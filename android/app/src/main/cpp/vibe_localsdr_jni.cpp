@@ -1141,6 +1141,18 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeAirspyControl(JNIEnv* env, jobject, jstr
     else LOGI("airspy control '%s' is not one this build knows", k.c_str());
 }
 
+/** ★★★ ANDROID RE-ENUMERATION RECOVERY — see LocalSdrShim::usbNeedsFreshFd / adoptFreshUsbFd. Kotlin
+ *  polls the first while a server runs and, when it is true, opens the dongle afresh through UsbManager
+ *  and hands the new descriptor to the second. The engine dups it; the caller keeps its connection. */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeUsbNeedsFreshFd(JNIEnv*, jobject) {
+    return vibe::LocalSdrShim::instance().usbNeedsFreshFd() ? JNI_TRUE : JNI_FALSE;
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeAdoptFreshUsbFd(JNIEnv*, jobject, jint fd) {
+    return vibe::LocalSdrShim::instance().adoptFreshUsbFd((int)fd) ? JNI_TRUE : JNI_FALSE;
+}
+
 /** ★ The name the USB descriptor gives this dongle, handed down from Kotlin because the
  *  fd-open path leaves librtlsdr with no index to look it up from. See setUsbModelName(). */
 extern "C" JNIEXPORT void JNICALL

@@ -225,6 +225,13 @@ object VibeLocalSDR {
     /** ★ Tell the engine what the dongle calls itself. Android opens by fd, so the engine cannot
      *  read the descriptor itself and every Android server reported a nameless radio. */
     fun setUsbModelName(name: String) { ensureLoaded(); nativeSetUsbModelName(name) }
+    /** ★★★ Is the running engine waiting for its dongle to be handed back after a re-enumeration? See
+     *  VibeServerRestore.recoverUsbIfNeeded. False when the library is not loaded (nothing is running). */
+    fun usbNeedsFreshFd(): Boolean = loaded && nativeUsbNeedsFreshFd()
+    /** Hand the engine a fresh fd for its dongle. It dups it; the caller keeps its UsbDeviceConnection. */
+    fun adoptFreshUsbFd(fd: Int): Boolean = loaded && nativeAdoptFreshUsbFd(fd)
+    private external fun nativeUsbNeedsFreshFd(): Boolean
+    private external fun nativeAdoptFreshUsbFd(fd: Int): Boolean
     private external fun nativeSetUsbModelName(name: String)
     private external fun nativeSetTrustedProxies(csv: String)
 

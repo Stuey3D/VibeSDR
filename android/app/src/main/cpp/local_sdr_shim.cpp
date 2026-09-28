@@ -4793,6 +4793,21 @@ struct LocalSdrShim::Impl {
     // Kotlin closing its copy can't pull the rug from libusb, and we close ours
     // after rtlsdr_close on the teardown thread.
     int usbFd = -1;
+    /* ★★★ A RE-ENUMERATED DONGLE IS A NEW DEVICE, AND OUR FD IS TO THE OLD ONE (Sony, 2026-09-28).
+     *  The stream stopped (tune rc=-9, PIPE), the dongle dropped off the bus and came back on a new
+     *  /dev/bus/usb path, and the engine logged "RTL-SDR back — capture resumed" — then failed every
+     *  tune with rc=-1 until it was restarted, because it had reopened on the SAME fd. usbfs binds an
+     *  fd to the device instance it was opened on: after a disconnect every call on it is -ENODEV,
+     *  for ever. The desktop learned this for the Airspy and the RSP ("a nudge is a re-enumeration,
+     *  not a stall — every handle is dead"); on Android there is the extra twist that only the Java
+     *  side can get a new fd, because only UsbManager may open a device.
+     *  ★ So: `usbFdDead` is set the moment the descriptor read on our fd fails; the watchdog then
+     *    RELEASES the dead handle (never reuses it) and the Kotlin side polls usbNeedsFreshFd(), opens
+     *    the dongle afresh through UsbManager — Android grants a LIVE re-attach through the default
+     *    association — and hands the new fd in through adoptFreshUsbFd(), which lands here as our own
+     *    dup. The watchdog's reopen takes it from there, exactly as for an ordinary stall. */
+    mutable std::atomic<bool> usbFdDead{false};
+    std::atomic<int>          freshUsbFd{-1};
     // RTL-TCP source (rtl_tcp protocol over the network, no USB/librtlsdr — so it
     // works on iOS too). When tcpSock is set, the IQ comes from this socket and the
     // hardware setters send rtl_tcp commands instead of calling rtlsdr_*.
@@ -21903,9 +21918,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  restarted, with listeners still being admitted to silence.
          *  usbfs answers read() with the device descriptor while the device is attached and
          *  -ENODEV once it has gone: that is the presence test. */
+        /* ★★★ AND A DEAD FD STAYS DEAD — see usbFdDead. A fresh one from UsbManager is the only way back. */
+        if (freshUsbFd.load() >= 0) return 0;
+        if (usbFdDead.load()) return -1;
         if (usbFd >= 0) {
             uint8_t d[18];
-            return ::pread(usbFd, d, sizeof d, 0) == (ssize_t)sizeof d ? 0 : -1;
+            if (::pread(usbFd, d, sizeof d, 0) == (ssize_t)sizeof d) return 0;
+            if (!usbFdDead.exchange(true))
+                LOGE("RTL-SDR: our USB handle is dead (errno %d) — the dongle has gone or re-enumerated. "
+                     "It will not be reused; waiting for Android to hand the dongle back", errno);
+            return -1;
         }
 #endif
         const uint32_t n = rtlsdr_get_device_count();
@@ -21946,6 +21968,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (dev) { rtlsdr_close(dev); dev = nullptr; }
 
 #ifdef __ANDROID__
+        /* ★★★ A FRESH FD FROM UsbManager WINS — see usbFdDead. The old one is closed here, after
+         *  rtlsdr_close above, and never opened on again. */
+        if (const int fresh = freshUsbFd.exchange(-1); fresh >= 0) {
+            if (usbFd >= 0) ::close(usbFd);
+            usbFd = fresh;
+            usbFdDead.store(false);
+            LOGI("RTL-SDR: reopening on the fresh USB handle Android handed back");
+        }
         // ★ The same fd we opened with: rtlsdr_close() does not close it (libusb_wrap_sys_device does
         //   not own it), and Android will not hand us the device by index.
         if (usbFd >= 0) {
@@ -22008,6 +22038,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("RTL-SDR back — capture resumed on device %d", idx);
         notifyDeviceState();
         return true;
+    }
+
+    /** ★★★ LET GO OF A DEAD USB HANDLE — Android only, see usbFdDead. Stops the reader, closes the
+     *  librtlsdr device and our dup of the fd, so nothing (a tune from a control thread, a gain from the
+     *  AGC) is ever issued on it again and the kernel can free the old device instance. Idempotent.
+     *  ★ devMtx then modeMtx, the documented order, as every other close of `dev` takes them: the
+     *    hardware writer touches `dev` under devMtx and the control setters under modeMtx. */
+    void releaseDeadUsb() {
+#ifdef __ANDROID__
+        if (!usbFdDead.load()) return;
+        std::lock_guard<std::recursive_mutex> dlk(devMtx);
+        std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+        if (!dev && usbFd < 0) return;
+        if (dev && !rtlThreadDone.load()) { restarting.store(true); rtlsdr_cancel_async(dev); }
+        joinOnce(rtlThread, "capture (dead USB handle)");
+        restarting.store(false);
+        if (dev) { rtlsdr_close(dev); dev = nullptr; }
+        if (usbFd >= 0) { ::close(usbFd); usbFd = -1; }
+        LOGI("RTL-SDR: released the dead USB handle — nothing will be sent to it again");
+#endif
     }
 
     void startHotplugWatch() {
@@ -22451,6 +22501,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     deviceLost.store(!back);
                     notifyDeviceState();
                 }
+                /* ★★★ ANDROID: A DEAD HANDLE IS RELEASED, NOT KEPT FOR A REOPEN THAT CANNOT WORK — see
+                 *  usbFdDead. Only a dongle opened from a descriptor ever sets it, so every other source
+                 *  passes straight through. The reopen below then waits for Kotlin's fresh fd. */
+                if (!back && !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf() && !useHackRf()
+                          && !useAirspy())
+                    releaseDeadUsb();
 
                 // ★★★ AND NOW WE CAN ACTUALLY REOPEN IT. The note above says why this used to be
                 //     impossible: `dev` had no lock, so closing it here raced every rtlsdr_set_gain
@@ -22486,6 +22542,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         //    capture callback takes iqMtx only and never modeMtx, so it cannot be
                         //    waiting on what we hold. That is the difference between this and
                         //    stopDspThread(), which joins a thread that DOES take modeMtx.
+                        /* ★★ devMtx FIRST, as every other close of `dev` takes it (the documented
+                         *  order): the hardware writer tunes under devMtx alone, so a reopen under
+                         *  modeMtx only could free `dev` beneath a tune in flight. */
+                        std::lock_guard<std::recursive_mutex> dlk(devMtx);
                         std::lock_guard<std::recursive_mutex> hw(modeMtx);
                         if (reopenDevice()) {
                             captureDown.store(false);
@@ -26317,6 +26377,8 @@ void LocalSdrShim::stopLocked() {
     // Close our own dup last (rtlsdr_close/libusb don't own it). Kotlin's
     // UsbDeviceConnection.close() races us harmlessly now — it's a different fd.
     if (impl->usbFd >= 0) { ::close(impl->usbFd); impl->usbFd = -1; }
+    // ★ And a fresh handle handed in by Kotlin that the watchdog never got to adopt — see usbFdDead.
+    if (const int f = impl->freshUsbFd.exchange(-1); f >= 0) ::close(f);
     delete impl;
     LOGI("local SDR stopped");
 }
@@ -26775,6 +26837,28 @@ void LocalSdrShim::setGain(int gainTenthDb) {
 }
 /** The gain the radio is ACTUALLY set to, in its own units; -1 = auto/AGC. */
 int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -1; }
+bool LocalSdrShim::usbNeedsFreshFd() const {
+#ifdef __ANDROID__
+    return p && p->usbFdDead.load() && p->freshUsbFd.load() < 0;
+#else
+    return false;
+#endif
+}
+bool LocalSdrShim::adoptFreshUsbFd(int fd) {
+#ifdef __ANDROID__
+    if (!p || fd < 0) return false;
+    // ★ Only when asked: swapping a LIVE handle under a running stream is how a working radio dies.
+    if (!p->usbFdDead.load()) { LOGI("RTL-SDR: a fresh USB handle was offered but ours is alive — not taken"); return false; }
+    const int d = ::dup(fd);
+    if (d < 0) { LOGE("RTL-SDR: dup() of the fresh USB handle failed (errno %d)", errno); return false; }
+    if (const int old = p->freshUsbFd.exchange(d); old >= 0) ::close(old);
+    LOGI("RTL-SDR: Android handed the dongle back on a fresh USB handle — the watchdog will reopen on it");
+    return true;
+#else
+    (void)fd;
+    return false;
+#endif
+}
 
 /**
  * ★★★ OVERLOAD PROTECTION FOR THE DONGLE — what the RSP gets from a hardware flag.

@@ -190,7 +190,53 @@ object VibeServerRestore {
         return null
     }
 
-    private var heldConn: android.hardware.usb.UsbDeviceConnection? = null
+    /** ★ The USB connection the running server's dongle was opened with (by either start path, or by
+     *  the re-enumeration recovery below). The engine works on its own dup; this is kept so the
+     *  connection is not collected, and so a DEAD one can be closed when a fresh one replaces it. */
+    @Volatile private var heldConn: android.hardware.usb.UsbDeviceConnection? = null
+
+    /** The app's start path hands its connection here, so the recovery below can let go of it. */
+    fun holdServerConn(conn: android.hardware.usb.UsbDeviceConnection?) { heldConn = conn }
+
+    /** A deliberate stop: close whatever connection the server was last given. Safe to call twice —
+     *  the start path may close the same object itself. */
+    fun releaseServerConn() {
+        val c = heldConn; heldConn = null
+        try { c?.close() } catch (t: Throwable) { Log.w(TAG, "closing the server's USB connection: ${t.message}") }
+    }
+
+    /**
+     * ★★★ HAND THE ENGINE ITS DONGLE BACK AFTER A RE-ENUMERATION (Sony, 2026-09-28).
+     *
+     * The dongle stalled (tune rc=-9, PIPE), dropped off the bus and came back on a new
+     * /dev/bus/usb path — and the engine went on using the fd it had, which is bound to the OLD
+     * device instance and answers -ENODEV for ever. Every tune failed rc=-1 until a restart. The
+     * engine now notices (the descriptor read fails), releases that handle and says so through
+     * usbNeedsFreshFd(); this — polled by RtlTcpServerService while the server runs — is the half
+     * that only Java can do: open the dongle afresh through UsbManager and hand the new fd in.
+     * ★ Permission for a LIVE re-attach comes through the default association the owner ticked
+     *   (Android launched the app on the re-attach at 22:13 that night); until it lands this
+     *   answers "waiting" and the next poll tries again. Nothing is prompted from here.
+     * ★ The old connection is CLOSED once the new one is accepted — never kept open.
+     * Returns a short state for the log, or null when there is nothing to do.
+     */
+    @Synchronized
+    fun recoverUsbIfNeeded(ctx: Context): String? {
+        if (!VibeLocalSDR.usbNeedsFreshFd()) return null
+        val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return "no USB service"
+        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) } ?: return "waiting for the dongle to come back"
+        if (!mgr.hasPermission(dev)) return "waiting for USB permission for the dongle"
+        val conn = mgr.openDevice(dev) ?: return "openDevice returned null"
+        if (conn.fileDescriptor < 0 || !VibeLocalSDR.adoptFreshUsbFd(conn.fileDescriptor)) {
+            conn.close()
+            return "the engine did not take the fresh handle"
+        }
+        val old = heldConn
+        heldConn = conn
+        try { old?.close() } catch (t: Throwable) { Log.w(TAG, "closing the dead USB connection: ${t.message}") }
+        Log.i(TAG, "dongle handed back to the engine on a fresh USB handle (${dev.deviceName})")
+        return "handed back"
+    }
 
     private fun isShimServing(): Boolean = try {
         VibeLocalSDR.getVibeServerStatus().contains("\"running\":true")

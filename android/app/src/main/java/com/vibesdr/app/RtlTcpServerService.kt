@@ -72,8 +72,28 @@ class RtlTcpServerService : Service() {
     private val ticker = object : Runnable {
         override fun run() {
             updateNotification()
+            pollUsbRecovery()
             handler.postDelayed(this, 2000)
         }
+    }
+
+    /** ★★★ A RE-ENUMERATED DONGLE NEEDS A FRESH FD, AND ONLY JAVA CAN GET ONE — see
+     *  VibeServerRestore.recoverUsbIfNeeded. Polled on the 2 s tick while the service runs; off the main
+     *  thread (openDevice is a binder call) and never two at once. */
+    @Volatile private var usbPollBusy = false
+    private var lastUsbState: String? = null
+    private fun pollUsbRecovery() {
+        if (usbPollBusy) return
+        usbPollBusy = true
+        Thread {
+            try {
+                val st = VibeServerRestore.recoverUsbIfNeeded(applicationContext)
+                if (st != null && st != lastUsbState) Log.i(TAG, "USB recovery: $st")
+                lastUsbState = st
+            } catch (t: Throwable) {
+                Log.w(TAG, "USB recovery failed: $t")
+            } finally { usbPollBusy = false }
+        }.start()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

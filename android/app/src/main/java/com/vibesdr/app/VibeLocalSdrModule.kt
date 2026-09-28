@@ -558,6 +558,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         val fd = conn.fileDescriptor
         if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
         sessionConn = conn
+        // ★ Shared with the re-enumeration recovery, which closes it when it has to replace it.
+        VibeServerRestore.holdServerConn(conn)
 
         // ★★★ THE CONFIG TRAVELS WHOLE. Every setting is read and applied by VibeServerBoot, which
         //     the CRASH-RESTORE path also uses — see that file for why there is no longer a second,
@@ -609,6 +611,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         if (port <= 0) {
             VibeLocalSDR.setServeOnLan(false)
             conn.close(); sessionConn = null
+            VibeServerRestore.holdServerConn(null)
             promise.reject("start_failed", "native startVibeServer failed (see logcat)")
             return
         }
@@ -646,6 +649,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         releaseMulticastLock()
         RtlTcpServerService.stop(reactContext)
         stopSpectrumInternal()
+        // ★ After the engine has stopped: the connection a re-enumeration recovery opened is ours to close.
+        VibeServerRestore.releaseServerConn()
         VibeLocalSDR.setServeOnLan(false)
         VibeLocalSDR.setVibeServerAuth("")   // clear the secret from process memory
         promise.resolve(null)

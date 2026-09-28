@@ -177,6 +177,14 @@ public:
      *  -1 = auto/AGC. Sent in hwinfo so a remote client can SHOW the truth instead of imposing
      *  its own remembered value on a radio it does not own. */
     int currentGainTenthDb() const;
+    /** ★★★ ANDROID RE-ENUMERATION RECOVERY. True when the dongle this engine opened from a USB
+     *  descriptor has gone dead (it dropped off the bus, or re-enumerated on a new path) and the engine
+     *  is waiting for a FRESH descriptor — which only UsbManager can supply. Always false elsewhere. */
+    bool usbNeedsFreshFd() const;
+    /** Hand the engine a fresh descriptor for its dongle after usbNeedsFreshFd(). The engine takes its
+     *  own dup, so the caller keeps (and later closes) its UsbDeviceConnection as usual. Refused
+     *  (false) when nothing asked for one — a live handle is never swapped underneath a stream. */
+    bool adoptFreshUsbFd(int fd);
     /** ★★★ Reverse proxies whose X-Forwarded-For we believe, comma separated (addresses/CIDRs).
      *  EMPTY = trust nobody and read no headers, which is the default: the header is
      *  client-supplied, so believing it from any peer lets a stranger forge an address and walk
