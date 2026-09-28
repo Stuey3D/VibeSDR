@@ -3,41 +3,144 @@
 <title>VibeSDR portable settings</title>
 <!--
   ★★★ THE PORTABLE SETTINGS STORE (web/client/src/portable.ts). Loaded hidden by a server page on
-  <name>.vibeserver.vibesdr.net; keeps the listener's master VIEW settings and bookmarks in THIS origin's
-  localStorage, so every server in the directory shares them. Everything stays in the listener's browser:
-  nothing is sent anywhere, and this page makes no requests.
+  <name>.vibeserver.vibesdr.net; keeps the listener's master VIEW settings and bookmarks for this origin, so
+  every server in the directory shares them. Everything stays in the listener's browser: this page makes no
+  requests, and the worker never reads the cookie below (the browser does send it with GET /store).
   ★ Answers only pages on a *.vibeserver.vibesdr.net subdomain over https, and only these operations.
+
+  ★★★ SAFARI PARTITIONS THIS FRAME'S localStorage BY THE PAGE AROUND IT — BUT NOT ITS COOKIES.
+      Stuart, 2026-09-28: "Save for all" did nothing in Safari; Kiko's new server opened on defaults.
+      Measured in WebKit (headless WKWebView): a value written to localStorage here from the Pi 500's page
+      read back EMPTY from the Lenovo's — WebKit keys an embedded frame's localStorage by the top-level
+      page. The SAME frame's cookie, written from the Pi 500, read back on the Lenovo with
+      hasStorageAccess() false and no prompt: every server is on vibesdr.net, so this frame is SAME-SITE
+      to them, and WebKit's cookie blocking is only for cross-site frames. The Storage Access API is not
+      needed — and could not help localStorage anyway: WebKit's grant covers cookies only
+      (webkit.org/blog/8124; MDN compat: no `types` parameter in Safari).
+      ★ So the record lives in BOTH: localStorage (Chromium and Firefox share it; it is also each Safari
+        partition's own copy) and a cookie (the one thing Safari shares). The newer wins on every read
+        and is written back to the other, so a cookie Safari has expired is restored from any server
+        that still holds a copy.
+      ★★ Safari caps a cookie written from script at 7 days (ITP 2.1, webkit.org/blog/8613). Every read
+         re-writes it, so it lasts 7 days from the last visit to ANY VibeSDR.net server, not from the save.
+      ★★ The cookie goes to vibeserver.vibesdr.net with GET /store, so it is kept small: deflated when the
+         browser can, split into ≤ 8 cookies of < 4 KB. A bookmark list too big for that stays out of the
+         cookie (logged) rather than breaking the store's own page load.
 -->
 <script>
 (function () {
-  var KEY = 'vsPortable';
+  var KEY = 'vsPortable', CK = 'vsP', CHUNK = 3800, MAXCHUNKS = 8, AGE = 34560000;  // 400 days (Chrome's cap)
   var OK = /^https:\/\/[a-z0-9-]+\.vibeserver\.vibesdr\.net$/;
-  function load() {
-    try { var v = JSON.parse(localStorage.getItem(KEY) || '{}'); return v && typeof v === 'object' ? v : {}; }
-    catch (e) { return {}; }
+  // ★ How new a record is. The directory's reset writes only { resetAt } (and older pages no `at`).
+  function stamp(v) { return v ? Math.max(Number(v.at) || 0, Number(v.resetAt) || 0, Number(v.viewAt) || 0) : 0; }
+  function obj(v) { return v && typeof v === 'object' ? v : null; }
+  function lsLoad() {
+    try { return obj(JSON.parse(localStorage.getItem(KEY) || 'null')); }
+    catch (e) { console.warn('portable store: localStorage unreadable', e); return null; }
   }
-  function save(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); return true; } catch (e) { return false; } }
+  function lsSave(v) {
+    try { localStorage.setItem(KEY, JSON.stringify(v)); return true; }
+    catch (e) { console.warn('portable store: localStorage write failed', e); return false; }
+  }
+  function cookies() {
+    var m = {};
+    document.cookie.split('; ').forEach(function (p) { var i = p.indexOf('='); if (i > 0) m[p.slice(0, i)] = p.slice(i + 1); });
+    return m;
+  }
+  function b64(bytes) { var s = ''; for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s); }
+  function unb64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  function pipe(bytes, stream) { return new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer(); }
+  // 'z' + base64(deflate-raw(JSON)) where CompressionStream exists, else 'j' + URI-encoded JSON.
+  function encode(v) {
+    var json = JSON.stringify(v);
+    if (typeof CompressionStream !== 'function') return Promise.resolve('j' + encodeURIComponent(json));
+    return pipe(new TextEncoder().encode(json), new CompressionStream('deflate-raw'))
+      .then(function (buf) { return 'z' + b64(new Uint8Array(buf)); });
+  }
+  function decode(s) {
+    if (s.charAt(0) === 'j') return Promise.resolve(JSON.parse(decodeURIComponent(s.slice(1))));
+    if (s.charAt(0) !== 'z') return Promise.reject(new Error('unknown cookie format'));
+    return pipe(unb64(s.slice(1)), new DecompressionStream('deflate-raw'))
+      .then(function (buf) { return JSON.parse(new TextDecoder().decode(buf)); });
+  }
+  function ckLoad() {
+    var c = cookies(), n = Number(c[CK + 'n']) || 0, s = '';
+    if (!n) return Promise.resolve(null);
+    for (var i = 0; i < n; i++) { if (c[CK + i] === undefined) { console.warn('portable store: cookie part ' + i + ' of ' + n + ' missing'); return Promise.resolve(null); } s += c[CK + i]; }
+    return decode(s).then(obj, function (e) { console.warn('portable store: cookie unreadable', e); return null; });
+  }
+  function setCookie(name, value, age) {
+    document.cookie = name + '=' + value + '; Path=/store; Max-Age=' + age + '; Secure; SameSite=Lax';
+  }
+  function ckSave(v) {
+    return encode(v).then(function (s) {
+      if (s.length > CHUNK * MAXCHUNKS && v.bookmarks) {
+        console.warn('portable store: ' + v.bookmarks.length + ' bookmarks are too many for the cookie; '
+                     + 'they stay in this browser\'s localStorage only (not shared in Safari)');
+        var slim = {}; for (var k in v) if (k !== 'bookmarks') slim[k] = v[k];
+        slim.noBm = 1;
+        return ckSave(slim);
+      }
+      if (s.length > CHUNK * MAXCHUNKS) { console.error('portable store: record too big for the cookie'); return false; }
+      var n = Math.ceil(s.length / CHUNK), old = Number(cookies()[CK + 'n']) || 0;
+      for (var i = 0; i < n; i++) setCookie(CK + i, s.slice(i * CHUNK, (i + 1) * CHUNK), AGE);
+      for (var j = n; j < Math.max(old, MAXCHUNKS); j++) setCookie(CK + j, '', 0);
+      setCookie(CK + 'n', String(n), AGE);
+      var back = cookies(), got = '';
+      for (i = 0; i < n; i++) got += back[CK + i] || '';
+      if (back[CK + 'n'] !== String(n) || got !== s) { console.error('portable store: the browser refused the cookie'); return false; }
+      return true;
+    }, function (e) { console.error('portable store: could not encode the cookie', e); return false; });
+  }
+  /* The newer of the two, written back to the other. Resolves { rec, lsOk, ckOk }. */
+  function load() {
+    var ls = lsLoad();
+    return ckLoad().then(function (ck) {
+      var rec = stamp(ck) > stamp(ls) ? ck : (ls || ck || {});
+      if (rec.noBm) {   // the cookie could not carry the bookmarks: this browser's own copy, if it has one
+        var r2 = {}; for (var k in rec) if (k !== 'noBm') r2[k] = rec[k];
+        if (ls && Array.isArray(ls.bookmarks)) r2.bookmarks = ls.bookmarks;
+        rec = r2;
+      }
+      var lsOk = rec === ls ? true : lsSave(rec);
+      // ★ Always re-written when there is anything to keep: it restarts Safari's 7-day cookie cap.
+      return (stamp(rec) || rec.view || rec.bookmarks ? ckSave(rec) : Promise.resolve(true))
+        .then(function (ckOk) { return { rec: rec, lsOk: lsOk, ckOk: ckOk }; });
+    });
+  }
+  function save(rec) {
+    rec.at = Date.now();
+    var lsOk = lsSave(rec);
+    return ckSave(rec).then(function (ckOk) { return lsOk || ckOk; });
+  }
+  var queue = Promise.resolve();   // ★ one operation at a time: a read-modify-write must not interleave
   window.addEventListener('message', function (e) {
     if (!OK.test(e.origin) || !e.data || typeof e.data.id !== 'number') return;
-    var d = e.data, s = load(), r = { id: d.id, ok: false };
-    if (d.op === 'get') {
-      r.ok = true;
-      r.data = { view: s.view || {}, bookmarks: Array.isArray(s.bookmarks) ? s.bookmarks : null,
-                 resetAt: s.resetAt || 0, viewAt: s.viewAt || 0 };
-    } else if (d.op === 'setView' && d.view && typeof d.view === 'object') {
-      /* ★★★ STAMP THE VIEW EPOCH, OR "SAVE FOR ALL" REACHES ONLY THE SERVER YOU ARE STANDING ON.
-         A per-server override beats MASTER (portable.ts layer 1), and every server the listener has
-         ever tweaked holds one — so writing MASTER alone changed nothing anywhere else. Stuart,
-         2026-09-21: "I changed the colour to orange on the sony tv and pressed to save for all
-         vibesdr.net servers and got a confirmation, but all other servers are still green."
-         ★★ A SEPARATE EPOCH FROM resetAt, NOT A REUSE OF IT. resetAt is also read by the BOOKMARK
-            side (search.ts clears the list when it advances), so stamping it here would have made
-            changing a colour delete the listener's bookmarks on every other server. */
-      s.view = d.view; s.viewAt = Date.now(); r.ok = save(s);
-    } else if (d.op === 'setBookmarks' && Array.isArray(d.bookmarks)) {
-      s.bookmarks = d.bookmarks; r.ok = save(s);
-    }
-    e.source.postMessage(r, e.origin);
+    var d = e.data, r = { id: d.id, ok: false };
+    queue = queue.then(function () { return load(); }).then(function (l) {
+      var s = l.rec;
+      if (d.op === 'get') {
+        r.ok = true;
+        r.data = { view: s.view || {}, bookmarks: Array.isArray(s.bookmarks) ? s.bookmarks : null,
+                   resetAt: s.resetAt || 0, viewAt: s.viewAt || 0 };
+        return;
+      }
+      if (d.op === 'setView' && d.view && typeof d.view === 'object') {
+        /* ★★★ STAMP THE VIEW EPOCH, OR "SAVE FOR ALL" REACHES ONLY THE SERVER YOU ARE STANDING ON.
+           A per-server override beats MASTER (portable.ts layer 1), and every server the listener has
+           ever tweaked holds one — so writing MASTER alone changed nothing anywhere else. Stuart,
+           2026-09-21: "I changed the colour to orange on the sony tv and pressed to save for all
+           vibesdr.net servers and got a confirmation, but all other servers are still green."
+           ★★ A SEPARATE EPOCH FROM resetAt, NOT A REUSE OF IT. resetAt is also read by the BOOKMARK
+              side (search.ts clears the list when it advances), so stamping it here would have made
+              changing a colour delete the listener's bookmarks on every other server. */
+        s.view = d.view; s.viewAt = Date.now();
+      } else if (d.op === 'setBookmarks' && Array.isArray(d.bookmarks)) {
+        s.bookmarks = d.bookmarks;
+      } else { console.warn('portable store: unknown operation', d.op); return; }
+      return save(s).then(function (ok) { r.ok = ok; });
+    }).catch(function (err) { console.error('portable store: ' + d.op + ' failed', err); })
+      .then(function () { e.source.postMessage(r, e.origin); });
   });
 })();
 </script>

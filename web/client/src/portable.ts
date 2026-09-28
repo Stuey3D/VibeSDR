@@ -8,8 +8,10 @@
  *      so its origin's storage is a stable per-server place, and display tweaks already save there.
  *   2. MASTER  — one store in the DIRECTORY's origin (vibeserver.vibesdr.net), reached through a hidden
  *      iframe (/store.html) by postMessage. A page cannot read another origin's storage directly; every
- *      *.vibeserver.vibesdr.net address is one SITE, so the browser's storage partitioning keeps that one
- *      store shared between them. "Save view settings for all" writes it.
+ *      *.vibeserver.vibesdr.net address is one SITE, so Chromium and Firefox keep that one store shared
+ *      between them. ★★ SAFARI DOES NOT: it keys the frame's localStorage by the page around it, so the
+ *      store also keeps a COOKIE, which WebKit does share between same-site pages (store.html has the
+ *      measurement, 2026-09-28). "Save view settings for all" writes it.
  *   3. The built-in defaults.
  *
  * ★ Nothing here leaves the browser: no cookie, nothing sent with a request, nothing stored by us. Only VIEW

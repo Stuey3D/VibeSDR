@@ -12064,7 +12064,7 @@ function buildMenu() {
   /* ★ SAVE FOR ALL (portable.ts): what this server is showing becomes the master for every
    *  *.vibeserver.vibesdr.net server, and this server's own overrides go — it now follows the master too. */
   if (onVibeDomain()) {
-    $('dispAllRow').hidden = false; $('dispAllHint').hidden = false;
+    $('dispAllRow').hidden = false; $('dispAllCaption').hidden = false; $('dispAllHint').hidden = false;
     $('dispSaveAll').onclick = async () => {
       const cur = prefs();
       if (!(await saveViewForAll(cur))) { showPill('Could not reach the VibeSDR.net settings store', 5000); return; }

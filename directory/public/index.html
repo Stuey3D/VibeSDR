@@ -753,14 +753,15 @@
 
 <main>
   <!-- ★★ PORTABLE SETTINGS (Stuart's wording, 2026-09-19). The store lives in THIS origin's localStorage
-       (store.html), so the reset is simply clearing it here — plus a reset time every server page checks, so
+       AND a Path=/store cookie (store.html — Safari shares only the cookie, 2026-09-28), so the reset is simply clearing it here — plus a reset time every server page checks, so
        each server's own overrides go too the next time it is opened. -->
   <div class="portable">
     <p>VibeServer keeps a small store in your browser so your display settings and bookmarks travel between
       radios and servers. Adjust your display settings in the SDR view and they are saved for that radio;
       press <b>Save for all</b> there and they become your default on every server in this directory. A
-      radio or server can still keep its own settings if conditions there need them. Nothing leaves your
-      browser.</p>
+      radio or server can still keep its own settings if conditions there need them. They are kept in your
+      browser's storage and a small cookie for this site; your browser sends that cookie here only when it
+      opens the settings store, and we never read it.</p>
     <button type="button" id="portableReset">Reset to defaults</button>
   </div>
   <div id="list"><div class="empty">Loading…</div></div>
@@ -770,7 +771,15 @@
   //   next opens and sees a newer stamp (portable.ts honourReset).
   document.getElementById('portableReset').onclick = function () {
     if (!confirm('Reset your display settings and portable bookmarks for every VibeSDR.net server?')) return;
-    try { localStorage.setItem('vsPortable', JSON.stringify({ resetAt: Date.now() })); } catch (e) {}
+    var now = Date.now(), rec = JSON.stringify({ resetAt: now, at: now });
+    try { localStorage.setItem('vsPortable', rec); } catch (e) { console.error('portable reset: localStorage', e); }
+    /* ★★ AND THE COOKIE — the copy Safari actually shares (store.html). Safari keeps the store frame's
+       localStorage apart for every server page around it, so clearing THIS page's localStorage never
+       reached them there. Written in the store's own format ('j' + URI-encoded JSON, one part). */
+    var ck = function (n, v, age) { document.cookie = n + '=' + v + '; Path=/store; Max-Age=' + age + '; Secure; SameSite=Lax'; };
+    ck('vsP0', 'j' + encodeURIComponent(rec), 34560000);
+    for (var i = 1; i < 8; i++) ck('vsP' + i, '', 0);
+    ck('vsPn', '1', 34560000);
     this.textContent = 'Reset ✓';
   };
 </script>
