@@ -6309,6 +6309,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Phase accumulator per listener, advanced once per emitted frame. Fractional, so a client
      *  asking 7 fps off a 20 fps engine gets 7 — not the nearest integer divisor. */
     std::map<net::Socket*, double> clientFpsAcc;
+    /** ★★★ WHAT EACH LISTENER WAS ACTUALLY SENT — the per-client half of the SPEC RATE audit.
+     *  The engine audit in onSpectrum counts ENGINE frames, which is the FASTEST listener's rate;
+     *  everyone slower is decimated after it, in dueForFrame. So "asked 5, emitting 19.7" could
+     *  never say whether the listener who asked for 5 got 5 (2026-09-28: they did, exactly — see
+     *  the note at the audit). This counts the frames handed to each listener's socket, per
+     *  window, against the rate that listener should be getting. Keyed and erased like
+     *  clientFpsAcc; touched only under clientMtx. */
+    struct SpecAudit { double t0 = 0, last = 0, want = 0, engine = 0; long long n = 0; };
+    std::map<net::Socket*, SpecAudit> clientSpecAudit;
     /** The rate the OWNER configured (--fps / the GUI). The floor when nobody has asked, and what
      *  the radio returns to when the last slow listener leaves. */
     double baseFftRate = 0.0;
@@ -7595,18 +7604,55 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<char> due(peers.size(), 1);
         const double engine = fftRate;
         if (engine <= 0) return due;
+        std::vector<std::string> audit;      // logged after the lock is released
+        {
         std::lock_guard<std::mutex> lk(clientMtx);
+        const double nowMs = nowSecs() * 1000.0;
         for (size_t i = 0; i < peers.size(); i++) {
             const double want = peers[i].fps > 0 ? peers[i].fps : baseFftRate;
-            if (want <= 0 || want >= engine) { clientFpsAcc[peers[i].sock.get()] = 0.0; continue; }
-            double& a = clientFpsAcc[peers[i].sock.get()];
-            a += want / engine;
-            if (a >= 1.0) { a -= 1.0; due[i] = 1; } else due[i] = 0;
-            // Never let the accumulator run away if the engine rate drops under us — a stored
-            // surplus would come back out as a burst of frames the listener did not ask for.
-            if (a > 1.0) a = 1.0;
+            if (want <= 0 || want >= engine) clientFpsAcc[peers[i].sock.get()] = 0.0;
+            else {
+                double& a = clientFpsAcc[peers[i].sock.get()];
+                a += want / engine;
+                if (a >= 1.0) { a -= 1.0; due[i] = 1; } else due[i] = 0;
+                // Never let the accumulator run away if the engine rate drops under us — a stored
+                // surplus would come back out as a burst of frames the listener did not ask for.
+                if (a > 1.0) a = 1.0;
+            }
+            if (due[i]) specAuditClient(peers[i], want, engine, nowMs, audit);
         }
+        }
+        for (auto& line : audit) LOGI("%s", line.c_str());
         return due;
+    }
+
+    /** The per-listener SPEC RATE audit — see clientSpecAudit. Called under clientMtx, once per
+     *  frame this listener is due. Speaks only when what it was SENT is more than 10 % off what
+     *  it should get: its own rate, or the engine's if that is slower.
+     *  ★ The window RESTARTS whenever either rate changes or the frames stop (capture parked):
+     *    a window that straddles a change compares frames made under the old rate with the new
+     *    target, and that is exactly the false "394 % of target" this replaced. */
+    void specAuditClient(const SpecPeer& p, double want, double engine, double nowMs,
+                         std::vector<std::string>& out) {
+        SpecAudit& st = clientSpecAudit[p.sock.get()];
+        const double gapMs = std::max(1500.0, 3000.0 / std::max(0.1, std::min(want, engine)));
+        if (st.t0 == 0 || st.want != want || st.engine != engine || nowMs - st.last > gapMs) {
+            st.t0 = st.last = nowMs; st.n = 0; st.want = want; st.engine = engine;
+            return;                          // this frame OPENS the window; it is not counted
+        }
+        st.last = nowMs;
+        ++st.n;
+        if (nowMs - st.t0 < 5000.0) return;
+        const double got = st.n * 1000.0 / (nowMs - st.t0);
+        const double should = std::min(want, engine);
+        if (std::fabs(got - should) > should * 0.1) {
+            char b[200];
+            std::snprintf(b, sizeof b, "SPEC RATE: listener %s sent %.1f fps, asked %.1f "
+                          "(engine %.1f) — %.0f%% of what it should get",
+                          p.sock->peerAddress().c_str(), got, want, engine, 100.0 * got / should);
+            out.emplace_back(b);
+        }
+        st.t0 = nowMs; st.n = 0;
     }
 
     /** This client's requested rate, or the server default if it has never asked.
@@ -8536,6 +8582,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     unsigned adcBufN_ = 0;      // ★ buffer counter for the 1-in-4 ADC sampling (see wantAdc)
     double specAuditMs = 0.0; long long specAuditFrames = 0;   // see onSpectrum's rate audit
+    double specAuditLastMs = 0.0, specAuditRate = 0.0;          // ★ the window restarts on either
 
     // ── Spectrum callback (Stage 3) ────────────────────────────────────────
     // The V5 engine hands us a fftshifted dB row (bin 0 = -fs/2, bins/2 = DC),
@@ -8768,8 +8815,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         {
             const double tMs = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
-            if (specAuditMs == 0.0) specAuditMs = tMs;
-            ++specAuditFrames;
+            /* ★★★ RESTART THE WINDOW WHEN THE RATE CHANGES OR THE FRAMES STOP (2026-09-28).
+             *  "SPEC RATE: emitting 19.7 fps, asked 5.0 (engine 20.0, 394% of target)" on the Pi
+             *  500, and "6.6, asked 2.0" on the TV, read as a listener's cap being ignored. It was
+             *  not: counted at the socket, the listener that asked for 5 got 5.00 fps and one that
+             *  asked for 2 got 2.00, on the inline AND the threaded path. The window simply ran
+             *  on across the rate change — four seconds of frames made at 20 divided out against
+             *  the new target of 5. Same for a window left open while capture was parked, which
+             *  divides a handful of frames by minutes and printed "emitting 0.0 fps".
+             *  ★ So a change of rate, or a gap, opens a fresh window and that frame is not
+             *    counted (N frames after the opener span N intervals — no off-by-one high).
+             *  ★ This is the ENGINE's rate — the fastest listener's. What each listener is
+             *    actually sent is audited per socket in specAuditClient. */
+            const double gapMs = std::max(1500.0, 3000.0 / std::max(0.1, fftRate));
+            if (specAuditMs == 0.0 || specAuditRate != fftRate || tMs - specAuditLastMs > gapMs) {
+                specAuditMs = specAuditLastMs = tMs; specAuditFrames = 0; specAuditRate = fftRate;
+            } else {
+                specAuditLastMs = tMs;
+                ++specAuditFrames;
+            }
             if (tMs - specAuditMs >= 5000.0) {
                 const double got = specAuditFrames * 1000.0 / (tMs - specAuditMs);
                 const double want = fftRate;
@@ -8788,7 +8852,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 g_specAchievedFps.store(s_listenersCached.load(std::memory_order_relaxed) > 0
                                         ? got : -1.0, std::memory_order_relaxed);
                 if (want > 0 && std::fabs(got - want) > want * 0.1)
-                    LOGI("SPEC RATE: emitting %.1f fps, asked %.1f (engine %.1f, %.0f%% of target)",
+                    LOGI("SPEC RATE: engine emitting %.1f fps, asked %.1f by the fastest listener "
+                         "(%.1f FFTs/s, %.0f%% of target)",
                          got, want, want * FFT_AVG, 100.0 * got / want);
                 specAuditFrames = 0; specAuditMs = tMs;
             }
@@ -17738,7 +17803,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     listener is actually registered — see the note there. */
         if (!isAudio) {
             std::lock_guard<std::mutex> lk(clientMtx);
-            clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get());
+            clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get()); clientSpecAudit.erase(sock.get());
         }
 
         // A listener has arrived — wake the dongle if it was idled while nobody was connected. Idempotent
@@ -18270,6 +18335,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           //     disconnected. The recompute is below, OUTSIDE this lock.
           clientFps.erase(sock.get());
           clientFpsAcc.erase(sock.get());
+          clientSpecAudit.erase(sock.get());
           // ★ Close the log entry for whoever this socket was. The reason is "closed" — the
           //   paths that end a session for a REASON (kicked, banned, timeout) each record their
           //   own before getting here, and ConnLog::close only ever fills the most recent
