@@ -4516,6 +4516,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    went is the part that explains what you are hearing.
       onHwAgc: (on: boolean) => {
         if (destroyed.current) return;
+        /* ★★ AND THE STATE, NOT ONLY THE LABEL. This painted "AGC" on the status row and never set
+         *  hwAgc — so against a remote server the app believed the gain was MANUAL: the gain-at-minimum
+         *  warning fired while VibeAGC was deliberately holding a strong station at minimum (Stuart,
+         *  2026-09-28, Sony TV, S9+40), and the VibeAGC control could show the wrong state. Adopted as
+         *  LOCAL STATE ONLY — setHwAgc never sends (onHwAgc the control handler does), and the saved
+         *  per-device settings are only written for local hardware. */
+        setHwAgc(on);
         const b = meterBus.current;
         if (b) b.emit({ ...b.value, agcText: on ? b.value.agcText || 'AGC' : '' });
       },
