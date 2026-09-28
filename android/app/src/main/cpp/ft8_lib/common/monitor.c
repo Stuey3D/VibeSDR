@@ -36,7 +36,9 @@ static float hann_i(int i, int N)
 
 static void waterfall_init(ftx_waterfall_t* me, int max_blocks, int num_bins, int time_osr, int freq_osr)
 {
-    size_t mag_size = max_blocks * time_osr * freq_osr * num_bins * sizeof(me->mag[0]);
+    // VibeSDR local change (CodeQL cpp/integer-multiplication-cast-to-long): widen to size_t BEFORE
+    // multiplying, so the int product cannot overflow on its way into a size_t. Not in upstream ft8_lib.
+    size_t mag_size = (size_t)max_blocks * time_osr * freq_osr * num_bins * sizeof(me->mag[0]);
     me->max_blocks = max_blocks;
     me->num_blocks = 0;
     me->num_bins = num_bins;

@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -185,15 +187,15 @@ func (b *bridge) acceptLoop(ln net.Listener, p pairing, done chan struct{}) {
 // resolve turns a code (and optionally a host) into the page host + credential.
 func resolve(code, host string) (pairing, error) {
 	if host != "" {
-		h := strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+		h := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(host), "https://"), "http://")
 		p := pairing{host: h, token: code}
 		if i := strings.Index(h, "/"); i >= 0 {
-			p.host, p.path = h[:i], strings.TrimSuffix(h[i:], "/")+"/"
+			p.host, p.path = h[:i], h[i:]
 		}
 		if code == "" {
 			return pairing{}, errors.New("the code is needed with the address too")
 		}
-		return p, nil
+		return checkTarget(p)
 	}
 	if len(code) != 6 {
 		return pairing{}, errors.New("a code is six characters")
@@ -212,13 +214,55 @@ func resolve(code, host string) (pairing, error) {
 		}
 		return pairing{}, errors.New("directory did not recognise that code")
 	}
-	return pairing{host: j.Host, path: j.Path, token: j.Token}, nil
+	return checkTarget(pairing{host: j.Host, path: j.Path, token: j.Token})
+}
+
+// radioPath is the only path a pairing may carry: the root, or one radio behind a multi-radio
+// front door. The same shape the directory accepts (IQ_PATH_RE in directory/src/index.js).
+var radioPath = regexp.MustCompile(`^/(r/[A-Za-z0-9_-]{1,40}/)?$`)
+
+// checkTarget validates a pairing's host and path before anything is fetched from them, and
+// normalises the path to "/" or "/r/<serial>/".
+//
+// ★★★ CodeQL go/request-forgery (2026-09-28). The host is where the bridge sends its first request,
+// and it comes from the window, the command line or the directory's answer. It is MEANT to be
+// a receiver the user chose — this is not a proxy for arbitrary URLs — but it went into the
+// URL as a raw string, so "evil@host", "host?x" or "host#x" changed which server was asked,
+// and a "/../" path reached any page on it. Now the host must be a bare host[:port] (no
+// userinfo, query, fragment or path of its own) and the path one of the two shapes above.
+// ★ This also fixed a real fault: a pairing with NO path (a single-radio receiver, the common
+// case) fetched "https://<host>vibeserver.json" — the slash was missing — and never connected.
+func checkTarget(p pairing) (pairing, error) {
+	bad := errors.New("that receiver address is not a plain host name or address")
+	if p.host == "" || strings.ContainsAny(p.host, "@?#\\ /") {
+		return pairing{}, bad
+	}
+	u, err := url.Parse("https://" + p.host + "/")
+	if err != nil || u.User != nil || u.Host != p.host || u.Hostname() == "" || u.Path != "/" {
+		return pairing{}, bad
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return pairing{}, bad
+		}
+	}
+	if p.path == "" {
+		p.path = "/"
+	} else if !strings.HasSuffix(p.path, "/") {
+		p.path += "/"
+	}
+	if !radioPath.MatchString(p.path) {
+		return pairing{}, errors.New("that receiver path is not /r/<radio>/")
+	}
+	return p, nil
 }
 
 // wsURL reads /vibeserver.json at the page host: through the directory it carries `directUrl`,
 // the live tunnel hostname; on a receiver's own address it is the address itself.
 func wsURL(p pairing) (string, error) {
-	res, err := http.Get("https://" + p.host + p.path + "vibeserver.json")
+	// ★ p was validated by checkTarget: a bare host[:port] and a path of "/" or "/r/<radio>/".
+	target := url.URL{Scheme: "https", Host: p.host, Path: p.path + "vibeserver.json"}
+	res, err := http.Get(target.String())
 	if err != nil {
 		return "", err
 	}
@@ -234,6 +278,9 @@ func wsURL(p pairing) (string, error) {
 	u, err := url.Parse(base)
 	if err != nil {
 		return "", err
+	}
+	if (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
+		return "", fmt.Errorf("the receiver gave an unusable address: %q", base)
 	}
 	scheme := "wss"
 	if u.Scheme == "http" {

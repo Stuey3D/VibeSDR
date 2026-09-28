@@ -20,6 +20,11 @@
 #include "vibe_dab_service.h"
 #include <memory>
 #include <thread>
+#if !defined(__ANDROID__)
+// ★ vibeserver/proc.h — fork+execvp, no shell. Every desktop includer links vibeserver_core, which
+//   builds proc.cpp and puts vibeserver/ on the include path. Android never downloads (see below).
+#include "proc.h"
+#endif
 
 namespace vibe {
 
@@ -134,8 +139,16 @@ inline std::string ensureDabClip(const std::string& cacheDir,
     DabClip probe;
     if (loadDabClip(path, probe)) return path;                 // already here and whole
     const std::string tmp = path + ".part";
-    const std::string cmd = "curl -sSL --max-time 900 '" + url + "' | gzip -dc > '" + tmp + "' 2>/dev/null";
-    if (std::system(cmd.c_str()) != 0) { std::remove(tmp.c_str()); return ""; }
+    const std::string gz  = path + ".part.gz";
+    // ★★★ NO SHELL (CodeQL cpp/command-line-injection, 2026-09-28). This used to be one `system()` line —
+    //     curl | gzip > '<tmp>' — and `cacheDir` is the config directory, which comes from the command line or
+    //     the environment (TMPDIR for vibeserver-bench). A single quote in that path closed ours and the rest
+    //     ran as shell. vibeproc takes an ARGUMENT VECTOR, so a path is one argument whatever bytes it holds.
+    //     The pipeline becomes two programs through a temporary file, as proc.h says a pipeline must.
+    auto fail = [&]() { std::remove(gz.c_str()); std::remove(tmp.c_str()); return std::string(); };
+    if (vibeproc::run({ "curl", "-sSL", "--max-time", "900", "-o", gz, url }) != 0) return fail();
+    if (vibeproc::runToFile({ "gzip", "-dc", "--", gz }, tmp) != 0) return fail();
+    std::remove(gz.c_str());
     if (!loadDabClip(tmp, probe)) { std::remove(tmp.c_str()); return ""; }
     if (std::rename(tmp.c_str(), path.c_str()) != 0) { std::remove(tmp.c_str()); return ""; }
     return path;

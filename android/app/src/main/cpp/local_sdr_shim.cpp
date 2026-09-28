@@ -19033,8 +19033,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const float A = iqCapClean_.coefA(), B = iqCapClean_.coefB();
             LOGI("capture clean: dc %.4f,%.4f  imbalance gain %.3f dB phase %.2f°%s  wide NB %s%s",
                  iqCapClean_.dcI(), iqCapClean_.dcQ(),
-                 (A > 0 ? -20.0 * std::log10((double)A * std::sqrt(1.0 - std::min(0.99, (double)B * B / (A * A + B * B)))) : 0.0),
-                 (A > 0 ? std::asin(std::max(-1.0, std::min(1.0, (double)(-B) / std::sqrt((double)A * A + B * B)))) * 180.0 / M_PI : 0.0),
+                 (A > 0 ? -20.0 * std::log10((double)A * std::sqrt(1.0 - std::min(0.99, (double)B * B / ((double)A * A + (double)B * B)))) : 0.0),
+                 (A > 0 ? std::asin(std::max(-1.0, std::min(1.0, (double)(-B) / std::sqrt((double)A * A + (double)B * B)))) * 180.0 / M_PI : 0.0),
                  capCleanOff_ ? " [cleaner OFF by VIBE_IQ_CLEAN=0]" : "",
                  on ? "on" : "off",
                  on ? (", blanking " + std::to_string(nbWide_.rate() * 100.0f) + " %").c_str() : "");

@@ -11,6 +11,12 @@ is no TCP reassembly to do before reading the protocol off the wire.
 
 Then point the client at 127.0.0.1:5556.
 
+It listens on the LOOPBACK only by default: an open relay to somebody's receiver
+that also records everything it carries should not be reachable from the LAN by
+accident. When the client runs on ANOTHER machine (SDR# on a Windows box), say so:
+
+  ./ss_proxy.py --bind 0.0.0.0 --listen 5556 --server 192.168.86.99:5555
+
 Writes, next to this script:
   c2s.bin    every byte client -> server   (commands: hello, set setting, ...)
   s2c.bin    every byte server -> client   (device info, client sync, FFT, IQ)
@@ -76,6 +82,8 @@ def pump(src, dst, direction, path, logf, max_bytes, counters):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--listen", type=int, default=5556)
+    ap.add_argument("--bind", default="127.0.0.1",
+                    help="address to listen on (default 127.0.0.1; 0.0.0.0 for a client on another machine)")
     ap.add_argument("--server", required=True, help="host:port of the real SpyServer")
     ap.add_argument("--max-s2c", type=int, default=8 * 1024 * 1024,
                     help="cap saved server->client bytes (0 = unlimited)")
@@ -86,9 +94,11 @@ def main():
 
     ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    ls.bind(("0.0.0.0", args.listen))
+    # ★ CodeQL py/bind-socket-all-network-interfaces (2026-09-28): this was hard-wired to 0.0.0.0
+    #   while the banner below claimed 127.0.0.1. Loopback unless the user asks for more.
+    ls.bind((args.bind, args.listen))
     ls.listen(1)
-    print(f"proxy listening on 127.0.0.1:{args.listen} -> {target[0]}:{target[1]}")
+    print(f"proxy listening on {args.bind}:{args.listen} -> {target[0]}:{target[1]}")
     print("point SDR++ / SDR# at the listen address, then connect")
 
     # Serve connections in a LOOP. A single accept() is wrong twice over: any

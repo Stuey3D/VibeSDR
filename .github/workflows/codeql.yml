@@ -151,7 +151,39 @@ jobs:
                 -DVIBESERVER_ALLOW_NO_TUNNEL=ON
           cmake --build vibeserver/build-codeql -j "$(nproc)"
 
+      # ★★★ ANALYSE, FILTER, THEN UPLOAD — because paths-ignore above does NOT apply to a compiled
+      #     language. For java-kotlin, c-cpp and swift the database holds whatever the BUILD compiled,
+      #     and the Android build compiles every autolinked React Native module straight out of
+      #     node_modules. That is how alerts #46-48 (react-native-svg, react-native-webview, expo's
+      #     log-box) reached the security tab with `node_modules` already in paths-ignore.
+      #     So the results are written to disk, anything located under a node_modules/ directory is
+      #     dropped, and only then uploaded. Same scope rule as paths-ignore: NOT OURS.
+      # ★★ What is deliberately NOT filtered: the vendored C/C++ under android/app/src/main/cpp
+      #    (ft8_lib, libairspy, libairspyhf, vibedsp/third_party/pffft). Unlike node_modules they are
+      #    committed here, compiled into the server and the apps we ship, and patched in-tree when
+      #    needed (ft8_lib's monitor.c, 2026-09-28) — so a finding in them is one we can and must act on.
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
+          category: '/language:${{ matrix.language }}'
+          upload: never
+          output: sarif-results
+
+      - name: Drop results in third-party dependencies
+        run: |
+          shopt -s nullglob
+          for f in sarif-results/*.sarif; do
+            before=$(jq '[.runs[].results[]?] | length' "$f")
+            jq '.runs[].results |= map(select(
+                  [.locations[]?.physicalLocation.artifactLocation.uri // ""]
+                  | any(test("(^|/)node_modules/")) | not))' "$f" > "$f.tmp"
+            mv "$f.tmp" "$f"
+            after=$(jq '[.runs[].results[]?] | length' "$f")
+            echo "$f: $before results, $((before - after)) in node_modules dropped, $after kept"
+          done
+
+      - name: Upload CodeQL results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sarif-results
           category: '/language:${{ matrix.language }}'
