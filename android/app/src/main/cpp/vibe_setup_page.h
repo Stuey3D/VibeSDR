@@ -2073,15 +2073,25 @@ function gainIsDb() {
    *    at all. */
   return d === "rtl" || d === "rtlsdr" || d === "hackrf";
 }
-/** Owner's text -> the stored integer. "19.7 dB" -> 197 on an RTL, "5" -> 5 on an RSP. */
+/** ★★★ THE AIRSPY R2 / MINI SPEAKS A PRESET POSITION, 0-21 — not dB and not an RSP position.
+ *  Its gain is Airspy's own linearity/sensitivity curve: one index that libairspy turns into the
+ *  LNA, mixer and VGA together. The listener's slider (web client and app alike) moves that index,
+ *  and the wire carries it as TENTHS — index x 10 — so the gain contract every radio shares is
+ *  unchanged (AirspySource::gainListTenthDb: 0, 10 … 210). So the owner types "15" and 150 is
+ *  stored, which is exactly the figure the server compares a listener's request against. */
+function gainIsAspPreset() { return (radio().driver || "") === "airspy"; }
+/** Owner's text -> the stored integer. "19.7 dB" -> 197 on an RTL, "5" -> 5 on an RSP,
+ *  "15" -> 150 on an Airspy R2 / Mini (preset 15 of 21). */
 function gainToRaw(txt) {
   const n = parseFloat(String(txt).replace(/[^0-9.\-]/g, ""));
   if (!isFinite(n)) return -1;
+  if (gainIsAspPreset()) return Math.max(0, Math.min(21, Math.round(n))) * 10;
   return gainIsDb() ? Math.round(n * 10) : Math.round(n);
 }
 /** The stored integer -> what the owner reads back. */
 function gainFromRaw(v) {
   if (v === undefined || v === null || v < 0) return "";
+  if (gainIsAspPreset()) return "preset " + Math.round(v / 10);
   return gainIsDb() ? (v / 10).toFixed(1) + " dB" : String(v);
 }
 
@@ -2274,6 +2284,10 @@ const R820T_GAINS = [0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229
                      297, 328, 338, 364, 372, 386, 402, 421, 434, 439, 445, 480, 496];
 
 function gainSteps() {
+  /* ★★ THE AIRSPY R2 / MINI: its 22 preset positions, in the tenths the server speaks — the same
+   *  list AirspySource::gainListTenthDb() publishes and the listener's slider walks. Ahead of the
+   *  RSP branch below, which would otherwise read it as "not dB" and look for LNA states. */
+  if (gainIsAspPreset()) return Array.from({length: 22}, (_, i) => i * 10);
   // ★★★ AN RSP'S LIMIT IS AN RF POSITION, NOT dB — and NOT the list in HW.gains, which is the
   //     0-49 dB IF scale the listener's slider uses. Sliding over that would be a slider over the
   //     WRONG QUANTITY, which is worse than the text box it replaced: it would look authoritative
@@ -2326,9 +2340,19 @@ function renderGain() {
   const isRsp = drv === "sdrplay";
   const isHf  = drv === "airspyhf";
   const isHrf = drv === "hackrf";
+  /* ★★★ AND THE AIRSPY R2 / MINI, THE FIFTH DRIVER — which this card had never heard of, so it
+   *     was hidden whole: an R2 owner had no ceiling, no lock and no starting gain. Its figures are
+   *     PRESET POSITIONS (see gainIsAspPreset). What it gets is what the server enforces for it:
+   *     the starting gain (applyRestGain -> setGain, a preset), per-band ceilings and the per-band
+   *     lock (the gain handler and applyGainCapForFreq hold it on a curve, and airspy_control
+   *     refuses Free mode and the manual stages on a capped band).
+   *  ★★ NOT the AGC lock. On this radio "AGC" is Free mode with the LNA and mixer AGCs, and the
+   *     server's lock refuses the manual stages but neither forces those AGCs on nor stops a
+   *     listener switching them off — a lock that does not lock is not drawn (AGENTS.md). */
+  const isAsp = drv === "airspy";
   // ★★ SHOWN ONLY WHERE THE CONTROL EXISTS. An HF+ has no gain to cap, so offering a ceiling box
   //    for it would be a setting that does nothing — the exact fault AGENTS.md has a rule about.
-  $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf || isHrf));
+  $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf || isHrf || isAsp));
   // ★★★ THE RTL'S AGC SWITCH WAS NEVER SHOWN AT ALL. The row was added with class="hide" and no
   //     line was ever written to take it off, so "VibeSDR Custom AGC for RTL-SDR" has been in the
   //     page, correct and invisible, since the day it was added — Stuart, 2026-08-21, trying to
@@ -2344,7 +2368,7 @@ function renderGain() {
   // ★ RSP only — it is the only driver here with a settable AGC target.
   $("agcSetRow").classList.toggle("hide", !isRsp);
   $("agcSetLockRow").classList.toggle("hide", !isRsp);
-  $("gainRestRow").classList.toggle("hide", !(isRtl || isRsp));
+  $("gainRestRow").classList.toggle("hide", !(isRtl || isRsp || isAsp));
   // ★ Remembered, because layoutLockedRadio() also hides this row (a pinned window has no other
   //   bands) and must not UNHIDE it on a radio that never had per-band ceilings to begin with.
   //   Two independent reasons to hide one row need one place that knows both.
@@ -2357,8 +2381,15 @@ function renderGain() {
    *     mixer — the only pre-mixer stage is the RF amp, which is owner-only already — so the sum
    *     is what drives the converter, and capping them separately would allow twice what was
    *     asked for. The server enforces the same sum in hackrf_control. */
-  $("gainLimitRow").dataset.avail = (isRtl || isRsp || isHrf) ? "1" : "0";
-  $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
+  $("gainLimitRow").dataset.avail = (isRtl || isRsp || isHrf || isAsp) ? "1" : "0";
+  $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp || isHrf || isAsp));
+  /* ★★★ THE PER-BAND IF FILTER IS THE R820T's, AND ONLY A DONGLE HAS ONE. It is written by the
+   *     hardware writer through rtlsdr_set_tuner_bandwidth, which drives a USB dongle and nothing
+   *     else — so on an RSP, a HackRF or an Airspy the menu accepted a width, drew it in the chip,
+   *     and changed nothing. Drawn only where it acts (AGENTS.md: a control that works on one radio
+   *     only is not drawn on the others). A width already stored stays in the config and in the
+   *     chip; it simply cannot be added where the hardware has no such filter. */
+  $("gainIfBwRow").classList.toggle("hide", !isRtl);
   $("gainAgcLock").checked = r.agcLock === 1;
   /* ★★★ NAME THE AGC THAT IS ACTUALLY BEING LOCKED. This said "Lock VibeAGC on" for every radio,
    *   and on an SDRplay that is simply the wrong AGC: VibeAGC is OUR loop walking an RTL's tuner
@@ -2386,7 +2417,7 @@ function renderGain() {
   // ★ The lock is offered wherever a ceiling is, because it is the same figures read differently.
   //   ★★ NOT loaded from the radio: it belongs to the ENTRY being added, not to the receiver, so
   //      it starts clear each time rather than inheriting the last band's answer.
-  $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
+  $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf || isAsp));
   // ★★ IF ceiling: RSP only, and only while its AGC is NOT locked on — see the note above.
   $("gainIfRow").classList.toggle("hide", !(isRsp && r.agcLock !== 1));
   /* ★★★ VibeAGC OWNS THE GAIN PATH, SO SAY SO ON EVERY CONTROL IT TAKES. With it on there is no
@@ -2443,9 +2474,13 @@ function renderGain() {
   //     what it MEANS changes, so the note changes with it rather than the control.
   { const n = $("gainRestAgcNote");
     if (n) n.classList.toggle("hide", !($("rtlAgc").value === "1")); }
-  $("gainRest").placeholder = isRtl ? "e.g. 19.7 dB \u2014 empty to leave it alone"
-                                    : "RF gain position \u2014 empty to leave it alone";
-  $("gainMax").placeholder = isRtl ? "max, e.g. 25 dB" : "max RF position";
+  /* ★ Each radio's own unit in the hint, as gainToRaw reads it. The HackRF is in dB (gainIsDb) and
+   *   was told "RF position" here; the R2 / Mini is a preset 0-21. */
+  $("gainRest").placeholder = isAsp ? "preset 0\u201321 \u2014 empty to leave it alone"
+                            : gainIsDb() ? "e.g. 19.7 dB \u2014 empty to leave it alone"
+                                         : "RF gain position \u2014 empty to leave it alone";
+  $("gainMax").placeholder = isAsp ? "max preset, 0\u201321"
+                           : gainIsDb() ? "max, e.g. 25 dB" : "max RF position";
   wireGainSlider("gainRestSlider", "gainRest");
   wireGainSlider("gainMaxSlider", "gainMax");
   fillGainBands();
@@ -2661,6 +2696,14 @@ const DRIVER_HW = {
    *    carry, not what the radio can emit (it will do 20 MSPS; nothing here could process it).
    *    ★ biasT true: it has one, and it is 3.3 V on the antenna port. */
   hackrf:   { rates: [2000000, 2400000, 4000000, 5000000, 8000000, 10000000],
+              biasT: true,  rfNotch: false, lnaState: false },
+  /* ★★★ AIRSPY R2 / MINI — WHICH FELL TO `DRIVER_HW.rtl` BELOW AND WAS OFFERED A DONGLE'S RATES,
+   *     none of which it can do. An R2 does 2.5 and 10 MS/s, a Mini 3 and 6 (libairspy enumerates
+   *     them from the device), and the two cannot be told apart until the radio is open — so an
+   *     offline page offers both boards' rates and the radio snaps to its nearest (nearestRate).
+   *     Once it is running its OWN list replaces this one, as for every radio here.
+   *  ★ biasT true: 4.5 V on the aerial socket, routed by setBiasTee to setAirspyBiasT. */
+  airspy:   { rates: [2500000, 3000000, 6000000, 10000000],
               biasT: true,  rfNotch: false, lnaState: false },
 };
 
@@ -2990,6 +3033,21 @@ async function renderHw() {
         automatic gain, very little headroom at 8 bits, and a preamp with a reputation for not
         surviving being driven hard. Bring the LNA up until signals are clear of the noise and no
         further.</div>`;
+  } else if (drv === "airspy") {
+    /* ★★★ THE AIRSPY R2 / MINI HAD NO BRANCH, so it fell to the dongle's `else` below — harmless
+     *     only because that draws nothing. Its gain model is its own and is said here, in the words
+     *     the receiver page uses: Sensitive / Linear / Free, the three modes SDR++ presents and our
+     *     first Airspy tester asked for. No VibeAGC (RTL only) and no direct sampling (24-1800 MHz,
+     *     no HF branch) — so neither is offered anywhere on this page for this radio. */
+    el.innerHTML = `
+      <div class="hint">This radio's gain is Airspy's own: <b>Linear</b> or <b>Sensitive</b> move
+        one preset position, 0&ndash;21, along that curve and set all three stages together;
+        <b>Free</b> sets the LNA, mixer and VGA by hand, with the radio's own AGC available on the
+        first two. They are set on the receiver page, where you can watch the waterfall while you
+        move them. A starting position, per-band ceilings and per-band locks are in <b>Gain
+        limits</b> below, in the same 0&ndash;21 positions.
+        <br>It covers 24&ndash;1800&nbsp;MHz. There is no direct sampling to switch and VibeSDR's
+        own AGC is not used on it.</div>`;
   } else {
     /* ★★★ NO GAIN SELECT HERE. It sat directly above a note saying "Gain is not set here", and
      *     both were true: the select saved a number the client's live controls then overrode.
@@ -3025,6 +3083,11 @@ async function renderHw() {
     : drv === "airspyhf"
     ? `The HF+ has no variable gain to set &mdash; it manages its own attenuator and preamp &mdash;
        so there is nothing to protect here and nothing to adjust.`
+    : drv === "airspy"
+    ? `With no gain in its settings this radio opens on its <b>own automatic gain</b> &mdash; Free
+       mode with the LNA and mixer AGCs on, the nearest thing an R2 or Mini has to one. Set a
+       <b>starting gain</b> in Gain limits and it opens on that preset position instead, and goes
+       back to it whenever the last listener leaves.`
     : drv === "hackrf"
     ? `<b>Signals will look weak until you set the gain.</b> A HackRF has no automatic gain at all,
        so it starts with <b>every gain stage at zero and the RF amp off</b>, and stays exactly
@@ -3043,7 +3106,8 @@ async function renderHw() {
    *     sits above VibeAGC with a lock beside it. This card used to carry two paragraphs about
    *     where gain is NOT set, above a select that set it (Stuart, 2026-09-15: "double
    *     settings"). Only a radio with something of its own to say keeps a note here. */
-  if (drv === "airspyhf" || drv === "hackrf") el.innerHTML += `<div class="note">${startState}</div>`;
+  if (drv === "airspyhf" || drv === "hackrf" || drv === "airspy")
+    el.innerHTML += `<div class="note">${startState}</div>`;
   { const card = el.closest(".card"); if (card) card.classList.toggle("hide", !el.innerHTML.trim()); }
 
   // Restore stored values into whichever controls we just drew.

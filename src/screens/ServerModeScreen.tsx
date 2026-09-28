@@ -103,6 +103,18 @@ const RATE_OPTIONS_AHF = [
   { label: '768 kHz',         value: 768_000 },
   { label: '384 kHz (light)', value: 384_000 },
 ];
+// ★★★ Airspy R2 / Mini — which fell to RATE_OPTIONS_RTL and was offered a dongle's rates, none of
+// which it can do. An R2 does 10 and 2.5 MS/s, a Mini 6 and 3 (libairspy enumerates them from the
+// device), and getConnectedRadio() cannot tell the two apart from VID/PID — so both boards' rates
+// are listed and the shim snaps a pinned one to the radio's nearest (AirspySource::nearestRate).
+// ★ Same list as `airspy` in vibe_setup_page.h's DRIVER_HW — edit both together.
+const RATE_OPTIONS_ASP = [
+  { label: 'Client-controlled',        value: 0 },
+  { label: '10 MS/s (R2, heavy)',      value: 10_000_000 },
+  { label: '6 MS/s (Mini)',            value: 6_000_000 },
+  { label: '3 MS/s (Mini, lightest)',  value: 3_000_000 },
+  { label: '2.5 MS/s (R2, lightest)',  value: 2_500_000 },
+];
 
 /** ★★ THE R820T/R828D's 29 TUNER GAINS, tenths of a dB. Fixed in the tuner, identical across
  *  every RTL dongle we support, and the reason the control is a slider: there is nothing between
@@ -414,6 +426,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // ★ THREE RADIOS, THREE MENUS — not a two-way choice with a default any more.
   const rateOptionsAll = radio?.driver === 'airspyhf' ? RATE_OPTIONS_AHF
                        : radio?.driver === 'hackrf'   ? RATE_OPTIONS_HRF
+                       : radio?.driver === 'airspy'   ? RATE_OPTIONS_ASP
                        : RATE_OPTIONS_RTL;
   // ★★★ "CLIENT-CONTROLLED" CANNOT EXIST IN A LOCKED RANGE. The whole point of a pinned window is
   //     that the SERVER decides what is captured and everybody pans inside it — a listener who
@@ -465,6 +478,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // The rate ceiling to quote in prose, so the hint cannot drift from the list above it.
   const topRateLabel = radio?.driver === 'airspyhf' ? '912 kHz'
                      : radio?.driver === 'hackrf'   ? '8 MS/s'
+                     : radio?.driver === 'airspy'   ? '10 MS/s'
                      : '2.4 MHz';
 
   // ★★★ THE ORDER AN OWNER SETS A LOCKED RECEIVER IN, which is not the order the page grew in.
@@ -2403,6 +2417,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   ? 'The Airspy HF+ sets its own gain and its AGC stays on, so there is no starting '
                     + 'gain to choose and nothing to lock. It has no tuner IF filter either — '
                     + 'selectivity comes from the sample rate.'
+                  /* ★ The R2 / Mini fell through to the HackRF's sentence below — "else means
+                   *   dongle", in prose. Its gain is its own, and lives in the hardware panel. */
+                  : radio?.driver === 'airspy'
+                  ? 'The Airspy R2 / Mini sets its gain from the hardware panel: Linear or Sensitive '
+                    + 'move one preset position (0–21) along that curve, and Free sets the LNA, mixer '
+                    + 'and VGA by hand with the radio\'s own AGC on the first two. VibeAGC is for '
+                    + 'RTL-SDR only, and there is no tuner IF filter to follow the zoom.'
                   : 'The HackRF has no AGC at all — its gain is two manual stages (LNA and VGA) that '
                     + 'a listener sets from the hardware panel, so there is no starting gain, no '
                     + 'AGC to lock, and no tuner IF filter to follow the zoom.'}

@@ -25,6 +25,7 @@
 // ★ COVERAGE: 24 - 1800 MHz. No HF without an upconverter, and NO direct-sampling branch — so
 //   unlike a dongle there is nothing to switch out below 24 MHz, and the app must not offer it.
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -127,9 +128,18 @@ public:
     void setPacking(bool on);
     bool packing() const { return packing_; }
 
+    /** ★ Drop buffers without stopping the stream, for the idle saver — the same contract as
+     *  AirspyHfSource / HackRfSource::setPaused. Stopping and restarting is what re-states every
+     *  setting (applyAll) and costs a settle; the idle saver only wants the DSP quiet. */
+    void setPaused(bool p) { paused_.store(p, std::memory_order_relaxed); }
+    /** Seconds since the radio last delivered a buffer — stamped BEFORE the pause drop, so an
+     *  idle-parked radio is not mistaken for an unplugged one. 1e9 if none ever has. */
+    double secondsSinceLastRx() const;
+
     /** ★ Called by the library's RX callback (a free function in the .cpp — its signature needs
-     *  libairspy's own types, which this header deliberately does not include). */
-    void deliver(const float* iq, int sampleCount) { if (sink_) sink_(iq, sampleCount); }
+     *  libairspy's own types, which this header deliberately does not include). Stamps liveness,
+     *  then drops the buffer if paused. */
+    void deliver(const float* iq, int sampleCount);
 
     const std::string& model()  const { return model_; }
     const std::string& serial() const { return serial_; }
@@ -156,6 +166,8 @@ private:
     bool lnaAgc_ = false, mixerAgc_ = false;
     bool bias_ = false, packing_ = false;
     bool open_ = false, streaming_ = false;
+    std::atomic<bool>   paused_{false};
+    std::atomic<double> lastRx_{0.0};   // steady-clock seconds of the last buffer; 0 = never
 };
 
 } // namespace vibe

@@ -8,6 +8,8 @@
 #include <thread>
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
+#include "hackrf_source.h"
+#include "airspy_source.h"
 #include "radios.h"
 #include "directory.h"
 
@@ -158,6 +160,29 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     // ★ Route to whichever driver owns this index. See vs_device_count for the flat list.
     const int nRtl = rtlCount();
     const int nRsp = vibe::SdrplaySource::deviceCount();
+    const int nAhf = vibe::AirspyHfSource::deviceCount();
+    const int nHrf = vibe::HackRfSource::deviceCount();
+    const char* mode = cfg->mode ? cfg->mode : "wfm";
+    /* ★★★ THE SAME ORDER AS detectRadios(): RTL, RSP, HF+, HackRF, Airspy R2/Mini. Until
+     *     2026-09-28 this stopped at the HF+, so on a Mac a HackRF or an R2 was not in the list at
+     *     all — and anything past the HF+ range would have been handed to startAirspyHf with an
+     *     index it does not have. Each branch names its driver; nothing is "the rest". */
+    if (cfg->deviceIndex >= nRtl + nRsp + nAhf + nHrf) {
+        const int p = LocalSdrShim::instance().startAirspy(
+            cfg->deviceIndex - nRtl - nRsp - nAhf - nHrf, cfg->centreHz, cfg->sampleRate,
+            cfg->gainTenthDb, cfg->fftSize, cfg->fftRate, mode, err);
+        if (p <= 0) { copyStr(errOut, errCap, err.empty() ? "could not start" : err); g_port = 0; return -1; }
+        g_port = p;
+        return p;
+    }
+    if (cfg->deviceIndex >= nRtl + nRsp + nAhf) {
+        const int p = LocalSdrShim::instance().startHackRf(
+            cfg->deviceIndex - nRtl - nRsp - nAhf, cfg->centreHz, cfg->sampleRate,
+            cfg->gainTenthDb, cfg->fftSize, cfg->fftRate, mode, err);
+        if (p <= 0) { copyStr(errOut, errCap, err.empty() ? "could not start" : err); g_port = 0; return -1; }
+        g_port = p;
+        return p;
+    }
     if (cfg->deviceIndex >= nRtl + nRsp) {
         const int port3 = LocalSdrShim::instance().startAirspyHf(
             cfg->deviceIndex - nRtl - nRsp, cfg->centreHz, cfg->sampleRate, cfg->gainTenthDb,
@@ -252,17 +277,30 @@ void vs_sdrplay_retry(void) { vibe::SdrplaySource::retryApi(); }
 
 int vs_sdrplay_api_stuck(void) { return vibe::SdrplaySource::apiUnresponsive() ? 1 : 0; }
 
-// ★ ONE FLAT LIST, now three drivers deep: dongles, then RSPs, then Airspy HF+. The operator
-// picks a RECEIVER; which of three APIs it happens to speak is our problem. Order is fixed so
-// an index means the same thing on the next launch.
+// ★ ONE FLAT LIST, now five drivers deep: dongles, then RSPs, then Airspy HF+, then HackRF, then
+// Airspy R2/Mini — the order detectRadios() uses, so the Mac app, the TUI and `--radio N` all mean
+// the same receiver by the same number. The operator picks a RECEIVER; which API it happens to
+// speak is our problem. Order is fixed so an index means the same thing on the next launch.
 int vs_device_count(void) {
     return rtlCount() + vibe::SdrplaySource::deviceCount()
-                      + vibe::AirspyHfSource::deviceCount();
+                      + vibe::AirspyHfSource::deviceCount()
+                      + vibe::HackRfSource::deviceCount()
+                      + vibe::AirspySource::deviceCount();
 }
 
 const char* vs_device_name(int index) {
     const int nRtl = rtlCount();
     const int nRsp = vibe::SdrplaySource::deviceCount();
+    const int nAhf = vibe::AirspyHfSource::deviceCount();
+    const int nHrf = vibe::HackRfSource::deviceCount();
+    if (index >= nRtl + nRsp + nAhf + nHrf) {
+        g_deviceName = vibe::AirspySource::deviceName(index - nRtl - nRsp - nAhf - nHrf);
+        return g_deviceName.c_str();
+    }
+    if (index >= nRtl + nRsp + nAhf) {
+        g_deviceName = vibe::HackRfSource::deviceName(index - nRtl - nRsp - nAhf);
+        return g_deviceName.c_str();
+    }
     if (index >= nRtl + nRsp) {
         g_deviceName = vibe::AirspyHfSource::deviceName(index - nRtl - nRsp);
         return g_deviceName.c_str();

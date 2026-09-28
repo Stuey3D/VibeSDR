@@ -111,7 +111,9 @@ std::string radioLine() {
     //  ★ So: ask the driver, and if it says nothing, ask the USB bus before believing it. A false
     //    "no radio" is the single most expensive thing this screen can say — it sends people
     //    looking for a hardware fault that is not there.
-    return run("lsusb 2>/dev/null | grep -iE 'airspy|sdrplay|rtl|realtek|1df7' "
+    // ★ HackRF (1d50:6089) and Airspy R2/Mini (1d50:60a1) by ID as well as by name: both sit
+    //   under the OpenMoko vendor ID, and an old usb.ids may not name either.
+    return run("lsusb 2>/dev/null | grep -iE 'airspy|sdrplay|rtl|realtek|1df7|hackrf|1d50:6089|1d50:60a1' "
                "| sed 's/.*ID [0-9a-f:]* //' | head -1");
 }
 std::string myIp() { return run("hostname -I 2>/dev/null | awk '{print $1}'"); }
@@ -273,7 +275,7 @@ bool runWizard(vsconfig::Config& cfg, std::vector<vibe::DetectedRadio>& radios,
         if (radios.empty()) {
             message(4, 2, "No radio detected.");
             mvprintw(6, 2, "Plug an SDR into this machine, then press  r  to look again.");
-            mvprintw(7, 2, "Supported: RTL-SDR, Airspy HF+, SDRplay RSP.");
+            mvprintw(7, 2, "Supported: RTL-SDR, Airspy HF+, Airspy R2/Mini, SDRplay RSP, HackRF.");
             attron(A_BOLD); mvprintw(9, 2, "r = look again    q = quit"); attroff(A_BOLD);
             refresh();
             int c = getch();

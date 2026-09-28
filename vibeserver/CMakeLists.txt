@@ -362,6 +362,16 @@ if(EXISTS "${AIRSPY_VENDOR}/airspy.c")
     target_include_directories(vibeserver_core PRIVATE "${LIBUSB_INC_AS}")
   endif()
   target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_AIRSPY)
+elseif(VIBESERVER_STRICT_RADIOS)
+  # ★★★ Same guard as the SDRplay and HackRF blocks: a release must never be quietly missing a
+  #     radio. Every VibeServer build supports every SDR we support (Stuart, 2026-09-28), and a
+  #     checkout without the vendored tree would otherwise compile the stub and tell every R2/Mini
+  #     owner "no radio".
+  message(FATAL_ERROR
+          "Vendored libairspy not found at ${AIRSPY_VENDOR}, and VIBESERVER_STRICT_RADIOS is on.\n"
+          "A package built now would report 'no radio' to every Airspy R2/Mini owner.")
+else()
+  message(STATUS "libairspy: vendored tree missing — building without Airspy R2/Mini support")
 endif()
 
 # ── libhackrf: HackRF One (EXPERIMENTAL — this is the DESKTOP half) ───────────

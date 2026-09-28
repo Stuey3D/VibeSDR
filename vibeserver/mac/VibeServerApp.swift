@@ -1673,7 +1673,7 @@ struct SettingsView: View {
                         Spacer()
                         Button("Look again") { server.rescanFullRadios() }
                     }
-                    Text("Plug an SDR in — RTL-SDR, Airspy HF+ or SDRplay RSP.")
+                    Text("Plug an SDR in — RTL-SDR, Airspy HF+, Airspy R2/Mini, SDRplay RSP or HackRF.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     ForEach($server.fullRadios) { $r in

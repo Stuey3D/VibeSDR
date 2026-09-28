@@ -7835,6 +7835,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return "";
         }
+        /* ★★★ AND THE AIRSPY R2 / MINI, WHICH FELL INTO THE DONGLE LIST BELOW — the same fault the
+         *     HackRF note above describes, one radio later. An R2 does 10/2.5 MS/s and a Mini 6/3;
+         *     none of the dongle's five rates is either, so the setup page offered an R2 owner only
+         *     rates the radio cannot do. advertisedRates() already had this branch — the second
+         *     reader of that one fact had not. Enumerated from the radio, descending. */
+        if (useAirspy()) {
+            if (auto* a = asp.get()) {
+                const auto& rl = a->sampleRates();
+                std::string out;
+                for (size_t i = rl.size(); i-- > 0; ) {
+                    if (!out.empty()) out += ",";
+                    out += std::to_string(rl[i]);
+                }
+                if (!out.empty()) return out;
+            }
+            return "";
+        }
         /* ★ 2 048 000 ADDED (2026-09-08). It was never offered for the RTL "for some reason"
          *  (Stuart) — and it is the one rate that lets the DAB question be MEASURED: whether the
          *  XCover's 94 % sample delivery at 2.048 (the reason DAB captures at 2.4 and resamples)
@@ -12619,22 +12636,54 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "airspy_control") {
             if (!sharedGate("Airspy controls")) return;
             const bool manualLocked = LocalSdrShim::agcLocked();
-            if (jsonNum(msg, "mode", v))     LocalSdrShim::instance().setAirspyGainMode((int)v);
-            if (jsonNum(msg, "curve", v))    LocalSdrShim::instance().setAirspyCurve(v != 0);
+            /* ★★★ THE OWNER'S PER-BAND CEILING BINDS THIS RADIO TOO (2026-09-28). The setup page
+             *     now offers ceilings for an R2 / Mini, as a PRESET POSITION — and a ceiling that
+             *     Free mode walks straight past is a setting that does nothing, which AGENTS.md
+             *     forbids drawing. So on a capped band the gain stays on a curve: Free and the
+             *     three manual stages (and their AGCs, which only exist in Free) are refused, and a
+             *     curve switch is re-clamped, because each curve remembers its own position and
+             *     the other one may sit above the ceiling. On a LOCKED band the owner's position
+             *     and curve are the setting, so every gain-shaped field is refused — the HackRF's
+             *     rule. Bias-T and packing are not gain and are untouched. */
+            const double capHz  = LocalSdrShim::instance().listenFrequency();
+            const int    capT   = LocalSdrShim::gainCapAt(capHz);
+            const bool   capped = capT >= 0;
+            const bool   fixed  = capped && LocalSdrShim::gainLockedAt(capHz);
+            bool curveMoved = false;
+            if (jsonNum(msg, "mode", v)) {
+                if (fixed)                LOGI("Airspy gain mode refused — the owner has fixed this band");
+                else if (capped && (int)v == 2)
+                                          LOGI("Airspy free mode refused — the owner caps this band at preset %d", capT / 10);
+                else { LocalSdrShim::instance().setAirspyGainMode((int)v); curveMoved = true; }
+            }
+            if (jsonNum(msg, "curve", v)) {
+                if (fixed) LOGI("Airspy curve refused — the owner has fixed this band");
+                else       { LocalSdrShim::instance().setAirspyCurve(v != 0); curveMoved = true; }
+            }
+            if (curveMoved && capped) applyGainCapForFreq(capHz);
+            const char* stageRefusal = manualLocked ? "the owner has locked the AGC on"
+                                     : capped       ? "the owner caps this band, which holds the gain on a curve"
+                                                    : nullptr;
             if (jsonNum(msg, "lna", v)) {
-                if (manualLocked) LOGI("LNA refused — the owner has locked the AGC on");
+                if (stageRefusal) LOGI("LNA refused — %s", stageRefusal);
                 else              LocalSdrShim::instance().setAirspyStage(0, (int)v);
             }
             if (jsonNum(msg, "mixer", v)) {
-                if (manualLocked) LOGI("mixer gain refused — the owner has locked the AGC on");
+                if (stageRefusal) LOGI("mixer gain refused — %s", stageRefusal);
                 else              LocalSdrShim::instance().setAirspyStage(1, (int)v);
             }
             if (jsonNum(msg, "vga", v)) {
-                if (manualLocked) LOGI("VGA refused — the owner has locked the AGC on");
+                if (stageRefusal) LOGI("VGA refused — %s", stageRefusal);
                 else              LocalSdrShim::instance().setAirspyStage(2, (int)v);
             }
-            if (jsonNum(msg, "lnaAgc", v))   LocalSdrShim::instance().setAirspyLnaAgc(v != 0);
-            if (jsonNum(msg, "mixerAgc", v)) LocalSdrShim::instance().setAirspyMixerAgc(v != 0);
+            if (jsonNum(msg, "lnaAgc", v)) {
+                if (capped) LOGI("LNA AGC refused — the owner caps this band");
+                else        LocalSdrShim::instance().setAirspyLnaAgc(v != 0);
+            }
+            if (jsonNum(msg, "mixerAgc", v)) {
+                if (capped) LOGI("mixer AGC refused — the owner caps this band");
+                else        LocalSdrShim::instance().setAirspyMixerAgc(v != 0);
+            }
             if (jsonNum(msg, "biast", v) && adminGate("bias-T"))
                 LocalSdrShim::instance().setAirspyBiasT(v != 0);
             if (jsonNum(msg, "packing", v))  LocalSdrShim::instance().setAirspyPacking(v != 0);
@@ -13855,6 +13904,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // behind the admin password; a personal one leaves it alone.
             if (!sharedGate("gain")) return;
             if (msg.find("\"auto\":true") != std::string::npos) {
+                /* ★ On an Airspy R2 / Mini "auto" is Free mode with the stage AGCs, which no
+                 *   preset ceiling can bind — see airspy_control. Refused where a ceiling applies. */
+                if (useAirspy()
+                    && LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency()) >= 0) {
+                    LOGI("Airspy auto gain refused — the owner caps this band");
+                    return;
+                }
                 LocalSdrShim::instance().setGain(-1); vsPersist("{\"gain\":-1}");
             } else if (jsonNum(msg,"value",v)) {
                 // ★★★ THE OWNER'S CEILING FOR THIS BAND. A ceiling, not a lock: the listener keeps
@@ -20024,6 +20080,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Same treatment as the HF+: a HackRF is far more disruptive to stop and restart than
         //   simply to ignore, and the idle saver only wants it quiet, not gone.
         else if (useHackRf())   { hrf->setPaused(true); }
+        /* ★★ AND THE AIRSPY R2 / MINI, which fell into the dongle's `else` below. That set
+         *    idleDiscard — read only by the RTL async handler — so an idle R2 kept filling the IQ
+         *    queue and the DSP never parked. Same treatment as the HF+ and the HackRF: keep the
+         *    stream, drop the buffers at the source (which still stamps liveness for the watchdog). */
+        else if (useAirspy())   { asp->setPaused(true); }
         else {
             // ★★★ THE DONGLE IS NO LONGER STOPPED — IT IS IGNORED. Cancelling the async
             // stream and restarting it is what crashed the server, and the "fix" below was
@@ -20226,6 +20287,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return;
         }
+        /* ★★★ THE AIRSPY R2 / MINI: THE CEILING IS A PRESET POSITION (index x 10, the same tenths
+         *     the slider speaks — see AirspySource::gainListTenthDb), and it can only be honoured on
+         *     a preset curve. Free mode sets the three stages by hand or hands two of them to the
+         *     radio's own AGC, and neither has any relation to a position on a curve — so on a
+         *     capped band the radio is brought back onto its curve, at the listener's own position
+         *     if that is within the ceiling and at the ceiling if not. Falling into the RTL line
+         *     below read lastGainTenthDb, which a mode change never updates, so a listener in Free
+         *     simply kept whatever the stages were doing. */
+        if (useAirspy() && asp) {
+            const bool free = asp->gainMode() == vibe::AirspySource::GainFree;
+            const int  cur  = asp->gainTenthDb();
+            const int  base = cur >= 0 ? cur : cap;
+            const int  want = fix ? cap : std::min(base, cap);
+            if (free || cur != want) {
+                LOGI("retune into a %s band — Airspy %s preset %d -> %d", fix ? "fixed" : "capped",
+                     free ? "free mode" : "curve", cur < 0 ? -1 : cur / 10, want / 10);
+                LocalSdrShim::instance().setGain(want);
+            }
+            return;
+        }
         // RTL: tenths of a dB, and -1 means AUTO — which is the radio deciding, not the listener
         // overriding, so it is left alone.
         const int cur = lastGainTenthDb;
@@ -20413,6 +20494,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else if (useSdrplay()) { sdrp->setPaused(false); }
         else if (useAirspyHf()) { ahf->setPaused(false); }
         else if (useHackRf())   { hrf->setPaused(false); }
+        else if (useAirspy())   { asp->setPaused(false); }   // ★ see pauseCaptureIdle
         else          { idleDiscard.store(false); }   // never stopped; just start wanting it again
         // ★★ AND RESET THE DSP. Restarting the capture alone leaves every recursive
         // state holding values from before the pause — filters, the pilot PLL, and the
@@ -21550,6 +21632,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     const double age = hrf->secondsSinceLastRx();
                     if (age < 1e8) last = std::max(last, nowSecs() - age);
                 }
+                // ★ And the Airspy R2 / Mini, the same way — it is idle-parked at the source too.
+                if (useAirspy() && asp) {
+                    const double age = asp->secondsSinceLastRx();
+                    if (age < 1e8) last = std::max(last, nowSecs() - age);
+                }
                 /* ★★ A RADIO BEING RETUNED IS ALLOWED A LONGER PAUSE. 3 s of silence is the
                  *    unplugged-dongle figure; an RSP that had a tuner write inside the last 3 s
                  *    gets 8 s before it is called stalled, so a block-stepping burst is never
@@ -21587,7 +21674,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                           // ★ A HackRF stall is recoverable in place too — it has
                                           //   its own source object to stop and start, and nothing
                                           //   about it needs the librtlsdr reopen path below.
-                                          || (useHackRf() && hrf));
+                                          || (useHackRf() && hrf)
+                                          // ★ And the R2 / Mini: its own source object, its own
+                                          //   stop/start, nothing of librtlsdr's.
+                                          || (useAirspy() && asp));
                 if (recoverable) {
                     /* ★★★ NEVER TWO STREAM RESTARTS INSIDE TEN SECONDS. 2026-09-15 19:48 on the
                      *     Lenovo: a block-stepping burst (13 multiplexes in 8 s) stalled the RSP,
@@ -21647,7 +21737,55 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                  deep ? "reopening the device" : "re-initialising the stream",
                                  srcRestarts);
                             ok = deep ? sdrp->reopen(rerr) : sdrp->restartStream(rerr);
-                        } else {
+                        } else if ((useHackRf() && hrf) || (useAirspy() && asp)) {
+                            /* ★★★ NAMED, NOT "THE REST". The HackRF was admitted to `recoverable`
+                             *     above and then fell into the HF+ branch below, which calls
+                             *     ahf->restartStream() — on a null `ahf`, because a HackRF server
+                             *     has none. The first stall of a HackRF would have been a SIGSEGV.
+                             *     The R2 / Mini joins it here rather than repeating that.
+                             *  ★ Same escalation as the HF+: restart the stream on the handle we
+                             *    hold first; after two goes the handle is the suspect, so close and
+                             *    reopen by index. A radio opened from an Android descriptor has no
+                             *    index (-1: the fd is single-use), so it only ever gets the shallow
+                             *    restart — a reopen must come back through UsbManager.
+                             *  ★★ Under devMtx then modeMtx, in the documented order, exactly as
+                             *     releaseRadio() closes these radios: the control threads write to
+                             *     them under modeMtx (VIBE_HW_LOCK), and a close underneath a
+                             *     setter is a use-after-free. The capture callback takes neither. */
+                            const bool isHrf = useHackRf();
+                            const int  idx   = isHrf ? hrfIndex : aspIndex;
+                            const bool deep  = srcRestarts > 2 && idx >= 0;
+                            LOGE("no IQ for 3s on %s — %s (attempt %d)",
+                                 isHrf ? "a HackRF" : "an Airspy R2/Mini",
+                                 deep ? "reopening the device" : "restarting the stream",
+                                 srcRestarts);
+                            std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                            std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+                            const double phys = rtlCenter.load() + hwOffsetHz();
+                            if (isHrf) {
+                                hrf->stop();
+                                if (deep) {
+                                    hrf->close();
+                                    // ★ -1 gain: leave the three stages where the owner put them,
+                                    //   as reacquireRadio() does.
+                                    ok = hrf->open(idx, sampleRate, phys, -1, rerr) && hrf->start(rerr);
+                                } else {
+                                    ok = hrf->start(rerr);
+                                }
+                            } else {
+                                asp->stop();
+                                if (deep) {
+                                    asp->close();
+                                    ok = asp->open(idx, sampleRate, phys, lastGainTenthDb, rerr)
+                                      && asp->start(rerr);
+                                    // ★ open() resets the gain mode from the number it is given;
+                                    //   put back what the owner chose (stages, AGCs, mode).
+                                    if (ok) LocalSdrShim::applyDesiredDsp(this);
+                                } else {
+                                    ok = asp->start(rerr);   // start() re-states every setting
+                                }
+                            }
+                        } else if (useAirspyHf() && ahf) {
                             // ★ ESCALATE. The first two goes restart the stream on the handle we
                             // hold, which is all a stalled-but-present radio needs. After that the
                             // handle itself is the suspect, so close and reopen by serial — the
@@ -21756,6 +21894,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const bool back = useAirspyHf() ? (ahf  ? true : vibe::AirspyHfSource::deviceCount() > 0)
                                 : useSdrplay()  ? (sdrp ? true : vibe::SdrplaySource::deviceCount() > 0)
                                 : useHackRf()   ? (hrf  ? true : vibe::HackRfSource::deviceCount() > 0)
+                                // ★ And the R2 / Mini — left to findOurDevice() (librtlsdr), a
+                                //   stalled R2 was declared gone for good.
+                                : useAirspy()   ? (asp  ? true : vibe::AirspySource::deviceCount() > 0)
                                                 : (findOurDevice() >= 0);
                 if (back == deviceLost.load()) {      // state changed
                     deviceLost.store(!back);
@@ -21782,6 +21923,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     the note above says — running a HackRF through it would reopen whatever
                 //     dongle happened to be at that index, or nothing at all.
                 if (back && !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf() && !useHackRf()
+                         && !useAirspy()
                          && !radioReleased.load() && !captureIdle.load()) {
                     // ★ Backed off, not hammered. A dongle that cannot hold a stream would
                     //   otherwise be reopened every two seconds for ever, and each attempt is USB
@@ -27649,8 +27791,8 @@ bool LocalSdrShim::releaseRadio() {
     //   server reported the radio as released.
     const bool rsp = impl->useSdrplay(), ahf = impl->useAirspyHf(), hrf = impl->useHackRf();
     /* ★ And the R2/Mini, which the sentence directly above asks for and the line below it forgot.
-     *  It has no setPaused: libairspy stops by ending the transfer, so stop() IS its pause, and
-     *  start() brings it back with every setting re-stated (AirspySource::applyAll). */
+     *  stop(), not setPaused(): the device is about to be CLOSED, and libairspy stops by ending
+     *  the transfer; reacquireRadio() start()s it again with every setting re-stated (applyAll). */
     const bool asp = impl->useAirspy();
 
     if (rsp)      impl->sdrp->setPaused(true);
@@ -27849,6 +27991,16 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
     // ★ Same shape as the HF+: the device was CLOSED on release, so streaming has to be started
     //   again, not merely unpaused. The sink was set at open time and survives.
     else if (hrf) { std::string e2; impl->hrf->start(e2); impl->hrf->setPaused(false); }
+    /* ★★★ AND THE R2 / MINI, WHICH FELL INTO launchCapture() — rtlsdr_read_async on a null `dev`,
+     *     which returns at once and marks the capture down. Taking an R2 back after lending it out
+     *     gave a dead receiver. Its device was CLOSED on release, so start the stream again (start()
+     *     re-states every setting), and put back the gain mode open(-1) replaced with Free+AGC. */
+    else if (asp) {
+        std::string e2;
+        impl->asp->setPaused(false);
+        impl->asp->start(e2);
+        LocalSdrShim::applyDesiredDsp(impl);
+    }
     else          impl->launchCapture();
     LOGI("radio REACQUIRED");
     impl->notifyDeviceState();
@@ -27921,6 +28073,18 @@ void LocalSdrShim::setBiasTee(bool on) {
         p->hrf->setBiasTee(on);
         g_biasTeeOn.store(on);
         LOGI("bias-tee (HackRF): %s", on ? "ON — DC on the feedline" : "off");
+        return;
+    }
+    /* ★★ AND THE AIRSPY R2 / MINI, THE SAME WAY. It has a 4.5 V bias-T (setAirspyBiasT, which the
+     *   listener panel drives through airspy_control), and the owner's switch in the setup page and
+     *   the server's start-up "off unless the config asks" both come through HERE — so without this
+     *   branch both fell to the dongle path, found no `dev`, and "remembered" a setting nothing
+     *   would ever apply. Routed through setAirspyBiasT so it is also kept in g_dsp and survives a
+     *   reopen. */
+    if (p->useAirspy()) {
+        setAirspyBiasT(on);
+        g_biasTeeOn.store(on);
+        LOGI("bias-tee (Airspy): %s", on ? "ON — DC on the feedline" : "off");
         return;
     }
     /* ★ Remembered BEFORE the device check, so an early call survives to be applied at open. */

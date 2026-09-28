@@ -4,6 +4,7 @@
 #ifdef VIBE_HAVE_AIRSPY
 #include "airspy.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -55,6 +56,26 @@ std::vector<int> AirspySource::gainListTenthDb() {
     g.reserve(kPresets);
     for (int i = 0; i < kPresets; i++) g.push_back(i * 10);
     return g;
+}
+
+namespace {
+double nowSecsMono() {
+    using namespace std::chrono;
+    return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+}  // namespace
+
+/* ★★ LIVENESS FIRST, BEFORE THE DROP — the ordering AirspyHfSource and HackRfSource document. The
+ *  buffer is proof the radio is alive; whether we keep it is our decision, not the hardware's. */
+void AirspySource::deliver(const float* iq, int sampleCount) {
+    lastRx_.store(nowSecsMono(), std::memory_order_relaxed);
+    if (paused_.load(std::memory_order_relaxed)) return;
+    if (sink_) sink_(iq, sampleCount);
+}
+
+double AirspySource::secondsSinceLastRx() const {
+    const double t = lastRx_.load(std::memory_order_relaxed);
+    return t <= 0.0 ? 1e9 : (nowSecsMono() - t);
 }
 
 namespace {
@@ -190,6 +211,8 @@ bool AirspySource::start(std::string& err) {
     const int rc = airspy_start_rx(dev_, &airspyRxCallback, this);
     if (rc != AIRSPY_SUCCESS) { err = std::string("airspy_start_rx: ") + airspy_error_name((airspy_error)rc); return false; }
     streaming_ = true;
+    // ★ A fresh clock, so the stall watchdog does not read the time before a restart as silence.
+    lastRx_.store(nowSecsMono(), std::memory_order_relaxed);
     // ★★★ AFTER the stream, never before — see applyAll().
     applyAll();
     return true;
@@ -361,5 +384,7 @@ void AirspySource::setLnaAgc(bool) {}
 void AirspySource::setMixerAgc(bool) {}
 void AirspySource::setBiasTee(bool) {}
 void AirspySource::setPacking(bool) {}
+void AirspySource::deliver(const float*, int) {}
+double AirspySource::secondsSinceLastRx() const { return 1e9; }
 } // namespace vibe
 #endif

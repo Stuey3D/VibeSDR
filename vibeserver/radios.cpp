@@ -3,6 +3,7 @@
 #include "airspyhf_source.h"
 #include "sdrplay_source.h"
 #include "hackrf_source.h"
+#include "airspy_source.h"
 #include <algorithm>
 
 namespace vibe {
@@ -66,6 +67,27 @@ std::vector<DetectedRadio> detectRadios() {
         r.driver = "hackrf";
         r.name   = HackRfSource::deviceName(i);
         // Named like "HackRF One (a1b2c3d4)" — the tail of the serial, see deviceName().
+        const size_t open = r.name.find('('), close = r.name.find(')');
+        if (open != std::string::npos && close != std::string::npos && close > open + 1)
+            r.serial = r.name.substr(open + 1, close - open - 1);
+        r.driverIndex = i;
+        out.push_back(r);
+    }
+
+    /* ★★★ AIRSPY R2 / MINI — AFTER THE HACKRF, AND THAT ORDER IS THE CONTRACT TOO. Every
+     *     VibeServer build must drive every radio we support (Stuart, 2026-09-28); the R2/Mini
+     *     worked on Android from 2026-09-22 and the desktop never enumerated it at all, so a Pi
+     *     with one attached reported "no radio". Appending it LAST keeps every flat index that
+     *     existed before it exactly where it was — a config that says `--radio 2` still means
+     *     the same hardware on a machine that gains an R2.
+     *  ★ A different driver from the HF+ ("airspyhf"): different library, different gain model.
+     *    Absent from the build = deviceCount() 0, so this loop does not run. */
+    const int nAsp = AirspySource::deviceCount();
+    for (int i = 0; i < nAsp; i++) {
+        DetectedRadio r;
+        r.driver = "airspy";
+        r.name   = AirspySource::deviceName(i);
+        // Named like "Airspy (0123456789ABCDEF)" — libairspy's 64-bit serial, see deviceName().
         const size_t open = r.name.find('('), close = r.name.find(')');
         if (open != std::string::npos && close != std::string::npos && close > open + 1)
             r.serial = r.name.substr(open + 1, close - open - 1);

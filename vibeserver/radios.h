@@ -18,7 +18,7 @@
 namespace vibe {
 
 struct DetectedRadio {
-    std::string driver;    // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental)
+    std::string driver;    // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental) | "airspy" (R2/Mini)
     std::string name;      // human-readable, as the driver describes it
     std::string serial;    // as the DRIVER reports it; may be empty, and may not be unique
     int         index = 0; // position in this flat list — what `--radio N` takes
@@ -31,7 +31,8 @@ struct DetectedRadio {
     int         driverIndex = 0;
 };
 
-/** Everything attached, dongles first, then SDRplay RSPs, then Airspy HF+.
+/** Everything attached, dongles first, then SDRplay RSPs, then Airspy HF+, then HackRF, then
+ *  Airspy R2 / Mini (each new driver is appended, so no existing flat index moves).
  *  ★ The order is the contract: it is what `--radio` indexes and what the setup screen numbers. */
 std::vector<DetectedRadio> detectRadios();
 

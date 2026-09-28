@@ -111,6 +111,12 @@ OPUSLIB=$(grep -m1 '^OPUS_LIB:'  "$BUILD/CMakeCache.txt" | cut -d= -f2)
 # plug-and-play with nothing for the user to install. Optional: a machine without it still
 # builds, and simply reports no HF+ devices.
 AHFLIB=$(grep -m1 '^AIRSPYHF_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
+# ★★ BUT NOT WHEN WE BUILT OUR OWN. CMakeLists.txt compiles the vendored, PATCHED libairspyhf into
+#    libvibeserver_core.a whenever this file exists (the same test it uses), and find_library still
+#    caches Homebrew's UNPATCHED archive. Linking both leaves which airspyhf_close() wins to archive
+#    order — the use-after-free the vendored copy exists to fix. Core already defines every symbol.
+# ★ libairspy (Airspy R2/Mini) is vendored-only and lives inside core too, so it needs no line here.
+if [ -f "$ROOT/android/app/src/main/cpp/libairspyhf/airspyhf.c" ]; then AHFLIB=""; fi
 # ★★★ AND libhackrf — THE SECOND READER OF THE RADIO LIST. CMakeLists.txt links this into
 # vibeserver_core, but the Swift app is linked BY HAND right here, so a driver added there is not a
 # driver added here: the CLI `vibeserver` target linked fine while the .app failed with 14

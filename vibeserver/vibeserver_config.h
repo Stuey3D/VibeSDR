@@ -322,7 +322,7 @@ struct Config {
  *    is for and why `vibeserver --set-rtl-serial` exists. */
 struct RadioConfig {
     std::string serial;      // as the DRIVER reports it — empty until the radio is first seen
-    std::string driver;      // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental)
+    std::string driver;      // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental) | "airspy" (R2/Mini)
     std::string usbPath;     // physical socket, e.g. "1-2" — the tie-break when serials collide
     std::string label;       // what the owner calls it; shown to listeners
     /** ★★★ A PIN FOR THIS RADIO ALONE. Empty for almost every server, and empty means "the

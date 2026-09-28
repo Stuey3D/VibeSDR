@@ -703,7 +703,10 @@ function refreshAdminRow() {
   //     treated with the same caution as the Bias-T and password protected so a stranger cannot
   //     enable the preamp and blow it up... Unlike the Airspy the HackRF preamp is extremely
   //     sensitive." It is the U14 amp, the part of a HackRF that most commonly dies.
-  for (const id of ['ppm', 'biasT', 'directSampling', 'ahfPpb', 'rspBiasT', 'hrfAmp', 'hrfBiasT']) {
+  // ★ aspBiasT too: the Airspy R2 / Mini's bias-T is owner-only on the server (adminGate in the
+  //   airspy_control handler), and it was the one bias-T this list forgot — live for a stranger,
+  //   refused by the server, which reads as a broken switch (2026-09-28).
+  for (const id of ['ppm', 'biasT', 'directSampling', 'ahfPpb', 'rspBiasT', 'hrfAmp', 'hrfBiasT', 'aspBiasT']) {
     const el = document.getElementById(id) as HTMLInputElement | null;
     if (!el) continue;
     el.disabled = locked;

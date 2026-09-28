@@ -34,7 +34,10 @@ int main() {
                         // ★ HackRF is EXPERIMENTAL but it is not exempt from this: an unknown
                         //   driver is a radio the start path cannot dispatch, and "experimental"
                         //   must not mean "detected and then silently unservable".
-                        || !std::strcmp(drv, "hackrf");
+                        || !std::strcmp(drv, "hackrf")
+                        // ★ And the Airspy R2 / Mini, enumerated since 2026-09-28 with its own
+                        //   start branch (startAirspy) in main.cpp and vs_start.
+                        || !std::strcmp(drv, "airspy");
         ok(known, "every radio reports a driver we can actually start");
         ok(std::strlen(vs_radio_name(i)) > 0, "every radio has a display name");
     }

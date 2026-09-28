@@ -34,6 +34,7 @@
 #include "parent_watch.h"   // die-with-the-front-door; a no-op on Linux
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
+#include "airspy_source.h"
 #include "sdrplay_source.h"
 
 #include <atomic>
@@ -2619,6 +2620,12 @@ int main(int argc, char** argv) {
             if (drv == "hackrf")
                 port = shim.startHackRf(drvIdx, o.freq, o.rate, o.gain,
                                         o.fftSize, o.fftRate, o.mode, err);
+            /* ★★★ THE AIRSPY R2 / MINI, THE FIFTH SOURCE. Before this branch existed "airspy"
+             *     fell into the dongle's `else` below and started an RTL capture against an
+             *     Airspy's driver index — "else means dongle", once more. Named, not inferred. */
+            else if (drv == "airspy")
+                port = shim.startAirspy(drvIdx, o.freq, o.rate, o.gain,
+                                        o.fftSize, o.fftRate, o.mode, err);
             else if (drv == "airspyhf")
                 port = shim.startAirspyHf(drvIdx, o.freq, o.rate, o.gain,
                                           o.fftSize, o.fftRate, o.mode, err);
@@ -2645,7 +2652,15 @@ int main(int argc, char** argv) {
          *     radio" means the same thing everywhere — the setup screen, the config API and this.
          *     detectRadios() appends HackRF LAST, so it is last here too, and adding it anywhere
          *     else would silently renumber every existing radio on a machine that has one. */
-        if (o.radio >= nRtl + nRsp + nAhf) {
+        /* ★★★ AND THE AIRSPY R2 / MINI, appended AFTER the HackRF in detectRadios() so no
+         *     existing index moves — so it is tested first here, above the HackRF's range. */
+        const int nHrf = vibe::HackRfSource::deviceCount();
+        if (o.radio >= nRtl + nRsp + nAhf + nHrf) {
+            std::printf("VibeServer: using Airspy R2/Mini %d\n",
+                        o.radio - nRtl - nRsp - nAhf - nHrf);
+            port = shim.startAirspy(o.radio - nRtl - nRsp - nAhf - nHrf, o.freq, o.rate, o.gain,
+                                    o.fftSize, o.fftRate, o.mode, err);
+        } else if (o.radio >= nRtl + nRsp + nAhf) {
             std::printf("VibeServer: using HackRF %d (experimental)\n",
                         o.radio - nRtl - nRsp - nAhf);
             port = shim.startHackRf(o.radio - nRtl - nRsp - nAhf, o.freq, o.rate, o.gain,
@@ -2668,8 +2683,23 @@ int main(int argc, char** argv) {
         std::printf("VibeServer: Airspy HF+ detected\n");
         port = shim.startAirspyHf(0, o.freq, o.rate, o.gain,
                                   o.fftSize, o.fftRate, o.mode, err);
+    } else if (!o.deviceGiven && vibe::AirspySource::deviceCount() > 0
+                              && vibe::SdrplaySource::deviceCount() == 0
+                              && rtlsdr_get_device_count() == 0) {
+        /* ★★★ THE AIRSPY R2 / MINI IN THE DISCOVERY CHAIN. Without this branch an R2 alone on a
+         *     headless box fell to the dongle's `else`, found no RTL and reported "no SDR found"
+         *     — the RSP's fault of 2026-08-02, one radio later.
+         *  ★★ Reached only when no RTL and no RSP is attached (the HF+ has already been taken
+         *     above), so a machine that works today picks the same radio tomorrow. The RTL test
+         *     is explicit for the reason the HackRF note below gives: the dongle is the `else`.
+         *  ★ AHEAD of the HackRF, which is experimental — the HackRF branch also requires that no
+         *    R2/Mini is attached, so an untested driver never wins over one that works. */
+        std::printf("VibeServer: Airspy R2/Mini detected\n");
+        port = shim.startAirspy(0, o.freq, o.rate, o.gain,
+                                o.fftSize, o.fftRate, o.mode, err);
     } else if (!o.deviceGiven && vibe::HackRfSource::deviceCount() > 0
                               && vibe::SdrplaySource::deviceCount() == 0
+                              && vibe::AirspySource::deviceCount() == 0
                               && rtlsdr_get_device_count() == 0) {
         /* ★★★ LAST IN THE DISCOVERY CHAIN TOO, AND THE RTL COUNT IS PART OF THAT. An experimental
          *     driver nobody here can test must never be picked ahead of a radio that works, so it
