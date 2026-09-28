@@ -56,6 +56,11 @@ jobs:
             build-mode: manual
           - language: swift
             build-mode: autobuild
+          # ★ VibeIQ (tools/vibeiq) is Go. It was scanned once, before this matrix existed, and never
+          #   again — so fixed alert #2 (go/request-forgery, fixed in c28dfae8) stayed open against
+          #   code that no longer exists. Built manually below: its go.mod is not at the repo root.
+          - language: go
+            build-mode: manual
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -81,6 +86,13 @@ jobs:
       - name: Set up Gradle
         if: matrix.language == 'java-kotlin'
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/vibeiq/go.mod
+          cache: false
 
       - name: Install the radio libraries
         if: matrix.language == 'c-cpp'
@@ -150,6 +162,11 @@ jobs:
           cmake -S vibeserver -B vibeserver/build-codeql -DCMAKE_BUILD_TYPE=Release \
                 -DVIBESERVER_ALLOW_NO_TUNNEL=ON
           cmake --build vibeserver/build-codeql -j "$(nproc)"
+
+      - name: Build VibeIQ
+        if: matrix.language == 'go'
+        working-directory: tools/vibeiq
+        run: go build ./...
 
       # ★★★ ANALYSE, FILTER, THEN UPLOAD — because paths-ignore above does NOT apply to a compiled
       #     language. For java-kotlin, c-cpp and swift the database holds whatever the BUILD compiled,
