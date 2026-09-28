@@ -159,92 +159,132 @@ const V10_CHANGES: string[] = [
   'FIXED \u2014 tuning steps below 1 kHz above 30 MHz. Some airband channels sit on 100 Hz boundaries, so a VOLMET at 128.5928 MHz could not be reached with the controls at all \u2014 only by typing it, and on the watch not at all. 100 Hz and 500 Hz steps added.',
   'The RF gain slider has been removed from the demodulator popup. It only ever spoke the RTL\u2011SDR\u2019s gain model, so on an Airspy HF+ (which has no variable gain \u2014 an attenuator and a preamp) or an SDRplay RSP (IF gain reduction) it was a live\u2011looking control that did nothing. The correct per\u2011radio controls are in the hardware panel, where they always were.',
   'FIXED \u2014 the tour sent people to the settings cog for noise reduction and bookmarks. Audio moved to the speaker button and bookmarks to the frequency card some releases ago; the tour had never been told.',
-]
+];
 
-
-
-
-
-
-
-
-
-
-
-
-
+/** ★★★ THE CREDITS — AUDITED FROM THE SOURCE FOR V11 (2026-09-28), NOT COPIED FROM THE OLD LIST.
+ *  Stuart: "EVERYTHING NEEDS TO BE CREDITED". Every entry says truthfully what was USED (bundled,
+ *  linked, fetched) or LEARNED (read as a reference — no code), and nothing is credited that is not
+ *  there any more without saying so. README.md's Credits table is the same list; keep them in step.
+ *  ★★ The old list had drifted: Zstandard (gone with SDR++ in V5), VT323 (never shipped), Leaflet
+ *     "bundled, not fetched" (the app loads it from unpkg, as the fallback engine), libhackrf as GPL
+ *     (its library source is BSD-3), librtlsdr as the RTL-SDR Blog fork (we build osmocom 2.0.3), and
+ *     MapLibre, PMTiles, PFFFT, cloudflared and the runtime data sources were missing entirely.
+ *  Order: the people, then projects we speak to or learned from, then code we ship, then data. */
 const CREDITS: { name: string; detail: string }[] = [
+  // ── THE PEOPLE ───────────────────────────────────────────────────────────────────────────────
   { name: 'M9PSY (madpsy) — UberSDR',
-    detail: 'The biggest thank-you of all. M9PSY got me into AI-assisted coding and encouraged this whole project into existence — without him there is no VibeSDR. UberSDR is the server this client is built for, and the on-device decoders (RTTY / NAVTEX, WEFAX, SSTV and more) for Local Hardware and KiwiSDR are based on his UberSDR decoders. Also: the protocol, web-UI design reference, NR2 / noise-blanker / WebSDR-NR DSP algorithms, colour palettes, band plans, bookmark format and the waterfall smoothing pipeline. Cheers, mate.' },
+    detail: 'The biggest thank-you of all. M9PSY got me into AI-assisted coding and encouraged this whole project into existence — without him there is no VibeSDR. UberSDR is the server this client was first built for, and VibeServer speaks its protocol. The on-device RTTY / NAVTEX, WEFAX and SSTV decoders are C++ ports of his UberSDR decoders; the NR2, noise-blanker and WebSDR-NR audio processing are ports of his web client’s; and the decoder wiring, the maps for HFDL, digital and CW spots, the colour palettes, band plans, bookmark format and the waterfall smoothing pipeline all started from his work. Cheers, mate.' },
   { name: 'tgcfabian',
-    detail: 'The biggest outside source of testing and ideas VibeSDR and VibeServer have had. HackRF support, the deviation monitor, releasing the SDR when idle so other applications can use it, and running behind a reverse proxy all exist or work properly because of him. He also ran VibeServer in a genuinely complicated environment and kept reporting what broke there — which is what made it robust rather than merely working on the bench it was written on.' },
+    detail: 'The biggest outside source of testing and ideas VibeSDR and VibeServer have had. HackRF support, the deviation monitor, the composite eye diagram, releasing the SDR when idle so other applications can use it, and running behind a reverse proxy all exist or work properly because of him, and he checked our MPX deviation against MPX Tool station by station. He also ran VibeServer in a genuinely complicated environment and kept reporting what broke there — which is what made it robust rather than merely working on the bench it was written on.' },
   { name: 'Onfliner',
-    detail: 'Airspy R2 / Mini testing and feedback — the first person to run that driver on real hardware, and the reason its three gain modes are presented the way they are.' },
+    detail: 'Two jobs, both done with real instruments. First, the Airspy R2 / Mini: the first person to run that driver on real hardware, he reported the faults that stood between it and working — gain that did nothing, a bias-T that did not switch, a sample rate that would not change, settings lost on the way back to the menu — and asked for the three gain modes it now has (Sensitive, Linear and Free, as SDR++ presents them). Second, the MPX tools: he found that the deviation meter under-read quiet stations, which turned out to be an average being published as a peak. Then he tested Advanced RDS against MpxTool with a TEST SIGNAL of his own — a 22-point sweep, and then his own transmitter set to known RDS deviations of 1.2, 3.0 and 5.1 kHz, read through an Airspy Mini and an RTL-SDR, which gave identical figures. That measurement is where the RDS deviation calibration now comes from, and his pilot and 75 kHz test-tone checks are what showed the rest of the MPX chain was already right.' },
   { name: 'Hans van Eijsden',
-    detail: 'Calibrated Advanced RDS against a PIRA broadcast analyser, station by station — he found that our phase reading was its own reflection and that the deviation figures were scaled wrong, and kept testing until they agreed. Without him those numbers would be guesses rather than measurements. He is also the only route we have to testing Long PS, RadioText+ and PTYN, which UK broadcasters simply do not transmit.' },
+    detail: 'Calibrated Advanced RDS against a PIRA broadcast analyser, station by station — he found that our phase reading was its own reflection and that the deviation figures were scaled wrong, and kept testing until they agreed. Without him those numbers would be guesses rather than measurements. He is also the only route we have to testing Long PS, RadioText+ and PTYN, which UK broadcasters simply do not transmit — and he found the Dutch-locale fault that turned 100.5 into 1005 MHz, and three faults in VibeServer for the Mac.' },
   { name: 'Kiko7250',
-    detail: 'Showed me how VibeSDR is actually used, and on what hardware, in Brazil — which set off the whole optimisation push to run on the lowest-end machines we could reach. I bought a Raspberry Pi 2 specifically to build VibeServer on because of him. He also put up the first public VibeServer outside mine and tgcfabian\u2019s, which is how I came to understand Brazilian RDS: their stations rotate the station name as a marquee, something I had never seen, and our learning RDS bookmarks never worked properly on his server until they were changed to cope with it.' },
-  { name: 'welle.io — Albrecht Lohofener & contributors',
-    detail: 'Read clause by clause while building and repairing VibeSDR\u2019s own DAB receiver: the FIC and FIG parsing, the MSC handling and the OFDM front end. Three days of reasoning from our own source found none of five DSP bugs; one comparison against welle.io, DAB-Radio and dablin found all of them in an hour. No code from it is used \u2014 the DAB receiver is our own \u2014 but it is the reference that made it correct.' },
-  { name: 'dablin — Stefan P\u00f6schel',
-    detail: 'Reference for DAB/DAB+ superframe and audio handling, and for how a decoder should behave when a subchannel goes away. Read, not copied.' },
-  { name: 'dab-cmdline — Jan van Katwijk',
-    detail: 'Reference for DAB demodulation and the frequency/timing corrections a receiver applies automatically \u2014 worth several dB of sensitivity, and the shape every open DAB decoder converges on.' },
-  { name: 'DAB-Radio — FiendChain',
-    detail: 'Reference for the DAB physical layer, and the project whose own notes pointed at the TII work we then went further with. Read, not copied.' },
-  { name: 'SoapySDRPlay3 — Pothosware & Franco Venturi',
-    detail: 'The open, authoritative account of how each SDRplay RSP model actually behaves \u2014 per-model antenna ports, the bandwidth chosen for a sample rate, and the quirks the vendor headers do not describe. VibeServer\u2019s RSP support was written from the API headers and this. No code from it is used.' },
-  { name: 'ka9q-radio — Phil Karn, KA9Q',
-    detail: 'The SDR engine (radiod) underneath UberSDR.' },
-  { name: 'SDR++ & SDR++ Brown — Alexandre Rouma & contributors',
-    detail: 'VibeSDR’s original on-device radio (V4) was built on the SDR++ Brown DSP core to get Local Hardware and RTL-TCP up and running quickly. In V5 that was replaced with VibeDSP — VibeSDR’s own clean-room, GPL-free engine — and all SDR++ Brown code was removed; none is bundled now. Some waterfall colour palettes also originate here. It is also the reference for how the Airspy R2/Mini presents its gain: Sensitive, Linear and Free, with one slider along the chosen preset curve and the three stages shown only in Free — the shape its users already know. Thank you for making on-device SDR possible. Licensed under the GNU GPL v3.' },
-  { name: 'librtlsdr & rtl_tcp — Osmocom / Steve Markgraf, and the RTL-SDR Blog fork',
-    detail: 'The RTL-SDR USB driver and the rtl_tcp protocol behind the Local Hardware and RTL-TCP backends.' },
-  { name: 'KissFFT — Mark Borgerding (BSD-3)',
-    detail: 'The small, permissively-licensed FFT kernel inside VibeDSP — the on-device waterfall and spectrum, and the MMSE noise reduction, Auto Notch and decoders.' },
-  { name: 'Zstandard — Yann Collet / Meta',
-    detail: 'Compression used inside the bundled DSP core.' },
-  { name: 'libairspyhf — Airspy (BSD-3)',
-    detail: 'The Airspy HF+ Discovery driver. BSD-licensed and shipping as a static library, so the radio works the moment it is plugged in with nothing to install.' },
-  { name: 'libairspy — Airspy (BSD-3-Clause, with MIT parts)',
-    detail: 'The Airspy R2 and Mini driver. Copyright (C) 2013-2016 Benjamin Vernoux, Youssef Touil and Ian Gilmour; airspy.c, airspy.h and airspy_commands.h are BSD-3-Clause, and the IQ converter and filter sources (iqconverter_float.c, iqconverter_int16.c, filters.h) are MIT. Bundled unmodified. Redistributed with those notices and their disclaimers of warranty; the Airspy name is not used to endorse or promote VibeSDR.' },
-  { name: 'libhackrf — Great Scott Gadgets (GPL-2.0-or-later)',
-    detail: 'The HackRF One driver, for the experimental HackRF support in VibeServer. Bundled as a patched copy: upstream has no way to open a radio from a USB file descriptor, which is the only way an Android app is allowed to open one at all. VibeSDR is GPL-3, which those terms permit.' },
-  { name: 'SDRplay — SDRplay Ltd',
-    detail: 'The RSP API used by VibeServer on macOS. Its headers only — the closed-source library is never bundled, and is loaded at runtime if you have installed it. No SDRplay software, no SDRplay support, and nothing breaks.' },
-  { name: 'libusb',
-    detail: 'USB device access for VibeServer on macOS.' },
-  { name: 'ft8_lib — Karlis Goba, YL3JG',
-    detail: 'FT8 / FT4 decoding for the on-device digital-mode decoders.' },
+    detail: 'Showed me how VibeSDR is actually used, and on what hardware, in Brazil — which set off the whole optimisation push to run on the lowest-end machines we could reach. I bought a Raspberry Pi 2 specifically to build VibeServer on because of him. He also put up the first public VibeServer outside mine and tgcfabian’s, which is how I came to understand Brazilian RDS: their stations rotate the station name as a marquee, something I had never seen, and our learning RDS bookmarks never worked properly on his server until they were changed to cope with it. His server is also why a radio now has a display name you can set, and why Save View For All works in Safari.' },
+  { name: 'xavxx',
+    detail: 'An App Store user who reported, on Discord, what an older app met on a newer VibeServer: a blank spectrum, then an endless “Connection lost” — and a Jr squelch that did nothing and left the radio in use. That report is why V11 is a compatibility programme: an app you still have installed now gets the core experience or a clear message, never a silent failure.' },
+  { name: 'Michael, DL8LDN',
+    detail: 'Tested VibeSDR against OpenWebRX and wrote his findings up on GitHub: the OWRX map with no way back on a notched iPhone, digital-mode bookmarks that were ignored, a decoder panel that threw away its history, and DRM audio breaking up. He also asked for the 5 kHz shortwave broadcast step, found that the squelch marker did not follow the visual gain trim, and that a tap on the waterfall never quite landed on the channel — it now snaps to the tuning step.' },
+  { name: '@Sagistario306',
+    detail: 'Reported that the first-launch CONTINUE button could not be tapped on a small-screen ZTE Blade L8.' },
+
+  // ── RECEIVERS WE CONNECT TO, AND PROTOCOLS WE LEARNED ────────────────────────────────────────
   { name: 'OpenWebRX — Jakob Ketterl (DD5JFK) & OpenWebRX+ (Marat Fayzullin)',
-    detail: 'The OpenWebRX server and its OpenWebRX+ fork — protocol reference for the OpenWebRX backend (waterfall, audio, modes, decoders and chat).' },
+    detail: 'The OpenWebRX server and its OpenWebRX+ fork — protocol reference for the OpenWebRX backend (waterfall, audio, modes, decoders and chat), verified against their source. Its ADPCM audio flavour is ported exactly, and csdr (András Retzler, HA7ILM) is the reference for its squelch and S-meter behaviour.' },
   { name: 'KiwiSDR — John Seamons (ZL/KF6VO)',
-    detail: 'The KiwiSDR receiver and its open web client — protocol reference for the KiwiSDR backend.' },
+    detail: 'The KiwiSDR receiver and its open web client — protocol reference for the KiwiSDR backend, and the source of its IMA-ADPCM audio flavour (from libcsdr, after Tim Kientzle), ported exactly. VibeDSP’s MMSE noise reduction is the same published method KiwiSDR ships (Ephraim & Malah; Kim & Ruwisch), tuned to match Kiwi’s constants, and its auto-notch follows the structure of Kiwi’s.' },
   { name: 'FM-DX Webserver — NoobishSVK & contributors',
     detail: 'The FM-DX Webserver project and the servers.fmdx.org receiver map — protocol reference for VibeSDR’s FM-DX backend (tuning, RDS, signal, transmitter data, chat) and its 3LAS MP3 audio stream. Licensed under the GNU GPL v3.' },
-  { name: 'radio-browser.info',
-    detail: 'The community radio-station directory used to look up and match station logos, by name and country — on every backend, and on AM and shortwave stations as well as FM. Community data, freely licensed.' },
-  { name: 'Nominatim & OpenStreetMap',
-    detail: 'Geocoding for the receiver’s location: turning a town name into a position, and a position back into a town and country, so a VibeServer can tell its clients where it actually is. Data © OpenStreetMap contributors, ODbL. Used sparingly — once per receiver, then cached — in line with the Nominatim usage policy.' },
-  { name: 'redsea — Oona R\u00e4is\u00e4nen (windytan)',
-    detail: 'The reference for VibeDSP\u2019s weak-signal RDS block recovery: syndrome-table burst correction, rhythm-based sync acquisition and dropping sync on error rate. No redsea code is used \u2014 the ideas are hers. MIT-licensed.' },
+  { name: 'SpyServer — Airspy',
+    detail: 'VibeSDR speaks the SpyServer protocol clean-room: worked out from network captures between the official server and two clients (SDR# and SDR++ Brown). No code, header or structure was copied.' },
+  { name: 'ka9q-radio — Phil Karn, KA9Q',
+    detail: 'The SDR engine (radiod) underneath UberSDR, whose channel SNR the app reads — and the design reference for VibeSDR’s front-end automatic gain: IF-power targeting, proportional correction and snapping to the hardware’s steps. Read and credited, never copied.' },
+  { name: 'Receiver directories',
+    detail: 'instances.ubersdr.org, servers.fmdx.org, receiverbook.de, the KiwiSDR list at rx.linkfanel.net and the Airspy SpyServer directory — the public lists the server browser reads.' },
+
+  // ── DSP AND DECODERS: WHAT WE READ ───────────────────────────────────────────────────────────
+  { name: 'redsea and slowrx — Oona Räisänen (windytan, OH2EIQ)',
+    detail: 'redsea (MIT) is the reference for VibeDSP’s weak-signal RDS block recovery: syndrome-table burst correction, rhythm-based sync acquisition, dropping sync on error rate and the block error rate itself. No redsea code is used — the ideas are hers. slowrx is where the SSTV decoder’s mode timings and method come from, by way of UberSDR’s port.' },
   { name: 'librdsparser — Konrad Kosmatka',
     detail: 'Reference for the RDS PI-code + ECC → country mapping (IEC 62106) that shows country flags from live RDS. MIT-licensed.' },
-  { name: 'Opus — Xiph.Org Foundation',
-    detail: 'Audio codec used for all streaming and decoding.' },
-  { name: 'opus-decoder (wasm-audio-decoders) — Ethan Halsall',
-    detail: 'libopus compiled to WebAssembly. It is what lets VibeServer’s web client play Opus in any browser, on a plain http:// address — where the browser’s own WebCodecs decoder is unavailable. MIT-licensed. Found by way of UberSDR, which uses it for the same reason.' },
+  { name: 'welle.io — Albrecht Lohofener & contributors',
+    detail: 'Read clause by clause while building and repairing VibeSDR’s own DAB receiver: the FIC and FIG parsing, the MSC handling and the OFDM front end. Three days of reasoning from our own source found none of five DSP bugs; one comparison against welle.io, DAB-Radio and dablin found all of them in an hour. No code from it is used — the DAB receiver is our own — but it is the reference that made it correct.' },
+  { name: 'dablin — Stefan Pöschel',
+    detail: 'Reference for DAB/DAB+ superframe and audio handling, the programme-associated data, and for how a decoder should behave when a subchannel goes away. Read, not copied.' },
+  { name: 'dab-cmdline — Jan van Katwijk',
+    detail: 'Reference for DAB demodulation and the frequency/timing corrections a receiver applies automatically — worth several dB of sensitivity, and the shape every open DAB decoder converges on.' },
+  { name: 'DAB-Radio — FiendChain',
+    detail: 'Reference for the DAB physical layer, and the project whose own notes pointed at the TII and DAB+ error-correction work we then went further with. Read, not copied.' },
+  { name: 'SDRangel — Edouard Griffiths (F4EXB) & contributors',
+    detail: 'Its DAB demodulator’s notes on RF bandwidth and sample rate were a reference while choosing ours. Read, not copied.' },
+  { name: 'ETSI and IEC',
+    detail: 'VibeSDR’s DAB receiver is written from the published standards — EN 300 401, TS 102 563, TS 103 466 and their companions, with tables extracted from them — and its RDS decoder from IEC 62106.' },
+  { name: 'SoapySDRPlay3 — Pothosware & Franco Venturi',
+    detail: 'The open, authoritative account of how each SDRplay RSP model actually behaves — per-model antenna ports, the bandwidth chosen for a sample rate, and the quirks the vendor headers do not describe. VibeServer’s RSP support was written from the API headers and this. No code from it is used.' },
+  { name: 'SDR++ & SDR++ Brown — Alexandre Rouma & contributors',
+    detail: 'VibeSDR’s original on-device radio (V4) was built on the SDR++ Brown DSP core to get Local Hardware and RTL-TCP up and running quickly. In V5 that was replaced with VibeDSP — VibeSDR’s own clean-room, GPL-free engine — and all SDR++ Brown code was removed, along with the FFTW, VOLK and Zstandard libraries it brought; none is bundled now. Some waterfall colour palettes originate here, and VibeDSP’s spectrum window matches SDR++’s. It is also the reference for how the Airspy R2/Mini presents its gain: Sensitive, Linear and Free, with one slider along the chosen preset curve and the three stages shown only in Free — the shape its users already know. Thank you for making on-device SDR possible. Licensed under the GNU GPL v3.' },
+  { name: 'NXP TEF668x tuners, PIRA and MpxTool',
+    detail: 'Behaviour, not code. The TEF tuners the FM-DX community builds on are the model for iMS, the FM noise blanker and automatic bandwidth; PIRA’s MPX oscillograms are the model for the composite eye, and a PIRA analyser is what Advanced RDS was calibrated against; MpxTool is the instrument our testers measured the deviation figures against.' },
+  { name: 'WSJT-X — Joe Taylor (K1JT), Steve Franke (K9AN) & the WSJT team',
+    detail: 'FT8 and FT4 are their modes. The decoder is ft8_lib (below), whose LDPC tables come from WSJT-X.' },
+
+  // ── CODE WE SHIP ─────────────────────────────────────────────────────────────────────────────
+  { name: 'librtlsdr & rtl_tcp — Osmocom (rtl-sdr 2.0.3), Steve Markgraf & contributors (GPL-2.0-or-later)',
+    detail: 'The RTL-SDR USB driver and the rtl_tcp protocol behind Local Hardware, RTL-TCP and VibeServer — including the support for the RTL-SDR Blog V4 and V4L that the 2.0 releases carry. Built from source, with a small patch so Android can open the radio it has been given permission for.' },
+  { name: 'libusb (LGPL-2.1-or-later)',
+    detail: 'USB device access for VibeServer and for Android’s Local Hardware and VibeServer Lite.' },
+  { name: 'libairspyhf — Airspy (BSD-3-Clause)',
+    detail: 'The Airspy HF+ Discovery driver. Copyright (c) 2013-2018 Youssef Touil, 2013-2017 Benjamin Vernoux and Ian Gilmour, 2013 Michael Ossmann, 2012 Jared Boone, and 2017 Airspy. Built in, with a small patch to open the radio from an Android USB handle, so it works the moment it is plugged in with nothing to install.' },
+  { name: 'libairspy — Airspy (BSD-3-Clause, with MIT parts)',
+    detail: 'The Airspy R2 and Mini driver. Copyright (C) 2013-2016 Benjamin Vernoux, Youssef Touil and Ian Gilmour; airspy.c, airspy.h and airspy_commands.h are BSD-3-Clause, and the IQ converter and filter sources (iqconverter_float.c, iqconverter_int16.c, filters.h) are MIT. Bundled unmodified. Redistributed with those notices and their disclaimers of warranty; the Airspy name is not used to endorse or promote VibeSDR.' },
+  { name: 'libhackrf — Great Scott Gadgets (BSD-3-Clause)',
+    detail: 'The HackRF One driver, for HackRF support in VibeServer. Copyright (c) 2012-2022 Great Scott Gadgets, Jared Boone and Benjamin Vernoux. Bundled as a patched copy: upstream has no way to open a radio from a USB file descriptor, which is the only way an Android app is allowed to open one at all.' },
+  { name: 'SDRplay — SDRplay Ltd',
+    detail: 'The RSP API used by VibeServer. Its headers only — the closed-source library is never bundled, and is loaded at runtime if you have installed it. No SDRplay software, no SDRplay support, and nothing breaks.' },
+  { name: 'KissFFT — Mark Borgerding (BSD-3-Clause)',
+    detail: 'Copyright (c) 2003-2010 Mark Borgerding. The small, permissively-licensed FFT kernel inside VibeDSP — the waterfall and spectrum, the MMSE noise reduction, Auto Notch and the decoders.' },
+  { name: 'PFFFT — Julien Pommier (FFTPACK licence)',
+    detail: 'Copyright (c) 2013 Julien Pommier; based on FFTPACK, Copyright (c) 2004 the University Corporation for Atmospheric Research (“UCAR”), developed at NCAR’s Computational and Information Systems Laboratory. The fast FFT behind the DAB receiver’s OFDM demodulator.' },
+  { name: 'ft8_lib — Karlis Goba, YL3JG (MIT)',
+    detail: 'Copyright (c) 2018 Kārlis Goba. FT8 / FT4 decoding for the digital-mode decoders.' },
+  { name: 'Opus — Xiph.Org Foundation (BSD-3-Clause)',
+    detail: 'The audio codec for all streaming: VibeServer encodes with it, and the app, the watch and the web client decode it.' },
+  { name: 'opus-decoder (wasm-audio-decoders) — Ethan Halsall (MIT)',
+    detail: 'libopus compiled to WebAssembly. It is what lets VibeServer’s web client play Opus in any browser, on a plain http:// address — where the browser’s own WebCodecs decoder is unavailable. Found by way of UberSDR, which uses it for the same reason.' },
+  { name: 'cloudflared — Cloudflare (Apache-2.0)',
+    detail: 'The tunnel client that lets a VibeServer be reached from outside without opening a port. Built from source for Android, VibeServer Lite and the Mac; Cloudflare’s own release on Linux.' },
+  { name: 'MapLibre GL JS — MapLibre contributors (BSD-3-Clause)',
+    detail: 'The GPU map engine behind every map in the app, the web client and the directory.' },
+  { name: 'PMTiles — Protomaps (BSD-3-Clause)',
+    detail: 'The single-file map format and its reader, which is how the maps are served from the app and from each VibeServer with no tile server.' },
+  { name: 'Leaflet — Volodymyr Agafonkin (BSD-2-Clause), and Leaflet.Terminator — Jörg Dietrich (MIT)',
+    detail: 'Leaflet is the fallback map engine where the GPU map cannot run: the app and the web client load it from unpkg, and the directory site bundles it. The directory’s fallback draws the greyline with Leaflet.Terminator, and the GPU map’s greyline uses the same astronomy.' },
+  { name: 'pako — Vitaly Puzrin & Andrei Tuputcyn (MIT, zlib)',
+    detail: 'Decompresses the gzip-compressed messages UberSDR and VibeServer send to the app.' },
+
+  // ── DATA ─────────────────────────────────────────────────────────────────────────────────────
+  { name: 'RadioDNS',
+    detail: 'Station logos for FM and DAB, looked up by the station’s own identity (PI code or service ID) so you get the broadcaster’s artwork rather than a guess.' },
+  { name: 'radio-browser.info',
+    detail: 'The community radio-station directory used to look up and match station logos, by name and country — on every backend, and on AM and shortwave stations as well as FM. Community data, freely licensed.' },
   { name: 'EiBi',
-    detail: 'Shortwave broadcast schedules used for live station bookmarks.' },
-  { name: 'GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib',
-    detail: 'Origins of the waterfall colour palettes.' },
+    detail: 'Shortwave broadcast schedules used for live station bookmarks and the directory’s station finder.' },
+  { name: 'Ofcom',
+    detail: 'The UK DAB transmitter list that names the transmitter you are hearing. Contains public sector information licensed under the Open Government Licence v3.0.' },
+  { name: 'NOAA Space Weather Prediction Center',
+    detail: 'Public domain. The solar flux and K index behind VibeServer’s band conditions.' },
+  { name: 'The regional internet registries and iptoasn.com',
+    detail: 'AFRINIC, APNIC, ARIN, LACNIC and RIPE NCC’s published delegation statistics (country) and iptoasn.com’s table (PDDL, network) let VibeServer show an owner where its listeners are from, looked up on the server itself.' },
+  { name: 'Nominatim & OpenStreetMap',
+    detail: 'Geocoding for the receiver’s location: turning a town name into a position, and a position back into a town and country, so a VibeServer can tell its clients where it actually is. Data © OpenStreetMap contributors, ODbL. Used sparingly — once per receiver, then cached — in line with the Nominatim usage policy.' },
   /* ★★★ THE MAP DATA CREDITS, AND THREE OF THEM ARE A LICENCE OBLIGATION, NOT A COURTESY.
    *  GeoNames, HydroLAKES and RESOLVE Ecoregions are CC BY 4.0: attribution is a CONDITION of
    *  use, so this block is load-bearing. ✗ Do not trim it for space.
    *  ★★ The old entry here read "Leaflet, OpenStreetMap & CARTO — map rendering and tiles",
    *  which described a system deleted on 2026-09-26. The maps are now vectors and a shaded-relief
    *  image built from public-domain grids, served from the app and each VibeServer, with NO tile
-   *  provider and no network at all. A credit that names the wrong source is worse than none: it
+   *  provider. A credit that names the wrong source is worse than none: it
    *  misattributes someone else's work and hides who actually deserves the thanks. */
   { name: 'Natural Earth',
     detail: 'Public domain. Coastlines, countries, state and province lines, urban areas, rivers, lakes, roads, railways, reefs, salt flats, ice, bathymetry and the physical region names.' },
@@ -259,14 +299,16 @@ const CREDITS: { name: string; detail: string }[] = [
   { name: 'OurAirports',
     detail: 'Public domain, dedicated by David Megginson. Every airfield, heliport and seaplane base, and the runway thresholds and designators.' },
   { name: 'NGA World Port Index',
-    detail: 'Public domain (US Government). The world\u2019s sea ports.' },
+    detail: 'Public domain (US Government). The world’s sea ports.' },
   { name: 'OpenStreetMap contributors',
-    detail: 'ODbL. The detailed coastline at close zoom \u2014 the layer that puts an island\u2019s shore where it really is. Downloaded once when the map data is built, never at runtime: the app makes no request to OpenStreetMap for maps. As ODbL requires, the same data is published unrestricted alongside every release.' },
-  { name: 'Leaflet',
-    detail: 'BSD-2-Clause, by Volodymyr Agafonkin. The map engine \u2014 projection, panning and drawing. Bundled, not fetched, so the maps work with no internet at all.' },
-  { name: 'Atkinson Hyperlegible — Braille Institute',
-    detail: 'Primary UI typeface. Nixie One and VT323 are used for the frequency displays.' },
-  { name: 'React Native, Expo, Hermes, Skia, Reanimated, Gesture Handler, OkHttp',
+    detail: 'ODbL. The detailed coastline at close zoom — the layer that puts an island’s shore where it really is. Built in when the map data is made, never fetched at runtime: the app makes no request to OpenStreetMap for maps. As ODbL requires, the same data is published unrestricted alongside every release.' },
+
+  // ── LOOK AND FRAMEWORK ───────────────────────────────────────────────────────────────────────
+  { name: 'GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib',
+    detail: 'Origins of the waterfall colour palettes.' },
+  { name: 'Fonts — all under the SIL Open Font License 1.1',
+    detail: 'Atkinson Hyperlegible (Braille Institute) is the primary UI typeface; Nixie One (Jovanny Lemonad) is the instrument face; JetBrains Mono (JetBrains) labels the maps.' },
+  { name: 'React Native, Expo, Hermes, Skia, Reanimated, Gesture Handler, WebView, OkHttp, AndroidX Media3, Fresco',
     detail: 'The frameworks and libraries that make the app run.' },
 ];
 
@@ -393,7 +435,8 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
 
           <Text style={styles.section}>CREDITS</Text>
           <Text style={styles.body}>
-            VibeSDR stands on the work of other open projects. Thank you to all of them.
+            VibeSDR stands on the work of other open projects, and of the people who tested it
+            with real radios and real instruments. Thank you to all of them.
           </Text>
           {CREDITS.map((c) => (
             <View key={c.name} style={styles.creditBlock}>
