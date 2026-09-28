@@ -559,6 +559,10 @@ object VibeTunnel {
              *  Taken from the server's own vibeserver.json, as on Linux, so the number cannot drift. */
             j.optString("version").takeIf { it.isNotEmpty() }?.let { out.put("version", it) }
             j.optString("flavour").takeIf { it.isNotEmpty() }?.let { out.put("flavour", it) }
+            // ★ The owner's landing-page message and link, so a listener who goes straight to a radio
+            //   from the directory still sees it (Stuart, 2026-09-28). The Worker caps and checks them.
+            for (k in listOf("landingMessage", "landingLinkUrl", "landingLinkLabel"))
+                j.optString(k).takeIf { it.isNotEmpty() }?.let { out.put(k, it) }
             // ★ The machine — CPU, cores, clock, RAM, instruction set — as the server measured it (vibe_hwinfo.h).
             j.optJSONObject("hw")?.let { out.put("hw", it) }
             // ★ The phone's battery, as the server publishes it — the badge beside the entry.

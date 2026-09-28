@@ -117,6 +117,12 @@
   .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg); opacity: 0.8; }
   .maplibregl-ctrl-attrib, .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(0,0,0,0.6); color: var(--dim); font-size: 9px; }
   .maplibregl-ctrl-attrib a { color: var(--dim); }
+  /* ★ The owner's landing message on the server's entry — see ownerMessage(). */
+  .ownerMsg { margin: 8px 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent);
+              border-radius: 8px; background: var(--panel); }
+  .ownerMsgHead { font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
+  .ownerMsgText { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font-size: 13px; line-height: 1.45; }
+  .ownerMsgLink { display: inline-block; margin-top: 6px; color: var(--accent); }
   main { padding: 16px 20px 60px; max-width: 900px; margin: 0 auto; }
 
   .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--dim);
@@ -1594,7 +1600,7 @@ function serverBlock(s) {
       <span class="meta">${esc(s.grid)}${s.unreachable ? ' · not responding' : ''}</span>
     </summary>
     <div class="body">
-      ${pinBox(s)}${radios}${extra}
+      ${pinBox(s)}${ownerMessage(s)}${radios}${extra}
       ${s.demo ? '<div class="radio cap">Simulated receiver — nothing to listen to.</div>'
                : serverLocked(s)
                // ★★★ ON A SINGLE-RADIO HOST THIS BUTTON IS THE ONLY WAY IN, so while the server is
@@ -1607,6 +1613,23 @@ function serverBlock(s) {
   </details>`;
 }
 
+
+/** ★★ THE OWNER'S MESSAGE, IN THE DIRECTORY TOO (Stuart, 2026-09-28): "since you can click a SDR direct
+ *  from the directory you'd bypass that page and miss it". The same message and link the server's landing
+ *  page shows (web client showLandingMessage) — the text as TEXT (escaped, line breaks kept), the link hidden
+ *  behind its label ("Join the Discord", "Donate"), falling back to the site's host, never the raw URL.
+ *  The Worker has already capped the text and refused anything but an http(s) link. */
+function ownerMessage(s) {
+  const msg = typeof s.landingMessage === 'string' ? s.landingMessage.trim() : '';
+  const url = typeof s.landingLinkUrl === 'string' && /^https?:\/\//i.test(s.landingLinkUrl) ? s.landingLinkUrl : '';
+  if (!msg && !url) return '';
+  let label = typeof s.landingLinkLabel === 'string' ? s.landingLinkLabel.trim() : '';
+  if (!label && url) { try { label = new URL(url).host; } catch { label = url; } }
+  return `<div class="ownerMsg"><div class="ownerMsgHead">Message from the server owner</div>`
+    + (msg ? `<div class="ownerMsgText">${esc(msg)}</div>` : '')
+    + (url ? `<a class="ownerMsgLink" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : '')
+    + `</div>`;
+}
 
 /* ══ FILTERING ═══════════════════════════════════════════════════════════════════════════════
  * ★★★ EVERY BAND NAME ON THIS PAGE COMES FROM A SERVER. There is no band table here and there

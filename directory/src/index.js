@@ -654,6 +654,13 @@ async function list(env, url, request) {
                  .includes(status.flavour) ? status.flavour : '',
       version: typeof status.version === 'string' && /^[0-9][0-9.]{0,15}$/.test(status.version)
                  ? status.version : '',
+      /* ★★ THE OWNER'S LANDING MESSAGE (Stuart, 2026-09-28): clicking a radio straight from here skips
+       *  the server's landing page, and with it what the owner wrote there. Text stays TEXT (the page
+       *  renders it with textContent), bounded; the link must be http(s) or it is dropped. */
+      landingMessage:   typeof status.landingMessage === 'string' ? status.landingMessage.trim().slice(0, 600) : '',
+      landingLinkUrl:   typeof status.landingLinkUrl === 'string' && /^https?:\/\/[^\s"'<>]{3,300}$/i.test(status.landingLinkUrl.trim())
+                          ? status.landingLinkUrl.trim() : '',
+      landingLinkLabel: typeof status.landingLinkLabel === 'string' ? status.landingLinkLabel.trim().slice(0, 60) : '',
       // ★ THE MACHINE, as the server measured it (vibe_hwinfo.h) — shown so a listener can see a DAB receiver
       //   running on a 900 MHz Pi 2 or a TV (Stuart, 2026-09-19). Each field checked and bounded; text stays text.
       hw: (status.hw && typeof status.hw === 'object') ? {

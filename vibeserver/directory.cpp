@@ -117,6 +117,22 @@ std::string httpGetLocal(int port, const std::string& path) {
 // ── the smallest JSON reading that will do ───────────────────────────────────────────────────
 // ★ Deliberately not a parser. We read a handful of scalars out of answers WE generate, and the
 //   one field that must not be got wrong — the key — is copied whole and never interpreted.
+/** A string field's JSON literal EXACTLY as written — escapes intact — for passing a free-text field
+ *  (the owner's landing message) from vibeserver.json into the directory payload. jsonStr() below
+ *  unescapes naively ("\\n" -> "n"), which is fine for versions and names, not for prose.
+ *  Returns "" when absent; the result is safe to embed between quotes because it came from valid JSON. */
+static std::string jsonRawStr(const std::string& j, const std::string& key) {
+    const std::string k = "\"" + key + "\":\"";
+    size_t p = j.find(k);
+    if (p == std::string::npos) return {};
+    p += k.size();
+    for (size_t i = p; i < j.size(); i++) {
+        if (j[i] == '\\') { i++; continue; }
+        if (j[i] == '"') return j.substr(p, i - p);
+    }
+    return {};
+}
+
 std::string jsonStr(const std::string& j, const std::string& key) {
     const std::string k = "\"" + key + "\":\"";
     size_t p = j.find(k);
@@ -493,6 +509,14 @@ std::string buildStatus(int port) {
       if (!ver.empty()) j += ",\"version\":\"" + ver + "\""; }
     { const std::string fl = jsonStr(ident, "flavour");
       if (!fl.empty()) j += ",\"flavour\":\"" + fl + "\""; }
+    /* ★★ THE OWNER'S MESSAGE TRAVELS TO THE DIRECTORY (Stuart, 2026-09-28): a listener who clicks a
+     *  radio straight from the directory skips the landing page, and with it the message the owner
+     *  wrote there ("join the Discord", "donate"). Copied verbatim from vibeserver.json; the
+     *  directory Worker caps and checks each field (index.js). */
+    for (const char* k : { "landingMessage", "landingLinkUrl", "landingLinkLabel" }) {
+        const std::string raw = jsonRawStr(ident, k);
+        if (!raw.empty()) j += std::string(",\"") + k + "\":\"" + raw + "\"";
+    }
     // ★ The contract this server speaks (docs/PROTOCOL.md) — a client greys a server out by these.
     if (jsonNum(ident, "proto", -1) >= 0)
         j += ",\"proto\":" + std::to_string((int)jsonNum(ident, "proto", 0))
