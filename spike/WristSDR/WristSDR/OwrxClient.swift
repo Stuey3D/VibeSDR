@@ -461,9 +461,14 @@ final class OwrxClient: ObservableObject, SDRClient {
       Task { @MainActor in self.status = "connecting" }
       return
     }
-    guard let d = data.data(using: .utf8),
-          let json = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-          let type = json["type"] as? String else { return }
+    // ★ Through MsgFaults, not `try?`: a message we cannot read is dropped, counted and logged.
+    //   OWRX floods this socket, so a server that has started sending garbage would otherwise look
+    //   like one that has merely gone quiet.
+    guard let json = MsgFaults.json("owrx", Data(data.utf8)) else { return }
+    guard let type = json["type"] as? String else {
+      MsgFaults.note("owrx", "untyped", "JSON object with no string `type`")
+      return
+    }
     switch type {
     case "config":   let v = json["value"] as? [String: Any] ?? [:]; Task { @MainActor in self.onConfig(v) }
     case "profiles": let ps = buildProfiles(json["value"] as? [Any] ?? []); Task { @MainActor in self.profiles = ps }
@@ -710,8 +715,18 @@ final class OwrxClient: ObservableObject, SDRClient {
   private var pendingProfileSwitch = false   // set by selectProfile; forces demod adoption on next config
   private func onConfig(_ c: [String: Any]) {
     let prevCenter = centerFreq
-    if let cf = (c["center_freq"] as? NSNumber)?.doubleValue { centerFreq = cf }
-    if let sr = (c["samp_rate"] as? NSNumber)?.doubleValue { sampRate = sr }
+    /* ★★ THE SCALE IS CHECKED BEFORE IT IS ADOPTED. centre_freq and samp_rate feed
+     *  `Int((frequency - centerFreq).rounded())` in sendDemod, which TRAPS on NaN, infinity or
+     *  anything past Int's range (±2.1 billion on arm64_32) — one corrupt config and the app is gone.
+     *  A nonsense value is refused, counted and logged; the last good one stands. */
+    if c["center_freq"] != nil, Wire.inRange(c["center_freq"], 0...1.0e11) == nil {
+      MsgFaults.note("owrx", "config", "center_freq \(String(describing: c["center_freq"]).prefix(24)) refused")
+    }
+    if c["samp_rate"] != nil, Wire.inRange(c["samp_rate"], 1...1.0e9) == nil {
+      MsgFaults.note("owrx", "config", "samp_rate \(String(describing: c["samp_rate"]).prefix(24)) refused")
+    }
+    if let cf = Wire.inRange(c["center_freq"], 0...1.0e11) { centerFreq = cf }
+    if let sr = Wire.inRange(c["samp_rate"], 1...1.0e9) { sampRate = sr }
     if let fc = c["fft_compression"] as? String { fftCompression = fc; fftCompressionSnapshot = fc }
     if let ac = c["audio_compression"] as? String { audioCompression = ac; audioCompressionSnapshot = ac }
     modeSnapshot = mode
@@ -731,7 +746,7 @@ final class OwrxClient: ObservableObject, SDRClient {
     if newCentre {
       if frequency == 0 || abs(frequency - centerFreq) > sampRate / 2, centerFreq != 0 {
         frequency = centerFreq
-        if let off = (c["start_offset_freq"] as? NSNumber)?.doubleValue { frequency = centerFreq + off }
+        if let off = Wire.inRange(c["start_offset_freq"], -1.0e9...1.0e9) { frequency = centerFreq + off }
       }
       viewCenter = frequency
       // Show a GENEROUS chunk of the band by default (OWRX profiles are often multi-MHz — a 12 kHz
@@ -973,7 +988,9 @@ final class OwrxClient: ObservableObject, SDRClient {
     // ADS-B's profile config carries NO center_freq (it's the raw 1090 MHz IF), so don't gate on it and
     // don't compute an offset — the decoder works on the whole IF. Other modes still need a valid centre.
     guard started, centerFreq != 0 || rawIf else { return }
-    let offset = (centerFreq != 0 && !rawIf) ? Int((frequency - centerFreq).rounded()) : 0
+    // ★ Wire.int, not Int(): both terms are bounded at the parser, and this makes sure a value that
+    //   slipped past can only be wrong on the wire, never a trap.
+    let offset = (centerFreq != 0 && !rawIf) ? Wire.int(frequency - centerFreq) : 0
     // A secondary decoder (adsb, ft8, packet…) rides on top of the carrier via secondary_mod (else false).
     var params: [String: Any] = [
       "offset_freq": offset,

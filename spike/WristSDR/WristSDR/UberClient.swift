@@ -2151,15 +2151,28 @@ final class UberClient: ObservableObject {
   /// UberSDR sends its JSON config as a GZIPPED BINARY frame, not a text frame — the magic
   /// bytes are the only way to tell it from a spectrum frame. (The web client sniffs for
   /// exactly this before reaching for DecompressionStream.)
-  private func onSpectrumBinary(_ d: Data) {
+  private func onSpectrumBinary(_ raw: Data) {
+    /* ★★★ EVERY REFUSAL BELOW IS COUNTED AND LOGGED (MsgFaults). These were bare `return`s: a
+     *  server sending short, truncated or foreign frames looked exactly like one sending nothing —
+     *  a black waterfall and not one line saying why. One bad frame is one dropped row; the socket
+     *  and the next frame are untouched.
+     * ★ Re-based if it is a slice, because the byte subscripts assume the first byte is index 0. */
+    let d = raw.startIndex == 0 ? raw : Data(raw)
     if d.count >= 2, d[0] == 0x1f, d[1] == 0x8b {
       if let un = Gzip.inflate(d) { onSpectrumJSON(un) }
+      else { MsgFaults.note("uber spec", "gzip", "\(d.count) B gzip frame would not inflate") }
       return
     }
-    guard d.count >= 22 else { return }
+    guard d.count >= 22 else {
+      MsgFaults.note("uber spec", "short", "\(d.count) B binary frame, header is 22")
+      return
+    }
 
     let magic: UInt32 = d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self) }
-    guard magic == 0x4345_5053 else { return }   // "SPEC" little-endian
+    guard magic == 0x4345_5053 else {             // "SPEC" little-endian
+      MsgFaults.note("uber spec", "magic", String(format: "bad magic 0x%08x", magic))
+      return
+    }
 
     // COUNT IT HERE. It used to be counted after the `flags` switch — which `return`s early
     // on frame types we don't decode — so a working feed could report 0 fps and the whole
@@ -2194,7 +2207,10 @@ final class UberClient: ObservableObject {
       let changes: UInt16 = body.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self) }
       var off = 2
       for _ in 0..<Int(changes) {
-        guard off + 3 <= body.count else { break }
+        guard off + 3 <= body.count else {
+          MsgFaults.note("uber spec", "delta8", "claims \(changes) changes, \(body.count) B body — kept what fitted")
+          break
+        }
         let idx: UInt16 = body.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: off, as: UInt16.self) }
         let val = body[body.startIndex + off + 2]
         off += 3
@@ -2204,7 +2220,12 @@ final class UberClient: ObservableObject {
       let n = body.count / 4
       if bins.count != n { bins = [Float](repeating: -120, count: n) }
       body.withUnsafeBytes { raw in
-        for i in 0..<n { bins[i] = raw.loadUnaligned(fromByteOffset: i * 4, as: Float32.self) }
+        // ★ A NaN or infinite bin is a corrupt frame, not a very loud signal: it would poison the
+        //   floor tracker's running average for every frame after it. Floor it instead.
+        for i in 0..<n {
+          let v = raw.loadUnaligned(fromByteOffset: i * 4, as: Float32.self)
+          bins[i] = v.isFinite ? v : -120
+        }
       }
     case 0x02:                                     // delta float32
       guard body.count >= 2 else { return }
@@ -2212,17 +2233,21 @@ final class UberClient: ObservableObject {
       let changes: UInt16 = body.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt16.self) }
       var off = 2
       for _ in 0..<Int(changes) {
-        guard off + 6 <= body.count else { break }
+        guard off + 6 <= body.count else {
+          MsgFaults.note("uber spec", "delta32", "claims \(changes) changes, \(body.count) B body — kept what fitted")
+          break
+        }
         let idx: UInt16 = body.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: off, as: UInt16.self) }
         let v: Float32 = body.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: off + 2, as: Float32.self) }
         off += 6
-        if Int(idx) < bins.count { bins[Int(idx)] = v }
+        if Int(idx) < bins.count { bins[Int(idx)] = v.isFinite ? v : -120 }
       }
     default:
       // Say so, loudly. An unhandled frame type used to be a silent `return` — the frame
       // counter ticked up and the waterfall stayed black, which looks like a render bug and
       // is a protocol bug.
       unknownFlags = flags
+      MsgFaults.note("uber spec", "flags", "frame format 0x\(String(flags, radix: 16)) not decoded")
       return
     }
 
@@ -2411,7 +2436,9 @@ final class UberClient: ObservableObject {
   var rowsPushed = 0
 
   private func onSpectrumJSON(_ d: Data) {
-    guard let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+    // ★ Parsed through MsgFaults, not `try?`: a message we cannot read is dropped, counted and
+    //   logged — the old `try?` made it indistinguishable from a message never sent.
+    guard let j = MsgFaults.json("uber spec", d) else { return }
     let type = j["type"] as? String
     if type == "hwinfo" { onHwInfo(j); return }         // VibeServer: offered gains/rates + owner ceiling
     /* ★★★ THE GATE'S OWN READING (BRIEF-jr-vibeserver-display §4). A VibeServer sends, on every
@@ -2615,7 +2642,22 @@ final class UberClient: ObservableObject {
     }
     Vitals.crumb("UBER json: type=\(type)")
     guard type == "config" else { return }
-    if let bc = j["binCount"] as? Int {
+    /* ★★★ THE SCALE IS CHECKED BEFORE IT IS ADOPTED. binCount sizes an array (a negative one
+     *  TRAPS, a vast one is an allocation the watch cannot make), and centreFreq/binBandwidth feed
+     *  every Int conversion of the view below — Int(Double) traps on NaN, infinity and anything past
+     *  Int's range, which on arm64_32 is ±2.1 billion. A config with a nonsense scale is refused
+     *  field by field, counted and logged; the rest of the message still applies. */
+    if j["binCount"] != nil, Wire.inRange(j["binCount"], 1...65_536) == nil {
+      MsgFaults.note("uber spec", "config", "binCount \(String(describing: j["binCount"]).prefix(24)) refused")
+    }
+    if j["binBandwidth"] != nil, Wire.inRange(j["binBandwidth"], 0.001...1.0e9) == nil {
+      MsgFaults.note("uber spec", "config", "binBandwidth \(String(describing: j["binBandwidth"]).prefix(24)) refused")
+    }
+    if j["centerFreq"] != nil, Wire.inRange(j["centerFreq"], 0...1.0e11) == nil {
+      MsgFaults.note("uber spec", "config", "centerFreq \(String(describing: j["centerFreq"]).prefix(24)) refused")
+    }
+    if let bcD = Wire.inRange(j["binCount"], 1...65_536) {
+      let bc = Int(bcD)
       binCount = bc
       // ★★★ SIZE THE BIN ARRAY HERE — A DELTA CANNOT CREATE IT.
       //
@@ -2645,8 +2687,8 @@ final class UberClient: ObservableObject {
         Vitals.crumb("UBER config: binCount=\(bc) → sized the bin array")
       }
     }
-    if let bb = j["binBandwidth"] as? Double { binBandwidth = bb }
-    if let cf = j["centerFreq"] as? Double { centerHz = cf }
+    if let bb = Wire.inRange(j["binBandwidth"], 0.001...1.0e9) { binBandwidth = bb }
+    if let cf = Wire.inRange(j["centerFreq"], 0...1.0e11) { centerHz = cf }
     // The server has confirmed the scale for the current subscription — rows may paint now.
     specConfigSeq = specSubscribeSeq
 
@@ -2701,14 +2743,19 @@ final class UberClient: ObservableObject {
     if isVibe, let sh = j["shared"] as? Bool { sharedView = sh }
     // ★ What the server says it is ACTUALLY on, recorded before any guard below can skip it — the tune
     //   fallback needs it to tell "the audio socket delivered" from "nobody heard me". See sendTune().
-    if let sv = (j["vfo"] as? NSNumber)?.doubleValue, sv > 0 { lastServerVfo = sv }
+    // ★ Bounded like centreFreq above: a VFO past 100 GHz, or NaN, is a corrupt field — it would be
+    //   adopted as the frequency and trap the first Int conversion that met it.
+    if j["vfo"] != nil, Wire.inRange(j["vfo"], 0...1.0e11) == nil {
+      MsgFaults.note("uber spec", "config", "vfo \(String(describing: j["vfo"]).prefix(24)) refused")
+    }
+    if let sv = Wire.inRange(j["vfo"], 1...1.0e11) { lastServerVfo = sv }
 
     if isVibe, vibeAdopted,
-       let sv = (j["vfo"] as? NSNumber)?.doubleValue, sv > 0,
+       let sv = Wire.inRange(j["vfo"], 1...1.0e11),
        ProcessInfo.processInfo.systemUptime - lastLocalTuneAt > 1.5 {
       let moved = abs(sv - frequency)
       if moved > 100 {
-        Vitals.crumb("UBER shared dial: another listener moved it to \(Int(sv))")
+        Vitals.crumb("UBER shared dial: another listener moved it to \(Wire.i64(sv))")
         frequency = sv
         clearRds()          // it is a different station now — the old name must not linger
         // The shim sends the mode with the config on a shared dial, so the passband follows too.
@@ -2761,7 +2808,7 @@ final class UberClient: ObservableObject {
           sendView(frequency, viewBinBw > 0 ? viewBinBw : binBandwidth)
           return
         }
-        Vitals.crumb("UBER centre clamped by server (\(Int(centerHz)) vs \(Int(frequency))) — adopting it")
+        Vitals.crumb("UBER centre clamped by server (\(Wire.i64(centerHz)) vs \(Wire.i64(frequency))) — adopting it")
         viewCenterHz = centerHz
       }
     } else {
@@ -2803,7 +2850,7 @@ final class UberClient: ObservableObject {
         pendingRestoreSpanHz = nil
         let wantBinBw = want / Double(bins.count)
         if wantBinBw > 0, abs(wantBinBw - binBandwidth) > binBandwidth * 1e-3 {
-          Vitals.crumb("UBER restoring remembered span \(Int(want)) Hz")
+          Vitals.crumb("UBER restoring remembered span \(Wire.i64(want)) Hz")
           viewBinBw = wantBinBw
           sendView(viewCenterHz > 0 ? viewCenterHz : frequency, wantBinBw)
           return
@@ -2839,7 +2886,7 @@ final class UberClient: ObservableObject {
         sendView(viewCenterHz > 0 ? viewCenterHz : frequency, viewBinBw)
         return
       } else {
-        Vitals.crumb("UBER span not honoured (\(Int(binBandwidth)) vs \(Int(viewBinBw))) — adopting it")
+        Vitals.crumb("UBER span not honoured (\(Wire.i64(binBandwidth)) vs \(Wire.i64(viewBinBw))) — adopting it")
         viewBinBw = binBandwidth
         viewCenterHz = centerHz
       }
@@ -2919,7 +2966,7 @@ final class UberClient: ObservableObject {
     let maxBinBw = min(widestUsefulSpan, centrable) / bins
     let binBw = min(binBwRequested, maxBinBw)
     if binBw < binBwRequested {
-      Vitals.crumb("UBER span clamped: asked \(Int(binBwRequested * bins)) Hz, sending \(Int(binBw * bins)) Hz (VFO \(Int(freq)))")
+      Vitals.crumb("UBER span clamped: asked \(Wire.i64(binBwRequested * bins)) Hz, sending \(Wire.i64(binBw * bins)) Hz (VFO \(Wire.i64(freq)))")
     }
     viewCenterHz = freq
     viewBinBw = binBw
@@ -2932,7 +2979,7 @@ final class UberClient: ObservableObject {
     //   average the new span against the old one's history.
     specDecodeQueue.async { self.proc.reset() }
     let msg: [String: Any] = ["type": "zoom",
-                              "frequency": Int(freq.rounded()),
+                              "frequency": Wire.i64(freq),
                               "binBandwidth": binBw]
     specSock.send(json: msg)
   }
@@ -3138,21 +3185,44 @@ final class UberClient: ObservableObject {
   /// Decode one /ws/audio binary frame: [0]=ch [1]=format(0 raw/1 ADPCM mono/2 ADPCM mid-side)
   /// [2..5]=rate LE. Raw → int16 from offset 6. ADPCM → [6..7]=count/ch, one self-seeded block per channel
   /// from offset 8. Format is read PER FRAME (stereo silently drops to mono when the pilot is unlocked).
-  private func decodeVibeAudio(_ d: Data) {
-    guard d.count >= 6 else { return }
+  private func decodeVibeAudio(_ raw: Data) {
+    /* ★★★ A HEADER IS A CLAIM, AND IT IS CHECKED BEFORE IT IS BELIEVED. The rate used to go
+     *  `Int(UInt32)` — which on arm64_32 (Int is 32 bits below watchOS 27) TRAPS for anything at or
+     *  above 2^31, so one corrupt frame took the watch app down mid-listen. The channel byte went
+     *  straight to the Opus decoder and the player. Now a frame whose header is nonsense is
+     *  refused, counted and logged (MsgFaults), and the next frame is judged on its own.
+     * ★ Re-based to a zero-indexed copy only if it is a slice: the byte subscripts below assume
+     *   index 0 is the first byte, which a slice of a larger Data does not promise. */
+    let d = raw.startIndex == 0 ? raw : Data(raw)
+    guard d.count >= 6 else {
+      if !d.isEmpty { MsgFaults.note("vibe audio", "short", "\(d.count) B frame, header is 6") }
+      return
+    }
     let format = d[1]
-    let rate = Int(d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self) })
+    let rate32 = d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 2, as: UInt32.self) }
+    guard rate32 >= 4_000, rate32 <= 384_000 else {
+      MsgFaults.note("vibe audio", "rate", "format \(format) claims \(rate32) Hz — refused")
+      return
+    }
+    let rate = Int(rate32)                             // safe now: ≤ 384000 fits any Int
+    let ch = max(1, Int(d[0]))
+    if (format == 0 || format == 3) && ch > 2 {
+      MsgFaults.note("vibe audio", "channels", "format \(format) claims \(ch) channels — refused")
+      return
+    }
 
     if format == 3 {                                   // Opus (VibeServer compressed audio)
-      let ch = max(1, Int(d[0]))
       let packet = d.subdata(in: 6..<d.count)
       if let pcm = opus.decodeRaw(packet, rate: Int32(rate), ch: Int32(ch)) {
         audio.play(pcm: pcm, rate: Int32(rate), channels: Int32(ch))
+      } else if !packet.isEmpty {
+        // ★ Said, not swallowed: a packet Opus will not decode is a dropped 20 ms of audio, and a
+        //   run of them is a decoder the self-heal should be looking at.
+        MsgFaults.note("vibe audio", "opus", "\(packet.count) B packet at \(rate) Hz/\(ch) ch would not decode")
       }
       return
     }
     if format == 0 {
-      let ch = max(1, Int(d[0]))
       let pcm = d.subdata(in: 6..<d.count).withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
       audio.play(pcm: pcm, rate: Int32(rate), channels: Int32(ch))
       return
@@ -3167,18 +3237,28 @@ final class UberClient: ObservableObject {
      *    count out of the middle of an ADTS header. It happens to fall through today; it would not
      *    survive the next edit to this function. */
     if format == 4 { return }
+    guard format == 1 || format == 2 else {
+      MsgFaults.note("vibe audio", "format", "unknown audio format \(format)")
+      return
+    }
 
-    guard d.count >= 8 else { return }
+    guard d.count >= 8 else { MsgFaults.note("vibe audio", "short", "ADPCM frame \(d.count) B"); return }
     let count = Int(d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 6, as: UInt16.self) })
     guard count > 0 else { return }
     let blockBytes = 4 + (count + 1) / 2                    // [pred i16][index u8][pad] + ceil(count/2) nibbles
 
     if format == 1 {
-      guard d.count >= 8 + blockBytes else { return }
+      guard d.count >= 8 + blockBytes else {
+        MsgFaults.note("vibe audio", "truncated", "ADPCM mono claims \(count) samples, \(d.count) B arrived")
+        return
+      }
       let mono = decodeAdpcmBlock(d.subdata(in: 8..<(8 + blockBytes)), count: count, dec: adpcmL)
       audio.play(pcm: mono, rate: Int32(rate), channels: 1)
     } else if format == 2 {
-      guard d.count >= 8 + 2 * blockBytes else { return }
+      guard d.count >= 8 + 2 * blockBytes else {
+        MsgFaults.note("vibe audio", "truncated", "ADPCM stereo claims \(count) samples, \(d.count) B arrived")
+        return
+      }
       let mid  = decodeAdpcmBlock(d.subdata(in: 8..<(8 + blockBytes)), count: count, dec: adpcmL)
       let side = decodeAdpcmBlock(d.subdata(in: (8 + blockBytes)..<(8 + 2 * blockBytes)), count: count, dec: adpcmR)
       let n = min(mid.count, side.count)

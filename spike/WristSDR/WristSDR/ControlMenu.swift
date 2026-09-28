@@ -509,6 +509,19 @@ struct ControlMenu: View {
               .frame(maxWidth: .infinity, alignment: .leading)
           }.padding(.top, 3).padding(.bottom, 18)
         }
+        // ★★ BAD MESSAGES — what the parsers refused this run (MsgFaults). A server sending garbage
+        //    now costs a dropped frame instead of the app, and this is where that shows: without it
+        //    a refused stream looks exactly like a quiet one. Same gate as LAST RUN.
+        if CpuMeter.enabled, MsgFaults.total > 0 {
+          VStack(spacing: 3) {
+            Text("BAD MESSAGES DROPPED (\(MsgFaults.total))")
+              .font(.system(size: 9, weight: .bold)).foregroundColor(.orange.opacity(0.7))
+            Text(MsgFaults.summary())
+              .font(.system(size: 8, design: .monospaced))
+              .foregroundColor(.white.opacity(0.65))
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }.padding(.bottom, 18)
+        }
 
         }
       }

@@ -213,12 +213,17 @@ final class FmDxClient: SDRClient {
 
   // FM-DX pushes a whole-state JSON snapshot per frame; non-JSON lines are keepalive.
   nonisolated private func onTextFrame(_ t: String) {
-    guard let d = t.data(using: .utf8),
-          let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+    // ★ Non-JSON lines ARE the keepalive, so only something that claims to be JSON (opens with a
+    //   brace) and then fails to parse is a fault — dropped, counted and logged, never silent.
+    guard t.hasPrefix("{"), let j = MsgFaults.json("fmdx text", Data(t.utf8)) else { return }
     // A valid state frame must carry a numeric freq (MHz). Skip plugin/other frames.
     let freqMhz: Double? = (j["freq"] as? NSNumber)?.doubleValue
       ?? Double((j["freq"] as? String) ?? "")
     guard let mhz = freqMhz, mhz.isFinite, mhz > 0 else { return }
+    // ★★ BOUNDED: the frequency becomes `Int((freq / 1000).rounded())` in adopt(), which TRAPS past
+    //    Int's range — ±2.1 billion kHz on arm64_32 is a lot, but "1e300" is a valid JSON number.
+    //    Nothing FM-DX tunes is above 10 GHz; anything that is, is a corrupt frame.
+    guard mhz < 10_000 else { MsgFaults.note("fmdx text", "freq", "refused \(mhz) MHz"); return }
 
     var i = FmdxInfo()
     i.freq = (mhz * 1_000_000).rounded()
@@ -234,7 +239,9 @@ final class FmDxClient: SDRClient {
     let rtFlag = "\(j["rt_flag"] ?? "0")"
     i.rt = ((rtFlag == "1" ? j["rt1"] : j["rt0"]) as? String ?? "").trimmingCharacters(in: .whitespaces)
 
-    let dBf = (j["sig"] as? NSNumber)?.doubleValue ?? Double((j["sig"] as? String) ?? "") ?? 0
+    // ★ Finite only — `Double("nan")` parses, and a NaN meter would read "nan dBf" on the wrist.
+    let dBfRaw = (j["sig"] as? NSNumber)?.doubleValue ?? Double((j["sig"] as? String) ?? "") ?? 0
+    let dBf = dBfRaw.isFinite ? dBfRaw : 0
     i.meter = String(format: "%.1f dBf", dBf)
     // Map dBf onto a 0…1 bar. FM-DX useful range ≈ 0 (noise) … 90 (very strong).
     i.level = min(1, max(0, dBf / 90.0))
@@ -245,7 +252,10 @@ final class FmDxClient: SDRClient {
     if let tx = j["txInfo"] as? [String: Any] {
       i.tx = (tx["tx"] as? String ?? "").trimmingCharacters(in: .whitespaces)
       i.city = (tx["city"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-      i.dist = (tx["dist"] as? NSNumber)?.doubleValue ?? Double((tx["dist"] as? String) ?? "") ?? 0
+      let dist = (tx["dist"] as? NSNumber)?.doubleValue ?? Double((tx["dist"] as? String) ?? "") ?? 0
+      // ★ The view draws `Int(dist)`, which traps on "inf" (a string Double() accepts). No
+      //   transmitter is further than half the planet away; anything else is a corrupt field.
+      i.dist = (dist.isFinite && dist >= 0 && dist <= 20_050) ? dist : 0
       itu = (tx["itu"] as? String ?? "").trimmingCharacters(in: .whitespaces)
     }
     // ★ THE TRANSMITTER'S country beats the RDS one. `country_iso` is decoded off
@@ -308,8 +318,7 @@ final class FmDxClient: SDRClient {
   }
 
   nonisolated private func onChatFrame(_ t: String) {
-    guard let d = t.data(using: .utf8),
-          let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
+    guard t.hasPrefix("{"), let j = MsgFaults.json("fmdx chat", Data(t.utf8)) else { return }
     if (j["type"] as? String) == "clientIp" { return }   // the server telling us our own IP
     guard let msg = j["message"] as? String, !msg.isEmpty else { return }
     let nm = (j["nickname"] as? String) ?? "?"

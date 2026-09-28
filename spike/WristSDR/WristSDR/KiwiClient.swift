@@ -670,18 +670,24 @@ final class KiwiClient: ObservableObject, SDRClient {
       let r = Int(val) ?? 12000
       sndSend("SET AR OK in=\(r) out=44100")
       if stream == "SND" { sendRxParams() }
+    /* ★★ BOUNDED, BECAUSE BOTH ARE CONVERTED LATER. The rate becomes `Int32(rate.rounded())` on
+     *  every audio packet, which TRAPS for "inf" (Double("inf") parses) or anything past 2^31; the
+     *  bandwidth becomes the view span. An out-of-range value is refused and logged, and the last
+     *  good one stands. */
     case "sample_rate":
-      if let f = Double(val), f > 1000 { trueAudioRate = f }
+      if let f = Double(val), f.isFinite, f > 1000, f <= 384_000 { trueAudioRate = f }
+      else { MsgFaults.note("kiwi \(stream)", "sample_rate", "refused \(val.prefix(24))") }
     case "bandwidth":
-      if let bw = Double(val), bw > 1000 {
+      if let bw = Double(val), bw.isFinite, bw > 1000, bw <= 1.0e9 {
         rxBw = bw
         if !viewInit { viewCenter = bw / 2; viewBw = bw }
-      }
+      } else { MsgFaults.note("kiwi \(stream)", "bandwidth", "refused \(val.prefix(24))") }
     case "wf_setup":
       if !wfReady { wfReady = true; sendZoom() }
     case "audio_adpcm_state":
       let parts = val.split(separator: ",").compactMap { Int($0) }
       if parts.count == 2 { audioDec.setState(index: parts[0], predictor: parts[1]) }
+      else { MsgFaults.note("kiwi \(stream)", "audio_adpcm_state", "refused \(val.prefix(24))") }
     case "too_busy":
       // too_busy=0 is a NORMAL "you are not too busy" broadcast — only non-zero means full.
       if val != "0" && val != "" {
@@ -741,7 +747,7 @@ final class KiwiClient: ObservableObject, SDRClient {
   // ── Waterfall (W/F binary) ──
   nonisolated(unsafe) private var out256 = [UInt8]()   // wfDecodeQueue only, with proc
   private func onWf(_ buf: [UInt8]) {
-    guard buf.count >= 16 else { return }
+    guard buf.count >= 16 else { MsgFaults.note("kiwi W/F", "short", "\(buf.count) B frame, header is 16"); return }
     let zoomFlags = UInt32(buf[8]) | (UInt32(buf[9]) << 8) | (UInt32(buf[10]) << 16) | (UInt32(buf[11]) << 24)
     let wfFlags = (zoomFlags >> 16) & 0xffff
     var bins = ArraySlice(buf[16...])
