@@ -16,9 +16,12 @@
 #pragma once
 #include "vibedsp/vibedsp.h"
 #if defined(VIBE_HAVE_OPUS)
-#include "opus_audio_encoder.h"
-#include "vibe_health.h"         // ★ the snail's all-core calibration runs as the benchmark's first step   // ★ a listener's audio is encoded per listener — see runListener
+#include "opus_audio_encoder.h"   // ★ a listener's audio is encoded per listener — see runListener
 #endif
+// ★ OUTSIDE the Opus guard: the snail's all-core calibration runs as the benchmark's first step on
+//   every build. It had been put inside it, so the iOS lib (built without Opus) failed with
+//   "undeclared identifier vibehealth" — found by the first build_ios.sh since (2026-09-28).
+#include "vibe_health.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
