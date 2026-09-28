@@ -1539,6 +1539,8 @@ button.btn.on:hover { background: #fff0a0; border-color: #fff0a0; }
    ★ Added as a modifier rather than by changing `.lbl`: dozens of short labels depend on the
    nowrap, and flipping the default would move the bug rather than fix it. */
 .lbl.wrap { white-space: normal; line-height: 1.45; letter-spacing: 0.04em; }
+/* The ABOUT section's links: the browser default blue is unreadable on this background. */
+#menu .lbl.wrap a { color: var(--freq); }
 
 input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
@@ -4903,6 +4905,30 @@ select.btn { padding: 6px 8px; }
     <div class="lbl wrap">
       Monitoring, listeners, connection history, blocking and maintenance for this receiver.
     </div>
+  </div>
+
+  <!-- ★★ ABOUT & CREDITS. The web client had none, and the bundle strips every licence comment
+       (legalComments: 'none', and opus-decoder's dist carries none anyway) — so the one MIT
+       library this page actually runs was credited nowhere a listener could see. Static text,
+       nothing to wire. The full list is README's Credits table (the same as the app's About). -->
+  <h2>ABOUT</h2>
+  <div class="lbl wrap">
+    VibeServer &mdash; VibeSDR&rsquo;s own DSP, speaking the UberSDR protocol. Free software under the
+    <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GNU GPL v3</a>;
+    source at <a href="https://github.com/Stuey3D/VibeSDR" target="_blank" rel="noopener">github.com/Stuey3D/VibeSDR</a>.
+  </div>
+  <div class="lbl wrap">
+    This page runs <b>opus-decoder</b> (&copy; Ethan Halsall, MIT) with <b>libopus</b> (&copy; Xiph.Org
+    Foundation, BSD-3-Clause), and draws its maps with <b>MapLibre GL JS</b> (&copy; MapLibre
+    contributors, BSD-3-Clause) and <b>PMTiles</b> (&copy; Protomaps, BSD-3-Clause), or
+    <b>Leaflet</b> (&copy; Volodymyr Agafonkin, BSD-2-Clause) where there is no WebGL. Map data:
+    Natural Earth, NOAA ETOPO, &copy; GeoNames, &copy; HydroLAKES, &copy; RESOLVE Ecoregions 2017
+    (CC BY 4.0), OurAirports, NGA World Port Index and &copy; OpenStreetMap contributors (ODbL).
+  </div>
+  <div class="lbl wrap">
+    Tested by tgcfabian, Onfliner, Hans van Eijsden, Kiko7250, xavxx and Michael DL8LDN.
+    Every library, driver, reference and data source, with what it gave:
+    <a href="https://github.com/Stuey3D/VibeSDR#credits" target="_blank" rel="noopener">full credits</a>.
   </div>
 </div>
 
