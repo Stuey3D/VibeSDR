@@ -4,7 +4,8 @@
   "version": "0.0.1",
   "description": "VibeServer Lite's JS: the MAIN app's ServerModeScreen, bundled verbatim on React Native 0.73 (the last line whose floor is Android 5.0 / API 21).",
   "scripts": {
-    "bundle": "react-native bundle --platform android --dev false --entry-file index.js --bundle-output ../android/app/build/rn-assets/index.android.bundle --assets-dest ../android/app/build/rn-res"
+    "bundle": "react-native bundle --platform android --dev false --entry-file index.js --bundle-output ../android/app/build/rn-assets/index.android.bundle --assets-dest ../android/app/build/rn-res",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "1.23.1",
@@ -18,9 +19,11 @@
     "@babel/runtime": "^7.24.0",
     "@react-native/babel-preset": "0.73.21",
     "@react-native/metro-config": "0.73.5",
-    "@react-native/typescript-config": "0.73.1"
+    "@react-native/typescript-config": "0.73.1",
+    "patch-package": "^8.0.1"
   },
   "overrides": {
-    "fast-xml-parser": "^5.7.0"
+    "fast-xml-parser": "^5.7.0",
+    "image-size": "^2.0.4"
   }
 }
