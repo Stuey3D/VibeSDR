@@ -108,6 +108,22 @@ final class WatchAudio {
   private(set) var route: String = "—"
   private(set) var packets = 0
 
+  /* ★★★ SELF-HEAL COUNTERS (see AudioSelfHeal.swift; UberClient runs the monitor).
+   *  `realPlayed`: frames of REAL audio the player consumed — counted in playLocked's completions,
+   *  never the silence keeper's, and never a buffer a flush discarded (flushGen). `userPaused`: the
+   *  listener pressed pause on the Now Playing card, which must never be "repaired".
+   *  ★ Behind a lock, not `q.sync`: the monitor reads them from the main actor, and a main thread
+   *    that waits on an audio queue that is itself wedged is a watchdog kill on the wrist. */
+  private let statsLock = NSLock()
+  private var realPlayed: Int64 = 0
+  private var userPaused = false
+  /// (frames of real audio played, the listener paused it, the audio was started and not stopped)
+  var healthSnapshot: (played: Int64, paused: Bool, live: Bool) {
+    statsLock.lock(); defer { statsLock.unlock() }
+    return (realPlayed, userPaused, live)
+  }
+  private func setUserPaused(_ p: Bool) { statsLock.lock(); userPaused = p; statsLock.unlock() }
+
   /// True once audio is genuinely running — i.e. the session activated AND the engine
   /// started. Anything less is a finding.
   private(set) var live = false
@@ -408,6 +424,7 @@ final class WatchAudio {
       return .success
     }
     c.pauseCommand.addTarget { [weak self] _ in
+      self?.setUserPaused(true)
       self?.q.async { self?.player.pause() }
       return .success
     }
@@ -415,7 +432,7 @@ final class WatchAudio {
       guard let self else { return .success }
       // ★ Pause is safe unguarded; PLAY is not — same uncatchable exception, so it goes
       //   through restartAudio, which starts the engine first and skips play if it cannot.
-      if self.player.isPlaying { self.q.async { self.player.pause() } }
+      if self.player.isPlaying { self.setUserPaused(true); self.q.async { self.player.pause() } }
       else                     { self.restartAudio("remote toggle") }
       return .success
     }
@@ -527,6 +544,7 @@ final class WatchAudio {
         return
       }
       if !self.player.isPlaying { self.player.play() }
+      self.setUserPaused(false)
       // The config-change handler cancels the keeper before its surgery and, if engine.start() failed
       // there, bailed before re-arming it. Now that we ARE running again, re-arm a dead keeper (only if
       // nil, so we don't re-prime a silence burst on every didBecomeActive).
@@ -900,6 +918,7 @@ final class WatchAudio {
     let dur = Double(outBuf.frameLength) / outFmt.sampleRate
     queuedSeconds += dur
     let gen = flushGen
+    let outFrames = Int64(outBuf.frameLength)
     player.scheduleBuffer(outBuf) { [weak self] in
       // BACK ONTO THE QUEUE. This completion fires on the AUDIO thread, and it was
       // decrementing a counter that `play` increments on the WebSocket thread — one
@@ -908,7 +927,53 @@ final class WatchAudio {
       // `gen` guard: a flush() (tune) stops the player, which fires these completions for
       // buffers we've already discarded — without the guard they'd drive queuedSeconds
       // negative and the cushion logic would over-fill.
-      self?.q.async { guard self?.flushGen == gen else { return }; self?.queuedSeconds -= dur }
+      // ★ Self-heal: the same completion is the proof that REAL audio was consumed.
+      self?.q.async {
+        guard let self, self.flushGen == gen else { return }
+        self.queuedSeconds -= dur
+        self.statsLock.lock(); self.realPlayed &+= outFrames; self.statsLock.unlock()
+      }
+    }
+  }
+
+  /// ★★ SELF-HEAL, RUNG ONE: the engine and the player, rebuilt in place — the same surgery the
+  ///    config-change handler does (proven on the wrist), for the case no notification announces:
+  ///    packets arriving and nothing being played. Also clears the `started = false` latch
+  ///    playLocked sets when it meets a stopped engine — from then on EVERY packet was dropped at
+  ///    its first guard and restartAudio refused to act (it guards on `started`), so a single
+  ///    engine stop with packets in flight left the radio silent until a config change happened
+  ///    to come along.
+  ///  ★ play() only on a CONFIRMED running engine, and buffers only in the player's own format —
+  ///    both are uncatchable Obj-C traps on watchOS (memory watch_audio_playnode_crash).
+  func rebuildEngine(_ why: String) {
+    q.async { [weak self] in
+      guard let self, self.live else { return }
+      self.keeper?.cancel()
+      self.keeper = nil
+      self.flushGen &+= 1            // completions from the discarded buffers are not "played"
+      self.player.stop()
+      self.engine.stop()
+      self.converter = nil
+      self.srcFormat = nil
+      self.dstFormat = nil
+      self.queuedSeconds = 0
+      self.deepSince = 0
+      let out = self.engine.outputNode.outputFormat(forBus: 0)
+      guard out.sampleRate > 0, out.channelCount > 0 else {
+        Vitals.crumb("AUDIO self-heal (\(why)): no output format — skip, will retry")
+        return
+      }
+      self.engine.connect(self.player, to: self.engine.mainMixerNode, format: out)
+      self.engine.prepare()
+      try? self.engine.start()
+      guard self.engine.isRunning else {
+        Vitals.crumb("AUDIO self-heal (\(why)): engine NOT running — skip play, will retry")
+        return
+      }
+      self.player.play()
+      self.started = true
+      self.startSilenceKeeper()
+      Vitals.crumb("AUDIO self-heal (\(why)): engine + player rebuilt, running=\(self.engine.isRunning) playing=\(self.player.isPlaying)")
     }
   }
 

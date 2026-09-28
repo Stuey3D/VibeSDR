@@ -6026,7 +6026,7 @@ function dabRender() {
       : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
           : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
     for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
-      el.onclick = () => { dabPickedAt = performance.now(); dabPcmRunStart = 0; dabPcmRoseAt = 0; spec?.dabService(Number(el.dataset.sid)); dabRender(); };
+      el.onclick = () => { dabPickedAt = performance.now(); dabPcmRunStart = 0; dabPcmRoseAt = 0; audio?.holdHealing(6000); spec?.dabService(Number(el.dataset.sid)); dabRender(); };
     { const b = document.getElementById('decBody'); if (b && listScroll) b.scrollTop = listScroll; }
   }
   for (const sv of d.services) {
@@ -6565,13 +6565,13 @@ function dabGoTo(hz: number, sid: number) {
   if (!dabOn) {
     dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
     dabUiOn();
-    spec?.dab(true, idx, svc);
+    audio?.holdHealing(6000); spec?.dab(true, idx, svc);
   } else if (idx !== dabChannel) {
     dabChannel = idx; savePref('dabChannel', DAB_BLOCKS[idx].name);
     dabState = null;
-    spec?.dab(true, idx, svc);
+    audio?.holdHealing(6000); spec?.dab(true, idx, svc);
   } else if (svc !== undefined) {
-    spec?.dabService(svc);
+    audio?.holdHealing(6000); spec?.dabService(svc);
   }
   dabRender();
   syncDialTips();
@@ -6583,7 +6583,7 @@ function dabTune(delta: number) {
   dabChannel = Math.max(0, Math.min(DAB_BLOCKS.length - 1, dabChannel + delta));
   savePref('dabChannel', DAB_BLOCKS[dabChannel].name);
   dabState = null;
-  spec?.dab(true, dabChannel);
+  audio?.holdHealing(6000); spec?.dab(true, dabChannel);
   dabRender();
   syncDialTips();   // ★ the arrows name the NEXT blocks — see syncDialTips
 }
@@ -6790,13 +6790,13 @@ function dabSetMode(on: boolean) {
     } else {
       if (dabChannel < 0) dabChannel = dabRememberedChannel();
       dabUiOn();
-      spec?.dab(true, dabChannel);
+      audio?.holdHealing(6000); spec?.dab(true, dabChannel);
     }
   } else {
     dabArmRestore();          // ★ before dabOn goes — see the note above
     dabOn = false;
     wf?.applySettings({ minRangeDb: 30 });
-    spec?.dab(false);
+    audio?.holdHealing(6000); spec?.dab(false);
     dabState = null;
     dabUiOff();
   }

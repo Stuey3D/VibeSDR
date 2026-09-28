@@ -1491,6 +1491,17 @@ final class UberClient: ObservableObject {
   private var everPainted = false
   private var frameCount = 0
   private var audioCount = 0
+  /* ★★★ SELF-HEAL (Stuart, 2026-09-28) — IS WHAT ARRIVES ACTUALLY BEING PLAYED? The liveness
+   *  watchdog below reopens the audio socket when PACKETS STOP; nothing caught packets arriving and
+   *  NOTHING PLAYING, and WatchAudio has a latch that produces exactly that (see rebuildEngine).
+   *  `audioRxTotal` counts every frame Jr can play (not DAB+ AAC, which Jr never decodes) the moment
+   *  it lands; WatchAudio counts the frames of real audio its player consumed. AudioSelfHeal — the
+   *  SAME file the phone compiles — compares them once a second: receiving and nothing played for
+   *  3 s → a fresh decoder + engine + player; still silent → reopen the audio socket; round again,
+   *  slower, never permanent. Never while the listener has paused, and never before the audio is
+   *  live. Each repair is a crumb (Vitals), so a recurrence leaves evidence on the wrist. */
+  private var audioRxTotal: Int64 = 0
+  private let heal = AudioSelfHeal()
   private var specBytes  = 0        // DEBUG byte tallies for kbps
   private var audioBytes = 0
   private var rateTimer: Timer?
@@ -1538,6 +1549,7 @@ final class UberClient: ObservableObject {
           self.lastAudioAt = Date()      // re-arm: try again in another 5s if still silent
           self.retryAudio()
         }
+        self.healTick()
 
         self.stepLinkManagement()
       }
@@ -2953,7 +2965,8 @@ final class UberClient: ObservableObject {
         guard let self else { return }
         self.decodeVibeAudio(d)
         let n = d.count
-        Task { @MainActor in self.audioCount += 1; self.audioBytes += n }
+        let playable = d.count >= 6 && d[1] != 4        // DAB+ AAC: Jr does not decode it
+        Task { @MainActor in self.audioCount += 1; self.audioBytes += n; if playable { self.audioRxTotal += 1 } }
       }
     } else {
       // UberSDR: `/ws`, tune rides the query string. Taken verbatim from VibePowerModule.audioWsURL.
@@ -2984,7 +2997,11 @@ final class UberClient: ObservableObject {
         if let out = self.opus.decode(d) {
           self.audio.play(pcm: out.pcm, rate: out.rate, channels: out.channels)
           let n = d.count
-          Task { @MainActor in self.audioCount += 1; self.audioBytes += n }
+          Task { @MainActor in self.audioCount += 1; self.audioBytes += n; self.audioRxTotal += 1 }
+        } else if d.count > 21 {
+          // ★ Self-heal: a packet that ARRIVED and would not decode still arrived — a decoder that
+          //   has wedged is exactly what the monitor exists to notice.
+          Task { @MainActor in self.audioRxTotal += 1 }
         }
       }
     }
@@ -3206,6 +3223,28 @@ final class UberClient: ObservableObject {
       guard !self.goingIdle, self.framesPerSec == 0 else { return }   // torn down, or recovered on its own
       self.specWsState = "spec retry \(self.specRetries)…"
       self.openSpectrum()
+    }
+  }
+
+  /// Main actor, once a second (the rate timer). See the note on `heal`.
+  private func healTick() {
+    let snap = audio.healthSnapshot
+    let expected = status == "live" && everHadAudio && snap.live && !snap.paused && !goingIdle
+    let d = heal.tick(now: ProcessInfo.processInfo.systemUptime, rx: audioRxTotal,
+                      played: snap.played, expected: expected)
+    guard d.action != .none else { return }
+    let what = d.action == .reopenSocket ? "reopening the audio socket" : "new decoder + engine + player"
+    Vitals.crumb("AUDIO SELF-HEAL #\(heal.repairs) \(d.state.rawValue): \(d.reason) — \(what) "
+               + "(attempt \(d.attempt)) · rx=\(audioRxTotal) played=\(snap.played) · \(audio.stateLine)")
+    switch d.action {
+    case .rebuildPipeline:
+      opus.requestReset()
+      audio.rebuildEngine("self-heal")
+    case .reopenSocket:
+      audioWsState = "audio not playing — reopening"
+      openAudio()                    // open() cancels the old socket first (AudioSocket.open)
+    case .none:
+      break
     }
   }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { NativeModules, NativeEventEmitter } from 'react-native';
 import { noteAudioEvent } from '../services/audioPathLog';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -99,10 +99,11 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
    *  — was reachable only through a Mac, a cable and Console.app. The person who can reproduce the
    *  fault is holding a phone; put it in the report they can send. */
   useEffect(() => {
-    // ★ iOS only: these events come from VibePowerModule.swift. Android's VibeStreamModule stubs
-    //   addListener/removeListeners as no-ops and emits neither, so subscribing there would buy a
-    //   listener that can never fire — and the native pump is a different design in any case.
-    if (!VibePowerModule || Platform.OS !== 'ios') return;
+    // ★ Both platforms since the self-heal (2026-09-28): VibeStreamService now emits VibeAudioPath
+    //   for every repair it makes, through the same RCTDeviceEventEmitter its VibeMuted already
+    //   reaches JS by (its addListener/removeListeners stubs do not stop delivery). VibeAudioStuck
+    //   is still iOS's alone — Android never emits it, so that listener simply never fires there.
+    if (!VibePowerModule) return;
     const em = new NativeEventEmitter(VibePowerModule as never);
     const path  = em.addListener('VibeAudioPath',  (e: { what?: string }) => {
       if (e?.what) noteAudioEvent('native: ' + e.what);

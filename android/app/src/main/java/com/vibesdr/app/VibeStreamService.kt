@@ -304,6 +304,30 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var carObserver: Observer<Int>? = null
 
     private var watchdog: Runnable? = null
+
+    /* ★★★ SELF-HEAL — IS WHAT ARRIVES ACTUALLY BEING PLAYED? (Stuart, 2026-09-28)
+     *  The watchdog reopens the socket when PACKETS STOP. Nothing caught packets ARRIVING and
+     *  nothing PLAYING, and this service has latches that produce exactly that: the decode thread
+     *  can DIE ("decode loop died" — a MediaCodec or AudioTrack exception ends it, and nothing
+     *  restarts it, so packets fill the queue and are dropped for the rest of the session), and a
+     *  blocking AudioTrack.write on a track the system stopped never returns. Waterfall fine,
+     *  server sending, silence.
+     *  ★★ Two counters, compared by AudioSelfHeal (the Kotlin port of the rules the web client and
+     *     both Apple apps share): packets off the socket, and frames the AudioTrack's PLAYBACK HEAD
+     *     advanced — the hardware's own word that sound left. Receiving and nothing played for
+     *     3 s → rebuild the decode thread, codec and track; still silent → reopen the socket;
+     *     round again, slower. "Nothing arriving" stays reviveIfDead's.
+     *  ★ Not judged while muted (a transient focus loss mutes), paused for the data saver, or on
+     *    the external (JS-owned socket) and FM-DX paths. Every repair is logged to Logcat (tag
+     *    VibeStream) with its counters. */
+    private val heal = AudioSelfHeal()
+    private var healTicker: Runnable? = null
+    private val healRx = java.util.concurrent.atomic.AtomicLong(0)
+    /** Main-thread only: frames played, accumulated from the playback head (which wraps at 2^32
+     *  and restarts at 0 on every new AudioTrack — see healTick). */
+    private var healPlayed = 0L
+    private var healTrackRef: AudioTrack? = null
+    private var healLastHead = 0L
     // Tune coalescing: the velocity drum can emit 20+ steps/s; one WS tune
     // per step thrashes radiod. Leading send + 80ms trailing timer.
     private var pendingTuneFreq = 0L
@@ -451,6 +475,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         startDecodeThread()
         openWs()
         startWatchdog()
+        startHealTicker()
         mediaSession?.isActive = true
         updateMetadataSession()
         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
@@ -476,6 +501,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         abandonAudioFocus()
         watchdog?.let { mainHandler.removeCallbacks(it) }
         watchdog = null
+        healTicker?.let { mainHandler.removeCallbacks(it) }
+        healTicker = null
         tuneFlush?.let { mainHandler.removeCallbacks(it) }
         tuneFlush = null
         ws?.close(1001, "going away")
@@ -1430,6 +1457,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     if (!running || ws !== webSocket) return
                     packetCount++
                     lastPacketAt = SystemClock.elapsedRealtime()
+                    healRx.incrementAndGet()
                     if (packetCount <= 3) Log.i(TAG, "ws pkt#$packetCount len=${bytes.size}")
                     /* ★★★ THE FIRST PACKET IS THE ONLY PROOF THE SESSION IS REAL — a 101 is equally
                      *  true of a socket the server is about to drop, and a send into that window is
@@ -1555,6 +1583,98 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         if (stale <= staleAfterMs && ws != null) return
         Log.i(TAG, "watchdog: stale=${stale}ms — reviving audio WS")
         lastPacketAt = SystemClock.elapsedRealtime() // debounce one revive/window
+        ws?.cancel()
+        ws = null
+        openWs()
+    }
+
+    // ── Self-heal (received vs played — see the note on `heal`) ─────────────
+
+    private fun startHealTicker() {
+        healTicker?.let { mainHandler.removeCallbacks(it) }
+        heal.reset()
+        healTrackRef = null
+        val r = object : Runnable {
+            override fun run() {
+                if (!running) return
+                healTick()
+                mainHandler.postDelayed(this, 1_000)
+            }
+        }
+        healTicker = r
+        mainHandler.postDelayed(r, 1_000)
+    }
+
+    /** Main thread, once a second. */
+    private fun healTick() {
+        // ★ The playback head: frames the hardware actually consumed. It is an UNSIGNED 32-bit
+        //   count that wraps, and every new AudioTrack starts again at 0, so accumulate deltas per
+        //   track and re-base (count nothing) on the tick a new track appears.
+        val t = track
+        if (t !== healTrackRef) {
+            healTrackRef = t
+            healLastHead = try { t?.playbackHeadPosition?.toLong()?.and(0xFFFFFFFFL) ?: 0L } catch (_: Exception) { 0L }
+        } else if (t != null) {
+            val head = try { t.playbackHeadPosition.toLong() and 0xFFFFFFFFL } catch (_: Exception) { healLastHead }
+            healPlayed += (head - healLastHead) and 0xFFFFFFFFL
+            healLastHead = head
+        }
+        val expected = running && !externalAudio && !fmdxAudio && !dataSaverDisconnected && !muted
+        val rx = healRx.get()
+        val d = heal.tick(SystemClock.elapsedRealtime(), rx, healPlayed, expected)
+        if (d.action == AudioSelfHeal.Action.NONE) return
+        val what = if (d.action == AudioSelfHeal.Action.REOPEN_SOCKET) "reopening the audio socket"
+                   else "rebuilding the decode thread + codec + AudioTrack"
+        val line = "SELF-HEAL #${heal.repairs} ${d.state.wire}: ${d.reason} — $what (attempt ${d.attempt}) · " +
+                   "rx=$rx played=$healPlayed pkts=$packetCount queue=${packetQueue.size} " +
+                   "decodeAlive=${decodeThread?.isAlive} track=${t?.playState}"
+        Log.w(TAG, line)
+        // ★ And into the in-app diagnostics report (AudioPlayer.tsx → audioPathLog), which is what
+        //   the person holding the phone can actually send — Logcat needs a cable.
+        emitEvent("VibeAudioPath") { it.putString("what", line) }
+        when (d.action) {
+            AudioSelfHeal.Action.REBUILD_PIPELINE -> healRebuildPipeline()
+            AudioSelfHeal.Action.REOPEN_SOCKET -> healReopenSocket()
+            AudioSelfHeal.Action.NONE -> {}
+        }
+    }
+
+    /** ★★ RUNG ONE: the decode thread, and with it the codec and the AudioTrack (the thread's
+     *  `finally` releases both, and the new thread builds fresh ones on its first packet).
+     *  ★ A write wedged on a stopped track is released by pause()+flush() from here — and a thread
+     *    that already DIED needs nothing but a replacement. The join happens OFF the main thread;
+     *    the new thread only starts once the old one is gone, so the two never share a track. */
+    private fun healRebuildPipeline() {
+        val old = decodeThread
+        // ★ A live RECORDING lives on this thread (its finally finalises the .m4a), and the
+        //   recorder taps the decoded feed, so it can be perfectly healthy while the track is not.
+        //   Ending someone's recording to fix the speaker is not a repair — unwedge the track in
+        //   place instead, and leave the thread alone.
+        if (recArmed && old?.isAlive == true) {
+            try { track?.pause(); track?.flush(); track?.play() } catch (_: Exception) {}
+            Log.w(TAG, "self-heal: recording in progress — restarted the AudioTrack in place, thread kept")
+            return
+        }
+        try { track?.pause(); track?.flush() } catch (_: Exception) {}
+        old?.interrupt()
+        Thread({
+            try { old?.join(1_500) } catch (_: InterruptedException) {}
+            mainHandler.post {
+                if (!running || decodeThread !== old) return@post
+                if (old != null && old.isAlive) {
+                    Log.w(TAG, "self-heal: the old decode thread would not stop — leaving it; the next rung reopens the socket")
+                    return@post
+                }
+                packetQueue.clear()
+                startDecodeThread()
+            }
+        }, "vibesdr-heal").start()
+    }
+
+    /** ★★ RUNG TWO: the socket — the same reopen reviveIfDead does, without its staleness test
+     *  (packets ARE arriving here). Same uuid: the server sees the same listener come back. */
+    private fun healReopenSocket() {
+        lastPacketAt = SystemClock.elapsedRealtime()
         ws?.cancel()
         ws = null
         openWs()

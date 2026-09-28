@@ -25,6 +25,7 @@ import { decodeVibeAdpcmFrame } from '../../../src/services/imaAdpcm';
 // fine over plain http on a LAN IP — WASM has no secure-context gate and no platform media stack
 // to disagree with. The wasm is inlined in the module, so the single-file page stays self-contained.
 import { OpusDecoder } from 'opus-decoder';
+import { AudioSelfHeal, type HealDecision } from '../../../src/services/audioSelfHeal';
 import { initSegment, mediaSegment } from './fmp4';
 
 /** How much audio to hold before playout starts, in seconds. This is also very nearly
@@ -123,7 +124,16 @@ class VibeSink extends AudioWorkletProcessor {
      * ★ Same handler for both, so a flush from the page and PCM from the Worker cannot drift
      *   apart — there is one implementation of what a message means. */
     this.feed = null;
+    // ★ Samples handed IN (fed) as distinct from samples played OUT (drained) — see the self-heal
+    //   watchdog on the page: the two together say whether a silence is the decoder upstream or
+    //   this node, which is what decides the repair. Reported every 250 ms of input.
+    this.fed = 0; this.lastFedReport = 0;
+    // ★ Fault injection for the self-heal test (AudioPlayer.debugFault('player')): stop draining
+    //   while frames keep arriving — the exact signature of a wedged output. A NEW node clears it,
+    //   which is the repair being tested.
+    this.faultStall = false;
     this.port.onmessage = (e) => {
+      if (e.data && e.data.fault === 'stall') { this.faultStall = true; return; }
       if (e.data && e.data.sinkPort) {
         this.feed = e.data.sinkPort;
         this.feed.onmessage = (ev) => this.onAudioMsg(ev);
@@ -150,6 +160,8 @@ class VibeSink extends AudioWorkletProcessor {
       }
       const { l, r } = e.data;
       const n = l.length;
+      this.fed += n;
+      if (this.fed - this.lastFedReport >= 12000) { this.lastFedReport = this.fed; this.port.postMessage({ fed: this.fed }); }
       if (this.filled + n > this.cap) {   // overflow: drop oldest
         this.skips++; this.port.postMessage({ skips: this.skips });
         const drop = this.filled + n - this.cap;
@@ -187,6 +199,7 @@ class VibeSink extends AudioWorkletProcessor {
   process(_inputs, outputs) {
     const out = outputs[0];
     const n = out[0].length;
+    if (this.faultStall) { for (let c = 0; c < out.length; c++) out[c].fill(0); return true; }
     if (!this.started || this.filled < n) {
       // Underrun — output silence and re-arm the jitter buffer.
       if (this.started && this.filled < n) {
@@ -301,6 +314,10 @@ let url = '';
 // ★ Media playout (Safari): hand the Opus packets to the page UNDECODED — a MediaSource on an
 //   <audio> element decodes them. The decoder here is then only for the recorder.
 let rawOpus = false;
+// ★ Fault injection for the self-heal test (AudioPlayer.debugFault). 'decoder' swallows decoded
+//   output until the decoder is rebuilt ('reset'); 'drop' discards frames after counting them and
+//   'freeze' ignores the socket entirely (a half-open link) — both until the socket is reopened.
+let fault = '';
 
 function toFloat(pcm, ch, frames) {
   const l = new Float32Array(frames);
@@ -330,6 +347,7 @@ function ensureDec(ch) {
   decCh = ch;
   dec = new AudioDecoder({
     output: (ad) => {
+      if (fault === 'decoder') { ad.close(); return; }
       const n = ad.numberOfFrames, nc = ad.numberOfChannels;
       const pcm = new Int16Array(n * nc);
       const plane = new Float32Array(n);
@@ -362,7 +380,9 @@ function onFrame(buf) {
   const dv = new DataView(buf);
   const channels = dv.getUint8(0);
   const format = dv.getUint8(1);
-  self.postMessage({ type: 'bytes', n: buf.byteLength });
+  if (fault === 'freeze') return;
+  self.postMessage({ type: 'bytes', n: buf.byteLength, f: format });
+  if (fault === 'drop') return;
   if (format === 3) {
     const ch = channels || 1;
     // ★ Raw mode: the page's media element decodes. Decode here too ONLY while recording, and
@@ -421,7 +441,16 @@ function open() {
 self.onmessage = (e) => {
   const d = e.data || {};
   if (d.type === 'init')      { sink = d.sinkPort || null; rawOpus = !!d.rawOpus; url = d.url; open(); }
-  else if (d.type === 'url')  { url = d.url; closedByUs = true; try { ws && ws.close(); } catch (err) {} closedByUs = false; open(); }
+  else if (d.type === 'url')  { if (fault === 'drop' || fault === 'freeze') fault = ''; url = d.url; closedByUs = true; try { ws && ws.close(); } catch (err) {} closedByUs = false; open(); }
+  /* ★★ SELF-HEAL, rung one: a NEW decoder (the old one may be wedged or erroring quietly) and, when
+   *    the page rebuilt the playout node, the new node's feed port. The socket is untouched. */
+  else if (d.type === 'reset') {
+    if (fault === 'decoder') fault = '';
+    if (dec) { try { dec.close(); } catch (err) {} }
+    dec = null; decCh = 0; ts = 0;
+    if (d.sinkPort) sink = d.sinkPort;
+  }
+  else if (d.type === 'fault') { fault = d.kind || ''; }
   else if (d.type === 'rec')  { recording = !!d.on; }
   else if (d.type === 'close'){ closedByUs = true; try { ws && ws.close(); } catch (err) {} }
 };
@@ -850,17 +879,7 @@ export class AudioPlayer {
         // ★ The worklet reports its depth whenever it changes. Record it so "why is the audio
         //   behind the waterfall?" has an answer on this side of the port — an adaptive value
         //   nobody can read is indistinguishable from a bug.
-        this.node.port.onmessage = (e: MessageEvent) => {
-          const d = e.data as { jitterMs?: number; drained?: number; underruns?: number;
-                                skips?: number; audible?: number };
-          if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
-          if (typeof d?.underruns === 'number') this.underruns = d.underruns;
-          if (typeof d?.skips === 'number') this.skips = d.skips;
-          // ★★★ THE ONLY PROOF THAT SOUND IS LEAVING. See the note in the worklet: every other
-          //     signal this class has is measured before the node.
-          if (typeof d?.drained === 'number') this.lastDrainAt = performance.now();
-          if (d?.audible) this._noteAudible();
-        };
+        this._wireNode(this.node);
         this.node.connect(this.gain);
         this._connectOutput();
         this.lastDrainAt = performance.now();
@@ -926,6 +945,7 @@ export class AudioPlayer {
       }
       this.rPos = (this.rPos + n) % this.cap;
       this.filled -= n;
+      this.playedTotal += n;          // the self-heal watchdog's "played" on this path
     };
     sp.connect(this.gain!);
     this._connectOutput();
@@ -947,6 +967,8 @@ export class AudioPlayer {
   /** ★ Drop everything queued for playout. See the worklet's flush handler for why. Called on
    *  every retune, through SpectrumClient.tune(). */
   flush() {
+    // ★ A retune empties the playout buffer on purpose and re-arms it: not a stall to repair.
+    this.heal.hold(performance.now(), 2000);
     // Media playout: what is buffered was demodulated at the old frequency — skip past it.
     if (this.omEl) { this._mediaSkipToLive(Math.min(0.1, this.omTarget)); }
     // The worklet path.
@@ -1018,7 +1040,7 @@ export class AudioPlayer {
             this.workerOpen = d.s === 'open';
             this.cb.onStatus?.(d.s as any, d.msg);
             break;
-          case 'bytes':  this.cb.onBytes?.(d.n || 0); break;
+          case 'bytes':  this.cb.onBytes?.(d.n || 0); this._noteRx((d as { f?: number }).f ?? 3); break;
           case 'needsCodec':
             console.error('[audio] server requires Opus and refused this socket');
             this.needsCodec = true;
@@ -1090,8 +1112,11 @@ export class AudioPlayer {
         return;
       }
       if (!(e.data instanceof ArrayBuffer)) return;
+      if (this.fault === 'freeze') return;                  // self-heal test: a half-open socket
       this.needsCodec = false;
       this.cb.onBytes?.(e.data.byteLength);
+      this._noteRx(e.data.byteLength >= 2 ? new Uint8Array(e.data, 1, 1)[0] : 3);
+      if (this.fault === 'drop') return;                    // self-heal test: frames discarded here
       this._handleFrame(e.data);
     };
   }
@@ -2238,6 +2263,7 @@ export class AudioPlayer {
   private _playPcm(pcm: Int16Array, ch: number) {
     const frames = Math.floor(pcm.length / Math.max(1, ch));
     if (frames <= 0) return;
+    if (this.fault === 'decoder') return;       // self-heal test: a decoder that stopped emitting
 
     if (this.rec) this._recordPcm(pcm, ch);
 
@@ -2367,7 +2393,6 @@ export class AudioPlayer {
   private lastDrainAt = 0;
   private lastCtxTime = 0;         // the context clock as last seen by the watchdog
   private ctxAdvancedAt = 0;       // when it last moved
-  private clockKicks = 0;          // suspend/resume attempts on a frozen clock (reset on a rebuild)
   private contextRebuilds = 0;     // full teardowns — capped so a broken browser cannot loop
   private rebuilding = false;
   private hiddenAt = 0;            // when the tab went to the background (0 = visible)
@@ -2382,7 +2407,7 @@ export class AudioPlayer {
     try {
       this.close();
       this.closedByUs = false;
-      this.lastCtxTime = 0; this.ctxAdvancedAt = 0; this.clockKicks = 0; this.stallRebuilds = 0;
+      this.lastCtxTime = 0; this.ctxAdvancedAt = 0;
       this.lastAudibleAt = 0; this.lastDrainAt = 0;
       await this.start();
       if (wasRec && this.worker) this.worker.postMessage({ type: 'rec', on: true });
@@ -2394,128 +2419,195 @@ export class AudioPlayer {
     }
   }
   private stallWatch: number | null = null;
-  private stallRebuilds = 0;
 
-  /** ★★★ FRAMES IN, NO SOUND OUT — NOTICE IT, AND REBUILD.
+  /* ★★★ SELF-HEALING — IS WHAT ARRIVES ACTUALLY BEING PLAYED? (Stuart, 2026-09-28)
    *
-   *  A worklet that stops draining while audio keeps arriving is silence the page cannot see:
-   *  `health()` reports `ok` because it reads the DATA (frames, peak level, decoder state), and a
-   *  recording made at the same moment comes out perfect because the recorder taps the PCM before
-   *  this node. That combination is precisely what happened on the shared dial while another
-   *  listener tuned around (Stuart, 2026-08-20) — a clean 13.7 s recording of audio nobody could
-   *  hear.
+   *  Audio stopped in FM stereo and DAB while the server kept sending and everything else looked
+   *  fine; a page refresh cured it. The watchdog that used to sit here judged "feeding" by AUDIBLE
+   *  OUTPUT FROM THE WORKLET — the very thing that had stopped — so on the Worker path (every
+   *  modern browser: PCM goes Worker → worklet and never touches this thread) `feeding` went false
+   *  the moment the output stalled and the watchdog stood down exactly when it was needed. Its
+   *  clock-frozen and suspended-context branches had the same blind spot.
    *
-   *  ★★ REBUILD, DO NOT DIAGNOSE. The same rule the Opus decoder already follows: a node that has
-   *     stopped draining rarely starts again on its own, and a fresh one costs a few milliseconds.
-   *     Bounded to three attempts so a genuinely dead output stops thrashing and is left for
-   *     health() to report honestly.
-   *  ★ Squelch, mute and a suspended context are all NOT stalls — they are silence somebody asked
-   *    for, and rebuilding through them would be a bug wearing a fix's clothes. */
+   *  ★★ NOW: two counters, compared by the shared rules in src/services/audioSelfHeal.ts —
+   *     rxFrames   every frame off the socket (the server sends continuous frames in every mode,
+   *                silent and squelched included), counted where it arrives;
+   *     playedTotal samples the OUTPUT consumed (the worklet's drain count, or the ScriptProcessor's).
+   *     Receiving and nothing played for 3 s → rebuild the local pipeline (resume/kick the context,
+   *     a fresh playout node, a fresh decoder); still silent 3 s later → reopen the socket; the next
+   *     round rebuilds the WHOLE context; back-off and a 4-a-minute cap, never permanent. Nothing
+   *     received for 6 s (a half-open socket: the Worker's own reconnect only fires on a CLOSE)
+   *     → reopen the socket.
+   *  ★★ NEVER FIGHT THE LISTENER. Not judged while muted, while the context has never played (the
+   *     autoplay gate — only a tap cures that, and the page already shows TAP TO START), on media
+   *     playout (its own watchdog), while DAB+ AAC is arriving (it may play through an element the
+   *     counters cannot see), in a hidden WebKit tab (Safari stops rendering there by design —
+   *     the false rebuilds of 2026-09-14), or within 2 s of a retune flush / 6 s of a DAB switch.
+   *  ★ Every repair is logged with the counters, and kept in debugState().heal, so a recurrence
+   *    leaves evidence rather than a mystery. */
+  private heal = new AudioSelfHeal({ notRecvMs: 6000 });
+  private rxFrames = 0;
+  private lastAacAt = 0;
+  private playedTotal = 0;
+  private nodeDrained = 0;          // the CURRENT node's own cumulative figure (it restarts at 0)
+  private fedTotal = 0;
+  private nodeFed = 0;
+  private healLog: Array<{ at: string; state: string; action: string; attempt: number; reason: string; counters: string }> = [];
+  /** Self-heal fault injection — see debugFault(). '' = none. */
+  private fault = '';
+
+  private _noteRx(format: number) {
+    this.rxFrames++;
+    if (format === 4) this.lastAacAt = performance.now();
+  }
+
+  /** Suppress self-heal judgement for a legitimate transition the page knows about (a DAB service
+   *  switch, a mode change): the audio may pause while the server re-primes, and that is not a
+   *  fault to repair. */
+  holdHealing(ms: number) { this.heal.hold(performance.now(), ms); }
+
+  /** One handler for every playout node — the one start() builds and every rebuilt one. */
+  private _wireNode(node: AudioWorkletNode) {
+    this.nodeDrained = 0; this.nodeFed = 0;
+    node.port.onmessage = (e: MessageEvent) => {
+      const d = e.data as { jitterMs?: number; drained?: number; underruns?: number;
+                            skips?: number; audible?: number; fed?: number };
+      if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
+      if (typeof d?.underruns === 'number') this.underruns = d.underruns;
+      if (typeof d?.skips === 'number') this.skips = d.skips;
+      // ★★★ THE ONLY PROOF THAT SOUND IS LEAVING. See the note in the worklet: every other
+      //     signal this class has is measured before the node.
+      if (typeof d?.drained === 'number') {
+        this.lastDrainAt = performance.now();
+        if (d.drained > this.nodeDrained) this.playedTotal += d.drained - this.nodeDrained;
+        this.nodeDrained = d.drained;
+      }
+      if (typeof d?.fed === 'number') {
+        if (d.fed > this.nodeFed) this.fedTotal += d.fed - this.nodeFed;
+        this.nodeFed = d.fed;
+      }
+      if (d?.audible) this._noteAudible();
+    };
+  }
+
   private _watchOutput() {
     if (this.stallWatch !== null) return;
     this.stallWatch = window.setInterval(() => {
-      if (!this.node || !this.ctx) return;
-      if (this._muted || this.squelchActive || this.suspended) return;
+      if (!this.ctx) return;
       const now = performance.now();
-      /* ★★★ A HIDDEN TAB IS NOT A STALL. Safari throttles or pauses audio rendering in a
-       *   background tab: the worklet stops draining and the context clock stops while the
-       *   state still says "running" — exactly the frozen-clock signature. The node rebuild
-       *   fired on Stuart's idle Pi tab ("the fact I hadn't been on that server for a while
-       *   suggests the audio rebuild is false triggering", 2026-09-14) and the context rebuild
-       *   would have torn the socket down as well, on a tab nobody was looking at. So neither
-       *   watchdog acts while the document is hidden, and the clocks restart when it returns. */
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
-        this.hiddenAt = this.hiddenAt || now;
-        return;
-      }
-      if (this.hiddenAt) {
-        this.hiddenAt = 0;
-        this.lastCtxTime = 0; this.ctxAdvancedAt = now; this.lastDrainAt = now; this.lastAudibleAt = 0;
-        return;                                  // one clean tick before judging anything
-      }
-      const feeding = this.lastAudibleAt > 0 && now - this.lastAudibleAt < 2000;
-      /* ★★★ THE CLOCK, NOT THE STATE STRING. Safari 27 (macOS and iOS): the context reports
-       *   "running" while its currentTime has stopped advancing — the render thread is dead.
-       *   Measured on Stuart's silent tab, 2026-09-14: state "running", currentTime 1.18 s and
-       *   frozen, the worklet no longer draining, and the console's "rebuilding the playout
-       *   node" already fired without effect, because a new node on a dead context is still
-       *   dead. That is the "flash of audio then silence" — about a second of output, then
-       *   nothing — and a refresh does not always cure it because Safari's media session
-       *   underneath can stay wedged. So: watch the clock. If frames are arriving and the
-       *   clock has not moved for 2.5 s, first suspend/resume the context (cheap, sometimes
-       *   enough), and if it is still frozen 2.5 s later tear the WHOLE thing down and start
-       *   again — new context, new worklet, new media element, new socket. */
+      /* ★★★ A HIDDEN WEBKIT TAB IS NOT A STALL. Safari throttles or pauses audio rendering in a
+       *   background tab: the worklet stops draining and the context clock stops while the state
+       *   still says "running". The old node rebuild fired on Stuart's idle Pi tab ("the audio
+       *   rebuild is false triggering", 2026-09-14). Chromium and Firefox keep rendering a
+       *   playing tab in the background, so there a stall while hidden IS a stall. */
+      const hidden = typeof document !== 'undefined' && document.visibilityState !== 'visible';
+      if (hidden && AudioPlayer.isWebKit()) this.hiddenAt = this.hiddenAt || now;
+      else this.hiddenAt = 0;
       const ct = this.ctx.currentTime;
-      if (ct > this.lastCtxTime + 0.05) { this.lastCtxTime = ct; this.ctxAdvancedAt = now; }
-      if (this.ctxAdvancedAt === 0) this.ctxAdvancedAt = now;
-      const clockFrozen = this.ctx.state === 'running' && feeding && now - this.ctxAdvancedAt > 2500;
-      if (clockFrozen && !this.rebuilding) {
-        if (this.clockKicks === 0) {
-          this.clockKicks = 1;
-          console.warn(`[audio] the context says "running" but its clock is frozen at ${ct.toFixed(2)} s — suspend/resume`);
-          const c = this.ctx;
-          void c.suspend().then(() => c.resume()).catch(() => {});
-          this.ctxAdvancedAt = now;            // give the kick its own 2.5 s
-          return;
-        }
-        if (this.contextRebuilds < 3) {
-          this.contextRebuilds++;
-          console.warn(`[audio] clock still frozen after the kick — rebuilding the whole audio context (attempt ${this.contextRebuilds})`);
-          void this._rebuildContext();
-        }
-        return;
-      }
-      // ★★★ RESUME BEFORE REBUILDING — IT COSTS NOTHING AND LOSES NOTHING. An AudioContext that is
-      //     not `running` cannot pull from the worklet, and Safari has a THIRD state nobody codes
-      //     for: `interrupted`, which is neither running nor suspended and is what you get when
-      //     the audio session is taken away (another app, a call, a route change). The old check
-      //     bailed out on anything that was not `running`, so the one case that most looks like
-      //     "frames arriving, no sound" was the one it declined to touch.
-      //  ★ A resume is not a rebuild: the ring keeps its samples and playback continues where it
-      //    left off, so there is no gap to hear. The rebuild below stays as the last resort.
-      if (this.ctx.state !== 'running') {
-        if (feeding) {
-          console.warn(`[audio] frames are arriving but the context is "${this.ctx.state}" — resuming`);
-          void this.ctx.resume().catch(() => {});
-        }
-        return;
-      }
-      const draining = this.lastDrainAt > 0 && now - this.lastDrainAt < 2000;
-      if (!feeding || draining) {
-        /* ★★★ A NODE THAT IS DRAINING IS A HEALTHY NODE — FORGET THE FAILED ATTEMPTS. This is the
-         *     SAME reset `_onOpusData` already does for `opusFails`, and for the same reason: the
-         *     counter below is a limit on CONSECUTIVE failures, but without this it was a limit on
-         *     failures for the LIFE OF THE PAGE. Three unrelated stalls spread over a long session
-         *     left the watchdog permanently disarmed, so the next stall — the one it exists for —
-         *     was never repaired and the only cure was reloading the page (Stuart, 2026-08-26,
-         *     after a socket drop: "the spectrum has resumed but no audio... I had to refresh the
-         *     page to restore the audio"). The lesson had already been learned one function up and
-         *     was not carried down here. */
-        if (feeding && draining) this.stallRebuilds = 0;
-        return;
-      }
-      if (this.stallRebuilds >= 3) return;
-      this.stallRebuilds++;
-      console.warn('[audio] frames are arriving but the output has stopped draining — '
-                 + `rebuilding the playout node (attempt ${this.stallRebuilds})`);
-      try {
-        this.node.disconnect();
-        this.node = new AudioWorkletNode(this.ctx, 'vibe-sink', { outputChannelCount: [2] });
-        this.node.port.onmessage = (e: MessageEvent) => {
-          const d = e.data as { jitterMs?: number; drained?: number; underruns?: number;
-                                skips?: number; audible?: number };
-          if (typeof d?.jitterMs === 'number') this.jitterMs = d.jitterMs;
-          if (typeof d?.underruns === 'number') this.underruns = d.underruns;
-          if (typeof d?.skips === 'number') this.skips = d.skips;
-          if (typeof d?.drained === 'number') this.lastDrainAt = performance.now();
-          if (d?.audible) this._noteAudible();
-        };
-        this.node.connect(this.gain!);
-        this.lastDrainAt = performance.now();     // give the new node its own two seconds
-      } catch (e) {
-        console.error('[audio] rebuilding the playout node failed', e);
-      }
+      if (ct > this.lastCtxTime + 0.05 || this.ctxAdvancedAt === 0) { this.lastCtxTime = ct; this.ctxAdvancedAt = now; }
+      const aac = this.lastAacAt > 0 && now - this.lastAacAt < 3000;
+      const gated = this.ctx.state !== 'running' && this.playedTotal === 0;
+      const expected = (!!this.node || !!this.sp) && !this.omEl && !this._muted && !this.hiddenAt
+                    && !aac && !gated && !this.rebuilding && !this.needsCodec && !this.opusStuck;
+      const d = this.heal.tick({ now, rx: this.rxFrames, played: this.playedTotal, expected });
+      if (d.action !== 'none') this._repair(d);
     }, 1000);
+  }
+
+  private _repair(d: HealDecision) {
+    const counters = `rx=${this.rxFrames} fed=${this.fedTotal} played=${this.playedTotal} `
+                   + `ctx=${this.ctx?.state}@${this.ctx?.currentTime.toFixed(2)} `
+                   + `path=${this.worker ? 'worker' : (this.ws ? 'main' : 'none')} `
+                   + `underruns=${this.underruns} skips=${this.skips}`;
+    const rung = d.action === 'reopen-socket' ? 'reopening the audio socket'
+               : d.attempt >= 3 ? 'rebuilding the whole audio context'
+               : 'rebuilding the local pipeline (context, playout node, decoder)';
+    console.warn(`[audio] SELF-HEAL #${this.heal.repairs} ${d.state}: ${d.reason} — ${rung} (attempt ${d.attempt}) · ${counters}`);
+    this.healLog.push({ at: new Date().toISOString(), state: d.state, action: d.action,
+                        attempt: d.attempt, reason: d.reason, counters });
+    if (this.healLog.length > 20) this.healLog.shift();
+    if (d.action === 'reopen-socket') { this._reopenSocket(); return; }
+    if (d.attempt >= 3) {
+      // ★ The third rung: a new context, worklet, element and socket — the cure for Safari's dead
+      //   render thread (state "running", clock frozen), where a new node on a dead context is
+      //   still dead. Everything the listener set survives (see _rebuildContext).
+      this.contextRebuilds++;
+      void this._rebuildContext();
+      return;
+    }
+    this._rebuildPipeline();
+  }
+
+  /** ★★ RUNG ONE: EVERYTHING LOCAL, NOTHING ON THE WIRE. Cheap, and no gap anybody can hear that
+   *  was not already silence. The socket and the session are untouched. */
+  private _rebuildPipeline() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = performance.now();
+    // 1. The context. Not running → resume (Safari has a THIRD state, `interrupted`, that the
+    //    old check skipped). Running with a frozen clock → the suspend/resume kick.
+    if (ctx.state !== 'running') void ctx.resume().catch(() => {});
+    else if (now - this.ctxAdvancedAt > 2500) {
+      const c = ctx;
+      void c.suspend().then(() => c.resume()).catch(() => {});
+    }
+    if (this.mediaEl && this.mediaEl.paused && !this._muted) void this.mediaEl.play().catch(() => {});
+    // 2. A fresh playout node (and, below, its feed port to the Worker).
+    if (this.node && this.gain) {
+      try { this.node.disconnect(); } catch { /* already gone */ }
+      try {
+        const node = new AudioWorkletNode(ctx, 'vibe-sink', { outputChannelCount: [2] });
+        this._wireNode(node);
+        node.connect(this.gain);
+        this.node = node;
+        this.lastDrainAt = now;
+        // 3. A fresh decoder. In the Worker it is rebuilt there, and handed the new node's port.
+        if (this.worker) {
+          const ch = new MessageChannel();
+          node.port.postMessage({ sinkPort: ch.port2 }, [ch.port2]);
+          this.worker.postMessage({ type: 'reset', sinkPort: ch.port1 }, [ch.port1]);
+        }
+      } catch (e) {
+        console.error('[audio] self-heal: rebuilding the playout node failed', e);
+      }
+    } else if (this.sp) {
+      this.rPos = this.wPos; this.filled = 0; this.playing = false;
+    }
+    if (!this.worker) {
+      try { this.opusDec?.close(); } catch { /* already closed */ }
+      this.opusDec = null; this.opusCh = 0; this.opusTs = 0;
+      try { this.wasmDec?.free(); } catch { /* already freed */ }
+      this.wasmDec = null; this.wasmReady = false; this.wasmCh = 0;
+    }
+    if (this.fault === 'decoder' || this.fault === 'player') this.fault = '';
+  }
+
+  /** ★★ RUNG TWO: THE SOCKET. The Worker's own reconnect only fires on a CLOSE, and a half-open
+   *  socket never closes — so this is the only thing that reopens one that went quiet. Same URL,
+   *  same session id: the server sees the same listener come back. */
+  private _reopenSocket() {
+    if (this.fault === 'drop' || this.fault === 'freeze') this.fault = '';
+    if (this.worker) { this.worker.postMessage({ type: 'url', url: this.url }); return; }
+    const old = this.ws;
+    this.closedByUs = true;
+    if (old) { old.onclose = null; try { old.close(); } catch { /* already closed */ } }
+    this.ws = null;
+    this._openWs();
+  }
+
+  /** ★ FAULT INJECTION, for proving the self-heal (and for nothing else). From the console or a
+   *  driver: window.__vibeAudio.debugFault(kind), where kind is
+   *    'suspend'  — suspend the AudioContext behind the page's back;
+   *    'decoder'  — the decoder stops emitting (cleared by a decoder rebuild);
+   *    'player'   — the playout node stops draining (cleared by a new node);
+   *    'drop'     — frames are counted and then discarded (cleared by a socket reopen);
+   *    'freeze'   — the socket goes half-open: nothing is delivered (cleared by a reopen). */
+  debugFault(kind: 'suspend' | 'decoder' | 'player' | 'drop' | 'freeze') {
+    console.warn(`[audio] debugFault: injecting '${kind}'`);
+    if (kind === 'suspend') { void this.ctx?.suspend(); return; }
+    if (kind === 'player') { this.node?.port.postMessage({ fault: 'stall' }); this.fault = 'player'; return; }
+    this.fault = kind;
+    this.worker?.postMessage({ type: 'fault', kind });
   }
 
   /** ★ Everything a driver or a bug report needs to say WHERE the audio stopped. The Safari
@@ -2549,8 +2641,10 @@ export class AudioPlayer {
       audibleAgoMs: this.lastAudibleAt > 0 ? Math.round(now - this.lastAudibleAt) : -1,
       drainAgoMs: this.lastDrainAt > 0 ? Math.round(now - this.lastDrainAt) : -1,
       underruns: this.underruns, skips: this.skips, jitterMs: this.jitterMs,
-      stallRebuilds: this.stallRebuilds, workerOpen: this.workerOpen,
-      clockKicks: this.clockKicks, contextRebuilds: this.contextRebuilds,
+      workerOpen: this.workerOpen, contextRebuilds: this.contextRebuilds,
+      // ★ The self-heal: its counters, its verdict, and the last 20 repairs with their reasons.
+      heal: { state: this.heal.state, repairs: this.heal.repairs, rx: this.rxFrames,
+              fed: this.fedTotal, played: this.playedTotal, fault: this.fault, log: this.healLog },
       ctxAdvancedAgoMs: this.ctxAdvancedAt > 0 ? Math.round(now - this.ctxAdvancedAt) : -1,
       opusBroken: this.opusBroken, opusStuck: this.opusStuck, needsCodec: this.needsCodec,
       muted: this._muted, volume: this._volume, squelch: this.squelchActive,

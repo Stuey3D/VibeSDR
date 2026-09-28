@@ -273,6 +273,37 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private var lastPacketAt  = Date()
   private var healthTimer: Timer?
 
+  /* ★★★ SELF-HEAL — IS WHAT ARRIVES ACTUALLY BEING PLAYED? (Stuart, 2026-09-28)
+   *  The watchdog above reopens the socket when PACKETS STOP. Nothing caught packets ARRIVING and
+   *  nothing PLAYING — and this engine has at least two ways into that state that no check here
+   *  could see: a player node that stops consuming while `isPlaying` still says true (then no
+   *  completion fires, `queuedSeconds` stays above `liveEdgeCap`, and scheduleOut DROPS EVERY
+   *  BUFFER from then on — a latch), and an engine that failed to restart after a config change
+   *  (`startEngine` returns early and leaves `playerNode` nil, so scheduleOut returns on its first
+   *  line for ever). Either way: waterfall fine, server sending, silence, and no refresh button.
+   *  ★★ Two counters, compared by the shared rules in AudioSelfHeal.swift (the SAME file Jr
+   *     compiles): packets off the native socket, and frames of REAL audio the player consumed
+   *     (scheduleOut's completions — never the flushes, see healGen). Receiving and nothing played
+   *     for 3 s → rebuild the engine, player, converter and decoder; still silent → reopen the
+   *     socket; round again, slower. "Nothing arriving" stays reviveIfDead's job.
+   *  ★ Not judged while muted/paused (an interruption mutes), disconnected for data saver, on the
+   *    external (OWRX/Kiwi/local, JS-owned socket) or FM-DX paths. Every repair goes to NSLog, the
+   *    diagnostics path log (notePath) AND the crumbs file, so a recurrence leaves evidence. */
+  private let heal = AudioSelfHeal()
+  private var healTimer: Timer?
+  private let healLock = NSLock()
+  /// Packets off the native audio socket. Written on the socket's queue, read on main — healLock.
+  private var healRx: Int64 = 0
+  /// Frames of real audio the player consumed. Written on audioQ, read on main — healLock.
+  private var healPlayed: Int64 = 0
+  /// Bumped by every flush and rebuild BEFORE the stop: `player.stop()` fires the completions of the
+  /// buffers it DISCARDS, and counting those as "played" would hide exactly the stall this watches.
+  /// healLock — the rebuild bumps it on main, before the stop, so no discarded completion can slip
+  /// in ahead of the bump.
+  private var healGen: Int64 = 0
+  private func currentHealGen() -> Int64 { healLock.lock(); defer { healLock.unlock() }; return healGen }
+  private func bumpHealGen() { healLock.lock(); healGen &+= 1; healLock.unlock() }
+
   // Playback live-edge control (laggy-tuning bug 2026-06-11): scheduleBuffer
   // with no accounting let the queue grow after any delivery burst, so
   // playback ran seconds behind live FOREVER — tuning sounded delayed because
@@ -408,6 +439,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     packetCount  = 0
     lastPacketAt = Date()
     startHealthTimer()
+    startHealTimer()
     startPathMonitor()
     configureAVSession()
     startEngine()
@@ -896,6 +928,78 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     healthTimer = t
   }
 
+  // MARK: - Self-heal (received vs played — see the note on `heal`)
+
+  /// audioQ: a completion of a buffer scheduled under generation `gen`.
+  private func notePlayed(_ frames: Int64, gen: Int64) {
+    healLock.lock(); if gen == healGen { healPlayed &+= frames }; healLock.unlock()
+  }
+
+  private func startHealTimer() {
+    healTimer?.invalidate()
+    heal.reset()
+    // .common, like the watchdog: default-mode timers stop while a list is being scrolled.
+    let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in self?.healTick() }
+    RunLoop.main.add(t, forMode: .common)
+    healTimer = t
+  }
+
+  /// Main thread, once a second.
+  private func healTick() {
+    healLock.lock(); let rx = healRx; let played = healPlayed; healLock.unlock()
+    let expected = isRunning && !externalAudio && !fmdxAudio && !dataSaverDisconnected && !isMuted
+    let d = heal.tick(now: ProcessInfo.processInfo.systemUptime, rx: rx, played: played, expected: expected)
+    guard d.action != .none else { return }
+    let route = AVAudioSession.sharedInstance().currentRoute.outputs
+      .map { $0.portType.rawValue }.joined(separator: "+")
+    let counters = "rx=\(rx) played=\(played) pkts=\(packetCount) engine=\(audioEngine?.isRunning == true ? 1 : 0)"
+                 + " player=\(playerNode?.isPlaying == true ? 1 : 0) route=[\(route)]"
+    let what = d.action == .reopenSocket ? "reopening the audio socket"
+                                         : "rebuilding engine + player + converter + decoder"
+    let line = "SELF-HEAL #\(heal.repairs) \(d.state.rawValue): \(d.reason) — \(what) (attempt \(d.attempt)) · \(counters)"
+    NSLog("[VibePowerModule] %@", line)
+    VibeCrumbs.log("audio \(line)")
+    notePath(line)
+    switch d.action {
+    case .rebuildPipeline: healRebuildPipeline()
+    case .reopenSocket:    healReopenSocket()
+    case .none:            break
+    }
+  }
+
+  /// ★★ RUNG ONE: everything local, nothing on the wire — the same engine teardown/rebuild the
+  ///    config-change handler does, plus the audioQ state that could be wedged with it.
+  private func healRebuildPipeline() {
+    let oldPlayer = playerNode, oldEngine = audioEngine
+    playerNode = nil; audioEngine = nil; audioFormat = nil
+    bumpHealGen()                    // BEFORE the stop — see healGen
+    oldPlayer?.stop(); oldEngine?.stop()
+    audioQ.async { [weak self] in
+      guard let self else { return }
+      self.destroyDecoder()
+      self.converter = nil; self.converterInFmt = nil
+      self.queuedSeconds = 0
+      self.preRoll = 0; self.preRollBufs.removeAll(keepingCapacity: true)
+    }
+    try? AVAudioSession.sharedInstance().setActive(true)
+    startEngine()
+  }
+
+  /// ★★ RUNG TWO: the socket. Same uuid — the server sees the same listener come back — and the
+  ///    same reopen reviveIfDead does, without its staleness test (packets ARE arriving here).
+  private func healReopenSocket() {
+    lastPacketAt = Date()
+    closeAudioWs()
+    if let engine = audioEngine, !engine.isRunning {
+      try? AVAudioSession.sharedInstance().setActive(true)
+      try? engine.start()
+    }
+    // ★ play() only on a RUNNING engine — on a stopped one it raises an uncatchable Obj-C
+    //   exception (memory watch_audio_playnode_crash).
+    if !isMuted, audioEngine?.isRunning == true { playerNode?.play() }
+    openAudioWs(baseUrl: currentBase, frequency: currentFreq, mode: currentMode, uuid: currentUuid)
+  }
+
   // MARK: - System volume
   //
   // THE WATCH CONTROLS EXACTLY ONE KNOB: the iPhone's SYSTEM volume.
@@ -1093,7 +1197,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     if let engine = audioEngine, !engine.isRunning {
       try? AVAudioSession.sharedInstance().setActive(true)
       try? engine.start()
-      if !isMuted { playerNode?.play() }
+      // ★ Guarded: play() on an engine that did not start is an uncatchable Obj-C exception.
+      if !isMuted, engine.isRunning { playerNode?.play() }
     }
     // SAME uuid — decoders + spectrum WS are keyed to it server-side.
     openAudioWs(baseUrl: currentBase, frequency: currentFreq,
@@ -1174,6 +1279,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
        *  avoid. Stays 0.05 s under the bound, as it was. */
       if self.queuedSeconds > self.liveEdgeCap - 0.05 {
         self.queuedSeconds = 0
+        self.bumpHealGen()          // the stop below discards buffers; their completions are not "played"
         // ★ Re-arm the cushion. A flush leaves playback hard against the live edge, which is
         //   exactly the state the pre-roll exists to avoid — without this, the first gap after
         //   any tune would underrun again. See scheduleOut.
@@ -1642,6 +1748,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func onAudioData(_ data: Data) -> Bool {
     packetCount += 1
     lastPacketAt = Date()
+    healLock.lock(); healRx &+= 1; healLock.unlock()
     // ★ A packet is the only proof the session is real. Everything else — a 101, a .ready — is
     //   equally true of a socket the server is about to drop.
     deadRevives = 0
@@ -2343,6 +2450,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     externalPauseMode = "release"
     healthTimer?.invalidate()
     healthTimer = nil
+    healTimer?.invalidate()
+    healTimer = nil
     stopPathMonitor()
     closeAudioWs()
     closeFmdxWs()
@@ -2663,20 +2772,30 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       guard preRoll >= kPreRollSeconds else { return }
       let held = preRollBufs
       preRollBufs.removeAll(keepingCapacity: true)
+      let gen = currentHealGen()
       for b in held {
         let d = Double(b.frameLength) / fmt.sampleRate
+        let frames = Int64(b.frameLength)
         queuedSeconds += d
         player.scheduleBuffer(b) { [weak self] in
           guard let self else { return }
-          self.audioQ.async { self.queuedSeconds = max(0, self.queuedSeconds - d) }
+          self.audioQ.async {
+            self.queuedSeconds = max(0, self.queuedSeconds - d)
+            self.notePlayed(frames, gen: gen)
+          }
         }
       }
       return
     }
     queuedSeconds += dur
+    let gen = currentHealGen()
+    let frames = Int64(buf.frameLength)
     player.scheduleBuffer(buf) { [weak self] in
       guard let self else { return }
-      self.audioQ.async { self.queuedSeconds = max(0, self.queuedSeconds - dur) }
+      self.audioQ.async {
+        self.queuedSeconds = max(0, self.queuedSeconds - dur)
+        self.notePlayed(frames, gen: gen)
+      }
     }
   }
 

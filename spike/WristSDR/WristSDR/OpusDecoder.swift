@@ -36,6 +36,7 @@ final class OpusDecoder {
   private(set) var channels: Int32 = 0
   func decode(_ packet: Data) -> (pcm: [Int16], rate: Int32, channels: Int32)? { nil }
   func decodeRaw(_ packet: Data, rate: Int32, ch: Int32) -> [Int16]? { nil }
+  func requestReset() {}
 }
 #else
 final class OpusDecoder {
@@ -51,7 +52,18 @@ final class OpusDecoder {
   /// The server creates its encoder ONCE per WebSocket at the then-current sample rate,
   /// so a rate change means a new decoder — and, on the phone, a whole new socket. Here
   /// we simply rebuild when the header's rate changes.
+  /// ★ Self-heal (UberClient): a decoder can wedge and hand back nothing, packet after packet. The
+  ///   request is a flag, not a destroy, because decode() runs on the socket's thread and the
+  ///   request comes from the main actor — the decoding thread itself rebuilds on its next packet.
+  private var resetRequested = false
+  func requestReset() { resetRequested = true }
+
   private func ensure(rate: Int32, ch: Int32) {
+    if resetRequested {
+      resetRequested = false
+      if let d = dec { opus_decoder_destroy(d); dec = nil }
+      sampleRate = 0; channels = 0
+    }
     guard rate != sampleRate || ch != channels || dec == nil else { return }
     if let d = dec { opus_decoder_destroy(d); dec = nil }
     var err: Int32 = 0
