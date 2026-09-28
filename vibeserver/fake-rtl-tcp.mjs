@@ -167,6 +167,15 @@ const srv = net.createServer((sock) => {
       pending = pending.subarray(5);
       if (cmd === 0x01) { centreHz = val; console.log(`[fake-rtl-tcp] tune ${(val / 1e6).toFixed(4)} MHz`); }
       else if (cmd === 0x02) { RATE = val; console.log(`[fake-rtl-tcp] sample rate ${val}`); }
+      // ★ The front-end settings are only ACKNOWLEDGED (nothing here can hear them), but logged, so a
+      //   bench run can show what the server actually asserted on the radio — bias-T, ppm, direct
+      //   sampling, gain mode and gain (the DAB quick scan's "full hardware set", 2026-09-29).
+      else if (cmd === 0x03) console.log(`[fake-rtl-tcp] gain mode ${val ? 'manual' : 'auto'}`);
+      else if (cmd === 0x04) console.log(`[fake-rtl-tcp] gain ${(val / 10).toFixed(1)} dB`);
+      else if (cmd === 0x05) console.log(`[fake-rtl-tcp] ppm ${val | 0}`);
+      else if (cmd === 0x08) console.log(`[fake-rtl-tcp] RTL digital AGC ${val ? 'on' : 'off'}`);
+      else if (cmd === 0x09) console.log(`[fake-rtl-tcp] direct sampling ${val}`);
+      else if (cmd === 0x0e) console.log(`[fake-rtl-tcp] bias-T ${val ? 'ON' : 'off'}`);
     }
   });
 

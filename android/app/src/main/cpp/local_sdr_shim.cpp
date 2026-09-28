@@ -1197,6 +1197,11 @@ static std::atomic<bool>   g_dabSavedAgcOn{false};
  *    the loop had it, and the AGC takes over from there. -1 = not known (the loop starts from wherever
  *    the radio is). */
 static std::atomic<int>    g_dabSavedHwGain{-1};
+/* ★★ DIRECT SAMPLING IS OFF FOR BAND III, AND PUT BACK AFTER (2026-09-29). An owner who left a dongle in
+ *  MANUAL direct sampling (the Q branch, tuner bypassed) for HF got a DAB entry — a listener's, or the
+ *  setup page's quick scan — that tuned 225 MHz through the ADC alone and found nothing. The automatic
+ *  crossover already handles its own case at the tune; this is the manual one. -1 = nothing to restore. */
+static std::atomic<int>    g_dabSavedDs{-1};
 /* ★★★ THE IF AGC TARGET WANTS TO BE LOWER FOR DAB, AND THE REASON IS OFDM. A DAB ensemble is
  *     1536 carriers summed, so its peak-to-average ratio is around 10 dB — the peaks are enormous
  *     next to the average the AGC is levelling. An AGC that holds the AVERAGE at -30 dBFS is
@@ -1314,6 +1319,8 @@ static bool vsDabCapableHw();   // ★ the same, ignoring the owner's block — 
 // ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
 //   thousands of lines above the definition, and it needs to name WHICH restriction bit.
 static bool vsDabDecoderAvailable();
+// ★ Forward-declared for the DAB quick scan's hardware line, which states the RSP's bias-T too.
+static int  vsDesiredRspBiasT();
 
 // ★ A PIN, not the ceiling above it. See setVibeServerRateLock.
 static std::atomic<bool>   g_vsRateLock{false};
@@ -4761,11 +4768,19 @@ template <class ImplT>   // ★ Impl is LocalSdrShim's private type; deduced, ne
 static bool dabSeedGain(ImplT* p, int wantSteps, double now) {
     if (!p) return false;
     std::lock_guard<std::recursive_mutex> hw(p->modeMtx);
-    if (!p->dev || p->radioReleased.load()) return false;
-    const int n = rtlsdr_get_tuner_gains(p->dev, nullptr);
+    if (p->radioReleased.load()) return false;
+    /* ★★ AND OVER rtl_tcp (2026-09-29). The AGC steers an rtl_tcp dongle through the same gain table
+     *  (queueHwGain speaks rtl_tcp) and the gain memory LEARNS there, so a restore that only knew
+     *  librtlsdr was one rule with two readers: remembered on every visit, applied on none. */
+    std::vector<int> gains;
+    if (p->dev) {
+        const int n0 = rtlsdr_get_tuner_gains(p->dev, nullptr);
+        if (n0 > 1) { gains.resize((size_t)n0); rtlsdr_get_tuner_gains(p->dev, gains.data()); }
+    } else if (p->useTcp() && p->tcpHasGain()) {
+        gains = p->tcpGains;
+    }
+    const int n = (int)gains.size();
     if (n <= 1) return false;
-    std::vector<int> gains((size_t)n);
-    rtlsdr_get_tuner_gains(p->dev, gains.data());
     const int target = g_gainTarget.load(std::memory_order_relaxed);
     int tgtIdx = 0;
     for (int i = 0; i < n; i++) if (gains[(size_t)i] <= target) tgtIdx = i;
@@ -10854,6 +10869,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  whatever we set just below it. Skipping a no-op rebuild removes the race entirely on
          *  the common path. */
         if (ar > 0.0 && std::fabs(ar - sampleRate) > 1.0) { noteHwMoved(); LocalSdrShim::instance().setSampleRate(ar); }
+        /* ★ The owner's manual direct sampling back BEFORE the frequency, as the crossover orders it:
+         *  it changes what the centre frequency means to the hardware. See g_dabSavedDs. */
+        if (const int ds = g_dabSavedDs.exchange(-1, std::memory_order_relaxed); ds > 0) {
+            LOGI("[DAB] mode OFF: direct sampling back to %d", ds);
+            LocalSdrShim::instance().setDirectSampling(ds);
+        }
         if (rc > 0.0) { rtlCenter.store(rc); tuneHw(rc); }
         if (g_dabSavedAudio.load() > 0.0) audioFreq.store(g_dabSavedAudio.load());
         if (g_dabSavedView.load()  > 0.0) viewCenter.store(g_dabSavedView.load());
@@ -10950,6 +10971,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string ensemble;
         LOGI("[DAB] quick scan: DAB entered in %.1f s, gain %.1f dB%s", enterSecs, lastGainTenthDb / 10.0,
              g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? " (VibeAGC)" : "");
+        /* ★★★ THE HARDWARE THE SCAN IS LISTENING THROUGH, IN ONE LINE (Stuart, 2026-09-29: "the full set
+         *  hardware is enabled as Bias-t may be needed to power an antenna to be able to receive DAB").
+         *  A scan runs through the listener's own entry above, on the radio as the owner set it up —
+         *  this says so, so a scan that found nothing can be told from one that had no power on the
+         *  aerial. */
+        LOGI("[DAB] quick scan: hardware — bias-T %s, ppm %d, %s, direct sampling %s, block gain %s",
+             (g_biasTeeOn.load() || vsDesiredRspBiasT() == 1) ? "ON" : "off",
+             g_ppmNow.load(std::memory_order_relaxed),
+             g_vibeAgcRtlOn.load(std::memory_order_relaxed) ? "AGC on (learns and keeps this block's gain)" : "manual gain",
+             g_dsNow.load(std::memory_order_relaxed) > 0 ? "ON" : "off",
+             [&] { std::lock_guard<std::mutex> lk(g_dabGainMemMtx); dabGainLoadLocked();
+                   return g_dabGainMem.count(idx) ? "remembered (restored at entry)" : "not yet learned"; }());
         for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
             if (g_dabScanCancel.load()) { cancelled = true; break; }
@@ -10976,6 +11009,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         ensemble = g_dab.ensembleLabel();
         while (!ensemble.empty() && ensemble.back() == ' ') ensemble.pop_back();
+        /* ★★★ AND KEEP WHAT THE AGC LEARNED, AS A LISTENER'S SESSION WOULD (Stuart, 2026-09-29: "if DAB has
+         *  already got some agc measurements in the memory restore them if not then agc learns as it scans").
+         *  The restore half is the entry's own (g_dabSeedPending → dabSeedGain). The learning half lives in
+         *  overloadTick, behind the 2.5 s settle after DAB entry's forget — and a scan that has the whole
+         *  list in a second is over before that gate ever opens, so it learned nothing. The tick's bar is
+         *  a FIB rate over 0.9 — but that is a running average (0.9 old + 0.1 new per frame) which needs
+         *  ~2 s of perfect frames to cross 0.9, longer than a good scan takes. A COMPLETE service list,
+         *  every entry named, is the stronger proof that this gain decodes the block: the whole MCI and
+         *  every label came through it. Either bar, with the AGC in charge of a gain table. */
+        if (g_vibeAgcRtlOn.load(std::memory_order_relaxed) && (dev || (useTcp() && tcpHasGain()))
+            && !cancelled && (g_dab.quality().fibRate > 0.9f || (complete && !rows.empty()))) {
+            const int steps = g_ovlSteps.load(std::memory_order_relaxed);
+            std::lock_guard<std::mutex> lk(g_dabGainMemMtx);
+            dabGainLoadLocked();
+            auto it = g_dabGainMem.find(idx);
+            if (it == g_dabGainMem.end() || it->second != steps) {
+                g_dabGainMem[idx] = steps;
+                dabGainSaveLocked();
+                LOGI("[DAB] quick scan: %s decodes at AGC step %d (gain %.1f dB) — remembered for the next visit",
+                     vibedab::kBandIII[idx].name, steps, lastGainTenthDb / 10.0);
+            }
+        }
         const double took = nowSecs() - t0;
         const double tExit = nowSecs();
         // ★ Hand it back as a departing listener would — and WITHOUT the "off" message's clearing of
@@ -13503,6 +13558,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
                 g_dabSavedDigAgc.store(g_rtlDigitalAgc.load(std::memory_order_relaxed));
+                /* ★★ The tuner, not the ADC, for Band III — see g_dabSavedDs. Only a MANUAL direct-sampling
+                 *  setting on a dongle; the automatic crossover switches itself at the tune below. */
+                {
+                    const int ds = g_dsNow.load(std::memory_order_relaxed);
+                    if (ds > 0 && dev && !g_autoDs.load(std::memory_order_relaxed)) {
+                        g_dabSavedDs.store(ds, std::memory_order_relaxed);
+                        LOGI("[DAB] direct sampling %d -> off for Band III (put back when DAB ends)", ds);
+                        LocalSdrShim::instance().setDirectSampling(0);
+                    } else {
+                        g_dabSavedDs.store(-1, std::memory_order_relaxed);
+                    }
+                }
                 g_dabSavedRtl.store(rtlCenter.load());
                 g_dabSavedAudio.store(audioFreq.load());
                 g_dabSavedView.store(viewCenter.load());
@@ -28758,7 +28825,7 @@ void LocalSdrShim::setPpm(int ppm) {
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useSpy()) return;   // no ppm setting in the SpyServer protocol
 
-    if (p->useTcp()) { p->sendTcpCmd(0x05, (uint32_t)ppm); return; }
+    if (p->useTcp()) { p->sendTcpCmd(0x05, (uint32_t)ppm); LOGI("ppm: %d (rtl_tcp)", ppm); return; }
     /* ★★★ AND THE RSP, WHICH HAS NEVER HAD PPM AT ALL. `if (!p->dev) return;` is the librtlsdr
      *  handle, so every non-dongle fell out here — the eighth appearance of that shape in this
      *  file, and the reason the sweep of 2026-09-24 went looking. The RSP keeps ppm on devParams,
@@ -28779,7 +28846,15 @@ void LocalSdrShim::setBiasTee(bool on) {
     //   and already the one held across engine rebuilds.
     VIBE_HW_LOCK();
     if (p->radioReleased.load()) return;   // the radio is lent to another program
-    if (p->useTcp()) { p->sendTcpCmd(0x0e, on ? 1 : 0); return; }
+    if (p->useTcp()) {
+        p->sendTcpCmd(0x0e, on ? 1 : 0);
+        // ★ Recorded and logged like every other path, so hwinfo and the DAB quick scan's hardware line
+        //   can say what the radio was told (it used to leave no trace over rtl_tcp).
+        g_biasTeeWant.store(on ? 1 : 0, std::memory_order_relaxed);
+        g_biasTeeOn.store(on);
+        LOGI("bias-tee (rtl_tcp): %s", on ? "ON — DC on the feedline" : "off");
+        return;
+    }
     /* ★★★ THE HACKRF HAS A BIAS-T TOO, AND THIS SETTER SILENTLY DROPPED IT ON THE FLOOR.
      *   Everything below is librtlsdr, and `p->dev` is null on a HackRF — so the owner's BIAS-T
      *   switch in the phone's server screen returned here without touching anything. The switch

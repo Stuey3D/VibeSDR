@@ -274,7 +274,7 @@ object VibeServerRestore {
         if (cfg.length() == 0) { conn.close(); return "no stored config" }
 
         VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))   // see VibeServerBoot
-        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir)
+        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir, serveOnLan = true)
         VibeServerBoot.startBatteryMonitor(ctx)   // after start — see VibeLocalSdrModule
         // ★★★ AND PUT THE PUBLIC LISTING BACK. The tunnel dies with the process that spawned it, so
         //     an update, a low-memory kill or a reboot leaves the directory advertising an address
