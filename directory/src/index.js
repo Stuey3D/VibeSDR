@@ -652,7 +652,9 @@ async function list(env, url, request) {
        *    than inventing a number. */
       flavour: ['VibeServer', 'VibeServer Lite', 'VibeServer inside VibeSDR']
                  .includes(status.flavour) ? status.flavour : '',
-      version: typeof status.version === 'string' && /^[0-9][0-9.]{0,15}$/.test(status.version)
+      /* ★ V11 betas carry a label — 11.0.0~b1 (dpkg's pre-release form). Digits and dots only threw
+       *  away every B1 server's version the moment the estate moved (2026-09-28). */
+      version: typeof status.version === 'string' && /^[0-9][0-9.]{0,15}(~[A-Za-z0-9]{1,8})?$/.test(status.version)
                  ? status.version : '',
       /* ★★ THE OWNER'S LANDING MESSAGE (Stuart, 2026-09-28): clicking a radio straight from here skips
        *  the server's landing page, and with it what the owner wrote there. Text stays TEXT (the page
