@@ -50,19 +50,22 @@ class MainActivity : ReactActivity() {
    *    stack never enumerates a dongle that was attached while the phone was off". The XCover
    *    (Android 11) disproved it on 2026-09-22: its battery died, it cold-booted with the dongle
    *    in, and the attach intent arrived and launched us. So the main app gets a boot path after
-   *    all — not through BOOT_COMPLETED, which the Lite/TV build uses, but through the attach
+   *    all — not through BOOT_COMPLETED (which never works: no USB grant at boot), but through the attach
    *    itself, which is STRONGER EVIDENCE: it does not fire until the dongle is really enumerated,
    *    so there is no waiting and no race with the USB stack. A phone whose OTG stack genuinely
    *    does not enumerate on boot simply never gets here, and nothing is promised to it.
-   * ★★ THE OWNER'S SWITCH GOVERNS, NOT THE ATTACH. bootWanted() is armed-AND-startOnBoot, so a
-   *    server stopped on purpose stays stopped and someone who has never asked for start-on-boot
-   *    gets nothing. Plugging a dongle into a phone must not silently start broadcasting from it.
+   * ★★ ARMED GOVERNS, NOT THE ATTACH. Only a server the owner left RUNNING comes back: one stopped
+   *    on purpose is disarmed and stays stopped, and a phone that has never served gets nothing.
+   *    Plugging a dongle into a phone must not silently start broadcasting from it.
+   * ★★ THERE IS NO "START ON BOOT" SWITCH ANY MORE (2026-09-28) — see
+   *    VibeServerRestore.attachResumeWanted. The attach is the one event Android grants the radio
+   *    on, which is why this path survived the switch's removal and BOOT_COMPLETED did not.
    * ★ Safe when the server is already up: the service's restore path refuses to double-open the
    *   radio (isShimServing), and this is the same EXTRA_RESTORE the sticky restart and the update
    *   receiver use — one restore path, not a fourth.
    */
   private fun resumeServerIfWanted() {
-    if (!VibeServerRestore.bootWanted(this)) return
+    if (!VibeServerRestore.attachResumeWanted(this)) return
     val svc = Intent(this, RtlTcpServerService::class.java)
         .putExtra(RtlTcpServerService.EXTRA_RESTORE, true)
     try {

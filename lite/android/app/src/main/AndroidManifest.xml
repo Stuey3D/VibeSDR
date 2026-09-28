@@ -4,7 +4,6 @@
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
-  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
@@ -38,12 +37,9 @@
     <!-- ★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — the main app's VibeUpdateReceiver, synced. Without it
          every Lite update left the server stopped until somebody pressed Start, which on a TV box means
          walking to the TV. -->
-    <!-- ★ Start the server when the device boots — only if the owner's switch is on (VibeBootReceiver). -->
-    <receiver android:name=".VibeBootReceiver" android:exported="true">
-      <intent-filter>
-        <action android:name="android.intent.action.BOOT_COMPLETED"/>
-      </intent-filter>
-    </receiver>
+    <!-- ★★ NO BOOT RECEIVER (removed 2026-09-28). Start-on-boot could not work: after a reboot the restore
+         waited a minute and ended "no USB permission" — Android grants a USB device only on a live attach.
+         The attach above is how a running server gets its radio back. -->
     <receiver android:name=".VibeUpdateReceiver" android:exported="false">
       <intent-filter>
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>

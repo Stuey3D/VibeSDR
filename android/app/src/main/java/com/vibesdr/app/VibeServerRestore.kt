@@ -81,16 +81,19 @@ object VibeServerRestore {
     /** ★ Was this phone serving when it stopped? The update path asks before it acts — see
      *  VibeUpdateReceiver. Read-only; arming stays the business of the JS that started the server. */
     fun isArmed(ctx: Context): Boolean = prefs(ctx).getBoolean(K_ARMED, false)
-    /** ★ Start this server when the DEVICE boots? The owner's switch (config `startOnBoot`), and only if the server
-     *  was running when the device went down — stopped on purpose stays stopped. See VibeBootReceiver. */
-    fun bootWanted(ctx: Context): Boolean {
-        if (!isArmed(ctx)) return false
-        // ★ A config saved before the switch existed has no key: take the switch's own default — ON for a TV.
-        val pm = ctx.packageManager
-        val tv = pm.hasSystemFeature("android.hardware.type.television") || pm.hasSystemFeature("android.software.leanback_only")
-        return try { org.json.JSONObject(prefs(ctx).getString(K_CONFIG, "{}") ?: "{}").optBoolean("startOnBoot", tv) }
-               catch (_: Throwable) { false }
-    }
+    /** ★★★ PUT THE SERVER BACK WHEN ITS RADIO IS ATTACHED? Only if it was running and not stopped on purpose.
+     *
+     *  ★★ THIS USED TO BE `bootWanted()` — armed AND the owner's "start on boot" switch — and that switch is
+     *     GONE (2026-09-28). On the Sony it was proven undeliverable: VibeBootReceiver ran at BOOT_COMPLETED
+     *     and the restore gave up 60 s later with "no USB permission". Android grants a USB device to an app
+     *     only on a LIVE attach (through the default association the owner ticked), never to one that was
+     *     already present when the system came up. A switch that promises otherwise is a promise we cannot
+     *     keep (Stuart: "we would be promising something that we couldnt achieve").
+     *  ★ What Android DOES grant is the attach, and the attach is what calls this (MainActivity). A server
+     *    the owner left running and whose radio comes back — replugged, re-enumerated, or enumerated on the
+     *    way up on a phone that does that (the XCover, 2026-09-22) — resumes. Nothing on screen promises it.
+     *  ★ A `startOnBoot` key in a config stored by an older build is simply never read again. */
+    fun attachResumeWanted(ctx: Context): Boolean = isArmed(ctx)
 
     fun disarm(ctx: Context) {
         prefs(ctx).edit().putBoolean(K_ARMED, false).apply()

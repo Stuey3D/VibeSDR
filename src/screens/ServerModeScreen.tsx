@@ -164,7 +164,8 @@ const K = {
   allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
   dabRateBoost: 'vs_dabboost',
   dabScanLabels: 'vs_dabscan',
-  startOnBoot: 'vs_startonboot',
+  /** ★ RETIRED 2026-09-28 (the start-on-boot switch) — kept only so the stored value can be removed. */
+  startOnBootRetired: 'vs_startonboot',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
   gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits', gainCurves: 'vs_gaincurves',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
@@ -303,9 +304,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   /** ★ A television: no battery (its battery service is invented — see VibeServerBoot), mains power. */
   const isTv = !!(NativeModules as any).VibeLocalSDR?.isTv;
   const [dabScanLabels, setDabScanLabels] = useState(-1);
-  /** ★ LITE ONLY — start the server when the device boots (VibeBootReceiver). ON by default on a TV (the always-on
-   *  box after a power cut), OFF elsewhere; the owner can turn it off if it disturbs the TV (Stuart, 2026-09-19). */
-  const [startOnBoot, setStartOnBoot] = useState(!!(NativeModules as any).VibeLocalSDR?.isTv);
+  /* ★★★ NO "START ON BOOT" ANY MORE (2026-09-28). The switch promised a server that comes back by itself
+   *  after a power cut, and on the Sony it could not: BOOT_COMPLETED started the restore, and 60 s later
+   *  it gave up with "no USB permission" — Android does not grant a USB device that was present at boot,
+   *  only one that is ATTACHED while the system is up. Stuart: "we would be promising something that we
+   *  couldnt achieve". The switch, the boot receiver and every sentence that promised it are gone; the
+   *  stored value is removed below so nothing reads it again. What remains is the attach itself (see
+   *  MainActivity.resumeServerIfWanted), which Android DOES grant and which promises nothing. */
   /* ★★★ THE BENCHMARK (VibeBenchmark / vibe_benchmark.h). Lite runs it at FIRST setup — that is the class of
    *  box that needs it — and applies what it finds: red = off by default, with the reason shown, and the owner
    *  may switch it back on. Everywhere else it is a button and nothing is changed without being asked.
@@ -387,8 +392,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   useEffect(() => {
     if (!isLite) return;
     AsyncStorage.getItem(K.dabScanLabels).then(v => { if (v === '0' || v === '1') setDabScanLabels(Number(v)); });
-    AsyncStorage.getItem(K.startOnBoot).then(v => { if (v === '0' || v === '1') setStartOnBoot(v === '1'); });
   }, [isLite]);
+  // ★ The retired start-on-boot switch's stored value — removed, on every build, so no reader can find it.
+  useEffect(() => { AsyncStorage.removeItem(K.startOnBootRetired).catch((e) => console.warn('[server] could not clear the retired start-on-boot value:', e)); }, []);
   const [gainLimits, setGainLimits]   = useState('');
   /** ★★ WHICH BANDS ARE FIXED at their ceiling rather than limited by it, and — on a HackRF — where
    *  between LNA and VGA a fixed band's total sits. Per band, both of them: an owner can hold FM at
@@ -1329,7 +1335,6 @@ export default function ServerModeScreen({ navigation, route }: Props) {
          *  checks them; the value is -1 ("decide from the measurement") where there is no control
          *  to set it, which is what absent meant anyway. */
         dabScanLabels,
-        startOnBoot,
         // ★ The rest of the server's settings — the phone runs the same server, one radio at a
         //   time, so everything the desktop can set is set from here.
         sessionLimitSoft: live.current.limitSoft,
@@ -1398,7 +1403,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
-      blockedModes, dabRateBoost, dabScanLabels, isLite, startOnBoot,
+      blockedModes, dabRateBoost, dabScanLabels, isLite,
       gainLimits, gainLocks, gainSplits, gainCurves, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown]);
 
@@ -2733,36 +2738,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 ★★ NOT the Linux "release when idle", which hands the dongle to another program:
                    Android's permission model means nothing else can pick it up anyway, so
                    releasing would cost the restart and buy nothing (Stuart, 2026-08-19). */}
-            {/* ★★★ NOT LITE-ONLY ANY MORE. This was a TV switch on the premise that a phone
-                cannot come back by itself — "a phone's OTG stack generally does not enumerate a
-                dongle attached while it was off". The XCover disproved it on 2026-09-22: it
-                cold-booted with the dongle in, enumerated it, and the attach intent launched us.
-                A phone in a garage has the same problem a TV does and nobody walks to it either.
-                ★ The switch is the only thing that makes the resume legal — see MainActivity
-                  .resumeServerIfWanted(). Without it in the config, bootWanted() read the TV
-                  default, which is false on a phone, and the resume could never fire. */}
-            {(<>
-              <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHEN THIS DEVICE STARTS</Text>
-              <View style={[styles.card, { borderColor: C.border }]}>
-                <View style={styles.rowBetween}>
-                  <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
-                    Start the server automatically
-                  </Text>
-                  <Switch value={startOnBoot}
-                    onValueChange={(v) => { setStartOnBoot(v); AsyncStorage.setItem(K.startOnBoot, v ? '1' : '0'); }}
-                    trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
-                </View>
-                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                  {startOnBoot
-                    ? 'After a power cut or a restart the server comes back on its own, if it was running before. '
-                      + (isLite ? 'Turn this off if it gets in the way of using the TV. ' : 'It needs the radio to be '
-                         + 'plugged in when the device starts, and "use by default for this device" ticked when you '
-                         + 'first allowed it. ')
-                      + 'Takes effect from the next Start.'
-                    : 'The server waits for you to open this app and press Start after a restart.'}
-                </Text>
-              </View>
-            </>)}
+            {/* ★★★ THE "WHEN THIS DEVICE STARTS" SWITCH IS GONE (2026-09-28) — see the note where its state
+                used to be. A switch that promised the server back after a power cut, on a platform that
+                refuses the radio to anything started at boot, was a promise we could not keep. The line
+                below says what actually happens instead, so nobody goes looking for the switch. */}
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 14 }]}>
+              After this {isTv ? 'TV' : 'device'} restarts, open this app and press Start: Android does not
+              let an app take a USB radio by itself while the {isTv ? 'TV' : 'device'} is starting up.
+            </Text>
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHEN NOBODY IS LISTENING</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={styles.rowBetween}>

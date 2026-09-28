@@ -186,11 +186,6 @@ export type VibeServerConfig = {
   batteryResumeAt?: number;
   /** ★ Raw-IQ span cap for LAN listeners, Hz. 0 = the general `rawIqMax`. */
   rawIqLanMaxHz?: number;
-  /** ★★★ COME BACK BY YOURSELF AFTER A POWER CUT — armed server AND this switch, both, read
-   *  natively by VibeServerRestore.bootWanted(). It was sent only by the Lite/TV build, so on the
-   *  full app bootWanted() fell through to its default (on for a TV, OFF for a phone) and no phone
-   *  could ever resume. The switch is now offered on both, and read on both. */
-  startOnBoot?: boolean;
   /** Crystal correction in ppm. Absent = leave the radio alone. */
   ppm?: number;
   /** Manual direct sampling: 0 off, 1 I branch, 2 Q branch. */
@@ -311,13 +306,12 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
      *     startOnBoot — so each was a control that moved, saved, and did nothing at all. Stuart
      *     found it from the outside on the Sony, 2026-09-22: "the TV reported it could handle
      *     multistation radio text so I enabled it and ... the setting was being ignored". It was.
-     *  ★★ startOnBoot is the one that would have wasted a night: the whole attach-time resume
-     *     added earlier today is gated on it, and it could never have arrived.
+     *  ★ startOnBoot was the fifth, and is RETIRED (2026-09-28): Android refuses a USB radio to
+     *    anything started at boot, so the switch promised what could not be done. Not sent any more.
      *  ★ rawIqLanMaxHz goes over as a STRING because that is how it is read (`cfg.s(...)` then
      *    toIntOrNull): a JS number arrives as a double and "250000.0" parses to null, which is a
      *    silent 0 — the same class of bug one layer down. */
     dabScanLabels: cfg.dabScanLabels ?? -1,
-    startOnBoot: cfg.startOnBoot === true,
     batteryPauseAt: cfg.batteryPauseAt ?? 0,
     batteryResumeAt: cfg.batteryResumeAt ?? 40,
     rawIqLanMaxHz: String(Math.round(cfg.rawIqLanMaxHz ?? 0)),

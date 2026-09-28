@@ -90,8 +90,8 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               // ★ Puts a running server back after an update (MY_PACKAGE_REPLACED). Missing from Lite, so a
               //   reinstall left a TV box's server stopped until somebody walked to it (2026-09-19).
               'VibeUpdateReceiver.kt',
-              // ★ Start on boot — the owner's switch, TV boxes especially.
-              'VibeBootReceiver.kt',
+              // ★ NO VibeBootReceiver.kt (removed 2026-09-28): Android grants no USB radio at boot, so
+              //   start-on-boot was a promise the app could not keep. See VibeServerRestore.attachResumeWanted.
               // ★★ The server benchmark VibeLocalSdrModule calls (runBenchmark/lastBenchmark). Missing from
               //    this list, the module does not compile at all — and gradle stops with the PREVIOUS APK still
               //    sitting in outputs/, which is exactly how a stale build once shipped as a new one.

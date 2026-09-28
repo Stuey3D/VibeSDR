@@ -97,12 +97,13 @@ class RtlTcpServerService : Service() {
                  *  reason is final and reported at once. */
                 var err = VibeServerRestore.restore(applicationContext)
                 var tries = 0
-                /* ★ 30 tries x 2 s: at DEVICE BOOT (VibeBootReceiver) the USB bus is still coming up.
-                 * ★★ AND THE PERMISSION, for the same reason (Stuart, 2026-09-20: "I just hope android
-                 *    permissions dont cause issues on boot as that may scupper the entire plan"). A grant made
-                 *    with "use by default for this USB device" ticked survives a reboot, but it is not
-                 *    necessarily in place the instant the device appears — the USB service is still settling
-                 *    while we ask. Waiting costs nothing; giving up costs the whole unattended restart. */
+                /* ★ 30 tries x 2 s: after an update the USB service may not list the device yet, and on an
+                 *   ATTACH (MainActivity.resumeServerIfWanted) the default-association grant lands a moment
+                 *   after the activity is launched.
+                 * ★★★ NOT A BOOT PATH ANY MORE. This loop was widened for start-on-boot, in the hope that the
+                 *     grant would arrive if we waited. It does not: on the Sony (2026-09-28) the boot restore
+                 *     waited the full minute and ended "no USB permission", because Android never grants a
+                 *     device that was present at boot. The switch and VibeBootReceiver are gone. */
                 while ((err == "no SDR attached" || err == "no USB permission") && tries < 30) {
                     Thread.sleep(2000); tries++
                     err = VibeServerRestore.restore(applicationContext)
@@ -117,7 +118,7 @@ class RtlTcpServerService : Service() {
                             "Waiting for USB permission — open VibeServer Lite once and allow the radio"
                         "no SDR attached" -> "No radio found — check the dongle is plugged in"
                         "no stored config" -> "Nothing saved to restore — start the server once from the app"
-                        else -> "Could not restart after boot: $err"
+                        else -> "Could not restart the server: $err"
                     }
                     handler.post { updateNotification() }
                 } else {
