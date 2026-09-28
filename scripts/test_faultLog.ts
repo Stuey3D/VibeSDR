@@ -13,7 +13,7 @@
  *   5. Nothing is silent: every failure increments the total.
  */
 import {
-  guard, guardJson, noteFault, faultSummary, faultTotal, _resetFaults, _setFaultSink, _setFaultClock,
+  guard, guardJson, guardCallbacks, noteFault, faultSummary, faultTotal, _resetFaults, _setFaultSink, _setFaultClock,
   LOG_INTERVAL_MS,
 } from '../src/services/faultLog';
 
@@ -70,6 +70,19 @@ const hostile = { toString() { throw new Error('nope'); } };
 let threw = false;
 try { noteFault('x', 'y', hostile); } catch { threw = true; }
 ok(!threw, 'noteFault survives an error whose toString throws');
+
+// 6. guardCallbacks — a throwing UI callback does not abort the caller's own update
+_resetFaults();
+const seen: string[] = [];
+const cbs = guardCallbacks('ui', {
+  onRds: (ps: string) => { seen.push('rds'); return ps.trim(); },
+  onConfig: (n: number) => { seen.push('config:' + n); return n * 2; },
+} as { onRds: (ps: unknown) => unknown; onConfig: (n: number) => number });
+function clientHandles() { const r = cbs.onRds(42); const c = cbs.onConfig(3); return [r, c]; }
+const [r, c] = clientHandles();
+ok(r === undefined && c === 6 && seen.join() === 'rds,config:3', 'a throwing callback returns undefined and the next callback still runs');
+ok(faultSummary()[0]?.kind === 'cb:onRds', 'counted as cb:onRds');
+ok(cbs.onConfig === cbs.onConfig, 'wrapper identity is stable');
 
 _setFaultSink(null); _setFaultClock(null);
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');

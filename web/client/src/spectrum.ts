@@ -17,6 +17,8 @@
  *      link. Keep _sendView.
  */
 
+import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services/faultLog';
+
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
 /** The server applies these on every mode change and never reports bandwidth
@@ -617,7 +619,11 @@ export class SpectrumClient {
 
   constructor(url: string, cb: SpectrumCallbacks) {
     this.url = url;
-    this.cb = cb;
+    /* ★★★ EVERY CALLBACK GUARDED. The callbacks are the page's UI sections — the RDS panel, the
+     *  analyser, the maps, the meters — and one of them throwing used to abort this client half-way
+     *  through its own update (after `config` had moved cfg, before it had told anyone). Now a
+     *  throw is contained to that callback, logged and counted (faultLog, window.__vibeFaults). */
+    this.cb = guardCallbacks('web-ui', cb);
   }
 
   connect() {
@@ -656,13 +662,17 @@ export class SpectrumClient {
       //   radio still answers pings and still sends state, and calling that dead would reconnect
       //   a perfectly good socket every fifteen seconds.
       this.lastRxAt = performance.now();
+      /* ★★★ ONE BAD MESSAGE COSTS ONE MESSAGE — dropped, counted per type, logged (rate-limited)
+       *  and listed by window.__vibeFaults(). The JSON parse used to be `catch { return; }`, and
+       *  a handler throw left the rest of that message's work undone with nothing counted. */
       if (typeof e.data === 'string') {
         this.cb.onBytes?.(e.data.length);
-        this._handleText(e.data);
+        const text = e.data;
+        this._handleText(text);
       } else {
         const buf = e.data as ArrayBuffer;
         this.cb.onBytes?.(buf.byteLength);
-        this._handleBinary(buf);
+        guard('web-spec', 'binary', () => this._handleBinary(buf), `len=${buf.byteLength}`);
       }
     };
 
@@ -729,7 +739,13 @@ export class SpectrumClient {
 
   private _handleText(raw: string) {
     let msg: any;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try { msg = JSON.parse(raw); }
+    catch (err) { noteFault('web-spec', 'bad-json', err, `len=${raw.length} head=${JSON.stringify(raw.slice(0, 40))}`); return; }
+    if (!msg || typeof msg !== 'object') { noteFault('web-spec', 'bad-json', new Error('not an object'), typeof msg); return; }
+    guard('web-spec', msgKind(msg), () => this._handleMessage(msg));
+  }
+
+  private _handleMessage(msg: any) {
     switch (msg.type) {
       case 'dab':
         this.cb.onDab?.(msg as unknown as DabState);
@@ -1106,8 +1122,12 @@ export class SpectrumClient {
         break;
       case 'rds':
         this.cb.onRds?.({
-          stereo: !!msg.stereo, ps: msg.ps ?? '', radiotext: msg.radiotext ?? '',
-          pi: msg.pi ?? -1, ecc: msg.ecc ?? 0,
+          // ★ Typed at the door: a wrong-typed field (ps as a number) used to reach the page's
+          //   `.trim()` and throw. The callback guard would contain that; better not to need it.
+          stereo: msg.stereo === true,
+          ps: typeof msg.ps === 'string' ? msg.ps : '',
+          radiotext: typeof msg.radiotext === 'string' ? msg.radiotext : '',
+          pi: typeof msg.pi === 'number' ? msg.pi : -1, ecc: typeof msg.ecc === 'number' ? msg.ecc : 0,
           ber: typeof msg.ber === 'number' ? msg.ber : -1,
           sig: typeof msg.sig === 'number' ? msg.sig : -99,
         });
@@ -1258,15 +1278,17 @@ export class SpectrumClient {
   }
 
   private _handleBinary(buf: ArrayBuffer) {
-    if (buf.byteLength < 22) return;
+    // ★ Every drop counted — a frame thrown away in silence reads as a frozen waterfall.
+    if (buf.byteLength < 22) { noteFault('web-spec', 'short-frame', new Error('frame too short'), `len=${buf.byteLength}`); return; }
     const dv = new DataView(buf);
-    if (dv.getUint32(0, true) !== SPEC_MAGIC) return;
+    if (dv.getUint32(0, true) !== SPEC_MAGIC) { noteFault('web-spec', 'bad-magic', new Error('bad magic'), `len=${buf.byteLength}`); return; }
     const flags = dv.getUint8(5);
-    if (flags !== FLAG_FULL_U8) return; // shim only ever emits FULL_UINT8
+    // shim only ever emits FULL_UINT8
+    if (flags !== FLAG_FULL_U8) { noteFault('web-spec', 'unknown-flags', new Error('unexpected frame flags'), `flags=${flags}`); return; }
 
     const centerHz = Number(dv.getBigUint64(14, true));
     const n = buf.byteLength - 22;
-    if (n <= 0) return;
+    if (n <= 0) { noteFault('web-spec', 'empty-frame', new Error('frame with no bins')); return; }
 
     if (!this.bins || this.bins.length !== n) this.bins = new Float32Array(n);
     const bins = this.bins;

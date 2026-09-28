@@ -124,3 +124,27 @@ export function faultSummary(): FaultEntry[] {
 }
 export function faultTotal(): number { return total; }
 export function _resetFaults(): void { faults.clear(); total = 0; }
+
+/** Wrap every function on a callbacks object so a throw inside one (a UI section updating from a
+ *  message) is contained to that callback: logged, counted under `source`/`cb:<name>`, and the
+ *  caller — the socket client, mid-way through its own state update — carries on.
+ *  ★ A Proxy, so a callback assigned AFTER construction is guarded too. Wrappers are cached so a
+ *    callback read twice is the same function (identity matters to add/removeEventListener). */
+export function guardCallbacks<T extends object>(source: string, cb: T): T {
+  const cache = new Map<PropertyKey, { fn: unknown; wrapped: unknown }>();
+  return new Proxy(cb, {
+    get(target, key, recv) {
+      const v = Reflect.get(target, key, recv) as unknown;
+      if (typeof v !== 'function') return v;
+      const hit = cache.get(key);
+      if (hit && hit.fn === v) return hit.wrapped;
+      const name = String(key);
+      const wrapped = function (this: unknown, ...args: unknown[]) {
+        try { return (v as (...a: unknown[]) => unknown).apply(this === recv ? target : this, args); }
+        catch (err) { noteFault(source, 'cb:' + name, err); return undefined; }
+      };
+      cache.set(key, { fn: v, wrapped });
+      return wrapped;
+    },
+  });
+}

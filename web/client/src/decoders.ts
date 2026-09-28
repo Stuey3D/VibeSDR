@@ -35,6 +35,7 @@
 
 import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
+import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 
 export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null;
 
@@ -114,7 +115,7 @@ export class DecoderClient {
   constructor(host: string, auth: AuthState, cb: DecoderCallbacks) {
     // ★ Same rule as every other URL: an https page cannot open a ws:// socket. See origin.ts.
     this.url = `${wsBase(host)}${withAuth('/ws/dxcluster', auth)}`;
-    this.cb = cb;
+    this.cb = guardCallbacks('web-ui', cb);   // ★ a decoder panel that throws stays its own problem
   }
 
   connect() {
@@ -135,9 +136,13 @@ export class DecoderClient {
       if (this.mode) this._sendAttach(this.mode, this.params);
       if (this.spotsOn) this._send({ type: 'subscribe_digital_spots' });
     };
+    // ★ Guarded per message — dropped, counted and logged (faultLog), never silent.
     ws.onmessage = (e) => {
       if (typeof e.data === 'string') this._handleText(e.data);
-      else this._handleBinary(e.data as ArrayBuffer);
+      else {
+        const buf = e.data as ArrayBuffer;
+        guard('web-decoder', 'binary', () => this._handleBinary(buf), `len=${buf.byteLength}`);
+      }
     };
     ws.onclose = () => {
       this.cb.onClose?.();
@@ -189,8 +194,10 @@ export class DecoderClient {
   // ── Inbound ────────────────────────────────────────────────────────────────
 
   private _handleText(raw: string) {
-    let msg: any;
-    try { msg = JSON.parse(raw); } catch { return; }
+    guardJson('web-decoder', raw, (m) => this._handleMessage(m));
+  }
+
+  private _handleMessage(msg: any) {
     if (msg.type === 'digital_spot' && msg.data) {
       const d = msg.data;
       this.cb.onSpot?.({

@@ -27,6 +27,7 @@ import { decodeVibeAdpcmFrame } from '../../../src/services/imaAdpcm';
 import { OpusDecoder } from 'opus-decoder';
 import { AudioSelfHeal, type HealDecision } from '../../../src/services/audioSelfHeal';
 import { initSegment, mediaSegment } from './fmp4';
+import { guard, guardCallbacks, guardJson, noteFault } from '../../../src/services/faultLog';
 
 /** How much audio to hold before playout starts, in seconds. This is also very nearly
  *  how far the audio LAGS THE WATERFALL, so it is the A/V sync knob.
@@ -429,12 +430,22 @@ function open() {
     // ★ Same three seconds as the page used to use — one reconnect policy, moved, not rewritten.
     if (!closedByUs) setTimeout(open, 3000);
   };
+  /* ★★★ ONE BAD FRAME COSTS ONE FRAME. A throw out of onFrame used to reach the page as the
+   *  Worker's onerror — which tears the whole Worker down and falls audio back to the main thread.
+   *  Now the frame is dropped and the page is told, so it can count and log it (faultLog). */
   ws.onmessage = (e) => {
     if (typeof e.data === 'string') {
-      try { if (JSON.parse(e.data).type === 'needs_codec') self.postMessage({ type: 'needsCodec' }); } catch (err) {}
+      let m = null;
+      try { m = JSON.parse(e.data); }
+      catch (err) { self.postMessage({ type: 'fault', kind: 'bad-json', why: String(err && err.message || err) }); return; }
+      if (m && m.type === 'needs_codec') self.postMessage({ type: 'needsCodec' });
       return;
     }
-    if (e.data instanceof ArrayBuffer) onFrame(e.data);
+    if (e.data instanceof ArrayBuffer) {
+      const n = e.data.byteLength;
+      try { onFrame(e.data); }
+      catch (err) { self.postMessage({ type: 'fault', kind: 'frame', why: String(err && err.message || err) + ' len=' + n }); }
+    }
   };
 }
 
@@ -801,7 +812,7 @@ export class AudioPlayer {
 
   constructor(url: string, cb: AudioCallbacks = {}) {
     this.url = url;
-    this.cb = cb;
+    this.cb = guardCallbacks('web-ui', cb);   // ★ a meter or recorder UI that throws stays its own problem
   }
 
   /** Must be called from a user gesture — browsers block audio otherwise. */
@@ -1050,7 +1061,9 @@ export class AudioPlayer {
           case 'pcm':    if (d.pcm && this.rec) this._recordPcm(d.pcm, d.ch || 1); break;
           /* ★ A frame the worker cannot decode but the page can — DAB+ AAC. See the worker's own
            *   note: forwarding it keeps the socket and every other format off the main thread. */
-          case 'passthru': if (d.buf) this._handleFrame(d.buf as ArrayBuffer); break;
+          case 'passthru': if (d.buf) { const b = d.buf as ArrayBuffer; guard('web-audio', 'frame', () => this._handleFrame(b)); } break;
+          // ★ A frame the Worker dropped — counted and logged here, where faultLog lives.
+          case 'fault':    noteFault('web-audio-worker', String((d as { kind?: string }).kind ?? 'frame'), new Error(d.why || 'bad frame')); break;
           case 'opus':     if (d.buf) this._mediaFeed(d.buf as ArrayBuffer); break;
           /* ★★★ A DECODER THAT WILL NOT WORK IN THE WORKER MUST NOT MEAN SILENCE. Fall the whole
            *     path back to the page, which still has the WASM decoder and every fallback this
@@ -1103,12 +1116,12 @@ export class AudioPlayer {
       //     so the only evidence was `audio 0 KB/s` and a reconnect loop every 3 s, for ever.
       //     With the WASM decoder we should never be refused again; if we are, SAY SO.
       if (typeof e.data === 'string') {
-        try {
-          if (JSON.parse(e.data)?.type === 'needs_codec') {
+        guardJson('web-audio', e.data, (m) => {
+          if (m.type === 'needs_codec') {
             console.error('[audio] server requires Opus and refused this socket');
             this.needsCodec = true;
           }
-        } catch { /* not ours */ }
+        });
         return;
       }
       if (!(e.data instanceof ArrayBuffer)) return;
@@ -1117,7 +1130,9 @@ export class AudioPlayer {
       this.cb.onBytes?.(e.data.byteLength);
       this._noteRx(e.data.byteLength >= 2 ? new Uint8Array(e.data, 1, 1)[0] : 3);
       if (this.fault === 'drop') return;                    // self-heal test: frames discarded here
-      this._handleFrame(e.data);
+      // ★ One bad frame costs one frame — dropped, counted, logged (faultLog).
+      const buf = e.data;
+      guard('web-audio', 'frame', () => this._handleFrame(buf), `len=${buf.byteLength}`);
     };
   }
 

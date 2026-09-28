@@ -10,6 +10,11 @@ import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, V
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode, type DabState } from './spectrum';
 import { AudioPlayer } from './audio';
+import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
+/* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
+ *  sections that failed — counted per source and type. Type __vibeFaults() in the console. */
+(window as unknown as { __vibeFaults: () => unknown }).__vibeFaults =
+  () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
@@ -2803,15 +2808,27 @@ function perfReport(secs: number) {
   perf.tick = perf.draw = perf.scale = perf.renders = 0;
 }
 
+/* ★★★ THE RENDER LOOP MUST OUTLIVE ANY ONE THING IT DRAWS. requestAnimationFrame was the LAST line
+ *  of loop(), so a single throw anywhere in the frame — an overlay, the scale, the status line —
+ *  skipped it and the spectrum and waterfall stopped for good, on a page whose socket and audio
+ *  were perfectly healthy. Now the next frame is always requested, and each section is its own
+ *  guarded unit, so a broken overlay costs the overlay and the waterfall keeps drawing. */
 function loop() {
+  if (!wf || !spec) return;
+  try { renderFrame(); }
+  catch (e) { noteFault('web-render', 'frame', e); }
+  requestAnimationFrame(loop);
+}
+
+function renderFrame() {
   if (!wf || !spec) return;
   const nowMs = performance.now();
   const minGap = 1000 / renderHz() - 1;      // -1ms: never miss a slot to rounding
-  if (nowMs - lastRenderAt < minGap) { requestAnimationFrame(loop); return; }
+  if (nowMs - lastRenderAt < minGap) return;
   lastRenderAt = nowMs;
 
   wf.vfoHz = spec.frequency;
-  updateViewOverlays();
+  guard('web-render', 'overlays', updateViewOverlays);
   // Passband drives the acrylic sidebands — so bandwidth is something you SEE
   // sitting on the signal, not a number you read.
   wf.filterLow = spec.bandwidthLow;
@@ -2837,10 +2854,11 @@ function loop() {
   //     for the full length of the drag in that harness (3296 ms), the new one never exceeds
   //     192 ms in any case including a retune every 40 ms.
   //   ★ Kill switch is still one line: setHoldMs(0) restores the pre-buffer waterfall exactly.
-  if (!NO_WF && audio) wf.setHoldMs(audio.jitterMs);
-  if (!NO_WF) wf.tick();   // synthesise any waterfall lines now due (see Waterfall.tick)
+  const w = wf;
+  if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
+  if (!NO_WF) guard('web-render', 'waterfall-tick', () => w.tick());   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
-  if (!NO_WF) wf.draw();
+  if (!NO_WF) guard('web-render', 'waterfall-draw', () => w.draw());
   const t2 = measuring ? performance.now() : 0;
 
   // ★ THE SCALE AND BAND STRIP ARE NOT PER-FRAME WORK. Both redraw TEXT — frequency labels, band
@@ -2860,8 +2878,8 @@ function loop() {
   const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
   if (key !== lastViewKey) {
     lastViewKey = key;
-    drawScale();
-    drawBands();
+    guard('web-render', 'scale', drawScale);
+    guard('web-render', 'bands', drawBands);
   }
   if (measuring) {
     const t3 = performance.now();
@@ -2878,12 +2896,11 @@ function loop() {
     framesPerSec = frameCount / secs;
     frameCount = 0;
     lastBytesAt = now;
-    perfReport(secs);
-    updateStatus();
-    updateRecTime();
-    saveTuned();   // once a second, not per tune — a drum-fast nudge would thrash localStorage
+    guard('web-render', 'perf', () => perfReport(secs));
+    guard('web-render', 'status', updateStatus);
+    guard('web-render', 'rec-time', updateRecTime);
+    guard('web-render', 'save-tuned', saveTuned);   // once a second, not per tune — a drum-fast nudge would thrash localStorage
   }
-  requestAnimationFrame(loop);
 }
 
 // ── Frequency scale ──────────────────────────────────────────────────────────
@@ -4718,7 +4735,11 @@ function updateStatus() {
     + (audio ? ` · buf = audio buffered ahead (grows on a bursty link; the waterfall is held`
              + ` back to match, so a big buffer feels laggy to tune)` : '')
     + (audio && (audio.underruns || audio.skips)
-        ? ` · audio: ${audio.underruns} dry, ${audio.skips} skip` : '');
+        ? ` · audio: ${audio.underruns} dry, ${audio.skips} skip` : '')
+    // ★ Contained faults — in the tooltip with the other diagnostics, never on the status line
+    //   (see the note above: a counter a listener cannot interpret reads as a fault report).
+    //   The detail is window.__vibeFaults() in the console.
+    + (faultTotal() ? ` · ${faultTotal()} bad message${faultTotal() === 1 ? '' : 's'} dropped (__vibeFaults())` : '');
 
   // Faults go on the METER, not into the status text: a long message there ran
   // off the edge of the screen, and the meter is where you're already looking

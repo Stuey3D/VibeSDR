@@ -3,6 +3,7 @@
  *
  *   node scripts/mock-vibeserver.mjs            # PIN 123456, port 48000
  *   node scripts/mock-vibeserver.mjs --no-pin
+ *   node scripts/mock-vibeserver.mjs --bad-messages --port 48010   # interleave malformed traffic
  *
  * Speaks the same wire protocol as the real shim (local_sdr_shim.cpp), so the
  * web client can't tell the difference: the auth nonce/HMAC handshake, the
@@ -21,8 +22,32 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 48000;
+const PORT = Number(process.argv[process.argv.indexOf('--port') + 1]) || 48000;
 const PIN = process.argv.includes('--no-pin') ? null : '123456';
+/* ★ --bad-messages: interleave MALFORMED traffic with the good stream, to prove a client drops one
+ *   bad message and carries on (faultLog / PanelBoundary, 2026-09-28). Every kind a real radio or
+ *   a broken build could produce: bad JSON, a bare null, truncated / bad-magic / header-only SPEC
+ *   frames, wrong-typed RDS / config / hwinfo fields, and truncated or garbage audio frames. */
+const BAD = process.argv.includes('--bad-messages');
+const BAD_SPEC = [
+  () => wsText('{"type":"rds","ps":'),                                        // truncated JSON
+  () => wsText('null'),
+  () => wsText('not json at all'),
+  () => wsText(JSON.stringify({ type: 'rds', ps: 42, radiotext: { x: 1 }, pi: 'zz', stereo: 'yes' })),
+  () => wsText(JSON.stringify({ type: 'rdsx', groups: 'x', bler: null, eye: 5, pty: [], af: 'q' })),
+  () => wsText(JSON.stringify({ type: 'hwinfo', gains: 'lots', rates: 7, driver: 12 })),
+  () => wsText(JSON.stringify({ type: 'health', cpu: 'hot', temp: {} })),
+  () => wsBin(Buffer.from('SPEC\x01\x03', 'latin1')),                       // truncated header
+  () => wsBin(Buffer.alloc(40, 0x55)),                                        // bad magic
+  () => { const b = Buffer.alloc(22); b.write('SPEC', 0, 'ascii'); b.writeUInt8(1, 4); b.writeUInt8(3, 5); return wsBin(b); },  // no bins
+  () => wsBin(Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad])),             // gzip garbage
+];
+const BAD_AUDIO = [
+  () => { const b = Buffer.alloc(9); b.writeUInt8(1, 0); b.writeUInt8(1, 1); b.writeUInt32LE(48000, 2); b.writeUInt16LE(1024, 6); return wsBin(b); }, // ADPCM, 1 byte for 1024 samples
+  () => wsBin(Buffer.from([1, 1, 0])),                                        // shorter than a header
+  () => wsBin(Buffer.from([1, 9, 0x80, 0xbb, 0, 0, 1, 2, 3])),                // unknown format
+  () => wsText('{"type":'),                                                   // truncated JSON
+];
 
 const BINS = 4096;
 const FS = 2_400_000;          // capture bandwidth
@@ -313,8 +338,10 @@ server.on('upgrade', (req, sock) => {
     send(wsText(configMsg()));
     send(wsText(hwinfoMsg));
     let n = 0;
+    let bad = 0;
     const t = setInterval(() => {
       send(wsBin(specFrame()));
+      if (BAD && n % 5 === 0) send(BAD_SPEC[bad++ % BAD_SPEC.length]());
       if (++n % 10 === 0 && state.mode === 'wfm') {
         send(wsText(JSON.stringify({
           type: 'rds', stereo: true, ps: 'VIBE FM',
@@ -329,7 +356,11 @@ server.on('upgrade', (req, sock) => {
   if (isAudio) {
     console.log('audio client connected');
     const CHUNK = 1024;                       // ~21ms at 48k
-    const t = setInterval(() => send(wsBin(audioFrame(CHUNK))), (CHUNK / 48000) * 1000);
+    let k = 0;
+    const t = setInterval(() => {
+      send(wsBin(audioFrame(CHUNK)));
+      if (BAD && ++k % 25 === 0) send(BAD_AUDIO[(k / 25) % BAD_AUDIO.length]());
+    }, (CHUNK / 48000) * 1000);
     sock.on('close', () => { clearInterval(t); console.log('audio client gone'); });
   }
 });
