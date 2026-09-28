@@ -2954,7 +2954,7 @@ function stnSearch(q) {
   res.innerHTML = out.slice(0, 20).map((row, i) => {
     const site = eibiSite(row);
     const now = eibiOnAirNow(row);
-    return `<button type="button" data-i="${i}">${esc(row[4])} <span class="k">· ${row[0]} kHz</span>`
+    return `<button type="button" data-i="${i}">${esc(row[4])} <span class="k">· ${esc(row[0])} kHz</span>`
       + ` <span class="t">· ${esc(row[1] || '')} UTC${row[2] ? ' ' + esc(row[2]) : ''}`
       + `${site ? ' · ' + esc(site.name) + (site.cty !== site.name ? ', ' + esc(site.cty) : '') : ''}</span>`
       + `${now ? ' <span class="now">on air now</span>' : ''}</button>`;
@@ -3275,7 +3275,7 @@ function render(servers, filtered) {
       : placed.map((s) => ({ s, km: null }));
     const from = site ? `${esc(site.name)}${site.cty !== site.name ? ', ' + esc(site.cty) : ''}${site.exact ? '' : ' (country centre — the site is not in the list)'}` : 'an unknown site';
     rankHtml = `<div class="stnRank">
-      <h3>Receivers most likely to hear ${esc(stationPick.name)} on ${stationPick.khz} kHz</h3>
+      <h3>Receivers most likely to hear ${esc(stationPick.name)} on ${esc(stationPick.khz)} kHz</h3>
       <div class="cav">Transmits from ${from}${stationPick.time ? ` · ${esc(stationPick.time)} UTC` : ''}${stationPick.now ? ' · <b>on air now</b>' : ''}.</div>
       ${ranked.length ? `<ol>${ranked.slice(0, 8).map(({ s, km }) => `<li>${esc(s.name)}${km !== null ? ` <span class="km">· ${Math.round(km).toLocaleString()} km from the transmitter</span>` : ''}</li>`).join('')}</ol>`
                       : '<div class="cav">No listed receiver covers this frequency right now.</div>'}
@@ -3547,10 +3547,20 @@ function homeCountry(groups) {
   return best;
 }
 
+/* ★★ EVERY REQUEST THIS PAGE MAKES TO A RECEIVER — the live counts, the PIN challenge, the admin
+ *    ticket, the signed link — is built as https://<address>/…, so `address` is an AUTHORITY. The
+ *    worker only ever issues <slug>.vibeserver.vibesdr.net (slugify: a-z, 0-9, dashes); this holds
+ *    the page to the same rule, so nothing in a listing can aim a PIN proof anywhere else. */
+const ADDRESS_OK = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.vibeserver\.vibesdr\.net$/;
+function ownAddresses(servers) {
+  for (const s of servers) if (s && s.address != null && !ADDRESS_OK.test(String(s.address))) s.address = null;
+  return servers;
+}
+
 function load(first) {
   return fetch('/api/directory')
     .then((r) => r.json())
-    .then((d) => { YOU = (d && d.you) || null; return withLiveCounts(Array.isArray(d.servers) ? d.servers : []); })
+    .then((d) => { YOU = (d && d.you) || null; return withLiveCounts(ownAddresses(Array.isArray(d.servers) ? d.servers : [])); })
     // ★ Real servers first, then the invented ones — so a demo run still shows the estate as it
     //   actually is, with the simulation around it.
     .then(async (servers) => DEMO_ON ? servers.concat(await demoServers()) : servers)

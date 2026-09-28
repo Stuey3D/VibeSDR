@@ -219,6 +219,11 @@ async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance
 const SPYSERVER_DIR_URL = 'https://airspy.com/directory/status.json';
 
 const RECEIVERBOOK_URL = 'https://www.receiverbook.de/map';
+/* ★★ PLAIN HTTP, AND NOT BY CHOICE: rx.linkfanel.net has no HTTPS at all (port 443 refuses the
+ *  connection — measured 2026-09-28). So the reply is treated as what it is, text anybody on the path
+ *  could have edited: it is only ever parsed as DATA (never evaluated), the names lose their markup,
+ *  and a row whose address is not a plain http(s) URL is dropped rather than handed to a socket or a
+ *  WebView. */
 const KIWI_LIST_URL    = 'http://rx.linkfanel.net/kiwisdr_com.js';
 
 /** Pull a `var <name> = [ … ];` array out of a JS/HTML blob by walking balanced
@@ -308,7 +313,8 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
   const arr = extractJsArray(js, 'var kiwisdr_com');
   if (!arr) return [];
   return arr
-    .filter((r) => r?.url && String(r?.offline ?? '').toLowerCase() !== 'yes')
+    .filter((r) => r?.url && /^https?:\/\/[^\s/?#@]+/i.test(String(r.url))
+                   && String(r?.offline ?? '').toLowerCase() !== 'yes')
     .map((r) => {
       const gps = /\(([-\d.]+),\s*([-\d.]+)\)/.exec(String(r.gps ?? ''));
       const glat = gps ? Number(gps[1]) : null;

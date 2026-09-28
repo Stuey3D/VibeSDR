@@ -1102,7 +1102,10 @@ setInterval(loadDirectory, 60000);
     if (!rel) return;
     const v = rel.tag_name.replace('vibeserver-mac-v', '');
     $('vsMac').textContent = `Download ${v} for macOS`;
-    $('vsMac').href = rel.html_url;
+    // ★ Only a page of OUR repository becomes the download link — anything else keeps the
+    //   releases-page href the markup already carries.
+    if (typeof rel.html_url === 'string' && rel.html_url.startsWith('https://github.com/Stuey3D/VibeSDR/'))
+      $('vsMac').href = rel.html_url;
     $('vsVer').textContent = `Mac · Linux · v${v}`;
   } catch {}
 })();

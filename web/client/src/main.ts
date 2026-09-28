@@ -3123,6 +3123,18 @@ const bmLogos = new Map<string, string | null>();
  */
 const FREQ_LOGO_KEY = 'vsFreqLogos';
 function freqLogoKey(hz: number): string { return String(Math.round(hz / 10000)); }
+/** ★★ ONLY A WEB ADDRESS BECOMES A LOGO. Every logo URL here is somebody else's text — RadioDNS is
+ *  whatever a broadcaster's DNS says, the frequency cache is localStorage — and it goes straight into
+ *  an <img src>. http(s) or nothing: a javascript:/data:/file: value is dropped, and the fallback
+ *  (name, monogram) takes over exactly as it does for a logo that fails to load. */
+function webImageUrl(u: unknown): string {
+  const s = String(u ?? '').trim();
+  if (!s) return '';
+  try {
+    const p = new URL(s);
+    return p.protocol === 'https:' || p.protocol === 'http:' ? p.href : '';
+  } catch { return ''; }
+}
 function loadFreqLogos(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(FREQ_LOGO_KEY) || '{}') || {}; } catch { return {}; }
 }
@@ -3772,7 +3784,7 @@ async function resolveRdsLogoBest(iso: string) {
         const r = await fetch(P(`/vibeserver/stationlogo?pi=${piHex}&ecc=${eccHex}&freq=${Math.round(hz)}`),
                               { cache: 'no-store' });
         if (r.ok) {
-          const url = String((await r.json())?.logo ?? '');
+          const url = webImageUrl((await r.json())?.logo);
           // The dial may have moved while DNS was resolving — this answer belongs to the station
           // we ASKED about, not to whatever is tuned now.
           if (url && logoDnsKey === key) {
@@ -3830,8 +3842,9 @@ async function resolveRdsLogo(name: string, iso: string) {
      *  apart). The logo belongs to the STATION, and nothing here is evidence the station changed —
      *  only a PI change is, and that clears it where rdsLogoPi is handled.
      *  ★ So: a hit replaces, a miss leaves things exactly as they were. */
-    if (!url) return;
-    rdsLogoUrl = url;
+    const safeUrl = webImageUrl(url);
+    if (!safeUrl) return;
+    rdsLogoUrl = safeUrl;
     // ★★★ A NAME-SEARCH RESULT IS PROVISIONAL, AND SAYING SO IS THE WHOLE FIX. A NAME IS NOT AN
     //     IDENTITY: radio-browser matched "BBC 3CR" to a generic Radioplayer icon, and because a
     //     logo we already have was never re-examined, that wrong picture LOCKED — even though the
@@ -8555,7 +8568,7 @@ async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string, 
   //     station on this frequency and RadioDNS answered, that is the broadcaster's OWN file and it
   //     outranks any name match — the same ranking the live path enforces, applied to the list.
   if (hz && hz > 0) {
-    const known = loadFreqLogos()[freqLogoKey(hz)];
+    const known = webImageUrl(loadFreqLogos()[freqLogoKey(hz)]);
     if (known && row.isConnected) {
       const img0 = document.createElement('img');
       img0.className = 'bmLogo';
@@ -8574,10 +8587,11 @@ async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string, 
     ).catch(() => null);
     bmLogos.set(key, url ?? null);
   }
-  if (!url || !row.isConnected) return;
+  const safeUrl = webImageUrl(url);
+  if (!safeUrl || !row.isConnected) return;
   const img = document.createElement('img');
   img.className = 'bmLogo';
-  img.src = url;
+  img.src = safeUrl;
   img.alt = '';
   row.insertBefore(img, row.firstChild);
 }

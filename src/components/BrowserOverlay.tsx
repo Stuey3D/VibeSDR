@@ -142,7 +142,10 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
             setProgress(1);
             setLoading(false);
             if (!injectCSS) return;
-            const css = JSON.stringify(injectCSS);
+            // ★ JSON.stringify makes a string LITERAL; escaping < > / and the two JS line
+            //   separators as \uXXXX as well keeps it one whatever the CSS contains.
+            const css = JSON.stringify(injectCSS).replace(
+              /[<>/\u2028\u2029]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
             webRef.current?.injectJavaScript(
               `(function(){function a(){var id='vibe-inj';if(!document.getElementById(id)){var s=document.createElement('style');s.id=id;s.textContent=${css};(document.head||document.documentElement).appendChild(s);}}a();new MutationObserver(a).observe(document.documentElement,{childList:true,subtree:true});})();true;`,
             );

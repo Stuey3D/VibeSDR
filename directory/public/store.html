@@ -139,7 +139,7 @@
         s.bookmarks = d.bookmarks;
       } else { console.warn('portable store: unknown operation', d.op); return; }
       return save(s).then(function (ok) { r.ok = ok; });
-    }).catch(function (err) { console.error('portable store: ' + d.op + ' failed', err); })
+    }).catch(function (err) { console.error('portable store: %s failed', String(d.op), err); })
       .then(function () { e.source.postMessage(r, e.origin); });
   });
 })();

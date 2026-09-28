@@ -86,7 +86,12 @@ async function srv(name: string): Promise<string> {
   const port = Number(m[3]);
   let host = m[4];
   if (host.endsWith('.')) host = host.slice(0, -1);
-  if (!host || !port) return '';
+  // ★★ THE TARGET IS A BROADCASTER'S DNS TEXT, AND IT BECOMES A URL AUTHORITY. Only a plain host
+  //    name (letters, digits, hyphens, dots — what an SRV target is defined to be) and a real port
+  //    get through; anything carrying '/', '@', ':' or an escape could otherwise steer the SPI
+  //    request somewhere other than the host the record names.
+  if (!host || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(host)) return '';
+  if (!(port > 0 && port < 65536)) return '';
   return `${host}:${port}`;
 }
 
