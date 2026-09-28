@@ -24,6 +24,7 @@ import { getLastCrash } from './crashGuard';
 import { audioPathDump } from './audioPathLog';
 import { unhandledLog } from './protocolLog';
 import { readCrumbs } from './crumbs';
+import { faultSummary, faultTotal } from './faultLog';
 
 const Vibe = (NativeModules as {
   VibePowerModule?: {
@@ -70,6 +71,22 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
     const u = unhandledLog();
     if (!u.length) lines.push('none');
     else for (const l of u) lines.push(`${new Date(l.ts).toISOString().slice(11, 19)} ${l.backend.padEnd(8)} ${l.text}`);
+  }
+
+  // ── Contained faults (faultLog) ──────────────────────────────────────────
+  /* ★★★ A BAD MESSAGE OR A PANEL THAT THREW, CONTAINED. Each of these would once have taken far more
+   *  than itself with it (a bad RDS packet, an AdvRdsPanel render throw that unmounted the screen).
+   *  Now the message is dropped / the panel closed — and this is where the fact that it happened
+   *  survives, counted per source and type, so a type that fails every frame reads as such. */
+  lines.push('', `--- contained faults (dropped messages, closed panels): ${faultTotal()} ---`);
+  {
+    const f = faultSummary();
+    if (!f.length) lines.push('none');
+    else for (const e of f.slice(0, 30)) {
+      lines.push(`${e.source} ${e.kind} x${e.count}  first ${new Date(e.firstTs).toISOString().slice(11, 19)}`
+        + ` last ${new Date(e.lastTs).toISOString().slice(11, 19)}`);
+      lines.push(`    ${e.firstError}${e.lastError !== e.firstError ? `  | latest: ${e.lastError}` : ''}`);
+    }
   }
 
   // ── JS crash (crashGuard) ────────────────────────────────────────────────
