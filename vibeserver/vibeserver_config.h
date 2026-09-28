@@ -145,6 +145,7 @@ struct Config {
     /** The SDRplay's IF gain-reduction floor, and the HackRF's per-band split. See RadioConfig. */
     std::string ifGrLimits;
     std::string gainSplits;
+    std::string gainCurves;   ///< Airspy R2/Mini: the curve a limited band is held on — see RadioConfig
 
     /** The sample rate is PINNED — see RadioConfig::rateLock. */
     bool rateLock = false;
@@ -458,6 +459,14 @@ struct RadioConfig {
      *  (the VGA takes the rest), and it is read only when gainLock is on. Per band, because the
      *  right split on FM is not the right split on HF. Same band syntax, same parser. */
     std::string gainSplits;
+    /** ★★★ THE AIRSPY R2 / MINI's CURVE, PER BAND (Stuart, 2026-09-28): "tie it to one of the gain
+     *  curves and limit that and then block any manual gain". A band with a gainLimits entry is held
+     *  on this preset curve — 0 = Linearity, 1 = Sensitivity (the `curve` wire field's meaning) —
+     *  at a position capped (or, with gainLocks, fixed) by its gainLimits figure (position x 10),
+     *  and Free mode, the manual stages and the stage AGCs are refused there. Read only on an
+     *  R2 / Mini and only where the band has a ceiling; absent = Linearity. Same band syntax, same
+     *  parser. The whole rule: android/app/src/main/cpp/vibe_airspy_limit.h. */
+    std::string gainCurves;
     /** ★★★ THE RATE IS PINNED, NOT MERELY CAPPED. `lockRate` is a CEILING — a listener may still
      *  choose anything below it — and on a shared dial that is not enough: dropping from 8 MHz to
      *  2 MHz changes the window for EVERYBODY, and on a damaged radio some rates do not work at

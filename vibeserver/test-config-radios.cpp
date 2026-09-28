@@ -408,6 +408,31 @@ int main() {
         ok(!effectiveFor(b, b.radios[0]).oneRadioPerIp, "★★ it reaches the radio via effectiveFor");
     }
 
+    // ★★ THE AIRSPY R2 / MINI's CURVE PER BAND travels with the limits it belongs to — saved,
+    //    loaded, and handed to the running radio. A curve that did not survive a save would put the
+    //    band back on Linearity at the next restart without a word (vibe_airspy_limit.h).
+    std::printf("\n★ Airspy R2 / Mini: the per-band curve round-trips with its limit and lock\n");
+    {
+        ServerConfig s; s.configured = true;
+        RadioConfig r; r.driver = "airspy"; r.serial = "A1B2C3D4E5F60708";
+        r.gainLimits = "fm:100,air:150"; r.gainLocks = "air:1"; r.gainCurves = "fm:1,air:0";
+        s.radios.push_back(r);
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err), "it saves and loads", err);
+        ok(back.radios.size() == 1 && back.radios[0].gainCurves == "fm:1,air:0",
+           "★★ gainCurves survives the save", back.radios.empty() ? "" : back.radios[0].gainCurves);
+        ok(back.radios.size() == 1 && back.radios[0].gainLimits == "fm:100,air:150"
+           && back.radios[0].gainLocks == "air:1", "and the limit and lock beside it");
+        if (!back.radios.empty())
+            ok(effectiveFor(back, back.radios[0]).gainCurves == "fm:1,air:0",
+               "★★ it reaches the running radio via effectiveFor");
+        ServerConfig old;
+        ok(fromJson("{\"name\":\"x\",\"radios\":[{\"serial\":\"S1\",\"driver\":\"airspy\",\"gainLimits\":\"fm:100\"}]}",
+                    old, err), "a config written before the curve existed loads", err);
+        ok(old.radios.size() == 1 && old.radios[0].gainCurves.empty(),
+           "★ ...with no curve, which the server reads as Linearity");
+    }
+
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);
     return failures ? 1 : 0;

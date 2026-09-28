@@ -64,7 +64,18 @@ type Props = {
   splittable?: boolean;
   splits?: string;
   onSplitsChange?: (next: string) => void;
+  /* ★★★ AIRSPY R2 / MINI ONLY: THE CURVE THE BAND IS HELD ON. Stuart, 2026-09-28: "a dropdown to
+   *   choose the gain mode and the slider after that to then limit or lock". With this set the
+   *   figure is a POSITION 0-21 on the chosen curve, written bare as position x 10 (the server's
+   *   tenths contract — "fm:100"), never as dB; the curve goes in its own parallel list keyed by
+   *   band ("fm:1", 0 = Linearity, 1 = Sensitivity), exactly as the server stores it, and the lock
+   *   is offered as LIMIT / LOCK. Absent = no curve UI, which is every other radio. */
+  curveable?: boolean;
+  curves?: string;
+  onCurvesChange?: (next: string) => void;
 };
+
+const CURVE_NAMES = ['Linearity', 'Sensitivity'];
 
 /** A parallel per-band list ("fm:1, hf:0") as a map. The band syntax and the parser are the
  *  server's own, so nothing here has to know what a band is. */
@@ -109,7 +120,11 @@ export default function BandLimitEditor(p: Props) {
    *  than inheriting whatever the last band was given. */
   const [lockNext, setLockNext] = useState(false);
   const [splitNext, setSplitNext] = useState(50);
+  /** ★ The curve for the entry being added — Linearity first, Airspy's own curve for strong
+   *  signals and the one an owner protecting a front end most likely wants. */
+  const [curveNext, setCurveNext] = useState(0);
   const locks = useMemo(() => sideMap(p.locks), [p.locks]);
+  const curves = useMemo(() => sideMap(p.curves), [p.curves]);
 
   const label = (entry: string) => {
     // ★ Show the band's real NAME, not its id — "FM broadcast" rather than "fm". The id is what
@@ -118,6 +133,15 @@ export default function BandLimitEditor(p: Props) {
     const b = bands.find(x => x.id === head.trim().toLowerCase());
     const name = b ? b.label : head.trim();
     if (!tail) return name;
+    /* ★ An Airspy R2 / Mini rule reads in the words its own panel uses: the CURVE and the position
+     *   on it — "FM broadcast · Sensitivity up to 10 of 21", or "… · Sensitivity 10 🔒". */
+    if (p.curveable) {
+      const key = head.trim().toLowerCase();
+      const pos = Math.round((parseInt(tail, 10) || 0) / 10);
+      const locked = locks[key] > 0;
+      const curve = CURVE_NAMES[curves[key] > 0 ? 1 : 0];
+      return locked ? `${name} · ${curve} ${pos} \u{1F512}` : `${name} · ${curve} up to ${pos} of 21`;
+    }
     /* ★★★ TWO STATES THAT BEHAVE DIFFERENTLY MUST NOT READ THE SAME. A locked band shows the figure
      *   and a padlock; an unlocked one says "up to" in words, rather than being the absence of a
      *   symbol. Same wording as the setup page's chips, so an owner who runs both meets one idea. */
@@ -133,9 +157,15 @@ export default function BandLimitEditor(p: Props) {
       // ★ The slider decides the figure when the tuner's list is known; the box is only the
       //   fallback for a radio whose steps we have not been told.
       if (!band) return;
-      const db = steps.length ? (steps[gainIdx] / 10).toFixed(1) : t;
-      if (!db) return;
-      entry = `${band}:${/db$/i.test(db) ? db : `${db}dB`}`;
+      if (p.curveable && steps.length) {
+        // ★ A POSITION, bare, in the server's tenths — never "dB": parseGainList would multiply a
+        //   dB figure by ten again and the ceiling would sit ten positions past where it was put.
+        entry = `${band}:${steps[gainIdx]}`;
+      } else {
+        const db = steps.length ? (steps[gainIdx] / 10).toFixed(1) : t;
+        if (!db) return;
+        entry = `${band}:${/db$/i.test(db) ? db : `${db}dB`}`;
+      }
     } else {
       // ★ A band OR a typed range — the two ways the server accepts a limit, and the owner should
       //   not have to know which one they are using.
@@ -160,6 +190,11 @@ export default function BandLimitEditor(p: Props) {
       if (lockNext) m[head] = splitNext; else delete m[head];
       p.onSplitsChange(sideWrite(m));
     }
+    if (p.curveable && p.onCurvesChange) {
+      const m = sideMap(p.curves);
+      m[head] = curveNext;
+      p.onCurvesChange(sideWrite(m));
+    }
     setBand(''); setText(''); setLoText(''); setHiText(''); setLockNext(false);
   };
 
@@ -171,6 +206,7 @@ export default function BandLimitEditor(p: Props) {
     const head = entry.split(':')[0].trim().toLowerCase();
     if (p.onLocksChange)  { const m = sideMap(p.locks);  delete m[head]; p.onLocksChange(sideWrite(m)); }
     if (p.onSplitsChange) { const m = sideMap(p.splits); delete m[head]; p.onSplitsChange(sideWrite(m)); }
+    if (p.onCurvesChange) { const m = sideMap(p.curves); delete m[head]; p.onCurvesChange(sideWrite(m)); }
   };
 
   const chip = (active: boolean) => ({
@@ -211,6 +247,23 @@ export default function BandLimitEditor(p: Props) {
         ))}
       </ScrollView>
 
+      {/* ── Airspy R2 / Mini: the curve, then the position on it ─────────────
+          ★ The mode choice comes FIRST, as Stuart described it ("a dropdown to choose the gain
+            mode and the slider after that"): the slider means nothing until you know which curve
+            it walks. Two chips rather than a picker, like the band row above. */}
+      {p.curveable && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>Gain mode</Text>
+          {CURVE_NAMES.map((nm, i) => (
+            <TouchableOpacity key={nm} onPress={() => setCurveNext(i)} style={chip(curveNext === i)}>
+              <Text style={{ color: curveNext === i ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+                {nm}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       {/* ── the value, and Add ──────────────────────────────────────────── */}
       <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 8 }}>
         {p.kind === 'gain' && steps.length ? (
@@ -221,7 +274,8 @@ export default function BandLimitEditor(p: Props) {
               thumbTintColor={p.C.gold} />
             <Text style={{ color: p.C.amber, fontFamily: p.F, fontSize: 13, minWidth: 62,
                            textAlign: 'right' }}>
-              {(steps[gainIdx] / 10).toFixed(1)} dB
+              {p.curveable ? `${CURVE_NAMES[curveNext]} ${Math.round(steps[gainIdx] / 10)}`
+                           : `${(steps[gainIdx] / 10).toFixed(1)} dB`}
             </Text>
           </>
         ) : p.kind === 'range' ? (
@@ -259,7 +313,24 @@ export default function BandLimitEditor(p: Props) {
 
       {/* ★★ THE LOCK, AND THE SPLIT IT IMPLIES ON A HACKRF — both belong to the entry being added,
              which is why they sit between the value and the list rather than over the section. */}
-      {p.lockable && (
+      {p.lockable && p.curveable && (
+        /* ★ LIMIT or LOCK, said as the two words Stuart used, rather than as a checkbox whose
+             unticked state has to be inferred. */
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
+          {([['Limit', false], ['Lock', true]] as const).map(([nm, on]) => (
+            <TouchableOpacity key={nm} onPress={() => setLockNext(on)} style={chip(lockNext === on)}>
+              <Text style={{ color: lockNext === on ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+                {nm}
+              </Text>
+            </TouchableOpacity>
+          ))}
+          <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12, flex: 1 }}>
+            {lockNext ? 'The gain sits at this position on this band.'
+                      : 'Listeners may go up to this position on this band.'}
+          </Text>
+        </View>
+      )}
+      {p.lockable && !p.curveable && (
         <TouchableOpacity onPress={() => setLockNext(v => !v)}
           style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 }}>
           <View style={{ width: 18, height: 18, borderRadius: 4, borderWidth: 1,

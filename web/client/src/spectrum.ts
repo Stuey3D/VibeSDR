@@ -234,6 +234,10 @@ export interface RadioCaps {
   stageMax?: number;      // top of each manual stage (15)
   curve?: 'linearity' | 'sensitivity' | string;
   gainMode?: number;      // ★ 0 sensitive, 1 linear, 2 free — SDR++'s three modes
+  /** ★★ The owner's per-band rule on THIS band (vibe_airspy_limit.h): the band's curve, the top
+   *  position (LIMIT) or the fixed one (LOCK). null = no rule here, every control as normal.
+   *  Absent on every radio but the R2 / Mini. */
+  aspLimit?: { curve: 'linearity' | 'sensitivity'; max: number; locked: boolean } | null;
 
   lnaAgc?: boolean;       // the radio's own AGC for the LNA...
   mixerAgc?: boolean;     // ...and for the mixer. The VGA has none.

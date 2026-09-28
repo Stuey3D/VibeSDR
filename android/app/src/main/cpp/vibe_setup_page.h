@@ -925,6 +925,15 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             </div>
             <div class="row" style="gap:8px">
               <select id="gainPick" style="flex:1 1 200px"></select>
+              <!-- ★★★ AIRSPY R2 / MINI ONLY: THE GAIN MODE, THEN THE POSITION ON IT. Stuart,
+                   2026-09-28: "a dropdown to choose the gain mode and the slider after that to
+                   then limit or lock". The band is held on this curve and the slider beside it is
+                   a position 0-21 on it; Free mode and the manual stages are closed in that band.
+                   Stored in its own per-band list (gainCurves), like the lock and the split. -->
+              <select id="gainCurve" class="hide" style="flex:0 1 150px" aria-label="Gain mode">
+                <option value="0">Linearity</option>
+                <option value="1">Sensitivity</option>
+              </select>
               <input type="range" id="gainMaxSlider" class="hide" style="flex:1 1 160px">
               <input type="text" id="gainMax" placeholder="max, e.g. 25 dB" style="flex:1 1 120px">
             </div>
@@ -1022,6 +1031,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
               control at all. <b>All bands</b> applies it everywhere.
               <br>DAB, full-rate raw IQ and ADS&#8209;B take the full width regardless &mdash; they
               need the whole capture.</div>
+            <!-- ★ AIRSPY R2 / MINI: LIMIT or LOCK, in those words, instead of the tick below —
+                 the two states are the whole choice here, so both are named. -->
+            <div class="row hide" id="gainAspLockRow" style="gap:8px;margin-top:10px">
+              <select id="gainAspLock" style="flex:1 1 260px" aria-label="Limit or lock">
+                <option value="0">Limit &mdash; listeners may go up to this position</option>
+                <option value="1">Lock &mdash; the gain sits at this position</option>
+              </select>
+            </div>
             <label class="row hide" id="gainLockRow" style="gap:8px;margin-top:10px">
               <input type="checkbox" id="gainLock">
               <span>Lock this band &mdash; the ceiling above is the SETTING, not a limit</span>
@@ -1045,7 +1062,12 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
              <br><b>On a HackRF this is the TOTAL of the two gain stages</b> (LNA + VGA): both sit
              after the mixer, so it is the sum that drives the converter. With a ceiling set, each
              slider stops at whatever the other one leaves &mdash; lower one to raise the other. The
-             RF amp is not counted here because it is owner-only in its own right.</div></label>
+             RF amp is not counted here because it is owner-only in its own right.
+             <span id="gainAspNote" class="hide"><br><b>On an Airspy R2 / Mini a band rule is a gain
+             mode and a position on it.</b> In that band listeners get only that mode's slider
+             &mdash; up to your position with Limit, fixed at it with Lock &mdash; and no Free mode,
+             manual LNA / mixer / VGA or AGCs. It holds for a signed-in admin too: change it here.
+             Bands without a rule keep every control.</span></div></label>
       </div>
 
       <div class="card hide" id="bandCard">
@@ -2386,6 +2408,8 @@ function gainChips() {
   const ifs = gainSideList("ifGrLimits"), sp = gainSideList("gainSplits");
   const locks = gainSideList("gainLocks");
   const isHrf = (radio().driver || "") === "hackrf";
+  const isAsp = gainIsAspPreset();
+  const curves = gainSideList("gainCurves");
   const host = $("gainList");
   host.innerHTML = list.map((e, i) => {
     const colon = e.lastIndexOf(":");
@@ -2399,6 +2423,12 @@ function gainChips() {
     const lock = locks[band] > 0;
     /* ★ A filter-only rule has no gain ceiling to describe, so it must not claim one. */
     let txt = val >= 0 ? (lock ? "" : "up to ") + "RF " + gainFromRaw(val) : "";
+    /* ★ An Airspy R2 / Mini rule is a curve and a position on it: "Sensitivity up to 10 of 21",
+     *  or "Sensitivity 10 🔒". A rule written before the curve existed is held on Linearity by
+     *  the server (vibe_airspy_limit.h), so it says so rather than leaving it to be guessed. */
+    if (isAsp && val >= 0)
+      txt = (curves[band] > 0 ? "Sensitivity " : "Linearity ") + (lock ? "" : "up to ")
+          + Math.round(val / 10) + (lock ? "" : " of 21");
     // ★ "IF ≥ 25 dB" — a FLOOR on the reduction, so the ≥ is the right way round and the unit is
     //   the client's. Written the other way it would read as a ceiling and mean its own opposite.
     if (ifs[band] !== undefined && ifs[band] >= 0) txt += " \u00b7 IF \u2265 " + ifs[band] + " dB";
@@ -2435,7 +2465,8 @@ function gainChips() {
       //    a ceiling is a figure nothing reads — invisible here and still in the config file, which
       //    is exactly how a setting comes back from the dead when the band is added again later.
       if (band) { gainSideSet("ifGrLimits", band, null); gainSideSet("gainSplits", band, null);
-                  gainSideSet("gainLocks", band, null); gainSideSet("ifBwLimits", band, null); }
+                  gainSideSet("gainLocks", band, null); gainSideSet("ifBwLimits", band, null);
+                  gainSideSet("gainCurves", band, null); }
       gainChips();
     });
 }
@@ -2468,8 +2499,12 @@ function gainAdd() {
   // ★ Held to what the radio has: a figure outside 20-59 dB is not a reduction it can be set to.
   gainSideSet("ifGrLimits", band,
               isFinite(ifRaw) && ifRaw >= 20 ? Math.min(59, Math.round(ifRaw)) : null);
-  const lock = $("gainLock").checked;
+  const isAsp = gainIsAspPreset();
+  const lock = isAsp ? $("gainAspLock").value === "1" : $("gainLock").checked;
   gainSideSet("gainLocks", band, lock ? 1 : null);
+  /* ★★ THE CURVE GOES WITH THE POSITION, and only with one: a curve for a band that has no
+   *  position is a figure nothing reads (the server binds a band only where gainLimits has it). */
+  gainSideSet("gainCurves", band, (isAsp && raw >= 0) ? parseInt($("gainCurve").value, 10) : null);
   // ★ The split is only read on a LOCKED HackRF band — as a limiter the listener still chooses it.
   if (lock && (radio().driver || "") === "hackrf")
     gainSideSet("gainSplits", band, parseInt($("gainSplitSlider").value, 10));
@@ -2477,6 +2512,7 @@ function gainAdd() {
   $("gainMax").value = "";
   $("gainIfMax").value = "";
   $("gainIfBw").value = "";
+  $("gainAspLock").value = "0";   // ★ belongs to the entry, not the radio — see the tick's note
   gainChips();
 }
 
@@ -2563,7 +2599,18 @@ function wireGainSlider(sliderId, boxId) {
   let idx = steps.length - 1;
   if (cur >= 0) { idx = 0; for (let i = 0; i < steps.length; i++) if (steps[i] <= cur) idx = i; }
   sl.value = String(idx);
-  sl.oninput = () => { box.value = gainFromRaw(steps[Number(sl.value)] ?? 0); box.dispatchEvent(new Event("change")); };
+  sl.oninput = () => {
+    const raw = steps[Number(sl.value)] ?? 0;
+    // ★ The Airspy R2 / Mini's ceiling reads as the CURVE and the position — "Sensitivity 10" —
+    //   because a bare position means nothing until you know which curve it is on. gainToRaw
+    //   still reads the number out of it.
+    box.value = (boxId === "gainMax" && gainIsAspPreset()) ? gainAspLabel(raw) : gainFromRaw(raw);
+    box.dispatchEvent(new Event("change"));
+  };
+}
+/** "Sensitivity 10" — the curve picked for this entry and a position, for the Airspy's ceiling box. */
+function gainAspLabel(raw) {
+  return ($("gainCurve").value === "1" ? "Sensitivity " : "Linearity ") + Math.round(raw / 10);
 }
 
 function renderGain() {
@@ -2650,7 +2697,11 @@ function renderGain() {
   // ★ The lock is offered wherever a ceiling is, because it is the same figures read differently.
   //   ★★ NOT loaded from the radio: it belongs to the ENTRY being added, not to the receiver, so
   //      it starts clear each time rather than inheriting the last band's answer.
-  $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf || isAsp));
+  // ★ The Airspy R2 / Mini gets its own LIMIT / LOCK choice and its curve picker instead.
+  $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
+  $("gainAspLockRow").classList.toggle("hide", !isAsp);
+  $("gainCurve").classList.toggle("hide", !isAsp);
+  $("gainAspNote").classList.toggle("hide", !isAsp);
   // ★★ IF ceiling: RSP only, and only while its AGC is NOT locked on — see the note above.
   $("gainIfRow").classList.toggle("hide", !(isRsp && r.agcLock !== 1));
   /* ★★★ VibeAGC OWNS THE GAIN PATH, SO SAY SO ON EVERY CONTROL IT TAKES. With it on there is no
@@ -2712,7 +2763,7 @@ function renderGain() {
   $("gainRest").placeholder = isAsp ? "preset 0\u201321 \u2014 empty to leave it alone"
                             : gainIsDb() ? "e.g. 19.7 dB \u2014 empty to leave it alone"
                                          : "RF gain position \u2014 empty to leave it alone";
-  $("gainMax").placeholder = isAsp ? "max preset, 0\u201321"
+  $("gainMax").placeholder = isAsp ? "max position, 0\u201321, on the mode beside it"
                            : gainIsDb() ? "max, e.g. 25 dB" : "max RF position";
   wireGainSlider("gainRestSlider", "gainRest");
   wireGainSlider("gainMaxSlider", "gainMax");
@@ -3281,8 +3332,9 @@ async function renderHw() {
         one preset position, 0&ndash;21, along that curve and set all three stages together;
         <b>Free</b> sets the LNA, mixer and VGA by hand, with the radio's own AGC available on the
         first two. They are set on the receiver page, where you can watch the waterfall while you
-        move them. A starting position, per-band ceilings and per-band locks are in <b>Gain
-        limits</b> below, in the same 0&ndash;21 positions.
+        move them. A starting position is in <b>Gain limits</b> below, and so are per-band rules:
+        pick a band, a gain mode (Linearity or Sensitivity) and a position 0&ndash;21, then Limit
+        or Lock &mdash; in that band listeners get only that mode's slider.
         <br>It covers 24&ndash;1800&nbsp;MHz. There is no direct sampling to switch and VibeSDR's
         own AGC is not used on it.</div>`;
   } else {
@@ -3960,6 +4012,11 @@ function fill() {
   });
   // ★ The tick governs THIS entry, so the only thing that follows from it here is whether the
   //   HackRF needs to be asked for a split. The chips are written when the band is added.
+  // ★ A new curve relabels the figure already chosen — same position, other curve.
+  $("gainCurve").addEventListener("change", () => {
+    const raw = gainToRaw($("gainMax").value);
+    if (raw >= 0) $("gainMax").value = gainAspLabel(raw);
+  });
   $("gainLock").addEventListener("change", () => {
     $("gainSplitRow").classList.toggle("hide",
       !((radio().driver || "") === "hackrf" && $("gainLock").checked));

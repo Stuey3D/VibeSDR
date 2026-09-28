@@ -163,6 +163,12 @@ public:
     static int  ifGrFloorAt(double hz);
     static void setGainSplits(const std::string& csv);
     static int  gainSplitAt(double hz);
+    /** ★★★ AIRSPY R2 / MINI ONLY: which preset CURVE a limited band is held on, "fm:1" —
+     *  0 = Linearity, 1 = Sensitivity (the `curve` wire field's meaning). Read only where the band
+     *  also has a gainLimits entry; see vibe_airspy_limit.h for the whole rule.
+     *  gainCurveAt: 0/1, or -1 when not serving or nothing is written for this frequency. */
+    static void setGainCurves(const std::string& csv);
+    static int  gainCurveAt(double hz);
     /** ★★★ RTL OVERLOAD PROTECTION — one call per second, FROM THE DSP THREAD ONLY. It takes the
      *  hardware lock and touches the tuner, so the libusb callback must never call it (see the
      *  note on enqueueIq). Non-static: it works on the live device. */
@@ -720,6 +726,9 @@ public:
     /** ★ 0 sensitive, 1 linear, 2 free — SDR++'s three modes, which is what an Airspy owner
      *  expects to find. See AirspySource::GainMode for why it is a mode and not two switches. */
     void setAirspyGainMode(int mode);
+    /** ★ A preset curve (0 sensitive, 1 linear) AND a position on it, tenths, in one hardware
+     *  write — the owner's per-band limit puts the radio exactly here. See AirspySource::setPreset. */
+    void setAirspyPreset(int mode, int tenthDb);
     void setAirspyStage(int stage, int value);
     void setAirspyLnaAgc(bool on);
     void setAirspyMixerAgc(bool on);

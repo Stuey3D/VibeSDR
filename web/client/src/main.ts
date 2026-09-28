@@ -13541,7 +13541,43 @@ function applyAspCaps(caps: import('./spectrum').RadioCaps | null) {
   $('rowAspPacking').hidden = caps?.hasPacking === false;
   renderAspMode();
   renderAspEnabled();
-  pushAllAspSettings();
+  // ★ In a limited band the server has put the radio on the band's curve and refuses any other;
+  //   restating a remembered mode would only earn a refusal.
+  if (!applyAspLimit(caps)) pushAllAspSettings();
+}
+
+/** ★★★ THE OWNER'S BAND RULE ON AN AIRSPY R2 / MINI (Stuart, 2026-09-28): "tie it to one of the
+ *  gain curves and limit that and then block any manual gain". In a limited band the listener gets
+ *  that curve's slider and nothing else — the mode switch, Free, the three stages and both stage
+ *  AGCs are HIDDEN (not greyed: there is nothing here the listener can do to earn them), and one
+ *  line says whose rule it is. The slider's ceiling is the ordinary gainCap (applyGainCap) and a
+ *  LOCK hides it (applyGainLocked), so both are the paths every radio already uses.
+ *  ★ No rule on this band: returns false and touches nothing, so every control is exactly as it
+ *    was — renderAspMode above has already drawn them. */
+function applyAspLimit(caps: import('./spectrum').RadioCaps | null): boolean {
+  const lim = caps?.aspLimit ?? null;
+  const modeRow = $('aspModeSeg').closest('.mrow') as HTMLElement | null;
+  if (modeRow) modeRow.hidden = !!lim;
+  let note = document.getElementById('aspLimitNote');
+  if (!lim) { if (note) note.hidden = true; return false; }
+  for (const id of ['rowAspLna', 'rowAspMixer', 'rowAspVga', 'aspManualNote'])
+    $<HTMLElement>(id).hidden = true;
+  for (const el of Array.from(document.querySelectorAll('#aspCtls .aspFreeOnly')) as HTMLElement[])
+    el.hidden = true;
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'aspLimitNote';
+    note.className = 'mnote';
+    note.style.cssText = 'margin:2px 0 6px;opacity:.85';
+    $('aspCtls').prepend(note);
+  }
+  const curve = lim.curve === 'sensitivity' ? 'Sensitivity' : 'Linearity';
+  note.textContent = lim.locked
+    ? `Gain: ${curve} ${lim.max} \u2014 locked by the owner on this band.`
+    : `Gain: ${curve}, up to ${lim.max} of 21 \u2014 limited by the owner on this band. `
+      + 'Free mode and the manual stages are off here.';
+  note.hidden = false;
+  return true;
 }
 
 function initAirspyControls() {

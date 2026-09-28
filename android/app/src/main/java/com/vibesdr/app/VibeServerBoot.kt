@@ -293,7 +293,8 @@ object VibeServerBoot {
             VibeLocalSDR.setGainLock(
                 if (adv) cfg.s("gainLocks") else "",
                 if (adv) cfg.s("gainSplits") else "",
-                adv && cfg.b("rateLock", false))
+                adv && cfg.b("rateLock", false),
+                if (adv) cfg.s("gainCurves") else "")
         }
         VibeLocalSDR.setVibeServerLockedRate(cfg.n("lockedRate", 0.0))
         VibeLocalSDR.setServeOnLan(true)

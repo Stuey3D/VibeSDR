@@ -142,6 +142,7 @@ struct Opts {
      *  different things is how the wrong one gets wired. */
     std::string ifBwLimits;            // RTL tuner IF filter ceiling in kHz, per band
     std::string gainSplits;              // HackRF LNA share of the total, 0-100, per band
+    std::string gainCurves;              // Airspy R2/Mini curve per limited band: 0 linearity, 1 sensitivity
     bool        rateLock = false;        // the sample rate is PINNED, not merely capped
     bool        dabRateBoost = false;    // DAB may borrow 2.048 MS/s — see Config::dabRateBoost
     int         rawIq = 0, rawIqMax = 0; // raw IQ out — see RadioConfig::rawIq
@@ -504,7 +505,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.gainLimits = c.gainLimits; o.restGain = c.restGain; o.agcLock = c.agcLock;
     o.ifBwLimits = c.ifBwLimits;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
-    o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits;
+    o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits; o.gainCurves = c.gainCurves;
     o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide;
     o.blockedModes = c.blockedModes;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
@@ -550,7 +551,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.gainLimits = o.gainLimits; c.restGain = o.restGain; c.agcLock = o.agcLock;
     c.ifBwLimits = o.ifBwLimits;
     c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
-    c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits;
+    c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits; c.gainCurves = o.gainCurves;
     c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide;
     c.blockedModes = o.blockedModes;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
@@ -1813,6 +1814,7 @@ int main(int argc, char** argv) {
                     LocalSdrShim::setGainLocks(g_runtimeConfig.gainLocks);
                     LocalSdrShim::setIfGrFloors(g_runtimeConfig.ifGrLimits);
                     LocalSdrShim::setGainSplits(g_runtimeConfig.gainSplits);
+                    LocalSdrShim::setGainCurves(g_runtimeConfig.gainCurves);
                     LocalSdrShim::setVibeServerRateLock(g_runtimeConfig.rateLock);
                     LocalSdrShim::setRestGain(g_runtimeConfig.restGain);
                     // ★ Both, together: the AGC raises the ceiling to the tuner's maximum, so it
@@ -2384,6 +2386,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setGainLocks(o.gainLocks);
     LocalSdrShim::setIfGrFloors(o.ifGrLimits);
     LocalSdrShim::setGainSplits(o.gainSplits);
+    LocalSdrShim::setGainCurves(o.gainCurves);
     LocalSdrShim::setRestGain(o.restGain);
     LocalSdrShim::setAgcLock(o.agcLock == 1);
     /* ★★★ APPLIED WHERE THE RADIO ACTUALLY IS. The other two calls to this setter are in main()'s

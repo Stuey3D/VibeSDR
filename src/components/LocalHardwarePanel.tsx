@@ -344,6 +344,14 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const aspMode = typeof p.aspGainMode === 'number'
                 ? p.aspGainMode
                 : (p.aspCurve === 'sensitivity' ? 0 : 1);
+  /* ★★★ THE OWNER'S BAND RULE (Stuart, 2026-09-28): "tie it to one of the gain curves and limit
+   *   that and then block any manual gain". In a limited band this radio's whole gain UI is that
+   *   curve's slider, capped at the owner's position — or, locked, one line saying where it is. The
+   *   mode switch, Free, the stages and the stage AGCs are not drawn: the server refuses all of them
+   *   there, and a control whose every use is refused is the fault AGENTS.md names. null = no rule
+   *   on this band, and every control below is exactly as it always was. */
+  const aspLim = isAsp ? (p.radio?.aspLimit ?? null) : null;
+  const aspLimCurve = aspLim?.curve === 'sensitivity' ? 'Sensitivity' : 'Linearity';
   /* ★★★ THE CEILING, IN WHOLE dB, or -1 for none. The wire carries tenths (the dongle's spelling,
    *   which every radio's limit reuses); the HackRF's stages are whole dB, so it is floored —
    *   NEVER rounded, because rounding up would offer a decibel the server then refuses. */
@@ -998,6 +1006,32 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   ★★ Only in the PRESET modes. In Free the three stages below ARE the control, and
                      a fourth slider driving all of them at once would fight them — which is the
                      ambiguity the three-way mode was introduced to remove. */}
+              {aspLim ? (
+                <>
+                  <Text style={styles.section}>GAIN — {aspLimCurve.toLowerCase()} curve</Text>
+                  {aspLim.locked ? (
+                    <Text style={styles.note}>
+                      Gain: {aspLimCurve} {aspLim.max} — locked by the owner on this band.
+                    </Text>
+                  ) : (
+                    <>
+                      <View style={styles.sliderRow}>
+                        <Text style={styles.sliderEnd}>0</Text>
+                        <Slider style={{ flex: 1, height: 40 }} minimumValue={0} step={1}
+                          maximumValue={Math.max(1, aspLim.max)} disabled={aspLim.max < 1}
+                          value={Math.min(aspLim.max, Math.max(0, Math.round((p.gainTenthDb ?? 0) / 10)))}
+                          onSlidingComplete={(v) => p.onGain(Math.min(aspLim.max, Math.round(v)) * 10)}
+                          minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                        <Text style={styles.sliderEnd}>{aspLim.max}</Text>
+                      </View>
+                      <Text style={styles.note}>
+                        Gain: {aspLimCurve}, up to {aspLim.max} of 21 — limited by the owner on this
+                        band. Free mode and the manual stages are off here.
+                      </Text>
+                    </>
+                  )}
+                </>
+              ) : (<>
               <Text style={styles.section}>GAIN MODE</Text>
               <Seg slot={slot} options={[0, 1, 2]}
                    value={aspMode}
@@ -1089,6 +1123,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <Text style={styles.note}>
                 The VGA has no automatic setting on this radio — it is always yours.
               </Text>
+              </>)}
               </>)}
 
               <View style={styles.toggleRow}>

@@ -184,6 +184,11 @@ export interface RadioCaps {
   hasPacking?: boolean;
   /** ★ 24-1800 MHz with no direct-sampling branch: the control must not be offered. */
   noDirectSampling?: boolean;
+  /** ★★★ THE OWNER'S RULE ON THE BAND BEING LISTENED TO (vibe_airspy_limit.h, 2026-09-28): the
+   *  band's curve and its top position (LIMIT) or its fixed one (LOCK). null = no rule here and
+   *  every control as normal; absent = an older server. The server refuses everything else in a
+   *  limited band — this is so the panel does not offer it. */
+  aspLimit?: { curve: 'linearity' | 'sensitivity' | string; max: number; locked: boolean } | null;
   // ── Airspy HF+ ──
   attSteps?: number;        // 9 => 0..8
   attStepDb?: number;       // 6 dB per step

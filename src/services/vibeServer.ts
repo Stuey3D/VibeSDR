@@ -139,6 +139,10 @@ export type VibeServerConfig = {
   /** ★★ HackRF only, and only while locked: the LNA's share of that band's total, 0-100. A total
    *  does not determine two stages, so a ceiling is enough to limit with and not to SET with. */
   gainSplits?: string;
+  /** ★★ Airspy R2 / Mini only: the preset curve each limited band is held on ("fm:1") — 0 =
+   *  Linearity, 1 = Sensitivity. Its gainLimits figure is then a POSITION x 10 on that curve, and
+   *  Free mode / the manual stages are refused there. See vibe_airspy_limit.h. */
+  gainCurves?: string;
   /** ★★ The sample rate is PINNED rather than capped — listeners get no rate picker at all. On a
    *  shared dial one listener narrowing the window narrows it for everybody. */
   rateLock?: boolean;
@@ -280,6 +284,7 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     agcLock: cfg.agcLock ?? false,
     gainLocks: cfg.gainLocks ?? '',
     gainSplits: cfg.gainSplits ?? '',
+    gainCurves: cfg.gainCurves ?? '',
     rateLock: cfg.rateLock ?? false,
     rtlAgc: cfg.rtlAgc ?? false,
     tunerBwAuto: cfg.tunerBwAuto ?? false,
