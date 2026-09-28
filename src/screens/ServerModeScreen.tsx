@@ -168,6 +168,7 @@ const K = {
   startOnBootRetired: 'vs_startonboot',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
   gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits', gainCurves: 'vs_gaincurves',
+  ifBwLimits: 'vs_ifbwlimits',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
   ppm: 'vs_ppm', directSampling: 'vs_directsampling', autoDs: 'vs_autods', autoDsMhz: 'vs_autodsmhz',
   convOffsetMhz: 'vs_convoffset', convLoMhz: 'vs_convlo', convHiMhz: 'vs_convhi', convDown: 'vs_convdown',
@@ -403,6 +404,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [gainSplits, setGainSplits]   = useState('');
   /** ★ Airspy R2 / Mini: the preset curve each limited band is held on — see BandLimitEditor. */
   const [gainCurves, setGainCurves]   = useState('');
+  /** ★★★ The tuner's IF filter per band, kHz ("fm:1400") — RTL only; see BandLimitEditor's `ifable`. */
+  const [ifBwLimits, setIfBwLimits]   = useState('');
   const [restGain, setRestGain]       = useState(-1);
   /** ★★★ ONE SLIDER, TWO MEANINGS — see the note by the toggles. Protection is ON by default (it
    *  can only ever prevent clipping); the AGC is OFF, because it may raise the gain above what the
@@ -727,6 +730,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           if (v != null) setTunerBwAuto(v === '1');
           const g2 = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
           setGainCurves(await g2(K.gainCurves));
+          setIfBwLimits(await g2(K.ifBwLimits));
           setPpm(await g2(K.ppm));
           { const d = await g2(K.directSampling); if (d === 'i' || d === 'q') setDirectSampling(d); }
           setAutoDs((await g2(K.autoDs)) === '1');
@@ -1270,7 +1274,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'],
       [K.gainLimits, gainLimits], [K.gainLocks, gainLocks], [K.gainSplits, gainSplits],
-      [K.gainCurves, gainCurves],
+      [K.gainCurves, gainCurves], [K.ifBwLimits, ifBwLimits],
       [K.restGain, String(restGain)],
       [K.rtlAgc, rtlAgc ? '1' : '0'],
       [K.tunerBwAuto, tunerBwAuto ? '1' : '0'],
@@ -1365,6 +1369,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         // ★ Sent in EVERY mode — see the ZOOM DETAIL card's note.
         zoomSpectrum: live.current.zoomSpec,
         gainLimits, gainLocks, gainSplits, gainCurves, restGain, agcLock,
+        // ★ The per-band IF filter — only a dongle has the filter it sets, so nothing is sent for others.
+        ifBwLimits: isRtl ? ifBwLimits : '',
         /* ★★★ THE SCREEN ALREADY SAID "PINNED — listeners cannot change it" whenever a rate was
          *   chosen, and the server only ever treated `lockedRate` as a CEILING: anything narrower
          *   was allowed. So the words on this screen have been ahead of the behaviour. rateLock
@@ -1411,7 +1417,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
       blockedModes, dabRateBoost, dabScanLabels, isLite,
-      gainLimits, gainLocks, gainSplits, gainCurves, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
+      gainLimits, gainLocks, gainSplits, gainCurves, ifBwLimits, isRtl, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown]);
 
   const stopAndBack = useCallback(() => {
@@ -3139,6 +3145,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   splittable={radio?.driver === 'hackrf'}
                   splits={gainSplits}
                   onSplitsChange={(v) => { setGainSplits(v); AsyncStorage.setItem(K.gainSplits, v); }}
+                  /* ★★★ THE TUNER'S IF FILTER, PER BAND — the setup page's "IF filter for this band",
+                       which the phone and the TV never had (Stuart, 2026-09-28: the Sony's FM band at
+                       1.4 MHz). RTL only: it is the R820T's filter, written through
+                       rtlsdr_set_tuner_bandwidth, and on any other radio the menu would accept a width
+                       and change nothing (AGENTS.md). A width stored earlier stays in the config. */
+                  ifable={isRtl}
+                  ifLimits={ifBwLimits}
+                  onIfLimitsChange={(v) => { setIfBwLimits(v); AsyncStorage.setItem(K.ifBwLimits, v); }}
                   placeholder="max, e.g. 25 dB"
                   emptyText="No ceilings — listeners have the full range." />
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
@@ -3158,6 +3172,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   The return gain is applied when the LAST listener leaves, so somebody who turns it
                   up does not leave it up for the next person. Tuning into a capped band brings the
                   gain down automatically.
+                  {isRtl
+                    ? '\n\nIF filter: left on Automatic, the filter is as wide as the sample rate needs. '
+                      + 'Narrow it for a band whose aerial hands the tuner too much at once — a long wire '
+                      + 'on FM is the usual case, where 1.4 MHz can be worth many dB of clean signal. The '
+                      + 'gain can be left alone and only the filter set. Unlocked it is a limit the '
+                      + 'automatic filter still narrows under; locked, it is the width, fixed.'
+                    : ''}
                 </Text>
                 </>)}
 

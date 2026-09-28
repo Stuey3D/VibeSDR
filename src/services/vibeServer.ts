@@ -143,6 +143,11 @@ export type VibeServerConfig = {
    *  Linearity, 1 = Sensitivity. Its gainLimits figure is then a POSITION x 10 on that curve, and
    *  Free mode / the manual stages are refused there. See vibe_airspy_limit.h. */
   gainCurves?: string;
+  /** ★★★ THE TUNER'S IF FILTER, PER BAND, in kHz ("fm:1400"; 99999 = as wide as the capture) — the
+   *  setup page's "IF filter for this band", read natively as ifBwLimits (VibeServerBoot → setGainLimits'
+   *  ifCsv). RTL-SDR only: it is the R820T's own filter. Unlocked it is a ceiling the auto filter still
+   *  narrows under; with the band's lock it is the width, fixed. Absent/'' = automatic, as before. */
+  ifBwLimits?: string;
   /** ★★ The sample rate is PINNED rather than capped — listeners get no rate picker at all. On a
    *  shared dial one listener narrowing the window narrows it for everybody. */
   rateLock?: boolean;
@@ -280,6 +285,7 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     gainLocks: cfg.gainLocks ?? '',
     gainSplits: cfg.gainSplits ?? '',
     gainCurves: cfg.gainCurves ?? '',
+    ifBwLimits: cfg.ifBwLimits ?? '',
     rateLock: cfg.rateLock ?? false,
     rtlAgc: cfg.rtlAgc ?? false,
     tunerBwAuto: cfg.tunerBwAuto ?? false,

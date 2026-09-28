@@ -73,9 +73,29 @@ type Props = {
   curveable?: boolean;
   curves?: string;
   onCurvesChange?: (next: string) => void;
+  /* ★★★ RTL-SDR ONLY: THE TUNER'S IF FILTER FOR THE BAND — the setup page's "IF filter for this band"
+   *   (Stuart, 2026-09-27: "select FM broadcast band, leave the gain untouched but from a dropdown set
+   *   1.2MHz IF filter"; 2026-09-28: the Sony's FM at 1.4 MHz). Stored in its own parallel list keyed
+   *   by band, in kHz ("fm:1400"; 99999 = the whole capture), exactly as the server reads ifBwLimits.
+   *   ★ Either half of a rule is enough: a band may carry a width and no gain ceiling at all.
+   *   ★ The lock governs both: locked, the width is fixed; unlocked, it is a ceiling that the
+   *     automatic filter still narrows under. Absent = no filter UI, which is every other radio. */
+  ifable?: boolean;
+  ifLimits?: string;
+  onIfLimitsChange?: (next: string) => void;
 };
 
 const CURVE_NAMES = ['Linearity', 'Sensitivity'];
+/** ★★ THE TUNER'S ACTUAL RUNGS, the same list as the setup page — applyAutoIf's ladder. A width the
+ *  R820T cannot produce would be snapped to another and read back as the setting being ignored. */
+const IF_WIDTHS: { khz: number; label: string }[] = [
+  { khz: 0, label: 'Automatic' }, { khz: 99999, label: 'Wide' },
+  { khz: 2800, label: '2.8 MHz' }, { khz: 2000, label: '2.0 MHz' }, { khz: 1400, label: '1.4 MHz' },
+  { khz: 1000, label: '1.0 MHz' }, { khz: 700, label: '700 kHz' }, { khz: 500, label: '500 kHz' },
+  { khz: 350, label: '350 kHz' },
+];
+const ifWords = (khz: number) => (khz >= 99999 ? 'IF wide'
+  : `IF ${IF_WIDTHS.find(w => w.khz === khz)?.label ?? `${khz} kHz`}`);
 
 /** A parallel per-band list ("fm:1, hf:0") as a map. The band syntax and the parser are the
  *  server's own, so nothing here has to know what a band is. */
@@ -125,8 +145,30 @@ export default function BandLimitEditor(p: Props) {
   const [curveNext, setCurveNext] = useState(0);
   const locks = useMemo(() => sideMap(p.locks), [p.locks]);
   const curves = useMemo(() => sideMap(p.curves), [p.curves]);
+  const ifs = useMemo(() => sideMap(p.ifLimits), [p.ifLimits]);
+  /** ★ The IF width for the entry being added (0 = automatic) and whether its gain is left alone. */
+  const [ifNext, setIfNext] = useState(0);
+  const [gainNone, setGainNone] = useState(false);
+  /* ★★★ A BAND MAY BE HERE FOR ITS FILTER ALONE. Listing from the gain string only would accept a
+   *  filter-only rule and never show it — the setup page made exactly that mistake first. So the rows
+   *  are the gain entries plus any band that carries only a width, and everything is keyed by BAND. */
+  const rows = useMemo(() => {
+    const heads = new Set(entries.map(e => e.split(':')[0].trim().toLowerCase()));
+    const extra = p.ifable ? Object.keys(ifs).filter(b => ifs[b] > 0 && !heads.has(b)) : [];
+    return [...entries, ...extra];
+  }, [entries, ifs, p.ifable]);
 
   const label = (entry: string) => {
+    const base = gainLabel(entry);
+    const key = entry.split(':')[0].trim().toLowerCase();
+    if (!p.ifable || !(ifs[key] > 0)) return base;
+    const locked = p.lockable && locks[key] > 0;
+    /* ★ A filter-only rule has no gain figure to describe, so it must not claim one — and its padlock
+     *   (the lock covers the filter too) is drawn here rather than by the gain wording. */
+    if (!entry.includes(':')) return `${base} · ${ifWords(ifs[key])}${locked ? ' \u{1F512}' : ''}`;
+    return `${base} · ${ifWords(ifs[key])}`;
+  };
+  const gainLabel = (entry: string) => {
     // ★ Show the band's real NAME, not its id — "FM broadcast" rather than "fm". The id is what
     //   travels; the label is what the owner recognised when they picked it.
     const [head, tail] = entry.split(':');
@@ -153,11 +195,16 @@ export default function BandLimitEditor(p: Props) {
   const add = () => {
     const t = text.trim();
     let entry = '';
+    const ifOnly = p.kind === 'gain' && !!p.ifable && gainNone;
     if (p.kind === 'gain') {
       // ★ The slider decides the figure when the tuner's list is known; the box is only the
       //   fallback for a radio whose steps we have not been told.
       if (!band) return;
-      if (p.curveable && steps.length) {
+      if (ifOnly) {
+        // ★ Gain left alone: a width is then the whole rule, and without one there is nothing to add.
+        if (!(ifNext > 0)) return;
+        entry = band;
+      } else if (p.curveable && steps.length) {
         // ★ A POSITION, bare, in the server's tenths — never "dB": parseGainList would multiply a
         //   dB figure by ten again and the ceiling would sit ten positions past where it was put.
         entry = `${band}:${steps[gainIdx]}`;
@@ -177,7 +224,15 @@ export default function BandLimitEditor(p: Props) {
     //   the server would resolve silently, and silently is the problem.
     const head = entry.split(':')[0].trim().toLowerCase();
     const kept = entries.filter(e => e.split(':')[0].trim().toLowerCase() !== head);
-    p.onChange([...kept, entry].join(', '));
+    /* ★★ A FILTER-ONLY RULE WRITES NO GAIN ENTRY — "band:-1" would be a nonsense ceiling and the row
+     *  would claim a gain limit nobody set. It still REPLACES any gain ceiling the band had, as the
+     *  setup page does: the owner has just said "leave the gain alone" for this band. */
+    p.onChange((ifOnly ? kept : [...kept, entry]).join(', '));
+    if (p.ifable && p.onIfLimitsChange) {
+      const m = sideMap(p.ifLimits);
+      if (ifNext > 0) m[head] = ifNext; else delete m[head];
+      p.onIfLimitsChange(sideWrite(m));
+    }
     if (p.lockable && p.onLocksChange) {
       const m = sideMap(p.locks);
       if (lockNext) m[head] = 1; else delete m[head];
@@ -192,18 +247,23 @@ export default function BandLimitEditor(p: Props) {
     }
     if (p.curveable && p.onCurvesChange) {
       const m = sideMap(p.curves);
-      m[head] = curveNext;
+      if (ifOnly) delete m[head]; else m[head] = curveNext;
       p.onCurvesChange(sideWrite(m));
     }
     setBand(''); setText(''); setLoText(''); setHiText(''); setLockNext(false);
+    setIfNext(0); setGainNone(false);
   };
 
   const remove = (entry: string) => {
-    p.onChange(entries.filter(e => e !== entry).join(', '));
+    const head = entry.split(':')[0].trim().toLowerCase();
+    /* ★★★ BY BAND, NOT BY STRING. A filter-only row is not in the gain list at all, so removing the
+     *  exact string would remove nothing and the × would do nothing — the setup page's own bug
+     *  (Stuart, 2026-09-27, "the X button is not clearing per band gain/IF"). */
+    p.onChange(entries.filter(e => e.split(':')[0].trim().toLowerCase() !== head).join(', '));
     // ★★ AND ITS COMPANIONS. A lock or a split for a band with no ceiling is a figure nothing
     //    reads — invisible here and still in the config, which is how a setting comes back from
     //    the dead when the band is added again later.
-    const head = entry.split(':')[0].trim().toLowerCase();
+    if (p.onIfLimitsChange) { const m = sideMap(p.ifLimits); delete m[head]; p.onIfLimitsChange(sideWrite(m)); }
     if (p.onLocksChange)  { const m = sideMap(p.locks);  delete m[head]; p.onLocksChange(sideWrite(m)); }
     if (p.onSplitsChange) { const m = sideMap(p.splits); delete m[head]; p.onSplitsChange(sideWrite(m)); }
     if (p.onCurvesChange) { const m = sideMap(p.curves); delete m[head]; p.onCurvesChange(sideWrite(m)); }
@@ -264,9 +324,30 @@ export default function BandLimitEditor(p: Props) {
         </View>
       )}
 
+      {/* ── RTL only: may the gain be left alone? ───────────────────────────
+          ★ The commonest filter rule is "FM needs selectivity, its gain is fine" — so the gain half is
+            optional, and saying so is a chip, not an empty box whose meaning must be guessed. */}
+      {p.kind === 'gain' && p.ifable && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>Gain</Text>
+          {([['Set a ceiling', false], ['Leave alone', true]] as const).map(([nm, on]) => (
+            <TouchableOpacity key={nm} onPress={() => setGainNone(on)} style={chip(gainNone === on)}>
+              <Text style={{ color: gainNone === on ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+                {nm}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       {/* ── the value, and Add ──────────────────────────────────────────── */}
       <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 8 }}>
-        {p.kind === 'gain' && steps.length ? (
+        {p.kind === 'gain' && p.ifable && gainNone ? (
+          <Text style={{ flex: 1, color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>
+            {ifNext > 0 ? 'Only the IF filter below is set for this band.'
+                        : 'Pick an IF filter below — with the gain left alone, the filter is the whole rule.'}
+          </Text>
+        ) : p.kind === 'gain' && steps.length ? (
           <>
             <Slider style={{ flex: 1 }} minimumValue={0} maximumValue={steps.length - 1} step={1}
               value={gainIdx} onValueChange={(v: number) => setGainIdx(Math.round(v))}
@@ -310,6 +391,24 @@ export default function BandLimitEditor(p: Props) {
           <Text style={{ color: p.C.gold, fontFamily: p.F, fontSize: 13 }}>Add</Text>
         </TouchableOpacity>
       </View>
+
+      {/* ── RTL only: the tuner's IF filter for this band ──────────────────
+          ★ Set levels, not a typed figure: the R820T quantises to its own rungs, so these are exactly
+            the widths it has — what is chosen is what the chip reports back. */}
+      {p.kind === 'gain' && p.ifable && (
+        <View style={{ marginTop: 10 }}>
+          <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>IF filter for this band</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {IF_WIDTHS.map(w => (
+              <TouchableOpacity key={w.khz} onPress={() => setIfNext(w.khz)} style={chip(ifNext === w.khz)}>
+                <Text style={{ color: ifNext === w.khz ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+                  {w.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
 
       {/* ★★ THE LOCK, AND THE SPLIT IT IMPLIES ON A HACKRF — both belong to the entry being added,
              which is why they sit between the value and the list rather than over the section. */}
@@ -356,13 +455,13 @@ export default function BandLimitEditor(p: Props) {
       )}
 
       {/* ── what is set ─────────────────────────────────────────────────── */}
-      {entries.length === 0 ? (
+      {rows.length === 0 ? (
         <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12, marginTop: 8 }}>
           {p.emptyText}
         </Text>
       ) : (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-          {entries.map(e => (
+          {rows.map(e => (
             <TouchableOpacity key={e} onPress={() => remove(e)}
               style={{ borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12,
                        borderColor: p.C.green, backgroundColor: `${p.C.green}18`,
