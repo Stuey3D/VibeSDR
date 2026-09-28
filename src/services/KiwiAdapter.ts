@@ -21,6 +21,7 @@
 
 import type { SDRMode, SDRStatus } from './UberSDRClient';
 import { noteUnhandled } from './protocolLog';
+import { guard } from './faultLog';
 import type {
   SDRBackend, BackendCallbacks, BackendCapabilities, BackendKind,
 } from './SDRBackend';
@@ -360,17 +361,21 @@ export class KiwiAdapter implements SDRBackend {
       // server process auth first; also re-asserted on the audio_rate MSG.
       setTimeout(() => { if (this.started) this.sendRxParams(); }, 150);
     };
+    /* ★★★ GUARDED PER MESSAGE, AND openWf() IS NOT BEHIND IT. The old single try around both
+     *  meant one MSG that threw also skipped openWf(), so a bad first message left the waterfall
+     *  socket unopened — and the catch only reached dbg(), which goes nowhere in a release build.
+     *  Now each frame (and each MSG key, see onText) is its own guarded unit (faultLog). */
     this.sndWs.onmessage = (e) => {
-      try {
-        if (typeof e.data === 'string') this.onText(e.data, 'SND');
-        else {
-          const u8 = new Uint8Array(e.data as ArrayBuffer);
-          this.rxBytes += u8.length;
-          this.startRateMeter();
-          this.onBinaryFrame(u8, 'SND');
-        }
-        this.openWf();
-      } catch (err: any) { this.dbg('SND msg err: ' + (err?.message ?? err)); }
+      if (typeof e.data === 'string') {
+        const t = e.data;
+        guard('kiwi-snd', 'text', () => this.onText(t, 'SND'));
+      } else {
+        const u8 = new Uint8Array(e.data as ArrayBuffer);
+        this.rxBytes += u8.length;
+        this.startRateMeter();
+        guard('kiwi-snd', 'binary', () => this.onBinaryFrame(u8, 'SND'), `len=${u8.length}`);
+      }
+      guard('kiwi-snd', 'open-wf', () => this.openWf());
     };
     // ★ Both of these DEFER to the URL-dialect probe. A wrong prefix surfaces as an error
     // immediately followed by a close, and failing the promise from either one would reject the
@@ -496,15 +501,15 @@ export class KiwiAdapter implements SDRBackend {
       this.sendZoom();              // initial full-span view
     };
     this.wfWs.onmessage = (e) => {
-      try {
-        if (typeof e.data === 'string') this.onText(e.data, 'W/F');
-        else {
-          const u8 = new Uint8Array(e.data as ArrayBuffer);
-          this.rxBytes += u8.length; this.wfFrames++;   // fps = WATERFALL rows
-          this.startRateMeter();
-          this.onBinaryFrame(u8, 'W/F');
-        }
-      } catch (err: any) { this.dbg('WF msg err: ' + (err?.message ?? err)); }
+      if (typeof e.data === 'string') {
+        const t = e.data;
+        guard('kiwi-wf', 'text', () => this.onText(t, 'W/F'));
+      } else {
+        const u8 = new Uint8Array(e.data as ArrayBuffer);
+        this.rxBytes += u8.length; this.wfFrames++;   // fps = WATERFALL rows
+        this.startRateMeter();
+        guard('kiwi-wf', 'binary', () => this.onBinaryFrame(u8, 'W/F'), `len=${u8.length}`);
+      }
     };
     this.wfWs.onerror = () => { this.dbg('WF error'); };
     this.wfWs.onclose = (ev: any) => {
@@ -551,7 +556,9 @@ export class KiwiAdapter implements SDRBackend {
       const eq = tok.indexOf('=');
       if (eq < 0) continue;
       const key = tok.slice(0, eq), val = tok.slice(eq + 1);
-      this.onMsg(key, val, stream);
+      // ★ One MSG carries several keys; a bad `cfg=` must not stop the `audio_rate=` beside it.
+      guard(stream === 'SND' ? 'kiwi-snd' : 'kiwi-wf', 'msg:' + key.slice(0, 24),
+            () => this.onMsg(key, val, stream));
     }
   }
 

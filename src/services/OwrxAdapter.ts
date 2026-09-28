@@ -22,6 +22,7 @@ import type {
 import { NativeModules } from 'react-native';
 import { decodeOwrxFftFrame, OwrxAudioDecoder } from './imaAdpcm';
 import { USER_AGENT } from '../constants/version';
+import { guard, noteFault, msgKind } from './faultLog';
 
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
@@ -363,11 +364,17 @@ export class OwrxAdapter implements SDRBackend {
         ws.send('SERVER DE CLIENT client=vibesdr type=receiver');
         // connectionproperties + start are sent on the CLIENT DE SERVER ack.
       };
+      /* ★★ GUARDED PER MESSAGE (faultLog). The catch used to reach only dbg(), which goes nowhere
+       *  in a release build — a bad message vanished uncounted. Text messages are further keyed by
+       *  their JSON type inside onText, so one bad `config` is told apart from a bad `smeter`. */
       ws.onmessage = (e) => {
-        try {
-          if (typeof e.data === 'string') this.onText(e.data, () => { if (!settled) { settled = true; resolve(); } });
-          else this.onBinary(new Uint8Array(e.data as ArrayBuffer));
-        } catch (err: any) { this.dbg('msg err: ' + (err?.message ?? err)); }
+        if (typeof e.data === 'string') {
+          const t = e.data;
+          guard('owrx', 'text', () => this.onText(t, () => { if (!settled) { settled = true; resolve(); } }));
+        } else {
+          const u8 = new Uint8Array(e.data as ArrayBuffer);
+          guard('owrx', 'binary', () => this.onBinary(u8), `len=${u8.length}`);
+        }
       };
       ws.onerror = () => { this.dbg('WS error'); if (!settled) { settled = true; reject(new Error('OpenWebRX WebSocket error')); } };
       ws.onclose = (ev) => {
@@ -426,7 +433,13 @@ export class OwrxAdapter implements SDRBackend {
       return;
     }
     let json: any;
-    try { json = JSON.parse(data); } catch { return; }
+    try { json = JSON.parse(data); }
+    catch (err) { noteFault('owrx', 'bad-json', err, `len=${data.length} head=${JSON.stringify(data.slice(0, 40))}`); return; }
+    if (!json || typeof json !== 'object') { noteFault('owrx', 'bad-json', new Error('not an object')); return; }
+    guard('owrx', msgKind(json), () => this.onJson(json));
+  }
+
+  private onJson(json: any): void {
     switch (json.type) {
       case 'config':   this.onConfig(json.value || {}); break;
       case 'profiles': this.onProfiles(json.value || []); break;

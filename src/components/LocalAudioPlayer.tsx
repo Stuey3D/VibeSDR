@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { decodeVibeAdpcmFrame } from '../services/imaAdpcm';
 import { noteAudioEvent } from '../services/audioPathLog';
+import { guard, noteFault } from '../services/faultLog';
 
 // VibeSDR V4 — local-hardware / RTL-TCP audio.
 //
@@ -270,9 +271,19 @@ export default function LocalAudioPlayer(
       noteAudioEvent('js socket OPEN');
       if (!closed && assertTune) sock.send(tuneJson(f, m, bl, bh));
     };
+    /* ★★★ ONE BAD FRAME COSTS ONE FRAME. A truncated ADPCM frame or a header the DataView cannot
+     *  read threw straight out of onmessage; now it is dropped, counted and logged (faultLog) and
+     *  the next frame plays. Audio is the one thing that must survive anything. */
     sock.onmessage = (e) => {
-      if (closed || !(e.data instanceof ArrayBuffer)) return;
-      const buf = e.data as ArrayBuffer;
+      if (closed) return;
+      if (!(e.data instanceof ArrayBuffer)) {
+        noteFault('local-audio', 'text-frame', new Error('unexpected non-binary frame'), typeof e.data);
+        return;
+      }
+      const frame = e.data as ArrayBuffer;
+      guard('local-audio', 'frame', () => onAudioFrame(frame), `len=${frame.byteLength}`);
+    };
+    const onAudioFrame = (buf: ArrayBuffer) => {
       onBytes?.(buf.byteLength);   // count BEFORE any early return — every byte crossed the link
       if (buf.byteLength <= 6) return;
       const dv = new DataView(buf);

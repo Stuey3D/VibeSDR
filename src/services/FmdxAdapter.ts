@@ -18,6 +18,7 @@ import type {
 import { NativeModules } from 'react-native';
 import { FMDX_TUNE_LO, FMDX_TUNE_HI } from '../constants/fmBand';
 import { USER_AGENT } from '../constants/version';
+import { guard, guardJson, noteFault } from './faultLog';
 
 const Vibe = NativeModules.VibePowerModule as {
   startFmdxAudio?: (baseUrl: string) => void;
@@ -124,10 +125,18 @@ export class FmdxAdapter implements SDRBackend {
       }
       onOpen?.();
     };
+    /* ★★ The parse and the handler used to share one `catch {}` labelled "keepalive", so a frame
+     *  that onFrame choked on vanished as if it were a keepalive. Now only text that is not JSON-
+     *  shaped is treated as a keepalive; a JSON frame that will not parse, or one the handler
+     *  throws on, is dropped, counted and logged (faultLog) and the next frame is handled. */
     ws.onmessage = (e) => {
       if (typeof e.data !== 'string') return;   // server pushes JSON text
-      try { this.onFrame(JSON.parse(e.data)); }
-      catch { /* non-JSON keepalive — ignore */ }
+      const t = e.data.trimStart();
+      if (!t.startsWith('{') && !t.startsWith('[')) return;   // non-JSON keepalive
+      let frame: any;
+      try { frame = JSON.parse(t); }
+      catch (err) { noteFault('fmdx', 'bad-json', err, `len=${t.length}`); return; }
+      guard('fmdx', 'frame', () => this.onFrame(frame));
     };
     ws.onerror = () => { onErr?.(new Error('FM-DX WebSocket error')); };
     ws.onclose = (ev) => {
@@ -187,15 +196,14 @@ export class FmdxAdapter implements SDRBackend {
     this.chatWs = cw;
     cw.onmessage = (e) => {
       if (typeof e.data !== 'string') return;
-      try {
-        const j = JSON.parse(e.data);
-        // The server sends a 'clientIp' control frame + chat frames {nickname,
-        // message, time, admin?, history?}. Render only ones with a message.
+      // The server sends a 'clientIp' control frame + chat frames {nickname,
+      // message, time, admin?, history?}. Render only ones with a message.
+      guardJson('fmdx-chat', e.data, (j) => {
         if (j?.type === 'clientIp') return;
         if (j?.message != null) {
           this.cb.onChatMessage?.(String(j.nickname ?? '?'), String(j.message));
         }
-      } catch { /* ignore */ }
+      });
     };
     cw.onclose = () => { this.chatWs = null; };
     cw.onerror = () => {};

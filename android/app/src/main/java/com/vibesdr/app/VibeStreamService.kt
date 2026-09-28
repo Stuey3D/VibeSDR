@@ -837,6 +837,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     lastLocalTune?.let { webSocket.send(it) }
                 }
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    try {
                     // ★★ COUNT EVERY BYTE THAT CROSSED THE LINK — BEFORE any early return, because
                     //    a frame we drop still cost bandwidth. Without this the connection readout
                     //    is SPECTRUM ONLY: it once showed 12 KB/s while the link carried 198, and
@@ -874,8 +875,14 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     val format = b[1].toInt() and 0xFF
                     val out: Triple<Int, Int, ShortArray>? = when (format) {
                         1, 2 -> {
-                            val count = (b[6].toInt() and 0xFF) or ((b[7].toInt() and 0xFF) shl 8)
-                            if (count <= 0) null else {
+                            val count = if (b.size >= 8) (b[6].toInt() and 0xFF) or ((b[7].toInt() and 0xFF) shl 8) else 0
+                            // ★ The header's sample count must fit the bytes that actually arrived —
+                            //   a truncated frame is dropped and counted, never read past its end.
+                            if (count > 0 && b.size < 8 + 4 + (count + 1) / 2) {
+                                noteBadAudioFrame("local", IllegalArgumentException(
+                                    "truncated ADPCM frame: count=$count size=${b.size}"))
+                                null
+                            } else if (count <= 0) null else {
                                 val nb = (count + 1) / 2
                                 val mid = adpcmDecodeBlock(b, 8, count)
                                 if (format == 2 && b.size >= 8 + 4 + nb + 4 + nb) {
@@ -937,11 +944,34 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     lastPacketAt = SystemClock.elapsedRealtime()
                     packetCount++
                     extQueue.offer(out)  // drop when full
+                    } catch (e: Exception) {
+                        // ★★★ ONE BAD FRAME COSTS ONE FRAME. An exception here is thrown on OkHttp's
+                        //     reader thread, where it is UNCAUGHT — and an uncaught exception on any
+                        //     thread kills the whole Android process. A truncated ADPCM frame did
+                        //     exactly that (b[7] on a 7-byte frame; a count larger than its data).
+                        //     Now it is dropped, counted and logged at most every 10 s.
+                        noteBadAudioFrame("local", e)
+                    }
                 }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.w(TAG, "local audio WS failure: ${t.message}")
                 }
             })
+    }
+
+    // ── Contained bad frames ────────────────────────────────────────────────
+    // ★★ Counted per source, logged at most once per 10 s per source, so a flood of bad frames can
+    //    neither crash the process (see the catch in the local audio onMessage) nor drown logcat.
+    private val badFrameCounts = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>()
+    private val badFrameLoggedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private fun noteBadAudioFrame(source: String, e: Throwable) {
+        val n = badFrameCounts.getOrPut(source) { java.util.concurrent.atomic.AtomicLong() }.incrementAndGet()
+        val now = SystemClock.elapsedRealtime()
+        val last = badFrameLoggedAt[source] ?: 0L
+        if (last == 0L || now - last >= 10_000) {
+            badFrameLoggedAt[source] = now
+            Log.e(TAG, "[fault] $source audio: dropped bad frame ($n total): ${e.message}", e)
+        }
     }
 
     // IMA-ADPCM ('kiwi' flavour) — decode one self-seeded VibeServer block:

@@ -53,6 +53,7 @@ import { VIBEMAP_JS } from '../generated/vibemapSource';
  *     actually opened, so carrying them costs install size and not memory.
  *     Regenerate with: node scripts/gen-mapdata-source.mjs */
 import { MAPDATA_FILES } from '../generated/mapdataBundle';
+import { noteFault } from '../services/faultLog';
 
 export type MapKind = 'hfdl' | 'digi' | 'cw';
 
@@ -1254,7 +1255,12 @@ if(KIND==='digi'||KIND==='cw'){
       try{
         var m=JSON.parse(e.data);
         if((m.type==='digital_spot'&&!isCW)||(m.type==='cw_spot'&&isCW))ingest(m.data||{});
-      }catch(x){}
+      }catch(x){
+        // One bad spot is dropped, never silently: counted, and logged at most every 10 s.
+        window.__badSpots=(window.__badSpots||0)+1;
+        var nw=Date.now();if(!window.__badSpotLog||nw-window.__badSpotLog>10000){window.__badSpotLog=nw;
+          console.error('[fault] map dxcluster: dropped bad spot ('+window.__badSpots+' total)',x);}
+      }
     };
     ws.onclose=function(){setTimeout(connect,3000);};
   }
@@ -1458,7 +1464,8 @@ export default function MapOverlay(
              *  bare-string messages is JSON; an unparseable message is ignored rather than thrown,
              *  because a map that stops talking is worse than a map missing one layer. */
             let m: { t?: string; id?: string; file?: string } | null = null;
-            try { m = JSON.parse(d); } catch { return; }
+            try { m = JSON.parse(d); }
+            catch (err) { noteFault('map-webview', 'bad-json', err, `len=${String(d).length}`); return; }
             /* ★★★ THE INSTANCE FETCH, DONE HERE INSTEAD OF IN THE PAGE. See hostFetch: RN is not
              *  bound by browser CORS, so this reaches an UberSDR that sends no CORS headers —
              *  which is what the instance-origin trick was for, and it frees the page to live on

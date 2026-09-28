@@ -21,6 +21,7 @@ import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { setSessionTeardown } from '../services/crashGuard';
+import { guardJson } from '../services/faultLog';
 import {
   Alert,
   AppState,
@@ -4326,10 +4327,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       .then((v) => { sysVolRef.current = v; watchProvider.setVolume(v); })
       .catch(() => {});
     // Server-NR protocol messages arrive as text on the native audio WS
+    // ★ Guarded per message (faultLog): a bad one is dropped, counted and logged — never silent.
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
-      let msg: { type?: string; info?: Record<string, unknown> };
-      try { msg = JSON.parse(e.text); } catch { return; }
-      if (!msg || typeof msg.type !== 'string') return;
+      guardJson('native-audio', String(e?.text ?? ''), (raw) => onAudioText(raw));
+    });
+    const onAudioText = (raw: Record<string, unknown>) => {
+      const msg = raw as { type?: string; info?: Record<string, unknown> };
+      if (typeof msg.type !== 'string') return;
       const info = (msg.info ?? msg) as Record<string, unknown>;
       if (msg.type === 'dsp_filters') {
         dspSeen.current = true;
@@ -4357,7 +4361,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setDspError(String(info.error ?? 'DSP error'));
         setTimeout(() => setDspError(null), 4000);
       }
-    });
+    };
     return () => {
       sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subWs.remove();
       subCar.remove(); subCarTune.remove(); subVoice.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();

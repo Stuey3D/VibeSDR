@@ -45,6 +45,7 @@
  */
 
 import { USER_AGENT } from '../constants/version';
+import { guard, guardJson } from './faultLog';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -389,14 +390,16 @@ export class DecoderClient {
       if (this.spotsKind) this._subscribeSpots();
       if (this.chatSubscribed) this._chatSubscribe();
     };
+    /* ★★ GUARDED PER MESSAGE (faultLog). The JSON branch was a single `catch {}` — a bad spot or
+     *  chat frame vanished uncounted — and the binary branch was not guarded at all. */
     ws.onmessage = (e) => {
       if (e.data instanceof ArrayBuffer) {
-        this._handleBin(new Uint8Array(e.data));
+        const u8 = new Uint8Array(e.data);
+        guard('decoder', 'binary', () => this._handleBin(u8), `len=${u8.length}`);
       }
       // JSON traffic on this WS (DX spots, attach acks) — acks update status
       else if (typeof e.data === 'string') {
-        try {
-          const m = JSON.parse(e.data);
+        guardJson('decoder', e.data, (m: any) => {
           if (m.type === 'audio_extension_attached') this.cb.onStatus('attached');
           else if (m.type === 'audio_extension_error') {
             // Server field is `error` (audio_extension_manager.go sendErrorSafe)
@@ -474,7 +477,7 @@ export class DecoderClient {
           } else if (m.type === 'chat_error') {
             this.cb.onChatError?.(String(m.error ?? 'chat error'));
           }
-        } catch {}
+        });
       }
     };
     ws.onclose = () => {
@@ -640,7 +643,7 @@ export class DecoderClient {
         if (u8.length < 13) return;
         const jlen = v.getUint32(9, false);
         if (u8.length < 13 + jlen) return;
-        try {
+        guard('decoder', 'segments', () => {
           const segs = JSON.parse(utf8(u8.subarray(13, 13 + jlen)));
           if (Array.isArray(segs)) {
             for (const seg of segs) {
@@ -648,7 +651,7 @@ export class DecoderClient {
             }
             this.cb.onDot('active');
           }
-        } catch {}
+        }, `jlen=${jlen}`);
       }
     }
   }

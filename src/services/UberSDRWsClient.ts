@@ -50,6 +50,7 @@ import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { noteUnhandled, noteDecision } from './protocolLog';
+import { guard, guardJson, noteFault, msgKind } from './faultLog';
 import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './linkManager';
 
@@ -1256,14 +1257,19 @@ export abstract class UberSDRWsClient {
       if (specMsgCount <= 3) {
         this.dbg(`SpecMsg#${specMsgCount} binary=${e.data instanceof ArrayBuffer} len=${e.data instanceof ArrayBuffer ? e.data.byteLength : (e.data as string).length}`);
       }
+      /* ★★★ ONE BAD MESSAGE COSTS ONE MESSAGE. The text branch used to be `catch {}` — a bad RDS
+       *  packet vanished uncounted — and the binary branch was not guarded at all, so a truncated
+       *  frame threw out of onmessage. Now each message is parsed and dispatched under its own
+       *  guard (services/faultLog.ts): dropped, counted per type, logged rate-limited, and listed
+       *  in Diagnostics. The socket, the audio and every other type carry on. */
       if (e.data instanceof ArrayBuffer) {
         this.specBytes += e.data.byteLength;   // for the connection-meter data-rate readout
-        this._parseBinaryFrame(e.data);
+        const buf = e.data;
+        guard('uber-spec', 'binary', () => this._parseBinaryFrame(buf), `len=${buf.byteLength}`);
       } else if (typeof e.data === 'string') {
-        try {
-          const msg = JSON.parse(e.data) as Record<string, unknown>;
-          this._handleSpectrumMessage(msg);
-        } catch {}
+        guardJson('uber-spec', e.data, (msg) => this._handleSpectrumMessage(msg));
+      } else {
+        noteFault('uber-spec', 'unknown-frame', new Error('neither text nor ArrayBuffer'), typeof e.data);
       }
     };
 
@@ -1345,21 +1351,30 @@ export abstract class UberSDRWsClient {
     // gzipped JSON (server writeJSONCompressed) — NOT text frames. The web
     // client does the same gzip-magic sniff before DecompressionStream.
     if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-      try {
-        const msg = JSON.parse(ungzip(bytes, { to: 'string' })) as Record<string, unknown>;
-        this._handleSpectrumMessage(msg);
-      } catch (e) {
-        this.dbg('gzip JSON frame parse failed: ' + String(e));
-      }
+      // ★ Inflate and parse under one guard, dispatch under the message's own type — so a corrupt
+      //   gzip frame and a handler that chokes on a well-formed message are counted as what they are.
+      let msg: Record<string, unknown> | null = null;
+      if (!guard('uber-spec', 'gzip-json', () => {
+        msg = JSON.parse(ungzip(bytes, { to: 'string' })) as Record<string, unknown>;
+      }, `len=${bytes.length}`)) return;
+      const m = msg as Record<string, unknown> | null;
+      if (!m || typeof m !== 'object') { noteFault('uber-spec', 'gzip-json', new Error('not an object')); return; }
+      guard('uber-spec', msgKind(m), () => this._handleSpectrumMessage(m));
       return;
     }
 
-    if (buf.byteLength < 22) { this.dbg('frame too short: ' + buf.byteLength); return; }
+    if (buf.byteLength < 22) {
+      noteFault('uber-spec', 'short-frame', new Error('frame too short'), `len=${buf.byteLength}`);
+      return;
+    }
 
     const magic = view.getUint32(0, true);
     if (magic !== SPEC_MAGIC) {
-      this.dbg('bad magic: 0x' + magic.toString(16) + ' expected 0x' + SPEC_MAGIC.toString(16) +
-        ' bytes=' + Array.from(bytes.slice(0,4)).map(b=>b.toString(16)).join(','));
+      const why = 'bad magic: 0x' + magic.toString(16) + ' expected 0x' + SPEC_MAGIC.toString(16) +
+        ' bytes=' + Array.from(bytes.slice(0,4)).map(b=>b.toString(16)).join(',');
+      this.dbg(why);
+      // ★ dbg() goes nowhere in a release build — count it where Diagnostics can see it.
+      noteFault('uber-spec', 'bad-magic', new Error(why), `len=${buf.byteLength}`);
       return;
     }
 
@@ -1372,11 +1387,25 @@ export abstract class UberSDRWsClient {
      *  VibeServer at 1024–4096 bins); slicing the body allocated a fresh 1–4 KB ArrayBuffer per
      *  frame for a view that can index the original at an offset. Float32 bodies still need the
      *  copy: offset 22 is not 4-byte aligned and a Float32Array view would throw. */
+    /* ★★ A FULL FRAME WITH NO BINS WOULD RESIZE THE SPECTRUM TO NOTHING — a header-only frame (a
+     *  truncation exactly at the header) must be dropped, not applied, or one bad frame blanks the
+     *  display until the next full one. Likewise a float body that is not a whole number of floats. */
+    if ((flags === FLAG_FULL_U8 || flags === FLAG_FULL_F32) && buf.byteLength === 22) {
+      noteFault('uber-spec', 'empty-frame', new Error('full frame with no bins'), `flags=${flags}`);
+      return;
+    }
     if (flags === FLAG_FULL_U8) { this._applyFullU8(new Uint8Array(buf, 22), frequency); return; }
     const body = buf.slice(22);
-    if (flags === FLAG_FULL_F32)  { this._applyFull(new Float32Array(body), frequency); }
+    if (flags === FLAG_FULL_F32) {
+      if (body.byteLength % 4) {
+        noteFault('uber-spec', 'short-frame', new Error('float body not a multiple of 4'), `len=${buf.byteLength}`);
+        return;
+      }
+      this._applyFull(new Float32Array(body), frequency);
+    }
     else if (flags === FLAG_DELTA_F32) { this._applyDeltaF32(body, frequency); }
     else if (flags === FLAG_DELTA_U8)  { this._applyDeltaU8(body, frequency); }
+    else noteFault('uber-spec', 'unknown-flags', new Error('unknown spectrum frame flags'), `flags=${flags}`);
   }
 
   private _applyFull(floats: Float32Array, frequency: number) {
