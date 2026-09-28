@@ -133,6 +133,7 @@ import DecoderPanel,
   { type DecoderType } from '../components/DecoderPanel';
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
+import PanelBoundary from '../components/PanelBoundary';
 import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
@@ -8958,7 +8959,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View style={[styles.radioPickBackdrop, { paddingTop: insets.top + 46 }]}>
           {/* ★ The receiver's last day behind the list — the web landing page's backdrop. Sized
               to the screen; absent silently on a server without history. */}
+          <PanelBoundary name="Door spectrogram">
           <DoorSpectrogram base={baseUrl} width={screenW} height={rootH || screenH} />
+          </PanelBoundary>
           {/* ★★★ THE WAY OUT. This screen covers the whole app and nothing on it went back, so a
               listener who opened the wrong server was stuck with the system gesture (or nothing at
               all on Android's gesture nav) — on the one screen where changing your mind is the
@@ -9106,7 +9109,9 @@ export default function SDRScreen({ route, navigation }: Props) {
               </Pressable>
             ); })}
             {/* ★ Predicted vs actual band conditions and where the receiver is — the web's block. */}
+            <PanelBoundary name="Band conditions">
             <DoorConditions base={baseUrl} />
+            </PanelBoundary>
           </ScrollView>
 
           {/* ── ADMIN, BENEATH THE RADIOS ────────────────────────────────────────────────
@@ -9199,6 +9204,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Waterfall — fills screen below the status bar / Dynamic Island so the
           band plan strip is never hidden under the notch */}
       <View style={{ marginTop: insets.top }}>
+      <PanelBoundary name="Spectrum" autoRetry>
       <WaterfallView
         frameSink={wfFrameSink}
         binCount={status.binCount}
@@ -9272,9 +9278,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         centerMarkerHz={localRf?.rf ?? status.centerHz}
         showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
       />
+      </PanelBoundary>
       </View>
 
       {/* Spec ratio overlay — floats above pill */}
+      <PanelBoundary name="Spectrum size" onClose={() => setRatioOverlayOpen(false)} resetKey={ratioOverlayOpen}>
       <SpecRatioOverlay
         visible={ratioOverlayOpen}
         isLandscape={isLandscape}
@@ -9284,6 +9292,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onChange={(p, l) => { setSpecRatioPortrait(p); setSpecRatioLandscape(l); }}
         onClose={() => setRatioOverlayOpen(false)}
       />
+      </PanelBoundary>
       {/* Decoder panel needs vertical space phone landscape doesn't have (skin
           parity: panel is portrait-only) — decoder keeps running, banner
           tells the user where it went. Tablets (iPad) have the room, so the
@@ -9360,6 +9369,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           </Text>
         </View>
       ) : (
+        <PanelBoundary name="Decoder" onClose={dismissDecoderPanel}>
         <DecoderPanel
           activeDecoder={activeDecoder}
           decoderText={decoderText}
@@ -9405,6 +9415,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           dabSpeed={dabSpeed}
           onDabSpeed={onDabSpeed}
         />
+        </PanelBoundary>
       )}
 
       {/* Chat rotate hint — chat is portrait-only, button stays for unread */}
@@ -9592,6 +9603,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           hides restricted receivers there so this should never be reachable — this is the belt to
           that braces, and it keeps react-native-webview out of the tvOS render path entirely. */}
       {compatUrl && !IS_TV && (
+        <PanelBoundary name="Web view">
         <BrowserOverlay
           url={compatUrl}
           topInset={insets.top}
@@ -9599,6 +9611,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           backLabel="← VibeSDR"
           onClose={() => { setCompatUrl(null); navigation.goBack(); }}
         />
+        </PanelBoundary>
       )}
 
       {/* Connection to an UberSDR instance dropped (e.g. it rebooted). It auto-
@@ -9727,6 +9740,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setPillBottom((rootH > 0 ? rootH : screenH) - y);
         }}
       >
+        <PanelBoundary name="Controls" autoRetry>
         <ControlsBar
           srvTzOffsetMin={srvTz.offsetMin}
           srvTzAbbr={srvTz.abbr}
@@ -9797,6 +9811,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           //    is the "never offer a control whose every use is a no-op" rule, broken quietly.
           chatDisabled={isKiwi || (isVibeServer && !sharedDial)}
         />
+        </PanelBoundary>
       </View>}
 
       {/* Servers chip — the discoverable route back to the instance list (§brief).
@@ -9864,7 +9879,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View pointerEvents="none"
               onLayout={(e) => setHealthPillH(Math.round(e.nativeEvent.layout.height))}
               style={[styles.rxHealth, { top: rightStackTop, right: rightInset }]}>
+          <PanelBoundary name="Health">
           <HealthPill health={health} />
+          </PanelBoundary>
         </View>
       )}
 
@@ -9961,6 +9978,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {!controlsHidden && (
+        <PanelBoundary name="Servers">
         <ServersChip
           anchorRef={tourRef('serversChip')}
           top={insets.top + 46}
@@ -9976,6 +9994,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           closeToken={serversCloseToken}
           onExpandedChange={setServersOpen}
         />
+        </PanelBoundary>
       )}
 
       {/* ★★ THE SESSION COUNTDOWN, FULL SIZE. It existed only as a ⏳m:ss squeezed beside the
@@ -9991,6 +10010,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           vertical space landscape does not have, and the rotate banner below says where it
           went. A tablet has the room. */}
       {advRdsOpen && status.mode === 'wfm' && (!isLandscape || isTablet) && (
+        <PanelBoundary name="Advanced RDS" onClose={() => setAdvRdsOpen(false)}>
         <AdvRdsPanel
           bus={advRdsBus}
           ps={liveStation.name} rt={liveStation.text} pi={liveStation.pi}
@@ -10008,6 +10028,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClose={() => setAdvRdsOpen(false)}
         />
+        </PanelBoundary>
       )}
       {/* ★★★ THE DAB WINDOW. Portrait-only on a phone for the same reason as the analyser above:
           a service list plus forty measured rows needs vertical space landscape has not got.
@@ -10015,6 +10036,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           panel carries both doors. Closing the box leaves DAB decoding and the audio playing;
           EXIT DAB (and the DAB button in the demodulator sheet) leaves the mode. */}
       {dabBoxOpen && (!isLandscape || isTablet) && (
+        <PanelBoundary name="DAB" onClose={() => setDabBoxOpen(false)}>
         <DabPanel
           d={dabState}
           error={dabError}
@@ -10032,6 +10054,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */
           base={connectBase.replace(/\/+$/, '')}
         />
+        </PanelBoundary>
       )}
       {/* ★ NB the panel itself still clears the NOTICE pills — it takes noticeStackH in its
           bottomOffset. Hiding the VTS bar removes one thing under it, not all of them: a
@@ -10045,14 +10068,19 @@ export default function SDRScreen({ route, navigation }: Props) {
           the decoder box, the powersave pill, the idle-terms notice — would keep a gap for a bar
           that is not there. See the vtsBarH rule further up. */}
       {!controlsHidden && !advRdsOpen && (
+        <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
                 serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH} />
+        </PanelBoundary>
       )}
 
       {/* Floating CENTRE ON VFO — unlocked + VFO off-screen (BRIEF §5.8) */}
+      <PanelBoundary name="Centre button" resetKey={vfoOffscreen && !controlsHidden}>
       <CenterVfoButton visible={vfoOffscreen && !controlsHidden} bottom={pillBottom + 56} onPress={onCentreVfo} />
+      </PanelBoundary>
 
       {/* Menu sheet */}
+      <PanelBoundary name="Menu" onClose={() => setMenuOpen(false)} resetKey={menuOpen}>
       <MenuSheet
         visible={menuOpen}
         serverType={route.params.serverType ?? 'ubersdr'}
@@ -10241,6 +10269,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
         onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
       />
+      </PanelBoundary>
 
       {/* ★ THE SERVER TURNED US AWAY — TIME UP or PLEASE WAIT, matching the web
           client word for word. Not dismissible by tapping outside: the session
@@ -10305,19 +10334,26 @@ export default function SDRScreen({ route, navigation }: Props) {
       </Modal>
 
       {/* About VibeSDR — V2 changes, credits, GPL-3.0 */}
+      <PanelBoundary name="About" onClose={() => setAboutOpen(false)} resetKey={aboutOpen}>
       <AboutOverlay visible={aboutOpen} onClose={() => setAboutOpen(false)} />
+      </PanelBoundary>
+      <PanelBoundary name="Keyboard help" onClose={() => setKeyHelpOpen(false)} resetKey={keyHelpOpen}>
       <KeyboardShortcuts visible={keyHelpOpen} onClose={() => setKeyHelpOpen(false)} />
+      </PanelBoundary>
       <FkaSplash onOpenHelp={() => setKeyHelpOpen(true)} />
+      <PanelBoundary name="Recordings" onClose={() => setRecordingsOpen(false)} resetKey={recordingsOpen}>
       <RecordingsOverlay
         visible={recordingsOpen}
         onClose={() => setRecordingsOpen(false)}
         onActiveChange={onRecordingsActive}
       />
+      </PanelBoundary>
 
       {/* First-run guided tour (dismissable) — renders nothing until active */}
       {sdrTour.overlay}
 
       {/* Step picker — bottom sheet */}
+      <PanelBoundary name="Step picker" onClose={() => setStepOpen(false)} resetKey={stepOpen}>
       <StepPicker
         visible={stepOpen}
         currentStep={step}
@@ -10325,8 +10361,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onSelect={hz => { setStep(hz); }}
         onClose={() => setStepOpen(false)}
       />
+      </PanelBoundary>
 
       {/* Mode selector */}
+      <PanelBoundary name="Mode selector" onClose={() => setModeSelOpen(false)} resetKey={modeSelOpen}>
       <ModeSelector
         visible={modeSelOpen}
         current={status.mode}
@@ -10397,8 +10435,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           onSttToggle: () => onDecToggle('whisper'),
         } : null}
       />
+      </PanelBoundary>
 
       {/* Audio sheet — NR/NB/squelch/notch/REC + server NR */}
+      <PanelBoundary name="Audio settings" onClose={() => setAudioSheetOpen(false)} resetKey={audioSheetOpen}>
       <AudioSheet
         visible={audioSheetOpen}
         onClose={() => setAudioSheetOpen(false)}
@@ -10461,9 +10501,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDspFilter={onServerDspFilter}
         onServerDspParam={onServerDspParam}
       />
+      </PanelBoundary>
 
       {/* v4 local hardware: RTL-SDR controls submenu */}
       {isLocal ? (
+        <PanelBoundary name="Hardware" onClose={() => setHwOpen(false)} resetKey={hwOpen}>
         <LocalHardwarePanel
           isSpy={isSpy}
           // ★ The ONE gate for the whole feature — see canConvert. A VibeServer reaches this
@@ -10609,23 +10651,24 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  offered a position it cannot honour (the web's hwHasAutoDs rule). */
           onAutoDs={!adoptHw || hwHasAutoDs ? onHwAutoDs : undefined}
         />
+        </PanelBoundary>
       ) : null}
 
       {/* Server map overlay (HFDL / Digital / CW — full-screen WebView Leaflet) */}
       {/* ★ NOT ON tvOS — MapOverlay is Leaflet in a WebView and there is no WKWebView on the
           platform. Gated at the RENDER so the component (and react-native-webview with it) is
           never mounted there. See src/utils/tv.ts and briefs/BRIEF-tvos-app.md §5b. */}
-      {!IS_TV && <MapOverlay
+      {!IS_TV && <PanelBoundary name="Map" onClose={() => setMapKind(null)} resetKey={mapKind !== null}><MapOverlay
         visible={mapKind !== null}
         kind={mapKind}
         baseUrl={baseUrl}
         sessionUuid={sessionUuid}
         onClose={() => setMapKind(null)}
-      />}
+      /></PanelBoundary>}
 
       {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),
           receiver position from device GPS / Kiwi gps / a picked city. */}
-      {!IS_TV && <MapOverlay
+      {!IS_TV && <PanelBoundary name="Map" onClose={() => setLocalMapOpen(false)} resetKey={localMapOpen}><MapOverlay
         visible={localMapOpen}
         kind="digi"
         local
@@ -10640,8 +10683,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         disconnected={serverLost || serverBusy || connTimedOut}
         onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
         onRetry={() => fullReconnect()}
-      />}
+      /></PanelBoundary>}
 
+      <PanelBoundary name="City picker" onClose={() => setCityPickerOpen(false)} resetKey={cityPickerOpen}>
       <CityPickerModal
         visible={cityPickerOpen}
         onClose={() => setCityPickerOpen(false)}
@@ -10651,6 +10695,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setCityPickerOpen(false);
         }}
       />
+      </PanelBoundary>
 
       {/* Admin pages — in-app browser with ← SDR bar */}
       {/* ★ NOT ON tvOS — no WKWebView. Also the route Kiwi compatibility mode uses, which is why
@@ -10679,6 +10724,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       />}
 
       {/* Frequency modal */}
+      <PanelBoundary name="Frequency card" onClose={() => { setFreqModalOpen(false); setFreqModalDab(false); }} resetKey={freqModalOpen}>
       <FreqModal
         visible={freqModalOpen}
         /* ★ The card is inside a Modal, where useSafeAreaInsets reads 0 — measure out here and
@@ -10728,8 +10774,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onImportToServer={adminAuthQ ? onImportToServer : undefined}
         onPickImportFileToServer={adminAuthQ ? onPickImportFileToServer : undefined}
       />
+      </PanelBoundary>
 
       {/* Chat drawer */}
+      <PanelBoundary name="Chat" onClose={closeChat} resetKey={chatOpen}>
       <ChatDrawer
         visible={chatOpen}
         messages={chatMessages}
@@ -10754,8 +10802,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onSay={(id: string) => client.current?.say?.(id)}
         dialLine={dialState ? dialSummary(dialState) : undefined}
       />
+      </PanelBoundary>
 
       {/* Bypass password — rate-limit recovery (replaces the session) */}
+      <PanelBoundary name="Password" resetKey={pwPrompt}>
       <PasswordModal
         visible={pwPrompt}
         serverUrl={baseUrl}
@@ -10765,9 +10815,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}
         onCancel={() => { setPwPrompt(false); navigation.goBack(); }}
       />
+      </PanelBoundary>
 
       {/* Audio player (renderless) — held until the saved tune is restored
           so the audio WS opens on the CORRECT freq/mode (no race) */}
+      <PanelBoundary name="Audio" autoRetry tail="the sound is being restarted">
       <AudioPlayer
         // v3: the native UberSDR Opus engine only speaks UberSDR. OWRX/Kiwi audio
         // moves into their own native engines in a later phase — until then the
@@ -10799,6 +10851,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         //     restart the engine so the new socket arrives behind a session that exists.
         onStuck={onAudioStuck}
       />
+      </PanelBoundary>
       {/* ★ Record which audio component is mounted and WHY, for the diagnostics report. Both of
           these are gated, and a gate that closes produces no socket at all — which the server
           cannot see and therefore cannot report. See audioPathLog.ts. */}
@@ -10817,6 +10870,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       })()}
       {/* v4 local hardware: audio from the on-device shim's /ws/audio (PCM) */}
       {route.params.isLocal && route.params.localPort != null ? (
+        <PanelBoundary name="Audio" autoRetry tail="the sound is being restarted">
         <LocalAudioPlayer
           port={!refusal && tuneLoaded ? route.params.localPort : null}   // see the note on AudioPlayer
           /* ★★★ HARDWARE Hz, BECAUSE THIS TALKS TO THE RADIO WITHOUT GOING THROUGH SDRBackend.
@@ -10901,6 +10955,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           }}
           raw={rawAudio && rawAudioPolicy === 'choice'}
         />
+        </PanelBoundary>
       ) : null}
     </View>
   );
