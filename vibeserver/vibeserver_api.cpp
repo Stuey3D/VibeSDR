@@ -12,6 +12,7 @@
 #include "airspy_source.h"
 #include "radios.h"
 #include "directory.h"
+#include "mapgl_curl.h"
 
 #ifdef VIBE_HAVE_LIBRTLSDR
 #include <rtl-sdr.h>
@@ -130,6 +131,10 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
             LocalSdrShim::instance().setSpectrogramPath(dir + "/spectrogram.bin");
             geoip::setDir(dir);
             asndb::setDir(dir);
+            // ★ The GPU map's High Detail pack: where it lives and how it is fetched — Simple mode had
+            //   neither, so its admin page could only say the download was unavailable (2026-09-28).
+            vibemapgl::setDataDir(dir + "/mapgl");
+            vibemapgl::installCurlDownloader();
         }
         geoip::load();
         asndb::load();

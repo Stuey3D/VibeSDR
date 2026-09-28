@@ -71,6 +71,7 @@
 #include "asndb.h"
 #include "proc.h"         // vibeproc::run — the High Detail Maps download (curl, no shell)
 #include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
+#include "mapgl_curl.h"   // the High Detail Maps downloader (shared with Mac Simple mode)
 
 // ★ Declared out here on purpose: the anonymous namespace below closes long before
 //   reapRadios() is defined, so a declaration inside it would be a DIFFERENT function
@@ -3151,33 +3152,8 @@ int main(int argc, char** argv) {
         if (b.empty()) std::printf("VibeServer: no GPU map files installed — the maps fall back to the old renderer.\n");
         else           std::printf("VibeServer: GPU map files at %s\n", b.c_str());
     }
-    // ★ curl, as geoip/eibi do: the daemon has no TLS stack of its own. -L because a GitHub
-    //   release asset is a redirect. No --max-time (169 MB on a slow link is legitimately long);
-    //   a STALLED transfer is cut off instead: under 1 KB/s for two minutes.
-    // ★ Progress is the size of the .part file, polled — curl writes it as it goes.
-    vibemapgl::setDownloader([](const std::string& url, const std::string& dest,
-                                std::function<void(int64_t, int64_t)> progress) -> bool {
-        std::atomic<bool> done{false};
-        std::thread poll([&]() {
-            while (!done.load()) {
-                struct stat sb{};
-                if (::stat(dest.c_str(), &sb) == 0) progress((int64_t)sb.st_size, vibemapgl::DETAIL_BYTES);
-                std::this_thread::sleep_for(std::chrono::milliseconds(250));
-            }
-        });
-        const int rc = vibeproc::run({"curl", "-fsSL", "--retry", "3", "--connect-timeout", "30",
-                                      "--speed-limit", "1024", "--speed-time", "120",
-                                      "-o", dest, url});
-        done = true;
-        poll.join();
-        struct stat sb{};
-        if (::stat(dest.c_str(), &sb) == 0) progress((int64_t)sb.st_size, vibemapgl::DETAIL_BYTES);
-        if (rc != 0) {
-            std::fprintf(stderr, "VibeServer: High Detail Maps download: curl exited %d\n", rc);
-            return false;
-        }
-        return true;
-    });
+    // ★ The desktop downloader (curl) — shared with Mac Simple mode, see mapgl_curl.h.
+    vibemapgl::installCurlDownloader();
     asndb::load();
     LocalSdrShim::setAsnHandler([](const std::string& ip, uint32_t& asn, std::string& name) {
         return asndb::lookup(ip, asn, name);
