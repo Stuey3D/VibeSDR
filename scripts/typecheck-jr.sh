@@ -28,4 +28,17 @@ if [ -n "$OUT" ]; then
   echo "FAILED — fix these before triggering a build."
   exit 1
 fi
-echo "Jr type-checks clean (watchOS ${TARGET}, with the bridging header)"
+# ★★★ AND EVERY FILE MUST BE IN THE XCODE PROJECT. The check above compiles the FOLDER; Xcode Cloud
+#     compiles the PROJECT. AudioSelfHeal.swift (2026-09-28) was in the folder and never added to
+#     Jr's target, so this said clean while Jr 132 and 133 failed "Cannot find 'AudioSelfHeal' in
+#     scope". A file only the folder knows about is a file only this script compiles.
+MISSING=""
+for f in spike/WristSDR/WristSDR/*.swift; do
+  b=$(basename "$f")
+  grep -qF "/* $b in Sources */" spike/WristSDR/WristSDR.xcodeproj/project.pbxproj || MISSING="$MISSING $b"
+done
+if [ -n "$MISSING" ]; then
+  echo "FAILED — in the folder but not in Jr's Xcode project (Cloud will not compile them):$MISSING"
+  exit 1
+fi
+echo "Jr type-checks clean (watchOS ${TARGET}, with the bridging header), and every file is in the project"

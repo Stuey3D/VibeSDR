@@ -35,6 +35,7 @@
 		92F20CE6946AA32256E9DA24 /* FmdxMp3Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EEC2B3FFA6441C4C3A46B8F /* FmdxMp3Decoder.swift */; };
 		9C8ACBFE98E4C6CC5D3C3CEC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4FB5962ADE3FED0012F31D5D /* Assets.xcassets */; };
 		A1A2ABD844904D8F302C4914 /* UberClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D43A131B3C936F106D8872A6 /* UberClient.swift */; };
+		AB5E1F0A2C3D4E5F60718294 /* AudioSelfHeal.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB5E1F0A2C3D4E5F60718293 /* AudioSelfHeal.swift */; };
 		AB09236DE493D07D3AD771C2 /* ControlMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0192327755EB9D29ED557A5 /* ControlMenu.swift */; };
 		AC2382A451E5459DE54D634F /* InstancePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3337F8EA18D635A21DF13495 /* InstancePickerView.swift */; };
 		AD5CAC9826C2285975A9606C /* CloudSyncEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF7F043D12176F99913BFB5D /* CloudSyncEngine.swift */; };
@@ -116,6 +117,7 @@
 		D2612D8B2F2F9E65D120DA64 /* libopus.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libopus.a; sourceTree = "<group>"; };
 		D363E607DCD2E02F223F5B09 /* BandPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandPlan.swift; sourceTree = "<group>"; };
 		D43A131B3C936F106D8872A6 /* UberClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UberClient.swift; sourceTree = "<group>"; };
+		AB5E1F0A2C3D4E5F60718293 /* AudioSelfHeal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSelfHeal.swift; sourceTree = "<group>"; };
 		D6772E1A8FFA7DF393020C6B /* ImaAdpcm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImaAdpcm.swift; sourceTree = "<group>"; };
 		DC1001D6D5D78E308A2F855C /* OwrxSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OwrxSocket.swift; sourceTree = "<group>"; };
 		DDA18D942D5BEDA2D586530E /* WatchAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAudio.swift; sourceTree = "<group>"; };
@@ -185,6 +187,7 @@
 				69FF50C437861299AAC27394 /* SignalProcessor.swift */,
 				967BF6CB775E6B40E9E614BA /* SpikeLink.swift */,
 				D43A131B3C936F106D8872A6 /* UberClient.swift */,
+				AB5E1F0A2C3D4E5F60718293 /* AudioSelfHeal.swift */,
 				75E9C61BCE51423C017D58E7 /* VibeMdns.swift */,
 				5C4C0C76743B617E12A64820 /* Vitals.swift */,
 				F4CF2036846CBC9B73EB6B76 /* VolumeControl.swift */,
@@ -370,6 +373,7 @@
 				5E5CDC9F3AF76A4C09A67400 /* SignalProcessor.swift in Sources */,
 				27D890BDD06F36FEC78816AE /* SpikeLink.swift in Sources */,
 				A1A2ABD844904D8F302C4914 /* UberClient.swift in Sources */,
+				AB5E1F0A2C3D4E5F60718294 /* AudioSelfHeal.swift in Sources */,
 				27D69CCA8F02B23C062007B8 /* VibeMdns.swift in Sources */,
 				90E549E2A30949199198FC09 /* Vitals.swift in Sources */,
 				39074027502AA1428ECB7AE2 /* VolumeControl.swift in Sources */,
