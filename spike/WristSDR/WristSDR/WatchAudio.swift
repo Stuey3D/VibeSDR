@@ -823,7 +823,23 @@ final class WatchAudio {
 
   /// Feed one decoded packet. Interleaved Int16 at the server's rate.
   func play(pcm: [Int16], rate: Int32, channels: Int32) {
-    q.async { [weak self] in self?.playLocked(pcm: pcm, rate: rate, channels: channels) }
+    /* ★★★ THE ONE DOOR EVERY CLIENT'S AUDIO COMES THROUGH, SO IT IS WHERE A BAD HEADER STOPS.
+     *  Four clients read a rate and a channel count out of bytes a server sent, and playLocked
+     *  trusted them: channels 0 divides by zero; a rate of 0 makes the resample ratio infinite and
+     *  AVAudioFrameCount(infinity) traps; and 2 channels with an ODD sample count copied one sample
+     *  past the end of the buffer it had sized. Any of those is the app gone, not the packet.
+     *  ★ Refused and counted here (MsgFaults), and the stream goes on — the next packet is judged
+     *    on its own. An odd trailing sample on stereo is trimmed, not refused: the rest is good. */
+    guard channels == 1 || channels == 2 else {
+      MsgFaults.note("audio", "channels", "refused a packet claiming \(channels) channels"); return
+    }
+    guard rate >= 4_000, rate <= 384_000 else {
+      MsgFaults.note("audio", "rate", "refused a packet claiming \(rate) Hz"); return
+    }
+    var pcm = pcm
+    if channels == 2, pcm.count % 2 != 0 { pcm.removeLast() }
+    let p = pcm
+    q.async { [weak self] in self?.playLocked(pcm: p, rate: rate, channels: channels) }
   }
 
   private func playLocked(pcm: [Int16], rate: Int32, channels: Int32) {

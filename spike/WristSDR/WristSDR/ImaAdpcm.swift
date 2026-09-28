@@ -43,7 +43,11 @@ final class ImaAdpcmDecoder {
   /// Kiwi `MSG audio_adpcm_state=<index>,<prev>` / OWRX sync-frame state (owrx keeps `step` stale).
   func setState(index: Int, predictor: Int) {
     self.index = min(max(index, 0), 88)
-    self.predictor = predictor
+    // ★ Clamped to the decoder's own range. The state comes off the wire (Kiwi's
+    //   `audio_adpcm_state=idx,pred` is text, parsed with Int()), and an out-of-range predictor
+    //   made the first `predictor + diff` in decodeNibble OVERFLOW — which in Swift is a trap,
+    //   not a wrap. A bad state costs a click; it must not cost the app.
+    self.predictor = min(max(predictor, clampLo), clampHi)
   }
 
   @inline(__always) func decodeNibble(_ nibble: Int) -> Int {

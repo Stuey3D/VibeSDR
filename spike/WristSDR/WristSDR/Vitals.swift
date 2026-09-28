@@ -210,3 +210,103 @@ final class Vitals: ObservableObject {
     return total
   }
 }
+
+// ── Bad messages ─────────────────────────────────────────────────────────────────────────────
+//
+/// ★★★ ONE BAD MESSAGE IS ONE DROPPED MESSAGE — NEVER A DEAD STREAM, AND NEVER A SILENT ONE.
+///
+/// Stuart, 2026-09-28: "did you at least do the hardening we discussed to prevent a bad packet from
+/// taking down the whole app like the broken RDS used to". On the phone a throw can be caught; on
+/// the watch a malformed number does not throw at all — Swift TRAPS: `Int(someDouble)` on a value
+/// outside Int's range, `Int(someUInt32)` above 2^31 on arm64_32 (Int is 32-bit below watchOS 27),
+/// an index past the end of a frame. A trap is the whole app gone, audio and all, off the wrist,
+/// with no crash report we can read. So the parsers are made TOTAL — every input either decodes or
+/// is refused — and every refusal comes through here.
+///
+/// ★★ COUNTED AND LOGGED, BECAUSE A REFUSAL NOBODY HEARS IS THE OLD BUG IN A NEW PLACE. The
+///    sockets used to `try?` their JSON and `return` on a short frame, so a server sending garbage
+///    looked exactly like a server sending nothing — a black waterfall with a healthy frame count.
+///    Every refusal is tallied per source+kind, and written to the vitals log (jr-vitals.log, which
+///    survives into LAST RUN) and the system log.
+/// ★★ RATE-LIMITED PER KIND. A server that sends the same broken frame twenty times a second must
+///    not turn the log into that frame: the first is written at once, then at most one line per
+///    kind every `logEvery` seconds, carrying how many were counted and not written in between.
+///    The COUNT is never limited — only the writing.
+/// ★ Thread-safe and actor-free: the sockets call this from their own queues, the decoders from
+///   theirs, and none of them may wait for the main actor to report a fault.
+enum MsgFaults {
+  private nonisolated static let lock = NSLock()
+  nonisolated(unsafe) private static var counts: [String: Int] = [:]
+  nonisolated(unsafe) private static var lastLogAt: [String: Double] = [:]
+  nonisolated(unsafe) private static var unlogged: [String: Int] = [:]
+  private nonisolated static let logEvery = 10.0
+
+  /// Record one refused message. `source` is the socket ("uber spec", "kiwi SND"), `kind` the
+  /// message type or the check that failed, `detail` what was wrong with it — never a payload body.
+  nonisolated static func note(_ source: String, _ kind: String, _ detail: String) {
+    let key = "\(source) \(kind)"
+    let now = ProcessInfo.processInfo.systemUptime
+    lock.lock()
+    let n = (counts[key] ?? 0) &+ 1
+    counts[key] = n
+    let write = now - (lastLogAt[key] ?? -Double.infinity) >= logEvery
+    var held = 0
+    if write { lastLogAt[key] = now; held = unlogged[key] ?? 0; unlogged[key] = 0 }
+    else { unlogged[key] = (unlogged[key] ?? 0) &+ 1 }
+    lock.unlock()
+    guard write else { return }
+    let line = "BAD MSG \(key) #\(n)" + (held > 0 ? " (+\(held) since last line)" : "")
+             + ": \(detail.prefix(160))"
+    NSLog("[Jr] %@", line)
+    Vitals.crumb(line)
+  }
+
+  /// Parse one JSON object, or say why not. Replaces `try? JSONSerialization…` on the socket paths,
+  /// which turned a malformed message into a silent nothing.
+  nonisolated static func json(_ source: String, _ data: Data) -> [String: Any]? {
+    do {
+      guard let j = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        note(source, "json", "not an object (\(data.count) B)")
+        return nil
+      }
+      return j
+    } catch {
+      note(source, "json", "unparseable (\(data.count) B): \(error.localizedDescription)")
+      return nil
+    }
+  }
+
+  /// Every refusal so far, most frequent first — for the debug block in the menu.
+  nonisolated static func summary() -> String {
+    lock.lock(); let c = counts; lock.unlock()
+    return c.sorted { $0.value > $1.value }.prefix(6).map { "\($0.key) ×\($0.value)" }
+            .joined(separator: "\n")
+  }
+
+  nonisolated static var total: Int { lock.lock(); defer { lock.unlock() }; return counts.values.reduce(0, &+) }
+}
+
+/// ★★★ NUMBERS FROM A SERVER, MADE SAFE TO CONVERT. `Int(x)` on a Double traps on NaN, on infinity
+/// and on anything outside Int's range — and on arm64_32 that range is ±2.1 billion, so a centre
+/// frequency of 2.4 GHz, or a corrupt one of 1e30, took the whole app down from a log line. These
+/// clamp instead; a nonsense value is refused at the parser, and these make sure a value that got
+/// past it can still only be WRONG, never fatal.
+enum Wire {
+  /// Double → Int64, NaN → 0, clamped to Int64's range. For logs and for the wire.
+  nonisolated static func i64(_ d: Double) -> Int64 {
+    guard d.isFinite else { return 0 }
+    return Int64(max(-9.0e18, min(9.0e18, d.rounded())))
+  }
+  /// Double → Int, NaN → 0, clamped to THIS platform's Int (32-bit on arm64_32).
+  nonisolated static func int(_ d: Double) -> Int {
+    guard d.isFinite else { return 0 }
+    // ★ Not Double(Int.max): at 64 bits that rounds UP to 2^63, which is itself out of range.
+    let lim = Int.bitWidth == 32 ? 2_147_483_000.0 : 9.0e18
+    return Int(max(-lim, min(lim, d.rounded())))
+  }
+  /// A finite number in a range, or nil — the gate for anything the server sends as a quantity.
+  nonisolated static func inRange(_ v: Any?, _ r: ClosedRange<Double>) -> Double? {
+    guard let d = (v as? NSNumber)?.doubleValue, d.isFinite, r.contains(d) else { return nil }
+    return d
+  }
+}

@@ -132,8 +132,10 @@ final class SignalProcessor {
       guard db.isFinite else { continue }
       count += 1
       if db > absoluteMax { absoluteMax = db }
-      var b = Int(db + 280)
-      if b < 0 { b = 0 } else if b > 299 { b = 299 }
+      // ★ CLAMPED IN DOUBLE, THEN CONVERTED. `Int(db + 280)` of a finite but absurd bin (a
+      //   corrupt float frame can carry 1e30) is outside Int's range and TRAPS — the whole app
+      //   gone for one bad bin. Every value out of the 300-bucket range lands in an end bucket.
+      let b = Int(max(0, min(299, db + 280)))
       hist[b] &+= 1
     }
     if count > 0 {
