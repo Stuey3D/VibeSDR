@@ -128,6 +128,7 @@ const LIMITATIONS: { q: string; a: string[] }[] = [
     a: [
       'Patents and codec licensing — not technical difficulty. The VibeDSP engine could implement these demodulators, but the audio codecs behind them are legally encumbered for a shipped app: HD Radio sits on Xperi’s patent portfolio, DAB+ and DRM on HE-AAC/xHE-AAC codec licensing, and DMR, D-STAR, Fusion and NXDN on the AMBE/IMBE vocoder patents. Shipping unlicensed implementations in App Store or Play Store builds is a risk VibeSDR will not take. Genuinely open digital voice modes — Codec2-based FreeDV and M17 — are unencumbered and remain candidates for native support.',
       'The supported route: many OpenWebRX / OpenWebRX+ servers decode digital modes server-side. When you select such a mode on one of those servers, VibeSDR simply plays the already-decoded PCM audio the server sends — no demodulator or codec ships in, or runs inside, the app. That’s why DAB+ works in VibeSDR on some servers despite none of these decoders existing in the app itself.',
+      'VibeServer works the same way. Its DAB receiver is VibeSDR\u2019s own, but the DAB+ audio codec is the one the HOST already has \u2014 Android\u2019s, Apple\u2019s, or an ffmpeg the owner installed \u2014 so no HE-AAC decoder ships in VibeSDR or VibeServer, and the app simply plays the audio the server sends.',
     ],
   },
   {
