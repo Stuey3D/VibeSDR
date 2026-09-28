@@ -117,6 +117,10 @@ const RATE_OPTIONS_ASP = [
   { label: '2.5 MS/s (R2, lightest)',  value: 2_500_000 },
 ];
 
+/** ★ The Airspy R2 / Mini's 22 preset positions, in the tenths the server speaks (position x 10) —
+ *  AirspySource::gainListTenthDb. What a per-band limit is chosen ON for that radio. */
+const ASP_POSITIONS = Array.from({ length: 22 }, (_, i) => i * 10);
+
 /** ★★ THE R820T/R828D's 29 TUNER GAINS, tenths of a dB. Fixed in the tuner, identical across
  *  every RTL dongle we support, and the reason the control is a slider: there is nothing between
  *  these values, so a typed number is a value the radio will quietly move.
@@ -162,7 +166,7 @@ const K = {
   dabScanLabels: 'vs_dabscan',
   startOnBoot: 'vs_startonboot',
   gainLimits: 'vs_gainlimits', restGain: 'vs_restgain', agcLock: 'vs_agclock',
-  gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits',
+  gainLocks: 'vs_gainlocks', gainSplits: 'vs_gainsplits', gainCurves: 'vs_gaincurves',
   rtlAgc: 'vs_rtlagc', tunerBwAuto: 'vs_tunerbwauto', publicName: PUBLIC_NAME_KEY,
   ppm: 'vs_ppm', directSampling: 'vs_directsampling', autoDs: 'vs_autods', autoDsMhz: 'vs_autodsmhz',
   convOffsetMhz: 'vs_convoffset', convLoMhz: 'vs_convlo', convHiMhz: 'vs_convhi', convDown: 'vs_convdown',
@@ -391,6 +395,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  one figure and leave HF adjustable under a ceiling (Stuart, 2026-08-28). */
   const [gainLocks, setGainLocks]     = useState('');
   const [gainSplits, setGainSplits]   = useState('');
+  /** ★ Airspy R2 / Mini: the preset curve each limited band is held on — see BandLimitEditor. */
+  const [gainCurves, setGainCurves]   = useState('');
   const [restGain, setRestGain]       = useState(-1);
   /** ★★★ ONE SLIDER, TWO MEANINGS — see the note by the toggles. Protection is ON by default (it
    *  can only ever prevent clipping); the AGC is OFF, because it may raise the gain above what the
@@ -712,6 +718,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           const v = await AsyncStorage.getItem(K.tunerBwAuto);
           if (v != null) setTunerBwAuto(v === '1');
           const g2 = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
+          setGainCurves(await g2(K.gainCurves));
           setPpm(await g2(K.ppm));
           { const d = await g2(K.directSampling); if (d === 'i' || d === 'q') setDirectSampling(d); }
           setAutoDs((await g2(K.autoDs)) === '1');
@@ -1250,6 +1257,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'],
       [K.gainLimits, gainLimits], [K.gainLocks, gainLocks], [K.gainSplits, gainSplits],
+      [K.gainCurves, gainCurves],
       [K.restGain, String(restGain)],
       [K.rtlAgc, rtlAgc ? '1' : '0'],
       [K.tunerBwAuto, tunerBwAuto ? '1' : '0'],
@@ -1344,7 +1352,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           : {}),
         // ★ Sent in EVERY mode — see the ZOOM DETAIL card's note.
         zoomSpectrum: live.current.zoomSpec,
-        gainLimits, gainLocks, gainSplits, restGain, agcLock,
+        gainLimits, gainLocks, gainSplits, gainCurves, restGain, agcLock,
         /* ★★★ THE SCREEN ALREADY SAID "PINNED — listeners cannot change it" whenever a rate was
          *   chosen, and the server only ever treated `lockedRate` as a CEILING: anything narrower
          *   was allowed. So the words on this screen have been ahead of the behaviour. rateLock
@@ -1391,7 +1399,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
       blockedModes, dabRateBoost, dabScanLabels, isLite, startOnBoot,
-      gainLimits, gainLocks, gainSplits, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
+      gainLimits, gainLocks, gainSplits, gainCurves, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
       oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown]);
 
   const stopAndBack = useCallback(() => {
@@ -3114,7 +3122,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 {radioUse === 'single' && (<>
                 <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>PER-BAND CEILINGS</Text>
                 <BandLimitEditor C={C} F={F} bands={bands} kind="gain" allowAll
-                  gainSteps={RTL_GAINS}
+                  /* ★★★ THE AIRSPY R2 / MINI's LIMIT IS A CURVE AND A POSITION ON IT, not dB — its
+                       22 preset positions in the server's tenths, a Linearity / Sensitivity choice
+                       and LIMIT / LOCK (Stuart, 2026-09-28). Every other radio: exactly as before. */
+                  gainSteps={radio?.driver === 'airspy' ? ASP_POSITIONS : RTL_GAINS}
+                  curveable={radio?.driver === 'airspy'}
+                  curves={gainCurves}
+                  onCurvesChange={(v) => { setGainCurves(v); AsyncStorage.setItem(K.gainCurves, v); }}
                   value={gainLimits}
                   onChange={(v) => { setGainLimits(v); AsyncStorage.setItem(K.gainLimits, v); }}
                   /* ★★ THE LOCK, PER BAND — the phone's half of the setup page's "Lock this band".
@@ -3136,6 +3150,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   placeholder="max, e.g. 25 dB"
                   emptyText="No ceilings — listeners have the full range." />
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  {radio?.driver === 'airspy'
+                    ? 'On this Airspy a band rule is a gain mode and a position on it: pick Linearity '
+                      + 'or Sensitivity, then the position. In that band listeners get only that '
+                      + 'mode\'s slider — up to your position with Limit, fixed at it with Lock — and '
+                      + 'no Free mode, manual stages or AGCs. Other bands keep every control.\n\n'
+                    : ''}
                   Cap the bands that overload and leave the rest open — a strong local FM
                   transmitter is the usual reason, while HF wants everything the radio has.
                   &quot;all&quot; caps everywhere; a tighter per-band ceiling still wins.{'\n\n'}
