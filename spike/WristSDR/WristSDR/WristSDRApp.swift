@@ -118,7 +118,9 @@ func fmdxTutorialTips() -> [TutorialTip] {
     .init(icon: "timer", text: "The crown **disarms itself** after a few seconds — deliberate tuning only."),
     .init(icon: "speaker.wave.2", text: "Tap the **speaker** to give the crown the volume, with the native HUD."),
     .init(icon: "person.2.fill", text: "The **listener count** (top-left) tells you if you're alone. Tap it to **chat** — ask before you tune if others are on."),
-    .init(icon: "rectangle.stack", text: "The **servers** button goes back to pick a different receiver."),
+    /* ★ AGENTS.md: this tip named a SERVERS button the screen stopped having when it became a
+     *  settings button (antenna, cEQ, iMS). Servers is at the bottom of that sheet now. */
+    .init(icon: "slider.horizontal.3", text: "The **settings** button, beside the listener count, has the tuner's options (antenna, cEQ, iMS) and **Servers** at the bottom to pick a different receiver."),
   ]
 }
 

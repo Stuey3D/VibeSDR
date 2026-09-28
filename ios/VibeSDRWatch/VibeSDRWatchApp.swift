@@ -272,7 +272,10 @@ func dabTutorialTips() -> [TutorialTip] {
      *  SAME pass. These two are the whole VibeServer half of this screen. */
     .init(icon: "square.stack.3d.up.fill", text: "On a VibeServer, **tap the block** (12B) for the multiplex list — it shows what this aerial has heard on each one, so you can see which are worth a try."),
     .init(icon: "arrow.uturn.left", text: "**Exit DAB** leaves DAB and goes back to the waterfall."),
-    .init(icon: "gauge.with.dots.needle.bottom.50percent", text: "**Speed Fix** corrects a station that plays too fast (the DAB 'chipmunk') — remembered per station."),
+    /* ★ No Speed Fix tip on BUDDY: its DAB screen has no such button, and the menu's speed-fix row
+     *  is a no-op here (WatchLinkCompat.setDabScale) because the PHONE applies the correction. A tip
+     *  sending people to a control that does nothing is the fault AGENTS.md exists for. Jr keeps its
+     *  own tip — Jr's DAB screen does have the button. */
     .init(icon: "line.3.horizontal", text: "The **menu** button has profiles, servers and the rest."),
   ]
   return t
@@ -286,7 +289,9 @@ func fmdxTutorialTips() -> [TutorialTip] {
     .init(icon: "timer", text: "The crown **disarms itself** after a few seconds — deliberate tuning only."),
     .init(icon: "speaker.wave.2", text: "Tap the **speaker** to give the crown the volume, with the native HUD."),
     .init(icon: "person.2.fill", text: "The **listener count** (top-left) tells you if you're alone. Tap it to **chat** — ask before you tune if others are on."),
-    .init(icon: "rectangle.stack", text: "The **servers** button goes back to pick a different receiver."),
+    /* ★ AGENTS.md: this tip named a SERVERS button the screen stopped having when it became a
+     *  settings button (antenna, cEQ, iMS). Servers is at the bottom of that sheet now. */
+    .init(icon: "slider.horizontal.3", text: "The **settings** button, beside the listener count, has the tuner's options (antenna, cEQ, iMS) and **Servers** at the bottom to pick a different receiver."),
   ]
 }
 

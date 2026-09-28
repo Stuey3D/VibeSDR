@@ -509,7 +509,7 @@
       <div class="panel">
         <div class="panel-h"><span class="lbl">Sharing it with the world</span><span class="lbl on">tunnel</span></div>
         <div class="panel-b">
-          <p>Tick <b>List on VibeSDR.net</b> and the server opens a Cloudflare tunnel to the directory by itself.</p>
+          <p>Turn on <b>List this server publicly</b> (<b>List on VibeSDR.net</b> on the Mac) and the server opens a Cloudflare tunnel to the directory by itself.</p>
           <ul class="ticks tunnel">
             <li><b>No port forwarding.</b> The tunnel dials out, so nothing opens on your router. It works behind CGNAT, where forwarding is not merely awkward but impossible.</li>
             <li><b>No DDNS, no address to chase.</b> You get a stable name under vibeserver.vibesdr.net.</li>
@@ -522,7 +522,7 @@
       <div class="panel">
         <div class="panel-h"><span class="lbl">No spare Android?</span><span class="lbl on" id="vsVer">Mac · Linux</span></div>
         <div class="panel-b">
-          <p>The same server runs native on Apple Silicon as a menu-bar app, and on Linux, arm64 and amd64, from our apt repository. Plug in an RTL-SDR, an Airspy HF+ or an SDRplay RSP, click <b>Open in Browser</b>, and tune. Several receivers can sit behind one address; listeners pick from a front page that shows what's free.</p>
+          <p>The same server runs native on Apple Silicon as a menu-bar app, and on Linux, arm64 and amd64, from our apt repository. Plug in an RTL-SDR, an Airspy HF+, an Airspy R2 or Mini, or an SDRplay RSP, click <b>Open in Browser</b>, and tune. Several receivers can sit behind one address; listeners pick from a front page that shows what's free.</p>
           <ul class="ticks">
             <li><b>macOS</b> on Apple Silicon, notarised, so it opens cleanly.</li>
             <li><b>Linux</b>: a Raspberry Pi, an old laptop, a NUC, a home server. Tested on Debian and Ubuntu; other distributions are likely to work but are unverified.</li>
@@ -652,7 +652,7 @@
     <ul class="ticks" style="margin-top:18px">
       <li><b>UberSDR · OpenWebRX · KiwiSDR · Web-888</b>: the shared-receiver networks, spoken natively.</li>
       <li><b>FM-DX Webserver</b>: the worldwide network of shared FM tuners. Station names, RadioText and distances, in stereo.</li>
-      <li><b>RTL-SDR, Airspy HF+ and HackRF over USB</b> on Android. VibeSDR demodulates the raw IQ itself. SDRplay on Mac and Linux.</li>
+      <li><b>RTL-SDR, Airspy HF+, Airspy R2 / Mini and HackRF over USB</b> on Android. VibeSDR demodulates the raw IQ itself. SDRplay on Mac and Linux.</li>
       <li><b>SpyServer · rtl_tcp</b>: the standard network protocols, spoken natively.</li>
       <li><b>VibeServer</b>: your own receiver, on your own network or on the directory.</li>
     </ul>
@@ -710,7 +710,9 @@
         </tr>
         <tr>
           <td>Verified with someone else&rsquo;s hardware</td>
-          <td><b>HackRF</b> &mdash; made to work with a user who owns one, over several builds.<br>
+          <td><b>HackRF</b> &mdash; made to work with tgcfabian, who owns one, over several builds.<br>
+              <b>Airspy R2 / Mini</b> &mdash; Onfliner ran the driver first, on his Mini, and reported until it worked.<br>
+              <b>MPX and RDS deviation</b> &mdash; measured by Onfliner against MPX Tool with a test signal from his own transmitter, and by tgcfabian against MPX Tool station by station.<br>
               <b>Advanced RDS</b> &mdash; checked against a professional PIRA broadcast analyser by Hans van Eijsden, who owns one.</td>
         </tr>
         <tr>
@@ -724,7 +726,7 @@
       <div class="stat"><span class="num">GPLv3</span><span class="l">full source, free forever</span></div>
       <div class="stat"><span class="num">£2.99</span><span class="l">on the App Store, to cover the fees</span></div>
       <div class="stat"><span class="num">0</span><span class="l">subscriptions, accounts, trackers, ads</span></div>
-      <div class="stat"><span class="num">3</span><span class="l">radio drivers built in: RTL-SDR including the latest V4L, Airspy HF+ and HackRF. SDRplay through its own API</span></div>
+      <div class="stat"><span class="num">4</span><span class="l">radio drivers built in: RTL-SDR including the latest V4L, Airspy HF+, Airspy R2 / Mini and HackRF. SDRplay through its own API</span></div>
     </div>
   </div>
 </section>
@@ -751,6 +753,19 @@
        the same list (AGENTS.md: when something moves, fix the copy that says where it is).
        ★ VibeSDR's maps are vector data and a shaded-relief image built from public-domain grids,
        bundled with the app and every VibeServer. There is no tile provider and no network call. -->
+  <!-- ★★ CREDITS, SHORT, AND A LINK TO THE FULL LIST (README's Credits table, the same list as the
+       app's About page). ✗ The UberSDR credit is NOT repeated here: it lives in the VibeServer
+       section's "VibeDSP + UberSDR = VibeServer" figure and nowhere else on this page (Stuart). -->
+  <div class="wrap" style="margin-top:22px">
+    <p class="fine" style="max-width:88ch; opacity:0.75">
+      <b>Credits.</b> Tested far beyond my own bench by tgcfabian, Onfliner, Hans van Eijsden, Kiko7250,
+      xavxx and Michael DL8LDN. Built on open-source drivers and codecs &mdash; librtlsdr, libusb,
+      libairspy, libairspyhf, libhackrf, Opus, KissFFT, PFFFT, ft8_lib &mdash; and on what we learned
+      from redsea, welle.io, dablin, dab-cmdline, DAB-Radio, OpenWebRX, KiwiSDR, FM-DX Webserver,
+      SDR++ and others. Every one is named, with what it gave, in the
+      <a href="https://github.com/Stuey3D/VibeSDR#credits">full credits</a>.
+    </p>
+  </div>
   <div class="wrap" style="margin-top:22px">
     <p class="fine" style="max-width:88ch; opacity:0.75">
       <b>Map data.</b> The maps are built from open data and ship with the app — no tile server, and
@@ -767,7 +782,8 @@
       and the detailed coastline &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>,
       <a href="https://opendatacommons.org/licenses/odbl/">ODbL</a> &mdash; built in once, never fetched at runtime, and
       published unrestricted with every release as that licence requires.
-      Rendered with <a href="https://leafletjs.com/">Leaflet</a> (BSD-2-Clause).
+      Drawn by <a href="https://maplibre.org/">MapLibre GL JS</a> from <a href="https://protomaps.com/">PMTiles</a> (both BSD-3-Clause),
+      with <a href="https://leafletjs.com/">Leaflet</a> (BSD-2-Clause) where a device has no WebGL.
     </p>
   </div>
 </footer>
