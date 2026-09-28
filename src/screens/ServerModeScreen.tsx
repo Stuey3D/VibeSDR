@@ -2422,7 +2422,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   </View>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                     A new listener is put straight onto this station. DAB takes a few seconds to lock
-                    onto a multiplex, so they hear it shortly after they arrive.
+                    onto a multiplex, so they hear it shortly after they arrive. Where several people
+                    share one dial it keeps whatever it was left on, but after the server restarts
+                    the first listener always starts here.
                   </Text>
                 </>)}
               </View>

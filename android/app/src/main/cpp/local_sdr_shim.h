@@ -643,6 +643,10 @@ public:
      *  Applied when the listener count goes 0 -> 1, never on every connect — the shared receiver
      *  is one radio and one VFO, so landing each joiner would yank the group already listening. */
     static void setVibeServerLanding(double hz, const std::string& mode);
+    /** ★★ Did the OWNER choose that landing, or is it a fallback (the Linux daemon hands over its
+     *  startup frequency when no landing is set)? Only a chosen one outranks the remembered dial after
+     *  a start — see "RULE 0" in the accept path. Default true: Android sends a landing only when set. */
+    static void setVibeServerLandingExplicit(bool explicitlySet);
     static bool isConfigured();
 
     /** Learned RDS station bookmarks. The APP persists them; the shim learns them. */

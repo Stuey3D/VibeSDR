@@ -53,6 +53,34 @@ station scan and then a selection box for the station so then BBC Radio 1"*
   reaches the server as the start frequency/mode, and a remembered DAB block does not survive a restart.
   Wire it properly for both Android apps (main + Lite).
 
+## ★★★ DECIDED 2026-09-28 — A START IS NOT A RESUME (RULE 0)
+Stuart set a DAB landing station on the Sony; after a reboot the server resumed the DAB station he was LAST
+on (the remembered block/SID in `vibe_dab_memory.txt` / `dabChannel`) instead of the landing. His words: "on a
+shared VFO radio is what I'd expect, I just never expected it to do it after a reboot."
+
+The rule, implemented in the landing block of the spectrum accept path (search "RULE 0"):
+- WITHIN A RUNNING SERVER a remembered session resumes: the radio parking and waking, the last listener
+  leaving and the next one arriving. Unchanged.
+- AFTER THE SERVER STARTS (reboot, app/service restart, update, a settings save — anything that starts the
+  engine) the FIRST listener gets the owner's configured landing — DAB or frequency — on EVERY kind of radio,
+  shared dial included. The remembered multiplex is forgotten (in memory and on disk, `dabChannel: -1`), not
+  resumed. After that first listener, the ordinary rules above apply again.
+- With NO landing configured, the memory still resumes after a start: that is the 2026-09-24 fix ("a TV left in
+  DAB came back on WFM after the app was restarted") and there is no owner's answer to prefer over it.
+- "Configured" means CHOSEN by the owner: a DAB landing, or a landing frequency. The Linux daemon hands the
+  shim its startup frequency as a fallback landing, so it also says whether the landing was explicit
+  (`setVibeServerLandingExplicit(landingFreq > 0)`); Android sends a landing only when one is set.
+- "Since the server started" is per ENGINE, not per process (`Impl::anySessionYet`, was the process-wide
+  `g_vsAnySessionYet`): on Android the app process outlives the server, and every settings save restarts it.
+- How the frequency landing already behaved: the capture STARTS on it (VibeServerBoot's centerFreq / the
+  daemon's freq), so after a restart the FM dial was already on the landing; only a remembered multiplex could
+  override it. On a shared dial the first listener since the start is now also retuned to it (a scan or a
+  resume may have moved the radio before anybody arrived).
+- Measured on the Mac against fake-rtl-tcp --dab, with a config carrying `dabChannel: 32` (12B) and:
+  shared dial + DAB landing 12A → "first listener since this server started — the owner's landing applies",
+  lands 12A · shared dial + landing frequency only → forgets 12B, lands 96.6 MHz · shared dial, no landing →
+  resumes 12B (unchanged) · one-listener radio + DAB landing → lands 12A.
+
 ## CLIENTS
 - Web client and app already follow a server that is in DAB (`onDab` in web/client/src/main.ts ~:1299;
   SDRScreen ~:4424). Verify, don't rebuild. Jr (watch) is out of scope.

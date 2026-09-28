@@ -687,7 +687,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
             <label style="margin-top:10px"><span class="lbl">Station</span>
               <select id="dabLandStation"></select></label>
             <div class="hint">A new listener is put straight onto this station. DAB takes a few
-              seconds to lock onto a multiplex, so they hear it shortly after they arrive.</div>
+              seconds to lock onto a multiplex, so they hear it shortly after they arrive. Where
+              several people share one dial it keeps whatever it was left on, but after the server
+              restarts the first listener always starts here.</div>
           </div>
         </div>
         <div class="hint" id="dabLandNote"></div>

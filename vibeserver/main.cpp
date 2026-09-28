@@ -1482,6 +1482,10 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLanding(
         g_runtimeConfig.landingFreq > 0 ? g_runtimeConfig.landingFreq : g_runtimeConfig.freq,
         g_runtimeConfig.demodMode);
+    // ★★ Only an owner-chosen landing outranks the remembered dial after a start (the shim's RULE 0);
+    //    the startup-frequency fallback above does not, so a DAB receiver with no landing set still
+    //    comes back on the multiplex it was left on.
+    LocalSdrShim::setVibeServerLandingExplicit(g_runtimeConfig.landingFreq > 0);
     // ★ And the multiplex it was left on, so a DAB receiver comes back as a DAB receiver rather
     //   than on the DAB frequency in the default mode — see setVibeServerDabChannel.
     LocalSdrShim::setVibeServerDabChannel(g_runtimeConfig.dabChannel, uint32_t(std::max(0, g_runtimeConfig.dabSid)));
@@ -1833,6 +1837,7 @@ int main(int argc, char** argv) {
                     LocalSdrShim::setVibeServerLanding(
                         g_runtimeConfig.landingFreq > 0 ? g_runtimeConfig.landingFreq : g_runtimeConfig.freq,
                         g_runtimeConfig.demodMode);
+                    LocalSdrShim::setVibeServerLandingExplicit(g_runtimeConfig.landingFreq > 0);
                     LocalSdrShim::setVibeServerLandingDab(g_runtimeConfig.landingDabChannel,
                                                           uint32_t(std::max(0, g_runtimeConfig.landingDabSid)));
                     std::printf("VibeServer: gain limits/rest gain/AGC lock applied live "

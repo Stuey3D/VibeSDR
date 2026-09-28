@@ -972,8 +972,9 @@ static std::atomic<uint32_t> g_vsLandingDabSid{0};
 /** ★ The owner's display name for this radio (Android's "SDR display name") — see setRadioLabel. */
 static std::mutex            g_vsRadioLabelMtx;
 static std::string           g_vsRadioLabel;
-/** ★ Has any listener arrived since this process started? See the shared-dial arm of the landing. */
-static std::atomic<bool>     g_vsAnySessionYet{false};
+/* ★ "Has any listener arrived since this server started?" moved into Impl (anySessionYet) on
+ *  2026-09-28: on Android the PROCESS outlives the server — every settings save restarts the server in
+ *  the same process — so a process-wide flag could never answer "since this server started". */
 /* ★★★ THE QUICK STATION SCAN (setup page) — one at a time, and a listener arriving CANCELS it. The
  *  scan borrows an idle radio for a few seconds; the moment somebody wants it, it is theirs. */
 static std::atomic<bool>     g_dabScanActive{false};
@@ -4367,6 +4368,8 @@ static std::atomic<bool>             g_vsNativeSetup{false};
 //    receiver's whole premise is one radio, one VFO, one view. A fresh session is the only moment
 //    at which "where new listeners start" is unambiguous.
 static std::atomic<double>  g_vsLandingHz{0.0};
+/** ★ Was the plain landing chosen by the owner, or is it the daemon's startup-frequency fallback? */
+static std::atomic<bool>    g_vsLandingExplicit{true};
 static std::mutex           g_vsLandingMtx;
 static std::string          g_vsLandingMode;
 
@@ -4808,6 +4811,9 @@ struct LocalSdrShim::Impl {
      *    dup. The watchdog's reopen takes it from there, exactly as for an ordinary stall. */
     mutable std::atomic<bool> usbFdDead{false};
     std::atomic<int>          freshUsbFd{-1};
+    /** ★★ Has any listener arrived since THIS SERVER started? A member, not a static, so every start —
+     *  a boot, an app restart, an update, a settings save — begins false. See the landing rule. */
+    std::atomic<bool>         anySessionYet{false};
     // RTL-TCP source (rtl_tcp protocol over the network, no USB/librtlsdr — so it
     // works on iOS too). When tcpSock is set, the IQ comes from this socket and the
     // hardware setters send rtl_tcp commands instead of calling rtlsdr_*.
@@ -18268,6 +18274,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (firstOfSession) dabScanYield();
 
             /* ★★★ THE DAB LANDING STATION, AND WHICH RULE WINS (2026-09-28).
+             *  ★★★ RULE 0 — A START IS NOT A RESUME (Stuart, 2026-09-28, after the Sony rebooted and came
+             *      back on the DAB station he had last listened to instead of his configured landing: "on
+             *      a shared VFO radio is what I'd expect, I just never expected it to do it after a
+             *      reboot"). A remembered session resumes WITHIN a running server — the radio parking
+             *      and waking, the last listener leaving and the next arriving. After the server STARTS
+             *      (a reboot, an app or service restart, an update, a settings save) the first listener
+             *      gets the owner's LANDING, DAB or frequency, on every kind of radio, shared dial
+             *      included — and the multiplex the server was last left on is forgotten, not resumed.
+             *      With NO landing configured the memory still resumes after a start, which is the
+             *      2026-09-24 fix ("a TV left in DAB came back on WFM after the app was restarted")
+             *      and stays: there is no owner's answer to prefer over it.
              *  Precedence, in one place:
              *    1. A SHARED DIAL is never landed (the rule above). It keeps the dial it was left on,
              *       and that includes a remembered multiplex — resumed below, as always. The ONE
@@ -18286,11 +18303,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★ Through handleControl, the SAME entry the remembered-block resume uses, never
              *    `mode = "dab"` (see the per-client tune path: "dab" is not a demodulator). */
             const bool newSession = firstOfSession && landedSession != session;
-            const bool firstEver  = firstOfSession && !g_vsAnySessionYet.exchange(true);
+            const bool firstEver  = firstOfSession && !anySessionYet.exchange(true);
             const int  landDabCh  = g_vsLandingDabCh.load(std::memory_order_relaxed);
+            // ★ Rule 0: the first listener since this server started, on a server with a landing.
+            bool plainLandingSet;
+            { std::lock_guard<std::mutex> lk(g_vsLandingMtx);
+              plainLandingSet = g_vsLandingExplicit.load()
+                             && (g_vsLandingHz.load() > 0 || !g_vsLandingMode.empty()); }
+            const bool startLanding = firstEver && !adminOk.load() && !preTuned
+                                   && (landDabCh >= 0 || plainLandingSet);
+            if (startLanding && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
+                && !g_dabMode.load(std::memory_order_relaxed)) {
+                LOGI("[DAB] first listener since this server started — the owner's landing applies, not "
+                     "block %d that it was last left on (a remembered dial resumes only within a running server)",
+                     g_dabWantChannel.load(std::memory_order_relaxed));
+                g_dabWantChannel.store(-1, std::memory_order_relaxed);
+                g_dabWantSid.store(0, std::memory_order_relaxed);
+                vsPersist("{\"dabChannel\":-1,\"dabSid\":0}");
+            }
             bool landOnDab = false;
             if (newSession && landDabCh >= 0 && !adminOk.load() && !preTuned
-                && (!sharedDialNow || (firstEver && g_dabWantChannel.load(std::memory_order_relaxed) < 0))) {
+                && (!sharedDialNow || startLanding)) {
                 if (vsModeBlocked("dab"))
                     LOGI("[DAB] landing station ignored — DAB is blocked on this radio; the plain landing applies");
                 else if (!vsDabCapable())
@@ -18331,10 +18364,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
             }
-            if (sharedDialNow && firstOfSession && landedSession != session)
+            if (sharedDialNow && firstOfSession && landedSession != session && !startLanding)
                 LOGI("shared dial — landing skipped, the radio keeps the dial it was left on");
+            /* ★ Rule 0 reaches the plain landing too: on a shared dial the first listener since the start
+             *   is put on it (the capture usually already sits there — the server starts on it — but a
+             *   scan or a remembered multiplex may have moved the radio before anyone arrived). */
             if (!landOnDab && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
-                && !sharedDialNow) {
+                && (!sharedDialNow || startLanding)) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from
                 //   127.0.0.1, and loopback is exempt from the session limit.
@@ -25116,7 +25152,8 @@ void LocalSdrShim::setVibeServerDabChannel(int ch, uint32_t sid) {
     g_dabWantChannel.store(ch >= 0 ? ch : -1, std::memory_order_relaxed);
     // ★ The station only means something with its block — a SId on no block is dropped.
     g_dabWantSid.store(ch >= 0 ? sid : 0, std::memory_order_relaxed);
-    if (ch >= 0) LOGI("[DAB] this receiver was last left on block %d (service 0x%X) — the first listener resumes it",
+    if (ch >= 0) LOGI("[DAB] this receiver was last left on block %d (service 0x%X) — the first listener resumes it "
+                      "unless the owner has set a landing, which a start always applies (RULE 0)",
                       ch, unsigned(ch >= 0 ? sid : 0));
 }
 void LocalSdrShim::setVibeServerLandingDab(int ch, uint32_t sid) {
@@ -25128,6 +25165,9 @@ void LocalSdrShim::setVibeServerLandingDab(int ch, uint32_t sid) {
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }
 void LocalSdrShim::setNativeSetup(bool on) { g_vsNativeSetup.store(on); }
+void LocalSdrShim::setVibeServerLandingExplicit(bool explicitlySet) {
+    g_vsLandingExplicit.store(explicitlySet);
+}
 void LocalSdrShim::setVibeServerLanding(double hz, const std::string& mode) {
     g_vsLandingHz.store(hz > 0 ? hz : 0.0);
     std::lock_guard<std::mutex> lk(g_vsLandingMtx);
