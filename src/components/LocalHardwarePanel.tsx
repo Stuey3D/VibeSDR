@@ -238,7 +238,7 @@ export interface LocalHardwarePanelProps {
    *  property of the radio, which is why it is not in RadioCaps. */
   gainCapTenthDb?: number;
   /** ★★ The LEAST IF gain reduction the owner allows on this band, in dB — the same units as the
-   *  slider below, so there is no conversion to get backwards (tgcfabian, 2026-08-28: it should read
+   *  slider below, so there is no conversion to get backwards (TGCFabian, 2026-08-28: it should read
    *  as gain reduction "as per the control in the client"). -1 = none. Clamped rather than refused
    *  server-side, so without this the slider visibly springs back and reads as broken. */
   ifGrFloorDb?: number;
