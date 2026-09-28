@@ -125,6 +125,8 @@
         bindPopup: (html, po) => { c.html = html; c.maxWidth = po && po.maxWidth; return h; },
         setPopupContent: (html) => { c.html = html; return h; },
         getPopup: () => (c.html ? {} : null),
+        // ★ As Leaflet's circleMarker.openPopup — the spots pill opens the newest spot's card with it.
+        openPopup: () => { if (c.html) new ml.Popup({ maxWidth: (c.maxWidth || 200) + 'px' }).setLngLat([c.ll.lng, c.ll.lat]).setHTML(c.html).addTo(gl); return h; },
       };
       return h;
     }

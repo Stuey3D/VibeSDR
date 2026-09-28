@@ -1205,9 +1205,21 @@ if(KIND==='digi'||KIND==='cw'){
       t:(function(ts){var x=new Date(ts).getTime();return isNaN(x)?Date.now():x;})(cw?d.time:d.timestamp)
     };
   }
+  /* ★ THE PILL IS A WAY TO THE SPOT (Stuart, 2026-09-28: it showed a hand cursor and did nothing, as the
+   *  HFDL one did). Tapping it flies to the newest spot and opens its card, as a tap on the circle would. */
+  var lastSpot=null;
+  toast.addEventListener('click',function(){
+    if(!lastSpot)return;
+    var m=markers[key(lastSpot)];
+    try{
+      map.flyTo([lastSpot.lat,lastSpot.lon],Math.max(map.getZoom(),4),{animate:true,duration:0.8});
+      if(m&&m.openPopup)m.openPopup();
+    }catch(e){console.error('spots: could not show the spot from the pill',e);}
+  });
   function showSpotToast(s){
     var band=spotBand(s)||'';
     if(!s.call)return;
+    lastSpot=s;
     toast.textContent=s.call+(s.mode?' '+s.mode:'')+(band?' '+band:'');
     toast.classList.add('on');
     clearTimeout(toast._tid);
