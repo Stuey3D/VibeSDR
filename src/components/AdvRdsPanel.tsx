@@ -215,6 +215,16 @@ const Row = React.memo(function Row({ label, value, colour, conf, raw, reserve }
    *  ★ NOT truncation. The web panel's CSS records why in capitals — an ellipsis once ate exactly
    *    the half of "5.5 kHz · nominal" that was worth reading. Reserve space; never remove text. */
   const [minH, setMinH] = React.useState(0);
+  /* ★★ THE OVERLAID VALUE MUST ALSO BE ABLE TO GROW THE ROW. With `reserve`, the live value is laid
+   *  ABSOLUTELY over an invisible worst case — so when a value turned out LONGER than the reserve
+   *  ("16.7% · moderate · IMS standing by · NR already blending further"), it spilled out of the row
+   *  and printed over the next one (Stuart, 2026-09-28, Multipath over CEQ), and onRowLayout never
+   *  saw it: an absolute child adds no height. It reports its own height here; grow-only, as below. */
+  const [valH, setValH] = React.useState(0);
+  const onValLayout = React.useCallback((e: LayoutChangeEvent) => {
+    const h = e.nativeEvent.layout.height;
+    setValH(prev => (h > prev + 0.5 ? h : prev));
+  }, []);
   const onRowLayout = React.useCallback((e: LayoutChangeEvent) => {
     const h = e.nativeEvent.layout.height;
     // ★ Half a pixel of slack: layout returns fractional heights, and firing setState on every
@@ -231,9 +241,10 @@ const Row = React.memo(function Row({ label, value, colour, conf, raw, reserve }
         // flipped (Stuart). Truncating was the wrong fix: that message IS the
         // diagnosis the field exists to deliver. So reserve the worst case and lay
         // the live value over it — correct at any width, unlike a fixed height.
-        <View style={{ flex: 1 }}>
+        <View style={[{ flex: 1 }, valH ? { minHeight: valH } : null]}>
           <Text style={[s.val, { opacity: 0 }]}>{reserve}</Text>
-          <Text style={[s.val, colour ? { color: colour } : null,
+          <Text onLayout={onValLayout}
+                style={[s.val, colour ? { color: colour } : null,
                         { position: 'absolute', left: 0, right: 0, top: 0 }]}>{value}</Text>
         </View>
       ) : (
