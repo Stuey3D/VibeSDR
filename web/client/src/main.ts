@@ -635,6 +635,15 @@ async function loadAudioPolicy(httpBase: string) {
     srvLocal = j.local === true;
     srvLan = j.lan === true;
     srvAdminProtected = j.admin === true;
+    // ★ The ABOUT section names the server's own build (flavour + version), as the directory does.
+    //   Text only, never markup — it came from the network.
+    const av = document.getElementById('aboutSrvVer');
+    if (av) {
+      const ver = typeof j.version === 'string' ? j.version : '';
+      const flav = typeof j.flavour === 'string' ? j.flavour : 'VibeServer';
+      av.textContent = ver ? `This receiver runs ${flav} ${ver}.` : '';
+      av.hidden = !ver;
+    }
     /* ★★ THE SERVER DECIDES WHETHER DAB IS OFFERED. Only it knows the EFFECTIVE limits — the
      *  tunable set after allow/block lists and the rate the receiver will actually run at — so a
      *  V4 locked to FM or held below 2.048 MS/s never draws the button at all. */

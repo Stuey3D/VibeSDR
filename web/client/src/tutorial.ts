@@ -94,6 +94,20 @@ const STEPS: Step[] = [
         + 'receiver answers, and buf is how much audio is held in hand to ride out the bumps. '
         + 'Lower is better, but VibeSDR buffers so a weaker connection still plays smoothly.',
   },
+  {
+    // ★ Stuart, 2026-09-28: the pill is "for Server Owners to diagnose their server at a glance, and
+    //   if listeners have any issues they can quickly determine if the server is at fault or if
+    //   their connection is at fault in conjunction with the signal meter at the bottom". It comes
+    //   straight after the connection line because the two are read TOGETHER. Skipped by
+    //   stepAvailable() on a server that draws no pill.
+    ids: ['srvHealth'],
+    title: 'SERVER HEALTH',
+    body: 'The SERVER HEALTH pill [[@srvHealth]] shows how the receiver itself is coping — its '
+        + 'processor, memory, temperature and power. It lets an owner check their server at a '
+        + 'glance. If the audio breaks up, read it with the connection line at the bottom: a '
+        + 'struggling pill means the server is the problem, a healthy pill with a poor connection '
+        + 'line means it is your connection.',
+  },
 ];
 
 /** ★ Visible AND usable. `offsetParent` is null for a `display:none` control, and a disabled
