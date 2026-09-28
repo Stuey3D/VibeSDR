@@ -10954,6 +10954,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  now stamped — entering DAB, first lock, first FIB, the list complete, handing back — with the
          *  gain at each, because a scan that acquires through an overloaded front end looks exactly like
          *  a slow one. */
+        /* ★★★ A SCAN READS THE BLOCK FRESH (Stuart, 2026-09-29: "stations change and new ones added, for
+         *  instance Heart Xmas has appeared in the last few days"). The decoder keeps a block's ensemble
+         *  while it stays on that block, so a second scan of 12B returned the FIRST scan's list, whatever
+         *  was on air now. Forgotten here — safe, because the scan is refused while anybody listens and
+         *  while DAB is on — and the listener's entry below then reads it from the air. */
+        {
+            const size_t forgot = g_dab.rereadChannel(idx);
+            LOGI("[DAB] quick scan: reading %s afresh%s", vibedab::kBandIII[idx].name,
+                 forgot ? (" \xe2\x80\x94 forgot the " + std::to_string(forgot) + " service(s) the decoder remembered").c_str() : "");
+        }
         const double tEnter = nowSecs();
         handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(idx) + "}");
         const double enterSecs = nowSecs() - tEnter;

@@ -75,6 +75,26 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         if (idx < 0 || idx >= int(kBandIIICount)) return;
         if (idx == channel_) return;
+        tuneLocked_(idx);
+    }
+    /** ★★★ READ THIS BLOCK AFRESH — the quick station scan (Stuart, 2026-09-29: "stations change and new
+     *  ones added, for instance Heart Xmas has appeared in the last few days"). setChannel() keeps the
+     *  ensemble when the block has not changed, which is right for a listener stepping back to where they
+     *  were and wrong for a scan: a re-scan of the same block answered from the decoder's remembered
+     *  service list and could never show a station added since. Everything a block change clears is
+     *  cleared, as though arriving from another block. Returns how many services were forgotten.
+     *  ★ Only for a caller that holds the radio with nobody listening (the scan refuses otherwise):
+     *    a live listener's programme would be cut exactly as by a block change. */
+    size_t rereadChannel(int idx) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (idx < 0 || idx >= int(kBandIIICount)) return 0;
+        const size_t had = rx_.ensemble().services.size();
+        tuneLocked_(idx);
+        return had;
+    }
+private:
+    /** The whole of a block change, under m_. */
+    void tuneLocked_(int idx) {
         channel_ = idx;
         rx_.reset();
         dlsAll_.clear(); scanCursor_ = 0; scanRotatedAt_ = 0;
@@ -112,6 +132,7 @@ public:
         pcmOwed_ = 0; pcmPushed_ = 0;
         resampleReset();
     }
+public:
     /** ★★★ A RETUNE IS IN FLIGHT — discard everything until the radio has settled on it.
      *  Called straight after tuneHw(), which only QUEUES the frequency. See the note in feed().
      *  @param seconds how long the hardware may take; 0.25 s is generous for a USB control
