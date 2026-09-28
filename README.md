@@ -176,40 +176,93 @@ Design notes and specifications for individual features live in [`briefs/`](brie
 
 ## Credits
 
+The same list as the app's About page, audited against the source for V11. Each line says what
+was **used** (bundled, linked or fetched) or **learned** (read as a reference, no code taken).
+
+### People
+
 | Name | Role |
 |---|---|
 | **Stuart Carr (Stuey3D)** | UI/UX design, concept & testing |
-| **madpsy (M9PSY)** | Creator of UberSDR — protocol, DSP algorithms (NR2 / noise blanker / WebSDR-NR), colour palettes, band plans and bookmark format |
-| **tgcfabian** | The biggest outside source of testing and ideas VibeSDR and VibeServer have had — HackRF support, the deviation monitor, releasing the SDR when idle so other applications can use it, and working behind a reverse proxy all exist or work properly because of him. He ran VibeServer in a genuinely complicated environment and kept reporting what broke there, which is what made it robust rather than merely working on the bench it was written on |
-| **Onfliner** | Airspy R2 / Mini testing and feedback — the first person to run that driver on real hardware, and the reason its three gain modes are presented the way they are |
-| **Hans van Eijsden (FMDX.org)** | Calibration and validation of the Advanced RDS analyser against a Pira FM broadcast analyser — he found that our phase reading was its own reflection and that the deviation figures were scaled wrong, and kept testing until they agreed |
-| **Kiko7250** | Showed how VibeSDR is actually used, and on what hardware, in Brazil — which set off the optimisation push to run on the lowest-end machines we could reach (a Raspberry Pi 2 was bought specifically to build VibeServer on because of it). He also put up the first public VibeServer outside Stuart's and tgcfabian's, which is how Brazilian RDS came to be understood: their stations rotate the station name as a marquee, and the learning RDS bookmarks never worked properly on his server until they were changed to cope with it |
-| **Phil Karn (KA9Q)** | [ka9q-radio](https://github.com/ka9q/ka9q-radio) — the SDR engine underneath UberSDR, and (GPL-3.0) the design reference for VibeSDR's front-end automatic gain: IF-power level targeting, proportional correction and snap-to-hardware-steps. Read and credited, never copied |
-| **John Seamons (ZL/KF6VO)** | Creator of KiwiSDR |
-| **Jakob Ketterl (DD5JFK) & the OpenWebRX+ project** | OpenWebRX / OpenWebRX+ servers |
-| **NoobishSVK & contributors** | FM-DX Webserver + the servers.fmdx.org receiver map — protocol reference for the FM-DX backend and its 3LAS MP3 audio (GPL-3.0) |
-| **Oona Räisänen (windytan)** | [redsea](https://github.com/windytan/redsea) (MIT) — the reference for VibeDSP's weak-signal RDS block recovery: syndrome-table burst correction, rhythm-based sync acquisition and error-rate sync dropping. No redsea code is used; the ideas are hers |
-| **Albrecht Lohofener & contributors (welle.io)** | Read clause by clause while building and repairing VibeSDR's own DAB receiver — FIC/FIG parsing, MSC handling and the OFDM front end. No code used; it is the reference that made ours correct |
-| **Stefan Pöschel (dablin)** | Reference for DAB/DAB+ superframe and audio handling, and how a decoder should behave when a subchannel goes away. Read, not copied |
-| **Jan van Katwijk (dab-cmdline)** | Reference for DAB demodulation and the automatic frequency/timing corrections a receiver applies |
-| **FiendChain (DAB-Radio)** | Reference for the DAB physical layer, and the project whose notes pointed at the TII work we took further |
-| **Pothosware & Franco Venturi (SoapySDRPlay3)** | The open, authoritative account of how each SDRplay RSP model behaves — per-model antenna ports, bandwidth-for-sample-rate, and the quirks the vendor headers omit. VibeServer's RSP support was written from the API headers and this. No code used |
-| **Konrad Kosmatka** | librdsparser — reference for the RDS PI + ECC → country mapping (IEC 62106) behind the RDS country flags |
-| **radio-browser.info** | Community station directory used to look up FM-DX / RDS station logos |
-| **Alexandre Rouma & contributors (SDR++ / SDR++ Brown)** | VibeSDR V4's on-device radio was built on the SDR++ Brown DSP core; V5 replaced it with VibeDSP, our own clean-room GPL-free engine, and all SDR++ Brown code was removed — none is bundled now. Some waterfall palettes originate here, and it is the reference for how the Airspy R2/Mini presents its gain: Sensitive / Linear / Free, one slider along the chosen preset curve and the three stages only in Free (GPL-3.0) |
-| **Osmocom / librtlsdr** | RTL-SDR USB driver (Android local hardware + rtl_tcp) |
-| **Airspy** | libairspyhf (BSD-3) — the Airspy HF+ driver |
-| **Great Scott Gadgets** | libhackrf (GPL-2.0-or-later) |
-| **SDRplay Ltd** | The RSP API — headers only; the closed-source library is never bundled |
-| **Mark Borgerding (KissFFT)** | BSD-licensed FFT vendored in the VibeDSP engine |
-| **Karlis Goba (ft8_lib)** | FT8 / FT4 decoding |
-| **Xiph.Org Foundation** | Opus audio codec |
-| **Ethan Halsall** | [opus-decoder / wasm-audio-decoders](https://github.com/eshaz/wasm-audio-decoders) (MIT) — libopus in WebAssembly, which is how VibeServer's web client decodes Opus on a plain `http://` LAN address |
-| **EiBi** | Shortwave broadcast schedules for live station bookmarks |
-| **Leaflet & OpenStreetMap** | Map rendering and tiles |
-| **Braille Institute** | Atkinson Hyperlegible typeface |
+| **madpsy (M9PSY)** | Creator of UberSDR, and the reason this project exists. VibeServer speaks UberSDR's protocol; the RTTY/NAVTEX, WEFAX and SSTV decoders are C++ ports of his UberSDR decoders, and NR2 / noise blanker / WebSDR-NR are ports of his web client's; colour palettes, band plans, bookmark format, the HFDL/spots maps and the waterfall smoothing pipeline started from his work |
+| **tgcfabian** | The biggest outside source of testing and ideas VibeSDR and VibeServer have had — HackRF support (on his hardware), the deviation monitor, the composite eye diagram, releasing the SDR when idle so other applications can use it, and working behind a reverse proxy all exist or work properly because of him; he also checked our MPX deviation against MPX Tool station by station. He ran VibeServer in a genuinely complicated environment and kept reporting what broke there, which is what made it robust rather than merely working on the bench it was written on |
+| **Onfliner** | Airspy R2 / Mini: the first person to run that driver on real hardware — he reported the gain, bias-T, sample-rate and settings faults that stood between it and working, and asked for the Sensitive / Linear / Free gain modes it now has. The MPX tools: he found the deviation meter under-read quiet stations (an average published as a peak), then tested Advanced RDS against MPX Tool with a **test signal from his own transmitter** — a 22-point sweep, then known RDS deviations of 1.2, 3.0 and 5.1 kHz read through an Airspy Mini and an RTL-SDR. The RDS deviation calibration comes from that measurement, and his pilot and 75 kHz test-tone checks validated the rest of the MPX chain |
+| **Hans van Eijsden (FMDX.org)** | Calibration and validation of the Advanced RDS analyser against a PIRA FM broadcast analyser — he found that our phase reading was its own reflection and that the deviation figures were scaled wrong, and kept testing until they agreed. Also the only route to testing Long PS, RadioText+ and PTYN; found the Dutch-locale 1005 MHz fault and three Mac VibeServer faults |
+| **Kiko7250** | Showed how VibeSDR is actually used, and on what hardware, in Brazil — which set off the optimisation push to run on the lowest-end machines we could reach (a Raspberry Pi 2 was bought specifically to build VibeServer on because of it). He also put up the first public VibeServer outside Stuart's and tgcfabian's, which is how Brazilian RDS came to be understood: their stations rotate the station name as a marquee, and the learning RDS bookmarks never worked properly on his server until they were changed to cope with it. His server is also why radios have a settable display name and why Save View For All works in Safari |
+| **xavxx** | An App Store user whose Discord report — an older app meeting a newer VibeServer with a blank spectrum and an endless "Connection lost", and a Jr squelch that did nothing — is why V11 is a compatibility programme |
+| **Michael (DL8LDN)** | Tested against OpenWebRX and reported on GitHub (issue #22): the OWRX map with no way back, ignored digital-mode bookmarks, the decoder history, DRM dropouts; asked for the 5 kHz broadcast step and waterfall taps that snap to the step, and found the squelch marker not following the visual gain trim |
+| **@Sagistario306** | Reported the first-launch CONTINUE button being untappable on a small-screen ZTE Blade L8 |
 | **Claude (Anthropic)** | AI coding and development assistant |
-| **Expo, React Native, Hermes, Skia, Reanimated, Gesture Handler, OkHttp** | App framework and native stack |
+
+### Receivers, protocols and references (read, not copied, unless it says so)
+
+| Name | Role |
+|---|---|
+| **John Seamons (ZL/KF6VO) — KiwiSDR** | Protocol reference for the KiwiSDR backend; its IMA-ADPCM flavour (from libcsdr, after Tim Kientzle) is ported exactly; VibeDSP's MMSE noise reduction is the same published method Kiwi ships (Ephraim & Malah; Kim & Ruwisch), and its auto-notch follows Kiwi's structure |
+| **Jakob Ketterl (DD5JFK), Marat Fayzullin & the OpenWebRX+ project** | Protocol reference for the OpenWebRX backend; its ADPCM flavour is ported exactly; csdr (András Retzler, HA7ILM) is the reference for its squelch and S-meter behaviour |
+| **NoobishSVK & contributors** | FM-DX Webserver + the servers.fmdx.org receiver map — protocol reference for the FM-DX backend and its 3LAS MP3 audio (GPL-3.0) |
+| **Airspy — SpyServer** | The SpyServer protocol, implemented clean-room from network captures; no code, header or structure copied |
+| **Phil Karn (KA9Q)** | [ka9q-radio](https://github.com/ka9q/ka9q-radio) — the SDR engine underneath UberSDR, and (GPL-3.0) the design reference for VibeSDR's front-end automatic gain: IF-power level targeting, proportional correction and snap-to-hardware-steps. Read and credited, never copied |
+| **Oona Räisänen (windytan, OH2EIQ)** | [redsea](https://github.com/windytan/redsea) (MIT) — the reference for VibeDSP's weak-signal RDS block recovery: syndrome-table burst correction, rhythm-based sync acquisition and error-rate sync dropping. No redsea code is used; the ideas are hers. Also slowrx, whose SSTV timings reached us through UberSDR's port |
+| **Konrad Kosmatka** | librdsparser (MIT) — reference for the RDS PI + ECC → country mapping (IEC 62106) behind the RDS country flags |
+| **Albrecht Lohofener & contributors (welle.io)** | Read clause by clause while building and repairing VibeSDR's own DAB receiver — FIC/FIG parsing, MSC handling and the OFDM front end. No code used; it is the reference that made ours correct |
+| **Stefan Pöschel (dablin)** | Reference for DAB/DAB+ superframe, PAD and audio handling, and how a decoder should behave when a subchannel goes away |
+| **Jan van Katwijk (dab-cmdline)** | Reference for DAB demodulation and the automatic frequency/timing corrections a receiver applies |
+| **FiendChain (DAB-Radio)** | Reference for the DAB physical layer, and the project whose notes pointed at the TII and DAB+ error-correction work we took further |
+| **Edouard Griffiths (F4EXB) & contributors (SDRangel)** | Its DAB demodulator's bandwidth and sample-rate notes |
+| **ETSI and IEC** | The DAB receiver is written from EN 300 401, TS 102 563, TS 103 466 and companions (tables extracted from them); RDS from IEC 62106 |
+| **Pothosware & Franco Venturi (SoapySDRPlay3)** | The open, authoritative account of how each SDRplay RSP model behaves — per-model antenna ports, bandwidth-for-sample-rate, and the quirks the vendor headers omit. No code used |
+| **Alexandre Rouma & contributors (SDR++ / SDR++ Brown)** | VibeSDR V4's on-device radio was built on the SDR++ Brown DSP core; V5 replaced it with VibeDSP, our own clean-room GPL-free engine, and all SDR++ Brown code was removed along with the FFTW, VOLK and Zstandard libraries it brought — none is bundled now. Some waterfall palettes originate here, VibeDSP's spectrum window matches its, and it is the reference for how the Airspy R2/Mini presents its gain: Sensitive / Linear / Free (GPL-3.0) |
+| **NXP TEF668x, PIRA, MPX Tool** | Behaviour, not code: the TEF tuners are the model for iMS, the FM noise blanker and automatic bandwidth; PIRA's MPX oscillograms for the composite eye; MPX Tool is what our testers measured deviation against |
+| **Joe Taylor (K1JT), Steve Franke (K9AN) & the WSJT team** | FT8 and FT4 are their modes; ft8_lib's LDPC tables come from WSJT-X |
+| **Receiver directories** | instances.ubersdr.org, servers.fmdx.org, receiverbook.de, rx.linkfanel.net (KiwiSDR) and the Airspy SpyServer directory |
+
+### Code that ships
+
+| Name | Licence | Where |
+|---|---|---|
+| **librtlsdr / rtl_tcp** — Osmocom rtl-sdr 2.0.3, Steve Markgraf & contributors | GPL-2.0-or-later | Android Local Hardware, VibeServer (all hosts), Lite; patched to open an Android USB handle |
+| **libusb** | LGPL-2.1-or-later | Android, Lite, VibeServer (static on macOS) |
+| **libairspyhf** — Airspy | BSD-3-Clause | Airspy HF+ driver; patched for Android USB handles |
+| **libairspy** — Airspy (Vernoux, Touil, Gilmour) | BSD-3-Clause + MIT (IQ converter, filters) | Airspy R2 / Mini driver, unmodified |
+| **libhackrf** — Great Scott Gadgets | BSD-3-Clause (library source) | HackRF driver; patched to open from a USB fd |
+| **SDRplay API** — SDRplay Ltd | proprietary | Headers only; the library is loaded at runtime if the user installed it, never bundled |
+| **KissFFT** — Mark Borgerding | BSD-3-Clause | The FFT inside VibeDSP (and inside ft8_lib) |
+| **PFFFT** — Julien Pommier, after FFTPACK (© 2004 UCAR) | FFTPACK licence (BSD-style) | The DAB receiver's OFDM FFT |
+| **ft8_lib** — Kārlis Goba (YL3JG) | MIT | FT8 / FT4 decoding |
+| **Opus** — Xiph.Org Foundation | BSD-3-Clause | The streaming codec: VibeServer encodes, the app, watch and web client decode |
+| **[opus-decoder / wasm-audio-decoders](https://github.com/eshaz/wasm-audio-decoders)** — Ethan Halsall | MIT | libopus in WebAssembly — how VibeServer's web client decodes Opus on a plain `http://` LAN address |
+| **cloudflared** — Cloudflare | Apache-2.0 | The tunnel that lets a VibeServer be reached without port forwarding |
+| **MapLibre GL JS** — MapLibre contributors | BSD-3-Clause | The GPU map engine (app, web client, directory) |
+| **PMTiles** — Protomaps | BSD-3-Clause | The single-file map format the maps are served from |
+| **Leaflet** — Volodymyr Agafonkin; **Leaflet.Terminator** — Jörg Dietrich | BSD-2-Clause; MIT | The fallback map engine where there is no WebGL (loaded from unpkg in the app and web client, bundled on the directory), and the directory fallback's greyline |
+| **pako** — Vitaly Puzrin & Andrei Tuputcyn | MIT (zlib port) | gzip decompression of server messages in the app |
+| **Fonts** — Atkinson Hyperlegible (Braille Institute), Nixie One (Jovanny Lemonad), JetBrains Mono (JetBrains) | SIL OFL 1.1 | UI face, instrument face, map labels |
+| **Expo, React Native, Hermes, Skia, Reanimated, Gesture Handler, WebView, OkHttp, AndroidX Media3, Fresco** | various (MIT / Apache-2.0) | App framework and native stack |
+
+DAB MP2 audio, the DAB Reed-Solomon and Viterbi decoders, the WebSocket server, the mDNS
+responder and all of VibeDSP are our own code. DAB+ (HE-AAC) audio is decoded by the host's own
+decoder — Android's MediaCodec, Apple's AudioToolbox, or an installed ffmpeg — never by a codec
+we ship.
+
+### Data
+
+| Source | Licence | Used for |
+|---|---|---|
+| **Natural Earth** | public domain | Coastlines, borders, rivers, roads, region names |
+| **NOAA / NCEI ETOPO2v2c** | public domain | Shaded relief and bathymetry |
+| **RESOLVE Ecoregions 2017** (Dinerstein et al.) | **CC BY 4.0** | Biome colouring |
+| **HydroLAKES / HydroSHEDS** | **CC BY 4.0** | Lakes and reservoirs |
+| **GeoNames** | **CC BY 4.0** | Towns and cities |
+| **OurAirports** (David Megginson) | public domain | Airfields and runways |
+| **NGA World Port Index** | public domain | Sea ports |
+| **© OpenStreetMap contributors** | **ODbL** | Detailed coastline (built in, never fetched; the derived data is published with every release) and Nominatim geocoding of a server's location |
+| **Ofcom** | **OGL v3** — contains public sector information licensed under the Open Government Licence v3.0 | UK DAB transmitter identification |
+| **EiBi** | — | Shortwave schedules: live bookmarks and the directory's station finder |
+| **RadioDNS** and **radio-browser.info** | — / community | Station logos |
+| **NOAA Space Weather Prediction Center** | public domain | Solar flux and K index for band conditions |
+| **AFRINIC, APNIC, ARIN, LACNIC, RIPE NCC** delegation stats and **iptoasn.com** | free / PDDL | Listener country and network on the server's admin page |
+| **GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib** | — | Waterfall palette origins |
 
 ## Questions people actually ask
 
