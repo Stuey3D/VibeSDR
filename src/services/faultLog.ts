@@ -43,9 +43,12 @@ const faults = new Map<string, FaultEntry & { loggedAt: number; suppressed: numb
 let total = 0;
 type Sink = (line: string, err: unknown) => void;
 // ★ Overridable for the unit test, which must not print a wall of expected errors.
-let sink: Sink = (line, err) => { console.error(line, err); };
+// ★ The line carries text from the network (a message type, a bad frame's summary), so it is an
+//   ARGUMENT, never the format string: a stray %s or %c in it would otherwise garble the one log
+//   this module exists to keep, and swallow `err` as its substitution (CodeQL js/tainted-format-string).
+let sink: Sink = (line, err) => { console.error('%s', line, err); };
 export function _setFaultSink(s: Sink | null): void {
-  sink = s ?? ((line, err) => { console.error(line, err); });
+  sink = s ?? ((line, err) => { console.error('%s', line, err); });
 }
 let now: () => number = () => Date.now();
 export function _setFaultClock(fn: (() => number) | null): void { now = fn ?? (() => Date.now()); }
