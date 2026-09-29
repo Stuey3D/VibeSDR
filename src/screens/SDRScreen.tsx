@@ -161,7 +161,7 @@ import {
 } from '../services/stations';
 import {
   loadUserBookmarks, saveUserBookmarks, bookmarksForInstance, withoutInstance, adoptInstanceScope,
-  exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, setBookmarkSynced,
+  exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, setBookmarkSynced, bookmarkPassband,
   type UserBookmark,
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
@@ -3403,7 +3403,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  zoomByRef and onFilterBothRef already do, rather than hoisting VTS state up the file. */
   const showVtsNoticeRef = useRef<((msg: string, ms: number) => void) | null>(null);
   const onVtsJumpRef   = useRef<((d: 'left' | 'right') => void) | null>(null);
-  const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => void) | null>(null);
+  const onSearchTuneRef = useRef<((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean,
+                                   bw?: [number, number] | null) => void) | null>(null);
 
   // ── Media skip mode: lock-screen ⏮⏭ tune by step or jump bookmarks ───────
   const [mediaSkip, setMediaSkip] = useState<'step' | 'bookmark'>('step');
@@ -8143,13 +8144,18 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  2026-08-07 and never here: "add to server import to server are admin locked and should be
    *  present on the phone app", Stuart, 2026-09-09). Same route the browser uses: POST /bookmarks
    *  with the ticket; the server answers with its whole list, which becomes ours. */
-  const postServerBookmark = useCallback(async (hz: number, name: string, mode?: string): Promise<boolean> => {
+  /** ★ `bw` = the passband, sent in UberSDR's own field names so the receiver's list keeps it (the
+   *  shim stores bandwidth_low/high since 2026-09-29; an older one ignores them). */
+  const postServerBookmark = useCallback(async (hz: number, name: string, mode?: string,
+                                                bw?: [number, number] | null): Promise<boolean> => {
     const q = adminAuthQRef.current;
     if (!q) return false;
     try {
       const base = connectBase.replace(/\/+$/, '');
       const r = await fetch(`${base}/bookmarks?${q}&frequency=${Math.round(hz)}&name=${encodeURIComponent(name)}`
-                            + (mode ? `&mode=${encodeURIComponent(mode)}` : ''), { method: 'POST' });
+                            + (mode ? `&mode=${encodeURIComponent(mode)}` : '')
+                            + (bw ? `&bandwidth_low=${Math.round(bw[0])}&bandwidth_high=${Math.round(bw[1])}` : ''),
+                            { method: 'POST' });
       if (!r.ok) return false;
       const arr = await r.json();
       if (Array.isArray(arr)) {
@@ -8163,15 +8169,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onAddServerBookmark = useCallback(async (name: string): Promise<string> => {
     const clean = name.trim();
     if (!clean) return '';
-    const ok = await postServerBookmark(status.frequency, clean, status.mode);
+    const ok = await postServerBookmark(status.frequency, clean, status.mode,
+      bookmarkPassband({ bandwidth_low: status.bandwidthLow, bandwidth_high: status.bandwidthHigh }));
     return ok ? `Saved "${clean}" on the receiver.` : 'Could not save on the receiver (is the password still good?).';
-  }, [postServerBookmark, status.frequency, status.mode]);
+  }, [postServerBookmark, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
   const onImportToServer = useCallback(async (text: string): Promise<string> => {
     let incoming: UserBookmark[];
     try { incoming = parseBookmarksAny(text, ''); } catch { return 'Could not parse that file (need JSON or YAML).'; }
     if (!incoming.length) return 'No bookmarks found (JSON or YAML).';
     let n = 0;
-    for (const b of incoming) if (await postServerBookmark(b.frequency, b.name, b.mode)) n++;
+    for (const b of incoming) if (await postServerBookmark(b.frequency, b.name, b.mode, bookmarkPassband(b))) n++;
     return n ? `Imported ${n} of ${incoming.length} to the receiver.` : 'Could not save on the receiver (is the password still good?).';
   }, [postServerBookmark]);
   const onPickImportFileToServer = useCallback(async (): Promise<string> => {
@@ -8538,7 +8545,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     onTuneHz(bm.frequency);
     const m = bm.mode?.toLowerCase();
     if (m && m in MODE_BANDWIDTHS) onMode(m as SDRMode);
-  }, [onTuneHz, onMode]);
+    const bw = bookmarkPassband(bm);     // ★ its own passband, after the mode reset it — see onSearchTune
+    if (bw) onFilterBoth(bw[0], bw[1]);
+  }, [onTuneHz, onMode, onFilterBoth]);
   const onVtsPrev = useCallback(() => onVtsJump('left'),  [onVtsJump]);
   const onVtsNext = useCallback(() => onVtsJump('right'), [onVtsJump]);
 
@@ -8570,7 +8579,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     return m in MODE_BANDWIDTHS;
   }, [serverModes]);
 
-  const onSearchTune = useCallback((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean) => {
+  /** @param bw a bookmark's own passband (bookmarkPassband) — applied AFTER the mode, which resets the
+   *            filter to its default, so the bookmark's width is the one the server ends up on. */
+  const onSearchTune = useCallback((hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean,
+                                    bw?: [number, number] | null) => {
     setMenuOpen(false);
     const target = Math.round(hz);
     /* ★★★ A DAB BOOKMARK IS A BLOCK, NOT A FREQUENCY AND A MODE. Down this path it tuned the VFO
@@ -8594,7 +8606,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     } else if (explicit && canSetMode(explicit)) {
       onMode(explicit);  // plain bookmark tap — mode only, step untouched
     }
-  }, [onTuneHz, onMode, ituRegion, canSetMode, dabGoTo]);
+    /* ★★★ THE BOOKMARK'S PASSBAND, LAST. It was saved (bandwidth_low/high, UberSDR's own fields) and
+     *  never applied, so a weak AM signal saved on ±3 kHz came back on the default ±5 (NickB,
+     *  2026-09-29). After onMode, because a mode change resets the filter to the mode's default. */
+    if (bw && !isBand) onFilterBoth(bw[0], bw[1]);
+  }, [onTuneHz, onMode, ituRegion, canSetMode, dabGoTo, onFilterBoth]);
 
   // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
   // fell back to just closing the menu). The ⟳ RECONNECT button was removed

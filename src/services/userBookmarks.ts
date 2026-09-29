@@ -45,6 +45,22 @@ export interface UserBookmark {
   updatedAt?:      number;
 }
 
+/** ★★ THE PASSBAND A BOOKMARK WAS SAVED WITH, or null for "use the mode's default".
+ *
+ *  The fields have always been part of the format (UberSDR's normalizeBookmark carries
+ *  bandwidth_low/bandwidth_high, and every save here writes them) — but nothing APPLIED them in
+ *  the app, so a weak AM signal saved on a narrow ±3 kHz came back at the default ±5 kHz (NickB,
+ *  2026-09-29). Optional on purpose: a bookmark without them, or with nonsense in them, keeps the
+ *  mode default exactly as before. Accepts every bookmark shape we hold (user, server, EiBi). */
+export function bookmarkPassband(
+  b: { bandwidth_low?: number | null; bandwidth_high?: number | null } | null | undefined,
+): [number, number] | null {
+  const lo = b?.bandwidth_low, hi = b?.bandwidth_high;
+  if (typeof lo !== 'number' || typeof hi !== 'number') return null;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
+  return [lo, hi];
+}
+
 /** Flip a bookmark's iCloud opt-in. Matched the same way deletion is. */
 export function setBookmarkSynced(
   list: UserBookmark[], bm: UserBookmark, synced: boolean,

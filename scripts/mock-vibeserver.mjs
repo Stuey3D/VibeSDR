@@ -270,6 +270,7 @@ function handleControl(raw, send) {
     case 'tune':
       if (m.frequency) state.vfo = m.frequency;
       if (m.mode) state.mode = m.mode;
+      lastControls.set('tune', m);   // so a test can assert the exact Hz a tune reached (test-web-airband)
       break;
     case 'mode': state.mode = m.mode; break;
     // Hardware + audio-DSP controls. The real shim applies these server-side;

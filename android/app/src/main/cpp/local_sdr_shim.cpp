@@ -1414,6 +1414,12 @@ struct LearnedBm {
     int         pi = -1;         // RDS PI code (station identity)
     long long   hz = 0;          // the EXACT frequency — the map key is only a rounding
     std::string mode = "wfm";    // RDS learning is FM-only, but an IMPORT carries any mode
+    /** ★★ THE PASSBAND IT WAS SAVED WITH — UberSDR's own `bandwidth_low`/`bandwidth_high` (Hz offsets
+     *  from the carrier). A weak AM signal saved on a narrow ±3 kHz came back on the mode default
+     *  (NickB, 2026-09-29) because the receiver's list had nowhere to keep it. hasBw=false = none,
+     *  which is every learned station and every record written before this: the mode default. */
+    bool        hasBw = false;
+    int         bwLo = 0, bwHi = 0;
     long long   lastHeard = 0;   // unix seconds — drives expiry
     bool        manual = false;  // saved by hand: never expires
     /** ★ DAB identity (mode "dab"): the service inside the multiplex at hz. -1 = not DAB. */
@@ -1798,7 +1804,8 @@ static void bmLearnDab(double hz, int eid, int ecc, uint32_t sid, const std::str
     bmSaveLocked();
 }
 
-static void bmAddManual(double hz, const std::string& name, const std::string& mode) {
+static void bmAddManual(double hz, const std::string& name, const std::string& mode,
+                        bool hasBw = false, int bwLo = 0, int bwHi = 0) {
     const std::string n = bmTrim(name);
     if (n.empty() || hz <= 0) return;
     std::lock_guard<std::mutex> lk(g_bmMtx);
@@ -1807,6 +1814,8 @@ static void bmAddManual(double hz, const std::string& name, const std::string& m
     b.pi = -1;
     b.hz = (long long)llround(hz);
     b.mode = mode.empty() ? "am" : mode;
+    // ★ Only a real passband: both edges, low below high. Anything else is "use the mode default".
+    if (hasBw && bwHi > bwLo) { b.hasBw = true; b.bwLo = bwLo; b.bwHi = bwHi; }
     b.lastHeard = (long long)time(nullptr);
     b.manual = true;
     g_bookmarks[bmKey(hz)] = b;
@@ -1901,6 +1910,15 @@ static void bmLoadJson(const std::string& json) {
         if (within(sp)) b.sid = atoi(json.c_str() + sp + 6);
         if (within(ep)) b.eid = atoi(json.c_str() + ep + 6);
         if (within(cp)) b.ecc = atoi(json.c_str() + cp + 6);
+        /* ★ The saved passband, when the record has one (an app import, or anything saved since
+         *  2026-09-29). Absent = the mode default, which is what every older record meant. */
+        {
+            const size_t blp = json.find("\"bandwidth_low\":", p), bhp = json.find("\"bandwidth_high\":", p);
+            if (within(blp) && within(bhp)) {
+                const int lo = atoi(json.c_str() + blp + 16), hi = atoi(json.c_str() + bhp + 17);
+                if (hi > lo) { b.hasBw = true; b.bwLo = lo; b.bwHi = hi; }
+            }
+        }
         if (freq > 0 && !b.name.empty()) g_bookmarks[bmKeyFor((double)freq, b.sid)] = b;
         p = ne;
     }
@@ -1929,6 +1947,8 @@ static std::string bmJsonLocked() {
            + ",\"lastHeard\":" + std::to_string(kv.second.lastHeard)
            + ",\"manual\":" + (kv.second.manual ? "true" : "false")
            + ",\"mode\":\"" + bmEsc(kv.second.mode) + "\""
+           + (kv.second.hasBw ? ",\"bandwidth_low\":" + std::to_string(kv.second.bwLo)
+                                + ",\"bandwidth_high\":" + std::to_string(kv.second.bwHi) : std::string())
            + (kv.second.sid >= 0 ? ",\"sid\":" + std::to_string(kv.second.sid)
                                    + ",\"eid\":" + std::to_string(kv.second.eid)
                                    + ",\"ecc\":" + std::to_string(kv.second.ecc) : std::string())
@@ -17406,7 +17426,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return;
             }
             if (remove) { const std::string sidQ = queryParam(reqLine, "sid"); bmRemove(hz, sidQ.empty() ? -1 : atoi(sidQ.c_str())); }
-            else bmAddManual(hz, name, urlDecode(queryParam(reqLine, "mode")));
+            else {
+                // ★ Optional passband (UberSDR's field names). An older client sends neither, and
+                //   the bookmark keeps the mode default exactly as before.
+                const std::string bl = queryParam(reqLine, "bandwidth_low"), bh = queryParam(reqLine, "bandwidth_high");
+                const bool hasBw = !bl.empty() && !bh.empty();
+                bmAddManual(hz, name, urlDecode(queryParam(reqLine, "mode")),
+                            hasBw, hasBw ? atoi(bl.c_str()) : 0, hasBw ? atoi(bh.c_str()) : 0);
+            }
 
             std::string body = bmJson();
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"

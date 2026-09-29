@@ -13,7 +13,7 @@ import {
   searchStations, fmtFreq, fmtRange, grpAbbr,
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
-import { type UserBookmark } from '../services/userBookmarks';
+import { type UserBookmark, bookmarkPassband } from '../services/userBookmarks';
 import { airbandEntry } from '../utils/airband';
 import { useListNav, useKeyboardMode, NAV_FOCUS, revealIn, noteTouchInteraction } from './PanelNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -74,7 +74,9 @@ interface FreqModalProps {
   /** BOOKMARKS mode (relocated from MenuSheet §4.2). When these are supplied the card gains a
    *  Tune | Bookmarks segmented header. All lifted verbatim from MenuSheet. */
   currentMode?:      string;
-  onSearchTune?:     (hz: number, mode?: string | null, isBand?: boolean) => void;
+  /** `bw` = the bookmark's own passband (bookmarkPassband); omitted = the mode's default. */
+  onSearchTune?:     (hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean,
+                      bw?: [number, number] | null) => void;
   /** ★ A DAB bookmark: tune the multiplex and select the service (web client's dabGoTo). Only
    *  offered when the receiver can do DAB; otherwise a DAB row tunes like any other. */
   onDabTune?:        (hz: number, sid: number) => void;
@@ -255,7 +257,7 @@ export default function FreqModal({
   const tuneBm = (b: ServerBookmark) => {
     const isDab = (b.mode || '').toLowerCase() === 'dab' && (b.sid ?? -1) >= 0;
     if (isDab && onDabTune) onDabTune(b.frequency, b.sid!);
-    else onSearchTune?.(b.frequency, b.mode);
+    else onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b));
   };
   // ★ Deferred: the keystroke paints first, the thousands-long scan follows when the thread is free.
   const deferredQuery = useDeferredValue(searchQuery);
@@ -934,7 +936,7 @@ export default function FreqModal({
               {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: dimText }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
               {userBookmarks.map((b: UserBookmark, i: number) => (
                 <View key={`${b.name}|${b.frequency}|${i}`} style={st.bmSaveRow}>
-                  <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode); onClose(); }}>
+                  <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b)); onClose(); }}>
                     <Text style={[st.bmName2, { color: t.freqColor }]} numberOfLines={1}>{b.name}</Text>
                     <Text style={[st.bmFreq2, { color: dimText }]}>{fmtFreq(b.frequency)}  {b.mode.toUpperCase()}</Text>
                   </BmBtn>

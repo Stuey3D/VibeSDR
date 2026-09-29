@@ -8416,7 +8416,7 @@ function initBookmarks() {
   $('bmAddServer').onclick = async () => {
     if (!spec) return;
     const name = nameEl.value.trim() || rdsName || `${(spec.frequency / 1e6).toFixed(3)} MHz`;
-    const ok = await saveToServer(spec.frequency, name, spec.mode);
+    const ok = await saveToServer(spec.frequency, name, spec.mode, spec.bandwidthLow, spec.bandwidthHigh);
     $('bmMsg').textContent = ok
       ? `Saved "${name}" on the receiver`
       : 'Could not save on the receiver (is the PIN right?)';
@@ -8455,7 +8455,8 @@ function initBookmarks() {
         let n = 0;
         for (const b of rows) {
           if (!b?.name || !b?.frequency) continue;
-          if (await saveToServer(Number(b.frequency), String(b.name), b.mode || undefined)) n++;
+          if (await saveToServer(Number(b.frequency), String(b.name), b.mode || undefined,
+                                 b.bandwidth_low, b.bandwidth_high)) n++;
         }
         renderBookmarks();
         $('bmMsg').textContent = n
@@ -8507,6 +8508,7 @@ function renderBookmarks() {
     ...getServerBookmarks().map(b => ({
       name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', local: false,
       heard: !(b as any).manual, sid: b.sid, eid: b.eid, ecc: b.ecc,
+      bwLo: b.bandwidth_low, bwHi: b.bandwidth_high,
     })),
   ];
   if (bmFilter === 'dab') rows = rows.filter(r => (r.mode || '').toLowerCase() === 'dab');
