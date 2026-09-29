@@ -37,6 +37,7 @@ import {
 } from '../../../src/constants/bandPlan';
 import { deriveItuRegion } from '../../../src/services/stations';
 import { resolveStationIso, isoToFlag, ituToIso } from '../../../src/services/rdsCountry';
+import { PsStabiliser } from '../../../src/services/psStabiliser';
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
@@ -2052,7 +2053,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //     BBC Radio 1 logo does pop up then go again even when tuned to BBC Radio 1").
       //     ★★ THE PI CODE IS THE STATION; the PS is decoration it may change at will. So the
       //        logo belongs to the PI, and only a PI change invalidates it — see rdsLogoPi.
-      if (ps !== rdsName) rdsName = ps;
+      // ★ Through the stabiliser — see psStab. Keyed on the PI (the identity) when there is one,
+      //   else the tuned frequency, exactly as the app keys it.
+      rdsPsRaw = ps;
+      rdsName = psStab.feed(m.pi > 0 ? `pi:${m.pi.toString(16)}` : `f:${Math.round((spec?.frequency || 0) / 100000)}`,
+                            ps, Date.now());
+      armPsTick();
       rdsText = rt;
       if (!rdsName && rt) rdsName = rt;   // some stations send only RadioText
       // Transmitter country from the RDS Extended Country Code + PI, as the app
@@ -3101,7 +3107,39 @@ function drawBands() {
 // saying nothing. VTS appears only when you're essentially ON the bookmark.
 const VTS_ON_HZ = 99;
 
-let rdsName = '';
+let rdsName = '';   // the name to DISPLAY — the PS after psStab (see below)
+/* ★★★ A ROTATING (MARQUEE) PS IS SHOWN AS ONE NAME, as the app does (f9cf6a6a). Brazilian stations
+ *  rotate the 8-character PS — "UMUARAMA" / "ALINE" / "RADIO", a second or two apart, for ever —
+ *  so every reader of the name got a different fragment each time. The SAME stabiliser the app
+ *  uses (src/services/psStabiliser.ts — one rule, two readers): a static PS passes straight
+ *  through at once (Europe unchanged); a rotating one becomes one stable name carrying the whole
+ *  cycle; an empty PS on the same station never blanks it; nothing changes inside the dwell.
+ *  ★ ADV RDS still shows the PS exactly as it is on air — rdsPsRaw — because it is an instrument. */
+const psStab = new PsStabiliser();
+let rdsPsRaw = '';
+let psTickTimer: ReturnType<typeof setTimeout> | null = null;
+/** Forget the stabiliser's station — live RDS has ended (retune, mode change). */
+function resetPsStab() {
+  psStab.reset();
+  rdsPsRaw = '';
+  if (psTickTimer) { clearTimeout(psTickTimer); psTickTimer = null; }
+}
+/** A change the dwell held back lands on its own timer, with no new RDS message needed. */
+function armPsTick() {
+  if (psTickTimer) { clearTimeout(psTickTimer); psTickTimer = null; }
+  const due = psStab.nextDueIn(Date.now());
+  if (due == null) return;
+  psTickTimer = setTimeout(() => {
+    psTickTimer = null;
+    const name = psStab.tick(Date.now());
+    if (name && name !== rdsName) {
+      rdsName = name;
+      if (rdsPanelOpen()) renderRds();
+      updateVts();
+    }
+    armPsTick();
+  }, due + 20);
+}
 let rdsText = '';   // RDS RadioText — the message, distinct from the PS name
 let rdsIso = '';        // transmitter country, from RDS ECC + PI
 let rdsLogoUrl = '';    // resolved station logo (radio-browser)
@@ -3142,6 +3180,7 @@ let rdsEcc = 0;     // Extended Country Code (group 1A), 0 = not received
 function expireRdsIfRetuned() {
   if (rdsFreq < 0 || !spec || spec.frequency === rdsFreq) return;
   rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
+  resetPsStab();
   rdsLogoProvisional = false;
   logoFromIdentity = false;
   rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
@@ -3520,6 +3559,7 @@ function checkBandCrossing(hz: number) {
 
 function updateVts() {
   expireRdsIfRetuned();
+  syncDecIdentity();   // ★ the decoder header follows the CURRENT station — see syncDecIdentity
   if (!spec) return;
   // ★ A move of the dial is a NEW announcement, so the static clock restarts rather than the old
   //   one continuing to run against a station you have already left.
@@ -6758,6 +6798,9 @@ function dabUiOn() {
   dabSetPane('stations');
   // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
   document.getElementById('decBox')?.classList.add('open');
+  /* ★ `dab` lets a narrow box give the multiplex summary its own line under the header buttons —
+   *  see "#decBox.dab #decStatus" in index.html. Removed in dabUiOff. */
+  document.getElementById('decBox')?.classList.add('dab');
   /* ★ And it gets the size toggle every other decoder has. Opening the box directly skips
    *  openDecoder(), which is where the button is shown — so DAB had no Big/Small (Stuart). */
   $('rdsSize').classList.add('show');
@@ -6903,7 +6946,7 @@ function dabUiOff() {
     /* ★★★ AND CLOSE THE BOX. dabUiOn opens it directly and titles it DAB; nothing here undid
      *  either, so a listener who left DAB kept an open box headed "DAB" with no controls in it
      *  (seen on the Xcover, 2026-09-07). Give the box back the way it was found. */
-    document.getElementById('decBox')?.classList.remove('open');
+    document.getElementById('decBox')?.classList.remove('open', 'dab');
     $('rdsSize').classList.remove('show');
     $('decClr').style.display = '';
     $('dabBm').style.display = 'none';
@@ -9646,12 +9689,28 @@ function lockRdsRowHeights() {
   }
 }
 
-function renderRds() {
-  const dash = '—';
+/** ★★★ ONE OWNER FOR THE DECODER HEADER'S STATION IDENTITY (#decFlag, #decLogo, and the big logo
+ *  inside the ADV RDS panel).
+ *
+ *  THE BUG THIS REPLACES: these were written ONLY by renderRds(), which runs only while ADV RDS is
+ *  open — and nothing ever took them down. Switching the box to another decoder (showDecBox retitles
+ *  it and never touched the header's <img>) left the picture up; a retune or a mode change cleared
+ *  rdsLogoUrl, but with the panel shut renderRds never ran to act on it. So the last station's logo
+ *  rode along into TIME, RTTY, WEFAX… — Stuart, 2026-09-29, on an iPhone: the Heart logo in the MSF
+ *  box, "searching for the minute", long after Heart was left. Same shape as every earlier stale-logo
+ *  report: a picture put up by one path and taken down by none.
+ *  ★★ So the header is DERIVED from the current state every time, never left standing. It is called
+ *     from renderRds AND from updateVts — which every retune, mode change, RDS message and decoder
+ *     open (showDecBox) already passes through, straight after expireRdsIfRetuned.
+ *  ★ SHOWN ONLY IN ADV RDS. The header identity stands in for the VTS bar, which hides only while
+ *    ADV RDS is open (see updateVts). Every other decoder leaves the bar on screen, and a TIME / RTTY
+ *    / FT8 box is not about a broadcast station at all. */
+function syncDecIdentity() {
+  const own = rdsPanelOpen();
   // ★ The flag and logo move into the header while the bar is hidden, so the station keeps
   // the same visual identity it had on the VTS rather than becoming a table of numbers
   // (Stuart, 2026-07-26).
-  $('decFlag').textContent = rdsName || rdsPi > 0 ? isoToFlag(rdsIso) : '';
+  $('decFlag').textContent = own && (rdsName || rdsPi > 0) ? isoToFlag(rdsIso) : '';
   // ★ TWO COPIES, ON PURPOSE. The header badge is the identity you glance at while the panel
   // is minimised; the big one under the MPX fills space the column already leaves empty and is
   // the one you actually look at. Both are driven from the same URL so they cannot disagree.
@@ -9666,7 +9725,13 @@ function renderRds() {
   for (const id of ['decLogo', 'rdsLogoBig']) {
     const el = document.getElementById(id) as HTMLImageElement | null;
     if (!el) continue;
-    if (!rdsLogoUrl) { el.classList.remove('show'); continue; }
+    // ★ Not ours to show (see above), or no logo for THIS station: take it down AND drop the src,
+    //   so the next show can never flash the previous station's picture before its onload.
+    if (!own || !rdsLogoUrl) {
+      el.classList.remove('show');
+      if (el.hasAttribute('src')) el.removeAttribute('src');
+      continue;
+    }
     if (el.src !== rdsLogoUrl) {
       const url = rdsLogoUrl;
       el.classList.remove('show');
@@ -9680,12 +9745,18 @@ function renderRds() {
       el.classList.add('show');
     }
   }
+}
+
+function renderRds() {
+  const dash = '—';
+  syncDecIdentity();
   // ★ HEX AND DECIMAL. Hex is how the standard defines PI, and how it decomposes into
   // country / coverage / reference — but plenty of databases, loggers and older receivers
   // quote it in DECIMAL, so DXers comparing catches see both forms. Showing both saves
   // anyone doing hex arithmetic to match a log entry (Stuart, 2026-07-27).
   $('rxPi').textContent  = rdsPi > 0 ? `${piHex(rdsPi)} · ${rdsPi}` : dash;
-  $('rxPs').textContent  = rdsName || dash;
+  // ★ The PS as it is ON AIR, not the stabilised display name — this is the instrument.
+  $('rxPs').textContent  = rdsPsRaw || rdsName || dash;
   $('rxRt').textContent  = rdsText || dash;
   // ★ RT+ — the tags point INTO RadioText, so they can only appear once group 3A has
   // announced which group carries them. That announcement is infrequent, which is why this
@@ -12567,6 +12638,7 @@ function setMode(m: SDRMode, send: boolean) {
   if (m !== 'wfm') {
     $('stereo').classList.remove('on');
     rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
+    resetPsStab();
   rdsLogoProvisional = false;
   logoFromIdentity = false;
   }
