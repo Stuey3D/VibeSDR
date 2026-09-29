@@ -135,3 +135,16 @@ and after (pre-existing, unrelated).
 **Maintenance note:** the Metro patches are keyed to the Metro version. When Expo or Lite's RN
 moves Metro, patch-package will say the patch does not apply — re-make it (two lines) or drop the
 override if Metro has moved to image-size 2.
+
+## 2026-09-29 — follow-up after adding Go to the scan matrix
+
+- **#2 go/request-forgery (tools/vibeiq/bridge.go:221)** — closed as FIXED by the first Go scan (c28dfae8 had
+  replaced the concatenated URL with a validated url.URL).
+- **#92 go/request-forgery (tools/vibeiq/bridge.go:265)** — the same flow re-flagged against the fixed code.
+  DISMISSED as a false positive (Stuart approved): VibeIQ is a local desktop tool and the receiver host is typed
+  by its own user; the control API listens on 127.0.0.1 only and rejects any Host/Origin other than
+  127.0.0.1/::1/localhost (ui.go guard — covers cross-site POSTs and DNS rebinding); checkTarget admits a bare
+  host[:port] and a /r/<radio>/ path only; the one request is an HTTPS GET of /vibeserver.json on the host the
+  user chose, at pairing time. The rule's "DDOS" wording is its generic description, not a finding.
+- **#90, #91 js/tainted-format-string (src/services/faultLog.ts)** — REAL (minor): network text was the console
+  format string. FIXED in 3c387b62 (passed as an argument to '%s').
