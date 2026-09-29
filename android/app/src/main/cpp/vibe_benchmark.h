@@ -184,6 +184,11 @@ inline Result runOne(const std::string& id, const std::string& label, double fs,
     //    rdsExt. A server always wires them, so without these every WFM row read LOW (no RDS decoder at all).
     cb.rdsPs = noPs; cb.rdsText = noText; cb.rdsExt = noExt;
     pipe.setRdsExtWantedFlag(rdsExt ? &rdsOn : &rdsOff);
+    /* ★★ THE INSTRUMENT MUST WAIT HERE, NOT DROP. Advanced RDS is measured on its own thread
+     *  (MpxMeasure, "vibe-mpx"), which on a live server drops blocks rather than delay audio. Fed as
+     *  fast as the pipeline will take it — this whole function — a dropping instrument would score a
+     *  fraction of its real cost and grade a Pi 2 green for a feature it cannot carry. */
+    pipe.setMeasureBlocking(true);
     const auto before = threadCpu();
     const double self0 = threadSelfCpu();
     pipe.start(fs, 4096, 10.0, 48000, cb);

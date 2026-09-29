@@ -6138,6 +6138,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         float rdsPilotDev = 0.0f, rdsDev = 0.0f; // injection levels, kHz deviation
         float rdsDevPeak = 0.0f;                // ★ the MEASURED peak, no assumed crest factor
         float rdsDevRaw  = 0.0f;                // ★ rdsDev with the guard subtraction skipped — calibration only
+        // ★★ The instrument's MPX S/N and multipath (MpxMeasure, 2026-09-29) — see RdsExt::mpxSnrDb.
+        float rdsMeasSnr = 0.0f; int rdsMeasSnrOk = 0;
+        float rdsMeasMp  = 0.0f; int rdsMeasMpOk  = 0; int rdsMeasured = 0;
         std::vector<vibedsp::RdsDecoder::Eon> rdsEon;
         std::vector<vibedsp::RdsDecoder::Oda> rdsOda;
         std::vector<int> rdsAf;
@@ -7396,6 +7399,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //       deep enough to be worth a private view — and from the shared wide row when it does
         //       not. That is the same handover, decided without resizing anything.
         int want = chanBinsFor(bw);
+        /* ★ NOT WIDENED FOR THE ADVANCED RDS INSTRUMENT, deliberately (2026-09-29). MpxMeasure takes
+         *  this pipeline's baseband ahead of the listener's filter, and extract() rolls the channel's
+         *  outer quarter off — so a narrow passband here (±75 kHz asks for 375 kHz, flat to ±94) does
+         *  reach the instrument. MEASURED, not assumed (test-mpx-measure, shared dial): at 80 kHz peak
+         *  deviation the RDS figures move 1 % and the pilot not at all; at ±100 kHz, nothing. Flooring
+         *  every WFM listener's channel at 600 kHz would cost CPU in normal listening, with the panel
+         *  shut, to buy that 1 % — and resizing only when the panel opens would rebuild the listener's
+         *  pipeline under their audio. Neither is worth it; the residual is stated instead. */
         // ★ RAW IQ OUT needs the channel at least as wide as the rate it delivers (the resampler
         //   can only take away). 250 kHz IQ on a 12.5 kHz NFM channel would otherwise be 12.5 kHz of
         //   signal inside 250 kHz of nothing.
@@ -10826,6 +10837,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsDev      = x.rdsDevKHz;
         st.rdsDevPeak  = x.rdsDevPeakKHz;
         st.rdsDevRaw   = x.rdsDevRawKHz;
+        st.rdsMeasSnr = x.mpxSnrDb; st.rdsMeasSnrOk = x.snrOk;
+        st.rdsMeasMp  = x.multipath; st.rdsMeasMpOk = x.multipathOk; st.rdsMeasured = x.measured;
     }
     static void rdsSigCb_(RdsState& st, double vfoHz, Impl* im, float relDb) {
         std::lock_guard<std::mutex> lk(st.rdsMtx);
@@ -12215,8 +12228,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ The pipeline's optional worker threads (spectrum, demod — VIBE_DSP_THREADS=1) are real-time
         //   work like vibe-dsp itself, so they get its name-and-priority treatment, not the default.
         vibedsp::RxPipeline::workerInit() = [](const char* name) {
-            // ★ The priority order (vibe_thread.h): the spectrum worker is SPECTRUM, the demod worker AUDIO.
-            if (std::strcmp(name, "vibe-spec") == 0) vibeSpectrumThread(name); else vibeAudioThread(name);
+            // ★ The priority order (vibe_thread.h): the spectrum worker is SPECTRUM, the demod worker AUDIO,
+            //   and the Advanced RDS instrument (MpxMeasure, "vibe-mpx") a DECODER — it measures, nobody
+            //   hears it, and it drops its own work rather than delay anything above it.
+            if (std::strcmp(name, "vibe-spec") == 0) vibeSpectrumThread(name);
+            else if (std::strcmp(name, "vibe-mpx") == 0) vibeDecoderThread(name);
+            else vibeAudioThread(name);
         };
         cb.rdsText  = &Impl::rdsTextCb;
         cb.rdsEcc   = &Impl::rdsEccCb;
@@ -21359,6 +21376,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  only inside the locked block below, so a path that skips it reads an indeterminate
          *  float. Pre-existing and untouched here, but not worth copying into a new field. */
         float rdsDevRaw_ = 0.0f;
+        float measSnr = 0.0f, measMp = 0.0f; int measSnrOk = 0, measMpOk = 0, measured = 0;
         int berNow;   // ★ block error rate, ALSO here: the phase verdict needs it
         std::string rtpT, rtpA, lps, ptyn;
         std::vector<vibedsp::RdsDecoder::Eon> eon;
@@ -21378,7 +21396,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
           phaseDrift = R.rdsPhaseDrift;
           pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; rdsDevPk_ = R.rdsDevPeak;
-          rdsDevRaw_ = R.rdsDevRaw; berNow = R.rdsBer; }
+          rdsDevRaw_ = R.rdsDevRaw; berNow = R.rdsBer;
+          measSnr = R.rdsMeasSnr; measSnrOk = R.rdsMeasSnrOk; measMp = R.rdsMeasMp; measMpOk = R.rdsMeasMpOk;
+          measured = R.rdsMeasured; }
         // ★ The pipeline whose figures these are — chosen exactly as RdsState was above, so the
         //   numbers describe the SAME signal as the constellation beside them. A shared radio has
         //   one pipeline per client; a single-user radio has only the Impl's own.
@@ -21452,21 +21472,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       //   ★★ The last two exist so "why is this not in full stereo?" and "why does
                       //      this sound dull?" have an ANSWER rather than a suspicion — the same
                       //      rule as every other sticky control reporting its state.
-                      + ",\"mpxSnr\":"    + std::to_string(P_ ? P_->blendSnrDb() : 0.0f)
-                      /* ★ AUTO BW's answer travels WITH the MPX S/N that drove it — the panel
-                       *   shows them side by side, and a reading split across two messages would
-                       *   let them disagree by a tick. */
+                      /* ★★ FROM THE INSTRUMENT (MpxMeasure, 2026-09-29), like every other figure on this
+                       *  panel: the station's S/N through a fixed, flat ±150 kHz channel, which the
+                       *  listener's passband and auto bandwidth cannot move. */
+                      + ",\"mpxSnr\":"    + std::to_string(measured ? measSnr : (P_ ? P_->blendSnrDb() : 0.0f))
+                      /* ★ AUTO BW's answer travels WITH the S/N that DROVE it — which is the LISTENER's,
+                       *   measured after their own filter (that is what auto bandwidth steers), so it
+                       *   rides here as mpxSnrRx. ADDITIVE: no shipped client reads it; mpxSnr above is
+                       *   what the panel draws. The two differ exactly by what the narrowing bought. */
+                      + ",\"mpxSnrRx\":"  + std::to_string(P_ ? P_->blendSnrDb() : 0.0f)
                       + ",\"autobw\":"   + std::string(g_autoBwOn.load() ? "true" : "false")
                       + ",\"autobwHz\":" + std::to_string(g_autoBwNowHz.load())
                       // ★ The CORRECTED figure — the noise contribution has been measured and
                       //   subtracted — plus whether it means anything at this S/N. Sending the
                       //   raw number would repeat the mistake that labelled a 6 dB signal's noise
                       //   as "severe multipath".
-                      + ",\"multipath\":" + std::to_string(P_ ? P_->multipathDepth() : 0.0f)
-                      + ",\"multipathOk\":" + std::string((P_ && P_->multipathValid()) ? "1" : "0")
+                      // ★ From the instrument too — the listener's own figure (after IMS/auto bandwidth
+                      //   have narrowed their IF) still drives the CEQ and IMS, and is not sent.
+                      + ",\"multipath\":" + std::to_string(measured ? measMp : (P_ ? P_->multipathDepth() : 0.0f))
+                      + ",\"multipathOk\":" + std::string((measured ? measMpOk != 0 : (P_ && P_->multipathValid())) ? "1" : "0")
                       // ★ Is there a pilot to measure ANY of this against? Without one, mpxSnr and
                       //   multipath are both ratios with a collapsed denominator.
-                      + ",\"snrOk\":" + std::string((P_ && P_->snrValid()) ? "1" : "0")
+                      + ",\"snrOk\":" + std::string((measured ? measSnrOk != 0 : (P_ && P_->snrValid())) ? "1" : "0")
                       + ",\"hiCutLmr\":"  + std::to_string(P_ ? P_->lmrHiCutHz() : 0.0f)
                       + ",\"hiCutAud\":"  + std::to_string(P_ ? P_->audioHiCutHz() : 0.0f)
                       // ★ WOULD A NARROWER IF HELP THIS SIGNAL? Measured live on a shadow copy —
