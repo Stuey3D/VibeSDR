@@ -127,8 +127,11 @@ async function adminQs(existing: string): Promise<string> {
  *  The MODE has to go with it. Without one the shim can only assume, and an imported
  *  list is mostly AM, USB, CW and fax — every one of them arrived as WFM and was
  *  unlistenable. */
+/** ★ `bwLow`/`bwHigh` — the passband, in UberSDR's own field names (bandwidth_low/high), so a bookmark
+ *  saved on the receiver comes back at the width it was saved with. Optional: an older server ignores
+ *  the extra query fields, and a bookmark without them keeps the mode default. */
 export async function saveToServer(
-  frequency: number, name: string, mode?: string,
+  frequency: number, name: string, mode?: string, bwLow?: number | null, bwHigh?: number | null,
 ): Promise<boolean> {
   if (!bmHost) return false;
   try {
@@ -137,7 +140,10 @@ export async function saveToServer(
     const r = await fetch(
       `${httpBase(bmHost)}/bookmarks${qs}${sep}frequency=${Math.round(frequency)}` +
       `&name=${encodeURIComponent(name)}` +
-      (mode ? `&mode=${encodeURIComponent(mode)}` : ''), { method: 'POST' });
+      (mode ? `&mode=${encodeURIComponent(mode)}` : '') +
+      (typeof bwLow === 'number' && typeof bwHigh === 'number' && isFinite(bwLow) && isFinite(bwHigh) && bwHigh > bwLow
+        ? `&bandwidth_low=${Math.round(bwLow)}&bandwidth_high=${Math.round(bwHigh)}` : ''),
+      { method: 'POST' });
     if (!r.ok) return false;
     const arr = await r.json();
     if (Array.isArray(arr)) {
@@ -295,6 +301,7 @@ export function search(query: string, limit = 200): SearchResult[] {
       out.push({
         name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', source: 'server', sid: b.sid,
         detail: (b as any).manual ? 'Saved on the receiver' : 'Heard by this receiver',
+        bandwidthLow: b.bandwidth_low, bandwidthHigh: b.bandwidth_high,
       });
     }
   }

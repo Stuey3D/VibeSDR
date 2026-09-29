@@ -13,7 +13,8 @@ import {
   searchStations, fmtFreq, fmtRange, grpAbbr,
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
-import { type UserBookmark } from '../services/userBookmarks';
+import { type UserBookmark, bookmarkPassband } from '../services/userBookmarks';
+import { airbandEntry } from '../utils/airband';
 import { useListNav, useKeyboardMode, NAV_FOCUS, revealIn, noteTouchInteraction } from './PanelNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -73,7 +74,9 @@ interface FreqModalProps {
   /** BOOKMARKS mode (relocated from MenuSheet §4.2). When these are supplied the card gains a
    *  Tune | Bookmarks segmented header. All lifted verbatim from MenuSheet. */
   currentMode?:      string;
-  onSearchTune?:     (hz: number, mode?: string | null, isBand?: boolean) => void;
+  /** `bw` = the bookmark's own passband (bookmarkPassband); omitted = the mode's default. */
+  onSearchTune?:     (hz: number, mode?: string | null, isBand?: boolean, voiceStep?: boolean,
+                      bw?: [number, number] | null) => void;
   /** ★ A DAB bookmark: tune the multiplex and select the service (web client's dabGoTo). Only
    *  offered when the receiver can do DAB; otherwise a DAB row tunes like any other. */
   onDabTune?:        (hz: number, sid: number) => void;
@@ -254,7 +257,7 @@ export default function FreqModal({
   const tuneBm = (b: ServerBookmark) => {
     const isDab = (b.mode || '').toLowerCase() === 'dab' && (b.sid ?? -1) >= 0;
     if (isDab && onDabTune) onDabTune(b.frequency, b.sid!);
-    else onSearchTune?.(b.frequency, b.mode);
+    else onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b));
   };
   // ★ Deferred: the keystroke paints first, the thousands-long scan follows when the thread is free.
   const deferredQuery = useDeferredValue(searchQuery);
@@ -352,11 +355,27 @@ export default function FreqModal({
   // mirrored by VibeKeyWindow, and onSubmitEditing from the on-screen keyboard. Tuning
   // twice on one press would be a real (if brief) double retune of the server.
   const confirming = useRef(false);
+  const [entryMsg, setEntryMsg] = useState('');
+  useEffect(() => { setEntryMsg(''); }, [value, visible]);
+  /* ★ As you type a channel NAME, say which frequency it tunes — 118.010 is 118.0083 MHz, and an
+   *  aviation radio's user already knows that; everyone else deserves to be told. */
+  const entryHint = useMemo(() => {
+    const air = airbandEntry(fromDisplay(value, unit));
+    if (!air || !air.ok) return '';
+    return `Channel ${air.name} · ${air.spacing === 833 ? '8.33' : '25'} kHz · ${(air.hz / 1e6).toFixed(4)} MHz`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, unit]);
   const confirm = () => {
     if (confirming.current) return;
     confirming.current = true;
     setTimeout(() => { confirming.current = false; }, 0);
     const hz = fromDisplay(value, unit);
+    /* ★★ AN AIRBAND CHANNEL NAME THAT DOES NOT EXIST IS REFUSED, WITH THE REASON. In 118–137 MHz a
+     *  value on a 5 kHz boundary is a channel name, pilot-style (utils/airband.ts), and 8.33 kHz
+     *  names never end .x20/.x45/.x70/.x95. Snapping to a neighbour would tune somewhere nobody asked
+     *  for — so the card stays open and says which two channels are either side. */
+    const air = airbandEntry(hz);
+    if (air && !air.ok) { setEntryMsg(air.message); Keyboard.dismiss(); return; }
     if (hz >= minHz && hz <= maxHz) { onConfirm(hz); onClose(); }
     Keyboard.dismiss();
   };
@@ -622,6 +641,11 @@ export default function FreqModal({
               {unit === 'hz' ? 'Hz' : unit === 'khz' ? 'kHz' : 'MHz'}
             </Text>
           </View>
+          {!!(entryMsg || entryHint) && (
+            <Text style={[st.bmMsg, { color: entryMsg ? '#ff8a70' : unitText, fontFamily: t.font, textAlign: 'center' }]}>
+              {entryMsg || entryHint}
+            </Text>
+          )}
           <View style={st.units}>
             {(['hz', 'khz', 'mhz'] as Unit[]).map(u => (
               <TouchableOpacity
@@ -912,7 +936,7 @@ export default function FreqModal({
               {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: dimText }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
               {userBookmarks.map((b: UserBookmark, i: number) => (
                 <View key={`${b.name}|${b.frequency}|${i}`} style={st.bmSaveRow}>
-                  <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode); onClose(); }}>
+                  <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b)); onClose(); }}>
                     <Text style={[st.bmName2, { color: t.freqColor }]} numberOfLines={1}>{b.name}</Text>
                     <Text style={[st.bmFreq2, { color: dimText }]}>{fmtFreq(b.frequency)}  {b.mode.toUpperCase()}</Text>
                   </BmBtn>

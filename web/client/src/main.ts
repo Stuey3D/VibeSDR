@@ -22,6 +22,8 @@ import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAu
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
+import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
+         type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
@@ -7133,7 +7135,7 @@ function buildControls() {
      *  but this time it stayed in DAB mode until I clicked the DAB button again."
      *  ★ Selecting FM plainly MEANS "stop doing DAB", and a picker where one entry is a toggle
      *    and the rest are a radio group is a picker that lies about what it does. */
-    setMode:    (m) => { if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); },
+    setMode:    (m) => { if (dabOn) dabSetMode(false); setMode(m as SDRMode, true); airbandFollowPassband(); renderFreq(); },
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
@@ -8360,6 +8362,8 @@ function tuneTo(r: SearchResult) {
   const mode = (r.mode || bandMode || spec.mode) as SDRMode;
   spec.tune(clampTune(r.frequency), mode, { recenter: true, retarget: true });
   setMode(mode, false);
+  airDesig = null;
+  airbandFollowPassband();   // an airband DEFAULT for the channel — the bookmark's own width, below, wins
   // A bookmark can carry its own passband — honour it rather than the mode default.
   if (typeof r.bandwidthLow === 'number' && typeof r.bandwidthHigh === 'number') {
     spec.setBandwidth(r.bandwidthLow, r.bandwidthHigh);
@@ -8412,7 +8416,7 @@ function initBookmarks() {
   $('bmAddServer').onclick = async () => {
     if (!spec) return;
     const name = nameEl.value.trim() || rdsName || `${(spec.frequency / 1e6).toFixed(3)} MHz`;
-    const ok = await saveToServer(spec.frequency, name, spec.mode);
+    const ok = await saveToServer(spec.frequency, name, spec.mode, spec.bandwidthLow, spec.bandwidthHigh);
     $('bmMsg').textContent = ok
       ? `Saved "${name}" on the receiver`
       : 'Could not save on the receiver (is the PIN right?)';
@@ -8451,7 +8455,8 @@ function initBookmarks() {
         let n = 0;
         for (const b of rows) {
           if (!b?.name || !b?.frequency) continue;
-          if (await saveToServer(Number(b.frequency), String(b.name), b.mode || undefined)) n++;
+          if (await saveToServer(Number(b.frequency), String(b.name), b.mode || undefined,
+                                 b.bandwidth_low, b.bandwidth_high)) n++;
         }
         renderBookmarks();
         $('bmMsg').textContent = n
@@ -8503,6 +8508,7 @@ function renderBookmarks() {
     ...getServerBookmarks().map(b => ({
       name: b.name, frequency: b.frequency, mode: b.mode ?? 'wfm', local: false,
       heard: !(b as any).manual, sid: b.sid, eid: b.eid, ecc: b.ecc,
+      bwLo: b.bandwidth_low, bwHi: b.bandwidth_high,
     })),
   ];
   if (bmFilter === 'dab') rows = rows.filter(r => (r.mode || '').toLowerCase() === 'dab');
@@ -12823,6 +12829,10 @@ function cycleStep() {
 
 function setStep(v: number) {
   step = v;
+  // ★ The step decides which name a shared airband frequency wears (118.000 / 118.005), and with it
+  //   the default passband — so a change of step is a change the readout and the filter follow.
+  airbandFollowPassband();
+  renderFreq();
   $('stepBtn').textContent = formatStep(step);
   // ★ The card's own step button carries the same label — updating only the desktop one left
   //   the mobile button showing the previous step after every change.
@@ -13085,11 +13095,47 @@ function nudge(hz: number) {
    *  is not a frequency, so the only tuning gesture that means anything is the next block. */
   if (dabOn) { dabTune(hz < 0 ? -1 : 1); return; }
   // Snap to the step grid so repeated nudges stay on round frequencies.
-  const mag = Math.abs(hz);
-  const next = Math.round((spec.frequency + hz) / mag) * mag;
-  spec.tune(clampTune(next));
+  // ★★ Through airbandStepFrom: the 8.33 kHz step is 25000/3 exactly (no drift), and in the airband
+  //    in AM it walks channel NAMES the way an 8.33 set's knob does — see src/utils/airband.ts.
+  const n = step > 0 ? (Math.round(hz / step) || Math.sign(hz)) : 0;
+  const r = step > 0 ? airbandStepFrom(spec.frequency, step, n, 'round', spec.mode, airDesig)
+                     : { hz: spec.frequency + hz, desig: null };
+  airDesig = r.desig;
+  spec.tune(clampTune(r.hz));
   syncStep();
+  airbandFollowPassband();
   renderFreq();
+}
+
+/* ── THE AIRBAND AS AN AVIATION RADIO (NickB via Stuart, 2026-09-29) ─────────────────────────────
+ * The rules, the channel/frequency pairing and the sources are in src/utils/airband.ts — shared
+ * with the app, so both clients name 118.0083 MHz "118.010" and land on it to the hertz.
+ * `airDesig` is which NAME the listener selected at a frequency that has two (118.000 is both the
+ * 25 kHz channel "118.000" and the 8.33 kHz channel "118.005"): set by the 8.33 knob walk and by a
+ * typed channel name, honoured only at the frequency it was pinned to. */
+let airDesig: AirDesig | null = null;
+
+function airChannelNow(): AirChannel | null {
+  return spec ? airbandChannel(spec.frequency, spec.mode, step, airDesig) : null;
+}
+
+/** The small line beside the unit: spacing and, for an 8.33 channel, the true frequency — or,
+ *  when the listener reads kHz/Hz and keeps their digits, the channel name itself. */
+function airChanTag(ch: AirChannel | null, nameIsMain: boolean): string {
+  if (!ch) return '';
+  const sp = ch.spacing === 833 ? '8.33' : '25 kHz';
+  if (!nameIsMain) return `CH ${ch.name} · ${sp}`;
+  return ch.spacing === 833 ? `8.33 · ${ch.trueText}` : sp;
+}
+
+/** ★★ The passband a real set would have for the channel's spacing (±2.8 kHz on 8.33, ±8.5 on 25 —
+ *  ETSI EN 300 676-1 §8.5), ONLY while the passband is still at a default. Called after a person's
+ *  own tune, mode or step change — never from a config echo, so a shared dial somebody else moved
+ *  sends nothing from here. A bookmark's width is applied after this, and is never a default. */
+function airbandFollowPassband() {
+  if (!spec || dabOn) return;
+  const pb = airbandPassband(spec.frequency, spec.mode, airChannelNow(), spec.bandwidthLow, spec.bandwidthHigh);
+  if (pb) { applyBw(pb[0], pb[1]); syncBw(); }
 }
 
 // ── Frequency display + entry ────────────────────────────────────────────────
@@ -13115,9 +13161,20 @@ let freqUnit: FreqUnit = 'mhz';
  * ★ Both parts are FIXED WIDTH per unit, because the island is sized by its contents — a readout
  *   that grows a digit moves every control with it (see #mFreq's reservation in index.html).
  */
-function cardFreqText(): { main: string; fine: string; unit: string } | null {
+function cardFreqText(): { main: string; fine: string; unit: string; chan?: string } | null {
   if (!spec) return null;
   const hz = Math.round(spec.frequency);
+  // ★ An airband channel: its NAME is the figure, in MHz — see renderFreq.
+  const ch = airChannelNow();
+  if (ch && freqUnit === 'mhz') return { main: ch.name, fine: '', unit: 'MHz', chan: airChanTag(ch, true) };
+  if (ch) {
+    const r = cardFreqPlain(hz);
+    return r && { ...r, chan: airChanTag(ch, false) };
+  }
+  return cardFreqPlain(hz);
+}
+
+function cardFreqPlain(hz: number): { main: string; fine: string; unit: string } | null {
   if (freqUnit === 'hz') return { main: String(hz), fine: '', unit: 'Hz' };
   if (freqUnit === 'khz') {
     // kHz: three decimals is already 1 Hz, so there is nothing finer to split off.
@@ -13138,8 +13195,16 @@ function renderFreq() {
   updateVts();
   updateMediaSession();
   const hz = Math.round(spec.frequency);
-  $('freq').textContent = (hz / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
+  /* ★★ ON AN AIRBAND CHANNEL THE NAME IS THE READOUT (in MHz), as on an aviation radio; the spacing
+   *  and the true frequency sit small beside it (#freqChan). Nothing changes anywhere else. */
+  const ch = airChannelNow();
+  $('freq').textContent = ch && freqUnit === 'mhz' ? ch.name
+    : (hz / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
   $('freqUnit').textContent = UNIT_LBL[freqUnit];
+  {
+    const tag = document.getElementById('freqChan');
+    if (tag) { tag.hidden = !ch; tag.textContent = airChanTag(ch, freqUnit === 'mhz'); }
+  }
   /* ★★ THE CARD'S INPUT FOLLOWS THE RADIO TOO. It was filled once when the panel opened and never
      again, so tuning from the search list left the box showing where you USED to be — 96.600 while
      the receiver sat on 93.000. Harmless until the list started surviving the tune, which is
@@ -13210,7 +13275,14 @@ function initFreqEntry() {
     const raw = normaliseDecimal($<HTMLInputElement>('freqInput').value);
     const v = parseFloat(raw.replace(/[^\d.]/g, ''));
     if (!isFinite(v) || v <= 0) { $('freqMsg').textContent = 'Enter a frequency'; return; }
-    const asked = v * UNIT_DIV[freqUnit];
+    const typed = Math.round(v * UNIT_DIV[freqUnit]);
+    /* ★★ PILOT-STYLE ENTRY in 118–137 MHz: a value on a 5 kHz boundary is a channel NAME — 118.010
+     *  tunes 118.0083 MHz, 121.5 tunes 121.500 — and a name that does not exist (.x20/.x45/.x70/.x95)
+     *  is refused here with its two neighbours rather than snapped to one of them. Everything else
+     *  tunes exactly as typed. src/utils/airband.ts. */
+    const air = airbandEntry(typed);
+    if (air && !air.ok) { $('freqMsg').textContent = air.message; return; }
+    const asked = air ? air.hz : typed;
     const got = clampTune(asked);
     // ★★ SAY SO WHEN IT IS OUT OF RANGE, and do NOT close the panel. A silent clamp is barely
     //    better than the wrong readout it replaces: the user typed a number, something else
@@ -13223,8 +13295,10 @@ function initFreqEntry() {
       return;
     }
     spec!.tune(got, undefined, { recenter: true, retarget: true });
-    renderFreq();
+    airDesig = air && air.ok ? { hz: air.hz, spacing: air.spacing } : null;
     applyBandStep(got);
+    airbandFollowPassband();
+    renderFreq();
     closePanels();
   };
   $('freqGo').onclick = go;
@@ -13234,6 +13308,13 @@ function initFreqEntry() {
   // Normalise in the field too, so the user SEES a `.` whatever their layout offers.
   $<HTMLInputElement>('freqInput').oninput = (e) => {
     const el = e.target as HTMLInputElement;
+    /* ★ As a channel NAME is typed, say which frequency it tunes — 118.010 is 118.0083 MHz. */
+    {
+      const n = parseFloat(normaliseDecimal(el.value).replace(/[^\d.]/g, ''));
+      const air = isFinite(n) && n > 0 ? airbandEntry(Math.round(n * UNIT_DIV[freqUnit])) : null;
+      $('freqMsg').textContent = air && air.ok
+        ? `Channel ${air.name} · ${air.spacing === 833 ? '8.33' : '25'} kHz · ${(air.hz / 1e6).toFixed(4)} MHz` : '';
+    }
     const v = normaliseDecimal(el.value);
     if (v !== el.value) {
       const at = el.selectionStart;
@@ -14401,9 +14482,12 @@ function initWaterfallInput() {
     if (!moved && spec && wf) {
       const rect = c.getBoundingClientRect();
       // Snap the click to the step grid, so the arrows carry on from a round number.
-      const hz = Math.round(wf.xToHz(e.clientX - rect.left) / step) * step;
+      // (snapToStep: exact 25000/3 on the airband's 8.33 kHz step — src/utils/airband.ts.)
+      const hz = snapToStep(wf.xToHz(e.clientX - rect.left), step);
+      airDesig = null;
       spec.tune(clampTune(hz));
       syncStep();
+      airbandFollowPassband();
       renderFreq();
     }
   });

@@ -30,7 +30,8 @@ export type MobileDeps = {
    *  in the entry popup also drives the tuning block's readout, so the two always agree — a dial
    *  reading MHz while you type kHz is how people mis-tune by a factor of a thousand." That rule
    *  did not follow the readout when it moved into this card. */
-  freqText: () => { main: string; fine: string; unit: string } | null;
+  /** `chan`: the airband channel's small line (spacing / true frequency / name) — absent elsewhere. */
+  freqText: () => { main: string; fine: string; unit: string; chan?: string } | null;
   mode: () => string;
   /** Formatted step label for the step button, e.g. "1k". */
   stepLabel: () => string;
@@ -462,6 +463,9 @@ export function initMobileControls(deps: MobileDeps) {
       put(fineEl, ft.fine);
       put(uEl, ft.unit);
     }
+    // ★ The airband channel line (src/utils/airband.ts) — hidden, and so taking no room, elsewhere.
+    const chEl = document.getElementById('mChan');
+    if (chEl) { chEl.hidden = !ft?.chan; put(chEl, ft?.chan ?? ''); }
     put($('mMode'), deps.mode().toUpperCase());
     // ★ MIRRORED from the real #stereo badge, exactly as the mute state below is — the RDS
     //   decoder already toggles that one, and a second copy of the same boolean is how a badge

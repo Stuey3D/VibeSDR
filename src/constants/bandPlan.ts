@@ -70,7 +70,15 @@ export const BAND_PLAN: Band[] = [
   { lo: 50000000,  hi: 54000000,   name: '6m Ham Band',                type: 'ham',  bandLabel: '6m',  mode: 'usb', step: 1000 },
   { lo: 70000000,  hi: 70500000,   name: '4m Ham Band',                type: 'ham',  bandLabel: '4m',  regions: [1], mode: 'usb', step: 1000 },
   { lo: 87500000,  hi: 108000000,  name: 'FM Broadcast Band',          type: 'broadcast', step: 100000 },
-  { lo: 108000000, hi: 137000000,  name: 'Airband (VHF Air)',          type: 'utility', mode: 'am',  step: 25000 },
+  /* ★★ THE COM HALF IS SPLIT BY REGION FOR ITS STEP (NickB, 2026-09-29). Europe (ITU R1) channels
+   *    on 8.33 kHz — mandatory in EU airspace (Reg. 1079/2012) — and the 8.33 step reaches every
+   *    25 kHz channel too, so it is the superset there. The Americas and Asia-Pacific are still 25
+   *    kHz, where 8.33 would be three clicks per channel; an unknown region gets 25 kHz as well,
+   *    because 25 kHz names are valid everywhere. 108-118 (VOR/ILS) is navaids, not voice — left as
+   *    it was. Same name, so the band reads as one "Airband". STEP_833 is 8333, see airband.ts. */
+  { lo: 108000000, hi: 117999999,  name: 'Airband (VHF Air)',          type: 'utility', mode: 'am',  step: 25000 },
+  { lo: 118000000, hi: 137000000,  name: 'Airband (VHF Air)',          type: 'utility', regions: [2, 3], mode: 'am',  step: 25000 },
+  { lo: 118000000, hi: 137000000,  name: 'Airband (VHF Air)',          type: 'utility', regions: [1], mode: 'am',  step: 8333 },
   { lo: 144000000, hi: 146000000,  name: '2m Ham Band',                type: 'ham',  bandLabel: '2m',  regions: [1], mode: 'nfm', step: 12500 },
   { lo: 144000000, hi: 148000000,  name: '2m Ham Band',                type: 'ham',  bandLabel: '2m',  regions: [2, 3], mode: 'nfm', step: 12500 },
   { lo: 156000000, hi: 162050000,  name: 'Marine VHF',                 type: 'utility', mode: 'nfm', step: 25000 },
