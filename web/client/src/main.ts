@@ -3518,6 +3518,7 @@ function checkBandCrossing(hz: number) {
 
 function updateVts() {
   expireRdsIfRetuned();
+  syncDecIdentity();   // ★ the decoder header follows the CURRENT station — see syncDecIdentity
   if (!spec) return;
   // ★ A move of the dial is a NEW announcement, so the static clock restarts rather than the old
   //   one continuing to run against a station you have already left.
@@ -9640,12 +9641,28 @@ function lockRdsRowHeights() {
   }
 }
 
-function renderRds() {
-  const dash = '—';
+/** ★★★ ONE OWNER FOR THE DECODER HEADER'S STATION IDENTITY (#decFlag, #decLogo, and the big logo
+ *  inside the ADV RDS panel).
+ *
+ *  THE BUG THIS REPLACES: these were written ONLY by renderRds(), which runs only while ADV RDS is
+ *  open — and nothing ever took them down. Switching the box to another decoder (showDecBox retitles
+ *  it and never touched the header's <img>) left the picture up; a retune or a mode change cleared
+ *  rdsLogoUrl, but with the panel shut renderRds never ran to act on it. So the last station's logo
+ *  rode along into TIME, RTTY, WEFAX… — Stuart, 2026-09-29, on an iPhone: the Heart logo in the MSF
+ *  box, "searching for the minute", long after Heart was left. Same shape as every earlier stale-logo
+ *  report: a picture put up by one path and taken down by none.
+ *  ★★ So the header is DERIVED from the current state every time, never left standing. It is called
+ *     from renderRds AND from updateVts — which every retune, mode change, RDS message and decoder
+ *     open (showDecBox) already passes through, straight after expireRdsIfRetuned.
+ *  ★ SHOWN ONLY IN ADV RDS. The header identity stands in for the VTS bar, which hides only while
+ *    ADV RDS is open (see updateVts). Every other decoder leaves the bar on screen, and a TIME / RTTY
+ *    / FT8 box is not about a broadcast station at all. */
+function syncDecIdentity() {
+  const own = rdsPanelOpen();
   // ★ The flag and logo move into the header while the bar is hidden, so the station keeps
   // the same visual identity it had on the VTS rather than becoming a table of numbers
   // (Stuart, 2026-07-26).
-  $('decFlag').textContent = rdsName || rdsPi > 0 ? isoToFlag(rdsIso) : '';
+  $('decFlag').textContent = own && (rdsName || rdsPi > 0) ? isoToFlag(rdsIso) : '';
   // ★ TWO COPIES, ON PURPOSE. The header badge is the identity you glance at while the panel
   // is minimised; the big one under the MPX fills space the column already leaves empty and is
   // the one you actually look at. Both are driven from the same URL so they cannot disagree.
@@ -9660,7 +9677,13 @@ function renderRds() {
   for (const id of ['decLogo', 'rdsLogoBig']) {
     const el = document.getElementById(id) as HTMLImageElement | null;
     if (!el) continue;
-    if (!rdsLogoUrl) { el.classList.remove('show'); continue; }
+    // ★ Not ours to show (see above), or no logo for THIS station: take it down AND drop the src,
+    //   so the next show can never flash the previous station's picture before its onload.
+    if (!own || !rdsLogoUrl) {
+      el.classList.remove('show');
+      if (el.hasAttribute('src')) el.removeAttribute('src');
+      continue;
+    }
     if (el.src !== rdsLogoUrl) {
       const url = rdsLogoUrl;
       el.classList.remove('show');
@@ -9674,6 +9697,11 @@ function renderRds() {
       el.classList.add('show');
     }
   }
+}
+
+function renderRds() {
+  const dash = '—';
+  syncDecIdentity();
   // ★ HEX AND DECIMAL. Hex is how the standard defines PI, and how it decomposes into
   // country / coverage / reference — but plenty of databases, loggers and older receivers
   // quote it in DECIMAL, so DXers comparing catches see both forms. Showing both saves
