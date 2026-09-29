@@ -149,6 +149,9 @@ inline bool onMains() {
  *  bits had cleared with the clock unchanged. Stuart: "My Pi500 always reports under voltage but
  *  from what I can see it is hitting the 2.4GHz it should all the time and isnt throttled."
  *  So the bits are NOT evidence of a cap. An observed cap is.
+ *  ✗ CORRECTED 2026-09-30: "every core sat at its full 2400 MHz" was sysfs, which reports the REQUEST.
+ *    The firmware's MEASURED clock was flipping 2400 ↔ 1000 in step with those bits. On a Pi the
+ *    snail now reads the mailbox (vibe_vcio.h, Sampler::fwTick); this ceiling test is unchanged.
  *
  *  ★★ PER CORE AGAINST ITS OWN MAXIMUM, never a global one: on big.LITTLE the little cluster's
  *     maximum is legitimately lower, and comparing it to the big cores' would report every phone as
@@ -195,8 +198,8 @@ inline std::string& sysRoot() { static std::string r = "/sys"; return r; }
  *  flags: Intel/AMD advertise a single-core BOOST as cpuinfo_max_freq, which a healthy chip cannot hold
  *  with every core busy, so the all-core figure must be measured. ARM (Pis, phones, TV boxes) has no
  *  such boost — its cpuinfo_max_freq IS the all-core maximum, and is used directly.
- *  ★ (The Pi's firmware flags are not the trigger: 2026-09-25 they read "throttled now" while every
- *    core ran its full 2400 MHz — see capObserved. They would only ever name a cause.) */
+ *  ★ (The Pi's firmware flags are not the trigger — the firmware's MEASURED clock is, where the mailbox
+ *    answers; the flags only ever name the cause. See Sampler::fwTick and the correction at capObserved.) */
 #if defined(__x86_64__) || defined(__i386__) || defined(VIBE_HEALTH_TEST_BOOST)
 constexpr bool kBoostClocks = true;
 #else
@@ -378,7 +381,33 @@ inline double busiestCorePct(double) {
     return worst;
 }
 
+/** ★★★ A SUSTAINED RUN QUEUE COUNTS AS "LOADED" — not only a machine average of 90 %.
+ *
+ *  MEASURED ON THE PI 500, 2026-09-30: ten listeners and their decoders held the machine at ~75 %
+ *  on average with a load average of 12 on 4 cores — bursty, every core taking turns at 100 % and
+ *  never all four at once for long. The old gate (≥ 90 % machine-wide, every core ≥ 85 %) almost
+ *  never held, so the snail could not appear through a whole night of real firmware throttling.
+ *  ★★ The load average IS the sustained measure: it is a one-minute exponential mean of the
+ *     threads ready to run, so 12 on 4 cores means three are waiting behind every core, continuously,
+ *     whatever the instantaneous percentages say. On a machine like that a slowed clock is lost
+ *     throughput somebody is queueing for — which is exactly the case the snail exists to name.
+ *  ★ 1.5× the core count: at parity every thread gets a core when it asks, so a queue only starts
+ *    to mean waiting well above it. AND ≥ 60 % CPU, because Linux counts threads in uninterruptible
+ *    sleep (USB and disk I/O) in the load average — a box with a high load and idle cores is
+ *    waiting on I/O, not on its clock, and must not raise a clock verdict.
+ *  ★ Android refuses /proc/loadavg, so there haveLoad is false and nothing changes. */
+inline bool queueSaturated(bool haveLoad, double load1, int cores, double cpuPct) {
+    return haveLoad && cores > 0 && cpuPct >= 60.0 && load1 >= 1.5 * cores;
+}
+
 }  // namespace detail
+
+/** ★ The Pi's firmware clock for the snail — see vibe_vcio.h. ok=false everywhere else. */
+struct FwClock {
+    bool ok = false;
+    long long kHz = 0, maxKHz = 0;
+    long long throttled = -1;          ///< get_throttled bits; -1 = not readable
+};
 
 /** One sample. Call about once a second; it is cheap (readSys plus at most a few small sysfs reads).
  *  `prev` carries the hysteresis and the smoothing between calls. */
@@ -391,6 +420,7 @@ struct Sampler {
     bool   slowNow = false;
     long   lastCoreThr = -1, lastPkgPwr = -1;
     int    thermalHold = 0, powerHold = 0;   // seconds left on the CPU's own cause report
+    uint32_t fwWin = 0;            // the firmware path's last 10 seconds, one bit each (1 = below)
     bool   started = false;
 
     /** ★ EWMA at 0.3: fast enough that a real spike shows within a couple of seconds, slow enough
@@ -399,13 +429,19 @@ struct Sampler {
     /** ★ One second of the snail's judgement, given whether the machine is fully loaded and each
      *  core's clock. Separate from sample() so it can be driven directly (test-health-snail.cpp) —
      *  sample() reads live load from /proc, which a test machine may not even have. Updates slowNow
-     *  and the cause holds. */
+     *  and the cause holds.
+     *  @param busyPct  the per-core load a core must reach to be judged — 85 normally, lower when
+     *                  the run queue says every core has work waiting (see queueSaturated).
+     *  @param fw       the Pi's firmware clock, when the mailbox answers. It REPLACES the per-core
+     *                  sysfs clocks, which on a Pi report the request and not the result. */
     void snailTick(bool loaded, const std::map<int, long>& clocks,
-                   const std::map<int, double>& busy = detail::coreBusy()) {
-        auto& peaks = detail::corePeaks();
-        double ratioSum = 0; int ratioN = 0; bool learned = false;
+                   const std::map<int, double>& busy = detail::coreBusy(),
+                   double busyPct = 85.0, const FwClock* fw = nullptr) {
         // ★★ A GOVERNOR THAT PINS THE CLOCK IS CONFIGURATION, NOT THROTTLING — see governorPinsClock.
         if (detail::governorPinsClock()) loaded = false;
+        if (fw && fw->ok && fw->maxKHz > 0) { fwTick(loaded, *fw); return; }
+        auto& peaks = detail::corePeaks();
+        double ratioSum = 0; int ratioN = 0; bool learned = false;
         for (const auto& kv : clocks) {
             /* ★★★ ONLY BUSY CORES ARE JUDGED. An idle core under ondemand/schedutil sits at its minimum
              *  BY DESIGN; averaging it in would drag a healthy machine under the margin. A core that is
@@ -414,7 +450,7 @@ struct Sampler {
              *  is judged, as before. */
             if (!busy.empty()) {
                 const auto b = busy.find(kv.first);
-                if (b == busy.end() || b->second < 85.0) continue;
+                if (b == busy.end() || b->second < busyPct) continue;
             }
             long ref;
             if (detail::kBoostClocks) {
@@ -442,8 +478,8 @@ struct Sampler {
          *      and RAPL shows the limit (200 W) but not the draw (energy_uj is root-only). So Intel can
          *      PROVE thermal and cannot read power. (HWiNFO reads MSR_CORE_PERF_LIMIT_REASONS through a
          *      root driver; granting a network service raw MSR access is not worth it.)
-         *    Pi 500: no firmware throttle flags (get_throttled needs /dev/vcio); the rpi_volt
-         *      under-voltage alarm is the power evidence.
+         *    Pi 500: the firmware's own flags, through the mailbox, when the service user is in
+         *      `video` — see fwTick. Without it, the rpi_volt under-voltage alarm is the power evidence.
          *  ✗ "Slow and not hot, so it must be power" would be an INFERRED hardware readout. A slowed
          *    machine with no readable cause gets the plain snail. package_power_limit_count is still
          *    read for older kernels that have it. A rise within the last 10 s counts. */
@@ -454,6 +490,40 @@ struct Sampler {
         thermalHold = (thr >= 0 && lastCoreThr >= 0 && thr > lastCoreThr) ? 10 : std::max(0, thermalHold - 1);
         powerHold   = (pwr >= 0 && lastPkgPwr  >= 0 && pwr > lastPkgPwr)  ? 10 : std::max(0, powerHold - 1);
         lastCoreThr = thr; lastPkgPwr = pwr;
+    }
+
+    /** ★★★ THE PI: THE FIRMWARE'S MEASURED CLOCK AGAINST ITS MAXIMUM, AND ITS OWN REASON WHY.
+     *
+     *  The Pi 500, 2026-09-30, at full load on a sagging supply: `measure_clock arm` flipped
+     *  2400 ↔ 1000 MHz in step with get_throttled 0x50005 ↔ 0x50000, while sysfs said 2400
+     *  throughout. So on a Pi the clock is the FIRMWARE's, never sysfs's.
+     *  ★ One ARM clock for the whole cluster, so there is no per-core judgement to make: a busy
+     *    machine below its maximum is being held down, whichever core is busiest.
+     *  ★★ AGAINST THE MAXIMUM, which on a Pi is the all-core figure (no boost) and which the
+     *     governor asks for under load — VibeServer sets `performance` by default, and a governor
+     *     that pins the minimum is already excluded above.
+     *  ★★★ A WINDOW, NOT A RUN. The clock FLIPS: the firmware drops to 1000 MHz, the supply recovers,
+     *      it returns to 2400, and round again — so "five consecutive seconds below" (the sysfs
+     *      rule, which suits a clock that sags and stays) almost never holds, and a machine losing a
+     *      quarter of its throughput would never be told. Here: below in ≥ 4 of the last 10 loaded
+     *      seconds raises the snail; five clean seconds in a row clear it (the same exit as sysfs).
+     *      4 of 10 at 1000/2400 is ≥ 23 % of the machine's work gone — well past a wobble.
+     *  ★★ THE CAUSE IS READ, NEVER INFERRED: under-voltage NOW (bit 0) is the lightning; the soft
+     *     temperature limit NOW (bit 3) is the fire. Each is held 10 s, like the Intel counters, so a
+     *     flag that flickers with the clock does not flicker the icon. A snail with neither bit set
+     *     stays plain — "slow and not hot, so it must be power" is exactly the guess we refuse. */
+    void fwTick(bool loaded, const FwClock& fw) {
+        const bool below = loaded && (double)fw.kHz / (double)fw.maxKHz < 0.93;
+        fwWin = ((fwWin << 1) | (below ? 1u : 0u)) & 0x3ffu;          // the last 10 seconds
+        int n = 0; for (uint32_t w = fwWin; w; w &= w - 1) n++;
+        slowRun = below ? slowRun + 1 : 0;
+        fastRun = below ? 0 : fastRun + 1;
+        if (n >= 4) slowNow = true;
+        if (fastRun >= 5) slowNow = false;
+        const bool uv  = fw.throttled >= 0 && (fw.throttled & 0x1);
+        const bool hot = fw.throttled >= 0 && (fw.throttled & 0x8);
+        powerHold   = uv  ? 10 : std::max(0, powerHold - 1);
+        thermalHold = hot ? 10 : std::max(0, thermalHold - 1);
     }
 
     Health sample(int batPct, bool batCharging, double dtSec = 1.0,
@@ -587,7 +657,15 @@ struct Sampler {
         } else h.ram = last.ram;
 
         // ── THE SNAIL: loaded and below the all-core maximum (see snailTick) ───────────────────
-        snailTick(cpu >= 90.0, detail::coreClocks());
+        {
+            // ★ Loaded = a saturated machine OR a sustained run queue (see queueSaturated); when it
+            //   is the queue, every core has work waiting, so a core at 60 % is not idling by design.
+            const bool queued = detail::queueSaturated(s.haveLoad, s.load1, s.cores, cpu);
+            FwClock fw;
+            if (s.haveFw) { fw.ok = true; fw.kHz = s.cpuKHz; fw.maxKHz = s.fwMaxKHz; fw.throttled = s.fwThrottled; }
+            snailTick(cpu >= 90.0 || queued, detail::coreClocks(), detail::coreBusy(),
+                      queued ? 60.0 : 85.0, &fw);
+        }
         const bool slowed = slowNow || capped;
         // ── TEMP, or a throttle, or nothing ────────────────────────────────────────────────────
         /* ★★ HEADROOM, NOT TEMPERATURE. 70 °C is fine on a chip that throttles at 100 and serious on

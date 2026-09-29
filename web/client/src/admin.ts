@@ -284,9 +284,24 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
 
   // ★ The governor is already shown under UPTIME; the CLOCK is the number that says what the
   //   governor is actually DOING right now.
-  if (st.sys?.cpuKHz > 0)
-    out.push(card('CPU CLOCK', `${Math.round(st.sys.cpuKHz / 1000)} MHz`,
-                  st.sys.governor ? `governor: ${st.sys.governor}` : ''));
+  // ★★★ ON A PI IT IS THE FIRMWARE'S FIGURE (cpuFirmware), because sysfs reports the clock the kernel
+  //     ASKED for: the Pi 500 read 2400 here through a night the firmware spent flipping to 1000 on a
+  //     sagging supply (2026-09-30). When it is held below its maximum the card says so, and why — the
+  //     firmware's own flags (bit 0 under-voltage, bit 3 soft temperature limit), never a guess.
+  if (st.sys?.cpuKHz > 0) {
+    const s = st.sys;
+    const mhz = Math.round(s.cpuKHz / 1000);
+    const maxMhz = s.cpuFirmware && s.cpuMaxKHz > 0 ? Math.round(s.cpuMaxKHz / 1000) : 0;
+    const capped = maxMhz > 0 && s.cpuKHz < s.cpuMaxKHz * 0.93;
+    const thr = typeof s.throttled === 'number' ? s.throttled : 0;
+    const why = (thr & 0x1) ? ' — under-voltage' : (thr & 0x8) ? ' — temperature limit' : '';
+    const gov = s.governor ? `governor: ${s.governor}` : '';
+    out.push(card('CPU CLOCK', `${mhz} MHz`,
+      !maxMhz ? gov
+        : capped ? `held below ${maxMhz} MHz by the firmware${why}`
+        : `firmware clock, of ${maxMhz} MHz` + (gov ? ` · ${gov}` : ''),
+      capped ? 'warning' : undefined));
+  }
   // ★★★ ONE CARD PER RADIO, NOT ONE CARD FOR "THE" RADIO. Health above this line is about the
   //     MACHINE — one CPU, one supply, one clock — but listeners, uplink and the radio itself
   //     belong to a process each. Read from a single status they were not merely incomplete but

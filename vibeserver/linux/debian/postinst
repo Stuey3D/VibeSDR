@@ -45,6 +45,18 @@ case "$1" in
     if getent group plugdev >/dev/null; then
       adduser vibeserver plugdev >/dev/null 2>&1 || true
     fi
+    # ★★★ AND `video` ON A RASPBERRY PI — /dev/vcio (root:video 0660) is the firmware mailbox, the
+    #     only place the Pi says what clock it is REALLY running at and why it is being held down.
+    #     sysfs reports the clock the kernel asked for: the Pi 500 read 2400 MHz there through a
+    #     night the firmware spent flipping to 1000 on a sagging supply (2026-09-30), so the throttle
+    #     snail and the admin CPU CLOCK tile never fired. Group membership, NOT root — Stuart: "we
+    #     will avoid root". The units allow the device read-only (DeviceAllow=/dev/vcio r).
+    #  ★ Idempotent (adduser on an existing member is a no-op), and only where the group exists —
+    #    every Debian has it; a box without it has no /dev/vcio either, and the server falls back.
+    #  ★ Takes effect when the service next starts; the upgrade path below restarts it.
+    if getent group video >/dev/null; then
+      adduser vibeserver video >/dev/null 2>&1 || usermod -a -G video vibeserver >/dev/null 2>&1 || true
+    fi
 
     # ── 1. The config: NEVER clobber the user's edits ────────────────────────
     # ★ Copied from /usr/share on FIRST install only. Shipping it as a packaged file would let

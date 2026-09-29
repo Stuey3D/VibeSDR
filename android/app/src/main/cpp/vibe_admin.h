@@ -36,6 +36,7 @@
 #include <functional>
 #include <thread>
 #include <vector>
+#include "vibe_vcio.h"   // ★ the Pi's firmware clock and throttle flags — see readSys()
 
 #if defined(__APPLE__)
   #include <mach/mach.h>
@@ -1335,12 +1336,35 @@ struct SysStats {
      *  ★★ LATCHED, not sampled. A brownout an hour ago is exactly what you want reported: by the
      *     time an owner opens the page the voltage has usually recovered, and a page showing "all
      *     fine" would be telling the truth about this instant and lying about the machine.
-     *  ★ Read from the rpi_volt hwmon, NOT `vcgencmd` — the service user cannot open /dev/vcio,
-     *    so vcgencmd fails for exactly the process that needs the answer. */
+     *  ★ Read from the rpi_volt hwmon, NOT `vcgencmd` — a shell per sample is not on, and the
+     *    alarm is latched there by the kernel. (The firmware's own flags now come from the mailbox
+     *    below, where the service user is in `video`; this stays as the latch and the fallback.) */
     bool haveVolt = false;
     bool underVoltageNow = false;
     bool underVoltageEver = false;
+
+    /** ★★★ THE PI'S FIRMWARE CLOCK — what the ARM is ACTUALLY running at. When present, cpuKHz above
+     *  IS this figure, because sysfs reports the clock the kernel asked for and the firmware quietly
+     *  delivers less under a sagging supply (Pi 500, 2026-09-30: sysfs 2400, measured 1000). See
+     *  vibe_vcio.h. Absent everywhere else, and nothing changes there. */
+    bool      haveFw = false;
+    long long fwMaxKHz = 0;          ///< the firmware's maximum ARM clock
+    long long fwAskedKHz = 0;        ///< what sysfs said — kept so the page can show the gap
+    long long fwThrottled = -1;      ///< get_throttled bits, -1 = not readable
 };
+
+/** ★ Fold a firmware reading into the stats. Separate from readSys() so it can be tested without a
+ *  Pi: the mailbox transport is swappable (vibevcio::mboxOverride) and this is the only decision.
+ *  ★★ The MEASURED clock replaces cpuKHz outright — every reader of cpuKHz (the tile, the history
+ *     graph) wanted the truth and was getting the request. */
+inline void applyFirmwareClock(SysStats& s, const vibevcio::Reading& r) {
+    if (!r.ok || r.armHz <= 0 || r.armMaxHz <= 0) return;
+    s.haveFw      = true;
+    s.fwAskedKHz  = s.cpuKHz;
+    s.cpuKHz      = r.armHz / 1000;
+    s.fwMaxKHz    = r.armMaxHz / 1000;
+    s.fwThrottled = r.throttled;
+}
 
 inline SysStats readSys() {
     SysStats s;
@@ -1484,6 +1508,7 @@ inline SysStats readSys() {
         }
         if (n > 0) s.cpuKHz = sum / n;
     }
+    applyFirmwareClock(s, vibevcio::read());   // ★ a silent no-op off a Pi, or without `video`
 #endif
     s.cpuPct = cpuUsagePct();
     s.cpuIsProcess = cpuPctIsProcess();
@@ -1549,6 +1574,13 @@ inline std::string sysJson(const SysStats& s) {
     if (s.haveUptime) j += ",\"uptimeSec\":" + std::to_string((long long)s.uptimeSec);
     if (!s.governor.empty()) j += ",\"governor\":\"" + esc(s.governor) + "\"";
     if (s.cpuKHz > 0)        j += ",\"cpuKHz\":" + std::to_string(s.cpuKHz);
+    /* ★ ADDITIVE: an older admin page ignores these and shows cpuKHz, which is now the measured
+     *  figure anyway. A newer one says it is the firmware's and whether it is being held down. */
+    if (s.haveFw) {
+        j += ",\"cpuFirmware\":true,\"cpuMaxKHz\":" + std::to_string(s.fwMaxKHz);
+        if (s.fwAskedKHz > 0)   j += ",\"cpuAskedKHz\":" + std::to_string(s.fwAskedKHz);
+        if (s.fwThrottled >= 0) j += ",\"throttled\":" + std::to_string(s.fwThrottled);
+    }
     return j + "}";
 }
 

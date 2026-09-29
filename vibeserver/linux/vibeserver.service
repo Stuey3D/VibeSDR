@@ -88,6 +88,10 @@ StateDirectory=vibeserver
 ReadWritePaths=/var/lib/vibeserver /etc/vibeserver
 # ★ The radio needs raw USB; everything else stays off.
 DeviceAllow=char-usb_device rw
+# ★★ The Pi's firmware mailbox, READ-ONLY — the true ARM clock and the throttle flags (vibe_vcio.h).
+#    DeviceAllow= closes every other device, so group `video` alone would still be refused here.
+#    On a machine with no /dev/vcio systemd logs that it cannot find it and carries on.
+DeviceAllow=/dev/vcio r
 
 [Install]
 WantedBy=multi-user.target
