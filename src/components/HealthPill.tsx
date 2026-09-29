@@ -47,7 +47,11 @@ const HEALTH_COLOURS = ['#5BE36B', '#E8C547', '#FF8A3D', '#FF4B4B'];
  *  web client's HEALTH_COLOURS".
  *  ★ `pos` is the server's continuous position on the SAME four-rung ladder as `level`, so
  *    floor(pos) === level and they cannot disagree. Absent (an older server) → the rung, exactly
- *    as before. ★ sRGB mix: the anchors are close in lightness, far apart in hue. */
+ *    as before. ★ sRGB mix: the anchors are close in lightness, far apart in hue.
+ *  ★★★ AND THE CALLER MUST HAND THE POSITIONS ON. SDRScreen's onHealth rebuilt the object from the
+ *      levels alone until 2026-09-29, so this blend never saw a position and the app snapped anyway
+ *      — a correct copy of the web rule, starved one layer up. Web original: healthColour() in
+ *      web/client/src/main.ts; keep the stops and the maths identical. */
 function mixHex(a: string, b: string, f: number): string {
   const p = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
   const [r1, g1, b1] = p(a), [r2, g2, b2] = p(b);

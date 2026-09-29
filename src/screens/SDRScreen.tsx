@@ -278,6 +278,10 @@ const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
  *  do not control — see the defensive parsing in VibeServerWsClient. */
 const healthLevel = (n: number): HealthLevel =>
   (Math.max(0, Math.min(3, Math.round(n) || 0)) as HealthLevel);
+/** ★ A continuous ladder position (0-3) for the pill's blended tint, or undefined when the server
+ *  sent none or sent garbage — so the pill falls back to the rung rather than painting a guess. */
+const healthPos = (n: number | undefined): number | undefined =>
+  (typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.min(3, n)) : undefined);
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -5010,11 +5014,18 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  learns about it immediately rather than at the next change. Stored as-is apart from the
        *  level clamp (healthLevel): the pill decides what is DRAWN, including which slots exist at
        *  all, and this screen must not start second-guessing that in two places. */
+      /* ★★★ THE POSITIONS GO THROUGH TOO — they are what the blend is made of. This copy used to
+       *  rebuild the object from the LEVELS only, dropping cpuPos / ramPos / temp.pos on the floor,
+       *  so HealthPill's continuous tint (a port of web/client/src/main.ts healthColour) always fell
+       *  back to the four fixed rungs: the app SNAPPED green → yellow where the browser drifted
+       *  (Stuart, 2026-09-29, VibeSDR 11 B2). The pill was right; this layer starved it.
+       *  ✗ An absent position stays ABSENT (undefined), never 0 — see VibeServerWsClient. */
       onHealth: (h) => {
         if (destroyed.current) return;
         setHealth({
           cpu: healthLevel(h.cpu), ram: healthLevel(h.ram),
-          temp: { kind: h.temp.kind, level: healthLevel(h.temp.level) },
+          cpuPos: healthPos(h.cpuPos), ramPos: healthPos(h.ramPos),
+          temp: { kind: h.temp.kind, level: healthLevel(h.temp.level), pos: healthPos(h.temp.pos) },
           bat: h.bat.present
             ? { present: true, pct: h.bat.pct, charging: h.bat.charging, level: healthLevel(h.bat.level ?? 0) }
             : { present: false },
