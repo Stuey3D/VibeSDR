@@ -32,6 +32,9 @@ flags_for() {
     # ★ The Advanced RDS instrument (MpxMeasure) against a signal of known deviation, at several
     #   capture rates and passbands — the real pipeline end to end, so the same deps again.
     test-mpx-measure)      echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★ WFM DSP cost vs passband — a narrow width once cost ~5x the whole chain (the Sony's
+    #   161-276 % of real time). Optimised like the server, or the ratio is not the server's.
+    test-wfm-narrow-cost)  echo "-O2 -I $VDSP -I $KISS" ;;
     *)               echo "" ;;
   esac
 }
@@ -49,6 +52,9 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-mpx-measure)     echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-wfm-narrow-cost) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     # ★★ proc.cpp goes with anything that SHELLS OUT (curl, mostly): geoip, asndb and radiodns all

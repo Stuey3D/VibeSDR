@@ -2342,6 +2342,14 @@ private:
 class RxPipeline {
 public:
     enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM, WFM /* mono; stereo+RDS later */ };
+    /** ★★★ THE NARROWEST WFM PASSBAND (total width, both sides). setTune() clamps to it, and it
+     *  is the bottom edge of WFM's width ladder (chainBand in pipeline.cpp).
+     *  ★ Why 40 kHz: a broadcast carrier swings ±75 kHz, and the narrowest IF anyone listens to
+     *    broadcast FM through is the FM-DXer's ~55-56 kHz (TEF668x, XDR-F1HD). 40 kHz sits below
+     *    that, so no real setting is touched; under it the discriminator is producing distortion,
+     *    not audio. The web and app sliders run to 0, so this is reachable by a drag.
+     *  ★★ THE CLAMP IS NOT THE CPU FIX — the ladder edge is. See chainBand(). */
+    static constexpr double kWfmMinBwHz = 40000.0;
     /** MPX spectrum geometry — DC to 100 kHz, which covers L+R, pilot, L-R and RDS with a
      *  little room above for anything unusual a station is carrying. */
     static constexpr int    kMpxFft  = 1024;

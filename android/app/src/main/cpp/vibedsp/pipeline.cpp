@@ -221,9 +221,23 @@ static bool chainBand(RxPipeline::Mode mode, double bwHz, double& lo, double& hi
         //     the WFM filter tore down the pilot PLL and RDS on every step, which is the same
         //     "tune away and RDS never comes back" family this file keeps fighting.
         // ★★ Its channel rate is floored at 150 kHz, so every width below ~100 kHz already shares
-        //    one chain — the bottom band is deliberately huge because nothing there moves chFs_,
+        //    one chain — the bottom band is deliberately wide because nothing there moves chFs_,
         //    and only the wide end needs banding at all.
-        case M::WFM: { static const double e[] = { 1000.0, 100000.0, 200000.0, 400000.0, 800000.0 };
+        // ★★★ BUT THE BOTTOM EDGE IS NOT A PLACEHOLDER — IT SETS THE FILTER LENGTH FOR THE WHOLE
+        //     BAND. rebuildAudio() designs the selectivity filter's transition from the band's LOW
+        //     edge (chHalfLo/2), so that one tap count serves every width in the band. The edge
+        //     was 1 kHz, which asked for a 250 Hz transition at a ~256 kS/s stage: 5501 taps, where
+        //     the band above uses 113. Any WFM width under 100 kHz therefore cost ~4.7x the whole
+        //     WFM chain on a Mac, and on Stuart's 32-bit A53 Sony took the shared DSP from 34 % of
+        //     real time to 161-276 % — "bursts of fast noisy audio with about a 1 second gap",
+        //     IQ overruns, a 256 ms backlog (2026-09-29, ±28 kHz on 99.7, V11 b4). Widening
+        //     crossed back into the [100k, 200k] band and recovered, which is why it looked like
+        //     the narrowing itself. The edge is now the real floor (kWfmMinBwHz, which setTune
+        //     clamps to): a 10 kHz transition, ~141 taps, the same cost as the wide band.
+        // ★ Guarded by vibeserver/test-wfm-narrow-cost.cpp (CPU per second of signal, narrow vs
+        //   wide, relative so it holds on any machine).
+        case M::WFM: { static const double e[] = { RxPipeline::kWfmMinBwHz, 100000.0, 200000.0,
+                                                   400000.0, 800000.0 };
                        return pickBand(e, 5, bwHz, lo, hi); }
     }
     return false;
@@ -246,6 +260,9 @@ void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
     //
     // ★ A REQUEST, not a retune: this is called from a socket/control thread and the
     // NCO is owned by the DSP thread. Same discipline as `dirty_` and `resetReq_`.
+    // ★ WFM has a floor — see kWfmMinBwHz. Clamped HERE, before the sameChain/sameBand tests, so
+    //   every width under it is the same chain and a drag through them rebuilds nothing.
+    if (mode == Mode::WFM) bwHz = std::max(bwHz, kWfmMinBwHz);
     const bool sameChain = (mode == mode_ && bwHz == bwHz_);
     // ★★★ A WIDTH CHANGE IS NOT A NEW CHAIN, and treating it as one is the dip. When the chain was
     //     built for a band that still contains the new width, the selectivity filter can simply be
