@@ -83,6 +83,10 @@ endif()
 #   are therefore ignored WHATEVER they contain — a `;` in a comment used to split the line
 #   in two (CMake lists are semicolon-separated) and the tail was read as a source file.
 file(STRINGS "${CPP_DIR}/vibedsp/SOURCES" VIBEDSP_NAMES REGEX "^[A-Za-z0-9_./-]+\\.cpp$")
+# ★ Re-read it when it changes. file(STRINGS) is read once at configure time, so a NEW source added
+#   to SOURCES (mpxmeasure.cpp, 2026-09-29) left an existing build dir linking without it — undefined
+#   MpxMeasure symbols — until someone re-ran cmake by hand. build-app.sh reuses its build dir.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CPP_DIR}/vibedsp/SOURCES")
 set(VIBEDSP_SRC "")
 foreach(f ${VIBEDSP_NAMES})
     list(APPEND VIBEDSP_SRC "${CPP_DIR}/vibedsp/${f}")
