@@ -1024,7 +1024,7 @@ const plain = (text, status) => new Response(text, {
  *   'gone' — past its hold, or delisted (410).
  * All three rank the same way: the same bands first, then nearest to THIS server.
  */
-async function knownPage(env, slug, { variant, name, pos, bands, country, away }) {
+async function knownPage(env, slug, { variant, name, pos, bands, country, away, left }) {
   const picks = await suggestServers(env, { from: pos, bands, country, exclude: slug, coarse: true });
   const covered = bands.map((k) => BAND_NAME.get(k)).join(', ');
   const who = name || 'this server';
@@ -1039,8 +1039,12 @@ async function knownPage(env, slug, { variant, name, pos, bands, country, away }
   } else if (variant === 'away') {
     status = 503;
     title = 'Offline for now';
-    lead = `Sorry — ${who} has not been online for ${away}.`;
-    sub = ['Its address is kept for it, so this link will work again if it comes back.'];
+    // ★ Stuart, 2026-09-29: the day count yes, but factual rather than chatty — say it may return,
+    //   and exactly when its address will be released if it does not.
+    lead = `Sorry — ${who} has not been seen for ${away}.`;
+    sub = ['This could be a temporary issue, and the server may return.'
+         + ` However, if it does not check in within the next ${left}, it will be removed from the`
+         + ' directory and this address will be made available again.'];
     heading = 'In the meantime, here are some other servers you may enjoy';
   } else {
     status = 410;
@@ -1082,6 +1086,15 @@ function awayWords(sec) {
   if (d >= 1) return d === 1 ? 'a day' : `${d} days`;
   const h = Math.max(1, Math.floor(sec / 3600));
   return h === 1 ? 'an hour' : `${h} hours`;
+}
+
+/** Time until the address hold runs out, rounded UP — "within the next 4 days" must never promise
+ *  less time than the server really has. */
+function leftWords(sec) {
+  const d = Math.ceil(sec / 86400);
+  if (d >= 2) return `${d} days`;
+  const h = Math.max(1, Math.ceil(sec / 3600));
+  return h >= 24 ? 'day' : (h === 1 ? 'hour' : `${h} hours`);
 }
 
 /** ★ Called by delist() BEFORE the row goes: the note gone_slugs keeps (see 0007-gone-slugs.sql). */
@@ -1165,7 +1178,7 @@ async function serveBySlug(host, request, env) {
     }
     // ★★ AWAY A DAY OR MORE, STILL HELD: the address is kept, and the visitor is offered others.
     if (page && awaySec >= AWAY_PAGE_SEC) {
-      return knownPage(env, slug, known(row, 'away', { away: awayWords(awaySec) }));
+      return knownPage(env, slug, known(row, 'away', { away: awayWords(awaySec), left: leftWords(hold - awaySec) }));
     }
     // ★ Briefly offline (or not the document): exactly the answer it has always had.
     return new Response(

@@ -209,7 +209,7 @@ console.log('offline but held');
   const b = await get(slugUrl('holiday'));
   save('away', b.text);
   check('away 3 days: 503 page with alternatives', b.status === 503 && b.type.startsWith('text/html')
-        && b.text.includes('On Holiday has not been online for 3 days') && order(b.text).length === 6);
+        && b.text.includes('On Holiday has not been seen for 3 days') && b.text.includes('within the next 4 days') && order(b.text).length === 6);
   const c = await get(slugUrl('holiday', '/vibeserver.json'));
   check('away, non-root: plain 503', c.status === 503 && c.type.startsWith('text/plain'));
 }
