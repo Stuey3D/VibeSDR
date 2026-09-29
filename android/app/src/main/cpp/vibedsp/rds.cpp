@@ -329,6 +329,10 @@ float RdsDemod::rdsDeviationKHz() const {
          *     is the signature of the GUARD BAND being contaminated rather than of any subcarrier
          *     being absent: a wide IF admits adjacent-channel energy, some of it lands at 63 kHz
          *     where the guard sits, and the subtraction then removes signal instead of noise.
+         *     ★★ CORRECTION, 2026-09-29: the guard did NOT sit at 63 kHz — a sign error put it at
+         *        51 kHz, in the stereo difference's upper sideband (see process()). What a wide IF
+         *        let through was STEREO TREBLE, which a narrow IF's roll-off at 51 kHz had been
+         *        hiding. Fixed.
          *  ★★ So the correction may reduce the reading, never annihilate it. When the subtraction
          *     would leave nothing, the guard is measuring something that is not our noise floor,
          *     and the uncorrected estimate — which needs no guard at all — is the better answer.
@@ -669,7 +673,12 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     // rdsDeviationKHz(). Clamped at zero first so a momentary negative excursion pulls the
     // average down rather than latching the whole reading to "nothing".
     if (guardOn_ && nb > 0) {
-        const float inst = std::max(0.0f, rdsPow_ - guardPow_);
+        /* ★★ SCALED TO THE RDS BAND'S NOISE, NOT THE GUARD'S. FM's discriminator noise rises as f², so
+         *  the band at 63 kHz holds (63/57)² = 1.22x the noise the RDS band at 57 kHz does; subtracting
+         *  it unscaled over-removes on exactly the weak signals the correction exists for. (57/63)² is
+         *  the whole derivation — valid on a flat channel (the listener.s is not, which is its own fault). */
+        constexpr float kGuardNoiseScale = (57.0f / 63.0f) * (57.0f / 63.0f);
+        const float inst = std::max(0.0f, rdsPow_ - kGuardNoiseScale * guardPow_);
         sigPowSlow_ += 0.02f * (inst - sigPowSlow_);
     }
 
@@ -684,8 +693,19 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
          *  what every other mixer here uses; guardPhase_ now carries the oscillator as (cos, sin)
          *  and rotateBlock renormalises it every block, so drift cannot accumulate. Same signs:
          *  xGI = xI·c + xQ·s, xGQ = xQ·c − xI·s. */
+        /* ★★★ THE GUARD SAT AT 51 kHz, NOT 63 — INSIDE THE STEREO SUBCARRIER (found 2026-09-29).
+         *  x = 2·mpx·e^{+j3φ}, so MPX content at 57+δ kHz lands at baseband −δ: 63 kHz is at −6 kHz.
+         *  rotateBlock returns z·e^{−jθ} for a positive step, which moves content DOWN — so a
+         *  positive step brought +6 kHz to DC, i.e. MPX 51 kHz: the top of the L−R sideband (38 ± 15).
+         *  Every station with treble in its stereo difference therefore had that programme measured
+         *  as "noise" and subtracted from its RDS deviation, down to the 0.707 floor below — ~25-30 %
+         *  low on music, right on speech. Onfliner saw exactly that against MpxTool (2026-09-29): RAW
+         *  right on all three stations, AVG low on the two music stations. It looked like a rotating
+         *  -encoder effect because both music stations happened to rotate; a synthetic station with
+         *  treble in L−R reproduces it locked or rotating (test-mpx-measure --diag), and one without
+         *  treble does not. ★ Negative step = rotate UP by 6 kHz = the guard really is at 63 kHz. */
         float cr = guardCos_, ci = guardSin_;
-        rotateBlock(xI_.data(), xQ_.data(), n, cr, ci, (float)std::cos(guardStep_), (float)std::sin(guardStep_),
+        rotateBlock(xI_.data(), xQ_.data(), n, cr, ci, (float)std::cos(guardStep_), (float)-std::sin(guardStep_),
                     xGI_.data(), xGQ_.data(), nullptr, nullptr);
         guardCos_ = cr; guardSin_ = ci;
         sGI_.resize(lpfGI_->maxOut(n));
