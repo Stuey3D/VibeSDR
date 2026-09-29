@@ -447,6 +447,15 @@ async function register(request, env) {
     // ★ Housekeeping on the write path rather than a cron: free, and cron is one more thing to fail.
     env.DB.prepare('DELETE FROM reg_log WHERE at < ?').bind(since),
   ]);
+  // ★ The address belongs to somebody again, so the note about who had it before goes — and old
+  //   notes are pruned here too (see 0007-gone-slugs.sql). Kept OUT of the batch above: a failure
+  //   here must never cost a server its registration. (A stale note is harmless anyway — a listed
+  //   row always wins over a note in serveBySlug.)
+  try {
+    await env.DB.prepare('DELETE FROM gone_slugs WHERE slug = ? OR gone_at < ?').bind(wanted, t - GONE_KEEP_SEC).run();
+  } catch (e) {
+    console.error('register: gone_slugs cleanup failed', wanted, (e && e.stack) || String(e));
+  }
 
   // ★★★ THE ONLY TIME THE KEY IS EVER SENT. It cannot be recovered; a lost key means re-register.
   //     `address` is what the switch shows underneath itself — the thing the owner shares.
@@ -534,6 +543,22 @@ async function delist(request, env) {
   if (!body) return json({ error: 'bad json' }, 400);
   const { row, error } = await authed(env, body);
   if (error) return error;
+  // ★★ A NOTE OF WHERE IT WAS AND WHAT IT COVERED, so a visitor holding the old link is offered
+  //    receivers like it (see 0007-gone-slugs.sql). Not the name, the address or the status blob.
+  //    Written in the same batch as the delete: either both happen or neither does.
+  //  ★★★ THE DELETE MUST NOT DEPEND ON THE NOTE. Delist is the owner's privacy switch; a missing
+  //      table (migration 0007 not applied) or any other failure writing the note is logged and
+  //      the listing is removed regardless.
+  const t = now();
+  try {
+    const note = goneNote(env, row, t);
+    await env.DB.batch([
+      ...(note ? [note] : []),
+      env.DB.prepare('DELETE FROM gone_slugs WHERE gone_at < ?').bind(t - GONE_KEEP_SEC),
+    ]);
+  } catch (e) {
+    console.error('delist: could not keep the gone_slugs note', row.slug, (e && e.stack) || String(e));
+  }
   await env.DB.prepare('DELETE FROM servers WHERE id = ?').bind(row.id).run();
   // ★ Immediate, per the privacy rule: one-press delist, effective now, not at the next expiry.
   return json({ delisted: true });
@@ -597,9 +622,8 @@ async function list(env, url, request) {
   const { results } = await env.DB.prepare(
     `SELECT id, name, url, kind, grid, lat, lon, country, status_json, updated_at, expires_at, slug,
             until
-       FROM servers WHERE expires_at > ? AND verified = 1
-                      AND (until = 0 OR until > ?) ORDER BY country, name`
-  ).bind(now(), now()).all();
+       FROM servers WHERE ${LIVE_WHERE} ORDER BY country, name`
+  ).bind(now()).all();
 
   const servers = (results || []).map((r) => {
     let status = {};
@@ -735,6 +759,341 @@ async function checkName(url, env) {
   });
 }
 
+/* ══ A DEAD ADDRESS STILL GETS VISITORS ═══════════════════════════════════════════════════════════
+ * ★★★ Stuart, 2026-09-29: "anybody opening a dead link from history gets a sorry this server is no
+ *     longer available on this address, here are some other servers that you may be interested in
+ *     and bring up the servers closest to location of the old dead server and which covers the same
+ *     ranges". Measured: clearing the Sony TV app's storage made it a NEW server (new key, new slug
+ *     stuey3d-sony-bravia-tv); the old stuey3d-sonytv answered a plain-text 503 and still had 21
+ *     visits in a week from bookmarks and Discord links. The two cannot be linked — the new one is
+ *     a new identity — so we never redirect; we OFFER.
+ *
+ * ★★ WHICH ADDRESS GETS WHICH ANSWER (serveBySlug):
+ *    · live                                  → proxied, unchanged.
+ *    · live, but its tunnel does not answer  → 503 + Retry-After page: "isn't responding right now"
+ *                                              + other servers like it (see UPSTREAM_DOWN).
+ *    · offline under a day                   → today's plain 503, unchanged. A restart, a reboot, a
+ *                                              flat phone overnight: nobody needs alternatives.
+ *    · offline a day or more, still HELD     → 503 page: "not been online for N days, its address is
+ *                                              kept for it" + other servers like it. Not "gone" —
+ *                                              the owner may be on holiday.
+ *    · offline past its hold (HOLD_SQL)      → 410 page: "no longer available at this address" +
+ *                                              other servers like it. The row still exists (expiry
+ *                                              never deletes), so its own grid and radios rank.
+ *    · deleted by delist, note in gone_slugs → 410 page, same, ranked from the note.
+ *    · never seen                            → 404 page: nearest servers to the VISITOR.
+ *    ★ Only the ROOT DOCUMENT gets a page. Any other path under a dead address — an API read, an
+ *      asset, a socket — gets the same status in plain text, never HTML inside a JSON reply.
+ */
+const AWAY_PAGE_SEC = 86400;              // offline this long before the 503 carries alternatives
+const GONE_KEEP_SEC = 180 * 86400;        // how long a delisted address's note is kept
+const SUGGEST_MAX = 6;
+// Statuses that mean "the tunnel reached nobody" — Cloudflare's and cloudflared's, never VibeServer's.
+const UPSTREAM_DOWN = new Set([502, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);
+
+/**
+ * ★ The bands a listener would recognise, for "covers the same ranges". A COARSE table on purpose:
+ *   it ranks suggestions, it filters nothing, and it never decides what a receiver may tune — the
+ *   directory page learns band edges from the servers themselves (learnBands) and that stays so.
+ */
+const BANDS = [
+  ['lw',   'Longwave',     148500,     283500],
+  ['mw',   'Medium\u00a0wave', 526500,     1606500],
+  ['hf',   'Shortwave',    3000000,    30000000],
+  ['fm',   'FM',           87500000,   108000000],
+  ['air',  'Airband',      118000000,  137000000],
+  ['2m',   '2\u00a0m',       144000000,  148000000],
+  ['dab',  'DAB',          174000000,  240000000],
+  ['70cm', '70\u00a0cm',      430000000,  440000000],
+];
+const BAND_NAME = new Map(BANDS.map(([k, n]) => [k, n]));
+// A phone publishes band NAMES in `coverage` (see index.html radioLine) — read the words too.
+const BAND_WORDS = [
+  ['lw', /\blong ?wave\b|\blw\b/i], ['mw', /\bmedium ?wave\b|\bmw\b|\bam broadcast/i],
+  ['hf', /\bshort ?wave\b|\bhf\b|\bsw\b/i], ['fm', /\bfm\b/i], ['air', /\bair ?band\b|\baviation\b/i],
+  ['2m', /\b2 ?m\b/i], ['dab', /\bdab\b/i], ['70cm', /\b70 ?cm\b/i],
+];
+
+const pairsOf = (v) => (Array.isArray(v) ? v : [])
+  .filter((p) => Array.isArray(p) && p.length === 2 && Number.isFinite(+p[0]) && Number.isFinite(+p[1]))
+  .map((p) => [+p[0], +p[1]]);
+
+/** What one radio reaches, in Hz — the same precedence as the page's reachOf(): a locked radio is
+ *  its window; then what a listener may tune; then the hardware. ★ A radio that published no numbers
+ *  at all (an older phone — the old Sony row is exactly this) falls back to its driver's reach,
+ *  because "covers nothing" would rank it below everything and that is not true. */
+function reachOfRadio(r) {
+  const centre = Number(r.centreHz) || 0, span = Number(r.spanHz) || 0;
+  if (r.locked && centre > 0 && span > 0) return [[centre - span / 2, centre + span / 2]];
+  for (const f of ['allowed', 'ranges', 'coverage']) {
+    const p = pairsOf(r[f]);
+    if (p.length) return p;
+  }
+  const d = String(r.driver || '').toLowerCase(), n = String(r.name || '').toLowerCase();
+  if (d.includes('airspyhf')) return [[9000, 31000000], [60000000, 260000000]];
+  if (d.includes('sdrplay') || /\brsp/.test(n)) return [[1000, 2000000000]];
+  if (d.includes('rtl')) return /\bv4\b/.test(n) ? [[500000, 1766000000]] : [[24000000, 1766000000]];
+  return [];
+}
+
+/** Band keys a server offers across its radios, from numbers and from words. */
+function bandsFor(status) {
+  const out = new Set();
+  for (const r of (Array.isArray(status && status.radios) ? status.radios : [])) {
+    if (!r || typeof r !== 'object') continue;
+    const words = [r.allowedNames, r.coverage].flatMap((v) => Array.isArray(v) ? v : [])
+      .filter((w) => typeof w === 'string');
+    for (const w of words) for (const [k, re] of BAND_WORDS) if (re.test(w)) out.add(k);
+    const reach = reachOfRadio(r);
+    for (const [k, , lo, hi] of BANDS) if (reach.some(([a, b]) => a < hi && b > lo)) out.add(k);
+  }
+  return BANDS.map(([k]) => k).filter((k) => out.has(k));      // table order, stable
+}
+
+/** ★ The 4-character square's centre, even if the listing published six: ranking does not need a
+ *  5 km square, and a note about a server that has gone should hold no more than it must. */
+function coarsePos(grid, lat, lon) {
+  const p = gridToLatLon(String(grid || '').slice(0, 4));
+  return p || (Number.isFinite(+lat) && Number.isFinite(+lon) ? { lat: +lat, lon: +lon } : null);
+}
+
+function kmBetween(a, b) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+const parseStatus = (s) => { try { return JSON.parse(s) || {}; } catch { return {}; } };
+
+/** ★ THE SAME "LIVE" AS list() — one rule, two readers, so the expression is shared, not copied. */
+const LIVE_WHERE = 'expires_at > ?1 AND verified = 1 AND (until = 0 OR until > ?1)';
+
+/**
+ * Up to SUGGEST_MAX live servers for a visitor at a dead address.
+ * @param from  {lat, lon} to measure from (the gone server, or the visitor), or null
+ * @param bands band keys to match (the gone server's), or [] to rank on distance alone
+ * @param country fallback when there is no position: same country first
+ * ★ Order: most shared bands, then a server a stranger can actually open (no server PIN), then
+ *   nearest. A server-wide PIN is listed — the directory lists it — just not ahead of an open one.
+ */
+async function suggestServers(env, { from, bands = [], country = '', exclude = '', coarse = false }) {
+  const { results } = await env.DB.prepare(
+    `SELECT name, url, slug, country, grid, lat, lon, status_json FROM servers WHERE ${LIVE_WHERE}`
+  ).bind(now()).all();
+  const want = new Set(bands);
+  const rows = (results || []).filter((r) => r.slug !== exclude).map((r) => {
+    const status = parseStatus(r.status_json);
+    const b = bandsFor(status);
+    // ★ Measured at the SAME resolution as `from`: a gone server is held at its 4-character square,
+    //   so candidates are too — otherwise a receiver in the very same place reads "23 km away".
+    const pos = coarse ? coarsePos(r.grid, r.lat, r.lon)
+      : Number.isFinite(+r.lat) && Number.isFinite(+r.lon) ? { lat: +r.lat, lon: +r.lon } : null;
+    return {
+      name: r.name, slug: r.slug, url: r.url, country: r.country || '',
+      bands: b, shared: b.filter((k) => want.has(k)).length,
+      km: from && pos ? kmBetween(from, pos) : null,
+      pin: !!status.pin,
+      listeners: Number(status.listeners) || 0, maxListeners: Number(status.maxListeners) || 0,
+    };
+  });
+  rows.sort((a, b) =>
+    (b.shared - a.shared) || (a.pin - b.pin)
+    || (a.km !== null && b.km !== null ? a.km - b.km : 0)
+    || ((b.country === country) - (a.country === country))
+    || String(a.name).localeCompare(String(b.name)));
+  return rows.slice(0, SUGGEST_MAX);
+}
+
+/** ★ THE DIRECTORY PAGE'S esc(), to the character — every string from the database goes through it,
+ *  and no string from the database is ever placed anywhere but element text or a quoted attribute. */
+const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function flagOf(cc) {
+  if (!/^[A-Z]{2}$/.test(cc || '')) return '🌐';
+  return String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+
+/** Where a suggestion links: its stable address when it has one, else its own validated URL. */
+function hrefOf(s) {
+  if (s.slug && /^[a-z0-9][a-z0-9-]{0,62}$/.test(s.slug)) return `https://${s.slug}.${PUBLIC_ZONE}/`;
+  return validUrl(s.url) ? validUrl(s.url) + '/' : `https://${PUBLIC_ZONE}/`;
+}
+
+function cardHtml(s, sharedWith, distWord) {
+  const shared = new Set(sharedWith);
+  const covers = s.bands.length
+    ? s.bands.map((k) => shared.has(k) ? `<b>${escHtml(BAND_NAME.get(k))}</b>` : escHtml(BAND_NAME.get(k))).join(' · ')
+    : 'coverage not published';
+  const full = s.maxListeners > 0 && s.listeners >= s.maxListeners;
+  const state = full ? `<span class="st full">FULL RIGHT NOW</span>`
+    : s.listeners > 0 ? `<span class="st">ONLINE · ${s.listeners} LISTENING</span>`
+    : `<span class="st">ONLINE</span>`;
+  const dist = s.km === null ? ''
+    : s.km < 5 ? ` · ${distWord === 'you' ? 'near you' : 'same area'}`
+    : ` · ${Math.round(s.km).toLocaleString('en-GB')} km ${distWord === 'you' ? 'from you' : 'away'}`;
+  return `<li class="card"><a href="${escHtml(hrefOf(s))}">`
+    + `<span class="top"><span class="nm">${flagOf(s.country)} ${escHtml(s.name)}</span>${state}</span>`
+    + `<span class="sub">${covers}${escHtml(dist)}${s.pin ? ' · PIN needed' : ''}</span>`
+    + `</a></li>`;
+}
+
+/**
+ * The page itself. ★ The directory's own look — its palette tokens by value and its monospace — but
+ * NO SCRIPT at all, and a CSP that says so: a page built from other people's names needs nothing
+ * that runs. ★ noindex twice (meta and header): a dead address must not become a search result.
+ */
+function sorryPage({ status, title, lead, sub, heading, cards, empty, retry = false, extra = {} }) {
+  const body = `<!doctype html>
+<html lang="en-GB"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${escHtml(title)} — VibeServer Directory</title>
+<style>
+  :root { --bg:#080601; --panel:#0d0a02; --line:rgba(255,176,0,.22); --text:#ffcc88;
+          --dim:rgba(255,160,0,.5); --accent:#ffb833; --phosphor:#28A745; --busy:#e05050; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-size:15px; line-height:1.5;
+         font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  header { padding: max(26px, env(safe-area-inset-top)) 16px 18px; border-bottom:1px solid var(--line); text-align:center; }
+  header a { color:var(--accent); text-decoration:none; font-size:20px; font-weight:600;
+             letter-spacing:5px; text-indent:5px; display:inline-block; text-shadow:0 0 24px rgba(255,170,0,.35); }
+  main { max-width:680px; margin:0 auto; padding:22px 16px 40px; }
+  h1 { font-size:19px; color:var(--accent); font-weight:600; letter-spacing:.03em; margin:0 0 8px; }
+  p { margin:0 0 10px; }
+  .dim { color:var(--dim); font-size:13px; }
+  h2 { font-size:12px; color:var(--dim); font-weight:400; letter-spacing:.14em; text-transform:uppercase;
+       margin:26px 0 8px; }
+  ul { list-style:none; margin:0; padding:0; }
+  .card a { display:block; border:1px solid rgba(255,176,0,.35); border-radius:8px; padding:10px 12px;
+            margin:0 0 10px; color:inherit; text-decoration:none; background:var(--panel); }
+  .card a:hover, .card a:focus-visible { border-color:var(--accent); }
+  .top { display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .nm { font-size:16px; font-weight:600; color:var(--accent); letter-spacing:.03em; overflow-wrap:anywhere; }
+  .st { font-size:11px; color:var(--phosphor); letter-spacing:.06em; white-space:nowrap; }
+  .st.full { color:var(--busy); }
+  .sub { display:block; margin-top:3px; font-size:12px; color:var(--dim); letter-spacing:.03em; }
+  .sub b { color:var(--text); font-weight:600; }
+  .listen { display:inline-block; margin-top:18px; padding:9px 18px; border-radius:7px; background:var(--accent);
+            color:#120a00; text-decoration:none; font-weight:600; font-size:12px; letter-spacing:.12em; text-transform:uppercase; }
+  .listen:hover { background:#ffc75c; }
+  .acts { display:flex; flex-wrap:wrap; gap:10px; margin:18px 0 0; }
+  .acts .listen { margin-top:0; }
+  /* ★ "Try again" is a plain link to this same address — a reload with no script on the page. */
+  .listen.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  .listen.ghost:hover { border-color:var(--accent); background:transparent; }
+</style></head>
+<body><header><a href="https://${PUBLIC_ZONE}/">VIBESERVER</a></header>
+<main>
+<h1>${escHtml(lead)}</h1>
+${sub.map((l) => `<p class="dim">${escHtml(l)}</p>`).join('\n')}
+${cards.length
+    ? `<h2>${escHtml(heading)}</h2>\n<ul>${cards.join('\n')}</ul>`
+    : `<p>${escHtml(empty)}</p>`}
+<p class="acts">${retry ? '<a class="listen ghost" href="/">Try again</a>' : ''}<a class="listen" href="https://${PUBLIC_ZONE}/">${retry ? 'Back to the directory' : 'See every server in the directory'}</a></p>
+</main></body></html>`;
+  return new Response(body, {
+    status,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-robots-tag': 'noindex',
+      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'referrer-policy': 'no-referrer',
+      ...extra,
+    },
+  });
+}
+
+/** A root GET/HEAD for the document — the only request a dead address answers with a page. */
+const wantsPage = (request, pathname) =>
+  (request.method === 'GET' || request.method === 'HEAD') && (pathname === '/' || pathname === '/index.html')
+  && (request.headers.get('upgrade') || '').toLowerCase() !== 'websocket';
+
+const plain = (text, status) => new Response(text, {
+  status, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' },
+});
+
+/**
+ * The page for an address whose server we KNOW — three variants, distinct in wording and status:
+ *   'down' — listed and pinging, but its tunnel did not answer (503 + Retry-After). NickB's server,
+ *            2026-09-29: listed, shown unresponsive, and clicking it gave visitors Cloudflare's raw
+ *            error page until he restarted it.
+ *   'away' — has not pinged for a day or more but still holds its address (503).
+ *   'gone' — past its hold, or delisted (410).
+ * All three rank the same way: the same bands first, then nearest to THIS server.
+ */
+async function knownPage(env, slug, { variant, name, pos, bands, country, away }) {
+  const picks = await suggestServers(env, { from: pos, bands, country, exclude: slug, coarse: true });
+  const covered = bands.map((k) => BAND_NAME.get(k)).join(', ');
+  const who = name || 'this server';
+  let title, lead, sub, heading, status, extra = {}, retry = false;
+  if (variant === 'down') {
+    status = 503; retry = true; extra = { 'retry-after': '120' };
+    title = "This server isn't responding right now";
+    lead = title;
+    sub = [`Apologies — ${who} appears to be experiencing technical difficulties and isn't responding at the moment.`
+         + ' It may well be back shortly: check the VibeServer directory for its latest status.'];
+    heading = 'In the meantime, here are some other servers you may enjoy';
+  } else if (variant === 'away') {
+    status = 503;
+    title = 'Offline for now';
+    lead = `Sorry — ${who} has not been online for ${away}.`;
+    sub = ['Its address is kept for it, so this link will work again if it comes back.'];
+    heading = 'In the meantime, here are some other servers you may enjoy';
+  } else {
+    status = 410;
+    title = 'No longer here';
+    lead = 'Sorry — this server is no longer available at this address.';
+    sub = name ? [`${name} used to be here, at ${slug}.${PUBLIC_ZONE}.`] : [];
+    heading = 'Here are some other servers you may like';
+  }
+  if (covered && picks.length) sub.push(`Listed nearest first, favouring servers that also cover ${covered}.`);
+  return sorryPage({
+    status, title, lead, sub, heading, retry, extra,
+    cards: picks.map((s) => cardHtml(s, bands, 'away')),
+    empty: 'No other servers are online right now.',
+  });
+}
+
+/** The page for an address nobody ever held: nearest to the visitor, by Cloudflare's own edge. */
+async function unknownPage(env, slug, request) {
+  const cf = request.cf || {};
+  // ★ The same coarse, edge-supplied position list() already uses — never the browser's location.
+  const from = cf.latitude != null && cf.longitude != null && cf.latitude !== '' && cf.longitude !== ''
+    && Number.isFinite(+cf.latitude) && Number.isFinite(+cf.longitude)
+    ? { lat: +cf.latitude, lon: +cf.longitude } : null;
+  const country = typeof cf.country === 'string' ? cf.country : '';
+  const picks = await suggestServers(env, { from, country });
+  return sorryPage({
+    status: 404,
+    title: 'No server here',
+    lead: 'Sorry — there is no server at this address.',
+    sub: [`No server is listed at ${slug}.${PUBLIC_ZONE}. Check the spelling, or pick one of these.`],
+    heading: from ? 'Servers near you' : 'Servers online now',
+    cards: picks.map((s) => cardHtml(s, [], 'you')),
+    empty: 'No servers are online right now.',
+  });
+}
+
+function awayWords(sec) {
+  const d = Math.floor(sec / 86400);
+  if (d >= 1) return d === 1 ? 'a day' : `${d} days`;
+  const h = Math.max(1, Math.floor(sec / 3600));
+  return h === 1 ? 'an hour' : `${h} hours`;
+}
+
+/** ★ Called by delist() BEFORE the row goes: the note gone_slugs keeps (see 0007-gone-slugs.sql). */
+function goneNote(env, row, t) {
+  const pos = coarsePos(row.grid, row.lat, row.lon);
+  if (!row.slug || !pos) return null;
+  return env.DB.prepare(
+    'INSERT OR REPLACE INTO gone_slugs (slug, lat, lon, country, bands, gone_at) VALUES (?,?,?,?,?,?)'
+  ).bind(row.slug, pos.lat, pos.lon, clean(row.country, 2).toUpperCase(),
+         JSON.stringify(bandsFor(parseStatus(row.status_json))), t);
+}
+
 /**
  * ★★★ <slug>.vibeserver.vibesdr.net — A REDIRECT, NEVER A PROXY.
  *
@@ -755,26 +1114,62 @@ async function serveBySlug(host, request, env) {
    *  never passed verifyAddress could still be SERVED under its slug — the attacker in the note
    *  above never had to run a real receiver at all. (Audit, 2026-09-10.) */
   const row = await env.DB.prepare(
-    'SELECT url, name, expires_at, updated_at, created_at FROM servers WHERE slug = ? AND verified = 1'
+    `SELECT url, name, expires_at, updated_at, created_at, grid, lat, lon, country, status_json
+       FROM servers WHERE slug = ? AND verified = 1`
   ).bind(slug).first();
 
+  const upstream = new URL(request.url);
+  const page = wantsPage(request, upstream.pathname);
+  // Everything we know about this server that the "other servers" ranking needs.
+  const known = (r, variant, extra = {}) => ({
+    variant, name: r.name, pos: coarsePos(r.grid, r.lat, r.lon),
+    bands: bandsFor(parseStatus(r.status_json)), country: r.country || '', ...extra,
+  });
+
   if (!row) {
-    return new Response(
-      `No VibeServer is listed at ${slug}.${PUBLIC_ZONE}.`,
-      { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } }
-    );
+    /* ★ NOT LISTED: either a delisted server whose note we kept (410), or a name nobody holds
+     *   (404). An UNVERIFIED row falls here too, as it always has — a claim is not a server. */
+    let note = null;
+    try {
+      note = await env.DB.prepare(
+        'SELECT lat, lon, country, bands FROM gone_slugs WHERE slug = ? AND gone_at > ?'
+      ).bind(slug, now() - GONE_KEEP_SEC).first();
+    } catch (e) {
+      // ★ Logged, not swallowed: most likely migration 0007 is not applied. The visitor still gets
+      //   the "no server here" page rather than a Worker exception.
+      console.error('serveBySlug: gone_slugs lookup failed', slug, (e && e.stack) || String(e));
+    }
+    if (note) {
+      if (!page) return plain(`No VibeServer is listed at ${slug}.${PUBLIC_ZONE} any more.`, 410);
+      let bands = [];
+      try { bands = JSON.parse(note.bands).filter((k) => BAND_NAME.has(k)); }
+      catch (e) { console.warn('gone_slugs: unreadable bands for', slug, String(e)); }
+      return knownPage(env, slug, { variant: 'gone', name: '', pos: { lat: +note.lat, lon: +note.lon },
+                                    bands, country: note.country || '' });
+    }
+    if (!page) return plain(`No VibeServer is listed at ${slug}.${PUBLIC_ZONE}.`, 404);
+    return unknownPage(env, slug, request);
   }
   if (Number(row.expires_at) <= now()) {
     // ★★ DO NOT PROMISE A RESERVATION THAT HAS LAPSED. Past the hold this name is up for grabs, so
     //    "it will work again when it returns" would be a claim we have stopped honouring.
     const lifetime = Number(row.updated_at) - Number(row.created_at);
     const hold = Math.min(Math.max(lifetime, ADDRESS_HOLD_MIN), ADDRESS_HOLD_MAX);
-    const stillHeld = Number(row.updated_at) > now() - hold;
-    const tail = stillHeld
-      ? 'Its address stays reserved, so this link will work again when it returns.'
-      : 'It has been away a long time and this address may be reassigned.';
+    const awaySec = now() - Number(row.updated_at);
+    const stillHeld = awaySec < hold;
+    // ★★★ PAST THE HOLD IT IS GONE — a 410 page with other servers like it. The row is still here
+    //     (expiry never deletes), so its own square and radios do the ranking.
+    if (!stillHeld) {
+      if (!page) return plain(`${row.name} is no longer available at this address.`, 410);
+      return knownPage(env, slug, known(row, 'gone'));
+    }
+    // ★★ AWAY A DAY OR MORE, STILL HELD: the address is kept, and the visitor is offered others.
+    if (page && awaySec >= AWAY_PAGE_SEC) {
+      return knownPage(env, slug, known(row, 'away', { away: awayWords(awaySec) }));
+    }
+    // ★ Briefly offline (or not the document): exactly the answer it has always had.
     return new Response(
-      `${row.name} is not online at the moment.\n${tail}`,
+      `${row.name} is not online at the moment.\nIts address stays reserved, so this link will work again when it returns.`,
       { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } }
     );
   }
@@ -782,7 +1177,6 @@ async function serveBySlug(host, request, env) {
   const origin = validUrl(row.url);
   if (!origin) return new Response('This server published an address we cannot use.', { status: 502 });
 
-  const upstream = new URL(request.url);
   const target = origin + upstream.pathname + upstream.search;
 
   // ★★★ WE PROXY THE PAGE, NOT THE STREAM — and that distinction is the whole design.
@@ -839,12 +1233,49 @@ async function serveBySlug(host, request, env) {
   //     this header only from Cloudflare's Worker range, so nobody can relabel themselves with it.
   fwd.set('x-vibesdr-via', 'directory');
 
-  const res = await fetch(target, {
-    method: request.method,
-    headers: fwd,
-    body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : request.body,
-    redirect: 'manual',
-  });
+  /* ★★★ A LISTED SERVER THAT DOES NOT ANSWER GETS OUR PAGE, NOT CLOUDFLARE'S. A fetch that threw
+   *     used to escape the Worker entirely (Cloudflare's 1101 page), and a tunnel with nobody behind
+   *     it came back as Cloudflare's own 502/530 page, proxied faithfully to the visitor. Both now
+   *     become the 'down' variant: 503 + Retry-After, with other servers like it.
+   *  ★★ ONLY FAILURES THAT CANNOT BE THE SERVER'S OWN ANSWER. 502, 504 and 520–530 are what
+   *     Cloudflare and cloudflared say when the origin is unreachable, and VibeServer emits none of
+   *     them. 503 is deliberately NOT on the list: the front door answers 503 itself for a radio
+   *     that is not up (main.cpp), and that is a real answer the client must see.
+   *  ★ The document waits DOC_TIMEOUT_MS for headers, then gives up — the timer is cleared the
+   *    moment headers arrive, so a slow body is never cut. Other paths keep Cloudflare's own
+   *    100-second origin limit (a 524, which is then mapped like the rest). */
+  const DOC_TIMEOUT_MS = 25000;
+  const ctl = page ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), DOC_TIMEOUT_MS) : null;
+  const down = async (why) => {
+    console.warn('slug upstream not responding', slug, why);
+    if (!page) {
+      return new Response(`${row.name} is not responding at the moment. Please try again shortly.`, {
+        status: 503,
+        headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '120' },
+      });
+    }
+    return knownPage(env, slug, known(row, 'down'));
+  };
+  let res;
+  try {
+    res = await fetch(target, {
+      method: request.method,
+      headers: fwd,
+      body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : request.body,
+      redirect: 'manual',
+      ...(ctl ? { signal: ctl.signal } : {}),
+    });
+  } catch (e) {
+    return down(ctl && ctl.signal.aborted ? 'timeout' : String((e && e.message) || e).slice(0, 120));
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (UPSTREAM_DOWN.has(res.status)) {
+    // ★ Drain what Cloudflare sent so the connection is released; its content is not wanted.
+    try { await res.body?.cancel(); } catch (e) { console.warn('slug upstream body cancel', String(e)); }
+    return down(`http ${res.status}`);
+  }
 
   const type = res.headers.get('content-type') || '';
 
