@@ -23,6 +23,32 @@ export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl
  *  FM-DX filter is ~55 kHz; below 40 kHz the discriminator is making distortion, not audio. */
 export const WFM_MIN_BW_HZ = 40_000;
 
+/** ★★★ THE WIDEST PASSBAND (total width, Hz) VibeServer builds per mode — mirrors
+ *  RxPipeline::maxBwHz, which the server clamps to anyway. Past the sliders a width's cost is not
+ *  linear (USB at 500 kHz measured 55x its default; test-passband-cost.cpp), so the server refuses
+ *  it; mirrored here so a bookmark, a shared link or a typed width shows what is actually running. */
+export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
+  usb: 12_000, lsb: 12_000, cwu: 12_000, cwl: 12_000,
+  am:  48_000, sam: 48_000,
+  fm:  64_000, nfm: 64_000,
+  wfm: 500_000,
+};
+
+/** The passband VibeServer will actually run — WFM's floor (widened about its own centre) and
+ *  every mode's ceiling (scaled about the carrier). Same rule as the web client's clampPassband. */
+export function clampVibePassband(mode: SDRMode, low: number, high: number): [number, number] {
+  if (mode === 'wfm' && high - low < WFM_MIN_BW_HZ) {
+    const extra = (WFM_MIN_BW_HZ - (high - low)) / 2;
+    return [low - extra, high + extra];
+  }
+  const max = MODE_MAX_BW_HZ[mode];
+  if (max && high - low > max) {
+    const k = max / (high - low);
+    return [low * k, high * k];
+  }
+  return [low, high];
+}
+
 /** Server-side mode bandwidth defaults (websocket.go, verbatim). */
 export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   usb: [50, 2700],     lsb: [-2700, -50],
