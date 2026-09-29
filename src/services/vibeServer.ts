@@ -193,6 +193,8 @@ export type VibeServerConfig = {
   rawIqLanMaxHz?: number;
   /** Crystal correction in ppm. Absent = leave the radio alone. */
   ppm?: number;
+  /** ★ DC on the feedline for a powered aerial. Absent = leave the radio alone (a radio with none). */
+  biasT?: boolean;
   /** Manual direct sampling: 0 off, 1 I branch, 2 Q branch. */
   directSampling?: number;
   /** ★ Switch direct sampling on by itself below `directSamplingBelowHz` — the owner's choice, and
@@ -235,8 +237,15 @@ export type VibeServerStatus = {
   maxUsers: number;
 };
 
-export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServerInfo> {
-  const info = await Local.startVibeServer({
+/**
+ * ★★★ THE CONFIG AS THE NATIVE SIDE READS IT — one builder, for BOTH readers (2026-09-29).
+ *  startVibeServer sends it to start a server; dabQuickScan sends it so the private scan engine runs the
+ *  owner's radio exactly as a server would (bias-T, ppm, AGC, gain rules — see
+ *  VibeServerBoot.privateScanConfig). Two copies of this list would be the hand-maintained-list fault
+ *  this file already records, twice.
+ */
+export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknown> {
+  return {
     name: cfg.name,
     centerFreq: cfg.centerFreq,
     sampleRate: cfg.sampleRate,
@@ -321,7 +330,16 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
     batteryPauseAt: cfg.batteryPauseAt ?? 0,
     batteryResumeAt: cfg.batteryResumeAt ?? 40,
     rawIqLanMaxHz: String(Math.round(cfg.rawIqLanMaxHz ?? 0)),
-  });
+    /* ★★★ BIAS-T IN THE CONFIG (2026-09-29) — sent only for a radio that HAS one (the caller decides;
+     *  absent = leave the radio alone). It used to be a separate call after start, so every start that
+     *  was not this screen's — the crash restore, the attach resume, the DAB scan engine — left a powered
+     *  aerial with no DC. VibeServerBoot applies it once the radio is open. */
+    ...(cfg.biasT != null ? { biasT: cfg.biasT === true } : {}),
+  };
+}
+
+export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServerInfo> {
+  const info = await Local.startVibeServer(nativeServerConfig(cfg));
   // Hand the web client's search its station list. Fire-and-forget: the server is
   // already up and useful without it, and this can involve a network fetch.
   void publishStations();
@@ -352,9 +370,11 @@ export async function dabScanPhase(): Promise<string> {
   if (!Local?.dabScanPhase) return '';
   return String(await Local.dabScanPhase());
 }
-export async function dabQuickScan(block: string, known: boolean, blockedModes: string): Promise<DabScanResult> {
+/** ★★ `cfg` is the config the Start button would send — the scan runs the owner's radio exactly as a
+ *  server would when it has to start its own private engine (see nativeServerConfig). */
+export async function dabQuickScan(block: string, known: boolean, cfg: VibeServerConfig): Promise<DabScanResult> {
   if (!Local?.dabQuickScan) return { ok: false, why: 'this build cannot scan' };
-  return JSON.parse(await Local.dabQuickScan(block, known, blockedModes)) as DabScanResult;
+  return JSON.parse(await Local.dabQuickScan(block, known, JSON.stringify(nativeServerConfig(cfg)))) as DabScanResult;
 }
 
 /**
@@ -771,15 +791,9 @@ export function setVibeServerCompressAudio(on: boolean): void {
 export function setVibeServerAdminSecret(secret: string): void {
   try { Local?.setVibeServerAdminSecret?.(secret); } catch {}
 }
-/** ★★★ BIAS-T, APPLIED AFTER THE RADIO IS OPEN. It is NOT a start option: `startVibeServer` on the
- *  Kotlin side reads no such key, so passing one there would have been a switch that saved, redrew
- *  itself green, and did nothing to the feedline — which is worse than not offering it. The native
- *  setter has existed all along (VibeLocalSdrModule.setBiasTee); it just needs calling once the
- *  radio is up.
- *  ★ Only for a radio that HAS one — the Airspy HF+ does not, and the caller checks. */
-export function setVibeServerBiasT(on: boolean): void {
-  try { (Local as any)?.setBiasTee?.(on); } catch { /* older build, or no bias-T on this radio */ }
-}
+/* ★★ setVibeServerBiasT() WAS HERE — a call after start, because the start config carried no bias-T.
+ *  It does now (`biasT`, applied by VibeServerBoot once the radio is open, on every start path: the
+ *  screen, the crash restore, the attach resume and the DAB scan engine). See nativeServerConfig. */
 
 export function setVibeServerUncompressedAudio(mode: 0 | 1 | 2): void {
   try { Local?.setVibeServerUncompressedAudio?.(mode); } catch {}

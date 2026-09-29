@@ -78,8 +78,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         dev.vendorId == AIRSPY_VID && dev.productId == AIRSPY_PID
 
     /** Any radio we can open directly over USB. */
-    private fun isSupportedRadio(dev: UsbDevice): Boolean =
-        isRtlSdr(dev) || isAirspyHf(dev) || isHackRf(dev) || isAirspy(dev)
+    private fun isSupportedRadio(dev: UsbDevice): Boolean = isServableRadio(dev.vendorId, dev.productId)
 
     private fun describe(dev: UsbDevice, hasPermission: Boolean): WritableMap {
         val m = Arguments.createMap()
@@ -171,7 +170,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun dabScanPhase(promise: Promise) { promise.resolve(scanPhase) }
 
     @ReactMethod
-    fun dabQuickScan(block: String, known: Boolean, blockedModes: String, promise: Promise) {
+    fun dabQuickScan(block: String, known: Boolean, ownerConfigJson: String, promise: Promise) {
         Thread {
             val t0 = android.os.SystemClock.elapsedRealtime()
             /* ★★★ EVERY PHASE STAMPED IN THE LOG, so the next slow scan names the phase that was slow
@@ -203,21 +202,26 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                 val conn = mgr.openDevice(dev)
                     ?: run { promise.reject("open_failed", "The radio could not be opened"); return@Thread }
                 try {
-                    // ★ A clean, private engine: loopback only, no PIN, nothing pinned that would stop it
-                    //   reaching 2.048 MS/s, and the owner's blocked modes (a blocked DAB is refused).
-                    VibeLocalSDR.setServeOnLan(false)
-                    VibeLocalSDR.setVibeServerAuth("")
-                    VibeLocalSDR.setVibeServerLockedCentre(0.0)
-                    VibeLocalSDR.setVibeServerLockedRate(0.0)
-                    VibeLocalSDR.setMaxUsers(1)
-                    VibeLocalSDR.setDabPolicy(true, blockedModes)
-                    VibeLocalSDR.setVibeServerLanding(0.0, "")
-                    VibeLocalSDR.setVibeServerLandingDab(-1, 0)
+                    /* ★★★ THE OWNER'S RADIO, NOT A BARE ONE (Stuart, 2026-09-29) — see
+                     *  VibeServerBoot.privateScanConfig. The screen hands in the config its Start button
+                     *  would send (one builder, two readers), and it goes through the SAME applyAndStart
+                     *  as every server start: bias-T, ppm, direct sampling, the AGC and its rules, the
+                     *  resting gain. Only what makes it private is taken out: loopback only (serveOnLan
+                     *  false), no PIN, no landing, nothing pinned below 2.048 MS/s. The block's
+                     *  remembered AGC gain is restored at DAB entry and learned if there is none —
+                     *  the listener's own entry does both, and the scan uses it. */
+                    val owner = try { org.json.JSONObject(ownerConfigJson) } catch (t: Throwable) {
+                        promise.reject("bad_config", "The scan was not given the server's settings: ${t.message}"); return@Thread
+                    }
+                    val cfg = VibeServerBoot.privateScanConfig(owner)
                     VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
-                    VibeLocalSDR.setBookmarksPath(java.io.File(reactContext.filesDir, "vibe_bookmarks.json").absolutePath)
-                    phase("starting the receiver")
-                    val port = VibeLocalSDR.startSpectrum(conn.fileDescriptor, dev.vendorId, dev.productId,
-                                                          225_648_000.0, 2_048_000.0, -1, 1024, 5.0, "wfm")
+                    phase("starting the receiver with the server's own radio settings")
+                    val port = VibeServerBoot.applyAndStart(cfg, conn.fileDescriptor, dev.vendorId, dev.productId,
+                                                            reactContext.filesDir, serveOnLan = false)
+                    Log.i(TAG, "DAB quick scan: private engine on the owner's settings — bias-T " +
+                               (if (cfg.optBoolean("biasT", false)) "ON" else "off") +
+                               ", ppm ${cfg.optDouble("ppm", 0.0).toInt()}, AGC " +
+                               (if (cfg.optBoolean("rtlAgc", false) || cfg.optBoolean("agcLock", false)) "on" else "off"))
                     if (port <= 0) { promise.reject("start_failed", "The radio would not start for the scan"); return@Thread }
                     phase("locking onto $block and reading its station names")
                     val body = dabScanHttp(port, block, false)
@@ -576,7 +580,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★ Before start: the engine cannot read the descriptor on an fd-open. See usbModelName().
         VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
-                                                reactContext.filesDir)
+                                                reactContext.filesDir, serveOnLan = true)
         // ★ AFTER the server is up: the monitor pushes the sticky state the moment it registers, and
         //   a push before the native library is loaded is dropped (473 showed no level, 2026-09-17).
         VibeServerBoot.startBatteryMonitor(reactContext)
@@ -1309,5 +1313,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
          *  start() dispatch: three copies of one fact, and they must agree. */
         internal const val AIRSPY_VID = 0x1d50
         internal const val AIRSPY_PID = 0x60a1
+
+        /** ★ Any radio a server can be running on — the same four allowlists as isSupportedRadio(),
+         *  reachable without a module instance. The service asks it of a USB device that has just
+         *  DETACHED, to know whether the server's radio is what left (VibeServerRestore.noteRadioGone). */
+        internal fun isServableRadio(vid: Int, pid: Int): Boolean =
+            RTL_SDR_VIDPIDS.contains((vid shl 16) or pid) ||
+            (vid == AIRSPYHF_VID && pid == AIRSPYHF_PID) ||
+            (vid == HACKRF_VID && pid == HACKRF_PID) ||
+            (vid == AIRSPY_VID && pid == AIRSPY_PID)
     }
 }

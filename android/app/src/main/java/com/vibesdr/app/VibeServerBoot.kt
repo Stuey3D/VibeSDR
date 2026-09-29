@@ -124,7 +124,39 @@ object VibeServerBoot {
         return "$maker $product"
     }
 
-    fun applyAndStart(cfg: JSONObject, fd: Int, vendorId: Int, productId: Int, filesDir: File): Int {
+    /**
+     * ★★★ THE OWNER'S CONFIG, MADE PRIVATE FOR A DAB QUICK SCAN (Stuart, 2026-09-29).
+     *
+     * *"DAB needs to scan in the same way as if a user was actually listening to the DAB so if DAB has
+     * already got some agc measurements in the memory restore them if not then agc learns as it scans,
+     * but the full set hardware is enabled as Bias-t may be needed to power an antenna to be able to
+     * receive DAB."* The private engine the settings screen starts for a scan (server stopped) used to
+     * be a bare one — no bias-T, no ppm, no AGC, no gain rules — so a powered aerial had no power and
+     * the scan heard nothing a listener would have heard.
+     * ★★ So it is NOT a second list of settings: it is the owner's own config, through the one
+     *    applyAndStart every server start uses, with only what makes it PRIVATE taken out — nobody on
+     *    the LAN (serveOnLan false at the call), no PIN or password to answer on loopback, no landing,
+     *    no listing, and nothing pinned that would stop the radio reaching 2.048 MS/s on the block.
+     *    Everything that belongs to the RADIO — bias-T, ppm, direct sampling, converter, the AGC and its
+     *    per-band rules, the resting gain, the IF filter rules — stays exactly as the owner set it.
+     */
+    fun privateScanConfig(owner: JSONObject): JSONObject {
+        val c = JSONObject(owner.toString())
+        for (k in listOf("pin", "adminPassword", "mode", "landingDabChannel", "landingDabSid", "landingDabService",
+                         "lockedCentre", "lockedRate", "rateLock", "sessionLimitMin", "idleKickMin",
+                         "batteryPauseAt", "rawIq", "rawIqMax", "uncompressedAudio"))
+            c.remove(k)
+        c.put("advertise", false)
+        c.put("maxUsers", 1)
+        c.put("centerFreq", 225_648_000.0)   // 12B, as before — DAB entry moves it to the block anyway
+        c.put("sampleRate", 2_048_000.0)
+        return c
+    }
+
+    /** ★ `serveOnLan` is REQUIRED, never defaulted: false only for the private DAB scan engine — see
+     *  privateScanConfig. A default would let a new caller serve the LAN without deciding to. */
+    fun applyAndStart(cfg: JSONObject, fd: Int, vendorId: Int, productId: Int, filesDir: File,
+                      serveOnLan: Boolean): Int {
         val centerFreq = cfg.n("centerFreq", 100_000_000.0)
         val sampleRate = cfg.n("sampleRate", 2_400_000.0)
         // ★★★ THE RESTING GAIN IS ALSO THE STARTING GAIN, and until now it was neither.
@@ -297,7 +329,7 @@ object VibeServerBoot {
                 if (adv) cfg.s("gainCurves") else "")
         }
         VibeLocalSDR.setVibeServerLockedRate(cfg.n("lockedRate", 0.0))
-        VibeLocalSDR.setServeOnLan(true)
+        VibeLocalSDR.setServeOnLan(serveOnLan)
 
         val port = VibeLocalSDR.startSpectrum(
             fd, vendorId, productId, centerFreq, sampleRate, gain, fftSize, fftRate, mode)
@@ -324,6 +356,11 @@ object VibeServerBoot {
          *    direct sampling (manual or automatic below a frequency) and a converter in front of the
          *    radio. -1 / 0 / absent leave the radio as it is, which is what an old config means. */
         if (port > 0) {
+            /* ★★★ THE BIAS-T TRAVELS IN THE CONFIG NOW (2026-09-29). It used to be sent by the settings
+             *  screen AFTER start() returned — so the crash restore, the attach resume and the private DAB
+             *  scan engine, none of which have that screen, all ran with no DC on a powered aerial. Absent
+             *  = leave the radio as it is (an older stored config, or a radio with no bias-T). */
+            if (cfg.has("biasT")) VibeLocalSDR.setBiasTee(cfg.b("biasT", false))
             if (cfg.has("ppm")) VibeLocalSDR.setPpm(cfg.i("ppm", 0))
             val ds = cfg.i("directSampling", -1)
             if (ds >= 0) VibeLocalSDR.setDirectSampling(ds)

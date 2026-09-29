@@ -50,6 +50,8 @@ object VibeServerRestore {
         prefs(ctx).edit()
             .putBoolean(K_ARMED, true)
             .putString(K_CONFIG, cfg.toString())
+            // ★ A fresh start has its radio: no earlier departure may be held against it.
+            .remove(K_GONE_ELAPSED).remove(K_GONE_BOOTWALL).remove(K_GONE_BOOTNO)
             .apply()
     }
 
@@ -81,7 +83,87 @@ object VibeServerRestore {
     /** ★ Was this phone serving when it stopped? The update path asks before it acts — see
      *  VibeUpdateReceiver. Read-only; arming stays the business of the JS that started the server. */
     fun isArmed(ctx: Context): Boolean = prefs(ctx).getBoolean(K_ARMED, false)
-    /** ★★★ PUT THE SERVER BACK WHEN ITS RADIO IS ATTACHED? Only if it was running and not stopped on purpose.
+    /**
+     * ★★★ HOW LONG THE RADIO MAY BE GONE AND STILL COUNT AS A BLIP — five minutes, Stuart's figure.
+     *
+     * Stuart, 2026-09-29: *"if a quick connection blip then yes because as we know USB connections can
+     * be flaky and a radio may temporarily blip and come back. If unplugged for a decent amount of time
+     * dont auto resume the server as there is a good job the owner may have forgotten they were serving
+     * previously and we dont want to assume that is what they want to do this time."* And the window:
+     * five minutes.
+     * ★ ONE figure for BOTH ways a radio comes back — the re-attach resume below (MainActivity) and the
+     *   engine's own fresh-fd recovery (recoverUsbIfNeeded, polled by RtlTcpServerService). Past it the
+     *   server is stopped and DISARMED, as though the owner had pressed Stop.
+     * ★ A reboot is never a blip, however quick: see radioGoneForMs.
+     */
+    const val RADIO_BLIP_WINDOW_MS = 5 * 60 * 1000L
+
+    // ★ The moment the served radio LEFT, on three clocks — see radioGoneForMs for why three.
+    private const val K_GONE_ELAPSED  = "radioGoneElapsedMs"   // SystemClock.elapsedRealtime()
+    private const val K_GONE_BOOTWALL = "radioGoneBootWallMs"  // wall clock minus elapsed = when that boot began
+    private const val K_GONE_BOOTNO   = "radioGoneBootCount"   // Settings.Global.BOOT_COUNT, -1 where unknown
+
+    private fun bootCount(ctx: Context): Int = try {
+        android.provider.Settings.Global.getInt(ctx.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1)
+    } catch (t: Throwable) { Log.w(TAG, "boot count unreadable: ${t.message}"); -1 }
+
+    /** ★ The served radio has gone — a USB detach, or the engine finding its handle dead. Stamped ONCE:
+     *  the first sign counts, so a departure seen twice (the broadcast, then the engine) does not restart
+     *  the clock. Only while a server is ARMED: a radio leaving a phone that is not serving means nothing. */
+    fun noteRadioGone(ctx: Context, why: String) {
+        val p = prefs(ctx)
+        if (!p.getBoolean(K_ARMED, false) || p.contains(K_GONE_ELAPSED)) return
+        val el = android.os.SystemClock.elapsedRealtime()
+        p.edit()
+            .putLong(K_GONE_ELAPSED, el)
+            .putLong(K_GONE_BOOTWALL, System.currentTimeMillis() - el)
+            .putInt(K_GONE_BOOTNO, bootCount(ctx))
+            // ★ commit, not apply: a dongle pulled mid-stream can take the process down with it, and an
+            //   apply still queued at that moment is lost — the stamp is what a later attach decides on.
+            .commit()
+        Log.i(TAG, "the server's radio has gone ($why) — the server resumes if it is back within " +
+                   "${RADIO_BLIP_WINDOW_MS / 1000} s, and stops after that")
+    }
+
+    /** ★ The radio is back and the server has it — the gone-stamp is spent. */
+    fun noteRadioBack(ctx: Context) {
+        val p = prefs(ctx)
+        if (!p.contains(K_GONE_ELAPSED)) return
+        p.edit().remove(K_GONE_ELAPSED).remove(K_GONE_BOOTWALL).remove(K_GONE_BOOTNO).apply()
+        Log.i(TAG, "the server's radio is back")
+    }
+
+    /**
+     * How long the served radio has been gone, in THIS boot; -1 when it was never seen to leave, or
+     * left in an earlier boot.
+     * ★★★ A REBOOT IS NEVER A BLIP. A phone can restart inside five minutes, so a wall-clock age alone
+     *     would call "switched off and on again" a blip and resume a server the owner may have forgotten.
+     *     elapsedRealtime restarts at zero on every boot, so the age is measured on it — and only when the
+     *     stamp was written in this same boot: BOOT_COUNT where the OS keeps one (API 24+), otherwise the
+     *     boot's own start time (wall minus elapsed) agreeing to within a minute.
+     */
+    fun radioGoneForMs(ctx: Context): Long {
+        val p = prefs(ctx)
+        if (!p.contains(K_GONE_ELAPSED)) return -1
+        val el0 = p.getLong(K_GONE_ELAPSED, 0L)
+        val bootWall0 = p.getLong(K_GONE_BOOTWALL, 0L)
+        val bootNo0 = p.getInt(K_GONE_BOOTNO, -1)
+        val el = android.os.SystemClock.elapsedRealtime()
+        val bootNo = bootCount(ctx)
+        val sameBoot = if (bootNo0 >= 0 && bootNo >= 0) bootNo0 == bootNo
+                       else kotlin.math.abs((System.currentTimeMillis() - el) - bootWall0) < 60_000L
+        if (!sameBoot || el < el0) return -1
+        return el - el0
+    }
+
+    /** ★ Has the gone radio outstayed its blip window? False while it is merely away, or never went. */
+    fun radioGoneTooLong(ctx: Context): Boolean {
+        if (!prefs(ctx).contains(K_GONE_ELAPSED)) return false
+        val gone = radioGoneForMs(ctx)
+        return gone < 0 || gone > RADIO_BLIP_WINDOW_MS
+    }
+
+    /** ★★★ PUT THE SERVER BACK WHEN ITS RADIO IS ATTACHED? Only after a BLIP — see RADIO_BLIP_WINDOW_MS.
      *
      *  ★★ THIS USED TO BE `bootWanted()` — armed AND the owner's "start on boot" switch — and that switch is
      *     GONE (2026-09-28). On the Sony it was proven undeliverable: VibeBootReceiver ran at BOOT_COMPLETED
@@ -89,14 +171,60 @@ object VibeServerRestore {
      *     only on a LIVE attach (through the default association the owner ticked), never to one that was
      *     already present when the system came up. A switch that promises otherwise is a promise we cannot
      *     keep (Stuart: "we would be promising something that we couldnt achieve").
-     *  ★ What Android DOES grant is the attach, and the attach is what calls this (MainActivity). A server
-     *    the owner left running and whose radio comes back — replugged, re-enumerated, or enumerated on the
-     *    way up on a phone that does that (the XCover, 2026-09-22) — resumes. Nothing on screen promises it.
+     *  ★★★ AND "ARMED" STOPPED BEING ENOUGH (2026-09-29). A server the owner left running whose radio comes
+     *      back within five minutes of LEAVING resumes. One whose radio was away longer — or that we never
+     *      saw leave, which is what a reboot with the dongle in looks like (the XCover enumerates it on the
+     *      way up) — does NOT, and is disarmed here so no later attach resumes it either. The owner presses
+     *      Start; the screen shows the server stopped, because it is.
+     *  ★ A server still RUNNING (the engine waiting for its dongle) is left entirely alone: its own recovery
+     *    hands the fresh fd over on the same window (recoverUsbIfNeeded), and a restore would refuse to
+     *    double-open the radio anyway. Nothing here may disarm a live server.
      *  ★ A `startOnBoot` key in a config stored by an older build is simply never read again. */
-    fun attachResumeWanted(ctx: Context): Boolean = isArmed(ctx)
+    fun attachResumeWanted(ctx: Context): Boolean {
+        if (!isArmed(ctx)) return false
+        if (isShimServing()) return false
+        val gone = radioGoneForMs(ctx)
+        if (gone in 0..RADIO_BLIP_WINDOW_MS) {
+            Log.i(TAG, "radio back after ${gone / 1000} s — a blip, resuming the server")
+            return true
+        }
+        Log.i(TAG, when {
+            !prefs(ctx).contains(K_GONE_ELAPSED) ->
+                "radio attached, but it was never seen to leave a running server (a restart?) — not resuming; press Start"
+            gone < 0 -> "radio attached, but it left before a restart — not resuming; press Start"
+            else -> "radio back after ${gone / 1000} s, longer than ${RADIO_BLIP_WINDOW_MS / 1000} s — not resuming; press Start"
+        })
+        disarm(ctx)
+        return false
+    }
 
+    /** ★ Disarming also spends any gone-stamp: a stopped server has no radio to wait for. */
     fun disarm(ctx: Context) {
-        prefs(ctx).edit().putBoolean(K_ARMED, false).apply()
+        prefs(ctx).edit().putBoolean(K_ARMED, false)
+            .remove(K_GONE_ELAPSED).remove(K_GONE_BOOTWALL).remove(K_GONE_BOOTNO).apply()
+    }
+
+    /**
+     * ★★★ STOP A SERVER WHOSE RADIO HAS BEEN GONE TOO LONG — as the owner's Stop button would.
+     *
+     * The engine waits for a vanished dongle indefinitely (usbNeedsFreshFd), so without this a radio
+     * replugged an hour later was handed straight back and the server carried on serving: exactly the
+     * "assume that is what they want" Stuart ruled out. Called from RtlTcpServerService's 2 s tick, which
+     * then stops itself.
+     * ★ The same steps as VibeLocalSdrModule.stopVibeServer — disarm first, mDNS, the engine, the held
+     *   connection, LAN off, the secret out of memory. The module's own session connection is the same
+     *   object as the held one; closing it again on the next start or stop is harmless.
+     * ★ The settings screen sees `running:false` on its next status poll and goes back to Start.
+     */
+    fun stopBecauseRadioGone(ctx: Context) {
+        Log.w(TAG, "the server's radio has been gone for more than ${RADIO_BLIP_WINDOW_MS / 1000} s — " +
+                   "stopping the server; the owner starts it again when they want it")
+        disarm(ctx)
+        try { VibeLocalSDR.stopMdns() } catch (t: Throwable) { Log.w(TAG, "stopMdns: ${t.message}") }
+        try { VibeLocalSDR.stopSpectrumSync() } catch (t: Throwable) { Log.w(TAG, "stopping the engine: ${t.message}") }
+        releaseServerConn()
+        try { VibeLocalSDR.setServeOnLan(false) } catch (t: Throwable) { Log.w(TAG, "setServeOnLan: ${t.message}") }
+        try { VibeLocalSDR.setVibeServerAuth("") } catch (t: Throwable) { Log.w(TAG, "clearing the secret: ${t.message}") }
     }
 
     /** Cache what JS publishes, so a restored server still knows its own identity. */
@@ -118,6 +246,9 @@ object VibeServerRestore {
         val p = prefs(ctx)
         if (!p.getBoolean(K_ARMED, false)) return "not armed"
         if (isShimServing()) return null                 // never double-open the dongle
+        // ★★ THE BLIP RULE ON THIS DOOR TOO (RADIO_BLIP_WINDOW_MS). A process that died while its radio was
+        //    away comes back here, and a radio gone longer than the window is the owner's to restart.
+        if (radioGoneTooLong(ctx)) { disarm(ctx); return RADIO_GONE_TOO_LONG }
 
         val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager
             ?: return "no USB service"
@@ -143,7 +274,7 @@ object VibeServerRestore {
         if (cfg.length() == 0) { conn.close(); return "no stored config" }
 
         VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))   // see VibeServerBoot
-        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir)
+        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir, serveOnLan = true)
         VibeServerBoot.startBatteryMonitor(ctx)   // after start — see VibeLocalSdrModule
         // ★★★ AND PUT THE PUBLIC LISTING BACK. The tunnel dies with the process that spawned it, so
         //     an update, a low-memory kill or a reboot leaves the directory advertising an address
@@ -175,6 +306,7 @@ object VibeServerRestore {
             return "native startSpectrum failed"
         }
         heldConn = conn      // the shim owns this fd; it must not be collected
+        noteRadioBack(ctx)   // ★ whatever gap there was, the server has its radio again
 
         // Hand back the identity + station list JS would normally have published.
         val loc = p.getString(K_LOCJSON, "") ?: ""
@@ -218,12 +350,25 @@ object VibeServerRestore {
      *   (Android launched the app on the re-attach at 22:13 that night); until it lands this
      *   answers "waiting" and the next poll tries again. Nothing is prompted from here.
      * ★ The old connection is CLOSED once the new one is accepted — never kept open.
+     * ★★★ ONLY WITHIN THE BLIP WINDOW (RADIO_BLIP_WINDOW_MS, 2026-09-29). This is the blip case at the
+     *     engine level — the server never stopped — and it obeys the same five minutes as the re-attach
+     *     resume in MainActivity: past them it answers RADIO_GONE_TOO_LONG and the service stops the
+     *     server rather than hand a radio back to a server its owner may have forgotten.
      * Returns a short state for the log, or null when there is nothing to do.
      */
     @Synchronized
     fun recoverUsbIfNeeded(ctx: Context): String? {
-        if (!VibeLocalSDR.usbNeedsFreshFd()) return null
         val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return "no USB service"
+        if (!VibeLocalSDR.usbNeedsFreshFd()) {
+            // ★ No server running: a stopped or not-yet-restored server is restore()'s to judge, not this.
+            if (!isShimServing()) return null
+            // ★ Nothing for the engine to adopt. A radio that left (the detach broadcast stamped it) and is
+            //   listed again with the engine's handle alive is back; one still missing is judged on the clock.
+            if (radioGoneForMs(ctx) >= 0 && mgr.deviceList.values.any { isServable(it) }) { noteRadioBack(ctx); return null }
+            return if (radioGoneTooLong(ctx)) RADIO_GONE_TOO_LONG else null
+        }
+        noteRadioGone(ctx, "the engine's USB handle died")
+        if (radioGoneTooLong(ctx)) return RADIO_GONE_TOO_LONG
         val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) } ?: return "waiting for the dongle to come back"
         if (!mgr.hasPermission(dev)) return "waiting for USB permission for the dongle"
         val conn = mgr.openDevice(dev) ?: return "openDevice returned null"
@@ -235,10 +380,17 @@ object VibeServerRestore {
         heldConn = conn
         try { old?.close() } catch (t: Throwable) { Log.w(TAG, "closing the dead USB connection: ${t.message}") }
         Log.i(TAG, "dongle handed back to the engine on a fresh USB handle (${dev.deviceName})")
+        noteRadioBack(ctx)
         return "handed back"
     }
 
-    private fun isShimServing(): Boolean = try {
+    /** ★ What recoverUsbIfNeeded and restore answer when the radio outstayed RADIO_BLIP_WINDOW_MS. */
+    const val RADIO_GONE_TOO_LONG = "the radio was gone too long to resume"
+
+    private fun isServable(dev: UsbDevice): Boolean =
+        VibeLocalSdrModule.isServableRadio(dev.vendorId, dev.productId)
+
+    internal fun isShimServing(): Boolean = try {
         VibeLocalSDR.getVibeServerStatus().contains("\"running\":true")
     } catch (_: Throwable) { false }
 

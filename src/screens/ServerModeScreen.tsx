@@ -31,12 +31,11 @@ import { getServerName, saveServerName, PUBLIC_NAME_KEY } from '../services/rtlT
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
   setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
-  setVibeServerBiasT,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   getServerLocationMode, setServerLocationMode, getManualServerLocation,
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation,
-  getDabBlocks, dabQuickScan, dabScanPhase, type DabBlock,
+  getDabBlocks, dabQuickScan, dabScanPhase, type DabBlock, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { loadActiveEibi } from '../services/eibi';
@@ -645,6 +644,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [starting, setStarting] = useState(false);
   const [error, setError]     = useState<string | null>(null);
   const runningRef = useRef(false);
+  /** ★ Consecutive status reads saying the server is not running — see the live-status poll. */
+  const stoppedReads = useRef(0);
   /* ★★ Set by keepServingAndBrowse(), and PRE-SET when the picker's "Currently serving" row
    *  opened this screen to LOOK at a running server. Read only by the unmount teardown below. */
   const keepServingRef = useRef(!!(route.params as any)?.keepOnExit);
@@ -897,6 +898,22 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     if (!running) return;
     const t = setInterval(async () => {
       const s = await getVibeServerStatus();
+      /* ★★★ THE SERVER CAN STOP WITHOUT THIS SCREEN STOPPING IT. Its radio gone for more than five
+       *     minutes stops it natively (VibeServerRestore.RADIO_BLIP_WINDOW_MS — Stuart, 2026-09-29: an
+       *     owner who unplugged it for a while may have forgotten they were serving). Only an explicit
+       *     `running:false` counts — a failed read (null) says nothing — and only TWICE in a row, so the
+       *     moment inside a restart (a settings save stops and starts the engine) is not mistaken for it.
+       *     The screen then goes back to the settings and Start, saying why, rather than showing a live
+       *     server that is not there. Applies to an ADOPTED server too, hence `running`, not runningRef. */
+      stoppedReads.current = s && s.running === false ? stoppedReads.current + 1 : 0;
+      if (stoppedReads.current >= 2) {
+        stoppedReads.current = 0;
+        runningRef.current = false;
+        setRunning(null);
+        setError('The server has stopped. If its radio was unplugged for more than 5 minutes it is not '
+          + 'restarted on its own — plug it in and press Start to serve again.');
+        return;
+      }
       if (s) setStatus(s);
       // ★★★ THE LISTING CAN COME BACK WITHOUT THE SCREEN ASKING IT TO. Turning the server on
       //     re-establishes a listing that was left on, and that happens on its own, seconds later,
@@ -1212,7 +1229,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     try {
       // ★ known=false: the settings are only on screen while the server is stopped, when there is no
       //   running engine holding a memory of heard stations — so it is always a real scan here.
-      const j = await dabQuickScan(b.name, false, blockedModes);
+      // ★★ The owner's full config, so a scan with the server stopped runs the radio as the server would.
+      const j = await dabQuickScan(b.name, false, serverConfigRef.current(name.trim() || 'VibeSDR'));
       if (!j.ok) { setDabScanMsg('Scan not done: ' + (j.why || 'the radio refused')); return; }
       const list = Array.isArray(j.services) ? j.services : [];
       setDabStations((prev) => ({ ...prev, [ch]: list }));
@@ -1237,6 +1255,101 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel,
   };
+
+  /* ★★★ THE CONFIG THE SERVER STARTS WITH, BUILT IN ONE PLACE (2026-09-29). Start sends it, and so does
+   *  the DAB quick scan, whose private engine must run the owner's radio exactly as a server would —
+   *  bias-T, ppm, AGC, gain rules (Stuart: "the full set hardware is enabled as Bias-t may be needed to
+   *  power an antenna"). Read through a ref, so the Start callback's long dependency list cannot freeze
+   *  a stale copy of it. */
+  const serverConfig = (n: string): VibeServerConfig => ({
+    name: n,
+    // rate 0 = client-controlled: start at the full span and let the client
+    // narrow it. Anything else both starts AND pins there.
+    sampleRate: rate || 2_400_000,
+    lockedRate: rate,
+    // ★★ WHERE A LISTENER LANDS. 0 = say nothing and let the server keep its own default,
+    //    rather than asserting a frequency the owner never chose.
+    ...(landingHz > 0 ? { centerFreq: landingHz, mode: landingMode } : {}),
+
+    pin: effectivePin,
+    maxFftRate: fpsForTier(fps),
+    compressAudio: compress,
+    adminPassword: adminPw,
+    uncompressedAudio: uncomp,
+    sessionLimitMin: limitMin,
+    webServer,
+    advertise,
+    // ★ Always. See the note where the switch used to be.
+    autoRestore: true,
+    advanced,
+    maxUsers, allowRanges, blockRanges,
+    // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
+    //   like the resting gain, not of sharing — see the note in VibeServerBoot.
+    blockedModes, dabRateBoost,
+    // ★★★ THE DAB LANDING STATION — never sent beside a DAB block (the engine refuses it too).
+    ...(dabBlockedNow(blockedModes) || live.current.landingDabCh < 0
+      ? { landingDabChannel: -1, landingDabSid: 0, landingDabService: '' }
+      : { landingDabChannel: live.current.landingDabCh, landingDabSid: live.current.landingDabSid,
+          landingDabService: live.current.landingDabSvc }),
+    radioLabel: live.current.radioLabel,
+    /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
+     *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
+     *  check for the WHOLE literal, so every setting here could be misspelled or unknown to
+     *  VibeServerConfig and nothing would say a word — which is precisely how five settings
+     *  came to be sent to a function that does not forward them. Sent plainly, the compiler
+     *  checks them; the value is -1 ("decide from the measurement") where there is no control
+     *  to set it, which is what absent meant anyway. */
+    dabScanLabels,
+    // ★ The rest of the server's settings — the phone runs the same server, one radio at a
+    //   time, so everything the desktop can set is set from here.
+    sessionLimitSoft: live.current.limitSoft,
+    idleKickMin: live.current.idleKick,
+    batteryPauseAt, batteryResumeAt: batteryPauseAt > 0 ? batteryPauseAt + 20 : 40,
+    // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
+    //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
+    //   should be in the GUI on the app screen on the phone").
+    rawIq: (maxUsers > 1 && radioUse !== 'locked') ? 0 : live.current.rawIq,
+    // ★ One stream on a one-listener radio; the count only means something on a locked window.
+    rawIqMax: radioUse === 'locked' ? live.current.rawIqMax : (live.current.rawIq > 0 ? 1 : 0),
+    rawIqLanMaxHz: radioUse !== 'locked' ? live.current.rawIqLanMaxHz : 0,
+    idleGraceSec: live.current.idleGrace,
+    antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
+    landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
+    // ★★ Locked mode only. In single-user mode the centre follows the listener, which is what
+    //    the phone has always done and is right for one person retuning the radio themselves.
+    ...(advanced && radioUse === 'locked'
+      ? { lockedCentre: live.current.lockedCentre, spectrogram: live.current.spectrogram }
+      : {}),
+    // ★ Sent in EVERY mode — see the ZOOM DETAIL card's note.
+    zoomSpectrum: live.current.zoomSpec,
+    gainLimits, gainLocks, gainSplits, gainCurves, restGain, agcLock,
+    // ★ The per-band IF filter — only a dongle has the filter it sets, so nothing is sent for others.
+    ifBwLimits: isRtl ? ifBwLimits : '',
+    /* ★★★ THE SCREEN ALREADY SAID "PINNED — listeners cannot change it" whenever a rate was
+     *   chosen, and the server only ever treated `lockedRate` as a CEILING: anything narrower
+     *   was allowed. So the words on this screen have been ahead of the behaviour. rateLock
+     *   makes the claim true, and it is derived rather than a second switch — the app's model
+     *   is already "0 = listener's choice, anything else = pinned". */
+    rateLock: rate > 0,
+    trustedProxies: proxies, oneRadioPerIp,
+    rtlAgc,
+    tunerBwAuto,
+    // ★ The front end (see the state block). Absent/0 = leave the radio alone, as on Linux.
+    ...(ppm.trim() !== '' && Number.isFinite(Number(ppm)) ? { ppm: Math.round(Number(ppm)) } : {}),
+    directSampling: directSampling === 'i' ? 1 : directSampling === 'q' ? 2 : 0,
+    autoDirectSampling: autoDs,
+    directSamplingBelowHz: (Number(autoDsMhz) || 24) * 1e6,
+    // ★ Sign as the setup page stores it: an UP-converter (HF moved up to the tuner) is NEGATIVE,
+    //   a down-converter (LNB, transverter block) positive — see vibe_setup_page.h's convDown.
+    converterOffsetHz: (convDown ? 1 : -1) * (Number(convOffsetMhz) || 0) * 1e6,
+    converterInputLoHz: (Number(convLoMhz) || 0) * 1e6,
+    converterInputHiHz: (Number(convHiMhz) || 0) * 1e6,
+    // ★★ The bias-T now travels with the rest (it was a separate call after start, so a restore, an
+    //    attach resume and the scan engine all ran with no DC on the aerial). Radios with none send nothing.
+    biasT: hasHwSetup ? biasT : undefined,
+  });
+  const serverConfigRef = useRef(serverConfig);
+  serverConfigRef.current = serverConfig;
 
   const start = useCallback(async () => {
     /* ★★★ NEVER WRITE DEFAULTS OVER SETTINGS WE COULD NOT READ. If the load failed, every control on this
@@ -1307,98 +1420,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     await setServerLocationMode(locMode);
 
     try {
-      const info = await startVibeServer({
-        name: n,
-        // rate 0 = client-controlled: start at the full span and let the client
-        // narrow it. Anything else both starts AND pins there.
-        sampleRate: rate || 2_400_000,
-        lockedRate: rate,
-        // ★★ WHERE A LISTENER LANDS. 0 = say nothing and let the server keep its own default,
-        //    rather than asserting a frequency the owner never chose.
-        ...(landingHz > 0 ? { centerFreq: landingHz, mode: landingMode } : {}),
-
-        pin: effectivePin,
-        maxFftRate: fpsForTier(fps),
-        compressAudio: compress,
-        adminPassword: adminPw,
-        uncompressedAudio: uncomp,
-        sessionLimitMin: limitMin,
-        webServer,
-        advertise,
-        // ★ Always. See the note where the switch used to be.
-        autoRestore: true,
-        advanced,
-        maxUsers, allowRanges, blockRanges,
-        // ★ Not gated on `advanced`: what this aerial is good for is a property of the RADIO,
-        //   like the resting gain, not of sharing — see the note in VibeServerBoot.
-        blockedModes, dabRateBoost,
-        // ★★★ THE DAB LANDING STATION — never sent beside a DAB block (the engine refuses it too).
-        ...(dabBlockedNow(blockedModes) || live.current.landingDabCh < 0
-          ? { landingDabChannel: -1, landingDabSid: 0, landingDabService: '' }
-          : { landingDabChannel: live.current.landingDabCh, landingDabSid: live.current.landingDabSid,
-              landingDabService: live.current.landingDabSvc }),
-        radioLabel: live.current.radioLabel,
-        /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
-         *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
-         *  check for the WHOLE literal, so every setting here could be misspelled or unknown to
-         *  VibeServerConfig and nothing would say a word — which is precisely how five settings
-         *  came to be sent to a function that does not forward them. Sent plainly, the compiler
-         *  checks them; the value is -1 ("decide from the measurement") where there is no control
-         *  to set it, which is what absent meant anyway. */
-        dabScanLabels,
-        // ★ The rest of the server's settings — the phone runs the same server, one radio at a
-        //   time, so everything the desktop can set is set from here.
-        sessionLimitSoft: live.current.limitSoft,
-        idleKickMin: live.current.idleKick,
-        batteryPauseAt, batteryResumeAt: batteryPauseAt > 0 ? batteryPauseAt + 20 : 40,
-        // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
-        //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
-        //   should be in the GUI on the app screen on the phone").
-        rawIq: (maxUsers > 1 && radioUse !== 'locked') ? 0 : live.current.rawIq,
-        // ★ One stream on a one-listener radio; the count only means something on a locked window.
-        rawIqMax: radioUse === 'locked' ? live.current.rawIqMax : (live.current.rawIq > 0 ? 1 : 0),
-        rawIqLanMaxHz: radioUse !== 'locked' ? live.current.rawIqLanMaxHz : 0,
-        idleGraceSec: live.current.idleGrace,
-        antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
-        landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
-        // ★★ Locked mode only. In single-user mode the centre follows the listener, which is what
-        //    the phone has always done and is right for one person retuning the radio themselves.
-        ...(advanced && radioUse === 'locked'
-          ? { lockedCentre: live.current.lockedCentre, spectrogram: live.current.spectrogram }
-          : {}),
-        // ★ Sent in EVERY mode — see the ZOOM DETAIL card's note.
-        zoomSpectrum: live.current.zoomSpec,
-        gainLimits, gainLocks, gainSplits, gainCurves, restGain, agcLock,
-        // ★ The per-band IF filter — only a dongle has the filter it sets, so nothing is sent for others.
-        ifBwLimits: isRtl ? ifBwLimits : '',
-        /* ★★★ THE SCREEN ALREADY SAID "PINNED — listeners cannot change it" whenever a rate was
-         *   chosen, and the server only ever treated `lockedRate` as a CEILING: anything narrower
-         *   was allowed. So the words on this screen have been ahead of the behaviour. rateLock
-         *   makes the claim true, and it is derived rather than a second switch — the app's model
-         *   is already "0 = listener's choice, anything else = pinned". */
-        rateLock: rate > 0,
-        trustedProxies: proxies, oneRadioPerIp,
-        rtlAgc,
-        tunerBwAuto,
-        // ★ The front end (see the state block). Absent/0 = leave the radio alone, as on Linux.
-        ...(ppm.trim() !== '' && Number.isFinite(Number(ppm)) ? { ppm: Math.round(Number(ppm)) } : {}),
-        directSampling: directSampling === 'i' ? 1 : directSampling === 'q' ? 2 : 0,
-        autoDirectSampling: autoDs,
-        directSamplingBelowHz: (Number(autoDsMhz) || 24) * 1e6,
-        // ★ Sign as the setup page stores it: an UP-converter (HF moved up to the tuner) is NEGATIVE,
-        //   a down-converter (LNB, transverter block) positive — see vibe_setup_page.h's convDown.
-        converterOffsetHz: (convDown ? 1 : -1) * (Number(convOffsetMhz) || 0) * 1e6,
-        converterInputLoHz: (Number(convLoMhz) || 0) * 1e6,
-        converterInputHiHz: (Number(convHiMhz) || 0) * 1e6,
-      });
+      const info = await startVibeServer(serverConfigRef.current(n));
       setRunning(info);
       runningRef.current = true;
       setStarting(false);
-      // ★★★ BIAS-T THE MOMENT THE RADIO IS UP, not when a client eventually turns up and unlocks
-      //     the hardware — a powered loop needs its DC before the first listener arrives, which is
-      //     the whole point of setting it here (Stuart, 2026-08-17: "as soon as you press go live
-      //     you are in play"). Never sent to a radio that has none; see hasHwSetup.
-      if (hasHwSetup) setVibeServerBiasT(biasT);
+      // ★★★ BIAS-T THE MOMENT THE RADIO IS UP — now carried IN the config (serverConfig) and applied by
+      //     VibeServerBoot once the radio is open, on every start path, not only this one.
       if (advertise) advertiseServer(n, info.port, 'vibeserver', effectivePin !== '');
     } catch (e: any) {
       setStarting(false);
