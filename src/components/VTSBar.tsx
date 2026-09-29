@@ -71,8 +71,12 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
   // drops back down instead of floating over the gap where the VTS used to be.
   useEffect(() => { if (!shown) onHeight?.(0); }, [shown, onHeight]);
 
+  /** True from the moment the bar starts to appear until it starts to leave. */
+  const visibleRef = useRef(false);
+
   const dismiss = () => {
     if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
+    visibleRef.current = false;
     Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })
       .start(() => { setShown(null); shownRef.current = null; });
   };
@@ -84,16 +88,32 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
       if (shownRef.current?.hold) dismiss();
       return;
     }
+    /* ★★★ LIVE DATA UPDATES IN PLACE — IT DOES NOT RE-ENTER (2026-09-29). Every held RDS update
+     *  (a new RadioText, a logo landing, a PS change) used to snap the bar to transparent and fade
+     *  it back in, and reset the scroll — so on a Brazilian station whose PS rotates every second
+     *  or two the bar blinked continuously: "flickers like a broken element". A held notif
+     *  replacing a held notif that is ON SCREEN is the same bar with new words: swap the content,
+     *  leave the opacity alone. The scroll restarts only if the TEXT changed (the slide effect is
+     *  keyed on it). Timed notifs (bookmark / band / notice) still make their entrance. */
+    const inPlace = !!notif.hold && !!shownRef.current?.hold && visibleRef.current;
+    const textChanged = shownRef.current?.name !== notif.name
+                     || shownRef.current?.secondary !== notif.secondary;
     setShown(notif);
     shownRef.current = notif;
-    setTextW(0);
-    slide.setValue(0);
-    fade.setValue(0);
-    Animated.timing(fade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    if (!inPlace) {
+      setTextW(0);
+      slide.setValue(0);
+      fade.setValue(0);
+      Animated.timing(fade, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    } else if (textChanged) {
+      slide.setValue(0);
+    }
+    visibleRef.current = true;
     if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
     // Live data (RDS/DMR/DAB) holds on screen; static (bookmark/band) times out.
     if (!notif.hold) {
       hideRef.current = setTimeout(() => {
+        visibleRef.current = false;
         Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })
           .start(() => { setShown(null); shownRef.current = null; });
       }, notif.ms ?? NOTIF_MS);
@@ -126,8 +146,10 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
       easing: Easing.linear,
       useNativeDriver: true,
     }).start();
+  // ★ A held (live) notif restarts its scroll only when its TEXT changes — a new key carrying the
+  //   same words (a logo arriving, a flag) must not throw the reader back to the start.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shown?.key, areaW, textW]);
+  }, [shown?.hold ? `${shown.name}|${shown.secondary ?? ''}` : shown?.key, areaW, textW]);
 
   if (!shown) return null;
 

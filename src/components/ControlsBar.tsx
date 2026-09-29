@@ -223,9 +223,9 @@ export function meterText(mode: 'snr' | 'smeter' | 'dbfs', m: MeterValues): stri
  *      zones DIFFER: on a UK listener with a UK receiver the row reads "22:07 UTC · 23:07 BST" and
  *      nothing says which half is whose, and on a receiver whose box is set to UTC it reads
  *      "22:07 UTC · 22:07 UTC" and looks simply broken (Stuart, 2026-09-24, on the Lenovo — whose
- *      zone really was Etc/UTC). The symbol does not have to be learnt here: it is the SAME rack
- *      glyph already sitting in the stats row of this very bar, next to the phone glyph, where it
- *      has always meant "the server end".
+ *      zone really was Etc/UTC). The symbol does not have to be learnt here: it is the SAME node
+ *      mark already sitting in the stats row of this very bar, next to the phone glyph, where it
+ *      means "the server end" (it was the old rack box here until 2026-09-29).
  *  ★ Falls back to the phone's clock when the server has not said (an older build), so the row is
  *    never blank — but it is then labelled with the PHONE's zone, which is the honest reading. */
 function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
@@ -257,15 +257,20 @@ function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
   return { utc: `${utc} UTC`, srv: `${hhmm} ${label}`, fromServer: true };
 }
 
-/** The clock row: UTC, then the RECEIVER's wall clock behind the rack glyph that means "server end"
- *  everywhere else in this bar. */
+/** The clock row: UTC, then the RECEIVER's wall clock behind the node mark that means "server end"
+ *  everywhere else in this bar (the connection meter beneath it). */
 function ClockRow({ clock, color, font, size }:
     { clock: { utc: string; srv: string; fromServer: boolean }; color: string; font?: string; size: number }) {
   return (
     <View style={pm.clockRow}>
       <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size }}>{clock.utc}</Text>
       <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size, opacity: 0.6 }}>·</Text>
-      {clock.fromServer ? <ServerGlyph color={color} /> : null}
+      {/* ★★ THE NODE, NOT THE RACK (Stuart, 2026-09-29: "wrong server icon next to the clock").
+          The connection meter directly beneath this row draws the server end as the network-NODE
+          mark (SectionIcon 'instance' — the same server mark as the menu and the watch); this row
+          still drew the old server-rack box, so one bar used two symbols for one thing. Same
+          component now, in this row's own colour, sized to the clock text. */}
+      {clock.fromServer ? <SectionIcon name="instance" size={Math.max(11, Math.round(size * 1.45))} color={color} /> : null}
       <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size }}>{clock.srv}</Text>
     </View>
   );
@@ -475,14 +480,6 @@ function PhoneGlyph({ color }: { color: string }) {
   return (
     <View style={[pm.phoneGlyph, { borderColor: color }]}>
       <View style={[pm.phoneDot, { backgroundColor: color }]} />
-    </View>
-  );
-}
-function ServerGlyph({ color }: { color: string }) {
-  return (
-    <View style={[pm.serverGlyph, { borderColor: color }]}>
-      <View style={[pm.serverLine, { backgroundColor: color }]} />
-      <View style={[pm.serverLine, { backgroundColor: color }]} />
     </View>
   );
 }
@@ -752,9 +749,6 @@ const pm = StyleSheet.create({
                 alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 1.5 },
   phoneDot:   { width: 2.5, height: 1.5, borderRadius: 1 },
   clockRow:   { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0 },
-  serverGlyph:{ width: 13, height: 11, borderWidth: 1, borderRadius: 2,
-                justifyContent: 'space-evenly', paddingHorizontal: 2 },
-  serverLine: { height: 1, borderRadius: 0.5 },
   dot:     { width: 7, height: 7, borderRadius: 3.5, marginRight: 5, alignSelf: 'center', flexShrink: 0 },
   dotOn:   { backgroundColor: '#00cc44' },
   dotOff:  { backgroundColor: '#333' },

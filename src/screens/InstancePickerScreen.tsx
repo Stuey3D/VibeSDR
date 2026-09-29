@@ -118,6 +118,7 @@ import { APP_VERSION } from '../constants/version';
 import { useServing, loopbackIfSelf, servingNow } from '../services/serving';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
 import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
+import { favFromDiscovered, repairFromDiscovery, needsVibeProbe, tcpFavHttpBase } from '../services/discoveredFavs';
 import { resolveVibeAuth } from '../services/vibeAuth';
 import { crumb } from '../services/crumbs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
@@ -1333,13 +1334,49 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     } else add(fallback);
   }, [tcpFavs]);
 
-  // Pin a discovered (mDNS) server into the RTL-TCP favourites so it survives
+  // Pin a discovered (mDNS) server into the custom-server favourites so it survives
   // even when it's not currently advertising.
+  // ★★★ WITH ITS PROTOCOL. This wrote `{ name, host, port }` and nothing else, and every reader of
+  //   a TcpFav says `proto ?? 'rtltcp'` — so a starred VibeServer came back as rtl_tcp and never
+  //   connected (Stuart, 2026-09-29). See services/discoveredFavs.ts.
   const saveDiscovered = useCallback((s: DiscoveredServer) => {
     const next = [...tcpFavs.filter(f => !(f.host === s.host && f.port === s.port)),
-                  { name: s.name, host: s.host, port: s.port }];
-    setTcpFavs(next); saveTcpFavs(next).catch(() => {});
+                  favFromDiscovered(s)];
+    setTcpFavs(next);
+    saveTcpFavs(next).catch((e) => console.warn('[favourites] saving a discovered server failed', e));
   }, [tcpFavs]);
+
+  // ★ REPAIR what the old ☆ saved: while discovery can SEE a favourite's host:port advertising
+  //   `_vibesdr._tcp`, a proto-less (or rtl_tcp) favourite there is corrected on the spot. No
+  //   probe needed — the advert is the evidence. Favourites whose server is not advertising right
+  //   now are repaired on connect instead (connectTcpFav).
+  useEffect(() => {
+    const repaired = repairFromDiscovery(tcpFavs, discovered);
+    if (!repaired) return;
+    setTcpFavs(repaired);
+    saveTcpFavs(repaired).catch((e) => console.warn('[favourites] repairing discovered favourites failed', e));
+  }, [discovered, tcpFavs]);
+
+  // Tap a custom-server favourite. A favourite with a proto connects as that, exactly as before.
+  // ★ An AMBIGUOUS one (no proto — what the old ☆ wrote, or a pre-SpyServer rtl_tcp favourite) is
+  //   first asked whether it is a VibeServer; `/vibeserver.json` answers that definitively. A yes is
+  //   written back so it is asked once. A no/no-answer is NOT written as rtl_tcp: a VibeServer that
+  //   is merely switched off must not be stamped rtl_tcp for ever — it just stays as it was.
+  const connectTcpFav = useCallback(async (f: TcpFav) => {
+    let proto: BackendType = (f.proto ?? 'rtltcp') as BackendType;
+    if (needsVibeProbe(f)) {
+      setConnecting(true);
+      const occ = await fetchOccupancy(tcpFavHttpBase(f), 2000);
+      setConnecting(false);
+      if (occ) {
+        proto = 'vibeserver';
+        const next = tcpFavs.map(t => (t.host === f.host && t.port === f.port ? { ...t, proto } : t));
+        setTcpFavs(next);
+        saveTcpFavs(next).catch((e) => console.warn('[favourites] saving a repaired favourite failed', e));
+      }
+    }
+    connectDetected(proto, f.host, f.port, f.name);
+  }, [tcpFavs, connectDetected]);
 
   // Discovered servers not already saved as a favourite (dedupe by host:port).
   const discoveredNew = useMemo(
@@ -2568,8 +2605,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   {tcpFavs.map((f) => (
                     <ChooserRow key={`${f.host}:${f.port}`}
                       style={[styles.row, { borderColor: C.amber }]}
-                      onPress={() => connectDetected(
-                        (f.proto ?? 'rtltcp') as BackendType, f.host, f.port, f.name)}
+                      onPress={() => { void connectTcpFav(f); }}
                       onLongPress={() => Alert.alert(f.name, `${f.host}:${f.port}`, [
                         { text: 'Cancel', style: 'cancel' },
                         { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
