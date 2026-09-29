@@ -174,6 +174,7 @@ import * as DocumentPicker from 'expo-document-picker';
 // SDK 56 moved readAsStringAsync to the legacy entry (new File API otherwise).
 import * as FileSystem from 'expo-file-system/legacy';
 import { crumb } from '../services/crumbs';
+import { PsStabiliser } from '../services/psStabiliser';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -2132,12 +2133,44 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [aircraft, setAircraft] = useState<Aircraft[]>([]);
   // DAB speed correction (dablin chipmunk workaround) — 1 = off; persisted.
   const [dabSpeed, setDabSpeed] = useState<number>(1);
-  const [liveStation, setLiveStation] = useState<{ name?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number }>({});
+  // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
+  //   Advanced RDS instrument, which must show what is on air rather than what we display.
+  const [liveStation, setLiveStation] = useState<{ name?: string; psRaw?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
+  /* ★★★ THE RDS NAME GOES THROUGH A STABILISER BEFORE ANYTHING SEES IT (Stuart, 2026-09-29: "the
+   *  VTS flickers like a broken element" on Kiko's Brazilian servers). Their PS is a MARQUEE — it
+   *  rotates "UMUARAMA" / "ALINE" / "RADIO" for ever — and every consumer keyed on the name (the
+   *  VTS popup, its RadioText scroll, the logo lookup, the menu, the lock screen) re-fired on each
+   *  rotation. See services/psStabiliser.ts: a static PS passes straight through (Europe
+   *  unchanged); a rotating one becomes ONE stable name carrying the whole rotation; an empty PS
+   *  on the same station never blanks it; and nothing changes faster than the minimum dwell.
+   * ★ Keyed on the PI when there is one (the identity), else the tuned frequency. */
+  const psStab = useRef(new PsStabiliser());
+  const psTickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const psStationKey = (pi: string | undefined) =>
+    pi ? `pi:${pi}` : `f:${Math.round((tuneRef.current.frequency || 0) / 100000)}`;
+  /** A held change (see PsStabiliser.nextDueIn) lands on its own timer, with no RDS frame needed. */
+  const armPsTick = () => {
+    if (psTickTimer.current) { clearTimeout(psTickTimer.current); psTickTimer.current = null; }
+    const due = psStab.current.nextDueIn(Date.now());
+    if (due == null) return;
+    psTickTimer.current = setTimeout(() => {
+      psTickTimer.current = null;
+      if (destroyed.current) return;
+      const name = psStab.current.tick(Date.now());
+      if (name && name !== liveStationRef.current) {
+        liveStationRef.current = name;
+        setLiveStation((cur) => (cur.badge === 'RDS' && cur.name ? { ...cur, name } : cur));
+      }
+      armPsTick();
+    }, due + 20);
+  };
+  useEffect(() => () => { if (psTickTimer.current) clearTimeout(psTickTimer.current); }, []);
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
   const [dabActiveLogo, setDabActiveLogo] = useState<string | null>(null);   // the playing DAB service's logo
   const lastLiveLogoKey = useRef('');
+  const lastLiveLogoStation = useRef('');   // ★ see the logo effect: cleared per STATION, not per name
   const [fmStereo, setFmStereo] = useState(false);   // WFM stereo pilot (local hardware)
 
   // DAB speed correction is remembered PER STATION (ensemble + programme), since
@@ -5213,9 +5246,19 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         // RDS (FM) / DAB labels feed the SAME station display as bookmarks (VTS),
         // so a live station name shows uniformly regardless of source.
-        liveStationRef.current = meta.stationName ?? '';
+        // ★ FM RDS only (an OWRX DAB label also carries 'RDS', but with its programme list) — a
+        //   DAB service label or a DMR caller is not a PS and must show every change.
+        let stationName = meta.stationName;
+        if (meta.badge === 'RDS' && !meta.programmes) {
+          stationName = psStab.current.feed(psStationKey(meta.pi), meta.stationName, Date.now()) || undefined;
+          armPsTick();
+        } else {
+          psStab.current.reset();
+          if (psTickTimer.current) { clearTimeout(psTickTimer.current); psTickTimer.current = null; }
+        }
+        liveStationRef.current = stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc });
+        setLiveStation({ name: stationName, psRaw: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc });
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -8347,8 +8390,16 @@ export default function SDRScreen({ route, navigation }: Props) {
               + `|${Math.round(status.frequency || 0)}`;
     if (key === lastLiveLogoKey.current) return;
     lastLiveLogoKey.current = key;
+    /* ★★★ CLEAR ON A CHANGE OF STATION, NOT OF NAME (2026-09-29). The miss below was already
+     *  forbidden from erasing a logo, but this line erased it UP FRONT on every key change — and the
+     *  key contains the name — so a marquee PS still dropped the picture on every rotation and put
+     *  it back when the (cached) lookup answered: the VTS swapped logo → RDS mark → logo each time,
+     *  one of the ways it "flickered like a broken element". The station is the PI + frequency. */
+    const station = `${liveStation.pi ?? ''}|${Math.round((status.frequency || 0) / 100000)}`;
+    const stationChanged = station !== lastLiveLogoStation.current;
+    lastLiveLogoStation.current = station;
     if (!name) { setLiveLogo(null); return; }
-    setLiveLogo(null);
+    if (stationChanged) setLiveLogo(null);
     // ★ The FREQUENCY goes with the PI, because RadioDNS is keyed on the BEARER — one PI can be
     //   on several transmitters and the SPI lists each by frequency. Without it the identity
     //   lookup cannot run at all and we are back to matching on a name that may be wrong.
@@ -8409,6 +8460,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (fmLogoOk) return;
     lastLiveLogoKey.current = '';
+    lastLiveLogoStation.current = '';
     setLiveLogo(null);
   }, [fmLogoOk]);
 
@@ -10024,7 +10076,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="Advanced RDS" onClose={() => setAdvRdsOpen(false)}>
         <AdvRdsPanel
           bus={advRdsBus}
-          ps={liveStation.name} rt={liveStation.text} pi={liveStation.pi}
+          ps={liveStation.psRaw ?? liveStation.name} rt={liveStation.text} pi={liveStation.pi}
           countryIso={liveStation.countryIso}
           // ★ The ECC was already sitting in liveStation and simply never handed over, so the
           //   COUNTRY row could only ever say "from PI". Written and never read, again.
