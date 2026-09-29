@@ -1252,6 +1252,23 @@ final class UberClient: ObservableObject {
   }
 
   private func onDabJSON(_ type: String, _ j: [String: Any]) {
+    /* ★★★ HOLD THE SELF-HEAL FOR DAB CHANGES THIS WATCH DID NOT MAKE, TOO. On a shared dial another
+     *  listener can take the radio into DAB, change block or service, and bring it out again — the
+     *  same seconds of frames-without-playout that setDab/selectDabSid hold for. The web client missed
+     *  exactly this (2026-09-29: a follower's heal reopened its audio mid-change); the phone holds on
+     *  the server's reports; Jr now does as well. ONLY ON A CHANGE — the once-a-second report must never
+     *  re-hold, or the heal would be off for the whole of DAB. */
+    let now = ProcessInfo.processInfo.systemUptime
+    if type == "dab_off" && dabActive { heal.hold(now: now, seconds: 15) }
+    if type == "dab" {
+      let rch = dabSafe(j["channel"], 8)
+      let rsid = (j["sid"] as? NSNumber)?.intValue ?? -1
+      if !dabActive || (!rch.isEmpty && rch != Self.dabBlocks[max(0, min(Self.dabBlocks.count - 1, dabBlockIndex))].name) {
+        heal.hold(now: now, seconds: 15)
+      } else if rsid >= 0 && rsid != dabActiveSid {
+        heal.hold(now: now, seconds: 6)
+      }
+    }
     if type == "dab_off" {
       dabActive = false; dabProgrammesV = []; dabEnsembleV = ""; dabActiveSid = -1
       dabLocked = false; dabDls = ""
