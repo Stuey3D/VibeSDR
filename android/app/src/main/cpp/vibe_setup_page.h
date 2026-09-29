@@ -1466,11 +1466,13 @@ function benchApplyDefaults() {
   const row = id => (BENCH.rows || []).find(r => r.id === id);
   const rdsx = row("rdsx_2048"), scan = row("dab_scan");
   const rdsBox = document.querySelector('input[data-mode="rds"]');
-  if (rdsx && rdsx.grade === "red" && rdsBox && rdsBox.checked) {
+  // ★★★ REFERENCE GRADE OR NOT AT ALL (Stuart, 2026-09-29): only a GREEN box keeps Advanced RDS — amber is off too,
+  //     because its dedicated measurement path skips blocks near the limit. Same rule as ServerModeScreen.tsx.
+  if (rdsx && rdsx.grade !== "green" && rdsx.grade !== "none" && rdsBox && rdsBox.checked) {
     // ★ CHECKED means OFFERED — see the data-mode handler; the stored list is what is switched OFF.
     rdsBox.checked = false;
     rdsBox.dispatchEvent(new Event("change"));
-    benchNote(rdsBox, "Advanced RDS is off: it measured " + Math.round(rdsx.pct) + "% of a core here.");
+    benchNote(rdsBox, "Advanced RDS is off: it measured " + Math.round(rdsx.pct) + "% of a core here, and it only runs where it can measure to reference standard.");
   }
   if (scan && scan.grade === "red" && $("dabScanLabels")) {
     $("dabScanLabels").value = "0";

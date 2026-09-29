@@ -327,10 +327,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     const row = (id: string) => (j.rows || []).find((r: any) => r.id === id);
     const notes: string[] = [];
     const rdsx = row('rdsx_2048'), scan = row('dab_scan');
-    if (rdsx && rdsx.grade === 'red' && !/(^|,)rds(,|$)/.test(blockedModes)) {
+    /* ★★★ REFERENCE GRADE OR NOT AT ALL (Stuart, 2026-09-29: "I'd rather sacrifice the ultimate bottom devices to
+     *  make it more accurate and reference grade"). Advanced RDS now runs a dedicated measurement path (MpxMeasure);
+     *  on a box near its limit it skips blocks to protect audio, so the figures update unevenly. Only GREEN keeps it;
+     *  amber is off as well as red. The same rule is in vibe_setup_page.h benchApplyDefaults — keep them in step. */
+    if (rdsx && rdsx.grade !== 'green' && rdsx.grade !== 'none' && !/(^|,)rds(,|$)/.test(blockedModes)) {
       const next = blockedModes ? blockedModes + ',rds' : 'rds';
       setBlockedModes(next); AsyncStorage.setItem(K.blockedModes, next);
-      notes.push(`Advanced RDS is off — it measured ${Math.round(rdsx.pct)}% of a core here.`);
+      notes.push(`Advanced RDS is off — it measured ${Math.round(rdsx.pct)}% of a core here, and it only runs where it can measure to reference standard.`);
     }
     if (scan && scan.grade === 'red' && dabScanLabels === 1) {
       setDabScanLabels(0); AsyncStorage.setItem(K.dabScanLabels, '0');
