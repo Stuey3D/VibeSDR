@@ -145,6 +145,7 @@ interface ModeSelectorProps {
   filterLow?:    number;
   filterHigh?:   number;
   bwEdgeMax?:    number;   // per-edge half-width cap (Hz) for the active mode
+  bwEdgeMin?:    number;   // per-edge half-width floor (Hz) — VibeServer WFM has one
   onFilterBoth?: (low: number, high: number) => void;
   // SERVER MAPS (relocated from MenuSheet §4.4). SDRScreen computes the guard
   // (UberSDR feeds only — hidden for OWRX/Kiwi/local); we just render the buttons.
@@ -204,7 +205,7 @@ interface ModeSelectorProps {
 }
 
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose,
-  filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, onFilterBoth,
+  filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, bwEdgeMin = 0, onFilterBoth,
   showServerMaps = false, onServerMap, owrxPages,
   decoderControls, spotsControls, blocked }: ModeSelectorProps) {
   const isBlocked = (id: string) => !!blocked && blocked.has(id);
@@ -370,8 +371,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           <View style={st.bwMirrorRow}>
             <Text style={st.bwEdgeVal}>{filterLow >= 0 ? '+' : '−'}{fmtHz(Math.abs(filterLow))}</Text>
             <NavSlider style={st.bwHalfSlider}
-              minimumValue={-bwEdgeMax} maximumValue={0} step={bwStep}
-              value={Math.max(-bwEdgeMax, Math.min(0, filterLow))}
+              minimumValue={-bwEdgeMax} maximumValue={-bwEdgeMin} step={bwStep}
+              value={Math.max(-bwEdgeMax, Math.min(-bwEdgeMin, filterLow))}
               onValueChange={(v: number) => {
                 if (bwSync) onFilterBoth?.(v, -v);
                 else        onFilterBoth?.(v, filterHigh);
@@ -387,8 +388,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             </TouchableOpacity>
             )}</NavItem></NavRow>
             <NavSlider style={st.bwHalfSlider}
-              minimumValue={0} maximumValue={bwEdgeMax} step={bwStep}
-              value={Math.min(bwEdgeMax, Math.max(0, filterHigh))}
+              minimumValue={bwEdgeMin} maximumValue={bwEdgeMax} step={bwStep}
+              value={Math.min(bwEdgeMax, Math.max(bwEdgeMin, filterHigh))}
               onValueChange={(v: number) => {
                 if (bwSync) onFilterBoth?.(-v, v);
                 else        onFilterBoth?.(filterLow, v);

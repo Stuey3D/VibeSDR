@@ -122,6 +122,9 @@ if node scripts/test-nr-roundtrip.mjs; then pass=$((pass+1)); else fail=$((fail+
 # ★ The two ends of the advanced-RDS message must agree on field NAMES. A stray "R." prefix meant
 #   the deviation readout never populated at all, and neither half looked wrong on its own.
 if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★ The web playout (worklet AND the main-thread fallback) must come back clean by itself after the
+#   server has delivered audio in bursts — the Sony's narrow-WFM overload, 2026-09-29. Silent.
+if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
 #     pbxproj owns MARKETING_VERSION and only `expo prebuild` would copy it across, which this

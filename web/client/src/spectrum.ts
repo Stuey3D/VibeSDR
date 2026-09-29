@@ -31,6 +31,22 @@ export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   wfm: [-100000, 100000],
 };
 
+/** ★★★ THE NARROWEST WFM PASSBAND (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz, which the
+ *  server clamps to anyway. Below it the discriminator makes distortion, not audio (a broadcast
+ *  carrier swings ±75 kHz; the narrowest real FM-DX filter is ~55 kHz). Enforced here too so the
+ *  slider, a bookmark or a shared link can never show a width the server is not running. */
+export const WFM_MIN_BW_HZ = 40_000;
+
+/** A passband the server will honour as given: WFM narrower than WFM_MIN_BW_HZ is widened about its
+ *  own centre. Every other mode passes through untouched. */
+export function clampPassband(mode: SDRMode, low: number, high: number): [number, number] {
+  if (mode === 'wfm' && high - low < WFM_MIN_BW_HZ) {
+    const extra = (WFM_MIN_BW_HZ - (high - low)) / 2;
+    return [low - extra, high + extra];
+  }
+  return [low, high];
+}
+
 const SPEC_MAGIC    = 0x43455053; // 'SPEC' little-endian
 const FLAG_FULL_U8  = 0x03;
 const U8_DBFS_OFFSET = -256;      // dBFS = u8 - 256
@@ -1390,6 +1406,9 @@ export class SpectrumClient {
   }
 
   setBandwidth(low: number, high: number) {
+    // ★ The one door every passband goes through (slider, bookmark, shared link), so the WFM floor
+    //   is applied once, here — see WFM_MIN_BW_HZ.
+    [low, high] = clampPassband(this.mode, low, high);
     this.bandwidthLow = low;
     this.bandwidthHigh = high;
     this._send({ type: 'bandwidth', bandwidthLow: low, bandwidthHigh: high });

@@ -8,7 +8,7 @@
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
-import { SpectrumClient, MODE_BANDWIDTHS, type SDRMode, type DabState } from './spectrum';
+import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState } from './spectrum';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
@@ -12677,6 +12677,9 @@ function edgeLabel(hz: number): string {
 function applyBw(low: number, high: number) {
   if (!spec) return;
   spec.setBandwidth(Math.round(low), Math.round(high));
+  // ★ Read back what was actually applied — setBandwidth clamps WFM to its floor, and the labels
+  //   and sliders must show the width the server is running, not the one that was asked for.
+  low = spec.bandwidthLow; high = spec.bandwidthHigh;
   $('bwLoVal').textContent = edgeLabel(low);
   $('bwHiVal').textContent = edgeLabel(high);
   $<HTMLInputElement>('bwLo').value = String(-Math.round(low));   // magnitude (see syncBw)
@@ -12696,8 +12699,10 @@ function syncBw() {
   // inward, i.e. it showed the bandwidth you were NOT using. Magnitude + mirror makes
   // both halves fill outward from the carrier, so the orange always means "this much
   // bandwidth", the same on both sides.
-  lo.min = '0'; lo.max = String(max); lo.step = String(step);
-  hi.min = '0'; hi.max = String(max); hi.step = String(step);
+  // ★ WFM has a floor (WFM_MIN_BW_HZ, total) — half of it per edge, so no drag can go under it.
+  const edgeMin = spec.mode === 'wfm' ? WFM_MIN_BW_HZ / 2 : 0;
+  lo.min = String(edgeMin); lo.max = String(max); lo.step = String(step);
+  hi.min = String(edgeMin); hi.max = String(max); hi.step = String(step);
   lo.value = String(-Math.max(-max, Math.min(0, spec.bandwidthLow)));   // signed -> magnitude
   hi.value = String(Math.min(max, Math.max(0, spec.bandwidthHigh)));
   $('bwLoVal').textContent = edgeLabel(spec.bandwidthLow);

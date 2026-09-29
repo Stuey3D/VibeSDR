@@ -18,6 +18,11 @@ export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the
 // 'wfm' = broadcast FM (stereo); local-hardware (RTL-SDR) only — UberSDR is HF.
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
+/** ★★★ VibeServer's narrowest WFM passband (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz,
+ *  which the server clamps to anyway. A broadcast carrier swings ±75 kHz and the narrowest real
+ *  FM-DX filter is ~55 kHz; below 40 kHz the discriminator is making distortion, not audio. */
+export const WFM_MIN_BW_HZ = 40_000;
+
 /** Server-side mode bandwidth defaults (websocket.go, verbatim). */
 export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
   usb: [50, 2700],     lsb: [-2700, -50],

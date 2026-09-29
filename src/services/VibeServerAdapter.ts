@@ -9,6 +9,7 @@
 
 import { VibeServerClient } from './VibeServerClient';
 import type { SDRMode, SDRStatus } from './sdrProtocol';
+import { WFM_MIN_BW_HZ } from './sdrProtocol';
 import type { BackendCallbacks, BackendCapabilities, BackendKind, SDRBackend } from './SDRBackend';
 
 const VIBESERVER_CAPS: BackendCapabilities = {
@@ -26,6 +27,8 @@ const VIBESERVER_CAPS: BackendCapabilities = {
    *    vibeserver it reaches a maximum of +-250k" (Onfliner, 2026-09-24). One receiver should not
    *    offer two different passbands depending on which client is looking at it. */
   maxBandwidth:   { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 250000 },
+  // ★ WFM's floor — mirrors RxPipeline::kWfmMinBwHz (40 kHz total). See SDRBackend.minBandwidth.
+  minBandwidth:   { wfm: WFM_MIN_BW_HZ / 2 },
 };
 
 // V4 local hardware (RTL-SDR Blog V4): HF direct ~0.1 MHz up to ~1766 MHz.

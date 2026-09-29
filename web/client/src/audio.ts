@@ -810,6 +810,8 @@ export class AudioPlayer {
   private playing = false;
   /** Fallback path only: suppresses buffer growth for the re-arm that a retune flush causes. */
   private armedByFlush = false;
+  /** Fallback path only: samples played since the last underrun — the worklet's `cleanFor`. */
+  private cleanFor = 0;
   private url: string;
   /** The Worker that owns the socket and the decoder when this browser can support it — see
    *  WORKER_SRC. Null means the legacy main-thread path is running instead. */
@@ -970,7 +972,11 @@ export class AudioPlayer {
           //   own retune flush caused, for the same reason. Without this the fallback would adapt
           //   its arm threshold and never actually raise it, which is no adaptation at all.
           if (this.armedByFlush) this.armedByFlush = false;
-          else this.jitterMs = Math.min(JITTER_MAX_SEC * 1000, this.jitterMs + JITTER_STEP_SEC * 1000);
+          else {
+            this.underruns++;
+            this.jitterMs = Math.min(JITTER_MAX_SEC * 1000, this.jitterMs + JITTER_STEP_SEC * 1000);
+          }
+          this.cleanFor = 0;
         }
         outL.fill(0);
         outR.fill(0);
@@ -986,6 +992,15 @@ export class AudioPlayer {
       this.rPos = (this.rPos + n) % this.cap;
       this.filled -= n;
       this.playedTotal += n;          // the self-heal watchdog's "played" on this path
+      // ★ AND GIVE THE DEPTH BACK, as the worklet does (JITTER_DECAY_SEC). Without this a burst
+      //   episode — a server that fell behind real time for a while — left the fallback at the
+      //   400 ms ceiling for the rest of the session, charging the lag it had needed once to every
+      //   minute afterwards. Counted in samples PLAYED, so silence cannot earn it.
+      this.cleanFor += n;
+      if (this.cleanFor >= JITTER_DECAY_SEC * 48000) {
+        this.cleanFor = 0;
+        this.jitterMs = Math.max(JITTER_SEC * 1000, this.jitterMs - JITTER_STEP_SEC * 1000);
+      }
     };
     sp.connect(this.gain!);
     this._connectOutput();
@@ -1035,6 +1050,21 @@ export class AudioPlayer {
     }
     this.wPos = (this.wPos + n) % this.cap;
     this.filled += n;
+    /* ★★★ BOUND THE LATENCY, NOT JUST THE MEMORY — the worklet's rule, which this copy never got.
+     *     The only limit here was the 2 s overflow above, so a burst of late audio (the server
+     *     catching up after its DSP fell behind: Stuart's Sony at 161-276 % of real time,
+     *     2026-09-29, "bursts ... with about a 1 second gap") could leave up to two seconds queued,
+     *     and nothing ever brought it back: the fallback played that far behind the dial for the
+     *     rest of the session, until a refresh. Same margin as the worklet (2.5x the target), same
+     *     direction (drop the OLDEST, back to the target), and counted as a skip like the worklet's
+     *     so it is visible. ONE RULE, TWO READERS: keep this and VibeSink.onAudioMsg in step. */
+    const target = 48 * this.jitterMs;
+    if (this.playing && this.filled > target * 2.5) {
+      const drop = this.filled - target;
+      this.rPos = (this.rPos + drop) % this.cap;
+      this.filled -= drop;
+      this.skips++;
+    }
     // Same cushion as the worklet — this is the fallback path, not a different policy. ★ Which
     // means it follows the ADAPTED depth, not the starting constant: this path is what runs on
     // exactly the setups that cannot use a worklet (a page served over plain HTTP to a LAN IP),

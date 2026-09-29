@@ -82,7 +82,7 @@ const CLIENT_Q = `&client=${encodeURIComponent(USER_AGENT)}&proto=${APP_PROTO}`;
 const POWERSAVE_FPS = 5;
 
 import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState } from './sdrProtocol';
-import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE } from './sdrProtocol';
+import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, WFM_MIN_BW_HZ } from './sdrProtocol';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -634,6 +634,13 @@ export abstract class VibeServerWsClient {
   }
 
   setBandwidth(low: number, high: number) {
+    // ★ VibeServer clamps WFM to WFM_MIN_BW_HZ; do it here too so status (and so the slider and
+    //   any bookmark saved from it) holds the width the server is actually running. Widened about
+    //   the passband's own centre.
+    if (this.isLocal && this.status.mode === 'wfm' && high - low < WFM_MIN_BW_HZ) {
+      const extra = (WFM_MIN_BW_HZ - (high - low)) / 2;
+      low -= extra; high += extra;
+    }
     this.status.bandwidthLow  = low;
     this.status.bandwidthHigh = high;
     // Local shim (on-device or a remote VibeServer): the demod runs server-side

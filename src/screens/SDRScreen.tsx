@@ -91,7 +91,7 @@ import { watchProvider } from '../services/watchProvider';
  *  watch gets a STEADY 10fps locked or awake. Headroom is what buys steadiness
  *  here; the frames we drop cost nothing, and the ones we keep are on time. */
 const WATCH_BG_DIVISOR = 1;
-import { filterEdgeMax, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
+import { filterEdgeMax, filterEdgeMin, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -10525,6 +10525,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         filterLow={status.bandwidthLow}
         filterHigh={status.bandwidthHigh}
         bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
+        bwEdgeMin={client.current ? filterEdgeMin(client.current.caps, status.mode) : 0}
         onFilterBoth={onFilterBoth}
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}

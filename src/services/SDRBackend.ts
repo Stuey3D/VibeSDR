@@ -131,11 +131,23 @@ export interface BackendCapabilities {
    * = 192 kHz wide, while UberSDR narrow modes cap at 6 kHz).
    */
   maxBandwidth: { default: number } & Partial<Record<SDRMode, number>>;
+  /**
+   * Per-edge passband half-width FLOOR in Hz, keyed by mode (absent = 0). VibeServer's WFM has one
+   * (RxPipeline::kWfmMinBwHz, 40 kHz total, so 20 kHz per edge): under it the discriminator makes
+   * distortion, not audio, and the server clamps to it anyway — so the slider stops there rather
+   * than offering widths the radio will not run.
+   */
+  minBandwidth?: Partial<Record<SDRMode, number>>;
 }
 
 /** Per-edge passband half-width cap (Hz) for the active mode. */
 export function filterEdgeMax(caps: BackendCapabilities, mode: SDRMode): number {
   return caps.maxBandwidth[mode] ?? caps.maxBandwidth.default;
+}
+
+/** Per-edge passband half-width floor (Hz) for the active mode — 0 when the backend has none. */
+export function filterEdgeMin(caps: BackendCapabilities, mode: SDRMode): number {
+  return caps.minBandwidth?.[mode] ?? 0;
 }
 
 export interface SDRBackend {
