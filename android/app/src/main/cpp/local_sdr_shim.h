@@ -324,7 +324,9 @@ public:
     static void noteConnectionClosed(const std::string& ip, const std::string& session,
                                      const char* reason, uint64_t bytes = 0, uint64_t drops = 0,
                                      int stops = -1, int heard = 0, float bestSnr = 0,
-                                     double parkedHz = 0);
+                                     double parkedHz = 0,
+                                     /** ★ Audio bytes the session was sent; -1 = not known. */
+                                     long long audioBytes = -1);
 
     /** One consistent snapshot of the whole machine: load, temperature, memory, uptime, the
      *  radio, listeners, uplink rate, and the ban list. One request rather than five, so the

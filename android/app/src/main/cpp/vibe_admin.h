@@ -500,6 +500,14 @@ struct ConnRec {
     /** ★ Only set when they PARKED — one stop for the whole visit. He asked for the frequency only
      *  in that case: "dont need exact frequencies unless they literally only stayed on Heart FM". */
     double      parkedHz = 0;
+    /** ★★★ AUDIO BYTES THE SERVER ACTUALLY SENT THIS VISIT — the other half of "did they hear
+     *  anything". The SNR tally says whether there was a signal where they sat; this says whether
+     *  any sound left the server at all. A web visitor who never pressed play, an app that kept the
+     *  receiver muted (muting closes the audio socket) and a scanner all take a spectrum socket and
+     *  NO audio — and a signal they could not hear is not "heard".
+     *  ★ -1 = not known (an old record, or a legacy client with no session id to pair its audio
+     *    socket with), which is NOT the same as 0 = we know nothing was sent. */
+    long long   audioBytes = -1;
     uint64_t    bytes = 0;
     /** ★★★ IQ BUFFERS THIS VISIT LOST. The live monitor has always shown a drop count, but it
      *  lives on the per-listener channel and dies with them — so the number was visible only
@@ -710,27 +718,14 @@ public:
      *  idle, banned) keeps its existing signature and records nothing, honestly. */
     void close(const std::string& ip, const std::string& session,
                const char* reason, uint64_t bytes = 0, uint64_t drops = 0,
-               int stops = -1, int heard = 0, float bestSnr = 0, double parkedHz = 0) {
+               int stops = -1, int heard = 0, float bestSnr = 0, double parkedHz = 0,
+               long long audioBytes = -1) {
         std::lock_guard<std::mutex> lk(mtx_);
         for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
             if (it->endEpoch) continue;
             const bool hit = session.empty() ? (it->ip == ip) : (it->session == session);
             if (!hit) continue;
-            // ★★★ THE BYTES ARE THE SESSION'S RUNNING TOTAL, not this socket's, so the LARGEST
-            //     figure seen is the true one — taking whatever the last caller passed let a
-            //     socket that carried almost nothing overwrite a megabyte count.
-            if (bytes > it->bytes) it->bytes = bytes;
-            if (drops > it->drops) it->drops = drops;
-            /* ★★ A VISIT IS ONE VERDICT, NOT ONE PER SOCKET. Several sockets close for one visit
-             *  and only the spectrum one watched the dial, so the tallies are MERGED by taking the
-             *  richer answer rather than letting a later, emptier close wipe the real one — the
-             *  same reasoning as the bytes above, which had exactly this bug. */
-            if (stops >= 0 && stops >= it->visitStops) {
-                it->visitStops   = stops;
-                it->visitHeard   = heard;
-                it->visitBestSnr = bestSnr;
-                it->parkedHz     = parkedHz;
-            }
+            mergeInto(*it, bytes, drops, stops, heard, bestSnr, parkedHz, audioBytes);
             // ★★★ CLOSE ON THE LAST SOCKET, NOT THE FIRST. A visit holds two; ending the row when
             //     the first one goes stamped the visit with the length of whichever socket died
             //     soonest, which on a reconnect is zero. A record restored from disk has live 0
@@ -766,7 +761,16 @@ public:
         //        session id are one connection.
         if (!session.empty()) {
             for (auto it = recs_.rbegin(); it != recs_.rend(); ++it)
-                if (it->session == session) return;
+                if (it->session == session) {
+                    /* ★★★ BUT KEEP WHAT IT CARRIES. A visit ended for a REASON (timeout, idle,
+                     *  kicked) is closed by that path first, with no session id and no figures —
+                     *  and the spectrum socket's own close, which holds the verdict, the audio and
+                     *  the byte total, then lands here. Returning discarded all three, so every
+                     *  row a limit had ended read "—" in Heard. Merge them into the closed row
+                     *  (and into its unflushed copy, so the file agrees). */
+                    mergeClosedLocked(*it, bytes, drops, stops, heard, bestSnr, parkedHz, audioBytes);
+                    return;
+                }
         }
         // Never opened (refused before we logged it) — record the refusal itself, which is
         // precisely the event an owner is looking for.
@@ -777,6 +781,24 @@ public:
         dirty_ = true;
         recs_.push_back(std::move(r));
         while (recs_.size() > kMax) recs_.pop_front();
+    }
+
+    /** ★★★ THE AUDIO SOCKET'S FIGURE, WHICHEVER SOCKET GOES LAST. A visit's audio socket often
+     *  closes AFTER its spectrum socket (the spectrum close ends the row), and then the audio it
+     *  delivered would never reach the record. The caller passes the session's running audio
+     *  total; the newest row for that session takes it if it is larger.
+     *  @return true when that row is already CLOSED — the caller's running total can be dropped,
+     *          nothing later will ask for it. */
+    bool noteAudio(const std::string& session, long long audioBytes) {
+        if (session.empty() || audioBytes < 0) return false;
+        std::lock_guard<std::mutex> lk(mtx_);
+        for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
+            if (it->session != session) continue;
+            if (!it->endEpoch) { if (audioBytes > it->audioBytes) it->audioBytes = audioBytes; return false; }
+            mergeClosedLocked(*it, 0, 0, -1, 0, 0, 0, audioBytes);
+            return true;
+        }
+        return true;    // ★ no row for it at all (refused before it opened): nothing will ask
     }
 
     /** Newest first, capped. */
@@ -920,17 +942,55 @@ private:
      *  which a 0 would not: 0 stops is a real answer (they stayed and never settled anywhere) and
      *  the page must be able to tell those apart. Keeps the ordinary row the size it always was. */
     static std::string visitJson(const ConnRec& r) {
-        if (r.visitStops < 0) return {};
         char b[160];
+        // ★ Audio stands on its own: DAB, or a visit too short to settle anywhere, has an audio
+        //   figure and no SNR verdict, and the page needs the first even without the second.
+        std::string out;
+        if (r.audioBytes >= 0) {
+            std::snprintf(b, sizeof b, ",\"audio\":%lld", r.audioBytes);
+            out = b;
+        }
+        if (r.visitStops < 0) return out;
         std::snprintf(b, sizeof b, ",\"stops\":%d,\"heard\":%d,\"bestSnr\":%.1f",
                       r.visitStops, r.visitHeard, (double)r.visitBestSnr);
-        std::string out = b;
+        out += b;
         // ★ The frequency only when they PARKED — one stop for the whole visit.
         if (r.visitStops == 1 && r.parkedHz > 0) {
             std::snprintf(b, sizeof b, ",\"parkedHz\":%.0f", r.parkedHz);
             out += b;
         }
         return out;
+    }
+    /** Fold one close's figures into a record. Every figure is a RUNNING TOTAL or a verdict, so
+     *  the richer answer wins and a later, emptier close can never wipe a real one. */
+    static void mergeInto(ConnRec& r, uint64_t bytes, uint64_t drops, int stops, int heard,
+                          float bestSnr, double parkedHz, long long audioBytes) {
+        // ★★★ THE BYTES ARE THE SESSION'S RUNNING TOTAL, not this socket's, so the LARGEST
+        //     figure seen is the true one — taking whatever the last caller passed let a
+        //     socket that carried almost nothing overwrite a megabyte count.
+        if (bytes > r.bytes) r.bytes = bytes;
+        if (drops > r.drops) r.drops = drops;
+        /* ★★ A VISIT IS ONE VERDICT, NOT ONE PER SOCKET. Several sockets close for one visit
+         *  and only the spectrum one watched the dial, so the tallies are MERGED by taking the
+         *  richer answer rather than letting a later, emptier close wipe the real one — the
+         *  same reasoning as the bytes above, which had exactly this bug. */
+        if (stops >= 0 && stops >= r.visitStops) {
+            r.visitStops   = stops;
+            r.visitHeard   = heard;
+            r.visitBestSnr = bestSnr;
+            r.parkedHz     = parkedHz;
+        }
+        if (audioBytes > r.audioBytes) r.audioBytes = audioBytes;
+    }
+    /** mergeInto for a row that has ALREADY closed: the in-memory row, and its copy still waiting
+     *  in pending_ if the 1 Hz flush has not written it yet. A row already on disk keeps what it
+     *  was written with — the page (which reads memory) is still right until the next restart. */
+    void mergeClosedLocked(ConnRec& r, uint64_t bytes, uint64_t drops, int stops, int heard,
+                           float bestSnr, double parkedHz, long long audioBytes) {
+        mergeInto(r, bytes, drops, stops, heard, bestSnr, parkedHz, audioBytes);
+        for (auto& p : pending_)
+            if (p.session == r.session && p.atEpoch == r.atEpoch)
+                mergeInto(p, bytes, drops, stops, heard, bestSnr, parkedHz, audioBytes);
     }
     void rotateIfDueLocked() {
         if (path_.empty()) return;
@@ -994,6 +1054,8 @@ private:
                 r.visitBestSnr = (float)numField(line, "\"bestSnr\":");
                 r.parkedHz     = (double)numField(line, "\"parkedHz\":");
             }
+            // ★ Absent = not known (-1), exactly as for the verdict above.
+            if (strstr(line, "\"audio\":")) r.audioBytes = numField(line, "\"audio\":");
             if (!r.atEpoch) continue;
             recs_.push_back(std::move(r));
             // ★ Keep only the newest in memory; the file may hold more than we display.

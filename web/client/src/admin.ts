@@ -1051,8 +1051,54 @@ function groupVisits(list: any[]): any[] {
     }
     if (!had.agent && c.agent) had.agent = c.agent;
     if (!had.cc && c.cc) had.cc = c.cc;
+    mergeVerdict(had, c);
   }
   return out;
+}
+
+/** ★★★ ONE VISIT, ONE VERDICT — SUMMED ACROSS ITS LEGS. The visit was built as `{ ...c }` from
+ *  whichever leg came first (the NEWEST, since the log runs newest first), so a two-radio visit or
+ *  a reconnect showed only that one leg's Heard — and a leg with no figure blanked a visit whose
+ *  other leg had one. Stops and heard ADD (they are places settled on, per leg); the best SNR is
+ *  the best of any leg; audio adds; a parked frequency survives only if the whole visit was one
+ *  stop. An absent figure contributes nothing, so "not measured" never overwrites a measurement. */
+function mergeVerdict(had: any, c: any): void {
+  const cs = Number(c.stops);
+  if (Number.isFinite(cs) && cs >= 0) {
+    const hs = Number(had.stops);
+    const hadOne = Number.isFinite(hs) && hs >= 0;
+    const parked = !hadOne && cs === 1 ? Number(c.parkedHz) || 0 : 0;
+    had.stops = (hadOne ? hs : 0) + cs;
+    had.heard = (hadOne ? Number(had.heard) || 0 : 0) + (Number(c.heard) || 0);
+    const cb = Number(c.bestSnr), hb = Number(had.bestSnr);
+    had.bestSnr = hadOne && Number.isFinite(hb) ? Math.max(hb, Number.isFinite(cb) ? cb : hb) : cb;
+    had.parkedHz = had.stops === 1 ? (parked || Number(had.parkedHz) || 0) : 0;
+  }
+  const ca = Number(c.audio);
+  if (Number.isFinite(ca) && ca >= 0) {
+    const ha = Number(had.audio);
+    had.audio = (Number.isFinite(ha) && ha >= 0 ? ha : 0) + ca;
+  }
+}
+
+/** ★★ What the visit comes to, as one word the cell and the filter both read — so the filter can
+ *  never disagree with what the row shows.
+ *    'noaudio' — the server KNOWS it sent no sound (never played, muted throughout, a scanner).
+ *                Heard nothing, whatever the signal was: a signal nobody could hear is not heard.
+ *    'some' / 'none' — settled somewhere and the signal did / did not stand above the noise.
+ *    'audio'   — sound went out but the signal was never measured (DAB, or a visit too brief
+ *                to settle). Something was heard; how good it was is not known.
+ *    ''        — genuinely unknown: an old row, or a legacy client with no session id. */
+function heardVerdict(c: any): '' | 'noaudio' | 'some' | 'none' | 'audio' {
+  const audio = Number(c.audio);
+  const audioKnown = c.audio !== undefined && Number.isFinite(audio) && audio >= 0;
+  if (audioKnown && audio === 0) return 'noaudio';
+  const stops = Number(c.stops);
+  if (Number.isFinite(stops) && stops >= 0 && c.stops !== undefined) {
+    if (stops > 0) return (Number(c.heard) || 0) > 0 ? 'some' : 'none';
+    return audioKnown ? 'audio' : 'none';
+  }
+  return audioKnown ? 'audio' : '';
 }
 
 /** ★★ The visit verdict as one glanceable cell.
@@ -1062,14 +1108,27 @@ function groupVisits(list: any[]): any[] {
  *  ★ PARKED is called out by name, because one stop all visit is a different story from one stop
  *    because they left immediately — and the frequency is only recorded in that case. */
 function heardCell(c: any): string {
-  const stops = Number(c.stops);
-  if (!Number.isFinite(stops) || stops < 0) {
-    return '<span class="dim" title="Not measured for this visit — nothing watched this listener\u2019s dial.">—</span>';
+  const v = heardVerdict(c);
+  const kb = Math.round((Number(c.audio) || 0) / 1024);
+  if (v === '') {
+    return '<span class="dim" title="Not known for this visit — an older record, or a client that '
+         + 'gave no session id to pair its sockets.">—</span>';
   }
+  if (v === 'noaudio') {
+    return '<span class="heardNone" title="The server sent this visit NO audio: it never opened '
+         + 'a sound stream (never pressed play, muted the whole time, or not a listener at all). '
+         + 'It may still have watched the waterfall.">no audio</span>';
+  }
+  if (v === 'audio') {
+    return `<span class="heardSome" title="${esc(`${kb} KB of audio was sent. The signal was not `
+         + `measured for this visit (DAB, or it never settled on one frequency for 10 s).`)}">audio</span>`;
+  }
+  const stops = Number(c.stops);
   const heard = Number(c.heard) || 0;
   const best  = Number(c.bestSnr);
   const tip = (Number.isFinite(best) && stops > 0 ? `Best signal ${best.toFixed(1)} dB above the noise. ` : '')
-            + `${heard} of ${stops} place${stops === 1 ? '' : 's'} they settled on had a real signal.`;
+            + `${heard} of ${stops} place${stops === 1 ? '' : 's'} they settled on had a real signal.`
+            + (Number(c.audio) > 0 ? ` ${kb} KB of audio was sent.` : '');
   if (stops === 1 && Number(c.parkedHz) > 0) {
     const mhz = (Number(c.parkedHz) / 1e6).toFixed(1);
     return `<span class="${heard ? 'heardSome' : 'heardNone'}" title="${esc(tip)}">`
@@ -1096,13 +1155,13 @@ function connMatches(c: any): boolean {
   if (connFilter.cc     && String(c.cc || '')     !== connFilter.cc)     return false;
   if (connFilter.reason && String(c.reason || '') !== connFilter.reason) return false;
   if (connFilter.heard) {
-    // ★ stops absent = NOT MEASURED, which is not "heard nothing". A visit we never watched must
-    //   fall out of BOTH answers rather than be counted as a disappointed listener.
-    const stops = Number(c.stops);
-    if (!Number.isFinite(stops) || stops < 0) return false;
-    const heard = Number(c.heard) || 0;
-    if (connFilter.heard === 'none' && heard !== 0) return false;
-    if (connFilter.heard === 'some' && heard === 0) return false;
+    // ★ UNKNOWN is not "heard nothing". A visit we never watched must fall out of BOTH answers
+    //   rather than be counted as a disappointed listener. Same verdict the cell draws.
+    const v = heardVerdict(c);
+    if (!v) return false;
+    const heardIt = v === 'some' || v === 'audio';
+    if (connFilter.heard === 'none' && heardIt) return false;
+    if (connFilter.heard === 'some' && !heardIt) return false;
   }
   return true;
 }
