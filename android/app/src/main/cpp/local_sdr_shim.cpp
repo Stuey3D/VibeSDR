@@ -7405,7 +7405,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (c->rx) c->rx->requestRdsResync();
         }
         const auto mp = paramsFor(c->mode);
-        const double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
+        double bw = c->bwHz > 0 ? c->bwHz : mp.bandwidth;
+        /* ★★★ THE SAME LIMITS THE SHARED PATH HAS, BEFORE THE CHANNEL IS SIZED FROM THEM. This path
+         *  took `bandwidthHigh - bandwidthLow` as sent and sized the listener's channel from it —
+         *  no owner cap (setBandwidth's g_vsMaxBandwidth), no ceiling of any kind. USB at 500 kHz
+         *  is 30-55x its default cost (test-passband-cost), so one listener could take the box.
+         *  The pipeline clamps again in setTune; doing it here too keeps chanBinsFor() honest. */
+        { const double cap = g_vsMaxBandwidth.load();
+          if (g_serveOnLan.load() && cap > 0 && bw > cap) bw = cap; }
+        bw = vibedsp::RxPipeline::clampBwHz(rxModeFor(mp.kind), bw);
         // ★★★ THE CHANNEL IS SIZED BY THE DEMODULATOR, AND BY NOTHING ELSE.
         //     It used to be sized by max(audio, view) so one channel could serve both. That is
         //     tidy and it is wrong: changing the ZOOM then changed the channel WIDTH, which
@@ -15463,7 +15471,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { double cap = g_vsMaxBandwidth.load();
           if (g_serveOnLan.load() && cap > 0 && bw > cap) bw = cap; }
         std::lock_guard<std::recursive_mutex> lk(modeMtx);
-        rxBwHz = std::min(bw, sampleRate * 0.8);
+        // ★ The mode's floor/ceiling (RxPipeline::clampBwHz) here as well as in setTune, so the
+        //   width this reports (vfoBwHz) is the one the chain is running.
+        rxBwHz = vibedsp::RxPipeline::clampBwHz(rxMode, std::min(bw, sampleRate * 0.8));
         vfoBwHz.store(rxBwHz);
         // CW: ignore the client's narrow passband override (cwu/cwl send ±200 Hz =
         // 400 Hz wide). With the USB demod the carrier must sit at a POSITIVE audio

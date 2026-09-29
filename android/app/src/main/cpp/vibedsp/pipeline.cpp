@@ -236,8 +236,11 @@ static bool chainBand(RxPipeline::Mode mode, double bwHz, double& lo, double& hi
         //     clamps to): a 10 kHz transition, ~141 taps, the same cost as the wide band.
         // ★ Guarded by vibeserver/test-wfm-narrow-cost.cpp (CPU per second of signal, narrow vs
         //   wide, relative so it holds on any machine).
+        // ★★ The TOP is the ceiling (kWfmMaxBwHz), not 800 kHz: WFM's channel rate is now sized
+        //    from the band top (see rebuildAudio), and a band reaching to 800 kHz would have built
+        //    every width over 400 kHz at the full capture rate — 3.5x the default.
         case M::WFM: { static const double e[] = { RxPipeline::kWfmMinBwHz, 100000.0, 200000.0,
-                                                   400000.0, 800000.0 };
+                                                   400000.0, RxPipeline::kWfmMaxBwHz };
                        return pickBand(e, 5, bwHz, lo, hi); }
     }
     return false;
@@ -262,7 +265,9 @@ void RxPipeline::setTune(double offsetHz, Mode mode, double bwHz) {
     // NCO is owned by the DSP thread. Same discipline as `dirty_` and `resetReq_`.
     // ★ WFM has a floor — see kWfmMinBwHz. Clamped HERE, before the sameChain/sameBand tests, so
     //   every width under it is the same chain and a drag through them rebuilds nothing.
-    if (mode == Mode::WFM) bwHz = std::max(bwHz, kWfmMinBwHz);
+    // ★★ And every mode has a ceiling — see kSsbMaxBwHz. Same place for the same reason, and
+    //    because this is the one door every caller (shared, per-listener, benchmark) comes through.
+    bwHz = clampBwHz(mode, bwHz);
     const bool sameChain = (mode == mode_ && bwHz == bwHz_);
     // ★★★ A WIDTH CHANGE IS NOT A NEW CHAIN, and treating it as one is the dip. When the chain was
     //     built for a band that still contains the new width, the selectivity filter can simply be
@@ -353,7 +358,14 @@ void RxPipeline::rebuildAudio() {
     // ★★★ FM-DX NO LONGER WIDENS THE CHANNEL — the premise was wrong, and measurement killed
     // it. See the chHalf note below: widening recovers subcarrier AMPLITUDE and destroys
     // subcarrier SNR, which is the thing that actually decodes.
-    if (mode_ == Mode::WFM) targetCh = std::max(bwHz_ * 1.5, 150000.0);
+    // ★★★ FROM THE BAND TOP, LIKE EVERY OTHER MODE — chainBw, not bwHz_. This read bwHz_, so a
+    //     WFM chain was sized for the width it was BUILT at and then dragged across the band: built
+    //     at ±55 kHz (band [100k, 200k]) the channel came out at 146 kHz, and dragging back out to
+    //     ±100 kHz kept it — the selectivity filter's cutoff is capped at 0.45 of the channel rate,
+    //     so the listener asked for ±100 kHz and got ±66 kHz, clipping the deviation peaks and the
+    //     RDS sidebands, until something forced a rebuild. Found by test-passband-cost's audit
+    //     (2026-09-29); pinned by its "dragged builds what a fresh build builds" rule.
+    if (mode_ == Mode::WFM) targetCh = std::max(chainBw * 1.5, 150000.0);
     // ★ Raw IQ out needs the channel at least as wide as the consumer's rate — a 48 kHz consumer
     //   cannot be fed from the 12 kHz channel a narrow mode would otherwise build.
     { const double f = iqMinRate_.load(std::memory_order_relaxed); if (f > 0.0) targetCh = std::max(targetCh, f); }

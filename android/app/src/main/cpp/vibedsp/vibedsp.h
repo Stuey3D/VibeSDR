@@ -1040,6 +1040,7 @@ public:
     /** Swap the coefficients, keep the history — see FirDecimator::retune for why that matters
      *  and why a different tap count is refused rather than accommodated. */
     bool retune(const std::vector<float>& taps);
+    int taps() const { return K_; }   // ★ diagnostics (RxPipeline::chainShape)
 private:
     // Same block-contiguous + NEON scheme as FirDecimator, real samples.
     std::vector<float> rtaps_;   // reversed taps
@@ -1214,6 +1215,7 @@ public:
     bool retune(Side side, double bwHz);
     void process(const cf32* in, float* out, int n);
     void reset();
+    int taps() const { return lpfI_ ? lpfI_->taps() : 0; }   // each of the pair; diagnostics
 private:
     Side side_ = Side::USB;
     double rate_ = 0.0, trans_ = 0.0;   // remembered so retune() can hold the tap count
@@ -2350,6 +2352,43 @@ public:
      *    not audio. The web and app sliders run to 0, so this is reachable by a drag.
      *  ★★ THE CLAMP IS NOT THE CPU FIX — the ladder edge is. See chainBand(). */
     static constexpr double kWfmMinBwHz = 40000.0;
+    /** ★★★ THE WIDEST PASSBAND EACH MODE WILL BUILD (total width, both sides). setTune() clamps
+     *  to it, so no request — a hostile client, a bookmark from another receiver, a typed width, a
+     *  `bandwidthLow/High` pair a long way apart — can build a chain dearer than the widest one a
+     *  client slider can reach.
+     *  ★★ MEASURED, NOT ASSUMED (vibeserver/test-passband-cost.cpp, 2026-09-29): nothing clamped
+     *     the TOP, and the cost of a width past the sliders is not linear. USB at 500 kHz rebuilt
+     *     the Weaver pair at the full capture rate — 55x its default cost at 2.4 MS/s; CW 45x; WFM
+     *     at 1 MHz 6x; AM and NFM at 500 kHz 6-8x. The per-listener path clamped nothing at all
+     *     (the shared one only to 0.8 x the sample rate, which is exactly where USB is dearest).
+     *  ★ The figures: the top of each chainBand() ladder for AM, NFM and SSB/CW — which already
+     *    clears every client slider (web BW_EDGE_MAX, app maxBandwidth) with a band to spare — and
+     *    the sliders' own ±250 kHz for WFM (its ladder ran on to 800 kHz, 3.5x the default; it now
+     *    stops here). */
+    static constexpr double kSsbMaxBwHz = 12000.0;    // USB, LSB and CW
+    static constexpr double kAmMaxBwHz  = 48000.0;
+    static constexpr double kNfmMaxBwHz = 64000.0;
+    static constexpr double kWfmMaxBwHz = 500000.0;
+    static double maxBwHz(Mode m) {
+        switch (m) {
+            case Mode::AM:  return kAmMaxBwHz;
+            case Mode::NFM: return kNfmMaxBwHz;
+            case Mode::WFM: return kWfmMaxBwHz;
+            case Mode::SSB_USB: case Mode::SSB_LSB: case Mode::CW: break;
+        }
+        return kSsbMaxBwHz;
+    }
+    /** The width setTune() will actually build for `bwHz` in mode `m` — WFM's floor, every mode's
+     *  ceiling. ★ Not a number (NaN, a width <= 0) is the ceiling too: strtod reads "nan" and
+     *  "inf" happily, NaN slips through every std::min/std::max, and a NaN Weaver sub-carrier is
+     *  silence for good. Callers that report the width back (the shim's vfoBwHz, a per-listener
+     *  channel) use this so the figure they state is the one running. */
+    static double clampBwHz(Mode m, double bwHz) {
+        const double hi = maxBwHz(m);
+        if (!(bwHz > 0.0) || !std::isfinite(bwHz)) return hi;
+        if (m == Mode::WFM && bwHz < kWfmMinBwHz) return kWfmMinBwHz;
+        return bwHz > hi ? hi : bwHz;
+    }
     /** MPX spectrum geometry — DC to 100 kHz, which covers L+R, pilot, L-R and RDS with a
      *  little room above for anything unusual a station is carrying. */
     static constexpr int    kMpxFft  = 1024;
@@ -2707,6 +2746,18 @@ public:
      *  the retune test asserts on, because "did tuning tear the chain down?" is otherwise
      *  only observable as a level/continuity artefact that varies with the signal. */
     unsigned rebuildCount() const { return rebuilds_; }
+    /** ★ Diagnostics: the chain as last BUILT — channel rate, the whole channel cascade's taps and
+     *  the last (selectivity) stage's, and each Weaver filter's (SSB/CW, else 0). A width's cost can
+     *  then be read as a length rather than inferred from a timing (test-passband-cost). Read it on
+     *  the thread that calls feed(); a setTune() takes effect on the next feed. */
+    struct ChainShape { double chFs = 0.0; int stages = 0, chanTaps = 0, lastTaps = 0, weaverTaps = 0; };
+    ChainShape chainShape() const {
+        ChainShape s; s.chFs = chFs_; s.stages = (int)decs_.size();
+        for (const auto& d : decs_) s.chanTaps += d->taps();
+        if (!decs_.empty()) s.lastTaps = decs_.back()->taps();
+        if (ssb_) s.weaverTaps = ssb_->taps();
+        return s;
+    }
     // Diagnostics: smoothed 19 kHz pilot lock amplitude + current blend (0..1).
     float pilotLockAmp() const { return pll_.lockAmp(); }
     /** ★ Is the stereo pilot actually LOCKED — i.e. is there stereo (and realistically RDS)
