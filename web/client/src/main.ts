@@ -1330,7 +1330,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
          *  receiver back. Everything DAB locked has to be given back here too, or the zoom stays
          *  disabled and the dial stays held on a receiver that is back on FM (my own fault of an
          *  hour earlier: dabOn was cleared and nothing else was). */
-        if (dabOn) dabUiOff();
+        /* ★★★ AND HOLD THE SELF-HEAL, EXACTLY AS OUR OWN EXIT DOES (dabSetMode). A DAB exit made by
+         *  ANOTHER listener on the shared dial is the same transition for this listener's audio —
+         *  the server re-primes and the stream can pause — but only the own-click path held the
+         *  heal, so a follower's pause was judged a fault and repaired, and the socket-reopen repair
+         *  is what left a Worker reconnecting every 3 s (see retire() in audio.ts). Stuart,
+         *  2026-09-29: following another listener's DAB round trip, back on FM the audio came out
+         *  "fast … and stuttered", cured when he made the same round trip himself. */
+        if (dabOn) { audio?.holdHealing(6000); dabUiOff(); }
         /* ★★★ AND HIDE THE PANES — the same omission the note above records, one reader later.
          *  dabSetPane() is the ONLY code that ever sets #dabStations' display, and it gates on
          *  `dabOn`; so clearing the flag without re-running the gate leaves the service list on
@@ -1360,11 +1367,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         dabState = d;
         const i = DAB_BLOCKS.findIndex(b => b.name === d.channel);
         if (i >= 0) dabChannel = i;
+        // ★ The same hold our own entry takes (dabSetMode) — see the server-driven exit above.
+        audio?.holdHealing(6000);
         dabUiOn();
       }
       if (d.channel && (dabChannel < 0 || DAB_BLOCKS[dabChannel]?.name !== d.channel)) {
         const i = DAB_BLOCKS.findIndex(b => b.name === d.channel);
         if (i >= 0) { dabChannel = i; savePref('dabChannel', d.channel); }
+        // ★ Another listener moved the multiplex — our own dabTune holds the heal for this too.
+        audio?.holdHealing(6000);
         /* ★★ THE ARROWS LEARN THE BLOCK FROM THE SERVER, TOO. They named the neighbouring multiplexes only
          *  after a tune, because that was the only path that refreshed them — so LANDING on a receiver already
          *  in DAB left them blank until you moved (Stuart, 2026-09-20). Every place dabChannel changes must

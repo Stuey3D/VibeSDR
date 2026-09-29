@@ -419,21 +419,45 @@ function onFrame(buf) {
   self.postMessage({ type: 'unhandled', format });
 }
 
+/* ★★★ ONE SOCKET, AND A REPLACED ONE IS RETIRED — NOT MERELY CLOSED. The self-heal's socket
+ *  reopen ('url' below) used to do closedByUs = true; ws.close(); closedByUs = false; open(). But
+ *  close() is ASYNCHRONOUS: the old socket's close event arrives after the flag is already false
+ *  again, so its onclose scheduled a reconnect of its own, and 3 s later a SECOND socket opened.
+ *  On a shared dial the server closes the older socket of the same session when a new one arrives
+ *  (local_sdr_shim.cpp, "A RECONNECT IS STILL A RECONNECT"), whose onclose again reconnected: an
+ *  audio reconnect every 3 s, for the life of the Worker, from ONE repair. On a server that does
+ *  not take over, both sockets stayed up and fed the same decoder and playout node — twice the
+ *  audio into a buffer drained at 1x. Measured with this exact source against both server rules
+ *  (2026-09-29). The page's own _reopenSocket always nulled onclose first; this copy did not.
+ *  ★ So: a replaced socket has its handlers detached before it is closed, every handler ignores a
+ *    socket that is no longer the current one, and there is one reconnect timer, cleared by
+ *    anything that opens or closes on purpose. */
+let reconnectTimer = null;
+function retire(s) {
+  if (!s) return;
+  s.onopen = null; s.onerror = null; s.onclose = null; s.onmessage = null;
+  try { s.close(); } catch (err) { self.postMessage({ type: 'fault', kind: 'retire', why: String(err && err.message || err) }); }
+}
 function open() {
+  if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   closedByUs = false;
-  ws = new WebSocket(url);
-  ws.binaryType = 'arraybuffer';
-  ws.onopen  = () => self.postMessage({ type: 'status', s: 'open' });
-  ws.onerror = () => self.postMessage({ type: 'status', s: 'error', msg: 'audio websocket error' });
-  ws.onclose = () => {
+  retire(ws);
+  const me = new WebSocket(url);
+  ws = me;
+  me.binaryType = 'arraybuffer';
+  me.onopen  = () => { if (ws === me) self.postMessage({ type: 'status', s: 'open' }); };
+  me.onerror = () => { if (ws === me) self.postMessage({ type: 'status', s: 'error', msg: 'audio websocket error' }); };
+  me.onclose = () => {
+    if (ws !== me) return;           // superseded — its replacement owns the reconnect
     self.postMessage({ type: 'status', s: 'closed' });
     // ★ Same three seconds as the page used to use — one reconnect policy, moved, not rewritten.
-    if (!closedByUs) setTimeout(open, 3000);
+    if (!closedByUs && reconnectTimer === null) reconnectTimer = setTimeout(() => { reconnectTimer = null; open(); }, 3000);
   };
   /* ★★★ ONE BAD FRAME COSTS ONE FRAME. A throw out of onFrame used to reach the page as the
    *  Worker's onerror — which tears the whole Worker down and falls audio back to the main thread.
    *  Now the frame is dropped and the page is told, so it can count and log it (faultLog). */
-  ws.onmessage = (e) => {
+  me.onmessage = (e) => {
+    if (ws !== me) return;             // a retired socket's late frames are not this stream
     if (typeof e.data === 'string') {
       let m = null;
       try { m = JSON.parse(e.data); }
@@ -452,7 +476,8 @@ function open() {
 self.onmessage = (e) => {
   const d = e.data || {};
   if (d.type === 'init')      { sink = d.sinkPort || null; rawOpus = !!d.rawOpus; url = d.url; open(); }
-  else if (d.type === 'url')  { if (fault === 'drop' || fault === 'freeze') fault = ''; url = d.url; closedByUs = true; try { ws && ws.close(); } catch (err) {} closedByUs = false; open(); }
+  // ★ The self-heal's socket reopen. open() retires the current socket itself — see retire().
+  else if (d.type === 'url')  { if (fault === 'drop' || fault === 'freeze') fault = ''; url = d.url; open(); }
   /* ★★ SELF-HEAL, rung one: a NEW decoder (the old one may be wedged or erroring quietly) and, when
    *    the page rebuilt the playout node, the new node's feed port. The socket is untouched. */
   else if (d.type === 'reset') {
@@ -463,7 +488,11 @@ self.onmessage = (e) => {
   }
   else if (d.type === 'fault') { fault = d.kind || ''; }
   else if (d.type === 'rec')  { recording = !!d.on; }
-  else if (d.type === 'close'){ closedByUs = true; try { ws && ws.close(); } catch (err) {} }
+  else if (d.type === 'close'){
+    closedByUs = true;
+    if (reconnectTimer !== null) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    try { ws && ws.close(); } catch (err) { self.postMessage({ type: 'fault', kind: 'close', why: String(err && err.message || err) }); }
+  }
 };
 `;
 
