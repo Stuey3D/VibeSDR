@@ -2139,6 +2139,26 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      because a truncated status is readable-later and a missing button is not reachable at all. */
   #decStatus { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 }
+/* ★★★ DAB: THE MULTIPLEX SUMMARY GETS ITS OWN LINE UNDER THE BUTTONS ON A PHONE.
+   DAB carries the most header buttons of any decoder (bookmarks, size, SIGNAL, EXIT DAB, minimise),
+   so the elastic status above was squeezed to nothing: Stuart's iPhone, 2026-09-29, drew
+   "D1 N… · 31 S…" wrapped down four lines in a sliver beside the buttons — and that wrapped sliver
+   made the header 80px tall, with a whole empty line going spare beneath the buttons.
+   ★★ Taken OUT of the scrolling strip, not wrapped inside it. A wrapping strip would wrap the
+      buttons too (they do not fit one row at 320px), and a status inside the scroller would slide
+      away with them. Positioned against #decHeadWrap — which is positioned and sits OUTSIDE the
+      scroller — it is neither clipped nor scrolled by the strip, and keeps the full box width.
+   ★ The strip reserves the line with padding, and the scroll arrows stop above it so their fade
+     never covers the text. Ellipsis only if the summary truly cannot fit one full line.
+   ★ Wide boxes are untouched: there the status sits inline with room to spare. */
+@container decbox (max-width: 420px) {
+  #decBox.dab #decBoxHead { padding-bottom: 22px; }
+  #decBox.dab #decStatus {
+    position: absolute; left: 10px; right: 10px; bottom: 6px;
+    line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #decBox.dab .decHeadArr { bottom: 20px; }
+}
 /* ★★★ THE BACKSTOP. `overflow-wrap: anywhere` on the values is right — an unbroken 32-character
    Long PS has to go somewhere — but it means a value squeezed to near-zero width breaks EVERY
    character onto its own line, which is what "shits the bed" looked like. Below this width the

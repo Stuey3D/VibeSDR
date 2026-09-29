@@ -6757,6 +6757,9 @@ function dabUiOn() {
   dabSetPane('stations');
   // ★★ The decoder box is ALWAYS OPEN in DAB — the station list IS the tuning UI.
   document.getElementById('decBox')?.classList.add('open');
+  /* ★ `dab` lets a narrow box give the multiplex summary its own line under the header buttons —
+   *  see "#decBox.dab #decStatus" in index.html. Removed in dabUiOff. */
+  document.getElementById('decBox')?.classList.add('dab');
   /* ★ And it gets the size toggle every other decoder has. Opening the box directly skips
    *  openDecoder(), which is where the button is shown — so DAB had no Big/Small (Stuart). */
   $('rdsSize').classList.add('show');
@@ -6902,7 +6905,7 @@ function dabUiOff() {
     /* ★★★ AND CLOSE THE BOX. dabUiOn opens it directly and titles it DAB; nothing here undid
      *  either, so a listener who left DAB kept an open box headed "DAB" with no controls in it
      *  (seen on the Xcover, 2026-09-07). Give the box back the way it was found. */
-    document.getElementById('decBox')?.classList.remove('open');
+    document.getElementById('decBox')?.classList.remove('open', 'dab');
     $('rdsSize').classList.remove('show');
     $('decClr').style.display = '';
     $('dabBm').style.display = 'none';
