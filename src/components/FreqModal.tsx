@@ -14,6 +14,7 @@ import {
   type ServerBookmark, type ServerBand, type SearchResult,
 } from '../services/stations';
 import { type UserBookmark } from '../services/userBookmarks';
+import { airbandEntry } from '../utils/airband';
 import { useListNav, useKeyboardMode, NAV_FOCUS, revealIn, noteTouchInteraction } from './PanelNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -352,11 +353,27 @@ export default function FreqModal({
   // mirrored by VibeKeyWindow, and onSubmitEditing from the on-screen keyboard. Tuning
   // twice on one press would be a real (if brief) double retune of the server.
   const confirming = useRef(false);
+  const [entryMsg, setEntryMsg] = useState('');
+  useEffect(() => { setEntryMsg(''); }, [value, visible]);
+  /* ★ As you type a channel NAME, say which frequency it tunes — 118.010 is 118.0083 MHz, and an
+   *  aviation radio's user already knows that; everyone else deserves to be told. */
+  const entryHint = useMemo(() => {
+    const air = airbandEntry(fromDisplay(value, unit));
+    if (!air || !air.ok) return '';
+    return `Channel ${air.name} · ${air.spacing === 833 ? '8.33' : '25'} kHz · ${(air.hz / 1e6).toFixed(4)} MHz`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, unit]);
   const confirm = () => {
     if (confirming.current) return;
     confirming.current = true;
     setTimeout(() => { confirming.current = false; }, 0);
     const hz = fromDisplay(value, unit);
+    /* ★★ AN AIRBAND CHANNEL NAME THAT DOES NOT EXIST IS REFUSED, WITH THE REASON. In 118–137 MHz a
+     *  value on a 5 kHz boundary is a channel name, pilot-style (utils/airband.ts), and 8.33 kHz
+     *  names never end .x20/.x45/.x70/.x95. Snapping to a neighbour would tune somewhere nobody asked
+     *  for — so the card stays open and says which two channels are either side. */
+    const air = airbandEntry(hz);
+    if (air && !air.ok) { setEntryMsg(air.message); Keyboard.dismiss(); return; }
     if (hz >= minHz && hz <= maxHz) { onConfirm(hz); onClose(); }
     Keyboard.dismiss();
   };
@@ -622,6 +639,11 @@ export default function FreqModal({
               {unit === 'hz' ? 'Hz' : unit === 'khz' ? 'kHz' : 'MHz'}
             </Text>
           </View>
+          {!!(entryMsg || entryHint) && (
+            <Text style={[st.bmMsg, { color: entryMsg ? '#ff8a70' : unitText, fontFamily: t.font, textAlign: 'center' }]}>
+              {entryMsg || entryHint}
+            </Text>
+          )}
           <View style={st.units}>
             {(['hz', 'khz', 'mhz'] as Unit[]).map(u => (
               <TouchableOpacity

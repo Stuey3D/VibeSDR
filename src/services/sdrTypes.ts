@@ -1,4 +1,5 @@
 // Shared SDR types used across clients and UI
+import { STEP_833, isAirbandCom } from '../utils/airband';
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 export type Mode = SDRMode; // alias
@@ -27,12 +28,20 @@ export const STEPS = [10, 100, 500, 1000, 5000, 9000, 10000];
 //    ★ It is only an option — nobody has to cross VHF in 100 Hz steps, they just gain the ability
 //      to land on a channel that is not on a kHz boundary.
 export const STEPS_VHF = [100, 500, 1000, 5000, 6250, 12500, 25000, 50000, 100000];
+/* ★★ THE AIRBAND LADDER GAINS 8.33 kHz (NickB, 2026-09-29) — and ONLY the COM band does. 8.33 kHz
+ *    is the European aviation channel raster (25 kHz / 3); anywhere else it lands on nothing, and a
+ *    rung that is meaningless outside one band is a control that works in one scenario only
+ *    (AGENTS.md). It is carried as the integer sentinel STEP_833 (8333) and every step calculation
+ *    that moves a frequency goes through src/utils/airband.ts, which uses the exact 25000/3 — so
+ *    stepping lands on 118.00833 / 118.01667 / 118.025 with no drift. 5 kHz was already a rung. */
+export const STEPS_AIRBAND = [100, 500, 1000, 5000, 6250, STEP_833, 12500, 25000, 50000, 100000];
 export function stepsForFreq(hz: number): number[] {
+  if (isAirbandCom(hz)) return STEPS_AIRBAND;
   return hz >= 30_000_000 ? STEPS_VHF : STEPS;
 }
 export const STEP_LABELS: Record<number, string> = {
   10: '10Hz', 100: '100Hz', 500: '500Hz',
-  1000: '1kHz', 5000: '5kHz', 9000: '9kHz', 10000: '10kHz',
+  1000: '1kHz', 5000: '5kHz', 9000: '9kHz', 10000: '10kHz', [STEP_833]: '8.33kHz',
 };
 
 export const MIN_HZ = 10_000;

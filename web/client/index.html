@@ -564,6 +564,12 @@ html #bar { display: none; }
              font-variant-numeric: tabular-nums; min-width: 2ch; display: inline-block;
              text-align: left; }
 #mUnit { font-size: 0.8em; color: #fff; }
+/* ★ THE AIRBAND CHANNEL LINE (src/utils/airband.ts): the spacing and the true frequency beside a
+   channel name — "8.33 · 118.0083". Small and dimmed like the fine digits: the name is the figure,
+   this is the detail. Present only on an airband channel, so nothing moves anywhere else. */
+#mChan { font-size: 0.62em; color: rgba(255,255,255,0.72); letter-spacing: 0.04em; white-space: nowrap;
+         font-variant-numeric: tabular-nums; }
+#mChan[hidden] { display: none; }
 /* ★ min-width in em, so the demod chip cannot shrink to a stub. It was the narrowest thing in
    the pill and the first to be squeezed — at the tightest width WFM had collapsed to a fraction
    of the frequency's height beside it, reading as a label rather than the button it is. */
@@ -1403,6 +1409,8 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #pill:hover { border-color: var(--btn-active-bdr); }
 #freq { font-size: 2.3em; color: var(--freq); letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
 #freqUnit { font-size: 0.85em; color: var(--unit); }
+#freqChan { font-size: 0.72em; color: var(--unit); letter-spacing: 0.04em; white-space: nowrap; }
+#freqChan[hidden] { display: none; }
 #stereo { font-size: 0.78em; color: var(--green); border: 1px solid var(--green); border-radius: 3px; padding: 0 0.25em; display: none; }
 #stereo.on { display: inline; }
 
@@ -3391,7 +3399,7 @@ select.btn { padding: 6px 8px; }
                frequency entry must have a padlock and advise it is locked due to DAB mode"). -->
           <span id="mFreqBox"><span id="mFreqLock" hidden aria-hidden="true"><svg viewBox="0 0 10 13" width="9" height="12"
             fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1" y="5.5" width="8" height="6.5" rx="1"/><path
-            d="M2.9 5.5V3.6a2.1 2.1 0 0 1 4.2 0v1.9"/></svg></span><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span></span>
+            d="M2.9 5.5V3.6a2.1 2.1 0 0 1 4.2 0v1.9"/></svg></span><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span><span id="mChan" hidden></span></span>
           <span id="mMode">NFM</span><!--
           ★★ THE APP'S INTERLOCKING RINGS, not a green "ST". The lettering was the least legible
              thing on a bar that runs to bright green, and the app already has a symbol for this
@@ -3473,7 +3481,7 @@ select.btn { padding: 6px 8px; }
       <!-- Tuner: what you READ sits above what you USE. -->
       <div id="tuner">
         <div id="pill" title="Click to enter a frequency">
-          <span id="freq">—</span><span id="freqUnit">MHz</span>
+          <span id="freq">—</span><span id="freqUnit">MHz</span><span id="freqChan" hidden></span>
           <span id="stereo">ST</span>
         </div>
         <div id="vfo">

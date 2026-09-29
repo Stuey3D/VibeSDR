@@ -9,10 +9,12 @@ import {
   TouchableWithoutFeedback, View,
 } from 'react-native';
 import { STEPS_HZ } from '../services/sdrTypes';
+import { STEP_833 } from '../utils/airband';
 import { useTheme } from '../contexts/ThemeContext';
 import { useListNav, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
 
 function stepLabel(hz: number): string {
+  if (hz === STEP_833) return '8.33 kHz';   // the airband raster, 25/3 kHz — see utils/airband.ts
   if (hz >= 1_000_000) return (hz / 1_000_000) + ' MHz';
   if (hz >= 1_000)     return (hz / 1_000) + ' kHz';
   return hz + ' Hz';

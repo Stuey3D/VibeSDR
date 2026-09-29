@@ -139,6 +139,8 @@ import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import { IS_TV } from '../utils/tv';
+import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
+         type AirDesig } from '../utils/airband';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { resolveStationLogo } from '../services/stationLogoCache';
 import { noteAudioPath, noteAudioEvent } from '../services/audioPathLog';
@@ -2446,6 +2448,27 @@ export default function SDRScreen({ route, navigation }: Props) {
   const stepRef = useRef(step);
   useEffect(() => { stepRef.current = step; }, [step]);
 
+  /* ★★ AIRBAND CHANNEL NAME — which of the two names the listener selected at a frequency that has
+   *  two (118.000 is the 25 kHz channel "118.000" AND the 8.33 kHz channel "118.005"). Set by the
+   *  8.33 knob walk and by typing a channel name; only honoured at the frequency it was pinned to.
+   *  The rule and its sources live in utils/airband.ts. A ref for the tuning paths (they run outside
+   *  render), state so the readout follows. */
+  const airDesigRef = useRef<AirDesig | null>(null);
+  const [airDesig, setAirDesig] = useState<AirDesig | null>(null);
+  const pinAirDesig = useCallback((d: AirDesig | null) => {
+    airDesigRef.current = d;
+    setAirDesig(d);
+  }, []);
+  /** Every step-tune path's target: the ordinary grid, or in the airband on 8.33 the next channel
+   *  NAME — see airbandStepFrom. One function, so the keys, the drum, the crown and the lock-screen
+   *  skip cannot disagree about where a step lands. */
+  const stepTarget = useCallback((cur: number, s: number, n: number, snap: 'dir' | 'round',
+                                  mode: string): number => {
+    const r = airbandStepFrom(cur, s, n, snap, mode, airDesigRef.current);
+    pinAirDesig(r.desig);
+    return r.hz;
+  }, [pinAirDesig]);
+
   // ── Display settings ──────────────────────────────────────────────────────
 
   const [dbMin,         setDbMin]         = useState(-120);
@@ -3428,9 +3451,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (isWholeProfileMode(String(c.getStatus().mode))) return;
     const s = stepRef.current; if (!(s > 0)) return;
     const cur = c.getStatus().frequency;
-    const snapped = dir === 'right'
-      ? (Math.floor(cur / s) + 1) * s
-      : (Math.ceil(cur / s) - 1) * s;
+    const snapped = stepTarget(cur, s, dir === 'right' ? 1 : -1, 'dir', String(c.getStatus().mode));
     const [loHz, hiHz] = c.caps.freqRange;
     const newHz = Math.max(loHz, Math.min(hiHz, snapped));
     if (newHz === cur) return;
@@ -6578,14 +6599,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!steps) return;
     vfoPendingHz.current -= steps * s;
     const cur     = c.getStatus().frequency;
-    const snapped = Math.round(cur / s) * s;   // vDown grid snap
+    // vDown grid snap, then whole steps — through stepTarget so 8.33 lands on true channels.
     const [loHz, hiHz] = c.caps.freqRange;     // backend range (OWRX VHF/UHF ≠ 0–30 MHz)
-    const newHz   = Math.max(loHz, Math.min(hiHz, snapped + steps * s));
+    const newHz   = Math.max(loHz, Math.min(hiHz,
+      stepTarget(cur, s, steps, 'round', String(c.getStatus().mode))));
     if (newHz === cur) return;
     c.tune(newHz);
     keepVfoAtEdge(newHz);          // same edge-follow as the keys — one behaviour
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: newHz }));
-  }, [keepVfoAtEdge, dabDrumStep]);
+  }, [keepVfoAtEdge, dabDrumStep, stepTarget]);
 
   // ── BW drum ───────────────────────────────────────────────────────────────
 
@@ -6730,9 +6752,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const st = sweepTune.current;
     const now = Date.now();
     if (st.hz == null || now - st.sentAt > 400) st.hz = c.getStatus().frequency;
-    const snapped = dir === 1
-      ? (Math.floor(st.hz / s) + 1) * s
-      : (Math.ceil(st.hz / s) - 1) * s;
+    const snapped = stepTarget(st.hz, s, dir, 'dir', String(c.getStatus().mode));
     const [loHz, hiHz] = c.caps.freqRange;
     const hz = Math.max(loHz, Math.min(hiHz, snapped));
     if (hz === st.hz) return;                    // already against the band edge
@@ -6753,7 +6773,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // Trailing send — the last step of a sweep must always reach the radio.
       st.timer = setTimeout(flush, SWEEP_SEND_MS - (now - st.sentAt));
     }
-  }, [markInteract]);
+  }, [markInteract, stepTarget]);
   // ★ A TAP must move a WHOLE LADDER RUNG. The server snaps binBandwidth to a ladder,
   // so a fractional request is snapped straight back and nothing happens — the symptom
   // was a single tap making the waterfall lurch and return, with only a double tap
@@ -6920,7 +6940,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  already does this and SDR++ is the reference (DL8LDN, 2026-09-14: "Typing with finger on
      *  the waterfall never reach the right frequency"). */
     const s = stepRef.current;
-    const snapped = s > 0 ? Math.round(hz / s) * s : hz;
+    const snapped = snapToStep(hz, s);   // exact 25/3 kHz on the 8.33 step — utils/airband.ts
     const [loHz, hiHz] = c.caps.freqRange;
     const clamped = Math.max(loHz, Math.min(hiHz, snapped));
     userTuneSeq.current++;   // ★ a PERSON asked (entry) — see the note on userTuneSeq
@@ -7021,6 +7041,31 @@ export default function SDRScreen({ route, navigation }: Props) {
     sendBandwidth(low, high);
     setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: low, bandwidthHigh: high }));
   }, [sendBandwidth]);
+
+  /* ★★ THE AIRBAND CHANNEL on the readout (null outside 118–137 MHz AM) — see utils/airband.ts. */
+  const airChannelNow = useMemo(
+    () => airbandChannel(status.frequency, String(status.mode), step, airDesig),
+    [status.frequency, status.mode, step, airDesig]);
+  /* ★★ AND THE PASSBAND A REAL SET WOULD HAVE for that channel's spacing — ±2.8 kHz on 8.33, ±8.5 on
+   *  25 (ETSI EN 300 676-1 §8.5; the figures and the rule are in airbandPassband). Only while the
+   *  passband is still at a DEFAULT, so a bookmark's or a dragged width is never overridden.
+   *  ★★★ ONLY AFTER A PERSON TUNED, CHANGED MODE OR CHANGED STEP HERE. A shared dial moved by
+   *      somebody else is not our action, and this client transmits nothing on its own account
+   *      (the shared-dial contract) — so the key is userTuneSeq + airStepSeq (a step the person
+   *      PICKED), never the frequency or the step value: a step restored from prefs on connect is
+   *      not somebody asking for a new filter. */
+  const airPbSeen = useRef('0|0');
+  const airStepSeq = useRef(0);
+  useEffect(() => {
+    const key = `${userTuneSeq.current}|${airStepSeq.current}`;
+    if (key === airPbSeen.current) return;
+    airPbSeen.current = key;
+    if (dabOnRef.current) return;
+    const pb = airbandPassband(status.frequency, String(status.mode), airChannelNow,
+                               status.bandwidthLow, status.bandwidthHigh);
+    if (pb) onFilterBoth(pb[0], pb[1]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [airChannelNow, status.frequency, status.mode, step]);
 
   const onFilterLow  = useCallback((v: number) => { sendBandwidth(v, status.bandwidthHigh); setStatus((prev: SDRStatus) => ({ ...prev, bandwidthLow: v })); }, [status.bandwidthHigh, sendBandwidth]);
   const onFilterHigh = useCallback((v: number) => { sendBandwidth(status.bandwidthLow, v);  setStatus((prev: SDRStatus) => ({ ...prev, bandwidthHigh: v })); }, [status.bandwidthLow, sendBandwidth]);
@@ -7279,6 +7324,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
   }, []);
 
+  /** ★★ TYPED ENTRY, THE WAY A PILOT TYPES IT. In the COM band a value on a 5 kHz boundary is a
+   *  channel NAME (118.010 → 118.0083 MHz; 121.5 → 121.500) and the name typed is the one the readout
+   *  keeps. Names that do not exist are refused by FreqModal with the reason before they get here.
+   *  Everything else — including every frequency outside 118–137 MHz — is exactly onTuneHz. */
+  const onEntryTune = useCallback((hz: number) => {
+    const ch = airbandEntry(hz);
+    if (ch && !ch.ok) return;
+    onTuneHz(ch ? ch.hz : hz);
+    if (ch) pinAirDesig({ hz: ch.hz, spacing: ch.spacing });
+  }, [onTuneHz, pinAirDesig]);
+
   // ── Crown-tune DEBOUNCE (m9psy/MadPsy, UberSDR author: "debounce to 100ms so it
   //    doesn't fire on every change"). The watch sends ~16 tune deltas/sec; applying each
   //    one hammers the tune path, and while the phone is LOCKED its JS thread is throttled
@@ -7383,9 +7439,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
         lastTuneDeltaAt.current = now;
         const cur = tuneTargetRef.current;
-        const base = delta > 0 ? Math.floor(cur / s) : Math.ceil(cur / s);
         const [loHz, hiHz] = c.caps.freqRange;
-        tuneTargetRef.current = Math.max(loHz, Math.min(hiHz, (base + delta) * s));
+        tuneTargetRef.current = Math.max(loHz, Math.min(hiHz,
+          stepTarget(cur, s, delta, 'dir', String(c.getStatus().mode))));
         // DEBOUNCE to 100ms (UberSDR's rate): apply the LATEST target ≤1/100ms, trailing-edge
         // so the final value always lands. Stops the tune path being hammered 16/sec.
         const apply = () => { lastTuneApplyAt.current = Date.now(); onTuneHzRef.current?.(tuneTargetRef.current!); };
@@ -8427,6 +8483,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         : `${trim(hz / 1e3, 3)} kHz`;
       const st = mediaSkip === 'bookmark'
         ? 'bookmark skip'
+        : step === STEP_833 ? '8.33 kHz step'
         : (step >= 1000 ? `${trim(step / 1e3, 1)} kHz step` : `${step} Hz step`);
       // ★ In DAB the mode is DAB, whatever demodulator sits idle underneath (the card said AM).
       const fqLine = `${fq} ${dabOnRef.current ? 'DAB' : status.mode.toUpperCase()}`;
@@ -9759,6 +9816,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           activeDecoder={activeDecoder}
           adminMode={adminOk}
           sharedDial={sharedDialProp}
+          airChannel={airChannelNow}
           storms={storms}
           dabOn={dabOn}
           frequency={status.frequency}
@@ -10369,7 +10427,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         visible={stepOpen}
         currentStep={step}
         steps={stepsForFreq(status.frequency)}
-        onSelect={hz => { setStep(hz); }}
+        onSelect={hz => { airStepSeq.current++; setStep(hz); }}
         onClose={() => setStepOpen(false)}
       />
       </PanelBoundary>
@@ -10742,7 +10800,7 @@ export default function SDRScreen({ route, navigation }: Props) {
          *   pass it in, the same way BrowserOverlay has done since build 70. */
         topInset={insets.top}
         currentHz={status.frequency}
-        onConfirm={onTuneHz}
+        onConfirm={onEntryTune}
         onClose={() => { setFreqModalOpen(false); setFreqModalDab(false); }}
         onDabTune={dabCapable ? dabGoTo : undefined}
         dabOnly={freqModalDab}

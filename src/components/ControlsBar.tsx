@@ -73,6 +73,7 @@ function ControlSlot({ report, style, children }: {
 import { useTheme } from '../contexts/ThemeContext';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
+import { STEP_833, type AirChannel } from '../utils/airband';
 import { tourRef, mergeRefs } from './Coachmark';
 import { IS_TV } from '../utils/tv';
 
@@ -98,6 +99,7 @@ function modeDisplay(mode: string): string {
   return (m === 'cwu' || m === 'cwl' || m === 'cw') ? 'CW' : mode.toUpperCase();
 }
 function formatStep(s: number): string {
+  if (s === STEP_833) return '8.33k';        // the airband raster, 25/3 kHz — see utils/airband.ts
   return s >= 1_000_000 ? s / 1_000_000 + 'M'
        : s >= 1_000     ? s / 1_000 + 'k'
        :                  s + 'Hz';
@@ -376,6 +378,12 @@ export interface ControlsBarProps {
   storms?: { rate: number; ago: number } | null;
   /** ★ In DAB the pill says DAB — the server's demodulator is idle and its name is a lie there. */
   dabOn?: boolean;
+  /** ★★ THE AIRBAND CHANNEL, when tuned on one (118–137 MHz, AM) — computed by the parent from
+   *  utils/airband.ts, null everywhere else. Like an aviation radio the readout then shows the
+   *  channel NAME ("118.010"), with the spacing and the true frequency ("8.33 · 118.0083") small
+   *  above the unit. Only in MHz: a listener who chose kHz or Hz keeps their digits, and the name
+   *  moves into the small line instead. */
+  airChannel?: AirChannel | null;
   /** ★★ ADMIN SESSIONS ARE NOT TIMED, so this slot says WHY rather than counting down. An admin is
    *  exempt from the session limit, and the honest thing to show where a countdown would be is
    *  what is actually true of this session (Stuart, 2026-08-12). Takes precedence over
@@ -580,7 +588,7 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
   );
 }
 
-function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActive,
+function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
   tight = false, fmStereo = false, wide = false, sharedTuner = null,
@@ -654,7 +662,10 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
       >
         <Text style={[pm.freq, {
-          color: t.freqColor, fontSize: freqFontSize, width: freqWidth,
+          // ★ A channel name is seven characters where the frequency is ten, so the digits give up
+          //   the room the small spacing/true-frequency line needs — the pill does not grow.
+          color: t.freqColor, fontSize: freqFontSize,
+          width: chanTag && chanMain ? Math.round(freqWidth * 0.74) : freqWidth,
           fontFamily: t.font, textShadowColor: t.freqGlowColor,
           // Tight line metrics — Atkinson's tall default line-height (and
           // Android's extra font padding) inflated the pill to fill the
@@ -664,9 +675,22 @@ function FreqModePill({ freqStr, unit, modeLabel, snrText, connected, signalActi
         }]} numberOfLines={1} adjustsFontSizeToFit>
           {freqStr}
         </Text>
-        <Text style={[pm.unit, { color: t.unitColor, fontFamily: t.font, fontSize: unitFontSize }]}>
-          {unit}
-        </Text>
+        {chanTag ? (
+          <View style={pm.chanCol}>
+            <Text style={[pm.chanTag, { color: t.snrColor, fontFamily: t.font,
+                          fontSize: Math.max(8, Math.round(unitFontSize * 0.72)) }]}
+                  numberOfLines={1}>
+              {chanTag}
+            </Text>
+            <Text style={[pm.unit, { color: t.unitColor, fontFamily: t.font, fontSize: unitFontSize }]}>
+              {unit}
+            </Text>
+          </View>
+        ) : (
+          <Text style={[pm.unit, { color: t.unitColor, fontFamily: t.font, fontSize: unitFontSize }]}>
+            {unit}
+          </Text>
+        )}
       </TouchableOpacity>
       <TouchableOpacity
         ref={tourRef('modeBtn')}
@@ -761,6 +785,9 @@ const pm = StyleSheet.create({
   freqBox: { flexDirection: 'row', alignItems: 'flex-end', borderTopLeftRadius: 5, borderBottomLeftRadius: 5, flexShrink: 1 },
   freq:    { letterSpacing: 1.5, textAlign: 'center', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6, flexShrink: 1 },
   unit:    { letterSpacing: 1, alignSelf: 'flex-end', paddingBottom: 2, flexShrink: 0 },
+  /* ★ The airband channel's small line sits ABOVE the unit, so "MHz" keeps its baseline beside the digits. */
+  chanCol: { alignItems: 'flex-end', justifyContent: 'flex-end', flexShrink: 0 },
+  chanTag: { letterSpacing: 0.5, fontWeight: '700', includeFontPadding: false },
   modeBtn: { borderTopRightRadius: 5, borderBottomRightRadius: 5,
              borderLeftWidth: 1, borderLeftColor: 'rgba(70,60,45,0.45)',
              alignItems: 'center', justifyContent: 'center', gap: 1, flexShrink: 0 },
@@ -886,7 +913,7 @@ function useHandbackFlash() {
   return value;
 }
 
-function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
+function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
@@ -974,7 +1001,7 @@ function PortraitBar({ freqStr, unit, modeLabel, snrText, connected, signalActiv
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
         <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
         <FreqModePill
-          freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
+          freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
           connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
           onFreqTap={onFreqTap} onModeTap={onModeTap}
           freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
@@ -1172,7 +1199,7 @@ const por = StyleSheet.create({
 
 // ── LANDSCAPE ─────────────────────────────────────────────────────────────────
 
-function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
+function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, vfoNoInertia,
@@ -1276,7 +1303,7 @@ function LandscapeBar({ freqStr, unit, modeLabel, snrText, connected, signalActi
         <View style={[lnd.sigFrame, { height: SIG_H }]}>
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
           <FreqModePill
-            freqStr={freqStr} unit={unit} modeLabel={modeLabel} snrText={snrText}
+            freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
             connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
             onFreqTap={onFreqTap} onModeTap={onModeTap}
             freqFontSize={FREQ_FONT} freqWidth={FREQ_W} unitFontSize={UNIT_FONT}
@@ -1417,6 +1444,7 @@ function ControlsBar({
   sharedDial,
   storms,
   adminMode,
+  airChannel = null,
 }: ControlsBarProps) {
   // ★ Flashes when a captured region hands the keyboard back — see useRegionHandback.
   const handback = useRegionHandback();
@@ -1430,7 +1458,20 @@ function ControlsBar({
   const { theme: t } = useTheme();
   const s = useUiScale();
 
-  const freqStr   = useMemo(() => freqFormat ? freqFormat(frequency) : formatHz(frequency, freqUnit), [frequency, freqUnit, freqFormat]);
+  /* ★★ THE CHANNEL NAME IS THE READOUT ON THE RASTER (airband only — airChannel is null elsewhere). An
+   *  8.33 kHz channel's name is not its frequency (118.010 tunes 118.0083 MHz), and the name is what a
+   *  pilot, a controller and every frequency list quote, so it is what an aviation radio displays. The
+   *  true frequency is not hidden: it rides in `chanTag`, small, above the unit. */
+  const chanMain  = !!airChannel && freqUnit === 'mhz' && !freqFormat;
+  const freqStr   = useMemo(() => chanMain ? airChannel!.name
+    : freqFormat ? freqFormat(frequency) : formatHz(frequency, freqUnit),
+    [frequency, freqUnit, freqFormat, chanMain, airChannel]);
+  const chanTag   = useMemo(() => {
+    if (!airChannel) return null;
+    const sp = airChannel.spacing === 833 ? '8.33' : '25 kHz';
+    if (!chanMain) return `CH ${airChannel.name} · ${sp}`;
+    return airChannel.spacing === 833 ? `8.33 · ${airChannel.trueText}` : sp;
+  }, [airChannel, chanMain]);
   const unit      = useMemo(() => freqUnitLabel(freqUnit),       [freqUnit]);
   const stepLabel = useMemo(() => formatStep(step),      [step]);
   const snrText   = meterLabel ?? ''; // FM-DX static reading; live text comes from the bus + meterText()
@@ -1479,7 +1520,7 @@ function ControlsBar({
    *  in `shared` below. */
   const bcastFm = !dabOn && String(mode).toLowerCase() === 'wfm';
   const shared = {
-    freqStr, unit,
+    freqStr, unit, chanTag, chanMain,
     // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX).
     modeLabel: dabOn ? 'DAB' : modeDisplay(mode) + (activeDecoder ? `: ${(activeDecoder === 'wefax' ? 'fax' : activeDecoder).toUpperCase()}` : ''),
     snrText, fmStereo,
