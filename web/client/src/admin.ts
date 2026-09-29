@@ -121,6 +121,26 @@ const withFlag = (cc: string | undefined, text: string) => {
   return f ? `<span class="cc" title="${esc(ccName(cc))}">${f}</span> ${esc(text)}` : esc(text);
 };
 
+/** ★★★ A ROW THAT IS CLOUDFLARE'S, NOT A PERSON'S (Stuart, 2026-09-29: "we get those cloudflare
+ *  addresses on all logs … so people dont think its a dodgy user lingering about").
+ *  2a06:98c0::/29 is where every Cloudflare WORKER request comes from, and the Worker is our own
+ *  directory: a page opened at <name>.vibeserver.vibesdr.net sends all its HTTP through it, and
+ *  Cloudflare replaces the visitor's address with this one on the way (vibe_admin.h
+ *  cloudflareWorkerAddr). So it is a real page — often the owner's own admin page — with its
+ *  address hidden. The SERVER decides (`via` / `cfw`); the page only words it.
+ *  ★ Never a flag: the geolocation is Cloudflare's, not the visitor's. */
+const CF_DIRECTORY_TIP = 'A page opened through this server\u2019s VibeServer directory address '
+  + '(\u2026.vibeserver.vibesdr.net). Its requests come through the directory on Cloudflare, which '
+  + 'hides the visitor\u2019s own address \u2014 so this is somebody\u2019s open page (often your own '
+  + 'admin page), not a stranger lingering. Their listening, if any, shows under their real address.';
+const CF_NETWORK_TIP = 'Cloudflare\u2019s Workers network (2a06:98c0::/29) \u2014 an automated request '
+  + 'relayed by a Cloudflare Worker, not a person\u2019s own connection.';
+function cfLabel(via: string): string {
+  return via === 'directory'
+    ? `<span class="dim" title="${esc(CF_DIRECTORY_TIP)}">VibeServer directory visitor (via Cloudflare)</span>`
+    : `<span class="dim" title="${esc(CF_NETWORK_TIP)}">Cloudflare network (address hidden)</span>`;
+}
+
 const mhz = (hz: number) => hz > 0 ? `${(hz / 1e6).toFixed(3)} MHz` : '—';
 
 // ── Health cards ──────────────────────────────────────────────────────────────────────────────
@@ -368,6 +388,7 @@ function countriesFrom(conns: any[], fallback: any[]): any[] {
   const byCc: Record<string, Set<string>> = {};
   for (const c of conns || []) {
     if ((Number(c.at) || 0) < dayAgo) continue;
+    if (c.cfw) continue;                    // ★ Cloudflare's address is nobody's country — see cfLabel
     const cc = String(c.cc || '').trim();
     const ip = String(c.ip || '');
     if (!cc || !ip) continue;
@@ -392,7 +413,8 @@ function machineStats(conns: any[]): {
   topRadio: { label: string; n: number } | null;
 } {
   const dayAgo = Math.floor(Date.now() / 1000) - 24 * 3600;
-  const today = (conns || []).filter((c) => (Number(c.at) || 0) >= dayAgo);
+  // ★ Cloudflare's Worker address is not a visitor — see cfLabel.
+  const today = (conns || []).filter((c) => (Number(c.at) || 0) >= dayAgo && !c.cfw);
   if (!today.length) return { uniqueDay: 0, visits: 0, medianSec: 0, longestSec: 0, topRadio: null };
 
   const ips = new Set<string>();
@@ -839,6 +861,12 @@ function renderVisitors(list: any[], busyIps: Set<string>) {
       const what = !v.forSecs ? 'choosing a radio'
                  : on > 180   ? `page left open for ${esc(dur(on))}`
                               : 'choosing a radio';
+      // ★ A Cloudflare row is labelled for what it is — see cfLabel — and "page open", not
+      //   "choosing a radio": it is usually a page left open on purpose, like the admin page.
+      if (v.via) {
+        return `<div class="qRow">${cfLabel(String(v.via))} `
+             + `<span class="dim">· page open for ${esc(dur(on))} · seen ${esc(dur(v.secs || 0))} ago</span></div>`;
+      }
       return `<div class="qRow">${withFlag(v.cc, v.ip || '—')} `
            + `<span class="dim">${what} · seen ${esc(dur(v.secs || 0))} ago</span></div>`;
     })
@@ -938,6 +966,7 @@ function renderClientMix(list: any[]) {
   if (!list.length) { el.textContent = ''; return; }
   const seen = new Map<string, Set<string>>();
   for (const c of list) {
+    if (c.cfw) continue;                    // ★ not a client anybody chose — see cfLabel
     const k = clientKind(c.agent);
     if (!seen.has(k)) seen.set(k, new Set());
     seen.get(k)!.add(String(c.ip || '?'));
@@ -1051,8 +1080,54 @@ function groupVisits(list: any[]): any[] {
     }
     if (!had.agent && c.agent) had.agent = c.agent;
     if (!had.cc && c.cc) had.cc = c.cc;
+    mergeVerdict(had, c);
   }
   return out;
+}
+
+/** ★★★ ONE VISIT, ONE VERDICT — SUMMED ACROSS ITS LEGS. The visit was built as `{ ...c }` from
+ *  whichever leg came first (the NEWEST, since the log runs newest first), so a two-radio visit or
+ *  a reconnect showed only that one leg's Heard — and a leg with no figure blanked a visit whose
+ *  other leg had one. Stops and heard ADD (they are places settled on, per leg); the best SNR is
+ *  the best of any leg; audio adds; a parked frequency survives only if the whole visit was one
+ *  stop. An absent figure contributes nothing, so "not measured" never overwrites a measurement. */
+function mergeVerdict(had: any, c: any): void {
+  const cs = Number(c.stops);
+  if (Number.isFinite(cs) && cs >= 0) {
+    const hs = Number(had.stops);
+    const hadOne = Number.isFinite(hs) && hs >= 0;
+    const parked = !hadOne && cs === 1 ? Number(c.parkedHz) || 0 : 0;
+    had.stops = (hadOne ? hs : 0) + cs;
+    had.heard = (hadOne ? Number(had.heard) || 0 : 0) + (Number(c.heard) || 0);
+    const cb = Number(c.bestSnr), hb = Number(had.bestSnr);
+    had.bestSnr = hadOne && Number.isFinite(hb) ? Math.max(hb, Number.isFinite(cb) ? cb : hb) : cb;
+    had.parkedHz = had.stops === 1 ? (parked || Number(had.parkedHz) || 0) : 0;
+  }
+  const ca = Number(c.audio);
+  if (Number.isFinite(ca) && ca >= 0) {
+    const ha = Number(had.audio);
+    had.audio = (Number.isFinite(ha) && ha >= 0 ? ha : 0) + ca;
+  }
+}
+
+/** ★★ What the visit comes to, as one word the cell and the filter both read — so the filter can
+ *  never disagree with what the row shows.
+ *    'noaudio' — the server KNOWS it sent no sound (never played, muted throughout, a scanner).
+ *                Heard nothing, whatever the signal was: a signal nobody could hear is not heard.
+ *    'some' / 'none' — settled somewhere and the signal did / did not stand above the noise.
+ *    'audio'   — sound went out but the signal was never measured (DAB, or a visit too brief
+ *                to settle). Something was heard; how good it was is not known.
+ *    ''        — genuinely unknown: an old row, or a legacy client with no session id. */
+function heardVerdict(c: any): '' | 'noaudio' | 'some' | 'none' | 'audio' {
+  const audio = Number(c.audio);
+  const audioKnown = c.audio !== undefined && Number.isFinite(audio) && audio >= 0;
+  if (audioKnown && audio === 0) return 'noaudio';
+  const stops = Number(c.stops);
+  if (Number.isFinite(stops) && stops >= 0 && c.stops !== undefined) {
+    if (stops > 0) return (Number(c.heard) || 0) > 0 ? 'some' : 'none';
+    return audioKnown ? 'audio' : 'none';
+  }
+  return audioKnown ? 'audio' : '';
 }
 
 /** ★★ The visit verdict as one glanceable cell.
@@ -1062,14 +1137,27 @@ function groupVisits(list: any[]): any[] {
  *  ★ PARKED is called out by name, because one stop all visit is a different story from one stop
  *    because they left immediately — and the frequency is only recorded in that case. */
 function heardCell(c: any): string {
-  const stops = Number(c.stops);
-  if (!Number.isFinite(stops) || stops < 0) {
-    return '<span class="dim" title="Not measured for this visit — nothing watched this listener\u2019s dial.">—</span>';
+  const v = heardVerdict(c);
+  const kb = Math.round((Number(c.audio) || 0) / 1024);
+  if (v === '') {
+    return '<span class="dim" title="Not known for this visit — an older record, or a client that '
+         + 'gave no session id to pair its sockets.">—</span>';
   }
+  if (v === 'noaudio') {
+    return '<span class="heardNone" title="The server sent this visit NO audio: it never opened '
+         + 'a sound stream (never pressed play, muted the whole time, or not a listener at all). '
+         + 'It may still have watched the waterfall.">no audio</span>';
+  }
+  if (v === 'audio') {
+    return `<span class="heardSome" title="${esc(`${kb} KB of audio was sent. The signal was not `
+         + `measured for this visit (DAB, or it never settled on one frequency for 10 s).`)}">audio</span>`;
+  }
+  const stops = Number(c.stops);
   const heard = Number(c.heard) || 0;
   const best  = Number(c.bestSnr);
   const tip = (Number.isFinite(best) && stops > 0 ? `Best signal ${best.toFixed(1)} dB above the noise. ` : '')
-            + `${heard} of ${stops} place${stops === 1 ? '' : 's'} they settled on had a real signal.`;
+            + `${heard} of ${stops} place${stops === 1 ? '' : 's'} they settled on had a real signal.`
+            + (Number(c.audio) > 0 ? ` ${kb} KB of audio was sent.` : '');
   if (stops === 1 && Number(c.parkedHz) > 0) {
     const mhz = (Number(c.parkedHz) / 1e6).toFixed(1);
     return `<span class="${heard ? 'heardSome' : 'heardNone'}" title="${esc(tip)}">`
@@ -1096,13 +1184,13 @@ function connMatches(c: any): boolean {
   if (connFilter.cc     && String(c.cc || '')     !== connFilter.cc)     return false;
   if (connFilter.reason && String(c.reason || '') !== connFilter.reason) return false;
   if (connFilter.heard) {
-    // ★ stops absent = NOT MEASURED, which is not "heard nothing". A visit we never watched must
-    //   fall out of BOTH answers rather than be counted as a disappointed listener.
-    const stops = Number(c.stops);
-    if (!Number.isFinite(stops) || stops < 0) return false;
-    const heard = Number(c.heard) || 0;
-    if (connFilter.heard === 'none' && heard !== 0) return false;
-    if (connFilter.heard === 'some' && heard === 0) return false;
+    // ★ UNKNOWN is not "heard nothing". A visit we never watched must fall out of BOTH answers
+    //   rather than be counted as a disappointed listener. Same verdict the cell draws.
+    const v = heardVerdict(c);
+    if (!v) return false;
+    const heardIt = v === 'some' || v === 'audio';
+    if (connFilter.heard === 'none' && heardIt) return false;
+    if (connFilter.heard === 'some' && !heardIt) return false;
   }
   return true;
 }
@@ -1217,7 +1305,7 @@ function renderConns(raw: any[]) {
            ★ Dimmed and on its own line: it is context for the address above it, not a column
              anyone scans. A blank means the ASN database has no entry for that range — which is
              itself worth seeing, since it usually means a VPN or corporate egress. -->
-      <td>${withFlag(c.cc, c.ip || '—')}${c.admin ? ' <span class="adminTag" title="This session used the admin password">ADMIN</span>' : ''}${
+      <td>${c.cfw ? cfLabel('') : withFlag(c.cc, c.ip || '—')}${c.admin ? ' <span class="adminTag" title="This session used the admin password">ADMIN</span>' : ''}${
         c.net ? `<div class="dim cNet" title="Network this address belongs to. A corporate VPN or cloud egress will show its provider rather than a consumer ISP — and that is usually why a country looks wrong.">${esc(String(c.net).slice(0, 40))}</div>` : ''}</td>
       <!-- ★ WHICH RECEIVER THEY CHOSE. The fan-out already tagged every record with the radio it
            came from; it was meaningless while each radio answered with the whole machine's history

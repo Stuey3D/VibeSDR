@@ -4306,7 +4306,13 @@ static std::mutex g_vsVisitorMtx;
  *  radio · seen 3s ago", which reads as somebody actively deciding. Stuart, 2026-08-19: an address
  *  "that hasnt moved for a couple of hours". How long they have been there is the fact that tells
  *  an owner whether they are looking at demand or at a forgotten tab. */
-struct VsVisitor { double first = 0, last = 0; };
+struct VsVisitor {
+    double first = 0, last = 0;
+    /** ★★★ "" for a person we can see; "directory" for a page opened through our directory's
+     *  address (<slug>.vibeserver.vibesdr.net), whose own address Cloudflare hides; "cloudflare"
+     *  for Cloudflare's Worker network without that signature. See vsViaOf. */
+    std::string via;
+};
 static std::map<std::string, VsVisitor> g_vsVisitors;
 /** ★★★ IS THIS THE SERVER LOOKING AT ITSELF? The listing switch polls its own
  *  /vibeserver/radios over loopback every time it renews the directory entry — and that endpoint
@@ -4334,13 +4340,40 @@ static std::string dirProofFor(const std::string& nonce) {
     return ",\"dirProof\":\"" + hex + "\"";
 }
 
-static void vsNoteVisitor(const std::string& ip) {
+/** ★★★ WHO IS REALLY BEHIND A CLOUDFLARE-WORKER ADDRESS — judged by the REQUEST, then the range.
+ *
+ *  2a06:98c0:3600::103 sat on every server's landing-page list, "page left open for 41m · seen 0s
+ *  ago" with a US flag (Stuart, 2026-09-29). It is the source address of every Cloudflare Worker
+ *  subrequest, and the Worker is OUR DIRECTORY: `<slug>.vibeserver.vibesdr.net` proxies the landing
+ *  page and all its HTTP, and Cloudflare overwrites the X-Forwarded-For the Worker sets on a
+ *  cross-zone fetch (vibe_admin.h cloudflareWorkerAddr has the detail). So those rows are REAL
+ *  people — somebody's landing page, the owner's own admin page polling /vibeserver/radios every
+ *  two seconds, a listener's tab whose WebSocket (which goes direct) shows them correctly in the
+ *  listener list under their own address — all folded into one address that looks like a lurker.
+ *  ★★ By SIGNATURE first: the directory Worker names itself (`x-vibesdr-via: directory`, from the
+ *     2026-09-29 Worker), and Cloudflare stamps every Worker subrequest with `cf-worker: <zone>`
+ *     (ours is vibesdr.net). A header alone is text anybody can type, so it only counts FROM the
+ *     Worker range — a visitor cannot use it to relabel themselves.
+ *  ★ The range alone (no signature) still says "Cloudflare network", never a person's country.
+ *    It is not WARP: WARP users egress from other ranges and keep their own rows. */
+static std::string vsViaOf(const std::string& ip, const std::string& cfWorker,
+                           const std::string& vibeVia) {
+    if (!vibeadmin::cloudflareWorkerAddr(ip)) return std::string();
+    std::string w = cfWorker;
+    for (auto& ch : w) ch = (char)tolower((unsigned char)ch);
+    const bool ours = vibeVia == "directory"
+                   || w == "vibesdr.net" || (w.size() > 12 && w.compare(w.size() - 12, 12, ".vibesdr.net") == 0);
+    return ours ? "directory" : "cloudflare";
+}
+
+static void vsNoteVisitor(const std::string& ip, const std::string& via = std::string()) {
     if (ip.empty()) return;
     const double now = (double)::time(nullptr);
     std::lock_guard<std::mutex> lk(g_vsVisitorMtx);
     auto& v = g_vsVisitors[ip];
     if (v.first <= 0) v.first = now;      // ★ set once; the whole point is that it does not move
     v.last = now;
+    if (!via.empty()) v.via = via;
     for (auto it = g_vsVisitors.begin(); it != g_vsVisitors.end();)
         it = (now - it->second.last > 60.0) ? g_vsVisitors.erase(it) : std::next(it);
 }
@@ -6492,6 +6525,91 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<cf32>  rotBuf;
     };
 
+    /* ★★★ WHAT THIS LISTENER ACTUALLY DID — the visit VERDICT, for the connection log.
+     *
+     *  Stuart, 2026-09-21: "if a user has come for a couple of mins and heard nothing but static
+     *  and then left that I really want to know about, likewise if they tuned about and heard a
+     *  few stations then i know someone is gunuinely interested and found stuff to listen to."
+     *
+     *  The log records how LONG someone stayed and how many bytes they took, and those two say
+     *  nothing about whether the receiver was any good to them: five minutes of static and five
+     *  minutes of a station they enjoyed are the same row today.
+     *  ★★ Everything needed is already measured — the channel peak and iqFloorDb, so (chan - floor)
+     *     is the SNR they were actually getting on the frequency they were on. We compute it for
+     *     the S meter and throw it away.
+     *  ★ A STOP, not a frequency trail: he does not want a list of frequencies ("dont need exact
+     *    frequencies unless they literally only stayed on Heart FM for the session"). Counting
+     *    stops and how many had signal answers the question in ~40 bytes a row.
+     *
+     *  ★★★ ITS OWN TYPE, BECAUSE IT WAS ONLY EVER KEPT ON A ClientDsp — and a ClientDsp exists only
+     *      in per-client mode (a LOCKED centre AND more than one listener allowed). Every other
+     *      radio — a single-listener one, a shared dial, VibeServer Lite on a phone out of the box —
+     *      never had a tally, so its every row read "—" in Heard (Stuart, 2026-09-29: "I think
+     *      I've seen it correctly show someone hearing something on a few logs and that was it").
+     *      The DIRECT radios now keep one per spectrum socket (Impl::directVisit), fed from the
+     *      shared VFO's own passband peak — which on those radios IS what the listener hears.
+     *  ★ Its own leaf mutex: fed from the DSP thread, read out on the socket-close thread. */
+    struct VisitTally {
+        std::mutex m;
+        bool      observed     = false;  // ★ never measured = "not known", not "found nothing"
+        double    stopVfoHz    = 0;      // where the current dwell is
+        long long stopSince    = 0;      // when it started (unix seconds)
+        float     stopBestSnr  = -1e9f;  // best SNR seen during THIS dwell
+        int       visitStops   = 0;      // dwells long enough to count
+        int       visitHeard   = 0;      // ...of which had a real signal
+        float     visitBestSnr = -1e9f;  // best SNR of the whole visit
+        double    firstStopHz  = 0;      // the only frequency worth recording, and only if parked
+
+        /** ★ A dwell must last this long to count as a STOP. Spinning the dial past a station is
+         *  not listening to it, and counting it would make every visit look busy. */
+        static constexpr long long kStopDwellSecs = 10;
+        /** ★★ "Heard" means the channel stood this far above the noise. Deliberately modest: the
+         *  question is "was there anything there at all", not "was it a good signal" — 6 dB is
+         *  audible on AM and a clear lock on FM, and the BEST figure is recorded separately so a
+         *  strong station is still distinguishable from a marginal one. */
+        static constexpr float kHeardSnrDb = 6.0f;
+
+        /** Close the dwell in progress and fold it into the visit's tally. Safe to call twice.
+         *  Caller holds `m`. */
+        void closeStopLocked(long long now) {
+            if (stopSince <= 0) return;
+            if (now - stopSince >= kStopDwellSecs && stopBestSnr > -1e8f) {
+                ++visitStops;
+                if (stopBestSnr >= kHeardSnrDb) ++visitHeard;
+                if (stopBestSnr > visitBestSnr) visitBestSnr = stopBestSnr;
+                if (visitStops == 1) firstStopHz = stopVfoHz;
+            }
+            stopSince = 0;
+            stopBestSnr = -1e9f;
+        }
+        /** One reading: the listener is on `hz`, `bwHz` wide, and the channel stands `snr` dB
+         *  above the floor. A "stop" ends when the dial moves more than the channel width — a real
+         *  retune, not the sub-kHz wander of a drag. */
+        void observe(double hz, double bwHz, float snr, long long now) {
+            std::lock_guard<std::mutex> lk(m);
+            observed = true;
+            const double moved = std::fabs(hz - stopVfoHz);
+            const double width = std::max(3000.0, bwHz);
+            if (stopSince == 0 || moved > width) {
+                closeStopLocked(now);
+                stopVfoHz = hz;
+                stopSince = now;
+                stopBestSnr = -1e9f;
+            }
+            if (snr > stopBestSnr) stopBestSnr = snr;
+        }
+        /** The verdict as the connection log takes it. stops -1 = never measured. */
+        void verdict(long long now, int& stops, int& heard, float& best, double& parked) {
+            std::lock_guard<std::mutex> lk(m);
+            if (!observed) { stops = -1; heard = 0; best = 0; parked = 0; return; }
+            closeStopLocked(now);   // fold in the dwell still in progress
+            stops  = visitStops;
+            heard  = visitHeard;
+            best   = visitBestSnr > -1e8f ? visitBestSnr : 0.0f;
+            parked = visitStops == 1 ? firstStopHz : 0.0;
+        }
+    };
+
     struct ClientDsp {
         std::shared_ptr<IqOut> iq;              // ★ raw IQ out, while the listener has it on
         std::shared_ptr<net::Socket> spec;      // whose channel this is
@@ -6612,52 +6730,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::atomic<float> squelchDb{-100.0f};
         std::atomic<float> sigChanDb{-200.0f};   // the per-listener channel peak sent as sig.chan
 
-        /* ★★★ WHAT THIS LISTENER ACTUALLY DID — the visit VERDICT, for the connection log.
-         *
-         *  Stuart, 2026-09-21: "if a user has come for a couple of mins and heard nothing but static
-         *  and then left that I really want to know about, likewise if they tuned about and heard a
-         *  few stations then i know someone is gunuinely interested and found stuff to listen to."
-         *
-         *  The log records how LONG someone stayed and how many bytes they took, and those two say
-         *  nothing about whether the receiver was any good to them: five minutes of static and five
-         *  minutes of a station they enjoyed are the same row today.
-         *  ★★ Everything needed is already measured — sigChanDb above is this listener's channel
-         *     peak and iqFloorDb is the noise floor, so (chan - floor) is the SNR they were actually
-         *     getting on the frequency THEY chose. We compute it for the S meter and throw it away.
-         *  ★ A STOP, not a frequency trail: he does not want a list of frequencies ("dont need exact
-         *    frequencies unless they literally only stayed on Heart FM for the session"). Counting
-         *    stops and how many had signal answers the question in ~40 bytes a row. */
-        double    stopVfoHz    = 0;      // where the current dwell is
-        long long stopSince    = 0;      // when it started (unix seconds)
-        float     stopBestSnr  = -1e9f;  // best SNR seen during THIS dwell
-        int       visitStops   = 0;      // dwells long enough to count
-        int       visitHeard   = 0;      // ...of which had a real signal
-        float     visitBestSnr = -1e9f;  // best SNR of the whole visit
-        double    firstStopHz  = 0;      // the only frequency worth recording, and only if parked
-        int       distinctStops = 0;     // >1 means they moved, so "parked" is false
-    
-        /** ★ A dwell must last this long to count as a STOP. Spinning the dial past a station is
-         *  not listening to it, and counting it would make every visit look busy. */
-        static constexpr long long kStopDwellSecs = 10;
-        /** ★★ "Heard" means the channel stood this far above the noise. Deliberately modest: the
-         *  question is "was there anything there at all", not "was it a good signal" — 6 dB is
-         *  audible on AM and a clear lock on FM, and the BEST figure is recorded separately so a
-         *  strong station is still distinguishable from a marginal one. */
-        static constexpr float kHeardSnrDb = 6.0f;
-
-        /** Close the dwell in progress and fold it into the visit's tally. Safe to call twice. */
-        void closeStop(long long now) {
-            if (stopSince <= 0) return;
-            if (now - stopSince >= kStopDwellSecs && stopBestSnr > -1e8f) {
-                ++visitStops;
-                if (stopBestSnr >= kHeardSnrDb) ++visitHeard;
-                if (stopBestSnr > visitBestSnr) visitBestSnr = stopBestSnr;
-                if (visitStops == 1) firstStopHz = stopVfoHz;
-                ++distinctStops;
-            }
-            stopSince = 0;
-            stopBestSnr = -1e9f;
-        }
+        VisitTally visit;   // ★ see VisitTally — what this listener actually did
         float             nrStrength = 0.5f;
         double            deempTau = -1.0;      // <0 = never set; leave the pipeline's own default
         std::atomic<bool> nfmVoice{true};       // ★ NFM Voice (300 Hz-3 kHz) vs Raw — re-applied on every rebuild
@@ -6707,6 +6780,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibedsp::Channelizer::ExtractCtx ectx, vectx;
     };
     std::map<net::Socket*, std::shared_ptr<ClientDsp>> clientDsp;
+    /** ★★★ THE VISIT VERDICT FOR A LISTENER WITH NO ClientDsp — see VisitTally. Keyed on the
+     *  spectrum socket; filled by the signal loop, taken and erased when that socket closes. */
+    std::mutex directVisitMtx;
+    std::map<net::Socket*, std::shared_ptr<VisitTally>> directVisit;
     /** ★ RAW IQ OUT in DIRECT mode (one listener, no ClientDsp): the tap hangs off the single
      *  pipeline's iq callback instead. `iqDirectSock` is the spectrum socket that owns it — the
      *  stream dies with that socket exactly as a ClientDsp's does with its listener. */
@@ -8522,6 +8599,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  below, what a mode actually costs (Stuart, 2026-08-08: wanting a definitive answer on
          *  what FM stereo with RDS costs). */
         std::atomic<unsigned long long> sentTotal{0};
+        /** ★★★ AND HOW MUCH OF IT WAS AUDIO (Out::Audio frames only). sentTotal on an audio socket
+         *  also counts its control replies, so "bytes > 0" cannot say whether any SOUND went out —
+         *  and that is the question the connection log's Heard column asks. */
+        std::atomic<unsigned long long> audioTotal{0};
         bool   closing = false;      // drain what is queued, then the writer exits
         bool   overran = false;      // dropped for backlog, not for leaving
         std::thread th;
@@ -8550,6 +8631,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  afterwards." That is the whole point of a history: the interesting sessions are the ones
      *  you were not watching. */
     std::map<std::string, unsigned long long> sessionDrops;
+    /** ★★★ AUDIO BYTES SENT, PER SESSION, banked as each socket closes — the same rescue as
+     *  sessionBytes, for the same reason (the outbox dies with its socket). Read by the spectrum
+     *  close (plus any audio socket of the session still open) and, when the audio socket is the
+     *  one that goes LAST, handed straight to the already-closed row by ConnLog::noteAudio. */
+    std::map<std::string, unsigned long long> sessionAudio;
 
     /** The ONLY thread that ever writes to this client's socket. Blocking sends are fine HERE —
      *  blocking is exactly what this thread is for, and it holds no lock any other client wants. */
@@ -8657,6 +8743,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         ob->bytes += frame.size();
         ob->sentTotal.fetch_add(frame.size(), std::memory_order_relaxed);
+        if (cls == Out::Audio) ob->audioTotal.fetch_add(frame.size(), std::memory_order_relaxed);
         ob->q.emplace_back(cls, std::move(frame));
         ob->cv.notify_one();
     }
@@ -10417,23 +10504,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         mine = pk;
                         c->sigChanDb.store(pk, std::memory_order_relaxed);
                         /* ★★★ THE VISIT VERDICT, ACCUMULATED WHERE THE NUMBERS ALREADY ARE.
-                         *  A "stop" ends when the dial moves more than this listener's own channel
-                         *  width — a real retune, not the sub-kHz wander of a drag. Everything here
-                         *  is per-listener state on their own ClientDsp, so two people on a shared
-                         *  receiver get two honest verdicts. */
-                        {
-                            const long long nowS = (long long)time(nullptr);
-                            const double moved = std::fabs(c->vfoHz - c->stopVfoHz);
-                            const double width = std::max(3000.0, c->bwHz);
-                            if (c->stopSince == 0 || moved > width) {
-                                c->closeStop(nowS);
-                                c->stopVfoHz = c->vfoHz;
-                                c->stopSince = nowS;
-                                c->stopBestSnr = -1e9f;
-                            }
-                            const float snr = pk - floorDb;
-                            if (snr > c->stopBestSnr) c->stopBestSnr = snr;
-                        }
+                         *  Everything here is per-listener state on their own ClientDsp, so two
+                         *  people on a shared receiver get two honest verdicts. */
+                        c->visit.observe(c->vfoHz, c->bwHz, pk - floorDb, (long long)time(nullptr));
+                    } else if (peak > -1e8f) {
+                        /* ★★★ AND ON EVERY OTHER RADIO. Without a ClientDsp there is one VFO and
+                         *  this listener hears it, so ITS passband peak is their signal. This
+                         *  branch did not exist, and that is the whole reason the Heard column was
+                         *  almost always "—": only a locked-centre multi-user radio ever had a
+                         *  tally. Keyed on the spectrum socket, erased when that socket closes. */
+                        std::shared_ptr<VisitTally> t;
+                        { std::lock_guard<std::mutex> vl(directVisitMtx);
+                          if (p.sock->isOpen()) {   // ★ never resurrect one its close has erased
+                              auto& slot = directVisit[p.sock.get()];
+                              if (!slot) slot = std::make_shared<VisitTally>();
+                              t = slot;
+                          } }
+                        if (t) t->observe(audioFreq.load(), vfoBwHz.load(), peak - floorDb,
+                                   (long long)time(nullptr));
                     }
                     /* ★★★ THE CONVERTER'S OWN FIGURES RIDE WITH THE SIGNAL ONES, AND THEY HAVE TO
                      *     BE SENT PERIODICALLY OR THEY ARE NOT A MEASUREMENT. `adcPeak` already
@@ -15530,6 +15618,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void handleConnection(std::shared_ptr<net::Socket> sock) {
         vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
+        std::string cfWorkerHeader, vibeViaHeader;   // ★ see vsViaOf
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         bool acceptsGzip = false;         // ★ only /mapdata/ cares — see the header capture below
         std::string rangeHeader;          // ★ only /mapgl/ reads it: PMTiles are read by Range
@@ -15738,6 +15827,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     size_t a = vv.find_first_not_of(" \t");
                     size_t b = vv.find_last_not_of(" \t\r\n");
                     if (a != std::string::npos) xRealIpHeader = vv.substr(a, b - a + 1);
+                }
+            }
+            // ★★ WHO PROXIED THIS — the signature vsViaOf reads. `cf-worker` is stamped by
+            //    Cloudflare on every Worker subrequest; `x-vibesdr-via` is our directory's own.
+            {
+                const size_t colon = line.find(':');
+                if (colon != std::string::npos && colon < 16) {
+                    std::string hk = line.substr(0, colon);
+                    for (auto& c : hk) c = (char)tolower((unsigned char)c);
+                    if (hk == "cf-worker" || hk == "x-vibesdr-via") {
+                        auto vv = line.substr(colon + 1);
+                        size_t a = vv.find_first_not_of(" \t");
+                        size_t b = vv.find_last_not_of(" \t\r\n");
+                        std::string v = a != std::string::npos ? vv.substr(a, std::min<size_t>(b - a + 1, 64)) : "";
+                        (hk == "cf-worker" ? cfWorkerHeader : vibeViaHeader) = v;
+                    }
                 }
             }
             if (line.size() > 18) {
@@ -16065,7 +16170,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Deliberately NOT admin-gated: it is the public face of the receiver, and it shows
         //   nothing a listener could not see by watching the waterfall for a day.
         } else if (reqLine.rfind("GET /vibeserver/spectrogram", 0) == 0) {
-            vsNoteVisitor(sock->peerAddress());   // the page refreshes this while it is open
+            vsNoteVisitor(sock->peerAddress(),    // the page refreshes this while it is open
+                          vsViaOf(sock->peerAddress(), cfWorkerHeader, vibeViaHeader));
             // ★★ The caller says how big its canvas is; we downsample to fit. Sending the full
             //    2048 x 1440 (~3 MB) to draw on a 900-pixel-wide splash would be paying for detail
             //    the screen cannot show — and on a landing page, load time IS the feature.
@@ -17032,7 +17138,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         } else if (reqLine.rfind("GET /vibeserver/radios", 0) == 0) {
             compatRecord("radios", reqLine, userAgent);
             // ★ Not when it is us — see vsIsSelfPoll.
-            if (!vsIsSelfPoll(userAgent)) vsNoteVisitor(sock->peerAddress());
+            if (!vsIsSelfPoll(userAgent))
+                vsNoteVisitor(sock->peerAddress(), vsViaOf(sock->peerAddress(), cfWorkerHeader, vibeViaHeader));
             // ★★ WHAT ELSE IS ON THIS MACHINE. The landing page lists every radio the owner has
             //    enabled and configured, with the port each answers on, so one address is enough
             //    to reach all of them.
@@ -18684,13 +18791,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               { auto si = sockSession.find(sock.get());
                 if (si != sockSession.end()) bsess = si->second; }
               if (!bsess.empty()) {
-                  unsigned long long sent = 0;
+                  unsigned long long sent = 0, aud = 0;
                   { std::lock_guard<std::mutex> ol(outboxMtx);
                     auto ob = outboxes.find(sock.get());
-                    if (ob != outboxes.end() && ob->second)
-                        sent = ob->second->sentTotal.load(std::memory_order_relaxed); }
+                    if (ob != outboxes.end() && ob->second) {
+                        sent = ob->second->sentTotal.load(std::memory_order_relaxed);
+                        aud  = ob->second->audioTotal.load(std::memory_order_relaxed);
+                    } }
                   if (sent) { std::lock_guard<std::mutex> bl(sessionBytesMtx);
                               sessionBytes[bsess] += sent; }
+                  /* ★★★ AND THE AUDIO, banked on EVERY close — including zero, so the session has
+                   *  an entry that says "known, and nothing" rather than no entry ("unknown").
+                   *  When this IS the audio socket and its spectrum socket has already gone, the
+                   *  row is closed and nobody else will carry the figure to it — so hand it over
+                   *  here. That is the common order for a browser tab being shut. */
+                  { std::lock_guard<std::mutex> bl(sessionBytesMtx);
+                    sessionAudio[bsess] += aud;
+                    if (isAudio && g_vsConnLog.noteAudio(bsess, (long long)sessionAudio[bsess]))
+                        sessionAudio.erase(bsess); }
                   // ★ Same rescue for the drop count: clientDsp is keyed by SOCKET and is about to
                   //   go, so read it here or lose it.
                   { unsigned long long dr = 0;
@@ -18720,12 +18838,38 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   and ERASED: a session id is not reused, and a map fed by unauthenticated traffic
             //   must not grow for ever.
             unsigned long long total = 0, drops = 0;
+            long long audio = -1;          // ★ -1 = not known: no session to pair an audio socket with
             if (!sess.empty()) {
                 std::lock_guard<std::mutex> bl(sessionBytesMtx);
                 auto b = sessionBytes.find(sess);
                 if (b != sessionBytes.end()) { total = b->second; sessionBytes.erase(b); }
                 auto d = sessionDrops.find(sess);
                 if (d != sessionDrops.end()) { drops = d->second; sessionDrops.erase(d); }
+                // ★ Banked just above for this socket, so the entry exists; an absent one would
+                //   still be a real zero, since a session id is exactly what pairs the sockets.
+                auto a = sessionAudio.find(sess);
+                audio = a != sessionAudio.end() ? (long long)a->second : 0;
+            }
+            /* ★★★ PLUS WHAT ITS AUDIO SOCKET HAS SENT SO FAR, IF THAT IS STILL OPEN. Only the
+             *  banked total was visible here, so a tab that closed spectrum first recorded 0 audio
+             *  for a visit that had played for minutes. The live socket's own close tops it up via
+             *  ConnLog::noteAudio; this makes the row right from the moment it closes. */
+            if (!sess.empty()) {
+                std::vector<net::Socket*> mates;
+                for (auto& kv : sockSession)
+                    if (kv.first != sock.get() && kv.second == sess) mates.push_back(kv.first);
+                if (!mates.empty()) {
+                    std::lock_guard<std::mutex> ol(outboxMtx);
+                    for (auto* m : mates) {
+                        auto ob = outboxes.find(m);
+                        if (ob != outboxes.end() && ob->second)
+                            audio += (long long)ob->second->audioTotal.load(std::memory_order_relaxed);
+                    }
+                } else {
+                    // ★ Nothing of this visit left open: nobody will ask for the bank again.
+                    std::lock_guard<std::mutex> bl(sessionBytesMtx);
+                    sessionAudio.erase(sess);
+                }
             }
             /* ★★★ AND THE VERDICT — what they actually did while they were here. Read from THIS
              *  listener's ClientDsp before it is destroyed a few lines below, exactly like the
@@ -18754,15 +18898,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             { auto it = clientDsp.find(sock.get());
               if (it != clientDsp.end()) cd = it->second.get();
               else for (auto& kv : clientDsp) if (kv.second && kv.second->audio == sock) { cd = kv.second.get(); break; } }
-            if (auto* c = cd) {
-                c->closeStop((long long)time(nullptr));   // fold in the dwell still in progress
-                vStops = c->visitStops;
-                vHeard = c->visitHeard;
-                vBest  = (c->visitBestSnr > -1e8f) ? c->visitBestSnr : 0.0f;
-                if (c->visitStops == 1) vParked = c->firstStopHz;
-            }
+            // ★★★ And a DIRECT radio's tally, which lives beside clientDsp rather than on it —
+            //     taken and erased either way, so the map never outlives its socket.
+            std::shared_ptr<VisitTally> dv;
+            { std::lock_guard<std::mutex> vl(directVisitMtx);
+              auto it = directVisit.find(sock.get());
+              if (it != directVisit.end()) { dv = it->second; directVisit.erase(it); } }
+            const long long nowV = (long long)time(nullptr);
+            if (auto* c = cd)  c->visit.verdict(nowV, vStops, vHeard, vBest, vParked);
+            else if (dv)       dv->verdict(nowV, vStops, vHeard, vBest, vParked);
             LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed", total, drops,
-                                               vStops, vHeard, vBest, vParked);
+                                               vStops, vHeard, vBest, vParked, audio);
           }
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
           // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
@@ -23814,8 +23960,9 @@ void LocalSdrShim::noteConnectionOpened(const std::string& ip, const std::string
 }
 void LocalSdrShim::noteConnectionClosed(const std::string& ip, const std::string& session,
                                         const char* reason, uint64_t bytes, uint64_t drops,
-                                        int stops, int heard, float bestSnr, double parkedHz) {
-    g_vsConnLog.close(ip, session, reason, bytes, drops, stops, heard, bestSnr, parkedHz);
+                                        int stops, int heard, float bestSnr, double parkedHz,
+                                        long long audioBytes) {
+    g_vsConnLog.close(ip, session, reason, bytes, drops, stops, heard, bestSnr, parkedHz, audioBytes);
 }
 
 /** ★★ EVERYTHING THE MONITOR PAGE DRAWS, IN ONE REQUEST. A page that polls five endpoints once a
@@ -23999,7 +24146,12 @@ std::string LocalSdrShim::adminSessionsJson() {
             if (!vfirst) visitorsJson += ',';
             vfirst = false;
             visitorsJson += "{\"ip\":\"" + vibeadmin::esc(kv.first) + "\""
-                          + ",\"cc\":\"" + vibeadmin::esc(vsCountry(kv.first)) + "\""
+                          // ★ No country for a Cloudflare row: its geolocation is Cloudflare's,
+                          //   never the visitor's, and a flag would claim otherwise.
+                          + ",\"cc\":\"" + (kv.second.via.empty() ? vibeadmin::esc(vsCountry(kv.first))
+                                                                     : std::string()) + "\""
+                          + (kv.second.via.empty() ? std::string()
+                                                   : ",\"via\":\"" + vibeadmin::esc(kv.second.via) + "\"")
                           + ",\"secs\":" + std::to_string((long long)(nowEpoch - kv.second.last))
                           // ★ How long they have been ON the page, which is the number that
                           //   separates a person choosing from a tab somebody forgot.

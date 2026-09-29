@@ -139,6 +139,79 @@ int main() {
     ok(!row.empty() && row.find("\"stops\":") == std::string::npos,
        "★★★ a close with no verdict records NO stops field — absent, not a zero");
   }
+  {
+    /* ★★★ HEARD WAS "—" ON ALMOST EVERY ROW (Stuart, 2026-09-29). Two of the ways the verdict
+     *  and the audio figure were lost, pinned here; the third (no tally on a direct radio) lives
+     *  in the shim and is proven end to end against a running server. */
+    auto rowOf = [](const std::string& j, const std::string& sess) {
+      const size_t at = j.find("\"session\":\"" + sess + "\"");
+      if (at == std::string::npos) return std::string();
+      const size_t a = j.rfind('{', at), b = j.find('}', at);
+      return j.substr(a, b - a);
+    };
+    vibeadmin::ConnLog log;
+    // A limit ends the visit FIRST, by address and with no figures; the spectrum socket's own
+    // close — the one holding the verdict — arrives after the row is already shut.
+    log.open("7.7.7.7", "limited", "UA", "GB");
+    log.close("7.7.7.7", "", "timeout");
+    log.close("7.7.7.7", "limited", "closed", 5000000, 0, 3, 2, 21.0f, 0, 2400000);
+    const std::string r1 = rowOf(log.json(), "limited");
+    ok(r1.find("\"reason\":\"timeout\"") != std::string::npos
+       && r1.find("\"heard\":2") != std::string::npos && r1.find("\"audio\":2400000") != std::string::npos
+       && r1.find("\"bytes\":5000000") != std::string::npos,
+       "★★★ a verdict arriving after a timeout closed the row is KEPT (reason stays 'timeout')");
+
+    // The audio socket closes AFTER the spectrum socket ended the row.
+    log.open("7.7.7.8", "tabshut", "UA", "GB");
+    log.close("7.7.7.8", "tabshut", "closed", 100000, 0, 1, 1, 30.0f, 96600000.0, 12000);
+    ok(log.noteAudio("tabshut", 3400000), "noteAudio on a CLOSED row says so (the bank can go)");
+    ok(rowOf(log.json(), "tabshut").find("\"audio\":3400000") != std::string::npos,
+       "★★★ audio delivered after the spectrum close still reaches the row");
+
+    // Connected, took the spectrum, never opened audio.
+    log.open("7.7.7.9", "silent", "UA", "GB");
+    log.close("7.7.7.9", "silent", "closed", 80000, 0, 0, 0, 0.0f, 0, 0);
+    ok(rowOf(log.json(), "silent").find("\"audio\":0") != std::string::npos,
+       "★★ a visit that was sent no audio records audio:0 — known, and nothing");
+
+    // Persisted and reloaded: the audio field survives the file.
+    char tmpl[] = "/tmp/connlog-audio-XXXXXX";
+    const char* dir = mkdtemp(tmpl);
+    if (dir) {
+      const std::string path = std::string(dir) + "/c.jsonl";
+      { vibeadmin::ConnLog a; a.setPath(path);
+        a.open("6.6.6.6", "disk", "UA", "GB");
+        a.close("6.6.6.6", "disk", "closed", 1, 0, 2, 1, 9.0f, 0, 777);
+        a.saveIfDue(); }
+      vibeadmin::ConnLog b; b.setPath(path);
+      const std::string r = rowOf(b.json(), "disk");
+      ok(r.find("\"audio\":777") != std::string::npos && r.find("\"heard\":1") != std::string::npos,
+         "★ audio and verdict survive a save and reload");
+    }
+  }
+  {
+    /* ★★★ CLOUDFLARE'S WORKER ADDRESS IS NOT A VISITOR (Stuart, 2026-09-29). 2a06:98c0::/29 is the
+     *  Workers egress — our directory proxying somebody's page — and must be labelled, never counted
+     *  as a person or a country. WARP (2a09:bac0::/29, 104.28/16) is people and must NOT match. */
+    using vibeadmin::cloudflareWorkerAddr;
+    ok(cloudflareWorkerAddr("2a06:98c0:3600::103"), "★★★ the Worker egress address matches");
+    ok(cloudflareWorkerAddr("2A06:98C7:ffff::1"), "the top of the /29, in capitals, matches");
+    ok(!cloudflareWorkerAddr("2a06:98c8::1"), "just past the /29 does not");
+    ok(!cloudflareWorkerAddr("2a09:bac0::1") && !cloudflareWorkerAddr("104.28.1.2"),
+       "★★ WARP users (a real person) are NOT labelled Cloudflare");
+    ok(!cloudflareWorkerAddr("81.159.1.2") && !cloudflareWorkerAddr("garbage"), "ordinary and junk input do not");
+    vibeadmin::ConnLog log;
+    log.open("2a06:98c0:3600::103", "cfrow", "Mozilla", "US");
+    log.close("2a06:98c0:3600::103", "cfrow", "closed");
+    log.open("81.159.1.2", "person", "Mozilla", "GB");
+    log.close("81.159.1.2", "person", "closed");
+    const std::string j = log.json();
+    ok(j.find("\"cfw\":true") != std::string::npos && j.find("\"cfw\":true") == j.rfind("\"cfw\":true"),
+       "★ the Cloudflare row, and only it, is flagged cfw");
+    ok(log.uniqueSince(3600) == 1, "★★ the day's visitor count leaves it out");
+    ok(log.topCountriesJson(3600).find("\"US\"") == std::string::npos,
+       "★★ and so does the country chart — no US flag for Cloudflare");
+  }
   std::printf(fails ? "\n\033[31m%d failed\033[0m\n" : "\n\033[32mpassed\033[0m\n", fails);
   return fails ? 1 : 0;
 }

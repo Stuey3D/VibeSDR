@@ -809,7 +809,7 @@ async function serveBySlug(host, request, env) {
     return new Response('This address does not carry the audio stream.', { status: 426 });
   }
 
-  // ★★★ SAY WHO THE VISITOR IS, PLAINLY. Proxying the page means the server sees CLOUDFLARE at the
+  // ★★★ SAY WHO THE VISITOR IS, PLAINLY. (★ Tried, and Cloudflare discards it — see below.) Proxying the page means the server sees CLOUDFLARE at the
   //     other end of every HTTP request, not the person — so the landing-page visitor list, the
   //     country breakdown and the ban list all described us instead of them. Stuart spotted it on
   //     his own admin screen: "ON THE LANDING PAGE  2a06:98c0:3600::103" — a Cloudflare address,
@@ -828,6 +828,16 @@ async function serveBySlug(host, request, env) {
   const visitor = request.headers.get('cf-connecting-ip');
   if (visitor) { fwd.set('x-forwarded-for', visitor); fwd.set('x-real-ip', visitor); }
   else { fwd.delete('x-forwarded-for'); fwd.delete('x-real-ip'); }
+  // ★★★ …AND IT DOES NOT ARRIVE. This fetch is a CROSS-ZONE subrequest, and for those Cloudflare
+  //     "unconditionally replaces" X-Forwarded-For / X-Real-IP with its own Worker address
+  //     (2a06:98c0:3600::103) to prevent spoofing (Cloudflare docs, Request Header Modification).
+  //     So every server's landing-page list showed that one address "page left open for 41m" with a
+  //     US flag, on every box (Stuart, 2026-09-29) — somebody's page, the owner's own admin page
+  //     included, with the address hidden. The server cannot get the visitor back, but it CAN say
+  //     honestly what the row is: we name ourselves, and the shim labels the row
+  //     ("VibeServer directory visitor (via Cloudflare)") instead of drawing a lurker. It believes
+  //     this header only from Cloudflare's Worker range, so nobody can relabel themselves with it.
+  fwd.set('x-vibesdr-via', 'directory');
 
   const res = await fetch(target, {
     method: request.method,
