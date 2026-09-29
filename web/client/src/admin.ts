@@ -121,6 +121,26 @@ const withFlag = (cc: string | undefined, text: string) => {
   return f ? `<span class="cc" title="${esc(ccName(cc))}">${f}</span> ${esc(text)}` : esc(text);
 };
 
+/** ★★★ A ROW THAT IS CLOUDFLARE'S, NOT A PERSON'S (Stuart, 2026-09-29: "we get those cloudflare
+ *  addresses on all logs … so people dont think its a dodgy user lingering about").
+ *  2a06:98c0::/29 is where every Cloudflare WORKER request comes from, and the Worker is our own
+ *  directory: a page opened at <name>.vibeserver.vibesdr.net sends all its HTTP through it, and
+ *  Cloudflare replaces the visitor's address with this one on the way (vibe_admin.h
+ *  cloudflareWorkerAddr). So it is a real page — often the owner's own admin page — with its
+ *  address hidden. The SERVER decides (`via` / `cfw`); the page only words it.
+ *  ★ Never a flag: the geolocation is Cloudflare's, not the visitor's. */
+const CF_DIRECTORY_TIP = 'A page opened through this server\u2019s VibeServer directory address '
+  + '(\u2026.vibeserver.vibesdr.net). Its requests come through the directory on Cloudflare, which '
+  + 'hides the visitor\u2019s own address \u2014 so this is somebody\u2019s open page (often your own '
+  + 'admin page), not a stranger lingering. Their listening, if any, shows under their real address.';
+const CF_NETWORK_TIP = 'Cloudflare\u2019s Workers network (2a06:98c0::/29) \u2014 an automated request '
+  + 'relayed by a Cloudflare Worker, not a person\u2019s own connection.';
+function cfLabel(via: string): string {
+  return via === 'directory'
+    ? `<span class="dim" title="${esc(CF_DIRECTORY_TIP)}">VibeServer directory visitor (via Cloudflare)</span>`
+    : `<span class="dim" title="${esc(CF_NETWORK_TIP)}">Cloudflare network (address hidden)</span>`;
+}
+
 const mhz = (hz: number) => hz > 0 ? `${(hz / 1e6).toFixed(3)} MHz` : '—';
 
 // ── Health cards ──────────────────────────────────────────────────────────────────────────────
@@ -368,6 +388,7 @@ function countriesFrom(conns: any[], fallback: any[]): any[] {
   const byCc: Record<string, Set<string>> = {};
   for (const c of conns || []) {
     if ((Number(c.at) || 0) < dayAgo) continue;
+    if (c.cfw) continue;                    // ★ Cloudflare's address is nobody's country — see cfLabel
     const cc = String(c.cc || '').trim();
     const ip = String(c.ip || '');
     if (!cc || !ip) continue;
@@ -392,7 +413,8 @@ function machineStats(conns: any[]): {
   topRadio: { label: string; n: number } | null;
 } {
   const dayAgo = Math.floor(Date.now() / 1000) - 24 * 3600;
-  const today = (conns || []).filter((c) => (Number(c.at) || 0) >= dayAgo);
+  // ★ Cloudflare's Worker address is not a visitor — see cfLabel.
+  const today = (conns || []).filter((c) => (Number(c.at) || 0) >= dayAgo && !c.cfw);
   if (!today.length) return { uniqueDay: 0, visits: 0, medianSec: 0, longestSec: 0, topRadio: null };
 
   const ips = new Set<string>();
@@ -839,6 +861,12 @@ function renderVisitors(list: any[], busyIps: Set<string>) {
       const what = !v.forSecs ? 'choosing a radio'
                  : on > 180   ? `page left open for ${esc(dur(on))}`
                               : 'choosing a radio';
+      // ★ A Cloudflare row is labelled for what it is — see cfLabel — and "page open", not
+      //   "choosing a radio": it is usually a page left open on purpose, like the admin page.
+      if (v.via) {
+        return `<div class="qRow">${cfLabel(String(v.via))} `
+             + `<span class="dim">· page open for ${esc(dur(on))} · seen ${esc(dur(v.secs || 0))} ago</span></div>`;
+      }
       return `<div class="qRow">${withFlag(v.cc, v.ip || '—')} `
            + `<span class="dim">${what} · seen ${esc(dur(v.secs || 0))} ago</span></div>`;
     })
@@ -938,6 +966,7 @@ function renderClientMix(list: any[]) {
   if (!list.length) { el.textContent = ''; return; }
   const seen = new Map<string, Set<string>>();
   for (const c of list) {
+    if (c.cfw) continue;                    // ★ not a client anybody chose — see cfLabel
     const k = clientKind(c.agent);
     if (!seen.has(k)) seen.set(k, new Set());
     seen.get(k)!.add(String(c.ip || '?'));
@@ -1276,7 +1305,7 @@ function renderConns(raw: any[]) {
            ★ Dimmed and on its own line: it is context for the address above it, not a column
              anyone scans. A blank means the ASN database has no entry for that range — which is
              itself worth seeing, since it usually means a VPN or corporate egress. -->
-      <td>${withFlag(c.cc, c.ip || '—')}${c.admin ? ' <span class="adminTag" title="This session used the admin password">ADMIN</span>' : ''}${
+      <td>${c.cfw ? cfLabel('') : withFlag(c.cc, c.ip || '—')}${c.admin ? ' <span class="adminTag" title="This session used the admin password">ADMIN</span>' : ''}${
         c.net ? `<div class="dim cNet" title="Network this address belongs to. A corporate VPN or cloud egress will show its provider rather than a consumer ISP — and that is usually why a country looks wrong.">${esc(String(c.net).slice(0, 40))}</div>` : ''}</td>
       <!-- ★ WHICH RECEIVER THEY CHOSE. The fan-out already tagged every record with the radio it
            came from; it was meaningless while each radio answered with the whole machine's history

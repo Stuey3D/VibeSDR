@@ -189,6 +189,29 @@ int main() {
          "★ audio and verdict survive a save and reload");
     }
   }
+  {
+    /* ★★★ CLOUDFLARE'S WORKER ADDRESS IS NOT A VISITOR (Stuart, 2026-09-29). 2a06:98c0::/29 is the
+     *  Workers egress — our directory proxying somebody's page — and must be labelled, never counted
+     *  as a person or a country. WARP (2a09:bac0::/29, 104.28/16) is people and must NOT match. */
+    using vibeadmin::cloudflareWorkerAddr;
+    ok(cloudflareWorkerAddr("2a06:98c0:3600::103"), "★★★ the Worker egress address matches");
+    ok(cloudflareWorkerAddr("2A06:98C7:ffff::1"), "the top of the /29, in capitals, matches");
+    ok(!cloudflareWorkerAddr("2a06:98c8::1"), "just past the /29 does not");
+    ok(!cloudflareWorkerAddr("2a09:bac0::1") && !cloudflareWorkerAddr("104.28.1.2"),
+       "★★ WARP users (a real person) are NOT labelled Cloudflare");
+    ok(!cloudflareWorkerAddr("81.159.1.2") && !cloudflareWorkerAddr("garbage"), "ordinary and junk input do not");
+    vibeadmin::ConnLog log;
+    log.open("2a06:98c0:3600::103", "cfrow", "Mozilla", "US");
+    log.close("2a06:98c0:3600::103", "cfrow", "closed");
+    log.open("81.159.1.2", "person", "Mozilla", "GB");
+    log.close("81.159.1.2", "person", "closed");
+    const std::string j = log.json();
+    ok(j.find("\"cfw\":true") != std::string::npos && j.find("\"cfw\":true") == j.rfind("\"cfw\":true"),
+       "★ the Cloudflare row, and only it, is flagged cfw");
+    ok(log.uniqueSince(3600) == 1, "★★ the day's visitor count leaves it out");
+    ok(log.topCountriesJson(3600).find("\"US\"") == std::string::npos,
+       "★★ and so does the country chart — no US flag for Cloudflare");
+  }
   std::printf(fails ? "\n\033[31m%d failed\033[0m\n" : "\n\033[32mpassed\033[0m\n", fails);
   return fails ? 1 : 0;
 }

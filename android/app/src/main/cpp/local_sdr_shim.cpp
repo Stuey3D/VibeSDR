@@ -4306,7 +4306,13 @@ static std::mutex g_vsVisitorMtx;
  *  radio · seen 3s ago", which reads as somebody actively deciding. Stuart, 2026-08-19: an address
  *  "that hasnt moved for a couple of hours". How long they have been there is the fact that tells
  *  an owner whether they are looking at demand or at a forgotten tab. */
-struct VsVisitor { double first = 0, last = 0; };
+struct VsVisitor {
+    double first = 0, last = 0;
+    /** ★★★ "" for a person we can see; "directory" for a page opened through our directory's
+     *  address (<slug>.vibeserver.vibesdr.net), whose own address Cloudflare hides; "cloudflare"
+     *  for Cloudflare's Worker network without that signature. See vsViaOf. */
+    std::string via;
+};
 static std::map<std::string, VsVisitor> g_vsVisitors;
 /** ★★★ IS THIS THE SERVER LOOKING AT ITSELF? The listing switch polls its own
  *  /vibeserver/radios over loopback every time it renews the directory entry — and that endpoint
@@ -4334,13 +4340,40 @@ static std::string dirProofFor(const std::string& nonce) {
     return ",\"dirProof\":\"" + hex + "\"";
 }
 
-static void vsNoteVisitor(const std::string& ip) {
+/** ★★★ WHO IS REALLY BEHIND A CLOUDFLARE-WORKER ADDRESS — judged by the REQUEST, then the range.
+ *
+ *  2a06:98c0:3600::103 sat on every server's landing-page list, "page left open for 41m · seen 0s
+ *  ago" with a US flag (Stuart, 2026-09-29). It is the source address of every Cloudflare Worker
+ *  subrequest, and the Worker is OUR DIRECTORY: `<slug>.vibeserver.vibesdr.net` proxies the landing
+ *  page and all its HTTP, and Cloudflare overwrites the X-Forwarded-For the Worker sets on a
+ *  cross-zone fetch (vibe_admin.h cloudflareWorkerAddr has the detail). So those rows are REAL
+ *  people — somebody's landing page, the owner's own admin page polling /vibeserver/radios every
+ *  two seconds, a listener's tab whose WebSocket (which goes direct) shows them correctly in the
+ *  listener list under their own address — all folded into one address that looks like a lurker.
+ *  ★★ By SIGNATURE first: the directory Worker names itself (`x-vibesdr-via: directory`, from the
+ *     2026-09-29 Worker), and Cloudflare stamps every Worker subrequest with `cf-worker: <zone>`
+ *     (ours is vibesdr.net). A header alone is text anybody can type, so it only counts FROM the
+ *     Worker range — a visitor cannot use it to relabel themselves.
+ *  ★ The range alone (no signature) still says "Cloudflare network", never a person's country.
+ *    It is not WARP: WARP users egress from other ranges and keep their own rows. */
+static std::string vsViaOf(const std::string& ip, const std::string& cfWorker,
+                           const std::string& vibeVia) {
+    if (!vibeadmin::cloudflareWorkerAddr(ip)) return std::string();
+    std::string w = cfWorker;
+    for (auto& ch : w) ch = (char)tolower((unsigned char)ch);
+    const bool ours = vibeVia == "directory"
+                   || w == "vibesdr.net" || (w.size() > 12 && w.compare(w.size() - 12, 12, ".vibesdr.net") == 0);
+    return ours ? "directory" : "cloudflare";
+}
+
+static void vsNoteVisitor(const std::string& ip, const std::string& via = std::string()) {
     if (ip.empty()) return;
     const double now = (double)::time(nullptr);
     std::lock_guard<std::mutex> lk(g_vsVisitorMtx);
     auto& v = g_vsVisitors[ip];
     if (v.first <= 0) v.first = now;      // ★ set once; the whole point is that it does not move
     v.last = now;
+    if (!via.empty()) v.via = via;
     for (auto it = g_vsVisitors.begin(); it != g_vsVisitors.end();)
         it = (now - it->second.last > 60.0) ? g_vsVisitors.erase(it) : std::next(it);
 }
@@ -15585,6 +15618,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void handleConnection(std::shared_ptr<net::Socket> sock) {
         vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
+        std::string cfWorkerHeader, vibeViaHeader;   // ★ see vsViaOf
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         bool acceptsGzip = false;         // ★ only /mapdata/ cares — see the header capture below
         std::string rangeHeader;          // ★ only /mapgl/ reads it: PMTiles are read by Range
@@ -15793,6 +15827,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     size_t a = vv.find_first_not_of(" \t");
                     size_t b = vv.find_last_not_of(" \t\r\n");
                     if (a != std::string::npos) xRealIpHeader = vv.substr(a, b - a + 1);
+                }
+            }
+            // ★★ WHO PROXIED THIS — the signature vsViaOf reads. `cf-worker` is stamped by
+            //    Cloudflare on every Worker subrequest; `x-vibesdr-via` is our directory's own.
+            {
+                const size_t colon = line.find(':');
+                if (colon != std::string::npos && colon < 16) {
+                    std::string hk = line.substr(0, colon);
+                    for (auto& c : hk) c = (char)tolower((unsigned char)c);
+                    if (hk == "cf-worker" || hk == "x-vibesdr-via") {
+                        auto vv = line.substr(colon + 1);
+                        size_t a = vv.find_first_not_of(" \t");
+                        size_t b = vv.find_last_not_of(" \t\r\n");
+                        std::string v = a != std::string::npos ? vv.substr(a, std::min<size_t>(b - a + 1, 64)) : "";
+                        (hk == "cf-worker" ? cfWorkerHeader : vibeViaHeader) = v;
+                    }
                 }
             }
             if (line.size() > 18) {
@@ -16120,7 +16170,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Deliberately NOT admin-gated: it is the public face of the receiver, and it shows
         //   nothing a listener could not see by watching the waterfall for a day.
         } else if (reqLine.rfind("GET /vibeserver/spectrogram", 0) == 0) {
-            vsNoteVisitor(sock->peerAddress());   // the page refreshes this while it is open
+            vsNoteVisitor(sock->peerAddress(),    // the page refreshes this while it is open
+                          vsViaOf(sock->peerAddress(), cfWorkerHeader, vibeViaHeader));
             // ★★ The caller says how big its canvas is; we downsample to fit. Sending the full
             //    2048 x 1440 (~3 MB) to draw on a 900-pixel-wide splash would be paying for detail
             //    the screen cannot show — and on a landing page, load time IS the feature.
@@ -17087,7 +17138,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         } else if (reqLine.rfind("GET /vibeserver/radios", 0) == 0) {
             compatRecord("radios", reqLine, userAgent);
             // ★ Not when it is us — see vsIsSelfPoll.
-            if (!vsIsSelfPoll(userAgent)) vsNoteVisitor(sock->peerAddress());
+            if (!vsIsSelfPoll(userAgent))
+                vsNoteVisitor(sock->peerAddress(), vsViaOf(sock->peerAddress(), cfWorkerHeader, vibeViaHeader));
             // ★★ WHAT ELSE IS ON THIS MACHINE. The landing page lists every radio the owner has
             //    enabled and configured, with the port each answers on, so one address is enough
             //    to reach all of them.
@@ -24094,7 +24146,12 @@ std::string LocalSdrShim::adminSessionsJson() {
             if (!vfirst) visitorsJson += ',';
             vfirst = false;
             visitorsJson += "{\"ip\":\"" + vibeadmin::esc(kv.first) + "\""
-                          + ",\"cc\":\"" + vibeadmin::esc(vsCountry(kv.first)) + "\""
+                          // ★ No country for a Cloudflare row: its geolocation is Cloudflare's,
+                          //   never the visitor's, and a flag would claim otherwise.
+                          + ",\"cc\":\"" + (kv.second.via.empty() ? vibeadmin::esc(vsCountry(kv.first))
+                                                                     : std::string()) + "\""
+                          + (kv.second.via.empty() ? std::string()
+                                                   : ",\"via\":\"" + vibeadmin::esc(kv.second.via) + "\"")
                           + ",\"secs\":" + std::to_string((long long)(nowEpoch - kv.second.last))
                           // ★ How long they have been ON the page, which is the number that
                           //   separates a person choosing from a tab somebody forgot.

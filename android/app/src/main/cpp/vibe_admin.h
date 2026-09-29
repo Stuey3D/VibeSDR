@@ -24,6 +24,8 @@
 #include <cstring>
 #include <ctime>
 #include <sys/stat.h>
+#include <arpa/inet.h>   // inet_pton — cloudflareWorkerAddr
+#include <netinet/in.h>
 // ★ sysconf(_SC_CLK_TCK) and clock_gettime for the per-process CPU fallback — named rather than
 //   relied on transitively, the same lesson <cmath> taught in vibe_bands.h this afternoon.
 #include <unistd.h>
@@ -124,6 +126,33 @@ inline std::string esc(const std::string& s_raw) {
  *  human reads TIMES off, so they must not use a monotonic clock — those restart with the
  *  process and would date every ban to 1970. */
 inline long long nowEpoch() { return (long long)time(nullptr); }
+
+/** ★★★ IS THIS ADDRESS CLOUDFLARE'S WORKERS NETWORK (2a06:98c0::/29)? — never a person.
+ *
+ *  Stuart, 2026-09-29: "we get those cloudflare addresses on all logs on all Pi's I would like to
+ *  maybe label them … so people dont think its a dodgy user lingering about." The address was
+ *  2a06:98c0:3600::103 — the fixed source address of every request a Cloudflare WORKER makes.
+ *  ★★ WHICH WORKER: OUR DIRECTORY. `<slug>.vibeserver.vibesdr.net` proxies the landing page and all
+ *     of its HTTP (the WebSocket goes direct — origin.ts socketHost). Its fetch to the tunnel is a
+ *     CROSS-ZONE subrequest, and for those Cloudflare "unconditionally replaces" X-Forwarded-For /
+ *     X-Real-IP "with an internal Cloudflare address to prevent IP spoofing" (Cloudflare docs,
+ *     Request Header Modification). So the `x-forwarded-for: <visitor>` the Worker sets never
+ *     arrives, and every page opened through the directory address — the landing page's 15 s
+ *     spectrogram refresh, the admin page's /vibeserver/radios poll, a listener's own tab — reports
+ *     in as this one address. A REAL visitor behind a masked address, not a bot.
+ *  ★★ NOT WARP. Cloudflare WARP users egress from 104.28.0.0/16 and 2a09:bac0::/29, which this does
+ *     not match, so a real person on WARP keeps their own row. This range is the Workers egress
+ *     alone; nothing a person browses from.
+ *  ★ Pure: a prefix test on the parsed address, so a textual variant ("2A06:98C0:3600:0::103")
+ *    cannot slip past it. */
+inline bool cloudflareWorkerAddr(const std::string& ip) {
+    if (ip.find(':') == std::string::npos) return false;
+    struct in6_addr a {};
+    if (inet_pton(AF_INET6, ip.c_str(), &a) != 1) return false;
+    const uint8_t* b = a.s6_addr;
+    // 2a06:98c0::/29 — the first 16 bits exactly, then the top 13 bits of the next 16.
+    return b[0] == 0x2a && b[1] == 0x06 && b[2] == 0x98 && (b[3] & 0xf8) == 0xc0;
+}
 
 /** Read a whole small file (sysfs, /proc). Empty on any failure — a missing sysfs node is the
  *  normal case on a Mac or in a container, not an error to report. */
@@ -824,7 +853,10 @@ public:
                 *  actually reads. I patched the two file writers and not this one, and the tests
                 *  failed on all four verdict assertions: the field was on disk and invisible.
                 *  Same shape as "ONE RULE, TWO READERS" — ask who ELSE serialises this. */
-               + ",\"admin\":" + (it->admin ? "true" : "false") + visitJson(*it) + "}";
+               + ",\"admin\":" + (it->admin ? "true" : "false") + visitJson(*it)
+               // ★ Our own directory's Worker, not a person — see cloudflareWorkerAddr. The page
+               //   labels the row and leaves it out of visitor and country counts.
+               + (cloudflareWorkerAddr(it->ip) ? ",\"cfw\":true" : "") + "}";
         }
         return j + "]";
     }
@@ -848,6 +880,7 @@ public:
         std::vector<std::pair<std::string, std::vector<std::string>>> byCc;
         for (const auto& r : recs_) {
             if (r.atEpoch < cut || r.cc.empty()) continue;
+            if (cloudflareWorkerAddr(r.ip)) continue;   // ★ Cloudflare's Worker egress is nobody's country
             auto it = std::find_if(byCc.begin(), byCc.end(),
                                    [&](const std::pair<std::string, std::vector<std::string>>& e) {
                                        return e.first == r.cc; });
@@ -912,7 +945,8 @@ public:
                + ",\"cc\":\"" + esc(liveCc(it->ip, it->cc)) + "\""
                + ",\"path\":\"" + esc(it->path) + "\""
                + ",\"agent\":\"" + esc(it->agent) + "\""
-               + ",\"n\":" + std::to_string(it->n) + "}";
+               + ",\"n\":" + std::to_string(it->n)
+               + (cloudflareWorkerAddr(it->ip) ? ",\"cfw\":true" : "") + "}";
         }
         return j + "]";
     }
@@ -925,6 +959,7 @@ public:
         std::vector<std::string> seen;
         for (const auto& r : recs_) {
             if (r.atEpoch < cut) continue;
+            if (cloudflareWorkerAddr(r.ip)) continue;   // ★ not a visitor — see cloudflareWorkerAddr
             if (std::find(seen.begin(), seen.end(), r.ip) == seen.end()) seen.push_back(r.ip);
         }
         return (int)seen.size();
