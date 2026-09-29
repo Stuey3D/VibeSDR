@@ -217,15 +217,33 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   .ring-ac{border-color:rgba(255,255,100,0.85);}
   .ring-gs{border-color:rgba(80,220,255,0.85);}
   /* ── toast — skin lsv-hfdl-toast / lsv-smap-toast ── */
-  #toast{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+  /* ★★★ THE PILL LIVES IN A LANE THAT STOPS SHORT OF THE ZOOM STACK. It was centred with
+     left:50% + translateX(-50%) and max-width:90vw, so a long ground station ("AMX020 via
+     Riverhead, New York, USA just now") ran full width UNDER the +/- buttons (Stuart, 2026-09-29,
+     iPhone, VibeSDR 11 B2). Now left/right define a lane — the right edge clears the zoom control
+     (Leaflet: 10 px margin + 34 px wide; MapLibre's is 29 px) plus an 8 px gap — and auto margins
+     centre the pill inside it, sized to its content.
+     ★★ The three parts are FLEX ITEMS so only the STATION gives way: callsign and age never
+     shrink, the station ellipsises — and showToast first drops it to its first part ("Riverhead")
+     when the whole name will not fit. ★ The ⓘ legend sits ABOVE this lane (bottom 44 px), so the
+     left side needs only the ordinary 10 px margin. */
+  #toast{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));
+    left:max(10px,env(safe-area-inset-left));right:calc(52px + env(safe-area-inset-right));
+    width:fit-content;max-width:calc(100% - 62px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    margin:0 auto;box-sizing:border-box;display:flex;align-items:baseline;gap:0.6em;
     z-index:1000;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.93);border:1px solid rgba(${T.a},0.30);border-radius:20px;
     padding:6px 14px;font-size:13px;letter-spacing:1px;
-    color:rgba(${T.hi},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;max-width:90vw;
-    overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
-  #toast.on{opacity:1;}
+    color:rgba(${T.hi},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;
+    overflow:hidden;cursor:pointer;pointer-events:none;}
+  /* ★ An invisible pill no longer swallows taps meant for the map beneath it. */
+  #toast.on{opacity:1;pointer-events:auto;}
+  .tf,.ta{flex:none;}
+  .tg,.tx{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
   .tf{color:#ffe566;font-size:14px;}
   .tg{color:rgba(255,160,0,0.55);}
   .ta{color:rgba(255,160,0,0.40);font-size:12px;}
+  /* ★ iPhone SE with Display Zoom (320 pt) is the narrowest layout the app has to survive. */
+  @media (max-width:400px){#toast{padding:5px 11px;letter-spacing:0.4px;gap:0.5em;}}
   /* ── legend — skin lsv-smap-legend / lsv-hfdl-legend ── */
   #legend{position:absolute;bottom:max(44px,calc(env(safe-area-inset-bottom) + 34px));left:max(10px,env(safe-area-inset-left));
     z-index:1000;font-size:12px;letter-spacing:0.8px;color:rgba(${T.hi},0.80);pointer-events:auto;}
@@ -249,7 +267,9 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   .scroll-arrow-dn{bottom:0;}
   .scroll-arrow.arr-on{display:block;}
   /* ── stats (digi/cw) — skin lsv-st ── */
-  #statsbtnwrap{position:absolute;bottom:max(120px,calc(env(safe-area-inset-bottom) + 110px));right:max(10px,env(safe-area-inset-right));
+  /* ★ Above the zoom stack, not on it: at 120 px the stats button sat over the GPU map's "+" (its
+     control spans roughly 74-134 px from the bottom with the attribution beneath it). 2026-09-29. */
+  #statsbtnwrap{position:absolute;bottom:max(146px,calc(env(safe-area-inset-bottom) + 136px));right:max(10px,env(safe-area-inset-right));
     z-index:1000;pointer-events:auto;}
   #statsbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
     background:rgba(6,9,6,0.88);border:1px solid rgba(${T.a},0.30);border-radius:8px;cursor:pointer;
@@ -883,11 +903,31 @@ if(KIND==='hfdl'){
     }
   }
 
+  /* ★★ A LONG STATION SHORTENS TO ITS FIRST PART BEFORE IT ELLIPSISES. "via Riverhead, New York,
+   *  USA" at 320 pt would otherwise read "via Riverhead, Ne…"; "via Riverhead" says the same thing
+   *  whole. The full name is kept in the span's title and in the aircraft card. Re-run on resize,
+   *  because a rotation to landscape gives the full name room again. */
+  function fitToastStation(){
+    var tg=toast.querySelector('.tg');
+    if(!tg||!lastFlight||!lastFlight.gs)return;
+    tg.textContent='via '+lastFlight.gs;
+    if(tg.scrollWidth>tg.clientWidth+1){
+      var first=String(lastFlight.gs).split(',')[0].trim();
+      if(first)tg.textContent='via '+first;
+    }
+  }
+  window.addEventListener('resize',function(){setTimeout(fitToastStation,150);});
   function showToast(){
     if(!lastFlight)return;
-    toast.innerHTML='<span class="tf">'+(lastFlight.cs||'???')+'</span>'
-      +(lastFlight.gs?' <span class="tg">via '+lastFlight.gs+'</span>':'')
-      +' <span class="ta">'+age(lastFlight.t)+'</span>';
+    /* ★ Built from text nodes, not innerHTML: the station name comes from the server. */
+    toast.textContent='';
+    var tf=document.createElement('span');tf.className='tf';tf.textContent=lastFlight.cs||'???';toast.appendChild(tf);
+    if(lastFlight.gs){
+      var tg=document.createElement('span');tg.className='tg';tg.textContent='via '+lastFlight.gs;
+      tg.title=lastFlight.gs;toast.appendChild(tg);
+    }
+    var ta=document.createElement('span');ta.className='ta';ta.textContent=age(lastFlight.t);toast.appendChild(ta);
+    fitToastStation();
     toast.classList.add('on');
     if(ageTimer)clearInterval(ageTimer);
     ageTimer=setInterval(function(){
@@ -1226,7 +1266,11 @@ if(KIND==='digi'||KIND==='cw'){
     var band=spotBand(s)||'';
     if(!s.call)return;
     lastSpot=s;
-    toast.textContent=s.call+(s.mode?' '+s.mode:'')+(band?' '+band:'');
+    // ★ In a span, so it ellipsises inside the lane that clears the zoom stack (see #toast).
+    toast.textContent='';
+    var tx=document.createElement('span');tx.className='tx';
+    tx.textContent=s.call+(s.mode?' '+s.mode:'')+(band?' '+band:'');
+    toast.appendChild(tx);
     toast.classList.add('on');
     clearTimeout(toast._tid);
     toast._tid=setTimeout(function(){toast.classList.remove('on');},3000);
