@@ -14,6 +14,7 @@ import { watchProvider } from './src/services/watchProvider';
 import { fetchFrontDoor, radioBaseUrl, isSharedDial,
          radioOccupancy, radioLimits } from './src/services/vibeserverRadios';
 import { favouritesCollection, getFavourites, getTcpFavs, setFavouriteServerType } from './src/services/favourites';
+import { tcpFavHttpBase } from './src/services/discoveredFavs';
 import { bookmarksCollection } from './src/services/bookmarksSync';
 import { registerCollection, registerSyncHook, startCloudSync } from './src/services/cloudSync';
 import {
@@ -411,6 +412,11 @@ export default function App() {
           // synthesised as <proto>://host:port; match that back.
           const tcp = tcpFavs.find((t) => `${t.proto ?? 'rtltcp'}://${t.host}:${t.port}` === url);
           let type = f?.serverType ?? cached?.serverType ?? wtype ?? (tcp ? (tcp.proto ?? 'rtltcp') : undefined);
+          /* ★★ A VIBESERVER SAVED AS A CUSTOM SERVER (typed, or starred from mDNS discovery) is keyed
+           *   to the wrist as `vibeserver://host:port` — a KEY, not an address. The VibeServer branch
+           *   below fetches it, and nothing can fetch that scheme; hand it the http address it lives on,
+           *   which also lets the front-door check below see a multi-radio server. */
+          if (tcp && type === 'vibeserver' && !/^https?:\/\//i.test(url)) url = tcpFavHttpBase(tcp);
           // RE-DETECT the HTTP backend, exactly as the phone's own connectFav does — a favourite saved
           // with the wrong type (e.g. an OWRX added via the custom URL box, which defaults to UberSDR)
           // must still connect right from the watch. fmdx/spyserver/vibeserver/rtl aren't HTTP-sniffable.
