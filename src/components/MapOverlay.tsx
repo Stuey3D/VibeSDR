@@ -208,24 +208,45 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   .maplibregl-ctrl-attrib a{color:rgba(${T.a},0.55);}
   .maplibregl-ctrl-attrib-button{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.55;}
   /* skin lsv-hfdl pulse + rings (verbatim keyframes) */
-  @keyframes pulseac{0%,100%{filter:drop-shadow(0 0 3px rgba(255,255,80,0.5));}50%{filter:drop-shadow(0 0 10px rgba(255,255,80,1)) drop-shadow(0 0 18px rgba(255,200,0,0.7));}}
-  @keyframes pulsegs{0%,100%{filter:drop-shadow(0 0 3px rgba(80,200,255,0.5));}50%{filter:drop-shadow(0 0 10px rgba(80,220,255,1)) drop-shadow(0 0 18px rgba(0,180,255,0.7));}}
-  .pulse-ac{animation:pulseac 1.2s ease-in-out infinite;}
-  .pulse-gs{animation:pulsegs 1.2s ease-in-out infinite;}
+  /* ★★★ THE PULSE WEARS THE MARKER'S OWN COLOUR. It was a fixed yellow (and a cyan ring), and the
+     station only took its signal-strength colour once the NEXT flight moved the glow on — which on
+     a busy HFDL server is after the map has already flown somewhere else, so the colour that
+     answers "how well did I hear it?" was never seen (Stuart, 2026-09-29). --pc is set on the
+     marker element to the SAME rgb the icon is drawn in (gsTone / acTone), so the pulse, the ring
+     and the settled icon are one colour from the first frame. */
+  @keyframes pulsec{0%,100%{filter:drop-shadow(0 0 3px rgba(var(--pc,255,240,60),0.5));}50%{filter:drop-shadow(0 0 10px rgba(var(--pc,255,240,60),1)) drop-shadow(0 0 18px rgba(var(--pc,255,240,60),0.7));}}
+  .pulse-ac,.pulse-gs{animation:pulsec 1.2s ease-in-out infinite;}
   @keyframes ring{0%{transform:translate(-50%,-50%) scale(1);opacity:0.8;}100%{transform:translate(-50%,-50%) scale(3);opacity:0;}}
   .ring{position:absolute;pointer-events:none;z-index:650;width:26px;height:26px;border-radius:50%;border:2px solid;transform:translate(-50%,-50%);animation:ring 1.4s ease-out 3;will-change:transform,opacity;}
-  .ring-ac{border-color:rgba(255,255,100,0.85);}
-  .ring-gs{border-color:rgba(80,220,255,0.85);}
+  .ring-ac,.ring-gs{border-color:rgba(255,240,60,0.85);}
   /* ── toast — skin lsv-hfdl-toast / lsv-smap-toast ── */
-  #toast{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);
+  /* ★★★ THE PILL LIVES IN A LANE THAT STOPS SHORT OF THE ZOOM STACK. It was centred with
+     left:50% + translateX(-50%) and max-width:90vw, so a long ground station ("AMX020 via
+     Riverhead, New York, USA just now") ran full width UNDER the +/- buttons (Stuart, 2026-09-29,
+     iPhone, VibeSDR 11 B2). Now left/right define a lane — the right edge clears the zoom control
+     (Leaflet: 10 px margin + 34 px wide; MapLibre's is 29 px) plus an 8 px gap — and auto margins
+     centre the pill inside it, sized to its content.
+     ★★ The three parts are FLEX ITEMS so only the STATION gives way: callsign and age never
+     shrink, the station ellipsises — and showToast first drops it to its first part ("Riverhead")
+     when the whole name will not fit. ★ The ⓘ legend sits ABOVE this lane (bottom 44 px), so the
+     left side needs only the ordinary 10 px margin. */
+  #toast{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));
+    left:max(10px,env(safe-area-inset-left));right:calc(52px + env(safe-area-inset-right));
+    width:fit-content;max-width:calc(100% - 62px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    margin:0 auto;box-sizing:border-box;display:flex;align-items:baseline;gap:0.6em;
     z-index:1000;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.93);border:1px solid rgba(${T.a},0.30);border-radius:20px;
     padding:6px 14px;font-size:13px;letter-spacing:1px;
-    color:rgba(${T.hi},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;max-width:90vw;
-    overflow:hidden;text-overflow:ellipsis;cursor:pointer;}
-  #toast.on{opacity:1;}
+    color:rgba(${T.hi},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;
+    overflow:hidden;cursor:pointer;pointer-events:none;}
+  /* ★ An invisible pill no longer swallows taps meant for the map beneath it. */
+  #toast.on{opacity:1;pointer-events:auto;}
+  .tf,.ta{flex:none;}
+  .tg,.tx{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
   .tf{color:#ffe566;font-size:14px;}
   .tg{color:rgba(255,160,0,0.55);}
   .ta{color:rgba(255,160,0,0.40);font-size:12px;}
+  /* ★ iPhone SE with Display Zoom (320 pt) is the narrowest layout the app has to survive. */
+  @media (max-width:400px){#toast{padding:5px 11px;letter-spacing:0.4px;gap:0.5em;}}
   /* ── legend — skin lsv-smap-legend / lsv-hfdl-legend ── */
   #legend{position:absolute;bottom:max(44px,calc(env(safe-area-inset-bottom) + 34px));left:max(10px,env(safe-area-inset-left));
     z-index:1000;font-size:12px;letter-spacing:0.8px;color:rgba(${T.hi},0.80);pointer-events:auto;}
@@ -249,7 +270,9 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   .scroll-arrow-dn{bottom:0;}
   .scroll-arrow.arr-on{display:block;}
   /* ── stats (digi/cw) — skin lsv-st ── */
-  #statsbtnwrap{position:absolute;bottom:max(120px,calc(env(safe-area-inset-bottom) + 110px));right:max(10px,env(safe-area-inset-right));
+  /* ★ Above the zoom stack, not on it: at 120 px the stats button sat over the GPU map's "+" (its
+     control spans roughly 74-134 px from the bottom with the attribution beneath it). 2026-09-29. */
+  #statsbtnwrap{position:absolute;bottom:max(146px,calc(env(safe-area-inset-bottom) + 136px));right:max(10px,env(safe-area-inset-right));
     z-index:1000;pointer-events:auto;}
   #statsbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
     background:rgba(6,9,6,0.88);border:1px solid rgba(${T.a},0.30);border-radius:8px;cursor:pointer;
@@ -726,14 +749,32 @@ if(KIND==='hfdl'){
   updSnap();
   snapBtn.addEventListener('click',function(){snapOn=!snapOn;try{localStorage.setItem('lsv_hfdl_snap',snapOn?'1':'0');}catch(e){}updSnap();});
 
-  function acColour(lastSeen,glow){if(glow)return'rgba(255,240,60,1)';var a=Math.floor(Date.now()/1000)-lastSeen;
-    if(a<120)return'rgba(80,255,120,0.92)';if(a<300)return'rgba(180,255,80,0.88)';
-    if(a<900)return'rgba(255,190,40,0.85)';return'rgba(255,80,60,0.75)';}
+  /* ★★ ONE COLOUR PER MARKER, glowing or not — the pulse no longer swaps in yellow (see pulsec).
+   *  Tones return the rgb triple separately so the pulse and ring can use it at their own alpha. */
+  function acTone(lastSeen){var a=Math.floor(Date.now()/1000)-lastSeen;
+    if(a<120)return{rgb:'80,255,120',a:0.92};if(a<300)return{rgb:'180,255,80',a:0.88};
+    if(a<900)return{rgb:'255,190,40',a:0.85};return{rgb:'255,80,60',a:0.75};}
+  function acColour(lastSeen){var t=acTone(lastSeen);return'rgba('+t.rgb+','+t.a+')';}
+  function gsTone(sig){
+    if(sig==null||sig===0)return{rgb:'120,120,140',a:0.60,x:true};
+    if(sig>-40)return{rgb:'60,220,80',a:0.92};
+    if(sig>-55)return{rgb:'220,200,40',a:0.92};
+    return{rgb:'255,100,60',a:0.85};
+  }
+  /* ★ Start (rgb) or stop (null) a marker's pulse in its own colour. The custom property sits on the
+   *  same element as the class, because that is the element the animation runs on. */
+  function setPulse(mk,cls,rgb){
+    try{
+      var el=mk.getElement();if(!el)return;
+      if(rgb){el.style.setProperty('--pc',rgb);el.classList.add(cls);}
+      else{el.classList.remove(cls);el.style.removeProperty('--pc');}
+    }catch(e){console.error('HFDL: could not set the marker pulse',e);}
+  }
 
   // skin _acSVG: fuselage ellipse + swept wings + tail, rotated, glow shadow
   function acSVG(glow,bearing,lastSeen){
-    var c=acColour(lastSeen||0,glow);
-    var f=glow?'filter:drop-shadow(0 0 5px rgba(255,240,60,0.85));':'';
+    var t=acTone(lastSeen||0), c='rgba('+t.rgb+','+t.a+')';
+    var f=glow?'filter:drop-shadow(0 0 5px rgba('+t.rgb+',0.85));':'';
     return'<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26" style="'+f+'">'
     +'<g transform="rotate('+(bearing||0)+',13,13)">'
     +'<ellipse cx="13" cy="13" rx="2.5" ry="9" fill="'+c+'" stroke="rgba(0,0,0,0.3)" stroke-width="0.5"/>'
@@ -745,13 +786,10 @@ if(KIND==='hfdl'){
   // skin _gsSVG verbatim: lattice radio tower (mast + legs + cross braces +
   // ground line) with radiating wave arcs off the antenna tip, ✕ when silent
   function gsSVG(glow,sig){
-    var c,xOver=false;
-    if(glow){c='rgba(255,240,60,1)';}
-    else if(sig==null||sig===0){c='rgba(120,120,140,0.60)';xOver=true;}
-    else if(sig>-40){c='rgba(60,220,80,0.92)';}
-    else if(sig>-55){c='rgba(220,200,40,0.92)';}
-    else{c='rgba(255,100,60,0.85)';}
-    var f=glow?'filter:drop-shadow(0 0 5px rgba(255,240,60,0.85));':'';
+    /* ★★ The signal-strength colour WHILE it glows too — it used to be yellow until the glow moved
+     *  on. The same thresholds as sigBars and the legend. */
+    var t=gsTone(sig), c='rgba('+t.rgb+','+t.a+')', xOver=!!t.x;
+    var f=glow?'filter:drop-shadow(0 0 5px rgba('+t.rgb+',0.85));':'';
     var svg='<svg xmlns="http://www.w3.org/2000/svg" width="30" height="36" viewBox="0 0 30 36" style="'+f+'">'
     +'<path d="M10,11 A7,7 0 0,0 10,1" fill="none" stroke="'+c+'" stroke-width="2" stroke-linecap="round"/>'
     +'<path d="M20,11 A7,7 0 0,1 20,1" fill="none" stroke="'+c+'" stroke-width="2" stroke-linecap="round"/>'
@@ -796,13 +834,14 @@ if(KIND==='hfdl'){
 
   // skin rings — overlay-pane divs, CSS animation, self-removing
   var ringAC=null, ringGS=null;
-  function placeRing(latlng,cls){
+  function placeRing(latlng,cls,rgb){
     /* ★ On the GPU map a ring is a zero-size marker MapLibre keeps in place, with the ring INSIDE it:
      *  the ring animates its own transform (scale + centring), which MapLibre would overwrite if it
      *  were the marker element itself. */
     if(window.__GL){
       var wrap=document.createElement('div');wrap.style.width='0';wrap.style.height='0';
       var ring=document.createElement('div');ring.className='ring '+cls;ring.style.left='0';ring.style.top='0';
+      if(rgb)ring.style.borderColor='rgba('+rgb+',0.85)';
       wrap.appendChild(ring);
       var gm=new maplibregl.Marker({element:wrap,anchor:'center'}).setLngLat([latlng.lng,latlng.lat]).addTo(map._gl);
       wrap._mk=gm;wrap._tid=setTimeout(function(){gm.remove();},4400);
@@ -811,6 +850,7 @@ if(KIND==='hfdl'){
     var pane=map.getPane('overlayPane');if(!pane)return null;
     var el=document.createElement('div');
     el.className='ring '+cls;
+    if(rgb)el.style.borderColor='rgba('+rgb+',0.85)';
     pane.appendChild(el);
     try{var p=map.latLngToLayerPoint(latlng);el.style.left=p.x+'px';el.style.top=p.y+'px';}catch(e){}
     el._tid=setTimeout(function(){if(el.parentNode)el.parentNode.removeChild(el);},4400);
@@ -838,8 +878,9 @@ if(KIND==='hfdl'){
     if(!acLL)return;
     removeRing(ringAC);ringAC=null;removeRing(ringGS);ringGS=null;
     map.once('moveend',function(){
-      if(acKey&&acM[acKey])ringAC=placeRing(acM[acKey].getLatLng(),'ring-ac');
-      if(gsid!=null&&gsM[gsid])ringGS=placeRing(gsM[gsid].getLatLng(),'ring-gs');
+      // ★ Rings in the marker's own colour, like its pulse (see pulsec).
+      if(acKey&&acM[acKey])ringAC=placeRing(acM[acKey].getLatLng(),'ring-ac',acTone((acM[acKey]._d||{}).last_seen||0).rgb);
+      if(gsid!=null&&gsM[gsid])ringGS=placeRing(gsM[gsid].getLatLng(),'ring-gs',gsTone(gsM[gsid]._sig).rgb);
     });
     if(gsLL){
       var b=L.latLngBounds([acLL,gsLL]);
@@ -859,12 +900,12 @@ if(KIND==='hfdl'){
   function glowGSfn(gsid){
     if(glowGS!=null&&gsM[glowGS]){
       gsM[glowGS].setIcon(icon(gsSVG(false,gsM[glowGS]._sig),30,36,15,36));
-      try{gsM[glowGS].getElement().classList.remove('pulse-gs');}catch(e){}
+      setPulse(gsM[glowGS],'pulse-gs',null);
     }
     glowGS=gsid;
     if(gsid!=null&&gsM[gsid]){
       gsM[gsid].setIcon(icon(gsSVG(true,gsM[gsid]._sig),30,36,15,36));
-      try{gsM[gsid].getElement().classList.add('pulse-gs');}catch(e){}
+      setPulse(gsM[gsid],'pulse-gs',gsTone(gsM[gsid]._sig).rgb);
     }
   }
   function glowACfn(key){
@@ -872,22 +913,42 @@ if(KIND==='hfdl'){
       var d=acM[glowAC]._d||{};
       acM[glowAC].setIcon(icon(acSVG(false,d.bearing||0,d.last_seen||0),26,26,13,13));
       acM[glowAC]._sigr='';
-      try{acM[glowAC].getElement().classList.remove('pulse-ac');}catch(e){}
+      setPulse(acM[glowAC],'pulse-ac',null);
     }
     glowAC=key;
     if(key&&acM[key]){
       var d=acM[key]._d||{};
       acM[key].setIcon(icon(acSVG(true,d.bearing||0,d.last_seen||0),26,26,13,13));
       acM[key]._sigr='';
-      try{acM[key].getElement().classList.add('pulse-ac');}catch(e){}
+      setPulse(acM[key],'pulse-ac',acTone(d.last_seen||0).rgb);
     }
   }
 
+  /* ★★ A LONG STATION SHORTENS TO ITS FIRST PART BEFORE IT ELLIPSISES. "via Riverhead, New York,
+   *  USA" at 320 pt would otherwise read "via Riverhead, Ne…"; "via Riverhead" says the same thing
+   *  whole. The full name is kept in the span's title and in the aircraft card. Re-run on resize,
+   *  because a rotation to landscape gives the full name room again. */
+  function fitToastStation(){
+    var tg=toast.querySelector('.tg');
+    if(!tg||!lastFlight||!lastFlight.gs)return;
+    tg.textContent='via '+lastFlight.gs;
+    if(tg.scrollWidth>tg.clientWidth+1){
+      var first=String(lastFlight.gs).split(',')[0].trim();
+      if(first)tg.textContent='via '+first;
+    }
+  }
+  window.addEventListener('resize',function(){setTimeout(fitToastStation,150);});
   function showToast(){
     if(!lastFlight)return;
-    toast.innerHTML='<span class="tf">'+(lastFlight.cs||'???')+'</span>'
-      +(lastFlight.gs?' <span class="tg">via '+lastFlight.gs+'</span>':'')
-      +' <span class="ta">'+age(lastFlight.t)+'</span>';
+    /* ★ Built from text nodes, not innerHTML: the station name comes from the server. */
+    toast.textContent='';
+    var tf=document.createElement('span');tf.className='tf';tf.textContent=lastFlight.cs||'???';toast.appendChild(tf);
+    if(lastFlight.gs){
+      var tg=document.createElement('span');tg.className='tg';tg.textContent='via '+lastFlight.gs;
+      tg.title=lastFlight.gs;toast.appendChild(tg);
+    }
+    var ta=document.createElement('span');ta.className='ta';ta.textContent=age(lastFlight.t);toast.appendChild(ta);
+    fitToastStation();
     toast.classList.add('on');
     if(ageTimer)clearInterval(ageTimer);
     ageTimer=setInterval(function(){
@@ -978,12 +1039,15 @@ if(KIND==='hfdl'){
           if(gsM[id]._sig!==sig){
             gsM[id]._sig=sig;
             gsM[id].setIcon(icon(gsSVG(glowGS===id,sig),30,36,15,36));
-            if(glowGS===id){try{gsM[id].getElement().classList.add('pulse-gs');}catch(e){}}
+            if(glowGS===id)setPulse(gsM[id],'pulse-gs',gsTone(sig).rgb);
           }
         }else{
           var mk=L.marker([s.lat,s.lon],{icon:icon(gsSVG(glowGS===id,sig),30,36,15,36),zIndexOffset:500});
           mk._sig=sig;
           mk.addTo(map).bindPopup(ph,{maxWidth:240});
+          /* ★ A station that is ALREADY the glowing one when its marker is first made (the first
+           *  flight arrives before the station list) pulses from birth, not from the next flight. */
+          if(glowGS===id)setPulse(mk,'pulse-gs',gsTone(sig).rgb);
           gsM[id]=mk;
         }
       });
@@ -1024,7 +1088,7 @@ if(KIND==='hfdl'){
         var pop=buildACPopup(a,a.lat,a.lon,hdg);
         // icon signature: only swap the icon when its rendering changes —
         // otherwise setLatLng alone rides the CSS transition (GPU glide)
-        var sig=acColour(a.last_seen,glowAC===a.key)+'|'+Math.round(hdg/3);
+        var sig=acColour(a.last_seen)+'|'+(glowAC===a.key?1:0)+'|'+Math.round(hdg/3);
         if(acM[a.key]){
           /* ★★★ COUNT WHAT ACTUALLY MOVES, NOT WHAT EXISTS. I first gated the glide on the
            *  NUMBER OF AIRCRAFT, and Stuart corrected it: "with HFDL not all aircraft update at
@@ -1041,7 +1105,7 @@ if(KIND==='hfdl'){
           if(acM[a.key]._sigr!==sig){
             acM[a.key]._sigr=sig;
             acM[a.key].setIcon(icon(acSVG(glowAC===a.key,hdg,a.last_seen),26,26,13,13));
-            if(glowAC===a.key){try{acM[a.key].getElement().classList.add('pulse-ac');}catch(e){}}
+            if(glowAC===a.key)setPulse(acM[a.key],'pulse-ac',acTone(a.last_seen).rgb);
           }
           if(acM[a.key].getPopup())acM[a.key].setPopupContent(pop);
         }else{
@@ -1049,6 +1113,8 @@ if(KIND==='hfdl'){
           mk._d={bearing:hdg,last_seen:a.last_seen};
           mk._sigr=sig;
           mk.addTo(map).bindPopup(pop,{maxWidth:220});
+          // ★ Same for the aircraft: on the first poll the glow is chosen before its marker exists.
+          if(glowAC===a.key)setPulse(mk,'pulse-ac',acTone(a.last_seen).rgb);
           acM[a.key]=mk;
         }
       });
@@ -1226,7 +1292,11 @@ if(KIND==='digi'||KIND==='cw'){
     var band=spotBand(s)||'';
     if(!s.call)return;
     lastSpot=s;
-    toast.textContent=s.call+(s.mode?' '+s.mode:'')+(band?' '+band:'');
+    // ★ In a span, so it ellipsises inside the lane that clears the zoom stack (see #toast).
+    toast.textContent='';
+    var tx=document.createElement('span');tx.className='tx';
+    tx.textContent=s.call+(s.mode?' '+s.mode:'')+(band?' '+band:'');
+    toast.appendChild(tx);
     toast.classList.add('on');
     clearTimeout(toast._tid);
     toast._tid=setTimeout(function(){toast.classList.remove('on');},3000);
