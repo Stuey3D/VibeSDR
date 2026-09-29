@@ -179,6 +179,12 @@ object VibeTunnel {
     @Synchronized
     fun startTunnel(ctx: Context, localPort: Int, onReady: (String?) -> Unit) {
         if (running.get()) { onReady(tunnelUrl.ifEmpty { null }); return }
+        // ★ localPort is interpolated into the --url argument handed to ProcessBuilder; require it
+        //   to be a plain TCP port number so nothing but digits ever reaches that argument.
+        if (localPort !in 1..65535) {
+            lastError = "invalid local port"
+            onReady(null); return
+        }
         val bin = binary(ctx)
         if (!bin.exists()) {
             // ★ AGENTS.md: never leave a control visible and inert. The switch should be absent on
