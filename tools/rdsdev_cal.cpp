@@ -10,6 +10,13 @@
 // stations; a ~1.3 dB residual remains and is believed to be real subcarrier loss in the
 // WFM channel filter, NOT a scaling error — see rds.cpp.
 //
+// ★★ 2026-09-29: CONFIRMED, MEASURED, AND TAKEN OUT OF THE PATH. vibeserver/test-mpx-measure.cpp
+// runs this file's pulse (IEC shaping, unit ABSOLUTE peak over pseudo-random data) through the
+// whole server path: the LISTENER's chain lost 10-25 % of the subcarrier depending on passband and
+// capture rate, and the Advanced RDS figures now come from MpxMeasure's fixed flat path, which
+// loses nothing (0.1 % against an ideal demodulator). Over that test's data the crest reads 1.545
+// where 20000 random bits give 1.520 here — the absolute peak depends on which bit runs occur.
+//
 // We synthesise a spec-shaped RDS subcarrier of KNOWN peak deviation, push it through the
 // EXACT receive chain rds.cpp uses (designLowpass(2400/fs, 2400/fs) + decimating RealFir),
 // and measure the mean envelope the way process() does. The constant we want is

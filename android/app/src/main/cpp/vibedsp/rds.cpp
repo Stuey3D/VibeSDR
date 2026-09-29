@@ -264,8 +264,53 @@ int RdsDemod::constellation(float* xy, int maxPts) const {
  *   treating kRdsChainGain as universal. The three levels agreeing to ±1 % says the SHAPE is right
  *   (a pure scale, not level-dependent), which is the part that matters most.
  * ▶ Verification: avg 0.9 -> 1.183 against a set 1.2 (-1.4 %); peak 1.0 -> 1.205 (+0.4 %).
+ *
+ * ══ 2026-09-29: THE KNOWN LIMIT WAS THE FAULT — AND THE FIX IS A PATH, NOT A CONSTANT ══════════════
+ *
+ * ★★★ The "re-measure across widths" above was done, by Onfliner, with the same transmitter at 3.0 kHz
+ *   (Airspy): ±100 kHz @ 3 MS/s read 2.7, ±150 @ 3 MS/s 3.0-3.1, ±100 @ 6 MS/s 2.8, ±125 @ 6 MS/s
+ *   2.8-2.9. The loss WAS in the listener's chain and it DID move — with the passband, with auto
+ *   bandwidth, and with the capture rate's decimation plan. No constant can undo a loss that changes
+ *   with a slider; 1.205 was simply its value at the configuration he calibrated on.
+ * ★★ SO EVERY DEVIATION READING NOW COMES FROM MpxMeasure (vibedsp.h) — its own receiver, fed ahead of
+ *   the listener's passband, one fixed 384 kS/s channel flat to ±150 kHz, the discriminator's sinc
+ *   equalised, one 192 kS/s multiplex. This RdsDemod instance still DECODES for the listener; the
+ *   one inside MpxMeasure MEASURES. Same code, same constants — only the second one's figures are sent.
+ * ★★ AND ON THAT PATH THE CHAIN LOSSES ARE MEASURED TO BE NIL. vibeserver/test-mpx-measure.cpp puts a
+ *   synthetic IEC-shaped RDS subcarrier of known level through the whole server path AND, separately,
+ *   straight into an RdsDemod with perfect references (no FM, no channel, no discriminator): the two
+ *   agree to 0.1 % (3.88 / 3.881 on the uncorrected mean-envelope figure), at every capture rate from
+ *   2.048 to 8 MS/s and every passband including auto bandwidth. A 57 kHz tone through the path reads
+ *   3.000 kHz for 3.000 set; the pilot 6.745 for 6.75. There is nothing left for a chain gain to undo:
+ *
+ *        kRdsChainGain   1.205  ->  1.000   (the measured transfer of the fixed path)
+ *
+ * ★★ THE CREST FACTORS STAY (1.659 mean-envelope, 1.507 RMS), deliberately, and here is the evidence.
+ *   They describe the ENCODER's waveform, not our chain, and three real ones agree they are right:
+ *     · Onfliner's transmitter, 2026-09-26: peak/avg on the old path 1.087 where the ideal IEC shape
+ *       gives 1.046 through the same chain — its envelope is ~4 % peakier than the textbook shape;
+ *     · BUSINESS 87.5 against MpxTool, 2026-09-29: peak/raw 1.023 where the ideal gives 0.959 —
+ *       ~7 % peakier;
+ *     · and with 1.659 on the fixed path the three stations of that video predict 4.10 / 3.68 / 1.40
+ *       kHz against MpxTool's 4.25 / 3.83 / 1.43 — MpxTool ~3-4 % above us on RDS, exactly as it sits
+ *       ~4 % above us on the PILOT, which Hans's PIRA confirmed we read correctly (to 0.1 kHz on six
+ *       stations). One instrument, one scale offset, on both quantities.
+ *   The ideal IEC shape (the synthetic) has a mean-envelope crest of 1.545 over pseudo-random data
+ *   (rdsdev_cal: 1.520 over 20000 random bits), so ON THE SYNTHETIC the avg/raw figures read ~7 % high
+ *   while the PEAK — which assumes no crest at all — reads its absolute peak to +1 %. That split is
+ *   the honest one: the peak is measured, the average is an estimate calibrated on real encoders.
+ *   ▶ If a future reference shows real encoders at the textbook crest, 1.659 -> 1.545 (and 1.507 ->
+ *     1.40) is the one-line change, and test-mpx-measure prints the figure it would give.
+ * ★★ AND THE AVERAGE NO LONGER READS LOW ON MUSIC. The guard band below sat at 51 kHz instead of 63
+ *   (see process()), inside the stereo difference's upper sideband, and subtracted programme as
+ *   noise — ~25-30 % low on treble-rich stations, right on speech. Onfliner's MpxTool video showed it
+ *   on Jazz and Rock FM and not on BUSINESS; it looked like a rotating-encoder effect only because both
+ *   music stations happened to rotate. Locked or rotating, avg == raw now (test-mpx-measure).
+ * ▶ Expected on Onfliner's transmitter at 3.0 kHz, if his earlier ±150 @ 3 MS/s reading (3.05) was
+ *   right: ~2.85 on the fixed path at EVERY passband and rate (the listener chain's transfer at that
+ *   one configuration was 0.89 on the synthetic; 1.205 x 0.89 = 1.07 of it survived as over-read).
  */
-static constexpr float kRdsChainGain = 1.205f;
+static constexpr float kRdsChainGain = 1.000f;
 
 float RdsDemod::rdsDeviationPeakKHz() const {
     /* ★★★ THE SAME "NO SUBCARRIER, NO NUMBER" GATE AS THE AVERAGED PATH — and it was missing
@@ -332,7 +377,7 @@ float RdsDemod::rdsDeviationKHz() const {
          *     ★★ CORRECTION, 2026-09-29: the guard did NOT sit at 63 kHz — a sign error put it at
          *        51 kHz, in the stereo difference's upper sideband (see process()). What a wide IF
          *        let through was STEREO TREBLE, which a narrow IF's roll-off at 51 kHz had been
-         *        hiding. Fixed.
+         *        hiding. Fixed; and the readout now comes from MpxMeasure's fixed path anyway.
          *  ★★ So the correction may reduce the reading, never annihilate it. When the subtraction
          *     would leave nothing, the guard is measuring something that is not our noise floor,
          *     and the uncorrected estimate — which needs no guard at all — is the better answer.
@@ -676,7 +721,7 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
         /* ★★ SCALED TO THE RDS BAND'S NOISE, NOT THE GUARD'S. FM's discriminator noise rises as f², so
          *  the band at 63 kHz holds (63/57)² = 1.22x the noise the RDS band at 57 kHz does; subtracting
          *  it unscaled over-removes on exactly the weak signals the correction exists for. (57/63)² is
-         *  the whole derivation — valid on a flat channel (the listener.s is not, which is its own fault). */
+         *  the whole derivation — valid on a flat channel, which the instrument's is (MpxMeasure). */
         constexpr float kGuardNoiseScale = (57.0f / 63.0f) * (57.0f / 63.0f);
         const float inst = std::max(0.0f, rdsPow_ - kGuardNoiseScale * guardPow_);
         sigPowSlow_ += 0.02f * (inst - sigPowSlow_);

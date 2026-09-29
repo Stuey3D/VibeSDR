@@ -52,6 +52,7 @@ g++ $FLAGS \
   "$DSP/stereo.cpp" \
   "$DSP/rds.cpp" \
   "$DSP/pipeline.cpp" \
+  "$DSP/mpxmeasure.cpp" \
   "$DSP/third_party/kissfft/kiss_fft.c" \
   "$DSP/third_party/kissfft/kiss_fftr.c" \
   -I"$DSP" \
