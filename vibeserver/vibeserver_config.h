@@ -81,6 +81,7 @@ struct Config {
     std::string trustedProxies;   ///< see ServerConfig::trustedProxies
     bool        oneRadioPerIp = true;  ///< see ServerConfig::oneRadioPerIp
     int         maxRadiosPerIp = 1;    ///< see ServerConfig::maxRadiosPerIp
+    int         decoderMax = 0;        ///< see ServerConfig::decoderMax
     std::string allowRanges, blockRanges;   ///< see RadioConfig::allowRanges
     std::string pin, adminPass;
     /** ★★ THIS radio's own PIN, if the owner set one — see effectiveFor(). Empty for almost every
@@ -761,6 +762,12 @@ struct ServerConfig {
      *  ★ The false positive from the note above still applies and still costs nothing: a watch
      *  tunnelling through its paired phone shares one address. */
     int         maxRadiosPerIp = 1;
+    /** ★★★ HOW MANY DECODERS THE MACHINE RUNS AT ONCE — RTTY/NAVTEX/WEFAX/SSTV/time signals, and
+     *  FT8+FT4 counted as one — across EVERY radio, because the CPU is the machine's (B6). 0 = the
+     *  default for this hardware (LocalSdrShim::decoderDefaultMax). The first-setup benchmark
+     *  measures each decoder here and writes its recommendation into this field; the owner can
+     *  change it on the setup page, the admin page or in the app. */
+    int         decoderMax = 0;
     int         port = 0;      // the ONE port that leaves the machine
     bool        web = true;
     std::vector<RadioConfig> radios;

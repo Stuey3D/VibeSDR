@@ -104,6 +104,8 @@
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
+#include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
+#include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 #include "vibe_setup_page.h"
 #include "vibe_benchmark.h"   // ★ benchProgressJson — the live progress a page draws its bar from
@@ -4650,6 +4652,76 @@ static int vsRawIqDefaultMax() {
 #endif
 }
 static int vsRawIqMax() { const int m = g_vsRawIqMax.load(std::memory_order_relaxed); return m > 0 ? m : vsRawIqDefaultMax(); }
+
+// ── ★★★ THE DECODER LIMIT — how many decoders the BOX runs at once (B6, 2026-09-30) ─────────────
+// Stuart: "as part of the benchmark test advise how many simultaneous decoders can be run — it may
+// be that with this current load another 4 users could have decoders but not all 10 at once". The
+// benchmark measures each decoder on this hardware and recommends a figure (vibe_benchmark.h,
+// `decoders.recommend`); the setup page and the app write it into the config as the owner's
+// default, and the owner can change it (setup page, admin page, the app's server settings).
+// ★ PER BOX, because that is where the CPU is — see FileSlots in vibe_decoder_host.h.
+static std::atomic<int> g_vsDecoderMax{0};      // 0 = the conservative default below
+static std::mutex       g_vsDecoderSlotDirMtx;
+static std::string      g_vsDecoderSlotDir;     // the runtime dir every radio process shares ("" = in-process)
+/** ★★ THE DEFAULT FOR A BOX THAT NEVER RAN THE NEW BENCHMARK — conservative, from what hwinfo can
+ *  see, and deliberately not generous: it is what an install upgraded in place gets without anybody
+ *  choosing, and a limit that is too low is one refusal with a clear message while one that is too
+ *  high is every listener's audio breaking up (decoders are lowest priority, but a box pinned at
+ *  100 % still starves the network and spectrum threads above them).
+ *  ★ Measured anchors behind the numbers (2026-09): FT8+FT4 — the heaviest decoder — decodes a busy
+ *    slot in well under its 15 s on a Pi 2 core but takes most of an A53 core in bursts; RTTY/NAVTEX
+ *    are a few % of any core. So: phones and TVs (A53-class, and the Sony already spends a core on
+ *    Advanced RDS) 2; 32-bit ARM (Pi 2/3 on armhf, the minimum spec) 2; 64-bit ARM 3 below 1.6 GHz
+ *    (Pi 3), 4 above (Pi 4/5/500); x86 and Macs by core count. The benchmark replaces this with a
+ *    measured figure the moment the owner runs it. */
+static int vsDecoderDefaultMax() {
+    const unsigned n = std::max(1u, std::thread::hardware_concurrency());
+#if defined(__ANDROID__)
+    (void)n; return 2;
+#elif defined(__arm__)
+    (void)n; return 2;
+#elif defined(__aarch64__) && defined(__linux__)
+    long khz = 0;
+    if (FILE* f = std::fopen("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", "r")) {
+        if (std::fscanf(f, "%ld", &khz) != 1) khz = 0;
+        std::fclose(f);
+    }
+    if (n < 4) return 2;
+    return (khz > 0 && khz < 1600000) ? 3 : 4;
+#else
+    return n >= 8 ? 8 : n >= 4 ? 6 : 2;
+#endif
+}
+/** The limit in force for THIS process: the owner's figure, else the default. */
+static int vsDecoderMaxLocal() { const int m = g_vsDecoderMax.load(std::memory_order_relaxed); return m > 0 ? m : vsDecoderDefaultMax(); }
+static std::string vsDecoderSlotDir() { std::lock_guard<std::mutex> lk(g_vsDecoderSlotDirMtx); return g_vsDecoderSlotDir; }
+/** ★ The limit in force on the BOX. Every radio process loads the same config, but an owner's change
+ *  arrives at ONE of them (whichever served the admin page), so it is also written beside the slot
+ *  files and every process reads it from there at each claim — a change applies box-wide at once,
+ *  without restarting anybody's radio. Unreadable = this process's own figure. */
+static int vsDecoderMax() {
+    const std::string d = vsDecoderSlotDir();
+    if (!d.empty())
+        if (FILE* f = std::fopen((d + "/decoder-max").c_str(), "r")) {
+            int v = 0; const bool okv = std::fscanf(f, "%d", &v) == 1; std::fclose(f);
+            if (okv && v > 0) return v;
+        }
+    return vsDecoderMaxLocal();
+}
+static void vsDecoderMaxPublish() {
+    const std::string d = vsDecoderSlotDir();
+    if (d.empty()) return;
+    const std::string tmp = d + "/decoder-max.tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        std::fprintf(f, "%d\n", vsDecoderMaxLocal()); std::fclose(f);
+        std::rename(tmp.c_str(), (d + "/decoder-max").c_str());
+    }
+}
+/** The box-wide slots. Built on first use, which is after startup has named the directory. */
+static vibe::FileSlots& vsDecoderSlots() {
+    static vibe::FileSlots slots(vsDecoderSlotDir(), [] { return vsDecoderMax(); });
+    return slots;
+}
 /** ★ The owner's ceiling for raw IQ on the local network, in Hz (0 = none). The full span is
  *  offered only when the capture rate is within it — the radio's own rates, no resampling — so an
  *  owner on Wi-Fi or a small box can keep an RTL at 2.4 MS/s off the LAN while still serving
@@ -6274,94 +6346,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::vector<float> shoulderBins_;
     std::vector<float> contrastBins_;
 
-    // Audio-extension decoder (RTTY etc.) on /ws/dxcluster — fed the demod audio.
-    /** ★ What is attached, for the admin view — "RTTY" reads better than a null pointer check,
-     *  and it is the one thing that says WHY a listener is costing more than the others. */
-    std::string currentDecoder;
-    std::mutex decoderMtx;
-    FskDecoder* decoder = nullptr;
-    WefaxDecoder* wefax = nullptr;          // active image decoder (WEFAX), or null
-    // FT8/FT4 digital-spots decoders (independent of the text/image decoders).
-    std::mutex spotsMtx;
-    Ft8Decoder* ft8 = nullptr;
-    Ft8Decoder* ft4 = nullptr;
-    bool spotsActive = false;
-    int  spotDecim = 0;                      // 48k→12k decimation counter
-    float spotAcc = 0.0f;                    // box-average accumulator
-    // SSTV image decoder (audio-extension). Runs a video-decode thread, so all
-    // dxClient sends are serialised through dxSendMtx.
-    SstvDecoder* sstv = nullptr;
-    /** MSF / DCF77 time signals. Audio-path like the rest — see decoders/time_decoder.h. */
-    TimeDecoder* timeDec = nullptr;
-    std::string  morseWord_;                ///< RWM's callsign, accumulated for display
-    int  sstvDecim = 0; float sstvAcc = 0.0f;
-    std::mutex dxSendMtx;
-    std::shared_ptr<net::Socket> dxClient;
-    /** ★★★ THE OTHER LISTENERS' DECODER SOCKETS. On a shared dial the decoder is shared like the
-     *  audio and the RDS: whoever opens it drives it, and everybody else sees a MIRROR of the same
-     *  output (Stuart, 2026-08-20: "the decoder box needs to be shared too, just show a mirror of
-     *  it to the others when its up"). A decoder is expensive — one per listener would be the
-     *  wrong answer on a receiver whose whole point is that N listeners cost what one does. */
-    std::vector<std::shared_ptr<net::Socket>> dxExtra;
-    /** ★★★ WHAT THE DECODE HAS DRAWN SO FAR, so a listener who joins halfway sees the whole image.
-     *
-     *  A WEFAX chart takes about ten minutes and an SSTV frame a couple, and a mirror that only
-     *  receives what arrives AFTER it attaches gets the bottom half of a picture on a blank canvas
-     *  — which reads as a broken decoder rather than a late arrival (Stuart asked the right
-     *  question: "if a user connects halfway through a wefax decode do they see what has already
-     *  been decoded?").
-     *  ★★ FORMAT-AGNOSTIC ON PURPOSE. This records the FRAMES, not the picture: a 0x02 start marker
-     *     clears the log, everything after it is kept, and a joiner is handed the lot. It therefore
-     *     works for WEFAX, SSTV and anything else added later without knowing what a row means.
-     *  ★ Bounded, and it stops recording rather than dropping the oldest: losing the TOP of an
-     *    image to make room for the bottom is worse than a short one, and a full-height WEFAX at
-     *    1200-odd rows fits inside this comfortably. */
-    std::mutex dxReplayMtx;
-    std::vector<std::vector<uint8_t>> dxReplay;
-    size_t dxReplayBytes = 0;
-    static constexpr size_t kDxReplayMax = 4u * 1024 * 1024;
-
-    /** Send one decoder frame to every attached decoder socket. Call WITHOUT clientMtx held. */
-    void dxBroadcast(int op, const uint8_t* data, size_t len) {
-        std::vector<std::shared_ptr<net::Socket>> socks;
-        { std::lock_guard<std::mutex> lk(clientMtx);
-          if (dxClient && dxClient->isOpen()) socks.push_back(dxClient);
-          for (auto& d : dxExtra) if (d && d->isOpen()) socks.push_back(d); }
-        for (auto& sk : socks) sendWs(sk, op, data, len);
-        // ★ Only the binary decoder stream is replayable; a text line carries its own timestamp
-        //   and is history the client already keeps.
-        if (op != 0x2 || len == 0) return;
-        std::lock_guard<std::mutex> rl(dxReplayMtx);
-        if (len == 1 && data[0] == 0x02) { dxReplay.clear(); dxReplayBytes = 0; }   // a new image
-        if (dxReplayBytes + len > kDxReplayMax) return;
-        dxReplay.emplace_back(data, data + len);
-        dxReplayBytes += len;
-    }
-
-    /** Hand a newly attached mirror everything the running decode has produced. */
-    void dxSendReplay(const std::shared_ptr<net::Socket>& sock) {
-        std::vector<std::vector<uint8_t>> frames;
-        { std::lock_guard<std::mutex> rl(dxReplayMtx); frames = dxReplay; }
-        if (frames.empty() || !sock || !sock->isOpen()) return;
-        LOGI("decoder mirror joined — replaying %zu frames of the image so far", frames.size());
-        for (auto& f : frames) sendWs(sock, 0x2, f.data(), f.size());
-    }
-    /** ★★ WHOSE AUDIO THE DECODERS ARE LISTENING TO. Empty = the shared pipeline (a personal
-     *  receiver, where there is only one). On a shared receiver the decoders must follow the
-     *  listener who OPENED them — fed from the shared VFO they decode a signal nobody chose,
-     *  which is what they did before per-client tuning existed. */
-    std::string decoderSession;
-    /** Is any decoder socket open? Read on every listener's audio path, so it must be cheap. */
-    std::atomic<bool> decoderAttached{false};
-    /** ★★ HOW MANY SAMPLES THE DECODERS HAVE ACTUALLY BEEN GIVEN. Exposed on the admin page.
-     *  ★★★ This exists because "the decoder is attached" and "the decoder is being fed" looked
-     *  identical from outside for a whole evening — WEFAX missed an entire transmission and the
-     *  UI said `decoding…` throughout. A counter that only moves when audio really reaches the
-     *  decoder is the difference between "no signal" and "no samples", and those need opposite
-     *  fixes: one is an antenna, the other is us. */
-    std::atomic<uint64_t> decoderFedSamples{0};
-    std::string decTextBuf;                 // decoded chars awaiting flush (UTF-8)
-    std::mutex decBufMtx;
+    // ── ★★★ THE DECODERS (/ws/dxcluster) — ONE HOST PER LISTENER ON A PER-VFO RADIO ──────────────
+    // RTTY, NAVTEX, WEFAX, SSTV, the time signals and FT8/FT4 used to be members of the RADIO: one of
+    // each, "only the decoder OWNER is actually decoding". On a range-locked radio that let listener
+    // B's WEFAX replace listener A's RTTY and fed FT8 somebody else's audio (Pi 500, 2026-09-30). The
+    // whole design is in vibe_decoder_host.h. Here:
+    //   • perClientDsp() → each decoder socket is routed by its SESSION to that listener's own host,
+    //     fed from that listener's own audio (onClientAudio).
+    //   • otherwise (a shared dial, a one-listener radio, the decoder-only sidecar) → ONE host, fed
+    //     from the one pipeline (onAudio) and mirrored to every decoder socket, exactly as before.
+    //   • every running decoder holds a box-wide SLOT; the next one past the owner's limit is refused
+    //     with words the listener can read (vibe::decoderLimitMessage).
+    /** A decoder socket, as a host sees it. */
+    struct DxPeer : DecoderPeer {
+        Impl* im; std::shared_ptr<net::Socket> sock;
+        DxPeer(Impl* i, std::shared_ptr<net::Socket> s) : im(i), sock(std::move(s)) {}
+        bool open() const override { return sock && sock->isOpen(); }
+        void binary(const uint8_t* d, size_t n) override { im->sendWs(sock, 0x2, d, n); }
+        void text(const std::string& t) override { im->sendText(sock, t); }
+        size_t backlog() const override { return im->outboxBacklog(sock); }
+    };
+    // ★ decoderEnv() is defined beside acceptDxcluster.
+    DecoderRouter decoders_{ [this](const std::string& s) { return decoderEnv(s); } };
+    /** Who started the ONE-pipeline decoder, for the admin table's credit. Guarded by clientMtx. */
+    std::string sharedDecoderBy_;
+    /** Every open decoder socket — so a shutdown can close them all. Guarded by clientMtx. */
+    std::set<std::shared_ptr<net::Socket>> dxSocks;
+    /** ★ Is anything actually DECODING on this radio? (Not "is a decoder socket open": the web client
+     *  opens one on every visit, so that answered yes for anybody who had merely loaded the page.) */
+    bool decodingNow() { return decoders_.anyRunning(); }
 
     // server
     std::shared_ptr<net::Listener> listener;
@@ -6453,7 +6466,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the note at the audit). This counts the frames handed to each listener's socket, per
      *  window, against the rate that listener should be getting. Keyed and erased like
      *  clientFpsAcc; touched only under clientMtx. */
-    struct SpecAudit { double t0 = 0, last = 0, want = 0, engine = 0; long long n = 0; };
+    // ★ LogLatch — "say it when it changes, and once a minute while it lasts" — is in vibe_log_latch.h.
+    struct SpecAudit { double t0 = 0, last = 0, want = 0, engine = 0; long long n = 0;
+                       LogLatch latch; };   // ★ the latch outlives the window restarts below
     std::map<net::Socket*, SpecAudit> clientSpecAudit;
     /** The rate the OWNER configured (--fps / the GUI). The floor when nobody has asked, and what
      *  the radio returns to when the last slow listener leaves. */
@@ -6817,7 +6832,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the same listener again every time one of their sockets arrives to an empty room. */
     std::string landedSession;
     /** Audio sockets that arrived before their spectrum socket, by session id. */
-    std::map<std::string, std::shared_ptr<net::Socket>> pendingAudio;
+    /** ★★★ AND WHAT IT ASKED FOR. This held the SOCKET alone, so an audio socket that arrived before
+     *  its spectrum socket was adopted with the ClientDsp's defaults — wantsOpus false — and a listener
+     *  who asked for Opus was sent raw PCM: ~96 kB/s instead of ~12 on the Pi 500's RSP (2026-09-30,
+     *  "audio WS connected (waiting for its spectrum socket, codec=opus)" and then 325 PCM frames a
+     *  second). Eight times the uplink, for every per-VFO listener whose browser opened audio first.
+     *  ★ Everything the audio handshake decides that lives on the ClientDsp travels with it; the rest
+     *    (session, protocol, browser id) is keyed by socket and never depended on the order. */
+    struct PendingAudio { std::shared_ptr<net::Socket> sock; bool wantsOpus = false, forceMono = false; };
+    std::map<std::string, PendingAudio> pendingAudio;
     /** ★★★ A SESSION THAT HAS ALREADY TUNED IS NOT A FRESH ARRIVAL. The app's AUDIO socket opens
      *  first and carries the tune, so a listener restoring 90.1 MHz had it applied — and then the
      *  SPECTRUM socket arrived a moment later, the landing gate called it a new session and put
@@ -6887,7 +6910,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  frozen so it seems to be an intermittent bug"). The flag is now derived: a decoder-attached
      *  `rds`, or any control socket that asked. Leaf mutex; recompute outside clientMtx or in. */
     std::mutex rdsxMtx;
-    std::set<const net::Socket*> rdsxSocks;
+    /** Control-socket subscribers (the app's path), with the session each belongs to. rdsxMtx. */
+    std::map<const net::Socket*, std::string> rdsxSocks;
     /** ★★ EYE GRIDS EVERY Nth MESSAGE, for clients that ASK (Stuart, 2026-09-19: Advanced RDS took a server
      *  from 18 to 80-90 kB/s). The three eye diagrams are ~8.4 of the ~9 kB in each rdsx, sent up to 6x a
      *  second, and they are persistence displays that build slowly. A client that sends eyeEvery:N on its
@@ -6895,12 +6919,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  already installed maps a missing eye to EMPTY) gets them in every message exactly as before.
      *  socket -> {every, sent}. rdsxMtx. */
     std::map<const net::Socket*, std::pair<int, unsigned>> rdsxEyeEvery;
-    bool rdsxDecoder = false;
+    /** Decoder-socket subscribers (the web client attaches `rds`), with their session. rdsxMtx.
+     *  ★ Was ONE bool for the radio — which is also why it could only ever be "everybody or nobody". */
+    std::map<const net::Socket*, std::string> rdsxDx;
     void rdsxRecompute() {
         bool on;
-        { std::lock_guard<std::mutex> lk(rdsxMtx); on = rdsxDecoder || !rdsxSocks.empty(); }
+        { std::lock_guard<std::mutex> lk(rdsxMtx); on = !rdsxDx.empty() || !rdsxSocks.empty(); }
         rdsxOn.store(on);
         rx.setRdsNoiseCorrection(on);   // honest deviation readout, only while somebody reads it
+    }
+    /** ★★★ DID THIS LISTENER ASK FOR ADVANCED RDS? Call with rdsxMtx held.
+     *
+     *  Stuart, 2026-09-30, after the Airspy's shared-dial joiners were measured receiving ~5 rdsx a
+     *  second (eye grids ~8 kB each) that they never asked for: "it has to be specifically chosen by
+     *  the user, not just shoved in their face; another user will be wanting it and using it." So the
+     *  analyser goes to a spectrum socket only when THAT socket, or a socket of THAT session (the web
+     *  client asks on its decoder socket, the iOS app sometimes on its audio socket), asked for it.
+     *  ★ The instrument itself keeps running while ANY subscriber remains (rdsxRecompute) — one
+     *    listener closing the panel never stops it under another. */
+    bool rdsxWantedLocked(const net::Socket* spec, const std::string& session) const {
+        if (rdsxSocks.count(spec)) return true;
+        if (session.empty()) return false;
+        for (auto& kv : rdsxSocks) if (kv.second == session) return true;
+        for (auto& kv : rdsxDx)    if (kv.second == session) return true;
+        return false;
     }
     /** Last byte total and when, per socket — an uplink RATE needs two samples. */
     std::map<net::Socket*, std::pair<unsigned long long, double>> sockLastBytes;
@@ -7613,20 +7655,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     ★ A decoder is not a listener. It needs the SAMPLES, and nothing about whether
         //       anyone is listening to them — which is exactly why the audio socket must not be
         //       able to gate it.
-        //   Guarded on decoderAttached so that with no decoder attached — the usual case — this
-        //   costs an atomic read rather than clientMtx and a map scan on every audio block.
-        if (decoderAttached.load(std::memory_order_relaxed)) {
-            auto owner = decoderOwner();
-            if (owner && owner.get() == c) {
-                std::vector<stereo_t> st((size_t)frames);
-                for (int i = 0; i < frames; i++) {
-                    st[i].l = pcm[i * ch];
-                    st[i].r = ch == 2 ? pcm[i * ch + 1] : pcm[i * ch];
-                }
-                enqueueDecode(st.data(), frames);      // ★ never inline — see enqueueDecode
-                decoderFedSamples.fetch_add((uint64_t)frames, std::memory_order_relaxed);
-            }
-        }
+        // ★★★ AND THEY ARE THIS LISTENER'S OWN (B6). The host is looked up by session; with no
+        //     listener decoding this costs one atomic read. The host copies the block into its own
+        //     queue and returns — decoders run at decoder priority, never on this thread.
+        decoders_.feedSession(c->session, pcm, frames, ch);
         std::shared_ptr<net::Socket> sock;
         { std::lock_guard<std::mutex> lk(clientMtx); sock = c->audio; }
         if (!sock || !sock->isOpen()) return;
@@ -7842,11 +7874,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (nowMs - st.t0 < 5000.0) return;
         const double got = st.n * 1000.0 / (nowMs - st.t0);
         const double should = std::min(want, engine);
-        if (std::fabs(got - should) > should * 0.1) {
-            char b[200];
-            std::snprintf(b, sizeof b, "SPEC RATE: listener %s sent %.1f fps, asked %.1f "
-                          "(engine %.1f) — %.0f%% of what it should get",
-                          p.sock->peerAddress().c_str(), got, want, engine, 100.0 * got / should);
+        // ★ Every 5 s for as long as a listener ran slow — the one this was written for (8.1 fps of
+        //   20) ran slow for HOURS. Now: when it starts, a minute's summary, when it stops.
+        const int say = st.latch.step(std::fabs(got - should) > should * 0.1, nowMs / 1000.0);
+        if (say) {
+            char b[240];
+            if (say == 3)
+                std::snprintf(b, sizeof b, "SPEC RATE: listener %s back to %.1f fps (asked %.1f) after %.0f s short",
+                              p.sock->peerAddress().c_str(), got, want, st.latch.forSec(nowMs / 1000.0));
+            else
+                std::snprintf(b, sizeof b, "SPEC RATE: listener %s sent %.1f fps, asked %.1f "
+                              "(engine %.1f) — %.0f%% of what it should get%s",
+                              p.sock->peerAddress().c_str(), got, want, engine, 100.0 * got / should,
+                              say == 2 ? (" — still, for " + std::to_string((int)st.latch.forSec(nowMs / 1000.0)) + " s").c_str() : "");
             out.emplace_back(b);
         }
         st.t0 = nowMs; st.n = 0;
@@ -8292,10 +8332,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ A DECODE HOLDS THE LABEL. Ten minutes of a WEFAX frame is ten minutes of touching
      *    nothing, and that is precisely when the room most needs to see WHY the dial is not
      *    moving (Stuart, 2026-08-20). Same reasoning that keeps the idle disconnect away from a
-     *    decoding listener — the server already knows, from decoderAttached. */
+     *    decoding listener — the server already knows, from decodingNow(). */
     bool dialExpireLocked() {
         if (dialSession.empty() || dialTouched <= 0) return false;
-        if (decoderAttached.load()) return false;
+        if (decodingNow()) return false;
         if ((Impl::nowSecs() - dialTouched) < kDialShowSec) return false;
         dialSession.clear(); dialSince = 0; dialTouched = 0;
         return true;
@@ -8333,7 +8373,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         j += ",\"listeners\":" + std::to_string(specListenerCountLocked());
         // ★★ WHY THE DIAL IS NOT MOVING, when it is not. A decode runs for ten minutes with no
         //    interaction, and a room that cannot see that is a room that starts retuning over it.
-        if (decoderAttached.load()) j += ",\"decoding\":true";
+        if (decodingNow()) j += ",\"decoding\":true";
         return j + "}";
     }
 
@@ -8701,6 +8741,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
     }
 
+    /** Bytes queued for this socket and not yet written — a replay paces itself on it. */
+    size_t outboxBacklog(const std::shared_ptr<net::Socket>& sock) {
+        std::shared_ptr<Outbox> ob;
+        { std::lock_guard<std::mutex> lk(outboxMtx);
+          auto it = outboxes.find(sock.get()); if (it != outboxes.end()) ob = it->second; }
+        if (!ob) return 0;
+        std::lock_guard<std::mutex> lk(ob->m);
+        return ob->bytes;
+    }
     void outboxOpen(const std::shared_ptr<net::Socket>& sock) {
         auto ob = std::make_shared<Outbox>();
         ob->sock = sock;
@@ -9273,16 +9322,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const double now = nowSecs();
                 if (now - rdsxLastAt >= 1.0 / 6.0) {
                     rdsxLastAt = now;
-                    // ★★★ TO EVERY LISTENER, NOT JUST peers.front(). `sock` here is the FIRST
-                    //     peer, so on a shared dial the Advanced RDS panel populated for whoever
-                    //     joined first and stayed empty for everybody else — the same fault as the
-                    //     RDS metadata beside it, and found the same way: Stuart had the analyser
-                    //     filling while my mirror had never received a single frame (2026-08-20).
-                    //  ★ Per-client receivers keep the per-socket call: there the payload is built
-                    //    from THAT listener's own decoder, so one socket is the right answer.
-                    if (perClientDsp()) sendRdsExt(sock);
-                    else for (auto& pr : peers)
-                        if (pr.sock && pr.sock->isOpen()) sendRdsExt(pr.sock);
+                    // ★★★ TO EVERY LISTENER WHO ASKED — NOT JUST peers.front(), AND NOT EVERYBODY.
+                    //     The 2026-08-20 fix ("my mirror had never received a single frame") sent it
+                    //     to every peer on a shared dial — which also shoved ~40 kB/s of eye grids
+                    //     at listeners who had never opened the panel (Airspy, 2026-09-30). The
+                    //     intent was every SUBSCRIBED listener; rdsxWantedLocked says who that is.
+                    //  ★ And per-VFO receivers had the opposite fault: only peers.front() ever got
+                    //    it. sendRdsExt picks each socket's OWN listener's decoder (dspFor), so
+                    //    every subscriber on every radio shape now gets their own.
+                    std::vector<std::pair<std::shared_ptr<net::Socket>, std::string>> rx_;
+                    { std::lock_guard<std::mutex> lk(clientMtx);
+                      for (auto& pr : peers) {
+                          if (!pr.sock || !pr.sock->isOpen()) continue;
+                          auto it = sockSession.find(pr.sock.get());
+                          rx_.push_back({ pr.sock, it == sockSession.end() ? std::string() : it->second });
+                      } }
+                    for (auto& pr : rx_) {
+                        bool want;
+                        { std::lock_guard<std::mutex> lk(rdsxMtx); want = rdsxWantedLocked(pr.first.get(), pr.second); }
+                        if (want) sendRdsExt(pr.first);
+                    }
                 }
             }
             if (n % 2 == 0) { enforceSessionLimit(); enforceAdminIdle(); }
@@ -11776,31 +11835,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // ★★ This must never PERTURB anything (a probe shipped as behaviour cost a working radio on
     // 08-01), so it only reads, and it only speaks when something is wrong — no log spam, and
     // nothing at all in normal listening.
-    struct AudioAudit {
-        long long n = 0, nonFinite = 0, railed = 0, quiet = 0;
-        double tMs = 0.0;
-        void note(float v) {
-            ++n;
-            if (!std::isfinite(v)) { ++nonFinite; return; }
-            const float a = std::fabs(v);
-            if (a > 0.995f)      ++railed;
-            else if (a < 1e-4f)  ++quiet;
-        }
-        // Returns true and fills `out` once a second IF the second was faulty.
-        bool tick(double nowMs, char* out, size_t cap, const char* stage) {
-            if (tMs == 0.0) { tMs = nowMs; return false; }
-            if (nowMs - tMs < 1000.0 || n == 0) return false;
-            const double nf = 100.0 * (double)nonFinite / (double)n;
-            const double rl = 100.0 * (double)railed    / (double)n;
-            const double qt = 100.0 * (double)quiet     / (double)n;
-            const bool bad = nonFinite > 0 || rl > 20.0 || qt > 95.0;
-            if (bad) snprintf(out, cap, "AUDIO AUDIT: nonfinite %.1f%% railed %.1f%% quiet %.1f%% (n=%lld)%s%s",
-                              nf, rl, qt, n,
-                              stage ? " ORIGIN=" : "", stage ? stage : "");
-            n = nonFinite = railed = quiet = 0; tMs = nowMs;
-            return bad;
-        }
-    };
+    // ★ AudioAudit is in vibe_log_latch.h, beside the latch it reports through (and its test).
     AudioAudit audit;
 
     void onAudio(stereo_t* data, int count, int ch) {
@@ -11826,8 +11861,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  handed a demodulated DAB service here — audio no analogue decoder can mean anything
          *  by, at a cost, with spurious spots as the failure mode. */
         if (!perClientDsp() && !g_dabMode.load(std::memory_order_relaxed)) {
-            enqueueDecode(data, count);            // ★ never inline — see enqueueDecode
-            decoderFedSamples.fetch_add((uint64_t)count, std::memory_order_relaxed);
+            static_assert(sizeof(stereo_t) == 2 * sizeof(float), "stereo_t must be two packed floats");
+            decoders_.feedShared(&data[0].l, count, 2);   // ★ the left channel; queued, never decoded here
         }
 
         // Squelch: mute the audio when the tuned-channel power (pre-AGC, from the
@@ -11895,59 +11930,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         sendAudioPcmSquelchAware(socks, pcm.data(), count, ch);
     }
 
-    // ── Audio-extension decoder (RTTY) ─────────────────────────────────────
-    void feedDecoder(stereo_t* data, int count) {
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        if (!decoder && !wefax && !sstv && !timeDec) return;
-        // SSTV runs at 12 kHz — decimate 48k→12k (box-average 4) and feed.
-        if (sstv) {
-            std::vector<int16_t> dec; dec.reserve((size_t)count/4 + 1);
-            for (int i = 0; i < count; i++) {
-                sstvAcc += data[i].l;
-                if (++sstvDecim >= 4) {
-                    int s = (int)lround(sstvAcc / 4.0f * 32767.0f);
-                    dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
-                    sstvDecim = 0; sstvAcc = 0.0f;
-                }
-            }
-            if (!dec.empty()) sstv->process(dec.data(), (int)dec.size());
-            return;
-        }
-        std::vector<int16_t> mono((size_t)count);
-        for (int i = 0; i < count; i++) {
-            int s = (int)lround(data[i].l * 32767.0f);
-            mono[i] = (int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s));
-        }
-        if (wefax) { wefax->process(mono.data(), count); return; }
-        // ★★★ FALL THROUGH TO THE TEXT FLUSH — do NOT return here. The time decoder emits its
-        //     minutes down the same text channel RTTY uses, and that channel is drained by the
-        //     code BELOW this point. An early return processed the audio perfectly and then threw
-        //     the result away: a decoder that runs, decodes, and is never heard from. Exactly the
-        //     shape of the WEFAX bug documented in startDecoder — complete, correct code with
-        //     nothing carrying its output.
-        if (timeDec) timeDec->process(mono.data(), count);
-        else if (decoder) decoder->process(mono.data(), count);
-        else return;
-        // Flush any decoded text to the dxcluster client.
-        std::string text;
-        { std::lock_guard<std::mutex> bl(decBufMtx); if (!decTextBuf.empty()) { text.swap(decTextBuf); } }
-        if (!text.empty()) {
-            std::shared_ptr<net::Socket> dx;
-            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (dx && dx->isOpen()) {
-                std::vector<uint8_t> msg(13 + text.size());
-                msg[0] = 0x01;
-                uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                for (int i = 0; i < 8; i++) msg[1 + i] = (uint8_t)(ts >> ((7 - i) * 8));   // big-endian
-                uint32_t len = (uint32_t)text.size();
-                msg[9] = (uint8_t)(len >> 24); msg[10] = (uint8_t)(len >> 16);
-                msg[11] = (uint8_t)(len >> 8); msg[12] = (uint8_t)len;
-                std::memcpy(msg.data() + 13, text.data(), text.size());
-                dxBroadcast(0x2, msg.data(), msg.size());
-            }
-        }
-    }
+    // ── ★ The decoders themselves live in vibe_decoder_host.h (B6) — see decoders_. ──────────
     /** ★ Push the owner's notice to everyone listening RIGHT NOW. Sent to every spectrum client,
      *  not just the first: on a shared receiver the people who most need it are the ones already
      *  watching the spectrum misbehave. */
@@ -11976,177 +11959,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ And the state itself, so the AGC chip turns to "paused — direct sampling" (or back) now,
         //   not at the next hwinfo. See dsActive.
         LocalSdrShim::instance().broadcastHwInfo();
-    }
-
-    void sendDecoderState(int st) {
-        std::shared_ptr<net::Socket> dx;
-        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-        if (dx && dx->isOpen()) { uint8_t m[2] = { 0x03, (uint8_t)st }; dxBroadcast(0x2, m, 2); }
-    }
-
-    // ── FT8/FT4 digital spots ──────────────────────────────────────────────
-    static const char* bandFor(double hz) {
-        double m = hz / 1e6;
-        if (m >= 1.8  && m < 2.0)   return "160m";
-        if (m >= 3.5  && m < 4.0)   return "80m";
-        if (m >= 5.3  && m < 5.5)   return "60m";
-        if (m >= 7.0  && m < 7.3)   return "40m";
-        if (m >= 10.1 && m < 10.15) return "30m";
-        if (m >= 14.0 && m < 14.35) return "20m";
-        if (m >= 18.0 && m < 18.2)  return "17m";
-        if (m >= 21.0 && m < 21.45) return "15m";
-        if (m >= 24.8 && m < 25.0)  return "12m";
-        if (m >= 28.0 && m < 29.7)  return "10m";
-        if (m >= 50.0 && m < 54.0)  return "6m";
-        return "";
-    }
-    void emitSpot(bool isFt4, const std::string& callTo, const std::string& callDe,
-                  const std::string& grid, int snr, float audioHz) {
-        (void)callTo;
-        std::shared_ptr<net::Socket> dx;
-        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-        if (!dx || !dx->isOpen()) return;
-        double rfHz = audioFreq.load() + audioHz;     // dial (USB) + audio offset
-        uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        /* ★★★ THESE TWO FIELDS COME OFF THE AIR, AND ANYONE MAY TRANSMIT ANYTHING.
-         *
-         *  ★★★ THIS IS THE RDS FAULT, ON A DIFFERENT DECODER. A corrupted RDS group once put a
-         *      byte that is not valid UTF-8 into a JSON string, the client's JSON.parse threw on
-         *      the WHOLE FRAME, and the spectrum socket died until the text happened to clear. The
-         *      cure there was vibeadmin::utf8Clean at the one choke point every RDS field passes
-         *      through — and its own comment says "one choke point, and the class of fault is
-         *      gone". The spot path simply never went through it: `callDe` and `grid` were
-         *      interpolated raw, so one odd byte from a mis-decode, or a quote in a non-standard
-         *      callsign, takes the DX socket down for every listener.
-         *      Stuart, 2026-09-27: "we need to sandbox everything so a dodgy FT8 receive or a
-         *      dodgy server name in a directory doesnt corrupt and kill the app."
-         *
-         *  ★★★ AND snprintf RETURNS THE LENGTH IT WANTED, NOT WHAT IT WROTE. `n > 0` was the only
-         *      guard, so a long callsign or grid that truncated left n ABOVE sizeof(buf) and
-         *      `std::string(buf, n)` then read PAST THE END of a 384-byte stack buffer — an
-         *      out-of-bounds read whose contents would be sent to the client. Reachable from a
-         *      radio transmission, which is as untrusted as an input gets.
-         *
-         *  ★ A whitelist rather than an escape, because these two fields have a known shape: a
-         *    callsign is letters, digits, / and - ; a locator is letters and digits. Anything else
-         *    is corruption, and dropping it is the same choice utf8Clean makes for a bad byte.
-         *    That also means neither can contain a quote or a backslash, so the JSON is safe by
-         *    construction rather than by remembering to escape. */
-        auto spotSafe = [](const std::string& in, size_t cap) {
-            const std::string c = vibeadmin::utf8Clean(in);
-            std::string o; o.reserve(c.size() < cap ? c.size() : cap);
-            for (char ch : c) {
-                if (o.size() >= cap) break;
-                const unsigned char u = (unsigned char)ch;
-                if ((u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z') ||
-                    (u >= '0' && u <= '9') || u == '/' || u == '-') o.push_back(ch);
-            }
-            return o;
-        };
-        const std::string safeCall = spotSafe(callDe, 32);
-        const std::string safeGrid = spotSafe(grid, 8);
-        char buf[384];
-        int n = snprintf(buf, sizeof(buf),
-            "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
-            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"timestamp\":%llu}}",
-            isFt4 ? "FT4" : "FT8", safeCall.c_str(), snr, rfHz, bandFor(rfHz),
-            safeGrid.c_str(), (unsigned long long)ts);
-        /* ★ Clamped to what was actually WRITTEN. Even with the fields bounded above, a future
-         *  field added to this format string must not be able to resurrect the over-read. */
-        if (n > 0) {
-            const size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
-            sendText(dx, std::string(buf, len));
-        }
-    }
-    void startSpots() {
-        std::lock_guard<std::mutex> lk(spotsMtx);
-        if (spotsActive) return;
-        delete ft8; delete ft4;
-        ft8 = new Ft8Decoder(12000, false);
-        ft4 = new Ft8Decoder(12000, true);
-        ft8->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(false, to, de, g, s, f); };
-        ft4->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(true,  to, de, g, s, f); };
-        spotDecim = 0; spotAcc = 0.0f;
-        spotsActive = true;
-        LOGI("digital spots (FT8/FT4) started");
-    }
-    void stopSpots() {
-        std::lock_guard<std::mutex> lk(spotsMtx);
-        spotsActive = false;
-        delete ft8; ft8 = nullptr;
-        delete ft4; ft4 = nullptr;
-    }
-    /* ★★★ NO DECODER RUNS ON THE AUDIO THREAD (Stuart, 2026-09-19: "anything that can be split into
-     *  its own thread to preserve audio integrity — RTTY, WEFAX, FT8 etc — do it"; priority order
-     *  NETWORK > AUDIO > SPECTRUM > DECODERS). feedDecoder (RTTY, NAVTEX, WEFAX, SSTV, time signals)
-     *  and feedSpots (FT8/FT4) were called INLINE from onAudio / onClientAudio, so any decoder's
-     *  burst of work — FT8's whole slot decode every 15 s above all — stopped the audio with it.
-     *  Stuart saw exactly that in SDR++ Brown on a Moto G35; a Pi 2 or a Fire 7 would hitch on every
-     *  FT8 cycle. Now the audio thread copies the block into a bounded queue and returns; vibe-decode
-     *  (lowest priority) drains it. ★ A decoder that falls 4 s behind LOSES AUDIO, counted in
-     *  decQDropped_ — the listener never does. */
-    std::mutex decQM_;
-    std::condition_variable decQCv_;
-    std::deque<std::vector<stereo_t>> decQ_;
-    size_t decQFrames_ = 0;
-    bool   decQStop_ = false;
-    std::thread decQThread_;
-    std::atomic<uint64_t> decQDropped_{0};
-    static constexpr size_t kDecQMaxFrames = 48000 * 4;
-    void enqueueDecode(const stereo_t* data, int count) {
-        if (count <= 0) return;
-        std::vector<stereo_t> v(data, data + count);
-        {
-            std::lock_guard<std::mutex> lk(decQM_);
-            if (!decQThread_.joinable()) { decQStop_ = false; decQThread_ = std::thread([this] { decodeLoop_(); }); }
-            decQFrames_ += v.size();
-            decQ_.push_back(std::move(v));
-            while (decQFrames_ > kDecQMaxFrames && decQ_.size() > 1) {
-                decQFrames_ -= decQ_.front().size();
-                decQDropped_.fetch_add(decQ_.front().size(), std::memory_order_relaxed);
-                decQ_.pop_front();
-            }
-        }
-        decQCv_.notify_one();
-    }
-    void decodeLoop_() {
-        vibeDecoderThread("vibe-decode");
-        std::unique_lock<std::mutex> lk(decQM_);
-        for (;;) {
-            decQCv_.wait(lk, [this] { return !decQ_.empty() || decQStop_; });
-            if (decQStop_) return;
-            std::vector<stereo_t> v = std::move(decQ_.front());
-            decQ_.pop_front();
-            decQFrames_ -= v.size();
-            lk.unlock();
-            feedDecoder(v.data(), (int)v.size());
-            feedSpots(v.data(), (int)v.size());
-            lk.lock();
-        }
-    }
-    void stopDecodeQueue() {
-        { std::lock_guard<std::mutex> lk(decQM_); decQStop_ = true; decQ_.clear(); decQFrames_ = 0; }
-        decQCv_.notify_all();
-        if (decQThread_.joinable()) decQThread_.join();
-    }
-    void feedSpots(stereo_t* data, int count) {
-        std::lock_guard<std::mutex> lk(spotsMtx);
-        if (!spotsActive) return;
-        // Decimate 48k→12k by box-averaging 4 samples (mono).
-        std::vector<int16_t> dec;
-        dec.reserve((size_t)count / 4 + 1);
-        for (int i = 0; i < count; i++) {
-            spotAcc += data[i].l;
-            if (++spotDecim >= 4) {
-                int s = (int)lround(spotAcc / 4.0f * 32767.0f);
-                dec.push_back((int16_t)(s < -32768 ? -32768 : (s > 32767 ? 32767 : s)));
-                spotDecim = 0; spotAcc = 0.0f;
-            }
-        }
-        if (dec.empty()) return;
-        if (ft8) ft8->process(dec.data(), (int)dec.size());
-        if (ft4) ft4->process(dec.data(), (int)dec.size());
     }
 
     // ── Demod chain (re)build ──────────────────────────────────────────────
@@ -14837,8 +14649,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   one, so the app could turn the analyser on where the web client could not.
             if (vsModeBlocked("rds")) return;
             const bool on = jsonNum(msg, "on", v) && v != 0.0;
+            const std::string who = sessionOfSock(sock.get());   // ★ taken BEFORE rdsxMtx — never under it
             { std::lock_guard<std::mutex> lk(rdsxMtx);
-              if (on) rdsxSocks.insert(sock.get()); else rdsxSocks.erase(sock.get());
+              if (on) rdsxSocks[sock.get()] = who; else rdsxSocks.erase(sock.get());
               double ev = 0;
               if (on && jsonNum(msg, "eyeEvery", ev) && ev >= 2 && ev <= 12) rdsxEyeEvery[sock.get()] = { (int)ev, 0u };
               else rdsxEyeEvery.erase(sock.get()); }
@@ -16745,6 +16558,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reply(200, "OK", "{\"ok\":true,\"kicked\":" + std::to_string(n) + "}");
                 return;
             }
+            if (isPost && what == "decoders") {
+                // ★★ THE DECODER LIMIT, from the admin page. 0 = the default for this hardware.
+                //    Persisted through the config API's own handler (one writer), and published to
+                //    every radio process on the box at once — see vsDecoderMax().
+                double v = 0;
+                if (!jsonNum(body, "max", v) || v < 0 || v > 64) {
+                    reply(400, "Bad Request", "{\"error\":\"max must be 0 (the default) to 64\"}"); return;
+                }
+                LocalSdrShim::setDecoderMax((int)v);
+                LocalSdrShim::ConfigPersistFn pf;
+                { std::lock_guard<std::mutex> lk(g_vsConfigMtx); pf = g_vsConfigPersist; }
+                if (pf) pf("{\"decoderMax\":" + std::to_string((int)v) + "}");
+                reply(200, "OK", "{\"ok\":true,\"max\":" + std::to_string(vsDecoderSlots().max()) + "}");
+                return;
+            }
             if (isPost && what == "schedule") {
                 // ★★ PERSISTED THROUGH THE CONFIG API's OWN HANDLER, not written here. The daemon
                 //    owns config.json — one writer. A second writer is how a setting saved from
@@ -18284,7 +18112,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       break;
                   }
                   // Arrived first: hold it until its spectrum socket turns up.
-                  if (!matched) pendingAudio[session] = sock; }
+                  if (!matched) pendingAudio[session] = PendingAudio{ sock, wantsOpus, forceMono }; }
                 LOGI("audio WS connected (%s, codec=%s)",
                      matched ? "own channel" : "waiting for its spectrum socket",
                      wantsOpus ? "opus" : "pcm");
@@ -18792,6 +18620,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get()); }
         bool bothGone = false;
+        bool rdsxGone = false;            // ★ an Advanced RDS subscriber left — recompute OUTSIDE clientMtx
         std::shared_ptr<ClientDsp> goneDsp;
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (specClient == sock) {
@@ -18987,10 +18816,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           sockSince.erase(sock.get());
           sockWarned.erase(sock.get());
           sockHandover.erase(sock.get());
-          { std::lock_guard<std::mutex> rl(rdsxMtx); rdsxSocks.erase(sock.get()); rdsxEyeEvery.erase(sock.get()); }
+          { std::lock_guard<std::mutex> rl(rdsxMtx);
+            rdsxGone = rdsxSocks.erase(sock.get()) > 0; rdsxEyeEvery.erase(sock.get()); }
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
-              if (it->second == sock) it = pendingAudio.erase(it); else ++it;
+              if (it->second.sock == sock) it = pendingAudio.erase(it); else ++it;
           }
+          // ★★ THE OTHER ORDERING: the SPECTRUM socket went and the audio socket is still playing
+          //    (a waterfall reconnect, a backgrounded app). Its channel was just erased, and nothing
+          //    held the audio socket any more — so the returning spectrum socket built a new
+          //    channel with no audio and the listener heard silence until audio reconnected too.
+          //    Park it again, codec and all, exactly as if it had arrived first.
+          if (goneDsp && goneDsp->audio && goneDsp->audio->isOpen() && goneDsp->audio != sock
+              && !goneDsp->session.empty())
+              pendingAudio[goneDsp->session] = PendingAudio{ goneDsp->audio, goneDsp->wantsOpus, goneDsp->forceMono };
           for (auto& kv : clientDsp) if (kv.second->audio == sock) kv.second->audio = nullptr;
           { std::lock_guard<std::mutex> al(adminSockMtx); adminSocks.erase(sock.get()); }
           if (audioClient == sock) {
@@ -19016,6 +18854,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (bothGone) { { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp.clear(); }
                         occWrite(""); }
         outboxClose(sock);   // drain, then close — see outboxClose()
+        // ★★ AND STOP THE ANALYSER IF THEY WERE ITS LAST READER. The subscription was erased above
+        //    and never recomputed, so a listener leaving with the panel open kept the instrument (and
+        //    its ~95 % of an A53 core on the Sony) running for nobody until somebody else toggled it.
+        if (rdsxGone) rdsxRecompute();
         // ★ The slow listener has gone: the survivors get their rate back. OUTSIDE the lock —
         //   recomputeEngineRate() takes clientMtx, and a helper that locks must never be called
         //   from a scope that holds it (see specListenerCountLocked's deadlock note).
@@ -19125,319 +18967,52 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
     }
 
-    void startDecoder(const std::string& msg, const std::string& bySession = "") {
-        std::string ext = jsonStr(msg, "extension_name");
-        /* ★★★ THE SERVER IS THE ENFORCEMENT FOR DECODERS TOO. The mode path refused a blocked mode
-         *  (see "THE SERVER IS THE ENFORCEMENT, NOT THE MENU"); the decoder path never did, so an
-         *  old client or a hand-rolled tool could start any decoder the owner had switched off.
-         *  The wire names differ from the setup page's: fsk = RTTY, the five station names = TIME. */
-        {
-            std::string key = ext;
-            if (ext == "fsk") key = "rtty";
-            else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") key = "time";
-            if (!key.empty() && vsModeBlocked(key)) {
-                LOGI("decoder %s refused — the server owner has switched it off on this receiver", ext.c_str());
-                return;
-            }
-        }
-        { std::lock_guard<std::mutex> lk(decoderMtx); currentDecoder = ext; }
-        // ★★★ AND WHO STARTED IT. currentDecoder is the RADIO's — one decoder runs at a time — but
-        //     the admin table has to say WHOSE it is, and this path recorded nothing at all. So
-        //     Advanced RDS opened on a phone was credited to whichever listener the table drew
-        //     first: "rds open on the iPhone is still credited to the mac" (Stuart, 2026-08-22).
-        //  ★★ decoderSession was only ever set by the digital-spots path, so every OTHER decoder —
-        //     including the one people actually use — was anonymous, and anonymous means guessed.
-        //  ★ An older client that sends no id stays anonymous, and the table then credits nobody
-        //    rather than somebody. See adminSessionsJson.
-        if (!bySession.empty()) {
-            std::lock_guard<std::mutex> lk(clientMtx);
-            decoderSession = bySession;
-        }
-        // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
-        // fields we normally discard, plus the constellation). It attaches through the same
-        // path as every other decoder on purpose: SELECTING IT IS THE TOGGLE, so the extra
-        // work and the extra bytes are paid for only while somebody is looking at them, and
-        // there is no setting to explain (Stuart, 2026-07-26).
-        if (ext == "rds") {
-            { std::lock_guard<std::mutex> lk(rdsxMtx); rdsxDecoder = true; }
-            rdsxRecompute();
-            // ★ THE ANALYSER BEING OPEN IS THE SWITCH. The guard-band noise measurement exists
-            // solely to make the DEVIATION READOUT honest, so it is worth its CPU exactly while
-            // somebody is reading it — the same reasoning that gates the extended stream itself.
-            // ★ It replaces an operator setting that also widened the channel filter; that half
-            // was measured to cost 10 dB of RDS SNR and has been removed entirely.
-            return;
-        }
-        if (ext == "sstv")  { startSstv(msg);  return; }
-        // ★★★ WEFAX WAS NEVER DISPATCHED. startWefax() has always existed, fully written —
-        //     config parsing, onLine/onStart/onStop, the image framing — and NOTHING EVER CALLED
-        //     IT. `extension_name: "wefax"` fell through to the `ext != "fsk" && !navtex` guard
-        //     below and returned, so no WefaxDecoder was ever constructed and not one line of
-        //     image was ever produced.
-        //     ★★ It did not look like an absent feature, which is why it survived: the client
-        //     drew the WEFAX panel, said "decoding…", and waited. Stuart, 2026-08-06 — "WEFAX
-        //     completely missed an entire transmission", then, having caught the next one from
-        //     the very start, "wefax still not working". It was never running.
-        //     ★ Same family as `doAdminUnlock` being defined and never called, and as the admin
-        //       `adminOk` flag being sent and never read: complete, correct code with no caller.
-        //       A function nobody calls is invisible to every test that exercises the callers.
-        if (ext == "wefax") { startWefax(msg); return; }
-        // ★ MSF (60 kHz) and DCF77 (77.5 kHz). Tune them in CW: the carrier arrives as a beat note
-        //   whose AMPLITUDE carries the code, which is what the decoder reads.
-        // ★ ONE extension, the station as a parameter — the client sends a preset, exactly as it
-        //   does for RTTY's shift and baud. The old per-station names still work so a client that
-        //   predates the change is not broken by it.
-        if (ext == "time") {
-            std::string st = jsonStr(msg, "station");
-            if (st.empty()) st = "msf";
-            startTime(msg, st);
-            return;
-        }
-        if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") {
-            startTime(msg, ext); return;
-        }
-        bool navtex = (ext == "navtex");
-        if (ext != "fsk" && !navtex) return;   // RTTY / NAVTEX
-        double cf, sh, baud; bool inv = msg.find("\"inverted\":true") != std::string::npos;
-        if (!jsonNum(msg, "center_frequency", cf)) cf = navtex ? 500.0 : 1000.0;
-        if (!jsonNum(msg, "shift", sh)) sh = navtex ? 170.0 : 170.0;
-        if (!jsonNum(msg, "baud_rate", baud)) baud = navtex ? 100.0 : 45.45;
-        std::string enc = jsonStr(msg, "encoding"); if (enc.empty()) enc = navtex ? "CCIR476" : "ITA2";
-        std::string framing = jsonStr(msg, "framing"); if (framing.empty()) framing = navtex ? "4/7" : "5N1.5";
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder;
-        // ★ ONE DECODER OWNS THE AUDIO. feedDecoder dispatches in a fixed order, so leaving an
-        //   old image or time decoder alive would silently take priority over the one just asked
-        //   for — the panel would sit blank while a decoder nobody selected ran instead.
-        delete wefax;   wefax   = nullptr;
-        delete sstv;    sstv    = nullptr;
-        delete timeDec; timeDec = nullptr;
-        decoder = new FskDecoder(48000, cf, sh, baud, framing, enc, inv);
-        decoder->onChar = [this](char32_t ch) {
-            std::lock_guard<std::mutex> bl(decBufMtx);
-            // RTTY/ITA2 is ASCII; encode minimally as UTF-8.
-            if (ch < 0x80) decTextBuf.push_back((char)ch);
-            else if (ch < 0x800) { decTextBuf.push_back((char)(0xC0|(ch>>6))); decTextBuf.push_back((char)(0x80|(ch&0x3F))); }
-        };
-        decoder->onState = [this](int st) { sendDecoderState(st); };
-        LOGI("decoder attached: fsk cf=%.0f shift=%.0f baud=%.2f enc=%s", cf, sh, baud, enc.c_str());
-    }
-    void startWefax(const std::string& msg) {
-        WefaxDecoder::Config cfg;
-        double v;
-        if (jsonNum(msg, "lpm", v))         cfg.lpm        = (int)v;
-        if (jsonNum(msg, "image_width", v)) cfg.imageWidth = (int)v;
-        if (jsonNum(msg, "carrier", v))     cfg.carrier    = v;
-        if (jsonNum(msg, "deviation", v))   cfg.deviation  = v;
-        if (jsonNum(msg, "bandwidth", v))   cfg.bandwidth  = (int)v;
-        cfg.usePhasing = msg.find("\"use_phasing\":false") == std::string::npos;
-        cfg.autoStop   = msg.find("\"auto_stop\":true")    != std::string::npos;
-        cfg.autoStart  = msg.find("\"auto_start\":true")   != std::string::npos;
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder; decoder = nullptr;
-        delete sstv;    sstv    = nullptr;
-        delete timeDec; timeDec = nullptr;
-        delete wefax;
-        wefax = new WefaxDecoder(48000, cfg);
-        wefax->onLine = [this](uint32_t ln, uint32_t w, const uint8_t* px) {
-            std::shared_ptr<net::Socket> dx;
-            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (!dx || !dx->isOpen()) return;
-            std::vector<uint8_t> m(9 + w);
-            m[0] = 0x01;
-            m[1] = (uint8_t)(ln >> 24); m[2] = (uint8_t)(ln >> 16); m[3] = (uint8_t)(ln >> 8); m[4] = (uint8_t)ln;
-            m[5] = (uint8_t)(w >> 24);  m[6] = (uint8_t)(w >> 16);  m[7] = (uint8_t)(w >> 8);  m[8] = (uint8_t)w;
-            std::memcpy(m.data() + 9, px, w);
-            dxBroadcast(0x2, m.data(), m.size());
-        };
-        wefax->onStart = [this]() {
-            std::shared_ptr<net::Socket> dx;
-            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (dx && dx->isOpen()) { uint8_t b = 0x02; dxBroadcast(0x2, &b, 1); }
-        };
-        wefax->onStop = [this]() {
-            std::shared_ptr<net::Socket> dx;
-            { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-            if (dx && dx->isOpen()) { uint8_t b = 0x03; dxBroadcast(0x2, &b, 1); }
-        };
-        LOGI("decoder attached: wefax lpm=%d width=%d carrier=%.0f", cfg.lpm, cfg.imageWidth, cfg.carrier);
-    }
-    // ── SSTV ───────────────────────────────────────────────────────────────
-    void dxSend(const uint8_t* d, size_t n) {
-        std::shared_ptr<net::Socket> dx;
-        { std::lock_guard<std::mutex> lk2(clientMtx); dx = dxClient; }
-        if (!dx || !dx->isOpen()) return;
-        std::lock_guard<std::mutex> sl(dxSendMtx);
-        dxBroadcast(0x2, d, n);
-    }
-    static void put32(std::vector<uint8_t>& v, uint32_t x) {
-        v.push_back((uint8_t)(x>>24)); v.push_back((uint8_t)(x>>16));
-        v.push_back((uint8_t)(x>>8));  v.push_back((uint8_t)x);
-    }
-    /** ★ MSF / DCF77. Output goes down the SAME text channel RTTY uses, so it needs no new client
-     *  protocol and appears in the decoder panel that already exists.
-     *  ★★ IT REPORTS WHILE IT IS STILL WAITING. A minute is 59 bits, so a listener who has just
-     *     tuned may wait a full minute before anything is certain — and a panel that says nothing
-     *     for a minute is indistinguishable from one that is broken. So the state and the measured
-     *     carrier margin go out too: "searching, carrier +19 dB" is the difference between "keep
-     *     waiting" and "point the aerial somewhere else". */
-    void startTime(const std::string& msg, const std::string& which) {
-        (void)msg;
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder; decoder = nullptr;
-        delete wefax;   wefax   = nullptr;
-        delete sstv;    sstv    = nullptr;
-        delete timeDec;
-        const TimeDecoder::Station st =
-              which == "dcf77" ? TimeDecoder::Station::DCF77
-            : which == "rwm"   ? TimeDecoder::Station::RWM
-            : which == "wwvb"  ? TimeDecoder::Station::WWVB
-            : which == "wwv"   ? TimeDecoder::Station::WWV
-                               : TimeDecoder::Station::MSF;
-        timeDec = new TimeDecoder(48000, st);
-        std::string name = which; for (auto& c : name) c = (char)toupper((unsigned char)c);
-        timeDec->onTime = [this, name](const TimeDecoder::TimeStamp& t) {
-            static const char* kDay[8] = { "", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
-            char buf[160];
-            std::snprintf(buf, sizeof(buf), "%s  %s %04d-%02d-%02d %02d:%02d  %s%s\n",
-                          name.c_str(), kDay[t.weekday >= 1 && t.weekday <= 7 ? t.weekday : 0],
-                          t.year, t.month, t.day, t.hour, t.minute,
-                          t.dst ? "(summer time)" : "",
-                          t.leapSecondPending ? " LEAP SECOND PENDING" : "");
-            std::lock_guard<std::mutex> bl(decBufMtx);
-            decTextBuf += buf;
-        };
-        // ★★★ FILL THE FIELDS AS THEY ARRIVE. A minute is 59 bits, so waiting for the whole thing
-        //     leaves the panel blank for a minute — and blank is indistinguishable from broken
-        //     (Stuart, 2026-08-11, watching MSF read cleanly and show nothing). Sent as a
-        //     replace-in-place line so the panel updates rather than scrolling 59 times a minute.
-        //     ★★ It is the best diagnostic here too: seeing the year fill correctly and the hour
-        //        come out wrong says exactly where the framing slipped, which a pass/fail at the
-        //        end of the minute never could.
-        timeDec->onPartial = [this, name](const TimeDecoder::Partial& p) {
-            // ★ Flush any callsign heard in the last second, so it appears as it is sent rather
-            //   than only once a buffer fills.
-            { std::lock_guard<std::mutex> bl(decBufMtx);
-              if (morseWord_.size() >= 3) { decTextBuf += "RWM ID: " + morseWord_ + "\n"; morseWord_.clear(); } }
-            char buf[200];
-            char yy[8], mo[4], dd[4], hh[4], mi[4];
-            std::snprintf(yy, sizeof(yy), p.year  ? "%04d" : "----", p.t.year);
-            std::snprintf(mo, sizeof(mo), p.month ? "%02d" : "--",   p.t.month);
-            std::snprintf(dd, sizeof(dd), p.day   ? "%02d" : "--",   p.t.day);
-            std::snprintf(hh, sizeof(hh), p.hour  ? "%02d" : "--",   p.t.hour);
-            std::snprintf(mi, sizeof(mi), p.minute? "%02d" : "--",   p.t.minute);
-            std::snprintf(buf, sizeof(buf), "\r%s  %s-%s-%s %s:%s   second %02d/59",
-                          name.c_str(), yy, mo, dd, hh, mi, p.second);
-            std::lock_guard<std::mutex> bl(decBufMtx);
-            decTextBuf += buf;
-        };
-        timeDec->onState = [this, name](TimeDecoder::State st) {
-            const char* w = st == TimeDecoder::State::NoSignal ? "no carrier"
-                          : st == TimeDecoder::State::Searching ? "searching for the minute"
-                          : st == TimeDecoder::State::Reading   ? "reading the minute"
-                                                                : "locked";
-            char buf[160];
-            std::snprintf(buf, sizeof(buf), "[%s] %s — carrier %+.0f dB\n",
-                          name.c_str(), w, timeDec ? timeDec->snrDb() : 0.0);
-            std::lock_guard<std::mutex> bl(decBufMtx);
-            decTextBuf += buf;
-        };
-        // ★★ RWM's CALLSIGN, which is the only proof it is being heard. Buffered into a word and
-        //    flushed on a pause, so the panel shows "RWM" rather than one letter per line.
-        timeDec->onMorse = [this](char c) {
-            std::lock_guard<std::mutex> bl(decBufMtx);
-            morseWord_ += c;
-            if (morseWord_.size() >= 24) { decTextBuf += "RWM ID: " + morseWord_ + "\n"; morseWord_.clear(); }
-        };
-
-        // ★★ SAY UP FRONT WHEN THERE IS NOTHING TO WAIT FOR. RWM transmits markers and a Morse
-        //    callsign and NO timecode, so a panel that sat there "reading the minute" for ever
-        //    would look broken when it was working perfectly. Tell the user what it can do.
-        if (!timeDec->carriesTimeCode()) {
-            std::lock_guard<std::mutex> bl(decBufMtx);
-            decTextBuf += "RWM sends second and minute markers and a Morse callsign — it carries "
-                          "NO date or time code, so none can be shown. Use it for propagation and "
-                          "calibration.\n";
-        }
-        LOGI("time decoder: %s (tune it in CW)", name.c_str());
+    /** ★★★ THE SERVER IS THE ENFORCEMENT FOR DECODERS TOO. The mode path refused a blocked mode
+     *  (see "THE SERVER IS THE ENFORCEMENT, NOT THE MENU"); the decoder path never did, so an old
+     *  client or a hand-rolled tool could start any decoder the owner had switched off. The wire
+     *  names differ from the setup page's: fsk = RTTY, the five station names = TIME. */
+    static bool decoderBlocked(const std::string& ext) {
+        std::string key = ext;
+        if (ext == "fsk") key = "rtty";
+        else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") key = "time";
+        return !key.empty() && vsModeBlocked(key);
     }
 
-    void startSstv(const std::string& msg) {
-        (void)msg;
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder; decoder = nullptr;
-        delete wefax;   wefax = nullptr;
-        delete sstv;
-        delete timeDec; timeDec = nullptr;   // ★ only one decoder owns the audio
-        // ★★★ autoSync OFF. The post-reception "Correcting slant..." pass is the only thing
-        // breaking SSTV here: Stuart, 2026-08-01, watching a geometric test card (W6AOA's prism)
-        // come in — "it receives it perfect, then its the cleanup pass afterwards that breaks it",
-        // splitting the picture so the top third sits where the WHOLE image should be and the rest
-        // stays put.
-        //
-        // ★★ And it should never have been running. Slant correction exists for SOUNDCARD CLOCK
-        // DRIFT — a sample rate that is not quite what it claims. An SDR's clock is locked and its
-        // rate exact, so there is no drift to correct; `redrawFromLuminance`'s own comments have
-        // said so since the last attempt. The pass could only ever guess at a fault that was not
-        // there. It defaulted to true and was exposed NOWHERE, so every frame got it.
-        //
-        // ★ Three fixes have now been aimed at making the correction behave (overrun guard, sync
-        // confidence gate, offset-not-shear). Each was a real bug and none of them mattered,
-        // because the whole pass is wrong for this input. Do not re-enable it without a soundcard
-        // source to justify it AND the standalone harness to prove it.
-        // ★★★ BACK ON, because the cleanup is no longer the thing that breaks the picture. It was
-        //     switched off on 08-01 as the only way to stop a torn image — the right call at the
-        //     time, but it left every picture with the wrap it was meant to remove.
-        //     ★ What changed: the guard inside redrawFromLuminance now measures HOW FAR the
-        //     correction overruns the captured audio instead of whether it overruns at all. A
-        //     skip-sized overrun (bounded by one line) is applied; a drifting one still refuses.
-        //     ★★ PROVEN ON REAL AUDIO, not one lucky frame: the four Essex Ham recordings
-        //     (test/fixtures/sstv, Scottie S2 ×2 and Martin M2 ×2) went from 1 of 4 corrected to
-        //     4 of 4, checked as images. `tools/sstv_harness.cpp` replays them on the Mac — run it
-        //     before touching this again. Off-air remains the final word.
-        sstv = new SstvDecoder(12000, /*autoSync=*/true);
-        sstvDecim = 0; sstvAcc = 0.0f;
-        sstv->onImageStart = [this](int w, int h) {
-            std::vector<uint8_t> m; m.push_back(0x07); put32(m,(uint32_t)w); put32(m,(uint32_t)h);
-            dxSend(m.data(), m.size());
-        };
-        sstv->onLine = [this](int y, int w, const uint8_t* rgb) {
-            std::vector<uint8_t> m; m.reserve(9 + (size_t)w*3);
-            m.push_back(0x01); put32(m,(uint32_t)y); put32(m,(uint32_t)w);
-            m.insert(m.end(), rgb, rgb + (size_t)w*3);
-            dxSend(m.data(), m.size());
-        };
-        sstv->onMode = [this](uint8_t, const std::string& name) {
-            std::vector<uint8_t> m; m.push_back(0x02);
-            m.push_back((uint8_t)(name.size()>>8)); m.push_back((uint8_t)name.size());
-            m.insert(m.end(), name.begin(), name.end());
-            dxSend(m.data(), m.size());
-        };
-        sstv->onStatus = [this](const std::string& s) {
-            std::vector<uint8_t> m; m.push_back(0x03); m.push_back(0x00);
-            m.push_back((uint8_t)(s.size()>>8)); m.push_back((uint8_t)s.size());
-            m.insert(m.end(), s.begin(), s.end());
-            dxSend(m.data(), m.size());
-        };
-        sstv->onSync = [this]() { uint8_t b = 0x04; dxSend(&b, 1); };
-        sstv->onComplete = [this]() { std::vector<uint8_t> m; m.push_back(0x05); put32(m,0); dxSend(m.data(), m.size()); };
-        sstv->onRedrawStart = [this]() { uint8_t b = 0x08; dxSend(&b, 1); };
-        LOGI("decoder attached: sstv");
-    }
-    void stopDecoder() {
-        // ★ Whoever owned a decoder that is no longer running owns nothing.
-        { std::lock_guard<std::mutex> lk(clientMtx); decoderSession.clear(); }
-        { std::lock_guard<std::mutex> lk(rdsxMtx); rdsxDecoder = false; }
-        rdsxRecompute();                   // ★ the decoder's half only — control-socket askers keep it
-        { std::lock_guard<std::mutex> lk(decoderMtx); currentDecoder.clear(); }
-        std::lock_guard<std::mutex> lk(decoderMtx);
-        delete decoder; decoder = nullptr;
-        delete wefax;   wefax = nullptr;
-        delete sstv;    sstv = nullptr;
-        delete timeDec; timeDec = nullptr;
-        { std::lock_guard<std::mutex> bl(decBufMtx); decTextBuf.clear(); }
+    /** ★★ WHOSE IS A DECODER SOCKET THAT DID NOT SAY? The app has always sent user_session_id on
+     *  /ws/dxcluster; the web client did not (fixed with this change, but a tab loaded before the
+     *  upgrade still runs the old script). On a per-VFO radio "whose audio?" has no default — the
+     *  old one was "the first listener", which is exactly how a stranger's RTTY got fed somebody
+     *  else's WEFAX. So: the ONE listener at this socket's address, if there is exactly one; else
+     *  nobody, and the decoder is refused with words that say to reload. Never a guess. */
+    std::string decoderSessionByAddress(const std::shared_ptr<net::Socket>& sock) {
+        const std::string addr = sock ? sock->peerAddress() : std::string();
+        if (addr.empty()) return "";
+        std::set<std::string> found;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        for (auto& kv : clientDsp) {
+            const auto& c = kv.second;
+            if (!c || c->session.empty()) continue;
+            const bool here = (c->spec && c->spec->isOpen() && c->spec->peerAddress() == addr)
+                           || (c->audio && c->audio->isOpen() && c->audio->peerAddress() == addr);
+            if (here) found.insert(c->session);
+        }
+        return found.size() == 1 ? *found.begin() : std::string();
     }
 
+    /** The session a socket belongs to, or "". Takes clientMtx. */
+    std::string sessionOfSock(const net::Socket* sk) {
+        std::lock_guard<std::mutex> lk(clientMtx);
+        auto it = sockSession.find(const_cast<net::Socket*>(sk));
+        return it == sockSession.end() ? std::string() : it->second;
+    }
+
+    /** ★★ ADVANCED RDS, ASKED FOR ON A DECODER SOCKET — recorded against THAT socket and ITS session,
+     *  so the analyser goes to the listener who opened it and to nobody else (see rdsxWantedLocked). */
+    void rdsxDecoderSub(const net::Socket* dx, const std::string& session, bool on) {
+        { std::lock_guard<std::mutex> lk(rdsxMtx);
+          if (on) rdsxDx[dx] = session; else rdsxDx.erase(dx); }
+        rdsxRecompute();
+    }
     /** @param session the listener this decoder socket belongs to. ★ It never carried one: with
      *  a single VFO there was only one thing it could possibly be decoding. Per-client tuning
      *  makes "whose audio?" a real question, and the session is the only thing that answers it. */
@@ -19807,6 +19382,32 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("raw IQ out: tunnel consumer left");
     }
 
+    /** A host's view of this server: where its dial is, where it logs, whose slots it takes. */
+    DecoderHost::Env decoderEnv(const std::string& session) {
+        DecoderHost::Env e;
+        e.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
+        // ★ The decoder-only sidecar decodes a network radio's audio for the app on this phone — it
+        //   serves nobody else, so it is not a server decoder and takes no slot.
+        e.slots = decoderOnly ? nullptr : &vsDecoderSlots();
+        if (session.empty()) e.dialHz = [this] { return audioFreq.load(); };
+        else e.dialHz = [this, session] {
+            // ★ THIS listener's dial. A spot's RF frequency is dial + audio offset, and on a per-VFO
+            //   radio the shared audioFreq is somebody else's — every spot would be filed wrong.
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) if (kv.second && kv.second->session == session) return kv.second->vfoHz;
+            return audioFreq.load();
+        };
+        return e;
+    }
+
+    /** Tell a listener, in words, why their decoder did not start. `what` is "decoder" or "spots". */
+    void sendDecoderRefusal(const std::shared_ptr<net::Socket>& sock, const char* what, const std::string& ext,
+                            const char* reason, const std::string& message) {
+        sendText(sock, std::string("{\"type\":\"decoder_refused\",\"what\":\"") + what + "\",\"ext\":\""
+                     + vibeadmin::esc(ext) + "\",\"reason\":\"" + reason + "\",\"max\":"
+                     + std::to_string(vsDecoderSlots().max()) + ",\"message\":\"" + vibeadmin::esc(message) + "\"}");
+    }
+
     void acceptDxcluster(std::shared_ptr<net::Socket> sock, const std::string& wsKey,
                          const std::string& session = "") {
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -19817,30 +19418,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // FT8 spots), so they need the same protection as the spectrum path — a browser tab that
         // stops draining its decoder stream must not stall the decoders for everyone else.
         outboxOpen(sock);
-        bool mirror = false;
-        {
-            std::lock_guard<std::mutex> lk(clientMtx);
-            dxExtra.erase(std::remove_if(dxExtra.begin(), dxExtra.end(),
-                [](const std::shared_ptr<net::Socket>& d){ return !d || !d->isOpen(); }), dxExtra.end());
-            // ★★★ A SECOND DECODER SOCKET ON A SHARED DIAL IS A MIRROR, NOT A TAKEOVER. Replacing
-            //     the pointer pointed the running decoder's output at the newcomer and left the
-            //     listener who STARTED it with a dead panel — the same shape as the audio socket
-            //     steal, one channel along.
-            //  ★ `decoderSession` is only reassigned when there is no decoder running: it says
-            //    whose AUDIO the decoders follow, and handing that to a mirror would move the
-            //    decode off the signal the person who opened it chose.
-            if (g_vsMaxUsers.load() > 1 && dxClient && dxClient->isOpen()) {
-                dxExtra.push_back(sock);
-                mirror = true;
-            } else {
-                dxClient = sock;
-                decoderSession = session;
-            }
-        }
-        decoderAttached.store(true, std::memory_order_relaxed);
-        LOGI("dxcluster (decoder) WS connected%s", mirror ? " (mirror)" : "");
-        // ★ Catch the mirror up on the decode already in progress — see dxReplay.
-        if (mirror) dxSendReplay(sock);
+        // ★★★ WHICH HOST. On a per-VFO radio, this listener's own — by session, or by the one
+        //     listener at this address for a client too old to say (decoderSessionByAddress). On
+        //     a shared dial or a one-pipeline radio, THE host, and a second socket is a MIRROR of
+        //     it, not a takeover (the takeover left the listener who STARTED it with a dead panel).
+        const bool perVfo = perClientDsp() && !decoderOnly;
+        std::string sess = session;
+        if (perVfo && sess.empty()) sess = decoderSessionByAddress(sock);
+        std::shared_ptr<DecoderHost> host;
+        if (!perVfo || !sess.empty()) host = decoders_.hostFor(sess, perVfo);
+        auto peer = std::make_shared<DxPeer>(this, sock);
+        const bool mirror = host ? host->addPeer(peer) : false;
+        { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.insert(sock); }
+        LOGI("dxcluster (decoder) WS connected%s%s", perVfo ? " — own decoders" : (mirror ? " (mirror)" : ""),
+             perVfo && sess.empty() ? " — NO SESSION, decoders refused" : "");
+        bool rdsHere = false;
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
             int op = recvWs(sock, payload);
@@ -19849,62 +19441,79 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (op != 0x1) continue;
             std::string type = jsonStr(payload, "type");
             if (type == "audio_extension_attach") {
-                startDecoder(payload, session);
+                const std::string ext = jsonStr(payload, "extension_name");
+                if (decoderBlocked(ext)) {
+                    LOGI("decoder %s refused — the server owner has switched it off on this receiver", ext.c_str());
+                    continue;
+                }
+                // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
+                //    fields we normally discard, plus the constellation). SELECTING IT IS THE TOGGLE,
+                //    so the extra work and bytes are paid only while somebody is looking (Stuart,
+                //    2026-07-26) — and only THAT somebody receives it (2026-09-30, see rdsxWantedLocked).
+                //  ★ Attaching anything replaces what this socket had: the web client runs one decoder
+                //    panel at a time, so selecting RTTY is also closing Advanced RDS.
+                if (ext == "rds") {
+                    const std::string who = !sess.empty() ? sess : decoderSessionByAddress(sock);
+                    if (host) host->stop();
+                    rdsxDecoderSub(sock.get(), who, true); rdsHere = true;
+                    sendText(sock, "{\"type\":\"audio_extension_attached\"}");
+                    continue;
+                }
+                if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
+                if (!host) {
+                    sendDecoderRefusal(sock, "decoder", ext, "no_session",
+                        "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
+                    continue;
+                }
+                const auto r = host->start(ext, payload, peer);
+                if (r == DecoderHost::Start::Refused) {
+                    LOGI("decoder %s refused — all %d decoder slots on this server are in use", ext.c_str(), vsDecoderSlots().max());
+                    sendDecoderRefusal(sock, "decoder", ext, "limit", decoderLimitMessage(vsDecoderSlots().max()));
+                    continue;
+                }
+                if (r == DecoderHost::Start::Unknown) continue;
+                // ★★★ AND WHO STARTED IT, for the admin table — on the one-pipeline host only; a
+                //     listener's own host is theirs by construction.
+                if (!perVfo && !session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
                 sendText(sock, "{\"type\":\"audio_extension_attached\"}");
             } else if (type == "audio_extension_detach") {
-                stopDecoder();
+                if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
+                if (host) host->stop();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
             } else if (type == "subscribe_digital_spots") {
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
                  *  the button, but an old client or a hand-rolled tool must meet the same wall. */
                 if (vsModeBlocked("spots")) {
                     LOGI("digital spots refused — the server owner has switched them off on this receiver");
-                } else
-                startSpots();    // local FT8/FT4 decoder feeds digital_spot frames
+                } else if (!host) {
+                    sendDecoderRefusal(sock, "spots", "ft8", "no_session",
+                        "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
+                } else if (host->startSpots() == DecoderHost::Start::Refused) {
+                    LOGI("digital spots refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
+                    sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
+                } else if (!perVfo && !session.empty()) {
+                    std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session;
+                }
             } else if (type == "unsubscribe_digital_spots") {
-                stopSpots();
+                if (host) host->stopSpots();
             }
             // chat / cw-spot / subscribe_chat messages are ignored (no server here).
         }
-        // ★★★ ONLY TEAR DOWN IF WE ARE STILL THE CURRENT CLIENT — a DEPARTING socket must never
-        // switch off state a NEWER one has already asked for.
-        //
-        // The old code guarded the POINTER against a newer client but tore the decoder and the
-        // spots down unconditionally, which loses a race that a backgrounded browser tab runs
-        // reliably:
-        //   1. the tab is frozen, its socket drops, and this thread is scheduled to exit;
-        //   2. the client reconnects 3s later, re-attaches `rds` and re-subscribes spots —
-        //      the shim keeps no per-client state, so re-asserting is CORRECT and expected;
-        //   3. only THEN does this tail run, calling stopDecoder() (rdsxOn = false) and
-        //      stopSpots() — killing the new client's stream;
-        //   4. `dxClient == sock` is false, so the pointer is left alone, which HID the damage.
-        // The client is none the wiser: its socket is open and it was told "attached", so it
-        // never retries. The Advanced RDS box goes BLANK and stays blank, and digital spots
-        // stop — together, after the tab has been in the background (Stuart, 2026-07-27).
-        //
-        // ★★ Same shape as the per-client-state-in-globals family: state owned by the SERVER
-        // but switched by whichever CLIENT happened to speak last. Guard the ACTION, not just
-        // the bookkeeping that follows it.
-        bool stillCurrent;
-        { std::lock_guard<std::mutex> lk(clientMtx);
-          dxExtra.erase(std::remove_if(dxExtra.begin(), dxExtra.end(),
-              [&](const std::shared_ptr<net::Socket>& d){ return !d || d == sock || !d->isOpen(); }),
-              dxExtra.end());
-          stillCurrent = (dxClient == sock);
-          if (stillCurrent) {
-              dxClient = nullptr;
-              // ★ A mirror is still watching: hand it the primary pointer rather than tearing the
-              //   decoder down under it. Only when NOBODY is left does the decoder stop.
-              for (auto& d : dxExtra)
-                  if (d && d->isOpen()) { dxClient = d; d = nullptr; stillCurrent = false; break; }
-              dxExtra.erase(std::remove(dxExtra.begin(), dxExtra.end(),
-                                        std::shared_ptr<net::Socket>()), dxExtra.end());
-              if (stillCurrent) decoderSession.clear();
-          } }
-        if (stillCurrent) { decoderAttached.store(false, std::memory_order_relaxed);
-                            stopDecoder(); stopSpots(); }
+        // ★★★ ONLY TEAR DOWN WHEN NOBODY IS LEFT ON THE HOST — a DEPARTING socket must never switch
+        //     off what a NEWER one has already asked for. A backgrounded tab's socket drops, the
+        //     client reconnects 3 s later and re-asserts its decoder, and only THEN does the old
+        //     socket's tail run (Stuart, 2026-07-27: the Advanced RDS box went blank and stayed so).
+        //     Counting the host's open sockets is that guard: the reconnected one is already there.
+        if (rdsHere) rdsxDecoderSub(sock.get(), "", false);
+        { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.erase(sock); }
+        const size_t left = host ? host->removePeer(peer.get()) : 0;
+        if (host && left == 0) {
+            // ★ A listener's own host goes with them, slots and all — freed at once for the next.
+            if (perVfo) decoders_.drop(sess);
+            else { host->stop(); host->stopSpots(); }
+        }
         outboxClose(sock);
-        LOGI("dxcluster WS disconnected%s", stillCurrent ? "" : " (superseded — kept decoder)");
+        LOGI("dxcluster WS disconnected%s", host && left ? " (others still watching — kept decoder)" : "");
     }
 
     // ── IQ producer (runs on the libusb/socket reader thread) ───────────────
@@ -19918,6 +19527,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // ★ Accumulators for the 1 Hz overload evaluation above. Touched only on the IQ producer
     //   thread, so they need no lock; the two published figures are atomics.
     uint32_t adcRails_ = 0, adcTotal_ = 0;
+    LogLatch adcLatch_;   // ★ ADC OVERLOAD's own — see LogLatch
     int      clipRun_ = 0;   // consecutive seconds with rail hits — see the dwell above
     uint8_t  adcMax_ = 0, adcMin_ = 255;
     double   adcAt_ = 0;
@@ -20014,10 +19624,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 g_adcClipRun.store(clipRun_, std::memory_order_relaxed);
                 g_adcCleanRun.store(clipping ? 0 : g_adcCleanRun.load(std::memory_order_relaxed) + 1,
                                     std::memory_order_relaxed);
-                if (clipRun_ >= 2)
+                // ★ When it starts, once a minute while it lasts, when it stops — see LogLatch. It
+                //   was once a second for as long as the front end stayed overloaded.
+                switch (adcLatch_.step(clipRun_ >= 2, now)) {
+                case 1: case 2:
                     LOGI("ADC OVERLOAD: %.3f%% of samples on the rail, peak %.1f dBFS "
-                         "(gain is too high for this signal)",
-                         clipPct, g_adcPeakDbfs.load(std::memory_order_relaxed));
+                         "(gain is too high for this signal)%s", clipPct, g_adcPeakDbfs.load(std::memory_order_relaxed),
+                         adcLatch_.forSec(now) >= 1.0 ? (" — for " + std::to_string((int)adcLatch_.forSec(now)) + " s").c_str() : "");
+                    break;
+                case 3:
+                    LOGI("ADC overload cleared after %.0f s", adcLatch_.forSec(now));
+                    break;
+                default: break;
+                }
                 // ★★★ AND A HEARTBEAT, SO THE READING CAN BE TRUSTED. A detector that says nothing
                 //     is indistinguishable from one that is not running — which is exactly how the
                 //     first test of this went (Stuart forced the gain up, saw no line, and there
@@ -20370,22 +19989,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (adminOk.load()) lastAdminTouch.store(Impl::nowSecs());
     }
 
-    /** The listener whose audio drives the decoders. ★ Falls back to the FIRST listener when the
-     *  decoder socket carried no session id — every client shipped before this did exactly that,
-     *  and without the fallback their decoders simply never receive audio: RDS, WEFAX, SSTV and
-     *  FT8 all silently dead (Stuart, 2026-08-05: "none of the decoders are working"). */
-    std::shared_ptr<ClientDsp> decoderOwner() {
-        std::lock_guard<std::mutex> lk(clientMtx);
-        if (!decoderSession.empty())
-            for (auto& kv : clientDsp)
-                if (kv.second->session == decoderSession) return kv.second;
-        if (specClient) {
-            auto it = clientDsp.find(specClient.get());
-            if (it != clientDsp.end()) return it->second;
-        }
-        return clientDsp.empty() ? nullptr : clientDsp.begin()->second;
-    }
-
     /** ★★ A browser opens its spectrum and audio sockets AS A PAIR, in no guaranteed order, and
      *  they are tied together only by the session id. Whichever arrives second does the matching —
      *  so this is called from both paths. Without it a listener whose audio socket landed first is
@@ -20397,7 +20000,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (it == pendingAudio.end()) return;
         for (auto& kv : clientDsp) {
             if (kv.second->session != session) continue;
-            kv.second->audio = it->second;
+            kv.second->audio = it->second.sock;
+            kv.second->wantsOpus = it->second.wantsOpus;   // ★ see PendingAudio — the codec it ASKED for
+            kv.second->forceMono = it->second.forceMono;
             pendingAudio.erase(it);
             return;
         }
@@ -22001,9 +21606,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    nobody is turning, it never disconnects anybody, and a decode suspends it.
         if (vsSharedDial()) return;
         const double now = Impl::nowSecs();
-        std::string decoderOwnerSession;
-        { std::lock_guard<std::mutex> dl(decoderMtx);
-          if (!currentDecoder.empty()) decoderOwnerSession = decoderSession; }
+        // ★ WHO IS DECODING — every listener with a running decoder, not "the" owner: on a per-VFO
+        //   radio there can be one per listener now. Snapshotted BEFORE clientMtx (the router has
+        //   its own lock and the order clientMtx -> router is the one used everywhere else).
+        std::set<std::string> decodingSessions;
+        std::string sharedBy;
+        { std::lock_guard<std::mutex> lk(clientMtx); sharedBy = sharedDecoderBy_; }
+        for (auto& kv : decoders_.all())
+            if (kv.second->wantsAudio()) decodingSessions.insert(kv.first.empty() ? sharedBy : kv.first);
+        decodingSessions.erase(std::string());
 
         std::vector<std::pair<std::shared_ptr<ClientDsp>, bool>> act;   // client, isTimeUp
         {
@@ -22019,7 +21630,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (addr.empty() || isLoopback(addr)) continue;
                 // ★ Watching a decode IS using the radio. Also resets the clock, so the prompt does
                 //   not fire the moment they close it having watched for an hour.
-                if (!decoderOwnerSession.empty() && c->session == decoderOwnerSession) {
+                if (decodingSessions.count(c->session)) {
                     c->lastAsk = now; c->idleAskAt = 0; continue;
                 }
                 // ★ A raw IQ consumer that is taking data IS using the radio — the decoder in
@@ -23073,6 +22684,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    nothing to do, and the session warnings are latched by a bitmask, so the spectrum path
      *    ticking the same functions ~11 times a second changes nothing.
      */
+    /** ★★ A LISTENER WHO HAS GONE KEEPS NO DECODER SLOT. Kicked, timed out or simply vanished, their
+     *  spectrum and audio sockets are closed by whoever ended them — but the decoder socket is a
+     *  third, and a slot held by nobody is one somebody else is refused. 20 s of grace, so a
+     *  reconnecting spectrum socket does not throw away a ten-minute WEFAX chart. */
+    void reapDecoderOrphans() {
+        decoders_.reapOrphans([this](const std::string& s) {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& kv : clientDsp) if (kv.second && kv.second->session == s) return true;
+            for (auto& kv : sockSession) if (kv.second == s) return true;
+            return false;
+        }, nowSecs(), 20.0);
+    }
     void startHousekeeping() {
         if (houseRun.exchange(true)) return;
         houseThread = std::thread([this]{
@@ -23085,6 +22708,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 enforceSessionLimit();
                 enforceAdminIdle();
                 enforceIdleListeners();
+                reapDecoderOrphans();
             }
         });
     }
@@ -24011,6 +23635,17 @@ void LocalSdrShim::setPublicSharing(bool on) {
     g_vsPublicSharing.store(on);
     LOGI("sharing: %s", on ? "public — full admin tools" : "local — simple admin");
 }
+void LocalSdrShim::setDecoderMax(int max) {
+    g_vsDecoderMax.store(max > 0 ? max : 0, std::memory_order_relaxed);
+    vsDecoderMaxPublish();
+    LOGI("decoders: at most %d at once on this server (%s)", vsDecoderMaxLocal(),
+         max > 0 ? "the owner's figure" : "the default for this hardware");
+}
+void LocalSdrShim::setDecoderSlotDir(const std::string& dir) {
+    { std::lock_guard<std::mutex> lk(g_vsDecoderSlotDirMtx); g_vsDecoderSlotDir = dir; }
+    vsDecoderMaxPublish();
+}
+int LocalSdrShim::decoderDefaultMax() { return vsDecoderDefaultMax(); }
 void LocalSdrShim::setAdminIdleMinutes(int minutes) {
     g_vsAdminIdleMin.store(minutes >= 0 ? minutes : 0);
     LOGI("admin idle re-lock: %d min", g_vsAdminIdleMin.load());
@@ -24136,31 +23771,49 @@ std::string LocalSdrShim::adminStatusJson() {
     j += ",\"uniqueHour\":" + std::to_string(g_vsConnLog.uniqueSince(3600));
     // ★ Decoder health: attached, and actually receiving samples. See decoderFedSamples.
     if (p) {
-        j += std::string(",\"decoderAttached\":") + (p->decoderAttached.load() ? "true" : "false")
-           + ",\"decoderFedSamples\":"
-           + std::to_string((unsigned long long)p->decoderFedSamples.load());
-        // ★★★ RESYNCS AND LEVEL. See FskDecoder::resyncs() — a resync discards the decoder's
-        //     whole state, so a counter climbing while text is on the air IS the "clean for a
-        //     bit then slips out" symptom, measured rather than described. `audioLevel` beside
-        //     `audioThreshold` says whether the signal is simply too quiet for the decoder,
-        //     which is a completely different fix from a bad signal.
+        // ★ decoderAttached / decoderFedSamples / decoderKind / decoder{} keep their old names and
+        //   meanings for pages that read them, summed or taken over EVERY host now (B6).
+        bool attached = false; uint64_t fed = 0, dropped = 0; std::string kind = "none";
+        unsigned long rs = 0; double lvl = 0, thr = 0; int st = 0; bool haveFsk = false;
+        std::string running;
+        std::string sharedBy;
+        { std::lock_guard<std::mutex> lk(p->clientMtx); sharedBy = p->sharedDecoderBy_; }
+        for (auto& kv : p->decoders_.all()) {
+            auto& h = kv.second;
+            if (h->peerCount() > 0) attached = true;
+            fed += h->fedSamples(); dropped += h->droppedSamples();
+            const std::string k = h->kind();
+            if (kind == "none" && k != "none") kind = k;
+            if (!haveFsk) haveFsk = h->fskHealth(rs, lvl, thr, st);
+            const std::string nm = h->name();
+            const bool sp = h->spotsOn();
+            if (nm.empty() && !sp) continue;
+            if (!running.empty()) running += ',';
+            running += "{\"session\":\"" + vibeadmin::esc(kv.first.empty() ? sharedBy : kv.first) + "\""
+                     + ",\"shared\":" + (kv.first.empty() ? "true" : "false")
+                     + ",\"decoder\":\"" + vibeadmin::esc(nm) + "\",\"spots\":" + (sp ? "true" : "false")
+                     + ",\"slots\":" + std::to_string(h->slotsHeld()) + "}";
+        }
+        j += std::string(",\"decoderAttached\":") + (attached ? "true" : "false")
+           + ",\"decoderFedSamples\":" + std::to_string((unsigned long long)fed)
+           + ",\"decoderDroppedSamples\":" + std::to_string((unsigned long long)dropped);
         // ★★★ WHICH decoder is actually running. Exposed because "attached" was true while
-        //     NOTHING had been constructed — WEFAX fell through its dispatch for months and the
-        //     only outward sign was an image that never arrived. A name here makes that a
-        //     one-line test instead of an evening.
-        { std::lock_guard<std::mutex> dl(p->decoderMtx);
-          j += std::string(",\"decoderKind\":\"")
-             + (p->wefax ? "wefax" : p->sstv ? "sstv" : p->decoder ? "fsk" : "none") + "\""; }
-        { std::lock_guard<std::mutex> dl(p->decoderMtx);
-          if (p->decoder) {
-              char db[160];
-              snprintf(db, sizeof db,
-                       ",\"decoder\":{\"resyncs\":%lu,\"audioLevel\":%.1f,"
-                       "\"audioThreshold\":%.1f,\"state\":%d}",
-                       p->decoder->resyncs(), p->decoder->audioLevel(),
-                       p->decoder->audioThreshold(), p->decoder->stateNow());
-              j += db;
-          } }
+        //     NOTHING had been constructed — WEFAX fell through its dispatch for months.
+        j += ",\"decoderKind\":\"" + kind + "\"";
+        // ★★★ RESYNCS AND LEVEL — see FskDecoder::resyncs().
+        if (haveFsk) {
+            char db[160];
+            snprintf(db, sizeof db, ",\"decoder\":{\"resyncs\":%lu,\"audioLevel\":%.1f,"
+                     "\"audioThreshold\":%.1f,\"state\":%d}", rs, lvl, thr, st);
+            j += db;
+        }
+        // ★★ THE LIMIT, AS THE OWNER SETS IT AND AS THE BOX IS USING IT. `set` 0 = the default for
+        //    this hardware (`default`); `inUse` counts every radio on the box, not just this one.
+        j += ",\"decoders\":{\"max\":" + std::to_string(vsDecoderSlots().max())
+           + ",\"set\":" + std::to_string(g_vsDecoderMax.load())
+           + ",\"default\":" + std::to_string(vsDecoderDefaultMax())
+           + ",\"inUse\":" + std::to_string(vsDecoderSlots().inUse())
+           + ",\"running\":[" + running + "]}";
     }
     { std::lock_guard<std::mutex> lk(g_vsMaintMtx);
       j += ",\"maintenance\":\"" + vibeadmin::esc(g_vsMaintActions) + "\""; }
@@ -24223,8 +23876,26 @@ std::string LocalSdrShim::adminSessionsJson() {
                           + "}";
         }
     }
-    std::string curDecoder;
-    { std::lock_guard<std::mutex> dl(p->decoderMtx); curDecoder = p->currentDecoder; }
+    // ★★★ WHAT EACH SESSION IS DECODING — snapshotted BEFORE clientMtx like everything else here.
+    //     A per-VFO listener's decoders are their own host's; the one-pipeline host is credited to
+    //     whoever started it. Advanced RDS rides along: it is what a listener chose, and it costs.
+    std::map<std::string, std::string> decBySession;
+    {
+        std::string sharedBy;
+        { std::lock_guard<std::mutex> lk(p->clientMtx); sharedBy = p->sharedDecoderBy_; }
+        for (auto& kv : p->decoders_.all()) {
+            std::string nm = kv.second->name();
+            if (kv.second->spotsOn()) nm += nm.empty() ? "ft8" : "+ft8";
+            if (nm.empty()) continue;
+            const std::string who = kv.first.empty() ? sharedBy : kv.first;
+            if (!who.empty()) decBySession[who] = nm;
+        }
+        std::lock_guard<std::mutex> rl(p->rdsxMtx);
+        for (auto& kv : p->rdsxDx)    if (!kv.second.empty()) { auto& d = decBySession[kv.second]; if (d.find("rds") == std::string::npos) d += d.empty() ? "rds" : "+rds"; }
+        for (auto& kv : p->rdsxSocks) if (!kv.second.empty()) { auto& d = decBySession[kv.second]; if (d.find("rds") == std::string::npos) d += d.empty() ? "rds" : "+rds"; }
+    }
+    const auto decFor = [&decBySession](const std::string& sess) {
+        auto it = decBySession.find(sess); return it == decBySession.end() ? std::string() : it->second; };
     std::map<net::Socket*, unsigned long long> sentBySock;
     {
         std::lock_guard<std::mutex> ol(p->outboxMtx);
@@ -24287,17 +23958,8 @@ std::string LocalSdrShim::adminSessionsJson() {
         } else {
             c->lastDspNanos = nowNanos; c->lastSentBytes = nowBytes; c->lastSampleAt = now;
         }
-        // ★ Only the decoder OWNER is actually decoding — the rest pay nothing for it, and saying
-        //   otherwise would make every listener look like they had one running.
-        //   ★★ Decided from state we ALREADY hold the lock for (decoderSession is guarded by
-        //      clientMtx), not by calling decoderOwner() — see the note above.
-        std::string dec;
-        if (!curDecoder.empty()) {
-            const bool owns = !p->decoderSession.empty()
-                                ? (c->session == p->decoderSession)
-                                : (p->specClient && p->specClient.get() == kv.first);
-            if (owns) dec = curDecoder;
-        }
+        // ★ Each listener's OWN decoders (B6) — from the snapshot above, never a lookup under clientMtx.
+        const std::string dec = decFor(c->session);
         j += "{\"session\":\"" + vibeadmin::esc(c->session) + "\""
            + ",\"ip\":\"" + vibeadmin::esc(peer) + "\""
            + ",\"vfoHz\":" + std::to_string((long long)c->vfoHz)
@@ -24448,11 +24110,7 @@ std::string LocalSdrShim::adminSessionsJson() {
            //    With a single listener it can only be theirs, so it is still shown; with
            //    several, naming one is a guess — and a guess here is what put the iPhone's
            //    RDS on the Mac's row.
-           + ",\"decoder\":\"" + vibeadmin::esc(
-                 (!curDecoder.empty()
-                  && (!p->decoderSession.empty() ? p->decoderSession == rowSession
-                                                 : p->specExtra.empty()))
-                     ? curDecoder : std::string()) + "\""
+           + ",\"decoder\":\"" + vibeadmin::esc(decFor(rowSession)) + "\""
            + ",\"occupant\":true"
            // ★★★ AND BADGE IT HERE TOO. The per-client row above has said `admin` since 08-13; this
            //     one — the row used by every SINGLE-USER radio, which is the Airspy HF+ and the
@@ -24539,9 +24197,7 @@ std::string LocalSdrShim::adminSessionsJson() {
                //    uplink and the time are theirs, though, and are reported.
                + ",\"cpu\":-1,\"kbps\":" + std::to_string(extraKbps)
                // ★ And an extra listener shows the decoder when the session running it is THEIRS.
-               + ",\"decoder\":\"" + vibeadmin::esc(
-                     (!curDecoder.empty() && !p->decoderSession.empty()
-                      && p->decoderSession == sess) ? curDecoder : std::string()) + "\""
+               + ",\"decoder\":\"" + vibeadmin::esc(decFor(sess)) + "\""
                + ",\"occupant\":false"
                // ★★ NOT ADMIN. Whatever the radio-wide flag says, a listener on the shared dial has
                //    proved nothing — badging them would repeat the inherit bug in the one view an
@@ -26519,7 +26175,7 @@ void LocalSdrShim::stopLocked() {
     { std::lock_guard<std::mutex> lk(impl->clientMtx);
       if (impl->specClient) impl->specClient->close();
       if (impl->audioClient) impl->audioClient->close();
-      if (impl->dxClient) impl->dxClient->close();
+      for (auto& d : impl->dxSocks) if (d) d->close();
       // ★ Per-client sockets too, for the same reason — a shared receiver has N of them and
       //   closing only the primary leaves the rest blocking their writers.
       for (auto& kv : impl->clientDsp) {
@@ -26655,9 +26311,9 @@ void LocalSdrShim::stopLocked() {
     impl->teardownAudio();
     impl->rx.stop();
 
-    impl->stopDecodeQueue();   // ★ first: vibe-decode must not be inside a decoder that is about to be deleted
-    impl->stopDecoder();
-    impl->stopSpots();
+    // ★ Every decoder host: each drains and joins its own vibe-decode thread before its decoders are
+    //   deleted, and gives its slots back — before `delete impl` destroys the outboxes they write to.
+    impl->decoders_.shutdownAll();
     { std::lock_guard<std::mutex> lk(impl->nrMtx); delete impl->nrEng; impl->nrEng = nullptr; }
     { std::lock_guard<std::mutex> lk(impl->notchMtx); delete impl->notchEng; impl->notchEng = nullptr; }
     // NOTE: the accept loop needs no poking to exit — it polls accept() with a 500 ms timeout and
@@ -26754,7 +26410,7 @@ void LocalSdrShim::feedDecoderPcm(const int16_t* pcm, int n, int rate) {
         buf.push_back({ v, v });
     }
     if (buf.empty()) return;
-    p->enqueueDecode(buf.data(), (int)buf.size());   // ★ never inline — see enqueueDecode
+    p->decoders_.feedShared(&buf[0].l, (int)buf.size(), 2);   // ★ never inline — the host queues it
 }
 
 void LocalSdrShim::setDecoderFreq(double hz) {

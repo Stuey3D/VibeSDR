@@ -296,6 +296,16 @@ public:
      *  password (Stuart, 2026-08-06). */
     static void setAdminIdleMinutes(int minutes);
 
+    /** ★★★ HOW MANY DECODERS THE BOX RUNS AT ONCE (RTTY/NAVTEX/WEFAX/SSTV/time, and FT8+FT4 as
+     *  one) — across EVERY radio on the machine. 0 = the default for this hardware
+     *  (decoderDefaultMax); the benchmark recommends a measured figure. The next decoder past it is
+     *  refused with a message the listener sees. See vibe_decoder_host.h. */
+    static void setDecoderMax(int max);
+    static int  decoderDefaultMax();
+    /** ★ The directory every radio process on the box shares for the decoder slots (flock files).
+     *  Empty = count in this process only (Android, the Mac app's single engine). Set at startup. */
+    static void setDecoderSlotDir(const std::string& dir);
+
     /** ★★ Is this receiver shared with strangers? Drives WHICH admin panels the page draws —
      *  listeners, blocking and connection history are about managing people you do not know, and
      *  are noise on a household receiver.

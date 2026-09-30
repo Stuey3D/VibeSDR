@@ -38,6 +38,9 @@ flags_for() {
     # ★ Every mode's DSP cost vs passband, both directions and past the ceiling — the audit that
     #   followed the WFM cliff (2026-09-29). Optimised for the same reason.
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
+    #   slot decode finishes in a second rather than ten.
+    test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     *)               echo "" ;;
   esac
 }
@@ -78,11 +81,30 @@ deps_for() {
     test-geoip)         echo "$SRC/geoip.cpp $SRC/proc.cpp" ;;
     test-asndb)         echo "$SRC/asndb.cpp $SRC/proc.cpp" ;;
     test-admin-banlist) echo "" ;;
+    test-decoder-hosts) echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+                              android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
     *)                  echo "" ;;
   esac
 }
 
-pass=0; fail=0; broke=0
+# test name -> C sources it needs. ★ Compiled as C, separately: g++ would compile a .c file as C++,
+#   and ft8_lib is C that C++ refuses (malloc without a cast). Prints the object files built.
+FT8C=android/app/src/main/cpp/ft8_lib
+cobjs_for() {
+  case "$1" in
+    test-decoder-hosts)
+      local d="$OUT/cobj-ft8"; mkdir -p "$d"
+      for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
+        local o="$d/$(basename "$f" .c).o"
+        [ "$o" -nt "$f" ] || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
+        printf '%s ' "$o"
+      done ;;
+    *) ;;
+  esac
+}
+
+pass=0; fail=0; broke=0; notrun=0
 for t in "$SRC"/test-*.cpp; do
   name="$(basename "$t" .cpp)"
   # ★ Not every test fits this harness. It compiles ONE .cpp with a named handful of deps, which is
@@ -95,8 +117,9 @@ for t in "$SRC"/test-*.cpp; do
   esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
   # shellcheck disable=SC2046
-  if ! g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for "$name") \
-        -o "$OUT/$name" "$t" $(deps_for "$name") 2>"$OUT/$name.buildlog"; then
+  if ! cobj="$(cobjs_for "$name" 2>"$OUT/$name.buildlog")" || \
+     ! g++ -std=c++17 -I "$SRC" -I android/app/src/main/cpp $(flags_for "$name") \
+        -o "$OUT/$name" "$t" $(deps_for "$name") $cobj 2>>"$OUT/$name.buildlog"; then
     printf '   \033[33mdid not build\033[0m — %s\n' "$OUT/$name.buildlog"
     head -5 "$OUT/$name.buildlog" | sed 's/^/     /'
     broke=$((broke+1)); continue
@@ -132,6 +155,15 @@ if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)
 #   server has delivered audio in bursts — the Sony's narrow-WFM overload, 2026-09-29. Silent.
 if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
+# ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
+#     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
+#     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.
+#  ★ It needs a vibeserver BUILT FROM THIS TREE (VIBESERVER_BIN=…). Without one it is reported as
+#    NOT RUN — counted separately, never as a pass: a stale binary would test yesterday's server.
+printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
+node scripts/test-server-decoders.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
 #     pbxproj owns MARKETING_VERSION and only `expo prebuild` would copy it across, which this
 #     project deliberately never runs — so the App Store shipped 10.2 while the app's own About
@@ -139,5 +171,5 @@ if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((
 #     inspected by hand before submitting.
 if node scripts/check-versions.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
-printf '\n\033[1m%d suite(s) passed, %d failed, %d did not build\033[0m\n' "$pass" "$fail" "$broke"
+printf '\n\033[1m%d suite(s) passed, %d failed, %d did not build, %d not run\033[0m\n' "$pass" "$fail" "$broke" "$notrun"
 [ "$fail" -eq 0 ] && [ "$broke" -eq 0 ]

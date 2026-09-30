@@ -150,6 +150,7 @@ struct Opts {
     int         nbWide = 1;              // wide impulse blanker — see RadioConfig::nbWide
     std::string blockedModes;            // modes/decoders switched off — see Config::blockedModes
     int         adminIdleMin = 30;      // admin controls re-lock after this idle; 0 = never
+    int         decoderMax = -1;        // ★ --decoder-max: overrides ServerConfig::decoderMax (-1 = the config's)
     // ★ Local by default — the mode that behaves exactly as VibeServer always has. A new setting
     //   must never change what an existing install does.
     bool        publicSharing = false;
@@ -317,6 +318,8 @@ void usage() {
         "                        listeners, blocking and connection history. Without it the\n"
         "                        server behaves exactly as before — those panels are about\n"
         "                        managing people you do not know.\n"
+        "  --decoder-max N       decoders (RTTY, WEFAX, FT8…) the whole machine runs at once;\n"
+        "                        0 = the default for this hardware. Normally set by the benchmark.\n"
         "  --admin-idle MIN      re-lock admin controls after MIN idle (default 30, 0 = never).\n"
         "                        The session keeps running — only the controls lock.\n"
         "                        (bias-T, direct sampling, calibration). Set this on any\n"
@@ -431,6 +434,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--trusted-proxies") o.trustedProxies = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
         else if (a == "--admin-idle")     o.adminIdleMin    = std::atoi(need(i));
+        else if (a == "--decoder-max")    o.decoderMax      = std::atoi(need(i));
         else if (a == "--public")         o.publicSharing   = true;
         // ★★★ "RUN THE SERVER, USING THE STORED CONFIG, AND DO NOT SHOW THE SETUP SCREEN."
         //     It sets nothing — the config file already has it all. It exists because the ONLY
@@ -2344,6 +2348,8 @@ int main(int argc, char** argv) {
         if (patched("updateSrvDay"))  srv.updateSrvDay  = next.updateSrvDay;
         if (patched("updateAllHour")) srv.updateAllHour = next.updateAllHour;
         if (patched("updateAllDay"))  srv.updateAllDay  = next.updateAllDay;
+        // ★ The decoder limit is the machine's too — the admin page's "decoders" post rides here.
+        if (patched("decoderMax"))    srv.decoderMax    = next.decoderMax;
 
         // ★ Do NOT touch `configured` here. Only the setup page finishing means "set up"; a gain
         //   tweak on a half-configured server must not silently declare it done.
@@ -3089,6 +3095,12 @@ int main(int argc, char** argv) {
         // ★ The CAP, not the switch — the switch is derived from it in the config reader so the
         //   two can never disagree. See ServerConfig::maxRadiosPerIp.
         LocalSdrShim::instance().setMaxRadiosPerIp(g_serverConfig.maxRadiosPerIp);
+        // ★★★ THE DECODER LIMIT — MACHINE-level too, and for a harder reason: every radio is its
+        //     own process, so the slots must live somewhere they all see. The runtime dir is where
+        //     the hand-off sockets already meet; the slots are flock()ed files in it (see
+        //     vibe_decoder_host.h), released by the kernel if a radio process dies holding one.
+        LocalSdrShim::setDecoderSlotDir(handoffDir());
+        LocalSdrShim::setDecoderMax(o.decoderMax >= 0 ? o.decoderMax : g_serverConfig.decoderMax);
         // ★ Per radio, like everything else here: one machine may run a shared FM-DX dial and a
         //   private HF receiver at the same time, and they want opposite answers.
         // ★ Nothing to set for the shared dial: it IS "unlocked centre + more than one listener",

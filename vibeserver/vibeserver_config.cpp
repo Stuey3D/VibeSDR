@@ -239,6 +239,7 @@ std::string toJson(const Config& c) {
     S("trustedProxies", c.trustedProxies);
     B("oneRadioPerIp", c.oneRadioPerIp);
     N("maxRadiosPerIp", c.maxRadiosPerIp);
+    N("decoderMax", c.decoderMax);
     N("port", c.port);
     j += "  \"web\": " + std::string(c.web ? "true" : "false") + "\n}\n";
     return j;
@@ -340,6 +341,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     c.maxRadiosPerIp = c.oneRadioPerIp ? 1 : 0;
     if (getNum(s, "maxRadiosPerIp", d)) c.maxRadiosPerIp = (int)(d < 0 ? 0 : d);
     c.oneRadioPerIp = (c.maxRadiosPerIp != 0);
+    if (getNum(s, "decoderMax", d)) c.decoderMax = (int)(d < 0 ? 0 : d);
     if (getNum(s, "uncompressed", d)) c.uncompressed = (int)d;
     if (getNum(s, "port", d))        c.port = (int)d;
     getBool(s, "web", c.web);
@@ -584,6 +586,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     out.trustedProxies = one.trustedProxies;
     out.oneRadioPerIp = one.oneRadioPerIp;
     out.maxRadiosPerIp = one.maxRadiosPerIp;
+    out.decoderMax   = one.decoderMax;
     out.port         = one.port;
     out.web          = one.web;
 
@@ -657,6 +660,7 @@ std::string toJson(const ServerConfig& c) {
     S("trustedProxies", c.trustedProxies);
     B("oneRadioPerIp", c.oneRadioPerIp);
     N("maxRadiosPerIp", c.maxRadiosPerIp);
+    N("decoderMax", c.decoderMax);
     // ★ The owner's standing message for the landing screen, and its link. See ServerConfig.
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
@@ -719,6 +723,8 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     I("maxRadiosPerIp", c.maxRadiosPerIp);
     if (c.maxRadiosPerIp < 0) c.maxRadiosPerIp = 0;
     c.oneRadioPerIp = (c.maxRadiosPerIp != 0);
+    I("decoderMax", c.decoderMax);
+    if (c.decoderMax < 0) c.decoderMax = 0;
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
     // ★★★ WHATEVER THE SOURCE, IT PASSES THROUGH HERE — a hand-edited file, a restored backup or
@@ -903,6 +909,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.trustedProxies = s.trustedProxies;
     c.oneRadioPerIp = s.oneRadioPerIp;
     c.maxRadiosPerIp = s.maxRadiosPerIp;
+    c.decoderMax = s.decoderMax;
     c.web = s.web;
 
     c.mode = r.mode;
