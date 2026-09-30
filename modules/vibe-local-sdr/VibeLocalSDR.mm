@@ -7,6 +7,8 @@
 #import <Foundation/Foundation.h>
 #include <string>
 #include <vector>
+#include <sys/sysctl.h>
+#include <sys/utsname.h>
 #include "local_sdr_shim.h"
 
 @interface VibeLocalSDR : NSObject <RCTBridgeModule>
@@ -157,6 +159,41 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(transliterate:(NSString *)text) {
   if (![text isKindOfClass:[NSString class]] || text.length == 0) return @"";
   NSString *out = [text stringByApplyingTransform:@"Any-Latin; Latin-ASCII" reverse:NO];
   return out ?: text;
+}
+
+// ── DEVICE CLASS — Transparency effects' low-end default (src/constants/transparency.ts) ─────
+// { totalMemoryBytes, model, isMac }. Mirrors VibeLocalSdrModule.deviceClass on Android; read once
+// by src/services/deviceClass.ts. SYNCHRONOUS so the first frame already has the default.
+// ★ model = utsname.machine, the identifier VibeCrashLog.hardwareModel() reports ("iPhone11,8").
+//   That lives in the app target's Swift, out of this pod's reach, so it is mirrored here.
+// ★★ On a Mac (the iPad app on Apple silicon, or Catalyst) machine is not an iPhone identifier: say
+//   so with isMac, and report the Mac's own hw.model ("Mac14,2") when sysctl will give it. The JS
+//   rule never downgrades a Mac on memory, model or version.
+static NSString *sysctlString(const char *name) {
+  size_t size = 0;
+  if (sysctlbyname(name, NULL, &size, NULL, 0) != 0 || size == 0) return nil;
+  std::vector<char> buf(size + 1, 0);
+  if (sysctlbyname(name, buf.data(), &size, NULL, 0) != 0) return nil;
+  NSString *s = [NSString stringWithUTF8String:buf.data()];
+  return s.length ? s : nil;
+}
+
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(deviceClass) {
+  NSProcessInfo *pi = NSProcessInfo.processInfo;
+  BOOL isMac = NO;
+  if (@available(iOS 14.0, *)) isMac = pi.isiOSAppOnMac;
+  if (@available(iOS 13.0, *)) isMac = isMac || pi.isMacCatalystApp;
+  NSString *model = nil;
+  if (isMac) model = sysctlString("hw.model");
+  if (!model) {
+    struct utsname u; uname(&u);
+    model = [NSString stringWithUTF8String:u.machine] ?: @"";
+  }
+  return @{
+    @"totalMemoryBytes": @((double)pi.physicalMemory),
+    @"model": model,
+    @"isMac": @(isMac),
+  };
 }
 
 // ── USB (Android-only) — reject on iOS ──────────────────────────────────────

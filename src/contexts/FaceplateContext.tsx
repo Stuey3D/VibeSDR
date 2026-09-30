@@ -27,10 +27,11 @@ import {
   type SurfaceTokens,
 } from '../constants/faceplate';
 import {
-  autoTransparency, effectiveTransparency, parseOsVersion,
+  autoTransparency, effectiveTransparency, parseDeviceClass, parseOsVersion,
   type AutoTransparency, type DeviceSignals,
 } from '../constants/transparency';
 import { installNativeTransliterator } from '../services/transliterator';
+import { readNativeDeviceClass } from '../services/deviceClass';
 
 // ★ The dot-matrix / 14-segment displays transliterate non-Latin names with the platform's ICU
 //   (brief §7). Installed once, when the faceplate owner loads — before any display draws.
@@ -62,9 +63,9 @@ const FaceplateContext = createContext<FaceplateContextValue>({
 });
 
 /**
- * The signals low-end detection can read in JS today (see transparency.ts for what is missing and
- * why). Synchronous, so the first frame already has the device's default — only Reduce
- * Transparency arrives a moment later, from a promise.
+ * The signals low-end detection reads (transparency.ts header says where each comes from).
+ * Synchronous — RAM / model / Mac come from one blocking native getter — so the first frame already
+ * has the device's default; only Reduce Transparency arrives a moment later, from a promise.
  */
 function baseSignals(): DeviceSignals {
   const os = Platform.OS === 'ios' ? 'ios' : Platform.OS === 'android' ? 'android' : 'other';
@@ -73,8 +74,8 @@ function baseSignals(): DeviceSignals {
     isPad: Platform.OS === 'ios' && !!(Platform as { isPad?: boolean }).isPad,
     isTV: !!Platform.isTV,
     reduceTransparency: false,
-    totalMemoryBytes: null,   // ★ no JS source yet — transparency.ts header
-    modelId: null,            // ★ no JS source yet — transparency.ts header
+    // ★ No getter (old binary, Expo Go, web) → null / null / false: decides nothing.
+    ...parseDeviceClass(readNativeDeviceClass()),
   };
 }
 

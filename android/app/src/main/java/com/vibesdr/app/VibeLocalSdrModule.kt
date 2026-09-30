@@ -132,6 +132,27 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /** DEVICE CLASS — Transparency effects' low-end default (src/constants/transparency.ts):
+     *  { totalMemoryBytes, model, isMac }. Mirrors VibeLocalSDR.mm's deviceClass on iOS; read once by
+     *  src/services/deviceClass.ts. SYNCHRONOUS so the first frame already has the default.
+     *  ★ totalMem is what the kernel reports — a "3 GB" phone shows a little under 3 GiB; the JS line
+     *    sits at 3.5 GiB for that reason. 0 (unreadable) decides nothing in JS.
+     *  ★ isMac is always false here: it exists for the iOS app on a Mac. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun deviceClass(): WritableMap {
+        val out = Arguments.createMap()
+        val total = try {
+            val am = reactContext.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            val mi = android.app.ActivityManager.MemoryInfo()
+            am?.getMemoryInfo(mi)
+            mi.totalMem
+        } catch (_: Throwable) { 0L }
+        out.putDouble("totalMemoryBytes", total.toDouble())
+        out.putString("model", "${Build.MANUFACTURER ?: ""} ${Build.MODEL ?: ""}".trim())
+        out.putBoolean("isMac", false)
+        return out
+    }
+
     /** ★ Lite: "run the server in the background — minimise app". Home, in effect: the task goes to the back
      *  and NOTHING stops — the server lives in its foreground service either way. */
     @ReactMethod

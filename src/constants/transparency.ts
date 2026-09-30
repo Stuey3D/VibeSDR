@@ -11,15 +11,17 @@
  *   out afresh on every launch, so a restored backup on a newer phone is not left solid, and an OS
  *   Reduce Transparency switched off again brings the glass back — unless the user picked.
  *
- * ★★ WHAT THE APP CAN ACTUALLY SEE TODAY (no native dependency added — expo-device is not
- *   installed and nothing we ship exposes RAM or the model identifier to JS):
+ * ★★ WHERE THE SIGNALS COME FROM (no dependency added — expo-device / react-native-device-info are
+ *   deliberately not installed):
  *     • iOS Reduce Transparency — AccessibilityInfo (react-native core), live.
  *     • Android API level, iOS major version — Platform.Version.
  *     • iPhone vs iPad — Platform.isPad.
- *   `totalMemoryBytes` and `modelId` are rules WITHOUT A SOURCE yet: a native getter (iOS
- *   ProcessInfo.physicalMemory + the utsname machine VibeCrashLog already reads; Android
- *   ActivityManager.MemoryInfo.totalMem) would supply them. Until then they arrive null and decide
- *   nothing — the tests prove the rules so the getter is the only missing piece.
+ *     • RAM, model identifier, "this is a Mac" — ONE synchronous native getter,
+ *       `NativeModules.VibeLocalSDR.deviceClass()` (iOS ProcessInfo.physicalMemory + utsname
+ *       machine, the identifier VibeCrashLog reports; Android ActivityManager.MemoryInfo.totalMem +
+ *       MANUFACTURER MODEL), read by src/services/deviceClass.ts and checked by `parseDeviceClass`
+ *       below. An old binary, Expo Go, web and tests have no getter: those fields arrive null /
+ *       false and decide nothing, exactly as before the getter existed.
  *
  * Pure: no React, no imports — Node runs the test straight from this file.
  */
@@ -34,10 +36,31 @@ export interface DeviceSignals {
   isTV:                boolean;
   /** The OS accessibility setting (iOS only — Android has no equivalent; it arrives false). */
   reduceTransparency:  boolean;
-  /** Physical RAM, bytes. ★ No source yet (see header) — null. */
+  /** Physical RAM, bytes — from the native getter (header); null when there is none. */
   totalMemoryBytes:    number | null;
-  /** Apple's model identifier, e.g. "iPhone11,8". ★ No source yet (see header) — null. */
+  /** iOS: Apple's model identifier, e.g. "iPhone11,8". Android: "MANUFACTURER MODEL" (read by no
+   *  rule — Android is judged on memory and API level). Null when there is no getter. */
   modelId:             string | null;
+  /**
+   * ★★ The iOS app running on a Mac (Apple silicon "Designed for iPad", or Catalyst). A Mac is never
+   * low-end here: only the user's own Reduce Transparency can turn its glass off — no memory, model or
+   * version rule applies (the version it reports is not an iOS one, its identifier is not an iPhone's).
+   */
+  isMac:               boolean;
+}
+
+/** What the native `deviceClass()` getter hands back, checked. Anything malformed → that field
+ *  decides nothing (null / false); a missing getter (undefined) → all three decide nothing. */
+export function parseDeviceClass(raw: unknown):
+    Pick<DeviceSignals, 'totalMemoryBytes' | 'modelId' | 'isMac'> {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const mem = o.totalMemoryBytes;
+  const model = o.model;
+  return {
+    totalMemoryBytes: typeof mem === 'number' && Number.isFinite(mem) && mem > 0 ? mem : null,
+    modelId: typeof model === 'string' && model.trim() ? model.trim() : null,
+    isMac: o.isMac === true,
+  };
 }
 
 export type AutoReason = 'reduceTransparency' | 'lowMemory' | 'oldModel' | 'oldAndroid' | 'oldIos';
@@ -81,6 +104,7 @@ export function isPreA12Model(modelId: string | null): boolean {
 export function autoTransparency(d: DeviceSignals): AutoTransparency {
   const off = (reason: AutoReason): AutoTransparency => ({ transparency: 'off', reason });
   if (d.reduceTransparency) return off('reduceTransparency');
+  if (d.isMac) return { transparency: 'on', reason: null };   // ★★ never downgraded (see isMac)
   if (typeof d.totalMemoryBytes === 'number' && d.totalMemoryBytes > 0 && d.totalMemoryBytes <= LOW_MEMORY_BYTES) {
     return off('lowMemory');
   }

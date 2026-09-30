@@ -23,7 +23,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  autoTransparency, effectiveTransparency, isPreA12Model, parseOsVersion,
+  autoTransparency, effectiveTransparency, isPreA12Model, parseDeviceClass, parseOsVersion,
   LOW_MEMORY_BYTES, MIN_ANDROID_API, MIN_IPHONE_IOS, AUTO_REASON_NOTE,
   type DeviceSignals,
 } from '../src/constants/transparency.ts';
@@ -48,7 +48,7 @@ const ok = (what: string, cond: boolean) => eq(what, cond, true);
 /** A current, fast phone: every signal says "leave the glass on". */
 const FAST: DeviceSignals = {
   os: 'ios', osVersion: 26, isPad: false, isTV: false, reduceTransparency: false,
-  totalMemoryBytes: null, modelId: null,
+  totalMemoryBytes: null, modelId: null, isMac: false,
 };
 const GB = 1024 ** 3;
 
@@ -92,6 +92,57 @@ for (const r of ['reduceTransparency', 'lowMemory', 'oldModel', 'oldAndroid', 'o
 eq('iOS version string → major', parseOsVersion('16.7.10'), 16);
 eq('Android API number passes through', parseOsVersion(33), 33);
 eq('garbage version → null', parseOsVersion('beta'), null);
+
+// ── Fed from the native deviceClass() getter (src/services/deviceClass.ts) ────
+// What VibeLocalSDR.deviceClass() returns, through parseDeviceClass, into the rules — the path
+// FaceplateContext.baseSignals() takes.
+const fed = (os: DeviceSignals['os'], osVersion: number, raw: unknown, extra: Partial<DeviceSignals> = {}) =>
+  autoTransparency({ ...FAST, os, osVersion, ...parseDeviceClass(raw), ...extra });
+
+eq('iPhone XR "iPhone11,8", 3 GB (reports ~2.8 GiB), iOS 18 → OFF (memory)',
+   fed('ios', 18, { totalMemoryBytes: 2.8 * GB, model: 'iPhone11,8', isMac: false }), { transparency: 'off', reason: 'lowMemory' });
+eq('iPhone 15 "iPhone15,4", 6 GB (reports ~5.6 GiB), iOS 26 → ON',
+   fed('ios', 26, { totalMemoryBytes: 5.6 * GB, model: 'iPhone15,4', isMac: false }), { transparency: 'on', reason: null });
+eq('iPhone X "iPhone10,3" on iOS 16 → OFF (memory first: it has 3 GB)',
+   fed('ios', 16, { totalMemoryBytes: 2.8 * GB, model: 'iPhone10,3', isMac: false }).reason, 'lowMemory');
+eq('iPhone 8 Plus "iPhone10,5" with 3 GB-plus reported → OFF by model',
+   fed('ios', 16, { totalMemoryBytes: 3.6 * GB, model: 'iPhone10,5', isMac: false }).reason, 'oldModel');
+eq('2 GB Android (reports ~1.8 GiB), Android 11 → OFF',
+   fed('android', 30, { totalMemoryBytes: 1.8 * GB, model: 'samsung SM-A125F', isMac: false }), { transparency: 'off', reason: 'lowMemory' });
+eq('8 GB Android 14 (reports ~7.4 GiB) → ON',
+   fed('android', 34, { totalMemoryBytes: 7.4 * GB, model: 'Google Pixel 8', isMac: false }), { transparency: 'on', reason: null });
+eq('an Android "model" never trips the iOS model rule',
+   fed('android', 34, { totalMemoryBytes: 7.4 * GB, model: 'iPhone10,3', isMac: false }).transparency, 'on');
+// ★★ A Mac is never downgraded by memory, model or version — only by its own Reduce Transparency.
+eq('Mac "Mac14,2", 8 GB → ON', fed('ios', 15, { totalMemoryBytes: 8 * GB, model: 'Mac14,2', isMac: true }, { isPad: true }).transparency, 'on');
+eq('Mac with a (spoofed) pre-A12 identifier and little memory → still ON',
+   fed('ios', 14, { totalMemoryBytes: 2 * GB, model: 'iPad7,11', isMac: true }).transparency, 'on');
+eq('Mac on an iPhone-idiom version below 17 → still ON',
+   fed('ios', 15, { totalMemoryBytes: 16 * GB, model: 'MacBookPro18,3', isMac: true }).transparency, 'on');
+eq('Mac with Reduce Transparency → OFF (the user\'s own words)',
+   fed('ios', 15, { totalMemoryBytes: 16 * GB, model: 'Mac14,2', isMac: true }, { reduceTransparency: true }).reason, 'reduceTransparency');
+
+// The guard: no getter (old binary, Expo Go, web, tests) or garbage decides nothing.
+eq('no getter → nothing decided', parseDeviceClass(undefined), { totalMemoryBytes: null, modelId: null, isMac: false });
+eq('null → nothing decided', parseDeviceClass(null), { totalMemoryBytes: null, modelId: null, isMac: false });
+eq('garbage fields → nothing decided',
+   parseDeviceClass({ totalMemoryBytes: 'lots', model: 42, isMac: 'yes' }), { totalMemoryBytes: null, modelId: null, isMac: false });
+eq('0 / negative / NaN / Infinity memory → null',
+   [0, -1, NaN, Infinity].map(m => parseDeviceClass({ totalMemoryBytes: m }).totalMemoryBytes), [null, null, null, null]);
+eq('blank model → null', parseDeviceClass({ model: '  ' }).modelId, null);
+eq('no getter on an iPhone left on iOS 16 still falls back to the version rule', fed('ios', 16, undefined).reason, 'oldIos');
+eq('no getter on a current iPhone → ON', fed('ios', 26, undefined).transparency, 'on');
+{
+  const src = readFileSync(new URL('../src/contexts/FaceplateContext.tsx', import.meta.url), 'utf8');
+  ok('FaceplateContext feeds the getter into the signals', /parseDeviceClass\(readNativeDeviceClass\(\)\)/.test(src));
+  const svc = readFileSync(new URL('../src/services/deviceClass.ts', import.meta.url), 'utf8');
+  ok('deviceClass.ts guards a missing method and a throwing call',
+     /typeof fn === 'function'/.test(svc) && /catch/.test(svc));
+  const mm = readFileSync(new URL('../modules/vibe-local-sdr/VibeLocalSDR.mm', import.meta.url), 'utf8');
+  ok('iOS exports deviceClass synchronously', /RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD\(deviceClass\)/.test(mm));
+  const kt = readFileSync(new URL('../android/app/src/main/java/com/vibesdr/app/VibeLocalSdrModule.kt', import.meta.url), 'utf8');
+  ok('Android exports deviceClass synchronously', /isBlockingSynchronousMethod = true\)\s*fun deviceClass\(\)/.test(kt));
+}
 
 // ── A stored choice always wins; the auto default is never saved as if chosen ─
 
