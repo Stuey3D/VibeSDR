@@ -9,6 +9,7 @@
  */
 import {
   portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind,
+  VU_SEGMENTS, VU_LABELS, VU_THRESHOLDS, LED_SPEC, RING_OPEN, RING_CLOSED, ledColourOf, ringSegment, vuPos, peakStep,
 } from '../src/constants/meters.ts';
 
 let fails = 0, passes = 0;
@@ -80,6 +81,44 @@ eq('squelch off (−1): never closed', sqlClosedOf(-1, true, 0), false);
 eq('gate verdict wins over geometry', sqlClosedOf(0.5, false, 0.1), false);
 eq('no verdict: below the line = closed', sqlClosedOf(0.5, undefined, 0.4), true);
 eq('no verdict: above the line = open', sqlClosedOf(0.5, undefined, 0.6), false);
+
+// ── §4.3 THE LED TABLE ───────────────────────────────────────────────────────
+eq('5 green / 3 orange / 2 red', Array.from({ length: VU_SEGMENTS }, (_, i) => ledColourOf(i)).join(','),
+   'green,green,green,green,green,orange,orange,orange,red,red');
+eq('labels, S9 top of the green', [VU_LABELS.length, VU_LABELS[4], ledColourOf(4), ledColourOf(5)], [10, 'S9', 'green', 'orange']);
+eq('LED colours are the brief\'s, verbatim (green)', Object.values(LED_SPEC.green).slice(0, 6),
+   ['#e9ffe9', '#7dff9c', '#22d24e', '#0c7a26', '#1d3a23', '#0b170e']);
+eq('LED colours (orange)', Object.values(LED_SPEC.orange).slice(0, 6),
+   ['#fff3dc', '#ffc36b', '#ff8a12', '#a34a05', '#3d2811', '#170f06']);
+eq('LED colours (red)', Object.values(LED_SPEC.red).slice(0, 6),
+   ['#fff0ee', '#ff8a80', '#f2231a', '#8d0c07', '#3e1613', '#180807']);
+eq('ring green open / red closed', [RING_OPEN, RING_CLOSED], ['#3dff72', '#ff3a2e']);
+// ★★ The ring and the segments read ONE table: the mockup's bar line for a ring on `sq` is (sq + .5)×10 %.
+for (let sq = 0; sq < 10; sq++) eq(`mockup: bar line at ${(sq + 0.5) * 10}% → ring on segment ${sq}`, ringSegment((sq + 0.5) / 10), sq);
+eq('squelch off (−1): no ring', ringSegment(-1), -1);
+eq('squelch absent: no ring', ringSegment(undefined), -1);
+eq('squelch at the very top: the last LED', ringSegment(1), 9);
+eq('squelch at the very bottom: the first LED', ringSegment(0), 0);
+// ★★★ §4.3 TRAP, as a property: AT the level where the gate opens (level == sql), the ringed LED is the
+//     one on the edge — every LED below it is past its threshold, none above it is. Any table.
+for (const table of [VU_THRESHOLDS, [0.2, 1, 2.1, 3.5, 4.4, 5.9, 6.5, 7.2, 8.8, 9.6]]) {
+  for (let k = 0; k <= 1000; k++) {
+    const sql = k / 1000, p = vuPos(sql), ring = ringSegment(sql, table);
+    const below = table.slice(0, ring).every(T => T <= p + 1e-9);
+    const above = table.slice(ring + 1).every(T => T >= p - 1e-9);
+    if (!below || !above) { eq(`ring on the edge LED at sql ${sql} (table ${table === VU_THRESHOLDS ? 'uniform' : 'uneven'})`, ring, 'the edge'); break; }
+  }
+  passes++;
+}
+// Peak hold: one segment above the level, ~1 s, then back to the level.
+{
+  const p = { idx: -1, at: 0 };
+  eq('peak rises with the level', peakStep(p, 6, 0), -1);
+  eq('level falls: the peak holds one segment above', peakStep(p, 3, 500), 6);
+  eq('…still held at 1 s', peakStep(p, 3, 1000), 6);
+  eq('…drops after ~1 s', peakStep(p, 3, 1001), -1);
+  eq('a new high is caught at once', peakStep(p, 8, 1100), -1);
+}
 
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate meters: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

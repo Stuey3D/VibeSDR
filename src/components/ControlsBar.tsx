@@ -46,6 +46,7 @@ import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import type { SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
 import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
+import LedVu from './LedVu';
 import { GhostGrid, SegDigits } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
 import { FONT_DOTO, rgba } from '../constants/faceplate';
@@ -1068,14 +1069,15 @@ function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeL
 }
 
 /** The LED strip's / edgewise meter's black housing (§4.3 / §4.5): `#030303 → #0b0b0b`, inset shadow,
- *  the chassis lip below. What it holds arrives with the meters themselves. */
-function MeterHousing({ kind, height, lip }: {
+ *  the chassis lip below, and the meter in it. */
+function MeterHousing({ kind, height, shared, lip, bus }: {
   kind: MeterKind; height: number; shared: boolean; lip: string; bus?: MeterBus;
 }) {
   return (
     <View style={[cd.housing, { height }]}>
       <View pointerEvents="none" style={cd.housingShade} />
       <View pointerEvents="none" style={[cd.lip, { backgroundColor: kind === 'vu' ? 'rgba(255,255,255,0.22)' : lip }]} />
+      {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} />}
     </View>
   );
 }
