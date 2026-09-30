@@ -129,6 +129,8 @@ import ChatDrawer,
   { type ChatMessage } from '../components/ChatDrawer';
 import { DIAL_PHRASES, phraseText, dialSummary, speakerName,
          type DialState } from '../services/dialChat';
+import { blindTuneReason, blindTuneRefusal, mediaSkipEnabled, dialAlone,
+         type BlindTuneAction, type BlindTuneInput } from '../services/blindTuneGate';
 import DecoderPanel,
   { type DecoderType } from '../components/DecoderPanel';
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
@@ -3669,6 +3671,36 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [noticeSeen, setNoticeSeen] = useState('');
   const [adminSet, setAdminSet] = useState(false);
   const [adminOk,  setAdminOk]  = useState(false);
+  /* ★★★ THE BLIND TUNES OBEY THE SHARED DIAL, AS THEY ALWAYS HAVE ON FM-DX. The lock-screen /
+   *    headphone / car ⏮⏭, a car-list pick and Siri cannot see the SHARED TUNER banner, so they
+   *    cannot ask — and on one shared tuner they retune every listener. FM-DX switched ⏮⏭ off in
+   *    native from the start; a VibeServer shared dial left them all live (Stuart, 2026-09-30).
+   *    The rule, and why the deck itself is NOT gated, is in services/blindTuneGate.
+   *  ★ A ref for the native listeners (registered once — a captured value would be the first
+   *    render's), and the ⏮⏭ switch pushed to native so the lock screen GREYS them rather than
+   *    offering a button that does nothing. Re-pushed on reconnect: the Android service can be
+   *    recreated, exactly as the skip MODE is. */
+  const blindGate: BlindTuneInput = {
+    serverType: String(route.params.serverType ?? 'ubersdr'),
+    dial: dialState, readOnly, admin: adminOk,
+  };
+  const blindGateRef = useRef(blindGate);
+  blindGateRef.current = blindGate;
+  const skipOn = mediaSkipEnabled(blindGate);
+  useEffect(() => {
+    VibePowerModule?.setMediaSkipEnabled?.(skipOn);
+  }, [skipOn, connected]);
+  // ★ Leaving a shared dial must hand the next screen working controls — FM-DX's TunerScreen never
+  //   pushes this, and native keeps it switched off there by its own rule anyway.
+  useEffect(() => () => { VibePowerModule?.setMediaSkipEnabled?.(true); }, []);
+  /** May this blind input tune right now? Refusals from Siri / the car SAY why (a request that
+   *  silently does nothing reads as a broken feature); a refused ⏮⏭ is already greyed. */
+  const blindTuneOk = useCallback((action: BlindTuneAction): boolean => {
+    const r = blindTuneReason(blindGateRef.current, action);
+    if (r === 'ok' || r === 'not-a-tune') return true;
+    if (action !== 'next' && action !== 'prev') setDialHint(blindTuneRefusal(r));
+    return false;
+  }, []);
   const [adminRefused, setAdminRefused] = useState(false);
   /* ★★ WHY it was refused, because the two causes want different words and the old single flag
    *  could only say "locked". A password the SERVER rejected is a typo; a challenge we could not
@@ -4318,6 +4350,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     // (used by OWRX/Kiwi, whose tuning lives in JS) snaps by the tune step.
     const subSkip = emitter.addListener('VibeSkip', (e: { direction: string }) => {
       const dir = e.direction === 'prev' ? 'left' : 'right';
+      // ★★ Refused on a shared dial with others listening — see blindGate (native greys it too).
+      if (!blindTuneOk(e.direction === 'prev' ? 'prev' : 'next')) return;
       // DAB: cycle programmes within the ensemble (the VFO is locked there).
       if (String(client.current?.getStatus().mode) === 'dab') { dabSkipRef.current?.(dir); return; }
       if (mediaSkipRef.current === 'bookmark') onVtsJumpRef.current?.(dir);
@@ -4332,6 +4366,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // onSearchTune path so band-aware mode/step + region logic stay in one place.
     const subCarTune = emitter.addListener('VibeCarTune',
       (e: { frequency: number; mode?: string | null; isBand?: boolean }) => {
+        if (!blindTuneOk('carPick')) return;   // shared dial — see blindGate
         onSearchTuneRef.current?.(e.frequency, e.mode ?? null, !!e.isBand);
       });
     // Siri voice command — native passes the spoken text + kind; JS resolves and
@@ -4339,7 +4374,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     // mode: synonyms; step: nearest supported rate).
     const subVoice = emitter.addListener('VibeVoiceQuery', (e: { query: string; kind?: string }) => {
       if (e.kind === 'step') { const s = parseVoiceStep(e.query); if (s != null) setStep(s); return; }
-      if (e.kind === 'mode') { const m = parseVoiceMode(e.query); if (m) onModeRef.current?.(m); return; }
+      // ★ Mode and frequency are the SHARED dial's on a shared receiver; the step is ours alone.
+      if (e.kind === 'mode') {
+        const m = parseVoiceMode(e.query);
+        if (m && blindTuneOk('voiceMode')) onModeRef.current?.(m);
+        return;
+      }
+      if (!blindTuneOk('voiceTune')) return;
       const r = resolveVoiceQuery(e.query, vtsBookmarks.current, searchBandsRef.current);
       if (r) onSearchTuneRef.current?.(r.hz, r.mode, r.isBand, true);
     });
@@ -8688,7 +8729,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const sharedDialProp = useMemo(() => sharedDial && dialState ? {
     listeners: dialState.listeners,
     max: occMaxUsers,
-    alone: dialState.listeners <= 1,
+    alone: dialAlone(dialState),   // ★ the same test the blind-tune gate uses — one rule, two readers
     // ★★ NAME THE TUNER, NOT YOURSELF. "User 2 tuning" is the warning; your own last move
     //    is not news to you, and putting it here would make the badge cry wolf.
     tuning: (dialState.tuner && !dialState.mine)

@@ -51,6 +51,7 @@ import {
   setBookmarkAdminAuth,
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
+import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
@@ -497,6 +498,9 @@ let srvAdminProtected = false;
  *  What changes here is not what you may do — anybody may tune — but what happens WITHOUT you
  *  doing anything: nothing at all. See the restore in onConfig. */
 let srvSharedDial = false;
+/** The dial message's mode ('exclusive' until one arrives) and the ⏮⏭ switch last applied — see syncMediaSkip. */
+let dialModeNow = 'exclusive';
+let mediaSkipOn: boolean | null = null;
 let landingStepDone = false;   // ★ the first config's band step — see onConfig
 let firstConfigDone = false;   // ★ the landing (restore / adopt) runs once per connection — see onConfig
 /* ★ RAW IQ OUT — the owner's policy from /vibeserver.json, and this session's stream once it is on. */
@@ -626,6 +630,7 @@ async function loadAudioPolicy(httpBase: string) {
   srvLocal = false;
   srvLan = false;
   srvSharedDial = false;
+  dialModeNow = 'exclusive';   // ★ a new receiver's dial is unknown until it says
   landingStepDone = false;
   firstConfigDone = false;
   try {
@@ -676,6 +681,7 @@ function updateSharedBanner() {
   const ms = document.getElementById('mShared');
   if (!ms) return;
   ms.hidden = !srvSharedDial;
+  syncMediaSkip();   // ★ the lock-screen ⏮⏭ follow the same count the banner does
   if (!srvSharedDial) return;
   // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
   if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = 'SHARED TUNER · ASK BEFORE TUNING'; return; }
@@ -1255,6 +1261,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //    ordinary one this never fires, and the buttons stay in the disabled state they start in.
     onDial: (d) => {
       chatDial(d);
+      dialModeNow = d.mode;
+      syncMediaSkip();
       const on = d.mode !== 'exclusive';
       /* ★ The receiver's sharing state decides who owns the SAMPLE RATE as well as the dial — see
        *  populateHw(). Re-drawn here because `dial` can arrive after the hardware panel was built
@@ -1410,9 +1418,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         const pwRowBack = document.getElementById('adminPwRow');
         if (pwRowBack) pwRowBack.hidden = false;
         refreshAdminRow();
+        syncMediaSkip();
         return;
       }
       adminUnlocked = ok;
+      syncMediaSkip();   // ★ the owner may skip on their own spectator dial
       // ★ An admin session has no time limit on the server, so it must have no countdown here.
       if (ok) clearTimeLeft();
       // ★ Never leave the password sitting in the box, whichever way it went.
@@ -7466,9 +7476,33 @@ function initMediaSession() {
     setMuted(true);
     updateMediaSession();
   });
-  ms.setActionHandler('nexttrack', () => nudge(step));
-  ms.setActionHandler('previoustrack', () => nudge(-step));
+  syncMediaSkip();
   updateMediaSession();
+}
+
+/* ★★★ ⏮⏭ OBEY THE SHARED DIAL — the app's rule, shared (src/services/blindTuneGate). The OS media
+ *    keys, a headset's buttons and the lock-screen card cannot see the SHARED TUNER banner, so they
+ *    cannot ask, and on one shared tuner a skip retunes every listener. With others listening (or on
+ *    a spectator receiver) the handlers are REMOVED, which is how a browser greys/drops the button;
+ *    alone ("FREE TO TUNE") or on an exclusive receiver they work as before (Stuart, 2026-09-30).
+ *  ★ The deck's own arrows and the keyboard are NOT gated: the banner is in view there. */
+function webSkipAllowed(): boolean {
+  const mode = dialModeNow !== 'exclusive' ? dialModeNow : (srvSharedDial ? 'open' : 'exclusive');
+  // ★ Until the first count arrives (0), NOT alone — the banner's own caution ("never free on a guess").
+  return mediaSkipEnabled({ serverType: 'vibeserver', admin: adminUnlocked,
+    dial: { mode, listeners: listenerCount > 0 ? listenerCount : 2 } });
+}
+function syncMediaSkip() {
+  if (!('mediaSession' in navigator)) return;
+  const on = webSkipAllowed();
+  if (on === mediaSkipOn) return;
+  mediaSkipOn = on;
+  const ms = navigator.mediaSession;
+  try {
+    // ★ Re-checked at press time as well: the count can change between the last sync and a press.
+    ms.setActionHandler('nexttrack', on ? () => { if (webSkipAllowed()) nudge(step); } : null);
+    ms.setActionHandler('previoustrack', on ? () => { if (webSkipAllowed()) nudge(-step); } : null);
+  } catch { /* an older browser without these actions — nothing to switch */ }
 }
 
 /** Last metadata actually published, so this is safe to call on every RDS frame. */

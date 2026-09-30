@@ -132,8 +132,9 @@ const LIMITATIONS: { q: string; a: string[] }[] = [
     ],
   },
   {
-    q: 'Why do the skip buttons vanish on FM-DX?',
-    a: ['An FM-DX Webserver is one physical tuner shared by every connected listener — tuning it retunes it for everyone at once. Lock-screen and in-car skip buttons would let you change the station for people you can’t see, so they’re disabled out of courtesy while connected to FM-DX. You’ll see a reminder on the lock-screen artwork too. It’s the same principle behind the connection warning when you join an FM-DX server: one tuner, many listeners.'],
+    q: 'Why do the skip buttons vanish on FM-DX and shared tuners?',
+    a: ['An FM-DX Webserver is one physical tuner shared by every connected listener — tuning it retunes it for everyone at once. Lock-screen and in-car skip buttons would let you change the station for people you can’t see, so they’re disabled out of courtesy while connected to FM-DX. On iPhone you’ll see a reminder on the lock-screen artwork too. It’s the same principle behind the connection warning when you join an FM-DX server: one tuner, many listeners.',
+        'A VibeServer running a SHARED TUNER is the same arrangement, so the same rule applies whenever the banner says ASK TO TUNE: the skip buttons go (along with car-list and Siri tuning), and come back the moment you are the only listener and it says FREE TO TUNE. The frequency and mode controls in the app still work — ask in the chat first.'],
   },
 ];
 

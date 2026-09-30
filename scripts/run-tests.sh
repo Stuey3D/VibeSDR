@@ -201,6 +201,10 @@ if node --no-warnings scripts/test_transparency.ts; then pass=$((pass+1)); else 
 #     timer last), SHARED TUNER shortens before it goes, the connection meter never goes, portrait never
 #     drops, the row packs before anything drops, and a 1 pt wobble cannot flap (hysteresis).
 if node --no-warnings scripts/test_faceplate_status.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE BLIND TUNES OBEY THE SHARED DIAL (blindTuneGate.ts): lock-screen / headset / car ⏮⏭, a car
+#     pick and Siri are refused on a shared dial with others listening (and on spectator / listen-only),
+#     as FM-DX's always were; alone or exclusive they work; the native switch and a press agree.
+if node --no-warnings scripts/test_blindTuneGate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

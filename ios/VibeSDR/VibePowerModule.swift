@@ -348,6 +348,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // Media skip routing: "step" = native tune±step; "bookmark" = emit
   // VibeSkip and let JS jump bookmarks (it owns the VTS station list)
   private var skipMode = "step"
+  /// ★★ JS switches ⏮⏭ OFF on a SHARED DIAL with others listening — the same treatment FM-DX gets
+  /// from `fmdxAudio`, for the same reason: a blind skip retunes every listener (Stuart, 2026-09-30).
+  /// JS owns the rule (services/blindTuneGate); native only greys the buttons and refuses a stale press.
+  /// Deliberately NOT reset by stopEngine: JS may push it before the audio starts.
+  private var skipAllowed = true
 
   // Tune coalescing: the velocity drum can emit 20+ steps/s; one WS tune per
   // step thrashes radiod. Leading send + 80ms trailing timer.
@@ -1402,6 +1407,19 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   @objc func setMediaSkipMode(_ mode: String) {
     skipMode = mode
+  }
+
+  @objc func setMediaSkipEnabled(_ enabled: Bool) {
+    onMain {
+      guard self.skipAllowed != enabled else { return }
+      self.skipAllowed = enabled
+      let cc = MPRemoteCommandCenter.shared()
+      cc.nextTrackCommand.isEnabled     = !self.fmdxAudio && enabled
+      cc.previousTrackCommand.isEnabled = !self.fmdxAudio && enabled
+      // Re-composite: the artwork says WHY the skip buttons are gone. ★ Only over a live session —
+      // the unmount push must not resurrect a card for a session that has ended.
+      if self.audioIsLive { self.updateNowPlaying() }
+    }
   }
 
   /// Car browse tree (bookmarks + band plan) pushed from JS. Cached here for the
@@ -2932,7 +2950,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     guard let base = UIImage(named: "artwork_base") else { return }
     let key = reconnectFailed ? "fail"
             : dataSaverDisconnected ? "disc"
-            : "play-\(npArtworkType)-\(stationLogoImg != nil ? stationLogoUrl : "")"
+            : "play-\(npArtworkType)-\(stationLogoImg != nil ? stationLogoUrl : "")-\(skipAllowed ? "" : "shared")"
     guard key != lastArtworkKey else { return }
     lastArtworkKey = key
 
@@ -2992,7 +3010,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       // The wording is deliberately the same phrase used by the warning shown when you
       // JOIN an FM-DX server and by the About page — "one tuner, many listeners" — so the
       // three read as one policy rather than as three separate apologies.
-      if npArtworkType == "fmdx" {
+      // ★★ And a SHARED DIAL with others listening, whose skip is off for the same reason
+      //    (setMediaSkipEnabled) — one policy, one stamp, wherever the skip button is missing.
+      if npArtworkType == "fmdx" || !skipAllowed {
         let head = "SHARED RECEIVER"
         let body = "One tuner, many listeners.\nSkip is disabled out of courtesy."
 
@@ -3063,11 +3083,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
     // Skip forward = tune up by step. DISABLED for FM-DX: it's a single shared
     // tuner, so a lock-screen / headphone skip would retune for EVERY listener.
-    cc.nextTrackCommand.isEnabled = !fmdxAudio
+    cc.nextTrackCommand.isEnabled = !fmdxAudio && skipAllowed
     cc.nextTrackCommand.removeTarget(nil)
     cc.nextTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
-      if self.fmdxAudio { return .commandFailed }
+      if self.fmdxAudio || !self.skipAllowed { return .commandFailed }
       // External (OWRX/Kiwi): tuning lives in JS — delegate the skip so we don't
       // tune the native UberSDR WS (which resurrects a UberSDR session). JS
       // handles step vs bookmark from its own media-skip setting.
@@ -3086,11 +3106,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
 
     // Skip back = tune down by step. DISABLED for FM-DX (shared tuner — see above).
-    cc.previousTrackCommand.isEnabled = !fmdxAudio
+    cc.previousTrackCommand.isEnabled = !fmdxAudio && skipAllowed
     cc.previousTrackCommand.removeTarget(nil)
     cc.previousTrackCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
-      if self.fmdxAudio { return .commandFailed }
+      if self.fmdxAudio || !self.skipAllowed { return .commandFailed }
       if self.externalAudio || self.skipMode == "bookmark" {
         self.sendEvent(withName: "VibeSkip", body: ["direction": "prev"])
         return .success
