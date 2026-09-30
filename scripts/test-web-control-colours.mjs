@@ -81,22 +81,26 @@ const ok = (c, m) => { if (c) oks++; else { fails++; console.log('  FAIL ' + m);
     const v = lookVars(l);
     if (isDefaultLook(l)) continue;
     combos++;
-    const cardRgb = parseHex(bg.hex) ?? TODAY.card.rgb, btnRgb = parseHex(btn.hex) ?? TODAY.btn.rgb;
+    // ★ the button swatch is the RING — the fill is always today's (Stuart, 2026-09-30)
+    const cardRgb = parseHex(bg.hex) ?? TODAY.card.rgb, btnRgb = TODAY.btn.rgb;
     const cardSeen = over(cardRgb, alphaFor(TODAY.card.a, solid), [0, 0, 0]);
     const btnSeen = over(btnRgb, alphaFor(TODAY.btn.a, solid), cardSeen);
     const textOnBtn = parseHex(v.card['--btn-text'] ?? TODAY.font);
     const glyph = parseHex(v.card['--ctl-glyph'] ?? TODAY.font);
     const status = parseHex(v.card['--ctl-status'] ?? TODAY.status);
-    const c = Math.min(contrast(textOnBtn, btnSeen), contrast(glyph, cardSeen), contrast(status, cardSeen));
+    const freq = parseHex(v.card['--ctl-freq'] ?? '#ffffff');
+    const c = Math.min(contrast(textOnBtn, btnSeen), contrast(glyph, cardSeen), contrast(status, cardSeen), contrast(freq, cardSeen));
+    if (btn.hex) ok(v.card['--btn-border'] && v.card['--btn-bg'] === (solid ? v.card['--btn-bg'] : undefined), `ring ${btn.name}: border set, fill untouched unless solid`);
     worst = Math.min(worst, c);
     if (c < MIN_CONTRAST) ok(false, `unreadable: ${JSON.stringify(l)} → ${c.toFixed(2)}:1`);
     // a font the listener chose that had to move is SAID
     if (font.hex && toHex(textOnBtn) !== font.hex) ok(v.warn !== '', `adjusted font is reported: ${JSON.stringify(l)}`);
   }
   ok(combos > 1000, `every swatch combination checked (${combos}, worst ${worst.toFixed(2)}:1)`);
-  // a custom picker colour that matches the button exactly
-  const clash = lookVars({ bg: '', btn: '#336699', font: '#336699', solid: 100 });
-  ok(clash.warn.length > 0 && contrast(parseHex(clash.card['--btn-text']), [0x33, 0x66, 0x99]) >= 3, 'custom clash is nudged and reported');
+  // a custom picker colour that matches the BACKGROUND exactly (the button colour is only a ring now)
+  const clash = lookVars({ bg: '#336699', btn: '', font: '#336699', solid: 100 });
+  ok(clash.warn.length > 0 && contrast(parseHex(clash.card['--ctl-glyph']), [0x33, 0x66, 0x99]) >= 3, 'custom clash is nudged and reported');
+  ok(contrast(parseHex(clash.card['--ctl-freq']), [0x33, 0x66, 0x99]) >= 3, 'the frequency is nudged too');
 }
 
 // ── 3. solid is solid ──────────────────────────────────────────────────────────────────────────

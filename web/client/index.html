@@ -545,7 +545,7 @@ html #bar { display: none; }
 /* ★ `+ 0.4em` because LETTER-SPACING IS NOT PART OF `ch`. 8 characters at 0.02em of tracking add
    another 0.16em that a bare `8ch` does not account for — the same near-miss that made the signal
    figure twitch. The extra also leaves a little slack either side. */
-#mFreq { font-size: 1.85em; font-variant-numeric: tabular-nums; color: #fff; letter-spacing: 0.02em;
+#mFreq { font-size: 1.85em; font-variant-numeric: tabular-nums; color: var(--ctl-freq, #fff); letter-spacing: 0.02em;
          min-width: calc(8ch + 0.4em); text-align: center; }
 /* ★★ WHITE, LIKE THE DIGITS THEY BELONG TO. `--unit` is a dark amber (#886600) that works on
    the flat bar but not HERE: these two sit on the meter gradient, which runs from deep red to
@@ -560,7 +560,7 @@ html #bar { display: none; }
 /* ★ Sized BETWEEN the two: larger than the `MHz` unit (0.8em) so the digits are easy to read,
    clearly smaller than the main figure (1.85em) so they still read as the fine tail rather than
    part of the number you scan. Nudged brighter for the same reason. */
-#mFreqFine { font-size: 0.95em; color: rgba(255,255,255,0.68); letter-spacing: 0.02em;
+#mFreqFine { font-size: 0.95em; color: var(--ctl-freq-fine, rgba(255,255,255,0.68)); letter-spacing: 0.02em;
              font-variant-numeric: tabular-nums; min-width: 2ch; display: inline-block;
              text-align: left; }
 #mUnit { font-size: 0.8em; color: #fff; }

@@ -32,15 +32,22 @@ export const TODAY = {
 
 export interface Swatch { name: string; hex: string }
 /** '' = today's colour. First in every list, so the default is always one tap away. */
+/* ★★ LED COLOURS, LIKE THE VFO (Stuart, 2026-09-30: "the colours chosen look really dark, I think the default
+ *    offerings should be LED based like the VFO, font can be normal colours"). The same set the app's
+ *    faceplates light their controls in (src/constants/faceplate.ts). The readability nudge still guards
+ *    the font on a bright background. */
 export const BG_SWATCHES: Swatch[] = [
-  { name: 'Default', hex: '' }, { name: 'Black', hex: '#000000' }, { name: 'Charcoal', hex: '#1e1e1e' },
-  { name: 'Navy', hex: '#0a1628' }, { name: 'Forest', hex: '#0c1a10' }, { name: 'Slate', hex: '#28313b' },
-  { name: 'Silver', hex: '#d8d8d8' },
+  { name: 'Default', hex: '' }, { name: 'Green', hex: '#3dff72' }, { name: 'Red', hex: '#ff3a2e' },
+  { name: 'Amber', hex: '#ffae1a' }, { name: 'Blue', hex: '#3d9bff' }, { name: 'Teal', hex: '#46ffd7' },
+  { name: 'Neon', hex: '#ff7a26' }, { name: 'White', hex: '#eef3ff' },
 ];
+/* ★★ BUTTONS COLOUR THE RING, NOT THE FILL (Stuart, 2026-09-30: "when I said the buttons I meant the ring
+ *    around them not the fill"). The fill stays today's dark glass (Transparency makes it solid), so the
+ *    font keeps its contrast and a bright swatch reads as a lit bezel. Ring colours, not fill colours. */
 export const BTN_SWATCHES: Swatch[] = [
-  { name: 'Default', hex: '' }, { name: 'Black', hex: '#000000' }, { name: 'Graphite', hex: '#2c2c2c' },
-  { name: 'Navy', hex: '#13294b' }, { name: 'Forest', hex: '#173a22' }, { name: 'Plum', hex: '#2e1433' },
-  { name: 'Silver', hex: '#e6e6e6' },
+  { name: 'Default', hex: '' }, { name: 'Green', hex: '#3dff72' }, { name: 'Red', hex: '#ff3a2e' },
+  { name: 'Amber', hex: '#ffae1a' }, { name: 'Blue', hex: '#3d9bff' }, { name: 'Teal', hex: '#46ffd7' },
+  { name: 'Neon', hex: '#ff7a26' }, { name: 'White', hex: '#eef3ff' },
 ];
 /* ★★ NO RED AND NO GREEN. Red is REC, mute and a closed squelch; green is "on" and a good signal. A
  *    font in either would make those states unreadable at a glance. (The custom picker can still reach
@@ -218,13 +225,13 @@ export function lookVars(l: ControlLook): LookVars {
   // The waterfall behind is mostly dark, so the glass is judged over black.
   const black: RGB = [0, 0, 0];
   const cardRgb = parseHex(l.bg) ?? TODAY.card.rgb;
-  const btnRgb = parseHex(l.btn) ?? TODAY.btn.rgb;
+  const btnRgb = TODAY.btn.rgb;                          // ★ the fill is always today's — l.btn is the RING
   const cardA = alphaFor(TODAY.card.a, l.solid), btnA = alphaFor(TODAY.btn.a, l.solid);
   const cardSeen = over(cardRgb, cardA, black);
   const btnSeen = over(btnRgb, btnA, cardSeen);
 
   if (l.bg || l.solid) card['--ctl-card-bg'] = rgba(cardRgb, cardA);
-  if (l.btn || l.solid) card['--btn-bg'] = rgba(btnRgb, btnA);
+  if (l.solid) card['--btn-bg'] = rgba(btnRgb, btnA);
 
   let warn = '';
   if (l.font || l.bg || l.btn) {
@@ -246,7 +253,16 @@ export function lookVars(l: ControlLook): LookVars {
       card['--btn-border'] = rgba(fr, 0.35);
       card['--bar-border'] = rgba(onCard.rgb, 0.22);
     }
+    // ★ The frequency and its fine digits follow the font too (Stuart: "font colour needs to apply to
+    //   frequency too"); today they are white and white at .68. Whenever ANY colour is set — a light
+    //   background with the default font must not leave white digits on it.
+    const fq = readableOn(parseHex(l.font || '#ffffff')!, cardSeen);
+    card['--ctl-freq'] = toHex(fq.rgb);
+    card['--ctl-freq-fine'] = rgba(fq.rgb, 0.68);
   }
+  // ★ The chosen ring wins over the font-derived one, at near-full strength so it reads as a lit bezel.
+  const ring = parseHex(l.btn);
+  if (ring) card['--btn-border'] = rgba(ring, 0.9);
 
   if (l.solid) {
     for (const o of OVERLAYS) root[o.v] = rgba(o.rgb, alphaFor(o.a, l.solid));
@@ -263,7 +279,7 @@ export function lookVars(l: ControlLook): LookVars {
 }
 
 /** Every variable either list may set — so a change can REMOVE what the last look set. */
-export const CARD_VARS = ['--ctl-card-bg', '--btn-bg', '--btn-text', '--ctl-glyph', '--ctl-status', '--btn-border', '--bar-border'];
+export const CARD_VARS = ['--ctl-card-bg', '--btn-bg', '--btn-text', '--ctl-glyph', '--ctl-status', '--btn-border', '--bar-border', '--ctl-freq', '--ctl-freq-fine'];
 export const ROOT_VARS = [...OVERLAYS.map((o) => o.v), '--ov-panel-shadow'];
 
 
