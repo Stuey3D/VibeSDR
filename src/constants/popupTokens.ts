@@ -277,7 +277,8 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, textRgb: 
       ? { border: '#8b8983', topHi: 'rgba(255,255,255,0.95)', handle: 'rgba(0,0,0,0.38)', handleLip: 'rgba(255,255,255,0.75)' }
       : { border: '#3a3c40', topHi: 'rgba(255,255,255,0.22)', handle: 'rgba(0,0,0,0.70)', handleLip: 'rgba(255,255,255,0.12)' },
     sheetShadow: 'rgba(0,0,0,0.8)',
-    rule: silver ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.10)', danger: silver ? '#9e1b14' : '#ff6b62',
+    // ★ Silver's danger red is dark enough to read on the light cap (4.5:1 at its shaded foot, test_popup).
+    rule: silver ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.10)', danger: silver ? '#67120d' : '#ff6b62',
     entry,
   };
 }

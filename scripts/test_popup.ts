@@ -147,6 +147,71 @@ eq('the contrast fixes are the ones the header documents', CONTRAST_FIX,
   for (const f of ['1035.000', '14230', '96.6', '0.648']) eq(`toSegCells identity for ${f}`, toSegCells(f), f);
 }
 
+// ── 5. Danger legends (a meaning colour) read on their cap ───────────────────
+for (const chassis of ['silver', 'black'] as const) {
+  const pt = buildPopupTokens(chassis, LED.green.rgb, LED.green.rgb, 'hyper');
+  const cap: RGB = chassis === 'silver' ? over([0, 0, 0, 0.22], rgb('#c9c6bf')) : rgb('#1d1e20');
+  ok(`${chassis} danger legend on its cap ≥ 4.5`, contrast(pt.danger, cap) >= 4.5, contrast(pt.danger, cap).toFixed(2));
+}
+// ★ Lit legends on the SILVER cap are REPORTED, not asserted (the decoder test's rule): an LED legend
+//   on a light cap is the mockup's and the deck's own silver key; no same-hue lift takes green or
+//   white to 4.5:1 on #c4c1ba, and the pip carries the selection either way.
+{
+  const cap: RGB = over([0, 0, 0, 0.22], rgb('#c9c6bf'));
+  const lit = CONTROLS.map(c => `${c} ${contrast(buildPopupTokens('silver', LED[c].rgb, LED.green.rgb, 'hyper').legendLit, cap).toFixed(1)}`);
+  rows.push(`note: silver lit legends on the cap (reported): ${lit.join(', ')}`);
+}
+
+// ── 6. Transparency OFF in popups (source checks — a render test would need a device) ──────────
+{
+  const shell = src('components/PopupShell.tsx');
+  ok('PopupScrim reads scrimOpacity (no dim with OFF, the view stays)', /scrimOpacity > 0/.test(shell) && /onPress=\{onPress\}/.test(shell));
+  ok('usePopupFrame drops the drop shadow with OFF', /surface\.dropShadow \?[\s\S]*?: NO_DROP_SHADOW/.test(shell));
+  ok('usePopupSurface: fill + no shadow with OFF', /shadow: surface\.dropShadow \? null : NO_DROP_SHADOW/.test(shell));
+  ok('PopupShell draws no BlurView', !/<BlurView\b/.test(shell));
+  const scrims: Array<[string, RegExp]> = [
+    ['components/FreqModal.tsx',        /<PopupScrim /],
+    ['components/AudioSheet.tsx',       /<PopupScrim /],
+    ['components/KeyboardShortcuts.tsx', /<PopupScrim /],
+    ['components/ModeSelector.tsx',     /<PopupScrim /],
+    ['components/ChatDrawer.tsx',       /!surf\.opaque && cd\.backdrop/],
+    ['components/StepPicker.tsx',       /!surf\.opaque && \{ backgroundColor: BACKDROP \}/],
+    ['components/CityPickerModal.tsx',  /dim && s\.backdropDim/],
+    ['components/PasswordModal.tsx',    /dim && styles\.overlayDim/],
+    ['components/IdentModal.tsx',       /dim && styles\.overlayDim/],
+    ['components/MenuSheet.tsx',        /!opaque && styles\.backdrop/],
+    ['components/LocalHardwarePanel.tsx', /fp\.opaque && styles\.backdropNone/],
+  ];
+  for (const [f, re] of scrims) ok(`${f}: its dim follows Transparency OFF`, re.test(src(f)));
+  // ★ The popups that moved their dim INTO PopupScrim carry no colour in the style any more (the
+  //   scrim owns it), so nothing can bring an unconditional dim back through that style.
+  for (const f of ['components/FreqModal.tsx', 'components/AudioSheet.tsx', 'components/KeyboardShortcuts.tsx',
+                   'components/ModeSelector.tsx', 'components/StepPicker.tsx', 'components/CityPickerModal.tsx',
+                   'components/PasswordModal.tsx', 'components/IdentModal.tsx']) {
+    const bare = src(f).match(/(backdrop|overlay):\s*\{[^}]*backgroundColor/g) ?? [];
+    ok(`${f}: the scrim's style holds no colour`, bare.length === 0, bare.join(' '));
+  }
+  // Glass popups go opaque with OFF (fill), and the one with a drop shadow drops it.
+  for (const f of ['components/FreqModal.tsx', 'components/AudioSheet.tsx', 'components/ChatDrawer.tsx',
+                   'components/KeyboardShortcuts.tsx', 'components/StepPicker.tsx', 'components/ModeSelector.tsx']) {
+    ok(`${f}: glass made opaque with OFF`, /surf\.opaque[^\n]*surf\.fill\(/.test(src(f)));
+  }
+  ok('ChatDrawer drops its drop shadow with OFF', /surf\.shadow/.test(src('components/ChatDrawer.tsx')));
+  // ★★ Silver / black are opaque plates: MenuSheet's two BlurViews go on metal as well as with OFF.
+  const menu = src('components/MenuSheet.tsx');
+  eq('MenuSheet: both blur layers skip metal', (menu.match(/!opaque && !pt\.metal &&/g) ?? []).length, 2);
+}
+
+// ── 7. Every popup reads the chassis ─────────────────────────────────────────
+for (const f of ['FreqModal', 'AudioSheet', 'MenuSheet', 'ChatDrawer', 'RecordingsOverlay', 'KeyboardShortcuts',
+                 'PasswordModal', 'IdentModal', 'CityPickerModal', 'AboutOverlay', 'StepPicker', 'LocalHardwarePanel']) {
+  const s = src(`components/${f}.tsx`);
+  ok(`${f} reads usePopupTheme`, /usePopupTheme\(\)/.test(s));
+  ok(`${f} draws the plate on metal`, /<PopupPlate\b/.test(s));
+}
+// ★ The CONTROL CUSTOMISATION pane's one swap point is a pip key on metal.
+ok('SelectorKey is a PopupKey with a pip on metal', /function SelectorKey[\s\S]*?pt\.metal[\s\S]*?<PopupKey[^>]*\bpip\b/.test(src('components/MenuSheet.tsx')));
+
 console.log(rows.join('\n'));
 console.log(`popup: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
