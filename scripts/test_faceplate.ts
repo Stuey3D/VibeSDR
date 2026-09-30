@@ -10,8 +10,12 @@ import {
   DEFAULT_SETTINGS, DISPLAYS, TEXTS, CONTROLS, TEXT_ALLOWED, NEON_TEXT, FONT_NIXIE,
   resolveTextColour, resolveFaceplate, resolveControlsColour, withDisplay, withText,
   parseSettings, migrateLegacyFont, ledA, hotA, LED,
+  CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, DECODER_BG_CHOICES, CHASSIS, METERS, DECODER_BGS,
+  COLOUR_NAMES, textChoices, controlsDot, feelRows,
+  chassisTokens,
   type FaceplateSettings,
 } from '../src/constants/faceplate.ts';
+import { createDomeClick, DOME_PRESS_MS, DOME_RELEASE_MS } from '../src/components/domeClick.ts';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -98,7 +102,8 @@ const def = resolveFaceplate(DEFAULT_SETTINGS);
 eq('default freq/unit/mode/reading are today\'s white-theme values',
    [def.deck.freq, def.deck.freqGlow, def.deck.unit, def.deck.mode, def.deck.reading, def.deck.sqlClosed, def.deck.freqFont],
    ['#ffffff', 'rgba(255,255,255,0.50)', '#b0b8c8', '#ffffff', '#b0b8c8', '#ff4040', 'Atkinson Hyperlegible']);
-eq('default key legend is today\'s white Atkinson, no glow', def.keyLegend, { color: '#ffffff', font: 'Atkinson Hyperlegible', glow: null });
+eq('default key legend is today\'s white Atkinson, no glow', def.keyLegend,
+   { color: '#ffffff', font: 'Atkinson Hyperlegible', glow: null, hot: '#ffffff', shade: null });
 // DrumWheel/TunerKeys drew hsl(120,100%,45%) (and 78% for the lit symbol) — the default green must
 // produce the identical strings.
 const g = resolveControlsColour('default', 'green');
@@ -107,6 +112,87 @@ eq('default green glow clamps like G()', ledA(g, 1.4), 'hsla(120,100%,45%,1)');
 eq('default green hot = the old hsl(120,100,78)', hotA(g, 0.95), 'hsla(120,100%,78%,0.95)');
 eq('silver green is the brief\'s LED', resolveControlsColour('silver', 'green').rgb, LED.green.rgb);
 eq('neon controls on the default chassis light the legends neon', resolveFaceplate({ ...DEFAULT_SETTINGS, controls: 'neon' }).keyLegend.color, NEON_TEXT.core);
+
+// ── §1: the CONTROL CUSTOMISATION pane's rules ───────────────────────────────
+eq('pane offers every chassis', CHASSIS_CHOICES.map(c => c.value).sort(), [...CHASSIS].sort());
+eq('pane offers every display, in the mockup\'s order', DISPLAY_CHOICES.map(c => c.label), ['NIXIE', 'HYPER', 'DOT', 'VCR']);
+eq('pane offers every display', DISPLAY_CHOICES.map(c => c.value).sort(), [...DISPLAYS].sort());
+eq('pane offers every meter', METER_CHOICES.map(c => c.value), METERS);
+eq('pane offers both decoder backgrounds', DECODER_BG_CHOICES.map(c => c.value), DECODER_BGS);
+eq('Nixie: the TEXT row is the locked note, not keys', textChoices('nixie'), null);
+for (const d of ['dot', 'seg'] as const) {
+  ok(`${d}: TEXT never offers white (§13.4)`, !textChoices(d)!.includes('white'));
+  eq(`${d}: TEXT offers the VFD colours, teal first`, textChoices(d), ['teal', 'green', 'blue', 'amber', 'red']);
+}
+eq('hyper: TEXT offers all six', textChoices('hyper')!.length, 6);
+// Every colour the pane can pick must survive withText — or the key would light and do nothing.
+for (const d of DISPLAYS) for (const t of textChoices(d) ?? []) {
+  eq(`${d}: picking ${t} sticks`, withText(withDisplay(DEFAULT_SETTINGS, d), t).text, t);
+}
+eq('HAPTICS hidden without a motor; STEADY LEDS always', feelRows(false), ['steadyLeds']);
+eq('FEEL order with a motor', feelRows(true), ['haptics', 'steadyLeds']);
+eq('default-chassis green dot is today\'s drum green', controlsDot('default', 'green'), 'rgb(0,230,0)');
+eq('silver green dot is the brief\'s LED', controlsDot('silver', 'green'), LED.green.core);
+ok('every colour key has a spoken name', [...CONTROLS, ...TEXTS].every(c => !!COLOUR_NAMES[c]));
+eq('steadyLeds defaults off', DEFAULT_SETTINGS.steadyLeds, false);
+eq('steadyLeds round-trips', parseSettings(JSON.stringify({ ...DEFAULT_SETTINGS, steadyLeds: true })).steadyLeds, true);
+eq('steadyLeds: garbage → off', parseSettings(JSON.stringify({ steadyLeds: 'yes' })).steadyLeds, false);
+
+// ── §3 / §5: chassis tokens ───────────────────────────────────────────────────
+eq('default chassis has no plate (today\'s glass island)', chassisTokens('default').plate, null);
+eq('default keys keep today\'s outline look', chassisTokens('default').dome.look, 'outline');
+for (const c of ['silver', 'black'] as const) {
+  const t = chassisTokens(c);
+  ok(`${c} has an opaque plate`, !!t.plate && t.plate.texture === c);
+  eq(`${c} keys are caps`, t.dome.look, 'cap');
+  eq(`${c} lighting stops line up`, t.plate!.lightColors.length, t.plate!.lightPos.length);
+  const th = resolveFaceplate({ ...DEFAULT_SETTINGS, chassis: c, controls: 'red' });
+  eq(`${c} legend is the controls colour, hot when clicked`, [th.keyLegend.color, th.keyLegend.hot], [LED.red.core, LED.red.hot]);
+  ok(`${c} legend is never Nixie One`, resolveFaceplate({ ...DEFAULT_SETTINGS, chassis: c, display: 'nixie', controls: 'neon' }).keyLegend.font !== FONT_NIXIE);
+}
+eq('screws on silver only (§3.2 / §3.3)', [chassisTokens('silver').plate!.screws, chassisTokens('black').plate!.screws], [true, false]);
+eq('gloss panel on black only', [chassisTokens('silver').plate!.gloss, chassisTokens('black').plate!.gloss], [false, true]);
+eq('press dim .84 silver / .82 black (§5)', [chassisTokens('silver').dome.pressDim, chassisTokens('black').dome.pressDim], [0.84, 0.82]);
+eq('silver engraving shadow; black none', [resolveFaceplate({ ...DEFAULT_SETTINGS, chassis: 'silver' }).keyLegend.shade,
+   resolveFaceplate({ ...DEFAULT_SETTINGS, chassis: 'black' }).keyLegend.shade], ['rgba(0,0,0,0.6)', null]);
+
+// ── §5: when a dome key clicks (domeClick.ts, with a fake clock) ──────────────
+{
+  let t = 0; const q: { at: number; f: () => void; id: number }[] = []; let nid = 0;
+  const log: string[] = [];
+  const run = (until: number) => {
+    for (;;) {
+      q.sort((a, b) => a.at - b.at);
+      const n = q[0];
+      if (!n || n.at > until) break;
+      q.shift(); t = n.at; n.f();
+    }
+    t = until;
+  };
+  const dc = createDomeClick({
+    press: () => log.push(`press@${t}`), release: () => log.push(`release@${t}`),
+    setTimer: (ms, f) => { const id = ++nid; q.push({ at: t + ms, f, id }); return id; },
+    clearTimer: (id) => { const i = q.findIndex(x => x.id === id); if (i >= 0) q.splice(i, 1); },
+    now: () => t,
+  });
+  dc.down(); run(44);
+  eq('no click before the snap', log, []);
+  run(45);
+  eq('the press click lands at the END of the 45 ms curve', log, ['press@45']);
+  run(200); dc.up();
+  eq('release clicks at once after a full press', log, ['press@45', 'release@200']);
+  log.length = 0; t = 1000;
+  dc.down(); run(1010); dc.up();
+  eq('a 10 ms tap: press on lift, release one release-curve later', log, ['press@1010']);
+  run(1045);
+  eq('… and the release 35 ms after', log, ['press@1010', `release@${1010 + DOME_RELEASE_MS}`]);
+  log.length = 0;
+  dc.up(); dc.up();
+  eq('a second release for the same press never clicks', log, []);
+  dc.down(); run(t + 10); dc.dispose(); run(t + 500);
+  eq('dispose drops a queued click silently', log, []);
+  eq('§5 timings', [DOME_PRESS_MS, DOME_RELEASE_MS], [45, 35]);
+}
 
 console.log(`${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

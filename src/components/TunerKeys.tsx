@@ -32,6 +32,7 @@ import {
 } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import { getControlHaptics, buildGlyphPath } from './DrumWheel';
+import { useDomeKey } from './DomeKey';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { ledA, hotA } from '../constants/faceplate';
 
@@ -109,6 +110,10 @@ export function createHoldSweep(
    *  tap zooms). A held sweep wants the opposite — small compounding factors, which
    *  do cross rungs cumulatively and give the smooth ramp. Hence two magnitudes. */
   fireSweep?: (dir: -1 | 1) => void,
+  /** ★ The on-screen keys are DOME KEYS (faceplates §5) and click press + release through
+   *  useDomeKey, so they pass `true` here. The hardware arrow keys (SDRScreen) keep the Light /
+   *  Medium impacts this law has always given them. */
+  quiet = false,
 ) {
   const sweepFire = fireSweep ?? fire;
   let holdT: ReturnType<typeof setTimeout> | null = null;
@@ -124,13 +129,13 @@ export function createHoldSweep(
   const press = (dir: -1 | 1) => {
     release();                    // cancel anything armed by a previous press
     fire(dir);                    // ★ the step happens NOW, not on release
-    if (getControlHaptics()) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (!quiet && getControlHaptics()) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     holdT = setTimeout(() => {
       holdT = null;
       heldDir = dir;
       onSweepChange?.(dir);
       // ★ A heavier thump at the step→sweep transition, so the change of mode is FELT.
-      if (getControlHaptics()) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      if (!quiet && getControlHaptics()) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const started = Date.now();
       const tick = () => {
         sweepFire(dir);
@@ -170,6 +175,7 @@ export function useHoldSweep(
     () => (rateRef.current ? rateRef.current() : SWEEP_HI),
     setSweeping,
     (d) => (sweepRef.current ?? fireRef.current)(d),
+    true,
   ), []);
 
   // A component unmounting mid-press must not leave a timer walking the VFO up the
@@ -215,8 +221,18 @@ export default function TunerKeys({
   const [down, setDown] = useState<-1 | 1 | 0>(0);
   const { press, release, sweeping } = useHoldSweep(onStep, disabled, sweepRate, onSweepStep);
 
-  const onDown = useCallback((dir: -1 | 1) => { setDown(dir); press(dir); }, [press]);
-  const onUp   = useCallback(() => { setDown(0); release(); }, [release]);
+  // ★ The feel of a dome key (§5): the click at the END of the 45 ms snap and another on release —
+  //   one per key, so a thumb rolling from one key to the other clicks each. The step itself still
+  //   lands on the way DOWN (the sweep law is unchanged); only the Light/Medium impacts are gone.
+  const domeL = useDomeKey();
+  const domeR = useDomeKey();
+  const onDown = useCallback((dir: -1 | 1) => {
+    if (disabled) return;
+    setDown(dir); press(dir); (dir === 1 ? domeR : domeL).pressIn();
+  }, [press, disabled, domeL, domeR]);
+  const onUp = useCallback((dir: -1 | 1) => {
+    setDown(0); release(); (dir === 1 ? domeR : domeL).pressOut();
+  }, [release, domeL, domeR]);
 
   // ── Geometry: [key] [glyph] [key], the keys generous and the glyph a label ──
   const padX = Math.max(4, W * 0.045);
@@ -407,10 +423,10 @@ export default function TunerKeys({
           key={`p${dir}`}
           disabled={disabled}
           onPressIn={() => onDown(dir)}
-          onPressOut={onUp}
+          onPressOut={() => onUp(dir)}
           // A drag off the key still ends the press, so a sweep cannot be
           // orphaned by sliding a finger away instead of lifting it.
-          onTouchCancel={onUp}
+          onTouchCancel={() => onUp(dir)}
           style={{ position: 'absolute', left: x - 2, top: padY - 2,
                    width: keyW + 4, height: keyH + 4 }}
           hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}

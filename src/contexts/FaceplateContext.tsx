@@ -3,8 +3,8 @@
  *
  * `useFaceplate()` is what the deck draws with (ControlsBar, DrumWheel, TunerKeys, VTSBar,
  * DecoderShell). `useFaceplateSettings()` is for whatever edits them — the CONTROL CUSTOMISATION
- * pane (brief §1), not built yet: until it is, the settings are reachable only as stored prefs
- * (`lsv_faceplate`), and with nothing stored the app renders exactly as it did.
+ * pane in MenuSheet (brief §1). Stored as `lsv_faceplate`; with nothing stored the app renders
+ * exactly as it did.
  *
  * ★★ App-wide, not per server: a faceplate is the hardware in your hand, not a property of the
  *   receiver you are listening to. (Display prefs are per server; this deliberately is not.)
@@ -28,7 +28,7 @@ interface FaceplateContextValue {
   setDisplay: (d: DisplayStyle) => void;
   setText:    (t: TextColour) => void;
   /** The rest have no side effects. */
-  set:        (patch: Partial<Pick<FaceplateSettings, 'chassis' | 'controls' | 'meter' | 'decoderBg'>>) => void;
+  set:        (patch: Partial<Pick<FaceplateSettings, 'chassis' | 'controls' | 'meter' | 'decoderBg' | 'steadyLeds'>>) => void;
 }
 
 const DEFAULT_THEME = resolveFaceplate(DEFAULT_SETTINGS);

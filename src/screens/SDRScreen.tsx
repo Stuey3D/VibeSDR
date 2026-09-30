@@ -8969,7 +8969,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)',
                    backgroundColor: 'rgba(14,10,4,0.94)', padding: 10, minWidth: 200 }}>
       <Text style={{ color: 'rgba(255,184,51,0.75)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
-                     letterSpacing: 1 }}>CONTROLS</Text>
+                     letterSpacing: 1 }}>CONTROL CUSTOMISATION</Text>
       {rowMock('TUNE', 'DRUM', 'KEYS', true)}
       {rowMock('ZOOM', 'DRUM', 'KEYS', true)}
     </View>
@@ -9036,7 +9036,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
     { id: 'schemes', title: 'Pick your control scheme',
-      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under CONTROLS in the settings cog.',
+      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog.',
       target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard drives the whole thing',
       body: 'Pair a keyboard — to an iPhone, iPad or Mac — and nearly every control has a key behind it: tuning, zoom, mode, bookmarks, the menus. The full list is in the settings cog, and Esc always steps back out of whatever is open.',
