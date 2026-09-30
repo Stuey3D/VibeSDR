@@ -17,8 +17,18 @@ import { type UserBookmark, bookmarkPassband } from '../services/userBookmarks';
 import { airbandEntry } from '../utils/airband';
 import { useListNav, useKeyboardMode, NAV_FOCUS, revealIn, noteTouchInteraction } from './PanelNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText, windowStyle,
+  PopupKey, PopupPlate, PopupScrim, PopupWindow, POPUP_FONT, type PopupTokens,
+} from './PopupShell';
+import { toSegCells } from '../constants/displayText';
 
 type Unit = 'hz' | 'khz' | 'mhz';
+
+/** Today's dim behind the card and the card's own glass — Transparency OFF drops the first
+ *  (PopupScrim) and makes the second opaque (usePopupSurface). */
+const BACKDROP = 'rgba(0,0,0,0.58)';
+const CARD_BG  = 'rgba(8,6,1,0.97)';
 
 interface FreqModalProps {
   visible:   boolean;
@@ -158,6 +168,7 @@ function fromDisplay(val: string, unit: Unit): number {
 function KeyCap({ letter, color, label, font, textStyle }: {
   letter: string; color: string; label: string; font?: string; textStyle?: any;
 }) {
+  const st = usePopupStyles(makeSt);
   // ★ A VIEW, not a nested <Text>. iOS renders nested Text as attributed-string runs and
   // simply DROPS borderWidth on them — so the letter drew and the box never did, which is
   // exactly what Stuart saw ("the boxes around the keys are not showing"). The cap has to be
@@ -221,6 +232,10 @@ export default function FreqModal({
   onAddBookmark, onDeleteBookmark, onToggleBookmarkSync, onExportBookmarks, onImportBookmarks, onPickImportFile,
 }: FreqModalProps) {
   const hasBookmarks = !!onSearchTune;   // bookmarks mode available
+  const pt = usePopupTheme();
+  const st = usePopupStyles(makeSt);
+  const surf = usePopupSurface();
+  const metalFrame = usePopupFrame(16, false);
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   const { width: winW, height: winH } = useWindowDimensions();
@@ -483,9 +498,19 @@ export default function FreqModal({
     bmSlots.current.push(onPress);
     return { on: bmNavFocus === i, ref: (r: any) => { bmViews.current[i] = r; } };
   };
-  /** A bookmarks-pane button that takes part in that order. */
-  const BmBtn = ({ onPress, style, children, ...rest }: any) => {
+  /** A bookmarks-pane button that takes part in that order. ★ Given a `label`, it is a DOME KEY on
+   *  silver / black (§10.3) — `active` + `pip` for a toggle / choice, `primary` for the SAVE keys;
+   *  `children` is today's legend on the default chassis. Without a label it is a list row (a saved
+   *  bookmark), which stays a row in its window on every chassis. */
+  const BmBtn = ({ onPress, style, children, label, active, pip, primary, ...rest }: any) => {
     const { on, ref } = bmSlot(onPress ?? (() => {}));
+    if (pt.metal && label) {
+      return (
+        <PopupKey ref={ref} label={label} active={!!active} pip={!!pip} primary={!!primary} onPress={onPress}
+          disabled={rest.disabled} focused={on} height={32} fontSize={11}
+          style={[StyleSheet.flatten(style), { marginBottom: StyleSheet.flatten(style)?.marginBottom ?? 0 }]} />
+      );
+    }
     return (
       <TouchableOpacity ref={ref} onPress={onPress}
         style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
@@ -499,11 +524,26 @@ export default function FreqModal({
   // Read through a ref: the listener above is installed once, on `visible` alone.
   const cardModeRef = useRef(cardMode); cardModeRef.current = cardMode;
 
+  // ★ §10.3 on silver / black: text INSIDE a recessed window keeps light colours (the station,
+  //   the entry, the lists — `winC` / `winDim`, in the text colour); text left ON the plate is
+  //   engraved (`plateDim`). On the default chassis all three are today's values.
   const dimText  = isWhite ? 'rgba(255,255,255,0.45)' : 'rgba(150,100,30,0.65)';
   const unitText = isWhite ? '#b0b8c8' : '#886600';
   const bdrDim   = isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)';
   const bdrBrt   = isWhite ? 'rgba(255,255,255,0.45)' : 'rgba(160,90,0,0.60)';
   const btnPadY  = isWhite ? 12 : 10;
+  const winC     = pt.metal ? pt.winText : t.freqColor;
+  const winName  = pt.metal ? pt.winText : t.btnText;
+  const winDim   = pt.metal ? pt.winDim : dimText;
+  const plateDim = pt.metal ? pt.note : dimText;
+  /** Popup text is always Atkinson on silver / black (§10.3) — only the tune entry follows the Display. */
+  const ff       = pt.metal ? POPUP_FONT : t.font;
+  const e = pt.entry;
+  const entryStyle = {
+    color: e.color, fontFamily: e.fontFamily, fontSize: e.fontSize, fontWeight: e.fontWeight,
+    fontStyle: e.fontStyle, letterSpacing: e.letterSpacing,
+    ...(e.glow ? { textShadowColor: e.glow, textShadowRadius: 6, textShadowOffset: { width: 0, height: 0 } } : null),
+  } as const;
   /* Bookmarks list cap (§6.4/§6.5): size to the space actually available above the keyboard, so a
    * big phone (17PM) shows every button with no scroll, while small phones cap-and-scroll.
    *
@@ -525,7 +565,8 @@ export default function FreqModal({
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
            onDismiss={() => { if (pendingShare.current) { pendingShare.current = false; onShare?.(); } }}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <Pressable style={st.backdrop} onPress={onClose} />
+      {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (PopupScrim). */}
+      <PopupScrim style={st.backdrop} color={BACKDROP} onPress={onClose} />
       <KeyboardAvoidingView
         // LANDSCAPE: position manually a small gap above the measured keyboard — iOS's
         // auto-padding over-lifts a tall modal in landscape (clips the top, gap below).
@@ -558,12 +599,35 @@ export default function FreqModal({
           paddingBottom: isLandscape ? kbHeight + 8 : 16 + (Platform.OS === 'android' ? kbHeight : 0),
         }]} pointerEvents="box-none"
       >
-        <View style={[st.modal, { borderColor: t.barBorder }]}
+        <View style={[st.modal, { borderColor: t.barBorder },
+                      surf.opaque && !pt.metal && { backgroundColor: surf.fill(CARD_BG) }, metalFrame]}
               // ★ Touching the card ends keyboard mode, so the [H]z / [T]une caps disappear
               // rather than advertising shortcuts to someone using their thumb. A Modal is its
               // own window, so SDRScreen's root touch sniff never sees this.
               onTouchStart={noteTouchInteraction}>
-          {hasBookmarks ? (
+          <PopupPlate radius={16} />
+          {hasBookmarks && pt.metal ? (
+            // ★ §10.3: TUNE | BOOKMARKS are an input selector — two dome keys, the lit one with its
+            //   pip — and the ✕ is a plain key. Same order, same keyboard letters (KeyCap).
+            <View style={st.segHeaderMetal}>
+              {(['tune', 'bookmarks'] as const).map(m => (
+                <PopupKey key={m} active={cardMode === m} pip height={32} style={{ flex: 1 }}
+                  accessibilityLabel={m === 'tune' ? 'Tune' : 'Bookmarks'}
+                  onPress={() => { setCardMode(m); if (m === 'bookmarks') Keyboard.dismiss(); }}>
+                  {(c: string) => kbSeen ? (
+                    <KeyCap letter={m === 'tune' ? 'T' : 'B'} label={m === 'tune' ? 'UNE' : 'OOKMARKS'}
+                            color={c} font={POPUP_FONT} textStyle={st.segTabText} />
+                  ) : (
+                    <Text style={[st.segTabText, { fontFamily: POPUP_FONT, color: c }]}>
+                      {m === 'tune' ? 'TUNE' : 'BOOKMARKS'}
+                    </Text>
+                  )}
+                </PopupKey>
+              ))}
+              <PopupKey label="✕" onPress={onClose} height={32} fontSize={15} hitSlop={10}
+                accessibilityLabel="Close" style={{ width: 36, paddingHorizontal: 0 }} />
+            </View>
+          ) : hasBookmarks ? (
             <View style={st.segHeader}>
               {(['tune', 'bookmarks'] as const).map(m => (
                 <TouchableOpacity key={m}
@@ -595,37 +659,42 @@ export default function FreqModal({
               </TouchableOpacity>
             </View>
           ) : (
-            <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }]}>FREQUENCY</Text>
+            <Text style={[st.title, { color: t.sectionColor, fontFamily: t.font }, st.titleMetal]}>FREQUENCY</Text>
           )}
 
           {cardMode === 'tune' && (<>
           {/* VTS nearby-station skip — relocated from MenuSheet (§4.1). Absent on FM-DX
               (SDRScreen doesn't pass the handlers there — the shared-tuner guard travels). */}
+          {/* ★ §10.3: the station and the entry are DATA — on silver / black they sit in one recessed
+              window, lit in the text colour; the entry follows the Display style (pt.entry). */}
+          <PopupWindow metalStyle={st.tuneWin}>
           {onVtsPrev && onVtsNext && (
             <View style={st.vtsRow}>
               <TouchableOpacity style={st.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
-                <Text style={[st.vtsArrowText, { color: t.freqColor }]}>◄</Text>
+                <Text style={[st.vtsArrowText, { color: pt.metal ? pt.winDim : t.freqColor }]}>◄</Text>
               </TouchableOpacity>
               <View style={st.vtsInfo}>
-                <Text style={[st.vtsName, { color: t.btnText, fontFamily: t.font }]} numberOfLines={1}>
+                <Text style={[st.vtsName, { color: winName, fontFamily: ff }]} numberOfLines={1}>
                   {(draftVts?.name ?? vtsName) || '—'}
                 </Text>
                 {(draftVts ? draftVts.freq : vtsFreq) != null && (
-                  <Text style={[st.vtsFreq, { color: dimText }]}>
+                  <Text style={[st.vtsFreq, { color: winDim }]}>
                     {((draftVts ? draftVts.freq : vtsFreq)! / 1_000_000).toFixed(3)} MHz
                   </Text>
                 )}
               </View>
               <TouchableOpacity style={st.vtsArrow} onPress={onVtsNext} hitSlop={8}>
-                <Text style={[st.vtsArrowText, { color: t.freqColor }]}>►</Text>
+                <Text style={[st.vtsArrowText, { color: pt.metal ? pt.readout : t.freqColor }]}>►</Text>
               </TouchableOpacity>
             </View>
           )}
-          <View style={[st.inputRow, { borderBottomColor: t.barBorder }]}>
+          <View style={[st.inputRow, { borderBottomColor: t.barBorder }, st.inputRowMetal]}>
             <TextInput
               ref={inputRef}
-              style={[st.input, { color: t.freqColor, fontFamily: t.font }]}
-              value={value}
+              style={[st.input, pt.metal ? entryStyle : { color: t.freqColor, fontFamily: t.font }]}
+              // ★ 14-segment: fed through toSegCells like every DSEG14 string (§7) — for a frequency
+              //   (digits and one point) it is the identity, so the field stays a live TextInput.
+              value={pt.entry.seg && pt.metal ? toSegCells(value) : value}
               onChangeText={onChangeValue}
               keyboardType="decimal-pad"
               autoComplete="off"
@@ -637,17 +706,33 @@ export default function FreqModal({
               // before the field could see it, so there was nothing to hear.
               returnKeyType="done"
             />
-            <Text style={[st.unitLabel, { color: unitText, fontFamily: t.font }]}>
+            <Text style={[st.unitLabel, { color: pt.metal ? pt.winDim : unitText, fontFamily: ff }]}>
               {unit === 'hz' ? 'Hz' : unit === 'khz' ? 'kHz' : 'MHz'}
             </Text>
           </View>
+          </PopupWindow>
           {!!(entryMsg || entryHint) && (
-            <Text style={[st.bmMsg, { color: entryMsg ? '#ff8a70' : unitText, fontFamily: t.font, textAlign: 'center' }]}>
+            <Text style={[st.bmMsg, { color: entryMsg ? (pt.metal ? pt.danger : '#ff8a70') : (pt.metal ? pt.note : unitText),
+                                      fontFamily: ff, textAlign: 'center' }]}>
               {entryMsg || entryHint}
             </Text>
           )}
           <View style={st.units}>
-            {(['hz', 'khz', 'mhz'] as Unit[]).map(u => (
+            {(['hz', 'khz', 'mhz'] as Unit[]).map(u => pt.metal ? (
+              // ★ An input selector (§10.3): the lit unit carries the LED pip.
+              <PopupKey key={u} active={unit === u} pip height={34} style={{ flex: 1 }}
+                disabled={lockUnit && u !== 'mhz'} onPress={() => switchUnit(u)}
+                accessibilityLabel={u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}>
+                {(c: string) => showKeyCaps ? (
+                  <KeyCap letter={u === 'hz' ? 'H' : u === 'khz' ? 'K' : 'M'} label={u === 'hz' ? 'z' : 'Hz'}
+                          color={c} font={POPUP_FONT} textStyle={[st.unitBtnText, st.unitBtnTextMetal]} />
+                ) : (
+                  <Text style={[st.unitBtnText, st.unitBtnTextMetal, { color: c }]}>
+                    {u === 'hz' ? 'Hz' : u === 'khz' ? 'kHz' : 'MHz'}
+                  </Text>
+                )}
+              </PopupKey>
+            ) : (
               <TouchableOpacity
                 key={u}
                 disabled={lockUnit && u !== 'mhz'}
@@ -679,6 +764,7 @@ export default function FreqModal({
           </View>
           {profiles.length > 0 && (
             <View style={st.profiles}>
+              <PopupWindow metalStyle={st.profileWin}>
               <ProfilePicker
                 active={visible && cardMode === 'tune'}
                 profiles={profiles}
@@ -688,6 +774,7 @@ export default function FreqModal({
                 onSelectProfile={onSelectProfile}
                 onPicked={onClose}
               />
+              </PopupWindow>
               {/* ★★★ THE MAGIC KEY. An OWRX operator can LOCK a profile; selecting it without the
                   key is refused and the picker snaps back, with the server saying "This profile is
                   locked, keeping current profile." (now surfaced — see onLogMessage). Given the
@@ -707,7 +794,7 @@ export default function FreqModal({
                     value={magicKey ?? ''}
                     onChangeText={onMagicKey}
                     placeholder="OWRX magic key (optional)"
-                    placeholderTextColor="rgba(255,190,90,0.45)"
+                    placeholderTextColor={pt.metal ? pt.winDim : 'rgba(255,190,90,0.45)'}
                     secureTextEntry
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -723,6 +810,23 @@ export default function FreqModal({
             </View>
           )}
 
+          {pt.metal ? (
+            // ★ §10.3: CANCEL and SHARE are plain keys; TUNE ▶ is the primary action, its legend lit.
+            <View style={st.actions}>
+              <PopupKey label="CANCEL" onPress={onClose} height={40} fontSize={12} style={{ flex: 1 }} />
+              {onShare && shareOffReason ? (
+                <PopupKey label={shareOffReason} disabled numberOfLines={2} height={40} fontSize={9}
+                  accessibilityLabel={`Share. ${shareOffReason}`} style={{ flex: 1 }} />
+              ) : onShare && (
+                <PopupKey label="SHARE" height={40} fontSize={12} style={{ flex: 1 }}
+                  onPress={() => {
+                    if (Platform.OS === 'ios') { pendingShare.current = true; onClose(); }
+                    else { onShare(); onClose(); }
+                  }} />
+              )}
+              <PopupKey label="TUNE ▶" primary onPress={confirm} height={40} fontSize={12} style={{ flex: 2 }} />
+            </View>
+          ) : (
           <View style={st.actions}>
             <TouchableOpacity
               style={[st.cancelBtn, { borderColor: bdrDim, paddingVertical: btnPadY }]}
@@ -761,6 +865,7 @@ export default function FreqModal({
               </Text>
             </TouchableOpacity>
           </View>
+          )}
           </>)}
 
           {/* BOOKMARKS mode — search + band plan, EiBi, add current, saved list, transfer.
@@ -773,14 +878,15 @@ export default function FreqModal({
               {(() => { const { on, ref: slotRef } = bmSlot(() => searchRef.current?.focus()); return (
               <TextInput
                 ref={(r: any) => { (searchRef as any).current = r; slotRef(r); }}
-                style={[st.searchInput, { color: t.freqColor, fontFamily: t.font,
-                                          borderColor: on ? NAV_FOCUS : bdrDim, borderWidth: on ? 2 : 1 }]}
+                style={[st.searchInput, { color: winC, fontFamily: ff,
+                                          borderColor: on ? NAV_FOCUS : (pt.metal ? pt.window.border : bdrDim), borderWidth: on ? 2 : 1 },
+                        st.inputMetal]}
                 value={searchQuery} onChangeText={(v: string) => {
                   setSearchQuery(v);
                   // ★ Emptying the box by hand is the user saying they are done with that list.
                   if (!v.trim()) stickySearch = null;
                 }}
-                placeholder="🔍 Search bookmarks & band plan…" placeholderTextColor={dimText}
+                placeholder="🔍 Search bookmarks & band plan…" placeholderTextColor={winDim}
                 autoCorrect={false} autoCapitalize="none" spellCheck={false} clearButtonMode="while-editing" />
               ); })()}
               {dabFilter && (() => {
@@ -789,26 +895,33 @@ export default function FreqModal({
                   .sort((a, b) => a.name.localeCompare(b.name));
                 return (<>
                   <View style={st.bmToggleRow}>
-                    <Text style={[st.bmSub, { color: dimText, marginTop: 0 }]}>DAB STATIONS HEARD BY THIS RECEIVER ({rows.length})</Text>
+                    <Text style={[st.bmSub, { color: plateDim, marginTop: 0 }]}>DAB STATIONS HEARD BY THIS RECEIVER ({rows.length})</Text>
+                    {pt.metal ? (
+                      <PopupKey label="SHOW ALL" onPress={() => setDabFilter(false)} height={26} fontSize={10} hitSlop={8} />
+                    ) : (
                     <TouchableOpacity onPress={() => setDabFilter(false)} hitSlop={8}>
                       <Text style={{ color: t.freqColor, fontFamily: t.font, fontSize: 11 }}>SHOW ALL</Text>
                     </TouchableOpacity>
+                    )}
                   </View>
-                  {rows.length === 0 && <Text style={[st.bmMsg, { color: dimText }]}>None yet — the receiver learns them as multiplexes are decoded.</Text>}
+                  {rows.length === 0 && <Text style={[st.bmMsg, { color: plateDim }]}>None yet — the receiver learns them as multiplexes are decoded.</Text>}
+                  <PopupWindow metalStyle={st.listWin}>
                   {rows.map((b, i) => (
                     <TouchableOpacity key={`dab|${b.frequency}|${b.sid}|${i}`} activeOpacity={0.7} style={st.searchRow}
                       onPress={() => { tuneBm(b); onClose(); }}>
-                      <Text style={[st.searchFreq, { color: t.freqColor }]}>{fmtFreq(b.frequency)}</Text>
-                      <Text style={[st.searchMode, { color: dimText }]}>DAB</Text>
-                      <Text style={[st.searchName, { color: t.btnText }]} numberOfLines={1}>{b.name}</Text>
+                      <Text style={[st.searchFreq, { color: winC }]}>{fmtFreq(b.frequency)}</Text>
+                      <Text style={[st.searchMode, { color: winDim }]}>DAB</Text>
+                      <Text style={[st.searchName, { color: winName }]} numberOfLines={1}>{b.name}</Text>
                     </TouchableOpacity>
                   ))}
+                  </PopupWindow>
                 </>);
               })()}
               {!dabFilter && searchQuery.trim().length > 0 && (searchResults.length === 0 ? (
-                <Text style={[st.bmMsg, { color: dimText }]}>No results for “{searchQuery.trim()}”</Text>
+                <Text style={[st.bmMsg, { color: plateDim }]}>No results for “{searchQuery.trim()}”</Text>
               ) : (<>
-                <Text style={[st.bmHint, { color: dimText }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune</Text>
+                <Text style={[st.bmHint, { color: plateDim }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune</Text>
+                <PopupWindow metalStyle={st.listWin}>
                 {searchResults.map((r: SearchResult, i: number) => {
                   const tune = () => {
                     // ★ Keep the query rather than clearing it: this is the tap that USED the
@@ -823,15 +936,16 @@ export default function FreqModal({
                   <TouchableOpacity key={i} ref={slotRef} activeOpacity={0.7}
                     style={[st.searchRow, on && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                     onPress={tune}>
-                    <Text style={[st.searchFreq, { color: t.freqColor }]}>{r.isBand && r.band ? fmtRange(r.band.start, r.band.end) : fmtFreq(r.bm?.frequency ?? 0)}</Text>
-                    <Text style={[st.searchMode, { color: dimText }]}>{r.isBand ? grpAbbr(r.band?.group) : (r.bm?.mode ?? '—').toUpperCase()}</Text>
+                    <Text style={[st.searchFreq, { color: winC }]}>{r.isBand && r.band ? fmtRange(r.band.start, r.band.end) : fmtFreq(r.bm?.frequency ?? 0)}</Text>
+                    <Text style={[st.searchMode, { color: winDim }]}>{r.isBand ? grpAbbr(r.band?.group) : (r.bm?.mode ?? '—').toUpperCase()}</Text>
                     {!r.isBand && r.bm?.name ? <StationLogo name={r.bm.name} itu={r.bm.itu} /> : null}
-                    <Text style={[st.searchName, { color: t.btnText }]} numberOfLines={1}>
+                    <Text style={[st.searchName, { color: winName }]} numberOfLines={1}>
                       {!r.isBand && r.bm?.flag ? r.bm.flag + ' ' : ''}{r.isBand ? (r.band?.label ?? '') : (r.bm?.name ?? '')}
                     </Text>
                   </TouchableOpacity>
                   );
                 })}
+                </PopupWindow>
               </>))}
 
               {/* ★★★ WHAT THIS RECEIVER HAS HEARD, WITHOUT HAVING TO GUESS ITS NAME FIRST.
@@ -852,6 +966,7 @@ export default function FreqModal({
                     twice, and a `ref` on a plain function component is dropped with a warning. */}
                 <BmBtn style={[st.bmSeg, { marginTop: 10,
                                            borderColor: showServerList ? bdrBrt : bdrDim }]}
+                  label={`ON THIS SERVER · ${serverBookmarks!.length}`} active={showServerList} pip
                   onPress={() => setShowServerList(v => !v)}>
                   <Text style={[st.bmSegText, { color: showServerList ? t.freqColor : dimText }]}>
                     {showServerList ? '▾ ' : '▸ '}ON THIS SERVER · {serverBookmarks!.length}
@@ -862,9 +977,10 @@ export default function FreqModal({
                       somebody's decision — different claims, so the row says which. Where the
                       backend does not tell us (UberSDR, OWRX, Kiwi send no such flag) the honest
                       label is none at all rather than a guess. */}
-                  <Text style={[st.bmHint, { color: dimText }]}>
+                  <Text style={[st.bmHint, { color: plateDim }]}>
                     tap to tune · LEARNT = heard by this aerial, SAVED = set by its owner
                   </Text>
+                  <PopupWindow metalStyle={st.listWin}>
                   {serverBookmarks!.map((b: ServerBookmark, i: number) => {
                     const go = () => { tuneBm(b); onClose(); };
                     const { on, ref: slotRef } = bmSlot(go);
@@ -873,39 +989,46 @@ export default function FreqModal({
                       <TouchableOpacity key={`srv${i}`} ref={slotRef} activeOpacity={0.7}
                         style={[st.searchRow, on && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                         onPress={go}>
-                        <Text style={[st.searchFreq, { color: t.freqColor }]}>{fmtFreq(b.frequency)}</Text>
-                        <Text style={[st.searchMode, { color: dimText }]}>{(b.mode ?? '—').toUpperCase()}</Text>
+                        <Text style={[st.searchFreq, { color: winC }]}>{fmtFreq(b.frequency)}</Text>
+                        <Text style={[st.searchMode, { color: winDim }]}>{(b.mode ?? '—').toUpperCase()}</Text>
                         {b.name ? <StationLogo name={b.name} itu={b.itu} /> : null}
-                        <Text style={[st.searchName, { color: t.btnText }]} numberOfLines={1}>
+                        <Text style={[st.searchName, { color: winName }]} numberOfLines={1}>
                           {b.flag ? b.flag + ' ' : ''}{b.name}
                         </Text>
-                        {tag ? <Text style={[st.searchMode, { color: dimText }]}>{tag}</Text> : null}
+                        {tag ? <Text style={[st.searchMode, { color: winDim }]}>{tag}</Text> : null}
                       </TouchableOpacity>
                     );
                   })}
+                  </PopupWindow>
                 </>)}
               </>)}
 
               {onEibiToggle && (
                 <View style={st.bmToggleRow}>
-                  <Text style={[st.bmSub, { color: dimText, marginTop: 0 }]}>EiBi SCHEDULE</Text>
+                  <Text style={[st.bmSub, { color: plateDim, marginTop: 0 }]}>EiBi SCHEDULE</Text>
+                  {pt.metal ? (
+                    <PopupKey label={eibiEnabled ? 'ON' : 'OFF'} active={eibiEnabled} pip hitSlop={8} height={28} fontSize={10}
+                      style={{ minWidth: 58 }} onPress={() => onEibiToggle(!eibiEnabled)} />
+                  ) : (
                   <TouchableOpacity onPress={() => onEibiToggle(!eibiEnabled)} hitSlop={8}
                     style={[st.bmToggle, { borderColor: eibiEnabled ? bdrBrt : bdrDim, backgroundColor: eibiEnabled ? t.btnActiveBg : 'transparent' }]}>
                     <Text style={{ color: eibiEnabled ? t.btnActiveText : dimText, fontFamily: t.font, fontSize: 11 }}>{eibiEnabled ? 'ON' : 'OFF'}</Text>
                   </TouchableOpacity>
+                  )}
                 </View>
               )}
 
-              <Text style={[st.bmSub, { color: dimText }]}>Add: {(currentHz / 1_000_000).toFixed(4)} MHz {currentMode.toUpperCase()}</Text>
+              <Text style={[st.bmSub, { color: plateDim }]}>Add: {(currentHz / 1_000_000).toFixed(4)} MHz {currentMode.toUpperCase()}</Text>
               {(() => { const { on, ref: slotRef } = bmSlot(() => bmNameRef.current?.focus()); return (
               <TextInput ref={(r: any) => { (bmNameRef as any).current = r; slotRef(r); }}
-                style={[st.searchInput, { color: t.freqColor, fontFamily: t.font,
-                                          borderColor: on ? NAV_FOCUS : bdrDim, borderWidth: on ? 2 : 1 }]}
-                value={bmName} onChangeText={setBmName} placeholder="Bookmark name…" placeholderTextColor={dimText} maxLength={60} autoCorrect={false} />
+                style={[st.searchInput, { color: winC, fontFamily: ff,
+                                          borderColor: on ? NAV_FOCUS : (pt.metal ? pt.window.border : bdrDim), borderWidth: on ? 2 : 1 },
+                        st.inputMetal]}
+                value={bmName} onChangeText={setBmName} placeholder="Bookmark name…" placeholderTextColor={winDim} maxLength={60} autoCorrect={false} />
               ); })()}
               <View style={st.bmSegRow}>
-                <BmBtn style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? t.freqColor : dimText }]}>THIS SERVER</Text></BmBtn>
-                <BmBtn style={[st.bmSeg, { borderColor: bmAll ? bdrBrt : bdrDim }]} onPress={() => setBmAll(true)}><Text style={[st.bmSegText, { color: bmAll ? t.freqColor : dimText }]}>ALL SERVERS</Text></BmBtn>
+                <BmBtn style={[st.bmSeg, { borderColor: !bmAll ? bdrBrt : bdrDim }]} label="THIS SERVER" active={!bmAll} pip onPress={() => setBmAll(false)}><Text style={[st.bmSegText, { color: !bmAll ? t.freqColor : dimText }]}>THIS SERVER</Text></BmBtn>
+                <BmBtn style={[st.bmSeg, { borderColor: bmAll ? bdrBrt : bdrDim }]} label="ALL SERVERS" active={bmAll} pip onPress={() => setBmAll(true)}><Text style={[st.bmSegText, { color: bmAll ? t.freqColor : dimText }]}>ALL SERVERS</Text></BmBtn>
               </View>
               {/* ★★★ A BUTTON THAT DOES NOTHING MUST LOOK LIKE IT. The press was guarded by
                   `if (!bmName.trim()) return` and nothing else, so with the name box empty the
@@ -916,6 +1039,7 @@ export default function FreqModal({
                   ★ Dimmed and disabled, the same shape as the admin TAKE OVER button, so the
                     reason is visible before the tap rather than inferred from nothing happening. */}
               <BmBtn style={[st.bmBtn, { borderColor: bmName.trim() ? bdrBrt : bdrDim }]}
+                     label="★ SAVE BOOKMARK" primary
                      disabled={!bmName.trim()}
                      onPress={() => { if (!bmName.trim()) return; onAddBookmark?.(bmName, bmAll); setBmName(''); }}>
                 <Text style={[st.bmBtnText, { color: t.freqColor },
@@ -926,24 +1050,26 @@ export default function FreqModal({
                   an empty one. */}
               {!!onAddServerBookmark && (
                 <BmBtn style={[st.bmBtn, { borderColor: bmName.trim() ? bdrBrt : bdrDim, marginTop: 6 }]}
+                       label="⚿ SAVE ON THE RECEIVER" primary
                        disabled={!bmName.trim()}
                        onPress={async () => { if (!bmName.trim()) return; const m = await onAddServerBookmark(bmName); setBmImportMsg(m); if (m.startsWith('Saved')) setBmName(''); }}>
                   <Text style={[st.bmBtnText, { color: t.freqColor }, !bmName.trim() && { opacity: 0.4 }]}>⚿ SAVE ON THE RECEIVER</Text>
                 </BmBtn>
               )}
 
-              <Text style={[st.bmSub, { color: dimText }]}>Saved ({userBookmarks.length})</Text>
-              {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: dimText }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
+              <Text style={[st.bmSub, { color: plateDim }]}>Saved ({userBookmarks.length})</Text>
+              {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: plateDim }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
+              <PopupWindow metalStyle={userBookmarks.length ? st.listWin : st.listWinEmpty}>
               {userBookmarks.map((b: UserBookmark, i: number) => (
                 <View key={`${b.name}|${b.frequency}|${i}`} style={st.bmSaveRow}>
                   <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b)); onClose(); }}>
-                    <Text style={[st.bmName2, { color: t.freqColor }]} numberOfLines={1}>{b.name}</Text>
-                    <Text style={[st.bmFreq2, { color: dimText }]}>{fmtFreq(b.frequency)}  {b.mode.toUpperCase()}</Text>
+                    <Text style={[st.bmName2, { color: winC }]} numberOfLines={1}>{b.name}</Text>
+                    <Text style={[st.bmFreq2, { color: winDim }]}>{fmtFreq(b.frequency)}  {b.mode.toUpperCase()}</Text>
                   </BmBtn>
                   {!!onToggleBookmarkSync && (
                     <TouchableOpacity hitSlop={8} onPress={() => onToggleBookmarkSync(b)}
                       accessibilityLabel={b.synced ? `Stop syncing ${b.name} to iCloud` : `Sync ${b.name} to iCloud`}>
-                      <Text style={[st.bmCloud, { color: b.synced ? t.freqColor : dimText,
+                      <Text style={[st.bmCloud, { color: b.synced ? winC : winDim,
                                                   opacity: b.synced ? 1 : 0.45 }]}>
                         {/* Distinct GLYPHS, not just a colour: a dim cloud and a
                             bright one are the same shape, and "is this one
@@ -953,36 +1079,53 @@ export default function FreqModal({
                       </Text>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}><Text style={[st.bmDel, { color: dimText }]}>✕</Text></TouchableOpacity>
+                  <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}><Text style={[st.bmDel, { color: winDim }]}>✕</Text></TouchableOpacity>
                 </View>
               ))}
+              </PopupWindow>
 
-              <Text style={[st.bmSub, { color: dimText }]}>Transfer</Text>
+              <Text style={[st.bmSub, { color: plateDim }]}>Transfer</Text>
               <View style={st.bmSegRow}>
-                <BmBtn style={[st.bmSeg, { borderColor: bdrDim }]} onPress={onExportBookmarks}><Text style={[st.bmSegText, { color: dimText }]}>⇧ EXPORT JSON</Text></BmBtn>
-                <BmBtn style={[st.bmSeg, { borderColor: bmImportOpen ? bdrBrt : bdrDim }]} onPress={() => { setBmImportOpen(p => !p); setBmImportMsg(''); }}><Text style={[st.bmSegText, { color: bmImportOpen ? t.freqColor : dimText }]}>⇩ PASTE</Text></BmBtn>
+                <BmBtn style={[st.bmSeg, { borderColor: bdrDim }]} label="⇧ EXPORT JSON" onPress={onExportBookmarks}><Text style={[st.bmSegText, { color: dimText }]}>⇧ EXPORT JSON</Text></BmBtn>
+                <BmBtn style={[st.bmSeg, { borderColor: bmImportOpen ? bdrBrt : bdrDim }]} label="⇩ PASTE" active={bmImportOpen} pip onPress={() => { setBmImportOpen(p => !p); setBmImportMsg(''); }}><Text style={[st.bmSegText, { color: bmImportOpen ? t.freqColor : dimText }]}>⇩ PASTE</Text></BmBtn>
               </View>
               {onPickImportFile && (
+                pt.metal ? (
+                  <PopupKey label="📁 IMPORT FILE (JSON / YAML)" height={32} fontSize={11} style={{ marginBottom: 8 }} onPress={async () => { const msg = await onPickImportFile(bmAll); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }} />
+                ) : (
                 <TouchableOpacity style={[st.bmBtn, { borderColor: bdrDim }]} onPress={async () => { const msg = await onPickImportFile(bmAll); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }}>
                   <Text style={[st.bmBtnText, { color: dimText }]}>📁 IMPORT FILE (JSON / YAML)</Text>
                 </TouchableOpacity>
+                )
               )}
               {!!onPickImportFileToServer && (
+                pt.metal ? (
+                  <PopupKey label="⚿ IMPORT FILE TO THE RECEIVER" height={32} fontSize={11} style={{ marginBottom: 8 }} onPress={async () => { const msg = await onPickImportFileToServer(); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }} />
+                ) : (
                 <TouchableOpacity style={[st.bmBtn, { borderColor: bdrDim }]} onPress={async () => { const msg = await onPickImportFileToServer(); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }}>
                   <Text style={[st.bmBtnText, { color: dimText }]}>⚿ IMPORT FILE TO THE RECEIVER</Text>
                 </TouchableOpacity>
+                )
               )}
-              {!!bmImportMsg && <Text style={[st.bmMsg, { color: dimText }]}>{bmImportMsg}</Text>}
+              {!!bmImportMsg && <Text style={[st.bmMsg, { color: plateDim }]}>{bmImportMsg}</Text>}
               {bmImportOpen && (<>
-                <TextInput style={[st.searchInput, st.bmImportBox, { color: t.freqColor, fontFamily: t.font, borderColor: bdrDim }]}
-                  value={bmImportText} onChangeText={setBmImportText} placeholder="Paste UberSDR bookmarks (JSON or YAML) here…" placeholderTextColor={dimText} autoCorrect={false} autoCapitalize="none" multiline />
+                <TextInput style={[st.searchInput, st.bmImportBox, { color: winC, fontFamily: ff, borderColor: pt.metal ? pt.window.border : bdrDim }, st.inputMetal]}
+                  value={bmImportText} onChangeText={setBmImportText} placeholder="Paste UberSDR bookmarks (JSON or YAML) here…" placeholderTextColor={winDim} autoCorrect={false} autoCapitalize="none" multiline />
+                {pt.metal ? (
+                  <PopupKey label="CONFIRM IMPORT" primary height={32} fontSize={11} style={{ marginBottom: 8 }} onPress={() => { const msg = onImportBookmarks?.(bmImportText, bmAll) ?? ''; setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }} />
+                ) : (
                 <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={() => { const msg = onImportBookmarks?.(bmImportText, bmAll) ?? ''; setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }}>
                   <Text style={[st.bmBtnText, { color: t.freqColor }]}>CONFIRM IMPORT</Text>
                 </TouchableOpacity>
+                )}
                 {!!onImportToServer && (
-                  <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={async () => { const msg = await onImportToServer(bmImportText); setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }}>
+                  pt.metal ? (
+                  <PopupKey label="⚿ CONFIRM IMPORT TO THE RECEIVER" primary height={32} fontSize={11} style={{ marginBottom: 8 }} onPress={async () => { const msg = await onImportToServer(bmImportText); setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }} />
+                ) : (
+                <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={async () => { const msg = await onImportToServer(bmImportText); setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }}>
                     <Text style={[st.bmBtnText, { color: t.freqColor }]}>⚿ CONFIRM IMPORT TO THE RECEIVER</Text>
                   </TouchableOpacity>
+                )
                 )}
               </>)}
               <View style={{ height: 12 }} />
@@ -994,7 +1137,7 @@ export default function FreqModal({
   );
 }
 
-const st = StyleSheet.create({
+const makeSt = (pt: PopupTokens) => StyleSheet.create({
   // Small enough to sit inside a label without changing its metrics — the boxes must not
   // reflow the row as they appear and disappear.
   keyCapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
@@ -1002,13 +1145,13 @@ const st = StyleSheet.create({
     borderWidth: 1, borderRadius: 3, paddingHorizontal: 3, marginRight: 1,
     alignItems: 'center', justifyContent: 'center',
   },
-  backdrop:     { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.58)' },
+  backdrop:     { ...StyleSheet.absoluteFill },
   // Anchor near the bottom (over the control pill) so it's thumb-reachable on
   // big phones; the auto-opened keyboard then sits just below it.
   center:       { ...StyleSheet.absoluteFill, justifyContent: 'flex-end', alignItems: 'center' },
-  modal:        { backgroundColor: 'rgba(8,6,1,0.97)', borderWidth: 1, borderRadius: 12, padding: 20, width: '90%', maxWidth: 360 },
+  modal:        { backgroundColor: CARD_BG, borderWidth: 1, borderRadius: 12, padding: 20, width: '90%', maxWidth: 360 },
   title:        { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
-  vtsRow:       { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  vtsRow:       onMetal(pt, { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }, { marginBottom: 6 }),
   vtsArrow:     { paddingHorizontal: 8, paddingVertical: 2 },
   vtsArrowText: { fontSize: 20, fontWeight: 'bold' },
   vtsInfo:      { flex: 1, alignItems: 'center' },
@@ -1023,11 +1166,11 @@ const st = StyleSheet.create({
   actions:      { flexDirection: 'row', gap: 10 },
   profiles:     { marginBottom: 12 },
   magicRow:     { marginTop: 8 },
-  magicInput:   { borderWidth: 1, borderColor: 'rgba(255,190,90,0.35)', borderRadius: 6,
+  magicInput:   onMetal(pt, { borderWidth: 1, borderColor: 'rgba(255,190,90,0.35)', borderRadius: 6,
                   paddingHorizontal: 10, paddingVertical: 7, color: '#ffd89b',
-                  fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
-  magicHint:    { color: 'rgba(255,190,90,0.55)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
-                  marginTop: 4 },
+                  fontFamily: 'Atkinson Hyperlegible', fontSize: 14 }, { ...windowStyle(pt), color: pt.readout }),
+  magicHint:    onMetal(pt, { color: 'rgba(255,190,90,0.55)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
+                  marginTop: 4 }, engraveText(pt, pt.note)),
   cancelBtn:    { flex: 1, borderWidth: 1, borderRadius: 3, alignItems: 'center' },
   tuneBtn:      { flex: 2, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderRadius: 3, alignItems: 'center' },
   // Bookmarks mode (§4.2)
@@ -1040,15 +1183,15 @@ const st = StyleSheet.create({
   bmScroll:     { maxHeight: 340 },
   searchInput:  { borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14, marginBottom: 8, backgroundColor: 'rgba(255,255,255,0.04)' },
   bmImportBox:  { minHeight: 64, textAlignVertical: 'top' },
-  bmMsg:        { fontSize: 12, marginBottom: 8, fontStyle: 'italic' },
-  bmHint:       { fontSize: 10, letterSpacing: 1, marginBottom: 4 },
+  bmMsg:        onMetal(pt, { fontSize: 12, marginBottom: 8, fontStyle: 'italic' }, engraveText(pt, pt.note)),
+  bmHint:       onMetal(pt, { fontSize: 10, letterSpacing: 1, marginBottom: 4 }, engraveText(pt, pt.note)),
   searchRow:    { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 7, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.10)' },
   searchFreq:   { fontSize: 12, fontWeight: '700', minWidth: 70 },
   searchMode:   { fontSize: 10, minWidth: 34 },
   searchName:   { flex: 1, fontSize: 12 },
   bmToggleRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, marginBottom: 4 },
   bmToggle:     { paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6, borderWidth: 1 },
-  bmSub:        { fontSize: 10, letterSpacing: 1, marginTop: 12, marginBottom: 5 },
+  bmSub:        onMetal(pt, { fontSize: 10, letterSpacing: 1, marginTop: 12, marginBottom: 5 }, { ...engraveText(pt, pt.note), fontWeight: '700', letterSpacing: 1.4 }),
   bmSegRow:     { flexDirection: 'row', gap: 6, marginBottom: 8 },
   bmSeg:        { flex: 1, borderWidth: 1, borderRadius: 4, paddingVertical: 8, alignItems: 'center' },
   bmSegText:    { fontSize: 11, fontWeight: '600' },
@@ -1059,4 +1202,13 @@ const st = StyleSheet.create({
   bmFreq2:      { fontSize: 10, marginTop: 1 },
   bmDel:        { fontSize: 16, paddingHorizontal: 6 },
   bmCloud:      { fontSize: 14, paddingHorizontal: 6 },
+  titleMetal: onMetal(pt, {}, { ...engraveText(pt), fontWeight: '700' }),
+  segHeaderMetal: { flexDirection: 'row', gap: 6, alignItems: 'center', marginBottom: 10 },
+  tuneWin: { paddingHorizontal: 10, paddingTop: 8, paddingBottom: 6, marginBottom: 10 },
+  inputRowMetal: onMetal(pt, {}, { borderBottomWidth: 0, borderTopWidth: 1, borderTopColor: pt.winRule, marginBottom: 0, paddingTop: 4, paddingBottom: 2 }),
+  unitBtnTextMetal: onMetal(pt, {}, { fontFamily: POPUP_FONT, fontSize: 12, fontWeight: '700' }),
+  profileWin: { padding: 6 },
+  inputMetal: onMetal(pt, {}, { backgroundColor: pt.window.bg, borderRadius: pt.window.radius }),
+  listWin: { paddingHorizontal: 8, marginBottom: 8 },
+  listWinEmpty: { display: 'none' },
 });
