@@ -180,6 +180,10 @@ if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); e
 #    every chassis, the aluminium notch pair inverts (and its draw order is a token), the LED pool's
 #    geometry, the controls colour at the brief's brightness, and the tuner keys' 31 % / 34 % layout.
 if node --no-warnings scripts/test_faceplate_wells.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ THE DECODER BOXES (faceplates §10.2): every text role ≥ 4.5:1 (WCAG luminance, composited over
+#    what it sits on) in every chassis × controls colour × text colour × Transparent/Solid; the
+#    meaning colours never move, the text colour never reaches a box, no blur on silver / black.
+if node --no-warnings scripts/test_decoder_contrast.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
