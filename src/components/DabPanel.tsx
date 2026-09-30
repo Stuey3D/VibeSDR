@@ -30,13 +30,13 @@ import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component below
- *  reads `useDecoderStyles(makeStyles)`, so a chassis, colour or Decoder-background change reaches
+ *  reads `useDecoderStyles(makeStyles)`, so a chassis, colour or Transparency change reaches
  *  the text as well as the frame. Aliased to the names the body already used.
- * ★★★ THE TINT IS THE USER'S NOW (§10.2 Transparent / Solid). This box was 0.94 + blur, nearly
+ * ★★★ THE TINT IS THE USER'S NOW (§10.2, now TRANSPARENCY EFFECTS). This box was 0.94 + blur, nearly
  *  opaque, for a measured reason — on the Xcover over 11A (2026-09-08) the service list was
  *  unreadable at 0.72 wherever the waterfall ran hot, and in DAB there is nothing behind it to tune
- *  by. That reason is exactly what the Solid setting answers ("easier to read, hides the signals
- *  behind"); Transparent is the same glass as every other box. See DecoderShell. */
+ *  by. That reason is exactly what Transparency OFF answers ("solid panels, easier to read"); ON is
+ *  the same glass as every other box. See DecoderShell. */
 /* ★★ 560 IS KEPT, AND IT IS THE CONTENT'S WIDTH (brief §10.1 asked: justify or drop). Every line in
  *  this box is ONE column — a 124 pt label and its value, or a logo and a station name — and the
  *  widest thing in it, the signal pane's constellation + impulse-response pair, is ~450 pt. The
@@ -848,7 +848,7 @@ const makeStyles = (T: DecoderTokens) => {
   const C = palette(T);
   const s = StyleSheet.create({
   /* ★ Frame, header, title and header keys are DecoderShell's. */
-  // The header's read-outs sit on the metal when Solid: engraved, in the header's own colours.
+  // The header's read-outs sit on the metal with Transparency OFF: engraved, in the header's own colours.
   blockTxt: { fontFamily: FONT, fontSize: 13, color: T.hdrAccent, ...engraveStyle(T) },
   blockHz:  { fontFamily: FONT, fontSize: 10, color: T.hdrMuted },
   mux:      { fontFamily: FONT, fontSize: 12, color: T.hdrValue, maxWidth: 150, ...engraveStyle(T) },
