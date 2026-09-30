@@ -7,10 +7,21 @@
  *   │ −   ╲   [icon window]   ╱    + │  ← panel face; trapezoid cut-out, NO top
  *   │      ╲                 ╱       │    edge (outer border serves as the top);
  *   │       ╲_______________╱        │    +/− live in the dead corner triangles
- *   ├────────────▼───────────────────┤  ← drum rim; LED carrier at the V base
- *   │▓▓▓▓▓▓▓▓▓▓▓▓│▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│  ← knurled rubber drum, grey notches,
- *   │▓▓▓▓▓▓▓▓▓▓▓▓│▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│    red LED beam shines DOWNWARD into the
- *   └─────────────────────────────────┘    drum only — never into the trapezoid
+ *   ├─────────────────────────────────┤  ← drum rim
+ *   │▓▓▓▓▓▓▓▓▓▓▓▓░░░▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│  ← knurled drum, notches; the controls-colour
+ *   │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│    LED glows THROUGH it from behind (§6.1 —
+ *   └─────────────────────────────────┘    no index needle any more)
+ *
+ * ★★ FACEPLATES §6.1 — PORTED, NOT REDRAWN. The layering below is today's; the chassis tokens
+ *   (constants/faceplate.ts) parameterise the face, drum, ridges and notches, and components/
+ *   DrumWell.tsx draws the face, the edge and the LED pool that DrumWheel shares with TunerKeys.
+ *   The default chassis is today's drum exactly, EXCEPT the red index needle — removed on every
+ *   chassis by the brief.
+ * ★★ THREE CANVASES, and the split is the performance work (§3.4, Xcover 4S): the face + drum body
+ *   below, the rolling notches in the middle, the sheen / trapezoid / icon / edge above. Only the
+ *   middle one repaints while the drum turns; the blurs (seams, trapezoid edges, icon, border glow)
+ *   used to be re-run on every frame of every drag because they shared its canvas. Stacked canvases
+ *   composite exactly as the layers did in one, so the picture is unchanged.
  *
  * NOTE: the final slider-locked parameters from the preview widget were not
  * recoverable from the session transcript — the TUNABLES block below carries
@@ -42,14 +53,14 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { ledA } from '../constants/faceplate';
+import { notchOrder, wellOutset } from '../constants/drumWell';
+import { WellFace, WellEdge, DrumPool } from './DrumWell';
+import { getControlHaptics } from './controlHaptics';
 
 // ── Drum haptics (menu ✦ HAPTICS toggle) ──────────────────────────────────────
-// Module-level so SDRScreen can flip it without threading a prop through
-// ControlsBar's layouts into every drum instance.
-let _hapticsOn = true;
-export function setDrumHaptics(on: boolean) { _hapticsOn = on; }
-/** Same switch, read by the other controls that share the setting (TunerKeys). */
-export function getControlHaptics() { return _hapticsOn; }
+// ★ The switch lives in controlHaptics.ts now (DomeKey needs it, and DrumWheel draws with DomeKey's
+//   texture — an import cycle otherwise). Re-exported so every existing caller is unchanged.
+export { setDrumHaptics, getControlHaptics } from './controlHaptics';
 
 // ── TUNABLES (preview-widget parameters, 2026-06-10 session) ──────────────────
 
@@ -57,7 +68,7 @@ const DRUM_FRAC   = 0.60;  // drum body fraction of total height
 const TRAP_TOP_W  = 0.78;  // trapezoid top width fraction of panel width
 const TRAP_BOT_W  = 0.38;  // trapezoid bottom width fraction
 // ★ The LED hue and the needle hue are gone from here: colour is the faceplate's (§6.1). The
-//   controls colour lights the well; the chassis tokens carry the drum, notches and needle.
+//   controls colour lights the well; the chassis tokens carry the face, drum and notches.
 const RIDGES      = 4;     // horizontal knurl ridge pairs on the drum
 const RIM_H       = 2;     // drum rim highlight height
 
@@ -133,7 +144,7 @@ export default function DrumWheel({
   const lastHaptic = useRef(0);
   const hapticAcc  = useRef(0);
   const detentTick = useCallback((dPx: number) => {
-    if (!_hapticsOn) { hapticAcc.current = 0; return; }
+    if (!getControlHaptics()) { hapticAcc.current = 0; return; }
     hapticAcc.current += dPx;
     if (Math.abs(hapticAcc.current) < LSV_PX_STEP) return;
     // Consume ALL whole crossings (a single fast frame can cross several
@@ -149,7 +160,7 @@ export default function DrumWheel({
 
   // Soft landing thunk when a flick finishes coasting
   const settleTick = useCallback(() => {
-    if (!_hapticsOn) return;
+    if (!getControlHaptics()) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft).catch(() => {});
   }, []);
 
@@ -368,8 +379,6 @@ export default function DrumWheel({
     () => buildIconPath(type === 'vfo', cx, drumTop * 0.48, iconSz),
     [type, cx, drumTop, iconSz]);
 
-  // LED carrier at the V base
-
   const pmFontSz = Math.max(10, Math.round(drumTop * 0.51));
 
   if (W <= 0) {
@@ -379,24 +388,31 @@ export default function DrumWheel({
     );
   }
 
+  // The edge canvas is M larger than the well on each side: the metal ring and glow sit OUTSIDE it.
+  const M = wellOutset(ct);
+  const notchPaths = {
+    pair:  <Path key="pair"  path={pathShadow} style="stroke" strokeWidth={1.1} color={ct.notchPair} />,
+    minor: <Path key="minor" path={pathMinor}  style="stroke" strokeWidth={0.8} color={ct.notchMinor} />,
+    med:   <Path key="med"   path={pathMed}    style="stroke" strokeWidth={0.8} color={ct.notchMed} />,
+    major: <Path key="major" path={pathMajor}  style="stroke" strokeWidth={1.5} color={ct.notchMajor} />,
+  };
+
   return (
     <GestureDetector gesture={gesture}>
       <View style={[{ height }, style]}
             onLayout={widthProp <= 0 ? e => setMeasuredW(e.nativeEvent.layout.width) : undefined}>
-        <Canvas style={StyleSheet.absoluteFill}>
+        {/* ════ 1. BELOW THE NOTCHES — static ════ */}
+        <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
 
-          {/* ── Panel face — machined dark metal, subtle vertical sheen ── */}
-          <RoundedRect x={0} y={0} width={W} height={H} r={6}>
-            <LinearGradient start={vec(0, 0)} end={vec(0, H)}
-              colors={ct.wellFace} positions={[0, 0.4, 1]} />
-          </RoundedRect>
+          {/* ── Panel face — today's machined dark metal, or the chassis's brushed grain ── */}
+          <WellFace W={W} H={H} ct={ct} />
 
-          {/* ── Drum body — convex plastic wheel poking out of the panel:
+          {/* ── Drum body — convex wheel poking out of the panel:
               crown catches the light mid-face, falls away to the seams ── */}
           <Rect x={1} y={drumTop} width={W - 2} height={drumH - 1}>
             <LinearGradient start={vec(0, drumTop)} end={vec(0, H)}
               colors={ct.drumBody}
-              positions={[0, 0.28, 0.50, 0.74, 1]} />
+              positions={ct.drumPos} />
           </Rect>
 
           {/* Slot shadows — the panel edge occludes the wheel at both seams */}
@@ -409,7 +425,7 @@ export default function DrumWheel({
               colors={ct.drumShadeBot} />
           </Rect>
 
-          {/* Green backlight seeping through the panel/wheel gaps */}
+          {/* Backlight seeping through the panel/wheel gaps, in the controls colour */}
           <Line p1={vec(3, drumTop + 0.5)} p2={vec(W - 3, drumTop + 0.5)}
                 color={G(0.30)} strokeWidth={1.4}>
             <BlurMask blur={4} style="normal" respectCTM />
@@ -432,9 +448,12 @@ export default function DrumWheel({
                     color={ct.ridgeHighlight} strokeWidth={0.8} />
             </Group>
           ))}
+        </Canvas>
 
+        {/* ════ 2. THE ROLLING NOTCHES — the only canvas that repaints while the drum turns ════ */}
+        <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
           {/* Engraved notches — cosine-faded with the curvature; each line
-              carries a shadow pair so the cuts read as depth, not paint */}
+              carries a pair so the cuts read as depth, not paint */}
           <Group clip={Skia.XYWHRect(1, drumTop + RIM_H, W - 2, drumH - RIM_H - 1)}>
             {/* ★★ THE CURVATURE FADE IS A MASK, not per-notch alpha — see buildTicks. The stops
                 sample 0.15 + 0.85·cos(asin(u)) across the drum, which is exactly the falloff the
@@ -450,93 +469,73 @@ export default function DrumWheel({
                   colors={ct.glint} />
               </Rect>
             }>
-              {/* Shadow pair first — the cut reads as depth only if it sits UNDER the highlight. */}
-              <Path path={pathShadow} style="stroke" strokeWidth={1.1} color={ct.notchShadow} />
-              <Path path={pathMinor}  style="stroke" strokeWidth={0.8} color={ct.notchMinor} />
-              <Path path={pathMed}    style="stroke" strokeWidth={0.8} color={ct.notchMed} />
-              <Path path={pathMajor}  style="stroke" strokeWidth={1.5} color={ct.notchMajor} />
+              {/* ★ §6.1 TRAP: the ORDER is a chassis token. On rubber the pair is the shadow and
+                  must sit UNDER the light notch; on aluminium the notch is the dark cut and the
+                  pair its white highlight — drawn over it, the highlight would paint the cut out. */}
+              {notchOrder(ct).map(k => notchPaths[k])}
             </Mask>
           </Group>
+        </Canvas>
 
-          {/* Specular sheen — studio light caught across the curvature */}
-          <Rect x={1} y={drumTop + drumH * 0.16} width={W - 2} height={drumH * 0.26}>
-            <LinearGradient
-              start={vec(0, drumTop + drumH * 0.16)}
-              end={vec(0, drumTop + drumH * 0.42)}
-              colors={ct.sheen}
-              positions={[0, 0.45, 1]} />
-          </Rect>
-
-          {/* Drum side shading — cylindrical falloff at the edges */}
-          <Rect x={1} y={drumTop} width={W * 0.12} height={drumH - 1}>
-            <LinearGradient start={vec(0, 0)} end={vec(W * 0.12, 0)}
-              colors={ct.sideShade} />
-          </Rect>
-          <Rect x={W - 1 - W * 0.12} y={drumTop} width={W * 0.12} height={drumH - 1}>
-            <LinearGradient start={vec(W - 1, 0)} end={vec(W - 1 - W * 0.12, 0)}
-              colors={ct.sideShade} />
-          </Rect>
-
-          {/* ── Trapezoid window — darker inset, green-lit from within ── */}
-          <Path path={trapPath} color={ct.trapFill} />
-          <Path path={trapPath}>
-            <RadialGradient c={vec(cx, drumTop * 0.55)} r={trapWT * 0.55}
-              colors={[G(0.16), G(0.05), 'rgba(0,0,0,0)']}
-              positions={[0, 0.55, 1]} />
-          </Path>
-
-          {/* Trapezoid edges — left/right/bottom only (NO top edge) */}
-          {[
-            [tx0, 0, bx0, drumTop], [tx1, 0, bx1, drumTop], [bx0, drumTop, bx1, drumTop],
-          ].map(([x0, y0, x1, y1], i) => (
-            <Group key={`te${i}`}>
-              <Line p1={vec(x0, y0)} p2={vec(x1, y1)} color={G(0.30)} strokeWidth={3}>
-                <BlurMask blur={3} style="normal" respectCTM />
-              </Line>
-              <Line p1={vec(x0, y0)} p2={vec(x1, y1)} color={G(0.60)} strokeWidth={0.9} />
-            </Group>
-          ))}
-
-          {/* Icon — green LED: glow BEHIND a crisp stroke (BlurMask on the
-              stroke itself smudged the icons — acrylic rule applies) */}
-          <Path path={iconPath} color={G(0.45)} strokeWidth={2.6} style="stroke"
-                strokeCap="round" strokeJoin="round">
-            <BlurMask blur={3} style="normal" respectCTM />
-          </Path>
-          <Path path={iconPath} color={G(0.95)} strokeWidth={1.1} style="stroke"
-                strokeCap="round" strokeJoin="round" />
-
-          {/* (LED carrier housing removed per design review — the beam
-              emerges straight from the V base.) */}
-          {/* Deep-red LED beam (no dot at the carrier — per design brief):
-              a soft pool of red light on the wheel surface + glow layers +
-              razor filament */}
-          <Group clip={Skia.XYWHRect(1, drumTop, W - 2, drumH - 1)}>
-            <Rect x={cx - W * 0.16} y={drumTop} width={W * 0.32} height={drumH - 1}>
-              <RadialGradient c={vec(cx, drumTop + drumH * 0.30)} r={W * 0.16}
-                colors={ct.needleWash}
-                positions={[0, 0.55, 1]} />
+        {/* ════ 3. ABOVE THE NOTCHES — static; M larger than the well for the metal glow ════ */}
+        <Canvas pointerEvents="none"
+                style={{ position: 'absolute', left: -M, top: -M, width: W + 2 * M, height: H + 2 * M }}>
+          <Group transform={[{ translateX: M }, { translateY: M }]}>
+            {/* Specular sheen — studio light caught across the curvature */}
+            <Rect x={1} y={drumTop + drumH * 0.16} width={W - 2} height={drumH * 0.26}>
+              <LinearGradient
+                start={vec(0, drumTop + drumH * 0.16)}
+                end={vec(0, drumTop + drumH * 0.42)}
+                colors={ct.sheen}
+                positions={[0, 0.45, 1]} />
             </Rect>
-            <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={ct.needleGlow} strokeWidth={9}>
-              <BlurMask blur={6} style="normal" respectCTM />
-            </Line>
-            <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={ct.needleBody} strokeWidth={2.6}>
+
+            {/* Drum side shading — cylindrical falloff at the edges */}
+            <Rect x={1} y={drumTop} width={W * 0.12} height={drumH - 1}>
+              <LinearGradient start={vec(0, 0)} end={vec(W * 0.12, 0)}
+                colors={ct.sideShade} />
+            </Rect>
+            <Rect x={W - 1 - W * 0.12} y={drumTop} width={W * 0.12} height={drumH - 1}>
+              <LinearGradient start={vec(W - 1, 0)} end={vec(W - 1 - W * 0.12, 0)}
+                colors={ct.sideShade} />
+            </Rect>
+
+            {/* ★★ §6.1: NO INDEX NEEDLE, on any chassis. The LED behind the drum glows through it
+                instead — a soft pool in the controls colour, high on the wheel. */}
+            <DrumPool x={1} y={drumTop} w={W - 2} h={drumH - 1} led={fp.controls} />
+
+            {/* ── Trapezoid window — darker inset, lit from within ── */}
+            <Path path={trapPath} color={ct.trapFill} />
+            <Path path={trapPath}>
+              <RadialGradient c={vec(cx, drumTop * 0.55)} r={trapWT * 0.55}
+                colors={[G(0.16), G(0.05), 'rgba(0,0,0,0)']}
+                positions={[0, 0.55, 1]} />
+            </Path>
+
+            {/* Trapezoid edges — left/right/bottom only (NO top edge) */}
+            {[
+              [tx0, 0, bx0, drumTop], [tx1, 0, bx1, drumTop], [bx0, drumTop, bx1, drumTop],
+            ].map(([x0, y0, x1, y1], i) => (
+              <Group key={`te${i}`}>
+                <Line p1={vec(x0, y0)} p2={vec(x1, y1)} color={G(0.30)} strokeWidth={3}>
+                  <BlurMask blur={3} style="normal" respectCTM />
+                </Line>
+                <Line p1={vec(x0, y0)} p2={vec(x1, y1)} color={G(0.60)} strokeWidth={0.9} />
+              </Group>
+            ))}
+
+            {/* Icon — the controls-colour LED: glow BEHIND a crisp stroke (BlurMask on the
+                stroke itself smudged the icons — acrylic rule applies) */}
+            <Path path={iconPath} color={G(0.45)} strokeWidth={2.6} style="stroke"
+                  strokeCap="round" strokeJoin="round">
               <BlurMask blur={3} style="normal" respectCTM />
-            </Line>
-            {/* Crisp deep-red filament — glow BEHIND a razor line */}
-            <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={ct.needleCore} strokeWidth={0.9} />
+            </Path>
+            <Path path={iconPath} color={G(0.95)} strokeWidth={1.1} style="stroke"
+                  strokeCap="round" strokeJoin="round" />
           </Group>
 
-          {/* ── Outer panel border — green LED glow + solid ── */}
-          <RoundedRect x={1} y={1} width={W - 2} height={H - 2} r={6}
-                       color={G(0.10)} strokeWidth={5} style="stroke">
-            <BlurMask blur={6} style="normal" respectCTM />
-          </RoundedRect>
-          <RoundedRect x={0.5} y={0.5} width={W - 1} height={H - 1} r={6}
-                       color={G(0.70)} strokeWidth={0.9} style="stroke" />
+          {/* ── The well's edge — today's lit border, or the metal gap + ring + glow ── */}
+          <WellEdge W={W} H={H} M={M} ct={ct} led={fp.controls} />
         </Canvas>
 
         {/* ── +/− in the dead corner triangles flanking the V ── */}

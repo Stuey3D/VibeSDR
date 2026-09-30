@@ -314,8 +314,7 @@ export function feelRows(hapticsHardware: boolean): Array<'haptics' | 'steadyLed
 
 /**
  * Everything the deck draws with that is not a text or controls colour. ★ Silver and black spread
- * DEFAULT_CHASSIS and override the plate and keys (row 3); the drum wells, tuner keys, meter and
- * VTS keep today's tokens on every chassis until their own rows (4–6) restyle them.
+ * DEFAULT_CHASSIS and override the plate and keys (row 3) and the drum wells (row 6).
  */
 export interface ChassisTokens {
   // Keys (today's outline keys)
@@ -359,28 +358,54 @@ export interface ChassisTokens {
   dspTagBorder:   string;
   dspTagBg:       string;
   handbackBg:     string;
-  // Drum well (DrumWheel) — §6.1
+  // Drum well (DrumWheel, and TunerKeys' well) — §6.1 / §6.2
+  /** The panel face's vertical gradient (stops at 0 / 40 / 100 %). Under a texture it is the base
+   *  the grain is laid over — a flat colour, so the well never flashes a gradient while it loads. */
   wellFace:       string[];
+  /** Brushed grain on the face (silver / black), or null for today's machined dark metal. */
+  wellTexture:    'silver' | 'black' | null;
+  /** The face's 0.9 pt border: a fixed colour (metal: the dark gap), or null = the controls colour
+   *  at .70 (default: today's lit edge). */
+  wellBorder:     string | null;
+  /** Today's inner glow along the border (G(.10), 5 pt, blur 6); 0 = none. */
+  wellInnerGlowA: number;
+  /** Metal: the controls-colour ring OUTSIDE the dark gap (`0 0 0 1px L(a)`) and the glow beyond it
+   *  (`0 0 8px L(a)`). 0 on the default well, whose edge is its lit border. */
+  wellRingA:      number;
+  wellGlowA:      number;
+  /** The face's top lip (`inset 0 1px 0 …`), or null. */
+  wellTopLip:     string | null;
   drumBody:       string[];
+  /** The drum gradient's stop positions (silver's crown light sits at 26 %, the dark drums' at 28 %). */
+  drumPos:        number[];
   drumShadeTop:   string[];
   drumShadeBot:   string[];
   rimLine:        string;
   ridgeShadow:    string;
   ridgeHighlight: string;
   glint:          string[];
-  notchShadow:    string;
+  /** ★ §6.1 TRAP — the notch PAIR, colour AND draw order. On dark rubber the notch is a light line
+   *  with its shadow beside it; on aluminium it inverts: a DARK cut with a white highlight beside it.
+   *  `notchPair` is the second line (shadow / highlight), offset `notchPairDx`, drawn UNDER the
+   *  notches when `notchPairUnder` (so the notch's own colour wins where the two overlap). */
+  notchPair:      string;
+  notchPairDx:    number;
+  notchPairUnder: boolean;
   notchMinor:     string;
   notchMed:       string;
   notchMajor:     string;
   sheen:          string[];
   sideShade:      string[];
   trapFill:       string;
-  /** The red index needle — removed on every chassis in row 6; its colours until then. */
-  needleWash:     string[];
-  needleGlow:     string;
-  needleBody:     string;
-  needleCore:     string;
-  // Tuner keys (TunerKeys)
+  // (★★ §6.1: the red index needle is GONE on every chassis, and its tokens with it. In its place the
+  //   LED pool in the controls colour — constants/drumWell.ts POOL.)
+  // Tuner-keys mode (TunerKeys) — §6.2
+  /** The well's face behind the keys (Deck.mockup `tk.bg`); metal lays its grain over it. */
+  keysFace:       string;
+  /** The dark slot each key sits in, where the key draws none itself (the default chassis's outline
+   *  key); null on metal, whose DomeKey cap already sits in its own slot. */
+  keysSlot:       string | null;
+  // Today's tuner keys (TunerKeys, until §6.2 makes them dome keys)
   tkSlotEdge:     string;
   tkSlotLip:      string[];
   tkCapDown:      string[];
@@ -486,7 +511,14 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
   dspTagBg:      'rgba(255,184,51,0.16)',
   handbackBg:    'rgba(124,255,155,0.10)',
   wellFace:      ['#101410', '#0a0c0a', '#060706'],
+  wellTexture:   null,
+  wellBorder:    null,
+  wellInnerGlowA: 0.10,
+  wellRingA:     0,
+  wellGlowA:     0,
+  wellTopLip:    null,
   drumBody:      ['#070807', '#191a18', '#232422', '#181917', '#050505'],
+  drumPos:       [0, 0.28, 0.50, 0.74, 1],
   drumShadeTop:  ['rgba(0,0,0,0.62)', 'rgba(0,0,0,0)'],
   drumShadeBot:  ['rgba(0,0,0,0)', 'rgba(0,0,0,0.58)'],
   rimLine:       'rgba(180,185,175,0.14)',
@@ -494,18 +526,17 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
   ridgeHighlight:'rgba(160,160,150,0.10)',
   glint:         ['#262626', '#6b6b6b', '#a5a5a5', '#d6d6d6', '#ffffff',
                   '#d6d6d6', '#a5a5a5', '#6b6b6b', '#262626'],
-  notchShadow:   'rgba(0,0,0,0.5)',
+  notchPair:     'rgba(0,0,0,0.5)',
+  notchPairDx:   0.9,
+  notchPairUnder: true,
   notchMinor:    'rgba(168,166,158,0.22)',
   notchMed:      'rgba(168,166,158,0.36)',
   notchMajor:    'rgba(168,166,158,0.55)',
   sheen:         ['rgba(255,255,255,0)', 'rgba(255,255,255,0.07)', 'rgba(255,255,255,0)'],
   sideShade:     ['rgba(0,0,0,0.55)', 'rgba(0,0,0,0)'],
   trapFill:      'rgba(3,4,3,0.96)',
-  // hsl(4, 95%, l) at the lightnesses DrumWheel's RD() used — same strings, so Skia parses the same.
-  needleWash:    ['hsla(4,95%,42%,0.16)', 'hsla(4,95%,40%,0.05)', 'rgba(0,0,0,0)'],
-  needleGlow:    'hsla(4,95%,40%,0.14)',
-  needleBody:    'hsla(4,95%,44%,0.5)',
-  needleCore:    'hsla(4,95%,52%,1)',
+  keysFace:      '#0b0a08',
+  keysSlot:      '#050403',
   tkSlotEdge:    'rgba(0,0,0,0.9)',
   tkSlotLip:     ['rgba(255,255,255,0.05)', 'rgba(255,255,255,0.22)', 'rgba(255,255,255,0.05)'],
   tkCapDown:     ['#050605', '#090a09', '#0d0f0d'],
@@ -535,6 +566,26 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
 /** §3.2 brushed silver (Sony HCD-SE1, Panasonic stacking hi-fi). */
 export const SILVER_CHASSIS: ChassisTokens = {
   ...DEFAULT_CHASSIS,
+  // §6.1, Deck.mockup `W_FACE.silver`: a brushed-silver face, a dark 1 pt gap, then the ring and glow
+  // in the controls colour; a polished-aluminium drum with DARK cuts (the pair inverts — TRAP).
+  wellFace:      ['#c9c6bf', '#c9c6bf', '#c9c6bf'],
+  wellTexture:   'silver',
+  wellBorder:    'rgba(0,0,0,0.55)',
+  wellInnerGlowA: 0,
+  wellRingA:     0.35,
+  wellGlowA:     0.40,
+  wellTopLip:    'rgba(255,255,255,0.80)',
+  drumBody:      ['#4d4b46', '#a9a69f', '#e4e2dc', '#a3a09a', '#393834'],
+  drumPos:       [0, 0.26, 0.50, 0.74, 1],
+  rimLine:       'rgba(255,255,255,0.55)',
+  ridgeHighlight:'rgba(255,255,255,0.35)',
+  notchPair:     'rgba(255,255,255,0.45)',
+  notchMinor:    'rgba(58,56,50,0.40)',
+  notchMed:      'rgba(48,46,41,0.55)',
+  notchMajor:    'rgba(38,36,32,0.70)',
+  sheen:         ['rgba(255,255,255,0)', 'rgba(255,255,255,0.40)', 'rgba(255,255,255,0)'],
+  keysFace:      '#c9c6bf',
+  keysSlot:      null,
   plate: {
     base: '#c9c6bf', border: '#8b8983', radius: 16, texture: 'silver',
     lightColors: ['rgba(255,255,255,0)', 'rgba(255,255,255,0.10)', 'rgba(255,255,255,0.34)',
@@ -557,6 +608,24 @@ export const SILVER_CHASSIS: ChassisTokens = {
 /** §3.3 brushed black (Stuart's Yamaha RX-V583): no screws, a gloss acrylic display panel. */
 export const BLACK_CHASSIS: ChassisTokens = {
   ...DEFAULT_CHASSIS,
+  // §6.1 — ★ THE MOCKUP WINS over the brief's table here: `W_FACE.black` is NOT the default well. It
+  // has a brushed-black face (#000 gap, ring .30, glow .38, top lip .14) and a NEUTRAL grey drum
+  // (#070707 … #050505) where the default's is faintly green. Notches stay light on dark.
+  wellFace:      ['#1b1c1e', '#1b1c1e', '#1b1c1e'],
+  wellTexture:   'black',
+  wellBorder:    '#000000',
+  wellInnerGlowA: 0,
+  wellRingA:     0.30,
+  wellGlowA:     0.38,
+  wellTopLip:    'rgba(255,255,255,0.14)',
+  drumBody:      ['#070707', '#181818', '#222222', '#171717', '#050505'],
+  rimLine:       'rgba(180,182,186,0.14)',
+  ridgeHighlight:'rgba(160,162,166,0.10)',
+  notchMinor:    'rgba(168,168,170,0.22)',
+  notchMed:      'rgba(169,169,172,0.36)',
+  notchMajor:    'rgba(170,170,174,0.55)',
+  keysFace:      '#1b1c1e',
+  keysSlot:      null,
   plate: {
     base: '#1b1c1e', border: '#3a3c40', radius: 16, texture: 'black',
     // ★ The mockup's own black lighting, not "silver at a third" (the brief's paraphrase of it).

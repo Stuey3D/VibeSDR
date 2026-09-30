@@ -35,7 +35,7 @@ import {
 } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import { useFaceplate } from '../contexts/FaceplateContext';
-import { getControlHaptics } from './DrumWheel';
+import { getControlHaptics } from './controlHaptics';
 import {
   createDomeClick, DOME_PRESS_MS, DOME_RELEASE_MS, DOME_PRESS_BEZIER, DOME_RELEASE_BEZIER,
 } from './domeClick';

@@ -176,6 +176,10 @@ if node --no-warnings scripts/test_faceplate_nixie.ts; then pass=$((pass+1)); el
 #     table the LEDs light from, Φ((μ − T)/σ) with its σ floor, the eye filter as the only easing, the
 #     steady-LED hysteresis, and the needle's 300 ms / 1 % ballistics — the maths, checked as data.
 if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ THE DRUM WELLS (faceplates §6): the default well is today's drum as data, the needle is gone on
+#    every chassis, the aluminium notch pair inverts (and its draw order is a token), the LED pool's
+#    geometry, the controls colour at the brief's brightness, and the tuner keys' 31 % / 34 % layout.
+if node --no-warnings scripts/test_faceplate_wells.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
