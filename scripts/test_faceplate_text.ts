@@ -10,6 +10,7 @@
 import {
   toSegCells, segCellCount, segGhost, segCellList, foldForSeg, foldForDot, foldToAscii, dotoHas,
   toUpperDisplay, flagToIso, foldIsUsable, displayOrFallback, setTransliterator, SEG_BLANK,
+  toSegRun, vfdStripText, cellWindow, steppedOffset,
 } from '../src/constants/displayText.ts';
 
 let fails = 0, passes = 0;
@@ -118,6 +119,31 @@ eq('CJK falls back', displayOrFallback('中国之声', 'dot', '9.500 MHz'), '9.5
 setTransliterator((s) => s.replace('Радио', 'Radio').replace('России', 'Rossii'));
 eq('with a transliterator installed', displayOrFallback('Радио России', 'seg', 'x'), 'RADIO ROSSII');
 setTransliterator(null);
+
+// ── The VTS strip on a VFD ───────────────────────────────────────────────────
+{
+  const r = toSegRun('BAND 14.000 MHz');
+  eq('units never go through the 14-seg: blank cells', r.cells.join(''), 'BAND!14.000!!!!');
+  eq('…and a SegUnit in its own case', r.units, [{ at: 11, len: 3, text: 'MHz' }]);
+  eq('a unit glued to a number', toSegRun('-1.2kHz').units, [{ at: 3, len: 3, text: 'kHz' }]);
+  eq('a unit-looking word is just letters', toSegRun('HZONE').units, []);
+  eq('no units: plain cells', toSegRun('Radio 1').cells.join(''), 'RADIO!1');
+  eq('seg strip keeps the unit\'s case for toSegRun', vfdStripText('Tuned 7.1 MHz', undefined, 'seg', 'x'), 'Tuned 7.1 MHz');
+  eq('seg strip folds accents', vfdStripText('Rádio Nacional', undefined, 'seg', 'x'), 'Radio Nacional');
+  eq('dot strip: UPPER, units kept, accents kept', vfdStripText('Rádio 5 kHz', undefined, 'dot', 'x'), 'RÁDIO 5 kHz');
+  eq('secondary joins with a slash', vfdStripText('A', 'B', 'dot', 'x'), 'A  /  B');
+  eq('non-Latin name → frequency', vfdStripText('Радио России', undefined, 'seg', '7310 kHz'), '7310 kHz');
+  eq('cellWindow centres a short run in whole cells', cellWindow(['A', 'B'], 5, 0, '!'), ['!', 'A', 'B', '!', '!']);
+  eq('cellWindow slides a long run', cellWindow(['A', 'B', 'C', 'D'], 2, 1, '!'), ['B', 'C']);
+  eq('cellWindow clamps the offset', cellWindow(['A', 'B', 'C'], 2, 9, '!'), ['B', 'C']);
+  // ★★ Stepped: whole cells, a 1.5 s pause at the start, ~300 ms per step, never a fraction.
+  eq('pause at the start', [0, 1499].map(t => steppedOffset(t, 20, 14, false)), [0, 0]);
+  eq('one whole cell per 300 ms', [1500, 1799, 1800, 2100].map(t => steppedOffset(t, 20, 14, false)), [1, 1, 2, 3]);
+  eq('stops at the end', steppedOffset(99_999, 20, 14, false), 6);
+  ok('always an integer', [0, 17, 1633, 4321, 7777].every(t => Number.isInteger(steppedOffset(t, 40, 14, true))));
+  eq('loops back to the start after the end pause', steppedOffset(1500 + 6 * 300 + 1500 + 10, 20, 14, true), 0);
+  eq('a run that fits never moves', steppedOffset(5000, 10, 14, true), 0);
+}
 
 void SEG_BLANK;
 console.log(`faceplate text: ${passes} passed, ${fails} failed`);

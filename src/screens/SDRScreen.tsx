@@ -10217,7 +10217,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       {!controlsHidden && !advRdsOpen && (
         <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
-                serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH} />
+                serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH}
+                /* ★ What a VFD display shows for a name it cannot draw (faceplates §7). */
+                freqLabel={status.frequency >= 30_000_000
+                  ? `${(status.frequency / 1e6).toFixed(3)} MHz`
+                  : `${(status.frequency / 1e3).toFixed(status.frequency % 1000 ? 1 : 0)} kHz`} />
         </PanelBoundary>
       )}
 

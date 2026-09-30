@@ -8,13 +8,19 @@
  * Overflowing text slides across once, like the skin's a11y-scrolling.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFaceplate } from '../contexts/FaceplateContext';
+import RdsMark from './RdsMark';
+import { GhostGrid } from './VfdParts';
+import { rgba, FONT_HYPER, FONT_DOTO, FONT_SEG14 } from '../constants/faceplate';
+import {
+  cellWindow, cellWindowLeft, flagToIso, segGhost, steppedOffset, toSegCells, toSegRun, toUpperDisplay,
+  vfdStripText, VFD_STEP_MS,
+} from '../constants/displayText';
 
-// Official RDS mark — shown in place of the text badge when the live data is
-// genuine RDS (black logo sits in a white pill against the dark bar).
-const RDS_LOGO = require('../../assets/rds-logo.png');
+/* ★ The RDS mark is the vector mark (RdsMark, §7.1) in the strip's own colour. It replaced the fixed
+ *  black-on-white `assets/rds-logo.png`, which a neon or VFD strip cannot carry. Never "ADVANCED". */
 
 // Bookmark-source marks (uniform with the RDS logo): the backend logo for a
 // server bookmark, an "EiBi" text mark for the on-device EiBi schedule, and a
@@ -55,8 +61,11 @@ const NOTIF_MS = 8000;
  *  display every glyph drawn in Nixie One is neon (§2) — including a notice that carries its own
  *  colour, which is then ignored. */
 
-export default function VTSBar({ notif, bottom, serverType, onHeight }:
-    { notif: VtsNotifData | null; bottom: number; serverType?: string; onHeight?: (h: number) => void }) {
+export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel = '' }:
+    { notif: VtsNotifData | null; bottom: number; serverType?: string; onHeight?: (h: number) => void;
+      /** The tuned frequency as text ("7310 kHz") — what a VFD shows when a name folds to nothing
+       *  it can draw (§7: Cyrillic, CJK… until native transliteration lands). */
+      freqLabel?: string }) {
   const fp = useFaceplate();
   const COL = fp.vts;
   const [shown, setShown] = useState<VtsNotifData | null>(null);
@@ -125,6 +134,8 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
   // Slide for overflowing text. Held (live) notifs loop continuously so the long
   // RDS radiotext keeps marqueeing; timed notifs do the skin's one-shot a11y slide.
   useEffect(() => {
+    // ★ A VFD strip never slides by pixels — VfdStrip steps whole cells (§7).
+    if (COL.style === 'dot' || COL.style === 'seg') return;
     if (!shown || !areaW || !textW || textW <= areaW) return;
     const dist = textW - areaW;
     slide.setValue(0);
@@ -164,6 +175,11 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
   const rightCol = onTune ? COL.onTune : shown.tuneDir === 'right' ? COL.offTune : COL.dim;
   const tuneLeft = shown.tuneDir === 'left';
   const overflow = textW > areaW && areaW > 0;
+  const vfd = COL.style === 'dot' || COL.style === 'seg';
+  // ★ The offset carries a UNIT ("-1.2kHz"): never through the 14-segment (it has no lower case) —
+  //   the sans on seg; Doto keeps the unit's case on dot.
+  const offsetFont = COL.style === 'seg' ? FONT_HYPER : COL.font;
+  const offsetText = COL.style === 'dot' ? toUpperDisplay(shown.offset ?? '') : shown.offset;
 
   return (
     // ★★ TWO VIEWS, NOT ONE, PURELY SO THE BAR CAN BE CAPPED AND CENTRED. The outer one does the
@@ -178,14 +194,25 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
     <View style={[styles.bar, { backgroundColor: fp.chassis.vtsBg, borderColor: fp.chassis.vtsBorder }]}
       onLayout={(e: { nativeEvent: { layout: { height: number } } }) => onHeight?.(e.nativeEvent.layout.height)}>
       <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>
-      {/* Source mark: live-data badge (RDS logo / text) wins; otherwise the
-          bookmark-origin icon — backend logo, EiBi mark, or phone glyph. */}
-      {shown.logoUrl
+      {/* Source mark: live-data badge (RDS mark / text) wins; otherwise the
+          bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
+          ★ On a VFD (dot / seg) the RDS annunciator is part of the GLASS: always there, lit only
+            on RDS; a colour station logo or a flag emoji cannot exist there (§7.1). */}
+      {vfd && (
+        <View style={styles.vfdMarks}>
+          <RdsMark kind="picto" height={13} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)}
+            lit={shown.badge === 'RDS'} />
+          <VfdIso style={COL.style as 'dot' | 'seg'} code={flagToIso(shown.flag)} rgb={COL.rgb} core={COL.core} glow={COL.glow} />
+        </View>
+      )}
+      {!vfd && shown.logoUrl
         ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
-        : shown.badge === 'RDS'
-        ? <Image source={RDS_LOGO} style={styles.rdsLogo} resizeMode="contain" />
-        : !!shown.badge
+        : !vfd && shown.badge === 'RDS'
+        ? <View style={styles.rdsMark}><RdsMark kind="plain" height={13} color={COL.mark} glow={COL.markGlow} /></View>
+        : !!shown.badge && shown.badge !== 'RDS'
           ? <Text style={styles.badge}>{shown.badge}</Text>
+          : vfd && shown.badge === 'RDS'
+            ? null
           : shown.source === 'server'
             ? <Image source={SERVER_LOGOS[serverType ?? 'ubersdr'] ?? SERVER_LOGOS.ubersdr}
                 style={[styles.srcLogo, serverType === 'owrx' && styles.srcLogoLight]} resizeMode="contain" />
@@ -194,8 +221,14 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
               : shown.source === 'user'
                 ? <Text style={styles.phoneMark}>📱</Text>
                 : null}
-      {!!shown.flag && <Text style={styles.flag}>{shown.flag}</Text>}
-      {!!shown.offset && tuneLeft && <Text style={[styles.offset, { color: COL.offset, fontFamily: COL.font }]}>{shown.offset}</Text>}
+      {!vfd && !!shown.flag && <Text style={styles.flag}>{shown.flag}</Text>}
+      {!!shown.offset && tuneLeft && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
+      {vfd ? (
+        <VfdStrip style={COL.style as 'dot' | 'seg'} rgb={COL.rgb} core={COL.core} glow={COL.glow}
+          text={vfdStripText(shown.name, shown.secondary, COL.style as 'dot' | 'seg', freqLabel)}
+          loop={!!shown.hold}
+          restartKey={shown.hold ? `${shown.name}|${shown.secondary ?? ''}` : String(shown.key)} />
+      ) : (<>
       {/* Horizontal ScrollView = unconstrained content width, so the text
           measures at its TRUE size (a plain View clamps Text to the parent
           width and the overflow slide never triggers). scrollEnabled off —
@@ -216,10 +249,96 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
           </Text>
         </Animated.View>
       </ScrollView>
-      {!!shown.offset && shown.tuneDir === 'right' && <Text style={[styles.offset, { color: COL.offset, fontFamily: COL.font }]}>{shown.offset}</Text>}
+      </>)}
+      {!!shown.offset && shown.tuneDir === 'right' && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
       <Text style={[styles.arrow, { color: rightCol }]}>►</Text>
     </View>
     </Animated.View>
+  );
+}
+
+// ── The VFD strip (dot / seg) ────────────────────────────────────────────────
+
+/** Cell widths from the fonts' own metrics: DSEG14 is 816/1000 em, Doto 600/1000 em (monospaced),
+ *  plus the 1 pt letter-spacing both are drawn with (Deck.mockup). */
+const SEG_PX = 15, DOT_PX = 19, CELL_LS = 1;
+const SEG_CELL = SEG_PX * 0.816 + CELL_LS;
+const DOT_CELL = DOT_PX * 0.6 + CELL_LS;
+
+/**
+ * ★★ STEPPED, NEVER SMOOTH (§7, ref vfd-scroll.gif): a fixed window of whole cells; a long run waits
+ * ~1.5 s, then moves ONE WHOLE CELL every ~300 ms — no easing, no pixel offsets. The ghost layer is
+ * the window's own cells, always there. 14-segment: every character is one DSEG cell (toSegCells);
+ * units are drawn in the sans over their blank cells, never through the segments. Dot: Doto, upper
+ * case with the units' case kept, over the ghost-dot grid (also stepped per whole cell — the brief
+ * allows per-column, and one rule for both reads as one machine).
+ */
+function VfdStrip({ style, rgb, core, glow, text, loop, restartKey }: {
+  style: 'dot' | 'seg'; rgb: string; core: string; glow: string; text: string; loop: boolean; restartKey: string;
+}) {
+  const [w, setW] = useState(0);
+  const seg = style === 'seg';
+  const cellW = seg ? SEG_CELL : DOT_CELL;
+  const n = Math.max(0, Math.floor(w / cellW));
+  const run = useMemo(() => (seg ? toSegRun(text) : { cells: Array.from(text), units: [] }), [seg, text]);
+  const count = run.cells.length;
+  const [offset, setOffset] = useState(0);
+  useEffect(() => {
+    setOffset(0);
+    if (count <= n || n <= 0) return;
+    const t0 = Date.now();
+    // Ticks faster than a step so each step lands on time; the offset only CHANGES by a whole
+    // cell, and setting an unchanged number does not re-render.
+    const id = setInterval(() => setOffset(steppedOffset(Date.now() - t0, count, n, loop)), VFD_STEP_MS / 3);
+    return () => clearInterval(id);
+  }, [restartKey, count, n, loop]);
+  const win = cellWindow(run.cells, n, offset, seg ? '!' : ' ');
+  const left = cellWindowLeft(count, n);
+  const shift = count <= n ? -left : Math.max(0, Math.min(offset, count - n));
+  const px = seg ? SEG_PX : DOT_PX;
+  const common = { fontFamily: seg ? FONT_SEG14 : FONT_DOTO, fontSize: px, letterSpacing: CELL_LS,
+                   lineHeight: Math.round(px * 1.25), includeFontPadding: false } as const;
+  const lit = { color: core, textShadowColor: glow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } };
+  return (
+    <View style={styles.nameArea} onLayout={(e: any) => setW(e.nativeEvent.layout.width)}>
+      {n > 0 && (
+        <View style={{ width: n * cellW, alignSelf: 'center', justifyContent: 'center' }}>
+          {seg
+            ? <Text style={[common, { color: rgba(rgb, 0.10) }]} numberOfLines={1}>{segGhost(n)}</Text>
+            : <GhostGrid rgb={rgb} pitch={3} dot={0.7} />}
+          <Text style={[common, lit, seg ? styles.overlay : null]} numberOfLines={1}>{win.join('')}</Text>
+          {seg && run.units.map((u, i) => {
+            const at = u.at - shift;
+            if (at < 0 || at + u.len > n) return null;
+            return (
+              <Text key={i} style={[styles.segUnit, lit, { left: at * cellW, width: u.len * cellW }]} numberOfLines={1}>
+                {u.text}
+              </Text>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
+
+/** The transmitter country as its ISO code in the display's own characters (§7.1): Doto 13 pt over
+ *  its own ghost grid, or two DSEG14 cells at 11 pt over a `~~` ghost. No flag: the cells stay ghosted. */
+function VfdIso({ style, code, rgb, core, glow }: { style: 'dot' | 'seg'; code: string; rgb: string; core: string; glow: string }) {
+  const lit = { color: core, textShadowColor: glow, textShadowRadius: 3, textShadowOffset: { width: 0, height: 0 } };
+  if (style === 'seg') {
+    return (
+      <View>
+        <Text style={[styles.isoSeg, { color: rgba(rgb, 0.10) }]}>{segGhost(2)}</Text>
+        <Text style={[styles.isoSeg, lit, styles.overlay]}>{code ? toSegCells(code) : '!!'}</Text>
+      </View>
+    );
+  }
+  return (
+    <View style={{ paddingHorizontal: 2, paddingVertical: 1 }}>
+      <GhostGrid rgb={rgb} pitch={2.6} dot={0.6} />
+      <Text style={[styles.isoDot, lit]}>{code || '\u00a0\u00a0'}</Text>
+    </View>
   );
 }
 
@@ -264,13 +383,15 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     marginRight: 4,
   },
-  rdsLogo: {
-    width: 46,
-    height: 15,
-    backgroundColor: '#ffffff',
-    borderRadius: 4,
-    paddingHorizontal: 3,
+  rdsMark: {
     marginRight: 5,
+  },
+  vfdMarks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginLeft: 4,
+    marginRight: 4,
   },
   staLogo: {
     width: 20,
@@ -324,6 +445,34 @@ const styles = StyleSheet.create({
   nameCentre: {
     flexGrow: 1,
     justifyContent: 'center',
+  },
+  overlay: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+  },
+  segUnit: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 12,
+    lineHeight: 19,
+  },
+  isoSeg: {
+    fontFamily: 'DSEG14 Classic',
+    fontSize: 11,
+    lineHeight: 13,
+    letterSpacing: 1,
+    includeFontPadding: false,
+  },
+  isoDot: {
+    fontFamily: 'Doto',
+    fontSize: 13,
+    lineHeight: 14,
+    includeFontPadding: false,
   },
   name: {
     fontSize: 16,

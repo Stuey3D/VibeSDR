@@ -268,3 +268,85 @@ export function displayOrFallback(text: string, display: 'dot' | 'seg', freqLabe
   }).join(' ');
   return callsign ? `${freqLabel} ${callsign}` : freqLabel;
 }
+
+// ── The VTS strip on a VFD ───────────────────────────────────────────────────
+
+/** A unit riding in a 14-segment run: drawn in the sans over its blank cells, never through DSEG. */
+export interface SegUnit { at: number; len: number; text: string }
+export interface SegRun { cells: string[]; units: SegUnit[] }
+
+/**
+ * ★★ Text for the 14-segment strip, UNITS KEPT OUT of the segments (§7 TRAP: "The 14-segment VTS
+ * can't [do lower case], so units never go through it"). Every whitelisted unit becomes that many
+ * BLANK cells plus a SegUnit saying where to draw it, in its own case, in the sans. Everything else
+ * is toSegCells(), one cell per character. Give it CASE-KEPT text (vfdStripText does).
+ */
+export function toSegRun(text: string): SegRun {
+  const parts = text.split(UNIT_RE);
+  const cells: string[] = [];
+  const units: SegUnit[] = [];
+  let carry = '';
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    const prev = parts[i - 1], next = parts[i + 1];
+    const unit = i % 2 === 1 && !isLetter(prev ? prev[prev.length - 1] : undefined) && !isLetter(next ? next[0] : undefined);
+    if (!unit) { carry += p; continue; }
+    if (carry) { cells.push(...segCellList(toSegCells(carry))); carry = ''; }
+    units.push({ at: cells.length, len: p.length, text: p });
+    for (let k = 0; k < p.length; k++) cells.push(SEG_BLANK);
+  }
+  if (carry) cells.push(...segCellList(toSegCells(carry)));
+  return { cells, units };
+}
+
+/**
+ * The strip's text for a VFD display: the name (and any secondary line) folded for the display's
+ * ROM — the frequency (+ Latin callsign) when a name folds to nothing — upper-cased with the units
+ * kept on dot; left in its case on seg, where toSegRun() upper-cases everything but the units.
+ * ★ Display only; the notif itself keeps the original text.
+ */
+export function vfdStripText(name: string, secondary: string | undefined, display: 'dot' | 'seg', freqLabel: string): string {
+  const one = (t: string) => {
+    const r = displayOrFallback(t, display, freqLabel);
+    // seg: displayOrFallback upper-cased it; hand back the case-kept fold so the units survive.
+    return display === 'seg' && foldIsUsable(t, foldForSeg(t), 'seg') ? foldToAscii(t) : r;
+  };
+  const body = secondary ? `${one(name)}  /  ${one(secondary)}` : one(name);
+  return display === 'dot' ? toUpperDisplay(body) : body;
+}
+
+/** A fixed window of `n` cells over `cells`, starting at `offset`; a short run is centred in WHOLE
+ *  cells (a VFD cannot place a character between cells). */
+export function cellWindow<T>(cells: T[], n: number, offset: number, blank: T): T[] {
+  if (n <= 0) return [];
+  if (cells.length <= n) {
+    const left = cellWindowLeft(cells.length, n);
+    const out = new Array<T>(n).fill(blank);
+    for (let i = 0; i < cells.length; i++) out[left + i] = cells[i];
+    return out;
+  }
+  const o = Math.max(0, Math.min(offset, cells.length - n));
+  return cells.slice(o, o + n);
+}
+
+/** Cells of left padding when a short run is centred (unit overlays follow it). */
+export function cellWindowLeft(count: number, n: number): number {
+  return count <= n ? Math.floor((n - count) / 2) : 0;
+}
+
+/**
+ * ★★ STEPPED, never smooth (§7, ref vfd-scroll.gif): the scroll offset after `ms` of scrolling a run
+ * of `count` cells through a window of `n`. A pause at the start, then one WHOLE cell per step — no
+ * easing, no sub-cell offset. `loop`: pause at the end too, then jump back to the start.
+ */
+export const VFD_STEP_MS = 300;
+export const VFD_PAUSE_MS = 1500;
+export function steppedOffset(ms: number, count: number, n: number, loop: boolean): number {
+  const travel = count - n;
+  if (travel <= 0) return 0;
+  const run = VFD_PAUSE_MS + travel * VFD_STEP_MS;
+  let t = ms;
+  if (loop) t = ms % (run + VFD_PAUSE_MS);
+  if (t < VFD_PAUSE_MS) return 0;
+  return Math.min(travel, Math.floor((t - VFD_PAUSE_MS) / VFD_STEP_MS) + 1);
+}
