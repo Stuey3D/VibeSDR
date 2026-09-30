@@ -1108,7 +1108,7 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
   recTime:  onMetal(pt, { color: pt.gold.readout, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 }, { fontWeight: '700' }),
-  dspError: { color: 'rgba(220,53,69,0.95)', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 },
+  dspError: onMetal(pt, { color: 'rgba(220,53,69,0.95)', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 }, { color: pt.danger }),
 
   closeBtn: {
     marginTop: 14, alignSelf: 'center', borderWidth: 1,
