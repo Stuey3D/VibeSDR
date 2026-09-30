@@ -250,13 +250,14 @@ export function lookVars(l: ControlLook): LookVars {
 
   if (l.solid) {
     for (const o of OVERLAYS) root[o.v] = rgba(o.rgb, alphaFor(o.a, l.solid));
-    /* ★★ THE DIM BEHIND AN OPEN PANEL IS OVER THE WATERFALL TOO (Stuart, 2026-09-30: "fully solid as it
-     *  is a performance requirement"). At 100 it is opaque black with NO blur radius — a 60 px blurred
-     *  drop shadow is the same compositing work the rest of SOLID removes. ✗ The waterfall still DRAWS
-     *  under it — it never stops once started (Stuart); only the START screen skips drawing. */
+    /* ★★ AT FULLY SOLID THERE IS NO DIM (Stuart, 2026-09-30: "a solid menu would allow the waterfall to
+     *  keep running and just put a menu over the top of it without the GPU heavy transparencies"). The
+     *  dim is a translucent layer over the WHOLE screen, re-blended with every waterfall frame; the
+     *  opaque panel over a live, undimmed waterfall is the cheap case. Between 0 and 100 the dim fades
+     *  out and the 60 px blurred drop shadow goes at 100 too. The waterfall always draws regardless. */
     root['--ov-panel-shadow'] = l.solid >= 100
-      ? '0 0 0 100vmax rgb(0,0,0)'
-      : `0 24px 60px rgba(0,0,0,0.7), 0 0 0 100vmax ${rgba([0, 0, 0], alphaFor(0.55, l.solid))}`;
+      ? 'none'
+      : `0 24px 60px rgba(0,0,0,0.7), 0 0 0 100vmax ${rgba([0, 0, 0], 0.55 * (1 - l.solid / 100))}`;
   }
   return { card, root, warn };
 }

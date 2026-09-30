@@ -63,9 +63,9 @@ const ok = (c, m) => { if (c) oks++; else { fails++; console.log('  FAIL ' + m);
   // ★ the panel dim: opaque and UNBLURRED at fully solid, today's value at 0 (unset), dimmer-to-opaque between
   {
     const s100 = lookVars({ bg: '', btn: '', font: '', solid: 100 }).root['--ov-panel-shadow'];
-    ok(s100 === '0 0 0 100vmax rgb(0,0,0)', `solid 100: panel dim opaque, no blur radius (${s100})`);
+    ok(s100 === 'none', `solid 100: no dim, no blurred shadow — the waterfall stays visible around the panel (${s100})`);
     ok(lookVars({ bg: '', btn: '', font: '', solid: 0 }).root['--ov-panel-shadow'] === undefined, 'solid 0: panel dim left to the CSS fallback (today)');
-    ok(/100vmax rgba\(0, ?0, ?0, ?0\.[0-9]+\)/.test(lookVars({ bg: '', btn: '', font: '', solid: 50 }).root['--ov-panel-shadow'] || ''), 'solid 50: panel dim between');
+    ok(/100vmax rgba\(0, ?0, ?0, ?0\.[0-9]+\)/.test(lookVars({ bg: '', btn: '', font: '', solid: 50 }).root['--ov-panel-shadow'] || ''), 'solid 50: panel dim fading out');
   }
 }
 
