@@ -19,7 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   readLook, lookVars, isDefaultLook, contrast, parseHex, toHex, over, alphaFor, readableOn, solidByDefault,
-  TODAY, OVERLAYS, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, DEFAULT_LOOK, MIN_CONTRAST,
+  TODAY, OVERLAYS, ROOT_VARS, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, DEFAULT_LOOK, MIN_CONTRAST,
 } from '../web/client/src/controlColours.ts';
 import { VIEW_KEYS } from '../web/client/src/portable.ts';
 
@@ -59,7 +59,14 @@ const ok = (c, m) => { if (c) oks++; else { fails++; console.log('  FAIL ' + m);
     }
   }
   // and no --ov- variable is read that the table does not set
-  for (const m of all.matchAll(/var\((--ov-[a-z0-9]+)/g)) ok(OVERLAYS.some((o) => o.v === m[1]), `${m[1]} is in OVERLAYS`);
+  for (const m of all.matchAll(/var\((--ov-[a-z0-9-]+)/g)) ok(ROOT_VARS.includes(m[1]), `${m[1]} is set by lookVars (ROOT_VARS)`);
+  // ★ the panel dim: opaque and UNBLURRED at fully solid, today's value at 0 (unset), dimmer-to-opaque between
+  {
+    const s100 = lookVars({ bg: '', btn: '', font: '', solid: 100 }).root['--ov-panel-shadow'];
+    ok(s100 === '0 0 0 100vmax rgb(0,0,0)', `solid 100: panel dim opaque, no blur radius (${s100})`);
+    ok(lookVars({ bg: '', btn: '', font: '', solid: 0 }).root['--ov-panel-shadow'] === undefined, 'solid 0: panel dim left to the CSS fallback (today)');
+    ok(/100vmax rgba\(0, ?0, ?0, ?0\.[0-9]+\)/.test(lookVars({ bg: '', btn: '', font: '', solid: 50 }).root['--ov-panel-shadow'] || ''), 'solid 50: panel dim between');
+  }
 }
 
 // ── 2. nothing unreadable ──────────────────────────────────────────────────────────────────────

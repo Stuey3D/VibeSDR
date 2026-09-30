@@ -1563,7 +1563,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   width: min(92vw, 520px); max-height: 82vh; overflow-y: auto;
   background: var(--ov-panel98, rgba(8,6,2,0.98)); border: 1px solid var(--btn-border);
   border-radius: 12px; padding: 18px;
-  box-shadow: 0 24px 60px rgba(0,0,0,0.7), 0 0 0 100vmax rgba(0,0,0,0.55);
+  /* ★ --ov-panel-shadow: at fully SOLID it is an opaque, UNBLURRED dim — see controlColours.ts. */
+  box-shadow: var(--ov-panel-shadow, 0 24px 60px rgba(0,0,0,0.7), 0 0 0 100vmax rgba(0,0,0,0.55));
   transform: translate(-50%, -48%) scale(0.97);
   opacity: 0; visibility: hidden;
   transition: opacity .14s ease-out, transform .14s ease-out, visibility .14s;

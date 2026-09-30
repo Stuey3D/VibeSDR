@@ -50,6 +50,8 @@ export const FONT_SWATCHES: Swatch[] = [
   { name: 'Ice', hex: '#8fd3ff' }, { name: 'Gold', hex: '#ffd24d' }, { name: 'Black', hex: '#111111' },
 ];
 
+let lastSolid = 0;   // the look last computed (see isFullySolid)
+
 export const CTL_KEYS = ['ctlBg', 'ctlBtn', 'ctlFont', 'ctlSolid'] as const;
 
 export interface ControlLook { bg: string; btn: string; font: string; solid: number }
@@ -213,6 +215,7 @@ export interface LookVars {
 export function lookVars(l: ControlLook): LookVars {
   const card: Record<string, string> = {};
   const root: Record<string, string> = {};
+  lastSolid = l.solid;   // ★ before the early return, or going back to glass would leave the draw-skip on
   if (isDefaultLook(l)) return { card, root, warn: '' };
 
   // The waterfall behind is mostly dark, so the glass is judged over black.
@@ -250,13 +253,23 @@ export function lookVars(l: ControlLook): LookVars {
 
   if (l.solid) {
     for (const o of OVERLAYS) root[o.v] = rgba(o.rgb, alphaFor(o.a, l.solid));
+    /* ★★ THE DIM BEHIND AN OPEN PANEL IS OVER THE WATERFALL TOO (Stuart, 2026-09-30: "fully solid as it
+     *  is a performance requirement"). At 100 it is opaque black with NO blur radius — a 60 px blurred
+     *  drop shadow is the same compositing work the rest of SOLID removes — and main.ts stops DRAWING
+     *  the waterfall while a panel covers it (rows are still ingested, so it is current on close). */
+    root['--ov-panel-shadow'] = l.solid >= 100
+      ? '0 0 0 100vmax rgb(0,0,0)'
+      : `0 24px 60px rgba(0,0,0,0.7), 0 0 0 100vmax ${rgba([0, 0, 0], alphaFor(0.55, l.solid))}`;
   }
   return { card, root, warn };
 }
 
 /** Every variable either list may set — so a change can REMOVE what the last look set. */
 export const CARD_VARS = ['--ctl-card-bg', '--btn-bg', '--btn-text', '--ctl-glyph', '--ctl-status', '--btn-border', '--bar-border'];
-export const ROOT_VARS = OVERLAYS.map((o) => o.v);
+export const ROOT_VARS = [...OVERLAYS.map((o) => o.v), '--ov-panel-shadow'];
+
+/** ★ The look last computed is fully solid — renderFrame() asks, to skip drawing under an opaque panel. */
+export function isFullySolid(): boolean { return lastSolid >= 100; }
 
 /** Put a look on the page. Removes everything first, so the default look leaves no trace at all. */
 export function applyControlLook(l: ControlLook, doc: Document = document): string {
