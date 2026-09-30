@@ -418,7 +418,8 @@ export default function NixieTubes({ hz, unit, layout, design, bar, scale = 1, r
   const tubeW = sz.w - reserveRight;
   const geo = useMemo(() => (tubeW > 0 && sz.h > 0 ? nixieGeometry(tubeW, sz.h, spec, design, { bar, scale }) : null),
     [tubeW, sz.h, spec, design, bar, scale]);
-  const ro = nixieReadout(hz, spec, unit);
+  // ★ Memoised: the cathode layer is React.memo, and a fresh array every parent render would defeat it.
+  const ro = useMemo(() => nixieReadout(hz, spec, unit), [hz, spec, unit]);
   const key = ro.tubes.map(d => d ?? ' ').join('');
 
   /* Afterglow: remember what was lit, show what went out at 38 % for ONE frame, then drop it. */
