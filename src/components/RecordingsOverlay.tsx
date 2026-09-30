@@ -17,7 +17,9 @@ import {
   Pressable, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode } from './PanelNav';
-import { usePopupStyles, type PopupTokens } from './PopupShell';
+import {
+  usePopupStyles, usePopupTheme, onMetal, engraveText, PopupKey, PopupPlate, PopupWindow, type PopupTokens,
+} from './PopupShell';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
@@ -72,6 +74,7 @@ export interface RecordingsOverlayProps {
 
 export default function RecordingsOverlay({ visible, onClose, onActiveChange }: RecordingsOverlayProps) {
   const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
   const [recs, setRecs] = useState<Rec[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);    // uri of the selected/playing rec
   const [trackW, setTrackW] = useState(0);                // seek-bar width of the open row
@@ -195,19 +198,33 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
       <View style={[styles.row, isSel && styles.rowSel,
                     navOn && { borderColor: '#7CFF9B', borderWidth: 2 }]}>
         <View style={styles.rowTop}>
+          {pt.metal ? (
+            // ★ §10.3: dome keys — play lit while it plays, share plain, delete in the danger red.
+            <PopupKey label={playing ? '❚❚' : '▶'} active={playing} onPress={() => togglePlay(item)} hitSlop={8}
+              height={38} fontSize={13} accessibilityLabel={playing ? 'Pause' : 'Play'}
+              style={{ width: 44, marginRight: 10, paddingHorizontal: 0 }} />
+          ) : (
           <TouchableOpacity style={styles.playBtn} onPress={() => togglePlay(item)} hitSlop={8}>
             <Text style={styles.playIcon}>{playing ? '❚❚' : '▶'}</Text>
           </TouchableOpacity>
+          )}
           <View style={styles.meta}>
             <Text style={styles.freq} numberOfLines={1}>{item.freq}  <Text style={styles.mode}>{item.mode}</Text></Text>
             <Text style={styles.sub} numberOfLines={1}>{item.when} · {fmtSize(item.size)}</Text>
           </View>
+          {pt.metal ? (<>
+            <PopupKey label="⤴" onPress={() => share(item)} hitSlop={6} height={32} fontSize={15}
+              accessibilityLabel="Share" style={{ width: 38, marginLeft: 4, paddingHorizontal: 0 }} />
+            <PopupKey label="🗑" danger onPress={() => remove(item)} hitSlop={6} height={32} fontSize={14}
+              accessibilityLabel="Delete" style={{ width: 38, marginLeft: 4, paddingHorizontal: 0 }} />
+          </>) : (<>
           <TouchableOpacity style={styles.actBtn} onPress={() => share(item)} hitSlop={6}>
             <Text style={styles.actIcon}>⤴</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.actBtn} onPress={() => remove(item)} hitSlop={6}>
             <Text style={[styles.actIcon, styles.del]}>🗑</Text>
           </TouchableOpacity>
+          </>)}
         </View>
         {isSel && (
           <View style={styles.progWrap}>
@@ -227,7 +244,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
         )}
       </View>
     );
-  }, [sel, status.playing, status.duration, status.currentTime, trackW, togglePlay, share, remove, player]);
+  }, [sel, status.playing, status.duration, status.currentTime, trackW, togglePlay, share, remove, player, pt, styles]);
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} transparent={false}>
@@ -235,9 +252,16 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
           zero insets (title drew under the status bar / notch). Own provider fixes it. */}
       <SafeAreaProvider>
       <SafeAreaView style={styles.root} edges={['top', 'bottom']}>
+        {/* ★ §10.3 silver / black: the whole screen is the brushed plate; the list sits in a window. */}
+        <PopupPlate radius={0} />
         <View style={styles.bar}>
           <Text style={styles.title}>RECORDINGS</Text>
+          {pt.metal ? (
+            <PopupKey label="✕" onPress={onClose} hitSlop={10} height={30} fontSize={14}
+              accessibilityLabel="Close" style={{ width: 40, paddingHorizontal: 0 }} />
+          ) : (
           <TouchableOpacity onPress={onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
+          )}
         </View>
         {/* ★ Keyboard hint in the header, only while a keyboard is in use — the same shape as
             the server list's subtitle. Share is absent because it hands off to the system
@@ -247,6 +271,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
             ↑↓ select · space play/pause · ⌫ delete · esc close
           </Text>
         )}
+        <PopupWindow style={styles.listWrap} metalStyle={styles.listWin}>
         {recs == null ? (
           <View style={styles.center}><ActivityIndicator color="#3ddc84" /></View>
         ) : recs.length === 0 ? (
@@ -264,6 +289,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
             contentContainerStyle={{ paddingVertical: 8 }}
           />
         )}
+        </PopupWindow>
       </SafeAreaView>
       </SafeAreaProvider>
     </Modal>
@@ -271,17 +297,19 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
 }
 
 const makeStyles = (pt: PopupTokens) => StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#0a0d0b' },
+  root: onMetal(pt, { flex: 1, backgroundColor: '#0a0d0b' }, { backgroundColor: pt.silver ? '#c9c6bf' : '#1b1c1e' }),
+  listWrap: { flex: 1 },
+  listWin:  { marginHorizontal: 10, marginBottom: 10 },
   bar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: 'rgba(61,220,132,0.25)',
+    ...(pt.metal ? null : { borderBottomWidth: 1, borderBottomColor: 'rgba(61,220,132,0.25)' }),
   },
-  title: { color: '#3ddc84', fontSize: 16, fontWeight: '800', letterSpacing: 2 },
+  title: onMetal(pt, { color: '#3ddc84', fontSize: 16, fontWeight: '800', letterSpacing: 2 }, { ...engraveText(pt), fontWeight: '700' }),
   close: { color: '#ddd', fontSize: 20, fontWeight: '700' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   empty: { color: '#ccc', fontSize: 16, fontWeight: '700' },
-  kbHint: { color: '#8fa', fontSize: 10, letterSpacing: 0.5, opacity: 0.85,
+  kbHint: { color: pt.metal ? pt.note : '#8fa', fontSize: 10, letterSpacing: 0.5, opacity: pt.metal ? 1 : 0.85,
             paddingHorizontal: 16, paddingBottom: 8 },
   emptySub: { color: '#888', fontSize: 13, marginTop: 8, textAlign: 'center' },
   row: {
@@ -299,7 +327,8 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   playIcon: { color: '#3ddc84', fontSize: 14, fontWeight: '800' },
   meta: { flex: 1, minWidth: 0 },
   freq: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  mode: { color: pt.gold.amber, fontSize: 13, fontWeight: '700' },
+  // ★ In the window on metal: the text colour (a readout), not the plate's engraved amber role.
+  mode: { color: pt.metal ? pt.readout : pt.gold.amber, fontSize: 13, fontWeight: '700' },
   sub: { color: '#9aa', fontSize: 12, marginTop: 2 },
   actBtn: { paddingHorizontal: 8, paddingVertical: 6, marginLeft: 2 },
   actIcon: { color: '#bcd', fontSize: 18 },

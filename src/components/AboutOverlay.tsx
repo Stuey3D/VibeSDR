@@ -13,6 +13,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';   // nativeBuildVersion = the actual installed CFBundleVersion
 import { APP_VERSION } from '../constants/version';
 import { buildDiagnostics } from '../services/diagnostics';
+import {
+  usePopupStyles, usePopupTheme, onMetal, engraveText, PopupKey, PopupPlate, PopupWindow, type PopupTokens,
+} from './PopupShell';
 
 /** Support address, same as the one in PRIVACY.md. */
 const SUPPORT_EMAIL = 'stuey3dttb@icloud.com';
@@ -342,8 +345,15 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'The frameworks and libraries that make the app run.' },
 ];
 
-export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
-  if (!visible) return null;
+export default function AboutOverlay(props: AboutOverlayProps) {
+  if (!props.visible) return null;
+  return <AboutBody {...props} />;
+}
+
+/** ★ Hooks live below the early return (MenuSheet's pattern): a shut About runs nothing. */
+function AboutBody({ onClose }: AboutOverlayProps) {
+  const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
   return (
     <Modal
       visible
@@ -352,14 +362,21 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
       onRequestClose={onClose}
     >
       <SafeAreaView style={styles.root} edges={['top']}>
+        {/* ★ §10.3 silver / black: the brushed plate; the reading matter sits in a recessed window. */}
+        <PopupPlate radius={0} />
         <View style={styles.bar}>
+          {pt.metal ? (
+            <PopupKey label="← SDR" onPress={onClose} hitSlop={12} height={30} fontSize={12} style={{ minWidth: 64 }} />
+          ) : (
           <TouchableOpacity onPress={onClose} hitSlop={12} activeOpacity={0.7}>
             <Text style={styles.back}>← SDR</Text>
           </TouchableOpacity>
+          )}
           <Text style={styles.title}>About VibeSDR</Text>
           <View style={{ width: 50 }} />
         </View>
 
+        <PopupWindow style={styles.scroll} metalStyle={styles.scrollWin}>
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
           <View style={styles.heroRow}>
             <Image source={require('../../assets/icon.png')} style={styles.icon} />
@@ -508,6 +525,7 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
 
           <View style={{ height: 40 }} />
         </ScrollView>
+        </PopupWindow>
       </SafeAreaView>
     </Modal>
   );
@@ -515,15 +533,16 @@ export default function AboutOverlay({ visible, onClose }: AboutOverlayProps) {
 
 const F = 'Atkinson Hyperlegible';
 
-const styles = StyleSheet.create({
-  root:  { flex: 1, backgroundColor: '#000' },
+const makeStyles = (pt: PopupTokens) => StyleSheet.create({
+  root:  onMetal(pt, { flex: 1, backgroundColor: '#000' }, { backgroundColor: pt.silver ? '#c9c6bf' : '#1b1c1e' }),
   bar:   {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8, backgroundColor: '#0a0a0a',
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8,
+    ...(pt.metal ? null : { backgroundColor: '#0a0a0a', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.18)' }),
   },
   back:  { color: '#ffe566', fontFamily: F, fontSize: 16 },
-  title: { color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 15 },
+  title: onMetal(pt, { color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 15 }, { ...engraveText(pt), fontWeight: '700' }),
+  scrollWin: { marginHorizontal: 8, marginBottom: 8 },
 
   scroll:  { flex: 1 },
   content: { paddingHorizontal: 18, paddingTop: 16 },
@@ -531,7 +550,7 @@ const styles = StyleSheet.create({
   heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 6 },
   icon:    { width: 64, height: 64, borderRadius: 14 },
   appName: { color: '#fff', fontFamily: F, fontSize: 22, fontWeight: 'bold', letterSpacing: 1 },
-  appVer:  { color: '#ffe566', fontFamily: F, fontSize: 13, marginTop: 2 },
+  appVer:  { color: pt.metal ? pt.readout : '#ffe566', fontFamily: F, fontSize: 13, marginTop: 2 },
   appSub:  { color: 'rgba(255,255,255,0.70)', fontFamily: F, fontSize: 12, marginTop: 2 },
 
   section: {
@@ -544,12 +563,12 @@ const styles = StyleSheet.create({
   /** The question, in the Limitations section. Brighter than the answer, so the section
    *  can be SKIMMED — people arrive here with one specific question, not to read an essay. */
   limQ: {
-    color: '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19,
+    color: pt.metal ? pt.readout : '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19,
     marginTop: 4, marginBottom: 4,
   },
 
   bulletRow:  { flexDirection: 'row', gap: 8, marginBottom: 5, paddingRight: 4 },
-  bulletDot:  { color: '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19 },
+  bulletDot:  { color: pt.metal ? pt.readout : '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19 },
   bulletText: { flex: 1, color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 13, lineHeight: 19 },
 
   creditBlock:  { marginBottom: 12 },
