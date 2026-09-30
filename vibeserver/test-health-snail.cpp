@@ -9,6 +9,7 @@
 // VIBE_HEALTH_TEST_BOOST, which forces the x86 path — see CMakeLists.
 #include "vibe_health.h"
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -37,6 +38,7 @@ static bool run(vibehealth::Sampler& s, int secs, bool loaded, long kHz, int n =
  *   response code 0x80000000, bit 31 on each tag it understood, values in place. */
 struct FakeFw {
     bool present = true, measSupported = true;
+    bool propertyAllowed = true;   // false = the Pi OS truth for `video`: /dev/vcio refused, gencmd only
     uint32_t maxHz = 2400000000u, setHz = 2400000000u, measHz = 2400000000u, thr = 0;
 };
 static FakeFw g_fw;
@@ -45,6 +47,19 @@ static int fakeMbox(uint32_t* buf) {
     if (!g_fw.present) return -1;
     const uint32_t tag = buf[2];
     uint32_t* v = buf + 5;
+    if (tag == vibevcio::TAG_GET_GENCMD_RESULT) {
+        // ★ The text interface, answered the way the firmware answers vcgencmd.
+        const std::string cmd(reinterpret_cast<const char*>(buf + 6));
+        char out[64] = {0};
+        if (cmd == "measure_clock arm")        std::snprintf(out, sizeof out, "frequency(0)=%u", g_fw.measHz);
+        else if (cmd == "get_throttled")       std::snprintf(out, sizeof out, "throttled=0x%x", g_fw.thr);
+        else if (cmd == "get_config arm_freq") std::snprintf(out, sizeof out, "arm_freq=%u", g_fw.maxHz / 1000000u);
+        else { buf[1] = 0x80000000u; v[0] = 1; return 0; }      // unknown command: error code set
+        buf[1] = 0x80000000u; v[0] = 0;
+        std::memcpy(buf + 6, out, std::strlen(out) + 1);
+        return 0;
+    }
+    if (!g_fw.propertyAllowed) return -1;                        // EPERM, as /dev/vcio gives `video`
     auto answer = [&](int words) { buf[1] = 0x80000000u; buf[4] = 0x80000000u | (uint32_t)(words * 4); };
     switch (tag) {
         case vibevcio::TAG_GET_MAX_CLOCK_RATE:      if (v[0] != 3) return -1; v[1] = g_fw.maxHz; answer(2); break;
@@ -137,6 +152,7 @@ int main() {
     {
         // ★ The REAL transport against a path that is not there: silent, and ok=false.
         vibevcio::devPath() = g_root + "/no-such-vcio";
+        vibevcio::gencmdPath() = g_root + "/no-such-vcio-gencmd";
         const auto r = vibevcio::read();
         ok(!r.ok, "no /dev/vcio: read() says so and nothing else happens");
         vibehealth::detail::sysRoot() = g_root;   // (unchanged — the mailbox has its own path)
@@ -159,6 +175,19 @@ int main() {
         g_fw.present = false;
         ok(!vibevcio::read().ok, "mailbox refuses: ok=false (silent fallback)");
         g_fw.present = true;
+
+        // ★★★ THE PI OS TRUTH (2026-09-30): /dev/vcio is root-only, `video` gets /dev/vcio_gencmd — so
+        //     the property tags are refused and the same figures must come back as vcgencmd text.
+        g_fw.propertyAllowed = false;
+        g_fw.measHz = 1000000000; g_fw.thr = 0x50005;
+        const auto gv = vibevcio::read();
+        ok(gv.ok && gv.measured && gv.armHz == 1000000000LL && gv.armMaxHz == 2400000000LL && gv.underVoltNow() && gv.cappedNow(),
+           "property tags refused (video group): gencmd text gives 1000 of 2400 MHz, under-voltage + throttled");
+        g_fw.measHz = 2400000000u; g_fw.thr = 0x50000;
+        const auto gr = vibevcio::read();
+        ok(gr.ok && gr.armHz == 2400000000LL && !gr.underVoltNow() && gr.throttled == 0x50000,
+           "gencmd at rest: 2400 of 2400, only the sticky bits");
+        g_fw.propertyAllowed = true;
 
         // ★ The admin figure: the measured clock REPLACES sysfs's request.
         vibeadmin::SysStats s; s.cpuKHz = 2400000;

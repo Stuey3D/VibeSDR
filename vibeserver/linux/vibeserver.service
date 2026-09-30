@@ -92,6 +92,9 @@ DeviceAllow=char-usb_device rw
 #    DeviceAllow= closes every other device, so group `video` alone would still be refused here.
 #    On a machine with no /dev/vcio systemd logs that it cannot find it and carries on.
 DeviceAllow=/dev/vcio r
+# ★★ …and the node `video` can actually open on Pi OS (/dev/vcio itself is root-only there — measured on
+#    the Pi 500, 2026-09-30). It carries only the vcgencmd text interface; see vibe_vcio.h.
+DeviceAllow=/dev/vcio_gencmd r
 
 [Install]
 WantedBy=multi-user.target

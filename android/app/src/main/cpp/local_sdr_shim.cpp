@@ -4672,8 +4672,14 @@ static std::string      g_vsDecoderSlotDir;     // the runtime dir every radio p
  *    slot in well under its 15 s on a Pi 2 core but takes most of an A53 core in bursts; RTTY/NAVTEX
  *    are a few % of any core. So: phones and TVs (A53-class, and the Sony already spends a core on
  *    Advanced RDS) 2; 32-bit ARM (Pi 2/3 on armhf, the minimum spec) 2; 64-bit ARM 3 below 1.6 GHz
- *    (Pi 3), 4 above (Pi 4/5/500); x86 and Macs by core count. The benchmark replaces this with a
- *    measured figure the moment the owner runs it. */
+ *    (Pi 3), 8 above (Pi 4/5/500); x86 and Macs by core count. The benchmark replaces this with a
+ *    measured figure the moment the owner runs it.
+ *  ★★ MEASURED ON THE PI 500, 2026-09-30 (B6 stress, scratchpad decstress): 20 decoder slots (RTTY,
+ *     WEFAX, 3 FT8, 6 SSTV, 2 time, FT8 on every VFO) on top of a FULL box — 10 RSP listeners, 9 on the
+ *     Airspy, Advanced RDS, DAB — at a firmware clock held at 1000 MHz by under-voltage: the ten
+ *     vibe-decode threads together took 12.6 % of ONE core, 0 iqDrops, 0 audio gaps > 250 ms. The first
+ *     default here (4) was ~2.5 % of a core. 8 keeps a wide margin: SSTV actually drawing a picture was
+ *     not on air that night, so its busy cost is unmeasured. */
 static int vsDecoderDefaultMax() {
     const unsigned n = std::max(1u, std::thread::hardware_concurrency());
 #if defined(__ANDROID__)
@@ -4687,7 +4693,7 @@ static int vsDecoderDefaultMax() {
         std::fclose(f);
     }
     if (n < 4) return 2;
-    return (khz > 0 && khz < 1600000) ? 3 : 4;
+    return (khz > 0 && khz < 1600000) ? 3 : 8;
 #else
     return n >= 8 ? 8 : n >= 4 ? 6 : 2;
 #endif

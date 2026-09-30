@@ -61,6 +61,7 @@ ReadWritePaths=/var/lib/vibeserver /etc/vibeserver
 DeviceAllow=char-usb_device rw
 # ★★ The Pi's firmware mailbox, read-only — see vibeserver.service. Keep the two in step.
 DeviceAllow=/dev/vcio r
+DeviceAllow=/dev/vcio_gencmd r
 
 [Install]
 WantedBy=multi-user.target

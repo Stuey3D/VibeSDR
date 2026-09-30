@@ -10,16 +10,23 @@
 //     throttling. The earlier conclusion (2026-09-25, "the bits are NOT evidence of a cap — every
 //     core sat at its full 2400 MHz") was drawn from the very number that was lying.
 //
-// ★★ NO ROOT, NO SHELL. /dev/vcio is root:video 0660 on Raspberry Pi OS; the package adds the
-//    service user to `video` (debian/postinst) and the units allow the device (DeviceAllow=).
-//    Stuart: "we will avoid root". The ioctl is issued directly — a `vcgencmd` fork once a second
-//    per radio process would cost more than everything else the sampler does put together.
+// ★★ NO ROOT, NO SHELL. Stuart: "we will avoid root". The ioctl is issued directly — a `vcgencmd`
+//    fork once a second per radio process would cost more than everything else the sampler does.
+// ★★★ TWO DOORS, AND THE ONE WE CAN OPEN IS THE SECOND. The first B6 build assumed /dev/vcio was
+//     root:video 0660. MEASURED on the Pi 500 (kernel 6.18, 2026-09-30): /dev/vcio is root:root
+//     0600; Pi OS's udev rule gives `video` only /dev/vcio_gencmd (and _crypto), and the kernel lets
+//     that node carry ONE tag — GET_GENCMD_RESULT, the text interface `vcgencmd` itself uses. The
+//     raw property tags there fail EPERM. So: the property tags on /dev/vcio first (root, or a box
+//     whose udev opens it up), then the SAME questions `vcgencmd` asks, as text, on
+//     /dev/vcio_gencmd — "measure_clock arm", "get_throttled", "get_config arm_freq". The package
+//     adds the service user to `video` (debian/postinst) and the units allow both devices.
 // ★★ SILENT FALLBACK. Not a Pi, not in `video` yet (the group takes effect on the next service
 //    start), a container, Android, a Mac: read() returns ok=false and every caller carries on with
 //    what it did before. A missing firmware reading is not a fault worth a log line per second.
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <chrono>
@@ -38,6 +45,7 @@ enum : uint32_t {
     TAG_GET_MAX_CLOCK_RATE      = 0x00030004,
     TAG_GET_THROTTLED           = 0x00030046,
     TAG_GET_CLOCK_RATE_MEASURED = 0x00030047,   // what `vcgencmd measure_clock arm` reports
+    TAG_GET_GENCMD_RESULT       = 0x00030080,   // a `vcgencmd` command as text — /dev/vcio_gencmd
     CLOCK_ARM                   = 3,
 };
 
@@ -70,6 +78,8 @@ using MboxFn = int (*)(uint32_t* buf);
 inline MboxFn& mboxOverride() { static MboxFn f = nullptr; return f; }
 /** "/dev/vcio" in life. Settable so a test can point the REAL transport at a path that fails. */
 inline std::string& devPath() { static std::string p = "/dev/vcio"; return p; }
+/** The node `video` may open — it carries TAG_GET_GENCMD_RESULT only. Settable for the same reason. */
+inline std::string& gencmdPath() { static std::string p = "/dev/vcio_gencmd"; return p; }
 
 namespace detail {
 #if defined(__linux__)
@@ -77,29 +87,36 @@ namespace detail {
  *  retried at most once a minute — the group is granted by the package and takes effect when the
  *  service restarts, so a process that could not open it will not suddenly be able to; the retry
  *  is only for a path a test swapped, or a device that appeared late at boot. */
-inline int realMbox(uint32_t* buf) {
-    static std::mutex m;
-    static int fd = -1;
-    static std::string openedPath;
-    static std::chrono::steady_clock::time_point lastTry{};
-    std::lock_guard<std::mutex> lk(m);
-    if (fd >= 0 && openedPath != devPath()) { ::close(fd); fd = -1; }
+/** One device node: the fd, kept open, and when opening it last failed. */
+struct Dev {
+    std::mutex m;
+    int fd = -1;
+    std::string openedPath;
+    std::chrono::steady_clock::time_point lastTry{};
+};
+inline int mboxOn(Dev& d, const std::string& path, uint32_t* buf) {
+    std::lock_guard<std::mutex> lk(d.m);
+    int& fd = d.fd;
+    if (fd >= 0 && d.openedPath != path) { ::close(fd); fd = -1; }
     if (fd < 0) {
         const auto now = std::chrono::steady_clock::now();
-        if (lastTry.time_since_epoch().count() != 0 && openedPath == devPath()
-            && now - lastTry < std::chrono::seconds(60)) return -1;
-        lastTry = now; openedPath = devPath();
+        if (d.lastTry.time_since_epoch().count() != 0 && d.openedPath == path
+            && now - d.lastTry < std::chrono::seconds(60)) return -1;
+        d.lastTry = now; d.openedPath = path;
         // ★ O_RDONLY, as the firmware's own mbox_open() does: the property ioctl needs no write
         //   access, so DeviceAllow= can stay read-only.
-        fd = ::open(devPath().c_str(), O_RDONLY | O_CLOEXEC);
+        fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
         if (fd < 0) return -1;
     }
     // IOCTL_MBOX_PROPERTY = _IOWR(100, 0, char*) — from the firmware's userland mailbox.h.
     if (::ioctl(fd, _IOWR(100, 0, char*), buf) < 0) return -1;
     return 0;
 }
+inline int realMbox(uint32_t* buf)       { static Dev d; return mboxOn(d, devPath(), buf); }
+inline int realGencmdMbox(uint32_t* buf) { static Dev d; return mboxOn(d, gencmdPath(), buf); }
 #else
 inline int realMbox(uint32_t*) { return -1; }
+inline int realGencmdMbox(uint32_t*) { return -1; }
 #endif
 
 /** Ask for ONE tag carrying `nIn` request words and room for `nOut` answer words. Returns the
@@ -131,6 +148,45 @@ inline int property(uint32_t tag, const uint32_t* in, int nIn, uint32_t* out, in
     for (int k = 0; k < n; k++) out[k] = buf[valAt + k];
     return n;
 }
+/** ★ One `vcgencmd` command, the way vcgencmd sends it (raspberrypi/utils vcgencmd.c): a 1024-byte
+ *  value buffer, word 0 of it the firmware's error code, the text from word 1. Returns false on any
+ *  refusal. The test fake answers this tag through the same override as the property tags. */
+inline bool gencmd(const char* cmd, std::string& out) {
+    constexpr int kMax = 1024;
+    uint32_t buf[(kMax >> 2) + 7];
+    std::memset(buf, 0, sizeof buf);
+    const size_t len = std::strlen(cmd);
+    if (len + 1 >= (size_t)kMax) return false;
+    int i = 0;
+    buf[i++] = 0;                          // total size, filled below
+    buf[i++] = 0;                          // request code
+    buf[i++] = TAG_GET_GENCMD_RESULT;
+    buf[i++] = kMax;                       // value buffer size
+    buf[i++] = 0;                          // request length
+    buf[i++] = 0;                          // the firmware's error code comes back here
+    std::memcpy(buf + i, cmd, len + 1);
+    i += kMax >> 2;
+    buf[i++] = 0;                          // end tag
+    buf[0] = (uint32_t)(i * 4);
+    MboxFn f = mboxOverride();
+    const int rc = f ? f(buf) : realGencmdMbox(buf);
+    if (rc != 0 || buf[1] != 0x80000000u || buf[5] != 0) return false;
+    const char* txt = reinterpret_cast<const char*>(buf + 6);
+    out.assign(txt, ::strnlen(txt, kMax - 8));
+    return !out.empty();
+}
+/** The number after the '=' of "frequency(0)=1000015168" / "throttled=0x50005" / "arm_freq=2400". */
+inline bool afterEquals(const std::string& s, long long& v, int base) {
+    const size_t eq = s.find('=');
+    if (eq == std::string::npos) return false;
+    const char* p = s.c_str() + eq + 1;
+    char* end = nullptr;
+    const long long x = std::strtoll(p, &end, base);
+    if (end == p) return false;
+    v = x;
+    return true;
+}
+
 inline long long clockTag(uint32_t tag) {
     const uint32_t in[2] = { CLOCK_ARM, 0 };
     uint32_t out[2] = { 0, 0 };
@@ -139,11 +195,29 @@ inline long long clockTag(uint32_t tag) {
 }
 }  // namespace detail
 
-/** One reading. Cheap — four ioctls — and safe to call once a second from several threads. */
+/** One reading. Cheap — three or four ioctls — and safe to call once a second from several threads. */
+/** ★ The second door — see the note at the top. The same three figures, as `vcgencmd` text. No "asked
+ *  for" figure exists here; callers already take that from sysfs. */
+inline Reading readGencmd() {
+    Reading r;
+    std::string t;
+    long long v = 0;
+    if (!detail::gencmd("measure_clock arm", t) || !detail::afterEquals(t, v, 10) || v <= 0) return r;
+    r.armHz = v; r.measured = true;
+    // get_config reports MHz; a firmware that will not say leaves the maximum unknown, and a
+    // reading without a maximum is no reading (nobody can say it is BELOW anything).
+    if (detail::gencmd("get_config arm_freq", t) && detail::afterEquals(t, v, 10) && v > 0)
+        r.armMaxHz = v * 1000000LL;
+    if (detail::gencmd("get_throttled", t) && detail::afterEquals(t, v, 16) && v >= 0)
+        r.throttled = v;
+    r.ok = r.armHz > 0 && r.armMaxHz > 0;
+    return r;
+}
+
 inline Reading read() {
     Reading r;
     r.armMaxHz = detail::clockTag(TAG_GET_MAX_CLOCK_RATE);
-    if (r.armMaxHz <= 0) return r;                     // no mailbox, or not a Pi: stay silent
+    if (r.armMaxHz <= 0) return readGencmd();          // not root: the node `video` may open
     r.armSetHz = detail::clockTag(TAG_GET_CLOCK_RATE);
     const long long meas = detail::clockTag(TAG_GET_CLOCK_RATE_MEASURED);
     if (meas > 0) { r.armHz = meas; r.measured = true; }
