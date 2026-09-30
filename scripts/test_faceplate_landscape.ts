@@ -1,14 +1,16 @@
 /**
  * The landscape deck's geometry (src/constants/meters.ts landscapeDeck) — faceplates brief §9, §11, §4.1.
  *
- * ★★★ NEVER TALLER THAN TODAY'S BAR: at every landscape width from the SE in Display Zoom (568) to a
- * 13" iPad (1366), for every chassis × meter × shared, the band is today's, the four keys are one
- * height, the columns never go negative or overlap, the drums keep their 80 pt, and the frequency
- * window still holds a real Nixie tube row without clipping a dome.
+ * ★★★ THE BAND GROWS WITH THE HEIGHT, AND ONLY WHERE THERE IS HEIGHT (build 356): at every landscape
+ * window from the SE in Display Zoom (568 × 320) to a 13" iPad (1366 × 1024), for every chassis × meter
+ * × shared, the band is today's on the SE and on the default chassis's bar, grows with the window's
+ * height in POINTS to the mockup's 62 on a Pro Max, the four keys are one height, the columns never go
+ * negative or overlap, the drums keep their 80 pt, and the frequency window still holds a real Nixie
+ * tube row without clipping a dome.
  *
  * Run: node --no-warnings scripts/test_faceplate_landscape.ts   (run-tests.sh does)
  */
-import { landscapeDeck, LAND, type MeterKind } from '../src/constants/meters.ts';
+import { landscapeDeck, landscapeBand, LAND, type MeterKind } from '../src/constants/meters.ts';
 import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H } from '../src/constants/nixie.ts';
 
 let fails = 0, passes = 0;
@@ -24,26 +26,36 @@ type Plate = { screws: boolean; gloss: boolean } | null;
 const CHASSIS: [string, Plate][] = [['default', null], ['silver', { screws: true, gloss: false }],
                                     ['black', { screws: false, gloss: true }]];
 const METERS: MeterKind[] = ['bar', 'vu', 'edge'];
-// Phones: 568 (SE Display Zoom), 667 (SE), 740, 844, 932 (Pro Max); tablets: 1024, 1366.
-const WIDTHS: [number, boolean][] = [[568, false], [667, false], [740, false], [844, false], [932, false],
-                                     [1024, true], [1366, true]];
+// Landscape windows in POINTS (W × H): 568 × 320 (SE Display Zoom), 667 × 375 (SE), 740 × 360 (Android),
+// 844 × 390 (iPhone 14), 874 × 402 (iPhone 17), 932 × 430 (Pro Max), 956 × 440 (17 Pro Max); tablets
+// 1024 × 768, 1366 × 1024.
+const DEVICES: [number, number, boolean][] = [[568, 320, false], [667, 375, false], [740, 360, false], [844, 390, false],
+  [874, 402, false], [932, 430, false], [956, 440, false], [1024, 768, true], [1366, 1024, true]];
 
-for (const [W, tablet] of WIDTHS) {
+for (const [W, H, tablet] of DEVICES) {
   const scale = Math.max(0.58, Math.min(1.45, W / 926));      // useUiScale, landscape
   const r = (n: number) => Math.round(n * scale);
   // TODAY's LandscapeBar, before this row: BAND_H = max(DRUM_H 44, SIG_H 40 / tablet 62), KEY_H half of it.
   const todayBand = Math.max(r(44), r(tablet ? 62 : 40));
+  // ★★ The band this window should have: today's up to 375 pt of height, the mockup's 62 from 430,
+  //    a straight line between — and never below today's (a tablet's today is already over 62).
+  const t = Math.max(0, Math.min(1, (H - 375) / (430 - 375)));
+  const grown = Math.max(todayBand, Math.round(todayBand + (62 - todayBand) * t));
   for (const [cname, plate] of CHASSIS) {
     const heights = new Set<number>();
     for (const meter of METERS) for (const shared of [false, true]) for (const singleDrum of [false, true]) {
       // ★ shared never reaches the geometry: the banner lives in the status row (§9) — so the call
       //   takes no `shared` at all, and the loop proves the deck cannot depend on it.
       void shared;
-      const d = landscapeDeck({ plate, meter, tablet, W, scale, r, singleDrum });
-      const tag = `${W} ${cname} ${meter}${shared ? '+shared' : ''}${singleDrum ? ' 1-drum' : ''}`;
-      heights.add(d.bandH);
-      ok(`${tag}: never taller than today's band (${d.bandH} ≤ ${todayBand})`, d.bandH <= todayBand);
-      eq(`${tag}: the band IS today's`, d.bandH, todayBand);
+      const d = landscapeDeck({ plate, meter, tablet, W, H, scale, r, singleDrum });
+      const tag = `${W}×${H} ${cname} ${meter}${shared ? '+shared' : ''}${singleDrum ? ' 1-drum' : ''}`;
+      const defaultBar = !plate && meter === 'bar';
+      if (!defaultBar) heights.add(d.bandH);
+      ok(`${tag}: never taller than the mockup's 62 or today's (${d.bandH})`, d.bandH <= Math.max(todayBand, 62));
+      ok(`${tag}: never shorter than today's (${d.bandH} ≥ ${todayBand})`, d.bandH >= todayBand);
+      eq(`${tag}: the band`, d.bandH, defaultBar ? todayBand : grown);
+      if (H <= 375) eq(`${tag}: ★ the SE keeps TODAY's band, to the point`, d.bandH, todayBand);
+      if (defaultBar) eq(`${tag}: ★ the default chassis's bar is today's (§3.1)`, d.bandH, todayBand);
       // §11: four identical keys, two rows and the gap exactly fill the band.
       eq(`${tag}: two keys + the row gap = the band`, 2 * d.keyH + d.rowGap, d.bandH);
       ok(`${tag}: keys are positive`, d.keyH > 0);
@@ -93,7 +105,7 @@ for (const [W, tablet] of WIDTHS) {
       if (plate?.gloss) ok(`${tag}: gloss sits in the column gap`, d.glossOut > 0 && d.glossOut <= d.colGap);
       else eq(`${tag}: no gloss`, d.glossOut, 0);
     }
-    eq(`${W} ${cname}: ONE band across meter × shared × drums`, heights.size, 1);
+    eq(`${W}×${H} ${cname}: ONE band across meter × shared × drums${plate ? '' : ' (LED / analogue)'}`, heights.size, 1);
   }
 }
 
@@ -136,10 +148,35 @@ for (const [W, tablet] of WIDTHS) {
   eq('844 / 932: analogue kept', [at(844, 'edge').meter, at(932, 'edge').meter], ['edge', 'edge']);
   eq('932: LED strip without labels (a phone band cannot hold them)', at(932, 'vu').labelH, 0);
 }
+// ── ★★ Build 356: the 17 Pro Max's tubes grow; the SE is today's to the point ──
+{
+  const dev = (W: number, H: number, meter: MeterKind, plate: Plate = { screws: true, gloss: false }) => {
+    const scale = Math.max(0.58, W / 926);
+    return landscapeDeck({ plate, meter, tablet: false, W, H, scale, r: (n: number) => Math.round(n * scale) });
+  };
+  eq('17 Pro Max (956 × 440): the mockup\'s 62 pt band', dev(956, 440, 'vu').bandH, 62);
+  eq('Pro Max (932 × 430): the mockup\'s numbers — band 62, keys 28, LED window 33.5, labels back',
+     [dev(932, 430, 'vu').bandH, dev(932, 430, 'vu').keyH, +dev(932, 430, 'vu').freqH.toFixed(1), dev(932, 430, 'vu').labelH > 0],
+     [62, 28, 33.5, true]);
+  ok(`17 Pro Max: the frequency window is ≥ 9 pt taller than today's (${dev(956, 440, 'vu').freqH.toFixed(1)} vs ${
+       landscapeDeck({ plate: { screws: true, gloss: false }, meter: 'vu', tablet: false, W: 956, scale: 956 / 926, r: (n: number) => Math.round(n * 956 / 926) }).freqH.toFixed(1)})`,
+     dev(956, 440, 'vu').freqH - landscapeDeck({ plate: { screws: true, gloss: false }, meter: 'vu', tablet: false, W: 956,
+       scale: 956 / 926, r: (n: number) => Math.round(n * 956 / 926) }).freqH >= 9);
+  eq('17 Pro Max: default chassis + LED grows too; the default BAR does not',
+     [dev(956, 440, 'vu', null).bandH, dev(956, 440, 'bar', null).bandH], [62, 45]);
+  for (const meter of ['bar', 'vu', 'edge'] as const) for (const plate of [null, { screws: true, gloss: false }]) {
+    const today = landscapeDeck({ plate, meter, tablet: false, W: 667, scale: 667 / 926, r: (n: number) => Math.round(n * 667 / 926) });
+    eq(`SE (667 × 375) ${plate ? 'silver' : 'default'} ${meter}: the whole deck is today's`, dev(667, 375, meter, plate), today);
+  }
+  // Monotone: a taller window never gets a shorter band.
+  let prev = 0, mono = true;
+  for (let H = 300; H <= 500; H++) { const b = landscapeBand({ plate: {}, meter: 'vu', tablet: false, H, r: (n: number) => n }); if (b < prev) mono = false; prev = b; }
+  ok('the band never shrinks as the window gets taller', mono);
+}
 // Every compact result anywhere is legible.
-for (const [W, tablet] of WIDTHS) for (const [, plate] of CHASSIS) for (const meter of ['vu', 'edge'] as const) {
+for (const [W, H, tablet] of DEVICES) for (const [, plate] of CHASSIS) for (const meter of ['vu', 'edge'] as const) {
   const scale = Math.max(0.58, Math.min(1.45, W / 926));
-  const d = landscapeDeck({ plate, meter, tablet, W, scale, r: (n: number) => Math.round(n * scale) });
+  const d = landscapeDeck({ plate, meter, tablet, W, H, scale, r: (n: number) => Math.round(n * scale) });
   if (d.meter !== 'bar') ok(`${W} ${meter}: the mode box is legible (${d.modeFont} / ${d.readingFont})`,
                             d.modeFont >= LAND.minModeFont && d.readingFont >= LAND.minReadingFont);
 }

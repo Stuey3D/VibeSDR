@@ -538,6 +538,12 @@ export const LAND = {
   /** Black's gloss panel: padding 4 — drawn OUTSIDE the display column, in the gaps, so it costs no
    *  height (see landscapeDeck). */
   glossPad:      4,
+  /** ★★ The band GROWS with the window's height (build 356, the 17 Pro Max): today's band up to the
+   *  SE's 375 pt, the mockup's 62 pt from 430 pt — the height of the phone the mockup was drawn on (a
+   *  Pro Max, 932 × 430) — and a straight line between. In POINTS, never pixels: the SE (2x) and the
+   *  17 Pro Max (3x) lay out in points of about the same physical size. */
+  growFromH:     375,
+  growToH:       430,
   /** SDRScreen `pillWrap`: 8 pt each side of the bar. */
   screenMargin:  8,
   /** ControlsBar's drum columns: `minWidth: s.r(80)`. */
@@ -545,8 +551,9 @@ export const LAND = {
 } as const;
 
 export interface LandscapeLayout {
-  /** The control band — TODAY's (the taller of the 44 pt drum and the bar frame), on every chassis,
-   *  meter and shared state. §9: "never gets taller than today's bar". */
+  /** The control band — see landscapeBand: today's on the SE and on the default chassis's bar, growing
+   *  with the window's height to the mockup's 62 pt on a large phone. One height across meter × shared
+   *  on a chassis (except the default chassis's bar, which is today's, as in portrait §4.1). */
   bandH:       number;
   /** Every key is exactly this tall (§11): half the band less the row gap. */
   keyH:        number;
@@ -588,16 +595,51 @@ export interface LandscapeLayout {
 }
 
 /**
+ * ★★★ THE LANDSCAPE BAND'S HEIGHT (§9, revised for build 356).
+ *
+ * §9 held the band to TODAY's — the taller of the 44 pt drum and the bar frame, both scaled with the
+ * WIDTH (r) — and that is 32 pt on the SE but only 45 pt on a 17 Pro Max, whose 440 pt of height could
+ * carry the mockup's 62: Stuart, "the Nixies are tiny in landscape on a 17 Pro Max". So the band grows
+ * with the window's HEIGHT in points:
+ *
+ *     t    = clamp((H − 375) / (430 − 375), 0, 1)
+ *     band = max(today, round(today + (62 − today) × t))
+ *
+ *   SE 667 × 375 ........ t 0    → today's 32 (unchanged, to the point)
+ *   SE Display Zoom 320 .. t 0    → today's
+ *   iPhone 14 844 × 390 .. t .27  → 46   (today 40)
+ *   iPhone 16 852 × 393 .. t .33  → 47   (today 40)
+ *   iPhone 17 874 × 402 .. t .49  → 52   (today 42)
+ *   Pro Max 932 × 430 .... t 1    → 62   (today 44) — the mockup's own frame
+ *   17 Pro Max 956 × 440 . t 1    → 62   (today 45)
+ *   tablets .............. today's r(62) is already ≥ 62 — unchanged
+ *
+ * ★★ The default chassis's BAR keeps today's band everywhere (§3.1 / §13.1: pixel for pixel) — the one
+ *   exception, exactly as in portrait §4.1, where the default bar keeps today's and the LED / analogue
+ *   deck is the taller block.
+ * ★ No PixelRatio anywhere: points are the same physical size on a 2x and a 3x screen.
+ */
+export function landscapeBand(o: { plate: unknown; meter: MeterKind; tablet: boolean; H?: number;
+                                   r: (n: number) => number }): number {
+  const today = Math.max(o.r(LAND.todayDrum), o.r(o.tablet ? LAND.todayBarTab : LAND.todayBar));
+  if (o.H == null || (!o.plate && o.meter === 'bar')) return today;
+  const t = Math.max(0, Math.min(1, (o.H - LAND.growFromH) / (LAND.growToH - LAND.growFromH)));
+  return Math.max(today, Math.round(today + (LAND.band - today) * t));
+}
+
+/**
  * ★★★ THE LANDSCAPE DECK (§9). One band of controls — `[VFO drum] [step / cog] [display] [audio / chat]
- * [zoom drum]` — then the status row, and ★ NEVER TALLER THAN TODAY'S BAR.
+ * [zoom drum]` — then the status row. The band's height is landscapeBand's: today's on the SE, growing
+ * with the window's height to the mockup's 62 pt on a large phone.
  *
  * ★★ WHERE THE BRIEF CANNOT BE MET WHOLE: the mockup's band is 62 pt and it calls that "today". It is
  *   today's band on a TABLET (the 62 pt bar frame), but on a phone today's band is 44 pt (the 44 pt drum
- *   over a 40 pt bar). "Never taller than today's" is the hard rule (§9, A2's own caption, §4.1's one
- *   deck height), so the band is today's everywhere and the mockup's column is FITTED into it: the
- *   frequency window flexes (as in portrait), the gap tightens, the LED labels go, and last — where the
- *   mode box could no longer be read (the SE's 32 pt band) — the meter gives way to the bar, §9's own
- *   "or the bar". On a tablet every mockup number comes out exactly.
+ *   over a 40 pt bar), scaled with the width — 32 pt on the SE. §9 held every phone to today's; build
+ *   356 showed what that costs on a 17 Pro Max (tiny tubes in 440 pt of height), so the band now grows
+ *   with the height (landscapeBand), and wherever it is still short the mockup's column is FITTED into
+ *   it: the frequency window flexes (as in portrait), the gap tightens, the LED labels go, and last —
+ *   where the mode box could no longer be read (the SE's 32 pt band) — the meter gives way to the bar,
+ *   §9's own "or the bar". On a tablet and on a Pro Max every mockup number comes out exactly.
  *
  * Columns: the default chassis keeps today's (56 / 340 / 6), so its bar deck is pixel-for-pixel today's
  * and switching meter moves nothing sideways; silver and black take the mockup's grid (62 / 360 / 8).
@@ -608,9 +650,12 @@ export interface LandscapeLayout {
  */
 export function landscapeDeck(o: { plate: { screws: boolean; gloss: boolean } | null; meter: MeterKind;
                                    tablet: boolean; W: number; scale: number; r: (n: number) => number;
-                                   singleDrum?: boolean }): LandscapeLayout {
+                                   singleDrum?: boolean;
+                                   /** The window's height (pt) — the band grows with it (landscapeBand).
+                                    *  Absent = today's band. */
+                                   H?: number }): LandscapeLayout {
   const { r, plate } = o;
-  const bandH = Math.max(r(LAND.todayDrum), r(o.tablet ? LAND.todayBarTab : LAND.todayBar));
+  const bandH = landscapeBand({ plate, meter: o.meter, tablet: o.tablet, H: o.H, r });
   const rowGap = r(LAND.rowGap);
   const keyH = (bandH - rowGap) / 2;
   const colGap = r(plate ? LAND.colGap : LAND.todayGap);

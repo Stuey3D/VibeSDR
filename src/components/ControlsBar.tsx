@@ -1770,15 +1770,16 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   const [sigW, setSigW] = useState(0);
 
   /* ★★★ THE LANDSCAPE DECK (§9) — constants/meters.ts landscapeDeck, pure and tested
-   *  (scripts/test_faceplate_landscape.ts). ONE band for every meter × shared state, and it is TODAY's
-   *  band: the taller of the 44 pt drum and the bar frame (40; 62 on a tablet). The mockup's 62 pt band
-   *  is today's only on a tablet, so on a phone the LED / analogue column is FITTED into today's band —
-   *  the frequency window flexes, then the labels go, and on the SE the analogue card becomes the bar.
-   *  ★ The bar never gets taller than today's: that is the rule the test holds at 568 → 1366 pt. */
+   *  (scripts/test_faceplate_landscape.ts). ONE band for every meter × shared state. On the SE it is
+   *  TODAY's band (the taller of the 44 pt drum and the bar frame; 62 on a tablet); on a taller phone it
+   *  GROWS with the window's height in points to the mockup's 62 pt (landscapeBand — build 356, "the
+   *  Nixies are tiny in landscape on a 17 Pro Max"). The LED / analogue column is fitted into it — the
+   *  frequency window flexes, then the labels go, and on the SE the analogue card becomes the bar.
+   *  ★ The default chassis's BAR keeps today's band everywhere (§3.1 pixel for pixel). */
   const isCap     = ct.dome.look === 'cap';
   const lay       = landscapeDeck({ plate: ct.plate ? { screws: ct.plate.screws, gloss: ct.plate.gloss } : null,
                                     meter: fp.settings.meter, tablet: s.isTablet, W: s.W, scale: s.scale, r: s.r,
-                                    singleDrum: !!singleDrum });
+                                    singleDrum: !!singleDrum, H: s.H });
   const BAND_H    = lay.bandH;
   const SIG_H     = lay.barH;                // the bar frame (bar meter only)
   const GAP       = lay.rowGap;
