@@ -38,6 +38,7 @@ static inline int      rtlsdr_get_tuner_gains(rtlsdr_dev_t*, int*)     { return 
 static inline int      rtlsdr_set_bias_tee(rtlsdr_dev_t*, int)         { return 0; }
 static inline int      rtlsdr_set_agc_mode(rtlsdr_dev_t*, int)         { return 0; }
 static inline int      rtlsdr_set_direct_sampling(rtlsdr_dev_t*, int)  { return 0; }
+static inline int      rtlsdr_get_direct_sampling(rtlsdr_dev_t*)       { return 0; }
 static inline int      rtlsdr_reset_buffer(rtlsdr_dev_t*)              { return 0; }
 static inline int      rtlsdr_read_async(rtlsdr_dev_t*, rtlsdr_read_async_cb_t, void*, uint32_t, uint32_t) { return 0; }
 static inline int      rtlsdr_cancel_async(rtlsdr_dev_t*)              { return 0; }

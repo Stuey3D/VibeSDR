@@ -107,6 +107,7 @@
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
+#include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 #include "vibe_setup_page.h"
 #include "vibe_benchmark.h"   // ★ benchProgressJson — the live progress a page draws its bar from
@@ -6174,6 +6175,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *   where we want to listen and where the tuner must be parked. */
         uint32_t hz = (uint32_t)llround(logicalCenter - convOffsetHz.load(std::memory_order_relaxed)
                                         + hwOffsetHz());
+        /* ★★ DIAGNOSTIC (Kiko's +1.950 MHz, 2026-09-30): the one line where a dial position becomes a
+         *  tuner number, with every term that goes into it. A converter offset or a wrong logical centre
+         *  shows here; a tuner/demodulator IF disagreement does NOT (the numbers here will be right and
+         *  the audio still wrong) — that is what the writer's "tuner write:" line is for. First 12 tunes,
+         *  then one per 10 s. */
+        {
+            static std::atomic<int> s_n{0};
+            static std::atomic<long long> s_last{0};
+            const long long now = (long long)nowSecs();
+            if (s_n.fetch_add(1, std::memory_order_relaxed) < 12
+                || now - s_last.load(std::memory_order_relaxed) >= 10) {
+                s_last.store(now, std::memory_order_relaxed);
+                LOGI("tune: dial centre %.6f MHz - converter %.6f MHz + DC offset %.3f kHz = tuner %.6f MHz "
+                     "(vfo %.6f MHz)", logicalCenter / 1e6, convOffsetHz.load(std::memory_order_relaxed) / 1e6,
+                     hwOffsetHz() / 1e3, hz / 1e6, audioFreq.load() / 1e6);
+            }
+        }
         if (useSpy()) {
             spy->setIqFrequency(hz);
             // The centres are independent, but not UNBOUNDED: the device only covers
@@ -22691,6 +22709,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         if (frc != 0)
                             LOGI("tuner centre -> %.3f MHz REFUSED (rc=%d, readback %.3f MHz)", hz / 1e6, frc,
                                  rtlsdr_get_center_freq(dev) / 1e6);
+                        /* ★★ DIAGNOSTIC (Kiko's +1.950 MHz, 2026-09-30) — what the TUNER was told, beside
+                         *  what librtlsdr believes, and the IF its filter implies (vibe_r82xx_if.h). With
+                         *  the "tune:" line from tuneHw this settles where any dial error comes from. The
+                         *  first 12 tunes after start, then one per 10 s: a sweep must not flood logcat. */
+                        {
+                            static std::atomic<int> s_n{0};
+                            static std::atomic<long long> s_last{0};
+                            const long long now = (long long)nowSecs();
+                            if (s_n.fetch_add(1, std::memory_order_relaxed) < 12
+                                || now - s_last.load(std::memory_order_relaxed) >= 10) {
+                                s_last.store(now, std::memory_order_relaxed);
+                                const int fbw = bw >= 0 ? bw : g_tunerBwHz.load(std::memory_order_relaxed);
+                                const int32_t impliedIf = vibertl::r82xxIntFreqForBw(
+                                    fbw > 0 ? fbw : (int32_t)rtlsdr_get_sample_rate(dev));
+                                LOGI("tuner write: centre %.6f MHz rc=%d readback %.6f MHz, direct sampling %d, "
+                                     "rate %u, IF filter %d Hz (tuner IF %.3f MHz once written; init's is %.3f)",
+                                     hz / 1e6, frc, rtlsdr_get_center_freq(dev) / 1e6,
+                                     rtlsdr_get_direct_sampling(dev), rtlsdr_get_sample_rate(dev), fbw,
+                                     impliedIf / 1e6, vibertl::kR82xxInitIfHz / 1e6);
+                            }
+                        }
                         // ★ …and put our IF filter back, because that call just undid it.
                         //   Silent: one line per retune would bury everything else.
                         const int want = bw >= 0 ? bw : g_tunerBwHz.load(std::memory_order_relaxed);
