@@ -79,6 +79,8 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate }: {
               transform={[{ translateX: w / 2 - 600 * k }, { translateY: h / 2 - 450 * k }, { scale: k }]} />
           </Rect>
         )}
+        {/* The veil over the grain (black: a touch darker than the mockup — PlateTokens.textureDim). */}
+        {plate.textureDim > 0 && <Rect x={0} y={0} width={w} height={h} color={`rgba(0,0,0,${plate.textureDim})`} />}
         {/* ── The lighting layer (separate from the grain, §3.4) ── */}
         <Rect x={0} y={0} width={w} height={h}>
           <LinearGradient start={light.start} end={light.end} colors={plate.lightColors} positions={plate.lightPos} />

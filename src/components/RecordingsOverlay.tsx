@@ -297,7 +297,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
 }
 
 const makeStyles = (pt: PopupTokens) => StyleSheet.create({
-  root: onMetal(pt, { flex: 1, backgroundColor: '#0a0d0b' }, { backgroundColor: pt.silver ? '#c9c6bf' : '#1b1c1e' }),
+  root: onMetal(pt, { flex: 1, backgroundColor: '#0a0d0b' }, { backgroundColor: pt.silver ? '#c9c6bf' : '#161719' }),
   listWrap: { flex: 1 },
   listWin:  { marginHorizontal: 10, marginBottom: 10 },
   bar: {

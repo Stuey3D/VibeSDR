@@ -178,6 +178,8 @@ except under the Nixie rule. Footer is today's two-line footer, including GAIN a
 
 ### 3.3 `black`: brushed black (ref: Stuart's own Yamaha RX-V583)
 - Plate `#1b1c1e`, border `1px #3a3c40`, radius 16, top lip `inset 0 1px 0 rgba(255,255,255,.22)`.
+  ★ Darkened a touch after build 356 (Stuart: "can be darkened ever so slightly"): plate `#161719`, a .14
+  black veil over the grain, the lighting's white bands at ~.8, caps `#18191b` (`BLACK_CHASSIS`).
 - Texture `black-brushed.jpg`; lighting as silver at about a third of the alpha.
 - **Gloss acrylic display panel** behind banner, frequency and meter: `#111214 → #060607 55% → #0b0b0d`,
   hard diagonal reflection at 112° (38–56%, α .10 → .035), aluminium trim line beneath

@@ -535,7 +535,7 @@ function AboutBody({ onClose }: AboutOverlayProps) {
 const F = 'Atkinson Hyperlegible';
 
 const makeStyles = (pt: PopupTokens) => StyleSheet.create({
-  root:  onMetal(pt, { flex: 1, backgroundColor: '#000' }, { backgroundColor: pt.silver ? '#c9c6bf' : '#1b1c1e' }),
+  root:  onMetal(pt, { flex: 1, backgroundColor: '#000' }, { backgroundColor: pt.silver ? '#c9c6bf' : '#161719' }),
   bar:   {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8,

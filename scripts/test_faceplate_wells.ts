@@ -121,7 +121,10 @@ eq('amber is full-brightness amber', rgbOf(ledA(LED.amber, 1)).slice(0, 3), [255
 eq('blue is the brief\'s blue', rgbOf(ledA(LED.blue, 1)).slice(0, 3), [61, 155, 255]);
 
 // ── §6.2 tuner-keys mode ─────────────────────────────────────────────────────────
-eq('keys well faces (Deck.mockup tk.bg)', [D.keysFace, S.keysFace, B.keysFace], ['#0b0a08', '#c9c6bf', '#1b1c1e']);
+// ★ Black is the mockup's #1b1c1e darkened a touch (build 356) — the keys face follows the plate.
+eq('keys well faces (Deck.mockup tk.bg; black darkened with its plate)', [D.keysFace, S.keysFace, B.keysFace],
+   ['#0b0a08', '#c9c6bf', '#161719']);
+eq('black keys face = its plate base', B.keysFace, B.plate!.base);
 eq('only the default key needs its own dark slot', [D.keysSlot, S.keysSlot, B.keysSlot], ['#050403', null, null]);
 eq('the keys well keeps the drum well\'s edge exactly (same tokens, one component)',
    [S.wellRingA, S.wellGlowA, S.wellBorder], [0.35, 0.40, 'rgba(0,0,0,0.55)']);

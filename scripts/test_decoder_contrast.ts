@@ -81,6 +81,13 @@ const WF_HOT:  RGB = [82, 131, 66];    // 95th percentile — printed, not asser
 const glassOver = (tk: DecoderTokens, tint: number, wf: RGB): RGB => tk.solidBg
   ? parse(tk.solidBg).slice(0, 3) as RGB
   : over([...parseRgb(tk.tintRgb), tint] as RGBA, wf);
+/** The lighting's brightest white band (black's plate: light text is worst there). Read from the
+ *  tokens, so darkening the plate is measured, not assumed. */
+function brightestBand(stops: string[]): number {
+  let a = 0;
+  for (const c of stops) { const m = /^rgba\(255,255,255,([\d.]+)\)$/.exec(c.replace(/\s/g, '')); if (m) a = Math.max(a, +m[1]); }
+  return a;
+}
 /** The plate under engraved header text, at the point of the lighting that is WORST for it. */
 function plateWorst(chassis: 'silver' | 'black'): RGB {
   const p = (chassis === 'silver' ? SILVER_CHASSIS : BLACK_CHASSIS).plate!;
@@ -89,7 +96,7 @@ function plateWorst(chassis: 'silver' | 'black'): RGB {
   // bottom shade never reaches the header). Black's text is light: worst at the lighting's brightest band (.11 white).
   return chassis === 'silver'
     ? over([0, 0, 0, 0.16], base)
-    : over([255, 255, 255, 0.11], base);
+    : over([255, 255, 255, brightestBand(p.lightColors)], base);
 }
 const WINDOW: RGB = [7, 6, 5];
 

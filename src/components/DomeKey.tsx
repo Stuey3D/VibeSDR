@@ -164,6 +164,7 @@ const CapFace = React.memo(function CapFace({ w, h, r, dome, texture }: {
             transform={[{ translateX: w / 2 - 600 * k }, { translateY: h / 2 - 450 * k }, { scale: k }]} />
         </RoundedRect>
       )}
+      {dome.textureDim > 0 && <RoundedRect x={0} y={0} width={w} height={h} r={r} color={`rgba(0,0,0,${dome.textureDim})`} />}
       <RoundedRect x={0} y={0} width={w} height={h} r={r}>
         <LinearGradient start={vec(0, 0)} end={vec(0, h)} colors={dome.capSheen} positions={[0, 0.42, 1]} />
       </RoundedRect>

@@ -277,7 +277,7 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, transpare
     cap: silver
       ? { base: '#c4c1ba', hi: 'rgba(255,255,255,0.40)', lo: 'rgba(0,0,0,0.10)', border: '#8d8a83',
           topLine: 'rgba(255,255,255,0.80)', cast: '#000000', castOpacity: 0.6, pressDim: 0.84 }
-      : { base: '#141517', hi: 'rgba(255,255,255,0.05)', lo: 'rgba(0,0,0,0.25)', border: '#050505',
+      : { base: '#111214', hi: 'rgba(255,255,255,0.05)', lo: 'rgba(0,0,0,0.25)', border: '#050505',
           topLine: 'rgba(255,255,255,0.22)', cast: '#000000', castOpacity: 0.85, pressDim: 0.82 },
     dotIdle: L(0.35),
     plot: L(0.05), axis: L(0.25), axisStrong: L(0.35), axisFaint: L(0.07), chartText: Lt(0.85),

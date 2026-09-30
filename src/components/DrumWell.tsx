@@ -46,6 +46,10 @@ export function WellFace({ W, H, ct, keys = false }: {
             transform={[{ translateX: W / 2 - 600 * k }, { translateY: H / 2 - 450 * k }, { scale: k }]} />
         </Rect>
       )}
+      {/* The plate's veil over the grain, so a well's face stays the plate's shade (PlateTokens.textureDim). */}
+      {img && ct.wellTexture && (ct.plate?.textureDim ?? 0) > 0 && (
+        <Rect x={0} y={0} width={W} height={H} color={`rgba(0,0,0,${ct.plate!.textureDim})`} />
+      )}
     </Group>
   );
 }

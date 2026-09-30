@@ -308,7 +308,7 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
       accessibilityState={{ selected: active, disabled }} accessibilityLabel={accessibilityLabel ?? label}
       accessibilityHint={accessibilityHint}
       onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut} hitSlop={hitSlop}
-      style={[ps.cap, { minHeight: height, backgroundColor: silver ? '#c4c1ba' : '#141517',
+      style={[ps.cap, { minHeight: height, backgroundColor: silver ? '#c4c1ba' : '#111214',
                         borderColor: silver ? '#8d8a83' : '#050505' },
               layoutOnly(style), focused && { borderColor: NAV_FOCUS, borderWidth: 2 },
               disabled && { opacity: 0.45 }, motion]}>

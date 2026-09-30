@@ -504,6 +504,10 @@ export interface PlateTokens {
   gloss:       boolean;
   /** The 1 pt light lip under a recessed window (Deck.mockup `lip`). */
   windowLip:   string;
+  /** A black veil over the GRAIN, under the lighting (0 = none). The texture, not the base colour, is
+   *  what shows once it decodes, so this is what darkens a plate — deck, popups, decoder boxes and the
+   *  drum wells all read it. */
+  textureDim:  number;
 }
 
 export interface DomeTokens {
@@ -516,6 +520,8 @@ export interface DomeTokens {
   slotLip:     string;
   capBase:     string;
   capBorder:   string;
+  /** A black veil over the cap's grain (the plate's `textureDim`), 0 = none. */
+  textureDim:  number;
   /** `.bz-silver` / `.bz-black`: the sheen over the cap's texture — top, clear at 42%, bottom. */
   capSheen:    [string, string, string];
   /** Chamfer: `inset 0 1px 0 rgba(255,255,255, hi × 0.3)`. */
@@ -600,7 +606,7 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
   //   (§5: "every dome key clicks, on every chassis, including default"). Only pressDim is read.
   dome: {
     look: 'outline', slotBg: 'transparent', slotShade: 'transparent', slotLip: 'transparent',
-    capBase: 'transparent', capBorder: 'transparent',
+    capBase: 'transparent', capBorder: 'transparent', textureDim: 0,
     capSheen: ['rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0)'],
     chamfer: 'rgba(255,255,255,0.03)', rim: 'rgba(255,255,255,0.07)', bottomEdge: 'rgba(0,0,0,0.5)',
     cast: 'rgba(0,0,0,0.85)', pressDim: 0.84,
@@ -638,11 +644,11 @@ export const SILVER_CHASSIS: ChassisTokens = {
     radialColor: 'rgba(255,250,240,0.22)',
     bottomShade: 'rgba(0,0,0,0.10)',
     lipTop: 'rgba(255,255,255,0.95)', lipTop2: 'rgba(255,255,255,0.35)', lipBottom: 'rgba(0,0,0,0.20)',
-    screws: true, gloss: false, windowLip: 'rgba(255,255,255,0.80)',
+    screws: true, gloss: false, windowLip: 'rgba(255,255,255,0.80)', textureDim: 0,
   },
   dome: {
     look: 'cap', slotBg: '#141414', slotShade: 'rgba(0,0,0,0.95)', slotLip: 'rgba(255,255,255,0.85)',
-    capBase: '#c9c6bf', capBorder: '#8d8a83',
+    capBase: '#c9c6bf', capBorder: '#8d8a83', textureDim: 0,
     capSheen: ['rgba(255,255,255,0.60)', 'rgba(255,255,255,0)', 'rgba(0,0,0,0.22)'],
     chamfer: rgba('255,255,255', 0.95 * 0.3), rim: 'rgba(255,255,255,0.07)', bottomEdge: 'rgba(0,0,0,0.5)',
     cast: 'rgba(0,0,0,0.85)', pressDim: 0.84,
@@ -655,7 +661,11 @@ export const BLACK_CHASSIS: ChassisTokens = {
   // §6.1 — ★ THE MOCKUP WINS over the brief's table here: `W_FACE.black` is NOT the default well. It
   // has a brushed-black face (#000 gap, ring .30, glow .38, top lip .14) and a NEUTRAL grey drum
   // (#070707 … #050505) where the default's is faintly green. Notches stay light on dark.
-  wellFace:      ['#1b1c1e', '#1b1c1e', '#1b1c1e'],
+  /* ★ BLACK IS A TOUCH DARKER than the mockup (Stuart, build 356: "can be darkened ever so slightly"):
+   *  base #1b1c1e → #161719, a .14 veil over the grain (its mean #2a2a2a → ~#242424), the lighting's
+   *  white bands at ~.8 of the mockup's, the caps #1d1e20 → #18191b. One set of tokens, so the deck,
+   *  every popup, the decoder boxes and the wells move together. */
+  wellFace:      ['#161719', '#161719', '#161719'],
   wellTexture:   'black',
   wellBorder:    '#000000',
   wellInnerGlowA: 0,
@@ -668,22 +678,24 @@ export const BLACK_CHASSIS: ChassisTokens = {
   notchMinor:    'rgba(168,168,170,0.22)',
   notchMed:      'rgba(169,169,172,0.36)',
   notchMajor:    'rgba(170,170,174,0.55)',
-  keysFace:      '#1b1c1e',
+  keysFace:      '#161719',
   keysSlot:      null,
   plate: {
-    base: '#1b1c1e', border: '#3a3c40', radius: 16, texture: 'black',
-    // ★ The mockup's own black lighting, not "silver at a third" (the brief's paraphrase of it).
-    lightColors: ['rgba(255,255,255,0)', 'rgba(255,255,255,0.03)', 'rgba(255,255,255,0.11)',
-                  'rgba(255,255,255,0.02)', 'rgba(0,0,0,0.10)', 'rgba(0,0,0,0.25)'],
+    base: '#161719', border: '#3a3c40', radius: 16, texture: 'black',
+    // ★ The mockup's own black lighting, not "silver at a third" (the brief's paraphrase of it) —
+    //   its white bands at ~.8 (.03 / .11 / .02 / radial .07 → .025 / .09 / .015 / .06).
+    lightColors: ['rgba(255,255,255,0)', 'rgba(255,255,255,0.025)', 'rgba(255,255,255,0.09)',
+                  'rgba(255,255,255,0.015)', 'rgba(0,0,0,0.10)', 'rgba(0,0,0,0.25)'],
     lightPos:    [0, 0.18, 0.36, 0.52, 0.74, 1],
-    radialColor: 'rgba(255,255,255,0.07)',
+    radialColor: 'rgba(255,255,255,0.06)',
+    textureDim:  0.14,
     bottomShade: null,
     lipTop: 'rgba(255,255,255,0.22)', lipTop2: 'rgba(255,255,255,0.06)', lipBottom: 'rgba(0,0,0,0.60)',
     screws: false, gloss: true, windowLip: 'rgba(255,255,255,0.14)',
   },
   dome: {
     look: 'cap', slotBg: '#030303', slotShade: 'rgba(0,0,0,0.95)', slotLip: 'rgba(255,255,255,0.14)',
-    capBase: '#1d1e20', capBorder: '#050505',
+    capBase: '#18191b', capBorder: '#050505', textureDim: 0.14,
     capSheen: ['rgba(255,255,255,0.20)', 'rgba(255,255,255,0)', 'rgba(0,0,0,0.45)'],
     chamfer: rgba('255,255,255', 0.22 * 0.3), rim: 'rgba(255,255,255,0.07)', bottomEdge: 'rgba(0,0,0,0.5)',
     cast: 'rgba(0,0,0,0.85)', pressDim: 0.82,

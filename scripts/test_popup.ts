@@ -98,7 +98,10 @@ for (const f of POPUPS) {
 /** The plate under engraved text at the point of its lighting WORST for that text (decoder test). */
 function plateWorst(silver: boolean): RGB {
   const base = rgb((silver ? SILVER_CHASSIS : BLACK_CHASSIS).plate!.base);
-  return silver ? over([0, 0, 0, 0.16], base) : over([255, 255, 255, 0.11], base);
+  // Black: the lighting's brightest white band, read from the tokens (darkened in build 356).
+  const band = Math.max(...(BLACK_CHASSIS.plate!.lightColors.map(c => {
+    const m = /^rgba\(255,255,255,([\d.]+)\)$/.exec(c.replace(/\s/g, '')); return m ? +m[1] : 0; })));
+  return silver ? over([0, 0, 0, 0.16], base) : over([255, 255, 255, band], base);
 }
 const WINDOW: RGB = [7, 6, 5];
 const rows: string[] = [];
