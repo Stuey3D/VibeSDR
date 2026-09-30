@@ -35,6 +35,7 @@ import Svg, { Defs, G, Line, LinearGradient as SvgLinear, RadialGradient as SvgR
 import {
   ReduceMotion, useDerivedValue, useFrameCallback, useSharedValue, withSpring, withTiming,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import {
   Canvas, Group, Image as SkImageNode, LinearGradient, Path, Rect, Skia, vec, type SkImage,
 } from '@shopify/react-native-skia';
@@ -150,12 +151,14 @@ function shadowSprite(w: number, h: number, blur: number, colour: string): SkIma
   return makeSprite(w + 2 * pad, h + 2 * pad, c => c.drawRect(Skia.XYWHRect(pad, pad, w, h), glowPaint(colour, blur)));
 }
 
-export default function EdgeMeter({ bus, unit = 'smeter', height, printH, printTop }: {
+export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault }: {
   /** ★ A bus on the CALIBRATED scale (ControlsBar useScaledMeterBus): level / raw / sql = position / 10. */
   bus?: MeterBus;
-  /** The readout's unit — which scale is printed. */
+  /** The readout's unit — which scale is printed (S-meter when absent). */
   unit?: MeterUnit;
   height: number;
+  /** ★★★ The frame callback threw (JS thread, once): the housing puts the BAR back (ControlsBar MeterHousing). */
+  onFault?: (message: string) => void;
   /** Landscape: the print's design height and offset in a shorter window (default: the window). */
   printH?: number; printTop?: number;
 }) {
@@ -182,6 +185,7 @@ export default function EdgeMeter({ bus, unit = 'smeter', height, printH, printT
   const held   = useSharedValue(0);
   const sqlPos = useSharedValue(-1);
   const dim    = useSharedValue(0);
+  const faulted = useSharedValue(0);
   useEffect(() => {
     if (!bus) return;
     const cfg = { ...needleSpring(reduceMotion), reduceMotion: ReduceMotion.Never };
@@ -200,12 +204,19 @@ export default function EdgeMeter({ bus, unit = 'smeter', height, printH, printT
   }, [bus, reduceMotion, needle, sqlPos, dim]);
 
   // ★ The peak needle, on the SAME UI thread as the spring, pushed by where the needle IS on screen.
+  // ★★★ A throw in a UI-thread callback is a native abort: caught, handed to the JS thread once (as LedVu).
   useFrameCallback((f) => {
     'worklet';
-    const st = { pos: peak.value, heldMs: held.value };
-    const p = peakNeedleStep(st, needle.value, f.timeSincePreviousFrame ?? 16);
-    if (p !== peak.value) peak.value = p;
-    held.value = st.heldMs;
+    if (faulted.value) return;
+    try {
+      const st = { pos: peak.value, heldMs: held.value };
+      const p = peakNeedleStep(st, needle.value, f.timeSincePreviousFrame ?? 16);
+      if (p !== peak.value) peak.value = p;
+      held.value = st.heldMs;
+    } catch (e) {
+      faulted.value = 1;
+      if (onFault) scheduleOnRN(onFault, String((e as Error)?.message ?? e));
+    }
   });
 
   const needleT = useDerivedValue(() => [{ translateX: needleX(needle.value, w) }]);
@@ -215,7 +226,7 @@ export default function EdgeMeter({ bus, unit = 'smeter', height, printH, printT
 
   return (
     <View style={{ height: H, borderRadius: 3, overflow: 'hidden' }} onLayout={onLayout}>
-      {w > 0 && <Card w={w} h={H} unit={unit} printH={printH} printTop={printTop} />}
+      {w > 0 && <Card w={w} h={H} unit={unit ?? 'smeter'} printH={printH} printTop={printTop} />}
       {w > 0 && (
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: H }} pointerEvents="none">
           {/* the red squelch hand: a set-point pointer parked at the threshold, hanging from the top */}

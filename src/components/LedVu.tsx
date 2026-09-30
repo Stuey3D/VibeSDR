@@ -21,6 +21,7 @@
 import React, { useEffect, useMemo } from 'react';
 import { Text, View } from 'react-native';
 import { useDerivedValue, useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import {
   Canvas, ClipOp, Image as SkImageNode, PaintStyle, RoundedRect, Skia, TileMode, type SkCanvas, type SkImage,
 } from '@shopify/react-native-skia';
@@ -161,9 +162,12 @@ export interface LedVuProps {
   /** ★ Landscape (§9, constants/meters.ts landscapeDeck): the strip's own geometry — LEDs 9, labels
    *  6.5, padding 3 6 2 — and `labelH: 0` for the strip without labels on a small screen. */
   geom?: { padTop: number; padX: number; ledH: number; labelH: number; labelGap: number };
+  /** ★★★ The frame callback threw (on the JS thread, once): the housing puts the BAR back
+   *  (ControlsBar MeterHousing) instead of the throw aborting the app. */
+  onFault?: (message: string) => void;
 }
 
-export default function LedVu({ bus, height, shared, geom }: LedVuProps) {
+export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps) {
   const s = useUiScale();
   const [{ w }, onLayout] = useBoxSize();
   const padX = geom?.padX ?? s.r(7), padTop = geom?.padTop ?? s.r(shared ? 3 : 6), gap = s.r(4);
@@ -187,6 +191,7 @@ export default function LedVu({ bus, height, shared, geom }: LedVuProps) {
   const litState = useSharedValue<number[]>(new Array(VU_SEGMENTS).fill(0));
   const peakIdx = useSharedValue(-1);
   const peakAt  = useSharedValue(0);
+  const faulted = useSharedValue(0);
   useEffect(() => {
     if (!bus) return;
     // σ: the running std-dev of the RAW level over ~0.5 s (a fading HF signal gets a soft, wide edge;
@@ -209,38 +214,48 @@ export default function LedVu({ bus, height, shared, geom }: LedVuProps) {
    *  The eye filter (τ ≈ 100 ms, ≤ 0.35 per frame) is the ONLY easing: at 5 fps on fading HF the edge
    *  LED glides between updates instead of stepping. Steady LEDs: solid on / off with ~1 dB of
    *  hysteresis, no easing. While the squelch mutes: the plain threshold, dimmed — no σ shimmer. */
+  /* ★★★ A THROW HERE IS A NATIVE ABORT — an uncaught error in a UI-thread callback kills the app (the
+   *  11 B7 crash: meters.ts WORKLET DEFAULTS). So the frame is caught, stops drawing, and the fault is
+   *  handed to the JS thread ONCE, where the housing falls back to the bar. Not a fix for anything —
+   *  scripts/test_worklet_defaults.mjs runs this callback as the UI thread does; this is the net. */
   const thresholds = VU_THRESHOLDS as number[];
   useFrameCallback((f) => {
     'worklet';
-    const dt = f.timeSincePreviousFrame ?? 16;
-    const mu = muPos.value, sg = sigma.value;
-    const st = steadySv.value === 1, mute = muting.value === 1;
-    const was = litState.value, prev = bright.value;
-    const tgt = new Array(VU_SEGMENTS);
-    const lit = new Array(VU_SEGMENTS);
-    let top = -1, litChanged = false;
-    for (let i = 0; i < VU_SEGMENTS; i++) {
-      const t = segmentTarget(i, mu, sg, st, mute, was[i] === 1, thresholds);
-      tgt[i] = t;
-      lit[i] = t >= 0.5 ? 1 : 0;
-      if (lit[i] !== was[i]) litChanged = true;
-      if (t >= 0.5) top = i;
+    if (faulted.value) return;
+    try {
+      const dt = f.timeSincePreviousFrame ?? 16;
+      const mu = muPos.value, sg = sigma.value;
+      const st = steadySv.value === 1, mute = muting.value === 1;
+      const was = litState.value, prev = bright.value;
+      const tgt = new Array(VU_SEGMENTS);
+      const lit = new Array(VU_SEGMENTS);
+      let top = -1, litChanged = false;
+      for (let i = 0; i < VU_SEGMENTS; i++) {
+        const t = segmentTarget(i, mu, sg, st, mute, was[i] === 1, thresholds);
+        tgt[i] = t;
+        lit[i] = t >= 0.5 ? 1 : 0;
+        if (lit[i] !== was[i]) litChanged = true;
+        if (t >= 0.5) top = i;
+      }
+      if (litChanged) litState.value = lit;
+      // Peak hold: one segment above the level, full brightness, ~1 s (§4.3).
+      const ph = { idx: peakIdx.value, at: peakAt.value };
+      const pk = peakStep(ph, top, f.timestamp);
+      peakIdx.value = ph.idx; peakAt.value = ph.at;
+      if (pk >= 0) tgt[pk] = 1;
+      let changed = false;
+      const next = new Array(VU_SEGMENTS);
+      for (let i = 0; i < VU_SEGMENTS; i++) {
+        let b = st ? tgt[i] : eyeStep(prev[i], tgt[i], dt);
+        if (Math.abs(b - tgt[i]) < 0.002) b = tgt[i];
+        next[i] = b;
+        if (Math.abs(b - prev[i]) > 0.0005) changed = true;
+      }
+      if (changed) bright.value = next;
+    } catch (e) {
+      faulted.value = 1;
+      if (onFault) scheduleOnRN(onFault, String((e as Error)?.message ?? e));
     }
-    if (litChanged) litState.value = lit;
-    // Peak hold: one segment above the level, full brightness, ~1 s (§4.3).
-    const ph = { idx: peakIdx.value, at: peakAt.value };
-    const pk = peakStep(ph, top, f.timestamp);
-    peakIdx.value = ph.idx; peakAt.value = ph.at;
-    if (pk >= 0) tgt[pk] = 1;
-    let changed = false;
-    const next = new Array(VU_SEGMENTS);
-    for (let i = 0; i < VU_SEGMENTS; i++) {
-      let b = st ? tgt[i] : eyeStep(prev[i], tgt[i], dt);
-      if (Math.abs(b - tgt[i]) < 0.002) b = tgt[i];
-      next[i] = b;
-      if (Math.abs(b - prev[i]) > 0.0005) changed = true;
-    }
-    if (changed) bright.value = next;
   });
 
   // ── The ring ──
