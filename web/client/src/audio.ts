@@ -23,8 +23,22 @@ import { decodeVibeAdpcmFrame } from '../../../src/services/imaAdpcm';
 // It only ever worked on the dev Mac because loopback is exempt from the policy and gets raw PCM.
 // UberSDR ships this same library (`opus-decoder.min.js`, wasm-audio-decoders, MIT) and plays
 // fine over plain http on a LAN IP — WASM has no secure-context gate and no platform media stack
-// to disagree with. The wasm is inlined in the module, so the single-file page stays self-contained.
-import { OpusDecoder } from 'opus-decoder';
+// to disagree with. The wasm is inlined in the module, so it needs no file of its own on the server.
+// ★★ FETCHED ONLY WHERE IT IS NEEDED (2026-09-30). It is ~88 KB of script, and a browser with
+//    WebCodecs Opus (any https listener on a current Chrome, Edge or Firefox — the tunnel and the
+//    directory) never touches it. build-web.mjs splits the import() below into its own file; a
+//    browser WITHOUT AudioDecoder (every plain-http LAN listener) starts fetching it the moment this
+//    module runs, so it has long arrived by the time START RADIO is pressed.
+import type { OpusDecoder } from 'opus-decoder';
+type OpusModule = typeof import('opus-decoder');
+let opusModule: Promise<OpusModule> | null = null;
+/** The WASM Opus decoder's module, fetched once. A failed fetch is forgotten so the next call retries. */
+function loadOpusModule(): Promise<OpusModule> {
+  opusModule ??= import('opus-decoder').catch((e) => { opusModule = null; throw e; });
+  return opusModule;
+}
+// ★ The typeof guard is the build's rule for WebCodecs (build-web.mjs) — and the right test anyway.
+if (typeof AudioDecoder === 'undefined') void loadOpusModule().catch(() => { /* retried when a packet needs it */ });
 import { AudioSelfHeal, type HealDecision } from '../../../src/services/audioSelfHeal';
 import { initSegment, mediaSegment } from './fmp4';
 import { guard, guardCallbacks, guardJson, noteFault } from '../../../src/services/faultLog';
@@ -1367,9 +1381,34 @@ export class AudioPlayer {
    *  attempted once; per-packet decode errors are a separate thing and still counted in _failOpus. */
   private wasmDead = false;
 
+  /** The decoder's module, once fetched (see loadOpusModule at the top of this file). */
+  private wasmMod: OpusModule | null = null;
+  private wasmFetching = false;
+  /** When the last fetch failed — a dropped link is retried, but not once per 20 ms packet. */
+  private wasmFetchFailedAt = 0;
+
   private _ensureWasm(ch: number) {
     if (this.wasmDead) return;
     if (this.wasmDec && this.wasmCh === ch) return;
+    // ★★ THE CODE MAY NOT BE HERE YET: it is its own file, fetched on demand. Packets that arrive
+    //    meanwhile are dropped exactly like the ones during the decoder's own start-up below —
+    //    and the listener is told nothing, because on a LAN the file is normally already here.
+    if (!this.wasmMod) {
+      this.wasmCh = ch;
+      if (this.wasmFetching || performance.now() - this.wasmFetchFailedAt < 3000) return;
+      this.wasmFetching = true;
+      loadOpusModule().then((m) => {
+        this.wasmFetching = false;
+        this.wasmMod = m;
+        this._ensureWasm(this.wasmCh);
+      }).catch((e) => {
+        this.wasmFetching = false;
+        this.wasmFetchFailedAt = performance.now();
+        this.opusStuck = true;      // said on the meter until a retry lands
+        console.error('[audio] the WASM Opus decoder could not be fetched — retrying', e);
+      });
+      return;
+    }
     try { this.wasmDec?.free(); } catch {}
     this.wasmReady = false;
     this.wasmCh = ch;
@@ -1378,7 +1417,7 @@ export class AudioPlayer {
       // ★ Construction itself can throw — the module's WASM payload is CRC-checked, and a page
       //   that mangled it fails HERE, not at decode time. That distinction was invisible while
       //   this ran unguarded once per packet.
-      dec = new OpusDecoder({ channels: ch });
+      dec = new this.wasmMod.OpusDecoder({ channels: ch });
     } catch (e) {
       console.error('[audio] the WASM Opus decoder would not build — audio cannot play', e);
       this.wasmDead = true;

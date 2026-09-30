@@ -2988,10 +2988,11 @@ select.btn { padding: 6px 8px; }
                    padding: 2px 4px; }
 </style>
 
-<!-- Lock-screen / Now Playing artwork, composited at runtime from the same two
-     images the phone uses (see VibeStreamService.refreshArtwork). -->
-<img id="artBase" src="__ARTWORK_BASE__" alt="" hidden>
-<img id="artInset" src="__ARTWORK_INSET__" alt="" hidden>
+<!-- Lock-screen / Now Playing artwork — the VibeServer mark (see buildArtwork in main.ts).
+     ★★ NO src HERE: the image is /icon-512.png, fetched when the radio STARTS, not at first paint.
+        It used to be inlined twice as a data: URI (72 KB of every page, for a picture most
+        listeners' browsers never show). The second copy, #artInset, was read by nothing. -->
+<img id="artBase" alt="" hidden>
 
 <div id="splash">
   <!-- ★★ THE BAND'S LAST 24 HOURS, AS THE BACKGROUND. Stuart, 2026-08-05: "I wonder if it would

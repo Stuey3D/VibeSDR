@@ -230,6 +230,13 @@ printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
 node scripts/test-server-decoders.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★★ THE WEB CLIENT, AS THE SERVER HANDS IT OUT: the page and every /vs/ script, in every encoding,
+#     byte for byte against web/dist, `immutable` on the scripts and no-store on the page, through a
+#     /r/<id>/ prefix as well. Same VIBESERVER_BIN rule as above: not run without one.
+printf '\n\033[1m── web client serving (end to end) ──\033[0m\n'
+node scripts/test-web-serving.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
 #     pbxproj owns MARKETING_VERSION and only `expo prebuild` would copy it across, which this
 #     project deliberately never runs — so the App Store shipped 10.2 while the app's own About

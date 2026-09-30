@@ -55,7 +55,8 @@ import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
-import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './admin';
+// ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
+import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
 import { httpBase, wsBase } from './origin';
 import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTicketQuery } from './adminticket';
 
@@ -80,8 +81,9 @@ let adminSignedInThisView = false;
 import {
   saveRecording, listRecordings, deleteRecording, formatSize, formatDuration,
 } from './recordings';
-/* ★ The shared vector-basemap renderer, carried as a string — see ensureVibeMap(). */
-import { VIBEMAP_JS } from './generated/vibemapSource';
+/* ★ The shared vector-basemap renderer, carried as a string — see ensureVibeMap(). ★★ FETCHED ONLY
+ *  WHEN A MAP OPENS (openSpotsMap): ~98 KB that most listeners never use, so it is its own file and
+ *  the page does not carry it (build-web.mjs splits every import() into one). */
 import { probeMapGL, type MapGLKit } from './mapgl';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -7451,9 +7453,14 @@ function buildArtwork() {
   const base = $<HTMLImageElement>('artBase');
   const use = () => {
     if (!base.naturalWidth) return;
-    artworkUrl = base.src;      // already a data: URI, baked in at build time
+    artworkUrl = base.src;      // an absolute URL on this server (the <img> resolves it)
     updateMediaSession();
   };
+  // ★★ FETCHED HERE, when the radio starts — never at first paint. It was a data: URI baked into
+  //    the page, 36 KB of every visit (twice over, with an unused copy) for a picture only the OS
+  //    media controls show. The server has always served the same file as the PWA icon, and a
+  //    front door answers /icon too, so an absolute path works from every page.
+  if (!base.getAttribute('src')) { base.onload = use; base.src = '/icon-512.png'; return; }
   if (base.complete) use(); else base.onload = use;
 }
 
@@ -11357,14 +11364,24 @@ function openSpotsMap() {
   const w = window.open('', '_blank');
   if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
   spotsMapWin = w;
-  void probeMapGL().then((kit) => {
+  // ★ The renderer source comes with the map, not with the page (see the import note at the top).
+  //   Fetched even when the GPU map is on offer: the window falls back to it if MapLibre fails there.
+  void Promise.all([probeMapGL(), import('./generated/vibemapSource')]).then(([kit, m]) => {
     if (w.closed) return;
-    w.document.write(spotsMapHtml(kit));
+    w.document.write(spotsMapHtml(kit, m.VIBEMAP_JS));
+    w.document.close();
+  }).catch((e) => {
+    // ★ A dropped link while the map's code was on its way. Say so in the window that is open,
+    //   rather than leaving it blank.
+    console.error('[map] the map could not load', e);
+    if (w.closed) return;
+    w.document.write('<!doctype html><meta charset="utf-8"><body style="background:#080601;color:#ffb833;'
+      + 'font:14px monospace;padding:2em">The map did not finish loading. Close this window and try again.');
     w.document.close();
   });
 }
 
-function spotsMapHtml(kit: MapGLKit | null): string {
+function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string): string {
   const me = myPos();
   const pts = spotsMapPoints();
 

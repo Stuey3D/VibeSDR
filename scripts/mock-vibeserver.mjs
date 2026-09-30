@@ -301,7 +301,20 @@ const server = createServer(async (req, res) => {
     res.end(body);
     return;
   }
-  if (req.url === '/' || req.url.startsWith('/index')) {
+  // ★ The page's scripts (build-web.mjs writes them beside it). The same /r/<id>/ prefix rule as
+  //   the real server, so a page opened under a radio prefix still finds them.
+  const vs = /^(?:\/r\/[^/]+)?\/vs\/([A-Za-z0-9._-]+\.js)(?:[?#]|$)/.exec(req.url);
+  if (vs) {
+    try {
+      const js = await readFile(path.join(root, 'web/dist/vs', vs[1]));
+      res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(js);
+    } catch {
+      res.writeHead(404).end();
+    }
+    return;
+  }
+  if (req.url === '/' || req.url.startsWith('/index') || req.url.startsWith('/?')) {
     try {
       const html = await readFile(path.join(root, 'web/dist/vibesdr.html'), 'utf8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });

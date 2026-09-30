@@ -19,13 +19,16 @@ import { fetchAuthChallenge, vibeAuthToken } from './auth';
 import { isoToFlag } from '../../../src/services/rdsCountry';
 import { httpBase } from './origin';
 import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
-import { VIBEMAP_JS } from './generated/vibemapSource';
 import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
  *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
- *  ✗ Not a fetch: the admin page must work on a LAN server with no route to the internet. */
-function ensureVibeMap(): void {
+ *  ✗ Not from the internet: the admin page must work on a LAN server with no route out.
+ *  ★★ The source is a separate file OF THIS SERVER's client (import(), split by build-web.mjs), so
+ *     only an admin who opens the Leaflet map ever downloads it — never a listener. */
+async function ensureVibeMap(): Promise<void> {
+  if ((window as any).VibeMap) return;
+  const { VIBEMAP_JS } = await import('./generated/vibemapSource');
   if ((window as any).VibeMap) return;
   const el = document.createElement('script');
   el.textContent = VIBEMAP_JS;
@@ -655,13 +658,15 @@ async function makeCountryMap(host: HTMLElement): Promise<boolean> {
     }
   }
   if (!await loadLeaflet()) return false;
+  // ★ Before anything is drawn: if the renderer's file cannot be fetched (a link that dropped),
+  //   answer "no map" and let the next refresh try again, rather than drawing an empty frame.
+  try { await ensureVibeMap(); } catch (e) { console.error('Admin map: the renderer did not load', e); return false; }
   const L = (window as any).L;
   ccL = L;
 
   {
     host.hidden = false;
     host.style.height = '360px';
-    ensureVibeMap();
     ccMap = L.map(host, {
       worldCopyJump: true, zoomControl: true, attributionControl: true,
       // ★ Nobody navigates this map; it is a picture of where people are. Scroll-zoom would steal
@@ -690,7 +695,6 @@ async function makeCountryMap(host: HTMLElement): Promise<boolean> {
      *     and country names"*.
      *  ★ The dark CSS filter that used to sit on the tile pane is gone with the tiles: the vector
      *    map is already dark by design, and filtering it would fight its own palette. */
-    ensureVibeMap();
     (window as any).VibeMap.attach(ccMap, { dataBase: '/mapdata/v1/', profile: 'admin' });
   }
   return true;
