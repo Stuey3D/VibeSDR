@@ -48,6 +48,12 @@ import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
+import { useFaceplateSettings } from '../contexts/FaceplateContext';
+import {
+  CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, DECODER_BG_CHOICES, CONTROLS, LED, COLOUR_NAMES,
+  TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows,
+  type PaneChoice, type Chassis, type SignalMeter, type DecoderBackground,
+} from '../constants/faceplate';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -561,6 +567,151 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
   return <Text style={[styles.subLabel, small && styles.subLabelSmall]}>{label}</Text>;
 }
 
+// ── CONTROL CUSTOMISATION (faceplates brief §1; Popup mockup `kind: 'custom'`) ────────────────
+//
+// ★ Every row is an INPUT SELECTOR: a label and a group of keys, exactly one lit. On the default
+//   chassis they draw as today's menu keys (gold selection). On silver/black they become dome keys
+//   with a 4 × 4 LED pip (§10.3) — that arrives with PopupShell (row 10), and SelectorKey is the
+//   ONLY place this pane draws a key, so it is a change to SelectorKey's look, not to the pane.
+
+/** One key in a selector row: a legend, or (colour rows) a lit LED dot in that colour. */
+function SelectorKey({ label, dot, active, onPress, a11y }: {
+  label?: string; dot?: string; active: boolean; onPress: () => void; a11y?: string;
+}) {
+  const { focused, viewRef } = useNavButton(onPress);
+  return (
+    <TouchableOpacity
+      ref={viewRef as any}
+      style={[styles.btn, styles.selKey, active && styles.btnActive, focused && styles.btnFocused]}
+      onPress={onPress} hitSlop={4} activeOpacity={0.7}
+      accessibilityRole="button" accessibilityState={{ selected: active }}
+      accessibilityLabel={a11y ?? label}
+    >
+      {dot
+        ? <View style={[styles.selDot, { backgroundColor: dot, shadowColor: dot }]} />
+        : <Text style={[styles.btnText, styles.selKeyText, active && styles.btnTextActive]}
+                numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{label}</Text>}
+    </TouchableOpacity>
+  );
+}
+
+function SelectorRow<T extends string>({ label, choices, value, onPick }: {
+  label: string; choices: PaneChoice<T>[]; value: T; onPick: (v: T) => void;
+}) {
+  return (
+    <View style={styles.ctrlRow}>
+      <Text style={styles.ctrlLabel}>{label}</Text>
+      <BtnRow>
+        {choices.map(c => (
+          <SelectorKey key={c.value} label={c.label} active={c.value === value} onPress={() => onPick(c.value)} />
+        ))}
+      </BtnRow>
+    </View>
+  );
+}
+
+function ControlCustomisationPane({
+  onBack, drumMode, onDrumMode, vfoKeys, onVfoKeys, zoomKeys, onZoomKeys,
+  wheelAction, onWheelAction, mediaSkip, onMediaSkip, hapticsEnabled, onHaptics, hapticsHardware,
+}: {
+  onBack: () => void;
+  drumMode: 'normal' | 'precise';           onDrumMode?: (m: 'normal' | 'precise') => void;
+  vfoKeys: boolean;                         onVfoKeys?: (on: boolean) => void;
+  zoomKeys: boolean;                        onZoomKeys?: (on: boolean) => void;
+  wheelAction: 'zoom' | 'tune';             onWheelAction?: (m: 'zoom' | 'tune') => void;
+  mediaSkip: 'step' | 'bookmark';           onMediaSkip?: (m: 'step' | 'bookmark') => void;
+  hapticsEnabled: boolean;                  onHaptics?: (on: boolean) => void;
+  hapticsHardware: boolean;
+}) {
+  // ★ App-wide, not per server (FaceplateContext) — the faceplate is the hardware in your hand.
+  const { settings: fp, setDisplay, setText, set } = useFaceplateSettings();
+  const texts = textChoices(fp.display);
+  return (
+    <View style={styles.subPanel}>
+      <TouchableOpacity style={styles.backRow} onPress={onBack} activeOpacity={0.7}>
+        <Text style={styles.backRowChevron}>‹  BACK</Text>
+        <Text style={styles.backRowTitle}>CONTROL CUSTOMISATION</Text>
+      </TouchableOpacity>
+
+      {/* ── FACEPLATE ── */}
+      <SubLabel label="FACEPLATE" />
+      <SelectorRow label="CHASSIS" choices={CHASSIS_CHOICES} value={fp.chassis}
+        onPick={(v: Chassis) => set({ chassis: v })} />
+      {/* ★ Display has side effects (resolver §1): Nixie takes the controls to neon and locks the
+          text; leaving it with neon controls puts them on amber. withDisplay() owns all of that. */}
+      <SelectorRow label="DISPLAY" choices={DISPLAY_CHOICES} value={fp.display} onPick={setDisplay} />
+      <View style={styles.ctrlRow}>
+        <Text style={styles.ctrlLabel}>CONTROLS</Text>
+        <BtnRow>
+          {CONTROLS.map(c => (
+            <SelectorKey key={c} dot={controlsDot(fp.chassis, c)} a11y={`${COLOUR_NAMES[c]} controls`}
+              active={fp.controls === c} onPress={() => set({ controls: c })} />
+          ))}
+        </BtnRow>
+      </View>
+      {/* ★★ TEXT offers ONLY what the display technology came in (§1) — never white on a VFD —
+          and under Nixie it is a note, not a greyed row of keys that do nothing (§2). */}
+      <View style={styles.ctrlRow}>
+        <Text style={styles.ctrlLabel}>TEXT</Text>
+        {texts ? (
+          <BtnRow>
+            {texts.map(t => (
+              <SelectorKey key={t} dot={LED[t].core} a11y={`${COLOUR_NAMES[t]} text`}
+                active={fp.text === t} onPress={() => setText(t)} />
+            ))}
+          </BtnRow>
+        ) : (
+          <Text style={styles.selNote}>{TEXT_LOCKED_NOTE}</Text>
+        )}
+      </View>
+      <SelectorRow label="SIGNAL METER" choices={METER_CHOICES} value={fp.meter}
+        onPick={(v: SignalMeter) => set({ meter: v })} />
+      <SelectorRow label="DECODERS" choices={DECODER_BG_CHOICES} value={fp.decoderBg}
+        onPick={(v: DecoderBackground) => set({ decoderBg: v })} />
+
+      {/* ── TUNING & ZOOM — moved from the menu's CONTROLS section, behaviour unchanged ── */}
+      <SubLabel label="TUNING & ZOOM" />
+      {/* Drum or HiFi tuner keys, per control. Deliberately two rows rather than one switch:
+          mixing them (keys to tune, drum to zoom) is a real preference, and it is also the
+          accessibility route — a labelled target for anyone who cannot make a drag gesture. */}
+      <SelectorRow label="TUNE" value={vfoKeys ? 'keys' : 'drum'}
+        choices={[{ value: 'drum', label: 'DRUM' }, { value: 'keys', label: 'KEYS' }]}
+        onPick={(v: string) => onVfoKeys?.(v === 'keys')} />
+      <SelectorRow label="ZOOM" value={zoomKeys ? 'keys' : 'drum'}
+        choices={[{ value: 'drum', label: 'DRUM' }, { value: 'keys', label: 'KEYS' }]}
+        onPick={(v: string) => onZoomKeys?.(v === 'keys')} />
+      {/* DRUM FEEL is the old DRUMS NORMAL/PRECISE, renamed: the pane now has several drum rows. */}
+      <SelectorRow label="DRUM FEEL" value={drumMode}
+        choices={[{ value: 'normal', label: 'NORMAL' }, { value: 'precise', label: 'PRECISE' }]}
+        onPick={(v: 'normal' | 'precise') => onDrumMode?.(v)} />
+      {/* ★ ONE question for pointing devices, not a layout matrix. The vertical wheel is the only
+          input every device has; the OTHER control lands automatically on whatever orthogonal
+          axis exists (horizontal wheel, tilt wheel, trackpad left/right). */}
+      <SelectorRow label="WHEEL" value={wheelAction}
+        choices={[{ value: 'zoom', label: 'ZOOM' }, { value: 'tune', label: 'TUNE' }]}
+        onPick={(v: 'zoom' | 'tune') => onWheelAction?.(v)} />
+      {/* Lock-screen / car-stereo skip buttons: tune by step, or jump bookmarks like the VTS arrows. */}
+      <SelectorRow label="MEDIA ⏮⏭" value={mediaSkip}
+        choices={[{ value: 'step', label: 'TUNE STEP' }, { value: 'bookmark', label: 'BOOKMARK' }]}
+        onPick={(v: 'step' | 'bookmark') => onMediaSkip?.(v)} />
+
+      {/* ── FEEL ── */}
+      <SubLabel label="FEEL" />
+      {feelRows(hapticsHardware).map(r => r === 'haptics' ? (
+        // ★ Its own row now, not a key squeezed onto the drums row: it covers every dome key as
+        //   well as the drums (§5). Hidden with no haptic motor — a switch that can do nothing.
+        <SelectorRow key={r} label="HAPTICS" value={hapticsEnabled ? 'on' : 'off'}
+          choices={[{ value: 'off', label: 'OFF' }, { value: 'on', label: 'ON' }]}
+          onPick={(v: string) => onHaptics?.(v === 'on')} />
+      ) : (
+        <SelectorRow key={r} label="STEADY LEDS" value={fp.steadyLeds ? 'on' : 'off'}
+          choices={[{ value: 'off', label: 'OFF' }, { value: 'on', label: 'ON' }]}
+          onPick={(v: string) => set({ steadyLeds: v === 'on' })} />
+      ))}
+    </View>
+  );
+}
+
 /**
  * iCloud sync: the on/off switch and, more importantly, whether it is WORKING.
  *
@@ -788,6 +939,9 @@ function MenuSheetBody({
   // server features). FT8/FT4 digital spots are decoded locally, so they stay.
   const isLocal = !!onLocalHardware;
   const [dispSettingsOpen, setDispSettingsOpen] = useState(false);
+  /** The CONTROL CUSTOMISATION pane (faceplates brief §1) — replaces the menu content, like
+   *  DISPLAY SETTINGS. */
+  const [custOpen, setCustOpen] = useState(false);
 
   // ── Keyboard navigation of the sheet ────────────────────────────────────────
   // Up/down between rows, left/right within a row, Enter to activate. The machinery
@@ -904,6 +1058,7 @@ function MenuSheetBody({
     if (dabOpen)          { setDabOpen(false); return; }
     if (bookmarksOpen)    { setBookmarksOpen(false); return; }
     if (dispSettingsOpen) { setDispSettingsOpen(false); return; }
+    if (custOpen)         { setCustOpen(false); return; }
     // Nothing nested open — leave the menu itself to Esc, which SDRScreen owns.
   };
 
@@ -988,7 +1143,7 @@ function MenuSheetBody({
             {/* Display settings is its OWN view — it REPLACES the main menu
                 content instead of expanding inline over it (inline blended in
                 and was confusing to read). */}
-            {!dispSettingsOpen && !bookmarksOpen && (<>
+            {!dispSettingsOpen && !bookmarksOpen && !custOpen && (<>
 
             {/* ── LOCAL HARDWARE (V4 Android — RTL-SDR controls submenu) ── */}
             {onLocalHardware && (<>
@@ -1322,7 +1477,19 @@ function MenuSheetBody({
               </View>
             )}
 
-            {!dispSettingsOpen && !bookmarksOpen && (<>
+            {custOpen && (
+              <ControlCustomisationPane
+                onBack={() => setCustOpen(false)}
+                drumMode={drumMode} onDrumMode={onDrumMode}
+                vfoKeys={vfoKeys} onVfoKeys={onVfoKeys}
+                zoomKeys={zoomKeys} onZoomKeys={onZoomKeys}
+                wheelAction={wheelAction} onWheelAction={onWheelAction}
+                mediaSkip={mediaSkip} onMediaSkip={onMediaSkip}
+                hapticsEnabled={hapticsEnabled} onHaptics={onHaptics} hapticsHardware={hapticsHardware}
+              />
+            )}
+
+            {!dispSettingsOpen && !bookmarksOpen && !custOpen && (<>
 
 
             {/* SERVER MAPS relocated to ModeSelector (§4.4) — same "what's on this
@@ -1332,62 +1499,17 @@ function MenuSheetBody({
                (§4.3) — a decoder rides on the demod, so it belongs in the demodulator menu. */}
 
             {/* ── CONTROLS ───────────────────────────────────────── */}
+            {/* ★★ ONE KEY. Everything controls-related (the faceplate, the drum/keys choices, the
+                wheel, the media keys, haptics) lives in the CONTROL CUSTOMISATION pane below, which
+                replaces the menu content like DISPLAY SETTINGS (faceplates brief §1). The SIGNAL
+                METER *unit* stays in DISPLAY SETTINGS: it is a display choice, not the faceplate.
+                ★ AGENTS.md: the sdrTour `schemes` card and its illustration say where these live —
+                  move them with this pane or the tour sends people to a section that is gone. */}
             <SectionLabel label="CONTROLS" icon="controls" />
-            {/* SIGNAL METER unit moved to DISPLAY SETTINGS (it's a display choice). */}
-            {/* ★ DISPLAY STYLE is back — as the faceplate's DISPLAY (hyper / nixie / dot / seg), with
-                the chassis and colours, in the CONTROL CUSTOMISATION pane (faceplates brief §1).
-                The settings exist and persist (FaceplateContext, `lsv_faceplate`); the pane that
-                edits them is not built yet, so there is deliberately no row here until it is. */}
-            <View style={styles.ctrlRow}>
-              <Text style={styles.ctrlLabel}>DRUMS</Text>
-              <BtnRow>
-                <Btn label="NORMAL"    active={drumMode==='normal'}  onPress={() => onDrumMode?.('normal')} />
-                <Btn label="PRECISE"   active={drumMode==='precise'} onPress={() => onDrumMode?.('precise')} />
-                {hapticsHardware && (
-                  <Btn label="✦ HAPTICS" active={hapticsEnabled}     onPress={() => onHaptics?.(!hapticsEnabled)} />
-                )}
-              </BtnRow>
-            </View>
-            {/* Drum or HiFi tuner keys, per control. Deliberately two rows rather
-                than one switch: mixing them (keys to tune, drum to zoom) is a
-                real preference, and it is also the accessibility route — a
-                labelled target for anyone who cannot make a drag gesture. */}
-            <View style={styles.ctrlRow}>
-              <Text style={styles.ctrlLabel}>TUNE</Text>
-              <BtnRow>
-                <Btn label="DRUM" active={!vfoKeys} onPress={() => onVfoKeys?.(false)} />
-                <Btn label="KEYS" active={vfoKeys}  onPress={() => onVfoKeys?.(true)} />
-              </BtnRow>
-            </View>
-            <View style={styles.ctrlRow}>
-              <Text style={styles.ctrlLabel}>ZOOM</Text>
-              <BtnRow>
-                <Btn label="DRUM" active={!zoomKeys} onPress={() => onZoomKeys?.(false)} />
-                <Btn label="KEYS" active={zoomKeys}  onPress={() => onZoomKeys?.(true)} />
-              </BtnRow>
-            </View>
-            {/* ★ ONE question for pointing devices, not a layout matrix. The vertical
-                wheel is the only input every device has, so it is the only thing worth
-                asking; the OTHER control lands automatically on whatever orthogonal
-                axis exists (horizontal wheel, tilt wheel, trackpad left/right). */}
-            <View style={styles.ctrlRow}>
-              <Text style={styles.ctrlLabel}>WHEEL</Text>
-              <BtnRow>
-                <Btn label="ZOOM" active={wheelAction === 'zoom'} onPress={() => onWheelAction?.('zoom')} />
-                <Btn label="TUNE" active={wheelAction === 'tune'} onPress={() => onWheelAction?.('tune')} />
-              </BtnRow>
-            </View>
-            {/* Lock-screen / car-stereo skip buttons: tune by step, or jump
-                bookmarks like the VTS arrows */}
-            <View style={styles.ctrlRow}>
-              <Text style={styles.ctrlLabel}>MEDIA ⏮⏭</Text>
-              <BtnRow>
-                <Btn label="TUNE STEP" active={mediaSkip==='step'}
-                     onPress={() => onMediaSkip?.('step')} />
-                <Btn label="BOOKMARK SKIP" active={mediaSkip==='bookmark'}
-                     onPress={() => onMediaSkip?.('bookmark')} />
-              </BtnRow>
-            </View>
+            <BtnRow>
+              <Btn label={'CONTROL CUSTOMISATION  ›'} full active={custOpen}
+                onPress={() => setCustOpen(true)} />
+            </BtnRow>
 
             {/* ── SERVER PAGES — in-app browser view. OWRX bundles map + files
                    gallery (SSTV/WEFAX/Navtex images) + settings, so we link those
@@ -1827,6 +1949,15 @@ const styles = StyleSheet.create({
 
   ctrlRow:   { paddingVertical: 4, gap: 4 },
   ctrlLabel: { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 1.5 },
+  // CONTROL CUSTOMISATION selector keys — share the row evenly (six colour keys, or TRANSPARENT /
+  // SOLID) so no key wraps onto a line of its own on an SE.
+  selKey:     { flex: 1, paddingHorizontal: 4, minHeight: 44 },
+  selKeyText: { fontSize: 13 },
+  // A lit LED: the colour, with its own glow (iOS shadow; Android draws the dot without the halo).
+  selDot:     { width: 12, height: 12, borderRadius: 6, shadowOpacity: 0.9, shadowRadius: 4,
+                shadowOffset: { width: 0, height: 0 } },
+  selNote:    { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontStyle: 'italic',
+                paddingVertical: 10, paddingHorizontal: 2 },
 
   swatchRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingVertical: 4 },
   swatch:     { width: 32, height: 32, borderRadius: 16, borderWidth: 3, borderColor: 'transparent' },

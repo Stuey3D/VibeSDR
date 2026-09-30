@@ -36,6 +36,10 @@ export interface FaceplateSettings {
   text:      TextColour;
   meter:     SignalMeter;
   decoderBg: DecoderBackground;
+  /** §4.4 "Steady LEDs": the LED VU's edge segment solid on/off with ~1 dB hysteresis instead of the
+   *  statistical partial brightness. Stored now (the CONTROL CUSTOMISATION pane's FEEL group); the
+   *  VU that reads it arrives with row 5, which also ORs in the OS Reduce Motion setting. */
+  steadyLeds: boolean;
   /** ★ The user's text colour, remembered PER DISPLAY (§1: "Remember the user's choice per display
    *  if cheap to do" — it is). Leaving Hyperlegible-white for dot matrix falls back to teal; coming
    *  back restores white rather than leaving them on teal. */
@@ -61,7 +65,7 @@ export const TEXT_ALLOWED: Record<DisplayStyle, TextColour[]> = {
 /** §1 defaults. `display` is overwritten by the font migration on first load (see migrate…). */
 export const DEFAULT_SETTINGS: FaceplateSettings = {
   chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
-  meter: 'bar', decoderBg: 'transparent', textByDisplay: {},
+  meter: 'bar', decoderBg: 'transparent', steadyLeds: false, textByDisplay: {},
 };
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
@@ -251,8 +255,59 @@ export function parseSettings(json: string | null, legacyThemeName?: string | nu
     text,
     meter:     pick(raw.meter, METERS, 'bar'),
     decoderBg: pick(raw.decoderBg, DECODER_BGS, 'transparent'),
+    steadyLeds: raw.steadyLeds === true,
     textByDisplay,
   };
+}
+
+// ── The CONTROL CUSTOMISATION pane (§1) ───────────────────────────────────────
+//
+// ★ What the pane offers is decided HERE, not in MenuSheet, so the rules (which text colours a
+//   display may show, when the TEXT row is a note, when HAPTICS is hidden) are testable and there
+//   is one copy of them. Order and labels are the Popup mockup's (`kind: 'custom'`), which wins over
+//   the brief: DISPLAY reads NIXIE · HYPER · DOT · VCR, and the meters BAR · LED VU · ANALOGUE.
+
+export interface PaneChoice<T extends string> { value: T; label: string }
+
+export const CHASSIS_CHOICES: PaneChoice<Chassis>[] = [
+  { value: 'default', label: 'DEFAULT' }, { value: 'silver', label: 'SILVER' }, { value: 'black', label: 'BLACK' },
+];
+export const DISPLAY_CHOICES: PaneChoice<DisplayStyle>[] = [
+  { value: 'nixie', label: 'NIXIE' }, { value: 'hyper', label: 'HYPER' },
+  { value: 'dot',   label: 'DOT' },   { value: 'seg',   label: 'VCR' },
+];
+export const METER_CHOICES: PaneChoice<SignalMeter>[] = [
+  { value: 'bar', label: 'BAR' }, { value: 'vu', label: 'LED VU' }, { value: 'edge', label: 'ANALOGUE' },
+];
+export const DECODER_BG_CHOICES: PaneChoice<DecoderBackground>[] = [
+  { value: 'transparent', label: 'TRANSPARENT' }, { value: 'solid', label: 'SOLID' },
+];
+
+/** The note the TEXT row shows instead of colours under Nixie (§1; the mockup's exact words). */
+export const TEXT_LOCKED_NOTE = 'Locked to neon by the Nixie display';
+
+/** Spoken names for the colour keys, which carry no legend — only a lit LED dot. */
+export const COLOUR_NAMES: Record<ControlsColour | TextColour, string> = {
+  green: 'Green', red: 'Red', amber: 'Amber', blue: 'Blue', white: 'White', teal: 'Teal', neon: 'Neon',
+};
+
+/** The TEXT row's colour keys for a display — ONLY the ones it may show — or null when the row is
+ *  the locked-to-neon note (Nixie). Reads TEXT_ALLOWED, so it can never offer white on dot/seg. */
+export function textChoices(display: DisplayStyle): TextColour[] | null {
+  const allowed = TEXT_ALLOWED[display];
+  return allowed.length ? allowed : null;
+}
+
+/** The lit LED dot a CONTROLS key shows: the colour as the deck will draw it on this chassis
+ *  (today's drum green on the default chassis, so the dot matches the wells it lights). */
+export function controlsDot(chassis: Chassis, c: ControlsColour): string {
+  return resolveControlsColour(chassis, c).core;
+}
+
+/** FEEL rows, in order. HAPTICS is hidden on a device with no haptic motor (§1: "as today") — a
+ *  switch whose every use is a no-op. STEADY LEDS is always offered. */
+export function feelRows(hapticsHardware: boolean): Array<'haptics' | 'steadyLeds'> {
+  return hapticsHardware ? ['haptics', 'steadyLeds'] : ['steadyLeds'];
 }
 
 // ── Chassis tokens ────────────────────────────────────────────────────────────

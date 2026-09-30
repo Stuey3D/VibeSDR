@@ -10,6 +10,8 @@ import {
   DEFAULT_SETTINGS, DISPLAYS, TEXTS, CONTROLS, TEXT_ALLOWED, NEON_TEXT, FONT_NIXIE,
   resolveTextColour, resolveFaceplate, resolveControlsColour, withDisplay, withText,
   parseSettings, migrateLegacyFont, ledA, hotA, LED,
+  CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, DECODER_BG_CHOICES, CHASSIS, METERS, DECODER_BGS,
+  COLOUR_NAMES, textChoices, controlsDot, feelRows,
   type FaceplateSettings,
 } from '../src/constants/faceplate.ts';
 
@@ -107,6 +109,31 @@ eq('default green glow clamps like G()', ledA(g, 1.4), 'hsla(120,100%,45%,1)');
 eq('default green hot = the old hsl(120,100,78)', hotA(g, 0.95), 'hsla(120,100%,78%,0.95)');
 eq('silver green is the brief\'s LED', resolveControlsColour('silver', 'green').rgb, LED.green.rgb);
 eq('neon controls on the default chassis light the legends neon', resolveFaceplate({ ...DEFAULT_SETTINGS, controls: 'neon' }).keyLegend.color, NEON_TEXT.core);
+
+// ── §1: the CONTROL CUSTOMISATION pane's rules ───────────────────────────────
+eq('pane offers every chassis', CHASSIS_CHOICES.map(c => c.value).sort(), [...CHASSIS].sort());
+eq('pane offers every display, in the mockup\'s order', DISPLAY_CHOICES.map(c => c.label), ['NIXIE', 'HYPER', 'DOT', 'VCR']);
+eq('pane offers every display', DISPLAY_CHOICES.map(c => c.value).sort(), [...DISPLAYS].sort());
+eq('pane offers every meter', METER_CHOICES.map(c => c.value), METERS);
+eq('pane offers both decoder backgrounds', DECODER_BG_CHOICES.map(c => c.value), DECODER_BGS);
+eq('Nixie: the TEXT row is the locked note, not keys', textChoices('nixie'), null);
+for (const d of ['dot', 'seg'] as const) {
+  ok(`${d}: TEXT never offers white (§13.4)`, !textChoices(d)!.includes('white'));
+  eq(`${d}: TEXT offers the VFD colours, teal first`, textChoices(d), ['teal', 'green', 'blue', 'amber', 'red']);
+}
+eq('hyper: TEXT offers all six', textChoices('hyper')!.length, 6);
+// Every colour the pane can pick must survive withText — or the key would light and do nothing.
+for (const d of DISPLAYS) for (const t of textChoices(d) ?? []) {
+  eq(`${d}: picking ${t} sticks`, withText(withDisplay(DEFAULT_SETTINGS, d), t).text, t);
+}
+eq('HAPTICS hidden without a motor; STEADY LEDS always', feelRows(false), ['steadyLeds']);
+eq('FEEL order with a motor', feelRows(true), ['haptics', 'steadyLeds']);
+eq('default-chassis green dot is today\'s drum green', controlsDot('default', 'green'), 'rgb(0,230,0)');
+eq('silver green dot is the brief\'s LED', controlsDot('silver', 'green'), LED.green.core);
+ok('every colour key has a spoken name', [...CONTROLS, ...TEXTS].every(c => !!COLOUR_NAMES[c]));
+eq('steadyLeds defaults off', DEFAULT_SETTINGS.steadyLeds, false);
+eq('steadyLeds round-trips', parseSettings(JSON.stringify({ ...DEFAULT_SETTINGS, steadyLeds: true })).steadyLeds, true);
+eq('steadyLeds: garbage → off', parseSettings(JSON.stringify({ steadyLeds: 'yes' })).steadyLeds, false);
 
 console.log(`${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
