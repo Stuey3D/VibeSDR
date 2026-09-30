@@ -184,26 +184,16 @@ async function bundle() {
   //    to anybody. `--dev` keeps the page as written, so a dev build can still be read in devtools.
   const src = await readFile(SRC_HTML, 'utf8');
   const html0 = DEV ? src : await shrinkHtml(src, { target: TARGET });
-  // Inline the RDS mark as a data URI — the page must stay self-contained (the
-  // shim serves it from a phone; there is nowhere to fetch an asset FROM).
-  // All inlined as data URIs — the page must stay self-contained (the shim serves
-  // it from a phone; there is nowhere to fetch an asset FROM).
-  const dataUri = async (rel) =>
-    `data:image/png;base64,${(await readFile(path.join(root, rel))).toString('base64')}`;
-  // replaceAll, not replace: __FAVICON__ appears twice (icon + apple-touch-icon)
-  // and replace() would leave the second one as a literal placeholder.
-  const html = html0
-    .replaceAll('__RDS_LOGO__', await dataUri('assets/rds-logo.png'))
-    // ★ The VibeServer mark, not VibeSDR's. This page is served BY VibeServer — on a Mac, a phone
-    // or a Pi — so the tab icon and the Now Playing artwork should say which thing you are
-    // listening to. It already carries the family radio glyph, so it still reads as ours.
-    .replaceAll('__FAVICON__', await dataUri('assets/vibeserver-favicon.png'))
-    // Album art for the OS media controls. The VibeServer icon is enough on its own — it already
-    // has the triangle-node inset, so the old base+inset compositing (the phone's
-    // VibeStreamService.refreshArtwork recipe) has nothing left to add here, and one image cannot
-    // half-load the way two could. The RDS station logo still overrides it when one is known.
-    .replaceAll('__ARTWORK_BASE__',  await dataUri('assets/vibeserver-art.png'))
-    .replaceAll('__ARTWORK_INSET__', await dataUri('assets/vibeserver-art.png'));
+  // ★ The RDS mark stays INLINE — it shows in the tuner bar the moment RDS locks, and at 512 bytes
+  //   a request would cost more than it carries. Lossless WebP (web/client/rds-logo.webp, made
+  //   with `cwebp -lossless -z 9 -exact` from assets/rds-logo.png, pixel-identical; every target
+  //   browser decodes it): 1,838 -> 512 bytes.
+  // ★★ Nothing else is inlined any more. The Now Playing artwork used to be — TWICE, 72 KB of
+  //    base64 in every page — and is now /icon-512.png, fetched when the radio starts (buildArtwork
+  //    in main.ts). The favicon is a real URL already (Safari refuses data: favicons).
+  const dataUri = async (rel, type) =>
+    `data:${type};base64,${(await readFile(path.join(root, rel))).toString('base64')}`;
+  const html = html0.replaceAll('__RDS_LOGO__', await dataUri('web/client/rds-logo.webp', 'image/webp'));
 
   // ★★★ THE LOADER. The first half is plain markup in the head — modulepreload for the entry and
   //     every chunk it imports statically — so the browser starts the download while the rest of

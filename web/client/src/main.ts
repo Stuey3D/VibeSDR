@@ -7453,9 +7453,14 @@ function buildArtwork() {
   const base = $<HTMLImageElement>('artBase');
   const use = () => {
     if (!base.naturalWidth) return;
-    artworkUrl = base.src;      // already a data: URI, baked in at build time
+    artworkUrl = base.src;      // an absolute URL on this server (the <img> resolves it)
     updateMediaSession();
   };
+  // ★★ FETCHED HERE, when the radio starts — never at first paint. It was a data: URI baked into
+  //    the page, 36 KB of every visit (twice over, with an unused copy) for a picture only the OS
+  //    media controls show. The server has always served the same file as the PWA icon, and a
+  //    front door answers /icon too, so an absolute path works from every page.
+  if (!base.getAttribute('src')) { base.onload = use; base.src = '/icon-512.png'; return; }
   if (base.complete) use(); else base.onload = use;
 }
 
