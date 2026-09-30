@@ -164,6 +164,10 @@ if node scripts/test-web-decoder-refusal.mjs; then pass=$((pass+1)); else fail=$
 #     resolve to today's literal colours — the pixel-identical promise, checked as data.
 #  ★ Node runs the .ts directly (type stripping), so this needs nothing installed.
 if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ WHAT A VFD CAN SHOW (faceplates §7). Every printable ASCII character is exactly one DSEG14
+#    cell (its space is 200 wide and its ! is the BLANK cell), accents fold like a display ROM,
+#    units keep their case, and a string that folds to nothing shows the frequency, never tofu.
+if node --no-warnings scripts/test_faceplate_text.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
