@@ -12,6 +12,7 @@
  */
 
 import { build } from 'esbuild';
+import { shrinkHtml } from './lib/shrink-html.mjs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -56,6 +57,8 @@ const ENTRY    = path.join(root, 'web/client/src/main.ts');
 const OUT_DIR  = path.join(root, 'web/dist');
 const OUT_HTML = path.join(OUT_DIR, 'vibesdr.html');
 
+const TARGET = ['chrome110', 'safari16', 'firefox115'];
+
 async function bundle() {
   const res = await build({
     entryPoints: [ENTRY],
@@ -71,7 +74,7 @@ async function bundle() {
       '@react-native-async-storage/async-storage':
         path.join(root, 'web/client/src/shims/asyncStorage.ts'),
     },
-    target: ['chrome110', 'safari16', 'firefox115'],
+    target: TARGET,
     minify: !process.argv.includes('--dev'),
     sourcemap: false,
     write: false,
@@ -116,7 +119,11 @@ async function bundle() {
     }
   }
 
-  const html0 = await readFile(SRC_HTML, 'utf8');
+  // ★★ THE SHIPPED PAGE CARRIES NO COMMENTS AND NO INDENTATION — see scripts/lib/shrink-html.mjs.
+  //    The ★ notes stay in index.html, where they are read; a listener's link never carried them
+  //    to anybody. `--dev` keeps the page as written, so a dev build can still be read in devtools.
+  const src = await readFile(SRC_HTML, 'utf8');
+  const html0 = process.argv.includes('--dev') ? src : await shrinkHtml(src, { target: TARGET });
   // Inline the RDS mark as a data URI — the page must stay self-contained (the
   // shim serves it from a phone; there is nowhere to fetch an asset FROM).
   // All inlined as data URIs — the page must stay self-contained (the shim serves
