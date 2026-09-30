@@ -22687,6 +22687,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         if (g_autoDs.load(std::memory_order_relaxed)) {
                             const double below = g_dsBelowHz.load(std::memory_order_relaxed);
                             const int want = ((double)hz < below) ? 2 : 0;   // 2 = Q branch
+                            /* ★★ g_dsNow starts at -1, so the FIRST tune always "changed" — and sending
+                             *  0 to a dongle already on its tuner re-runs the tuner's whole init (see
+                             *  setDirectSampling). Record librtlsdr's own answer instead of re-sending. */
+                            if (want != g_dsNow.load(std::memory_order_relaxed)
+                                && rtlsdr_get_direct_sampling(dev) == want) {
+                                g_dsNow.store(want, std::memory_order_relaxed);
+                            }
                             if (want != g_dsNow.load(std::memory_order_relaxed)) {
                                 const int rc = rtlsdr_set_direct_sampling(dev, want);
                                 if (rc == 0) {
@@ -26593,6 +26600,24 @@ void LocalSdrShim::setDecoderFreq(double hz) {
 // ★ DEFINED HERE, above its FIRST user — it used to sit halfway down the file, next to the RSP
 //   setters that were its only callers. The RTL setters above needed it too.
 #define VIBE_HW_LOCK() std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
+/** ★★★ THE RTL CONTROL SETTERS TAKE devMtx TOO — devMtx FIRST, the documented order (2026-09-30).
+ *
+ *  VIBE_HW_LOCK is modeMtx, and the hardware writer (startHwWriter) tunes and writes the IF filter
+ *  under devMtx ALONE — so ppm, bias-T, the dongle's digital AGC and DIRECT SAMPLING reached librtlsdr
+ *  from the caller's thread while the writer was inside it. librtlsdr is not thread-safe, and two of
+ *  those calls rewrite the IF: rtlsdr_set_direct_sampling(dev, 0) runs r82xx_init (int_freq := 3.57 MHz,
+ *  then the RTL2832's IF register), and the writer's rtlsdr_set_tuner_bandwidth runs r820t_set_bw
+ *  (int_freq from the width — 1.625 MHz for the 2 MHz rung or 2.048 MHz — then the IF register, then a
+ *  re-tune). Interleaved, the tuner's int_freq and the demodulator's IF end up DIFFERENT, and every tune
+ *  after that lands int_freq − IF off the dial: 3.570 − 1.625 = +1.945 MHz, which is Kiko's +1.950
+ *  (Moto G, Android 5.1, Lite b6 — see vibe_r82xx_if.h and test-r82xx-if.cpp). Android sends direct
+ *  sampling 0 on EVERY start, from the Kotlin thread, straight after startSpectrum — exactly when the
+ *  writer is making the start's first tune and filter write. Linux sends nothing by default (-1).
+ *  ★ devMtx before modeMtx, as setSampleRate and every close of `dev` take them. None of these setters'
+ *    callers holds modeMtx (the DAB paths that call setDirectSampling also call setSampleRate, which
+ *    takes devMtx itself, so they cannot be holding modeMtx either). */
+#define VIBE_RTL_CTL_LOCK() std::lock_guard<std::recursive_mutex> _devlk(p->devMtx); \
+                            std::lock_guard<std::recursive_mutex> _hwlk(p->modeMtx)
 
 double LocalSdrShim::rfCentreHz() const {
     // ★ The TUNER's centre — rtlCenter plus the fixed hardware offset that keeps the DC spike off
@@ -28871,7 +28896,7 @@ void LocalSdrShim::setPpm(int ppm) {
     //    land mid-tune, and libusb turns that into an ABORT, not an error.
     // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
     //   and already the one held across engine rebuilds.
-    VIBE_HW_LOCK();
+    VIBE_RTL_CTL_LOCK();   // ★ devMtx too — see VIBE_RTL_CTL_LOCK
     g_ppmNow.store(ppm, std::memory_order_relaxed);   // ★ the intent, reported by hwinfo
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useSpy()) return;   // no ppm setting in the SpyServer protocol
@@ -28895,7 +28920,7 @@ void LocalSdrShim::setBiasTee(bool on) {
     //    land mid-tune, and libusb turns that into an ABORT, not an error.
     // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
     //   and already the one held across engine rebuilds.
-    VIBE_HW_LOCK();
+    VIBE_RTL_CTL_LOCK();   // ★ devMtx too — see VIBE_RTL_CTL_LOCK
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) {
         p->sendTcpCmd(0x0e, on ? 1 : 0);
@@ -28954,7 +28979,7 @@ void LocalSdrShim::setAgc(bool on) {
     //    land mid-tune, and libusb turns that into an ABORT, not an error.
     // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
     //   and already the one held across engine rebuilds.
-    VIBE_HW_LOCK();
+    VIBE_RTL_CTL_LOCK();   // ★ devMtx too — see VIBE_RTL_CTL_LOCK
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) { p->sendTcpCmd(0x08, on ? 1 : 0); return; }
     if (!p->dev) return;
@@ -28968,11 +28993,38 @@ void LocalSdrShim::setDirectSampling(int mode) {
     //    land mid-tune, and libusb turns that into an ABORT, not an error.
     // ★ A SECOND lock would only add an inversion to invert — modeMtx is already recursive
     //   and already the one held across engine rebuilds.
-    VIBE_HW_LOCK();
+    VIBE_RTL_CTL_LOCK();   // ★ devMtx too — see VIBE_RTL_CTL_LOCK
     if (p->radioReleased.load()) return;   // the radio is lent to another program
     if (p->useTcp()) { p->sendTcpCmd(0x09, (uint32_t)mode); return; }
     if (!p->dev) return;
-    rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d", mode);
+    /* ★★★ A NO-OP IS NOT SENT (2026-09-30). The Android server screen sends directSampling 0 on EVERY
+     *  start ("off" is its default), and librtlsdr does not treat 0-when-already-0 as nothing: it runs
+     *  the tuner's whole init — r82xx_init, filter calibration, the IF back to 3.57 MHz, the gain
+     *  registers back to their power-on values — on a radio that is already streaming. That silently
+     *  undid the IF filter and the manual gain the open had just programmed, and it is the call that
+     *  tore the IF against the hardware writer's filter write (VIBE_RTL_CTL_LOCK). Linux never sent it
+     *  (its default is -1, "leave alone"). librtlsdr's own record of the mode is the authority. */
+    const int was = rtlsdr_get_direct_sampling(p->dev);
+    if (was == mode) {
+        LOGI("direct sampling: already %d — nothing sent (a re-send re-initialises the tuner)", mode);
+        g_dsNow.store(mode, std::memory_order_relaxed);
+        return;
+    }
+    rtlsdr_set_direct_sampling(p->dev, mode); LOGI("direct sampling: %d (was %d)", mode, was);
+    /* ★★ BACK ON THE TUNER, IT HAS FORGOTTEN EVERYTHING — put back what the open programs (the IF filter
+     *  and manual gain), in the reopen path's order. r82xx_init leaves int_freq and the IF register
+     *  agreeing at 3.57 MHz with a WIDE filter and the tuner's own gain; the filter write re-derives
+     *  both halves together and re-tunes, so the dial stays exact. */
+    if (mode == 0 && was > 0) {
+        const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
+        const uint32_t bwWrite = bw_ > 0 ? (uint32_t)bw_ : (uint32_t)std::lround(p->sampleRate);
+        rtlsdr_set_tuner_bandwidth(p->dev, bwWrite);
+        rtlsdr_set_tuner_gain_mode(p->dev, 1);
+        const int g = p->lastGainTenthDb >= 0 ? p->lastGainTenthDb : p->hwGainNow;
+        if (g >= 0) rtlsdr_set_tuner_gain(p->dev, g);
+        LOGI("direct sampling off: tuner re-initialised — IF filter %.0f kHz and gain %.1f dB put back",
+             bwWrite / 1e3, g / 10.0);
+    }
     /* ★★ RECORD WHAT THE HARDWARE IS NOW DOING. g_dsNow was written only by the AUTOMATIC crossover, so a
      *  MANUAL switch left it stale — and the state we publish to clients and to the directory would have said
      *  "tuner" while the tuner was bypassed. That is the one thing this field exists to prevent: an admin
