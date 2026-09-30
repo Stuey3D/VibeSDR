@@ -651,6 +651,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *  DEFAULTS, not the owner's choices, and must not be written back over what is still on disk. */
   const [prefsRead, setPrefsRead] = useState(false);
   const [prefsError, setPrefsError] = useState<string | null>(null);
+  /** ★★★ STILL READING is not FAILED (Kiko's Moto G + Stuart's Sony, 2026-09-30). The red banner was
+   *  drawn on `!prefsRead` alone, and prefsRead starts false — so every cold start showed "could not be
+   *  read … DEFAULTS" for as long as the read took, and on slow eMMC that was long enough to be seen
+   *  (and, past the old 8 s deadline, to become a real failure a refresh then "fixed"). Loading is its
+   *  own state; the banner is for a read that has actually given up. start() still refuses both. */
+  const [prefsLoading, setPrefsLoading] = useState(true);
+  /** ★ The read is past its first few seconds — said plainly, never as an error. */
+  const [prefsSlow, setPrefsSlow] = useState(false);
   const [running, setRunning] = useState<VibeServerInfo | null>(null);
   const [status, setStatus]   = useState<VibeServerStatus | null>(null);
   /** The mDNS hostname the responder actually TOOK — "vibesdr-moto-g35", or with a "-2"
@@ -685,21 +693,50 @@ export default function ServerModeScreen({ navigation, route }: Props) {
      *    failure, which the retry and the banner below already know how to handle. Eight seconds
      *    is far longer than a healthy read (milliseconds) and far shorter than a person's patience.
      *  ★ It does NOT cancel the underlying read — nothing can — it stops us waiting on it. */
-    const deadline = <T,>(p: Promise<T>, ms = 8000): Promise<T> =>
-      Promise.race([p, new Promise<T>((_, rej) =>
-        setTimeout(() => rej(new Error('the settings did not answer in time')), ms))]);
+    /* ★★★ PATIENT, NOT QUICK TO GIVE UP — AND NEVER A SECOND READ QUEUED BEHIND THE FIRST (2026-09-30).
+     *  The deadline was 8 s per attempt and every retry ISSUED NEW READS. AsyncStorage runs on ONE
+     *  serial executor, and the first call of a cold start also opens (and may recover) its SQLite
+     *  file — on Kiko's Moto G (2014 eMMC, Android 5.1) and on Stuart's Sony that alone outlasted 8 s.
+     *  The retries then queued BEHIND the read that was still grinding, so all three "failed", the
+     *  banner went up, and a refresh a minute later "fixed" it because by then the ORIGINAL read had
+     *  finished and the file was warm.
+     *  ★★ AND THE FIRST READ WAS OUTSIDE THE try. getServerName's deadline threw straight out of
+     *     load(), which is called with `void`: no retry, no reason, prefsRead left false — the
+     *     reason-less banner of 2026-09-22/26.
+     *  ★ So one attempt waits on the SAME promise for up to PREFS_HARD_MS (saying "reading slowly"
+     *    after PREFS_SLOW_MS), and only a real REJECTION is retried. A read that settles after we
+     *    gave up re-runs the load by itself (the file is warm by then), so nobody has to find the
+     *    button.
+     *  ★★★ Nothing here ever WRITES. Giving up only keeps start() refusing; the stored settings stay
+     *      the owner's until a read has actually returned them.
+     *  ★ It does NOT cancel the underlying read — nothing can — it stops us waiting on it. */
+    const PREFS_SLOW_MS = 4000, PREFS_HARD_MS = 60000;
+    let gaveUp = false;
+    const patient = <T,>(p: Promise<T>): Promise<T> => {
+      const slow = setTimeout(() => { if (!cancelled) setPrefsSlow(true); }, PREFS_SLOW_MS);
+      let hard: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<T>((_, rej) => {
+        hard = setTimeout(() => {
+          gaveUp = true;
+          // ★ The read may still come back — when it does, read again from a warm file.
+          p.then(() => { if (!cancelled && gaveUp) setPrefsTry((t) => t + 1); }, () => {});
+          rej(new Error(`the settings did not answer in ${PREFS_HARD_MS / 1000} s`));
+        }, PREFS_HARD_MS);
+      });
+      return Promise.race([p, timeout]).finally(() => { clearTimeout(slow); if (hard) clearTimeout(hard); });
+    };
     const load = async (attempt: number): Promise<void> => {
-      const n = await deadline(getServerName(route.params?.name ?? 'VibeSDR'));
-      if (cancelled) return;
-      setName(n);
-      setPrefsError(null);
+      if (!cancelled) { setPrefsLoading(true); setPrefsError(null); }
       try {
+        const n = await patient(getServerName(route.params?.name ?? 'VibeSDR'));
+        if (cancelled) return;
+        setName(n);
         /* ★★ POSITIONAL, so a name added here must land in the SAME place as its getItem below.
          *   glk/gsp sit immediately after gl because that is where their reads were inserted —
          *   put them anywhere else and every variable after them silently takes its neighbour's
          *   value, which type-checks perfectly and is wrong at run time. */
         const [p, a, pm, sp, r, fp, cp, ws, apw, unc, lim, fm,
-               mu, alw, blk, gl, bmd, dbb, glk, gsp, rg, agl, ragc, px, ru, lhz, lmd, bt] = await deadline(Promise.all([
+               mu, alw, blk, gl, bmd, dbb, glk, gsp, rg, agl, ragc, px, ru, lhz, lmd, bt] = await patient(Promise.all([
           AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
           AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
           AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
@@ -742,7 +779,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
          *     Inserting one more getItem() into a destructure of twenty-odd shifts EVERY value
          *     after it into the wrong setting, silently. I did exactly that while adding this and
          *     caught it only on re-reading; the comment warning against it is three lines away. */
-        void (async () => {
+        /* ★★★ AWAITED BEFORE prefsRead, NOT FIRED AND FORGOTTEN (2026-09-30). These two blocks were
+         *  `void (async () => …)()`, so prefsRead went true while they were still queued on the storage
+         *  executor — and on slow eMMC that is seconds. A Start in that gap persisted (multiSet) the
+         *  DEFAULTS of every setting below — IF filter auto, ppm, direct sampling, the converter, the
+         *  landing message, raw IQ, the DAB landing — over the owner's stored values: the exact loss
+         *  prefsRead exists to prevent, through a side door. They still run in parallel with the rest. */
+        const radioReads = (async () => {
           const v = await AsyncStorage.getItem(K.tunerBwAuto);
           if (v != null) setTunerBwAuto(v === '1');
           const g2 = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
@@ -757,7 +800,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setConvHiMhz(await g2(K.convHiMhz));
           setConvDown((await g2(K.convDown)) === '1');
         })();
-        void (async () => {
+        const serverReads = (async () => {
           const g = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
           setLandingMsg(await g(K.landingMsg));
           setLandingUrl(await g(K.landingUrl));
@@ -786,7 +829,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             if (ch !== '' && Number.isFinite(Number(ch))) setLandingDabCh(Number(ch)); }
           setLandingDabSid(Number(await g(K.landingDabSid)) || 0);
           setLandingDabSvc(await g(K.landingDabSvc));
-          // ★ The block list comes from the ENGINE's table — the stored value is an index into it.
+        })();
+        // ★ The block list comes from the ENGINE's table — the stored value is an index into it. Not
+        //   storage, so not part of the read the screen waits on.
+        void (async () => {
           try { setDabBlocks(await getDabBlocks()); }
           catch (e: any) { setDabScanMsg('Could not read the DAB block list: ' + (e?.message ?? e)); }
         })();
@@ -808,8 +854,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg));
         if (agl != null) setAgcLock(agl === '1');
         if (px != null) setProxies(px);
-        setLocMode(await deadline(getServerLocationMode()));
-        setLocCity((await deadline(getManualServerLocation()))?.label ?? '');
+        setLocMode(await patient(getServerLocationMode()));
+        setLocCity((await patient(getManualServerLocation()))?.label ?? '');
         if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
         // Restore the saved PIN for BOTH modes so re-opening the server keeps the
         // same code — it only changes when the user taps refresh (↻) or edits it.
@@ -820,8 +866,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         if (r != null && Number.isFinite(Number(r))) setRate(Number(r));
         if (fp === 'full' || fp === 'half' || fp === 'quarter') setFps(fp);
         if (cp != null) setCompress(cp !== '0');
+        await patient(Promise.all([radioReads, serverReads]));
+        if (cancelled) return;
         setPrefsRead(true);
+        setPrefsLoading(false);
+        setPrefsSlow(false);
       } catch (e: any) {
+        if (cancelled) return;
         /* ★★★ A READ THAT FAILS MUST NOT LOOK LIKE A SERVER WITH NO SETTINGS (Stuart's Sony, 2026-09-20: "for
          *  some reason the sony lost all my preferences today"). This swallowed everything, so one failed
          *  AsyncStorage open — its database had an unflushed 512 kB write-ahead log — left every control at its
@@ -843,8 +894,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
          *    a lock that is not going to clear is not helped by hammering it. Only after the last
          *    one does the banner appear — and it now offers to try again, rather than naming an
          *    action the device may not be able to perform. */
-        if (attempt < 2 && !cancelled) { await new Promise(r => setTimeout(r, 800 * (attempt + 1))); return load(attempt + 1); }
-        if (!cancelled) setPrefsError(e?.message ? String(e.message) : 'the settings could not be read');
+        // ★ A TIMEOUT is not retried: a fresh read would only queue behind the one still running.
+        //   `patient` re-runs the load by itself if that read ever comes back.
+        if (!gaveUp && attempt < 2) { await new Promise(r => setTimeout(r, 800 * (attempt + 1))); return load(attempt + 1); }
+        if (cancelled) return;
+        setPrefsError(e?.message ? String(e.message) : 'the settings could not be read');
+        setPrefsLoading(false);
+        setPrefsSlow(false);
       }
     };
     void load(0);
@@ -1374,6 +1430,12 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     /* ★★★ NEVER WRITE DEFAULTS OVER SETTINGS WE COULD NOT READ. If the load failed, every control on this
      *  screen is a default rather than the owner's choice, and this multiSet would make that permanent — which
      *  is how "it lost my preferences" becomes true instead of merely looking true. */
+    if (!prefsRead && prefsLoading) {
+      // ★ Still reading, not failed — the same split the banner makes. Refused all the same.
+      Alert.alert('Still reading your saved settings',
+        'This device\'s storage is slow to answer. Start will work as soon as your settings have loaded.');
+      return;
+    }
     if (!prefsRead) {
       /* ★★ ONE RULE, TWO READERS — this Alert and the banner at the top of the screen say the same
        *  thing, and only the banner was corrected. It still told a TV owner to close and reopen an
@@ -1460,7 +1522,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   // back BLANK next time and made it look like a save bug. One stale closure, two symptoms,
   // and an evening of looking at the server for a fault that was three lines above it
   // (Stuart, 2026-07-27).
-  }, [name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
+  // ★★ prefsRead/prefsLoading/prefsError were MISSING (2026-09-30): start() is the one reader that must
+  //    see the read land, and a load whose values all equalled the defaults changed no other dependency,
+  //    so start kept refusing on the initial `false` it was created with.
+  }, [prefsRead, prefsLoading, prefsError,
+      name, proto, advertise, pinMode, pin, rate, fps, compress, effectivePin,
       webServer, locMode, locCity, checkBackgroundAllowed,
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
       blockedModes, dabRateBoost, dabScanLabels, isLite,
@@ -1824,8 +1890,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                records correcting the wording in both places and still left the CONDITIONS apart. Wording
                is not the rule; the rule is "the read failed". ✗ Whoever changes one of these changes both.
             ★ `!prefsRead` is the authority: it is what start() refuses on, so it is what must offer the
-              way out. prefsError, when there is one, only adds the reason. */}
-        {!prefsRead && (
+              way out. prefsError, when there is one, only adds the reason.
+            ★★★ BUT NOT WHILE THE READ IS STILL RUNNING (2026-09-30) — prefsRead starts false, so this
+               drew "could not be read" on every cold start until the read landed; on slow storage that
+               was seconds. start() splits the same two cases the same way. */}
+        {!prefsRead && prefsLoading && prefsSlow && (
+          <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 12 }]}>
+            {'Reading your saved settings — this device\'s storage is slow to answer. Start will work as '
+             + 'soon as they have loaded.'}
+          </Text>
+        )}
+        {!prefsRead && !prefsLoading && (
           <View style={{ borderLeftWidth: 3, borderLeftColor: '#ff8a7d', paddingLeft: 10, marginBottom: 12 }}>
             <Text style={[styles.hint, { color: '#ff8a7d', fontFamily: F, marginBottom: 0 }]}>
               {`Your saved settings could not be read${prefsError ? ` (${prefsError})` : ''}. What you see `
