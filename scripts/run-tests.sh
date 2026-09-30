@@ -172,6 +172,10 @@ if node --no-warnings scripts/test_faceplate_text.ts; then pass=$((pass+1)); els
 #     zeros are switched off, and the TUBE shrinks to its window (smallest window first) — domes
 #     are never clipped.
 if node --no-warnings scripts/test_faceplate_nixie.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE METERS (faceplates §4): one deck height across meter × shared, the squelch ring on the SAME
+#     table the LEDs light from, Φ((μ − T)/σ) with its σ floor, the eye filter as the only easing, the
+#     steady-LED hysteresis, and the needle's 300 ms / 1 % ballistics — the maths, checked as data.
+if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

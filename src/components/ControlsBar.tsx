@@ -46,9 +46,12 @@ import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import type { SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
 import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
+import LedVu from './LedVu';
+import EdgeMeter from './EdgeMeter';
 import { GhostGrid, SegDigits } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
 import { FONT_DOTO, rgba } from '../constants/faceplate';
+import { DECK, portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind } from '../constants/meters';
 import { statusGainParts, type StatusItem } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
@@ -185,6 +188,10 @@ function sigGradPos(sig: number): number[] {
 /** link: 0=disconnected, 1=poor(red), 2=fluctuating(yellow), 3=good(green) */
 export interface MeterValues {
   level: number; peak: number; snr: number;
+  /** ★ The level BEFORE the meter smoothing (same 0..1 bar scale as `level`). The analogue needle
+   *  springs from it (§4.5 TRAP: smoothing first and then springing doubles the lag) and the LED VU's
+   *  σ is its spread (§4.4). Absent on a backend that only has the smoothed one → use `level`. */
+  raw?: number;
   /** Peak power in the passband, dBFS — feeds the S-meter / dBFS readouts. */
   dbfs: number;
   active: boolean; link: 0|1|2|3;
@@ -702,14 +709,20 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
  * never changes the deck's height; the tubes and cells shrink into it, the window does not grow.
  * ★ The unit label has a FIXED width, so kHz / MHz / Hz cannot shift the digits beside it (§7 TRAP).
  */
-function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFontSize, pillPadH, pillPadV, gap, shared }: {
+function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFontSize, pillPadH, pillPadV, gap, shared,
+  winH }: {
   freqStr: string; unit: string; chanTag: string | null; freqFontSize: number; freqWidth: number;
   unitFontSize: number; pillPadH: number; pillPadV: number; gap: number; shared: boolean;
+  /** ★ The LED / analogue frequency window (§4.1): its height, which the deck's fixed block decided
+   *  (48 / 38 / 46 / 35 at scale 1). Absent = the bar's pill, sized from the text as before. The
+   *  compact window takes the §4.1 digit / tube sizes and FILLS its width. */
+  winH?: number;
 }) {
   const dk = useFaceplate().deck;
   const s = useUiScale();
   const ro = React.useContext(FreqReadoutContext);
-  const H = Math.round(freqFontSize * 1.12) + 2 * pillPadV;
+  const compact = winH != null;
+  const H = compact ? winH : Math.round(freqFontSize * 1.12) + 2 * pillPadV;
   const unitW = Math.round(unitFontSize * 2.6);
   const tagW = chanTag ? Math.round(Math.max(unitFontSize * 0.72 * 0.62 * chanTag.length, unitW)) : 0;
   const labelW = Math.max(unitW, tagW);
@@ -727,10 +740,21 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
       </Text>
     </View>
   );
+  if (dk.style === 'nixie' && compact) {
+    // ★★★ The LED / analogue window: 22 × 36 tubes (shared 18 × 29), bar = false, the window's full
+    //   width. The TUBE shrinks to the window, never the other way (§7 TRAP) — the smallest case is
+    //   analogue + shared = 35 pt against a 37 pt design stack (test_faceplate_meters.ts).
+    return (
+      <NixieTubes hz={ro.hz} unit={ro.unit} layout={ro.layout}
+        design={shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter} bar={false} scale={s.scale}
+        radius={8} reserveRight={labelW} style={{ flex: 1, height: H, minWidth: 0 }}>
+        {label}
+      </NixieTubes>
+    );
+  }
   if (dk.style === 'nixie') {
-    // ★ Bar-meter window (the only meter until row 5): 16 pt tubes, 1 pt gaps; the SHARED banner
-    //   and landscape take the mockup's smaller designs. Row 5's LED / analogue windows pass
-    //   TUBE_DESIGN.meter* with bar = false.
+    // ★ Bar-meter window: 16 pt tubes, 1 pt gaps; the SHARED banner and landscape take the mockup's
+    //   smaller designs. The LED / analogue windows take the branch above.
     const design = shared ? TUBE_DESIGN.barShared : s.isLandscape ? TUBE_DESIGN.barLand : TUBE_DESIGN.bar;
     const want = Math.ceil(nixieNaturalWidth(ro.layout, design, true, s.scale)) + labelW + 4;
     return (
@@ -742,16 +766,22 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   }
   // dot / seg: a black VFD window. Doto over the ghost-dot grid, or the DRAWN 7-segment cells.
   const winW = Math.round(freqWidth * 1.1);
+  // ★ Compact (LED / analogue) window: Deck.mockup `fv0` — Doto 27 (shared 23), 7-segment 29 (25) —
+  //   centred in the full-width window; the bar pill keeps its own sizes.
+  const cellBox: ViewStyle = compact ? { flex: 1, minWidth: 0, alignItems: 'center' }
+                                     : { width: winW, flexShrink: 1, minWidth: 0 };
+  const dotSize = compact ? s.r(shared ? 23 : 27) : s.r(shared ? 24 : 28);
+  const segH = compact ? Math.min(s.r(shared ? 25 : 29), H - 4) : s.r(shared ? 27 : 30);
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
-                   flexShrink: 1, minWidth: 0 }}>
+    <View style={[{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
+                    flexShrink: 1, minWidth: 0 }, compact && { flex: 1 }]}>
       {dk.style === 'dot' ? (
-        <View style={{ width: winW, flexShrink: 1, minWidth: 0, justifyContent: 'center' }}>
+        <View style={[cellBox, { justifyContent: 'center' }]}>
           <GhostGrid rgb={dk.rgb} pitch={3.4} dot={0.8} />
           <Text style={[pm.freq, {
             color: dk.freq, fontFamily: dk.freqFont, letterSpacing: dk.freqSpacing,
             textShadowColor: dk.freqGlow, textShadowRadius: 5,
-            fontSize: Math.min(s.r(shared ? 24 : 28), Math.floor((H - 2) / 1.1)),
+            fontSize: Math.min(dotSize, Math.floor((H - 2) / 1.1)),
             lineHeight: H, includeFontPadding: false,
           }]} numberOfLines={1} adjustsFontSizeToFit>
             {freqStr}
@@ -759,11 +789,112 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
         </View>
       ) : (
         <SegDigits text={freqStr.replace(/,/g, '')} rgb={dk.rgb} core={dk.core} glow={dk.glow}
-          designH={s.r(shared ? 27 : 30)} style={{ width: winW, flexShrink: 1, minWidth: 0 }} />
+          designH={segH} style={cellBox} />
       )}
       {label}
     </View>
   );
+}
+
+type SharedTuner = NonNullable<ControlsBarProps['sharedDial']>;
+
+/** The SHARED TUNER banner's words — one copy for the bar's banner and the LED / analogue one (§4.1). */
+function sharedBannerText(st: SharedTuner, tight: boolean): string {
+  return st.alone ? 'SHARED TUNER · FREE TO TUNE'
+    : st.youPlus
+      /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out
+       *  whether they are in it. No "/max" — FM-DX has no cap to report. */
+      //  ★ On the narrowest layouts (SE in Display Zoom) the prefix goes, never the words
+      //    that matter — truncating mid-word is the one outcome that is not allowed.
+      ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning (You+${Math.max(1, st.listeners - 1)})`
+      : `SHARED TUNER · ASK TO TUNE · ${st.listeners}${st.max > 1 ? `/${st.max}` : ''} 👤`;
+}
+function sharedBannerLabel(st: SharedTuner): string {
+  return st.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
+    : st.youPlus
+      ? `Shared tuner. You and ${Math.max(1, st.listeners - 1)} other${st.listeners - 1 === 1 ? '' : 's'} listening — ask before tuning.`
+      : `Shared tuner. ${st.listeners}${st.max > 1 ? ` of ${st.max}` : ''} listening — ask before tuning.`;
+}
+
+interface ModeReading { text: string; active: boolean; sqlClosed: boolean; breathe: Animated.Value }
+
+/**
+ * The mode box's live reading, shared by every meter (§4.6): the S-reading, or — while the squelch
+ * is MUTING — a breathing "SQL" in `dk.sqlClosed` (red; neon under Nixie, the rule outranks red).
+ * ★ Squelch: when the live signal is BELOW the threshold the gate is closed (muting NOW) — the
+ *   readout flips to "SQL" (no extra screen space), and the meter dims.
+ */
+function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, meterMode: any,
+                        signalActive: boolean | undefined): ModeReading {
+  // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
+  const m = useMeters(bus);
+  // An explicit snrText (FM-DX "28 dBf") wins over the bus-computed text.
+  const text = snrText ? snrText : (m ? meterText(meterMode ?? 'snr', m) : '');
+  const active = m ? m.active : !!signalActive;
+  const sqlClosed = sqlClosedOf(m ? (m.sql ?? -1) : -1, m?.gate, m ? m.level : 0);
+  const breathe = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!sqlClosed) { breathe.setValue(1); return; }
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(breathe, { toValue: 0.3, duration: 650, useNativeDriver: true }),
+      Animated.timing(breathe, { toValue: 1.0, duration: 650, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [sqlClosed, breathe]);
+  return { text, active, sqlClosed, breathe };
+}
+
+/** The mode label (+ stereo rings) over the reading / breathing SQL — the mode box's contents. */
+function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWidth, readingFontSize }: {
+  reading: ModeReading; modeLabel: string; fmStereo: boolean; modeFontSize: number; modeLs: number;
+  snrWidth?: number;
+  /** LED / analogue window: the mockup's 11 pt reading. Absent = the bar's (today's) sizing. */
+  readingFontSize?: number;
+}) {
+  const dk = useFaceplate().deck;
+  const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
+  const rl = readingFontSize ? Math.round(readingFontSize * 1.15) : Math.round(Math.max(9, modeFontSize * 0.75) * 1.15);
+  const dot = dk.modeFont === FONT_DOTO;
+  return (<>
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={[pm.modeLbl, {
+        color: dk.mode, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: dk.modeFont,
+        textShadowColor: dk.modeGlow,
+        // ★ Doto is ONE weight (the Black cut is the file); asking it for bold makes Android
+        //   fall back to the system font.
+        ...(dot ? { fontWeight: 'normal' as const } : null),
+        lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
+      }]}>
+        {modeLabel}
+      </Text>
+      {/* WFM stereo: V5's pilot-PLL lock (+ blend) is reliable, so the icon
+          is back — shows the interlocking-rings symbol when stereo is active. */}
+      {fmStereo && <StereoIcon size={Math.round(modeFontSize * 0.95)} color={dk.mode} />}
+    </View>
+    {reading.sqlClosed ? (
+      <Animated.Text style={[pm.snr, {
+        color: dk.sqlClosed, fontFamily: dk.modeFont, width: snrWidth,
+        fontSize: rf, lineHeight: rl,
+        includeFontPadding: false, fontWeight: dot ? 'normal' : '800', opacity: reading.breathe,
+        // §4.6: neon under Nixie (`#ff9a55`, the rule outranks red), red elsewhere, with the mockup's
+        // glow; the default deck keeps today's unglowing SQL.
+        ...(dk.sqlGlow ? { textShadowColor: dk.sqlGlow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null),
+      }]}>
+        SQL
+      </Animated.Text>
+    ) : (
+      <Text style={[pm.snr, {
+        color: dk.reading, fontFamily: dk.modeFont, width: snrWidth,
+        fontSize: rf, lineHeight: rl,
+        includeFontPadding: false,
+        fontWeight: dot ? 'normal' : '700',
+        opacity: reading.active ? 1.0 : 0.65,
+      }]}>
+        {reading.text}
+      </Text>
+    )}
+  </>);
 }
 
 function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLabel, snrText, connected, signalActive,
@@ -790,25 +921,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
     unitFontSize = Math.round(unitFontSize * 0.85); pillPadV = Math.max(1, Math.round(pillPadV * 0.6));
     modePadV = Math.max(1, Math.round(modePadV * 0.6));
   }
-  // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
-  const m = useMeters(bus);
-  // An explicit snrText (FM-DX "28 dBf") wins over the bus-computed text.
-  const liveSnrText = snrText ? snrText : (m ? meterText(meterMode ?? 'snr', m) : '');
-  const liveActive  = m ? m.active : signalActive;
-  // Squelch: when the live signal is BELOW the threshold the gate is closed (muting NOW) — the
-  // readout flips to a breathing red "SQL" (no extra screen space), and the bar dims (SignalCanvas).
-  const sqlNorm   = m ? (m.sql ?? -1) : -1;
-  const sqlClosed = sqlNorm >= 0 && (m?.gate ?? ((m ? m.level : 0) < sqlNorm));
-  const breathe   = useRef(new Animated.Value(1)).current;
-  useEffect(() => {
-    if (!sqlClosed) { breathe.setValue(1); return; }
-    const loop = Animated.loop(Animated.sequence([
-      Animated.timing(breathe, { toValue: 0.3, duration: 650, useNativeDriver: true }),
-      Animated.timing(breathe, { toValue: 1.0, duration: 650, useNativeDriver: true }),
-    ]));
-    loop.start();
-    return () => loop.stop();
-  }, [sqlClosed, breathe]);
+  const reading = useModeReading(bus, snrText, meterMode, signalActive);
   return (
     // maxWidth cap: the pill must NEVER swallow the signal bar — on narrow
     // screens (SE / Moto G35) and with Android font metrics the fixed dp
@@ -820,21 +933,11 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
        *    the room's count lives HERE, where the question is asked, not in a corner badge. */
       <View style={[pm.sharedBox, { backgroundColor: ct.pillBg, borderColor: ct.sharedBorder }]}
             accessibilityRole="text"
-            accessibilityLabel={sharedTuner.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
-              : sharedTuner.youPlus
-                ? `Shared tuner. You and ${Math.max(1, sharedTuner.listeners - 1)} other${sharedTuner.listeners - 1 === 1 ? '' : 's'} listening — ask before tuning.`
-                : `Shared tuner. ${sharedTuner.listeners}${sharedTuner.max > 1 ? ` of ${sharedTuner.max}` : ''} listening — ask before tuning.`}>
+            accessibilityLabel={sharedBannerLabel(sharedTuner)}>
         <Text style={[pm.sharedTxt, { fontFamily: dk.bannerFont, fontSize: sharedFontSize,
                       color: sharedTuner.alone ? dk.bannerFree : dk.bannerAsk }]}
               numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-          {sharedTuner.alone ? 'SHARED TUNER · FREE TO TUNE'
-            : sharedTuner.youPlus
-              /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out
-               *  whether they are in it. No "/max" — FM-DX has no cap to report. */
-              //  ★ On the narrowest layouts (SE in Display Zoom) the prefix goes, never the words
-              //    that matter — truncating mid-word is the one outcome that is not allowed.
-              ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning (You+${Math.max(1, sharedTuner.listeners - 1)})`
-              : `SHARED TUNER · ASK TO TUNE · ${sharedTuner.listeners}${sharedTuner.max > 1 ? `/${sharedTuner.max}` : ''} 👤`}
+          {sharedBannerText(sharedTuner, tight)}
         </Text>
       </View>
     )}
@@ -889,47 +992,128 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
         style={[pm.modeBtn, { backgroundColor: ct.pillBg, borderLeftColor: ct.modeDivider, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: tight ? 72 : 84 }]}
         onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
       >
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={[pm.modeLbl, {
-            color: dk.mode, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: dk.modeFont,
-            textShadowColor: dk.modeGlow,
-            // ★ Doto is ONE weight (the Black cut is the file); asking it for bold makes Android
-            //   fall back to the system font.
-            ...(dk.modeFont === FONT_DOTO ? { fontWeight: 'normal' as const } : null),
-            lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
-          }]}>
-            {modeLabel}
-          </Text>
-          {/* WFM stereo: V5's pilot-PLL lock (+ blend) is reliable, so the icon
-              is back — shows the interlocking-rings symbol when stereo is active. */}
-          {fmStereo && <StereoIcon size={Math.round(modeFontSize * 0.95)} color={dk.mode} />}
-        </View>
-        {sqlClosed ? (
-          <Animated.Text style={[pm.snr, {
-            color: dk.sqlClosed, fontFamily: dk.modeFont, width: snrWidth,
-            fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
-            lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
-            includeFontPadding: false, fontWeight: dk.modeFont === FONT_DOTO ? 'normal' : '800', opacity: breathe,
-          }]}>
-            SQL
-          </Animated.Text>
-        ) : (
-          <Text style={[pm.snr, {
-            color: dk.reading, fontFamily: dk.modeFont, width: snrWidth,
-            fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
-            lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
-            includeFontPadding: false,
-            fontWeight: dk.modeFont === FONT_DOTO ? 'normal' : '700',
-            opacity: liveActive ? 1.0 : 0.65,
-          }]}>
-            {liveSnrText}
-          </Text>
-        )}
+        <ModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
+          modeFontSize={modeFontSize} modeLs={modeLs} snrWidth={snrWidth} />
       </TouchableOpacity>
     </View>
     </View>
   );
 }
+
+/**
+ * ★★★ THE LED / ANALOGUE DISPLAY (§4.1, Deck.mockup `isVu`): [SHARED TUNER banner] / frequency window
+ * with the mode box inside it / the meter housing — stacked in a column of FIXED height (the deck's
+ * block less the keys), in which only the frequency window flexes. So neither the meter type nor a
+ * shared server can change the deck's height: the window gives the room back (48 → 38, 46 → 35).
+ * The bar deck keeps FreqModePill inside the bar, exactly as today (§4.2).
+ */
+function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeLabel, snrText, signalActive, bus,
+  meterMode, fmStereo = false, onFreqTap, onModeTap, sharedTuner = null, tight = false, freqWidth }: any) {
+  const fp = useFaceplate();
+  const dk = fp.deck;
+  const s = useUiScale();
+  const reading = useModeReading(bus, snrText, meterMode, signalActive);
+  const shared = !!sharedTuner;
+  const lip = fp.chassis.plate?.windowLip ?? 'rgba(255,255,255,0.06)';
+  const winBg = dk.style === 'nixie' ? '#060403' : dk.style === 'hyper' ? '#0a0807' : '#050505';
+  const unitFont = s.r(11);
+  // §4.1 "digits 32 (shared 27)" — capped by the window it has to sit in.
+  const digit = Math.min(s.r(shared ? 27 : 32), Math.floor((dl.freqH - 4) / 1.12));
+  return (
+    <View style={{ height: dl.displayH }}>
+      {sharedTuner && (
+        <View style={[cd.banner, { height: dl.bannerH, marginBottom: dl.bannerGap }]}
+              accessibilityRole="text" accessibilityLabel={sharedBannerLabel(sharedTuner)}>
+          <Text style={[cd.bannerTxt, { fontFamily: dk.bannerFont, fontSize: s.f(10.5),
+                        color: sharedTuner.alone ? dk.bannerFree : dk.bannerAsk,
+                        textShadowColor: fp.chassis.plate ? dk.glow : 'transparent' }]}
+                numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+            {sharedBannerText(sharedTuner, tight)}
+          </Text>
+          <View pointerEvents="none" style={[cd.lip, { backgroundColor: 'rgba(255,255,255,0.18)' }]} />
+        </View>
+      )}
+      <View style={[cd.window, { height: dl.freqH, backgroundColor: winBg }]}>
+        <TouchableOpacity ref={tourRef('freqBox')} onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
+          style={[cd.freqArea, dk.style === 'hyper' && { paddingHorizontal: s.r(8), gap: s.r(8) }]}>
+          {dk.style === 'hyper' ? (<>
+            <Text style={[pm.freq, {
+              color: dk.freq, fontSize: digit, fontFamily: dk.freqFont, textShadowColor: dk.freqGlow,
+              letterSpacing: dk.freqSpacing, lineHeight: Math.round(digit * 1.12), includeFontPadding: false,
+              flexShrink: 1,
+            }]} numberOfLines={1} adjustsFontSizeToFit>
+              {freqStr}
+            </Text>
+            <View style={[pm.chanCol, { paddingBottom: s.r(7), alignSelf: 'stretch' }]}>
+              {chanTag ? (
+                <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.freqFont,
+                              fontSize: Math.max(8, Math.round(unitFont * 0.72)) }]} numberOfLines={1}>
+                  {chanTag}
+                </Text>
+              ) : null}
+              <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFont, paddingBottom: 0 }]}>
+                {unit}
+              </Text>
+            </View>
+          </>) : (
+            <DisplayFreq freqStr={freqStr} unit={unit} chanTag={chanTag} freqFontSize={digit}
+              freqWidth={freqWidth} unitFontSize={unitFont} pillPadH={s.r(6)} pillPadV={s.r(7)}
+              gap={s.r(6)} shared={shared} winH={dl.freqH} />
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity ref={tourRef('modeBtn')} onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
+          style={[cd.modeBox, { width: s.r(70), borderLeftColor: 'rgba(255,255,255,0.10)' }]}>
+          <ModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
+            modeFontSize={s.r(15)} modeLs={2} readingFontSize={s.r(11)} />
+        </TouchableOpacity>
+        {/* The glass's inner shadow at the top and the lip below (`inset 0 2px 7px`, `0 1px 0 .25`). */}
+        {/* ★ Not over the tubes: the Nixie recess draws its own lip shadows (§7), and a second
+            shade would darken the domes' tips in the 35 pt window where they sit closest to it. */}
+        {dk.style !== 'nixie' && <View pointerEvents="none" style={cd.shade} />}
+        <View pointerEvents="none" style={[cd.lip, { backgroundColor: 'rgba(255,255,255,0.25)' }]} />
+      </View>
+      <View style={{ height: dl.meterGap }} />
+      <MeterHousing kind={meterKind} height={dl.housingH} shared={shared} lip={lip} bus={bus} />
+    </View>
+  );
+}
+
+/** The LED strip's / edgewise meter's black housing (§4.3 / §4.5): `#030303 → #0b0b0b`, inset shadow,
+ *  the chassis lip below, and the meter in it. */
+function MeterHousing({ kind, height, shared, lip, bus }: {
+  kind: MeterKind; height: number; shared: boolean; lip: string; bus?: MeterBus;
+}) {
+  const s = useUiScale();
+  return (
+    <View style={[cd.housing, { height }]}>
+      <View pointerEvents="none" style={cd.housingShade} />
+      <View pointerEvents="none" style={[cd.lip, { backgroundColor: kind === 'vu' ? 'rgba(255,255,255,0.22)' : lip }]} />
+      {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} />}
+      {kind === 'edge' && (
+        // §4.5: a 28 pt window in the 34 pt housing (padding 3; 2 with the shared banner).
+        <View style={{ padding: s.r(shared ? DECK.edgePadShared : DECK.edgePad) }}>
+          <EdgeMeter bus={bus} height={s.r(DECK.edgeWindow)} />
+        </View>
+      )}
+    </View>
+  );
+}
+
+const cd = StyleSheet.create({
+  banner:    { borderRadius: 6, backgroundColor: '#070605', alignItems: 'center', justifyContent: 'center',
+               paddingHorizontal: 8 },
+  bannerTxt: { letterSpacing: 1.8, fontWeight: '600', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 5 },
+  window:    { flexDirection: 'row', alignItems: 'stretch', borderRadius: 8 },
+  freqArea:  { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+               borderTopLeftRadius: 8, borderBottomLeftRadius: 8, overflow: 'hidden' },
+  modeBox:   { borderLeftWidth: 1, alignItems: 'center', justifyContent: 'center', gap: 1 },
+  shade:     { position: 'absolute', left: 0, right: 0, top: 0, height: 4, borderTopLeftRadius: 8,
+               borderTopRightRadius: 8, backgroundColor: 'rgba(0,0,0,0.55)' },
+  lip:       { position: 'absolute', left: 6, right: 6, bottom: -1, height: 1 },
+  housing:   { borderRadius: 6, backgroundColor: '#070707' },
+  housingShade: { position: 'absolute', left: 0, right: 0, top: 0, height: 3, borderTopLeftRadius: 6,
+                  borderTopRightRadius: 6, backgroundColor: 'rgba(0,0,0,0.6)' },
+});
 
 const pm = StyleSheet.create({
   row:      { flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center' },
@@ -1153,19 +1337,33 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   }, [chatUnread, chatPulse]);
 
   // All dp values go through s.r() — port of applyUiScale()'s r() function
-  const SIG_H      = s.r(s.isTablet ? 62 : 40); // taller on tablet so the meter shows above/below the tall two-line pill
+  // (The bar's height — 40, taller on tablet so the meter shows above/below the tall two-line pill —
+  //  is the deck's: dl.displayH below.)
   const DRUM_H     = s.r(60);
   const ROW_GAP    = s.r(7);
   const COL_GAP    = s.r(8);
   const BAR_PAD_H  = s.r(12);
-  const BTN_H      = s.r(44); // a11y minimum touch target (was 36 — misses)
   // ★ Silver/black keys sit in the mockup's 58 pt slot with a 54 pt cap (§4.1, bar meter); the
-  //   default key stays today's 44 pt minimum.
+  //   default key stays today's 44 pt minimum (a11y minimum touch target — was 36, misses).
   const isCap      = ct.dome.look === 'cap';
   const gloss      = !!ct.plate?.gloss && !!plateInset;
-  const KEY_SLOT   = isCap ? s.r(58) : BTN_H;
-  const pulseR     = isCap ? 10 : 4;
-  const ICON_SZ    = s.r(20);
+  /* ★★★ ONE DECK HEIGHT (§4.1). The display area and the keys come out of ONE fixed block per
+   *  chassis (constants/meters.ts portraitDeck): on the LED / analogue deck the frequency window
+   *  flexes and the keys take the §4.1 slot, so neither the meter type nor a shared server can grow
+   *  or shrink the deck. The bar keeps today's sizes (§4.2); on silver / black its frame is the
+   *  mockup's 72 pt so the bar deck is the same height as the other two. */
+  const meterKind  = fp.settings.meter;
+  const dl         = portraitDeck({ cap: isCap, meter: meterKind, shared: !!sharedDial, tablet: s.isTablet,
+                                    rowGap: ROW_GAP, r: s.r });
+  const KEY_SLOT   = dl.keySlot;
+  const pulseR     = !isCap ? 4 : dl.compact ? s.r(8) : 10;
+  const ICON_SZ    = Math.round(s.r(20) * dl.legendScale);
+  // ★ §4.1 TRAP: a 34 pt key is below 44 pt — its hitSlop reaches into the gaps round it.
+  const keySlop    = dl.compact ? compactKeyHitSlop(KEY_SLOT, ROW_GAP, COL_GAP) : undefined;
+  const keyProps   = dl.compact
+    ? { height: KEY_SLOT, radius: s.r(8), hitSlop: keySlop && { top: keySlop.top, bottom: keySlop.bottom,
+                                                               left: keySlop.left, right: keySlop.right } }
+    : { height: KEY_SLOT, minHeight: true };
   // Freq/mode sizing — read from theme so white mode can increase them
   // Pill sized to leave the signal bar visible around it (the white theme's
   // 28pt/168w pill covered the whole frame — screenshots 2026-06-11; 23/138
@@ -1203,9 +1401,16 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
                              paddingHorizontal: plateInset.h, paddingTop: plateInset.top,
                              paddingBottom: s.r(12) } : undefined}>
       {gloss && <GlossPanel radius={plateInset.radius} squareBottom />}
-      <View style={[por.sigFrame, { height: SIG_H }]}
+      {dl.compact ? (
+        <CompactDisplay dl={dl} meterKind={meterKind}
+          freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
+          signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
+          onFreqTap={onFreqTap} onModeTap={onModeTap} sharedTuner={sharedDial ?? null} tight={tight}
+          freqWidth={FREQ_W} />
+      ) : (
+      <View style={[por.sigFrame, { height: dl.displayH }]}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
-        <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
+        <SignalCanvas width={sigW} height={dl.displayH} signal={signal} peak={peak} bus={bus} />
         <FreqModePill
           freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
           connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
@@ -1217,6 +1422,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           tight={tight} sharedTuner={sharedDial ?? null}
         />
       </View>
+      )}
       </View>
 
       {/* Row 2 — 4 equal buttons */}
@@ -1226,14 +1432,14 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
             before. Default keeps today's outline key at rest; it now snaps and clicks. The ACTION
             is on release; the depress, click and flare are on touch-down. */}
         {/* STEP */}
-        <DomeKey ref={tourRef('stepBtn')} style={por.key} height={KEY_SLOT} minHeight
+        <DomeKey ref={tourRef('stepBtn')} style={por.key} {...keyProps}
           onPress={onStep} accessibilityLabel="Tuning step">
-          {p => <DomeText progress={p} style={[por.btnTxt, { fontSize: BTN_FONT }]}>{stepLabel}</DomeText>}
+          {p => <DomeText progress={p} style={[por.btnTxt, { fontSize: BTN_FONT * dl.legendScale }]}>{stepLabel}</DomeText>}
         </DomeKey>
 
         {/* AUDIO — opens the audio sheet; breathes red↔white while recording
             (REC lives inside the sheet, so this is the tap target to stop it). */}
-        <DomeKey style={por.key} height={KEY_SLOT} minHeight onPress={onAudio}
+        <DomeKey style={por.key} {...keyProps} onPress={onAudio}
           accessibilityLabel={audioAsRecord ? 'Record' : 'Audio'}
           overlay={<Animated.View pointerEvents="none"
             style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseRec, opacity: recPulse }]} />}>
@@ -1243,15 +1449,15 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         </DomeKey>
 
         {/* MENU */}
-        <DomeKey ref={tourRef('menuBtn')} style={por.key} height={KEY_SLOT} minHeight onPress={onMenu}
+        <DomeKey ref={tourRef('menuBtn')} style={por.key} {...keyProps} onPress={onMenu}
           accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
           {p => menuAsBack
-            ? <DomeText progress={p} style={{ fontSize: s.f(t.btnSize) }}>‹ Back</DomeText>
+            ? <DomeText progress={p} style={{ fontSize: s.f(t.btnSize) * dl.legendScale }}>‹ Back</DomeText>
             : <Cog size={ICON_SZ} progress={p} />}
         </DomeKey>
 
         {/* CHAT */}
-        <DomeKey style={[por.key, { opacity: chatOff ? 0.4 : 1 }]} height={KEY_SLOT} minHeight
+        <DomeKey style={[por.key, { opacity: chatOff ? 0.4 : 1 }]} {...keyProps}
           onPress={chatOff ? undefined : onChat} disabled={chatOff} accessibilityLabel="Chat"
           overlay={<Animated.View pointerEvents="none"
             style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseChat, opacity: chatPulse }]} />}>

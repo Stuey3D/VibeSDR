@@ -613,6 +613,9 @@ export interface DeckText {
   modeGlow:     string;
   /** The breathing "SQL" in the mode box (§4.6): red, or neon under Nixie (the rule outranks red). */
   sqlClosed:    string;
+  /** Its glow (Deck.mockup `md.g` while closed): `0 0 4px rgba(255,64,64,.6)`, neon
+   *  `rgba(255,90,10,.8)` under Nixie, or null — the default deck's SQL has none today (§13.1). */
+  sqlGlow:      string | null;
   bannerFont:   string;
   /** The SHARED TUNER banner's two states — "free to tune" green and "ask" grey today. */
   bannerFree:   string;
@@ -686,6 +689,8 @@ const TODAY_TEXT = {
   sqlRed:   '#ff4040',
   free:     '#7bd88f',
 };
+/** The SQL's red glow on silver / black and the VFD displays (Deck.mockup `md.g` while closed). */
+const SQL_RED_GLOW = 'rgba(255,64,64,0.6)';
 const TODAY_VTS = {
   onTune:  'rgba(80,220,100,0.95)',
   offTune: 'rgba(255,200,80,0.95)',
@@ -713,7 +718,7 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
     deck = {
       style: 'nixie', freqFont: FONT_NIXIE, freq: NEON_TEXT.core, freqGlow: NEON_TEXT.glow, freqSpacing: 1.5,
       unit: GREY_UNIT, unitFont: FONT_HYPER,
-      modeFont: FONT_HYPER, mode: NEON_TEXT.mode, reading: NEON_TEXT.reading, sqlClosed: NEON_TEXT.reading,
+      modeFont: FONT_HYPER, mode: NEON_TEXT.mode, reading: NEON_TEXT.reading, sqlClosed: NEON_TEXT.reading, sqlGlow: NEON_TEXT.readingGlow,
       modeGlow: NEON_TEXT.readingGlow,
       bannerFont: FONT_NIXIE, bannerFree: NEON_TEXT.core, bannerAsk: NEON_TEXT.reading, ...lit,
     };
@@ -724,7 +729,7 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
     deck = {
       style: 'hyper', freqFont: FONT_HYPER, freq: TODAY_TEXT.freq, freqGlow: TODAY_TEXT.freqGlow, freqSpacing: 1.5,
       unit: TODAY_TEXT.unit, unitFont: FONT_HYPER,
-      modeFont: FONT_HYPER, mode: TODAY_TEXT.mode, reading: TODAY_TEXT.reading, sqlClosed: TODAY_TEXT.sqlRed,
+      modeFont: FONT_HYPER, mode: TODAY_TEXT.mode, reading: TODAY_TEXT.reading, sqlClosed: TODAY_TEXT.sqlRed, sqlGlow: null,
       modeGlow: chassis.modeGlow,
       bannerFont: FONT_HYPER, bannerFree: TODAY_TEXT.free, bannerAsk: TODAY_TEXT.reading, ...lit,
     };
@@ -734,7 +739,7 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
     deck = {
       style: 'hyper', freqFont: FONT_HYPER, freq: text.hot, freqGlow: text.glow, freqSpacing: 2.5,
       unit: GREY_UNIT, unitFont: FONT_HYPER,
-      modeFont: FONT_HYPER, mode: text.hot, reading: 'rgba(255,255,255,0.80)', sqlClosed: TODAY_TEXT.sqlRed,
+      modeFont: FONT_HYPER, mode: text.hot, reading: 'rgba(255,255,255,0.80)', sqlClosed: TODAY_TEXT.sqlRed, sqlGlow: SQL_RED_GLOW,
       modeGlow: 'rgba(0,0,0,0)',
       bannerFont: FONT_HYPER, bannerFree: text.core, bannerAsk: rgba(text.rgb, 0.75), ...lit,
     };
@@ -746,7 +751,7 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
     deck = {
       style: s.display, freqFont: dot ? FONT_DOTO : FONT_HYPER, freq: text.core, freqGlow: text.glow, freqSpacing: 1,
       unit: GREY_UNIT, unitFont: FONT_HYPER,
-      modeFont: dot ? FONT_DOTO : FONT_HYPER, mode: text.core, reading: text.core, sqlClosed: TODAY_TEXT.sqlRed,
+      modeFont: dot ? FONT_DOTO : FONT_HYPER, mode: text.core, reading: text.core, sqlClosed: TODAY_TEXT.sqlRed, sqlGlow: SQL_RED_GLOW,
       modeGlow: text.glow,
       bannerFont: FONT_HYPER, bannerFree: text.core, bannerAsk: rgba(text.rgb, 0.75), ...lit,
     };

@@ -5568,6 +5568,8 @@ export default function SDRScreen({ route, navigation }: Props) {
               // KB/FPS readout flash on then vanish on the next frame (Stuart 2026-07-24).
               ...meterBus.current.value,
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
+              // ★ The unsmoothed level, for the faceplate meters (the needle springs from it).
+              raw: norm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
               link: meterBus.current.value.link,
               sql: sqlN, gate,
