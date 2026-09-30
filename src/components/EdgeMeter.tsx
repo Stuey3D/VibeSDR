@@ -58,10 +58,14 @@ const RED_FROM = VU_LABELS.indexOf('+30');
 // ── 1. The card ───────────────────────────────────────────────────────────────
 
 /** The lamp and the printed scale — static; react-native-svg draws it once per size. */
-const Card = React.memo(function Card({ w, h }: { w: number; h: number }) {
+const Card = React.memo(function Card({ w, h, printH = h, printTop = 0 }: {
+  w: number; h: number; printH?: number; printTop?: number;
+}) {
   const U = (w - 16) / VU_SEGMENTS;
-  const k = h / 28;                                    // the print is designed on a 28 pt window
-  const y = (v: number) => v * k;
+  // The print is designed on a 28 pt window. ★ Landscape (§9, Deck.mockup `svgTop: -2px`) keeps the
+  // 28 pt print and shows it 2 pt up in a 24 pt window: printH / printTop say so, scaled with it.
+  const k = printH / 28;
+  const y = (v: number) => printTop + v * k;
   const redX = scalePointX(RED_FROM, w) - U / 2;
   return (
     <Svg width={w} height={h} style={{ position: 'absolute', left: 0, top: 0 }}>
@@ -143,7 +147,11 @@ function shadowSprite(w: number, h: number, blur: number, colour: string): SkIma
   return makeSprite(w + 2 * pad, h + 2 * pad, c => c.drawRect(Skia.XYWHRect(pad, pad, w, h), glowPaint(colour, blur)));
 }
 
-export default function EdgeMeter({ bus, height }: { bus?: MeterBus; height: number }) {
+export default function EdgeMeter({ bus, height, printH, printTop }: {
+  bus?: MeterBus; height: number;
+  /** Landscape: the print's design height and offset in a shorter window (default: the window). */
+  printH?: number; printTop?: number;
+}) {
   const [{ w }, onLayout] = useBoxSize();
   const H = height;
   const reduceMotion = useReduceMotion();
@@ -200,7 +208,7 @@ export default function EdgeMeter({ bus, height }: { bus?: MeterBus; height: num
 
   return (
     <View style={{ height: H, borderRadius: 3, overflow: 'hidden' }} onLayout={onLayout}>
-      {w > 0 && <Card w={w} h={H} />}
+      {w > 0 && <Card w={w} h={H} printH={printH} printTop={printTop} />}
       {w > 0 && (
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: H }} pointerEvents="none">
           {/* the red squelch hand: a set-point pointer parked at the threshold, hanging from the top */}

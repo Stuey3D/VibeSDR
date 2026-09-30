@@ -158,13 +158,16 @@ export interface LedVuProps {
   height: number;
   /** Shared banner showing: the housing's top padding is 3, not 6. */
   shared: boolean;
+  /** ★ Landscape (§9, constants/meters.ts landscapeDeck): the strip's own geometry — LEDs 9, labels
+   *  6.5, padding 3 6 2 — and `labelH: 0` for the strip without labels on a small screen. */
+  geom?: { padTop: number; padX: number; ledH: number; labelH: number; labelGap: number };
 }
 
-export default function LedVu({ bus, height, shared }: LedVuProps) {
+export default function LedVu({ bus, height, shared, geom }: LedVuProps) {
   const s = useUiScale();
   const [{ w }, onLayout] = useBoxSize();
-  const padX = s.r(7), padTop = s.r(shared ? 3 : 6), gap = s.r(4);
-  const ledH = s.r(13), labelGap = s.r(2), labelH = s.r(8);
+  const padX = geom?.padX ?? s.r(7), padTop = geom?.padTop ?? s.r(shared ? 3 : 6), gap = s.r(4);
+  const ledH = geom?.ledH ?? s.r(13), labelGap = geom?.labelGap ?? s.r(2), labelH = geom?.labelH ?? s.r(8);
   const ledW = w > 0 ? (w - 2 * padX - (VU_SEGMENTS - 1) * gap) / VU_SEGMENTS : 0;
 
   const sprites = useMemo(() => (ledW > 1 ? ledSprites(ledW, ledH) : null), [ledW, ledH]);
@@ -258,7 +261,7 @@ export default function LedVu({ bus, height, shared }: LedVuProps) {
             color={ringColour} opacity={ringOp} style="stroke" strokeWidth={1.5} />
         </Canvas>
       )}
-      <View style={{ position: 'absolute', left: padX, right: padX, top: padTop + ledH + labelGap, height: labelH,
+      {labelH > 0 && <View style={{ position: 'absolute', left: padX, right: padX, top: padTop + ledH + labelGap, height: labelH,
                      flexDirection: 'row', gap }} pointerEvents="none">
         {VU_LABELS.map(l => (
           <Text key={l} style={{ flex: 1, textAlign: 'center', fontFamily: FONT_HYPER, fontSize: labelH,
@@ -266,7 +269,7 @@ export default function LedVu({ bus, height, shared }: LedVuProps) {
                                  color: 'rgba(255,255,255,0.45)', includeFontPadding: false }}
                 numberOfLines={1} adjustsFontSizeToFit>{l}</Text>
         ))}
-      </View>
+      </View>}
     </View>
   );
 }
