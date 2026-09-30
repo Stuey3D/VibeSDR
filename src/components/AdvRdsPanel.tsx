@@ -23,58 +23,38 @@ import React, { useMemo, useRef } from 'react';
 import { useBusValue, type ValueBus } from '../services/valueBus';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import type { LayoutChangeEvent } from 'react-native';
-import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DECODER_FONT, decoderTokensFor } from './DecoderShell';
+import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT,
+         useDecoderStyles, type DecoderTokens } from './DecoderShell';
+import { DECODER_MEANING } from '../constants/decoderTokens';
 import { AlphaType, Canvas, ColorType, Image as SkiaImage, Path, Points, Rect, Skia,
          Text as SkText, matchFont } from '@shopify/react-native-skia';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
 
-/* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1). The tints stay here — they are this
- *  panel's measured choices, and row 8 (Transparent / Solid) is where they become the user's. */
-const T = decoderTokensFor();
-const C = {
-  // ★ 0.95 was an opaque slab that blanked the waterfall behind it on BOTH platforms. Softened
-  //   so the spectrum reads through; on iOS a BlurView sits underneath to keep the text legible
-  //   against it, which is what the control island has always done.
-  bg:      0.72,
-  // ★★ BIG IS MORE TRANSPARENT THAN SMALL, and only now can be. It carries no blur, so its tint is
-  //   the ONLY thing between the reader and the spectrum — where SMALL's blur (iOS) is already
-  //   doing some of that work. And BIG is the mode that hides most of the band, so it is the one
-  //   that gains from being seen through. Stuart, once 49 fixed the stutter: "we could now make it
-  //   slightly more transparent to allow for the signals to be seen behind it slightly better."
-  //   ★ Free, unlike the blur that used to be here: alpha blending does not resample what is
-  //   underneath, which is the whole reason the panel could stop being frosted and start being
-  //   glass. See the panel body for that story.
-  bgTall:  0.62,
-  // ★★★ BIG IS ANDROID'S LOOK, DELIBERATELY — the same tint, no blur. Android has never had the
-  //   BlurView (it is gated on Platform.OS === 'ios') and Stuart's verdict on it is "the window is
-  //   glass and the spectrum shines through". That is the effect BIG wants and it is FREE: alpha
-  //   blending does not force the offscreen resample a backdrop blur does, so the see-through
-  //   costs nothing and the blur was the whole bill.
-  //   ★ THE POINT OF SEEING THROUGH IT IS TUNING — Stuart: "so that the user could still see a
-  //   little spectrum underneath the window so that they can see to tune". An earlier pass at this
-  //   raised BIG to 0.93 to protect legibility once the blur was gone, which traded away the one
-  //   thing the transparency existed for. Same value as SMALL, so the two modes match.
-  //   ★★ Same rule as ControlsBar's blur note (2026-07-28): "ANDROID IS THE TARGET, NOT THE THING
-  //   TO CHANGE… iOS just needs to get to android level." It applied to the island then and it
-  //   applies to this panel now.
-  goldDim: T.label,
-  // ★★ LIFTED FROM 0.38. These are the field TITLES ("PI", "Station", "RDS↔pilot") and the plot
-  //   captions, and 0.38 was chosen when the panel sat over a near-opaque slab. The panel is glass
-  //   now — deliberately, so the spectrum reads through it — which means the background behind a
-  //   label is no longer black but whatever the waterfall is doing, and a bright band swallowed
-  //   them (Stuart, 2026-08-02: "with the waterfall behind they are a little hard to see depending
-  //   on whats on the waterfall behind").
-  //   ★ Still clearly SUBORDINATE to the values, which are full-strength gold — the hierarchy is
-  //   the point of dimming them, and 0.60 keeps it while staying legible over a lit waterfall.
-  //   Raising the tint instead would have undone the transparency that was just asked for.
-  muted:   T.muted,
-  good:    T.good,
-  warn:    T.warn,
-  bad:     T.bad,
-  value:   T.value,
-};
+/* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component reads
+ *  `useDecoderStyles(makeStyles)`, so a chassis / colour / Decoder-background change reaches the
+ *  text and the plots, not just the frame. Module-level code (the verdict functions, which pick a
+ *  MEANING colour) reads the fixed meaning colours below — they never follow a setting (§10.2).
+ *
+ * ★★★ THE TINT WAS THIS PANEL'S, AND IS NOW EVERY PANEL'S "TRANSPARENT" (§10.2): 0.72 in SMALL over
+ *  an iOS blur, 0.62 in BIG with none. Its history, which is why those are the numbers:
+ *  ★ 0.95 was an opaque slab that blanked the waterfall behind it on BOTH platforms. Softened so
+ *    the spectrum reads through; on iOS a BlurView sits underneath to keep the text legible
+ *    against it, which is what the control island has always done.
+ *  ★★ BIG IS MORE TRANSPARENT THAN SMALL, and only now can be. It carries no blur, so its tint is
+ *    the ONLY thing between the reader and the spectrum. Stuart, once 49 fixed the stutter: "we
+ *    could now make it slightly more transparent to allow for the signals to be seen behind it
+ *    slightly better." Free: alpha blending does not resample what is underneath.
+ *  ★★★ BIG IS ANDROID'S LOOK, DELIBERATELY — the same tint, no blur. THE POINT OF SEEING THROUGH IT
+ *    IS TUNING — Stuart: "so that the user could still see a little spectrum underneath the window
+ *    so that they can see to tune". An earlier pass raised BIG to 0.93 to protect legibility once
+ *    the blur was gone, which traded away the one thing the transparency existed for. That trade
+ *    is now the user's: Solid (0.95 / metal) for reading, Transparent for tuning.
+ *  ★★ LABELS LIFTED FROM 0.38 (2026-08-02: "with the waterfall behind they are a little hard to
+ *    see"), and to .72 by the §10.2 contrast sweep — still clearly SUBORDINATE to the full-strength
+ *    values, which is the hierarchy the dimming exists for. */
+const C = DECODER_MEANING;
 const FONT = DECODER_FONT;
 const DASH = '—';
 
@@ -198,7 +178,8 @@ const Row = React.memo(function Row({ label, value, colour, conf, raw, reserve }
    *  reserve the height, so the row cannot change size when the value does. */
   reserve?: string;
 }) {
-  const lblCol = raw && conf !== undefined ? (conf ? C.good : C.bad) : C.muted;
+  const { s, C } = useDecoderStyles(makeStyles);
+  const lblCol = raw && conf !== undefined ? (conf ? C.good : C.bad) : C.rowLabel;
   /* ★★★ AND EVERY ROW REMEMBERS THE TALLEST IT HAS EVER BEEN. `reserve` above is the right idea
    *     but it has to be told the longest string by hand, and most of these values are ASSEMBLED
    *     from optional clauses — "3.6% · slight · held · IMS standing by · multipath not measurable
@@ -324,6 +305,7 @@ function constellationVerdict(xy: number[], phaseCoh: number, ber: number):
  *  is sweeping against the pilot, which is a diagnosis and not a fault of ours. Points arrive
  *  pre-scaled x100 and clipped to +/-127 by the server. */
 const Constellation = React.memo(function Constellation({ xy, size }: { xy: number[]; size: number }) {
+  const { C } = useDecoderStyles(makeStyles);
   const pts = useMemo(() => {
     const out: { x: number; y: number }[] = [];
     const half = size / 2;
@@ -339,9 +321,9 @@ const Constellation = React.memo(function Constellation({ xy, size }: { xy: numb
   }, [xy, size]);
   return (
     <Canvas style={{ width: size, height: size }}>
-      <Rect x={0} y={0} width={size} height={size} color="rgba(255,160,0,0.05)" />
-      <Rect x={size / 2 - 0.5} y={0} width={1} height={size} color="rgba(255,160,0,0.18)" />
-      <Rect x={0} y={size / 2 - 0.5} width={size} height={1} color="rgba(255,160,0,0.18)" />
+      <Rect x={0} y={0} width={size} height={size} color={C.plot} />
+      <Rect x={size / 2 - 0.5} y={0} width={1} height={size} color={C.axis} />
+      <Rect x={0} y={size / 2 - 0.5} width={size} height={1} color={C.axis} />
       {/* ★★★ ONE NODE FOR THE WHOLE SCATTER, NOT ONE PER POINT. This was `pts.map(... <Circle/>)`
           — a React ELEMENT for every point, several hundred of them, created, reconciled and
           turned into Skia scene-graph nodes SIX TIMES A SECOND, across two plots.
@@ -353,7 +335,7 @@ const Constellation = React.memo(function Constellation({ xy, size }: { xy: numb
           ★ `Points` takes the array and draws it in one primitive; round caps make each a dot, so
           it is the same picture. */}
       <Points points={pts} mode="points" style="stroke" strokeWidth={2.4}
-              strokeCap="round" color="rgba(125,255,154,0.75)" />
+              strokeCap="round" color={C.dot} />
     </Canvas>
   );
 });
@@ -363,6 +345,7 @@ const Constellation = React.memo(function Constellation({ xy, size }: { xy: numb
  *  from. The same points as the constellation, rotated onto the wanted axis, drawn left to right.
  *  One Points node, as the constellation — never an element per symbol. */
 const Eye = React.memo(function Eye({ xy, width, height }: { xy: number[]; width: number; height: number }) {
+  const { C } = useDecoderStyles(makeStyles);
   const pts = useMemo(() => {
     const out: { x: number; y: number }[] = [];
     const n = xy.length / 2;
@@ -379,10 +362,10 @@ const Eye = React.memo(function Eye({ xy, width, height }: { xy: number[]; width
   }, [xy, width, height]);
   return (
     <Canvas style={{ width, height }}>
-      <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
-      <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color="rgba(255,160,60,0.35)" />
+      <Rect x={0} y={0} width={width} height={height} color={C.plot} />
+      <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color={C.axisStrong} />
       <Points points={pts} mode="points" style="stroke" strokeWidth={1.8}
-              strokeCap="round" color="rgba(125,255,154,0.85)" />
+              strokeCap="round" color={C.trace} />
     </Canvas>
   );
 });
@@ -397,6 +380,7 @@ const MPX_MARKS: [number, string][] = [[19000, 'PILOT'], [38000, 'L−R'], [5700
 const mpxFont = matchFont({ fontFamily: 'monospace', fontSize: 8 });
 
 const Mpx = React.memo(function Mpx({ mpx, width, height }: { mpx: number[]; width: number; height: number }) {
+  const { C } = useDecoderStyles(makeStyles);
   const path = useMemo(() => {
     const p = Skia.Path.Make();
     if (!mpx.length) return p;
@@ -414,22 +398,22 @@ const Mpx = React.memo(function Mpx({ mpx, width, height }: { mpx: number[]; wid
   }, [mpx, width, height]);
   return (
     <Canvas style={{ width, height }}>
-      <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
+      <Rect x={0} y={0} width={width} height={height} color={C.plot} />
       {/* L+R occupies DC..15 kHz — a band rather than a line, so shade it. */}
       <Rect x={0} y={10} width={(15000 / MPX_SPAN) * width} height={height - 10}
-            color="rgba(255,170,60,0.07)" />
-      {mpxFont && <SkText x={2} y={8} text="L+R" font={mpxFont} color="rgba(255,190,110,0.85)" />}
+            color={C.axisFaint} />
+      {mpxFont && <SkText x={2} y={8} text="L+R" font={mpxFont} color={C.chartText} />}
       {MPX_MARKS.map(([hz, label]) => {
         const x = (hz / MPX_SPAN) * width;
         return (
           <React.Fragment key={label}>
-            <Rect x={x - 0.5} y={10} width={1} height={height - 10} color="rgba(255,170,60,0.30)" />
+            <Rect x={x - 0.5} y={10} width={1} height={height - 10} color={C.mark} />
             {mpxFont && <SkText x={Math.min(width - 26, x + 2)} y={8} text={label}
-                                font={mpxFont} color="rgba(255,190,110,0.85)" />}
+                                font={mpxFont} color={C.chartText} />}
           </React.Fragment>
         );
       })}
-      <Path path={path} color={C.good} style="stroke" strokeWidth={1.2} />
+      <Path path={path} color={C.mpxLine} style="stroke" strokeWidth={1.2} />
     </Canvas>
   );
 });
@@ -487,6 +471,7 @@ const EYE_COLOURS: Array<[number, number, number]> = [
 const ScopeBox = React.memo(function ScopeBox(
   { grid, ew, eh, width, height, colour }:
   { grid: string; ew: number; eh: number; width: number; height: number; colour: [number, number, number] }) {
+  const { C } = useDecoderStyles(makeStyles);
   const img = useMemo(() => {
     if (ew <= 0 || eh <= 0) return null;
     const n = ew * eh;
@@ -507,15 +492,16 @@ const ScopeBox = React.memo(function ScopeBox(
   }, [grid, ew, eh, colour]);
   return (
     <Canvas style={{ width, height }}>
-      <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
+      <Rect x={0} y={0} width={width} height={height} color={C.plot} />
       {img && <SkiaImage image={img} x={0} y={0} width={width} height={height} fit="fill" />}
-      <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color="rgba(255,160,60,0.30)" />
-      <Rect x={width / 2 - 0.5} y={0} width={1} height={height} color="rgba(255,160,60,0.18)" />
+      <Rect x={0} y={height / 2 - 0.5} width={width} height={1} color={C.mark} />
+      <Rect x={width / 2 - 0.5} y={0} width={1} height={height} color={C.markFaint} />
     </Canvas>
   );
 });
 
 export default function AdvRdsPanel(p: AdvRdsPanelProps) {
+  const { s, C } = useDecoderStyles(makeStyles);
   const busX = useBusValue(p.bus);
   const x = p.bus ? (busX ?? null) : (p.x ?? null);
   const { raw } = p;
@@ -1087,7 +1073,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
 
   return (
     <DecoderShell bottom={p.bottomOffset} maxHeight={maxH} maxWidth={wideCols ? 800 : 600}
-                  tint={p.tall ? C.bgTall : C.bg} blur={p.tall ? 0 : 35}>
+                  tall={p.tall}>
       {/* ★ The cap is the CONTENT's width, not a guess: the fields column is 340 and the plots
           column ~330, plus the 18 gap and 24 of padding — so ~760 in two columns, and ~560
           stacked where only the fields and the 310-wide symbol trace have to fit. */}
@@ -1117,7 +1103,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             complaint that produced it was a 0.95 slab blanking the waterfall behind that strip —
             and BIG, where you are reading an instrument rather than watching through it, takes a
             near-solid tint instead. Platform.OS is 'ios' on a Mac, which is how the Mac got here. */}
-        {/* ★ Blur and tint are DecoderShell's now: `blur` above is 35 in SMALL and 0 in BIG, iOS only. */}
+        {/* ★ Blur and tint are DecoderShell's now, from the Decoder background setting: under the
+            default Transparent, 35 in SMALL and 0 in BIG, iOS only — and never on silver / black. */}
         <DecoderHeader>
           {/* ★ Matches the button that opens it — an abbreviation in one place and the full
               name in the other reads as two different features. */}
@@ -1137,6 +1124,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <DecoderKey tone="close" onPress={p.onClose} hitSlop={8} label="✕" />
         </DecoderHeader>
 
+        <DecoderBody>
         <ScrollView contentContainerStyle={[s.body, wideCols && s.bodyWide]}>
           <View style={wideCols ? s.colFields : undefined}>
           {/* ★ RAW mode needs saying, not just showing — a panel full of red labels with no
@@ -1271,8 +1259,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                     • the LINE at 75 % = the limit.
                   0-100 kHz, so 1 kHz = 1 %. Drawn dim when the reading is not trusted. */}
               <View style={{ width: 180, height: 8, marginTop: 4, borderRadius: 2,
-                             backgroundColor: 'rgba(255,160,0,0.10)',
-                             borderWidth: 1, borderColor: 'rgba(255,160,0,0.25)',
+                             backgroundColor: C.devBarBg,
+                             borderWidth: 1, borderColor: C.devBarBorder,
                              overflow: 'hidden' }}>
                 <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0,
                                width: `${mpxDevInfo.pct}%`, backgroundColor: mpxDevInfo.c }} />
@@ -1324,11 +1312,41 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           </View>
           )}
         </ScrollView>
+        </DecoderBody>
     </DecoderShell>
   );
 }
 
-const s = StyleSheet.create({
+type Palette = ReturnType<typeof palette>;
+/** The panel's colours. ★ On the default chassis the plots keep their exact literals (§13.1: today's
+ *  look); on silver / black they take the controls colour (§10.2 "charts take the controls colour").
+ *  The eye's per-component colours (ScopeBox `colour`) are VERDICTS and stay as they are. */
+const palette = (T: DecoderTokens) => {
+  const def = T.chassis === 'default';
+  return {
+    ...DECODER_MEANING,
+    goldDim:  T.label,
+    muted:    T.muted,
+    rowLabel: T.rowLabel,
+    value:    T.value,
+    plot:     T.plot,
+    axis:     T.axis,
+    axisStrong: T.axisStrong,
+    axisFaint:  T.axisFaint,
+    chartText:  T.chartText,
+    mark:       def ? 'rgba(255,170,60,0.30)' : T.axisStrong,
+    markFaint:  def ? 'rgba(255,160,60,0.18)' : T.axis,
+    dot:      T.dot,
+    trace:    T.trace,
+    mpxLine:  def ? DECODER_MEANING.good : T.trace,
+    note:     def ? 'rgba(255,190,90,0.80)' : T.label,
+    devBarBg:     def ? 'rgba(255,160,0,0.10)' : T.rowActive,
+    devBarBorder: def ? 'rgba(255,160,0,0.25)' : T.axis,
+  };
+};
+
+/** ★ Built once per setting (useDecoderStyles), never per render. */
+const makeStyles = (T: DecoderTokens) => { const C: Palette = palette(T); const s = StyleSheet.create({
   // ★★ CENTRED, AND CAPPED BY ITS CONTENT — the panel used to stretch to whatever was available,
   //   so on a Mac it was a column of text against a metre of empty box (Stuart: "needs to be
   //   centre justified so the box doesn't end up huge like this"). Same rule as the control
@@ -1353,8 +1371,8 @@ const s = StyleSheet.create({
   row:   { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   // ★ The label column is FIXED and the value WRAPS. Letting the label wrap instead was what
   // pushed text off the panel in the browser and made the whole thing scroll sideways.
-  lbl:   { fontFamily: FONT, fontSize: 11, letterSpacing: 1, color: C.muted, width: 112 },
-  val:   { fontFamily: FONT, fontSize: 13, color: C.value, flex: 1 },
+  lbl:   { fontFamily: FONT, fontSize: 11, letterSpacing: 1, color: C.rowLabel, width: 112 },
+  val:   { fontFamily: FONT, fontSize: 13, color: C.value, flex: 1, fontVariant: ['tabular-nums'] },
   section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
              marginTop: 10, marginBottom: 2 },
   plots:   { flexDirection: 'row', gap: 10, marginTop: 4 },
@@ -1371,6 +1389,6 @@ const s = StyleSheet.create({
   //   clear bands = every bit decided with margin" — so it is prose to be read, not a caption to
   //   be glanced at, and it is the longest run of small text sitting over a live waterfall.
   //   Stuart asked for the titles and then "including the text about the constellation etc".
-  plotNote: { fontFamily: FONT, fontSize: 12, color: 'rgba(255,190,90,0.80)', marginTop: 4, lineHeight: 16 },
+  plotNote: { fontFamily: FONT, fontSize: 12, color: C.note, marginTop: 4, lineHeight: 16 },
   logoWrap: { alignItems: 'center', marginTop: 10 },
-});
+}); return { s, C }; };

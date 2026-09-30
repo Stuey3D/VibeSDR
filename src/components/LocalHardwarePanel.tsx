@@ -4,7 +4,9 @@ import {
   KeyboardAvoidingView, Platform, Animated,
   Switch, StyleSheet,
 } from 'react-native';
-import { DecoderTitle, DecoderKey, DECODER_FONT, decoderTokensFor } from './DecoderShell';
+import { DecoderTitle, DecoderKey, DecoderSurface, DECODER_FONT } from './DecoderShell';
+import { decoderTokensFor } from '../constants/decoderTokens';
+import { useFaceplate } from '../contexts/FaceplateContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from './PanelNav';
 import GainSlider from './GainSlider';
@@ -27,8 +29,11 @@ const CONV_DIRS: ('up' | 'down')[] = ['up', 'down'];
 /* ★★ The frame, the title and the close key are DecoderShell's (brief §10.1): this sheet is one of
  *  the boxes over the waterfall and now shares their chrome and their pinned font. The body keeps
  *  its own white segment controls — those are settings, not read-outs, and row 10 (PopupShell)
- *  is where they take the chassis. */
-const T = decoderTokensFor();
+ *  is where they take the chassis.
+ * ★★ ALWAYS THE GLASS TOKENS (DecoderSurface bg="transparent"), whatever the Decoder background: the
+ *  sheet is an opaque dark settings sheet, never the brushed plate, so Solid silver's engraved
+ *  DARK title would vanish on it. It follows the chassis and controls colour live (border, title,
+ *  and the close key, a dome key like every decoder key). */
 const FONT = DECODER_FONT;
 const C = {
   bg:     'rgba(6,4,2,0.99)',
@@ -313,6 +318,8 @@ function Seg<T>({ options, value, onChange, fmt, sub, slot, disabled }: {
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const insets = useSafeAreaInsets();
+  const fp = useFaceplate();
+  const frameBorder = decoderTokensFor(fp.settings.chassis, fp.controls.rgb, 'transparent').border;
   // ★ Same rule as Seg's ring: only show keyboard focus when a keyboard is actually driving.
   const kbNav = useKeyboardMode();
   const [adminPw, setAdminPw] = useState('');
@@ -547,7 +554,8 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.kbWrap} pointerEvents="box-none">
-      <View style={[styles.sheet, {
+      <DecoderSurface bg="transparent">
+      <View style={[styles.sheet, { borderColor: frameBorder,
         paddingBottom: insets.bottom + 12,
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
       }]}>
@@ -1591,6 +1599,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           </Text>}
         </ScrollView>
       </View>
+      </DecoderSurface>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -1603,7 +1612,7 @@ const styles = StyleSheet.create({
   kbWrap: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end' },
   sheet: { left: 0, right: 0, maxHeight: '85%',
            backgroundColor: C.bg, borderTopLeftRadius: 16, borderTopRightRadius: 16,
-           borderWidth: 1, borderColor: T.border, paddingHorizontal: 16, paddingTop: 10 },
+           borderWidth: 1, paddingHorizontal: 16, paddingTop: 10 },
   handleBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   // ★ Shrinks rather than pushing the close key off a narrow sheet (long USB model strings).
   title: { flexShrink: 1, marginRight: 8 },

@@ -595,8 +595,10 @@ function SelectorKey({ label, dot, active, onPress, a11y }: {
   );
 }
 
-function SelectorRow<T extends string>({ label, choices, value, onPick }: {
+function SelectorRow<T extends string>({ label, choices, value, onPick, note }: {
   label: string; choices: PaneChoice<T>[]; value: T; onPick: (v: T) => void;
+  /** A subtitle under the keys — what the choice costs you (§10.2's DECODERS row). */
+  note?: string;
 }) {
   return (
     <View style={styles.ctrlRow}>
@@ -606,6 +608,7 @@ function SelectorRow<T extends string>({ label, choices, value, onPick }: {
           <SelectorKey key={c.value} label={c.label} active={c.value === value} onPress={() => onPick(c.value)} />
         ))}
       </BtnRow>
+      {!!note && <Text style={styles.selNote}>{note}</Text>}
     </View>
   );
 }
@@ -666,8 +669,10 @@ function ControlCustomisationPane({
       </View>
       <SelectorRow label="SIGNAL METER" choices={METER_CHOICES} value={fp.meter}
         onPick={(v: SignalMeter) => set({ meter: v })} />
+      {/* ★ §10.2: say what Solid costs — it is the one faceplate choice that hides something. */}
       <SelectorRow label="DECODERS" choices={DECODER_BG_CHOICES} value={fp.decoderBg}
-        onPick={(v: DecoderBackground) => set({ decoderBg: v })} />
+        onPick={(v: DecoderBackground) => set({ decoderBg: v })}
+        note="Solid · easier to read, hides the signals behind" />
 
       {/* ── TUNING & ZOOM — moved from the menu's CONTROLS section, behaviour unchanged ── */}
       <SubLabel label="TUNING & ZOOM" />
