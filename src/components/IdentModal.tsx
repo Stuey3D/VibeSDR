@@ -9,6 +9,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import {
+  usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
+  PopupKey, PopupPlate, type PopupTokens,
+} from './PopupShell';
+import { useSurface } from '../contexts/FaceplateContext';
 import { sanitizeIdent } from '../services/kiwiIdent';
 
 interface Props {
@@ -23,6 +28,11 @@ interface Props {
 /// remembered (see kiwiIdent), pre-filled here so re-opening it is confirm-or-edit, not retype.
 /// It is IDENTITY, not a chat name (KiwiSDR has no chat) — worded accordingly.
 export default function IdentModal({ visible, initial, onSubmit, onCancel }: Props) {
+  const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
+  // ★★★ Transparency OFF: no full-screen dim (§10.2). ★ Silver / black: the brushed plate (§10.3).
+  const dim = useSurface().scrimOpacity > 0;
+  const metalFrame = usePopupFrame(16, false);
   const [name, setName] = useState(initial);
 
   // Re-seed the field whenever the modal is (re-)shown with a different saved value.
@@ -42,10 +52,11 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
       onRequestClose={onCancel}
     >
       <KeyboardAvoidingView
-        style={styles.overlay}
+        style={[styles.overlay, dim && styles.overlayDim]}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <View style={styles.box}>
+        <View style={[styles.box, metalFrame]}>
+          <PopupPlate radius={16} />
           <Text style={styles.title}>Name or Callsign</Text>
           <Text style={styles.sub} numberOfLines={3}>
             Some KiwiSDR receivers require a name or callsign before you can listen. It’s saved and
@@ -54,7 +65,7 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
           <TextInput
             style={styles.input}
             placeholder="e.g. M0ABC or Stu"
-            placeholderTextColor="rgba(200,137,58,0.45)"
+            placeholderTextColor={pt.metal ? pt.winDim : "rgba(200,137,58,0.45)"}
             value={name}
             onChangeText={(t) => setName(sanitizeIdent(t))}
             maxLength={16}
@@ -63,6 +74,12 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
             returnKeyType="go"
             onSubmitEditing={submit}
           />
+          {pt.metal ? (
+            <View style={styles.row}>
+              <PopupKey label="CANCEL" onPress={onCancel} height={40} fontSize={12} style={{ minWidth: 96 }} />
+              <PopupKey label="SAVE & CONNECT" primary onPress={submit} height={40} fontSize={12} style={{ minWidth: 110 }} />
+            </View>
+          ) : (
           <View style={styles.row}>
             <TouchableOpacity style={styles.btn} onPress={onCancel}>
               <Text style={styles.btnTxtCancel}>Cancel</Text>
@@ -71,18 +88,21 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
               <Text style={styles.btnTxtPrimary}>Save & Connect</Text>
             </TouchableOpacity>
           </View>
+          )}
         </View>
       </KeyboardAvoidingView>
     </Modal>
   );
 }
 
-const styles = StyleSheet.create({
-  overlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', padding: 24 },
+const makeStyles = (pt: PopupTokens) => StyleSheet.create({
+  overlay:     { flex: 1, justifyContent: 'center', padding: 24 },
+  overlayDim:  { backgroundColor: 'rgba(0,0,0,0.75)' },
   box:         { backgroundColor: '#0A0804', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,160,0,0.40)', padding: 20, gap: 14 },
-  title:       { fontFamily: 'Courier', fontSize: 16, fontWeight: 'bold', color: '#FFB833', letterSpacing: 1 },
-  sub:         { fontFamily: 'Courier', fontSize: 11, color: 'rgba(200,137,58,0.70)', lineHeight: 16 },
-  input:       { height: 44, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 6, paddingHorizontal: 12, fontFamily: 'Courier', fontSize: 14, color: '#FFB833' },
+  title:       onMetal(pt, { fontFamily: 'Courier', fontSize: 16, fontWeight: 'bold', color: '#FFB833', letterSpacing: 1 }, { ...engraveText(pt), letterSpacing: 1.5 }),
+  sub:         onMetal(pt, { fontFamily: 'Courier', fontSize: 11, color: 'rgba(200,137,58,0.70)', lineHeight: 16 }, engraveText(pt, pt.note)),
+  input:       onMetal(pt, { height: 44, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 6, paddingHorizontal: 12, fontFamily: 'Courier', fontSize: 14, color: '#FFB833' },
+                        { ...windowStyle(pt), fontFamily: 'Atkinson Hyperlegible', color: pt.readout }),
   row:         { flexDirection: 'row', gap: 10, justifyContent: 'flex-end' },
   btn:         { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,160,0,0.30)' },
   btnPrimary:  { borderColor: 'rgba(255,160,0,0.60)', backgroundColor: 'rgba(255,160,0,0.12)' },

@@ -1,6 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { Modal, View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
+  PopupKey, PopupPlate, PopupHandle, PopupWindow, type PopupTokens,
+} from './PopupShell';
+import { useSurface } from '../contexts/FaceplateContext';
 
 // Rough receiver location for the FT8 map when device GPS is unavailable/denied
 // (local hardware). The user picks a nearby city → "rough distances based on the
@@ -67,6 +72,11 @@ interface Props {
 
 export default function CityPickerModal({ visible, onClose, onPick }: Props) {
   const insets = useSafeAreaInsets();
+  const s = usePopupStyles(makeS);
+  const pt = usePopupTheme();
+  // ★★★ Transparency OFF: no full-screen dim over the live waterfall (§10.2).
+  const dim = useSurface().scrimOpacity > 0;
+  const metalFrame = usePopupFrame(14, true);
   const [q, setQ] = useState('');
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -76,18 +86,22 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={s.backdrop}>
-        <View style={[s.sheet, { paddingBottom: insets.bottom + 10 }]}>
+      <View style={[s.backdrop, dim && s.backdropDim]}>
+        <View style={[s.sheet, { paddingBottom: insets.bottom + 10 }, metalFrame, metalFrame && { paddingTop: 0 }]}>
+          <PopupPlate radius={14} />
+          <PopupHandle />
           <Text style={s.title}>SET LOCATION</Text>
           <Text style={s.sub}>Pick a nearby city for rough spot distances (no GPS).</Text>
           <TextInput
             style={s.search}
             placeholder="Search city or country…"
-            placeholderTextColor="rgba(120,240,120,0.4)"
+            placeholderTextColor={pt.metal ? pt.winDim : 'rgba(120,240,120,0.4)'}
             value={q}
             onChangeText={setQ}
             autoCorrect={false}
           />
+          {/* ★ §10.3: the list is data — a recessed window on silver / black. */}
+          <PopupWindow style={s.listWrap} metalStyle={s.listWin}>
           <FlatList
             data={list}
             keyExtractor={(c) => c.name}
@@ -100,28 +114,37 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
               </TouchableOpacity>
             )}
           />
+          </PopupWindow>
+          {pt.metal ? (
+            <PopupKey label="CANCEL" onPress={onClose} height={32} style={{ alignSelf: 'center', width: 110, marginTop: 10 }} />
+          ) : (
           <TouchableOpacity style={s.cancel} onPress={onClose} activeOpacity={0.7}>
             <Text style={s.cancelTxt}>CANCEL</Text>
           </TouchableOpacity>
+          )}
         </View>
       </View>
     </Modal>
   );
 }
 
-const s = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+const makeS = (pt: PopupTokens) => StyleSheet.create({
+  backdrop: { flex: 1, justifyContent: 'flex-end' },
+  backdropDim: { backgroundColor: 'rgba(0,0,0,0.6)' },
   sheet:    { backgroundColor: '#060906', borderTopWidth: 1, borderColor: 'rgba(80,200,80,0.4)',
               borderTopLeftRadius: 14, borderTopRightRadius: 14, paddingHorizontal: 16, paddingTop: 14, maxHeight: '80%' },
-  title:    { color: 'rgba(120,240,120,0.95)', fontSize: 14, letterSpacing: 2, fontWeight: '600' },
-  sub:      { color: 'rgba(80,200,80,0.6)', fontSize: 11, marginTop: 4, marginBottom: 10 },
-  search:   { backgroundColor: 'rgba(80,200,80,0.08)', borderWidth: 1, borderColor: 'rgba(80,200,80,0.3)',
+  title:    onMetal(pt, { color: 'rgba(120,240,120,0.95)', fontSize: 14, letterSpacing: 2, fontWeight: '600' }, engraveText(pt)),
+  sub:      onMetal(pt, { color: 'rgba(80,200,80,0.6)', fontSize: 11, marginTop: 4, marginBottom: 10 }, engraveText(pt, pt.note)),
+  search:   onMetal(pt, { backgroundColor: 'rgba(80,200,80,0.08)', borderWidth: 1, borderColor: 'rgba(80,200,80,0.3)',
               borderRadius: 8, color: '#bfe', paddingHorizontal: 12, paddingVertical: 9, fontSize: 14 },
-  list:     { marginTop: 8 },
+              { ...windowStyle(pt), color: pt.readout }),
+  listWrap: { flexShrink: 1 },
+  listWin:  { marginTop: 8, paddingHorizontal: 10 },
+  list:     onMetal(pt, { marginTop: 8 }, { marginTop: 0 }),
   row:      { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 11,
               borderBottomWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(80,200,80,0.15)' },
-  city:     { color: 'rgba(180,255,180,0.95)', fontSize: 15 },
-  cc:       { color: 'rgba(80,200,80,0.55)', fontSize: 12, marginLeft: 8 },
+  city:     onMetal(pt, { color: 'rgba(180,255,180,0.95)', fontSize: 15 }, { color: pt.winText }),
+  cc:       onMetal(pt, { color: 'rgba(80,200,80,0.55)', fontSize: 12, marginLeft: 8 }, { color: pt.winDim }),
   cancel:   { marginTop: 10, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 24 },
   cancelTxt:{ color: 'rgba(80,200,80,0.7)', fontSize: 13, letterSpacing: 1 },
 });
