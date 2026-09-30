@@ -170,9 +170,10 @@ export function GlossPanel({ style, radius, trim = true, squareBottom = false }:
 
 /**
  * A recessed dark window in the plate (the status display, §8.1): #050505, an inner shadow at the
- * top, and the light lip below. Its contents keep today's colours — light text needs a dark window
- * on a silver plate (§10.3 TRAP, the same rule the popups follow).
- * ★ Row 9 fills it with the ghost grid and Doto in the text colour; this is only the window.
+ * top, and the light lip below — light text needs a dark window on a silver plate (§10.3 TRAP, the
+ * same rule the popups follow).
+ * ★ This is only the window. ControlsBar's StatusWell fills it with the ghost grid and Doto in the
+ *   text colour (row 4); row 9 adds the landscape drop order.
  */
 export function RecessedWindow({ lip, style, children }: {
   lip: string; style?: StyleProp<ViewStyle>; children: React.ReactNode;

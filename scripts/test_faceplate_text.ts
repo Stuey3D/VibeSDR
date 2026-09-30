@@ -10,7 +10,7 @@
 import {
   toSegCells, segCellCount, segGhost, segCellList, foldForSeg, foldForDot, foldToAscii, dotoHas,
   toUpperDisplay, flagToIso, foldIsUsable, displayOrFallback, setTransliterator, SEG_BLANK,
-  toSegRun, vfdStripText, cellWindow, steppedOffset,
+  toSegRun, vfdStripText, cellWindow, steppedOffset, statusGainParts,
 } from '../src/constants/displayText.ts';
 
 let fails = 0, passes = 0;
@@ -144,6 +144,13 @@ setTransliterator(null);
   eq('loops back to the start after the end pause', steppedOffset(1500 + 6 * 300 + 1500 + 10, 20, 14, true), 0);
   eq('a run that fits never moves', steppedOffset(5000, 10, 14, true), 0);
 }
+
+// ── Status display: the gain arrow is drawn, the value written "25.4dB" (§8.1) ──
+eq('gain down', statusGainParts('GAIN ↓ 25.4 dB'), { label: 'GAIN', dir: 'down', value: '25.4dB', tail: '' });
+eq('gain up', statusGainParts('GAIN ↑ 3.0 dB'), { label: 'GAIN', dir: 'up', value: '3.0dB', tail: '' });
+eq('gain held, no arrow', statusGainParts('GAIN · 12.5 dB (held)'), { label: 'GAIN', dir: null, value: '12.5dB', tail: ' (held)' });
+eq('plain AGC is not a gain reading', statusGainParts('AGC'), null);
+ok('Doto really has no arrow to draw it with', !dotoHas('↓') && !dotoHas('↑'));
 
 void SEG_BLANK;
 console.log(`faceplate text: ${passes} passed, ${fails} failed`);

@@ -269,6 +269,28 @@ export function displayOrFallback(text: string, display: 'dot' | 'seg', freqLabe
   return callsign ? `${freqLabel} ${callsign}` : freqLabel;
 }
 
+// ── The status display (§8.1) ────────────────────────────────────────────────
+
+export interface GainParts { label: string; dir: 'up' | 'down' | null; value: string; tail: string }
+
+/**
+ * The bus's gain reading ("GAIN ↓ 25.4 dB", "GAIN · 3.0 dB (held)") split so the status display can
+ * DRAW the arrow — Doto has no arrow glyph (§8.1) — and write the value the mockup's way ("25.4dB").
+ * null when the text is not a gain reading ("AGC"), which is then shown as it is.
+ */
+export function statusGainParts(agcText: string): GainParts | null {
+  const m = /^GAIN\s*([↑↓·])?\s*(-?[\d.]+)\s*dB(.*)$/.exec(agcText);
+  if (!m) return null;
+  return { label: 'GAIN', dir: m[1] === '↑' ? 'up' : m[1] === '↓' ? 'down' : null, value: `${m[2]}dB`, tail: m[3] };
+}
+
+/**
+ * ★ Row 9's hook: the landscape status row's DROP ORDER (§8.2), first to go first. The connection
+ * meter is never in it — it is never dropped. Measured with onLayout, never by device model.
+ */
+export const STATUS_DROP_ORDER = ['if', 'gain', 'linkIcons', 'localTime', 'dsp', 'rate', 'shared', 'utc', 'rec'] as const;
+export type StatusItem = typeof STATUS_DROP_ORDER[number];
+
 // ── The VTS strip on a VFD ───────────────────────────────────────────────────
 
 /** A unit riding in a 14-segment run: drawn in the sans over its blank cells, never through DSEG. */

@@ -48,7 +48,46 @@ import TunerKeys from './TunerKeys';
 import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
 import { GhostGrid, SegDigits } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
-import { FONT_DOTO } from '../constants/faceplate';
+import { FONT_DOTO, rgba } from '../constants/faceplate';
+import { statusGainParts, type StatusItem } from '../constants/displayText';
+import Svg, { Path as SvgPath } from 'react-native-svg';
+
+/**
+ * ★★ THE STATUS DISPLAY (§8.1) on silver / black: a recessed sub-display in Doto 900 12 pt, in the
+ *   TEXT colour, over the ghost-dot grid. The default chassis keeps today's footer exactly — the
+ *   context is null there and every status piece draws as it always has. A context rather than props
+ *   because the pieces (ClockRow, LinkIndicator, DspBadges, the bars' own inline texts) are spread
+ *   through both bars.
+ */
+interface StatusDisplay { font: string; color: string; glow: string; rgb: string; size: number }
+const StatusDisplayContext = React.createContext<StatusDisplay | null>(null);
+
+/** A status text: today's style on the default deck; Doto in the text colour inside the display.
+ *  `keepColor` for meaning colours (the recording red) that no faceplate colour may replace. */
+function StatusText({ style, keepColor = false, children, ...rest }:
+    React.ComponentProps<typeof Text> & { keepColor?: boolean }) {
+  const sd = React.useContext(StatusDisplayContext);
+  if (!sd) return <Text style={style} {...rest}>{children}</Text>;
+  const flat = StyleSheet.flatten(style) ?? {};
+  return (
+    <Text {...rest} style={[flat, {
+      fontFamily: sd.font, fontSize: sd.size, fontWeight: 'normal', letterSpacing: 0.4,
+      color: keepColor ? flat.color : sd.color,
+      textShadowColor: keepColor ? undefined : sd.glow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 },
+    }]}>{children}</Text>
+  );
+}
+
+/** The gain arrow, DRAWN (Doto has no arrow glyph) — Deck.mockup's 7 × 8 stroke. */
+function GainArrow({ dir, color, size }: { dir: 'up' | 'down'; color: string; size: number }) {
+  const k = size / 12;
+  return (
+    <Svg width={7 * k} height={8 * k} viewBox="0 0 7 8" style={{ marginLeft: 3 * k, marginRight: 1 * k,
+         transform: dir === 'up' ? [{ rotate: '180deg' }] : undefined }}>
+      <SvgPath d="M3.5 0v6M1 3.5l2.5 3 2.5-3" fill="none" stroke={color} strokeWidth={1.4} />
+    </Svg>
+  );
+}
 
 /**
  * ★ What the TUBES need that the formatted string does not carry: the frequency as a number, the
@@ -283,6 +322,18 @@ function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
  *  everywhere else in this bar (the connection meter beneath it). */
 function ClockRow({ clock, color, font, size }:
     { clock: { utc: string; srv: string; fromServer: boolean }; color: string; font?: string; size: number }) {
+  const sd = React.useContext(StatusDisplayContext);
+  if (sd) {
+    // §8.1: `08:37 UTC 09:37 BST` — Doto, text colour, one run; the node mark stays (it means
+    // "the receiver's clock"), drawn in the display's colour.
+    return (
+      <View style={pm.clockRow}>
+        <StatusText numberOfLines={1}>{clock.utc}</StatusText>
+        {clock.fromServer ? <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} /> : null}
+        <StatusText numberOfLines={1}>{clock.srv}</StatusText>
+      </View>
+    );
+  }
   return (
     <View style={pm.clockRow}>
       <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size }}>{clock.utc}</Text>
@@ -485,6 +536,7 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
 // 1 red = stalling/reconnecting, all dim = disconnected.
 function LinkBars({ q }: { q: 0 | 1 | 2 | 3 }) {
   const ct = useFaceplate().chassis;
+  const sd = React.useContext(StatusDisplayContext);
   // Disconnected (q=0) → a clear red ✕ rather than ambiguous dim bars.
   if (q === 0) {
     return (
@@ -493,13 +545,16 @@ function LinkBars({ q }: { q: 0 | 1 | 2 | 3 }) {
       </View>
     );
   }
-  const litColor = q === 3 ? ct.linkGood : q === 2 ? ct.linkFair : ct.linkBad;
+  // ★ In the status display the bars are the display's own segments (Deck.mockup: currentColor, the
+  //   unlit ones at α .28) — the COUNT carries the quality. The ✕ above stays red on every chassis.
+  const litColor = sd ? sd.color : q === 3 ? ct.linkGood : q === 2 ? ct.linkFair : ct.linkBad;
+  const unlit = sd ? rgba(sd.rgb, 0.28) : ct.linkUnlit;
   return (
     <View style={pm.linkWrap}>
       {[0, 1, 2].map(i => (
         <View key={i} style={[pm.linkBar, {
           height: 4 + i * 3,
-          backgroundColor: i < q ? litColor : ct.linkUnlit,
+          backgroundColor: i < q ? litColor : unlit,
         }]} />
       ))}
     </View>
@@ -536,6 +591,7 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
     { nr?: boolean; nb?: boolean; an?: boolean; onPress?: () => void;
       font?: string; color?: string }) {
   const ct = useFaceplate().chassis;
+  const sd = React.useContext(StatusDisplayContext);
   const on: string[] = [];
   if (nr) on.push('NR');
   if (nb) on.push('NB');
@@ -544,8 +600,11 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
   const body = (
     <View style={pm.dspRow}>
       {on.map((k) => (
-        <Text key={k} style={[pm.dspTag, { fontFamily: font, color: color ?? ct.dspTagText,
-                                          borderColor: ct.dspTagBorder, backgroundColor: ct.dspTagBg }]}>{k}</Text>
+        <Text key={k} style={[pm.dspTag, sd
+          ? { fontFamily: sd.font, fontWeight: 'normal', color: sd.color, borderColor: rgba(sd.rgb, 0.55),
+              backgroundColor: rgba(sd.rgb, 0.12), textShadowColor: sd.glow, textShadowRadius: 4 }
+          : { fontFamily: font, color: color ?? ct.dspTagText,
+              borderColor: ct.dspTagBorder, backgroundColor: ct.dspTagBg }]}>{k}</Text>
       ))}
     </View>
   );
@@ -554,9 +613,13 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
     : body;
 }
 
-export function LinkIndicator({ bus }: { bus?: MeterBus }) {
+export function LinkIndicator({ bus, hide }: { bus?: MeterBus;
+    /** ★ Row 9's hook (§8.2): items the landscape status row has dropped to fit, by STATUS_DROP_ORDER.
+     *  Nothing passes it yet. The bars are never hidden — the connection meter is never dropped. */
+    hide?: Partial<Record<StatusItem, boolean>> }) {
   const m = useMeters(bus);
   const ct = useFaceplate().chassis;
+  const sd = React.useContext(StatusDisplayContext);
   const q = m ? m.link : 0;
   // ★ LATCH, don't gate on the live value. Requiring fps > 0 to show the readout
   // meant a single second with no counted frames BLANKED it — so on a backend
@@ -579,6 +642,25 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
     //   away by RN and then measureInWindow has nothing to report. Same as the other
     //   tour targets.
     <View ref={tourRef('linkMeter')} collapsable={false} style={pm.linkRow}>
+      {sd ? (<>
+        {/* §8.1: `[bars][node] 6k/s 5fps · GAIN ↓25.4dB · IF 2800k` — the phone and ⇄ go (they are
+            the first icons row 9 drops anyway), the arrow is DRAWN. */}
+        <LinkBars q={q} />
+        {!hide?.linkIcons && <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} />}
+        {showRate && !hide?.rate ? <StatusText>{`${Math.round(m!.kbps ?? 0)}k/s ${Math.round(m!.fps ?? 0)}fps`}</StatusText> : null}
+        {m?.agcText && !hide?.gain ? (() => {
+          const g = statusGainParts(m.agcText);
+          if (!g) return <StatusText>{`· ${m.agcText}`}</StatusText>;
+          return (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <StatusText>{`· ${g.label}`}</StatusText>
+              {g.dir ? <GainArrow dir={g.dir} color={sd.color} size={sd.size} /> : <StatusText> </StatusText>}
+              <StatusText>{g.value + g.tail}</StatusText>
+            </View>
+          );
+        })() : null}
+        {m?.ifText && !hide?.if ? <StatusText>{`· ${m.ifText}`}</StatusText> : null}
+      </>) : (<>
       <PhoneGlyph color={dim} />
       <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>
       <LinkBars q={q} />
@@ -592,6 +674,7 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
       {m?.agcText ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${m.agcText}`}</Text> : null}
       {/* ★ Last: it moves least of all — it changes only when somebody zooms. */}
       {m?.ifText ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${m.ifText}`}</Text> : null}
+      </>)}
     </View>
   );
 }
@@ -961,8 +1044,22 @@ function RecordIcon({ size, progress }: { size: number; progress?: SharedValue<n
 function StatusWell({ plate, gap, style, children }: {
   plate: PlateTokens | null; gap: number; style?: ViewStyle; children: React.ReactNode;
 }) {
-  if (!plate) return <>{children}</>;
-  return <RecessedWindow lip={plate.windowLip} style={{ gap, ...style }}>{children}</RecessedWindow>;
+  const fp = useFaceplate();
+  const s = useUiScale();
+  const sd = useMemo<StatusDisplay | null>(() => plate ? {
+    // ★ Doto 900 12 pt, with §8.2's 10 pt floor (dot matrix falls apart below it; what does not fit
+    //   is dropped by row 9, never squeezed). Text colour — neon under Nixie (the rule outranks it).
+    font: FONT_DOTO, color: fp.text.core, glow: fp.text.glow, rgb: fp.text.rgb, size: Math.max(10, s.f(12)),
+  } : null, [plate, fp.text, s]);
+  if (!plate || !sd) return <>{children}</>;
+  return (
+    <StatusDisplayContext.Provider value={sd}>
+      <RecessedWindow lip={plate.windowLip} style={{ gap, ...style }}>
+        <GhostGrid rgb={sd.rgb} pitch={3} dot={0.7} />
+        {children}
+      </RecessedWindow>
+    </StatusDisplayContext.Provider>
+  );
 }
 
 // ── PORTRAIT ──────────────────────────────────────────────────────────────────
@@ -1200,8 +1297,9 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         )}
       </View>}
 
-      {/* Rows 4–5 — the status. ★ On silver / black it sits in a recessed dark window (§8.1): today's
-          light text would vanish on a silver plate. Row 9 turns this window into the Doto display. */}
+      {/* Rows 4–5 — the status. ★ On silver / black it is the recessed STATUS DISPLAY (§8.1): Doto in
+          the text colour over the ghost grid, two lines in portrait — the clocks, then the link. The
+          default deck keeps today's two-line footer untouched. */}
       <StatusWell plate={ct.plate} gap={ROW_GAP}>
       {/* Row 4 — clock · link quality · rec */}
       <View style={por.clockRow}>
@@ -1214,11 +1312,11 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           <ClockRow clock={clock} color={ct.clock} font={t.font} size={CLOCK_FONT} />
           {/* Time-limited receiver: how long before the server drops us. */}
           {adminMode ? (
-            <Text style={{ color: ct.clock, fontFamily: t.font, fontSize: CLOCK_FONT,
+            <StatusText style={{ color: ct.clock, fontFamily: t.font, fontSize: CLOCK_FONT,
                            opacity: 0.9 }}
                   accessibilityLabel="Admin mode — this session is not time limited">
               ⚿ Admin Mode
-            </Text>
+            </StatusText>
           ) : null}
           {/* ★★★ NO SECOND COUNTDOWN HERE. The session timer already has a large, legible card over
               the spectrum ("GUARANTEED TIME ENDS IN 29:13"), and repeating it as a 9pt shield in
@@ -1235,18 +1333,18 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
               reading, because the point is to answer "may I just tune?" at a glance. */}
           {/* ★ Who is moving the dial. The room's COUNT moved to the shared-tuner banner (2026-09-19). */}
           {!!sharedDial?.tuning && (
-            <Text style={{ color: ct.clock, fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}
+            <StatusText style={{ color: ct.clock, fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}
                   numberOfLines={1}>
               {sharedDial.tuning}
-            </Text>
+            </StatusText>
           )}
           {!!storms && (
-            <Text style={{ color: ct.srvClock, fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9, letterSpacing: 1 }}
+            <StatusText style={{ color: ct.srvClock, fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9, letterSpacing: 1 }}
                   numberOfLines={1}
                   accessibilityLabel={`Lightning nearby — the broadband lines across the spectrum are sferics, not a fault (about ${Math.round(storms.rate)} a minute`
                     + (storms.ago >= 0 && storms.ago < 90 ? `, last ${Math.round(storms.ago)} seconds ago)` : ')')}>
               ⚡ STORMS
-            </Text>
+            </StatusText>
           )}
         </View>
         {/* ★★ THE RECORDING TIMER BELONGS BESIDE THE CLOCK, not out on the right. Pinned to the
@@ -1260,7 +1358,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         {isRecording && (
           <View style={[por.recRow, { flexShrink: 0 }]}>
             <View style={[por.recDot, { backgroundColor: ct.recRed }]} />
-            <Text style={[por.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
+            <StatusText keepColor style={[por.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</StatusText>
           </View>
         )}
         {/* ★★★ THE AUDIO CHAIN, ON THE END OF THE TIMES ROW — and the STATS get a line of their
@@ -1494,9 +1592,9 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           <ClockRow clock={clock} color={ct.clock} font={t.font} size={CLOCK_FONT} />
           <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
             <View style={[lnd.recDot, { backgroundColor: ct.recRed }]} />
-            <Text style={[lnd.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+            <StatusText keepColor style={[lnd.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
               {isRecording ? recTime : '0:00'}
-            </Text>
+            </StatusText>
           </View>
         </View>
         <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio}
