@@ -1067,7 +1067,9 @@ function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeL
             modeFontSize={s.r(15)} modeLs={2} readingFontSize={s.r(11)} />
         </TouchableOpacity>
         {/* The glass's inner shadow at the top and the lip below (`inset 0 2px 7px`, `0 1px 0 .25`). */}
-        <View pointerEvents="none" style={cd.shade} />
+        {/* ★ Not over the tubes: the Nixie recess draws its own lip shadows (§7), and a second
+            shade would darken the domes' tips in the 35 pt window where they sit closest to it. */}
+        {dk.style !== 'nixie' && <View pointerEvents="none" style={cd.shade} />}
         <View pointerEvents="none" style={[cd.lip, { backgroundColor: 'rgba(255,255,255,0.25)' }]} />
       </View>
       <View style={{ height: dl.meterGap }} />

@@ -13,6 +13,7 @@ import {
   phi, edgeBrightness, segmentTarget, makeWindow, pushSample, eyeStep, steadyLit,
   scalePointX, needleX, needleSpring, peakNeedleStep,
 } from '../src/constants/meters.ts';
+import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H } from '../src/constants/nixie.ts';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -251,6 +252,37 @@ function step(sp: { mass: number; stiffness: number; damping: number }) {
   for (let k = 0; k < 3000; k++) peakNeedleStep(p, 2, 10);
   eq('…until it is caught by the needle again', p.pos, 2);
   eq('and it can never fall below the needle', peakNeedleStep(p, 3, 10), 3);
+}
+
+// ── §4.1 × §7: the LED / analogue windows on REAL TUBES — smallest case first ──
+// ★★★ Analogue + shared = the 35 pt window against a 37 pt design stack: the tube shrinks, the window
+//     does not, the domes are never clipped — at every portrait scale from the SE in Display Zoom
+//     (320 pt) up, for every radio's fixed tube row, in the width the window really has (the deck
+//     less its padding, the 70 pt mode box and the unit label's reserve).
+for (const W of [320, 375, 390, 430]) {
+  const scale = Math.max(0.75, Math.min(1.45, W / 390));
+  const r = (n: number) => Math.round(n * scale);
+  for (const meter of ['edge', 'vu'] as const) for (const shared of [true, false]) {
+    const d = portraitDeck({ cap: true, meter, shared, tablet: false, rowGap: r(7), r });
+    const winW = W - 2 * r(14) - r(70) - Math.round(r(11) * 2.6);
+    const design = shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter;
+    for (const layout of ['hf', 'wide', 'fm'] as const) {
+      const g = nixieGeometry(winW, d.freqH, nixieSpec(layout), design, { bar: false, scale });
+      const tag = `${W} pt ${meter}${shared ? '+shared' : ''} ${layout} (window ${d.freqH} pt)`;
+      ok(`${tag}: the stack fits the window`, stackHeight(g.glassH, scale) <= d.freqH + 1e-9);
+      ok(`${tag}: the dome's pip is inside the window`, g.collarY - g.glassH - PIP_H * scale >= -1e-9);
+      ok(`${tag}: the glass never exceeds its design height`, g.glassH <= design.th * scale + 1e-9);
+      const last = g.tubes[g.tubes.length - 1];
+      ok(`${tag}: the tube row fits the width`, last.x + last.w <= winW + 1e-6);
+    }
+  }
+}
+{
+  // The named smallest case at scale 1: 35 pt, and the glass really did give way.
+  const d = portraitDeck({ cap: true, meter: 'edge', shared: true, tablet: false, rowGap: 7, r: (n: number) => n });
+  const g = nixieGeometry(300, d.freqH, nixieSpec('hf'), TUBE_DESIGN.meterShared, { bar: false });
+  eq('analogue + shared: 35 pt window', d.freqH, 35);
+  ok(`analogue + shared: the glass shrank (${g.glassH} < ${TUBE_DESIGN.meterShared.th})`, g.glassH < TUBE_DESIGN.meterShared.th);
 }
 
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate meters: ${passes} passed, ${fails} failed`);
