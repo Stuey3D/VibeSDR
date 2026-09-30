@@ -41,6 +41,8 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
+import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
+import type { SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
 
 /** Guard for the keys' handler — never expected to run. */
@@ -810,16 +812,14 @@ const pm = StyleSheet.create({
 const COG_GEAR   = Skia.Path.MakeFromSVGString('M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H2a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 3.6 8a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H8a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H22a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z')!;
 const COG_CENTER = Skia.Path.MakeFromSVGString('M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z')!;
 
-function Cog({ size, color }: { size: number; color: string }) {
-  const k = size / 24;
-  return (
-    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
-      <Group transform={[{ scale: k }]}>
-        <Path path={COG_GEAR}   color={color} strokeWidth={1.7 / k} style="stroke" strokeCap="round" strokeJoin="round" />
-        <Path path={COG_CENTER} color={color} strokeWidth={1.7 / k} style="stroke" strokeCap="round" strokeJoin="round" />
-      </Group>
-    </Canvas>
-  );
+// ★ The key legends are DomeIcons: the same paths, drawn in the resolved legend colour with the
+//   §5 flare (and, on silver/black, the controls-colour glow and the engraving's shadow).
+const COG_STROKES:   IconStroke[] = [{ path: COG_GEAR, width: 1.7 }, { path: COG_CENTER, width: 1.7 }];
+const AUDIO_STROKES: IconStroke[] = [{ path: SPEAKER_BODY, fill: true }, { path: SPEAKER_W1 }, { path: SPEAKER_W2 }];
+const CHAT_STROKES:  IconStroke[] = [{ path: CHAT_PATH }];
+
+function Cog({ size, progress }: { size: number; progress?: SharedValue<number> }) {
+  return <DomeIcon size={size} k={size / 24} strokes={COG_STROKES} progress={progress} />;
 }
 
 // ── Share icon canvas ─────────────────────────────────────────────────────────
@@ -840,43 +840,22 @@ function ShareIcon({ size, color }: { size: number; color: string }) {
   );
 }
 
-function ChatIcon({ size, color }: { size: number; color: string }) {
-  const k = size / 20;
-  return (
-    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
-      <Group transform={[{ scale: k }]}>
-        <Path path={CHAT_PATH} color={color} strokeWidth={1.6 / k} style="stroke" strokeCap="round" strokeJoin="round" />
-      </Group>
-    </Canvas>
-  );
+function ChatIcon({ size, progress }: { size: number; progress?: SharedValue<number> }) {
+  return <DomeIcon size={size} k={size / 20} strokes={CHAT_STROKES} progress={progress} />;
 }
 
-function AudioIcon({ size, color }: { size: number; color: string }) {
-  const k = size / 20;
-  return (
-    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
-      <Group transform={[{ scale: k }]}>
-        {/* Speaker cone (filled) + two sound-wave arcs */}
-        <Path path={SPEAKER_BODY} color={color} style="fill" />
-        <Path path={SPEAKER_W1}   color={color} strokeWidth={1.6 / k} style="stroke" strokeCap="round" />
-        <Path path={SPEAKER_W2}   color={color} strokeWidth={1.6 / k} style="stroke" strokeCap="round" />
-      </Group>
-    </Canvas>
-  );
+function AudioIcon({ size, progress }: { size: number; progress?: SharedValue<number> }) {
+  // Speaker cone (filled) + two sound-wave arcs
+  return <DomeIcon size={size} k={size / 20} strokes={AUDIO_STROKES} progress={progress} />;
 }
 
 // FM-DX audio button = REC panel; a filled record disc reads clearer than a speaker.
-function RecordIcon({ size, color }: { size: number; color: string }) {
-  const k = size / 20;
+function RecordIcon({ size, progress }: { size: number; progress?: SharedValue<number> }) {
   const dot = useFaceplate().chassis.recordDot;
-  return (
-    <Canvas pointerEvents="none" style={{ width: size, height: size }}>
-      <Group transform={[{ scale: k }]}>
-        <Path path={RECORD_RING} color={color} strokeWidth={1.6 / k} style="stroke" />
-        <Path path={RECORD_DOT}  color={dot} style="fill" />
-      </Group>
-    </Canvas>
-  );
+  const strokes = useMemo<IconStroke[]>(() => [
+    { path: RECORD_RING }, { path: RECORD_DOT, fill: true, color: dot },
+  ], [dot]);
+  return <DomeIcon size={size} k={size / 20} strokes={strokes} progress={progress} />;
 }
 
 // ── PORTRAIT ──────────────────────────────────────────────────────────────────
@@ -932,10 +911,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   //   separately (§2 — white, or neon when the controls are neon, and Nixie One only when neon).
   const fp = useFaceplate();
   const ct = fp.chassis;
-  const kl = fp.keyLegend;
-  const legendTxt = { color: kl.color, fontFamily: kl.font,
-                      ...(kl.glow ? { textShadowColor: kl.glow, textShadowRadius: 4,
-                                      textShadowOffset: { width: 0, height: 0 } } : null) };
+  // (The key legends — colour, font, glow, flare — are DomeText / DomeIcon's, from fp.keyLegend.)
   const s = useUiScale();
   const [sigW, setSigW] = useState(0);
 
@@ -979,6 +955,11 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   const COL_GAP    = s.r(8);
   const BAR_PAD_H  = s.r(12);
   const BTN_H      = s.r(44); // a11y minimum touch target (was 36 — misses)
+  // ★ Silver/black keys sit in the mockup's 58 pt slot with a 54 pt cap (§4.1, bar meter); the
+  //   default key stays today's 44 pt minimum.
+  const isCap      = ct.dome.look === 'cap';
+  const KEY_SLOT   = isCap ? s.r(58) : BTN_H;
+  const pulseR     = isCap ? 10 : 4;
   const ICON_SZ    = s.r(20);
   // Freq/mode sizing — read from theme so white mode can increase them
   // Pill sized to leave the signal bar visible around it (the white theme's
@@ -1029,55 +1010,41 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
       {/* Row 2 — 4 equal buttons */}
       <View style={{ flexDirection: 'row', gap: COL_GAP }}>
 
+        {/* ★★★ THE FOUR MAIN KEYS ARE DOME KEYS (§5) on every chassis — they had no haptics at all
+            before. Default keeps today's outline key at rest; it now snaps and clicks. The ACTION
+            is on release; the depress, click and flare are on touch-down. */}
         {/* STEP */}
-        <TouchableOpacity
-          ref={tourRef('stepBtn')}
-          style={[por.btn, { minHeight: BTN_H, borderColor: ct.keyBorder, backgroundColor: ct.keyBg }]}
-          onPress={onStep} activeOpacity={0.75} hitSlop={10}
-        >
-          <Text style={[por.btnTxt, legendTxt, { fontSize: BTN_FONT }]}>
-            {stepLabel}
-          </Text>
-        </TouchableOpacity>
+        <DomeKey ref={tourRef('stepBtn')} style={por.key} height={KEY_SLOT} minHeight
+          onPress={onStep} accessibilityLabel="Tuning step">
+          {p => <DomeText progress={p} style={[por.btnTxt, { fontSize: BTN_FONT }]}>{stepLabel}</DomeText>}
+        </DomeKey>
 
         {/* AUDIO — opens the audio sheet; breathes red↔white while recording
             (REC lives inside the sheet, so this is the tap target to stop it). */}
-        <View style={[por.btn, { minHeight: BTN_H, borderColor: ct.keyBorder, backgroundColor: ct.keyBg, borderWidth: 1 }]}>
-          <Animated.View pointerEvents="none"
-            style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: ct.keyPulseRec, opacity: recPulse }]} />
-          <TouchableOpacity
-            style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
-            onPress={onAudio} activeOpacity={0.75} hitSlop={10}
-          >
-            {audioAsRecord
-              ? <RecordIcon size={ICON_SZ} color={kl.color} />
-              : <AudioIcon size={ICON_SZ} color={kl.color} />}
-          </TouchableOpacity>
-        </View>
+        <DomeKey style={por.key} height={KEY_SLOT} minHeight onPress={onAudio}
+          accessibilityLabel={audioAsRecord ? 'Record' : 'Audio'}
+          overlay={<Animated.View pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseRec, opacity: recPulse }]} />}>
+          {p => audioAsRecord
+            ? <RecordIcon size={ICON_SZ} progress={p} />
+            : <AudioIcon size={ICON_SZ} progress={p} />}
+        </DomeKey>
 
         {/* MENU */}
-        <TouchableOpacity
-          ref={tourRef('menuBtn')}
-          style={[por.btn, { minHeight: BTN_H, borderColor: ct.keyBorder, backgroundColor: ct.keyBg, borderWidth: 1 }]}
-          onPress={onMenu} activeOpacity={0.75} hitSlop={10}
-        >
-          {menuAsBack
-            ? <Text style={[legendTxt, { fontSize: s.f(t.btnSize) }]}>‹ Back</Text>
-            : <Cog size={ICON_SZ} color={kl.color} />}
-        </TouchableOpacity>
+        <DomeKey ref={tourRef('menuBtn')} style={por.key} height={KEY_SLOT} minHeight onPress={onMenu}
+          accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
+          {p => menuAsBack
+            ? <DomeText progress={p} style={{ fontSize: s.f(t.btnSize) }}>‹ Back</DomeText>
+            : <Cog size={ICON_SZ} progress={p} />}
+        </DomeKey>
 
         {/* CHAT */}
-        <View style={[por.btn, { minHeight: BTN_H, borderColor: ct.keyBorder, backgroundColor: ct.keyBg, borderWidth: 1, opacity: chatOff ? 0.4 : 1 }]}>
-          <Animated.View pointerEvents="none"
-            style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: ct.keyPulseChat, opacity: chatPulse }]} />
-          <TouchableOpacity
-            style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
-            onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
-          >
-            {/* decorative — don't let the Skia view contest the touch */}
-            <ChatIcon size={ICON_SZ} color={kl.color} />
-          </TouchableOpacity>
-        </View>
+        <DomeKey style={[por.key, { opacity: chatOff ? 0.4 : 1 }]} height={KEY_SLOT} minHeight
+          onPress={chatOff ? undefined : onChat} disabled={chatOff} accessibilityLabel="Chat"
+          overlay={<Animated.View pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseChat, opacity: chatPulse }]} />}>
+          {p => <ChatIcon size={ICON_SZ} progress={p} />}
+        </DomeKey>
 
       </View>
 
@@ -1198,7 +1165,9 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
 
 const por = StyleSheet.create({
   sigFrame: { borderRadius: 7, overflow: 'hidden', justifyContent: 'center' },   // track: SignalCanvas draws ct.meterTrack
-  btn:      { flex: 1, borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
+  // ★ The key's outline and tint are DomeKey's (today's values on the default chassis); the bar
+  //   only shares the row out.
+  key:      { flex: 1 },
   btnTxt:   { letterSpacing: 0.5, textAlign: 'center' },
   clockRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 2 },
   /* ★ Its own line, centred like landscape's. The stats are the widest thing in the bar and the
@@ -1231,10 +1200,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   //   separately (§2 — white, or neon when the controls are neon, and Nixie One only when neon).
   const fp = useFaceplate();
   const ct = fp.chassis;
-  const kl = fp.keyLegend;
-  const legendTxt = { color: kl.color, fontFamily: kl.font,
-                      ...(kl.glow ? { textShadowColor: kl.glow, textShadowRadius: 4,
-                                      textShadowOffset: { width: 0, height: 0 } } : null) };
+  // (The key legends — colour, font, glow, flare — are DomeText / DomeIcon's, from fp.keyLegend.)
   const s = useUiScale();
   const [sigW, setSigW] = useState(0);
 
@@ -1271,7 +1237,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   const BAND_H    = Math.max(DRUM_H, SIG_H);
   const KEY_H     = (BAND_H - GAP) / 2;
   const ICON_SZ   = Math.min(s.r(18), KEY_H - 2);   // − the 1 pt border top and bottom
-  const keyBox    = { height: KEY_H };
+  const isCap     = ct.dome.look === 'cap';
 
   return (
     /* ★ A COLUMN NOW: the controls in one row, the status in another beneath it. This function's
@@ -1306,24 +1272,20 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
 
       {/* STEP + MENU column */}
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
-        <TouchableOpacity ref={tourRef('stepBtn')} style={[lnd.lsBtn, keyBox, { borderColor: ct.keyBorder, backgroundColor: ct.keyBg }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
+        {/* ★ Dome keys (§5), KEY_H tall exactly (§11). Under 44 pt, so hitSlop reaches into the gaps. */}
+        <DomeKey ref={tourRef('stepBtn')} style={lnd.lsKey} height={KEY_H} radius={6}
+          onPress={onStep} accessibilityLabel="Tuning step">
           {/* ★ ONE line: "100k" / "500Hz" / "8.33k" SHRINK to fit the key; two lines let the text
               ask for a taller box, which is the bug this key had. */}
-          <Text style={[lnd.lsTxt, legendTxt, { fontSize: s.f(11), lineHeight: s.f(14) }]}
-                numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-            {stepLabel}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          ref={tourRef('menuBtn')}
-          style={[lnd.lsBtn, keyBox, { borderColor: ct.keyBorder, backgroundColor: ct.keyBg }]}
-          onPress={onMenu} activeOpacity={0.75} hitSlop={10}
-        >
-          {menuAsBack
-            ? <Text style={[legendTxt, { fontSize: s.f(11), lineHeight: s.f(14) }]}
-                    numberOfLines={1}>‹</Text>
-            : <Cog size={ICON_SZ} color={kl.color} />}
-        </TouchableOpacity>
+          {p => <DomeText progress={p} style={[lnd.lsTxt, { fontSize: s.f(11), lineHeight: s.f(14) }]}
+                  numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{stepLabel}</DomeText>}
+        </DomeKey>
+        <DomeKey ref={tourRef('menuBtn')} style={lnd.lsKey} height={KEY_H} radius={6}
+          onPress={onMenu} accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
+          {p => menuAsBack
+            ? <DomeText progress={p} style={{ fontSize: s.f(11), lineHeight: s.f(14) }} numberOfLines={1}>‹</DomeText>
+            : <Cog size={ICON_SZ} progress={p} />}
+        </DomeKey>
       </View>
 
       {/* Signal bar + pill — flex so small screens (SE) get a shorter bar with
@@ -1352,20 +1314,25 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
 
       {/* AUDIO + CHAT column */}
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
-        <TouchableOpacity
-          style={[lnd.lsBtn, keyBox, { borderColor: isRecording ? ct.keyBorderRec : ct.keyBorder, backgroundColor: ct.keyBg }]}
-          onPress={onAudio} activeOpacity={0.75} hitSlop={10}
-        >
-          {audioAsRecord
-            ? <RecordIcon size={ICON_SZ} color={kl.color} />
-            : <AudioIcon size={ICON_SZ} color={kl.color} />}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[lnd.lsBtn, keyBox, { borderColor: chatUnread ? ct.keyBorderChat : ct.keyBorder, backgroundColor: ct.keyBg, opacity: chatOff ? 0.4 : 1 }]}
-          onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
-        >
-          <ChatIcon size={ICON_SZ} color={kl.color} />
-        </TouchableOpacity>
+        {/* ★ Recording / unread chat: the outline turns red / blue on the default key (today's
+            signal); a cap has no outline, so there it is a ring round the slot. */}
+        <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} onPress={onAudio}
+          outline={isRecording ? ct.keyBorderRec : undefined}
+          overlay={isCap && isRecording ? <View pointerEvents="none" style={[StyleSheet.absoluteFill,
+            { borderRadius: 6, borderWidth: 1, borderColor: ct.keyBorderRec }]} /> : undefined}
+          accessibilityLabel={audioAsRecord ? 'Record' : 'Audio'}>
+          {p => audioAsRecord
+            ? <RecordIcon size={ICON_SZ} progress={p} />
+            : <AudioIcon size={ICON_SZ} progress={p} />}
+        </DomeKey>
+        <DomeKey style={[lnd.lsKey, { opacity: chatOff ? 0.4 : 1 }]} height={KEY_H} radius={6}
+          onPress={chatOff ? undefined : onChat} disabled={chatOff}
+          outline={chatUnread ? ct.keyBorderChat : undefined}
+          overlay={isCap && chatUnread ? <View pointerEvents="none" style={[StyleSheet.absoluteFill,
+            { borderRadius: 6, borderWidth: 1, borderColor: ct.keyBorderChat }]} /> : undefined}
+          accessibilityLabel="Chat">
+          {p => <ChatIcon size={ICON_SZ} progress={p} />}
+        </DomeKey>
       </View>
 
       {/* Zoom drum (omitted for FM-DX single-drum tuner) */}
@@ -1428,14 +1395,16 @@ const lnd = StyleSheet.create({
   sigFrame: { borderRadius: 7, overflow: 'hidden', justifyContent: 'center', alignSelf: 'stretch' },   // track: ct.meterTrack
   // ★ No flex: the height is KEY_H at the use site (see LandscapeBar). overflow hidden so nothing
   //   inside can push the key taller than its neighbours.
-  lsBtn:    { borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, overflow: 'hidden' },
+  // ★ The outline, tint and overflow are DomeKey's now; the step legend carries the 4 pt side
+  //   padding itself (lsTxt), because a cap's absolute layers must not be inset by it.
+  lsKey:    {},
   // ★★ NO FIXED lineHeight HERE — it is set at the use site, SCALED, alongside fontSize.
   // A constant 14 lived here while the font is s.f(11), which scales: on a Mac window (and any
   // iPad wide enough to clamp the scale at 1.45) the text renders at ~16pt inside a 14pt line
   // box, and the tops of the glyphs are sliced off — "500Hz" and "100k" both showed it. The
   // portrait button next door has never had the fault because it sets no lineHeight at all.
   // ★ A length that must track fontSize cannot be a constant when fontSize is not one.
-  lsTxt:    { letterSpacing: 0.5, textAlign: 'center' },
+  lsTxt:    { letterSpacing: 0.5, textAlign: 'center', paddingHorizontal: 4 },
   clock:    { letterSpacing: 1, marginTop: 3, textAlign: 'center' },
   recRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, marginTop: 1 },
   recDot:   { width: 5, height: 5, borderRadius: 2.5 },   // colour: ct.recRed

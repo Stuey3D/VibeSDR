@@ -313,8 +313,9 @@ export function feelRows(hapticsHardware: boolean): Array<'haptics' | 'steadyLed
 // ── Chassis tokens ────────────────────────────────────────────────────────────
 
 /**
- * Everything the deck draws with that is not a text or controls colour. ★ `default` only in this
- * step (build order row 2); silver and black arrive in row 3 and must fill every field.
+ * Everything the deck draws with that is not a text or controls colour. ★ Silver and black spread
+ * DEFAULT_CHASSIS and override the plate and keys (row 3); the drum wells, tuner keys, meter and
+ * VTS keep today's tokens on every chassis until their own rows (4–6) restyle them.
  */
 export interface ChassisTokens {
   // Keys (today's outline keys)
@@ -395,6 +396,55 @@ export interface ChassisTokens {
   // VTS strip
   vtsBg:          string;
   vtsBorder:      string;
+  /** The deck's plate (§3.2/§3.3). null = the default chassis: today's glass island (BlurView +
+   *  tint + ring). Anything else is OPAQUE — no BlurView behind it (§3.4). */
+  plate:          PlateTokens | null;
+  /** The dome keys' cap and slot (§5). */
+  dome:           DomeTokens;
+}
+
+/** An opaque brushed plate. Numbers are Deck.mockup's `T.silver` / `T.black`, verbatim. */
+export interface PlateTokens {
+  base:        string;
+  border:      string;
+  radius:      number;
+  texture:     'silver' | 'black';
+  /** Lighting, drawn OVER the texture and never baked into it (§3.4 TRAP). CSS `linear 104°`. */
+  lightColors: string[];
+  lightPos:    number[];
+  /** `radial-gradient(140% 70% at 28% -10%, c → 0 at 60%)`. */
+  radialColor: string;
+  /** Bottom 30% darkening to this, or null (black has none in the mockup). */
+  bottomShade: string | null;
+  /** The plate's inset box-shadows: the 1 pt top lip, the soft 2 pt below it, the bottom edge. */
+  lipTop:      string;
+  lipTop2:     string;
+  lipBottom:   string;
+  screws:      boolean;
+  /** Black's gloss acrylic panel behind the frequency and meter, with its aluminium trim (§3.3). */
+  gloss:       boolean;
+}
+
+export interface DomeTokens {
+  /** `outline` = today's key (border + tint, no slot); `cap` = a brushed cap in a recessed slot. */
+  look:        'outline' | 'cap';
+  slotBg:      string;
+  /** The slot's inner shadow at its top edge (`inset 0 3px 5px`). */
+  slotShade:   string;
+  /** The machined lip catching light below the slot (`0 1px 0`). */
+  slotLip:     string;
+  capBase:     string;
+  capBorder:   string;
+  /** `.bz-silver` / `.bz-black`: the sheen over the cap's texture — top, clear at 42%, bottom. */
+  capSheen:    [string, string, string];
+  /** Chamfer: `inset 0 1px 0 rgba(255,255,255, hi × 0.3)`. */
+  chamfer:     string;
+  rim:         string;
+  bottomEdge:  string;
+  /** The cast shadow at rest (`0 1.5px 1px`), gone when clicked. */
+  cast:        string;
+  /** Clicked: brightness .84 / .82 — drawn as black at 1 − pressDim. */
+  pressDim:    number;
 }
 
 /** ★★★ Today's literals, moved from ControlsBar / DrumWheel / TunerKeys / VTSBar. */
@@ -468,12 +518,65 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
   tkWellRing:    'rgba(255,255,255,0.10)',
   vtsBg:         'rgba(8,10,14,0.94)',
   vtsBorder:     'rgba(255,255,255,0.22)',
+  plate:         null,
+  // ★ The default key keeps today's look AT REST (outline + tint); it still snaps and clicks
+  //   (§5: "every dome key clicks, on every chassis, including default"). Only pressDim is read.
+  dome: {
+    look: 'outline', slotBg: 'transparent', slotShade: 'transparent', slotLip: 'transparent',
+    capBase: 'transparent', capBorder: 'transparent',
+    capSheen: ['rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0)'],
+    chamfer: 'rgba(255,255,255,0.03)', rim: 'rgba(255,255,255,0.07)', bottomEdge: 'rgba(0,0,0,0.5)',
+    cast: 'rgba(0,0,0,0.85)', pressDim: 0.84,
+  },
 };
 
-export function chassisTokens(_chassis: Chassis): ChassisTokens {
-  // ★ Row 3 adds SILVER and BLACK. Until then every chassis draws the default deck, so a stored
-  //   'silver' shows today's deck rather than a half-built one.
-  return DEFAULT_CHASSIS;
+/** §3.2 brushed silver (Sony HCD-SE1, Panasonic stacking hi-fi). */
+export const SILVER_CHASSIS: ChassisTokens = {
+  ...DEFAULT_CHASSIS,
+  plate: {
+    base: '#c9c6bf', border: '#8b8983', radius: 16, texture: 'silver',
+    lightColors: ['rgba(255,255,255,0)', 'rgba(255,255,255,0.10)', 'rgba(255,255,255,0.34)',
+                  'rgba(255,255,255,0.08)', 'rgba(0,0,0,0.06)', 'rgba(0,0,0,0.16)'],
+    lightPos:    [0, 0.18, 0.36, 0.52, 0.74, 1],
+    radialColor: 'rgba(255,250,240,0.22)',
+    bottomShade: 'rgba(0,0,0,0.10)',
+    lipTop: 'rgba(255,255,255,0.95)', lipTop2: 'rgba(255,255,255,0.35)', lipBottom: 'rgba(0,0,0,0.20)',
+    screws: true, gloss: false,
+  },
+  dome: {
+    look: 'cap', slotBg: '#141414', slotShade: 'rgba(0,0,0,0.95)', slotLip: 'rgba(255,255,255,0.85)',
+    capBase: '#c9c6bf', capBorder: '#8d8a83',
+    capSheen: ['rgba(255,255,255,0.60)', 'rgba(255,255,255,0)', 'rgba(0,0,0,0.22)'],
+    chamfer: rgba('255,255,255', 0.95 * 0.3), rim: 'rgba(255,255,255,0.07)', bottomEdge: 'rgba(0,0,0,0.5)',
+    cast: 'rgba(0,0,0,0.85)', pressDim: 0.84,
+  },
+};
+
+/** §3.3 brushed black (Stuart's Yamaha RX-V583): no screws, a gloss acrylic display panel. */
+export const BLACK_CHASSIS: ChassisTokens = {
+  ...DEFAULT_CHASSIS,
+  plate: {
+    base: '#1b1c1e', border: '#3a3c40', radius: 16, texture: 'black',
+    // ★ The mockup's own black lighting, not "silver at a third" (the brief's paraphrase of it).
+    lightColors: ['rgba(255,255,255,0)', 'rgba(255,255,255,0.03)', 'rgba(255,255,255,0.11)',
+                  'rgba(255,255,255,0.02)', 'rgba(0,0,0,0.10)', 'rgba(0,0,0,0.25)'],
+    lightPos:    [0, 0.18, 0.36, 0.52, 0.74, 1],
+    radialColor: 'rgba(255,255,255,0.07)',
+    bottomShade: null,
+    lipTop: 'rgba(255,255,255,0.22)', lipTop2: 'rgba(255,255,255,0.06)', lipBottom: 'rgba(0,0,0,0.60)',
+    screws: false, gloss: true,
+  },
+  dome: {
+    look: 'cap', slotBg: '#030303', slotShade: 'rgba(0,0,0,0.95)', slotLip: 'rgba(255,255,255,0.14)',
+    capBase: '#1d1e20', capBorder: '#050505',
+    capSheen: ['rgba(255,255,255,0.20)', 'rgba(255,255,255,0)', 'rgba(0,0,0,0.45)'],
+    chamfer: rgba('255,255,255', 0.22 * 0.3), rim: 'rgba(255,255,255,0.07)', bottomEdge: 'rgba(0,0,0,0.5)',
+    cast: 'rgba(0,0,0,0.85)', pressDim: 0.82,
+  },
+};
+
+export function chassisTokens(chassis: Chassis): ChassisTokens {
+  return chassis === 'silver' ? SILVER_CHASSIS : chassis === 'black' ? BLACK_CHASSIS : DEFAULT_CHASSIS;
 }
 
 // ── The resolved faceplate ────────────────────────────────────────────────────
@@ -506,7 +609,16 @@ export interface KeyLegend {
   font:    string;
   /** Text glow for the step legend, or null for none. */
   glow:    string | null;
+  /** The legend while the key is clicked (§5 "legend flare"): today's white stays white; an LED
+   *  legend goes to its white-hot centre. */
+  hot:     string;
+  /** The engraving's dark shadow on a light cap (silver: `0 -0.5px 0 rgba(0,0,0,.6)`), or null. */
+  shade:   string | null;
 }
+
+/** §5: the legend glow's radius at rest and clicked ("legend glow 4 → 7 pt"). */
+export const LEGEND_GLOW_REST = 4;
+export const LEGEND_GLOW_DOWN = 7;
 
 export interface VtsText {
   font:    string;
@@ -585,10 +697,18 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
     };
   }
 
+  // ★ Silver and black light their legends in the CONTROLS colour (§5, Deck.mockup `led.c`, clicked
+  //   `led.d`), Atkinson always — the mockup's Barlow is not bundled, and never Nixie One, which
+  //   would then have to be neon on every controls colour (§2). The default chassis is today's
+  //   white, or neon when the controls are neon.
   const neonKeys = s.chassis === 'default' && s.controls === 'neon';
-  const keyLegend: KeyLegend = neonKeys
-    ? { color: NEON_TEXT.core, font: nixie ? FONT_NIXIE : FONT_HYPER, glow: NEON_TEXT.glow }
-    : { color: chassis.keyLegend, font: FONT_HYPER, glow: null };
+  const keyLegend: KeyLegend = s.chassis !== 'default'
+    ? { color: controls.core, font: FONT_HYPER, glow: controls.glow, hot: controls.hot,
+        shade: s.chassis === 'silver' ? 'rgba(0,0,0,0.6)' : null }
+    : neonKeys
+    ? { color: NEON_TEXT.core, font: nixie ? FONT_NIXIE : FONT_HYPER, glow: NEON_TEXT.glow,
+        hot: NEON_TEXT.core, shade: null }
+    : { color: chassis.keyLegend, font: FONT_HYPER, glow: null, hot: chassis.keyLegend, shade: null };
 
   const vts: VtsText = nixie
     ? { font: FONT_NIXIE, onTune: NEON_TEXT.core, offTune: NEON_TEXT.core, band: NEON_TEXT.core,
