@@ -14,7 +14,7 @@ import type React from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { useMemo } from 'react';
 import type { Aircraft } from '../services/SDRBackend';
-import { useDecoderTokens, DECODER_FONT, type DecoderTokens } from './DecoderShell';
+import { useDecoderStyles, DECODER_FONT, type DecoderTokens } from './DecoderShell';
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
@@ -48,8 +48,7 @@ export default function AircraftPanel({ aircraft, scrollRef }: {
 }) {
   // ★ The decoder box's palette and its pinned font (DecoderShell) — this table is that box's body,
   //   and used to borrow the deck's theme tokens (frequency colour, button text) instead.
-  const tk = useDecoderTokens();
-  const s = useMemo(() => styles(tk), [tk]);
+  const s = useDecoderStyles(styles);
 
   // Nearest first; the ones that haven't sent a position yet fall back to signal so
   // they sort last rather than vanish — they're real aircraft, just not locatable.
@@ -112,7 +111,7 @@ const styles = (t: DecoderTokens) => StyleSheet.create({
   wrap:    { flex: 1 },
   row:     { flexDirection: 'row', alignItems: 'center', gap: 8,
              paddingVertical: 6, paddingHorizontal: 4,
-             borderBottomWidth: 1, borderBottomColor: t.hdrBdr },
+             borderBottomWidth: 1, borderBottomColor: t.hdrBdr ?? t.divider },
   flag:    { fontSize: 16, width: 22 },
   idCol:   { flex: 1, minWidth: 0 },
   call:    { color: t.value, fontFamily: F, fontSize: 14, fontWeight: 'bold' },

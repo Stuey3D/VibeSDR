@@ -21,34 +21,22 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
-import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DECODER_FONT, decoderTokensFor } from './DecoderShell';
+import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, engraveStyle,
+         useDecoderStyles, type DecoderTokens } from './DecoderShell';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, DAB_PTY, dabBlockAt } from '../services/dabBlocks';
 import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
 
-/* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1) — this panel no longer carries its own
- *  copy. Aliased to the names the body already uses so the rows below read as they did. */
-const T = decoderTokensFor();
-const C = {
-  gold:    T.accent,
-  goldDim: T.label,
-  muted:   T.muted,
-  good:    T.good,
-  warn:    T.warn,
-  bad:     T.bad,
-  value:   T.value,
-  rowAct:  T.rowActive,
-};
-/* ★★★ NEARLY OPAQUE, AND DELIBERATELY NOT GLASS LIKE THE RDS PANEL. That panel is see-through
- *  for one reason: "so that the user could still see a little spectrum underneath the window so
- *  that they can see to tune". In DAB there is nothing to tune behind it — the block is the
- *  tuning and the dial is locked out — so the transparency buys nothing and costs the thing this
- *  window is entirely made of: two dozen lines of small text. Measured on the Xcover over 11A,
- *  2026-09-08: at 0.72 the service list was unreadable wherever the waterfall ran hot.
- *  ★ Row 8 (Transparent / Solid) is where this becomes the user's choice. */
-const DAB_TINT = 0.94;
+/* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component below
+ *  reads `useDecoderStyles(makeStyles)`, so a chassis, colour or Decoder-background change reaches
+ *  the text as well as the frame. Aliased to the names the body already used.
+ * ★★★ THE TINT IS THE USER'S NOW (§10.2 Transparent / Solid). This box was 0.94 + blur, nearly
+ *  opaque, for a measured reason — on the Xcover over 11A (2026-09-08) the service list was
+ *  unreadable at 0.72 wherever the waterfall ran hot, and in DAB there is nothing behind it to tune
+ *  by. That reason is exactly what the Solid setting answers ("easier to read, hides the signals
+ *  behind"); Transparent is the same glass as every other box. See DecoderShell. */
 /* ★★ 560 IS KEPT, AND IT IS THE CONTENT'S WIDTH (brief §10.1 asked: justify or drop). Every line in
  *  this box is ONE column — a 124 pt label and its value, or a logo and a station name — and the
  *  widest thing in it, the signal pane's constellation + impulse-response pair, is ~450 pt. The
@@ -60,7 +48,7 @@ const FONT = DECODER_FONT;
 const DASH = '—';
 
 type Tone = 'ok' | 'warn' | 'bad' | undefined;
-const toneColour = (t: Tone) => t === 'ok' ? C.good : t === 'warn' ? C.warn : t === 'bad' ? C.bad : C.value;
+const toneColour = (C: Palette, t: Tone) => t === 'ok' ? C.good : t === 'warn' ? C.warn : t === 'bad' ? C.bad : C.value;
 
 /** One label/value row. Memoised for the same reason AdvRdsPanel's is: this panel is ~40 rows and
  *  the message arrives about once a second, but the spectrum trace is tweened on the JS thread and
@@ -68,20 +56,25 @@ const toneColour = (t: Tone) => t === 'ok' ? C.good : t === 'warn' ? C.warn : t 
 const Row = React.memo(function Row({ label, value, tone }: {
   label: string; value: string; tone?: Tone;
 }) {
+  const { s, C } = useDecoderStyles(makeStyles);
   return (
     <View style={s.row}>
       <Text style={s.lbl} numberOfLines={2}>{label}</Text>
-      <Marquee text={value} style={[s.val, { color: toneColour(tone) }]} />
+      <Marquee text={value} style={[s.val, { color: toneColour(C, tone) }]} />
     </View>
   );
 });
 
-const Section = ({ t }: { t: string }) => <Text style={s.section}>{t}</Text>;
+const Section = ({ t }: { t: string }) => {
+  const { s } = useDecoderStyles(makeStyles);
+  return <Text style={s.section}>{t}</Text>;
+};
 
 /** ★ The constellation, drawn as ONE Skia primitive rather than a node per point — the lesson
  *  AdvRdsPanel paid for: a React element per sample, several hundred of them, reconciled on every
  *  message, is the cost that starves the trace. Points arrive as 192 int8 pairs, ideal radius 60. */
 const Constellation = React.memo(function Constellation({ iq, size }: { iq: number[]; size: number }) {
+  const { C } = useDecoderStyles(makeStyles);
   const pts = useMemo(() => {
     const out: { x: number; y: number }[] = [];
     const half = size / 2;
@@ -93,11 +86,12 @@ const Constellation = React.memo(function Constellation({ iq, size }: { iq: numb
   }, [iq, size]);
   return (
     <Canvas style={{ width: size, height: size }}>
-      <Rect x={0} y={0} width={size} height={size} color="rgba(255,160,0,0.05)" />
-      <Rect x={size / 2 - 0.5} y={0} width={1} height={size} color="rgba(255,160,0,0.18)" />
-      <Rect x={0} y={size / 2 - 0.5} width={size} height={1} color="rgba(255,160,0,0.18)" />
+      <Rect x={0} y={0} width={size} height={size} color={C.plot} />
+      <Rect x={size / 2 - 0.5} y={0} width={1} height={size} color={C.axis} />
+      <Rect x={0} y={size / 2 - 0.5} width={size} height={1} color={C.axis} />
+      {/* ★ Chart marks take the controls colour on silver / black (§10.2); today's green on default. */}
       <Points points={pts} mode="points" style="stroke" strokeWidth={2.2}
-              strokeCap="round" color="rgba(125,255,154,0.75)" />
+              strokeCap="round" color={C.dot} />
     </Canvas>
   );
 });
@@ -108,6 +102,7 @@ const Constellation = React.memo(function Constellation({ iq, size }: { iq: numb
 const ImpulseResponse = React.memo(function ImpulseResponse({ ir, width, height }: {
   ir: number[]; width: number; height: number;
 }) {
+  const { C } = useDecoderStyles(makeStyles);
   const bars = useMemo(() => {
     const out: { x: number; y: number }[] = [];
     const n = Math.max(1, ir.length);
@@ -121,9 +116,9 @@ const ImpulseResponse = React.memo(function ImpulseResponse({ ir, width, height 
   }, [ir, width, height]);
   return (
     <Canvas style={{ width, height }}>
-      <Rect x={0} y={0} width={width} height={height} color="rgba(255,160,0,0.05)" />
+      <Rect x={0} y={0} width={width} height={height} color={C.plot} />
       <Points points={bars} mode="lines" style="stroke" strokeWidth={Math.max(1, width / 128 - 0.4)}
-              color="rgba(255,190,90,0.85)" />
+              color={C.bar} />
     </Canvas>
   );
 });
@@ -213,6 +208,7 @@ function useServiceLogo(base: string, d: DabState | null,
 const SignalHead = React.memo(function SignalHead({ d, cur, base }: {
   d: DabState; cur: DabState['services'][number] | undefined; base: string;
 }) {
+  const { s } = useDecoderStyles(makeStyles);
   const logo = useServiceLogo(base, d, cur);
   const [dead, setDead] = React.useState<string | null>(null);
   const slide = d.slide && d.slide.seq ? `${base}/vibeserver/dabslide?seq=${d.slide.seq}` : null;
@@ -294,6 +290,7 @@ const Marquee = React.memo(function Marquee({ text, style }: { text: string; sty
 /** One service row's picture, or the space where it would be — a list whose rows change width as
  *  logos land is worse than one with none, so the box is always there. */
 const SvcLogo = React.memo(function SvcLogo({ uri }: { uri: string | null }) {
+  const { s } = useDecoderStyles(makeStyles);
   const [dead, setDead] = React.useState(false);
   React.useEffect(() => { setDead(false); }, [uri]);
   if (!uri || dead) return <View style={s.logoBox} />;
@@ -320,6 +317,7 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, onPress, waitin
   /** The "tuning in" line, shown in this row's live-text slot while it is the picked station. */
   waiting?: string;
 }) {
+  const { s, C } = useDecoderStyles(makeStyles);
   const active = sv.sid === d.sid;
   const logo = useServiceLogo(base, d, sv);
   const text = (active && waiting) || sv.dls || (active ? d.dls : '') || '';
@@ -405,6 +403,7 @@ export interface DabPanelProps {
 }
 
 export default function DabPanel(p: DabPanelProps) {
+  const { s, C } = useDecoderStyles(makeStyles);
   const [pane, setPane] = React.useState<'stations' | 'signal'>('stations');
   const { height: winH, width: winW } = useWindowDimensions();
   /* ★★★ THE PANEL MUST NOT GROW UP INTO THE TOP CHIPS, AND THE REASON IS TOUCH, NOT LOOKS.
@@ -784,7 +783,7 @@ export default function DabPanel(p: DabPanelProps) {
   );
 
   return (
-    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tint={DAB_TINT} blur={24}>
+    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tall={p.tall}>
         <DecoderHeader>
           <DecoderTitle>DAB</DecoderTitle>
           {/* ★★★ A READOUT, NOT A CONTROL. This was a pair of chevrons either side of the block —
@@ -817,7 +816,7 @@ export default function DabPanel(p: DabPanelProps) {
           <DecoderKey onPress={p.onExit} label="EXIT DAB" />
         </DecoderHeader>
 
-        {body}
+        <DecoderBody>{body}</DecoderBody>
     </DecoderShell>
   );
 }
@@ -828,16 +827,36 @@ const DLP_ORDER = ['artist', 'title', 'album', 'track', 'composer', 'band', 'pre
   'programme', 'genre', 'station', 'slogan', 'comment', 'homepage', 'phone', 'email', 'sms',
   'news', 'sport', 'weather', 'traffic', 'alarm', 'advertisement', 'country'];
 
-const s = StyleSheet.create({
+type Palette = ReturnType<typeof palette>;
+const palette = (T: DecoderTokens) => ({
+  gold:    T.accent,
+  goldDim: T.label,
+  muted:   T.muted,
+  good:    T.good,
+  warn:    T.warn,
+  bad:     T.bad,
+  value:   T.value,
+  rowAct:  T.rowActive,
+  plot:    T.plot,
+  axis:    T.axis,
+  dot:     T.dot,
+  bar:     T.bar,
+});
+
+/** ★ Built once per setting (useDecoderStyles), never per render. */
+const makeStyles = (T: DecoderTokens) => {
+  const C = palette(T);
+  const s = StyleSheet.create({
   /* ★ Frame, header, title and header keys are DecoderShell's. */
-  blockTxt: { fontFamily: FONT, fontSize: 13, color: C.gold },
-  blockHz:  { fontFamily: FONT, fontSize: 10, color: C.muted },
-  mux:      { fontFamily: FONT, fontSize: 12, color: C.value, maxWidth: 150 },
+  // The header's read-outs sit on the metal when Solid: engraved, in the header's own colours.
+  blockTxt: { fontFamily: FONT, fontSize: 13, color: T.hdrAccent, ...engraveStyle(T) },
+  blockHz:  { fontFamily: FONT, fontSize: 10, color: T.hdrMuted },
+  mux:      { fontFamily: FONT, fontSize: 12, color: T.hdrValue, maxWidth: 150, ...engraveStyle(T) },
   body:   { paddingHorizontal: 12, paddingVertical: 8, gap: 3 },
   notice: { fontFamily: FONT, fontSize: 12, color: C.warn, paddingVertical: 6 },
   row:    { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  lbl:    { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: C.muted, width: 124 },
-  val:    { fontFamily: FONT, fontSize: 14, color: C.value },
+  lbl:    { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: T.rowLabel, width: 124 },
+  val:    { fontFamily: FONT, fontSize: 14, color: C.value, fontVariant: ['tabular-nums'] },
   section:{ fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
             marginTop: 10, marginBottom: 2 },
   /* ★ The web's .dabHead: 56 px picture, green name, codec line, scrolling radio text. */
@@ -860,4 +879,6 @@ const s = StyleSheet.create({
   svcCodec: { fontFamily: FONT, fontSize: 11, color: C.muted },
   plots:    { flexDirection: 'row', gap: 10, marginTop: 8, alignItems: 'flex-end' },
   plotLbl:  { fontFamily: FONT, fontSize: 9, letterSpacing: 1, color: C.muted, marginBottom: 2 },
-});
+  });
+  return { s, C };
+};

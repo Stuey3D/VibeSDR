@@ -93,6 +93,11 @@ export interface DecoderTokens {
   /** Silver: a dark copy under the legend, as the deck's silver keys have (keyLegend.shade). */
   keyShade:     string | null;
   close:        string;
+  /** Buttons INSIDE the body (DecoderPanel's filter / speed chips): outline chips on every chassis —
+   *  they sit on the glass or in the dark window, never on the metal. */
+  chipBorder:    string;
+  chipBorderAct: string;
+  chipBgAct:     string;
   cap:          { base: string; hi: string; lo: string; border: string; topLine: string;
                   cast: string; castOpacity: number; pressDim: number } | null;
 
@@ -198,6 +203,7 @@ function defaultTokens(bg: DecoderBackground): DecoderTokens {
     keyBorder: GOLD(0.28), keyBorderAct: GOLD(0.55), keyBgAct: GOLD(0.12),
     keyText: GOLD(0.72), keyTextAct: '#ffb833', keyGlow: null, keyShade: null,
     close: 'rgba(255,100,100,0.70)', cap: null,
+    chipBorder: GOLD(0.28), chipBorderAct: GOLD(0.55), chipBgAct: GOLD(0.12),
     dotIdle: GOLD(0.35),
     plot: GOLD(0.05), axis: GOLD(0.18), axisStrong: 'rgba(255,160,60,0.35)',
     axisFaint: 'rgba(255,170,60,0.07)', chartText: 'rgba(255,190,110,0.85)',
@@ -249,6 +255,7 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, bg: Decod
     keyGlow:    L(0.55),
     keyShade:   silver ? 'rgba(0,0,0,0.6)' : null,
     close:      silver ? L(0.90) : Lt(0.90),
+    chipBorder: L(0.35), chipBorderAct: L(0.70), chipBgAct: L(0.14),
     cap: silver
       ? { base: '#c4c1ba', hi: 'rgba(255,255,255,0.40)', lo: 'rgba(0,0,0,0.10)', border: '#8d8a83',
           topLine: 'rgba(255,255,255,0.80)', cast: '#000000', castOpacity: 0.6, pressDim: 0.84 }
