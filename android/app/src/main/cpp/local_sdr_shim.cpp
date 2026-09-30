@@ -108,6 +108,14 @@
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
+#include "vibe_rtl_tuner_restore.h"   // ★ the ONE "put the tuner back after its re-init" (both direct-sampling routes)
+/** librtlsdr, as vibertl::restoreTunerAfterReinit() sees it — the three calls it makes, nothing else. */
+struct VibeRtlTunerOps {
+    rtlsdr_dev_t* dev;
+    int setTunerBandwidth(uint32_t bw) { return rtlsdr_set_tuner_bandwidth(dev, bw); }
+    int setTunerGainMode(int manual)   { return rtlsdr_set_tuner_gain_mode(dev, manual); }
+    int setTunerGain(int tenth)        { return rtlsdr_set_tuner_gain(dev, tenth); }
+};
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 #include "vibe_setup_page.h"
 #include "vibe_benchmark.h"   // ★ benchProgressJson — the live progress a page draws its bar from
@@ -5414,7 +5422,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // ★ The tuner's own gain steps, cached for the writer so it can WALK to a target rather than
     //   jump. Filled the first time anything needs it; a tuner's list never changes.
     std::vector<int> hwGainList;
-    int hwGainNow = -1;                 // last value actually written to the tuner
+    int hwGainNow = -1;                 // last value actually written to the tuner — EVERY direct write records it: the direct-sampling restore puts it back (vibe_rtl_tuner_restore.h)
 
     // IQ producer/consumer. CRITICAL: rtlsdr_read_async's callback runs on
     // libusb's event-handling thread, so it must return fast — running the heavy
@@ -22076,7 +22084,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  mode always; the owner's gain, or VibeAGC's own current step. */
         rtlsdr_set_tuner_gain_mode(dev, 1);
         { const int g = lastGainTenthDb >= 0 ? lastGainTenthDb : hwGainNow;
-          if (g >= 0) rtlsdr_set_tuner_gain(dev, g); }
+          if (g >= 0) { rtlsdr_set_tuner_gain(dev, g); hwGainNow = g; } }   // ★ hwGainNow = what the tuner HAS (vibe_rtl_tuner_restore.h reads it)
         // ★ The digital AGC is one of the things the device forgot, and it was missing from this
         //   list — so a replug silently handed control back to the dongle. See g_rtlDigitalAgc.
         rtlsdr_set_agc_mode(dev, g_rtlDigitalAgc.load(std::memory_order_relaxed) ? 1 : 0);
@@ -22681,6 +22689,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (hz) {
                     std::lock_guard<std::recursive_mutex> dlk(devMtx);
                     if (dev && !radioReleased.load()) {
+                        /* ★★★ SET WHEN THE CROSSOVER BELOW TOOK THE DONGLE BACK TO ITS TUNER, whose
+                         *  re-init has just wiped the IF filter and the gain. Restored AFTER the tune
+                         *  (the filter write re-tunes to librtlsdr's last centre, which must be the
+                         *  new VHF one, not the HF one we are leaving) — see vibe_rtl_tuner_restore.h. */
+                        bool restoreTuner = false;
                         /* ★★ THE CROSSOVER, BEFORE THE FREQUENCY. Direct sampling changes what
                          *  the centre frequency even means to the hardware, so switching after
                          *  the tune would spend one write in the wrong mode. */
@@ -22690,13 +22703,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             /* ★★ g_dsNow starts at -1, so the FIRST tune always "changed" — and sending
                              *  0 to a dongle already on its tuner re-runs the tuner's whole init (see
                              *  setDirectSampling). Record librtlsdr's own answer instead of re-sending. */
+                            const int libWas = rtlsdr_get_direct_sampling(dev);
                             if (want != g_dsNow.load(std::memory_order_relaxed)
-                                && rtlsdr_get_direct_sampling(dev) == want) {
+                                && !vibertl::directSamplingSendNeeded(libWas, want)) {
                                 g_dsNow.store(want, std::memory_order_relaxed);
                             }
                             if (want != g_dsNow.load(std::memory_order_relaxed)) {
                                 const int rc = rtlsdr_set_direct_sampling(dev, want);
                                 if (rc == 0) {
+                                    restoreTuner = vibertl::switchReinitialisedTuner(libWas, want);
                                     const int was = g_dsNow.exchange(want, std::memory_order_relaxed);
                                     LOGI("auto direct sampling: %s at %.3f MHz (crossover %.3f MHz)",
                                          want ? "ON (Q branch, tuner bypassed)" : "OFF (tuner)",
@@ -22737,10 +22752,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                      impliedIf / 1e6, vibertl::kR82xxInitIfHz / 1e6);
                             }
                         }
-                        // ★ …and put our IF filter back, because that call just undid it.
-                        //   Silent: one line per retune would bury everything else.
-                        const int want = bw >= 0 ? bw : g_tunerBwHz.load(std::memory_order_relaxed);
-                        if (want > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)want);
+                        if (restoreTuner) {
+                            /* ★★★ THE AUTOMATIC ROUTE BACK TO THE TUNER PUTS BACK WHAT ITS RE-INIT WIPED —
+                             *  the same function as the manual switch (setDirectSampling). This used to
+                             *  write the filter only when a width had been ASKED for, and never the gain,
+                             *  so an owner with auto direct sampling who tuned HF → VHF got the tuner's
+                             *  wide default filter and its own gain loop (Kiko's +1.950 MHz, route #2).
+                             *  It replaces the per-tune filter write below: that is one of its steps. */
+                            VibeRtlTunerOps ops{dev};
+                            const vibertl::TunerRestorePlan plan = vibertl::tunerRestorePlan(
+                                g_tunerBwHz.load(std::memory_order_relaxed), sampleRate,
+                                hwGainNow, lastGainTenthDb);
+                            const int rrc = vibertl::restoreTunerAfterReinit(ops, plan);
+                            if (plan.gainTenth >= 0) hwGainNow = plan.gainTenth;
+                            LOGI("direct sampling off (auto): tuner restored: IF filter %.0f kHz%s, "
+                                 "gain %.1f dB%s (rc=%d)", plan.bwHz / 1e3,
+                                 plan.captureWidth ? " (the capture width)" : "", plan.gainTenth / 10.0,
+                                 plan.gainTenth >= 0 ? " (manual mode)" : " — none known, manual mode only",
+                                 rrc);
+                        } else {
+                            // ★ …and put our IF filter back, because that call just undid it.
+                            //   Silent: one line per retune would bury everything else.
+                            const int want = bw >= 0 ? bw : g_tunerBwHz.load(std::memory_order_relaxed);
+                            if (want > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)want);
+                        }
                     }
                 }
                 if (bw >= 0) {
@@ -25555,7 +25590,7 @@ int LocalSdrShim::start(int fd, int vid, int pid,
         g_biasTeeOn.store(bt != 0);
         LOGI("bias-tee re-asserted at open: %s", bt ? "ON — DC on the feedline" : "off");
     }
-    if (applyGain >= 0) rtlsdr_set_tuner_gain(impl->dev, applyGain);
+    if (applyGain >= 0) { rtlsdr_set_tuner_gain(impl->dev, applyGain); impl->hwGainNow = applyGain; }   // ★ see hwGainNow
     rtlsdr_reset_buffer(impl->dev);
     // Use the ACTUAL rate the RTL rounded to (keeps the waterfall calibrated).
     uint32_t actualSr = rtlsdr_get_sample_rate(impl->dev);
@@ -28814,7 +28849,7 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
             // ★★★ Manual mode ALWAYS — see the replug handler: AUTO is VibeAGC, never the tuner's own loop.
             rtlsdr_set_tuner_gain_mode(impl->dev, 1);
             { const int g = impl->lastGainTenthDb >= 0 ? impl->lastGainTenthDb : impl->hwGainNow;
-              if (g >= 0) rtlsdr_set_tuner_gain(impl->dev, g); }
+              if (g >= 0) { rtlsdr_set_tuner_gain(impl->dev, g); impl->hwGainNow = g; } }   // ★ see hwGainNow
             /* ★★★ AND EVERYTHING ELSE THE DEVICE FORGOT — THE SAME LIST AS A REPLUG (2026-09-20). This branch
              *  set the gain and stopped, so a radio handed back after a release came up with the dongle's
              *  DIGITAL AGC OFF however the owner had it, and no bias-T. On the Pi 2, after the benchmark, that
@@ -29005,7 +29040,7 @@ void LocalSdrShim::setDirectSampling(int mode) {
      *  tore the IF against the hardware writer's filter write (VIBE_RTL_CTL_LOCK). Linux never sent it
      *  (its default is -1, "leave alone"). librtlsdr's own record of the mode is the authority. */
     const int was = rtlsdr_get_direct_sampling(p->dev);
-    if (was == mode) {
+    if (!vibertl::directSamplingSendNeeded(was, mode)) {
         LOGI("direct sampling: already %d — nothing sent (a re-send re-initialises the tuner)", mode);
         g_dsNow.store(mode, std::memory_order_relaxed);
         return;
@@ -29014,16 +29049,17 @@ void LocalSdrShim::setDirectSampling(int mode) {
     /* ★★ BACK ON THE TUNER, IT HAS FORGOTTEN EVERYTHING — put back what the open programs (the IF filter
      *  and manual gain), in the reopen path's order. r82xx_init leaves int_freq and the IF register
      *  agreeing at 3.57 MHz with a WIDE filter and the tuner's own gain; the filter write re-derives
-     *  both halves together and re-tunes, so the dial stays exact. */
-    if (mode == 0 && was > 0) {
-        const int bw_ = g_tunerBwHz.load(std::memory_order_relaxed);
-        const uint32_t bwWrite = bw_ > 0 ? (uint32_t)bw_ : (uint32_t)std::lround(p->sampleRate);
-        rtlsdr_set_tuner_bandwidth(p->dev, bwWrite);
-        rtlsdr_set_tuner_gain_mode(p->dev, 1);
-        const int g = p->lastGainTenthDb >= 0 ? p->lastGainTenthDb : p->hwGainNow;
-        if (g >= 0) rtlsdr_set_tuner_gain(p->dev, g);
-        LOGI("direct sampling off: tuner re-initialised — IF filter %.0f kHz and gain %.1f dB put back",
-             bwWrite / 1e3, g / 10.0);
+     *  both halves together and re-tunes, so the dial stays exact.
+     *  ★★★ THE SAME FUNCTION AS THE HARDWARE WRITER'S AUTOMATIC CROSSOVER — vibe_rtl_tuner_restore.h.
+     *      Two hand-written copies is how the automatic one came to restore half of this. */
+    if (vibertl::switchReinitialisedTuner(was, mode)) {
+        VibeRtlTunerOps ops{p->dev};
+        const vibertl::TunerRestorePlan plan = vibertl::tunerRestorePlan(
+            g_tunerBwHz.load(std::memory_order_relaxed), p->sampleRate, p->hwGainNow, p->lastGainTenthDb);
+        const int rrc = vibertl::restoreTunerAfterReinit(ops, plan);
+        if (plan.gainTenth >= 0) p->hwGainNow = plan.gainTenth;
+        LOGI("direct sampling off: tuner re-initialised — IF filter %.0f kHz%s and gain %.1f dB put back (rc=%d)",
+             plan.bwHz / 1e3, plan.captureWidth ? " (the capture width)" : "", plan.gainTenth / 10.0, rrc);
     }
     /* ★★ RECORD WHAT THE HARDWARE IS NOW DOING. g_dsNow was written only by the AUTOMATIC crossover, so a
      *  MANUAL switch left it stale — and the state we publish to clients and to the directory would have said
