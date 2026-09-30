@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include "vibe_thread.h"
 
 #if defined(VIBE_HAS_HACKRF)
 #include <libhackrf/hackrf.h>
@@ -80,6 +81,12 @@ struct HackRfSource::Impl {
  *    — a value of exactly -1.0 is honest, and +1.0 is simply unreachable, which is correct for a
  *    two's-complement converter. */
 static int rxCallback(hackrf_transfer* t) {
+    /* ★★★ THIS RUNS ON libhackrf's USB THREAD, which it creates at the default priority. There is
+     *  no ring behind it — a late callback is a transfer not resubmitted, and the loss happens in
+     *  the radio's FIFO where nothing counts it — so the thread takes the IQ rung, once, from here
+     *  (the only place our code runs on it). See vibeIqThread. */
+    static thread_local bool prioritised = false;
+    if (!prioritised) { prioritised = true; vibeIqThread("vibe-hackrf"); }
     if (!t || !t->rx_ctx) return 0;
     auto* c = (CbCtx*)t->rx_ctx;
     if (!c->sink || !*c->sink || t->valid_length <= 0) return 0;

@@ -47,7 +47,13 @@ typedef int bool;
 
 #define PACKET_SIZE (12)
 #define UNPACKED_SIZE (16)
-#define RAW_BUFFER_COUNT (8)
+/* ★★★ VibeSDR: 8 -> 16. Same failure as libairspyhf's ring (see the note there): when the consumer
+ *     thread is late the next USB buffer is thrown away, counted only in transfer.dropped_samples.
+ *     One buffer is 131072 unpacked samples; at the R2's 10 MS/s that is 6.6 ms, so upstream's 8
+ *     was 52 ms and 16 is 105 ms (the Mini's 3/6 MS/s get proportionally more). 256 KB each, so
+ *     this costs 2 MB more per open radio, and only while one is open.
+ *   ★ MUST STAY A POWER OF TWO — head and tail are masked with (RAW_BUFFER_COUNT - 1). */
+#define RAW_BUFFER_COUNT (16)
 
 #ifdef AIRSPY_BIG_ENDIAN
 #define TO_LE(x) __builtin_bswap32(x)
@@ -337,6 +343,22 @@ static inline void unpack_samples(uint32_t *input, uint16_t *output, int length)
 	}
 }
 
+/* ★★★ VibeSDR patch: NAME AND PRIORITISE THIS LIBRARY'S TWO STREAMING THREADS.
+ *  Upstream raises both to THREAD_PRIORITY_HIGHEST on Windows (the #ifdef _WIN32 in each thread)
+ *  and does nothing anywhere else, so on Linux and macOS the USB event thread and the consumer
+ *  thread ran nameless at the default priority — underneath every real-time thread VibeServer
+ *  raises. Under full load on a throttled Pi that starved the consumer long enough to overflow the
+ *  raw ring, and the library dropped whole USB buffers in silence. The host installs one hook,
+ *  called ONCE at the top of each thread, and applies its own priority rule (vibe_thread.h); the
+ *  library stays policy-free. NULL (the default) = upstream behaviour exactly.
+ *  Process-wide; set it before airspy_start. */
+static void (*g_airspy_thread_hook)(int role) = NULL;
+
+void ADDCALL airspy_set_thread_hook(void (*hook)(int role))
+{
+	g_airspy_thread_hook = hook;
+}
+
 static void* consumer_threadproc(void *arg)
 {
 	int sample_count;
@@ -344,6 +366,8 @@ static void* consumer_threadproc(void *arg)
 	uint32_t dropped_buffers;
 	airspy_device_t* device = (airspy_device_t*)arg;
 	airspy_transfer_t transfer;
+
+	if (g_airspy_thread_hook) g_airspy_thread_hook(AIRSPY_THREAD_CONSUMER);   /* ★ VibeSDR — see above */
 
 #ifdef _WIN32
 
@@ -495,6 +519,8 @@ static void* transfer_threadproc(void* arg)
 	airspy_device_t* device = (airspy_device_t*)arg;
 	int error;
 	struct timeval timeout = { 0, 500000 };
+
+	if (g_airspy_thread_hook) g_airspy_thread_hook(AIRSPY_THREAD_USB);   /* ★ VibeSDR — see above */
 
 #ifdef _WIN32
 

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include "vibe_thread.h"
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -207,9 +208,17 @@ void AirspySource::applyAll() {
           centreHz_ / 1e6, bias_ ? "on" : "off", packing_ ? "on" : "off");
 }
 
+/* ★★★ THE LIBRARY'S OWN THREADS TAKE THE IQ PRIORITY — the same fix, for the same reason, as the
+ *  HF+ (see ahfThreadHook in airspyhf_source.cpp): libairspy drops a USB buffer when its consumer
+ *  is late, and that consumer ran at the default priority under all of ours. */
+static void airspyThreadHook(int role) {
+    vibeIqThread(role == AIRSPY_THREAD_USB ? "vibe-asp-usb" : "vibe-asp-iq");
+}
+
 bool AirspySource::start(std::string& err) {
     if (!dev_) { err = "Airspy not open"; return false; }
     if (streaming_) return true;
+    airspy_set_thread_hook(&airspyThreadHook);   // ★ before start: the threads are made there
     const int rc = airspy_start_rx(dev_, &airspyRxCallback, this);
     if (rc != AIRSPY_SUCCESS) { err = std::string("airspy_start_rx: ") + airspy_error_name((airspy_error)rc); return false; }
     streaming_ = true;

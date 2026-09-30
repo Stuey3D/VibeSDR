@@ -20504,7 +20504,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     against a requested 2.4 — short bytes, not corrupt bytes, which is the signature
             //     of the host failing to resubmit rather than the dongle's FIFO overflowing.
             //     The Pi never showed it: cores to spare, so priority never decided anything.
-            vibeAudioThread("vibe-rtl");
+            // ★★ AND NOW IT ACTUALLY OUTRANKS THEM (2026-09-30): vibeAudioThread put it LEVEL with
+            //    the consumers, not above. vibeIqThread is the IQ input's own rung, shared with the
+            //    Airspy libraries' threads, the HackRF's and the RSP's callbacks — see vibe_thread.h.
+            vibeIqThread("vibe-rtl");
             // ★ Set on EVERY exit path, including the early returns below — a flag that is only
             //   correct on the happy path is worse than none, because it is trusted.
             struct Done { Impl* s; ~Done(){ s->rtlThreadDone.store(true); } } done{self};

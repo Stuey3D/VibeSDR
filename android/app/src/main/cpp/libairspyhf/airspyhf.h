@@ -120,6 +120,11 @@ typedef int (*airspyhf_sample_block_cb_fn) (airspyhf_transfer_t* transfer_fn);
 
 extern ADDAPI void ADDCALL airspyhf_lib_version(airspyhf_lib_version_t* lib_version);
 extern ADDAPI int ADDCALL airspyhf_list_devices(uint64_t *serials, int count);
+
+/* ★★★ VibeSDR patch — see airspyhf_set_thread_hook in airspyhf.c. `role` is one of these. */
+#define AIRSPYHF_THREAD_USB      0   /* libusb event handling: completes and resubmits the transfers */
+#define AIRSPYHF_THREAD_CONSUMER 1   /* converts each buffer and runs the sample callback */
+extern ADDAPI void ADDCALL airspyhf_set_thread_hook(void (*hook)(int role));
 extern ADDAPI int ADDCALL airspyhf_open(airspyhf_device_t** device);
 extern ADDAPI int ADDCALL airspyhf_open_sn(airspyhf_device_t** device, uint64_t serial_number);
 /* ★ VibeSDR addition: open an already-opened USB file descriptor (Android's UsbManager gives

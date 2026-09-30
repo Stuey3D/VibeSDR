@@ -11,6 +11,7 @@
 #include <atomic>
 #include <future>
 #include <chrono>
+#include "vibe_thread.h"
 #include <thread>
 #include <cstdio>
 #include <cmath>
@@ -1458,6 +1459,11 @@ void SdrplaySource::applyDuoChoice() {
 
 static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT* params,
                      unsigned int numSamples, unsigned int reset, void* ctx) {
+    /* ★★★ THE API'S STREAM THREAD TAKES THE IQ RUNG — once, from here, the only place our code runs
+     *  on it. It is created by the SDRplay library at the default priority, beneath every thread of
+     *  ours that consumes what it delivers. See vibeIqThread. */
+    static thread_local bool prioritised = false;
+    if (!prioritised) { prioritised = true; vibeIqThread("vibe-rsp-iq"); }
     auto* c = (CbCtx*)ctx;
     if (!c || !c->sink || !*c->sink || numSamples == 0) return;
     // ★★ BEFORE the idle drop: continuity is a fact about the API's delivery, listener or not. A

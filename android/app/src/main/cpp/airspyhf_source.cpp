@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <mutex>
+#include "vibe_thread.h"
 
 namespace vibe {
 
@@ -108,6 +109,19 @@ static int streamCb(airspyhf_transfer_t* t) {
     (*c->sink)(reinterpret_cast<const float*>(t->samples), t->sample_count);
     return 0;   // non-zero would ask the library to STOP streaming
 }
+
+/* ★★★ THE LIBRARY'S OWN THREADS TAKE THE IQ PRIORITY. libairspyhf runs two: the libusb event thread
+ *  that completes and resubmits the transfers, and the consumer that converts each buffer and calls
+ *  streamCb. Both used to run nameless at the default priority beneath every thread we raise, and
+ *  a late consumer is not a late sample — it is a DROPPED one (see noteUsbDropped). Upstream raises
+ *  both to HIGHEST on Windows and nowhere else; this is our equivalent, through the one hook our
+ *  vendored copy adds (airspyhf_set_thread_hook).
+ *  ★ Names fit Linux's 15 characters. */
+#ifdef VIBE_AIRSPYHF_HAS_FD
+static void ahfThreadHook(int role) {
+    vibeIqThread(role == AIRSPYHF_THREAD_USB ? "vibe-ahf-usb" : "vibe-ahf-iq");
+}
+#endif
 
 // ── Lifecycle ───────────────────────────────────────────────────────────────
 bool AirspyHfSource::open(int index, double sampleRateHz, double centreHz,
@@ -202,6 +216,9 @@ bool AirspyHfSource::start(std::string& err) {
     if (!open_ || !impl_->dev) { err = "device not open"; return false; }
     if (streaming_) return true;
     impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx, this };
+#ifdef VIBE_AIRSPYHF_HAS_FD
+    airspyhf_set_thread_hook(&ahfThreadHook);   // ★ before start: the threads are made there
+#endif
     if (airspyhf_start(impl_->dev, &streamCb, &impl_->ctx) != AIRSPYHF_SUCCESS) {
         err = "the Airspy HF+ would not start streaming";
         return false;

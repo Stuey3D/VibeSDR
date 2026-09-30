@@ -54,7 +54,18 @@ typedef int bool;
 
 #define SAMPLES_TO_TRANSFER (1024 * 2)
 #define SERIAL_NUMBER_UNUSED (0)
-#define RAW_BUFFER_COUNT (8)
+/* ★★★ VibeSDR: 8 -> 64. The ring between the libusb callback and the consumer thread is the ONLY
+ *     slack this library has, and when it is full the next USB buffer is thrown away (counted in
+ *     dropped_buffers -> transfer.dropped_samples, which nothing used to read). At 912 kS/s one
+ *     buffer is 2048 samples = 2.2 ms, so upstream's 8 was 18 ms — shorter than one scheduler
+ *     time slice on a loaded, throttled Pi 500, and the consumer thread ran at nice 0 underneath a
+ *     dozen of our nice -19 threads (see airspyhf_set_thread_hook). The hole is inaudible and it
+ *     costs RDS its block sync for most of a second, every time.
+ *     64 x 2.2 ms = 144 ms of slack at the top rate (more at the lower ones). Buffers only fill
+ *     while the consumer is BEHIND, so it adds no latency in steady state; the cost is 56 more
+ *     8 KB buffers = 448 KB per open radio, which the 1 GB floor does not notice.
+ *   ★ MUST STAY A POWER OF TWO — head and tail are masked with (RAW_BUFFER_COUNT - 1). */
+#define RAW_BUFFER_COUNT (64)
 #define AIRSPYHF_SERIAL_SIZE (28)
 
 #define MAX_SAMPLERATE_INDEX (100)
@@ -337,6 +348,22 @@ static void convert_samples(airspyhf_device_t* device, airspyhf_complex_int16_t 
 	}
 }
 
+/* ★★★ VibeSDR patch: NAME AND PRIORITISE THIS LIBRARY'S TWO STREAMING THREADS.
+ *  Upstream raises both to THREAD_PRIORITY_HIGHEST on Windows (the #ifdef _WIN32 in each thread)
+ *  and does nothing anywhere else, so on Linux and macOS the USB event thread and the consumer
+ *  thread ran nameless at the default priority — underneath every real-time thread VibeServer
+ *  raises. Under full load on a throttled Pi that starved the consumer long enough to overflow the
+ *  raw ring, and the library dropped whole USB buffers in silence. The host installs one hook,
+ *  called ONCE at the top of each thread, and applies its own priority rule (vibe_thread.h); the
+ *  library stays policy-free. NULL (the default) = upstream behaviour exactly.
+ *  Process-wide; set it before airspyhf_start. */
+static void (*g_airspyhf_thread_hook)(int role) = NULL;
+
+void ADDCALL airspyhf_set_thread_hook(void (*hook)(int role))
+{
+	g_airspyhf_thread_hook = hook;
+}
+
 static void* consumer_threadproc(void *arg)
 {
 	int sample_count;
@@ -344,6 +371,8 @@ static void* consumer_threadproc(void *arg)
 	uint32_t dropped_buffers;
 	airspyhf_device_t* device = (airspyhf_device_t*) arg;
 	airspyhf_transfer_t transfer;
+
+	if (g_airspyhf_thread_hook) g_airspyhf_thread_hook(AIRSPYHF_THREAD_CONSUMER);   /* ★ VibeSDR — see above */
 
 #ifdef _WIN32
 
@@ -447,6 +476,8 @@ static void* transfer_threadproc(void* arg)
 	airspyhf_device_t* device = (struct  airspyhf_device*) arg;
 	int error;
 	struct timeval timeout = { 0, 500000 };
+
+	if (g_airspyhf_thread_hook) g_airspyhf_thread_hook(AIRSPYHF_THREAD_USB);   /* ★ VibeSDR — see above */
 
 #ifdef _WIN32
 

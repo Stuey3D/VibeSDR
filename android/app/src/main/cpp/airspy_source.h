@@ -11,8 +11,11 @@
 //   app's credits.
 //
 // ★★ UPSTREAM ALREADY HAS THE ANDROID DOOR. libairspyhf had to be patched to add an fd entry
-// point; libairspy ships airspy_open_fd() on libusb_wrap_sys_device(), so this one is vendored
-// UNMODIFIED — which is the licence's "redistribution in source form" case and nothing more.
+// point; libairspy ships airspy_open_fd() on libusb_wrap_sys_device(), so it needed no door.
+// ★ It is NO LONGER UNMODIFIED (2026-09-30): two marked VibeSDR patches — a deeper raw ring
+//   (RAW_BUFFER_COUNT 8 -> 16) and airspy_set_thread_hook(), so its two streaming threads take the
+//   IQ priority instead of the default. Both exist because the library DROPS USB buffers when its
+//   consumer is late, and ours was starved under load. See the notes in airspy.c.
 //
 // Shape, against the other sources:
 //   1. Samples arrive as INTERLEAVED COMPLEX FLOAT (AIRSPY_SAMPLE_FLOAT32_IQ), already the

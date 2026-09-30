@@ -382,9 +382,11 @@ if(EXISTS "${AHF_VENDOR}/airspyhf.c")
 endif()
 
 # ── libairspy: Airspy R2 / Mini (2026-09-22) ─────────────────────────────────
-# ★★ VENDORED UNMODIFIED and permissive — airspy.c/.h/commands BSD-3, iqconverter*/filters MIT
+# ★★ VENDORED and permissive — airspy.c/.h/commands BSD-3, iqconverter*/filters MIT
 # (libairspy/LICENSE); the credits carry both notices. A DIFFERENT library from libairspyhf, for
-# different radios. Upstream already has airspy_open_fd(), so there is no patch to keep visible.
+# different radios. Upstream already has airspy_open_fd(), so it needed no door patch; since
+# 2026-09-30 it carries two marked VibeSDR patches (deeper raw ring, streaming-thread hook) — see
+# airspy.c, and the same pair in airspyhf.c.
 # ★ Same arrangement as the HF+ block above: our copy, both platforms, one place to fix.
 set(AIRSPY_VENDOR "${CPP_DIR}/libairspy")
 if(EXISTS "${AIRSPY_VENDOR}/airspy.c")

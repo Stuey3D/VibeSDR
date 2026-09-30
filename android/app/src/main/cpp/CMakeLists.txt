@@ -82,12 +82,14 @@ set(AIRSPYHF_SRC
 # that a wrapped fd cannot do. See the VIBESDR PATCH notes in hackrf.c.
 set(HACKRF_SRC "${CMAKE_CURRENT_SOURCE_DIR}/libhackrf/hackrf.c")
 
-# ★★ libairspy, VENDORED UNMODIFIED — Airspy R2 / Mini (2026-09-22, a user request via Stuart).
+# ★★ libairspy, VENDORED — Airspy R2 / Mini (2026-09-22, a user request via Stuart).
 # A DIFFERENT library from libairspyhf above, and permissive: airspy.c/.h/airspy_commands.h are
 # BSD-3-Clause, iqconverter*/filters.h are MIT (libairspy/LICENSE). Both notices ship in the app's
 # credits, and BSD clause 3 means the Airspy name must not be used to promote VibeSDR.
-# ★ No patch needed: upstream already has airspy_open_fd() on libusb_wrap_sys_device(), which is
-#   the entry point Android forces (UsbManager hands out an fd and forbids enumeration).
+# ★ No DOOR patch needed: upstream already has airspy_open_fd() on libusb_wrap_sys_device(), which
+#   is the entry point Android forces (UsbManager hands out an fd and forbids enumeration).
+# ★★ Two marked VibeSDR patches since 2026-09-30 (a deeper raw ring, and a thread hook so its
+#    streaming threads take the IQ priority) — see airspy.c. Same pair as libairspyhf.
 set(AIRSPY_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/libairspy/airspy.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/libairspy/iqconverter_float.c"

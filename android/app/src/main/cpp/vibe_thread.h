@@ -63,6 +63,21 @@
   inline void vibeNetThread(const char* name)      { vibeNiceThread_(name, -20); }
   inline void vibeSpectrumThread(const char* name) { vibeNiceThread_(name, -5); }
   inline void vibeDecoderThread(const char* name)  { vibeNiceThread_(name, 10); }
+  /* ★★★ THE IQ INPUT SITS ABOVE THE WHOLE ORDER — Network > Audio > Spectrum > Decoders all
+   *  consume what it delivers, and a sample it fails to collect is lost for every one of them
+   *  (never late: GONE — a radio library drops the buffer). So it takes the top nice, level with
+   *  the send threads, falling back to audio priority where -20 is refused.
+   *  ★★ WHY IT EXISTS (2026-09-30): the Airspy libraries' own USB and consumer threads ran at nice 0
+   *     under a dozen of our -19 threads — a CFS weight of 1024 against ~70 000 each — so on a
+   *     loaded Pi they were starved past their ring and dropped IQ, and the listener's RDS block
+   *     errors tracked the load (~25 % full, ~1.5 % idle). The dongle's reader was already at -19
+   *     and read 0-4 % on the same box at the same time. It does little work, so ranking it first
+   *     costs the rest nothing. */
+  inline void vibeIqThread(const char* name) {
+      prctl(PR_SET_NAME, name);
+      errno = 0;
+      if (setpriority(PRIO_PROCESS, 0, -20) != 0 && errno != 0) vibeAudioThread(name);
+  }
 #elif defined(__APPLE__)
   #include <pthread.h>
   #include <pthread/qos.h>
@@ -95,10 +110,16 @@
       pthread_setname_np(name);
       pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   }
+  // ★ The IQ input — see the Linux note. macOS has nothing above USER_INTERACTIVE to give it.
+  inline void vibeIqThread(const char* name) {
+      pthread_setname_np(name);
+      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+  }
 #else
   inline void vibeThreadName(const char*) {}
   inline void vibeAudioThread(const char*) {}
   inline void vibeNetThread(const char*) {}
   inline void vibeSpectrumThread(const char*) {}
   inline void vibeDecoderThread(const char*) {}
+  inline void vibeIqThread(const char*) {}
 #endif

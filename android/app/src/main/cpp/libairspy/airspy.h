@@ -121,6 +121,11 @@ typedef int (*airspy_sample_block_cb_fn)(airspy_transfer* transfer);
 extern ADDAPI void ADDCALL airspy_lib_version(airspy_lib_version_t* lib_version);
 /* airspy_init() deprecated */
 extern ADDAPI int ADDCALL airspy_init(void);
+
+/* ★★★ VibeSDR patch — see airspy_set_thread_hook in airspy.c. `role` is one of these. */
+#define AIRSPY_THREAD_USB      0   /* libusb event handling: completes and resubmits the transfers */
+#define AIRSPY_THREAD_CONSUMER 1   /* converts each buffer and runs the sample callback */
+extern ADDAPI void ADDCALL airspy_set_thread_hook(void (*hook)(int role));
 /* airspy_exit() deprecated */
 extern ADDAPI int ADDCALL airspy_exit(void);
 
