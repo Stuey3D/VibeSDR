@@ -4,6 +4,15 @@
  * Everything here is pure (no React, no Skia) so scripts/test_faceplate_meters.ts can check it, and
  * everything the UI thread runs per frame is a `'worklet'` so the meters can call it there.
  *
+ * ★★★ WORKLET DEFAULTS — NEVER `param = MODULE_CONSTANT` IN A WORKLET. The worklets Babel plugin
+ *   unpacks the captured constants INSIDE the body (`const { PEAK_HOLD_MS } = this.__closure;`), and
+ *   a default-parameter initialiser runs BEFORE the body, so on the UI thread it finds nothing:
+ *   `ReferenceError: Property 'PEAK_HOLD_MS' doesn't exist`, thrown from a frame callback — a native
+ *   abort, not a red box. That was the LED VU crash in 11 B7 (it killed the app on every receiver,
+ *   because the meter setting persists). Plain JS on the JS thread runs it happily, so only
+ *   scripts/test_worklet_defaults.mjs — which runs the plugin's OUTPUT — can see it. Take the
+ *   parameter optional and resolve it in the body (`holdMs ?? PEAK_HOLD_MS`).
+ *
  *   §4.1  portraitDeck()    ONE DECK HEIGHT per chassis: a fixed block with the display flexing inside
  *   §4.3  the LED table     ten segments, their colours, thresholds, and the squelch ring's segment
  *   §4.4  edge brightness   Φ((μ − T)/σ), the σ window, the eye filter, the steady-LED hysteresis
@@ -23,6 +32,7 @@
 // ── §4.1 One deck height ──────────────────────────────────────────────────────
 
 export type MeterKind = 'bar' | 'vu' | 'edge';
+
 
 /** Scale-1 sizes from Deck.mockup's portrait `L` + §4.1's table. */
 export const DECK = {
@@ -196,13 +206,14 @@ export function vuPos(norm: number): number {
  * is half-lit at the level where the gate opens. −1 = squelch off (−1 on the bus): no ring.
  * ★ Reads VU_THRESHOLDS, the table the segments light from, so the two can never disagree.
  */
-export function ringSegment(sqlNorm: number | undefined | null, thresholds: readonly number[] = VU_THRESHOLDS): number {
+export function ringSegment(sqlNorm: number | undefined | null, thresholds?: readonly number[]): number {
   'worklet';
+  const th = thresholds ?? VU_THRESHOLDS;   // ★ not a default parameter — see WORKLET DEFAULTS above
   if (sqlNorm == null || !(sqlNorm >= 0)) return -1;
   const p = vuPos(sqlNorm);
   let best = 0, bestD = Infinity;
-  for (let i = 0; i < thresholds.length; i++) {
-    const d = Math.abs(thresholds[i] - p);
+  for (let i = 0; i < th.length; i++) {
+    const d = Math.abs(th[i] - p);
     if (d < bestD) { bestD = d; best = i; }
   }
   return best;
@@ -213,10 +224,11 @@ export const PEAK_HOLD_MS = 1000;
 export interface PeakHold { idx: number; at: number }
 /** `top` = the highest segment that is (at least half) lit now, −1 for none. Returns the held peak
  *  segment, or −1 when it is not above the level (nothing extra to draw). */
-export function peakStep(p: PeakHold, top: number, nowMs: number, holdMs = PEAK_HOLD_MS): number {
+export function peakStep(p: PeakHold, top: number, nowMs: number, holdMs?: number): number {
   'worklet';
+  const hold = holdMs ?? PEAK_HOLD_MS;   // ★ not a default parameter — see WORKLET DEFAULTS above
   if (top >= p.idx) { p.idx = top; p.at = nowMs; }
-  else if (nowMs - p.at > holdMs) { p.idx = top; p.at = nowMs; }
+  else if (nowMs - p.at > hold) { p.idx = top; p.at = nowMs; }
   return p.idx > top ? p.idx : -1;
 }
 
@@ -267,19 +279,22 @@ export function edgeBrightness(muDb: number, thresholdDb: number, sigmaDb: numbe
 /** §4.4 eye filter: exponential, τ ≈ 100 ms, and at most 0.35 change per frame. ★ The ONLY easing. */
 export const EYE_TAU_MS = 100;
 export const EYE_MAX_STEP = 0.35;
-export function eyeStep(b: number, target: number, dtMs: number, tauMs = EYE_TAU_MS, maxStep = EYE_MAX_STEP): number {
+export function eyeStep(b: number, target: number, dtMs: number, tauMs?: number, maxStepArg?: number): number {
   'worklet';
+  // ★ not default parameters — see WORKLET DEFAULTS above
+  const tau = tauMs ?? EYE_TAU_MS, maxStep = maxStepArg ?? EYE_MAX_STEP;
   const dt = Math.max(0, Math.min(250, dtMs));   // a stalled frame must not become one giant jump
-  let d = (target - b) * (1 - Math.exp(-dt / tauMs));
+  let d = (target - b) * (1 - Math.exp(-dt / tau));
   if (d > maxStep) d = maxStep; else if (d < -maxStep) d = -maxStep;
   return b + d;
 }
 
 /** "Steady LEDs": solid on / off with ~1 dB of hysteresis — on above T + ½, off below T − ½. */
 export const STEADY_HYST_DB = 1;
-export function steadyLit(wasLit: boolean, muDb: number, thresholdDb: number, hystDb = STEADY_HYST_DB): boolean {
+export function steadyLit(wasLit: boolean, muDb: number, thresholdDb: number, hystDb?: number): boolean {
   'worklet';
-  return wasLit ? muDb > thresholdDb - hystDb / 2 : muDb > thresholdDb + hystDb / 2;
+  const h = hystDb ?? STEADY_HYST_DB;   // ★ not a default parameter — see WORKLET DEFAULTS above
+  return wasLit ? muDb > thresholdDb - h / 2 : muDb > thresholdDb + h / 2;
 }
 
 /**
@@ -290,9 +305,10 @@ export function steadyLit(wasLit: boolean, muDb: number, thresholdDb: number, hy
  * • otherwise: Φ((μ − T)/σ).
  */
 export function segmentTarget(i: number, muPos: number, sigmaPos: number, steady: boolean, muting: boolean,
-                              wasLit: boolean, thresholds: readonly number[] = VU_THRESHOLDS): number {
+                              wasLit: boolean, thresholds?: readonly number[]): number {
   'worklet';
-  const mu = muPos * DB_PER_SEG, T = thresholds[i] * DB_PER_SEG;
+  // ★ not a default parameter — see WORKLET DEFAULTS above
+  const mu = muPos * DB_PER_SEG, T = (thresholds ?? VU_THRESHOLDS)[i] * DB_PER_SEG;
   if (steady) return steadyLit(wasLit, mu, T) ? 1 : 0;
   if (muting) return mu > T ? 1 : 0;
   return edgeBrightness(mu, T, sigmaPos * DB_PER_SEG);

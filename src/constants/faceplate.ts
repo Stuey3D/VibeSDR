@@ -947,3 +947,116 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
   const opaque = s.transparency === 'off';
   return { settings: s, chassis, controls, text, deck, keyLegend, vts, opaque, surface: surfaceTokens(opaque) };
 }
+
+// ── Crash safety ──────────────────────────────────────────────────────────────
+
+/**
+ * ★★★ CRASH SAFETY — A FACEPLATE SETTING CAN NEVER LOCK SOMEONE OUT OF THE APP.
+ *
+ * WHY (11 B7): SIGNAL METER → LED VU crashed the app on its first frame, and because a faceplate
+ * setting is STORED, every launch that reached the deck crashed again. On a phone with a default
+ * server the app goes straight into it, so it could not even reach the server list to change it
+ * back; the only way out was deleting the app. The LED VU bug is fixed (meters.ts, WORKLET
+ * DEFAULTS); this is the guarantee that the NEXT faceplate bug cannot do the same.
+ *
+ *   ARM   — immediately BEFORE a non-default faceplate is drawn (the stored settings applied at
+ *           launch, a change in the CONTROL CUSTOMISATION pane, the deck mounting in a receiver) a
+ *           mark is written SYNCHRONOUSLY (services/faceplateGuard.ts: a file, so it is on disk before
+ *           the next line runs — an abort a frame later must find it).
+ *   CLEAR — after ARMED_WINDOW_MS of the app running with it, when the app leaves the foreground (a
+ *           swipe-away from the switcher is not a crash), and when the settings go back to safe.
+ *   CHECK — at launch, BEFORE the stored settings are applied: a mark still there means the last run
+ *           died while a faceplate was being drawn. The app comes up on the SAFE faceplate (display
+ *           HYPER, meter BAR, chassis DEFAULT — transparency and colours untouched), stores that, keeps
+ *           what the user had chosen in a "last crashed" slot, and says so once.
+ *
+ * Pure (no React Native): scripts/test_faceplate_safety.ts drives it with a fake disk and clock.
+ * (Here, not in its own file, because it needs withDisplay and the node tests load one module.)
+ */
+
+/** How long a faceplate must run before it is trusted (crash on mount, the first data, a retune). */
+export const ARMED_WINDOW_MS = 5000;
+
+/** The faceplate every build has drawn since before the faceplates existed. */
+export const SAFE_FACEPLATE = { chassis: 'default', display: 'hyper', meter: 'bar' } as const;
+
+/** Is anything drawn that is not the safe faceplate? (Colours and transparency are not risks: they
+ *  only change the values the same components draw with.) */
+export function isRiskyFaceplate(s: Pick<FaceplateSettings, 'chassis' | 'display' | 'meter'>): boolean {
+  return s.chassis !== SAFE_FACEPLATE.chassis || s.display !== SAFE_FACEPLATE.display
+      || s.meter !== SAFE_FACEPLATE.meter;
+}
+
+/** The user's settings with the safe faceplate — via withDisplay, so the text colour is one the
+ *  display can show (leaving Nixie also takes the controls off neon). */
+export function safeFaceplate(s: FaceplateSettings): FaceplateSettings {
+  return { ...withDisplay(s, SAFE_FACEPLATE.display), chassis: SAFE_FACEPLATE.chassis, meter: SAFE_FACEPLATE.meter };
+}
+
+/** What the mark records: the risky choices, and when (for the diagnostics, not the decision). */
+export function markOf(s: Pick<FaceplateSettings, 'chassis' | 'display' | 'meter'>, nowMs: number): string {
+  return JSON.stringify({ chassis: s.chassis, display: s.display, meter: s.meter, at: nowMs });
+}
+
+export interface LaunchDecision {
+  /** What to apply (and store, if it changed). */
+  settings: FaceplateSettings;
+  /** The settings the last run died with — for the "last crashed" slot and the notice; null when
+   *  nothing is wrong. */
+  crashed: FaceplateSettings | null;
+}
+
+/**
+ * At launch. `mark` is whatever was on disk (null = the last run cleared it). ★ ANY mark counts, even
+ * one that does not parse: a write torn by the very crash it records is still a crash. A mark with a
+ * faceplate that is already safe changes nothing (the crash was not the faceplate's).
+ */
+export function decideLaunch(stored: FaceplateSettings, mark: string | null): LaunchDecision {
+  if (mark == null || !isRiskyFaceplate(stored)) return { settings: stored, crashed: null };
+  return { settings: safeFaceplate(stored), crashed: stored };
+}
+
+// ── The arm / clear state machine (disk and clock injected) ───────────────────
+
+export interface GuardIO {
+  /** Synchronous: on disk when it returns. */
+  write(mark: string): void;
+  read(): string | null;
+  remove(): void;
+  now(): number;
+  setTimer(fn: () => void, ms: number): unknown;
+  clearTimer(t: unknown): void;
+}
+
+export interface FaceplateGuard {
+  /** Before drawing `s`: write the mark (risky) or clear it (safe). Restarts the window. */
+  arm(s: Pick<FaceplateSettings, 'chassis' | 'display' | 'meter'>): void;
+  /** The window ran out, or the app left the foreground. */
+  clear(): void;
+  /** Once, at launch, before anything arms: the previous run's mark (removed from disk), or null. */
+  takeLaunchMark(): string | null;
+}
+
+export function makeFaceplateGuard(io: GuardIO, windowMs = ARMED_WINDOW_MS): FaceplateGuard {
+  let timer: unknown = null;
+  const stopTimer = () => { if (timer != null) { io.clearTimer(timer); timer = null; } };
+  const clear = () => {
+    stopTimer();
+    try { io.remove(); } catch { /* nothing there, or the disk refused: nothing to undo */ }
+  };
+  return {
+    arm(s) {
+      if (!isRiskyFaceplate(s)) { clear(); return; }
+      try { io.write(markOf(s, io.now())); } catch { /* a guard that cannot write must not break drawing */ }
+      stopTimer();
+      timer = io.setTimer(() => { timer = null; clear(); }, windowMs);
+    },
+    clear,
+    takeLaunchMark() {
+      let m: string | null = null;
+      try { m = io.read(); } catch { m = null; }
+      if (m != null) clear();
+      return m;
+    },
+  };
+}

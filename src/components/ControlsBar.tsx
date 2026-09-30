@@ -130,7 +130,8 @@ function ControlSlot({ report, style, children }: {
   );
 }
 import { useTheme } from '../contexts/ThemeContext';
-import { useFaceplate } from '../contexts/FaceplateContext';
+import { useFaceplate, useFaceplateOnTrial, useFaceplateSettings } from '../contexts/FaceplateContext';
+import { explainMeterFault } from '../services/faceplateGuard';
 import type { ChassisTokens, PlateTokens } from '../constants/faceplate';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
@@ -1170,6 +1171,13 @@ function MeterHousing({ kind, height, shared, lip, bus, land }: {
   land?: LandscapeLayout;
 }) {
   const s = useUiScale();
+  // ★★★ A METER CANNOT TAKE THE APP DOWN: a throw in its frame callback is caught there and lands
+  //   here once — the BAR goes back, and the user is told (a crash on launch: faceplate.ts CRASH SAFETY).
+  const { set: setFaceplate } = useFaceplateSettings();
+  const onFault = useCallback((message: string) => {
+    setFaceplate({ meter: 'bar' });
+    explainMeterFault(kind, message);
+  }, [kind, setFaceplate]);
   const ledGeom = useMemo(() => land ? { padTop: land.ledPadTop, padX: land.ledPadX, ledH: land.ledH,
     labelH: land.labelH, labelGap: land.labelGap } : undefined,
     [land?.ledPadTop, land?.ledPadX, land?.ledH, land?.labelH, land?.labelGap]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -1177,16 +1185,16 @@ function MeterHousing({ kind, height, shared, lip, bus, land }: {
     <View style={[cd.housing, { height }]}>
       <View pointerEvents="none" style={cd.housingShade} />
       <View pointerEvents="none" style={[cd.lip, { backgroundColor: kind === 'vu' ? 'rgba(255,255,255,0.22)' : lip }]} />
-      {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} geom={ledGeom} />}
+      {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} geom={ledGeom} onFault={onFault} />}
       {kind === 'edge' && (land ? (
         // §9: a 24 pt window, padding 2, the 28 pt print shown 2 pt up (Deck.mockup `svgTop: -2px`).
         <View style={{ padding: land.edgePad }}>
-          <EdgeMeter bus={bus} height={land.edgeWindow} printH={land.edgePrintH} printTop={land.edgePrintTop} />
+          <EdgeMeter bus={bus} height={land.edgeWindow} printH={land.edgePrintH} printTop={land.edgePrintTop} onFault={onFault} />
         </View>
       ) : (
         // §4.5: a 28 pt window in the 34 pt housing (padding 3; 2 with the shared banner).
         <View style={{ padding: s.r(shared ? DECK.edgePadShared : DECK.edgePad) }}>
-          <EdgeMeter bus={bus} height={s.r(DECK.edgeWindow)} />
+          <EdgeMeter bus={bus} height={s.r(DECK.edgeWindow)} onFault={onFault} />
         </View>
       ))}
     </View>
@@ -2158,6 +2166,9 @@ function ControlsBar({
   airChannel = null,
   tubeLayout = 'hf',
 }: ControlsBarProps) {
+  // ★★★ Entering a receiver is where the faceplate is really drawn: on trial from this first render
+  //   (constants/faceplate.ts CRASH SAFETY) — a crash in the next few seconds brings the next launch up safe.
+  useFaceplateOnTrial();
   // ★ Flashes when a captured region hands the keyboard back — see useRegionHandback.
   const handback = useRegionHandback();
   const handbackFlash = useRef(new Animated.Value(0)).current;

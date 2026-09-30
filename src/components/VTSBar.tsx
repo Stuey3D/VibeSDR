@@ -10,7 +10,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useFaceplate } from '../contexts/FaceplateContext';
+import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import RdsMark from './RdsMark';
 import { GhostGrid } from './VfdParts';
 import { rgba, FONT_HYPER, FONT_DOTO, FONT_SEG14 } from '../constants/faceplate';
@@ -66,6 +66,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       /** The tuned frequency as text ("7310 kHz") — what a VFD shows when a name folds to nothing
        *  it can draw (§7: Cyrillic, CJK… until native transliteration lands). */
       freqLabel?: string }) {
+  useFaceplateOnTrial();   // ★★★ the VFD strip is faceplate too (constants/faceplate.ts CRASH SAFETY)
   const fp = useFaceplate();
   const COL = fp.vts;
   const [shown, setShown] = useState<VtsNotifData | null>(null);

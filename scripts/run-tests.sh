@@ -180,6 +180,16 @@ if node --no-warnings scripts/test_faceplate_nixie.ts; then pass=$((pass+1)); el
 #     table the LEDs light from, Φ((μ − T)/σ) with its σ floor, the eye filter as the only easing, the
 #     steady-LED hysteresis, and the needle's 300 ms / 1 % ballistics — the maths, checked as data.
 if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ WORKLETS AS THE UI THREAD RUNS THEM (the 11 B7 LED VU crash): a default parameter that names a
+#     module constant THROWS on the UI thread (the plugin unpacks captures inside the body), so every
+#     worklet in src/ is compiled with the app's plugin and checked, and the meters' frame callbacks are
+#     rebuilt from the plugin's output with no module scope and run — the test above cannot see it.
+if node --no-warnings scripts/test_worklet_defaults.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ A FACEPLATE CANNOT LOCK YOU OUT (faceplate.ts CRASH SAFETY): the mark is armed before a risky
+#     faceplate draws and cleared after 5 s / on leaving the foreground; a launch that finds it comes up
+#     on HYPER / BAR / DEFAULT with the choice kept aside — a crash, a clean exit, a swipe-away, a torn
+#     mark and a refusing disk, across fake launches.
+if node --no-warnings scripts/test_faceplate_safety.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ THE DRUM WELLS (faceplates §6): the default well is today's drum as data, the needle is gone on
 #    every chassis, the aluminium notch pair inverts (and its draw order is a token), the LED pool's
 #    geometry, the controls colour at the brief's brightness, and the tuner keys' 31 % / 34 % layout.
