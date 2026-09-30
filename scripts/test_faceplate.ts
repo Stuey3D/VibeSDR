@@ -212,5 +212,18 @@ eq('default chassis, red text: the VTS goes red, the digits stay white', (() => 
   eq('§5 timings', [DOME_PRESS_MS, DOME_RELEASE_MS], [45, 35]);
 }
 
+// ── §4.6 SQL in the mode box, on every meter: red, neon #ff9a55 under Nixie (the rule outranks red) ──
+for (const chassis of CHASSIS) for (const display of DISPLAYS) for (const text of TEXTS) for (const meter of METERS) {
+  const d = resolveFaceplate({ ...DEFAULT_SETTINGS, chassis, display, text, meter }).deck;
+  const tag = `${chassis}/${display}/${text}/${meter}`;
+  if (display === 'nixie') {
+    eq(`${tag}: SQL neon`, [d.sqlClosed, d.sqlGlow], ['#ff9a55', 'rgba(255,90,10,0.8)']);
+  } else {
+    eq(`${tag}: SQL red`, d.sqlClosed, '#ff4040');
+    // The default deck's SQL has no glow today; silver / black / VFD take the mockup's red glow.
+    eq(`${tag}: SQL glow`, d.sqlGlow, chassis === 'default' && display === 'hyper' ? null : 'rgba(255,64,64,0.6)');
+  }
+}
+
 console.log(`${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

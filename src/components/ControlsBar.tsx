@@ -877,6 +877,9 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
         color: dk.sqlClosed, fontFamily: dk.modeFont, width: snrWidth,
         fontSize: rf, lineHeight: rl,
         includeFontPadding: false, fontWeight: dot ? 'normal' : '800', opacity: reading.breathe,
+        // §4.6: neon under Nixie (`#ff9a55`, the rule outranks red), red elsewhere, with the mockup's
+        // glow; the default deck keeps today's unglowing SQL.
+        ...(dk.sqlGlow ? { textShadowColor: dk.sqlGlow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null),
       }]}>
         SQL
       </Animated.Text>
