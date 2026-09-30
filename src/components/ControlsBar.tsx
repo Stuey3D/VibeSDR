@@ -1788,7 +1788,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   const isCap     = ct.dome.look === 'cap';
   const lay       = landscapeDeck({ plate: ct.plate ? { screws: ct.plate.screws, gloss: ct.plate.gloss } : null,
                                     meter: fp.settings.meter, tablet: s.isTablet, W: s.W, scale: s.scale, r: s.r,
-                                    singleDrum: !!singleDrum, H: s.H });
+                                    singleDrum: !!singleDrum, H: s.H, display: fp.settings.display });
   const BAND_H    = lay.bandH;
   const SIG_H     = lay.barH;                // the bar frame (bar meter only)
   const GAP       = lay.rowGap;

@@ -636,9 +636,13 @@ export interface LandscapeLayout {
  * ★ No PixelRatio anywhere: points are the same physical size on a 2x and a 3x screen.
  */
 export function landscapeBand(o: { plate: unknown; meter: MeterKind; tablet: boolean; H?: number;
-                                   r: (n: number) => number }): number {
+                                   r: (n: number) => number; display?: string }): number {
   const today = Math.max(o.r(LAND.todayDrum), o.r(o.tablet ? LAND.todayBarTab : LAND.todayBar));
-  if (o.H == null || (!o.plate && o.meter === 'bar')) return today;
+  // ★ Only the UNTOUCHED deck (default chassis, bar meter, Hyperlegible) keeps today's band for pixel parity.
+  //   Any other Display grows too — Nixie tubes on the default chassis were the ones "tiny in landscape on a
+  //   17 Pro Max" (Stuart, 2026-09-30). `display` absent = treated as Hyperlegible (today's callers/tests).
+  const untouched = !o.plate && o.meter === 'bar' && (o.display == null || o.display === 'hyper');
+  if (o.H == null || untouched) return today;
   const t = Math.max(0, Math.min(1, (o.H - LAND.growFromH) / (LAND.growToH - LAND.growFromH)));
   return Math.max(today, Math.round(today + (LAND.band - today) * t));
 }
@@ -669,9 +673,11 @@ export function landscapeDeck(o: { plate: { screws: boolean; gloss: boolean } | 
                                    singleDrum?: boolean;
                                    /** The window's height (pt) — the band grows with it (landscapeBand).
                                     *  Absent = today's band. */
-                                   H?: number }): LandscapeLayout {
+                                   H?: number;
+                                   /** The Display (faceplate §7) — any but Hyperlegible lets the default bar deck grow. */
+                                   display?: string }): LandscapeLayout {
   const { r, plate } = o;
-  const bandH = landscapeBand({ plate, meter: o.meter, tablet: o.tablet, H: o.H, r });
+  const bandH = landscapeBand({ plate, meter: o.meter, tablet: o.tablet, H: o.H, r, display: o.display });
   const rowGap = r(LAND.rowGap);
   const keyH = (bandH - rowGap) / 2;
   const colGap = r(plate ? LAND.colGap : LAND.todayGap);

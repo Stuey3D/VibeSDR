@@ -181,5 +181,16 @@ for (const [W, H, tablet] of DEVICES) for (const [, plate] of CHASSIS) for (cons
                             d.modeFont >= LAND.minModeFont && d.readingFont >= LAND.minReadingFont);
 }
 
+// ★ Nixie (or any non-Hyperlegible display) on the DEFAULT bar deck grows on a big phone; untouched stays today's.
+{
+  const r = (n: number) => n;
+  const untouched = landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 440, r });
+  const hyper = landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 440, r, display: 'hyper' });
+  const nixie = landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 440, r, display: 'nixie' });
+  const nixieSE = landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 375, r, display: 'nixie' });
+  ok('default + bar + hyper keeps today on a 17 Pro Max', untouched === hyper);
+  ok(`default + bar + NIXIE grows on a 17 Pro Max (${hyper} → ${nixie})`, nixie > hyper);
+  ok('default + bar + NIXIE on the SE stays today', nixieSE === landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 375, r }));
+}
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate landscape: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);
