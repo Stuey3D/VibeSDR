@@ -10,7 +10,7 @@ import {
   DEFAULT_SETTINGS, DISPLAYS, TEXTS, CONTROLS, TEXT_ALLOWED, NEON_TEXT, FONT_NIXIE,
   resolveTextColour, resolveFaceplate, resolveControlsColour, withDisplay, withText,
   parseSettings, migrateLegacyFont, ledA, hotA, LED,
-  CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, DECODER_BG_CHOICES, CHASSIS, METERS, DECODER_BGS,
+  CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, CHASSIS, METERS, TRANSPARENCIES,
   COLOUR_NAMES, textChoices, controlsDot, feelRows,
   chassisTokens,
   type FaceplateSettings,
@@ -127,7 +127,8 @@ eq('pane offers every chassis', CHASSIS_CHOICES.map(c => c.value).sort(), [...CH
 eq('pane offers every display, in the mockup\'s order', DISPLAY_CHOICES.map(c => c.label), ['NIXIE', 'HYPER', 'DOT', 'VCR']);
 eq('pane offers every display', DISPLAY_CHOICES.map(c => c.value).sort(), [...DISPLAYS].sort());
 eq('pane offers every meter', METER_CHOICES.map(c => c.value), METERS);
-eq('pane offers both decoder backgrounds', DECODER_BG_CHOICES.map(c => c.value), DECODER_BGS);
+eq('pane offers TRANSPARENCY EFFECTS on and off', TRANSPARENCY_CHOICES.map(c => c.value), TRANSPARENCIES);
+eq('TRANSPARENCY EFFECTS keys read ON / OFF', TRANSPARENCY_CHOICES.map(c => c.label), ['ON', 'OFF']);
 eq('Nixie: the TEXT row is the locked note, not keys', textChoices('nixie'), null);
 for (const d of ['dot', 'seg'] as const) {
   ok(`${d}: TEXT never offers white (§13.4)`, !textChoices(d)!.includes('white'));

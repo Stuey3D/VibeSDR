@@ -1,5 +1,5 @@
 /**
- * decoderTokens.ts — the decoder boxes' palette, per chassis × controls colour × background
+ * decoderTokens.ts — the decoder boxes' palette, per chassis × controls colour × TRANSPARENCY EFFECTS
  * (faceplates brief §10.2; numbers from docs/faceplates/Decoder.mockup.dc.html `renderVals()`).
  *
  * Every box over the waterfall (DabPanel, DecoderPanel + AircraftPanel, AdvRdsPanel, and the frame of
@@ -7,8 +7,9 @@
  * panel holds a palette of its own any more — that was the drift §10.1 unified.
  *
  * ★★★ THE TWO SURFACES. What a piece of text sits on decides its colour, not which chassis it is:
- *   • `glass` — a tint over the waterfall (every Transparent box, and Solid on the default chassis).
- *   • `metal` — Solid on silver / black: a brushed plate. The HEADER sits on the metal (engraved
+ *   • `glass` — a tint over the waterfall (every box with Transparency ON), or that same tint made
+ *     OPAQUE on the default chassis with Transparency OFF (`solidBg`: alpha 1.0, no blur).
+ *   • `metal` — Transparency OFF on silver / black: a brushed plate. The HEADER sits on the metal (engraved
  *     text); the BODY sits in a recessed dark window, so body text is the same as on glass.
  *   Header text therefore has its own tokens (`title`, `hdrMuted`, `hdrValue`, `hdrAccent`) and body
  *   text its own (`muted`, `label`, `rowLabel`, `value`) — a body read-out drawn in an engraved
@@ -31,13 +32,17 @@
  * Pure: type-only imports, so Node runs the test straight from this file.
  */
 
-import type { Chassis, DecoderBackground } from './faceplate';
+import type { Chassis, Transparency } from './faceplate';
 
 export interface DecoderTokens {
   chassis:    Chassis;
-  bg:         DecoderBackground;
-  /** `glass` (a tint over the waterfall) or `metal` (Solid silver / black: plate + recessed window). */
+  transparency: Transparency;
+  /** `glass` (a tint, see-through or made solid) or `metal` (OFF on silver / black: plate + recessed window). */
   surface:    'glass' | 'metal';
+  /** ★★★ Transparency OFF on the default chassis: the glass tint composited over black at alpha 1.0
+   *  EXACTLY — drawn on the box itself, no tint layer, no BlurView. Null when see-through (and on
+   *  metal, whose plate is its own opaque base). */
+  solidBg:    string | null;
 
   // ── Frame ──
   /** Alpha of the glass tint (SMALL / BIG). Unused on metal. */
@@ -47,7 +52,7 @@ export interface DecoderTokens {
   blur:       number;
   tintRgb:    string;
   border:     string;
-  /** The controls-colour glow round a silver / black Transparent box (mockup `0 0 8px L(.18)`). */
+  /** The controls-colour glow round a silver / black see-through box (mockup `0 0 8px L(.18)`). */
   glow:       string | null;
   /** The hairline under the header; null on metal (the mockup's metal header has none). */
   hdrBdr:     string | null;
@@ -179,16 +184,29 @@ export function controlsText(controlsRgb: string): string {
 
 // ── The resolver ─────────────────────────────────────────────────────────────
 
+/** The default box's glass: its tint triplet and alpha (SMALL). */
+const DEFAULT_TINT_RGB = '10,8,4';
+const DEFAULT_TINT = 0.72;
+
+/**
+ * ★★★ Transparency OFF on the default chassis: today's SMALL glass composited over black, at alpha
+ * 1.0. Not the old Solid's 0.95 ("I thought solid would be 1.0 fully solid for max GPU savings") —
+ * and at 0.95 iOS would still draw the box's drop shadow per pixel (see DecoderShell). Same maths as
+ * faceplate.ts `solidOver` (no runtime import here, so Node can run the test on this file alone);
+ * scripts/test_transparency.ts proves the two agree.
+ */
+export const DEFAULT_SOLID_BG = `rgb(${parseRgb(DEFAULT_TINT_RGB).map(v => Math.round(v * DEFAULT_TINT)).join(',')})`;
+
 /** Today's gold chrome — the mockup's `isDef` branch, with the literals the panels drew. */
-function defaultTokens(bg: DecoderBackground): DecoderTokens {
-  const solid = bg === 'solid';
+function defaultTokens(transparency: Transparency): DecoderTokens {
+  const solid = transparency === 'off';
   return {
-    chassis: 'default', bg, surface: 'glass',
-    // ★★ Transparent = the RDS panel's glass, which the brief calls "today's glass" (0.72, BIG
-    //   0.62, iOS blur under SMALL); Solid = "today's panel at 0.95". See DecoderShell for why
-    //   every panel now shares these instead of carrying its own.
-    tint: solid ? 0.95 : 0.72, tintTall: solid ? 0.95 : 0.62, blur: solid ? 0 : 35,
-    tintRgb: '10,8,4',
+    chassis: 'default', transparency, surface: 'glass',
+    // ★★ ON = the RDS panel's glass, which the brief calls "today's glass" (0.72, BIG 0.62, iOS
+    //   blur under SMALL). OFF = that glass made opaque (solidBg) — same colour on a dark
+    //   waterfall, nothing behind it drawn through it. See DecoderShell.
+    tint: solid ? 1 : DEFAULT_TINT, tintTall: solid ? 1 : 0.62, blur: solid ? 0 : 35,
+    tintRgb: DEFAULT_TINT_RGB, solidBg: solid ? DEFAULT_SOLID_BG : null,
     border: GOLD(0.28), glow: null, hdrBdr: GOLD(0.12), window: null,
     title: GOLD(0.86), titleMin: GOLD(0.40),
     hdrMuted: GOLD(0.72), hdrValue: '#ffe566', hdrAccent: '#ffb833', engrave: null,
@@ -213,13 +231,13 @@ function defaultTokens(bg: DecoderBackground): DecoderTokens {
 }
 
 /** Silver / black. `controlsRgb` is the controls colour's triplet (LED[controls].rgb). */
-function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, bg: DecoderBackground): DecoderTokens {
-  const solid = bg === 'solid';
+function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, transparency: Transparency): DecoderTokens {
+  const solid = transparency === 'off';
   const L  = (a: number) => `rgba(${controlsRgb},${a})`;
   const Lt = (a: number) => `rgba(${controlsText(controlsRgb)},${a})`;
   const silver = chassis === 'silver';
 
-  // Header text: engraved on the metal when Solid; the lit controls colour over the glass otherwise.
+  // Header text: engraved on the metal when OFF; the lit controls colour over the glass otherwise.
   const hdr = solid
     ? (silver
       ? { title: '#2a2824', titleMin: 'rgba(42,40,36,0.60)', hdrMuted: '#35332e',
@@ -229,7 +247,7 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, bg: Decod
     : { title: Lt(0.92), titleMin: Lt(0.50), hdrMuted: Lt(0.85), engrave: null };
 
   return {
-    chassis, bg, surface: solid ? 'metal' : 'glass',
+    chassis, transparency, surface: solid ? 'metal' : 'glass', solidBg: null,
     // ★★ No blur on silver / black in either mode (§10.2, §3.4) — a metal deck over a blurred
     //   spectrum would pay the one cost the opaque plate exists to avoid.
     tint: 0.72, tintTall: 0.62, blur: 0, tintRgb: '10,8,4',
@@ -269,8 +287,8 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, bg: Decod
 }
 
 /** Unmemoised — the contrast test's `--find` sweep changes CONTRAST_LIFT under it. */
-export function buildDecoderTokens(chassis: Chassis, controlsRgb: string, bg: DecoderBackground): DecoderTokens {
-  return chassis === 'default' ? defaultTokens(bg) : metalTokens(chassis, controlsRgb, bg);
+export function buildDecoderTokens(chassis: Chassis, controlsRgb: string, transparency: Transparency): DecoderTokens {
+  return chassis === 'default' ? defaultTokens(transparency) : metalTokens(chassis, controlsRgb, transparency);
 }
 
 const cache = new Map<string, DecoderTokens>();
@@ -281,11 +299,11 @@ const cache = new Map<string, DecoderTokens>();
  * render — a spectrum frame never touches it.
  */
 export function decoderTokensFor(chassis: Chassis = 'default', controlsRgb = '61,255,114',
-                                 bg: DecoderBackground = 'transparent'): DecoderTokens {
-  const key = chassis === 'default' ? `default|${bg}` : `${chassis}|${controlsRgb}|${bg}`;
+                                 transparency: Transparency = 'on'): DecoderTokens {
+  const key = chassis === 'default' ? `default|${transparency}` : `${chassis}|${controlsRgb}|${transparency}`;
   let t = cache.get(key);
   if (!t) {
-    t = buildDecoderTokens(chassis, controlsRgb, bg);
+    t = buildDecoderTokens(chassis, controlsRgb, transparency);
     cache.set(key, t);
   }
   return t;

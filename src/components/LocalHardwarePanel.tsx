@@ -7,6 +7,7 @@ import {
 import { DecoderTitle, DecoderKey, DecoderSurface, DECODER_FONT } from './DecoderShell';
 import { decoderTokensFor } from '../constants/decoderTokens';
 import { useFaceplate } from '../contexts/FaceplateContext';
+import { solidOver } from '../constants/faceplate';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from './PanelNav';
 import GainSlider from './GainSlider';
@@ -30,8 +31,8 @@ const CONV_DIRS: ('up' | 'down')[] = ['up', 'down'];
  *  the boxes over the waterfall and now shares their chrome and their pinned font. The body keeps
  *  its own white segment controls — those are settings, not read-outs, and row 10 (PopupShell)
  *  is where they take the chassis.
- * ★★ ALWAYS THE GLASS TOKENS (DecoderSurface bg="transparent"), whatever the Decoder background: the
- *  sheet is an opaque dark settings sheet, never the brushed plate, so Solid silver's engraved
+ * ★★ ALWAYS THE GLASS TOKENS (DecoderSurface transparency="on"), whatever TRANSPARENCY EFFECTS says: the
+ *  sheet is an opaque dark settings sheet, never the brushed plate, so silver OFF's engraved
  *  DARK title would vanish on it. It follows the chassis and controls colour live (border, title,
  *  and the close key, a dome key like every decoder key). */
 const FONT = DECODER_FONT;
@@ -319,7 +320,9 @@ function Seg<T>({ options, value, onChange, fmt, sub, slot, disabled }: {
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const insets = useSafeAreaInsets();
   const fp = useFaceplate();
-  const frameBorder = decoderTokensFor(fp.settings.chassis, fp.controls.rgb, 'transparent').border;
+  const frameBorder = decoderTokensFor(fp.settings.chassis, fp.controls.rgb, 'on').border;
+  // ★ Transparency OFF: the sheet's 0.99 made 1.0 exactly (solidOver — the same colour over black).
+  const sheetBg = fp.opaque ? SHEET_BG_SOLID : C.bg;
   // ★ Same rule as Seg's ring: only show keyboard focus when a keyboard is actually driving.
   const kbNav = useKeyboardMode();
   const [adminPw, setAdminPw] = useState('');
@@ -538,8 +541,10 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   return (
     <Modal visible={p.visible} transparent animationType="slide" onRequestClose={p.onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
+      {/* ★★★ Transparency OFF: no dim over the live waterfall — the view stays, invisible, so a tap
+          outside still closes the sheet. */}
       <TouchableWithoutFeedback onPress={p.onClose}>
-        <View style={styles.backdrop} />
+        <View style={[styles.backdrop, fp.opaque && styles.backdropNone]} />
       </TouchableWithoutFeedback>
       {/* ★★★ THE KEYBOARD USED TO SIT ON TOP OF THIS SHEET. Focusing the admin-password field
           raised it over a bottom-anchored panel that never moved, leaving "a slither of the top of
@@ -554,8 +559,8 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.kbWrap} pointerEvents="box-none">
-      <DecoderSurface bg="transparent">
-      <View style={[styles.sheet, { borderColor: frameBorder,
+      <DecoderSurface transparency="on">
+      <View style={[styles.sheet, { borderColor: frameBorder, backgroundColor: sheetBg,
         paddingBottom: insets.bottom + 12,
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
       }]}>
@@ -1605,8 +1610,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   );
 }
 
+const SHEET_BG_SOLID = solidOver(C.bg);
+
 const styles = StyleSheet.create({
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+  backdropNone: { backgroundColor: 'transparent' },
   /* ★ Fills the screen so KeyboardAvoidingView has something to shrink; the sheet inside stays
    *  bottom-anchored, so with no keyboard up nothing about the layout changes. */
   kbWrap: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end' },

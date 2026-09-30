@@ -48,12 +48,13 @@ import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
-import { useFaceplateSettings } from '../contexts/FaceplateContext';
+import { useFaceplateSettings, useSurfaceOpaque } from '../contexts/FaceplateContext';
 import {
-  CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, DECODER_BG_CHOICES, CONTROLS, LED, COLOUR_NAMES,
-  TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows,
-  type PaneChoice, type Chassis, type SignalMeter, type DecoderBackground,
+  CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
+  COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver,
+  type PaneChoice, type Chassis, type SignalMeter,
 } from '../constants/faceplate';
+import { AUTO_REASON_NOTE } from '../constants/transparency';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -597,7 +598,7 @@ function SelectorKey({ label, dot, active, onPress, a11y }: {
 
 function SelectorRow<T extends string>({ label, choices, value, onPick, note }: {
   label: string; choices: PaneChoice<T>[]; value: T; onPick: (v: T) => void;
-  /** A subtitle under the keys — what the choice costs you (§10.2's DECODERS row). */
+  /** A subtitle under the keys — what the choice costs you (TRANSPARENCY EFFECTS). */
   note?: string;
 }) {
   return (
@@ -627,7 +628,10 @@ function ControlCustomisationPane({
   hapticsHardware: boolean;
 }) {
   // ★ App-wide, not per server (FaceplateContext) — the faceplate is the hardware in your hand.
-  const { settings: fp, setDisplay, setText, set } = useFaceplateSettings();
+  const { settings: fp, setDisplay, setText, set, setTransparency, autoTransparency: auto } = useFaceplateSettings();
+  // ★ While the DEVICE chose OFF (never once the user has picked), say so — otherwise a new user on
+  //   an old phone sees solid panels, the ON key unlit, and no reason why.
+  const autoNote = !fp.transparencyExplicit && auto.reason ? AUTO_REASON_NOTE[auto.reason] : null;
   const texts = textChoices(fp.display);
   return (
     <View style={styles.subPanel}>
@@ -669,10 +673,12 @@ function ControlCustomisationPane({
       </View>
       <SelectorRow label="SIGNAL METER" choices={METER_CHOICES} value={fp.meter}
         onPick={(v: SignalMeter) => set({ meter: v })} />
-      {/* ★ §10.2: say what Solid costs — it is the one faceplate choice that hides something. */}
-      <SelectorRow label="DECODERS" choices={DECODER_BG_CHOICES} value={fp.decoderBg}
-        onPick={(v: DecoderBackground) => set({ decoderBg: v })}
-        note="Solid · easier to read, hides the signals behind" />
+      {/* ★★★ ONE switch for every see-through surface — the deck, the decoder boxes, the menus
+          (Stuart, 2026-09-30). It replaced the boxes' own Transparent / Solid row. The keys show
+          what is ON SCREEN (the device's default until the user picks); a pick is stored as theirs. */}
+      <SelectorRow label="TRANSPARENCY EFFECTS" choices={TRANSPARENCY_CHOICES} value={fp.transparency}
+        onPick={setTransparency}
+        note={autoNote ? `${TRANSPARENCY_NOTE}\n${autoNote}` : TRANSPARENCY_NOTE} />
 
       {/* ── TUNING & ZOOM — moved from the menu's CONTROLS section, behaviour unchanged ── */}
       <SubLabel label="TUNING & ZOOM" />
@@ -931,6 +937,7 @@ function MenuSheetBody({
   const sheetW = isLandscape
     ? Math.min(520, winW - sheetInsets.left - sheetInsets.right - 24)
     : undefined;
+  const opaque = useSurfaceOpaque();
   const sheetGeom = isLandscape
     ? { height: sheetH, width: sheetW, left: (winW - (sheetW ?? winW)) / 2,
         right: undefined, borderTopLeftRadius: 16, borderTopRightRadius: 16 }
@@ -1109,13 +1116,18 @@ function MenuSheetBody({
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
-          <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: backdropOp }]} />
+          {/* ★★★ Transparency OFF: no dim — a full-screen blend over the live waterfall. The view
+              stays (invisible, free to composite) so a tap outside still closes the menu. */}
+          <Animated.View style={[StyleSheet.absoluteFill, !opaque && styles.backdrop, { opacity: backdropOp }]} />
         </TouchableWithoutFeedback>
 
-        <Animated.View style={[styles.sheet, sheetGeom, { transform: [{ translateY }] }]}>
-          <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />
+        <Animated.View style={[styles.sheet, sheetGeom, { transform: [{ translateY }] },
+                               opaque && { backgroundColor: SHEET_SOLID }]}>
+          {/* ★★★ Transparency OFF: the sheet's own background, alpha 1.0 (its tint over black) — no
+              BlurView. Row 10's PopupShell takes this over for every popup. */}
+          {!opaque && <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />}
           {/* a11y panel is near-opaque (reference bg rgba(6,4,2,0.99)) */}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(6,4,2,0.60)' }]} />
+          {!opaque && <View style={[StyleSheet.absoluteFill, { backgroundColor: SHEET_TINT }]} />}
           <View style={styles.handle} />
 
           <NavCtx.Provider value={navCtx}>
@@ -1691,6 +1703,10 @@ function MenuSheetBody({
 
 // ── Styles ─────────────────────────────────────────────────────────────────────
 
+/** The sheet's tint over its blur, and the same tint made opaque for Transparency OFF. */
+const SHEET_TINT  = 'rgba(6,4,2,0.60)';
+const SHEET_SOLID = solidOver(SHEET_TINT);
+
 const styles = StyleSheet.create({
   adminUnlockRow:   { flexDirection: 'row', alignItems: 'center', gap: 8,
                       paddingHorizontal: 12, marginBottom: 6 },
@@ -1954,8 +1970,8 @@ const styles = StyleSheet.create({
 
   ctrlRow:   { paddingVertical: 4, gap: 4 },
   ctrlLabel: { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 1.5 },
-  // CONTROL CUSTOMISATION selector keys — share the row evenly (six colour keys, or TRANSPARENT /
-  // SOLID) so no key wraps onto a line of its own on an SE.
+  // CONTROL CUSTOMISATION selector keys — share the row evenly (six colour keys, or TRANSPARENCY
+  // ON / OFF) so no key wraps onto a line of its own on an SE.
   selKey:     { flex: 1, paddingHorizontal: 4, minHeight: 44 },
   selKeyText: { fontSize: 13 },
   // A lit LED: the colour, with its own glow (iOS shadow; Android draws the dot without the halo).

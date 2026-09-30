@@ -13,24 +13,32 @@
  * What it does NOT own: the bodies. A DAB station list and a spots table share nothing but the
  * frame and the palette, and forcing them into one layout would be the drift in reverse.
  *
- * ★★★ DECODER BACKGROUND (§10.2) — Transparent (default) / Solid, the user's choice, and where the
- *   per-panel tints finally unify. They used to be DecoderPanel 0.95, DAB 0.94 + blur 24, RDS 0.72
- *   + blur 35 (BIG 0.62): every one had a measured reason, and every reason was a readability /
- *   see-through trade made ONCE, for everybody. The setting hands that trade to the user, so:
- *     • Transparent = "today's glass" — the RDS panel's 0.72 (BIG 0.62), iOS blur 35 under SMALL,
- *       on the default chassis; the same glass without blur on silver / black.
- *     • Solid       = "today's panel at 0.95" on default; brushed metal + recessed window on
- *       silver / black.
- *   ★ Why not keep each panel's own tint under Transparent: then DAB (0.94) and the decoders (0.95)
- *     would look identical in both settings — a control whose every use is a no-op on two of the
+ * ★★★ TRANSPARENCY EFFECTS (§10.2, widened 2026-09-30 from the boxes' own Transparent / Solid row to
+ *   ONE app-wide switch) — and where the per-panel tints finally unify. They used to be DecoderPanel
+ *   0.95, DAB 0.94 + blur 24, RDS 0.72 + blur 35 (BIG 0.62): every one had a measured reason, and
+ *   every reason was a readability / see-through trade made ONCE, for everybody. The setting hands
+ *   that trade to the user (and, until they choose, to low-end detection), so:
+ *     • ON  = "today's glass" — the RDS panel's 0.72 (BIG 0.62), iOS blur 35 under SMALL, on the
+ *       default chassis; the same glass without blur on silver / black.
+ *     • OFF = that glass made OPAQUE on default (today's colour composited over black, alpha 1.0
+ *       exactly, no BlurView, no tint layer); brushed metal + recessed window on silver / black.
+ *   ★ Why not keep each panel's own tint under ON: then DAB (0.94) and the decoders (0.95) would
+ *     look nearly identical in both settings — a control whose every use is a no-op on two of the
  *     three boxes (AGENTS.md). DAB's measured complaint (0.72 unreadable over a hot 11A on the
- *     Xcover, 2026-09-08) is exactly the case Solid now answers, and its subtitle says so.
+ *     Xcover, 2026-09-08) is exactly the case OFF now answers, and its subtitle says so.
+ *   ★★★ OFF = OPAQUE PANELS OVER A LIVE, UNDIMMED WATERFALL (Stuart): alpha 1.0 exactly (not the old
+ *     0.95), the colour on the box itself (one layer, no tint child), no BlurView, and NO DROP
+ *     SHADOW — the 14 pt blurred shadow is a blend over the live spectrum. (On the glass it was
+ *     worse than it looked: iOS RN precomputes a shadowPath only for a view whose OWN background is
+ *     > 0.999 alpha — RCTViewComponentView "Stage 1. Shadow Path" — so the glass box's shadow was
+ *     drawn per pixel, offscreen, every frame the waterfall moved.) The border stays.
  *
  * ★ MEANING COLOURS ARE NOT TOKENS OF THE LOOK. good / warn / bad (and MER pink, SNR green) never
  *   follow a colour setting: a red-controls user must still see good from bad (§10.2 TRAP).
  * ★ PERFORMANCE: tokens and every style sheet built from them are memoised per setting (below), so
  *   a spectrum frame re-renders nothing here; the metal plate is ChassisPlate's cached canvas,
- *   redrawn only when the box changes size; and there is no BlurView at all on silver / black.
+ *   redrawn only when the box changes size; there is no BlurView at all on silver / black, and none
+ *   anywhere with Transparency OFF.
  */
 
 import React, { createContext, useContext } from 'react';
@@ -43,7 +51,7 @@ import { BlurView } from 'expo-blur';
 import { Fonts } from '../constants/theme';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { decoderTokensFor, type DecoderTokens } from '../constants/decoderTokens';
-import type { DecoderBackground } from '../constants/faceplate';
+import { NO_DROP_SHADOW, type Transparency } from '../constants/faceplate';
 import ChassisPlate from './ChassisPlate';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 
@@ -61,20 +69,22 @@ const RADIUS = 14;
 /**
  * ★ A surface override for a box that is NOT a DecoderShell but borrows its chrome — the local
  * hardware sheet, an opaque settings sheet whose title and close key are the shell's. It is always
- * dark, so it must resolve the glass tokens: the Solid metal header's engraved dark title would
- * vanish on it. Row 10 (PopupShell) is where that sheet takes the chassis properly.
+ * dark, so it must resolve the GLASS text tokens (transparency="on"): the OFF metal header's
+ * engraved dark title would vanish on it. It draws its own background, so this changes only text.
+ * Row 10 (PopupShell) is where that sheet takes the chassis properly.
  */
-const DecoderBgOverride = createContext<DecoderBackground | null>(null);
-export function DecoderSurface({ bg, children }: { bg: DecoderBackground; children: React.ReactNode }) {
-  return <DecoderBgOverride.Provider value={bg}>{children}</DecoderBgOverride.Provider>;
+const TransparencyOverride = createContext<Transparency | null>(null);
+export function DecoderSurface({ transparency, children }: { transparency: Transparency; children: React.ReactNode }) {
+  return <TransparencyOverride.Provider value={transparency}>{children}</TransparencyOverride.Provider>;
 }
 
 /** The tokens every decoder body reads — live: they follow the chassis, the controls colour and
- *  the Decoder background setting. Components never hold their own palette. */
+ *  TRANSPARENCY EFFECTS (the effective value: the user's choice, or the device's default until they
+ *  make one). Components never hold their own palette. */
 export function useDecoderTokens(): DecoderTokens {
   const fp = useFaceplate();
-  const override = useContext(DecoderBgOverride);
-  return decoderTokensFor(fp.settings.chassis, fp.controls.rgb, override ?? fp.settings.decoderBg);
+  const override = useContext(TransparencyOverride);
+  return decoderTokensFor(fp.settings.chassis, fp.controls.rgb, override ?? fp.settings.transparency);
 }
 
 const styleCache = new WeakMap<(tk: DecoderTokens) => unknown, WeakMap<DecoderTokens, unknown>>();
@@ -111,7 +121,8 @@ export interface DecoderShellProps {
   /** ★ The content's width, not a guess — each panel states why its number is what it is. */
   maxWidth:    number;
   maxHeight?:  number;
-  /** BIG mode: the glass is thinner (0.62) and never blurred — see decoderTokens. */
+  /** BIG mode: the glass is thinner (0.62) and never blurred — see decoderTokens. (OFF: the same
+   *  opaque colour as SMALL.) */
   tall?:       boolean;
   /** Replaces the border colour — the keyboard-focus ring. */
   borderColor?: string;
@@ -126,22 +137,28 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
   const tk = useDecoderTokens();
   const plate = useFaceplate().chassis.plate;
   const metal = tk.surface === 'metal' && plate != null;
-  const blur = !metal && !tall ? tk.blur : 0;
+  // ★★★ Transparency OFF on default: one opaque colour ON this view — no BlurView, no tint layer,
+  //   no drop shadow (any chassis). See the header.
+  const opaque = tk.transparency === 'off';
+  const solid = !metal ? tk.solidBg : null;
+  const blur = !metal && !solid && !tall ? tk.blur : 0;
   return (
     /* ★ box-none: the wrap spans the screen's width so it can centre the box; without this its
        empty sides ate taps meant for the waterfall on anything wider than the box. */
     <Animated.View style={[sh.wrap, { bottom }, wrapStyle]} pointerEvents="box-none">
       <View style={[sh.inner, { maxWidth, borderColor: borderColor ?? tk.border },
-                    // Silver / black Transparent: the controls-colour glow round the glass
+                    // Silver / black, Transparency ON: the controls-colour glow round the glass
                     // (mockup `0 0 8px L(.18)`) as well as the drop shadow.
                     tk.glow != null && { boxShadow: `0 0 8px ${tk.glow}, 0 4px 14px rgba(0,0,0,0.8)` },
                     metal && { backgroundColor: plate.base },
+                    solid != null && { backgroundColor: solid },
+                    opaque && NO_DROP_SHADOW,
                     maxHeight != null && { maxHeight }]}
             onTouchStart={onTouchStart}>
         {metal ? (
           // ★ Opaque brushed metal, drawn once (ChassisPlate caches it until the box resizes).
           <ChassisPlate plate={plate} radius={RADIUS} />
-        ) : (<>
+        ) : solid != null ? null : (<>
           {Platform.OS === 'ios' && blur > 0 && (
             <BlurView intensity={blur} tint="dark" style={StyleSheet.absoluteFill} />
           )}

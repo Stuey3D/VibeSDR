@@ -50,7 +50,7 @@ import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
 import { GhostGrid, SegDigits } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
-import { FONT_DOTO, rgba } from '../constants/faceplate';
+import { FONT_DOTO, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout } from '../constants/meters';
 import { statusGainParts, statusFit, statusState, type StatusItem, type StatusRowSpec } from '../constants/displayText';
@@ -2168,7 +2168,11 @@ function ControlsBar({
   }, [handback, handbackFlash]);
 
   const { theme: t } = useTheme();
-  const ct = useFaceplate().chassis;
+  const fpTheme = useFaceplate();
+  const ct = fpTheme.chassis;
+  /* ★★★ TRANSPARENCY EFFECTS OFF (default chassis): the island made opaque — no BlurView, no tint
+   *  layer. Silver / black are already an opaque plate; OFF only takes their drop shadow (below). */
+  const solidDeck = fpTheme.opaque && !ct.plate;
   const s = useUiScale();
 
   /* ★★ THE CHANNEL NAME IS THE READOUT ON THE RASTER (airband only — airChannel is null elsewhere). An
@@ -2295,6 +2299,14 @@ function ControlsBar({
         // ★ Opaque from the first frame on a metal plate — the plate's base colour until the
         //   texture has decoded, never a see-through gap over the waterfall.
         ...(plate ? { backgroundColor: plate.base } : null),
+        // ★★★ Transparency OFF: today's tint composited over black, alpha 1.0 EXACTLY, on THIS view
+        //   rather than a fill child (one layer, not three). And no drop shadow on ANY chassis: a
+        //   12 pt blurred shadow over the live spectrum is exactly the blend OFF exists to remove —
+        //   and on the glass island, which has no background of its own, iOS could not even
+        //   precompute its path (RN only does for an own background > 0.999 alpha,
+        //   RCTViewComponentView "Stage 1. Shadow Path"), so it was drawn per pixel, offscreen.
+        ...(solidDeck ? { backgroundColor: ct.deckSolid } : null),
+        ...(fpTheme.opaque ? NO_DROP_SHADOW : null),
         alignSelf: 'center',
         width: '100%',
       },
@@ -2309,6 +2321,11 @@ function ControlsBar({
         /* ★★ SILVER / BLACK ARE OPAQUE METAL: no BlurView behind them (§3.4) — the blur was the
            expensive part of the glass deck on iOS. The plate is one cached Skia layer. */
         <ChassisPlate plate={plate} radius={RADIUS} />
+      ) : solidDeck ? (
+        /* Transparency OFF: the root's own background is the tint (above); only the ring stays, at
+           its colour over black, so the island's edge reads exactly as it did on a dark band. */
+        <View style={[root.border, { borderRadius: RADIUS, borderColor: ct.barBorderSolid }]}
+              pointerEvents="none" />
       ) : (<>
         <BlurView intensity={Platform.OS === 'ios' ? 35 : 80} tint="dark" style={StyleSheet.absoluteFill} />
         {/* Tinted overlay — semi-transparent so blur shows; NOT fully opaque */}
