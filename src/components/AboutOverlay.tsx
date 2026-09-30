@@ -337,7 +337,7 @@ const CREDITS: { name: string; detail: string }[] = [
   { name: 'GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib',
     detail: 'Origins of the waterfall colour palettes.' },
   { name: 'Fonts — all under the SIL Open Font License 1.1',
-    detail: 'Atkinson Hyperlegible (Braille Institute) is the primary UI typeface; Nixie One (Jovanny Lemonad) is the instrument face; JetBrains Mono (JetBrains) labels the maps.' },
+    detail: 'Atkinson Hyperlegible (Braille Institute) is the primary UI typeface; Nixie One (Jovanny Lemonad) is the instrument face; Doto (The Doto Project Authors) draws the dot-matrix display and DSEG14 (keshikan) the 14-segment one; JetBrains Mono (JetBrains) labels the maps.' },
   { name: 'React Native, Expo, Hermes, Skia, Reanimated, Gesture Handler, WebView, OkHttp, AndroidX Media3, Fresco',
     detail: 'The frameworks and libraries that make the app run.' },
 ];
