@@ -1204,7 +1204,8 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   // unreadable on a 17 Pro Max even at arm's length: the colour was doing the work of a hierarchy
   // that weight and size should do. Now the data reads plainly and the amber marks the one field
   // you scan for.
-  spotCell:    { fontSize: 11, letterSpacing: 0.3, color: 'rgba(255,255,255,0.88)' },
+  // ★ tabular-nums: time, SNR and distance are columns and must line up down the table (§10.2).
+  spotCell:    { fontSize: 11, letterSpacing: 0.3, color: 'rgba(255,255,255,0.88)', fontVariant: ['tabular-nums'] },
   // Widened with the font step from 10pt to 11pt — the old widths were cut for 10pt and clip
   // "20:14"/"FT8" at the larger size. Check on the SE in Display Zoom before trimming these.
   spotTime:    { width: 42 },
