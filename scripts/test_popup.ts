@@ -204,10 +204,23 @@ for (const chassis of ['silver', 'black'] as const) {
 
 // ── 7. Every popup reads the chassis ─────────────────────────────────────────
 for (const f of ['FreqModal', 'AudioSheet', 'MenuSheet', 'ChatDrawer', 'RecordingsOverlay', 'KeyboardShortcuts',
-                 'PasswordModal', 'IdentModal', 'CityPickerModal', 'AboutOverlay', 'StepPicker', 'LocalHardwarePanel']) {
+                 'PasswordModal', 'IdentModal', 'CityPickerModal', 'AboutOverlay', 'StepPicker', 'LocalHardwarePanel',
+                 'ModeSelector']) {
   const s = src(`components/${f}.tsx`);
   ok(`${f} reads usePopupTheme`, /usePopupTheme\(\)/.test(s));
   ok(`${f} draws the plate on metal`, /<PopupPlate\b/.test(s));
+}
+// ★★ The DEMODULATOR sheet (build 356: "still the old gold / glass style"): the demodulators are pip
+//    keys on metal, CLOSE is a plain one, the bandwidth sliders are faders, and its gold glass fill is
+//    never laid over the plate.
+{
+  const ms = src('components/ModeSelector.tsx');
+  ok('ModeSelector: the demodulator keys carry the pip on metal',
+     /pick\(m\.id\)\}>\{\(navFocused, navRef\) => pt\.metal \? \(\s*<MetalKey[^>]*active=\{m\.id === current\} pip/.test(ms));
+  ok('ModeSelector: CLOSE is a plain dome key (no pip)', /<PopupKey ref=\{nr as any\} label="CLOSE"(?![^>]*\bpip\b)/.test(ms));
+  ok('ModeSelector: slide faders on metal', /<PopupFader\b/.test(ms));
+  ok('ModeSelector: the glass fill never reaches the plate', /surf\.opaque && !pt\.metal && \{ backgroundColor: surf\.fill\(SHEET_BG\) \}/.test(ms));
+  ok('ModeSelector: no front-panel click (PopupKey is silent)', /useDomeKey\(\{ silent: true \}\)/.test(src('components/PopupShell.tsx')));
 }
 // ★ The CONTROL CUSTOMISATION pane's one swap point is a pip key on metal.
 ok('SelectorKey is a PopupKey with a pip on metal', /function SelectorKey[\s\S]*?pt\.metal[\s\S]*?<PopupKey[^>]*\bpip\b/.test(src('components/MenuSheet.tsx')));

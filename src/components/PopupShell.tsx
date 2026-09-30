@@ -357,7 +357,7 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
  *   otherwise steal a drag with any vertical component.
  */
 export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, onValueChange,
-  onSlidingComplete, level, active = true, lineColor, style, focused, innerRef, disabled }: {
+  onSlidingComplete, level, active = true, lineColor, style, focused, innerRef, disabled, fillFrom = 'left' }: {
   value: number; minimumValue?: number; maximumValue?: number; step?: number;
   onValueChange?: (v: number) => void; onSlidingComplete?: (v: number) => void;
   /** 0..1 live level drawn behind the fill (squelch), or undefined for none. */
@@ -367,6 +367,9 @@ export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, on
   /** Override the index line (squelch: red while the gate is muting). */
   lineColor?: string;
   style?: StyleProp<ViewStyle>; focused?: boolean; innerRef?: React.Ref<View>; disabled?: boolean;
+  /** Which end the fill runs from to the cap: 'right' for a mirrored control whose value is on the
+   *  cap's right (the demodulator sheet's LOWER passband edge — its passband is toward the carrier). */
+  fillFrom?: 'left' | 'right';
 }) {
   const pt = usePopupTheme();
   const f = pt.fader;
@@ -425,7 +428,9 @@ export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, on
         <View pointerEvents="none" style={[ps.fill, { width: Math.max(0, lvl * (w - 2)), backgroundColor: f.level }]} />
       )}
       {active && (
-        <View pointerEvents="none" style={[ps.fill, { width: Math.max(0, capX - 1), backgroundColor: f.fill,
+        <View pointerEvents="none" style={[ps.fill, fillFrom === 'right'
+          ? { left: capX, width: Math.max(0, w - capX - 1) }
+          : { width: Math.max(0, capX - 1) }, { backgroundColor: f.fill,
                shadowColor: f.fillGlow, shadowOpacity: 1, shadowRadius: 3, shadowOffset: { width: 0, height: 0 } }]} />
       )}
       <View pointerEvents="none" style={[ps.faderCap, { left: capX - 10, borderColor: f.capBorder, backgroundColor: f.capColors[1] }]}>
