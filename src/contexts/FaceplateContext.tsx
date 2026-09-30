@@ -31,6 +31,8 @@ import {
   type AutoTransparency, type DeviceSignals,
 } from '../constants/transparency';
 import { installNativeTransliterator } from '../services/transliterator';
+import { explainMeterFallback, takeUncleanMeterExit } from '../services/meterGuard';
+import { meterAfterUncleanExit } from '../constants/meters';
 import { readNativeDeviceClass } from '../services/deviceClass';
 
 // ★ The dot-matrix / 14-segment displays transliterate non-Latin names with the platform's ICU
@@ -108,14 +110,20 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
 
   useEffect(() => {
     let live = true;
-    AsyncStorage.getItem(FACEPLATE_STORAGE_KEY)
-      .then((j: string | null) => {
+    Promise.all([AsyncStorage.getItem(FACEPLATE_STORAGE_KEY), takeUncleanMeterExit()])
+      .then(([j, armed]: [string | null, string | null]) => {
         if (!live || touched.current) return;
-        const s = parseSettings(j, legacyThemeName);
+        let s = parseSettings(j, legacyThemeName);
+        // ★★★ THE METER CANNOT LOCK YOU OUT (services/meterGuard.ts): the last run died while this
+        //   meter was starting — come back on the bar, stored, and say so once.
+        const meter = meterAfterUncleanExit(s.meter, armed);
+        const fellBack = meter !== s.meter;
+        if (fellBack) s = { ...s, meter };
         setSettings(s);
         // ★ Write the migrated result back, so the migration runs once and a later change to the
         //   legacy default cannot re-seed Display under a user who never touched it.
-        if (!j) AsyncStorage.setItem(FACEPLATE_STORAGE_KEY, JSON.stringify(s)).catch(() => {});
+        if (!j || fellBack) AsyncStorage.setItem(FACEPLATE_STORAGE_KEY, JSON.stringify(s)).catch(() => {});
+        if (fellBack && armed) explainMeterFallback(armed, 'crash');
       })
       .catch(() => {});
     return () => { live = false; };

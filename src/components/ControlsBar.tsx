@@ -130,7 +130,8 @@ function ControlSlot({ report, style, children }: {
   );
 }
 import { useTheme } from '../contexts/ThemeContext';
-import { useFaceplate } from '../contexts/FaceplateContext';
+import { useFaceplate, useFaceplateSettings } from '../contexts/FaceplateContext';
+import { explainMeterFallback, reportMeterFault, useMeterArming } from '../services/meterGuard';
 import type { ChassisTokens, PlateTokens } from '../constants/faceplate';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
@@ -1170,6 +1171,15 @@ function MeterHousing({ kind, height, shared, lip, bus, land }: {
   land?: LandscapeLayout;
 }) {
   const s = useUiScale();
+  // ★★★ A METER CANNOT LOCK YOU OUT (services/meterGuard.ts): the LED / analogue meter mounts only
+  //   once its armed mark is on disk, and a fault in its frame callback puts the BAR back.
+  const armedReady = useMeterArming(kind);
+  const { set: setFaceplate } = useFaceplateSettings();
+  const onFault = useCallback((message: string) => {
+    reportMeterFault(kind, message);
+    setFaceplate({ meter: 'bar' });
+    explainMeterFallback(kind, 'fault');
+  }, [kind, setFaceplate]);
   const ledGeom = useMemo(() => land ? { padTop: land.ledPadTop, padX: land.ledPadX, ledH: land.ledH,
     labelH: land.labelH, labelGap: land.labelGap } : undefined,
     [land?.ledPadTop, land?.ledPadX, land?.ledH, land?.labelH, land?.labelGap]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -1177,16 +1187,16 @@ function MeterHousing({ kind, height, shared, lip, bus, land }: {
     <View style={[cd.housing, { height }]}>
       <View pointerEvents="none" style={cd.housingShade} />
       <View pointerEvents="none" style={[cd.lip, { backgroundColor: kind === 'vu' ? 'rgba(255,255,255,0.22)' : lip }]} />
-      {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} geom={ledGeom} />}
-      {kind === 'edge' && (land ? (
+      {armedReady && kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} geom={ledGeom} onFault={onFault} />}
+      {armedReady && kind === 'edge' && (land ? (
         // §9: a 24 pt window, padding 2, the 28 pt print shown 2 pt up (Deck.mockup `svgTop: -2px`).
         <View style={{ padding: land.edgePad }}>
-          <EdgeMeter bus={bus} height={land.edgeWindow} printH={land.edgePrintH} printTop={land.edgePrintTop} />
+          <EdgeMeter bus={bus} height={land.edgeWindow} printH={land.edgePrintH} printTop={land.edgePrintTop} onFault={onFault} />
         </View>
       ) : (
         // §4.5: a 28 pt window in the 34 pt housing (padding 3; 2 with the shared banner).
         <View style={{ padding: s.r(shared ? DECK.edgePadShared : DECK.edgePad) }}>
-          <EdgeMeter bus={bus} height={s.r(DECK.edgeWindow)} />
+          <EdgeMeter bus={bus} height={s.r(DECK.edgeWindow)} onFault={onFault} />
         </View>
       ))}
     </View>
