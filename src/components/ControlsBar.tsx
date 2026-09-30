@@ -1231,8 +1231,19 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   const MODE_PAD_H = s.r(7);
   const MODE_PAD_V = s.r(4);
   const PILL_GAP  = s.r(4);
-  const ICON_SZ   = s.r(18);
   const CLOCK_FONT = s.f(7);
+  /* ★★★ EVERY LANDSCAPE KEY IS KEY_H TALL, SET, NOT NEGOTIATED (brief §11). The keys used to be
+     `flex: 1` in their column, and a flex item's share is argued out against its CONTENT: the step
+     key's Text (scaled lineHeight, adjustsFontSizeToFit) and the cog's Skia Canvas report different
+     intrinsic heights, so on a live screenshot "1k" sat SHORTER than the cog beneath it and the
+     audio/chat pair disagreed too. Now the band is the taller of the drum and the meter frame, and
+     each key is exactly half of it less the gap — in every step size and in the menu-as-back state.
+     ★ The icon is capped to the key rather than the key grown to the icon: a key must never be the
+       thing that makes the bar taller. */
+  const BAND_H    = Math.max(DRUM_H, SIG_H);
+  const KEY_H     = (BAND_H - GAP) / 2;
+  const ICON_SZ   = Math.min(s.r(18), KEY_H - 2);   // − the 1 pt border top and bottom
+  const keyBox    = { height: KEY_H };
 
   return (
     /* ★ A COLUMN NOW: the controls in one row, the status in another beneath it. This function's
@@ -1266,21 +1277,24 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       </View>
 
       {/* STEP + MENU column */}
-      <View style={{ width: BTN_W, gap: GAP }}>
-        <TouchableOpacity ref={tourRef('stepBtn')} style={[lnd.lsBtn, { borderColor: t.btnBorder }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
+      <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
+        <TouchableOpacity ref={tourRef('stepBtn')} style={[lnd.lsBtn, keyBox, { borderColor: t.btnBorder }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
+          {/* ★ ONE line: "100k" / "500Hz" / "8.33k" SHRINK to fit the key; two lines let the text
+              ask for a taller box, which is the bug this key had. */}
           <Text style={[lnd.lsTxt, { color: t.btnText, fontFamily: t.font,
                                      fontSize: s.f(11), lineHeight: s.f(14) }]}
-                numberOfLines={2} adjustsFontSizeToFit>
+                numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
             {stepLabel}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           ref={tourRef('menuBtn')}
-          style={[lnd.lsBtn, { borderColor: t.btnBorder }]}
+          style={[lnd.lsBtn, keyBox, { borderColor: t.btnBorder }]}
           onPress={onMenu} activeOpacity={0.75} hitSlop={10}
         >
           {menuAsBack
-            ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(11) }}>‹</Text>
+            ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(11), lineHeight: s.f(14) }}
+                    numberOfLines={1}>‹</Text>
             : <Cog size={ICON_SZ} color={t.btnText} />}
         </TouchableOpacity>
       </View>
@@ -1310,9 +1324,9 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       </View>
 
       {/* AUDIO + CHAT column */}
-      <View style={{ width: BTN_W, gap: GAP }}>
+      <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
         <TouchableOpacity
-          style={[lnd.lsBtn, { borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
+          style={[lnd.lsBtn, keyBox, { borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
           onPress={onAudio} activeOpacity={0.75} hitSlop={10}
         >
           {audioAsRecord
@@ -1320,7 +1334,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
             : <AudioIcon size={ICON_SZ} color={t.btnText} />}
         </TouchableOpacity>
         <TouchableOpacity
-          style={[lnd.lsBtn, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder, opacity: chatOff ? 0.4 : 1 }]}
+          style={[lnd.lsBtn, keyBox, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder, opacity: chatOff ? 0.4 : 1 }]}
           onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
         >
           <ChatIcon size={ICON_SZ} color={t.btnText} />
@@ -1385,7 +1399,9 @@ const lnd = StyleSheet.create({
   statusSide: { flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row',
                 alignItems: 'center', gap: 8 },
   sigFrame: { borderRadius: 7, overflow: 'hidden', backgroundColor: 'rgba(105,98,82,0.30)', justifyContent: 'center', alignSelf: 'stretch' },
-  lsBtn:    { flex: 1, backgroundColor: 'rgba(20,10,0,0.75)', borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  // ★ No flex: the height is KEY_H at the use site (see LandscapeBar). overflow hidden so nothing
+  //   inside can push the key taller than its neighbours.
+  lsBtn:    { backgroundColor: 'rgba(20,10,0,0.75)', borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, overflow: 'hidden' },
   // ★★ NO FIXED lineHeight HERE — it is set at the use site, SCALED, alongside fontSize.
   // A constant 14 lived here while the font is s.f(11), which scales: on a Mac window (and any
   // iPad wide enough to clamp the scale at 1.45) the text renders at ~16pt inside a 14pt line
