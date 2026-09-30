@@ -9,7 +9,7 @@
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
-         type Swatch, type ControlLook, isFullySolid } from './controlColours';
+         type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState } from './spectrum';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -2940,10 +2940,9 @@ function renderFrame() {
   const drawWf = !NO_WF && !startScreenUp;
   if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick());   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
-  // ★ At fully SOLID an open panel's dim is opaque black (controlColours.ts), so the waterfall under it
-  //   cannot be seen: keep TICKING (rows are ingested, nothing is lost) but skip the DRAW until it closes.
-  const coveredBySolidPanel = isFullySolid() && PANELS.some((id) => isPanelOpen(id));
-  if (drawWf && !coveredBySolidPanel) guard('web-render', 'waterfall-draw', () => w.draw());
+  // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen is the ONLY exception
+  //     (Stuart, 2026-09-30: "it must never stop"). A draw-skip under an open panel was tried and removed.
+  if (drawWf) guard('web-render', 'waterfall-draw', () => w.draw());
   const t2 = measuring ? performance.now() : 0;
 
   // ★ THE SCALE AND BAND STRIP ARE NOT PER-FRAME WORK. Both redraw TEXT — frequency labels, band
