@@ -197,6 +197,11 @@ if node --no-warnings scripts/test_decoder_contrast.ts; then pass=$((pass+1)); e
 #     transparent = NOT chosen), OFF is alpha 1.0 exactly with no scrim or drop shadow, no darker/lighter than the glass on a
 #     dark waterfall, and every file that draws a BlurView reads the switch.
 if node --no-warnings scripts/test_transparency.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ POPUPS TAKE THE CHASSIS (faceplates §10.3): the default chassis is today's gold, value for value;
+#     no popup holds a hard-coded gold; engraved text clears 4.5:1 on silver and black at the plate's
+#     worst lighting; the tune entry follows the Display (Nixie One only ever neon); and with
+#     Transparency OFF no popup dims the waterfall or blurs it.
+if node --no-warnings scripts/test_popup.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ THE SMALL-SCREEN STATUS ROW (faceplates §8.2): dropped strictly in order (IF first, the recording
 #     timer last), SHARED TUNER shortens before it goes, the connection meter never goes, portrait never
 #     drops, the row packs before anything drops, and a 1 pt wobble cannot flap (hysteresis).

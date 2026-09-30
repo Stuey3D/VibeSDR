@@ -9,6 +9,7 @@ import { decoderTokensFor } from '../constants/decoderTokens';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { solidOver } from '../constants/faceplate';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { usePopupTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, PopupWindow } from './PopupShell';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from './PanelNav';
 import GainSlider from './GainSlider';
 import Slider from '@react-native-community/slider';
@@ -323,6 +324,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   const frameBorder = decoderTokensFor(fp.settings.chassis, fp.controls.rgb, 'on').border;
   // ★ Transparency OFF: the sheet's 0.99 made 1.0 exactly (solidOver — the same colour over black).
   const sheetBg = fp.opaque ? SHEET_BG_SOLID : C.bg;
+  // ★★ §10.3 on silver / black: the sheet is the brushed plate with an engraved title, and the body —
+  //   today's dark controls, unchanged — sits in ONE recessed window, so nothing light lands on the
+  //   plate. (The body's own keys and switches keep their look inside the window for now.)
+  const pt = usePopupTheme();
+  const metalFrame = usePopupFrame(16, true);
   // ★ Same rule as Seg's ring: only show keyboard focus when a keyboard is actually driving.
   const kbNav = useKeyboardMode();
   const [adminPw, setAdminPw] = useState('');
@@ -563,19 +569,30 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
       <View style={[styles.sheet, { borderColor: frameBorder, backgroundColor: sheetBg,
         paddingBottom: insets.bottom + 12,
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
-      }]}>
+      }, metalFrame, metalFrame && { paddingTop: 0 }]}>
+        <PopupPlate />
+        <PopupHandle />
         <View style={styles.handleBar}>
           {/* ★ NAME THE ACTUAL RADIO. This said "RTL-SDR Controls" over a panel driving an
               Airspy HF+ (Stuart, 2026-07-27) — which is not just wrong, it tells the user the
               app has misidentified their hardware. The server already reports a model string
               taken from the USB descriptor, i.e. what is written on the box. */}
+          {pt.metal ? (
+            <Text style={[styles.title, engraveText(pt), styles.titleMetal]} numberOfLines={1}>
+              {p.isSpy ? 'SpyServer Controls'
+               : p.radio?.model ? `${p.radio.model} Controls`
+               : 'Local SDR Controls'}
+            </Text>
+          ) : (
           <DecoderTitle style={styles.title}>
             {p.isSpy ? 'SpyServer Controls'
              : p.radio?.model ? `${p.radio.model} Controls`
              : 'Local SDR Controls'}
           </DecoderTitle>
+          )}
           <DecoderKey tone="close" onPress={p.onClose} hitSlop={10} label="✕" />
         </View>
+        <PopupWindow style={styles.bodyWrap} metalStyle={styles.bodyWin}>
         <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
           {/* ★ The lock notice goes FIRST, before any control — it explains the whole panel,
               and finding it underneath the thing it applies to would be no use. */}
@@ -1603,6 +1620,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             of the SpyServer protocol — they belong to whoever runs this receiver.
           </Text>}
         </ScrollView>
+        </PopupWindow>
       </View>
       </DecoderSurface>
       </KeyboardAvoidingView>
@@ -1624,6 +1642,9 @@ const styles = StyleSheet.create({
   handleBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   // ★ Shrinks rather than pushing the close key off a narrow sheet (long USB model strings).
   title: { flexShrink: 1, marginRight: 8 },
+  titleMetal: { fontSize: 12, letterSpacing: 2, fontWeight: '700' },
+  bodyWrap: { flexShrink: 1 },
+  bodyWin: { paddingHorizontal: 10 },
   section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.sectionC, marginTop: 16, marginBottom: 4 },
   segRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   seg: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center' },

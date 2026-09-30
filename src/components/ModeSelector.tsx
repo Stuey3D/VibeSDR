@@ -6,6 +6,12 @@ import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction, useKeyboardMode } from './PanelNav';
+import { usePopupSurface, PopupScrim } from './PopupShell';
+
+/** Today's dim and sheet glass — Transparency OFF drops the first and makes the second opaque.
+ *  ★ The demodulator sheet keeps today's look on silver / black for now (it is outside §10.3's list). */
+const BACKDROP = 'rgba(0,0,0,0.50)';
+const SHEET_BG = 'rgba(8,6,1,0.97)';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 
@@ -225,6 +231,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const decSectionShown = !!decoderControls && !dabInGrid
     && (clientDecs.length > 0 || advRdsShown || !!decoderControls.dabAvail);
   const { theme: t } = useTheme();
+  const surf = usePopupSurface();
   const { height: winH, width: winW } = useWindowDimensions();
   // ★ "ADV RDS" was an abbreviation forced by nothing — the button spans the whole row and has
   //   room to spare. Only the very narrowest phones need the short form (Stuart, 2026-07-28).
@@ -309,8 +316,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <Pressable style={st.backdrop} onPress={onClose} onTouchStart={noteTouchInteraction} />
-      <View style={[st.sheet, { borderTopColor: t.barBorder }]} onTouchStart={noteTouchInteraction}>
+      {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (§10.2). */}
+      <PopupScrim style={st.backdrop} color={BACKDROP} onPress={onClose} onTouchStart={noteTouchInteraction} />
+      <View style={[st.sheet, { borderTopColor: t.barBorder }, surf.opaque && { backgroundColor: surf.fill(SHEET_BG) }]} onTouchStart={noteTouchInteraction}>
         {/* Scrolls when the content (decoders + callout + extensions + maps) overflows on a
             small screen (§7). Capped so big screens render static as before. */}
         <ScrollView {...scrollProps} style={{ maxHeight: winH * 0.82 }} showsVerticalScrollIndicator={false}
@@ -670,7 +678,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
 }
 
 const st = StyleSheet.create({
-  backdrop:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.50)' },
+  backdrop:     { flex: 1 },
   sheet: {
     backgroundColor: 'rgba(8,6,1,0.97)',
     borderTopWidth: 1, borderRadius: 14,

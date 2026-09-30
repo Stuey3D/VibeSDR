@@ -29,6 +29,10 @@ import React, { useRef } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
 import { useRepeatingKeys, noteTouchInteraction, NAV_FOCUS } from './PanelNav';
+import {
+  usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
+  PopupKey, PopupPlate, PopupScrim, PopupWindow, POPUP_FONT, type PopupTokens,
+} from './PopupShell';
 
 type Section = { title: string; body: string[] };
 
@@ -120,6 +124,11 @@ export default function KeyboardShortcuts({ visible, onClose }: {
   visible: boolean; onClose: () => void;
 }) {
   const { theme: t } = useTheme();
+  const s = usePopupStyles(makeS);
+  const pt = usePopupTheme();
+  const surf = usePopupSurface();
+  const metalFrame = usePopupFrame(16, false);
+  const ff = pt.metal ? POPUP_FONT : t.font;
   const scroll = useRef<ScrollView | null>(null);
   const y = useRef(0);
 
@@ -136,12 +145,17 @@ export default function KeyboardShortcuts({ visible, onClose }: {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      <Pressable style={s.backdrop} onPress={onClose} onTouchStart={noteTouchInteraction} />
-      <View style={[s.card, { borderColor: t.barBorder }]} onTouchStart={noteTouchInteraction}>
+      {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes. */}
+      <PopupScrim style={s.backdrop} color="rgba(0,0,0,0.6)" onPress={onClose} onTouchStart={noteTouchInteraction} />
+      <View style={[s.card, { borderColor: t.barBorder }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(CARD_BG) },
+                    metalFrame]} onTouchStart={noteTouchInteraction}>
+        <PopupPlate radius={16} />
         <View style={s.head}>
-          <Text style={[s.title, { fontFamily: t.font }]}>KEYBOARD</Text>
-          <Text style={[s.hint, { fontFamily: t.font }]}>↑↓ scroll · esc close</Text>
+          <Text style={[s.title, { fontFamily: ff }]}>KEYBOARD</Text>
+          <Text style={[s.hint, { fontFamily: ff }]}>↑↓ scroll · esc close</Text>
         </View>
+        {/* ★ §10.3: the reference is reading matter — a recessed window on silver / black. */}
+        <PopupWindow style={s.bodyWrap} metalStyle={s.bodyWin}>
         <ScrollView
           ref={scroll}
           onScroll={(e) => { y.current = e.nativeEvent.contentOffset.y; }}
@@ -150,45 +164,56 @@ export default function KeyboardShortcuts({ visible, onClose }: {
           contentContainerStyle={{ paddingBottom: 20 }}>
           {SECTIONS.map((sec) => (
             <View key={sec.title} style={s.sec}>
-              <Text style={[s.secTitle, { fontFamily: t.font }]}>{sec.title}</Text>
+              <Text style={[s.secTitle, { fontFamily: ff }]}>{sec.title}</Text>
               {sec.body.map((para, i) => (
-                <Text key={i} style={[s.para, { fontFamily: t.font }]}>{para}</Text>
+                <Text key={i} style={[s.para, { fontFamily: ff }]}>{para}</Text>
               ))}
             </View>
           ))}
         </ScrollView>
+        </PopupWindow>
         {/* ★★ OUTSIDE the ScrollView, deliberately. At the end of the scrollable content it
             would mean reading the whole reference to find the way out — the same trap this
             button exists to fix, just further along.
             ★ A keyboard reference is exactly what a TOUCH user opens out of curiosity, having
             no keyboard to press Escape with; the backdrop is a thin margin on a small screen,
             so tapping outside is not a way out you can rely on. (Stuart, 2026-07-26.) */}
+        {pt.metal ? (
+          <PopupKey label="CLOSE" onPress={onClose} height={32}
+            style={{ alignSelf: 'center', width: 110, marginVertical: 10 }} />
+        ) : (
         <Pressable style={s.closeBtn} onPress={onClose} onTouchStart={noteTouchInteraction}>
           <Text style={[s.closeTxt, { fontFamily: t.font }]}>CLOSE</Text>
         </Pressable>
+        )}
       </View>
     </Modal>
   );
 }
 
-const s = StyleSheet.create({
-  backdrop: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)' },
+/** Today's card glass — made opaque with Transparency OFF. */
+const CARD_BG = 'rgba(8,10,9,0.98)';
+
+const makeS = (pt: PopupTokens) => StyleSheet.create({
+  backdrop: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
   card: {
     position: 'absolute', left: 12, right: 12, top: '8%', bottom: '8%',
-    backgroundColor: 'rgba(8,10,9,0.98)', borderWidth: 1, borderRadius: 12, overflow: 'hidden',
+    backgroundColor: CARD_BG, borderWidth: 1, borderRadius: 12, overflow: 'hidden',
   },
   head: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.12)',
+    ...(pt.metal ? { borderBottomWidth: 0 } : { borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.12)' }),
   },
-  title: { color: NAV_FOCUS, fontSize: 13, letterSpacing: 3, fontWeight: '700' },
-  hint:  { color: 'rgba(255,255,255,0.55)', fontSize: 10, letterSpacing: 0.5 },
+  title: onMetal(pt, { color: NAV_FOCUS, fontSize: 13, letterSpacing: 3, fontWeight: '700' }, engraveText(pt)),
+  hint:  onMetal(pt, { color: 'rgba(255,255,255,0.55)', fontSize: 10, letterSpacing: 0.5 }, engraveText(pt, pt.note)),
+  bodyWrap: { flex: 1 },
+  bodyWin:  { marginHorizontal: 10 },
   body:  { flex: 1, paddingHorizontal: 14 },
   sec:   { marginTop: 16 },
   // Sections are titled and spaced rather than ruled: this is read straight through, and a
   // divider every few lines makes a reference feel like a form.
-  secTitle: { color: NAV_FOCUS, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
+  secTitle: onMetal(pt, { color: NAV_FOCUS, fontSize: 11, letterSpacing: 2, marginBottom: 6 }, { color: pt.readout }),
   para:  { color: 'rgba(255,255,255,0.88)', fontSize: 13, lineHeight: 20, marginBottom: 8 },
   closeBtn: {
     borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.12)',

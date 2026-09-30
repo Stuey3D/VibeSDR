@@ -26,6 +26,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
+import {
+  usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText, windowStyle,
+  PopupKey, PopupPlate, PopupHandle, PopupWindow, POPUP_FONT, type PopupTokens,
+} from './PopupShell';
 import type { ChatUserRow } from '../services/DecoderClient';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -82,9 +86,7 @@ function fmtUserFreq(hz?: number): string {
 const C = {
   bg:       'rgba(6,4,2,0.99)',
   border:   'rgba(255,160,0,0.30)',
-  gold:     '#ffb833',
   goldDim:  '#c8893a',
-  muted:    'rgba(255,184,51,0.40)',
   btnBg:    'rgba(20,10,0,0.80)',
   btnBdr:   'rgba(255,160,0,0.35)',
   inputBg:  'rgba(15,10,0,0.90)',
@@ -111,16 +113,18 @@ function ChatDrawerBody({
   users = [], syncedUser = null, zoomSync = false,
   onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, dialLine,
 }: ChatDrawerProps) {
+  const cd = usePopupStyles(makeCd);
+  const pt = usePopupTheme();
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   // White-aware colour overrides — backgrounds stay dark
   const cc = {
     border:  isWhite ? 'rgba(255,255,255,0.25)' : C.border,
-    title:   isWhite ? 'rgba(255,255,255,0.55)' : C.muted,
+    title:   isWhite ? 'rgba(255,255,255,0.55)' : pt.gold.amberA(0.40),
     btnBdr:  isWhite ? 'rgba(255,255,255,0.30)' : C.btnBdr,
-    btnText: isWhite ? '#ffffff' : C.gold,
+    btnText: isWhite ? '#ffffff' : pt.gold.amber,
     inputBdr:isWhite ? 'rgba(255,255,255,0.22)' : C.inputBdr,
-    inputCl: isWhite ? '#ffffff' : C.gold,
+    inputCl: isWhite ? '#ffffff' : pt.gold.amber,
     userCl:  isWhite ? '#b0c8ff' : C.userCl,
     ownCl:   isWhite ? '#ffe566' : C.ownCl,
     textCl:  isWhite ? 'rgba(240,240,240,0.90)' : C.textCl,
@@ -128,6 +132,19 @@ function ChatDrawerBody({
     sysCl:   isWhite ? 'rgba(180,190,210,0.55)' : C.sysCl,
     handle:  isWhite ? 'rgba(255,255,255,0.25)' : C.handle,
   };
+  // ★★ SILVER / BLACK (§10.3): text ON the plate is engraved (title, the user list, the room line);
+  //   the thread and every input sit in recessed windows, where chat's MEANING colours stay — own
+  //   name blue, others amber, system grey italic — lit on the dark glass. Only the palette changes
+  //   here; the default chassis reads `cc` exactly as before.
+  if (pt.metal) {
+    Object.assign(cc, {
+      border: 'transparent', title: pt.label, btnText: pt.legend, inputCl: pt.winText,
+      userCl: pt.chatOther, ownCl: pt.chatOwn, textCl: pt.chatText, timeCl: pt.winDim, sysCl: pt.chatSys,
+    });
+  }
+  const surf = usePopupSurface();
+  const metalFrame = usePopupFrame(14, true);
+  const ff = pt.metal ? POPUP_FONT : t.font;
   const insets = useSafeAreaInsets();
   const translateY = useRef(new Animated.Value(DRAWER_H)).current;
   const backdropOp = useRef(new Animated.Value(0)).current;
@@ -195,7 +212,9 @@ function ChatDrawerBody({
     <>
       {/* Backdrop */}
       <Animated.View
-        style={[StyleSheet.absoluteFill, cd.backdrop, { opacity: backdropOp }]}
+        // ★★★ Transparency OFF: no dim over the live waterfall — the view (and its tap-to-close)
+        //   stays, invisible.
+        style={[StyleSheet.absoluteFill, !surf.opaque && cd.backdrop, { opacity: backdropOp }]}
         pointerEvents={visible ? 'auto' : 'none'}
         onStartShouldSetResponder={() => { onClose(); return true; }}
       />
@@ -206,28 +225,46 @@ function ChatDrawerBody({
         style={cd.kavWrap}
         pointerEvents="box-none"
       >
-        <Animated.View style={[cd.drawer, { borderTopColor: cc.border, paddingBottom: insets.bottom + 8, transform: [{ translateY }] }]}>
+        <Animated.View style={[cd.drawer, { borderTopColor: cc.border, paddingBottom: insets.bottom + 8, transform: [{ translateY }] },
+                               surf.opaque && !pt.metal && { backgroundColor: surf.fill(C.bg) }, surf.shadow, metalFrame]}>
+          <PopupPlate radius={14} />
 
           {/* Handle */}
           <TouchableOpacity style={cd.handle} onPress={onClose} hitSlop={12} activeOpacity={0.7}>
-            <View style={[cd.handleBar, { backgroundColor: cc.handle }]} />
+            <PopupHandle><View style={[cd.handleBar, { backgroundColor: cc.handle }]} /></PopupHandle>
           </TouchableOpacity>
 
           {/* Header */}
           <View style={[cd.header, { borderBottomColor: cc.border }]}>
             {!showUsers && !isCanned && myCallsign && onChangeName ? (
               <TouchableOpacity onPress={onChangeName} hitSlop={8} activeOpacity={0.6}>
-                <Text style={[cd.title, { color: cc.title, fontFamily: t.font }]}>
+                <Text style={[cd.title, { color: cc.title, fontFamily: ff }, cd.engrave]}>
                   CHAT · {myCallsign} <Text style={{ color: cc.btnText }}>✎</Text>
                 </Text>
               </TouchableOpacity>
             ) : (
-              <Text style={[cd.title, { color: cc.title, fontFamily: t.font }]}>
+              <Text style={[cd.title, { color: cc.title, fontFamily: ff }, cd.engrave]}>
                 {showUsers ? `USERS · ${users.length}`
                   : isCanned ? 'CHAT'
                   : myCallsign ? `CHAT · ${myCallsign}` : 'CHAT'}
               </Text>
             )}
+            {pt.metal ? (<>
+              {/* ★ Dome keys: 👥 and 🔍 are toggles (their pips light while on), 🔔 lights while
+                  alerts are ON, ✕ is a plain key. */}
+              {joined && !textOnly && !isCanned && (
+                <PopupKey label="👥" active={showUsers} pip height={28} fontSize={14} style={cd.hkey}
+                  accessibilityLabel="Users" onPress={() => setShowUsers((p: boolean) => !p)} hitSlop={8} />
+              )}
+              {showUsers && (
+                <PopupKey label="🔍" active={zoomSync} pip height={28} fontSize={14} style={cd.hkey}
+                  accessibilityLabel="Follow zoom" onPress={onToggleZoomSync} hitSlop={8} />
+              )}
+              <PopupKey label={muted ? '🔇' : '🔔'} active={!muted} pip height={28} fontSize={14} style={cd.hkey}
+                accessibilityLabel={muted ? 'Chat alerts off' : 'Chat alerts on'} onPress={onMute} hitSlop={8} />
+              <PopupKey label="✕" height={28} fontSize={13} style={cd.hkey} accessibilityLabel="Close"
+                onPress={onClose} hitSlop={8} />
+            </>) : (<>
             {joined && !textOnly && !isCanned && (
               <TouchableOpacity style={cd.hbtn} onPress={() => setShowUsers((p: boolean) => !p)} hitSlop={8}>
                 <Text style={[cd.hbtnTxt, { color: cc.btnText }, showUsers && cd.hbtnActive]}>👥</Text>
@@ -244,34 +281,39 @@ function ChatDrawerBody({
             <TouchableOpacity style={cd.hbtn} onPress={onClose} hitSlop={8}>
               <Text style={[cd.hbtnTxt, { color: 'rgba(255,120,120,0.70)' }]}>✕</Text>
             </TouchableOpacity>
+            </>)}
           </View>
 
           {/* Join flow — never in canned mode: there are no names to choose. */}
           {!joined && (
             <View style={cd.setupWrap}>
-              <Text style={[cd.setupLbl, { color: cc.title, fontFamily: t.font }]}>
+              <Text style={[cd.setupLbl, { color: cc.title, fontFamily: ff }, cd.engrave]}>
                 Enter your callsign or handle to join
               </Text>
               <View style={cd.setupRow}>
                 <TextInput
                   ref={nameRef}
-                  style={[cd.nameInp, { borderColor: cc.inputBdr, color: cc.inputCl, fontFamily: t.font }]}
+                  style={[cd.nameInp, { borderColor: cc.inputBdr, color: cc.inputCl, fontFamily: ff }, cd.inputMetal]}
                   value={nameInput}
                   onChangeText={(v: string) => setNameInput(v.replace(/\s+/g, ''))}
                   placeholder="Callsign / handle"
-                  placeholderTextColor={isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.28)'}
+                  placeholderTextColor={pt.metal ? pt.winDim : isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.28)'}
                   autoCapitalize="none"
                   autoCorrect={false}
                   maxLength={15}
                   returnKeyType="done"
                   onSubmitEditing={handleJoin}
                 />
+                {pt.metal ? (
+                  <PopupKey label="JOIN" primary onPress={handleJoin} height={40} fontSize={12} style={{ minWidth: 72 }} />
+                ) : (
                 <TouchableOpacity
                   style={[cd.joinBtn, { borderColor: cc.btnBdr }]}
                   onPress={handleJoin} activeOpacity={0.75}
                 >
                   <Text style={[cd.joinBtnTxt, { color: cc.btnText, fontFamily: t.font }]}>JOIN</Text>
                 </TouchableOpacity>
+                )}
               </View>
             </View>
           )}
@@ -294,14 +336,18 @@ function ChatDrawerBody({
                     disabled={isMe}
                     onPress={() => onUserTap?.(u)}
                   >
-                    <Text style={[cd.userName, { color: isMe ? cc.ownCl : cc.userCl, fontFamily: t.font }]} numberOfLines={1}>
+                    <Text style={[cd.userName, { color: pt.metal ? (isMe ? pt.chatOwnPlate : pt.chatOtherPlate) : isMe ? cc.ownCl : cc.userCl,
+                                               fontFamily: ff }, cd.engraveName]} numberOfLines={1}>
                       {u.username}{u.country_code ? `  ·${u.country_code}` : ''}{u.tx ? ' 📡TX' : ''}
                     </Text>
-                    <Text style={[cd.userFreq, { color: cc.textCl, fontFamily: t.font }]} numberOfLines={1}>
+                    <Text style={[cd.userFreq, { color: pt.metal ? pt.label : cc.textCl, fontFamily: ff }, cd.engrave]} numberOfLines={1}>
                       {fmtUserFreq(u.frequency)}{u.mode ? ` ${u.mode.toUpperCase()}` : ''}
                       {u.is_idle && u.idle_minutes ? `  idle ${u.idle_minutes}m` : ''}
                     </Text>
-                    {!isMe && (
+                    {!isMe && pt.metal ? (
+                      <PopupKey label={isSynced ? 'SYNCED' : 'SYNC'} active={isSynced} pip height={26} fontSize={10}
+                        style={{ width: 70 }} hitSlop={6} onPress={() => onToggleSync?.(u.username)} />
+                    ) : !isMe && (
                       <TouchableOpacity
                         style={[cd.syncBtn, isSynced && cd.syncBtnOn]}
                         onPress={() => onToggleSync?.(u.username)}
@@ -320,6 +366,7 @@ function ChatDrawerBody({
 
           {/* Message list */}
           {joined && !showUsers && (
+            <PopupWindow style={cd.msgList} metalStyle={cd.threadWin}>
             <FlatList
               ref={listRef}
               data={messages}
@@ -330,22 +377,25 @@ function ChatDrawerBody({
               onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
               renderItem={({ item: m }: { item: ChatMessage }) => (
                 <View style={[cd.msg, m.type === 'system' && cd.msgSystem]}>
-                  <Text style={[cd.msgTime, { color: cc.timeCl, fontFamily: t.font }]}>{m.ts}</Text>
+                  <Text style={[cd.msgTime, { color: cc.timeCl, fontFamily: ff }]}>{m.ts}</Text>
                   {m.type !== 'system' && (
-                    <Text style={[cd.msgUser, { color: m.type === 'own' ? cc.ownCl : cc.userCl, fontFamily: t.font }]}>
+                    <Text style={[cd.msgUser, { color: m.type === 'own' ? cc.ownCl : cc.userCl, fontFamily: ff }]}>
                       {m.user}
                     </Text>
                   )}
                   <Text style={[
                     cd.msgText,
-                    { color: cc.textCl, fontFamily: t.font },
+                    { color: cc.textCl, fontFamily: ff },
                     m.type === 'system' && { color: cc.sysCl },
+                    // ★ Metal: system lines in the mockup's grey italic (a meaning, not a look).
+                    m.type === 'system' && pt.metal && cd.msgTextSystem,
                   ]} selectable>
                     {m.text}
                   </Text>
                 </View>
               )}
             />
+            </PopupWindow>
           )}
 
           {/* ★★ THE PHRASE PAD — canned mode's entire means of speaking. Wrapped, not a row: the
@@ -354,12 +404,15 @@ function ChatDrawerBody({
           {isCanned && (
             <View style={[cd.inputRow, { borderTopColor: cc.border, flexWrap: 'wrap', gap: 6 }]}>
               {!!dialLine && (
-                <Text style={[cd.cannedLine, { color: cc.title, fontFamily: t.font }]}
+                <Text style={[cd.cannedLine, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}
                       numberOfLines={2}>
                   {dialLine}
                 </Text>
               )}
-              {canned!.map(ph => (
+              {canned!.map(ph => pt.metal ? (
+                <PopupKey key={ph.id} label={ph.text} numberOfLines={3} height={32} fontSize={12}
+                  style={{ alignSelf: 'flex-start', maxWidth: '100%' }} onPress={() => onSay?.(ph.id)} />
+              ) : (
                 <TouchableOpacity
                   key={ph.id}
                   style={[cd.cannedBtn, { borderColor: cc.btnBdr }]}
@@ -377,28 +430,34 @@ function ChatDrawerBody({
           {/* Input row */}
           {joined && !isCanned && (
             <View style={[cd.inputRow, { borderTopColor: cc.border }]}>
-              <Text style={[cd.meLbl, { color: cc.title, fontFamily: t.font }]} numberOfLines={1}>
+              <Text style={[cd.meLbl, { color: cc.title, fontFamily: ff }, cd.engrave]} numberOfLines={1}>
                 {myCallsign}
               </Text>
               <TextInput
                 ref={msgRef}
-                style={[cd.msgInp, { borderColor: cc.inputBdr, color: cc.inputCl, fontFamily: t.font }]}
+                style={[cd.msgInp, { borderColor: cc.inputBdr, color: cc.inputCl, fontFamily: ff }, cd.inputMetal]}
                 value={msgInput}
                 onChangeText={setMsgInput}
                 placeholder="Message…"
-                placeholderTextColor={isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.25)'}
+                placeholderTextColor={pt.metal ? pt.winDim : isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.25)'}
                 returnKeyType="send"
                 onSubmitEditing={handleSend}
                 maxLength={250}
                 multiline={false}
                 blurOnSubmit={false}
               />
+              {pt.metal ? (
+                // ★ §10.3: send is the primary action — its legend lit in the controls colour.
+                <PopupKey label="➤" primary onPress={handleSend} height={34} fontSize={15}
+                  accessibilityLabel="Send" style={{ width: 44, paddingHorizontal: 0 }} />
+              ) : (
               <TouchableOpacity
                 style={[cd.sendBtn, { borderColor: cc.btnBdr }]}
                 onPress={handleSend} activeOpacity={0.75}
               >
                 <Text style={[cd.sendBtnTxt, { color: cc.btnText, fontFamily: t.font }]}>▶</Text>
               </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -410,7 +469,7 @@ function ChatDrawerBody({
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const cd = StyleSheet.create({
+const makeCd = (pt: PopupTokens) => StyleSheet.create({
   backdrop: { backgroundColor: 'rgba(0,0,0,0.55)' },
   kavWrap:  { position: 'absolute', left: 0, right: 0, bottom: 0, top: 0, justifyContent: 'flex-end', pointerEvents: 'box-none' },
   drawer: {
@@ -424,7 +483,7 @@ const cd = StyleSheet.create({
   handle: { alignItems: 'center', justifyContent: 'center', height: 32 },
   handleBar: { width: 36, height: 4, borderRadius: 2, backgroundColor: C.handle },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 8, gap: 6 },
-  title:  { flex: 1, color: 'rgba(255,160,0,0.60)', fontFamily: FONT, fontSize: 11, letterSpacing: 2 },
+  title:  onMetal(pt, { flex: 1, color: 'rgba(255,160,0,0.60)', fontFamily: FONT, fontSize: 11, letterSpacing: 2 }, { fontSize: 11, letterSpacing: 2.2, fontWeight: '700' }),
   hbtn:   { padding: 4 },
   hbtnTxt:    { color: 'rgba(255,160,0,0.55)', fontSize: 16 },
   hbtnMuted:  { opacity: 0.35 },
@@ -446,7 +505,7 @@ const cd = StyleSheet.create({
   syncBtnOn: {
     borderColor: 'rgba(80,220,100,0.70)', backgroundColor: 'rgba(80,220,100,0.12)',
   },
-  syncBtnTxt:   { fontSize: 10, letterSpacing: 1, color: 'rgba(255,184,51,0.80)' },
+  syncBtnTxt:   { fontSize: 10, letterSpacing: 1, color: pt.gold.amberA(0.80) },
   syncBtnTxtOn: { color: 'rgba(120,235,140,0.95)' },
 
   setupWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 10 },
@@ -456,7 +515,7 @@ const cd = StyleSheet.create({
     flex: 1, backgroundColor: 'rgba(20,12,0,0.90)',
     borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
     borderRadius: 6, paddingHorizontal: 12, paddingVertical: 10,
-    fontFamily: FONT, fontSize: 14, letterSpacing: 1, color: C.gold,
+    fontFamily: FONT, fontSize: 14, letterSpacing: 1, color: pt.gold.amber,
   },
   joinBtn: {
     backgroundColor: 'rgba(255,160,0,0.12)',
@@ -464,7 +523,7 @@ const cd = StyleSheet.create({
     borderRadius: 6, paddingHorizontal: 18, paddingVertical: 10,
     justifyContent: 'center', alignItems: 'center',
   },
-  joinBtnTxt: { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: C.gold },
+  joinBtnTxt: { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: pt.gold.amber },
 
   msgList:    { flex: 1 },
   msgContent: { paddingHorizontal: 14, paddingVertical: 4 },
@@ -478,7 +537,7 @@ const cd = StyleSheet.create({
   msgUser:       { flexShrink: 0, fontSize: 11, fontWeight: 'bold', color: C.userCl, fontFamily: FONT, letterSpacing: 0.5 },
   msgUserOwn:    { color: C.ownCl },
   msgText:       { color: C.textCl, fontFamily: FONT, fontSize: 12, flex: 1, lineHeight: 18 },
-  msgTextSystem: { color: C.sysCl, fontStyle: 'italic', fontSize: 10 },
+  msgTextSystem: onMetal(pt, { color: C.sysCl, fontStyle: 'italic', fontSize: 10 }, { color: pt.chatSys }),
 
   inputRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
@@ -498,7 +557,7 @@ const cd = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,160,0,0.40)',
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  sendBtnTxt: { color: C.gold, fontSize: 16 },
+  sendBtnTxt: { color: pt.gold.amber, fontSize: 16 },
   // ★★★ THE PHRASE PAD HAS ITS OWN STYLE, and this is why: it first reused `sendBtn`, which is a
   //     fixed 36×36 CIRCLE built for a single ▶ glyph. Twelve sentences in twelve circles came out
   //     as unreadable two-letter stacks — "C an", "A nyt", "Tu nir" (Stuart, on an iPad, 2026-08-20).
@@ -513,10 +572,15 @@ const cd = StyleSheet.create({
   },
   cannedTxt: { fontFamily: FONT, fontSize: 13, color: '#ffe0a0' },
   // ★ The room line is a SENTENCE too — `meLbl` caps at 80px, which squeezed it into a column.
-  cannedLine: {
+  cannedLine: onMetal(pt, {
     width: '100%', fontFamily: FONT, fontSize: 11,
-    color: 'rgba(255,184,51,0.75)', marginBottom: 2,
-  },
+    color: pt.gold.amberA(0.75), marginBottom: 2,
+  }, { fontSize: 11 }),
+  engrave: onMetal(pt, {}, engraveText(pt)),
+  engraveName: onMetal(pt, {}, pt.engraveName ? { textShadowColor: pt.engraveName.color, textShadowOffset: { width: 0, height: pt.engraveName.dy }, textShadowRadius: 0.01 } : {}),
+  inputMetal: onMetal(pt, {}, { ...windowStyle(pt), borderRadius: pt.window.radius }),
+  hkey: { minWidth: 34, paddingHorizontal: 4 },
+  threadWin: { marginHorizontal: 14, marginVertical: 4 },
 });
 
 /** ★ Same rule as MenuSheet: no hooks run for a drawer that is shut. */

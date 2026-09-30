@@ -12,6 +12,13 @@ import { STEPS_HZ } from '../services/sdrTypes';
 import { STEP_833 } from '../utils/airband';
 import { useTheme } from '../contexts/ThemeContext';
 import { useListNav, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
+import {
+  usePopupTheme, usePopupSurface, usePopupFrame, engraveText, PopupKey, PopupPlate, PopupHandle,
+} from './PopupShell';
+
+/** Today's dim and sheet glass — Transparency OFF drops the first and makes the second opaque. */
+const BACKDROP = 'rgba(0,0,0,0.52)';
+const SHEET_BG = 'rgba(8,6,1,0.97)';
 
 function stepLabel(hz: number): string {
   if (hz === STEP_833) return '8.33 kHz';   // the airband raster, 25/3 kHz — see utils/airband.ts
@@ -32,6 +39,9 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
   const stepList = steps && steps.length ? steps : STEPS_HZ;
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
+  const pt = usePopupTheme();
+  const surf = usePopupSurface();
+  const metalFrame = usePopupFrame(14, true);
 
   // Keyboard / D-pad navigation. The steps are a wrapped grid and CLOSE is the last
   // entry, so arrows walk the ladder and then land on CLOSE — no separate rule for it.
@@ -52,14 +62,25 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
-          <View style={st.backdrop} />
+          {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (§10.2). */}
+          <View style={[st.backdrop, !surf.opaque && { backgroundColor: BACKDROP }]} />
         </TouchableWithoutFeedback>
-        <View style={[st.sheet, { borderTopColor: t.barBorder }]}>
-          <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font }]}>
+        <View style={[st.sheet, { borderTopColor: t.barBorder },
+                      surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },
+                      metalFrame, metalFrame && { paddingTop: 0 }]}>
+          <PopupPlate radius={14} />
+          <PopupHandle />
+          <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font },
+                        pt.metal && { ...engraveText(pt), fontWeight: '700' }]}>
             TUNING STEP
           </Text>
           <View style={st.grid}>
-            {stepList.map((hz, i) => (
+            {stepList.map((hz, i) => pt.metal ? (
+              // ★ §10.3: an input selector — the current step's pip lit.
+              <PopupKey key={hz} label={stepLabel(hz)} active={hz === currentStep} pip focused={navFocus === i}
+                height={44} fontSize={13} onPress={() => { onSelect(hz); onClose(); }} hitSlop={4}
+                style={{ width: '22%', flexGrow: 1 }} />
+            ) : (
               <TouchableOpacity
                 key={hz}
                 style={[
@@ -85,6 +106,10 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
               </TouchableOpacity>
             ))}
           </View>
+          {pt.metal ? (
+            <PopupKey label="CLOSE" onPress={onClose} focused={navFocus === stepList.length} height={32}
+              style={{ alignSelf: 'center', width: 110, marginTop: 14 }} />
+          ) : (
           <TouchableOpacity
             style={[st.closeBtn, { borderColor: t.btnBorder },
                     navFocus === stepList.length && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
@@ -94,6 +119,7 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
               CLOSE
             </Text>
           </TouchableOpacity>
+          )}
         </View>
       </View>
     </Modal>
@@ -101,9 +127,9 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
 }
 
 const st = StyleSheet.create({
-  backdrop:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.52)' },
+  backdrop:      { flex: 1 },
   sheet: {
-    backgroundColor: 'rgba(8,6,1,0.97)',
+    backgroundColor: SHEET_BG,
     borderTopWidth: 1,
     borderTopLeftRadius: 14, borderTopRightRadius: 14,
     paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40,
