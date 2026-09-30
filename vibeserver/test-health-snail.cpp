@@ -206,6 +206,14 @@ int main() {
     }
     vibevcio::mboxOverride() = nullptr;
     {
+        // ★★★ THE PI 500, 2026-09-30: machine-wide 100 % on 4 cores must read as loaded, not 25 %.
+        ok(vibehealth::detail::loadedCpuPct(100.0, false, 25.0) == 100.0, "machine-wide 100 % stays 100 % for LOADED (was quartered to 25)");
+        ok(vibehealth::detail::loadedCpuPct(140.0, true, 35.0) == 35.0, "Android process figure (1.4 cores of 4) still normalised: 35 %");
+        ok(vibehealth::detail::loadedCpuPct(-1.0, false, 60.0) == 60.0, "no CPU figure: falls back to the load-average estimate");
+        ok(vibehealth::detail::queueSaturated(true, 17.0, 4, vibehealth::detail::loadedCpuPct(100.0, false, 25.0)),
+           "load 17 on 4 cores at 100 %: the queue says loaded");
+    }
+    {
         // ★★★ THE PI 500 NIGHT: sysfs says 2400 on every core while the firmware flips 2400 ↔ 1000.
         vibehealth::FwClock up;   up.ok = true;   up.kHz = 2400000;   up.maxKHz = 2400000; up.throttled = 0x50000;
         vibehealth::FwClock down; down.ok = true; down.kHz = 1000000; down.maxKHz = 2400000; down.throttled = 0x50005;

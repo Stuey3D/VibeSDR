@@ -400,6 +400,19 @@ inline bool queueSaturated(bool haveLoad, double load1, int cores, double cpuPct
     return haveLoad && cores > 0 && cpuPct >= 60.0 && load1 >= 1.5 * cores;
 }
 
+/** ★★★ HOW BUSY THE MACHINE IS, FOR "LOADED" — in the machine's own 0-100 %.
+ *  readSys() gives two different things under one name: machine-wide /proc/stat is ALREADY a share
+ *  of the whole machine (clamped 0-100, see cpuUsagePct), while Android's fallback is THIS PROCESS
+ *  as a per-core sum (140 % = 1.4 cores). sample()'s `cpu` divides both by the core count, which is
+ *  right for the process figure and QUARTERS the machine one on a 4-core box. MEASURED on the Pi 500,
+ *  2026-09-30: 100 % busy, load 17-19, firmware clock flipping 2400 <-> 1000 with under-voltage set
+ *  — and the snail saw 25 %, so "loaded" never held and neither the snail nor Thor ever showed on
+ *  any Linux server. The badge thresholds that also read `cpu` are left exactly as they are. */
+inline double loadedCpuPct(double cpuPct, bool cpuIsProcess, double perCoreCpu) {
+    if (cpuPct < 0) return perCoreCpu;
+    return cpuIsProcess ? perCoreCpu : cpuPct;
+}
+
 }  // namespace detail
 
 /** ★ The Pi's firmware clock for the snail — see vibe_vcio.h. ok=false everywhere else. */
@@ -660,10 +673,11 @@ struct Sampler {
         {
             // ★ Loaded = a saturated machine OR a sustained run queue (see queueSaturated); when it
             //   is the queue, every core has work waiting, so a core at 60 % is not idling by design.
-            const bool queued = detail::queueSaturated(s.haveLoad, s.load1, s.cores, cpu);
+            const double busy = detail::loadedCpuPct(s.cpuPct, s.cpuIsProcess, cpu);
+            const bool queued = detail::queueSaturated(s.haveLoad, s.load1, s.cores, busy);
             FwClock fw;
             if (s.haveFw) { fw.ok = true; fw.kHz = s.cpuKHz; fw.maxKHz = s.fwMaxKHz; fw.throttled = s.fwThrottled; }
-            snailTick(cpu >= 90.0 || queued, detail::coreClocks(), detail::coreBusy(),
+            snailTick(busy >= 90.0 || queued, detail::coreClocks(), detail::coreBusy(),
                       queued ? 60.0 : 85.0, &fw);
         }
         const bool slowed = slowNow || capped;
