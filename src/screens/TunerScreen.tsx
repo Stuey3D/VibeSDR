@@ -1172,6 +1172,8 @@ export default function TunerScreen({ route, navigation }: Props) {
         onZoomSweep={onZoomKeySweep}
         meterLabel={st ? `${Math.round(st.sig)} dBf` : ''}
         freqFormat={(hz) => (hz / 1e6).toFixed(3)}
+        /* ★ The FM tuner screen's own fixed Nixie row: 3 tubes + bulb + 3, MHz (faceplates §7). */
+        tubeLayout="fm"
         /* ★★ THE SHARED TUNER BANNER, FM-DX EDITION (Stuart, 2026-09-22): "Shared Tuner - Ask
          *  Before Tuning (You+1)". The server's `users` includes us. Trusted cautiously: 0 means
          *  the server has not said, so no banner rather than a false "free to tune". */

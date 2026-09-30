@@ -45,6 +45,19 @@ import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
 import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import type { SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
+import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
+import { GhostGrid, SegDigits } from './VfdParts';
+import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
+import { FONT_DOTO } from '../constants/faceplate';
+
+/**
+ * ★ What the TUBES need that the formatted string does not carry: the frequency as a number, the
+ *   unit (which bulb lights), and the radio's fixed tube row. A context, not three more props,
+ *   because this file's bars keep hand-written copies of their prop lists and a name missing from
+ *   one of them has already been fatal twice (see the note on `readOnly` in ControlsBar).
+ */
+interface FreqReadout { hz: number; unit: FreqUnit; layout: NixieLayout }
+const FreqReadoutContext = React.createContext<FreqReadout>({ hz: 0, unit: 'khz', layout: 'hf' });
 
 /** Guard for the keys' handler — never expected to run. */
 const noStep = (_d: -1 | 1) => {};
@@ -396,6 +409,9 @@ export interface ControlsBarProps {
    *  above the unit. Only in MHz: a listener who chose kHz or Hz keeps their digits, and the name
    *  moves into the small line instead. */
   airChannel?: AirChannel | null;
+  /** ★ The Nixie display's FIXED tube row for this radio (§7): `hf` network radios (8 tubes),
+   *  `wide` a local radio to 2 GHz (10), `fm` the FM tuner screen (3 + bulb + 3). Never per frequency. */
+  tubeLayout?: NixieLayout;
   /** ★★ ADMIN SESSIONS ARE NOT TIMED, so this slot says WHY rather than counting down. An admin is
    *  exempt from the session limit, and the honest thing to show where a countdown would be is
    *  what is actually true of this session (Stuart, 2026-08-12). Takes precedence over
@@ -597,6 +613,76 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
   );
 }
 
+/**
+ * The frequency window for the tube / dot-matrix / segment displays (§7). ★ Exactly the pill's
+ * height under Hyperlegible (the text's line height + its vertical padding), so switching Display
+ * never changes the deck's height; the tubes and cells shrink into it, the window does not grow.
+ * ★ The unit label has a FIXED width, so kHz / MHz / Hz cannot shift the digits beside it (§7 TRAP).
+ */
+function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFontSize, pillPadH, pillPadV, gap, shared }: {
+  freqStr: string; unit: string; chanTag: string | null; freqFontSize: number; freqWidth: number;
+  unitFontSize: number; pillPadH: number; pillPadV: number; gap: number; shared: boolean;
+}) {
+  const dk = useFaceplate().deck;
+  const s = useUiScale();
+  const ro = React.useContext(FreqReadoutContext);
+  const H = Math.round(freqFontSize * 1.12) + 2 * pillPadV;
+  const unitW = Math.round(unitFontSize * 2.6);
+  const tagW = chanTag ? Math.round(Math.max(unitFontSize * 0.72 * 0.62 * chanTag.length, unitW)) : 0;
+  const labelW = Math.max(unitW, tagW);
+  const label = (
+    <View style={[pm.chanCol, { width: labelW, height: H, paddingBottom: Math.max(2, pillPadV), paddingRight: 3,
+                                position: dk.style === 'nixie' ? 'absolute' : 'relative', right: 0, bottom: 0 }]}>
+      {chanTag ? (
+        <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.unitFont,
+                      fontSize: Math.max(8, Math.round(unitFontSize * 0.72)) }]} numberOfLines={1}>
+          {chanTag}
+        </Text>
+      ) : null}
+      <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.unitFont, fontSize: unitFontSize, paddingBottom: 0 }]}>
+        {unit}
+      </Text>
+    </View>
+  );
+  if (dk.style === 'nixie') {
+    // ★ Bar-meter window (the only meter until row 5): 16 pt tubes, 1 pt gaps; the SHARED banner
+    //   and landscape take the mockup's smaller designs. Row 5's LED / analogue windows pass
+    //   TUBE_DESIGN.meter* with bar = false.
+    const design = shared ? TUBE_DESIGN.barShared : s.isLandscape ? TUBE_DESIGN.barLand : TUBE_DESIGN.bar;
+    const want = Math.ceil(nixieNaturalWidth(ro.layout, design, true, s.scale)) + labelW + 4;
+    return (
+      <NixieTubes hz={ro.hz} unit={ro.unit} layout={ro.layout} design={design} bar scale={s.scale}
+        radius={5} reserveRight={labelW} style={{ width: want, height: H, flexShrink: 1, minWidth: 0 }}>
+        {label}
+      </NixieTubes>
+    );
+  }
+  // dot / seg: a black VFD window. Doto over the ghost-dot grid, or the DRAWN 7-segment cells.
+  const winW = Math.round(freqWidth * 1.1);
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
+                   flexShrink: 1, minWidth: 0 }}>
+      {dk.style === 'dot' ? (
+        <View style={{ width: winW, flexShrink: 1, minWidth: 0, justifyContent: 'center' }}>
+          <GhostGrid rgb={dk.rgb} pitch={3.4} dot={0.8} />
+          <Text style={[pm.freq, {
+            color: dk.freq, fontFamily: dk.freqFont, letterSpacing: dk.freqSpacing,
+            textShadowColor: dk.freqGlow, textShadowRadius: 5,
+            fontSize: Math.min(s.r(shared ? 24 : 28), Math.floor((H - 2) / 1.1)),
+            lineHeight: H, includeFontPadding: false,
+          }]} numberOfLines={1} adjustsFontSizeToFit>
+            {freqStr}
+          </Text>
+        </View>
+      ) : (
+        <SegDigits text={freqStr.replace(/,/g, '')} rgb={dk.rgb} core={dk.core} glow={dk.glow}
+          designH={s.r(shared ? 27 : 30)} style={{ width: winW, flexShrink: 1, minWidth: 0 }} />
+      )}
+      {label}
+    </View>
+  );
+}
+
 function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
@@ -672,15 +758,19 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
     <View style={pm.row}>
       <TouchableOpacity
         ref={tourRef('freqBox')}
-        style={[pm.freqBox, { backgroundColor: ct.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }]}
+        style={[pm.freqBox, dk.style === 'hyper'
+          ? { backgroundColor: ct.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }
+          // ★ The display windows draw their own glass (the Nixie recess, the VFD's black) edge to edge.
+          : { backgroundColor: dk.style === 'nixie' ? '#060403' : '#050505', overflow: 'hidden' }]}
         onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
       >
+        {dk.style === 'hyper' ? (<>
         <Text style={[pm.freq, {
           // ★ A channel name is seven characters where the frequency is ten, so the digits give up
           //   the room the small spacing/true-frequency line needs — the pill does not grow.
           color: dk.freq, fontSize: freqFontSize,
           width: chanTag && chanMain ? Math.round(freqWidth * 0.74) : freqWidth,
-          fontFamily: dk.freqFont, textShadowColor: dk.freqGlow,
+          fontFamily: dk.freqFont, textShadowColor: dk.freqGlow, letterSpacing: dk.freqSpacing,
           // Tight line metrics — Atkinson's tall default line-height (and
           // Android's extra font padding) inflated the pill to fill the
           // whole meter frame, hiding the signal ring around it
@@ -705,6 +795,11 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
             {unit}
           </Text>
         )}
+        </>) : (
+          <DisplayFreq freqStr={freqStr} unit={unit} chanTag={chanTag} freqFontSize={freqFontSize}
+            freqWidth={freqWidth} unitFontSize={unitFontSize} pillPadH={pillPadH} pillPadV={pillPadV}
+            gap={gap} shared={!!sharedTuner} />
+        )}
       </TouchableOpacity>
       <TouchableOpacity
         ref={tourRef('modeBtn')}
@@ -714,7 +809,10 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
           <Text style={[pm.modeLbl, {
             color: dk.mode, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: dk.modeFont,
-            textShadowColor: ct.modeGlow,
+            textShadowColor: dk.modeGlow,
+            // ★ Doto is ONE weight (the Black cut is the file); asking it for bold makes Android
+            //   fall back to the system font.
+            ...(dk.modeFont === FONT_DOTO ? { fontWeight: 'normal' as const } : null),
             lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
           }]}>
             {modeLabel}
@@ -728,7 +826,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
             color: dk.sqlClosed, fontFamily: dk.modeFont, width: snrWidth,
             fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
             lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
-            includeFontPadding: false, fontWeight: '800', opacity: breathe,
+            includeFontPadding: false, fontWeight: dk.modeFont === FONT_DOTO ? 'normal' : '800', opacity: breathe,
           }]}>
             SQL
           </Animated.Text>
@@ -738,7 +836,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
             fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
             lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
             includeFontPadding: false,
-            fontWeight: '700',
+            fontWeight: dk.modeFont === FONT_DOTO ? 'normal' : '700',
             opacity: liveActive ? 1.0 : 0.65,
           }]}>
             {liveSnrText}
@@ -1479,6 +1577,7 @@ function ControlsBar({
   storms,
   adminMode,
   airChannel = null,
+  tubeLayout = 'hf',
 }: ControlsBarProps) {
   // ★ Flashes when a captured region hands the keyboard back — see useRegionHandback.
   const handback = useRegionHandback();
@@ -1508,6 +1607,13 @@ function ControlsBar({
     return airChannel.spacing === 833 ? `8.33 · ${airChannel.trueText}` : sp;
   }, [airChannel, chanMain]);
   const unit      = useMemo(() => freqUnitLabel(freqUnit),       [freqUnit]);
+  /* The tubes read the NUMBER. On the airband raster the channel name IS the readout (see chanMain),
+   * so the tubes show the name's digits; a custom format (the FM tuner screen) is MHz. */
+  const readout   = useMemo<FreqReadout>(() => ({
+    hz: chanMain ? Math.round(parseFloat(airChannel!.name) * 1e6) || frequency : frequency,
+    unit: freqFormat ? 'mhz' : freqUnit,
+    layout: tubeLayout,
+  }), [chanMain, airChannel, frequency, freqFormat, freqUnit, tubeLayout]);
   const stepLabel = useMemo(() => formatStep(step),      [step]);
   const snrText   = meterLabel ?? ''; // FM-DX static reading; live text comes from the bus + meterText()
   const clock     = useClock(srvTzOffsetMin, srvTzAbbr);
@@ -1641,10 +1747,12 @@ function ControlsBar({
           hunting. It also puts the clock and status rows where they already belong, so this is a
           row DELETION (see PortraitBar) rather than a hand-built hybrid of the two layouts.
           See briefs/BRIEF-tvos-app.md §2. */}
+      <FreqReadoutContext.Provider value={readout}>
       {s.isLandscape && !IS_TV
         ? <LandscapeBar {...shared} />
         : <PortraitBar  {...shared} />
       }
+      </FreqReadoutContext.Provider>
     </View>
   );
 }

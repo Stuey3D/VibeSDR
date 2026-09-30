@@ -54,7 +54,16 @@ for (const chassis of ['default', 'silver', 'black'] as const) {
         const th = resolveFaceplate({ ...DEFAULT_SETTINGS, chassis, display, controls, text });
         const tag = `${chassis}/${display}/${controls}/${text}`;
         const d = th.deck;
-        if (d.freqFont === FONT_NIXIE) ok(`${tag}: Nixie freq is neon`, isNeonish(d.freq) && isNeonish(d.unit));
+        if (d.freqFont === FONT_NIXIE) ok(`${tag}: Nixie freq is neon`, isNeonish(d.freq));
+        if (d.unitFont === FONT_NIXIE) ok(`${tag}: Nixie unit is neon`, isNeonish(d.unit));
+        ok(`${tag}: the unit label is never Nixie One unless neon`, d.unitFont !== FONT_NIXIE || isNeonish(d.unit));
+        eq(`${tag}: the frequency window follows the display`, d.style, display);
+        if (display === 'nixie') ok(`${tag}: nixie mark is neon`, isNeonish(th.vts.mark) && th.vts.font === FONT_NIXIE);
+        if (display === 'dot' || display === 'seg') {
+          ok(`${tag}: §13.4 no white on a VFD (deck)`, d.core !== LED.white.core && d.freq !== LED.white.core && d.freq !== LED.white.hot);
+          ok(`${tag}: §13.4 no white on a VFD (VTS)`, th.vts.core !== LED.white.core && th.vts.mark !== LED.white.core);
+          eq(`${tag}: VFD VTS is upper case and ignores colour overrides`, [th.vts.upper, th.vts.allowOverride], [true, false]);
+        }
         if (d.bannerFont === FONT_NIXIE) ok(`${tag}: Nixie banner is neon`, isNeonish(d.bannerFree) && isNeonish(d.bannerAsk));
         if (d.modeFont === FONT_NIXIE) ok(`${tag}: Nixie mode is neon`, isNeonish(d.mode) && isNeonish(d.reading) && isNeonish(d.sqlClosed));
         if (th.keyLegend.font === FONT_NIXIE) ok(`${tag}: Nixie key legend is neon`, isNeonish(th.keyLegend.color));
@@ -155,6 +164,15 @@ eq('gloss panel on black only', [chassisTokens('silver').plate!.gloss, chassisTo
 eq('press dim .84 silver / .82 black (§5)', [chassisTokens('silver').dome.pressDim, chassisTokens('black').dome.pressDim], [0.84, 0.82]);
 eq('silver engraving shadow; black none', [resolveFaceplate({ ...DEFAULT_SETTINGS, chassis: 'silver' }).keyLegend.shade,
    resolveFaceplate({ ...DEFAULT_SETTINGS, chassis: 'black' }).keyLegend.shade], ['rgba(0,0,0,0.6)', null]);
+
+// ── Row 4: the default deck's VTS and frequency window are today's ───────────
+eq('default VTS keeps today\'s palette', [def.vts.onTune, def.vts.offTune, def.vts.band, def.vts.font, def.vts.upper, def.vts.markGlow],
+   ['rgba(80,220,100,0.95)', 'rgba(255,200,80,0.95)', '#ffe566', 'Atkinson Hyperlegible', false, null]);
+eq('default frequency: today\'s spacing and glow', [def.deck.style, def.deck.freqSpacing, def.deck.modeGlow], ['hyper', 1.5, 'rgba(255,160,0,0.6)']);
+eq('silver hyper: letter-spacing 2.5 in the text colour', (() => { const t = resolveFaceplate({ ...DEFAULT_SETTINGS, chassis: 'silver', text: 'amber' });
+   return [t.deck.freqSpacing, t.deck.freq, t.vts.mark]; })(), [2.5, LED.amber.hot, LED.amber.core]);
+eq('default chassis, red text: the VTS goes red, the digits stay white', (() => { const t = resolveFaceplate({ ...DEFAULT_SETTINGS, text: 'red' });
+   return [t.vts.onTune, t.deck.freq]; })(), [LED.red.core, '#ffffff']);
 
 // ── §5: when a dome key clicks (domeClick.ts, with a fake clock) ──────────────
 {

@@ -9892,6 +9892,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           adminMode={adminOk}
           sharedDial={sharedDialProp}
           airChannel={airChannelNow}
+          /* ★ Nixie's FIXED tube row (faceplates §7): a network radio is HF (MAX_HZ 30 MHz, 8 tubes); a
+           *  local radio tunes to 2 GHz (10 tubes). A property of the radio, never of the frequency. */
+          tubeLayout={isLocal ? 'wide' : 'hf'}
           storms={storms}
           dabOn={dabOn}
           frequency={status.frequency}

@@ -595,19 +595,32 @@ export const FONT_SEG14 = 'DSEG14 Classic';
 /** The deck's TEXT roles, already under the Nixie rule. Default chassis + hyper = today's WHITE
  *  theme values (ThemeContext), so the frequency pill is unchanged. */
 export interface DeckText {
+  /** Which frequency window to draw (§7): Atkinson text, tubes, Doto over a ghost grid, drawn segments. */
+  style:        DisplayStyle;
   freqFont:     string;
   freq:         string;
   freqGlow:     string;
+  /** Letter-spacing of a TEXT frequency (hyper / dot). §7 says 2.5 for Hyperlegible; the default
+   *  chassis keeps today's 1.5 (§13.1 — identical to today's build). */
+  freqSpacing:  number;
   unit:         string;
+  /** The unit label's font — never Nixie One: beside the tubes it is the mockup's plain grey sans. */
+  unitFont:     string;
   modeFont:     string;
   mode:         string;
   reading:      string;
+  /** The mode label's glow (textShadowColor). Default hyper: today's amber glow. */
+  modeGlow:     string;
   /** The breathing "SQL" in the mode box (§4.6): red, or neon under Nixie (the rule outranks red). */
   sqlClosed:    string;
   bannerFont:   string;
   /** The SHARED TUNER banner's two states — "free to tune" green and "ask" grey today. */
   bannerFree:   string;
   bannerAsk:    string;
+  /** The lit colour as a triplet / core / glow, for the ghost layers and glow sprites (dot, seg). */
+  rgb:          string;
+  core:         string;
+  glow:         string;
 }
 
 /** The four main keys' legends (§2): white on the default chassis, neon when the controls are neon;
@@ -629,7 +642,11 @@ export const LEGEND_GLOW_REST = 4;
 export const LEGEND_GLOW_DOWN = 7;
 
 export interface VtsText {
+  /** Which display draws the strip (§7): Atkinson, Nixie One neon, Doto UPPER, DSEG14 UPPER. */
+  style:   DisplayStyle;
   font:    string;
+  /** dot / seg: upper-case through toUpperDisplay() (units keep their case). */
+  upper:   boolean;
   onTune:  string;
   offTune: string;
   band:    string;
@@ -637,8 +654,16 @@ export interface VtsText {
   sub:     string;
   offset:  string;
   /** ★ Under Nixie the per-notice colour override (band conditions) is IGNORED — it would draw
-   *  Nixie One in green or red. */
+   *  Nixie One in green or red. A single-colour VFD (dot / seg) cannot show it either. */
   allowOverride: boolean;
+  /** The RDS mark's colour (§7.1: the resolved text colour; neon under Nixie) and its glow, or
+   *  null for none (the default chassis — Deck.mockup `vtsGlow: 'none'`). */
+  mark:     string;
+  markGlow: string | null;
+  /** The lit colour as a triplet / core / glow (ghosts, the annunciator, the ISO code). */
+  rgb:     string;
+  core:    string;
+  glow:    string;
 }
 
 export interface FaceplateTheme {
@@ -676,32 +701,54 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
   const text     = resolveTextColour(s.display, s.text);
   const nixie    = s.display === 'nixie';
 
+  const deckDefault = s.chassis === 'default';
+  const GREY_UNIT = 'rgba(255,255,255,0.55)';      // Deck.mockup's unit label, every display
+  const lit = { rgb: text.rgb, core: text.core, glow: text.glow };
   let deck: DeckText;
   if (nixie) {
-    // ★ Interim until row 4 draws tubes: the frequency in Nixie One, neon. There is no tubeless
-    //   Nixie in the finished design (§1); this is the rule applied to what exists today. The mode
-    //   box is Barlow in the brief — not bundled yet, so Atkinson, in the brief's neon.
+    // ★★★ Real tubes for the frequency (§7) — the tubes ARE Nixie One glyphs, so freqFont says so and
+    //   the colour is the neon core. The unit label beside them is the mockup's grey sans (not Nixie
+    //   One, so the rule does not reach it); the mode box is Barlow in the brief — not bundled, so
+    //   Atkinson, in the brief's neon.
     deck = {
-      freqFont: FONT_NIXIE, freq: NEON_TEXT.core, freqGlow: NEON_TEXT.glow, unit: NEON_TEXT.reading,
+      style: 'nixie', freqFont: FONT_NIXIE, freq: NEON_TEXT.core, freqGlow: NEON_TEXT.glow, freqSpacing: 1.5,
+      unit: GREY_UNIT, unitFont: FONT_HYPER,
       modeFont: FONT_HYPER, mode: NEON_TEXT.mode, reading: NEON_TEXT.reading, sqlClosed: NEON_TEXT.reading,
-      bannerFont: FONT_NIXIE, bannerFree: NEON_TEXT.core, bannerAsk: NEON_TEXT.reading,
+      modeGlow: NEON_TEXT.readingGlow,
+      bannerFont: FONT_NIXIE, bannerFree: NEON_TEXT.core, bannerAsk: NEON_TEXT.reading, ...lit,
+    };
+  } else if (s.display === 'hyper' && deckDefault) {
+    // ★ The default deck's text is today's white on EVERY text colour: on the default chassis the
+    //   mockup keeps the digits and mode white (`isDefault ? '#f4f1ea'`); the text colour reaches
+    //   the VTS (see `vts` below).
+    deck = {
+      style: 'hyper', freqFont: FONT_HYPER, freq: TODAY_TEXT.freq, freqGlow: TODAY_TEXT.freqGlow, freqSpacing: 1.5,
+      unit: TODAY_TEXT.unit, unitFont: FONT_HYPER,
+      modeFont: FONT_HYPER, mode: TODAY_TEXT.mode, reading: TODAY_TEXT.reading, sqlClosed: TODAY_TEXT.sqlRed,
+      modeGlow: chassis.modeGlow,
+      bannerFont: FONT_HYPER, bannerFree: TODAY_TEXT.free, bannerAsk: TODAY_TEXT.reading, ...lit,
     };
   } else if (s.display === 'hyper') {
-    // ★ The default deck's text is today's white on EVERY text colour: on the default chassis the
-    //   mockup keeps the digits and mode white (`isDefault ? '#f4f1ea'`) and the text colour reaches
-    //   the VTS only, from row 4.
+    // Silver / black Hyperlegible: Deck.mockup `digit: tx.d` (the colour's hot centre) with its glow,
+    // letter-spacing 2.5, the mode in the same hot colour over a white reading, no mode glow.
     deck = {
-      freqFont: FONT_HYPER, freq: TODAY_TEXT.freq, freqGlow: TODAY_TEXT.freqGlow, unit: TODAY_TEXT.unit,
-      modeFont: FONT_HYPER, mode: TODAY_TEXT.mode, reading: TODAY_TEXT.reading, sqlClosed: TODAY_TEXT.sqlRed,
-      bannerFont: FONT_HYPER, bannerFree: TODAY_TEXT.free, bannerAsk: TODAY_TEXT.reading,
+      style: 'hyper', freqFont: FONT_HYPER, freq: text.hot, freqGlow: text.glow, freqSpacing: 2.5,
+      unit: GREY_UNIT, unitFont: FONT_HYPER,
+      modeFont: FONT_HYPER, mode: text.hot, reading: 'rgba(255,255,255,0.80)', sqlClosed: TODAY_TEXT.sqlRed,
+      modeGlow: 'rgba(0,0,0,0)',
+      bannerFont: FONT_HYPER, bannerFree: text.core, bannerAsk: rgba(text.rgb, 0.75), ...lit,
     };
   } else {
-    // dot / seg: the text colour lights the readouts (Doto / DSEG14 arrive with row 4; Atkinson
-    // until then — §2 TRAP: never Nixie One here).
+    // dot / seg: the text colour lights the readouts (§2 TRAP: never Nixie One here). Dot: Doto for
+    // the frequency and the mode box. Seg: the digits are DRAWN; the mode box is "sans" (Barlow in
+    // the mockup, not bundled → Atkinson).
+    const dot = s.display === 'dot';
     deck = {
-      freqFont: FONT_HYPER, freq: text.core, freqGlow: text.glow, unit: rgba(text.rgb, 0.75),
-      modeFont: FONT_HYPER, mode: text.core, reading: text.core, sqlClosed: TODAY_TEXT.sqlRed,
-      bannerFont: FONT_HYPER, bannerFree: text.core, bannerAsk: rgba(text.rgb, 0.75),
+      style: s.display, freqFont: dot ? FONT_DOTO : FONT_HYPER, freq: text.core, freqGlow: text.glow, freqSpacing: 1,
+      unit: GREY_UNIT, unitFont: FONT_HYPER,
+      modeFont: dot ? FONT_DOTO : FONT_HYPER, mode: text.core, reading: text.core, sqlClosed: TODAY_TEXT.sqlRed,
+      modeGlow: text.glow,
+      bannerFont: FONT_HYPER, bannerFree: text.core, bannerAsk: rgba(text.rgb, 0.75), ...lit,
     };
   }
 
@@ -718,10 +765,28 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
         hot: NEON_TEXT.core, shade: null }
     : { color: chassis.keyLegend, font: FONT_HYPER, glow: null, hot: chassis.keyLegend, shade: null };
 
-  const vts: VtsText = nixie
-    ? { font: FONT_NIXIE, onTune: NEON_TEXT.core, offTune: NEON_TEXT.core, band: NEON_TEXT.core,
-        dim: rgba(LED.neon.rgb, 0.35), sub: NEON_TEXT.reading, offset: NEON_TEXT.reading, allowOverride: false }
-    : { font: FONT_HYPER, ...TODAY_VTS, allowOverride: true };
+  // ★ The VTS strip (§7, §7.1). The default deck with GREEN text keeps today's strip exactly — its
+  //   on-tune green / off-tune amber / band yellow palette (§13.1), the way TODAY_GREEN keeps the
+  //   drums. Any other text colour, or a metal chassis, lights the strip in the text colour; a VFD
+  //   (dot / seg) is one colour, so band-condition overrides cannot reach it.
+  let vts: VtsText;
+  if (nixie) {
+    vts = { style: 'nixie', font: FONT_NIXIE, upper: false,
+            onTune: NEON_TEXT.core, offTune: NEON_TEXT.core, band: NEON_TEXT.core,
+            dim: rgba(LED.neon.rgb, 0.35), sub: NEON_TEXT.reading, offset: NEON_TEXT.reading, allowOverride: false,
+            mark: NEON_TEXT.core, markGlow: NEON_TEXT.glow, ...lit };
+  } else if (s.display === 'hyper' && deckDefault && text.name === 'green') {
+    vts = { style: 'hyper', font: FONT_HYPER, upper: false, ...TODAY_VTS, allowOverride: true,
+            mark: TODAY_VTS.onTune, markGlow: null, ...lit };
+  } else {
+    const vfd = s.display === 'dot' || s.display === 'seg';
+    vts = { style: s.display, font: s.display === 'dot' ? FONT_DOTO : s.display === 'seg' ? FONT_SEG14 : FONT_HYPER,
+            upper: vfd,
+            onTune: text.core, offTune: text.core, band: text.core,
+            dim: rgba(text.rgb, 0.30), sub: rgba(text.rgb, 0.70), offset: rgba(text.rgb, 0.85),
+            allowOverride: !vfd,
+            mark: text.core, markGlow: deckDefault ? null : text.glow, ...lit };
+  }
 
   return { settings: s, chassis, controls, text, deck, keyLegend, vts };
 }
