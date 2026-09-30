@@ -96,9 +96,10 @@ void RxPipeline::startDemodThread_() {
             //   swapping it out under the lock is safe and costs no copy.
             demodIn_.swap(demodQ_[demodHead_]);
             const int nc = demodQn_[demodHead_];
+            const bool gap = demodQGap_[demodHead_];
             demodBusy_ = true;
             lk.unlock();
-            demodTail_(demodIn_, nc);
+            demodTail_(demodIn_, nc, gap);
             lk.lock();
             demodBusy_ = false;
             demodHead_ = (demodHead_ + 1) % kDemodQ;
@@ -108,7 +109,7 @@ void RxPipeline::startDemodThread_() {
     });
 }
 
-void RxPipeline::enqueueDemod_(const cf32* ch, int nc) {
+void RxPipeline::enqueueDemod_(const cf32* ch, int nc, bool gap) {
     std::unique_lock<std::mutex> lk(demodM_);
     if (demodCount_ >= kDemodQ) {
         demodWaits_.fetch_add(1, std::memory_order_relaxed);
@@ -117,6 +118,7 @@ void RxPipeline::enqueueDemod_(const cf32* ch, int nc) {
     const int slot = (demodHead_ + demodCount_) % kDemodQ;
     demodQ_[slot].assign(ch, ch + nc);
     demodQn_[slot] = nc;
+    demodQGap_[slot] = gap;
     ++demodCount_;
     lk.unlock();
     demodCv_.notify_one();
@@ -766,6 +768,10 @@ void RxPipeline::feed(const cf32* iq, int n) {
         pll_.resyncBitClock();
         ++measGen_;                      // the instrument re-acquires with the decoder
     }
+    // ★★★ A HOLE UPSTREAM — see noteInputGap(). Taken once, here, and carried with THIS block to
+    //     the two readers that care, so it lands on the samples that follow the hole and no others.
+    const bool gap = gapReq_.exchange(false, std::memory_order_relaxed);
+    if (gap) inputGaps_.fetch_add(1, std::memory_order_relaxed);
     bool rebuilt = false;
     if (dirty_) {
         rebuildAudio();                  // rebuildAudio() re-points the NCO itself
@@ -953,7 +959,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                            && rdsEnabled_.load(std::memory_order_relaxed);
             if (want) {
                 if (!measWas_) ++measGen_;       // opened afresh: nothing measured before counts
-                meas_.feed(baseBuf_.data(), n, measGen_);
+                meas_.feed(baseBuf_.data(), n, measGen_, gap);
             }
             measWas_ = want;
         }
@@ -977,15 +983,18 @@ void RxPipeline::feed(const cf32* iq, int n) {
         // ★ THE CUT (setDemodThread): everything above is the DSP thread's, everything below may run
         //   on vibe-demod. The channel block is handed over whole; a full queue is WAITED for, never
         //   dropped — a hole in the channel is a click, and a late block is only a late block.
-        if (demodOn_) { enqueueDemod_(chBuf_.data(), nc); return; }
-        demodTail_(chBuf_, nc);
+        if (demodOn_) { enqueueDemod_(chBuf_.data(), nc, gap); return; }
+        demodTail_(chBuf_, nc, gap);
     }
 }
 
 /** ★ The second half of the audio path: channel IQ in, audio (and every RDS/stereo/meter callback)
  *  out. On the DSP thread by default; on vibe-demod with setDemodThread. `chB` is the channel buffer
  *  it owns for this call — the DSP thread keeps writing its own chBuf_ meanwhile. */
-void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc) {
+void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
+    // ★★ The RDS decoder hears about a hole BEFORE it decodes the samples after it — see
+    //    RdsDemod::noteGap. Harmless when RDS is off: it only forgets a grid it is not using.
+    if (gap) { rdsDemod_.noteGap(); pll_.noteGap(); }
     {
         faultStage_ = nullptr;          // per-block: trace_() records the FIRST bad stage
         if (cb_.iq && nc > 0) cb_.iq(cb_.ctx, chB.data(), nc, chFs_);

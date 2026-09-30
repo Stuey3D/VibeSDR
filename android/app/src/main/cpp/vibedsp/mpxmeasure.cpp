@@ -52,7 +52,7 @@ void MpxMeasure::stop() {
     if (thr_.joinable()) thr_.join();
     running_ = false;
     std::lock_guard<std::mutex> lk(qM_);
-    qStop_ = false; qCount_ = 0; qHead_ = 0; gapPending_ = false;
+    qStop_ = false; qCount_ = 0; qHead_ = 0; gapPending_ = false; draining_ = false;
 }
 
 void MpxMeasure::startWorker_() {
@@ -83,15 +83,29 @@ void MpxMeasure::startWorker_() {
     });
 }
 
-void MpxMeasure::feed(const cf32* iq, int n, unsigned gen) {
+void MpxMeasure::feed(const cf32* iq, int n, unsigned gen, bool gap) {
     if (n <= 0 || !(inRate_ > 0.0)) return;
-    if (!threadedWant_) { process_(iq, n, gen, false); return; }
+    if (!threadedWant_) { process_(iq, n, gen, gap); return; }
     if (!running_) startWorker_();
     // ★ The copy is made OUTSIDE the lock, into a spare buffer that is then swapped in — so the DSP
     //   thread never holds the queue while copying, and never waits on a low-priority thread that
     //   does. The worker only ever holds the lock for a swap.
     spare_.assign(iq, iq + n);
     std::unique_lock<std::mutex> lk(qM_);
+    // ★ A hole UPSTREAM (the caller's) joins our own drops in gapPending_: if this very block is
+    //   then dropped too, the flag waits for the next one that gets in, exactly as a drop does.
+    if (gap) gapPending_ = true;
+    /* ★★★ AND ONCE DROPPING, KEEP DROPPING UNTIL THE WORKER HAS CAUGHT UP. Dropping one block each
+     *  time a slot frees turned a worker at half speed into a hole every other block — and a hole
+     *  now costs a hold (kGapHoldSec), so the panel would never publish at all. Refusing until the
+     *  queue has drained to kQ/2 loses the SAME share of the signal in fewer, longer runs, leaving
+     *  contiguous stretches long enough to measure. */
+    if (draining_ && qCount_ > kQ / 2 && !blocking_.load(std::memory_order_relaxed)) {
+        dropped_.fetch_add(1, std::memory_order_relaxed);
+        gapPending_ = true;
+        return;
+    }
+    draining_ = false;
     if (qCount_ >= kQ) {
         if (blocking_.load(std::memory_order_relaxed)) {
             qIdleCv_.wait(lk, [this] { return qCount_ < kQ || qStop_; });
@@ -101,6 +115,7 @@ void MpxMeasure::feed(const cf32* iq, int n, unsigned gen) {
              *  straddles the hole is discarded rather than read (see winTainted_). */
             dropped_.fetch_add(1, std::memory_order_relaxed);
             gapPending_ = true;
+            draining_ = true;
             return;
         }
     }
@@ -397,6 +412,7 @@ void MpxMeasure::reset_() {
     noise_.reset(); multipath_.reset();
     snrDb_ = 99.0f; snrOk_ = false; multipathCorr_ = 0.0f; multipathOk_ = false;
     winTainted_ = false;
+    holdChunks_ = 0;
     // ── the moved eye / deviation / panel state, cleared exactly as rebuildAudio() cleared it ──
     for (int b = 0; b < kEyeBands; ++b) {
         std::fill(eyeAcc_[b].begin(), eyeAcc_[b].end(), 0.0f);
@@ -424,7 +440,16 @@ void MpxMeasure::reset_() {
 void MpxMeasure::process_(const cf32* iq, int n, unsigned gen, bool gap) {
     if (!built_) build();
     if (gen != gen_) { gen_ = gen; reset_(); }
-    if (gap) winTainted_ = true;
+    if (gap) {
+        // ★★★ A HOLE — hold every figure while the splice clears (see holdChunks_). The chunk in
+        //     progress holds the samples either side of it, so the hold starts with that chunk.
+        winTainted_ = true;
+        ++gapsSeen_;
+        holdChunks_ = (int)std::ceil(kGapHoldSec * kChanRate / (double)kChunk);
+        rds_.noteGap(kGapHoldSec);    // re-find the block grid; hold its level/phase figures
+        pll_.noteGap();               // and do not let the pilot's re-lock dent the pilot figure
+        mpxAccN_ = 0;                    // the MPX spectrum frame in progress straddles it: discard
+    }
     // Front end: integer stages, then the rational channel filter.
     const cf32* src = iq;
     int m = n;
@@ -448,20 +473,25 @@ void MpxMeasure::process_(const cf32* iq, int n, unsigned gen, bool gap) {
 }
 
 void MpxMeasure::chunk_(const cf32* ch, int n) {
+    // ★★★ THE HOLD AFTER A HOLE (holdChunks_): below, every filter, the discriminator and the pilot
+    //     loop still run — they must, to flush the splice — but nothing is accumulated, averaged or
+    //     published until it is over. Each gated line says so.
+    const bool hold = holdChunks_ > 0;
+    if (hold) --holdChunks_;
     // ── multipath: the envelope, measured on the flat channel ──
-    multipath_.process(ch, n);
+    multipath_.process(ch, n, /*measure=*/!hold);
     // ── the multiplex ──
     mpx384_.resize((size_t)n);
     fm_.process(ch, mpx384_.data(), n);
     dc_.process(mpx384_.data(), n);
-    mpxSpectrum_(mpx384_.data(), n);
+    if (!hold) mpxSpectrum_(mpx384_.data(), n);      // ★ a display average: simply skip the hold
     mpx_.resize((size_t)dec2_->maxOut(n));
     const int nm = dec2_->process(mpx384_.data(), n, mpx_.data());
     const float* x = mpx_.data();
 
     // ── MPX S/N: the pilot against the 15-19 kHz gap — the listener's own formula ──
-    noise_.process(x, nm);
-    if (noise_.ready()) {
+    noise_.process(x, nm, /*measure=*/!hold);
+    if (noise_.ready() && !hold) {
         const float noise = noise_.level();
         const float pilot = std::fabs(pll_.lockAmp());
         snrOk_ = (pilot > 0.027f);                         // ~2 kHz: below it there is no yardstick
@@ -472,7 +502,7 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
         }
     }
     // ── multipath, noise contribution removed — see kMpSnr / kMpDepth for this path's table ──
-    {
+    if (!hold) {
         const float s = snrDb_;
         float expect = kMpDepth[0];
         if (s <= kMpSnr[kMpN - 1]) expect = kMpDepth[kMpN - 1];
@@ -495,7 +525,7 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
     lmr_.resize((size_t)nm); ref57_.resize((size_t)nm); ref57q_.resize((size_t)nm); bitClk_.resize((size_t)nm);
     pll_.processBlock(x, nm, lmr_.data(), ref57_.data(), ref57q_.data(), bitClk_.data());
 
-    eyeAndDeviation_(x, nm);
+    eyeAndDeviation_(x, nm, hold);
 
     // ── RDS: amplitude, phase, coherence, drift — MEASURED, never decoded for the listener ──
     const bool nc = noiseCorr_.load(std::memory_order_relaxed);
@@ -508,12 +538,13 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
      *  refreshed by mergedAf(). The listener's path calls that when it assembles the panel; nothing
      *  else would here, so the gate would stay shut for ever and every figure read "—". */
     { int af[RdsDecoder::kMaxAf]; rds_.mergedAf(af, RdsDecoder::kMaxAf); }
+    if (hold) return;                    // ★ the panel keeps the figures from before the hole
     panelAverage_((double)nm / kMpxRate);
     publish_(gridsReady_);
     gridsReady_ = false;
 }
 
-void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n) {
+void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
     const double fsM_ = kMpxRate;
     // ★★ 96 COLUMNS, FIXED. The grid was sized to the channel rate for one release
     //    and came out at 30 columns on every radio — see the note on eyeW_ for why
@@ -593,6 +624,24 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n) {
           mpxDevDwellMax_ = 0.0f; mpxDevDwellT_ = 0.0; }
     if ((int)devHist_.size() != kDevHistN) devHist_.assign(kDevHistN, 0u);
     if (!std::isfinite(eyePeak_)) eyePeak_ = 0.0f;
+    /* ★★★ IN THE HOLD AFTER A HOLE: step every filter the loop below steps — the high-pass, the
+     *  three band resonators, the deviation low-pass and the guard — so their state is the signal's
+     *  when the hold ends, and do nothing else: no peak, no histogram, no guard power, no eye
+     *  deposit, no decay, no clock. A spike that is not measured cannot become a figure. */
+    if (hold) {
+        for (int i = 0; i < n; ++i) {
+            const float x = mpxIn[i];
+            eyeHp1_ += eyeHpA_ * (x - eyeHp1_);       const float h1 = x - eyeHp1_;
+            eyeHp2_ += eyeHpA_ * (h1 - eyeHp2_);      const float h2 = h1 - eyeHp2_;
+            eyeHp3_ += eyeHpA_ * (h2 - eyeHp3_);      const float h  = h2 - eyeHp3_;
+            (void)eyeBand_[0][1].step(eyeBand_[0][0].step(h));
+            (void)eyeBand_[1][1].step(eyeBand_[1][0].step(h));
+            (void)eyeBand_[2][1].step(eyeBand_[2][0].step(h));
+            (void)mpxLp_[2].step(mpxLp_[1].step(mpxLp_[0].step(x)));
+            (void)mpxGuard_[2].step(mpxGuard_[1].step(mpxGuard_[0].step(x)));
+        }
+        return;
+    }
     // ★ AUTOSCALE, with a slow decay so it cannot pump on every bass note. A quiet
     //   passage genuinely shrinks the composite, and a fixed full scale would hide
     //   the structure instead of magnifying it (Stuart, 2026-09-13).

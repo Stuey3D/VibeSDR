@@ -2269,6 +2269,9 @@ static void noteUsbDrop(unsigned long long samples, unsigned long long events = 
  *  count where a probe without the admin password can see it, because it is the other place a
  *  loaded box punches holes in one listener's stream — and so in that listener's RDS. */
 static std::atomic<unsigned long long> g_chanDrops{0};
+/** ★★ HOLES THAT REACHED THE DSP, from any cause (a radio library's drop, our own overrun), each
+ *  now signalled to the RDS decoder and the instrument — see IqBuf. Should track usbDrops + iqDrops. */
+static std::atomic<unsigned long long> g_iqGaps{0};
 // ★★★ A HANDFUL OF RAILED SAMPLES IN A SECOND IS NOISE, NOT AN OVERLOAD. At 2.4 MSPS a second is
 //     4.8 million bytes; an impulse — a thermostat, a switching supply, a car — rails a few of
 //     them and means nothing. Treating ANY rail as clipping had two consequences, and the second
@@ -5437,7 +5440,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  Control calls become no-ops rather than touching a handle that is not there. */
     std::atomic<bool> radioReleased{false};
 
-    std::deque<std::vector<cf32>> iqQueue;
+    /** ★★★ A BUFFER, AND WHETHER A HOLE CAME BEFORE IT. Samples lost upstream — a USB buffer a radio
+     *  library dropped, or one our own overrun threw away — leave the two sides of the hole abutting,
+     *  and nothing downstream can tell. The flag is how the one who KNOWS tells the RDS decoder and
+     *  the Advanced RDS instrument (RxPipeline::noteInputGap), so a hole costs a quick re-sync
+     *  instead of ~25 blocks of the decoder's confusion counted as link errors. */
+    struct IqBuf { std::vector<cf32> v; bool gap = false; };
+    std::deque<IqBuf> iqQueue;
+    /** ★ A drop emptied the queue: the NEXT buffer pushed follows the hole. Guarded by iqMtx. */
+    bool iqGapNext = false;
+    /** ★ The channelizer holds samples across calls, so a hole must mark the first BLOCK it emits
+     *  after the hole, however many feed() calls that takes. DSP thread only. */
+    bool chanGapPending_ = false;
     std::mutex iqMtx;
     std::condition_variable iqCv;
     std::condition_variable iqSpaceCv;          // TCP reader waits here when full
@@ -6842,7 +6856,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::mutex                                    qm;
         std::condition_variable                       qcv;
         // ★ The block AND which block it was — the phase correction is meaningless without it.
-        struct Block { std::vector<cf32> bins; long long index; };
+        struct Block { std::vector<cf32> bins; long long index; bool gap = false; };
         std::deque<std::shared_ptr<const Block>> q;
         std::atomic<bool>                             run{true};
         std::atomic<uint64_t>                         dropped{0};
@@ -7354,6 +7368,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     void clientThread(std::shared_ptr<ClientDsp> c) {
         vibeAudioThread("vibe-listener");
+        long long lastIndex = -1;          // ★ the channelizer numbers its blocks — see below
         for (;;) {
             std::shared_ptr<const ClientDsp::Block> blk;
             {
@@ -7373,9 +7388,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     idle and 106% while the other radios were hammered, having done no more work at
             //     all (2026-08-08). A capacity number that rises when OTHER people arrive is worse
             //     than none, because it is the number an owner sizes their server with.
+            /* ★★★ WAS THERE A HOLE BEFORE THIS BLOCK? Two ways: the radio side lost samples
+             *  (blk->gap, set by the DSP thread from IqBuf), or THIS listener fell behind and its
+             *  own hand-off dropped blocks — which shows as a jump in the channelizer's numbering.
+             *  Either way this listener's RDS decoder must re-find its grid rather than count its
+             *  own confusion as link errors (RxPipeline::noteInputGap). */
+            const bool hole = blk->gap || (lastIndex >= 0 && blk->index != lastIndex + 1);
+            lastIndex = blk->index;
             timespec c0{}, c1{};
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0);
-            feedOneClient(c, blk->bins.data(), blk->index);
+            feedOneClient(c, blk->bins.data(), blk->index, hole);
             clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
             c->dspNanos.fetch_add(
                 (unsigned long long)((c1.tv_sec - c0.tv_sec) * 1000000000LL
@@ -16845,6 +16867,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                        ? (double)vsNowEpoch() - g_usbLastDropAt.load(std::memory_order_relaxed)
                                        : -1.0))
                              + ",\"chanDrops\":" + std::to_string(g_chanDrops.load(std::memory_order_relaxed))
+                             + ",\"iqGaps\":" + std::to_string(g_iqGaps.load(std::memory_order_relaxed))
                              // ★★★ HOW THE LIMIT BEHAVES, or a client cannot describe it honestly.
                              //     Absent means HARD, so every older client and server reads right.
                              + (g_vsSessionLimitSoft.load()
@@ -19734,7 +19757,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 dropOldestLocked();                       // USB: bounded by chunk count
             }
             iqQueuedSamples += v.size();
-            iqQueue.push_back(std::move(v));
+            iqQueue.push_back(IqBuf{std::move(v), std::exchange(iqGapNext, false)});
         }
         iqCv.notify_one();
     }
@@ -19742,7 +19765,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // int16 IQ (16-bit devices: Airspy et al). Same queue, same backpressure; only
     // the sample conversion differs. Public SpyServers are not all 8-bit RTL-SDRs,
     // and feeding a 16-bit device's stream through the u8 path would be garbage.
-    void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull) {
+    void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull, bool gapBefore = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v((size_t)sampCount);
@@ -19763,7 +19786,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
             }
             iqQueuedSamples += v.size();
-            iqQueue.push_back(std::move(v));
+            iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false)});
         }
         iqCv.notify_one();
     }
@@ -19772,7 +19795,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // float at roughly +/-1 — the engine's own format — so this path does no conversion at all.
     // Routing it through the int16 one would quantise an 18-bit-effective radio down to 16 and
     // straight back up, throwing away the dynamic range that is the entire reason to own one.
-    void enqueueIqFloat(const float* interleaved, int sampCount, bool blockIfFull) {
+    /** `gapBefore`: the SOURCE lost samples immediately before this buffer — see IqBuf. */
+    void enqueueIqFloat(const float* interleaved, int sampCount, bool blockIfFull, bool gapBefore = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
         std::vector<cf32> v((size_t)sampCount);
@@ -19790,7 +19814,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
             }
             iqQueuedSamples += v.size();
-            iqQueue.push_back(std::move(v));
+            iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false)});
         }
         iqCv.notify_one();
     }
@@ -19799,10 +19823,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // is why the server could report a healthy link while the client broke up.
     void dropOldestLocked() {
         if (iqQueue.empty()) return;
-        size_t n = iqQueue.front().size();
+        size_t n = iqQueue.front().v.size();
         iqQueuedSamples -= n;
         iqQueue.pop_front();
         iqDroppedSamples.fetch_add(n, std::memory_order_relaxed);
+        // ★ Whatever is consumed next follows the hole this just made — see IqBuf.
+        if (!iqQueue.empty()) iqQueue.front().gap = true; else iqGapNext = true;
     }
 
     // ── DSP consumer (dedicated thread, OFF the libusb path) ────────────────
@@ -20063,9 +20089,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     /** Do one client's channels for this block. Pure per-client work — no shared mutable state,
      *  which is exactly why it parallelises. */
-    void feedOneClient(const std::shared_ptr<ClientDsp>& c, const cf32* bins, long long blockIndex) {
+    void feedOneClient(const std::shared_ptr<ClientDsp>& c, const cf32* bins, long long blockIndex,
+                       bool gap = false) {
         std::lock_guard<std::mutex> lk(c->mtx);
         if (!c->rx || c->chanBins <= 0) return;
+        if (gap) c->rx->noteInputGap();     // ★ before the feed that carries the splice
         const int got = chan_->extract(bins, clientCentreBin(c.get()), c->chanBins,
                                        c->slice.data(), c->ectx, blockIndex);
         if (got > 0) c->rx->feed(c->slice.data(), got);
@@ -20132,7 +20160,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     ★ One copy of the block per round, shared by reference: the channelizer
             //       overwrites its buffer on the next block, so the data has to be taken, but it
             //       only has to be taken ONCE however many listeners there are.
-            handBlockToListeners(cs, bins, nbins);
+            // ★ The first block out after a hole carries it — see chanGapPending_.
+            handBlockToListeners(cs, bins, nbins, std::exchange(chanGapPending_, false));
             fanMs += std::chrono::duration<double,std::milli>(
                          std::chrono::steady_clock::now() - f0).count();
             // ★★★ THE WIDE WATERFALL COMES OFF THIS SAME FFT — ka9q's whole point.
@@ -20222,7 +20251,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     /** Copy this block once and post it to every listener's queue. Never blocks. */
     void handBlockToListeners(const std::vector<std::shared_ptr<ClientDsp>>& cs,
-                              const cf32* bins, int nbins) {
+                              const cf32* bins, int nbins, bool gap = false) {
         // ★ Nothing to hand out: skip the copy entirely. The wide path still runs above (that is
         //   the point of getting here with no listeners), but copying a 32k block for an empty
         //   list every round would be pure waste on an idle server.
@@ -20230,6 +20259,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto blk = std::make_shared<ClientDsp::Block>();
         blk->bins.assign(bins, bins + nbins);
         blk->index = chan_->blockIndex();     // ★ the phase reference travels WITH the samples
+        blk->gap = gap;                       // ★ …and so does a hole upstream of it
         for (auto& c : cs) {
             std::lock_guard<std::mutex> lk(c->qm);
             // ★★ A LISTENER THAT CANNOT KEEP UP DROPS ITS OWN BLOCKS. Four blocks is ~12 ms of
@@ -20261,6 +20291,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeAudioThread("vibe-dsp");
         while (dspRunning.load()) {
             std::vector<cf32> buf;
+            bool gap = false;
             {
                 std::unique_lock<std::mutex> lk(iqMtx);
                 // One-shot prefill at stream start. The DSP is NOT paced by this
@@ -20278,11 +20309,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 iqCv.wait(lk, [this]{ return !iqQueue.empty() || !dspRunning.load(); });
                 if (!dspRunning.load()) break;
-                buf = std::move(iqQueue.front());
+                buf = std::move(iqQueue.front().v);
+                gap = iqQueue.front().gap;
                 iqQueue.pop_front();
                 iqQueuedSamples -= buf.size();
             }
             iqSpaceCv.notify_one();
+            /* ★★★ THIS BUFFER FOLLOWS A HOLE — tell whatever will demodulate it, BEFORE it does
+             *  (see IqBuf). The shared pipeline takes it on its next feed; the per-listener chains
+             *  get it on the first channel block that contains the splice. It also disturbs the
+             *  AGC's before/after comparison, exactly as the dongle's own overrun already did. */
+            if (gap) {
+                g_iqGaps.fetch_add(1, std::memory_order_relaxed);
+                g_pipelineDisturbedAt.store(Impl::nowSecs(), std::memory_order_relaxed);
+                rx.noteInputGap();
+                chanGapPending_ = true;
+            }
             // ★ The wait for the lock is measured SEPARATELY from the work done under it. Same
             //   scope as the lock_guard this replaces; unique_lock only so the acquisition can be
             //   timed either side.
@@ -21156,7 +21198,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       /* ★★ DIAGNOSTIC, for probes rather than the panel: blocks the Advanced
                        *  RDS instrument itself dropped (decoder priority — it may, audio may not).
                        *  Cumulative for this pipeline; a poller diffs it. */
-                      + ",\"mpxDrops\":" + std::to_string(P_ ? P_->measDropped() : 0u)
+                      + ",\"mpxDrops\":" + std::to_string(P_ ? P_->measureDropped() : 0u)
+                      // ★ Holes this pipeline was told about (RxPipeline::noteInputGap) — cumulative.
+                      + ",\"gaps\":" + std::to_string(P_ ? P_->inputGaps() : 0u)
                       // ★★★ THE WEAK-SIGNAL FIGURES, KEPT ON PURPOSE — not debug scaffolding.
                       //     Stuart: "the FM-DX crowd would appreciate them anyway and that would
                       //     be the place for them". They belong beside pilot deviation and block
@@ -25723,8 +25767,9 @@ int LocalSdrShim::startAirspyCommon(int index, int fd,
     impl->asp->setSink([self](const float* iq, int n) {
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
         // ★★★ What libairspy dropped just before this buffer — see g_usbDropEvents.
-        if (const uint64_t lost = self->asp->takeUsbDropped()) noteUsbDrop(lost);
-        self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
+        const uint64_t lost = self->asp->takeUsbDropped();
+        if (lost) noteUsbDrop(lost);
+        self->enqueueIqFloat(iq, n, /*blockIfFull=*/false, /*gapBefore=*/lost != 0);
     });
     /* ★★★ TUNE THE RADIO TO (LOGICAL CENTRE + OFFSET), exactly as the dongle's open path does —
      *     `rtlCenter` above is the LOGICAL centre and everything else derives the physical DC from
@@ -25817,8 +25862,9 @@ int LocalSdrShim::startAirspyHfCommon(int index, int fd,
     impl->ahf->setSink([self](const float* iq, int n) {
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
         // ★★★ What libairspyhf dropped just before this buffer — see g_usbDropEvents.
-        if (const uint64_t lost = self->ahf->takeUsbDropped()) noteUsbDrop(lost);
-        self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
+        const uint64_t lost = self->ahf->takeUsbDropped();
+        if (lost) noteUsbDrop(lost);
+        self->enqueueIqFloat(iq, n, /*blockIfFull=*/false, /*gapBefore=*/lost != 0);
     });
     const bool opened = (fd >= 0)
         ? impl->ahf->openFd(fd, sampleRate, centerFreq, gainTenthDb, err)

@@ -309,6 +309,73 @@ Reading runChannelised(double fs, int fftSize, double need, double bw, const Sig
     return cap.r;
 }
 
+/** ★★★ A STREAM WITH HOLES IN IT — what a loaded server hands the DSP. Every `every` seconds a
+ *  stretch of `holeLen` samples is generated (the transmitter carries on) and NOT fed: the two sides
+ *  of the hole abut, exactly as they do when a radio library drops a USB buffer or a listener's
+ *  thread drops a block. With `tell`, the feeder says so first (RxPipeline::noteInputGap), as the
+ *  server now does. Reports the Advanced RDS figures at the end and the LISTENER's block error rate
+ *  (the panel's ERRORS) averaged from `warm` seconds on, plus how often it read -1 after first sync. */
+struct HoleRun {
+    Reading r;
+    double berAvg = -1.0; double berNegFrac = 0.0; int berN = 0;
+    std::string ps; unsigned gaps = 0; int holes = 0;
+};
+struct BerCap : Cap {
+    long berSum = 0; int berN = 0, berNeg = 0; bool synced = false; bool counting = false;
+    std::string ps;
+    static void onBer(void* c, int pct) {
+        auto* p = (BerCap*)c;
+        if (pct >= 0) p->synced = true;
+        if (!p->counting || !p->synced) return;
+        if (pct < 0) { p->berNeg++; return; }
+        p->berSum += pct; p->berN++;
+    }
+    static void onPs(void* c, uint16_t, const char* ps8) { ((BerCap*)c)->ps.assign(ps8, strnlen(ps8, 8)); }
+};
+HoleRun runHoles(double fs, const Sig& sig, double seconds, double every, int holeLen, bool tell,
+                 double warm = 2.0) {
+    static std::atomic<bool> wanted{true};
+    BerCap cap;
+    RxPipeline rx;
+    RxPipeline::Callbacks cb{};
+    cb.ctx = &cap; cb.audio = &Cap::onAudio; cb.rdsPs = &BerCap::onPs; cb.rdsExt = &Cap::onExt;
+    cb.rdsBer = &BerCap::onBer;
+    rx.setRdsExtWantedFlag(&wanted);
+    rx.setMeasureThread(false);
+    rx.start(fs, 1024, 10.0, 48000, cb);
+    rx.setTune(kOffsetHz, RxPipeline::Mode::WFM, 200000.0);
+    rx.setRdsNoiseCorrection(true);
+    Gen gen(sig, fs);
+    std::vector<cf32> buf, hole;
+    const int block = (int)std::max(4096.0, fs / 100.0);
+    const long total = (long)(fs * seconds);
+    double nextHole = every > 0.0 ? 1.0 : 1e9;         // the first after the decoder has locked
+    HoleRun out;
+    for (long done = 0; done < total; ) {
+        const double t = (double)done / fs;
+        cap.counting = t >= warm;
+        if (t >= nextHole) {
+            gen.fill(hole, holeLen);                   // time passes on air…
+            done += holeLen;                           // …and none of it reaches the receiver
+            if (tell) rx.noteInputGap();
+            out.holes++;
+            nextHole += every;
+            continue;
+        }
+        gen.fill(buf, (int)std::min<long>(block, total - done));
+        rx.feed(buf.data(), (int)buf.size());
+        done += (long)buf.size();
+    }
+    out.gaps = rx.inputGaps();
+    rx.stop();
+    out.r = cap.r;
+    out.berN = cap.berN;
+    out.berAvg = cap.berN ? (double)cap.berSum / cap.berN : -1.0;
+    out.berNegFrac = (cap.berN + cap.berNeg) ? (double)cap.berNeg / (cap.berN + cap.berNeg) : 0.0;
+    out.ps = cap.ps;
+    return out;
+}
+
 /** ★★ THE SAME SUBCARRIER, DEMODULATED IDEALLY — no FM, no channel, no discriminator: the RDS
  *  term of the multiplex straight into an RdsDemod at 192 kS/s with perfect 57 kHz references and
  *  bit clock (test_rds_dsp's direct method). What the pipeline reads divided by this IS the transfer
@@ -579,6 +646,52 @@ int main(int argc, char** argv) {
     }
 
 #ifdef VIBEDSP_HAS_MPXMEASURE
+    // ★★★ HOLES IN THE STREAM (2026-09-30). The Pi 500 under full load: the Airspy HF+ listener's
+    //     ERRORS read ~25 % against ~1.5 % unloaded on a clean 30 dB signal, because the radio
+    //     library dropped USB buffers and the decoder, not knowing, stayed "synced" on a grid the hole
+    //     had shifted and counted ~25 blocks of its own confusion as link errors per hole. A hole the
+    //     server KNOWS about is now signalled; this measures both sides of that and holds the fix to:
+    //       · the listener's block error rate with signalled holes ≈ the hole-free rate, and never
+    //         "-1, no RDS" in between;
+    //       · every Advanced RDS figure with signalled holes ≈ the hole-free figure — a hole may make a
+    //         figure late, never wrong.
+    //     The holes are the two sizes the server makes at the HF+'s 912 kS/s: one USB buffer (2048
+    //     samples, 2.2 ms) and one listener hand-off block (12288 samples, 13.5 ms), one a second.
+    {
+        std::printf("\n── holes in the stream (912 kS/s, one a second) ──\n");
+        const double fs = 912000.0, hs = std::max(secs, 8.0);
+        const HoleRun clean = runHoles(fs, locked, hs, 0.0, 0, false);
+        std::printf("   no holes          : ERRORS %5.1f %%  (-1 %4.1f %% of reads)  PS \"%s\"  pilot %.2f raw %.2f peak %.2f "
+                    "phase %.1f coh %.2f S/N %.1f mp %.3f MPX %.1f\n",
+                    clean.berAvg, 100 * clean.berNegFrac, clean.ps.c_str(), clean.r.pilot, clean.r.rdsRaw, clean.r.rdsPk,
+                    clean.r.phase, clean.r.coh, clean.r.snr, clean.r.mp, clean.r.mpxHold);
+        for (int len : { 2048, 12288 }) {
+            const HoleRun blind = runHoles(fs, locked, hs, 1.0, len, false);
+            const HoleRun told  = runHoles(fs, locked, hs, 1.0, len, true);
+            for (const HoleRun* h : { &blind, &told })
+                std::printf("   %5d-sample holes, %-6s: ERRORS %5.1f %%  (-1 %4.1f %% of reads)  PS \"%s\"  pilot %.2f raw %.2f "
+                            "peak %.2f phase %.1f coh %.2f S/N %.1f mp %.3f MPX %.1f  [%d holes, %u told]\n",
+                            len, h == &blind ? "unsaid" : "told", h->berAvg, 100 * h->berNegFrac, h->ps.c_str(),
+                            h->r.pilot, h->r.rdsRaw, h->r.rdsPk, h->r.phase, h->r.coh, h->r.snr, h->r.mp,
+                            h->r.mpxHold, h->holes, h->gaps);
+            char w[200];
+            std::snprintf(w, sizeof w, "%d-sample holes: an UNSIGNALLED hole costs the decoder real errors (the fault "
+                          "being fixed: %.1f %% vs %.1f %% clean)", len, blind.berAvg, clean.berAvg);
+            ok(blind.berAvg > clean.berAvg + 5.0, w);
+            std::snprintf(w, sizeof w, "%d-sample holes, signalled: ERRORS within 2 points of the hole-free run "
+                          "(%.1f vs %.1f %%), PS intact, never -1 after sync", len, told.berAvg, clean.berAvg);
+            ok(told.berAvg >= 0.0 && told.berAvg <= clean.berAvg + 2.0 && told.ps == "VIBETEST"
+               && told.berNegFrac == 0.0 && told.gaps == (unsigned)told.holes, w);
+            std::snprintf(w, sizeof w, "%d-sample holes, signalled: every Advanced RDS figure equals the hole-free "
+                          "run (pilot/raw 1.5 %%, peak 3 %%, phase 2 deg, coh 0.03, S/N 1 dB, multipath 0.01, MPX 3 %%)", len);
+            ok(told.r.measured && near(told.r.pilot, clean.r.pilot, 0.015) && near(told.r.rdsRaw, clean.r.rdsRaw, 0.015)
+               && near(told.r.rdsAvg, clean.r.rdsAvg, 0.015) && near(told.r.rdsPk, clean.r.rdsPk, 0.03)
+               && std::fabs(told.r.phase - clean.r.phase) <= 2.0f && std::fabs(told.r.coh - clean.r.coh) <= 0.03f
+               && std::fabs(told.r.snr - clean.r.snr) <= 1.0f && std::fabs(told.r.mp - clean.r.mp) <= 0.01f
+               && near(told.r.mpxHold, clean.r.mpxHold, 0.03), w);
+        }
+    }
+
     // ★ The production path: the same instrument on its own `vibe-mpx` thread. Blocking, so it sees
     //   every sample and must agree with the inline figures.
     {

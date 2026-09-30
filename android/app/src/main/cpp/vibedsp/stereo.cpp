@@ -6,6 +6,8 @@
 namespace vibedsp {
 
 void StereoPLL::configure(double pilotHz, double rate) {
+    rate_ = rate;
+    lockHold_ = 0;
     w0_ = 2.0 * M_PI * pilotHz / rate;
     df_ = 0.0;
     phase_ = 0.0;
@@ -159,6 +161,25 @@ void StereoPLL::step(float mpx, float* ref38, float* ref57, float* bitClk) {
 
 void StereoPLL::processBlock(const float* mpx, int n, float* lmr,
                              float* ref57, float* ref57q, float* bitClk) {
+    // ★★ The hold after a known hole (noteGap): run the loop over the held stretch, then put the
+    //    metric and the lock/track states back. One branch per BLOCK; the sample loop is untouched.
+    if (lockHold_ > 0 && n > 0) {
+        const int h = (int)std::min<long>(lockHold_, (long)n);
+        const float amp = lockAmp_;
+        const bool ls = lockState_, ts = trackState_;
+        const int br = belowRelease_;
+        processBlock_(mpx, h, lmr, ref57, ref57q, bitClk);
+        lockAmp_ = amp; lockState_ = ls; trackState_ = ts; belowRelease_ = br;
+        lockHold_ -= h;
+        if (h < n) processBlock_(mpx + h, n - h, lmr + h, ref57 ? ref57 + h : nullptr,
+                                 ref57q ? ref57q + h : nullptr, bitClk ? bitClk + h : nullptr);
+        return;
+    }
+    processBlock_(mpx, n, lmr, ref57, ref57q, bitClk);
+}
+
+void StereoPLL::processBlock_(const float* mpx, int n, float* lmr,
+                              float* ref57, float* ref57q, float* bitClk) {
     // The loop filter is a feedback path, so this cannot be vectorised across
     // samples — but it no longer has to be: with the trig gone each iteration is
     // a handful of multiplies. The vectorised work either side of it (the FM

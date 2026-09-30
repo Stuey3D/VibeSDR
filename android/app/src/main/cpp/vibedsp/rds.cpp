@@ -521,7 +521,28 @@ float RdsDemod::subcarrierRelDb() const {
 
 int RdsDemod::blockErrorPercent() const {
     const int b = bestIdx();
-    return (b >= 0 && b < NPH) ? dec_[b].blockErrorPercent() : -1;
+    const int v = (b >= 0 && b < NPH) ? dec_[b].blockErrorPercent() : -1;
+    // ★ Straight after a KNOWN hole the new winner has no full window yet — report what the link
+    //   was doing, not "nothing is synced" (see noteGap). Only for berHold_, then the truth.
+    if (v < 0 && berHold_ > 0 && berAtGap_ >= 0) return berAtGap_;
+    return v;
+}
+
+void RdsDemod::noteGap(double holdSec) {
+    // ★ Taken BEFORE sync is dropped, while the winner still describes the link. Mid-re-sync (a
+    //   second hole inside the first one's hold) blockErrorPercent() already returns the held
+    //   figure, so this simply keeps it; only a real -1 (no full window yet) leaves it alone.
+    { const int b = blockErrorPercent(); if (b >= 0) berAtGap_ = b; }
+    for (int k = 0; k < NPH; ++k) {
+        dec_[k].dropSync();
+        havePrev_[k] = false;               // the last symbol before the hole is not this one's reference
+        accI_[k] = accQ_[k] = 0.0f;
+    }
+    started_ = false;                       // prevPh_ describes the far side of the hole
+    const long hold = (mpxRate_ > 0.0) ? (long)(holdSec * mpxRate_) : 0;
+    measHold_ = std::max(measHold_, hold);
+    berHold_ = (mpxRate_ > 0.0) ? (long)(3.0 * mpxRate_) : 0;   // ample for ~3 blocks + a 48-block window
+    ++gaps_;
 }
 
 void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
@@ -603,6 +624,7 @@ void RdsDemod::reset() {
     mergedAfN_ = 0; mergedAfPi_ = 0; phCos2_ = phSin2_ = 0.0f;
     phDriftDeg_ = 0.0f; phLastDeg_ = -1.0f; phLastAt_ = 0.0; phClock_ = 0.0;
     agg_ = Agg{}; aggEonN_ = 0; aggOdaN_ = 0;
+    measHold_ = 0; berAtGap_ = -1; berHold_ = 0;
     for (int k = 0; k < NPH; ++k) {
         accI_[k] = accQ_[k] = 0.0f; prevPh_[k] = 0.0f;
         prevAI_[k] = prevAQ_[k] = 0.0f; havePrev_[k] = false;
@@ -660,14 +682,20 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     // the system clock — it runs on a callback thread whose timing is not the signal's — and
     // sample count IS the elapsed time as far as the radio is concerned.
     phClock_ += (double)n / mpxRate_;
-    measurePhaseDrift();
+    // ★★ AFTER A KNOWN HOLE, DECODE BUT DO NOT MEASURE — see noteGap(). The filters are flushing
+    //    the splice and the pilot loop is re-settling, so every level, phase and envelope figure
+    //    taken now would be the hole's, not the station's. The clock above still runs: it is time.
+    const bool hold = measHold_ > 0;
+    if (hold) measHold_ -= n;
+    if (berHold_ > 0) berHold_ -= n;
+    if (!hold) measurePhaseDrift();
 
     // Smoothed RMS of the complex RDS baseband — the level the detector actually sees.
     // ★ Mean-square is tracked alongside the mean envelope: the envelope feeds the legacy
     // uncorrected deviation and subcarrierRelDb, the POWER feeds the noise subtraction, which
     // can only be done on a power. Same smoothing on both so they stay comparable.
     float blockPk = 0.0f;
-    for (int i = 0; i < nb; ++i) {
+    for (int i = 0; i < (hold ? 0 : nb); ++i) {
         const float mag2 = sI_[i] * sI_[i] + sQ_[i] * sQ_[i];
         const float mag  = std::sqrt(mag2);
         if (mag > blockPk) blockPk = mag;
@@ -690,7 +718,7 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
      *     exact present behaviour, so the readings validated against Hans's analyser cannot
      *     regress — this is published ALONGSIDE them (Stuart, 2026-09-26: "we must however also
      *     preserve our PIRA tested numbers"). */
-    if (nb > 0 && decim_ > 0 && mpxRate_ > 0.0) {
+    if (!hold && nb > 0 && decim_ > 0 && mpxRate_ > 0.0) {
         const float bbRate = (float)(mpxRate_ / (double)decim_);   // baseband rate after decimation
         const float dt = (float)nb / bbRate;
         /* ★★ A DWELL, NOT A DECAY. An exponential "hold" is a continuously falling figure and
@@ -717,7 +745,7 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     // ★ The noise-subtracted power, smoothed over SECONDS rather than milliseconds — see
     // rdsDeviationKHz(). Clamped at zero first so a momentary negative excursion pulls the
     // average down rather than latching the whole reading to "nothing".
-    if (guardOn_ && nb > 0) {
+    if (!hold && guardOn_ && nb > 0) {
         /* ★★ SCALED TO THE RDS BAND'S NOISE, NOT THE GUARD'S. FM's discriminator noise rises as f², so
          *  the band at 63 kHz holds (63/57)² = 1.22x the noise the RDS band at 57 kHz does; subtracting
          *  it unscaled over-removes on exactly the weak signals the correction exists for. (57/63)² is
@@ -757,7 +785,7 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
         sGQ_.resize(lpfGQ_->maxOut(n));
         const int ng = std::min(lpfGI_->process(xGI_.data(), n, sGI_.data()),
                                 lpfGQ_->process(xGQ_.data(), n, sGQ_.data()));
-        for (int i = 0; i < ng; ++i) {
+        for (int i = 0; i < (hold ? 0 : ng); ++i) {   // ★ the filter still ran: its state stays current
             const float m2 = sGI_[i] * sGI_[i] + sGQ_[i] * sGQ_[i];
             guardPow_ += 0.0005f * (m2 - guardPow_);
         }
@@ -789,7 +817,7 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
                     const float dot = aI * prevAI_[p] + aQ * prevAQ_[p];
                     dec_[p].pushBit(dot < 0.0f ? 1 : 0);
                 }
-                if (p == constBest_) {
+                if (p == constBest_ && !hold) {
                     // Accumulate the doubled angle, magnitude-weighted so strong symbols
                     // define the estimate and noise near the origin barely counts.
                     const float mag2 = aI * aI + aQ * aQ;
@@ -968,6 +996,13 @@ int RdsDecoder::blockErrorPercent() const {
     for (uint64_t h = errHist_ & ((1ull << kBerBlocks) - 1); h; h >>= 1)
         bad += (int)(h & 1);
     return (bad * 100) / kBerBlocks;
+}
+
+void RdsDecoder::dropSync() {
+    // ★ ONLY where the blocks are. Everything decoded, and errHist_ (the link's BER), survives.
+    reg_ = 0; synced_ = false; bitsLeft_ = 0; nextBlk_ = 0;
+    pulseCount_ = 0; badHist_ = 0; blocksSeen_ = 0; grpRepairBits_ = 0;
+    for (int i = 0; i < 4; ++i) { blkOk_[i] = false; blkRepair_[i] = 0; }
 }
 
 void RdsDecoder::reset() {

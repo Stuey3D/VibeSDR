@@ -862,7 +862,9 @@ public:
         reset();
     }
     /** Feed channelised complex samples. Read-only. */
-    void process(const cf32* z, int n) {
+    /** ★ `measure` false = run the envelope filters (so their state stays current) but leave the
+     *  published depth alone — MpxMeasure's hold after a hole in the input. Default: as ever. */
+    void process(const cf32* z, int n, bool measure = true) {
         if (!ready_ || n <= 0) return;
         double acc = 0.0;
         double meanAcc = 0.0;
@@ -874,6 +876,7 @@ public:
             meanAcc += (double)mean_;
         }
         if (!std::isfinite(mean_) || !std::isfinite(lp_)) { reset(); return; }
+        if (!measure) return;
         const double m = meanAcc / (double)n;
         if (!(m > 1e-20)) return;
         // Depth = RMS wobble / mean power. Dimensionless, and 0 for a perfect constant-envelope
@@ -962,7 +965,9 @@ public:
         reset();
     }
     /** Feed one block of MPX. Read-only: `x` is not modified. */
-    void process(const float* x, int n) {
+    /** ★ `measure` false = run the band-pass (state current) but leave level() alone — see
+     *  MultipathMeter::process. Default: as ever. */
+    void process(const float* x, int n, bool measure = true) {
         if (!ready_ || n <= 0) return;
         double acc = 0.0;
         for (int i = 0; i < n; ++i) {
@@ -981,6 +986,7 @@ public:
         //     but a retune.
         for (int s = 0; s < kSections; ++s)
             if (!std::isfinite(y1_[s]) || !std::isfinite(y2_[s])) { reset(); break; }
+        if (!measure) return;
         const float rms = (float)std::sqrt(acc / (double)n);
         if (!std::isfinite(rms)) return;
         // ★ Slow, and deliberately ASYMMETRIC: rise quickly when noise appears (the hiss is
@@ -1094,7 +1100,19 @@ public:
     // kills it outright at 90 degrees. All four may be null to skip that work.
     void processBlock(const float* mpx, int n, float* lmr,
                       float* ref57, float* ref57q, float* bitClk);
+    /** ★★★ A KNOWN HOLE IN THE INPUT: the pilot's phase has jumped by whatever the hole cost, and
+     *  the loop re-acquires it in a few milliseconds. What does NOT recover quickly is lockAmp_ —
+     *  the 110 ms average of mpx x cos that IS the pilot deviation reading and gates stereo and RDS:
+     *  it integrates the few mis-phased milliseconds as a dent that takes ~a quarter second to fill
+     *  (measured: 6.72 -> 6.64 kHz with one 2 ms hole a second). So for `holdSec` the LOOP runs as
+     *  ever and the metric and the two hysteretic states are held where they were. Only processBlock
+     *  honours it. */
+    void noteGap(double holdSec = 0.04) { lockHold_ = (rate_ > 0.0) ? (long)(holdSec * rate_) : 0; }
 private:
+    void processBlock_(const float* mpx, int n, float* lmr,
+                       float* ref57, float* ref57q, float* bitClk);
+    double rate_ = 0.0;
+    long   lockHold_ = 0;                    // samples left in the hold — see noteGap()
     inline void advance(float mpx);          // one loop iteration (no trig)
 public:
     // Hysteretic lock: engages only on a sustained pilot, releases on loss — so
@@ -1279,6 +1297,17 @@ public:
     };
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
+    /** ★★★ THE STREAM HAS A HOLE IN IT — forget WHERE THE BLOCKS ARE, and nothing else.
+     *  A gap upstream (a USB buffer the radio library dropped, a block a listener's thread had to
+     *  throw away) removes a number of bits that is almost never a multiple of 26. The decoder does
+     *  not know, stays "synced" on the old grid, and every block after it fails its checkword —
+     *  counted as a LINK error — until kRateDrop of the last kRateWindow have failed: about 25
+     *  blocks, half a second of 100 % errors, per hole. On a loaded Pi that was a hole every few
+     *  seconds and the panel's ERRORS read ~25 % on a clean signal.
+     *  ★ So a hole the caller KNOWS about drops block sync at once and lets acquisition find the
+     *    new grid (three agreeing offsets, ~3 blocks). Unlike reset() it keeps everything decoded —
+     *    PS, RT, PI, AF, the counts — and the BER history, which is a property of the link. */
+    void dropSync();
     // Arbitration support: RdsDemod runs NPH timing hypotheses, and a MISALIGNED one can
     // still stumble into block sync and emit rubbish through the shared callbacks — which
     // is how a good station ends up reporting a two-character name. So only the best
@@ -1554,6 +1583,17 @@ public:
      *  a completely different fault from a high error rate, and the two were indistinguishable
      *  from outside until this existed. */
     int blockErrorPercent() const;
+    /** ★★★ A KNOWN HOLE IN THE INPUT — see RdsDecoder::dropSync for why this matters so much.
+     *  Every hypothesis drops block sync and its differential detector forgets the symbol before
+     *  the hole, and for `holdSec` of input the MEASUREMENTS (level, deviation, phase, the
+     *  constellation) stop accumulating while the filters flush the splice and the pilot loop
+     *  re-settles: a hole must make a figure late, never wrong. Decoding carries on throughout.
+     *  ★ The block error rate the winner last reported is held (blockErrorPercent) until a
+     *    hypothesis has a full window again, so a re-sync reads as the link it is, not as "-1, no
+     *    RDS". Called on the thread that runs process(). */
+    void noteGap(double holdSec = 0.25);
+    /** How many holes noteGap() has been told about since configure(). Diagnostics. */
+    unsigned gapsNoted() const { return gaps_; }
     /** ★★ RMS of the recovered 57 kHz baseband, relative to the pilot's own lock
      *  amplitude, in dB. THE decisive measurement: it separates "the subcarrier is not
      *  reaching us" from "it is reaching us and we are wasting it" — opposite faults with
@@ -1778,6 +1818,12 @@ private:
     float prevAQ_[NPH] = {0};
     bool  havePrev_[NPH] = {false};
     bool  started_ = false;
+    // ★ See noteGap(): input samples left in the measurement hold, the BER to report while no
+    //   hypothesis has a full window after a hole, and for how many more input samples.
+    long  measHold_ = 0;
+    int   berAtGap_ = -1;
+    long  berHold_ = 0;
+    unsigned gaps_ = 0;
     RdsDecoder dec_[NPH];
     std::vector<float> xI_, xQ_, sI_, sQ_;
     float rdsRms_ = 0.0f;              // smoothed |baseband|, for subcarrierRelDb()
@@ -2025,7 +2071,7 @@ public:
     /** ★ The feeding side. `iq` is the post-NCO baseband at inRate, the station at DC. A block the
      *  worker cannot take is dropped (never waited for) unless setBlocking(true). `gen` changes on
      *  every retune / reset — the worker restarts its state when it sees a new one. */
-    void feed(const cf32* iq, int n, unsigned gen);
+    void feed(const cf32* iq, int n, unsigned gen, bool gap = false);
     /** ★ Run inline on the caller's thread instead of on `vibe-mpx` — deterministic, for tests. */
     void setThreaded(bool on) { threadedWant_ = on; }
     /** ★ Wait for room rather than drop. The benchmark needs it: fed faster than real time, a
@@ -2035,6 +2081,8 @@ public:
     void stop();
     /** Blocks dropped because the worker was behind — the priority rule doing its job, counted. */
     unsigned dropped() const { return dropped_.load(std::memory_order_relaxed); }
+    /** Holes the worker has seen (its own drops, and holes upstream of the pipeline). Tests. */
+    unsigned gapsSeen() const { return gapsSeen_; }
     /** ★ CHARACTERISATION — the designed responses, evaluated from the actual taps (tests + the
      *  report): |H| of the whole complex front end at `hz` from the carrier, and of the multiplex
      *  path (discriminator sinc x the 2:1 equaliser) at baseband `hz`. 1.0 = flat. */
@@ -2076,6 +2124,7 @@ private:
     int  qHead_ = 0, qCount_ = 0;
     bool qStop_ = false, running_ = false, threadedWant_ = true;
     bool gapPending_ = false;                        // a block was dropped before the next one queued
+    bool draining_ = false;                          // dropping until the queue is half empty — see feed()
     std::atomic<bool> blocking_{false};
     std::atomic<unsigned> dropped_{0};
     std::vector<cf32> work_;
@@ -2144,7 +2193,22 @@ private:
     static constexpr float kMpDepth[kMpN] = { 0.0001f, 0.023f, 0.052f, 0.095f, 0.126f, 0.157f, 0.185f, 0.214f };
     void reset_();
     void chunk_(const cf32* ch, int n);
-    void eyeAndDeviation_(const float* x, int n);
+    void eyeAndDeviation_(const float* x, int n, bool hold);
+    /** ★★★ CHUNKS LEFT IN THE HOLD AFTER A HOLE. A dropped block splices two stretches of signal
+     *  that were never adjacent: the carrier phase jumps, the discriminator emits a spike up to half
+     *  the sample rate, and every filter rings with it. Measured through, that spike was a WRONG
+     *  figure, not a late one — the S/N and multipath smoothers attack fast and decay slowly, so one
+     *  splice read as a dip in S/N and a burst of multipath for a second or more, and the pilot
+     *  loop's slip dented the deviation and phase. So for kGapHoldSec after a hole every filter and
+     *  the pilot loop keep running (to flush it) while nothing accumulates and nothing is published:
+     *  the panel shows the figures from before the hole, a little late.
+     *  ★ 60 ms, MEASURED (test-mpx-measure, holes in the stream): with the pilot loop's own lock
+     *    metric held for 40 ms (StereoPLL::noteGap) every figure matches the hole-free run from
+     *    20 ms up; without that, the pilot needed 250 ms. Longer costs availability for nothing —
+     *    a worker dropping a third of its blocks must still publish. */
+    static constexpr double kGapHoldSec = 0.06;
+    int   holdChunks_ = 0;
+    unsigned gapsSeen_ = 0;
     void mpxSpectrum_(const float* x384, int n);
     void panelAverage_(double dt);
     void publish_(bool grids);
@@ -2633,9 +2697,6 @@ public:
     /** Blocks the instrument dropped because it was behind — see MpxMeasure::feed. */
     unsigned measureDropped() const { return meas_.dropped(); }
     unsigned demodQueueWaits() const { return demodWaits_.load(std::memory_order_relaxed); }
-    /** ★ Blocks the Advanced RDS instrument dropped because its decoder-priority thread was behind
-     *  (MpxMeasure::dropped). Diagnostics: sent in rdsx so a probe can see the instrument's gaps. */
-    unsigned measDropped() const { return meas_.dropped(); }
     /** Run first on every worker thread this class starts (name + priority are the HOST's business:
      *  a VibeServer raises them as it does vibe-dsp). Set once, before any start(). */
     static std::function<void(const char*)>& workerInit();
@@ -2760,6 +2821,19 @@ public:
      *  closing the Advanced RDS box did (Stuart, 2026-08-08: "it works on the stronger signals
      *  but the weaker ones ... are struggling"). */
     void requestRdsResync() { rdsResyncReq_.store(true, std::memory_order_relaxed); }
+    /** ★★★ THE NEXT BLOCK fed() FOLLOWS A HOLE IN THE INPUT — samples upstream were lost (a radio
+     *  library dropped a USB buffer, our IQ queue overran, this listener's thread dropped a block).
+     *  The chain cannot see a hole: the samples either side simply abut. So the caller who KNOWS
+     *  says so, and the next feed() tells the two things a hole can fool:
+     *    · the RDS decoder, which would otherwise stay "synced" on a grid the hole shifted and
+     *      count ~25 blocks of its own confusion as link errors (RdsDemod::noteGap), and
+     *    · the Advanced RDS instrument, which holds its figures while the splice clears
+     *      (MpxMeasure — a hole makes a figure late, never wrong).
+     *  ★ Nothing else changes: no rebuild, no audio reset, no pilot re-seed. Unlike requestReset()
+     *    this is safe to call every time, from any thread; it is honoured on the one that feeds. */
+    void noteInputGap() { gapReq_.store(true, std::memory_order_relaxed); }
+    /** Holes noteInputGap() has reported that reached a feed(). Diagnostics (rdsx `gaps`). */
+    unsigned inputGaps() const { return inputGaps_.load(std::memory_order_relaxed); }
     /** How many times the audio chain has been rebuilt. Diagnostics only — but it is what
      *  the retune test asserts on, because "did tuning tear the chain down?" is otherwise
      *  only observable as a level/continuity artefact that varies with the signal. */
@@ -2905,6 +2979,7 @@ private:
     std::condition_variable demodCv_, demodIdleCv_;
     std::vector<cf32> demodQ_[kDemodQ];
     int  demodQn_[kDemodQ] = {};
+    bool demodQGap_[kDemodQ] = {};           // ★ the hole travels WITH its block — see noteInputGap
     std::vector<cf32> demodIn_;              // the worker's channel buffer for the block in hand
     int  demodHead_ = 0, demodCount_ = 0;
     bool demodBusy_ = false, demodStop_ = false;
@@ -2912,8 +2987,8 @@ private:
     void startDemodThread_();
     void stopDemodThread_();
     void flushDemod_();
-    void enqueueDemod_(const cf32* ch, int nc);
-    void demodTail_(std::vector<cf32>& chB, int nc);
+    void enqueueDemod_(const cf32* ch, int nc, bool gap);
+    void demodTail_(std::vector<cf32>& chB, int nc, bool gap);
     int specFill_ = 0;          // samples gathered toward the next frame
     // ── Overlapping spectrum window ────────────────────────────────────────
     // ★★★ WHY THIS IS A RING AND NOT A GATHER. Disjoint blocks cap the frame rate at
@@ -3102,6 +3177,8 @@ private:
     bool  snrValid_ = false;       // is there a real pilot to measure the S/N against at all?
     const std::atomic<bool>* rdsExtWantedFlag_ = nullptr;   // see setRdsExtWantedFlag — nullptr = wanted
     std::atomic<bool> resetReq_{false};      // see requestReset()
+    std::atomic<bool> gapReq_{false};        // see noteInputGap()
+    std::atomic<unsigned> inputGaps_{0};
     std::atomic<bool> rdsResyncReq_{false};  // see requestRdsResync()
     std::atomic<bool> tuneReq_{false};       // same-chain retune: move the NCO, rebuild nothing
     // ── Smooth AM width ────────────────────────────────────────────────────────────────────
