@@ -15554,7 +15554,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         std::string cfWorkerHeader, vibeViaHeader;   // ★ see vsViaOf
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
-        bool acceptsGzip = false;         // ★ only /mapdata/ cares — see the header capture below
+        bool acceptsGzip = false;         // ★ /mapdata/ and the web client — see the header capture below
+        bool acceptsBr = false;           // ★ the web client only: brotli, pre-compressed at build time
         std::string rangeHeader;          // ★ only /mapgl/ reads it: PMTiles are read by Range
         if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
         // ★★★ STRIP OUR OWN /r/<serial> PREFIX, ONCE, RIGHT HERE.
@@ -15620,7 +15621,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/mapdata/", 0) == 0
                 // ★ The GPU map (vibe_mapgl.h) — same reasoning: the machine's, not a radio's.
                 || path0.rfind("/mapgl/", 0) == 0
-                || path0.rfind("/apple-touch-icon", 0) == 0;
+                || path0.rfind("/apple-touch-icon", 0) == 0
+                // ★★ The web client's scripts (vibe_web_page.h). The page the door serves loads
+                //    them from /vs/ — a radio's page from /r/<id>/vs/, which the radio answers.
+                || path0.rfind("/vs/", 0) == 0;
             if (!ok) {
                 // ★★★ A DEAD END IS NOT AN ANSWER. This used to reply with a bare JSON error, so a
                 //     listener who simply refreshed their tab — the first thing anyone tries when
@@ -15732,14 +15736,40 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (a != std::string::npos) xffHeader = vv.substr(a, b - a + 1);
                 }
             }
-            // ★ Only the map data reads this (vibe_mapdata.h): a pre-compressed sibling may only
-            //   go to a client that said it would take one. Captured with the others because the
-            //   headers are consumed once, here, before any route sees the request.
+            // ★ The map data (vibe_mapdata.h) and the web client (vibe_web_page.h) read this: a
+            //   pre-compressed body may only go to a client that said it would take one. Captured
+            //   with the others because the headers are consumed once, here, before any route sees
+            //   the request.
+            // ★★ PARSED BY TOKEN, not by substring, so "br;q=0" is a refusal rather than a yes.
+            //    Browsers send "br" only over https (and Cloudflare towards us), so a plain-http LAN
+            //    listener gets gzip and a tunnelled one may get brotli.
             if (line.size() > 16) {
                 std::string ak = line.substr(0, 16);
                 for (auto& c : ak) c = (char)tolower(c);
-                if (ak == "accept-encoding:" && line.find("gzip") != std::string::npos)
-                    acceptsGzip = true;
+                if (ak == "accept-encoding:") {
+                    std::string v = line.substr(16);
+                    for (auto& c : v) c = (char)tolower((unsigned char)c);
+                    size_t at = 0;
+                    while (at <= v.size()) {
+                        size_t comma = v.find(',', at);
+                        if (comma == std::string::npos) comma = v.size();
+                        std::string tok = v.substr(at, comma - at);
+                        at = comma + 1;
+                        const size_t semi = tok.find(';');
+                        std::string name = tok.substr(0, semi);
+                        const size_t a = name.find_first_not_of(" \t\r\n");
+                        const size_t b = name.find_last_not_of(" \t\r\n");
+                        name = (a == std::string::npos) ? std::string() : name.substr(a, b - a + 1);
+                        bool refused = false;
+                        if (semi != std::string::npos) {
+                            const size_t q = tok.find("q=", semi);
+                            if (q != std::string::npos && atof(tok.c_str() + q + 2) <= 0.0) refused = true;
+                        }
+                        if (refused) continue;
+                        if (name == "gzip" || name == "x-gzip") acceptsGzip = true;
+                        else if (name == "br") acceptsBr = true;
+                    }
+                }
             }
             // ★ The GPU map reads its PMTiles archives a few KB at a time (vibe_mapgl.h); without
             //   the Range header every tile read would be the whole 169 MB file.
@@ -17262,6 +17292,39 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             size_t to = reqLine.find_first_of(" ?#", from);
             if (to == std::string::npos) to = reqLine.size();
             vibemapgl::serve(sock, reqLine.substr(from, to - from), rangeHeader, head);
+        // ── ★★★ THE WEB CLIENT'S SCRIPTS ────────────────────────────────────────────────────────
+        // GET/HEAD /vs/<name>.js — the page loads its code from here (build-web.mjs). The names
+        // carry a content hash, so a URL can only ever mean one set of bytes: `immutable` for a
+        // year, and a returning listener's browser does not even ask. A new build is a new name.
+        // ★★ Pre-compressed at build time; the smallest encoding the client accepts goes out, with
+        //    Vary so no cache hands a gzip body to a client that did not ask for one.
+        // ★ Behind a radio's /r/<id>/ prefix this arrives already stripped (see the top of this
+        //   function), so the radio that served the page serves its script — never the door,
+        //   which may be running a different build for a few seconds during an update.
+        } else if (reqLine.rfind("GET /vs/", 0) == 0 || reqLine.rfind("HEAD /vs/", 0) == 0) {
+            const bool head = reqLine[0] == 'H';
+            const size_t from = head ? 5 : 4;
+            size_t to = reqLine.find_first_of(" ?#", from);
+            if (to == std::string::npos) to = reqLine.size();
+            const int idx = g_vsWebEnabled.load() ? vibeWebAssetFind(reqLine.substr(from, to - from)) : -1;
+            if (idx < 0) {
+                sock->sendstr("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                              "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: 10\r\n\r\nnot found\n");
+                sock->close();
+                return;
+            }
+            const int enc = vibeWebPickEnc(idx, acceptsBr, acceptsGzip);
+            const std::string& body = vibeWebAssetBody(idx, enc);
+            std::string hdr = std::string("HTTP/1.1 200 OK\r\nContent-Type: ") + kVibeWebAssets[idx].type + "\r\n"
+                              "Cache-Control: public, max-age=31536000, immutable\r\n"
+                              "X-Content-Type-Options: nosniff\r\n"
+                              "Vary: Accept-Encoding\r\n";
+            if (enc == kVibeEncGzip) hdr += "Content-Encoding: gzip\r\n";
+            if (enc == kVibeEncBrotli) hdr += "Content-Encoding: br\r\n";
+            hdr += "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+            if (head) sock->sendstr(hdr);
+            else sock->sendstr(hdr + body);
+            sock->close();
         } else if (reqLine.rfind("GET /icon-512.png", 0) == 0) {
             std::string body((const char*)kVibeIcon512, kVibeIcon512Len);
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
@@ -17436,10 +17499,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sock->close();
                 return;
             }
-            // ★★★ NOT `std::string(kVibeWebPage)` — that is strlen, and the page contains NUL
+            // ★★★ NOT `std::string(kVibeWebPage)` — that is strlen, and the client contains NUL
             //     bytes (the WASM Opus decoder embeds its module as a binary string). It served
             //     233,787 bytes of a 488,109-byte page for exactly one deploy, with no error at
-            //     either end. vibeWebPage() decodes base64 and knows its own length.
+            //     either end. vibeWebAssetBody() decodes base64 and knows its own length.
             // ★★★ THE DOOR STAMPS ITSELF ON THE PAGE IT SERVES. The front door serves the
             //     SAME bundle as a radio, so the splash drew the single-radio controls (CONNECT,
             //     PIN, a listener count) and only hid them once the client had fetched
@@ -17449,26 +17512,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     The server knows the answer at request time and no fetch can beat it, so it
             //     says so in the markup and the page's CSS hides those controls before first
             //     paint. `html[data-frontdoor]` in web/client/index.html is the other half.
-            // ★★ A COPY, PATCHED ONCE — never the shared string vibeWebPage() returns, which is
-            //    a function-local static handed out by reference to every request.
-            // ★ Injected after the leading <meta charset>, not before it: a byte ahead of the
-            //   charset declaration is the one place a stray <script> can change how the rest of
-            //   the document is decoded.
-            // ★ Built on demand, INSIDE the branch: a radio never serves this and must not pay
-            //   750 KB of resident copy for a page it will never send.
-            auto frontDoorPage = []() -> const std::string& {
-                static const std::string stamped = [] {
-                    static const char kMeta[] = "<meta charset=\"utf-8\">";
-                    std::string p = vibeWebPage();
-                    const size_t at = p.find(kMeta);
-                    if (at == std::string::npos) return p;  // page changed shape — serve it plain
-                    p.insert(at + sizeof(kMeta) - 1,
-                             "<script>document.documentElement.setAttribute('data-frontdoor','1')</script>");
-                    return p;
-                }();
-                return stamped;
-            };
-            const std::string& kBase = frontDoorOnly ? frontDoorPage() : vibeWebPage();
+            // ★★ STAMPED AT BUILD TIME NOW (build-web.mjs, asset kVibeWebDoorPageIdx). The page goes
+            //    out pre-compressed, and a compressed body cannot be patched here — so the build
+            //    makes the door's copy, after the leading <meta charset> exactly as this code did.
+            // ★★★ COMPRESSED WHERE THE CLIENT ACCEPTS IT — the page was 1.3 MB on the wire to every
+            //     LAN listener, every visit (Stuart, 2026-09-30: "optimise the page first — that is
+            //     our biggest issue for users on wank internet connections"). Vary, so no cache
+            //     between us hands a compressed body to a client that did not ask for one.
+            const int pageIdx = frontDoorOnly ? kVibeWebDoorPageIdx : kVibeWebPageIdx;
+            const int pageEnc = vibeWebPickEnc(pageIdx, acceptsBr, acceptsGzip);
+            const std::string& kBase = vibeWebAssetBody(pageIdx, pageEnc);
             /* ★★★ A CONTENT SECURITY POLICY — bounding where the page may fetch, connect, frame
              *  and post, on top of the XSS fixes themselves. It carried a script nonce for one
              *  afternoon; see the note below the policy for why that came out again.
@@ -17485,8 +17538,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  — with every tag stamped — the spectrogram gone and no radio enterable, because
              *  the running bundle CREATES script at runtime and a created script carries no
              *  nonce. A policy that keeps taking the page down is not a security control.
-             *  ★★ What it was ever worth here was already small: the bundle is delivered as
-             *     base64 and eval()d, so 'unsafe-eval' is forced regardless, and the two XSS
+             *  ★★ What it was ever worth here was already small (the bundle was then delivered
+             *     as base64 and eval()d, so 'unsafe-eval' was forced regardless), and the two XSS
              *     findings this audit turned up (an onerror= smuggled through a station logo URL,
              *     markup in an off-air DAB field) are FIXED AT THE SOURCE by escaping in
              *     web/client/src/main.ts. The nonce was defence in depth over a hole already shut.
@@ -17506,20 +17559,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  headless, 2026-09-10). blob: is for the AudioWorklet, which is addModule'd from
                  *  a Blob URL on a secure origin. Neither weakens the injection defence: an
                  *  attacker still cannot run inline script without the nonce. */
-                /* ★★★ 'unsafe-eval' IS FORCED BY OUR OWN BUILD, and it costs less than it looks.
-                 *  The page does not contain its JavaScript as script — build-web.mjs packs it as
-                 *  base64 so it survives being embedded in a C++ header (NUL bytes and all), and
-                 *  the loader decodes it and eval()s the lot. Measured by intercepting eval in the
-                 *  browser: one call, the entire bundle. So a nonce alone can never work here.
-                 *  ★★ WHAT THE NONCE STILL BUYS, which is the part that matters: an INJECTED
-                 *     <script> and an INLINE EVENT HANDLER are both governed by 'unsafe-inline',
-                 *     NOT 'unsafe-eval' — and 'unsafe-inline' is absent. Every XSS this audit found
-                 *     was exactly that shape: an onerror= smuggled through a station logo URL, and
-                 *     markup in an off-air DAB field. Both are still refused.
-                 *  ★ What is given up: a future bug that feeds attacker text INTO an eval sink.
-                 *    There is one eval in the product and it takes a compile-time constant.
+                /* ★★★ 'unsafe-eval' IS GONE (2026-09-30). It was forced by our own build: the page
+                 *  carried its JavaScript as base64 and eval()d the lot, so a policy without it
+                 *  could not run the page at all. The script is a real file now (/vs/, see the route
+                 *  above), there is no eval anywhere in the client (checked: no eval( and no
+                 *  new Function in the bundle or in MapLibre/pmtiles/vibemapgl), so the policy no
+                 *  longer has to allow one. A future bug that feeds attacker text into an eval sink
+                 *  is refused by the browser rather than run.
                  *  ★ 'wasm-unsafe-eval' stays for the Opus decoder; blob: for the AudioWorklet. */
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: https://unpkg.com; "
+                "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://unpkg.com; "
                 "style-src 'self' 'unsafe-inline' https://unpkg.com; "
                 "img-src 'self' data: blob: https: http:; "
                 "media-src 'self' data: blob:; "
@@ -17542,6 +17590,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + csp +
                           "X-Content-Type-Options: nosniff\r\n"
                           "Referrer-Policy: no-referrer\r\n"
+                          "Vary: Accept-Encoding\r\n"
+                          + std::string(pageEnc == kVibeEncBrotli ? "Content-Encoding: br\r\n"
+                                        : pageEnc == kVibeEncGzip ? "Content-Encoding: gzip\r\n" : "") +
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(kPage.size()) + "\r\n\r\n" + kPage);
             sock->close();
