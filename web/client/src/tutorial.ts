@@ -106,7 +106,10 @@ const STEPS: Step[] = [
         + 'processor, memory, temperature and power. It lets an owner check their server at a '
         + 'glance. If the audio breaks up, read it with the connection line at the bottom: a '
         + 'struggling pill means the server is the problem, a healthy pill with a poor connection '
-        + 'line means it is your connection.',
+        + 'line means it is your connection. A SNAIL in the pill means the server is busy but running '
+        + 'slower than it should: a snail with FLAMES means it is too hot and has slowed itself down to '
+        + 'cool off; a snail with a LIGHTNING BOLT means its power supply cannot keep up and it has '
+        + 'slowed itself down to cope. A plain snail means it has slowed down and cannot tell why.',
   },
 ];
 

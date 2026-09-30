@@ -9013,6 +9013,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'link', title: 'How healthy is the connection?',
       body: 'Phone ⇄ bars ⇄ receiver. The bars are the health of the link between you and the server, and the figures beside them are what is actually arriving — kilobytes per second and frames per second. If the bars drop it is nearly always the receiver or the route to it, not the app; the numbers tell you whether data is still flowing.',
       target: tourRef('linkMeter') },
+    // ★ The SERVER side of the same question — read together with the card above (Stuart, 2026-09-28:
+    //   the pill is for owners at a glance, and for listeners to tell the server from their own link).
+    //   The snails (2026-09-30): Stuart asked for them to be explained here — fire = heat, bolt = power,
+    //   both read from the hardware, never guessed. On a server that draws no pill the card is centred.
+    { id: 'health', title: 'Is the server coping?',
+      body: 'The SERVER HEALTH pill shows how the receiver itself is doing — its processor, memory, temperature and power. If the audio breaks up, read it with the connection bars: a struggling pill means the server is the problem, a healthy pill with poor bars means it is the link. A snail means the server is busy but running slower than it should: a snail with flames means it is too hot and has slowed itself down to cool off, a snail with a lightning bolt means its power supply cannot keep up. A plain snail means it has slowed down and cannot tell why.',
+      target: tourRef('healthPill') },
     // ★★ THIS CARD USED TO BE WRONG, and a tour that misdirects is worse than no tour: it sends
     //    someone hunting through the cog for a noise-reduction slider that is not there, and they
     //    conclude the feature is missing rather than that the card is. NR, the auto notch and
@@ -10013,7 +10020,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ pointerEvents none: it is a readout, and it sits over the frequency scale — a touch that
             lands on it must reach the scale, like every other pill anchored here. */}
       {!!health && (
-        <View pointerEvents="none"
+        <View pointerEvents="none" ref={tourRef('healthPill')} collapsable={false}
               onLayout={(e) => setHealthPillH(Math.round(e.nativeEvent.layout.height))}
               style={[styles.rxHealth, { top: rightStackTop, right: rightInset }]}>
           <PanelBoundary name="Health">
