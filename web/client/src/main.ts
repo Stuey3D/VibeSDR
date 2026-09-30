@@ -9151,7 +9151,20 @@ function initDecoders(host: string, auth: AuthState) {
       pushSpotsToMap();      // ★ keep an open map current — see pushSpotsToMap()
       setDecLive(true);
     },
-  });
+    // ★★ THE SERVER SAID NO — say so, in its words, where the decoder's output would have been.
+    //    Most often every decoder slot on the server is in use ("All 4 decoder slots on this
+    //    server are in use — try again shortly"). A panel that just sat on "listening…" would
+    //    read as a broken decoder; a button left lit would read as one that is running.
+    onRefused: (message, what) => {
+      if (what === 'spots') $<HTMLButtonElement>('spotsBtn').classList.remove('on');
+      else if (activeDec && activeDec !== 'rds') { activeDec = null; syncDecButtons(); }
+      $('decStatus').textContent = 'not started';
+      const el = $('decText');
+      el.classList.remove('off');
+      el.textContent = message;
+      setDecLive(false);
+    },
+  }, visitSessionId());
   decoders.connect();
 
   initRdsResize();

@@ -16169,6 +16169,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     while (!mhz.empty() && (mhz.back()=='\n'||mhz.back()=='\r')) mhz.pop_back();
                 }
                 if (!gov.empty()) j += ",\"governor\":\"" + jsonEscape(gov) + "\"";
+                // ★★ ON A PI, THE FIRMWARE'S CLOCK — readSys() swaps in the mailbox's measured figure
+                //    (vibe_vcio.h). scaling_cur_freq is the kernel's REQUEST: it read 2400 MHz on the
+                //    Pi 500 while the firmware held the ARM at 1000 for under-voltage (2026-09-30).
+                //    The same rule as the governor above — show what is true. sysfs is the fallback.
+                { const vibeadmin::SysStats ss = vibeadmin::readSys();
+                  if (ss.haveFw && ss.cpuKHz > 0) mhz = std::to_string((long long)ss.cpuKHz); }
                 if (!mhz.empty()) j += ",\"cpuKHz\":" + mhz;
             }
             /* ★★★ THE DAB LANDING STATION'S TWO FACTS (2026-09-28). `dabHw`: could this radio do DAB
@@ -19454,7 +19460,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //    panel at a time, so selecting RTTY is also closing Advanced RDS.
                 if (ext == "rds") {
                     const std::string who = !sess.empty() ? sess : decoderSessionByAddress(sock);
-                    if (host) host->stop();
+                    // ★ Only a listener's OWN host: on a shared dial the running decoder may be
+                    //   somebody else's, and opening Advanced RDS must not switch it off under them.
+                    if (host && perVfo) host->stop();
                     rdsxDecoderSub(sock.get(), who, true); rdsHere = true;
                     sendText(sock, "{\"type\":\"audio_extension_attached\"}");
                     continue;

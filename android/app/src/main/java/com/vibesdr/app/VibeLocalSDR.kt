@@ -275,6 +275,9 @@ object VibeLocalSDR {
     /** ★ Raw IQ out: 0 off, 1 local only, 2 local + public; max 0 = this phone's default (1). */
     fun setRawIq(mode: Int, max: Int, lanMaxHz: Int = 0) { ensureLoaded(); nativeSetRawIq(mode, max, lanMaxHz) }
     private external fun nativeSetRawIq(mode: Int, max: Int, lanMaxHz: Int)
+    /** ★ Decoders at once on this server (RTTY, WEFAX, SSTV, time, FT8); 0 = this device's default. */
+    fun setDecoderMax(max: Int) { ensureLoaded(); nativeSetDecoderMax(max) }
+    private external fun nativeSetDecoderMax(max: Int)
     fun setNbWide(mode: Int) { ensureLoaded(); nativeSetNbWide(mode) }
     private external fun nativeSetNbWide(mode: Int)
 

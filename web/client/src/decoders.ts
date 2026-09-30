@@ -64,6 +64,9 @@ export interface DecoderCallbacks {
   onStatus?: (text: string) => void;
   /** An FT8/FT4 decode. */
   onSpot?: (spot: Spot) => void;
+  /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
+   *  `message` is the server's own words, shown as they are (one definition, every client). */
+  onRefused?: (message: string, what: 'decoder' | 'spots') => void;
   onOpen?: () => void;
   onClose?: () => void;
 }
@@ -112,9 +115,14 @@ export class DecoderClient {
   private mode: DecoderMode = null;
   private spotsOn = false;
 
-  constructor(host: string, auth: AuthState, cb: DecoderCallbacks) {
+  constructor(host: string, auth: AuthState, cb: DecoderCallbacks, sessionId = '') {
     // ★ Same rule as every other URL: an https page cannot open a ws:// socket. See origin.ts.
-    this.url = `${wsBase(host)}${withAuth('/ws/dxcluster', auth)}`;
+    // ★★★ WITH THE SESSION ID, like the spectrum and audio sockets. This socket carried none, so on
+    //     a per-VFO server the decoders could not tell WHOSE audio to decode and fell back to "the
+    //     first listener": another listener's WEFAX replaced your RTTY, and FT8 decoded somebody
+    //     else's frequency (Pi 500, 2026-09-30). The app has always sent it.
+    const q = sessionId ? `/ws/dxcluster?user_session_id=${encodeURIComponent(sessionId)}` : '/ws/dxcluster';
+    this.url = `${wsBase(host)}${withAuth(q, auth)}`;
     this.cb = guardCallbacks('web-ui', cb);   // ★ a decoder panel that throws stays its own problem
   }
 
@@ -198,6 +206,15 @@ export class DecoderClient {
   }
 
   private _handleMessage(msg: any) {
+    if (msg.type === 'decoder_refused') {
+      // ★★ FORGET WHAT WAS REFUSED, so a reconnect does not ask again and again: the onopen handler
+      //    re-asserts `mode` and `spotsOn`, which is exactly right for a decoder that was RUNNING and
+      //    exactly wrong for one the server said no to. The listener asks again when they choose to.
+      const what = msg.what === 'spots' ? 'spots' : 'decoder';
+      if (what === 'spots') this.spotsOn = false; else { this.mode = null; this.params = {}; }
+      this.cb.onRefused?.(String(msg.message || 'The server could not start that decoder.'), what);
+      return;
+    }
     if (msg.type === 'digital_spot' && msg.data) {
       const d = msg.data;
       this.cb.onSpot?.({

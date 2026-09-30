@@ -15,8 +15,11 @@ int main(int argc, char** argv) {
     // ★ A path given, or the cached download (fetched on first use) — see ensureDabClip.
     const std::string clip = argc > 2 ? std::string(argv[2])
                                       : vibe::ensureDabClip(std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
+    // ★ VIBE_BENCH_OFFLINE=1: no uplink measurement (it posts 4 MB to the directory) — for a bench
+    //   run that must not touch the network.
+    const double uplink = std::getenv("VIBE_BENCH_OFFLINE") ? -1 : -2;
     const std::string j = vibe::runBenchmark([](int d, int n, const std::string& l) {
-        std::fprintf(stderr, "[%d/%d] %s\n", d, n, l.c_str()); }, secs, -2,
+        std::fprintf(stderr, "[%d/%d] %s\n", d, n, l.c_str()); }, secs, uplink,
         [&] { return vibe::runDabRows(clip, secs); });
     std::puts(j.c_str());
     return 0;

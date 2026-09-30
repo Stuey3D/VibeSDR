@@ -401,6 +401,17 @@ export class DecoderClient {
       else if (typeof e.data === 'string') {
         guardJson('decoder', e.data, (m: any) => {
           if (m.type === 'audio_extension_attached') this.cb.onStatus('attached');
+          // ★★ A VibeServer REFUSED the decoder — most often every decoder slot on the server is
+          //    in use ("All 4 decoder slots on this server are in use — try again shortly"). The
+          //    server's own words go in the status line verbatim (one definition, every client),
+          //    and what was refused is FORGOTTEN so the reconnect in onopen does not ask again in
+          //    a loop; the listener asks again when they choose to.
+          else if (m.type === 'decoder_refused') {
+            const msg = String(m.message ?? 'The server could not start that decoder.');
+            if (m.what === 'spots') this.spotsKind = null; else this.active = null;
+            this.cb.onStatus(msg);
+            this.cb.onDot('idle');
+          }
           else if (m.type === 'audio_extension_error') {
             // Server field is `error` (audio_extension_manager.go sendErrorSafe)
             const msg = String(m.error ?? m.message ?? 'extension error');

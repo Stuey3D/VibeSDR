@@ -1203,6 +1203,11 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetRawIq(JNIEnv*, jobject, jint mode, ji
     vibe::LocalSdrShim::setVibeServerRawIq((int)mode, (int)max, (int)lanMaxHz);
 }
 extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetDecoderMax(JNIEnv*, jobject, jint max) {
+    // ★ One process, one radio on Android: no slot directory, so the limit is counted in-process.
+    vibe::LocalSdrShim::setDecoderMax(max < 0 ? 0 : (int)max);
+}
+extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetNbWide(JNIEnv*, jobject, jint mode) {
     vibe::LocalSdrShim::setVibeServerNbWide((int)mode);
 }

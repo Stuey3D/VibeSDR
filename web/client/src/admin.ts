@@ -1531,6 +1531,27 @@ async function refresh() {
       show('updSrvDay', 'updSrvHour', st.updateSrvHour, st.updateSrvDay);
       show('updAllDay', 'updAllHour', st.updateAllHour, st.updateAllDay);
     }
+    // ★★ DECODERS — what is in use right now, against the limit, from the server (B6). A server
+    //    too old to send `decoders` hides the row rather than showing a control that does nothing.
+    {
+      const d = st.decoders;
+      const row = document.getElementById('admDecRow');
+      const note = document.getElementById('admDecNote');
+      const inp = document.getElementById('admDecMax') as HTMLInputElement | null;
+      if (row) row.hidden = !d;
+      if (note) note.hidden = !d;
+      if (d && note) {
+        const running = Array.isArray(d.running) ? d.running : [];
+        const what = running.map((r: any) => [r.decoder, r.spots ? 'FT8' : ''].filter(Boolean).join(' + ')).filter(Boolean);
+        note.textContent = `${d.inUse ?? 0} of ${d.max} in use on this machine`
+          + (what.length ? ` (${what.join(', ')})` : '')
+          + ` — ${d.set > 0 ? 'your limit' : `automatic for this hardware (${d.default})`}. `
+          + 'On a locked range each listener decodes their own frequency; on a shared dial one decoder '
+          + 'serves everybody and counts once. The next one past the limit is refused, and the listener is told why.';
+      }
+      // ★ Never yank a field the owner is typing in.
+      if (d && inp && document.activeElement !== inp) inp.value = d.set > 0 ? String(d.set) : '';
+    }
     $('adminHost').textContent = host;
   } catch (e) {
     // ★ SAY SO IN PLACE rather than silently freezing. A monitoring page that stops updating
@@ -1905,6 +1926,16 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
       } catch (e) { msg('actMsg', (e as Error).message); }
     });
   }
+
+  // ── Decoders at once (B6) ─────────────────────────────────────────────────────────────────
+  $('admDecSave')?.addEventListener('click', async () => {
+    const v = Math.max(0, Math.min(64, parseInt(($('admDecMax') as HTMLInputElement).value || '0', 10) || 0));
+    try {
+      const r = await post('decoders', { max: v });
+      msg('actMsg', v ? `Saved — at most ${r.max} decoders at once on this machine.`
+                      : `Saved — automatic: ${r.max} decoders at once for this hardware.`);
+    } catch (e) { msg('actMsg', (e as Error).message); }
+  });
 
   // ── ★★ THE NOTICE TO LISTENERS ────────────────────────────────────────────────────────────
   const postNotice = async (text: string, mins: number) => {

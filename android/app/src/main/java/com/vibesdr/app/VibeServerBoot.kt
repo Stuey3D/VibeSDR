@@ -272,6 +272,9 @@ object VibeServerBoot {
             // ★ Absent = -1 = the build's default, so the main app (which never sends it) is unchanged.
             VibeLocalSDR.setDabScanLabels(cfg.i("dabScanLabels", -1))
             // ★ Raw IQ out — the owner's mode and cap, same source as every other setting here.
+            // ★ Decoders at once (B6). Absent/0 = this device's default — applied on EVERY start, so a
+            //   limit from a previous run can never outlive the config that set it.
+            VibeLocalSDR.setDecoderMax(cfg.i("decoderMax", 0).coerceAtLeast(0))
             VibeLocalSDR.setRawIq(cfg.s("rawIq").toIntOrNull() ?: 0, cfg.s("rawIqMax").toIntOrNull() ?: 0,
                                   cfg.s("rawIqLanMaxHz").toIntOrNull() ?: 0)
             // ★ Wide impulse blanker — off / auto (HF only) / on; auto when unset.

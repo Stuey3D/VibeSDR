@@ -22,6 +22,7 @@
 //   every build. It had been put inside it, so the iOS lib (built without Opus) failed with
 //   "undeclared identifier vibehealth" — found by the first build_ios.sh since (2026-09-28).
 #include "vibe_health.h"
+#include "vibe_benchmark_decoders.h"   // ★ every decoder timed, and how many at once (B6)
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -363,7 +364,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         auto& p = benchProgress();
         p.running.store(true);
         p.step.store(0);
-        p.steps.store(1 + 1 + 7 + 4 + (moreRows ? 2 : 0));
+        p.steps.store(1 + 1 + 7 + 4 + 6 + (moreRows ? 2 : 0));
         { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
     }
     /* ★★★ FIRST, WHILE THE MACHINE IS COOLEST: the all-core clock calibration the throttle snail is
@@ -448,6 +449,15 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
             perListener[l.id] = res.back().pct;
         }
     }
+    /* ★★★ THE DECODERS, EACH ON THIS BOX (B6) — see vibe_benchmark_decoders.h. Their rows join the
+     *  table like any other; the recommendation below is what becomes the owner's decoder limit. */
+    double heaviestDec = 0; std::string heaviestId;
+    for (const auto& d : benchdec::runDecoderRows(secondsPerScenario, [&](const std::string& l) {
+             benchStep(l); if (progress) progress(N, N, l); })) {
+        Result r; r.id = d.id; r.label = d.label; r.rate = 48000; r.pct = d.pct; r.hottest = "decoder";
+        res.push_back(r);
+        if (d.pct > heaviestDec) { heaviestDec = d.pct; heaviestId = d.id; }
+    }
     if (moreRows) { if (progress) progress(N, N, "DAB+"); for (auto& r : moreRows()) res.push_back(r); }
     if (progress) progress(N, N, "done");
     { auto& p = benchProgress(); p.step.store(p.steps.load()); { std::lock_guard<std::mutex> lk(p.m); p.label = "done"; } }
@@ -491,7 +501,23 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     } else j += ",\"network\":null";
     benchProgress().running.store(false);
     j += ",\"lockedUsers\":{\"wfm\":" + std::to_string(usersFor("lk_wfm")) + ",\"nfm\":" + std::to_string(usersFor("lk_nfm"))
-       + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb")) + "}}";
+       + ",\"am\":" + std::to_string(usersFor("lk_am")) + ",\"ssb\":" + std::to_string(usersFor("lk_ssb")) + "}";
+    /* ★★★ HOW MANY DECODERS AT ONCE, WITH A FULL HOUSE LISTENING (Stuart: "with this current load
+     *     another 4 users could have decoders but not all 10 at once"). The house is ten narrow-band
+     *     listeners — the per-VFO case, where every listener costs their own chain — or as many as
+     *     the box fits if that is fewer. `recommend` is what the setup page and the app write into
+     *     the config as the owner's default decoder limit. */
+    {
+        const int house = std::min(10, usersFor("lk_nfm"));
+        auto pl = perListener.find("lk_nfm");
+        const double per = pl == perListener.end() ? 0.0 : pl->second;
+        const int rec = benchdec::recommendDecoders(cores, per, house, heaviestDec);
+        char db[256];
+        snprintf(db, sizeof db, ",\"decoders\":{\"recommend\":%d,\"forUsers\":%d,\"perListenerPct\":%.1f,"
+                 "\"heaviest\":\"%s\",\"heaviestPct\":%.1f}", rec, house, per, heaviestId.c_str(), heaviestDec);
+        j += db;
+    }
+    j += "}";
     return j;
 }
 

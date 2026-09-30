@@ -3858,6 +3858,16 @@ select.btn { padding: 6px 8px; }
       fixes current, but an OS upgrade can occasionally need attention and nobody will be watching,
       so weekly is the sensible choice. Both run at the hour you pick, local time.
     </p>
+    <!-- ★★★ DECODERS AT ONCE (B6, 2026-09-30). On a locked range every listener runs their own
+         decoder on their own frequency, so the machine's CPU — across all its radios — is what
+         limits them. The row says what is in use NOW and what the limit is, read from the server
+         every refresh; blank + SAVE goes back to the automatic figure for this hardware. -->
+    <div class="aBanForm" id="admDecRow">
+      <label class="dim" style="align-self:center;min-width:9em">Decoders at once</label>
+      <input id="admDecMax" class="btn" type="number" min="0" max="64" placeholder="auto" style="width:6em">
+      <button class="btn" id="admDecSave">SAVE</button>
+    </div>
+    <p class="dim wrap aNote" id="admDecNote"></p>
     <!-- ★★ HIGH DETAIL MAPS — the optional close-in pack for the GPU map this server serves at
          /mapgl/ (towns, lakes, runways). One row that says what is true NOW, read from the server's
          status every refresh: installed + space used, not installed + what it costs, the download

@@ -99,6 +99,9 @@ export type VibeServerConfig = {
   rawIq?: number;
   /** How many raw IQ streams at once. 0 = the server's default (1 on a phone). */
   rawIqMax?: number;
+  /** ★ How many decoders the server runs at once (RTTY, WEFAX, SSTV, time, FT8). 0 = the default for
+   *  this device; the benchmark recommends a measured figure. See vibe_decoder_host.h. */
+  decoderMax?: number;
   /** Seconds after the last listener before the capture parks to save power. The device stays
    *  CLAIMED so it restarts instantly.
    *  ★ NOT the Linux "release to another program": Android's permission model means nothing else
@@ -272,6 +275,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     spectrogram: cfg.spectrogram ?? false,
     rawIq: cfg.rawIq ?? 0,
     rawIqMax: cfg.rawIqMax ?? 0,
+    decoderMax: cfg.decoderMax ?? 0,
     // ★ 300 s matches the desktop default. The radio parks; it is never handed away.
     idleGraceSec: cfg.idleGraceSec ?? 300,
     antenna: cfg.antenna ?? '',

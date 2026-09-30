@@ -41,6 +41,8 @@ flags_for() {
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
     test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
+    test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     *)               echo "" ;;
   esac
 }
@@ -81,7 +83,7 @@ deps_for() {
     test-geoip)         echo "$SRC/geoip.cpp $SRC/proc.cpp" ;;
     test-asndb)         echo "$SRC/asndb.cpp $SRC/proc.cpp" ;;
     test-admin-banlist) echo "" ;;
-    test-decoder-hosts) echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-decoder-hosts|test-bench-decoders) echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
     *)                  echo "" ;;
@@ -93,7 +95,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts)
+    test-decoder-hosts|test-bench-decoders)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -154,6 +156,9 @@ if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)
 # ★ The web playout (worklet AND the main-thread fallback) must come back clean by itself after the
 #   server has delivered audio in bursts — the Sony's narrow-WFM overload, 2026-09-29. Silent.
 if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★ The web decoder socket says whose it is (user_session_id) and takes a refusal — shown in the
+#   server's words and FORGOTTEN, so the 3-s reconnect cannot turn one "no" into a loop (B6).
+if node scripts/test-web-decoder-refusal.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

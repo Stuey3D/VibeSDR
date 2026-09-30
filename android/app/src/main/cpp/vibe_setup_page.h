@@ -382,6 +382,17 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           address</b>, so the pair count as one listener even though they are two devices. And
           <b>behind a proxy you have not named above</b>, every listener arrives as the proxy — so
           the rule would refuse everyone after the first. Naming the proxy is the better fix.</div></label>
+      <!-- ★★★ DECODERS AT ONCE (B6, 2026-09-30). On a locked range every listener now runs their OWN
+           decoder on their OWN frequency, so it is the machine's CPU — across every radio on it —
+           that limits them. The benchmark times each decoder here and fills this in at first setup. -->
+      <label><span class="lbl">Decoders at once</span>
+        <input type="number" id="decoderMax" min="0" max="64" placeholder="automatic">
+        <div class="hint">How many decoders &mdash; RTTY, NAVTEX, WEFAX, SSTV, time signals, FT8 &mdash; this
+          machine runs at the same time, across all its radios. On a locked range each listener
+          decodes their own frequency; on a shared dial everyone shares one decoder, which counts
+          once. The next one past the limit is refused and the listener is told why. The benchmark
+          above measures each decoder on this machine and sets this for you; blank uses a cautious
+          figure for this hardware.</div></label>
     </div>
 
       <div class="card">
@@ -1450,6 +1461,11 @@ function renderBench(j) {
     bits.push("On a locked range this box fits about <b>" + (lu.wfm || 0) + "</b> WFM or <b>"
               + (lu.nfm || 0) + "</b> narrow-mode listeners");
   }
+  // ★ How many decoders fit beside a full house — the figure that becomes the decoder limit.
+  if (BENCH.decoders && BENCH.decoders.recommend) {
+    bits.push("With " + (BENCH.decoders.forUsers || 0) + " listeners on it, this box can run about <b>"
+              + BENCH.decoders.recommend + "</b> decoders at once");
+  }
   const red = (BENCH.rows || []).filter(r => r.grade === "red").map(r => r.label || r.id);
   if (red.length) bits.push("Too heavy for this box: <b>" + red.map(esc).join(", ") + "</b>");
   adv.innerHTML = bits.join("<br>");
@@ -1493,6 +1509,15 @@ function benchApplyDefaults() {
   if (cap > 0 && cap < 99 && $("users") && Number($("users").value || 1) > cap) {
     $("users").value = String(cap);
     benchNote($("users"), "Listener limit set to " + cap + " — what this box and its link measured.");
+  }
+  // ★★★ DECODERS AT ONCE — the measured figure becomes the owner's default. The SAME rule as
+  //     ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS): only ever tightening what is set.
+  const dec = BENCH.decoders && Number(BENCH.decoders.recommend);
+  const cur = parseInt(($("decoderMax") && $("decoderMax").value) || "0", 10) || 0;
+  if (dec > 0 && $("decoderMax") && (cur === 0 || cur > dec)) {
+    $("decoderMax").value = String(dec);
+    benchNote($("decoderMax"), "Set to " + dec + " — what this box measured with "
+              + (BENCH.decoders.forUsers || 0) + " listeners on it.");
   }
 }
 
@@ -3766,6 +3791,8 @@ function fill() {
   $("maxRadiosPerIp").value = String(
     (cfg.maxRadiosPerIp !== undefined && cfg.maxRadiosPerIp !== null) ? cfg.maxRadiosPerIp
       : (cfg.oneRadioPerIp === false ? 0 : 1));
+  // ★ Blank = 0 = the default for this hardware, which is what an older config means too.
+  $("decoderMax").value = cfg.decoderMax > 0 ? String(cfg.decoderMax) : "";
   // ★★ FILLED IN THE SAME EDIT THAT ADDED THE FIELDS. A control the page never populates shows
   //    the owner an empty box over a setting that is actually on, and the next save writes the
   //    blank back — which is how twelve settings reverted on every start once already.
@@ -4333,6 +4360,7 @@ function stashServer() {
   // ★ Sent alongside for a server that predates the cap: "enforced" unless the owner chose no
   //   limit, which is the safer of the two answers an older build can hold.
   cfg.oneRadioPerIp  = cfg.maxRadiosPerIp !== 0;
+  cfg.decoderMax     = Math.max(0, parseInt($("decoderMax").value || "0", 10) || 0);
   cfg.dirList       = $("dirList").checked;
   cfg.dirName       = $("dirName").value.trim();
   cfg.dirPublicUrl  = $("dirPublicUrl").value.trim();
@@ -4369,6 +4397,7 @@ function collect() {
     trustedProxies: $("trustedProxies").value.trim(),
     maxRadiosPerIp: parseInt($("maxRadiosPerIp").value, 10) || 0,
     oneRadioPerIp: (parseInt($("maxRadiosPerIp").value, 10) || 0) !== 0,
+    decoderMax:       Math.max(0, parseInt($("decoderMax").value || "0", 10) || 0),
     dirList:          $("dirList").checked,
     dirName:          $("dirName").value.trim(),
     dirPublicUrl:     $("dirPublicUrl").value.trim(),
