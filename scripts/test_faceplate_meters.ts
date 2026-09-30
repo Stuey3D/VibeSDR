@@ -11,6 +11,7 @@ import {
   portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind,
   VU_SEGMENTS, VU_LABELS, VU_THRESHOLDS, LED_SPEC, RING_OPEN, RING_CLOSED, ledColourOf, ringSegment, vuPos, peakStep,
   phi, edgeBrightness, segmentTarget, makeWindow, pushSample, eyeStep, steadyLit,
+  scalePointX, needleX, needleSpring, peakNeedleStep,
 } from '../src/constants/meters.ts';
 
 let fails = 0, passes = 0;
@@ -196,6 +197,60 @@ eq('muting: no partial brightness', [segmentTarget(4, 4.4, 1, false, true, false
   }
   eq('±0.3 dB dither round T: no toggling', toggles, 0);
   eq('steady target is 0 / 1 only', [segmentTarget(4, 4.53, 2, true, false, false), segmentTarget(4, 4.6, 2, true, false, false)], [0, 1]);
+}
+
+// ── §4.5 THE EDGEWISE NEEDLES ────────────────────────────────────────────────
+// Scale points at 8 + (i + 0.5) × (w − 16) / 10 — the mockup's portrait card (328 wide).
+eq('scale points (mockup 328 pt card)', Array.from({ length: 10 }, (_, i) => +scalePointX(i, 328).toFixed(1)),
+   [23.6, 54.8, 86, 117.2, 148.4, 179.6, 210.8, 242, 273.2, 304.4]);
+// ★ The needle, the ring and the LEDs share ONE table: position T_i lands exactly on scale point i.
+for (let i = 0; i < 10; i++) near(`needle at threshold ${i} sits on its label`, needleX(VU_THRESHOLDS[i], 328), scalePointX(i, 328), 1e-9);
+eq('needle pinned inside the scale', [needleX(-3, 328), needleX(14, 328)], [8, 320]);
+// Ballistics: simulate the spring the way Reanimated integrates it (semi-implicit, 1 ms steps).
+function step(sp: { mass: number; stiffness: number; damping: number }) {
+  let x = 0, v = 0, t99 = -1, maxX = 0;
+  for (let t = 1; t <= 1500; t++) {
+    const a = (-sp.stiffness * (x - 1) - sp.damping * v) / sp.mass;
+    v += a / 1000; x += v / 1000;
+    maxX = Math.max(maxX, x);
+    if (t99 < 0 && Math.abs(x - 1) <= 0.01) {
+      // "99 %" = inside 1 % and staying there
+      let stays = true, xx = x, vv = v;
+      for (let u = t + 1; u <= 1500 && stays; u++) {
+        const aa = (-sp.stiffness * (xx - 1) - sp.damping * vv) / sp.mass;
+        vv += aa / 1000; xx += vv / 1000;
+        if (Math.abs(xx - 1) > 0.01) stays = false;
+      }
+      if (stays) t99 = t;
+    }
+  }
+  return { t99, over: maxX - 1 };
+}
+{
+  const vu = step(needleSpring(false));
+  ok(`VU ballistics: 99 % within 300 ms (${vu.t99} ms)`, vu.t99 > 0 && vu.t99 <= 300);
+  ok(`VU ballistics: ~1 % overshoot (${(vu.over * 100).toFixed(2)} %)`, vu.over > 0.005 && vu.over < 0.02);
+  const rm = step(needleSpring(true));
+  ok(`Reduce Motion: still moving, 99 % within 300 ms (${rm.t99} ms)`, rm.t99 > 0 && rm.t99 <= 310);
+  ok(`Reduce Motion: no overshoot (${(rm.over * 100).toFixed(3)} %)`, rm.over < 0.001);
+}
+// The peak needle: pushed by the needle's on-screen position, holds ~1 s, drifts ~6 dB/s easing in.
+{
+  const p = { pos: 0, heldMs: 0 };
+  eq('pushed up by the needle', peakNeedleStep(p, 6, 16), 6);
+  eq('never ahead of the needle it follows', peakNeedleStep(p, 6.5, 16), 6.5);
+  let t = 0;
+  for (; t < 990; t += 10) peakNeedleStep(p, 2, 10);
+  eq('holds ~1 s after the needle falls away', p.pos, 6.5);
+  const at = (ms: number) => { for (let k = 0; k < ms; k += 10) peakNeedleStep(p, 2, 10); return p.pos; };
+  const a1 = at(100), a2 = at(100);
+  ok('then drifts down, easing in (slow first)', 6.5 - a1 < a1 - a2);
+  at(200);                                            // past the 300 ms ease-in
+  const before = p.pos; at(1000);
+  near('~6 dB/s once it has eased in (in segments: 6 / 9 per s)', before - p.pos, 6 / 9, 0.02);
+  for (let k = 0; k < 3000; k++) peakNeedleStep(p, 2, 10);
+  eq('…until it is caught by the needle again', p.pos, 2);
+  eq('and it can never fall below the needle', peakNeedleStep(p, 3, 10), 3);
 }
 
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate meters: ${passes} passed, ${fails} failed`);

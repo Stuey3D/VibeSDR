@@ -47,10 +47,11 @@ import type { SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
 import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
 import LedVu from './LedVu';
+import EdgeMeter from './EdgeMeter';
 import { GhostGrid, SegDigits } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
 import { FONT_DOTO, rgba } from '../constants/faceplate';
-import { portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind } from '../constants/meters';
+import { DECK, portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind } from '../constants/meters';
 import { statusGainParts, type StatusItem } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
@@ -1077,11 +1078,18 @@ function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeL
 function MeterHousing({ kind, height, shared, lip, bus }: {
   kind: MeterKind; height: number; shared: boolean; lip: string; bus?: MeterBus;
 }) {
+  const s = useUiScale();
   return (
     <View style={[cd.housing, { height }]}>
       <View pointerEvents="none" style={cd.housingShade} />
       <View pointerEvents="none" style={[cd.lip, { backgroundColor: kind === 'vu' ? 'rgba(255,255,255,0.22)' : lip }]} />
       {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} />}
+      {kind === 'edge' && (
+        // §4.5: a 28 pt window in the 34 pt housing (padding 3; 2 with the shared banner).
+        <View style={{ padding: s.r(shared ? DECK.edgePadShared : DECK.edgePad) }}>
+          <EdgeMeter bus={bus} height={s.r(DECK.edgeWindow)} />
+        </View>
+      )}
     </View>
   );
 }

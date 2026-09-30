@@ -297,3 +297,57 @@ export function segmentTarget(i: number, muPos: number, sigmaPos: number, steady
   if (muting) return mu > T ? 1 : 0;
   return edgeBrightness(mu, T, sigmaPos * DB_PER_SEG);
 }
+
+// ── §4.5 The edgewise needles ─────────────────────────────────────────────────
+
+/** Scale inset each side (§4.5 "scale points at 8 + (i + 0.5) × (width − 16) / 10"). */
+export const EDGE_INSET = 8;
+/** x of a scale point `i` (label / major tick) in a window `w` wide. */
+export function scalePointX(i: number, w: number): number {
+  return EDGE_INSET + (i + 0.5) * (w - 2 * EDGE_INSET) / VU_SEGMENTS;
+}
+/** x of a segment POSITION (0..10) — the same table: position T_i lands on scale point i. */
+export function needleX(pos: number, w: number): number {
+  'worklet';
+  const p = Math.max(0, Math.min(VU_SEGMENTS, pos));
+  return EDGE_INSET + p * (w - 2 * EDGE_INSET) / VU_SEGMENTS;
+}
+
+export interface SpringParams { mass: number; stiffness: number; damping: number }
+/**
+ * Signal ballistics (§4.5): a real VU movement — 99 % in 300 ms with ~1 % overshoot; with Reduce
+ * Motion, CRITICALLY damped (no overshoot, same 300 ms). Mass 1, so ω = √k and ζ = c / 2ω.
+ *   ζ = 0.82 → overshoot e^(−ζπ/√(1−ζ²)) ≈ 1.1 %; ω chosen so the envelope is inside 1 % at 300 ms.
+ *   ζ = 1   → (1 + ωt)·e^(−ωt) = 0.01 at ωt ≈ 6.64.
+ */
+export function needleSpring(reduceMotion: boolean): SpringParams {
+  if (reduceMotion) {
+    const w = 6.64 / 0.3;
+    return { mass: 1, stiffness: w * w, damping: 2 * w };
+  }
+  const z = 0.82;
+  const w = Math.log(100 / Math.sqrt(1 - z * z)) / (z * 0.3);
+  return { mass: 1, stiffness: w * w, damping: 2 * z * w };
+}
+
+/** Peak needle: holds ~1 s, then drifts down ~6 dB/s, EASING IN (the drift speeds up over ~0.3 s). */
+export const PEAK_NEEDLE_HOLD_MS = 1000;
+export const PEAK_NEEDLE_DB_PER_S = 6;
+export const PEAK_NEEDLE_EASE_MS = 300;
+export interface PeakNeedle { pos: number; heldMs: number }
+/**
+ * One frame of the peak needle. ★ It is PUSHED by the signal needle's ON-SCREEN position (§4.5:
+ * `peak = max(peak, signalNeedleAnimatedPos)`), never the raw level, so it can never jump ahead.
+ */
+export function peakNeedleStep(p: PeakNeedle, needlePos: number, dtMs: number): number {
+  'worklet';
+  const dt = Math.max(0, Math.min(250, dtMs));
+  if (needlePos >= p.pos) { p.pos = needlePos; p.heldMs = 0; return p.pos; }
+  p.heldMs += dt;
+  if (p.heldMs <= PEAK_NEEDLE_HOLD_MS) return p.pos;
+  const since = p.heldMs - PEAK_NEEDLE_HOLD_MS;
+  const ease = Math.min(1, since / PEAK_NEEDLE_EASE_MS);
+  const rate = (PEAK_NEEDLE_DB_PER_S / DB_PER_SEG) * ease * ease;   // segment units per second
+  p.pos = Math.max(needlePos, p.pos - rate * dt / 1000);
+  return p.pos;
+}
