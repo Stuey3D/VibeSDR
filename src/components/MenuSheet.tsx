@@ -55,7 +55,10 @@ import {
   type PaneChoice, type Chassis, type SignalMeter,
 } from '../constants/faceplate';
 import { AUTO_REASON_NOTE } from '../constants/transparency';
-import { usePopupStyles, usePopupTheme, type PopupTokens } from './PopupShell';
+import {
+  usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
+  PopupKey, PopupFader, PopupPlate, PopupHandle, type PopupTokens,
+} from './PopupShell';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -438,10 +441,11 @@ function StepSlider({
 
 function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIconName; first?: boolean }) {
   const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
   return (
     <View style={[styles.sectionBar, first && styles.sectionBarFirst]}>
       <View style={styles.sectionRow}>
-        {icon && <SectionIcon name={icon} size={16} color={C.sectionC} />}
+        {icon && <SectionIcon name={icon} size={16} color={pt.metal ? pt.label : C.sectionC} />}
         <Text style={styles.sectionLabel}>{label}</Text>
       </View>
     </View>
@@ -469,12 +473,15 @@ function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean })
   );
 }
 
-function Btn({ label, active, danger, onPress, full, style, icon, skipNav }: {
+function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip }: {
   label: string; active?: boolean; danger?: boolean;
   onPress?: () => void; full?: boolean; style?: object; icon?: SectionIconName;
   /** Keep OUT of the keyboard focus order — used for buttons that open the receiver's own
    *  pages, where none of our shortcuts apply. See useNavButton. */
   skipNav?: boolean;
+  /** Silver / black: the input-selector LED pip. Defaults to "this key has an on/off state"
+   *  (`active` given) — a key in an exclusive or toggle group; plain actions pass no `active`. */
+  pip?: boolean;
 }) {
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
@@ -483,6 +490,15 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav }: {
   // assumed a uniform row height and was wrong for anything nested or unevenly
   // sized.
   const { focused, viewRef } = useNavButton(onPress, skipNav);
+  if (pt.metal) {
+    // ★ §10.3: a dome key; selection shows by its LED pip and a lit legend, never a gold fill.
+    return (
+      <PopupKey ref={viewRef as any} label={label} active={!!active} pip={pip ?? active !== undefined}
+        danger={danger} onPress={onPress} focused={focused} height={36} fontSize={12}
+        style={[{ minWidth: 58 }, full && styles.btnFull, style]}
+        icon={icon ? (c: string) => <SectionIcon name={icon} size={15} color={c} /> : undefined} />
+    );
+  }
   return (
     <TouchableOpacity
       ref={viewRef as any}
@@ -546,6 +562,17 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
     const next = Math.max(minimumValue, Math.min(maximumValue, value + dir * nudge));
     if (next !== value) onValueChange?.(next);
   });
+  const pt = usePopupTheme();
+  if (pt.metal) {
+    // ★ §10.3: a slide fader. Its fill is unlit exactly where the slider's track went muted
+    //   (the callers' "Off" position), so a switched-off setting still reads as off.
+    return (
+      <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
+        step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
+        active={props.minimumTrackTintColor !== C.muted} focused={focused}
+        style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
+    );
+  }
   return (
     <Slider
       ref={viewRef as any}
@@ -562,6 +589,15 @@ function VfoLockBtn({ locked, disabled, onPress, full }: {
   locked: boolean; disabled?: boolean; onPress?: () => void; full?: boolean;
 }) {
   const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
+  if (pt.metal) {
+    // A toggle: the pip lights while the VFO is LOCKED (the mockup's "🔒 LOCKED" key).
+    return (
+      <PopupKey label={locked ? 'LOCKED' : 'FREE'} active={locked} pip onPress={onPress} disabled={disabled}
+        height={34} fontSize={12} style={full ? styles.btnFull : undefined}
+        icon={() => <VfoLockIcon size={20} locked={locked} />} />
+    );
+  }
   return (
     <TouchableOpacity
       style={[styles.btn, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, full && styles.btnFull, disabled && { opacity: 0.4 }]}
@@ -581,16 +617,26 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
 // ── CONTROL CUSTOMISATION (faceplates brief §1; Popup mockup `kind: 'custom'`) ────────────────
 //
 // ★ Every row is an INPUT SELECTOR: a label and a group of keys, exactly one lit. On the default
-//   chassis they draw as today's menu keys (gold selection). On silver/black they become dome keys
-//   with a 4 × 4 LED pip (§10.3) — that arrives with PopupShell (row 10), and SelectorKey is the
-//   ONLY place this pane draws a key, so it is a change to SelectorKey's look, not to the pane.
+//   chassis they draw as today's menu keys (gold selection). On silver/black they are dome keys
+//   with a 4 × 4 LED pip (§10.3, PopupShell's PopupKey) — and SelectorKey is the ONLY place this
+//   pane draws a key, so the swap lives there, not in the pane. The rows lay out through CtrlRow.
 
 /** One key in a selector row: a legend, or (colour rows) a lit LED dot in that colour. */
 function SelectorKey({ label, dot, active, onPress, a11y }: {
   label?: string; dot?: string; active: boolean; onPress: () => void; a11y?: string;
 }) {
   const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
   const { focused, viewRef } = useNavButton(onPress);
+  if (pt.metal) {
+    // ★★ THE SINGLE SWAP POINT (see the note above): on silver / black every selector key is a
+    //   dome key with its LED pip, and a colour key shows its colour as a lit LED dot (§10.3).
+    return (
+      <PopupKey ref={viewRef as any} label={label} dot={dot} active={active} pip onPress={onPress}
+        focused={focused} height={dot ? 30 : 32} fontSize={10} accessibilityLabel={a11y ?? label}
+        style={{ flex: 1, paddingHorizontal: 2 }} />
+    );
+  }
   return (
     <TouchableOpacity
       ref={viewRef as any}
@@ -612,15 +658,50 @@ function SelectorRow<T extends string>({ label, choices, value, onPick, note }: 
   /** A subtitle under the keys — what the choice costs you (TRANSPARENCY EFFECTS). */
   note?: string;
 }) {
-  const styles = usePopupStyles(makeStyles);
   return (
-    <View style={styles.ctrlRow}>
-      <Text style={styles.ctrlLabel}>{label}</Text>
+    <CtrlRow label={label} note={note}>
       <BtnRow>
         {choices.map(c => (
           <SelectorKey key={c.value} label={c.label} active={c.value === value} onPress={() => onPick(c.value)} />
         ))}
       </BtnRow>
+    </CtrlRow>
+  );
+}
+
+/** A pane's ‹ BACK header. Default: today's bar. Silver / black: the mockup's small ‹ dome key
+ *  beside the pane's engraved title. */
+function BackRow({ title, onPress }: { title: string; onPress: () => void }) {
+  const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
+  if (pt.metal) {
+    return (
+      <View style={styles.backRowMetal}>
+        <PopupKey label="‹" onPress={onPress} height={30} fontSize={16} style={{ width: 40 }}
+          accessibilityLabel="Back" />
+        <Text style={styles.backRowTitle}>{title}</Text>
+      </View>
+    );
+  }
+  return (
+    <TouchableOpacity style={styles.backRow} onPress={onPress} activeOpacity={0.7}>
+      <Text style={styles.backRowChevron}>‹  BACK</Text>
+      <Text style={styles.backRowTitle}>{title}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/** One row of the pane: its label, its keys, and an optional note under them. Default chassis:
+ *  label ABOVE the keys, exactly as before (the two inner views reproduce the old gaps). Silver /
+ *  black: the mockup's layout — an engraved 96 pt label beside the keys. */
+function CtrlRow({ label, note, children }: { label: string; note?: string; children: React.ReactNode }) {
+  const styles = usePopupStyles(makeStyles);
+  return (
+    <View style={styles.ctrlRow}>
+      <View style={styles.ctrlLine}>
+        <Text style={styles.ctrlLabel}>{label}</Text>
+        <View style={styles.ctrlKeys}>{children}</View>
+      </View>
       {!!note && <Text style={styles.selNote}>{note}</Text>}
     </View>
   );
@@ -648,10 +729,7 @@ function ControlCustomisationPane({
   const texts = textChoices(fp.display);
   return (
     <View style={styles.subPanel}>
-      <TouchableOpacity style={styles.backRow} onPress={onBack} activeOpacity={0.7}>
-        <Text style={styles.backRowChevron}>‹  BACK</Text>
-        <Text style={styles.backRowTitle}>CONTROL CUSTOMISATION</Text>
-      </TouchableOpacity>
+      <BackRow title="CONTROL CUSTOMISATION" onPress={onBack} />
 
       {/* ── FACEPLATE ── */}
       <SubLabel label="FACEPLATE" />
@@ -660,19 +738,17 @@ function ControlCustomisationPane({
       {/* ★ Display has side effects (resolver §1): Nixie takes the controls to neon and locks the
           text; leaving it with neon controls puts them on amber. withDisplay() owns all of that. */}
       <SelectorRow label="DISPLAY" choices={DISPLAY_CHOICES} value={fp.display} onPick={setDisplay} />
-      <View style={styles.ctrlRow}>
-        <Text style={styles.ctrlLabel}>CONTROLS</Text>
+      <CtrlRow label="CONTROLS">
         <BtnRow>
           {CONTROLS.map(c => (
             <SelectorKey key={c} dot={controlsDot(fp.chassis, c)} a11y={`${COLOUR_NAMES[c]} controls`}
               active={fp.controls === c} onPress={() => set({ controls: c })} />
           ))}
         </BtnRow>
-      </View>
+      </CtrlRow>
       {/* ★★ TEXT offers ONLY what the display technology came in (§1) — never white on a VFD —
           and under Nixie it is a note, not a greyed row of keys that do nothing (§2). */}
-      <View style={styles.ctrlRow}>
-        <Text style={styles.ctrlLabel}>TEXT</Text>
+      <CtrlRow label="TEXT">
         {texts ? (
           <BtnRow>
             {texts.map(t => (
@@ -683,7 +759,7 @@ function ControlCustomisationPane({
         ) : (
           <Text style={styles.selNote}>{TEXT_LOCKED_NOTE}</Text>
         )}
-      </View>
+      </CtrlRow>
       <SelectorRow label="SIGNAL METER" choices={METER_CHOICES} value={fp.meter}
         onPick={(v: SignalMeter) => set({ meter: v })} />
       {/* ★★★ ONE switch for every see-through surface — the deck, the decoder boxes, the menus
@@ -793,7 +869,7 @@ function ICloudRow() {
     {s.enabled && (<>
       <BtnRow>
         <Btn label={resetting ? 'REPLACING…' : 'REPLACE iCLOUD WITH THIS DEVICE'}
-             active={false} onPress={resetting ? () => {} : onReset} />
+             onPress={resetting ? () => {} : onReset} />
       </BtnRow>
       <SubLabel small label="Clears leftovers from an old build or a device you no longer have." />
       {/* ★ Evidence, not inference. A resurrecting entry has several possible
@@ -801,7 +877,7 @@ function ICloudRow() {
           is — every item on both sides with the key it resolves to and its
           timestamp, plus the tombstones and the deletion snapshot. */}
       <BtnRow>
-        <Btn label="SHARE SYNC DIAGNOSTIC" active={false} onPress={() => {
+        <Btn label="SHARE SYNC DIAGNOSTIC" onPress={() => {
           syncDiagnostic()
             .then((text) => Share.share({ message: text }))
             .catch((e) => Alert.alert('Diagnostic failed', String(e?.message ?? e)));
@@ -818,6 +894,10 @@ function OptRow({ children }: { children: React.ReactNode }) {
 
 function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void; key?: React.Key }) {
   const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
+  if (pt.metal) {
+    return <PopupKey label={label} active={active} pip onPress={onPress} height={32} fontSize={11} style={{ minWidth: 54 }} />;
+  }
   return (
     <TouchableOpacity style={[styles.btn, active && styles.btnActive]} onPress={onPress} hitSlop={4} activeOpacity={0.7}>
       <Text style={[styles.btnText, active && styles.btnTextActive]}>{label}</Text>
@@ -955,6 +1035,7 @@ function MenuSheetBody({
     ? Math.min(520, winW - sheetInsets.left - sheetInsets.right - 24)
     : undefined;
   const opaque = useSurfaceOpaque();
+  const metalFrame = usePopupFrame(16, true);
   const sheetGeom = isLandscape
     ? { height: sheetH, width: sheetW, left: (winW - (sheetW ?? winW)) / 2,
         right: undefined, borderTopLeftRadius: 16, borderTopRightRadius: 16 }
@@ -1139,13 +1220,15 @@ function MenuSheetBody({
         </TouchableWithoutFeedback>
 
         <Animated.View style={[styles.sheet, sheetGeom, { transform: [{ translateY }] },
-                               opaque && { backgroundColor: SHEET_SOLID }]}>
+                               opaque && !pt.metal && { backgroundColor: SHEET_SOLID }, metalFrame]}>
           {/* ★★★ Transparency OFF: the sheet's own background, alpha 1.0 (its tint over black) — no
-              BlurView. Row 10's PopupShell takes this over for every popup. */}
-          {!opaque && <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />}
+              BlurView. ★★ Silver / black (§10.3): the brushed plate, opaque in BOTH settings — both
+              BlurViews go (the same performance win as the deck, §3.4). */}
+          {!opaque && !pt.metal && <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />}
           {/* a11y panel is near-opaque (reference bg rgba(6,4,2,0.99)) */}
-          {!opaque && <View style={[StyleSheet.absoluteFill, { backgroundColor: SHEET_TINT }]} />}
-          <View style={styles.handle} />
+          {!opaque && !pt.metal && <View style={[StyleSheet.absoluteFill, { backgroundColor: SHEET_TINT }]} />}
+          <PopupPlate />
+          <PopupHandle><View style={styles.handle} /></PopupHandle>
 
           <NavCtx.Provider value={navCtx}>
             {/* ★★ Shown when iOS Full Keyboard Access appears to be on — it takes the arrows and
@@ -1215,7 +1298,7 @@ function MenuSheetBody({
               <VfoLockBtn locked={vfoLocked} onPress={onToggleVfoLock} full />
             </BtnRow>
             <BtnRow>
-              <Btn label="DISPLAY SETTINGS" icon="monitor" full active={dispSettingsOpen}
+              <Btn label="DISPLAY SETTINGS" icon="monitor" full
                 onPress={() => setDispSettingsOpen((p: boolean) => !p)} />
             </BtnRow>
             <BtnRow>
@@ -1231,11 +1314,7 @@ function MenuSheetBody({
               <View style={styles.subPanel}>
 
                 {/* Back header — this panel replaces the main menu */}
-                <TouchableOpacity style={styles.backRow}
-                  onPress={() => setDispSettingsOpen(false)} activeOpacity={0.7}>
-                  <Text style={styles.backRowChevron}>‹  BACK</Text>
-                  <Text style={styles.backRowTitle}>DISPLAY SETTINGS</Text>
-                </TouchableOpacity>
+                <BackRow title="DISPLAY SETTINGS" onPress={() => setDispSettingsOpen(false)} />
 
                 {/* Save row */}
                 <BtnRow>
@@ -1476,8 +1555,7 @@ function MenuSheetBody({
                   <Btn label="DEFAULT" active={wfScroll==='default'} onPress={() => onWfScroll?.('default')} />
                   <Btn label="SMOOTH"  active={wfScroll==='smooth'}  onPress={() => onWfScroll?.('smooth')} />
                 </BtnRow>
-                <Text style={{ color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible',
-                               fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }}>
+                <Text style={styles.wfNote}>
                   {wfScroll === 'sharp'
                     ? 'One row per received frame — most detail, scrolls at the data rate.'
                     : wfScroll === 'default'
@@ -1541,7 +1619,7 @@ function MenuSheetBody({
                   move them with this pane or the tour sends people to a section that is gone. */}
             <SectionLabel label="CONTROLS" icon="controls" />
             <BtnRow>
-              <Btn label={'CONTROL CUSTOMISATION  ›'} full active={custOpen}
+              <Btn label={'CONTROL CUSTOMISATION  ›'} full
                 onPress={() => setCustOpen(true)} />
             </BtnRow>
 
@@ -1571,17 +1649,22 @@ function MenuSheetBody({
                       value={menuAdminPw}
                       onChangeText={setMenuAdminPw}
                       placeholder="Admin password"
-                      placeholderTextColor={pt.gold.amberA(0.45)}
+                      placeholderTextColor={pt.metal ? pt.winDim : pt.gold.amberA(0.45)}
                       secureTextEntry autoCapitalize="none" autoCorrect={false}
                       style={styles.adminUnlockInput}
                       onSubmitEditing={() => { if (menuAdminPw) { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); } }}
                     />
+                    {pt.metal ? (
+                      <PopupKey label="UNLOCK" primary disabled={!menuAdminPw} height={36}
+                        onPress={() => { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); }} />
+                    ) : (
                     <TouchableOpacity
                       style={styles.adminUnlockBtn}
                       disabled={!menuAdminPw}
                       onPress={() => { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); }}>
                       <Text style={styles.adminUnlockBtnTxt}>UNLOCK</Text>
                     </TouchableOpacity>
+                    )}
                   </View>
                   <Text style={styles.kbSkipNote}>
                     {adminRefused
@@ -1707,11 +1790,17 @@ function MenuSheetBody({
           </ScrollView>
           </NavCtx.Provider>
 
+          {pt.metal ? (
+            // A plain action key: no pip (§10.3 "RECORDINGS, MIN/MAX, CLOSE").
+            <PopupKey label="CLOSE" onPress={onClose} height={32} hitSlop={8}
+              style={{ alignSelf: 'center', width: 110, marginTop: 10, marginBottom: sheetInsets.bottom + 12 }} />
+          ) : (
           <TouchableOpacity
             style={[styles.closeBtn, { marginBottom: sheetInsets.bottom + 12 }]}
             onPress={onClose} hitSlop={8}>
             <Text style={styles.closeBtnText}>CLOSE  ✕</Text>
           </TouchableOpacity>
+          )}
         </Animated.View>
       </View>
     </Modal>
@@ -1727,8 +1816,8 @@ const SHEET_SOLID = solidOver(SHEET_TINT);
 const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   adminUnlockRow:   { flexDirection: 'row', alignItems: 'center', gap: 8,
                       paddingHorizontal: 12, marginBottom: 6 },
-  adminUnlockInput: { flex: 1, borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 6,
-                      paddingHorizontal: 10, paddingVertical: 8, color: pt.gold.amber, fontSize: 14 },
+  adminUnlockInput: onMetal(pt, { flex: 1, borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 6,
+                      paddingHorizontal: 10, paddingVertical: 8, color: pt.gold.amber, fontSize: 14 }, { ...windowStyle(pt), color: pt.readout }),
   adminUnlockBtn:   { borderWidth: 1, borderColor: 'rgba(255,160,0,0.55)', borderRadius: 6,
                       paddingHorizontal: 12, paddingVertical: 9 },
   adminUnlockBtnTxt:{ color: pt.gold.amber, fontSize: 12, letterSpacing: 0.5 },
@@ -1745,41 +1834,41 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   scroll:        { flex: 1 },
   scrollContent: { paddingHorizontal: 14, paddingTop: 4 },
 
-  sectionBar: {
+  sectionBar: onMetal(pt, {
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.divider,
     paddingTop: 12, paddingBottom: 6, marginTop: 6,
-  },
+  }, { borderTopColor: pt.rule }),
   sectionBarFirst: { borderTopWidth: 0, marginTop: 2 },
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sectionLabel: {
+  sectionLabel: onMetal(pt, {
     color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
     fontWeight: 'bold', letterSpacing: 2,
-  },
+  }, { ...engraveText(pt), fontSize: 11, letterSpacing: 2.2 }),
 
-  footerRow: {
+  footerRow: onMetal(pt, {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.divider,
     marginTop: 14, paddingTop: 14, paddingHorizontal: 2,
-  },
-  footerBrand: {
+  }, { borderTopColor: pt.rule }),
+  footerBrand: onMetal(pt, {
     color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15,
     fontWeight: 'bold', letterSpacing: 1.5,
-  },
-  footerAboutHint: {
+  }, engraveText(pt)),
+  footerAboutHint: onMetal(pt, {
     color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10,
     letterSpacing: 2, marginTop: 1,
-  },
+  }, engraveText(pt, pt.note)),
   footerServer: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   footerLogo:   { width: 30, height: 30 },
   footerLogoChip: { backgroundColor: 'rgba(235,235,235,0.92)', borderRadius: 7, padding: 3 },
-  footerServerName: {
+  footerServerName: onMetal(pt, {
     color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 13,
     fontWeight: 'bold', letterSpacing: 1, textAlign: 'right',
-  },
-  footerServerVer: {
+  }, engraveText(pt)),
+  footerServerVer: onMetal(pt, {
     color: C.sliderLabel, fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
     letterSpacing: 1, textAlign: 'right', marginTop: 1,
-  },
+  }, engraveText(pt, pt.note)),
 
   btnRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
   btnRowCol: { flexDirection: 'column', gap: 6 },
@@ -1796,13 +1885,13 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   // setting is on"). Focus is where the keyboard is, not what is selected.
   btnFocused:    { borderColor: C.focus, borderWidth: 2 },
   // Amber rather than the focus green: this is an explanation of why the green is not moving.
-  fkaNote:      { borderWidth: 1, borderColor: pt.gold.noticeBorder, borderRadius: 6,
-                  backgroundColor: 'rgba(60,40,0,0.5)', padding: 10, marginBottom: 10 },
+  fkaNote:      onMetal(pt, { borderWidth: 1, borderColor: pt.gold.noticeBorder, borderRadius: 6,
+                  backgroundColor: 'rgba(60,40,0,0.5)', padding: 10, marginBottom: 10 }, windowStyle(pt)),
   fkaNoteTitle: { color: pt.gold.notice, fontSize: 11, letterSpacing: 1, marginBottom: 5 },
   fkaNoteBody:  { color: C.muted, fontSize: 11, lineHeight: 16 },
   fkaNoteKey:   { color: pt.gold.notice, fontWeight: '700' },
   // Dim and small: an explanation, not a warning — nothing has gone wrong.
-  kbSkipNote:    { color: C.sectionC, fontSize: 10, lineHeight: 14, paddingHorizontal: 2, paddingBottom: 6, opacity: 0.85 },
+  kbSkipNote:    onMetal(pt, { color: C.sectionC, fontSize: 10, lineHeight: 14, paddingHorizontal: 2, paddingBottom: 6, opacity: 0.85 }, { ...engraveText(pt, pt.note), opacity: 1 }),
   dropHeaderFocused: { borderWidth: 2, borderColor: C.focus, borderRadius: 5, margin: -2 },
   // Dropdown rows are a dense list with only a divider, so focus is a background tint —
   // a 2px border would shift every row as focus moved down it.
@@ -1811,22 +1900,22 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
   // Colour map dropdown
-  dropHeader: {
+  dropHeader: onMetal(pt, {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
     borderRadius: 4, paddingHorizontal: 12, paddingVertical: 9, marginVertical: 4,
-  },
-  dropHeaderText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
-  dropChevron:    { color: C.muted, fontSize: 10 },
-  dropList: {
+  }, windowStyle(pt)),
+  dropHeaderText: onMetal(pt, { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 }, { color: pt.winText }),
+  dropChevron:    onMetal(pt, { color: C.muted, fontSize: 10 }, { color: pt.winDim }),
+  dropList: onMetal(pt, {
     borderWidth: 1, borderColor: C.border, borderRadius: 4, maxHeight: 240,
     marginBottom: 6, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.25)',
-  },
-  dropItem: {
+  }, windowStyle(pt)),
+  dropItem: onMetal(pt, {
     paddingHorizontal: 12, paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border,
-  },
-  dropItemActive:     { backgroundColor: C.active },
+  }, { borderBottomColor: pt.winRule }),
+  dropItemActive:     onMetal(pt, { backgroundColor: C.active }, { backgroundColor: 'rgba(255,255,255,0.08)' }),
   dropItemText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, letterSpacing: 0.5 },
   dropItemTextActive: { color: pt.gold.sel, fontWeight: 'bold' },
 
@@ -1944,16 +2033,16 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   searchRpt: { fontSize: 11 },
 
   sliderRow:   { paddingVertical: 4, gap: 4 },
-  sliderLabel: { color: C.sliderLabel, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 1, width: 90, flexShrink: 0 },
+  sliderLabel: onMetal(pt, { color: C.sliderLabel, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 1, width: 90, flexShrink: 0 }, { ...engraveText(pt), fontSize: 11 }),
   bwRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
   bwMirrorRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 },
   bwHalfSlider: { flex: 1, height: 32 },
   bwEdgeVal:    { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, minWidth: 44, textAlign: 'center' },
-  bwLabel:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1, width: 32 },
+  bwLabel:  onMetal(pt, { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1, width: 32 }, engraveText(pt)),
   bwSlider: { flex: 1, height: 32 },
-  bwVal:    { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
+  bwVal:    onMetal(pt, { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' }, engraveText(pt, pt.value)),
   sliderWrap:  { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
-  sliderVal:   { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, minWidth: 72, textAlign: 'right' },
+  sliderVal:   onMetal(pt, { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, minWidth: 72, textAlign: 'right' }, { ...engraveText(pt, pt.value), fontWeight: '700', fontSize: 12 }),
 
   stepSlider: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   stepSliderBtn: {
@@ -1963,13 +2052,13 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   stepSliderBtnTxt: { color: pt.gold.glyph, fontSize: 18, fontWeight: 'bold', lineHeight: 22 },
   stepSliderVal: { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, flex: 1, textAlign: 'center' },
 
-  subPanel: {
+  subPanel: onMetal(pt, {
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 6,
     borderWidth: StyleSheet.hairlineWidth, borderColor: C.divider,
     padding: 10, marginBottom: 4,
-  },
-  subLabel:      { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, letterSpacing: 1, paddingTop: 8, paddingBottom: 3 },
-  subLabelSmall: { fontSize: 10, opacity: 0.5 },
+  }, { backgroundColor: 'transparent', borderColor: pt.rule }),
+  subLabel:      onMetal(pt, { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, letterSpacing: 1, paddingTop: 8, paddingBottom: 3 }, engraveText(pt)),
+  subLabelSmall: onMetal(pt, { fontSize: 10, opacity: 0.5 }, { opacity: 1, color: pt.note }),
 
   // Display-settings back header
   backRow: {
@@ -1978,7 +2067,7 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
     borderRadius: 5, paddingHorizontal: 14, paddingVertical: 11, marginBottom: 8,
   },
   backRowChevron: { color: pt.gold.glyph, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold' },
-  backRowTitle:   { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 1 },
+  backRowTitle:   onMetal(pt, { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 1 }, { ...engraveText(pt), fontSize: 12, letterSpacing: 2.2 }),
 
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
@@ -1986,7 +2075,7 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   dspError: { color: 'rgba(220,53,69,0.95)', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 },
 
   ctrlRow:   { paddingVertical: 4, gap: 4 },
-  ctrlLabel: { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 1.5 },
+  ctrlLabel: onMetal(pt, { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 1.5 }, { ...engraveText(pt), width: 96, lineHeight: 12, letterSpacing: 1.4 }),
   // CONTROL CUSTOMISATION selector keys — share the row evenly (six colour keys, or TRANSPARENCY
   // ON / OFF) so no key wraps onto a line of its own on an SE.
   selKey:     { flex: 1, paddingHorizontal: 4, minHeight: 44 },
@@ -1994,19 +2083,19 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   // A lit LED: the colour, with its own glow (iOS shadow; Android draws the dot without the halo).
   selDot:     { width: 12, height: 12, borderRadius: 6, shadowOpacity: 0.9, shadowRadius: 4,
                 shadowOffset: { width: 0, height: 0 } },
-  selNote:    { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontStyle: 'italic',
-                paddingVertical: 10, paddingHorizontal: 2 },
+  selNote:    onMetal(pt, { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontStyle: 'italic',
+                paddingVertical: 10, paddingHorizontal: 2 }, engraveText(pt, pt.note)),
 
   swatchRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingVertical: 4 },
   swatch:     { width: 32, height: 32, borderRadius: 16, borderWidth: 3, borderColor: 'transparent' },
-  swatchActive: { borderColor: '#fff' },
+  swatchActive: onMetal(pt, { borderColor: '#fff' }, { borderColor: pt.legendLit }),
   cmapStrip:          { gap: 6, flexDirection: 'row', paddingBottom: 4 },
   cmapPill:           { backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 },
   cmapPillActive:     { backgroundColor: C.active, borderColor: pt.gold.sel },
   cmapPillText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11 },
   cmapPillTextActive: { color: pt.gold.sel },
 
-  instanceUrl: { color: 'rgba(255,255,255,0.40)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11, paddingBottom: 4 },
+  instanceUrl: onMetal(pt, { color: 'rgba(255,255,255,0.40)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11, paddingBottom: 4 }, engraveText(pt, pt.note)),
 
   closeBtn: {
     margin: 12, alignSelf: 'center', backgroundColor: C.btnBg,
@@ -2014,6 +2103,10 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
     paddingHorizontal: 24, paddingVertical: 8,
   },
   closeBtnText: { color: pt.gold.close, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
+  backRowMetal: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  ctrlLine: onMetal(pt, { gap: 4 }, { flexDirection: 'row', alignItems: 'center', gap: 8 }),
+  ctrlKeys: onMetal(pt, {}, { flex: 1 }),
+  wfNote: onMetal(pt, { color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }, engraveText(pt, pt.note)),
 });
 
 /** ★★ NOTHING RUNS WHILE THE SHEET IS SHUT. The body has 22 hooks and ~250 lines of setup that

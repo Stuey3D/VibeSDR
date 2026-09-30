@@ -134,6 +134,10 @@ export interface PopupTokens {
   shell: { border: string; topHi: string; handle: string; handleLip: string };
   /** Drop shadow of a sheet over the spectrum (`0 -4px 18px rgba(0,0,0,.8)`) — off with Transparency OFF. */
   sheetShadow: string;
+  /** A hairline rule / sub-panel edge on the plate (section dividers). */
+  rule:       string;
+  /** A destructive key's legend (RESET, delete) — a meaning colour, red on every chassis. */
+  danger:     string;
   /** The tune entry, following the Display style (§10.3). */
   entry:      PopupEntryStyle;
 }
@@ -180,6 +184,7 @@ function defaultTokens(): PopupTokens {
     },
     shell: { border: 'rgba(255,255,255,0.10)', topHi: 'transparent', handle: 'rgba(255,255,255,0.22)', handleLip: 'transparent' },
     sheetShadow: 'rgba(0,0,0,0.8)',
+    rule: 'rgba(255,255,255,0.12)', danger: '#ff6666',
     entry: { fontFamily: FONT, fontSize: 32, fontWeight: '400', fontStyle: 'normal', letterSpacing: 3,
              color: '#ffffff', glow: null, seg: false },
   };
@@ -237,7 +242,8 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, textRgb: 
     gold: {
       sel: L(1), selBorder: 'transparent', fill: L(0.85), thumb: L(0.95),
       value: valueC, readout: T(1), glyph: legend,
-      notice: label, noticeBorder: silver ? 'rgba(0,0,0,0.30)' : 'rgba(255,255,255,0.14)', close: legend,
+      // ★ The notice sits in a recessed window on metal (light text), so it is lit in the text colour.
+      notice: T(1), noticeBorder: 'rgba(0,0,0,0.80)', close: legend,
       amber: label, amberA: () => label,
     },
     label, engrave,
@@ -271,6 +277,7 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, textRgb: 
       ? { border: '#8b8983', topHi: 'rgba(255,255,255,0.95)', handle: 'rgba(0,0,0,0.38)', handleLip: 'rgba(255,255,255,0.75)' }
       : { border: '#3a3c40', topHi: 'rgba(255,255,255,0.22)', handle: 'rgba(0,0,0,0.70)', handleLip: 'rgba(255,255,255,0.12)' },
     sheetShadow: 'rgba(0,0,0,0.8)',
+    rule: silver ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.10)', danger: silver ? '#9e1b14' : '#ff6b62',
     entry,
   };
 }
