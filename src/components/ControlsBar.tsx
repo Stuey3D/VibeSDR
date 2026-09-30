@@ -51,7 +51,8 @@ import EdgeMeter from './EdgeMeter';
 import { GhostGrid, SegDigits } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
 import { FONT_DOTO, rgba } from '../constants/faceplate';
-import { DECK, portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind } from '../constants/meters';
+import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
+  type LandscapeLayout } from '../constants/meters';
 import { statusGainParts, type StatusItem } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
@@ -620,7 +621,10 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
     : body;
 }
 
-export function LinkIndicator({ bus, hide }: { bus?: MeterBus;
+export function LinkIndicator({ bus, hide, noNode = false }: { bus?: MeterBus;
+    /** §8.1 / §9: on a shared server SHARED TUNER sits in the landscape status row's centre, REPLACING
+     *  the node icon here (the phone ⇄ bars stay: the connection meter is never dropped). */
+    noNode?: boolean;
     /** ★ Row 9's hook (§8.2): items the landscape status row has dropped to fit, by STATUS_DROP_ORDER.
      *  Nothing passes it yet. The bars are never hidden — the connection meter is never dropped. */
     hide?: Partial<Record<StatusItem, boolean>> }) {
@@ -653,7 +657,7 @@ export function LinkIndicator({ bus, hide }: { bus?: MeterBus;
         {/* §8.1: `[bars][node] 6k/s 5fps · GAIN ↓25.4dB · IF 2800k` — the phone and ⇄ go (they are
             the first icons row 9 drops anyway), the arrow is DRAWN. */}
         <LinkBars q={q} />
-        {!hide?.linkIcons && <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} />}
+        {!hide?.linkIcons && !noNode && <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} />}
         {showRate && !hide?.rate ? <StatusText>{`${Math.round(m!.kbps ?? 0)}k/s ${Math.round(m!.fps ?? 0)}fps`}</StatusText> : null}
         {m?.agcText && !hide?.gain ? (() => {
           const g = statusGainParts(m.agcText);
@@ -671,10 +675,10 @@ export function LinkIndicator({ bus, hide }: { bus?: MeterBus;
       <PhoneGlyph color={dim} />
       <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>
       <LinkBars q={q} />
-      <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>
       {/* The network-NODE triangle — the same server mark used everywhere else (menu, watch), not
-          the old server-rack box. */}
-      <SectionIcon name="instance" size={13} color={dim} />
+          the old server-rack box. ★ Replaced by SHARED TUNER on a shared server in landscape (§8.1). */}
+      {!noNode && <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>}
+      {!noNode && <SectionIcon name="instance" size={13} color={dim} />}
       {showRate ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{rateTxt}</Text> : null}
       {/* ★ After the rate, because it changes rarely — a value that moves once a minute beside one
              that moves every second reads as part of the same reading if it comes first. */}
@@ -710,13 +714,15 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
  * ★ The unit label has a FIXED width, so kHz / MHz / Hz cannot shift the digits beside it (§7 TRAP).
  */
 function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFontSize, pillPadH, pillPadV, gap, shared,
-  winH }: {
+  winH, land = false }: {
   freqStr: string; unit: string; chanTag: string | null; freqFontSize: number; freqWidth: number;
   unitFontSize: number; pillPadH: number; pillPadV: number; gap: number; shared: boolean;
   /** ★ The LED / analogue frequency window (§4.1): its height, which the deck's fixed block decided
    *  (48 / 38 / 46 / 35 at scale 1). Absent = the bar's pill, sized from the text as before. The
    *  compact window takes the §4.1 digit / tube sizes and FILLS its width. */
   winH?: number;
+  /** The landscape LED / analogue window (§9): Deck.mockup `fvL` — tubes 15 × 27, Doto 22, 7-segment 23. */
+  land?: boolean;
 }) {
   const dk = useFaceplate().deck;
   const s = useUiScale();
@@ -746,7 +752,7 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
     //   analogue + shared = 35 pt against a 37 pt design stack (test_faceplate_meters.ts).
     return (
       <NixieTubes hz={ro.hz} unit={ro.unit} layout={ro.layout}
-        design={shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter} bar={false} scale={s.scale}
+        design={land ? TUBE_DESIGN.meterLand : shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter} bar={false} scale={s.scale}
         radius={8} reserveRight={labelW} style={{ flex: 1, height: H, minWidth: 0 }}>
         {label}
       </NixieTubes>
@@ -770,8 +776,8 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   //   centred in the full-width window; the bar pill keeps its own sizes.
   const cellBox: ViewStyle = compact ? { flex: 1, minWidth: 0, alignItems: 'center' }
                                      : { width: winW, flexShrink: 1, minWidth: 0 };
-  const dotSize = compact ? s.r(shared ? 23 : 27) : s.r(shared ? 24 : 28);
-  const segH = compact ? Math.min(s.r(shared ? 25 : 29), H - 4) : s.r(shared ? 27 : 30);
+  const dotSize = compact ? s.r(land ? 22 : shared ? 23 : 27) : s.r(shared ? 24 : 28);
+  const segH = compact ? Math.min(s.r(land ? 23 : shared ? 25 : 29), H - 4) : s.r(shared ? 27 : 30);
   return (
     <View style={[{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
                     flexShrink: 1, minWidth: 0 }, compact && { flex: 1 }]}>
@@ -1007,8 +1013,12 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
  * shared server can change the deck's height: the window gives the room back (48 → 38, 46 → 35).
  * The bar deck keeps FreqModePill inside the bar, exactly as today (§4.2).
  */
-function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeLabel, snrText, signalActive, bus,
+function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain, modeLabel, snrText, signalActive, bus,
   meterMode, fmStereo = false, onFreqTap, onModeTap, sharedTuner = null, tight = false, freqWidth }: any) {
+  /* ★ `land` (a LandscapeLayout, §9): the same column in the landscape band — the mockup's `fvL`
+   *  sizes (digits 25, tubes 15 × 27, Doto 22, 7-segment 23) and the mode box's type shrunk to the
+   *  window, the LED strip at 9 / 6.5 (or unlabelled), the edgewise card in its 24 pt window. */
+  const L = land as LandscapeLayout | undefined;
   const fp = useFaceplate();
   const dk = fp.deck;
   const s = useUiScale();
@@ -1016,9 +1026,9 @@ function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeL
   const shared = !!sharedTuner;
   const lip = fp.chassis.plate?.windowLip ?? 'rgba(255,255,255,0.06)';
   const winBg = dk.style === 'nixie' ? '#060403' : dk.style === 'hyper' ? '#0a0807' : '#050505';
-  const unitFont = s.r(11);
-  // §4.1 "digits 32 (shared 27)" — capped by the window it has to sit in.
-  const digit = Math.min(s.r(shared ? 27 : 32), Math.floor((dl.freqH - 4) / 1.12));
+  const unitFont = L ? Math.min(s.r(11), Math.max(8, Math.floor(dl.freqH * 0.42))) : s.r(11);
+  // §4.1 "digits 32 (shared 27)" — capped by the window it has to sit in. Landscape: 25 (§9).
+  const digit = L ? L.digit : Math.min(s.r(shared ? 27 : 32), Math.floor((dl.freqH - 4) / 1.12));
   return (
     <View style={{ height: dl.displayH }}>
       {sharedTuner && (
@@ -1044,7 +1054,7 @@ function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeL
             }]} numberOfLines={1} adjustsFontSizeToFit>
               {freqStr}
             </Text>
-            <View style={[pm.chanCol, { paddingBottom: s.r(7), alignSelf: 'stretch' }]}>
+            <View style={[pm.chanCol, { paddingBottom: L ? Math.max(2, Math.round(dl.freqH * 0.16)) : s.r(7), alignSelf: 'stretch' }]}>
               {chanTag ? (
                 <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.freqFont,
                               fontSize: Math.max(8, Math.round(unitFont * 0.72)) }]} numberOfLines={1}>
@@ -1057,14 +1067,15 @@ function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeL
             </View>
           </>) : (
             <DisplayFreq freqStr={freqStr} unit={unit} chanTag={chanTag} freqFontSize={digit}
-              freqWidth={freqWidth} unitFontSize={unitFont} pillPadH={s.r(6)} pillPadV={s.r(7)}
-              gap={s.r(6)} shared={shared} winH={dl.freqH} />
+              freqWidth={freqWidth} unitFontSize={unitFont} pillPadH={s.r(6)}
+              pillPadV={L ? Math.max(2, Math.round(dl.freqH * 0.16)) : s.r(7)}
+              gap={s.r(6)} shared={shared} winH={dl.freqH} land={!!L} />
           )}
         </TouchableOpacity>
         <TouchableOpacity ref={tourRef('modeBtn')} onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
           style={[cd.modeBox, { width: s.r(70), borderLeftColor: 'rgba(255,255,255,0.10)' }]}>
           <ModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
-            modeFontSize={s.r(15)} modeLs={2} readingFontSize={s.r(11)} />
+            modeFontSize={L ? L.modeFont : s.r(15)} modeLs={L ? 1.5 : 2} readingFontSize={L ? L.readingFont : s.r(11)} />
         </TouchableOpacity>
         {/* The glass's inner shadow at the top and the lip below (`inset 0 2px 7px`, `0 1px 0 .25`). */}
         {/* ★ Not over the tubes: the Nixie recess draws its own lip shadows (§7), and a second
@@ -1073,28 +1084,38 @@ function CompactDisplay({ dl, meterKind, freqStr, unit, chanTag, chanMain, modeL
         <View pointerEvents="none" style={[cd.lip, { backgroundColor: 'rgba(255,255,255,0.25)' }]} />
       </View>
       <View style={{ height: dl.meterGap }} />
-      <MeterHousing kind={meterKind} height={dl.housingH} shared={shared} lip={lip} bus={bus} />
+      <MeterHousing kind={meterKind} height={dl.housingH} shared={shared} lip={lip} bus={bus} land={L} />
     </View>
   );
 }
 
 /** The LED strip's / edgewise meter's black housing (§4.3 / §4.5): `#030303 → #0b0b0b`, inset shadow,
  *  the chassis lip below, and the meter in it. */
-function MeterHousing({ kind, height, shared, lip, bus }: {
+function MeterHousing({ kind, height, shared, lip, bus, land }: {
   kind: MeterKind; height: number; shared: boolean; lip: string; bus?: MeterBus;
+  /** Landscape (§9): the strip's / card's own geometry from landscapeDeck. */
+  land?: LandscapeLayout;
 }) {
   const s = useUiScale();
+  const ledGeom = useMemo(() => land ? { padTop: land.ledPadTop, padX: land.ledPadX, ledH: land.ledH,
+    labelH: land.labelH, labelGap: land.labelGap } : undefined,
+    [land?.ledPadTop, land?.ledPadX, land?.ledH, land?.labelH, land?.labelGap]);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <View style={[cd.housing, { height }]}>
       <View pointerEvents="none" style={cd.housingShade} />
       <View pointerEvents="none" style={[cd.lip, { backgroundColor: kind === 'vu' ? 'rgba(255,255,255,0.22)' : lip }]} />
-      {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} />}
-      {kind === 'edge' && (
+      {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} geom={ledGeom} />}
+      {kind === 'edge' && (land ? (
+        // §9: a 24 pt window, padding 2, the 28 pt print shown 2 pt up (Deck.mockup `svgTop: -2px`).
+        <View style={{ padding: land.edgePad }}>
+          <EdgeMeter bus={bus} height={land.edgeWindow} printH={land.edgePrintH} printTop={land.edgePrintTop} />
+        </View>
+      ) : (
         // §4.5: a 28 pt window in the 34 pt housing (padding 3; 2 with the shared banner).
         <View style={{ padding: s.r(shared ? DECK.edgePadShared : DECK.edgePad) }}>
           <EdgeMeter bus={bus} height={s.r(DECK.edgeWindow)} />
         </View>
-      )}
+      ))}
     </View>
   );
 }
@@ -1615,9 +1636,11 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
    *  it and worked; its twin did not, which is why it survived review: the same JSX, one bar broken.
    *  ★★ A destructured prop list is a hand-maintained copy of the props — anything the body uses must be in it. */
   sharedDial,
-  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate }: any) {
+  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
+  /** ★ Row 9's hook (§8.2): status items the landscape row has dropped to fit (STATUS_DROP_ORDER).
+   *  Nothing passes it yet. */
+  statusHide }: any) {
   const handbackFlash = useHandbackFlash();
-
   const { theme: t } = useTheme();
   // ★ Colours are the faceplate's: the chassis for keys, glass and status; the key LEGENDS resolve
   //   separately (§2 — white, or neon when the controls are neon, and Nixie One only when neon).
@@ -1627,13 +1650,21 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   const s = useUiScale();
   const [sigW, setSigW] = useState(0);
 
-  const DRUM_H    = s.r(44);   // landscape drum height from skin BASE_LSV_DH=44
-  // Tablet: the two-line pill (mode + SNR) is tall enough to fill a 40dp frame,
-  // hiding the meter fill above/below the freq box — give it more height so the
-  // meter shows top and bottom like it does on phones.
-  const SIG_H     = s.r(s.isTablet ? 62 : 40);  // was 48 — frame dwarfed the small pill
-  const GAP       = s.r(6);
-  const BTN_W     = s.r(56);
+  /* ★★★ THE LANDSCAPE DECK (§9) — constants/meters.ts landscapeDeck, pure and tested
+   *  (scripts/test_faceplate_landscape.ts). ONE band for every meter × shared state, and it is TODAY's
+   *  band: the taller of the 44 pt drum and the bar frame (40; 62 on a tablet). The mockup's 62 pt band
+   *  is today's only on a tablet, so on a phone the LED / analogue column is FITTED into today's band —
+   *  the frequency window flexes, then the labels go, and on the SE the analogue card becomes the bar.
+   *  ★ The bar never gets taller than today's: that is the rule the test holds at 568 → 1366 pt. */
+  const isCap     = ct.dome.look === 'cap';
+  const lay       = landscapeDeck({ plate: ct.plate ? { screws: ct.plate.screws, gloss: ct.plate.gloss } : null,
+                                    meter: fp.settings.meter, tablet: s.isTablet, W: s.W, scale: s.scale, r: s.r,
+                                    singleDrum: !!singleDrum });
+  const BAND_H    = lay.bandH;
+  const SIG_H     = lay.barH;                // the bar frame (bar meter only)
+  const GAP       = lay.rowGap;
+  const COL_GAP   = lay.colGap;
+  const BTN_W     = lay.keyW;
   const { ref: drumRowRef, onLayout: guardDrums } = useDrumSwipeGuard();
   // Pill enlarged toward portrait proportions — at 20pt in a 48pt frame the
   // signal bar visually swallowed it (screenshots 2026-06-11).
@@ -1653,21 +1684,31 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
      `flex: 1` in their column, and a flex item's share is argued out against its CONTENT: the step
      key's Text (scaled lineHeight, adjustsFontSizeToFit) and the cog's Skia Canvas report different
      intrinsic heights, so on a live screenshot "1k" sat SHORTER than the cog beneath it and the
-     audio/chat pair disagreed too. Now the band is the taller of the drum and the meter frame, and
-     each key is exactly half of it less the gap — in every step size and in the menu-as-back state.
+     audio/chat pair disagreed too. Now each key is exactly half the band less the gap (the mockup's
+     28 / 28 rows on a tablet) — in every step size and in the menu-as-back state.
      ★ The icon is capped to the key rather than the key grown to the icon: a key must never be the
-       thing that makes the bar taller. */
-  const BAND_H    = Math.max(DRUM_H, SIG_H);
-  const KEY_H     = (BAND_H - GAP) / 2;
-  const ICON_SZ   = Math.min(s.r(18), KEY_H - 2);   // − the 1 pt border top and bottom
-  const isCap     = ct.dome.look === 'cap';
+       thing that makes the bar taller. On a cap key (silver / black) the legends are the mockup's
+       78 % of the portrait legend, inside the cap (the slot less its 2 pt inset top and bottom). */
+  const KEY_H     = lay.keyH;
+  const ICON_SZ   = isCap ? Math.max(8, Math.min(Math.round(s.r(20) * lay.legendScale), KEY_H - 6))
+                          : Math.min(s.r(18), KEY_H - 2);   // − the 1 pt border top and bottom
+  const KEY_FONT  = isCap ? s.f(t.btnSize) * lay.legendScale : s.f(11);
+  const KEY_LH    = isCap ? Math.round(KEY_FONT * 1.27) : s.f(14);   // default: today's exactly
+  const compact   = lay.meter !== 'bar';
+  /* The LED / analogue column as CompactDisplay reads it: the band, no banner (§9: the SHARED TUNER
+     banner lives in the status row in landscape, so the display column never grows). */
+  const dl        = useMemo<DeckLayout>(() => ({
+    compact: true, displayH: BAND_H, keySlot: KEY_H, legendScale: lay.legendScale, bannerH: 0, bannerGap: 0,
+    meterGap: lay.meterGap, housingH: lay.housingH, freqH: lay.freqH, blockH: BAND_H,
+  }), [BAND_H, KEY_H, lay.legendScale, lay.meterGap, lay.housingH, lay.freqH]);
+  const dispH     = compact ? BAND_H : SIG_H;
 
   return (
     /* ★ A COLUMN NOW: the controls in one row, the status in another beneath it. This function's
        root used to BE the drum row, which is why the clock and the stats had to be tucked inside
        the drum columns — there was nowhere else for them to go. */
     <View>
-    <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: GAP }}>
+    <View ref={drumRowRef} onLayout={guardDrums} style={{ flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center', gap: COL_GAP, height: BAND_H }}>
 
       {/* ★ Handback flash — see useHandbackFlash. The landscape bar has its own drum row, so
           without this the announcement simply vanished on rotation. */}
@@ -1679,18 +1720,13 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           opacity: handbackFlash, zIndex: 3,
         }} />
 
-      {/* VFO drum + clock */}
+      {/* VFO drum. ★ §9: the well stretches to its column and is sized to the BAND, not flex-stretched —
+          `flex: 1` on the drum let its view grow past the height its canvas was drawn at (a tablet's
+          44 pt drum sat in a 62 pt band). The trapezoid is 40 % of it (25 pt of the mockup's 62). */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
         {vfoKeys
-          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} landscape />
-          : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
-
-        {/* ★★ THE SLOT IS ALWAYS THERE, EMPTY OR NOT — and that is the whole point of putting it
-            back deliberately rather than just reverting. The recording row used to APPEAR, which
-            grew this column and resized the tuning keys under the user's thumb mid-gesture
-            (Stuart: "the controls dont have to grow and shrink when recording is happening"). A
-            reserved row keeps the timer beside the dial where he wants it AND keeps the keys
-            still: the height is identical whether it is recording or not. */}
+          ? <TunerKeys type="vfo" height={BAND_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} landscape />
+          : <DrumWheel type="vfo" height={BAND_H} onDelta={onVfoDelta} noInertia={vfoNoInertia} />}
       </View>
 
       {/* STEP + MENU column */}
@@ -1700,33 +1736,42 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           onPress={onStep} accessibilityLabel="Tuning step">
           {/* ★ ONE line: "100k" / "500Hz" / "8.33k" SHRINK to fit the key; two lines let the text
               ask for a taller box, which is the bug this key had. */}
-          {p => <DomeText progress={p} style={[lnd.lsTxt, { fontSize: s.f(11), lineHeight: s.f(14) }]}
+          {p => <DomeText progress={p} style={[lnd.lsTxt, { fontSize: KEY_FONT, lineHeight: KEY_LH }]}
                   numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{stepLabel}</DomeText>}
         </DomeKey>
         <DomeKey ref={tourRef('menuBtn')} style={lnd.lsKey} height={KEY_H} radius={6}
           onPress={onMenu} accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
           {p => menuAsBack
-            ? <DomeText progress={p} style={{ fontSize: s.f(11), lineHeight: s.f(14) }} numberOfLines={1}>‹</DomeText>
+            ? <DomeText progress={p} style={{ fontSize: KEY_FONT, lineHeight: KEY_LH }} numberOfLines={1}>‹</DomeText>
             : <Cog size={ICON_SZ} progress={p} />}
         </DomeKey>
       </View>
 
-      {/* Signal bar + pill — flex so small screens (SE) get a shorter bar with
-          everything still fitting; maxWidth caps the stretch on big panels. */}
-      {/* ★★★ TOP-ALIGNED, NOT CENTRED. justifyContent:'center' inside a row whose alignItems is
+      {/* ★★★ THE DISPLAY COLUMN — frequency on top, meter underneath (§9), or today's bar.
+          TOP-ALIGNED, NOT CENTRED: justifyContent:'center' inside a row whose alignItems is
           'stretch' floated this box in the middle of the tallest column, leaving black padding
           above AND below it — "Landscape is wasting space, there is black padding above the
-          frequency/signal meter box" (Stuart, 2026-09-24). The drums and the button columns start
-          at the top; this now starts there too, so the row reads as one band of controls. */}
-      <View style={{ width: s.r(340), justifyContent: 'flex-start' }}
+          frequency/signal meter box" (Stuart, 2026-09-24). */}
+      <View style={{ width: lay.dispW, justifyContent: 'flex-start' }}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
-        {/* ★ Black: the gloss panel wraps the display (Deck.mockup landscape `gloss`, padding 4,
-            radius 10) — drawn 4 pt OUTSIDE the frame so it adds no height to the band (§9: the bar
-            never gets taller than today's). */}
+        {/* ★ Black: the gloss panel wraps the frequency AND the meter together (§9; Deck.mockup
+            landscape `gloss`, radius 10). Drawn 4 pt OUTSIDE the column, in the gaps, so it adds no
+            height to the band (the mockup pads 4 INSIDE a 62 pt column; ours is today's band, and
+            the window cannot spare 8 pt). */}
         {ct.plate?.gloss && <GlossPanel radius={10} trim={false}
-          style={{ top: -4, left: -4, right: -4, bottom: 'auto', height: SIG_H + 8 }} />}
+          style={{ top: -lay.glossOut, left: -lay.glossOut, right: -lay.glossOut, bottom: 'auto',
+                   height: dispH + 2 * lay.glossOut }} />}
+        {compact ? (
+          <CompactDisplay dl={dl} land={lay} meterKind={lay.meter}
+            freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
+            signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
+            onFreqTap={onFreqTap} onModeTap={onModeTap} sharedTuner={null} tight={false}
+            freqWidth={FREQ_W} />
+        ) : (
         <View style={[lnd.sigFrame, { height: SIG_H }]}>
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
+          {/* ★ No banner in the pill: in landscape the SHARED TUNER banner lives in the status row
+              (§9, Deck.mockup `sharedInBar: false`), so the frequency keeps its size on a shared dial. */}
           <FreqModePill
             freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
             connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
@@ -1735,9 +1780,10 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
             modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
             pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
             modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
-            sharedTuner={sharedDial ?? null}
+            sharedTuner={null}
           />
         </View>
+        )}
       </View>
 
       {/* AUDIO + CHAT column */}
@@ -1763,22 +1809,12 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
         </DomeKey>
       </View>
 
-      {/* Zoom drum (omitted for FM-DX single-drum tuner) */}
+      {/* Zoom drum (omitted for FM-DX single-drum tuner) — sized to the band, like the VFO's. */}
       {!singleDrum && (
         <View style={{ flex: 1, minWidth: s.r(80) }}>
           {zoomKeys
-            ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} style={{ flex: 1 }} landscape />
-            : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
-          {/* ★★★ THE READOUTS LIVE UNDER THE ZOOM KEYS, NOT UNDER THE VFO — and the reason is not
-              tidiness. They were in the VFO column, so the recording row APPEARED AND DISAPPEARED
-              inside the group that holds the tuning keys, and the keys resized under the thumb
-              while you were using them. Stuart: "also means the controls dont have to grow and
-              shrink when recording is happening."
-              ★★ The zoom column is the right home on its own terms too: it is the one group whose
-                 height nothing else depends on, and these are STATUS, not controls — so they sit
-                 with the control you are least likely to be holding.
-              ★ Portrait is untouched: it has a full-width row of its own (por.clockRow) and never
-                had the problem. */}
+            ? <TunerKeys type="zoom" height={BAND_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} landscape />
+            : <DrumWheel type="zoom" height={BAND_H} onDelta={onBwDelta} />}
         </View>
       )}
 
@@ -1791,11 +1827,15 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
              stop truncating: they had the width of ONE COLUMN and now have the bar.
           ★ Times left, audio chain centre, link right — and the recording slot keeps its reserved
             space so nothing resizes under a thumb when recording starts (the reason it was pulled
-            out of the tuning column in the first place). */}
+            out of the tuning column in the first place).
+          ★★ §8.1 / §9: ONE line in landscape, and on a shared dial SHARED TUNER sits in the CENTRE
+             (replacing the node icon at the link's end) — the banner moved here so the display
+             column never grows. */}
       <StatusWell plate={ct.plate} gap={0} style={{ marginTop: GAP }}>
       <View style={[lnd.statusRow, ct.plate && { marginTop: 0 }]}>
         <View style={lnd.statusSide}>
           <ClockRow clock={clock} color={ct.clock} font={t.font} size={CLOCK_FONT} />
+          {/* ★ The reserved slot: always laid out, only its opacity changes — nothing resizes. */}
           <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
             <View style={[lnd.recDot, { backgroundColor: ct.recRed }]} />
             <StatusText keepColor style={[lnd.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
@@ -1803,14 +1843,38 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
             </StatusText>
           </View>
         </View>
-        <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio}
-                   font={t.font} />
+        {/* ★ Only when there is something to centre — an empty box would add a gap to today's row. */}
+        {(!!sharedDial || dspNr || dspNb || dspAn) && <View style={lnd.statusCentre}>
+          {sharedDial && !statusHide?.shared && <SharedStatus st={sharedDial} size={CLOCK_FONT} />}
+          {!statusHide?.dsp && <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio} font={t.font} />}
+        </View>}
         <View style={[lnd.statusSide, { justifyContent: 'flex-end' }]}>
-          <LinkIndicator bus={bus} />
+          <LinkIndicator bus={bus} hide={statusHide} noNode={!!sharedDial} />
         </View>
       </View>
       </StatusWell>
 
+    </View>
+  );
+}
+
+/**
+ * ★ SHARED TUNER in the landscape status row (§8.1 / §9): the banner's own words and colours (free /
+ * ask), on one line. On the status display (silver / black) it is Doto in the text colour's role; on
+ * the default deck it is today's banner font at the row's size. Row 9 shortens it to `SHARED` first.
+ */
+function SharedStatus({ st, size }: { st: SharedTuner; size: number }) {
+  const dk = useFaceplate().deck;
+  const sd = React.useContext(StatusDisplayContext);
+  const colour = st.alone ? dk.bannerFree : dk.bannerAsk;
+  return (
+    <View style={{ flexShrink: 1, minWidth: 0 }} accessibilityRole="text" accessibilityLabel={sharedBannerLabel(st)}>
+      <StatusText keepColor numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}
+        style={[lnd.sharedTxt, sd
+          ? { color: colour, textShadowColor: sd.glow, textShadowRadius: 4 }
+          : { color: colour, fontFamily: dk.bannerFont, fontSize: Math.max(9, size * 1.15), fontWeight: '700' }]}>
+        {sharedBannerText(st, true)}
+      </StatusText>
     </View>
   );
 }
@@ -1822,6 +1886,9 @@ const lnd = StyleSheet.create({
                 gap: 8, paddingHorizontal: 4, marginTop: 3 },
   statusSide: { flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row',
                 alignItems: 'center', gap: 8 },
+  /* The centre: SHARED TUNER on a shared dial, then the DSP badges — shrinks before the sides do. */
+  statusCentre: { flexShrink: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sharedTxt:  { letterSpacing: 1.1 },
   sigFrame: { borderRadius: 7, overflow: 'hidden', justifyContent: 'center', alignSelf: 'stretch' },   // track: ct.meterTrack
   // ★ No flex: the height is KEY_H at the use site (see LandscapeBar). overflow hidden so nothing
   //   inside can push the key taller than its neighbours.
