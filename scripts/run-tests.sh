@@ -180,6 +180,10 @@ if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); e
 #    every chassis, the aluminium notch pair inverts (and its draw order is a token), the LED pool's
 #    geometry, the controls colour at the brief's brightness, and the tuner keys' 31 % / 34 % layout.
 if node --no-warnings scripts/test_faceplate_wells.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE LANDSCAPE DECK (faceplates §9): never taller than today's band at 568 → 1366 pt for every
+#     chassis × meter × shared, four equal keys, no negative or overlapping column, the drums' 80 pt,
+#     real Nixie tubes that fit the window, and the SE's fall-backs (no labels; the bar).
+if node --no-warnings scripts/test_faceplate_landscape.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

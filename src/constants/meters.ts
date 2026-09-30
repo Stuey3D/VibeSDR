@@ -351,3 +351,208 @@ export function peakNeedleStep(p: PeakNeedle, needlePos: number, dtMs: number): 
   p.pos = Math.max(needlePos, p.pos - rate * dt / 1000);
   return p.pos;
 }
+
+// ── §9 Landscape ──────────────────────────────────────────────────────────────
+
+/**
+ * Deck.mockup's landscape `L` (scale 1): grid `minmax(0,1fr) 62 360 62 minmax(0,1fr)`, rows 28 / 28 /
+ * auto, column gap 8, row gap 6 — a 62 pt control band — and the display column's LED strip (padding
+ * 3 6 2, LEDs 9, labels 6.5) or edgewise window (padding 2, window 24 with the 28 pt print shifted up
+ * 2). `today*` are TODAY's LandscapeBar (ControlsBar: DRUM_H 44, SIG_H 40 / tablet 62, BTN_W 56, the
+ * 340 pt display, GAP 6).
+ */
+export const LAND = {
+  band:          62,
+  keyW:          62,
+  dispW:         360,
+  colGap:        8,
+  rowGap:        6,
+  todayDrum:     44,
+  todayBar:      40,
+  todayBarTab:   62,
+  todayKeyW:     56,
+  todayDispW:    340,
+  todayGap:      6,
+  /** Frequency window ↔ meter gap (the VU column's `gap: 6px`), and the squeezed one. */
+  meterGap:      6,
+  meterGapTight: 3,
+  ledPadTop:     3,
+  ledPadBottom:  2,
+  /** Without the labels the strip keeps a symmetric 3 pt below the LEDs. */
+  ledPadBottomBare: 3,
+  ledPadX:       6,
+  ledH:          9,
+  ledLabelGap:   2,
+  ledLabel:      6.5,
+  edgePad:       2,
+  edgeWindow:    24,
+  /** The print is designed on a 28 pt card and drawn 2 pt up in the 24 pt window (`svgTop: -2px`). */
+  edgePrint:     28,
+  edgePrintTop:  -2,
+  /** Below this the frequency window is not worth having: the tube stack's floor is 18 (MIN_GLASS 8 +
+   *  pip, collar, clearances), and the digits need a little air over it. */
+  minFreq:       20,
+  /** Below this an edgewise card is only ticks — show the bar instead. */
+  minEdgeWindow: 14,
+  /** §9 TRAP: below ~740 pt the LED strip loses its labels and the analogue meter becomes the bar. */
+  smallW:        740,
+  /** Hyperlegible digits 25; mode box 15 / 11 in a 70 pt box (as portrait). */
+  digit:         25,
+  modeBox:       70,
+  modeFont:      15,
+  readingFont:   11,
+  /** Legibility floors for the mode box (absolute pt — a floor does not scale down). */
+  minModeFont:   9,
+  minReadingFont: 7,
+  /** §9 legends 78 % (the mockup's `transform: scale(0.78)`), on the cap keys. */
+  legendScale:   0.78,
+  /** Black's gloss panel: padding 4 — drawn OUTSIDE the display column, in the gaps, so it costs no
+   *  height (see landscapeDeck). */
+  glossPad:      4,
+  /** SDRScreen `pillWrap`: 8 pt each side of the bar. */
+  screenMargin:  8,
+  /** ControlsBar's drum columns: `minWidth: s.r(80)`. */
+  drumMin:       80,
+} as const;
+
+export interface LandscapeLayout {
+  /** The control band — TODAY's (the taller of the 44 pt drum and the bar frame), on every chassis,
+   *  meter and shared state. §9: "never gets taller than today's bar". */
+  bandH:       number;
+  /** Every key is exactly this tall (§11): half the band less the row gap. */
+  keyH:        number;
+  rowGap:      number;
+  colGap:      number;
+  keyW:        number;
+  dispW:       number;
+  /** Each drum column's width (the `minmax(0,1fr)` tracks), for the geometry test. */
+  drumW:       number;
+  /** The plate's side padding (silver 24 so the screws clear the drums, §9). */
+  padH:        number;
+  /** The meter actually drawn — the setting, or the bar where the analogue card cannot fit (§9 TRAP). */
+  meter:       MeterKind;
+  /** The bar frame's height (bar meter only): today's on the default chassis, the whole band on metal. */
+  barH:        number;
+  /** Compact (LED / analogue) column; zeros on the bar. */
+  freqH:       number;
+  meterGap:    number;
+  housingH:    number;
+  ledPadTop:   number;
+  ledPadBottom: number;
+  ledPadX:     number;
+  ledH:        number;
+  /** 0 = the strip has no labels (small screens, §9 TRAP). */
+  labelH:      number;
+  labelGap:    number;
+  edgePad:     number;
+  edgeWindow:  number;
+  /** The edgewise print's design height and its offset in the window (the mockup's 28 at −2 in 24). */
+  edgePrintH:  number;
+  edgePrintTop: number;
+  digit:       number;
+  modeFont:    number;
+  readingFont: number;
+  /** Key legend scale: today's on the default deck, 78 % on the cap keys. */
+  legendScale: number;
+  /** Black: the gloss panel's reach beyond the display column on every side. */
+  glossOut:    number;
+}
+
+/**
+ * ★★★ THE LANDSCAPE DECK (§9). One band of controls — `[VFO drum] [step / cog] [display] [audio / chat]
+ * [zoom drum]` — then the status row, and ★ NEVER TALLER THAN TODAY'S BAR.
+ *
+ * ★★ WHERE THE BRIEF CANNOT BE MET WHOLE: the mockup's band is 62 pt and it calls that "today". It is
+ *   today's band on a TABLET (the 62 pt bar frame), but on a phone today's band is 44 pt (the 44 pt drum
+ *   over a 40 pt bar). "Never taller than today's" is the hard rule (§9, A2's own caption, §4.1's one
+ *   deck height), so the band is today's everywhere and the mockup's column is FITTED into it: the
+ *   frequency window flexes (as in portrait), the gap tightens, the LED labels go, and last — where the
+ *   mode box could no longer be read (the SE's 32 pt band) — the meter gives way to the bar, §9's own
+ *   "or the bar". On a tablet every mockup number comes out exactly.
+ *
+ * Columns: the default chassis keeps today's (56 / 340 / 6), so its bar deck is pixel-for-pixel today's
+ * and switching meter moves nothing sideways; silver and black take the mockup's grid (62 / 360 / 8).
+ *
+ * @param plate  null on the default chassis; silver has screws, black the gloss panel
+ * @param W      the window width (pt)
+ * @param scale  the UI scale's factor (the 6.5 pt label is not rounded); `r` its rounding (s.r)
+ */
+export function landscapeDeck(o: { plate: { screws: boolean; gloss: boolean } | null; meter: MeterKind;
+                                   tablet: boolean; W: number; scale: number; r: (n: number) => number;
+                                   singleDrum?: boolean }): LandscapeLayout {
+  const { r, plate } = o;
+  const bandH = Math.max(r(LAND.todayDrum), r(o.tablet ? LAND.todayBarTab : LAND.todayBar));
+  const rowGap = r(LAND.rowGap);
+  const keyH = (bandH - rowGap) / 2;
+  const colGap = r(plate ? LAND.colGap : LAND.todayGap);
+  const keyW = r(plate ? LAND.keyW : LAND.todayKeyW);
+  const dispW = r(plate ? LAND.dispW : LAND.todayDispW);
+  const padH = !plate ? r(12) : r(plate.screws ? 24 : 12);
+  const inner = o.W - 2 * LAND.screenMargin - 2 * padH;
+  const drums = o.singleDrum ? 1 : 2;
+  const drumW = (inner - 2 * keyW - dispW - (drums + 2) * colGap) / drums;
+  const small = o.W < LAND.smallW;
+  const minFreq = r(LAND.minFreq);
+  const zero = { freqH: 0, meterGap: 0, housingH: 0, ledPadTop: 0, ledPadBottom: 0, ledPadX: 0, ledH: 0,
+                 labelH: 0, labelGap: 0, edgePad: 0, edgeWindow: 0, edgePrintH: 0, edgePrintTop: 0 };
+  const base = { bandH, keyH, rowGap, colGap, keyW, dispW, drumW, padH,
+                 legendScale: plate ? LAND.legendScale : 1, glossOut: plate?.gloss ? r(LAND.glossPad) : 0 };
+  // The window's type: capped at the mockup's sizes, shrunk to the window. The mode box stacks the mode
+  // over the reading, so the reading takes what the mode's line leaves.
+  // (ModeReadout sets each line at round(size × 1.15).)
+  const lh = (n: number) => Math.round(n * 1.15);
+  const fit = (cap: number, room: number) => { let v = cap; while (v > 1 && lh(v) > room) v--; return v; };
+  const fonts = (freqH: number) => {
+    const modeFont = fit(Math.min(r(LAND.modeFont), Math.floor(freqH * 0.5)), freqH - lh(LAND.minReadingFont));
+    return {
+      digit:       Math.min(r(LAND.digit), Math.floor((freqH - 2) / 1.12)),
+      modeFont,
+      readingFont: fit(r(LAND.readingFont), freqH - lh(modeFont)),
+    };
+  };
+  /** ★ Legible, or not drawn: a mode box below 9 / 7 pt cannot be read, and the bar (today's, which
+   *  has room for both) is the honest fallback — §9's own "or the bar". */
+  const legible = (f: { modeFont: number; readingFont: number }) =>
+    f.modeFont >= LAND.minModeFont && f.readingFont >= LAND.minReadingFont;
+  const bar = (): LandscapeLayout => ({
+    ...base, ...zero, meter: 'bar', digit: 0, modeFont: 0, readingFont: 0,
+    // ★ Default: today's frame, top-aligned in the band. Metal: the bar fills the band (the mockup's
+    //   `barH: 62px` = its band).
+    barH: plate ? bandH : r(o.tablet ? LAND.todayBarTab : LAND.todayBar),
+  });
+  if (o.meter === 'bar') return bar();
+
+  if (o.meter === 'vu') {
+    const padTop = r(LAND.ledPadTop), ledH = r(LAND.ledH), ledPadX = r(LAND.ledPadX);
+    const labelled = r(LAND.ledPadBottom) + r(LAND.ledLabelGap) + LAND.ledLabel * o.scale;
+    let meterGap = r(LAND.meterGap);
+    const labels = !small && bandH - meterGap - (padTop + ledH + labelled) >= minFreq;
+    const housingH = padTop + ledH + (labels ? labelled : r(LAND.ledPadBottomBare));
+    if (bandH - meterGap - housingH < minFreq) meterGap = r(LAND.meterGapTight);
+    const freqH = bandH - meterGap - housingH;
+    const f = fonts(freqH);
+    if (freqH < minFreq || !legible(f)) return bar();
+    return { ...base, ...zero, meter: 'vu', barH: 0, freqH, meterGap, housingH,
+             ledPadTop: padTop, ledPadBottom: labels ? r(LAND.ledPadBottom) : r(LAND.ledPadBottomBare), ledPadX, ledH,
+             labelH: labels ? LAND.ledLabel * o.scale : 0, labelGap: labels ? r(LAND.ledLabelGap) : 0,
+             ...f };
+  }
+
+  // Analogue. ★ §9 TRAP: below ~740 pt the card cannot be read — the bar, not a smear of ticks.
+  if (small) return bar();
+  const edgePad = r(LAND.edgePad);
+  let meterGap = r(LAND.meterGap);
+  let edgeWindow = r(LAND.edgeWindow);
+  if (bandH - meterGap - 2 * edgePad - edgeWindow < minFreq) {
+    meterGap = r(LAND.meterGapTight);
+    edgeWindow = Math.min(edgeWindow, bandH - meterGap - 2 * edgePad - minFreq);
+  }
+  if (edgeWindow < r(LAND.minEdgeWindow)) return bar();
+  const housingH = 2 * edgePad + edgeWindow;
+  const freqH = bandH - meterGap - housingH;
+  const f = fonts(freqH);
+  if (!legible(f)) return bar();
+  const k = edgeWindow / LAND.edgeWindow;
+  return { ...base, ...zero, meter: 'edge', barH: 0, freqH, meterGap, housingH, edgePad, edgeWindow,
+           edgePrintH: LAND.edgePrint * k, edgePrintTop: LAND.edgePrintTop * k, ...f };
+}
