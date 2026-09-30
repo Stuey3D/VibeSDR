@@ -23651,6 +23651,7 @@ void LocalSdrShim::setDecoderMax(int max) {
 }
 void LocalSdrShim::setDecoderSlotDir(const std::string& dir) {
     { std::lock_guard<std::mutex> lk(g_vsDecoderSlotDirMtx); g_vsDecoderSlotDir = dir; }
+    vsDecoderSlots().setDir(dir);   // ★ in case anything asked for the slots before startup named this
     vsDecoderMaxPublish();
 }
 int LocalSdrShim::decoderDefaultMax() { return vsDecoderDefaultMax(); }

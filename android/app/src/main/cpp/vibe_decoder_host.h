@@ -98,6 +98,12 @@ public:
         for (int fd : held_) if (fd >= 0) ::close(fd);
     }
     int max() const override { const int m = maxFn_ ? maxFn_() : 1; return m < 1 ? 1 : m; }
+    /** ★ Name the shared directory after construction (the host learns it at startup). Ignored while
+     *  this process holds a slot, so a claim is always released through the store that granted it. */
+    void setDir(const std::string& d) {
+        std::lock_guard<std::mutex> lk(m_);
+        if (held_.empty() && local_ == 0) dir_ = d;
+    }
     int claim() override {
         const int m = max();
         std::lock_guard<std::mutex> lk(m_);
