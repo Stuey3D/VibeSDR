@@ -14,7 +14,7 @@ import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
   PopupKey, PopupFader, PopupPlate, PopupHandle, PopupScrim, PopupWindow, type PopupTokens,
 } from './PopupShell';
-import { sqlClosedOf } from '../constants/meters';
+import { sMeterText, sqlClosedOf } from '../constants/meters';
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
@@ -615,13 +615,8 @@ export default function AudioSheet({
 
   // Squelch readout in the DISPLAYED meter unit (S-units when the meter shows S-meter), while the
   // slider's value stays in the backend's NATIVE unit for the wire. dBm/dBFS → S (S9 = −73, 6 dB/S).
-  const sqlDisp = (v: number) => {
-    if (signalMode === 'smeter') {
-      if (v >= -73) { const o = Math.round(v + 73); return o > 0 ? `S9+${o}` : 'S9'; }
-      return `S${Math.max(1, 9 - Math.ceil((-73 - v) / 6))}`;
-    }
-    return `${Math.round(v)}dB`;
-  };
+  // ★ The meters' one S-meter formatter (constants/meters.ts), not a second copy of the calibration.
+  const sqlDisp = (v: number) => (signalMode === 'smeter' ? sMeterText(v) : `${Math.round(v)}dB`);
 
   // OWRX squelch/NR sliders — seeded from the server/profile preset (keyed on
   // seq so a profile switch re-syncs even when the new preset equals the old).

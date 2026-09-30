@@ -50,9 +50,10 @@ import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
 import { GhostGrid, SegDigits } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
-import { FONT_DOTO, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
+import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
-  type LandscapeLayout } from '../constants/meters';
+  type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
+  makeScaledMeterState, type MeterUnit } from '../constants/meters';
 import { statusGainParts, statusFit, statusState, type StatusItem, type StatusRowSpec } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
@@ -199,6 +200,11 @@ export interface MeterValues {
   /** Squelch threshold as a bar-normalised position (0..1), in the SAME scale the bar draws, so the
    *  red squelch line sits on the shown meter. -1 = squelch off / not applicable (no line, no SQL). */
   sql?: number;
+  /** ★★★ The same squelch threshold in the READOUT's own quantity — the unit meterReading() reads for
+   *  the current signal readout (dB in S-meter / dBFS mode, SNR dB in SNR mode), visual trim included.
+   *  The LED ring and the analogue red hand are placed from it on the calibrated scale, so they sit
+   *  under the label the mode box would name at the gate. Absent = not stated: no ring, never a wrong one. */
+  sqlVal?: number;
   /** Is the gate ACTUALLY closed (muting) right now? Computed from the same quantity the gate
    *  itself compares — not from bar geometry. In S-meter/dBFS mode the bar is a smoothed dBFS fill
    *  while the UberSDR gate compares raw SNR, so "fill < line" could redden while audio flowed (and
@@ -248,17 +254,6 @@ export function useMeters(bus?: MeterBus): MeterValues | null {
   return bus ? v : null;
 }
 
-// Real S-meter from passband dBFS (classic 6dB/S-unit, S9 ≈ −73) — replaces
-// the old synthetic conversion built on upstream's broken +30dB SNR offset.
-function dbfsToSMeter(dbfs: number): string {
-  if (dbfs >= -73) {
-    const over = Math.round(dbfs + 73);
-    return over > 0 ? `S9+${over}` : 'S9';
-  }
-  const s = Math.max(1, 9 - Math.ceil((-73 - dbfs) / 6));
-  return `S${s}`;
-}
-
 /** Exported so the WATCH can mirror the phone's meter verbatim rather than picking
  *  its own metric. It used to render SNR specifically — which OWRX, Kiwi and FM-DX
  *  do not have (they send an absolute S-meter / dBf and no noise reference), so the
@@ -266,10 +261,11 @@ function dbfsToSMeter(dbfs: number): string {
  *  it. Sending the TEXT means the watch can never disagree with the phone, and a
  *  future backend with some other metric works for free. Same reasoning as shipping
  *  the palette as a LUT instead of reimplementing the colour maps in Swift. */
-export function meterText(mode: 'snr' | 'smeter' | 'dbfs', m: MeterValues): string {
-  if (mode === 'smeter') return dbfsToSMeter(m.dbfs);
-  if (mode === 'dbfs')   return `${Math.round(m.dbfs)}dB`;
-  return isFinite(m.snr) ? `${Math.round(m.snr)}db` : '';
+/* ★★★ ONE CHAIN (constants/meters.ts): the reading, its text, and — on the LED / analogue meters — its
+ *  position on the printed scale all come from meterReading(unit, m), so the three cannot disagree.
+ *  The S-meter is the classic HF one from passband dBFS (6 dB/S-unit, S9 ≈ −73). */
+export function meterText(mode: MeterUnit, m: Pick<MeterValues, 'dbfs' | 'snr'> & Partial<MeterValues>): string {
+  return formatReading(mode, meterReading(mode, m));
 }
 
 // ── Clock — port of tick() ────────────────────────────────────────────────────
@@ -903,12 +899,14 @@ interface ModeReading { text: string; active: boolean; sqlClosed: boolean; breat
  * ★ Squelch: when the live signal is BELOW the threshold the gate is closed (muting NOW) — the
  *   readout flips to "SQL" (no extra screen space), and the meter dims.
  */
-function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, meterMode: any,
+function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, meterMode: MeterUnit | undefined,
                         signalActive: boolean | undefined): ModeReading {
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
   const m = useMeters(bus);
-  // An explicit snrText (FM-DX "28 dBf") wins over the bus-computed text.
-  const text = snrText ? snrText : (m ? meterText(meterMode ?? 'snr', m) : '');
+  /* ★★★ The LIVE reading comes off the bus through the meters' own chain (meterText), so the needle and
+   *  the LEDs stand under the label this text names. The screen's static label (FM-DX "28 dBf", from
+   *  its 5 Hz state) only shows while the bus has nothing live — paused, or before the first frame. */
+  const text = m && (m.active || !snrText) ? meterText(meterMode ?? 'snr', m) : (snrText ?? '');
   const active = m ? m.active : !!signalActive;
   const sqlClosed = sqlClosedOf(m ? (m.sql ?? -1) : -1, m?.gate, m ? m.level : 0);
   const breathe = useRef(new Animated.Value(1)).current;
@@ -1157,36 +1155,87 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
         <View pointerEvents="none" style={[cd.lip, { backgroundColor: 'rgba(255,255,255,0.25)' }]} />
       </View>
       <View style={{ height: dl.meterGap }} />
-      <MeterHousing kind={meterKind} height={dl.housingH} shared={shared} lip={lip} bus={bus} land={L} />
+      <MeterHousing kind={meterKind} height={dl.housingH} shared={shared} lip={lip} bus={bus} land={L}
+        unit={meterMode ?? 'snr'} />
+    </View>
+  );
+}
+
+/**
+ * ★★★ THE METER BUS ON THE CALIBRATED SCALE. The LED VU and the analogue meter take a bus of their own
+ * whose level / raw / sql are the readout's POSITION on the printed scale (constants/meters.ts
+ * scaleMeterValues) — the same reading the mode box shows, in the same unit — so their uniform table
+ * lands on the labels. The bar keeps the screen's bus untouched (§4.2: today's meter, unchanged).
+ * ★ The unit is read live from a ref, so switching the signal readout re-scales the next frame without
+ *   re-subscribing the meters.
+ */
+function useScaledMeterBus(bus: MeterBus | undefined, unit: MeterUnit): MeterBus | undefined {
+  const unitRef = useRef(unit);
+  unitRef.current = unit;
+  const out = useMemo(() => (bus ? createMeterBus() : undefined), [bus]);
+  useEffect(() => {
+    if (!bus || !out) return;
+    const st = makeScaledMeterState();
+    const f = (m: MeterValues) => out.emit(scaleMeterValues(m, unitRef.current, st));
+    f(bus.value);
+    bus.subs.add(f);
+    return () => { bus.subs.delete(f); };
+  }, [bus, out]);
+  return out;
+}
+
+/** The LED strip's scale — the readout's own labels (S1 … +60, or dB), under the segments. LedVu's
+ *  built-in row prints the S-meter's only, so the housing draws it (LedVu runs with labelH 0). Same
+ *  geometry and type as LedVu's: padX, the 4 pt gap, one flex cell per LED. */
+function VuScaleLabels({ unit, padX, top, labelH }: { unit: MeterUnit; padX: number; top: number; labelH: number }) {
+  const s = useUiScale();
+  return (
+    <View style={{ position: 'absolute', left: padX, right: padX, top, height: labelH, flexDirection: 'row',
+                   gap: s.r(4) }} pointerEvents="none">
+      {METER_SCALES[unit].labels.map(l => (
+        <Text key={l} style={{ flex: 1, textAlign: 'center', fontFamily: FONT_HYPER, fontSize: labelH,
+                               lineHeight: labelH, fontWeight: '600', letterSpacing: 0.3,
+                               color: 'rgba(255,255,255,0.45)', includeFontPadding: false }}
+              numberOfLines={1} adjustsFontSizeToFit>{l}</Text>
+      ))}
     </View>
   );
 }
 
 /** The LED strip's / edgewise meter's black housing (§4.3 / §4.5): `#030303 → #0b0b0b`, inset shadow,
  *  the chassis lip below, and the meter in it. */
-function MeterHousing({ kind, height, shared, lip, bus, land }: {
+function MeterHousing({ kind, height, shared, lip, bus, land, unit }: {
   kind: MeterKind; height: number; shared: boolean; lip: string; bus?: MeterBus;
   /** Landscape (§9): the strip's / card's own geometry from landscapeDeck. */
   land?: LandscapeLayout;
+  /** The signal readout's unit: the scale printed, and the one the needle / LEDs read. */
+  unit: MeterUnit;
 }) {
   const s = useUiScale();
-  const ledGeom = useMemo(() => land ? { padTop: land.ledPadTop, padX: land.ledPadX, ledH: land.ledH,
-    labelH: land.labelH, labelGap: land.labelGap } : undefined,
-    [land?.ledPadTop, land?.ledPadX, land?.ledH, land?.labelH, land?.labelGap]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const scaled = useScaledMeterBus(bus, unit);
+  // LedVu's own geometry (its defaults in portrait, landscapeDeck's in landscape) — with ITS label row
+  // off; VuScaleLabels draws the readout's labels in the same place.
+  const g = land ? { padTop: land.ledPadTop, padX: land.ledPadX, ledH: land.ledH, labelH: land.labelH, labelGap: land.labelGap }
+    : { padTop: s.r(shared ? 3 : 6), padX: s.r(7), ledH: s.r(13), labelH: s.r(DECK.ledLabel), labelGap: s.r(DECK.ledLabelGap) };
+  const ledGeom = useMemo(() => ({ padTop: g.padTop, padX: g.padX, ledH: g.ledH, labelH: 0, labelGap: g.labelGap }),
+    [g.padTop, g.padX, g.ledH, g.labelGap]);
   return (
     <View style={[cd.housing, { height }]}>
       <View pointerEvents="none" style={cd.housingShade} />
       <View pointerEvents="none" style={[cd.lip, { backgroundColor: kind === 'vu' ? 'rgba(255,255,255,0.22)' : lip }]} />
-      {kind === 'vu' && <LedVu bus={bus} height={height} shared={shared} geom={ledGeom} />}
+      {kind === 'vu' && <LedVu bus={scaled} height={height} shared={shared} geom={ledGeom} />}
+      {kind === 'vu' && g.labelH > 0 && (
+        <VuScaleLabels unit={unit} padX={g.padX} top={g.padTop + g.ledH + g.labelGap} labelH={g.labelH} />
+      )}
       {kind === 'edge' && (land ? (
         // §9: a 24 pt window, padding 2, the 28 pt print shown 2 pt up (Deck.mockup `svgTop: -2px`).
         <View style={{ padding: land.edgePad }}>
-          <EdgeMeter bus={bus} height={land.edgeWindow} printH={land.edgePrintH} printTop={land.edgePrintTop} />
+          <EdgeMeter bus={scaled} unit={unit} height={land.edgeWindow} printH={land.edgePrintH} printTop={land.edgePrintTop} />
         </View>
       ) : (
         // §4.5: a 28 pt window in the 34 pt housing (padding 3; 2 with the shared banner).
         <View style={{ padding: s.r(shared ? DECK.edgePadShared : DECK.edgePad) }}>
-          <EdgeMeter bus={bus} height={s.r(DECK.edgeWindow)} />
+          <EdgeMeter bus={scaled} unit={unit} height={s.r(DECK.edgeWindow)} />
         </View>
       ))}
     </View>
@@ -2199,6 +2248,9 @@ function ControlsBar({
   }), [chanMain, airChannel, frequency, freqFormat, freqUnit, tubeLayout]);
   const stepLabel = useMemo(() => formatStep(step),      [step]);
   const snrText   = meterLabel ?? ''; // FM-DX static reading; live text comes from the bus + meterText()
+  /* ★★★ THE READOUT'S UNIT, for the mode box AND the LED / analogue scales: the signal readout setting,
+   *  or FM-DX's dBf (the tuner screen passes its own label and has no such setting). */
+  const meterUnit = meterUnitOf(signalMode, meterLabel !== undefined);
   const clock     = useClock(srvTzOffsetMin, srvTzAbbr);
 
   const cycleStep = useCallback(() => {
@@ -2252,7 +2304,7 @@ function ControlsBar({
     // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX).
     modeLabel: dabOn ? 'DAB' : modeDisplay(mode) + (activeDecoder ? `: ${(activeDecoder === 'wefax' ? 'fax' : activeDecoder).toUpperCase()}` : ''),
     snrText, fmStereo,
-    connected, signalActive, bus: meterBus, meterMode: signalMode,
+    connected, signalActive, bus: meterBus, meterMode: meterUnit,
     signal: signalLevel, peak: peakLevel,
     stepLabel, onFreqTap, onModeTap,
     onStep: cycleStep, onChat, onMenu, onAudio, audioAsRecord, onShare: handleShare,

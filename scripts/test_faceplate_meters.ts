@@ -11,7 +11,9 @@ import {
   portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind,
   VU_SEGMENTS, VU_LABELS, VU_THRESHOLDS, LED_SPEC, RING_OPEN, RING_CLOSED, ledColourOf, ringSegment, vuPos, peakStep,
   phi, edgeBrightness, segmentTarget, makeWindow, pushSample, eyeStep, steadyLit,
-  scalePointX, needleX, needleSpring, peakNeedleStep,
+  scalePointX, needleX, needleSpring, peakNeedleStep, DB_PER_SEG,
+  METER_SCALES, meterPos, meterReading, formatReading, sMeterText, scaleMeterValues, makeScaledMeterState,
+  meterUnitOf, type MeterUnit,
 } from '../src/constants/meters.ts';
 import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H } from '../src/constants/nixie.ts';
 
@@ -248,10 +250,111 @@ function step(sp: { mass: number; stiffness: number; damping: number }) {
   ok('then drifts down, easing in (slow first)', 6.5 - a1 < a1 - a2);
   at(200);                                            // past the 300 ms ease-in
   const before = p.pos; at(1000);
-  near('~6 dB/s once it has eased in (in segments: 6 / 9 per s)', before - p.pos, 6 / 9, 0.02);
+  near(`~6 dB/s once it has eased in (in segments: 6 / ${DB_PER_SEG} per s)`, before - p.pos, 6 / DB_PER_SEG, 0.02);
   for (let k = 0; k < 3000; k++) peakNeedleStep(p, 2, 10);
   eq('…until it is caught by the needle again', p.pos, 2);
   eq('and it can never fall below the needle', peakNeedleStep(p, 3, 10), 3);
+}
+
+// ── ★★★ THE METERS READ THE MODE BOX: one chain, reading → text → position ──────
+// Build 356: the mode box said S9+15 while the needle sat past +40 — the meters spread the BAR's 0..1
+// evenly under nominal labels. Now the needle / LEDs are placed from the SAME reading the mode box
+// formats, on the scale of the readout's unit. For each reading: the text names label L, the needle
+// stands at/after L's scale point and before the next one, and exactly the LEDs up to L are lit.
+{
+  const W = 328;
+  /** Simulate the LEDs for a steady reading: position → which segments light (σ at the floor). */
+  const litCount = (pos: number) => {
+    let n = 0;
+    for (let i = 0; i < VU_SEGMENTS; i++) if (segmentTarget(i, pos, 0, false, false, false) >= 0.5) n++;
+    return n;
+  };
+  /** A bus frame carrying `v` as the readout for `unit`. */
+  const frame = (unit: MeterUnit, v: number, sqlVal?: number) => ({
+    level: 0.3, peak: 0.3, raw: 0.3, snr: unit === 'snr' ? v : 12, dbfs: unit === 'snr' ? -90 : v,
+    sql: sqlVal == null ? -1 : 0.4, sqlVal,
+  });
+  const cases: Record<MeterUnit, { v: number; text: string; label: number }[]> = {
+    // label = index of the highest printed label at or below the reading (−1: below the first)
+    smeter: [
+      { v: -121, text: 'S1',    label: 0 }, { v: -97, text: 'S5', label: 2 }, { v: -73, text: 'S9', label: 4 },
+      { v: -58,  text: 'S9+15', label: 5 }, { v: -33, text: 'S9+40', label: 8 }, { v: -13, text: 'S9+60', label: 9 },
+      { v: -3,   text: 'S9+70', label: 9 }, { v: -127, text: 'S1', label: -1 },
+    ],
+    dbfs: [
+      { v: -120, text: '-120dB', label: 0 }, { v: -100, text: '-100dB', label: 2 }, { v: -73, text: '-73dB', label: 4 },
+      { v: -58,  text: '-58dB',  label: 6 }, { v: -40, text: '-40dB', label: 8 }, { v: -20, text: '-20dB', label: 9 },
+      { v: 0,    text: '0dB',    label: 9 },
+    ],
+    snr: [
+      { v: 3, text: '3db', label: 0 }, { v: 10, text: '10db', label: 2 }, { v: 20, text: '20db', label: 4 },
+      { v: 28, text: '28db', label: 5 }, { v: 50, text: '50db', label: 8 }, { v: 60, text: '60db', label: 9 },
+      { v: 75, text: '75db', label: 9 },
+    ],
+    dbf: [
+      { v: 10, text: '10 dBf', label: 0 }, { v: 30, text: '30 dBf', label: 2 }, { v: 50, text: '50 dBf', label: 4 },
+      { v: 65, text: '65 dBf', label: 5 }, { v: 90, text: '90 dBf', label: 8 }, { v: 100, text: '100 dBf', label: 9 },
+      { v: 120, text: '120 dBf', label: 9 },
+    ],
+  };
+  for (const unit of Object.keys(cases) as MeterUnit[]) {
+    const sc = METER_SCALES[unit];
+    eq(`${unit}: ten labels, ten values, increasing`, [sc.labels.length, sc.values.length,
+       sc.values.every((v, i) => i === 0 || v > sc.values[i - 1])], [10, 10, true]);
+    // AT every printed label the needle stands ON it, and exactly that many LEDs are lit (the label's
+    // own LED is on its threshold: half — which the LED counts as lit).
+    for (let i = 0; i < 10; i++) {
+      const pos = meterPos(unit, sc.values[i]);
+      near(`${unit}: reading ${sc.labels[i]} → needle on its label`, needleX(pos, W), scalePointX(i, W), 1e-9);
+      eq(`${unit}: reading ${sc.labels[i]} → LEDs lit up to it`, litCount(pos), i + 1);
+    }
+    for (const c of cases[unit]) {
+      const m = frame(unit, c.v);
+      const text = formatReading(unit, meterReading(unit, m));
+      eq(`${unit} ${c.v}: the mode box reads ${c.text}`, text, c.text);
+      const scaled = scaleMeterValues(m, unit, makeScaledMeterState());
+      const pos = vuPos(scaled.raw as number), x = needleX(pos, W);
+      if (c.label >= 0) ok(`${unit} ${c.text}: needle at/after ${sc.labels[c.label]} (x ${x.toFixed(1)})`, x >= scalePointX(c.label, W) - 1e-9);
+      if (c.label < 9) ok(`${unit} ${c.text}: needle before ${sc.labels[c.label + 1]}`, x < scalePointX(c.label + 1, W));
+      eq(`${unit} ${c.text}: LEDs lit = labels at or below it`, litCount(vuPos(scaled.level)), c.label + 1);
+      ok(`${unit} ${c.text}: the needle never leaves the card`, x >= 8 && x <= W - 8);
+    }
+    // Pegged: far beyond the top label the needle rests at the card's end, and there only.
+    eq(`${unit}: pegged beyond the top label`, meterPos(unit, sc.values[9] + 1000), 10);
+    eq(`${unit}: rests at the bottom far below the first`, meterPos(unit, sc.values[0] - 1000), 0);
+    eq(`${unit}: NaN reads as no signal`, meterPos(unit, NaN), 0);
+    // Monotone across the whole range (the needle never runs backwards as the signal rises).
+    let mono = true, prev = -1;
+    for (let v = sc.values[0] - 30; v <= sc.values[9] + 30; v += 0.25) { const p = meterPos(unit, v); if (p < prev) mono = false; prev = p; }
+    ok(`${unit}: monotone`, mono);
+    // ★★ §4.3 TRAP, calibrated: the ring and the red hand go through the same chain — a squelch set AT
+    //    a label rings that label's LED and parks the hand on that label.
+    for (let i = 0; i < 10; i++) {
+      const sc2 = scaleMeterValues(frame(unit, sc.values[i], sc.values[i]), unit, makeScaledMeterState());
+      eq(`${unit}: squelch at ${sc.labels[i]} rings LED ${i}`, ringSegment(sc2.sql), i);
+      near(`${unit}: squelch at ${sc.labels[i]}: the red hand on its label`, needleX(vuPos(sc2.sql as number), W), scalePointX(i, W), 1e-9);
+    }
+  }
+  // The named case from Stuart's screenshot: S9+15 lands half-way between +10 and +20.
+  near('S9+15 is half-way between +10 and +20', meterPos('smeter', -58), 6, 1e-9);
+  eq('the S-meter labels are the brief\'s', METER_SCALES.smeter.labels.join(' '), 'S1 S3 S5 S7 S9 +10 +20 +30 +40 +60');
+  eq('S labels stand for their true dB (S9 = −73, 6 dB / S)', METER_SCALES.smeter.values, [-121, -109, -97, -85, -73, -63, -53, -43, -33, -13]);
+  // S-meter text: every S-unit boundary agrees with where its label is printed.
+  for (let n = 1; n <= 9; n++) eq(`S${n} starts at its label's dB`, sMeterText(-73 - 6 * (9 - n)), `S${n}`);
+  // Squelch not stated in the readout's unit: NO ring (never one in the wrong place).
+  eq('squelch without sqlVal: no ring', scaleMeterValues({ ...frame('smeter', -80), sql: 0.4 }, 'smeter', makeScaledMeterState()).sql, -1);
+  eq('squelch off: no ring', scaleMeterValues(frame('smeter', -80), 'smeter', makeScaledMeterState()).sql, -1);
+  // The unit: FM-DX is dBf whatever the setting; elsewhere the setting (SNR by default).
+  eq('unit: FM-DX dBf / setting / default', [meterUnitOf('smeter', true), meterUnitOf('dbfs', false), meterUnitOf(undefined, false)],
+     ['dbf', 'dbfs', 'snr']);
+  // The LEDs' μ keeps the bar's meter ballistics (0.85 up / 0.35 down per update), in position.
+  {
+    const st = makeScaledMeterState();
+    scaleMeterValues(frame('smeter', -121), 'smeter', st);
+    const up = scaleMeterValues(frame('smeter', -73), 'smeter', st);
+    near('LED μ rises 85 % of the step in one update', up.level * 10, 0.5 + 0.85 * 4, 1e-9);
+    eq('the needle takes the raw reading at once', up.raw * 10, 4.5);
+  }
 }
 
 // ── §4.1 × §7: the LED / analogue windows on REAL TUBES — smallest case first ──

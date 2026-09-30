@@ -5587,6 +5587,20 @@ export default function SDRScreen({ route, navigation }: Props) {
               sqlDragRef.current?.(gateOpen ? -1 : sqlN, true);
             }
           }
+          /* ★★★ THE SQUELCH THRESHOLD IN THE READOUT'S OWN QUANTITY — what the LED ring and the analogue
+           *  red hand are placed from (constants/meters.ts scaleMeterValues), so they stand under the label
+           *  the mode box would name at the gate. `sqlN` is on the BAR's map, which differs per backend;
+           *  this inverts exactly the map it was drawn with (the effect above, onSquelchDrag's forward
+           *  maps, posOf). Everything the bar maps is TRIMMED, like `levelDbm`, so the two compare.
+           *  ★ Local in SNR mode: its gate is a dBFS threshold while the readout is SNR — the same gap
+           *    above the channel level, expressed as SNR (local SNR = chDbfs − floor, frame by frame). */
+          let sqlVal = NaN;
+          if (sqlN >= 0) {
+            if (owrxDbm != null) sqlVal = sqlN * 100 - 110;
+            else if (signalModeRef.current !== 'snr') sqlVal = sqlN * 90 - 130;
+            else if (isKiwi || isLocal) sqlVal = (sqlN * 90 - 130) - levelDbm + snrDb;
+            else sqlVal = sigDenorm(sqlN);
+          }
           // Send the meter TEXT THE PHONE DRAWS, not a metric of the watch's choosing.
           // OWRX/Kiwi have no SNR (snrDb is hardcoded 0 on them), so a wrist that
           // rendered SNR showed a permanent "—" while its bar moved perfectly well.
@@ -5613,7 +5627,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               raw: norm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
               link: meterBus.current.value.link,
-              sql: sqlN, gate,
+              sql: sqlN, sqlVal, gate,
             });
           }
         }

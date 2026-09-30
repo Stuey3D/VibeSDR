@@ -39,7 +39,7 @@ import {
   Canvas, Group, Image as SkImageNode, LinearGradient, Path, Rect, Skia, vec, type SkImage,
 } from '@shopify/react-native-skia';
 import {
-  VU_LABELS, VU_SEGMENTS, needleSpring, needleX, peakNeedleStep, scalePointX, sqlClosedOf, vuPos,
+  METER_SCALES, VU_SEGMENTS, needleSpring, needleX, peakNeedleStep, scalePointX, sqlClosedOf, vuPos, type MeterUnit,
 } from '../constants/meters';
 import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
@@ -52,15 +52,18 @@ const PRINT = '#16120d';
 const RED_PRINT = '#b8160c';
 const RED_BAND  = '#c21a0e';
 const SQL_HAND  = '#d0140a';
-/** Where the red zone begins: +30 (§4.5 "small red zone +30 to +60"). */
-const RED_FROM = VU_LABELS.indexOf('+30');
 
 // ── 1. The card ───────────────────────────────────────────────────────────────
 
-/** The lamp and the printed scale — static; react-native-svg draws it once per size. */
-const Card = React.memo(function Card({ w, h, printH = h, printTop = 0 }: {
-  w: number; h: number; printH?: number; printTop?: number;
+/** The lamp and the printed scale — static; react-native-svg draws it once per size and unit.
+ *  ★★★ The scale is the READOUT's (constants/meters.ts METER_SCALES): S1 … +60 in S-meter mode, dB in
+ *  dBFS / SNR mode, dBf on FM-DX — the labels the needle is calibrated to (meterPos). The red zone is
+ *  the §4.5 "+30 to +60" band, at the same place on every scale. */
+const Card = React.memo(function Card({ w, h, unit, printH = h, printTop = 0 }: {
+  w: number; h: number; unit: MeterUnit; printH?: number; printTop?: number;
 }) {
+  const scale = METER_SCALES[unit];
+  const RED_FROM = scale.redFrom;
   const U = (w - 16) / VU_SEGMENTS;
   // The print is designed on a 28 pt window. ★ Landscape (§9, Deck.mockup `svgTop: -2px`) keeps the
   // 28 pt print and shows it 2 pt up in a 24 pt window: printH / printTop say so, scaled with it.
@@ -100,7 +103,7 @@ const Card = React.memo(function Card({ w, h, printH = h, printTop = 0 }: {
         {/* the scale line, then the red band from half a division before +30 */}
         <Line x1={8} y1={y(14.3)} x2={redX} y2={y(14.3)} stroke={PRINT} strokeWidth={1} />
         <SvgRect x={redX} y={y(13.4)} width={w - 8 - redX} height={2.8 * k} fill={RED_BAND} />
-        {VU_LABELS.map((label, i) => {
+        {scale.labels.map((label, i) => {
           const x = scalePointX(i, w);
           const c = i >= RED_FROM ? RED_PRINT : PRINT;
           return (
@@ -117,7 +120,7 @@ const Card = React.memo(function Card({ w, h, printH = h, printTop = 0 }: {
           );
         })}
         <SvgText x={w - 10} y={y(8)} textAnchor="end" fontSize={5.5 * k} fontWeight="700" fill={PRINT}
-          fontFamily={FONT_HYPER} letterSpacing={0.6}>SIGNAL</SvgText>
+          fontFamily={FONT_HYPER} letterSpacing={0.6}>{scale.title}</SvgText>
       </G>
     </Svg>
   );
@@ -147,8 +150,12 @@ function shadowSprite(w: number, h: number, blur: number, colour: string): SkIma
   return makeSprite(w + 2 * pad, h + 2 * pad, c => c.drawRect(Skia.XYWHRect(pad, pad, w, h), glowPaint(colour, blur)));
 }
 
-export default function EdgeMeter({ bus, height, printH, printTop }: {
-  bus?: MeterBus; height: number;
+export default function EdgeMeter({ bus, unit = 'smeter', height, printH, printTop }: {
+  /** ★ A bus on the CALIBRATED scale (ControlsBar useScaledMeterBus): level / raw / sql = position / 10. */
+  bus?: MeterBus;
+  /** The readout's unit — which scale is printed. */
+  unit?: MeterUnit;
+  height: number;
   /** Landscape: the print's design height and offset in a shorter window (default: the window). */
   printH?: number; printTop?: number;
 }) {
@@ -208,7 +215,7 @@ export default function EdgeMeter({ bus, height, printH, printTop }: {
 
   return (
     <View style={{ height: H, borderRadius: 3, overflow: 'hidden' }} onLayout={onLayout}>
-      {w > 0 && <Card w={w} h={H} printH={printH} printTop={printTop} />}
+      {w > 0 && <Card w={w} h={H} unit={unit} printH={printH} printTop={printTop} />}
       {w > 0 && (
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: H }} pointerEvents="none">
           {/* the red squelch hand: a set-point pointer parked at the threshold, hanging from the top */}

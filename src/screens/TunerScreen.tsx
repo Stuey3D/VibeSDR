@@ -333,6 +333,9 @@ export default function TunerScreen({ route, navigation }: Props) {
   const meterBus = useMemo(() => createMeterBus(), []);
   const lastFrameAt = useRef(Date.now());
   const lastSigNorm = useRef(0);
+  /** The last dBf reading — the LED / analogue meters and the mode box read `dbfs` off the bus, so the
+   *  1 s link watchdog must restate it, not zero it (it used to drop the needle to 0 dBf every second). */
+  const lastSig = useRef(0);
   const dragFreqRef = useRef<number | null>(null);
   const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const vfoPendingHz = useRef(0);
@@ -446,6 +449,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         lastFrameAt.current = Date.now();
         const sn = Math.min(1, Math.max(0, s.sig / 70));
         lastSigNorm.current = sn;
+        lastSig.current = s.sig;
         meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: s.sig, active: true, link: 3 });
         // The wrist gets the same frame. Throttled inside the provider (4/sec) —
         // RDS RadioText changes constantly and WCSession queues rather than drops.
@@ -520,7 +524,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       const gap = Date.now() - lastFrameAt.current;
       const link: 0 | 1 | 2 | 3 = gap < 2000 ? 3 : gap < 4000 ? 2 : gap < 8000 ? 1 : 0;
       const sn = link > 0 ? lastSigNorm.current : 0;
-      meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: 0, active: link > 0, link });
+      meterBus.emit({ level: sn, peak: sn, snr: 0, dbfs: link > 0 ? lastSig.current : 0, active: link > 0, link });
     }, 1000);
     return () => clearInterval(id);
   }, [meterBus]);

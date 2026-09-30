@@ -9,15 +9,22 @@
  *   §4.4  edge brightness   Φ((μ − T)/σ), the σ window, the eye filter, the steady-LED hysteresis
  *   §4.5  the needles       scale points, spring ballistics, the peak needle's hold and drift
  *
- * ★★★ ONE SCALE FOR EVERYTHING. The meter bus carries `level`, `peak` and the squelch `sql` in the SAME
- *   bar-normalised 0..1 scale — the bar's own contract (MeterValues.sql), and the only scale in which
- *   every backend's squelch line is known to sit where its gate compares (Kiwi dBm, a dongle's dBFS,
- *   radiod's SNR). The LEDs and the needles map that ONE number through ONE table (`vuPos`), and the
- *   squelch ring and the red hand go through the SAME table (§4.3 TRAP: "place the ring with the same
- *   S-unit table the segments use, or it sits one LED off from where audio really opens").
- * ★ The table is uniform — the mockup's own model: level 0..10 lights segments linearly, and the
- *   bar's squelch line sits at `(sq + 0.5) × 10 %` for a ring on segment `sq`. The printed labels
- *   (S1 … +60) are the mockup's scale card. See VU_LABELS for why they are nominal.
+ * ★★★ THE METERS READ THE MODE BOX (Stuart, build 356: "if I switch signal readout (S-units / dB) does
+ *   the analogue and the LED's change their readout to accommodate?"). They used to spread the BAR's
+ *   0..1 level evenly under nominal labels, so the mode box said S9+15 while the needle sat past +40.
+ *   Now there is ONE chain, used by the mode box's text and by both meters:
+ *
+ *       meterReading(unit, m) → the number the readout shows, in its unit
+ *       formatReading(unit, v) → the mode box's text
+ *       meterPos(unit, v)      → the position on THAT unit's printed scale (METER_SCALES)
+ *
+ *   so the needle sits under the label the mode box names, on every backend, in every unit.
+ * ★★ The squelch ring and the red hand go through the SAME chain (§4.3 TRAP: "place the ring with the
+ *   same S-unit table the segments use, or it sits one LED off from where audio really opens"): the
+ *   screen puts the threshold on the bus in the readout's own quantity (`sqlVal`).
+ * ★ The position is in SEGMENT units (0..10): label i sits at i + 0.5, segment i lights once the
+ *   reading passes label i, and the needle stands on label i when the readout reads it. The table
+ *   (VU_THRESHOLDS) is uniform in POSITION; the non-uniform dB spacing lives in meterPos.
  */
 
 // ── §4.1 One deck height ──────────────────────────────────────────────────────
@@ -149,14 +156,134 @@ export function sqlClosedOf(sql: number | undefined, gate: boolean | undefined, 
 // ── The LED table (§4.3) ──────────────────────────────────────────────────────
 
 export const VU_SEGMENTS = 10;
+// ── The calibrated scales: what the readout shows, and where it prints ────────
+
+/** The readout's unit — the DISPLAY SETTINGS signal readout (`snr` / `smeter` / `dbfs`), or FM-DX's own
+ *  dBf (the tuner screen, which has no such setting). */
+export type MeterUnit = 'snr' | 'smeter' | 'dbfs' | 'dbf';
+/** The S-meter's calibration — the mode box's since it was written (HF: S9 = −73 dBm, 6 dB per S-unit).
+ *  ★ No VHF (S9 = −93 dBm) convention: the mode box does not use one, and the meters follow it. */
+export const S9_DB = -73;
+export const DB_PER_S_UNIT = 6;
+
+export interface MeterScale {
+  unit:    MeterUnit;
+  /** The ten printed labels (one per segment / scale point). */
+  labels:  readonly string[];
+  /** The reading each label stands for, in the readout's unit — strictly increasing. */
+  values:  readonly number[];
+  /** The analogue card's red zone begins here (§4.5 "+30 to +60"). */
+  redFrom: number;
+  /** The small legend on the analogue card. */
+  title:   string;
+}
+const sVal = (n: number) => S9_DB - DB_PER_S_UNIT * (9 - n);
 /**
- * The printed scale — S9 is the top of the green (§4.3).
- * ★ NOMINAL, like the mockup: the bar's 0..1 scale is SNR-compressed in SNR mode and 90 dB of dBFS in
- *   S-meter / dBFS mode, and neither is S-units in 12 / 10 dB steps. A calibrated S-unit table would
- *   need the squelch threshold in the same dB on every backend (it is not on the bus today) — change
- *   `VU_THRESHOLDS` and both the LEDs and the ring follow, because both read it.
+ * ★★★ THE FOUR PRINTED SCALES. Label i sits at scale point i (position i + 0.5).
+ *  • S-meter: S1 S3 S5 S7 S9 +10 +20 +30 +40 +60 at their TRUE dB (−121 … −73 in 12 dB steps, then
+ *    10 dB steps, then 20 dB to +60) — so S9+15 lands exactly half-way between +10 and +20.
+ *  • dB (the dBFS readout — dBm on a Kiwi / OpenWebRX, whose readout says "dB" too): −120 … −40 in
+ *    10 dB steps, then −20, the same shape as the S scale (the last division is 20 dB, like +40 → +60),
+ *    and −80 / −70 either side of S9 at the top of the green.
+ *  • SNR: 3 6 10 15 20 | 25 30 40 | 50 60 dB — 6 dB is where the app calls a signal present, 20 dB
+ *    (solid copy) is the top of the green, 50–60 dB is the red-zone monster.
+ *  • dBf (FM-DX): 10 … 100 in 10 dB steps — 50 dBf (a good FM signal) the top of the green.
  */
-export const VU_LABELS = ['S1', 'S3', 'S5', 'S7', 'S9', '+10', '+20', '+30', '+40', '+60'] as const;
+export const METER_SCALES: Record<MeterUnit, MeterScale> = {
+  smeter: { unit: 'smeter', labels: ['S1', 'S3', 'S5', 'S7', 'S9', '+10', '+20', '+30', '+40', '+60'],
+            values: [sVal(1), sVal(3), sVal(5), sVal(7), sVal(9), S9_DB + 10, S9_DB + 20, S9_DB + 30, S9_DB + 40, S9_DB + 60],
+            redFrom: 7, title: 'SIGNAL' },
+  dbfs:   { unit: 'dbfs', labels: ['-120', '-110', '-100', '-90', '-80', '-70', '-60', '-50', '-40', '-20'],
+            values: [-120, -110, -100, -90, -80, -70, -60, -50, -40, -20], redFrom: 7, title: 'SIGNAL dB' },
+  snr:    { unit: 'snr', labels: ['3', '6', '10', '15', '20', '25', '30', '40', '50', '60'],
+            values: [3, 6, 10, 15, 20, 25, 30, 40, 50, 60], redFrom: 7, title: 'SNR dB' },
+  dbf:    { unit: 'dbf', labels: ['10', '20', '30', '40', '50', '60', '70', '80', '90', '100'],
+            values: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100], redFrom: 7, title: 'SIGNAL dBf' },
+};
+/** The S-meter's printed scale — S9 is the top of the green (§4.3). */
+export const VU_LABELS = METER_SCALES.smeter.labels;
+
+/** Which scale a screen's readout is on: FM-DX says dBf (it passes its own label); everywhere else the
+ *  signal readout setting. */
+export function meterUnitOf(signalMode: 'snr' | 'smeter' | 'dbfs' | undefined, fmdx: boolean): MeterUnit {
+  return fmdx ? 'dbf' : (signalMode ?? 'snr');
+}
+
+/** The number the readout shows: SNR in SNR mode, the absolute level (the bus's `dbfs` — dBFS, a Kiwi's /
+ *  OpenWebRX's dBm, FM-DX's dBf) otherwise. Visual trim included — it is on the bus already. */
+export function meterReading(unit: MeterUnit, m: { dbfs: number; snr: number }): number {
+  'worklet';
+  return unit === 'snr' ? m.snr : m.dbfs;
+}
+
+/** The S-reading of an absolute level: "S5", "S9", "S9+15" (S9 = −73, 6 dB per S-unit). */
+export function sMeterText(db: number): string {
+  if (db >= S9_DB) {
+    const over = Math.round(db - S9_DB);
+    return over > 0 ? `S9+${over}` : 'S9';
+  }
+  return `S${Math.max(1, 9 - Math.ceil((S9_DB - db) / DB_PER_S_UNIT))}`;
+}
+
+/** The mode box's text for a reading — the one formatter (the phone, the watch, the audio sheet). */
+export function formatReading(unit: MeterUnit, v: number): string {
+  if (unit === 'smeter') return sMeterText(v);
+  if (unit === 'dbfs')   return `${Math.round(v)}dB`;
+  if (unit === 'dbf')    return `${Math.round(v)} dBf`;
+  return isFinite(v) ? `${Math.round(v)}db` : '';
+}
+
+/**
+ * ★★★ A READING → its POSITION on the unit's printed scale (0..10, segment units).
+ * Piecewise-linear through (values[i], i + 0.5): AT a label the needle stands on that label and the
+ * label's LED is exactly on its threshold. Below the first label it runs on at the first division's
+ * rate to 0; above the top label at the last division's rate to 10 — the needle PEGS half a division
+ * past the top label and never leaves the card.
+ */
+export function meterPos(unit: MeterUnit, v: number): number {
+  'worklet';
+  const vals = METER_SCALES[unit].values;
+  const n = vals.length;
+  if (!(v === v)) return 0;                                   // NaN: no reading
+  let p: number;
+  if (v <= vals[0]) p = 0.5 + (v - vals[0]) / (vals[1] - vals[0]);
+  else if (v >= vals[n - 1]) p = n - 0.5 + (v - vals[n - 1]) / (vals[n - 1] - vals[n - 2]);
+  else {
+    let i = 0;
+    while (v > vals[i + 1]) i++;
+    p = i + 0.5 + (v - vals[i]) / (vals[i + 1] - vals[i]);
+  }
+  return Math.max(0, Math.min(n, p));
+}
+
+/** The values on the meter bus this chain reads (structural, so this file stays React-free). */
+export interface MeterBusValues {
+  level: number; peak: number; snr: number; dbfs: number; raw?: number;
+  sql?: number; gate?: boolean;
+  /** The squelch threshold in the READOUT's quantity (the same unit as meterReading). */
+  sqlVal?: number;
+}
+export interface ScaledMeterState { lvl: number; init: boolean }
+export function makeScaledMeterState(): ScaledMeterState { return { lvl: 0, init: false }; }
+/**
+ * ★★★ The bus values the LED VU and the analogue meter draw from, re-expressed on the CALIBRATED scale:
+ * `raw` / `level` / `peak` / `sql` become position / 10, so the meters' own uniform table (vuPos,
+ * VU_THRESHOLDS, ringSegment, needleX) lands on the printed labels. Everything else passes through.
+ *  • raw   = the readout, unsmoothed (the needle springs from it, §4.5 TRAP).
+ *  • level = the same, with the bar's own meter ballistics (0.85 up / 0.35 down per update) — the LEDs'
+ *            μ (§4.4). Smoothed in position, which the mapping keeps monotone.
+ *  • sql   = the threshold on the SAME scale, or −1 (off, or not stated in the readout's unit — never a
+ *            ring in the wrong place).
+ */
+export function scaleMeterValues<T extends MeterBusValues>(m: T, unit: MeterUnit, st: ScaledMeterState): T {
+  const p = meterPos(unit, meterReading(unit, m));
+  if (!st.init) { st.lvl = p; st.init = true; }
+  else st.lvl += (p > st.lvl ? 0.85 : 0.35) * (p - st.lvl);
+  const on = m.sql != null && m.sql >= 0 && m.sqlVal != null && Number.isFinite(m.sqlVal);
+  return { ...m, raw: p / VU_SEGMENTS, level: st.lvl / VU_SEGMENTS, peak: Math.max(p, st.lvl) / VU_SEGMENTS,
+           sql: on ? meterPos(unit, m.sqlVal as number) / VU_SEGMENTS : -1 };
+}
+
 export type LedColourName = 'green' | 'orange' | 'red';
 /** 5 green / 3 orange / 2 red. ★ Never either colour setting — these are the LEDs' own colours. */
 export function ledColourOf(i: number): LedColourName {
@@ -177,15 +304,17 @@ export const LED_SPEC: Record<LedColourName, { hot: string; hi: string; base: st
 export const RING_OPEN = '#3dff72';
 export const RING_CLOSED = '#ff3a2e';
 
-/** Segment units per dB-ish: the bar spans 90 dB in dBFS mode, so a segment is 9 dB. It sets what
- *  "σ floor 1.5 dB" and "~1 dB hysteresis" mean on the bar-normalised scale. */
-export const DB_PER_SEG = 9;
+/** dB per segment: every printed scale's divisions are ~10 dB (the S scale 12 below S9 and 10 above; dB
+ *  and dBf 10; SNR 3–10). It sets what "σ floor 1.5 dB", "~1 dB hysteresis" and the peak needle's
+ *  "6 dB/s" mean in segment units. */
+export const DB_PER_SEG = 10;
 
 /** Each segment's threshold, in segment units: its CENTRE (i + 0.5), which is where the bar's squelch
  *  line sits for a ring on that segment (Deck.mockup `sqlPct: (sq + 0.5) × 10 %`). */
 export const VU_THRESHOLDS: readonly number[] = Array.from({ length: VU_SEGMENTS }, (_, i) => i + 0.5);
 
-/** Bar-normalised level (0..1) → segment position (0..10). THE one mapping (see the header). */
+/** A meter-bus fraction (0..1 — on the LED / analogue meters, the CALIBRATED position / 10 that
+ *  scaleMeterValues puts there) → segment position (0..10). */
 export function vuPos(norm: number): number {
   'worklet';
   return 10 * Math.max(0, Math.min(1, norm));
