@@ -2011,7 +2011,7 @@ function LandscapeStatus({ plate, marginTop, clock, font, clockFont, isRecording
   fit.hidden.forEach((it) => { hide[it] = true; });
   const showShared = !!sharedDial && !hide.shared;
   const showDsp = dspOn && !hide.dsp;
-  const side = [lnd.statusSide, fit.packed && lnd.statusSidePacked];
+  const side = fit.packed ? lnd.statusSidePacked : lnd.statusSide;
 
   return (
     <StatusWell plate={plate} gap={0} style={{ marginTop }}>
@@ -2086,8 +2086,10 @@ const lnd = StyleSheet.create({
   statusSide: { flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row',
                 alignItems: 'center', gap: 8 },
   /* ★ Row 9 (§8.2): PACKED — the sides take their content's width (space-between spreads them) when
-     the equal halves above would not hold them. Still shrinkable, as the last resort of all. */
-  statusSidePacked: { flexGrow: 0, flexBasis: 'auto' },
+     the equal halves above would not hold them. Still shrinkable, as the last resort of all.
+     ★ A whole style, NOT an override of statusSide: Yoga reads `flex: 1` as basis 0 whenever the
+       basis is 'auto', so `{ flex: 1, flexGrow: 0, flexBasis: 'auto' }` is a side of width ZERO. */
+  statusSidePacked: { flexShrink: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
   /* The measuring twin: out of the layout, invisible, wide enough that nothing in it ever wraps. */
   statusGhost: { position: 'absolute', left: 0, top: 0, width: 4000, opacity: 0,
                  flexDirection: 'column', alignItems: 'flex-start' },
