@@ -336,6 +336,103 @@ export function statusGainParts(agcText: string): GainParts | null {
 export const STATUS_DROP_ORDER = ['if', 'gain', 'linkIcons', 'localTime', 'dsp', 'rate', 'shared', 'utc', 'rec'] as const;
 export type StatusItem = typeof STATUS_DROP_ORDER[number];
 
+/**
+ * One thing in the landscape status row, as the row lays it out: its natural width (measured, with
+ * any margin of its own) and the `lead` gap the row puts before it when something precedes it in
+ * its section. `item: null` is the CONNECTION METER — never dropped (§8.2). Width 0 = not present
+ * (no DSP on, not a shared server…): it costs nothing and dropping it frees nothing.
+ */
+export interface StatusUnit { item: StatusItem | null; width: number; lead: number }
+
+/** The row: three sections (times left, SHARED TUNER + DSP centre, link right), `sectionGap` apart. */
+export interface StatusRowSpec {
+  left: StatusUnit[]; centre: StatusUnit[]; right: StatusUnit[];
+  sectionGap: number;
+  /** Width of SHARED TUNER shortened to `SHARED` (§8.2: it shortens before it is dropped). */
+  sharedShort?: number;
+}
+
+/**
+ * The row's state after `step` steps:
+ *   0          today's layout — every item, the side sections EQUAL (flex 1) so the centre is centred;
+ *   1          PACKED — every item, the sides content-sized (space-between). Same items, more room;
+ *   2 …        one step per STATUS_DROP_ORDER item, in order, except that `shared` takes TWO:
+ *              shorten to `SHARED`, then drop.
+ */
+export interface StatusFit { step: number; packed: boolean; sharedShort: boolean; hidden: Set<StatusItem> }
+
+export function statusStepCount(order: readonly StatusItem[] = STATUS_DROP_ORDER): number {
+  return 2 + order.length + (order.includes('shared') ? 1 : 0);
+}
+
+export function statusState(step: number, order: readonly StatusItem[] = STATUS_DROP_ORDER): StatusFit {
+  const hidden = new Set<StatusItem>();
+  let sharedShort = false;
+  let k = 2;
+  for (const it of order) {
+    if (it === 'shared') {
+      if (step >= k) sharedShort = true;
+      k++;
+    }
+    if (step >= k) hidden.add(it);
+    k++;
+  }
+  return { step, packed: step >= 1, sharedShort: sharedShort && !hidden.has('shared'), hidden };
+}
+
+/** The width a section needs with `st`'s items shown. */
+function sectionWidth(units: StatusUnit[], st: StatusFit, sharedShort: number | undefined): number {
+  let w = 0, any = false;
+  for (const u of units) {
+    if (u.item && st.hidden.has(u.item)) continue;
+    const width = u.item === 'shared' && st.sharedShort && sharedShort !== undefined ? sharedShort : u.width;
+    if (width <= 0) continue;
+    w += width + (any ? u.lead : 0);
+    any = true;
+  }
+  return w;
+}
+
+/** Does the row fit `available` pt in state `st`? (Half a point of rounding slack.) */
+export function statusFits(available: number, spec: StatusRowSpec, st: StatusFit): boolean {
+  const L = sectionWidth(spec.left, st, spec.sharedShort);
+  const C = sectionWidth(spec.centre, st, spec.sharedShort);
+  const R = sectionWidth(spec.right, st, spec.sharedShort);
+  // The side sections are always laid out; the centre only when it has something in it.
+  const gaps = spec.sectionGap * (C > 0 ? 2 : 1);
+  const need = st.packed ? L + C + R + gaps : 2 * Math.max(L, R) + C + gaps;
+  return need <= available + 0.5;
+}
+
+/** The fewest steps that fit — the last step (everything droppable gone) when nothing does. */
+function minStep(available: number, spec: StatusRowSpec, order: readonly StatusItem[]): number {
+  const n = statusStepCount(order);
+  for (let k = 0; k < n; k++) if (statusFits(available, spec, statusState(k, order))) return k;
+  return n - 1;
+}
+
+/**
+ * ★★★ §8.2 — WHAT THE LANDSCAPE STATUS ROW DROPS TO FIT, from MEASURED widths (never the device model).
+ *   Items go strictly in STATUS_DROP_ORDER (IF first … the recording timer last); SHARED TUNER
+ *   shortens to `SHARED` before it goes; the connection meter is never dropped. Before anything is
+ *   dropped the row PACKS (sides content-sized), so nothing drops where the items fit at all.
+ * ★★ PORTRAIT NEVER DROPS: it is the full readout (two lines), so it is step 0 whatever the width.
+ * ★ HYSTERESIS: dropping more happens at once (nothing may overflow), but bringing an item BACK needs
+ *   `hysteresis` pt to spare — so a rate readout ticking from 9k/s to 10k/s cannot make IF flap.
+ *   Pass the previous result's `step` as `prevStep`.
+ */
+export function statusFit(available: number, spec: StatusRowSpec, opts: {
+  portrait?: boolean; prevStep?: number; hysteresis?: number; order?: readonly StatusItem[];
+} = {}): StatusFit {
+  const order = opts.order ?? STATUS_DROP_ORDER;
+  if (opts.portrait) return statusState(0, order);
+  const k = minStep(available, spec, order);
+  const prev = opts.prevStep;
+  if (prev === undefined || k >= prev) return statusState(k, order);
+  // Room to bring something back — only with the hysteresis to spare, and never past where we were.
+  return statusState(Math.min(prev, minStep(available - (opts.hysteresis ?? 0), spec, order)), order);
+}
+
 // ── The VTS strip on a VFD ───────────────────────────────────────────────────
 
 /** A unit riding in a 14-segment run: drawn in the sans over its blank cells, never through DSEG. */

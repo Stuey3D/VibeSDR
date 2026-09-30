@@ -9013,7 +9013,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   assume the app is broken, when it is usually the receiver or the path to it.
     //   Saying what it measures turns a worry into information.
     { id: 'link', title: 'How healthy is the connection?',
-      body: 'Phone ⇄ bars ⇄ receiver. The bars are the health of the link between you and the server, and the figures beside them are what is actually arriving — kilobytes per second and frames per second. If the bars drop it is nearly always the receiver or the route to it, not the app; the numbers tell you whether data is still flowing.',
+      body: 'Phone ⇄ bars ⇄ receiver. The bars are the health of the link between you and the server, and the figures beside them are what is actually arriving — kilobytes per second and frames per second. If the bars drop it is nearly always the receiver or the route to it, not the app; the numbers tell you whether data is still flowing. Sideways on a small phone, the figures step aside when the row runs out of room (the bars never do): turn the phone upright to see everything.',
       target: tourRef('linkMeter') },
     // ★ The SERVER side of the same question — read together with the card above (Stuart, 2026-09-28:
     //   the pill is for owners at a glance, and for listeners to tell the server from their own link).

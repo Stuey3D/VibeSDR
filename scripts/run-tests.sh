@@ -192,6 +192,10 @@ if node --no-warnings scripts/test_faceplate_landscape.ts; then pass=$((pass+1))
 #    what it sits on) in every chassis × controls colour × text colour × Transparent/Solid; the
 #    meaning colours never move, the text colour never reaches a box, no blur on silver / black.
 if node --no-warnings scripts/test_decoder_contrast.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE SMALL-SCREEN STATUS ROW (faceplates §8.2): dropped strictly in order (IF first, the recording
+#     timer last), SHARED TUNER shortens before it goes, the connection meter never goes, portrait never
+#     drops, the row packs before anything drops, and a 1 pt wobble cannot flap (hysteresis).
+if node --no-warnings scripts/test_faceplate_status.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
