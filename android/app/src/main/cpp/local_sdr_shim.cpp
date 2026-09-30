@@ -80,6 +80,7 @@
 #include <mutex>
 #include <random>
 #include <unordered_map>
+#include <utility>        // std::exchange — GCC (the Linux build) does not pull it in transitively
 #include <string>
 #include <thread>
 #include <system_error>
