@@ -21,20 +21,23 @@
 
 import React, { useMemo, useRef } from 'react';
 import { useBusValue, type ValueBus } from '../services/valueBus';
-import { Platform, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import type { LayoutChangeEvent } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DECODER_FONT, decoderTokensFor } from './DecoderShell';
 import { AlphaType, Canvas, ColorType, Image as SkiaImage, Path, Points, Rect, Skia,
          Text as SkText, matchFont } from '@shopify/react-native-skia';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
 
+/* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1). The tints stay here — they are this
+ *  panel's measured choices, and row 8 (Transparent / Solid) is where they become the user's. */
+const T = decoderTokensFor();
 const C = {
   // ★ 0.95 was an opaque slab that blanked the waterfall behind it on BOTH platforms. Softened
   //   so the spectrum reads through; on iOS a BlurView sits underneath to keep the text legible
   //   against it, which is what the control island has always done.
-  bg:      'rgba(10,8,4,0.72)',
+  bg:      0.72,
   // ★★ BIG IS MORE TRANSPARENT THAN SMALL, and only now can be. It carries no blur, so its tint is
   //   the ONLY thing between the reader and the spectrum — where SMALL's blur (iOS) is already
   //   doing some of that work. And BIG is the mode that hides most of the band, so it is the one
@@ -43,7 +46,7 @@ const C = {
   //   ★ Free, unlike the blur that used to be here: alpha blending does not resample what is
   //   underneath, which is the whole reason the panel could stop being frosted and start being
   //   glass. See the panel body for that story.
-  bgTall:  'rgba(10,8,4,0.62)',
+  bgTall:  0.62,
   // ★★★ BIG IS ANDROID'S LOOK, DELIBERATELY — the same tint, no blur. Android has never had the
   //   BlurView (it is gated on Platform.OS === 'ios') and Stuart's verdict on it is "the window is
   //   glass and the spectrum shines through". That is the effect BIG wants and it is FREE: alpha
@@ -56,9 +59,7 @@ const C = {
   //   ★★ Same rule as ControlsBar's blur note (2026-07-28): "ANDROID IS THE TARGET, NOT THE THING
   //   TO CHANGE… iOS just needs to get to android level." It applied to the island then and it
   //   applies to this panel now.
-  border:  'rgba(255,160,0,0.28)',
-  gold:    '#ffb833',
-  goldDim: 'rgba(255,160,0,0.86)',
+  goldDim: T.label,
   // ★★ LIFTED FROM 0.38. These are the field TITLES ("PI", "Station", "RDS↔pilot") and the plot
   //   captions, and 0.38 was chosen when the panel sat over a near-opaque slab. The panel is glass
   //   now — deliberately, so the spectrum reads through it — which means the background behind a
@@ -68,17 +69,13 @@ const C = {
   //   ★ Still clearly SUBORDINATE to the values, which are full-strength gold — the hierarchy is
   //   the point of dimming them, and 0.60 keeps it while staying legible over a lit waterfall.
   //   Raising the tint instead would have undone the transparency that was just asked for.
-  muted:   'rgba(255,160,0,0.60)',
-  hdrBdr:  'rgba(255,160,0,0.12)',
-  btnBdr:  'rgba(255,160,0,0.28)',
-  btnAct:  'rgba(255,160,0,0.12)',
-  good:    '#7dff9a',
-  warn:    '#ffd479',
-  bad:     '#ff8a7d',
-  value:   '#ffe566',
-  closeCl: 'rgba(255,100,100,0.70)',
+  muted:   T.muted,
+  good:    T.good,
+  warn:    T.warn,
+  bad:     T.bad,
+  value:   T.value,
 };
-const FONT = 'Atkinson Hyperlegible';
+const FONT = DECODER_FONT;
 const DASH = '—';
 
 const PTY_EU = [
@@ -1089,11 +1086,11 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   const maxH = Math.min(avail, p.tall ? winH * 0.82 : winH * 0.34);
 
   return (
-    <View style={[s.wrap, { bottom: p.bottomOffset }]}>
+    <DecoderShell bottom={p.bottomOffset} maxHeight={maxH} maxWidth={wideCols ? 800 : 600}
+                  tint={p.tall ? C.bgTall : C.bg} blur={p.tall ? 0 : 35}>
       {/* ★ The cap is the CONTENT's width, not a guess: the fields column is 340 and the plots
           column ~330, plus the 18 gap and 24 of padding — so ~760 in two columns, and ~560
           stacked where only the fields and the 310-wide symbol trace have to fit. */}
-      <View style={[s.inner, { maxHeight: maxH, maxWidth: wideCols ? 800 : 600 }]}>
         {/* ★★ THE PANEL HAD NO BLUR AT ALL — a 95%-opaque slab that blanked the waterfall behind
             it. The control island next to it has used BlurView since it was built, which is
             exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
@@ -1120,14 +1117,11 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             complaint that produced it was a 0.95 slab blanking the waterfall behind that strip —
             and BIG, where you are reading an instrument rather than watching through it, takes a
             near-solid tint instead. Platform.OS is 'ios' on a Mac, which is how the Mac got here. */}
-        {Platform.OS === 'ios' && !p.tall &&
-          <BlurView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />}
-        <View style={[StyleSheet.absoluteFill,
-                      { backgroundColor: p.tall ? C.bgTall : C.bg }]} pointerEvents="none" />
-        <View style={s.header}>
+        {/* ★ Blur and tint are DecoderShell's now: `blur` above is 35 in SMALL and 0 in BIG, iOS only. */}
+        <DecoderHeader>
           {/* ★ Matches the button that opens it — an abbreviation in one place and the full
               name in the other reads as two different features. */}
-          <Text style={s.title} numberOfLines={1}>ADVANCED RDS</Text>
+          <DecoderTitle>ADVANCED RDS</DecoderTitle>
           <View style={{ flex: 1 }} />
           {/* ★ RAW REMOVED 2026-07-28. It showed the UNCONFIRMED value for five block-B
               fields (PTY/TP/TA/MS/DI) and coloured those labels by confirmation state —
@@ -1138,14 +1132,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               means making it cover more than five fields, not re-adding a button. */}
           {/* ★ Say what it DOES. A bare caret read as decoration, and while the panel height
               was broken it also appeared to do nothing at all. */}
-          <TouchableOpacity onPress={() => p.onTall(!p.tall)}
-                            style={[s.hbtn, p.tall && s.hbtnActive]} hitSlop={6}>
-            <Text style={[s.hbtnTxt, p.tall && s.hbtnTxtActive]}>{p.tall ? 'SMALL' : 'BIG'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={p.onClose} style={s.hbtn} hitSlop={8}>
-            <Text style={[s.hbtnTxt, { color: C.closeCl }]}>✕</Text>
-          </TouchableOpacity>
-        </View>
+          <DecoderKey active={p.tall} onPress={() => p.onTall(!p.tall)} hitSlop={6}
+                      label={p.tall ? 'SMALL' : 'BIG'} />
+          <DecoderKey tone="close" onPress={p.onClose} hitSlop={8} label="✕" />
+        </DecoderHeader>
 
         <ScrollView contentContainerStyle={[s.body, wideCols && s.bodyWide]}>
           <View style={wideCols ? s.colFields : undefined}>
@@ -1334,8 +1324,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           </View>
           )}
         </ScrollView>
-      </View>
-    </View>
+    </DecoderShell>
   );
 }
 
@@ -1344,27 +1333,7 @@ const s = StyleSheet.create({
   //   so on a Mac it was a column of text against a metre of empty box (Stuart: "needs to be
   //   centre justified so the box doesn't end up huge like this"). Same rule as the control
   //   island: content decides the width, the window only decides whether it fits.
-  wrap:  { position: 'absolute', left: 8, right: 8, zIndex: 200, alignItems: 'center' },
-  inner: {
-    // ★ NO backgroundColor here — the BlurView is the first child and an opaque parent would
-    //   sit behind it doing the very blanking the blur exists to avoid.
-    width: '100%',
-    borderWidth: 1, borderColor: C.border, borderRadius: 14,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.80, shadowRadius: 14, elevation: 16,
-    overflow: 'hidden',
-  },
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 12, paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.hdrBdr,
-  },
-  title: { fontSize: 11, letterSpacing: 2, color: C.goldDim, fontFamily: FONT },
-  hbtn:  { borderWidth: 1, borderColor: C.btnBdr, borderRadius: 4,
-           paddingHorizontal: 8, paddingVertical: 3 },
-  hbtnActive:    { backgroundColor: C.btnAct, borderColor: 'rgba(255,160,0,0.55)' },
-  hbtnTxt:       { fontFamily: FONT, fontSize: 11, color: 'rgba(255,160,0,0.60)' },
-  hbtnTxtActive: { color: C.gold },
+  /* ★ Wrap, frame, header, title and header keys are DecoderShell's. */
   body:  { paddingHorizontal: 12, paddingVertical: 8, gap: 3 },
   // Wide: fields on the left at a FIXED width, plots beside them taking the rest.
   // ★★ EXPLICIT WIDTH, NOT flexBasis + flexShrink. The first attempt used

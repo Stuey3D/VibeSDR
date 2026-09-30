@@ -14,7 +14,7 @@ import type React from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { useMemo } from 'react';
 import type { Aircraft } from '../services/SDRBackend';
-import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
+import { useDecoderTokens, DECODER_FONT, type DecoderTokens } from './DecoderShell';
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
@@ -46,8 +46,10 @@ export default function AircraftPanel({ aircraft, scrollRef }: {
    *  whole point of ADS-B, so it has to be reachable without a finger. */
   scrollRef?: React.RefObject<ScrollView | null>;
 }) {
-  const { theme } = useTheme();
-  const s = useMemo(() => styles(theme), [theme]);
+  // ★ The decoder box's palette and its pinned font (DecoderShell) — this table is that box's body,
+  //   and used to borrow the deck's theme tokens (frequency colour, button text) instead.
+  const tk = useDecoderTokens();
+  const s = useMemo(() => styles(tk), [tk]);
 
   // Nearest first; the ones that haven't sent a position yet fall back to signal so
   // they sort last rather than vanish — they're real aircraft, just not locatable.
@@ -105,20 +107,22 @@ export default function AircraftPanel({ aircraft, scrollRef }: {
   );
 }
 
-const styles = (t: ThemeTokens) => StyleSheet.create({
+const F = DECODER_FONT;
+const styles = (t: DecoderTokens) => StyleSheet.create({
   wrap:    { flex: 1 },
   row:     { flexDirection: 'row', alignItems: 'center', gap: 8,
              paddingVertical: 6, paddingHorizontal: 4,
-             borderBottomWidth: 1, borderBottomColor: t.barBorder },
+             borderBottomWidth: 1, borderBottomColor: t.hdrBdr },
   flag:    { fontSize: 16, width: 22 },
   idCol:   { flex: 1, minWidth: 0 },
-  call:    { color: t.freqColor, fontFamily: t.font, fontSize: 14, fontWeight: 'bold' },
-  icao:    { color: t.sectionColor, fontFamily: t.font, fontSize: 10, opacity: 0.8 },
+  call:    { color: t.value, fontFamily: F, fontSize: 14, fontWeight: 'bold' },
+  icao:    { color: t.muted, fontFamily: F, fontSize: 10 },
   altCol:  { width: 78, alignItems: 'flex-end' },
-  alt:     { color: t.btnText, fontFamily: t.font, fontSize: 13 },
+  alt:     { color: t.value, fontFamily: F, fontSize: 13, fontVariant: ['tabular-nums'] },
   distCol: { width: 82, alignItems: 'flex-end' },
-  dist:    { color: t.snrColor, fontFamily: t.font, fontSize: 13, fontWeight: 'bold' },
-  sub:     { color: t.sectionColor, fontFamily: t.font, fontSize: 10, opacity: 0.75 },
+  dist:    { color: t.label, fontFamily: F, fontSize: 13, fontWeight: 'bold', fontVariant: ['tabular-nums'] },
+  sub:     { color: t.muted, fontFamily: F, fontSize: 10 },
+  // ★ Meaning colours (climb / descend): never follow a colour setting (§10.2).
   up:      { color: '#3ddc84' },
   down:    { color: '#4cc9f0' },
 });

@@ -19,37 +19,44 @@
  *    string by concatenating one into JSON.
  */
 import React, { useMemo, useRef, useState } from 'react';
-import { Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
+import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DECODER_FONT, decoderTokensFor } from './DecoderShell';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, DAB_PTY, dabBlockAt } from '../services/dabBlocks';
 import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
 
+/* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1) — this panel no longer carries its own
+ *  copy. Aliased to the names the body already uses so the rows below read as they did. */
+const T = decoderTokensFor();
 const C = {
-  /* ★★★ NEARLY OPAQUE, AND DELIBERATELY NOT GLASS LIKE THE RDS PANEL. That panel is see-through
-   *  for one reason: "so that the user could still see a little spectrum underneath the window so
-   *  that they can see to tune". In DAB there is nothing to tune behind it — the block is the
-   *  tuning and the dial is locked out — so the transparency buys nothing and costs the thing this
-   *  window is entirely made of: two dozen lines of small text. Measured on the Xcover over 11A,
-   *  2026-09-08: at 0.72 the service list was unreadable wherever the waterfall ran hot. */
-  bg:      'rgba(10,8,4,0.94)',
-  border:  'rgba(255,160,0,0.28)',
-  gold:    '#ffb833',
-  goldDim: 'rgba(255,160,0,0.86)',
-  muted:   'rgba(255,160,0,0.60)',
-  hdrBdr:  'rgba(255,160,0,0.12)',
-  btnBdr:  'rgba(255,160,0,0.28)',
-  btnAct:  'rgba(255,160,0,0.12)',
-  good:    '#7dff9a',
-  warn:    '#ffd479',
-  bad:     '#ff8a7d',
-  value:   '#ffe566',
-  rowAct:  'rgba(255,160,0,0.14)',
+  gold:    T.accent,
+  goldDim: T.label,
+  muted:   T.muted,
+  good:    T.good,
+  warn:    T.warn,
+  bad:     T.bad,
+  value:   T.value,
+  rowAct:  T.rowActive,
 };
-const FONT = 'Atkinson Hyperlegible';
+/* ★★★ NEARLY OPAQUE, AND DELIBERATELY NOT GLASS LIKE THE RDS PANEL. That panel is see-through
+ *  for one reason: "so that the user could still see a little spectrum underneath the window so
+ *  that they can see to tune". In DAB there is nothing to tune behind it — the block is the
+ *  tuning and the dial is locked out — so the transparency buys nothing and costs the thing this
+ *  window is entirely made of: two dozen lines of small text. Measured on the Xcover over 11A,
+ *  2026-09-08: at 0.72 the service list was unreadable wherever the waterfall ran hot.
+ *  ★ Row 8 (Transparent / Solid) is where this becomes the user's choice. */
+const DAB_TINT = 0.94;
+/* ★★ 560 IS KEPT, AND IT IS THE CONTENT'S WIDTH (brief §10.1 asked: justify or drop). Every line in
+ *  this box is ONE column — a 124 pt label and its value, or a logo and a station name — and the
+ *  widest thing in it, the signal pane's constellation + impulse-response pair, is ~450 pt. The
+ *  spots table (DecoderPanel, 760) has seven columns and RDS's two-column BIG (800) has fields
+ *  beside plots; this has neither, so a wider box on a tablet or the Mac is only a longer run of
+ *  empty glass to the right of short values. Same rule as RDS's stacked 600: content decides. */
+const DAB_MAX_W = 560;
+const FONT = DECODER_FONT;
 const DASH = '—';
 
 type Tone = 'ok' | 'warn' | 'bad' | undefined;
@@ -777,15 +784,9 @@ export default function DabPanel(p: DabPanelProps) {
   );
 
   return (
-    <View style={[s.wrap, { bottom: p.bottomOffset }]} pointerEvents="box-none">
-      <View style={s.inner}>
-        {Platform.OS === 'ios' && (
-          <BlurView intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
-        )}
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: C.bg }]} />
-
-        <View style={s.header}>
-          <Text style={s.title}>DAB</Text>
+    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tint={DAB_TINT} blur={24}>
+        <DecoderHeader>
+          <DecoderTitle>DAB</DecoderTitle>
           {/* ★★★ A READOUT, NOT A CONTROL. This was a pair of chevrons either side of the block —
               and they were tiny, in a panel header, duplicating a control the app already has in
               the right place. Stuart: "2 extremely tiny buttons in the decoder header are there
@@ -800,33 +801,24 @@ export default function DabPanel(p: DabPanelProps) {
           </Text>
           <Text style={s.mux} numberOfLines={1}>{muxTitle}</Text>
           <View style={{ flex: 1 }} />
-          <TouchableOpacity onPress={() => setPane(pane === 'stations' ? 'signal' : 'stations')}
-                            style={[s.hbtn, s.hbtnActive]}>
-            {/* ★ The label names where the button GOES, and the state is readable without pressing
-                it — the browser's rule for this same control. */}
-            <Text style={[s.hbtnTxt, s.hbtnTxtActive]}>{pane === 'stations' ? 'SIGNAL' : 'STATIONS'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => p.onTall(!p.tall)} style={[s.hbtn, p.tall && s.hbtnActive]}>
-            <Text style={[s.hbtnTxt, p.tall && s.hbtnTxtActive]}>{p.tall ? 'SMALL' : 'BIG'}</Text>
-          </TouchableOpacity>
+          {/* ★ The label names where the button GOES, and the state is readable without pressing
+              it — the browser's rule for this same control. */}
+          <DecoderKey active onPress={() => setPane(pane === 'stations' ? 'signal' : 'stations')}
+                      label={pane === 'stations' ? 'SIGNAL' : 'STATIONS'} />
+          <DecoderKey active={p.tall} onPress={() => p.onTall(!p.tall)} label={p.tall ? 'SMALL' : 'BIG'} />
           {!!p.onBookmarks && (
-            <TouchableOpacity onPress={p.onBookmarks} style={s.hbtn} accessibilityLabel="DAB bookmarks">
-              <Text style={s.hbtnTxt}>★</Text>
-            </TouchableOpacity>
+            <DecoderKey onPress={p.onBookmarks} accessibilityLabel="DAB bookmarks" label="★" />
           )}
           {/* ★★★ NO ✕ (Stuart, 2026-09-20). Closing this window left the receiver IN DAB with nothing on
               screen to control it — no station list, no way back except pressing DAB again, which reads as
               having lost the mode rather than having hidden a panel. The web client has never offered it.
               EXIT DAB is the honest way out: it leaves the mode as well as the window. SMALL is there for
               anyone who wants the picture back without leaving DAB. */}
-          <TouchableOpacity onPress={p.onExit} style={s.hbtn}>
-            <Text style={s.hbtnTxt}>EXIT DAB</Text>
-          </TouchableOpacity>
-        </View>
+          <DecoderKey onPress={p.onExit} label="EXIT DAB" />
+        </DecoderHeader>
 
         {body}
-      </View>
-    </View>
+    </DecoderShell>
   );
 }
 
@@ -837,28 +829,10 @@ const DLP_ORDER = ['artist', 'title', 'album', 'track', 'composer', 'band', 'pre
   'news', 'sport', 'weather', 'traffic', 'alarm', 'advertisement', 'country'];
 
 const s = StyleSheet.create({
-  wrap:  { position: 'absolute', left: 8, right: 8, zIndex: 200, alignItems: 'center' },
-  inner: {
-    width: '100%', maxWidth: 560,
-    borderWidth: 1, borderColor: C.border, borderRadius: 14,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.80, shadowRadius: 14, elevation: 16,
-    overflow: 'hidden',
-  },
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 10, paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.hdrBdr,
-  },
-  title:    { fontSize: 11, letterSpacing: 2, color: C.goldDim, fontFamily: FONT },
+  /* ★ Frame, header, title and header keys are DecoderShell's. */
   blockTxt: { fontFamily: FONT, fontSize: 13, color: C.gold },
   blockHz:  { fontFamily: FONT, fontSize: 10, color: C.muted },
   mux:      { fontFamily: FONT, fontSize: 12, color: C.value, maxWidth: 150 },
-  hbtn:     { borderWidth: 1, borderColor: C.btnBdr, borderRadius: 4,
-              paddingHorizontal: 7, paddingVertical: 3 },
-  hbtnActive:    { backgroundColor: C.btnAct, borderColor: 'rgba(255,160,0,0.55)' },
-  hbtnTxt:       { fontFamily: FONT, fontSize: 11, color: 'rgba(255,160,0,0.60)' },
-  hbtnTxtActive: { color: C.gold },
   body:   { paddingHorizontal: 12, paddingVertical: 8, gap: 3 },
   notice: { fontFamily: FONT, fontSize: 12, color: C.warn, paddingVertical: 6 },
   row:    { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },

@@ -82,6 +82,13 @@ export const Fonts = {
   ui:           'Atkinson Hyperlegible',
   mono:         'Atkinson Hyperlegible',
   monoFallback: 'Courier New',
+  /**
+   * ★★ Every decoder box (DecoderShell and everything inside it) — PINNED, never the display
+   * style. The boxes are dense instrument read-outs (brief §10: "the text remains Hyperlegible");
+   * DecoderPanel used to take `theme.font`, which would have carried Nixie One into RTTY text the
+   * moment a display style could pick it.
+   */
+  decoder:      'Atkinson Hyperlegible',
 } as const;
 
 // ── Size tokens (from mockup CSS vars) ────────────────────────────────────────

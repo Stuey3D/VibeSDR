@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView, Platform, Animated,
   Switch, StyleSheet,
 } from 'react-native';
+import { DecoderTitle, DecoderKey, DECODER_FONT, decoderTokensFor } from './DecoderShell';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from './PanelNav';
 import GainSlider from './GainSlider';
@@ -23,6 +24,12 @@ import {
  *  instead of widening to string. */
 const CONV_DIRS: ('up' | 'down')[] = ['up', 'down'];
 
+/* ★★ The frame, the title and the close key are DecoderShell's (brief §10.1): this sheet is one of
+ *  the boxes over the waterfall and now shares their chrome and their pinned font. The body keeps
+ *  its own white segment controls — those are settings, not read-outs, and row 10 (PopupShell)
+ *  is where they take the chassis. */
+const T = decoderTokensFor();
+const FONT = DECODER_FONT;
 const C = {
   bg:     'rgba(6,4,2,0.99)',
   border: 'rgba(255,255,255,0.30)',
@@ -549,12 +556,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               Airspy HF+ (Stuart, 2026-07-27) — which is not just wrong, it tells the user the
               app has misidentified their hardware. The server already reports a model string
               taken from the USB descriptor, i.e. what is written on the box. */}
-          <Text style={styles.title}>
+          <DecoderTitle style={styles.title}>
             {p.isSpy ? 'SpyServer Controls'
              : p.radio?.model ? `${p.radio.model} Controls`
              : 'Local SDR Controls'}
-          </Text>
-          <TouchableOpacity onPress={p.onClose} hitSlop={10}><Text style={styles.close}>✕</Text></TouchableOpacity>
+          </DecoderTitle>
+          <DecoderKey tone="close" onPress={p.onClose} hitSlop={10} label="✕" />
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
           {/* ★ The lock notice goes FIRST, before any control — it explains the whole panel,
@@ -1596,49 +1603,49 @@ const styles = StyleSheet.create({
   kbWrap: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end' },
   sheet: { left: 0, right: 0, maxHeight: '85%',
            backgroundColor: C.bg, borderTopLeftRadius: 16, borderTopRightRadius: 16,
-           borderWidth: 1, borderColor: C.border, paddingHorizontal: 16, paddingTop: 10 },
+           borderWidth: 1, borderColor: T.border, paddingHorizontal: 16, paddingTop: 10 },
   handleBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  title: { fontSize: 16, color: C.gold, fontWeight: '700' },
-  close: { fontSize: 18, color: C.muted },
-  section: { fontSize: 10, letterSpacing: 2, color: C.sectionC, marginTop: 16, marginBottom: 4 },
+  // ★ Shrinks rather than pushing the close key off a narrow sheet (long USB model strings).
+  title: { flexShrink: 1, marginRight: 8 },
+  section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.sectionC, marginTop: 16, marginBottom: 4 },
   segRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   seg: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center' },
   segActive: { borderColor: C.abtn, backgroundColor: C.active },
-  segTxt: { fontSize: 12, color: C.muted },
+  segTxt: { fontFamily: FONT, fontSize: 12, color: C.muted },
   segTxtActive: { color: C.gold },
   /* ★ Dimmer and smaller than the title, because the LO is the fact and the product name is the
    *  hint — a newcomer finds their box by the name, and everyone else reads past it. Centred so a
    *  two-line button still reads as one control. */
-  segSub: { fontSize: 9, color: C.muted, opacity: 0.7, marginTop: 1, textAlign: 'center' },
+  segSub: { fontFamily: FONT, fontSize: 9, color: C.muted, opacity: 0.7, marginTop: 1, textAlign: 'center' },
   segSubActive: { color: C.gold, opacity: 0.85 },
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
-  stepBtnTxt: { fontSize: 20, color: C.gold },
+  stepBtnTxt: { fontFamily: FONT, fontSize: 20, color: C.gold },
   adminCard: { borderWidth: 1, borderColor: 'rgba(255,140,60,0.55)', borderRadius: 8,
                padding: 12, marginBottom: 14, backgroundColor: 'rgba(255,140,60,0.08)' },
   adminCardOk: { borderColor: 'rgba(120,220,140,0.5)', backgroundColor: 'rgba(120,220,140,0.08)' },
-  adminTitle: { color: C.gold, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
+  adminTitle: { color: C.gold, fontFamily: FONT, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
   adminRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
-  fieldLbl:  { fontSize: 12, color: C.dim, marginTop: 10, marginBottom: 4 },
+  fieldLbl:  { fontFamily: FONT, fontSize: 12, color: C.dim, marginTop: 10, marginBottom: 4 },
   convInput: { borderWidth: 1, borderColor: C.border, borderRadius: 6,
-               paddingHorizontal: 10, paddingVertical: 8, color: C.muted, fontSize: 15 },
+               paddingHorizontal: 10, paddingVertical: 8, color: C.muted, fontFamily: FONT, fontSize: 15 },
   convRow:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
   convHalf:  { flex: 1 },
-  convDash:  { fontSize: 13, color: C.dim },
+  convDash:  { fontFamily: FONT, fontSize: 13, color: C.dim },
   /* ★ Red only while the refusal stands — it clears the moment a new attempt starts (see
    *  onAdminUnlockPw, which resets the flag before it asks), so the box is not permanently
    *  accusing somebody who has since corrected it. */
   adminInputBad: { borderColor: '#ff6b5e', borderWidth: 1.5 },
   adminInput: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 6,
-                paddingHorizontal: 10, paddingVertical: 8, color: C.gold, fontSize: 14 },
+                paddingHorizontal: 10, paddingVertical: 8, color: C.gold, fontFamily: FONT, fontSize: 14 },
   adminBtn:  { borderWidth: 1, borderColor: C.abtn, borderRadius: 6,
                paddingHorizontal: 14, paddingVertical: 9 },
-  adminBtnTxt: { color: C.gold, fontSize: 12, letterSpacing: 1 },
+  adminBtnTxt: { color: C.gold, fontFamily: FONT, fontSize: 12, letterSpacing: 1 },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  sliderEnd: { color: C.dim, fontSize: 12, minWidth: 26, textAlign: 'center' },
-  stepVal: { fontSize: 15, color: C.muted, minWidth: 80, textAlign: 'center' },
+  sliderEnd: { color: C.dim, fontFamily: FONT, fontSize: 12, minWidth: 26, textAlign: 'center' },
+  stepVal: { fontFamily: FONT, fontSize: 15, color: C.muted, minWidth: 80, textAlign: 'center' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
-  toggleLabel: { fontSize: 14, color: C.muted },
-  note: { fontSize: 11, color: C.dim, marginTop: 6, fontStyle: 'italic' },
+  toggleLabel: { fontFamily: FONT, fontSize: 14, color: C.muted },
+  note: { fontFamily: FONT, fontSize: 11, color: C.dim, marginTop: 6, fontStyle: 'italic' },
   noteStrong: { color: C.gold, fontWeight: '700' },
 });

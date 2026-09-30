@@ -23,13 +23,14 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '../contexts/ThemeContext';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { NAV_FOCUS, captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
+import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DECODER_FONT, decoderTokensFor,
+         useDecoderTokens } from './DecoderShell';
 import StationLogo from './StationLogo';
 import type { Aircraft } from '../services/SDRBackend';
 
@@ -188,21 +189,19 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   time:    'TIME',
 };
 
+/* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1). This panel used to keep its own, with a
+ *  separate white-theme copy in `dc` below, and it had drifted from the others: title 10 pt at .65,
+ *  muted .38, and `theme.font` — which would carry Nixie One into decoder text. */
+const T = decoderTokensFor();
 const C = {
-  bg:       'rgba(10,8,4,0.95)',
-  border:   'rgba(255,160,0,0.28)',
-  gold:     '#ffb833',
-  goldDim:  'rgba(255,160,0,0.70)',
-  muted:    'rgba(255,160,0,0.38)',
-  hdrBdr:   'rgba(255,160,0,0.12)',
-  btnBdr:   'rgba(255,160,0,0.28)',
-  btnAct:   'rgba(255,160,0,0.12)',
-  dotIdle:  'rgba(255,160,0,0.35)',
-  dotOn:    '#55d98d',
-  outputCl: '#ffe566',
-  closeCl:  'rgba(255,100,100,0.70)',
+  gold:     T.accent,
+  hdrBdr:   T.hdrBdr,
+  outputCl: T.value,
 };
-const FONT = 'Atkinson Hyperlegible';
+/* ★ Opaque by design, unlike RDS's glass: this box is mostly text (RTTY, NAVTEX, spots), read
+ *  rather than seen through. Row 8 (Transparent / Solid) is where it becomes the user's choice. */
+const DECODER_TINT = 0.95;
+const FONT = DECODER_FONT;
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
@@ -292,12 +291,11 @@ export default function DecoderPanel({
       (cutoff === 0 || s.time >= cutoff));
   }, [isSpotsMode, spots, spotsKind, sfMode, sfBand, sfAge]);
 
-  const { theme: themeForRows } = useTheme();
   const renderSpot = useCallback(({ item }: { item: SpotRow }) => (
-    <SpotRowView s={item} isCW={spotsKind === 'cw'} font={themeForRows.font}
+    <SpotRowView s={item} isCW={spotsKind === 'cw'} font={FONT}
                  callColor={C.gold}
                  onTuneHz={onTuneHz} expanded={spotsExpanded} />
-  ), [spotsKind, themeForRows, onTuneHz, spotsExpanded]);
+  ), [spotsKind, onTuneHz, spotsExpanded]);
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
   const [imageInfo,   setImageInfo]   = useState('');
   const [hasPrev,     setHasPrev]     = useState(false);
@@ -307,8 +305,7 @@ export default function DecoderPanel({
     else             imageRef?.current?.showPrev();
   };
   const onSave = () => { imageRef?.current?.save(); };
-  const { theme: t } = useTheme();
-  const isWhite = t.name === 'white';
+  const tk = useDecoderTokens();
   const [minimised, setMinimised] = useState(false);
   const [dabSpeedOpen, setDabSpeedOpen] = useState(false);   // DAB speed-fix popup
   // ★★ The spots filters were CYCLERS: each tap advanced by one and you read the label to find
@@ -352,18 +349,20 @@ export default function DecoderPanel({
     onScrollEndDrag:     (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
   };
 
+  // ★ One palette for every box (DecoderShell). The white-theme branch that lived here is gone:
+  //   the boxes follow the faceplate now, whose default chassis is today's gold chrome
+  //   (Decoder.mockup `isDef`) — the look DAB and RDS already had.
   const dc = {
-    border:  isWhite ? 'rgba(255,255,255,0.25)' : C.border,
-    hdrBdr:  isWhite ? 'rgba(255,255,255,0.10)' : C.hdrBdr,
-    title:   isWhite ? 'rgba(255,255,255,0.65)' : C.goldDim,
-    status:  isWhite ? 'rgba(255,255,255,0.38)' : C.muted,
-    btnBdr:  isWhite ? 'rgba(255,255,255,0.25)' : C.btnBdr,
-    btnAct:  isWhite ? 'rgba(255,255,255,0.12)' : C.btnAct,
-    btnTxt:  isWhite ? 'rgba(255,255,255,0.55)' : C.muted,
-    btnActT: isWhite ? '#ffffff' : C.gold,
-    output:  isWhite ? '#ffffff' : C.outputCl,
-    close:   isWhite ? 'rgba(255,180,180,0.70)' : C.closeCl,
+    hdrBdr:  tk.hdrBdr,
+    status:  tk.muted,
+    btnBdr:  tk.keyBorder,
+    btnAct:  tk.keyBgAct,
+    btnTxt:  tk.keyText,
+    btnActT: tk.keyTextAct,
+    output:  tk.value,
+    close:   tk.close,
   };
+
 
   // Appear / disappear
   const panelOn = !!activeDecoder || isSpotsMode || isDabMode;
@@ -781,14 +780,14 @@ export default function DecoderPanel({
     const mine = !!run;
     if (mine) runIdx.current.add(i); else runIdx.current.delete(i);
     return (
-      <TouchableOpacity onPress={onPress}
+      <DecoderKey onPress={onPress}
         onLayout={mine ? (e: any) => {
           const { x, width } = e.nativeEvent.layout;
           hdrBtnX.current[i] = { x, width };
         } : undefined}
         style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
         {children}
-      </TouchableOpacity>
+      </DecoderKey>
     );
   };
 
@@ -801,12 +800,10 @@ export default function DecoderPanel({
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
   return (
-    <Animated.View
-      style={[dp.wrap, { bottom: bottomOffset, opacity, transform: [{ translateY: slideY }] }]}
-    >
-      <View style={[dp.inner, { borderColor: kbZone ? NAV_FOCUS : dc.border,
-                                width: '100%', maxWidth: PANEL_MAX_W }]}
-            onTouchStart={noteTouchInteraction}>
+    <DecoderShell bottom={bottomOffset} maxWidth={PANEL_MAX_W} tint={DECODER_TINT}
+                  borderColor={kbZone ? NAV_FOCUS : undefined}
+                  wrapStyle={{ opacity, transform: [{ translateY: slideY }] }}
+                  onTouchStart={noteTouchInteraction}>
 
         {/* ★ Arrival / departure flash. A border that brightens once and fades, so taking the
             keyboard and handing it back are both announced. pointerEvents none — it is a
@@ -815,25 +812,19 @@ export default function DecoderPanel({
           style={[dp.flash, { opacity: flash }]} />
 
         {/* Header */}
-        <TouchableOpacity
-          style={[dp.header, { borderBottomColor: dc.hdrBdr }]}
-          onPress={() => setMinimised((p: boolean) => !p)}
-          activeOpacity={0.85}
-        >
+        <DecoderHeader onPress={() => setMinimised((p: boolean) => !p)}>
           {/* Status dot */}
           <View style={[dp.dot, decoding && dp.dotOn]} />
 
           {/* Title */}
-          <Text style={[dp.title, { color: dc.title, fontFamily: t.font }, minimised && dp.titleMin]}>
-            {title}
-          </Text>
+          <DecoderTitle minimised={minimised}>{title}</DecoderTitle>
 
           {/* Status text — directly after title (skin layout).
               ★ DAB has no "listening…" state to report: it is not hunting for a signal,
               the multiplex either decodes or it does not. So that slot carries the
               MULTIPLEX NAME instead, matching the watch's DabView, which is the one
               thing you actually want to read there. */}
-          <Text style={[dp.status, dp.statusGrow, { color: dc.status, fontFamily: t.font }]}
+          <Text style={[dp.status, dp.statusGrow, { color: dc.status, fontFamily: FONT }]}
                 numberOfLines={1}>
             {kbZone
               // ★ Shown for EVERY decoder, not just DAB. On RTTY the box took the keyboard
@@ -860,7 +851,7 @@ export default function DecoderPanel({
           {canScrollL && (
             <TouchableOpacity hitSlop={8} style={dp.runArrow}
               onPress={(e: any) => { e?.stopPropagation(); nudge(-1); }}>
-              <Text style={[dp.runArrowTxt, { color: dc.btnTxt, fontFamily: t.font }]}>‹</Text>
+              <Text style={[dp.runArrowTxt, { color: dc.btnTxt, fontFamily: FONT }]}>‹</Text>
             </TouchableOpacity>
           )}
           <ScrollView
@@ -879,47 +870,47 @@ export default function DecoderPanel({
               MODE/BAND/AGE change WHICH rows are listed. Sitting it between two cyclers read as
               a fourth filter. */}
           {isSpotsMode && spotsKind === 'digi' && (
-            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn active={spotsExpanded} run hitSlop={6}
               onPress={(e: any) => { e?.stopPropagation(); setSpotsExpanded(v => !v); }}>
               <Text style={[dp.hbtnTxt, {
-                color: spotsExpanded ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                color: spotsExpanded ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
                 {spotsExpanded ? 'COLLAPSE' : 'EXPAND'}
               </Text>
             </HBtn>
           )}
           {/* Spots filter cyclers (skin sf-mode / sf-band / sf-age dropdowns) */}
           {isSpotsMode && spotsKind === 'digi' && (
-            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn active={sfMode !== 'ALL'} run hitSlop={6}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 setSfOpen(o => (o === 'mode' ? null : 'mode'));
               }}>
               <Text style={[dp.hbtnTxt, {
-                color: sfMode !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                color: sfMode !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
                 {sfMode === 'ALL' ? 'MODE' : sfMode}
               </Text>
             </HBtn>
           )}
           {isSpotsMode && (
-            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn active={sfBand !== 'ALL'} run hitSlop={6}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 setSfOpen(o => (o === 'band' ? null : 'band'));
               }}>
               <Text style={[dp.hbtnTxt, {
-                color: sfBand !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                color: sfBand !== 'ALL' ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
                 {sfBand === 'ALL' ? 'BAND' : sfBand}
               </Text>
             </HBtn>
           )}
           {isSpotsMode && (
-            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn active={sfAge > 0} run hitSlop={6}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 setSfOpen(o => (o === 'age' ? null : 'age'));
               }}>
               <Text style={[dp.hbtnTxt, {
-                color: sfAge > 0 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                color: sfAge > 0 ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
                 {SF_AGES.find(a => a.minutes === sfAge)?.label ?? 'AGE'}
               </Text>
             </HBtn>
@@ -928,19 +919,18 @@ export default function DecoderPanel({
           {/* CLR — text decoders (skin _clearB) */}
           {!isImageMode && !isSpotsMode && !isDabMode && (
             <HBtn run hitSlop={6}
-              style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onClear?.(); }}>
-              <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>CLR</Text>
+              <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: FONT }]}>CLR</Text>
             </HBtn>
           )}
 
           {/* DAB speed correction (§4.5) — opens the SPEED FIX popup (separate preset
               buttons), a popup like the spots filters. Highlighted when not Off. */}
           {isDabMode && onDabSpeed && (
-            <HBtn run hitSlop={6} style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+            <HBtn active={Math.abs((dabSpeed ?? 1) - 1) > 0.001} run hitSlop={6}
               onPress={(e: any) => { e?.stopPropagation(); setDabSpeedOpen(o => !o); }}>
               <Text style={[dp.hbtnTxt, {
-                color: Math.abs((dabSpeed ?? 1) - 1) > 0.001 ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                color: Math.abs((dabSpeed ?? 1) - 1) > 0.001 ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
                 SPEED FIX
               </Text>
             </HBtn>
@@ -949,13 +939,12 @@ export default function DecoderPanel({
           {/* Morse quality filter (skin lsv-dec-sf-quality) */}
           {activeDecoder === 'morse' && (
             <HBtn run hitSlop={6}
-              style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => {
                 e?.stopPropagation();
                 const i = MORSE_QUALITIES.indexOf(morseQuality);
                 onMorseQuality?.(MORSE_QUALITIES[(i + 1) % MORSE_QUALITIES.length]);
               }}>
-              <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: t.font }]}>
+              <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: FONT }]}>
                 {MORSE_QUALITY_LABELS[morseQuality]}
               </Text>
             </HBtn>
@@ -964,31 +953,28 @@ export default function DecoderPanel({
           {/* PREV/LIVE + SAVE — image decoders (skin _prevB/_saveB) */}
           {isImageMode && hasPrev && (
             <HBtn run hitSlop={6}
-              style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onTogglePrev?.(); }}>
-              <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>
+              <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: FONT }]}>
                 {viewingPrev ? 'LIVE' : 'PREV'}
               </Text>
             </HBtn>
           )}
           {isImageMode && (
             <HBtn run hitSlop={6}
-              style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onSave?.(); }}>
-              <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: t.font }]}>SAVE</Text>
+              <Text style={[dp.hbtnTxt, { color: dc.btnActT, fontFamily: FONT }]}>SAVE</Text>
             </HBtn>
           )}
           {/* ★★ BIG / SMALL — offered for EVERY decoder, not just images. See the block at the top
               of this component for why the 200 pt cap was wrong on large screens. */}
-          <HBtn run hitSlop={6}
-            style={[dp.hbtn, { borderColor: dc.btnBdr }]}
+          <HBtn active={tall} run hitSlop={6}
             onPress={(e: any) => { e?.stopPropagation(); setTall((v: boolean) => !v); }}>
-            <Text style={[dp.hbtnTxt, { color: tall ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+            <Text style={[dp.hbtnTxt, { color: tall ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
               {tall ? 'SMALL' : 'BIG'}
             </Text>
           </HBtn>
           {isImageMode && !!imageInfo && (
-            <Text style={[dp.status, { color: dc.status, fontFamily: t.font }]} numberOfLines={1}>
+            <Text style={[dp.status, { color: dc.status, fontFamily: FONT }]} numberOfLines={1}>
               {imageInfo}
             </Text>
           )}
@@ -996,7 +982,7 @@ export default function DecoderPanel({
           {canScrollR && (
             <TouchableOpacity hitSlop={8} style={dp.runArrow}
               onPress={(e: any) => { e?.stopPropagation(); nudge(1); }}>
-              <Text style={[dp.runArrowTxt, { color: dc.btnTxt, fontFamily: t.font }]}>›</Text>
+              <Text style={[dp.runArrowTxt, { color: dc.btnTxt, fontFamily: FONT }]}>›</Text>
             </TouchableOpacity>
           )}
 
@@ -1004,10 +990,9 @@ export default function DecoderPanel({
           {/* Minimise / restore (skin _minB: − / □) */}
           <HBtn
             hitSlop={8}
-            style={[dp.hbtn, { borderColor: dc.btnBdr }]}
             onPress={(e: any) => { e?.stopPropagation(); setMinimised((p: boolean) => !p); }}
           >
-            <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: t.font }]}>
+            <Text style={[dp.hbtnTxt, { color: dc.btnTxt, fontFamily: FONT }]}>
               {minimised ? '□' : '−'}
             </Text>
           </HBtn>
@@ -1020,13 +1005,12 @@ export default function DecoderPanel({
           {!isDabMode && !isAircraftMode && (
             <HBtn
               hitSlop={8}
-              style={[dp.hbtn, { borderColor: dc.btnBdr }]}
               onPress={(e: any) => { e?.stopPropagation(); onClose(); }}
             >
-              <Text style={[dp.hbtnTxt, { color: dc.close, fontFamily: t.font }]}>×</Text>
+              <Text style={[dp.hbtnTxt, { color: dc.close, fontFamily: FONT }]}>×</Text>
             </HBtn>
           )}
-        </TouchableOpacity>
+        </DecoderHeader>
 
         {/* Body — hidden when minimised; image canvas for WEFAX/SSTV */}
         {!minimised && isImageMode && imageRef && (
@@ -1064,7 +1048,7 @@ export default function DecoderPanel({
             {...bodyScroll}
             showsVerticalScrollIndicator
           >
-            <Text style={[dp.output, { color: dc.output, fontFamily: t.font }]} selectable>
+            <Text style={[dp.output, { color: dc.output, fontFamily: FONT }]} selectable>
               {decoderText}
             </Text>
           </ScrollView>
@@ -1078,7 +1062,7 @@ export default function DecoderPanel({
             would need measuring to avoid going off the top of an SE. */}
         {!minimised && popup && (
           <View style={[dp.dabSpeedPop, { borderBottomColor: dc.hdrBdr }]}>
-            <Text style={[dp.dabSpeedTitle, { color: dc.status, fontFamily: t.font }]}>{popup.title}</Text>
+            <Text style={[dp.dabSpeedTitle, { color: dc.status, fontFamily: FONT }]}>{popup.title}</Text>
             <View style={popup.wrap ? dp.popWrapRow : dp.dabSpeedRow}>
               {popup.opts.map((o, oi) => (
                 <TouchableOpacity key={o.key}
@@ -1086,7 +1070,7 @@ export default function DecoderPanel({
                           { borderColor: o.on ? dc.btnActT : dc.btnBdr }, o.on && { backgroundColor: dc.btnAct },
                           kbZone === 'popup' && speedIdx === oi && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
                   onPress={() => { o.apply(); popup.close(); }} activeOpacity={0.7}>
-                  <Text style={[dp.dabSpeedBtnTxt, { color: o.on ? dc.btnActT : dc.btnTxt, fontFamily: t.font }]}>
+                  <Text style={[dp.dabSpeedBtnTxt, { color: o.on ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
                     {o.label}
                   </Text>
                 </TouchableOpacity>
@@ -1106,7 +1090,7 @@ export default function DecoderPanel({
                           navOn && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                   onPress={() => onSelectDab?.(p.id)} activeOpacity={0.7}>
                   <StationLogo name={p.name} />
-                  <Text style={[dp.dabName, { color: active ? dc.btnActT : dc.output, fontFamily: t.font }]}
+                  <Text style={[dp.dabName, { color: active ? dc.btnActT : dc.output, fontFamily: FONT }]}
                         numberOfLines={1}>
                     {active ? '✓ ' : ''}{p.name}
                   </Text>
@@ -1149,15 +1133,14 @@ export default function DecoderPanel({
             // identity across the re-render that expanding causes.
             extraData={spotsExpanded}
             ListEmptyComponent={
-              <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: t.font }]}>
+              <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: FONT }]}>
                 waiting for spots…
               </Text>
             }
           />
         )}
 
-      </View>
-    </Animated.View>
+    </DecoderShell>
   );
 }
 
@@ -1169,28 +1152,9 @@ const dp = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
     borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 8,
   },
-  wrap: {
-    position: 'absolute', left: 8, right: 8,
-    zIndex: 200,
-    alignItems: 'center',   // ★ so `inner`'s maxWidth can take effect — see PANEL_MAX_W
-  },
-  inner: {
-    backgroundColor: C.bg,
-    borderWidth: 1, borderColor: C.border,
-    borderRadius: 14,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.80, shadowRadius: 14, elevation: 16,
-    overflow: 'hidden',
-  },
-  header: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 12, paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.hdrBdr,
-  },
-  dot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: C.dotIdle, flexShrink: 0 },
-  dotOn:     { backgroundColor: C.dotOn, shadowColor: '#55d98d', shadowOpacity: 0.60, shadowRadius: 4, shadowOffset: { width:0, height:0 } },
-  title:     { fontSize: 10, letterSpacing: 2, color: C.goldDim, fontFamily: FONT, flexShrink: 0 },
-  titleMin:  { color: 'rgba(255,160,0,0.40)' },
+  /* ★ Wrap, frame, header, title and the header keys' boxes are DecoderShell's. */
+  dot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: T.dotIdle, flexShrink: 0 },
+  dotOn:     { backgroundColor: T.dotOn, shadowColor: '#55d98d', shadowOpacity: 0.60, shadowRadius: 4, shadowOffset: { width:0, height:0 } },
   // flexShrink with an auto basis is what makes the priority come out right: the status text is
   // flex:1 (basis 0) so it only ever takes SPARE room, while the run keeps its natural width and
   // gives ground only when there is none. On a wide panel the status fills the gap; on the SE it
@@ -1200,15 +1164,9 @@ const dp = StyleSheet.create({
   // The chevrons are affordances, not buttons in the visual sense — no border, so they read as
   // "there is more that way" rather than as two more controls to understand.
   runArrow:    { paddingHorizontal: 2, paddingVertical: 3, flexShrink: 0 },
-  runArrowTxt: { fontFamily: FONT, fontSize: 15, lineHeight: 17, color: 'rgba(255,160,0,0.60)' },
-  hbtn: {
-    borderWidth: 1, borderColor: C.btnBdr, borderRadius: 4,
-    paddingHorizontal: 8, paddingVertical: 3,
-  },
-  hbtnActive:    { backgroundColor: C.btnAct, borderColor: 'rgba(255,160,0,0.55)' },
-  hbtnTxt:       { fontFamily: FONT, fontSize: 11, color: 'rgba(255,160,0,0.60)' },
-  hbtnTxtActive: { color: C.gold },
-  status:     { fontSize: 9, letterSpacing: 1, color: C.muted, flexShrink: 1, overflow: 'hidden' },
+  runArrowTxt: { fontFamily: FONT, fontSize: 15, lineHeight: 17, color: T.keyText },
+  hbtnTxt:       { fontFamily: FONT, fontSize: 11, color: T.keyText },
+  status:     { fontSize: 9, letterSpacing: 1, color: T.muted, flexShrink: 1, overflow: 'hidden' },
   statusGrow: { flex: 1 },
   // Spots table
   // The cells now live in the inner `spotLine`, so the row box itself must NOT be a row — a nested
@@ -1254,7 +1212,7 @@ const dp = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   settingsGap: { width: 6 },
-  closeBtn: { color: C.closeCl, fontSize: 16, paddingHorizontal: 2, flexShrink: 0 },
+  closeBtn: { color: T.close, fontSize: 16, paddingHorizontal: 2, flexShrink: 0 },
   // ★ maxHeight is applied INLINE from bodyH (see the BIG/SMALL block); this keeps the rest of
   // the style and no longer hardcodes the cap.
   body:        {},
