@@ -75,17 +75,22 @@ export interface DomeKeyState {
   pressOut: () => void;
 }
 
-export function useDomeKey(): DomeKeyState {
+/** ★★ WHO CLICKS (Stuart, 2026-09-30): "the tune / zoom / menu / chat / audio / step all need to click as they
+ *  are the front and centre buttons on the front of the hi-fi unit. The others do not need to click." So the
+ *  FRONT PANEL (the four main keys, the tuner keys — DomeKey below) clicks; popup and decoder keys pass
+ *  `silent` and keep the snap without the haptic. */
+export function useDomeKey(opts: { silent?: boolean } = {}): DomeKeyState {
+  const silent = !!opts.silent;
   const progress = useSharedValue(0);
   const click = useMemo(() => createDomeClick({
-    press: clickPress, release: clickRelease,
+    press: silent ? () => {} : clickPress, release: silent ? () => {} : clickRelease,
     setTimer: (ms, f) => setTimeout(f, ms),
     clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
     now: Date.now,
     // ★ §5 TRAP: "check the timer isn't late under load on the Xcover 4S". A JS timer is what can
     //   be late (the snap itself is on the UI thread); say so in development when it is.
     onLate: __DEV__ ? (late) => { if (late > 25) console.warn(`[DomeKey] press click ${Math.round(late)} ms late`); } : undefined,
-  }), []);
+  }), [silent]);
   useEffect(() => click.dispose, [click]);
 
   const pressIn = useCallback(() => {

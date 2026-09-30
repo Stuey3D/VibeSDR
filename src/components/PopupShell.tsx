@@ -267,8 +267,8 @@ export interface PopupKeyProps {
 /**
  * ★★ A DOME KEY for a popup on silver / black (§10.3 "every button is a dome key", §5): the
  * mockup's cap (silver #c4c1ba under a sheen; black #1c1d20 → #0c0c0e), a cast shadow that goes on
- * the click, 2 pt of travel, and the press / release click — all from useDomeKey(), gated on the one
- * controls-haptics switch. The action fires on release, as every dome key.
+ * the click and 2 pt of travel from useDomeKey() — SILENT: only the front panel clicks (Stuart). The
+ * action fires on release, as every dome key.
  * ★ Legends are ENGRAVED (silver #2a2824 / black #cfd2d7); lit ones take the controls colour with
  *   its glow (on silver with the deck keys' dark shade under it, which a single RN text shadow
  *   cannot do beside the glow).
@@ -280,7 +280,7 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
   accessibilityLabel, accessibilityHint,
 }, ref) {
   const pt = usePopupTheme();
-  const { progress, pressIn, pressOut } = useDomeKey();
+  const { progress, pressIn, pressOut } = useDomeKey({ silent: true });   // ★ not front panel: snaps, no click
   const silver = pt.silver;
   const lit = active || primary;
   const legendColor = danger ? pt.danger : lit ? pt.legendLit : pt.legend;

@@ -289,7 +289,7 @@ export const DecoderKey = React.forwardRef<View, DecoderKeyProps>(function Decod
   { label, active = false, tone = 'normal', style, textStyle, children, disabled,
     onPressIn, onPressOut, ...rest }, ref) {
   const tk = useDecoderTokens();
-  const { progress, pressIn, pressOut } = useDomeKey();
+  const { progress, pressIn, pressOut } = useDomeKey({ silent: true });   // ★ not front panel: snaps, no click
   const cap = tk.cap;
 
   const travel = useAnimatedStyle(() => ({ transform: [{ translateY: progress.value * DOME_TRAVEL }] }));
