@@ -189,9 +189,14 @@ if node --no-warnings scripts/test_faceplate_wells.ts; then pass=$((pass+1)); el
 #     real Nixie tubes that fit the window, and the SE's fall-backs (no labels; the bar).
 if node --no-warnings scripts/test_faceplate_landscape.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ THE DECODER BOXES (faceplates §10.2): every text role ≥ 4.5:1 (WCAG luminance, composited over
-#    what it sits on) in every chassis × controls colour × text colour × Transparent/Solid; the
-#    meaning colours never move, the text colour never reaches a box, no blur on silver / black.
+#    what it sits on) in every chassis × controls colour × text colour × Transparency on/off; the
+#    meaning colours never move, the text colour never reaches a box, no blur on silver / black or OFF.
 if node --no-warnings scripts/test_decoder_contrast.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ TRANSPARENCY EFFECTS: each low-end signal alone turns the default OFF, a stored choice always
+#     wins and the auto default is never saved as chosen, decoderBg migrates (solid = chosen OFF,
+#     transparent = NOT chosen), OFF is alpha 1.0 exactly with no scrim or drop shadow, no darker/lighter than the glass on a
+#     dark waterfall, and every file that draws a BlurView reads the switch.
+if node --no-warnings scripts/test_transparency.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ THE SMALL-SCREEN STATUS ROW (faceplates §8.2): dropped strictly in order (IF first, the recording
 #     timer last), SHARED TUNER shortens before it goes, the connection meter never goes, portrait never
 #     drops, the row packs before anything drops, and a 1 pt wobble cannot flap (hysteresis).

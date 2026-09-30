@@ -3,7 +3,7 @@
  *
  * "I don't want colour changes to look like a palette swap on a piece of software" — so a
  * faceplate is not a palette. It is five settings (chassis, display, controls colour, text colour,
- * signal meter) plus the decoder background, resolved HERE, once, into the tokens the deck draws
+ * signal meter) plus TRANSPARENCY EFFECTS, resolved HERE, once, into the tokens the deck draws
  * with. Components never read the colour tables below directly: ControlsBar, DrumWheel,
  * TunerKeys, VTSBar and DecoderShell take the resolved theme from FaceplateContext.
  *
@@ -20,6 +20,8 @@
  * Pure: no React, no storage — so scripts/test_faceplate.ts can check every rule directly.
  */
 
+import type { Transparency } from './transparency';
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 export type Chassis          = 'default' | 'silver' | 'black';
@@ -27,7 +29,11 @@ export type DisplayStyle     = 'hyper' | 'nixie' | 'dot' | 'seg';
 export type ControlsColour   = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'neon';
 export type TextColour       = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'teal';
 export type SignalMeter      = 'bar' | 'vu' | 'edge';
-export type DecoderBackground = 'transparent' | 'solid';
+/** ★★★ TRANSPARENCY EFFECTS (Stuart, 2026-09-30) — ONE switch for every see-through surface: the
+ *  default deck, every decoder box, and (row 10, PopupShell) the menus, sheets and chat. It replaced
+ *  the decoder boxes' own Transparent / Solid row. `off` = alpha 1.0 EXACTLY and no BlurView anywhere
+ *  ("I thought solid would be 1.0 fully solid for max GPU savings"). */
+export type { Transparency };
 
 export interface FaceplateSettings {
   chassis:   Chassis;
@@ -35,7 +41,14 @@ export interface FaceplateSettings {
   controls:  ControlsColour;
   text:      TextColour;
   meter:     SignalMeter;
-  decoderBg: DecoderBackground;
+  /** The user's choice — meaningful ONLY when `transparencyExplicit`. Otherwise the device decides
+   *  (src/constants/transparency.ts `autoTransparency`) and this field is not read: see
+   *  `effectiveTransparency`. ★ FaceplateContext resolves the theme with the EFFECTIVE value
+   *  substituted here, so `theme.settings.transparency` is what is on screen. */
+  transparency: Transparency;
+  /** ★★ Has the user ever picked ON / OFF? Until they do, low-end detection decides — and the auto
+   *  default is NEVER written back as if chosen, or a phone upgraded to a fast one would stay solid. */
+  transparencyExplicit: boolean;
   /** §4.4 "Steady LEDs": the LED VU's edge segment solid on/off with ~1 dB hysteresis instead of the
    *  statistical partial brightness. Stored now (the CONTROL CUSTOMISATION pane's FEEL group); the
    *  VU that reads it arrives with row 5, which also ORs in the OS Reduce Motion setting. */
@@ -51,7 +64,7 @@ export const DISPLAYS:    DisplayStyle[]   = ['hyper', 'nixie', 'dot', 'seg'];
 export const CONTROLS:    ControlsColour[] = ['green', 'red', 'amber', 'blue', 'white', 'neon'];
 export const TEXTS:       TextColour[]     = ['green', 'red', 'amber', 'blue', 'white', 'teal'];
 export const METERS:      SignalMeter[]    = ['bar', 'vu', 'edge'];
-export const DECODER_BGS: DecoderBackground[] = ['transparent', 'solid'];
+export const TRANSPARENCIES: Transparency[] = ['on', 'off'];
 
 /** ★★★ What the real display technology came in (§1). Nixie: none — locked neon (§2). Dot and
  *  segment VFDs never came in white. The first entry is the display's default. */
@@ -65,7 +78,7 @@ export const TEXT_ALLOWED: Record<DisplayStyle, TextColour[]> = {
 /** §1 defaults. `display` is overwritten by the font migration on first load (see migrate…). */
 export const DEFAULT_SETTINGS: FaceplateSettings = {
   chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
-  meter: 'bar', decoderBg: 'transparent', steadyLeds: false, textByDisplay: {},
+  meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, textByDisplay: {},
 };
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
@@ -84,6 +97,31 @@ export interface LedColour {
    *  as the same strings Skia parsed before (see ledA / hotA). */
   hsl?:    [number, number, number];
   hotHsl?: [number, number, number];
+}
+
+/**
+ * ★★★ A translucent colour made OPAQUE without changing how it looked: composited over `base`
+ * (black by default — the dark waterfall floor it sat on), returned at alpha 1.0 EXACTLY.
+ * Transparency OFF builds every surface colour with this, so the app "looks the same as now, just
+ * not see-through" — never a lighter or darker panel (scripts/test_transparency.ts measures it).
+ * ★ Only rgb()/rgba()/#rrggbb in; an already-opaque colour comes back as the same rgb.
+ */
+export function solidOver(color: string, base: [number, number, number] = [0, 0, 0]): string {
+  const c = color.trim();
+  let r: number, g: number, b: number, a = 1;
+  if (c.startsWith('#')) {
+    const h = c.slice(1);
+    const n = h.length === 3 ? h.split('').map(x => x + x).join('') : h;
+    r = parseInt(n.slice(0, 2), 16); g = parseInt(n.slice(2, 4), 16); b = parseInt(n.slice(4, 6), 16);
+  } else {
+    const m = c.match(/^rgba?\(([^)]+)\)$/);
+    if (!m) throw new Error(`solidOver: cannot parse ${color}`);
+    const p = m[1].split(',').map(Number);
+    [r, g, b] = p;
+    if (p.length > 3) a = Math.min(1, Math.max(0, p[3]));
+  }
+  const mix = (v: number, u: number) => Math.round(v * a + u * (1 - a));
+  return `rgb(${mix(r, base[0])},${mix(g, base[1])},${mix(b, base[2])})`;
 }
 
 /** rgba() from a triplet — the only way a token should be given an alpha. */
@@ -254,10 +292,31 @@ export function parseSettings(json: string | null, legacyThemeName?: string | nu
     controls:  pick(raw.controls, CONTROLS, 'green'),
     text,
     meter:     pick(raw.meter, METERS, 'bar'),
-    decoderBg: pick(raw.decoderBg, DECODER_BGS, 'transparent'),
+    ...parseTransparency(raw),
     steadyLeds: raw.steadyLeds === true,
     textByDisplay,
   };
+}
+
+/**
+ * ★★ MIGRATION from the decoder boxes' Transparent / Solid (`decoderBg`, row 8) to TRANSPARENCY
+ * EFFECTS. `solid` → OFF, and it WAS a choice: `transparent` was the default. But a stored
+ * `transparent` is NOT evidence of a choice — FaceplateProvider writes the parsed defaults back on
+ * first launch, so every install that never opened the pane has `decoderBg: 'transparent'` saved.
+ * It maps to ON *unchosen*, which lets low-end detection still switch a slow phone off.
+ */
+function parseTransparency(raw: any): Pick<FaceplateSettings, 'transparency' | 'transparencyExplicit'> {
+  if (typeof raw.transparencyExplicit === 'boolean') {
+    return { transparency: pick(raw.transparency, TRANSPARENCIES, 'on'),
+             transparencyExplicit: raw.transparencyExplicit && TRANSPARENCIES.includes(raw.transparency) };
+  }
+  if (raw.decoderBg === 'solid') return { transparency: 'off', transparencyExplicit: true };
+  return { transparency: 'on', transparencyExplicit: false };
+}
+
+/** The user's choice from the pane: ON / OFF, and from now on it is theirs (explicit). */
+export function withTransparency(s: FaceplateSettings, t: Transparency): FaceplateSettings {
+  return s.transparencyExplicit && s.transparency === t ? s : { ...s, transparency: t, transparencyExplicit: true };
 }
 
 // ── The CONTROL CUSTOMISATION pane (§1) ───────────────────────────────────────
@@ -279,9 +338,12 @@ export const DISPLAY_CHOICES: PaneChoice<DisplayStyle>[] = [
 export const METER_CHOICES: PaneChoice<SignalMeter>[] = [
   { value: 'bar', label: 'BAR' }, { value: 'vu', label: 'LED VU' }, { value: 'edge', label: 'ANALOGUE' },
 ];
-export const DECODER_BG_CHOICES: PaneChoice<DecoderBackground>[] = [
-  { value: 'transparent', label: 'TRANSPARENT' }, { value: 'solid', label: 'SOLID' },
+export const TRANSPARENCY_CHOICES: PaneChoice<Transparency>[] = [
+  { value: 'on', label: 'ON' }, { value: 'off', label: 'OFF' },
 ];
+/** The TRANSPARENCY EFFECTS row's subtitle (§1 group layout; UK English): what OFF buys and costs
+ *  nothing to read — it is the one faceplate choice that is also a performance setting. */
+export const TRANSPARENCY_NOTE = 'Off · solid panels, easier to read and lighter on older devices';
 
 /** The note the TEXT row shows instead of colours under Nixie (§1; the mockup's exact words). */
 export const TEXT_LOCKED_NOTE = 'Locked to neon by the Nixie display';
@@ -342,6 +404,11 @@ export interface ChassisTokens {
   // Deck glass (the island behind everything)
   barBorder:      string;
   deckTint:       string;
+  /** ★ Transparency OFF (default chassis only — silver / black are already an opaque plate): the
+   *  glass island's tint and ring at alpha 1.0, composited over black (`solidOver`). The deck draws
+   *  its tint ON the shadowed root view in this case — see ControlsBar for why that matters on iOS. */
+  deckSolid:      string;
+  barBorderSolid: string;
   // Status row
   clock:          string;
   srvClock:       string;
@@ -483,6 +550,8 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
   sharedBorder:  'rgba(255,255,255,0.30)',
   barBorder:     'rgba(255,255,255,0.30)',
   deckTint:      'rgba(8,6,2,0.55)',
+  deckSolid:     solidOver('rgba(8,6,2,0.55)'),
+  barBorderSolid: solidOver('rgba(255,255,255,0.30)'),
   clock:         'rgba(255,255,255,0.30)',
   srvClock:      '#9fd0ff',
   linkDim:       'rgba(255,255,255,0.40)',
@@ -721,7 +790,45 @@ export interface FaceplateTheme {
   deck:      DeckText;
   keyLegend: KeyLegend;
   vts:       VtsText;
+  /** ★★★ Transparency OFF: every see-through surface is drawn at alpha 1.0 with no BlurView. Read
+   *  through `useSurfaceOpaque()` (FaceplateContext) — the deck, DecoderShell, MenuSheet and row 10's
+   *  PopupShell all take it from here, so there is one switch and one reader of it. */
+  opaque:    boolean;
+  /** The same switch spelled out for a surface that draws itself — `useSurface()`. */
+  surface:   SurfaceTokens;
 }
+
+/**
+ * ★★★ WHAT TRANSPARENCY OFF MEANS, for anything drawn over the waterfall (Stuart, 2026-09-30, the
+ * same rule as the web client): OPAQUE PANELS OVER A LIVE, UNDIMMED WATERFALL.
+ *   • `fill()` — a panel colour at alpha 1.0 exactly (today's colour composited over black).
+ *   • `blur` false — no BlurView.
+ *   • `scrimOpacity` 0 — no full-screen dim behind a sheet, modal or menu: the dim IS a full-screen
+ *     blend over the live spectrum. Keep the tap-outside-to-close view; give it no background
+ *     (an invisible view costs nothing to composite).
+ *   • `dropShadow` false — no blurred shadow cast over the spectrum; the panel keeps its border.
+ * ★★ AND THE WATERFALL NEVER STOPS DRAWING under a panel — nothing here is a licence to skip a
+ *   frame. The only permitted draw-skip in the app is a start screen.
+ */
+export interface SurfaceTokens {
+  opaque:       boolean;
+  blur:         boolean;
+  /** Multiply a scrim's opacity by this: 1 = today's dim, 0 = none. */
+  scrimOpacity: number;
+  dropShadow:   boolean;
+  /** A surface colour as it must be drawn: itself when ON, `solidOver(itself)` when OFF. */
+  fill:         (color: string) => string;
+}
+
+const SURFACE_ON: SurfaceTokens = { opaque: false, blur: true, scrimOpacity: 1, dropShadow: true, fill: c => c };
+const SURFACE_OFF: SurfaceTokens = { opaque: true, blur: false, scrimOpacity: 0, dropShadow: false, fill: c => solidOver(c) };
+
+export function surfaceTokens(opaque: boolean): SurfaceTokens {
+  return opaque ? SURFACE_OFF : SURFACE_ON;
+}
+
+/** Style that switches a view's drop shadow off (iOS shadow + Android elevation) — for OFF. */
+export const NO_DROP_SHADOW = { shadowOpacity: 0, shadowRadius: 0, elevation: 0 } as const;
 
 /** Today's WHITE-theme text values (ThemeContext) — the default deck's text roles. */
 const TODAY_TEXT = {
@@ -837,5 +944,6 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
             mark: text.core, markGlow: deckDefault ? null : text.glow, ...lit };
   }
 
-  return { settings: s, chassis, controls, text, deck, keyLegend, vts };
+  const opaque = s.transparency === 'off';
+  return { settings: s, chassis, controls, text, deck, keyLegend, vts, opaque, surface: surfaceTokens(opaque) };
 }

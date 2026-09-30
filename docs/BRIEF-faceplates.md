@@ -43,7 +43,7 @@ Do these as separate commits, in this order. Each one ships on its own.
 | 5 | Meters: LED VU, then analogue | 4 |
 | 6 | Drum wells + tuner-keys mode | 6 |
 | 7 | Landscape | 9 |
-| 8 | Decoder boxes (Transparent / Solid) | 10 |
+| 8 | Decoder boxes (Transparent / Solid → since 2026-09-30 the app-wide TRANSPARENCY EFFECTS, §10.2) | 10 |
 | 9 | Small-screen status row | 8.2 |
 | 10 | Popups, menus and chat take the chassis (`PopupShell`) | 10.3 |
 
@@ -58,7 +58,7 @@ Control Customisation column). Today's **CONTROLS** section in `MenuSheet` becom
 
 | Group | Rows (in this order) | Today |
 |---|---|---|
-| **FACEPLATE** | CHASSIS · DISPLAY · CONTROLS colour · TEXT colour · SIGNAL METER · DECODERS (Transparent/Solid) | new (this brief) |
+| **FACEPLATE** | CHASSIS · DISPLAY · CONTROLS colour · TEXT colour · SIGNAL METER · TRANSPARENCY EFFECTS (On/Off) | new (this brief) |
 | **TUNING & ZOOM** | TUNE drum/keys · ZOOM drum/keys · DRUM FEEL normal/precise · WHEEL zoom/tune · MEDIA ⏮⏭ tune step/bookmark | moved from CONTROLS |
 | **FEEL** | HAPTICS off/on · STEADY LEDS off/on (§4.4) | haptics was a key on the DRUMS row |
 
@@ -86,7 +86,7 @@ Control Customisation column). Today's **CONTROLS** section in `MenuSheet` becom
 | **Controls colour** | `green`, `red`, `amber`, `blue`, `white`, `neon` | `green` |
 | **Text colour** | depends on Display (table below) | first allowed |
 | **Signal meter** | `bar` (today's), `vu` ("LED VU"), `edge` ("Analogue") | `bar` |
-| **Decoder background** | `transparent`, `solid` | `transparent` |
+| **Transparency effects** (was *Decoder background*) | `on`, `off` | `on`, or `off` on a low-end device until the user chooses (§10.2) |
 
 ★★★ **Two colours, not one.**
 - **Controls colour** lights the key legends, the drum wells (window edges, seam glow, icon, ±,
@@ -598,6 +598,25 @@ Use the majority values (title 11 pt / .86, muted .60, padding 12 / 8), follow t
 pin **`Fonts.decoder = 'Atkinson Hyperlegible'`**, and justify or drop DAB's 560 cap.
 
 ### 10.2 Decoder background: `Transparent` (default) or `Solid`
+
+> ★★★ **SUPERSEDED 2026-09-30 by ONE app-wide setting, TRANSPARENCY EFFECTS On / Off** (Stuart: "That
+> solid/transparency toggle we added to the decoder box, apply that to the default controls too, then when app
+> opened we detect low end hardware we default to transparency off … then user can customise afterwards", and
+> "I thought solid would be 1.0 fully solid for max GPU savings").
+> - **Off** = alpha **1.0 exactly** and **no `BlurView` anywhere**: the default deck (portrait + landscape), every
+>   decoder box (default chassis: today's glass composited over black; silver/black: the metal look below), the
+>   menu sheet, and row 10's `PopupShell` via `useSurfaceOpaque()` + `solidOver()` (FaceplateContext / faceplate.ts).
+>   **Opaque panels over a live, undimmed waterfall:** no full-screen scrim (keep the invisible tap-to-close view),
+>   no blurred drop shadow over the spectrum, and the waterfall never stops drawing under a panel. `useSurface()`
+>   gives PopupShell `fill()` / `blur` / `scrimOpacity` / `dropShadow`. (The glass box's shadow was worse than it
+>   looked — iOS RN only precomputes a `shadowPath` when that
+>   view's own background is > 0.999 alpha; otherwise it renders the shadow per pixel, offscreen.)
+> - Until the user picks, `autoTransparency()` (src/constants/transparency.ts) decides: Off for iOS Reduce
+>   Transparency, Android API < 29, an iPhone on iOS < 17; RAM ≤ 3 GB and pre-A12 model identifiers are coded
+>   and tested but have no JS source yet. A stored choice always wins; the auto value is never stored.
+> - Subtitle: "Off · solid panels, easier to read and lighter on older devices".
+> The table below is the original design; read "Transparent" as On and "Solid" as Off (at 1.0, not 0.95).
+
 ("I prefer transparent to see the signals, but someone may prefer solid for easier to read.")
 
 | | Transparent (default) | Solid |

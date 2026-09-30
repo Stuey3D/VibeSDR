@@ -196,7 +196,7 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
  *  its own, with a separate white-theme copy, and it had drifted: title 10 pt at .65, muted .38,
  *  and `theme.font` — which would carry Nixie One into decoder text.
  * ★ The tint is the user's (§10.2): this box was 0.95 ("mostly text, read rather than seen
- *  through") — which is now what Solid gives; Transparent is the same glass as every box. */
+ *  through") — which is now what Transparency OFF gives (at 1.0); ON is the same glass as every box. */
 const FONT = DECODER_FONT;
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ export default function DecoderPanel({
   // STATUS BAR ALONE"), reintroduced by applying the right number to the wrong box.
   // ★ Reserved rather than measured: onLayout would settle a frame late and make BIG visibly jump.
   const HEADER_H = 46;
-  // ★ Solid silver / black puts the body in a recessed window with an 8 pt margin under it: height
+  // ★ OFF on silver / black puts the body in a recessed window with an 8 pt margin under it: height
   //   the reservation above never counted, so it is counted here or BIG reaches the notch again.
   const tk = useDecoderTokens();
   const dp = useDecoderStyles(makeDp);
@@ -1011,7 +1011,7 @@ export default function DecoderPanel({
           )}
         </DecoderHeader>
 
-        {/* ★ On Solid silver / black the body sits in the recessed dark window (§10.2); on glass
+        {/* ★ With Transparency OFF on silver / black the body sits in the recessed dark window (§10.2); on glass
             DecoderBody is nothing at all. Not drawn when minimised — an empty window is not "hidden". */}
         {!minimised && (<DecoderBody>
         {/* Body — hidden when minimised; image canvas for WEFAX/SSTV */}
@@ -1173,7 +1173,7 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
                  color: T.keyLook === 'outline' ? T.keyText : T.title, ...engraveStyle(T) },
   hbtnTxt:       { fontFamily: FONT, fontSize: 11, color: T.keyText },
   status:     { fontSize: 9, letterSpacing: 1, color: T.muted, flexShrink: 1, overflow: 'hidden' },
-  // The status in the HEADER sits on the metal under Solid silver / black: engraved (§10.2).
+  // The status in the HEADER sits on the metal under OFF on silver / black: engraved (§10.2).
   hdrStatus:  { color: T.hdrMuted, fontFamily: FONT, ...engraveStyle(T) },
   statusGrow: { flex: 1 },
   // Spots table

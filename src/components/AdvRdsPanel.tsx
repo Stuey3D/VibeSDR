@@ -37,7 +37,7 @@ import StationLogo from './StationLogo';
  *  text and the plots, not just the frame. Module-level code (the verdict functions, which pick a
  *  MEANING colour) reads the fixed meaning colours below — they never follow a setting (§10.2).
  *
- * ★★★ THE TINT WAS THIS PANEL'S, AND IS NOW EVERY PANEL'S "TRANSPARENT" (§10.2): 0.72 in SMALL over
+ * ★★★ THE TINT WAS THIS PANEL'S, AND IS NOW EVERY PANEL'S TRANSPARENCY-ON GLASS (§10.2): 0.72 in SMALL over
  *  an iOS blur, 0.62 in BIG with none. Its history, which is why those are the numbers:
  *  ★ 0.95 was an opaque slab that blanked the waterfall behind it on BOTH platforms. Softened so
  *    the spectrum reads through; on iOS a BlurView sits underneath to keep the text legible
@@ -50,7 +50,7 @@ import StationLogo from './StationLogo';
  *    IS TUNING — Stuart: "so that the user could still see a little spectrum underneath the window
  *    so that they can see to tune". An earlier pass raised BIG to 0.93 to protect legibility once
  *    the blur was gone, which traded away the one thing the transparency existed for. That trade
- *    is now the user's: Solid (0.95 / metal) for reading, Transparent for tuning.
+ *    is now the user's: Transparency OFF (opaque at 1.0 / metal) for reading, ON for tuning.
  *  ★★ LABELS LIFTED FROM 0.38 (2026-08-02: "with the waterfall behind they are a little hard to
  *    see"), and to .72 by the §10.2 contrast sweep — still clearly SUBORDINATE to the full-strength
  *    values, which is the hierarchy the dimming exists for. */
@@ -1103,8 +1103,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             complaint that produced it was a 0.95 slab blanking the waterfall behind that strip —
             and BIG, where you are reading an instrument rather than watching through it, takes a
             near-solid tint instead. Platform.OS is 'ios' on a Mac, which is how the Mac got here. */}
-        {/* ★ Blur and tint are DecoderShell's now, from the Decoder background setting: under the
-            default Transparent, 35 in SMALL and 0 in BIG, iOS only — and never on silver / black. */}
+        {/* ★ Blur and tint are DecoderShell's now, from TRANSPARENCY EFFECTS: with it ON, 35 in
+            SMALL and 0 in BIG, iOS only — never on silver / black, and never with it OFF. */}
         <DecoderHeader>
           {/* ★ Matches the button that opens it — an abbreviation in one place and the full
               name in the other reads as two different features. */}
