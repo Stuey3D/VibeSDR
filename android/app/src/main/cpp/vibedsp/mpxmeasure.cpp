@@ -190,7 +190,7 @@ void MpxMeasure::build() {
         const double pass = kPassHz + 10000.0, stopHz = fsOut - kStopHz;
         std::vector<float> t = designLowpass(0.5 * (pass + stopHz) / fs, (stopHz - pass) / fs, /*deepStop=*/true);
         stageTaps_.emplace_back(t, fs);
-        decs_.push_back(std::make_unique<FirDecimator>(t, d));
+        decs_.push_back(std::make_unique<PairDec<cf32>>(t, d));
         fs = fsOut;
     }
     fs1_ = fs;
@@ -263,7 +263,7 @@ void MpxMeasure::build() {
             }
         }
         dec2Taps_ = taps;
-        dec2_ = std::make_unique<RealFir>(taps, 2);
+        dec2_ = std::make_unique<PairDec<float>>(taps, 2);
     }
     // The MPX spectrum is taken at rc_ (0-100 kHz needs more than 192k), so it gets the same
     // correction per bin, in dB.
@@ -293,6 +293,62 @@ double dtftMag(const std::vector<float>& h, double fNorm) {
     return std::sqrt(re * re + im * im);
 }
 }  // namespace
+
+/* ── The paired decimator ──────────────────────────────────────────────────────────────────────────
+ *  ★★★ FirDecimator::process / RealFir::process, output for output: the same reversed taps, the same
+ *  [K-1 history][block] buffer, the same countdown phase deciding which inputs produce an output — and
+ *  the same dot product, because dotCplx2/dotReal2 keep each output's accumulation order exactly as
+ *  dotCplx/dotReal have it. The only difference is that outputs are taken in PAIRS, so each tap vector
+ *  is loaded once for two of them.
+ *  ★ WHY THIS AND NOTHING CLEVERER (2026-09-30). The instrument's cost is spread: at 3 MS/s on the Mac
+ *  the /4 front-end stage is 23 %, the channel resampler 16 %, the measuring RDS demod 18 %, the eye and
+ *  deviation filters 18 %, the pilot PLL 11 %. The front end is already planned by cost (see build()),
+ *  the resampler's consecutive outputs use different polyphase branches (no taps to share), and the
+ *  eye's serial IIRs are the shape NEON was measured NOT to help (0.96x, 2026-09-13). What was left is
+ *  tap-load sharing in the integer stages — and it is the only change here that cannot move a figure,
+ *  because it does not change a single bit of one. */
+template <typename T>
+MpxMeasure::PairDec<T>::PairDec(const std::vector<float>& taps, int decim)
+    : D_(decim), phase_(decim), K_((int)taps.size()) {
+    rtaps_.assign(taps.rbegin(), taps.rend());
+    buf_.assign((size_t)(K_ - 1), T());
+}
+
+template <typename T>
+void MpxMeasure::PairDec<T>::reset() {
+    std::fill(buf_.begin(), buf_.end(), T());
+    buf_.resize((size_t)(K_ - 1));
+    phase_ = D_;
+}
+
+namespace {
+inline void dotPair(const float* t, const cf32* x, int K, int D, cf32& a, cf32& b) {
+    dotCplx2(t, reinterpret_cast<const float*>(x), K, D, a, b);
+}
+inline void dotPair(const float* t, const float* x, int K, int D, float& a, float& b) { dotReal2(t, x, K, D, a, b); }
+inline cf32  dotOne(const float* t, const cf32* x, int K) { return dotCplx(t, reinterpret_cast<const float*>(x), K); }
+inline float dotOne(const float* t, const float* x, int K) { return dotReal(t, x, K); }
+}  // namespace
+
+template <typename T>
+int MpxMeasure::PairDec<T>::process(const T* in, int n, T* out) {
+    buf_.resize((size_t)(K_ - 1 + n));
+    std::copy(in, in + n, buf_.begin() + (K_ - 1));
+    const T* x = buf_.data();
+    const float* h = rtaps_.data();
+    int outn = 0;
+    // FirDecimator's countdown, unrolled: it emits at i = phase_-1, then every D_.
+    int i = phase_ - 1;
+    for (; i + D_ < n; i += 2 * D_) { dotPair(h, x + i, K_, D_, out[outn], out[outn + 1]); outn += 2; }
+    if (i < n) { out[outn++] = dotOne(h, x + i, K_); i += D_; }
+    phase_ = i - n + 1;                              // the next output's countdown, as FirDecimator leaves it
+    std::copy(buf_.end() - (K_ - 1), buf_.end(), buf_.begin());
+    buf_.resize((size_t)(K_ - 1));
+    return outn;
+}
+
+template struct MpxMeasure::PairDec<cf32>;
+template struct MpxMeasure::PairDec<float>;
 
 double MpxMeasure::channelGain(double hz) const {
     double g = 1.0;

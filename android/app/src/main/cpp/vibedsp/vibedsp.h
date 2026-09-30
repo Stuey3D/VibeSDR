@@ -2085,7 +2085,22 @@ private:
     // ── front end: capture rate -> kChanRate ──
     double inRate_ = 0.0, fs1_ = 0.0, rc_ = 0.0;
     bool built_ = false;
-    std::vector<std::unique_ptr<FirDecimator>> decs_;
+    /** ★★ THE INSTRUMENT'S OWN DECIMATING FIR — FirDecimator / RealFir's exact arithmetic, two
+     *  outputs per pass so each tap is loaded once for both (dotCplx2 / dotReal2 in
+     *  simd_internal.h). Bit-identical output, so no figure and no calibration can move; it exists
+     *  only because this path is load-bound on the A53. See mpxmeasure.cpp. */
+    template <typename T> struct PairDec {
+        PairDec(const std::vector<float>& taps, int decim);
+        int process(const T* in, int n, T* out);
+        int decim() const { return D_; }
+        int taps() const { return K_; }
+        int maxOut(int n) const { return n / D_ + 1; }
+        void reset();
+        std::vector<float> rtaps_;                   // reversed taps
+        std::vector<T> buf_;                         // [K-1 history][block]
+        int D_, phase_, K_;
+    };
+    std::vector<std::unique_ptr<PairDec<cf32>>> decs_;
     // Complex rational resampler (L up, M down) whose prototype IS the flat channel filter.
     int rsL_ = 1, rsM_ = 1, rsK_ = 1;                // K taps per polyphase branch
     std::vector<float> rsTaps_;                      // L branches x K, reversed per branch
@@ -2100,7 +2115,7 @@ private:
     std::atomic<bool> noiseCorr_{true};
     FmDemod fm_{1.0f};
     DcBlocker dc_;
-    std::unique_ptr<RealFir> dec2_;                  // 384k -> 192k, with the discriminator's sinc undone
+    std::unique_ptr<PairDec<float>> dec2_;           // 384k -> 192k, with the discriminator's sinc undone
     std::vector<float> dec2Taps_, rsProto_;          // kept for channelGain()/mpxGain()
     std::vector<std::pair<std::vector<float>, double>> stageTaps_;   // each integer stage + its input rate
     std::vector<float> sincDbCorr_;                  // per MPX-FFT bin, the same correction in dB

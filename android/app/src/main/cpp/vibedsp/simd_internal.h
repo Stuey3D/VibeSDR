@@ -195,6 +195,124 @@ static inline cf32 dotCplx(const float* t, const float* z, int K) {
 #endif
 }
 
+// ── Two outputs of a DECIMATING FIR per tap load ────────────────────────────
+// ★★★ BIT-IDENTICAL TO TWO CALLS OF dotReal / dotCplx — the same accumulators, the same order, the
+//     same horizontal sums and the same scalar tail, per output. All that changes is that each tap
+//     vector is LOADED ONCE and used twice: the second output's window starts `D` samples after the
+//     first's. The Cortex-A53 has a 64-bit load path and this loop is load-bound on it (see the
+//     rejected tap-duplication experiment below — twice the tap loads cost more than the shuffle
+//     they saved), so sharing the tap loads is the lever. Mac: 2.5 → 2.0 ms for a 43-tap /4
+//     decimator over 3 M samples, 0 of 750000 outputs differing (2026-09-30).
+// ★ Used by MpxMeasure (the Advanced RDS instrument), whose own decimators have no other caller;
+//   the listener's FirDecimator/RealFir keep the single-output kernels untouched.
+static inline void dotReal2(const float* a, const float* b, int K, int D, float& y0, float& y1) {
+    const float* c = b + D;
+#if VIBE_NEON
+    float32x4_t acc0 = vdupq_n_f32(0.0f), acc1 = vdupq_n_f32(0.0f);
+    float32x4_t bcc0 = vdupq_n_f32(0.0f), bcc1 = vdupq_n_f32(0.0f);
+    int j = 0;
+    for (; j + 8 <= K; j += 8) {
+        const float32x4_t t0 = vld1q_f32(a + j), t1 = vld1q_f32(a + j + 4);
+        acc0 = vmlaq_f32(acc0, t0, vld1q_f32(b + j));
+        acc1 = vmlaq_f32(acc1, t1, vld1q_f32(b + j + 4));
+        bcc0 = vmlaq_f32(bcc0, t0, vld1q_f32(c + j));
+        bcc1 = vmlaq_f32(bcc1, t1, vld1q_f32(c + j + 4));
+    }
+    if (j + 4 <= K) {
+        const float32x4_t tv = vld1q_f32(a + j);
+        acc0 = vmlaq_f32(acc0, tv, vld1q_f32(b + j));
+        bcc0 = vmlaq_f32(bcc0, tv, vld1q_f32(c + j));
+        j += 4;
+    }
+    float s = vaddvq_f32(vaddq_f32(acc0, acc1)), u = vaddvq_f32(vaddq_f32(bcc0, bcc1));
+    for (; j < K; ++j) { s += a[j] * b[j]; u += a[j] * c[j]; }
+    y0 = s; y1 = u;
+#elif VIBE_SSE
+    __m128 acc0 = _mm_setzero_ps(), acc1 = _mm_setzero_ps(), bcc0 = _mm_setzero_ps(), bcc1 = _mm_setzero_ps();
+    int j = 0;
+    for (; j + 8 <= K; j += 8) {
+        const __m128 t0 = _mm_loadu_ps(a + j), t1 = _mm_loadu_ps(a + j + 4);
+        acc0 = sseMla(acc0, t0, _mm_loadu_ps(b + j));
+        acc1 = sseMla(acc1, t1, _mm_loadu_ps(b + j + 4));
+        bcc0 = sseMla(bcc0, t0, _mm_loadu_ps(c + j));
+        bcc1 = sseMla(bcc1, t1, _mm_loadu_ps(c + j + 4));
+    }
+    if (j + 4 <= K) {
+        const __m128 tv = _mm_loadu_ps(a + j);
+        acc0 = sseMla(acc0, tv, _mm_loadu_ps(b + j));
+        bcc0 = sseMla(bcc0, tv, _mm_loadu_ps(c + j));
+        j += 4;
+    }
+    float s = sseAddv(_mm_add_ps(acc0, acc1)), u = sseAddv(_mm_add_ps(bcc0, bcc1));
+    for (; j < K; ++j) { s += a[j] * b[j]; u += a[j] * c[j]; }
+    y0 = s; y1 = u;
+#else
+    /* ★★ THE SCALAR PATH IS TWO PLAIN CALLS. Written out paired it came back DIFFERENT in 7544 of
+     *  20800 outputs (2026-09-30): with no intrinsics pinning the operations, the compiler contracts
+     *  and vectorises the two loop shapes differently, so "the same expression" is not the same
+     *  arithmetic. The identity is the contract here, and this is the only form that keeps it. */
+    y0 = dotReal(a, b, K); y1 = dotReal(a, c, K);
+#endif
+}
+
+/** Two complex outputs, the second `D` complex samples after the first — see dotReal2. */
+static inline void dotCplx2(const float* t, const float* z, int K, int D, cf32& y0, cf32& y1) {
+    const float* w = z + 2 * D;
+#if VIBE_NEON
+    float32x4_t ar0 = vdupq_n_f32(0.0f), ai0 = vdupq_n_f32(0.0f), ar1 = vdupq_n_f32(0.0f), ai1 = vdupq_n_f32(0.0f);
+    float32x4_t br0 = vdupq_n_f32(0.0f), bi0 = vdupq_n_f32(0.0f), br1 = vdupq_n_f32(0.0f), bi1 = vdupq_n_f32(0.0f);
+    int j = 0;
+    for (; j + 8 <= K; j += 8) {
+        const float32x4_t t0 = vld1q_f32(t + j), t1 = vld1q_f32(t + j + 4);
+        const float32x4x2_t z0 = vld2q_f32(z + 2 * j), z1 = vld2q_f32(z + 2 * j + 8);
+        const float32x4x2_t w0 = vld2q_f32(w + 2 * j), w1 = vld2q_f32(w + 2 * j + 8);
+        ar0 = vmlaq_f32(ar0, t0, z0.val[0]); ai0 = vmlaq_f32(ai0, t0, z0.val[1]);
+        ar1 = vmlaq_f32(ar1, t1, z1.val[0]); ai1 = vmlaq_f32(ai1, t1, z1.val[1]);
+        br0 = vmlaq_f32(br0, t0, w0.val[0]); bi0 = vmlaq_f32(bi0, t0, w0.val[1]);
+        br1 = vmlaq_f32(br1, t1, w1.val[0]); bi1 = vmlaq_f32(bi1, t1, w1.val[1]);
+    }
+    if (j + 4 <= K) {
+        const float32x4_t tv = vld1q_f32(t + j);
+        const float32x4x2_t zv = vld2q_f32(z + 2 * j), wv = vld2q_f32(w + 2 * j);
+        ar0 = vmlaq_f32(ar0, tv, zv.val[0]); ai0 = vmlaq_f32(ai0, tv, zv.val[1]);
+        br0 = vmlaq_f32(br0, tv, wv.val[0]); bi0 = vmlaq_f32(bi0, tv, wv.val[1]);
+        j += 4;
+    }
+    float re = vaddvq_f32(vaddq_f32(ar0, ar1)), im = vaddvq_f32(vaddq_f32(ai0, ai1));
+    float re2 = vaddvq_f32(vaddq_f32(br0, br1)), im2 = vaddvq_f32(vaddq_f32(bi0, bi1));
+    for (; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1];
+                         re2 += t[j] * w[2 * j]; im2 += t[j] * w[2 * j + 1]; }
+    y0 = cf32(re, im); y1 = cf32(re2, im2);
+#elif VIBE_SSE
+    __m128 ar0 = _mm_setzero_ps(), ai0 = _mm_setzero_ps(), ar1 = _mm_setzero_ps(), ai1 = _mm_setzero_ps();
+    __m128 br0 = _mm_setzero_ps(), bi0 = _mm_setzero_ps(), br1 = _mm_setzero_ps(), bi1 = _mm_setzero_ps();
+    int j = 0;
+    for (; j + 8 <= K; j += 8) {
+        __m128 zr, zi, wr, wi;
+        const __m128 t0 = _mm_loadu_ps(t + j), t1 = _mm_loadu_ps(t + j + 4);
+        sseLoad2(z + 2 * j, zr, zi);     ar0 = sseMla(ar0, t0, zr); ai0 = sseMla(ai0, t0, zi);
+        sseLoad2(w + 2 * j, wr, wi);     br0 = sseMla(br0, t0, wr); bi0 = sseMla(bi0, t0, wi);
+        sseLoad2(z + 2 * j + 8, zr, zi); ar1 = sseMla(ar1, t1, zr); ai1 = sseMla(ai1, t1, zi);
+        sseLoad2(w + 2 * j + 8, wr, wi); br1 = sseMla(br1, t1, wr); bi1 = sseMla(bi1, t1, wi);
+    }
+    if (j + 4 <= K) {
+        __m128 zr, zi, wr, wi;
+        const __m128 tv = _mm_loadu_ps(t + j);
+        sseLoad2(z + 2 * j, zr, zi); ar0 = sseMla(ar0, tv, zr); ai0 = sseMla(ai0, tv, zi);
+        sseLoad2(w + 2 * j, wr, wi); br0 = sseMla(br0, tv, wr); bi0 = sseMla(bi0, tv, wi);
+        j += 4;
+    }
+    float re = sseAddv(_mm_add_ps(ar0, ar1)), im = sseAddv(_mm_add_ps(ai0, ai1));
+    float re2 = sseAddv(_mm_add_ps(br0, br1)), im2 = sseAddv(_mm_add_ps(bi0, bi1));
+    for (; j < K; ++j) { re += t[j] * z[2 * j]; im += t[j] * z[2 * j + 1];
+                         re2 += t[j] * w[2 * j]; im2 += t[j] * w[2 * j + 1]; }
+    y0 = cf32(re, im); y1 = cf32(re2, im2);
+#else
+    // ★★ Two plain calls — see the scalar note in dotReal2.
+    y0 = dotCplx(t, z, K); y1 = dotCplx(t, w, K);
+#endif
+}
+
 // ✗ TRIED AND REJECTED (2026-09-16): a dotCplx variant with the taps stored pair-duplicated
 //   [t0 t0 t1 t1 …] so the interleaved samples multiply straight through with plain loads and no
 //   vld2q de-interleave. Measured on the Pi 3 (Cortex-A53, ARMv7 NEON): WFM 1.92 MS/s 55.5 % →
