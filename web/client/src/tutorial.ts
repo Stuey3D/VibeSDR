@@ -68,7 +68,8 @@ const STEPS: Step[] = [
   {
     ids: ['mMenu'],
     title: 'MENU',
-    body: "[[MENU]] opens the display settings and the receiver's hardware controls.",
+    body: "[[MENU]] opens the display settings and the receiver's hardware controls. Its CONTROLS "
+        + 'section sets the colours of these controls, and how see-through the panels are.',
   },
   {
     ids: ['mAudio'],
@@ -166,7 +167,7 @@ function installStyle() {
   width: min(94vw, max(46vw, 380px), 560px);
   max-height: calc(100dvh - var(--decBoxBottom, 14px) - 24px);
   display: flex; flex-direction: column; overflow: hidden;
-  background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border, #ffa000);
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid var(--btn-border, #ffa000);
   border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   font-family: var(--mono, ui-monospace, monospace); color: var(--text, #e8e8e8);
 }

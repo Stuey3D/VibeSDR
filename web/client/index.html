@@ -418,7 +418,7 @@ html #bar { display: none; }
      sprawling on an ultrawide, and 96vw still governs a phone. */
   width: max-content; max-width: min(96vw, 1100px); z-index: 40;
   padding: 0.45em; border-radius: 12px;
-  background: rgba(10, 10, 10, 0.92);
+  background: var(--ctl-card-bg, rgba(10, 10, 10, 0.92));   /* ★ controlColours.ts */
   border: 1px solid var(--bar-border);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
   font-size: clamp(11px, 1.35vw, 15px);
@@ -677,7 +677,7 @@ html #bar { display: none; }
   /* Sits just above the card, measured — the card's height changes with the arrangement. */
   bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 2.9em);
   z-index: 46;
-  background: rgba(10,10,10,0.94); color: var(--phosphor);
+  background: var(--ov-chip, rgba(10,10,10,0.94)); color: var(--phosphor);
   border: 1px solid var(--phosphor); border-radius: 999px;
   padding: 0.5em 1.1em; min-height: 44px;
   font: inherit; font-size: clamp(11px, 1.3vw, 14px); letter-spacing: 0.08em;
@@ -716,7 +716,7 @@ html #bar { display: none; }
 .mDial .mBtn { font-size: 1.3em; line-height: 1; }
 .mDialGlyph {
   display: flex; align-items: center; justify-content: center;
-  min-width: 2.6em; opacity: 0.6; color: var(--btn-text);
+  min-width: 2.6em; opacity: 0.6; color: var(--ctl-glyph, var(--btn-text));
 }
 /* ★★ THE STEP, ON THE ARROW THAT TAKES IT (Stuart, 2026-09-19). A tooltip answers "how far does this tune me?"
    only on a desktop, with a mouse, after a wait — and that is the one question a first-time visitor has. Dim and
@@ -902,7 +902,7 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
      read as an empty strip — the row measured 1080×13 in the inspector while looking like
      nothing was there at all (Stuart: "no status row", 2026-08-01). A warning you cannot see
      is not a warning. */
-  font-size: 0.82em; color: #c9922e; padding: 0.05em 0.2em;
+  font-size: 0.82em; color: var(--ctl-status, #c9922e); padding: 0.05em 0.2em;
   /* ★★ WRAP RATHER THAN LOSE THINGS. At the narrowest the row overflowed and the right-hand
      end simply fell off the card — and because the throughput text comes BEFORE the bars and
      chips in the DOM, what got cut was the LINK QUALITY and the SQL/OVERLOAD warnings: the
@@ -912,7 +912,7 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 }
 /* ★ The throughput is the one thing here that may shrink and truncate — it is a nice-to-know.
    The bars and chips never shrink: they are the whole point of the row. */
-#mStatus #status { color: #c9922e; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#mStatus #status { color: var(--ctl-status, #c9922e); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #mStatus #linkBars, #mStatus #initChip, #mStatus #dsChip, #mStatus #ovlChip { flex: 0 0 auto; }
 /* ★★ TABULAR FIGURES, so a digit changing does not change the WIDTH. Proportional numerals make
    1 narrower than 8, so a counter ticking over reflows the row and nudges everything after it —
@@ -1250,7 +1250,7 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
   display: none; position: absolute; bottom: calc(100% + 6px); left: 0; right: 0;
   max-height: min(60vh, 30em); overflow-y: auto; z-index: 40;
   touch-action: pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
-  background: rgba(8,6,2,0.98); border: 1px solid var(--btn-border);
+  background: var(--ov-panel98, rgba(8,6,2,0.98)); border: 1px solid var(--btn-border);
   border-radius: 8px; padding: 4px;
 }
 #searchResults.open { display: block; }
@@ -1561,7 +1561,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel {
   position: fixed; top: 50%; left: 50%; z-index: 51;
   width: min(92vw, 520px); max-height: 82vh; overflow-y: auto;
-  background: rgba(8,6,2,0.98); border: 1px solid var(--btn-border);
+  background: var(--ov-panel98, rgba(8,6,2,0.98)); border: 1px solid var(--btn-border);
   border-radius: 12px; padding: 18px;
   box-shadow: 0 24px 60px rgba(0,0,0,0.7), 0 0 0 100vmax rgba(0,0,0,0.55);
   transform: translate(-50%, -48%) scale(0.97);
@@ -1704,7 +1704,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #tuneGapMsg {
   position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
   z-index: 46; pointer-events: none;
-  background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border); border-radius: 8px;
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid var(--btn-border); border-radius: 8px;
   padding: 8px 14px; color: var(--btn-text); font-size: 12px; letter-spacing: 0.4px;
   font-family: var(--mono, monospace); max-width: 70vw; text-align: center;
   opacity: 0; transition: opacity .18s ease-out;
@@ -1815,7 +1815,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #tuneGapMsg {
   position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
   z-index: 46; pointer-events: none;
-  background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border); border-radius: 8px;
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid var(--btn-border); border-radius: 8px;
   padding: 8px 14px; color: var(--btn-text); font-size: 12px; letter-spacing: 0.4px;
   font-family: var(--mono, monospace); max-width: 70vw; text-align: center;
   opacity: 0; transition: opacity .18s ease-out;
@@ -1877,7 +1877,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      sliver. The floor takes over there — at which width there is no room to be beside anything
      anyway, so the box may as well be usable. */
   width: min(94vw, max(46vw, 380px), 560px); display: none;
-  background: rgba(8,6,2,0.96); border: 1px solid var(--btn-border);
+  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid var(--btn-border);
   border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   overflow: hidden;
   /* ★★★ NEVER TALLER THAN THE ROOM ABOVE IT. The box is anchored by its BOTTOM edge and grew
@@ -2468,7 +2468,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
   z-index: 44; display: none; align-items: baseline; gap: 10px;
   max-width: min(82vw, 900px); padding: 6px 16px;
-  background: rgba(8,6,2,0.92); border: 1px solid var(--btn-border);
+  background: var(--ov-panel92, rgba(8,6,2,0.92)); border: 1px solid var(--btn-border);
   border-radius: 999px; box-shadow: 0 8px 26px rgba(0,0,0,0.55);
   font-size: 13px; letter-spacing: 1px; color: var(--btn-text); white-space: nowrap;
   /* ★★ NOTHING ESCAPES THE PILL. Every child but the RadioText is `flex: 0 0 auto`, so once the
@@ -2674,7 +2674,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      data loaded, the page was simply underneath (Stuart, 2026-08-08: "still cannot get into the
      admin page from the landing screen"). Moving it out of #app was necessary and not sufficient. */
   position: fixed; inset: 0; z-index: 120;
-  background: rgba(6,5,2,0.985);
+  background: var(--ov-admin, rgba(6,5,2,0.985));
   display: flex; flex-direction: column;
   font-size: 12px; color: var(--btn-text);
 }
@@ -2883,6 +2883,17 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 .seg { display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
 .seg button { padding: 5px 9px; font-size: 11px; flex: 0 0 auto; }
 select.btn { padding: 6px 8px; }
+/* ★ CONTROL COLOURS (controlColours.ts): a row of swatches and a native colour input for "custom".
+   Round, with the chosen one ringed — the ring is white-on-black so it shows on every swatch colour. */
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
+.swatches .sw { width: 30px; height: 30px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.35); flex: 0 0 auto; }
+.swatches .sw.on { box-shadow: 0 0 0 2px #000, 0 0 0 4px #fff; }
+.swatches .swDef { font: 700 9px/1 ui-monospace, monospace; color: #fff; text-shadow: 0 0 3px #000; }
+.swatches input[type=color] { width: 36px; height: 30px; padding: 0 2px; cursor: pointer;
+  background: transparent; border: 1px dashed rgba(255,255,255,0.45); border-radius: 8px; }
+.swatches input[type=color].on { border-style: solid; border-color: #fff; }
+.ctlWarn { color: #ffcc88; }
 
 /* Same leftover as #sigLabel — the hard 10px pinned the KB/s · ms readout and pushed
    it off the edge of a 1366 screen. Size comes from the em rule above. */
@@ -2916,7 +2927,7 @@ select.btn { padding: 6px 8px; }
       cheaper dimension. Content-width and right-anchored, so it grows leftwards when a slot
       appears and shrinks when one goes away. */
 #srvHealth { position: fixed; top: 8px; right: 8px; z-index: 60; pointer-events: none;
-             background: rgba(8,12,8,0.86); border: 1.5px solid rgba(120,200,120,0.45);
+             background: var(--ov-health, rgba(8,12,8,0.86)); border: 1.5px solid rgba(120,200,120,0.45);
              border-radius: 12px; padding: 4px 8px 5px; }
 /* ★ CENTRED, BOTH ROWS. Whichever line is wider sets the pill's width, and the other must sit
      under it rather than hang off one end: with no battery the icon row is NARROWER than the
@@ -3943,7 +3954,7 @@ select.btn { padding: 6px 8px; }
     background: transparent; color: inherit; border: 1px solid currentColor; border-radius: 4px; padding: 6px; }
 /* ── Wheel-volume popover (pointer devices only; the JS gates on hover+fine) ───────────────── */
 #volPop { position: fixed; z-index: 9000; transform: translate(-50%, -100%);
-          background: rgba(8,12,8,0.92); border: 1px solid rgba(255,255,255,0.18);
+          background: var(--ov-vol, rgba(8,12,8,0.92)); border: 1px solid rgba(255,255,255,0.18);
           border-radius: 10px; padding: 8px 10px; min-width: 168px;
           box-shadow: 0 6px 22px rgba(0,0,0,0.55); }
 #volPop .volPopBar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.14);
@@ -4927,6 +4938,36 @@ select.btn { padding: 6px 8px; }
     <label for="vfoFrost">FROSTED BACKING</label>
     <input type="range" id="vfoFrost" min="0" max="10" value="0">
     <span class="val" id="vfoFrostVal">OFF</span>
+  </div>
+
+  <!-- ★★ CONTROL COLOURS (controlColours.ts). Stuart, 2026-09-30: not the app's faceplates — the web
+       client stays light — but "some simple colour choices for the controls ... Background · Button
+       colour · Font colour · Transparency". Saved like every display setting, so they travel with
+       SAVE FOR ALL. The swatches are drawn by buildMenu(); the first of each row is today's colour. -->
+  <h2>CONTROLS</h2>
+  <div class="mrow">
+    <label>BACKGROUND</label>
+    <div class="swatches" id="ctlBgSw"></div>
+  </div>
+  <div class="mrow">
+    <label>BUTTONS</label>
+    <div class="swatches" id="ctlBtnSw"></div>
+  </div>
+  <div class="mrow">
+    <label>FONT</label>
+    <div class="swatches" id="ctlFontSw"></div>
+  </div>
+  <div class="lbl wrap ctlWarn" id="ctlWarn" hidden></div>
+  <div class="mrow">
+    <label for="ctlSolid">TRANSPARENCY</label>
+    <input type="range" id="ctlSolid" min="0" max="100" step="5" value="0">
+    <span class="val" id="ctlSolidVal">GLASS</span>
+  </div>
+  <div class="lbl wrap">Slide to SOLID to make every control and panel opaque. Solid is easier on older
+    devices: nothing see-through is redrawn over the moving waterfall.</div>
+  <div class="mrow">
+    <label>RESET</label>
+    <div class="seg"><button class="btn" id="ctlReset">↺ DEFAULT COLOURS</button></div>
   </div>
 
   <!-- ★★★ SERVER ADMIN — the last thing in the menu, and only for the owner.
