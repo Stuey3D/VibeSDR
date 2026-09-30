@@ -150,6 +150,19 @@ public:
      *  then drops the buffer if paused. */
     void deliver(const float* iq, int sampleCount);
 
+    /** ★★★ SAMPLES libairspy THREW AWAY BEFORE THEY REACHED US — the same count, the same silence
+     *  and the same reason as AirspyHfSource::noteUsbDropped() (read that note). libairspy reports
+     *  it as airspy_transfer.dropped_samples on the buffer AFTER the hole. */
+    void noteUsbDropped(uint64_t n) {
+        if (!n) return;
+        usbDropped_.fetch_add(n, std::memory_order_relaxed);
+        usbDropEvents_.fetch_add(1, std::memory_order_relaxed);
+        usbDropPending_.fetch_add(n, std::memory_order_relaxed);
+    }
+    uint64_t takeUsbDropped() { return usbDropPending_.exchange(0, std::memory_order_relaxed); }
+    uint64_t usbDroppedSamples() const { return usbDropped_.load(std::memory_order_relaxed); }
+    uint64_t usbDropEvents() const { return usbDropEvents_.load(std::memory_order_relaxed); }
+
     const std::string& model()  const { return model_; }
     const std::string& serial() const { return serial_; }
 
@@ -177,6 +190,7 @@ private:
     bool open_ = false, streaming_ = false;
     std::atomic<bool>   paused_{false};
     std::atomic<double> lastRx_{0.0};   // steady-clock seconds of the last buffer; 0 = never
+    std::atomic<uint64_t> usbDropped_{0}, usbDropEvents_{0}, usbDropPending_{0};   // see noteUsbDropped()
 };
 
 } // namespace vibe

@@ -2242,6 +2242,33 @@ static std::atomic<double> g_dspWorkMaxMs{0.0};
 static std::atomic<unsigned> g_demodWaits{0u};
 static std::atomic<double> g_dspStatAt{0.0};
 static std::atomic<double>    g_iqLastDropAt{0.0};
+/** ★★★ IQ THE RADIO'S OWN LIBRARY LOST BEFORE WE EVER SAW IT — the hole iqDrops cannot see.
+ *  iqDrops counts OUR queue. On the Airspy HF+ that queue never drops (it is unbounded on the float
+ *  path), yet the listener's RDS block errors tracked the box's load all night on the Pi 500 —
+ *  ~25 % loaded, ~1.5 % idle — with iqDrops at 0 throughout (2026-09-30). libairspyhf and libairspy
+ *  keep their own small ring between the USB callback and their consumer thread and throw a whole
+ *  USB buffer away when it is full, reporting it only as `dropped_samples` on the next transfer.
+ *  Nothing read it. These are those counts, for whichever radio this process runs:
+ *    · usbDrops       — how many holes (one per late delivery, whatever its size)
+ *    · usbDropSamples — how many samples they cost in total
+ *  ★ The SDRplay RSP has no such field; its count is inferred from the API's sample numbering and
+ *    is DIAGNOSTIC ONLY — see SampleSeqWatch in sdrplay_source.h.
+ *  ★ librtlsdr and libhackrf call us straight from the libusb thread with no ring of their own, so
+ *    there is nothing for them to report here: what they lose is lost in the device FIFO, and the
+ *    only symptom is fewer samples per second than the rate (usbSamples, on the dongle). */
+static std::atomic<unsigned long long> g_usbDropEvents{0}, g_usbDropSamples{0};
+static std::atomic<double>             g_usbLastDropAt{0.0};   // epoch seconds, 0 = never
+static void noteUsbDrop(unsigned long long samples, unsigned long long events = 1) {
+    if (!samples && !events) return;
+    g_usbDropEvents.fetch_add(events, std::memory_order_relaxed);
+    g_usbDropSamples.fetch_add(samples, std::memory_order_relaxed);
+    g_usbLastDropAt.store((double)::time(nullptr), std::memory_order_relaxed);
+}
+/** ★★ BLOCKS A LISTENER'S OWN DSP THREAD HAD TO THROW AWAY, all listeners together, since start.
+ *  The per-listener figure has always been in the admin session list ("dropped"); this is the same
+ *  count where a probe without the admin password can see it, because it is the other place a
+ *  loaded box punches holes in one listener's stream — and so in that listener's RDS. */
+static std::atomic<unsigned long long> g_chanDrops{0};
 // ★★★ A HANDFUL OF RAILED SAMPLES IN A SECOND IS NOISE, NOT AN OVERLOAD. At 2.4 MSPS a second is
 //     4.8 million bytes; an impulse — a thermostat, a switching supply, a car — rails a few of
 //     them and means nothing. Treating ANY rail as clipping had two consequences, and the second
@@ -16806,6 +16833,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                    g_iqLastDropAt.load(std::memory_order_relaxed) > 0
                                        ? (double)vsNowEpoch() - g_iqLastDropAt.load(std::memory_order_relaxed)
                                        : -1.0))
+                             /* ★★★ THE HOLES UPSTREAM OF iqDrops — see g_usbDropEvents. Always
+                              *  present (0 on a radio that cannot report them), so a poller can
+                              *  diff two readings without special cases. chanDrops is the other
+                              *  place load makes holes: a listener's own DSP thread falling behind
+                              *  its 4-block hand-off (the admin session list has it per listener). */
+                             + ",\"usbDrops\":" + std::to_string(g_usbDropEvents.load(std::memory_order_relaxed))
+                             + ",\"usbDropSamples\":" + std::to_string(g_usbDropSamples.load(std::memory_order_relaxed))
+                             + ",\"usbDropAgo\":" + std::to_string((int)llround(
+                                   g_usbLastDropAt.load(std::memory_order_relaxed) > 0
+                                       ? (double)vsNowEpoch() - g_usbLastDropAt.load(std::memory_order_relaxed)
+                                       : -1.0))
+                             + ",\"chanDrops\":" + std::to_string(g_chanDrops.load(std::memory_order_relaxed))
                              // ★★★ HOW THE LIMIT BEHAVES, or a client cannot describe it honestly.
                              //     Absent means HARD, so every older client and server reads right.
                              + (g_vsSessionLimitSoft.load()
@@ -20197,7 +20236,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    slack at 8 MSPS — enough to ride out a scheduling hiccup, short enough that a
             //    genuinely stuck listener does not accumulate latency it can never pay back.
             //    Its audio glitches; the radio and everyone else carry on.
-            if (c->q.size() >= 4) { c->q.pop_front(); c->dropped.fetch_add(1); }
+            if (c->q.size() >= 4) { c->q.pop_front(); c->dropped.fetch_add(1);
+                                    g_chanDrops.fetch_add(1, std::memory_order_relaxed); }
             c->q.push_back(blk);
             c->qcv.notify_one();
         }
@@ -21110,6 +21150,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *  ✗ Never draw this as a deviation — it is deliberately uncorrected. */
                       + ",\"rdsDevRaw\":" + std::to_string(rdsDevRaw_)
                       + ",\"ber\":" + std::to_string(berNow)
+                      /* ★★ DIAGNOSTIC, for probes rather than the panel: blocks the Advanced
+                       *  RDS instrument itself dropped (decoder priority — it may, audio may not).
+                       *  Cumulative for this pipeline; a poller diffs it. */
+                      + ",\"mpxDrops\":" + std::to_string(P_ ? P_->measDropped() : 0u)
                       // ★★★ THE WEAK-SIGNAL FIGURES, KEPT ON PURPOSE — not debug scaffolding.
                       //     Stuart: "the FM-DX crowd would appreciate them anyway and that would
                       //     be the place for them". They belong beside pilot deviation and block
@@ -23739,6 +23783,17 @@ std::string LocalSdrShim::adminStatusJson() {
                      g_vsSavedIfAgc.load() == 0 ? "false" : "true");
             j += b;
         }
+        // ★★★ IQ LOST BEFORE IT REACHED US, and blocks listeners' threads dropped — the same
+        //     figures /vibeserver.json carries (see g_usbDropEvents), here because this is the page
+        //     an owner opens when something sounds wrong.
+        j += ",\"usbDrops\":" + std::to_string(g_usbDropEvents.load(std::memory_order_relaxed))
+           + ",\"usbDropSamples\":" + std::to_string(g_usbDropSamples.load(std::memory_order_relaxed))
+           + ",\"chanDrops\":" + std::to_string(g_chanDrops.load(std::memory_order_relaxed));
+        // ★ The RSP's inference is only as good as the ratio it learned — show both, so a reading
+        //   of "no drops" can be told apart from "never learned how to count them".
+        if (p && p->useSdrplay() && p->sdrp)
+            j += ",\"seqRatio\":" + std::to_string(p->sdrp->seqRatio())
+               + ",\"seqIrregular\":" + std::to_string((unsigned long long)p->sdrp->seqIrregular());
         j += ",\"lockedCentre\":" + std::to_string((long long)g_vsLockedCentre.load()) + "}";
     }
 
@@ -25664,6 +25719,8 @@ int LocalSdrShim::startAirspyCommon(int index, int fd,
     //   the same float path the HF+ uses — no int16 round trip.
     impl->asp->setSink([self](const float* iq, int n) {
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
+        // ★★★ What libairspy dropped just before this buffer — see g_usbDropEvents.
+        if (const uint64_t lost = self->asp->takeUsbDropped()) noteUsbDrop(lost);
         self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
     });
     /* ★★★ TUNE THE RADIO TO (LOGICAL CENTRE + OFFSET), exactly as the dongle's open path does —
@@ -25756,6 +25813,8 @@ int LocalSdrShim::startAirspyHfCommon(int index, int fd,
     Impl* self = impl;
     impl->ahf->setSink([self](const float* iq, int n) {
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
+        // ★★★ What libairspyhf dropped just before this buffer — see g_usbDropEvents.
+        if (const uint64_t lost = self->ahf->takeUsbDropped()) noteUsbDrop(lost);
         self->enqueueIqFloat(iq, n, /*blockIfFull=*/false);
     });
     const bool opened = (fd >= 0)
@@ -25829,8 +25888,14 @@ int LocalSdrShim::startSdrplay(int index,
 
     impl->sdrp = std::make_unique<vibe::SdrplaySource>();
     Impl* self = impl;
-    impl->sdrp->setSink([self](const int16_t* iq, int n) {
+    impl->sdrp->setSink([self, seenEv = uint64_t(0), seenS = uint64_t(0)](const int16_t* iq, int n) mutable {
         self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
+        /* ★★ The RSP's inferred skips — see SampleSeqWatch. Counted beside the Airspy's, but the
+         *  source is diagnostic, so nothing downstream acts on it. Same thread as the callback that
+         *  counted them, so the deltas are exact. */
+        { const uint64_t ev = self->sdrp->usbDropEvents(), sm = self->sdrp->usbDroppedSamples();
+          if (ev < seenEv || sm < seenS) { seenEv = 0; seenS = 0; }   // defensive: never underflow
+          if (ev != seenEv) { noteUsbDrop(sm - seenS, ev - seenEv); seenEv = ev; seenS = sm; } }
         self->enqueueIqInt16(iq, n, /*blockIfFull=*/false);
     });
     /* ★★★ TUNE TO (LOGICAL CENTRE + OFFSET), exactly as tuneHw() and the HackRF's open do. This

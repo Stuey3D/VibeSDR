@@ -31,6 +31,8 @@ struct CbCtx {
     bool* paused;
     /** ★ Stamped on EVERY buffer, before the idle-park drop — see lastRxSecs(). */
     std::atomic<double>* lastRx;
+    /** ★ Where the library's own dropped-sample count goes — see noteUsbDropped(). */
+    AirspyHfSource* self;
 };
 }  // namespace
 
@@ -99,6 +101,9 @@ static int streamCb(airspyhf_transfer_t* t) {
     // keep it is our decision, not the hardware's. Stamping after the pause check made an
     // idle-parked radio indistinguishable from an unplugged one.
     if (c->lastRx) c->lastRx->store(nowSecsMono(), std::memory_order_relaxed);
+    // ★★★ AND WHAT THE LIBRARY LOST BEFORE THIS BUFFER — counted before the idle drop too: it is a
+    //     fact about the USB path, not about whether anyone is listening. See noteUsbDropped().
+    if (c->self && t->dropped_samples) c->self->noteUsbDropped((uint64_t)t->dropped_samples);
     if (c->paused && *c->paused) return 0;   // idle: drop, never tear the device down
     (*c->sink)(reinterpret_cast<const float*>(t->samples), t->sample_count);
     return 0;   // non-zero would ask the library to STOP streaming
@@ -196,7 +201,7 @@ bool AirspyHfSource::start(std::string& err) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (!open_ || !impl_->dev) { err = "device not open"; return false; }
     if (streaming_) return true;
-    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx };
+    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx, this };
     if (airspyhf_start(impl_->dev, &streamCb, &impl_->ctx) != AIRSPYHF_SUCCESS) {
         err = "the Airspy HF+ would not start streaming";
         return false;

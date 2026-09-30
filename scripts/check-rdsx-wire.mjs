@@ -57,7 +57,8 @@ const read = new Set([...cbody.matchAll(/msg\.([A-Za-z][\w]*)/g)].map(m => m[1])
 // ★ Sent deliberately for OTHER readers — the phone and the watch parse these, and the nested
 //   eon/oda entries carry their own pi/ps/aid. Listed so a genuinely new orphan still stands out;
 //   a warning that always fires is a warning nobody reads.
-const KNOWN_UNREAD = new Set(['ber', 'pi', 'ps', 'aid']);
+// ★ mpxDrops / gaps are DIAGNOSTICS for probes (the load harness reads them), not panel fields.
+const KNOWN_UNREAD = new Set(['ber', 'pi', 'ps', 'aid', 'mpxDrops', 'gaps']);
 
 let bad = 0;
 // ★ A dotted key can only be a mistake: nothing in this protocol is namespaced.

@@ -2633,6 +2633,9 @@ public:
     /** Blocks the instrument dropped because it was behind — see MpxMeasure::feed. */
     unsigned measureDropped() const { return meas_.dropped(); }
     unsigned demodQueueWaits() const { return demodWaits_.load(std::memory_order_relaxed); }
+    /** ★ Blocks the Advanced RDS instrument dropped because its decoder-priority thread was behind
+     *  (MpxMeasure::dropped). Diagnostics: sent in rdsx so a probe can see the instrument's gaps. */
+    unsigned measDropped() const { return meas_.dropped(); }
     /** Run first on every worker thread this class starts (name + priority are the HOST's business:
      *  a VibeServer raises them as it does vibe-dsp). Set once, before any start(). */
     static std::function<void(const char*)>& workerInit();

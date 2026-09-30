@@ -83,6 +83,8 @@ namespace {
 int airspyRxCallback(airspy_transfer* t) {
     if (!t || t->sample_count <= 0) return 0;
     auto* self = static_cast<AirspySource*>(t->ctx);
+    // ★★★ What the library lost before this buffer — see AirspySource::noteUsbDropped().
+    if (self && t->dropped_samples) self->noteUsbDropped((uint64_t)t->dropped_samples);
     if (self) self->deliver(static_cast<const float*>(t->samples), t->sample_count);
     return 0;
 }

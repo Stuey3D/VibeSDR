@@ -27,6 +27,58 @@
 
 namespace vibe {
 
+/** ★★★ WERE ANY SAMPLES LOST BETWEEN TWO RSP CALLBACKS? The SDRplay API never says so directly —
+ *  there is no dropped count like libairspy's — but every stream callback carries
+ *  `firstSampleNum`, the running number of its first sample, and a hole shows as a jump bigger than
+ *  the buffer that went before it.
+ *  ★★ THE STEP IS LEARNED, NOT ASSUMED. Whether that counter advances by one per OUTPUT sample or
+ *     by the decimation factor is not documented clearly enough to bet a counter on, so the ratio
+ *     k (counter steps per delivered sample) is measured from the stream itself: it must be a whole
+ *     number and agree for kLearn callbacks running before anything is counted. A jump that fits
+ *     no whole number of samples is not called a gap — it is counted as IRREGULAR and the ratio is
+ *     learned again, so a misunderstanding shows up as `irregular`, never as fake drops.
+ *  ★★ DIAGNOSTIC ONLY (2026-09-30). Unlike the Airspy counts this one is NOT turned into a gap
+ *     signal for the DSP: it has never been read against a real RSP, and a wrong signal would
+ *     re-sync RDS for nothing. Verify it on the Pi's RSP1B first (the runbook says how).
+ *  ★ Single-threaded: only the API's stream callback touches it. Header-only, so the build without
+ *    the SDRplay API needs no stub. */
+struct SampleSeqWatch {
+    static constexpr int kLearn = 8;
+    static constexpr uint64_t kMaxHole = 1ull << 24;
+    /** Samples missing immediately before this buffer; 0 = contiguous, first, reset, or learning. */
+    uint64_t step(uint32_t first, uint32_t num, bool reset) {
+        uint64_t missing = 0;
+        if (reset || !have_) { k_ = 0; cand_ = 0; agree_ = 0; }
+        else {
+            const uint32_t d = first - prevFirst_;            // unsigned: the wrap is exact
+            if (k_ == 0) {
+                const uint32_t k = (prevNum_ && d % prevNum_ == 0) ? d / prevNum_ : 0;
+                if (k >= 1 && k <= 64 && k == cand_) { if (++agree_ >= kLearn) k_ = k; }
+                else { cand_ = (k >= 1 && k <= 64) ? k : 0; agree_ = cand_ ? 1 : 0; }
+            } else {
+                const uint64_t expect = (uint64_t)k_ * prevNum_;
+                if (d != expect) {
+                    // ★ A "hole" of more than ~2 s at the top rate is a counter that went
+                    //   backwards or restarted unannounced (it wraps as a huge jump), not a loss.
+                    if (d > expect && (d - expect) % k_ == 0 && (d - expect) / k_ < kMaxHole)
+                        missing = (d - expect) / k_;
+                    else { ++irregular_; k_ = 0; cand_ = 0; agree_ = 0; }
+                }
+            }
+        }
+        prevFirst_ = first; prevNum_ = num; have_ = true;
+        return missing;
+    }
+    void restart() { have_ = false; k_ = 0; cand_ = 0; agree_ = 0; }
+    uint32_t ratio() const { return k_; }            // 0 = not learned (yet)
+    uint64_t irregular() const { return irregular_; }
+private:
+    uint32_t prevFirst_ = 0, prevNum_ = 0, k_ = 0, cand_ = 0;
+    int agree_ = 0;
+    bool have_ = false;
+    uint64_t irregular_ = 0;
+};
+
 class SdrplaySource {
 public:
     /** Interleaved int16 IQ, ready for the shim's existing enqueueIqInt16 path. */
@@ -352,6 +404,23 @@ public:
                         peakDbfs_.store(-99.0, std::memory_order_relaxed);
                         clipPct_.store(0.0, std::memory_order_relaxed); }
 
+    /** ★★ SAMPLES THE API SKIPPED, from its own sample numbering — see SampleSeqWatch. Diagnostic:
+     *  published beside the Airspy counts, never signalled to the DSP. Called by the stream
+     *  callback only. */
+    void noteSampleNum(uint32_t first, uint32_t num, bool reset) {
+        const uint64_t miss = seqWatch_.step(first, num, reset);
+        if (miss) { usbDropped_.fetch_add(miss, std::memory_order_relaxed);
+                    usbDropEvents_.fetch_add(1, std::memory_order_relaxed); }
+        seqRatio_.store(seqWatch_.ratio(), std::memory_order_relaxed);
+        seqIrregular_.store(seqWatch_.irregular(), std::memory_order_relaxed);
+    }
+    uint64_t usbDroppedSamples() const { return usbDropped_.load(std::memory_order_relaxed); }
+    uint64_t usbDropEvents() const { return usbDropEvents_.load(std::memory_order_relaxed); }
+    /** The learned counter step per sample (0 = not learned) and jumps that fit no whole number of
+     *  samples. A healthy reading is ratio >= 1 and irregular 0. */
+    uint32_t seqRatio() const { return seqRatio_.load(std::memory_order_relaxed); }
+    uint64_t seqIrregular() const { return seqIrregular_.load(std::memory_order_relaxed); }
+
 private:
     struct Impl;
     Impl* impl_ = nullptr;
@@ -408,6 +477,10 @@ private:
     std::atomic<double>   peakDbfs_{-99.0};
     std::atomic<double>   clipPct_{0.0};
     std::atomic<unsigned> windows_{0};
+    // ★ See noteSampleNum(). seqWatch_ is the callback thread's alone; the atomics are for readers.
+    SampleSeqWatch seqWatch_;
+    std::atomic<uint64_t> usbDropped_{0}, usbDropEvents_{0}, seqIrregular_{0};
+    std::atomic<uint32_t> seqRatio_{0};
 };
 
 }  // namespace vibe

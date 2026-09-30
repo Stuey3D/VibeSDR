@@ -283,7 +283,9 @@ struct CbCtx { std::vector<int16_t>* ilv; SdrplaySource::IqSink* sink; bool* los
                std::atomic<double>* peak; std::atomic<double>* clip; std::atomic<unsigned>* wins;
                std::atomic<unsigned>* gen;
                // ★ Set when the API reports sdrplay_api_DeviceFailure — its own words.
-               std::atomic<bool>* apiFailed; };
+               std::atomic<bool>* apiFailed;
+               // ★ For the sample-number continuity count — see SdrplaySource::noteSampleNum.
+               SdrplaySource* self; };
 }
 
 bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
@@ -382,7 +384,7 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
                  &liveGr_, &liveLna_, &liveGain_, &liveValid_, &liveStale_,
-                 &peakDbfs_, &clipPct_, &windows_, &gen_, &apiFailed_ };
+                 &peakDbfs_, &clipPct_, &windows_, &gen_, &apiFailed_, this };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -588,7 +590,7 @@ bool SdrplaySource::restartStream(std::string& err) {
     static CbCtx ctx;
     ctx = CbCtx{ &impl_->ilv, &sink_, &lost_, &paused_, &overload_, impl_->dev.dev,
                  &liveGr_, &liveLna_, &liveGain_, &liveValid_, &liveStale_,
-                 &peakDbfs_, &clipPct_, &windows_, &gen_, &apiFailed_ };
+                 &peakDbfs_, &clipPct_, &windows_, &gen_, &apiFailed_, this };
     sdrplay_api_CallbackFnsT fns{};
     fns.StreamACbFn = &streamCb;
     fns.StreamBCbFn = nullptr;
@@ -1454,10 +1456,15 @@ void SdrplaySource::applyDuoChoice() {
                                                            : sdrplay_api_Tuner_A;
 }
 
-static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT*,
-                     unsigned int numSamples, unsigned int, void* ctx) {
+static void streamCb(short* xi, short* xq, sdrplay_api_StreamCbParamsT* params,
+                     unsigned int numSamples, unsigned int reset, void* ctx) {
     auto* c = (CbCtx*)ctx;
     if (!c || !c->sink || !*c->sink || numSamples == 0) return;
+    // ★★ BEFORE the idle drop: continuity is a fact about the API's delivery, listener or not. A
+    //    rate change is a legitimate discontinuity, so fsChanged restarts the watch like `reset`.
+    if (c->self && params)
+        c->self->noteSampleNum(params->firstSampleNum, numSamples,
+                               reset != 0 || params->fsChanged != 0);
     if (c->paused && *c->paused) return;      // idle: drop, never tear the device down
     auto& ilv = *c->ilv;
     if (ilv.size() < (size_t)numSamples * 2) ilv.resize((size_t)numSamples * 2);

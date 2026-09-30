@@ -23,6 +23,7 @@
 // NOTHING between: 31-60 MHz is not a weak spot, it is absent. Anything offering a dial has to
 // know that, or it will silently sit on a dead frequency. See tuneRangeContains().
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -149,7 +150,27 @@ public:
      *  pretend. */
     bool restartStream(bool deep, std::string& err);
 
+    /** ★★★ SAMPLES libairspyhf THREW AWAY BEFORE THEY REACHED US. The library parks each USB buffer
+     *  in a small ring for its own consumer thread; when that thread is late and the ring is full,
+     *  the next buffer is DROPPED and the count rides on the following transfer as
+     *  `dropped_samples`. Nothing read it, so a hole in the IQ — inaudible, but fatal to RDS block
+     *  sync — was invisible from outside: iqDrops only counts OUR queue, which on this radio never
+     *  drops (2026-09-30, RDS errors tracking load on the Pi 500 with iqDrops at 0 all night).
+     *  ★ Two views of one count: the running total for /vibeserver.json, and "since you last
+     *    asked", which the shim's sink takes on the SAME thread straight after the callback noted
+     *    it — so the block it flags as following a hole is exactly the block that does. */
+    void noteUsbDropped(uint64_t n) {
+        if (!n) return;
+        usbDropped_.fetch_add(n, std::memory_order_relaxed);
+        usbDropEvents_.fetch_add(1, std::memory_order_relaxed);
+        usbDropPending_.fetch_add(n, std::memory_order_relaxed);
+    }
+    uint64_t takeUsbDropped() { return usbDropPending_.exchange(0, std::memory_order_relaxed); }
+    uint64_t usbDroppedSamples() const { return usbDropped_.load(std::memory_order_relaxed); }
+    uint64_t usbDropEvents() const { return usbDropEvents_.load(std::memory_order_relaxed); }
+
 private:
+    std::atomic<uint64_t> usbDropped_{0}, usbDropEvents_{0}, usbDropPending_{0};
     bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     struct Impl;
     Impl* impl_ = nullptr;
