@@ -10,7 +10,8 @@
 import {
   toSegCells, segCellCount, segGhost, segCellList, foldForSeg, foldForDot, foldToAscii, dotoHas,
   toUpperDisplay, flagToIso, foldIsUsable, displayOrFallback, setTransliterator, SEG_BLANK,
-  toSegRun, vfdStripText, cellWindow, steppedOffset, statusGainParts,
+  toSegRun, vfdStripText, cellWindow, steppedOffset, statusGainParts, transliterateNonLatin,
+  TRANSLIT_CACHE_MAX,
 } from '../src/constants/displayText.ts';
 
 let fails = 0, passes = 0;
@@ -115,10 +116,51 @@ eq('fallback keeps a Latin callsign', displayOrFallback('BBC Русская сл
 eq('usable text passes through (seg)', displayOrFallback('Radio Česko', 'seg', 'x'), 'RADIO CESKO');
 eq('usable text passes through (dot)', displayOrFallback('Radio Česko', 'dot', 'x'), 'Radio Česko');
 eq('CJK falls back', displayOrFallback('中国之声', 'dot', '9.500 MHz'), '9.500 MHz');
-// The native hook: once a transliterator is installed, it runs before the fold.
-setTransliterator((s) => s.replace('Радио', 'Radio').replace('России', 'Rossii'));
-eq('with a transliterator installed', displayOrFallback('Радио России', 'seg', 'x'), 'RADIO ROSSII');
-setTransliterator(null);
+// ── The native ICU hook (brief §7): transliterate → fold → fallback ──────────
+// A FAKE `Any-Latin; Latin-ASCII` so plain Node can run it; the real one is VibeLocalSDR.transliterate.
+{
+  const FAKE: Record<string, string> = {
+    'Радио России': 'Radio Rossii',
+    'Русская служба': 'Russkaya sluzhba',
+    'Ελληνική Ραδιοφωνία': 'Ellenike Radiophonia',
+    '中国之声': '',                                     // ICU "gave nothing back" → fallback
+  };
+  const sent: string[] = [];
+  setTransliterator((s) => { sent.push(s); return s in FAKE ? FAKE[s] : s; });
+
+  eq('Cyrillic → transliterated → seg cells', toSegCells('Радио России'), 'RADIO!ROSSII');
+  eq('…the whole phrase went to ICU as ONE run', sent, ['Радио России']);
+  eq('Cyrillic on seg is usable now', displayOrFallback('Радио России', 'seg', '7.310 MHz'), 'RADIO ROSSII');
+  eq('Cyrillic on dot', displayOrFallback('Радио России', 'dot', '7.310 MHz'), 'Radio Rossii');
+  eq('memoised: a repeat never crosses the bridge again', sent.length, 1);
+  eq('Greek', toSegCells('Ελληνική Ραδιοφωνία'), 'ELLENIKE!RADIOPHONIA');
+  eq('CJK with an empty answer → frequency', displayOrFallback('中国之声', 'seg', '9.500 MHz'), '9.500 MHz');
+  eq('CJK with an empty answer on dot → frequency', displayOrFallback('中国之声', 'dot', '9.500 MHz'), '9.500 MHz');
+  sent.length = 0;
+  eq('mixed Latin + Cyrillic: only the Cyrillic run is sent', toSegCells('BBC Русская служба'), 'BBC!RUSSKAYA!SLUZHBA');
+  eq('…the Latin callsign stayed in JS', sent, ['Русская служба']);
+  // ★ Latin accents never go to ICU (Latin-ASCII would strip what Doto can draw).
+  sent.length = 0;
+  eq('dot keeps the Latin accent beside transliterated Cyrillic', foldForDot('Rádio Русская служба'), 'Rádio Russkaya sluzhba');
+  sent.length = 0;
+  eq('a Latin-only name never calls the transliterator', [foldForDot('Rádio Nacional'), sent.length], ['Rádio Nacional', 0]);
+  eq('the VTS strip on seg uses the transliteration', vfdStripText('Радио России', undefined, 'seg', 'x'), 'Radio Rossii');
+  // A transliterator that throws or returns junk is treated as "no answer" — never a crash.
+  setTransliterator(() => { throw new Error('native gone'); });
+  eq('a throwing transliterator → fallback, no throw', displayOrFallback('Радио России', 'seg', '7.310 MHz'), '7.310 MHz');
+  setTransliterator(() => (undefined as unknown as string));
+  eq('a non-string answer → fallback', displayOrFallback('Радио России', 'seg', '7.310 MHz'), '7.310 MHz');
+  // Bounded memo: many distinct names never grow it past TRANSLIT_CACHE_MAX.
+  let calls = 0;
+  setTransliterator((s) => { calls++; return s.length ? 'x' : s; });
+  for (let i = 0; i < TRANSLIT_CACHE_MAX + 50; i++) transliterateNonLatin(String.fromCharCode(0x4e00 + i));
+  const before = calls;
+  transliterateNonLatin(String.fromCharCode(0x4e00 + TRANSLIT_CACHE_MAX + 49)); // recent → cached
+  transliterateNonLatin(String.fromCharCode(0x4e00));  // evicted → asked again
+  eq('LRU keeps the recent (0 calls), evicts the oldest (1 call)', calls - before, 1);
+  setTransliterator(null);
+  eq('uninstalled: back to the frequency fallback', displayOrFallback('Радио России', 'seg', '7.310 MHz'), '7.310 MHz');
+}
 
 // ── The VTS strip on a VFD ───────────────────────────────────────────────────
 {

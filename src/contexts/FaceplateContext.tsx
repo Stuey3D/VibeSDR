@@ -19,6 +19,11 @@ import {
   DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, parseSettings, resolveFaceplate, withDisplay, withText,
   type FaceplateSettings, type FaceplateTheme, type DisplayStyle, type TextColour,
 } from '../constants/faceplate';
+import { installNativeTransliterator } from '../services/transliterator';
+
+// ★ The dot-matrix / 14-segment displays transliterate non-Latin names with the platform's ICU
+//   (brief §7). Installed once, when the faceplate owner loads — before any display draws.
+installNativeTransliterator();
 
 interface FaceplateContextValue {
   theme:      FaceplateTheme;

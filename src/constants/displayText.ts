@@ -13,24 +13,69 @@
  *
  * ★★ FOLDING IS FOR THE DISPLAY ONLY. Search, bookmarks and the Hyperlegible / Nixie displays keep
  *   the original text. Nothing here may be written back anywhere.
- * ★★ NON-LATIN SCRIPTS: the brief asks for the platform ICU transliterator (`Any-Latin; Latin-ASCII`
- *   — CFStringTransform on iOS, android.icu.text.Transliterator on Android 10+). Neither is
- *   reachable from JS: Hermes has `String.prototype.normalize` but no transliterator, and Intl has
- *   nothing that does it. So this is NOT WIRED YET — it needs a small native module, a separate
- *   step. Until then Cyrillic / Greek / Arabic / CJK fold to nothing and `displayOrFallback()` shows
- *   the frequency and whatever Latin callsign survived, never empty cells or tofu. The hook for the
- *   native step is `setTransliterator()` below: install a sync `Any-Latin` function and it runs
- *   before the fold.
+ * ★★ NON-LATIN SCRIPTS (Cyrillic, Greek, Arabic, CJK…): the platform ICU transliterator
+ *   (`Any-Latin; Latin-ASCII` — NSString applyingTransform on iOS, android.icu.text.Transliterator on
+ *   Android 10+) runs FIRST, then the fold below, then — if still nothing usable — the frequency +
+ *   Latin callsign fallback. Hermes has no transliterator, so the native call is installed from
+ *   outside with `setTransliterator()` (src/services/transliterator.ts does it at app start). Only
+ *   the NON-LATIN RUNS of a string are sent to it, so Latin accents survive for the dot display
+ *   ("Rádio Россия" keeps its á); every answer is memoised (bounded LRU), so a long EiBi list costs
+ *   each distinct name one native call. With nothing installed (web, tests, an old binary) non-Latin
+ *   names fall back to the frequency, never empty cells or tofu.
  *
  * Pure: no React, no imports — scripts/test_faceplate_text.ts runs it under plain Node.
  */
 
-// ── Transliteration hook (native, not yet wired) ─────────────────────────────
+// ── Transliteration (native ICU, installed from outside) ─────────────────────
 
 type Transliterate = (s: string) => string;
 let transliterate: Transliterate | null = null;
-/** ★ For the native ICU step: install a synchronous `Any-Latin` transform. null = not available. */
-export function setTransliterator(f: Transliterate | null): void { transliterate = f; }
+/** Bounded LRU of native answers, keyed on the non-Latin run sent. A Map iterates in insertion
+ *  order, so the first key is the least recently used. */
+export const TRANSLIT_CACHE_MAX = 500;
+const translitCache = new Map<string, string>();
+
+/** ★ Install the synchronous `Any-Latin; Latin-ASCII` transform (null = none). Clears the memo. */
+export function setTransliterator(f: Transliterate | null): void {
+  transliterate = f;
+  translitCache.clear();
+}
+
+/** Characters that are Latin (or script-neutral) and never need the transliterator: ASCII, Latin-1,
+ *  Latin Extended-A/B, IPA, spacing modifiers, combining diacritics, Latin Extended Additional,
+ *  general punctuation, currency, letterlike symbols, Latin ligatures. Everything else is a run
+ *  worth offering to ICU (it hands back anything it cannot transliterate unchanged). */
+const LATIN_CH = '\\u0000-\\u036F\\u1E00-\\u1EFF\\u2000-\\u206F\\u20A0-\\u20CF\\u2100-\\u214F\\uFB00-\\uFB06';
+/** A run of non-Latin characters, spaces inside it kept so ICU sees whole phrases. */
+const NON_LATIN_RUN = new RegExp(`[^${LATIN_CH}]+(?:\\s+[^${LATIN_CH}]+)*`, 'g');
+const HAS_NON_LATIN = new RegExp(`[^${LATIN_CH}]`);
+
+function translitRun(run: string): string {
+  const hit = translitCache.get(run);
+  if (hit !== undefined) {
+    translitCache.delete(run); translitCache.set(run, hit);           // most recently used
+    return hit;
+  }
+  let out: string;
+  try {
+    const r = transliterate!(run);
+    out = typeof r === 'string' ? r : run;
+  } catch {
+    out = run;                                                          // a native failure = no answer
+  }
+  translitCache.set(run, out);
+  if (translitCache.size > TRANSLIT_CACHE_MAX) {
+    const oldest = translitCache.keys().next().value;
+    if (oldest !== undefined) translitCache.delete(oldest);
+  }
+  return out;
+}
+
+/** Step 1 of the fold: the non-Latin runs through the installed transliterator; Latin untouched. */
+export function transliterateNonLatin(text: string): string {
+  if (!transliterate || !HAS_NON_LATIN.test(text)) return text;
+  return text.normalize('NFC').replace(NON_LATIN_RUN, translitRun);
+}
 
 // ── Folding ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +100,7 @@ const PUNCT: Record<string, string> = {
 };
 
 function preFold(text: string): string {
-  let t = transliterate ? transliterate(text) : text;
+  let t = transliterateNonLatin(text);
   t = t.replace(/[‘-„–—−…   \t\n\r]/g, (c) => PUNCT[c] ?? c);
   return t;
 }
@@ -96,7 +141,7 @@ export function dotoHas(ch: string): boolean {
  * ★ Works on the precomposed (NFC) form, so "e + ◌́" from a decomposed source is drawn as é.
  */
 export function foldForDot(text: string): string {
-  const src = (transliterate ? transliterate(text) : text).normalize('NFC');
+  const src = transliterateNonLatin(text).normalize('NFC');
   let out = '';
   for (const ch of src) {
     if (dotoHas(ch)) { out += ch; continue; }
@@ -263,7 +308,7 @@ export function displayOrFallback(text: string, display: 'dot' | 'seg', freqLabe
   const folded = display === 'dot' ? foldForDot(text) : foldForSeg(text);
   if (foldIsUsable(text, folded, display)) return folded;
   const callsign = text.split(/\s+/).filter((w) => {
-    if (!w || significant(w) === 0) return false;
+    if (!w || significant(w) === 0 || HAS_NON_LATIN.test(w)) return false;
     return significant(foldToAscii(w)) === significant(w) && /^[\x20-\x7e]+$/.test(foldToAscii(w));
   }).join(' ');
   return callsign ? `${freqLabel} ${callsign}` : freqLabel;

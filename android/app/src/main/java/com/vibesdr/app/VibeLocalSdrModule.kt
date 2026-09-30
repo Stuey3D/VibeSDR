@@ -114,6 +114,24 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         return m
     }
 
+    /** ★★ FACEPLATE CHARACTER FOLDING (docs/BRIEF-faceplates.md §7): a non-Latin station name (Cyrillic,
+     *  Greek, Arabic, CJK…) → plain ASCII with ICU's `Any-Latin; Latin-ASCII`, so the dot-matrix and
+     *  14-segment displays can draw it. JS (src/constants/displayText.ts) folds the result further and
+     *  falls back to the frequency when nothing usable comes back.
+     *  ★ SYNCHRONOUS: called while a display prepares its text, and JS memoises every answer, so each
+     *    distinct name crosses the bridge once. Below Android 10 there is no android.icu, so the input
+     *    comes back unchanged — the JS fallback still works. Any failure → the input, never a throw.
+     *  ★ Display only: the result is never stored or searched. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun transliterate(text: String?): String {
+        if (text.isNullOrEmpty()) return text ?: ""
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return text
+        return try { IcuLatin.transliterate(text) } catch (e: Throwable) {
+            Log.w(TAG, "transliterate failed: ${e.message}")
+            text
+        }
+    }
+
     /** ★ Lite: "run the server in the background — minimise app". Home, in effect: the task goes to the back
      *  and NOTHING stops — the server lives in its foreground service either way. */
     @ReactMethod
@@ -1323,4 +1341,16 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             (vid == HACKRF_VID && pid == HACKRF_PID) ||
             (vid == AIRSPY_VID && pid == AIRSPY_PID)
     }
+}
+
+/** ICU `Any-Latin; Latin-ASCII` for [VibeLocalSdrModule.transliterate]. Its own object so the
+ *  android.icu class is only ever loaded on Android 10+ (the caller checks SDK_INT first). Built once:
+ *  compiling a compound transform is the expensive part. ICU transliterators are not documented as
+ *  thread-safe, so calls are serialised (they come from the JS thread anyway). */
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
+private object IcuLatin {
+    private val t: android.icu.text.Transliterator by lazy {
+        android.icu.text.Transliterator.getInstance("Any-Latin; Latin-ASCII")
+    }
+    @Synchronized fun transliterate(text: String): String = t.transliterate(text)
 }

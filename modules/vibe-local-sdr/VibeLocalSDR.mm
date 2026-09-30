@@ -145,6 +145,20 @@ RCT_EXPORT_METHOD(getTunerGains:(RCTPromiseResolveBlock)resolve rejecter:(RCTPro
 // exists so JS need not branch, but there is nothing here to serve.
 RCT_EXPORT_METHOD(setServeOnLan:(BOOL)on) { vibe::LocalSdrShim::setServeOnLan(on); }
 
+// ── Faceplate character folding (docs/BRIEF-faceplates.md §7) ───────────────
+// A non-Latin station name (Cyrillic, Greek, Arabic, CJK…) → plain ASCII with ICU's
+// `Any-Latin; Latin-ASCII`, so the dot-matrix and 14-segment displays can draw it. JS
+// (src/constants/displayText.ts) folds the result further and falls back to the frequency
+// when nothing usable comes back. Mirrors VibeLocalSdrModule.transliterate on Android.
+// ★ SYNCHRONOUS (the interop layer maps a non-void return to a sync JSI call): it runs while a
+//   display prepares its text, and JS memoises every answer. Any failure → the input unchanged.
+// ★ Display only: the result is never stored or searched.
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(transliterate:(NSString *)text) {
+  if (![text isKindOfClass:[NSString class]] || text.length == 0) return @"";
+  NSString *out = [text stringByApplyingTransform:@"Any-Latin; Latin-ASCII" reverse:NO];
+  return out ?: text;
+}
+
 // ── USB (Android-only) — reject on iOS ──────────────────────────────────────
 RCT_EXPORT_METHOD(startSpectrum:(NSDictionary *)opts
                        resolver:(RCTPromiseResolveBlock)resolve
