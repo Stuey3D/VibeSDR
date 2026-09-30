@@ -32,13 +32,13 @@ import {
 } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import { getControlHaptics, buildGlyphPath } from './DrumWheel';
+import { useFaceplate } from '../contexts/FaceplateContext';
+import { ledA, hotA } from '../constants/faceplate';
 
-// ── Look (matched to DrumWheel's TUNABLES so the panels are siblings) ─────────
-
-const GLOW_HUE = 120;
-const GLOW_INT = 1.0;
-function hsl(h: number, s: number, l: number, a: number) { return `hsla(${h},${s}%,${l}%,${a})`; }
-const G = (a: number) => hsl(GLOW_HUE, 100, 45, Math.min(1, a * GLOW_INT));
+// ── Look ──────────────────────────────────────────────────────────────────────
+// ★ The colours are the faceplate's (constants/faceplate.ts), shared with DrumWheel so a drum and a
+//   key pair stay siblings on every chassis: the controls colour lights the cuts and the legend,
+//   the chassis tokens carry the metal. The old hsl(GLOW_HUE) could not make white or neon (§6.1).
 
 // ── Behaviour (BRIEF §2, "they must ACT like a HiFi tuner") ──────────────────
 //
@@ -208,6 +208,9 @@ export default function TunerKeys({
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
   const H = height;
+  const fp = useFaceplate();
+  const ct = fp.chassis;
+  const G  = (a: number) => ledA(fp.controls, a);
 
   const [down, setDown] = useState<-1 | 1 | 0>(0);
   const { press, release, sweeping } = useHoldSweep(onStep, disabled, sweepRate, onSweepStep);
@@ -267,7 +270,7 @@ export default function TunerKeys({
             read as one continuous front panel when mixed ── */}
         <RoundedRect x={0} y={0} width={W} height={H} r={6}>
           <LinearGradient start={vec(0, 0)} end={vec(0, H)}
-            colors={['#101410', '#0a0c0a', '#060706']} positions={[0, 0.4, 1]} />
+            colors={ct.wellFace} positions={[0, 0.4, 1]} />
         </RoundedRect>
 
         {keys.map(({ dir, x }) => {
@@ -301,10 +304,10 @@ export default function TunerKeys({
                   are let into on a real tuner (Stuart's reference photos). It is
                   what gives the key somewhere to be recessed INTO. */}
               <RoundedRect x={x - 1} y={padY - 1} width={keyW + 2} height={keyH + 2} r={6}
-                           color="rgba(0,0,0,0.9)" />
+                           color={ct.tkSlotEdge} />
               <Rect x={x - 1} y={padY - 1} width={keyW + 2} height={1.2}>
                 <LinearGradient start={vec(x - 1, 0)} end={vec(x + keyW + 1, 0)}
-                  colors={['rgba(255,255,255,0.05)', 'rgba(255,255,255,0.22)', 'rgba(255,255,255,0.05)']} />
+                  colors={ct.tkSlotLip} />
               </Rect>
 
               {/* ── Key body, LEANING BACK into the panel ─────────────────────
@@ -316,9 +319,7 @@ export default function TunerKeys({
               <RoundedRect x={x} y={padY} width={keyW} height={keyH} r={5}>
                 <LinearGradient
                   start={vec(0, padY)} end={vec(0, padY + keyH)}
-                  colors={active
-                    ? ['#050605', '#090a09', '#0d0f0d']
-                    : ['#0a0b0a', '#141614', '#1b1e1b']}
+                  colors={active ? ct.tkCapDown : ct.tkCapUp}
                   positions={[0, 0.55, 1]} />
               </RoundedRect>
 
@@ -326,7 +327,7 @@ export default function TunerKeys({
                   what actually reads as "leaning back". */}
               <Rect x={x} y={padY} width={keyW} height={keyH * 0.42}>
                 <LinearGradient start={vec(0, padY)} end={vec(0, padY + keyH * 0.42)}
-                  colors={[active ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.6)', 'rgba(0,0,0,0)']} />
+                  colors={[active ? ct.tkShadeDown : ct.tkShadeUp, 'rgba(0,0,0,0)']} />
               </Rect>
 
               {/* Light caught on the lower face that tilts up towards you. Faint:
@@ -335,7 +336,7 @@ export default function TunerKeys({
               {!active && (
                 <Rect x={x + 1} y={padY + keyH * 0.70} width={keyW - 2} height={keyH * 0.28}>
                   <LinearGradient start={vec(0, padY + keyH * 0.70)} end={vec(0, padY + keyH * 0.98)}
-                    colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.05)']} />
+                    colors={ct.tkCapSheen} />
                 </Rect>
               )}
 
@@ -348,12 +349,12 @@ export default function TunerKeys({
               {!active && [0.22, 0.38, 0.55, 0.72].map((f, gi) => (
                 <Rect key={`gr${gi}`} x={x + keyW * f} y={padY + keyH * 0.18}
                       width={0.7} height={keyH * 0.64}
-                      color={gi % 2 ? 'rgba(255,255,255,0.030)' : 'rgba(255,255,255,0.045)'} />
+                      color={gi % 2 ? ct.tkGrainA : ct.tkGrainB} />
               ))}
 
               {/* Bottom lip highlight — the near edge, closest to the light */}
               <RoundedRect x={x + 0.5} y={padY + 0.5} width={keyW - 1} height={keyH - 1} r={4.5}
-                           color={active ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.07)'}
+                           color={active ? ct.tkRimDown : ct.tkRimUp}
                            strokeWidth={0.9} style="stroke" />
 
               {/* ── The laser cut ──────────────────────────────────────────────
@@ -369,7 +370,7 @@ export default function TunerKeys({
                     style="stroke" strokeCap="round" strokeJoin="round">
                 <BlurMask blur={2.5} style="normal" respectCTM />
               </Path>
-              <Path path={symPath(dir, x)} color={hsl(GLOW_HUE, 100, 78, 0.95 * lit)}
+              <Path path={symPath(dir, x)} color={hotA(fp.controls, 0.95 * lit)}
                     strokeWidth={1.7} style="stroke" strokeCap="round" strokeJoin="round" />
             </Group>
           );
@@ -395,7 +396,7 @@ export default function TunerKeys({
             separate keys set into metal. So this is a plain machined edge and
             the only green in the panel comes from the keys and the legend. */}
         <RoundedRect x={0.5} y={0.5} width={W - 1} height={H - 1} r={6}
-                     color="rgba(255,255,255,0.10)" strokeWidth={0.9} style="stroke" />
+                     color={ct.tkWellRing} strokeWidth={0.9} style="stroke" />
       </Canvas>
 
       {/* ── Touch targets. Views over the Canvas, as DrumWheel does for its +/−.

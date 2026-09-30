@@ -159,6 +159,11 @@ if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((
 # ★ The web decoder socket says whose it is (user_session_id) and takes a refusal — shown in the
 #   server's words and FORGOTTEN, so the 3-s reconnect cannot turn one "no" into a loop (B6).
 if node scripts/test-web-decoder-refusal.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE FACEPLATE RULES (app). Nixie One is neon in every chassis × display × colour, dot/seg can
+#     never reach white by any route (picker, migration, stored prefs), and the DEFAULT settings
+#     resolve to today's literal colours — the pixel-identical promise, checked as data.
+#  ★ Node runs the .ts directly (type stripping), so this needs nothing installed.
+if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

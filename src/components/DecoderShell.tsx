@@ -30,6 +30,8 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Fonts } from '../constants/theme';
+import { useFaceplate } from '../contexts/FaceplateContext';
+import type { Chassis } from '../constants/faceplate';
 
 /** ★ Pinned Atkinson Hyperlegible — see Fonts.decoder. Never the display style. */
 export const DECODER_FONT = Fonts.decoder;
@@ -103,13 +105,15 @@ const DEFAULT_TOKENS: DecoderTokens = {
 };
 
 /** ★ The resolver. One chassis today; row 8 adds silver/black and the Solid background. */
-export function decoderTokensFor(_chassis: string = 'default'): DecoderTokens {
+export function decoderTokensFor(_chassis: Chassis = 'default'): DecoderTokens {
   return DEFAULT_TOKENS;
 }
 
 /** The tokens every decoder body reads. Components never hold their own palette. */
 export function useDecoderTokens(): DecoderTokens {
-  return decoderTokensFor('default');
+  // ★ From the faceplate context, so row 8 needs no change here — only in decoderTokensFor().
+  //   (The Decoder background setting is stored already; it is read there, not yet here.)
+  return decoderTokensFor(useFaceplate().settings.chassis);
 }
 
 // ── Frame ─────────────────────────────────────────────────────────────────────

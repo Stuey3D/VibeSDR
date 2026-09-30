@@ -1,0 +1,544 @@
+/**
+ * faceplate.ts — the FACEPLATE tokens and the ONE resolver (brief §1, §2, §12).
+ *
+ * "I don't want colour changes to look like a palette swap on a piece of software" — so a
+ * faceplate is not a palette. It is five settings (chassis, display, controls colour, text colour,
+ * signal meter) plus the decoder background, resolved HERE, once, into the tokens the deck draws
+ * with. Components never read the colour tables below directly: ControlsBar, DrumWheel,
+ * TunerKeys, VTSBar and DecoderShell take the resolved theme from FaceplateContext.
+ *
+ * ★★★ DEFAULT SETTINGS RENDER TODAY'S APP, PIXEL FOR PIXEL (acceptance §13.1). Every token in
+ *   DEFAULT_CHASSIS below is the literal that used to sit in ControlsBar / DrumWheel / TunerKeys /
+ *   VTSBar, moved, not restyled. If you change one, you have changed the default look.
+ *   ★ Two places where the mockup and brief describe the default deck differently from what ships
+ *     today (digits #f4f1ea, legends #f1ede4; brief §3.1) — today's values are kept, because the
+ *     acceptance test for the default deck is "identical to today's build".
+ *
+ * ★★★ THE NIXIE RULE (§2, non-negotiable): anything drawn in Nixie One is neon orange, always. It is
+ *   enforced in resolveTextColour() and in the key-legend choice below — never at a call site.
+ *
+ * Pure: no React, no storage — so scripts/test_faceplate.ts can check every rule directly.
+ */
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+export type Chassis          = 'default' | 'silver' | 'black';
+export type DisplayStyle     = 'hyper' | 'nixie' | 'dot' | 'seg';
+export type ControlsColour   = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'neon';
+export type TextColour       = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'teal';
+export type SignalMeter      = 'bar' | 'vu' | 'edge';
+export type DecoderBackground = 'transparent' | 'solid';
+
+export interface FaceplateSettings {
+  chassis:   Chassis;
+  display:   DisplayStyle;
+  controls:  ControlsColour;
+  text:      TextColour;
+  meter:     SignalMeter;
+  decoderBg: DecoderBackground;
+  /** ★ The user's text colour, remembered PER DISPLAY (§1: "Remember the user's choice per display
+   *  if cheap to do" — it is). Leaving Hyperlegible-white for dot matrix falls back to teal; coming
+   *  back restores white rather than leaving them on teal. */
+  textByDisplay: Partial<Record<DisplayStyle, TextColour>>;
+}
+
+export const CHASSIS:     Chassis[]        = ['default', 'silver', 'black'];
+export const DISPLAYS:    DisplayStyle[]   = ['hyper', 'nixie', 'dot', 'seg'];
+export const CONTROLS:    ControlsColour[] = ['green', 'red', 'amber', 'blue', 'white', 'neon'];
+export const TEXTS:       TextColour[]     = ['green', 'red', 'amber', 'blue', 'white', 'teal'];
+export const METERS:      SignalMeter[]    = ['bar', 'vu', 'edge'];
+export const DECODER_BGS: DecoderBackground[] = ['transparent', 'solid'];
+
+/** ★★★ What the real display technology came in (§1). Nixie: none — locked neon (§2). Dot and
+ *  segment VFDs never came in white. The first entry is the display's default. */
+export const TEXT_ALLOWED: Record<DisplayStyle, TextColour[]> = {
+  hyper: ['green', 'red', 'amber', 'blue', 'white', 'teal'],
+  nixie: [],
+  dot:   ['teal', 'green', 'blue', 'amber', 'red'],
+  seg:   ['teal', 'green', 'blue', 'amber', 'red'],
+};
+
+/** §1 defaults. `display` is overwritten by the font migration on first load (see migrate…). */
+export const DEFAULT_SETTINGS: FaceplateSettings = {
+  chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
+  meter: 'bar', decoderBg: 'transparent', textByDisplay: {},
+};
+
+// ── Colour tokens ─────────────────────────────────────────────────────────────
+
+/** An LED colour: the rgb TRIPLET is the truth, everything else derives from it or is the mockup's
+ *  own value. `glow` is core at α .70–.80; `hot` is the white-hot centre; `dim` the unlit tint. */
+export interface LedColour {
+  rgb:    string;   // '61,255,114'
+  core:   string;   // '#3dff72'
+  glow:   string;   // 'rgba(61,255,114,0.70)'
+  hot:    string;   // '#c9ffd6'
+  /** The hot centre as a triplet, for alpha ramps (TunerKeys' lit symbol). */
+  hotRgb: string;
+  dim:    string;
+  /** ★ Only TODAY_GREEN has these: the exact hsl the drums were drawn with, so alpha ramps come out
+   *  as the same strings Skia parsed before (see ledA / hotA). */
+  hsl?:    [number, number, number];
+  hotHsl?: [number, number, number];
+}
+
+/** rgba() from a triplet — the only way a token should be given an alpha. */
+export const rgba = (rgb: string, a: number) => `rgba(${rgb},${Math.min(1, Math.max(0, a))})`;
+
+/** The LED at alpha `a` — what every glow, well edge and icon in the controls colour is drawn with. */
+export function ledA(c: LedColour, a: number): string {
+  const al = Math.min(1, Math.max(0, a));
+  return c.hsl ? `hsla(${c.hsl[0]},${c.hsl[1]}%,${c.hsl[2]}%,${al})` : `rgba(${c.rgb},${al})`;
+}
+/** The LED's white-hot centre at alpha `a` (TunerKeys' lit symbol core). */
+export function hotA(c: LedColour, a: number): string {
+  const al = Math.min(1, Math.max(0, a));
+  return c.hotHsl ? `hsla(${c.hotHsl[0]},${c.hotHsl[1]}%,${c.hotHsl[2]}%,${al})` : `rgba(${c.hotRgb},${al})`;
+}
+
+/** Brief §1 table, with glow and dim from the mockup's LEDS (Deck.mockup renderVals). */
+export const LED: Record<ControlsColour | TextColour, LedColour> = {
+  green: { rgb: '61,255,114',  core: '#3dff72', glow: 'rgba(61,255,114,0.70)', hot: '#c9ffd6', hotRgb: '201,255,214', dim: 'rgba(61,255,114,0.45)' },
+  red:   { rgb: '255,58,46',   core: '#ff3a2e', glow: 'rgba(255,58,46,0.80)',  hot: '#ffcbc6', hotRgb: '255,203,198', dim: 'rgba(255,58,46,0.50)' },
+  amber: { rgb: '255,174,26',  core: '#ffae1a', glow: 'rgba(255,174,26,0.80)', hot: '#ffe4b3', hotRgb: '255,228,179', dim: 'rgba(255,174,26,0.50)' },
+  blue:  { rgb: '61,155,255',  core: '#3d9bff', glow: 'rgba(61,155,255,0.80)', hot: '#d0e7ff', hotRgb: '208,231,255', dim: 'rgba(61,155,255,0.50)' },
+  white: { rgb: '215,228,255', core: '#eef3ff', glow: 'rgba(215,228,255,0.70)', hot: '#ffffff', hotRgb: '255,255,255', dim: 'rgba(215,228,255,0.45)' },
+  teal:  { rgb: '70,255,215',  core: '#46ffd7', glow: 'rgba(70,255,215,0.70)', hot: '#c8fff2', hotRgb: '200,255,242', dim: 'rgba(70,255,215,0.45)' },
+  neon:  { rgb: '255,106,20',  core: '#ff7a26', glow: 'rgba(255,100,16,0.80)', hot: '#ffc48a', hotRgb: '255,196,138', dim: 'rgba(255,106,20,0.50)' },
+};
+
+/**
+ * ★★ TODAY'S DRUM GREEN — the default chassis's `green`, and ONLY the default chassis's.
+ * DrumWheel and TunerKeys drew with `hsl(GLOW_HUE=120, 100%, 45%)` = rgb(0, 229.5, 0), and the lit
+ * key symbol with hsl(120, 100%, 78%) = rgb(143, 255, 143). The brief's green (61,255,114) is a
+ * different, bluer LED; putting it on the default deck would change today's look, which §13.1
+ * forbids. Silver and black take the brief's green.
+ * ★ §6.1 TRAP: G() could not make white or neon at all, and got blue/amber at the wrong brightness
+ *   — which is why every colour is a triplet now and the hue maths is gone.
+ */
+const TODAY_GREEN: LedColour = {
+  rgb: '0,230,0', core: 'rgb(0,230,0)', glow: 'rgba(0,230,0,0.70)',
+  hot: 'rgb(143,255,143)', hotRgb: '143,255,143', dim: 'rgba(0,230,0,0.45)',
+  hsl: [120, 100, 45], hotHsl: [120, 100, 78],
+};
+
+/** The Nixie text colour — §2, exactly. Not an LED: a gas discharge. */
+export const NEON_TEXT = {
+  core:     '#ffc48a',
+  /** CSS `0 0 1.5px #ff8a2e, 0 0 5px #ff6410, 0 0 11px rgba(255,80,10,0.6)` — RN takes one shadow,
+   *  so the middle (the one that reads as the glow) stands in until the displays land (row 4). */
+  glow:     '#ff6410',
+  mode:     '#ffb37a',
+  reading:  '#ff9a55',
+  readingGlow: 'rgba(255,90,10,0.8)',
+};
+
+export interface ResolvedTextColour {
+  /** The setting that won, or 'neon' under the Nixie rule. */
+  name:   TextColour | 'neon';
+  rgb:    string;
+  core:   string;
+  glow:   string;
+  hot:    string;
+  isNeon: boolean;
+}
+
+/** Is `text` one this display can show? */
+export function textAllowed(display: DisplayStyle, text: TextColour): boolean {
+  return TEXT_ALLOWED[display].includes(text);
+}
+
+/**
+ * ★★★ THE resolver (§2). Neon for Nixie, whatever was asked for; otherwise the text colour clamped
+ * to the display's allowed set (the display's first colour when it is not allowed). No other code
+ * decides a text colour — and no route (picker, migration, stored prefs) can reach white on dot or
+ * seg, because every one of them comes through here (acceptance §13.4).
+ */
+export function resolveTextColour(display: DisplayStyle, text: TextColour): ResolvedTextColour {
+  if (display === 'nixie') {
+    return { name: 'neon', rgb: LED.neon.rgb, core: NEON_TEXT.core, glow: NEON_TEXT.glow,
+             hot: NEON_TEXT.core, isNeon: true };
+  }
+  const allowed = TEXT_ALLOWED[display];
+  const name = allowed.includes(text) ? text : allowed[0];
+  const c = LED[name];
+  return { name, rgb: c.rgb, core: c.core, glow: c.glow, hot: c.hot, isNeon: false };
+}
+
+/** The controls colour's LED, with today's green on the default chassis (see TODAY_GREEN). */
+export function resolveControlsColour(chassis: Chassis, controls: ControlsColour): LedColour {
+  if (chassis === 'default' && controls === 'green') return TODAY_GREEN;
+  return LED[controls];
+}
+
+// ── Setting changes with side effects (§1) ────────────────────────────────────
+
+/**
+ * Changing Display. ★ Choosing Nixie switches the controls to neon so drums and keys match the
+ * tubes (the user may change them after); leaving Nixie with neon controls resets them to amber.
+ * The text colour follows the display: the one remembered for it, else the current one if allowed,
+ * else the display's first. Nixie keeps the stored text untouched — it is ignored, not replaced.
+ */
+export function withDisplay(s: FaceplateSettings, display: DisplayStyle): FaceplateSettings {
+  if (display === s.display) return s;
+  const textByDisplay = { ...s.textByDisplay };
+  if (s.display !== 'nixie') textByDisplay[s.display] = s.text;
+  let controls = s.controls;
+  if (display === 'nixie') controls = 'neon';
+  else if (s.display === 'nixie' && controls === 'neon') controls = 'amber';
+  let text = s.text;
+  if (display !== 'nixie') {
+    const remembered = textByDisplay[display];
+    text = remembered && textAllowed(display, remembered) ? remembered
+         : textAllowed(display, s.text) ? s.text
+         : TEXT_ALLOWED[display][0];
+  }
+  return { ...s, display, controls, text, textByDisplay };
+}
+
+/** Changing the text colour. Refused (unchanged) when the display cannot show it — the picker only
+ *  offers allowed colours, but a stale caller must not be able to smuggle white onto a VFD. */
+export function withText(s: FaceplateSettings, text: TextColour): FaceplateSettings {
+  if (s.display === 'nixie' || !textAllowed(s.display, text)) return s;
+  return { ...s, text, textByDisplay: { ...s.textByDisplay, [s.display]: text } };
+}
+
+// ── Storage: parse, validate, migrate ─────────────────────────────────────────
+
+export const FACEPLATE_STORAGE_KEY = 'lsv_faceplate';
+
+function pick<T extends string>(v: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof v === 'string' && (allowed as readonly string[]).includes(v) ? v as T : fallback;
+}
+
+/**
+ * ★★ MIGRATION: Display REPLACES today's font setting (ThemeContext: Nixie One / Atkinson), it does
+ * not sit beside it (§1: "don't add a second font switch"). Atkinson → `hyper`, Nixie One → `nixie`.
+ * ThemeContext has never persisted its choice and has defaulted to Atkinson since 2026-06-11, so in
+ * practice every existing user migrates to `hyper` — but the mapping is the rule, not the accident.
+ */
+export function migrateLegacyFont(legacyThemeName: string | null | undefined): DisplayStyle {
+  return legacyThemeName === 'amber' ? 'nixie' : 'hyper';
+}
+
+/**
+ * Stored JSON → settings. Anything unknown or missing takes the §1 default; a text colour the
+ * display cannot show is clamped (the same rule as resolveTextColour, applied to what is SAVED so
+ * the picker never opens on an impossible selection). `legacyThemeName` seeds Display when nothing
+ * was ever stored.
+ */
+export function parseSettings(json: string | null, legacyThemeName?: string | null): FaceplateSettings {
+  let raw: any = null;
+  if (json) { try { raw = JSON.parse(json); } catch { raw = null; } }
+  if (!raw || typeof raw !== 'object') {
+    const display = migrateLegacyFont(legacyThemeName);
+    return withDisplay({ ...DEFAULT_SETTINGS }, display);
+  }
+  const display = pick(raw.display, DISPLAYS, 'hyper');
+  const textByDisplay: FaceplateSettings['textByDisplay'] = {};
+  if (raw.textByDisplay && typeof raw.textByDisplay === 'object') {
+    for (const d of DISPLAYS) {
+      const t = raw.textByDisplay[d];
+      if (d !== 'nixie' && typeof t === 'string' && textAllowed(d, t as TextColour)) textByDisplay[d] = t as TextColour;
+    }
+  }
+  let text = pick(raw.text, TEXTS, 'green');
+  if (display !== 'nixie' && !textAllowed(display, text)) text = TEXT_ALLOWED[display][0];
+  return {
+    chassis:   pick(raw.chassis, CHASSIS, 'default'),
+    display,
+    controls:  pick(raw.controls, CONTROLS, 'green'),
+    text,
+    meter:     pick(raw.meter, METERS, 'bar'),
+    decoderBg: pick(raw.decoderBg, DECODER_BGS, 'transparent'),
+    textByDisplay,
+  };
+}
+
+// ── Chassis tokens ────────────────────────────────────────────────────────────
+
+/**
+ * Everything the deck draws with that is not a text or controls colour. ★ `default` only in this
+ * step (build order row 2); silver and black arrive in row 3 and must fill every field.
+ */
+export interface ChassisTokens {
+  // Keys (today's outline keys)
+  keyBg:          string;
+  keyBorder:      string;
+  keyBorderRec:   string;
+  keyBorderChat:  string;
+  keyPulseRec:    string;
+  keyPulseChat:   string;
+  keyLegend:      string;
+  // Meter (bar)
+  meterTrack:     string;
+  /** The bar fill's stops by level: < 0.20, < 0.58, above. Positions are ControlsBar's. */
+  meterGradLow:   string[];
+  meterGradMid:   string[];
+  meterGradHigh:  string[];
+  peakLine:       string;
+  sqlHalo:        string;
+  sqlLine:        string;
+  // Frequency + mode pill
+  pillBg:         string;
+  modeDivider:    string;
+  modeGlow:       string;
+  sharedBorder:   string;
+  // Deck glass (the island behind everything)
+  barBorder:      string;
+  deckTint:       string;
+  // Status row
+  clock:          string;
+  srvClock:       string;
+  linkDim:        string;
+  linkRate:       string;
+  linkUnlit:      string;
+  /** Connection bars — good / fair / poor (and the ✕ when disconnected). */
+  linkGood:       string;
+  linkFair:       string;
+  linkBad:        string;
+  recRed:         string;
+  recordDot:      string;
+  dspTagText:     string;
+  dspTagBorder:   string;
+  dspTagBg:       string;
+  handbackBg:     string;
+  // Drum well (DrumWheel) — §6.1
+  wellFace:       string[];
+  drumBody:       string[];
+  drumShadeTop:   string[];
+  drumShadeBot:   string[];
+  rimLine:        string;
+  ridgeShadow:    string;
+  ridgeHighlight: string;
+  glint:          string[];
+  notchShadow:    string;
+  notchMinor:     string;
+  notchMed:       string;
+  notchMajor:     string;
+  sheen:          string[];
+  sideShade:      string[];
+  trapFill:       string;
+  /** The red index needle — removed on every chassis in row 6; its colours until then. */
+  needleWash:     string[];
+  needleGlow:     string;
+  needleBody:     string;
+  needleCore:     string;
+  // Tuner keys (TunerKeys)
+  tkSlotEdge:     string;
+  tkSlotLip:      string[];
+  tkCapDown:      string[];
+  tkCapUp:        string[];
+  tkShadeDown:    string;
+  tkShadeUp:      string;
+  tkCapSheen:     string[];
+  tkGrainA:       string;
+  tkGrainB:       string;
+  tkRimDown:      string;
+  tkRimUp:        string;
+  tkWellRing:     string;
+  // VTS strip
+  vtsBg:          string;
+  vtsBorder:      string;
+}
+
+/** ★★★ Today's literals, moved from ControlsBar / DrumWheel / TunerKeys / VTSBar. */
+export const DEFAULT_CHASSIS: ChassisTokens = {
+  keyBg:         'rgba(20,10,0,0.75)',
+  keyBorder:     'rgba(255,255,255,0.35)',
+  keyBorderRec:  'rgba(220,40,40,0.90)',
+  keyBorderChat: 'rgba(40,140,255,0.85)',
+  keyPulseRec:   'rgba(255,60,60,1)',
+  keyPulseChat:  'rgba(100,180,255,1)',
+  keyLegend:     '#ffffff',
+  meterTrack:    'rgba(105,98,82,0.30)',
+  meterGradLow:  ['#bb1100', '#ff4400'],
+  meterGradMid:  ['#bb1100', '#ff4400', '#ffaa00'],
+  meterGradHigh: ['#bb1100', '#ff4400', '#ffaa00', '#00dd44'],
+  peakLine:      'rgba(255,245,200,0.92)',
+  sqlHalo:       'rgba(255,255,255,0.90)',
+  sqlLine:       'rgba(255,50,50,1)',
+  pillBg:        'rgb(20,10,0)',
+  modeDivider:   'rgba(70,60,45,0.45)',
+  modeGlow:      'rgba(255,160,0,0.6)',
+  sharedBorder:  'rgba(255,255,255,0.30)',
+  barBorder:     'rgba(255,255,255,0.30)',
+  deckTint:      'rgba(8,6,2,0.55)',
+  clock:         'rgba(255,255,255,0.30)',
+  srvClock:      '#9fd0ff',
+  linkDim:       'rgba(255,255,255,0.40)',
+  linkRate:      'rgba(255,255,255,0.55)',
+  linkUnlit:     'rgba(255,255,255,0.18)',
+  linkGood:      '#33cc44',
+  linkFair:      '#e0b020',
+  linkBad:       '#e04040',
+  recRed:        '#e05050',
+  recordDot:     '#e23b3b',
+  dspTagText:    '#ffb833',
+  dspTagBorder:  'rgba(255,184,51,0.55)',
+  dspTagBg:      'rgba(255,184,51,0.16)',
+  handbackBg:    'rgba(124,255,155,0.10)',
+  wellFace:      ['#101410', '#0a0c0a', '#060706'],
+  drumBody:      ['#070807', '#191a18', '#232422', '#181917', '#050505'],
+  drumShadeTop:  ['rgba(0,0,0,0.62)', 'rgba(0,0,0,0)'],
+  drumShadeBot:  ['rgba(0,0,0,0)', 'rgba(0,0,0,0.58)'],
+  rimLine:       'rgba(180,185,175,0.14)',
+  ridgeShadow:   'rgba(0,0,0,0.45)',
+  ridgeHighlight:'rgba(160,160,150,0.10)',
+  glint:         ['#262626', '#6b6b6b', '#a5a5a5', '#d6d6d6', '#ffffff',
+                  '#d6d6d6', '#a5a5a5', '#6b6b6b', '#262626'],
+  notchShadow:   'rgba(0,0,0,0.5)',
+  notchMinor:    'rgba(168,166,158,0.22)',
+  notchMed:      'rgba(168,166,158,0.36)',
+  notchMajor:    'rgba(168,166,158,0.55)',
+  sheen:         ['rgba(255,255,255,0)', 'rgba(255,255,255,0.07)', 'rgba(255,255,255,0)'],
+  sideShade:     ['rgba(0,0,0,0.55)', 'rgba(0,0,0,0)'],
+  trapFill:      'rgba(3,4,3,0.96)',
+  // hsl(4, 95%, l) at the lightnesses DrumWheel's RD() used — same strings, so Skia parses the same.
+  needleWash:    ['hsla(4,95%,42%,0.16)', 'hsla(4,95%,40%,0.05)', 'rgba(0,0,0,0)'],
+  needleGlow:    'hsla(4,95%,40%,0.14)',
+  needleBody:    'hsla(4,95%,44%,0.5)',
+  needleCore:    'hsla(4,95%,52%,1)',
+  tkSlotEdge:    'rgba(0,0,0,0.9)',
+  tkSlotLip:     ['rgba(255,255,255,0.05)', 'rgba(255,255,255,0.22)', 'rgba(255,255,255,0.05)'],
+  tkCapDown:     ['#050605', '#090a09', '#0d0f0d'],
+  tkCapUp:       ['#0a0b0a', '#141614', '#1b1e1b'],
+  tkShadeDown:   'rgba(0,0,0,0.75)',
+  tkShadeUp:     'rgba(0,0,0,0.6)',
+  tkCapSheen:    ['rgba(255,255,255,0)', 'rgba(255,255,255,0.05)'],
+  tkGrainA:      'rgba(255,255,255,0.030)',
+  tkGrainB:      'rgba(255,255,255,0.045)',
+  tkRimDown:     'rgba(255,255,255,0.03)',
+  tkRimUp:       'rgba(255,255,255,0.07)',
+  tkWellRing:    'rgba(255,255,255,0.10)',
+  vtsBg:         'rgba(8,10,14,0.94)',
+  vtsBorder:     'rgba(255,255,255,0.22)',
+};
+
+export function chassisTokens(_chassis: Chassis): ChassisTokens {
+  // ★ Row 3 adds SILVER and BLACK. Until then every chassis draws the default deck, so a stored
+  //   'silver' shows today's deck rather than a half-built one.
+  return DEFAULT_CHASSIS;
+}
+
+// ── The resolved faceplate ────────────────────────────────────────────────────
+
+export const FONT_HYPER = 'Atkinson Hyperlegible';
+export const FONT_NIXIE = 'Nixie One';
+
+/** The deck's TEXT roles, already under the Nixie rule. Default chassis + hyper = today's WHITE
+ *  theme values (ThemeContext), so the frequency pill is unchanged. */
+export interface DeckText {
+  freqFont:     string;
+  freq:         string;
+  freqGlow:     string;
+  unit:         string;
+  modeFont:     string;
+  mode:         string;
+  reading:      string;
+  /** The breathing "SQL" in the mode box (§4.6): red, or neon under Nixie (the rule outranks red). */
+  sqlClosed:    string;
+  bannerFont:   string;
+  /** The SHARED TUNER banner's two states — "free to tune" green and "ask" grey today. */
+  bannerFree:   string;
+  bannerAsk:    string;
+}
+
+/** The four main keys' legends (§2): white on the default chassis, neon when the controls are neon;
+ *  Nixie One only when BOTH the display is Nixie and the legend is neon (never white Nixie One). */
+export interface KeyLegend {
+  color:   string;
+  font:    string;
+  /** Text glow for the step legend, or null for none. */
+  glow:    string | null;
+}
+
+export interface VtsText {
+  font:    string;
+  onTune:  string;
+  offTune: string;
+  band:    string;
+  dim:     string;
+  sub:     string;
+  offset:  string;
+  /** ★ Under Nixie the per-notice colour override (band conditions) is IGNORED — it would draw
+   *  Nixie One in green or red. */
+  allowOverride: boolean;
+}
+
+export interface FaceplateTheme {
+  settings:  FaceplateSettings;
+  chassis:   ChassisTokens;
+  controls:  LedColour;
+  text:      ResolvedTextColour;
+  deck:      DeckText;
+  keyLegend: KeyLegend;
+  vts:       VtsText;
+}
+
+/** Today's WHITE-theme text values (ThemeContext) — the default deck's text roles. */
+const TODAY_TEXT = {
+  freq:     '#ffffff',
+  freqGlow: 'rgba(255,255,255,0.50)',
+  unit:     '#b0b8c8',
+  mode:     '#ffffff',
+  reading:  '#b0b8c8',
+  sqlRed:   '#ff4040',
+  free:     '#7bd88f',
+};
+const TODAY_VTS = {
+  onTune:  'rgba(80,220,100,0.95)',
+  offTune: 'rgba(255,200,80,0.95)',
+  band:    '#ffe566',
+  dim:     'rgba(255,255,255,0.35)',
+  sub:     'rgba(255,255,255,0.55)',
+  offset:  'rgba(255,200,80,0.85)',
+};
+
+export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
+  const chassis  = chassisTokens(s.chassis);
+  const controls = resolveControlsColour(s.chassis, s.controls);
+  const text     = resolveTextColour(s.display, s.text);
+  const nixie    = s.display === 'nixie';
+
+  let deck: DeckText;
+  if (nixie) {
+    // ★ Interim until row 4 draws tubes: the frequency in Nixie One, neon. There is no tubeless
+    //   Nixie in the finished design (§1); this is the rule applied to what exists today. The mode
+    //   box is Barlow in the brief — not bundled yet, so Atkinson, in the brief's neon.
+    deck = {
+      freqFont: FONT_NIXIE, freq: NEON_TEXT.core, freqGlow: NEON_TEXT.glow, unit: NEON_TEXT.reading,
+      modeFont: FONT_HYPER, mode: NEON_TEXT.mode, reading: NEON_TEXT.reading, sqlClosed: NEON_TEXT.reading,
+      bannerFont: FONT_NIXIE, bannerFree: NEON_TEXT.core, bannerAsk: NEON_TEXT.reading,
+    };
+  } else if (s.display === 'hyper') {
+    // ★ The default deck's text is today's white on EVERY text colour: on the default chassis the
+    //   mockup keeps the digits and mode white (`isDefault ? '#f4f1ea'`) and the text colour reaches
+    //   the VTS only, from row 4.
+    deck = {
+      freqFont: FONT_HYPER, freq: TODAY_TEXT.freq, freqGlow: TODAY_TEXT.freqGlow, unit: TODAY_TEXT.unit,
+      modeFont: FONT_HYPER, mode: TODAY_TEXT.mode, reading: TODAY_TEXT.reading, sqlClosed: TODAY_TEXT.sqlRed,
+      bannerFont: FONT_HYPER, bannerFree: TODAY_TEXT.free, bannerAsk: TODAY_TEXT.reading,
+    };
+  } else {
+    // dot / seg: the text colour lights the readouts (Doto / DSEG14 arrive with row 4; Atkinson
+    // until then — §2 TRAP: never Nixie One here).
+    deck = {
+      freqFont: FONT_HYPER, freq: text.core, freqGlow: text.glow, unit: rgba(text.rgb, 0.75),
+      modeFont: FONT_HYPER, mode: text.core, reading: text.core, sqlClosed: TODAY_TEXT.sqlRed,
+      bannerFont: FONT_HYPER, bannerFree: text.core, bannerAsk: rgba(text.rgb, 0.75),
+    };
+  }
+
+  const neonKeys = s.chassis === 'default' && s.controls === 'neon';
+  const keyLegend: KeyLegend = neonKeys
+    ? { color: NEON_TEXT.core, font: nixie ? FONT_NIXIE : FONT_HYPER, glow: NEON_TEXT.glow }
+    : { color: chassis.keyLegend, font: FONT_HYPER, glow: null };
+
+  const vts: VtsText = nixie
+    ? { font: FONT_NIXIE, onTune: NEON_TEXT.core, offTune: NEON_TEXT.core, band: NEON_TEXT.core,
+        dim: rgba(LED.neon.rgb, 0.35), sub: NEON_TEXT.reading, offset: NEON_TEXT.reading, allowOverride: false }
+    : { font: FONT_HYPER, ...TODAY_VTS, allowOverride: true };
+
+  return { settings: s, chassis, controls, text, deck, keyLegend, vts };
+}

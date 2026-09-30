@@ -10,6 +10,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFaceplate } from '../contexts/FaceplateContext';
 
 // Official RDS mark — shown in place of the text badge when the live data is
 // genuine RDS (black logo sits in a white pill against the dark bar).
@@ -49,16 +50,15 @@ export interface VtsNotifData {
 
 const NOTIF_MS = 8000;
 
-const COL = {
-  onTune:  'rgba(80,220,100,0.95)',
-  offTune: 'rgba(255,200,80,0.95)',
-  band:    '#ffe566',
-  dim:     'rgba(255,255,255,0.35)',
-  sub:     'rgba(255,255,255,0.55)',
-};
+/* ★ The strip's colours and font are the faceplate's TEXT role (constants/faceplate.ts `vts`): on the
+ *  default deck they are today's on-tune green / off-tune amber / band yellow, and under the Nixie
+ *  display every glyph drawn in Nixie One is neon (§2) — including a notice that carries its own
+ *  colour, which is then ignored. */
 
 export default function VTSBar({ notif, bottom, serverType, onHeight }:
     { notif: VtsNotifData | null; bottom: number; serverType?: string; onHeight?: (h: number) => void }) {
+  const fp = useFaceplate();
+  const COL = fp.vts;
   const [shown, setShown] = useState<VtsNotifData | null>(null);
   const shownRef = useRef<VtsNotifData | null>(null);
   const fade    = useRef(new Animated.Value(0)).current;
@@ -157,7 +157,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
   // ★ A notice reads as a band announcement — same amber, same static treatment. It is our own
   //   words either way, and giving it a fourth colour would imply a distinction that is not there.
   const isBand  = shown.kind === 'band' || shown.kind === 'notice';
-  const nameCol = shown.color ?? (isBand ? COL.band : onTune ? COL.onTune : COL.offTune);
+  const nameCol = (COL.allowOverride ? shown.color : undefined) ?? (isBand ? COL.band : onTune ? COL.onTune : COL.offTune);
   // Arrows: green pair when on tune; otherwise the side you need to tune
   // toward lights amber, the other dims (skin vts-arrow-active/dim)
   const leftCol  = onTune ? COL.onTune : shown.tuneDir === 'left' ? COL.offTune : COL.dim;
@@ -175,7 +175,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
     // set, and in that case Yoga resolves the position from `left` — a maxWidth alone would just
     // shrink the bar towards the left-hand edge rather than centring it.
     <Animated.View style={[styles.wrap, { bottom, opacity: fade }]} pointerEvents="none">
-    <View style={styles.bar}
+    <View style={[styles.bar, { backgroundColor: fp.chassis.vtsBg, borderColor: fp.chassis.vtsBorder }]}
       onLayout={(e: { nativeEvent: { layout: { height: number } } }) => onHeight?.(e.nativeEvent.layout.height)}>
       <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>
       {/* Source mark: live-data badge (RDS logo / text) wins; otherwise the
@@ -195,7 +195,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
                 ? <Text style={styles.phoneMark}>📱</Text>
                 : null}
       {!!shown.flag && <Text style={styles.flag}>{shown.flag}</Text>}
-      {!!shown.offset && tuneLeft && <Text style={styles.offset}>{shown.offset}</Text>}
+      {!!shown.offset && tuneLeft && <Text style={[styles.offset, { color: COL.offset, fontFamily: COL.font }]}>{shown.offset}</Text>}
       {/* Horizontal ScrollView = unconstrained content width, so the text
           measures at its TRUE size (a plain View clamps Text to the parent
           width and the overflow slide never triggers). scrollEnabled off —
@@ -210,13 +210,13 @@ export default function VTSBar({ notif, bottom, serverType, onHeight }:
         onContentSizeChange={(w: number) => setTextW(w)}
       >
         <Animated.View style={overflow ? { transform: [{ translateX: slide }] } : undefined}>
-          <Text style={[styles.name, { color: nameCol }]} numberOfLines={1}>
+          <Text style={[styles.name, { color: nameCol, fontFamily: COL.font }]} numberOfLines={1}>
             {shown.name}
-            {shown.secondary ? <Text style={styles.secondary}>{'  │  ' + shown.secondary}</Text> : null}
+            {shown.secondary ? <Text style={[styles.secondary, { color: COL.sub }]}>{'  │  ' + shown.secondary}</Text> : null}
           </Text>
         </Animated.View>
       </ScrollView>
-      {!!shown.offset && shown.tuneDir === 'right' && <Text style={styles.offset}>{shown.offset}</Text>}
+      {!!shown.offset && shown.tuneDir === 'right' && <Text style={[styles.offset, { color: COL.offset, fontFamily: COL.font }]}>{shown.offset}</Text>}
       <Text style={[styles.arrow, { color: rightCol }]}>►</Text>
     </View>
     </Animated.View>
@@ -242,9 +242,8 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: 'rgba(8,10,14,0.94)',
+    // ★ Background and border colours come from the faceplate's chassis (vtsBg / vtsBorder).
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.22)',
     zIndex: 60,
   },
   arrow: {
@@ -315,8 +314,6 @@ const styles = StyleSheet.create({
     marginRight: 3,
   },
   offset: {
-    color: 'rgba(255,200,80,0.85)',
-    fontFamily: 'Atkinson Hyperlegible',
     fontSize: 13,
     paddingHorizontal: 2,
   },
@@ -329,12 +326,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   name: {
-    fontFamily: 'Atkinson Hyperlegible',
     fontSize: 16,
     letterSpacing: 0.5,
   },
   secondary: {
-    color: COL.sub,
     fontSize: 14,
   },
 });

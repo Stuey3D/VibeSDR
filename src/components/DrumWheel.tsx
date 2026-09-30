@@ -40,6 +40,8 @@ import {
 import { useSharedValue, useDerivedValue } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
+import { useFaceplate } from '../contexts/FaceplateContext';
+import { ledA } from '../constants/faceplate';
 
 // ── Drum haptics (menu ✦ HAPTICS toggle) ──────────────────────────────────────
 // Module-level so SDRScreen can flip it without threading a prop through
@@ -54,10 +56,9 @@ export function getControlHaptics() { return _hapticsOn; }
 const DRUM_FRAC   = 0.60;  // drum body fraction of total height
 const TRAP_TOP_W  = 0.78;  // trapezoid top width fraction of panel width
 const TRAP_BOT_W  = 0.38;  // trapezoid bottom width fraction
-const GLOW_HUE    = 120;   // 120 = LED green; ~100 warmer, ~145 colder
-const GLOW_INT    = 1.0;   // overall LED burn intensity
+// ★ The LED hue and the needle hue are gone from here: colour is the faceplate's (§6.1). The
+//   controls colour lights the well; the chassis tokens carry the drum, notches and needle.
 const RIDGES      = 4;     // horizontal knurl ridge pairs on the drum
-const NEEDLE_HUE  = 4;     // 0–8 = warm orange-red LED
 const RIM_H       = 2;     // drum rim highlight height
 
 // ── Physics (locked — v1.5 feel) ───────────────────────────────────────────────
@@ -68,13 +69,11 @@ const MIN_VEL     = 0.8;
 const LSV_PX_STEP = 22;
 const UPDATE_RATE = 40; // Hz
 
-// ── Colour helpers ─────────────────────────────────────────────────────────────
-
-function hsl(h: number, s: number, l: number, a: number): string {
-  return `hsla(${h},${s}%,${l}%,${a})`;
-}
-const G  = (a: number) => hsl(GLOW_HUE, 100, 45, Math.min(1, a * GLOW_INT));
-const RD = (a: number, l = 50) => hsl(NEEDLE_HUE, 95, l, a);
+// ── Colour ─────────────────────────────────────────────────────────────────────
+// ★★ §6.1 TRAP: this was `G = hsl(GLOW_HUE, 100, 45)`, which cannot make white or neon at all and
+//   made blue and amber at the wrong brightness. The well now takes the controls colour's RGB
+//   triplet from the faceplate (ledA), and the default chassis's green IS that same hsl, so today's
+//   drum is unchanged.
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -101,6 +100,9 @@ export default function DrumWheel({
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
   const H = height;
+  const fp = useFaceplate();
+  const ct = fp.chassis;
+  const G  = (a: number) => ledA(fp.controls, a);
 
   /** ★★★ THE DRUM'S POSITION IS A SHARED VALUE NOW, NOT REACT STATE.
    *  It was `useState`, written on every rAF tick of a coast and on every gesture event of a drag
@@ -386,25 +388,25 @@ export default function DrumWheel({
           {/* ── Panel face — machined dark metal, subtle vertical sheen ── */}
           <RoundedRect x={0} y={0} width={W} height={H} r={6}>
             <LinearGradient start={vec(0, 0)} end={vec(0, H)}
-              colors={['#101410', '#0a0c0a', '#060706']} positions={[0, 0.4, 1]} />
+              colors={ct.wellFace} positions={[0, 0.4, 1]} />
           </RoundedRect>
 
           {/* ── Drum body — convex plastic wheel poking out of the panel:
               crown catches the light mid-face, falls away to the seams ── */}
           <Rect x={1} y={drumTop} width={W - 2} height={drumH - 1}>
             <LinearGradient start={vec(0, drumTop)} end={vec(0, H)}
-              colors={['#070807', '#191a18', '#232422', '#181917', '#050505']}
+              colors={ct.drumBody}
               positions={[0, 0.28, 0.50, 0.74, 1]} />
           </Rect>
 
           {/* Slot shadows — the panel edge occludes the wheel at both seams */}
           <Rect x={1} y={drumTop} width={W - 2} height={Math.max(4, drumH * 0.14)}>
             <LinearGradient start={vec(0, drumTop)} end={vec(0, drumTop + Math.max(4, drumH * 0.14))}
-              colors={['rgba(0,0,0,0.62)', 'rgba(0,0,0,0)']} />
+              colors={ct.drumShadeTop} />
           </Rect>
           <Rect x={1} y={H - 1 - Math.max(4, drumH * 0.16)} width={W - 2} height={Math.max(4, drumH * 0.16)}>
             <LinearGradient start={vec(0, H - 1 - Math.max(4, drumH * 0.16))} end={vec(0, H - 1)}
-              colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.58)']} />
+              colors={ct.drumShadeBot} />
           </Rect>
 
           {/* Green backlight seeping through the panel/wheel gaps */}
@@ -419,15 +421,15 @@ export default function DrumWheel({
 
           {/* Drum rim — caught light along the cylinder's top edge */}
           <Rect x={1} y={drumTop} width={W - 2} height={RIM_H}
-                color="rgba(180,185,175,0.14)" />
+                color={ct.rimLine} />
 
           {/* Knurl ridges — highlight/shadow pairs suggest the grip texture */}
           {ridges.map((y, i) => (
             <Group key={`rg${i}`}>
               <Line p1={vec(2, y)} p2={vec(W - 2, y)}
-                    color="rgba(0,0,0,0.45)" strokeWidth={1.2} />
+                    color={ct.ridgeShadow} strokeWidth={1.2} />
               <Line p1={vec(2, y + 1.2)} p2={vec(W - 2, y + 1.2)}
-                    color="rgba(160,160,150,0.10)" strokeWidth={0.8} />
+                    color={ct.ridgeHighlight} strokeWidth={0.8} />
             </Group>
           ))}
 
@@ -445,15 +447,14 @@ export default function DrumWheel({
                 <LinearGradient
                   start={vec(1, 0)} end={vec(W - 1, 0)}
                   positions={[0, 0.08, 0.2, 0.35, 0.5, 0.65, 0.8, 0.92, 1]}
-                  colors={['#262626', '#6b6b6b', '#a5a5a5', '#d6d6d6', '#ffffff',
-                           '#d6d6d6', '#a5a5a5', '#6b6b6b', '#262626']} />
+                  colors={ct.glint} />
               </Rect>
             }>
               {/* Shadow pair first — the cut reads as depth only if it sits UNDER the highlight. */}
-              <Path path={pathShadow} style="stroke" strokeWidth={1.1} color="rgba(0,0,0,0.5)" />
-              <Path path={pathMinor}  style="stroke" strokeWidth={0.8} color="rgba(168,166,158,0.22)" />
-              <Path path={pathMed}    style="stroke" strokeWidth={0.8} color="rgba(168,166,158,0.36)" />
-              <Path path={pathMajor}  style="stroke" strokeWidth={1.5} color="rgba(168,166,158,0.55)" />
+              <Path path={pathShadow} style="stroke" strokeWidth={1.1} color={ct.notchShadow} />
+              <Path path={pathMinor}  style="stroke" strokeWidth={0.8} color={ct.notchMinor} />
+              <Path path={pathMed}    style="stroke" strokeWidth={0.8} color={ct.notchMed} />
+              <Path path={pathMajor}  style="stroke" strokeWidth={1.5} color={ct.notchMajor} />
             </Mask>
           </Group>
 
@@ -462,22 +463,22 @@ export default function DrumWheel({
             <LinearGradient
               start={vec(0, drumTop + drumH * 0.16)}
               end={vec(0, drumTop + drumH * 0.42)}
-              colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.07)', 'rgba(255,255,255,0)']}
+              colors={ct.sheen}
               positions={[0, 0.45, 1]} />
           </Rect>
 
           {/* Drum side shading — cylindrical falloff at the edges */}
           <Rect x={1} y={drumTop} width={W * 0.12} height={drumH - 1}>
             <LinearGradient start={vec(0, 0)} end={vec(W * 0.12, 0)}
-              colors={['rgba(0,0,0,0.55)', 'rgba(0,0,0,0)']} />
+              colors={ct.sideShade} />
           </Rect>
           <Rect x={W - 1 - W * 0.12} y={drumTop} width={W * 0.12} height={drumH - 1}>
             <LinearGradient start={vec(W - 1, 0)} end={vec(W - 1 - W * 0.12, 0)}
-              colors={['rgba(0,0,0,0.55)', 'rgba(0,0,0,0)']} />
+              colors={ct.sideShade} />
           </Rect>
 
           {/* ── Trapezoid window — darker inset, green-lit from within ── */}
-          <Path path={trapPath} color="rgba(3,4,3,0.96)" />
+          <Path path={trapPath} color={ct.trapFill} />
           <Path path={trapPath}>
             <RadialGradient c={vec(cx, drumTop * 0.55)} r={trapWT * 0.55}
               colors={[G(0.16), G(0.05), 'rgba(0,0,0,0)']}
@@ -513,20 +514,20 @@ export default function DrumWheel({
           <Group clip={Skia.XYWHRect(1, drumTop, W - 2, drumH - 1)}>
             <Rect x={cx - W * 0.16} y={drumTop} width={W * 0.32} height={drumH - 1}>
               <RadialGradient c={vec(cx, drumTop + drumH * 0.30)} r={W * 0.16}
-                colors={[RD(0.16, 42), RD(0.05, 40), 'rgba(0,0,0,0)']}
+                colors={ct.needleWash}
                 positions={[0, 0.55, 1]} />
             </Rect>
             <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={RD(0.14, 40)} strokeWidth={9}>
+                  color={ct.needleGlow} strokeWidth={9}>
               <BlurMask blur={6} style="normal" respectCTM />
             </Line>
             <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={RD(0.50, 44)} strokeWidth={2.6}>
+                  color={ct.needleBody} strokeWidth={2.6}>
               <BlurMask blur={3} style="normal" respectCTM />
             </Line>
             {/* Crisp deep-red filament — glow BEHIND a razor line */}
             <Line p1={vec(cx, drumTop)} p2={vec(cx, H - 1)}
-                  color={RD(1, 52)} strokeWidth={0.9} />
+                  color={ct.needleCore} strokeWidth={0.9} />
           </Group>
 
           {/* ── Outer panel border — green LED glow + solid ── */}

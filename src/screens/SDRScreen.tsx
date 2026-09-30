@@ -8934,14 +8934,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const chipMock = (
     <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)', backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 5, minWidth: 200 }}>
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
-        <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>‹  Back to server list</Text>
+        <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>‹  Back to server list</Text>
       </View>
       <View style={{ height: 1, backgroundColor: 'rgba(255,160,0,0.5)', marginHorizontal: 8 }} />
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
-        <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>♡  Favourite this server</Text>
+        <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>♡  Favourite this server</Text>
       </View>
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
-        <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>☆  Set as default</Text>
+        <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>☆  Set as default</Text>
       </View>
     </View>
   );
@@ -8952,7 +8952,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   //   one (see Coachmark.tsx). So they are illustrated, like the servers chip.
   const rowMock = (label: string, a: string, b: string, aActive: boolean) => (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
-      <Text style={{ color: 'rgba(255,184,51,0.65)', fontFamily: 'Nixie One', fontSize: 11,
+      <Text style={{ color: 'rgba(255,184,51,0.65)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
                      letterSpacing: 0.6, width: 46 }}>{label}</Text>
       {[a, b].map((t, i) => (
         <View key={t} style={{
@@ -8960,7 +8960,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           borderColor: (i === 0) === aActive ? 'rgba(255,160,0,0.9)' : 'rgba(255,160,0,0.28)',
           backgroundColor: (i === 0) === aActive ? 'rgba(255,160,0,0.18)' : 'transparent' }}>
           <Text style={{ color: (i === 0) === aActive ? '#ffb833' : 'rgba(255,184,51,0.5)',
-                         fontFamily: 'Nixie One', fontSize: 12 }}>{t}</Text>
+                         fontFamily: 'Atkinson Hyperlegible', fontSize: 12 }}>{t}</Text>
         </View>
       ))}
     </View>
@@ -8968,7 +8968,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const schemeMock = (
     <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)',
                    backgroundColor: 'rgba(14,10,4,0.94)', padding: 10, minWidth: 200 }}>
-      <Text style={{ color: 'rgba(255,184,51,0.75)', fontFamily: 'Nixie One', fontSize: 11,
+      <Text style={{ color: 'rgba(255,184,51,0.75)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
                      letterSpacing: 1 }}>CONTROLS</Text>
       {rowMock('TUNE', 'DRUM', 'KEYS', true)}
       {rowMock('ZOOM', 'DRUM', 'KEYS', true)}
@@ -8978,7 +8978,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)',
                    backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 9, paddingHorizontal: 12,
                    minWidth: 200 }}>
-      <Text style={{ color: '#ffb833', fontFamily: 'Nixie One', fontSize: 13, letterSpacing: 0.3 }}>
+      <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>
         ⌨  KEYBOARD SHORTCUTS
       </Text>
     </View>
@@ -11113,11 +11113,11 @@ const styles = StyleSheet.create({
                  flexDirection: 'row', alignItems: 'center', gap: 6,
                  paddingLeft: 14, paddingRight: 6, paddingVertical: 8, borderRadius: 8, borderWidth: 1,
                  borderColor: 'rgba(255,180,60,0.55)', backgroundColor: 'rgba(30,20,0,0.94)' },
-  ownerNoticeTxt: { color: '#ffd479', fontFamily: 'Nixie One', fontSize: 13, textAlign: 'center' },
+  ownerNoticeTxt: { color: '#ffd479', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, textAlign: 'center' },
   // ★ 30 pt of drawn box plus 10 pt of hitSlop each way clears the 44 pt target without making the
   //   pill look like it has a button bolted on.
   ownerNoticeX:    { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
-  ownerNoticeXTxt: { color: '#ffd479', fontFamily: 'Nixie One', fontSize: 20, lineHeight: 22,
+  ownerNoticeXTxt: { color: '#ffd479', fontFamily: 'Atkinson Hyperlegible', fontSize: 20, lineHeight: 22,
                      opacity: 0.85 },
   // ★ paddingHorizontal + borderWidth here = the receiver name's paddingRight in WaterfallView
   //   (styles.stationId). They share a right-hand text column; change one, change both.
@@ -11135,17 +11135,23 @@ const styles = StyleSheet.create({
   rxClock:     { position: 'absolute', zIndex: 210,
                  paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
                  borderWidth: 1, backgroundColor: 'rgba(8,6,2,0.72)', alignItems: 'flex-end' },
-  rxClockCap:  { fontFamily: 'Nixie One', fontSize: 8, letterSpacing: 0.6 },
-  rxClockNum:  { fontFamily: 'Nixie One', fontSize: 16, lineHeight: 19 },
+  /* ★★★ NO NIXIE ONE OUTSIDE THE DECK (faceplates brief §2). "Anything drawn in Nixie One is neon
+   *  orange. Always." — and this card is gold, then RED when a hard limit is two minutes out, so it
+   *  could not keep the face without breaking the rule or losing the warning. Same for every other
+   *  gold Nixie One on this screen (the tour's menu mock-ups, the owner notice, the listener count,
+   *  STILL LISTENING?, the aerial line) and FreqModal's hints: Atkinson now, colours untouched.
+   *  Nixie One lives only where the faceplate resolves it, in neon. */
+  rxClockCap:  { fontFamily: 'Atkinson Hyperlegible', fontSize: 8, letterSpacing: 0.6 },
+  rxClockNum:  { fontFamily: 'Atkinson Hyperlegible', fontSize: 16, lineHeight: 19 },
   // ★ The soft-limit "expired" line is a sentence, not a number — it cannot use the 22pt face.
-  rxClockSoft: { fontFamily: 'Nixie One', fontSize: 11, lineHeight: 15, maxWidth: 150 },
+  rxClockSoft: { fontFamily: 'Atkinson Hyperlegible', fontSize: 11, lineHeight: 15, maxWidth: 150 },
   /* ★ The pill draws its OWN border, background and radius (it is one design, shared with the web
    *  client) — this is only a position, at the same zIndex as the clock it sits above. */
   rxHealth:    { position: 'absolute', zIndex: 210, alignItems: 'flex-end' },
   // ★ Quieter than the countdown beneath it: the clock is about YOU, this is about the room.
   rxListeners: { position: 'absolute', paddingHorizontal: 8, paddingVertical: 3,
                  borderWidth: 1, borderColor: 'rgba(255,160,0,0.30)', borderRadius: 4 },
-  rxListenersTxt: { color: 'rgba(255,190,90,0.85)', fontFamily: 'Nixie One', fontSize: 11,
+  rxListenersTxt: { color: 'rgba(255,190,90,0.85)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
                     letterSpacing: 1 },
   /* ★ NO gainMinNote/Txt/Sub HERE ANY MORE — the warning became a VTS notice. Left-behind styles
    *  for a deleted element are how a dead reference keeps looking alive: they cost nothing and
@@ -11206,7 +11212,7 @@ const styles = StyleSheet.create({
                    paddingHorizontal: 18 },
   // ★ Dimmer than the description above it: the aerial qualifies the range, it does not compete
   //   with it.
-  radioPickAnt:  { color: 'rgba(255,200,120,0.6)', fontFamily: 'Nixie One', fontSize: 12,
+  radioPickAnt:  { color: 'rgba(255,200,120,0.6)', fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
                    marginTop: 2 },
   radioPickAdmin: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 6 },
   radioPickAdminInput: {
@@ -11235,7 +11241,7 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 18, shadowOffset: { width: 0, height: 6 },
   },
   stillHereTitle: {
-    fontFamily: 'Nixie One', fontSize: 18, letterSpacing: 2,
+    fontFamily: 'Atkinson Hyperlegible', fontSize: 18, letterSpacing: 2,
     color: 'rgba(255,185,100,0.98)', marginBottom: 8,
   },
   stillHereBody: {

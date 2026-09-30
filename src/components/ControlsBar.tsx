@@ -71,6 +71,8 @@ function ControlSlot({ report, style, children }: {
   );
 }
 import { useTheme } from '../contexts/ThemeContext';
+import { useFaceplate } from '../contexts/FaceplateContext';
+import type { ChassisTokens } from '../constants/faceplate';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { STEP_833, type AirChannel } from '../utils/airband';
@@ -106,10 +108,12 @@ function formatStep(s: number): string {
 }
 
 // ── Signal gradient — port of sigGradient() ──────────────────────────────────
-function sigGradColors(sig: number): string[] {
-  if (sig < 0.20) return ['#bb1100', '#ff4400'];
-  if (sig < 0.58) return ['#bb1100', '#ff4400', '#ffaa00'];
-  return ['#bb1100', '#ff4400', '#ffaa00', '#00dd44'];
+// ★ The stops are the faceplate's chassis tokens (meterGrad*); the positions stay here with the
+//   geometry that needs them.
+function sigGradColors(sig: number, ct: ChassisTokens): string[] {
+  if (sig < 0.20) return ct.meterGradLow;
+  if (sig < 0.58) return ct.meterGradMid;
+  return ct.meterGradHigh;
 }
 function sigGradPos(sig: number): number[] {
   if (sig < 0.20) return [0, 1];
@@ -417,6 +421,7 @@ export interface ControlsBarProps {
 function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, bus }:
   { width: number; height: number; signal?: number; peak?: number; bus?: MeterBus }) {
   const m = useMeters(bus);
+  const ct = useFaceplate().chassis;
   const signal = m ? m.level : sigProp;
   const peak   = m ? m.peak  : peakProp;
 
@@ -425,7 +430,7 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
   if (width < 4) return null;
   const fillW  = width * Math.min(1, Math.max(0, signal));
   const peakX  = width * Math.min(1, Math.max(0, peak));
-  const colors = signal > 0.001 ? sigGradColors(signal) : [];
+  const colors = signal > 0.001 ? sigGradColors(signal, ct) : [];
   const pos    = signal > 0.001 ? sigGradPos(signal) : [];
   // Squelch: red threshold line at its bar position; while the signal is BELOW it the gate is closed
   // (muting) and the fill dims a touch — noticeable but still readable. Above it, full brightness.
@@ -436,20 +441,20 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
   const sqlClosed = sqlOn && (m?.gate ?? (signal < sql));
   return (
     <Canvas style={StyleSheet.absoluteFill}>
-      <Rect x={0} y={0} width={width} height={height} color="rgba(105,98,82,0.30)" />
+      <Rect x={0} y={0} width={width} height={height} color={ct.meterTrack} />
       {fillW > 1 && colors.length > 0 && (
         <Rect x={0} y={0} width={fillW} height={height} opacity={sqlClosed ? 0.55 : 1}>
           <LinearGradient start={vec(0,0)} end={vec(fillW,0)} colors={colors} positions={pos} />
         </Rect>
       )}
       {peakX > 2 && (
-        <Rect x={peakX - 1} y={0} width={2} height={height} color="rgba(255,245,200,0.92)" />
+        <Rect x={peakX - 1} y={0} width={2} height={height} color={ct.peakLine} />
       )}
       {sqlOn && (
         <>
           {/* White halo so the red squelch line stays visible over any fill colour. */}
-          <Rect x={sqlX - 2} y={0} width={4} height={height} color="rgba(255,255,255,0.90)" />
-          <Rect x={sqlX - 1} y={0} width={2} height={height} color="rgba(255,50,50,1)" />
+          <Rect x={sqlX - 2} y={0} width={4} height={height} color={ct.sqlHalo} />
+          <Rect x={sqlX - 1} y={0} width={2} height={height} color={ct.sqlLine} />
         </>
       )}
     </Canvas>
@@ -460,21 +465,22 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
 // Mobile-signal style: 3 green = solid link, 2 yellow = jitter/some drops,
 // 1 red = stalling/reconnecting, all dim = disconnected.
 function LinkBars({ q }: { q: 0 | 1 | 2 | 3 }) {
+  const ct = useFaceplate().chassis;
   // Disconnected (q=0) → a clear red ✕ rather than ambiguous dim bars.
   if (q === 0) {
     return (
       <View style={pm.linkWrap}>
-        <Text style={{ color: '#e04040', fontSize: 14, fontWeight: '900', lineHeight: 14 }}>✕</Text>
+        <Text style={{ color: ct.linkBad, fontSize: 14, fontWeight: '900', lineHeight: 14 }}>✕</Text>
       </View>
     );
   }
-  const litColor = q === 3 ? '#33cc44' : q === 2 ? '#e0b020' : '#e04040';
+  const litColor = q === 3 ? ct.linkGood : q === 2 ? ct.linkFair : ct.linkBad;
   return (
     <View style={pm.linkWrap}>
       {[0, 1, 2].map(i => (
         <View key={i} style={[pm.linkBar, {
           height: 4 + i * 3,
-          backgroundColor: i < q ? litColor : 'rgba(255,255,255,0.18)',
+          backgroundColor: i < q ? litColor : ct.linkUnlit,
         }]} />
       ))}
     </View>
@@ -510,6 +516,7 @@ function PhoneGlyph({ color }: { color: string }) {
 export function DspBadges({ nr, nb, an, onPress, font, color }:
     { nr?: boolean; nb?: boolean; an?: boolean; onPress?: () => void;
       font?: string; color?: string }) {
+  const ct = useFaceplate().chassis;
   const on: string[] = [];
   if (nr) on.push('NR');
   if (nb) on.push('NB');
@@ -518,7 +525,8 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
   const body = (
     <View style={pm.dspRow}>
       {on.map((k) => (
-        <Text key={k} style={[pm.dspTag, { fontFamily: font, color: color ?? '#ffb833' }]}>{k}</Text>
+        <Text key={k} style={[pm.dspTag, { fontFamily: font, color: color ?? ct.dspTagText,
+                                          borderColor: ct.dspTagBorder, backgroundColor: ct.dspTagBg }]}>{k}</Text>
       ))}
     </View>
   );
@@ -529,6 +537,7 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
 
 export function LinkIndicator({ bus }: { bus?: MeterBus }) {
   const m = useMeters(bus);
+  const ct = useFaceplate().chassis;
   const q = m ? m.link : 0;
   // ★ LATCH, don't gate on the live value. Requiring fps > 0 to show the readout
   // meant a single second with no counted frames BLANKED it — so on a backend
@@ -540,7 +549,7 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
   const everHadRate = useRef(false);
   if ((m?.fps ?? 0) > 0 || (m?.kbps ?? 0) > 0) everHadRate.current = true;
   if (q === 0) everHadRate.current = false;      // disconnected — start clean again
-  const dim = 'rgba(255,255,255,0.40)';
+  const dim = ct.linkDim;
   // Incoming rate readout — spectrum KB/s (the phone's audio is decoded natively, so JS can't see
   // its bytes) + frame rate, the same "what's actually arriving" cue the web client shows. Only once
   // a link exists, so a disconnected meter stays clean.
@@ -552,18 +561,18 @@ export function LinkIndicator({ bus }: { bus?: MeterBus }) {
     //   tour targets.
     <View ref={tourRef('linkMeter')} collapsable={false} style={pm.linkRow}>
       <PhoneGlyph color={dim} />
-      <Text style={pm.linkArrows}>⇄</Text>
+      <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>
       <LinkBars q={q} />
-      <Text style={pm.linkArrows}>⇄</Text>
+      <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>
       {/* The network-NODE triangle — the same server mark used everywhere else (menu, watch), not
           the old server-rack box. */}
       <SectionIcon name="instance" size={13} color={dim} />
-      {showRate ? <Text style={pm.linkRate}>{rateTxt}</Text> : null}
+      {showRate ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{rateTxt}</Text> : null}
       {/* ★ After the rate, because it changes rarely — a value that moves once a minute beside one
              that moves every second reads as part of the same reading if it comes first. */}
-      {m?.agcText ? <Text style={pm.linkRate}>{`· ${m.agcText}`}</Text> : null}
+      {m?.agcText ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${m.agcText}`}</Text> : null}
       {/* ★ Last: it moves least of all — it changes only when somebody zooms. */}
-      {m?.ifText ? <Text style={pm.linkRate}>{`· ${m.ifText}`}</Text> : null}
+      {m?.ifText ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${m.ifText}`}</Text> : null}
     </View>
   );
 }
@@ -590,7 +599,12 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
   tight = false, fmStereo = false, wide = false, sharedTuner = null,
 }: any) {
-  const { theme: t } = useTheme();
+  /* ★★ THE TEXT ROLES ARE THE FACEPLATE'S (fp.deck): frequency, unit, mode, reading, banner — each
+   *  with its own font, because under the Nixie display (§2) the frequency and banner are Nixie One
+   *  in neon while the mode box is not. Default settings resolve to today's white-theme values. */
+  const fp = useFaceplate();
+  const ct = fp.chassis;
+  const dk = fp.deck;
   /* ★★ A SHARED DIAL SAYS SO WHERE YOU TUNE (Stuart, 2026-09-19) — the web client's #mShared, here. A box of its
    *  own above the frequency and mode boxes, spanning both; the text steps down ~20 % so the pill still fits the
    *  meter frame. Shared-VFO radios only. */
@@ -632,14 +646,14 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
     {sharedTuner && (
       /* ★★ CONTEXT-AWARE (noobish via Stuart, 2026-09-19): alone, you may just tune; with company, ask — and
        *    the room's count lives HERE, where the question is asked, not in a corner badge. */
-      <View style={[pm.sharedBox, { backgroundColor: t.pillBg }]}
+      <View style={[pm.sharedBox, { backgroundColor: ct.pillBg, borderColor: ct.sharedBorder }]}
             accessibilityRole="text"
             accessibilityLabel={sharedTuner.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
               : sharedTuner.youPlus
                 ? `Shared tuner. You and ${Math.max(1, sharedTuner.listeners - 1)} other${sharedTuner.listeners - 1 === 1 ? '' : 's'} listening — ask before tuning.`
                 : `Shared tuner. ${sharedTuner.listeners}${sharedTuner.max > 1 ? ` of ${sharedTuner.max}` : ''} listening — ask before tuning.`}>
-        <Text style={[pm.sharedTxt, { fontFamily: t.font, fontSize: sharedFontSize,
-                      color: sharedTuner.alone ? '#7bd88f' : t.snrColor }]}
+        <Text style={[pm.sharedTxt, { fontFamily: dk.bannerFont, fontSize: sharedFontSize,
+                      color: sharedTuner.alone ? dk.bannerFree : dk.bannerAsk }]}
               numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
           {sharedTuner.alone ? 'SHARED TUNER · FREE TO TUNE'
             : sharedTuner.youPlus
@@ -655,15 +669,15 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
     <View style={pm.row}>
       <TouchableOpacity
         ref={tourRef('freqBox')}
-        style={[pm.freqBox, { backgroundColor: t.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }]}
+        style={[pm.freqBox, { backgroundColor: ct.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }]}
         onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
       >
         <Text style={[pm.freq, {
           // ★ A channel name is seven characters where the frequency is ten, so the digits give up
           //   the room the small spacing/true-frequency line needs — the pill does not grow.
-          color: t.freqColor, fontSize: freqFontSize,
+          color: dk.freq, fontSize: freqFontSize,
           width: chanTag && chanMain ? Math.round(freqWidth * 0.74) : freqWidth,
-          fontFamily: t.font, textShadowColor: t.freqGlowColor,
+          fontFamily: dk.freqFont, textShadowColor: dk.freqGlow,
           // Tight line metrics — Atkinson's tall default line-height (and
           // Android's extra font padding) inflated the pill to fill the
           // whole meter frame, hiding the signal ring around it
@@ -674,40 +688,41 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
         </Text>
         {chanTag ? (
           <View style={pm.chanCol}>
-            <Text style={[pm.chanTag, { color: t.snrColor, fontFamily: t.font,
+            <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.freqFont,
                           fontSize: Math.max(8, Math.round(unitFontSize * 0.72)) }]}
                   numberOfLines={1}>
               {chanTag}
             </Text>
-            <Text style={[pm.unit, { color: t.unitColor, fontFamily: t.font, fontSize: unitFontSize }]}>
+            <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]}>
               {unit}
             </Text>
           </View>
         ) : (
-          <Text style={[pm.unit, { color: t.unitColor, fontFamily: t.font, fontSize: unitFontSize }]}>
+          <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]}>
             {unit}
           </Text>
         )}
       </TouchableOpacity>
       <TouchableOpacity
         ref={tourRef('modeBtn')}
-        style={[pm.modeBtn, { backgroundColor: t.pillBg, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: tight ? 72 : 84 }]}
+        style={[pm.modeBtn, { backgroundColor: ct.pillBg, borderLeftColor: ct.modeDivider, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: tight ? 72 : 84 }]}
         onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
           <Text style={[pm.modeLbl, {
-            color: t.modeColor, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: t.font,
+            color: dk.mode, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: dk.modeFont,
+            textShadowColor: ct.modeGlow,
             lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
           }]}>
             {modeLabel}
           </Text>
           {/* WFM stereo: V5's pilot-PLL lock (+ blend) is reliable, so the icon
               is back — shows the interlocking-rings symbol when stereo is active. */}
-          {fmStereo && <StereoIcon size={Math.round(modeFontSize * 0.95)} color={t.modeColor} />}
+          {fmStereo && <StereoIcon size={Math.round(modeFontSize * 0.95)} color={dk.mode} />}
         </View>
         {sqlClosed ? (
           <Animated.Text style={[pm.snr, {
-            color: '#ff4040', fontFamily: t.font, width: snrWidth,
+            color: dk.sqlClosed, fontFamily: dk.modeFont, width: snrWidth,
             fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
             lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
             includeFontPadding: false, fontWeight: '800', opacity: breathe,
@@ -716,7 +731,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
           </Animated.Text>
         ) : (
           <Text style={[pm.snr, {
-            color: t.snrColor, fontFamily: t.font, width: snrWidth,
+            color: dk.reading, fontFamily: dk.modeFont, width: snrWidth,
             fontSize: Math.max(9, Math.round(modeFontSize * 0.75)),
             lineHeight: Math.round(Math.max(9, modeFontSize * 0.75) * 1.15),
             includeFontPadding: false,
@@ -735,7 +750,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
 const pm = StyleSheet.create({
   row:      { flexDirection: 'row', alignItems: 'stretch', justifyContent: 'center' },
   sharedBox:{ borderRadius: 5, paddingHorizontal: 8, paddingVertical: 2, marginBottom: 3, alignItems: 'center',
-              borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)',
+              borderWidth: 1,   // colour: ct.sharedBorder
               shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 3 },
   /* ★ The SIZE comes from the pill (see sharedFontSize) — a fixed 11 fitted a Mac and crowded a phone, and a
    *  fixed 9 wasted the room a Mac has. Only the constants that do not depend on width live here. */
@@ -753,7 +768,7 @@ const pm = StyleSheet.create({
        caught this class of fault before. */
   linkRow:    { flexDirection: 'row', alignItems: 'center', gap: 4,
                 flexWrap: 'wrap', justifyContent: 'center' },
-  linkArrows: { color: 'rgba(255,255,255,0.40)', fontSize: 9, lineHeight: 11 },
+  linkArrows: { fontSize: 9, lineHeight: 11 },   // colour: ct.linkDim
   /* ★ Same size and rhythm as the link stats beside them — these are a reading, not a button, and
      should not shout. The colour is the amber the rest of the active state uses. */
   dspRow:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -766,16 +781,12 @@ const pm = StyleSheet.create({
    *    shape to be found at a glance. Non-interactive in appearance, but still opens AUDIO. */
   dspTag:     { fontSize: 11, lineHeight: 13, letterSpacing: 1, fontWeight: '700',
                 paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, overflow: 'hidden',
-                borderWidth: 1, borderColor: 'rgba(255,184,51,0.55)',
-                backgroundColor: 'rgba(255,184,51,0.16)' },
-  linkRate:   { color: 'rgba(255,255,255,0.55)', fontSize: 9, lineHeight: 11, marginLeft: 4, fontVariant: ['tabular-nums'] },
+                borderWidth: 1 },   // ★ border + fill colours: the faceplate's dspTag tokens
+  linkRate:   { fontSize: 9, lineHeight: 11, marginLeft: 4, fontVariant: ['tabular-nums'] },
   phoneGlyph: { width: 8, height: 13, borderWidth: 1, borderRadius: 2,
                 alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 1.5 },
   phoneDot:   { width: 2.5, height: 1.5, borderRadius: 1 },
   clockRow:   { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0 },
-  dot:     { width: 7, height: 7, borderRadius: 3.5, marginRight: 5, alignSelf: 'center', flexShrink: 0 },
-  dotOn:   { backgroundColor: '#00cc44' },
-  dotOff:  { backgroundColor: '#333' },
   freqBox: { flexDirection: 'row', alignItems: 'flex-end', borderTopLeftRadius: 5, borderBottomLeftRadius: 5, flexShrink: 1 },
   freq:    { letterSpacing: 1.5, textAlign: 'center', textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6, flexShrink: 1 },
   unit:    { letterSpacing: 1, alignSelf: 'flex-end', paddingBottom: 2, flexShrink: 0 },
@@ -783,9 +794,9 @@ const pm = StyleSheet.create({
   chanCol: { alignItems: 'flex-end', justifyContent: 'flex-end', flexShrink: 0 },
   chanTag: { letterSpacing: 0.5, fontWeight: '700', includeFontPadding: false },
   modeBtn: { borderTopRightRadius: 5, borderBottomRightRadius: 5,
-             borderLeftWidth: 1, borderLeftColor: 'rgba(70,60,45,0.45)',
+             borderLeftWidth: 1,   // colour: ct.modeDivider
              alignItems: 'center', justifyContent: 'center', gap: 1, flexShrink: 0 },
-  modeLbl: { fontWeight: 'bold', textShadowColor: 'rgba(255,160,0,0.6)',
+  modeLbl: { fontWeight: 'bold',   // glow colour: ct.modeGlow
              textShadowOffset: { width:0,height:0 }, textShadowRadius: 5 },
   snr:     { fontSize: 9, textAlign: 'center' },
 });
@@ -794,7 +805,7 @@ const pm = StyleSheet.create({
 // Replaces the hamburger on the menu button. Once the ServersChip owns "leaving",
 // this button is honestly just settings — and a cog says so, where the hamburger
 // read as "exit" and hid the way back to the instance list. Colour matches the
-// row's other glyphs (t.btnText), not a hard white, so both themes stay coherent.
+// row's other glyphs (the faceplate's key legend), not a hard white.
 // Authored in a 24×24 space (Feather "settings"); scale to the canvas.
 const COG_GEAR   = Skia.Path.MakeFromSVGString('M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H2a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 3.6 8a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H8a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H22a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z')!;
 const COG_CENTER = Skia.Path.MakeFromSVGString('M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z')!;
@@ -857,11 +868,12 @@ function AudioIcon({ size, color }: { size: number; color: string }) {
 // FM-DX audio button = REC panel; a filled record disc reads clearer than a speaker.
 function RecordIcon({ size, color }: { size: number; color: string }) {
   const k = size / 20;
+  const dot = useFaceplate().chassis.recordDot;
   return (
     <Canvas pointerEvents="none" style={{ width: size, height: size }}>
       <Group transform={[{ scale: k }]}>
         <Path path={RECORD_RING} color={color} strokeWidth={1.6 / k} style="stroke" />
-        <Path path={RECORD_DOT}  color="#e23b3b" style="fill" />
+        <Path path={RECORD_DOT}  color={dot} style="fill" />
       </Group>
     </Canvas>
   );
@@ -916,6 +928,14 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
+  // ★ Colours are the faceplate's: the chassis for keys, glass and status; the key LEGENDS resolve
+  //   separately (§2 — white, or neon when the controls are neon, and Nixie One only when neon).
+  const fp = useFaceplate();
+  const ct = fp.chassis;
+  const kl = fp.keyLegend;
+  const legendTxt = { color: kl.color, fontFamily: kl.font,
+                      ...(kl.glow ? { textShadowColor: kl.glow, textShadowRadius: 4,
+                                      textShadowOffset: { width: 0, height: 0 } } : null) };
   const s = useUiScale();
   const [sigW, setSigW] = useState(0);
 
@@ -1012,50 +1032,50 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         {/* STEP */}
         <TouchableOpacity
           ref={tourRef('stepBtn')}
-          style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder }]}
+          style={[por.btn, { minHeight: BTN_H, borderColor: ct.keyBorder, backgroundColor: ct.keyBg }]}
           onPress={onStep} activeOpacity={0.75} hitSlop={10}
         >
-          <Text style={[por.btnTxt, { color: t.btnText, fontFamily: t.font, fontSize: BTN_FONT }]}>
+          <Text style={[por.btnTxt, legendTxt, { fontSize: BTN_FONT }]}>
             {stepLabel}
           </Text>
         </TouchableOpacity>
 
         {/* AUDIO — opens the audio sheet; breathes red↔white while recording
             (REC lives inside the sheet, so this is the tap target to stop it). */}
-        <View style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, borderWidth: 1 }]}>
+        <View style={[por.btn, { minHeight: BTN_H, borderColor: ct.keyBorder, backgroundColor: ct.keyBg, borderWidth: 1 }]}>
           <Animated.View pointerEvents="none"
-            style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,60,60,1)', opacity: recPulse }]} />
+            style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: ct.keyPulseRec, opacity: recPulse }]} />
           <TouchableOpacity
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
             onPress={onAudio} activeOpacity={0.75} hitSlop={10}
           >
             {audioAsRecord
-              ? <RecordIcon size={ICON_SZ} color={t.btnText} />
-              : <AudioIcon size={ICON_SZ} color={t.btnText} />}
+              ? <RecordIcon size={ICON_SZ} color={kl.color} />
+              : <AudioIcon size={ICON_SZ} color={kl.color} />}
           </TouchableOpacity>
         </View>
 
         {/* MENU */}
         <TouchableOpacity
           ref={tourRef('menuBtn')}
-          style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, borderWidth: 1 }]}
+          style={[por.btn, { minHeight: BTN_H, borderColor: ct.keyBorder, backgroundColor: ct.keyBg, borderWidth: 1 }]}
           onPress={onMenu} activeOpacity={0.75} hitSlop={10}
         >
           {menuAsBack
-            ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(t.btnSize) }}>‹ Back</Text>
-            : <Cog size={ICON_SZ} color={t.btnText} />}
+            ? <Text style={[legendTxt, { fontSize: s.f(t.btnSize) }]}>‹ Back</Text>
+            : <Cog size={ICON_SZ} color={kl.color} />}
         </TouchableOpacity>
 
         {/* CHAT */}
-        <View style={[por.btn, { minHeight: BTN_H, borderColor: t.btnBorder, borderWidth: 1, opacity: chatOff ? 0.4 : 1 }]}>
+        <View style={[por.btn, { minHeight: BTN_H, borderColor: ct.keyBorder, backgroundColor: ct.keyBg, borderWidth: 1, opacity: chatOff ? 0.4 : 1 }]}>
           <Animated.View pointerEvents="none"
-            style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: 'rgba(100,180,255,1)', opacity: chatPulse }]} />
+            style={[StyleSheet.absoluteFill, { borderRadius: 4, borderWidth: 1, borderColor: ct.keyPulseChat, opacity: chatPulse }]} />
           <TouchableOpacity
             style={{ flex: 1, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' }}
             onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
           >
             {/* decorative — don't let the Skia view contest the touch */}
-            <ChatIcon size={ICON_SZ} color={t.btnText} />
+            <ChatIcon size={ICON_SZ} color={kl.color} />
           </TouchableOpacity>
         </View>
 
@@ -1081,7 +1101,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           style={{
             position: 'absolute', left: -4, right: -4, top: -4, bottom: -4,
             borderRadius: 12, borderWidth: 2, borderColor: NAV_FOCUS,
-            backgroundColor: 'rgba(124,255,155,0.10)',
+            backgroundColor: ct.handbackBg,
             opacity: handbackFlash, zIndex: 3,
           }} />
         <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ vfo: r })}>
@@ -1106,10 +1126,10 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
             printed straight through the icons and the rate ("the clock is clipping the status
             icons", Stuart, 2026-09-20). Shrinking is what should give when the row is tight. */}
         <View style={{ flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <ClockRow clock={clock} color={t.clockColor} font={t.font} size={CLOCK_FONT} />
+          <ClockRow clock={clock} color={ct.clock} font={t.font} size={CLOCK_FONT} />
           {/* Time-limited receiver: how long before the server drops us. */}
           {adminMode ? (
-            <Text style={{ color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT,
+            <Text style={{ color: ct.clock, fontFamily: t.font, fontSize: CLOCK_FONT,
                            opacity: 0.9 }}
                   accessibilityLabel="Admin mode — this session is not time limited">
               ⚿ Admin Mode
@@ -1130,13 +1150,13 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
               reading, because the point is to answer "may I just tune?" at a glance. */}
           {/* ★ Who is moving the dial. The room's COUNT moved to the shared-tuner banner (2026-09-19). */}
           {!!sharedDial?.tuning && (
-            <Text style={{ color: t.clockColor, fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}
+            <Text style={{ color: ct.clock, fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9 }}
                   numberOfLines={1}>
               {sharedDial.tuning}
             </Text>
           )}
           {!!storms && (
-            <Text style={{ color: '#9fd0ff', fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9, letterSpacing: 1 }}
+            <Text style={{ color: ct.srvClock, fontFamily: t.font, fontSize: CLOCK_FONT, opacity: 0.9, letterSpacing: 1 }}
                   numberOfLines={1}
                   accessibilityLabel={`Lightning nearby — the broadband lines across the spectrum are sferics, not a fault (about ${Math.round(storms.rate)} a minute`
                     + (storms.ago >= 0 && storms.ago < 90 ? `, last ${Math.round(storms.ago)} seconds ago)` : ')')}>
@@ -1154,8 +1174,8 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
               only invisible while the stats were short enough to leave a gap. */}
         {isRecording && (
           <View style={[por.recRow, { flexShrink: 0 }]}>
-            <View style={por.recDot} />
-            <Text style={[por.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
+            <View style={[por.recDot, { backgroundColor: ct.recRed }]} />
+            <Text style={[por.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</Text>
           </View>
         )}
         {/* ★★★ THE AUDIO CHAIN, ON THE END OF THE TIMES ROW — and the STATS get a line of their
@@ -1177,8 +1197,8 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
 }
 
 const por = StyleSheet.create({
-  sigFrame: { borderRadius: 7, overflow: 'hidden', backgroundColor: 'rgba(105,98,82,0.30)', justifyContent: 'center' },
-  btn:      { flex: 1, backgroundColor: 'rgba(20,10,0,0.75)', borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
+  sigFrame: { borderRadius: 7, overflow: 'hidden', justifyContent: 'center' },   // track: SignalCanvas draws ct.meterTrack
+  btn:      { flex: 1, borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
   btnTxt:   { letterSpacing: 0.5, textAlign: 'center' },
   clockRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 2 },
   /* ★ Its own line, centred like landscape's. The stats are the widest thing in the bar and the
@@ -1187,8 +1207,8 @@ const por = StyleSheet.create({
               paddingHorizontal: 2, marginTop: 1 },
   clock:    { letterSpacing: 1 },
   recRow:   { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  recDot:   { width: 6, height: 6, borderRadius: 3, backgroundColor: '#e05050' },
-  recTime:  { letterSpacing: 1, color: '#e05050' },
+  recDot:   { width: 6, height: 6, borderRadius: 3 },   // colour: ct.recRed
+  recTime:  { letterSpacing: 1 },
 });
 
 // ── LANDSCAPE ─────────────────────────────────────────────────────────────────
@@ -1207,6 +1227,14 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
+  // ★ Colours are the faceplate's: the chassis for keys, glass and status; the key LEGENDS resolve
+  //   separately (§2 — white, or neon when the controls are neon, and Nixie One only when neon).
+  const fp = useFaceplate();
+  const ct = fp.chassis;
+  const kl = fp.keyLegend;
+  const legendTxt = { color: kl.color, fontFamily: kl.font,
+                      ...(kl.glow ? { textShadowColor: kl.glow, textShadowRadius: 4,
+                                      textShadowOffset: { width: 0, height: 0 } } : null) };
   const s = useUiScale();
   const [sigW, setSigW] = useState(0);
 
@@ -1258,7 +1286,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
         style={{
           position: 'absolute', left: -4, right: -4, top: -4, bottom: -4,
           borderRadius: 12, borderWidth: 2, borderColor: NAV_FOCUS,
-          backgroundColor: 'rgba(124,255,155,0.10)',
+          backgroundColor: ct.handbackBg,
           opacity: handbackFlash, zIndex: 3,
         }} />
 
@@ -1278,24 +1306,23 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
 
       {/* STEP + MENU column */}
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
-        <TouchableOpacity ref={tourRef('stepBtn')} style={[lnd.lsBtn, keyBox, { borderColor: t.btnBorder }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
+        <TouchableOpacity ref={tourRef('stepBtn')} style={[lnd.lsBtn, keyBox, { borderColor: ct.keyBorder, backgroundColor: ct.keyBg }]} onPress={onStep} activeOpacity={0.75} hitSlop={10}>
           {/* ★ ONE line: "100k" / "500Hz" / "8.33k" SHRINK to fit the key; two lines let the text
               ask for a taller box, which is the bug this key had. */}
-          <Text style={[lnd.lsTxt, { color: t.btnText, fontFamily: t.font,
-                                     fontSize: s.f(11), lineHeight: s.f(14) }]}
+          <Text style={[lnd.lsTxt, legendTxt, { fontSize: s.f(11), lineHeight: s.f(14) }]}
                 numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
             {stepLabel}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           ref={tourRef('menuBtn')}
-          style={[lnd.lsBtn, keyBox, { borderColor: t.btnBorder }]}
+          style={[lnd.lsBtn, keyBox, { borderColor: ct.keyBorder, backgroundColor: ct.keyBg }]}
           onPress={onMenu} activeOpacity={0.75} hitSlop={10}
         >
           {menuAsBack
-            ? <Text style={{ color: t.btnText, fontFamily: t.font, fontSize: s.f(11), lineHeight: s.f(14) }}
+            ? <Text style={[legendTxt, { fontSize: s.f(11), lineHeight: s.f(14) }]}
                     numberOfLines={1}>‹</Text>
-            : <Cog size={ICON_SZ} color={t.btnText} />}
+            : <Cog size={ICON_SZ} color={kl.color} />}
         </TouchableOpacity>
       </View>
 
@@ -1326,18 +1353,18 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       {/* AUDIO + CHAT column */}
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
         <TouchableOpacity
-          style={[lnd.lsBtn, keyBox, { borderColor: isRecording ? 'rgba(220,40,40,0.90)' : t.btnBorder }]}
+          style={[lnd.lsBtn, keyBox, { borderColor: isRecording ? ct.keyBorderRec : ct.keyBorder, backgroundColor: ct.keyBg }]}
           onPress={onAudio} activeOpacity={0.75} hitSlop={10}
         >
           {audioAsRecord
-            ? <RecordIcon size={ICON_SZ} color={t.btnText} />
-            : <AudioIcon size={ICON_SZ} color={t.btnText} />}
+            ? <RecordIcon size={ICON_SZ} color={kl.color} />
+            : <AudioIcon size={ICON_SZ} color={kl.color} />}
         </TouchableOpacity>
         <TouchableOpacity
-          style={[lnd.lsBtn, keyBox, { borderColor: chatUnread ? 'rgba(40,140,255,0.85)' : t.btnBorder, opacity: chatOff ? 0.4 : 1 }]}
+          style={[lnd.lsBtn, keyBox, { borderColor: chatUnread ? ct.keyBorderChat : ct.keyBorder, backgroundColor: ct.keyBg, opacity: chatOff ? 0.4 : 1 }]}
           onPress={chatOff ? undefined : onChat} disabled={chatOff} activeOpacity={0.75} hitSlop={10}
         >
-          <ChatIcon size={ICON_SZ} color={t.btnText} />
+          <ChatIcon size={ICON_SZ} color={kl.color} />
         </TouchableOpacity>
       </View>
 
@@ -1372,10 +1399,10 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
             out of the tuning column in the first place). */}
       <View style={lnd.statusRow}>
         <View style={lnd.statusSide}>
-          <ClockRow clock={clock} color={t.clockColor} font={t.font} size={CLOCK_FONT} />
+          <ClockRow clock={clock} color={ct.clock} font={t.font} size={CLOCK_FONT} />
           <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
-            <View style={lnd.recDot} />
-            <Text style={[lnd.recTime, { fontFamily: t.font, fontSize: CLOCK_FONT }]}>
+            <View style={[lnd.recDot, { backgroundColor: ct.recRed }]} />
+            <Text style={[lnd.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
               {isRecording ? recTime : '0:00'}
             </Text>
           </View>
@@ -1398,10 +1425,10 @@ const lnd = StyleSheet.create({
                 gap: 8, paddingHorizontal: 4, marginTop: 3 },
   statusSide: { flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row',
                 alignItems: 'center', gap: 8 },
-  sigFrame: { borderRadius: 7, overflow: 'hidden', backgroundColor: 'rgba(105,98,82,0.30)', justifyContent: 'center', alignSelf: 'stretch' },
+  sigFrame: { borderRadius: 7, overflow: 'hidden', justifyContent: 'center', alignSelf: 'stretch' },   // track: ct.meterTrack
   // ★ No flex: the height is KEY_H at the use site (see LandscapeBar). overflow hidden so nothing
   //   inside can push the key taller than its neighbours.
-  lsBtn:    { backgroundColor: 'rgba(20,10,0,0.75)', borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, overflow: 'hidden' },
+  lsBtn:    { borderWidth: 1, borderRadius: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4, overflow: 'hidden' },
   // ★★ NO FIXED lineHeight HERE — it is set at the use site, SCALED, alongside fontSize.
   // A constant 14 lived here while the font is s.f(11), which scales: on a Mac window (and any
   // iPad wide enough to clamp the scale at 1.45) the text renders at ~16pt inside a 14pt line
@@ -1411,8 +1438,8 @@ const lnd = StyleSheet.create({
   lsTxt:    { letterSpacing: 0.5, textAlign: 'center' },
   clock:    { letterSpacing: 1, marginTop: 3, textAlign: 'center' },
   recRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3, marginTop: 1 },
-  recDot:   { width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#e05050' },
-  recTime:  { letterSpacing: 1, color: '#e05050' },
+  recDot:   { width: 5, height: 5, borderRadius: 2.5 },   // colour: ct.recRed
+  recTime:  { letterSpacing: 1 },
 });
 
 // ── Root ──────────────────────────────────────────────────────────────────────
@@ -1466,6 +1493,7 @@ function ControlsBar({
   }, [handback, handbackFlash]);
 
   const { theme: t } = useTheme();
+  const ct = useFaceplate().chassis;
   const s = useUiScale();
 
   /* ★★ THE CHANNEL NAME IS THE READOUT ON THE RASTER (airband only — airChannel is null elsewhere). An
@@ -1588,10 +1616,10 @@ function ControlsBar({
           get any clearer… iOS just needs to get to android level". Hence iOS-only. */}
       <BlurView intensity={Platform.OS === 'ios' ? 35 : 80} tint="dark" style={StyleSheet.absoluteFill} />
       {/* Tinted overlay — semi-transparent so blur shows; NOT fully opaque */}
-      <View style={[StyleSheet.absoluteFill, root.tint, { borderRadius: RADIUS }]}
+      <View style={[StyleSheet.absoluteFill, root.tint, { backgroundColor: ct.deckTint, borderRadius: RADIUS }]}
             pointerEvents="none" />
       {/* Border ring */}
-      <View style={[root.border, { borderRadius: RADIUS, borderColor: t.barBorder }]}
+      <View style={[root.border, { borderRadius: RADIUS, borderColor: ct.barBorder }]}
             pointerEvents="none" />
       {/* ★★★ APPLE TV USES THE PORTRAIT CLUSTER, on a 16:9 screen (Stuart, 2026-08-04).
           Not a cosmetic choice — it is the one that matches the remote. Portrait STACKS the
@@ -1620,7 +1648,7 @@ const root = StyleSheet.create({
   },
   // Semi-transparent tint: waterfall colours show through but content is legible
   tint: {
-    backgroundColor: 'rgba(8,6,2,0.55)',
+    // colour: ct.deckTint
     inset: 1,              // keeps tint inside the border ring visually             // keeps tint inside the border ring visually
   },
   border: {

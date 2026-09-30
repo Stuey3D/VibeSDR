@@ -88,7 +88,7 @@ export default function ServersChip({
   useEffect(() => { onExpandedChange?.(expanded); }, [expanded]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const amber = t.btnText;   // #ffb833
-  const font  = t.font;      // Nixie One
+  const font  = t.font;      // Atkinson (the UI face; Nixie One is only ever the faceplate's, in neon)
 
   const collapse = useCallback(() => setExpanded(false), []);
   const onHeader = useCallback(() => { setExpanded(false); onBack(); }, [onBack]);

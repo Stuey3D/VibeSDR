@@ -1334,8 +1334,10 @@ function MenuSheetBody({
             {/* ── CONTROLS ───────────────────────────────────────── */}
             <SectionLabel label="CONTROLS" icon="controls" />
             {/* SIGNAL METER unit moved to DISPLAY SETTINGS (it's a display choice). */}
-            {/* DISPLAY STYLE row removed — accessibility skin (white/Atkinson)
-                is the single style now; amber/Nixie dropped for readability. */}
+            {/* ★ DISPLAY STYLE is back — as the faceplate's DISPLAY (hyper / nixie / dot / seg), with
+                the chassis and colours, in the CONTROL CUSTOMISATION pane (faceplates brief §1).
+                The settings exist and persist (FaceplateContext, `lsv_faceplate`); the pane that
+                edits them is not built yet, so there is deliberately no row here until it is. */}
             <View style={styles.ctrlRow}>
               <Text style={styles.ctrlLabel}>DRUMS</Text>
               <BtnRow>

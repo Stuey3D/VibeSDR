@@ -14,8 +14,9 @@
  */
 
 import React, {
-  createContext, useContext, useState, type ReactNode,
+  createContext, useCallback, useContext, useMemo, type ReactNode,
 } from 'react';
+import { FaceplateProvider, useFaceplateSettings } from './FaceplateContext';
 
 // ── Token shapes ──────────────────────────────────────────────────────────────
 
@@ -135,19 +136,35 @@ interface ThemeContextValue {
 // WHITE (accessibility skin, Atkinson Hyperlegible) is THE style — amber/Nixie
 // dropped 2026-06-11 for readability on all screens. The AMBER tokens above
 // are kept only as a historical reference; no UI switches to them anymore.
+// ★★★ AND THE FONT CHOICE NOW LIVES IN THE FACEPLATE'S DISPLAY (brief §1: "Display replaces today's
+//   font setting … don't add a second font switch"). `setTheme` is kept as a thin alias onto it —
+//   'amber' (Nixie One) = Display `nixie`, 'white' (Atkinson) = `hyper` — and `theme` stays WHITE
+//   whatever the display: Nixie One is drawn only by the roles the faceplate resolves (frequency,
+//   VTS, banner), in neon (§2). Handing AMBER's `font` to every `t.font` reader would paint Nixie
+//   One in white and gold across the app, the exact thing the Nixie rule forbids.
 const ThemeContext = createContext<ThemeContextValue>({
   theme:    WHITE,
   themeName:'white',
   setTheme: () => {},
 });
 
+function ThemeFromFaceplate({ children }: { children: ReactNode }) {
+  const { settings, setDisplay } = useFaceplateSettings();
+  const themeName: ThemeName = settings.display === 'nixie' ? 'amber' : 'white';
+  const setTheme = useCallback((name: ThemeName) => setDisplay(name === 'amber' ? 'nixie' : 'hyper'),
+                               [setDisplay]);
+  const value = useMemo(() => ({ theme: WHITE, themeName, setTheme }), [themeName, setTheme]);
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+
+/** ★ Also mounts the FaceplateProvider, so everything under the theme has the faceplate — one
+ *  provider in App.tsx, one place the font choice is decided. The legacy name seeds Display the first
+ *  time (§1 migration); it was never persisted and has been 'white' since 2026-06-11. */
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [themeName, setThemeName] = useState<ThemeName>('white');
-  const setTheme = (name: ThemeName) => setThemeName(name);
   return (
-    <ThemeContext.Provider value={{ theme: THEMES[themeName as ThemeName], themeName, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
+    <FaceplateProvider legacyThemeName="white">
+      <ThemeFromFaceplate>{children}</ThemeFromFaceplate>
+    </FaceplateProvider>
   );
 }
 
