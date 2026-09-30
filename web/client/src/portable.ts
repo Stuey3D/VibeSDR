@@ -30,6 +30,9 @@ export const VIEW_KEYS = [
   'palette', 'autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast', 'wfSharpness', 'wfCoarse',
   'wfSpeed', 'wfScroll', 'smoothingFrames', 'spatialSmooth', 'peakHold', 'specFloor', 'specPeakScale',
   'specAlpha', 'specRatio', 'specShow', 'vfoColor', 'vfoIntensity', 'vfoFrost', 'freqUnit', 'volume',
+  // ★ The CONTROLS colours and transparency (controlColours.ts CTL_KEYS) — Stuart: "saved in the same way
+  //   as the display settings so it can travel between servers".
+  'ctlBg', 'ctlBtn', 'ctlFont', 'ctlSolid',
 ] as const;
 
 const DIRECTORY = 'https://vibeserver.vibesdr.net';

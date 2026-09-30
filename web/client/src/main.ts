@@ -8,6 +8,8 @@
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
+import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
+         type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState } from './spectrum';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -876,6 +878,9 @@ async function connect(host: string, pin: string) {
     const lp = localPrefs();
     if (honourReset(lp)) localStorage.setItem(LS_PREFS, JSON.stringify(lp));
   }
+  // ★ The CONTROLS look (and, on an older browser with no choice stored, SOLID) from the very first frame
+  //   — not only once the menu is built. controlColours.ts.
+  applyCtlLook();
   // ★★★ FOLLOW THE PAGE'S OWN SCHEME. These were hardcoded to http:// and ws://, so a server put
   //     behind an HTTPS reverse proxy served an https page whose auth fetch, config fetch and
   //     every WebSocket were plain http/ws — which the browser BLOCKS as mixed content. The
@@ -2240,6 +2245,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     if (!need) {
       if (el && !gateGestureActive) {
         el.remove();
+        startScreenUp = false;
         // ★ Anything held back while the gate covered the screen can be said now.
         vtsPumpNotices();
         // ★★ AND ONLY NOW THE TOUR. Started from inside the gate's own handler it would have lit
@@ -2260,15 +2266,24 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     //    swallowed — so the panel would be unreachable and its Escape the only way out. End it
     //    cleanly instead; the button on this gate is right there to start it again.
     endTutorial();
+    // ★★★ SOLID, AND NOTHING IS DRAWN BEHIND IT (Stuart, 2026-09-30). It used to dim the live spectrum
+    //     through a translucent backing and a backdrop blur — which kept a low-end device compositing
+    //     the waterfall AND blurring it every frame, behind a screen whose whole job is "not started
+    //     yet", and let the listener watch it struggle before they had pressed anything. Now the gate
+    //     is opaque, has no backdrop-filter, and renderFrame() skips the waterfall, trace, scale and
+    //     band strip while `startScreenUp` is set. Data still arrives and is processed as before, so
+    //     the picture is current the moment the gate goes.
     el = document.createElement('div');
     el.id = 'audioGate';
     el.style.cssText = 'position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;'
-      + 'align-items:center;justify-content:center;gap:14px;background:rgba(0,0,0,.62);'
-      + 'backdrop-filter:blur(1.5px);cursor:pointer';
+      + 'align-items:center;justify-content:center;justify-content:safe center;gap:14px;background:var(--bg,#080601);'
+      + 'overflow-y:auto;padding:16px 0;cursor:pointer';
+    startScreenUp = true;
 
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = 'START';
+    // ★ START RADIO, not START: the press starts the whole receiver for the listener (Stuart, 2026-09-30).
+    btn.textContent = 'START RADIO';
     btn.style.cssText = 'font:600 15px/1 ui-monospace,monospace;letter-spacing:.22em;'
       + 'padding:16px 52px;border-radius:10px;cursor:pointer;'
       + 'color:var(--amber,#ffb000);background:rgba(0,0,0,.55);'
@@ -2297,6 +2312,31 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       + 'color:var(--amber,#ffb000);background:transparent;opacity:.85;'
       + 'border:1px solid rgba(255,176,0,.55)';
     el.appendChild(tut);
+
+    // ★★ TRANSPARENCY EFFECTS, ON THE ONE SCREEN EVERY LISTENER PASSES (Stuart, 2026-09-30). OFF is the
+    //    menu's TRANSPARENCY at SOLID — the same stored setting, so it travels and the menu shows it.
+    //    Like the tutorial button it is read from the gesture's TARGET below, and it does NOT dismiss
+    //    the gate or start the audio: flipping it is not "start", and the START press that follows
+    //    still carries its own user activation, so iOS unlocks audio exactly as before.
+    const tfx = document.createElement('button');
+    tfx.type = 'button';
+    tfx.id = 'gateTfxBtn';
+    const paintTfx = () => {
+      const on = transparencyEffectsOn();
+      tfx.textContent = `Transparency effects: ${on ? 'ON' : 'OFF'}`;
+      tfx.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+    paintTfx();
+    tfx.style.cssText = 'font:11px/1 ui-monospace,monospace;letter-spacing:.1em;'
+      + 'padding:9px 16px;border-radius:8px;cursor:pointer;margin-top:10px;'
+      + 'color:var(--amber,#ffb000);background:transparent;opacity:.85;'
+      + 'border:1px solid rgba(255,176,0,.55)';
+    const tfxWhy = document.createElement('div');
+    tfxWhy.textContent = 'Switching them off may improve performance on older or lower-end devices. '
+      + 'You can change this later in the menu.';
+    tfxWhy.style.cssText = 'font:10px/1.45 ui-monospace,monospace;letter-spacing:.04em;'
+      + 'color:var(--amber,#ffb000);opacity:.6;text-align:center;max-width:30em;padding:0 1.2em';
+    el.appendChild(tfx); el.appendChild(tfxWhy);
 
     // ★★ WEBKIT IS TOLD ABOUT WEBKIT. Safari — and every browser on iOS, which is WebKit
     //    underneath whatever it is called — can leave the AudioContext "running" with a frozen
@@ -2364,6 +2404,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //    shield. Reading the target instead keeps the swallow intact: the press still resumes
         //    audio and still takes the gate down, it just also remembers where it landed.
         if ((e.target as Element | null)?.closest?.('#gateTutBtn')) gateWantsTutorial = true;
+        // ★ The transparency toggle: flipped on its click, and the gate stays up (see where it is built).
+        const onTfx = !!(e.target as Element | null)?.closest?.('#gateTfxBtn');
+        if (onTfx) {
+          if (ev === 'click') { setTransparencyEffects(!transparencyEffectsOn()); paintTfx(); }
+          if (ev === 'click' || ev === 'pointerup' || ev === 'mouseup' || ev === 'touchend') {
+            setTimeout(() => { gateGestureActive = false; }, 0);
+          }
+          return;
+        }
         // ★ A press anywhere is the welcome screen's answer. Audio still has its own say — see
         //   `need` above — so this dismisses the WELCOME, not the audio gate.
         if (kickers.has(ev)) { gateDismissed = true; kick(); }
@@ -2841,6 +2890,10 @@ function perfReport(secs: number) {
  *  skipped it and the spectrum and waterfall stopped for good, on a page whose socket and audio
  *  were perfectly healthy. Now the next frame is always requested, and each section is its own
  *  guarded unit, so a broken overlay costs the overlay and the waterfall keeps drawing. */
+/** ★ The START RADIO screen is up: it is opaque, so the waterfall, trace, scale and band strip are not
+ *  drawn behind it (showAudioGate). Rows still arrive and are processed; only the drawing waits. */
+let startScreenUp = false;
+
 function loop() {
   if (!wf || !spec) return;
   try { renderFrame(); }
@@ -2884,9 +2937,10 @@ function renderFrame() {
   //   ★ Kill switch is still one line: setHoldMs(0) restores the pre-buffer waterfall exactly.
   const w = wf;
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
-  if (!NO_WF) guard('web-render', 'waterfall-tick', () => w.tick());   // synthesise any waterfall lines now due (see Waterfall.tick)
+  const drawWf = !NO_WF && !startScreenUp;
+  if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick());   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
-  if (!NO_WF) guard('web-render', 'waterfall-draw', () => w.draw());
+  if (drawWf) guard('web-render', 'waterfall-draw', () => w.draw());
   const t2 = measuring ? performance.now() : 0;
 
   // ★ THE SCALE AND BAND STRIP ARE NOT PER-FRAME WORK. Both redraw TEXT — frequency labels, band
@@ -2904,7 +2958,7 @@ function renderFrame() {
   // stale span while the waterfall drew the new one (Stuart 2026-07-24 — "wrong but back"). Keep the
   // VFO/rf-centre terms so tuning still forces a redraw.
   const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
-  if (key !== lastViewKey) {
+  if (key !== lastViewKey && !startScreenUp) {
     lastViewKey = key;
     guard('web-render', 'scale', drawScale);
     guard('web-render', 'bands', drawBands);
@@ -7851,7 +7905,7 @@ function showDeviceBanner(present: boolean, reason?: string) {
   el.id = id;
   el.style.cssText =
     'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:9500;' +
-    'background:rgba(40,10,0,0.94);color:#ffb833;border:1px solid rgba(255,120,0,0.6);' +
+    'background:var(--ov-warn,rgba(40,10,0,0.94));color:#ffb833;border:1px solid rgba(255,120,0,0.6);' +
     'border-radius:8px;padding:10px 16px;font:13px ui-monospace,monospace;text-align:center;' +
     'box-shadow:0 4px 18px rgba(0,0,0,0.6)';
   /* ★★★ TWO DIFFERENT FAULTS, AND ONE MESSAGE WAS WRONG FOR BOTH. "Unplugged or has failed —
@@ -8072,7 +8126,7 @@ function showIdleCheck(secs: number) {
   const el = document.createElement('div');
   el.id = id;
   el.style.cssText =
-    'position:fixed;inset:0;z-index:9700;background:rgba(8,6,1,0.9);display:flex;'
+    'position:fixed;inset:0;z-index:9700;background:var(--ov-idle,rgba(8,6,1,0.9));display:flex;'
   + 'align-items:center;justify-content:center;text-align:center;font:15px ui-monospace,monospace;color:#ffb833';
   const paint = () =>
     `<div style="max-width:340px;padding:24px">`
@@ -8126,7 +8180,7 @@ function showRefusal(title: string, bodyHtml: string, offerOverride = false) {
   const el = document.createElement('div');
   el.id = id;
   el.style.cssText =
-    'position:fixed;inset:0;z-index:9800;background:rgba(8,6,1,0.92);' +
+    'position:fixed;inset:0;z-index:9800;background:var(--ov-busy,rgba(8,6,1,0.92));' +
     'display:flex;align-items:center;justify-content:center;text-align:center;' +
     'font:15px ui-monospace,monospace;color:#ffb833';
   el.innerHTML =
@@ -11826,6 +11880,39 @@ function updateRecTime() {
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// ── Control colours (controlColours.ts) ──────────────────────────────────────
+
+/** The look in force: what is stored, with this browser's own default transparency where the listener
+ *  has never chosen one (controlColours.ts, solidByDefault). */
+function ctlLook(): ControlLook { return readLook(prefs(), browserSolidDefault()); }
+/** Put the stored control look on the page, and say so if a font colour had to be adjusted to stay
+ *  readable. At the defaults this REMOVES every variable — the page's own literals render. */
+function applyCtlLook() {
+  const warn = applyControlLook(ctlLook());
+  const w = document.getElementById('ctlWarn');
+  if (w) { w.textContent = warn; w.hidden = !warn; }
+}
+function ctlSolidLabel(v: number): string { return v <= 0 ? 'GLASS' : v >= 100 ? 'SOLID' : `${v}%`; }
+/** ★ What "Transparency effects: ON" goes back to — the listener's own setting, not a guess. In memory
+ *  only: after a reload, ON from the start screen means today's glass. */
+let ctlSolidBeforeOff = 0;
+/** ★★ ONE SETTING, TWO DOORS: the menu's TRANSPARENCY slider and the START screen's "Transparency
+ *  effects". Both write ctlSolid (a VIEW_KEY, so it travels), and both are redrawn from it. */
+function setCtlSolid(v: number, store = true) {
+  if (store) savePref('ctlSolid', v);
+  const el = document.getElementById('ctlSolid') as HTMLInputElement | null;
+  if (el) el.value = String(v);
+  const lbl = document.getElementById('ctlSolidVal');
+  if (lbl) lbl.textContent = ctlSolidLabel(v);
+  applyCtlLook();
+}
+function transparencyEffectsOn(): boolean { return ctlLook().solid < 100; }
+function setTransparencyEffects(on: boolean) {
+  const cur = ctlLook().solid;
+  if (!on) { if (cur < 100) ctlSolidBeforeOff = cur; setCtlSolid(100); }
+  else setCtlSolid(ctlSolidBeforeOff < 100 ? ctlSolidBeforeOff : 0);
+}
+
 // ── Menu: Radio / Audio / Display ────────────────────────────────────────────
 
 /** Wire a slider: live label, live effect, persisted. */
@@ -12270,6 +12357,71 @@ function buildMenu() {
     (v) => { wf!.vfoIntensity = v; }, 'vfoIntensity');
   slider('vfoFrost', 'vfoFrostVal', (v) => (v === 0 ? 'OFF' : String(v)),
     (v) => { wf!.vfoFrost = v; }, 'vfoFrost');
+
+  // ── CONTROLS: the card's colours, and how see-through every panel is (controlColours.ts) ──
+  /* ★★ A PICK IS SAVED AS A VALUE, EVEN "DEFAULT" (''). Deleting the key would fall back to the
+   *    portable MASTER view (prefs() lays this server over it), so choosing Default on a server whose
+   *    master says navy would silently stay navy. '' is "today's colour, here". */
+  const swatchRows: { host: string; key: 'ctlBg' | 'ctlBtn' | 'ctlFont'; field: keyof ControlLook;
+                       list: Swatch[]; today: string }[] = [
+    { host: 'ctlBgSw',   key: 'ctlBg',   field: 'bg',   list: BG_SWATCHES,   today: '#0a0a0a' },
+    { host: 'ctlBtnSw',  key: 'ctlBtn',  field: 'btn',  list: BTN_SWATCHES,  today: '#140a00' },
+    { host: 'ctlFontSw', key: 'ctlFont', field: 'font', list: FONT_SWATCHES, today: TODAY.font },
+  ];
+  const markSwatches = () => {
+    const look = ctlLook();
+    for (const r of swatchRows) {
+      const cur = String(look[r.field]);
+      const host = document.getElementById(r.host);
+      if (!host) continue;
+      let known = false;
+      host.querySelectorAll<HTMLButtonElement>('button.sw').forEach((b) => {
+        const on = (b.dataset.hex ?? '') === cur;
+        known = known || on;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      const pick = host.querySelector<HTMLInputElement>('input[type=color]');
+      if (pick) { pick.classList.toggle('on', !known); if (!known && cur) pick.value = cur; }
+    }
+  };
+  for (const r of swatchRows) {
+    const host = document.getElementById(r.host);
+    if (!host) continue;
+    host.textContent = '';
+    for (const s of r.list) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'sw' + (s.hex ? '' : ' swDef');
+      b.dataset.hex = s.hex;
+      b.style.background = s.hex || r.today;
+      if (!s.hex) b.textContent = 'DEF';
+      b.title = s.hex ? s.name : 'Default (as it has always looked)';
+      b.setAttribute('aria-label', b.title);
+      b.onclick = () => { savePref(r.key, s.hex); applyCtlLook(); markSwatches(); };
+      host.appendChild(b);
+    }
+    const pick = document.createElement('input');
+    pick.type = 'color';
+    pick.title = 'Custom colour';
+    pick.setAttribute('aria-label', 'Custom colour');
+    pick.value = r.today;
+    pick.oninput = () => { savePref(r.key, pick.value); applyCtlLook(); markSwatches(); };
+    host.appendChild(pick);
+  }
+  // ★ Seeded from the look IN FORCE, not the stored pref: with nothing stored an older browser starts
+  //   SOLID, and the slider must say so. slider() saves only on the listener's own input.
+  $<HTMLInputElement>('ctlSolid').value = String(ctlLook().solid);
+  slider('ctlSolid', 'ctlSolidVal', ctlSolidLabel, () => applyCtlLook(), 'ctlSolid');
+  $('ctlReset').onclick = () => {
+    /* ★ '' = today's colour HERE; null transparency = "no choice made", i.e. this browser's own default
+     *  (readLook). Written rather than deleted so the portable master cannot show through. */
+    for (const k of CTL_KEYS) savePref(k, k === 'ctlSolid' ? null : '');
+    setCtlSolid(ctlLook().solid, false);
+    markSwatches();
+  };
+  markSwatches();
+  applyCtlLook();
 }
 
 /**

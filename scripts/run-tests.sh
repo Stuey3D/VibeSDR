@@ -159,6 +159,10 @@ if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((
 # ★ The web decoder socket says whose it is (user_session_id) and takes a refusal — shown in the
 #   server's words and FORGOTTEN, so the 3-s reconnect cannot turn one "no" into a loop (B6).
 if node scripts/test-web-decoder-refusal.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ THE WEB CONTROL COLOURS (controlColours.ts): the default look sets no variable (today, to the
+#    pixel), every swatch combination stays ≥ 3:1, SOLID is opaque with no backdrop-filter anywhere, the
+#    keys travel as VIEW_KEYS, and an older browser starts solid unless a stored choice says otherwise.
+if node --no-warnings scripts/test-web-control-colours.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ THE FACEPLATE RULES (app). Nixie One is neon in every chassis × display × colour, dot/seg can
 #     never reach white by any route (picker, migration, stored prefs), and the DEFAULT settings
 #     resolve to today's literal colours — the pixel-identical promise, checked as data.
