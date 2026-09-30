@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VibeSDR control deck</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&amp;family=Nixie+One&amp;family=Doto:wght@900&amp;family=Atkinson+Hyperlegible:wght@400;700&amp;family=Zilla+Slab:wght@700&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#000}
+button{font:inherit;cursor:pointer;margin:0}
+.tex-silver{background-image:url(/_blob/e27d346d2cec39fc2d79a5d9f32ed2fb);background-size:620px auto;background-position:center}
+.tex-black{background-image:url(/_blob/f52997ebf316486ad45559af25401c02);background-size:620px auto;background-position:center}
+.bz-silver{background-image:linear-gradient(180deg,rgba(255,255,255,0.60) 0%,rgba(255,255,255,0) 42%,rgba(0,0,0,0.22) 100%),url(/_blob/e27d346d2cec39fc2d79a5d9f32ed2fb);background-size:auto,360px auto;background-color:#c9c6bf}
+.bz-black{background-image:linear-gradient(180deg,rgba(255,255,255,0.20) 0%,rgba(255,255,255,0) 42%,rgba(0,0,0,0.45) 100%),url(/_blob/f52997ebf316486ad45559af25401c02);background-size:auto,360px auto;background-color:#1d1e20}
+@font-face{font-family:'DSEG14';src:url(/_blob/f098db8bc98f07640e679b881c2f5d5d) format('woff2');font-weight:700;font-style:italic}
+</style>
+</helmet>
+<div style="width: {{rootW}}; height: {{rootH}}; box-sizing: border-box; padding: 12px 16px 16px; background: #000000; font-family: 'Barlow Semi Condensed', system-ui, sans-serif">
+<!-- VTS: station / status strip, inherits the chosen display font -->
+<div data-a="vts" class="{{t.bz}}" style="margin-bottom: 10px; {{vtsBezel}}">
+<div style="height: 40px; border-radius: 9px; display: flex; align-items: center; justify-content: space-between; padding: 0 14px; background: linear-gradient(180deg,#0b0c0f,#060708); box-shadow: inset 0 1px 4px rgba(0,0,0,0.9), inset 0 0 0 1px {{vtsEdge}}">
+<span style="font-size: 12px; color: rgba(255,255,255,0.45)">◄</span>
+<svg width="0" height="0" style="position: absolute"><defs><g id="rdsMark"><g transform="translate(-519.3541,-443.5148)"> <g transform="translate(35.437688,35.477722)" > <path d="M 232.78125,149.84375 C 160.91375,149.84375 102.65625,208.11554 102.65625,280 C 102.65625,351.86683 160.91375,410.15625 232.78125,410.15625 C 298.42865,410.15624 352.72285,361.5558 361.65625,298.375 C 362.74855,299.94305 363.96945,301.43824 365.34375,302.8125 C 371.42156,308.89096 379.5271,312.25 388.125,312.25 C 405.19831,312.25 419.18745,298.91566 420.28125,282.125 L 420.25,282.0625 L 437.5625,292.125 L 437.6875,292.09375 C 432.26089,314.52239 412.04,331.1875 387.9375,331.1875 C 378.89979,331.18751 370.444,328.82392 363.0625,324.71875 C 362.25199,327.07967 361.3706,329.39707 360.4375,331.6875 C 368.79965,336.15432 378.18625,338.5625 387.9375,338.5625 C 415.49329,338.56251 438.6563,319.46539 444.875,293.8125 L 444.78125,293.71875 L 465.40625,279.84375 L 465.4375,279.75 C 465.3135,237.05979 430.6637,202.5 387.9375,202.5 C 345.14229,202.49999 310.375,237.18646 310.375,280 C 310.375,322.79591 275.59475,357.5 232.78125,357.5 C 189.98465,357.49999 155.28125,322.79592 155.28125,280 L 137.09375,267.875 C 143.05468,220.33152 183.63848,183.5625 232.78125,183.5625 C 249.71215,183.5625 265.59315,187.9296 279.40625,195.59375 L 279.40625,195.53125 C 280.93835,193.55794 282.5496,191.6352 284.1875,189.75 C 269.03541,181.0992 251.47405,176.1875 232.78125,176.1875 C 180.08295,176.1875 136.5702,215.4472 129.875,266.3125 L 129.84375,266.25 L 110.03125,276.28125 L 110.09375,276.1875 C 112.12065,210.17008 166.26985,157.25 232.78125,157.25 C 256.72445,157.25 279.0502,164.08009 297.9375,175.9375 L 297.90625,176.03125 C 299.89784,174.30462 301.9196,172.6658 304,171.0625 L 303.96875,171.03125 C 283.51276,157.65862 259.05005,149.84375 232.78125,149.84375 z M 387.96875,149.875 C 339.72866,149.87499 297.70025,176.12109 275.21875,215.09375 L 275.15625,215.125 C 262.98237,207.16132 248.4411,202.53125 232.8125,202.53125 C 189.999,202.53126 155.3125,237.23533 155.3125,280.03125 L 175.84375,293.71875 L 175.84375,293.75 C 182.02715,319.47335 205.1864,338.59375 232.8125,338.59375 C 265.1436,338.59374 291.375,312.37926 291.375,280.03125 L 291.4375,280.03125 C 291.43749,226.7698 334.70655,183.59375 387.96875,183.59375 C 437.07146,183.59376 477.6332,220.33 483.625,267.8125 L 483.59375,267.875 L 465.4375,280 L 465.46875,280.03125 C 465.46874,322.82717 430.76535,357.53125 387.96875,357.53125 C 374.98306,357.53124 362.7474,354.3255 352,348.6875 C 342.97919,364.31533 330.969,377.99227 316.75,388.96875 C 337.22301,402.35899 361.68155,410.1875 387.96875,410.1875 C 459.83626,410.1875 518.125,351.91571 518.125,280.03125 C 518.12502,208.16441 459.83625,149.875 387.96875,149.875 z M 387.96875,157.28125 C 455.04256,157.28124 509.55595,211.05111 510.71875,277.84375 L 510.65625,277.90625 L 490.9375,266.5625 C 484.33119,215.59149 440.73615,176.1875 387.96875,176.1875 C 330.61906,176.18751 284.0625,222.69987 284.0625,280.03125 C 284.06249,308.29171 261.073,331.21875 232.8125,331.21875 C 208.7284,331.21875 188.5244,314.58092 183.0625,292.1875 L 183.1875,292.15625 L 200.75,282.03125 L 200.8125,282.09375 C 201.3058,289.91647 204.5847,297.20974 210.1875,302.8125 C 216.26661,308.90858 224.37085,312.28125 232.96875,312.28125 C 250.78065,312.28126 265.21875,297.8438 265.21875,280.03125 C 265.21875,212.23434 320.17185,157.28125 387.96875,157.28125 z M 388.125,255.15625 C 401.85071,255.15626 412.96875,266.275 412.96875,280 C 412.96875,293.72499 401.8507,304.84375 388.125,304.84375 C 374.40071,304.84375 363.28125,293.725 363.28125,280 C 363.28124,266.27499 374.4007,255.15625 388.125,255.15625 z M 232.96875,255.1875 C 246.69305,255.1875 257.84375,266.30625 257.84375,280.03125 C 257.84375,293.75625 246.69305,304.875 232.96875,304.875 C 219.24305,304.87499 208.125,293.75625 208.125,280.03125 C 208.125,266.30625 219.24305,255.1875 232.96875,255.1875 z" transform="translate(416.69785,293.67105)"  /> <path d="M 1128.2669,668.67919 L 1068.8212,668.67919 L 1038.6396,598.02804 L 1038.1477,598.02804 L 1023.2592,668.67919 L 975.5124,668.67919 L 1014.2215,484.98621 L 1085.5943,484.98621 C 1121.9072,484.98621 1145.7799,502.28781 1137.5174,541.50712 C 1132.1782,566.84287 1113.4319,588.7782 1086.3878,593.39431 L 1128.2669,668.67919 z M 1044.6131,567.33619 L 1049.2475,567.33619 C 1064.8394,567.33619 1082.9867,564.41148 1087.1983,544.43183 C 1091.4085,524.45218 1074.4945,521.52747 1058.9012,521.52747 L 1054.2682,521.52747 L 1044.6131,567.33619"  /> <path d="M 1231.6536,484.98621 L 1299.3801,484.98621 C 1350.5449,484.98621 1384.2136,525.19217 1373.3252,576.8327 C 1362.4368,628.49084 1311.5891,668.67919 1260.671,668.67919 L 1192.9446,668.67919 L 1231.6536,484.98621 z M 1249.2188,628.24418 L 1259.931,628.24418 C 1288.4381,628.24418 1316.0826,612.65159 1323.6235,576.8327 C 1330.5652,543.93851 1312.7872,525.43883 1282.0785,525.43883 L 1270.8729,525.43883 L 1249.2188,628.24418"  /> <path d="M 1555.5213,532.25728 C 1548.2976,524.94551 1538.114,520.06512 1526.4151,520.06512 C 1517.641,520.06512 1504.8681,525.19217 1502.7186,535.41104 C 1500.4634,546.14085 1512.4963,550.28125 1520.2133,552.9593 L 1531.6303,556.60638 C 1555.6087,564.16482 1572.6284,577.07936 1566.3575,606.80217 C 1562.5166,625.0728 1554.1823,643.83676 1536.9342,656.25797 C 1520.0019,668.43252 1499.6699,673.55958 1481.1533,673.55958 C 1458.0192,673.55958 1437.0007,665.75447 1421.0198,652.6109 L 1449.5974,614.11395 C 1459.323,624.57948 1471.6561,633.10695 1487.9711,633.10695 C 1499.1766,633.10695 1512.3032,627.50419 1515.0334,614.58965 C 1517.8524,601.19941 1500.0575,596.56568 1490.456,593.64097 C 1462.2829,585.1135 1444.1892,577.32602 1451.6765,541.75378 C 1459.5344,504.47253 1491.2312,480.12343 1528.0192,480.12343 C 1546.5357,480.12343 1567.9601,485.95524 1582.337,495.22269 L 1555.5213,532.25728"  /> <path d="M 1396.3015,554.3688 L 1430.0054,553.64643 L 1418.6068,604.77602 L 1386.5054,604.77602 L 1396.3015,554.3688"  /> <path d="M 1156.2637,554.3688 L 1189.9691,553.64643 L 1178.5874,604.77602 L 1146.4677,604.77602 L 1156.2637,554.3688"  /> </g> </g> </g>
+<pattern id="vfdMesh" patternUnits="userSpaceOnUse" width="42" height="42" patternTransform="rotate(60)"><rect width="42" height="8" fill="rgba(0,0,0,0.55)"></rect><rect width="8" height="42" fill="rgba(0,0,0,0.35)"></rect></pattern>
+<mask id="rdsCut" maskUnits="userSpaceOnUse" x="0" y="0" width="1200" height="400"><rect x="0" y="0" width="1200" height="400" fill="#fff"></rect><line x1="210" y1="30" x2="238" y2="300" stroke="#000" stroke-width="16"></line><line x1="30" y1="193" x2="440" y2="193" stroke="#000" stroke-width="13"></line></mask>
+</defs></svg>
+<div data-a="rds" style="display: flex; align-items: center; gap: 5px; margin-left: 8px; min-width: 0">
+<!-- Hyperlegible / Nixie: the RDS mark, no "ADVANCED", tinted to the text colour; shown only on an RDS signal -->
+<sc-if value="{{rd.plainRds}}" hint-placeholder-val="{{ true }}">
+<svg width="{{rd.w}}" height="{{rd.h}}" viewBox="35.4 35.5 1063 260.3" style="overflow: visible; filter: {{rd.filter}}"><use href="#rdsMark" fill="{{fx.vtsColor}}"></use></svg>
+</sc-if>
+<!-- Dot matrix / VCR: a fixed pictogram built into the glass. Always there (ghost when unlit), lit on RDS,
+     cut into its electrodes and seen through the VFD grid mesh. -->
+<sc-if value="{{rd.picto}}" hint-placeholder-val="{{ false }}">
+<svg width="{{rd.w}}" height="{{rd.h}}" viewBox="35.4 35.5 1063 260.3" style="overflow: visible"><g mask="url(#rdsCut)">
+<use href="#rdsMark" fill="{{fx.ghost}}"></use>
+<use href="#rdsMark" fill="{{tx.c}}" opacity="{{rd.on}}" style="filter: {{rd.pfilter}}"></use>
+<use href="#rdsMark" fill="url(#vfdMesh)"></use>
+</g></svg>
+</sc-if>
+<sc-if value="{{rd.emoji}}" hint-placeholder-val="{{ true }}"><span style="font-size: 15px; line-height: 1">{{rd.flag}}</span></sc-if>
+<sc-if value="{{isDot}}" hint-placeholder-val="{{ false }}"><span style="font-family: 'Doto', monospace; font-weight: 900; font-size: 13px; line-height: 1; padding: 1px 2px; color: {{tx.c}}; text-shadow: 0 0 3px {{tx.g}}; background-image: radial-gradient(circle, {{fx.ghost}} 0.6px, transparent 0.9px); background-size: 2.6px 2.6px">{{rd.code}}</span></sc-if>
+<sc-if value="{{isSeg}}" hint-placeholder-val="{{ false }}"><span style="position: relative; display: inline-block; font-family: 'DSEG14', monospace; font-weight: 700; font-style: italic; font-size: 11px; line-height: 1"><span style="color: {{fx.ghost}}">~~</span><span style="position: absolute; left: 0; top: 0; color: {{tx.c}}; text-shadow: 0 0 3px {{tx.g}}; white-space: pre">{{rd.segCode}}</span></span></sc-if>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; justify-content: center">
+<sc-if value="{{vtsPlain}}" hint-placeholder-val="{{ true }}">
+<span style="font-family: {{fx.vtsFont}}; font-size: {{fx.vtsSize}}; letter-spacing: 1px; color: {{fx.vtsColor}}; text-shadow: {{fx.vtsGlow}}">{{fx.vtsText}}</span>
+</sc-if>
+<sc-if value="{{isDot}}" hint-placeholder-val="{{ false }}">
+<span style="padding: 1px 4px; font-family: 'Doto', monospace; font-weight: 900; font-size: 19px; letter-spacing: 1px; color: {{tx.c}}; text-shadow: 0 0 4px {{tx.g}}; background-image: radial-gradient(circle, {{fx.ghost}} 0.7px, transparent 1px); background-size: 3px 3px; white-space: pre">{{fx.dotText}}</span>
+</sc-if>
+<sc-if value="{{isSeg}}" hint-placeholder-val="{{ false }}">
+<span style="position: relative; display: inline-block; font-family: 'DSEG14', monospace; font-weight: 700; font-style: italic; font-size: 15px; letter-spacing: 1px; line-height: 1">
+<span style="color: {{fx.ghost}}">{{fx.segGhost}}</span>
+<span style="position: absolute; left: 0; top: 0; color: {{tx.c}}; text-shadow: 0 0 4px {{tx.g}}; white-space: pre">{{fx.segText}}</span>
+</span>
+</sc-if>
+</div>
+<span style="font-size: 12px; color: rgba(255,255,255,0.45)">►</span>
+</div>
+</div>
+<div data-a="plate" style="position: relative; isolation: isolate; overflow: hidden; box-sizing: border-box; {{L.plate}}; {{t.plate}}">
+<div class="{{t.tex}}" style="position: absolute; inset: 0; z-index: -1"></div>
+<div style="position: absolute; inset: 0; z-index: -1; {{t.light}}"></div>
+
+<sc-if value="{{t.screws}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; top: 8px; left: 8px; width: 9px; height: 9px; border-radius: 50%; {{t.screw}}"><div style="position: absolute; left: 1px; right: 1px; top: 4px; height: 1px; background: rgba(0,0,0,0.55); transform: rotate(35deg)"></div></div>
+<div style="position: absolute; top: 8px; right: 8px; width: 9px; height: 9px; border-radius: 50%; {{t.screw}}"><div style="position: absolute; left: 1px; right: 1px; top: 4px; height: 1px; background: rgba(0,0,0,0.55); transform: rotate(-20deg)"></div></div>
+<div style="position: absolute; bottom: 8px; left: 8px; width: 9px; height: 9px; border-radius: 50%; {{t.screw}}"><div style="position: absolute; left: 1px; right: 1px; top: 4px; height: 1px; background: rgba(0,0,0,0.55); transform: rotate(80deg)"></div></div>
+<div style="position: absolute; bottom: 8px; right: 8px; width: 9px; height: 9px; border-radius: 50%; {{t.screw}}"><div style="position: absolute; left: 1px; right: 1px; top: 4px; height: 1px; background: rgba(0,0,0,0.55); transform: rotate(10deg)"></div></div>
+</sc-if>
+
+<div style="display: flex; flex-direction: column; gap: {{L.dispGap}}; grid-area: disp; min-width: 0; {{L.dispPanel}}">
+<!-- SHARED VFO BANNER (VU mode) -->
+<sc-if value="{{topRow}}" hint-placeholder-val="{{ false }}">
+<div data-a="banner" style="height: 18px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 10.5px; letter-spacing: 1.8px; font-weight: 600; background: #070605; box-shadow: inset 0 1px 3px rgba(0,0,0,0.9), 0 1px 0 rgba(255,255,255,0.18); color: {{tx.c}}; text-shadow: 0 0 5px {{tx.g}}">SHARED TUNER · FREE TO TUNE</div>
+</sc-if>
+
+<!-- BAR METER (current) -->
+<sc-if value="{{isBar}}" hint-placeholder-val="{{ true }}">
+<div style="position: relative; height: {{L.barH}}; border-radius: 10px; overflow: hidden; background: rgba(105,98,82,0.30)">
+<div style="position: absolute; left: 0; top: 0; bottom: 0; width: {{barPct}}; background: linear-gradient(90deg,#bb1100 0%,#ff4400 35%,#ffaa00 62%,#00dd44 100%); opacity: {{barOpacity}}"></div>
+<!-- Squelch line, as today: white halo + red line; the bar dims while muting -->
+<div style="position: absolute; top: 0; bottom: 0; left: {{sqlPct}}; width: 4px; margin-left: -2px; background: rgba(255,255,255,0.90)"></div>
+<div style="position: absolute; top: 0; bottom: 0; left: {{sqlPct}}; width: 2px; margin-left: -1px; background: #ff3232"></div>
+<div style="position: absolute; left: 12%; right: 12%; top: 6px; bottom: 6px; display: flex; flex-direction: column; gap: 3px; justify-content: center">
+<sc-if value="{{L.sharedInBar}}" hint-placeholder-val="{{ false }}">
+<div style="height: 17px; border-radius: 5px; background: #0b0907; display: flex; align-items: center; justify-content: center; font-size: 10px; letter-spacing: 2px; font-weight: 600; color: {{tx.c}}">SHARED TUNER · FREE TO TUNE</div>
+</sc-if>
+<div style="flex-grow: 1; display: flex; border-radius: 8px; background: #0b0907; box-shadow: inset 0 2px 6px rgba(0,0,0,0.9)">
+<div style="flex-grow: 1; display: flex; align-items: center; justify-content: center; gap: 6px; {{tb.cav}}">
+<sc-if value="{{isStd}}" hint-placeholder-val="{{ true }}">
+<span style="font-family: {{fx.stdFont}}; font-size: {{fb.lf}}; letter-spacing: {{fx.digitSpacing}}; color: {{fx.digit}}; text-shadow: {{fx.digitGlow}}">648.000</span>
+</sc-if>
+<sc-if value="{{isNixie}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-self: stretch; align-items: {{tb.align}}; gap: {{fb.gap}}; padding: {{tb.pad}}">
+<sc-for list="{{nixie}}" as="n" hint-placeholder-count="6">
+<sc-if value="{{n.tube}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; align-items: center; justify-content: flex-end; border-radius: {{tb.wr}}; box-shadow: {{tb.cast}}">
+<sc-if value="{{tb.socket}}" hint-placeholder-val="{{ true }}"><div style="width: 4px; height: 2px; border-radius: 2px 2px 0 0; background: rgba(255,235,210,0.22)"></div></sc-if>
+<div style="position: relative; width: {{fb.tw}}; height: {{tb.hb}}; flex-grow: {{tb.grow}}; min-height: 0; max-height: {{tb.mhb}}; border-radius: {{tb.r}}; overflow: hidden; background: radial-gradient(ellipse 70% 55% at 50% 45%, rgba(255,110,30,0.16), rgba(255,90,20,0) 70%), linear-gradient(90deg, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.03) 22%, rgba(255,255,255,0) 50%, rgba(255,255,255,0.04) 80%, rgba(255,255,255,0.14) 100%), #0a0504; box-shadow: {{tb.sh}}">
+<div style="position: absolute; inset: 3px 3px 5px; background-image: radial-gradient(circle, rgba(150,140,125,0.20) 0.55px, transparent 0.9px), radial-gradient(circle, rgba(150,140,125,0.20) 0.55px, transparent 0.9px); background-size: 3px 2.6px, 3px 2.6px; background-position: 0 0, 1.5px 1.3px"></div>
+<!-- cathode stack: unlit cathodes BEHIND the lit one (faint), lit digit at its own depth, then the cathodes IN FRONT of it (darker wire, partly occluding) -->
+<sc-for list="{{n.back}}" as="c" hint-placeholder-count="3"><span style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: 'Nixie One', serif; font-size: {{fb.nf}}; line-height: 1; color: rgba(150,130,110,0.10); {{c.t}}">{{c.d}}</span></sc-for>
+<span style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: 'Nixie One', serif; font-size: {{fb.nf}}; line-height: 1; color: #ffc48a; text-shadow: 0 0 1.5px #ff8a2e, 0 0 5px #ff6410, 0 0 11px rgba(255,80,10,0.75), 0 0 20px rgba(255,70,0,0.35); {{n.t}}">{{n.d}}</span>
+<sc-for list="{{n.front}}" as="c" hint-placeholder-count="2"><span style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: 'Nixie One', serif; font-size: {{fb.nf}}; line-height: 1; color: rgba(70,48,34,0.55); {{c.t}}">{{c.d}}</span></sc-for>
+<sc-if value="{{n.dp}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; right: 2px; bottom: 5px; width: 3.5px; height: 3.5px; border-radius: 50%; background: #ffc48a; box-shadow: 0 0 3px #ff6410, 0 0 7px rgba(255,80,10,0.8)"></div>
+</sc-if>
+</div>
+<sc-if value="{{tb.socket}}" hint-placeholder-val="{{ true }}"><div style="width: 100%; height: 4px; border-radius: 1px 1px 2px 2px; background: linear-gradient(180deg, #3a322c 0%, #1a1511 45%, #070504 100%); box-shadow: 0 -1px 0 rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.12)"></div></sc-if>
+</div>
+</sc-if>
+<sc-if value="{{n.sep}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; align-items: center; justify-content: flex-end; margin: 0 1px; border-radius: 40% 40% 2px 2px / 20% 20% 2px 2px; box-shadow: {{tb.cast}}">
+<div style="width: 3px; height: 2px; border-radius: 2px 2px 0 0; background: rgba(255,235,210,0.22)"></div>
+<div style="position: relative; width: {{tb.bwb}}; height: {{tb.bhb}}; border-radius: 48% 48% 2px 2px / 22% 22% 2px 2px; overflow: hidden; background: radial-gradient(ellipse 80% 45% at 50% 58%, rgba(255,110,30,0.22), rgba(255,90,20,0) 75%), linear-gradient(90deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.03) 28%, rgba(255,255,255,0) 55%, rgba(255,255,255,0.13) 100%), #0a0504; box-shadow: inset 0 0 0 1px rgba(255,235,210,0.12), inset 0 -2px 3px rgba(0,0,0,0.8)">
+<div style="position: absolute; left: calc(50% - 1.4px); top: 62%; bottom: 0; width: 0.6px; background: rgba(160,140,120,0.45)"></div>
+<div style="position: absolute; left: calc(50% + 0.8px); top: 62%; bottom: 0; width: 0.6px; background: rgba(160,140,120,0.45)"></div>
+<div style="position: absolute; left: 50%; top: 58%; width: 3px; height: 4px; transform: translate(-50%, -50%); border-radius: 45%; background: rgba(150,130,110,0.28)"></div>
+<div style="opacity: {{n.lit}}; position: absolute; left: 50%; top: 58%; width: 4px; height: 5px; transform: translate(-50%, -50%); border-radius: 45%; background: radial-gradient(circle at 50% 42%, #fff1dc 0%, #ffbd70 40%, #ff6a14 85%); box-shadow: 0 0 2px #ff8a2e, 0 0 6px #ff6410, 0 0 12px rgba(255,80,10,0.7), 0 0 20px rgba(255,70,0,0.3)"></div>
+</div>
+<div style="width: calc(100% + 2px); height: 4px; border-radius: 1px 1px 2px 2px; background: linear-gradient(180deg, #3a322c 0%, #1a1511 45%, #070504 100%); box-shadow: 0 -1px 0 rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.12)"></div>
+</div>
+</sc-if>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{isDot}}" hint-placeholder-val="{{ false }}">
+<span style="padding: 2px 6px; font-family: 'Doto', monospace; font-weight: 900; font-size: {{fb.df}}; line-height: 1.1; letter-spacing: 1px; color: {{tx.c}}; text-shadow: 0 0 5px {{tx.g}}; background-image: radial-gradient(circle, {{fx.ghost}} 0.8px, transparent 1.15px); background-size: 3.4px 3.4px">648.000</span>
+</sc-if>
+<sc-if value="{{isSeg}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; gap: 1px; filter: drop-shadow(0 0 3px {{tx.g}})">
+<sc-for list="{{seg7}}" as="g" hint-placeholder-count="6">
+<svg width="{{fb.sw}}" height="{{fb.sh}}" viewBox="0 0 24 38"><g transform="translate(4 1) skewX(-7)">
+<polygon points="5.5,1 15.5,1 17.5,3 15.5,5 5.5,5 3.5,3" fill="{{g.a}}"></polygon>
+<polygon points="18,4 20,6 20,15.5 18,17.5 16,15.5 16,6" fill="{{g.b}}"></polygon>
+<polygon points="18,18.5 20,20.5 20,30 18,32 16,30 16,20.5" fill="{{g.c}}"></polygon>
+<polygon points="5.5,31 15.5,31 17.5,33 15.5,35 5.5,35 3.5,33" fill="{{g.d}}"></polygon>
+<polygon points="3,18.5 5,20.5 5,30 3,32 1,30 1,20.5" fill="{{g.e}}"></polygon>
+<polygon points="3,4 5,6 5,15.5 3,17.5 1,15.5 1,6" fill="{{g.f}}"></polygon>
+<polygon points="5.5,16 15.5,16 17.5,18 15.5,20 5.5,20 3.5,18" fill="{{g.g}}"></polygon>
+<circle cx="21" cy="34" r="1.7" fill="{{g.dp}}"></circle>
+</g></svg>
+</sc-for>
+</div>
+</sc-if>
+<span style="font-size: 10px; color: rgba(255,255,255,0.55); align-self: flex-end; padding-bottom: 7px">{{unitLabel}}</span>
+</div>
+<div style="width: 64px; border-left: 1px solid rgba(255,255,255,0.10); display: flex; flex-direction: column; align-items: center; justify-content: center">
+<span style="font-size: 15px; font-weight: 700; letter-spacing: 2px; color: {{md.c}}; font-family: {{md.f}}; text-shadow: {{md.g}}">AM</span>
+<span style="font-size: 11px; color: {{md.s}}; font-family: {{md.f}}; text-shadow: {{md.g}}">{{sText}}</span>
+</div>
+</div>
+</div>
+</div>
+</sc-if>
+
+<!-- LED VU METER -->
+<sc-if value="{{isVu}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: {{L.vuDir}}; gap: 6px; height: {{L.vuH}}">
+<div data-a="freq" style="height: {{L.fwH}}; flex-grow: {{L.fwGrow}}; min-width: 0; display: flex; border-radius: 8px; background: #0a0807; box-shadow: inset 0 2px 7px rgba(0,0,0,0.95), 0 1px 0 rgba(255,255,255,0.25)">
+<div style="flex-grow: 1; display: flex; align-items: center; justify-content: center; gap: 8px; {{tb.cav}}">
+<sc-if value="{{isStd}}" hint-placeholder-val="{{ true }}">
+<span style="font-family: {{fx.stdFont}}; font-size: {{fv.lf}}; letter-spacing: {{fx.digitSpacing}}; color: {{fx.digit}}; text-shadow: {{fx.digitGlow}}">648.000</span>
+</sc-if>
+<sc-if value="{{isNixie}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-self: stretch; align-items: {{tb.align}}; gap: {{fv.gap}}; padding: {{tb.pad}}">
+<sc-for list="{{nixie}}" as="n" hint-placeholder-count="6">
+<sc-if value="{{n.tube}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; align-items: center; justify-content: flex-end; border-radius: {{tb.wr}}; box-shadow: {{tb.cast}}">
+<sc-if value="{{tb.socket}}" hint-placeholder-val="{{ true }}"><div style="width: 4px; height: 2px; border-radius: 2px 2px 0 0; background: rgba(255,235,210,0.22)"></div></sc-if>
+<div style="position: relative; width: {{fv.tw}}; height: {{tb.hv}}; flex-grow: {{tb.grow}}; min-height: 0; max-height: {{tb.mhv}}; border-radius: {{tb.r}}; overflow: hidden; background: radial-gradient(ellipse 70% 55% at 50% 45%, rgba(255,110,30,0.16), rgba(255,90,20,0) 70%), linear-gradient(90deg, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.03) 22%, rgba(255,255,255,0) 50%, rgba(255,255,255,0.04) 80%, rgba(255,255,255,0.14) 100%), #0a0504; box-shadow: {{tb.sh}}">
+<div style="position: absolute; inset: 3px 3px 5px; background-image: radial-gradient(circle, rgba(150,140,125,0.20) 0.55px, transparent 0.9px), radial-gradient(circle, rgba(150,140,125,0.20) 0.55px, transparent 0.9px); background-size: 3px 2.6px, 3px 2.6px; background-position: 0 0, 1.5px 1.3px"></div>
+<!-- cathode stack: unlit cathodes BEHIND the lit one (faint), lit digit at its own depth, then the cathodes IN FRONT of it (darker wire, partly occluding) -->
+<sc-for list="{{n.back}}" as="c" hint-placeholder-count="3"><span style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: 'Nixie One', serif; font-size: {{fv.nf}}; line-height: 1; color: rgba(150,130,110,0.10); {{c.t}}">{{c.d}}</span></sc-for>
+<span style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: 'Nixie One', serif; font-size: {{fv.nf}}; line-height: 1; color: #ffc48a; text-shadow: 0 0 1.5px #ff8a2e, 0 0 5px #ff6410, 0 0 11px rgba(255,80,10,0.75), 0 0 20px rgba(255,70,0,0.35); {{n.t}}">{{n.d}}</span>
+<sc-for list="{{n.front}}" as="c" hint-placeholder-count="2"><span style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: 'Nixie One', serif; font-size: {{fv.nf}}; line-height: 1; color: rgba(70,48,34,0.55); {{c.t}}">{{c.d}}</span></sc-for>
+<sc-if value="{{n.dp}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; right: 2px; bottom: 5px; width: 3.5px; height: 3.5px; border-radius: 50%; background: #ffc48a; box-shadow: 0 0 3px #ff6410, 0 0 7px rgba(255,80,10,0.8)"></div>
+</sc-if>
+</div>
+<sc-if value="{{tb.socket}}" hint-placeholder-val="{{ true }}"><div style="width: 100%; height: 4px; border-radius: 1px 1px 2px 2px; background: linear-gradient(180deg, #3a322c 0%, #1a1511 45%, #070504 100%); box-shadow: 0 -1px 0 rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.12)"></div></sc-if>
+</div>
+</sc-if>
+<sc-if value="{{n.sep}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; align-items: center; justify-content: flex-end; margin: 0 1px; border-radius: 40% 40% 2px 2px / 20% 20% 2px 2px; box-shadow: {{tb.cast}}">
+<div style="width: 3px; height: 2px; border-radius: 2px 2px 0 0; background: rgba(255,235,210,0.22)"></div>
+<div style="position: relative; width: {{tb.bwv}}; height: {{tb.bhv}}; border-radius: 48% 48% 2px 2px / 22% 22% 2px 2px; overflow: hidden; background: radial-gradient(ellipse 80% 45% at 50% 58%, rgba(255,110,30,0.22), rgba(255,90,20,0) 75%), linear-gradient(90deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.03) 28%, rgba(255,255,255,0) 55%, rgba(255,255,255,0.13) 100%), #0a0504; box-shadow: inset 0 0 0 1px rgba(255,235,210,0.12), inset 0 -2px 3px rgba(0,0,0,0.8)">
+<div style="position: absolute; left: calc(50% - 1.4px); top: 62%; bottom: 0; width: 0.6px; background: rgba(160,140,120,0.45)"></div>
+<div style="position: absolute; left: calc(50% + 0.8px); top: 62%; bottom: 0; width: 0.6px; background: rgba(160,140,120,0.45)"></div>
+<div style="position: absolute; left: 50%; top: 58%; width: 3px; height: 4px; transform: translate(-50%, -50%); border-radius: 45%; background: rgba(150,130,110,0.28)"></div>
+<div style="opacity: {{n.lit}}; position: absolute; left: 50%; top: 58%; width: 4px; height: 5px; transform: translate(-50%, -50%); border-radius: 45%; background: radial-gradient(circle at 50% 42%, #fff1dc 0%, #ffbd70 40%, #ff6a14 85%); box-shadow: 0 0 2px #ff8a2e, 0 0 6px #ff6410, 0 0 12px rgba(255,80,10,0.7), 0 0 20px rgba(255,70,0,0.3)"></div>
+</div>
+<div style="width: calc(100% + 2px); height: 4px; border-radius: 1px 1px 2px 2px; background: linear-gradient(180deg, #3a322c 0%, #1a1511 45%, #070504 100%); box-shadow: 0 -1px 0 rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.12)"></div>
+</div>
+</sc-if>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{isDot}}" hint-placeholder-val="{{ false }}">
+<span style="padding: 2px 6px; font-family: 'Doto', monospace; font-weight: 900; font-size: {{fv.df}}; line-height: 1.1; letter-spacing: 1px; color: {{tx.c}}; text-shadow: 0 0 5px {{tx.g}}; background-image: radial-gradient(circle, {{fx.ghost}} 0.8px, transparent 1.15px); background-size: 3.4px 3.4px">648.000</span>
+</sc-if>
+<sc-if value="{{isSeg}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; gap: 1px; filter: drop-shadow(0 0 3px {{tx.g}})">
+<sc-for list="{{seg7}}" as="g" hint-placeholder-count="6">
+<svg width="{{fv.sw}}" height="{{fv.sh}}" viewBox="0 0 24 38"><g transform="translate(4 1) skewX(-7)">
+<polygon points="5.5,1 15.5,1 17.5,3 15.5,5 5.5,5 3.5,3" fill="{{g.a}}"></polygon>
+<polygon points="18,4 20,6 20,15.5 18,17.5 16,15.5 16,6" fill="{{g.b}}"></polygon>
+<polygon points="18,18.5 20,20.5 20,30 18,32 16,30 16,20.5" fill="{{g.c}}"></polygon>
+<polygon points="5.5,31 15.5,31 17.5,33 15.5,35 5.5,35 3.5,33" fill="{{g.d}}"></polygon>
+<polygon points="3,18.5 5,20.5 5,30 3,32 1,30 1,20.5" fill="{{g.e}}"></polygon>
+<polygon points="3,4 5,6 5,15.5 3,17.5 1,15.5 1,6" fill="{{g.f}}"></polygon>
+<polygon points="5.5,16 15.5,16 17.5,18 15.5,20 5.5,20 3.5,18" fill="{{g.g}}"></polygon>
+<circle cx="21" cy="34" r="1.7" fill="{{g.dp}}"></circle>
+</g></svg>
+</sc-for>
+</div>
+</sc-if>
+<span style="font-size: 11px; color: rgba(255,255,255,0.55); align-self: flex-end; padding-bottom: 7px">{{unitLabel}}</span>
+</div>
+<div data-a="mode" style="width: 70px; border-left: 1px solid rgba(255,255,255,0.10); display: flex; flex-direction: column; align-items: center; justify-content: center">
+<span style="font-size: 15px; font-weight: 700; letter-spacing: 2px; color: {{md.c}}; font-family: {{md.f}}; text-shadow: {{md.g}}">AM</span>
+<span style="font-size: 11px; color: {{md.s}}; font-family: {{md.f}}; text-shadow: {{md.g}}">{{sText}}</span>
+</div>
+</div>
+<sc-if value="{{isLeds}}" hint-placeholder-val="{{ true }}">
+<div data-a="leds" style="padding: 6px 7px 3px; border-radius: 6px; background: linear-gradient(180deg,#030303,#0b0b0b); box-shadow: inset 0 1px 3px rgba(0,0,0,0.95), 0 1px 0 rgba(255,255,255,0.22); display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); column-gap: 4px; {{L.meterBox}}">
+<sc-for list="{{segs}}" as="s" hint-placeholder-count="10">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 2px">
+<div style="width: 100%; height: {{L.ledH}}; border-radius: 1.5px; {{s.style}}"></div>
+<span style="font-size: {{L.ledLbl}}; line-height: 1; font-weight: 600; letter-spacing: 0.3px; color: rgba(255,255,255,0.45)">{{s.label}}</span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{isEdge}}" hint-placeholder-val="{{ false }}">
+<!-- EDGEWISE ANALOGUE METER: moving-coil movement mounted edge-on, scale printed on a curved drum, lamp-lit from behind -->
+<div data-a="edge" style="padding: 3px; border-radius: 6px; background: linear-gradient(180deg,#030303,#0b0b0b); box-shadow: inset 0 1px 3px rgba(0,0,0,0.95), 0 1px 0 {{lip}}; {{L.edgeBox}}">
+<div style="position: relative; height: {{edge.h}}; border-radius: 3px; overflow: hidden; background: {{edge.lamp}}">
+<sc-if value="{{L.notLand}}" hint-placeholder-val="{{ true }}"><svg width="328" height="28" viewBox="0 0 328 28" style="position: absolute; left: 0; top: {{edge.svgTop}}"><line x1="23.6" y1="5" x2="23.6" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="23.6" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S1</text><line x1="34.0" y1="9" x2="34.0" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="44.4" y1="9" x2="44.4" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="54.8" y1="5" x2="54.8" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="54.8" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S3</text><line x1="65.2" y1="9" x2="65.2" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="75.6" y1="9" x2="75.6" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="86.0" y1="5" x2="86.0" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="86.0" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S5</text><line x1="96.4" y1="9" x2="96.4" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="106.8" y1="9" x2="106.8" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="117.2" y1="5" x2="117.2" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="117.2" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S7</text><line x1="127.6" y1="9" x2="127.6" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="138.0" y1="9" x2="138.0" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="148.4" y1="5" x2="148.4" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="148.4" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S9</text><line x1="158.8" y1="9" x2="158.8" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="169.2" y1="9" x2="169.2" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="179.6" y1="5" x2="179.6" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="179.6" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">+10</text><line x1="190.0" y1="9" x2="190.0" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="200.4" y1="9" x2="200.4" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="210.8" y1="5" x2="210.8" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="210.8" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">+20</text><line x1="221.2" y1="9" x2="221.2" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="231.6" y1="9" x2="231.6" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="242.0" y1="5" x2="242.0" y2="14" stroke="#b8160c" stroke-width="1.2"></line><text x="242.0" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#b8160c" font-family="Barlow Semi Condensed, sans-serif">+30</text><line x1="252.4" y1="9" x2="252.4" y2="14" stroke="#b8160c" stroke-width="0.8"></line><line x1="262.8" y1="9" x2="262.8" y2="14" stroke="#b8160c" stroke-width="0.8"></line><line x1="273.2" y1="5" x2="273.2" y2="14" stroke="#b8160c" stroke-width="1.2"></line><text x="273.2" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#b8160c" font-family="Barlow Semi Condensed, sans-serif">+40</text><line x1="283.6" y1="9" x2="283.6" y2="14" stroke="#b8160c" stroke-width="0.8"></line><line x1="294.0" y1="9" x2="294.0" y2="14" stroke="#b8160c" stroke-width="0.8"></line><line x1="304.4" y1="5" x2="304.4" y2="14" stroke="#b8160c" stroke-width="1.2"></line><text x="304.4" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#b8160c" font-family="Barlow Semi Condensed, sans-serif">+60</text><line x1="8" y1="14.3" x2="226.4" y2="14.3" stroke="#16120d" stroke-width="1"></line><rect x="226.4" y="13.4" width="93.6" height="2.8" fill="#c21a0e"></rect><text x="318" y="8" text-anchor="end" font-size="5.5" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif" letter-spacing="0.6">SIGNAL</text></svg></sc-if><sc-if value="{{L.land}}" hint-placeholder-val="{{ false }}"><svg width="346" height="28" viewBox="0 0 346 28" style="position: absolute; left: 0; top: {{edge.svgTop}}"><line x1="24.5" y1="5" x2="24.5" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="24.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S1</text><line x1="35.5" y1="9" x2="35.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="46.5" y1="9" x2="46.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="57.5" y1="5" x2="57.5" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="57.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S3</text><line x1="68.5" y1="9" x2="68.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="79.5" y1="9" x2="79.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="90.5" y1="5" x2="90.5" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="90.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S5</text><line x1="101.5" y1="9" x2="101.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="112.5" y1="9" x2="112.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="123.5" y1="5" x2="123.5" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="123.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S7</text><line x1="134.5" y1="9" x2="134.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="145.5" y1="9" x2="145.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="156.5" y1="5" x2="156.5" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="156.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">S9</text><line x1="167.5" y1="9" x2="167.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="178.5" y1="9" x2="178.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="189.5" y1="5" x2="189.5" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="189.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">+10</text><line x1="200.5" y1="9" x2="200.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="211.5" y1="9" x2="211.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="222.5" y1="5" x2="222.5" y2="14" stroke="#16120d" stroke-width="1.2"></line><text x="222.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif">+20</text><line x1="233.5" y1="9" x2="233.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="244.5" y1="9" x2="244.5" y2="14" stroke="#16120d" stroke-width="0.8"></line><line x1="255.5" y1="5" x2="255.5" y2="14" stroke="#b8160c" stroke-width="1.2"></line><text x="255.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#b8160c" font-family="Barlow Semi Condensed, sans-serif">+30</text><line x1="266.5" y1="9" x2="266.5" y2="14" stroke="#b8160c" stroke-width="0.8"></line><line x1="277.5" y1="9" x2="277.5" y2="14" stroke="#b8160c" stroke-width="0.8"></line><line x1="288.5" y1="5" x2="288.5" y2="14" stroke="#b8160c" stroke-width="1.2"></line><text x="288.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#b8160c" font-family="Barlow Semi Condensed, sans-serif">+40</text><line x1="299.5" y1="9" x2="299.5" y2="14" stroke="#b8160c" stroke-width="0.8"></line><line x1="310.5" y1="9" x2="310.5" y2="14" stroke="#b8160c" stroke-width="0.8"></line><line x1="321.5" y1="5" x2="321.5" y2="14" stroke="#b8160c" stroke-width="1.2"></line><text x="321.5" y="23.5" text-anchor="middle" font-size="7" font-weight="700" fill="#b8160c" font-family="Barlow Semi Condensed, sans-serif">+60</text><line x1="8" y1="14.3" x2="239.0" y2="14.3" stroke="#16120d" stroke-width="1"></line><rect x="239.0" y="13.4" width="99.0" height="2.8" fill="#c21a0e"></rect><text x="336" y="8" text-anchor="end" font-size="5.5" font-weight="700" fill="#16120d" font-family="Barlow Semi Condensed, sans-serif" letter-spacing="0.6">SIGNAL</text></svg></sc-if>
+<!-- red squelch pointer: a second, set-point needle parked at the threshold -->
+<div style="position: absolute; top: 0; bottom: 3px; left: {{edge.sqlShadowX}}; width: 2px; background: rgba(0,0,0,0.22); filter: blur(1.2px)"></div>
+<div style="position: absolute; top: 0; bottom: 3px; left: {{edge.sqlX}}; width: 1.4px; background: #d0140a"></div>
+<svg width="9" height="6" viewBox="0 0 9 6" style="position: absolute; top: 0; left: {{edge.sqlHeadX}}"><polygon points="0,0 9,0 4.5,6" fill="#d0140a"></polygon></svg>
+<!-- peak-decay needle: thin ghost pointer held at the recent peak, then falling back -->
+<div style="position: absolute; top: 3px; bottom: 0; left: {{edge.peakX}}; width: 1.6px; background: rgba(38,26,14,0.62); clip-path: polygon(50% 0, 100% 6%, 100% 100%, 0 100%, 0 6%)"></div>
+
+<!-- needle: floats above the scale, so it casts a soft shadow onto it -->
+<div style="position: absolute; top: 2px; bottom: 2px; left: {{edge.shadowX}}; width: 3px; background: rgba(0,0,0,0.30); filter: blur(1.4px)"></div>
+<div style="position: absolute; top: 1px; bottom: 5px; left: {{edge.needleX}}; width: 2.6px; background: linear-gradient(180deg,#2a1d12,#0d0906); clip-path: polygon(50% 0, 100% 5%, 100% 100%, 0 100%, 0 5%)"></div>
+<!-- signal needle's arrowhead at the bottom, mirroring the red squelch arrow at the top -->
+<svg width="11" height="7" viewBox="0 0 11 7" style="position: absolute; bottom: 0; left: {{edge.headX}}"><polygon points="0,7 11,7 5.5,0" fill="#120c07"></polygon></svg>
+<!-- drum curvature: scale rolls away top and bottom; glass streak; dim when squelch mutes -->
+<div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.10) 22%, rgba(0,0,0,0) 45%, rgba(0,0,0,0) 62%, rgba(0,0,0,0.18) 80%, rgba(0,0,0,0.70) 100%)"></div>
+<div style="position: absolute; left: 0; right: 0; top: 3px; height: 1px; background: rgba(255,255,255,0.28)"></div>
+<div style="position: absolute; left: 0; top: 0; bottom: 0; width: 16px; background: linear-gradient(90deg, rgba(0,0,0,0.45), rgba(0,0,0,0))"></div>
+<div style="position: absolute; right: 0; top: 0; bottom: 0; width: 16px; background: linear-gradient(270deg, rgba(0,0,0,0.45), rgba(0,0,0,0))"></div>
+<div style="position: absolute; inset: 0; background: rgba(0,0,0,{{edge.dim}})"></div>
+</div>
+</div>
+</sc-if>
+</div>
+</sc-if>
+</div>
+
+<!-- KEYS: mechanical caps that travel on press -->
+<div style="{{L.keysGrid}}">
+<div style="position: relative; grid-area: {{L.k1}}; height: {{keySlotH}}; border-radius: {{keyRadius}}; {{t.slot}}">
+<button data-a="key" aria-label="Tuning step" class="{{t.capClass}}" onPointerDown="{{kStep.down}}" onPointerUp="{{kStep.up}}" onPointerLeave="{{kStep.cancel}}" style="position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; transition: top 55ms ease-out, box-shadow 55ms ease-out, filter 55ms ease-out; {{kStep.cap}}">
+<span style="display: flex; align-items: center; justify-content: center; {{kStep.legend}}"><span style="font-size: 22px; font-weight: {{stepWeight}}; font-family: {{stepFont}}">{{stepLabel}}</span></span>
+</button>
+</div>
+<div style="position: relative; grid-area: {{L.k3}}; height: {{keySlotH}}; border-radius: {{keyRadius}}; {{t.slot}}">
+<button aria-label="Audio" class="{{t.capClass}}" onPointerDown="{{kAudio.down}}" onPointerUp="{{kAudio.up}}" onPointerLeave="{{kAudio.cancel}}" style="position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; transition: top 55ms ease-out, box-shadow 55ms ease-out, filter 55ms ease-out; {{kAudio.cap}}">
+<span style="display: flex; align-items: center; justify-content: center; {{kAudio.legend}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"></path><path d="M16.5 9a4 4 0 0 1 0 6"></path><path d="M19 6.5a8 8 0 0 1 0 11"></path></svg></span>
+</button>
+</div>
+<div style="position: relative; grid-area: {{L.k2}}; height: {{keySlotH}}; border-radius: {{keyRadius}}; {{t.slot}}">
+<button aria-label="Settings" class="{{t.capClass}}" onPointerDown="{{kSet.down}}" onPointerUp="{{kSet.up}}" onPointerLeave="{{kSet.cancel}}" style="position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; transition: top 55ms ease-out, box-shadow 55ms ease-out, filter 55ms ease-out; {{kSet.cap}}">
+<span style="display: flex; align-items: center; justify-content: center; {{kSet.legend}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></span>
+</button>
+</div>
+<div style="position: relative; grid-area: {{L.k4}}; height: {{keySlotH}}; border-radius: {{keyRadius}}; {{t.slot}}">
+<button aria-label="Chat" class="{{t.capClass}}" onPointerDown="{{kChat.down}}" onPointerUp="{{kChat.up}}" onPointerLeave="{{kChat.cancel}}" style="position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 8px; padding: 0; transition: top 55ms ease-out, box-shadow 55ms ease-out, filter 55ms ease-out; {{kChat.cap}}">
+<span style="display: flex; align-items: center; justify-content: center; {{kChat.legend}}"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></span>
+</button>
+</div>
+</div>
+
+<!-- DRUM WELLS: port of DrumWheel.tsx layering -->
+<div style="{{L.drumsBox}}">
+<div data-a="drum" class="{{w.faceClass}}" style="position: relative; grid-area: {{L.dl}}; width: {{w.wd}}; height: {{w.h}}; border-radius: 6px; overflow: hidden; {{w.face}}">
+<!-- drum body: convex wheel poking out of the panel -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt}}; bottom: 1px; background: {{w.drum}}"></div>
+<!-- engraved notches, faded with the curvature -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt2}}; bottom: 1px; background: repeating-linear-gradient(90deg, transparent 0px, transparent 31px, rgba(0,0,0,0.5) 31px, rgba(0,0,0,0.5) 32px, {{w.tickMaj}} 32px, {{w.tickMaj}} 33.5px, transparent 33.5px, transparent 40px), repeating-linear-gradient(90deg, transparent 0px, transparent 6.5px, rgba(0,0,0,0.5) 6.5px, rgba(0,0,0,0.5) 7.5px, {{w.tickMin}} 7.5px, {{w.tickMin}} 8.3px, transparent 8.3px, transparent 8px); -webkit-mask-image: linear-gradient(90deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.42) 8%, rgba(0,0,0,0.65) 20%, rgba(0,0,0,0.84) 35%, #000 50%, rgba(0,0,0,0.84) 65%, rgba(0,0,0,0.65) 80%, rgba(0,0,0,0.42) 92%, rgba(0,0,0,0.15) 100%); mask-image: linear-gradient(90deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.42) 8%, rgba(0,0,0,0.65) 20%, rgba(0,0,0,0.84) 35%, #000 50%, rgba(0,0,0,0.84) 65%, rgba(0,0,0,0.65) 80%, rgba(0,0,0,0.42) 92%, rgba(0,0,0,0.15) 100%)"></div>
+<!-- knurl ridges -->
+<div style="position: absolute; left: 2px; right: 2px; top: {{w.dt}}; bottom: 1px; background: repeating-linear-gradient(180deg, transparent 0px, transparent 8.6px, rgba(0,0,0,0.45) 8.6px, rgba(0,0,0,0.45) 9.8px, {{w.ridgeHi}} 9.8px, {{w.ridgeHi}} 10.6px, transparent 10.6px, transparent 9.4px)"></div>
+<!-- rim + specular sheen -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt}}; height: 1.5px; background: {{w.rim}}"></div>
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt7}}; height: 12px; background: linear-gradient(180deg, rgba(255,255,255,0), {{w.sheen}} 45%, rgba(255,255,255,0))"></div>
+<!-- slot shadows: panel edge occludes the wheel at both seams -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt}}; height: 7px; background: linear-gradient(180deg, rgba(0,0,0,0.70), rgba(0,0,0,0))"></div>
+<div style="position: absolute; left: 1px; right: 1px; bottom: 1px; height: 8px; background: linear-gradient(0deg, rgba(0,0,0,0.66), rgba(0,0,0,0))"></div>
+<!-- cylindrical side falloff -->
+<div style="position: absolute; left: 1px; top: {{w.dt}}; bottom: 1px; width: 20px; background: linear-gradient(90deg, rgba(0,0,0,0.62), rgba(0,0,0,0))"></div>
+<div style="position: absolute; right: 1px; top: {{w.dt}}; bottom: 1px; width: 20px; background: linear-gradient(270deg, rgba(0,0,0,0.62), rgba(0,0,0,0))"></div>
+<!-- backlight seeping through the panel/wheel gaps -->
+<div style="position: absolute; left: 3px; right: 3px; top: {{w.dt1}}; height: 2.5px; background: {{w.seamTop}}; filter: blur(2.5px)"></div>
+<div style="position: absolute; left: 3px; right: 3px; bottom: 0px; height: 2.5px; background: {{w.seamBot}}; filter: blur(2.5px)"></div>
+<!-- LED backlight glowing through from behind the drum (no index needle) -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt}}; bottom: 1px; background: radial-gradient(60% 75% at 50% 18%, {{w.poolA}}, {{w.poolB}} 55%, rgba(0,0,0,0) 100%)"></div>
+<!-- trapezoid window, lit from within, glowing edges (no top edge) -->
+<svg width="100%" height="{{w.th}}" viewBox="0 0 160 29" preserveAspectRatio="none" style="position: absolute; left: 0; top: 0; overflow: visible">
+<defs><radialGradient id="tg" cx="50%" cy="30%" r="45%"><stop offset="0" stop-color="{{w.trapA}}"></stop><stop offset="0.55" stop-color="{{w.trapB}}"></stop><stop offset="1" stop-color="rgba(0,0,0,0)"></stop></radialGradient></defs>
+<path d="M18 0 L52 28 L108 28 L142 0 Z" fill="rgba(3,4,3,0.96)"></path>
+<path d="M18 0 L52 28 L108 28 L142 0 Z" fill="url(#tg)"></path>
+<path d="M18 0 L52 28 L108 28 L142 0" fill="none" vector-effect="non-scaling-stroke" stroke="{{w.edgeGlow}}" stroke-width="3" style="filter: blur(2px)"></path>
+<path d="M18 0 L52 28 L108 28 L142 0" fill="none" vector-effect="non-scaling-stroke" stroke="{{w.edge}}" stroke-width="0.9"></path>
+</svg>
+<!-- icon + minus/plus in the dead corners -->
+<div style="position: absolute; left: 0; right: 0; top: 0; height: {{w.ir}}; display: flex; align-items: center; justify-content: center; color: {{w.icon}}; filter: drop-shadow(0 0 3px {{w.iconGlow}})"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Volume"><rect x="3" y="8" width="18" height="12" rx="2"></rect><path d="M7 8l10-5"></path><circle cx="8" cy="14" r="2"></circle><path d="M14 12h4M14 16h4"></path></svg></div>
+<span style="position: absolute; left: 7px; top: 2px; font-size: 15px; line-height: 15px; color: {{w.pm}}">−</span>
+<!-- TUNER KEYS mode (TunerKeys.tsx): the well holds two dome keys instead of a drum -->
+<sc-if value="{{tunerKeys}}" hint-placeholder-val="{{ false }}">
+<div class="{{w.faceClass}}" style="position: absolute; inset: 0; z-index: 2; padding: {{tk.pad}}; box-sizing: border-box; display: flex; align-items: stretch; justify-content: space-between; gap: 6px; {{tk.bg}}">
+<div style="position: relative; width: {{tk.w}}; height: 100%; border-radius: 8px; {{t.slot}}"><div class="{{t.capClass}}" style="position: absolute; left: 2px; right: 2px; top: 1.5px; bottom: 3px; border-radius: 7px; display: flex; align-items: center; justify-content: center; {{tk.cap}}"><span style="display: flex; {{tk.legend}}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"></path></svg></span></div></div>
+<span style="display: flex; align-items: center; color: {{w.icon}}; filter: drop-shadow(0 0 3px {{w.iconGlow}})"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="12" rx="2"></rect><path d="M7 8l10-5"></path><circle cx="8" cy="14" r="2"></circle><path d="M14 12h4M14 16h4"></path></svg></span>
+<div style="position: relative; width: {{tk.w}}; height: 100%; border-radius: 8px; {{t.slot}}"><div class="{{t.capClass}}" style="position: absolute; left: 2px; right: 2px; top: 1.5px; bottom: 3px; border-radius: 7px; display: flex; align-items: center; justify-content: center; {{tk.cap}}"><span style="display: flex; {{tk.legend}}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"></path></svg></span></div></div>
+</div>
+</sc-if>
+<span style="position: absolute; right: 7px; top: 2px; font-size: 15px; line-height: 15px; color: {{w.pm}}">+</span>
+</div>
+<div class="{{w.faceClass}}" style="position: relative; grid-area: {{L.dr}}; width: {{w.wd}}; height: {{w.h}}; border-radius: 6px; overflow: hidden; {{w.face}}">
+<!-- drum body: convex wheel poking out of the panel -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt}}; bottom: 1px; background: {{w.drum}}"></div>
+<!-- engraved notches, faded with the curvature -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt2}}; bottom: 1px; background: repeating-linear-gradient(90deg, transparent 0px, transparent 31px, rgba(0,0,0,0.5) 31px, rgba(0,0,0,0.5) 32px, {{w.tickMaj}} 32px, {{w.tickMaj}} 33.5px, transparent 33.5px, transparent 40px), repeating-linear-gradient(90deg, transparent 0px, transparent 6.5px, rgba(0,0,0,0.5) 6.5px, rgba(0,0,0,0.5) 7.5px, {{w.tickMin}} 7.5px, {{w.tickMin}} 8.3px, transparent 8.3px, transparent 8px); -webkit-mask-image: linear-gradient(90deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.42) 8%, rgba(0,0,0,0.65) 20%, rgba(0,0,0,0.84) 35%, #000 50%, rgba(0,0,0,0.84) 65%, rgba(0,0,0,0.65) 80%, rgba(0,0,0,0.42) 92%, rgba(0,0,0,0.15) 100%); mask-image: linear-gradient(90deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.42) 8%, rgba(0,0,0,0.65) 20%, rgba(0,0,0,0.84) 35%, #000 50%, rgba(0,0,0,0.84) 65%, rgba(0,0,0,0.65) 80%, rgba(0,0,0,0.42) 92%, rgba(0,0,0,0.15) 100%)"></div>
+<!-- knurl ridges -->
+<div style="position: absolute; left: 2px; right: 2px; top: {{w.dt}}; bottom: 1px; background: repeating-linear-gradient(180deg, transparent 0px, transparent 8.6px, rgba(0,0,0,0.45) 8.6px, rgba(0,0,0,0.45) 9.8px, {{w.ridgeHi}} 9.8px, {{w.ridgeHi}} 10.6px, transparent 10.6px, transparent 9.4px)"></div>
+<!-- rim + specular sheen -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt}}; height: 1.5px; background: {{w.rim}}"></div>
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt7}}; height: 12px; background: linear-gradient(180deg, rgba(255,255,255,0), {{w.sheen}} 45%, rgba(255,255,255,0))"></div>
+<!-- slot shadows: panel edge occludes the wheel at both seams -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt}}; height: 7px; background: linear-gradient(180deg, rgba(0,0,0,0.70), rgba(0,0,0,0))"></div>
+<div style="position: absolute; left: 1px; right: 1px; bottom: 1px; height: 8px; background: linear-gradient(0deg, rgba(0,0,0,0.66), rgba(0,0,0,0))"></div>
+<!-- cylindrical side falloff -->
+<div style="position: absolute; left: 1px; top: {{w.dt}}; bottom: 1px; width: 20px; background: linear-gradient(90deg, rgba(0,0,0,0.62), rgba(0,0,0,0))"></div>
+<div style="position: absolute; right: 1px; top: {{w.dt}}; bottom: 1px; width: 20px; background: linear-gradient(270deg, rgba(0,0,0,0.62), rgba(0,0,0,0))"></div>
+<!-- backlight seeping through the panel/wheel gaps -->
+<div style="position: absolute; left: 3px; right: 3px; top: {{w.dt1}}; height: 2.5px; background: {{w.seamTop}}; filter: blur(2.5px)"></div>
+<div style="position: absolute; left: 3px; right: 3px; bottom: 0px; height: 2.5px; background: {{w.seamBot}}; filter: blur(2.5px)"></div>
+<!-- LED backlight glowing through from behind the drum (no index needle) -->
+<div style="position: absolute; left: 1px; right: 1px; top: {{w.dt}}; bottom: 1px; background: radial-gradient(60% 75% at 50% 18%, {{w.poolA}}, {{w.poolB}} 55%, rgba(0,0,0,0) 100%)"></div>
+<!-- trapezoid window, lit from within, glowing edges (no top edge) -->
+<svg width="100%" height="{{w.th}}" viewBox="0 0 160 29" preserveAspectRatio="none" style="position: absolute; left: 0; top: 0; overflow: visible">
+<defs><radialGradient id="tg" cx="50%" cy="30%" r="45%"><stop offset="0" stop-color="{{w.trapA}}"></stop><stop offset="0.55" stop-color="{{w.trapB}}"></stop><stop offset="1" stop-color="rgba(0,0,0,0)"></stop></radialGradient></defs>
+<path d="M18 0 L52 28 L108 28 L142 0 Z" fill="rgba(3,4,3,0.96)"></path>
+<path d="M18 0 L52 28 L108 28 L142 0 Z" fill="url(#tg)"></path>
+<path d="M18 0 L52 28 L108 28 L142 0" fill="none" vector-effect="non-scaling-stroke" stroke="{{w.edgeGlow}}" stroke-width="3" style="filter: blur(2px)"></path>
+<path d="M18 0 L52 28 L108 28 L142 0" fill="none" vector-effect="non-scaling-stroke" stroke="{{w.edge}}" stroke-width="0.9"></path>
+</svg>
+<!-- icon + minus/plus in the dead corners -->
+<div style="position: absolute; left: 0; right: 0; top: 0; height: {{w.ir}}; display: flex; align-items: center; justify-content: center; color: {{w.icon}}; filter: drop-shadow(0 0 3px {{w.iconGlow}})"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Zoom"><circle cx="11" cy="11" r="7"></circle><path d="M8 11h6M21 21l-5-5"></path></svg></div>
+<span style="position: absolute; left: 7px; top: 2px; font-size: 15px; line-height: 15px; color: {{w.pm}}">−</span>
+<!-- TUNER KEYS mode (TunerKeys.tsx): the well holds two dome keys instead of a drum -->
+<sc-if value="{{tunerKeys}}" hint-placeholder-val="{{ false }}">
+<div class="{{w.faceClass}}" style="position: absolute; inset: 0; z-index: 2; padding: {{tk.pad}}; box-sizing: border-box; display: flex; align-items: stretch; justify-content: space-between; gap: 6px; {{tk.bg}}">
+<div style="position: relative; width: {{tk.w}}; height: 100%; border-radius: 8px; {{t.slot}}"><div class="{{t.capClass}}" style="position: absolute; left: 2px; right: 2px; top: 1.5px; bottom: 3px; border-radius: 7px; display: flex; align-items: center; justify-content: center; {{tk.cap}}"><span style="display: flex; {{tk.legend}}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"></path></svg></span></div></div>
+<span style="display: flex; align-items: center; color: {{w.icon}}; filter: drop-shadow(0 0 3px {{w.iconGlow}})"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="M8 11h6M21 21l-5-5"></path></svg></span>
+<div style="position: relative; width: {{tk.w}}; height: 100%; border-radius: 8px; {{t.slot}}"><div class="{{t.capClass}}" style="position: absolute; left: 2px; right: 2px; top: 1.5px; bottom: 3px; border-radius: 7px; display: flex; align-items: center; justify-content: center; {{tk.cap}}"><span style="display: flex; {{tk.legend}}"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"></path></svg></span></div></div>
+</div>
+</sc-if>
+<span style="position: absolute; right: 7px; top: 2px; font-size: 15px; line-height: 15px; color: {{w.pm}}">+</span>
+</div>
+</div>
+
+<!-- TODAY'S FOOTER (default chassis) -->
+<sc-if value="{{isDefault}}" hint-placeholder-val="{{ true }}">
+<div style="grid-area: st; display: flex; flex-direction: {{L.footDir}}; justify-content: space-between; align-items: {{L.footAlign}}; gap: 8px; padding: 0 6px; font-family: system-ui, sans-serif; font-size: 11px; color: rgba(255,255,255,0.42)">
+<div style="display: flex; align-items: center; gap: 6px"><span>08:37 UTC</span><span>·</span><span style="display: flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Server link"><circle cx="5" cy="5" r="2.5"></circle><circle cx="19" cy="5" r="2.5"></circle><circle cx="12" cy="19" r="2.5"></circle><path d="M7.5 5h9M6.5 7l4.5 10M17.5 7L13 17"></path></svg></span><span>09:37 BST</span></div>
+<sc-if value="{{L.sharedInStatus}}" hint-placeholder-val="{{ false }}"><span style="font-size: 10px; letter-spacing: 2px; font-weight: 600; color: {{tx.c}}">SHARED TUNER · FREE TO TUNE</span></sc-if>
+<div style="display: flex; align-items: center; justify-content: center; gap: 6px; color: rgba(255,255,255,0.55)">
+<svg width="11" height="15" viewBox="0 0 11 15" fill="none" stroke="currentColor" stroke-width="1.3" aria-label="Phone"><rect x="1" y="1" width="9" height="13" rx="2"></rect><path d="M4 12h3"></path></svg>
+<span style="font-size: 10px">⇄</span>
+<svg width="14" height="12" viewBox="0 0 14 12" aria-label="Link quality"><rect x="0" y="7" width="3.2" height="5" rx="0.8" fill="#ffb833"></rect><rect x="5" y="4" width="3.2" height="8" rx="0.8" fill="#ffb833"></rect><rect x="10" y="0" width="3.2" height="12" rx="0.8" fill="rgba(255,255,255,0.28)"></rect></svg>
+<span style="font-size: 10px">⇄</span>
+<span style="display: flex"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Server link"><circle cx="5" cy="5" r="2.5"></circle><circle cx="19" cy="5" r="2.5"></circle><circle cx="12" cy="19" r="2.5"></circle><path d="M7.5 5h9M6.5 7l4.5 10M17.5 7L13 17"></path></svg></span>
+<span style="margin-left: 4px; white-space: nowrap; font-size: 10.5px">6k/s · 5fps · GAIN ↓ 25.4 dB · IF 2800k auto</span>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{notDefault}}" hint-placeholder-val="{{ false }}">
+<!-- STATUS DISPLAY: its own recessed window, like a hi-fi sub-display. Portrait: two lines, everything (as today).
+     Landscape: one line; items drop by priority on small screens, connection meter last of all. -->
+<div data-a="status" style="grid-area: st; padding: 4px 10px; display: flex; flex-direction: {{L.statDir}}; gap: 3px; justify-content: space-between; align-items: {{L.statAlign}}; border-radius: 5px; background-color: #050505; background-image: radial-gradient(circle, {{fx.ghost}} 0.7px, transparent 1px); background-size: 3px 3px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.95), inset 0 0 0 1px rgba(0,0,0,0.8), 0 1px 0 {{lip}}; font-family: 'Doto', monospace; font-weight: 900; font-size: 12px; letter-spacing: 0.4px; color: {{tx.c}}; text-shadow: 0 0 4px {{tx.g}}">
+<span>08:37 UTC 09:37 BST</span>
+<sc-if value="{{L.sharedInStatus}}" hint-placeholder-val="{{ false }}"><span>SHARED TUNER · FREE TO TUNE</span></sc-if>
+<span style="display: flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap"><span style="display: flex; gap: 4px; filter: drop-shadow(0 0 3px {{tx.g}})"><svg width="14" height="12" viewBox="0 0 14 12" aria-label="Connection"><rect x="0" y="7" width="3.2" height="5" rx="0.6" fill="currentColor"></rect><rect x="5" y="4" width="3.2" height="8" rx="0.6" fill="currentColor"></rect><rect x="10" y="0" width="3.2" height="12" rx="0.6" fill="currentColor" opacity="0.28"></rect></svg><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Server link"><circle cx="5" cy="5" r="2.5"></circle><circle cx="19" cy="5" r="2.5"></circle><circle cx="12" cy="19" r="2.5"></circle><path d="M7.5 5h9M6.5 7l4.5 10M17.5 7L13 17"></path></svg></span><span>6k/s 5fps · GAIN<svg width="7" height="8" viewBox="0 0 7 8" style="display: inline-block; vertical-align: middle; margin: 0 1px 0 3px"><path d="M3.5 0v6M1 3.5l2.5 3 2.5-3" fill="none" stroke="currentColor" stroke-width="1.4"></path></svg>25.4dB · IF 2800k</span></span>
+</div>
+</sc-if>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"chassis":{"editor":"enum","options":["default","silver","black"],"default":"default"},"led":{"editor":"enum","options":["green","red","amber","blue","white","neon"],"default":"green"},"text":{"editor":"enum","options":["teal","green","red","amber","blue","white"],"default":"green"},"meter":{"editor":"enum","options":["bar","vu","edge"],"default":"vu"},"display":{"editor":"enum","options":["standard","hyper","nixie","dot","seg"],"default":"standard"},"shared":{"editor":"boolean","default":false},"sqlClosed":{"editor":"boolean","default":false},"tuner":{"editor":"enum","options":["drums","keys"],"default":"drums"},"tubes":{"editor":"enum","options":["socket","panel"],"default":"socket"},"rds":{"editor":"boolean","default":true},"mhzTubes":{"editor":"int","default":2},"unit":{"editor":"enum","options":["khz","mhz","hz"],"default":"khz"},"flag":{"editor":"text","default":"🇬🇧"},"orient":{"editor":"enum","options":["portrait","landscape"],"default":"portrait"},"level":{"editor":"int","min":0,"max":10,"default":6},"squelch":{"editor":"int","min":0,"max":10,"default":3},"$preview":{"width":390,"height":462}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { pressed: null, step: 0 }; }
+  renderVals() {
+    const LEDS = {
+      green: { rgb: '61,255,114', c: '#3dff72', g: 'rgba(61,255,114,0.70)', d: '#c9ffd6', dim: 'rgba(61,255,114,0.45)' },
+      red:   { rgb: '255,58,46', c: '#ff3a2e', g: 'rgba(255,58,46,0.80)',  d: '#ffcbc6', dim: 'rgba(255,58,46,0.50)' },
+      amber: { rgb: '255,174,26', c: '#ffae1a', g: 'rgba(255,174,26,0.80)', d: '#ffe4b3', dim: 'rgba(255,174,26,0.50)' },
+      blue:  { rgb: '61,155,255', c: '#3d9bff', g: 'rgba(61,155,255,0.80)', d: '#d0e7ff', dim: 'rgba(61,155,255,0.50)' },
+      teal:  { rgb: '70,255,215', c: '#46ffd7', g: 'rgba(70,255,215,0.70)', d: '#c8fff2', dim: 'rgba(70,255,215,0.45)' },
+      neon:  { rgb: '255,106,20', c: '#ff7a26', g: 'rgba(255,100,16,0.80)', d: '#ffc48a', dim: 'rgba(255,106,20,0.50)' },
+      white: { rgb: '215,228,255', c: '#eef3ff', g: 'rgba(215,228,255,0.70)', d: '#ffffff', dim: 'rgba(215,228,255,0.45)' }
+    };
+    const chassis = this.props.chassis ?? 'default';
+    // Two colours: `led` = controls (keys, drums, glows); `tx` = text (displays, VTS, status). Nixie One text is locked to neon regardless.
+    const led = LEDS[this.props.led ?? 'green'] || LEDS.green;
+    // Text colours are limited to what the real display technology came in. Nixie One / tubes: locked neon (handled below).
+    const TEXT_ALLOWED = {
+      hyper: ['green', 'red', 'amber', 'blue', 'white', 'teal'],
+      dot:   ['teal', 'green', 'blue', 'amber', 'red'],   // VFD: native teal phosphor or filtered. Never white.
+      seg:   ['teal', 'green', 'blue', 'amber', 'red'],   // VCR VFD / LED segments. Never white.
+      standard: ['neon'], nixie: ['neon']   // Nixie rule: banner + status display glow neon too
+    };
+    const allowedTx = TEXT_ALLOWED[this.props.display ?? 'standard'] || TEXT_ALLOWED.hyper;
+    const wantTx = this.props.text ?? this.props.led ?? 'green';
+    const tx = LEDS[allowedTx.includes(wantTx) ? wantTx : allowedTx[0]] || led;
+    const meter = this.props.meter ?? 'vu';
+    const shared = this.props.shared === true || this.props.shared === 'true';
+    const level = Math.max(0, Math.min(10, Number(this.props.level ?? 6)));
+    const sq = Number(this.props.squelch ?? 3);
+    const sqlClosed = this.props.sqlClosed === true || this.props.sqlClosed === 'true';
+
+    const hairLight = 'repeating-linear-gradient(180deg, rgba(255,255,255,0.22) 0px, rgba(255,255,255,0.22) 1px, rgba(0,0,0,0.07) 1px, rgba(0,0,0,0.07) 2px, transparent 2px, transparent 3px), repeating-linear-gradient(180deg, rgba(0,0,0,0.06) 0px, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 7px)';
+    const hairDark = 'repeating-linear-gradient(180deg, rgba(255,255,255,0.045) 0px, rgba(255,255,255,0.045) 1px, rgba(0,0,0,0.25) 1px, rgba(0,0,0,0.25) 2px, transparent 2px, transparent 3px), repeating-linear-gradient(180deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 9px)';
+    const knurl = (a, b) => 'background: linear-gradient(180deg, rgba(0,0,0,0.62) 0%, rgba(255,255,255,0.10) 42%, rgba(255,255,255,0.16) 50%, rgba(0,0,0,0.65) 100%), repeating-linear-gradient(90deg, ' + a + ' 0px, ' + a + ' 2px, ' + b + ' 2px, ' + b + ' 6px); box-shadow: inset 0 2px 4px rgba(0,0,0,0.8), inset 0 -1px 2px rgba(0,0,0,0.6)';
+
+    const T = {
+      default: {
+        plate: 'border-radius: 22px; background: linear-gradient(180deg,#120f0b,#0a0806); border: 1.5px solid rgba(150,130,100,0.35)',
+        screws: false, screw: '', tex: '', bz: '', light: '',
+        slot: 'background: #050403; box-shadow: inset 0 2px 4px rgba(0,0,0,0.9)', capClass: '', capBg: 'background: linear-gradient(180deg,#1f1811,#120d09); border: 1.5px solid #3d3329', skirt: '#060504', hi: 0.10, legendShadow: '', keyStyle: 'flat', pressDim: 0.84, displayPanel: '',
+        bezel: 'border-radius: 9px',
+        face: 'background: #140f0a; border: 1.5px solid #3d3329; border-radius: 9px',
+        wellBezel: 'border-radius: 12px',
+        wellFace: 'background: #0b0a08; border: 1.5px solid ' + led.dim + '; border-radius: 12px; box-shadow: 0 0 8px ' + led.dim.replace(/[0-9.]+\)$/, '0.18)'),
+        drum: knurl('#2b2721', '#12100d'),
+        engrave: 'rgba(255,255,255,0.42)', engraveShadow: 'none'
+      },
+      silver: {
+        plate: 'border-radius: 16px; background: #c9c6bf; border: 1px solid #8b8983; box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), inset 0 2px 1px rgba(255,255,255,0.35), inset 0 -2px 0 rgba(0,0,0,0.20), 0 3px 10px rgba(0,0,0,0.6)',
+        tex: 'tex-silver', bz: 'bz-silver',
+        slot: 'background: #141414; box-shadow: inset 0 3px 5px rgba(0,0,0,0.95), 0 1px 0 rgba(255,255,255,0.85), 0 -1px 0 rgba(0,0,0,0.25)', capClass: 'bz-silver', capBg: 'border: 1px solid #8d8a83', skirt: '#6f6c66', hi: 0.95, legendShadow: '; text-shadow: 0 -0.5px 0 rgba(0,0,0,0.6)', keyStyle: 'flat', pressDim: 0.84, displayPanel: '',
+        light: 'background: linear-gradient(104deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.10) 18%, rgba(255,255,255,0.34) 36%, rgba(255,255,255,0.08) 52%, rgba(0,0,0,0.06) 74%, rgba(0,0,0,0.16) 100%), radial-gradient(140% 70% at 28% -10%, rgba(255,250,240,0.22), rgba(255,255,255,0) 60%), linear-gradient(180deg, rgba(0,0,0,0) 70%, rgba(0,0,0,0.10) 100%)',
+        screws: true, screw: 'background: radial-gradient(circle at 35% 30%, #ffffff, #a7abb0 60%, #6d7176); box-shadow: 0 1px 0 rgba(255,255,255,0.8), inset 0 0 1px rgba(0,0,0,0.6)',
+        bezel: 'padding: 3px; border-radius: 11px; box-shadow: 0 2px 3px rgba(0,0,0,0.35), inset 0 1px 0 #ffffff',
+        face: 'background: linear-gradient(180deg,#1b1c1f,#0b0c0d); border: none; border-radius: 8px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.85), inset 0 -1px 0 rgba(255,255,255,0.07)',
+        wellBezel: 'padding: 3px; border-radius: 14px; box-shadow: 0 2px 3px rgba(0,0,0,0.35), inset 0 1px 0 #ffffff',
+        wellFace: 'background: linear-gradient(180deg,#17181a,#0b0b0c); border-radius: 11px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.85)',
+        drum: knurl('#f1efea', '#a19e97'),
+        engrave: '#55534d', engraveShadow: '0 1px 0 rgba(255,255,255,0.75)'
+      },
+      black: {
+        plate: 'border-radius: 16px; background: #1b1c1e; border: 1px solid #3a3c40; box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), inset 0 2px 1px rgba(255,255,255,0.06), inset 0 -2px 0 rgba(0,0,0,0.6), 0 3px 10px rgba(0,0,0,0.7)',
+        tex: 'tex-black', bz: 'bz-black',
+        slot: 'background: #030303; box-shadow: inset 0 3px 5px rgba(0,0,0,0.95), 0 1px 0 rgba(255,255,255,0.14)', capClass: 'bz-black', capBg: 'border: 1px solid #050505', skirt: '#0a0a0b', hi: 0.22, legendShadow: '', keyStyle: 'flat', pressDim: 0.82,
+        displayPanel: 'margin: -14px -14px 0; padding: 14px 14px 12px; border-radius: 16px 16px 0 0; background: linear-gradient(112deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0) 38%, rgba(255,255,255,0.10) 38.5%, rgba(255,255,255,0.035) 56%, rgba(255,255,255,0) 56.5%), linear-gradient(180deg, #111214 0%, #060607 55%, #0b0b0d 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 0 #8e9196, 0 2px 0 #3b3d41, 0 3px 3px rgba(0,0,0,0.6)',
+        light: 'background: linear-gradient(104deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.03) 18%, rgba(255,255,255,0.11) 36%, rgba(255,255,255,0.02) 52%, rgba(0,0,0,0.10) 74%, rgba(0,0,0,0.25) 100%), radial-gradient(140% 70% at 28% -10%, rgba(255,255,255,0.07), rgba(255,255,255,0) 60%)',
+        screws: false, screw: 'background: radial-gradient(circle at 35% 30%, #8a8d93, #2e3034 60%, #111214); box-shadow: 0 1px 0 rgba(255,255,255,0.12), inset 0 0 1px rgba(0,0,0,0.8)',
+        bezel: 'padding: 3px; border-radius: 11px; box-shadow: 0 2px 3px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.20)',
+        face: 'background: linear-gradient(180deg,#141416,#08080a); border: none; border-radius: 8px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.9), inset 0 -1px 0 rgba(255,255,255,0.05)',
+        wellBezel: 'padding: 3px; border-radius: 14px; box-shadow: 0 2px 3px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.20)',
+        wellFace: 'background: linear-gradient(180deg,#121214,#08080a); border-radius: 11px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.9)',
+        drum: knurl('#55585e', '#141517'),
+        engrave: '#8b8e94', engraveShadow: '0 -1px 0 rgba(0,0,0,0.85)'
+      }
+    };
+    const t = T[chassis] || T.default;
+
+    const LABELS = ['S1', 'S3', 'S5', 'S7', 'S9', '+10', '+20', '+30', '+40', '+60'];
+    // Diffused 1980s rectangular LEDs: hot centre, vignetted edges, matte epoxy top, seated in the housing.
+    const COLS = [
+      { hot: '#e9ffe9', hi: '#7dff9c', base: '#22d24e', dk: '#0c7a26', glow: 'rgba(47,224,90,0.70)', offC: '#1d3a23', offE: '#0b170e' },
+      { hot: '#fff3dc', hi: '#ffc36b', base: '#ff8a12', dk: '#a34a05', glow: 'rgba(255,148,22,0.70)', offC: '#3d2811', offE: '#170f06' },
+      { hot: '#fff0ee', hi: '#ff8a80', base: '#f2231a', dk: '#8d0c07', glow: 'rgba(255,45,34,0.75)', offC: '#3e1613', offE: '#180807' }
+    ];
+    const MATTE = 'linear-gradient(180deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.07) 30%, rgba(255,255,255,0) 55%, rgba(0,0,0,0.10) 100%)';
+    const peak = Math.min(10, level + 1);
+    const segs = LABELS.map((label, i) => {
+      const col = i < 5 ? COLS[0] : i < 8 ? COLS[1] : COLS[2];
+      const lit = i < level || i === peak - 1;
+      let style = lit
+        ? 'background: ' + MATTE + ', radial-gradient(ellipse 78% 60% at 50% 54%, ' + col.hot + ' 0%, ' + col.hi + ' 24%, ' + col.base + ' 60%, ' + col.dk + ' 100%); box-shadow: 0 0 0 1px rgba(0,0,0,0.9), 0 0 7px ' + col.glow + ', 0 0 14px ' + col.glow.replace(/[0-9.]+\)$/, '0.30)') + ', inset 0 0 2.5px rgba(0,0,0,0.45), inset 0 -1px 1px rgba(0,0,0,0.35)'
+        : 'background: ' + MATTE.replace('0.20', '0.09').replace('0.07', '0.03') + ', radial-gradient(ellipse 60% 65% at 50% 50%, ' + col.offC + ' 0%, ' + col.offE + ' 100%); box-shadow: 0 0 0 1px rgba(0,0,0,0.9), inset 0 0 2px rgba(0,0,0,0.6), inset 0 1px 1px rgba(0,0,0,0.5)';
+      // Squelch ring: sits on the threshold segment. Red = squelch closed (muted), green = open (audio passing).
+      // Squelch muting: lit LEDs drop to a dim state (overlay + shrunken glow), as the bar dims today. The ring stays full strength.
+      if (lit && sqlClosed) style = 'background: linear-gradient(rgba(0,0,0,0.55), rgba(0,0,0,0.55)), ' + MATTE + ', radial-gradient(ellipse 78% 60% at 50% 54%, ' + col.hot + ' 0%, ' + col.hi + ' 24%, ' + col.base + ' 60%, ' + col.dk + ' 100%); box-shadow: 0 0 0 1px rgba(0,0,0,0.9), 0 0 4px ' + col.glow.replace(/[0-9.]+\)$/, '0.22)') + ', inset 0 0 2.5px rgba(0,0,0,0.45)';
+      if (i === sq) style += '; outline: 1.5px solid ' + (sqlClosed ? '#ff3a2e' : '#3dff72') + '; outline-offset: 2px';
+      return { label, style };
+    });
+    const sText = sqlClosed ? 'SQL' : level <= 0 ? 'S0' : level <= 5 ? LABELS[level - 1] : 'S9' + LABELS[level - 1];
+
+    const L = (a) => 'rgba(' + led.rgb + ',' + a + ')';
+    const W_FACE = {
+      default: { faceClass: '', face: 'background: linear-gradient(180deg,#101410 0%,#0a0c0a 40%,#060706 100%); border: 0.9px solid ' + L(0.7) + '; box-shadow: 0 0 6px ' + L(0.22) + ', inset 0 0 5px ' + L(0.10),
+                 drum: 'linear-gradient(180deg,#070807 0%,#191a18 28%,#232422 50%,#181917 74%,#050505 100%)', rim: 'rgba(180,185,175,0.14)', sheen: 'rgba(255,255,255,0.07)', ridgeHi: 'rgba(160,160,150,0.10)', tickMin: 'rgba(168,166,158,0.22)', tickMaj: 'rgba(168,166,158,0.55)' },
+      silver:  { faceClass: 'tex-silver', face: 'border: 0.9px solid rgba(0,0,0,0.55); box-shadow: 0 0 0 1px ' + L(0.35) + ', 0 0 8px ' + L(0.40) + ', inset 0 1px 0 rgba(255,255,255,0.8)',
+                 drum: 'linear-gradient(180deg,#4d4b46 0%,#a9a69f 26%,#e4e2dc 50%,#a3a09a 74%,#393834 100%)', rim: 'rgba(255,255,255,0.55)', sheen: 'rgba(255,255,255,0.40)', ridgeHi: 'rgba(255,255,255,0.35)', tickMin: 'rgba(58,56,50,0.40)', tickMaj: 'rgba(38,36,32,0.70)' },
+      black:   { faceClass: 'tex-black', face: 'border: 0.9px solid #000000; box-shadow: 0 0 0 1px ' + L(0.30) + ', 0 0 8px ' + L(0.38) + ', inset 0 1px 0 rgba(255,255,255,0.14)',
+                 drum: 'linear-gradient(180deg,#070707 0%,#181818 28%,#222222 50%,#171717 74%,#050505 100%)', rim: 'rgba(180,182,186,0.14)', sheen: 'rgba(255,255,255,0.07)', ridgeHi: 'rgba(160,162,166,0.10)', tickMin: 'rgba(168,168,170,0.22)', tickMaj: 'rgba(170,170,174,0.55)' }
+    };
+    const w = Object.assign({}, W_FACE[chassis] || W_FACE.default, {
+      poolA: L(0.16), poolB: L(0.05),
+      // Drum geometry: portrait 160x76 wells; landscape wells stretch to the column and shrink to the 56 px row.
+      ...(this.props.orient === 'landscape'
+        ? { wd: 'auto', h: '100%', dt: '24px', dt1: '23px', dt2: '26px', dt7: '31px', th: '25px', ir: '22px' }
+        : { wd: '160px', h: '76px', dt: '28px', dt1: '27px', dt2: '30px', dt7: '35px', th: '29px', ir: '26px' }),
+      seamTop: L(0.55), seamBot: L(0.40), trapA: L(0.16), trapB: L(0.05),
+      edgeGlow: L(0.30), edge: L(0.60), icon: L(0.95), iconGlow: L(0.55), pm: L(0.70)
+    });
+    // 'standard' (Nixie One without tubes) is retired: a Nixie display ALWAYS uses real tubes for the frequency.
+    const display = (this.props.display ?? 'nixie') === 'standard' ? 'nixie' : (this.props.display ?? 'nixie');
+    const FREQ = this.props.freq ?? '648.000';
+    const nixie = [];
+    // Real nixie tubes stack the ten cathodes one behind another. IN-14-style order, front to back:
+    // 1 6 2 7 5 0 4 9 8 3 (varies by tube type). The lit digit sits at its own depth: deeper digits are
+    // smaller, a touch dimmer and seen THROUGH the unlit cathodes in front of them.
+    const STACK = ['1', '6', '2', '7', '5', '0', '4', '9', '8', '3'];
+    const depthT = (d) => { const i = STACK.indexOf(d); return 'transform: scale(' + (1 - i * 0.028).toFixed(3) + ') translateY(' + (i * 0.25).toFixed(2) + 'px); opacity: ' + (1 - i * 0.03).toFixed(2); };
+    // ★★★ FIXED TUBE LAYOUT, like real hardware: [MHz tubes] (bulb A) [3 kHz tubes] (bulb B) [3 Hz tubes].
+    // The tubes never change with the unit or the frequency — only which bulb is lit:
+    //   kHz: bulb B lit  (14 230•000)   MHz: bulb A lit (14•230 000)   Hz: both bulbs OFF (14 230 000)
+    // mhzTubes = digits of the radio's top frequency in MHz: network HF (30 MHz) = 2 -> 8 tubes;
+    // local RTL-SDR (2 GHz) = 4 -> 10 tubes. Leading zeros are SWITCHED OFF (bare cathodes), except the
+    // digit immediately left of a lit point (0.648000 MHz lights its 0).
+    const mhzTubes = this.props.mhzTubes ?? 2;
+    const unit = this.props.unit ?? 'khz';
+    const hz = Math.round(parseFloat(FREQ) * 1000);
+    const digits = String(hz).padStart(mhzTubes + 6, '0').slice(-(mhzTubes + 6));
+    const litAt = unit === 'mhz' ? mhzTubes : unit === 'khz' ? mhzTubes + 3 : -1;   // index of the first digit AFTER the lit point
+    const firstSig = digits.search(/[1-9]/);
+    const keepFrom = Math.min(firstSig < 0 ? digits.length - 1 : firstSig, litAt > 0 ? litAt - 1 : digits.length - 1);
+    const blank = () => ({ tube: true, sep: false, d: '', dp: false, t: '', front: [], back: STACK.slice(0, 4).map((d) => ({ d, t: depthT(d) })) });
+    [...digits].forEach((ch, k) => {
+      if (k === mhzTubes || k === mhzTubes + 3) nixie.push({ sep: true, tube: false, lit: k === litAt ? 1 : 0 });
+      if (k < keepFrom) { nixie.push(blank()); return; }
+      const i = STACK.indexOf(ch);
+      const front = STACK.slice(Math.max(0, i - 2), i).map((d) => ({ d, t: depthT(d) }));
+      const back = STACK.slice(i + 1, i + 4).map((d) => ({ d, t: depthT(d) }));
+      nixie.push({ tube: true, sep: false, d: ch, dp: false, t: depthT(ch), front, back });
+    });
+    const SEGMAP = { '0': 'abcdef', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd', '6': 'afgedc', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg' };
+    const ghostSeg = 'rgba(' + tx.rgb + ',0.07)';
+    const seg7 = [];
+    for (const ch of FREQ) {
+      if (ch === '.') { if (seg7.length) seg7[seg7.length - 1].dp = tx.c; continue; }
+      const on = SEGMAP[ch] || '';
+      const g = { dp: ghostSeg };
+      'abcdefg'.split('').forEach((k) => { g[k] = on.includes(k) ? tx.c : ghostSeg; });
+      seg7.push(g);
+    }
+    const isDefault = chassis === 'default';
+    // Anything drawn in Nixie One is neon: warm orange, always, whatever the backlight.
+    const nixieFont = display === 'standard' || display === 'nixie';
+    const NEON_C = '#ffc48a', NEON_G = '0 0 1.5px #ff8a2e, 0 0 5px #ff6410, 0 0 11px rgba(255,80,10,0.6)';
+    const fx = {
+      // VTS text. Segment/dot displays scroll ONE WHOLE CELL per step over a fixed 14-cell window.
+      vtsText: this.props.vts ?? 'Radio Caroline',
+      dotText: (this.props.vts ?? 'Radio Caroline').toUpperCase(),
+      segText: (() => {
+        // toSegCells: one character per 14-segment cell (see brief §7). Fold accents, map what the ROM lacks.
+        const SPECIAL = { 'ß': 'SS', 'Æ': 'AE', 'Œ': 'OE', 'Ø': 'O', 'Ł': 'L', 'Đ': 'D', 'Þ': 'TH', 'ı': 'I' };
+        const MAP = { '!': '|', '~': '-', ':': '-', '#': 'H', ';': ',', '[': '(', ']': ')' };
+        const OK = /[A-Z0-9?@&$%'"()*+,\-\/<=>^_\\|`]/;
+        let t = (this.props.vts ?? 'Radio Caroline').replace(/[ßÆŒØŁĐÞı]/g, (c) => SPECIAL[c] || c)
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+        const cells = [];
+        for (const ch of t) {
+          if (ch === '.' && cells.length) { cells[cells.length - 1] += '.'; continue; }   // decimal point on the previous cell
+          const m = MAP[ch] ?? ch;
+          cells.push(m === ' ' ? '!' : (OK.test(m) ? m : '!'));
+        }
+        while (cells.length < 14) cells.push('!');
+        return cells.slice(0, 14).join('');
+      })(),
+      segGhost: '~'.repeat(14),
+      digit: display === 'standard' ? NEON_C : isDefault ? '#f4f1ea' : tx.d,
+      vtsFont: display === 'hyper' ? "'Atkinson Hyperlegible', sans-serif" : "'Nixie One', serif",
+      vtsSize: display === 'hyper' ? '19px' : '21px',
+      vtsColor: nixieFont ? NEON_C : tx.c,
+      vtsGlow: nixieFont ? NEON_G : isDefault ? 'none' : '0 0 5px ' + tx.g,
+      digitSpacing: display === 'hyper' ? '2.5px' : '1.5px',
+      digitGlow: display === 'standard' ? NEON_G : isDefault ? '0 0 6px rgba(255,255,255,0.30)' : '0 0 6px ' + tx.g,
+      stdFont: display === 'hyper' ? "'Atkinson Hyperlegible', system-ui, sans-serif" : "'Nixie One', serif",
+      ghost: 'rgba(' + tx.rgb + ',0.10)'
+    };
+    const MD = {
+      standard: { f: "'Nixie One', serif", c: NEON_C, s: '#ff9a55', g: '0 0 4px rgba(255,90,10,0.8)' },
+      hyper:    { f: "'Atkinson Hyperlegible', sans-serif", c: isDefault ? '#f4f1ea' : tx.d, s: 'rgba(255,255,255,0.80)', g: 'none' },
+      nixie:    { f: "'Barlow Semi Condensed', sans-serif", c: '#ffb37a', s: '#ff9a55', g: '0 0 4px rgba(255,90,10,0.8)' },
+      dot:      { f: "'Doto', monospace", c: tx.c, s: tx.c, g: '0 0 4px ' + tx.g },
+      seg:      { f: "'Barlow Semi Condensed', sans-serif", c: tx.c, s: tx.c, g: '0 0 4px ' + tx.g }
+    };
+    let md = MD[display] || MD.standard;
+    if (sqlClosed) md = Object.assign({}, md, nixieFont || display === 'nixie'
+      ? { s: '#ff9a55', g: '0 0 4px rgba(255,90,10,0.8)' }          // Nixie rule: SQL glows neon, never red
+      : { s: '#ff4040', g: '0 0 4px rgba(255,64,64,0.6)' });
+    const lip = chassis === 'silver' ? 'rgba(255,255,255,0.80)' : chassis === 'black' ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.06)';
+    const fb = { lf: shared ? '30px' : '34px', tw: '21px', th: shared ? '34px' : '40px', nf: shared ? '28px' : '32px', gap: '2px', df: shared ? '24px' : '28px', sw: shared ? 17 : 19, sh: shared ? 27 : 30 };
+    const fb0 = fb;
+    const fbL = { lf: '28px', tw: '19px', th: '32px', nf: '26px', gap: '2px', df: '24px', sw: 16, sh: 25 };
+    const fvL = { lf: '25px', tw: '15px', th: '27px', nf: '23px', gap: '2px', df: '22px', sw: 15, sh: 23 };
+    const fv0 = { lf: '32px', tw: '22px', th: '36px', nf: '30px', gap: '2px', df: '27px', sw: 19, sh: 29 };   // compact window: 42 px
+    // Small screens: in LED VU mode the four keys go half height so the deck does not grow (drums unchanged).
+    const land = this.props.orient === 'landscape';
+    const compact = meter !== 'bar';
+    // ONE DECK HEIGHT (Stuart, 2026-09-30): the shared-VFO banner must not grow the deck. In the compact
+    // (LED / analogue) layout its 18 px + 5 px gap is paid for by a shorter frequency window (-10) and
+    // shorter keys (-10), plus 3 px off the meter housing. Bar mode already carries the banner inside the bar.
+    const fixedH = !land && compact && shared;
+    const capH = land ? 24 : fixedH ? 30 : compact ? 40 : 54;   // 44 pt slot keeps Apple's minimum touch target
+    const STEPS = ['1k', '5k', '9k', '10k', '100k'];
+    const mkKey = (id) => {
+      const down = this.state.pressed === id;
+      if (t.keyStyle === 'flat') {
+        const capF = down
+          ? 'left: 2px; right: 2px; height: ' + capH + 'px; top: 3.5px; transition: top 45ms cubic-bezier(0.9,0,1,0.6), box-shadow 45ms cubic-bezier(0.9,0,1,0.6), filter 45ms cubic-bezier(0.9,0,1,0.6); ' + t.capBg + '; box-shadow: 0 0 0 rgba(0,0,0,0), inset 0 1px 3px rgba(0,0,0,0.65), inset 0 0 0 1px rgba(255,255,255,0.04); filter: brightness(' + t.pressDim + ')'
+          : 'left: 2px; right: 2px; height: ' + capH + 'px; top: 1.5px; transition: top 35ms cubic-bezier(0.2,0.9,0.3,1.4), box-shadow 35ms ease-out, filter 35ms ease-out; ' + t.capBg + '; box-shadow: 0 1.5px 1px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,' + t.hi * 0.3 + '), inset 0 0 0 1px rgba(255,255,255,0.07), inset 0 -1px 0 rgba(0,0,0,0.5)';
+        const legendF = chassis === 'default'
+          ? (this.props.led === 'neon' ? 'color: ' + NEON_C + '; text-shadow: ' + NEON_G + '; filter: drop-shadow(0 0 2.5px #ff6410) drop-shadow(0 0 6px rgba(255,80,10,0.45))' : 'color: ' + (down ? '#ffffff' : '#f1ede4') + '; filter: none')
+          : 'color: ' + (down ? led.d : led.c) + '; filter: drop-shadow(0 0 ' + (down ? 7 : 4) + 'px ' + led.g + ')' + t.legendShadow;
+        return {
+          cap: capF + (compact ? '; border-radius: 7px' : ''), legend: legendF + (land ? '; transform: scale(0.78)' : fixedH ? '; transform: scale(0.8)' : compact ? '; transform: scale(0.88)' : ''),
+          down: () => this.setState({ pressed: id }),
+          up: () => this.setState((st) => ({ pressed: null, step: id === 'step' && st.pressed === 'step' ? (st.step + 1) % STEPS.length : st.step })),
+          cancel: () => { if (this.state.pressed === id) this.setState({ pressed: null }); }
+        };
+      }
+      const cap = down
+        ? 'left: 3px; right: 3px; height: 46px; top: 7px; ' + t.capBg + '; box-shadow: 0 1px 0 ' + t.skirt + ', 0 1px 2px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,' + (t.hi * 0.4) + '), inset 0 2px 6px rgba(0,0,0,0.30); filter: brightness(0.92)'
+        : 'left: 3px; right: 3px; height: 46px; top: 2px; ' + t.capBg + '; box-shadow: 0 5px 0 ' + t.skirt + ', 0 9px 8px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,' + t.hi + ')';
+      const legend = chassis === 'default'
+        ? (this.props.led === 'neon' ? 'color: ' + NEON_C + '; text-shadow: ' + NEON_G + '; filter: drop-shadow(0 0 2.5px #ff6410) drop-shadow(0 0 6px rgba(255,80,10,0.45))' : 'color: ' + (down ? '#ffffff' : '#f1ede4') + '; filter: none')
+        : 'color: ' + (down ? led.d : led.c) + '; filter: drop-shadow(0 0 ' + (down ? 7 : 4) + 'px ' + led.g + ')' + t.legendShadow;
+      return {
+        cap, legend,
+        down: () => this.setState({ pressed: id }),
+        up: () => this.setState((st) => ({ pressed: null, step: id === 'step' && st.pressed === 'step' ? (st.step + 1) % STEPS.length : st.step })),
+        cancel: () => { if (this.state.pressed === id) this.setState({ pressed: null }); }
+      };
+    };
+    const fbF0 = land ? fbL : fb0;
+    const fvF0 = land ? fvL : fixedH ? { lf: '27px', tw: '18px', th: '29px', nf: '26px', gap: '2px', df: '23px', sw: 16, sh: 25 } : fv0;
+    // More than 8 tubes (a wide-range radio, e.g. local RTL-SDR to 2 GHz = 10): narrow the tubes and digits so the
+    // fixed layout still fits the same window. Height is unchanged.
+    const tubeK = Math.min(1, 8 / ((this.props.mhzTubes ?? 2) + 6));
+    const narrow = (f, k) => k >= 1 ? f : Object.assign({}, f, { tw: (parseFloat(f.tw) * k).toFixed(1) + 'px', nf: (parseFloat(f.nf) * (0.5 + k / 2)).toFixed(1) + 'px', gap: '1px' });
+    // The bar-meter window (today's look) is narrower than the LED/analogue one: 8 tubes + 2 bulbs need
+    // tubes of at most 16 pt there, portrait and landscape.
+    const barK = Math.min(1, 16 / parseFloat(fbF0.tw));
+    const fbF = display === 'nixie' ? narrow(fbF0, barK * tubeK) : fbF0, fvF = display === 'nixie' ? narrow(fvF0, tubeK) : fvF0;
+    return {
+      keySlotH: land ? '100%' : fixedH ? '34px' : compact ? '44px' : '58px', keyRadius: land ? '6px' : compact ? '8px' : '10px',
+      tunerKeys: this.props.tuner === 'keys',
+      tk: {
+        w: land ? '34%' : '31%', pad: land ? '6px' : '8px',
+        bg: chassis === 'default' ? 'background: #0b0a08' : chassis === 'silver' ? 'background-color: #c9c6bf' : 'background-color: #1b1c1e',
+        cap: t.keyStyle === 'flat' ? t.capBg + '; box-shadow: 0 1.5px 1px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,' + t.hi * 0.3 + '), inset 0 0 0 1px rgba(255,255,255,0.07)' : t.capBg,
+        legend: 'color: ' + led.c + '; filter: drop-shadow(0 0 4px ' + led.g + ')'
+      },
+      kStep: mkKey('step'), kAudio: mkKey('audio'), kSet: mkKey('set'), kChat: mkKey('chat'),
+      stepLabel: STEPS[this.state.step],
+      tx, isDefault, notDefault: !isDefault,
+      vtsPlain: display !== 'dot' && display !== 'seg',
+      vtsBezel: isDefault ? 'border-radius: 12px' : 'padding: 3px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.6)',
+      vtsEdge: isDefault ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.8)',
+      stepFont: !isDefault ? "'Barlow Semi Condensed', sans-serif" : display === 'nixie' ? "'Nixie One', serif" : "'Atkinson Hyperlegible', sans-serif", stepWeight: isDefault ? 400 : 700,
+      rd: (() => {
+        // RDS source mark + transmitter flag in the VTS (VTSBar.tsx). One vector mark (assets/branding/rds/RDS_Logo.svg),
+        // never "ADVANCED", always in the resolved TEXT colour (neon under Nixie).
+        const rds = this.props.rds ?? false, flag = this.props.flag ?? '';
+        const picto = display === 'dot' || display === 'seg';
+        const shadows = (g) => g === 'none' ? 'none' : g.split(/,(?![^(]*\))/).map((x) => 'drop-shadow(' + x.trim() + ')').join(' ');
+        // flag emoji -> ISO code for the VFD styles (regional-indicator letters)
+        const code = [...flag].map((c) => { const cp = c.codePointAt(0); return cp >= 0x1F1E6 && cp <= 0x1F1FF ? String.fromCharCode(cp - 0x1F1E6 + 65) : ''; }).join('');
+        return { on: rds ? 1 : 0, plainRds: rds && !picto, picto, emoji: !!flag && !picto, flag,
+          code: code || '\u00a0\u00a0', segCode: code || '!!', w: '53px', h: '13px',
+          filter: shadows(fx.vtsGlow), pfilter: 'drop-shadow(0 0 2px ' + tx.g + ')' };
+      })(),
+      unitLabel: (this.props.unit ?? 'khz') === 'mhz' ? 'MHz' : (this.props.unit ?? 'khz') === 'hz' ? 'Hz' : 'kHz',
+      display, nixie, seg7, fx, md, lip, fb: fbF, fv: fvF,
+      tb: (() => {
+        // Tube mounting. socket: domed side-view tube (IN-14 style) standing in a bakelite socket on the window floor.
+        // panel: flat-ended tube that passes through the panel, so the glass runs floor to ceiling of the window.
+        const panel = (this.props.tubes ?? 'socket') === 'panel';
+        const nx = display === 'nixie';
+        // Recessed cavity behind the tubes: dark back wall, lip shadows on all four edges, a floor that catches the neon.
+        const cav = !nx ? '' : 'align-self: stretch; overflow: hidden; border-radius: 8px 0 0 8px; '
+          + 'background: radial-gradient(ellipse 58% 60% at 50% 58%, rgba(255,100,30,0.16), rgba(255,100,30,0) 72%), '
+          + 'radial-gradient(ellipse 70% 40% at 50% 100%, rgba(255,110,40,0.14), rgba(255,110,40,0) 70%), '
+          + 'repeating-linear-gradient(90deg, rgba(255,255,255,0.012) 0 1px, rgba(0,0,0,0.03) 1px 3px), '
+          + 'linear-gradient(180deg, #060403 0%, #15100c 28%, #1e1610 70%, #2a1c12 100%); '
+          + 'box-shadow: inset 0 10px 9px -3px rgba(0,0,0,0.97), inset 10px 0 10px -5px rgba(0,0,0,0.92), inset -10px 0 10px -5px rgba(0,0,0,0.92), '
+          + 'inset 0 -4px 5px -1px rgba(0,0,0,0.8), inset 0 -1px 0 rgba(255,200,160,0.08)';
+        return { cav, wr: panel ? '0' : '40% 40% 3px 3px / 20% 20% 3px 3px',
+          // each tube throws a shadow down-right onto the back wall and spills a little neon around itself
+          cast: '4px 3px 3px rgba(0,0,0,0.8), 7px 6px 10px rgba(0,0,0,0.6), 0 0 16px 3px rgba(255,90,20,0.10)',
+          // Socket: pip + glass + collar fill the cavity; the glass is capped at its design height and SHRINKS
+          // when the window does (shared banner + analogue meter = 35 px), so the domes are never clipped.
+          socket: !panel, panel, pad: panel ? '0' : '2px 0 2px', align: 'stretch',
+          hb: 'auto', hv: 'auto', grow: 1, mhb: panel ? 'none' : fbF.th, mhv: panel ? 'none' : fvF.th,
+          // indicator bulb: ~45% of a digit tube wide, ~62% as tall
+          bwb: Math.round(parseFloat(fbF.tw) * 0.45) + 'px', bhb: Math.round(parseFloat(fbF.th) * 0.62) + 'px',
+          bwv: Math.round(parseFloat(fvF.tw) * 0.45) + 'px', bhv: Math.round(parseFloat(fvF.th) * 0.62) + 'px',
+          r: panel ? '0' : '48% 48% 3px 3px / 26% 26% 3px 3px',
+          sh: panel ? 'inset 0 7px 6px -3px rgba(0,0,0,0.9), inset 0 -7px 6px -3px rgba(0,0,0,0.9), inset 1px 0 0 rgba(255,235,210,0.10), inset -1px 0 0 rgba(255,235,210,0.10)'
+                    : 'inset 0 0 0 1px rgba(255,235,210,0.10), inset 0 -3px 4px rgba(0,0,0,0.8)' };
+      })(),
+      rootW: land ? '932px' : '390px', rootH: land ? '192px' : '462px',
+      L: (() => {
+        const gloss = chassis === 'black'
+          ? 'padding: 4px; border-radius: 10px; background: linear-gradient(112deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0) 38%, rgba(255,255,255,0.10) 38.5%, rgba(255,255,255,0.035) 56%, rgba(255,255,255,0) 56.5%), linear-gradient(180deg, #111214 0%, #060607 55%, #0b0b0d 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 1px 0 #8e9196'
+          : '';
+        if (!land) return {
+          land: false, notLand: true,
+          plate: 'padding: 14px; display: flex; flex-direction: column; gap: 12px',
+          dispPanel: t.displayPanel, barH: '72px', sharedInBar: shared,
+          vuDir: 'column', vuH: 'auto', fwH: (meter === 'edge' ? (fixedH ? 35 : 46) : (fixedH ? 38 : 48)) + 'px', /* pads every meter type to the bar deck's exact height */ fwGrow: 0, meterBox: fixedH ? 'padding-top: 3px' : '', edgeBox: fixedH ? 'padding: 2px 3px' : '', ledH: '13px', ledLbl: '8px', dispGap: fixedH ? '5px' : '12px',
+          keysGrid: 'display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px',
+          k1: 'auto', k2: 'auto', k3: 'auto', k4: 'auto', drumsBox: 'display: flex; justify-content: space-between', dl: 'auto', dr: 'auto',
+          footDir: 'column', footAlign: 'stretch', sharedInStatus: false, notSharedStatus: true, statDir: 'column', statAlign: 'stretch'
+        };
+        // LANDSCAPE: one band of controls, as today — [VFO drum][step/cog][display][audio/chat][zoom drum],
+        // then one full-width status row. The display column is as tall as the two stacked keys, which leaves
+        // room for the frequency window ON TOP and the meter UNDERNEATH, exactly like portrait and like the
+        // app's own landscape bar. The shared banner moves to the status row so nothing gets taller.
+        return {
+          land: true, notLand: false, dispGap: '12px',
+          plate: 'padding: 10px ' + (t.screws ? '24px' : '12px') + '; display: grid; grid-template-columns: minmax(0, 1fr) 62px 360px 62px minmax(0, 1fr); grid-template-rows: 28px 28px auto; grid-template-areas: "dl k1 disp k3 dr" "dl k2 disp k4 dr" "st st st st st"; column-gap: 8px; row-gap: 6px',
+          dispPanel: gloss, barH: '62px', sharedInBar: false,
+          vuDir: 'column', vuH: chassis === 'black' ? '54px' : '62px', fwH: 'auto', fwGrow: 1,
+          meterBox: 'padding: 3px 6px 2px; flex-shrink: 0', ledH: '9px', ledLbl: '6.5px',
+          edgeBox: 'padding: 2px; flex-shrink: 0',
+          keysGrid: 'display: contents', k1: 'k1', k2: 'k2', k3: 'k3', k4: 'k4',
+          drumsBox: 'display: contents', dl: 'dl', dr: 'dr',
+          footDir: 'row', footAlign: 'center', sharedInStatus: shared, notSharedStatus: !shared, statDir: 'row', statAlign: 'center'
+        };
+      })(),
+      isStd: display === 'standard' || display === 'hyper', isNixie: display === 'nixie', isDot: display === 'dot', isSeg: display === 'seg',
+      w, t, led, segs, sText, shared,
+      vuShared: meter !== 'bar' && shared,
+      topRow: meter !== 'bar' && shared && !land,
+      isBar: meter === 'bar', isVu: meter !== 'bar', isLeds: meter === 'vu', isEdge: meter === 'edge',
+      edge: (() => {
+        // Needle position = the reading the LEDs would show (centre of the top lit segment).
+        const U = land ? 33.0 : 31.2;   // one scale division: (window width - 16) / 10
+        const cxs = (i) => 8 + (i + 0.5) * U;
+        const reading = Math.max(0, level - 0.5);
+        const nx = 8 + reading * U;
+        const sx = cxs(sq);
+        return {
+          // Vintage off-white scale card, lit from behind by two old incandescent bulbs: uneven on purpose —
+          // a warm hot spot over each bulb, the left one brighter, darker shadowed corners between and beyond.
+          lamp: 'radial-gradient(ellipse 34% 150% at 27% 62%, rgba(255,214,150,0.55), rgba(255,214,150,0.18) 45%, rgba(255,214,150,0) 72%), radial-gradient(ellipse 28% 140% at 77% 58%, rgba(255,206,140,0.32), rgba(255,206,140,0) 70%), linear-gradient(90deg, rgba(70,52,28,0.40) 0%, rgba(70,52,28,0) 16%, rgba(70,52,28,0) 44%, rgba(70,52,28,0.12) 53%, rgba(70,52,28,0) 64%, rgba(70,52,28,0) 86%, rgba(70,52,28,0.46) 100%), #e9e2cf',
+          needleX: (nx - 1.3).toFixed(1) + 'px', shadowX: (nx + 1.6).toFixed(1) + 'px', headX: (nx - 5.5).toFixed(1) + 'px',
+          sqlX: (sx - 0.7).toFixed(1) + 'px', sqlShadowX: (sx + 1.3).toFixed(1) + 'px', sqlHeadX: (sx - 4.5).toFixed(1) + 'px',
+          peakX: (8 + Math.min(9.6, reading + 0.8) * U - 0.8).toFixed(1) + 'px', peakHeadX: (8 + Math.min(9.6, reading + 0.8) * U - 4).toFixed(1) + 'px',
+          h: land ? '24px' : '28px', svgTop: land ? '-2px' : '0px',
+          dim: sqlClosed ? 0.5 : 0
+        };
+      })(),
+      barPct: Math.round(level * 10) + '%',
+      barOpacity: sqlClosed ? 0.38 : 1,
+      sqlPct: Math.round((sq + 0.5) * 10) + '%',
+      freqSize: shared ? '28px' : '34px'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+DSEG 0.46.0 (keshikan) — https://github.com/keshikan/DSEG
+License: SIL Open Font License 1.1 (package.json: OFL-1.1). Licence metadata is embedded in the .ttf.
+
+## License
+
+- Any font files(*.ttf, *.woff, *.sfd) are licensed under the [SIL OPEN FONT LICENSE Version 1.1](http://scripts.sil.org/OFL)

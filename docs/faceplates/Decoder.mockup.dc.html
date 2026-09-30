@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Decoder box</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#000}
+button{font:inherit;cursor:pointer;margin:0}
+.tex-silver{background-image:url(/_blob/e27d346d2cec39fc2d79a5d9f32ed2fb);background-size:620px auto;background-position:center}
+.tex-black{background-image:url(/_blob/f52997ebf316486ad45559af25401c02);background-size:620px auto;background-position:center}
+.wf{background-image:url(/_blob/9687e6e66eb42f7c960b61d94b810a5e);background-size:cover;background-position:center}
+</style>
+</helmet>
+<div class="wf" style="position: relative; width: 430px; height: 500px; box-sizing: border-box; padding: 20px 10px; font-family: 'Atkinson Hyperlegible', system-ui, sans-serif">
+<div data-a="shell" style="position: relative; isolation: isolate; overflow: hidden; border-radius: 14px; {{p.shell}}">
+<sc-if value="{{p.tex}}" hint-placeholder-val="{{ false }}">
+<div class="{{p.texClass}}" style="position: absolute; inset: 0; z-index: -2"></div>
+<div style="position: absolute; inset: 0; z-index: -1; {{p.light}}"></div>
+</sc-if>
+
+<!-- HEADER -->
+<div data-a="header" style="display: flex; align-items: center; gap: 6px; padding: 8px 12px; {{p.header}}">
+<span style="font-size: 11px; letter-spacing: 2px; color: {{p.title}}">DAB</span>
+<span style="font-size: 13px; font-weight: 700; color: {{p.title}}">10D</span>
+<span style="font-size: 10px; color: {{p.muted}}">215.072</span>
+<span style="flex-grow: 1; min-width: 0; font-size: 12px; color: {{p.hval}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Herts Beds Bucks</span>
+<sc-for list="{{keys}}" as="k" hint-placeholder-count="4">
+<button data-a="{{k.a}}" style="height: 22px; padding: 0 6px; font-size: 10px; letter-spacing: 0.3px; flex-shrink: 0; {{k.style}}">{{k.label}}</button>
+</sc-for>
+</div>
+
+<!-- BODY -->
+<div data-a="window" style="margin: {{p.winMargin}}; padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 3px; {{p.window}}">
+<sc-for list="{{rowsA}}" as="r" hint-placeholder-count="3">
+<div style="display: flex; font-size: 12px; line-height: 17px"><span style="width: 142px; letter-spacing: 1.2px; color: {{p.label}}">{{r.l}}</span><span data-a="{{r.a}}" style="color: {{r.c}}; font-variant-numeric: tabular-nums">{{r.v}}</span></div>
+</sc-for>
+<div style="display: flex; gap: 10px; align-items: flex-end; margin: 6px 0 4px">
+<div style="display: flex; flex-direction: column; gap: 3px">
+<span style="font-size: 9px; letter-spacing: 1.6px; color: {{p.label}}">CONSTELLATION</span>
+<div data-a="plot" style="position: relative; width: 104px; height: 104px; background: {{p.plot}}; border-radius: 2px">
+<div style="position: absolute; left: 52px; top: 0; bottom: 0; width: 1px; background: {{p.axis}}"></div>
+<div style="position: absolute; top: 52px; left: 0; right: 0; height: 1px; background: {{p.axis}}"></div>
+<sc-for list="{{dots}}" as="d" hint-placeholder-count="40">
+<div style="position: absolute; width: 2.2px; height: 2.2px; border-radius: 50%; left: {{d.x}}; top: {{d.y}}; background: {{p.dot}}"></div>
+</sc-for>
+</div>
+</div>
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0">
+<span style="font-size: 9px; letter-spacing: 1.6px; color: {{p.label}}">IMPULSE RESPONSE · 32 µs / div</span>
+<div style="height: 70px; display: flex; align-items: flex-end; gap: 1px; background: {{p.plot}}; padding: 0 2px; border-radius: 2px">
+<sc-for list="{{bars}}" as="b" hint-placeholder-count="60">
+<div style="flex-grow: 1; height: {{b.h}}; background: {{p.bar}}"></div>
+</sc-for>
+</div>
+</div>
+</div>
+<sc-for list="{{rowsB}}" as="r" hint-placeholder-count="3">
+<div style="display: flex; font-size: 12px; line-height: 17px"><span style="width: 142px; letter-spacing: 1.2px; color: {{p.label}}">{{r.l}}</span><span style="color: {{r.c}}; font-variant-numeric: tabular-nums">{{r.v}}</span></div>
+</sc-for>
+<span style="margin-top: 6px; font-size: 10px; letter-spacing: 2.4px; color: {{p.label}}">AUDIO CHANNEL</span>
+<sc-for list="{{rowsC}}" as="r" hint-placeholder-count="4">
+<div style="display: flex; font-size: 12px; line-height: 17px"><span style="width: 142px; letter-spacing: 1.2px; color: {{p.label}}">{{r.l}}</span><span style="color: {{r.c}}; font-variant-numeric: tabular-nums">{{r.v}}</span></div>
+</sc-for>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"chassis":{"editor":"enum","options":["default","silver","black"],"default":"default"},"led":{"editor":"enum","options":["green","red","amber","blue","white","neon"],"default":"green"},"bg":{"editor":"enum","options":["transparent","solid"],"default":"transparent"},"$preview":{"width":430,"height":500}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const LEDS = {
+      green: '61,255,114', red: '255,58,46', amber: '255,174,26', blue: '61,155,255', white: '215,228,255', neon: '255,106,20'
+    };
+    const chassis = this.props.chassis ?? 'default';
+    const solid = (this.props.bg ?? 'transparent') === 'solid';
+    const rgb = LEDS[this.props.led ?? 'green'] || LEDS.green;
+    const L = (a) => 'rgba(' + rgb + ',' + a + ')';
+    const GOLD = (a) => 'rgba(255,160,0,' + a + ')';
+    const isDef = chassis === 'default';
+    // Accent: default keeps today's gold chrome; silver/black take the controls colour.
+    const A = isDef ? GOLD : L;
+    const lightSilver = 'background: linear-gradient(104deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.10) 18%, rgba(255,255,255,0.30) 36%, rgba(255,255,255,0.06) 52%, rgba(0,0,0,0.08) 100%)';
+    const lightBlack = 'background: linear-gradient(104deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.03) 18%, rgba(255,255,255,0.10) 36%, rgba(255,255,255,0.02) 52%, rgba(0,0,0,0.25) 100%)';
+    const recessed = 'background: #070605; border-radius: 6px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.95), inset 0 0 0 1px rgba(0,0,0,0.8), 0 1px 0 ';
+
+    let p;
+    if (isDef) {
+      p = {
+        tex: false, texClass: '', light: '',
+        shell: 'background: rgba(10,8,4,' + (solid ? 0.95 : 0.72) + '); border: 1px solid ' + GOLD(0.28) + '; box-shadow: 0 4px 14px rgba(0,0,0,0.8)',
+        header: 'border-bottom: 0.5px solid ' + GOLD(0.12),
+        title: GOLD(0.86), muted: GOLD(0.60), label: GOLD(0.86), value: '#ffe566',
+        window: '', winMargin: '0',
+        plot: 'rgba(255,160,0,0.05)', axis: GOLD(0.25), dot: '#8fe6a8', bar: 'rgba(255,184,51,0.75)'
+      };
+    } else if (!solid) {
+      // TRANSPARENT: today's glass, minimal faceplate touches only (keys + accents in controls colour).
+      p = {
+        tex: false, texClass: '', light: '',
+        shell: 'background: rgba(10,8,4,0.72); border: 1px solid ' + L(0.40) + '; box-shadow: 0 0 8px ' + L(0.18) + ', 0 4px 14px rgba(0,0,0,0.8)',
+        header: 'border-bottom: 0.5px solid ' + L(0.18),
+        title: L(0.90), muted: L(0.62), label: L(0.86), value: '#f2efe8',
+        window: '', winMargin: '0',
+        plot: L(0.05), axis: L(0.25), dot: L(0.85), bar: L(0.70)
+      };
+    } else if (chassis === 'silver') {
+      p = {
+        tex: true, texClass: 'tex-silver', light: lightSilver,
+        shell: 'border: 1px solid #8b8983; box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), inset 0 -1px 0 rgba(0,0,0,0.2), 0 4px 14px rgba(0,0,0,0.8)',
+        header: 'padding-bottom: 6px',
+        title: '#2a2824', muted: '#4a4741', label: L(0.86), value: '#f2efe8',
+        window: recessed + 'rgba(255,255,255,0.8)', winMargin: '0 8px 8px',
+        plot: L(0.05), axis: L(0.25), dot: L(0.85), bar: L(0.70)
+      };
+    } else {
+      p = {
+        tex: true, texClass: 'tex-black', light: lightBlack,
+        shell: 'border: 1px solid #3a3c40; box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 4px 14px rgba(0,0,0,0.8)',
+        header: 'padding-bottom: 6px',
+        title: '#c9ccd2', muted: '#8b8e94', label: L(0.86), value: '#f2efe8',
+        window: recessed + 'rgba(255,255,255,0.14)', winMargin: '0 8px 8px',
+        plot: L(0.05), axis: L(0.25), dot: L(0.85), bar: L(0.70)
+      };
+      p.header += '; background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(0,0,0,0.25))';
+    }
+    if (isDef) p.value = '#ffe566';
+    p.hval = (solid && !isDef) ? p.title : p.value;   // header sits on metal when solid
+
+    // header keys: today's outline keys on default; dome caps on silver/black
+    const keyStyle = (active) => {
+      if (isDef) return 'border: 1px solid ' + GOLD(active ? 0.55 : 0.28) + '; border-radius: 4px; background: ' + (active ? GOLD(0.12) : 'transparent') + '; color: ' + (active ? '#ffb833' : GOLD(0.60));
+      const cap = chassis === 'silver'
+        ? 'background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0) 45%, rgba(0,0,0,0.18)), #c4c1ba; border: 1px solid #8d8a83; box-shadow: 0 1.5px 1px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.8)'
+        : 'background: linear-gradient(180deg, #1c1d20, #0c0c0e); border: 1px solid #050505; box-shadow: 0 1.5px 1px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,0.22)';
+      return cap + '; border-radius: 5px; color: ' + L(active ? 1 : 0.9) + '; text-shadow: 0 0 4px ' + L(0.55);
+    };
+    const keys = [['STATIONS', true], ['SMALL', false], ['★', false], ['EXIT', false]].map(([label, a], i) => ({ label, style: keyStyle(a), a: i === 0 ? 'key' : '' }));
+
+    const V = p.value;
+    const WARN = '#ff8fa3';   // meaning colours are never recoloured
+    const rowsA = [
+      { l: 'Phase reference', v: '0.856 (0.95 of ref)', c: V },
+      { l: 'MER', v: '9.9 dB', c: WARN, a: 'mer' },
+      { l: 'MSC bit errors', v: '1.70 % before Viterbi', c: V }
+    ];
+    const rowsB = [
+      { l: 'Frames seen', v: '972', c: V },
+      { l: 'Frames erased', v: '0', c: V },
+      { l: 'Re-acquisitions', v: '0', c: V }
+    ];
+    const rowsC = [
+      { l: 'DAB+ super frames', v: '771 of 779', c: V },
+      { l: 'Reed-Solomon', v: '5 fixed, 31 lost', c: V },
+      { l: 'AAC', v: '32000 Hz, 2 ch', c: V },
+      { l: 'DLS groups', v: '1425 ok, 2 bad', c: V }
+    ];
+    // deterministic constellation (4 QPSK clusters) and impulse response
+    let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const g = () => (rnd() + rnd() + rnd() - 1.5) * 13;
+    const dots = [];
+    [[26, 26], [78, 26], [26, 78], [78, 78]].forEach(([cx, cy]) => { for (let i = 0; i < 26; i++) dots.push({ x: (cx + g()).toFixed(1) + 'px', y: (cy + g()).toFixed(1) + 'px' }); });
+    const bars = [];
+    for (let i = 0; i < 64; i++) {
+      let h = 18 + rnd() * 16 - i * 0.12;
+      if (i === 4) h = 95; if (i === 5) h = 70; if (i === 12) h = 62; if (i === 3) h = 55;
+      bars.push({ h: Math.max(8, Math.min(100, h)).toFixed(0) + '%' });
+    }
+    return { p, keys, rowsA, rowsB, rowsC, dots, bars };
+  }
+}
+</script>
+</body>
+</html>

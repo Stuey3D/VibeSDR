@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Faceplate picker</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&amp;family=Barlow+Semi+Condensed:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#070707}
+button{font:inherit;cursor:pointer;margin:0}
+</style>
+</helmet>
+<div style="width: 390px; height: 1150px; display: flex; flex-direction: column; background: #070707; font-family: 'Barlow Semi Condensed', system-ui, sans-serif; color: #ece8df">
+<div style="flex-grow: 1; padding: 24px 20px 12px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h1 style="margin: 0; font-size: 30px; font-weight: 700; letter-spacing: 0.5px">Faceplate</h1>
+<p style="margin: 0; font-size: 15px; color: #a9a49a">Swap the chassis, backlight and meter module.</p>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #8f8a80">CHASSIS</span>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+<sc-for list="{{chassisOpts}}" as="o" hint-placeholder-count="3">
+<button onClick="{{o.pick}}" style="height: 64px; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 600; color: #ece8df; {{o.style}}">
+<span style="width: 44px; height: 16px; border-radius: 4px; {{o.chip}}"></span>
+<span>{{o.label}}</span>
+</button>
+</sc-for>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #8f8a80">CONTROLS COLOUR</span>
+<div style="display: flex; gap: 12px">
+<sc-for list="{{ledOpts}}" as="o" hint-placeholder-count="5">
+<button onClick="{{o.pick}}" aria-label="{{o.label}}" style="width: 48px; height: 48px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: #111; {{o.ring}}">
+<span style="width: 22px; height: 22px; border-radius: 50%; {{o.dot}}"></span>
+</button>
+</sc-for>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: baseline; justify-content: space-between">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #8f8a80">TEXT COLOUR</span>
+<sc-if value="{{textLocked}}" hint-placeholder-val="{{ false }}"><span style="font-size: 13px; color: #ff9a55">Locked to neon by Nixie display</span></sc-if>
+</div>
+<div style="display: flex; gap: 12px; {{textRowStyle}}">
+<sc-for list="{{textOpts}}" as="o" hint-placeholder-count="5">
+<button onClick="{{o.pick}}" aria-label="{{o.label}}" style="width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #111; {{o.ring}}">
+<span style="font-family: 'Share Tech Mono', monospace; font-size: 18px; {{o.dot}}">8</span>
+</button>
+</sc-for>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #8f8a80">SIGNAL METER</span>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+<sc-for list="{{meterOpts}}" as="o" hint-placeholder-count="2">
+<button onClick="{{o.pick}}" style="height: 44px; border-radius: 10px; font-size: 15px; font-weight: 600; color: #ece8df; {{o.style}}">{{o.label}}</button>
+</sc-for>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #8f8a80">DISPLAY</span>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+<sc-for list="{{displayOpts}}" as="o" hint-placeholder-count="5">
+<button onClick="{{o.pick}}" style="height: 44px; border-radius: 10px; font-size: 14px; font-weight: 600; color: #ece8df; {{o.style}}">{{o.label}}</button>
+</sc-for>
+</div>
+</div>
+
+<div style="display: flex; align-items: center; justify-content: space-between">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #8f8a80">PREVIEW SHARED VFO</span>
+<button onClick="{{toggleShared}}" aria-label="Preview shared VFO banner" style="width: 56px; height: 32px; border-radius: 16px; padding: 3px; display: flex; {{sharedTrack}}">
+<span style="width: 26px; height: 26px; border-radius: 50%; background: #ece8df"></span>
+</button>
+</div>
+
+<div style="display: flex; align-items: center; justify-content: space-between">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 2px; color: #8f8a80">PREVIEW SQUELCH CLOSED</span>
+<button onClick="{{toggleSql}}" aria-label="Preview squelch closed" style="width: 56px; height: 32px; border-radius: 16px; padding: 3px; display: flex; {{sqlTrack}}">
+<span style="width: 26px; height: 26px; border-radius: 50%; background: #ece8df"></span>
+</button>
+</div>
+</div>
+
+<dc-import name="Deck" chassis="{{chassis}}" led="{{led}}" text="{{text}}" meter="{{meter}}" display="{{display}}" shared="{{shared}}" sql-closed="{{sqlClosed}}" level="{{level}}" hint-size="390px,462px"></dc-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1150}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { chassis: 'black', led: 'neon', text: 'amber', meter: 'vu', display: 'nixie', shared: false, sqlClosed: false };
+  }
+  renderVals() {
+    const s = this.state;
+    const LEDC = { green: '#3dff72', red: '#ff3a2e', amber: '#ffae1a', blue: '#3d9bff', white: '#eef3ff', neon: '#ff7a26' };
+    const TXC = { teal: '#46ffd7', green: '#3dff72', red: '#ff3a2e', amber: '#ffae1a', blue: '#3d9bff', white: '#eef3ff' };
+    const ALLOWED = { hyper: ['green', 'red', 'amber', 'blue', 'white', 'teal'], dot: ['teal', 'green', 'blue', 'amber', 'red'], seg: ['teal', 'green', 'blue', 'amber', 'red'], standard: [], nixie: [] };
+    const allowed = ALLOWED[s.display] || [];
+    const locked = s.display === 'nixie';
+    const accent = LEDC[s.led];
+    const sel = (on) => on
+      ? 'background: #17150f; border: 1.5px solid ' + accent + '; box-shadow: 0 0 10px ' + accent + '33'
+      : 'background: #111; border: 1.5px solid #2b2924';
+    const CHIPS = {
+      default: 'background: #120e0a; border: 1.5px solid #4a3f33',
+      silver: 'background: repeating-linear-gradient(180deg, rgba(255,255,255,0.3) 0 1px, transparent 1px 3px), linear-gradient(100deg,#d6d9dd,#eff1f3 30%,#b3b7bc)',
+      black: 'background: repeating-linear-gradient(180deg, rgba(255,255,255,0.06) 0 1px, transparent 1px 3px), linear-gradient(100deg,#202124,#34363a 30%,#141517); border: 1px solid #45474c'
+    };
+    return {
+      chassis: s.chassis, led: s.led, text: s.text, meter: s.meter, display: s.display, shared: s.shared,
+      textLocked: locked, textRowStyle: locked ? 'opacity: 0.35' : '',
+      textOpts: (allowed.length ? allowed : ['amber']).map((id) => ({
+        label: id.charAt(0).toUpperCase() + id.slice(1) + ' text',
+        dot: 'color: ' + TXC[id] + '; text-shadow: 0 0 6px ' + TXC[id],
+        ring: s.text === id && !locked ? 'border: 2px solid ' + TXC[id] : 'border: 2px solid #2b2924',
+        pick: () => { if (!locked) this.setState({ text: id }); }
+      })),
+      displayOpts: [['nixie', 'Nixie tubes'], ['hyper', 'Hyperlegible'], ['dot', 'Dot matrix'], ['seg', 'VCR']].map(([id, label]) => ({ label, style: sel(s.display === id), pick: () => this.setState({ display: id, led: id === 'nixie' ? 'neon' : (s.led === 'neon' ? 'amber' : s.led), text: (ALLOWED[id] && ALLOWED[id].length && !ALLOWED[id].includes(s.text)) ? ALLOWED[id][0] : s.text }) })),
+      chassisOpts: [['default', 'Default'], ['silver', 'Brushed silver'], ['black', 'Brushed black']].map(([id, label]) => ({
+        label, style: sel(s.chassis === id), chip: CHIPS[id], pick: () => this.setState({ chassis: id })
+      })),
+      ledOpts: Object.keys(LEDC).map((id) => ({
+        label: id.charAt(0).toUpperCase() + id.slice(1) + ' controls',
+        dot: 'background: ' + LEDC[id] + '; box-shadow: 0 0 10px ' + LEDC[id],
+        ring: s.led === id ? 'border: 2px solid ' + LEDC[id] : 'border: 2px solid #2b2924',
+        pick: () => this.setState({ led: id })
+      })),
+      meterOpts: [['bar', 'Bar'], ['vu', 'LED VU'], ['edge', 'Analogue']].map(([id, label]) => ({
+        label, style: sel(s.meter === id), pick: () => this.setState({ meter: id })
+      })),
+      sharedTrack: s.shared ? 'background: ' + accent + '; justify-content: flex-end; border: none' : 'background: #2b2924; justify-content: flex-start; border: none',
+      toggleShared: () => this.setState({ shared: !s.shared }),
+      sqlClosed: s.sqlClosed, level: s.sqlClosed ? 2 : 6,
+      sqlTrack: s.sqlClosed ? 'background: #ff3a2e; justify-content: flex-end; border: none' : 'background: #2b2924; justify-content: flex-start; border: none',
+      toggleSql: () => this.setState({ sqlClosed: !s.sqlClosed })
+    };
+  }
+}
+</script>
+</body>
+</html>

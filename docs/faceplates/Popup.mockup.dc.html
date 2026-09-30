@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Popups and menus</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&amp;family=Doto:wght@900&amp;family=Nixie+One&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#000}
+@font-face{font-family:'DSEG14';font-weight:700;font-style:italic;src:url(/_blob/f098db8bc98f07640e679b881c2f5d5d) format('woff2')}
+.tex-silver{background-image:url(/_blob/e27d346d2cec39fc2d79a5d9f32ed2fb);background-size:620px auto;background-position:center}
+.tex-black{background-image:url(/_blob/f52997ebf316486ad45559af25401c02);background-size:620px auto;background-position:center}
+</style>
+</helmet>
+<div style="position: relative; width: 390px; box-sizing: border-box; padding: 14px 0 0; background: #050505; font-family: 'Atkinson Hyperlegible', system-ui, sans-serif">
+<div data-a="shell" style="position: relative; isolation: isolate; overflow: hidden; margin: 0 8px; border-radius: {{s.radius}}; {{s.shell}}">
+<sc-if value="{{s.tex}}" hint-placeholder-val="{{ false }}">
+<div class="{{s.texClass}}" style="position: absolute; inset: 0; z-index: -2"></div>
+<div style="position: absolute; inset: 0; z-index: -1; {{s.light}}"></div>
+</sc-if>
+<!-- grab handle: engraved groove on metal -->
+<div data-a="handle" style="display: flex; justify-content: center; padding: 8px 0 4px"><div style="width: 38px; height: 4px; border-radius: 2px; {{s.handle}}"></div></div>
+
+<!-- ───────── TUNE (FreqModal) ───────── -->
+<sc-if value="{{isTune}}" hint-placeholder-val="{{ true }}">
+<div style="padding: 4px 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; gap: 6px; align-items: center">
+<sc-for list="{{tabs}}" as="k" hint-placeholder-count="2"><div data-a="{{k.a}}" style="position: relative; flex: 1; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 11px; letter-spacing: 2px; font-weight: 700; {{k.style}}"><sc-if value="{{k.pip}}" hint-placeholder-val="{{ true }}"><div style="position: absolute; top: 5px; left: 6px; width: 4px; height: 4px; border-radius: 50%; {{k.pipStyle}}"></div></sc-if>{{k.t}}</div></sc-for>
+<div style="width: 36px; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 15px; {{closeKey}}">✕</div>
+</div>
+<div data-a="window" style="padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; {{s.window}}">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="font-size: 12px; color: {{s.dim}}">◄</span>
+<div style="flex: 1; text-align: center"><div style="font-size: 13px; font-weight: 700; color: {{s.winText}}">Radio Oromiya</div><div style="font-size: 10px; color: {{s.winDim}}">1.035 MHz</div></div>
+<span style="font-size: 12px; color: {{s.readout}}">►</span>
+</div>
+<div data-a="entry" style="display: flex; align-items: baseline; justify-content: space-between; padding: 4px 4px 2px; border-top: 1px solid {{s.winRule}}">
+<span style="font-family: {{entry.f}}; font-weight: {{entry.w}}; font-style: {{entry.st}}; font-size: {{entry.s}}; letter-spacing: {{entry.ls}}; color: {{entry.c}}; text-shadow: {{entry.g}}">{{entry.t}}</span>
+<span style="font-size: 11px; color: {{s.winDim}}">kHz</span>
+</div>
+</div>
+<div style="display: flex; gap: 6px">
+<sc-for list="{{units}}" as="k" hint-placeholder-count="3"><div style="position: relative; flex: 1; height: 34px; display: flex; align-items: center; justify-content: center; font-size: 12px; {{k.style}}"><sc-if value="{{k.pip}}" hint-placeholder-val="{{ true }}"><div style="position: absolute; top: 5px; left: 6px; width: 4px; height: 4px; border-radius: 50%; {{k.pipStyle}}"></div></sc-if>{{k.t}}</div></sc-for>
+</div>
+<div style="display: flex; gap: 6px">
+<sc-for list="{{tuneBtns}}" as="k" hint-placeholder-count="2"><div data-a="{{k.a}}" style="position: relative; flex: {{k.flex}}; height: 40px; display: flex; align-items: center; justify-content: center; font-size: 12px; letter-spacing: 1px; font-weight: 700; {{k.style}}">{{k.t}}</div></sc-for>
+</div>
+</div>
+</sc-if>
+
+<!-- ───────── ROW SHEETS: AUDIO + MENU ───────── -->
+<sc-if value="{{isRows}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 2px 14px 12px; display: flex; flex-direction: column; gap: 7px">
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+<sc-if value="{{r.isBack}}" hint-placeholder-val="{{ false }}"><div style="display: flex; align-items: center; gap: 10px; margin-bottom: 2px"><div style="width: 40px; height: 30px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; {{r.k}}">‹</div><span style="font-size: 12px; letter-spacing: 2.2px; font-weight: 700; color: {{s.label}}; text-shadow: {{s.engrave}}">{{r.t}}</span></div></sc-if>
+<sc-if value="{{r.isSec}}" hint-placeholder-val="{{ false }}"><div style="margin-top: {{r.mt}}; font-size: 10px; letter-spacing: 2.2px; font-weight: 700; color: {{s.label}}; text-shadow: {{s.engrave}}; {{r.align}}">{{r.t}}</div></sc-if>
+<sc-if value="{{r.isKeys}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; align-items: center; gap: 8px">
+<sc-if value="{{r.label}}" hint-placeholder-val="{{ false }}"><span style="width: 96px; flex-shrink: 0; font-size: 10px; letter-spacing: 1.4px; line-height: 12px; color: {{s.label}}; text-shadow: {{s.engrave}}">{{r.label}}</span></sc-if>
+<div style="flex: 1; display: flex; gap: 6px; justify-content: {{r.just}}">
+<sc-for list="{{r.keys}}" as="k" hint-placeholder-count="3"><div data-a="{{k.a}}" style="position: relative; flex: {{k.flex}}; min-width: {{k.mw}}; height: {{r.h}}; padding: 0 8px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: {{r.fs}}; letter-spacing: 1px; font-weight: 700; white-space: nowrap; {{k.style}}"><sc-if value="{{k.pip}}" hint-placeholder-val="{{ true }}"><div style="position: absolute; top: 4px; left: 5px; width: 4px; height: 4px; border-radius: 50%; {{k.pipStyle}}"></div></sc-if><sc-if value="{{k.sw}}" hint-placeholder-val="{{ false }}"><span style="width: 9px; height: 9px; border-radius: 50%; background: {{k.sw}}; box-shadow: 0 0 5px {{k.sw}}"></span></sc-if>{{k.t}}</div></sc-for>
+</div>
+</div>
+</sc-if>
+<sc-if value="{{r.isSlider}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="width: 96px; flex-shrink: 0; font-size: 10px; letter-spacing: 1.4px; color: {{s.label}}; text-shadow: {{s.engrave}}">{{r.label}}</span>
+<div data-a="{{r.a}}" style="flex: 1; position: relative; height: 24px">
+<div style="position: absolute; left: 0; right: 0; top: 9px; height: 6px; border-radius: 3px; {{s.slot}}"></div>
+<sc-if value="{{r.level}}" hint-placeholder-val="{{ false }}"><div style="position: absolute; left: 1px; top: 10px; height: 4px; border-radius: 2px; width: {{r.level}}; background: {{s.levelFill}}"></div></sc-if>
+<div style="position: absolute; left: 1px; top: 10px; height: 4px; border-radius: 2px; width: {{r.pct}}; {{s.fill}}"></div>
+<div style="position: absolute; top: 3px; left: calc({{r.pct}} - 10px); width: 20px; height: 18px; border-radius: 4px; {{s.fader}}"><div style="position: absolute; left: 9px; top: 3px; bottom: 3px; width: 2px; {{s.faderLine}}"></div></div>
+</div>
+<span style="width: 44px; text-align: right; font-size: 11px; font-weight: 700; color: {{s.value}}; text-shadow: {{s.valueGlow}}">{{r.v}}</span>
+</div>
+<sc-if value="{{r.note}}" hint-placeholder-val="{{ false }}"><div style="margin: -4px 0 0 104px; font-size: 9.5px; line-height: 12px; color: {{s.note}}">{{r.note}}</div></sc-if>
+</sc-if>
+<sc-if value="{{r.isNote}}" hint-placeholder-val="{{ false }}"><div style="display: flex; align-items: center; gap: 8px"><span style="width: 96px; flex-shrink: 0; font-size: 10px; letter-spacing: 1.4px; color: {{s.label}}; text-shadow: {{s.engrave}}">{{r.label}}</span><span style="flex: 1; font-size: 10.5px; font-style: italic; color: {{s.note}}">{{r.t}}</span></div></sc-if>
+<sc-if value="{{r.isReadout}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; {{s.window}}"><span style="font-size: 10px; letter-spacing: 1.4px; color: {{s.winDim}}">{{r.label}}</span><span style="font-size: 13px; font-weight: 700; color: {{s.readout}}; text-shadow: {{s.readoutGlow}}">{{r.v}}</span></div>
+</sc-if>
+</sc-for>
+</div>
+</sc-if>
+
+<!-- ───────── CHAT (ChatDrawer) ───────── -->
+<sc-if value="{{isChat}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 2px 14px 14px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; gap: 6px">
+<span style="flex: 1; font-size: 11px; letter-spacing: 2.2px; font-weight: 700; color: {{s.label}}; text-shadow: {{s.engrave}}">CHAT · 3 LISTENING</span>
+<div style="width: 34px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 13px; {{closeKey}}">✕</div>
+</div>
+<sc-for list="{{users}}" as="u" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: 8px; opacity: {{u.op}}">
+<span style="flex-shrink: 0; font-size: 13px; font-weight: 700; color: {{u.c}}; text-shadow: {{s.engraveName}}">{{u.n}}</span>
+<span style="flex: 1; text-align: right; font-size: 11px; color: {{s.label}}; text-shadow: {{s.engrave}}">{{u.f}}</span>
+<div style="position: relative; width: 62px; height: 26px; display: flex; align-items: center; justify-content: center; font-size: 10px; letter-spacing: 1px; font-weight: 700; {{u.k.style}}"><sc-if value="{{u.k.pip}}" hint-placeholder-val="{{ true }}"><div style="position: absolute; top: 4px; left: 5px; width: 4px; height: 4px; border-radius: 50%; {{u.k.pipStyle}}"></div></sc-if>SYNC</div>
+</div>
+</sc-for>
+<div data-a="window" style="padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; {{s.window}}">
+<sc-for list="{{msgs}}" as="m" hint-placeholder-count="5">
+<div style="display: flex; gap: 6px; font-size: 12px; line-height: 17px"><span style="flex-shrink: 0; font-size: 9px; color: {{s.winDim}}; padding-top: 1px">{{m.ts}}</span><sc-if value="{{m.u}}" hint-placeholder-val="{{ true }}"><span style="flex-shrink: 0; font-size: 11px; font-weight: 700; color: {{m.uc}}">{{m.u}}</span></sc-if><span style="color: {{m.c}}; font-style: {{m.st}}; font-size: {{m.fs}}">{{m.t}}</span></div>
+</sc-for>
+</div>
+<div style="display: flex; gap: 6px">
+<sc-for list="{{canned}}" as="k" hint-placeholder-count="4"><div style="flex: 1; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; {{k.style}}">{{k.t}}</div></sc-for>
+</div>
+<div style="display: flex; align-items: center; gap: 6px">
+<span style="font-size: 10px; letter-spacing: 1px; color: {{s.label}}; text-shadow: {{s.engrave}}">M0VIB</span>
+<div style="flex: 1; height: 34px; display: flex; align-items: center; padding: 0 10px; font-size: 13px; color: {{s.winDim}}; {{s.window}}">Message…</div>
+<div data-a="key" style="width: 44px; height: 34px; display: flex; align-items: center; justify-content: center; font-size: 15px; {{sendKey}}">➤</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{hasClose}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; justify-content: center; padding: 0 0 14px"><div style="width: 110px; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 11px; letter-spacing: 1.5px; font-weight: 700; {{closeBtn}}">CLOSE</div></div>
+</sc-if>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"chassis":{"editor":"enum","options":["default","silver","black"],"default":"silver"},"led":{"editor":"enum","options":["green","red","amber","blue","white","neon"],"default":"red"},"text":{"editor":"enum","options":["teal","green","red","amber","blue","white"],"default":"red"},"display":{"editor":"enum","options":["hyper","nixie","dot","seg"],"default":"hyper"},"kind":{"editor":"enum","options":["tune","audio","menu","custom","chat"],"default":"custom"},"$preview":{"width":390,"height":980}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const RGB = { green: '61,255,114', red: '255,58,46', amber: '255,174,26', blue: '61,155,255', white: '215,228,255', neon: '255,106,20', teal: '70,255,215' };
+    const chassis = this.props.chassis ?? 'silver';
+    const kind = this.props.kind ?? 'menu';
+    const display = this.props.display ?? 'hyper';
+    const isDef = chassis === 'default', silver = chassis === 'silver';
+    const ledRgb = RGB[this.props.led ?? 'red'] || RGB.red;
+    const L = (a) => 'rgba(' + ledRgb + ',' + a + ')';
+    // Text colour follows the deck's resolver: Nixie locks it to neon; default chassis readouts stay white.
+    const nixie = display === 'nixie';
+    const txRgb = nixie ? '255,154,85' : (RGB[this.props.text ?? 'red'] || RGB.red);
+    const T = (a) => 'rgba(' + txRgb + ',' + a + ')';
+    const GOLD = (a) => 'rgba(255,184,51,' + a + ')';
+
+    const recessed = 'background: #070605; border-radius: 7px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.95), inset 0 0 0 1px rgba(0,0,0,0.8), 0 1px 0 ';
+    let s;
+    if (isDef) {
+      // DEFAULT: today's popups, unchanged (dark glass, gold selection). Listed so the brief can say "leave it".
+      s = { tex: false, texClass: '', light: '', radius: '16px 16px 0 0',
+        shell: 'background: rgba(12,10,6,0.94); border-top: 1px solid rgba(255,255,255,0.10); box-shadow: 0 -4px 18px rgba(0,0,0,0.8)',
+        handle: 'background: rgba(255,255,255,0.22)',
+        label: 'rgba(255,255,255,0.62)', engrave: 'none', engraveName: 'none', note: 'rgba(255,255,255,0.45)',
+        window: 'background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px',
+        winText: '#ffffff', winDim: 'rgba(255,255,255,0.5)', winRule: 'rgba(255,255,255,0.10)', dim: 'rgba(255,255,255,0.45)',
+        readout: '#ffe566', readoutGlow: 'none', value: '#ffe566', valueGlow: 'none',
+        slot: 'background: rgba(255,255,255,0.14)', levelFill: 'rgba(255,255,255,0.85)', fill: 'background: rgba(255,224,102,0.9)',
+        fader: 'background: #ffe066; border-radius: 50%; width: 18px; height: 18px', faderLine: 'display: none' };
+    } else {
+      const lightSilver = 'background: linear-gradient(104deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.10) 18%, rgba(255,255,255,0.30) 36%, rgba(255,255,255,0.06) 52%, rgba(0,0,0,0.08) 100%)';
+      const lightBlack = 'background: linear-gradient(104deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.03) 18%, rgba(255,255,255,0.10) 36%, rgba(255,255,255,0.02) 52%, rgba(0,0,0,0.25) 100%)';
+      s = { tex: true, texClass: silver ? 'tex-silver' : 'tex-black', light: silver ? lightSilver : lightBlack, radius: '16px 16px 0 0',
+        shell: silver
+          ? 'border: 1px solid #8b8983; border-bottom: none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), 0 -4px 18px rgba(0,0,0,0.8)'
+          : 'border: 1px solid #3a3c40; border-bottom: none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 -4px 18px rgba(0,0,0,0.8)',
+        // engraved groove instead of a pill
+        handle: silver ? 'background: rgba(0,0,0,0.38); box-shadow: 0 1px 0 rgba(255,255,255,0.75)' : 'background: rgba(0,0,0,0.7); box-shadow: 0 1px 0 rgba(255,255,255,0.12)',
+        // labels are ENGRAVED into the plate: dark on silver, light-grey on black
+        label: silver ? '#35332e' : '#a3a6ac', engrave: silver ? '0 1px 0 rgba(255,255,255,0.6)' : '0 -1px 0 rgba(0,0,0,0.9)',
+        engraveName: silver ? '0 1px 0 rgba(255,255,255,0.5)' : '0 -1px 0 rgba(0,0,0,0.9)',
+        note: silver ? '#55524b' : '#7d8086',
+        // anything that is DATA sits in a recessed dark window, lit in the text colour, so meaning colours still read
+        window: recessed + (silver ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.14)'),
+        winText: T(1), winDim: 'rgba(255,255,255,0.45)', winRule: 'rgba(255,255,255,0.08)', dim: 'rgba(255,255,255,0.35)',
+        readout: T(1), readoutGlow: '0 0 5px ' + T(0.6), value: silver ? '#2a2824' : '#d8dade', valueGlow: silver ? '0 1px 0 rgba(255,255,255,0.6)' : 'none',
+        // slide fader: recessed slot, fill in the CONTROLS colour, brushed-metal cap with an index line
+        slot: 'background: #0a0908; box-shadow: inset 0 1px 3px rgba(0,0,0,0.95), 0 1px 0 ' + (silver ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.14)'),
+        levelFill: 'rgba(255,255,255,0.22)', fill: 'background: ' + L(0.85) + '; box-shadow: 0 0 6px ' + L(0.6),
+        fader: silver
+          ? 'background: linear-gradient(180deg, #f1efea, #bdbab3 55%, #9f9c95); border: 1px solid #7d7a73; box-shadow: 0 2px 2px rgba(0,0,0,0.55), inset 0 1px 0 #fff'
+          : 'background: linear-gradient(180deg, #34363b, #16171a 60%, #0c0c0e); border: 1px solid #050505; box-shadow: 0 2px 2px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.25)',
+        faderLine: 'background: ' + L(0.95) + '; box-shadow: 0 0 4px ' + L(0.8) };
+    }
+
+    // ── dome key, same cap as the deck and decoder header (§5). Selected = LED pip lit + legend lit. ──
+    const cap = silver
+      ? 'background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0) 45%, rgba(0,0,0,0.18)), #c4c1ba; border: 1px solid #8d8a83; box-shadow: 0 1.5px 1px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.8)'
+      : 'background: linear-gradient(180deg, #1c1d20, #0c0c0e); border: 1px solid #050505; box-shadow: 0 1.5px 1px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,0.22)';
+    const key = (t, on, o = {}) => {
+      let style;
+      if (isDef) {
+        style = on
+          ? 'border: 1px solid #ffe066; border-radius: 5px; background: ' + (o.fillOn ? '#ffe066' : 'rgba(255,224,102,0.08)') + '; color: ' + (o.fillOn ? '#1a1400' : '#ffe066')
+          : 'border: 1px solid rgba(255,255,255,0.28); border-radius: 5px; background: rgba(255,255,255,0.02); color: ' + (o.primary ? '#ffffff' : 'rgba(255,255,255,0.88)');
+      } else {
+        const legend = (on || o.primary) ? L(1) : (silver ? '#2a2824' : '#cfd2d7');
+        const glow = (on || o.primary) ? '0 0 4px ' + L(0.6) + (silver ? ', 0 0 1px rgba(0,0,0,0.5)' : '') : (silver ? '0 1px 0 rgba(255,255,255,0.55)' : '0 -1px 0 rgba(0,0,0,0.8)');
+        style = cap + '; border-radius: 6px; color: ' + legend + '; text-shadow: ' + glow;
+      }
+      const pipStyle = on ? 'background: ' + L(1) + '; box-shadow: 0 0 4px ' + L(0.95) + ', 0 0 9px ' + L(0.5)
+                          : (silver ? 'background: rgba(0,0,0,0.30); box-shadow: inset 0 1px 1px rgba(0,0,0,0.5)' : 'background: rgba(255,255,255,0.07); box-shadow: inset 0 1px 1px rgba(0,0,0,0.8)');
+      return { t, style, pip: !isDef && o.pip !== false && (o.group || on), pipStyle, flex: o.flex ?? '1', mw: o.mw ?? '0', a: o.a ?? '', sw: o.sw ?? '' };
+    };
+    const closeKey = key('', false).style;
+    const closeBtn = key('', false).style;
+    const sendKey = key('', false, { primary: true }).style;
+
+    // ── TUNE ──
+    const tabs = [key('TUNE', true, { group: true, a: 'key' }), key('BOOKMARKS', false, { group: true })];
+    const units = [key('Hz', false, { group: true }), key('kHz', true, { group: true, fillOn: true }), key('MHz', false, { group: true })];
+    const tuneBtns = [key('CANCEL', false, { flex: '1', pip: false }), key('TUNE ▶', false, { primary: true, flex: '2', pip: false, a: 'primary' })];
+    // the entry window follows the Display style (like the deck), Nixie -> Nixie One neon (tubes are the main readout only)
+    const E = {
+      hyper: { f: "'Atkinson Hyperlegible', sans-serif", w: 700, st: 'normal', s: '30px', ls: '2px' },
+      nixie: { f: "'Nixie One', serif", w: 400, st: 'normal', s: '32px', ls: '1px' },
+      dot:   { f: "'Doto', monospace", w: 900, st: 'normal', s: '30px', ls: '1px' },
+      seg:   { f: "'DSEG14', monospace", w: 700, st: 'italic', s: '24px', ls: '2px' }
+    }[display];
+    const entry = Object.assign({ t: '1035.000', c: isDef ? '#ffffff' : T(1), g: isDef ? 'none' : ('0 0 6px ' + T(0.6)) }, E);
+    if (nixie) Object.assign(entry, { c: '#ffc48a', g: '0 0 1.5px #ff8a2e, 0 0 5px #ff6410, 0 0 11px rgba(255,80,10,0.6)' });
+
+    // ── AUDIO + MENU rows ──
+    const sec = (t, mt = '6px') => ({ isSec: true, t, mt, align: '' });
+    const keysRow = (label, keys, o = {}) => ({ isKeys: true, label, keys, just: o.just ?? 'flex-start', h: o.h ?? '30px', fs: o.fs ?? '11px' });
+    const slider = (label, pct, v, o = {}) => ({ isSlider: true, label, pct, v, level: o.level ?? '', note: o.note ?? '', a: o.a ?? '' });
+    let rows = [];
+    if (kind === 'audio') {
+      rows = [
+        Object.assign(sec('🔈  AUDIO', '0'), { align: 'text-align: center' }),
+        keysRow('', [key('● REC', false, { flex: '0 0 auto', mw: '72px', pip: false })]),
+        keysRow('', [key('RECORDINGS', false, { pip: false })]),
+        { isReadout: true, label: 'SIGNAL', v: 'S9+16' },
+        slider('SQUELCH', '6%', '', { level: '82%', a: 'fader', note: 'Your squelch stays at the signal level you set. The needle drifts a little as the noise floor moves.' }),
+        keysRow('', [key('AUTO SQUELCH', false, { flex: '0 0 auto', mw: '120px' })], { just: 'flex-start' }),
+        slider('NR', '3%', 'Off'),
+        keysRow('AUTO NOTCH', [key('OFF', false, { flex: '0 0 auto', mw: '58px' })], { just: 'flex-end' }),
+        keysRow('NOISE BLANKER', [key('OFF', false, { flex: '0 0 auto', mw: '58px' })], { just: 'flex-end' }),
+        keysRow('DE-EMPH', [key('OFF', false, { group: true, fillOn: true }), key('50µs', true, { group: true, fillOn: true }), key('75µs', false, { group: true, fillOn: true })], { just: 'flex-end' }),
+        keysRow('WFM STEREO', [key('ON', true, { flex: '0 0 auto', mw: '58px', fillOn: true })], { just: 'flex-end' }),
+        keysRow('BCAST FM', ['NR', 'IMS', 'CEQ', 'NB', 'A-BW'].map((t, i) => key(t, i === 1 || i === 4, { group: true, fillOn: true, a: i === 1 ? 'key' : '' })), { fs: '10px', h: '28px' })
+      ];
+    } else if (kind === 'menu') {
+      const colourKeys = ['green', 'red', 'amber', 'blue', 'white', 'neon'].map((c) => key('', c === (this.props.led ?? 'red'), { group: true, sw: 'rgb(' + RGB[c] + ')' }));
+      rows = [
+        sec('⚙  LOCAL HARDWARE', '0'),
+        keysRow('', [key('RTLSDRBlog V4 Controls  ›', false, { pip: false })], { h: '34px', fs: '12px' }),
+        sec('SPECTRUM / WATERFALL'),
+        keysRow('', [key('MIN', false, { pip: false }), key('− ZOOM', false, { pip: false }), key('+ ZOOM', false, { pip: false }), key('MAX', false, { pip: false })], { h: '34px' }),
+        keysRow('', [key('🔒 LOCKED', true, { fillOn: false })], { h: '32px' }),
+        keysRow('', [key('DISPLAY SETTINGS', false, { pip: false })], { h: '32px' }),
+        keysRow('', [key('KEYBOARD SHORTCUTS', false, { pip: false })], { h: '32px' }),
+        sec('CONTROLS'),
+        keysRow('', [key('CONTROL CUSTOMISATION  ›', false, { pip: false, a: 'key' })], { h: '36px', fs: '12px' })
+      ];
+    }
+    if (kind === 'custom') {
+      const swatches = (list, cur) => list.map((c) => key('', c === cur, { group: true, sw: 'rgb(' + RGB[c] + ')' }));
+      const TEXTS = { nixie: null, hyper: ['green', 'red', 'amber', 'blue', 'white', 'teal'], dot: ['teal', 'green', 'blue', 'amber', 'red'], seg: ['teal', 'green', 'blue', 'amber', 'red'] }[display];
+      const onOff = (label, on, a) => keysRow(label, [key('OFF', !on, { group: true }), key('ON', on, { group: true, a: a || '' })], { fs: '10px' });
+      rows = [
+        { isBack: true, t: 'CONTROL CUSTOMISATION', k: key('', false).style },
+        sec('FACEPLATE', '2px'),
+        keysRow('CHASSIS', [key('DEFAULT', isDef, { group: true }), key('SILVER', silver, { group: true }), key('BLACK', chassis === 'black', { group: true })], { fs: '10px' }),
+        keysRow('DISPLAY', [['NIXIE', 'nixie'], ['HYPER', 'hyper'], ['DOT', 'dot'], ['VCR', 'seg']].map(([t, d]) => key(t, display === d, { group: true })), { fs: '10px' }),
+        keysRow('CONTROLS', swatches(['green', 'red', 'amber', 'blue', 'white', 'neon'], this.props.led ?? 'red'), { h: '28px' }),
+        TEXTS ? keysRow('TEXT', swatches(TEXTS, this.props.text ?? 'red'), { h: '28px' })
+              : { isNote: true, label: 'TEXT', t: 'Locked to neon by the Nixie display' },
+        keysRow('SIGNAL METER', [key('BAR', false, { group: true }), key('LED VU', true, { group: true }), key('ANALOGUE', false, { group: true })], { fs: '10px' }),
+        keysRow('DECODERS', [key('TRANSPARENT', true, { group: true }), key('SOLID', false, { group: true })], { fs: '10px' }),
+        sec('TUNING & ZOOM'),
+        keysRow('TUNE', [key('DRUM', false, { group: true }), key('KEYS', true, { group: true })], { fs: '10px' }),
+        keysRow('ZOOM', [key('DRUM', true, { group: true }), key('KEYS', false, { group: true })], { fs: '10px' }),
+        keysRow('DRUM FEEL', [key('NORMAL', true, { group: true }), key('PRECISE', false, { group: true })], { fs: '10px' }),
+        keysRow('WHEEL', [key('ZOOM', true, { group: true }), key('TUNE', false, { group: true })], { fs: '10px' }),
+        keysRow('MEDIA ⏮⏭', [key('TUNE STEP', true, { group: true }), key('BOOKMARK', false, { group: true })], { fs: '10px' }),
+        sec('FEEL'),
+        onOff('HAPTICS', true),
+        onOff('STEADY LEDS', false)
+      ];
+    }
+    // ── CHAT ──
+    const users = [
+      { n: 'M0VIB (you)', f: '1035.000 kHz', c: isDef ? '#7fd1ff' : (silver ? '#1d4f7a' : '#8fc8ff'), op: 1, k: key('SYNC', true, { group: true }) },
+      { n: 'G4KLX', f: '1035.000 kHz', c: isDef ? '#ffd27f' : (silver ? '#6a4a0a' : '#e6c27a'), op: 1, k: key('SYNC', false, { group: true }) },
+      { n: 'PA3FWM', f: '198.000 kHz', c: isDef ? '#ffd27f' : (silver ? '#6a4a0a' : '#e6c27a'), op: 0.5, k: key('SYNC', false, { group: true }) }
+    ];
+    const own = '#7fd1ff', other = '#ffd27f', text = isDef ? 'rgba(255,240,210,0.92)' : '#eeeae2', sys = 'rgba(200,200,200,0.55)';
+    const msgs = [
+      { ts: '1546z', u: '', uc: '', t: 'PA3FWM joined', c: sys, st: 'italic', fs: '10px' },
+      { ts: '1547z', u: 'G4KLX', uc: other, t: 'Oromiya booming in tonight on 1035', c: text, st: 'normal', fs: '12px' },
+      { ts: '1547z', u: 'M0VIB', uc: own, t: 'S9+16 here, nice ID at the top of the hour', c: text, st: 'normal', fs: '12px' },
+      { ts: '1548z', u: 'G4KLX', uc: other, t: '73', c: text, st: 'normal', fs: '12px' }
+    ];
+    const canned = ['73', 'QSL?', 'Thanks', 'Tune?'].map((t) => key(t, false, { pip: false }));
+
+    return {
+      s, rows, tabs, units, tuneBtns, entry, users, msgs, canned, closeKey, closeBtn, sendKey,
+      isTune: kind === 'tune', isRows: kind === 'audio' || kind === 'menu' || kind === 'custom', isChat: kind === 'chat',
+      hasClose: kind === 'audio' || kind === 'menu' || kind === 'custom'
+    };
+  }
+}
+</script>
+</body>
+</html>
