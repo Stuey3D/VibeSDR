@@ -27,7 +27,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View, ViewStyle,} from 'react-native';
+  View, ViewStyle, type LayoutChangeEvent,} from 'react-native';
 import { useRegionHandback, NAV_FOCUS } from './PanelNav';
 import { BlurView } from 'expo-blur';
 import SectionIcon from './SectionIcon';
@@ -53,7 +53,7 @@ import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
 import { FONT_DOTO, rgba } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout } from '../constants/meters';
-import { statusGainParts, type StatusItem } from '../constants/displayText';
+import { statusGainParts, statusFit, statusState, type StatusItem, type StatusRowSpec } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
 /**
@@ -327,24 +327,32 @@ function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
 }
 
 /** The clock row: UTC, then the RECEIVER's wall clock behind the node mark that means "server end"
- *  everywhere else in this bar (the connection meter beneath it). */
-function ClockRow({ clock, color, font, size }:
-    { clock: { utc: string; srv: string; fromServer: boolean }; color: string; font?: string; size: number }) {
+ *  everywhere else in this bar (the connection meter beneath it).
+ *  ★ Row 9 (§8.2): `hide` drops `utc` / `localTime` in the landscape row; `onUnit` is the measuring
+ *    row's hook — each item wrapped and reporting its natural width (see LandscapeStatus). */
+function ClockRow({ clock, color, font, size, hide, onUnit }:
+    { clock: { utc: string; srv: string; fromServer: boolean }; color: string; font?: string; size: number;
+      hide?: Partial<Record<StatusItem, boolean>>; onUnit?: OnUnit }) {
   const sd = React.useContext(StatusDisplayContext);
   if (sd) {
     // §8.1: `08:37 UTC 09:37 BST` — Doto, text colour, one run; the node mark stays (it means
     // "the receiver's clock"), drawn in the display's colour.
     return (
       <View style={pm.clockRow}>
-        <StatusText numberOfLines={1}>{clock.utc}</StatusText>
-        {clock.fromServer ? <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} /> : null}
-        <StatusText numberOfLines={1}>{clock.srv}</StatusText>
+        {!hide?.utc && <Unit id="utc" onUnit={onUnit}><StatusText numberOfLines={1}>{clock.utc}</StatusText></Unit>}
+        {!hide?.localTime && <Unit id="localTime" onUnit={onUnit} gap={4}>
+          {clock.fromServer ? <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} /> : null}
+          <StatusText numberOfLines={1}>{clock.srv}</StatusText>
+        </Unit>}
       </View>
     );
   }
   return (
     <View style={pm.clockRow}>
-      <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size }}>{clock.utc}</Text>
+      {!hide?.utc && <Unit id="utc" onUnit={onUnit}>
+        <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size }}>{clock.utc}</Text>
+      </Unit>}
+      {!hide?.localTime && <Unit id="localTime" onUnit={onUnit} gap={4}>
       <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size, opacity: 0.6 }}>·</Text>
       {/* ★★ THE NODE, NOT THE RACK (Stuart, 2026-09-29: "wrong server icon next to the clock").
           The connection meter directly beneath this row draws the server end as the network-NODE
@@ -353,6 +361,27 @@ function ClockRow({ clock, color, font, size }:
           component now, in this row's own colour, sized to the clock text. */}
       {clock.fromServer ? <SectionIcon name="instance" size={Math.max(11, Math.round(size * 1.45))} color={color} /> : null}
       <Text numberOfLines={1} style={{ color, fontFamily: font, fontSize: size }}>{clock.srv}</Text>
+      </Unit>}
+    </View>
+  );
+}
+
+/** Row 9's measuring hook: (unit id, natural width in pt). */
+type OnUnit = (id: string, w: number) => void;
+
+/**
+ * ★ One item of the landscape status row. In the real row it is its children and nothing else — no
+ *   extra View, so every row lays out exactly as it did (the siblings keep their parent's gap). In the
+ *   MEASURING row (`onUnit` given) it wraps them in a View that reports their natural width; `gap` is
+ *   the parent's gap between them, so the wrapper measures what the row would have laid out.
+ */
+function Unit({ id, onUnit, gap = 0, children }:
+    { id: string; onUnit?: OnUnit; gap?: number; children: React.ReactNode }) {
+  if (!onUnit) return <>{children}</>;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap }}
+          onLayout={(e) => onUnit(id, e.nativeEvent.layout.width)}>
+      {children}
     </View>
   );
 }
@@ -621,17 +650,15 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
     : body;
 }
 
-export function LinkIndicator({ bus, hide, noNode = false }: { bus?: MeterBus;
-    /** §8.1 / §9: on a shared server SHARED TUNER sits in the landscape status row's centre, REPLACING
-     *  the node icon here (the phone ⇄ bars stay: the connection meter is never dropped). */
-    noNode?: boolean;
-    /** ★ Row 9's hook (§8.2): items the landscape status row has dropped to fit, by STATUS_DROP_ORDER.
-     *  Nothing passes it yet. The bars are never hidden — the connection meter is never dropped. */
-    hide?: Partial<Record<StatusItem, boolean>> }) {
-  const m = useMeters(bus);
-  const ct = useFaceplate().chassis;
-  const sd = React.useContext(StatusDisplayContext);
-  const q = m ? m.link : 0;
+/** What the connection meter shows, as the few values that are actually DRAWN. */
+interface LinkReadout { q: 0 | 1 | 2 | 3; showRate: boolean; kbps: number; fps: number; agcText: string; ifText: string }
+
+/**
+ * The connection meter's readout from the bus. ★ It re-renders only when something DRAWN changes —
+ * the bus ticks ~7×/s, the rounded rate about once a second — so the landscape row that reads it
+ * (and its measuring twin, row 9) is not re-laid-out seven times a second for identical text.
+ */
+function useLinkReadout(bus?: MeterBus): LinkReadout {
   // ★ LATCH, don't gate on the live value. Requiring fps > 0 to show the readout
   // meant a single second with no counted frames BLANKED it — so on a backend
   // whose frames arrive unevenly (Kiwi) it flashed on and off once a second.
@@ -640,28 +667,70 @@ export function LinkIndicator({ bus, hide, noNode = false }: { bus?: MeterBus;
   // into no information at all. Show it once a rate has ever arrived, then keep
   // showing it — zeros included.
   const everHadRate = useRef(false);
-  if ((m?.fps ?? 0) > 0 || (m?.kbps ?? 0) > 0) everHadRate.current = true;
-  if (q === 0) everHadRate.current = false;      // disconnected — start clean again
+  const derive = (m: MeterValues | null): LinkReadout => {
+    const q = m ? m.link : 0;
+    if ((m?.fps ?? 0) > 0 || (m?.kbps ?? 0) > 0) everHadRate.current = true;
+    if (q === 0) everHadRate.current = false;      // disconnected — start clean again
+    // Incoming rate readout — spectrum KB/s (the phone's audio is decoded natively, so JS can't see
+    // its bytes) + frame rate, the same "what's actually arriving" cue the web client shows. Only once
+    // a link exists, so a disconnected meter stays clean.
+    return { q, showRate: !!m && q > 0 && everHadRate.current,
+             kbps: Math.round(m?.kbps ?? 0), fps: Math.round(m?.fps ?? 0),
+             agcText: m?.agcText ?? '', ifText: m?.ifText ?? '' };
+  };
+  const [r, setR] = useState<LinkReadout>(() => derive(bus ? bus.value : null));
+  useEffect(() => {
+    if (!bus) return;
+    const f = (v: MeterValues) => {
+      const n = derive(v);
+      setR((p) => (p.q === n.q && p.showRate === n.showRate && p.kbps === n.kbps && p.fps === n.fps
+                   && p.agcText === n.agcText && p.ifText === n.ifText) ? p : n);
+    };
+    bus.subs.add(f);
+    f(bus.value);
+    return () => { bus.subs.delete(f); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bus]);
+  return r;
+}
+
+export function LinkIndicator({ bus, hide, noNode = false, readout, onUnit }: { bus?: MeterBus;
+    /** §8.1 / §9: on a shared server SHARED TUNER sits in the landscape status row's centre, REPLACING
+     *  the node icon here (the phone ⇄ bars stay: the connection meter is never dropped). */
+    noNode?: boolean;
+    /** ★ Row 9 (§8.2): items the landscape status row has dropped to fit, by STATUS_DROP_ORDER.
+     *  The bars are never hidden — the connection meter is never dropped. */
+    hide?: Partial<Record<StatusItem, boolean>>;
+    /** The readout, when the caller already reads it (the landscape row and its measuring twin share
+     *  one); otherwise this reads the bus itself. */
+    readout?: LinkReadout;
+    /** Row 9's MEASURING row: every unit reports its natural width, and no tour ref is claimed. */
+    onUnit?: OnUnit }) {
+  const own = useLinkReadout(readout ? undefined : bus);
+  const r = readout ?? own;
+  const ct = useFaceplate().chassis;
+  const sd = React.useContext(StatusDisplayContext);
+  const q = r.q;
   const dim = ct.linkDim;
-  // Incoming rate readout — spectrum KB/s (the phone's audio is decoded natively, so JS can't see
-  // its bytes) + frame rate, the same "what's actually arriving" cue the web client shows. Only once
-  // a link exists, so a disconnected meter stays clean.
-  const showRate = !!m && q > 0 && everHadRate.current;
-  const rateTxt  = showRate ? `${Math.round(m!.kbps ?? 0)}k/s · ${Math.round(m!.fps ?? 0)}fps` : '';
+  const showRate = r.showRate;
+  const rateTxt  = showRate ? `${r.kbps}k/s · ${r.fps}fps` : '';
   return (
     // ★ collapsable={false} so the tour can measure it — a plain View can be flattened
     //   away by RN and then measureInWindow has nothing to report. Same as the other
     //   tour targets.
-    <View ref={tourRef('linkMeter')} collapsable={false} style={pm.linkRow}>
+    <View ref={onUnit ? undefined : tourRef('linkMeter')} collapsable={false}
+          style={[pm.linkRow, onUnit && { flexWrap: 'nowrap', justifyContent: 'flex-start' }]}>
       {sd ? (<>
         {/* §8.1: `[bars][node] 6k/s 5fps · GAIN ↓25.4dB · IF 2800k` — the phone and ⇄ go (they are
             the first icons row 9 drops anyway), the arrow is DRAWN. */}
-        <LinkBars q={q} />
-        {!hide?.linkIcons && !noNode && <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} />}
-        {showRate && !hide?.rate ? <StatusText>{`${Math.round(m!.kbps ?? 0)}k/s ${Math.round(m!.fps ?? 0)}fps`}</StatusText> : null}
-        {m?.agcText && !hide?.gain ? (() => {
-          const g = statusGainParts(m.agcText);
-          if (!g) return <StatusText>{`· ${m.agcText}`}</StatusText>;
+        <Unit id="meter" onUnit={onUnit}><LinkBars q={q} /></Unit>
+        {!hide?.linkIcons && !noNode && <Unit id="linkIconsB" onUnit={onUnit}>
+          <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} />
+        </Unit>}
+        {showRate && !hide?.rate ? <Unit id="rate" onUnit={onUnit}><StatusText>{`${r.kbps}k/s ${r.fps}fps`}</StatusText></Unit> : null}
+        {r.agcText && !hide?.gain ? <Unit id="gain" onUnit={onUnit}>{(() => {
+          const g = statusGainParts(r.agcText);
+          if (!g) return <StatusText>{`· ${r.agcText}`}</StatusText>;
           return (
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <StatusText>{`· ${g.label}`}</StatusText>
@@ -669,22 +738,26 @@ export function LinkIndicator({ bus, hide, noNode = false }: { bus?: MeterBus;
               <StatusText>{g.value + g.tail}</StatusText>
             </View>
           );
-        })() : null}
-        {m?.ifText && !hide?.if ? <StatusText>{`· ${m.ifText}`}</StatusText> : null}
+        })()}</Unit> : null}
+        {r.ifText && !hide?.if ? <Unit id="if" onUnit={onUnit}><StatusText>{`· ${r.ifText}`}</StatusText></Unit> : null}
       </>) : (<>
-      <PhoneGlyph color={dim} />
-      <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>
-      <LinkBars q={q} />
+      {!hide?.linkIcons && <Unit id="linkIconsA" onUnit={onUnit} gap={4}>
+        <PhoneGlyph color={dim} />
+        <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>
+      </Unit>}
+      <Unit id="meter" onUnit={onUnit}><LinkBars q={q} /></Unit>
       {/* The network-NODE triangle — the same server mark used everywhere else (menu, watch), not
           the old server-rack box. ★ Replaced by SHARED TUNER on a shared server in landscape (§8.1). */}
-      {!noNode && <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>}
-      {!noNode && <SectionIcon name="instance" size={13} color={dim} />}
-      {showRate ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{rateTxt}</Text> : null}
+      {!hide?.linkIcons && !noNode && <Unit id="linkIconsB" onUnit={onUnit} gap={4}>
+        <Text style={[pm.linkArrows, { color: ct.linkDim }]}>⇄</Text>
+        <SectionIcon name="instance" size={13} color={dim} />
+      </Unit>}
+      {showRate && !hide?.rate ? <Unit id="rate" onUnit={onUnit}><Text style={[pm.linkRate, { color: ct.linkRate }]}>{rateTxt}</Text></Unit> : null}
       {/* ★ After the rate, because it changes rarely — a value that moves once a minute beside one
              that moves every second reads as part of the same reading if it comes first. */}
-      {m?.agcText ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${m.agcText}`}</Text> : null}
+      {r.agcText && !hide?.gain ? <Unit id="gain" onUnit={onUnit}><Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${r.agcText}`}</Text></Unit> : null}
       {/* ★ Last: it moves least of all — it changes only when somebody zooms. */}
-      {m?.ifText ? <Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${m.ifText}`}</Text> : null}
+      {r.ifText && !hide?.if ? <Unit id="if" onUnit={onUnit}><Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${r.ifText}`}</Text></Unit> : null}
       </>)}
     </View>
   );
@@ -1636,10 +1709,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
    *  it and worked; its twin did not, which is why it survived review: the same JSX, one bar broken.
    *  ★★ A destructured prop list is a hand-maintained copy of the props — anything the body uses must be in it. */
   sharedDial,
-  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
-  /** ★ Row 9's hook (§8.2): status items the landscape row has dropped to fit (STATUS_DROP_ORDER).
-   *  Nothing passes it yet. */
-  statusHide }: any) {
+  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate }: any) {
   const handbackFlash = useHandbackFlash();
   const { theme: t } = useTheme();
   // ★ Colours are the faceplate's: the chassis for keys, glass and status; the key LEGENDS resolve
@@ -1831,28 +1901,9 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           ★★ §8.1 / §9: ONE line in landscape, and on a shared dial SHARED TUNER sits in the CENTRE
              (replacing the node icon at the link's end) — the banner moved here so the display
              column never grows. */}
-      <StatusWell plate={ct.plate} gap={0} style={{ marginTop: GAP }}>
-      <View style={[lnd.statusRow, ct.plate && { marginTop: 0 }]}>
-        <View style={lnd.statusSide}>
-          <ClockRow clock={clock} color={ct.clock} font={t.font} size={CLOCK_FONT} />
-          {/* ★ The reserved slot: always laid out, only its opacity changes — nothing resizes. */}
-          <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
-            <View style={[lnd.recDot, { backgroundColor: ct.recRed }]} />
-            <StatusText keepColor style={[lnd.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>
-              {isRecording ? recTime : '0:00'}
-            </StatusText>
-          </View>
-        </View>
-        {/* ★ Only when there is something to centre — an empty box would add a gap to today's row. */}
-        {(!!sharedDial || dspNr || dspNb || dspAn) && <View style={lnd.statusCentre}>
-          {sharedDial && !statusHide?.shared && <SharedStatus st={sharedDial} size={CLOCK_FONT} />}
-          {!statusHide?.dsp && <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio} font={t.font} />}
-        </View>}
-        <View style={[lnd.statusSide, { justifyContent: 'flex-end' }]}>
-          <LinkIndicator bus={bus} hide={statusHide} noNode={!!sharedDial} />
-        </View>
-      </View>
-      </StatusWell>
+      <LandscapeStatus plate={ct.plate} marginTop={GAP} clock={clock} font={t.font} clockFont={CLOCK_FONT}
+        isRecording={isRecording} recTime={recTime} sharedDial={sharedDial}
+        dspNr={dspNr} dspNb={dspNb} dspAn={dspAn} onAudio={onAudio} bus={bus} />
 
     </View>
   );
@@ -1861,23 +1912,171 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
 /**
  * ★ SHARED TUNER in the landscape status row (§8.1 / §9): the banner's own words and colours (free /
  * ask), on one line. On the status display (silver / black) it is Doto in the text colour's role; on
- * the default deck it is today's banner font at the row's size. Row 9 shortens it to `SHARED` first.
+ * the default deck it is today's banner font at the row's size.
+ * ★★ Row 9 (§8.2): it is never SQUEEZED (dot matrix and segments fall apart below 10 pt) — when the
+ *    row is short of room it shortens to `SHARED` (`short`), and after that it is dropped.
+ *    The accessibility label keeps the whole sentence either way.
  */
-function SharedStatus({ st, size }: { st: SharedTuner; size: number }) {
+function SharedStatus({ st, size, short = false }: { st: SharedTuner; size: number; short?: boolean }) {
   const dk = useFaceplate().deck;
-  const sd = React.useContext(StatusDisplayContext);
   const colour = st.alone ? dk.bannerFree : dk.bannerAsk;
   return (
     <View style={{ flexShrink: 1, minWidth: 0 }} accessibilityRole="text" accessibilityLabel={sharedBannerLabel(st)}>
-      <StatusText keepColor numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}
-        style={[lnd.sharedTxt, sd
-          ? { color: colour, textShadowColor: sd.glow, textShadowRadius: 4 }
-          : { color: colour, fontFamily: dk.bannerFont, fontSize: Math.max(9, size * 1.15), fontWeight: '700' }]}>
-        {sharedBannerText(st, true)}
-      </StatusText>
+      <SharedText text={short ? SHARED_SHORT : sharedBannerText(st, true)} colour={colour} size={size} />
     </View>
   );
 }
+const SHARED_SHORT = 'SHARED';
+function SharedText({ text, colour, size }: { text: string; colour: string; size: number }) {
+  const dk = useFaceplate().deck;
+  const sd = React.useContext(StatusDisplayContext);
+  return (
+    <StatusText keepColor numberOfLines={1}
+      style={[lnd.sharedTxt, sd
+        ? { color: colour, textShadowColor: sd.glow, textShadowRadius: 4 }
+        : { color: colour, fontFamily: dk.bannerFont, fontSize: Math.max(9, size * 1.15), fontWeight: '700' }]}>
+      {text}
+    </StatusText>
+  );
+}
+
+/**
+ * ★★★ THE LANDSCAPE STATUS ROW (§8.1 / §8.2 / §9) — one line: times left, SHARED TUNER + the DSP
+ * badges centre, the link right; on the default deck today's footer, on silver / black the status
+ * display. Row 9 makes it FIT rather than squeeze:
+ *
+ *  ★★ MEASURED, NEVER BY DEVICE MODEL. A measuring twin (StatusMeasure) lays every item out at its
+ *     natural width, invisibly and out of the layout; the row's own width comes from its onLayout.
+ *     statusFit() (constants/displayText.ts, tested) turns the two into what to hide: first the sides
+ *     PACK (so nothing goes where it fits at all), then items drop strictly in STATUS_DROP_ORDER —
+ *     IF, GAIN, the phone ⇄ node icons, local time, DSP, rate, SHARED TUNER (→ `SHARED` first), UTC,
+ *     the recording timer. The CONNECTION METER is never dropped.
+ *  ★ No thrash: hiding an item changes neither the twin (it always holds everything) nor the row's
+ *    width (it is stretched by its parent), so a decision cannot feed back into its own inputs. The
+ *    twin re-lays out only when its text changes, and onLayout fires only when a width does.
+ *  ★ No flapping: bringing an item back needs 8 pt to spare (statusFit's hysteresis), so a rate that
+ *    ticks from 9k/s to 10k/s at the edge cannot make IF blink.
+ *  ★ Portrait never drops — it does not use this row; it is the full two-line readout.
+ */
+function LandscapeStatus({ plate, marginTop, clock, font, clockFont, isRecording, recTime, sharedDial,
+    dspNr, dspNb, dspAn, onAudio, bus }: {
+  plate: PlateTokens | null; marginTop: number;
+  clock: { utc: string; srv: string; fromServer: boolean }; font?: string; clockFont: number;
+  isRecording?: boolean; recTime?: string; sharedDial?: SharedTuner | null;
+  dspNr?: boolean; dspNb?: boolean; dspAn?: boolean; onAudio?: () => void; bus?: MeterBus;
+}) {
+  const ct = useFaceplate().chassis;
+  const s = useUiScale();
+  const link = useLinkReadout(bus);
+  const dspOn = !!(dspNr || dspNb || dspAn);
+  // ★ The reserved slot holds the timer's own shape, so it does not grow when recording starts.
+  const recText = isRecording && recTime ? recTime : '0:00:00';
+  const sharedFull = sharedDial ? sharedBannerText(sharedDial, true) : null;
+
+  const [measured, setMeasured] = useState<Record<string, number>>({});
+  const onUnit = useCallback((id: string, w: number) => {
+    const v = Math.round(w * 2) / 2;
+    setMeasured((p) => (p[id] === v ? p : { ...p, [id]: v }));
+  }, []);
+  const [avail, setAvail] = useState(0);
+  const onRowLayout = useCallback((e: LayoutChangeEvent) => {
+    // The row's content box: its width less lnd.statusRow's 4 pt padding each side.
+    const v = Math.round(e.nativeEvent.layout.width) - 2 * ROW_PAD;
+    setAvail((p) => (p === v ? p : v));
+  }, []);
+
+  const w = (id: string) => measured[id] ?? 0;
+  const spec: StatusRowSpec = {
+    sectionGap: SECTION_GAP,
+    sharedShort: sharedDial ? w('sharedShort') : undefined,
+    // leads = the gaps the row lays out: pm.clockRow 4, lnd.statusSide 8, lnd.statusCentre 8, pm.linkRow 4
+    left:   [{ item: 'utc', width: w('utc'), lead: 0 }, { item: 'localTime', width: w('localTime'), lead: 4 },
+             { item: 'rec', width: w('rec'), lead: 8 }],
+    centre: [{ item: 'shared', width: sharedDial ? w('shared') : 0, lead: 8 },
+             { item: 'dsp', width: dspOn ? w('dsp') : 0, lead: 8 }],
+    right:  [{ item: 'linkIcons', width: plate ? 0 : w('linkIconsA'), lead: 4 },
+             { item: null, width: w('meter'), lead: 4 },                     // the meter: never dropped
+             { item: 'linkIcons', width: sharedDial ? 0 : w('linkIconsB'), lead: 4 },
+             { item: 'rate', width: link.showRate ? w('rate') : 0, lead: 4 },
+             { item: 'gain', width: link.agcText ? w('gain') : 0, lead: 4 },
+             { item: 'if', width: link.ifText ? w('if') : 0, lead: 4 }],
+  };
+  const stepRef = useRef<number | undefined>(undefined);
+  let fit = statusState(0);
+  if (avail > 0) {
+    fit = statusFit(avail, spec, { prevStep: stepRef.current, hysteresis: s.r(8) });
+    stepRef.current = fit.step;
+  }
+  const hide: Partial<Record<StatusItem, boolean>> = {};
+  fit.hidden.forEach((it) => { hide[it] = true; });
+  const showShared = !!sharedDial && !hide.shared;
+  const showDsp = dspOn && !hide.dsp;
+  const side = [lnd.statusSide, fit.packed && lnd.statusSidePacked];
+
+  return (
+    <StatusWell plate={plate} gap={0} style={{ marginTop }}>
+      <View style={[lnd.statusRow, plate && { marginTop: 0 }]} onLayout={onRowLayout}>
+        <View style={side}>
+          {(!hide.utc || !hide.localTime) &&
+            <ClockRow clock={clock} color={ct.clock} font={font} size={clockFont} hide={hide} />}
+          {/* ★ The reserved slot: always laid out, only its opacity changes — nothing resizes. */}
+          {!hide.rec && <RecSlot recording={!!isRecording} text={recText} font={font} size={clockFont} />}
+        </View>
+        {/* ★ Only when there is something to centre — an empty box would add a gap to today's row. */}
+        {(showShared || showDsp) && <View style={lnd.statusCentre}>
+          {showShared && <SharedStatus st={sharedDial!} size={clockFont} short={fit.sharedShort} />}
+          {showDsp && <DspBadges nr={dspNr} nb={dspNb} an={dspAn} onPress={onAudio} font={font} />}
+        </View>}
+        <View style={[side, { justifyContent: 'flex-end' }]}>
+          <LinkIndicator readout={link} hide={hide} noNode={!!sharedDial} />
+        </View>
+      </View>
+      <StatusMeasure onUnit={onUnit} utc={clock.utc} srv={clock.srv} fromServer={clock.fromServer}
+        clockColor={ct.clock} font={font} clockFont={clockFont} recText={recText}
+        sharedFull={sharedFull} dspNr={!!dspNr} dspNb={!!dspNb} dspAn={!!dspAn}
+        link={link} noNode={!!sharedDial} />
+    </StatusWell>
+  );
+}
+const ROW_PAD = 4;       // lnd.statusRow paddingHorizontal
+const SECTION_GAP = 8;   // lnd.statusRow gap
+
+/** The recording timer's reserved slot (§8.1): laid out whether or not recording, so nothing moves. */
+function RecSlot({ recording, text, font, size }: { recording: boolean; text: string; font?: string; size: number }) {
+  const ct = useFaceplate().chassis;
+  return (
+    <View style={[lnd.recRow, !recording && { opacity: 0 }]} pointerEvents="none">
+      <View style={[lnd.recDot, { backgroundColor: ct.recRed }]} />
+      <StatusText keepColor style={[lnd.recTime, { color: ct.recRed, fontFamily: font, fontSize: size }]}>{text}</StatusText>
+    </View>
+  );
+}
+
+/**
+ * ★ Row 9's MEASURING TWIN: every status item at its natural width, invisible, out of the layout
+ * (absolute), in the same context — so the same fonts, the same 10 pt floor — and never hidden, so
+ * a dropped item's width is still known when there is room for it again. Memoised on the TEXT, so it
+ * re-renders (and re-measures) only when something it draws changes.
+ */
+const StatusMeasure = React.memo(function StatusMeasure({ onUnit, utc, srv, fromServer, clockColor, font,
+    clockFont, recText, sharedFull, dspNr, dspNb, dspAn, link, noNode }: {
+  onUnit: OnUnit; utc: string; srv: string; fromServer: boolean; clockColor: string; font?: string;
+  clockFont: number; recText: string; sharedFull: string | null;
+  dspNr: boolean; dspNb: boolean; dspAn: boolean; link: LinkReadout; noNode: boolean;
+}) {
+  const clock = useMemo(() => ({ utc, srv, fromServer }), [utc, srv, fromServer]);
+  return (
+    <View style={lnd.statusGhost} pointerEvents="none"
+          accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <ClockRow clock={clock} color={clockColor} font={font} size={clockFont} onUnit={onUnit} />
+      <Unit id="rec" onUnit={onUnit}><RecSlot recording text={recText} font={font} size={clockFont} /></Unit>
+      {sharedFull !== null && <Unit id="shared" onUnit={onUnit}><SharedText text={sharedFull} colour={clockColor} size={clockFont} /></Unit>}
+      {sharedFull !== null && <Unit id="sharedShort" onUnit={onUnit}><SharedText text={SHARED_SHORT} colour={clockColor} size={clockFont} /></Unit>}
+      {(dspNr || dspNb || dspAn) && <Unit id="dsp" onUnit={onUnit}><DspBadges nr={dspNr} nb={dspNb} an={dspAn} font={font} /></Unit>}
+      <LinkIndicator readout={link} noNode={noNode} onUnit={onUnit} />
+    </View>
+  );
+});
 
 const lnd = StyleSheet.create({
   /* ★ The bar's own bottom row. `flex: 1` on each side with the badges in the middle keeps the
@@ -1886,6 +2085,12 @@ const lnd = StyleSheet.create({
                 gap: 8, paddingHorizontal: 4, marginTop: 3 },
   statusSide: { flex: 1, minWidth: 0, flexShrink: 1, flexDirection: 'row',
                 alignItems: 'center', gap: 8 },
+  /* ★ Row 9 (§8.2): PACKED — the sides take their content's width (space-between spreads them) when
+     the equal halves above would not hold them. Still shrinkable, as the last resort of all. */
+  statusSidePacked: { flexGrow: 0, flexBasis: 'auto' },
+  /* The measuring twin: out of the layout, invisible, wide enough that nothing in it ever wraps. */
+  statusGhost: { position: 'absolute', left: 0, top: 0, width: 4000, opacity: 0,
+                 flexDirection: 'column', alignItems: 'flex-start' },
   /* The centre: SHARED TUNER on a shared dial, then the DSP badges — shrinks before the sides do. */
   statusCentre: { flexShrink: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
   sharedTxt:  { letterSpacing: 1.1 },
