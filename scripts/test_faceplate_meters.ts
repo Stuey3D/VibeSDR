@@ -11,7 +11,7 @@ import {
   portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind,
   VU_SEGMENTS, VU_LABELS, VU_THRESHOLDS, LED_SPEC, RING_OPEN, RING_CLOSED, ledColourOf, ringSegment, vuPos, peakStep,
   phi, edgeBrightness, segmentTarget, makeWindow, pushSample, eyeStep, steadyLit,
-  scalePointX, needleX, needleSpring, peakNeedleStep, meterAfterUncleanExit,
+  scalePointX, needleX, needleSpring, peakNeedleStep,
 } from '../src/constants/meters.ts';
 import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H } from '../src/constants/nixie.ts';
 
@@ -284,16 +284,6 @@ for (const W of [320, 375, 390, 430]) {
   eq('analogue + shared: 35 pt window', d.freqH, 35);
   ok(`analogue + shared: the glass shrank (${g.glassH} < ${TUBE_DESIGN.meterShared.th})`, g.glassH < TUBE_DESIGN.meterShared.th);
 }
-
-// ── ★★★ A METER CANNOT LOCK YOU OUT (services/meterGuard.ts; the 11 B7 LED VU crash) ──────────────
-// The previous run died while `armed` was starting: if that is still the chosen meter, come back on
-// the bar. A clean exit (null), the bar itself, or a meter changed since, are left alone.
-eq('died starting the LED VU → bar', meterAfterUncleanExit('vu', 'vu'), 'bar');
-eq('died starting the analogue → bar', meterAfterUncleanExit('edge', 'edge'), 'bar');
-eq('clean exit → the choice stands', meterAfterUncleanExit('vu', null), 'vu');
-eq('armed a different meter than is chosen now → the choice stands', meterAfterUncleanExit('edge', 'vu'), 'edge');
-eq('the bar is never taken away', meterAfterUncleanExit('bar', 'vu'), 'bar');
-eq('a junk mark changes nothing', meterAfterUncleanExit('vu', 'junk'), 'vu');
 
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate meters: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

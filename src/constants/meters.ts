@@ -33,14 +33,6 @@
 
 export type MeterKind = 'bar' | 'vu' | 'edge';
 
-/**
- * ★★★ THE METER CANNOT LOCK YOU OUT (services/meterGuard.ts). `armed` is the meter the previous run
- * was starting when it died (null = it exited cleanly). If that is the meter still chosen, the app
- * comes back on the BAR; anything else (a clean exit, the bar, a meter since changed) is left alone.
- */
-export function meterAfterUncleanExit(chosen: MeterKind, armed: string | null): MeterKind {
-  return armed != null && armed !== 'bar' && armed === chosen ? 'bar' : chosen;
-}
 
 /** Scale-1 sizes from Deck.mockup's portrait `L` + §4.1's table. */
 export const DECK = {

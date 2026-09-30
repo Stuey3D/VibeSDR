@@ -18,10 +18,10 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode } from 'react';
-import { AccessibilityInfo, Platform } from 'react-native';
+import { AccessibilityInfo, AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, parseSettings, resolveFaceplate, withDisplay, withText,
+  decideLaunch, DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, parseSettings, resolveFaceplate, withDisplay, withText,
   withTransparency,
   type FaceplateSettings, type FaceplateTheme, type DisplayStyle, type TextColour, type Transparency,
   type SurfaceTokens,
@@ -31,8 +31,7 @@ import {
   type AutoTransparency, type DeviceSignals,
 } from '../constants/transparency';
 import { installNativeTransliterator } from '../services/transliterator';
-import { explainMeterFallback, takeUncleanMeterExit } from '../services/meterGuard';
-import { meterAfterUncleanExit } from '../constants/meters';
+import { explainFaceplateReset, faceplateGuard, LAST_CRASHED_KEY, launchMarkOnce } from '../services/faceplateGuard';
 import { readNativeDeviceClass } from '../services/deviceClass';
 
 // ★ The dot-matrix / 14-segment displays transliterate non-Latin names with the platform's ICU
@@ -108,33 +107,54 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const base = useMemo(baseSignals, []);
   const auto = useMemo(() => autoTransparency({ ...base, reduceTransparency }), [base, reduceTransparency]);
 
+  // ★★★ A FACEPLATE CANNOT LOCK YOU OUT (constants/faceplate.ts CRASH SAFETY). The previous run's crash mark
+  //   is read SYNCHRONOUSLY, here, before anything can arm — and the stored settings are applied only
+  //   through decideLaunch, so a faceplate the last run died drawing is never drawn again unasked.
+  //   (Until the stored copy loads, the tree draws DEFAULT_SETTINGS, which is the safe faceplate.)
+  const launchMark = useMemo(launchMarkOnce, []);
   useEffect(() => {
     let live = true;
-    Promise.all([AsyncStorage.getItem(FACEPLATE_STORAGE_KEY), takeUncleanMeterExit()])
-      .then(([j, armed]: [string | null, string | null]) => {
+    AsyncStorage.getItem(FACEPLATE_STORAGE_KEY)
+      .then((j: string | null) => {
         if (!live || touched.current) return;
-        let s = parseSettings(j, legacyThemeName);
-        // ★★★ THE METER CANNOT LOCK YOU OUT (services/meterGuard.ts): the last run died while this
-        //   meter was starting — come back on the bar, stored, and say so once.
-        const meter = meterAfterUncleanExit(s.meter, armed);
-        const fellBack = meter !== s.meter;
-        if (fellBack) s = { ...s, meter };
+        const { settings: s, crashed } = decideLaunch(parseSettings(j, legacyThemeName), launchMark);
+        // ★ Written BEFORE the stored faceplate is drawn: this launch is now the one on trial.
+        faceplateGuard.arm(s);
         setSettings(s);
         // ★ Write the migrated result back, so the migration runs once and a later change to the
         //   legacy default cannot re-seed Display under a user who never touched it.
-        if (!j || fellBack) AsyncStorage.setItem(FACEPLATE_STORAGE_KEY, JSON.stringify(s)).catch(() => {});
-        if (fellBack && armed) explainMeterFallback(armed, 'crash');
+        if (!j || crashed) AsyncStorage.setItem(FACEPLATE_STORAGE_KEY, JSON.stringify(s)).catch(() => {});
+        if (crashed) {
+          AsyncStorage.setItem(LAST_CRASHED_KEY, JSON.stringify(crashed)).catch(() => {});
+          explainFaceplateReset();
+        }
       })
       .catch(() => {});
     return () => { live = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ★ Leaving the foreground ends the trial (a swipe-away from the switcher is not a crash);
+  //   coming back puts the faceplate on trial again for a few seconds (surfaces are rebuilt).
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st: string) => {
+      if (st === 'active') faceplateGuard.arm(settingsRef.current);
+      else faceplateGuard.clear();
+    });
+    return () => sub.remove();
+  }, []);
+
   const commit = useCallback((f: (s: FaceplateSettings) => FaceplateSettings) => {
     touched.current = true;
     setSettings((prev: FaceplateSettings) => {
       const next = f(prev);
-      if (next !== prev) AsyncStorage.setItem(FACEPLATE_STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      if (next !== prev) {
+        // ★ A new faceplate from the pane is on trial from before its first frame.
+        faceplateGuard.arm(next);
+        AsyncStorage.setItem(FACEPLATE_STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      }
       return next;
     });
   }, []);
@@ -155,6 +175,16 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
                                  setDisplay, setText, set }),
                         [theme, onScreen, auto, setTransparency, setDisplay, setText, set]);
   return <FaceplateContext.Provider value={value}>{children}</FaceplateContext.Provider>;
+}
+
+/**
+ * ★★★ The deck (and the VTS strip) put the faceplate on trial as they MOUNT — entering a receiver is
+ * where a faceplate is first really drawn, often long after launch. Runs during the first render, so
+ * the mark is on disk before the first frame (the write is synchronous and idempotent).
+ */
+export function useFaceplateOnTrial(): void {
+  const { settings } = useContext(FaceplateContext);
+  useState(() => { faceplateGuard.arm(settings); return 0; });
 }
 
 /** The resolved faceplate — what components draw with. */

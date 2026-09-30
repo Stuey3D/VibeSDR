@@ -184,7 +184,7 @@ function frameCallback(file, marker) {
   return { code, captured: [...analyse(code).captured] };
 }
 const sv = (value) => ({ value });
-/** The meters catch their own throw and hand it to `onFault` via scheduleOnRN (services/meterGuard.ts)
+/** The meters catch their own throw and hand it to `onFault` via scheduleOnRN (ControlsBar MeterHousing)
  *  — so a fault here is a CALL, not a throw, and it fails the test just the same. */
 function runFrames(what, fc, shared, extra = {}) {
   if (!fc) return;

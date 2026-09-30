@@ -163,7 +163,7 @@ export interface LedVuProps {
    *  6.5, padding 3 6 2 — and `labelH: 0` for the strip without labels on a small screen. */
   geom?: { padTop: number; padX: number; ledH: number; labelH: number; labelGap: number };
   /** ★★★ The frame callback threw (on the JS thread, once): the housing puts the BAR back
-   *  (services/meterGuard.ts) instead of the throw aborting the app. */
+   *  (ControlsBar MeterHousing) instead of the throw aborting the app. */
   onFault?: (message: string) => void;
 }
 

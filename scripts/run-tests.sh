@@ -185,6 +185,11 @@ if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); e
 #     worklet in src/ is compiled with the app's plugin and checked, and the meters' frame callbacks are
 #     rebuilt from the plugin's output with no module scope and run — the test above cannot see it.
 if node --no-warnings scripts/test_worklet_defaults.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ A FACEPLATE CANNOT LOCK YOU OUT (faceplate.ts CRASH SAFETY): the mark is armed before a risky
+#     faceplate draws and cleared after 5 s / on leaving the foreground; a launch that finds it comes up
+#     on HYPER / BAR / DEFAULT with the choice kept aside — a crash, a clean exit, a swipe-away, a torn
+#     mark and a refusing disk, across fake launches.
+if node --no-warnings scripts/test_faceplate_safety.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ THE DRUM WELLS (faceplates §6): the default well is today's drum as data, the needle is gone on
 #    every chassis, the aluminium notch pair inverts (and its draw order is a token), the LED pool's
 #    geometry, the controls colour at the brief's brightness, and the tuner keys' 31 % / 34 % layout.

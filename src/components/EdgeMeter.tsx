@@ -150,7 +150,7 @@ function shadowSprite(w: number, h: number, blur: number, colour: string): SkIma
 
 export default function EdgeMeter({ bus, height, printH, printTop, onFault }: {
   bus?: MeterBus; height: number;
-  /** ★★★ The frame callback threw (JS thread, once): the housing puts the BAR back (meterGuard). */
+  /** ★★★ The frame callback threw (JS thread, once): the housing puts the BAR back (ControlsBar MeterHousing). */
   onFault?: (message: string) => void;
   /** Landscape: the print's design height and offset in a shorter window (default: the window). */
   printH?: number; printTop?: number;
