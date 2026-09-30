@@ -944,7 +944,7 @@ function cardHtml(s, sharedWith, distWord) {
  * NO SCRIPT at all, and a CSP that says so: a page built from other people's names needs nothing
  * that runs. ★ noindex twice (meta and header): a dead address must not become a search result.
  */
-function sorryPage({ status, title, lead, sub, heading, cards, empty, retry = false, extra = {} }) {
+function sorryPage({ status, title, lead, sub, heading, note = '', cards, empty, retry = false, extra = {} }) {
   const body = `<!doctype html>
 <html lang="en-GB"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -989,7 +989,7 @@ function sorryPage({ status, title, lead, sub, heading, cards, empty, retry = fa
 <h1>${escHtml(lead)}</h1>
 ${sub.map((l) => `<p class="dim">${escHtml(l)}</p>`).join('\n')}
 ${cards.length
-    ? `<h2>${escHtml(heading)}</h2>\n<ul>${cards.join('\n')}</ul>`
+    ? `<h2>${escHtml(heading)}</h2>\n${note ? `<p class="dim">${escHtml(note)}</p>\n` : ''}<ul>${cards.join('\n')}</ul>`
     : `<p>${escHtml(empty)}</p>`}
 <p class="acts">${retry ? '<a class="listen ghost" href="/">Try again</a>' : ''}<a class="listen" href="https://${PUBLIC_ZONE}/">${retry ? 'Back to the directory' : 'See every server in the directory'}</a></p>
 </main></body></html>`;
@@ -1053,9 +1053,10 @@ async function knownPage(env, slug, { variant, name, pos, bands, country, away, 
     sub = name ? [`${name} used to be here, at ${slug}.${PUBLIC_ZONE}.`] : [];
     heading = 'Here are some other servers you may like';
   }
-  if (covered && picks.length) sub.push(`Listed nearest first, favouring servers that also cover ${covered}.`);
+  // ★ Under the heading, not above it (Stuart, 2026-09-30: "it reads better") — it describes the list.
+  const note = covered && picks.length ? `Listed nearest first, favouring servers that also cover ${covered}.` : '';
   return sorryPage({
-    status, title, lead, sub, heading, retry, extra,
+    status, title, lead, sub, heading, note, retry, extra,
     cards: picks.map((s) => cardHtml(s, bands, 'away')),
     empty: 'No other servers are online right now.',
   });
