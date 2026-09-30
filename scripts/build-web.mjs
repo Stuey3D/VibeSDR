@@ -66,14 +66,18 @@ const TARGET = ['chrome110', 'safari16', 'firefox115'];
 
 const DEV = process.argv.includes('--dev');
 const OUT_JS = path.join(OUT_DIR, 'vs');
-/** ★ Where the scripts live, below the page's own base (BASE_PATH in main.ts): `/vs/` on a
- *  single-radio server, `/r/<id>/vs/` on a multi-radio one — so the radio that served the page
- *  serves its script too, and a front door restarted onto a newer build cannot answer for it. */
+/** ★★ WHERE THE SCRIPTS LIVE: `/vs/`, ABSOLUTE — the same URL whichever page asked, so a listener
+ *  who arrives at a multi-radio server's front door and then opens a radio (/r/<id>/) already has
+ *  the code in cache, and so does one who hops between radios. Every process of a server is the
+ *  same binary with the same build, and the door answers /vs/ itself (local_sdr_shim.cpp).
+ *  ★ If it does not — an update restarts the door and its radios a few seconds apart, so for a
+ *    moment they can carry different builds — the page's own radio has the same files under its
+ *    prefix, and the loader falls back to that (BASE_JS). */
 const JS_DIR = '/vs/';
 
 /** The page's own copy of BASE_PATH (web/client/src/main.ts) — the SAME regex, on purpose: the
- *  script must come from the process that served the page. See JS_DIR. */
-const BASE_JS = `(location.pathname.match(/^\\/r\\/[^/]+/)||[''])[0]+${JSON.stringify(JS_DIR)}`;
+ *  fallback must reach the process that served the page. See JS_DIR. */
+const BASE_JS = `(location.pathname.match(/^\\/r\\/[^/]+/)||[''])[0]`;
 
 const gzip = (b) => zlib.gzipSync(b, { level: 9 });
 const brotli = (b) => zlib.brotliCompressSync(b, { params: {
@@ -142,10 +146,13 @@ async function bundle() {
   ];
   // ★ Checked per FILE: with the bundle split, a chunk that mentions the API while its typeof
   //   guard lives in a different chunk would pass a check over the joined text.
+  // ★ As a whole IDENTIFIER: the WASM decoder's own chunk is full of `WASMAudioDecoderCommon`,
+  //   which contains the needle and is not WebCodecs at all.
   for (const [needle, hint] of guardedOnly) {
     // Every mention must sit next to a typeof test. Minified or not, esbuild keeps both tokens.
+    const ident = new RegExp(`(?<![A-Za-z0-9_$])${needle}(?![A-Za-z0-9_$])`);
     for (const f of res.outputFiles) {
-      if (f.text.includes(needle) && !f.text.includes(`typeof ${needle}`)) {
+      if (ident.test(f.text) && !f.text.includes(`typeof ${needle}`)) {
         throw new Error(`unguarded secure-context-only API "${needle}" in ${path.basename(f.path)} — ${hint}`);
       }
     }
@@ -198,21 +205,22 @@ async function bundle() {
     .replaceAll('__ARTWORK_BASE__',  await dataUri('assets/vibeserver-art.png'))
     .replaceAll('__ARTWORK_INSET__', await dataUri('assets/vibeserver-art.png'));
 
-  // ★★★ THE LOADER. The script's URL depends on WHERE the page was served from (/ or /r/<id>/),
-  //     which only the browser knows — so two tiny inline scripts build it, with the page's own
-  //     BASE_PATH rule. The first, in the head, starts the download while the rest of the HTML is
-  //     still arriving (a slow link's whole problem is time). The second, where the bundle used to
-  //     be, runs it: everything it touches has been parsed by then, exactly as before.
-  //  ★ A failed load says so. On a link that drops, a page that silently never starts is the worst
-  //    outcome; a sentence and a refresh is the cure.
+  // ★★★ THE LOADER. The first half is plain markup in the head — modulepreload for the entry and
+  //     every chunk it imports statically — so the browser starts the download while the rest of
+  //     the HTML is still arriving (a slow link's whole problem is time). The second half, where
+  //     the bundle used to be, runs it: everything it touches has been parsed by then, as before.
+  //  ★★ A MODULE THAT WILL NOT LOAD TRIES THE PAGE'S OWN RADIO NEXT (see JS_DIR), then says so. On
+  //     a link that drops, a page that silently never starts is the worst outcome; a sentence and
+  //     a refresh is the cure. onerror fires only for a fetch or parse failure of the module graph,
+  //     never after it has run, so a fallback can never run the client twice.
   //  ★ Replacer FUNCTIONS, not strings: in a replacement string "$&" means "the matched text".
-  const preload = `<script>(function(){var b=${BASE_JS};${JSON.stringify(eager)}.forEach(function(n){`
-                + `var l=document.createElement('link');l.rel='modulepreload';l.href=b+n;document.head.appendChild(l)})})()</script>`;
-  const run = `<script>(function(){var s=document.createElement('script');s.type='module';`
-            + `s.src=${BASE_JS}+${JSON.stringify(entry.name)};`
-            + `s.onerror=function(){var d=document.createElement('div');d.textContent='This page did not finish loading. Refresh to try again.';`
-            + `d.style.cssText='position:fixed;left:0;right:0;bottom:0;padding:12px;background:#300;color:#ffb833;font:14px monospace;text-align:center;z-index:99999';`
-            + `document.body.appendChild(d)};document.body.appendChild(s)})()</script>`;
+  const preload = eager.map((n) => `<link rel="modulepreload" href="${JS_DIR}${n}">`).join('');
+  const run = `<script>(function(){var b=${BASE_JS},d=[${JSON.stringify(JS_DIR)}];if(b)d.push(b+${JSON.stringify(JS_DIR)});`
+            + `function go(i){var s=document.createElement('script');s.type='module';s.src=d[i]+${JSON.stringify(entry.name)};`
+            + `s.onerror=function(){s.remove();if(i+1<d.length)return go(i+1);var e=document.createElement('div');`
+            + `e.textContent='This page did not finish loading. Refresh to try again.';`
+            + `e.style.cssText='position:fixed;left:0;right:0;bottom:0;padding:12px;background:#300;color:#ffb833;font:14px monospace;text-align:center;z-index:99999';`
+            + `document.body.appendChild(e)};document.body.appendChild(s)}go(0)})()</script>`;
   let out = html.replace(/<\/title>/, (m) => m + preload);
   if (out === html) throw new Error('no </title> in index.html — where does the preload go?');
   const out2 = out.replace(/<script type="module" src="\.\/src\/main\.ts"><\/script>\s*$/, () => run + '\n');
