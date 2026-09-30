@@ -405,19 +405,6 @@ export interface ChassisTokens {
   /** The dark slot each key sits in, where the key draws none itself (the default chassis's outline
    *  key); null on metal, whose DomeKey cap already sits in its own slot. */
   keysSlot:       string | null;
-  // Today's tuner keys (TunerKeys, until §6.2 makes them dome keys)
-  tkSlotEdge:     string;
-  tkSlotLip:      string[];
-  tkCapDown:      string[];
-  tkCapUp:        string[];
-  tkShadeDown:    string;
-  tkShadeUp:      string;
-  tkCapSheen:     string[];
-  tkGrainA:       string;
-  tkGrainB:       string;
-  tkRimDown:      string;
-  tkRimUp:        string;
-  tkWellRing:     string;
   // VTS strip
   vtsBg:          string;
   vtsBorder:      string;
@@ -537,18 +524,6 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
   trapFill:      'rgba(3,4,3,0.96)',
   keysFace:      '#0b0a08',
   keysSlot:      '#050403',
-  tkSlotEdge:    'rgba(0,0,0,0.9)',
-  tkSlotLip:     ['rgba(255,255,255,0.05)', 'rgba(255,255,255,0.22)', 'rgba(255,255,255,0.05)'],
-  tkCapDown:     ['#050605', '#090a09', '#0d0f0d'],
-  tkCapUp:       ['#0a0b0a', '#141614', '#1b1e1b'],
-  tkShadeDown:   'rgba(0,0,0,0.75)',
-  tkShadeUp:     'rgba(0,0,0,0.6)',
-  tkCapSheen:    ['rgba(255,255,255,0)', 'rgba(255,255,255,0.05)'],
-  tkGrainA:      'rgba(255,255,255,0.030)',
-  tkGrainB:      'rgba(255,255,255,0.045)',
-  tkRimDown:     'rgba(255,255,255,0.03)',
-  tkRimUp:       'rgba(255,255,255,0.07)',
-  tkWellRing:    'rgba(255,255,255,0.10)',
   vtsBg:         'rgba(8,10,14,0.94)',
   vtsBorder:     'rgba(255,255,255,0.22)',
   plate:         null,

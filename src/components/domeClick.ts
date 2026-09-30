@@ -35,8 +35,8 @@ export function createDomeClick(d: DomeClickDeps) {
   let pressT: Timer | null = null;
   let releaseT: Timer | null = null;
   let armedAt = 0;
-  // ★ One release per press: TunerKeys ends a press on onPressOut AND onTouchCancel, and a second
-  //   release click for the same press would be a click with no key under it.
+  // ★ One release per press: a press can be ended twice (onPressOut and a touch cancel), and a
+  //   second release click for the same press would be a click with no key under it.
   let held = false;
 
   const flush = () => {

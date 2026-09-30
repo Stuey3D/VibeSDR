@@ -1682,7 +1682,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       {/* VFO drum + clock */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
         {vfoKeys
-          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} />
+          ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} style={{ flex: 1 }} landscape />
           : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} style={{ flex: 1 }} noInertia={vfoNoInertia} />}
 
         {/* ★★ THE SLOT IS ALWAYS THERE, EMPTY OR NOT — and that is the whole point of putting it
@@ -1767,7 +1767,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       {!singleDrum && (
         <View style={{ flex: 1, minWidth: s.r(80) }}>
           {zoomKeys
-            ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} style={{ flex: 1 }} />
+            ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} style={{ flex: 1 }} landscape />
             : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} style={{ flex: 1 }} />}
           {/* ★★★ THE READOUTS LIVE UNDER THE ZOOM KEYS, NOT UNDER THE VFO — and the reason is not
               tidiness. They were in the VFO column, so the recording row APPEARED AND DISAPPEARED

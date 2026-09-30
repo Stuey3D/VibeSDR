@@ -11,7 +11,7 @@
  *
  * ★★★ Depress, haptic and legend flare fire on onPressIn; the ACTION fires on release (§5).
  *   (TunerKeys is the exception the brief keeps: its step lands on the way DOWN, as it always has —
- *   it uses useDomeKey's pressIn/pressOut directly for the feel and keeps its own sweep law.)
+ *   it draws DomeKeys and hangs its own sweep law on their onPressIn / onPressOut.)
  * ★★ THE SNAP RUNS ON THE UI THREAD (Reanimated withTiming): press 45 ms `cubic-bezier(0.9,0,1,0.6)`
  *   — resists, then collapses; release 35 ms `cubic-bezier(0.2,0.9,0.3,1.4)` — springs back past
  *   rest. A busy JS thread cannot make it slide.
@@ -39,7 +39,7 @@ import { getControlHaptics } from './controlHaptics';
 import {
   createDomeClick, DOME_PRESS_MS, DOME_RELEASE_MS, DOME_PRESS_BEZIER, DOME_RELEASE_BEZIER,
 } from './domeClick';
-import { LEGEND_GLOW_REST, LEGEND_GLOW_DOWN, type ChassisTokens } from '../constants/faceplate';
+import { LEGEND_GLOW_REST, LEGEND_GLOW_DOWN, type ChassisTokens, type KeyLegend } from '../constants/faceplate';
 
 // ── Haptics ───────────────────────────────────────────────────────────────────
 
@@ -213,11 +213,15 @@ export function DomeText({ progress, style, children, numberOfLines, adjustsFont
 
 export interface IconStroke { path: SkPath; fill?: boolean; width?: number; color?: string }
 
-/** A Skia icon legend with the same flare. `k` scales the paths' authoring space to `size`. */
-export function DomeIcon({ size, k, strokes, progress }: {
+/** A Skia icon legend with the same flare. `k` scales the paths' authoring space to `size`.
+ *  `legend` overrides the main keys' legend colours — the tuner keys (§6.2) light theirs in the
+ *  CONTROLS colour on every chassis, where the main keys are white on the default deck. */
+export function DomeIcon({ size, k, strokes, progress, legend }: {
   size: number; k: number; strokes: IconStroke[]; progress?: SharedValue<number>;
+  legend?: Pick<KeyLegend, 'color' | 'hot' | 'glow' | 'shade'>;
 }) {
-  const kl = useFaceplate().keyLegend;
+  const fpLegend = useFaceplate().keyLegend;
+  const kl = legend ?? fpLegend;
   const zero = useSharedValue(0);
   const p = progress ?? zero;
   const color = useDerivedValue(() => {
@@ -265,13 +269,18 @@ export interface DomeKeyProps {
   /** Drawn over the slot, not moved by the press (the recording / chat pulse rings). */
   overlay?:  React.ReactNode;
   accessibilityLabel?: string;
+  accessibilityHint?:  string;
+  /** Called with the dome's own press / release — for a key whose ACTION lands on the way down
+   *  (TunerKeys' step and hold-to-sweep, §6.2), which `onPress` (on release, §5) cannot give. */
+  onPressIn?:  () => void;
+  onPressOut?: () => void;
   /** The legend, given the press progress for its flare. */
   children:  (progress: SharedValue<number>) => React.ReactNode;
 }
 
 export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   onPress, disabled, height, radius = 10, style, hitSlop = 10, outline, minHeight, overlay,
-  accessibilityLabel, children,
+  accessibilityLabel, accessibilityHint, onPressIn, onPressOut, children,
 }, ref) {
   const fp = useFaceplate();
   const ct = fp.chassis;
@@ -286,15 +295,15 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   const dim = useAnimatedStyle(() => ({ opacity: Math.max(0, Math.min(1, progress.value)) }));
   const cast = useAnimatedStyle(() => ({ opacity: 1 - Math.max(0, Math.min(1, progress.value)) }));
 
-  const onIn  = disabled ? undefined : pressIn;
-  const onOut = disabled ? undefined : pressOut;
+  const onIn  = disabled ? undefined : onPressIn ? () => { pressIn(); onPressIn(); } : pressIn;
+  const onOut = disabled ? undefined : onPressOut ? () => { pressOut(); onPressOut(); } : pressOut;
 
   if (dome.look === 'outline') {
     // ★ TODAY'S KEY at rest, pixel for pixel: por.btn / lnd.lsBtn's outline and tint. The snap moves
     //   the legend (the only part a flat outline key has to move) and dims the face.
     return (
       <Pressable ref={ref} onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut}
-        disabled={disabled} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel={accessibilityLabel}
+        disabled={disabled} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint}
         style={[{ ...(minHeight ? { minHeight: height } : { height }), borderWidth: 1, borderRadius: 4, borderColor: outline ?? ct.keyBorder,
                   backgroundColor: ct.keyBg, alignItems: 'center', justifyContent: 'center',
                   overflow: 'hidden' }, style]}>
@@ -311,7 +320,7 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   const capR = Math.max(2, radius - 2);
   return (
     <Pressable ref={ref} onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut}
-      disabled={disabled} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel={accessibilityLabel}
+      disabled={disabled} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint}
       style={[{ height, borderRadius: radius, backgroundColor: dome.slotBg }, style]}
       onLayout={e => {
         const w = Math.round(e.nativeEvent.layout.width - 4);

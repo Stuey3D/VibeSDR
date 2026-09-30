@@ -3,43 +3,47 @@
  * DrumWheel (briefs/BRIEF-inputs-shack-mode-mac.md §2), and deliberately NOT the app's
  * standard buttons.
  *
- *   ┌───────────────────────────────────┐  ← same machined panel + green LED
- *   │  ╭─────╮    ·glyph·    ╭─────╮   │    border as DrumWheel, so a drum and
- *   │  │  ‹  │              │  ›  │   │    a key pair sit side by side as one
- *   │  ╰─────╯              ╰─────╯   │    front panel
+ *   ┌───────────────────────────────────┐  ← THE DRUM WELL'S OWN face, border and
+ *   │ ┌──────┐               ┌──────┐ │    glow (faceplates §6.2): the drum is
+ *   │ │  ‹   │    ·glyph·    │  ›   │ │    swapped for two keys, nothing else
+ *   │ └──────┘               └──────┘ │    changes — the recess and the ring stay
  *   └───────────────────────────────────┘
  *
  * One instance renders ONE control pair — `<` `>` for VFO, `−` `+` for zoom —
  * with that pair's static glyph between them (radio = tune, magnifier = zoom).
  * Two of them side by side give the four-key row from the design.
  *
- * The look, per Stuart's brief:
- *  - black brushed-metal key bodies, physical-key proportions
- *  - a green LED halo SURROUNDING each key, so they look set INTO the panel
- *  - the icon is LASER-CUT: the green backlight glows THROUGH the cut, rather
- *    than the icon being painted on. Drawn as light escaping a recess, not as a
- *    coloured symbol.
- *  - the centre glyph is static and non-interactive — it LABELS the pair.
+ * ★★ FACEPLATES §6.2 (ref docs/faceplates/tuner-keys/K1, K2; Deck.mockup `tk`). The keys are DOME
+ *   KEYS — larger versions of the four main keys (§5): same cap, same 45 ms snap, same press +
+ *   release clicks (DomeKey / useDomeKey). Each sits in its own dark slot INSIDE the well's
+ *   recessed face, a step below the plate, 31 % of the well wide (34 % in landscape), full height.
+ *   The legends and the glyph between are in the CONTROLS colour, on every chassis.
+ * ★★★ Stuart, 2026-09-30: "I really like on the silver how they look like they are set into a slight
+ *   recess … and have a ring around them to indicate their importance." The ring is the drum
+ *   well's own border and glow (components/DrumWell.tsx WellEdge) — one implementation, so the
+ *   keys well can never drift from the drum well beside it.
+ * ★ The previous look (tilted matte-black keys with laser-cut backlit legends, a plain machined
+ *   edge) is retired by the brief: §5 makes every key on the deck the one dome key.
  *
- * The behaviour, which matters as much as the look: see useHoldSweep below.
+ * The behaviour, which matters as much as the look: see useHoldSweep below — UNCHANGED.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Pressable, ViewStyle } from 'react-native';
-import {
-  Canvas, Rect, RoundedRect, Path, Skia, vec,
-  BlurMask, LinearGradient, RadialGradient, Group,
-} from '@shopify/react-native-skia';
+import { View, StyleSheet, ViewStyle } from 'react-native';
+import { Canvas, Path, Skia, BlurMask } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
-import { getControlHaptics, buildGlyphPath } from './DrumWheel';
-import { useDomeKey } from './DomeKey';
+import { getControlHaptics } from './controlHaptics';
+import { buildGlyphPath } from './DrumWheel';
+import { DomeKey, DomeIcon, type IconStroke } from './DomeKey';
+import { WellFace, WellEdge } from './DrumWell';
 import { useFaceplate } from '../contexts/FaceplateContext';
-import { ledA, hotA } from '../constants/faceplate';
+import { useUiScale } from '../hooks/useUiScale';
+import { ledA } from '../constants/faceplate';
+import { tunerKeysLayout, wellOutset, TK_SLOT_R } from '../constants/drumWell';
 
 // ── Look ──────────────────────────────────────────────────────────────────────
-// ★ The colours are the faceplate's (constants/faceplate.ts), shared with DrumWheel so a drum and a
-//   key pair stay siblings on every chassis: the controls colour lights the cuts and the legend,
-//   the chassis tokens carry the metal. The old hsl(GLOW_HUE) could not make white or neon (§6.1).
+// ★ The colours are the faceplate's (constants/faceplate.ts): the well's face and edge are the drum
+//   well's tokens, the caps are DomeKey's, and the controls colour lights the legends and glyph.
 
 // ── Behaviour (BRIEF §2, "they must ACT like a HiFi tuner") ──────────────────
 //
@@ -206,67 +210,57 @@ interface Props {
   width?: number;
   style?: ViewStyle;
   disabled?: boolean;
+  /** The landscape bar: keys 34 % of the well and a 6 pt padding (Deck.mockup `tk`). */
+  landscape?: boolean;
+}
+
+/** The key legends, drawn in the mockup's 24-unit SVG space: ‹ › for tune, − + for zoom. */
+function legendStrokes(type: TunerKeyType, dir: -1 | 1): IconStroke[] {
+  const p = Skia.Path.Make();
+  if (type === 'vfo') {
+    if (dir === 1) { p.moveTo(9, 5); p.lineTo(16, 12); p.lineTo(9, 19); }    // M9 5l7 7-7 7
+    else           { p.moveTo(15, 5); p.lineTo(8, 12); p.lineTo(15, 19); }   // M15 5l-7 7 7 7
+  } else {
+    p.moveTo(5, 12); p.lineTo(19, 12);                                       // M5 12h14
+    if (dir === 1) { p.moveTo(12, 5); p.lineTo(12, 19); }                    // M12 5v14
+  }
+  return [{ path: p, width: 1.9 }];
 }
 
 export default function TunerKeys({
   type, height, onStep, sweepRate, onSweepStep, width: widthProp = 0, style, disabled = false,
+  landscape = false,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
   const H = height;
   const fp = useFaceplate();
   const ct = fp.chassis;
+  const s  = useUiScale();
   const G  = (a: number) => ledA(fp.controls, a);
 
-  const [down, setDown] = useState<-1 | 1 | 0>(0);
-  const { press, release, sweeping } = useHoldSweep(onStep, disabled, sweepRate, onSweepStep);
+  const { press, release } = useHoldSweep(onStep, disabled, sweepRate, onSweepStep);
+  // A key that becomes disabled while held (a shared dial taken away mid-sweep) must stop dead: the
+  // disabled DomeKey no longer reports its release.
+  useEffect(() => { if (disabled) release(); }, [disabled, release]);
 
-  // ★ The feel of a dome key (§5): the click at the END of the 45 ms snap and another on release —
-  //   one per key, so a thumb rolling from one key to the other clicks each. The step itself still
-  //   lands on the way DOWN (the sweep law is unchanged); only the Light/Medium impacts are gone.
-  const domeL = useDomeKey();
-  const domeR = useDomeKey();
-  const onDown = useCallback((dir: -1 | 1) => {
-    if (disabled) return;
-    setDown(dir); press(dir); (dir === 1 ? domeR : domeL).pressIn();
-  }, [press, disabled, domeL, domeR]);
-  const onUp = useCallback((dir: -1 | 1) => {
-    setDown(0); release(); (dir === 1 ? domeR : domeL).pressOut();
-  }, [release, domeL, domeR]);
+  // ★ The keys are DOME KEYS (§5): the dome's own press / release clicks and snap come from DomeKey
+  //   (useDomeKey), one per key, so a thumb rolling from one key to the other clicks each. The STEP
+  //   still lands on the way DOWN and the hold timer dies the instant contact breaks — the sweep
+  //   law above is untouched; DomeKey only hands us its press-in and press-out.
+  const onDown = useCallback((dir: -1 | 1) => { if (!disabled) press(dir); }, [press, disabled]);
+  const onUp   = useCallback(() => release(), [release]);
 
-  // ── Geometry: [key] [glyph] [key], the keys generous and the glyph a label ──
-  const padX = Math.max(4, W * 0.045);
-  const padY = Math.max(3, H * 0.13);
-  const keyW = Math.max(18, (W - padX * 2) * 0.335);
-  const keyH = Math.max(14, H - padY * 2);
-  const cx   = W / 2;
-  const keys = useMemo(() => ([
-    { dir: -1 as const, x: padX },
-    { dir:  1 as const, x: W - padX - keyW },
-  ]), [padX, W, keyW]);
-
-  const glyphSz   = Math.max(9, Math.round(H * 0.42));
+  const L = useMemo(() => tunerKeysLayout(W, H, landscape, s.r), [W, H, landscape, s.r]);
   const glyphPath = useMemo(
-    () => buildGlyphPath(type === 'vfo', cx, H / 2, glyphSz),
-    [type, cx, H, glyphSz]);
-
-  // The laser-cut symbol on each key: ‹ › for tune, − + for zoom.
-  const symPath = useCallback((dir: -1 | 1, kx: number) => {
-    const p = Skia.Path.Make();
-    const c = vec(kx + keyW / 2, padY + keyH / 2);
-    const r = Math.max(4, Math.min(keyW, keyH) * 0.22);
-    if (type === 'vfo') {
-      // Chevron — pointing the way it tunes.
-      const s = dir === 1 ? 1 : -1;
-      p.moveTo(c.x - s * r * 0.45, c.y - r);
-      p.lineTo(c.x + s * r * 0.55, c.y);
-      p.lineTo(c.x - s * r * 0.45, c.y + r);
-    } else {
-      p.moveTo(c.x - r, c.y); p.lineTo(c.x + r, c.y);
-      if (dir === 1) { p.moveTo(c.x, c.y - r); p.lineTo(c.x, c.y + r); }
-    }
-    return p;
-  }, [type, keyW, keyH, padY]);
+    () => buildGlyphPath(type === 'vfo', L.glyphCx, L.glyphCy, L.glyphSz),
+    [type, L.glyphCx, L.glyphCy, L.glyphSz]);
+  const legend = useMemo(() => ({
+    color: fp.controls.core, hot: fp.controls.hot, glow: fp.controls.glow, shade: null,
+  }), [fp.controls]);
+  const strokes = useMemo(() => ({
+    lo: legendStrokes(type, -1), hi: legendStrokes(type, 1),
+  }), [type]);
 
   if (W <= 0) {
     return (
@@ -276,168 +270,64 @@ export default function TunerKeys({
   }
 
   const dim = disabled ? 0.35 : 1;
+  const M = wellOutset(ct);
+  // Default: today's outline key sits in its own dark slot (Deck.mockup `t.slot`, cap inset
+  // 2 / 1.5 / 3). Metal: DomeKey's cap already sits in its slot, so it IS the slot.
+  const slot = ct.keysSlot;
+  const capInset = slot ? { top: 1.5, bottom: 3, x: 2 } : { top: 0, bottom: 0, x: 0 };
+  const capH = L.keyH - capInset.top - capInset.bottom;
+  const iconSz = Math.max(10, Math.min(s.r(22), (slot ? capH : capH - 4) * 0.55));
 
   return (
     <View style={[{ height }, style]}
           onLayout={widthProp <= 0 ? e => setMeasuredW(e.nativeEvent.layout.width) : undefined}>
-      <Canvas style={StyleSheet.absoluteFill}>
-
-        {/* ── Panel face — identical to DrumWheel's, so a drum and a key pair
-            read as one continuous front panel when mixed ── */}
-        <RoundedRect x={0} y={0} width={W} height={H} r={6}>
-          <LinearGradient start={vec(0, 0)} end={vec(0, H)}
-            colors={ct.wellFace} positions={[0, 0.4, 1]} />
-        </RoundedRect>
-
-        {keys.map(({ dir, x }) => {
-          const active = down === dir || sweeping === dir;
-          const lit = (active ? 1 : 0.62) * dim;
-          return (
-            <Group key={`k${dir}`}>
-              {/* ── Backlight LEAKING out around the key ──────────────────────
-                  ★ The physical model, and it matters for getting this right: the
-                  key is an opaque piece of metal sitting in front of a green lamp.
-                  It is NOT a key with an LED ring drawn around it. So the light we
-                  see is (a) the bright shaft through the laser cut, below, and
-                  (b) a thin spill escaping the gap around the key's edge.
-                  That spill is per-KEY because each key has its own lamp behind
-                  it — drawing one glow around both made the pair read as a single
-                  illuminated box, which no real tuner looks like.
-                  Kept deliberately restrained: on the reference tuners the keys
-                  are MATTE BLACK and barely lit at their edges. Overdo this and it
-                  stops looking like machined metal and starts looking like a toy. */}
-              <RoundedRect x={x - 2.5} y={padY - 2.5} width={keyW + 5} height={keyH + 5} r={8}
-                           color={G(active ? 0.30 : 0.10)} strokeWidth={6} style="stroke">
-                <BlurMask blur={7} style="normal" respectCTM />
-              </RoundedRect>
-              <RoundedRect x={x - 1.2} y={padY - 1.2} width={keyW + 2.4} height={keyH + 2.4} r={6.2}
-                           color={G(active ? 0.62 : 0.26)} strokeWidth={1.1} style="stroke">
-                <BlurMask blur={1.4} style="normal" respectCTM />
-              </RoundedRect>
-
-              {/* The dark recess the key sits down inside, with a machined metal
-                  LIP catching light along its top edge — the bright frame the keys
-                  are let into on a real tuner (Stuart's reference photos). It is
-                  what gives the key somewhere to be recessed INTO. */}
-              <RoundedRect x={x - 1} y={padY - 1} width={keyW + 2} height={keyH + 2} r={6}
-                           color={ct.tkSlotEdge} />
-              <Rect x={x - 1} y={padY - 1} width={keyW + 2} height={1.2}>
-                <LinearGradient start={vec(x - 1, 0)} end={vec(x + keyW + 1, 0)}
-                  colors={ct.tkSlotLip} />
-              </Rect>
-
-              {/* ── Key body, LEANING BACK into the panel ─────────────────────
-                  The face is tilted away at the top, so the light source (above
-                  and in front) rakes across the BOTTOM of the key and leaves the
-                  top in shadow. Hence dark-at-top → light-at-bottom, the reverse
-                  of a flat cap. Pressed = it lies back further still and the
-                  whole face falls into shadow. */}
-              <RoundedRect x={x} y={padY} width={keyW} height={keyH} r={5}>
-                <LinearGradient
-                  start={vec(0, padY)} end={vec(0, padY + keyH)}
-                  colors={active ? ct.tkCapDown : ct.tkCapUp}
-                  positions={[0, 0.55, 1]} />
-              </RoundedRect>
-
-              {/* The shadow the panel lip casts down over the top of the key —
-                  what actually reads as "leaning back". */}
-              <Rect x={x} y={padY} width={keyW} height={keyH * 0.42}>
-                <LinearGradient start={vec(0, padY)} end={vec(0, padY + keyH * 0.42)}
-                  colors={[active ? ct.tkShadeDown : ct.tkShadeUp, 'rgba(0,0,0,0)']} />
-              </Rect>
-
-              {/* Light caught on the lower face that tilts up towards you. Faint:
-                  these are MATTE keys, so it is a hint of sheen, not a gloss
-                  highlight — the reference tuners have almost none. */}
-              {!active && (
-                <Rect x={x + 1} y={padY + keyH * 0.70} width={keyW - 2} height={keyH * 0.28}>
-                  <LinearGradient start={vec(0, padY + keyH * 0.70)} end={vec(0, padY + keyH * 0.98)}
-                    colors={ct.tkCapSheen} />
-                </Rect>
-              )}
-
-              {/* ── Brushed grain ────────────────────────────────────────────
-                  The reference tuners are MATTE with a fine directional grain, not
-                  gloss. A few very low-contrast vertical strands read as machined
-                  aluminium at this size; a smooth gradient alone looks like
-                  plastic. Skipped while pressed — the face is in shadow then and
-                  the grain would only muddy it. */}
-              {!active && [0.22, 0.38, 0.55, 0.72].map((f, gi) => (
-                <Rect key={`gr${gi}`} x={x + keyW * f} y={padY + keyH * 0.18}
-                      width={0.7} height={keyH * 0.64}
-                      color={gi % 2 ? ct.tkGrainA : ct.tkGrainB} />
-              ))}
-
-              {/* Bottom lip highlight — the near edge, closest to the light */}
-              <RoundedRect x={x + 0.5} y={padY + 0.5} width={keyW - 1} height={keyH - 1} r={4.5}
-                           color={active ? ct.tkRimDown : ct.tkRimUp}
-                           strokeWidth={0.9} style="stroke" />
-
-              {/* ── The laser cut ──────────────────────────────────────────────
-                  Light escaping a cut in the metal, not a painted symbol: a soft
-                  pool bleeding onto the surrounding face, then the bright core of
-                  the cut itself. Glow BEHIND a crisp stroke — blurring the stroke
-                  itself just smudges it (the same rule DrumWheel's icons follow). */}
-              <Path path={symPath(dir, x)} color={G(0.34 * lit)} strokeWidth={7}
-                    style="stroke" strokeCap="round" strokeJoin="round">
-                <BlurMask blur={6} style="normal" respectCTM />
-              </Path>
-              <Path path={symPath(dir, x)} color={G(0.55 * lit)} strokeWidth={3.4}
-                    style="stroke" strokeCap="round" strokeJoin="round">
-                <BlurMask blur={2.5} style="normal" respectCTM />
-              </Path>
-              <Path path={symPath(dir, x)} color={hotA(fp.controls, 0.95 * lit)}
-                    strokeWidth={1.7} style="stroke" strokeCap="round" strokeJoin="round" />
-            </Group>
-          );
-        })}
-
-        {/* ── Centre glyph — static, non-interactive, labels the pair.
-            Backlit from behind like a panel legend. ── */}
-        <Rect x={cx - glyphSz} y={H / 2 - glyphSz} width={glyphSz * 2} height={glyphSz * 2}>
-          <RadialGradient c={vec(cx, H / 2)} r={glyphSz}
-            colors={[G(0.10 * dim), 'rgba(0,0,0,0)']} positions={[0, 1]} />
-        </Rect>
-        <Path path={glyphPath} color={G(0.40 * dim)} strokeWidth={2.6} style="stroke"
+      {/* ── The well's face (static) and the glyph that labels the pair ── */}
+      <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
+        <WellFace W={W} H={H} ct={ct} keys />
+        {/* Centre glyph — static, non-interactive, in the controls colour: glow BEHIND a crisp
+            stroke, as the drum's icon is drawn. */}
+        <Path path={glyphPath} color={G(0.55 * dim)} strokeWidth={2.6} style="stroke"
               strokeCap="round" strokeJoin="round">
           <BlurMask blur={3} style="normal" respectCTM />
         </Path>
-        <Path path={glyphPath} color={G(0.88 * dim)} strokeWidth={1.1} style="stroke"
+        <Path path={glyphPath} color={G(0.95 * dim)} strokeWidth={1.4} style="stroke"
               strokeCap="round" strokeJoin="round" />
-
-        {/* ── Panel edge — deliberately NOT the drum's green LED border ──────
-            DrumWheel rings its whole panel in green because the drum IS the lit
-            component. Here the KEYS are, and a green ring around the pair as
-            well made the two keys read as one illuminated box instead of two
-            separate keys set into metal. So this is a plain machined edge and
-            the only green in the panel comes from the keys and the legend. */}
-        <RoundedRect x={0.5} y={0.5} width={W - 1} height={H - 1} r={6}
-                     color={ct.tkWellRing} strokeWidth={0.9} style="stroke" />
       </Canvas>
 
-      {/* ── Touch targets. Views over the Canvas, as DrumWheel does for its +/−.
-          onPressIn/onPressOut rather than onPress: the step must land on the way
-          DOWN, and the hold timer must die the instant contact breaks. ── */}
-      {keys.map(({ dir, x }) => (
-        <Pressable
-          key={`p${dir}`}
-          disabled={disabled}
-          onPressIn={() => onDown(dir)}
-          onPressOut={() => onUp(dir)}
-          // A drag off the key still ends the press, so a sweep cannot be
-          // orphaned by sliding a finger away instead of lifting it.
-          onTouchCancel={() => onUp(dir)}
-          style={{ position: 'absolute', left: x - 2, top: padY - 2,
-                   width: keyW + 4, height: keyH + 4 }}
-          hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-          accessibilityRole="button"
-          accessibilityLabel={
-            type === 'vfo'
-              ? (dir === 1 ? 'Tune up' : 'Tune down')
-              : (dir === 1 ? 'Zoom in' : 'Zoom out')
-          }
-          accessibilityHint="Press for one step, hold to sweep"
-        />
+      {/* ── The well's edge — the drum well's own border, ring and glow, EXACTLY (§6.2: "kept
+          exactly as it is when the drum is swapped for keys"). M larger for the metal glow. ── */}
+      <View pointerEvents="none"
+            style={{ position: 'absolute', left: -M, top: -M, width: W + 2 * M, height: H + 2 * M }}>
+        <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
+          <WellEdge W={W} H={H} M={M} ct={ct} led={fp.controls} />
+        </Canvas>
+      </View>
+
+      {/* ── The two keys, each in its own dark slot, a step below the plate ── */}
+      {([-1, 1] as const).map(dir => (
+        <View key={`k${dir}`}
+              style={{ position: 'absolute', left: dir === 1 ? L.rightX : L.leftX, top: L.pad,
+                       width: L.keyW, height: L.keyH, opacity: dim,
+                       ...(slot ? { backgroundColor: slot, borderRadius: TK_SLOT_R,
+                                    paddingTop: capInset.top, paddingHorizontal: capInset.x } : null) }}>
+          <DomeKey
+            height={capH} radius={slot ? TK_SLOT_R - 1 : TK_SLOT_R}
+            style={slot ? { borderRadius: TK_SLOT_R - 1 } : { width: L.keyW }}
+            disabled={disabled}
+            onPressIn={() => onDown(dir)}
+            onPressOut={onUp}
+            // Into the padding and the gap — the keys are the well's only targets.
+            hitSlop={{ top: L.pad, bottom: L.pad, left: dir === 1 ? 4 : L.pad, right: dir === 1 ? L.pad : 4 }}
+            accessibilityLabel={
+              type === 'vfo'
+                ? (dir === 1 ? 'Tune up' : 'Tune down')
+                : (dir === 1 ? 'Zoom in' : 'Zoom out')
+            }
+            accessibilityHint="Press for one step, hold to sweep">
+            {p => <DomeIcon size={iconSz} k={iconSz / 24} strokes={dir === 1 ? strokes.hi : strokes.lo}
+                            progress={p} legend={legend} />}
+          </DomeKey>
+        </View>
       ))}
     </View>
   );
