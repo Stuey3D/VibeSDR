@@ -26,6 +26,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
+import { usePopupStyles, usePopupTheme, type PopupTokens } from './PopupShell';
 import type { ChatUserRow } from '../services/DecoderClient';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -82,9 +83,7 @@ function fmtUserFreq(hz?: number): string {
 const C = {
   bg:       'rgba(6,4,2,0.99)',
   border:   'rgba(255,160,0,0.30)',
-  gold:     '#ffb833',
   goldDim:  '#c8893a',
-  muted:    'rgba(255,184,51,0.40)',
   btnBg:    'rgba(20,10,0,0.80)',
   btnBdr:   'rgba(255,160,0,0.35)',
   inputBg:  'rgba(15,10,0,0.90)',
@@ -111,16 +110,18 @@ function ChatDrawerBody({
   users = [], syncedUser = null, zoomSync = false,
   onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, dialLine,
 }: ChatDrawerProps) {
+  const cd = usePopupStyles(makeCd);
+  const pt = usePopupTheme();
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
   // White-aware colour overrides — backgrounds stay dark
   const cc = {
     border:  isWhite ? 'rgba(255,255,255,0.25)' : C.border,
-    title:   isWhite ? 'rgba(255,255,255,0.55)' : C.muted,
+    title:   isWhite ? 'rgba(255,255,255,0.55)' : pt.gold.amberA(0.40),
     btnBdr:  isWhite ? 'rgba(255,255,255,0.30)' : C.btnBdr,
-    btnText: isWhite ? '#ffffff' : C.gold,
+    btnText: isWhite ? '#ffffff' : pt.gold.amber,
     inputBdr:isWhite ? 'rgba(255,255,255,0.22)' : C.inputBdr,
-    inputCl: isWhite ? '#ffffff' : C.gold,
+    inputCl: isWhite ? '#ffffff' : pt.gold.amber,
     userCl:  isWhite ? '#b0c8ff' : C.userCl,
     ownCl:   isWhite ? '#ffe566' : C.ownCl,
     textCl:  isWhite ? 'rgba(240,240,240,0.90)' : C.textCl,
@@ -410,7 +411,7 @@ function ChatDrawerBody({
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const cd = StyleSheet.create({
+const makeCd = (pt: PopupTokens) => StyleSheet.create({
   backdrop: { backgroundColor: 'rgba(0,0,0,0.55)' },
   kavWrap:  { position: 'absolute', left: 0, right: 0, bottom: 0, top: 0, justifyContent: 'flex-end', pointerEvents: 'box-none' },
   drawer: {
@@ -446,7 +447,7 @@ const cd = StyleSheet.create({
   syncBtnOn: {
     borderColor: 'rgba(80,220,100,0.70)', backgroundColor: 'rgba(80,220,100,0.12)',
   },
-  syncBtnTxt:   { fontSize: 10, letterSpacing: 1, color: 'rgba(255,184,51,0.80)' },
+  syncBtnTxt:   { fontSize: 10, letterSpacing: 1, color: pt.gold.amberA(0.80) },
   syncBtnTxtOn: { color: 'rgba(120,235,140,0.95)' },
 
   setupWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 10 },
@@ -456,7 +457,7 @@ const cd = StyleSheet.create({
     flex: 1, backgroundColor: 'rgba(20,12,0,0.90)',
     borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
     borderRadius: 6, paddingHorizontal: 12, paddingVertical: 10,
-    fontFamily: FONT, fontSize: 14, letterSpacing: 1, color: C.gold,
+    fontFamily: FONT, fontSize: 14, letterSpacing: 1, color: pt.gold.amber,
   },
   joinBtn: {
     backgroundColor: 'rgba(255,160,0,0.12)',
@@ -464,7 +465,7 @@ const cd = StyleSheet.create({
     borderRadius: 6, paddingHorizontal: 18, paddingVertical: 10,
     justifyContent: 'center', alignItems: 'center',
   },
-  joinBtnTxt: { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: C.gold },
+  joinBtnTxt: { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: pt.gold.amber },
 
   msgList:    { flex: 1 },
   msgContent: { paddingHorizontal: 14, paddingVertical: 4 },
@@ -498,7 +499,7 @@ const cd = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,160,0,0.40)',
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  sendBtnTxt: { color: C.gold, fontSize: 16 },
+  sendBtnTxt: { color: pt.gold.amber, fontSize: 16 },
   // ★★★ THE PHRASE PAD HAS ITS OWN STYLE, and this is why: it first reused `sendBtn`, which is a
   //     fixed 36×36 CIRCLE built for a single ▶ glyph. Twelve sentences in twelve circles came out
   //     as unreadable two-letter stacks — "C an", "A nyt", "Tu nir" (Stuart, on an iPad, 2026-08-20).
@@ -515,7 +516,7 @@ const cd = StyleSheet.create({
   // ★ The room line is a SENTENCE too — `meLbl` caps at 80px, which squeezed it into a column.
   cannedLine: {
     width: '100%', fontFamily: FONT, fontSize: 11,
-    color: 'rgba(255,184,51,0.75)', marginBottom: 2,
+    color: pt.gold.amberA(0.75), marginBottom: 2,
   },
 });
 

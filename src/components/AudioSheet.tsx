@@ -10,6 +10,7 @@ import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, note
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { meterText, useMeters, type MeterBus } from './ControlsBar';
 import { isKiwiProtocol } from '../services/sdrTypes';
+import { usePopupStyles, usePopupTheme, type PopupTokens } from './PopupShell';
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
@@ -73,6 +74,7 @@ function SquelchBar({ level, pos, gate, auto = false, onDrag, onDragEnd }: {
   onDrag?: (v: number) => void;
   onDragEnd?: () => void;
 }) {
+  const st = usePopupStyles(makeSt);
   // The bar's position in WINDOW coordinates, measured on layout.
   //
   // ★ Do NOT use the touch's locationX. It is relative to whichever view actually received the
@@ -208,6 +210,8 @@ function SquelchControl({
   margin: number; onMargin?: (db: number) => void;
   autoOk: boolean;
 }) {
+  const st = usePopupStyles(makeSt);
+  const pt = usePopupTheme();
   return (
     <View style={{ flex: 1 }}>
       <SquelchBar level={level} pos={pos} gate={gate} auto={auto}
@@ -250,8 +254,8 @@ function SquelchControl({
               minimumValue={4} maximumValue={20} step={1}
               value={Math.max(4, Math.min(20, margin))}
               onValueChange={(v: number) => onMargin?.(v)}
-              minimumTrackTintColor={C.gold}
-              maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+              minimumTrackTintColor={pt.gold.fill}
+              maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
             <Text style={st.bwVal}>{`+${Math.round(margin)} dB`}</Text>
           </View>
         </NavRow>
@@ -279,6 +283,7 @@ function fmtDspVal(v: number, step: number) {
 
 // ── Small primitives (local copies of MenuSheet's) ───────────────────────────
 function SectionLabel({ label, icon }: { label: string; icon?: SectionIconName }) {
+  const st = usePopupStyles(makeSt);
   return (
     <View style={st.sectionBar}>
       <View style={st.sectionRow}>
@@ -289,11 +294,13 @@ function SectionLabel({ label, icon }: { label: string; icon?: SectionIconName }
   );
 }
 function BtnRow({ children }: { children: React.ReactNode }) {
+  const st = usePopupStyles(makeSt);
   return <NavRow><View style={st.btnRow}>{children}</View></NavRow>;
 }
 function Btn({ label, active, onPress, full, style }: {
   label: string; active?: boolean; onPress?: () => void; full?: boolean; style?: object;
 }) {
+  const st = usePopupStyles(makeSt);
   const { focused, viewRef } = useNavButton(onPress);
   return (
     <TouchableOpacity
@@ -307,9 +314,11 @@ function Btn({ label, active, onPress, full, style }: {
   );
 }
 function SubLabel({ label }: { label: string }) {
+  const st = usePopupStyles(makeSt);
   return <Text style={st.subLabel}>{label}</Text>;
 }
 function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const st = usePopupStyles(makeSt);
   const { focused, viewRef } = useNavButton(onPress);
   return (
     <TouchableOpacity ref={viewRef as any}
@@ -465,6 +474,8 @@ export default function AudioSheet({
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
   dspFilters = [], dspError = null, onServerDsp, onServerDspFilter, onServerDspParam,
 }: AudioSheetProps) {
+  const st = usePopupStyles(makeSt);
+  const pt = usePopupTheme();
   const [iqRate, setIqRate] = useState(48000);   // ★ raw IQ out: the rate to ask for
   const { theme: t } = useTheme();
   const insets = useSafeAreaInsets();
@@ -577,7 +588,7 @@ export default function AudioSheet({
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SIGNAL</Text>
               <View style={{ flex: 1 }} />
-              <Text style={[st.bwVal, { color: C.gold, fontWeight: '700' }]}>{liveSig}</Text>
+              <Text style={[st.bwVal, { color: pt.gold.readout, fontWeight: '700' }]}>{liveSig}</Text>
             </View>
           ) : null}
 
@@ -591,8 +602,8 @@ export default function AudioSheet({
                 minimumValue={-130} maximumValue={-20} step={1}
                 value={owrxSql <= -130 ? -130 : Math.max(-129, Math.min(-20, owrxSql + visualGain))}
                 onValueChange={(v: number) => { const db = v <= -130 ? -150 : v - visualGain; setOwrxSql(db); onOwrxSquelch?.(db); }}
-                minimumTrackTintColor={owrxSql > -130 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                minimumTrackTintColor={owrxSql > -130 ? pt.gold.fill : C.muted}
+                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
               <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : sqlDisp(owrxSql + visualGain)}</Text>
             </View>
             <View style={st.bwRow}>
@@ -601,8 +612,8 @@ export default function AudioSheet({
                 minimumValue={0} maximumValue={30} step={1}
                 value={owrxNr}
                 onValueChange={(v: number) => { setOwrxNr(v); onOwrxNr?.(v); }}
-                minimumTrackTintColor={owrxNr > 0 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                minimumTrackTintColor={owrxNr > 0 ? pt.gold.fill : C.muted}
+                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
               <Text style={st.bwVal}>{owrxNr <= 0 ? 'Off' : `${owrxNr}dB`}</Text>
             </View>
           </>)}
@@ -627,8 +638,8 @@ export default function AudioSheet({
                 minimumValue={0} maximumValue={20} step={1}
                 value={localNR}
                 onValueChange={(v: number) => onLocalNR?.(v)}
-                minimumTrackTintColor={localNR > 0 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                minimumTrackTintColor={localNR > 0 ? pt.gold.fill : C.muted}
+                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
               <Text style={st.bwVal}>{localNR <= 0 ? 'Off' : String(localNR)}</Text>
             </View>
           )}
@@ -640,8 +651,8 @@ export default function AudioSheet({
               <View style={{ flex: 1 }} />
               <TouchableOpacity onPress={() => onNotch?.(!notchOn)} hitSlop={8}
                 style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                         backgroundColor: notchOn ? C.gold : 'transparent',
-                         borderWidth: 1, borderColor: notchOn ? C.gold : C.muted }}>
+                         backgroundColor: notchOn ? pt.gold.sel : 'transparent',
+                         borderWidth: 1, borderColor: notchOn ? pt.gold.sel : C.muted }}>
                 <Text style={{ color: notchOn ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {notchOn ? 'ON' : 'OFF'}
@@ -660,8 +671,8 @@ export default function AudioSheet({
               <View style={{ flex: 1 }} />
               <TouchableOpacity onPress={() => onNbx?.(!nbx)} hitSlop={8}
                 style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                         backgroundColor: nbx ? C.gold : 'transparent',
-                         borderWidth: 1, borderColor: nbx ? C.gold : C.muted }}>
+                         backgroundColor: nbx ? pt.gold.sel : 'transparent',
+                         borderWidth: 1, borderColor: nbx ? pt.gold.sel : C.muted }}>
                 <Text style={{ color: nbx ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {nbx ? 'ON' : 'OFF'}
@@ -679,8 +690,8 @@ export default function AudioSheet({
               <TouchableOpacity onPress={() => onNfmVoice?.(!nfmVoice)} hitSlop={8}
                 accessibilityLabel={nfmVoice ? 'NFM audio: voice filtered. Tap for raw.' : 'NFM audio: raw. Tap for voice filtered.'}
                 style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                         backgroundColor: nfmVoice ? C.gold : 'transparent',
-                         borderWidth: 1, borderColor: nfmVoice ? C.gold : C.muted }}>
+                         backgroundColor: nfmVoice ? pt.gold.sel : 'transparent',
+                         borderWidth: 1, borderColor: nfmVoice ? pt.gold.sel : C.muted }}>
                 <Text style={{ color: nfmVoice ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {nfmVoice ? 'VOICE' : 'RAW'}
@@ -697,8 +708,8 @@ export default function AudioSheet({
               <View style={{ flex: 1 }} />
               <TouchableOpacity onPress={() => onRawAudio(!rawAudio)} hitSlop={8}
                 style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                         backgroundColor: rawAudio ? C.gold : 'transparent',
-                         borderWidth: 1, borderColor: rawAudio ? C.gold : C.muted }}>
+                         backgroundColor: rawAudio ? pt.gold.sel : 'transparent',
+                         borderWidth: 1, borderColor: rawAudio ? pt.gold.sel : C.muted }}>
                 <Text style={{ color: rawAudio ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {rawAudio ? 'ON' : 'OFF'}
@@ -716,15 +727,15 @@ export default function AudioSheet({
                   {(iqLocal ? [48000, 96000, 192000, 250000] : [48000]).map(r => (
                     <TouchableOpacity key={r} onPress={() => { if (!iq?.on) setIqRate(r); }} hitSlop={6}
                       style={{ paddingHorizontal: 8, paddingVertical: 3, borderRadius: 5, borderWidth: 1,
-                               borderColor: (iq?.rate ?? iqRate) === r ? C.gold : C.muted, opacity: iq?.on && iq.rate !== r ? 0.35 : 1 }}>
-                      <Text style={{ color: (iq?.rate ?? iqRate) === r ? C.gold : C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 10 }}>{r / 1000}k</Text>
+                               borderColor: (iq?.rate ?? iqRate) === r ? pt.gold.sel : C.muted, opacity: iq?.on && iq.rate !== r ? 0.35 : 1 }}>
+                      <Text style={{ color: (iq?.rate ?? iqRate) === r ? pt.gold.sel : C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 10 }}>{r / 1000}k</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
                 <TouchableOpacity onPress={() => onIqOut(!iq?.on, iqRate)} hitSlop={8}
                   style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                           backgroundColor: iq?.on ? C.gold : 'transparent',
-                           borderWidth: 1, borderColor: iq?.on ? C.gold : C.muted }}>
+                           backgroundColor: iq?.on ? pt.gold.sel : 'transparent',
+                           borderWidth: 1, borderColor: iq?.on ? pt.gold.sel : C.muted }}>
                   <Text style={{ color: iq?.on ? '#000' : C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                     {iq?.on ? 'ON' : 'OFF'}
                   </Text>
@@ -750,8 +761,8 @@ export default function AudioSheet({
               {([{ l: 'OFF', v: 0 }, { l: '50µs', v: 50e-6 }, { l: '75µs', v: 75e-6 }]).map((o) => (
                 <TouchableOpacity key={o.l} onPress={() => onDeemph(o.v)} hitSlop={6}
                   style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, marginLeft: 6,
-                           backgroundColor: deemph === o.v ? C.gold : 'transparent',
-                           borderWidth: 1, borderColor: deemph === o.v ? C.gold : C.muted }}>
+                           backgroundColor: deemph === o.v ? pt.gold.sel : 'transparent',
+                           borderWidth: 1, borderColor: deemph === o.v ? pt.gold.sel : C.muted }}>
                   <Text style={{ color: deemph === o.v ? '#000' : C.muted,
                                  fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                     {o.l}
@@ -768,8 +779,8 @@ export default function AudioSheet({
               <View style={{ flex: 1 }} />
               <TouchableOpacity onPress={() => onStereo(!stereo)} hitSlop={8}
                 style={{ paddingHorizontal: 16, paddingVertical: 4, borderRadius: 6,
-                         backgroundColor: stereo ? C.gold : 'transparent',
-                         borderWidth: 1, borderColor: stereo ? C.gold : C.muted }}>
+                         backgroundColor: stereo ? pt.gold.sel : 'transparent',
+                         borderWidth: 1, borderColor: stereo ? pt.gold.sel : C.muted }}>
                 <Text style={{ color: stereo ? '#000' : C.muted,
                                fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                   {stereo ? 'ON' : 'OFF'}
@@ -806,8 +817,8 @@ export default function AudioSheet({
               ] as const).filter((o) => !!o.cb).map((o) => (
                 <TouchableOpacity key={o.l} onPress={() => o.cb?.(!o.on)} hitSlop={6}
                   style={{ paddingHorizontal: 9, paddingVertical: 4, borderRadius: 6, marginLeft: 6,
-                           backgroundColor: o.on ? C.gold : 'transparent',
-                           borderWidth: 1, borderColor: o.on ? C.gold : C.muted }}>
+                           backgroundColor: o.on ? pt.gold.sel : 'transparent',
+                           borderWidth: 1, borderColor: o.on ? pt.gold.sel : C.muted }}>
                   <Text style={{ color: o.on ? '#000' : C.muted,
                                  fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 }}>
                     {o.l}
@@ -852,8 +863,8 @@ export default function AudioSheet({
                   const db = v === 0 ? -999 : -48 + (v - 1) * (68 / 99);
                   onFmSquelch?.(db);
                 }}
-                minimumTrackTintColor={fmSquelch > -999 ? C.gold : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                minimumTrackTintColor={fmSquelch > -999 ? pt.gold.fill : C.muted}
+                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
               <Text style={st.bwVal}>{fmSquelch <= -999 ? 'Open' : `${fmSquelch.toFixed(1)}dB`}</Text>
             </View>
           )}
@@ -905,8 +916,8 @@ export default function AudioSheet({
                           minimumValue={min} maximumValue={max} step={step}
                           value={Math.max(min, Math.min(max, num))}
                           onValueChange={(v: number) => onServerDspParam?.(p.name, fmtDspVal(v, step))}
-                          minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
-                          thumbTintColor={C.gold} />
+                          minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted}
+                          thumbTintColor={pt.gold.thumb} />
                         <Text style={st.bwVal}>{fmtDspVal(num, step)}</Text>
                       </View>
                     );
@@ -926,7 +937,7 @@ export default function AudioSheet({
   );
 }
 
-const st = StyleSheet.create({
+const makeSt = (pt: PopupTokens) => StyleSheet.create({
   backdrop:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.50)' },
   sheet: {
     backgroundColor: 'rgba(8,6,1,0.97)',
@@ -958,15 +969,15 @@ const st = StyleSheet.create({
     borderRadius: 5, paddingHorizontal: 16, paddingVertical: 11,
     alignItems: 'center', justifyContent: 'center',
   },
-  btnActive:     { backgroundColor: C.active, borderColor: C.goldDim },
+  btnActive:     { backgroundColor: C.active, borderColor: pt.gold.selBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
   btnText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
-  btnTextActive: { color: C.gold },
+  btnTextActive: { color: pt.gold.sel },
 
   bwRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
   bwLabel:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1, width: 32 },
   bwSlider: { flex: 1, height: 32 },
-  bwVal:    { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
+  bwVal:    { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
   // The squelch meter IS the control, so it gets a slider's worth of height and touch target —
   // it replaced the slider rather than sitting under it.
   // 40 tall: a 22px ball on top, its needle dropping through the 14px bar parked at the bottom.
@@ -1018,7 +1029,7 @@ const st = StyleSheet.create({
 
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
-  recTime:  { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
+  recTime:  { color: pt.gold.readout, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
   dspError: { color: 'rgba(220,53,69,0.95)', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 },
 
   closeBtn: {

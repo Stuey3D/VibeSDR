@@ -17,6 +17,7 @@ import {
   Pressable, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode } from './PanelNav';
+import { usePopupStyles, type PopupTokens } from './PopupShell';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
@@ -70,6 +71,7 @@ export interface RecordingsOverlayProps {
 }
 
 export default function RecordingsOverlay({ visible, onClose, onActiveChange }: RecordingsOverlayProps) {
+  const styles = usePopupStyles(makeStyles);
   const [recs, setRecs] = useState<Rec[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);    // uri of the selected/playing rec
   const [trackW, setTrackW] = useState(0);                // seek-bar width of the open row
@@ -268,7 +270,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   root: { flex: 1, backgroundColor: '#0a0d0b' },
   bar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -297,7 +299,7 @@ const styles = StyleSheet.create({
   playIcon: { color: '#3ddc84', fontSize: 14, fontWeight: '800' },
   meta: { flex: 1, minWidth: 0 },
   freq: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  mode: { color: '#ffb833', fontSize: 13, fontWeight: '700' },
+  mode: { color: pt.gold.amber, fontSize: 13, fontWeight: '700' },
   sub: { color: '#9aa', fontSize: 12, marginTop: 2 },
   actBtn: { paddingHorizontal: 8, paddingVertical: 6, marginLeft: 2 },
   actIcon: { color: '#bcd', fontSize: 18 },

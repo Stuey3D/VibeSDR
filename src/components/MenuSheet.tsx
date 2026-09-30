@@ -55,6 +55,7 @@ import {
   type PaneChoice, type Chassis, type SignalMeter,
 } from '../constants/faceplate';
 import { AUTO_REASON_NOTE } from '../constants/transparency';
+import { usePopupStyles, usePopupTheme, type PopupTokens } from './PopupShell';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -416,6 +417,7 @@ function StepSlider({
   value: number; min: number; max: number; step: number;
   format: (v: number) => string; onChange: (v: number) => void;
 }) {
+  const styles = usePopupStyles(makeStyles);
   const clamp = (v: number) => Math.min(max, Math.max(min, v));
   return (
     <View style={styles.stepSlider}>
@@ -435,6 +437,7 @@ function StepSlider({
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIconName; first?: boolean }) {
+  const styles = usePopupStyles(makeStyles);
   return (
     <View style={[styles.sectionBar, first && styles.sectionBarFirst]}>
       <View style={styles.sectionRow}>
@@ -458,6 +461,7 @@ function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIco
 // AudioSheet and ModeSelector, and is what a game controller's D-pad will drive
 // (briefs/BRIEF-controls-keyboard-and-gamepad.md). MenuSheet keeps only the wiring.
 function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean }) {
+  const styles = usePopupStyles(makeStyles);
   return (
     <NavRow>
       <View style={[styles.btnRow, col && styles.btnRowCol]}>{children}</View>
@@ -472,6 +476,8 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav }: {
    *  pages, where none of our shortcuts apply. See useNavButton. */
   skipNav?: boolean;
 }) {
+  const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
   // ★ Scroll-into-view is now MEASURED against the ScrollView's content node
   // (revealIn, inside useNavButton) rather than estimated as `row * 46`, which
   // assumed a uniform row height and was wrong for anything nested or unevenly
@@ -485,7 +491,7 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav }: {
               focused && styles.btnFocused]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
     >
-      {icon && <SectionIcon name={icon} size={15} color={active ? C.gold : C.muted} />}
+      {icon && <SectionIcon name={icon} size={15} color={active ? pt.gold.sel : C.muted} />}
       <Text style={[styles.btnText, active && styles.btnTextActive, danger && styles.btnTextDanger]}>
         {label}
       </Text>
@@ -494,6 +500,7 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav }: {
 }
 
 function SwatchBtn({ hex, active, onPress }: { hex: string; active: boolean; onPress: () => void }) {
+  const styles = usePopupStyles(makeStyles);
   const { focused, viewRef } = useNavButton(onPress);
   return (
     <TouchableOpacity ref={viewRef as any} hitSlop={4}
@@ -510,6 +517,7 @@ function SwatchBtn({ hex, active, onPress }: { hex: string; active: boolean; onP
 function CmapHeaderBtn({ open, onPress, children }: {
   open: boolean; onPress: () => void; children: React.ReactNode;
 }) {
+  const styles = usePopupStyles(makeStyles);
   const { focused, viewRef } = useNavButton(onPress);
   return (
     <View ref={viewRef} style={focused ? styles.dropHeaderFocused : undefined}>{children}</View>
@@ -553,6 +561,7 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
 function VfoLockBtn({ locked, disabled, onPress, full }: {
   locked: boolean; disabled?: boolean; onPress?: () => void; full?: boolean;
 }) {
+  const styles = usePopupStyles(makeStyles);
   return (
     <TouchableOpacity
       style={[styles.btn, { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 }, full && styles.btnFull, disabled && { opacity: 0.4 }]}
@@ -565,6 +574,7 @@ function VfoLockBtn({ locked, disabled, onPress, full }: {
 }
 
 function SubLabel({ label, small }: { label: string; small?: boolean }) {
+  const styles = usePopupStyles(makeStyles);
   return <Text style={[styles.subLabel, small && styles.subLabelSmall]}>{label}</Text>;
 }
 
@@ -579,6 +589,7 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
 function SelectorKey({ label, dot, active, onPress, a11y }: {
   label?: string; dot?: string; active: boolean; onPress: () => void; a11y?: string;
 }) {
+  const styles = usePopupStyles(makeStyles);
   const { focused, viewRef } = useNavButton(onPress);
   return (
     <TouchableOpacity
@@ -601,6 +612,7 @@ function SelectorRow<T extends string>({ label, choices, value, onPick, note }: 
   /** A subtitle under the keys — what the choice costs you (TRANSPARENCY EFFECTS). */
   note?: string;
 }) {
+  const styles = usePopupStyles(makeStyles);
   return (
     <View style={styles.ctrlRow}>
       <Text style={styles.ctrlLabel}>{label}</Text>
@@ -627,6 +639,7 @@ function ControlCustomisationPane({
   hapticsEnabled: boolean;                  onHaptics?: (on: boolean) => void;
   hapticsHardware: boolean;
 }) {
+  const styles = usePopupStyles(makeStyles);
   // ★ App-wide, not per server (FaceplateContext) — the faceplate is the hardware in your hand.
   const { settings: fp, setDisplay, setText, set, setTransparency, autoTransparency: auto } = useFaceplateSettings();
   // ★ While the DEVICE chose OFF (never once the user has picked), say so — otherwise a new user on
@@ -799,10 +812,12 @@ function ICloudRow() {
 }
 
 function OptRow({ children }: { children: React.ReactNode }) {
+  const styles = usePopupStyles(makeStyles);
   return <View style={[styles.btnRow, styles.optRow]}>{children}</View>;
 }
 
 function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void; key?: React.Key }) {
+  const styles = usePopupStyles(makeStyles);
   return (
     <TouchableOpacity style={[styles.btn, active && styles.btnActive]} onPress={onPress} hitSlop={4} activeOpacity={0.7}>
       <Text style={[styles.btnText, active && styles.btnTextActive]}>{label}</Text>
@@ -912,6 +927,8 @@ function MenuSheetBody({
   smoothTune = true, onSmoothTune,
   onSpecRatio,
 }: MenuSheetProps) {
+  const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
 
   const translateY = useRef(new Animated.Value(SHEET_H)).current;
   const [cmapOpen, setCmapOpen] = useState(false);
@@ -1294,8 +1311,8 @@ function MenuSheetBody({
                     minimumValue={1} maximumValue={10} step={1}
                     value={vfoIntensity}
                     onValueChange={(v: number) => onVfoIntensity?.(v)}
-                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted}
-                    thumbTintColor={C.gold} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted}
+                    thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.bwVal}>{vfoIntensity}</Text>
                 </View>
 
@@ -1307,9 +1324,9 @@ function MenuSheetBody({
                     minimumValue={0} maximumValue={10} step={1}
                     value={vfoFrost}
                     onValueChange={(v: number) => onVfoFrost?.(v)}
-                    minimumTrackTintColor={vfoFrost > 0 ? C.gold : C.muted}
+                    minimumTrackTintColor={vfoFrost > 0 ? pt.gold.fill : C.muted}
                     maximumTrackTintColor={C.muted}
-                    thumbTintColor={C.gold} />
+                    thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.bwVal}>{vfoFrost === 0 ? 'Off' : vfoFrost}</Text>
                 </View>
 
@@ -1322,9 +1339,9 @@ function MenuSheetBody({
                       minimumValue={0} maximumValue={10} step={1}
                       value={bgOpacity}
                       onValueChange={(v: number) => onBgOpacity?.(v)}
-                      minimumTrackTintColor={bgOpacity > 0 ? C.gold : C.muted}
+                      minimumTrackTintColor={bgOpacity > 0 ? pt.gold.fill : C.muted}
                       maximumTrackTintColor={C.muted}
-                      thumbTintColor={C.gold} />
+                      thumbTintColor={pt.gold.thumb} />
                     <Text style={styles.bwVal}>{bgOpacity === 0 ? 'Off' : bgOpacity}</Text>
                   </View>
                 )}
@@ -1340,7 +1357,7 @@ function MenuSheetBody({
                     <Text style={styles.sliderLabel}>Auto Range</Text>
                     <NavSlider style={{flex:1}} minimumValue={0} maximumValue={20} step={1}
                       value={autoContrast} onValueChange={onAutoContrast ?? (() => {})}
-                      minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                      minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                     <Text style={styles.sliderVal}>{autoContrast}</Text>
                   </View>
                 )}
@@ -1352,7 +1369,7 @@ function MenuSheetBody({
                       <NavSlider style={{flex:1}} minimumValue={-160} maximumValue={-60} step={1}
                         value={Math.min(dbMin, dbMax - 5)}
                         onValueChange={(v: number) => onDbMin?.(Math.min(v, dbMax - 5))}
-                        minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                       <Text style={styles.sliderVal}>{dbMin} dB</Text>
                     </View>
                     <View style={styles.sliderWrap}>
@@ -1360,7 +1377,7 @@ function MenuSheetBody({
                       <NavSlider style={{flex:1}} minimumValue={-100} maximumValue={0} step={1}
                         value={Math.max(dbMax, dbMin + 5)}
                         onValueChange={(v: number) => onDbMax?.(Math.max(v, dbMin + 5))}
-                        minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                       <Text style={styles.sliderVal}>{dbMax} dB</Text>
                     </View>
                   </>
@@ -1372,21 +1389,21 @@ function MenuSheetBody({
                   <Text style={styles.sliderLabel}>Brightness</Text>
                   <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
                     value={wfBrightness} onValueChange={onWfBrightness ?? (() => {})}
-                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{(wfBrightness > 0 ? '+' : '') + wfBrightness} dB</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Contrast</Text>
                   <NavSlider style={{flex:1}} minimumValue={-10} maximumValue={10} step={1}
                     value={wfContrast} onValueChange={onWfContrast ?? (() => {})}
-                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{(wfContrast > 0 ? '+' : '') + wfContrast}</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Sharpness</Text>
                   <NavSlider style={{flex:1}} minimumValue={0} maximumValue={10} step={1}
                     value={wfSharpness} onValueChange={onWfSharpness ?? (() => {})}
-                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{wfSharpness}</Text>
                 </View>
                 <BtnRow>
@@ -1404,14 +1421,14 @@ function MenuSheetBody({
                   <Text style={styles.sliderLabel}>Smoothing</Text>
                   <NavSlider style={{flex:1}} minimumValue={1} maximumValue={10} step={1}
                     value={specSmoothing} onValueChange={onSpecSmoothing ?? (() => {})}
-                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{specSmoothing}</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Floor</Text>
                   <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
                     value={specFloor} onValueChange={onSpecFloor ?? (() => {})}
-                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{(specFloor > 0 ? '+' : '') + specFloor} dB</Text>
                 </View>
                 {/* ★ Below Floor, because they are easily confused and this is the one that moves
@@ -1427,7 +1444,7 @@ function MenuSheetBody({
                       <Text style={styles.sliderLabel}>Visual Gain</Text>
                       <NavSlider style={{flex:1}} minimumValue={-40} maximumValue={40} step={1}
                         value={visualGain} onValueChange={onVisualGain}
-                        minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                       <Text style={styles.sliderVal}>{(visualGain > 0 ? '+' : '') + visualGain} dB</Text>
                     </View>
                     <Text style={styles.kbSkipNote}>
@@ -1441,7 +1458,7 @@ function MenuSheetBody({
                   <Text style={styles.sliderLabel}>Peak Scale</Text>
                   <NavSlider style={{flex:1}} minimumValue={1} maximumValue={30} step={1}
                     value={specPeakScale} onValueChange={onSpecPeakScale ?? (() => {})}
-                    minimumTrackTintColor={C.gold} maximumTrackTintColor={C.muted} thumbTintColor={C.gold} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{(specPeakScale / 10).toFixed(1)}×</Text>
                 </View>
                 <BtnRow>
@@ -1554,7 +1571,7 @@ function MenuSheetBody({
                       value={menuAdminPw}
                       onChangeText={setMenuAdminPw}
                       placeholder="Admin password"
-                      placeholderTextColor="rgba(255,184,51,0.45)"
+                      placeholderTextColor={pt.gold.amberA(0.45)}
                       secureTextEntry autoCapitalize="none" autoCorrect={false}
                       style={styles.adminUnlockInput}
                       onSubmitEditing={() => { if (menuAdminPw) { onAdminUnlock?.(menuAdminPw); setMenuAdminPw(''); } }}
@@ -1707,14 +1724,14 @@ function MenuSheetBody({
 const SHEET_TINT  = 'rgba(6,4,2,0.60)';
 const SHEET_SOLID = solidOver(SHEET_TINT);
 
-const styles = StyleSheet.create({
+const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   adminUnlockRow:   { flexDirection: 'row', alignItems: 'center', gap: 8,
                       paddingHorizontal: 12, marginBottom: 6 },
   adminUnlockInput: { flex: 1, borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 6,
-                      paddingHorizontal: 10, paddingVertical: 8, color: '#ffb833', fontSize: 14 },
+                      paddingHorizontal: 10, paddingVertical: 8, color: pt.gold.amber, fontSize: 14 },
   adminUnlockBtn:   { borderWidth: 1, borderColor: 'rgba(255,160,0,0.55)', borderRadius: 6,
                       paddingHorizontal: 12, paddingVertical: 9 },
-  adminUnlockBtnTxt:{ color: '#ffb833', fontSize: 12, letterSpacing: 0.5 },
+  adminUnlockBtnTxt:{ color: pt.gold.amber, fontSize: 12, letterSpacing: 0.5 },
   backdrop: { backgroundColor: 'rgba(0,0,0,0.55)' },
   sheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0, height: SHEET_H,
@@ -1774,23 +1791,23 @@ const styles = StyleSheet.create({
     borderRadius: 5, paddingHorizontal: 16, paddingVertical: 11,
     alignItems: 'center', justifyContent: 'center',
   },
-  btnActive:     { backgroundColor: C.active, borderColor: C.goldDim },
+  btnActive:     { backgroundColor: C.active, borderColor: pt.gold.selBorder },
   // Keyboard focus ring — deliberately distinct from ACTIVE (which means "this
   // setting is on"). Focus is where the keyboard is, not what is selected.
   btnFocused:    { borderColor: C.focus, borderWidth: 2 },
   // Amber rather than the focus green: this is an explanation of why the green is not moving.
-  fkaNote:      { borderWidth: 1, borderColor: C.goldDim, borderRadius: 6,
+  fkaNote:      { borderWidth: 1, borderColor: pt.gold.noticeBorder, borderRadius: 6,
                   backgroundColor: 'rgba(60,40,0,0.5)', padding: 10, marginBottom: 10 },
-  fkaNoteTitle: { color: C.gold, fontSize: 11, letterSpacing: 1, marginBottom: 5 },
+  fkaNoteTitle: { color: pt.gold.notice, fontSize: 11, letterSpacing: 1, marginBottom: 5 },
   fkaNoteBody:  { color: C.muted, fontSize: 11, lineHeight: 16 },
-  fkaNoteKey:   { color: C.gold, fontWeight: '700' },
+  fkaNoteKey:   { color: pt.gold.notice, fontWeight: '700' },
   // Dim and small: an explanation, not a warning — nothing has gone wrong.
   kbSkipNote:    { color: C.sectionC, fontSize: 10, lineHeight: 14, paddingHorizontal: 2, paddingBottom: 6, opacity: 0.85 },
   dropHeaderFocused: { borderWidth: 2, borderColor: C.focus, borderRadius: 5, margin: -2 },
   // Dropdown rows are a dense list with only a divider, so focus is a background tint —
   // a 2px border would shift every row as focus moved down it.
   dropItemFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },
-  btnSelected:   { borderColor: C.goldDim }, // selected but not running (skin)
+  btnSelected:   { borderColor: pt.gold.selBorder }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
   // Colour map dropdown
@@ -1811,10 +1828,10 @@ const styles = StyleSheet.create({
   },
   dropItemActive:     { backgroundColor: C.active },
   dropItemText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, letterSpacing: 0.5 },
-  dropItemTextActive: { color: C.gold, fontWeight: 'bold' },
+  dropItemTextActive: { color: pt.gold.sel, fontWeight: 'bold' },
 
   btnText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
-  btnTextActive: { color: C.gold },
+  btnTextActive: { color: pt.gold.sel },
   btnTextDanger: { color: '#ff6666' },
 
   profileDrop: { paddingVertical: 6 },
@@ -1832,7 +1849,7 @@ const styles = StyleSheet.create({
   profileDropItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
   profileDropItemSub: { paddingLeft: 22, paddingRight: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
   profileDropItemText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
-  profileChipTextActive: { color: C.gold },
+  profileChipTextActive: { color: pt.gold.sel },
   profileItemInUse: { backgroundColor: 'rgba(255,184,77,0.10)' },
   profileTextInUse: { color: '#ffb84d' },
   sdrHeadRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 11, paddingBottom: 6, backgroundColor: 'rgba(255,255,255,0.04)' },
@@ -1857,7 +1874,7 @@ const styles = StyleSheet.create({
     borderRadius: 4, paddingHorizontal: 14, paddingVertical: 10,
     alignItems: 'center', justifyContent: 'center',
   },
-  vtsArrowText: { color: C.gold, fontSize: 18 },
+  vtsArrowText: { color: pt.gold.glyph, fontSize: 18 },
   vtsInfo:  { flex: 1, alignItems: 'center', gap: 3 },
   vtsName:  { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, letterSpacing: 1 },
   vtsFreq:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 },
@@ -1931,10 +1948,10 @@ const styles = StyleSheet.create({
   bwRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
   bwMirrorRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 },
   bwHalfSlider: { flex: 1, height: 32 },
-  bwEdgeVal:    { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, minWidth: 44, textAlign: 'center' },
+  bwEdgeVal:    { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, minWidth: 44, textAlign: 'center' },
   bwLabel:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1, width: 32 },
   bwSlider: { flex: 1, height: 32 },
-  bwVal:    { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
+  bwVal:    { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' },
   sliderWrap:  { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
   sliderVal:   { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, minWidth: 72, textAlign: 'right' },
 
@@ -1943,8 +1960,8 @@ const styles = StyleSheet.create({
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
     borderRadius: 4, width: 32, height: 32, alignItems: 'center', justifyContent: 'center',
   },
-  stepSliderBtnTxt: { color: C.gold, fontSize: 18, fontWeight: 'bold', lineHeight: 22 },
-  stepSliderVal: { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, flex: 1, textAlign: 'center' },
+  stepSliderBtnTxt: { color: pt.gold.glyph, fontSize: 18, fontWeight: 'bold', lineHeight: 22 },
+  stepSliderVal: { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, flex: 1, textAlign: 'center' },
 
   subPanel: {
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 6,
@@ -1960,12 +1977,12 @@ const styles = StyleSheet.create({
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
     borderRadius: 5, paddingHorizontal: 14, paddingVertical: 11, marginBottom: 8,
   },
-  backRowChevron: { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold' },
+  backRowChevron: { color: pt.gold.glyph, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold' },
   backRowTitle:   { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 1 },
 
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
-  recTime:  { color: C.gold, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
+  recTime:  { color: pt.gold.readout, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
   dspError: { color: 'rgba(220,53,69,0.95)', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 },
 
   ctrlRow:   { paddingVertical: 4, gap: 4 },
@@ -1985,9 +2002,9 @@ const styles = StyleSheet.create({
   swatchActive: { borderColor: '#fff' },
   cmapStrip:          { gap: 6, flexDirection: 'row', paddingBottom: 4 },
   cmapPill:           { backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 },
-  cmapPillActive:     { backgroundColor: C.active, borderColor: C.gold },
+  cmapPillActive:     { backgroundColor: C.active, borderColor: pt.gold.sel },
   cmapPillText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11 },
-  cmapPillTextActive: { color: C.gold },
+  cmapPillTextActive: { color: pt.gold.sel },
 
   instanceUrl: { color: 'rgba(255,255,255,0.40)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11, paddingBottom: 4 },
 
@@ -1996,7 +2013,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: C.border, borderRadius: 6,
     paddingHorizontal: 24, paddingVertical: 8,
   },
-  closeBtnText: { color: C.goldDim, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
+  closeBtnText: { color: pt.gold.close, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: 'bold', letterSpacing: 1 },
 });
 
 /** ★★ NOTHING RUNS WHILE THE SHEET IS SHUT. The body has 22 hooks and ~250 lines of setup that
