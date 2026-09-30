@@ -42,7 +42,7 @@ android {
         applicationId 'com.vibesdr.serverlite'
         minSdkVersion 21            // Android 5.0 — a 2017 Fire 7 is 5.1.1 (API 22)
         targetSdkVersion 28         // ★ sideload-only: old enough that an old tablet's rules apply
-        versionCode 9
+        versionCode 10
         versionName serverVersion + "-lite"
         ndk { abiFilters 'armeabi-v7a' }
         externalNativeBuild {
