@@ -42,6 +42,7 @@ import {
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
 import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
+import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import type { SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
 
@@ -74,7 +75,7 @@ function ControlSlot({ report, style, children }: {
 }
 import { useTheme } from '../contexts/ThemeContext';
 import { useFaceplate } from '../contexts/FaceplateContext';
-import type { ChassisTokens } from '../constants/faceplate';
+import type { ChassisTokens, PlateTokens } from '../constants/faceplate';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { STEP_833, type AirChannel } from '../utils/airband';
@@ -858,6 +859,14 @@ function RecordIcon({ size, progress }: { size: number; progress?: SharedValue<n
   return <DomeIcon size={size} k={size / 20} strokes={strokes} progress={progress} />;
 }
 
+/** The status rows: bare on the default glass deck, in a recessed window on a metal plate. */
+function StatusWell({ plate, gap, style, children }: {
+  plate: PlateTokens | null; gap: number; style?: ViewStyle; children: React.ReactNode;
+}) {
+  if (!plate) return <>{children}</>;
+  return <RecessedWindow lip={plate.windowLip} style={{ gap, ...style }}>{children}</RecessedWindow>;
+}
+
 // ── PORTRAIT ──────────────────────────────────────────────────────────────────
 
 // Android: exclude the drum band from the system back-edge swipe so a horizontal
@@ -903,7 +912,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
-  onControlRects }: any) {
+  onControlRects, plateInset }: any) {
   const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
@@ -958,6 +967,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   // ★ Silver/black keys sit in the mockup's 58 pt slot with a 54 pt cap (§4.1, bar meter); the
   //   default key stays today's 44 pt minimum.
   const isCap      = ct.dome.look === 'cap';
+  const gloss      = !!ct.plate?.gloss && !!plateInset;
   const KEY_SLOT   = isCap ? s.r(58) : BTN_H;
   const pulseR     = isCap ? 10 : 4;
   const ICON_SZ    = s.r(20);
@@ -991,7 +1001,13 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   return (
     <View style={{ gap: ROW_GAP }}>
 
-      {/* Row 1 — signal bar */}
+      {/* Row 1 — signal bar.
+          ★ On black it sits on the GLOSS ACRYLIC PANEL, which runs to the plate's top and side edges
+            (Deck.mockup `displayPanel`: margin −14, padding 14 14 12) with its trim line beneath. */}
+      <View style={gloss ? { marginHorizontal: -plateInset.h, marginTop: -plateInset.top,
+                             paddingHorizontal: plateInset.h, paddingTop: plateInset.top,
+                             paddingBottom: s.r(12) } : undefined}>
+      {gloss && <GlossPanel radius={plateInset.radius} squareBottom />}
       <View style={[por.sigFrame, { height: SIG_H }]}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
         <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
@@ -1005,6 +1021,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
           tight={tight} sharedTuner={sharedDial ?? null}
         />
+      </View>
       </View>
 
       {/* Row 2 — 4 equal buttons */}
@@ -1085,6 +1102,9 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         )}
       </View>}
 
+      {/* Rows 4–5 — the status. ★ On silver / black it sits in a recessed dark window (§8.1): today's
+          light text would vanish on a silver plate. Row 9 turns this window into the Doto display. */}
+      <StatusWell plate={ct.plate} gap={ROW_GAP}>
       {/* Row 4 — clock · link quality · rec */}
       <View style={por.clockRow}>
         {/* ★★ minWidth 0 + shrink, OR THE CLOCK RUNS UNDER THE LINK ICONS. A row child's default
@@ -1158,6 +1178,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
 
       {/* Row 5 — the connection stats, on their own line so they can no longer be truncated. */}
       <View style={por.statsRow}><LinkIndicator bus={bus} /></View>
+      </StatusWell>
 
     </View>
   );
@@ -1297,6 +1318,11 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           at the top; this now starts there too, so the row reads as one band of controls. */}
       <View style={{ width: s.r(340), justifyContent: 'flex-start' }}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
+        {/* ★ Black: the gloss panel wraps the display (Deck.mockup landscape `gloss`, padding 4,
+            radius 10) — drawn 4 pt OUTSIDE the frame so it adds no height to the band (§9: the bar
+            never gets taller than today's). */}
+        {ct.plate?.gloss && <GlossPanel radius={10} trim={false}
+          style={{ top: -4, left: -4, right: -4, bottom: 'auto', height: SIG_H + 8 }} />}
         <View style={[lnd.sigFrame, { height: SIG_H }]}>
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
           <FreqModePill
@@ -1364,7 +1390,8 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           ★ Times left, audio chain centre, link right — and the recording slot keeps its reserved
             space so nothing resizes under a thumb when recording starts (the reason it was pulled
             out of the tuning column in the first place). */}
-      <View style={lnd.statusRow}>
+      <StatusWell plate={ct.plate} gap={0} style={{ marginTop: GAP }}>
+      <View style={[lnd.statusRow, ct.plate && { marginTop: 0 }]}>
         <View style={lnd.statusSide}>
           <ClockRow clock={clock} color={ct.clock} font={t.font} size={CLOCK_FONT} />
           <View style={[lnd.recRow, !isRecording && { opacity: 0 }]} pointerEvents="none">
@@ -1380,6 +1407,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           <LinkIndicator bus={bus} />
         </View>
       </View>
+      </StatusWell>
 
     </View>
   );
@@ -1503,9 +1531,13 @@ function ControlsBar({
   const recTime = `${hh}:${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
 
   // Bar padding scales with screen
-  const PAD_H   = s.r(12);
-  const PAD_TOP = s.r(8);
-  const RADIUS  = s.r(18);
+  // ★ A metal plate (silver / black) takes the mockup's padding and 16 pt corners: 14 all round in
+  //   portrait; landscape 10 top and bottom, 24 at the sides on silver so the screws clear the drums
+  //   (§9), 12 on black. The default island keeps today's numbers.
+  const plate   = ct.plate;
+  const PAD_H   = !plate ? s.r(12) : s.isLandscape && !IS_TV ? s.r(plate.screws ? 24 : 12) : s.r(14);
+  const PAD_TOP = !plate ? s.r(8)  : s.isLandscape && !IS_TV ? s.r(10) : s.r(14);
+  const RADIUS  = !plate ? s.r(18) : s.r(plate.radius);
 
   // ★★ MAX-WIDTH CAP — the Mac app IS the iPad app, so on a Mac window (and
   // especially an ultrawide) the landscape bar's edge-to-edge thumb-reach
@@ -1562,6 +1594,8 @@ function ControlsBar({
      *  ★★ The same silence covers the bar's session clock, the lightning badge, read-only and admin: the props
      *     exist, are typed `any`, and go nowhere. A prop list written twice is a fact stored twice. */
     readOnly, sharedDial, storms, adminMode,
+    /** The plate's padding and corner, for the panels that run to its edge (black's gloss panel). */
+    plateInset: { top: PAD_TOP, h: PAD_H, radius: RADIUS },
   };
 
   return (
@@ -1573,6 +1607,9 @@ function ControlsBar({
         paddingBottom: Math.max(bottomInset, s.r(10)),
         borderRadius: RADIUS,
         maxWidth: MAX_BAR_W,
+        // ★ Opaque from the first frame on a metal plate — the plate's base colour until the
+        //   texture has decoded, never a see-through gap over the waterfall.
+        ...(plate ? { backgroundColor: plate.base } : null),
         alignSelf: 'center',
         width: '100%',
       },
@@ -1583,13 +1620,19 @@ function ControlsBar({
           waterfall through the island on the Moto and blanked it on the iPhone.
           ★ ANDROID IS THE TARGET, NOT THE THING TO CHANGE (Stuart, 2026-07-28): "android cannot
           get any clearer… iOS just needs to get to android level". Hence iOS-only. */}
-      <BlurView intensity={Platform.OS === 'ios' ? 35 : 80} tint="dark" style={StyleSheet.absoluteFill} />
-      {/* Tinted overlay — semi-transparent so blur shows; NOT fully opaque */}
-      <View style={[StyleSheet.absoluteFill, root.tint, { backgroundColor: ct.deckTint, borderRadius: RADIUS }]}
-            pointerEvents="none" />
-      {/* Border ring */}
-      <View style={[root.border, { borderRadius: RADIUS, borderColor: ct.barBorder }]}
-            pointerEvents="none" />
+      {plate ? (
+        /* ★★ SILVER / BLACK ARE OPAQUE METAL: no BlurView behind them (§3.4) — the blur was the
+           expensive part of the glass deck on iOS. The plate is one cached Skia layer. */
+        <ChassisPlate plate={plate} radius={RADIUS} />
+      ) : (<>
+        <BlurView intensity={Platform.OS === 'ios' ? 35 : 80} tint="dark" style={StyleSheet.absoluteFill} />
+        {/* Tinted overlay — semi-transparent so blur shows; NOT fully opaque */}
+        <View style={[StyleSheet.absoluteFill, root.tint, { backgroundColor: ct.deckTint, borderRadius: RADIUS }]}
+              pointerEvents="none" />
+        {/* Border ring */}
+        <View style={[root.border, { borderRadius: RADIUS, borderColor: ct.barBorder }]}
+              pointerEvents="none" />
+      </>)}
       {/* ★★★ APPLE TV USES THE PORTRAIT CLUSTER, on a 16:9 screen (Stuart, 2026-08-04).
           Not a cosmetic choice — it is the one that matches the remote. Portrait STACKS the
           sections, so the four buttons sit one swipe DOWN from the frequency, on the same

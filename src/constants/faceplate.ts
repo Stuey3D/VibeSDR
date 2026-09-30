@@ -423,6 +423,8 @@ export interface PlateTokens {
   screws:      boolean;
   /** Black's gloss acrylic panel behind the frequency and meter, with its aluminium trim (§3.3). */
   gloss:       boolean;
+  /** The 1 pt light lip under a recessed window (Deck.mockup `lip`). */
+  windowLip:   string;
 }
 
 export interface DomeTokens {
@@ -541,7 +543,7 @@ export const SILVER_CHASSIS: ChassisTokens = {
     radialColor: 'rgba(255,250,240,0.22)',
     bottomShade: 'rgba(0,0,0,0.10)',
     lipTop: 'rgba(255,255,255,0.95)', lipTop2: 'rgba(255,255,255,0.35)', lipBottom: 'rgba(0,0,0,0.20)',
-    screws: true, gloss: false,
+    screws: true, gloss: false, windowLip: 'rgba(255,255,255,0.80)',
   },
   dome: {
     look: 'cap', slotBg: '#141414', slotShade: 'rgba(0,0,0,0.95)', slotLip: 'rgba(255,255,255,0.85)',
@@ -564,7 +566,7 @@ export const BLACK_CHASSIS: ChassisTokens = {
     radialColor: 'rgba(255,255,255,0.07)',
     bottomShade: null,
     lipTop: 'rgba(255,255,255,0.22)', lipTop2: 'rgba(255,255,255,0.06)', lipBottom: 'rgba(0,0,0,0.60)',
-    screws: false, gloss: true,
+    screws: false, gloss: true, windowLip: 'rgba(255,255,255,0.14)',
   },
   dome: {
     look: 'cap', slotBg: '#030303', slotShade: 'rgba(0,0,0,0.95)', slotLip: 'rgba(255,255,255,0.14)',
