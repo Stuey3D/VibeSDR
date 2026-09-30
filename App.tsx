@@ -798,6 +798,13 @@ export default function App() {
   const [fontsLoaded, fontError] = useFonts({
     'Nixie One':              require('./assets/fonts/NixieOne-Regular.ttf'),
     'Atkinson Hyperlegible':  require('./assets/fonts/AtkinsonHyperlegible-Regular.ttf'),
+    // ★ The faceplate displays (brief §7): Doto 900 for the dot-matrix VFD and the silver/black status
+    //   window, DSEG14 Classic Bold Italic for the 14-segment VCR strip. Both OFL, licences beside
+    //   them. Names are constants/faceplate.ts FONT_DOTO / FONT_SEG14 — keep the two in step. Same
+    //   non-blocking path as the others: a font that fails falls back to the system font, never a
+    //   black screen.
+    'Doto':                   require('./assets/fonts/Doto-Black.ttf'),
+    'DSEG14 Classic':         require('./assets/fonts/DSEG14Classic-BoldItalic.ttf'),
   });
   /** ★★★ NEVER BLOCK THE WHOLE APP ON FONTS FOREVER. `if (!fontsLoaded) return null` renders
    *  NOTHING until they load — so any font failure is a permanent BLACK SCREEN with a running

@@ -585,6 +585,12 @@ export function chassisTokens(chassis: Chassis): ChassisTokens {
 
 export const FONT_HYPER = 'Atkinson Hyperlegible';
 export const FONT_NIXIE = 'Nixie One';
+/** Doto 900 (assets/fonts/Doto-Black.ttf — the Black cut IS the file, so no fontWeight is needed).
+ *  Registered under this name in App.tsx's useFonts. */
+export const FONT_DOTO  = 'Doto';
+/** DSEG14 Classic Bold Italic (assets/fonts/DSEG14Classic-BoldItalic.ttf), registered in App.tsx.
+ *  ★ Only ever fed through toSegCells() (constants/displayText.ts): its space is not a cell. */
+export const FONT_SEG14 = 'DSEG14 Classic';
 
 /** The deck's TEXT roles, already under the Nixie rule. Default chassis + hyper = today's WHITE
  *  theme values (ThemeContext), so the frequency pill is unchanged. */
