@@ -10,6 +10,7 @@
 import {
   portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind,
   VU_SEGMENTS, VU_LABELS, VU_THRESHOLDS, LED_SPEC, RING_OPEN, RING_CLOSED, ledColourOf, ringSegment, vuPos, peakStep,
+  phi, edgeBrightness, segmentTarget, makeWindow, pushSample, eyeStep, steadyLit,
 } from '../src/constants/meters.ts';
 
 let fails = 0, passes = 0;
@@ -118,6 +119,83 @@ for (const table of [VU_THRESHOLDS, [0.2, 1, 2.1, 3.5, 4.4, 5.9, 6.5, 7.2, 8.8, 
   eq('…still held at 1 s', peakStep(p, 3, 1000), 6);
   eq('…drops after ~1 s', peakStep(p, 3, 1001), -1);
   eq('a new high is caught at once', peakStep(p, 8, 1100), -1);
+}
+
+// ── §4.4 THE EDGE LED ────────────────────────────────────────────────────────
+// Φ against known values.
+near('Φ(0) = 0.5', phi(0), 0.5, 1e-7);
+near('Φ(1) = 0.8413', phi(1), 0.841345, 1e-6);
+near('Φ(−1.96) = 0.025', phi(-1.96), 0.024998, 1e-6);
+near('Φ(3) = 0.99865', phi(3), 0.998650, 1e-6);
+ok('Φ is monotone', Array.from({ length: 200 }, (_, k) => phi(-5 + k * 0.05)).every((v, k, a) => k === 0 || v >= a[k - 1]));
+// σ floor: a steady carrier is crisp, never a hard step.
+near('σ floor: 1.5 dB above T is Φ(1)', edgeBrightness(11.5, 10, 0), phi(1), 1e-9);
+near('σ = 6 dB: 6 dB above T is Φ(1)', edgeBrightness(16, 10, 6), phi(1), 1e-9);
+// ★ §4.4 TRAP: no linear ramp — a STEADY carrier halfway between two thresholds lights the lower
+//   one fully and the upper one not at all (a ramp would sit both half-lit for ever).
+{
+  const mu = 4.0;                                     // halfway between T3 = 3.5 and T4 = 4.5 (segments)
+  ok('steady carrier: the lower LED is fully lit', segmentTarget(3, mu, 0, false, false, false) > 0.99);
+  ok('steady carrier: the upper LED is dark', segmentTarget(4, mu, 0, false, false, false) < 0.01);
+  // fading HF (σ ≈ 6 dB ≈ 0.67 segment): a soft, wide edge
+  const b3 = segmentTarget(3, mu, 0.67, false, false, false), b4 = segmentTarget(4, mu, 0.67, false, false, false);
+  ok(`fading HF: both edge LEDs partly lit (${b3.toFixed(2)}, ${b4.toFixed(2)})`, b3 > 0.6 && b3 < 0.95 && b4 > 0.05 && b4 < 0.4);
+  near('at the threshold, exactly half', segmentTarget(4, 4.5, 0.5, false, false, false), 0.5, 1e-9);
+}
+// While the squelch mutes: the plain threshold — no σ shimmer under the red ring.
+eq('muting: no partial brightness', [segmentTarget(4, 4.4, 1, false, true, false), segmentTarget(4, 4.6, 1, false, true, false)], [0, 1]);
+// The σ window: ~0.5 s, population std-dev.
+{
+  const w = makeWindow();
+  pushSample(w, 0, 0);
+  const sd1 = pushSample(w, 100, 2);
+  near('σ of {0, 2} = 1', sd1, 1, 1e-9);
+  pushSample(w, 200, 0); pushSample(w, 300, 2);
+  const sd2 = pushSample(w, 900, 5);                   // everything older than 500 ms is gone
+  eq('the window forgets after ~0.5 s', w.v, [5]);
+  eq('one sample: σ 0 (the floor takes over)', sd2, 0);
+  const w2 = makeWindow();
+  for (let t = 0; t <= 2000; t += 200) pushSample(w2, t, 3);
+  eq('steady level: σ 0', pushSample(w2, 2200, 3), 0);
+}
+// The eye filter: τ ≈ 100 ms, ≤ 0.35 per frame, the ONLY easing.
+{
+  near('one τ closes 63 %', eyeStep(0, 0.1, 100), 0.1 * (1 - Math.exp(-1)), 1e-9);
+  eq('a big step is limited to 0.35 per frame', eyeStep(0, 1, 100), 0.35);
+  eq('…and downward', eyeStep(1, 0, 100), 0.65);
+  // ★★★ NO FLICKER at 5 fps on fading HF: targets that jump every 200 ms must GLIDE — at 60 fps the
+  //     brightness never changes by more than the limit in a frame, and never reverses direction
+  //     between two updates.
+  let b = 0, worst = 0, reversals = 0;
+  const targets = [0.9, 0.2, 0.8, 0.1, 0.95, 0.3, 0.7];
+  for (const tgt of targets) {
+    let dirSeen = 0;
+    for (let f = 0; f < 12; f++) {                   // 12 frames at 60 fps = one 5 fps update
+      const n = eyeStep(b, tgt, 1000 / 60);
+      worst = Math.max(worst, Math.abs(n - b));
+      const dir = Math.sign(n - b);
+      if (dirSeen && dir && dir !== dirSeen) reversals++;
+      if (dir) dirSeen = dir;
+      b = n;
+    }
+  }
+  ok(`60 fps: never more than 0.35 in a frame (worst ${worst.toFixed(3)})`, worst <= 0.35 + 1e-12);
+  eq('no reversal within an update (a steady glide, never a pulse)', reversals, 0);
+  ok('a stalled frame is not one giant jump', eyeStep(0, 1, 5000) <= 0.35);
+}
+// Steady LEDs: solid on / off with ~1 dB of hysteresis.
+{
+  eq('off → needs T + ½ dB', [steadyLit(false, 10.4, 10), steadyLit(false, 10.6, 10)], [false, true]);
+  eq('on → holds to T − ½ dB', [steadyLit(true, 9.6, 10), steadyLit(true, 9.4, 10)], [true, false]);
+  // A level dithering ±0.3 dB round T never toggles the LED.
+  let lit = false, toggles = 0;
+  for (let k = 0; k < 200; k++) {
+    const n = steadyLit(lit, 10 + 0.3 * Math.sin(k), 10);
+    if (n !== lit) toggles++;
+    lit = n;
+  }
+  eq('±0.3 dB dither round T: no toggling', toggles, 0);
+  eq('steady target is 0 / 1 only', [segmentTarget(4, 4.53, 2, true, false, false), segmentTarget(4, 4.6, 2, true, false, false)], [0, 1]);
 }
 
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate meters: ${passes} passed, ${fails} failed`);

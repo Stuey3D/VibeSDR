@@ -219,3 +219,81 @@ export function peakStep(p: PeakHold, top: number, nowMs: number, holdMs = PEAK_
   else if (nowMs - p.at > holdMs) { p.idx = top; p.at = nowMs; }
   return p.idx > top ? p.idx : -1;
 }
+
+// ── §4.4 The edge LED: partial brightness ─────────────────────────────────────
+
+/** Φ, the standard normal CDF (Abramowitz & Stegun 7.1.26, |ε| < 1.5e-7). */
+export function phi(x: number): number {
+  'worklet';
+  const z = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * z);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+  return x >= 0 ? 0.5 * (1 + y) : 0.5 * (1 - y);
+}
+
+/** σ's floor: 1.5 dB (§4.4). A steady carrier gets a crisp edge, never an infinitely sharp one. */
+export const SIGMA_FLOOR_DB = 1.5;
+/** The running window for σ: ~0.5 s. */
+export const SIGMA_WINDOW_MS = 500;
+
+/** A running window of samples (ms, value). Mutated in place; the meter keeps one per mount. */
+export interface SampleWindow { t: number[]; v: number[] }
+export function makeWindow(): SampleWindow { return { t: [], v: [] }; }
+/** Add a sample, drop what is older than `spanMs`; returns the window's population std-dev. */
+export function pushSample(w: SampleWindow, tMs: number, v: number, spanMs = SIGMA_WINDOW_MS): number {
+  w.t.push(tMs); w.v.push(v);
+  while (w.t.length > 1 && tMs - w.t[0] > spanMs) { w.t.shift(); w.v.shift(); }
+  const n = w.v.length;
+  let m = 0;
+  for (const x of w.v) m += x;
+  m /= n;
+  let s = 0;
+  for (const x of w.v) s += (x - m) * (x - m);
+  return Math.sqrt(s / n);
+}
+
+/**
+ * brightness(T) = Φ((μ − T) / σ): the fraction of time a signal of mean μ and spread σ spends above
+ * the threshold — which is what the eye sees of a real LM3915 LED switching fully on and off (§4.4).
+ * All in dB; σ is floored. ★ No linear ramp between thresholds (§4.4 TRAP): a steady carrier between
+ * two thresholds lights the lower one fully and the upper one not at all.
+ */
+export function edgeBrightness(muDb: number, thresholdDb: number, sigmaDb: number): number {
+  'worklet';
+  const s = Math.max(SIGMA_FLOOR_DB, sigmaDb);
+  return phi((muDb - thresholdDb) / s);
+}
+
+/** §4.4 eye filter: exponential, τ ≈ 100 ms, and at most 0.35 change per frame. ★ The ONLY easing. */
+export const EYE_TAU_MS = 100;
+export const EYE_MAX_STEP = 0.35;
+export function eyeStep(b: number, target: number, dtMs: number, tauMs = EYE_TAU_MS, maxStep = EYE_MAX_STEP): number {
+  'worklet';
+  const dt = Math.max(0, Math.min(250, dtMs));   // a stalled frame must not become one giant jump
+  let d = (target - b) * (1 - Math.exp(-dt / tauMs));
+  if (d > maxStep) d = maxStep; else if (d < -maxStep) d = -maxStep;
+  return b + d;
+}
+
+/** "Steady LEDs": solid on / off with ~1 dB of hysteresis — on above T + ½, off below T − ½. */
+export const STEADY_HYST_DB = 1;
+export function steadyLit(wasLit: boolean, muDb: number, thresholdDb: number, hystDb = STEADY_HYST_DB): boolean {
+  'worklet';
+  return wasLit ? muDb > thresholdDb - hystDb / 2 : muDb > thresholdDb + hystDb / 2;
+}
+
+/**
+ * One segment's TARGET brightness this frame (before the eye filter).
+ * • steady (setting, or OS Reduce Motion): hysteresis, 0 / 1.
+ * • squelch muting: the dim level only — no σ shimmer under the red ring (§4.4) — so the plain
+ *   threshold, 0 / 1.
+ * • otherwise: Φ((μ − T)/σ).
+ */
+export function segmentTarget(i: number, muPos: number, sigmaPos: number, steady: boolean, muting: boolean,
+                              wasLit: boolean, thresholds: readonly number[] = VU_THRESHOLDS): number {
+  'worklet';
+  const mu = muPos * DB_PER_SEG, T = thresholds[i] * DB_PER_SEG;
+  if (steady) return steadyLit(wasLit, mu, T) ? 1 : 0;
+  if (muting) return mu > T ? 1 : 0;
+  return edgeBrightness(mu, T, sigmaPos * DB_PER_SEG);
+}

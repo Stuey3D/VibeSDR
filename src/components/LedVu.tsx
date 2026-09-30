@@ -25,13 +25,15 @@ import {
   Canvas, ClipOp, Image as SkImageNode, PaintStyle, RoundedRect, Skia, TileMode, type SkCanvas, type SkImage,
 } from '@shopify/react-native-skia';
 import {
-  LED_SPEC, RING_CLOSED, RING_OPEN, VU_LABELS, VU_SEGMENTS, VU_THRESHOLDS, ledColourOf, peakStep,
-  ringSegment, sqlClosedOf, vuPos, type LedColourName,
+  LED_SPEC, RING_CLOSED, RING_OPEN, VU_LABELS, VU_SEGMENTS, VU_THRESHOLDS, eyeStep, ledColourOf, makeWindow,
+  peakStep, pushSample, ringSegment, segmentTarget, sqlClosedOf, vuPos, type LedColourName,
 } from '../constants/meters';
 import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
 import { useBoxSize } from './VfdParts';
 import { useUiScale } from '../hooks/useUiScale';
+import { useReduceMotion } from '../hooks/useReduceMotion';
+import { useFaceplate } from '../contexts/FaceplateContext';
 import type { MeterBus, MeterValues } from './ControlsBar';
 
 /** Glow reach round each LED in its sprite (the 14 pt glow). */
@@ -168,41 +170,72 @@ export default function LedVu({ bus, height, shared }: LedVuProps) {
   const sprites = useMemo(() => (ledW > 1 ? ledSprites(ledW, ledH) : null), [ledW, ledH]);
 
   // ── The bus → shared values (no React render per update) ──
+  /* ★★★ §4.4 STEADY LEDS: the setting, OR the OS's Reduce Motion / Remove animations — on
+   *  automatically, because someone who has asked the phone to stop moving things has asked us too. */
+  const reduceMotion = useReduceMotion();
+  const steady  = useFaceplate().settings.steadyLeds || reduceMotion;
+  const steadySv = useSharedValue(steady ? 1 : 0);
+  useEffect(() => { steadySv.value = steady ? 1 : 0; }, [steady, steadySv]);
   const muPos   = useSharedValue(0);
+  const sigma   = useSharedValue(0);
   const muting  = useSharedValue(0);
   const ring    = useSharedValue(-1);
   const bright  = useSharedValue<number[]>(new Array(VU_SEGMENTS).fill(0));
+  const litState = useSharedValue<number[]>(new Array(VU_SEGMENTS).fill(0));
   const peakIdx = useSharedValue(-1);
   const peakAt  = useSharedValue(0);
   useEffect(() => {
     if (!bus) return;
+    // σ: the running std-dev of the RAW level over ~0.5 s (a fading HF signal gets a soft, wide edge;
+    // a steady carrier a crisp one). Kept here, on the JS side, at the bus's own 5–25 Hz.
+    const win = makeWindow();
     const take = (m: MeterValues) => {
       muPos.value  = vuPos(m.level);
+      sigma.value  = pushSample(win, Date.now(), vuPos(m.raw ?? m.level));
       ring.value   = ringSegment(m.sql ?? -1);
       muting.value = sqlClosedOf(m.sql ?? -1, m.gate, m.level) ? 1 : 0;
     };
     take(bus.value);
     bus.subs.add(take);
     return () => { bus.subs.delete(take); };
-  }, [bus, muPos, ring, muting]);
+  }, [bus, muPos, sigma, ring, muting]);
 
   // ── Per frame, on the UI thread ──
+  /* ★★★ NO FLICKER, EVER (§4.4). Every frame draws a STEADY brightness — the fraction of time the
+   *  level spends above each threshold, Φ((μ − T)/σ) — never a segment toggled to fake a duty cycle.
+   *  The eye filter (τ ≈ 100 ms, ≤ 0.35 per frame) is the ONLY easing: at 5 fps on fading HF the edge
+   *  LED glides between updates instead of stepping. Steady LEDs: solid on / off with ~1 dB of
+   *  hysteresis, no easing. While the squelch mutes: the plain threshold, dimmed — no σ shimmer. */
   const thresholds = VU_THRESHOLDS as number[];
   useFrameCallback((f) => {
     'worklet';
-    const mu = muPos.value;
-    let top = -1;
-    for (let i = 0; i < VU_SEGMENTS; i++) if (mu > thresholds[i]) top = i;
+    const dt = f.timeSincePreviousFrame ?? 16;
+    const mu = muPos.value, sg = sigma.value;
+    const st = steadySv.value === 1, mute = muting.value === 1;
+    const was = litState.value, prev = bright.value;
+    const tgt = new Array(VU_SEGMENTS);
+    const lit = new Array(VU_SEGMENTS);
+    let top = -1, litChanged = false;
+    for (let i = 0; i < VU_SEGMENTS; i++) {
+      const t = segmentTarget(i, mu, sg, st, mute, was[i] === 1, thresholds);
+      tgt[i] = t;
+      lit[i] = t >= 0.5 ? 1 : 0;
+      if (lit[i] !== was[i]) litChanged = true;
+      if (t >= 0.5) top = i;
+    }
+    if (litChanged) litState.value = lit;
+    // Peak hold: one segment above the level, full brightness, ~1 s (§4.3).
     const ph = { idx: peakIdx.value, at: peakAt.value };
     const pk = peakStep(ph, top, f.timestamp);
     peakIdx.value = ph.idx; peakAt.value = ph.at;
-    const prev = bright.value;
+    if (pk >= 0) tgt[pk] = 1;
     let changed = false;
     const next = new Array(VU_SEGMENTS);
     for (let i = 0; i < VU_SEGMENTS; i++) {
-      const b = i <= top || i === pk ? 1 : 0;
+      let b = st ? tgt[i] : eyeStep(prev[i], tgt[i], dt);
+      if (Math.abs(b - tgt[i]) < 0.002) b = tgt[i];
       next[i] = b;
-      if (b !== prev[i]) changed = true;
+      if (Math.abs(b - prev[i]) > 0.0005) changed = true;
     }
     if (changed) bright.value = next;
   });

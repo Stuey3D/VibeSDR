@@ -187,6 +187,10 @@ function sigGradPos(sig: number): number[] {
 /** link: 0=disconnected, 1=poor(red), 2=fluctuating(yellow), 3=good(green) */
 export interface MeterValues {
   level: number; peak: number; snr: number;
+  /** ★ The level BEFORE the meter smoothing (same 0..1 bar scale as `level`). The analogue needle
+   *  springs from it (§4.5 TRAP: smoothing first and then springing doubles the lag) and the LED VU's
+   *  σ is its spread (§4.4). Absent on a backend that only has the smoothed one → use `level`. */
+  raw?: number;
   /** Peak power in the passband, dBFS — feeds the S-meter / dBFS readouts. */
   dbfs: number;
   active: boolean; link: 0|1|2|3;
