@@ -136,6 +136,19 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
         var reactContext: ReactApplicationContext? = null
         @Volatile var instance: VibeStreamService? = null
+        /** ★★ JS switches ⏮⏭ OFF on a SHARED DIAL with others listening — the same treatment FM-DX
+         *  gets from `fmdxAudio`, for the same reason: a blind skip retunes every listener (Stuart,
+         *  2026-09-30). JS owns the rule (services/blindTuneGate); native drops the actions and
+         *  refuses a stale press. ★ In the COMPANION, not the instance: JS may push it before the
+         *  service exists (or while it is being recreated), and an instance field would come back
+         *  `true` — a live button over a refusal, i.e. a dead control. Never reset by stopEngine. */
+        @Volatile var skipAllowedGlobal = true
+            private set
+        fun setSkipAllowed(allowed: Boolean) {
+            if (skipAllowedGlobal == allowed) return
+            skipAllowedGlobal = allowed
+            instance?.refreshSkipControls()
+        }
 
         // IMA-ADPCM tables (VibeServer compressed-audio decode).
         private val ADPCM_STEP = intArrayOf(
@@ -262,6 +275,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // Media skip routing: "step" = native tune±step; "bookmark" = emit
     // VibeSkip and let JS jump bookmarks (it owns the VTS station list)
     @Volatile var skipMode = "step"
+    /** The last playback state published, so a skip on/off change can re-publish it unchanged. */
+    @Volatile private var lastPbState = PlaybackStateCompat.STATE_NONE
+    private val skipAllowed get() = skipAllowedGlobal
+
+    /** Re-publish the transport actions + notification after ⏮⏭ were switched on or off. */
+    fun refreshSkipControls() {
+        mainHandler.post {
+            if (mediaSession != null && running) updatePlaybackState(lastPbState)
+            updateNotification()
+        }
+    }
     // Pause disconnects the SDR (server drops it on suspend anyway) and Play
     // reconnects; these track the two non-playing notification states: cleanly
     // disconnected vs a reconnect that failed (server full / rate-limited).
@@ -1370,6 +1394,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     private fun tuneByStep(direction: Int) {
+        if (fmdxAudio || !skipAllowed) return   // a stale notification / headset press — see skipAllowed
         // External (OWRX/Kiwi): tuning lives in JS — delegate so we don't tune the
         // native UberSDR WS (resurrecting a session). JS handles step vs bookmark
         // vs DAB-programme cycling from its own state.
@@ -2574,7 +2599,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             PlaybackStateCompat.ACTION_PAUSE or
             PlaybackStateCompat.ACTION_PLAY_PAUSE or
             PlaybackStateCompat.ACTION_STOP
-        if (!fmdxAudio) {
+        lastPbState = state
+        if (!fmdxAudio && skipAllowed) {
             actions = actions or
                 PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
                 PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
@@ -2634,9 +2660,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             .setContentTitle(nowPlayingTitle())
             .setContentText(nowPlayingArtist())
             .setContentIntent(contentPi)
-        // FM-DX (shared tuner): no prev/next — a skip would retune it for everyone.
+        // FM-DX (shared tuner), or a shared dial with others listening: no prev/next — a skip
+        // would retune it for everyone.
         val compact: IntArray
-        if (fmdxAudio) {
+        if (fmdxAudio || !skipAllowed) {
             b.addAction(playPauseIcon, playPauseLabel, pi(2, playPauseAction))
             b.addAction(android.R.drawable.ic_delete, "Stop", pi(4, ACTION_STOP))
             compact = intArrayOf(0)

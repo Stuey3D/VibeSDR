@@ -233,6 +233,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.skipMode = mode
     }
 
+    /** ⏮⏭ on/off — a shared dial with others listening switches them off (see skipAllowed). */
+    @ReactMethod
+    fun setMediaSkipEnabled(enabled: Boolean) {
+        VibeStreamService.setSkipAllowed(enabled)
+    }
+
     /** Car browse tree payload (bookmarks + band plan) for Android Auto. */
     @ReactMethod
     fun setBrowseItems(json: String) {

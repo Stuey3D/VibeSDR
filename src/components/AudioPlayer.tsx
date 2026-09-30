@@ -39,6 +39,10 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       setArtwork:        (serverType: string) => void;
       setStationLogo?:   (url: string) => void;   // FM-DX: inlay station favicon on the art
       setMediaSkipMode:  (mode: 'step' | 'bookmark') => void;
+      /** ★★ ⏮⏭ on/off (greyed on the lock screen, refused if a stale one fires) — a SHARED DIAL with
+       *  others listening switches them off, as FM-DX always has (see services/blindTuneGate).
+       *  Optional: native builds before it lack it, and JS refuses the skip anyway. */
+      setMediaSkipEnabled?: (enabled: boolean) => void;
       setBrowseItems?:   (json: string) => void;
       setReconnectFailed?: (failed: boolean) => void;
       setDefaultInstance?: (name: string) => void;   // '' = none (Siri "set a default")
