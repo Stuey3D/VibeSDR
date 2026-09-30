@@ -1975,13 +1975,14 @@ function LandscapeStatus({ plate, marginTop, clock, font, clockFont, isRecording
 
   const [measured, setMeasured] = useState<Record<string, number>>({});
   const onUnit = useCallback((id: string, w: number) => {
-    const v = Math.round(w * 2) / 2;
+    // ★ Rounded UP: ten items each rounded down could sum 2 pt short and truncate the last one.
+    const v = Math.ceil(w * 2) / 2;
     setMeasured((p) => (p[id] === v ? p : { ...p, [id]: v }));
   }, []);
   const [avail, setAvail] = useState(0);
   const onRowLayout = useCallback((e: LayoutChangeEvent) => {
     // The row's content box: its width less lnd.statusRow's 4 pt padding each side.
-    const v = Math.round(e.nativeEvent.layout.width) - 2 * ROW_PAD;
+    const v = Math.floor(e.nativeEvent.layout.width) - 2 * ROW_PAD;
     setAvail((p) => (p === v ? p : v));
   }, []);
 
