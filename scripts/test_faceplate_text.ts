@@ -10,7 +10,7 @@
 import {
   toSegCells, segCellCount, segGhost, segCellList, foldForSeg, foldForDot, foldToAscii, dotoHas,
   toUpperDisplay, flagToIso, foldIsUsable, displayOrFallback, setTransliterator, SEG_BLANK,
-  toSegRun, vfdStripText, cellWindow, steppedOffset, statusGainParts, transliterateNonLatin,
+  toSegRun, vfdStripText, cellWindow, steppedOffset, statusGainParts, statusGainText, STATUS_DIRECT_SAMPLE, transliterateNonLatin,
   TRANSLIT_CACHE_MAX,
 } from '../src/constants/displayText.ts';
 
@@ -192,6 +192,13 @@ eq('gain down', statusGainParts('GAIN ↓ 25.4 dB'), { label: 'GAIN', dir: 'down
 eq('gain up', statusGainParts('GAIN ↑ 3.0 dB'), { label: 'GAIN', dir: 'up', value: '3.0dB', tail: '' });
 eq('gain held, no arrow', statusGainParts('GAIN · 12.5 dB (held)'), { label: 'GAIN', dir: null, value: '12.5dB', tail: ' (held)' });
 eq('plain AGC is not a gain reading', statusGainParts('AGC'), null);
+// ★★ Direct sampling: the gain item says so instead of a gain the bypassed tuner is not applying (B10).
+eq('Q branch → Direct Sample', statusGainText('GAIN ↓ 25.4 dB', 2), 'Direct Sample');
+eq('I branch → Direct Sample', statusGainText('AGC', 1), STATUS_DIRECT_SAMPLE);
+eq('even with no gain text yet', statusGainText('', 2), 'Direct Sample');
+eq('on the tuner → the gain as written', statusGainText('GAIN ↓ 25.4 dB', 0), 'GAIN ↓ 25.4 dB');
+eq('unknown (−1 / absent) → the gain as written', [statusGainText('AGC', -1), statusGainText('AGC', undefined)], ['AGC', 'AGC']);
+eq('"Direct Sample" is not parsed as a gain reading', statusGainParts(STATUS_DIRECT_SAMPLE), null);
 ok('Doto really has no arrow to draw it with', !dotoHas('↓') && !dotoHas('↑'));
 
 void SEG_BLANK;

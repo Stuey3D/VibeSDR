@@ -330,6 +330,22 @@ export function statusGainParts(agcText: string): GainParts | null {
 }
 
 /**
+ * ★★★ IN DIRECT SAMPLING THE STATUS ROW SAYS "Direct Sample", NOT A GAIN (Stuart, B10, 2026-10-01:
+ *  "it should say Direct Sample"). The tuner is bypassed — on the Q or I branch the ADC is fed
+ *  straight from the aerial — so there is no gain to report, and VibeAGC has stood down (the server
+ *  stops stepping in direct sampling). The last "GAIN ↓25.4dB" the loop wrote before the crossover
+ *  just stood there, reading as a gain the radio was still applying.
+ *  ★ ONLY the gain item. The IF figure beside it STAYS: the owner's receiver uses the IF filter in
+ *    direct sampling and it "actually responds great" — it is the one control still working there.
+ *  ★ `dsLive` is hwinfo's `ds` (the mode the radio is in NOW: 0 tuner, 1 I, 2 Q; −1 unknown), never
+ *    the owner's setting — an AUTO receiver above the crossover is on its tuner and has a real gain.
+ */
+export const STATUS_DIRECT_SAMPLE = 'Direct Sample';
+export function statusGainText(agcText: string, dsLive: number | undefined): string {
+  return (dsLive ?? 0) > 0 ? STATUS_DIRECT_SAMPLE : agcText;
+}
+
+/**
  * ★ Row 9's hook: the landscape status row's DROP ORDER (§8.2), first to go first. The connection
  * meter is never in it — it is never dropped. Measured with onLayout, never by device model.
  */

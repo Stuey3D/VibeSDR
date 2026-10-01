@@ -3918,6 +3918,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *     default, and "minimum gain" on them means a max IF gain REDUCTION or a max attenuator,
    *     which are different quantities and worth measuring on hardware before claiming. */
   const gainIsAtMinimum = (() => {
+    // ★★ Not in direct sampling (B10): the tuner and its gain are bypassed, so "raise the gain" is
+    //    advice about a control that does nothing there — the server has just said "Gain not available".
+    if (hwDsLive > 0) return false;
     if (radioCaps?.driver === 'hackrf') {
       return (radioCaps.lna ?? 0) === 0 && (radioCaps.vga ?? 0) === 0;
     }
@@ -4809,6 +4812,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         setHwHasAutoDs(true);
         setHwDsLive(live);
+        // ★★ Onto the status row too: while the tuner is bypassed the gain item reads "Direct Sample"
+        //    (statusGainText). A LIVE reading, so taken from local hardware as well (see adoptHw).
+        const b = meterBus.current;
+        if (b && (b.value.dsLive ?? 0) !== live) b.emit({ ...b.value, dsLive: live });
         if (!adoptHw) return;
         setHwAutoDs(autoDs);
         if (belowHz > 0) setHwDsBelowHz(belowHz);
@@ -8051,11 +8058,25 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★ Nothing is lost by waiting: RDS updates continuously, so the station name lands on the next
    *   change once the notice has had its turn. */
   const vtsNoticeUntil = useRef(0);
+  /* ★★ AND WHEN THE NOTICE HAS HAD ITS TURN, THE BAR GOES BACK TO WHAT IT SHOWED (B10). The station
+   *  paths DEFER while a notice is up and leave vtsLastStation alone so "the next RDS tick" shows
+   *  the name — but a PS-only station, or a bookmark you are parked on, has no next tick, so the
+   *  bar simply stayed empty after the notice. At the deadline the latch is cleared and both paths
+   *  are re-run (vtsNoticeEnded is in their deps): the station comes back, or nothing does. */
+  const vtsNoticeEndTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [vtsNoticeEnded, setVtsNoticeEnded] = useState(0);
+  useEffect(() => () => { if (vtsNoticeEndTimer.current) clearTimeout(vtsNoticeEndTimer.current); }, []);
   /** ★ Published for the socket callbacks wired far above — see showVtsNoticeRef. */
   const showVtsNotice = useCallback((msg: string, ms: number) => {
     vtsNoticeUntil.current = Date.now() + ms;
     vtsKey.current++;
     setVtsNotif({ key: vtsKey.current, name: msg, kind: 'notice', ms });
+    if (vtsNoticeEndTimer.current) clearTimeout(vtsNoticeEndTimer.current);
+    vtsNoticeEndTimer.current = setTimeout(() => {
+      vtsNoticeEndTimer.current = null;
+      vtsLastStation.current = '';
+      setVtsNoticeEnded((g) => g + 1);
+    }, ms + 50);   // ★ +50: the deferral tests Date.now() < vtsNoticeUntil, which must be over by then
     return vtsKey.current;      // ★ so a caller can withdraw exactly its own notice later
   }, []);
   // ★ Publish it for the socket callbacks, which are wired before this exists — see the ref.
@@ -8624,7 +8645,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       // name / DMR caller falls back to the channel's bookmark instead of nothing.
       if (vtsLastStation.current) {
         vtsLastStation.current = '';
-        setVtsNotif(null);
+        /* ★★★ NOT A NOTICE THAT HAS SINCE TAKEN THE BAR (B10). FM → 7.092 MHz: the server's
+         *  direct-sampling notice lands within a few tens of ms of the tune, and the RDS clears
+         *  AFTER it — and this null used to take the notice down with the station it was meant
+         *  for (before VTSBar's fix it FROZE it there instead). A notice owns the bar for its life;
+         *  the station it displaced is already gone from the screen. */
+        setVtsNotif((n) => (n && n.kind === 'notice' && !n.hold ? n : null));
         vtsCheck(status.frequency);
       }
       return;
@@ -8659,7 +8685,14 @@ export default function SDRScreen({ route, navigation }: Props) {
                     kind: 'station-on', hold: true, badge: liveBadgeRef.current ?? (vtsId ? 'RDS' : undefined), flag, logoUrl });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveStation.pi, liveStation.sid, liveLogo, status.mode, dabOn]);
+  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveStation.pi, liveStation.sid, liveLogo, status.mode, dabOn,
+      vtsNoticeEnded]);
+  // ★ …and the bookmark you are parked on, once a notice has had its turn (see vtsNoticeEnded).
+  //   vtsCheck hands over to the effect above itself when a live station owns the bar.
+  useEffect(() => {
+    if (vtsNoticeEnded && status.frequency) vtsCheck(status.frequency);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vtsNoticeEnded]);
 
   // ── Station logo (radio-browser favicon) ────────────────────────────────────
   // NOT gated on WFM any more. The gate existed because a station name only ever
