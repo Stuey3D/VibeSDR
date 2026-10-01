@@ -92,6 +92,8 @@ import { watchProvider } from '../services/watchProvider';
  *  watch gets a STEADY 10fps locked or awake. Headroom is what buys steadiness
  *  here; the frames we drop cost nothing, and the ones we keep are on time. */
 const WATCH_BG_DIVISOR = 1;
+// How long the status row's gain arrow stays after the gain loop's last step.
+const GAIN_ARROW_MS = 4000;
 import { filterEdgeMax, filterEdgeMin, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type RttySettings, type MorseQuality,
@@ -701,6 +703,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  password (Stuart, 2026-08-13). The socket is already admin by then — `admin_unlock` did that
    *  — so there is nothing to reconnect FOR. The ref carries it into any LATER connect without
    *  making this one restart. */
+  const gainArrowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const adminAuthQRef = useRef('');
   /** ★ One retry without the admin credential, per session — see onError. */
   const adminRetryDone = useRef(false);
@@ -4880,8 +4883,25 @@ export default function SDRScreen({ route, navigation }: Props) {
         const b = meterBus.current;
         if (!b) return;
         const arrow = dir > 0 ? '↑' : dir < 0 ? '↓' : '·';
-        b.emit({ ...b.value,
-                 agcText: `GAIN ${arrow} ${(gainTenthDb / 10).toFixed(1)} dB${agc ? '' : ' (held)'}` });
+        const tail = `${(gainTenthDb / 10).toFixed(1)} dB${agc ? '' : ' (held)'}`;
+        b.emit({ ...b.value, agcText: `GAIN ${arrow} ${tail}` });
+        /* ★★ THE ARROW IS FOR MOVEMENT ONLY (B12, Stuart: "once the gain has moved the status row needs
+         *  to drop the arrow, it only needs to show when the gain is moving and for maybe a few seconds
+         *  after"). 'ovl' arrives only on a CHANGE, so the last arrow stood forever — a gain that
+         *  settled an hour ago still read as falling. Each step re-arms; GAIN_ARROW_MS after the last
+         *  one the arrow becomes '·' (statusGainParts draws no arrow for it). Only if the text is
+         *  still ours: an AGC-off or a newer reading must not be overwritten. */
+        if (gainArrowTimer.current) clearTimeout(gainArrowTimer.current);
+        gainArrowTimer.current = null;
+        if (arrow !== '·') {
+          const moving = `GAIN ${arrow} ${tail}`;
+          gainArrowTimer.current = setTimeout(() => {
+            gainArrowTimer.current = null;
+            const bb = meterBus.current;
+            if (destroyed.current || !bb || bb.value.agcText !== moving) return;
+            bb.emit({ ...bb.value, agcText: `GAIN · ${tail}` });
+          }, GAIN_ARROW_MS);
+        }
       },
       // Incoming spectrum data-rate + frame-rate → the connection meter's "NNk/s · NNfps" readout.
       onLinkRate: (rung: number, settling: boolean, fps: number, kbps: number) => {

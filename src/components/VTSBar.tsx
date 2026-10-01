@@ -13,6 +13,7 @@ import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, View }
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import RdsMark from './RdsMark';
+import SectionIcon from './SectionIcon';
 import { GhostGrid } from './VfdParts';
 import { rgba, FONT_HYPER, FONT_DOTO, FONT_SEG14 } from '../constants/faceplate';
 import {
@@ -24,17 +25,13 @@ import { vtsIdText, vtsJoin, vtsLineSegments, vtsStationText, type VtsIdLabel } 
 /* ★ The RDS mark is the vector mark (RdsMark, §7.1) in the strip's own colour. It replaced the fixed
  *  black-on-white `assets/rds-logo.png`, which a neon or VFD strip cannot carry. Never "ADVANCED". */
 
-// Bookmark-source marks (uniform with the RDS logo): the backend logo for a
-// server bookmark, an "EiBi" text mark for the on-device EiBi schedule, and a
-// phone glyph for the user's own (local) bookmarks.
-const SERVER_LOGOS: Record<string, any> = {
-  ubersdr: require('../../assets/logo_ubersdr.png'),
-  owrx:    require('../../assets/logo_owrx.png'),
-  kiwi:    require('../../assets/logo_kiwi.png'),
-  // ★ VibeServer had no logo, so our OWN server fell back to a generic radio glyph
-  //   in the very list where every other backend is branded (Stuart, 2026-07-29).
-  vibeserver: require('../../assets/logo_vibeserver.png'),
-};
+// Bookmark-source marks (uniform with the RDS logo): the node icon for a server
+// bookmark, an "EiBi" text mark for the on-device EiBi schedule, and a phone
+// glyph for the user's own (local) bookmarks.
+// ★★ The node icon on EVERY backend (B12, Stuart: "replace the server bookmarks icon for all servers
+//    with the node icon"). Backend logos fell back to UberSDR's on a VibeServer (the native pump
+//    reports serverType 'local'), and a bookmark's source is "this receiver", not a brand. It is the
+//    same glyph as the Servers chip.
 
 export interface VtsNotifData {
   key:        number;   // bump to re-trigger even with identical text
@@ -286,8 +283,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           : vfd && shown.badge === 'RDS'
             ? null
           : shown.source === 'server'
-            ? <Image source={SERVER_LOGOS[serverType ?? 'ubersdr'] ?? SERVER_LOGOS.ubersdr}
-                style={[styles.srcLogo, serverType === 'owrx' && styles.srcLogoLight]} resizeMode="contain" />
+            ? <View style={styles.srcLogo}><SectionIcon name="instance" size={16} color={COL.mark} /></View>
             : shown.source === 'eibi'
               ? <Text style={styles.eibiMark}>EiBi</Text>
               : shown.source === 'user'
@@ -519,17 +515,9 @@ const styles = StyleSheet.create({
     marginRight: 5,
   },
   srcLogo: {
-    width: 26,
+    width: 16,
     height: 16,
     marginRight: 5,
-  },
-  // OWRX's logo is a black antenna that vanishes on the dark bar — sit it on a
-  // light chip, same as the menu footer.
-  srcLogoLight: {
-    backgroundColor: '#ffffff',
-    borderRadius: 4,
-    paddingHorizontal: 3,
-    width: 30,
   },
   eibiMark: {
     color: '#0a0a0a',
