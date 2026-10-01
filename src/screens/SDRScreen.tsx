@@ -45,7 +45,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake }       from 'expo-keep-awake';
-import { keepIfSameStation, sameFlatList } from '../services/renderChurn';
+import { keepIfSameStation, sameFlatList, sameStorms } from '../services/renderChurn';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/native';
 import type { RootStackParamList }     from '../../App';
@@ -4620,7 +4620,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
       onRfCentre: (rf, locked) => { if (destroyed.current) return; setHwRfCentre(rf); setHwLockedCentre(locked); },
-      onLightning: (rate, ago) => { if (!destroyed.current) setStorms(rate > 0 ? { rate, ago } : null); },
+      /* ★★★ `lx` RIDES EVERY SPECTRUM TICK — ~20 a second — and every one with storms about built a
+       *  fresh object: TWENTY WHOLE-SCREEN RENDERS A SECOND for as long as anyone listened below
+       *  10 MHz with sferics in the air (MW at night: 28-33 a minute measured), to draw a badge
+       *  that reads "⚡ STORMS". Now only a change in what is drawn — the badge, and its spoken
+       *  label's whole-number rate and seconds — gets through (power audit, 2026-10-01). */
+      onLightning: (rate, ago) => {
+        if (destroyed.current) return;
+        const next = rate > 0 ? { rate, ago } : null;
+        setStorms((cur) => (sameStorms(cur, next) ? cur : next));
+      },
       /** ★ The server's answer to a raw IQ request: the address or the pairing code, or why not. */
       onIqOut: (m) => {
         if (destroyed.current) return;

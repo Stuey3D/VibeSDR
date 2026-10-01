@@ -50,6 +50,17 @@ export function sameFlatList<T extends object>(a: readonly T[], b: readonly T[])
   return true;
 }
 
+/** The lightning badge (`lx`, sent with EVERY spectrum frame): the same when it would draw the same.
+ *  What is drawn is "⚡ STORMS" and a spoken label with the rate and the seconds since the last
+ *  strike, both rounded to whole numbers — so that is the resolution compared, and no finer.
+ *  ★ Keep in step with ControlsBar's accessibilityLabel if it ever shows more. */
+export function sameStorms(a: { rate: number; ago: number } | null,
+                           b: { rate: number; ago: number } | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return Math.round(a.rate) === Math.round(b.rate) && Math.round(a.ago) === Math.round(b.ago);
+}
+
 /** The minute a clock showing HH:MM is on. A 1 Hz timer only needs to re-render when this moves:
  *  the seconds are not drawn, so the other 59 renders a minute drew the same pixels. */
 export function minuteKey(ms: number): number {
