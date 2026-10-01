@@ -223,10 +223,15 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           <VfdIso style={COL.style as 'dot' | 'seg'} code={flagToIso(shown.flag)} rgb={COL.rgb} core={COL.core} glow={COL.glow} />
         </View>
       )}
+      {/* ★★ The RDS mark STAYS when the station's logo lands (B9, Stuart: it vanished as the logo rendered
+          in, though the bar has room): mark first, then the logo — the web bar's order. */}
+      {!vfd && shown.badge === 'RDS' && (
+        <View style={styles.rdsMark}><RdsMark kind="plain" height={13} color={COL.mark} glow={COL.markGlow} /></View>
+      )}
       {!vfd && shown.logoUrl
         ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
         : !vfd && shown.badge === 'RDS'
-        ? <View style={styles.rdsMark}><RdsMark kind="plain" height={13} color={COL.mark} glow={COL.markGlow} /></View>
+        ? null
         : !!shown.badge && shown.badge !== 'RDS'
           ? <Text style={styles.badge}>{shown.badge}</Text>
           : vfd && shown.badge === 'RDS'
