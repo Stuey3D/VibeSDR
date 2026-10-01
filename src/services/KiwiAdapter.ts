@@ -1182,5 +1182,9 @@ export class KiwiAdapter implements SDRBackend {
   // ── helpers ────────────────────────────────────────────────────────────────
   private sndSend(s: string): void { try { if (this.sndWs?.readyState === WebSocket.OPEN) { if (s !== 'SET keepalive') this.dbg('SND tx: ' + s); this.sndWs.send(s); } } catch {} }
   private wfSend(s: string): void { try { if (this.wfWs?.readyState === WebSocket.OPEN) { if (s !== 'SET keepalive') this.dbg('WF tx: ' + s); this.wfWs.send(s); } } catch {} }
-  private dbg(m: string): void { console.log('[kiwi] ' + m); this.cb.onDbg?.('[kiwi] ' + m); }
+  /* ★ console.log is NOT free in a release build — it still crosses to the native logger — and this
+   *  is called for EVERY text message on both sockets (onText). The in-app debug surface (onDbg)
+   *  and the diagnostics export (noteUnhandled) are what a field report reads; the console is for
+   *  a developer at a Metro terminal. */
+  private dbg(m: string): void { if (__DEV__) console.log('[kiwi] ' + m); this.cb.onDbg?.('[kiwi] ' + m); }
 }

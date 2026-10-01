@@ -20,6 +20,7 @@ import {
   Dimensions,
   NativeEventEmitter,
   NativeModules,
+  AppState,
 } from 'react-native';
 // safe-area-context SafeAreaView — RN's own is iOS-only, which put the
 // header under the status bar on Android (G35: cog untappable)
@@ -1671,9 +1672,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // ★ Absent from the map = UNKNOWN (old server, or unreachable). Never rendered as "free":
   // claiming a server is available and then failing to connect is worse than saying nothing.
   const [occupancy, setOccupancy] = useState<Record<string, ServerOccupancy>>({});
+  /* ★★★ ONLY WHILE THIS LIST IS ON SCREEN. The picker stays MOUNTED under the radio screen (a
+   *   native stack keeps it), so this went on asking every saved VibeServer every 20 s, and
+   *   re-rendering the whole list with a fresh object per answer, for the entire time anyone
+   *   listened — locked in a pocket included (power audit, 2026-10-01). Nobody can see a badge on
+   *   a list that is not showing. Coming back to it re-focuses the screen and polls at once.
+   *  ★ Same "mounted is not on screen" rule as screenFocused below — one hook, read by both. */
+  const screenFocused = useIsFocused();
   useEffect(() => {
+    if (!screenFocused) return;
     let cancelled = false;
     const poll = async () => {
+      // ★ Nor behind a locked screen: the interval survives backgrounding while audio plays.
+      if (AppState.currentState !== 'active') return;
       const targets = favourites.filter(f => (f.serverType ?? '') === 'vibeserver');
       if (!targets.length) return;
       // Sequential, not parallel: this is a courtesy poll of somebody else's receiver, and
@@ -1684,7 +1695,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         const occ = await fetchOccupancy(f.url).catch(() => null);
         if (cancelled) return;
         setOccupancy(prev => {
-          if (!occ) { const { [f.url]: _drop, ...rest } = prev; return rest; }
+          if (!occ) {
+            if (!(f.url in prev)) return prev;      // ★ already unknown — nothing to re-render
+            const { [f.url]: _drop, ...rest } = prev; return rest;
+          }
+          // ★ An unchanged answer keeps the same map, so a quiet server costs no render.
+          const cur = prev[f.url];
+          if (cur && JSON.stringify(cur) === JSON.stringify(occ)) return prev;
           return { ...prev, [f.url]: occ };
         });
       }
@@ -1694,7 +1711,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // list, slow enough not to be a nuisance to a server that is already busy serving.
     const t = setInterval(poll, 20_000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [favourites]);
+  }, [favourites, screenFocused]);
 
   useEffect(() => {
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
@@ -1738,7 +1755,6 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   //
   // ★ Any screen-level key listener needs this. Mounted is not the same as on screen, which
   // is the second time that distinction has bitten in this work.
-  const screenFocused = useIsFocused();
   const listNavActive = screenFocused && !tcpModal && !editFav && !connecting;
 
   // ★★ ONE index space for the WHOLE screen. The chooser (custom URL, discovered,

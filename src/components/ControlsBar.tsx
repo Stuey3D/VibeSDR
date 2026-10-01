@@ -139,6 +139,7 @@ import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { STEP_833, type AirChannel } from '../utils/airband';
 import { tourRef, mergeRefs } from './Coachmark';
 import { IS_TV } from '../utils/tv';
+import { minuteKey } from '../services/renderChurn';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -299,8 +300,14 @@ function useClock(tzOffsetMin?: number | null, tzAbbr?: string) {
   useEffect(() => {
     // Background audio keeps JS alive when locked — don't re-render the
     // controls every second behind a screen nobody can see.
+    /* ★★ AND ONLY WHEN THE MINUTE TURNS. Both clocks draw HH:MM, but a fresh Date every second
+     *  re-rendered the whole controls bar sixty times a minute to draw the same pixels — plus two
+     *  Intl formatting calls a second for the phone-clock fallback (power audit, 2026-10-01).
+     *  Still ticked every second so the minute lands within a second of turning. */
     const id = setInterval(() => {
-      if (AppState.currentState === 'active') setNow(new Date());
+      if (AppState.currentState !== 'active') return;
+      const t = Date.now();
+      setNow((prev) => (minuteKey(prev.getTime()) === minuteKey(t) ? prev : new Date(t)));
     }, 1000);
     return () => clearInterval(id);
   }, []);
