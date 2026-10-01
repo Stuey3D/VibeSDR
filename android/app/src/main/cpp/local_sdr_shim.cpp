@@ -12068,9 +12068,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!a) return;
         const std::string body = std::string("{\"type\":\"notice\",\"vts\":\"")
             + (a == 1
-               ? "Switching to direct sampling mode for HF \xe2\x80\x94 the tuner is bypassed "
-                 "below this point, so gain control is not available."
-               : "Switching back to quadrature sampling \xe2\x80\x94 gain control is restored.")
+               // ★ Short (B10, Stuart): a VFD strip scrolls it, and the long sentence never finished.
+               ? "Direct Sample Active \xc2\xb7 Gain not available"
+               : "Direct Sample Off \xc2\xb7 Gain restored")
             + "\"}";
         for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
         // ★ And the state itself, so the AGC chip turns to "paused — direct sampling" (or back) now,
