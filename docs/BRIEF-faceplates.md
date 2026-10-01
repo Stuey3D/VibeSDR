@@ -234,7 +234,10 @@ Squelch line as today (white halo + red line); the bar dims to α .38 while sque
     green `#e9ffe9 #7dff9c #22d24e #0c7a26 #1d3a23 #0b170e` ·
     orange `#fff3dc #ffc36b #ff8a12 #a34a05 #3d2811 #170f06` ·
     red `#fff0ee #ff8a80 #f2231a #8d0c07 #3e1613 #180807`.
-- **Peak hold:** one segment above the level, full brightness, drops after ~1 s.
+- ~~**Peak hold:** one segment above the level, full brightness, drops after ~1 s.~~
+  **SUPERSEDED — owner, 2026-10-01: no peak hold on the LED strip** ("no peak hold on the LED, it's
+  too confusing"). The held segment one above the live edge made the LED *below* it read as the one
+  dimming first. The strip shows the level only. The analogue meter's peak **needle** (§4.5) stays.
 - **Squelch** (ref `07-squelch.jpg`): a **ring** (1.5 pt outline, 2 pt offset) on the threshold
   segment: **green `#3dff72` open, red `#ff3a2e` closed**, always full strength. While muting, lit
   LEDs dim (55% black overlay, glow cut to 4 pt at α .22). Squelch off (`-1`): no ring.

@@ -27,7 +27,7 @@ import {
 } from '@shopify/react-native-skia';
 import {
   LED_SPEC, RING_CLOSED, RING_OPEN, VU_LABELS, VU_SEGMENTS, VU_THRESHOLDS, eyeStep, ledColourOf, makeWindow,
-  meterTick, peakStep, pushSample, ringSegment, segmentTarget, sqlClosedOf, vuPos, type LedColourName,
+  meterTick, pushSample, ringSegment, segmentTarget, sqlClosedOf, vuPos, type LedColourName,
 } from '../constants/meters';
 import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
@@ -194,8 +194,6 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
   const ring    = useSharedValue(-1);
   const bright  = useSharedValue<number[]>(new Array(VU_SEGMENTS).fill(0));
   const litState = useSharedValue<number[]>(new Array(VU_SEGMENTS).fill(0));
-  const peakIdx = useSharedValue(-1);
-  const peakAt  = useSharedValue(0);
   const faulted = useSharedValue(0);
   /** The 60 Hz cadence's carried time (meterTick). */
   const cadAcc  = useSharedValue(0);
@@ -235,8 +233,8 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
   /* ★★★ TWO POWER RULES (audit 2026-10-01), neither of which changes what is drawn:
    *   1. ≤ 60 Hz (meterTick / METER_MIN_FRAME_MS): on a 120 Hz ProMotion panel every other display
    *      frame is skipped and its time carried into the next, so the time-based easing is unchanged.
-   *   2. SLEEP WHEN SETTLED (useFrameSleep): every brightness at its target and no peak held above the
-   *      level ⇒ nothing will move until the next sample, so the callback asks to stop — and the bus
+   *   2. SLEEP WHEN SETTLED (useFrameSleep): every brightness at its target ⇒ nothing will move until
+   *      the next sample, so the callback asks to stop — and the bus
    *      subscription wakes it. Before, it ran 120 times a second for as long as the strip was on
    *      screen — paused, disconnected, a steady carrier — and held the display at 120 Hz. */
   const thresholds = VU_THRESHOLDS as number[];
@@ -254,20 +252,18 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
       const was = litState.value, prev = bright.value;
       const tgt = new Array(VU_SEGMENTS);
       const lit = new Array(VU_SEGMENTS);
-      let top = -1, litChanged = false;
+      let litChanged = false;
       for (let i = 0; i < VU_SEGMENTS; i++) {
         const t = segmentTarget(i, mu, sg, st, mute, was[i] === 1, thresholds);
         tgt[i] = t;
         lit[i] = t >= 0.5 ? 1 : 0;
         if (lit[i] !== was[i]) litChanged = true;
-        if (t >= 0.5) top = i;
       }
       if (litChanged) litState.value = lit;
-      // Peak hold: one segment above the level, full brightness, ~1 s (§4.3).
-      const ph = { idx: peakIdx.value, at: peakAt.value };
-      const pk = peakStep(ph, top, f.timestamp);
-      peakIdx.value = ph.idx; peakAt.value = ph.at;
-      if (pk >= 0) tgt[pk] = 1;
+      /* ★★ NO PEAK HOLD on the LED strip (Stuart, 2026-10-01: "no peak hold on the LED, it's too
+       *  confusing"). A held segment one above the live edge made the edge read as DIMMING FIRST — the
+       *  eye takes the held LED as the level and the real edge below it as the one fading. The strip
+       *  shows the level and nothing else; the analogue meter keeps its peak NEEDLE (§4.5). */
       let changed = false;
       const next = new Array(VU_SEGMENTS);
       for (let i = 0; i < VU_SEGMENTS; i++) {
@@ -277,7 +273,7 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
         if (Math.abs(b - prev[i]) > 0.0005) changed = true;
       }
       if (changed) bright.value = next;
-      else if (!litChanged && pk < 0 && !asked.value) { asked.value = 1; scheduleOnRN(sleep, gen.value); }
+      else if (!litChanged && !asked.value) { asked.value = 1; scheduleOnRN(sleep, gen.value); }
     } catch (e) {
       faulted.value = 1;
       if (onFault) scheduleOnRN(onFault, String((e as Error)?.message ?? e));

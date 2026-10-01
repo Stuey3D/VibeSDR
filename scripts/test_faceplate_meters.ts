@@ -9,12 +9,13 @@
  */
 import {
   portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind,
-  VU_SEGMENTS, VU_LABELS, VU_THRESHOLDS, LED_SPEC, RING_OPEN, RING_CLOSED, ledColourOf, ringSegment, vuPos, peakStep,
+  VU_SEGMENTS, VU_LABELS, VU_THRESHOLDS, LED_SPEC, RING_OPEN, RING_CLOSED, ledColourOf, ringSegment, vuPos,
   phi, edgeBrightness, segmentTarget, makeWindow, pushSample, eyeStep, steadyLit, meterTick, METER_MIN_FRAME_MS,
   scalePointX, needleX, needleSpring, peakNeedleStep, DB_PER_SEG,
   METER_SCALES, meterPos, meterReading, formatReading, sMeterText, scaleMeterValues, makeScaledMeterState,
   meterUnitOf, type MeterUnit,
 } from '../src/constants/meters.ts';
+import * as METERS_MOD from '../src/constants/meters.ts';
 import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H, COLLAR_H } from '../src/constants/nixie.ts';
 import {
   modeBoxFit, modeTextWidth, stereoWidth, modeLabelCandidates, composeModeLabel, MODE_BOX, MODE_BOX_MAX_SHARE,
@@ -120,15 +121,8 @@ for (const table of [VU_THRESHOLDS, [0.2, 1, 2.1, 3.5, 4.4, 5.9, 6.5, 7.2, 8.8, 
   }
   passes++;
 }
-// Peak hold: one segment above the level, ~1 s, then back to the level.
-{
-  const p = { idx: -1, at: 0 };
-  eq('peak rises with the level', peakStep(p, 6, 0), -1);
-  eq('level falls: the peak holds one segment above', peakStep(p, 3, 500), 6);
-  eq('…still held at 1 s', peakStep(p, 3, 1000), 6);
-  eq('…drops after ~1 s', peakStep(p, 3, 1001), -1);
-  eq('a new high is caught at once', peakStep(p, 8, 1100), -1);
-}
+// ★ No LED peak hold (removed 2026-10-01, Stuart: "too confusing") — the module must not export one.
+eq('meters.ts has no LED peak hold', 'peakStep' in METERS_MOD || 'PEAK_HOLD_MS' in METERS_MOD, false);
 
 // ── §4.4 THE EDGE LED ────────────────────────────────────────────────────────
 // Φ against known values.

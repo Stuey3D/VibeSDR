@@ -162,7 +162,6 @@ function tryRun(what, f) {
 const CALLS = {
   vuPos:          f => f(0.5),
   ringSegment:    f => f(0.43),
-  peakStep:       f => f({ idx: -1, at: 0 }, 3, 16),
   phi:            f => f(0.3),
   edgeBrightness: f => f(20, 22, 3),
   eyeStep:        f => f(0.2, 0.8, 16),
@@ -220,7 +219,7 @@ function runFrames(what, fc, shared, extra = {}) {
   const S = {
     muPos: sv(0), sigma: sv(0), steadySv: sv(0), muting: sv(0),
     bright: sv(new Array(M.VU_SEGMENTS).fill(0)), litState: sv(new Array(M.VU_SEGMENTS).fill(0)),
-    peakIdx: sv(-1), peakAt: sv(0), cadAcc: sv(0), gen: sv(7), asked: sv(0),
+    cadAcc: sv(0), gen: sv(7), asked: sv(0),
   };
   S.__set = (level) => { S.muPos.value = M.vuPos(level); S.sigma.value = 0.3; };
   const sleeps = [];
@@ -244,12 +243,13 @@ function runFrames(what, fc, shared, extra = {}) {
     tryRun('LedVu settles', () => run(0.55, 200));
     if (sleeps.length === 1 && sleeps[0] === 7) pass();
     else fail(`LedVu settled at a steady level should ask to sleep exactly once with gen 7, asked ${JSON.stringify(sleeps)}`);
-    // …but NOT while a moving level is still easing, nor while the peak hold is above the level.
+    // …but NOT while a moving level is still easing. (★ There is no LED peak hold since 2026-10-01 —
+    //  Stuart: "too confusing" — so the strip settles as soon as its brightnesses do.)
     tryRun('LedVu at full scale again', () => run(1, 60));
     sleeps.length = 0; S.asked.value = 0;   // (it settled up there — that is the case above)
     tryRun('LedVu falling', () => run(0.2, 20));
     if (sleeps.length === 0) pass();
-    else fail(`LedVu asked to sleep with the LEDs still falling / the peak held (${sleeps.length}×)`);
+    else fail(`LedVu asked to sleep with the LEDs still falling (${sleeps.length}×)`);
     // ★★ ≤ 60 Hz on a 120 Hz panel: the brightness is WRITTEN on at most every other display frame.
     //    (The callback holds this very object, so its writes are counted through an accessor.)
     let store = S.bright.value, n120 = 0;
