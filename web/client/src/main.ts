@@ -52,6 +52,7 @@ import {
   setBookmarkAdminAuth,
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
+import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
 import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
@@ -8471,7 +8472,10 @@ function initSearch() {
       // A logo makes a long result list scannable at a glance. EiBi rows carry their
       // transmitter country, so those resolve without any guesswork at all.
       if (r.source !== 'band') void attachBookmarkLogo(row, r.name, r.itu);
-      row.onclick = () => { usedAt = Date.now(); tuneTo(r); close(); };
+      row.onclick = () => {
+        if (sharePickDone) { close(); pickSearchResult(r); return; }   // ★ picking for the chat: never tunes
+        usedAt = Date.now(); tuneTo(r); close();
+      };
       list.appendChild(row);
     });
     list.classList.add('open');
@@ -8483,6 +8487,7 @@ function initSearch() {
        broad search ("china" comes back with 62 in the app) looked truncated because it WAS.
        One number with two readers, and only one of them had been raised. */
     results = search(el.value, 200);
+    if (sharePickDone) results = results.filter(sharePickableResult);   // ★ a band is not a station
     sel = -1;
     usedAt = 0;                                // a new query is a new hunt, not a stale one
     render();
@@ -8514,6 +8519,7 @@ function initSearch() {
     if (e.key === 'ArrowDown') { sel = Math.min(results.length - 1, sel + 1); render(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); render(); e.preventDefault(); }
     else if (e.key === 'Enter') {
+      if (sharePickDone) { const r = results[Math.max(0, sel)]; el.blur(); close(); e.preventDefault(); pickSearchResult(r); return; }
       usedAt = Date.now();
       tuneTo(results[Math.max(0, sel)]);
       el.blur();
@@ -8611,10 +8617,20 @@ function initBookmarks() {
   };
   $('mBookmarks').onclick = () => {
     bmFilter = 'all';
-    togglePanel('bookmarksPanel');
+    // ★ From the card in PICK mode this is the hop to the learnt stations, not a way out of the pick.
+    keepSharePick = true;
+    try { togglePanel('bookmarksPanel'); } finally { keepSharePick = false; }
     renderBookmarks();
   };
-  $('bmClose').onclick = () => $('bookmarksPanel').classList.remove('open');
+  // ★ CLOSE leaves a pick too — it skips closePanels, so it must say so itself or the next tap would share.
+  $('bmClose').onclick = () => { $('bookmarksPanel').classList.remove('open'); endSharePick(); };
+  $('bmPickSearch').onclick = () => {
+    keepSharePick = true;
+    try { togglePanel('freqPanel'); } finally { keepSharePick = false; }
+    setTimeout(() => $<HTMLInputElement>('search').focus(), 60);
+  };
+  $('bmPickCancel').onclick = () => closePanels();
+  $('sharePickCancel').onclick = () => closePanels();
 
   // Bookmark whatever we're listening to right now. The name comes from an
   // in-page field: a native prompt() SUSPENDS the AudioContext in Safari, which
@@ -8742,6 +8758,8 @@ function renderBookmarks() {
     })),
   ];
   if (bmFilter === 'dab') rows = rows.filter(r => (r.mode || '').toLowerCase() === 'dab');
+  // ★ Picking for the chat: never offer what this receiver cannot play.
+  if (sharePickDone && !dabCapable) rows = rows.filter(r => (r.mode || '').toLowerCase() !== 'dab');
 
   if (!rows.length) {
     const empty = document.createElement('div');
@@ -8804,6 +8822,14 @@ function renderBookmarkRows(host: HTMLElement, rows: Array<{
       `<span class="src">${escapeHtml((b.mode || '').toUpperCase())}</span>`;
     const isDab = (b.mode || '').toLowerCase() === 'dab' && b.sid !== undefined && b.sid >= 0;
     row.onclick = () => {
+      /* ★★ PICKING FOR THE CHAT: the row becomes the draft and nothing tunes. Built by shareFromBookmark,
+       *  which reads the frequency, mode, passband and DAB ids — never the name; the name is only the
+       *  draft's caption on this screen. */
+      if (sharePickDone) {
+        finishSharePick(b.name, shareFromBookmark({ frequency: b.frequency, mode: b.mode,
+          bandwidth_low: b.bwLo, bandwidth_high: b.bwHi, sid: isDab ? b.sid : undefined, eid: b.eid }));
+        return;
+      }
       if (isDab) dabGoTo(b.frequency, b.sid!);
       else tuneTo({
         name: b.name, frequency: b.frequency, mode: b.mode,
@@ -8902,17 +8928,90 @@ async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string, 
 const PANELS = ['menu', 'audioPanel', 'decodersPanel', 'recordingsPanel',
                 'bookmarksPanel', 'freqPanel', 'chatPanel'];
 
-function closePanels() {
+/** `reopenChat` = a share pick abandoned this way brings the chat back (see endSharePick). Only togglePanel
+ *  passes false: opening another panel is the user moving on, and the chat must not reappear beside it. */
+function closePanels(reopenChat = true) {
   // ★ The chat's unread counter keys off whether its panel is open, and EVERY close route lands
   //   here — Escape, a click away, opening something else. Telling it from the button handlers
   //   alone would leave the count frozen at zero after any of the other three.
   if (isPanelOpen('chatPanel')) chatOpened(false);
   for (const id of PANELS) $(id).classList.remove('open');
+  if (!keepSharePick) endSharePick(reopenChat);
+}
+
+/* ★★★ PICK A STATION FOR THE CHAT (Stuart, 2026-10-01): "[Bookmark] opens up a slightly modified version of the
+ *  search and bookmarks lists … the chat box dropping down when the bookmark selection window pops up, bookmark
+ *  selected chat window pops back again with the bookmark now populated."
+ *  ★★ THE SAME LISTS, NOT A COPY: the frequency card's search (your bookmarks, the receiver's, EiBi) and its
+ *     ★ BOOKMARKS hop to the stations this receiver has learnt. In pick mode a row is CHOSEN rather than tuned,
+ *     band-plan ranges are left out (a band is not a station), the ✕ delete keys and the add/import rows hide,
+ *     and the frequency keypad hides — this is not tuning.
+ *  ★★ EVERY OTHER WAY OUT ENDS IT. closePanels is where Escape, a click away, CLOSE and CANCEL all land, so the
+ *     pick ends there; the one hop that must survive it (search ⇄ bookmarks) says so with keepSharePick. A pick
+ *     left latched would make the next ordinary tap on a bookmark silently NOT tune. */
+let sharePickDone: ((p: { title: string; out: ShareOut }) => void) | null = null;
+let keepSharePick = false;
+
+function sharePickableResult(r: SearchResult): boolean {
+  if (r.source === 'band') return false;
+  if ((r.mode || '').toLowerCase() === 'dab' && !dabCapable) return false;
+  return true;
+}
+
+function beginSharePick(done: (p: { title: string; out: ShareOut }) => void) {
+  closePanels();                                   // the chat drops away while you choose
+  sharePickDone = done;
+  $('freqPanel').classList.add('picking');
+  $('bookmarksPanel').classList.add('picking');
+  $('sharePickBar').hidden = false;
+  $('bmPickBar').hidden = false;
+  $('freqPanel').classList.add('open');
+  // ★ A fresh search: a list left over from tuning would still hold band rows and a stale hunt.
+  const el = $<HTMLInputElement>('search');
+  el.value = '';
+  el.dispatchEvent(new Event('input'));
+  setTimeout(() => el.focus(), 60);
+}
+
+/* ★★ A PICK ABANDONED BRINGS THE CHAT BACK (Stuart, 2026-10-01: "just in case it was a mistaken button
+ *  press"). Escape, a click away, CLOSE and CANCEL all reopen it, as the app does. finishSharePick ends the
+ *  pick with false because it opens the chat itself, and togglePanel passes false through closePanels. */
+function endSharePick(reopenChat = true) {
+  if (!sharePickDone) return;
+  sharePickDone = null;
+  $('freqPanel').classList.remove('picking');
+  $('bookmarksPanel').classList.remove('picking');
+  $('sharePickBar').hidden = true;
+  $('bmPickBar').hidden = true;
+  const el = $<HTMLInputElement>('search');
+  if (el.value) { el.value = ''; el.dispatchEvent(new Event('input')); }
+  if (isPanelOpen('bookmarksPanel')) renderBookmarks();   // the ✕ keys come back
+  if (reopenChat && !isPanelOpen('chatPanel')) {
+    for (const id of PANELS) $(id).classList.remove('open');
+    $('chatPanel').classList.add('open');
+    chatOpened(true);
+  }
+}
+
+function pickSearchResult(r: SearchResult | undefined) {
+  if (!r || !sharePickableResult(r)) return;
+  finishSharePick(r.name, shareFromBookmark({ frequency: r.frequency, mode: r.mode,
+    bandwidth_low: r.bandwidthLow, bandwidth_high: r.bandwidthHigh, sid: r.sid }));
+}
+
+/** The pick is made: close the lists, bring the chat back, and hand it the draft. */
+function finishSharePick(title: string, out: ShareOut | null) {
+  if (!out) return;                                // nothing shareable in that row — stay in the list
+  const done = sharePickDone;
+  closePanels(false);                              // ends the pick; the chat is opened just below
+  togglePanel('chatPanel');
+  chatOpened(isPanelOpen('chatPanel'));
+  done?.({ title, out });
 }
 
 function togglePanel(id: string) {
   const open = $(id).classList.contains('open');
-  closePanels();
+  closePanels(false);
   if (!open) $(id).classList.add('open');
 }
 
@@ -9373,17 +9472,8 @@ function initDecoders(host: string, auth: AuthState) {
     /* ★★★ SHARE A STATION — the frame src/services/chatShare.ts built: numbers and closed-list ids, NEVER a
      *  bookmark's label. The server validates it and names it from what THIS receiver knows. */
     share: (out) => spec?.send({ ...out }),
-    // ★★ The listener's own, then THIS RECEIVER's stations (RDS-learned and the owner's) — the B11 fix for
-    //    "no options to share bookmarks, only now playing": most visitors have saved nothing of their own.
-    bookmarks: () => {
-      const seen = new Set<number>(), out: Array<{ name: string; frequency: number; mode?: string }> = [];
-      for (const b of [...getBookmarks(), ...[...getServerBookmarks()].sort((a, c) => a.frequency - c.frequency)]) {
-        const hz = Math.round(b.frequency);
-        if (seen.has(hz)) continue;
-        seen.add(hz); out.push(b);
-      }
-      return out as ReturnType<typeof getBookmarks>;
-    },
+    // ★★ BOOKMARK: the frequency card's search and bookmark lists, in pick mode — see beginSharePick.
+    pickStation: (done) => beginSharePick(done),
     dabNow: () => {
       if (!dabOn || !dabState || !dabState.channel) return null;
       const svc = dabState.services?.find((x) => x.sid === dabState!.sid);

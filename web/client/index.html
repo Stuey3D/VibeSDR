@@ -1391,27 +1391,37 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   #chatPhrases .btn { flex: 1 1 100%; }
   #chatLog { max-height: 30vh; }
 }
-/* ★★ THE "CHECK OUT" COMPOSER — a number, a unit and a mode, on one row that wraps on a phone. It is the only
-   place in this panel where something is typed, and what is typed is a NUMBER: the vocabulary stays closed. */
-.chatCheckOut { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; margin-top: 4px; }
-.chatCheckOut .chatFreq { flex: 1 1 7em; min-width: 6em; }
-.chatCheckOut input, .chatCheckOut select {
+/* ★★★ CHECK OUT [BOOKMARK] [MANUAL] (Stuart, 2026-10-01) — one row first in SAY; the draft and the manual
+   field open under it. The manual field is the only place in this panel where something is typed, and what is
+   typed is a NUMBER: the vocabulary stays closed. */
+.chatShare { display: flex; flex-direction: column; gap: 6px; width: 100%; margin: 2px 0 6px; }
+.chatCheckOut, .chatManual, .chatShareDraft { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
+.chatManual[hidden], .chatShareDraft[hidden] { display: none; }
+.chatCheckLead { color: var(--amber); font-weight: 600; }
+#chatPhrases .chatShareBtn { font-weight: 600; flex: 1 1 auto; }
+/* ★ The phone rule above makes every phrase full width; the share keys sit side by side instead. */
+#chatPhrases .chatShare .btn { flex: 1 1 auto; text-align: center; }
+#chatPhrases .chatShareDraft .btn, #chatPhrases .chatManual .btn { flex: 0 0 auto; }
+.chatManual .chatFreq { flex: 1 1 7em; min-width: 6em; }
+.chatManual input, .chatManual select {
   background: #120c05; color: var(--amber); border: 1px solid var(--line); border-radius: 6px;
   padding: 5px 7px; font: inherit; font-size: 0.86em;
 }
-.chatCheckOut .btn { flex: 1 1 auto; }
+.chatShareDraft { border: 1px solid rgba(255, 176, 0, 0.4); border-radius: 6px; padding: 5px 7px; }
+.chatShareDraftTxt { flex: 1 1 12em; min-width: 0; overflow-wrap: anywhere; color: var(--amber); }
 /* ★ A frequency somebody found is a place you can go — say so with the pointer. */
 .chatGoTo { text-decoration: underline dotted; cursor: pointer; }
 .chatGoTo:hover { color: var(--amber); }
-/* ★★ SHARE A STATION — the picker opens above the phrases as a LIST (label over frequency), full width; the
-   label is the listener's own and is never sent. TUNE sits after a shared line, no wider than its word, and
-   the ask row under it says why it is asking. */
-#chatPhrases .chatShareBtn { font-weight: 600; }
-.chatSharePick { display: flex; flex-direction: column; gap: 4px; width: 100%; margin: 2px 0 6px; }
-.chatSharePick[hidden] { display: none; }
-#chatPhrases .chatShareRow { display: flex; flex-direction: column; align-items: flex-start; flex: 1 1 100%; width: 100%; }
-.chatShareDetail { font-size: 0.82em; color: var(--unit); }
-.chatShareNote { font-size: 12px; color: var(--unit); }
+/* ★★ PICK MODE on the frequency card and the bookmarks list (beginSharePick): the lists stay, everything that
+   tunes, deletes or saves hides — this is choosing, not tuning. */
+.sharePickBar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px;
+                font-size: 12px; color: var(--amber); }
+.sharePickBar[hidden] { display: none; }
+.sharePickBar span { flex: 1 1 14em; }
+#freqPanel.picking > :not(#menuHead):not(#sharePickBar):not(#mBmRow):not(#mSearchHost) { display: none !important; }
+#bookmarksPanel.picking > .mrow, #bookmarksPanel.picking #bmMsg,
+#bookmarksPanel.picking #bmList .sres > button { display: none !important; }
+/* TUNE sits after a shared line, no wider than its word, and the ask row under it says why it is asking. */
 .chatLine .chatTune { margin-left: 0.6em; padding: 1px 8px; font-size: 11px; letter-spacing: 0.08em; vertical-align: baseline; }
 .chatAsk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--amber);
            border: 1px solid rgba(255, 176, 0, 0.4); border-radius: 6px; padding: 5px 7px; }
@@ -1752,8 +1762,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   /* minmax(0,1fr), not minmax(150px,1fr): a 150px floor gave the grid a minimum width the flex
      row could not honour, which is what forced the wrap. Columns may now shrink and long
      values wrap inside their own cell instead of shoving the layout. */
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
   gap: 2px 16px; flex: 1 1 auto; min-width: 0;
+  /* ★★★ TWO COLUMNS ONLY WHEN TWO FIT. A fixed two columns beside the 180px plot column left
+     each VALUE about 98px in a 580px box, so "86° · quadrature" broke as "quadratur / e" and
+     IF NARROW took five lines (Onfliner's MPXtool comparison, 2026-10-01). Below ~476px of
+     grid it is one column; min(100%, …) keeps the old no-floor rule, so it never forces a wrap. */
 }
 /* (The plots column's flex basis is pinned further down, where the later rule would
    otherwise override anything set here.) */
@@ -3578,6 +3592,11 @@ select.btn { padding: 6px 8px; }
     <span>FREQUENCY</span>
     <button class="btn" id="freqClose">CLOSE</button>
   </div>
+  <!-- ★★ PICK MODE (the chat's Check out → Bookmark): see beginSharePick in main.ts. -->
+  <div class="sharePickBar" id="sharePickBar" hidden>
+    <span>Pick a station to share — search, or open BOOKMARKS for the ones this receiver has learnt.</span>
+    <button class="btn" id="sharePickCancel">CANCEL</button>
+  </div>
   <div class="mrow">
     <input id="freqInput" type="text" inputmode="decimal" spellcheck="false" autocomplete="off">
   </div>
@@ -3595,7 +3614,7 @@ select.btn { padding: 6px 8px; }
        two buttons a listener touches occasionally (Stuart). Finding a station, recalling one
        and typing one in are the same job, so they belong in the same place.
        ★ The only copy of either. -->
-  <div class="mrow mOnly" style="gap:0.5em">
+  <div class="mrow mOnly" id="mBmRow" style="gap:0.5em">
     <button class="mPanelBtn" id="mBookmarks" style="flex:1">★ BOOKMARKS</button>
   </div>
   <!-- ★★★ THE ONE SEARCH INPUT. It used to live in the hidden desktop bar and be moved in here at
@@ -3918,6 +3937,11 @@ select.btn { padding: 6px 8px; }
   <div id="menuHead">
     <span>&#9733; BOOKMARKS</span>
     <button class="btn" id="bmClose">CLOSE</button>
+  </div>
+  <div class="sharePickBar" id="bmPickBar" hidden>
+    <span>Pick a station to share.</span>
+    <button class="btn" id="bmPickSearch">SEARCH</button>
+    <button class="btn" id="bmPickCancel">CANCEL</button>
   </div>
   <!-- Naming happens IN THE PAGE. A native prompt() suspends Safari's
        AudioContext, which killed the audio mid-listen. -->

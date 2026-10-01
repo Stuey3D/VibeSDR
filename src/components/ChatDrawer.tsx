@@ -35,7 +35,10 @@ import {
 } from './PopupShell';
 import type { ChatUserRow } from '../services/DecoderClient';
 import { phrasePadMaxHeight } from '../constants/chatPad';
-import type { ShareOut, SharedStation } from '../services/chatShare';
+import {
+  shareFromManual, manualFieldFrom, MANUAL_SHARE_MODES, SHARE_MODE_LABEL,
+  type ShareOut, type SharedStation,
+} from '../services/chatShare';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -85,10 +88,21 @@ export interface ChatDrawerProps {
   onSay?:            (id: string) => void;
   /** One line about the room — who is tuning, how many are here, why it is not moving. */
   dialLine?:         string;
-  /** ★★ SHARE A STATION (canned mode): what this user may share — what is playing now, then their
-   *  own bookmarks for this receiver. Absent = no Share chip (a chat without canned mode has a text
-   *  box, and FM-DX has its own chat). */
-  shareItems?:       ShareItem[];
+  /** ★★★ "CHECK OUT [Bookmark] [Manual]" (canned mode — Stuart, 2026-10-01: the old picker was "a bit
+   *  of a rubbish UI"). Absent/false = no Check out row (a chat without canned mode has a text box,
+   *  and FM-DX has its own chat). */
+  shareEnabled?:     boolean;
+  /** [Bookmark] — a TWO-STEP pick: the host drops this drawer, opens the search/bookmarks card in
+   *  pick mode, and on a pick reopens the drawer with the station in `shareDraft`. */
+  onPickShare?:      () => void;
+  /** The station picked, waiting for [Send]. `title` may be the user's OWN label — shown on their
+   *  own screen only; what is sent is `out`, which chatShare built without it. */
+  shareDraft?:       ShareItem | null;
+  onClearShareDraft?: () => void;
+  /** Where the dial is now — the [Manual] field starts there (0 on DAB: DAB is shared from Bookmark). */
+  manualStartHz?:    number;
+  /** The demodulator now, so [Manual] starts on it when it is one MANUAL_SHARE_MODES offers. */
+  manualStartMode?:  string;
   /** Send one (the frame chatShare built — never a label). */
   onShare?:          (out: ShareOut) => void;
   /** TUNE on a shared line — a USER action, through the host's ordinary tune path. */
@@ -132,7 +146,8 @@ function ChatDrawerBody({
   onMute, muted = false,
   users = [], syncedUser = null, zoomSync = false,
   onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, dialLine,
-  shareItems, onShare, onShareTune,
+  shareEnabled = false, onPickShare, shareDraft, onClearShareDraft, manualStartHz = 0, manualStartMode,
+  onShare, onShareTune,
 }: ChatDrawerProps) {
   const cd = usePopupStyles(makeCd);
   const pt = usePopupTheme();
@@ -178,10 +193,46 @@ function ChatDrawerBody({
   //    no names at all — the server hands out ordinals — so asking for one would be a join flow
   //    with nothing to type into it, and the transcript would never render.
   const isCanned = !!canned && canned.length > 0;
-  /** ★ The pad shows the phrases OR the share picker — never both: the picker is a list, and a list
-   *  inside a wrap of chips is a pad nobody can read. Closes itself on a send and on closing the drawer. */
-  const [picking, setPicking] = useState(false);
-  useEffect(() => { if (!visible) setPicking(false); }, [visible]);
+  /** ★★ [Manual] expands a small inline field under the Check out row: a frequency (a NUMBER — the
+   *  only thing typed that can reach the room, and shareFromManual reads nothing else), its unit and
+   *  a demodulator. Starts on the dial, so sharing what you are on is open + Send. */
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualVal, setManualVal]   = useState('');
+  const [manualUnit, setManualUnit] = useState<'MHz' | 'kHz'>('MHz');
+  const [manualMode, setManualMode] = useState<string>('wfm');
+  const [manualBad, setManualBad]   = useState(false);
+  /** The server allows one line per 3 s; mirror it so a double-tap does not look like a lost share. */
+  const [shareCool, setShareCool]   = useState(false);
+  useEffect(() => { if (!visible) setManualOpen(false); }, [visible]);
+  const openManual = useCallback(() => {
+    if (manualOpen) { setManualOpen(false); return; }
+    const f = manualFieldFrom(manualStartHz);
+    setManualVal(f.value); setManualUnit(f.unit); setManualBad(false);
+    const m = String(manualStartMode || '').toLowerCase();
+    setManualMode((MANUAL_SHARE_MODES as readonly string[]).includes(m) ? m
+      : (manualStartHz >= 30_000_000 ? 'wfm' : 'am'));
+    setManualOpen(true);
+  }, [manualOpen, manualStartHz, manualStartMode]);
+  const sendShareOut = useCallback((out: ShareOut) => {
+    onShare?.(out);
+    setShareCool(true); setTimeout(() => setShareCool(false), 3000);
+  }, [onShare]);
+  const sendManual = useCallback(() => {
+    const out = shareFromManual(manualVal, manualUnit, manualMode);
+    if (!out) { setManualBad(true); return; }
+    sendShareOut(out); setManualOpen(false);
+  }, [manualVal, manualUnit, manualMode, sendShareOut]);
+  /** One key of the Check out row, in whichever skin is on — the same two shapes the phrases use. */
+  const shareKey = (k: string, label: string, onPress: () => void,
+                    o: { active?: boolean; disabled?: boolean } = {}) => pt.metal ? (
+    <PopupKey key={k} label={label} numberOfLines={1} height={30} fontSize={12} hitSlop={0}
+      active={o.active} disabled={o.disabled} style={{ alignSelf: 'flex-start' }} onPress={onPress} />
+  ) : (
+    <TouchableOpacity key={k} disabled={o.disabled} activeOpacity={0.75} onPress={onPress}
+      style={[cd.cannedBtn, { borderColor: cc.btnBdr }, o.active && cd.keyOn, o.disabled && { opacity: 0.4 }]}>
+      <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]} numberOfLines={1}>{label}</Text>
+    </TouchableOpacity>
+  );
   const joined = isCanned || !!myCallsign;
   // ★★ The phrase pad's cap (constants/chatPad.ts) comes off the drawer's body: its fixed height
   //    less the bottom inset + padding, the handle and the header (measured — metal keys are taller
@@ -475,52 +526,61 @@ function ChatDrawerBody({
               )}
               <ScrollView style={[cd.padScroll, { maxHeight: padMaxH }]} contentContainerStyle={[cd.padContent, scrollLane]}
                 showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
-              {/* ★★ SHARE A STATION — first, because it is the one key that says WHAT you found. */}
-              {isCanned && !!shareItems && !picking && (pt.metal ? (
-                <PopupKey key="__share" label="📻 Share a station…" numberOfLines={1} height={32} fontSize={12} hitSlop={0}
-                  style={{ alignSelf: 'flex-start', maxWidth: '100%' }} onPress={() => setPicking(true)} />
-              ) : (
-                <TouchableOpacity key="__share" style={[cd.cannedBtn, { borderColor: cc.btnBdr }]} activeOpacity={0.75}
-                  onPress={() => setPicking(true)}>
-                  <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]}>📻 Share a station…</Text>
-                </TouchableOpacity>
-              ))}
-              {/* ★★★ THE PICKER: what is playing now, then this user's own bookmarks for this receiver.
-                   Their labels are shown HERE, on their own screen; what is sent is the row's `out`,
-                   which carries no label — the room hears the name this receiver knows. */}
-              {picking && (<>
-                {pt.metal ? (
-                  <PopupKey key="__back" label="‹ Phrases" height={28} fontSize={11} hitSlop={0}
-                    style={{ alignSelf: 'flex-start' }} onPress={() => setPicking(false)} />
-                ) : (
-                  <TouchableOpacity key="__back" style={[cd.cannedBtn, { borderColor: cc.btnBdr }]} activeOpacity={0.75}
-                    onPress={() => setPicking(false)}>
-                    <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]}>‹ Phrases</Text>
-                  </TouchableOpacity>
-                )}
-                <Text style={[cd.cannedLine, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}>
-                  Shares the frequency and mode only — the room sees the name this receiver knows.
+              {/* ★★★ CHECK OUT [Bookmark] [Manual] — first, because it is the one line that says WHAT you
+                   found. Replaces the 2026-10-01 picker (every bookmark as a full-width row in this
+                   little pad), which Stuart called "a bit of a rubbish UI": the search and bookmark
+                   lists already exist, and are far better at finding a station, so [Bookmark] borrows
+                   them rather than imitating them here. */}
+              {isCanned && shareEnabled && !shareDraft && (<>
+                <Text style={[cd.cannedLine, cd.checkLbl, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}>
+                  Check out
                 </Text>
-                {(shareItems ?? []).length === 0 && (
-                  <Text style={[cd.cannedLine, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}>
-                    Nothing to share yet — tune a station or save a bookmark.
-                  </Text>
-                )}
-                {(shareItems ?? []).map(it => pt.metal ? (
-                  <PopupKey key={it.key} label={it.detail ? `${it.title}  ·  ${it.detail}` : it.title} numberOfLines={2}
-                    height={32} fontSize={12} hitSlop={0} style={{ width: '100%' }}
-                    onPress={() => { onShare?.(it.out); setPicking(false); }} />
-                ) : (
-                  <TouchableOpacity key={it.key} style={[cd.cannedBtn, cd.shareRow, { borderColor: cc.btnBdr }]} activeOpacity={0.75}
-                    onPress={() => { onShare?.(it.out); setPicking(false); }}>
-                    <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]} numberOfLines={1}>{it.title}</Text>
-                    {!!it.detail && (
-                      <Text style={[cd.shareDetail, { color: cc.title, fontFamily: t.font }]} numberOfLines={1}>{it.detail}</Text>
-                    )}
-                  </TouchableOpacity>
-                ))}
+                {shareKey('__bm', '📻 Bookmark', () => { setManualOpen(false); onPickShare?.(); })}
+                {shareKey('__man', manualOpen ? '✎ Manual ▾' : '✎ Manual', openManual, { active: manualOpen })}
               </>)}
-              {!picking && canned!.map(ph => pt.metal ? (
+              {/* ★★ THE PICKED STATION, waiting for Send. Its label is this user's own and stays on this
+                   screen; the room hears the name the receiver knows (chatShare). */}
+              {isCanned && shareEnabled && !!shareDraft && (
+                <View style={cd.manualBox}>
+                  <Text style={[cd.cannedLine, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]} numberOfLines={2}>
+                    Check out {shareDraft.title}{shareDraft.detail ? `  ·  ${shareDraft.detail}` : ''}
+                  </Text>
+                  <View style={cd.manualRow}>
+                    {shareKey('__send', 'Send', () => { sendShareOut(shareDraft.out); onClearShareDraft?.(); },
+                              { active: true, disabled: shareCool })}
+                    {shareKey('__other', 'Pick another', () => onPickShare?.())}
+                    {shareKey('__x', '✕', () => onClearShareDraft?.())}
+                  </View>
+                </View>
+              )}
+              {isCanned && shareEnabled && !shareDraft && manualOpen && (
+                <View style={cd.manualBox}>
+                  <View style={cd.manualRow}>
+                    <TextInput
+                      style={[cd.manualInp, { borderColor: manualBad ? '#ff6a5a' : cc.inputBdr, color: cc.inputCl, fontFamily: ff }, cd.inputMetal]}
+                      value={manualVal}
+                      onChangeText={(v: string) => { setManualVal(v.replace(/[^0-9.,]/g, '')); setManualBad(false); }}
+                      placeholder="frequency"
+                      placeholderTextColor={pt.metal ? pt.winDim : isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.28)'}
+                      keyboardType="decimal-pad" returnKeyType="send" onSubmitEditing={sendManual}
+                      maxLength={12} autoCorrect={false}
+                    />
+                    {(['MHz', 'kHz'] as const).map(u => shareKey(`__u${u}`, u, () => { setManualUnit(u); setManualBad(false); },
+                                                                { active: manualUnit === u }))}
+                  </View>
+                  <View style={cd.manualRow}>
+                    {MANUAL_SHARE_MODES.map(m => shareKey(`__m${m}`, SHARE_MODE_LABEL[m] ?? m.toUpperCase(),
+                                                          () => setManualMode(m), { active: manualMode === m }))}
+                  </View>
+                  <View style={cd.manualRow}>
+                    {shareKey('__msend', 'Send', sendManual, { active: true, disabled: shareCool })}
+                    {manualBad && (
+                      <Text style={[cd.cannedLine, cd.manualErr, { fontFamily: ff }]}>Enter a frequency, e.g. 96.6 MHz</Text>
+                    )}
+                  </View>
+                </View>
+              )}
+              {canned!.map(ph => pt.metal ? (
                 // ★★ hitSlop 0: the chips sit 6 pt apart and a dome key's default 4 pt slop on BOTH
                 //    neighbours overlapped in the gap — a tap there could say either phrase.
                 <PopupKey key={ph.id} label={ph.text} numberOfLines={3} height={32} fontSize={12} hitSlop={0}
@@ -685,9 +745,15 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
   },
   cannedTxt: { fontFamily: FONT, fontSize: 13, color: '#ffe0a0' },
-  // ★ A picker row is a LIST row — full width, label over its frequency — not a chip in the wrap.
-  shareRow:    { width: '100%', borderRadius: 10, paddingVertical: 6 },
-  shareDetail: { fontFamily: FONT, fontSize: 11, marginTop: 1 },
+  // ★ "Check out" sits on the key row as its lead-in word, not as a full-width line above it.
+  checkLbl:  { width: undefined, alignSelf: 'center', marginBottom: 0 },
+  // ★ The picked station / the manual field: a full-width block under the Check out row.
+  manualBox: { width: '100%', gap: 6, marginBottom: 4 },
+  manualRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  manualInp: { minWidth: 110, flexGrow: 1, maxWidth: 180, height: 32, borderWidth: 1, borderRadius: 8,
+               paddingHorizontal: 8, fontSize: 14 },
+  manualErr: { width: undefined, color: '#ff8a7a', marginBottom: 0 },
+  keyOn:     { backgroundColor: 'rgba(255,160,0,0.32)', borderColor: 'rgba(255,200,80,0.8)' },
   // ★ TUNE beside a shared line: small, after the text, never wider than its word.
   tuneBtn: {
     flexShrink: 0, alignSelf: 'center', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,

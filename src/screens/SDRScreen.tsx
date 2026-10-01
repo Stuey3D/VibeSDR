@@ -134,7 +134,7 @@ import ChatDrawer,
   { type ChatMessage, type ShareItem } from '../components/ChatDrawer';
 import { DIAL_PHRASES, phraseText, dialSummary, speakerName,
          type DialState } from '../services/dialChat';
-import { shareFromBookmark, shareFromTuned, shareSummary, parseShared, sharedLineText, shareTuneStep,
+import { shareFromBookmark, shareSummary, parseShared, sharedLineText, shareTuneStep,
          type ShareOut, type SharedStation } from '../services/chatShare';
 import { blindTuneReason, blindTuneRefusal, mediaSkipEnabled, dialAlone,
          type BlindTuneAction, type BlindTuneInput } from '../services/blindTuneGate';
@@ -9030,42 +9030,34 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (bw && !isBand) onFilterBoth(bw[0], bw[1]);
   }, [onTuneHz, onMode, ituRegion, canSetMode, dabGoTo, onFilterBoth]);
 
-  /* ★★★ SHARE A STATION (canned chat, shared dial). What this listener may share: what is playing
-   *  now — the DAB SERVICE when DAB is on, never the analogue dial under it — then their own
-   *  bookmarks for this receiver. Each row's `out` is built by chatShare, which never reads a label:
-   *  the title is theirs and stays on this screen; the room hears the name THE RECEIVER knows. */
-  const shareItems = useMemo((): ShareItem[] => {
-    const items: ShareItem[] = [];
-    const dab = dabOn && dabState?.channel ? dabState : null;
-    const now = shareFromTuned(
-      { frequency: status.frequency, mode: String(status.mode),
-        bandwidthLow: status.bandwidthLow, bandwidthHigh: status.bandwidthHigh },
-      dab ? { channel: dab.channel, sid: dab.sid > 0 ? dab.sid : undefined, eid: dab.eid > 0 ? dab.eid : undefined } : null,
-    );
-    if (now) {
-      const svc = dab ? dab.services?.find((x) => x.sid === dab.sid)?.label : undefined;
-      items.push({ key: 'now', title: svc ? `Now playing — ${svc.trim()}` : 'Now playing', detail: shareSummary(now), out: now });
+  /* ★★★ CHECK OUT [Bookmark] [Manual] (canned chat, shared dial — Stuart, 2026-10-01, replacing the
+   *  picker that listed every bookmark inside the chat pad). [Bookmark] is TWO STEPS: the drawer drops,
+   *  the frequency card opens in PICK mode on its search and bookmark lists (yours, the receiver's
+   *  learnt and saved stations, EiBi), and a pick brings the drawer back with the station waiting as a
+   *  draft. Closing the card without a pick brings the drawer back too — the user was mid-sentence.
+   *  The draft's title may be the user's own label: it stays on this screen; `out` is built by
+   *  chatShare, which never reads a label, so the room hears the name THE RECEIVER knows. */
+  const [sharePicking, setSharePicking] = useState(false);
+  const [shareDraft, setShareDraft] = useState<ShareItem | null>(null);
+  const onPickShare = useCallback(() => {
+    setChatOpen(false);
+    setSharePicking(true);
+    setFreqModalDab(false);
+    setFreqModalOpen(true);
+  }, []);
+  const onSharePicked = useCallback((b: Parameters<typeof shareFromBookmark>[0] & { name?: string }) => {
+    const out = shareFromBookmark(b);
+    // ★ never offer what this receiver cannot play — a DAB service on a receiver without DAB
+    if (!out || (out.kind === 'dab' && !dabCapable)) {
+      setDialHint('That station cannot be shared from this receiver.');
+      return;
     }
-    visibleBookmarks.forEach((b: UserBookmark, i: number) => {
-      const out = shareFromBookmark(b);
-      if (!out || (out.kind === 'dab' && !dabCapable)) return;   // ★ never offer what this receiver cannot play
-      items.push({ key: `bm-${i}-${b.frequency}`, title: b.name, detail: shareSummary(out), out });
-    });
-    /* ★★ AND THE RECEIVER'S OWN STATIONS (B11, Stuart: "no options to share bookmarks, only this now
-     *  playing station"). Most listeners have saved nothing of their own on a server they visit; what
-     *  they see in the Bookmarks card are the SERVER's — RDS-learned and the owner's. Those are the
-     *  natural thing to point someone at, and their names are the receiver's own, not a user label.
-     *  After the user's own, by frequency, skipping any frequency already offered. */
-    const seen = new Set(items.map((it) => it.out.hz));
-    [...serverBookmarks].sort((a, b) => a.frequency - b.frequency).forEach((b, i) => {
-      const out = shareFromBookmark(b as any);
-      if (!out || seen.has(out.hz) || (out.kind === 'dab' && !dabCapable)) return;
-      seen.add(out.hz);
-      items.push({ key: `srv-${i}-${b.frequency}`, title: b.name, detail: `${shareSummary(out)} · this receiver`, out });
-    });
-    return items;
-  }, [status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh, dabOn, dabState,
-      visibleBookmarks, serverBookmarks, dabCapable]);
+    setShareDraft({ key: 'pick', title: (b.name || '').trim() || shareSummary(out), detail: shareSummary(out), out });
+  }, [dabCapable]);
+  const closeFreqModal = useCallback(() => {
+    setFreqModalOpen(false); setFreqModalDab(false);
+    if (sharePicking) { setSharePicking(false); setChatOpen(true); }
+  }, [sharePicking]);
   const onShare = useCallback((out: ShareOut) => { markInteract(); client.current?.share?.(out); }, []);
   /** ★★ TUNE ON A SHARED LINE — a USER action, through the deck's own paths (dabGoTo for DAB, the
    *  bookmark path otherwise), so the owner's limits and the server's rules apply exactly as to any
@@ -11295,7 +11287,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       />}
 
       {/* Frequency modal */}
-      <PanelBoundary name="Frequency card" onClose={() => { setFreqModalOpen(false); setFreqModalDab(false); }} resetKey={freqModalOpen}>
+      <PanelBoundary name="Frequency card" onClose={closeFreqModal} resetKey={freqModalOpen}>
       <FreqModal
         visible={freqModalOpen}
         /* ★ The card is inside a Modal, where useSafeAreaInsets reads 0 — measure out here and
@@ -11303,7 +11295,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         topInset={insets.top}
         currentHz={status.frequency}
         onConfirm={onEntryTune}
-        onClose={() => { setFreqModalOpen(false); setFreqModalDab(false); }}
+        onClose={closeFreqModal}
+        onPickShare={sharePicking ? onSharePicked : undefined}
         onDabTune={dabCapable ? dabGoTo : undefined}
         dabOnly={freqModalDab}
         unit={freqUnit}
@@ -11372,7 +11365,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         canned={sharedDial ? DIAL_PHRASES : undefined}
         onSay={(id: string) => client.current?.say?.(id)}
         dialLine={dialState ? dialSummary(dialState) : undefined}
-        shareItems={sharedDial ? shareItems : undefined}
+        shareEnabled={sharedDial}
+        onPickShare={onPickShare}
+        shareDraft={shareDraft}
+        onClearShareDraft={() => setShareDraft(null)}
+        manualStartHz={dabOn && dabState?.channel ? 0 : status.frequency}
+        manualStartMode={String(status.mode)}
         onShare={onShare}
         onShareTune={onShareTune}
       />

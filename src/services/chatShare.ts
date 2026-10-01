@@ -105,6 +105,30 @@ export function shareFromBookmark(b: BookmarkLike): ShareOut | null {
   return out;
 }
 
+/** ★★ The demodulators the MANUAL entry offers (Stuart, 2026-10-01: "frequency and demodulator").
+ *  ✗ NOT DAB: a typed DAB share would need the multiplex loaded to name a service, and the learnt
+ *    DAB stations are already in the Bookmark picker — that is where DAB is shared from. */
+export const MANUAL_SHARE_MODES = ['wfm', 'nfm', 'am', 'usb', 'lsb', 'cw'] as const;
+
+/** ★★ A typed frequency + a chosen demodulator -> a share. Only a NUMBER is read from the text
+ *  (comma or point), so nothing typed but the frequency can reach the room. Null when the number is
+ *  not a frequency, or the mode is not one of MANUAL_SHARE_MODES. */
+export function shareFromManual(value: string, unit: 'MHz' | 'kHz', mode: string): ShareOut | null {
+  const s = String(value ?? '').trim().replace(',', '.');
+  if (!/^\d+(\.\d+)?$|^\.\d+$/.test(s)) return null;
+  const n = parseFloat(s);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (!(MANUAL_SHARE_MODES as readonly string[]).includes(mode)) return null;
+  return shareFromBookmark({ frequency: Math.round(n * (unit === 'MHz' ? 1e6 : 1e3)), mode });
+}
+
+/** The tuned frequency as the manual field starts it: MHz from 30 MHz up, else kHz. */
+export function manualFieldFrom(hz: number): { value: string; unit: 'MHz' | 'kHz' } {
+  if (!(hz > 0)) return { value: '', unit: 'MHz' };
+  if (hz >= 30_000_000) return { value: (hz / 1e6).toFixed(4).replace(/0+$/, '').replace(/\.$/, ''), unit: 'MHz' };
+  return { value: (hz / 1e3).toFixed(2).replace(/0+$/, '').replace(/\.$/, ''), unit: 'kHz' };
+}
+
 /** A DAB service (or, with no sid, the multiplex) -> a share. Null for a block name that is not one. */
 export function shareDab(block: string, sid?: number, eid?: number): ShareOut | null {
   const blk = DAB_BLOCKS.find((b) => b.name.toUpperCase() === String(block || '').toUpperCase());

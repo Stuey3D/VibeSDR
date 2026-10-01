@@ -22,10 +22,9 @@
  */
 
 import {
-  shareFromBookmark, shareFromTuned, shareSummary, parseShared, sharedLineText, shareTuneStep,
-  type ShareOut, type SharedStation,
+  shareSummary, parseShared, sharedLineText, shareTuneStep, shareFromManual, manualFieldFrom,
+  MANUAL_SHARE_MODES, SHARE_MODE_LABEL, type ShareOut, type SharedStation,
 } from '../../../src/services/chatShare';
-import type { UserBookmark } from '../../../src/services/userBookmarks';
 
 /** The vocabulary, in the order a conversation actually runs: ask, act, answer, thank.
  *  ★★ TAKEN FROM JR, NOT INVENTED HERE — `Canned.fmdx` in Chat.swift, plus the long-decode lines.
@@ -54,14 +53,10 @@ const TEXT: Record<string, string> = Object.fromEntries(PHRASES.map(p => [p.id, 
 /* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced RDS". A shared
  *  receiver is a room of people finding things, and the canned vocabulary let them agree who tunes but never
  *  say WHAT they found — the one thing worth saying on a radio.
- *  ★★★ AND SINCE 2026-10-01 IT IS "SHARE A STATION": the one you are on (a DAB SERVICE when DAB is on), one of
- *     your bookmarks, or a frequency typed in the composer. Built by src/services/chatShare.ts — the same file
- *     the app uses — which never reads a bookmark's label: the room hears the name THE RECEIVER knows. */
-const MODE_LABEL: Record<string, string> = {
-  wfm: 'WFM', nfm: 'NFM', am: 'AM', usb: 'USB', lsb: 'LSB', cwu: 'CW-U', cwl: 'CW-L',
-  dab: 'DAB', rds: 'Advanced RDS', rtty: 'RTTY', navtex: 'NAVTEX', wefax: 'WEFAX',
-  sstv: 'SSTV', ft8: 'FT8 / FT4', time: 'Time signal',
-};
+ *  ★★★ AND SINCE 2026-10-01 IT IS "CHECK OUT [BOOKMARK] [MANUAL]": a station picked from the frequency card's
+ *     own search and bookmark lists, or a frequency + demodulator typed inline. Built by src/services/chatShare.ts
+ *     — the same file the app uses — which never reads a bookmark's label: the room hears the name THE RECEIVER
+ *     knows. */
 
 export type DialState = {
   mode: string; tuner: number; mine: boolean; you: number;
@@ -73,9 +68,11 @@ type Deps = {
   say: (id: string) => void;
   /** Send a station share — the frame chatShare built (numbers and ids, never a label). */
   share?: (out: ShareOut) => void;
-  /** This listener's own bookmarks — their labels are shown in the picker HERE and never sent. */
-  bookmarks?: () => UserBookmark[];
-  /** The DAB service playing now, when DAB is on — what "Now playing" shares instead of the dial. */
+  /** ★★ BOOKMARK: hand off to the frequency card's search + bookmark lists in PICK mode. The host closes this
+   *  panel, and when a row is chosen reopens it and calls `done` — the title is the listener's own label,
+   *  shown in the draft here only; `out` is what is sent. Never called back if the pick is abandoned. */
+  pickStation?: (done: (p: { title: string; out: ShareOut }) => void) => void;
+  /** The DAB service playing now, when DAB is on — the manual field then starts empty (not FM hiss). */
   dabNow?: () => { channel: string; sid?: number; eid?: number; label?: string } | null;
   /** Can this receiver play DAB? A DAB bookmark is not offered, and a DAB TUNE not attempted, where not. */
   dabCapable?: () => boolean;
@@ -83,11 +80,11 @@ type Deps = {
   isAdmin?: () => boolean;
   /** TUNE on a shared line — the host's ordinary tune path (dabGoTo / the bookmark tune). */
   tuneShare?: (s: SharedStation) => void;
-  /** The current dial, for "Now playing". */
+  /** The current dial — the manual field's demodulator starts on it. */
   tuned?: () => { frequency: number; mode: string; bandwidthLow?: number; bandwidthHigh?: number } | null;
   /** The modes and decoders this receiver actually offers, so the picker cannot suggest a dead one. */
   modes?: () => string[];
-  /** Where the dial is now — the frequency box starts there, because "check out" usually means "here". */
+  /** Where the dial is now — the manual field starts there, because "check out" usually means "here". */
   freqHz?: () => number;
   /** Raise the unread count on whatever button opens this. */
   onUnread: (n: number) => void;
@@ -136,102 +133,115 @@ export function initChat(d: Deps) {
       };
       list.appendChild(b);
     }
-    /* ★★ THE COMPOSER, at the end of the canned buttons: a frequency box, its unit, and the modes this
-     *  receiver offers. Everything a listener can say here is still chosen from a list or typed as a number —
-     *  no sentence can get through. Defaults to where the dial is now, which is what "check out" usually
-     *  means, so the common case is two taps. */
-    const wrap = document.createElement('div');
-    wrap.className = 'chatCheckOut';
+    /* ★★★ "CHECK OUT [BOOKMARK] [MANUAL]" — ONE ROW, FIRST, because it is the one key that says WHAT you found
+     *  (Stuart, 2026-10-01: the station sharing "is a bit of a rubbish UI"). It replaced two things: a
+     *  "📻 Share a station…" list of now-playing plus every bookmark in one flat run, and a frequency/unit/mode
+     *  composer that sat open under the phrases whether anybody wanted it or not.
+     *  ★ BOOKMARK hands off to the frequency card's own SEARCH and BOOKMARKS lists in a pick mode (main.ts
+     *    beginSharePick): the chat drops away while you choose, then comes back with the choice POPULATED as a
+     *    draft — two steps, and nothing is sent until SEND. Those lists are the ones a listener already knows,
+     *    with EiBi and the receiver's learnt stations in them; a second, poorer list here was the problem.
+     *  ★ MANUAL is a frequency and a demodulator, inline. ✗ NOT DAB: a typed DAB share would need the
+     *    multiplex loaded to name a service — the learnt DAB stations are in the Bookmark lists instead. */
+    const box = document.createElement('div');
+    box.className = 'chatShare';
+    const row = document.createElement('div');
+    row.className = 'chatCheckOut';
+    const lead = document.createElement('span');
+    lead.className = 'chatCheckLead'; lead.textContent = 'Check out';
+    const bmBtn = document.createElement('button');
+    bmBtn.className = 'btn chatShareBtn'; bmBtn.textContent = '📻 Bookmark';
+    bmBtn.title = 'Pick a station from the search and bookmark lists';
+    const manBtn = document.createElement('button');
+    manBtn.className = 'btn chatShareBtn'; manBtn.textContent = 'Manual';
+    manBtn.title = 'Type a frequency and choose a demodulator';
+    row.append(lead, bmBtn, manBtn);
+
+    // ── The draft: what Bookmark chose, waiting for SEND ─────────────────────
+    const draft = document.createElement('div');
+    draft.className = 'chatShareDraft'; draft.hidden = true;
+    const draftTxt = document.createElement('span');
+    draftTxt.className = 'chatShareDraftTxt';
+    const draftSend = document.createElement('button');
+    draftSend.className = 'btn'; draftSend.textContent = 'Send';
+    const draftX = document.createElement('button');
+    draftX.className = 'btn'; draftX.textContent = '×'; draftX.title = 'Discard';
+    draft.append(draftTxt, draftSend, draftX);
+    let draftOut: ShareOut | null = null;
+    const clearDraft = () => { draftOut = null; draft.hidden = true; draftTxt.textContent = ''; };
+    draftX.onclick = clearDraft;
+    draftSend.onclick = () => { if (draftOut) { sendShare(draftOut, draftSend); clearDraft(); } };
+    showDraft = (title, out) => {
+      draftOut = out;
+      // ★ The NAME is the listener's own label and is shown only here — textContent, and never sent: the
+      //   room hears the name THE RECEIVER knows (chatShare.ts). The summary says what will actually go.
+      draftTxt.textContent = `Check out ${title ? `${title} · ` : ''}${shareSummary(out)}`;
+      draft.hidden = false;
+      manual.hidden = true; manBtn.classList.remove('on');
+    };
+
+    // ── Manual: a frequency, its unit, a demodulator ─────────────────────────
+    const manual = document.createElement('div');
+    manual.className = 'chatManual'; manual.hidden = true;
     const freq = document.createElement('input');
     freq.type = 'text'; freq.inputMode = 'decimal'; freq.placeholder = 'frequency';
-    freq.className = 'chatFreq';
+    freq.className = 'chatFreq'; freq.spellcheck = false; freq.autocomplete = 'off';
     const unit = document.createElement('select');
-    for (const u of ['MHz', 'kHz', 'Hz']) { const o = document.createElement('option'); o.value = u; o.textContent = u; unit.appendChild(o); }
+    for (const u of ['MHz', 'kHz']) { const o = document.createElement('option'); o.value = u; o.textContent = u; unit.appendChild(o); }
     const mode = document.createElement('select');
-    const none = document.createElement('option'); none.value = ''; none.textContent = '(mode)'; mode.appendChild(none);
-    for (const m of (deps?.modes?.() ?? Object.keys(MODE_LABEL))) {
-      const o = document.createElement('option'); o.value = m; o.textContent = MODE_LABEL[m] || m.toUpperCase(); mode.appendChild(o);
+    /* ★★ Only the demodulators this receiver offers. The web's MODES spell CW as cwu/cwl; the share's closed
+     *  list says "cw", so either of those offers it. Unknown (no modes() dep) = the whole manual list. */
+    const offered = deps?.modes?.();
+    for (const m of MANUAL_SHARE_MODES) {
+      if (offered && !(offered.includes(m) || (m === 'cw' && (offered.includes('cwu') || offered.includes('cwl'))))) continue;
+      const o = document.createElement('option'); o.value = m; o.textContent = SHARE_MODE_LABEL[m] || m.toUpperCase(); mode.appendChild(o);
     }
-    const send = document.createElement('button');
-    send.className = 'btn'; send.textContent = 'Hey, check out…';
-    const fill = () => {
-      const hz = deps?.freqHz?.() ?? 0;
-      if (hz > 0 && !freq.value) { unit.value = 'MHz'; freq.value = (hz / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, ''); }
+    const manSend = document.createElement('button');
+    manSend.className = 'btn'; manSend.textContent = 'Send';
+    manual.append(freq, unit, mode, manSend);
+    /* ★ STARTS WHERE THE DIAL IS — "check out" usually means "here", so the common case is Manual → Send.
+     *  ✗ Not while DAB is on: the frequency under a multiplex is not a station; Bookmark has the service. */
+    const prefill = () => {
+      if (deps?.dabNow?.()) { freq.value = ''; return; }
+      const f = manualFieldFrom(deps?.freqHz?.() ?? 0);
+      freq.value = f.value; unit.value = f.unit;
+      const cur = (deps?.tuned?.()?.mode ?? '').toLowerCase();
+      const want = cur === 'cwu' || cur === 'cwl' ? 'cw' : cur;
+      if (Array.from(mode.options).some((o) => o.value === want)) mode.value = want;
     };
-    freq.onfocus = fill;
-    send.onclick = () => {
-      /* ★★ DAB TOO (Stuart, 2026-10-01: the share "can't share DAB stations"). An empty box while DAB is on
-       *  means "this" — the SERVICE playing, not the analogue frequency under it, which opens as FM hiss. A
-       *  typed frequency with the DAB mode is that multiplex. */
-      const dab = !freq.value ? deps?.dabNow?.() : null;
-      if (dab) { sendShare(shareFromTuned({ frequency: 0, mode: 'dab' }, dab), send); return; }
-      fill();
-      const n = parseFloat(freq.value.replace(',', '.'));
-      if (!Number.isFinite(n) || n <= 0) { freq.focus(); return; }
-      const hz = Math.round(n * (unit.value === 'MHz' ? 1e6 : unit.value === 'kHz' ? 1e3 : 1));
-      const out = shareFromBookmark({ frequency: hz, mode: mode.value || undefined });
-      if (!out) { freq.focus(); return; }
-      sendShare(out, send);
+    manBtn.onclick = () => {
+      manual.hidden = !manual.hidden;
+      manBtn.classList.toggle('on', !manual.hidden);
+      if (!manual.hidden) { prefill(); freq.focus(); freq.select(); }
     };
-    wrap.append(freq, unit, mode, send);
+    const sendManual = () => {
+      const out = shareFromManual(freq.value, unit.value as 'MHz' | 'kHz', mode.value);
+      if (!out) { freq.focus(); freq.select(); return; }     // ★ nothing is sent that is not a frequency
+      sendShare(out, manSend);
+      manual.hidden = true; manBtn.classList.remove('on');
+    };
+    manSend.onclick = sendManual;
+    freq.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); sendManual(); } };
 
-    /* ★★★ SHARE A STATION — the picker: what is playing now, then this listener's own bookmarks. Their labels
-     *  are shown here, on their own screen; what is SENT is the row's ShareOut, which carries no label. */
-    const pickBtn = document.createElement('button');
-    pickBtn.className = 'btn chatShareBtn';
-    pickBtn.textContent = '📻 Share a station…';
-    const pick = document.createElement('div');
-    pick.className = 'chatSharePick';
-    pick.hidden = true;
-    pickBtn.onclick = () => {
-      pick.hidden = !pick.hidden;
-      if (!pick.hidden) renderPicker(pick, pickBtn);
+    bmBtn.onclick = () => {
+      if (!deps?.pickStation) return;
+      manual.hidden = true; manBtn.classList.remove('on');
+      deps.pickStation((p) => showDraft?.(p.title, p.out));
     };
-    list.insertBefore(pick, list.firstChild);
-    list.insertBefore(pickBtn, list.firstChild);
-    list.appendChild(wrap);
+
+    box.append(row, draft, manual);
+    list.insertBefore(box, list.firstChild);
   }
 }
+
+/** Set by initChat: put a picked station in the draft row. */
+let showDraft: ((title: string, out: ShareOut) => void) | null = null;
 
 /** ★★ THE ONE SEND PATH for a share — the frame chatShare built, and nothing else. */
 function sendShare(out: ShareOut | null, btn?: HTMLButtonElement) {
   if (!out) return;
   deps?.share?.(out);
   if (btn) { btn.disabled = true; setTimeout(() => { btn.disabled = false; }, 3000); }   // the server's 3 s gap
-}
-
-function renderPicker(pick: HTMLElement, pickBtn: HTMLButtonElement) {
-  pick.innerHTML = '';
-  const note = document.createElement('div');
-  note.className = 'chatShareNote';
-  note.textContent = 'Shares the frequency and mode only — the room sees the name this receiver knows.';
-  pick.appendChild(note);
-  const rows: Array<{ title: string; out: ShareOut }> = [];
-  const dab = deps?.dabNow?.() ?? null;
-  const t = deps?.tuned?.() ?? null;
-  const now = t || dab ? shareFromTuned(t ?? { frequency: 0, mode: 'dab' }, dab) : null;
-  if (now) rows.push({ title: dab?.label ? `Now playing — ${dab.label.trim()}` : 'Now playing', out: now });
-  const canDab = deps?.dabCapable?.() ?? false;
-  for (const b of deps?.bookmarks?.() ?? []) {
-    const out = shareFromBookmark(b);
-    if (!out || (out.kind === 'dab' && !canDab)) continue;   // ★ never offer what this receiver cannot play
-    rows.push({ title: b.name, out });
-  }
-  if (!rows.length) {
-    const none = document.createElement('div');
-    none.className = 'chatShareNote';
-    none.textContent = 'Nothing to share yet — tune a station or save a bookmark.';
-    pick.appendChild(none);
-  }
-  for (const r of rows) {
-    const b = document.createElement('button');
-    b.className = 'btn chatShareRow';
-    const a = document.createElement('span'); a.textContent = r.title;               // textContent — never innerHTML
-    const d = document.createElement('span'); d.className = 'chatShareDetail'; d.textContent = shareSummary(r.out);
-    b.append(a, d);
-    b.onclick = () => { sendShare(r.out, pickBtn); pick.hidden = true; };
-    pick.appendChild(b);
-  }
 }
 
 /** Called when the panel opens or closes, so the unread count can be cleared and stop counting. */

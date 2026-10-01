@@ -121,6 +121,13 @@ interface FreqModalProps {
   onAddServerBookmark?:     (name: string) => Promise<string>;
   onImportToServer?:        (text: string) => Promise<string>;
   onPickImportFileToServer?: () => Promise<string>;
+  /** ★★★ PICK MODE — the chat's "Check out [Bookmark]" (Stuart, 2026-10-01). Present = the card opens
+   *  on BOOKMARKS and a row is CHOSEN, not tuned: search (yours, the receiver's, EiBi) and ON THIS
+   *  SERVER work exactly as always, and the pick goes back to the chat as a draft to send. No TUNE tab,
+   *  no band-plan ranges (a band is not a station), no add / delete / import — this is a chooser. */
+  onPickShare?: (b: { name: string; frequency: number; mode?: string | null;
+                      bandwidth_low?: number | null; bandwidth_high?: number | null;
+                      sid?: number | null; eid?: number | null }) => void;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -231,7 +238,9 @@ export default function FreqModal({
   currentMode = 'usb', onSearchTune, searchBookmarks = [], serverBookmarks = [], searchBands = [], topInset,
   eibiEnabled = true, onEibiToggle, userBookmarks = [],
   onAddBookmark, onDeleteBookmark, onToggleBookmarkSync, onExportBookmarks, onImportBookmarks, onPickImportFile,
+  onPickShare,
 }: FreqModalProps) {
+  const picking = !!onPickShare;
   const hasBookmarks = !!onSearchTune;   // bookmarks mode available
   const pt = usePopupTheme();
   const st = usePopupStyles(makeSt);
@@ -271,6 +280,7 @@ export default function FreqModal({
   /** ★ One tune path for every server row: a DAB service goes through onDabTune when the
    *  receiver can do DAB, everything else through onSearchTune. */
   const tuneBm = (b: ServerBookmark) => {
+    if (onPickShare) { onPickShare(b); return; }   // ★ pick mode: chosen, not tuned
     const isDab = (b.mode || '').toLowerCase() === 'dab' && (b.sid ?? -1) >= 0;
     if (isDab && onDabTune) onDabTune(b.frequency, b.sid!);
     else onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b));
@@ -278,8 +288,11 @@ export default function FreqModal({
   // ★ Deferred: the keystroke paints first, the thousands-long scan follows when the thread is free.
   const deferredQuery = useDeferredValue(searchQuery);
   const searchResults = useMemo(
-    () => searchStations(searchBookmarks, searchBands, deferredQuery),
-    [searchBookmarks, searchBands, deferredQuery],
+    () => {
+      const r = searchStations(searchBookmarks, searchBands, deferredQuery);
+      return picking ? r.filter((x: SearchResult) => !x.isBand) : r;   // ★ a band is not a station
+    },
+    [searchBookmarks, searchBands, deferredQuery, picking],
   );
 
   // As the user types, resolve the nearest station to the DRAFT frequency.
@@ -329,8 +342,11 @@ export default function FreqModal({
       // ★ Come back to the list you were working through — see stickySearch.
       const sticky = stickySearch && (Date.now() - stickySearch.at) < SEARCH_STICKY_MS
         ? stickySearch : null;
-      setDabFilter(!!dabOnly);
-      if (dabOnly) {
+      setDabFilter(!!dabOnly && !picking);
+      if (picking) {
+        // ★ A chooser starts clean and leaves the user's sticky search alone for their next tune.
+        setCardMode('bookmarks'); setSearchQuery(''); setShowServerList(false);
+      } else if (dabOnly) {
         setCardMode('bookmarks'); setSearchQuery('');
       } else if (sticky) {
         sticky.at = Date.now();          // the window restarts on every return, not on the first
@@ -442,7 +458,7 @@ export default function FreqModal({
     const emitter = new NativeEventEmitter(NativeModules.VibePowerModule);
     const sub = emitter.addListener('VibeKeyDown', (e: { key: string }) => {
       const k = e?.key;
-      if (hasBookmarks && (k === 'T' || k === 'B')) {
+      if (hasBookmarks && !picking && (k === 'T' || k === 'B')) {
         const next = k === 'T' ? 'tune' : 'bookmarks';
         if (next === 'bookmarks') Keyboard.dismiss();
         setCardMode(next);
@@ -607,7 +623,21 @@ export default function FreqModal({
               // own window, so SDRScreen's root touch sniff never sees this.
               onTouchStart={noteTouchInteraction}>
           <PopupPlate radius={16} />
-          {hasBookmarks && pt.metal ? (
+          {picking ? (
+            <View style={pt.metal ? st.segHeaderMetal : st.segHeader}>
+              <Text style={[st.title, { flex: 1, marginBottom: 0, color: t.sectionColor, fontFamily: t.font }, st.titleMetal]}
+                    numberOfLines={1}>CHECK OUT A STATION</Text>
+              {pt.metal ? (
+                <PopupKey label="✕" onPress={onClose} height={32} fontSize={15} hitSlop={10}
+                  accessibilityLabel="Close" style={{ width: 36, paddingHorizontal: 0 }} />
+              ) : (
+                <TouchableOpacity onPress={onClose} style={st.segClose} hitSlop={10}
+                                  accessibilityRole="button" accessibilityLabel="Close">
+                  <Text style={{ fontFamily: t.font, fontSize: 18, color: dimText }}>✕</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : hasBookmarks && pt.metal ? (
             // ★ §10.3: TUNE | BOOKMARKS are an input selector — two dome keys, the lit one with its
             //   pip — and the ✕ is a plain key. Same order, same keyboard letters (KeyCap).
             <View style={st.segHeaderMetal}>
@@ -901,7 +931,7 @@ export default function FreqModal({
                   // ★ Emptying the box by hand is the user saying they are done with that list.
                   if (!v.trim()) stickySearch = null;
                 }}
-                placeholder="🔍 Search bookmarks & band plan…" placeholderTextColor={winDim}
+                placeholder={picking ? '🔍 Search bookmarks & EiBi…' : '🔍 Search bookmarks & band plan…'} placeholderTextColor={winDim}
                 autoCorrect={false} autoCapitalize="none" spellCheck={false} textContentType="none" clearButtonMode="while-editing" />
               ); })()}
               {dabFilter && (() => {
@@ -935,13 +965,13 @@ export default function FreqModal({
               {!dabFilter && searchQuery.trim().length > 0 && (searchResults.length === 0 ? (
                 <Text style={[st.bmMsg, { color: plateDim }]}>No results for “{searchQuery.trim()}”</Text>
               ) : (<>
-                <Text style={[st.bmHint, { color: plateDim }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to tune</Text>
+                <Text style={[st.bmHint, { color: plateDim }]}>{searchResults.length} result{searchResults.length !== 1 ? 's' : ''} · tap to {picking ? 'share' : 'tune'}</Text>
                 <PopupWindow metalStyle={st.listWin}>
                 {searchResults.map((r: SearchResult, i: number) => {
                   const tune = () => {
                     // ★ Keep the query rather than clearing it: this is the tap that USED the
                     //   list, which is exactly when you are most likely to want it again.
-                    stickySearch = { q: searchQuery, at: Date.now() };
+                    if (!picking) stickySearch = { q: searchQuery, at: Date.now() };
                     if (r.isBand && r.band) onSearchTune?.(r.band.start, r.band.mode, true);
                     else if (r.bm) tuneBm(r.bm);
                     onClose();
@@ -993,7 +1023,7 @@ export default function FreqModal({
                       backend does not tell us (UberSDR, OWRX, Kiwi send no such flag) the honest
                       label is none at all rather than a guess. */}
                   <Text style={[st.bmHint, { color: plateDim }]}>
-                    tap to tune · LEARNT = heard by this aerial, SAVED = set by its owner
+                    tap to {picking ? 'share' : 'tune'} · LEARNT = heard by this aerial, SAVED = set by its owner
                   </Text>
                   <PopupWindow metalStyle={st.listWin}>
                   {serverBookmarks!.map((b: ServerBookmark, i: number) => {
@@ -1033,6 +1063,7 @@ export default function FreqModal({
                 </View>
               )}
 
+              {!picking && (<>
               <Text style={[st.bmSub, { color: plateDim }]}>Add: {(currentHz / 1_000_000).toFixed(4)} MHz {currentMode.toUpperCase()}</Text>
               {(() => { const { on, ref: slotRef } = bmSlot(() => bmNameRef.current?.focus()); return (
               <TextInput ref={(r: any) => { (bmNameRef as any).current = r; slotRef(r); }}
@@ -1072,16 +1103,22 @@ export default function FreqModal({
                 </BmBtn>
               )}
 
+              </>)}
+
               <Text style={[st.bmSub, { color: plateDim }]}>Saved ({userBookmarks.length})</Text>
               {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: plateDim }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
               <PopupWindow metalStyle={userBookmarks.length ? st.listWin : st.listWinEmpty}>
               {userBookmarks.map((b: UserBookmark, i: number) => (
                 <View key={`${b.name}|${b.frequency}|${i}`} style={st.bmSaveRow}>
-                  <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => { onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b)); onClose(); }}>
+                  <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => {
+                    if (onPickShare) onPickShare(b);
+                    else onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b));
+                    onClose();
+                  }}>
                     <Text style={[st.bmName2, { color: winC }]} numberOfLines={1}>{b.name}</Text>
                     <Text style={[st.bmFreq2, { color: winDim }]}>{fmtFreq(b.frequency)}  {b.mode.toUpperCase()}</Text>
                   </BmBtn>
-                  {!!onToggleBookmarkSync && (
+                  {!picking && !!onToggleBookmarkSync && (
                     <TouchableOpacity hitSlop={8} onPress={() => onToggleBookmarkSync(b)}
                       accessibilityLabel={b.synced ? `Stop syncing ${b.name} to iCloud` : `Sync ${b.name} to iCloud`}>
                       <Text style={[st.bmCloud, { color: b.synced ? winC : winDim,
@@ -1094,11 +1131,12 @@ export default function FreqModal({
                       </Text>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}><Text style={[st.bmDel, { color: winDim }]}>✕</Text></TouchableOpacity>
+                  {!picking && <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}><Text style={[st.bmDel, { color: winDim }]}>✕</Text></TouchableOpacity>}
                 </View>
               ))}
               </PopupWindow>
 
+              {!picking && (<>
               <Text style={[st.bmSub, { color: plateDim }]}>Transfer</Text>
               <View style={st.bmSegRow}>
                 <BmBtn style={[st.bmSeg, { borderColor: bdrDim }]} label="⇧ EXPORT JSON" onPress={onExportBookmarks}><Text style={[st.bmSegText, { color: dimText }]}>⇧ EXPORT JSON</Text></BmBtn>
@@ -1142,6 +1180,7 @@ export default function FreqModal({
                   </TouchableOpacity>
                 )
                 )}
+              </>)}
               </>)}
               <View style={{ height: 12 }} />
             </ScrollView>

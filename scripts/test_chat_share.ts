@@ -11,8 +11,11 @@
  *     still drawable, a DAB line with no usable block dropped;
  *   • [TUNE] asks first on a shared dial somebody else is on, is refused on a spectator dial (unless
  *     admin), never offered for DAB where the receiver cannot play it, and just tunes otherwise;
- *   • source checks: ChatDrawer offers the Share chip only in canned mode, SDRScreen sends the share
- *     built by chatShare (never a bookmark's name), and neither client tunes on RECEIVING a share.
+ *   • [Manual] (2026-10-01): only a NUMBER is read from the typed text, the unit scales it, the mode is
+ *     from the closed manual list (never DAB), and the field starts on the dial in a sensible unit;
+ *   • source checks: ChatDrawer offers Check out [Bookmark] [Manual] only in canned mode, SDRScreen
+ *     builds the pick with chatShare (never a bookmark's name), and neither client tunes on RECEIVING
+ *     a share.
  *
  * Run: node --no-warnings scripts/test_chat_share.ts   (run-tests.sh does)
  */
@@ -34,7 +37,7 @@ registerHooks({
 const cs = await import('../src/services/chatShare.ts');
 const {
   shareFromBookmark, shareDab, shareFromTuned, parseShared, sharedStationText, sharedLineText,
-  shareTuneStep, shareFreqText, shareSummary,
+  shareTuneStep, shareFreqText, shareSummary, shareFromManual, manualFieldFrom,
 } = cs;
 
 let fails = 0, passes = 0;
@@ -133,17 +136,40 @@ ok('198 kHz', shareFreqText(198_000) === '198 kHz');
 ok('7.5 kHz', shareFreqText(7_500) === '7.5 kHz');
 ok('summary', shareSummary(shareDab('12B', 0xc0d2)!) === 'DAB 12B (225.648 MHz) · C0D2');
 
+// ── [Manual]: a number, a unit, a closed list of demodulators ───────────────────────────────────
+{
+  const a = shareFromManual('96.6', 'MHz', 'wfm');
+  ok('manual 96.6 MHz WFM', !!a && a.hz === 96_600_000 && a.mode === 'wfm' && a.kind === 'bookmark');
+  ok('manual comma decimal', shareFromManual('96,6', 'MHz', 'wfm')?.hz === 96_600_000);
+  ok('manual kHz', shareFromManual('198', 'kHz', 'am')?.hz === 198_000);
+  ok('manual: text refused', shareFromManual(`96.6 ${BAD}`, 'MHz', 'wfm') === null);
+  ok('manual: empty refused', shareFromManual('', 'MHz', 'wfm') === null);
+  ok('manual: zero refused', shareFromManual('0', 'MHz', 'wfm') === null);
+  ok('manual: DAB refused', shareFromManual('225.648', 'MHz', 'dab') === null);
+  ok('manual: unknown mode refused', shareFromManual('96.6', 'MHz', 'banana') === null);
+  ok('manual: keys whitelisted', !!a && Object.keys(a).every((k) => ALLOWED_KEYS.has(k)));
+  const f1 = manualFieldFrom(96_600_000), f2 = manualFieldFrom(7_100_000), f3 = manualFieldFrom(0);
+  ok('field: FM in MHz', f1.value === '96.6' && f1.unit === 'MHz', JSON.stringify(f1));
+  ok('field: HF in kHz', f2.value === '7100' && f2.unit === 'kHz', JSON.stringify(f2));
+  ok('field: nothing tuned = empty', f3.value === '');
+  ok('field round-trips', shareFromManual(f1.value, f1.unit, 'wfm')?.hz === 96_600_000);
+}
+
 // ── Source checks: the clients use this, and never tune on receipt ──────────────────────────────
 {
   const drawer = readFileSync(new URL('../src/components/ChatDrawer.tsx', import.meta.url), 'utf8');
   const screen = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
   const web = readFileSync(new URL('../web/client/src/chat.ts', import.meta.url), 'utf8');
-  ok('ChatDrawer: a Share chip in canned mode', /Share a station/.test(drawer) && /isCanned && !!shareItems/.test(drawer));
+  ok('ChatDrawer: Check out [Bookmark] [Manual] in canned mode', /Check out/.test(drawer) && /isCanned && shareEnabled/.test(drawer)
+     && /'📻 Bookmark'/.test(drawer) && /Manual/.test(drawer));
+  ok('ChatDrawer: Manual sends what shareFromManual built', /shareFromManual\(manualVal, manualUnit, manualMode\)/.test(drawer));
   ok('ChatDrawer: TUNE on a shared line calls onShareTune', /onShareTune\?\.\(m\.share!?\)/.test(drawer));
-  ok('SDRScreen: shares are built by chatShare', /shareFromBookmark\(/.test(screen) && /shareFromTuned\(/.test(screen));
+  ok('SDRScreen: the pick is built by chatShare', /const out = shareFromBookmark\(b\)/.test(screen));
   ok('SDRScreen: the received share is parsed, not tuned', /parseShared\(/.test(screen)
      && !/onSaid[\s\S]{0,1500}(onSearchTune|dabGoTo)\(/.test(screen.slice(screen.indexOf('onSaid: (from'), screen.indexOf('onSaid: (from') + 1600)));
-  ok('web: shares built by chatShare', /shareFromBookmark\(/.test(web) && /shareFromTuned\(/.test(web));
+  // ★ The web builds a PICKED row in main.ts (its search and bookmark lists live there), Manual in chat.ts.
+  const webMain = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  ok('web: shares built by chatShare', /shareFromBookmark\(/.test(webMain) && /shareFromManual\(/.test(web));
   ok('web: received share parsed', /parseShared\(/.test(web));
   // The picker shows the user's own label locally; the SEND path must take the built share, never `.name`.
   const sendFn = web.slice(web.indexOf('function sendShare'), web.indexOf('function sendShare') + 600);
