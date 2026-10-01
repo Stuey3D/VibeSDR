@@ -13,6 +13,7 @@
  *                    chip, so "tap-tap in the same spot" is the muscle-memory exit)
  *                   ♡ Favourite this server  (toggles in place, stays open)
  *                   ☆ Set as default         (toggles in place, stays open)
+ *                   ↻ Connection Refresh     (rebuilds every connection, closes the menu)
  *                   ⌃ collapse handle
  * A stray tap only opens a dismissable panel — nothing destructive happens until a
  * second, deliberate tap on a labelled row. Dismiss: the collapse chevron, or a tap
@@ -47,6 +48,10 @@ type Props = {
   /** Network receivers favourite from here; local USB/RTL-TCP favourite via the
    *  picker, so the row is hidden (parent passes false). */
   canFavourite?: boolean;
+  /** ★ Connection Refresh — the app's page refresh for this server (see
+   *  services/connectionRefresh.ts). Absent ⇒ the row is not drawn: the parent passes it only where
+   *  a refresh can do something (canRefreshConnection), never as a dead row. */
+  onRefresh?: () => void;
   /** Coachmark target — attached to the collapsed chip anchor so the first-run
    *  tour can spotlight it (tourRef from the parent). */
   anchorRef?: React.Ref<View>;
@@ -61,7 +66,7 @@ const SEP_STRONG   = 'rgba(255,160,0,0.5)';   // divides the exit from the toggl
 
 export default function ServersChip({
   top, left, isFavourite, isDefault,
-  onBack, onToggleFavourite, onSetDefault, canFavourite = true, anchorRef,
+  onBack, onToggleFavourite, onSetDefault, canFavourite = true, anchorRef, onRefresh,
   openToken = 0,
   closeToken = 0,
   onExpandedChange,
@@ -92,6 +97,9 @@ export default function ServersChip({
 
   const collapse = useCallback(() => setExpanded(false), []);
   const onHeader = useCallback(() => { setExpanded(false); onBack(); }, [onBack]);
+  // ★ Closes as it fires: the refresh replaces what is on screen, and a menu left open over the
+  //   reconnect would read as the refresh not having happened.
+  const onRefreshRow = useCallback(() => { setExpanded(false); onRefresh?.(); }, [onRefresh]);
 
   // Soft watchOS-style shading behind the collapsed chip: a dark radial that fades
   // to transparent so the chip blends into the waterfall instead of floating as a
@@ -123,9 +131,10 @@ export default function ServersChip({
     add('header', onHeader);
     if (canFavourite) add('fav', onToggleFavourite);
     add('default', onSetDefault);
+    if (onRefresh) add('refresh', onRefreshRow);
     add('collapse', collapse);
     return { rows: r, at: k };
-  }, [canFavourite, onHeader, onToggleFavourite, onSetDefault, collapse]);
+  }, [canFavourite, onHeader, onToggleFavourite, onSetDefault, onRefresh, onRefreshRow, collapse]);
 
   // Idle-close: a stray key must not leave this sitting over the waterfall with the phone
   // face-down. Touch cancels it — see PanelNav.
@@ -192,6 +201,24 @@ export default function ServersChip({
               <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>{isDefault ? 'Clear default' : 'Set as default'}</Text>
             </Pressable>
 
+            {/* ★ Connection Refresh — below a separator: the rows above change how the app keeps
+                this server, this one acts on the connection itself. Two lines, because a row that
+                rebuilds every socket should say when to reach for it. */}
+            {onRefresh && (
+              <>
+                <View style={[styles.sep, { backgroundColor: SEP }]} />
+                <Pressable onPress={onRefreshRow} style={[styles.row, styles.rowTop, rowFocus(at.refresh)]}
+                  accessibilityRole="button" accessibilityLabel="Connection Refresh"
+                  accessibilityHint={REFRESH_HINT}>
+                  <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>↻</Text>
+                  <View style={styles.rowCol}>
+                    <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Connection Refresh</Text>
+                    <Text style={[styles.rowSub, { color: amber, fontFamily: font }]}>{REFRESH_HINT}</Text>
+                  </View>
+                </Pressable>
+              </>
+            )}
+
             {/* Collapse handle — the non-exit escape from an accidental open */}
             <Pressable onPress={collapse} style={[styles.collapse, rowFocus(at.collapse)]} hitSlop={8}
               accessibilityRole="button" accessibilityLabel="Close server menu">
@@ -204,6 +231,10 @@ export default function ServersChip({
     </View>
   );
 }
+
+/** The row's description — exact wording agreed with Stuart, 2026-10-01. Also its spoken hint. */
+const REFRESH_HINT = 'Use this if you are experiencing odd connection related issues, most can be '
+                   + 'resolved by simply refreshing the connection to the server.';
 
 // Chip sizing — shrunk from the mockup so it doesn't dominate the spectrum.
 const GLYPH     = 16;
@@ -254,6 +285,11 @@ const styles = StyleSheet.create({
   },
   rowGlyph:  { fontSize: 17, width: GLYPH, textAlign: 'center' },
   rowText:   { fontSize: 16, letterSpacing: 0.3 },
+  // ★ Two-line row: glyph on the title's line, the description wrapping beneath it. The width cap
+  //   keeps the menu at its usual size rather than stretching to one very long line.
+  rowTop:    { alignItems: 'flex-start' },
+  rowCol:    { flexShrink: 1, maxWidth: 236 },
+  rowSub:    { fontSize: 12.5, lineHeight: 16, letterSpacing: 0.2, opacity: 0.72, marginTop: 2 },
   sep:       { height: StyleSheet.hairlineWidth, marginHorizontal: 8, marginVertical: 1 },
   collapse:  { alignItems: 'center', paddingTop: 5, paddingBottom: 7 },
   grab:      { width: 34, height: 3, borderRadius: 2, marginBottom: 1 },

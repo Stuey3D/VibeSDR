@@ -242,6 +242,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // rate-limited) and needs the user to open the app.
   private var dataSaverDisconnected = false
   private var reconnectFailed = false
+  /// The current mute was imposed by an AVAudioSession interruption, not chosen by the listener —
+  /// so an interruption that ENDS with .shouldResume may lift it. Main thread; cleared by setMuted.
+  private var interruptMuted = false
   private var lastSignalEmit: TimeInterval = 0   // throttle the SNR (VibeSignal) event
   private var currentFreq:  Int    = 14_074_000
   private var currentMode:  String = "usb"
@@ -1481,6 +1484,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   @objc func setMuted(_ muted: Bool) {
+    // ★ Any explicit mute or unmute settles who muted us — see interruptMuted.
+    interruptMuted = false
     isMuted = muted
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
     // FM-DX power-saving pause: STOP the MP3 audio stream + release the audio
@@ -1520,7 +1525,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         // card reflects the paused state.
         DispatchQueue.main.async {
           if muted { self.playerNode?.pause() }
-          else     { try? self.audioEngine?.start(); self.playerNode?.play() }
+          else {
+            // ★ The session may have been taken by another app while we were muted (that is what
+            //   muted us) — reclaim it, exactly as the FM-DX branch above does.
+            try? AVAudioSession.sharedInstance().setActive(true)
+            try? self.audioEngine?.start(); self.playerNode?.play()
+            /* ★★★ AND CHECK THERE IS STILL SOMETHING TO PLAY. A mute-in-place keeps the SOCKET, and
+             *  the mute is exactly when iOS suspends us and the server drops it — so unmuting a
+             *  player whose stream died is silence for ever (the DAB fault, see laWanted). Only the
+             *  native local pump has a socket to check; the OWRX/Kiwi sockets are JS's. */
+            self.checkLocalAudioAlive(why: "unmute")
+          }
           self.updateNowPlaying()
         }
       case "reconnect":
@@ -2000,6 +2015,46 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   ///   arriving in that window queues another start — see onLocalAudioFrame.
   private var laEngineStarting = false
   private var laBytesAt = Date.distantPast
+  /* ★★★ THE LOCAL PUMP NEVER REOPENED ITS SOCKET — the DAB "resumed but silent" fault (Stuart,
+   *  2026-10-01, Sony Bravia / VibeServer Lite, shared dial, DAB). Twitter took the audio session;
+   *  the interruption MUTED this path (external "resume" mode mutes in place); iOS then suspended
+   *  the app and the server lost BOTH sockets. The DAB tuning screen on return is the proof: the
+   *  shim tears the ensemble down only when NOBODY is left (`bothGone` in local_sdr_shim.cpp) and
+   *  re-enters the remembered block when somebody arrives. The spectrum socket is JS's and came
+   *  back; this one is native, and on an error, a `.failed` or a server close it simply RETURNED.
+   *  Tap to unmute then restarted a player with nothing to play, for ever — "only leaving the
+   *  server and entering again fixed it", because that remount is the only thing that ever called
+   *  startLocalAudio again.
+   *  ★★ The UberSDR socket has always had scheduleAudioWsReconnect. This pump was written for a
+   *     dongle on LOOPBACK, which does not drop, and was never revisited when the same call began
+   *     carrying every remote VibeServer's audio. One place updated, the other left behind.
+   *  ★ What the pump now remembers so it can come back by itself — see openLocalAudioConn. */
+  /// startLocalAudio has been asked for and stopLocalAudio has not — the ONLY licence to reconnect.
+  private var laWanted = false
+  /// The socket's full URL, kept so a reopen reaches the same radio with the same credentials.
+  private var laUrl: URL?
+  /// ★★★ MAY A REOPEN SAY `tune`? Only where the FIRST open was allowed to — JS sends an EMPTY
+  ///     initial tune on a SHARED DIAL. Recovery is not a user action (the shared-dial contract), so
+  ///     a reopened socket on a room's dial says nothing; on the listener's own dial it restates
+  ///     their tune exactly as the first hello did.
+  private var laAssert = false
+  /// The server refused or ended this listener (busy, evicted, cooldown…). JS shows the card and
+  /// owns the next step; reconnecting into a refusal is the reconnect war the shim warns about.
+  private var laTerminal = false
+  /// Consecutive reopens with no audio since — drives the back-off; the first frame clears it.
+  private var laRetries = 0
+  /// Bumped by every liveness check, so only the latest one's deferred verdict acts.
+  private var laReviveGen = 0
+  /// systemUptime of the last binary frame. Written on wsQueue, read on main — laLock.
+  private var laLastFrameAt: TimeInterval = 0
+  private let laLock = NSLock()
+  private func laFrameStamp() -> TimeInterval { laLock.lock(); defer { laLock.unlock() }; return laLastFrameAt }
+  /// The shim's refusals and endings on this socket — see scheduleLocalAudioReconnect. The same
+  /// terminal cases VibeServerWsClient meets on the spectrum socket and answers with `refused`.
+  private static let laTerminalTypes: Set<String> = [
+    "busy", "evicted", "kicked", "banned", "cooldown", "session_expired", "elsewhere",
+    "needs_codec", "idle_closed",
+  ]
   private static let adpcmStep: [Int] = [
     7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,
     88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,
@@ -2029,6 +2084,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
                              : (wsBase.hasSuffix("/") ? String(wsBase.dropLast()) : wsBase)
     guard let url = URL(string: "\(base)/ws/audio\(q)") else { return }
     laTune = initialTune
+    laUrl = url
+    laAssert = !initialTune.isEmpty
+    laTerminal = false
+    laRetries = 0
+    laWanted = true
     // ★★ THE ENGINE STARTS ON THE FIRST PACKET, NOT HERE — see onLocalAudioFrame. Starting it at
     //    connect left it running and pulling with nothing arriving yet, and that window is audible:
     //    a stutter on connect that settles once the stream catches up (Stuart, build 58).
@@ -2037,9 +2097,17 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     //      and the volume observer are all set up at exactly the moment they always were. Deferring
     //      restores the arrangement background media controls were verified against; it does not
     //      invent a new one. (Android starts it upfront, which is why I copied that first.)
+    openLocalAudioConn(reconnect: false)
+  }
+
+  /// Open (or reopen) the local audio socket to `laUrl`. `reconnect` = recovery, not a start: the
+  /// hello `tune` is then sent only where the first open was allowed to send one (see laAssert).
+  private func openLocalAudioConn(reconnect: Bool) {
+    guard let url = laUrl else { return }
     stopLocalAudioConn()
     laGen &+= 1
     let gen = laGen
+    if reconnect { notePath("local audio socket reopening") }
     // ★★★ TLS WHEN THE URL SAYS wss, AND THIS WAS HARDCODED `.tcp`. A VibeServer reached through
     //     its Cloudflare tunnel is wss on 443, so a plain-TCP NWConnection opened the socket and
     //     then spoke unencrypted WebSocket at a TLS endpoint: no handshake ever completed, the
@@ -2068,12 +2136,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       switch state {
       case .ready:
         NSLog("[VibePowerModule] local audio WS ready: %@", url.absoluteString)
-        self.sendEvent(withName: "VibeLocalAudioState", body: ["state": "ready"])
-        if !self.laTune.isEmpty { self.sendLocalTune(self.laTune) }
+        self.sendEvent(withName: "VibeLocalAudioState", body: ["state": reconnect ? "ready (reopened)" : "ready"])
+        // ★★ The hello. A REOPEN on a shared dial says nothing — see laAssert.
+        if !self.laTune.isEmpty && (!reconnect || self.laAssert) { self.sendLocalTune(self.laTune) }
         self.laReceive(conn, gen: gen)
       case .failed(let err):
         NSLog("[VibePowerModule] local audio WS failed: %@", "\(err)")
         self.sendEvent(withName: "VibeLocalAudioState", body: ["state": "failed: \(err)"])
+        self.scheduleLocalAudioReconnect(gen: gen, why: "failed: \(err)")
       // ★★ WAITING IS THE ONE THAT WAS INVISIBLE. NWConnection sits in .waiting on a refused or
       //    unreachable endpoint and RETRIES QUIETLY — no failure, no bytes, nothing in the server's
       //    log because nothing ever completed a handshake. It presents to the user as "no audio"
@@ -2090,6 +2160,73 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     conn.start(queue: wsQueue)
   }
 
+  /* ★★★ A DEAD SOCKET IS REOPENED — ONCE PER DEATH, WITH A BACK-OFF.
+   *  Reached from `.failed`, a receive error, a server close and the end of the stream, several of
+   *  which can fire for ONE death: the first to land on main bumps laGen and the rest find a stale
+   *  generation. Main, because laGen/laConn are otherwise touched there and on the bridge queue —
+   *  never on wsQueue, where these callbacks arrive.
+   *  ★★ NOT after a refusal. The shim tells a refused or ended listener WHY on this socket (busy,
+   *     evicted, cooldown…) and every client treats that as terminal; retrying would hammer a busy
+   *     radio and disturb whoever now holds it. JS shows the card and owns the next step.
+   *  ★ Same URL, same session id, same credentials — the server re-affirms our slot rather than
+   *    meeting a stranger (see the session-identity note in SDRScreen). */
+  private func scheduleLocalAudioReconnect(gen: Int, why: String) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.laWanted, self.laGen == gen else { return }
+      self.laGen &+= 1                      // supersede this connection's remaining callbacks
+      let next = self.laGen
+      self.laConn?.cancel()
+      self.laConn = nil
+      if self.laTerminal {
+        NSLog("[VibePowerModule] local audio socket ended (%@) after a refusal — not reopening", why)
+        self.notePath("local audio socket ended after a refusal — not reopening")
+        return
+      }
+      let attempt = self.laRetries
+      self.laRetries += 1
+      let delay = min(15.0, 2.0 * pow(2.0, Double(min(attempt, 3))))   // 2, 4, 8, 15, 15…
+      NSLog("[VibePowerModule] local audio socket lost (%@) — reopening in %.0f s", why, delay)
+      self.notePath("local audio socket lost (\(why)) — reopening in \(Int(delay)) s")
+      VibeCrumbs.log("audio local socket lost (\(why)) — reopening in \(Int(delay)) s")
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        guard let self, self.laWanted, self.laGen == next else { return }
+        self.openLocalAudioConn(reconnect: true)
+      }
+    }
+  }
+
+  /** ★★★ IS THE LOCAL AUDIO SOCKET ACTUALLY DELIVERING? Asked at the moments a person would find a
+   *  dead one — the app coming back to the front (JS), and an unmute (the banner, the lock-screen ▶,
+   *  an interruption ending). The server sends a frame every ~20 ms whether or not we play it —
+   *  frames keep arriving while muted, feedExternal* just drops them — so two seconds of NOTHING
+   *  after asking is a dead or half-open socket: iOS suspended us, the server reaped the session,
+   *  and a TCP flow that was never closed never says so. Reopen it once; a further death is
+   *  scheduleLocalAudioReconnect's.
+   *  ★ Deferred, never judged on the spot: the instant we return to the foreground the last frame is
+   *    necessarily old even on a healthy socket, and a reopen it did not need costs a gap.
+   *  ★ A reopen during a DAB re-acquisition is harmless — the spectrum socket still holds our place,
+   *    so the server is never left with nobody and does not tear the ensemble down. */
+  @objc func reviveLocalAudio() {
+    DispatchQueue.main.async { [weak self] in self?.checkLocalAudioAlive(why: "app returned to the foreground") }
+  }
+
+  /// Main thread.
+  private func checkLocalAudioAlive(why: String) {
+    guard laWanted, !laTerminal else { return }
+    laReviveGen &+= 1
+    let rg = laReviveGen
+    let asked = ProcessInfo.processInfo.systemUptime
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+      guard let self, self.laWanted, !self.laTerminal, self.laReviveGen == rg else { return }
+      if self.laFrameStamp() >= asked { return }          // frames are flowing — nothing to do
+      NSLog("[VibePowerModule] no local audio for 2 s after: %@ — reopening the socket", why)
+      self.notePath("no local audio 2 s after \(why) — reopening the socket")
+      VibeCrumbs.log("audio local socket silent after \(why) — reopening")
+      self.laRetries = 0
+      self.openLocalAudioConn(reconnect: true)
+    }
+  }
+
   @objc func sendLocalTune(_ json: String) {
     laTune = json
     guard let conn = laConn, let data = json.data(using: .utf8) else { return }
@@ -2099,6 +2236,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   @objc func stopLocalAudio() {
+    // ★ Withdraw the licence to reconnect FIRST, so a reopen already queued finds nothing to do.
+    laWanted = false
     // ★ A fresh session starts with a fresh cushion — see scheduleOut's pre-roll.
     audioQ.async { [weak self] in
       self?.preRoll = 0
@@ -2118,10 +2257,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func laReceive(_ conn: NWConnection, gen: Int) {
     conn.receiveMessage { [weak self] (data, context, _, error) in
       guard let self, self.laGen == gen, self.laConn === conn else { return }
-      if error != nil { return }
+      // ★★★ THIS AND THE TWO EXITS BELOW WERE SILENT RETURNS — the fault described at laWanted.
+      if let error { self.scheduleLocalAudioReconnect(gen: gen, why: "receive error: \(error)"); return }
       let op = (context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
                 as? NWProtocolWebSocket.Metadata)?.opcode
+      // ★ The shim explains a refusal in TEXT on this socket before it closes — note it, so the
+      //   close that follows is not retried (laTerminalTypes).
+      if op == .text, let data,
+         let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+         let type = obj["type"] as? String, Self.laTerminalTypes.contains(type) {
+        NSLog("[VibePowerModule] local audio socket: the server said '%@' — will not reopen", type)
+        self.laTerminal = true
+      }
       if op == .binary, let data {
+        self.laLock.lock(); self.laLastFrameAt = ProcessInfo.processInfo.systemUptime; self.laLock.unlock()
+        if self.laRetries != 0 { DispatchQueue.main.async { self.laRetries = 0 } }   // main owns it
         // ★ COUNT EVERY BYTE THAT CROSSED THE LINK, before anything can drop the frame — the JS
         //   reader this replaces counted at exactly this point, and for the same reason.
         //   Reported at ~2 Hz rather than per packet: the meter updates about once a second, and
@@ -2136,7 +2286,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         }
         self.onLocalAudioFrame(data)
       }
-      if op == .close { return }
+      if op == .close { self.scheduleLocalAudioReconnect(gen: gen, why: "closed by the server"); return }
+      // ★ End of stream with no close frame — a peer that simply went away. Re-arming here would
+      //   wait on a connection that can never deliver again.
+      if let ctx = context, ctx.isFinal {
+        self.scheduleLocalAudioReconnect(gen: gen, why: "stream ended"); return
+      }
       self.laReceive(conn, gen: gen)
     }
   }
@@ -2526,7 +2681,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         // pauses us; sync our state so the UI shows muted. NB this calls
         // disconnectForPause() → isRunning=false, so .ended must NOT gate on it.
         guard self.isRunning else { return }
-        DispatchQueue.main.async { if !self.isMuted { self.setMuted(true) } }
+        DispatchQueue.main.async {
+          if !self.isMuted { self.setMuted(true); self.interruptMuted = true }
+        }
       } else if type == AVAudioSession.InterruptionType.ended.rawValue {
         // Only auto-resume when iOS says the interruption was transient
         // (.shouldResume) — e.g. Siri voice tuning in CarPlay. Without this the
@@ -2541,6 +2698,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
             self.setMuted(false)   // full reconnect, identical to pressing ▶
           } else if self.fmdxAudio && self.isMuted {
             self.setMuted(false)   // FM-DX mutes in place on interruption → unmute to resume
+          } else if self.externalAudio && self.externalPauseMode == "resume" && self.isMuted
+                    && self.interruptMuted {
+            /* ★★ A VibeServer / local dongle mutes IN PLACE on interruption too, and nothing
+             *  unmuted it — so the V2.2.1 Siri-in-the-car fix never reached this path, and a
+             *  transient interruption left it muted until somebody found the banner. Only when the
+             *  INTERRUPTION muted it: a pause the listener chose stays paused. setMuted(false) also
+             *  checks the socket survived (checkLocalAudioAlive). */
+            self.setMuted(false)
           } else if !self.isMuted {
             try? self.audioEngine?.start(); self.playerNode?.play()
           }

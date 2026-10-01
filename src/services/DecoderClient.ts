@@ -359,6 +359,25 @@ export class DecoderClient {
     return false;
   }
 
+  /**
+   * ★★ A FRESH SOCKET, SAME INTENT — for a full reconnect (Connection Refresh, the reconnect
+   *  banners). The decoder, spots and chat choices live on THIS object, and onopen restates all
+   *  three, so a new socket is everything a refresh needs; rebuilding the client would throw those
+   *  choices away. The old socket's handlers are detached FIRST: its onclose would otherwise null
+   *  out the new socket and schedule a retry of its own. Idle (nothing in use) → nothing is opened.
+   */
+  refresh() {
+    if (this.destroyed) return;
+    const old = this.ws;
+    this.ws = null;
+    if (old) {
+      old.onopen = null; old.onmessage = null; old.onclose = null; old.onerror = null;
+      try { old.close(); } catch { /* already dead */ }
+    }
+    this.retries = 0;
+    if (this.active || this.spotsKind || this.chatSubscribed) this._open();
+  }
+
   destroy() {
     this.destroyed = true;
     this.stop();
@@ -373,6 +392,10 @@ export class DecoderClient {
 
   private _open() {
     if (this.destroyed) return;
+    // ★ One socket at a time. A retry timer from an earlier close (or a start() while CONNECTING)
+    //   would otherwise open a second one and orphan the first; the live one's onopen already
+    //   restates the decoder, spots and chat.
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) return;
     const url = this.baseUrl.replace(/^http/, 'ws')
       + `/ws/dxcluster?user_session_id=${this.uuid}`
       + (this.password ? `&password=${encodeURIComponent(this.password)}` : '');

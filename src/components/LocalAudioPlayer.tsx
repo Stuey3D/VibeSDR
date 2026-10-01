@@ -21,6 +21,8 @@ const Vibe = NativeModules.VibePowerModule as {
   pushExternalOpus?:  (b64: string, sampleRate: number, channels: number) => void;
   sendLocalTune?:     (json: string) => void;
   stopLocalAudio?:    () => void;
+  /** iOS: is the pump's socket still delivering? Reopens it if not (VibePowerModule.swift). */
+  reviveLocalAudio?:  () => void;
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
   pushExternalPcm?:   (b64: string, rate: number, channels?: number) => void;
   stopExternalAudio?: () => void;
@@ -82,6 +84,14 @@ function bytesToBase64(b: Uint8Array): string {
   return parts.join('');
 }
 
+/** ★★ ASK THE NATIVE PUMP WHETHER ITS SOCKET IS STILL DELIVERING, and let it reopen a dead one.
+ *  Called when the app returns to the foreground: a suspension is exactly when the server drops the
+ *  socket, and a half-open flow never says so. iOS only — Android's pump lives in a foreground
+ *  service that is not suspended, and has no such method (optional, so this is a quiet no-op there). */
+export function reviveLocalAudio(): void {
+  try { Vibe?.reviveLocalAudio?.(); } catch { /* an older native build — nothing to ask */ }
+}
+
 export interface LocalAudioPlayerProps {
   port:          number | null;
   frequency:     number;
@@ -139,6 +149,14 @@ export interface LocalAudioPlayerProps {
    *  measurement, it is a misleading one: it gave false confidence exactly where
    *  the problem was, and hid it for months. */
   onBytes?:      (n: number) => void;
+  /** ★★★ BUMP TO REOPEN THE AUDIO SOCKET — the screen's connEpoch. A full reconnect (Connection
+   *  Refresh, the reconnect banners, a data-saver resume) rebuilt the SPECTRUM client and left this
+   *  socket exactly as it was, because nothing it was keyed on changed: same port, same session id
+   *  (deliberately stable — see sessionUuid in SDRScreen). So the one connection a reconnect most
+   *  needed to replace was the one it never touched, and "leave the server and come back" — a
+   *  remount — was the only cure (Stuart, 2026-10-01, DAB on the Sony after an interruption).
+   *  ★ Same id on the new socket, so the server re-affirms our slot rather than seeing a stranger. */
+  restartKey?:   number;
   /** ★ Ask for uncompressed 16-bit PCM instead of Opus. Only ever true when the SERVER's policy
    *  says 'choice' — see ServerOccupancy.uncompressed. ~187 KB/s against Opus's ~8, so it is the
    *  listener's deliberate choice on a link that can carry it, never a default. */
@@ -152,7 +170,7 @@ function tuneJson(frequency: number, mode: string, bandwidthLow: number, bandwid
 export default function LocalAudioPlayer(
   { port, frequency, mode, bandwidthLow, bandwidthHigh, instanceName,
     host = '127.0.0.1', authSuffix = '', sessionId = '', onBytes, raw = false,
-    wsBase = '', adminAuth = '', assertTune = true, userTuneSeq = 0 }: LocalAudioPlayerProps,
+    wsBase = '', adminAuth = '', assertTune = true, userTuneSeq = 0, restartKey = 0 }: LocalAudioPlayerProps,
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
@@ -346,7 +364,8 @@ export default function LocalAudioPlayer(
   // ★★ host/authSuffix/sessionId for the same reason — all three are resolved asynchronously, and
   //    a dep list is a list you must remember, so it WILL be wrong. Name everything the URL is
   //    built from.
-  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune]);
+  // ★ restartKey: a reconnect asked for a NEW socket — see the prop.
+  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune, restartKey]);
 
   /* Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
    * JS branch remains for the fallback reader.

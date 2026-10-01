@@ -22,6 +22,9 @@ RCT_EXTERN_METHOD(stopExternalAudio)
 RCT_EXTERN_METHOD(startLocalAudio:(NSString *)host port:(nonnull NSNumber *)port initialTune:(NSString *)initialTune authSuffix:(NSString *)authSuffix wsBase:(NSString *)wsBase)
 RCT_EXTERN_METHOD(sendLocalTune:(NSString *)json)
 RCT_EXTERN_METHOD(stopLocalAudio)
+// ★★ Is the local pump's socket still delivering? Reopens it if not — see reviveLocalAudio. Exported
+//    here or JS cannot see it: the Swift @objc alone is invisible.
+RCT_EXTERN_METHOD(reviveLocalAudio)
 RCT_EXTERN_METHOD(startFmdxAudio:(NSString *)baseUrl)
 RCT_EXTERN_METHOD(stopFmdxAudio)
 RCT_EXTERN_METHOD(revive)
