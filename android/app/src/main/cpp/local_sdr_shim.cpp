@@ -17798,6 +17798,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    receiver is doing, or to stop it.
             if (!isLoopback(sock->peerAddress()) && !adminAuthed) {
                 const double now = Impl::nowSecs();
+                const auto it = cooldownUntil.find(sock->peerAddress());
+                if (it != cooldownUntil.end()) {
+                    if (it->second > now) {
+                        const int left = (int)(it->second - now + 0.5);
+                        LOGI("%s WS refused — cooling down %ds", isAudio ? "audio" : "spectrum", left);
+                        const std::string m = "{\"type\":\"cooldown\",\"secs\":"
+                                            + std::to_string(left) + "}";
+                        sendWs(sock, 0x1, (const uint8_t*)m.data(), m.size());
+                        outboxClose(sock);   // drain, then close — see outboxClose()
+                        return;
+                    }
+                    cooldownUntil.erase(it);   // expired — prune on the way past
+                }
+                /* ★★★ COUNTED ONLY ONCE PAST THE COOLDOWN (B10). The storm check used to run FIRST, so every
+                 *   attempt REFUSED for a cooldown still counted: a listener whose turn ended, pressing Try
+                 *   again while their client's sockets retried, crossed 30 in a minute and had the cooldown
+                 *   RENEWED — refused long after the "about 2 minutes" the card promised (Stuart on Kiko's
+                 *   server, 2026-10-01). A refused attempt costs the server nothing; only admitted ones count. */
                 /* ★★★ A SESSION STORM IS REFUSED, NOT SERVED. On 2026-09-14 one address opened a
                  *   fresh session on every Pi radio about twice a second for hours — 4,982 on the
                  *  V4L in a day, each one "landing", restarting the audio chain and counting as
@@ -17815,20 +17833,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              sock->peerAddress().c_str(), hits.size(), (int)kSessionCooldownSec * 2);
                         cooldownUntil[sock->peerAddress()] = now + kSessionCooldownSec * 2;
                         hits.clear();
-                    }
-                }
-                const auto it = cooldownUntil.find(sock->peerAddress());
-                if (it != cooldownUntil.end()) {
-                    if (it->second > now) {
-                        const int left = (int)(it->second - now + 0.5);
-                        LOGI("%s WS refused — cooling down %ds", isAudio ? "audio" : "spectrum", left);
+                        // ★ Refused HERE: the cooldown check above has already run for this socket.
                         const std::string m = "{\"type\":\"cooldown\",\"secs\":"
-                                            + std::to_string(left) + "}";
+                                            + std::to_string((int)kSessionCooldownSec * 2) + "}";
                         sendWs(sock, 0x1, (const uint8_t*)m.data(), m.size());
-                        outboxClose(sock);   // drain, then close — see outboxClose()
+                        outboxClose(sock);
                         return;
                     }
-                    cooldownUntil.erase(it);   // expired — prune on the way past
                 }
             }
 
