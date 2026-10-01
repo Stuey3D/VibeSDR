@@ -198,6 +198,7 @@ if node --no-warnings scripts/test_faceplate_wells.ts; then pass=$((pass+1)); el
 #     chassis × meter × shared, four equal keys, no negative or overlapping column, the drums' 80 pt,
 #     real Nixie tubes that fit the window, and the SE's fall-backs (no labels; the bar).
 if node --no-warnings scripts/test_faceplate_landscape.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+if node --no-warnings scripts/test_sprite_sizing.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ THE DECODER BOXES (faceplates §10.2): every text role ≥ 4.5:1 (WCAG luminance, composited over
 #    what it sits on) in every chassis × controls colour × text colour × Transparency on/off; the
 #    meaning colours never move, the text colour never reaches a box, no blur on silver / black or OFF.

@@ -16,6 +16,7 @@ import { View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 're
 import { Canvas, Group, Image as SkImageNode, Path, Skia, type SkImage, type SkPath } from '@shopify/react-native-skia';
 import { rgba } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
+import { segFit, SEG_CELL_W as CELL_W, SEG_CELL_H as CELL_H } from '../constants/spriteSizing';
 
 export function useBoxSize() {
   const [sz, setSz] = useState({ w: 0, h: 0 });
@@ -74,7 +75,6 @@ const SEG_MAP: Record<string, string> = {
   '0': 'abcdef', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc',
   '5': 'afgcd', '6': 'afgedc', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg', '-': 'g',
 };
-const CELL_W = 24, CELL_H = 38;
 const SKEW = Math.tan((-7 * Math.PI) / 180);
 
 /** A segment (or the DP) as a path in a cell of height `sh`, its top-left at (ox, oy). */
@@ -111,7 +111,7 @@ interface Sprite { img: SkImage; w: number; h: number; m: number }
 /** The lit glyphs, glow included (`drop-shadow(0 0 3px glow)`), rasterised once per colour × size. */
 function useSegSprites(sh: number, core: string, glow: string): Record<string, Sprite> | null {
   return useMemo(() => {
-    if (sh <= 0) return null;
+    if (!(sh > 0)) return null;   // ★ NaN-proof: `sh <= 0` is false for NaN
     const k = sh / CELL_H;
     const m = 6;
     const w = CELL_W * k + 2 * m, h = CELL_H * k + 2 * m;
@@ -160,12 +160,7 @@ export function SegDigits({ text, rgb, core, glow, designH, style }: {
   const cells = useMemo(() => segDigitCells(text), [text]);
   const n = cells.length;
   const gap = 1;
-  let sh = Math.max(0, Math.min(designH, h - 4));
-  let cw = (CELL_W * sh) / CELL_H;
-  const need = n * cw + (n - 1) * gap;
-  if (need > w && n > 0) { const f = (w - (n - 1) * gap) / (n * cw); sh *= f; cw *= f; }
-  sh = Math.round(sh * 2) / 2;
-  cw = (CELL_W * sh) / CELL_H;
+  const { sh, cw } = segFit(w, h, n, gap, designH);
   const x0 = Math.max(0, w - (n * cw + (n - 1) * gap));
   const y0 = Math.max(0, (h - sh) / 2);
   const sprites = useSegSprites(sh, core, glow);

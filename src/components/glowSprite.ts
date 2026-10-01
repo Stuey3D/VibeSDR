@@ -10,12 +10,15 @@
  */
 
 import { PixelRatio } from 'react-native';
+import { spritePixels } from '../constants/spriteSizing';
 import { BlurStyle, Skia, type SkCanvas, type SkImage, type SkPaint } from '@shopify/react-native-skia';
 
 /** Rasterise `draw` into a w × h (pt) image at the screen's pixel ratio. null if no surface. */
 export function makeSprite(w: number, h: number, draw: (c: SkCanvas) => void): SkImage | null {
   const pr = PixelRatio.get();
-  const pw = Math.max(1, Math.ceil(w * pr)), ph = Math.max(1, Math.ceil(h * pr));
+  const px = spritePixels(w, h, pr);
+  if (!px) { console.warn(`[sprite] refused ${w} x ${h} pt at ${pr}x`); return null; }
+  const { pw, ph } = px;
   const surf = Skia.Surface.MakeOffscreen(pw, ph);
   if (!surf) return null;
   const c = surf.getCanvas();
