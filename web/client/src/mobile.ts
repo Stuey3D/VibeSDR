@@ -17,6 +17,9 @@
 export type MobileDeps = {
   /** Tune by a signed number of STEPS (not Hz) — the caller owns step size and clamping. */
   nudgeSteps: (steps: number) => void;
+  /** ★ Tap = one step, hold = main.ts's accelerating sweep, paced on the receiver's own answer to
+   *  each tune (attachHoldSweep). Owned there so the pacing has ONE implementation. */
+  holdSweep: (el: HTMLElement, tap: () => void) => void;
   /** spec.zoomBy — a MAGNIFICATION factor, not a span multiplier: >1 zooms IN (narrower
    *  span, more detail), <1 zooms OUT. Reading it the other way round is what once got the
    *  − and + buttons swapped. */
@@ -66,7 +69,7 @@ export type MobileDeps = {
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-/** Press-and-hold repeat for the drums' − / + ends, for people who would rather tap. */
+/** Press-and-hold repeat for the zoom pad's − / +. (The tune pad uses deps.holdSweep.) */
 function attachRepeat(btn: HTMLElement, fire: () => void) {
   let hold = 0, rep = 0;
   const stop = () => {
@@ -132,8 +135,11 @@ export function initMobileControls(deps: MobileDeps) {
   // ★ The drag implementation is not carried here as dead code — it is in git history if the
   //   card is ever driven by a real touchscreen, where `pointer: coarse` would be the honest
   //   test for turning it back on.
-  attachRepeat($('mVfoDown'), () => deps.nudgeSteps(-1));
-  attachRepeat($('mVfoUp'),   () => deps.nudgeSteps(1));
+  // ★★ TUNING sweeps through deps.holdSweep (accelerating, and paced on the receiver's answer — a
+  //    flat-rate repeat outruns a slow server). ZOOM keeps the plain repeat below, unchanged — the
+  //    sweep fixes were made for, and measured on, tuning.
+  deps.holdSweep($('mVfoDown'), () => deps.nudgeSteps(-1));
+  deps.holdSweep($('mVfoUp'),   () => deps.nudgeSteps(1));
   // ★ IN magnifies, OUT widens. These were once the wrong way round: − zoomed in and + zoomed out.
   attachRepeat($('mZoomIn'),  () => deps.zoomBy(2));
   attachRepeat($('mZoomOut'), () => deps.zoomBy(0.5));

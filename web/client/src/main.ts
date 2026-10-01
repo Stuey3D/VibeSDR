@@ -7283,6 +7283,12 @@ function buildControls() {
   // ── The control card — the only control surface, at every width ──────────
   mobileUi = initMobileControls({
     nudgeSteps: (n) => nudge(n * step),
+    /* ★★★ THE TUNE PADS SWEEP THROUGH attachHoldSweep — the accelerating, ECHO-PACED sweep Stuart asked
+     *  for on 2026-09-27/28 ("it often goes faster than the connection can keep up with"; "it can
+     *  overwhelm a server especially a slower one"). Both fixes were made in attachHoldSweep, which then
+     *  drove only the retired desktop bar's hidden ◀ ▶ — the card's ‹ › kept a flat 14 steps/s that
+     *  never waits for the receiver, so neither fix ever reached a listener. */
+    holdSweep:  (el, tap) => attachHoldSweep(el, tap),
     zoomBy:     (f) => { spec?.zoomBy(f); updateViewOverlays(); },
     freqHz:     () => spec?.frequency ?? null,
     freqText:   () => cardFreqText(),
@@ -13212,6 +13218,11 @@ function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = t
   el.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;            // ignore right/middle click
     e.preventDefault();                    // no text selection, no double-tap zoom
+    /* ★★★ CAPTURE THE POINTER (carried over from the card's own repeat helper, which this replaces
+     *  on the tune pads). Without it the release goes to whatever the finger is over — and on iOS a
+     *  long press raises the selection callout, which swallows it entirely: the sweep kept running
+     *  and the button stayed stuck down. With capture, pointerup/cancel always come back here. */
+    try { el.setPointerCapture(e.pointerId); } catch { /* synthetic event, or an old engine */ }
     stop();
     tap();
     holdT = window.setTimeout(() => {
@@ -13241,12 +13252,16 @@ function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = t
       tickT = window.setTimeout(tick, 1000 / SWEEP_LO);
     }, HOLD_MS);
   });
-  el.addEventListener('pointercancel', stop);
-  el.addEventListener('pointerleave', stop);
+  // ★ `lostpointercapture` matters as much as the rest: if the system takes the pointer away (a
+  //   callout, a gesture, a phone call) it is the ONLY event we get.
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture']) el.addEventListener(ev, stop);
   // ★ Release ANYWHERE ends it. Listening only on the element would leave a
   // sweep running forever if the pointer drifted off the button before lifting,
   // which is exactly what happens when you press hard and slide.
   window.addEventListener('pointerup', stop);
+  // A last resort for the same class of failure: hidden or blurred mid-hold, nothing above may fire.
+  window.addEventListener('blur', stop);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
 }
 
 function buildVfo() {
