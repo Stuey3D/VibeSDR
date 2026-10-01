@@ -36,7 +36,8 @@
 #include <unistd.h>
 #include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
-#include "vibe_hwinfo.h"   // ★ what this server runs on, for the directory — see the header
+#include "vibe_hwinfo.h"
+#include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
 
 #include <algorithm>
 #include <atomic>
@@ -3270,6 +3271,18 @@ static std::atomic<int>      g_ovlLastDir{0};
  *  cooldown on it is advisory at best — clear it and you are back in. The cost is a household
  *  behind one router shares a cooldown, which is the accepted trade (Stuart, 2026-07-27). */
 static constexpr int        kSessionCooldownSec = 120;
+/** ★★★ THE ONE session_expired MESSAGE — three places end a session at the limit, and they had three
+ *  copies of it, all quoting `fresh` as the LIMIT while the turn book resets a turn after kTurnBreakS
+ *  (fixed at 15 minutes since 2026-09-19). On Kiko's 15-minute server the two happened to agree; on
+ *  any other limit the card quoted a number the server does not use.
+ *   cooldown — seconds this address is refused outright (unchanged: the window somebody else gets);
+ *   fresh    — seconds away before a FULL turn comes back (vibeturn::kTurnBreakS);
+ *   borrow   — ★ B10: after the cooldown a free radio admits them on borrowed time, kept until
+ *              somebody else wants it. Absent on an older server, whose clients must not promise it. */
+static std::string sessionExpiredJson() {
+    return "{\"type\":\"session_expired\",\"cooldown\":" + std::to_string(kSessionCooldownSec)
+         + ",\"fresh\":" + std::to_string((int)vibeturn::kTurnBreakS) + ",\"borrow\":true}";
+}
 
 // ── ★★★ THE ADMIN SUBSYSTEM'S STATE — see vibe_admin.h ────────────────────────────────────────
 // Bans and the connection log are policy and history, not radio, so they live in their own
@@ -8608,9 +8621,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     continues — which is still the whole defence against refreshing for a fresh clock;
      *   ★ keyed by BROWSER where the client sends one (turnKeyLocked), address otherwise — an address is a
      *     household, or on CGNAT a crowd of strangers who would otherwise inherit each other's turns. */
-    struct Turn { double started = 0; double seen = 0; };
-    std::map<std::string, Turn> turns;
-    static constexpr double kTurnBreakS = 15.0 * 60.0;
+    /* ★★★ THE BOOK ITSELF IS vibeturn::Book (vibe_session_turns.h) — moved out so the whole rule runs on
+     *  a synthetic clock in test-session-turns.cpp. It also carries what this file could not: whether
+     *  the limit has ALREADY ENDED a turn ("spent"), which is what lets a listener back after the
+     *  cooldown onto a free radio on borrowed time instead of being ended on the spot (B10, 2026-10-01,
+     *  Kiko's server — see the header). clientMtx HELD for every call. */
+    vibeturn::Book turnBook;
+    static constexpr double kTurnBreakS = vibeturn::kTurnBreakS;
     /** The key a socket's turn is kept under — its browser id when it sent one. clientMtx HELD. */
     std::string turnKeyLocked(const net::Socket* sk, const std::string& addr) {
         auto it = sockBrowser.find(const_cast<net::Socket*>(sk));
@@ -8618,32 +8635,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     /** The start time to use for a listener arriving from `addr`. Call with clientMtx HELD. */
-    double turnStartForLocked(const std::string& addr, double now) {
-        const double grace = kTurnBreakS;
-        // ★ Prune while we are here: this map would otherwise grow for the life of the process,
-        //   one entry per address ever seen, on a server whose whole point is strangers.
-        for (auto it = turns.begin(); it != turns.end(); ) {
-            if (now - it->second.seen > grace && it->first != addr) it = turns.erase(it);
-            else ++it;
-        }
-        if (addr.empty()) return now;
-        auto it = turns.find(addr);
-        if (it != turns.end() && (now - it->second.seen) <= grace) {
-            // ★ Same person, back within the break: their turn continues, WITHOUT the time they were away.
-            //   A live listener is touched every tick, so a second socket of the same visit sees ~0 here.
-            it->second.started += now - it->second.seen;
-            it->second.seen = now;
-            return it->second.started;
-        }
-        turns[addr] = Turn{ now, now };
-        return now;
-    }
+    double turnStartForLocked(const std::string& addr, double now) { return turnBook.startFor(addr, now); }
     /** Keep a live listener's turn from expiring while they are still here. clientMtx HELD. */
-    void touchTurnLocked(const std::string& addr, double now) {
-        if (addr.empty()) return;
-        auto it = turns.find(addr);
-        if (it != turns.end()) it->second.seen = now;
-    }
+    void touchTurnLocked(const std::string& addr, double now) { turnBook.touch(addr, now); }
+    /** ★ Is the listener under this key on BORROWED time (their turn already ended once)? clientMtx HELD. */
+    bool turnSpentLocked(const std::string& key, double now) const { return turnBook.spent(key, now); }
+    /** ★ The occupant's turn key on a one-at-a-time radio. clientMtx HELD. */
+    std::string occupantKeyLocked() const { return occupantTurnKey.empty() ? occupantAddr : occupantTurnKey; }
 
     // ── The waiting queue ──────────────────────────────────────────────────────────────────
     // ★★★ THE QUEUE *IS* THE SET OF WAITING SOCKETS, IN ARRIVAL ORDER. A refused listener used to
@@ -15244,7 +15242,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   asking, and the radio-wide clock is re-stamped by every new arrival.
         { const int left = secsLeftFor(sock);
           j += ",\"sessionLimitMin\":" + std::to_string(g_vsSessionLimitMin.load());
-          j += ",\"sessionSecsLeft\":" + std::to_string(left); }
+          j += ",\"sessionSecsLeft\":" + std::to_string(left);
+          // ★ B10: kept until somebody else wants the radio — see borrowedFor(). Absent = not borrowed.
+          if (left >= 0 && borrowedFor(sock)) j += ",\"borrowed\":true"; }
         // A pinned rate is advertised so the client can HIDE its rate picker and say
         // who set it, rather than offering a control whose every use is silently
         // dropped. 0 = client-controlled (the default).
@@ -20068,6 +20068,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ One-at-a-time receivers are unchanged: there `occupantSince` IS this listener's clock,
      *    so the old path is still exactly right and still used.
      */
+    /** ★★ IS THIS LISTENER ON BORROWED TIME (B10)? Their turn was already ended by the limit and they
+     *  came back after the cooldown to a free radio — so they are kept until somebody else wants it,
+     *  on a hard server as on a soft one, and their clock must say THAT rather than sit at a red 0:00
+     *  promising an ending that is not coming. Sent on hwinfo as `borrowed`. Call WITHOUT clientMtx. */
+    bool borrowedFor(const std::shared_ptr<net::Socket>& sock) {
+        if (g_vsSessionLimitMin.load() <= 0 || !sock) return false;
+        const std::string a = sock->peerAddress();
+        if (a.empty() || isLoopback(a)) return false;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        const std::string key = g_vsMaxUsers.load() <= 1 ? occupantKeyLocked() : turnKeyLocked(sock.get(), a);
+        return turnSpentLocked(key, Impl::nowSecs());
+    }
+
     int secsLeftFor(const std::shared_ptr<net::Socket>& sock) {
         const int limitMin = g_vsSessionLimitMin.load();
         if (limitMin <= 0) return -1;
@@ -21612,7 +21625,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const bool soft = g_vsSessionLimitSoft.load();
         const double now = Impl::nowSecs();
 
-        struct Cand { std::shared_ptr<ClientDsp> c; double since; };
+        // ★ `kept` = held to the soft rule: a soft server, or this listener is on BORROWED time (B10).
+        struct Cand { std::shared_ptr<ClientDsp> c; double since; bool kept; };
         std::vector<Cand> over;                  // past their limit, and not exempt
         std::vector<std::pair<std::shared_ptr<ClientDsp>, int>> toWarn;
         int waiters = 0, listeners = 0;
@@ -21633,13 +21647,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const std::string addr = specOpen ? c->spec->peerAddress()
                                                   : c->audio->peerAddress();
                 if (addr.empty() || isLoopback(addr)) continue;
-                touchTurnLocked(turnKeyLocked(specOpen ? c->spec.get() : c->audio.get(), addr), now);   // ★ still here
+                const std::string tk = turnKeyLocked(specOpen ? c->spec.get() : c->audio.get(), addr);
+                touchTurnLocked(tk, now);   // ★ still here
                 const double left = (double)limitMin * 60.0 - (now - c->since);
                 if (left > 0) {
                     const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
                     if (stage > 0 && !(c->warned & stage)) { c->warned |= stage; toWarn.push_back({c, (int)(left + 0.5)}); }
                 } else {
-                    over.push_back({c, c->since});
+                    over.push_back({c, c->since, vibeturn::keptUntilWanted(soft, turnSpentLocked(tk, now))});
                 }
             }
         }
@@ -21655,8 +21670,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
         // ★★★ THE LONGEST-CONNECTED OVER-TIME LISTENER IS THE ONE WHO GOES.
         std::sort(over.begin(), over.end(), [](const Cand& a, const Cand& b){ return a.since < b.since; });
+        // ★★ A HARD limit still ends a FIRST turn on the dot, whoever else is on borrowed time: the
+        //    longest-connected listener NOT kept goes now, with no notice, exactly as before.
+        auto hardIt = std::find_if(over.begin(), over.end(), [](const Cand& o){ return !o.kept; });
+        const bool viaSoft = (hardIt == over.end());   // everybody over time is kept until wanted
 
-        if (soft) {
+        if (viaSoft) {
             // ★★ Nobody is moved while there is room. A soft limit on a shared radio is a promise
             //    about CONTENTION, and an empty slot means there is none.
             const bool full = maxUsers > 0 && listeners >= maxUsers;
@@ -21668,11 +21687,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
 
-        auto& victim = over.front().c;
+        auto& victim = viaSoft ? over.front().c : hardIt->c;
         double due = 0;
         { std::lock_guard<std::mutex> lk(clientMtx); due = victim->handoverAt; }
 
-        if (soft) {
+        if (viaSoft) {
             if (due <= 0) {
                 { std::lock_guard<std::mutex> lk(clientMtx); victim->handoverAt = now + kHandoverNoticeSec; }
                 const std::string m = "{\"type\":\"session_handover\",\"secs\":"
@@ -21697,15 +21716,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *      "The app has been closed for a good 10 mins or so and as soon as I connected to the
          *      Pi again it said my time was over." The rule is a good one; it was invisible.
          *  ★ `fresh` is the turn-reset window in seconds. Absent on an older server, and a client
-         *    that does not understand it simply says what it always said. */
-        const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
-                            + std::to_string(kSessionCooldownSec)
-                            + ",\"fresh\":" + std::to_string(limitMin * 60) + "}";
+         *    that does not understand it simply says what it always said.
+         *  ★★ B10: `fresh` is now the turn BREAK (kTurnBreakS, 15 min since 2026-09-19), not the limit,
+         *     and `borrow` says a free radio takes them back after the cooldown — sessionExpiredJson(). */
+        const std::string m = sessionExpiredJson();
         std::shared_ptr<net::Socket> sp, au; std::string addr;
         { std::lock_guard<std::mutex> lk(clientMtx);
           sp = victim->spec; au = victim->audio; victim->handoverAt = 0; victim->since = 0;
           addr = sp && sp->isOpen() ? sp->peerAddress() : (au ? au->peerAddress() : std::string());
-          if (!addr.empty()) cooldownUntil[addr] = now + kSessionCooldownSec; }
+          if (!addr.empty()) {
+              cooldownUntil[addr] = now + kSessionCooldownSec;
+              // ★ back later = borrowed time (B10) — see vibe_session_turns.h
+              turnBook.markSpent(turnKeyLocked(sp && sp->isOpen() ? sp.get() : au.get(), addr), now);
+          } }
         LOGI("shared limit reached (%d min) — ending %s", limitMin, addr.c_str());
         // ★ Tell them, THEN drain — the same fault fixed in three other places today.
         if (sp && sp->isOpen()) { sendWs(sp, 0x1, (const uint8_t*)m.data(), m.size()); outboxClose(sp); }
@@ -21728,7 +21751,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double now = Impl::nowSecs();
         const int maxUsers = g_vsMaxUsers.load();
 
-        struct Cand { std::shared_ptr<net::Socket> sk; double since; std::string session; };
+        struct Cand { std::shared_ptr<net::Socket> sk; double since; std::string session; bool kept; };
         std::vector<Cand> over;
         std::vector<std::pair<std::shared_ptr<net::Socket>, int>> toWarn;
         int waiters = 0, listeners = 0;
@@ -21748,7 +21771,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   if (adminSocks.count(sk.get())) continue; }     // the owner is exempt
                 auto si = sockSince.find(sk.get());
                 if (si == sockSince.end() || si->second <= 0) continue;
-                touchTurnLocked(turnKeyLocked(sk.get(), addr), now);   // still here — the turn does not lapse
+                const std::string tk = turnKeyLocked(sk.get(), addr);
+                touchTurnLocked(tk, now);   // still here — the turn does not lapse
                 const double left = (double)limitMin * 60.0 - (now - si->second);
                 if (left > 0) {
                     const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
@@ -21757,7 +21781,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else {
                     std::string sess;
                     { auto it = sockSession.find(sk.get()); if (it != sockSession.end()) sess = it->second; }
-                    over.push_back({sk, si->second, sess});
+                    over.push_back({sk, si->second, sess, vibeturn::keptUntilWanted(soft, turnSpentLocked(tk, now))});
                 }
             }
         }
@@ -21769,8 +21793,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (over.empty()) return;
         std::sort(over.begin(), over.end(), [](const Cand& a, const Cand& b){ return a.since < b.since; });
+        // ★★ Same split as the per-client pass: a HARD first turn ends now; borrowed time is soft (B10).
+        auto hardIt = std::find_if(over.begin(), over.end(), [](const Cand& o){ return !o.kept; });
+        const bool viaSoft = (hardIt == over.end());
 
-        if (soft) {
+        if (viaSoft) {
             const bool full = maxUsers > 0 && listeners >= maxUsers;
             if (!full || waiters <= 0) {
                 std::lock_guard<std::mutex> lk(clientMtx);
@@ -21779,11 +21806,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
 
-        auto& victim = over.front();
+        auto& victim = viaSoft ? over.front() : *hardIt;
         double due = 0;
         { std::lock_guard<std::mutex> lk(clientMtx);
           auto it = sockHandover.find(victim.sk.get()); if (it != sockHandover.end()) due = it->second; }
-        if (soft) {
+        if (viaSoft) {
             if (due <= 0) {
                 { std::lock_guard<std::mutex> lk(clientMtx); sockHandover[victim.sk.get()] = now + kHandoverNoticeSec; }
                 const std::string m = "{\"type\":\"session_handover\",\"secs\":"
@@ -21797,15 +21824,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
 
         // ── End this listener's session — same message, same windows as the per-client pass.
-        const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
-                            + std::to_string(kSessionCooldownSec)
-                            + ",\"fresh\":" + std::to_string(limitMin * 60) + "}";
+        const std::string m = sessionExpiredJson();
         const std::string addr = victim.sk->peerAddress();
         std::vector<std::shared_ptr<net::Socket>> auds;
         { std::lock_guard<std::mutex> lk(clientMtx);
           sockHandover.erase(victim.sk.get());
           sockSince.erase(victim.sk.get());              // ★ not a candidate again while it drains
-          if (!addr.empty()) cooldownUntil[addr] = now + kSessionCooldownSec;
+          if (!addr.empty()) {
+              cooldownUntil[addr] = now + kSessionCooldownSec;
+              turnBook.markSpent(turnKeyLocked(victim.sk.get(), addr), now);   // ★ borrowed time later (B10)
+          }
           // ★ The same session's audio goes with it, as `au` does above.
           auto same = [&](const std::shared_ptr<net::Socket>& a) {
               if (!a || victim.session.empty()) return false;
@@ -21975,33 +22003,43 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     cleared — the next arrival starts a fresh 30 seconds. An earlier draft of this
         //     deliberately refused to cancel, on the grounds that taking back a warning makes it
         //     a lie; that reasoning was wrong, because the alternative is worse than a reprieve.
-        if (g_vsSessionLimitSoft.load() && left <= 0) {
+        // ★★★ AND BORROWED TIME IS SOFT ON EVERY SERVER (B10). A listener whose turn the limit has
+        //     ALREADY ended, back after the cooldown to a radio nobody else wanted, is kept until
+        //     somebody does — even where the owner chose hard. Ending them on the spot (what this did)
+        //     refused a FREE radio to nobody's benefit, re-armed the cooldown, and broke the TIME UP
+        //     card's "try again in about 2 minutes". See vibe_session_turns.h.
+        bool borrowed = false;
+        { std::lock_guard<std::mutex> lk(clientMtx); borrowed = turnSpentLocked(occupantKeyLocked(), Impl::nowSecs()); }
+        if (left <= 0 && vibeturn::keptUntilWanted(g_vsSessionLimitSoft.load(), borrowed)) {
             double handoverAt = 0; int waiters = 0;
             { std::lock_guard<std::mutex> lk(clientMtx);
               handoverAt = g_vsHandoverAt;
               waiters = distinctWaitingLocked(); }
-            if (handoverAt <= 0) {
-                if (waiters <= 0) return;                // borrowed time, and nobody is waiting
+            switch (vibeturn::overLimit(true, waiters > 0, handoverAt, Impl::nowSecs())) {
+            case vibeturn::OverAct::Keep: return;        // borrowed time, and nobody is waiting
+            case vibeturn::OverAct::StartNotice: {
                 const double at = Impl::nowSecs() + kHandoverNoticeSec;
                 { std::lock_guard<std::mutex> lk(clientMtx);
                   if (g_vsHandoverAt > 0) return;        // another thread started it first
                   g_vsHandoverAt = at; }
-                LOGI("soft limit — [%s] is over time and %d waiting: %ds notice",
-                     addr.c_str(), waiters, kHandoverNoticeSec);
+                LOGI("%s limit — [%s] is over time and %d waiting: %ds notice",
+                     borrowed ? "borrowed time" : "soft", addr.c_str(), waiters, kHandoverNoticeSec);
                 const std::string m = "{\"type\":\"session_handover\",\"secs\":"
                                     + std::to_string(kHandoverNoticeSec) + "}";
                 if (spec && spec->isOpen()) sendWs(spec, 0x1, (const uint8_t*)m.data(), m.size());
                 else if (aud && aud->isOpen()) sendWs(aud, 0x1, (const uint8_t*)m.data(), m.size());
                 return;
             }
-            if (Impl::nowSecs() < handoverAt) return;    // notice still running
-            if (waiters <= 0) {
+            case vibeturn::OverAct::Wait: return;        // notice still running
+            case vibeturn::OverAct::Withdraw: {
                 // ★ The waiter left while we were counting. Do NOT evict for nobody.
                 { std::lock_guard<std::mutex> lk(clientMtx); g_vsHandoverAt = 0; }
                 LOGI("soft limit — the waiter left; [%s] keeps the radio", addr.c_str());
                 const char* kStay = "{\"type\":\"session_handover_off\"}";
                 if (spec && spec->isOpen()) sendWs(spec, 0x1, (const uint8_t*)kStay, strlen(kStay));
                 return;
+            }
+            case vibeturn::OverAct::End: break;
             }
             // Notice served and somebody is still waiting — end it exactly as a hard limit would.
         }
@@ -22029,13 +22067,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (occupantSession != sess || occupantSince != since) return;   // already handled
           cooldownUntil[addr] = Impl::nowSecs() + kSessionCooldownSec;
+          turnBook.markSpent(occupantKeyLocked(), Impl::nowSecs());   // ★ back later = borrowed time (B10)
           occupantSession.clear(); occupantSince = 0; occupantWarned = 0; occupantAddr.clear();
           g_vsHandoverAt = 0; }
 
         LOGI("session limit reached (%d min) — ending %s", limitMin, addr.c_str());
-        const std::string m = "{\"type\":\"session_expired\",\"cooldown\":"
-                            + std::to_string(kSessionCooldownSec)
-                            + ",\"fresh\":" + std::to_string(g_vsSessionLimitMin.load() * 60) + "}";
+        const std::string m = sessionExpiredJson();
         // ★ TELL THEM FIRST, THEN CLOSE. The message is what stops the client treating this as
         // a dropped link and retry-storming a server that is deliberately turning it away.
         // ★★★ outboxClose, not closeAfterFlush — the third site with this fault, and the one that
@@ -23888,7 +23925,11 @@ void LocalSdrShim::setSessionLimitSoft(bool soft) {
 
 bool LocalSdrShim::claimableNow() const {
     const int limitMin = g_vsSessionLimitMin.load();
-    if (!p || limitMin <= 0 || !g_vsSessionLimitSoft.load()) return false;
+    if (!p || limitMin <= 0) return false;
+    /* ★★ SOFT, OR BORROWED (B10). On a HARD server a listener on borrowed time — back after the limit
+     *    already ended their turn — is kept only until somebody wants the radio, exactly like a soft
+     *    one past their guarantee. So the card must say FREE for the same reason it does there. */
+    const bool soft = g_vsSessionLimitSoft.load();
     const double now = Impl::nowSecs();
     // ★★★ A SHARED RADIO IS CLAIMABLE WHEN IT IS FULL AND SOMEBODY IN IT IS OVER THEIR GUARANTEE.
     //     Not full = there is a free slot and the card already says so; nobody over time = the
@@ -23907,7 +23948,9 @@ bool LocalSdrShim::claimableNow() const {
             if (c->adminOk.load()) continue;
             const std::string a = specOpen ? c->spec->peerAddress() : c->audio->peerAddress();
             if (a.empty() || isLoopback(a)) continue;
-            if ((now - c->since) >= (double)limitMin * 60.0) anyOver = true;
+            if ((now - c->since) >= (double)limitMin * 60.0
+                && (soft || p->turnSpentLocked(p->turnKeyLocked(specOpen ? c->spec.get() : c->audio.get(), a), now)))
+                anyOver = true;
         }
         return anyOver && live >= g_vsMaxUsers.load();
     }
@@ -23918,7 +23961,8 @@ bool LocalSdrShim::claimableNow() const {
     //   not be told the radio is theirs for the taking.
     if (p->occupantAddr.empty() || isLoopback(p->occupantAddr)) return false;
     if (p->adminOk.load()) return false;
-    return (Impl::nowSecs() - p->occupantSince) >= (double)limitMin * 60.0;
+    if (!soft && !p->turnSpentLocked(p->occupantKeyLocked(), now)) return false;
+    return (now - p->occupantSince) >= (double)limitMin * 60.0;
 }
 
 void LocalSdrShim::setAntennaIcon(const std::string& key) {
