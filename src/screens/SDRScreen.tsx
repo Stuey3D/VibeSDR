@@ -146,6 +146,7 @@ import { IS_TV } from '../utils/tv';
 import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig } from '../utils/airband';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
+import { vtsHex } from '../services/vtsLine';
 import { resolveStationLogo } from '../services/stationLogoCache';
 import { noteAudioPath, noteAudioEvent } from '../services/audioPathLog';
 import { fetchFrontDoor, radioBaseUrl, describeRadio,
@@ -2177,7 +2178,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
   //   Advanced RDS instrument, which must show what is on air rather than what we display.
-  const [liveStation, setLiveStation] = useState<{ name?: string; psRaw?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; psRaw?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number; sid?: string }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   /* ★★★ THE RDS NAME GOES THROUGH A STABILISER BEFORE ANYTHING SEES IT (Stuart, 2026-09-29: "the
@@ -4767,7 +4768,10 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  A DAB service is identified by its LABEL, not by an RDS PI — so state the fields
              *  outright and leave the RDS ones empty. */
             // ★ The DAB state report repeats; an unchanged service keeps the same object (renderChurn).
-            const nextLive = { name: svcName, text: playing?.dls || st.dls || undefined, badge: 'DAB' };
+            // ★ The SERVICE ID rides as `sid`, never as `pi` (see above): it is the DAB service's own
+            //   identity for the VTS line ("SId: C6D6 / …"), and nothing keys a logo lookup on it.
+            const nextLive = { name: svcName, text: playing?.dls || st.dls || undefined, badge: 'DAB',
+                               sid: vtsHex(playing?.sid) || undefined };
             setLiveStation((cur) => keepIfSameStation(cur, nextLive));
           }
           // ★ FOLLOW THE SERVER'S BLOCK, not our own request. It may have landed elsewhere (a
@@ -8599,7 +8603,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     // all until the name landed, which reads as "no RDS here" rather than "no name yet".
     // ★ The text-only case still carries the RDS badge, so it is never mistaken for a bookmark.
     const textOnly = !name && !!liveStation.text;
-    if (!name && !textOnly) {
+    /* ★★ THE IDENTITY RIDES IN THE LINE (2026-10-01): "PI: C363 / Name: RadioText", composed in
+     *   VTSBar from vtsLine.ts — the same file the web client uses. RDS gives a PI, DAB its service
+     *   ID; a PI ALONE is a complete identification (the web client has always shown it while the
+     *   name assembles), so it holds the bar on its own. ★ Only for live RDS/DAB: a DMR caller has
+     *   neither, and an OWRX DAB label has no PI to give. */
+    const isDab = liveBadgeRef.current === 'DAB' || dabOn;
+    const vtsId = isDab ? (liveStation.sid ?? '') : liveBadgeRef.current === 'RDS' ? (liveStation.pi ?? '') : '';
+    if (!name && !textOnly && !vtsId) {
       // Live data cleared (tuned away / mode change / voice idle) — dismiss the
       // held popup and re-evaluate bookmarks for the current spot, so a held RDS
       // name / DMR caller falls back to the channel's bookmark instead of nothing.
@@ -8615,9 +8626,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (name) { setVtsMenuName(name); setVtsMenuFreq(status.frequency); }
     // RDS: append the scrolling radiotext after the station name (the VTS bar
     // marquees overflow). e.g. "BBC Nhtn — BBC Radio Northampton …We love …".
-    const display = name
-      ? (liveStation.text ? `${name} — ${liveStation.text}` : name)
-      : (liveStation.text ?? '');
+    // ★ The parts travel SEPARATELY (name / rt / id) so a VFD can fold each for its own glass.
+    const display = name ?? '';
+    const rt = liveStation.text || undefined;
     // WFM broadcast FM: show the RDS country flag + station logo (from PI/ECC).
     // ★★ AND NOT IN DAB. `status.mode` is not necessarily off 'wfm' while a multiplex is being
     //    decoded — the mode and the DAB button are two different things (see dabBoxOpen) — so the
@@ -8626,7 +8637,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const wfm = status.mode === 'wfm' && !dabOn;
     const flag = wfm && validIso(liveStation.countryIso) ? isoToFlag(liveStation.countryIso) : undefined;
     const logoUrl = wfm ? (liveLogo ?? undefined) : undefined;
-    const composite = `${display}|${flag ?? ''}|${logoUrl ?? ''}`;
+    const composite = `${vtsId}|${display}|${rt ?? ''}|${flag ?? ''}|${logoUrl ?? ''}`;
     // ★ Deferred, not dropped — see vtsNoticeUntil. vtsLastStation is deliberately NOT updated
     //   here, so the next RDS tick after the notice ends still counts as a change and the station
     //   name appears then.
@@ -8636,10 +8647,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       vtsKey.current++;
       // Live server data (RDS/DMR/DAB) holds on screen until it changes/clears
       // — only the static bookmark/band notifs time out. Badge flags the source.
-      setVtsNotif({ key: vtsKey.current, name: display, kind: 'station-on', hold: true, badge: liveBadgeRef.current, flag, logoUrl });
+      setVtsNotif({ key: vtsKey.current, name: display, rt, id: vtsId || undefined, idLabel: isDab ? 'SId' : 'PI',
+                    kind: 'station-on', hold: true, badge: liveBadgeRef.current ?? (vtsId ? 'RDS' : undefined), flag, logoUrl });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveLogo, status.mode, dabOn]);
+  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveStation.pi, liveStation.sid, liveLogo, status.mode, dabOn]);
 
   // ── Station logo (radio-browser favicon) ────────────────────────────────────
   // NOT gated on WFM any more. The gate existed because a station name only ever

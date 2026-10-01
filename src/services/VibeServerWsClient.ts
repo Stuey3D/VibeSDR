@@ -2095,7 +2095,9 @@ export abstract class VibeServerWsClient {
         text: rt || undefined,
         // ★ Badge on ANY decoded RDS, not just a name — a text-only frame is still RDS, and
         // without the badge it would show up unlabelled, indistinguishable from a bookmark.
-        badge: (ps || rt) ? 'RDS' : undefined,
+        // ★ And on a PI alone (2026-10-01): it came off the subcarrier exactly as a name does, and the
+        //   VTS now shows "PI: C363" while the name is still assembling — as the web client always has.
+        badge: (ps || rt || pi) ? 'RDS' : undefined,
         stereo,
         pi,
         // ECC + PI when the station sends an ECC; otherwise the PI's country nibble
