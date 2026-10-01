@@ -19,6 +19,7 @@ import {
   cellWindow, cellWindowLeft, flagToIso, segGhost, steppedOffset, toSegCells, toSegRun, toUpperDisplay,
   vfdStripText, VFD_STEP_MS,
 } from '../constants/displayText';
+import { vtsIdText, vtsJoin, vtsLineSegments, vtsStationText, type VtsIdLabel } from '../services/vtsLine';
 
 /* ★ The RDS mark is the vector mark (RdsMark, §7.1) in the strip's own colour. It replaced the fixed
  *  black-on-white `assets/rds-logo.png`, which a neon or VFD strip cannot carry. Never "ADVANCED". */
@@ -38,6 +39,12 @@ const SERVER_LOGOS: Record<string, any> = {
 export interface VtsNotifData {
   key:        number;   // bump to re-trigger even with identical text
   name:       string;
+  /** ★ LIVE station line (2026-10-01): the message (RDS RadioText / DAB DLS) and the identity (RDS PI /
+   *  DAB SId, hex), kept APART from `name` so the bar composes "PI: C363 / Name: RadioText" itself —
+   *  vtsLine.ts, the same file the web client uses — and a VFD can fold each part for its glass. */
+  rt?:        string;
+  id?:        string;
+  idLabel?:   VtsIdLabel;
   secondary?: string;   // overlap band names (band notifs only)
   offset?:    string;   // "-1.2kHz" distance to the station
   tuneDir?:   'left' | 'right';  // which way to tune to reach it
@@ -109,8 +116,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
      *  leave the opacity alone. The scroll restarts only if the TEXT changed (the slide effect is
      *  keyed on it). Timed notifs (bookmark / band / notice) still make their entrance. */
     const inPlace = !!notif.hold && !!shownRef.current?.hold && visibleRef.current;
-    const textChanged = shownRef.current?.name !== notif.name
-                     || shownRef.current?.secondary !== notif.secondary;
+    const textChanged = !shownRef.current || lineKey(shownRef.current) !== lineKey(notif);
     setShown(notif);
     shownRef.current = notif;
     if (!inPlace) {
@@ -164,7 +170,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   // ★ A held (live) notif restarts its scroll only when its TEXT changes — a new key carrying the
   //   same words (a logo arriving, a flag) must not throw the reader back to the start.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shown?.hold ? `${shown.name}|${shown.secondary ?? ''}` : shown?.key, areaW, textW]);
+  }, [shown?.hold ? lineKey(shown) : shown?.key, areaW, textW]);
 
   if (!shown) return null;
 
@@ -184,6 +190,8 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   //   the sans on seg; Doto keeps the unit's case on dot.
   const offsetFont = COL.style === 'seg' ? FONT_HYPER : COL.font;
   const offsetText = COL.style === 'dot' ? toUpperDisplay(shown.offset ?? '') : shown.offset;
+  // ★ The scrolling line as tagged runs — the identity drawn in the sub colour, the rest as the name.
+  const runs = vtsLineSegments({ id: shown.id, idLabel: shown.idLabel, name: shown.name, text: shown.rt });
 
   return (
     // ★★ TWO VIEWS, NOT ONE, PURELY SO THE BAR CAN BE CAPPED AND CENTRED. The outer one does the
@@ -233,9 +241,9 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       {!!shown.offset && tuneLeft && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
       {vfd ? (
         <VfdStrip style={COL.style as 'dot' | 'seg'} rgb={COL.rgb} core={COL.core} glow={COL.glow}
-          text={vfdStripText(shown.name, shown.secondary, COL.style as 'dot' | 'seg', freqLabel)}
+          text={vfdLineText(shown, COL.style as 'dot' | 'seg', freqLabel)}
           loop={!!shown.hold}
-          restartKey={shown.hold ? `${shown.name}|${shown.secondary ?? ''}` : String(shown.key)} />
+          restartKey={shown.hold ? lineKey(shown) : String(shown.key)} />
       ) : (<>
       {/* Horizontal ScrollView = unconstrained content width, so the text
           measures at its TRUE size (a plain View clamps Text to the parent
@@ -252,7 +260,11 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       >
         <Animated.View style={overflow ? { transform: [{ translateX: slide }] } : undefined}>
           <Text style={[styles.name, { color: nameCol, fontFamily: COL.font }]} numberOfLines={1}>
-            {shown.name}
+            {runs.map((r, i) => (
+              <Text key={i} style={r.kind === 'id' ? [styles.idRun, { color: COL.sub }] : r.kind === 'sep' ? { color: COL.sub } : undefined}>
+                {r.s}
+              </Text>
+            ))}
             {shown.secondary ? <Text style={[styles.secondary, { color: COL.sub }]}>{'  │  ' + shown.secondary}</Text> : null}
           </Text>
         </Animated.View>
@@ -263,6 +275,28 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     </View>
     </Animated.View>
   );
+}
+
+/** What a held bar's scroll restarts on: the WORDS (identity, name, message, sub-line) — never a
+ *  logo or flag landing under the same words. */
+function lineKey(n: VtsNotifData): string {
+  return `${n.id ?? ''}|${n.name}|${n.rt ?? ''}|${n.secondary ?? ''}`;
+}
+
+/**
+ * ★★ The station line for a VFD. The identity is folded APART from the station: a Cyrillic or CJK
+ * name falls back to the frequency (vfdStripText), and folding "PI C363" in with it would let seven
+ * Latin characters tip a mostly-unprintable name over foldIsUsable's threshold — the glass would
+ * then show "PI C363 / !!!!!" instead of the frequency. On 14-segment the label has no colon (DSEG
+ * has none: ':' becomes '-'), so it reads "PI C363", as a segment radio prints it.
+ */
+function vfdLineText(n: VtsNotifData, display: 'dot' | 'seg', freqLabel: string): string {
+  const seg = display === 'seg';
+  const idText = vtsIdText(n.id, n.idLabel ?? 'PI', seg);
+  const station = vtsStationText(n.name, n.rt, seg);
+  if (!idText) return vfdStripText(station, n.secondary, display, freqLabel);
+  const body = station || n.secondary ? vfdStripText(station, n.secondary, display, freqLabel) : '';
+  return vtsJoin(display === 'dot' ? toUpperDisplay(idText) : idText, body);
 }
 
 // ── The VFD strip (dot / seg) ────────────────────────────────────────────────
@@ -494,5 +528,10 @@ const styles = StyleSheet.create({
   },
   secondary: {
     fontSize: 14,
+  },
+  // The PI / SId: a touch smaller, so the station's NAME is still what the eye lands on.
+  idRun: {
+    fontSize: 13,
+    letterSpacing: 0.3,
   },
 });

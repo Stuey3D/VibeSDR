@@ -35,7 +35,7 @@ eq('identical RDS keeps the PREVIOUS object', keepIfSameStation(rds, again) === 
 
 const fields: Array<[keyof LiveStationLike, unknown]> = [
   ['name', 'BBC R3'], ['psRaw', 'BBC  R2'], ['text', 'Next: news'], ['badge', undefined],
-  ['countryIso', 'ie'], ['pi', 'C203'], ['ecc', 0xE2],
+  ['countryIso', 'ie'], ['pi', 'C203'], ['ecc', 0xE2], ['sid', 'C6D6'],
 ];
 for (const [k, v] of fields) {
   const changed = { ...rds, [k]: v } as LiveStationLike;

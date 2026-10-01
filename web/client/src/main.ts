@@ -85,6 +85,10 @@ import {
  *  WHEN A MAP OPENS (openSpotsMap): ~98 KB that most listeners never use, so it is its own file and
  *  the page does not carry it (build-web.mjs splits every import() into one). */
 import { probeMapGL, type MapGLKit } from './mapgl';
+// ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
+import {
+  vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
+} from '../../../src/services/vtsLine';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -3625,6 +3629,85 @@ function checkBandCrossing(hz: number) {
   //   someone who had just chosen it.
 }
 
+/** The PI with the link's measurements, for a hover — never on the bar itself (Stuart, 2026-07-26). */
+function piDiagTitle(): string {
+  const piTxt = piHex(rdsPi);
+  if (!piTxt) return '';
+  const diag = [
+    rdsBer >= 0  ? `block error rate ${rdsBer}% (before correction, last 12 groups)` : '',
+    rdsSig > -90 ? `subcarrier ${rdsSig.toFixed(0)} dB vs pilot` : '',
+  ].filter(Boolean).join(' · ');
+  return `PI ${piTxt}${diag ? ' — ' + diag : ''}`;
+}
+
+/** The narrowest the scrolling line (or a bookmark name) may be squeezed to before a mark gives way:
+ *  about 25 characters — enough to read a few words at a time; the marquee does the rest. */
+const VTS_LINE_MIN_PX = 200;
+/** Room to spare before a dropped mark comes back — see vtsFit's hysteresis. */
+const VTS_FIT_HYST_PX = 12;
+const VTS_DROP_EL: Record<VtsDroppable, string> = { band: 'vtsBand', rds: 'vtsRds', flag: 'vtsFlag' };
+let vtsFitPrev: number | undefined;
+let vtsFitSig = '';
+
+/**
+ * ★★★ WHAT THE PILL DROPS TO FIT — MEASURED, IN ORDER, NEVER SQUEEZED (2026-10-01).
+ *   Stuart: on a phone "the DAB/DAB+ (Band III) is dropped, the RDS logo, then the flag". The
+ *   decision is vtsFit() (shared, tested); this only MEASURES: the pill's content width, each mark's
+ *   natural width with nothing dropped, and the line at no more than VTS_LINE_MIN_PX.
+ * ★★ ONLY WHEN SOMETHING THAT COSTS WIDTH HAS CHANGED. updateVts() runs on every spectrum frame and
+ *    measuring forces a layout; the signature is every input that can move the answer — the window,
+ *    the mode, which marks are up and what the band and flag say — so a steady station measures once.
+ *    ★ A logo that finishes loading AFTER the render changes the signature, and so refits next frame.
+ */
+function fitVtsDrops() {
+  const vts = $('vts');
+  if (!vts.classList.contains('show')) return;
+  const sig = [
+    window.innerWidth, vts.classList.contains('line'), vts.classList.contains('rt'),
+    $('vtsBand').textContent, $('vtsFlag').textContent, $('vtsName').textContent,
+    $('vtsRtInner').dataset.rt ?? '',
+    $('vtsRds').classList.contains('show'), $('vtsLogo').classList.contains('show'),
+    $('vtsSrc').classList.contains('show'), $('vtsPi').classList.contains('show'),
+    $('vtsRds').style.display,
+  ].join('|');
+  if (sig === vtsFitSig) return;
+  vtsFitSig = sig;
+
+  // Measure with NOTHING dropped — a dropped mark has no width to measure.
+  for (const k of VTS_DROP_ORDER) vts.classList.remove(`drop-${k}`);
+  const cs = getComputedStyle(vts);
+  const gap = parseFloat(cs.columnGap) || 0;
+  const available = vts.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  const widths: Partial<Record<VtsDroppable, number>> = {};
+  let fixed = 0, nFixed = 0;
+  for (const el of Array.from(vts.children) as HTMLElement[]) {
+    if (getComputedStyle(el).display === 'none') continue;
+    const drop = VTS_DROP_ORDER.find(k => VTS_DROP_EL[k] === el.id);
+    if (drop) { widths[drop] = el.getBoundingClientRect().width; continue; }
+    // ★ The SOURCE mark (DAB / EiBi / bookmark glyph) sits in the RDS mark's slot — it is shown only
+    //   when there is no RDS — so it goes at the RDS step, with the same reasoning.
+    if (el.id === 'vtsSrc') { widths.rds = (widths.rds ?? 0) + el.getBoundingClientRect().width; continue; }
+    let w = el.getBoundingClientRect().width;
+    if (el.id === 'vtsRt') {
+      // The elastic part counts at its natural width up to the minimum — a short line ("PI: C363")
+      // needs no more than itself, and a long one only needs room to start scrolling.
+      const inner = $('vtsRtInner');
+      w = Math.min(VTS_LINE_MIN_PX, measureRt(inner, inner.dataset.html ?? '', true));
+    } else if (el.id === 'vtsName') {
+      const span = el.firstElementChild as HTMLElement | null;
+      w = Math.min(VTS_LINE_MIN_PX, span ? span.scrollWidth : el.scrollWidth);
+    }
+    fixed += w;
+    nFixed++;
+  }
+  fixed += gap * Math.max(0, nFixed - 1);
+  const fit = vtsFit({ available, fixed, gap, widths }, { prevStep: vtsFitPrev, hysteresis: VTS_FIT_HYST_PX });
+  vtsFitPrev = fit.step;
+  for (const k of fit.hidden) vts.classList.add(`drop-${k}`);
+}
+// A rotate or a window resize changes the answer even when nothing on the pill has.
+window.addEventListener('resize', () => { vtsFitSig = ''; });
+
 function updateVts() {
   expireRdsIfRetuned();
   syncDecIdentity();   // ★ the decoder header follows the CURRENT station — see syncDecIdentity
@@ -3654,10 +3737,11 @@ function updateVts() {
   /* ★ IN DAB THE BAR IS THE PLAYING SERVICE. Left to the RDS variables it kept showing the last
    *  FM station ("C363 Heart" under a DAB ensemble, Stuart's screenshot, 2026-09-07). */
   let dabRt = '';
+  let dabSvcSid = 0;
   if (dabOn && dabState && dabState.sid) {
     const sv = dabState.services.find(x => x.sid === dabState!.sid);
     if (sv) {
-      name = sv.label; src = 'DAB';
+      name = sv.label; src = 'DAB'; dabSvcSid = sv.sid;
       const ecc = sv.ecc ?? dabState.ecc ?? -1;
       /* ★ Same order as the station list: RadioDNS, then the multiplex's own carousel, then the
        *  picture the station transmits. The bar used to show a blank tile for a station whose
@@ -3736,6 +3820,10 @@ function updateVts() {
       ($(id) as HTMLElement).style.display = 'none';
     setClass(vts, 'show', true);
     setClass(vts, 'on', false);
+    // ★ An announcement is not the station line: the name slot carries it, the band slot its
+    //   sub-line, and the band slot still gives way first when the pill is narrow.
+    setClass(vts, 'line', false);
+    fitVtsDrops();
     return;
   }
   /* ★★★ RETIRE AN EXPIRED NOTICE HERE, not only on its timer. vtsHideTimer is shared with
@@ -3765,7 +3853,19 @@ function updateVts() {
 
   setText($('vtsName'), name);
   setText($('vtsBand'), band ? (band.bandLabel || band.name) : '');
-  applyVtsScroll(live || rdsPi > 0);
+  /* ★★★ LIVE DATA IS ONE LINE: "PI: C363 / Name: RadioText" in the ticker (see vtsLine.ts and the
+   *   #vts.line CSS). The identity is the PI for RDS and the SERVICE ID for DAB — and in DAB ONLY the
+   *   service's own: the RDS variables may still hold the LAST FM STATION's, and the PI chip read
+   *   rdsPi whatever was playing ("C363" beside a DAB service label, Stuart's screenshot,
+   *   2026-10-01). The same goes for the RDS mark — DAB is not RDS.
+   *   ★ A bookmark / EiBi guess is not live and keeps the old layout: a name that slides once. */
+  const inDab = !!dabSvcSid;
+  const lineMode = live || rdsPi > 0;
+  const lineParts: VtsLineParts = inDab
+    ? { id: vtsHex(dabSvcSid), idLabel: 'SId', name, text: dabRt }
+    : { id: vtsHex(rdsPi), idLabel: 'PI', name: rdsName, text: rdsName ? rdsText : '' };
+  setClass(vts, 'line', lineMode);
+  applyVtsScroll(lineMode);
   // ★★ Static content gets a life; live RDS does not. A PI-only identification counts as live —
   //   it is the transmitter telling us who it is, and it will keep arriving.
   if (!live && rdsPi <= 0) {
@@ -3789,19 +3889,33 @@ function updateVts() {
   // overflows — a short message shouldn't slide around for no reason.
   const rtEl = $('vtsRt');
   const rtInner = $('vtsRtInner');
-  const rt = dabRt || (rdsName ? rdsText : '');
-  const showRt = !!rt && rt !== name;
+  /* ★★ In line mode the ticker carries the WHOLE line (identity, name, message); otherwise — a
+   *   bookmark guess — it carries the RadioText alone, as before (and a guess has none). */
+  const rt = lineMode ? vtsLine(lineParts) : (dabRt || (rdsName ? rdsText : ''));
+  const showRt = lineMode ? !!rt : (!!rt && rt !== name);
+  const lineSegs = lineMode ? vtsLineSegments(lineParts) : [];
+  const rtHtml = lineMode
+    ? lineSegs.map(r => `<span class="vl-${r.kind}">${escapeHtml(r.s)}</span>`).join('')
+    : escapeHtml(rt);
   // ★ Compare against the RAW message on the dataset, not textContent — while a long message is
   //   circling the element holds TWO copies plus a separator, so textContent never equals `rt`
   //   and every render would look like a change (and refit, and restart the loop).
-  const rtChanged = rtInner.dataset.rt !== rt;
-  if (rtChanged) { rtInner.dataset.rt = rt; rtInner.textContent = rt; }
+  // ★ The MARKUP is the key, not the text: the same words in a different run (a PI-only line that
+  //   gains its name) must be redrawn even where the characters happen to agree.
+  const rtChanged = rtInner.dataset.html !== rtHtml;
+  if (rtChanged) {
+    rtInner.dataset.rt = rt; rtInner.dataset.html = rtHtml;
+    rtInner.innerHTML = rtHtml; rtInner.dataset.shown = rtHtml;
+  }
   rtEl.classList.toggle('show', showRt);
   // Pin the bar's width while RadioText is on show. Without this the bar is
   // content-sized under a max-width, so it simply GREW to fit each message — which
   // meant the text never overflowed, never scrolled, and the whole bar visibly
   // expanded and contracted on every RadioText update instead.
-  vts.classList.toggle('rt', showRt);
+  // ★ In line mode, pinned only once there is a MESSAGE — "PI: C363 / Heart" alone keeps the pill
+  //   content-sized, exactly as a bare station name always did.
+  vts.classList.toggle('rt', showRt && (!lineMode || lineSegs.some(r => r.kind === 'text')));
+  rtEl.title = lineMode && !inDab && rdsPi > 0 ? piDiagTitle() : '';
   // ★★★ ONLY REFIT WHEN THERE IS SOMETHING NEW TO FIT. This ran on EVERY VTS render — several
   //     times a second — and each call rewrote `--rtShift` and `animation-duration` under a
   //     RUNNING animation. A measurement that wobbles by a pixel (or dips below the scroll
@@ -3824,7 +3938,7 @@ function updateVts() {
 
   // RDS mark only when the data really IS RDS — not for a bookmark guess. A confirmed
   // PI counts: it came off the subcarrier exactly as a name does.
-  const haveRds = !!rdsName || rdsPi > 0;
+  const haveRds = !inDab && (!!rdsName || rdsPi > 0);
   const rdsEl = $('vtsRds');
   rdsEl.classList.toggle('show', haveRds);
   // ★ Block error rate on the badge, so RDS quality is a NUMBER rather than an opinion.
@@ -3850,13 +3964,11 @@ function updateVts() {
   // examining signal quality (Stuart, 2026-07-26).
   // ★ Kept in the TOOLTIP, so the measurement is never further away than a hover — it cost a
   // whole evening to be able to see these at all.
-  piEl.textContent = piTxt;
-  const diag = [
-    rdsBer >= 0  ? `block error rate ${rdsBer}% (before correction, last 12 groups)` : '',
-    rdsSig > -90 ? `subcarrier ${rdsSig.toFixed(0)} dB vs pilot` : '',
-  ].filter(Boolean).join(' · ');
-  piEl.title = `PI ${piTxt}${diag ? ' — ' + diag : ''}`;
-  piEl.classList.toggle('show', !!piTxt);
+  // ★ In line mode the chip is hidden by CSS (the PI is IN the line) and its tooltip moves to the
+  //   line — see piDiagTitle. In DAB it is never the RDS PI: that may be the last FM station's.
+  piEl.textContent = inDab ? '' : piTxt;
+  piEl.title = piDiagTitle();
+  piEl.classList.toggle('show', !inDab && !!piTxt);
   const srcEl = $('vtsSrc');
   // innerHTML, not textContent: the source mark is an inline SVG glyph now, and
   // textContent would print the markup as literal text.
@@ -3889,6 +4001,7 @@ function updateVts() {
 
   setClass(vts, 'show', true);
   vts.classList.add('on');   // if it's showing at all, we're on the station
+  fitVtsDrops();
   setDecBoxOffset();
   // The OS card shows the same station identity as this bar, so republish from the same place.
   // Cheap: updateMediaSession() early-returns unless the station/frequency/mode/art changed.
@@ -4045,18 +4158,21 @@ const RT_GAP = '\u00A0\u00A0\u00B7\u00A0\u00A0';
  *  pieces as it assembles, so "the text changed" fires repeatedly on what is really one message.
  *  With a separate ruler the live element is only ever written to, never reset. */
 let rtRuler: HTMLElement | null = null;
-function measureRt(inner: HTMLElement, text: string): number {
+/** Width of `content` set in the live text's font. `html` = the content is markup (the station
+ *  line's coloured runs, which the ruler must carry so their own sizes are measured too). */
+function measureRt(inner: HTMLElement, content: string, html = false): number {
   if (!rtRuler) {
     rtRuler = document.createElement('span');
     rtRuler.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;pointer-events:none;'
                           + 'white-space:pre;';
-    inner.parentElement?.appendChild(rtRuler);
   }
+  // ★ Inside the box, so the `#vtsRt .vl-*` rules reach the runs it carries.
+  if (rtRuler.parentElement !== inner.parentElement) inner.parentElement?.appendChild(rtRuler);
   // Same font as the live text, or the measurement means nothing.
   const cs = getComputedStyle(inner);
   rtRuler.style.font = cs.font;
   rtRuler.style.letterSpacing = cs.letterSpacing;
-  rtRuler.textContent = text;
+  if (html) rtRuler.innerHTML = content; else rtRuler.textContent = content;
   return rtRuler.offsetWidth;
 }
 
@@ -4066,19 +4182,23 @@ function fitRadioText(box: HTMLElement, inner: HTMLElement) {
   //     the very edge the fade mask softens. The message is doubled with a separator and
   //     translated by exactly ONE copy, so the final frame is identical to the first — the loop
   //     is seamless and every character passes through the middle of the pill.
-  const text = inner.dataset.rt ?? inner.textContent ?? '';
-  const one = measureRt(inner, text);
+  // ★★ MARKUP, not text, since the station line (2026-10-01): the runs are coloured spans, and the
+  //    ruler measures them as drawn. dataset.html is what the render wrote; dataset.shown is what
+  //    the element holds now (one copy, or two while circling).
+  const html = inner.dataset.html ?? escapeHtml(inner.dataset.rt ?? inner.textContent ?? '');
+  const one = measureRt(inner, html, true);
 
   if (one - box.clientWidth <= 4) {              // it fits — plain, static text
     inner.classList.remove('scroll');
     inner.style.removeProperty('--rtShift');
-    if (inner.textContent !== text) inner.textContent = text;
+    if (inner.dataset.shown !== html) { inner.innerHTML = html; inner.dataset.shown = html; }
     return;
   }
 
-  const shift = measureRt(inner, text + RT_GAP); // one copy + separator = one revolution
-  const doubled = text + RT_GAP + text;
-  if (inner.textContent !== doubled) inner.textContent = doubled;
+  const gapHtml = escapeHtml(RT_GAP);
+  const shift = measureRt(inner, html + gapHtml, true); // one copy + separator = one revolution
+  const doubled = html + gapHtml + html;
+  if (inner.dataset.shown !== doubled) { inner.innerHTML = doubled; inner.dataset.shown = doubled; }
   inner.style.setProperty('--rtShift', `${-shift}px`);
   // ★ ~42px/s — gentler than the 55 it replaced (Stuart). With a continuous loop a slower pace
   //   costs nothing, since nothing is missed waiting for a reset; the ceiling still guarantees a

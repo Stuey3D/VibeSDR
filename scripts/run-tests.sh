@@ -226,6 +226,11 @@ if node --no-warnings scripts/test_blindTuneGate.ts; then pass=$((pass+1)); else
 #    object so the radio screen does not re-render for it, any drawn change still gets through, and
 #    the controls-bar clock re-renders on the minute, not every second (power audit, 2026-10-01).
 if node --no-warnings scripts/test_renderChurn.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ THE VTS STATION LINE (vtsLine.ts), app AND web: "PI: C363 / Name: RadioText" with no dangling
+#    punctuation for a missing part, DAB's SId never called a PI, the coloured runs identical to the
+#    plain line, and the web pill dropping band → RDS mark → flag only as far as its measured widths
+#    demand (2026-10-01).
+if node --no-warnings scripts/test_vtsLine.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

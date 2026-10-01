@@ -2478,23 +2478,27 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      the rules below are what stop it having to bite. */
   overflow: hidden;
 }
-/* ★★★ ON A PHONE THE BAND LABEL GOES AND THE RADIOTEXT GETS THE ROOM. The fixed items (RDS mark,
-   flag, PI, station name, band) left the elastic one — the RadioText — with about ONE CHARACTER,
-   so the field carrying the actual message was the field being starved. The band name is not
-   lost: it is written across the top of the screen in the band bar, at all times, which the
-   station's message is not. ★ This is the one thing on the pill that IS duplicated elsewhere,
-   which is why it is the one thing that gives way. */
+/* ★★★ ON A PHONE THE MARKS GIVE WAY AND THE STATION LINE GETS THE ROOM. The fixed items used to
+   leave the elastic one — the line carrying the actual message — with about ONE CHARACTER.
+   ★★ NO BREAKPOINT DECIDES WHAT GOES any more (2026-10-01). It is MEASURED (fitVtsDrops in main.ts,
+      vtsFit in src/services/vtsLine.ts — the controls' "fits by dropping, measured, never squeezed"
+      rule): the band label first (it is also written across the top of the screen), then the RDS
+      mark, then the flag, each only when the measured widths say the line would be starved. This
+      query only tightens the pill's own padding and lets it use the phone's width. */
 @media (max-width: 620px) {
   #vts { max-width: 94vw; padding: 6px 12px; gap: 7px; }
-  #vtsBand { display: none; }
-  /* Enough room to read a few words at a time; the marquee (fitRadioText) does the rest. */
-  #vtsRt { min-width: 9em; }
 }
+#vts.drop-band #vtsBand, #vts.drop-rds #vtsRds, #vts.drop-rds #vtsSrc, #vts.drop-flag #vtsFlag { display: none !important; }
+/* An empty band label or flag must not cost a flex gap (and the band's divider) for nothing. */
+#vtsBand:empty, #vtsFlag:empty { display: none; }
 #vts.show { display: flex; }
 /* A STABLE width once there's RadioText to show. The bar is otherwise content-sized
    (max-width only), so it grew to fit every message: the text never overflowed, so it
    never scrolled, and the bar itself expanded and contracted on each update. */
 #vts.rt { width: min(82vw, 900px); }
+/* ★ After the rule above, or it loses: on a phone the pinned pill takes the phone's width (its
+   max-width there), not 82vw — 40 px of message the marks no longer have to give up. */
+@media (max-width: 620px) { #vts.rt { width: 94vw; } }
 #vts img { height: 16px; width: auto; border-radius: 3px; display: none; }
 #vts img.show { display: block; }
 #vtsRds { background: #fff; padding: 1px 3px; }
@@ -2549,6 +2553,19 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   will-change: transform;
 }
 #vtsRtInner.scroll { animation: rtScroll linear infinite; }
+/* ★★★ THE STATION LINE (live RDS / DAB) — "PI: C363 / BBC Radio6Music: A Tribe Called Quest…", ONE
+   marquee, as the app has always scrolled "Name: RadioText" as a whole (Stuart, 2026-10-01). The
+   separate PI chip and name section are hidden in this mode — the line carries both — and the
+   divider goes, because there is no longer anything to divide it from. #vtsName is hidden, NOT
+   emptied: updateMediaSession() reads it. The runs come from vtsLineSegments(), so the colours
+   cannot disagree with the punctuation. */
+#vts.line #vtsName, #vts.line #vtsPi { display: none; }
+#vts.line #vtsRt { border-left: 0; padding-left: 0; }
+#vts.line #vtsRtInner { color: var(--btn-text); font-size: 13px; }
+#vtsRt .vl-id { font-family: var(--mono, monospace); font-size: 11px; letter-spacing: 0.5px; opacity: 0.75; }
+#vtsRt .vl-sep { opacity: 0.6; }
+#vtsRt .vl-text { color: rgba(255,184,51,0.85); font-size: 12px; }
+#vts.on.line .vl-name { color: #33cc44; }
 /* ★★ NO DWELL AT EITHER END — the message CIRCLES now (fitRadioText doubles it and shifts by
    exactly one copy), so the last frame is pixel-identical to the first and the loop is seamless.
    A pause here would reintroduce the very stutter the doubling removes, and the old 8%/92% holds
