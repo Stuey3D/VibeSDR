@@ -106,11 +106,18 @@ function dur(sec: number): string {
 }
 function when(epoch: number): string {
   if (!epoch) return '—';
-  const d = new Date(epoch * 1000), now = Date.now() / 1000;
+  const d = new Date(epoch * 1000), today = new Date();
   const hhmm = d.toTimeString().slice(0, 5);
-  // Within the day, the clock time is what an owner correlates against ("that was when I was
-  // out"). Older than that and the date matters more than the minute.
-  return now - epoch < 86400 ? hhmm : `${d.toISOString().slice(5, 10)} ${hhmm}`;
+  // Today, the clock time is what an owner correlates against ("that was when I was out"). Any
+  // other day carries its date.
+  // ★★ TODAY = the same LOCAL CALENDAR DAY, not "the last 24 hours" (B10, Stuart's Pi 2 list): yesterday's
+  //   16:48 showed bare under today's 00:51 and read as later than 16:35. And the date is LOCAL like the
+  //   time — it was toISOString's UTC date, which could disagree with the local hh:mm around midnight.
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth()
+               && d.getDate() === today.getDate();
+  if (sameDay) return hhmm;
+  const mmdd = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${mmdd} ${hhmm}`;
 }
 /** ★★ A flag, or NOTHING. An unknown country must render as absence — never as a globe, a
  *  question mark or a placeholder flag. The lookup is honest about not knowing (private
