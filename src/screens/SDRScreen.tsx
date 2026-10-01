@@ -2843,18 +2843,22 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★ Falls back to the pair if the server is too old to mint a ticket: that still unlocks the
    *   sockets, which is the half that matters most.
    */
-  const mintAdminTicket = useCallback(async (challengeQ: string) => {
-    if (!challengeQ) return;
+  const mintAdminTicket = useCallback(async (challengeQ: string, base: string = baseUrl): Promise<boolean> => {
+    if (!challengeQ) return false;
     let cred = challengeQ;
     try {
-      const r = await fetch(`${baseUrl.replace(/\/+$/, '')}/vibeserver/admin-ticket?${challengeQ}`,
+      const r = await fetch(`${base.replace(/\/+$/, '')}/vibeserver/admin-ticket?${challengeQ}`,
                             { cache: 'no-store' });
       if (r.ok) {
         const t = (await r.json())?.ticket;
         if (t) cred = `vs_admin_ticket=${encodeURIComponent(String(t))}`;
       }
     } catch { /* keep the challenge pair */ }
+    // ★ A pair never overwrites a ticket we already hold — a failed renewal must not downgrade a
+    //   working credential to one the pages cannot read.
+    if (cred === challengeQ && /vs_admin_ticket=/.test(adminAuthQRef.current || '')) return false;
     setAdminAuthQ(cred);
+    return cred !== challengeQ;
   }, [baseUrl]);
 
   /**
@@ -2888,10 +2892,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (nonce && token) {
       (client.current as any)?.adminUnlock?.(decodeURIComponent(nonce), token);
     }
-    const doorQ = connectBase === baseUrl
-      ? radioQ
-      : await resolveVibeAdminAuth(baseUrl, pw).catch(() => '');
-    if (doorQ) await mintAdminTicket(doorQ);
+    /* ★★★ MINT WHERE THE NONCE WAS ISSUED (2026-10-01, the Lenovo). A ticket is good on every process
+     *     of the machine, but the CHALLENGE is only good at the process that issued it — and the door
+     *     hands an APP's bare /vibeserver/auth to the primary radio (main.cpp, the legacy-app rule)
+     *     while it answered /vibeserver/admin-ticket itself. So the door refused every ticket the
+     *     app asked for ("admin ticket refused" at the door, "admin unlock granted" at the radio, the
+     *     same second), the credential fell back to the nonce pair, and ADMIN opened a page that can
+     *     only read a ticket: the landing page, and from there the radio — while the app was on it.
+     *  ★ So the radio's own challenge mints at the radio first — it cannot be the wrong process —
+     *    and the door is asked only if that fails (an older radio with no ticket endpoint). */
+    let minted = !!radioQ && await mintAdminTicket(radioQ, connectBase);
+    if (!minted) {
+      const doorQ = connectBase === baseUrl
+        ? radioQ
+        : await resolveVibeAdminAuth(baseUrl, pw).catch(() => '');
+      if (doorQ) minted = await mintAdminTicket(doorQ);
+    }
     // ★ A wrong password and an unreachable server both come back empty — say it did not work
     //   rather than inventing which. The SOCKET is the half that decides: the server has the last
     //   word on it, and onAdminState will correct us if it disagrees.
@@ -2976,8 +2992,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★★ SETUP stays at the DOOR, and that is not an oversight: the setup page configures the whole
   //    machine — every radio, the ports, the passwords — so a per-radio setup page would be a
   //    narrower thing than the one the owner is asking for.
-  const vibeAdminUrl = adminAuthQ ? `${connectBase.replace(/\/+$/, '')}/?${adminAuthQ}#admin` : undefined;
-  const vibeSetupUrl = adminAuthQ ? `${baseUrl.replace(/\/+$/, '')}/setup?${adminAuthQ}` : undefined;
+  // ★★★ ONLY WITH A TICKET. Both pages read `vs_admin_ticket` and nothing else; handed the nonce
+  //     pair (the fallback when no ticket could be minted) the admin URL opened the receiver's
+  //     landing page instead — and from there the radio, a second listener beside the app (Stuart,
+  //     2026-10-01, the Lenovo). A button that cannot work is worse than no button.
+  const pageTicketQ = /(?:^|&)vs_admin_ticket=/.test(adminAuthQ) ? adminAuthQ.replace(/^&/, '') : '';
+  const vibeAdminUrl = pageTicketQ ? `${connectBase.replace(/\/+$/, '')}/?${pageTicketQ}#admin` : undefined;
+  const vibeSetupUrl = pageTicketQ ? `${baseUrl.replace(/\/+$/, '')}/setup?${pageTicketQ}` : undefined;
 
   // Frequency display unit — chosen in FreqModal, drives the main readout too.
   const [freqUnit, setFreqUnit] = useState<'hz' | 'khz' | 'mhz'>('khz');
