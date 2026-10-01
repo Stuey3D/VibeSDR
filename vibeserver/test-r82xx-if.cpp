@@ -251,6 +251,74 @@ static void directSamplingRoutes() {
     }
 }
 
+// ═══════════════════════════ THE CHIP'S OWN REGISTERS — where the mixer really is ═══════════════════════════
+
+/** osmocom rtl-sdr 2.0.3's r82xx_set_pll() register encoding for an LO, with its fine-tune divider adjustment
+ *  (`adjust` = -1, 0 or +1 steps of the divider index), written into a 30-register image as the chip holds it. */
+static void encodePll(uint8_t* hw, uint32_t loHz, uint32_t xtal, int adjust, bool locked) {
+    for (int i = 0; i < kR82xxReadRegs; ++i) hw[i] = 0;
+    const uint32_t khz = (loHz + 500) / 1000;
+    uint32_t mixDiv = 2; int divNum = 0;
+    while (mixDiv <= 64) {
+        if (khz * mixDiv >= 1770000u && khz * mixDiv < 3540000u) {
+            uint32_t b = mixDiv; while (b > 2) { b >>= 1; divNum++; } break;
+        }
+        mixDiv <<= 1;
+    }
+    divNum += adjust;
+    const uint64_t vco = (uint64_t)loHz * mixDiv;
+    const uint64_t vcoDiv = ((uint64_t)xtal + 65536ull * vco) / (2ull * xtal);
+    const uint32_t nint = (uint32_t)(vcoDiv / 65536), sdm = (uint32_t)(vcoDiv % 65536);
+    const uint32_t ni = (nint - 13) / 4, si = nint - 4 * ni - 13;
+    hw[0x10] = (uint8_t)(divNum << 5);
+    hw[0x14] = (uint8_t)(ni + (si << 6));
+    hw[0x12] = sdm == 0 ? 0x08 : 0x00;
+    hw[0x15] = (uint8_t)(sdm & 0xff); hw[0x16] = (uint8_t)(sdm >> 8);
+    hw[0x02] = locked ? 0x40 : 0x00;
+    hw[0x04] = 0x20;   // fine tune 2, the reference
+}
+
+static void chipReadback() {
+    std::printf("\n── the chip's PLL registers, decoded (rtlsdr_get_r82xx_state) ──\n");
+    const uint32_t xtal = 28800000;
+    uint8_t hw[kR82xxReadRegs];
+    const struct { uint32_t tuner; int32_t intf; const char* what; } cases[] = {
+        { 93715000, 1625000, "Kiko's 93.7 (+15 kHz DC offset) on the 2.048 MHz filter" },
+        { 94515000, 1625000, "MASSA 94.5" },
+        { 102315000, 1625000, "102.3, heard while 93.7 was dead" },
+        { 107715000, 1625000, "107.7" },
+        { 93715000, 3570000, "93.7 on init's IF (B1's state)" },
+        { 96515000, 1575000, "the Sony's 96.5 on the 1.4 MHz rung" },
+        { 225648000, 1625000, "DAB 12B" },
+        { 1090000000, 1625000, "ADS-B" },
+    };
+    for (const auto& c : cases) {
+        const uint32_t lo = c.tuner + (uint32_t)c.intf;
+        encodePll(hw, lo, xtal, 0, true);
+        const R82xxPll p = r82xxDecodePll(hw, kR82xxReadRegs, xtal);
+        const double err = p.loHz - lo;
+        ok(p.valid && p.locked && err < 500 && err > -500 && r82xxLoMatches(p.loHz, lo),
+           std::string(c.what) + ": decoded LO " + std::to_string(p.loHz / 1e6) + " MHz == programmed");
+        ok(p.divider == r82xxExpectedDivider(lo), std::string(c.what) + ": divider /" + std::to_string(p.divider)
+           + " is the one the LO needs");
+        // ★★ The fine-tune adjustment, either way: the VCO is right and the divider is not, so the mixer sits a
+        //    factor of two from the dial — a flat floor, no stations. Must be caught.
+        for (int adj : { -1, +1 }) {
+            encodePll(hw, lo, xtal, adj, true);
+            const R82xxPll q = r82xxDecodePll(hw, kR82xxReadRegs, xtal);
+            ok(!r82xxLoMatches(q.loHz, lo) && q.divider != r82xxExpectedDivider(lo),
+               std::string(c.what) + ": divider moved " + (adj < 0 ? "down" : "up") + " -> LO "
+               + std::to_string(q.loHz / 1e6) + " MHz is reported as WRONG");
+        }
+    }
+    encodePll(hw, 95340000, xtal, 0, false);
+    ok(!r82xxDecodePll(hw, kR82xxReadRegs, xtal).locked, "an unlocked PLL reads as unlocked (rc was 0 regardless)");
+    ok(!r82xxDecodePll(hw, 0x10, xtal).valid, "a short read (no PLL registers) decodes as not valid, never as a frequency");
+    ok(r82xxLoMatches(14000000.0 + 28.8e6 + 1625000.0, 14000000.0 + 1625000.0),
+       "an RTL-SDR Blog V4 on HF (librtlsdr upconverts by 28.8 MHz) is not reported as wrong");
+    ok(r82xxExpectedDivider(1625000.0) == 0, "the LO librtlsdr asks for before the first tune (centre 0 + IF) has no divider");
+}
+
 int main() {
     std::printf("── r82xx IF (osmocom rtl-sdr 2.0.3's r82xx_set_bandwidth) ──\n");
     ok(r82xxIntFreqForBw(2000000) == 1625000, "a 2.0 MHz filter (the 2000 kHz rung) leaves int_freq 1.625 MHz");
@@ -301,6 +369,7 @@ int main() {
         ok(d.dialError() == 0, "fixed: the filter runs whole, nothing tears it");
     }
     directSamplingRoutes();
+    chipReadback();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

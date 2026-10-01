@@ -71,6 +71,17 @@ RTLSDR_API int rtlsdr_open_sys_dev(rtlsdr_dev_t **out_dev, intptr_t sys_dev);
 
 RTLSDR_API int rtlsdr_close(rtlsdr_dev_t *dev);
 
+/*!
+ * ★ VibeSDR, not present upstream: what an R820T/R828D tuner REALLY holds. Reads `len` registers
+ * from 0x00 back from the chip into hw[] (len <= 30), copies librtlsdr's shadow of registers
+ * 0x05..0x22 into shadow[] (30 bytes, may be NULL), and reports the tuner's intermediate frequency,
+ * its crystal and whether the last PLL program locked.
+ *
+ * \return 0 on success, -2 if the tuner is not an R82xx, other negative values on I2C failure
+ */
+RTLSDR_API int rtlsdr_get_r82xx_state(rtlsdr_dev_t *dev, uint8_t *hw, int len, uint8_t *shadow,
+				      uint32_t *int_freq, uint32_t *xtal, int *has_lock);
+
 /* configuration functions */
 
 /*!
