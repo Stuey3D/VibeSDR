@@ -154,8 +154,9 @@ const SegGhost = React.memo(function SegGhost({ w, h, n, sh, cw, gap, x0, y0, co
  * beside it never moves a digit.
  */
 type SegDigitsProps = { text: string; rgb: string; core: string; glow: string; designH: number; style?: StyleProp<ViewStyle>;
-  /** ★ 'left' anchors the digits so a label of changing width beside them cannot push them about. */
-  align?: 'left' | 'right' };
+  /** ★ 'left' anchors the digits so a label of changing width beside them cannot push them about;
+   *  'center' centres them in the window. Default 'right' (a counter's alignment). */
+  align?: 'left' | 'right' | 'center' };
 
 /** ★ Shallow, by value: the caller builds its `style` object afresh on every render. */
 function sameStyle(a?: StyleProp<ViewStyle>, b?: StyleProp<ViewStyle>): boolean {
@@ -176,7 +177,8 @@ export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, 
   const n = cells.length;
   const gap = 1;
   const { sh, cw } = segFit(w, h, n, gap, designH);
-  const x0 = align === 'left' ? 0 : Math.max(0, w - (n * cw + (n - 1) * gap));
+  const span = n * cw + (n - 1) * gap;
+  const x0 = align === 'left' ? 0 : align === 'center' ? Math.max(0, (w - span) / 2) : Math.max(0, w - span);
   const y0 = Math.max(0, (h - sh) / 2);
   const sprites = useSegSprites(sh, core, glow);
   return (
