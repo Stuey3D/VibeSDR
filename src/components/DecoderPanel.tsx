@@ -338,14 +338,27 @@ export default function DecoderPanel({
   // Reading the real offset also keeps arrow-scrolling honest: a counter of our own drifts the
   // moment the list is flicked by hand or clamps at its end, and then the arrows appear dead
   // until you press them back through the difference.
+  /* ★★ FOLLOW THE NEW TEXT ONLY WHILE THE READER IS AT THE BOTTOM (B11, Stuart: "cannot scroll up to
+   *  view history — as I attempt to scroll up the new content snaps my view back to the latest lines").
+   *  Every new character used to scrollToEnd unconditionally. Now scrolling up stops the follow; coming
+   *  back within ~24 pt of the end resumes it. CLR and opening the box start following again. */
+  const followTail = useRef(true);
+  const noteTail = (e: any) => {
+    const n = e?.nativeEvent;
+    if (!n?.contentSize || !n?.layoutMeasurement) return;
+    const gap = n.contentSize.height - (n.contentOffset.y + n.layoutMeasurement.height);
+    followTail.current = gap < 24;
+  };
   const bodyScroll = {
     scrollEventThrottle: 32,
-    onScroll: (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
+    onScroll: (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; noteTail(e); },
     // ★ Resync from reality when the list settles or the user drags it. Without this, a target
     // that ran past the end leaves the arrows pressing against a wall — you would have to key
     // back through the overshoot before anything moved.
-    onMomentumScrollEnd: (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
-    onScrollEndDrag:     (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; },
+    onMomentumScrollEnd: (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; noteTail(e); },
+    onScrollEndDrag:     (e: any) => { bodyScrollY.current = e?.nativeEvent?.contentOffset?.y ?? 0; noteTail(e); },
+    // ★ The finger going down is the reader's intent: stop following at once, before the next line lands.
+    onScrollBeginDrag:   () => { followTail.current = false; },
   };
 
   // ★ One palette for every box (DecoderShell). The white-theme branch that lived here is gone:
@@ -396,8 +409,10 @@ export default function DecoderPanel({
   // the text re-runs this effect, and the 40 ms timer can land after the panel has gone.
   // ★ Cheap either way: cancelling the timer on unmount is correct regardless, and the try/catch
   // costs nothing on the happy path. A failed scroll is not worth a crash.
+  // ★ Cleared or reopened: back to following the newest line.
+  useEffect(() => { if (!decoderText || !minimised) followTail.current = true; }, [!decoderText, minimised]);
   useEffect(() => {
-    if (minimised) return;
+    if (minimised || !followTail.current) return;
     const t = setTimeout(() => {
       try { outputRef.current?.scrollToEnd({ animated: false }); } catch {}
     }, 40);

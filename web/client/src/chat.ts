@@ -279,9 +279,11 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
       go.onclick = () => onShareTune(share, row);
       row.append(go);
     }
+    // ★ Same rule as the decoder box: only follow a reader who is at the bottom (B11).
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
     log.appendChild(row);
     while (log.children.length > 40) log.removeChild(log.firstChild!);
-    log.scrollTop = log.scrollHeight;
+    if (atBottom) log.scrollTop = log.scrollHeight;
   }
   if (!isOpen && !(dial && from === dial.you)) { unread++; deps?.onUnread(unread); syncTitle(); }
 }

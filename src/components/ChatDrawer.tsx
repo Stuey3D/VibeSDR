@@ -214,8 +214,12 @@ function ChatDrawerBody({
 
   // ── Scroll to bottom on new message ───────────────────────────────────────
 
+  // ★★ Only while the reader is at the bottom (B11, Stuart: scrolling up to read history snapped back
+  //    on every new line — the decoder box had the same fault). Opening the drawer follows again.
+  const followTail = useRef(true);
+  useEffect(() => { if (visible) followTail.current = true; }, [visible]);
   useEffect(() => {
-    if (visible && messages.length > 0) {
+    if (visible && messages.length > 0 && followTail.current) {
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 60);
     }
   }, [messages.length, visible]);
@@ -409,7 +413,14 @@ function ChatDrawerBody({
               style={cd.msgList}
               contentContainerStyle={cd.msgContent}
               showsVerticalScrollIndicator
-              onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+              onContentSizeChange={() => { if (followTail.current) listRef.current?.scrollToEnd({ animated: false }); }}
+              scrollEventThrottle={32}
+              onScrollBeginDrag={() => { followTail.current = false; }}
+              onScroll={(e: any) => {
+                const n = e?.nativeEvent;
+                if (n?.contentSize && n?.layoutMeasurement)
+                  followTail.current = n.contentSize.height - (n.contentOffset.y + n.layoutMeasurement.height) < 24;
+              }}
               renderItem={({ item: m }: { item: ChatMessage }) => (
                 <View style={[cd.msg, m.type === 'system' && cd.msgSystem]}>
                   <Text style={[cd.msgTime, { color: cc.timeCl, fontFamily: ff }]}>{m.ts}</Text>

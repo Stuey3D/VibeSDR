@@ -9396,8 +9396,11 @@ function initDecoders(host: string, auth: AuthState) {
           text += chunk;
         }
       }
+      // ★★ Follow the newest text only if the reader is at the bottom (B11, Stuart: scrolling up to
+      //    read history snapped straight back on every new character).
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
       el.textContent = text.slice(-8000);
-      el.scrollTop = el.scrollHeight;
+      if (atBottom) el.scrollTop = el.scrollHeight;
       setDecLive(true);
     },
     onState: (st) => {
