@@ -1393,9 +1393,19 @@ function ShareIcon({ size, color }: { size: number; color: string }) {
   );
 }
 
-function ChatIcon({ size, progress }: { size: number; progress?: SharedValue<number> }) {
-  return <DomeIcon size={size} k={size / 20} strokes={CHAT_STROKES} progress={progress} />;
+function ChatIcon({ size, progress, legend }: { size: number; progress?: SharedValue<number>; legend?: typeof LAMP_OFF_LEGEND }) {
+  return <DomeIcon size={size} k={size / 20} strokes={CHAT_STROKES} progress={progress} legend={legend} />;
 }
+
+/**
+ * ★★ A KEY WHOSE LAMP IS OFF (B10, Stuart): on a server with no chat the CHAT key stays a real key — it
+ *   presses, sinks and clicks like the rest — but nothing lights it: no gap light, no flood, and its legend
+ *   is the unlit engraving. That reads as "this does nothing here" the way a real radio's dark button does,
+ *   where the old 40 % grey-out read as a broken or absent control.
+ */
+const LAMP_OFF_LEGEND = { color: 'rgba(128,120,110,0.55)', hot: 'rgba(128,120,110,0.55)',
+                          glow: 'rgba(0,0,0,0)', shade: 'rgba(0,0,0,0.35)' };
+const NOOP = () => {};
 
 function AudioIcon({ size, progress }: { size: number; progress?: SharedValue<number> }) {
   // Speaker cone (filled) + two sound-wave arcs
@@ -1648,11 +1658,12 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         </DomeKey>
 
         {/* CHAT */}
-        <DomeKey style={[por.key, { opacity: chatOff ? 0.4 : 1 }]} {...keyProps}
-          onPress={chatOff ? undefined : onChat} disabled={chatOff} accessibilityLabel="Chat"
+        <DomeKey style={por.key} {...keyProps} lightReach={chatOff ? 0 : keyProps.lightReach}
+          onPress={chatOff ? NOOP : onChat} accessibilityLabel="Chat"
+          accessibilityHint={chatOff ? 'Chat is not available on this server' : undefined}
           overlay={<Animated.View pointerEvents="none"
             style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseChat, opacity: chatPulse }]} />}>
-          {p => <ChatIcon size={ICON_SZ} progress={p} />}
+          {p => <ChatIcon size={ICON_SZ} progress={p} legend={chatOff ? LAMP_OFF_LEGEND : undefined} />}
         </DomeKey>
 
       </View>
@@ -1970,13 +1981,14 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
             ? <RecordIcon size={ICON_SZ} progress={p} />
             : <AudioIcon size={ICON_SZ} progress={p} />}
         </DomeKey>
-        <DomeKey style={[lnd.lsKey, { opacity: chatOff ? 0.4 : 1 }]} height={KEY_H} radius={6} lightReach={lightReach}
-          onPress={chatOff ? undefined : onChat} disabled={chatOff}
+        <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} lightReach={chatOff ? 0 : lightReach}
+          onPress={chatOff ? NOOP : onChat}
+          accessibilityHint={chatOff ? 'Chat is not available on this server' : undefined}
           outline={chatUnread ? ct.keyBorderChat : undefined}
           overlay={isCap && chatUnread ? <View pointerEvents="none" style={[StyleSheet.absoluteFill,
             { borderRadius: 6, borderWidth: 1, borderColor: ct.keyBorderChat }]} /> : undefined}
           accessibilityLabel="Chat">
-          {p => <ChatIcon size={ICON_SZ} progress={p} />}
+          {p => <ChatIcon size={ICON_SZ} progress={p} legend={chatOff ? LAMP_OFF_LEGEND : undefined} />}
         </DomeKey>
       </View>
 
