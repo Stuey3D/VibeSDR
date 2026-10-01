@@ -54,6 +54,7 @@ import { decoderTokensFor, type DecoderTokens } from '../constants/decoderTokens
 import { NO_DROP_SHADOW, type Transparency } from '../constants/faceplate';
 import ChassisPlate from './ChassisPlate';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
+import { CAP_SHEEN } from '../constants/capSheen';
 
 export type { DecoderTokens } from '../constants/decoderTokens';
 
@@ -325,8 +326,13 @@ export const DecoderKey = React.forwardRef<View, DecoderKeyProps>(function Decod
                                 shadowOpacity: cap.castOpacity }, style, capMotion]}
       {...rest}>
       {/* The cap's sheen: light over the top 45 %, a shade at the foot, a 1 pt highlight on the edge. */}
-      <View pointerEvents="none" style={[sh.capHi, { backgroundColor: cap.hi }]} />
-      <View pointerEvents="none" style={[sh.capLo, { backgroundColor: cap.lo }]} />
+      {/* ★★★ Flex shares of a layer pinned to the cap, never percentage heights — a decoder key in a
+          multi-line wrap (the mode grid) would paint the ghost slabs the chat drawer did (capSheen.ts). */}
+      <View pointerEvents="none" style={sh.capSheen}>
+        <View style={[sh.capHi, { backgroundColor: cap.hi }]} />
+        <View style={sh.capMid} />
+        <View style={[sh.capLo, { backgroundColor: cap.lo }]} />
+      </View>
       <View pointerEvents="none" style={[sh.capTop, { backgroundColor: cap.topLine }]} />
       {/* Clicked: brightness .84 / .82 and an inset shadow from the top edge. */}
       <Reanimated.View pointerEvents="none" style={[sh.capDown, dim]}>
@@ -364,8 +370,7 @@ const sh = StyleSheet.create({
   keyTxt: { fontFamily: DECODER_FONT, fontSize: 11 },
   keyShade: { position: 'absolute', left: 0, right: 0, top: -0.5, textShadowRadius: 0 },
   cap:     { borderRadius: 5, shadowOffset: { width: 0, height: 1.5 }, shadowRadius: 1, elevation: 1 },
-  capHi:   { position: 'absolute', left: 0, right: 0, top: 0, height: '45%', borderTopLeftRadius: 4, borderTopRightRadius: 4 },
-  capLo:   { position: 'absolute', left: 0, right: 0, bottom: 0, height: '35%', borderBottomLeftRadius: 4, borderBottomRightRadius: 4 },
+  ...CAP_SHEEN(4),
   capTop:  { position: 'absolute', left: 3, right: 3, top: 0, height: 1 },
   capDown: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, borderRadius: 4, overflow: 'hidden' },
   capInset: { position: 'absolute', left: 0, right: 0, top: 0, height: 2, backgroundColor: 'rgba(0,0,0,0.45)' },

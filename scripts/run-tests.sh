@@ -223,6 +223,10 @@ if node --no-warnings scripts/test_frame_rate.ts; then pass=$((pass+1)); else fa
 #     worst lighting; the tune entry follows the Display (Nixie One only ever neon); and with
 #     Transparency OFF no popup dims the waterfall or blurs it.
 if node --no-warnings scripts/test_popup.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE CANNED CHAT PAD (chatPad.ts, capSheen.ts): the phrase pad scrolls inside a cap that never
+#     overflows the drawer on any phone (the SE lost phrases 7–14 below its edge), and a dome key's
+#     sheen is flex shares, never percentage heights (Yoga drew ghost slabs over a multi-line wrap).
+if node --no-warnings scripts/test_chat_pad.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ THE SMALL-SCREEN STATUS ROW (faceplates §8.2): dropped strictly in order (IF first, the recording
 #     timer last), SHARED TUNER shortens before it goes, the connection meter never goes, portrait never
 #     drops, the row packs before anything drops, and a 1 pt wobble cannot flap (hysteresis).
