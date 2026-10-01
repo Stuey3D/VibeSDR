@@ -512,6 +512,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             )}</NavItem></NavRow>
             {moreOpen && (
               <ScrollView ref={moreScroll} style={[st.moreList, { borderColor: t.btnBorder }, pt.metal && windowStyle(pt)]}
+                          /* ★ scroll lane: full-width text rows, each inset 12 pt by moreItem's own padding */
                           keyboardShouldPersistTaps="handled">
                 {others.map(m => (
                   <NavRow key={m.id}><MoreItem onPress={() => pick(m.id)}

@@ -47,6 +47,8 @@ import { NAV_FOCUS } from './PanelNav';
 import { CAP_SHEEN } from '../constants/capSheen';
 
 export type { PopupTokens } from '../constants/popupTokens';
+/** ★ The scroll indicator's lane (popupTokens.ts) — every popup scroller takes it from here. */
+export { SCROLL_LANE, scrollLane, scrollLaneOutset } from '../constants/popupTokens';
 
 export const POPUP_FONT = 'Atkinson Hyperlegible';
 

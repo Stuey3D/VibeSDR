@@ -382,7 +382,8 @@ function AboutBody({ onClose }: AboutOverlayProps) {
         </View>
 
         <PopupWindow style={styles.scroll} metalStyle={styles.scrollWin}>
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.content}
+                    /* ★ scroll lane: content's own 18 pt side padding */>
           <View style={styles.heroRow}>
             <Image source={require('../../assets/icon.png')} style={styles.icon} />
             <View style={{ flex: 1 }}>

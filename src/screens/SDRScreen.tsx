@@ -17,6 +17,7 @@
 import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
 import { APP_PROTO } from '../constants/version';
+import { scrollLane, scrollLaneOutset } from '../constants/popupTokens';
 import React, {
   useCallback, useEffect, useMemo, useRef, useState,
 } from 'react';
@@ -9555,10 +9556,11 @@ export default function SDRScreen({ route, navigation }: Props) {
             </Text>
           )}
           <ScrollView
-            style={styles.radioPickList}
+            style={[styles.radioPickList, scrollLaneOutset]}
             /* ★ Room under the last block for the admin row that floats over the bottom — the band
                conditions table sat behind it (Xcover, APK 439). */
-            contentContainerStyle={{ paddingBottom: 130 }}
+            contentContainerStyle={[{ paddingBottom: 130 }, scrollLane]}
+            /* ★ The indicator's lane, lent by the backdrop's 20 pt padding so the cards keep their width. */
             showsVerticalScrollIndicator
           >
             {door.radios.map((r: VibeRadio) => {

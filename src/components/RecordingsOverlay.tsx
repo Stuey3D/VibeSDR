@@ -299,6 +299,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
             extraData={navIdx}
             keyExtractor={(r) => r.uri}
             renderItem={renderItem}
+            /* ★ scroll lane: each row's own 12 pt side margin keeps its keys clear */
             contentContainerStyle={{ paddingVertical: 8 }}
           />
         )}

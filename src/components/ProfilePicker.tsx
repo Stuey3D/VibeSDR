@@ -166,7 +166,8 @@ export default function ProfilePicker({
         </TouchableOpacity>
 
         {open && (
-          <ScrollView ref={listScroll} style={s.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+          <ScrollView ref={listScroll} style={s.list} nestedScrollEnabled keyboardShouldPersistTaps="handled"
+                      /* ★ scroll lane: text rows, each inset 14 pt by item's own padding */>
             {sdrGroups.flatMap((g) => {
               const isCurrentSdr = g.items.some((it) => it.id === activeProfileId);
               return [

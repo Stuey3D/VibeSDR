@@ -3,7 +3,7 @@ import { Modal, View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet } 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
-  PopupKey, PopupPlate, PopupHandle, PopupWindow, type PopupTokens,
+  PopupKey, PopupPlate, PopupHandle, PopupWindow, type PopupTokens, scrollLane,
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
 
@@ -107,6 +107,8 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
             keyExtractor={(c) => c.name}
             keyboardShouldPersistTaps="handled"
             style={s.list}
+            // ★ The indicator's lane: the country code is right-aligned to the row's edge.
+            contentContainerStyle={scrollLane}
             renderItem={({ item }) => (
               <TouchableOpacity style={s.row} onPress={() => onPick(item)} activeOpacity={0.6}>
                 <Text style={s.city}>{item.name}</Text>

@@ -31,6 +31,7 @@ import { AlphaType, Canvas, ColorType, Image as SkiaImage, Path, Points, Rect, S
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
+import { scrollLane } from '../constants/popupTokens';
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component reads
  *  `useDecoderStyles(makeStyles)`, so a chassis / colour / Decoder-background change reaches the
@@ -1125,7 +1126,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
         </DecoderHeader>
 
         <DecoderBody>
-        <ScrollView contentContainerStyle={[s.body, wideCols && s.bodyWide]}>
+        <ScrollView contentContainerStyle={[s.body, scrollLane, wideCols && s.bodyWide]}>
           <View style={wideCols ? s.colFields : undefined}>
           {/* ★ RAW mode needs saying, not just showing — a panel full of red labels with no
               explanation reads as breakage rather than as "arriving but not yet trusted". */}
