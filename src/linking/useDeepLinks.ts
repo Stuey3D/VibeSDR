@@ -104,7 +104,7 @@ export function useDeepLinks(ready: boolean) {
     const onSDR = navigationRef.getCurrentRoute?.()?.name === 'SDR';
     if (onSDR) {
       Alert.alert(
-        'Open instance from link?',
+        'Open server from link?',
         `Connect to ${res.target.instanceName}?\nThis will disconnect your current session.`,
         [
           { text: 'Cancel', style: 'cancel' },

@@ -7128,7 +7128,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       setDefaultInstance({ name: instanceName ?? baseUrl, url: baseUrl })
         .then(() => {
           setIsDefault(true);
-          Alert.alert('Default Set', `${instanceName ?? baseUrl} is now your default instance.`);
+          Alert.alert('Default Set', `${instanceName ?? baseUrl} is now your default server.`);
         })
         .catch(() => {});
     }
@@ -10218,7 +10218,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           <View style={styles.serverLostCard}>
             <Text style={styles.serverLostTitle}>Connection lost</Text>
             <Text style={styles.serverLostBody}>
-              Lost connection to {instanceName || 'the instance'} — trying to reconnect…
+              Lost connection to {instanceName || 'the server'} — trying to reconnect…
             </Text>
             <ActivityIndicator color="#ffb84d" style={{ marginBottom: 14 }} />
             <View style={styles.serverLostBtnRow}>

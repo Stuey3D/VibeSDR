@@ -2534,7 +2534,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
               ListEmptyComponent={
                 <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim, textAlign: 'center', marginTop: 40 }}>
-                  No instances found
+                  No servers found
                 </Text>
               }
             />

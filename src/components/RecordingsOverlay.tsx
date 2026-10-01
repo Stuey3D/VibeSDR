@@ -24,6 +24,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
+import { useMacAudio } from '../services/macAudio';
 
 const REC = NativeModules.VibePowerModule as { shareRecording?: (path: string) => void };
 
@@ -86,6 +87,15 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
 
   // Play even when the ringer switch is silent (it's a deliberate action).
   useEffect(() => { setAudioModeAsync({ playsInSilentMode: true }).catch(() => {}); }, []);
+
+  /* ★ The Mac VOLUME / MUTE (services/macAudio.ts) covers playback too — on a Mac a recording played
+   *   here must not be the one sound the fader cannot reach. Off a Mac it is left alone. Set on
+   *   every change and after each replace(), which hands the player a new item. */
+  const { gain: macGain, onMac } = useMacAudio();
+  useEffect(() => {
+    if (!onMac) return;   // never touch the player anywhere else
+    try { player.volume = macGain; } catch { /* released player */ }
+  }, [player, macGain, sel, onMac]);
 
   const load = useCallback(async () => {
     setRecs(null);

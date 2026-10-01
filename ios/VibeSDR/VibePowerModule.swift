@@ -1601,6 +1601,37 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     playerNode?.volume = Float(max(0, min(1, volume)))
   }
 
+  // MARK: - Mac output gain (VOLUME + MUTE, the iPad app on a Mac only)
+  //
+  // ★★★ ON A MAC THE iPAD APP HAS NO VOLUME OF ITS OWN. macOS gives the app no per-app slider, and
+  //     the system volume is everybody's — so the AUDIO popup draws a VOLUME fader and a MUTE key
+  //     there (src/services/macAudio.ts), and this is what they turn. ON A MAC ONLY: on an iPhone or
+  //     iPad a second volume beside the system one, left low and forgotten, reads as a broken app
+  //     (Stuart). So the gain is forced to unity anywhere else, whatever JS sends.
+  // ★★ ONE KNOB COVERS EVERY BACKEND. All three ways audio enters — the UberSDR opus socket
+  //    (handlePacket), the external PCM/Opus feed (OWRX, Kiwi, VibeServer, the local dongle,
+  //    rtl_tcp, SpyServer, DAB — playExternalBuffer) and FM-DX's MP3 (playFmdxPcm) — end in
+  //    scheduleOut(), which plays ONLY on `playerNode`, wired to `audioEngine.mainMixerNode` in
+  //    startEngine(). So the gain is the main mixer's outputVolume: instant (no queued buffers to
+  //    play out at the old level), and MUTE is gain 0 with nothing torn down, so unmute is instant.
+  // ★ AFTER the recorder: writeRecording() is handed the buffer before scheduleOut, so a recording
+  //   is PRE-volume — turning the Mac down, or muting it, does not quieten what is being saved.
+  // ★ Kept here, not on the engine: the engine is rebuilt (route change, self-heal, every backend
+  //   switch) and startEngine() re-applies it to each new one.
+  // ★ Unrelated to setMuted / isMuted: that is the PAUSE (lock-screen ▶ / interruptions), which
+  //   disconnects or stops the player. This never stops anything.
+  private var macOutputGain: Float = 1
+  private static let runsOnMac: Bool =
+    ProcessInfo.processInfo.isiOSAppOnMac || ProcessInfo.processInfo.isMacCatalystApp
+
+  @objc func setMacOutputGain(_ gain: NSNumber) {
+    let g = VibePowerModule.runsOnMac ? Float(max(0, min(1, gain.doubleValue))) : 1
+    onMain {
+      self.macOutputGain = g
+      self.audioEngine?.mainMixerNode.outputVolume = g
+    }
+  }
+
   // MARK: - Breadcrumbs (see VibeCrumbs at the foot of this file)
 
   /// JS writes a boot breadcrumb. Same file, same format, same clock as the native ones, so the
@@ -2755,6 +2786,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       NSLog("[VibePowerModule] AVAudioFormat init failed"); return
     }
     engine.connect(player, to: engine.mainMixerNode, format: fmt)
+    // ★ The Mac VOLUME / MUTE (setMacOutputGain) — every new engine starts at it, or a route change
+    //   or a self-heal would put a muted Mac back at full volume. Unity everywhere but a Mac.
+    engine.mainMixerNode.outputVolume = macOutputGain
     do {
       try engine.start()
       player.play()
@@ -3566,7 +3600,7 @@ enum VibeVoice {
          let s = String(data: data, encoding: .utf8) { d.set(s, forKey: kPending) }
       return "Open VibeSDR to \(kind == "tune" ? "tune to \(q)" : "apply that")."
     }
-    return "Open VibeSDR and connect to an instance first to use voice control."
+    return "Open VibeSDR and connect to a server first to use voice control."
   }
 
   /// Dispatch a specific picked bookmark as an explicit Hz+mode tune (reuses the
@@ -3585,7 +3619,7 @@ enum VibeVoice {
          let s = String(data: data, encoding: .utf8) { d.set(s, forKey: kPending) }
       return "Open VibeSDR to tune to \(b.name)."
     }
-    return "Open VibeSDR and connect to an instance first to use voice control."
+    return "Open VibeSDR and connect to a server first to use voice control."
   }
 
   static func takePending() -> String? {

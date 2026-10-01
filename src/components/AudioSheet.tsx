@@ -15,6 +15,8 @@ import {
   PopupKey, PopupFader, PopupPlate, PopupHandle, PopupScrim, PopupWindow, type PopupTokens,
 } from './PopupShell';
 import { sMeterText, sqlClosedOf } from '../constants/meters';
+import { setMacAudioVolume, toggleMacAudioMute, useMacAudio } from '../services/macAudio';
+import { macVolumeLabel } from '../constants/macAudio';
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
@@ -648,6 +650,7 @@ export default function AudioSheet({
   // Keyboard / D-pad navigation — shared machinery (PanelNav). Buttons, sliders and
   // the squelch bar all register themselves; the game controller drives this unchanged.
   const { navCtx, scrollProps } = usePanelNav(visible, { onTimeout: onClose });
+  const mac = useMacAudio();   // ★ the Mac-only VOLUME / MUTE — onMac false everywhere else
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
@@ -675,6 +678,25 @@ export default function AudioSheet({
 
         <ScrollView {...scrollProps} style={st.scroll} keyboardShouldPersistTaps="handled">
         <NavCtx.Provider value={navCtx}>
+
+          {/* ★★★ VOLUME + MUTE — ON A MAC ONLY (services/macAudio.ts). The iPad app on a Mac has no
+              volume of its own, so it gets one here; on an iPhone or iPad the system volume is under the
+              thumb, and a second one left low would read as a broken app (Stuart). Every backend, FM-DX
+              included, plays through the gain this sets; recordings are taken before it. */}
+          {mac.onMac && (
+            <View style={st.bwRow}>
+              <Text style={[st.bwLabel, { width: 56 }]}>VOLUME</Text>
+              <NavSlider style={st.bwSlider}
+                minimumValue={0} maximumValue={1} step={0.01}
+                value={mac.state.volume}
+                onValueChange={(v: number) => setMacAudioVolume(v)}
+                minimumTrackTintColor={mac.state.muted ? C.muted : pt.gold.fill}
+                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+              <Text style={[st.bwVal, { minWidth: 52 }]}>{macVolumeLabel(mac.state)}</Text>
+              <Toggle label="MUTE" on={mac.state.muted} onPress={toggleMacAudioMute} padH={10}
+                a11y={mac.state.muted ? 'Unmute' : 'Mute'} />
+            </View>
+          )}
 
           {/* NR / NB (UberSDR client-side DSP) + REC — REC stays for all backends */}
           <BtnRow>

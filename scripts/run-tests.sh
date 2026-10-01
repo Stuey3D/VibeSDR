@@ -223,6 +223,10 @@ if node --no-warnings scripts/test_transparency.ts; then pass=$((pass+1)); else 
 #     cannot say, labelled with the panel's real rate, defaults to no cap, survives the crash reset,
 #     and both native modules export the two methods JS calls.
 if node --no-warnings scripts/test_frame_rate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ MAC VOLUME + MUTE (2026-10-01): shown only on iOS-on-a-Mac, unity gain everywhere else, MUTE is gain 0,
+#     every native audio ingress plays through the one mixer that carries the gain, recordings are taken
+#     before it, and the deck's speaker key shows a prohibition sign in the legend colour (never red).
+if node --no-warnings scripts/test_mac_audio.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ POPUPS TAKE THE CHASSIS (faceplates §10.3): the default chassis is today's gold, value for value;
 #     no popup holds a hard-coded gold; engraved text clears 4.5:1 on silver and black at the plate's
 #     worst lighting; the tune entry follows the Display (Nixie One only ever neon); and with

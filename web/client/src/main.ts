@@ -7201,16 +7201,17 @@ function dabUiOff() {
  *  (which mutes at 0) and the audio button's red state would have made six, and the one that gets
  *  forgotten is how a control ends up disagreeing with the thing it controls. Same fault shape as
  *  AGENTS.md's "one rule, two readers".
- *  ★ The AUDIO button turns red whenever the receiver is muted, however that happened — not only
- *    when the wheel did it. A colour that means "muted" must mean it always, or it teaches nothing. */
+ *  ★ The muted state shows whenever the receiver is muted, however that happened — not only when
+ *    the wheel did it. A sign that means "muted" must mean it always, or it teaches nothing. */
 function setMuted(on: boolean): void {
   if (!audio) return;
   audio.muted = on;
   document.getElementById('muteBtn')?.classList.toggle('on', on);
-  // ★ Both audio buttons, for the same reason the wheel is wired to both — CSS decides which is
-  //   on screen, so a red state on only one is a red state the user may never see.
-  for (const id of ['audioBtn', 'mAudio'])
-    document.getElementById(id)?.classList.toggle('mutedRed', on);
+  // ★ The desktop bar's AUDIO word goes red (it has no glyph to carry the state). The compact card's
+  //   speaker key (#mAudio) does NOT: it shows the prohibition-sign glyph in its own legend colour,
+  //   via the `muted` class mobile.ts mirrors from #muteBtn — red would vanish on red controls
+  //   (Stuart, 2026-10-01).
+  document.getElementById('audioBtn')?.classList.toggle('mutedRed', on);
   const pop = document.getElementById('volPop');
   if (pop && !pop.hidden) {
     const pct = on ? 0 : Math.round(audio.volume * 100);
