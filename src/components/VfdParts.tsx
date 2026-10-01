@@ -153,7 +153,9 @@ const SegGhost = React.memo(function SegGhost({ w, h, n, sh, cw, gap, x0, y0, co
  * the box, then narrowed to fit its width. Right-aligned, like a real counter, so the unit label
  * beside it never moves a digit.
  */
-type SegDigitsProps = { text: string; rgb: string; core: string; glow: string; designH: number; style?: StyleProp<ViewStyle> };
+type SegDigitsProps = { text: string; rgb: string; core: string; glow: string; designH: number; style?: StyleProp<ViewStyle>;
+  /** ★ 'left' anchors the digits so a label of changing width beside them cannot push them about. */
+  align?: 'left' | 'right' };
 
 /** ★ Shallow, by value: the caller builds its `style` object afresh on every render. */
 function sameStyle(a?: StyleProp<ViewStyle>, b?: StyleProp<ViewStyle>): boolean {
@@ -168,13 +170,13 @@ function sameStyle(a?: StyleProp<ViewStyle>, b?: StyleProp<ViewStyle>): boolean 
  *   changing). Every render of a Skia <Canvas> re-records and redraws it, and this one sits inside a
  *   deck that re-renders for unrelated reasons (meters, status); the digits only change on a retune.
  */
-export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, designH, style }: SegDigitsProps) {
+export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, designH, style, align }: SegDigitsProps) {
   const [{ w, h }, onLayout] = useBoxSize();
   const cells = useMemo(() => segDigitCells(text), [text]);
   const n = cells.length;
   const gap = 1;
   const { sh, cw } = segFit(w, h, n, gap, designH);
-  const x0 = Math.max(0, w - (n * cw + (n - 1) * gap));
+  const x0 = align === 'left' ? 0 : Math.max(0, w - (n * cw + (n - 1) * gap));
   const y0 = Math.max(0, (h - sh) / 2);
   const sprites = useSegSprites(sh, core, glow);
   return (
@@ -200,4 +202,4 @@ export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, 
     </View>
   );
 }, (a, b) => a.text === b.text && a.rgb === b.rgb && a.core === b.core && a.glow === b.glow
-             && a.designH === b.designH && sameStyle(a.style, b.style));
+             && a.designH === b.designH && a.align === b.align && sameStyle(a.style, b.style));

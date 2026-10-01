@@ -861,7 +861,8 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
     <View style={[{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
                     flexShrink: 1, minWidth: 0 }, compact && { flex: 1 }]}>
       {dk.style === 'dot' ? (
-        <View style={[cellBox, { justifyContent: 'center' }]}>
+        // ★ Left-anchored too, for the same reason as the 7-segment digits below.
+        <View style={[cellBox, { justifyContent: 'center', alignItems: 'flex-start' }]}>
           <GhostGrid rgb={dk.rgb} pitch={3.4} dot={0.8} />
           <Text style={[pm.freq, {
             color: dk.freq, fontFamily: dk.freqFont, letterSpacing: dk.freqSpacing,
@@ -873,8 +874,10 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
           </Text>
         </View>
       ) : (
+        // ★★ ANCHORED LEFT (B10, Stuart, airband): the label beside the digits changes width as you tune
+        //    ("25 kHz" ↔ "8.33 · 128.5917"), and right-aligned digits jumped sideways with it.
         <SegDigits text={freqStr.replace(/,/g, '')} rgb={dk.rgb} core={dk.core} glow={dk.glow}
-          designH={segH} style={cellBox} />
+          designH={segH} style={cellBox} align="left" />
       )}
       {label}
     </View>
