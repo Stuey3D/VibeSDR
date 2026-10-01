@@ -7,6 +7,7 @@ import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.defaults.DefaultReactNativeHost
+import com.facebook.react.modules.network.OkHttpClientProvider
 import com.facebook.react.shell.MainReactPackage
 import com.facebook.react.uimanager.ViewManager
 import com.facebook.soloader.SoLoader
@@ -48,6 +49,15 @@ class MainApplication : Application(), ReactApplication {
          *  2026-09-19: one thread could not keep up (22 % of the input dropped); split, 10.42 frames/s,
          *  0 dropped, 0 bad MP2 frames over 128 s. See DabReceiver::setMscThread. */
         try { android.system.Os.setenv("VIBE_DAB_SPLIT", "1", true) } catch (_: Throwable) {}
+        /* ★★ THE SCREEN'S OWN HTTPS GETS THE SAME MODERN ROOTS AS THE SERVER'S DOWNLOADS (B10). Lite runs
+         *  on Android 5, whose root store predates ISRG Root X1 — the directory, the address lookup and
+         *  GitHub all sit on chains a 2015 phone may not know. Added to the system's roots, never instead
+         *  of them: see VibeTls.kt. Every fetch() and WebSocket the JS makes comes from this factory. */
+        OkHttpClientProvider.setOkHttpClientFactory {
+            OkHttpClientProvider.createClientBuilder()
+                .sslSocketFactory(VibeTls.socketFactory, VibeTls.trustManager)
+                .build()
+        }
         SoLoader.init(this, false)
     }
 }

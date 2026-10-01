@@ -295,6 +295,26 @@ printf '\n\033[1m── shared chunk cache (real browser) ──\033[0m\n'
 node scripts/test-web-chunk-cache.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★★ A LISTENER WHOSE TURN RAN OUT, BACK ON A FREE RADIO (B10, Kiko's server): ended → refused inside
+#     the cooldown → after it, admitted on BORROWED time and kept until somebody else wants the radio →
+#     handed over with notice when somebody does. Real server, through the LAN address (loopback is
+#     exempt). ★ ~4 minutes (a 1-minute turn + the 2-minute cooldown), so only with VIBESERVER_SLOW=1;
+#     test-session-turns.cpp above covers the same rule on a synthetic clock in milliseconds.
+printf '\n\033[1m── session turn: borrowed time after the cooldown (end to end) ──\033[0m\n'
+if [ "${VIBESERVER_SLOW:-0}" = "1" ]; then
+  node scripts/test-session-turn.mjs; rc=$?
+else
+  echo '   not run — ~4 minutes; set VIBESERVER_SLOW=1 (test-session-turns covers the rule quickly)'; rc=3
+fi
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
+# ★★★ MODERN ROOTS FOR OLD PHONES (B10: a Lite on Android 5.1 could not fetch RIPE/APNIC, so Europe had
+#     no flags). VibeTls.kt itself, on the desktop JVM, against the real chains, with an old store
+#     simulated — and still refusing expired / self-signed / untrusted / wrong-host. Needs the network.
+printf '\n\033[1m── TLS roots for old Android (VibeTls) ──\033[0m\n'
+bash scripts/test-tls-roots.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
 #     pbxproj owns MARKETING_VERSION and only `expo prebuild` would copy it across, which this
 #     project deliberately never runs — so the App Store shipped 10.2 while the app's own About

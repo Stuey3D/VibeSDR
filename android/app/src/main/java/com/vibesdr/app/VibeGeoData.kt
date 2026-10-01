@@ -40,7 +40,20 @@ object VibeGeoData {
     private val http = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)     // ★ these are big files on a phone's uplink
+        // ★★ VibeTls: modern roots ADDED to an old phone's store — see VibeTls.kt (B10, Android 5.1 had no RIPE/APNIC).
+        .sslSocketFactory(VibeTls.socketFactory, VibeTls.trustManager)
         .build()
+
+    /** ★★ A PARTIAL REFRESH IS RETRIED, NOT KEPT FOR A WEEK (B10). The table is rebuilt from whatever
+     *  sources arrived — so on Kiko's Moto G, which could not reach RIPE or APNIC, it held the Americas
+     *  and Africa and nothing else, and being "fresh" it was not asked for again for seven days. This
+     *  file marks a refresh that lost a source; the next start after RETRY_PARTIAL_H tries again. */
+    private const val PARTIAL = "partial"
+    private const val RETRY_PARTIAL_H = 24L
+    /** ★★ ONE FULL REFRESH AFTER THE UPDATE THAT ADDED VibeTls. A host that already holds a table built
+     *  without RIPE/APNIC has no PARTIAL marker (the old code never wrote one) and a "fresh" cache, so
+     *  without this it would show no European flag for up to a week after updating. */
+    private const val ROOTS_MARK = "tls-roots-1"
 
     /**
      * Wire the lookups up, and refresh in the background if the data is missing or old.
@@ -56,8 +69,12 @@ object VibeGeoData {
             Log.w(TAG, "could not initialise country lookup: ${t.message}")
             return
         }
+        val partial = File(dir, PARTIAL)
+        val retryPartial = partial.exists() &&
+            System.currentTimeMillis() - partial.lastModified() > RETRY_PARTIAL_H * 3_600_000L
+        val firstWithRoots = !File(dir, ROOTS_MARK).exists()
         try {
-            if (!VibeLocalSDR.geoStale(MAX_AGE_DAYS)) return
+            if (!retryPartial && !firstWithRoots && !VibeLocalSDR.geoStale(MAX_AGE_DAYS)) return
         } catch (_: Throwable) { return }
 
         if (!busy.compareAndSet(false, true)) return
@@ -89,6 +106,13 @@ object VibeGeoData {
             if (download(url, out, gz)) paths.add(out.absolutePath)
             else Log.w(TAG, "could not fetch $url")   // ★ one registry down must not lose the rest
         }
+        // ★ Written either way: the forced post-update refresh has happened; PARTIAL handles a loss.
+        runCatching { File(dir, ROOTS_MARK).writeText("1") }
+        val partial = File(dir, PARTIAL)
+        if (paths.size < urls.size) {
+            runCatching { partial.writeText("${urls.size - paths.size} of ${urls.size} sources missing") }
+            Log.w(TAG, "country/network data is PARTIAL (${paths.size} of ${urls.size}) — retrying in ${RETRY_PARTIAL_H} h")
+        } else runCatching { partial.delete() }
         if (paths.isEmpty()) { Log.w(TAG, "no sources fetched"); return }
 
         val problems = try { VibeLocalSDR.geoIngest(paths.joinToString("\n")) }

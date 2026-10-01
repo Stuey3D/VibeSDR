@@ -1247,7 +1247,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onHandover: (secs) => showPill(
       `Someone is waiting for this radio — you have about ${Math.max(1, secs)} seconds`, 12000),
     onHandoverOff: () => showPill('They stopped waiting — the radio is still yours', 6000),
-    onSessionEnded: (cd, fresh) => showSessionEnded(cd, fresh),
+    onSessionEnded: (cd, fresh, borrow) => showSessionEnded(cd, fresh, borrow),
+    onBorrowed: () => {
+      if (borrowedTime) return;   // ★ hwinfo is re-sent; say it once per connection
+      borrowedTime = true;
+      paintTimeLeft();
+      showPill('Your turn on this receiver has been used — it is yours again until somebody else wants it.', 9000);
+    },
     onCooldown: (secs) => showCooldown(secs),
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
     //   visitor actually has — is there room, and is anyone else here — and it is the number the
@@ -8262,21 +8268,32 @@ function showEvicted() { showRefusal('TAKEN OVER',
 /** ★★ The session limit. Say WHY it ended and WHEN they may return — a bare disconnect on a
  *  public receiver reads as a crash, and the listener blames us rather than understanding they
  *  had a share of a shared radio. */
-function showSessionEnded(cooldownSec: number, freshSec = 0) {
-  const m = Math.max(1, Math.round(cooldownSec / 60));
-  const f = Math.round(freshSec / 60);
-  /* ★★★ TWO WINDOWS, AND WE QUOTED THE SHORT ONE. `cooldown` is how long this address is refused;
-   *     a FULL turn only returns after the limit itself has passed. Come back between them and you
-   *     are let in with no time left — which reads as a fault rather than as the rule it is.
-   *  ★ Only said when the server stated it and it is genuinely longer. */
+function showSessionEnded(cooldownSec: number, freshSec = 0, borrow = false) {
+  borrowedTime = false;   // a new connection is told afresh by hwinfo
   showRefusal('TIME UP',
     'Your guaranteed time on this shared receiver has ended and your session was closed so the '
-    + 'receiver is free for others.' +
-    (f > m
-      ? `<br><br>You can try again in about ${m} minute${m === 1 ? '' : 's'}, though the receiver may `
-        + `be in use by then — a full turn starts again ${f} minutes after your last one.`
-      : `<br><br>You can try again in about ${m} minute${m === 1 ? '' : 's'}, though the receiver may `
-        + `be in use by then.`));
+    + 'receiver is free for others.<br><br>' + sessionEndedNote(cooldownSec, freshSec, borrow));
+}
+
+/** ★★★ WHEN MAY THEY COME BACK — FROM THE SERVER'S OWN NUMBERS, NEVER A CONSTANT (B10).
+ *  Stuart on Kiko's server, 2026-10-01: told "try again in about 2 minutes", refused well after it.
+ *  The server let him in after the cooldown and ended him on the spot, because his turn had no time
+ *  left. A new server (`borrow`) now admits a returning listener to a FREE radio after the cooldown
+ *  and keeps them until somebody else wants it — so "about 2 minutes" is true, and we say what it
+ *  buys. An older server does not: there the real next entry is the FULL turn, and we quote that.
+ *  ★ Same words as the app's TIME UP card (SDRScreen onSessionEnded) — one rule, two readers. */
+function sessionEndedNote(cooldownSec: number, freshSec: number, borrow: boolean): string {
+  const mins = (s: number) => { const m = Math.max(1, Math.round(s / 60)); return `${m} minute${m === 1 ? '' : 's'}`; };
+  if (borrow) {
+    return `You can come back in about ${mins(cooldownSec)}. If nobody else is using the receiver then, `
+      + `it is yours until somebody else wants it` + (freshSec > cooldownSec
+        ? ` — a full guaranteed turn starts again once you have been away ${mins(freshSec)}.` : '.');
+  }
+  if (freshSec > cooldownSec) {
+    return `You can try again in about ${mins(freshSec)}, when a full turn starts again — coming back `
+      + `sooner ends at once, because this turn has no time left.`;
+  }
+  return `You can try again in about ${mins(cooldownSec)}, though the receiver may be in use by then.`;
 }
 
 /** Refused because we came back before our cooldown finished. */
@@ -9102,6 +9119,9 @@ let sessionTicker: ReturnType<typeof setInterval> | null = null;
 let softLimit = false;
 /** ★ Once per page load. Repeating it on every poll would turn an explanation into nagging. */
 let softLimitTold = false;
+/** ★★ B10: back after our turn ended, on a free radio — kept until somebody else wants it, on a hard
+ *  server too. The clock reads like a soft one's at zero; the server said so on hwinfo (`borrowed`). */
+let borrowedTime = false;
 
 function setTimeLeft(secs: number) {
   sessionDeadline = Date.now() + secs * 1000;
@@ -9154,7 +9174,7 @@ function paintTimeLeft() {
     //     down to a threat nobody carries out teaches people not to trust the readout.
     // ★ Stuart, 2026-08-19: "users need to be advised that there is a soft limit so that when the
     //   time limit runs out they dont wonder why they are staying connected."
-    if (softLimit) {
+    if (softLimit || borrowedTime) {
       // ★ SHORT. This is a one-line status slot in the corner under the receiver's name, not a
       //   place for a sentence — the explanation was already given as a pill on arrival, and all
       //   this has to do is say which state you are in now.

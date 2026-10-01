@@ -569,8 +569,13 @@ export interface SpectrumCallbacks {
   onYourTurn?: (withinSec: number) => void;
   /** Session limit: seconds remaining (fires at 2 min and 30 s). Still connected. */
   onSessionWarning?: (secs: number) => void;
-  /** The limit expired; we have been disconnected. `cooldown` = seconds before we may return. */
-  onSessionEnded?: (cooldown: number, fresh?: number) => void;
+  /** The limit expired; we have been disconnected. `cooldown` = seconds before we may return,
+   *  `fresh` = seconds away before a FULL turn returns, `borrow` = the server lets us back onto a FREE
+   *  radio after the cooldown, kept until somebody else wants it (B10; false on an older server). */
+  onSessionEnded?: (cooldown: number, fresh?: number, borrow?: boolean) => void;
+  /** ★ B10: we are on BORROWED time — our turn was already used, and the radio is ours until somebody
+   *  else wants it. Sent on hwinfo; the clock must say so rather than sit at a red 0:00. */
+  onBorrowed?: () => void;
   /** Refused because we are still inside our cooldown. */
   onCooldown?: (secs: number) => void;
   /** The owner took the radio back using the admin password. */
@@ -929,7 +934,7 @@ export class SpectrumClient {
         this.refused = true;
         // ★ `fresh` = when a FULL turn returns — a different, longer window than the
         //   cooldown. See the server's note; 0 on a server that does not say.
-        this.cb.onSessionEnded?.(Number(msg.cooldown) || 0, Number(msg.fresh) || 0);
+        this.cb.onSessionEnded?.(Number(msg.cooldown) || 0, Number(msg.fresh) || 0, msg.borrow === true);
         break;
       case 'cooldown':
         // We came back too soon after a timeout.
@@ -1131,6 +1136,8 @@ export class SpectrumClient {
         // ★ Seconds left on a limited session, sent on connect so the clock starts THEN
         // rather than at the first warning. -1 = no limit / exempt.
         if (typeof msg.sessionSecsLeft === 'number' && msg.sessionSecsLeft >= 0) {
+          // ★ Borrowed FIRST, so the clock paints in the right words the moment it starts (B10).
+          if (msg.borrowed === true) this.cb.onBorrowed?.();
           this.cb.onSessionWarning?.(msg.sessionSecsLeft);
         }
         // ★★★ ARE WE ALREADY ADMIN? `hwinfo` has carried adminOk since the lock was built and

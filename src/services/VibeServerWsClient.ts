@@ -2124,7 +2124,9 @@ export abstract class VibeServerWsClient {
       this.refused = true;                    // never auto-retry a deliberate refusal
       // ★ `fresh` = when a FULL turn returns, which is a different (and much longer) window than
       //   the cooldown — see the server's note. 0 when an older server did not say.
-      this.callbacks.onSessionEnded?.(Number(msg.cooldown) || 0, Number(msg.fresh) || 0);
+      // ★ `borrow` (B10): after the cooldown a FREE radio lets us back on borrowed time. Absent = an
+      //   older server, where coming back before `fresh` is ended at once.
+      this.callbacks.onSessionEnded?.(Number(msg.cooldown) || 0, Number(msg.fresh) || 0, msg.borrow === true);
       return;
     }
     if (msg.type === 'cooldown') {
@@ -2441,6 +2443,8 @@ export abstract class VibeServerWsClient {
       // nothing behind it. The web client already accepts >= 0 (spectrum.ts) — this end did not,
       // and a wire value has to be read the same way at both ends.
       if (typeof msg.sessionSecsLeft === 'number') {
+        // ★ Borrowed FIRST, so the clock paints in the right words the moment it starts (B10).
+        if (msg.borrowed === true) this.callbacks.onBorrowed?.();
         this.callbacks.onSessionWarning?.(Number(msg.sessionSecsLeft));
       }
       // ★★★ THE SERVER'S WORD ON ITS OWN DSP. These are sticky AND shared, so what this phone last

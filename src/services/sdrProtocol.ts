@@ -447,7 +447,10 @@ export interface SDRCallbacks {
    *  ignored both messages entirely, so a listener whose time ran out just
    *  dropped and started retrying (2026-07-28).
    *  `cooldownSec` is the server's own number — when they may come back. */
-  onSessionEnded?: (cooldownSec: number, freshSec?: number) => void;
+  onSessionEnded?: (cooldownSec: number, freshSec?: number, borrow?: boolean) => void;
+  /** ★ B10: this listener is on BORROWED time — their turn was already used, and the radio is theirs
+   *  until somebody else wants it (hwinfo `borrowed`). The clock must read like a soft limit's. */
+  onBorrowed?: () => void;
   /** Refused because we returned inside our cooldown. */
   onCooldown?: (secs: number) => void;
   /** ★★ PARITY GAP CLOSED 2026-07-28. The web client and Jr have handled all three of these

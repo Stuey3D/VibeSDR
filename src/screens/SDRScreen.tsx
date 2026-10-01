@@ -1069,6 +1069,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Declared HERE, above `bookmarkScope`, which reads the identity — putting them beside the
    *    effect that fills them left them in the temporal dead zone and tsc said so plainly. */
   const [limitSoft, setLimitSoft] = useState(false);
+  /** ★★ B10: back after our turn ended, on a free radio — kept until somebody else wants it, on a HARD
+   *  server too. The clock reads like a soft limit's at zero instead of a red 0:00 that never fires. */
+  const [borrowed, setBorrowed] = useState(false);
+  const borrowedRef = useRef(false);   // ★ hwinfo is re-sent; the hint is said once per connection
   /** ★ How many people are on this receiver. From the dial state where there is one (it is live
    *  and per-message), otherwise from the occupancy poll. */
   const [occListeners, setOccListeners] = useState<number | null>(null);
@@ -4951,28 +4955,39 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★ The part that matters is WHEN THEY MAY RETURN. A public receiver that
       // just goes quiet reads as our bug; one that says "someone else can have a
       // turn, come back in 2 minutes" reads as a shared radio working.
-      onSessionEnded: (cooldownSec: number, freshSec?: number) => {
+      onSessionEnded: (cooldownSec: number, freshSec?: number, borrow?: boolean) => {
         if (destroyed.current) return;
-        const m = Math.max(1, Math.round(cooldownSec / 60));
-        const f = Math.round((freshSec ?? 0) / 60);
         terminalRefusal.current = true;
-        /* ★★★ SAY THE RULE THAT ACTUALLY GOVERNS. There are two windows and we were quoting the
-         *     short one: `cooldown` is how long this address is refused, `fresh` is when a full
-         *     turn returns — and coming back between them lets you in with NO TIME LEFT. Stuart
-         *     hit exactly that: "The app has been closed for a good 10 mins or so and as soon as I
-         *     connected to the Pi again it said my time was over."
-         *  ★ Only when the server said it and it is genuinely longer; otherwise the old sentence,
-         *    which is right for a server that has no such rule. */
+        borrowedRef.current = false; setBorrowed(false);
+        /* ★★★ WHEN MAY THEY COME BACK — FROM THE SERVER'S OWN NUMBERS, NEVER A CONSTANT (B10).
+         *     Stuart on Kiko's server, 2026-10-01: told "try again in about 2 minutes", refused well
+         *     after it — the server let him in after the cooldown and ended him on the spot, because
+         *     his turn had no time left. A new server (`borrow`) admits a returning listener to a FREE
+         *     radio after the cooldown and keeps them until somebody else wants it, so the short
+         *     figure is true and we say what it buys. An older server does not: there the real next
+         *     entry is the FULL turn (`fresh`), and that is the figure we quote.
+         *  ★ Same words as the web client's sessionEndedNote() — one rule, two readers. */
+        const mins = (s: number) => { const m = Math.max(1, Math.round(s / 60)); return `${m} minute${m === 1 ? '' : 's'}`; };
+        const fresh = freshSec ?? 0;
         setRefusal({
           title: 'TIME UP',
           body: 'Your guaranteed time on this shared receiver has ended and your session was closed '
             + 'so the receiver is free for others.',
-          note: f > m
-            ? `You can try again in about ${m} minute${m === 1 ? '' : 's'}, though the receiver may be `
-              + `in use by then — a full turn starts again ${f} minutes after your last one.`
-            : `You can try again in about ${m} minute${m === 1 ? '' : 's'}, though the receiver may be `
-              + `in use by then.`,
+          note: borrow
+            ? `You can come back in about ${mins(cooldownSec)}. If nobody else is using the receiver then, `
+              + `it is yours until somebody else wants it` + (fresh > cooldownSec
+                ? ` — a full guaranteed turn starts again once you have been away ${mins(fresh)}.` : '.')
+            : fresh > cooldownSec
+              ? `You can try again in about ${mins(fresh)}, when a full turn starts again — coming back `
+                + `sooner ends at once, because this turn has no time left.`
+              : `You can try again in about ${mins(cooldownSec)}, though the receiver may be in use by then.`,
         });
+      },
+      onBorrowed: () => {
+        if (destroyed.current || borrowedRef.current) return;
+        borrowedRef.current = true;
+        setBorrowed(true);
+        setDialHint('Your turn on this receiver has been used — it is yours again until somebody else wants it.');
       },
       onCooldown: (secs: number) => {
         if (destroyed.current) return;
@@ -10368,7 +10383,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       })()}
 
       {sessionEndsAt != null && !adminOk && (
-        <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft}
+        <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft || borrowed}
                       top={rightStackTop + healthStackShift} right={rightInset} />
       )}
 
