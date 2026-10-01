@@ -1475,6 +1475,20 @@ inline SysStats readSys() {
             const char* q = strstr(mi.c_str(), "MemAvailable:");
             if (p) s.memTotalKB = atoll(p + 9);
             if (q) s.memAvailKB = atoll(q + 13);
+            else {
+                // ★★ MemAvailable arrived in Linux 3.14. Android 5.x kernels (3.4 / 3.10 — Kiko's Moto G,
+                //   2026-10-01) don't have it, so it read as 0 and SERVER HEALTH showed RAM at 100 %
+                //   forever. The kernel's own pre-3.14 estimate: free + buffers + page cache.
+                const char* f = strstr(mi.c_str(), "MemFree:");
+                const char* b = strstr(mi.c_str(), "Buffers:");
+                const char* c = strstr(mi.c_str(), "\nCached:");
+                long long kb = 0;
+                if (f) kb += atoll(f + 8);
+                if (b) kb += atoll(b + 8);
+                if (c) kb += atoll(c + 8);
+                if (s.memTotalKB > 0 && kb > s.memTotalKB) kb = s.memTotalKB;
+                s.memAvailKB = kb;
+            }
             s.haveMem = s.memTotalKB > 0;
         }
     }
