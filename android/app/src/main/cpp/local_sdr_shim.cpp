@@ -16592,11 +16592,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return;
             }
             if (!isPost && what == "history") {
-                reply(200, "OK", g_vsHistory.json());
+                // ★ ?after=<epoch>: only the new tail — see History::json.
+                reply(200, "OK", g_vsHistory.json(atoll(queryParam(reqLine, "after").c_str())));
                 return;
             }
             if (!isPost && what == "connections") {
-                reply(200, "OK", "{\"connections\":" + g_vsConnLog.json() + "}");
+                /* ★★ ?gen=<n>: "I already have generation n". The log changes when somebody
+                 *  connects or leaves; the page asks every 2 s. Unchanged → a few bytes instead of
+                 *  ~100 KB up the uplink the audio is using. The generation is read BEFORE the rows,
+                 *  so a change racing this request can only make the next poll fetch again. */
+                const unsigned long long gen = g_vsConnLog.generation();
+                const std::string have = queryParam(reqLine, "gen");
+                if (!have.empty() && strtoull(have.c_str(), nullptr, 10) == gen) {
+                    reply(200, "OK", "{\"unchanged\":true,\"gen\":" + std::to_string(gen) + "}");
+                    return;
+                }
+                reply(200, "OK", "{\"gen\":" + std::to_string(gen)
+                                 + ",\"connections\":" + g_vsConnLog.json() + "}");
                 return;
             }
             if (!isPost && what == "notice") {
@@ -18778,6 +18790,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get()); }
         bool bothGone = false;
         bool rdsxGone = false;            // ★ an Advanced RDS subscriber left — recompute OUTSIDE clientMtx
+        /* ★★★ THE CONNECTION LOG IS WRITTEN AFTER clientMtx IS RELEASED, NEVER UNDER IT.
+         *  clientMtx is the DSP thread's lock (feedClientChannels, allAudioSocks — every block), and
+         *  the log's own lock is the one the admin page's CONNECTION HISTORY reads. Calling into the
+         *  log from in here chained the two: an admin poll holding the log → this close waiting on
+         *  it with clientMtx held → the DSP waiting on clientMtx → "IQ overrun — dropping a buffer
+         *  (the DSP thread was blocked)", heard as a drop by everyone (Pi 2, 2026-10-01, with the
+         *  admin page open). The figures are gathered under the lock as before; only the calls
+         *  move. Same rule as adminKick: nothing slow, and no other subsystem's lock, under clientMtx. */
+        struct LogClose { bool due = false; std::string ip, sess; unsigned long long total = 0, drops = 0;
+                          int stops = -1, heard = 0; float best = 0; double parked = 0; long long audio = -1; } logClose;
+        std::string logAudioSess; long long logAudioBytes = -1;
         std::shared_ptr<ClientDsp> goneDsp;
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (specClient == sock) {
@@ -18847,8 +18870,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                    *  here. That is the common order for a browser tab being shut. */
                   { std::lock_guard<std::mutex> bl(sessionBytesMtx);
                     sessionAudio[bsess] += aud;
-                    if (isAudio && g_vsConnLog.noteAudio(bsess, (long long)sessionAudio[bsess]))
-                        sessionAudio.erase(bsess); }
+                    // ★ Handed to the log AFTER clientMtx is released — see LogClose above.
+                    if (isAudio) { logAudioSess = bsess; logAudioBytes = (long long)sessionAudio[bsess]; } }
                   // ★ Same rescue for the drop count: clientDsp is keyed by SOCKET and is about to
                   //   go, so read it here or lose it.
                   { unsigned long long dr = 0;
@@ -18947,8 +18970,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const long long nowV = (long long)time(nullptr);
             if (auto* c = cd)  c->visit.verdict(nowV, vStops, vHeard, vBest, vParked);
             else if (dv)       dv->verdict(nowV, vStops, vHeard, vBest, vParked);
-            LocalSdrShim::noteConnectionClosed(sock->peerAddress(), sess, "closed", total, drops,
-                                               vStops, vHeard, vBest, vParked, audio);
+            // ★ Recorded AFTER clientMtx is released — see LogClose above.
+            logClose = LogClose{ true, sock->peerAddress(), sess, total, drops,
+                                 vStops, vHeard, vBest, vParked, audio };
           }
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
           // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
@@ -19007,6 +19031,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           // ★ The occupant left of their own accord. Any soft-limit handover dies with them —
           //   leaving it set would start the next listener already 60 seconds into a notice.
           if (specGone && audioGone) { occupantSession.clear(); g_vsHandoverAt = 0; bothGone = true; } }
+        // ★★★ clientMtx is released: NOW the connection log (see LogClose).
+        if (logClose.due)
+            LocalSdrShim::noteConnectionClosed(logClose.ip, logClose.sess, "closed", logClose.total,
+                                               logClose.drops, logClose.stops, logClose.heard,
+                                               logClose.best, logClose.parked, logClose.audio);
+        if (!logAudioSess.empty() && g_vsConnLog.noteAudio(logAudioSess, logAudioBytes)) {
+            std::lock_guard<std::mutex> bl(sessionBytesMtx);
+            sessionAudio.erase(logAudioSess);
+        }
         // ★ And release the machine-wide claim, so this address may take another radio at once.
         if (bothGone) { { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp.clear(); }
                         occWrite(""); }
