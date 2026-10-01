@@ -36,6 +36,7 @@
 #include "vibe_dab_spi.h"
 #include "vibe_thread.h"
 #include "vibe_dab_epg.h"
+#include "vibe_dab_stereo.h"
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -117,6 +118,7 @@ private:
          *  configured for the OLD service's rate and channel mode, and DAB+ services on one
          *  multiplex differ in both. Carrying it across is the chipmunk bug wearing a new hat. */
         aac_.reset();
+        afmt_ = AudioFormat{};   // ★ the old block's format is not this one's — see setService
         aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacAuTotal_ = 0; aacEffRateHz_ = 0; aacRateWarned_ = false; aacPrimed_ = false;
         /* ★ WHICH GEOMETRY THE NEW SERVICE USES IS NOT KNOWN UNTIL ITS FIRST SUPER FRAME, so this
          *  can no longer be answered here. The first decoded unit sets it from that service's own
@@ -178,6 +180,10 @@ public:
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         requestMp2Reset_();   // ★ vibe-mp2 owns the decoder — see mp2Loop_
         aac_.reset(); aacDry_ = 0;   // ★ a new service is a new codec configuration — see setChannel
+        /* ★ AND ITS FORMAT IS NOT KNOWN UNTIL ITS FIRST SUPER FRAME. afmt_ stayed the OLD service's
+         *  until then, so the codec line — and the stereo light read beside it — showed the last
+         *  station's for the new one's first half second. Unknown reads as unknown (the light off). */
+        afmt_ = AudioFormat{};
         /* ★★★ AND THE SUPER-FRAME WINDOW. sf_ holds the last five logical frames — of the OLD
          *  service. The first super frame after a switch could be four old frames and one new,
          *  pass its firecode on the OLD service's header, and be decoded under the OLD format: on
@@ -829,14 +835,18 @@ public:
              *  super frame header says the core rate, SBR and PS; for Layer II the frame header
              *  says the sample rate and channel mode. "DAB+ 32 kbit/s 32 kHz HE-AAC v2 Parametric
              *  Stereo" is what a DXer wants to read, and it is only knowable here. */
-            char cb[200];
+            /* ★★ AND "stereo" — what the stereo light beside the mode shows in DAB (vibe_dab_stereo.h).
+             *  The light was the FM pilot's, and stayed lit on a mono service. Absent = not known
+             *  yet (acquiring): the clients leave the light OFF. 256: the longest DAB+ line is ~180. */
+            char cb[256];
             if (sid_ && rx_.selectedType() == 63 && afmt_.outputRateHz > 0) {
                 const char* prof = afmt_.sbr ? (aacPs_ ? "HE-AAC v2" : "HE-AAC v1") : "AAC-LC";
                 const char* chan = aacPs_ ? "Parametric Stereo" : (aacCoreCh_ == 2 ? "Stereo" : "Mono");
-                snprintf(cb, sizeof cb, ",\"codecDetail\":\"DAB+ %d kbit/s %d kHz %s %s\",\"audioRateHz\":%d,\"coreRateHz\":%d,\"sbr\":%s,\"ps\":%s,\"audioCh\":%d,\"aacEffRateHz\":%d",
+                snprintf(cb, sizeof cb, ",\"codecDetail\":\"DAB+ %d kbit/s %d kHz %s %s\",\"audioRateHz\":%d,\"coreRateHz\":%d,\"sbr\":%s,\"ps\":%s,\"audioCh\":%d,\"aacEffRateHz\":%d,\"stereo\":%s",
                          rx_.serviceBitrate(), afmt_.outputRateHz / 1000, prof, chan,
                          afmt_.outputRateHz, afmt_.coreRateHz, afmt_.sbr ? "true" : "false",
-                         aacPs_ ? "true" : "false", aacOutCh_, aacEffRateHz_);
+                         aacPs_ ? "true" : "false", aacOutCh_, aacEffRateHz_,
+                         dabAacIsStereo(aacCoreCh_ == 2, aacPs_) ? "true" : "false");
                 /* ★ Stuart, 2026-09-07, on the start-up glide of a DAB+ service on the Pi: "I
                  *  don't mind the glide, it's quite fun, just make a notification to show buffer
                  *  building". The measured-rate estimate is still moving for the first ~3 s of
@@ -851,9 +861,9 @@ public:
             } else if (sid_ && rx_.selectedType() == 0 && mp2_.info().valid) {
                 const auto& mi = mp2_.info();
                 static const char* modes[4] = { "Stereo", "Joint Stereo", "Dual Channel", "Mono" };
-                snprintf(cb, sizeof cb, ",\"codecDetail\":\"DAB %d kbit/s %d kHz MPEG-%s Layer II %s\",\"audioRateHz\":%d,\"audioCh\":%d",
+                snprintf(cb, sizeof cb, ",\"codecDetail\":\"DAB %d kbit/s %d kHz MPEG-%s Layer II %s\",\"audioRateHz\":%d,\"audioCh\":%d,\"mp2Mode\":%d,\"stereo\":%s",
                          mi.bitrateKbps, mi.sampleRateHz / 1000, mi.lsf ? "2 LSF" : "1", modes[mi.mode & 3],
-                         mi.sampleRateHz, mi.channels);
+                         mi.sampleRateHz, mi.channels, mi.mode & 3, dabMp2ModeIsStereo(mi.mode & 3) ? "true" : "false");
                 j += cb;
             }
         }

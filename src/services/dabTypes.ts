@@ -30,6 +30,12 @@ export interface DabState {
   /** True while the server is still measuring the decoder's real output rate (the start-up glide). */
   aacSettling?: boolean;
   codecDetail?: string; audioRateHz?: number; coreRateHz?: number; sbr?: boolean; ps?: boolean; audioCh?: number;
+  /** ★ Is the PLAYING service stereo, from its own audio headers (server vibe_dab_stereo.h): DAB+
+   *  core stereo or parametric stereo; Layer II stereo / joint stereo (dual channel and mono are not).
+   *  Absent while the service is still being acquired, and from servers before 2026-10-01. */
+  stereo?: boolean;
+  /** Layer II only: the frame header's mode (0 stereo, 1 joint, 2 dual channel, 3 mono). */
+  mp2Mode?: number;
   ecc?: number; cif?: number; mci?: boolean; nsvc?: number;
   /** Transmitter Identification: which transmitters of the SFN the null symbol says we hear. */
   tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean }[];
@@ -115,6 +121,23 @@ export function dabSafeText(v: unknown, max = 128): string {
     if (out.length >= max) break;
   }
   return out.trim();
+}
+
+/**
+ * ★★★ THE STEREO LIGHT IN DAB — the playing SERVICE's, never the FM pilot's (Stuart, 2026-10-01: "the
+ * stereo icon from WFM also is stuck when in DAB mode even when on Mono stations"). On while the
+ * service is stereo; OFF on mono and dual-channel services, and OFF while it is not known (acquiring,
+ * no service yet) — a light that guesses is the bug this replaces.
+ * ★ The server's own `stereo` when it sends one; before 2026-10-01 it did not, so the codec line it
+ *   has always sent is read instead — it names the channel mode ("… Parametric Stereo", "… Joint
+ *   Stereo", "… Dual Channel", "… Mono"), and only the stereo ones end in "Stereo".
+ * ★★ ONE RULE, ONE COPY: the web client imports THIS function (web/client/src/main.ts
+ *   syncStereoLight), so the app's light and the web's cannot disagree. scripts/test_dab_stereo.ts.
+ */
+export function dabServiceStereo(d: Pick<DabState, 'stereo' | 'codecDetail'> | null | undefined): boolean {
+  if (!d) return false;
+  if (typeof d.stereo === 'boolean') return d.stereo;
+  return typeof d.codecDetail === 'string' && /\bStereo$/.test(d.codecDetail.trim());
 }
 
 /** The same gate for a number the UI will render or do arithmetic on. NaN and Infinity survive
