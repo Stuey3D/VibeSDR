@@ -20,11 +20,11 @@
  *
  * Run: node --no-warnings scripts/test_popup.ts   (run-tests.sh does)
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { CONTROLS, TEXTS, DISPLAYS, LED, resolveTextColour, SILVER_CHASSIS, BLACK_CHASSIS } from '../src/constants/faceplate.ts';
 import {
   buildPopupTokens, popupTokensFor, TODAY_ACCENT, TODAY_ACCENT_DIM, TODAY_AMBER, CONTRAST_FIX,
-  type PopupTokens,
+  SCROLL_LANE, scrollLane, scrollLaneOutset, type PopupTokens,
 } from '../src/constants/popupTokens.ts';
 import { toSegCells } from '../src/constants/displayText.ts';
 
@@ -227,6 +227,58 @@ for (const f of ['FreqModal', 'AudioSheet', 'MenuSheet', 'ChatDrawer', 'Recordin
 }
 // ★ The CONTROL CUSTOMISATION pane's one swap point is a pip key on metal.
 ok('SelectorKey is a PopupKey with a pip on metal', /function SelectorKey[\s\S]*?pt\.metal[\s\S]*?<PopupKey[^>]*\bpip\b/.test(src('components/MenuSheet.tsx')));
+
+// ── 8. The scroll indicator's lane ───────────────────────────────────────────
+// ★★★ A SCROLL INDICATOR MUST NEVER SIT ON A BUTTON (Stuart, 2026-10-01: the AUDIO popup on a Mac with
+//   scroll bars always shown had it over the NR readout and every right-hand key). Every VERTICAL
+//   ScrollView / FlatList in a component (and the radio list on SDRScreen) that shows its indicator
+//   either takes `scrollLane` / `scrollLaneOutset` / SCROLL_LANE in its opening tag, or says in a
+//   `★ scroll lane:` comment there what already keeps its content clear. A new scroller with neither
+//   fails here — that is the point: the lane has to be a decision, not a default.
+{
+  ok('SCROLL_LANE is 12 pt', SCROLL_LANE === 12);
+  ok('scrollLane pads the right by the lane', scrollLane.paddingRight === SCROLL_LANE);
+  ok('scrollLaneOutset lends the lane from the parent', scrollLaneOutset.marginRight === -SCROLL_LANE);
+  const files = readdirSync(new URL('../src/components/', import.meta.url))
+    .filter((f) => f.endsWith('.tsx')).map((f) => `components/${f}`).concat(['screens/SDRScreen.tsx']);
+  /** The opening tag from `<Name` to its closing `>`, skipping `>` inside {…}, strings and comments. */
+  function openingTag(s: string, at: number): string {
+    let depth = 0, i = at + 1, q = '';
+    for (; i < s.length; i++) {
+      const c = s[i];
+      if (q) { if (c === q && s[i - 1] !== '\\') q = ''; continue; }
+      if (c === '/' && s[i + 1] === '*') { i = s.indexOf('*/', i + 2) + 1; continue; }
+      if (c === '/' && s[i + 1] === '/' ) { i = s.indexOf('\n', i); continue; }
+      if (depth > 0 && (c === '"' || c === "'" || c === '`')) { q = c; continue; }
+      if (c === '{') depth++;
+      else if (c === '}') depth--;
+      else if (c === '>' && depth === 0) break;
+    }
+    return s.slice(at, i + 1);
+  }
+  let scrollers = 0;
+  for (const f of files) {
+    const s = src(f);
+    for (const m of s.matchAll(/(?<![\w.])<(ScrollView|FlatList|SectionList|DraggableFlatList)\b(?!\s*[|>,])/g)) {
+      const tag = openingTag(s, m.index!);
+      if (/\bhorizontal\b(?!\s*=\s*\{\s*false)/.test(tag)) continue;
+      if (/showsVerticalScrollIndicator=\{false\}/.test(tag)) continue;
+      scrollers++;
+      const line = s.slice(0, m.index!).split('\n').length;
+      ok(`${f}:${line} <${m[1]}> keeps its indicator off the content`,
+         /\bscrollLane(Outset)?\b|\bSCROLL_LANE\b|★ scroll lane:/.test(tag), tag.slice(0, 160).replace(/\s+/g, ' '));
+      // An outset without the lane would only move the content INTO the indicator.
+      if (/\bscrollLaneOutset\b/.test(tag)) ok(`${f}:${line} outset comes with the lane`, /\bscrollLane\b/.test(tag));
+    }
+  }
+  ok('the lane check found the popup scrollers', scrollers >= 15, `found ${scrollers}`);
+  // ★★ The AUDIO sheet's key rows WRAP (A-BW was cut off at the right edge): no key row may push a
+  //    flex spacer and then its keys, which is how they overflowed.
+  const audio = src('components/AudioSheet.tsx');
+  ok('AudioSheet: BCAST FM keys wrap', /BCAST FM<\/Text>[\s\S]{0,400}<View style=\{st\.keyWrapEnd\}>/.test(audio));
+  ok('AudioSheet: DE-EMPH keys wrap', /DE-EMPH<\/Text>\s*<View style=\{st\.keyWrapEnd\}>/.test(audio));
+  ok('AudioSheet: keyWrapEnd wraps', /keyWrapEnd:\s*\{[^}]*flexWrap: 'wrap'/.test(audio));
+}
 
 console.log(rows.join('\n'));
 console.log(`popup: ${passes} passed, ${fails} failed`);

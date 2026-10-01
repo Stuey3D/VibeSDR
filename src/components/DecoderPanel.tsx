@@ -33,6 +33,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel,
          DECODER_FONT, decoderBodyInset, engraveStyle, useDecoderTokens, useDecoderStyles,
          type DecoderTokens } from './DecoderShell';
 import StationLogo from './StationLogo';
+import { scrollLane } from '../constants/popupTokens';
 import type { Aircraft } from '../services/SDRBackend';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -1061,7 +1062,7 @@ export default function DecoderPanel({
             // broken button. In BIG the box takes the room whether or not there is text to fill
             // it; in SMALL it goes back to sizing itself.
             style={[dp.body, bodySize]}
-            contentContainerStyle={dp.bodyContent}
+            contentContainerStyle={[dp.bodyContent, scrollLane]}
             {...bodyScroll}
             showsVerticalScrollIndicator
           >
@@ -1096,7 +1097,8 @@ export default function DecoderPanel({
           </View>
         )}
         {!minimised && isDabMode && (
-          <ScrollView ref={dabScroll} style={[dp.body, bodySize]} showsVerticalScrollIndicator {...bodyScroll}>
+          <ScrollView ref={dabScroll} style={[dp.body, bodySize]} showsVerticalScrollIndicator {...bodyScroll}
+            /* ★ scroll lane: full-width rows, each inset 12 pt by dabRow's own padding */>
             {dabProgrammes.map((p, pi) => {
               const active = p.id === activeDabId;
               const navOn = kbZone === 'list' && listIdx === pi;
@@ -1122,6 +1124,8 @@ export default function DecoderPanel({
           <FlatList
             ref={spotsRef}
             style={[dp.body, bodySize]}
+            // ★ The indicator's lane: a spot row's columns run to its right edge (10 pt inset only).
+            contentContainerStyle={scrollLane}
             {...bodyScroll}
             data={visibleSpots}
             // ★★ NO INDEX IN THE KEY. Spots are newest-first, so a burst PREPENDS rows and

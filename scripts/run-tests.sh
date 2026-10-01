@@ -296,6 +296,14 @@ printf '\n\033[1m── web client serving (end to end) ──\033[0m\n'
 node scripts/test-web-serving.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★★ A PERMANENT SCROLLBAR NEVER COVERS OR SQUEEZES A PANEL'S CONTROLS (Stuart, 2026-10-01: Windows /
+#     Edge keeps the bar on screen). Every panel at 390 and 1280 px with a classic 15 px bar forced on:
+#     the gutter is reserved, nothing scrolls sideways, every control ends left of the bar. Headless
+#     Edge, --mute-audio, throwaway profile. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── web panels: the scrollbar lane (real browser) ──\033[0m\n'
+node scripts/test-web-scrollbar-lane.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ THE SHARED CHUNK CACHE IN A REAL BROWSER, ACROSS REAL SERVERS: two vibeservers behind a local
 #     https front as a/b/c.vibeserver.vibesdr.net, this tree's store.html as the directory's. Server B
 #     opens the map and the admin panel with ZERO requests for either; a tampered IndexedDB entry is

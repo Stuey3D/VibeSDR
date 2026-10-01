@@ -332,7 +332,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     const boxH = fitsWhole ? Math.min(maxHeight, drawH) : maxHeight;
 
     return (
-      <ScrollView style={{ height: boxH, maxHeight }} showsVerticalScrollIndicator>
+      <ScrollView style={{ height: boxH, maxHeight }} showsVerticalScrollIndicator
+                  /* ★ scroll lane: a picture, centred, no controls in it */>
         {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would
             otherwise sit against the left edge with dead space beside it. */}
         <View style={[styles.canvasWrap, { width: drawW, height: drawH, alignSelf: 'center' }]}>

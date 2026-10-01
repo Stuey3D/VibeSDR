@@ -1361,6 +1361,7 @@ function MenuSheetBody({
                 </CmapHeaderBtn></NavRow>
                 {cmapOpen && (
                   <ScrollView ref={cmapScroll} style={[styles.dropList, { maxHeight: dropMaxH }]} nestedScrollEnabled
+                              /* ★ scroll lane: full-width text rows, each inset 12 pt by dropItem's own padding */
                               keyboardShouldPersistTaps="handled">
                     {cmapSorted.map(name => (
                       <TouchableOpacity key={name}

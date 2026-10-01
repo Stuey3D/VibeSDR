@@ -175,7 +175,7 @@ function installStyle() {
 }
 #tutBox .tutTitle { color: var(--amber, #ffb000); font-size: 12px; letter-spacing: .06em; }
 #tutBox .tutCount { margin-left: auto; font-size: 11px; opacity: .6; white-space: nowrap; }
-#tutBox .tutBody { padding: 10px; font-size: 12px; line-height: 1.9; overflow-y: auto; }
+#tutBox .tutBody { padding: 10px; font-size: 12px; line-height: 1.9; overflow-y: auto; scrollbar-gutter: stable; }
 /* ★★★ THE BUTTON ITSELF, IN THE SENTENCE. Naming a control in prose asks the reader to hold a
    description in their head and then go hunting for something that matches it — and the glyphs
    are the worst case: a bare ‹ in a paragraph is punctuation, not a button (Stuart, 2026-09-22:

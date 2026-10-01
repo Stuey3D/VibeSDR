@@ -1324,6 +1324,21 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   opacity: 1; visibility: visible;
   transform: translate(-50%, -50%) scale(1);
 }
+/* ★★★ THE SCROLLBAR GETS A LANE OF ITS OWN (Stuart, 2026-10-01: "on my work laptop with Windows and
+     Edge the bar stays on screen"). A permanent classic scrollbar — Windows, or macOS set to "Show
+     scroll bars: Always" — appears only once content overflows, so without a reserved gutter every
+     panel RE-LAYS ITSELF the moment it grows past its cap: the rows narrow by the bar's width and a
+     row of keys that just fitted no longer does. `scrollbar-gutter: stable` keeps the lane reserved
+     whether or not the bar is drawn, so the keys never move and never sit under it. Overlay
+     scrollbars (Safari, phones) take no lane and are unaffected. Full-screen CENTRED pages
+     (#splash, the audio gate) reserve both edges so the centre stays the centre.
+     ★ Every overflow-y: auto container belongs in this list — scripts/test-web-scrollbar-lane.mjs
+       measures them with classic scrollbars forced on. */
+#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel,
+#searchResults, #chatLog, #decText, #decBody, #rdsPanel, #adminPanelBody, #actLog {
+  scrollbar-gutter: stable;
+}
+#splash { scrollbar-gutter: stable both-edges; }
 /* Wider ones: bookmarks/recordings/decoders list real content. */
 #bookmarksPanel, #recordingsPanel, #decodersPanel { width: min(94vw, 640px); }
 #chatPanel { width: min(94vw, 460px); }
@@ -3869,7 +3884,9 @@ select.btn { padding: 6px 8px; }
   </div>
 
   <h2>RECEIVER LOCATION</h2>
-  <div class="lbl" id="rxLoc">Not published by this server</div>
+  <!-- ★ .wrap: the line becomes a whole SENTENCE when the location is unset, and nowrap ran it
+       264 px off a phone's panel, which then scrolled sideways (found 2026-10-01). -->
+  <div class="lbl wrap" id="rxLoc">Not published by this server</div>
   <div class="lbl wrap" style="margin-bottom:6px">
     Distances and the band plan are measured from the RECEIVER, not from you —
     the server may be in another town. Set a grid here only if the server hasn't
@@ -3883,7 +3900,7 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="spotsBtn">DIGITAL SPOTS</button>
     <button class="btn" id="mapBtn" title="Opens in a new tab">&#128506; MAP</button>
   </div>
-  <div class="lbl" style="margin-top:6px">
+  <div class="lbl wrap" style="margin-top:6px">
     Decoding runs on the server. Tap a spot to tune.
   </div>
   </div>

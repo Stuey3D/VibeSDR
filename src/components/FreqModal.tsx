@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText, windowStyle,
   PopupKey, PopupPlate, PopupScrim, PopupWindow, POPUP_FONT, type PopupTokens,
+  scrollLane, scrollLaneOutset,
 } from './PopupShell';
 import { toSegCells } from '../constants/displayText';
 
@@ -882,7 +883,10 @@ export default function FreqModal({
           {/* BOOKMARKS mode — search + band plan, EiBi, add current, saved list, transfer.
               Lifted verbatim from MenuSheet (§4.2). */}
           {cardMode === 'bookmarks' && (
-            <ScrollView ref={bmScrollRef} style={{ maxHeight: bmMaxH }}
+            <ScrollView ref={bmScrollRef} style={[{ maxHeight: bmMaxH }, scrollLaneOutset]}
+                        /* ★ The indicator's lane — the bookmark rows end in delete / cloud keys. The card's
+                           20 pt padding lends it, so the rows keep their width. */
+                        contentContainerStyle={scrollLane}
                         onScroll={(e) => { bmScrollY.current = e.nativeEvent.contentOffset.y; }}
                         scrollEventThrottle={16}
                         keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>

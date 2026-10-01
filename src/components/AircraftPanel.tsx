@@ -15,6 +15,7 @@ import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { useMemo } from 'react';
 import type { Aircraft } from '../services/SDRBackend';
 import { useDecoderStyles, DECODER_FONT, type DecoderTokens } from './DecoderShell';
+import { scrollLane } from '../constants/popupTokens';
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
@@ -61,7 +62,8 @@ export default function AircraftPanel({ aircraft, scrollRef }: {
 
   return (
     <View style={s.wrap}>
-      <ScrollView ref={scrollRef as any}>
+      {/* ★ The indicator's lane: the table's last column runs to the right edge. */}
+      <ScrollView ref={scrollRef as any} contentContainerStyle={scrollLane}>
         {rows.map((a) => {
           const climbing = a.vspeed != null && Math.abs(a.vspeed) >= 100;
           return (

@@ -161,6 +161,7 @@ export default function KeyboardShortcuts({ visible, onClose }: {
           onScroll={(e) => { y.current = e.nativeEvent.contentOffset.y; }}
           scrollEventThrottle={32}
           style={s.body}
+          /* ★ scroll lane: reading matter, inset 14 pt by s.body's own padding */
           contentContainerStyle={{ paddingBottom: 20 }}>
           {SECTIONS.map((sec) => (
             <View key={sec.title} style={s.sec}>

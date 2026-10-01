@@ -31,6 +31,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText, windowStyle,
   PopupKey, PopupPlate, PopupHandle, PopupWindow, POPUP_FONT, type PopupTokens,
+  scrollLane,
 } from './PopupShell';
 import type { ChatUserRow } from '../services/DecoderClient';
 import { phrasePadMaxHeight } from '../constants/chatPad';
@@ -364,6 +365,7 @@ function ChatDrawerBody({
               data={users}
               keyExtractor={(u: ChatUserRow) => u.username}
               style={cd.msgList}
+              /* ★ scroll lane: msgContent's own 14 pt side padding */
               contentContainerStyle={cd.msgContent}
               renderItem={({ item: u }: { item: ChatUserRow }) => {
                 const isMe = u.username === myCallsign;
@@ -411,6 +413,7 @@ function ChatDrawerBody({
               data={messages}
               keyExtractor={(m: ChatMessage) => m.id}
               style={cd.msgList}
+              /* ★ scroll lane: msgContent's own 14 pt side padding */
               contentContainerStyle={cd.msgContent}
               showsVerticalScrollIndicator
               onContentSizeChange={() => { if (followTail.current) listRef.current?.scrollToEnd({ animated: false }); }}
@@ -470,7 +473,7 @@ function ChatDrawerBody({
                   {dialLine}
                 </Text>
               )}
-              <ScrollView style={[cd.padScroll, { maxHeight: padMaxH }]} contentContainerStyle={cd.padContent}
+              <ScrollView style={[cd.padScroll, { maxHeight: padMaxH }]} contentContainerStyle={[cd.padContent, scrollLane]}
                 showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
               {/* ★★ SHARE A STATION — first, because it is the one key that says WHAT you found. */}
               {isCanned && !!shareItems && !picking && (pt.metal ? (

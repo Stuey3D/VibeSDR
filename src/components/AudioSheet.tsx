@@ -13,6 +13,7 @@ import { isKiwiProtocol } from '../services/sdrTypes';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
   PopupKey, PopupFader, PopupPlate, PopupHandle, PopupScrim, PopupWindow, type PopupTokens,
+  scrollLane, scrollLaneOutset,
 } from './PopupShell';
 import { sMeterText, sqlClosedOf } from '../constants/meters';
 import { setMacAudioVolume, toggleMacAudioMute, useMacAudio } from '../services/macAudio';
@@ -676,7 +677,11 @@ export default function AudioSheet({
           </Text>
         </View>
 
-        <ScrollView {...scrollProps} style={st.scroll} keyboardShouldPersistTaps="handled">
+        {/* ★★★ THE INDICATOR'S LANE (popupTokens SCROLL_LANE). It was printed over the NR readout and
+            every right-hand key on a Mac with scroll bars always shown (Stuart, 2026-10-01). The sheet's
+            16 pt right padding lends the lane, so the rows keep their width. */}
+        <ScrollView {...scrollProps} style={[st.scroll, scrollLaneOutset]} contentContainerStyle={scrollLane}
+                    keyboardShouldPersistTaps="handled">
         <NavCtx.Provider value={navCtx}>
 
           {/* ★★★ VOLUME + MUTE — ON A MAC ONLY (services/macAudio.ts). The iPad app on a Mac has no
@@ -840,7 +845,7 @@ export default function AudioSheet({
             <View style={{ marginTop: 6 }}>
               <View style={st.bwRow}>
                 <Text style={[st.bwLabel, { width: 78 }]}>RAW IQ</Text>
-                <View style={{ flex: 1, flexDirection: 'row', gap: 6 }}>
+                <View style={st.keyWrap}>
                   {(iqLocal ? [48000, 96000, 192000, 250000] : [48000]).map(r => (
                     pt.metal ? (
                     <PopupKey key={r} label={`${r / 1000}k`} active={(iq?.rate ?? iqRate) === r} pip hitSlop={6}
@@ -873,10 +878,11 @@ export default function AudioSheet({
           {onDeemph && (
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, { width: 78 }]}>DE-EMPH</Text>
-              <View style={{ flex: 1 }} />
+              <View style={st.keyWrapEnd}>
               {([{ l: 'OFF', v: 0 }, { l: '50µs', v: 50e-6 }, { l: '75µs', v: 75e-6 }]).map((o) => (
                 <Toggle key={o.l} label={o.l} on={deemph === o.v} onPress={() => onDeemph(o.v)} padH={10} marginLeft={6} />
               ))}
+              </View>
             </View>
           )}
 
@@ -904,7 +910,10 @@ export default function AudioSheet({
                   belong to. The names themselves match the web client deliberately: same product,
                   same words. */}
               <Text style={[st.bwLabel, { width: 78 }]}>BCAST FM</Text>
-              <View style={{ flex: 1 }} />
+              {/* ★★ THE KEYS WRAP, they never overflow. Five keys + the label are wider than a phone's
+                  row (and a narrow Mac window's): A-BW was cut off at the right edge (Stuart,
+                  2026-10-01). Right-aligned like the single toggles above, a second line when short. */}
+              <View style={st.keyWrapEnd}>
               {([
                 { l: 'NR',  on: fmNr !== false,  cb: onFmNr },
                 { l: 'IMS', on: fmIms !== false, cb: onFmIms },
@@ -917,6 +926,7 @@ export default function AudioSheet({
               ] as const).filter((o) => !!o.cb).map((o) => (
                 <Toggle key={o.l} label={o.l} on={o.on} onPress={() => o.cb?.(!o.on)} padH={9} marginLeft={6} />
               ))}
+              </View>
             </View>
           )}
 
@@ -1072,6 +1082,9 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   btnTextActive: { color: pt.gold.sel },
 
   bwRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
+  // ★ A row of keys after a label: takes the rest of the row and WRAPS rather than overflow it.
+  keyWrap:    { flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  keyWrapEnd: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', rowGap: 6 },
   bwLabel:  onMetal(pt, { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1, width: 32 }, { ...engraveText(pt), fontSize: 10, letterSpacing: 1.4 }),
   bwSlider: { flex: 1, height: 32 },
   bwVal:    onMetal(pt, { color: pt.gold.value, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, minWidth: 68, textAlign: 'right' }, { ...engraveText(pt, pt.value), fontWeight: '700' }),

@@ -2310,7 +2310,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     el.id = 'audioGate';
     el.style.cssText = 'position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;'
       + 'align-items:center;justify-content:center;justify-content:safe center;gap:14px;background:var(--bg,#080601);'
-      + 'overflow-y:auto;padding:16px 0;cursor:pointer';
+      // ★ scrollbar-gutter: a classic (Windows) scrollbar gets its own lane — both edges, so centred stays centred.
+      + 'overflow-y:auto;scrollbar-gutter:stable both-edges;padding:16px 0;cursor:pointer';
     startScreenUp = true;
 
     const btn = document.createElement('button');
@@ -11568,7 +11569,7 @@ ${glHead}
   .panel{position:absolute;z-index:1000;background:var(--bg);
     border:1px solid var(--bdr);border-radius:8px}
   /* Docked stats — left column, scrollable, NOT covering the map. */
-  #stats{top:10px;left:10px;width:265px;max-height:calc(100% - 20px);overflow-y:auto;padding:10px 12px}
+  #stats{top:10px;left:10px;width:265px;max-height:calc(100% - 20px);overflow-y:auto;scrollbar-gutter:stable;padding:10px 12px}
   #stats.hide,#legend.hide,#summary.hide{display:none}
   .sect{font-size:9px;letter-spacing:1.5px;color:var(--dim);margin:10px 0 6px;
     border-top:1px solid rgba(255,160,0,0.15);padding-top:8px}
@@ -13311,7 +13312,8 @@ function openStepMenu(anchor?: HTMLElement) {
   m.style.cssText = 'position:fixed;z-index:9998;background:#0d0d0d;border:1px solid #ffa000;'
     + 'border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;'
     + 'font:12px/1.4 var(--mono,monospace);box-shadow:0 6px 24px rgba(0,0,0,.6);'
-    + 'max-height:60vh;overflow:auto';
+    // ★ scrollbar-gutter: a classic (Windows) scrollbar takes its own lane, never the buttons' width.
+    + 'max-height:60vh;overflow:auto;scrollbar-gutter:stable';
   for (const v of steps) {
     const b = document.createElement('button');
     b.textContent = formatStep(v);

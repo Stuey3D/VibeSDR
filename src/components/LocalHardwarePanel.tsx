@@ -9,7 +9,7 @@ import { decoderTokensFor } from '../constants/decoderTokens';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { solidOver } from '../constants/faceplate';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { usePopupTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, PopupWindow } from './PopupShell';
+import { usePopupTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, PopupWindow, scrollLane } from './PopupShell';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from './PanelNav';
 import GainSlider from './GainSlider';
 import Slider from '@react-native-community/slider';
@@ -593,7 +593,8 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           <DecoderKey tone="close" onPress={p.onClose} hitSlop={10} label="✕" />
         </View>
         <PopupWindow style={styles.bodyWrap} metalStyle={styles.bodyWin}>
-        <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
+        {/* ★ The indicator's lane: the gain / attenuator keys run to the right edge. */}
+        <ScrollView contentContainerStyle={[{ paddingBottom: 16 }, scrollLane]}>
           {/* ★ The lock notice goes FIRST, before any control — it explains the whole panel,
               and finding it underneath the thing it applies to would be no use. */}
           {p.adminSet && (

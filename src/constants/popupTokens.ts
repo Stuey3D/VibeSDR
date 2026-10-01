@@ -142,6 +142,27 @@ export interface PopupTokens {
   entry:      PopupEntryStyle;
 }
 
+// ── The scroll indicator's lane ──────────────────────────────────────────────
+
+/**
+ * ★★★ A SCROLL INDICATOR MUST NEVER SIT ON A BUTTON. A ScrollView draws its indicator INSIDE its own
+ *   right edge, over whatever content reaches that edge. On a phone it flashes and fades; on a Mac
+ *   with "Show scroll bars: Always" (and Windows/Edge on the web client) it STAYS — Stuart's AUDIO
+ *   popup had it printed over the NR "Off" readout and every right-hand key (AUTO NOTCH, NOISE
+ *   BLANKER, RAW IQ, DE-EMPH, WFM STEREO), 2026-10-01. So every vertical scroller in a popup that
+ *   shows its indicator gives it a lane of its own: `contentContainerStyle` gets `scrollLane`
+ *   (content stops SCROLL_LANE short of the edge). Where the scroller's PARENT already has at least
+ *   SCROLL_LANE of right padding, the scroller also takes `scrollLaneOutset`, so the lane comes out
+ *   of that padding and the content keeps its width.
+ * ★ 12 pt: wider than the iOS/Android indicator (≤ 7) and the Mac's always-on overlay track.
+ *   scripts/test_popup.ts holds every popup scroller to it.
+ */
+export const SCROLL_LANE = 12;
+/** contentContainerStyle: the content stops short of the indicator's lane. */
+export const scrollLane = { paddingRight: SCROLL_LANE } as const;
+/** The scroller's own style, when its parent has ≥ SCROLL_LANE right padding to lend it. */
+export const scrollLaneOutset = { marginRight: -SCROLL_LANE } as const;
+
 // ── Today's literals ─────────────────────────────────────────────────────────
 
 /** MenuSheet / AudioSheet `C.gold` and `C.goldDim` (the accessibility skin's pale yellow). */
