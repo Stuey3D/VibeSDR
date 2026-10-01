@@ -9030,9 +9030,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!out || (out.kind === 'dab' && !dabCapable)) return;   // ★ never offer what this receiver cannot play
       items.push({ key: `bm-${i}-${b.frequency}`, title: b.name, detail: shareSummary(out), out });
     });
+    /* ★★ AND THE RECEIVER'S OWN STATIONS (B11, Stuart: "no options to share bookmarks, only this now
+     *  playing station"). Most listeners have saved nothing of their own on a server they visit; what
+     *  they see in the Bookmarks card are the SERVER's — RDS-learned and the owner's. Those are the
+     *  natural thing to point someone at, and their names are the receiver's own, not a user label.
+     *  After the user's own, by frequency, skipping any frequency already offered. */
+    const seen = new Set(items.map((it) => it.out.hz));
+    [...serverBookmarks].sort((a, b) => a.frequency - b.frequency).forEach((b, i) => {
+      const out = shareFromBookmark(b as any);
+      if (!out || seen.has(out.hz) || (out.kind === 'dab' && !dabCapable)) return;
+      seen.add(out.hz);
+      items.push({ key: `srv-${i}-${b.frequency}`, title: b.name, detail: `${shareSummary(out)} · this receiver`, out });
+    });
     return items;
   }, [status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh, dabOn, dabState,
-      visibleBookmarks, dabCapable]);
+      visibleBookmarks, serverBookmarks, dabCapable]);
   const onShare = useCallback((out: ShareOut) => { markInteract(); client.current?.share?.(out); }, []);
   /** ★★ TUNE ON A SHARED LINE — a USER action, through the deck's own paths (dabGoTo for DAB, the
    *  bookmark path otherwise), so the owner's limits and the server's rules apply exactly as to any

@@ -9456,7 +9456,17 @@ function initDecoders(host: string, auth: AuthState) {
     /* ★★★ SHARE A STATION — the frame src/services/chatShare.ts built: numbers and closed-list ids, NEVER a
      *  bookmark's label. The server validates it and names it from what THIS receiver knows. */
     share: (out) => spec?.send({ ...out }),
-    bookmarks: () => getBookmarks(),
+    // ★★ The listener's own, then THIS RECEIVER's stations (RDS-learned and the owner's) — the B11 fix for
+    //    "no options to share bookmarks, only now playing": most visitors have saved nothing of their own.
+    bookmarks: () => {
+      const seen = new Set<number>(), out: Array<{ name: string; frequency: number; mode?: string }> = [];
+      for (const b of [...getBookmarks(), ...[...getServerBookmarks()].sort((a, c) => a.frequency - c.frequency)]) {
+        const hz = Math.round(b.frequency);
+        if (seen.has(hz)) continue;
+        seen.add(hz); out.push(b);
+      }
+      return out as ReturnType<typeof getBookmarks>;
+    },
     dabNow: () => {
       if (!dabOn || !dabState || !dabState.channel) return null;
       const svc = dabState.services?.find((x) => x.sid === dabState!.sid);
