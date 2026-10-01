@@ -19,6 +19,7 @@
  *   tries again rather than being stuck with the failure.
  */
 import { inAdminMode } from './adminticket';
+import { loadAdminModule } from './chunkCache';
 
 type AdminModule = typeof import('./admin');
 let mod: AdminModule | null = null;
@@ -29,7 +30,9 @@ let wantOpen = false;
 
 function load(): Promise<AdminModule> {
   if (mod) return Promise.resolve(mod);
-  loading ??= import('./admin').then((m) => {
+  // ★ From the shared, hash-verified cache when another VibeSDR.net server already fetched it
+  //   (chunkCache.ts); otherwise exactly the import() it always was.
+  loading ??= loadAdminModule().then((m) => {
     mod = m;
     if (getters) m.initAdmin(getters[0], getters[1]);
     return m;

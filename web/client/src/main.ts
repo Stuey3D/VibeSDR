@@ -86,6 +86,7 @@ import {
  *  WHEN A MAP OPENS (openSpotsMap): ~98 KB that most listeners never use, so it is its own file and
  *  the page does not carry it (build-web.mjs splits every import() into one). */
 import { probeMapGL, type MapGLKit } from './mapgl';
+import { loadVibemapSource } from './chunkCache';
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
@@ -11499,7 +11500,7 @@ function openSpotsMap() {
   spotsMapWin = w;
   // ★ The renderer source comes with the map, not with the page (see the import note at the top).
   //   Fetched even when the GPU map is on offer: the window falls back to it if MapLibre fails there.
-  void Promise.all([probeMapGL(), import('./generated/vibemapSource')]).then(([kit, m]) => {
+  void Promise.all([probeMapGL(), loadVibemapSource()]).then(([kit, m]) => {
     if (w.closed) return;
     w.document.write(spotsMapHtml(kit, m.VIBEMAP_JS));
     w.document.close();
