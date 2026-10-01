@@ -153,9 +153,22 @@ const SegGhost = React.memo(function SegGhost({ w, h, n, sh, cw, gap, x0, y0, co
  * the box, then narrowed to fit its width. Right-aligned, like a real counter, so the unit label
  * beside it never moves a digit.
  */
-export function SegDigits({ text, rgb, core, glow, designH, style }: {
-  text: string; rgb: string; core: string; glow: string; designH: number; style?: StyleProp<ViewStyle>;
-}) {
+type SegDigitsProps = { text: string; rgb: string; core: string; glow: string; designH: number; style?: StyleProp<ViewStyle> };
+
+/** ★ Shallow, by value: the caller builds its `style` object afresh on every render. */
+function sameStyle(a?: StyleProp<ViewStyle>, b?: StyleProp<ViewStyle>): boolean {
+  if (a === b) return true;
+  if (!a || !b || Array.isArray(a) || Array.isArray(b) || typeof a !== 'object' || typeof b !== 'object') return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every(k => (a as Record<string, unknown>)[k] === (b as Record<string, unknown>)[k]);
+}
+
+/**
+ * ★★ MEMOISED (B8 power audit, emulator: the VCR window redrew ~58 times a second with nothing
+ *   changing). Every render of a Skia <Canvas> re-records and redraws it, and this one sits inside a
+ *   deck that re-renders for unrelated reasons (meters, status); the digits only change on a retune.
+ */
+export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, designH, style }: SegDigitsProps) {
   const [{ w, h }, onLayout] = useBoxSize();
   const cells = useMemo(() => segDigitCells(text), [text]);
   const n = cells.length;
@@ -186,4 +199,5 @@ export function SegDigits({ text, rgb, core, glow, designH, style }: {
       </>)}
     </View>
   );
-}
+}, (a, b) => a.text === b.text && a.rgb === b.rgb && a.core === b.core && a.glow === b.glow
+             && a.designH === b.designH && sameStyle(a.style, b.style));
