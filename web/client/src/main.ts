@@ -8271,8 +8271,8 @@ function showEvicted() { showRefusal('TAKEN OVER',
 function showSessionEnded(cooldownSec: number, freshSec = 0, borrow = false) {
   borrowedTime = false;   // a new connection is told afresh by hwinfo
   showRefusal('TIME UP',
-    'Your guaranteed time on this shared receiver has ended and your session was closed so the '
-    + 'receiver is free for others.<br><br>' + sessionEndedNote(cooldownSec, freshSec, borrow));
+    'Your time on this server has run out, and your session has been closed so the receiver is '
+    + 'free for others.<br><br>' + sessionEndedNote(cooldownSec, freshSec, borrow));
 }
 
 /** ★★★ WHEN MAY THEY COME BACK — FROM THE SERVER'S OWN NUMBERS, NEVER A CONSTANT (B10).
@@ -8285,9 +8285,10 @@ function showSessionEnded(cooldownSec: number, freshSec = 0, borrow = false) {
 function sessionEndedNote(cooldownSec: number, freshSec: number, borrow: boolean): string {
   const mins = (s: number) => { const m = Math.max(1, Math.round(s / 60)); return `${m} minute${m === 1 ? '' : 's'}`; };
   if (borrow) {
-    return `You can come back in about ${mins(cooldownSec)}. If nobody else is using the receiver then, `
-      + `it is yours until somebody else wants it` + (freshSec > cooldownSec
-        ? ` — a full guaranteed turn starts again once you have been away ${mins(freshSec)}.` : '.');
+    // ★ Stuart's wording (B10): what the short wait buys, what ends it, and how to get a full turn.
+    return `You can try again in about ${mins(cooldownSec)}. If the receiver is free then, you can carry `
+      + `on listening until somebody else wants it — you will be disconnected when they do.`
+      + (freshSec > cooldownSec ? ` Come back after ${mins(freshSec)} away and you start a full new session.` : '');
   }
   if (freshSec > cooldownSec) {
     return `You can try again in about ${mins(freshSec)}, when a full turn starts again — coming back `

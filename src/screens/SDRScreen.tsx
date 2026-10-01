@@ -4971,12 +4971,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         const fresh = freshSec ?? 0;
         setRefusal({
           title: 'TIME UP',
-          body: 'Your guaranteed time on this shared receiver has ended and your session was closed '
-            + 'so the receiver is free for others.',
+          body: 'Your time on this server has run out, and your session has been closed so the '
+            + 'receiver is free for others.',
+          // ★ Stuart's wording (B10) — same as the web client's sessionEndedNote().
           note: borrow
-            ? `You can come back in about ${mins(cooldownSec)}. If nobody else is using the receiver then, `
-              + `it is yours until somebody else wants it` + (fresh > cooldownSec
-                ? ` — a full guaranteed turn starts again once you have been away ${mins(fresh)}.` : '.')
+            ? `You can try again in about ${mins(cooldownSec)}. If the receiver is free then, you can carry `
+              + `on listening until somebody else wants it — you will be disconnected when they do.`
+              + (fresh > cooldownSec ? ` Come back after ${mins(fresh)} away and you start a full new session.` : '')
             : fresh > cooldownSec
               ? `You can try again in about ${mins(fresh)}, when a full turn starts again — coming back `
                 + `sooner ends at once, because this turn has no time left.`
