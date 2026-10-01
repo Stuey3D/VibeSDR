@@ -820,7 +820,10 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   const compact = winH != null;
   const H = compact ? winH : Math.round(freqFontSize * 1.12) + 2 * pillPadV;
   const unitW = Math.round(unitFontSize * 2.6);
-  const tagW = chanTag ? Math.round(Math.max(unitFontSize * 0.72 * 0.62 * chanTag.length, unitW)) : 0;
+  // ★★ A FIXED WIDTH for the airband channel label — sized for its longest form ("8.33 · 128.5917", 15
+  //    characters) — so tuning between 25 kHz and 8.33 kHz channels never changes the room the digits
+  //    sit in, and the CENTRED digits never move (B11, Stuart: centred, there is room for the details).
+  const tagW = chanTag ? Math.round(Math.max(unitFontSize * 0.72 * 0.62 * Math.max(chanTag.length, 15), unitW)) : 0;
   const labelW = Math.max(unitW, tagW);
   const label = (
     <View style={[pm.chanCol, { width: labelW, height: H, paddingBottom: Math.max(2, pillPadV), paddingRight: 3,
@@ -872,8 +875,8 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
     <View style={[{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
                     flexShrink: 1, minWidth: 0 }, compact && { flex: 1 }]}>
       {dk.style === 'dot' ? (
-        // ★ Left-anchored in airband only, centred otherwise — the same rule as the 7-segment digits below.
-        <View style={[cellBox, { justifyContent: 'center', alignItems: chanTag ? 'flex-start' : 'center' }]}>
+        // ★ Centred, like the 7-segment digits below (the airband label's width is fixed — tagW).
+        <View style={[cellBox, { justifyContent: 'center', alignItems: 'center' }]}>
           <GhostGrid rgb={dk.rgb} pitch={3.4} dot={0.8} />
           <Text style={[pm.freq, {
             color: dk.freq, fontFamily: dk.freqFont, letterSpacing: dk.freqSpacing,
@@ -885,11 +888,10 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
           </Text>
         </View>
       ) : (
-        // ★★ ANCHORED LEFT ONLY IN AIRBAND (B10/B11, Stuart): there the channel label beside the digits
-        //    changes width as you tune ("25 kHz" ↔ "8.33 · 128.5917") and would push centred digits about.
-        //    Everywhere else the digits sit CENTRED in the window.
+        // ★★ CENTRED, airband included (Stuart): the airband label's width is FIXED above (tagW), so it
+        //    can no longer push the digits about as you tune.
         <SegDigits text={freqStr.replace(/,/g, '')} rgb={dk.rgb} core={dk.core} glow={dk.glow}
-          designH={segH} style={cellBox} align={chanTag ? 'left' : 'center'} />
+          designH={segH} style={cellBox} align="center" />
       )}
       {label}
     </View>
