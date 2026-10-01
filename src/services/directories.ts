@@ -31,9 +31,11 @@ export const DIRECTORIES: DirectoryMeta[] = [
   //    is enough to say it is ours without inventing a second place for it to live.
   // ★ Only ANDROID can host (and so list) a VibeServer from this app — an iPhone cannot (B9, Stuart): there
   //   the line says where a server CAN run instead of promising a button that isn't there.
+  //   ★★ And it must NOT name Android on iOS: App Review guideline 2.3.10 (no other mobile platforms in
+  //   the app or its metadata). Mac and Linux are fine — they are not mobile platforms.
   { id: 'vibeserver',  name: 'VibeServer',
     desc: Platform.OS === 'android' ? 'Public VibeServers — list yours from the app'
-                                    : 'Public VibeServers — host one on Android, Mac or Linux',
+                                    : 'Public VibeServers — host one on a Mac or Linux',
     kinds: ['vibeserver'] },
   { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR instances',                 kinds: ['ubersdr'] },
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },
