@@ -15,7 +15,12 @@ import {
   METER_SCALES, meterPos, meterReading, formatReading, sMeterText, scaleMeterValues, makeScaledMeterState,
   meterUnitOf, type MeterUnit,
 } from '../src/constants/meters.ts';
-import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H } from '../src/constants/nixie.ts';
+import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H, COLLAR_H } from '../src/constants/nixie.ts';
+import {
+  modeBoxFit, modeTextWidth, stereoWidth, modeLabelCandidates, composeModeLabel, MODE_BOX, MODE_BOX_MAX_SHARE,
+  MODE_MIN_FONT, type ModeFace,
+} from '../src/constants/modeBox.ts';
+import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -409,6 +414,7 @@ for (const W of [320, 375, 390, 430]) {
       const tag = `${W} pt ${meter}${shared ? '+shared' : ''} ${layout} (window ${d.freqH} pt)`;
       ok(`${tag}: the stack fits the window`, stackHeight(g.glassH, scale) <= d.freqH + 1e-9);
       ok(`${tag}: the dome's pip is inside the window`, g.collarY - g.glassH - PIP_H * scale >= -1e-9);
+      ok(`${tag}: ★ the tubes stand on the line under the window`, Math.abs(g.collarY + COLLAR_H * scale - d.freqH) < 1e-9);
       ok(`${tag}: the glass never exceeds its design height`, g.glassH <= design.th * scale + 1e-9);
       const last = g.tubes[g.tubes.length - 1];
       ok(`${tag}: the tube row fits the width`, last.x + last.w <= winW + 1e-6);
@@ -421,6 +427,71 @@ for (const W of [320, 375, 390, 430]) {
   const g = nixieGeometry(300, d.freqH, nixieSpec('hf'), TUBE_DESIGN.meterShared, { bar: false });
   eq('analogue + shared: 35 pt window', d.freqH, 35);
   ok(`analogue + shared: the glass shrank (${g.glassH} < ${TUBE_DESIGN.meterShared.th})`, g.glassH < TUBE_DESIGN.meterShared.th);
+}
+
+// ── ★★★ THE MODE BOX: the longest label on ONE line, portrait (constants/modeBox.ts) ─────────────────
+// Stuart, 2026-10-01: USB + RTTY read "USB:" / "RTTY" / "S9+1" in the LED / analogue window's fixed
+// 70 pt box. The box is now 70 as a MINIMUM, grown to the label out of the frequency window (the
+// default deck's rule); the spacing tightens, then the type shrinks, only where the window cannot spare
+// it. Every label the code can compose, every portrait width from the SE in Display Zoom (320 pt) to a
+// 13" iPad, every chassis × Display × meter × shared.
+const CANDIDATES = modeLabelCandidates(WHOLE_PROFILE_MODES);
+const longest = (face: ModeFace) => CANDIDATES.reduce((a, c) => {
+  const w = (x: typeof c) => modeTextWidth(x.label, 15, 2, face) + (x.stereo ? stereoWidth(15) : 0);
+  return w(c) > w(a) ? c : a;
+});
+{
+  const lh = longest('hyper'), ld = longest('doto');
+  console.log(`  longest mode label (Atkinson): "${lh.label}"${lh.stereo ? ' + stereo rings' : ''}; (Doto): "${ld.label}"${ld.stereo ? ' + stereo rings' : ''} — of ${CANDIDATES.length}`);
+  eq('the longest label the code composes (Atkinson)', [lh.label, lh.stereo], ['WFM: WHISPER', true]);
+  // The label rules themselves.
+  eq('USB + rtty → USB: RTTY', composeModeLabel('usb', 'rtty'), 'USB: RTTY');
+  eq('wefax reads FAX', composeModeLabel('usb', 'wefax'), 'USB: FAX');
+  eq('cwu / cwl read CW', [composeModeLabel('cwu', 'morse'), composeModeLabel('cwl', null)], ['CW: MORSE', 'CW']);
+  eq('★ a standalone digimode is its own label (was MESHCORE: MESHCORE)', composeModeLabel('meshcore', 'meshcore'), 'MESHCORE');
+  eq('DAB is DAB whatever the decoder', composeModeLabel('wfm', 'rtty', true), 'DAB');
+}
+const DISPLAYS: [string, ModeFace][] = [['hyper', 'hyper'], ['nixie', 'hyper'], ['seg', 'hyper'], ['dot', 'doto']];
+for (const W of [320, 375, 390, 393, 402, 430, 440, 768, 1024]) {
+  const scale = Math.max(0.75, Math.min(1.45, W / 390));
+  const r = (n: number) => Math.round(n * scale);
+  for (const [cname, padH] of [['default', r(12)], ['metal', r(14)]] as const) {
+    // The window's width: the screen less pillWrap's 8 pt each side and the plate's padding.
+    const winW = W - 2 * 8 - 2 * padH;
+    for (const [disp, face] of DISPLAYS) for (const meter of ['vu', 'edge'] as const) for (const shared of [false, true]) {
+      const d = portraitDeck({ cap: cname === 'metal', meter, shared, tablet: W >= 768, rowGap: r(7), r });
+      const tag = `mode box ${W} pt ${cname} ${disp} ${meter}${shared ? '+shared' : ''}`;
+      let widest = 0;
+      for (const c of CANDIDATES) {
+        const f = modeBoxFit({ label: c.label, stereo: c.stereo, face, fontSize: r(15), letterSpacing: 2,
+                               readingFont: r(11), minW: r(MODE_BOX.minW), padH: r(MODE_BOX.padH), windowW: winW });
+        const t = `${tag} "${c.label}"${c.stereo ? '+rings' : ''}`;
+        const need = modeTextWidth(c.label, f.fontSize, f.letterSpacing, face) + (c.stereo ? stereoWidth(f.fontSize) : 0)
+                     + 2 * r(MODE_BOX.padH);
+        ok(`${t}: ONE line (need ${need.toFixed(1)} ≤ box ${f.width})`, need <= f.width + 1e-9);
+        ok(`${t}: legible (${f.fontSize} ≥ ${MODE_MIN_FONT})`, f.fontSize >= MODE_MIN_FONT);
+        ok(`${t}: never below the design 70`, f.width >= r(MODE_BOX.minW));
+        ok(`${t}: the frequency keeps the larger part of the window`,
+           f.width <= Math.max(r(MODE_BOX.minW), Math.floor(winW * MODE_BOX_MAX_SHARE)));
+        // ★★ Last resort means LAST: without the stereo rings, every label fits at full size and spacing.
+        if (!c.stereo) ok(`${t}: full type, full spacing (no squeeze)`, !f.squeezed);
+        widest = Math.max(widest, f.width);
+      }
+      // The reported case: USB: RTTY grows the box past 70 at full size and stays on one line.
+      const rt = modeBoxFit({ label: 'USB: RTTY', stereo: false, face, fontSize: r(15), letterSpacing: 2, readingFont: r(11),
+                              minW: r(MODE_BOX.minW), padH: r(MODE_BOX.padH), windowW: winW });
+      ok(`${tag}: USB: RTTY — the box grew past the old ${r(70)} (${rt.width}), full size`, rt.width > r(70) && !rt.squeezed);
+      // …and the tubes still stand in the window the widest box leaves.
+      const unitW = Math.round(r(11) * 2.6);
+      const design = shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter;
+      for (const layout of ['hf', 'wide', 'fm'] as const) {
+        const tw = winW - widest - unitW;
+        const g = nixieGeometry(tw, d.freqH, nixieSpec(layout), design, { bar: false, scale });
+        const last = g.tubes[g.tubes.length - 1];
+        ok(`${tag} ${layout}: the tube row fits beside the widest box (${tw} pt)`, tw > 0 && last.x + last.w <= tw + 1e-6);
+      }
+    }
+  }
 }
 
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate meters: ${passes} passed, ${fails} failed`);

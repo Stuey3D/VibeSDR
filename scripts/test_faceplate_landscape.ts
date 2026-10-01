@@ -11,7 +11,17 @@
  * Run: node --no-warnings scripts/test_faceplate_landscape.ts   (run-tests.sh does)
  */
 import { landscapeDeck, landscapeBand, LAND, type MeterKind } from '../src/constants/meters.ts';
-import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H } from '../src/constants/nixie.ts';
+import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H, COLLAR_H } from '../src/constants/nixie.ts';
+import {
+  modeBoxFit, modeTextWidth, stereoWidth, modeLabelCandidates, MODE_BOX, MODE_BOX_MAX_SHARE, MODE_BOX_LAST_SHARE, MODE_MIN_FONT,
+  type ModeFace,
+} from '../src/constants/modeBox.ts';
+import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
+
+/** Every label the code can compose (constants/modeBox.ts), and the two mode-box typefaces: Atkinson
+ *  under Hyperlegible / Nixie / 7-segment, Doto under the VFD. */
+const CANDIDATES = modeLabelCandidates(WHOLE_PROFILE_MODES);
+const FACES: ModeFace[] = ['hyper', 'doto'];
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -92,14 +102,36 @@ for (const [W, H, tablet] of DEVICES) {
           ok(`${tag}: the print covers the window`,
              d.edgePrintTop <= 0 && d.edgePrintTop + d.edgePrintH >= d.edgeWindow - 1e-9);
         }
+        // ★★★ The mode box: the longest label the code composes on ONE line, in every Display's face
+        //     (Stuart, 2026-10-01: "USB:" / "RTTY" / "S9+1"). 70 is the minimum; the box grows out of
+        //     the frequency window, then the spacing tightens, then — last — the type shrinks.
+        let widest = 0;
+        for (const face of FACES) for (const c of CANDIDATES) {
+          const f = modeBoxFit({ label: c.label, stereo: c.stereo, face, fontSize: d.modeFont, letterSpacing: 1.5,
+                                 readingFont: d.readingFont, minW: r(MODE_BOX.minW), padH: r(MODE_BOX.padH), windowW: d.dispW });
+          const t = `${tag} ${face} "${c.label}"${c.stereo ? '+rings' : ''}`;
+          const need = modeTextWidth(c.label, f.fontSize, f.letterSpacing, face) + (c.stereo ? stereoWidth(f.fontSize) : 0)
+                       + 2 * r(MODE_BOX.padH);
+          ok(`${t}: ONE line (need ${need.toFixed(1)} ≤ box ${f.width})`, need <= f.width + 1e-9);
+          ok(`${t}: legible (${f.fontSize})`, f.fontSize >= Math.min(d.modeFont, MODE_MIN_FONT));
+          ok(`${t}: never below the design 70`, f.width >= r(MODE_BOX.minW));
+          ok(`${t}: the frequency keeps the larger part`,
+             f.width <= Math.max(r(MODE_BOX.minW), Math.floor(d.dispW * (f.fontSize <= MODE_MIN_FONT ? MODE_BOX_LAST_SHARE : MODE_BOX_MAX_SHARE))));
+          if (c.label === 'USB: RTTY') ok(`${t}: the reported case is never squeezed`, !f.squeezed);
+          // ★★ Last resort means LAST: without the rings no label costs the type a point (spacing may tighten).
+          if (!c.stereo) ok(`${t}: full type (${f.fontSize} = ${d.modeFont})`, f.fontSize === d.modeFont);
+          widest = Math.max(widest, f.width);
+        }
         // ★ Real tubes in the window: the stack fits, the pip is inside, the glass is never taller
-        //   than meterLand — for every radio's fixed row, in the width the window really has.
-        const winW = d.dispW - r(LAND.modeBox) - Math.round(r(10) * 2.6);
+        //   than meterLand — for every radio's fixed row, in the width the window really has (beside
+        //   the WIDEST mode box any label asks for).
+        const winW = d.dispW - widest - Math.round(r(10) * 2.6);
         for (const layout of ['hf', 'wide', 'fm'] as const) {
           const g = nixieGeometry(winW, d.freqH, nixieSpec(layout), TUBE_DESIGN.meterLand, { bar: false, scale });
           const t = `${tag} ${layout} tubes (window ${d.freqH})`;
           ok(`${t}: the stack fits`, stackHeight(g.glassH, scale) <= d.freqH + 1e-9);
           ok(`${t}: the pip is inside`, g.collarY - g.glassH - PIP_H * scale >= -1e-9);
+          ok(`${t}: ★ the tubes stand on the line under the window`, Math.abs(g.collarY + COLLAR_H * scale - d.freqH) < 1e-9);
           ok(`${t}: glass ≤ meterLand`, g.glassH <= TUBE_DESIGN.meterLand.th * scale + 1e-9);
           const last = g.tubes[g.tubes.length - 1];
           ok(`${t}: the row fits the width`, last.x + last.w <= winW + 1e-6);

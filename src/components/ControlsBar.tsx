@@ -50,6 +50,7 @@ import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
 import { GhostGrid, SegDigits } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
+import { composeModeLabel, modeBoxFit, MODE_BOX } from '../constants/modeBox';
 import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
@@ -156,12 +157,6 @@ function freqUnitLabel(unit: FreqUnit): string {
   return unit === 'hz' ? 'Hz' : unit === 'mhz' ? 'MHz' : 'kHz';
 }
 
-// Mode pill label: there's a single CW button (the sideband id cwu/cwl is an
-// internal demod detail), so show it as plain "CW" to match the button.
-function modeDisplay(mode: string): string {
-  const m = mode.toLowerCase();
-  return (m === 'cwu' || m === 'cwl' || m === 'cw') ? 'CW' : mode.toUpperCase();
-}
 function formatStep(s: number): string {
   if (s === STEP_833) return '8.33k';        // the airband raster, 25/3 kHz — see utils/airband.ts
   return s >= 1_000_000 ? s / 1_000_000 + 'M'
@@ -931,18 +926,23 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
 }
 
 /** The mode label (+ stereo rings) over the reading / breathing SQL — the mode box's contents. */
-function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWidth, readingFontSize }: {
+function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWidth, readingFontSize, oneLine = false }: {
   reading: ModeReading; modeLabel: string; fmStereo: boolean; modeFontSize: number; modeLs: number;
   snrWidth?: number;
   /** LED / analogue window: the mockup's 11 pt reading. Absent = the bar's (today's) sizing. */
   readingFontSize?: number;
+  /** ★★★ The LED / analogue box (CompactDisplay): the label is ONE line, whatever happens — the box is
+   *  sized to it (constants/modeBox.ts), and if a label nobody foresaw still does not fit, it shrinks
+   *  rather than wrap ("USB:" / "RTTY" / "S9+1" was three lines). Absent = the bar's pill, which grows
+   *  to its content as it always has. */
+  oneLine?: boolean;
 }) {
   const dk = useFaceplate().deck;
   const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
   const rl = readingFontSize ? Math.round(readingFontSize * 1.15) : Math.round(Math.max(9, modeFontSize * 0.75) * 1.15);
   const dot = dk.modeFont === FONT_DOTO;
   return (<>
-    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+    <View style={[{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, oneLine && { maxWidth: '100%' }]}>
       <Text style={[pm.modeLbl, {
         color: dk.mode, fontSize: modeFontSize, letterSpacing: modeLs, fontFamily: dk.modeFont,
         textShadowColor: dk.modeGlow,
@@ -950,7 +950,8 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
         //   fall back to the system font.
         ...(dot ? { fontWeight: 'normal' as const } : null),
         lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
-      }]}>
+      }, oneLine && { flexShrink: 1 }]}
+        {...(oneLine ? { numberOfLines: 1, adjustsFontSizeToFit: true, minimumFontScale: 0.6 } : null)}>
         {modeLabel}
       </Text>
       {/* WFM stereo: V5's pilot-PLL lock (+ blend) is reliable, so the icon
@@ -1077,8 +1078,12 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
         style={[pm.modeBtn, { backgroundColor: ct.pillBg, borderLeftColor: ct.modeDivider, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: tight ? 72 : 84 }]}
         onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
       >
+        {/* ★ The bar's button grows to its label (minWidth + content) — the rule the LED / analogue box
+            now copies. Under any faceplate but the untouched default it is also held to ONE line, so a
+            pill squeezed by the meter frame shrinks the label rather than wrap it; the default deck
+            keeps today's exactly (§13.1). */}
         <ModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
-          modeFontSize={modeFontSize} modeLs={modeLs} snrWidth={snrWidth} />
+          modeFontSize={modeFontSize} modeLs={modeLs} snrWidth={snrWidth} oneLine={!!ct.plate || dk.style !== 'hyper'} />
       </TouchableOpacity>
     </View>
     </View>
@@ -1108,6 +1113,20 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
   const unitFont = L ? Math.min(s.r(11), Math.max(8, Math.floor(dl.freqH * 0.42))) : s.r(11);
   // §4.1 "digits 32 (shared 27)" — capped by the window it has to sit in. Landscape: 25 (§9).
   const digit = L ? L.digit : Math.min(s.r(shared ? 27 : 32), Math.floor((dl.freqH - 4) / 1.12));
+  /* ★★★ THE MODE BOX FITS ITS LABEL ON ONE LINE (Stuart, 2026-10-01: "USB:" / "RTTY" / "S9+1" in a
+   *  fixed 70 pt box beside a window with lots of spare width). The default deck's rule, applied here:
+   *  70 pt is the MINIMUM and the box grows to the label, out of the frequency window (which flexes —
+   *  the tubes narrow, §7), up to MODE_BOX_MAX_SHARE of the window. Only past that does the label's
+   *  spacing tighten, and only past THAT does the type shrink. constants/modeBox.ts; the longest label
+   *  the app can compose is proven to fit at every size by test_faceplate_meters / _landscape. */
+  const [winW, setWinW] = useState(0);
+  const modeFont0 = L ? L.modeFont : s.r(15);
+  const readingFont = L ? L.readingFont : s.r(11);
+  const mb = useMemo(() => modeBoxFit({
+    label: modeLabel, stereo: !!fmStereo, face: dk.modeFont === FONT_DOTO ? 'doto' : 'hyper',
+    fontSize: modeFont0, letterSpacing: L ? 1.5 : 2, readingFont,
+    minW: s.r(MODE_BOX.minW), padH: s.r(MODE_BOX.padH), windowW: winW,
+  }), [modeLabel, fmStereo, dk.modeFont, modeFont0, L, readingFont, s, winW]);
   return (
     <View style={{ height: dl.displayH }}>
       {sharedTuner && (
@@ -1122,7 +1141,11 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
           <View pointerEvents="none" style={[cd.lip, { backgroundColor: 'rgba(255,255,255,0.18)' }]} />
         </View>
       )}
-      <View style={[cd.window, { height: dl.freqH, backgroundColor: winBg }]}>
+      <View style={[cd.window, { height: dl.freqH, backgroundColor: winBg }]}
+            onLayout={(e: LayoutChangeEvent) => {
+              const w = Math.round(e.nativeEvent.layout.width);
+              setWinW(p => (p === w ? p : w));
+            }}>
         <TouchableOpacity ref={tourRef('freqBox')} onPress={onFreqTap} activeOpacity={0.80} hitSlop={8}
           style={[cd.freqArea, dk.style === 'hyper' && { paddingHorizontal: s.r(8), gap: s.r(8) }]}>
           {dk.style === 'hyper' ? (<>
@@ -1152,9 +1175,10 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
           )}
         </TouchableOpacity>
         <TouchableOpacity ref={tourRef('modeBtn')} onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
-          style={[cd.modeBox, { width: s.r(70), borderLeftColor: 'rgba(255,255,255,0.10)' }]}>
-          <ModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
-            modeFontSize={L ? L.modeFont : s.r(15)} modeLs={L ? 1.5 : 2} readingFontSize={L ? L.readingFont : s.r(11)} />
+          style={[cd.modeBox, { width: mb.width, paddingHorizontal: s.r(MODE_BOX.padH),
+                                borderLeftColor: 'rgba(255,255,255,0.10)' }]}>
+          <ModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo} oneLine
+            modeFontSize={mb.fontSize} modeLs={mb.letterSpacing} readingFontSize={readingFont} />
         </TouchableOpacity>
         {/* The glass's inner shadow at the top and the lip below (`inset 0 2px 7px`, `0 1px 0 .25`). */}
         {/* ★ Not over the tubes: the Nixie recess draws its own lip shadows (§7), and a second
@@ -2321,8 +2345,9 @@ function ControlsBar({
   const bcastFm = !dabOn && String(mode).toLowerCase() === 'wfm';
   const shared = {
     freqStr, unit, chanTag, chanMain,
-    // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX).
-    modeLabel: dabOn ? 'DAB' : modeDisplay(mode) + (activeDecoder ? `: ${(activeDecoder === 'wefax' ? 'fax' : activeDecoder).toUpperCase()}` : ''),
+    // §5.1: compose the running decoder onto the demod — USB → USB: RTTY (wefax reads FAX); a standalone
+    // OWRX digimode is its own mode (MESHCORE, not "MESHCORE: MESHCORE") — constants/modeBox.ts.
+    modeLabel: composeModeLabel(String(mode), activeDecoder, dabOn),
     snrText, fmStereo,
     connected, signalActive, bus: meterBus, meterMode: meterUnit,
     signal: signalLevel, peak: peakLevel,

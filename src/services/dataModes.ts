@@ -40,3 +40,7 @@ const WHOLE_PROFILE = new Set([
   'meshtastic',
   'meshcore',
 ]);
+
+/** The same modes as a list — what the mode box's longest-label test enumerates (a standalone digimode
+ *  is its own label: "MESHTASTIC", constants/modeBox.ts composeModeLabel). */
+export const WHOLE_PROFILE_MODES: readonly string[] = [...WHOLE_PROFILE];
