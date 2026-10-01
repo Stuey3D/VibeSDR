@@ -2923,7 +2923,17 @@ int main(int argc, char** argv) {
                         const size_t p = head.find("User-Agent: ");
                         return p != std::string::npos && head.compare(p + 12, 7, "VibeSDR") == 0;
                     };
-                    const bool appAuth = path.rfind("/vibeserver/auth", 0) == 0 && uaIsApp();
+                    /* ★★★ AND THE APP'S BARE /vibeserver/admin-ticket GOES WITH IT — ONE RULE, TWO
+                     *     READERS (2026-10-01). A ticket is minted against a challenge, and a
+                     *     challenge is only good at the process that ISSUED its nonce. The app's bare
+                     *     auth went to the radio and its ticket request stayed here, so this door
+                     *     refused every ticket the app asked for ("admin ticket refused" here, "admin
+                     *     unlock granted" at the radio, the same second, on the Lenovo). The app then
+                     *     opened its ADMIN page with no ticket — the landing page, and from it the
+                     *     radio, beside the app already on it. A ticket is good on every process, so
+                     *     minting it at the radio costs nothing. */
+                    const bool appAuth = (path.rfind("/vibeserver/auth", 0) == 0
+                                     || path.rfind("/vibeserver/admin-ticket", 0) == 0) && uaIsApp();
                     /* ★★★ A LEGACY CLIENT NEVER SAYS /r/<id>/ — SEND IT TO THE PRIMARY RADIO.
                      *     The App Store app (10.3.1, tree of 2026-07-29) strips any path from an
                      *     address on purpose and knows only host:port; the door arrived ten days

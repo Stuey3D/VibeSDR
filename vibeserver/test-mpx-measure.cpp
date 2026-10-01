@@ -744,6 +744,37 @@ int main(int argc, char** argv) {
         ok(o.mpxDevHoldKHz <= truePk * 1.05,
            "no dropped block published as a deviation peak (MPX peak <= truth + 5 %, or none)");
     }
+    // ★★★ AN SDRplay FEEDS ~1000-SAMPLE BLOCKS, IN BURSTS — AND THAT MUST NOT LOOK LIKE FALLING BEHIND.
+    //     The Lenovo's RSP1A (2026-10-01): ~2900 callbacks a second of ~1030 samples, the DSP thread
+    //     running ~90 of them back to back ~30 times a second. With the queue counted in BLOCKS that
+    //     was 2 ms of slack, ~700 drops a second, a hold after every one — and an Advanced RDS panel
+    //     that never published a figure on an idle i5, while every RTL (16k-sample blocks) was fine.
+    //     Fed here exactly so, in real time, on the production (dropping) path: nothing may drop.
+    {
+        std::printf("\n── an SDRplay's small blocks, in the DSP thread's bursts (real time) ──\n");
+        const double fs = 3000000.0;
+        Sig s; Gen g(s, fs); g.offset = 0.0;
+        std::vector<cf32> iq;
+        g.fill(iq, (int)(fs * 4.0));
+        const int blk = 1030, burst = 90;
+        vibedsp::MpxMeasure m; m.setThreaded(true); m.setBlocking(false); m.configure(fs);
+        const auto t0 = std::chrono::steady_clock::now();
+        int nb = 0;
+        for (int o = 0; o + blk <= (int)iq.size(); o += blk) {
+            m.feed(iq.data() + o, blk, 1);
+            if (++nb % burst == 0)
+                std::this_thread::sleep_until(t0 + std::chrono::microseconds((long long)((o + blk) / fs * 1e6)));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        vibedsp::MpxMeasure::Out o; int ew = 0; unsigned seq = 0;
+        m.snapshot(o, nullptr, ew, nullptr, seq);
+        const unsigned dropped = m.dropped(), holes = m.gapsSeen();
+        m.stop();
+        std::printf("   %u of %d blocks dropped, %u holes: pilot %.2f  RDS raw %.2f\n",
+                    dropped, nb, holes, o.pilotKHz, o.rdsRawKHz);
+        ok(dropped == 0 && holes == 0, "small bursty blocks are taken whole — no drops, no holes");
+        ok(o.valid && near(o.pilotKHz, 6.75, 0.03) && o.rdsRawKHz > 0.0f, "and the panel publishes its figures");
+    }
     // ★★ THE SHARED DIAL. Each listener's pipeline is fed a channel cut from the shared FFT, and
     //    extract() rolls that channel's outer quarter off at each edge — so it is flat only to
     //    ±chanRate/4. Sized by the passband (chanBinsFor: 2.5x), ±100 kHz gets 512 kHz at 2.048 MS/s

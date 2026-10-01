@@ -2114,6 +2114,9 @@ public:
 private:
     // ── the worker ──
     static constexpr int kQ = 6;                     // blocks in flight; a full queue DROPS
+    /** ★ The least a queued block may hold, in seconds — the feeder accumulates the radio's blocks to
+     *  this first, so kQ means time and not a callback count (see feed()). */
+    static constexpr double kMinBlockSec = 0.02;
     std::thread thr_;
     std::mutex qM_;
     std::condition_variable qCv_, qIdleCv_;
@@ -2128,6 +2131,9 @@ private:
     std::atomic<bool> blocking_{false};
     std::atomic<unsigned> dropped_{0};
     std::vector<cf32> work_;
+    unsigned spareGen_ = 0;                          // the measurement spare_ is accumulating for
+    bool spareGap_ = false;                          // spare_ begins just after a hole
+    void enqueue_();                                 // spare_ -> the queue (or dropped); feeder side
     void startWorker_();
     void process_(const cf32* iq, int n, unsigned gen, bool gap);   // worker (or inline) side
 

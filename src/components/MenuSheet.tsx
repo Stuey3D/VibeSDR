@@ -1687,6 +1687,13 @@ function MenuSheetBody({
                   </Text>
                 </>
               )}
+              {/* ★ Unlocked, but no ticket for the pages (they read nothing else) — say so, rather
+                  than leave an empty row or a button that opens the landing page instead. */}
+              {adminOk && !vibeAdminUrl && !vibeSetupUrl && (
+                <Text style={styles.kbSkipNote}>
+                  {'The controls are unlocked. The admin and setup pages could not be opened from here — this server did not issue a pass for them.'}
+                </Text>
+              )}
               {adminOk && (
                 <BtnRow>
                   {!!vibeAdminUrl && (
