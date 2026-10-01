@@ -559,6 +559,11 @@ export const LAND = {
    *  Pro Max, 932 × 430) — and a straight line between. In POINTS, never pixels: the SE (2x) and the
    *  17 Pro Max (3x) lay out in points of about the same physical size. */
   growFromH:     375,
+  /** ★ …and every PHONE deck that is not the untouched default gets at least this much over today's
+   *  (B8, Stuart on the SE in Display Zoom, 568 × 320: "landscape has a little room to spare height
+   *  wise, its portrait that was tight"). A floor, not a new curve: the mid phones and the Pro Max are
+   *  where the curve already puts them; the SE gains 6 pt. Never on a tablet (its today is already 62). */
+  phoneLift:     6,
   growToH:       430,
   /** SDRScreen `pillWrap`: 8 pt each side of the bar. */
   screenMargin:  8,
@@ -644,7 +649,8 @@ export function landscapeBand(o: { plate: unknown; meter: MeterKind; tablet: boo
   const untouched = !o.plate && o.meter === 'bar' && (o.display == null || o.display === 'hyper');
   if (o.H == null || untouched) return today;
   const t = Math.max(0, Math.min(1, (o.H - LAND.growFromH) / (LAND.growToH - LAND.growFromH)));
-  return Math.max(today, Math.round(today + (LAND.band - today) * t));
+  const lifted = o.tablet ? today : Math.min(LAND.band, today + LAND.phoneLift);
+  return Math.max(today, lifted, Math.round(today + (LAND.band - today) * t));
 }
 
 /**

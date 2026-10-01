@@ -10,6 +10,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import RdsMark from './RdsMark';
 import { GhostGrid } from './VfdParts';
@@ -72,6 +73,8 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const [shown, setShown] = useState<VtsNotifData | null>(null);
   const shownRef = useRef<VtsNotifData | null>(null);
   const fade    = useRef(new Animated.Value(0)).current;
+  const insets  = useSafeAreaInsets();
+  const side    = Math.max(14, insets.left, insets.right);
   const slide   = useRef(new Animated.Value(0)).current;
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
@@ -191,7 +194,11 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     // ★ It cannot be done on a single view: this is `position: absolute` with BOTH left and right
     // set, and in that case Yoga resolves the position from `left` — a maxWidth alone would just
     // shrink the bar towards the left-hand edge rather than centring it.
-    <Animated.View style={[styles.wrap, { bottom, opacity: fade }]} pointerEvents="none">
+    // ★ Clear the Dynamic Island / notch in landscape (B8, 17 Pro Max: the bar's left end ran under the
+    //   island). ★★ SYMMETRICAL (Stuart): whatever is cut on the island's side is cut on the other side
+    //   too, so the bar stays centred over the deck. The side insets are 0 in portrait: portrait keeps 14.
+    <Animated.View style={[styles.wrap, { bottom, opacity: fade, left: side, right: side }]}
+                   pointerEvents="none">
     <View style={[styles.bar, { backgroundColor: fp.chassis.vtsBg, borderColor: fp.chassis.vtsBorder }]}
       onLayout={(e: { nativeEvent: { layout: { height: number } } }) => onHeight?.(e.nativeEvent.layout.height)}>
       <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>

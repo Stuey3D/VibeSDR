@@ -3,8 +3,8 @@
  *
  * ★★★ THE BAND GROWS WITH THE HEIGHT, AND ONLY WHERE THERE IS HEIGHT (build 356): at every landscape
  * window from the SE in Display Zoom (568 × 320) to a 13" iPad (1366 × 1024), for every chassis × meter
- * × shared, the band is today's on the SE and on the default chassis's bar, grows with the window's
- * height in POINTS to the mockup's 62 on a Pro Max, the four keys are one height, the columns never go
+ * × shared, the band is today's on the default chassis's bar, grows a LITTLE on the SE (B8: landscape had
+ * room to spare there), and grows with the window's height in POINTS to the mockup's 62 on a Pro Max, the four keys are one height, the columns never go
  * negative or overlap, the drums keep their 80 pt, and the frequency window still holds a real Nixie
  * tube row without clipping a dome.
  *
@@ -37,10 +37,12 @@ for (const [W, H, tablet] of DEVICES) {
   const r = (n: number) => Math.round(n * scale);
   // TODAY's LandscapeBar, before this row: BAND_H = max(DRUM_H 44, SIG_H 40 / tablet 62), KEY_H half of it.
   const todayBand = Math.max(r(44), r(tablet ? 62 : 40));
-  // ★★ The band this window should have: today's up to 375 pt of height, the mockup's 62 from 430,
-  //    a straight line between — and never below today's (a tablet's today is already over 62).
-  const t = Math.max(0, Math.min(1, (H - 375) / (430 - 375)));
-  const grown = Math.max(todayBand, Math.round(todayBand + (62 - todayBand) * t));
+  // ★★ The band this window should have: today's at LAND.growFromH (375 pt) of height, the mockup's 62
+  //    from 430, a straight line between — never below today's (a tablet's today is already over 62),
+  //    and on a phone never below today's + LAND.phoneLift.
+  const t = Math.max(0, Math.min(1, (H - LAND.growFromH) / (LAND.growToH - LAND.growFromH)));
+  const lifted = tablet ? todayBand : Math.min(62, todayBand + LAND.phoneLift);   // B8: the SE's little lift
+  const grown = Math.max(todayBand, lifted, Math.round(todayBand + (62 - todayBand) * t));
   for (const [cname, plate] of CHASSIS) {
     const heights = new Set<number>();
     for (const meter of METERS) for (const shared of [false, true]) for (const singleDrum of [false, true]) {
@@ -54,7 +56,9 @@ for (const [W, H, tablet] of DEVICES) {
       ok(`${tag}: never taller than the mockup's 62 or today's (${d.bandH})`, d.bandH <= Math.max(todayBand, 62));
       ok(`${tag}: never shorter than today's (${d.bandH} ≥ ${todayBand})`, d.bandH >= todayBand);
       eq(`${tag}: the band`, d.bandH, defaultBar ? todayBand : grown);
-      if (H <= 375) eq(`${tag}: ★ the SE keeps TODAY's band, to the point`, d.bandH, todayBand);
+      // ★ B8 (Stuart, SE in Display Zoom): "landscape has a little room to spare height wise" — the SE
+      //   grows, but only a LITTLE: at most 8 pt over today's in Display Zoom, 14 at standard zoom.
+      if (H <= 375 && !defaultBar) eq(`${tag}: ★ the SE grows a LITTLE (today's ${todayBand} + ${LAND.phoneLift})`, d.bandH, todayBand + LAND.phoneLift);
       if (defaultBar) eq(`${tag}: ★ the default chassis's bar is today's (§3.1)`, d.bandH, todayBand);
       // §11: four identical keys, two rows and the gap exactly fill the band.
       eq(`${tag}: two keys + the row gap = the band`, 2 * d.keyH + d.rowGap, d.bandH);
@@ -166,7 +170,10 @@ for (const [W, H, tablet] of DEVICES) {
      [dev(956, 440, 'vu', null).bandH, dev(956, 440, 'bar', null).bandH], [62, 45]);
   for (const meter of ['bar', 'vu', 'edge'] as const) for (const plate of [null, { screws: true, gloss: false }]) {
     const today = landscapeDeck({ plate, meter, tablet: false, W: 667, scale: 667 / 926, r: (n: number) => Math.round(n * 667 / 926) });
-    eq(`SE (667 × 375) ${plate ? 'silver' : 'default'} ${meter}: the whole deck is today's`, dev(667, 375, meter, plate), today);
+    // The untouched default bar stays today's to the point; every other deck grows a little on the SE.
+    if (!plate && meter === 'bar') eq(`SE (667 × 375) default bar: the whole deck is today's`, dev(667, 375, meter, plate), today);
+    else ok(`SE (667 × 375) ${plate ? 'silver' : 'default'} ${meter}: grows a little (${today.bandH} → ${dev(667, 375, meter, plate).bandH})`,
+            dev(667, 375, meter, plate).bandH === today.bandH + LAND.phoneLift);
   }
   // Monotone: a taller window never gets a shorter band.
   let prev = 0, mono = true;
@@ -190,7 +197,10 @@ for (const [W, H, tablet] of DEVICES) for (const [, plate] of CHASSIS) for (cons
   const nixieSE = landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 375, r, display: 'nixie' });
   ok('default + bar + hyper keeps today on a 17 Pro Max', untouched === hyper);
   ok(`default + bar + NIXIE grows on a 17 Pro Max (${hyper} → ${nixie})`, nixie > hyper);
-  ok('default + bar + NIXIE on the SE stays today', nixieSE === landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 375, r }));
+  const nixieSEzoom = landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 320, r, display: 'nixie' });
+  const todaySE = landscapeBand({ plate: null, meter: 'bar', tablet: false, H: 375, r });
+  ok(`default + bar + NIXIE on the SE grows a little (${todaySE} → ${nixieSE})`, nixieSE === todaySE + LAND.phoneLift);
+  ok(`default + bar + NIXIE on the SE in Display Zoom grows a little too (${nixieSEzoom})`, nixieSEzoom === todaySE + LAND.phoneLift);
 }
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate landscape: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);
