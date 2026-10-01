@@ -116,7 +116,7 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
       lines.push(`os     : ${String(n.os ?? '?')} on ${String(n.model ?? '?')}`);
       if (n.stack) lines.push('stack  :', String(n.stack).slice(0, 3000));
     }
-  } catch { lines.push('unavailable (Android, or module missing)'); }
+  } catch { lines.push('unavailable on this device'); }
 
   /* ★★ BOOT BREADCRUMBS — the launch timeline, native and JS interleaved. Primary route is the
    *  file itself (`Documents/boot-crumbs.log`, pulled with devicectl off a TestFlight build), but

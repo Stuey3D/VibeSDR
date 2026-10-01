@@ -7,8 +7,9 @@
 
 import React from 'react';
 import {
-  Alert, Image, Linking, Modal, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View,
+  Alert, Image, Linking, Modal, Platform, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
+import { platformCopy } from '../services/platformCopy';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import Constants from 'expo-constants';   // nativeBuildVersion = the actual installed CFBundleVersion
@@ -437,7 +438,7 @@ function AboutBody({ onClose }: AboutOverlayProps) {
           </Text>
 
           <Text style={styles.section}>A MESSAGE FROM STUART</Text>
-          {STUART_MESSAGE.map((p, i) => (
+          {STUART_MESSAGE.map(pc).filter(Boolean).map((p, i) => (
             <Text key={i} style={[styles.body, { marginBottom: 10 }]}>{p}</Text>
           ))}
           <TouchableOpacity onPress={() => Linking.openURL(STUEY_URL)}>
@@ -445,7 +446,7 @@ function AboutBody({ onClose }: AboutOverlayProps) {
           </TouchableOpacity>
 
           <Text style={styles.section}>{`WHAT'S NEW IN V${HIGHLIGHT_MAJOR}`}</Text>
-          {HIGHLIGHTS[HIGHLIGHT_MAJOR].map((c) => (
+          {HIGHLIGHTS[HIGHLIGHT_MAJOR].map(pc).filter(Boolean).map((c) => (
             <View key={c} style={styles.bulletRow}>
               <Text style={styles.bulletDot}>•</Text>
               <Text style={styles.bulletText}>{c}</Text>
@@ -459,7 +460,7 @@ function AboutBody({ onClose }: AboutOverlayProps) {
               V11 shipped its own list (V11_CHANGES); HIGHLIGHTS picks the list by APP_VERSION's major. */}
 
           <Text style={styles.section}>VERSION HISTORY</Text>
-          {VERSION_HISTORY.map((v) => (
+          {VERSION_HISTORY.map((v) => ({ ...v, detail: pc(v.detail) })).filter((v) => !!v.detail).map((v) => (
             <View key={v.v} style={styles.creditBlock}>
               <Text style={styles.creditName}>{v.v}</Text>
               <Text style={styles.creditDetail}>{v.detail}</Text>
@@ -467,7 +468,7 @@ function AboutBody({ onClose }: AboutOverlayProps) {
           ))}
 
           <Text style={styles.section}>FUTURE PLANS</Text>
-          {FUTURE_PLANS.map((p, i) => (
+          {FUTURE_PLANS.map(pc).filter(Boolean).map((p, i) => (
             <Text key={i} style={styles.body}>{p}</Text>
           ))}
 
@@ -477,8 +478,8 @@ function AboutBody({ onClose }: AboutOverlayProps) {
           <Text style={styles.section}>LIMITATIONS — AND WHY THEY&rsquo;RE DELIBERATE</Text>
           {LIMITATIONS.map((l) => (
             <View key={l.q}>
-              <Text style={styles.limQ}>{l.q}</Text>
-              {l.a.map((p, i) => (
+              <Text style={styles.limQ}>{pc(l.q)}</Text>
+              {l.a.map(pc).filter(Boolean).map((p, i) => (
                 <Text key={i} style={styles.body}>{p}</Text>
               ))}
             </View>
@@ -492,7 +493,7 @@ function AboutBody({ onClose }: AboutOverlayProps) {
           {CREDITS.map((c) => (
             <View key={c.name} style={styles.creditBlock}>
               <Text style={styles.creditName}>{c.name}</Text>
-              <Text style={styles.creditDetail}>{c.detail}</Text>
+              <Text style={styles.creditDetail}>{pc(c.detail)}</Text>
             </View>
           ))}
 
@@ -534,6 +535,11 @@ function AboutBody({ onClose }: AboutOverlayProps) {
     </Modal>
   );
 }
+
+/** ★★ Every line of this screen, as it should read on THIS platform: on iOS no line may name Android
+ *  (App Review 2.3.10) — services/platformCopy.ts rewrites the few that matter and hides the rest. A line
+ *  that was only about Android comes back empty and is not drawn. */
+const pc = (t: string): string => platformCopy(t, Platform.OS);
 
 const F = 'Atkinson Hyperlegible';
 

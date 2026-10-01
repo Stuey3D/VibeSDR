@@ -1591,7 +1591,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         <ScrollView contentContainerStyle={{ padding: 18 }}>
           <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>Server mode</Text>
           <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
-            Sharing a local USB dongle is only available on Android.
+            Sharing a local USB dongle isn&rsquo;t available on this device.
           </Text>
           <TouchableOpacity style={[styles.stopBtn, { borderColor: C.border }]} onPress={() => navigation.goBack()}>
             <Text style={{ color: C.gold, fontFamily: F, fontSize: 16 }}>‹ Back</Text>
