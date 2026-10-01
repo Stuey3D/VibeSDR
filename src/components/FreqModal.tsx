@@ -699,6 +699,11 @@ export default function FreqModal({
               keyboardType="decimal-pad"
               autoComplete="off"
               autoCorrect={false}
+              // ★ On a Mac (the iPad app) a field with no content type and spell-check on gets macOS's
+              //   Siri / AutoFill suggestion bubble on its first click, which eats the click (B11,
+              //   Stuart: "a stupid Siri option comes up on first click and I have to click again").
+              spellCheck={false}
+              textContentType="none"
               selectTextOnFocus
               onSubmitEditing={confirm}
               // ★ A hardware Enter is handled by the VibeKeyDown listener above, NOT here.
@@ -799,6 +804,7 @@ export default function FreqModal({
                     autoCapitalize="none"
                     autoCorrect={false}
                     spellCheck={false}
+                    textContentType="none"
                     returnKeyType="done"
                   />
                   <Text style={st.magicHint}>
@@ -887,7 +893,7 @@ export default function FreqModal({
                   if (!v.trim()) stickySearch = null;
                 }}
                 placeholder="🔍 Search bookmarks & band plan…" placeholderTextColor={winDim}
-                autoCorrect={false} autoCapitalize="none" spellCheck={false} clearButtonMode="while-editing" />
+                autoCorrect={false} autoCapitalize="none" spellCheck={false} textContentType="none" clearButtonMode="while-editing" />
               ); })()}
               {dabFilter && (() => {
                 const rows = searchBookmarks
