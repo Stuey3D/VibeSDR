@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
 import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -151,6 +152,99 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         out.putString("model", "${Build.MANUFACTURER ?: ""} ${Build.MODEL ?: ""}".trim())
         out.putBoolean("isMac", false)
         return out
+    }
+
+    // ── FRAME RATE CAP — CONTROL CUSTOMISATION → FACEPLATE → FRAME RATE (src/services/frameRate.ts) ──
+    // ★★ Mirrors VibeLocalSDR.mm's setFrameRateCap / maxRefreshRate. Power audit, 2026-10-01: a 90 /
+    //   120 Hz phone runs the panel at its top rate while anything animates. A 60 Hz cap asks the
+    //   WINDOW for the 60 Hz display mode at the current resolution (preferredDisplayModeId, API 23+,
+    //   plus preferredRefreshRate) — the system honours a window's mode request while that window is
+    //   in front, and drops it when it is not. LIVE, no restart.
+    // ★ Re-applied on every resume: a recreated Activity has a fresh window with no preference. The
+    //   cap is kept in SharedPreferences, so a new Activity is capped before JS has said anything.
+    // ★ Below API 23 there are no display modes — those phones are 60 Hz anyway, maxRefreshRate says
+    //   so, and the row is hidden (faceplate.ts frameRateChoices).
+    private val fpsPrefs get() = reactContext.getSharedPreferences("vibe_frame_rate", Context.MODE_PRIVATE)
+    @Volatile private var fpsCapHz: Int = try { fpsPrefs.getInt("capHz", 0) } catch (_: Throwable) { 0 }
+
+    init {
+        reactContext.addLifecycleEventListener(object : LifecycleEventListener {
+            override fun onHostResume() { applyFrameRateCap() }
+            override fun onHostPause() {}
+            override fun onHostDestroy() {}
+        })
+        applyFrameRateCap()
+    }
+
+    private fun displayOf(act: android.app.Activity): android.view.Display? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) act.display
+        else @Suppress("DEPRECATION") act.windowManager.defaultDisplay
+
+    /** The display's modes at the resolution it is running now — a refresh rate only reachable by
+     *  also changing resolution is not one this setting offers or picks. */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.M)
+    private fun sameSizeModes(d: android.view.Display): List<android.view.Display.Mode> {
+        val cur = d.mode
+        return d.supportedModes.filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
+    }
+
+    private fun applyFrameRateCap() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val act = reactContext.currentActivity ?: return
+        act.runOnUiThread {
+            try {
+                val w = act.window ?: return@runOnUiThread
+                val d = displayOf(act) ?: return@runOnUiThread
+                val cap = fpsCapHz
+                var modeId = 0
+                var rate = 0f
+                if (cap > 0) {
+                    val modes = sameSizeModes(d)
+                    // ★ Only when the panel can go faster than the cap, and only to a mode AT the cap
+                    //   (±1 Hz): never down to a 30 / 24 Hz mode an LTPO panel may also list.
+                    if (modes.any { it.refreshRate > cap + 1f }) {
+                        val pick = modes.filter { it.refreshRate in (cap - 1f)..(cap + 1f) }.maxByOrNull { it.refreshRate }
+                        if (pick != null) { modeId = pick.modeId; rate = pick.refreshRate }
+                    }
+                }
+                val lp = w.attributes
+                if (lp.preferredDisplayModeId == modeId && lp.preferredRefreshRate == rate) return@runOnUiThread
+                lp.preferredDisplayModeId = modeId
+                lp.preferredRefreshRate = rate
+                w.attributes = lp
+                Log.i(TAG, "frame rate cap " + (if (cap > 0) "$cap Hz (mode $modeId @ $rate)" else "off"))
+            } catch (t: Throwable) {
+                Log.w(TAG, "frame rate cap failed: ${t.message}")
+            }
+        }
+    }
+
+    /** 0 = no cap; otherwise the cap in Hz (the app only ever sends 60). */
+    @ReactMethod
+    fun setFrameRateCap(hz: Double) {
+        val cap = if (hz.isFinite() && hz > 0) Math.round(hz).toInt() else 0
+        fpsCapHz = cap
+        try { fpsPrefs.edit().putInt("capHz", cap).apply() } catch (_: Throwable) {}
+        applyFrameRateCap()
+    }
+
+    /** The panel's top refresh rate at its current resolution (60 on a 60 Hz phone, and always the
+     *  one rate below API 23, where there are no modes to choose between). */
+    @ReactMethod
+    fun maxRefreshRate(promise: Promise) {
+        try {
+            val act = reactContext.currentActivity
+            val d = (if (act != null) displayOf(act) else null)
+                ?: (reactContext.getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager)
+                    ?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+            if (d == null) { promise.resolve(null); return }
+            val hz = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                sameSizeModes(d).maxOfOrNull { it.refreshRate } ?: d.refreshRate
+            else d.refreshRate
+            promise.resolve(hz.toDouble())
+        } catch (t: Throwable) {
+            promise.resolve(null)
+        }
     }
 
     /** ★ Lite: "run the server in the background — minimise app". Home, in effect: the task goes to the back

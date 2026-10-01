@@ -21,7 +21,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AccessibilityInfo, AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  decideLaunch, DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, parseSettings, resolveFaceplate, withDisplay, withText,
+  decideLaunch, DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, frameRateCapHz, parseSettings, resolveFaceplate, withDisplay, withText,
   withTransparency,
   type FaceplateSettings, type FaceplateTheme, type DisplayStyle, type TextColour, type Transparency,
   type SurfaceTokens,
@@ -33,6 +33,7 @@ import {
 import { installNativeTransliterator } from '../services/transliterator';
 import { explainFaceplateReset, faceplateGuard, LAST_CRASHED_KEY, launchMarkOnce } from '../services/faceplateGuard';
 import { readNativeDeviceClass } from '../services/deviceClass';
+import { applyFrameRateCap, readMaxRefreshRate } from '../services/frameRate';
 
 // ★ The dot-matrix / 14-segment displays transliterate non-Latin names with the platform's ICU
 //   (brief §7). Installed once, when the faceplate owner loads — before any display draws.
@@ -45,6 +46,9 @@ interface FaceplateContextValue {
   settings:   FaceplateSettings;
   /** The device's own default and why — the pane says so under the row until the user picks. */
   autoTransparency: AutoTransparency;
+  /** ★ The panel's top refresh rate (Hz), or null until known / when the binary cannot say — the
+   *  FRAME RATE row is shown only above 60 (faceplate.ts `frameRateChoices`). */
+  maxRefreshHz: number | null;
   /** A pick from the pane: ON / OFF, stored as the user's choice from then on. */
   setTransparency: (t: Transparency) => void;
   /** Display, with its side effects (controls → neon for Nixie, back to amber leaving it; text
@@ -52,14 +56,14 @@ interface FaceplateContextValue {
   setDisplay: (d: DisplayStyle) => void;
   setText:    (t: TextColour) => void;
   /** The rest have no side effects. */
-  set:        (patch: Partial<Pick<FaceplateSettings, 'chassis' | 'controls' | 'meter' | 'steadyLeds'>>) => void;
+  set:        (patch: Partial<Pick<FaceplateSettings, 'chassis' | 'controls' | 'meter' | 'steadyLeds' | 'frameRate'>>) => void;
 }
 
 const DEFAULT_THEME = resolveFaceplate(DEFAULT_SETTINGS);
 const AUTO_ON: AutoTransparency = { transparency: 'on', reason: null };
 
 const FaceplateContext = createContext<FaceplateContextValue>({
-  theme: DEFAULT_THEME, settings: DEFAULT_SETTINGS, autoTransparency: AUTO_ON,
+  theme: DEFAULT_THEME, settings: DEFAULT_SETTINGS, autoTransparency: AUTO_ON, maxRefreshHz: null,
   setTransparency: () => {}, setDisplay: () => {}, setText: () => {}, set: () => {},
 });
 
@@ -112,10 +116,15 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   //   through decideLaunch, so a faceplate the last run died drawing is never drawn again unasked.
   //   (Until the stored copy loads, the tree draws DEFAULT_SETTINGS, which is the safe faceplate.)
   const launchMark = useMemo(launchMarkOnce, []);
+  // ★ FRAME RATE is pushed to the native side only once the STORED copy is known (or the user has
+  //   picked): the defaults drawn before the load would otherwise lift a stored 60 Hz cap — which the
+  //   native side already applied at launch from its own copy — for the moment the load takes.
+  const [storedKnown, setStoredKnown] = useState(false);
   useEffect(() => {
     let live = true;
     AsyncStorage.getItem(FACEPLATE_STORAGE_KEY)
       .then((j: string | null) => {
+        if (live) setStoredKnown(true);
         if (!live || touched.current) return;
         const { settings: s, crashed } = decideLaunch(parseSettings(j, legacyThemeName), launchMark);
         // ★ Written BEFORE the stored faceplate is drawn: this launch is now the one on trial.
@@ -129,7 +138,7 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
           explainFaceplateReset();
         }
       })
-      .catch(() => {});
+      .catch(() => { if (live) setStoredKnown(true); });
     return () => { live = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -148,6 +157,17 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
       else if (st === 'background') faceplateGuard.clear();
     });
     return () => sub.remove();
+  }, []);
+
+  // ★★ FRAME RATE: live, no restart (services/frameRate.ts). Re-sent whenever it changes.
+  const capHz = frameRateCapHz(settings);
+  const capKnown = storedKnown || touched.current;
+  useEffect(() => { if (capKnown) applyFrameRateCap(capHz); }, [capKnown, capHz]);
+  const [maxRefreshHz, setMaxRefreshHz] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    readMaxRefreshRate().then((hz: number | null) => { if (live) setMaxRefreshHz(hz); });
+    return () => { live = false; };
   }, []);
 
   const commit = useCallback((f: (s: FaceplateSettings) => FaceplateSettings) => {
@@ -175,9 +195,9 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const onScreen = useMemo(() => settings.transparency === transparency ? settings : { ...settings, transparency },
                            [settings, transparency]);
   const theme = useMemo(() => resolveFaceplate(onScreen), [onScreen]);
-  const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, setTransparency,
-                                 setDisplay, setText, set }),
-                        [theme, onScreen, auto, setTransparency, setDisplay, setText, set]);
+  const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz,
+                                 setTransparency, setDisplay, setText, set }),
+                        [theme, onScreen, auto, maxRefreshHz, setTransparency, setDisplay, setText, set]);
   return <FaceplateContext.Provider value={value}>{children}</FaceplateContext.Provider>;
 }
 

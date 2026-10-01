@@ -209,6 +209,10 @@ if node --no-warnings scripts/test_decoder_contrast.ts; then pass=$((pass+1)); e
 #     transparent = NOT chosen), OFF is alpha 1.0 exactly with no scrim or drop shadow, no darker/lighter than the glass on a
 #     dark waterfall, and every file that draws a BlurView reads the switch.
 if node --no-warnings scripts/test_transparency.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ FRAME RATE (power audit 2026-10-01): the 60 Hz row is hidden on a 60 Hz panel and when the binary
+#     cannot say, labelled with the panel's real rate, defaults to no cap, survives the crash reset,
+#     and both native modules export the two methods JS calls.
+if node --no-warnings scripts/test_frame_rate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ POPUPS TAKE THE CHASSIS (faceplates §10.3): the default chassis is today's gold, value for value;
 #     no popup holds a hard-coded gold; engraved text clears 4.5:1 on silver and black at the plate's
 #     worst lighting; the tune entry follows the Display (Nixie One only ever neon); and with

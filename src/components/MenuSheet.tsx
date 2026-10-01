@@ -51,8 +51,9 @@ import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { useFaceplateSettings, useSurfaceOpaque } from '../contexts/FaceplateContext';
 import {
   CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
-  COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver,
-  type PaneChoice, type Chassis, type SignalMeter,
+  COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver, frameRateChoices,
+  FRAME_RATE_NOTE,
+  type PaneChoice, type Chassis, type SignalMeter, type FrameRate,
 } from '../constants/faceplate';
 import { AUTO_REASON_NOTE } from '../constants/transparency';
 import {
@@ -722,7 +723,8 @@ function ControlCustomisationPane({
 }) {
   const styles = usePopupStyles(makeStyles);
   // ★ App-wide, not per server (FaceplateContext) — the faceplate is the hardware in your hand.
-  const { settings: fp, setDisplay, setText, set, setTransparency, autoTransparency: auto } = useFaceplateSettings();
+  const { settings: fp, setDisplay, setText, set, setTransparency, autoTransparency: auto,
+          maxRefreshHz } = useFaceplateSettings();
   // ★ While the DEVICE chose OFF (never once the user has picked), say so — otherwise a new user on
   //   an old phone sees solid panels, the ON key unlit, and no reason why.
   const autoNote = !fp.transparencyExplicit && auto.reason ? AUTO_REASON_NOTE[auto.reason] : null;
@@ -768,6 +770,16 @@ function ControlCustomisationPane({
       <SelectorRow label="TRANSPARENCY EFFECTS" choices={TRANSPARENCY_CHOICES} value={fp.transparency}
         onPick={setTransparency}
         note={autoNote ? `${TRANSPARENCY_NOTE}\n${autoNote}` : TRANSPARENCY_NOTE} />
+      {/* ★★ FRAME RATE (power audit, 2026-10-01): the panel's full rate or 60 Hz, live. Shown ONLY
+          on a panel faster than 60 Hz (ProMotion, 90 / 120 Hz Android) — on a 60 Hz one a 60 Hz
+          cap is a key that does nothing (AGENTS.md). faceplate.ts frameRateChoices decides. */}
+      {(() => {
+        const rates = frameRateChoices(maxRefreshHz);
+        return rates ? (
+          <SelectorRow label="FRAME RATE" choices={rates} value={fp.frameRate}
+            onPick={(v: FrameRate) => set({ frameRate: v })} note={FRAME_RATE_NOTE} />
+        ) : null;
+      })()}
 
       {/* ── TUNING & ZOOM — moved from the menu's CONTROLS section, behaviour unchanged ── */}
       <SubLabel label="TUNING & ZOOM" />

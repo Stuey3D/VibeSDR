@@ -5,6 +5,10 @@
 // reject. The DSP/shim lives in libvibelocalsdr_ios.a (+ volk/fftw3f/zstd).
 #import <React/RCTBridgeModule.h>
 #import <Foundation/Foundation.h>
+#import <QuartzCore/QuartzCore.h>
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+#include <cmath>
 #include <string>
 #include <vector>
 #include <sys/sysctl.h>
@@ -194,6 +198,146 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(deviceClass) {
     @"model": model,
     @"isMac": @(isMac),
   };
+}
+
+// ── FRAME RATE CAP — CONTROL CUSTOMISATION → FACEPLATE → FRAME RATE (src/services/frameRate.ts) ─
+// ★★★ Power audit, 2026-10-01: on a ProMotion iPhone the app held the panel at 120 Hz the whole time
+//   the radio streamed. react-native-worklets' AnimationFrameQueue asks for 120 (and RN's own
+//   display links ask for the default, which is the panel's maximum), Info.plist sets
+//   CADisableMinimumFrameDurationOnPhone, and Skia canvases / Reanimated frame callbacks follow.
+// ★★ ONE OWNER FOR EVERY DISPLAY LINK: rather than patching each library that makes one (worklets,
+//   Reanimated's nodes manager and keyboard observer, RN's RCTDisplayLink / timers / native
+//   animated, Skia's video) — and missing the next one an upgrade adds — the three CADisplayLink
+//   entry points are wrapped ONCE, here, before main():
+//     +displayLinkWithTarget:selector:  every new link is tracked (weakly) and, while capped, born capped;
+//     -setPreferredFrameRateRange:      what the library ASKED for is remembered; the cap is applied;
+//     -setPreferredFramesPerSecond:     the same, for the deprecated property worklets still sets.
+//   Lifting the cap puts back exactly what each library asked for, so 'full' is today's behaviour.
+// ★ LIVE: setFrameRateCap re-applies to every tracked link at once — no restart. The value is also
+//   kept in NSUserDefaults, so the next launch is capped from its first link, before JS has run.
+// ★ Thread-safe: worklets creates and sets its link on the JS queue, others on main. One recursive
+//   lock (@synchronized) around the registry; a thread-local flag passes our OWN calls to the
+//   original setters straight through, in case one setter is implemented with the other.
+static NSString *const kVibeFrameRateCapKey = @"VibeFrameRateCapHz";
+
+typedef struct { int kind; CAFrameRateRange range; NSInteger fps; } VibeFpsRequest;  // kind 0 none · 1 range · 2 fps
+static const char kVibeFpsRequestKey = 0;
+
+static NSObject *gFpsSync;
+static NSHashTable *gFpsLinks;                // weak — a link's lifetime is its owner's business
+static NSInteger gFpsCap = 0;                 // 0 = no cap (the panel's own maximum)
+static __thread int gFpsInOriginal = 0;
+
+static id   (*gOrigMake)(id, SEL, id, SEL);
+static void (*gOrigSetRange)(id, SEL, CAFrameRateRange);
+static void (*gOrigSetFps)(id, SEL, NSInteger);
+
+static VibeFpsRequest vibeFpsRequestOf(CADisplayLink *link) {
+  VibeFpsRequest q = {0, CAFrameRateRangeDefault, 0};
+  NSValue *v = objc_getAssociatedObject(link, &kVibeFpsRequestKey);
+  if (v) [v getValue:&q size:sizeof q];
+  return q;
+}
+
+static CAFrameRateRange vibeFpsClamp(CAFrameRateRange r, float cap) {
+  if (cap <= 0) return r;
+  // The default range means "as fast as the panel goes": under a cap, that is the cap.
+  if (r.maximum <= 0 || CAFrameRateRangeIsEqualToRange(r, CAFrameRateRangeDefault))
+    return CAFrameRateRangeMake(cap / 2, cap, cap);
+  float mx = MIN(r.maximum, cap);
+  return CAFrameRateRangeMake(MIN(r.minimum, mx), mx, r.preferred > 0 ? MIN(r.preferred, mx) : r.preferred);
+}
+
+/** Give `link` what its owner asked for (`q`), under `cap`. Caller holds gFpsSync. */
+static void vibeFpsApply(CADisplayLink *link, VibeFpsRequest q, NSInteger cap) {
+  gFpsInOriginal++;
+  if (q.kind == 2) {
+    NSInteger f = q.fps;
+    if (cap > 0 && (f <= 0 || f > cap)) f = cap;
+    gOrigSetFps(link, @selector(setPreferredFramesPerSecond:), f);
+  } else {
+    gOrigSetRange(link, @selector(setPreferredFrameRateRange:),
+                  vibeFpsClamp(q.kind == 1 ? q.range : CAFrameRateRangeDefault, (float)cap));
+  }
+  gFpsInOriginal--;
+}
+
+static id vibeFpsMake(id cls, SEL cmd, id target, SEL sel) {
+  CADisplayLink *link = gOrigMake(cls, cmd, target, sel);
+  if (!link) return link;
+  @synchronized (gFpsSync) {
+    [gFpsLinks addObject:link];
+    if (gFpsCap > 0) vibeFpsApply(link, vibeFpsRequestOf(link), gFpsCap);
+  }
+  return link;
+}
+
+static void vibeFpsRecordAndApply(CADisplayLink *link, VibeFpsRequest q) {
+  @synchronized (gFpsSync) {
+    objc_setAssociatedObject(link, &kVibeFpsRequestKey, [NSValue valueWithBytes:&q objCType:@encode(VibeFpsRequest)],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    vibeFpsApply(link, q, gFpsCap);
+  }
+}
+
+static void vibeFpsSetRange(CADisplayLink *link, SEL cmd, CAFrameRateRange r) {
+  if (gFpsInOriginal) { gOrigSetRange(link, cmd, r); return; }
+  vibeFpsRecordAndApply(link, (VibeFpsRequest){1, r, 0});
+}
+
+static void vibeFpsSetFps(CADisplayLink *link, SEL cmd, NSInteger fps) {
+  if (gFpsInOriginal) { gOrigSetFps(link, cmd, fps); return; }
+  vibeFpsRecordAndApply(link, (VibeFpsRequest){2, CAFrameRateRangeDefault, fps});
+}
+
+// ★ Before main(): every display link a library makes later is made through the wrappers.
+__attribute__((constructor)) static void vibeFpsInstall(void) {
+  @autoreleasepool {
+    Class c = [CADisplayLink class];
+    Method mk = class_getClassMethod(c, @selector(displayLinkWithTarget:selector:));
+    Method sr = class_getInstanceMethod(c, @selector(setPreferredFrameRateRange:));
+    Method sf = class_getInstanceMethod(c, @selector(setPreferredFramesPerSecond:));
+    if (!mk || !sr || !sf) return;   // an SDK without them: no cap, nothing broken
+    gFpsSync  = [NSObject new];
+    gFpsLinks = [NSHashTable weakObjectsHashTable];
+    NSInteger stored = [[NSUserDefaults standardUserDefaults] integerForKey:kVibeFrameRateCapKey];
+    gFpsCap = stored > 0 ? stored : 0;
+    gOrigSetRange = (void (*)(id, SEL, CAFrameRateRange))method_setImplementation(sr, (IMP)vibeFpsSetRange);
+    gOrigSetFps   = (void (*)(id, SEL, NSInteger))method_setImplementation(sf, (IMP)vibeFpsSetFps);
+    gOrigMake     = (id (*)(id, SEL, id, SEL))method_setImplementation(mk, (IMP)vibeFpsMake);
+  }
+}
+
+static void vibeFpsSetCap(NSInteger cap) {
+  if (!gFpsSync) return;
+  @synchronized (gFpsSync) {
+    if (cap == gFpsCap) return;
+    gFpsCap = cap;
+    for (CADisplayLink *link in gFpsLinks.allObjects) vibeFpsApply(link, vibeFpsRequestOf(link), cap);
+  }
+}
+
+// 0 = no cap; otherwise the cap in Hz (the app only ever sends 60). Live, and remembered for the
+// next launch.
+RCT_EXPORT_METHOD(setFrameRateCap:(double)hz) {
+  NSInteger cap = (std::isfinite(hz) && hz > 0) ? (NSInteger)lround(hz) : 0;
+  [[NSUserDefaults standardUserDefaults] setInteger:cap forKey:kVibeFrameRateCapKey];
+  dispatch_async(dispatch_get_main_queue(), ^{ vibeFpsSetCap(cap); });
+}
+
+// The panel's top rate: 120 on ProMotion, 60 elsewhere. ★ UIKit — read on the main thread.
+RCT_EXPORT_METHOD(maxRefreshRate:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    UIScreen *screen = nil;
+    for (UIScene *sc in UIApplication.sharedApplication.connectedScenes) {
+      if ([sc isKindOfClass:[UIWindowScene class]]) { screen = ((UIWindowScene *)sc).screen; break; }
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    if (!screen) screen = UIScreen.mainScreen;
+#pragma clang diagnostic pop
+    resolve(@((double)screen.maximumFramesPerSecond));
+  });
 }
 
 // ── USB (Android-only) — reject on iOS ──────────────────────────────────────

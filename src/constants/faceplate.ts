@@ -29,6 +29,10 @@ export type DisplayStyle     = 'hyper' | 'nixie' | 'dot' | 'seg';
 export type ControlsColour   = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'neon';
 export type TextColour       = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'teal';
 export type SignalMeter      = 'bar' | 'vu' | 'edge';
+/** ★ FRAME RATE (power audit, 2026-10-01): `full` = whatever the display can do (120 Hz on a
+ *  ProMotion iPhone, 90 / 120 / 144 on a fast Android) — today's behaviour; `60` = capped at 60 Hz,
+ *  for battery. See `frameRateChoices` for when the row is offered at all. */
+export type FrameRate        = 'full' | '60';
 /** ★★★ TRANSPARENCY EFFECTS (Stuart, 2026-09-30) — ONE switch for every see-through surface: the
  *  default deck, every decoder box, and (row 10, PopupShell) the menus, sheets and chat. It replaced
  *  the decoder boxes' own Transparent / Solid row. `off` = alpha 1.0 EXACTLY and no BlurView anywhere
@@ -53,6 +57,11 @@ export interface FaceplateSettings {
    *  statistical partial brightness. Stored now (the CONTROL CUSTOMISATION pane's FEEL group); the
    *  VU that reads it arrives with row 5, which also ORs in the OS Reduce Motion setting. */
   steadyLeds: boolean;
+  /** ★ FRAME RATE — the display-refresh cap for everything the app animates (Skia canvases,
+   *  Reanimated frame callbacks, RN's own display links). ★★ DEVICE-LOCAL like the rest of the
+   *  faceplate: it is about the panel in your hand, so it is never per server and never synced.
+   *  Applied natively by src/services/frameRate.ts (FaceplateContext pushes it). */
+  frameRate: FrameRate;
   /** ★ The user's text colour, remembered PER DISPLAY (§1: "Remember the user's choice per display
    *  if cheap to do" — it is). Leaving Hyperlegible-white for dot matrix falls back to teal; coming
    *  back restores white rather than leaving them on teal. */
@@ -65,6 +74,7 @@ export const CONTROLS:    ControlsColour[] = ['green', 'red', 'amber', 'blue', '
 export const TEXTS:       TextColour[]     = ['green', 'red', 'amber', 'blue', 'white', 'teal'];
 export const METERS:      SignalMeter[]    = ['bar', 'vu', 'edge'];
 export const TRANSPARENCIES: Transparency[] = ['on', 'off'];
+export const FRAME_RATES: FrameRate[] = ['full', '60'];
 
 /** ★★★ What the real display technology came in (§1). Nixie: none — locked neon (§2). Dot and
  *  segment VFDs never came in white. The first entry is the display's default. */
@@ -78,7 +88,8 @@ export const TEXT_ALLOWED: Record<DisplayStyle, TextColour[]> = {
 /** §1 defaults. `display` is overwritten by the font migration on first load (see migrate…). */
 export const DEFAULT_SETTINGS: FaceplateSettings = {
   chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
-  meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, textByDisplay: {},
+  meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, frameRate: 'full',
+  textByDisplay: {},
 };
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
@@ -294,6 +305,7 @@ export function parseSettings(json: string | null, legacyThemeName?: string | nu
     meter:     pick(raw.meter, METERS, 'bar'),
     ...parseTransparency(raw),
     steadyLeds: raw.steadyLeds === true,
+    frameRate: pick(raw.frameRate, FRAME_RATES, 'full'),
     textByDisplay,
   };
 }
@@ -371,6 +383,36 @@ export function controlsDot(chassis: Chassis, c: ControlsColour): string {
 export function feelRows(hapticsHardware: boolean): Array<'haptics' | 'steadyLeds'> {
   return hapticsHardware ? ['haptics', 'steadyLeds'] : ['steadyLeds'];
 }
+
+/**
+ * ★★★ FRAME RATE row: the keys to offer, or null when the row must be HIDDEN. `maxHz` is the
+ * display's top refresh rate as the native side reports it (iOS `UIScreen.maximumFramesPerSecond`;
+ * Android the fastest mode at the CURRENT resolution) — null / not a number = unknown (old binary,
+ * web, Expo Go). ★ AGENTS.md: never offer a control whose every use is a no-op — on a 60 Hz panel
+ * (every non-ProMotion iPhone, most Android phones, all Android before 6) a 60 Hz cap changes
+ * nothing, so there is no row. The top key is labelled with the panel's REAL rate (a 90 Hz phone
+ * reads "90 Hz", never "120 Hz"), rounded: Android reports 119.99 / 60.000004.
+ */
+export function frameRateChoices(maxHz: number | null | undefined): PaneChoice<FrameRate>[] | null {
+  const hz = normaliseHz(maxHz);
+  if (hz == null || hz <= 60) return null;
+  return [{ value: 'full', label: `${hz} Hz` }, { value: '60', label: '60 Hz' }];
+}
+
+/** A reported refresh rate as a whole number of Hz, or null when it says nothing usable. */
+export function normaliseHz(maxHz: number | null | undefined): number | null {
+  if (typeof maxHz !== 'number' || !Number.isFinite(maxHz) || maxHz <= 0) return null;
+  return Math.round(maxHz);
+}
+
+/** What the native side is told: the cap in Hz, or 0 = no cap (the display's own maximum).
+ *  ★ Sent whatever the panel — on a 60 Hz panel a 60 Hz cap is simply a no-op natively. */
+export function frameRateCapHz(s: Pick<FaceplateSettings, 'frameRate'>): number {
+  return s.frameRate === '60' ? 60 : 0;
+}
+
+/** The FRAME RATE row's subtitle (UK English): what 60 Hz buys and costs. Live — no restart. */
+export const FRAME_RATE_NOTE = '60 Hz · easier on the battery; scrolling and animation a touch less smooth';
 
 // ── Chassis tokens ────────────────────────────────────────────────────────────
 
