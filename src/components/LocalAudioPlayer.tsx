@@ -21,7 +21,7 @@ const Vibe = NativeModules.VibePowerModule as {
   pushExternalOpus?:  (b64: string, sampleRate: number, channels: number) => void;
   sendLocalTune?:     (json: string) => void;
   stopLocalAudio?:    () => void;
-  /** iOS: is the pump's socket still delivering? Reopens it if not (VibePowerModule.swift). */
+  /** Is the pump's socket still delivering? Reopens it if not (VibePowerModule.swift / VibeStreamService.kt). */
   reviveLocalAudio?:  () => void;
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
   pushExternalPcm?:   (b64: string, rate: number, channels?: number) => void;
@@ -86,8 +86,8 @@ function bytesToBase64(b: Uint8Array): string {
 
 /** ★★ ASK THE NATIVE PUMP WHETHER ITS SOCKET IS STILL DELIVERING, and let it reopen a dead one.
  *  Called when the app returns to the foreground: a suspension is exactly when the server drops the
- *  socket, and a half-open flow never says so. iOS only — Android's pump lives in a foreground
- *  service that is not suspended, and has no such method (optional, so this is a quiet no-op there). */
+ *  socket, and a half-open flow never says so. Both platforms: iOS VibePowerModule.swift, Android
+ *  VibeStreamService.reviveLocalAudio (optional, so an older native build is a quiet no-op). */
 export function reviveLocalAudio(): void {
   try { Vibe?.reviveLocalAudio?.(); } catch { /* an older native build — nothing to ask */ }
 }

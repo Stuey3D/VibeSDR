@@ -2051,6 +2051,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func laFrameStamp() -> TimeInterval { laLock.lock(); defer { laLock.unlock() }; return laLastFrameAt }
   /// The shim's refusals and endings on this socket — see scheduleLocalAudioReconnect. The same
   /// terminal cases VibeServerWsClient meets on the spectrum socket and answers with `refused`.
+  /// ★ One rule, two readers: Android's VibeStreamService.LA_TERMINAL_TYPES — change both.
   private static let laTerminalTypes: Set<String> = [
     "busy", "evicted", "kicked", "banned", "cooldown", "session_expired", "elsewhere",
     "needs_codec", "idle_closed",

@@ -151,6 +151,11 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopLocalAudio() { VibeStreamService.instance?.stopLocalAudio() }
 
+    /** ★★ Is the local pump's socket still delivering? Reopens it if not — see
+     *  VibeStreamService.reviveLocalAudio. @ReactMethod or JS cannot see it (a quiet no-op). */
+    @ReactMethod
+    fun reviveLocalAudio() { VibeStreamService.instance?.reviveLocalAudio() }
+
     // FM-DX Webserver (v7): the shared tuner's MP3-over-WS audio, consumed +
     // decoded natively (background-safe). JS owns only the /text + /chat sockets.
     @ReactMethod
