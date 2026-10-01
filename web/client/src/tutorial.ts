@@ -45,9 +45,8 @@ type Step = {
   body: string;
 };
 
-// ★ Ids are the card's (#mcard), not the retired desktop bar's. index.html: "This and the desktop
-//   bar used to swap at a breakpoint ... The card is now simply THE controls; width changes only
-//   the ARRANGEMENT." Pointing at #tuneDown/#stepBtn would light up a bar nobody can see.
+// ★ Ids are the card's (#mcard) — the only control surface. (A retired desktop bar once carried
+//   look-alike ids; pointing at one lit up a bar nobody could see. It has since been deleted.)
 const STEPS: Step[] = [
   {
     ids: ['mVfoDown', 'mVfoUp', 'mStep', 'mZoomOut', 'mZoomIn'],
@@ -87,8 +86,7 @@ const STEPS: Step[] = [
     //    INSIDE #linkStats, which also carries the link bars and the SQL / SETTLING / OVERLOAD
     //    chips — and it is the ROW as a block that reads as "technical" to somebody who has just
     //    arrived. Lighting the container lights the thing they are actually looking at.
-    // ★ mobile.ts MOVES the real #linkStats node into the card's status line rather than copying
-    //   it, so there is exactly one of these to point at whatever the layout is doing.
+    // ★ #linkStats is written in the card's status line (#mLinkHost) — there is exactly one.
     ids: ['linkStats'],
     title: 'The connection line',
     body: 'The line at the bottom is how your connection is doing. Ping is how quickly the '

@@ -5,8 +5,9 @@
  *   node scripts/build-web.mjs && node scripts/test-web-airband.mjs
  *
  * Drives the REAL built page in headless Edge against the mock VibeServer, through the controls a
- * listener uses (the entry box, the step menu, the tune arrows, the mode picker, the bandwidth
- * slider, the bookmarks panel), and checks what reached the "server" (GET /debug/controls):
+ * listener uses — the CONTROL CARD's own controls (#mFreqBox, #mStep, #mVfoUp, the mode picker with
+ * its bandwidth row, #mBookmarks), never a hidden leftover — and checks what reached the "server"
+ * (GET /debug/controls) and what the card's readout (#mFreq / #mChan) says:
  *   1. typing a channel NAME tunes its true frequency (118.010 → 118008333 Hz) and the readout shows
  *      the name with "8.33 · 118.0083" beside it; the passband default follows the spacing (±2.8k);
  *   2. an unused name (118.020) is refused with the reason, and nothing is tuned;
@@ -66,21 +67,21 @@ try {
     return hit;
   };
   const enter = async (v) => {
-    await ev(`(() => { const p = document.getElementById('freqPanel'); if (!p || !p.classList.contains('open')) document.getElementById('pill').click(); })()`);
+    await ev(`(() => { const p = document.getElementById('freqPanel'); if (!p || !p.classList.contains('open')) document.getElementById('mFreqBox').click(); })()`);
     await sleep(150);
     await ev(`(() => { const i = document.getElementById('freqInput'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('input')); document.getElementById('freqGo').click(); })()`);
     await sleep(400);
   };
   const pickStep = async (label) => {
-    await ev(`document.getElementById('stepBtn').click()`);
+    await ev(`document.getElementById('mStep').click()`);
     await sleep(150);
     const hit = await ev(`(() => { const b = [...document.querySelectorAll('#stepMenu button')].find(x => x.textContent.trim() === ${JSON.stringify(label)}); if (b) b.click(); return !!b; })()`);
     await sleep(200);
     return hit;
   };
   const up = async () => {
-    await ev(`(() => { const el = document.getElementById('tuneUp'); el.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); })()`);
-    await sleep(250);
+    await ev(`(() => { const el = document.getElementById('mVfoUp'); el.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); })()`);
+    await sleep(450);   // ★ the card's readout is refreshed on a 250 ms poll
   };
   const tunedHz = async () => (await controls()).tune?.frequency;
   const bw = async () => { const b = (await controls()).bandwidth; return b ? [b.bandwidthLow, b.bandwidthHigh] : null; };
@@ -90,8 +91,8 @@ try {
   // 1. a channel name
   await enter('118.010');
   ok(await tunedHz() === 118008333, `1. "118.010" tuned 118008333 Hz (got ${await tunedHz()})`);
-  ok(await text('freq') === '118.010', `1. readout shows the channel name (${await text('freq')})`);
-  const tag = await text('freqChan');
+  ok(await text('mFreq') === '118.010', `1. readout shows the channel name (${await text('mFreq')})`);
+  const tag = await text('mChan');
   ok(/8\.33/.test(tag || '') && /118\.0083/.test(tag || ''), `1. spacing + true frequency beside it (${tag})`);
   ok(JSON.stringify(await bw()) === '[-2800,2800]', `1. passband default followed 8.33 spacing (${JSON.stringify(await bw())})`);
 
@@ -105,25 +106,29 @@ try {
   // 3. the 8.33 knob walk
   ok(await pickStep('8.33kHz'), '3. 8.33kHz is on the airband step ladder');
   const walk = [];
-  for (let i = 0; i < 3; i++) { await up(); walk.push([await text('freq'), await tunedHz()]); }
+  for (let i = 0; i < 3; i++) { await up(); walk.push([await text('mFreq'), await tunedHz()]); }
   ok(JSON.stringify(walk) === JSON.stringify([['118.015', 118016667], ['118.025', 118025000], ['118.030', 118025000]]),
      `3. walked 118.015 → 118.025 (25 kHz) → 118.030 (8.33), same Hz for the last two: ${JSON.stringify(walk)}`);
   ok(JSON.stringify(await bw()) === '[-2800,2800]', `3. back on an 8.33 name the passband is ±2.8k again (${JSON.stringify(await bw())})`);
 
   // 4. the emergency channel
   await enter('121.5');
-  ok(await tunedHz() === 121500000 && await text('freq') === '121.500', `4. 121.5 → 121.500 (${await text('freq')}, ${await tunedHz()})`);
-  ok((await text('freqChan')) === '25 kHz', `4. tagged as a 25 kHz channel (${await text('freqChan')})`);
+  ok(await tunedHz() === 121500000 && await text('mFreq') === '121.500', `4. 121.5 → 121.500 (${await text('mFreq')}, ${await tunedHz()})`);
+  ok((await text('mChan')) === '25 kHz', `4. tagged as a 25 kHz channel (${await text('mChan')})`);
   ok(JSON.stringify(await bw()) === '[-8500,8500]', `4. passband default for 25 kHz ±8.5k (${JSON.stringify(await bw())})`);
   await ev(`document.getElementById('freqClose')?.click()`);
 
-  // 5. a bookmark keeps its passband
-  await ev(`(() => { const s = document.getElementById('bwSync'); return s ? s.classList.contains('on') : null; })()`);
-  await ev(`(() => { const hi = document.getElementById('bwHi'); hi.value = '3000'; hi.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  // 5. a bookmark keeps its passband — narrowed through the bandwidth row the mode picker carries
+  await ev(`document.getElementById('mMode').click()`);
+  await sleep(200);
+  ok(await ev(`!!document.querySelector('#mModeMenu #bwHi')`), '5. the mode picker carries the bandwidth row');
+  await ev(`(() => { const hi = document.querySelector('#mModeMenu #bwHi'); hi.value = '3000'; hi.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   await sleep(300);
+  await ev(`document.querySelector('#mModeMenu .mModeClose')?.click()`);
+  await sleep(150);
   const narrow = await bw();
   ok(JSON.stringify(narrow) === '[-3000,3000]', `5. narrowed to ±3 kHz before saving (${JSON.stringify(narrow)})`);
-  await ev(`document.getElementById('bookmarksBtn').click()`);
+  await ev(`document.getElementById('mBookmarks').click()`);
   await sleep(200);
   await ev(`(() => { document.getElementById('bmName').value = 'WEAK AM'; document.getElementById('bmAdd').click(); })()`);
   await sleep(400);
@@ -134,7 +139,7 @@ try {
   await pickMode('AM');
   const before = await bw();
   ok(JSON.stringify(before) !== '[-3000,3000]', `5. moved away at a different width (${JSON.stringify(before)})`);
-  await ev(`document.getElementById('bookmarksBtn').click()`);
+  await ev(`document.getElementById('mBookmarks').click()`);
   await sleep(300);
   const clicked = await ev(`(() => { const r = [...document.querySelectorAll('#bmList .sres')].find(x => /WEAK AM/.test(x.textContent)); if (r) r.click(); return !!r; })()`);
   await sleep(500);

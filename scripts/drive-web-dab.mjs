@@ -38,7 +38,7 @@ const clicked = await ev(`(() => { const b = [...document.querySelectorAll('butt
 console.log('click:', clicked);
 for (let t = 5; t <= SECS; t += 5) {
   await sleep(5000);
-  const st = await ev(`(() => { const st = document.getElementById('dabStations'); const lbl = document.getElementById('dabMuxLbl'); const rows = st ? [...st.querySelectorAll('.dabSvc')].map(r => r.querySelector('.nm')?.firstChild?.textContent?.trim() + ' [' + r.querySelector('.cod')?.textContent + ']') : []; const z = document.getElementById('zoomIn'); const mz = document.getElementById('mZoomIn'); const held = document.getElementById('decStatus')?.textContent; return JSON.stringify({ mux: lbl?.textContent, n: rows.length, first: rows.slice(0,3), dls: st?.querySelector('.dls')?.textContent, zoomDisabled: z?.disabled, mZoomDisabled: mz?.disabled, status: held, decTitle: document.getElementById('decTitle')?.textContent, boxOpen: document.getElementById('decBox')?.classList.contains('open') }); })()`);
+  const st = await ev(`(() => { const st = document.getElementById('dabStations'); const lbl = document.getElementById('dabMuxLbl'); const rows = st ? [...st.querySelectorAll('.dabSvc')].map(r => r.querySelector('.nm')?.firstChild?.textContent?.trim() + ' [' + r.querySelector('.cod')?.textContent + ']') : []; const z = document.getElementById('mPanelFit'); const mz = document.getElementById('mZoomIn'); const held = document.getElementById('decStatus')?.textContent; return JSON.stringify({ mux: lbl?.textContent, n: rows.length, first: rows.slice(0,3), dls: st?.querySelector('.dls')?.textContent, fitDisabled: z?.disabled, mZoomDisabled: mz?.disabled, status: held, decTitle: document.getElementById('decTitle')?.textContent, boxOpen: document.getElementById('decBox')?.classList.contains('open') }); })()`);
   console.log(`t=${t}s`, st);
 }
 // pick the first station through the UI and read the signal pane
@@ -49,7 +49,7 @@ await ev(`document.getElementById('dabPane')?.click()`);
 await sleep(1500);
 console.log('signal pane:', (await ev(`document.getElementById('dabSignal')?.innerText`))?.replace(/\n+/g, ' | ').slice(0, 900));
 // try to zoom and tune from the keyboard/wheel path, then check the mux did not move
-await ev(`(() => { document.getElementById('zoomIn')?.click(); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' })); document.getElementById('tuneUp')?.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true })); return 1; })()`);
+await ev(`(() => { document.getElementById('mZoomIn')?.click(); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' })); document.getElementById('mVfoUp')?.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true })); return 1; })()`);
 await sleep(4000);
 console.log('after zoom+arrow presses:', await ev(`document.getElementById('dabMuxLbl')?.textContent`));
 try { await send('Browser.close'); } catch {}
