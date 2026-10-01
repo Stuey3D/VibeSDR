@@ -33,6 +33,9 @@ export function gridToLatLon(grid?: string | null): { lat: number; lon: number }
   if (!grid) return null;
   const g = grid.trim().toUpperCase();
   if (!/^[A-R]{2}[0-9]{2}([A-X]{2})?$/.test(g)) return null;
+  // ★★ "RR73" is FT8's sign-off, never a locator here — it LOOKS like a square near the North Pole, so
+  //    every station signing off was plotted in the Arctic (older servers still send it as the grid).
+  if (g === 'RR73') return null;
 
   // Field (20° lon / 10° lat) + square (2° lon / 1° lat).
   let lon = (g.charCodeAt(0) - 65) * 20 - 180;

@@ -179,6 +179,15 @@ void Ft8Decoder::runDecode(const monitor_t& mon) {
 
         float audioHz = (mon.min_bin + c->freq_offset + (float)c->freq_sub / wf->freq_osr) / mon.symbol_period;
         int snr = (int)std::lround(c->score * 0.5f - 24.0f);   // score→dB, rough offset
+        // ★★ ft8_lib's third field is "grid OR report": "IO92", but also "-12", "R-12", "73", "RRR" and
+        //    "RR73". Only a real 4-character locator is a grid (B10: the map warned about ~40 "unparseable
+        //    grids" on every update, and every RR73 sign-off — a VALID-LOOKING square near the North Pole —
+        //    was plotted in the Arctic). Anything else is sent as no grid at all.
+        const bool realGrid = std::strlen(grid) == 4
+            && grid[0] >= 'A' && grid[0] <= 'R' && grid[1] >= 'A' && grid[1] <= 'R'
+            && grid[2] >= '0' && grid[2] <= '9' && grid[3] >= '0' && grid[3] <= '9'
+            && std::strcmp(grid, "RR73") != 0;
+        if (!realGrid) grid[0] = 0;
         if (onSpot) onSpot(callTo, callDe, grid, snr, audioHz);
     }
 }

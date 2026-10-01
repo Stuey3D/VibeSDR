@@ -2270,6 +2270,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         //    up controls behind a full-screen shield, and its "tap outside ends it" would have
         //    been armed under an overlay that eats every pointer event.
         if (gateWantsTutorial) { gateWantsTutorial = false; startTutorial(); }
+        scheduleMapPrefetch();
       }
       return;
     }
@@ -11417,6 +11418,7 @@ function initSpotFilters() {
 /** ★ ONE derivation of the map's points, used both to build the page and to push updates into
  *  it. Two copies would drift, and a live update that disagreed with the initial render is worse
  *  than no live update at all. */
+let gridWarned = false;
 function spotsMapPoints() {
   const me = myPos();
 
@@ -11434,7 +11436,9 @@ function spotsMapPoints() {
     const p = gridToLatLon(s.grid);
     if (p) rows.push({ s, p }); else if (s.grid) dropped++;
   }
-  if (dropped) console.warn(`[map] ${dropped} spot(s) had an unparseable grid`);
+  // ★ Once per page, not per update: an older server sends FT8 reports ("-12", "73") as grids, and a
+  //   warning on every spot refresh flooded the console with dozens of lines a minute (B10).
+  if (dropped && !gridWarned) { gridWarned = true; console.warn(`[map] ${dropped} spot(s) had an unparseable grid (said once)`); }
 
   /* ★★★ SANITISED HERE, ONCE, BECAUSE OF WHERE THESE GO. Every field below was DECODED OFF THE
    *  AIR — an FT8 or WSPR callsign and grid are whatever the transmitter sent, and a bad decode
@@ -11493,6 +11497,29 @@ function pushSpotsToMap() {
  *     has /mapgl/ (probeMapGL). Its scripts are ABSOLUTE URLs on this server: the window is
  *     about:blank, and its own location says nothing about where the server is.
  *  ★ No WebGL 2 or no /mapgl/: the Leaflet map exactly as before. */
+/* ★★ WARM THE MAP RENDERER IN IDLE TIME (B10, Stuart: the first map open had "a very slight hiccup",
+ *  and the prefetch must not touch "the streaming bandwidth"). The page stays light — the renderer is
+ *  still its own file — but once the radio has played for 30 s the browser fetches it ONCE while idle:
+ *  ~98 KB, under five seconds of one audio stream, and cached for a year after (/vs/ is immutable), so
+ *  every later visit costs nothing. Never on Data Saver or a 2G-class link (those are the listeners the
+ *  page diet is for), never while the tab is hidden, never twice. A failure is silent: the map still
+ *  loads on demand exactly as before. */
+let mapPrefetched = false;
+function scheduleMapPrefetch(): void {
+  if (mapPrefetched) return;
+  mapPrefetched = true;
+  setTimeout(() => {
+    const conn = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+    if (conn?.saveData || /(^|-)2g$/.test(conn?.effectiveType ?? '')) return;
+    const go = () => {
+      if (document.visibilityState !== 'visible') { mapPrefetched = false; return; }   // try again on the next start
+      void import('./generated/vibemapSource').catch(() => {});
+    };
+    const ric = (window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    if (ric) ric(go, { timeout: 10_000 }); else setTimeout(go, 0);
+  }, 30_000);
+}
+
 function openSpotsMap() {
   const w = window.open('', '_blank');
   if (!w) { $('decStatus').textContent = 'popup blocked'; return; }
