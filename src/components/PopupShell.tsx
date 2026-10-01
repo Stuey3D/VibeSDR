@@ -44,6 +44,7 @@ import { NO_DROP_SHADOW, type PlateTokens } from '../constants/faceplate';
 import ChassisPlate from './ChassisPlate';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 import { NAV_FOCUS } from './PanelNav';
+import { CAP_SHEEN } from '../constants/capSheen';
 
 export type { PopupTokens } from '../constants/popupTokens';
 
@@ -312,9 +313,14 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
                         borderColor: silver ? '#8d8a83' : '#050505' },
               layoutOnly(style), focused && { borderColor: NAV_FOCUS, borderWidth: 2 },
               disabled && { opacity: 0.45 }, motion]}>
-      {/* The cap's sheen: light over the top 45 %, a shade at the foot, a 1 pt highlight on the edge. */}
-      <View pointerEvents="none" style={[ps.capHi, { backgroundColor: silver ? 'rgba(255,255,255,0.40)' : 'rgba(255,255,255,0.05)' }]} />
-      <View pointerEvents="none" style={[ps.capLo, { backgroundColor: silver ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.30)' }]} />
+      {/* The cap's sheen: light over the top 45 %, a shade at the foot, a 1 pt highlight on the edge.
+          ★★★ The 45 / 35 % are FLEX SHARES of a layer pinned to the cap (CAP_SHEEN), never `height:
+          '45%'` — see CAP_SHEEN for the chat drawer's ghost slabs that percentage heights drew. */}
+      <View pointerEvents="none" style={ps.capSheen}>
+        <View style={[ps.capHi, { backgroundColor: silver ? 'rgba(255,255,255,0.40)' : 'rgba(255,255,255,0.05)' }]} />
+        <View style={ps.capMid} />
+        <View style={[ps.capLo, { backgroundColor: silver ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.30)' }]} />
+      </View>
       <View pointerEvents="none" style={[ps.capTop, { backgroundColor: silver ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.22)' }]} />
       {/* Clicked: brightness .84 / .82 and an inset shadow from the top edge. */}
       <Reanimated.View pointerEvents="none" style={[ps.capDown, dim]}>
@@ -451,8 +457,7 @@ const ps = StyleSheet.create({
 
   cap:     { borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center',
              shadowColor: '#000', shadowOffset: { width: 0, height: 1.5 }, shadowRadius: 1, elevation: 1 },
-  capHi:   { position: 'absolute', left: 0, right: 0, top: 0, height: '45%', borderTopLeftRadius: 5, borderTopRightRadius: 5 },
-  capLo:   { position: 'absolute', left: 0, right: 0, bottom: 0, height: '35%', borderBottomLeftRadius: 5, borderBottomRightRadius: 5 },
+  ...CAP_SHEEN(5),
   capTop:  { position: 'absolute', left: 3, right: 3, top: 0, height: 1 },
   capDown: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, borderRadius: 5, overflow: 'hidden' },
   capInset: { position: 'absolute', left: 0, right: 0, top: 0, height: 2, backgroundColor: 'rgba(0,0,0,0.45)' },

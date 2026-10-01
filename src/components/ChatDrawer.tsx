@@ -18,11 +18,13 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
@@ -31,6 +33,7 @@ import {
   PopupKey, PopupPlate, PopupHandle, PopupWindow, POPUP_FONT, type PopupTokens,
 } from './PopupShell';
 import type { ChatUserRow } from '../services/DecoderClient';
+import { phrasePadMaxHeight } from '../constants/chatPad';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -103,6 +106,7 @@ const C = {
 const FONT = 'Atkinson Hyperlegible';
 const { height: SCREEN_H } = Dimensions.get('window');
 const DRAWER_H = Math.min(SCREEN_H * 0.55, 480);
+const HANDLE_H = 32;
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
@@ -158,6 +162,12 @@ function ChatDrawerBody({
   //    with nothing to type into it, and the transcript would never render.
   const isCanned = !!canned && canned.length > 0;
   const joined = isCanned || !!myCallsign;
+  // ★★ The phrase pad's cap (constants/chatPad.ts) comes off the drawer's body: its fixed height
+  //    less the bottom inset + padding, the handle and the header (measured — metal keys are taller
+  //    than the default's glyphs), and the room line above the chips.
+  const [headerH, setHeaderH] = useState(36);
+  const [lineH, setLineH] = useState(dialLine ? 18 : 0);
+  const padMaxH = phrasePadMaxHeight(DRAWER_H - insets.bottom - 8 - HANDLE_H - headerH, dialLine ? lineH + 6 : 0);
   const nameRef = useRef<TextInput>(null);
   const msgRef  = useRef<TextInput>(null);
 
@@ -225,7 +235,11 @@ function ChatDrawerBody({
         style={cd.kavWrap}
         pointerEvents="box-none"
       >
-        <Animated.View style={[cd.drawer, { borderTopColor: cc.border, paddingBottom: insets.bottom + 8, transform: [{ translateY }] },
+        {/* ★★ Side insets too: a landscape phone's nav bar (Android) or notch (iOS) sits over the
+            drawer's right / left edge, and it had the ✕ key and the longest phrase's end under it —
+            seen, and not tappable. The plate still runs edge to edge; only the contents step in. */}
+        <Animated.View style={[cd.drawer, { borderTopColor: cc.border, paddingBottom: insets.bottom + 8,
+                                            paddingLeft: insets.left, paddingRight: insets.right, transform: [{ translateY }] },
                                surf.opaque && !pt.metal && { backgroundColor: surf.fill(C.bg) }, surf.shadow, metalFrame]}>
           <PopupPlate radius={14} />
 
@@ -235,7 +249,8 @@ function ChatDrawerBody({
           </TouchableOpacity>
 
           {/* Header */}
-          <View style={[cd.header, { borderBottomColor: cc.border }]}>
+          <View style={[cd.header, { borderBottomColor: cc.border }]}
+                onLayout={(e: LayoutChangeEvent) => setHeaderH(Math.ceil(e.nativeEvent.layout.height))}>
             {!showUsers && !isCanned && myCallsign && onChangeName ? (
               <TouchableOpacity onPress={onChangeName} hitSlop={8} activeOpacity={0.6}>
                 <Text style={[cd.title, { color: cc.title, fontFamily: ff }, cd.engrave]}>
@@ -400,17 +415,25 @@ function ChatDrawerBody({
 
           {/* ★★ THE PHRASE PAD — canned mode's entire means of speaking. Wrapped, not a row: the
                longest line ("I'm running a decoder — can you wait please?") must not force a
-               horizontal scroll on the narrowest phone. */}
+               horizontal scroll on the narrowest phone.
+               ★★★ …and SCROLLED, inside a cap (constants/chatPad.ts). Fourteen phrases are taller
+               than a phone's drawer: laid straight in, they squeezed the transcript to nothing and
+               put phrases 7–14 below the drawer's edge, where no finger could reach them. Same
+               chips, same wrap, same look — only now in a ScrollView no taller than `padMaxH`. */}
           {isCanned && (
-            <View style={[cd.inputRow, { borderTopColor: cc.border, flexWrap: 'wrap', gap: 6 }]}>
+            <View style={[cd.inputRow, cd.padWrap, { borderTopColor: cc.border }]}>
               {!!dialLine && (
                 <Text style={[cd.cannedLine, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}
-                      numberOfLines={2}>
+                      numberOfLines={2} onLayout={(e: LayoutChangeEvent) => setLineH(Math.ceil(e.nativeEvent.layout.height))}>
                   {dialLine}
                 </Text>
               )}
+              <ScrollView style={[cd.padScroll, { maxHeight: padMaxH }]} contentContainerStyle={cd.padContent}
+                showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
               {canned!.map(ph => pt.metal ? (
-                <PopupKey key={ph.id} label={ph.text} numberOfLines={3} height={32} fontSize={12}
+                // ★★ hitSlop 0: the chips sit 6 pt apart and a dome key's default 4 pt slop on BOTH
+                //    neighbours overlapped in the gap — a tap there could say either phrase.
+                <PopupKey key={ph.id} label={ph.text} numberOfLines={3} height={32} fontSize={12} hitSlop={0}
                   style={{ alignSelf: 'flex-start', maxWidth: '100%' }} onPress={() => onSay?.(ph.id)} />
               ) : (
                 <TouchableOpacity
@@ -424,6 +447,7 @@ function ChatDrawerBody({
                   </Text>
                 </TouchableOpacity>
               ))}
+              </ScrollView>
             </View>
           )}
 
@@ -480,7 +504,7 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: -6 },
     shadowOpacity: 0.70, shadowRadius: 12, elevation: 20,
   },
-  handle: { alignItems: 'center', justifyContent: 'center', height: 32 },
+  handle: { alignItems: 'center', justifyContent: 'center', height: HANDLE_H },
   handleBar: { width: 36, height: 4, borderRadius: 2, backgroundColor: C.handle },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 8, gap: 6 },
   title:  onMetal(pt, { flex: 1, color: 'rgba(255,160,0,0.60)', fontFamily: FONT, fontSize: 11, letterSpacing: 2 }, { fontSize: 11, letterSpacing: 2.2, fontWeight: '700' }),
@@ -571,6 +595,12 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
   },
   cannedTxt: { fontFamily: FONT, fontSize: 13, color: '#ffe0a0' },
+  // ★★ The pad: the room line over a capped scroller of the same flowing wrap (constants/chatPad.ts).
+  //    3 pt under the chips so the last row's cast shadow and its 2 pt of travel are not clipped by
+  //    the scroller — the last chip used to sit hard on the drawer's edge.
+  padWrap:    { flexDirection: 'column', alignItems: 'stretch', gap: 4 },
+  padScroll:  { flexGrow: 0 },
+  padContent: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingTop: 1, paddingBottom: 3 },
   // ★ The room line is a SENTENCE too — `meLbl` caps at 80px, which squeezed it into a column.
   cannedLine: onMetal(pt, {
     width: '100%', fontFamily: FONT, fontSize: 11,
