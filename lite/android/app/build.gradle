@@ -107,6 +107,18 @@ tasks.register('syncSharedRes', Sync) {
     into "${buildDir}/shared-res/xml"
 }
 tasks.register('syncJniLibs', Sync) {
+    // ★★★ FAIL LOUDLY WITHOUT THE TUNNEL. cloudflared is gitignored (27 MB), so a fresh clone or an agent's
+    //   worktree has none — and Sync just skips a missing file: the APK built, installed and ran, then
+    //   logged "listing not restored: the tunnel component is not present in this build" and dropped the
+    //   Sony out of the directory (2026-10-01). A Lite with no tunnel is never what we meant to build.
+    doFirst {
+        ['cloudflared/armeabi-v7a/libcloudflared.so', 'kit/armeabi-v7a/lib/librtlsdr.so',
+         'kit/armeabi-v7a/lib/libusb1.0.so'].each { rel ->
+            if (!new File(NATIVE, rel).exists())
+                throw new GradleException("Lite: ${NATIVE}/${rel} is missing — copy it from the main checkout " +
+                                          "(lite/native is partly gitignored); refusing to build a Lite without it")
+        }
+    }
     from("${NATIVE}/kit/armeabi-v7a/lib") { include 'librtlsdr.so', 'libusb1.0.so' }
     from("${NATIVE}/cloudflared/armeabi-v7a") { include 'libcloudflared.so' }
     into "${buildDir}/lite-jniLibs/armeabi-v7a"
