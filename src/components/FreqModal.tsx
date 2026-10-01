@@ -671,7 +671,7 @@ export default function FreqModal({
           {onVtsPrev && onVtsNext && (
             <View style={st.vtsRow}>
               <TouchableOpacity style={st.vtsArrow} onPress={onVtsPrev} hitSlop={8}>
-                <Text style={[st.vtsArrowText, { color: pt.metal ? pt.winDim : t.freqColor }]}>◄</Text>
+                <Text style={[st.vtsArrowText, st.vtsArrowLeft, { color: pt.metal ? pt.winDim : t.freqColor }]}>►</Text>
               </TouchableOpacity>
               <View style={st.vtsInfo}>
                 <Text style={[st.vtsName, { color: winName, fontFamily: ff }]} numberOfLines={1}>
@@ -1154,6 +1154,8 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   vtsRow:       onMetal(pt, { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }, { marginBottom: 6 }),
   vtsArrow:     { paddingHorizontal: 8, paddingVertical: 2 },
   vtsArrowText: { fontSize: 20, fontWeight: 'bold' },
+  // ★ ► mirrored, not ◄: Apple draws the two from different fallback fonts at different sizes (see VTSBar).
+  vtsArrowLeft: { transform: [{ scaleX: -1 }] },
   vtsInfo:      { flex: 1, alignItems: 'center' },
   vtsName:      { fontSize: 13, fontWeight: 'bold' },
   vtsFreq:      { fontSize: 10, marginTop: 1 },

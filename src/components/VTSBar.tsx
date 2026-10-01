@@ -209,7 +209,9 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
                    pointerEvents="none">
     <View style={[styles.bar, { backgroundColor: fp.chassis.vtsBg, borderColor: fp.chassis.vtsBorder }]}
       onLayout={(e: { nativeEvent: { layout: { height: number } } }) => onHeight?.(e.nativeEvent.layout.height)}>
-      <Text style={[styles.arrow, { color: leftCol }]}>◄</Text>
+      {/* ★ The SAME glyph as the right arrow, mirrored: Apple draws ◄ (U+25C4) and ► (U+25BA) from
+          different fallback fonts, so the left one came out visibly smaller (B8, Mac + iPhone). */}
+      <Text style={[styles.arrow, styles.arrowLeft, { color: leftCol }]}>►</Text>
       {/* Source mark: live-data badge (RDS mark / text) wins; otherwise the
           bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
           ★ On a VFD (dot / seg) the RDS annunciator is part of the GLASS: always there, lit only
@@ -413,6 +415,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     zIndex: 60,
   },
+  arrowLeft: { transform: [{ scaleX: -1 }] },
   arrow: {
     fontFamily: 'Atkinson Hyperlegible',
     fontSize: 15,
