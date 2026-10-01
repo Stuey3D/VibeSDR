@@ -158,6 +158,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,
             10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767)
         private val ADPCM_INDEX = intArrayOf(-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8)
+
+        /** The shim's refusals and endings on the local audio socket — the same terminal cases
+         *  VibeServerWsClient meets on the spectrum socket and answers with `refused`. A socket that
+         *  closes after one of these is NOT reopened (see scheduleLocalAudioReconnect).
+         *  ★ One rule, two readers: mirror of VibePowerModule.laTerminalTypes — change both. */
+        private val LA_TERMINAL_TYPES = setOf(
+            "busy", "evicted", "kicked", "banned", "cooldown", "session_expired", "elsewhere",
+            "needs_codec", "idle_closed",
+        )
     }
 
     private var mediaSession: MediaSessionCompat? = null
@@ -294,7 +303,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     @Volatile private var lastSignalEmit = 0L   // throttle the SNR (VibeSignal) event
     // Audio focus — when another app takes it (parity with iOS interruption) we
     // register a mute so the UI + data saver reflect it; user presses Play to
-    // return (no auto-resume on regain).
+    // return — except the local/VibeServer path, which regains on AUDIOFOCUS_GAIN
+    // when the loss imposed the mute (focusMuted, iOS shouldResume parity).
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
     private var audioFocusRequest: AudioFocusRequest? = null
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
@@ -308,9 +318,28 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             // Transient loss (a call, a notification ping) = just mute; we resume.
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
-                mainHandler.post { if (running && !muted && !dataSaverDisconnected) setMutedNative(true) }
+                mainHandler.post {
+                    if (running && !muted && !dataSaverDisconnected) { setMutedNative(true); focusMuted = true }
+                }
+            /* ★★ Regained after a TRANSIENT loss — Android's interruption-ended-with-shouldResume.
+             *  A VibeServer / local dongle mutes IN PLACE on the loss and nothing unmuted it, so a
+             *  call or a notification left it muted until somebody found the banner. Only when the
+             *  FOCUS LOSS muted it: a pause the listener chose stays paused (setMutedNative clears
+             *  focusMuted on every explicit mute/unmute). setMutedNative(false) also checks the socket
+             *  survived (checkLocalAudioAlive). iOS parity: VibePowerModule interruptMuted (722504ab).
+             *  ★ The local path only, as on iOS's change; the other paths keep their own rules. */
+            AudioManager.AUDIOFOCUS_GAIN ->
+                mainHandler.post {
+                    if (focusMuted && muted && externalAudio && !fmdxAudio && externalPauseMode == "resume") {
+                        Log.i(TAG, "audio focus regained — lifting the mute the focus loss imposed")
+                        setMutedNative(false)
+                    }
+                }
         }
     }
+    /** The current mute was imposed by a TRANSIENT audio-focus loss, not chosen by the listener —
+     *  so regaining focus may lift it. Set on main; cleared by every setMutedNative (any thread). */
+    @Volatile private var focusMuted = false
     // Composited album art (app icon + server-type logo inset), cached
     private var npArtwork: android.graphics.Bitmap? = null
     private var npArtworkType = ""
@@ -518,7 +547,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         closeFmdxWs()
         mp3Thread?.interrupt(); mp3Thread = null
         mp3Queue.clear()
-        localAudioWs?.cancel(); localAudioWs = null; lastLocalTune = null
+        laWanted = false; closeLocalAudioConn(); lastLocalTune = null
         extThread?.interrupt(); extThread = null
         extQueue.clear()
         extTrack?.release(); extTrack = null; extRate = 0
@@ -589,6 +618,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     }
 
     fun setMutedNative(m: Boolean) {
+        // ★ Any explicit mute or unmute settles who muted us — see focusMuted. Synchronous, NOT
+        //   posted: the focus listener sets it straight after calling us, and a posted clear would
+        //   land after that and erase it.
+        focusMuted = false
         muted = m
         if (m) packetQueue.clear()
         emitEvent("VibeMuted") { it.putBoolean("muted", m) }
@@ -620,6 +653,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     mainHandler.post {
                         updatePlaybackState(if (m) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING)
                         updateNotification()
+                        /* ★★★ AND CHECK THERE IS STILL SOMETHING TO PLAY. A mute-in-place keeps the
+                         *  SOCKET, and a mute is exactly when the server may drop it — so unmuting a
+                         *  player whose stream died is silence for ever. No-op unless the local pump
+                         *  is running (laWanted). iOS parity: setMuted → checkLocalAudioAlive. */
+                        if (!m) checkLocalAudioAlive("unmute")
                     }
                 }
                 "reconnect" -> {
@@ -802,7 +840,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         Log.i(TAG, "stopExternalAudio")
         externalAudio = false
         externalPauseMode = "release"
-        localAudioWs?.cancel(); localAudioWs = null; lastLocalTune = null
+        laWanted = false; closeLocalAudioConn(); lastLocalTune = null
         running = false
         extThread?.interrupt(); extThread = null
         extQueue.clear()
@@ -826,6 +864,26 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     private var laBytes = 0            // bytes since the last report (see onMessage)
     private var laBytesAt = 0L
+    /** startLocalAudio has been asked for and nothing has ended it — the ONLY licence to reconnect. */
+    @Volatile private var laWanted = false
+    /** The socket's full URL, kept so a reopen reaches the same radio with the same credentials. */
+    @Volatile private var laUrl: String? = null
+    /** ★★★ MAY A REOPEN SAY `tune`? Only where the FIRST open was allowed to — JS sends an EMPTY
+     *  initial tune on a SHARED DIAL. Recovery is not a user action (the shared-dial contract), so
+     *  a reopened socket on a room's dial says nothing; on the listener's own dial it restates
+     *  their tune exactly as the first hello did. */
+    @Volatile private var laAssert = false
+    /** The server refused or ended this listener (busy, evicted, cooldown…). JS owns the next step. */
+    @Volatile private var laTerminal = false
+    /** Consecutive reopens with no audio since — drives the back-off; the first frame clears it. Main. */
+    @Volatile private var laRetries = 0
+    /** Bumped on every open/close; a callback from a superseded socket finds a stale value. */
+    private val laGen = java.util.concurrent.atomic.AtomicInteger(0)
+    private val laLock = Any()
+    /** Bumped by every liveness check, so only the latest one's deferred verdict acts. Main. */
+    private var laReviveGen = 0
+    /** elapsedRealtime of the last binary frame (written on OkHttp's reader thread). */
+    @Volatile private var laLastFrameAt = 0L
 
     /** ★★★ NO DEFAULT ON wsBase. It had one, and the default is precisely why a caller that never
      *      passed it compiled cleanly and shipped: onStartCommand dropped the value and Kotlin
@@ -843,24 +901,85 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         val h = if (host.isNotEmpty()) host else "127.0.0.1"
         startExternalAudio(48_000, "resume")   // external PCM engine; local pause = mute
         lastLocalTune = if (initialTune.isNotEmpty()) initialTune else null
-        val client = httpClient ?: OkHttpClient.Builder()
-            .pingInterval(20, TimeUnit.SECONDS)
-            .build().also { httpClient = it }
-        localAudioWs?.cancel()
         // authSuffix is "&vs_nonce=…&vs_auth=…"; /ws/audio has no query so it needs
         // a leading "?" rather than "&".
         val authQ = if (authSuffix.isNotEmpty()) "?" + authSuffix.removePrefix("&") else ""
-        localAudioWs = client.newWebSocket(
-            // ★ wsBase wins when supplied — it already carries scheme, host, port and any
-            //   /r/<id> prefix. The host:port form remains for local hardware on loopback.
-            Request.Builder().url(
-                if (localWsBase.isNotEmpty()) "$localWsBase/ws/audio$authQ"
-                else "ws://$h:$port/ws/audio$authQ").build(),
+        // ★ wsBase wins when supplied — it already carries scheme, host, port and any
+        //   /r/<id> prefix. The host:port form remains for local hardware on loopback.
+        laUrl = if (localWsBase.isNotEmpty()) "$localWsBase/ws/audio$authQ"
+                else "ws://$h:$port/ws/audio$authQ"
+        laAssert = initialTune.isNotEmpty()
+        laTerminal = false
+        laRetries = 0
+        // ★ AFTER startExternalAudio: its stopEngine withdraws the licence (see laWanted).
+        laWanted = true
+        openLocalAudioConn(reconnect = false)
+    }
+
+    /** Open (or reopen) the local audio socket to `laUrl`. `reconnect` = recovery, not a start: the
+     *  hello `tune` is then sent only where the first open was allowed to send one (see laAssert).
+     *  iOS parity: VibePowerModule.openLocalAudioConn. */
+    private fun openLocalAudioConn(reconnect: Boolean) {
+        val url = laUrl ?: return
+        val client = httpClient ?: OkHttpClient.Builder()
+            .pingInterval(20, TimeUnit.SECONDS)
+            .build().also { httpClient = it }
+        if (reconnect) Log.i(TAG, "local audio socket reopening: $url")
+        // ★ Under laLock: stopLocalAudio arrives on the JS module thread while a reopen runs on
+        //   main, and an unlocked swap can leave the NEW socket open after the stop cancelled the
+        //   old one — an orphan the server still counts as a listener.
+        synchronized(laLock) {
+            if (!laWanted) return
+            closeLocalAudioConnLocked()
+            val gen = laGen.get()
+            localAudioWs = client.newWebSocket(Request.Builder().url(url).build(),
+                localAudioListener(gen, reconnect, url))
+        }
+    }
+
+    /** Supersede the current socket (every callback it still delivers finds a stale generation)
+     *  and cancel it. Does NOT withdraw the licence — callers that end the session clear laWanted. */
+    private fun closeLocalAudioConn() { synchronized(laLock) { closeLocalAudioConnLocked() } }
+    private fun closeLocalAudioConnLocked() {
+        laGen.incrementAndGet()
+        localAudioWs?.cancel(); localAudioWs = null
+    }
+
+    private fun localAudioListener(gen: Int, reconnect: Boolean, url: String) =
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    lastLocalTune?.let { webSocket.send(it) }
+                    if (gen != laGen.get()) return
+                    Log.i(TAG, "local audio WS ready${if (reconnect) " (reopened)" else ""}: $url")
+                    emitEvent("VibeLocalAudioState") {
+                        it.putString("state", if (reconnect) "ready (reopened)" else "ready")
+                    }
+                    // ★★ The hello. A REOPEN on a shared dial says nothing — see laAssert.
+                    if (!reconnect || laAssert) lastLocalTune?.let { webSocket.send(it) }
+                }
+                /** ★ The shim explains a refusal in TEXT on this socket before it closes — note it,
+                 *  so the close that follows is not retried (LA_TERMINAL_TYPES). */
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (gen != laGen.get()) return
+                    val type = try { JSONObject(text).optString("type", "") } catch (_: Exception) { "" }
+                    if (type in LA_TERMINAL_TYPES) {
+                        Log.i(TAG, "local audio socket: the server said '$type' — will not reopen")
+                        laTerminal = true
+                    }
+                }
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(1000, null)
+                    scheduleLocalAudioReconnect(gen,
+                        "closed by the server ($code${if (reason.isNotEmpty()) " $reason" else ""})")
+                }
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    scheduleLocalAudioReconnect(gen, "closed ($code)")
                 }
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    if (gen != laGen.get()) return
+                    // ★ Proof of life for checkLocalAudioAlive — stamped BEFORE the mute drop below:
+                    //   the server keeps sending while we are muted, so a frame is a frame.
+                    laLastFrameAt = SystemClock.elapsedRealtime()
+                    if (laRetries != 0) mainHandler.post { laRetries = 0 }   // main owns it
                     try {
                     // ★★ COUNT EVERY BYTE THAT CROSSED THE LINK — BEFORE any early return, because
                     //    a frame we drop still cost bandwidth. Without this the connection readout
@@ -978,9 +1097,65 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     }
                 }
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (gen != laGen.get()) return
                     Log.w(TAG, "local audio WS failure: ${t.message}")
+                    emitEvent("VibeLocalAudioState") { it.putString("state", "failed: ${t.message}") }
+                    scheduleLocalAudioReconnect(gen, "failure: ${t.message}")
                 }
-            })
+            }
+
+    /* ★★★ A DEAD SOCKET IS REOPENED — ONCE PER DEATH, WITH A BACK-OFF (2, 4, 8, 15, 15… s).
+     *  iOS parity: VibePowerModule.scheduleLocalAudioReconnect (722504ab, the DAB "resumed but
+     *  silent" fault). Here onFailure only LOGGED, so a socket the server dropped stayed dead until
+     *  the user left the server and came back — the only thing that ever called startLocalAudio.
+     *  Reached from onFailure, onClosing and onClosed, several of which fire for ONE death: the
+     *  first to land on main bumps laGen and the rest find a stale generation. Posted to main, so
+     *  OkHttp's reader thread never waits on anything here.
+     *  ★★ NOT after a refusal (busy, evicted, cooldown…, see LA_TERMINAL_TYPES): JS shows the card
+     *     and owns the next step; retrying would hammer a busy radio and disturb whoever holds it.
+     *  ★ Same URL, same session id, same credentials — the server re-affirms our slot. */
+    private fun scheduleLocalAudioReconnect(gen: Int, why: String) {
+        mainHandler.post {
+            if (!laWanted || laGen.get() != gen) return@post
+            closeLocalAudioConn()                 // supersede this connection's remaining callbacks
+            val next = laGen.get()
+            if (laTerminal) {
+                Log.i(TAG, "local audio socket ended ($why) after a refusal — not reopening")
+                return@post
+            }
+            val attempt = laRetries
+            laRetries += 1
+            val delayMs = min(15_000L, 2_000L shl min(attempt, 3))   // 2, 4, 8, 15, 15…
+            Log.i(TAG, "local audio socket lost ($why) — reopening in ${delayMs / 1000} s")
+            mainHandler.postDelayed({
+                if (laWanted && laGen.get() == next) openLocalAudioConn(reconnect = true)
+            }, delayMs)
+        }
+    }
+
+    /** ★★★ IS THE LOCAL AUDIO SOCKET ACTUALLY DELIVERING? Asked when the app comes back to the
+     *  front (JS) and on an unmute. The server sends a frame every ~20 ms whether or not we play
+     *  it, so two seconds of NOTHING after asking is a dead or half-open socket. Reopen it once; a
+     *  further death is scheduleLocalAudioReconnect's. Deferred, never judged on the spot: the
+     *  instant we return, the last frame is necessarily old even on a healthy socket.
+     *  iOS parity: VibePowerModule.reviveLocalAudio / checkLocalAudioAlive. */
+    fun reviveLocalAudio() {
+        mainHandler.post { checkLocalAudioAlive("app returned to the foreground") }
+    }
+
+    /** Main thread. */
+    private fun checkLocalAudioAlive(why: String) {
+        if (!laWanted || laTerminal) return
+        laReviveGen += 1
+        val rg = laReviveGen
+        val asked = SystemClock.elapsedRealtime()
+        mainHandler.postDelayed({
+            if (!laWanted || laTerminal || laReviveGen != rg) return@postDelayed
+            if (laLastFrameAt >= asked) return@postDelayed       // frames are flowing
+            Log.i(TAG, "no local audio for 2 s after: $why — reopening the socket")
+            laRetries = 0
+            openLocalAudioConn(reconnect = true)
+        }, 2_000)
     }
 
     // ── Contained bad frames ────────────────────────────────────────────────
@@ -1049,7 +1224,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     fun stopLocalAudio() {
         Log.i(TAG, "stopLocalAudio")
-        localAudioWs?.cancel(); localAudioWs = null
+        // ★ Withdraw the licence to reconnect FIRST, so a reopen already queued finds nothing to do.
+        laWanted = false; closeLocalAudioConn()
         lastLocalTune = null
         stopExternalAudio()
     }
