@@ -45,10 +45,11 @@ export const WELL_GLOW_BLUR = 8;
  * ★ Transparency effects OFF (chosen, or a low-end device's default): the flat ring, as before.
  */
 export const RING_LIGHT = {
-  spill: { width: 3,   blur: 10, a: 0.14 },
-  halo:  { width: 1.5, blur: 4,  a: 0.30 },
-  /** The hot hair on the ring's outer edge: hotA(led, a), this wide. */
-  edge:  { width: 0.6, a: 0.40 },
+  // ★ Stronger since B9: with the hard outline gone (lit), the light alone has to mark the edge.
+  spill: { width: 3,   blur: 10, a: 0.22 },
+  halo:  { width: 1.5, blur: 4,  a: 0.42 },
+  /** The hot hair on the ring's outer edge: hotA(led, a), this wide. Softer than a stroke — light, not a line. */
+  edge:  { width: 0.6, a: 0.28 },
   /** How far the light reaches past the ring (pt) — the edge canvas must reach at least this far. */
   reach: 8,
 } as const;

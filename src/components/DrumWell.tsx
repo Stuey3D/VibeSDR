@@ -79,7 +79,10 @@ export function WellEdge({ W, H, M, ct, led, lit = false }: {
           <BlurMask blur={WELL_GLOW_BLUR / 2} style="outer" respectCTM />
         </RoundedRect>
       )}
-      {ct.wellRingA > 0 && (
+      {/* ★★ LIT = NO HARD OUTLINE (B9, Stuart: "the outline around them should drop" — the crisp 1 pt ring
+          made the groups read as "random rectangle boxes"). Lit, the edge is the light alone (useRingLight);
+          unlit (Transparency off / low-end) keeps the flat ring as before. */}
+      {ct.wellRingA > 0 && !lit && (
         <RoundedRect x={-0.5} y={-0.5} width={W + 1} height={H + 1} r={WELL_R + 0.5}
           color={ledA(led, ct.wellRingA)} strokeWidth={1} style="stroke" />
       )}
@@ -92,8 +95,10 @@ export function WellEdge({ W, H, M, ct, led, lit = false }: {
           <BlurMask blur={6} style="normal" respectCTM />
         </RoundedRect>
       )}
-      <RoundedRect x={0.5} y={0.5} width={W - 1} height={H - 1} r={WELL_R}
-                   color={ct.wellBorder ?? ledA(led, 0.70)} strokeWidth={0.9} style="stroke" />
+      {!lit && (
+        <RoundedRect x={0.5} y={0.5} width={W - 1} height={H - 1} r={WELL_R}
+                     color={ct.wellBorder ?? ledA(led, 0.70)} strokeWidth={0.9} style="stroke" />
+      )}
       {/* ★★ The light the ring spills — over the crisp ring, so the ring itself reads as the lit
           part. ONE image, rasterised once per size × colour (useRingLight). */}
       {light && <SkImageNode image={light} x={-M} y={-M} width={W + 2 * M} height={H + 2 * M} />}
