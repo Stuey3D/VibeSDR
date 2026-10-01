@@ -77,6 +77,7 @@ const POWERSAVE_FPS = 5;
 export * from './sdrProtocol';
 import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState } from './sdrProtocol';
 import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE } from './sdrProtocol';
+import type { ShareOut } from './chatShare';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -636,6 +637,9 @@ export abstract class UberSDRWsClient {
    *  ★ The server also rate-limits to one phrase per 3s per session; that is flood control, not
    *    moderation. Nothing here can be offensive, but anything can be repeated. */
   say(id: string) { this._sendCtl({ type: 'say', id }); }
+  /** ★★ A station share (chatShare.ts builds it — numbers and closed-list ids, NEVER a label). Sent
+   *  as built: the server reads only the fields it knows and names the station itself. */
+  share(out: ShareOut) { this._sendCtl({ ...out }); }
   setHwAgc(on: boolean)   { this._sendCtl({ type: 'agc', on }); }
   setHwPpm(ppm: number)   { this._sendCtl({ type: 'ppm', value: Math.round(ppm) }); }
   /** ★★★ FM DE-EMPHASIS — tau in SECONDS (0 = off, 50e-6 EU/UK, 75e-6 Americas).

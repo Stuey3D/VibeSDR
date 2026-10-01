@@ -80,7 +80,7 @@ const STEPS: Step[] = [
   {
     ids: ['mChat'],
     title: 'CHAT',
-    body: '[[CHAT]] is for receivers with a shared tuner — use it to ask before you tune.',
+    body: '[[CHAT]] is for receivers with a shared tuner — use it to ask before you tune, or to share a station you found.',
   },
   {
     // ★★ THE WHOLE ROW, NOT THE TEXT ALONE. #status (the KB/s · fps · ping · buf string) lives

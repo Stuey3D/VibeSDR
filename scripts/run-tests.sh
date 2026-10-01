@@ -227,6 +227,10 @@ if node --no-warnings scripts/test_popup.ts; then pass=$((pass+1)); else fail=$(
 #     overflows the drawer on any phone (the SE lost phrases 7–14 below its edge), and a dome key's
 #     sheen is flex shares, never percentage heights (Yoga drew ghost slabs over a multi-line wrap).
 if node --no-warnings scripts/test_chat_pad.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ SHARE A STATION (canned chat, app + web): a bookmark's LABEL never reaches the payload, the server's
+#     relayed line is what is drawn, and TUNE asks first on a shared dial somebody else is on. The server half
+#     (validation, naming, the line itself) is vibeserver/test-chat-share.cpp, run with the C++ tests above.
+if node --no-warnings scripts/test_chat_share.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ THE SMALL-SCREEN STATUS ROW (faceplates §8.2): dropped strictly in order (IF first, the recording
 #     timer last), SHARED TUNER shortens before it goes, the connection meter never goes, portrait never
 #     drops, the row packs before anything drops, and a 1 pt wobble cannot flap (hysteresis).
@@ -256,6 +260,13 @@ if node --no-warnings scripts/test_vtsLine.ts; then pass=$((pass+1)); else fail=
 #    NOT RUN — counted separately, never as a pass: a stale binary would test yesterday's server.
 printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
 node scripts/test-server-decoders.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
+# ★★★ SHARE A STATION THROUGH THE REAL SERVER: two listeners on a shared dial; the line the room receives is
+#     named from the receiver's own store, a smuggled label is not relayed, out-of-range / closed-mode shares
+#     are refused with a reason, flood control covers shares. Same VIBESERVER_BIN rule: not run without one.
+printf '\n\033[1m── chat share (end to end) ──\033[0m\n'
+node scripts/test-server-chat-share.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE WEB CLIENT, AS THE SERVER HANDS IT OUT: the page and every /vs/ script, in every encoding,

@@ -54,6 +54,7 @@
 //   8-bit variants: same layout but values are uint8 (0..255 mapped to dBFS range)
 
 import type { DabState } from './dabTypes';
+import type { ShareOut } from './chatShare';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
 import { ungzip } from 'pako';
 import { VibePowerModule } from '../components/AudioPlayer';
@@ -716,6 +717,9 @@ export abstract class VibeServerWsClient {
    *  ★ The server also rate-limits to one phrase per 3s per session; that is flood control, not
    *    moderation. Nothing here can be offensive, but anything can be repeated. */
   say(id: string) { this._sendCtl({ type: 'say', id }); }
+  /** ★★ A station share (chatShare.ts builds it — numbers and closed-list ids, NEVER a label). Sent
+   *  as built: the server reads only the fields it knows and names the station itself. */
+  share(out: ShareOut) { this._sendCtl({ ...out }); }
   setHwAgc(on: boolean)   { this._sendCtl({ type: 'agc', on }); }
   setHwPpm(ppm: number)   { this._sendCtl({ type: 'ppm', value: Math.round(ppm) }); }
   /** ★★★ FM DE-EMPHASIS — tau in SECONDS (0 = off, 50e-6 EU/UK, 75e-6 Americas).
@@ -2172,7 +2176,8 @@ export abstract class VibeServerWsClient {
     }
     if (msg.type === 'dial_refused') { this.callbacks.onDialRefused?.(); return; }
     if (msg.type === 'said') {
-      this.callbacks.onSaid?.(Number(msg.from) || 0, String(msg.id || ''));
+      // ★ The whole line goes with it: a "check_out" carries the SERVER's share (chatShare.parseShared).
+      this.callbacks.onSaid?.(Number(msg.from) || 0, String(msg.id || ''), msg as Record<string, unknown>);
       return;
     }
     if (msg.type === 'notice') {

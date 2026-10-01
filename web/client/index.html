@@ -1638,6 +1638,19 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* ★ A frequency somebody found is a place you can go — say so with the pointer. */
 .chatGoTo { text-decoration: underline dotted; cursor: pointer; }
 .chatGoTo:hover { color: var(--amber); }
+/* ★★ SHARE A STATION — the picker opens above the phrases as a LIST (label over frequency), full width; the
+   label is the listener's own and is never sent. TUNE sits after a shared line, no wider than its word, and
+   the ask row under it says why it is asking. */
+#chatPhrases .chatShareBtn { font-weight: 600; }
+.chatSharePick { display: flex; flex-direction: column; gap: 4px; width: 100%; margin: 2px 0 6px; }
+.chatSharePick[hidden] { display: none; }
+#chatPhrases .chatShareRow { display: flex; flex-direction: column; align-items: flex-start; flex: 1 1 100%; width: 100%; }
+.chatShareDetail { font-size: 0.82em; color: var(--unit); }
+.chatShareNote { font-size: 12px; color: var(--unit); }
+.chatLine .chatTune { margin-left: 0.6em; padding: 1px 8px; font-size: 11px; letter-spacing: 0.08em; vertical-align: baseline; }
+.chatAsk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--amber);
+           border: 1px solid rgba(255, 176, 0, 0.4); border-radius: 6px; padding: 5px 7px; }
+.chatAsk .btn { padding: 2px 8px; font-size: 12px; }
 /* ★★★ THE BUTTON BREATHES WHILE SOMETHING IS UNREAD, because a small amber count in a row of
    controls is easy to miss entirely — on a shared dial the whole point of a message is that
    somebody is waiting on an answer (Stuart, 2026-08-23: "the button needs to breathe for a little
