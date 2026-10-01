@@ -815,8 +815,24 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
              *    mille were taken on a spiky multi-tone, not on real programme.
              *  ✗ Do not restore a proportional skip: it makes the reading depend on
              *    the sample rate, which is exactly what §3 of the brief proved this
-             *    measurement is otherwise free of. */
-            const uint32_t skip = 2;
+             *    measurement is otherwise free of.
+             *
+             *  ★★★ A FIXED *TIME*, NOT TWO SAMPLES: 125 µs — MPXtool's default PEAK
+             *  RESPONSE TIME (Onfliner, 2026-10-01). Two samples was 10 µs: every
+             *  processor overshoot a few samples wide counted as the station's peak, and
+             *  side by side on seven Moscow stations we read 1-8 kHz above MPXtool
+             *  (Business FM 86 vs 80, Kultura 86 vs 81, Sputnik 86 vs 84, Retro 80 vs 77)
+             *  while RDS agreed to 0.1 kHz — the error was the peak detector alone, and
+             *  it was largest on the less clean signals. The level published is now the
+             *  one the composite stays at or above for 125 µs of the window (24 samples
+             *  at 192 kHz) — still a time, so still free of the radio's rate.
+             *  ★ An interpretation of "peak response", not a copy of MPXtool's code:
+             *    CUMULATIVE time above the level, because a composite near its peak
+             *    crosses back below it every pilot cycle (26 µs) and a CONTIGUOUS 125 µs
+             *    would read a 75 kHz programme peak as almost nothing. Re-check on
+             *    Onfliner's stations before tuning the figure. */
+            constexpr double kPeakResponseSec = 125e-6;
+            const uint32_t skip = (uint32_t)std::lround(kPeakResponseSec * fsM_);
             uint32_t seen = 0; int b = kDevHistN - 1;
             for (; b > 0; --b) { seen += hist[b]; if (seen > skip) break; }
             pk = (float)(b + 1) / kHistScale;
