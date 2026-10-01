@@ -655,8 +655,12 @@ html #bar { display: none; }
 /* ★★ AUDIO SHOWS ITS STATE. Muting is the one setting on this card whose effect is total
    silence, and silence is indistinguishable from a broken stream — so the button must SAY
    which it is rather than leaving the user to guess. It keeps the glyph (the icon is
-   universal and a word would not add anything) and swaps the waves for a cross when muted,
-   in the same red the recording timer uses for "this state is why nothing is happening".
+   universal and a word would not add anything) and, when muted, puts the speaker inside a
+   PROHIBITION SIGN — a ring with a slash, the "no sound" road sign.
+   ★★ IN THE KEY'S OWN LEGEND COLOUR, NEVER RED (Stuart, 2026-10-01): with red controls chosen
+      (controlColours.ts) a red mute is invisible. The glyph carries the state; the colour stays the
+      button's (--btn-text), so it follows the CONTROLS colours like every other legend. Same icon
+      as the app's speaker key (src/components/ControlsBar.tsx, AUDIO_MUTED_STROKES).
    ★ Both states live in the markup and CSS picks one, so switching cannot fail halfway or
    depend on a script having run. */
 /* ★ Keyed on a CLASS, not on #mAudio, because the audio button and the mute button in the
@@ -664,7 +668,6 @@ html #bar { display: none; }
 .mIcMute { display: none; }
 .muted .mIcLive { display: none; }
 .muted .mIcMute { display: inline-flex; }
-#mAudio.muted, #mPanelMute.muted { color: #ff3b30; border-color: #ff3b30; }
 
 /* ── "Back to the dial" button ────────────────────────────────────────────────── */
 /* ★★★ THE SAME CHIP AS 'CENTRE ON VFO', DELIBERATELY. Stuart, 2026-09-13: "we surface the
@@ -3477,7 +3480,7 @@ select.btn { padding: 6px 8px; }
       </div>
 
       <div class="mStack" id="mStackR">
-        <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M13 8L17 12M17 8L13 12"/></svg></span></button>
+        <button class="mBtn" id="mAudio" title="Audio: squelch, noise reduction, notch" aria-label="Audio"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.45 8.6H7.55L10.35 5.8V14.2L7.55 11.4H5.45Z" fill="currentColor" stroke="none"/><path d="M12.1 8.6a2.1 2.1 0 0 1 0 2.8M13.5 7.2a4.2 4.2 0 0 1 0 5.6" stroke-width="1.2"/><circle cx="10" cy="10" r="8.9"/><path d="M3.707 3.707L16.293 16.293"/></svg></span></button>
         <!-- ★★ Was DECODERS, which now lives with the demodulators in the mode picker — same
              layout the app already has. On a receiver with no shared dial this button is GREYED,
              not hidden: the stack keeps both cells, so the island stays symmetrical and portrait
@@ -4002,9 +4005,10 @@ select.btn { padding: 6px 8px; }
                        border-top: 1px solid rgba(255,255,255,0.10); }
 #volPop.muted .volPopFill { background: #ff4b4b; }
 #volPop.muted .volPopVal  { color: #ff8a8a; }
-/* ★ Muted is red on the AUDIO button however the mute happened — see setMuted(). */
-#audioBtn.mutedRed, #mAudio.mutedRed { color: #ff6b6b; border-color: rgba(255,75,75,0.65); }
-#mAudio.mutedRed svg { stroke: #ff6b6b; }
+/* ★ Muted is red on the desktop bar's AUDIO button however the mute happened — see setMuted(). It is a
+     WORD with no glyph to carry the state, so the colour is all it has. The deck's speaker key (#mAudio)
+     is NOT red: it shows the prohibition-sign glyph in its own legend colour (see .mIcMute). */
+#audioBtn.mutedRed { color: #ff6b6b; border-color: rgba(255,75,75,0.65); }
 @media (prefers-reduced-motion: reduce) { #volPop .volPopFill { transition: none; } }
 </style>
 </div>
@@ -4054,7 +4058,7 @@ select.btn { padding: 6px 8px; }
      bar, so hiding the bar on a narrow window left a listener with no way to turn it down.
      .mOnly keeps these to the widths where the bar is hidden, so desktop keeps ONE copy. -->
 <div class="mrow mOnly"><label>VOLUME</label>
-  <button class="mPanelBtn mMuteBtn" id="mPanelMute" title="Mute" style="width:3.4em"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M13 8L17 12M17 8L13 12"/></svg></span></button>
+  <button class="mPanelBtn mMuteBtn" id="mPanelMute" title="Mute" style="width:3.4em"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.45 8.6H7.55L10.35 5.8V14.2L7.55 11.4H5.45Z" fill="currentColor" stroke="none"/><path d="M12.1 8.6a2.1 2.1 0 0 1 0 2.8M13.5 7.2a4.2 4.2 0 0 1 0 5.6" stroke-width="1.2"/><circle cx="10" cy="10" r="8.9"/><path d="M3.707 3.707L16.293 16.293"/></svg></span></button>
   <input type="range" id="mPanelVol" min="0" max="100" step="1" aria-label="Volume">
 </div>
 <div class="mrow mOnly mOnlyGrid">

@@ -118,7 +118,12 @@ const ok = (c, m) => { if (c) oks++; else { fails++; console.log('  FAIL ' + m);
 
 // ── 4. meaning colours do not follow the font ─────────────────────────────────────────────────
 {
-  ok(/#mAudio\.muted, #mPanelMute\.muted \{ color: #ff3b30; border-color: #ff3b30; \}/.test(html), 'mute stays red');
+  /* ★★ MUTE IS NOT RED ANY MORE (Stuart, 2026-10-01): with red controls chosen a red mute is invisible.
+   *   The speaker keys show it with a prohibition-sign glyph in their own legend colour. */
+  ok(!/#mAudio\.muted[^{]*\{[^}]*(color|stroke)\s*:/.test(html) && !/#mPanelMute\.muted[^{]*\{[^}]*color\s*:/.test(html)
+     && !/#mAudio\.mutedRed/.test(html), 'mute keeps the speaker keys\' own legend colour');
+  ok((html.match(/<span class="mIcMute"><svg[^>]*stroke="currentColor"[^>]*>[\s\S]*?<circle cx="10" cy="10" r="8\.9"\/><path d="M3\.707 3\.707L16\.293 16\.293"\/><\/svg>/g) || []).length === 2,
+     'both mute glyphs are the prohibition sign, drawn in currentColor');
   ok(/\.mBtn\.on \{ border-color: var\(--phosphor\); color: var\(--phosphor\); \}/.test(html), '"on" stays phosphor');
   ok(/#mRecTime \{[^}]*color: #ff3b30/.test(html), 'recording timer stays red');
   ok(/#mSnr\.sql \{ color: #ff3b30/.test(html), 'closed squelch stays red');

@@ -45,6 +45,7 @@ import type { ViewMode }    from './src/services/viewMode';
 import type { SDRMode }     from './src/services/UberSDRClient';
 import { useDeepLinks }     from './src/linking/useDeepLinks';
 import { crumb }            from './src/services/crumbs';
+import { initMacAudio }     from './src/services/macAudio';
 
 /* ★★★ THE VERY FIRST JS CRUMB, at module scope — BEFORE any component mounts. Paired with the
  *   native launch crumb it brackets the whole of React's startup, which is the half of the black
@@ -837,8 +838,13 @@ export default function App() {
     if (fontError) console.warn('[fonts] failed to load, continuing with system fonts:', fontError);
   }, [fontError]);
 
+  /* ★ The Mac-only VOLUME / MUTE (services/macAudio.ts): load the saved level and hand it to the
+   *   native engine before any audio starts. A no-op on anything but a Mac. */
+  useEffect(() => { initMacAudio(); }, []);
+
   const [splashDone, setSplashDone]   = useState(false);
-  const [splashLabel, setSplashLabel] = useState('CONNECTING TO INSTANCE LIST');
+  // ★ SERVERS, never "instances" — Stuart's word for them, everywhere a user reads it.
+  const [splashLabel, setSplashLabel] = useState('CONNECTING TO SERVER LIST');
   const splashOpacity = useRef(new Animated.Value(1)).current;
 
   // First launch shows the power-saving info and waits for the user to tap

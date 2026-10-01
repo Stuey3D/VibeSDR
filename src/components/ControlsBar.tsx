@@ -46,6 +46,7 @@ import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import type { SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
 import { keyLightReach } from '../constants/keyLight';
+import { useMacSilenced } from '../services/macAudio';
 import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
 import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
@@ -399,6 +400,16 @@ const SHARE_C3    = Skia.Path.MakeFromSVGString('M5 10m-1.8 0a1.8 1.8 0 1 0 3.6 
 const SPEAKER_BODY = Skia.Path.MakeFromSVGString('M3 8H6L10 4V16L6 12H3Z')!;
 const SPEAKER_W1   = Skia.Path.MakeFromSVGString('M12.5 8a3 3 0 0 1 0 4')!;
 const SPEAKER_W2   = Skia.Path.MakeFromSVGString('M14.5 6a6 6 0 0 1 0 8')!;
+/* ★★ MUTED (the Mac VOLUME / MUTE — services/macAudio.ts): a PROHIBITION SIGN — a ring with a slash from
+ *   top-left to bottom-right, the "no sound" road sign — round the SAME speaker, scaled 0.7 about its own
+ *   centre so the cone and both waves sit inside the ring. Drawn in the key's LEGEND colour like every other
+ *   legend: never red, because a user who chose red controls would never see it (Stuart). The waves are a
+ *   touch thinner than the ring so the two arcs stay apart at the deck's 20 pt. */
+const MUTE_RING    = Skia.Path.MakeFromSVGString('M10 10m-8.9 0a8.9 8.9 0 1 0 17.8 0a8.9 8.9 0 1 0 -17.8 0')!;
+const MUTE_SLASH   = Skia.Path.MakeFromSVGString('M3.707 3.707L16.293 16.293')!;
+const MUTE_BODY    = Skia.Path.MakeFromSVGString('M5.45 8.6H7.55L10.35 5.8V14.2L7.55 11.4H5.45Z')!;
+const MUTE_W1      = Skia.Path.MakeFromSVGString('M12.1 8.6a2.1 2.1 0 0 1 0 2.8')!;
+const MUTE_W2      = Skia.Path.MakeFromSVGString('M13.5 7.2a4.2 4.2 0 0 1 0 5.6')!;
 // Record disc: outline ring + solid inner dot (authored 20×20)
 const RECORD_RING  = Skia.Path.MakeFromSVGString('M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0')!;
 const RECORD_DOT   = Skia.Path.MakeFromSVGString('M10 10m-4 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0')!;
@@ -1378,6 +1389,10 @@ const COG_CENTER = Skia.Path.MakeFromSVGString('M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6
 //   §5 flare (and, on silver/black, the controls-colour glow and the engraving's shadow).
 const COG_STROKES:   IconStroke[] = [{ path: COG_GEAR, width: 1.7 }, { path: COG_CENTER, width: 1.7 }];
 const AUDIO_STROKES: IconStroke[] = [{ path: SPEAKER_BODY, fill: true }, { path: SPEAKER_W1 }, { path: SPEAKER_W2 }];
+const AUDIO_MUTED_STROKES: IconStroke[] = [
+  { path: MUTE_BODY, fill: true }, { path: MUTE_W1, width: 1.2 }, { path: MUTE_W2, width: 1.2 },
+  { path: MUTE_RING, width: 1.5 }, { path: MUTE_SLASH, width: 1.5 },
+];
 const CHAT_STROKES:  IconStroke[] = [{ path: CHAT_PATH }];
 
 function Cog({ size, progress }: { size: number; progress?: SharedValue<number> }) {
@@ -1416,9 +1431,19 @@ const LAMP_OFF_LEGEND = { color: 'rgba(128,120,110,0.55)', hot: 'rgba(128,120,11
                           glow: 'rgba(0,0,0,0)', shade: 'rgba(0,0,0,0.35)' };
 const NOOP = () => {};
 
-function AudioIcon({ size, progress }: { size: number; progress?: SharedValue<number> }) {
-  // Speaker cone (filled) + two sound-wave arcs
-  return <DomeIcon size={size} k={size / 20} strokes={AUDIO_STROKES} progress={progress} />;
+function AudioIcon({ size, progress, muted }: { size: number; progress?: SharedValue<number>; muted?: boolean }) {
+  // Speaker cone (filled) + two sound-wave arcs; muted = the same speaker inside a prohibition sign.
+  return <DomeIcon size={size} k={size / 20} strokes={muted ? AUDIO_MUTED_STROKES : AUDIO_STROKES} progress={progress} />;
+}
+
+/** The AUDIO key's legend. ★ The Mac MUTE (or its fader at zero) wins even over FM-DX's record disc: the
+ *  key opens the popup that holds the MUTE key, so it is where a silent Mac has to say why. Only the
+ *  LEGEND changes — the key's lighting, its gap light and the recording pulse overlay are untouched. */
+function AudioKeyLegend({ size, progress, asRecord, muted }: {
+  size: number; progress?: SharedValue<number>; asRecord?: boolean; muted: boolean;
+}) {
+  if (muted) return <AudioIcon size={size} progress={progress} muted />;
+  return asRecord ? <RecordIcon size={size} progress={progress} /> : <AudioIcon size={size} progress={progress} />;
 }
 
 // FM-DX audio button = REC panel; a filled record disc reads clearer than a speaker.
@@ -1517,6 +1542,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   // killed the app for exceeding its background-CPU limit. Native opacity costs
   // nothing on the JS thread.
   const recPulse = useRef(new Animated.Value(0)).current;
+  const macMuted = useMacSilenced();   // ★ the Mac MUTE's legend — false on anything but a Mac
   useEffect(() => {
     if (isRecording) {
       const a = Animated.loop(Animated.sequence([
@@ -1650,12 +1676,10 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         {/* AUDIO — opens the audio sheet; breathes red↔white while recording
             (REC lives inside the sheet, so this is the tap target to stop it). */}
         <DomeKey style={por.key} {...keyProps} onPress={onAudio}
-          accessibilityLabel={audioAsRecord ? 'Record' : 'Audio'}
+          accessibilityLabel={`${audioAsRecord ? 'Record' : 'Audio'}${macMuted ? ', muted' : ''}`}
           overlay={<Animated.View pointerEvents="none"
             style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseRec, opacity: recPulse }]} />}>
-          {p => audioAsRecord
-            ? <RecordIcon size={ICON_SZ} progress={p} />
-            : <AudioIcon size={ICON_SZ} progress={p} />}
+          {p => <AudioKeyLegend size={ICON_SZ} progress={p} asRecord={audioAsRecord} muted={macMuted} />}
         </DomeKey>
 
         {/* MENU */}
@@ -1836,6 +1860,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   // (The key legends — colour, font, glow, flare — are DomeText / DomeIcon's, from fp.keyLegend.)
   const s = useUiScale();
   const [sigW, setSigW] = useState(0);
+  const macMuted = useMacSilenced();   // ★ the Mac MUTE's legend — false on anything but a Mac
 
   /* ★★★ THE LANDSCAPE DECK (§9) — constants/meters.ts landscapeDeck, pure and tested
    *  (scripts/test_faceplate_landscape.ts). ONE band for every meter × shared state. On the SE it is
@@ -1985,10 +2010,8 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           outline={isRecording ? ct.keyBorderRec : undefined}
           overlay={isCap && isRecording ? <View pointerEvents="none" style={[StyleSheet.absoluteFill,
             { borderRadius: 6, borderWidth: 1, borderColor: ct.keyBorderRec }]} /> : undefined}
-          accessibilityLabel={audioAsRecord ? 'Record' : 'Audio'}>
-          {p => audioAsRecord
-            ? <RecordIcon size={ICON_SZ} progress={p} />
-            : <AudioIcon size={ICON_SZ} progress={p} />}
+          accessibilityLabel={`${audioAsRecord ? 'Record' : 'Audio'}${macMuted ? ', muted' : ''}`}>
+          {p => <AudioKeyLegend size={ICON_SZ} progress={p} asRecord={audioAsRecord} muted={macMuted} />}
         </DomeKey>
         <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} lightReach={chatOff ? 0 : lightReach}
           onPress={chatOff ? NOOP : onChat}

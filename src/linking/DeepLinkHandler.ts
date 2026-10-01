@@ -169,9 +169,9 @@ export async function resolveRequest(req: DeepLinkRequest): Promise<ResolveResul
   if (req.uuid) {
     let list;
     try { list = await fetchInstances(); }
-    catch { return { ok: false, reason: 'Instance list unreachable' }; }
+    catch { return { ok: false, reason: 'Server list unreachable' }; }
     const hit = list.find((i) => i.uuid === req.uuid);
-    if (!hit || !hit.url) return { ok: false, reason: 'Instance not found in directory' };
+    if (!hit || !hit.url) return { ok: false, reason: 'Server not found in directory' };
     return {
       ok: true,
       target: {

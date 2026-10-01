@@ -37,7 +37,7 @@ export const DIRECTORIES: DirectoryMeta[] = [
     desc: Platform.OS === 'android' ? 'Public VibeServers — list yours from the app'
                                     : 'Public VibeServers — host one on a Mac or Linux',
     kinds: ['vibeserver'] },
-  { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR instances',                 kinds: ['ubersdr'] },
+  { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR servers'  ,                 kinds: ['ubersdr'] },
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },
   /* ★★★ NAME THE SOURCE WE ACTUALLY FETCH (2026-09-22). This said "(kiwisdr.com)", which is where
    *  the list ORIGINATES but not where we read it — and John Seamons, seeing that line in a
