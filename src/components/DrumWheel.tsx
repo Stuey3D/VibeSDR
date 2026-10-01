@@ -53,7 +53,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { ledA } from '../constants/faceplate';
-import { notchOrder, wellOutset } from '../constants/drumWell';
+import { notchOrder } from '../constants/drumWell';
 import { WellFace, WellEdge, DrumPool } from './DrumWell';
 import { getControlHaptics } from './controlHaptics';
 
@@ -387,10 +387,6 @@ export default function DrumWheel({
     );
   }
 
-  // The edge canvas is M larger than the well on each side: the metal ring and glow sit OUTSIDE it.
-  // ★ The ring is LIT (drumWell.ts RING_LIGHT) while Transparency effects are on; off = the flat ring.
-  const ringLit = fp.settings.transparency === 'on';
-  const M = wellOutset(ct, ringLit);
   const notchPaths = {
     pair:  <Path key="pair"  path={pathShadow} style="stroke" strokeWidth={1.1} color={ct.notchPair} />,
     minor: <Path key="minor" path={pathMinor}  style="stroke" strokeWidth={0.8} color={ct.notchMinor} />,
@@ -478,10 +474,10 @@ export default function DrumWheel({
           </Group>
         </Canvas>
 
-        {/* ════ 3. ABOVE THE NOTCHES — static; M larger than the well for the metal glow ════ */}
-        <Canvas pointerEvents="none"
-                style={{ position: 'absolute', left: -M, top: -M, width: W + 2 * M, height: H + 2 * M }}>
-          <Group transform={[{ translateX: M }, { translateY: M }]}>
+        {/* ════ 3. ABOVE THE NOTCHES — static. ★ The well's own size again: with the ring gone
+            (constants/drumWell.ts) nothing draws outside it. ════ */}
+        <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <Group>
             {/* Specular sheen — studio light caught across the curvature */}
             <Rect x={1} y={drumTop + drumH * 0.16} width={W - 2} height={drumH * 0.26}>
               <LinearGradient
@@ -535,8 +531,8 @@ export default function DrumWheel({
                   strokeCap="round" strokeJoin="round" />
           </Group>
 
-          {/* ── The well's edge — today's lit border, or the metal gap + ring + glow ── */}
-          <WellEdge W={W} H={H} M={M} ct={ct} led={fp.controls} lit={ringLit} />
+          {/* ── The drum's edge — the metal's dark cut and lip; no ring (constants/drumWell.ts) ── */}
+          <WellEdge W={W} H={H} ct={ct} />
         </Canvas>
 
         {/* ── +/− in the dead corner triangles flanking the V ── */}

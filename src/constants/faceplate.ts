@@ -473,15 +473,13 @@ export interface ChassisTokens {
   wellFace:       string[];
   /** Brushed grain on the face (silver / black), or null for today's machined dark metal. */
   wellTexture:    'silver' | 'black' | null;
-  /** The face's 0.9 pt border: a fixed colour (metal: the dark gap), or null = the controls colour
-   *  at .70 (default: today's lit edge). */
+  /** The DRUM's cut-out: the face's 0.9 pt dark gap (metal), or null = none (default).
+   *  ★★★ NO RING (Stuart, 2026-10-01: "try removing the outline ring that surrounds both buttons and
+   *  replace it with a glow coming up in the panel gap around each button"). The controls-colour ring,
+   *  its 8 pt glow, the default's lit border and its inner glow are GONE on every chassis, lit or not —
+   *  the tokens with them, so nothing can draw them back. Each control is lit on its own instead
+   *  (constants/keyLight.ts). The keys well draws no edge at all; the drum keeps this dark cut. */
   wellBorder:     string | null;
-  /** Today's inner glow along the border (G(.10), 5 pt, blur 6); 0 = none. */
-  wellInnerGlowA: number;
-  /** Metal: the controls-colour ring OUTSIDE the dark gap (`0 0 0 1px L(a)`) and the glow beyond it
-   *  (`0 0 8px L(a)`). 0 on the default well, whose edge is its lit border. */
-  wellRingA:      number;
-  wellGlowA:      number;
   /** The face's top lip (`inset 0 1px 0 …`), or null. */
   wellTopLip:     string | null;
   drumBody:       string[];
@@ -617,9 +615,6 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
   wellFace:      ['#101410', '#0a0c0a', '#060706'],
   wellTexture:   null,
   wellBorder:    null,
-  wellInnerGlowA: 0.10,
-  wellRingA:     0,
-  wellGlowA:     0,
   wellTopLip:    null,
   drumBody:      ['#070807', '#191a18', '#232422', '#181917', '#050505'],
   drumPos:       [0, 0.28, 0.50, 0.74, 1],
@@ -658,14 +653,12 @@ export const DEFAULT_CHASSIS: ChassisTokens = {
 /** §3.2 brushed silver (Sony HCD-SE1, Panasonic stacking hi-fi). */
 export const SILVER_CHASSIS: ChassisTokens = {
   ...DEFAULT_CHASSIS,
-  // §6.1, Deck.mockup `W_FACE.silver`: a brushed-silver face, a dark 1 pt gap, then the ring and glow
-  // in the controls colour; a polished-aluminium drum with DARK cuts (the pair inverts — TRAP).
+  // §6.1, Deck.mockup `W_FACE.silver`: a brushed-silver face and a dark 1 pt gap (the mockup's ring and
+  // glow beyond it are gone — see wellBorder); a polished-aluminium drum with DARK cuts (the pair
+  // inverts — TRAP).
   wellFace:      ['#c9c6bf', '#c9c6bf', '#c9c6bf'],
   wellTexture:   'silver',
   wellBorder:    'rgba(0,0,0,0.55)',
-  wellInnerGlowA: 0,
-  wellRingA:     0.35,
-  wellGlowA:     0.40,
   wellTopLip:    'rgba(255,255,255,0.80)',
   drumBody:      ['#4d4b46', '#a9a69f', '#e4e2dc', '#a3a09a', '#393834'],
   drumPos:       [0, 0.26, 0.50, 0.74, 1],
@@ -701,7 +694,7 @@ export const SILVER_CHASSIS: ChassisTokens = {
 export const BLACK_CHASSIS: ChassisTokens = {
   ...DEFAULT_CHASSIS,
   // §6.1 — ★ THE MOCKUP WINS over the brief's table here: `W_FACE.black` is NOT the default well. It
-  // has a brushed-black face (#000 gap, ring .30, glow .38, top lip .14) and a NEUTRAL grey drum
+  // has a brushed-black face (#000 gap, top lip .14; its ring and glow are gone) and a NEUTRAL grey drum
   // (#070707 … #050505) where the default's is faintly green. Notches stay light on dark.
   /* ★ BLACK IS A TOUCH DARKER than the mockup (Stuart, build 356: "can be darkened ever so slightly"):
    *  base #1b1c1e → #161719, a .14 veil over the grain (its mean #2a2a2a → ~#242424), the lighting's
@@ -710,9 +703,6 @@ export const BLACK_CHASSIS: ChassisTokens = {
   wellFace:      ['#161719', '#161719', '#161719'],
   wellTexture:   'black',
   wellBorder:    '#000000',
-  wellInnerGlowA: 0,
-  wellRingA:     0.30,
-  wellGlowA:     0.38,
   wellTopLip:    'rgba(255,255,255,0.14)',
   drumBody:      ['#070707', '#181818', '#222222', '#171717', '#050505'],
   rimLine:       'rgba(180,182,186,0.14)',

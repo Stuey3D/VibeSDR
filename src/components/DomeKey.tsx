@@ -40,6 +40,8 @@ import {
   createDomeClick, DOME_PRESS_MS, DOME_RELEASE_MS, DOME_PRESS_BEZIER, DOME_RELEASE_BEZIER,
 } from './domeClick';
 import { LEGEND_GLOW_REST, LEGEND_GLOW_DOWN, type ChassisTokens, type KeyLegend } from '../constants/faceplate';
+import { domeCap } from '../constants/keyLight';
+import { KeyLight, KeyWash } from './KeyLight';
 
 // ── Haptics ───────────────────────────────────────────────────────────────────
 
@@ -282,11 +284,22 @@ export interface DomeKeyProps {
   onPressOut?: () => void;
   /** The legend, given the press progress for its flare. */
   children:  (progress: SharedValue<number>) => React.ReactNode;
+  /**
+   * ★★★ THE PANEL-GAP LIGHT (constants/keyLight.ts; Stuart, 2026-10-01: "a glow coming up in the panel
+   * gap around each button … apply that same lighting to all the buttons"). How far it may reach past
+   * the key (pt, keyLightReach of the gap to the nearest neighbour) — a FRONT-PANEL key passes it
+   * (ControlsBar, TunerKeys); popup and decoder keys leave it out and are never lit. 0 = no light.
+   * Drawn only with Transparency effects on; off, the key is exactly what it was.
+   */
+  lightReach?: number;
+  /** The key sits in a dark SLOT of its own, this much bigger than it (TunerKeys on the default chassis):
+   *  the slot is then the panel's cut-out the light comes up round, and the key the cap inside it. */
+  lightSlot?: { x: number; top: number; bottom: number; r: number };
 }
 
 export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   onPress, disabled, height, radius = 10, style, hitSlop = 10, outline, minHeight, overlay,
-  accessibilityLabel, accessibilityHint, onPressIn, onPressOut, children,
+  accessibilityLabel, accessibilityHint, onPressIn, onPressOut, children, lightReach = 0, lightSlot,
 }, ref) {
   const fp = useFaceplate();
   const ct = fp.chassis;
@@ -294,12 +307,44 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   const { progress, pressIn, pressOut } = useDomeKey();
   const [capW, setCapW] = useState(0);
   const lastW = useRef(0);
-
+  // ★ The light needs the key's own box (an outline key's height is a MINIMUM, so it is measured too).
+  //   Measured ALWAYS, lit or not: no layout event follows turning Transparency on, so a key that only
+  //   measured while lit would stay dark until something else moved it. Half-point steps, so a
+  //   sub-pixel relayout never rebuilds the sprite.
+  const lit = lightReach > 0 && fp.settings.transparency === 'on';
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  const measureBox = (w: number, h: number) => {
+    const bw = Math.round(w * 2) / 2, bh = Math.round(h * 2) / 2;
+    setBox(b => (b && b.w === bw && b.h === bh) ? b : { w: bw, h: bh });
+  };
   const travel = useAnimatedStyle(() => ({
     transform: [{ translateY: progress.value * DOME_TRAVEL }],
   }));
   const dim = useAnimatedStyle(() => ({ opacity: Math.max(0, Math.min(1, progress.value)) }));
   const cast = useAnimatedStyle(() => ({ opacity: 1 - Math.max(0, Math.min(1, progress.value)) }));
+
+  // ★★★ ONE LIGHT FOR EVERY FRONT-PANEL KEY (constants/keyLight.ts): the thin gap light at rest; pressed,
+  //   the gap the snap opens floods (KeyLight's `open` image, round the SUNK cap) and the lamp washes over
+  //   the key's edges (KeyWash). Both fade in on `dim` — the press's own 0 → 1, which settles and stops.
+  const isOutline = dome.look === 'outline';
+  // The outline key's corner: 4, or what its caller's style sets (TunerKeys' slot keys are rounder).
+  const outlineR = isOutline ? (StyleSheet.flatten(style)?.borderRadius as number | undefined) ?? 4 : 4;
+  const capRect = lit && box && box.w > 0 && box.h > 0
+    ? domeCap(box.w, box.h, isOutline ? outlineR : radius, isOutline) : null;
+  const cut = !box ? null : lightSlot
+    ? { x: -lightSlot.x, y: -lightSlot.top, w: box.w + 2 * lightSlot.x, h: box.h + lightSlot.top + lightSlot.bottom, r: lightSlot.r }
+    : { x: 0, y: 0, w: box.w, h: box.h, r: isOutline ? outlineR : radius };
+  const light = capRect && cut ? (
+    <KeyLight cut={cut} cap={capRect}
+              reach={lightReach} led={fp.controls} chassis={fp.settings.chassis}
+              pressStyle={dim} travel={isOutline ? 0 : DOME_TRAVEL} />
+  ) : null;
+  // The wash lies over the FACE: an outline key's is inside its 1 pt border; a cap's is the cap.
+  const wash = capRect ? (
+    <KeyWash cap={isOutline ? { x: 0, y: 0, w: capRect.w - 2, h: capRect.h - 2, r: Math.max(0, outlineR - 1) } : { ...capRect, x: 0, y: 0 }}
+             led={fp.controls} chassis={fp.settings.chassis} pressStyle={dim}
+             radius={isOutline ? Math.max(0, outlineR - 1) : capRect.r} />
+  ) : null;
 
   const onIn  = disabled ? undefined : onPressIn ? () => { pressIn(); onPressIn(); } : pressIn;
   const onOut = disabled ? undefined : onPressOut ? () => { pressOut(); onPressOut(); } : pressOut;
@@ -307,15 +352,24 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   if (dome.look === 'outline') {
     // ★ TODAY'S KEY at rest, pixel for pixel: por.btn / lnd.lsBtn's outline and tint. The snap moves
     //   the legend (the only part a flat outline key has to move) and dims the face.
+    // ★ LIT, the key cannot clip its children: the light reaches PAST it. Its inner layers take the
+    //   inner corner radius instead (4 less the 1 pt border), so nothing pokes out of the corners.
+    //   Unlit, the key is exactly today's, overflow and all.
     return (
       <Pressable ref={ref} onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut}
         disabled={disabled} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint}
+        onLayout={e => measureBox(e.nativeEvent.layout.width, e.nativeEvent.layout.height)}
         style={[{ ...(minHeight ? { minHeight: height } : { height }), borderWidth: 1, borderRadius: 4, borderColor: outline ?? ct.keyBorder,
                   backgroundColor: ct.keyBg, alignItems: 'center', justifyContent: 'center',
-                  overflow: 'hidden' }, style]}>
+                  overflow: lit ? 'visible' : 'hidden' }, style]}>
+        {/* The light sits round the OUTSIDE of the border box: the key is the cut-out (constants/keyLight.ts
+            domeCap), so its 1 pt border is the -1 inset. */}
+        {light && <View pointerEvents="none" style={{ position: 'absolute', left: -1, top: -1 }}>{light}</View>}
         {overlay}
         <Animated.View pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(0,0,0,${1 - dome.pressDim})` }, dim]} />
+          style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(0,0,0,${1 - dome.pressDim})` },
+                  lit ? { borderRadius: Math.max(0, outlineR - 1) } : null, dim]} />
+        {wash}
         <Animated.View pointerEvents="none" style={[styles.legend, travel]}>{children(progress)}</Animated.View>
       </Pressable>
     );
@@ -331,6 +385,7 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
       onLayout={e => {
         const w = Math.round(e.nativeEvent.layout.width - 4);
         if (w !== lastW.current) { lastW.current = w; setCapW(w); }
+        measureBox(e.nativeEvent.layout.width, e.nativeEvent.layout.height);
       }}>
       {/* The machined lip below the slot, and the lip's shadow into it at the top. */}
       <View pointerEvents="none" style={[styles.slotLip, { backgroundColor: dome.slotLip, left: radius * 0.5, right: radius * 0.5 }]} />
@@ -338,6 +393,9 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
         borderTopLeftRadius: radius, borderTopRightRadius: radius }]} />
       <Animated.View pointerEvents="none"
         style={[styles.cast, { top: 1.5 + 1.5, height: capH, borderRadius: capR, backgroundColor: dome.cast }, cast]} />
+      {/* ★ The panel-gap light: over the slot and the cap's cast shadow (the lamp lights the gap), under
+          the cap — which then moves over it when pressed, and never rebuilds it. */}
+      {light}
       <Animated.View pointerEvents="none"
         style={[styles.cap, { top: 1.5, height: capH, borderRadius: capR }, travel]}>
         {capW > 0 && <CapFace w={capW} h={capH} r={capR} dome={dome} texture={ct.plate?.texture ?? 'silver'} />}
@@ -347,6 +405,7 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
           <View style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(0,0,0,${1 - dome.pressDim})` }]} />
           <View style={styles.insetTop} />
         </Animated.View>
+        {wash}
         <View style={[StyleSheet.absoluteFill, styles.legend]}>{children(progress)}</View>
       </Animated.View>
       {overlay}

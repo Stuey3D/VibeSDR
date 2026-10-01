@@ -29,50 +29,15 @@ export function poolEllipse(x: number, y: number, w: number, h: number): Ellipse
 }
 
 // ── §6.1 The well's edge ─────────────────────────────────────────────────────────
-/** CSS `box-shadow: 0 0 8px` — the blur radius of the metal wells' outer glow. */
-export const WELL_GLOW_BLUR = 8;
-
-/**
- * ★★★ THE RING IS A LIGHT PIPE, NOT A LINE (Stuart, 2026-10-01: "the rings surrounding the button
- * controls — can you make them look like they are gently lit up like a real radio would be; right now
- * they look just like random rectangle boxes"). On every chassis the well's ring — the default's lit
- * border, the metal's ring outside its dark gap — gets the light a backlit bezel spills: a wide faint
- * SPILL and a tighter HALO either side of it (low alpha, soft falloff), and a hair of the LED's
- * white-hot core along the ring's OUTER edge, where light leaks from behind the panel. Warm, in the
- * controls colour; subtle, not neon. Alphas are of the LED colour.
- * ★★ PERF: rasterised ONCE per well size × colour (DrumWell.tsx useRingLight → glowSprite makeSprite)
- *   and blitted — no live blur, nothing animated; the drums' rolling canvas never touches it.
- * ★ Transparency effects OFF (chosen, or a low-end device's default): the flat ring, as before.
+/*
+ * ★★★ THE RING IS GONE (Stuart, 2026-10-01: "try removing the outline ring that surrounds both buttons
+ * and replace it with a glow coming up in the panel gap around each button, also apply that same
+ * lighting to all the buttons please"). It was a light pipe for one afternoon (RING_LIGHT, 40f9b077 /
+ * c003d0ea) and before that a flat ring + glow — both read as a box round the GROUP. Now no well has a
+ * ring or a glow: the tuner keys are lit one by one (constants/keyLight.ts, DomeKey). The DRUM keeps
+ * only the metal's dark cut (DrumWell.tsx WellEdge): its seams are already backlit from behind
+ * (DrumWheel), and light round the whole well box would be the box itself again.
  */
-export const RING_LIGHT = {
-  // ★ Stronger since B9: with the hard outline gone (lit), the light alone has to mark the edge.
-  spill: { width: 3,   blur: 10, a: 0.22 },
-  halo:  { width: 1.5, blur: 4,  a: 0.42 },
-  /** The hot hair on the ring's outer edge: hotA(led, a), this wide. Softer than a stroke — light, not a line. */
-  edge:  { width: 0.6, a: 0.28 },
-  /** How far the light reaches past the ring (pt) — the edge canvas must reach at least this far. */
-  reach: 8,
-} as const;
-
-/**
- * How far past its own box the well draws (points): the metal ring and its 8 pt glow sit OUTSIDE
- * the face, as a box-shadow does; and the LIT ring's light (RING_LIGHT) spills past the default's
- * border too. 0 only for an unlit default well — its edge is its lit border, drawn inside, exactly
- * as before, so that well's canvas is its own size.
- * @param lit the ring is lit (RING_LIGHT) — Transparency effects on.
- */
-export function wellOutset(t: Pick<ChassisTokens, 'wellRingA' | 'wellGlowA'>, lit = false): number {
-  const own = t.wellGlowA > 0 ? WELL_GLOW_BLUR + 4 : t.wellRingA > 0 ? 2 : 0;
-  return lit ? Math.max(own, RING_LIGHT.reach + 2) : own;
-}
-
-/** Where the ring itself runs, in the well's own coordinates (x, y, w, h, corner radius): the
- *  default's lit border half a point inside the box, the metal ring half a point outside it. */
-export function ringRect(t: Pick<ChassisTokens, 'wellRingA'>, W: number, H: number, r: number) {
-  return t.wellRingA > 0
-    ? { x: -0.5, y: -0.5, w: W + 1, h: H + 1, r: r + 0.5 }
-    : { x: 0.5, y: 0.5, w: W - 1, h: H - 1, r };
-}
 
 /** The well's corner radius (Deck.mockup `border-radius: 6px`, today's DrumWheel r = 6). */
 export const WELL_R = 6;
