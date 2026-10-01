@@ -55,6 +55,10 @@ for (let h = 18; h <= 64; h++) {
     for (const [name, d] of Object.entries(TUBE_DESIGN)) for (const layout of ['hf', 'wide', 'fm'] as const) {
       const gg = nixieGeometry(260, h, nixieSpec(layout), d, { bar: name.startsWith('bar'), scale: sc });
       ok(`h=${h} ${name} ${layout} @${sc}: collar foot on the floor`, Math.abs(gg.collarY + COLLAR_H * sc - h) < 1e-9);
+      // ★★ `drop` is exactly how far the row moved from the brief's foot (h − CLEAR), so the wall's
+      //    neon spill that NixieStatic moves by it stays where it was RELATIVE TO THE TUBES.
+      ok(`h=${h} ${name} ${layout} @${sc}: drop = the row's move`,
+         Math.abs((gg.collarY + COLLAR_H * sc) - gg.drop - (h - CLEAR * sc)) < 1e-9);
       // …and the clearance went to the top, not into a clipped dome.
       ok(`h=${h} ${name} ${layout} @${sc}: ≥ ${2 * CLEAR} pt over the pip or the glass is at its cap`,
          gg.collarY - gg.glassH - PIP_H * sc >= 2 * CLEAR * sc - 1e-9 || gg.glassH <= MIN_GLASS * sc + 1e-9);

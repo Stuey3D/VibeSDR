@@ -138,6 +138,11 @@ export interface NixieGeometry {
   /** y of the collar's top edge (the socket floor line) — everything stands on it. The collar's foot
    *  (collarY + COLLAR_H) is the window's bottom edge: the tubes stand on the line under the window. */
   collarY:   number;
+  /** ★★ How far the anchoring moved the row DOWN from the brief's layout (the 2 pt that used to sit
+   *  under the collar). Everything that belongs to the tubes but is not drawn from their boxes — the
+   *  neon spill on the back wall behind them — moves by this too, so the row still reads as set INTO
+   *  the panel, not standing in front of a glow left behind (Stuart, 2026-10-01). */
+  drop:      number;
   /** The natural (unshrunk) group width, for the window to ASK for. */
   naturalW:  number;
   /** 0..1 — how much the group was narrowed to fit. */
@@ -190,7 +195,7 @@ export function nixieGeometry(w: number, h: number, spec: NixieSpec, design: Tub
   }
   // ★★★ Anchored: the collar's foot on the window floor, no clearance under it (see the header).
   const collarY = h - COLLAR_H * sc;
-  return { tubes, bulbs, glassH, bulbH, nf, gap: gapF, collarY, naturalW, fit };
+  return { tubes, bulbs, glassH, bulbH, nf, gap: gapF, collarY, drop: CLEAR * sc, naturalW, fit };
 }
 
 /** The whole stack's height for a glass height — what must fit in the window (its clearance included,

@@ -134,7 +134,11 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
         </Rect>
         <Rect x={0} y={0} width={w} height={h} color="rgba(0,0,0,0.03)" />
         <Path path={grain} color="rgba(255,255,255,0.012)" />
-        <Ellipse cx={w * 0.5} cy={h * 0.58} rx={w * 0.58} ry={h * 0.60}
+        {/* ★★ The spill is the TUBES' light on the wall behind them, so it moves down with the
+            anchored row (geo.drop) — left at the brief's 58 % it hung above the glass and the row
+            read as standing in front of a glow, not set into the panel (Stuart, 2026-10-01). The
+            floor spill below is the floor's, at the window's foot, where the tubes now stand. */}
+        <Ellipse cx={w * 0.5} cy={h * 0.58 + geo.drop} rx={w * 0.58} ry={h * 0.60}
           colors={['rgba(255,100,30,0.16)', 'rgba(255,100,30,0)']} positions={[0, 0.72]} />
         <Ellipse cx={w * 0.5} cy={h} rx={w * 0.70} ry={h * 0.40}
           colors={['rgba(255,110,40,0.14)', 'rgba(255,110,40,0)']} positions={[0, 0.70]} />
