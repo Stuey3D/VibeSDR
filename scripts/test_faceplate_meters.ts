@@ -10,7 +10,7 @@
 import {
   portraitDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind,
   VU_SEGMENTS, VU_LABELS, VU_THRESHOLDS, LED_SPEC, RING_OPEN, RING_CLOSED, ledColourOf, ringSegment, vuPos, peakStep,
-  phi, edgeBrightness, segmentTarget, makeWindow, pushSample, eyeStep, steadyLit,
+  phi, edgeBrightness, segmentTarget, makeWindow, pushSample, eyeStep, steadyLit, meterTick, METER_MIN_FRAME_MS,
   scalePointX, needleX, needleSpring, peakNeedleStep, DB_PER_SEG,
   METER_SCALES, meterPos, meterReading, formatReading, sMeterText, scaleMeterValues, makeScaledMeterState,
   meterUnitOf, type MeterUnit,
@@ -186,6 +186,41 @@ eq('muting: no partial brightness', [segmentTarget(4, 4.4, 1, false, true, false
   ok(`60 fps: never more than 0.35 in a frame (worst ${worst.toFixed(3)})`, worst <= 0.35 + 1e-12);
   eq('no reversal within an update (a steady glide, never a pulse)', reversals, 0);
   ok('a stalled frame is not one giant jump', eyeStep(0, 1, 5000) <= 0.35);
+}
+// ★★★ ≤ 60 Hz LED STRIP (meterTick, power audit 2026-10-01): the cadence and the proof it LOOKS THE SAME.
+{
+  // 120 Hz ProMotion: every other display frame is skipped and its time carried — so it steps at 60.
+  const st = { acc: 0 };
+  const steps120 = Array.from({ length: 12 }, () => meterTick(st, 1000 / 120));
+  eq('120 Hz: steps on every other frame', steps120.map(d => (d > 0 ? 1 : 0)), [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]);
+  near('120 Hz: each step carries BOTH frames of time', steps120[1], 1000 / 60, 1e-9);
+  // 60 Hz: every frame steps — a non-ProMotion phone is untouched.
+  const st60 = { acc: 0 };
+  eq('60 Hz: every frame steps', Array.from({ length: 6 }, () => meterTick(st60, 1000 / 60) > 0), [true, true, true, true, true, true]);
+  // Jitter around 60 Hz (15–18 ms) must never halve it to 30.
+  const stJ = { acc: 0 };
+  eq('60 Hz with jitter: still every frame', [15, 18, 15.5, 17].map(d => meterTick(stJ, d) > 0), [true, true, true, true]);
+  ok('the threshold sits between the two panel rates', METER_MIN_FRAME_MS > 1000 / 120 && METER_MIN_FRAME_MS < 1000 / 60);
+  // ★★ VISUALLY IDENTICAL: the eye filter is exponential in TIME, so one 16.7 ms step lands exactly
+  //   where two 8.3 ms steps do — at every instant both draw, the brightness is the same number. The
+  //   ONE difference: a sample that arrives between the two halves is picked up up to 8.3 ms later
+  //   (one 120 Hz frame) — a lag of ≤ 1.8 % of a step on the first frame after it, gone the next.
+  //   (The 0.35 per-frame cap does not bind on a meter-sized move at either rate; tested with 0.3.)
+  let a = 0, b = 0, steady = 0, onChange = 0, aPrev = 0;
+  let lastT = 0.3;
+  for (let f = 1; f <= 240; f++) {
+    const target = f < 121 ? 0.3 : 0.05;               // up, then a new sample lands on an ODD frame
+    aPrev = a;
+    a = eyeStep(a, target, 1000 / 120);                 // every 120 Hz frame (before)
+    if (f % 2 === 0) {
+      b = eyeStep(b, target, 1000 / 60);                // every other frame (after)
+      if (target === lastT) steady = Math.max(steady, Math.abs(a - b));
+      else onChange = Math.max(onChange, Math.abs(a - b) - Math.abs(a - aPrev));
+      lastT = target;
+    }
+  }
+  ok(`60 Hz stepping draws the SAME brightness as 120 Hz at every shared frame (worst ${steady.toExponential(2)})`, steady < 1e-9);
+  ok(`…and a sample between the halves lags by at most one 120 Hz frame (excess ${onChange.toExponential(2)})`, onChange <= 1e-9);
 }
 // Steady LEDs: solid on / off with ~1 dB of hysteresis.
 {

@@ -30,6 +30,7 @@
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { AppState, Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { useRepeatingKeys } from './PanelNav';
+import { useCoversScreen } from '../hooks/useScreenCovered';
 import { WebView } from 'react-native-webview';
 import { CABBR } from '../assets/countryAbbr';
 import { type SpotRow } from '../services/DecoderClient';
@@ -1366,6 +1367,10 @@ export default function MapOverlay(
     MapOverlayProps & { spots?: SpotRow[] },
 ) {
   const webRef = useRef<WebView>(null);
+  /* ★★ An OPAQUE full-screen modal over the receiver: the waterfall shader and the meters under it
+   *  stop drawing while it is up (useScreenCovered) — otherwise the phone runs two GPU pictures, the
+   *  map's and an invisible waterfall's. */
+  useCoversScreen(visible && !!kind);
   /* ★★★ THE OS SAYS MEMORY IS TIGHT: THE MAP LETS GO FIRST. The renderer holds a RAM budget sized
    *  from the device (vibemap.js MEMORY BANDS) — preloaded layers, a data cache and canvas drawn
    *  past the screen edge so a drag never shows sea. On a memory warning it drops straight to the

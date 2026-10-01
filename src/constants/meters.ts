@@ -418,6 +418,32 @@ export function eyeStep(b: number, target: number, dtMs: number, tauMs?: number,
   return b + d;
 }
 
+/**
+ * ★★★ THE LED STRIP STEPS AT ≤ 60 Hz, NOT AT THE DISPLAY RATE. A Reanimated frame callback fires on
+ * EVERY display frame — 120 a second on a ProMotion iPhone (Info.plist CADisableMinimumFrameDurationOnPhone)
+ * — and each step that moves a brightness re-records and re-presents the strip's Skia canvas. The
+ * strip has NOTHING that moves across the screen: every frame is ten brightnesses easing with τ =
+ * 100 ms (eyeStep), so the 120 Hz half of those frames changes a brightness by ≤ 4 % — a step no eye
+ * resolves, at twice the GPU and UI-thread cost. Every phone without ProMotion has always drawn it at
+ * 60. ★ The easing and the peak hold are TIME-based (dt), so the look is identical — only how often it
+ * is drawn changes. Power audit 2026-10-01.
+ * ★ 12 ms, not 16.7: a 60 Hz panel's frames (16.7 ms) all pass, a 120 Hz panel's alternate (8.3 → skip,
+ *   16.7 → step), and frame jitter around either cannot halve a 60 Hz panel to 30.
+ */
+export const METER_MIN_FRAME_MS = 12;
+export interface MeterCadence { acc: number }
+/** Add one display frame's time; returns the elapsed ms to step the meter by, or 0 = skip this frame
+ *  (the time is carried, so nothing is lost). */
+export function meterTick(st: MeterCadence, dtMs: number, minMs?: number): number {
+  'worklet';
+  const min = minMs ?? METER_MIN_FRAME_MS;   // ★ not a default parameter — see WORKLET DEFAULTS above
+  st.acc += Math.max(0, dtMs);
+  if (st.acc < min) return 0;
+  const d = st.acc;
+  st.acc = 0;
+  return d;
+}
+
 /** "Steady LEDs": solid on / off with ~1 dB of hysteresis — on above T + ½, off below T − ½. */
 export const STEADY_HYST_DB = 1;
 export function steadyLit(wasLit: boolean, muDb: number, thresholdDb: number, hystDb?: number): boolean {

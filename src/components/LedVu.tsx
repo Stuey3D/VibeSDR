@@ -27,13 +27,14 @@ import {
 } from '@shopify/react-native-skia';
 import {
   LED_SPEC, RING_CLOSED, RING_OPEN, VU_LABELS, VU_SEGMENTS, VU_THRESHOLDS, eyeStep, ledColourOf, makeWindow,
-  peakStep, pushSample, ringSegment, segmentTarget, sqlClosedOf, vuPos, type LedColourName,
+  meterTick, peakStep, pushSample, ringSegment, segmentTarget, sqlClosedOf, vuPos, type LedColourName,
 } from '../constants/meters';
 import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
 import { useBoxSize } from './VfdParts';
 import { useUiScale } from '../hooks/useUiScale';
 import { useReduceMotion } from '../hooks/useReduceMotion';
+import { useFrameSleep } from '../hooks/useFrameSleep';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import type { MeterBus, MeterValues } from './ControlsBar';
 
@@ -182,7 +183,11 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
   const reduceMotion = useReduceMotion();
   const steady  = useFaceplate().settings.steadyLeds || reduceMotion;
   const steadySv = useSharedValue(steady ? 1 : 0);
-  useEffect(() => { steadySv.value = steady ? 1 : 0; }, [steady, steadySv]);
+  // ★ The frame callback below sleeps when the strip has settled (useFrameSleep) — so anything that
+  //   changes what it draws must WAKE it, or the change waits for the next sample.
+  const fsleep = useFrameSleep();
+  const { wake } = fsleep;
+  useEffect(() => { steadySv.value = steady ? 1 : 0; wake(); }, [steady, steadySv, wake]);
   const muPos   = useSharedValue(0);
   const sigma   = useSharedValue(0);
   const muting  = useSharedValue(0);
@@ -192,21 +197,30 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
   const peakIdx = useSharedValue(-1);
   const peakAt  = useSharedValue(0);
   const faulted = useSharedValue(0);
+  /** The 60 Hz cadence's carried time (meterTick). */
+  const cadAcc  = useSharedValue(0);
   useEffect(() => {
     if (!bus) return;
     // σ: the running std-dev of the RAW level over ~0.5 s (a fading HF signal gets a soft, wide edge;
     // a steady carrier a crisp one). Kept here, on the JS side, at the bus's own 5–25 Hz.
     const win = makeWindow();
+    // ★ The last values written, so a sample that changes NOTHING does not wake a sleeping strip
+    //   (the bus also carries link / kbps / AGC text, at their own rates).
+    let lastMu = NaN, lastSg = NaN, lastRing = NaN, lastMute = NaN;
     const take = (m: MeterValues) => {
-      muPos.value  = vuPos(m.level);
-      sigma.value  = pushSample(win, Date.now(), vuPos(m.raw ?? m.level));
-      ring.value   = ringSegment(m.sql ?? -1);
-      muting.value = sqlClosedOf(m.sql ?? -1, m.gate, m.level) ? 1 : 0;
+      const mu = vuPos(m.level);
+      const sg = pushSample(win, Date.now(), vuPos(m.raw ?? m.level));
+      const rg = ringSegment(m.sql ?? -1);
+      const mt = sqlClosedOf(m.sql ?? -1, m.gate, m.level) ? 1 : 0;
+      if (mu === lastMu && sg === lastSg && rg === lastRing && mt === lastMute) return;
+      lastMu = mu; lastSg = sg; lastRing = rg; lastMute = mt;
+      muPos.value = mu; sigma.value = sg; ring.value = rg; muting.value = mt;
+      wake();
     };
     take(bus.value);
     bus.subs.add(take);
     return () => { bus.subs.delete(take); };
-  }, [bus, muPos, sigma, ring, muting]);
+  }, [bus, muPos, sigma, ring, muting, wake]);
 
   // ── Per frame, on the UI thread ──
   /* ★★★ NO FLICKER, EVER (§4.4). Every frame draws a STEADY brightness — the fraction of time the
@@ -218,12 +232,23 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
    *  11 B7 crash: meters.ts WORKLET DEFAULTS). So the frame is caught, stops drawing, and the fault is
    *  handed to the JS thread ONCE, where the housing falls back to the bar. Not a fix for anything —
    *  scripts/test_worklet_defaults.mjs runs this callback as the UI thread does; this is the net. */
+  /* ★★★ TWO POWER RULES (audit 2026-10-01), neither of which changes what is drawn:
+   *   1. ≤ 60 Hz (meterTick / METER_MIN_FRAME_MS): on a 120 Hz ProMotion panel every other display
+   *      frame is skipped and its time carried into the next, so the time-based easing is unchanged.
+   *   2. SLEEP WHEN SETTLED (useFrameSleep): every brightness at its target and no peak held above the
+   *      level ⇒ nothing will move until the next sample, so the callback asks to stop — and the bus
+   *      subscription wakes it. Before, it ran 120 times a second for as long as the strip was on
+   *      screen — paused, disconnected, a steady carrier — and held the display at 120 Hz. */
   const thresholds = VU_THRESHOLDS as number[];
-  useFrameCallback((f) => {
+  const { gen, asked, sleep } = fsleep;
+  const frame = useFrameCallback((f) => {
     'worklet';
     if (faulted.value) return;
     try {
-      const dt = f.timeSincePreviousFrame ?? 16;
+      const cad = { acc: cadAcc.value };
+      const dt = meterTick(cad, f.timeSincePreviousFrame ?? 16);
+      cadAcc.value = cad.acc;
+      if (dt <= 0) return;
       const mu = muPos.value, sg = sigma.value;
       const st = steadySv.value === 1, mute = muting.value === 1;
       const was = litState.value, prev = bright.value;
@@ -252,11 +277,13 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
         if (Math.abs(b - prev[i]) > 0.0005) changed = true;
       }
       if (changed) bright.value = next;
+      else if (!litChanged && pk < 0 && !asked.value) { asked.value = 1; scheduleOnRN(sleep, gen.value); }
     } catch (e) {
       faulted.value = 1;
       if (onFault) scheduleOnRN(onFault, String((e as Error)?.message ?? e));
     }
   });
+  fsleep.attach(frame);
 
   // ── The ring ──
   const ringX = useDerivedValue(() => padX + Math.max(0, ring.value) * (ledW + gap) - 2.75);

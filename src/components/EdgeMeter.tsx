@@ -46,6 +46,7 @@ import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
 import { useBoxSize } from './VfdParts';
 import { useReduceMotion } from '../hooks/useReduceMotion';
+import { useFrameSleep } from '../hooks/useFrameSleep';
 import type { MeterBus, MeterValues } from './ControlsBar';
 
 const CARD  = '#e9e2cf';
@@ -186,6 +187,10 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
   const sqlPos = useSharedValue(-1);
   const dim    = useSharedValue(0);
   const faulted = useSharedValue(0);
+  /** Where the signal needle was on the previous frame — "still" is half of "settled". */
+  const lastNeedle = useSharedValue(-1);
+  const fsleep = useFrameSleep();
+  const { wake, gen, asked, sleep } = fsleep;
   useEffect(() => {
     if (!bus) return;
     const cfg = { ...needleSpring(reduceMotion), reduceMotion: ReduceMotion.Never };
@@ -194,30 +199,41 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
       const closed = sqlClosedOf(m.sql ?? -1, m.gate, m.level);
       // ★ The RAW level (§4.5 TRAP) — and while the squelch mutes, the needles fall.
       const target = closed ? 0 : vuPos(m.raw ?? m.level);
-      if (target !== lastTarget) { lastTarget = target; needle.value = withSpring(target, cfg); }
+      if (target !== lastTarget) { lastTarget = target; needle.value = withSpring(target, cfg); wake(); }
       sqlPos.value = m.sql != null && m.sql >= 0 ? vuPos(m.sql) : -1;
       if (closed !== lastClosed) { lastClosed = closed; dim.value = withTiming(closed ? 0.5 : 0, { duration: 180 }); }
     };
     take(bus.value);
     bus.subs.add(take);
     return () => { bus.subs.delete(take); };
-  }, [bus, reduceMotion, needle, sqlPos, dim]);
+  }, [bus, reduceMotion, needle, sqlPos, dim, wake]);
 
   // ★ The peak needle, on the SAME UI thread as the spring, pushed by where the needle IS on screen.
   // ★★★ A throw in a UI-thread callback is a native abort: caught, handed to the JS thread once (as LedVu).
-  useFrameCallback((f) => {
+  // ★★ SLEEPS WHEN SETTLED (useFrameSleep, power audit 2026-10-01): the signal needle has stopped (its
+  //   spring has landed) and the peak needle has come down onto it ⇒ nothing can move until the next
+  //   sample changes the target, and that sample wakes it. It used to run on every display frame —
+  //   120 a second on ProMotion — for as long as the meter was on screen, holding the display at 120 Hz.
+  //   ★ The signal needle's own motion is a withSpring and is NOT touched: it is a moving object, and
+  //     on ProMotion it should glide at the panel's full rate.
+  const frame = useFrameCallback((f) => {
     'worklet';
     if (faulted.value) return;
     try {
+      const n = needle.value;
       const st = { pos: peak.value, heldMs: held.value };
-      const p = peakNeedleStep(st, needle.value, f.timeSincePreviousFrame ?? 16);
+      const p = peakNeedleStep(st, n, f.timeSincePreviousFrame ?? 16);
       if (p !== peak.value) peak.value = p;
       held.value = st.heldMs;
+      const still = n === lastNeedle.value;
+      lastNeedle.value = n;
+      if (still && p === n && !asked.value) { asked.value = 1; scheduleOnRN(sleep, gen.value); }
     } catch (e) {
       faulted.value = 1;
       if (onFault) scheduleOnRN(onFault, String((e as Error)?.message ?? e));
     }
   });
+  fsleep.attach(frame);
 
   const needleT = useDerivedValue(() => [{ translateX: needleX(needle.value, w) }]);
   const peakT   = useDerivedValue(() => [{ translateX: needleX(peak.value, w) }]);

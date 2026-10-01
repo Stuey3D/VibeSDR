@@ -10,6 +10,7 @@ import {
   Alert, Image, Linking, Modal, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useCoversScreen } from '../hooks/useScreenCovered';
 import Constants from 'expo-constants';   // nativeBuildVersion = the actual installed CFBundleVersion
 import { APP_VERSION } from '../constants/version';
 import { buildDiagnostics } from '../services/diagnostics';
@@ -353,6 +354,8 @@ export default function AboutOverlay(props: AboutOverlayProps) {
 
 /** ★ Hooks live below the early return (MenuSheet's pattern): a shut About runs nothing. */
 function AboutBody({ onClose }: AboutOverlayProps) {
+  // ★ An opaque full-screen modal: the receiver's clocks under it stop drawing (useScreenCovered).
+  useCoversScreen(true);
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
   return (

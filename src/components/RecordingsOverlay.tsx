@@ -21,6 +21,7 @@ import {
   usePopupStyles, usePopupTheme, onMetal, engraveText, PopupKey, PopupPlate, PopupWindow, type PopupTokens,
 } from './PopupShell';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { useCoversScreen } from '../hooks/useScreenCovered';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 
@@ -73,6 +74,8 @@ export interface RecordingsOverlayProps {
 }
 
 export default function RecordingsOverlay({ visible, onClose, onActiveChange }: RecordingsOverlayProps) {
+  // ★ An opaque full-screen modal: the receiver's clocks under it stop drawing (useScreenCovered).
+  useCoversScreen(visible);
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
   const [recs, setRecs] = useState<Rec[] | null>(null);
