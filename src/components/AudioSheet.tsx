@@ -364,9 +364,9 @@ function SectionLabel({ label, icon }: { label: string; icon?: SectionIconName }
     </View>
   );
 }
-function BtnRow({ children }: { children: React.ReactNode }) {
+function BtnRow({ children, end }: { children: React.ReactNode; end?: boolean }) {
   const st = usePopupStyles(makeSt);
-  return <NavRow><View style={st.btnRow}>{children}</View></NavRow>;
+  return <NavRow><View style={[st.btnRow, end && st.btnRowEnd]}>{children}</View></NavRow>;
 }
 function Btn({ label, active, onPress, full, style, pip }: {
   label: string; active?: boolean; onPress?: () => void; full?: boolean; style?: object;
@@ -698,8 +698,9 @@ export default function AudioSheet({
             </View>
           )}
 
-          {/* NR / NB (UberSDR client-side DSP) + REC — REC stays for all backends */}
-          <BtnRow>
+          {/* NR / NB (UberSDR client-side DSP) + REC — REC stays for all backends.
+              ★ Right-aligned, with every other key in this sheet (Stuart, B12: REC sat alone on the left). */}
+          <BtnRow end>
             {uberDsp && (
               <Btn
                 label={nrMode === 'serv' ? 'SERV' : nrMode === 'nr2' ? 'NR2' : 'NR'}
@@ -1059,6 +1060,7 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   // are about to move the squelch rather than the focus.
   sqlBarFocused: { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 6, margin: -2 },
   btnRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
+  btnRowEnd: { justifyContent: 'flex-end' },
   btn: {
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
     borderRadius: 5, paddingHorizontal: 16, paddingVertical: 11,
