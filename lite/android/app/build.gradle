@@ -84,6 +84,9 @@ android {
 //    here. Anything that imports React or Expo stays out.
 def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'RtlTcpServerService.kt',
               'VibeTunnel.kt', 'VibeGeoData.kt', 'VibeHttp.kt', 'VibeWifiLock.kt',
+              // ★★ Modern roots for old phones' HTTPS (B10: a Lite on Android 5.1 had no RIPE/APNIC data).
+              //    Every downloader above uses it — without this line none of them compiles.
+              'VibeTls.kt',
               // ★ stage 2: the bridge modules ServerModeScreen talks to — the main app's own files.
               //   They import only React's classic bridge API, which 0.73 has.
               'VibeLocalSdrModule.kt', 'VibeMdnsModule.kt',

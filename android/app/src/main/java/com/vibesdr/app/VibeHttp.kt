@@ -31,6 +31,8 @@ object VibeHttp {
     private val http = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
+        // ★★ VibeTls: modern roots ADDED to an old phone's store — see VibeTls.kt (B10, Android 5.1 had no RIPE/APNIC).
+        .sslSocketFactory(VibeTls.socketFactory, VibeTls.trustManager)
         .build()
 
     /**

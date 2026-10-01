@@ -67,6 +67,10 @@ object VibeBenchmark {
         return try {
             val c = (URL(CLIP_URL).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 20_000; readTimeout = 60_000; instanceFollowRedirects = true
+                // ★★ VibeTls: the clip is on GitHub, whose downloads chain to ISRG Root X1 — which Android
+                //    5.1 does not have ("Trust anchor for certification path not found", B10). Set on the
+                //    connection, so the github.com → release-assets redirect keeps it.
+                (this as? javax.net.ssl.HttpsURLConnection)?.sslSocketFactory = VibeTls.socketFactory
             }
             if (c.responseCode != 200) { c.disconnect(); return "" }
             GZIPInputStream(c.inputStream).use { gz -> tmp.outputStream().use { gz.copyTo(it) } }
@@ -89,6 +93,7 @@ object VibeBenchmark {
         val c = (URL(SPEEDTEST_URL).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"; doOutput = true
             connectTimeout = 15_000; readTimeout = 60_000
+            (this as? javax.net.ssl.HttpsURLConnection)?.sslSocketFactory = VibeTls.socketFactory   // ★ see ensureClip
             setFixedLengthStreamingMode(body.size)
             setRequestProperty("Content-Type", "application/octet-stream")
         }
