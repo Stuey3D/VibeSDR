@@ -134,14 +134,18 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ★ Leaving the foreground ends the trial (a swipe-away from the switcher is not a crash);
+  // ★ Going to the BACKGROUND ends the trial (a swipe-away from the switcher is not a crash);
   //   coming back puts the faceplate on trial again for a few seconds (surfaces are rebuilt).
+  // ★★ NOT 'inactive': iOS goes inactive for a system prompt at launch (local network permission),
+  //   Control Centre or an incoming call — still drawing, still able to crash. Clearing there let a
+  //   crashing faceplate through for a launch (B8, iPhone: the reset came on the THIRD attempt). A
+  //   swipe-away straight from inactive costs at worst one needless reset, never a lock-out.
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   useEffect(() => {
     const sub = AppState.addEventListener('change', (st: string) => {
       if (st === 'active') faceplateGuard.arm(settingsRef.current);
-      else faceplateGuard.clear();
+      else if (st === 'background') faceplateGuard.clear();
     });
     return () => sub.remove();
   }, []);

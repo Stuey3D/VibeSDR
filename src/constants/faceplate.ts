@@ -975,7 +975,7 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
  *           launch, a change in the CONTROL CUSTOMISATION pane, the deck mounting in a receiver) a
  *           mark is written SYNCHRONOUSLY (services/faceplateGuard.ts: a file, so it is on disk before
  *           the next line runs — an abort a frame later must find it).
- *   CLEAR — after ARMED_WINDOW_MS of the app running with it, when the app leaves the foreground (a
+ *   CLEAR — after ARMED_WINDOW_MS of the app running with it, when the app goes to the BACKGROUND (a
  *           swipe-away from the switcher is not a crash), and when the settings go back to safe.
  *   CHECK — at launch, BEFORE the stored settings are applied: a mark still there means the last run
  *           died while a faceplate was being drawn. The app comes up on the SAFE faceplate (display
