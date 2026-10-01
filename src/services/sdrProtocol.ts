@@ -315,7 +315,7 @@ export interface SDRCallbacks {
   onDialMoved?: (hz: number, mode?: string) => void;
   /** Somebody said one of the canned phrases. IDS TRAVEL, NOT TEXT: `from` is an ordinal ("User
    *  3"), and an id this build cannot draw must be DROPPED rather than shown raw. */
-  onSaid?:      (from: number, id: string) => void;
+  onSaid?:      (from: number, id: string, msg?: Record<string, unknown>) => void;
   /** ★★★ THE SESSION IS NOW REGISTERED WITH THE SERVER (POST /connection returned allowed).
    *  UberSDR drops an audio WebSocket whose session it has never seen — it completes the
    *  handshake and closes in the same breath, which the phone reports as an abort and the user

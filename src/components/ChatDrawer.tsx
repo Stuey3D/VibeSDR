@@ -34,6 +34,7 @@ import {
 } from './PopupShell';
 import type { ChatUserRow } from '../services/DecoderClient';
 import { phrasePadMaxHeight } from '../constants/chatPad';
+import type { ShareOut, SharedStation } from '../services/chatShare';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -43,7 +44,13 @@ export interface ChatMessage {
   user?:  string;
   text:   string;
   ts:     string; // "HHMMz"
+  /** ★ A station somebody shared (canned chat) — the SERVER's line, drawn with a TUNE key. */
+  share?: SharedStation;
 }
+
+/** One row of the share picker. `title` may be the user's OWN bookmark label — shown on their own
+ *  screen only; what is sent is `out`, which chatShare built without it. */
+export interface ShareItem { key: string; title: string; detail?: string; out: ShareOut }
 
 export interface ChatDrawerProps {
   visible:    boolean;
@@ -77,6 +84,14 @@ export interface ChatDrawerProps {
   onSay?:            (id: string) => void;
   /** One line about the room — who is tuning, how many are here, why it is not moving. */
   dialLine?:         string;
+  /** ★★ SHARE A STATION (canned mode): what this user may share — what is playing now, then their
+   *  own bookmarks for this receiver. Absent = no Share chip (a chat without canned mode has a text
+   *  box, and FM-DX has its own chat). */
+  shareItems?:       ShareItem[];
+  /** Send one (the frame chatShare built — never a label). */
+  onShare?:          (out: ShareOut) => void;
+  /** TUNE on a shared line — a USER action, through the host's ordinary tune path. */
+  onShareTune?:      (s: SharedStation) => void;
 }
 
 function fmtUserFreq(hz?: number): string {
@@ -116,6 +131,7 @@ function ChatDrawerBody({
   onMute, muted = false,
   users = [], syncedUser = null, zoomSync = false,
   onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, dialLine,
+  shareItems, onShare, onShareTune,
 }: ChatDrawerProps) {
   const cd = usePopupStyles(makeCd);
   const pt = usePopupTheme();
@@ -161,6 +177,10 @@ function ChatDrawerBody({
   //    no names at all — the server hands out ordinals — so asking for one would be a join flow
   //    with nothing to type into it, and the transcript would never render.
   const isCanned = !!canned && canned.length > 0;
+  /** ★ The pad shows the phrases OR the share picker — never both: the picker is a list, and a list
+   *  inside a wrap of chips is a pad nobody can read. Closes itself on a send and on closing the drawer. */
+  const [picking, setPicking] = useState(false);
+  useEffect(() => { if (!visible) setPicking(false); }, [visible]);
   const joined = isCanned || !!myCallsign;
   // ★★ The phrase pad's cap (constants/chatPad.ts) comes off the drawer's body: its fixed height
   //    less the bottom inset + padding, the handle and the header (measured — metal keys are taller
@@ -407,6 +427,17 @@ function ChatDrawerBody({
                   ]} selectable>
                     {m.text}
                   </Text>
+                  {/* ★★ TUNE is the RECEIVER's choice — arriving never moves anything. On a shared dial
+                       the host asks first when somebody else is on it (chatShare.shareTuneStep). */}
+                  {!!m.share && !!onShareTune && (pt.metal ? (
+                    <PopupKey label="TUNE" height={24} fontSize={10} style={cd.tuneKey} hitSlop={6}
+                      accessibilityLabel="Tune to the shared station" onPress={() => onShareTune?.(m.share!)} />
+                  ) : (
+                    <TouchableOpacity style={[cd.tuneBtn, { borderColor: cc.btnBdr }]} hitSlop={6} activeOpacity={0.75}
+                      accessibilityLabel="Tune to the shared station" onPress={() => onShareTune?.(m.share!)}>
+                      <Text style={[cd.tuneTxt, { color: cc.btnText, fontFamily: t.font }]}>TUNE</Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
               )}
             />
@@ -430,7 +461,52 @@ function ChatDrawerBody({
               )}
               <ScrollView style={[cd.padScroll, { maxHeight: padMaxH }]} contentContainerStyle={cd.padContent}
                 showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
-              {canned!.map(ph => pt.metal ? (
+              {/* ★★ SHARE A STATION — first, because it is the one key that says WHAT you found. */}
+              {isCanned && !!shareItems && !picking && (pt.metal ? (
+                <PopupKey key="__share" label="📻 Share a station…" numberOfLines={1} height={32} fontSize={12} hitSlop={0}
+                  style={{ alignSelf: 'flex-start', maxWidth: '100%' }} onPress={() => setPicking(true)} />
+              ) : (
+                <TouchableOpacity key="__share" style={[cd.cannedBtn, { borderColor: cc.btnBdr }]} activeOpacity={0.75}
+                  onPress={() => setPicking(true)}>
+                  <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]}>📻 Share a station…</Text>
+                </TouchableOpacity>
+              ))}
+              {/* ★★★ THE PICKER: what is playing now, then this user's own bookmarks for this receiver.
+                   Their labels are shown HERE, on their own screen; what is sent is the row's `out`,
+                   which carries no label — the room hears the name this receiver knows. */}
+              {picking && (<>
+                {pt.metal ? (
+                  <PopupKey key="__back" label="‹ Phrases" height={28} fontSize={11} hitSlop={0}
+                    style={{ alignSelf: 'flex-start' }} onPress={() => setPicking(false)} />
+                ) : (
+                  <TouchableOpacity key="__back" style={[cd.cannedBtn, { borderColor: cc.btnBdr }]} activeOpacity={0.75}
+                    onPress={() => setPicking(false)}>
+                    <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]}>‹ Phrases</Text>
+                  </TouchableOpacity>
+                )}
+                <Text style={[cd.cannedLine, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}>
+                  Shares the frequency and mode only — the room sees the name this receiver knows.
+                </Text>
+                {(shareItems ?? []).length === 0 && (
+                  <Text style={[cd.cannedLine, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}>
+                    Nothing to share yet — tune a station or save a bookmark.
+                  </Text>
+                )}
+                {(shareItems ?? []).map(it => pt.metal ? (
+                  <PopupKey key={it.key} label={it.detail ? `${it.title}  ·  ${it.detail}` : it.title} numberOfLines={2}
+                    height={32} fontSize={12} hitSlop={0} style={{ width: '100%' }}
+                    onPress={() => { onShare?.(it.out); setPicking(false); }} />
+                ) : (
+                  <TouchableOpacity key={it.key} style={[cd.cannedBtn, cd.shareRow, { borderColor: cc.btnBdr }]} activeOpacity={0.75}
+                    onPress={() => { onShare?.(it.out); setPicking(false); }}>
+                    <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]} numberOfLines={1}>{it.title}</Text>
+                    {!!it.detail && (
+                      <Text style={[cd.shareDetail, { color: cc.title, fontFamily: t.font }]} numberOfLines={1}>{it.detail}</Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </>)}
+              {!picking && canned!.map(ph => pt.metal ? (
                 // ★★ hitSlop 0: the chips sit 6 pt apart and a dome key's default 4 pt slop on BOTH
                 //    neighbours overlapped in the gap — a tap there could say either phrase.
                 <PopupKey key={ph.id} label={ph.text} numberOfLines={3} height={32} fontSize={12} hitSlop={0}
@@ -595,6 +671,16 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
   },
   cannedTxt: { fontFamily: FONT, fontSize: 13, color: '#ffe0a0' },
+  // ★ A picker row is a LIST row — full width, label over its frequency — not a chip in the wrap.
+  shareRow:    { width: '100%', borderRadius: 10, paddingVertical: 6 },
+  shareDetail: { fontFamily: FONT, fontSize: 11, marginTop: 1 },
+  // ★ TUNE beside a shared line: small, after the text, never wider than its word.
+  tuneBtn: {
+    flexShrink: 0, alignSelf: 'center', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
+    backgroundColor: 'rgba(255,160,0,0.12)', borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
+  },
+  tuneTxt: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: '#ffe0a0' },
+  tuneKey: { flexShrink: 0, alignSelf: 'center', paddingHorizontal: 8 },
   // ★★ The pad: the room line over a capped scroller of the same flowing wrap (constants/chatPad.ts).
   //    3 pt under the chips so the last row's cast shadow and its 2 pt of travel are not clipped by
   //    the scroller — the last chip used to sit hard on the drawer's edge.

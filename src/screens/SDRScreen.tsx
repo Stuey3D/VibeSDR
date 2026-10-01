@@ -128,9 +128,11 @@ import AudioSheet      from '../components/AudioSheet';
 import HealthPill, { type Health, type HealthLevel } from '../components/HealthPill';
 import StepPicker      from '../components/StepPicker';
 import ChatDrawer,
-  { type ChatMessage } from '../components/ChatDrawer';
+  { type ChatMessage, type ShareItem } from '../components/ChatDrawer';
 import { DIAL_PHRASES, phraseText, dialSummary, speakerName,
          type DialState } from '../services/dialChat';
+import { shareFromBookmark, shareFromTuned, shareSummary, parseShared, sharedLineText, shareTuneStep,
+         type ShareOut, type SharedStation } from '../services/chatShare';
 import { blindTuneReason, blindTuneRefusal, mediaSkipEnabled, dialAlone,
          type BlindTuneAction, type BlindTuneInput } from '../services/blindTuneGate';
 import DecoderPanel,
@@ -5392,9 +5394,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         setTuneAssertNonce((n) => n + 1);
       },
-      onSaid: (from: number, id: string) => {
+      onSaid: (from: number, id: string, msg?: Record<string, unknown>) => {
         if (destroyed.current) return;
-        const text = phraseText(id);
+        /* ★★★ A SHARED STATION IS THE SERVER'S LINE, drawn as the server named it (chatShare.ts):
+         *  the sender's label never travelled, and there is no client name field to trust. Arriving
+         *  tunes NOTHING — the TUNE key beside it is the receiver's own choice (onShareTune). */
+        const share = id === 'check_out' ? parseShared(msg) : null;
+        const text = share ? sharedLineText(share) : phraseText(id);
         if (!text) return;              // an id this build cannot draw — see dialChat's header
         const you = dialStateRef.current?.you ?? 0;
         const mine = from === you;
@@ -5404,12 +5410,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           user: speakerName(from, you),
           text,
           ts: new Date().toISOString().slice(11, 16).replace(':', '') + 'z',
+          ...(share ? { share } : {}),
         };
         setChatMessages((prev: ChatMessage[]) => [...prev, line].slice(-60));
         // ★ The wrist gets the phrase too — on a watch the canned chat is not a lesser version of
         //   the feature, it is the ONLY version that can work there (no keyboard).
+        //   ★ Not a share: the watch draws phrase ids, and an id it cannot draw is dropped there anyway.
         const ds = dialStateRef.current;
-        if (ds) watchProvider.sendDial({ ...ds, said: { from, id } });
+        if (ds && !share) watchProvider.sendDial({ ...ds, said: { from, id } });
         // ★ Unread only for OTHER people, and only while the drawer is shut — your own phrase
         //   echoing back as an unread badge would be absurd.
         if (!mine && !chatOpenRef.current) setChatUnread(true);
@@ -8882,6 +8890,61 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (bw && !isBand) onFilterBoth(bw[0], bw[1]);
   }, [onTuneHz, onMode, ituRegion, canSetMode, dabGoTo, onFilterBoth]);
 
+  /* ★★★ SHARE A STATION (canned chat, shared dial). What this listener may share: what is playing
+   *  now — the DAB SERVICE when DAB is on, never the analogue dial under it — then their own
+   *  bookmarks for this receiver. Each row's `out` is built by chatShare, which never reads a label:
+   *  the title is theirs and stays on this screen; the room hears the name THE RECEIVER knows. */
+  const shareItems = useMemo((): ShareItem[] => {
+    const items: ShareItem[] = [];
+    const dab = dabOn && dabState?.channel ? dabState : null;
+    const now = shareFromTuned(
+      { frequency: status.frequency, mode: String(status.mode),
+        bandwidthLow: status.bandwidthLow, bandwidthHigh: status.bandwidthHigh },
+      dab ? { channel: dab.channel, sid: dab.sid > 0 ? dab.sid : undefined, eid: dab.eid > 0 ? dab.eid : undefined } : null,
+    );
+    if (now) {
+      const svc = dab ? dab.services?.find((x) => x.sid === dab.sid)?.label : undefined;
+      items.push({ key: 'now', title: svc ? `Now playing — ${svc.trim()}` : 'Now playing', detail: shareSummary(now), out: now });
+    }
+    visibleBookmarks.forEach((b: UserBookmark, i: number) => {
+      const out = shareFromBookmark(b);
+      if (!out || (out.kind === 'dab' && !dabCapable)) return;   // ★ never offer what this receiver cannot play
+      items.push({ key: `bm-${i}-${b.frequency}`, title: b.name, detail: shareSummary(out), out });
+    });
+    return items;
+  }, [status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh, dabOn, dabState,
+      visibleBookmarks, dabCapable]);
+  const onShare = useCallback((out: ShareOut) => { markInteract(); client.current?.share?.(out); }, []);
+  /** ★★ TUNE ON A SHARED LINE — a USER action, through the deck's own paths (dabGoTo for DAB, the
+   *  bookmark path otherwise), so the owner's limits and the server's rules apply exactly as to any
+   *  tune. On a shared dial somebody else is on, it ASKS first — the banner's ASK TO TUNE, offered
+   *  as the canned "Can I tune?" — and tuning anyway stays this listener's call. */
+  const onShareTune = useCallback((sh: SharedStation) => {
+    const go = () => {
+      closeChat();
+      if (sh.kind === 'dab') { dabGoTo(sh.hz, sh.sid ?? -1); return; }
+      onSearchTune(sh.hz, sh.mode ?? null, false, false,
+                   typeof sh.bwLo === 'number' && typeof sh.bwHi === 'number' ? [sh.bwLo, sh.bwHi] : null);
+    };
+    const step = shareTuneStep(sh, dialStateRef.current, { admin: adminOk, dabCapable });
+    if (step === 'refused') { setDialHint('This receiver is set to listen only — the owner tunes it.'); return; }
+    if (step === 'no-dab')  { setDialHint('This receiver cannot play DAB.'); return; }
+    if (step === 'ask') {
+      const others = Math.max(1, (dialStateRef.current?.listeners ?? 2) - 1);
+      Alert.alert(
+        'Ask to tune',
+        `${others === 1 ? 'Somebody else is' : `${others} others are`} listening to this receiver — tuning moves it for everyone.`,
+        [
+          { text: 'Ask "Can I tune?"', onPress: () => client.current?.say?.('ask_tune') },
+          { text: 'Tune now', onPress: go },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+      );
+      return;
+    }
+    go();
+  }, [closeChat, dabGoTo, onSearchTune, adminOk, dabCapable]);
+
   // Menu INSTANCE row — ← BACK returns to the instance picker (it previously
   // fell back to just closing the menu). The ⟳ RECONNECT button was removed
   // 2026-06-12: it only recycled the spectrum client while the native audio
@@ -11154,6 +11217,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         canned={sharedDial ? DIAL_PHRASES : undefined}
         onSay={(id: string) => client.current?.say?.(id)}
         dialLine={dialState ? dialSummary(dialState) : undefined}
+        shareItems={sharedDial ? shareItems : undefined}
+        onShare={onShare}
+        onShareTune={onShareTune}
       />
       </PanelBoundary>
 

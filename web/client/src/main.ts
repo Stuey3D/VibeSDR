@@ -1295,7 +1295,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onDialRefused: () => { chatRefused(); togglePanel('chatPanel'); },
-    onSaid: (from, id, admin, extra) => chatSaid(from, id, admin, extra),
+    onSaid: (from, id, admin, msg) => chatSaid(from, id, admin, msg),
     // ★★★ SOMEBODY ELSE MOVED THE DIAL — REDRAW WHAT THEY MOVED. The readout, the mode and the
     //     VFO marker are all drawn from values this client chose, and on a shared receiver it
     //     chose none of them. Without this the audio followed and the screen did not.
@@ -9411,14 +9411,36 @@ function initDecoders(host: string, auth: AuthState) {
   $('chatBtn').onclick = () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); };
   $('chatClose').onclick = () => { closePanels(); chatOpened(false); };
   initChat({
-    say: (id, extra) => spec?.send(extra ? { type: 'say', id, hz: extra.hz, mode: extra.mode }
-                                          : { type: 'say', id }),
+    say: (id) => spec?.send({ type: 'say', id }),
+    /* ★★★ SHARE A STATION — the frame src/services/chatShare.ts built: numbers and closed-list ids, NEVER a
+     *  bookmark's label. The server validates it and names it from what THIS receiver knows. */
+    share: (out) => spec?.send({ ...out }),
+    bookmarks: () => getBookmarks(),
+    dabNow: () => {
+      if (!dabOn || !dabState || !dabState.channel) return null;
+      const svc = dabState.services?.find((x) => x.sid === dabState!.sid);
+      return { channel: dabState.channel, sid: dabState.sid > 0 ? dabState.sid : undefined,
+               eid: dabState.eid > 0 ? dabState.eid : undefined, label: svc?.label };
+    },
+    dabCapable: () => dabCapable,
+    isAdmin: () => adminUnlocked,
+    tuned: () => spec ? { frequency: spec.frequency, mode: spec.mode,
+                          bandwidthLow: spec.bandwidthLow, bandwidthHigh: spec.bandwidthHigh } : null,
+    /* ★★ TUNE on a shared line: the bookmark tap's own path (tuneTo / dabGoTo), so the owner's limits, the
+     *  clamp and the passband apply exactly as to any bookmark. A decoder id is not a demodulator: those tune
+     *  on the band's default mode. Arriving never calls this — only a tap does. */
+    tuneShare: (s) => {
+      if (s.kind === 'dab') { dabGoTo(s.hz, s.sid ?? -1); return; }
+      const m = s.mode && (MODES as string[]).includes(s.mode) ? s.mode : undefined;
+      tuneTo({ name: '', frequency: s.hz, mode: m, source: 'server',
+               bandwidthLow: typeof s.bwLo === 'number' ? s.bwLo : null,
+               bandwidthHigh: typeof s.bwHi === 'number' ? s.bwHi : null });
+    },
     // ★ Only what this receiver actually offers — see capsOf on the directory, same idea: never suggest a mode
     //   the owner has switched off, or a decoder this build cannot run.
     // ★ The same list the mode picker offers — anything the owner switched off is already gone from it.
     modes: () => MODES.filter((m) => !isModeBlocked(m)) as unknown as string[],
     freqHz: () => spec?.frequency ?? 0,
-    tuneTo: (hz, mode) => { if (mode && mode !== 'rds') setMode(mode as any, true); spec?.tune(hz); },
     onUnread: (n) => {
       for (const id of ['chatUnread', 'mChatUnread']) {
         const el = document.getElementById(id);

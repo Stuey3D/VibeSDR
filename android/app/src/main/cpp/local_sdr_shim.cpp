@@ -131,6 +131,7 @@ struct VibeRtlTunerOps {
 #include "vibe_admin_ticket.h"
 #include "vibe_airspy_limit.h"      // the owner's per-band limit on an Airspy R2 / Mini
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
+#include "vibe_chat_share.h"        // ★ "share a station" in the canned chat: validate, name, say
 
 #define LOG_TAG "VibeLocalSDR"
 #ifdef __ANDROID__
@@ -1881,6 +1882,36 @@ static void bmPrune() {
         if (!it->second.manual && it->second.lastHeard < cutoff) it = g_bookmarks.erase(it);
         else ++it;
     }
+}
+
+/** ★★ WHAT THIS RECEIVER KNOWS NEAR A SHARED FREQUENCY — for the chat's "share a station"
+ *  (vibe_chat_share.h). The bookmark store already holds all three kinds the room may be told: the
+ *  stations RDS has taught it, the owner's own entries, and every DAB service it has decoded off a
+ *  multiplex (bmLearnDab). Only the neighbourhood is copied — the map is keyed by rounded Hz, and a
+ *  DAB service sits at its block's key plus its sid (< 0x10000, well inside ±25 kHz of the block).
+ *  ★ Expired learned rows are skipped exactly as bmPrune would drop them; provisional labels
+ *    ("PI4322 93.7MHz") are passed as quality 0 so the resolver can refuse them in one place. */
+static std::vector<vibechat::Known> chatShareKnownNear(double hz) {
+    std::vector<vibechat::Known> out;
+    const long long lo = bmKey(hz - 25000.0), hi = bmKey(hz + 25000.0) + 0x10000;
+    const long long cutoff = (long long)time(nullptr) - kExpirySecs;
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    for (auto it = g_bookmarks.lower_bound(lo); it != g_bookmarks.end() && it->first <= hi; ++it) {
+        const LearnedBm& b = it->second;
+        if (!b.manual && b.lastHeard < cutoff) continue;
+        vibechat::Known k;
+        k.name = b.name; k.hz = b.hz; k.mode = b.mode; k.sid = b.sid; k.eid = b.eid;
+        k.quality = b.manual ? 2 : b.nameSrc == kNameProvisional ? 0 : b.nameSrc == kNameGuess ? 1 : 2;
+        out.push_back(std::move(k));
+    }
+    return out;
+}
+/** The multiplex's own label, when this receiver has heard that block — "" otherwise. */
+static std::string chatShareEnsembleLabel(int block) {
+    std::lock_guard<std::mutex> lk(g_dabEnsMemMtx);
+    dabEnsLoadLocked();
+    auto it = g_dabEnsMem.find(block);
+    return it == g_dabEnsMem.end() ? std::string() : it->second;
 }
 
 /** Restore the saved list at start-up. The APP owns persistence — the shim has no
@@ -8500,8 +8531,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  tunes but never say WHAT they found — the one thing worth saying on a radio.
              *  ★★ STILL NOT FREE TEXT, and that is the point: the payload is a NUMBER and a mode chosen from
              *     this receiver's own list. Both are validated here, so the vocabulary stays closed and a
-             *     client cannot smuggle a sentence through a frequency field. */
-            "check_out",       // Hey, check out <hz> <mode>
+             *     client cannot smuggle a sentence through a frequency field.
+             *  ★★★ AND IT IS HOW A STATION IS SHARED (2026-10-01): the one you are on, one of your own bookmarks,
+             *     or a DAB service (block + service id). The bookmark's LABEL never travels — the name the room
+             *     sees is the one THIS receiver knows (vibe_chat_share.h), and the mode is a closed list. */
+            "check_out",       // Hey, check out <hz> <mode>  /  shared <station>
         };
         return v;
     }
@@ -14037,48 +14071,80 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *   lock, and taking a second lock while holding this one is how the two orders meet
              *   in the middle. Nothing about the answer changes in the microsecond between. */
             const bool isAdmin = adminNow(sock);
-            std::string line;
+            int from = 0;
             {
                 std::lock_guard<std::mutex> lk(clientMtx);
                 auto it = sockSession.find(sock.get());
                 const std::string me = it == sockSession.end() ? std::string() : it->second;
                 if (me.empty()) return;                       // no id, no voice
                 const double now = Impl::nowSecs();
+                /* ★★ FLOOD CONTROL COVERS SHARES TOO — one line per session per kChatMinGapSec, whatever
+                 *  it says. A share is checked AFTER the slot is spent, so a stream of rejected shares
+                 *  costs its sender exactly what a stream of accepted ones would: no cheaper spam vector. */
                 auto& last = chatLast[me];
                 if (last > 0 && (now - last) < kChatMinGapSec) return;   // flood control, silent
                 last = now;
                 if (chatLast.size() > 512) chatLast.clear();
-                const int from = handleForLocked(me);
-                // ★ Nothing is stored. See the note where chatLog used to live: a canned phrase
-                //   is only ever meaningful to somebody present to answer it.
-                /* ★★ THE HANDLE STAYS, AND THE MARK IS ADDED TO IT — "User 3 (admin)", not
-                 *    "Admin". Stuart's call: on a club receiver with several operators, replacing
-                 *    the number would make two admins indistinguishable, and following who said
-                 *    what is the whole point of having handles at all. */
+                from = handleForLocked(me);
+            }
+            // ★ Nothing is stored. See the note where chatLog used to live: a canned phrase
+            //   is only ever meaningful to somebody present to answer it.
+            /* ★★ THE HANDLE STAYS, AND THE MARK IS ADDED TO IT — "User 3 (admin)", not
+             *    "Admin". Stuart's call: on a club receiver with several operators, replacing
+             *    the number would make two admins indistinguishable, and following who said
+             *    what is the whole point of having handles at all. */
+            std::string line;
+            if (id == "check_out") {
+                /* ★★★ "CHECK OUT" IS THE SHARE — the station the sender is on, one of THEIR bookmarks, or a
+                 *  DAB service (Stuart, 2026-10-01). Everything is decided here (vibe_chat_share.h):
+                 *   · read ONLY numbers and closed-list ids — the bookmark's label is never on the wire,
+                 *     and a client that adds one anyway is not read;
+                 *   · refuse what this receiver cannot visit: outside the EFFECTIVE tunable set (hardware
+                 *     coverage after the owner's lists — the old check read only the lists), a mode the
+                 *     owner switched off, DAB where vsDabCapable says no;
+                 *   · NAME it from what this receiver knows — RDS-learned stations, the owner's bookmarks,
+                 *     DAB services it has decoded, EiBi on air now — and nothing it was told.
+                 *  ★ Off the clientMtx: the bookmark and station stores have their own locks, and taking
+                 *    them inside this one would be a second lock order for nothing. */
+                vibechat::ShareReq req;
+                auto refuse = [&](const char* why) {
+                    LOGI("chat share from User %d refused: %s", from, why);
+                    sendText(sock, std::string("{\"type\":\"notice\",\"why\":\"Not shared \xE2\x80\x94 ") + why + "\"}");
+                };
+                if (!vibechat::parseRequest(msg, req)) { refuse("that share could not be read"); return; }
+                vibechat::Caps caps;
+                for (const auto& r : vsTunableRanges()) caps.ranges.emplace_back(r.lo, r.hi);
+                caps.modeBlocked = [](const std::string& m) { return vsModeBlocked(m); };
+                // ★ Asked only for a DAB share: the capability probe can reach the hardware's rate.
+                std::string lm = req.mode;
+                for (auto& ch : lm) ch = (char)tolower((unsigned char)ch);
+                caps.dabCapable = (req.dab || lm == "dab") ? vsDabCapable() : false;
+                const vibechat::Verdict v = vibechat::validate(req, caps);
+                if (v != vibechat::Verdict::Ok) {
+                    refuse(v == vibechat::Verdict::OutOfRange  ? "that frequency is outside this receiver's range"
+                         : v == vibechat::Verdict::ModeBlocked ? "this receiver does not offer that mode"
+                         : v == vibechat::Verdict::NoDab       ? "this receiver cannot play DAB"
+                         :                                       "that share could not be read");
+                    return;
+                }
+                const auto known = chatShareKnownNear(req.hz);
+                const std::string ensemble = req.dab ? chatShareEnsembleLabel(req.block) : std::string();
+                const time_t tnow = time(nullptr);
+                struct tm g{}; gmtime_r(&tnow, &g);
+                const int utcMin = g.tm_hour * 60 + g.tm_min;
+                vibechat::Named named;
+                if (!req.dab && req.hz < 30e6) {
+                    std::lock_guard<std::mutex> lk(g_stationsMtx);
+                    named = vibechat::resolveName(req, known, &g_stationsJson, utcMin, ensemble);
+                } else {
+                    named = vibechat::resolveName(req, known, nullptr, utcMin, ensemble);
+                }
+                line = vibechat::saidJson(from, isAdmin, req, named,
+                                          [](const std::string& s) { return jsonEscape(s); });
+            } else {
                 line = "{\"type\":\"said\",\"from\":" + std::to_string(from)
                      + (isAdmin ? ",\"admin\":true" : "")
-                     + ",\"id\":\"" + id + "\"";
-                /* ★★ "check out" carries a frequency and a mode, and NOTHING ELSE travels with it. The number
-                 *  must be one this receiver can actually reach — pointing the room at a frequency outside the
-                 *  tuning range is worse than saying nothing — and the mode must be one it offers. A bad
-                 *  payload drops the whole message rather than sending a half-sentence. */
-                if (id == "check_out") {
-                    double hz = 0;
-                    if (!jsonNum(msg, "hz", hz)) return;
-                    if (!(hz > 0)) return;
-                    /* ★ The owner's allow/block ranges, the same ones a tune obeys — pointing the room at a
-                     *  frequency this receiver refuses to visit is worse than saying nothing. An unrestricted
-                     *  receiver has no ranges and accepts anything the hardware can reach. */
-                    { const auto& perm = vsPermittedRanges(vibebands::Ranges{});
-                      if (!perm.empty() && !vibebands::allows(perm, hz)) return; }
-                    std::string md = jsonStr(msg, "mode");
-                    for (auto& ch : md) ch = (char)tolower((unsigned char)ch);
-                    if (!md.empty() && vsModeBlocked(md)) return;   // a mode this owner switched off
-                    char b[64]; snprintf(b, sizeof b, ",\"hz\":%.0f", hz);
-                    line += b;
-                    if (!md.empty()) line += ",\"mode\":\"" + jsonEscape(md) + "\"";
-                }
-                line += "}";
+                     + ",\"id\":\"" + id + "\"}";
             }
             for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, line);
             return;

@@ -13,6 +13,7 @@
  */
 
 import type { SDRStatus, SDRMode, SDRCallbacks } from './UberSDRClient';
+import type { ShareOut } from './chatShare';
 
 // 'web888' is KiwiAdapter too — a Web-888 / RaspSDR speaks the Kiwi protocol at a different URL,
 // nothing more. See isKiwiProtocol() in sdrTypes; anything gating Kiwi behaviour must accept both.
@@ -223,6 +224,9 @@ export interface SDRBackend {
   /** Say a CANNED phrase on a shared-VFO VibeServer. Optional because it is meaningless on every
    *  other backend — an id, never text (see src/services/dialChat.ts for why that matters). */
   say?(id: string): void;
+  /** ★★ SHARE A STATION in the canned chat (src/services/chatShare.ts): numbers and ids only — the
+   *  frame is built by chatShare, which never reads a bookmark's label. VibeServer shared dial only. */
+  share?(out: ShareOut): void;
   /** OWRX: squelch level in dB (−150 = off/open). */
   setSquelch?(level: number): void;
   /** OWRX: noise reduction — threshold ≤ 0 = off, higher = more NR. */
