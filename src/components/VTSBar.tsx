@@ -17,7 +17,7 @@ import { GhostGrid } from './VfdParts';
 import { rgba, FONT_HYPER, FONT_DOTO, FONT_SEG14 } from '../constants/faceplate';
 import {
   cellWindow, cellWindowLeft, flagToIso, segGhost, steppedOffset, toSegCells, toSegRun, toUpperDisplay,
-  vfdStripText, VFD_STEP_MS,
+  vfdStripText, VFD_PAUSE_MS, VFD_STEP_MS,
 } from '../constants/displayText';
 import { vtsIdText, vtsJoin, vtsLineSegments, vtsStationText, type VtsIdLabel } from '../services/vtsLine';
 
@@ -63,6 +63,8 @@ export interface VtsNotifData {
 }
 
 const NOTIF_MS = 8000;
+/** ★ The longest a VFD pass may stretch a timed notif (see onVfdPass). */
+const VFD_PASS_CAP_MS = 30000;
 
 /* ★ The strip's colours and font are the faceplate's TEXT role (constants/faceplate.ts `vts`): on the
  *  default deck they are today's on-tune green / off-tune amber / band yellow, and under the Nixie
@@ -94,18 +96,51 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   /** True from the moment the bar starts to appear until it starts to leave. */
   const visibleRef = useRef(false);
 
-  const dismiss = () => {
-    if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
+  /* ★★ `finished` — a fade-out that a NEW notif interrupts (it resets the opacity and fades in) is
+   *  stopped, and its completion must not then null the bar under the newcomer. */
+  const fadeOut = () => {
     visibleRef.current = false;
     Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })
-      .start(() => { setShown(null); shownRef.current = null; });
+      .start(({ finished }) => { if (finished) { setShown(null); shownRef.current = null; } });
+  };
+  const dismiss = () => {
+    if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
+    fadeOut();
+  };
+  /** When the showing TIMED notif appeared, and how long it was asked to stay (for the VFD pass). */
+  const shownAtRef = useRef(0);
+  const holdMsRef = useRef(0);
+  /* ★★ A VFD NOTICE STAYS FOR ONE WHOLE PASS. The strip steps one cell every 300 ms after a 1.5 s
+   *  pause, so on a narrow glass "Direct Sample Active · Gain not available" needs longer than the 7 s
+   *  the notice asked for, and the bar used to leave mid-word. The strip reports what one pass takes
+   *  (VfdStrip onPassMs) and the hide timer is pushed out to it — never shortened, and capped, so a
+   *  very long line on a very narrow glass still goes. The pixel slide needs none of this: its
+   *  duration is fitted to the notif's time already. */
+  const onVfdPass = (passMs: number) => {
+    const cur = shownRef.current;
+    if (!cur || cur.hold || !visibleRef.current || !hideRef.current) return;
+    const want = Math.min(passMs, VFD_PASS_CAP_MS);
+    if (want <= holdMsRef.current) return;
+    holdMsRef.current = want;
+    clearTimeout(hideRef.current);
+    hideRef.current = setTimeout(() => { hideRef.current = null; fadeOut(); },
+                                 Math.max(0, shownAtRef.current + want - Date.now()));
   };
 
   useEffect(() => {
     if (!notif) {
-      // Explicit clear (e.g. live data ended / mode change) — a held (live) notif
-      // has no auto-dismiss timer, so fade it out here. Timed notifs self-dismiss.
-      if (shownRef.current?.hold) dismiss();
+      /* ★★★ AN EXPLICIT CLEAR TAKES DOWN WHATEVER IS SHOWING — TIMED OR HELD (B10, 2026-10-01).
+       *  This used to fade only a HELD notif and leave a timed one to "self-dismiss" — but the
+       *  effect's own cleanup had ALREADY cancelled that timer when `notif` went to null (the deps
+       *  change), so a timed notice that was cleared stayed on screen FOR EVER: the VFD strip
+       *  parked on its last cells ("…MPLING MODE FOR HF – THE TUNER IS BYPASSED…") long after.
+       *  Reproduced on the emulator with the gain-at-minimum notice: its 30 s withdrawal
+       *  (setVtsNotif → null, by key) lands just before the bar's own 30 s timer, and the strip
+       *  then sat frozen on "…R IS DEA…" for minutes. The other way in is the RDS-cleared path —
+       *  FM → 7.092 MHz: the direct-sampling notice arrives, then the station clears to null.
+       *  ★ A clear is a decision the screen made, so it is obeyed now; a notice the screen wants
+       *    to KEEP is protected there (SDRScreen does not clear a showing notice for RDS). */
+      if (shownRef.current) dismiss();
       return;
     }
     /* ★★★ LIVE DATA UPDATES IN PLACE — IT DOES NOT RE-ENTER (2026-09-29). Every held RDS update
@@ -131,11 +166,9 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
     // Live data (RDS/DMR/DAB) holds on screen; static (bookmark/band) times out.
     if (!notif.hold) {
-      hideRef.current = setTimeout(() => {
-        visibleRef.current = false;
-        Animated.timing(fade, { toValue: 0, duration: 300, useNativeDriver: true })
-          .start(() => { setShown(null); shownRef.current = null; });
-      }, notif.ms ?? NOTIF_MS);
+      shownAtRef.current = Date.now();
+      holdMsRef.current = notif.ms ?? NOTIF_MS;
+      hideRef.current = setTimeout(() => { hideRef.current = null; fadeOut(); }, holdMsRef.current);
     }
     return () => { if (hideRef.current) clearTimeout(hideRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -250,7 +283,8 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
         <VfdStrip style={COL.style as 'dot' | 'seg'} rgb={COL.rgb} core={COL.core} glow={COL.glow}
           text={vfdLineText(shown, COL.style as 'dot' | 'seg', freqLabel)}
           loop={!!shown.hold}
-          restartKey={shown.hold ? lineKey(shown) : String(shown.key)} />
+          restartKey={shown.hold ? lineKey(shown) : String(shown.key)}
+          onPassMs={shown.hold ? undefined : onVfdPass} />
       ) : (<>
       {/* Horizontal ScrollView = unconstrained content width, so the text
           measures at its TRUE size (a plain View clamps Text to the parent
@@ -322,8 +356,10 @@ const DOT_CELL = DOT_PX * 0.6 + CELL_LS;
  * case with the units' case kept, over the ghost-dot grid (also stepped per whole cell — the brief
  * allows per-column, and one rule for both reads as one machine).
  */
-function VfdStrip({ style, rgb, core, glow, text, loop, restartKey }: {
+function VfdStrip({ style, rgb, core, glow, text, loop, restartKey, onPassMs }: {
   style: 'dot' | 'seg'; rgb: string; core: string; glow: string; text: string; loop: boolean; restartKey: string;
+  /** A one-shot (timed) line: told how long one full pass takes here, pauses included. */
+  onPassMs?: (ms: number) => void;
 }) {
   const [w, setW] = useState(0);
   const seg = style === 'seg';
@@ -335,6 +371,7 @@ function VfdStrip({ style, rgb, core, glow, text, loop, restartKey }: {
   useEffect(() => {
     setOffset(0);
     if (count <= n || n <= 0) return;
+    if (!loop) onPassMs?.(VFD_PAUSE_MS + (count - n) * VFD_STEP_MS + VFD_PAUSE_MS);
     const t0 = Date.now();
     // Ticks faster than a step so each step lands on time; the offset only CHANGES by a whole
     // cell, and setting an unchanged number does not re-render.
@@ -359,9 +396,13 @@ function VfdStrip({ style, rgb, core, glow, text, loop, restartKey }: {
       {n > 0 && (
         <View style={{ width: n * cellW, alignSelf: 'center', justifyContent: 'center' }}>
           {seg
-            ? <Text style={[common, { color: rgba(rgb, 0.10) }]} numberOfLines={1}>{segGhost(n)}</Text>
+            ? <Text style={[common, { color: rgba(rgb, 0.10) }]} numberOfLines={1} ellipsizeMode="clip">{segGhost(n)}</Text>
             : <GhostGrid rgb={rgb} pitch={3} dot={0.7} />}
-          <Text style={[common, lit, seg ? styles.overlay : null]} numberOfLines={1}>{win.join('')}</Text>
+          {/* ★★ ellipsizeMode="clip" (B10): n cells come out a hair wider than n × cellW on the real
+              font, and the default "tail" then swapped the LAST cell for "…" — on every line, so a
+              notice never showed its final letter ("…GAIN CONTROL IS NOT AVAIL…" on Stuart's Mac;
+              "RECT SAM…" in a 9-cell window on the emulator). A VFD has no ellipsis glyph anyway. */}
+          <Text style={[common, lit, seg ? styles.overlay : null]} numberOfLines={1} ellipsizeMode="clip">{win.join('')}</Text>
           {seg && run.units.map((u, i) => {
             const at = u.at - shift;
             if (at < 0 || at + u.len > n) return null;
