@@ -22734,40 +22734,63 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         static const StateFn fn = (StateFn)dlsym(RTLD_DEFAULT, "rtlsdr_get_r82xx_state");
 #endif
         if (!fn || !dev || hz < 24000000u || rtlsdr_get_direct_sampling(dev) != 0) return;
-        struct Snap { bool ok = false; vibertl::R82xxPll pll; uint32_t intFreq = 0, xtal = 0; double wantLo = 0;
+        struct Snap { bool ok = false; int n = 0, rc = 0; vibertl::R82xxPll pll; uint32_t intFreq = 0, xtal = 0;
+                      double wantLo = 0;
                       uint8_t hw[vibertl::kR82xxReadRegs] = {}, shadow[vibertl::kR82xxReadRegs] = {}; };
+        /* ★★ THE BRIDGE DECIDES HOW MANY REGISTERS COME BACK. An R82xx read is one I2C transaction from
+         *  register 0x00 through the RTL2832, and a 30-register read failed outright on the Sony's NooElec
+         *  (2026-10-01 13:33, "could not be read") while r82xx_set_pll's 5-byte reads work all day. The
+         *  library now steps the length down and returns how many it got: with 0x17 or more the PLL decodes
+         *  into an LO; with fewer, the lock bit and VCO fine tune are still the chip's own word — the LO
+         *  is then not judged at all rather than judged from librtlsdr's copy, which is the thing in doubt. */
         auto read = [&](Snap& s) {
             int lock = 0;
-            if (fn(dev, s.hw, vibertl::kR82xxReadRegs, s.shadow, &s.intFreq, &s.xtal, &lock) != 0) return false;
-            s.pll = vibertl::r82xxDecodePll(s.hw, vibertl::kR82xxReadRegs, s.xtal);
+            s.rc = fn(dev, s.hw, vibertl::kR82xxReadRegs, s.shadow, &s.intFreq, &s.xtal, &lock);
+            if (s.rc < 3) return false;          // not even the lock bit
+            s.n = s.rc;
+            /* ★★ THE PLL REGISTERS (0x10-0x16) LIE BEYOND WHAT THE BRIDGE RETURNS — 16 on the Sony's NooElec
+             *  (24 and 23 refused). Where the chip could not be read, decode librtlsdr's copy: it is what
+             *  r82xx_set_pll WROTE, which is exactly where a divider moved by the stale fine-tune bits would
+             *  show. Only a write that never landed is invisible there, and the registers we CAN read are
+             *  compared against the copy below for that. */
+            uint8_t img[vibertl::kR82xxReadRegs];
+            vibertl::r82xxComposeImage(s.hw, s.n, s.shadow, img);
+            s.pll = vibertl::r82xxDecodePll(img, vibertl::kR82xxReadRegs, s.xtal);
+            s.pll.locked = (s.hw[0x02] & 0x40) != 0;
+            s.pll.fineTune = s.n >= 5 ? ((s.hw[0x04] >> 4) & 0x03) : -1;
             s.wantLo = (double)rtlsdr_get_center_freq(dev) + (double)s.intFreq;
-            s.ok = s.pll.valid && s.pll.locked && vibertl::r82xxLoMatches(s.pll.loHz, s.wantLo);
-            return s.pll.valid;
+            s.ok = s.pll.locked && vibertl::r82xxLoMatches(s.pll.loHz, s.wantLo);
+            return true;
         };
         auto describe = [&](const Snap& s) {
             char b[512];
-            int n = std::snprintf(b, sizeof b,
+            int n;
+            n = std::snprintf(b, sizeof b,
                 "PLL %s, LO %.6f MHz (wanted %.6f = centre %.6f + IF %.3f), divider /%d (the LO needs /%d), "
-                "VCO %.4f GHz, fine tune %d",
+                "VCO %.4f GHz, fine tune %d%s",
                 s.pll.locked ? "locked" : "NOT LOCKED", s.pll.loHz / 1e6, s.wantLo / 1e6,
                 rtlsdr_get_center_freq(dev) / 1e6, s.intFreq / 1e6, s.pll.divider,
-                vibertl::r82xxExpectedDivider(s.wantLo), s.pll.vcoHz / 1e9, s.pll.fineTune);
+                vibertl::r82xxExpectedDivider(s.wantLo), s.pll.vcoHz / 1e9, s.pll.fineTune,
+                s.n > 0x16 ? " (all read from the chip)"
+                           : " (lock + fine tune from the chip; divider/N/SDM as librtlsdr wrote them)");
             // Registers the chip holds differently from librtlsdr's copy (0x05 onward is what it shadows).
+            // ★ Only the ones actually read — a register we did not get is not a difference.
             int diffs = 0;
             std::string list;
-            for (int r = 5; r < vibertl::kR82xxReadRegs; ++r) {
+            for (int r = 5; r < s.n; ++r) {
                 if (s.hw[r] == s.shadow[r - 5]) continue;
                 if (++diffs <= 8) { char e[32]; std::snprintf(e, sizeof e, " 0x%02x=%02x/%02x", r, s.hw[r], s.shadow[r - 5]); list += e; }
             }
             std::string out(b, (size_t)std::max(0, std::min(n, (int)sizeof b - 1)));
-            out += "; chip/copy differ at " + std::to_string(diffs) + " register(s)" + (diffs ? ":" + list : "");
+            out += "; " + std::to_string(s.n) + " registers read, chip/copy differ at " + std::to_string(diffs)
+                 + (diffs ? ":" + list : "");
             return out;
         };
         Snap s;
         if (!read(s)) {
             static std::atomic<long long> s_lastFail{0};
             const long long now = (long long)nowSecs();
-            if (now - s_lastFail.exchange(now) >= 10) LOGI("tuner chip readback: the R82xx registers could not be read");
+            if (now - s_lastFail.exchange(now) >= 10) LOGI("tuner chip readback: the R82xx registers could not be read (rc=%d)", s.rc);
             return;
         }
         static std::atomic<int> s_n{0};

@@ -316,6 +316,23 @@ static void chipReadback() {
     ok(!r82xxDecodePll(hw, 0x10, xtal).valid, "a short read (no PLL registers) decodes as not valid, never as a frequency");
     ok(r82xxLoMatches(14000000.0 + 28.8e6 + 1625000.0, 14000000.0 + 1625000.0),
        "an RTL-SDR Blog V4 on HF (librtlsdr upconverts by 28.8 MHz) is not reported as wrong");
+    // ★★ The Sony's bridge returns 16 registers: the PLL comes from librtlsdr's copy, and must still decode.
+    {
+        uint8_t chip[kR82xxReadRegs], shadow[kR82xxReadRegs] = {}, img[kR82xxReadRegs];
+        const uint32_t lo = 96115000 + 1575000;
+        encodePll(chip, lo, xtal, 0, true);
+        for (int r = 5; r < kR82xxReadRegs; ++r) shadow[r - 5] = chip[r];
+        uint8_t got[kR82xxReadRegs] = {};
+        for (int r = 0; r < 16; ++r) got[r] = chip[r];          // what a 16-byte read returns
+        r82xxComposeImage(got, 16, shadow, img);
+        const R82xxPll p = r82xxDecodePll(img, kR82xxReadRegs, xtal);
+        ok(p.valid && r82xxLoMatches(p.loHz, lo), "16 registers from the chip + librtlsdr's copy: LO decodes right");
+        encodePll(chip, lo, xtal, +1, true);                     // librtlsdr WROTE a moved divider
+        for (int r = 5; r < kR82xxReadRegs; ++r) shadow[r - 5] = chip[r];
+        r82xxComposeImage(got, 16, shadow, img);
+        ok(!r82xxLoMatches(r82xxDecodePll(img, kR82xxReadRegs, xtal).loHz, lo),
+           "…and a divider librtlsdr moved is still caught from its own copy");
+    }
     ok(r82xxExpectedDivider(1625000.0) == 0, "the LO librtlsdr asks for before the first tune (centre 0 + IF) has no divider");
 }
 

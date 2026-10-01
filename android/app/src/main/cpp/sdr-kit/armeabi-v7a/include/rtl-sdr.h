@@ -77,7 +77,10 @@ RTLSDR_API int rtlsdr_close(rtlsdr_dev_t *dev);
  * 0x05..0x22 into shadow[] (30 bytes, may be NULL), and reports the tuner's intermediate frequency,
  * its crystal and whether the last PLL program locked.
  *
- * \return 0 on success, -2 if the tuner is not an R82xx, other negative values on I2C failure
+ * The bridge limits how long one read may be, so fewer than `len` registers may come back.
+ *
+ * \return the number of registers read into hw[] (> 0), -2 if the tuner is not an R82xx,
+ *         other negative values when no read succeeded
  */
 RTLSDR_API int rtlsdr_get_r82xx_state(rtlsdr_dev_t *dev, uint8_t *hw, int len, uint8_t *shadow,
 				      uint32_t *int_freq, uint32_t *xtal, int *has_lock);

@@ -103,6 +103,16 @@ inline R82xxPll r82xxDecodePll(const uint8_t* hw, int len, uint32_t xtalHz) {
     return p;
 }
 
+/** ★★ THE BRIDGE RETURNS FEWER REGISTERS THAN THE PLL NEEDS. An R82xx read is one I2C transaction from
+ *  register 0x00 through the RTL2832, and the Sony's NooElec R820T2 accepts 16 (24 and 23 refused,
+ *  2026-10-01) — so the PLL registers 0x10-0x16 never come back from the chip. Build the image from the
+ *  chip where it was read and from librtlsdr's copy (`shadow[r-5]` = register r, what r82xx_write last
+ *  WROTE) beyond it: a divider moved by stale fine-tune bits is in what was written, so it still shows. */
+inline void r82xxComposeImage(const uint8_t* hw, int nRead, const uint8_t* shadow, uint8_t* out) {
+    for (int r = 0; r < kR82xxReadRegs; ++r)
+        out[r] = r < nRead ? hw[r] : (r >= 5 ? shadow[r - 5] : 0);
+}
+
 /** The divider r82xx_set_pll() starts from for an LO (before its fine-tune adjustment): the first of 2, 4 … 64
  *  that puts the VCO in [1.77, 3.54) GHz. 0 when none does (an LO below ~27.7 MHz — the PLL cannot make it). */
 inline int r82xxExpectedDivider(double loHz) {
