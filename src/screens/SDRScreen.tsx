@@ -14,7 +14,7 @@
  *   └── AudioPlayer           (renderless; plays Opus stream)
  */
 
-import { UPDATE_APP_MESSAGE } from '../services/sdrProtocol';
+import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
 import { APP_PROTO } from '../constants/version';
 import React, {
@@ -45,6 +45,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeepAwake }       from 'expo-keep-awake';
+import { keepIfSameStation, sameFlatList } from '../services/renderChurn';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/native';
 import type { RootStackParamList }     from '../../App';
@@ -875,6 +876,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     setRadioBase(radioBaseUrl(baseUrl, id));
   }, [baseUrl]);
+  /** Waiting for the owner to pick — the connect must not start.
+   *  ★ A door of ONE still waits when it has something to say: the aerial and the owner's message
+   *    are the reason the screen exists in that case, and connecting past them would show them to
+   *    nobody. See the resolver above. */
+  const awaitingRadio = !!door && !radioBase
+    && (door.radios.length > 1 || !!door.landingMessage || door.radios.some((r) => !!r.antenna));
+
   /**
    * ★★★ WHICH OF THESE RADIOS IS ACTUALLY IN USE. The door's radio list is a DIRECTORY, not a
    *     status board — it says what the owner configured and cannot see inside the other radios'
@@ -889,12 +897,25 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [radioBusy, setRadioBusy] = useState<Record<string, { busy: boolean; freeInSec: number; dab?: boolean }>>({});
   useEffect(() => {
     if (!door || !door.radios.length) { setRadioBusy({}); return; }
+    /* ★★★ ONLY WHILE THE PICKER IS ON SCREEN — which is what the note below always said, and the
+     *   effect never checked. Keyed on the door alone, it went on asking every radio behind it every
+     *   5 s for the WHOLE SESSION after one was chosen: N HTTP round trips and N whole-screen
+     *   renders (each answer built a fresh object) per 5 s, foreground and locked in a pocket alike,
+     *   for a table nobody could see (power audit, 2026-10-01). `radioBusy` is read by the picker
+     *   and nothing else. Coming back to the picker flips `awaitingRadio` and asks at once. */
+    if (!awaitingRadio) return;
     let dead = false;
     const ask = () => {
       door.radios.forEach((r) => {
         fetchOccupancy(radioBaseUrl(baseUrl, r.id)).then((o) => {
           if (dead || !o) return;
-          setRadioBusy((prev) => ({ ...prev, [r.id]: { busy: o.busy, freeInSec: o.freeInSec, dab: o.dab === true } }));
+          const next = { busy: o.busy, freeInSec: o.freeInSec, dab: o.dab === true };
+          // ★ An unchanged answer keeps the same object, so it re-renders nothing.
+          setRadioBusy((prev) => {
+            const cur = prev[r.id];
+            return cur && cur.busy === next.busy && cur.freeInSec === next.freeInSec && cur.dab === next.dab
+              ? prev : { ...prev, [r.id]: next };
+          });
         }).catch(() => {});
       });
     };
@@ -903,14 +924,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   stale "IN USE" would send you away from a radio that is now free.
     const t = setInterval(ask, 5000);
     return () => { dead = true; clearInterval(t); };
-  }, [door, baseUrl]);
-
-  /** Waiting for the owner to pick — the connect must not start.
-   *  ★ A door of ONE still waits when it has something to say: the aerial and the owner's message
-   *    are the reason the screen exists in that case, and connecting past them would show them to
-   *    nobody. See the resolver above. */
-  const awaitingRadio = !!door && !radioBase
-    && (door.radios.length > 1 || !!door.landingMessage || door.radios.some((r) => !!r.antenna));
+  }, [door, baseUrl, awaitingRadio]);
 
   /* ★★★ THERE IS NO SESSION WHILE THE LISTENER IS STILL CHOOSING A RADIO — and the resume path did
    *   not know it. On a multi-radio VibeServer the door is open, no radio is picked, and so there
@@ -1001,7 +1015,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const NOTICE_PILL_H = 34;
   /** ★ Shown briefly ON CONNECTION so the terms are known BEFORE they bite. */
   const [showIdleTerms, setShowIdleTerms] = useState(false);
-  const [sessionLeftMs, setSessionLeftMs] = useState<number | null>(null);
+  /* ★★ THE SECONDS LEFT ARE NOT SCREEN STATE ANY MORE — <SessionClock> counts them itself. Held
+   *  here, the 1 Hz tick re-rendered this entire screen every second for the whole of a
+   *  time-limited session (power audit, 2026-10-01). `sessionEndsAt` is the deadline and is still
+   *  the one thing to clear to stop the clock. */
   /** A deliberate refusal from the server (time up / cooldown), shown full-screen. */
   const [refusal, setRefusal] = useState<{ title: string; body: string; note: string } | null>(null);
   /** ★ The socket callbacks are created once, so they cannot read `refusal` state directly — a
@@ -3761,6 +3778,29 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  at when they first connect. Stuart, 2026-09-13: "maybe the VTS should scroll it too as in the
    *  app the chip is far less visible." */
   const [rspAgcInit, setRspAgcInit] = useState(false);
+  /* ★★ THE NEWEST rspstat, HELD WHILE THE HARDWARE PANEL IS SHUT — see onRspStat. Applied the
+   *  moment the panel opens, so it opens on the radio's current reading, never a stale one. */
+  type RspStat = Parameters<NonNullable<SDRCallbacks['onRspStat']>>[0];
+  const rspLatestRef = useRef<RspStat | null>(null);
+  const hwOpenRef = useRef(false); hwOpenRef.current = hwOpen;
+  // ★ Setters and refs only, so the copy captured by the connect effect's callbacks is never stale.
+  const applyRspStat = (r: RspStat) => {
+    setRspSys(r.sysGain); setRspOvl(r.overload); setRspSettling(r.settling);
+    setRspLna(r.lna);
+    // Under AGC the IF reduction is the AGC's to move — follow the radio, do not fight it.
+    if (rspIfAgcRef.current) setRspIfGr(r.ifgr);
+    /* ★ The live front-end state the panel needs to draw itself honestly: who owns the
+     *  notches, how many LNA states THIS BAND has, the AGC's target, and whether the gain
+     *  API has frozen. All of it was already on the wire. */
+    setRspRfNotch(r.rfNotch); setRspDabNotch(r.dabNotch);
+    setRspAutoNotch(r.autoNotch); setRspUserNotch(r.userNotch);
+    setRspRfAgc(r.rfAgc); setRspAgcSet(r.agcSet);
+    setRspLnaN(r.lnaN); setRspGainStuck(r.gainStuck);
+  };
+  useEffect(() => {
+    if (hwOpen && rspLatestRef.current) applyRspStat(rspLatestRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hwOpen]);
   /* ★★★ HackRF One live state. Mirrors what we last SENT, like the HF+ above — the shim has no
    *   read-back for these and the radio is single-occupant, so our own last write is the truth.
    * ★★★ AND EVERY ONE OF THEM STARTS AT ZERO/OFF, DELIBERATELY. Stuart: "the hackrf MUST DEFAULT
@@ -4633,7 +4673,9 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  (Stuart, 2026-09-22, "FM station logos stuck even when moving to DAB").
              *  A DAB service is identified by its LABEL, not by an RDS PI — so state the fields
              *  outright and leave the RDS ones empty. */
-            setLiveStation({ name: svcName, text: playing?.dls || st.dls || undefined, badge: 'DAB' });
+            // ★ The DAB state report repeats; an unchanged service keeps the same object (renderChurn).
+            const nextLive = { name: svcName, text: playing?.dls || st.dls || undefined, badge: 'DAB' };
+            setLiveStation((cur) => keepIfSameStation(cur, nextLive));
           }
           // ★ FOLLOW THE SERVER'S BLOCK, not our own request. It may have landed elsewhere (a
           //   remembered multiplex on first tune), and a header that names the block we ASKED for
@@ -4745,7 +4787,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         // actually carrying, which is the only figure worth showing.
         const audioKb = audioBytes.current / 1024;
         audioBytes.current = 0;
-        b.emit({ ...b.value, fps, kbps: kbps + audioKb, link: effLink() });
+        /* ★ NOT BEHIND A LOCKED SCREEN. The controller's 1 s timer outlives the spectrum socket it
+         *  measures, so this went on re-rendering every meter on the bus once a second in a pocket —
+         *  the same per-frame-commits-while-backgrounded rule onSpectrum already keeps. The first
+         *  tick after coming forward puts the readout right. */
+        if (appActiveRef.current) b.emit({ ...b.value, fps, kbps: kbps + audioKb, link: effLink() });
       },
       onHwLockedRate: (r: number) => { if (!destroyed.current) setHwLockedRate(r); },
       onHwAgcLocked: (v: boolean) => { if (!destroyed.current) setHwAgcLocked(v); },
@@ -4946,7 +4992,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ AND TO THE WRIST, which until now had no idea a session was timed at all. Someone
         //   listening on headphones with the phone in a pocket gets no other warning.
         watchProvider.sendSession(secs, sessionLimitMins);
-        if (secs < 0) { setSessionEndsAt(null); setSessionLeftMs(null); return; }
+        if (secs < 0) { setSessionEndsAt(null); return; }
         setSessionEndsAt(Date.now() + secs * 1000);
       },
       // ★★★ THE RECEIVER'S OWN TERMS, read from POST /connection at connect (see
@@ -5191,17 +5237,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   fact rather than estimate — and OVERLOAD is what destroys RDS on this radio.
       onRspStat:    (r) => {
         if (destroyed.current) return;
-        setRspSys(r.sysGain); setRspOvl(r.overload); setRspSettling(r.settling);
-        setRspLna(r.lna);
-        // Under AGC the IF reduction is the AGC's to move — follow the radio, do not fight it.
-        if (rspIfAgcRef.current) setRspIfGr(r.ifgr);
-        /* ★ The live front-end state the panel needs to draw itself honestly: who owns the
-         *  notches, how many LNA states THIS BAND has, the AGC's target, and whether the gain
-         *  API has frozen. All of it was already on the wire. */
-        setRspRfNotch(r.rfNotch); setRspDabNotch(r.dabNotch);
-        setRspAutoNotch(r.autoNotch); setRspUserNotch(r.userNotch);
-        setRspRfAgc(r.rfAgc); setRspAgcSet(r.agcSet);
-        setRspLnaN(r.lnaN); setRspGainStuck(r.gainStuck);
+        /* ★★★ ~10 Hz, AND ONLY THE HARDWARE PANEL DRAWS IT. Every field below feeds
+         *  LocalHardwarePanel and nothing else (agcInit aside — see below), but each report went
+         *  straight into screen state: under the RSP's AGC the system gain and IF reduction move
+         *  on most reports, so the WHOLE radio screen re-rendered up to ten times a second, for as
+         *  long as anyone listened to an SDRplay, with the panel shut (power audit, 2026-10-01).
+         *  Now the newest report is KEPT, applied live while the panel is open, and applied the
+         *  moment it opens — so the panel never shows an older reading than before. */
+        rspLatestRef.current = r;
+        if (hwOpenRef.current) applyRspStat(r);
+        // ★ The one field read outside the panel — the (re)initialising notice. A boolean that
+        //   changes rarely, so it costs nothing to keep live.
         setRspAgcInit(r.agcInit);
       },
       // ★★ THE OWNER'S NOTICE. Kept in state rather than shown as a toast: it explains something
@@ -5278,14 +5324,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         //    but the countdown here is driven by the last figure the server sent — so it went on
         //    counting down to a deadline that no longer existed. Cleared on the grant, which is
         //    the same rule the web client follows (clearTimeLeft on admin).
-        // ★★★ CLEAR THE DEADLINE, NOT JUST THE DISPLAY. `sessionLeftMs` is DERIVED: the 1 Hz tick
+        // ★★★ CLEAR THE DEADLINE, NOT JUST THE DISPLAY. The seconds shown are DERIVED: the 1 Hz tick
         //     is keyed on `sessionEndsAt` and recomputes it from that deadline, so clearing only
         //     the display put the countdown back within ONE SECOND and the "YOUR TURN ENDS IN"
         //     badge never went away — the unlock looked like it had done nothing at all (Stuart,
         //     2026-08-14: "it is not resetting the countdown and putting it into admin mode",
         //     with the countdown carrying on unchanged from where it was). Whoever stops a clock
         //     has to stop the thing that WINDS it.
-        if (st.ok) { setSessionEndsAt(null); setSessionLeftMs(null); }
+        if (st.ok) setSessionEndsAt(null);
         if (st.refused) { setAdminRefused(true); setAdminFailReason('wrong'); adminAskedAt.current = 0; }
         else if (!st.ok && adminAskedAt.current && Date.now() - adminAskedAt.current < 10000) {
           // ★ We asked, and the answer is "not admin". On every server that ships today that IS
@@ -5321,7 +5367,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
         liveStationRef.current = stationName ?? '';
         liveBadgeRef.current = meta.badge;
-        setLiveStation({ name: stationName, psRaw: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc });
+        /* ★★ ONLY WHEN SOMETHING DRAWN HAS CHANGED. A VibeServer sends RDS at ~1 Hz — it counts a
+         *  BER or signal-level move as a change, and neither is drawn here — so a steady station
+         *  rebuilt this object every second and re-rendered the whole screen with it, for the
+         *  entire time anyone listened to FM (power audit, 2026-10-01). */
+        const nextLive = { name: stationName, psRaw: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc };
+        setLiveStation((cur) => keepIfSameStation(cur, nextLive));
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
         // RDS messages omit it entirely (undefined) → leave the picker untouched.
@@ -6068,14 +6119,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       .catch(() => {});   // ★ Silent: a Kiwi/OWRX/older VibeServer answers nothing useful here.
     return () => { cancelled = true; };
   }, [connected, connectBase, adminOk]);
-
-  useEffect(() => {
-    if (!sessionEndsAt) return;
-    const tick = () => setSessionLeftMs(Math.max(0, sessionEndsAt - Date.now()));
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [sessionEndsAt]);
 
   // One combined notice covering BOTH constraints — a read-only, time-limited
   // receiver should not produce two popups in a row.
@@ -8041,7 +8084,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         const p = isRemoteShim && connectBase
           ? fetchBookmarks(connectBase)          // somebody else's shim, over HTTP
           : getLearnedBookmarksNow();            // our own, in this process
-        p.then((b) => { if (!cancelled && b.length) setServerBookmarks(b); })
+        /* ★★ AN UNCHANGED LIST KEEPS THE OLD ARRAY. This runs every 30 s for the whole session,
+         *  locked in a pocket included, and each answer is a NEW array — which re-rendered the
+         *  entire screen and re-ran every bookmark merge downstream of it twice a minute, for a
+         *  list that changes when the receiver learns a station (power audit, 2026-10-01). */
+        p.then((b) => { if (!cancelled && b.length) setServerBookmarks((cur) => (sameFlatList(cur, b) ? cur : b)); })
          .catch(() => {});
       };
       load();
@@ -8057,7 +8104,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!isLocal && st === 'ubersdr') {
       const load = () => {
         fetchBookmarks(baseUrl)
-          .then((b: ServerBookmark[]) => { if (!cancelled) setServerBookmarks(b.map((x) => ({ ...x, source: 'server' as const }))); })
+          .then((b: ServerBookmark[]) => {
+            if (cancelled) return;
+            const next = b.map((x) => ({ ...x, source: 'server' as const }));
+            setServerBookmarks((cur) => (sameFlatList(cur, next) ? cur : next));   // ★ see the 30 s poll above
+          })
           .catch(() => { if (!cancelled) setServerBookmarks([]); });
       };
       load();
@@ -10120,7 +10171,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         return (
           <View pointerEvents="none" style={[styles.rxListeners, {
             top: rightStackTop + healthStackShift
-                 + (sessionLeftMs != null && !adminOk ? 52 : 0),
+                 + (sessionEndsAt != null && !adminOk ? 52 : 0),
             right: rightInset,
           }]}>
             {/* ★★ "OF N" IS THE HALF THAT MAKES THE NUMBER MEAN ANYTHING. "2 listening" says
@@ -10136,35 +10187,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         );
       })()}
 
-      {sessionLeftMs != null && !adminOk && (
-        <View pointerEvents="none" style={[styles.rxClock, {
-          top: rightStackTop + healthStackShift,
-          right: rightInset,
-          /* ★★★ A SOFT LIMIT IS A GUARANTEE, NOT A SENTENCE — SO IT MUST NOT COUNT DOWN LIKE ONE.
-                 "YOUR TURN ENDS IN 0:00" sat there on a soft server while nothing whatever
-                 happened, which is worse than saying nothing: it tells the listener they have been
-                 cut off while they are plainly still listening, and it turns good news (you keep
-                 the radio) into an apparent fault. Stuart, looking at exactly that: "we need to
-                 change the wording of the timer for soft limit."
-              ★★ AND NO RED. The urgent colouring says "something is about to be taken from you",
-                 which is true on a hard limit and false on a soft one — there, zero is the moment
-                 a guarantee expires, not the moment anything stops. */
-          borderColor: (!limitSoft && sessionLeftMs < 120_000) ? 'rgba(255,90,90,0.75)'
-                                                              : 'rgba(255,160,0,0.45)',
-        }]}>
-          <Text style={[styles.rxClockCap, {
-            color: (!limitSoft && sessionLeftMs < 120_000) ? 'rgba(255,140,140,0.95)'
-                                                          : 'rgba(255,160,0,0.65)' }]}>
-            {limitSoft ? (sessionLeftMs <= 0 ? 'GUARANTEED TIME OVER' : 'GUARANTEED TIME ENDS IN')
-                       : 'YOUR TURN ENDS IN'}
-          </Text>
-          <Text style={[limitSoft && sessionLeftMs <= 0 ? styles.rxClockSoft : styles.rxClockNum, {
-            color: (!limitSoft && sessionLeftMs < 120_000) ? '#ff6b6b' : '#ffb833' }]}>
-            {limitSoft && sessionLeftMs <= 0
-              ? 'yours until someone else wants it'
-              : `${Math.floor(sessionLeftMs / 60000)}:${String(Math.floor((sessionLeftMs % 60000) / 1000)).padStart(2, '0')}`}
-          </Text>
-        </View>
+      {sessionEndsAt != null && !adminOk && (
+        <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft}
+                      top={rightStackTop + healthStackShift} right={rightInset} />
       )}
 
       {/* ★ NO GAIN-MIN OVERLAY HERE ANY MORE. It became a VTS notice — see the effect that
@@ -11166,6 +11191,60 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
         </PanelBoundary>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * The "YOUR TURN ENDS IN m:ss" badge, counting ITSELF.
+ *
+ * ★★★ A LEAF, SO THE TICK RE-RENDERS A LEAF. The seconds used to be SDRScreen state, so every
+ *  second of a time-limited session re-rendered the whole radio screen — ~300 hooks and every
+ *  child without stable props — to change four characters (power audit, 2026-10-01).
+ * ★★ AND IT DOES NOT TICK BEHIND A LOCKED SCREEN. Background audio keeps the JS thread alive, and a
+ *  1 Hz render nobody can see is pure heat in a pocket. The deadline is absolute (`endsAt`), so the
+ *  first foreground render is exactly right again — nothing is counted, only re-read.
+ * ✗ Display only. Nothing here may act on reaching zero: the SERVER ends a session, and the one
+ *  message that clears the deadline (sessionSecsLeft < 0, or an admin grant) clears `endsAt`.
+ */
+function SessionClock({ endsAt, limitSoft, top, right }:
+    { endsAt: number; limitSoft: boolean; top: number; right: number }) {
+  const [left, setLeft] = useState(() => Math.max(0, endsAt - Date.now()));
+  useEffect(() => {
+    const read = () => setLeft(Math.max(0, endsAt - Date.now()));
+    read();
+    const t = setInterval(() => { if (AppState.currentState === 'active') read(); }, 1000);
+    // ★ Re-read on the way back in, rather than showing a minute-old figure for up to a second.
+    const sub = AppState.addEventListener('change', (st: string) => { if (st === 'active') read(); });
+    return () => { clearInterval(t); sub.remove(); };
+  }, [endsAt]);
+  return (
+    <View pointerEvents="none" style={[styles.rxClock, {
+      top, right,
+      /* ★★★ A SOFT LIMIT IS A GUARANTEE, NOT A SENTENCE — SO IT MUST NOT COUNT DOWN LIKE ONE.
+             "YOUR TURN ENDS IN 0:00" sat there on a soft server while nothing whatever
+             happened, which is worse than saying nothing: it tells the listener they have been
+             cut off while they are plainly still listening, and it turns good news (you keep
+             the radio) into an apparent fault. Stuart, looking at exactly that: "we need to
+             change the wording of the timer for soft limit."
+          ★★ AND NO RED. The urgent colouring says "something is about to be taken from you",
+             which is true on a hard limit and false on a soft one — there, zero is the moment
+             a guarantee expires, not the moment anything stops. */
+      borderColor: (!limitSoft && left < 120_000) ? 'rgba(255,90,90,0.75)'
+                                               : 'rgba(255,160,0,0.45)',
+    }]}>
+      <Text style={[styles.rxClockCap, {
+        color: (!limitSoft && left < 120_000) ? 'rgba(255,140,140,0.95)'
+                                           : 'rgba(255,160,0,0.65)' }]}>
+        {limitSoft ? (left <= 0 ? 'GUARANTEED TIME OVER' : 'GUARANTEED TIME ENDS IN')
+                   : 'YOUR TURN ENDS IN'}
+      </Text>
+      <Text style={[limitSoft && left <= 0 ? styles.rxClockSoft : styles.rxClockNum, {
+        color: (!limitSoft && left < 120_000) ? '#ff6b6b' : '#ffb833' }]}>
+        {limitSoft && left <= 0
+          ? 'yours until someone else wants it'
+          : `${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`}
+      </Text>
     </View>
   );
 }

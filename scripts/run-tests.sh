@@ -221,6 +221,10 @@ if node --no-warnings scripts/test_faceplate_status.ts; then pass=$((pass+1)); e
 #     pick and Siri are refused on a shared dial with others listening (and on spectator / listen-only),
 #     as FM-DX's always were; alone or exclusive they work; the native switch and a press agree.
 if node --no-warnings scripts/test_blindTuneGate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ "IS THIS ACTUALLY NEWS?" (renderChurn.ts): a repeated RDS label / bookmark list keeps the old
+#    object so the radio screen does not re-render for it, any drawn change still gets through, and
+#    the controls-bar clock re-renders on the minute, not every second (power audit, 2026-10-01).
+if node --no-warnings scripts/test_renderChurn.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
