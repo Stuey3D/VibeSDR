@@ -253,6 +253,12 @@ if node --no-warnings scripts/test_connectionRefresh.ts; then pass=$((pass+1)); 
 #    plain line, and the web pill dropping band → RDS mark → flag only as far as its measured widths
 #    demand (2026-10-01).
 if node --no-warnings scripts/test_vtsLine.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE SHARED CHUNK CACHE (chunkCache.ts / chunkVerify.ts / directory store.html): a stored map or
+#     admin chunk runs ONLY if it hashes to this server's own page; the build's embedded hash is the
+#     served file's (web/dist AND vibe_web_page.h); server B loads from the store with zero fetches; a
+#     tampered entry is refused and refetched; the store answers only *.vibeserver.vibesdr.net. Needs
+#     web/dist (node scripts/build-web.mjs).
+if node --no-warnings scripts/test_chunk_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
@@ -268,6 +274,14 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     /r/<id>/ prefix as well. Same VIBESERVER_BIN rule as above: not run without one.
 printf '\n\033[1m── web client serving (end to end) ──\033[0m\n'
 node scripts/test-web-serving.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
+# ★★★ THE SHARED CHUNK CACHE IN A REAL BROWSER, ACROSS REAL SERVERS: two vibeservers behind a local
+#     https front as a/b/c.vibeserver.vibesdr.net, this tree's store.html as the directory's. Server B
+#     opens the map and the admin panel with ZERO requests for either; a tampered IndexedDB entry is
+#     not run on C. Headless Edge, --mute-audio, throwaway profile. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── shared chunk cache (real browser) ──\033[0m\n'
+node scripts/test-web-chunk-cache.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the

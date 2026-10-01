@@ -19,6 +19,7 @@ import { build } from 'esbuild';
 import { shrinkHtml } from './lib/shrink-html.mjs';
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import zlib from 'node:zlib';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,9 +138,18 @@ async function bundle() {
   // from the codec policy). It is allowed ONLY behind a typeof guard, which is how audio.ts uses
   // it; the WASM decoder is the path that always works.
   const banned = [
-    ['crypto.subtle', 'use src/services/vibeAuth.ts (pure-JS HMAC) instead'],
     ['randomUUID',    'use getRandomValues(); randomUUID is secure-context-only'],
   ];
+  // ★★ crypto.subtle is secure-context-only too — so it may appear ONLY in a file that also tests
+  //    isSecureContext (chunkCache.ts does: the shared chunk cache exists only on https VibeSDR.net
+  //    pages, and a LAN http page simply never uses it). For hashing on a LAN page use
+  //    src/services/vibeAuth.ts (pure-JS HMAC) instead.
+  for (const f of res.outputFiles) {
+    if (f.text.includes('crypto.subtle') && !f.text.includes('isSecureContext')) {
+      throw new Error(`crypto.subtle without an isSecureContext test in ${path.basename(f.path)} — `
+                    + 'it is undefined on a plain-http LAN page; guard it, or use src/services/vibeAuth.ts');
+    }
+  }
   const guardedOnly = [
     ['AudioDecoder', 'WebCodecs is secure-context-only — guard with `typeof AudioDecoder === "undefined"` '
                    + 'and fall back to the WASM decoder (opus-decoder)'],
@@ -179,6 +189,8 @@ async function bundle() {
   };
   walk(entry.name);
 
+  const chunkManifest = cacheManifest(res, files);
+
   // ★★ THE SHIPPED PAGE CARRIES NO COMMENTS AND NO INDENTATION — see scripts/lib/shrink-html.mjs.
   //    The ★ notes stay in index.html, where they are read; a listener's link never carried them
   //    to anybody. `--dev` keeps the page as written, so a dev build can still be read in devtools.
@@ -211,7 +223,12 @@ async function bundle() {
             + `e.textContent='This page did not finish loading. Refresh to try again.';`
             + `e.style.cssText='position:fixed;left:0;right:0;bottom:0;padding:12px;background:#300;color:#ffb833;font:14px monospace;text-align:center;z-index:99999';`
             + `document.body.appendChild(e)};document.body.appendChild(s)}go(0)})()</script>`;
-  let out = html.replace(/<\/title>/, (m) => m + preload);
+  // ★★★ THE SHARED CHUNK CACHE's manifest (chunkCache.ts): the exact SHA-256 of each cacheable
+  //     chunk this server serves. A copy from the cross-server store runs only if it hashes to THIS.
+  //     In the HTML, not in a script: a chunk's hash cannot live inside a script that the chunk
+  //     itself imports (the admin chunk imports the shared chunk by name — a cycle of hashes).
+  const manifestTag = `<script type="application/json" id="vs-chunks">${JSON.stringify(chunkManifest)}</script>`;
+  let out = html.replace(/<\/title>/, (m) => m + preload + manifestTag);
   if (out === html) throw new Error('no </title> in index.html — where does the preload go?');
   const out2 = out.replace(/<script type="module" src="\.\/src\/main\.ts"><\/script>\s*$/, () => run + '\n');
   if (out2 === out) throw new Error('script tag not found in index.html — did the tag change?');
@@ -258,6 +275,44 @@ async function bundle() {
 
   await emitCppHeader(assets);
   return assets;
+}
+
+/**
+ * ★★★ THE CHUNKS EVERY VibeSDR.net SERVER SHARES THROUGH THE DIRECTORY'S STORE (chunkCache.ts) —
+ *     name → the source module whose import() made the chunk. Only these; only by their exact hash.
+ *  ★ The Opus decoder is left out on purpose — see chunkCache.ts.
+ */
+const CACHEABLE = {
+  vibemap: 'web/client/src/generated/vibemapSource.ts',
+  admin:   'web/client/src/admin.ts',
+};
+
+/** { name: { file, sha256, size, rewrite } } for every CACHEABLE chunk, checked so the page can run it
+ *  from a blob: URL: every chunk it imports is listed (and present, quoted, in its text) for the page
+ *  to make absolute, and nothing in it depends on its own URL. */
+function cacheManifest(res, files) {
+  const out = {};
+  for (const [name, src] of Object.entries(CACHEABLE)) {
+    const want = path.join(root, src);
+    const hit = Object.entries(res.metafile.outputs)
+      .find(([, o]) => o.entryPoint && path.resolve(o.entryPoint) === want);
+    if (!hit) throw new Error(`chunk cache: no output chunk for ${src} — is it still loaded with import()?`);
+    const [key, o] = hit;
+    const file = path.basename(key);
+    const f = files.find((x) => x.name === file);
+    const text = f.bytes.toString('latin1');
+    const rewrite = [...new Set(o.imports.map((i) => './' + path.basename(i.path)))];
+    for (const spec of rewrite) {
+      if (!/^\.\/c-[A-Z0-9]+\.js$/.test(spec)) throw new Error(`chunk cache: ${file} imports ${spec}, not a chunk`);
+      if (!text.includes(JSON.stringify(spec))) throw new Error(`chunk cache: ${file} does not quote ${spec} as expected`);
+    }
+    // ★ A blob: module's import.meta.url is the blob, and a relative URL in it resolves to nothing.
+    if (/import\.meta/.test(text)) throw new Error(`chunk cache: ${file} uses import.meta — it cannot run from a blob: URL`);
+    const left = text.match(/"\.\.?\/c-[A-Z0-9]+\.js"/g)?.filter((m) => !rewrite.includes(m.slice(1, -1)));
+    if (left?.length) throw new Error(`chunk cache: ${file} has chunk URLs nobody will rewrite: ${left.slice(0, 3).join(' ')}`);
+    out[name] = { file, sha256: createHash('sha256').update(f.bytes).digest('hex'), size: f.bytes.length, rewrite };
+  }
+  return out;
 }
 
 /**

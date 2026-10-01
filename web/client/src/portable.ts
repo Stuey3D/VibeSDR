@@ -81,6 +81,8 @@ let resetPending = false;
  *  Drops this server's VIEW overrides only — bookmarks are not involved. */
 let viewPending = false;
 let frame: HTMLIFrameElement | null = null;
+/** Resolves when the store frame has loaded (set when portableReady creates it). */
+let frameLoaded: Promise<void> | null = null;
 let ready: Promise<boolean> | null = null;
 let seq = 0;
 const waiting = new Map<number, (v: any) => void>();
@@ -90,14 +92,27 @@ export function onVibeDomain(): boolean {
   return h.endsWith('.vibeserver.vibesdr.net') && location.protocol === 'https:';
 }
 
-function ask(msg: Record<string, unknown>, timeoutMs = 1500): Promise<any> {
+function ask(msg: Record<string, unknown>, timeoutMs = 1500, transfer: Transferable[] = []): Promise<any> {
   return new Promise((resolve) => {
     if (!frame?.contentWindow) return resolve(null);
     const id = ++seq;
     const t = setTimeout(() => { waiting.delete(id); resolve(null); }, timeoutMs);
     waiting.set(id, (v) => { clearTimeout(t); resolve(v); });
-    frame.contentWindow.postMessage({ ...msg, id }, DIRECTORY);
+    // ★ targetOrigin is the DIRECTORY, always: if the frame is anything else, the message is dropped.
+    frame.contentWindow.postMessage({ ...msg, id }, DIRECTORY, transfer);
   });
+}
+
+/** One request to the store frame, answered within `timeoutMs` in TOTAL (frame load included) or
+ *  null. For the shared chunk cache (chunkCache.ts): a store that is not up yet is a miss, never a
+ *  wait — so it does not create the frame, only uses the one portableReady() made at start-up. */
+export async function storeRequest(msg: Record<string, unknown>, timeoutMs: number,
+                                   transfer: Transferable[] = []): Promise<any> {
+  if (!onVibeDomain() || !frameLoaded) return null;
+  const t0 = performance.now();
+  const up = await Promise.race([frameLoaded.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), timeoutMs))]);
+  if (!up) return null;
+  return ask(msg, Math.max(1, timeoutMs - (performance.now() - t0)), transfer);
 }
 
 /** Load MASTER once. Resolves false (and changes nothing) off the VibeSDR domain, or if the store does not
@@ -120,6 +135,7 @@ export function portableReady(): Promise<boolean> {
     frame.style.display = 'none';
     frame.setAttribute('aria-hidden', 'true');
     const loaded = new Promise<void>((r) => { frame!.onload = () => r(); });
+    frameLoaded = loaded;
     document.body.appendChild(frame);
     await Promise.race([loaded, new Promise((r) => setTimeout(r, 2000))]);
     const got = await ask({ op: 'get' });

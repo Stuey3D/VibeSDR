@@ -26,6 +26,20 @@
       ★★ The cookie goes to vibeserver.vibesdr.net with GET /store, so it is kept small: deflated when the
          browser can, split into ≤ 8 cookies of < 4 KB. A bookmark list too big for that stays out of the
          cookie (logged) rather than breaking the store's own page load.
+
+  ★★★ THE SHARED CHUNK CACHE (web/client/src/chunkCache.ts, 2026-10-01) — the map renderer and the admin
+      panel's code, fetched once for EVERY server instead of once per server (Stuart: "fetch once, store
+      it in the same storage the settings and bookmarks use, so it loads once for ANY server you go to").
+      ★ In IndexedDB, NOT localStorage: ~140 KB of script must never compete with the settings and
+        bookmarks for localStorage's ~5 MB, nor be able to make a settings write fail on quota. A chunk
+        failure of any kind is answered { ok: false } and the page fetches from its own server.
+      ★★★ KEYED BY THE SHA-256 OF THE BYTES, and a put whose bytes do not hash to its key is refused
+          here. That is a courtesy, not the security: ANY *.vibeserver.vibesdr.net page can talk to this
+          frame, so the reading page checks the hash AGAIN against its own build before running a byte.
+          This frame never decides what runs; it only keeps what it was given under the name it proved.
+      ★ Bounded: ≤ 512 KB a chunk, the 2 most recently used of each name, ≤ 1.5 MB in all.
+      ★ Safari partitions this frame's IndexedDB by the page around it, so there it is per server — the
+        same as the HTTP cache it duplicates, and harmless.
 -->
 <script>
 (function () {
@@ -113,9 +127,87 @@
     var lsOk = lsSave(rec);
     return ckSave(rec).then(function (ckOk) { return lsOk || ckOk; });
   }
+  // ── THE SHARED CHUNK CACHE (see the note at the top) ────────────────────────────────────────────
+  var CDB = 'vsChunks', CST = 'chunks', CMAX = 512 * 1024, CTOTAL = 1536 * 1024, CKEEP = 2;
+  var SHA = /^[0-9a-f]{64}$/, CNAME = /^[a-z0-9-]{1,32}$/;
+  var dbp = null;
+  function db() {
+    if (!dbp) dbp = new Promise(function (res, rej) {
+      if (typeof indexedDB === 'undefined') return rej(new Error('no IndexedDB'));
+      var q = indexedDB.open(CDB, 1);
+      q.onupgradeneeded = function () { q.result.createObjectStore(CST, { keyPath: 'sha' }); };
+      q.onsuccess = function () { res(q.result); };
+      q.onerror = function () { rej(q.error); };
+      q.onblocked = function () { rej(new Error('IndexedDB blocked')); };
+    }).catch(function (e) { dbp = null; throw e; });
+    return dbp;
+  }
+  function req(r) { return new Promise(function (res, rej) { r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); }; }); }
+  function done(tx) { return new Promise(function (res, rej) { tx.oncomplete = res; tx.onerror = tx.onabort = function () { rej(tx.error); }; }); }
+  function hex(buf) { var b = new Uint8Array(buf), s = ''; for (var i = 0; i < b.length; i++) s += (b[i] < 16 ? '0' : '') + b[i].toString(16); return s; }
+  /* ★ The policy, pure: which records to drop so each name keeps its CKEEP newest and all fit in
+     CTOTAL. `all` is [{ sha, name, size, used }]. Kept here as one function so it can be tested. */
+  function evictions(all) {
+    var drop = {}, byName = {}, total = 0;
+    all = all.slice().sort(function (a, b) { return b.used - a.used; });   // newest first
+    all.forEach(function (c) {
+      var n = (byName[c.name] = (byName[c.name] || 0) + 1);
+      if (n > CKEEP || total + c.size > CTOTAL) { drop[c.sha] = 1; return; }
+      total += c.size;
+    });
+    return Object.keys(drop);
+  }
+  function chunkGet(d) {
+    if (typeof d.sha !== 'string' || !SHA.test(d.sha)) return Promise.resolve({ ok: false });
+    return db().then(function (h) {
+      var tx = h.transaction(CST, 'readwrite'), st = tx.objectStore(CST);
+      return req(st.get(d.sha)).then(function (c) {
+        if (!c || !(c.bytes instanceof ArrayBuffer)) return done(tx).then(function () { return { ok: false }; });
+        c.used = Date.now(); st.put(c);                 // ★ most recently used — what eviction keeps
+        return done(tx).then(function () { return { ok: true, bytes: c.bytes }; });
+      });
+    });
+  }
+  function chunkPut(d) {
+    var b = d.bytes;
+    if (typeof d.sha !== 'string' || !SHA.test(d.sha) || typeof d.name !== 'string' || !CNAME.test(d.name)
+        || !(b instanceof ArrayBuffer) || !b.byteLength || b.byteLength > CMAX || !(crypto && crypto.subtle)) {
+      return Promise.resolve({ ok: false });
+    }
+    return crypto.subtle.digest('SHA-256', b).then(function (dg) {
+      if (hex(dg) !== d.sha) { console.warn('portable store: refused a chunk whose bytes do not match its hash'); return { ok: false }; }
+      return db().then(function (h) {
+        var tx = h.transaction(CST, 'readwrite'), st = tx.objectStore(CST);
+        st.put({ sha: d.sha, name: d.name, size: b.byteLength, used: Date.now(), bytes: b });
+        return done(tx).then(function () {
+          var tx2 = h.transaction(CST, 'readwrite'), st2 = tx2.objectStore(CST), all = [];
+          st2.openCursor().onsuccess = function (ev) {
+            var cur = ev.target.result;
+            if (!cur) { evictions(all).forEach(function (k) { st2.delete(k); }); return; }
+            all.push({ sha: cur.value.sha, name: cur.value.name, size: cur.value.size, used: cur.value.used });
+            cur.continue();
+          };
+          return done(tx2);
+        }).then(function () { return { ok: true }; });
+      });
+    });
+  }
+  window.addEventListener('message', function (e) {
+    if (!OK.test(e.origin) || !e.data || typeof e.data.id !== 'number') return;
+    var d = e.data;
+    if (d.op !== 'chunkGet' && d.op !== 'chunkPut') return;     // the settings listener below has the rest
+    (d.op === 'chunkGet' ? chunkGet(d) : chunkPut(d))
+      .catch(function (err) { console.warn('portable store: %s failed', d.op, err); return { ok: false }; })
+      .then(function (r) {
+        r.id = d.id;
+        e.source.postMessage(r, e.origin, r.bytes ? [r.bytes] : []);
+      });
+  });
+
   var queue = Promise.resolve();   // ★ one operation at a time: a read-modify-write must not interleave
   window.addEventListener('message', function (e) {
     if (!OK.test(e.origin) || !e.data || typeof e.data.id !== 'number') return;
+    if (e.data.op === 'chunkGet' || e.data.op === 'chunkPut') return;   // the chunk cache's, above
     var d = e.data, r = { id: d.id, ok: false };
     queue = queue.then(function () { return load(); }).then(function (l) {
       var s = l.rec;

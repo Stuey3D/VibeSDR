@@ -20,6 +20,7 @@ import { isoToFlag } from '../../../src/services/rdsCountry';
 import { httpBase } from './origin';
 import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
 import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
+import { loadVibemapSource } from './chunkCache';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
  *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
@@ -28,7 +29,7 @@ import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
  *     only an admin who opens the Leaflet map ever downloads it — never a listener. */
 async function ensureVibeMap(): Promise<void> {
   if ((window as any).VibeMap) return;
-  const { VIBEMAP_JS } = await import('./generated/vibemapSource');
+  const { VIBEMAP_JS } = await loadVibemapSource();   // ★ shared, verified cache (chunkCache.ts)
   if ((window as any).VibeMap) return;
   const el = document.createElement('script');
   el.textContent = VIBEMAP_JS;
