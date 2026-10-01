@@ -35,6 +35,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <cstdlib>
 #include <ctime>
 #include <random>
@@ -170,6 +171,22 @@ struct Sig {
 /** Streams IQ: a broadcast at kOffsetHz, FM-modulated at 75 kHz per unit MPX. */
 struct Gen {
     Sig sig; double fs; long n = 0; double ph = 0.0; double mpxPeak = 0.0;
+    /** ★★★ THE PEAK AS THE METER NOW DEFINES IT (2026-10-01): per 50 ms window, the level the composite
+     *  reaches for 125 µs IN TOTAL — MPXtool's default peak response — and the highest of those. `mpxPeak`
+     *  (the instantaneous maximum) was the truth until then, and it is exactly the definition Onfliner's
+     *  side-by-side proved wrong: a sum of steady tones lines up for a few samples once in a while, and
+     *  an instrument reading that read 1-8 kHz above MPXtool on air. It stays as the CEILING for the
+     *  dropped-block check, where "never above the signal's own maximum" is the right question. */
+    double mpxPeak125 = 0.0;
+    std::vector<float> win;
+    void closeWin() {
+        const size_t k = (size_t)std::lround(125e-6 * fs);
+        if (win.size() > k) {
+            std::nth_element(win.begin(), win.begin() + (long)k, win.end(), std::greater<float>());
+            mpxPeak125 = std::max(mpxPeak125, (double)win[k]);
+        }
+        win.clear();
+    }
     double offset = kOffsetHz;   // where the station sits in the capture (0 = at DC)
     std::mt19937 rng{11};
     std::vector<cf32> hist; int hi = 0;   // the echo's delay line
@@ -190,7 +207,11 @@ struct Gen {
             const double mpx = 0.9 * (0.5 * (L + R) + 0.5 * (L - R) * std::cos(2 * wp))
                              + aP * std::cos(wp)
                              + aR * W.at(t * kFb * clk) * std::cos(3 * wp * clk + sig.rdsPhaseDeg * M_PI / 180.0);
-            if (t > 0.01) mpxPeak = std::max(mpxPeak, std::fabs(mpx));
+            if (t > 0.01) {
+                mpxPeak = std::max(mpxPeak, std::fabs(mpx));
+                win.push_back((float)std::fabs(mpx));
+                if (win.size() >= (size_t)(0.05 * fs)) closeWin();
+            }
             ph += 2 * M_PI * (offset + 75000.0 * mpx) / fs;
             if (ph > M_PI) ph -= 2 * M_PI; else if (ph < -M_PI) ph += 2 * M_PI;
             double re = 0.5 * std::cos(ph), im = 0.5 * std::sin(ph);
@@ -265,7 +286,7 @@ Reading run(double fs, double bw, double autoBw, const Sig& sig, double seconds,
     cap.r.dropped = rx.measureDropped();
 #endif
     rx.stop();
-    if (truthPeak) *truthPeak = gen.mpxPeak * 75.0;
+    if (truthPeak) *truthPeak = gen.mpxPeak125 * 75.0;   // ★ the 125 µs peak — see Gen::mpxPeak125
     return cap.r;
 }
 
