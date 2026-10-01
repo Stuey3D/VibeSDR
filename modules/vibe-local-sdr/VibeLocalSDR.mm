@@ -242,8 +242,11 @@ static VibeFpsRequest vibeFpsRequestOf(CADisplayLink *link) {
 static CAFrameRateRange vibeFpsClamp(CAFrameRateRange r, float cap) {
   if (cap <= 0) return r;
   // The default range means "as fast as the panel goes": under a cap, that is the cap.
+  // ★ The cap is a CEILING, never a fixed rate (Stuart: "lock it to 60 … UP TO 60; any drops lower than
+  //   60 the refresh rate drops as it would normally"): the floor stays low so the system can still
+  //   step a quiet screen down the way ProMotion does without the cap.
   if (r.maximum <= 0 || CAFrameRateRangeIsEqualToRange(r, CAFrameRateRangeDefault))
-    return CAFrameRateRangeMake(cap / 2, cap, cap);
+    return CAFrameRateRangeMake(MIN(10.0f, cap), cap, cap);
   float mx = MIN(r.maximum, cap);
   return CAFrameRateRangeMake(MIN(r.minimum, mx), mx, r.preferred > 0 ? MIN(r.preferred, mx) : r.preferred);
 }
