@@ -369,6 +369,16 @@ plate, with each key in its own dark slot; the well's **outer ring glows in the 
 marking these as the primary controls. That's the drum well's own border and glow (§6.1), kept
 exactly as it is when the drum is swapped for keys. Same on black and default; it reads best on silver.
 
+★★★ **SUPERSEDED 2026-10-01 — the ring is gone** (Stuart: "try removing the outline ring that surrounds
+both buttons and replace it with a glow coming up in the panel gap around each button, also apply that
+same lighting to all the buttons please"). No well has a ring or glow on any chassis (the §6.1 table's
+"glow ring" too); the drum keeps only the metal's dark cut. Instead EVERY front-panel key (‹ › − +,
+step, cog, audio, chat) is lit by warm light coming up out of the panel gap round it, and when pressed
+the light floods out of the wider gap the press opens and over the key's edges. The radio / magnifier
+between the tuner keys are laser-etched legends, backlit as before with a gentle bleed onto the case.
+Transparency effects on only. Numbers and rules: `src/constants/keyLight.ts`; tests:
+`scripts/test_faceplate_wells.ts`.
+
 ---
 
 ## 7. Display styles

@@ -3,11 +3,11 @@
  * DrumWheel (briefs/BRIEF-inputs-shack-mode-mac.md §2), and deliberately NOT the app's
  * standard buttons.
  *
- *   ┌───────────────────────────────────┐  ← THE DRUM WELL'S OWN face, border and
- *   │ ┌──────┐               ┌──────┐ │    glow (faceplates §6.2): the drum is
- *   │ │  ‹   │    ·glyph·    │  ›   │ │    swapped for two keys, nothing else
- *   │ └──────┘               └──────┘ │    changes — the recess and the ring stay
- *   └───────────────────────────────────┘
+ *   ┌───────────────────────────────────┐  ← THE DRUM WELL'S OWN face (faceplates
+ *   │ ┌──────┐               ┌──────┐ │    §6.2) — and, since 2026-10-01, NO ring:
+ *   │ │  ‹   │    ·glyph·    │  ›   │ │    each key is lit on its own instead, by
+ *   │ └──────┘               └──────┘ │    the light coming up out of the panel
+ *   └───────────────────────────────────┘    gap round it (constants/keyLight.ts)
  *
  * One instance renders ONE control pair — `<` `>` for VFO, `−` `+` for zoom —
  * with that pair's static glyph between them (radio = tune, magnifier = zoom).
@@ -18,10 +18,17 @@
  *   release clicks (DomeKey / useDomeKey). Each sits in its own dark slot INSIDE the well's
  *   recessed face, a step below the plate, 31 % of the well wide (34 % in landscape), full height.
  *   The legends and the glyph between are in the CONTROLS colour, on every chassis.
- * ★★★ Stuart, 2026-09-30: "I really like on the silver how they look like they are set into a slight
- *   recess … and have a ring around them to indicate their importance." The ring is the drum
- *   well's own border and glow (components/DrumWell.tsx WellEdge) — one implementation, so the
- *   keys well can never drift from the drum well beside it.
+ * ★★★ Stuart, 2026-10-01 — the RING IS GONE: "try removing the outline ring that surrounds both
+ *   buttons and replace it with a glow coming up in the panel gap around each button, also apply that
+ *   same lighting to all the buttons please." (It was the drum well's border and glow, 2026-09-30's
+ *   "ring around them to indicate their importance".) Each key is now marked by its own light, exactly
+ *   as every other front-panel key is (DomeKey `lightReach`); the default chassis's keys sit in their
+ *   own dark slots, so there the SLOT is the cut-out the light comes up round (DomeKey `lightSlot`).
+ * ★★ THE GLYPH BETWEEN THE KEYS IS LASER-ETCHED (Stuart, 2026-10-01): the radio / magnifier is cut into
+ *   the case and the same lamp shines THROUGH the cut — the strokes are the lit part, in the controls
+ *   colour, backlit exactly as before; with Transparency effects on, a gentle glow bleeds out of the
+ *   etching onto the case round it (constants/keyLight.ts ETCH_LIGHT), rasterised ONCE (useEtchGlow).
+ *   It is a printed legend, not a key: no panel-gap light of its own.
  * ★ The previous look (tilted matte-black keys with laser-cut backlit legends, a plain machined
  *   edge) is retired by the brief: §5 makes every key on the deck the one dome key.
  *
@@ -30,16 +37,19 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, ViewStyle } from 'react-native';
-import { Canvas, Path, Skia, BlurMask } from '@shopify/react-native-skia';
+import { Canvas, Path, Skia, BlurMask, Image as SkImageNode, PaintStyle, StrokeCap, StrokeJoin,
+  type SkImage, type SkPath } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import { getControlHaptics } from './controlHaptics';
 import { buildGlyphPath } from './DrumWheel';
 import { DomeKey, DomeIcon, type IconStroke } from './DomeKey';
-import { WellFace, WellEdge } from './DrumWell';
+import { WellFace } from './DrumWell';
+import { glowPaint, makeSprite } from './glowSprite';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { useUiScale } from '../hooks/useUiScale';
-import { ledA } from '../constants/faceplate';
-import { tunerKeysLayout, wellOutset, TK_SLOT_R } from '../constants/drumWell';
+import { ledA, type LedColour } from '../constants/faceplate';
+import { tunerKeysLayout, TK_SLOT_R } from '../constants/drumWell';
+import { DECK_MIN_GAP, ETCH_LIGHT, keyLightReach } from '../constants/keyLight';
 
 // ── Look ──────────────────────────────────────────────────────────────────────
 // ★ The colours are the faceplate's (constants/faceplate.ts): the well's face and edge are the drum
@@ -270,9 +280,11 @@ export default function TunerKeys({
   }
 
   const dim = disabled ? 0.35 : 1;
-  // ★ The ring is LIT (drumWell.ts RING_LIGHT) while Transparency effects are on; off = the flat ring.
-  const ringLit = fp.settings.transparency === 'on';
-  const M = wellOutset(ct, ringLit);
+  // ★ The keys are LIT (constants/keyLight.ts) while Transparency effects are on. With the ring gone, a
+  //   key's nearest neighbour outside the well is the padding away plus at least the deck's tightest gap
+  //   (DECK_MIN_GAP — test_faceplate_wells checks every layout), so the light takes its share of that.
+  const lit = fp.settings.transparency === 'on';   // (the etched glyph's glow; DomeKey reads it for the keys)
+  const lightReach = keyLightReach(L.pad + DECK_MIN_GAP);
   // Default: today's outline key sits in its own dark slot (Deck.mockup `t.slot`, cap inset
   // 2 / 1.5 / 3). Metal: DomeKey's cap already sits in its slot, so it IS the slot.
   const slot = ct.keysSlot;
@@ -286,24 +298,19 @@ export default function TunerKeys({
       {/* ── The well's face (static) and the glyph that labels the pair ── */}
       <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
         <WellFace W={W} H={H} ct={ct} keys />
-        {/* Centre glyph — static, non-interactive, in the controls colour: glow BEHIND a crisp
-            stroke, as the drum's icon is drawn. */}
-        <Path path={glyphPath} color={G(0.55 * dim)} strokeWidth={2.6} style="stroke"
-              strokeCap="round" strokeJoin="round">
-          <BlurMask blur={3} style="normal" respectCTM />
-        </Path>
+        {/* Centre glyph — static, non-interactive, LASER-ETCHED and backlit in the controls colour:
+            today's glow BEHIND a crisp stroke, as the drum's icon is drawn. Lit, the glow and the
+            light bleeding out of the etching come from one sprite (useEtchGlow); unlit, today's
+            drawing exactly. */}
+        {lit
+          ? <EtchGlow path={glyphPath} W={W} H={H} led={fp.controls} dim={dim} />
+          : <Path path={glyphPath} color={G(0.55 * dim)} strokeWidth={2.6} style="stroke"
+                  strokeCap="round" strokeJoin="round">
+              <BlurMask blur={3} style="normal" respectCTM />
+            </Path>}
         <Path path={glyphPath} color={G(0.95 * dim)} strokeWidth={1.4} style="stroke"
               strokeCap="round" strokeJoin="round" />
       </Canvas>
-
-      {/* ── The well's edge — the drum well's own border, ring and glow, EXACTLY (§6.2: "kept
-          exactly as it is when the drum is swapped for keys"). M larger for the metal glow. ── */}
-      <View pointerEvents="none"
-            style={{ position: 'absolute', left: -M, top: -M, width: W + 2 * M, height: H + 2 * M }}>
-        <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
-          <WellEdge W={W} H={H} M={M} ct={ct} led={fp.controls} lit={ringLit} />
-        </Canvas>
-      </View>
 
       {/* ── The two keys, each in its own dark slot, a step below the plate ── */}
       {([-1, 1] as const).map(dir => (
@@ -312,7 +319,11 @@ export default function TunerKeys({
                        width: L.keyW, height: L.keyH, opacity: dim,
                        ...(slot ? { backgroundColor: slot, borderRadius: TK_SLOT_R,
                                     paddingTop: capInset.top, paddingHorizontal: capInset.x } : null) }}>
+          {/* ★ The light is DomeKey's, as on every front-panel key. Default: the dark SLOT is the
+              cut-out the light comes up round and in (lightSlot); metal: the key IS its slot. */}
           <DomeKey
+            lightReach={lightReach}
+            lightSlot={slot ? { x: capInset.x, top: capInset.top, bottom: capInset.bottom, r: TK_SLOT_R } : undefined}
             height={capH} radius={slot ? TK_SLOT_R - 1 : TK_SLOT_R}
             style={slot ? { borderRadius: TK_SLOT_R - 1 } : { width: L.keyW }}
             disabled={disabled}
@@ -333,4 +344,35 @@ export default function TunerKeys({
       ))}
     </View>
   );
+}
+
+/**
+ * The etched glyph's light, rasterised ONCE per well size × glyph × colour: today's glow behind the
+ * strokes (α .55, blur 3) and, wider and fainter, the light bleeding out of the etching onto the case
+ * (ETCH_LIGHT). The crisp lit strokes are drawn over it, live (they are cheap; the blur is not).
+ * ★ `dim` (a disabled pair) is applied as the image's opacity — never a rebuild.
+ */
+function useEtchGlow(path: SkPath, W: number, H: number, led: LedColour): SkImage | null {
+  const key = ledA(led, 1);
+  const pathKey = path.toSVGString();
+  return useMemo(() => {
+    if (!(W > 2) || !(H > 2)) return null;
+    // The well's own size: the glyph sits in its middle with more than ETCH_LIGHT.reach clear all round
+    // (test_faceplate_wells), and the keys either side are drawn over any bleed that reaches them.
+    return makeSprite(W, H, (c) => {
+      for (const l of [ETCH_LIGHT.bleed, ETCH_LIGHT.glow]) {
+        const p = glowPaint(ledA(led, l.a), l.blur);
+        p.setStyle(PaintStyle.Stroke); p.setStrokeWidth(l.width);
+        p.setStrokeCap(StrokeCap.Round); p.setStrokeJoin(StrokeJoin.Round);
+        c.drawPath(path, p);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathKey, W, H, key]);
+}
+
+function EtchGlow({ path, W, H, led, dim }: { path: SkPath; W: number; H: number; led: LedColour; dim: number }) {
+  const img = useEtchGlow(path, W, H, led);
+  if (!img) return null;
+  return <SkImageNode image={img} x={0} y={0} width={W} height={H} opacity={dim} />;
 }

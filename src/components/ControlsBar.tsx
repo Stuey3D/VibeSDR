@@ -45,6 +45,7 @@ import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
 import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import type { SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
+import { keyLightReach } from '../constants/keyLight';
 import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
 import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
@@ -1543,10 +1544,14 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   const ICON_SZ    = Math.round(s.r(20) * dl.legendScale);
   // ★ §4.1 TRAP: a 34 pt key is below 44 pt — its hitSlop reaches into the gaps round it.
   const keySlop    = dl.compact ? compactKeyHitSlop(KEY_SLOT, ROW_GAP, COL_GAP) : undefined;
+  // ★★ THE PANEL-GAP LIGHT (constants/keyLight.ts): each key's light may take its share of the tightest
+  //   gap round it — the row gap to the display above and the drums below, the column gap to its
+  //   neighbours — so two keys' lights never run together into one glowing bar.
+  const lightReach = keyLightReach(Math.min(ROW_GAP, COL_GAP));
   const keyProps   = dl.compact
-    ? { height: KEY_SLOT, radius: s.r(8), hitSlop: keySlop && { top: keySlop.top, bottom: keySlop.bottom,
+    ? { height: KEY_SLOT, radius: s.r(8), lightReach, hitSlop: keySlop && { top: keySlop.top, bottom: keySlop.bottom,
                                                                left: keySlop.left, right: keySlop.right } }
-    : { height: KEY_SLOT, minHeight: true };
+    : { height: KEY_SLOT, minHeight: true, lightReach };
   // Freq/mode sizing — read from theme so white mode can increase them
   // Pill sized to leave the signal bar visible around it (the white theme's
   // 28pt/168w pill covered the whole frame — screenshots 2026-06-11; 23/138
@@ -1850,6 +1855,9 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
        thing that makes the bar taller. On a cap key (silver / black) the legends are the mockup's
        78 % of the portrait legend, inside the cap (the slot less its 2 pt inset top and bottom). */
   const KEY_H     = lay.keyH;
+  // ★★ The panel-gap light (constants/keyLight.ts) — its share of the tightest gap round a landscape key:
+  //   the row gap between the two stacked keys, the column gap to the drum and the display.
+  const lightReach = keyLightReach(Math.min(GAP, COL_GAP));
   const ICON_SZ   = isCap ? Math.max(8, Math.min(Math.round(s.r(20) * lay.legendScale), KEY_H - 6))
                           : Math.min(s.r(18), KEY_H - 2);   // − the 1 pt border top and bottom
   const KEY_FONT  = isCap ? s.f(t.btnSize) * lay.legendScale : s.f(11);
@@ -1892,14 +1900,14 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       {/* STEP + MENU column */}
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
         {/* ★ Dome keys (§5), KEY_H tall exactly (§11). Under 44 pt, so hitSlop reaches into the gaps. */}
-        <DomeKey ref={tourRef('stepBtn')} style={lnd.lsKey} height={KEY_H} radius={6}
+        <DomeKey ref={tourRef('stepBtn')} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach}
           onPress={onStep} accessibilityLabel="Tuning step">
           {/* ★ ONE line: "100k" / "500Hz" / "8.33k" SHRINK to fit the key; two lines let the text
               ask for a taller box, which is the bug this key had. */}
           {p => <DomeText progress={p} style={[lnd.lsTxt, { fontSize: KEY_FONT, lineHeight: KEY_LH }]}
                   numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{stepLabel}</DomeText>}
         </DomeKey>
-        <DomeKey ref={tourRef('menuBtn')} style={lnd.lsKey} height={KEY_H} radius={6}
+        <DomeKey ref={tourRef('menuBtn')} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach}
           onPress={onMenu} accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
           {p => menuAsBack
             ? <DomeText progress={p} style={{ fontSize: KEY_FONT, lineHeight: KEY_LH }} numberOfLines={1}>‹</DomeText>
@@ -1950,7 +1958,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       <View style={{ width: BTN_W, gap: GAP, justifyContent: 'center' }}>
         {/* ★ Recording / unread chat: the outline turns red / blue on the default key (today's
             signal); a cap has no outline, so there it is a ring round the slot. */}
-        <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} onPress={onAudio}
+        <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach} onPress={onAudio}
           outline={isRecording ? ct.keyBorderRec : undefined}
           overlay={isCap && isRecording ? <View pointerEvents="none" style={[StyleSheet.absoluteFill,
             { borderRadius: 6, borderWidth: 1, borderColor: ct.keyBorderRec }]} /> : undefined}
@@ -1959,7 +1967,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
             ? <RecordIcon size={ICON_SZ} progress={p} />
             : <AudioIcon size={ICON_SZ} progress={p} />}
         </DomeKey>
-        <DomeKey style={[lnd.lsKey, { opacity: chatOff ? 0.4 : 1 }]} height={KEY_H} radius={6}
+        <DomeKey style={[lnd.lsKey, { opacity: chatOff ? 0.4 : 1 }]} height={KEY_H} radius={6} lightReach={lightReach}
           onPress={chatOff ? undefined : onChat} disabled={chatOff}
           outline={chatUnread ? ct.keyBorderChat : undefined}
           overlay={isCap && chatUnread ? <View pointerEvents="none" style={[StyleSheet.absoluteFill,

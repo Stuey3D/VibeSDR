@@ -1,19 +1,28 @@
 /**
  * Drum wells and tuner keys (src/constants/drumWell.ts + the well tokens in faceplate.ts) — the
  * chassis parameterisation of today's drum, the needle's removal, the LED pool, the notch-order
- * TRAP, the controls colour's brightness, and the tuner-keys layout.
+ * TRAP, the controls colour's brightness, and the tuner-keys layout. And (2026-10-01) the ring round
+ * the wells is GONE, and every front-panel key is lit by the light coming up out of its panel gap
+ * (src/constants/keyLight.ts): its reach, its fit in the deck's tightest gaps, its colour, the pressed
+ * flood, the etched glyph's glow — and that unlit means NONE.
  *
  * Brief: docs/BRIEF-faceplates.md §6.1, §6.2 (Deck.mockup `W_FACE`, `w.poolA/B`, `tk`).
  *
  * Run: node --no-warnings scripts/test_faceplate_wells.ts   (run-tests.sh does)
  */
+import { readFileSync } from 'node:fs';
 import {
-  chassisTokens, CHASSIS, CONTROLS, LED, ledA, resolveControlsColour, DEFAULT_CHASSIS,
+  chassisTokens, CHASSIS, CONTROLS, LED, ledA, hotA, resolveControlsColour, DEFAULT_CHASSIS,
 } from '../src/constants/faceplate.ts';
+import * as drumWell from '../src/constants/drumWell.ts';
 import {
-  POOL, poolEllipse, wellOutset, notchOrder, WELL_GLOW_BLUR, tunerKeysLayout,
-  TK_KEY_FRAC, TK_KEY_FRAC_LAND, RING_LIGHT, ringRect,
+  POOL, poolEllipse, notchOrder, tunerKeysLayout, TK_KEY_FRAC, TK_KEY_FRAC_LAND,
 } from '../src/constants/drumWell.ts';
+import {
+  KEY_LIGHT, KEY_PRESS_LIGHT, ETCH_LIGHT, DECK_MIN_GAP, keyLightReach, keyLightExtent, keyLightAt,
+  keyLightSprite, keyLightLayers, domeCap, drawKeyLight, drawKeyWash, type RR,
+} from '../src/constants/keyLight.ts';
+import { landscapeDeck, portraitDeck, type MeterKind } from '../src/constants/meters.ts';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -48,9 +57,8 @@ eq('default ridges, rim, sheen', [D.ridgeShadow, D.ridgeHighlight, D.rimLine, D.
 eq('default notches: light on dark, shadow pair +0.9 UNDER them',
    [D.notchMinor, D.notchMed, D.notchMajor, D.notchPair, D.notchPairDx, D.notchPairUnder],
    ['rgba(168,166,158,0.22)', 'rgba(168,166,158,0.36)', 'rgba(168,166,158,0.55)', 'rgba(0,0,0,0.5)', 0.9, true]);
-eq('default edge: today\'s lit border (controls colour) + inner glow .10, nothing outside',
-   [D.wellBorder, D.wellInnerGlowA, D.wellRingA, D.wellGlowA, D.wellTopLip], [null, 0.10, 0, 0, null]);
-eq('default well draws inside its own box (canvas is today\'s size)', wellOutset(D), 0);
+eq('default edge: none — the lit border and its inner glow went with the ring (2026-10-01)',
+   [D.wellBorder, D.wellTopLip], [null, null]);
 
 // ── §6.1 ★★ the needle is gone on EVERY chassis ──────────────────────────────────
 for (const c of CHASSIS) {
@@ -63,9 +71,8 @@ eq('silver drum: polished aluminium', S.drumBody, ['#4d4b46', '#a9a69f', '#e4e2d
 eq('silver drum crown at 26 % (Deck.mockup)', S.drumPos, [0, 0.26, 0.50, 0.74, 1]);
 eq('silver ridge highlight', S.ridgeHighlight, 'rgba(255,255,255,0.35)');
 eq('silver notches: DARK cuts', [S.notchMinor, S.notchMajor], ['rgba(58,56,50,0.40)', 'rgba(38,36,32,0.70)']);
-eq('silver face: brushed silver, dark 1 pt gap, ring + glow in the controls colour',
-   [S.wellTexture, S.wellBorder, S.wellRingA, S.wellGlowA, S.wellInnerGlowA],
-   ['silver', 'rgba(0,0,0,0.55)', 0.35, 0.40, 0]);
+eq('silver face: brushed silver and the drum\'s dark 1 pt cut (no ring, no glow)',
+   [S.wellTexture, S.wellBorder], ['silver', 'rgba(0,0,0,0.55)']);
 // ★ TRAP: on aluminium the pair INVERTS — the cut is dark and its partner is a white highlight, and
 //   the highlight sits under the cut (drawn over, it would paint the cut white).
 ok('silver: the cut is darker than its pair (inverted)', lum(S.notchMajor) < lum(S.notchPair));
@@ -77,36 +84,230 @@ eq('notch order is a token: pair over when asked', notchOrder({ notchPairUnder: 
 
 // ── §6.1 black (the mockup wins over the brief's "same as default") ────────────
 eq('black drum: neutral grey', B.drumBody, ['#070707', '#181818', '#222222', '#171717', '#050505']);
-eq('black face: brushed black, #000 gap, ring .30, glow .38, lip .14',
-   [B.wellTexture, B.wellBorder, B.wellRingA, B.wellGlowA, B.wellTopLip],
-   ['black', '#000000', 0.30, 0.38, 'rgba(255,255,255,0.14)']);
+eq('black face: brushed black, #000 cut, lip .14 (no ring, no glow)',
+   [B.wellTexture, B.wellBorder, B.wellTopLip], ['black', '#000000', 'rgba(255,255,255,0.14)']);
 ok('black notches stay light on dark', lum(B.notchMajor) > lum(B.notchPair));
 
 for (const c of ['silver', 'black'] as const) {
   const t = chassisTokens(c);
-  ok(`${c}: the edge canvas reaches past the 8 pt glow`, wellOutset(t) >= WELL_GLOW_BLUR);
   eq(`${c}: face base under the grain is flat (no gradient flash while it loads)`,
      new Set(t.wellFace).size, 1);
 }
 
-// ── ★★★ THE LIT RING (Stuart, 2026-10-01: "gently lit up like a real radio… right now they look just
-//     like random rectangle boxes") — a light pipe on every chassis, subtle, and only with Transparency ──
+// ── ★★★ THE RING IS GONE (Stuart, 2026-10-01: "try removing the outline ring that surrounds both buttons
+//     and replace it with a glow coming up in the panel gap around each button") — on every chassis, lit
+//     or not: the tokens and the constants went with it, so nothing can draw it back ──────────────────
+for (const c of CHASSIS) {
+  const keys = Object.keys(chassisTokens(c));
+  eq(`${c}: no ring / glow / inner-glow tokens left`, keys.filter(k => /^well(Ring|Glow|InnerGlow)/.test(k)), []);
+}
+eq('drumWell.ts: no ring light, ring rect, glow blur or outset left',
+   ['RING_LIGHT', 'ringRect', 'WELL_GLOW_BLUR', 'wellOutset'].filter(k => k in drumWell), []);
+const SRC = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+const code = (f: string) => SRC(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 {
-  const r = RING_LIGHT;
-  ok('lit ring: soft — every layer well under the ring\'s own alpha (not neon)',
-     r.spill.a < 0.25 && r.halo.a < 0.5 && r.edge.a < 0.5);
-  ok('lit ring: the spill is wider and softer than the halo (a falloff, not a second line)',
-     r.spill.blur > r.halo.blur && r.spill.width > r.halo.width && r.spill.a < r.halo.a);
-  ok('lit ring: the hot edge is a hair, thinner than the 1 pt ring', r.edge.width < 1);
-  for (const [c, t] of [['default', D], ['silver', S], ['black', B]] as const) {
-    ok(`${c}: lit, the edge canvas reaches past the ring's light`, wellOutset(t, true) >= r.reach + 1);
-    ok(`${c}: lit never draws LESS than unlit`, wellOutset(t, true) >= wellOutset(t, false));
-    const rr = ringRect(t, 100, 40, 6);
-    // The light is drawn on the ring the chassis already draws: default's border inside, metal's outside.
-    if (t.wellRingA > 0) eq(`${c}: the light follows the metal ring, outside the face`, [rr.x, rr.w, rr.r], [-0.5, 101, 6.5]);
-    else eq(`${c}: the light follows the lit border, inside the face`, [rr.x, rr.w, rr.r], [0.5, 99, 6]);
+  const dw = code('components/DrumWell.tsx');
+  ok('DrumWell: the well edge draws no blur (no ring glow, no live BlurMask)', !/BlurMask/.test(dw));
+  ok('DrumWell: WellEdge takes no colour — nothing in it is lit', /export function WellEdge\(\{ W, H, ct \}/.test(dw));
+  const tk = code('components/TunerKeys.tsx');
+  ok('TunerKeys: no WellEdge round the keys well', !/WellEdge/.test(tk));
+  ok('DrumWheel: the well canvas is its own size again (no outset)', !/wellOutset|left: -M/.test(code('components/DrumWheel.tsx')));
+}
+
+// ── ★★★ THE PANEL-GAP LIGHT (constants/keyLight.ts) ────────────────────────────────────────────────
+// The light at its full reach: soft, warm, and a FALLOFF — never a line, never a box.
+{
+  const L = keyLightLayers(KEY_LIGHT.reach);
+  ok('light: subtle — no outside layer above α .35 (not neon)', L.edge.a <= 0.35 && L.spill.a <= 0.35 && L.bottom.a <= 0.35);
+  ok('light: the spill is wider, softer and fainter than the edge (a falloff, not a second line)',
+     L.spill.w > L.edge.w && L.spill.blur > L.edge.blur && L.spill.a < L.edge.a);
+  ok('light: the bottom\'s extra is fainter than the spill (subtle)', L.bottom.a < L.spill.a);
+  ok('light: brightest AT the edge, dying away outward',
+     keyLightAt(KEY_LIGHT.reach, 0) > keyLightAt(KEY_LIGHT.reach, 1)
+     && keyLightAt(KEY_LIGHT.reach, 1) > keyLightAt(KEY_LIGHT.reach, 2)
+     && keyLightAt(KEY_LIGHT.reach, 2) > keyLightAt(KEY_LIGHT.reach, 3));
+  ok('light: in a slot, brightest in the GAP against the cap (it comes from under the key)',
+     keyLightAt(KEY_LIGHT.reach, -1.6, 2) > keyLightAt(KEY_LIGHT.reach, 0, 2));
+  ok('light: gone (< 1 %) by the end of its reach', keyLightAt(KEY_LIGHT.reach, KEY_LIGHT.reach) < 0.01);
+}
+// ★★ The sprite reaches past the light, at every reach, at rest and pressed — the light is never clipped.
+for (let r = KEY_LIGHT.minReach; r <= KEY_LIGHT.reach; r += 0.25) {
+  ok(`reach ${r}: every layer ends inside the sprite (extent ${keyLightExtent(r).toFixed(2)})`, keyLightExtent(r) <= r + 1e-9);
+  ok(`reach ${r}: so does the pressed flood (extent ${keyLightExtent(r, true).toFixed(2)})`, keyLightExtent(r, true) <= r + 1e-9);
+}
+{
+  const cut = { x: -2, y: -1.5, w: 60, h: 40, r: 8 };
+  eq('the sprite is the cut-out plus the reach on every side', keyLightSprite(cut, 3), { x: -5, y: -4.5, w: 66, h: 46 });
+}
+// ★ Never NaN, never a sprite for nothing (spriteSizing refuses NaN / 0 — the light must never ask).
+for (const v of [NaN, Infinity, -1, 0, 1, 1.9]) eq(`keyLightReach(${v}) = 0 (no light, no sprite)`, keyLightReach(v), 0);
+ok('keyLightReach caps at the full reach', keyLightReach(100) === KEY_LIGHT.reach);
+
+// ★★★ IT FITS THE DECK'S GAPS — portrait and landscape, every chassis × meter, from the SE in Display
+//     Zoom (320 / 568 × 320) up. Two neighbours' lights meet in the middle of the gap: there the light must
+//     stay well under the light at either key's edge (two lit edges, never one glowing bar), and it must be
+//     gone before it reaches the neighbour.
+{
+  const scaleP = (W: number) => Math.max(0.75, Math.min(1.45, W / 390));
+  const scaleL = (W: number) => Math.max(0.58, Math.min(1.45, W / 926));
+  const gaps: Array<[string, number, number, { w: number; h: number }[], { W: number; H: number; land: boolean; r: (n: number) => number }[]]> = [];
+  for (const W of [320, 375, 390, 430, 768]) {
+    const sc = scaleP(W), r = (n: number) => Math.round(n * sc);
+    const ROW = r(7), COL = r(8);
+    for (const c of CHASSIS) for (const meter of ['bar', 'vu', 'edge'] as MeterKind[]) {
+      const t = chassisTokens(c);
+      const dl = portraitDeck({ cap: t.dome.look === 'cap', meter, shared: false, tablet: W >= 768, rowGap: ROW, r });
+      const inner = W - 16 - 2 * r(12);
+      const kw = (inner - 3 * COL) / 4;
+      gaps.push([`portrait ${W} ${c} ${meter}`, ROW, COL, [{ w: kw, h: dl.keySlot }],
+                 [{ W: (inner - COL) / 2, H: r(60), land: false, r }]]);
+    }
   }
-  eq('Transparency off: the default well is its own size again (the flat ring)', wellOutset(D, false), 0);
+  for (const [W, H] of [[568, 320], [667, 375], [844, 390], [926, 428], [1366, 1024]]) {
+    const sc = scaleL(W), r = (n: number) => Math.round(n * sc);
+    for (const c of CHASSIS) for (const meter of ['bar', 'vu', 'edge'] as MeterKind[]) {
+      const t = chassisTokens(c);
+      const d = landscapeDeck({ plate: t.plate ? { screws: t.plate.screws, gloss: t.plate.gloss } : null, meter,
+                                tablet: Math.min(W, H) >= 768, W, H, scale: sc, r });
+      gaps.push([`landscape ${W}×${H} ${c} ${meter}`, d.rowGap, d.colGap, [{ w: d.keyW, h: d.keyH }],
+                 [{ W: d.drumW, H: d.bandH, land: true, r }]]);
+    }
+  }
+  let tightest = Infinity;
+  for (const [tag, row, col, keys, wells] of gaps) {
+    const gap = Math.min(row, col);
+    tightest = Math.min(tightest, gap);
+    ok(`${tag}: the deck's gap (${gap}) is never under DECK_MIN_GAP`, gap >= DECK_MIN_GAP);
+    const reach = keyLightReach(gap);   // ControlsBar: keyLightReach(min(ROW_GAP, COL_GAP))
+    ok(`${tag}: the main keys are lit (reach ${reach})`, reach >= KEY_LIGHT.minReach);
+    ok(`${tag}: the light stays inside the gap`, keyLightExtent(reach, true) <= gap);
+    for (const slotGap of [0, 2]) {
+      const edge = keyLightAt(reach, 0, slotGap), mid = keyLightAt(reach, gap / 2, slotGap);
+      const meet = 1 - (1 - mid) * (1 - mid);
+      ok(`${tag} (slot ${slotGap}): where two lights meet it is under half the edge's (${(meet / edge).toFixed(2)})`, meet <= 0.5 * edge);
+      ok(`${tag} (slot ${slotGap}): gone before the neighbour (${keyLightAt(reach, gap, slotGap).toFixed(4)})`, keyLightAt(reach, gap, slotGap) < 0.01);
+    }
+    // The pressed wash: the key's middle stays the key — the band and its blur end before the centre.
+    for (const k of keys) {
+      const cap = domeCap(k.w, k.h, 8, false);
+      for (const face of [cap, { w: k.w - 2, h: k.h - 2 }]) {
+        const m = Math.min(face.w, face.h);
+        const blur = Math.min(KEY_PRESS_LIGHT.wash.blurMax, m * KEY_PRESS_LIGHT.wash.blurFrac);
+        const band = Math.min(KEY_PRESS_LIGHT.wash.w, m * KEY_PRESS_LIGHT.wash.wFrac);
+        ok(`${tag}: the pressed wash leaves the key's middle dark (${m.toFixed(1)} pt face)`, band + blur <= m / 2);
+      }
+    }
+    // The tuner keys: TunerKeys takes keyLightReach(pad + DECK_MIN_GAP); the two keys' lights never meet
+    // across the glyph, and the etched glyph's glow stays inside the well.
+    for (const w of wells) {
+      const L = tunerKeysLayout(w.W, w.H, w.land, w.r);
+      const tr = keyLightReach(L.pad + DECK_MIN_GAP);
+      ok(`${tag} tuner: lit (reach ${tr})`, tr >= KEY_LIGHT.minReach);
+      ok(`${tag} tuner: the light ends before the deck's neighbour (pad ${L.pad} + gap ${gap})`, keyLightExtent(tr, true) <= L.pad + gap);
+      ok(`${tag} tuner: the two keys' lights never meet across the glyph`, L.rightX - (L.leftX + L.keyW) >= 2 * tr);
+      ok(`${tag} tuner: the etched glyph's glow stays inside the well`,
+         L.glyphCy - L.glyphSz / 2 - ETCH_LIGHT.reach >= 0 && L.glyphCx - L.glyphSz / 2 - ETCH_LIGHT.reach >= 0);
+    }
+  }
+  eq('the tightest deck gap is the SE\'s landscape row (4 pt) — DECK_MIN_GAP', tightest, DECK_MIN_GAP);
+}
+
+// ★★ The etched glyph between the tuner keys: TODAY'S backlit look, kept exactly (Stuart: "must stay
+//    BACKLIT exactly as they are now"), plus a gentle bleed onto the case — wider and fainter.
+eq('etched glyph: today\'s halo (2.6 wide, blur 3, α .55)', [ETCH_LIGHT.glow.width, ETCH_LIGHT.glow.blur, ETCH_LIGHT.glow.a], [2.6, 3, 0.55]);
+ok('etched glyph: the bleed is wider, softer and fainter than the halo',
+   ETCH_LIGHT.bleed.width > ETCH_LIGHT.glow.width && ETCH_LIGHT.bleed.blur > ETCH_LIGHT.glow.blur && ETCH_LIGHT.bleed.a < ETCH_LIGHT.glow.a);
+eq('etched glyph: its reach is the bleed\'s half-width + blur', ETCH_LIGHT.reach, ETCH_LIGHT.bleed.width / 2 + ETCH_LIGHT.bleed.blur);
+
+// ── The draw itself, through a recording Skia: the colour, the cap kept dark, the pressed geometry ──
+type Op = { op: string; rr?: any; color?: string; clipOp?: number; sigma?: number; stroke?: number };
+function recorder() {
+  const ops: Op[] = [];
+  const Sk: any = {
+    Paint: () => { const p: any = { color: '', sigma: 0, stroke: undefined };
+      p.setAntiAlias = () => {}; p.setColor = (c: string) => { p.color = c; };
+      p.setMaskFilter = (m: any) => { p.sigma = m.sigma; }; p.setStyle = () => {}; p.setStrokeWidth = (w: number) => { p.stroke = w; };
+      return p; },
+    Color: (c: string) => c,
+    MaskFilter: { MakeBlur: (_s: number, sigma: number) => ({ sigma }) },
+    XYWHRect: (x: number, y: number, width: number, height: number) => ({ x, y, width, height }),
+    RRectXY: (rect: any, rx: number) => ({ ...rect, rx }),
+  };
+  const c: any = {
+    save: () => ops.push({ op: 'save' }), restore: () => ops.push({ op: 'restore' }),
+    clipRRect: (rr: any, clipOp: number) => ops.push({ op: 'clipRRect', rr, clipOp }),
+    clipRect: (rr: any, clipOp: number) => ops.push({ op: 'clipRect', rr, clipOp }),
+    drawRRect: (rr: any, p: any) => ops.push({ op: 'drawRRect', rr, color: p.color, sigma: p.sigma, stroke: p.stroke }),
+  };
+  return { Sk, c, ops };
+}
+{
+  const cut: RR = { x: 0, y: 0, w: 70, h: 48, r: 10 };
+  const cap = domeCap(70, 48, 10, false);
+  eq('a cap key\'s cap: inset 2 at the sides, 1.5 at the top, 4 pt shorter (DomeKey)', cap, { x: 2, y: 1.5, w: 66, h: 44, r: 8 });
+  eq('an outline key IS its cap (no slot)', domeCap(70, 36, 4, true), { x: 0, y: 0, w: 70, h: 36, r: 4 });
+  for (const chassis of CHASSIS) for (const cc of CONTROLS) {
+    const led = resolveControlsColour(chassis, cc);
+    const { Sk, c, ops } = recorder();
+    drawKeyLight(Sk, c, cut, cap, 4, a => ledA(led, a), a => hotA(led, a));
+    const draws = ops.filter(o => o.op === 'drawRRect');
+    const okColour = (s: string) => {
+      const m = s.match(/^(rgba|hsla)\((.*),([\d.]+)\)$/);
+      if (!m) return false;
+      const pre = m[2];
+      return [led.rgb, led.hotRgb, led.hsl && `${led.hsl[0]},${led.hsl[1]}%,${led.hsl[2]}%`,
+              led.hotHsl && `${led.hotHsl[0]},${led.hotHsl[1]}%,${led.hotHsl[2]}%`].includes(pre);
+    };
+    ok(`${chassis} ${cc}: every layer is the controls colour (or its hot centre)`, draws.length >= 4 && draws.every(d => okColour(d.color!)));
+  }
+  // ★★ never on the cap: the first thing the light does is clip the cap OUT, at its sprite position.
+  const { Sk, c, ops } = recorder();
+  drawKeyLight(Sk, c, cut, cap, 4, a => `rgba(1,2,3,${a})`, a => `rgba(4,5,6,${a})`);
+  const clip = ops.find(o => o.op === 'clipRRect')!;
+  eq('rest: the cap is clipped OUT (Difference) where it sits in the sprite', [clip.clipOp, clip.rr.x, clip.rr.y, clip.rr.width, clip.rr.height],
+     [0, 4 + 2, 4 + 1.5, 66, 44]);
+  ok('rest: the clip comes before any light', ops.indexOf(clip) < ops.findIndex(o => o.op === 'drawRRect'));
+  // ★★★ PRESSED: the light floods out of the WIDER gap the snap opens — it hugs the SUNK cap.
+  const P = recorder();
+  drawKeyLight(P.Sk, P.c, cut, cap, 4, a => `rgba(1,2,3,${a})`, a => `rgba(4,5,6,${a})`, true, 2);
+  const pclip = P.ops.find(o => o.op === 'clipRRect')!;
+  eq('pressed: the SUNK cap (2 pt down, DOME_TRAVEL) is clipped out', [pclip.clipOp, pclip.rr.y], [0, 4 + 1.5 + 2]);
+  const hug = P.ops.filter(o => o.op === 'drawRRect')[0];
+  ok('pressed: the gap light hugs the sunk cap', Math.abs(hug.rr.y - (4 + 1.5 + 2 - KEY_LIGHT.cap.o)) < 1e-9);
+  const restEdge = Math.max(...ops.filter(o => o.op === 'drawRRect').map(o => +o.color!.match(/,([\d.]+)\)$/)![1]));
+  ok('pressed: brighter than at rest (the gap opens)', KEY_PRESS_LIGHT.open.a > keyLightLayers(4).edge.a && restEdge > 0);
+  // The wash: clipped TO the cap (Intersect), a soft stroke round its edge.
+  const Wsh = recorder();
+  drawKeyWash(Wsh.Sk, Wsh.c, { x: 0, y: 0, w: 66, h: 44, r: 8 }, a => `rgba(1,2,3,${a})`);
+  const wclip = Wsh.ops.find(o => o.op === 'clipRRect')!;
+  eq('wash: clipped TO the cap (Intersect), the cap\'s own size', [wclip.clipOp, wclip.rr.width, wclip.rr.height], [1, 66, 44]);
+  ok('wash: soft and warm, not a fill', Wsh.ops.some(o => o.op === 'drawRRect' && o.stroke! > 0 && o.sigma! > 0));
+}
+
+// ── ★★★ UNLIT = NONE, and the perf rules (source checks: the components need a device to run) ─────────
+{
+  const dk = code('components/DomeKey.tsx');
+  ok('DomeKey: lit only with a reach AND Transparency effects on',
+     /const lit = lightReach > 0 && fp\.settings\.transparency === 'on'/.test(dk));
+  ok('DomeKey: unlit, the outline key clips as it always did', /overflow: lit \? 'visible' : 'hidden'/.test(dk));
+  ok('DomeKey: no reach given = no light (popup and decoder keys)', /lightReach = 0/.test(dk));
+  ok('DomeKey: the press fades the ready-made images in on its own `dim` style',
+     /pressStyle=\{dim\}/.test(dk) && /<KeyWash[\s\S]*?pressStyle=\{dim\}/.test(dk));
+  const cb = code('components/ControlsBar.tsx');
+  eq('ControlsBar: all four portrait keys take keyProps (which carries lightReach)', (cb.match(/\{\.\.\.keyProps\}/g) ?? []).length, 4);
+  ok('ControlsBar: keyProps carries the light', /height: KEY_SLOT, radius: s\.r\(8\), lightReach/.test(cb) && /minHeight: true, lightReach/.test(cb));
+  eq('ControlsBar: all four landscape keys are lit', (cb.match(/radius=\{6\} lightReach=\{lightReach\}/g) ?? []).length, 4);
+  const tk = code('components/TunerKeys.tsx');
+  ok('TunerKeys: both keys lit through DomeKey (one implementation)', /<DomeKey\s+lightReach=\{lightReach\}/.test(tk));
+  ok('TunerKeys: unlit, the glyph is drawn exactly as today (α .55, 2.6, blur 3, under α .95 1.4)',
+     /: <Path path=\{glyphPath\} color=\{G\(0\.55 \* dim\)\} strokeWidth=\{2\.6\}[\s\S]*?<BlurMask blur=\{3\} style="normal" respectCTM \/>/.test(tk)
+     && /color=\{G\(0\.95 \* dim\)\} strokeWidth=\{1\.4\}/.test(tk));
+  for (const f of ['components/KeyLight.tsx', 'constants/keyLight.ts']) {
+    const src = code(f);
+    ok(`${f}: no frame callback, no derived value, no live blur`, !/useFrameCallback|useDerivedValue|BlurMask|withRepeat/.test(src));
+  }
+  ok('KeyLight: images come from makeSprite (spriteSizing vets every size)', /makeSprite\(/.test(code('components/KeyLight.tsx')));
+  ok('KeyLight: a failed surface is never cached', /if \(!img\) return null;/.test(code('components/KeyLight.tsx')));
 }
 
 // ── §6.1 the LED pool: 60 % × 75 % at 50 % 18 %, α .16 → .05 at 55 % → 0 ─────────
@@ -146,8 +347,6 @@ eq('keys well faces (Deck.mockup tk.bg; black darkened with its plate)', [D.keys
    ['#0b0a08', '#c9c6bf', '#161719']);
 eq('black keys face = its plate base', B.keysFace, B.plate!.base);
 eq('only the default key needs its own dark slot', [D.keysSlot, S.keysSlot, B.keysSlot], ['#050403', null, null]);
-eq('the keys well keeps the drum well\'s edge exactly (same tokens, one component)',
-   [S.wellRingA, S.wellGlowA, S.wellBorder], [0.35, 0.40, 'rgba(0,0,0,0.55)']);
 for (const [W, H, land] of [[160, 60, false], [183, 60, false], [140, 45, false],
                             [80, 32, true], [120, 44, true], [220, 51, true]] as const) {
   const L = tunerKeysLayout(W, H, land);
@@ -168,7 +367,7 @@ for (const [W, H, land] of [[160, 60, false], [183, 60, false], [140, 45, false]
 }
 // The DEFAULT_CHASSIS object must still carry every well token the components read.
 for (const k of ['wellFace', 'drumBody', 'drumPos', 'notchPair', 'notchPairDx', 'notchPairUnder',
-                 'keysFace', 'keysSlot', 'wellRingA', 'wellGlowA'] as const) {
+                 'keysFace', 'keysSlot', 'wellBorder', 'wellTopLip'] as const) {
   ok(`DEFAULT_CHASSIS has ${k}`, (DEFAULT_CHASSIS as any)[k] !== undefined);
 }
 
