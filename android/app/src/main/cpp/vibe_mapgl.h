@@ -60,6 +60,7 @@
 
 #ifndef VIBE_MAPGL_NO_NET
 #include "net_shim.h"
+#include "vibe_bulk_pace.h"
 #endif
 
 namespace vibemapgl {
@@ -488,9 +489,12 @@ inline void sendPlain(const std::shared_ptr<net::Socket>& sock, const char* stat
 }
 
 /** Serve GET/HEAD /mapgl/<encoded>. `range` is the raw Range header value ("" when absent).
- *  Always answers and closes. Streams in 64 KB chunks; never holds a file in memory. */
+ *  Always answers and closes. Streams in chunks; never holds a file in memory.
+ *  ★★ `paced`: somebody is LISTENING, so the body goes out through vibebulk's shared budget and
+ *     never ahead of their audio (see vibe_bulk_pace.h). With nobody listening there is nothing
+ *     to protect and the map loads at full speed. Required, not defaulted — the caller decides. */
 inline void serve(const std::shared_ptr<net::Socket>& sock, const std::string& encoded,
-                  const std::string& range, bool head) {
+                  const std::string& range, bool head, bool paced) {
     std::string rel;
     const Where w = resolve(encoded, rel);
     const std::string base = w == Where::Bundle ? bundleDir() : w == Where::Data ? dataDir() : "";
@@ -535,12 +539,13 @@ inline void serve(const std::shared_ptr<net::Socket>& sock, const std::string& e
     hdr += "Connection: close\r\nContent-Length: " + std::to_string(len) + "\r\n\r\n";
     if (sock->sendstr(hdr) < 0 || head || len == 0) { ::fclose(f); sock->close(); return; }
     if (first > 0 && ::fseeko(f, (off_t)first, SEEK_SET) != 0) { ::fclose(f); sock->close(); return; }
-    std::vector<uint8_t> buf(64 * 1024);
+    std::vector<uint8_t> buf(paced ? vibebulk::kChunk : 64 * 1024);
     int64_t left = len;
     while (left > 0) {
         const size_t want = (size_t)std::min<int64_t>(left, (int64_t)buf.size());
         const size_t n = ::fread(buf.data(), 1, want, f);
         if (n == 0) break;
+        if (paced) vibebulk::pace(n);
         if (sock->send(buf.data(), n) < 0) break;   // ★ peer went away (a pan cancels reads)
         left -= (int64_t)n;
     }

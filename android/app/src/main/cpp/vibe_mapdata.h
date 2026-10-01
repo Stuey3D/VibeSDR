@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "net_shim.h"
+#include "vibe_bulk_pace.h"
 
 namespace vibemap {
 
@@ -164,8 +165,9 @@ inline bool choose(const std::string& name, bool acceptGzip, Chosen& out) {
  *     concurrent listener. The size comes from stat(), which is what Content-Length wants anyway.
  *  ★ 64 KB: comfortably more than a socket write can absorb in one go, small enough that the
  *    buffer is a stack-free heap block we can afford per connection. */
+/** ★★ `paced` — see vibemapgl::serve: through vibebulk's shared budget while anybody listens. */
 inline void serve(const std::shared_ptr<net::Socket>& sock, const std::string& name,
-                  bool acceptGzip, bool head = false) {
+                  bool acceptGzip, bool head, bool paced) {
     Chosen c;
     if (!choose(name, acceptGzip, c)) {
         // ★★ A SENTENCE, NOT AN EMPTY 404 — AND IT DISTINGUISHES THE TWO CASES, because they have
@@ -201,10 +203,11 @@ inline void serve(const std::shared_ptr<net::Socket>& sock, const std::string& n
     if (c.gzip) hdr += "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n";
     hdr += "Connection: close\r\nContent-Length: " + std::to_string(c.size) + "\r\n\r\n";
     if (sock->sendstr(hdr) < 0 || head) { ::fclose(f); sock->close(); return; }
-    std::vector<uint8_t> buf(64 * 1024);
+    std::vector<uint8_t> buf(paced ? vibebulk::kChunk : 64 * 1024);
     for (;;) {
         const size_t n = ::fread(buf.data(), 1, buf.size(), f);
         if (n == 0) break;
+        if (paced) vibebulk::pace(n);
         if (sock->send(buf.data(), n) < 0) break;   // ★ Peer went away mid-file: nothing to say.
     }
     ::fclose(f);

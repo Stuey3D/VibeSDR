@@ -63,6 +63,16 @@
   inline void vibeNetThread(const char* name)      { vibeNiceThread_(name, -20); }
   inline void vibeSpectrumThread(const char* name) { vibeNiceThread_(name, -5); }
   inline void vibeDecoderThread(const char* name)  { vibeNiceThread_(name, 10); }
+  /* ★★★ BULK HTTP — BELOW THE WHOLE ORDER. Map tiles, the map data, the web client's scripts:
+   *  bytes somebody is waiting for, but nobody HEARS late. A zoom-out on the GPU map fires dozens of
+   *  PMTiles range reads at once, each on its own connection thread, and those threads sat at nice
+   *  0 beside a Pi 2 whose WFM chain already needs most of a core ("zooming out of the map caused a
+   *  tiny stutter", Stuart, 2026-10-01). Called by a CONNECTION thread once it knows the request is
+   *  a plain file and will hold no radio lock; the thread ends with the request (Connection:
+   *  close), so nothing has to put the priority back.
+   *  ★★ NOT for the admin API or anything that takes clientMtx/modeMtx: a low-priority thread that
+   *     holds a lock the DSP needs is priority inversion, which is worse than the contention. */
+  inline void vibeBulkThread(const char* name)     { vibeNiceThread_(name, 15); }
   /* ★★★ THE IQ INPUT SITS ABOVE THE WHOLE ORDER — Network > Audio > Spectrum > Decoders all
    *  consume what it delivers, and a sample it fails to collect is lost for every one of them
    *  (never late: GONE — a radio library drops the buffer). So it takes the top nice, level with
@@ -110,6 +120,11 @@
       pthread_setname_np(name);
       pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   }
+  // ★ Bulk HTTP (see the Linux note): the lowest class that still makes steady progress.
+  inline void vibeBulkThread(const char* name) {
+      pthread_setname_np(name);
+      pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+  }
   // ★ The IQ input — see the Linux note. macOS has nothing above USER_INTERACTIVE to give it.
   inline void vibeIqThread(const char* name) {
       pthread_setname_np(name);
@@ -121,5 +136,6 @@
   inline void vibeNetThread(const char*) {}
   inline void vibeSpectrumThread(const char*) {}
   inline void vibeDecoderThread(const char*) {}
+  inline void vibeBulkThread(const char*) {}
   inline void vibeIqThread(const char*) {}
 #endif

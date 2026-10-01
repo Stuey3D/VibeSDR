@@ -17305,7 +17305,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const size_t from = (head ? 17 : 16);   // past "/mapdata/v1/"
             size_t to = reqLine.find_first_of(" ?#", from);
             if (to == std::string::npos) to = reqLine.size();
-            vibemap::serve(sock, reqLine.substr(from, to - from), acceptsGzip, head);
+            // ★★ Bulk: below the radio's threads, and paced while anybody listens — see
+            //    vibe_bulk_pace.h. No radio lock is taken on this path, so a low priority here
+            //    cannot invert onto the DSP.
+            vibeBulkThread("vibe-bulk");
+            vibemap::serve(sock, reqLine.substr(from, to - from), acceptsGzip, head,
+                           s_listenersCached.load(std::memory_order_relaxed) > 0);
         // ── ★★★ THE GPU MAP'S FILES, FROM DISK ──────────────────────────────────────────────────
         // GET/HEAD /mapgl/<path> — MapLibre, the style, glyphs, icons and the PMTiles packs the
         // listener's browser renders (briefs/BRIEF-server-gpu-maps.md §1). ★★ Range is honoured:
@@ -17316,7 +17321,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const size_t from = (head ? 12 : 11);   // past "/mapgl/"
             size_t to = reqLine.find_first_of(" ?#", from);
             if (to == std::string::npos) to = reqLine.size();
-            vibemapgl::serve(sock, reqLine.substr(from, to - from), rangeHeader, head);
+            // ★★★ A ZOOM IS A BURST OF THESE, AND IT WAS AUDIBLE (Stuart, 2026-10-01: "zooming out
+            //     of the map caused a tiny stutter"). Bulk priority, and the bytes go out through one
+            //     shared, paced budget while anybody is listening — see vibe_bulk_pace.h for why the
+            //     pacing, not just the priority, is what protects the audio. No radio lock is taken
+            //     on this path, so a low priority cannot invert onto the DSP.
+            vibeBulkThread("vibe-bulk");
+            vibemapgl::serve(sock, reqLine.substr(from, to - from), rangeHeader, head,
+                             s_listenersCached.load(std::memory_order_relaxed) > 0);
         // ── ★★★ THE WEB CLIENT'S SCRIPTS ────────────────────────────────────────────────────────
         // GET/HEAD /vs/<name>.js — the page loads its code from here (build-web.mjs). The names
         // carry a content hash, so a URL can only ever mean one set of bytes: `immutable` for a
@@ -17327,6 +17339,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   function), so the radio that served the page serves its script — never the door,
         //   which may be running a different build for a few seconds during an update.
         } else if (reqLine.rfind("GET /vs/", 0) == 0 || reqLine.rfind("HEAD /vs/", 0) == 0) {
+            vibeBulkThread("vibe-bulk");   // ★ compiled-in bytes, no lock: below the radio (vibe_thread.h)
             const bool head = reqLine[0] == 'H';
             const size_t from = head ? 5 : 4;
             size_t to = reqLine.find_first_of(" ?#", from);

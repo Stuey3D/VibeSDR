@@ -80,6 +80,8 @@ deps_for() {
     # ★★★ An admin read must never hold the connection log's lock while it works (Pi 2 IQ overruns
     #     with the admin page open, 2026-10-01). Header-only; slow resolvers make it CPU-independent.
     test-connlog-lock)  echo "" ;;
+    # ★★ The map's shared byte budget (vibe_bulk_pace.h), on a synthetic clock.
+    test-bulk-pace)     echo "" ;;
     test-time-decoder)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
     test-radiodns-ecc)  echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
     test-radiodns-name) echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
