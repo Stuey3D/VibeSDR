@@ -12259,7 +12259,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
         ps = trim(ps); rt = trim(rt);
-        const bool st = wfm && S.stereoDetected.load();
+        /* ★★ NOT IN DAB. DAB rides the WFM path but has no 19 kHz pilot, and the pilot flag kept the
+         *  last FM station's answer for as long as DAB played — "the stereo icon from WFM also is
+         *  stuck when in DAB mode even when on Mono stations" (Stuart, 2026-10-01). In DAB the
+         *  light is the SERVICE's own, sent as "stereo" in the `dab` state (vibe_dab_stereo.h). */
+        const bool st = wfm && !g_dabMode.load(std::memory_order_relaxed) && S.stereoDetected.load();
         // Only send when something actually CHANGED — re-sending identical RDS each
         // second re-triggers the client's notification marquee (text "repopulates"
         // and flickers). Change-detect ps/rt/pi/ecc/stereo and skip otherwise.

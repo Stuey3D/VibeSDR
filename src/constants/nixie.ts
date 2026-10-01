@@ -9,9 +9,14 @@
  *   Units only change WHICH BULB IS LIT; no digit ever moves. The MHz-tube count belongs to the
  *   connected radio (network HF 2 → 8 tubes; a local radio to 2 GHz 4 → 10 tubes at 8/10 width), never
  *   to the current frequency. The FM tuner screen is its own fixed layout: 3 tubes + bulb + 3, MHz.
- * ★★★ THE TUBE SHRINKS, THE WINDOW DOESN'T. pip + glass + collar + 2 pt clearance top and bottom fill
- *   the window; the glass is capped at its design height and shrinks when the window does. The same in
- *   width: the group narrows to fit, it never pushes the window wider.
+ * ★★★ THE TUBE SHRINKS, THE WINDOW DOESN'T. pip + glass + collar + 4 pt of clearance fill the window;
+ *   the glass is capped at its design height and shrinks when the window does. The same in width: the
+ *   group narrows to fit, it never pushes the window wider.
+ * ★★★ THE TUBES STAND ON THE LINE BELOW THEM (Stuart, 2026-10-01: "the tubes need to be anchored to
+ *   the line underneath them so they look attached to the radio"). The collar's foot IS the window's
+ *   floor — the lip line drawn under the window. The brief's 2 pt of clearance under the collar read as
+ *   a gap on a 17 Pro Max (the dark collar over a dark floor made it look like more), so the whole
+ *   clearance budget now sits ABOVE the pip. Bottom-aligned, not resized: the glass is the size it was.
  * ★ The decimal point is its OWN tube (an INS-1 bulb), never a dot inside a digit tube.
  */
 
@@ -110,7 +115,8 @@ export const TUBE_DESIGN = {
   meterLand:     { tw: 15, th: 27, nf: 23 },
 } as const;
 
-/** Stack pieces (pt at scale 1): tip-off pip, socket collar, clearance above and below. */
+/** Stack pieces (pt at scale 1): tip-off pip, socket collar, and the clearance — 2 × CLEAR, all of it
+ *  above the pip (the collar stands on the floor, see the ★★★ above). */
 export const PIP_H = 2;
 export const COLLAR_H = 4;
 export const CLEAR = 2;
@@ -129,8 +135,14 @@ export interface NixieGeometry {
   /** Digit size (px) for the cathodes. */
   nf:        number;
   gap:       number;
-  /** y of the collar's top edge (the socket floor line) — everything stands on it. */
+  /** y of the collar's top edge (the socket floor line) — everything stands on it. The collar's foot
+   *  (collarY + COLLAR_H) is the window's bottom edge: the tubes stand on the line under the window. */
   collarY:   number;
+  /** ★★ How far the anchoring moved the row DOWN from the brief's layout (the 2 pt that used to sit
+   *  under the collar). Everything that belongs to the tubes but is not drawn from their boxes — the
+   *  neon spill on the back wall behind them — moves by this too, so the row still reads as set INTO
+   *  the panel, not standing in front of a glow left behind (Stuart, 2026-10-01). */
+  drop:      number;
   /** The natural (unshrunk) group width, for the window to ASK for. */
   naturalW:  number;
   /** 0..1 — how much the group was narrowed to fit. */
@@ -181,11 +193,13 @@ export function nixieGeometry(w: number, h: number, spec: NixieSpec, design: Tub
     tubes.push({ x, w: tw });
     x += tw + gapF;
   }
-  const collarY = h - CLEAR * sc - COLLAR_H * sc;
-  return { tubes, bulbs, glassH, bulbH, nf, gap: gapF, collarY, naturalW, fit };
+  // ★★★ Anchored: the collar's foot on the window floor, no clearance under it (see the header).
+  const collarY = h - COLLAR_H * sc;
+  return { tubes, bulbs, glassH, bulbH, nf, gap: gapF, collarY, drop: CLEAR * sc, naturalW, fit };
 }
 
-/** The whole stack's height for a glass height — what must fit in the window. */
+/** The whole stack's height for a glass height — what must fit in the window (its clearance included,
+ *  all of it above the pip). */
 export function stackHeight(glassH: number, scale = 1): number {
   return glassH + (PIP_H + COLLAR_H + 2 * CLEAR) * scale;
 }

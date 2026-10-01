@@ -307,6 +307,11 @@ export interface DabState {
   /** True while the server is still measuring the decoder's real output rate (the start-up glide). */
   aacSettling?: boolean;
   codecDetail?: string; audioRateHz?: number; coreRateHz?: number; sbr?: boolean; ps?: boolean; audioCh?: number;
+  /** ★ The playing service is stereo, from its own audio headers (absent while acquiring, and from
+   *  servers before 2026-10-01) — the stereo light in DAB; src/services/dabTypes.ts dabServiceStereo. */
+  stereo?: boolean;
+  /** Layer II only: the header's mode (0 stereo, 1 joint, 2 dual channel, 3 mono). */
+  mp2Mode?: number;
   ecc?: number; cif?: number; mci?: boolean; nsvc?: number;
   /** Transmitter Identification: which transmitters of the SFN the null symbol says we hear. */
   tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean }[];

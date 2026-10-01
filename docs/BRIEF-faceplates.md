@@ -390,8 +390,12 @@ Applies to the frequency window, mode box and VTS strip (`VTSBar.tsx`, the live 
       floor shade `inset 0 -3 4 rgba(0,0,0,.8)`, faint neon bloom inside;
     - hex anode mesh: dot grid 3 × 2.6, offset by half, dots `rgba(150,140,125,.20)`;
     - socket collar: 4 tall, full tube width, gradient `#3a322c → #1a1511 → #070504`, 1 px top highlight.
-  - ★★★ **TRAP: the tube shrinks, the window doesn't.** The stack (pip + glass + collar + 2 px top and
-    bottom clearance) fills the window height. The glass is capped at its design height (table §4.1)
+  - ★★★ **The tubes stand on the line below them** (Stuart, 2026-10-01: "the tubes need to be anchored
+    to the line underneath them so they look attached to the radio"). The collar's foot is the window's
+    floor, on the lip line under it — no clearance below the collar; the 4 px of clearance all sits above
+    the pip.
+  - ★★★ **TRAP: the tube shrinks, the window doesn't.** The stack (pip + glass + collar + 4 px of
+    clearance above it) fills the window height. The glass is capped at its design height (table §4.1)
     and shrinks when the window does. Smallest case: analogue meter + shared banner = 35 pt window vs a
     37 pt stack. A fixed-height tube clips the domes there. Test that case first.
   - **Recess** (ref `nixie/N2`): the window is a cavity the tubes stand in, not a flat backing.

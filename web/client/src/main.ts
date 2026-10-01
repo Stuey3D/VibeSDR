@@ -24,6 +24,7 @@ import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAu
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
+import { dabServiceStereo } from '../../../src/services/dabTypes';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
@@ -1375,6 +1376,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
          *    the rule for BOTH panes (stations and signal), and a second place that hid one of
          *    them is exactly how this bug got here. */
         dabOn = false; dabState = null; wf?.applySettings({ minRangeDb: 30 });
+        syncStereoLight();
         dabSetPane(dabPane); dabRender(); return;
       }
       /* ★★★ HOLD THE LAST GOOD LIST. A frame where the FIC did not read — a fade, an erased frame,
@@ -1412,7 +1414,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (!d.eid) d.eid = prev.eid;
         d.held = true;
       }
-      dabState = d; dabRender(); updateVts();
+      dabState = d; dabRender(); updateVts(); syncStereoLight();
     },
     onAdmin: (ok, refused) => {
       if (refused) {
@@ -2060,7 +2062,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
     },
     onRds: (m) => {
-      $('stereo').classList.toggle('on', m.stereo);
+      rdsStereo = m.stereo; syncStereoLight();   // ★ the pilot's — DAB's own light wins in DAB
       // RDS is the station naming itself — it outranks any bookmark guess.
       const ps = m.ps.trim();
       const rt = m.radiotext.trim();
@@ -6110,6 +6112,15 @@ let dabBoost = false;
 let dabBoostUseful = false;
 let dabOn = false;
 let dabState: DabState | null = null;
+/** The FM pilot's last word (the `rds` message's `stereo`), kept so leaving DAB shows it again: the
+ *  server only sends `rds` when something CHANGES, so the light cannot wait for the next one. */
+let rdsStereo = false;
+/** ★★★ THE STEREO LIGHT HAS ONE WRITER. In DAB it is the playing SERVICE's (its own audio headers —
+ *  dabServiceStereo, shared with the app), never the FM pilot's, which stayed lit from the last FM
+ *  station on a mono DAB service (Stuart, 2026-10-01). Off while the service is not yet known. */
+function syncStereoLight() {
+  $('stereo').classList.toggle('on', dabOn ? dabServiceStereo(dabState) : rdsStereo);
+}
 /** performance.now() when the listener last picked a DAB service; 0 once it has been heard. */
 let dabPickedAt = 0;
 /** The "tuning in" line for the picked station's live-text slot, '' once audio has arrived. */
@@ -6952,6 +6963,7 @@ function dabUiOn() {
   // ★ Entering DAB changes what the arrows do, so it changes what they must say — see syncDialTips.
   setTimeout(syncDialTips, 0);
   dabOn = true;
+  syncStereoLight();   // ★ the service's, not the pilot's — off until the service is known
   wf?.applySettings({ minRangeDb: 15 });   // ★ a DAB block is flat and a few dB up — see SignalProcessorSettings.minRangeDb
   /* ★ THE ADVANCED RDS PANEL SHARES THIS BOX. Entering DAB with it open left it showing under
    *  the station list ("the DAB stations populated over the top of it", Stuart, 2026-09-07).
@@ -7103,6 +7115,7 @@ function dabSetMode(on: boolean) {
   } else {
     dabArmRestore();          // ★ before dabOn goes — see the note above
     dabOn = false;
+    syncStereoLight();
     wf?.applySettings({ minRangeDb: 30 });
     audio?.holdHealing(6000); spec?.dab(false);
     dabState = null;
@@ -12974,6 +12987,7 @@ function setMode(m: SDRMode, send: boolean) {
   // ★ The card's own readout (#mMode) is the one on screen; the bar's #modeLbl and its row of
   //   buttons went with the bar. See the note above buildControls.
   if (m !== 'wfm') {
+    rdsStereo = false;
     $('stereo').classList.remove('on');
     rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
     resetPsStab();

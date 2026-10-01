@@ -388,7 +388,9 @@ export default function DrumWheel({
   }
 
   // The edge canvas is M larger than the well on each side: the metal ring and glow sit OUTSIDE it.
-  const M = wellOutset(ct);
+  // ★ The ring is LIT (drumWell.ts RING_LIGHT) while Transparency effects are on; off = the flat ring.
+  const ringLit = fp.settings.transparency === 'on';
+  const M = wellOutset(ct, ringLit);
   const notchPaths = {
     pair:  <Path key="pair"  path={pathShadow} style="stroke" strokeWidth={1.1} color={ct.notchPair} />,
     minor: <Path key="minor" path={pathMinor}  style="stroke" strokeWidth={0.8} color={ct.notchMinor} />,
@@ -534,7 +536,7 @@ export default function DrumWheel({
           </Group>
 
           {/* ── The well's edge — today's lit border, or the metal gap + ring + glow ── */}
-          <WellEdge W={W} H={H} M={M} ct={ct} led={fp.controls} />
+          <WellEdge W={W} H={H} M={M} ct={ct} led={fp.controls} lit={ringLit} />
         </Canvas>
 
         {/* ── +/− in the dead corner triangles flanking the V ── */}

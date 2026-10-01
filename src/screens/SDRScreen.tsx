@@ -58,7 +58,7 @@ import DoorSpectrogram from '../components/DoorSpectrogram';
 import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
-import type { DabState } from '../services/dabTypes';
+import { dabServiceStereo, type DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
@@ -10127,7 +10127,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           instanceHost={instanceName ?? baseUrl}
           meterBus={meterBus.current}
           signalMode={signalMode}
-          fmStereo={fmStereo}
+          /* ★★ In DAB the light is the SERVICE's (its audio headers), never the FM pilot's — which
+           *  stayed lit from the last FM station on a mono DAB service (Stuart, 2026-10-01). Off while
+           *  the service is not yet known. dabTypes.ts dabServiceStereo. */
+          fmStereo={dabOn ? dabServiceStereo(dabState) : fmStereo}
           isRecording={isRecording}
           recSeconds={recSeconds}
           chatUnread={chatUnread}
