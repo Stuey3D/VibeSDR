@@ -8,7 +8,7 @@
  */
 import {
   CATHODE_STACK, cathodeDepth, cathodeNeighbours, nixieSpec, nixieReadout, nixieGeometry,
-  stackHeight, mhzDigitsFor, TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR,
+  stackHeight, mhzDigitsFor, TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, MIN_GLASS,
 } from '../src/constants/nixie.ts';
 
 let fails = 0, passes = 0;
@@ -46,10 +46,19 @@ for (let h = 18; h <= 64; h++) {
     }
   }
 }
-// The stack reaches the floor: collar bottom = h − 2.
+// ★★★ The tubes STAND ON THE LINE below the window (Stuart, 2026-10-01): collar foot = h, at every
+//     window height, every design, every layout, every scale — the clearance is all above the pip.
 {
   const g = nixieGeometry(300, 48, nixieSpec('hf'), TUBE_DESIGN.meter, { bar: false });
-  eq('collar sits 2 pt above the window floor', g.collarY + COLLAR_H + CLEAR, 48);
+  eq('collar stands on the window floor', g.collarY + COLLAR_H, 48);
+  for (const sc of [0.58, 0.82, 1, 1.13, 1.45]) for (let h = 18; h <= 72; h++)
+    for (const [name, d] of Object.entries(TUBE_DESIGN)) for (const layout of ['hf', 'wide', 'fm'] as const) {
+      const gg = nixieGeometry(260, h, nixieSpec(layout), d, { bar: name.startsWith('bar'), scale: sc });
+      ok(`h=${h} ${name} ${layout} @${sc}: collar foot on the floor`, Math.abs(gg.collarY + COLLAR_H * sc - h) < 1e-9);
+      // …and the clearance went to the top, not into a clipped dome.
+      ok(`h=${h} ${name} ${layout} @${sc}: ≥ ${2 * CLEAR} pt over the pip or the glass is at its cap`,
+         gg.collarY - gg.glassH - PIP_H * sc >= 2 * CLEAR * sc - 1e-9 || gg.glassH <= MIN_GLASS * sc + 1e-9);
+    }
 }
 
 // ── Width: the group narrows to fit, the window never grows ──────────────────
