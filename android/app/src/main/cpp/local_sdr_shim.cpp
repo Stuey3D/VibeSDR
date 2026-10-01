@@ -109,6 +109,7 @@
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
 #include "vibe_rtl_tuner_restore.h"   // ★ the ONE "put the tuner back after its re-init" (both direct-sampling routes)
+#include <dlfcn.h>                    // ★ rtlsdr_get_r82xx_state, looked up where librtlsdr is not ours (checkTunerChip)
 /** librtlsdr, as vibertl::restoreTunerAfterReinit() sees it — the three calls it makes, nothing else. */
 struct VibeRtlTunerOps {
     rtlsdr_dev_t* dev;
@@ -22705,6 +22706,89 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(hwWrMtx); pendingGainTenth = tenth; }
         hwWrCv.notify_one();
     }
+    /** ★★★ WHERE THE TUNER REALLY IS — read from the R820T/R828D itself after every tuner write (hardware
+     *  writer thread, devMtx held). Kiko, Lite b8, 2026-10-01: a FLAT floor and no stations below ~100 MHz
+     *  while 102 and 107.7 were in place, then hours later 93.7 at 23 dB with nothing changed — and every
+     *  line we logged said the tune was perfect, because `rc=0 readback …` is librtlsdr describing its own
+     *  memory: rc is 0 even when the PLL did not lock, and the readback is dev->freq. vibe_r82xx_if.h has
+     *  the three ways the chip can disagree with librtlsdr and how its PLL registers decode into an LO.
+     *  ★ One I2C read per tune (a few ms). Logged like the tune diagnostic (first 12, then one per 10 s),
+     *    and ALWAYS when the chip contradicts the request — that line is the finding.
+     *  ★★ ON A CONTRADICTION, ONE RE-TUNE VIA A NEIGHBOUR. Re-sending the same frequency would do nothing:
+     *     librtlsdr skips any register write whose value equals its copy (r82xx_write's shadow check), and
+     *     the divider choice depends on the state the PREVIOUS tune left (r82xx_set_pll reads the VCO fine
+     *     tune before programming). A step 1 MHz away writes fresh PLL registers from a state next to the
+     *     right one, and the step back lands there. The result is read and logged either way — a heal that
+     *     is not checked is a guess. Never in direct sampling (the tuner is bypassed) and never below the
+     *     tuner's range. */
+    void checkTunerChip(uint32_t hz) {
+        using StateFn = int (*)(rtlsdr_dev_t*, uint8_t*, int, uint8_t*, uint32_t*, uint32_t*, int*);
+#if defined(__ANDROID__)
+        static const StateFn fn = &rtlsdr_get_r82xx_state;   // librtlsdr-android.patch exports it
+#else
+        // ★ The Linux/macOS builds link a system or packaged librtlsdr that may not have it: ask, never assume.
+        static const StateFn fn = (StateFn)dlsym(RTLD_DEFAULT, "rtlsdr_get_r82xx_state");
+#endif
+        if (!fn || !dev || hz < 24000000u || rtlsdr_get_direct_sampling(dev) != 0) return;
+        struct Snap { bool ok = false; vibertl::R82xxPll pll; uint32_t intFreq = 0, xtal = 0; double wantLo = 0;
+                      uint8_t hw[vibertl::kR82xxReadRegs] = {}, shadow[vibertl::kR82xxReadRegs] = {}; };
+        auto read = [&](Snap& s) {
+            int lock = 0;
+            if (fn(dev, s.hw, vibertl::kR82xxReadRegs, s.shadow, &s.intFreq, &s.xtal, &lock) != 0) return false;
+            s.pll = vibertl::r82xxDecodePll(s.hw, vibertl::kR82xxReadRegs, s.xtal);
+            s.wantLo = (double)rtlsdr_get_center_freq(dev) + (double)s.intFreq;
+            s.ok = s.pll.valid && s.pll.locked && vibertl::r82xxLoMatches(s.pll.loHz, s.wantLo);
+            return s.pll.valid;
+        };
+        auto describe = [&](const Snap& s) {
+            char b[512];
+            int n = std::snprintf(b, sizeof b,
+                "PLL %s, LO %.6f MHz (wanted %.6f = centre %.6f + IF %.3f), divider /%d (the LO needs /%d), "
+                "VCO %.4f GHz, fine tune %d",
+                s.pll.locked ? "locked" : "NOT LOCKED", s.pll.loHz / 1e6, s.wantLo / 1e6,
+                rtlsdr_get_center_freq(dev) / 1e6, s.intFreq / 1e6, s.pll.divider,
+                vibertl::r82xxExpectedDivider(s.wantLo), s.pll.vcoHz / 1e9, s.pll.fineTune);
+            // Registers the chip holds differently from librtlsdr's copy (0x05 onward is what it shadows).
+            int diffs = 0;
+            std::string list;
+            for (int r = 5; r < vibertl::kR82xxReadRegs; ++r) {
+                if (s.hw[r] == s.shadow[r - 5]) continue;
+                if (++diffs <= 8) { char e[32]; std::snprintf(e, sizeof e, " 0x%02x=%02x/%02x", r, s.hw[r], s.shadow[r - 5]); list += e; }
+            }
+            std::string out(b, (size_t)std::max(0, std::min(n, (int)sizeof b - 1)));
+            out += "; chip/copy differ at " + std::to_string(diffs) + " register(s)" + (diffs ? ":" + list : "");
+            return out;
+        };
+        Snap s;
+        if (!read(s)) {
+            static std::atomic<long long> s_lastFail{0};
+            const long long now = (long long)nowSecs();
+            if (now - s_lastFail.exchange(now) >= 10) LOGI("tuner chip readback: the R82xx registers could not be read");
+            return;
+        }
+        static std::atomic<int> s_n{0};
+        static std::atomic<long long> s_last{0}, s_lastBad{0};
+        const long long now = (long long)nowSecs();
+        if (s.ok) {
+            if (s_n.fetch_add(1, std::memory_order_relaxed) < 12 || now - s_last.load() >= 10) {
+                s_last.store(now);
+                LOGI("tuner chip at %.6f MHz: %s", hz / 1e6, describe(s).c_str());
+            }
+            return;
+        }
+        const bool say = now - s_lastBad.exchange(now) >= 2;
+        if (say) LOGI("★ TUNER CHIP CONTRADICTS THE DIAL at %.6f MHz: %s — re-tuning via %.3f MHz",
+                      hz / 1e6, describe(s).c_str(), (hz + 1000000u) / 1e6);
+        const uint32_t centre = rtlsdr_get_center_freq(dev);
+        rtlsdr_set_center_freq(dev, centre + 1000000u);
+        rtlsdr_set_center_freq(dev, centre);
+        Snap t;
+        const bool got = read(t);
+        if (say || !t.ok)
+            LOGI("★ tuner chip after the re-tune: %s — %s", got ? describe(t).c_str() : "unreadable",
+                 got && t.ok ? "FIXED, the mixer is where the dial says" : "STILL WRONG");
+    }
+
     void startHwWriter() {
         if (hwWrRun.exchange(true)) return;
         hwWrThread = std::thread([this]{
@@ -22827,6 +22911,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             const int want = bw >= 0 ? bw : g_tunerBwHz.load(std::memory_order_relaxed);
                             if (want > 0) rtlsdr_set_tuner_bandwidth(dev, (uint32_t)want);
                         }
+                        // ★★★ AND THEN ASK THE CHIP, not librtlsdr, where the mixer ended up — see checkTunerChip.
+                        checkTunerChip(hz);
                     }
                 }
                 if (bw >= 0) {

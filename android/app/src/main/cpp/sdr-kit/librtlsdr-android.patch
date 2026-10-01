@@ -1,8 +1,8 @@
 diff --git a/include/rtl-sdr.h b/include/rtl-sdr.h
-index d64701e..98175e2 100644
+index d64701e..7420dfe 100644
 --- a/include/rtl-sdr.h
 +++ b/include/rtl-sdr.h
-@@ -62,6 +62,13 @@ RTLSDR_API int rtlsdr_get_index_by_serial(const char *serial);
+@@ -62,8 +62,26 @@ RTLSDR_API int rtlsdr_get_index_by_serial(const char *serial);
  
  RTLSDR_API int rtlsdr_open(rtlsdr_dev_t **dev, uint32_t index);
  
@@ -15,9 +15,35 @@ index d64701e..98175e2 100644
 +
  RTLSDR_API int rtlsdr_close(rtlsdr_dev_t *dev);
  
++/*!
++ * ★ VibeSDR, not present upstream: what an R820T/R828D tuner REALLY holds. Reads `len` registers
++ * from 0x00 back from the chip into hw[] (len <= 30), copies librtlsdr's shadow of registers
++ * 0x05..0x22 into shadow[] (30 bytes, may be NULL), and reports the tuner's intermediate frequency,
++ * its crystal and whether the last PLL program locked.
++ *
++ * \return 0 on success, -2 if the tuner is not an R82xx, other negative values on I2C failure
++ */
++RTLSDR_API int rtlsdr_get_r82xx_state(rtlsdr_dev_t *dev, uint8_t *hw, int len, uint8_t *shadow,
++				      uint32_t *int_freq, uint32_t *xtal, int *has_lock);
++
  /* configuration functions */
+ 
+ /*!
+diff --git a/include/tuner_r82xx.h b/include/tuner_r82xx.h
+index f6c206a..c2e631a 100644
+--- a/include/tuner_r82xx.h
++++ b/include/tuner_r82xx.h
+@@ -113,6 +113,8 @@ enum r82xx_delivery_system {
+ 
+ int r82xx_standby(struct r82xx_priv *priv);
+ int r82xx_init(struct r82xx_priv *priv);
++/* ANDROID/VibeSDR: read the tuner's registers 0x00.. back from the chip (len <= NUM_REGS). */
++int r82xx_read_regs(struct r82xx_priv *priv, uint8_t *val, int len);
+ int r82xx_set_freq(struct r82xx_priv *priv, uint32_t freq);
+ int r82xx_set_gain(struct r82xx_priv *priv, int set_manual_gain, int gain);
+ int r82xx_set_bandwidth(struct r82xx_priv *priv, int bandwidth,  uint32_t rate);
 diff --git a/src/librtlsdr.c b/src/librtlsdr.c
-index 55d2ef1..0aeacca 100644
+index 55d2ef1..89079a0 100644
 --- a/src/librtlsdr.c
 +++ b/src/librtlsdr.c
 @@ -1442,6 +1442,60 @@ int rtlsdr_check_dongle_model(void *dev, char *manufact_check, char *product_che
@@ -105,3 +131,52 @@ index 55d2ef1..0aeacca 100644
  	dev->rtl_xtal = DEF_RTL_XTAL_FREQ;
  
  	/* perform a dummy write, if it fails, reset the device */
+@@ -2055,3 +2126,29 @@ int rtlsdr_set_bias_tee(rtlsdr_dev_t *dev, int on)
+ {
+ 	return rtlsdr_set_bias_tee_gpio(dev, 0, on);
+ }
++
++int rtlsdr_get_r82xx_state(rtlsdr_dev_t *dev, uint8_t *hw, int len, uint8_t *shadow,
++			   uint32_t *int_freq, uint32_t *xtal, int *has_lock)
++{
++	int r;
++
++	if (!dev)
++		return -1;
++	if ((dev->tuner_type != RTLSDR_TUNER_R820T) && (dev->tuner_type != RTLSDR_TUNER_R828D))
++		return -2;
++
++	rtlsdr_set_i2c_repeater(dev, 1);
++	r = r82xx_read_regs(&dev->r82xx_p, hw, len);
++	rtlsdr_set_i2c_repeater(dev, 0);
++
++	if (shadow)
++		memcpy(shadow, dev->r82xx_p.regs, NUM_REGS);
++	if (int_freq)
++		*int_freq = dev->r82xx_p.int_freq;
++	if (xtal)
++		*xtal = dev->r82xx_c.xtal;
++	if (has_lock)
++		*has_lock = dev->r82xx_p.has_lock;
++
++	return r < 0 ? r : 0;
++}
+diff --git a/src/tuner_r82xx.c b/src/tuner_r82xx.c
+index 8c3b2b1..574c266 100644
+--- a/src/tuner_r82xx.c
++++ b/src/tuner_r82xx.c
+@@ -1425,3 +1425,14 @@ static int r82xx_gpio(struct r82xx_priv *priv, int enable)
+ 	return r82xx_write_reg_mask(priv, 0x0f, enable ? 1 : 0, 0x01);
+ }
+ #endif
++
++/* ★ VibeSDR: the chip's own registers, read back — the only way to see what the tuner was really
++ *  left with. The shadow-register skip (r82xx_write) and an I2C write that fails after the shadow
++ *  is stored can both leave the chip and librtlsdr's copy disagreeing, and nothing else reports it.
++ *  A read always starts at register 0x00 on the R82xx. */
++int r82xx_read_regs(struct r82xx_priv *priv, uint8_t *val, int len)
++{
++	if (len <= 0 || len > NUM_REGS)
++		return -1;
++	return r82xx_read(priv, 0x00, val, len);
++}
