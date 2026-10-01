@@ -1351,7 +1351,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ A refusal in the server's own words, in the TRANSIENT slot — never the owner's notice
     //   slot, which somebody posted deliberately and which must not be clobbered by it.
     onRefused: (why: string) => showPill(why, 9000),
-    onVts: (text: string) => vtsNotice('srv', text, '', 30000),
+    /* ★★ A NEWER SERVER LINE REPLACES THE OLDER ONE (B10). vtsNotice drops a second 'srv' while the
+     *  first is up ("already said"), so crossing back over the direct-sampling boundary inside the
+     *  first line's time left "Direct Sample Active · Gain not available" on screen for its full
+     *  30 s while the radio was already back on its tuner — and "Direct Sample Off" never shown.
+     *  The server sends each line once per change, so the latest one is the truth: withdraw, then say.
+     * ★ 9 s, as the app's 7 s and the refusal pill's 9 — not 30: "Direct Sample Active · Gain not
+     *   available" sat there half a minute. A longer line still gets its full scroll: the notice's
+     *   life is stretched to its length (vtsNoticeSized), never cut by this figure. */
+    onVts: (text: string) => { vtsClearNotice('srv'); vtsNotice('srv', text, '', 9000); },
     /* ★ DAB arrives twice a second with the whole station list — see BRIEF-dab.md for why it is
      *  sent entire rather than as deltas. A null means the server left DAB mode. */
     onDab: (d: DabState) => {
@@ -1612,7 +1620,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         const dB = (hwGainNow / 10).toFixed(1);
         const pk = pkText();
         if (hwDsActive) {
-          chip.textContent = `${DS_PAUSED}${pk}`;
+          chip.textContent = `${DS_PAUSED}${ifText()}${pk}`;
           chip.classList.add('set', 'easing');
         } else if (agc && hwGainNow >= 0) {
           chip.textContent = `AGC ${dB} dB${ifText()}${pk}`;
@@ -1754,7 +1762,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       chip.classList.add('set');
       ovlClearTimer = window.setTimeout(() => {
         // ★ hwAgcOn, NOT the captured `agc` — see its declaration.
-        if (hwAgcOn) {
+        // ★ And hwDsActive, read live: a crossover inside the 4 s must not be painted over with a gain.
+        if (hwDsActive) {
+          chip.textContent = `${DS_PAUSED}${ifText()}${pk}`;
+          chip.classList.add('easing');
+        } else if (hwAgcOn) {
           // Settled, and the AGC owns the gain from here — show it, quietly.
           chip.textContent = `AGC ${dB} dB${ifText()}${pk}`;
           chip.classList.add('easing');
@@ -2044,7 +2056,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (!hwAgcOn || hwGainNow < 0) return;
       const chip = $('ovlChip');
       if (!chip.classList.contains('easing')) return;   // a move is being announced; leave it
-      chip.textContent = hwDsActive ? `${DS_PAUSED}${pkText()}`
+      chip.textContent = hwDsActive ? `${DS_PAUSED}${ifText()}${pkText()}`
                                     : `AGC ${(hwGainNow / 10).toFixed(1)} dB${ifText()}${pkText()}`;
       chip.classList.toggle('fault', adcClipPct >= 0.01);
     },
@@ -2516,7 +2528,12 @@ let hwGainNow = -1;
 /** ★ Direct sampling in force (from hwinfo dsActive): no tuner gain exists, VibeAGC has stood down, and
  *  the chip says so — Stuart, 2026-09-19, 648 kHz: "this needs to say AGC Paused due to Direct Sampling". */
 let hwDsActive = false;
-const DS_PAUSED = 'AGC paused — direct sampling';
+/* ★★ "Direct Sample", and the IF beside it (B10, Stuart 2026-10-01: "it should say Direct Sample").
+ *  Was "AGC paused — direct sampling" — true, but it named a loop rather than the state, and the app's
+ *  status row says "Direct Sample" (displayText.ts statusGainText): one receiver, one word.
+ *  ★ The IF figure STAYS (ifText): the R820T's IF filter still works in direct sampling and the owner
+ *    finds it "actually responds great" — it is the one front-end control left. */
+const DS_PAUSED = 'Direct Sample';
 /* ★★★ WHETHER THE AGC IS ON, READ LIVE — NOT CAPTURED. onOverload takes `agc` as a PARAMETER and
  *     then reads it inside a setTimeout, so switching VibeAGC off between the event and the timer
  *     left the chip writing "AGC 8.7 dB" over a gain the listener had set by hand. Stuart, on

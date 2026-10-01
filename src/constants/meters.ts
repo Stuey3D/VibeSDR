@@ -11,7 +11,8 @@
  *   abort, not a red box. That was the LED VU crash in 11 B7 (it killed the app on every receiver,
  *   because the meter setting persists). Plain JS on the JS thread runs it happily, so only
  *   scripts/test_worklet_defaults.mjs — which runs the plugin's OUTPUT — can see it. Take the
- *   parameter optional and resolve it in the body (`holdMs ?? PEAK_HOLD_MS`).
+ *   parameter optional and resolve it in the body (`holdMs ?? PEAK_HOLD_MS`; peakStep itself is gone
+ *   since 2026-10-01 — §4.3 below — but the rule stands, e.g. meterTick's `minMs ?? METER_MIN_FRAME_MS`).
  *
  *   §4.1  portraitDeck()    ONE DECK HEIGHT per chassis: a fixed block with the display flexing inside
  *   §4.3  the LED table     ten segments, their colours, thresholds, and the squelch ring's segment
@@ -348,18 +349,10 @@ export function ringSegment(sqlNorm: number | undefined | null, thresholds?: rea
   return best;
 }
 
-/** §4.3 peak hold: one segment, at full brightness, above the level; drops after ~1 s. */
-export const PEAK_HOLD_MS = 1000;
-export interface PeakHold { idx: number; at: number }
-/** `top` = the highest segment that is (at least half) lit now, −1 for none. Returns the held peak
- *  segment, or −1 when it is not above the level (nothing extra to draw). */
-export function peakStep(p: PeakHold, top: number, nowMs: number, holdMs?: number): number {
-  'worklet';
-  const hold = holdMs ?? PEAK_HOLD_MS;   // ★ not a default parameter — see WORKLET DEFAULTS above
-  if (top >= p.idx) { p.idx = top; p.at = nowMs; }
-  else if (nowMs - p.at > hold) { p.idx = top; p.at = nowMs; }
-  return p.idx > top ? p.idx : -1;
-}
+/* ★★ §4.3 HAD A PEAK HOLD (one segment above the level, ~1 s — `peakStep`, the worklet whose default
+ *  parameter was the 11 B7 crash above). REMOVED, Stuart 2026-10-01: "no peak hold on the LED, it's
+ *  too confusing" — the held LED one above the live edge made the LED BELOW it look like the one
+ *  dimming first. The analogue meter's peak NEEDLE (§4.5) stays; he likes it. */
 
 // ── §4.4 The edge LED: partial brightness ─────────────────────────────────────
 
@@ -425,7 +418,7 @@ export function eyeStep(b: number, target: number, dtMs: number, tauMs?: number,
  * strip has NOTHING that moves across the screen: every frame is ten brightnesses easing with τ =
  * 100 ms (eyeStep), so the 120 Hz half of those frames changes a brightness by ≤ 4 % — a step no eye
  * resolves, at twice the GPU and UI-thread cost. Every phone without ProMotion has always drawn it at
- * 60. ★ The easing and the peak hold are TIME-based (dt), so the look is identical — only how often it
+ * 60. ★ The easing is TIME-based (dt), so the look is identical — only how often it
  * is drawn changes. Power audit 2026-10-01.
  * ★ 12 ms, not 16.7: a 60 Hz panel's frames (16.7 ms) all pass, a 120 Hz panel's alternate (8.3 → skip,
  *   16.7 → step), and frame jitter around either cannot halve a 60 Hz panel to 30.

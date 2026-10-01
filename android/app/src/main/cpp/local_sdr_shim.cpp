@@ -3550,7 +3550,17 @@ static std::atomic<bool> g_rspKickHandover{false};
 static std::atomic<bool>   g_autoDs{false};
 static std::atomic<double> g_dsBelowHz{24e6};
 static std::atomic<int>    g_dsNow{-1};        // the mode actually applied: -1 unknown, 0 off, 2 Q
-static std::atomic<int>    g_dsAnnounce{0};    // 0 nothing, 1 entered DS, 2 left DS
+static std::atomic<int>    g_dsAnnounce{0};    // 0 nothing, 1 entered DS, 2 left DS, 3 state only
+/* ★★ THE FIRST PLACEMENT IS NOT ANNOUNCED, BUT IT IS STILL NEWS TO THE STATUS ROW (B10). g_dsNow goes
+ *  -1 → 2 on the first tune after AUTO is switched on, silently by design ("a listener arriving on HF has
+ *  not crossed anything") — but nothing re-sent hwinfo either, so every client kept dsActive false and
+ *  went on showing a gain the bypassed tuner was not applying until the next crossing. Measured on the
+ *  fake rtl_tcp: AUTO on at 7.092 MHz, hwinfo ds stayed -1 for 12 s. 3 = re-send the state, no notice;
+ *  never overwrites a pending 1 / 2. */
+static inline void dsAnnounceStateOnly() {
+    int none = 0;
+    g_dsAnnounce.compare_exchange_strong(none, 3, std::memory_order_relaxed);
+}
 
 /* ★ `ifAgcOn` is PASSED, not read: this sits above the DSP state block, and a helper reaching
  *   forward for a global is how a file grows an ordering dependency nobody can see. */
@@ -6280,6 +6290,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     LOGI("auto direct sampling (rtl_tcp): %s at %.3f MHz (crossover %.3f MHz)",
                          want ? "ON (Q branch)" : "OFF (tuner)", hz / 1e6, below / 1e6);
                     if (was >= 0) g_dsAnnounce.store(want ? 1 : 2, std::memory_order_relaxed);
+                    else dsAnnounceStateOnly();
                 }
             }
             sendTcpCmd(0x01, hz);
@@ -12061,19 +12072,53 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  as the mode switch it is. Sent as a plain `notice`, which every client already renders
      *  (a pill on the web, the scrolling bar in the app), so it needs no new message type on
      *  either side. */
+    /* ★★★ AND ONLY WHEN THE CHANGE HAS STOOD FOR A MOMENT (B10, 2026-10-01). A RETURNING listener crosses
+     *  the boundary TWICE without anybody moving anything: the fresh socket is a new session, the server
+     *  lands it on its landing frequency (FM — tuner), and the app then re-asserts its own HF dial (Q branch).
+     *  Measured on the emulator against the fake rtl_tcp: every reconnect said "Direct Sample Off · Gain
+     *  restored" AND THEN "Direct Sample Active · Gain not available" to somebody who had been on 7.092 MHz
+     *  throughout — and the app reconnects its spectrum socket every time it comes back from the background,
+     *  so the notice "kept coming back". Same for a dial dragged back and forth over the crossover.
+     *  So a crossing only arms the notice; it is SAID once the mode has held for kDsAnnounceSettleMs, and
+     *  only if it differs from what it was before the burst began. The STATE (hwinfo) still goes at once,
+     *  so the status row's "Direct Sample" never waits.
+     *  ★ One caller (onSpectrum, this radio's spectrum thread), so the burst lives in plain members. */
+    static constexpr int64_t kDsAnnounceSettleMs = 2000;
+    int     dsBurstFrom_ = -1;   // the mode before this burst (0 tuner, 1 DS); -1 = no burst pending
+    int64_t dsBurstAt_ = 0;      // when the burst last moved (steady ms)
+    int     dsSeen_ = -1;        // the mode at the last drain with no burst pending (-1 = not yet seen)
+    static int64_t dsNowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
     void drainDirectSamplingAnnounce() {
         const int a = g_dsAnnounce.exchange(0, std::memory_order_relaxed);
-        if (!a) return;
+        if (a) {
+            // ★ The state itself goes NOW, so the status row turns to "Direct Sample" (or back) at once,
+            //   not at the next hwinfo. See dsActive.
+            LocalSdrShim::instance().broadcastHwInfo();
+            if (a == 1 || a == 2) {
+                // ★ What it was before the burst: the mode seen at the last quiet drain — NOT inferred
+                //   from `a`, which is one slot, so two crossings inside one frame keep only the last.
+                if (dsBurstFrom_ < 0) dsBurstFrom_ = dsSeen_ >= 0 ? dsSeen_ : (a == 1 ? 0 : 1);
+                dsBurstAt_ = dsNowMs();
+            }
+            // a == 3: state only — see dsAnnounceStateOnly
+        }
+        const int now = g_dsNow.load(std::memory_order_relaxed) > 0 ? 1 : 0;
+        if (dsBurstFrom_ < 0) { dsSeen_ = now; return; }
+        if (dsNowMs() - dsBurstAt_ < kDsAnnounceSettleMs) return;
+        dsSeen_ = now;
+        const int from = dsBurstFrom_;
+        dsBurstFrom_ = -1;
+        if (now == from) return;   // ★ there and back (a reconnect's landing, a dial dragged over and back)
         const std::string body = std::string("{\"type\":\"notice\",\"vts\":\"")
-            + (a == 1
+            + (now == 1
                // ★ Short (B10, Stuart): a VFD strip scrolls it, and the long sentence never finished.
                ? "Direct Sample Active \xc2\xb7 Gain not available"
                : "Direct Sample Off \xc2\xb7 Gain restored")
             + "\"}";
         for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
-        // ★ And the state itself, so the AGC chip turns to "paused — direct sampling" (or back) now,
-        //   not at the next hwinfo. See dsActive.
-        LocalSdrShim::instance().broadcastHwInfo();
     }
 
     // ── Demod chain (re)build ──────────────────────────────────────────────
@@ -14671,6 +14716,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (jsonNum(msg,"value",v)) {
                 LocalSdrShim::instance().setDirectSampling((int)v);
                 if (adminNow(sock)) vsPersist("{\"directSampling\":" + std::to_string((int)v) + "}");
+                // ★ Everyone's status row follows at once ("Direct Sample" in place of the gain, B10),
+                //   as the AUTO switch already does — not at whatever hwinfo happens next.
+                LocalSdrShim::instance().broadcastHwInfo();
             }
             return;
         }
@@ -15046,7 +15094,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *    formatting the offset itself, so an empty string is harmless. */
                       + ",\"tzOffsetMin\":" + std::to_string(vsUtcOffsetMinutes())
                       + ",\"tzAbbr\":\"" + jsonEscape(vsZoneAbbrev()) + "\""
-                      + ",\"dsActive\":" + (g_dsNow.load(std::memory_order_relaxed) == 2 ? "true" : "false")
+                      // ★ > 0: the I branch (1) bypasses the tuner exactly as the Q branch (2) does —
+                      //   both clients then show "Direct Sample" in place of a gain (B10).
+                      + ",\"dsActive\":" + (g_dsNow.load(std::memory_order_relaxed) > 0 ? "true" : "false")
                       /* ★★★ THE OWNER'S DIRECT-SAMPLING SETTING, not just what the hardware is doing
                        *  this second. `dsActive` is the live state; these say what was CHOSEN, which
                        *  is what the control has to draw.
@@ -23029,6 +23079,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             if (want != g_dsNow.load(std::memory_order_relaxed)
                                 && !vibertl::directSamplingSendNeeded(libWas, want)) {
                                 g_dsNow.store(want, std::memory_order_relaxed);
+                                dsAnnounceStateOnly();
                             }
                             if (want != g_dsNow.load(std::memory_order_relaxed)) {
                                 const int rc = rtlsdr_set_direct_sampling(dev, want);
@@ -23042,6 +23093,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                     //   a listener arriving on HF has not crossed anything.
                                     if (was >= 0) g_dsAnnounce.store(want ? 1 : 2,
                                                                      std::memory_order_relaxed);
+                                    else dsAnnounceStateOnly();
                                 } else {
                                     LOGI("auto direct sampling: set(%d) REFUSED rc=%d — leaving as is",
                                          want, rc);
@@ -27486,8 +27538,9 @@ void LocalSdrShim::overloadTick() {
      *  its gain are bypassed, so every step this loop takes is a no-op and every "overload" it reports
      *  is a verdict on a control it does not have. It stands down: no steps, no ovl events. The ADC's
      *  own clip figure still reaches the client — that is a measurement, and an attenuator is the cure.
-     *  The client learns it from dsActive in hwinfo and says "AGC paused — direct sampling". */
-    if (g_dsNow.load(std::memory_order_relaxed) == 2) return;
+     *  The client learns it from dsActive in hwinfo and says "Direct Sample" where the gain was.
+     *  ★ > 0, not == 2: the I branch (1) bypasses the tuner just the same. */
+    if (g_dsNow.load(std::memory_order_relaxed) > 0) return;
     const int target = g_gainTarget.load(std::memory_order_relaxed);
     if (target < 0) return;            // nothing set — no ceiling to work against
 
@@ -29361,7 +29414,13 @@ void LocalSdrShim::setDirectSampling(int mode) {
     //   and already the one held across engine rebuilds.
     VIBE_RTL_CTL_LOCK();   // ★ devMtx too — see VIBE_RTL_CTL_LOCK
     if (p->radioReleased.load()) return;   // the radio is lent to another program
-    if (p->useTcp()) { p->sendTcpCmd(0x09, (uint32_t)mode); return; }
+    if (p->useTcp()) {
+        p->sendTcpCmd(0x09, (uint32_t)mode);
+        // ★ Recorded here too (see RECORD WHAT THE HARDWARE IS NOW DOING below): over rtl_tcp a MANUAL
+        //   switch left g_dsNow stale, so dsActive said "tuner" with the tuner bypassed.
+        g_dsNow.store(mode, std::memory_order_relaxed);
+        return;
+    }
     if (!p->dev) return;
     /* ★★★ A NO-OP IS NOT SENT (2026-09-30). The Android server screen sends directSampling 0 on EVERY
      *  start ("off" is its default), and librtlsdr does not treat 0-when-already-0 as nothing: it runs

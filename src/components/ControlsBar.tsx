@@ -56,7 +56,7 @@ import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/facepl
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
-import { statusGainParts, statusFit, statusState, type StatusItem, type StatusRowSpec } from '../constants/displayText';
+import { statusGainParts, statusGainText, statusFit, statusState, type StatusItem, type StatusRowSpec } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
 /**
@@ -225,6 +225,9 @@ export interface MeterValues {
    *     thing on the receiver and nothing on screen would otherwise say so. Stuart, of the web
    *     client's version: "so a user knows its working". Empty on a radio that has no such filter. */
   ifText?: string;
+  /** ★ hwinfo's `ds`: the direct-sampling mode the radio is in NOW (0 tuner, 1 I, 2 Q). Above 0 the
+   *  gain item reads "Direct Sample" instead of agcText — see statusGainText. */
+  dsLive?: number;
   fps?:  number;
 }
 export interface MeterBus {
@@ -676,7 +679,10 @@ function useLinkReadout(bus?: MeterBus): LinkReadout {
     // a link exists, so a disconnected meter stays clean.
     return { q, showRate: !!m && q > 0 && everHadRate.current,
              kbps: Math.round(m?.kbps ?? 0), fps: Math.round(m?.fps ?? 0),
-             agcText: m?.agcText ?? '', ifText: m?.ifText ?? '' };
+             // ★ "Direct Sample" in place of the gain while the tuner is bypassed — HERE, the one
+             //   place the drawn readout is derived, so the row, its measuring twin and statusFit's
+             //   widths all see the same text (statusGainText).
+             agcText: statusGainText(m?.agcText ?? '', m?.dsLive), ifText: m?.ifText ?? '' };
   };
   const [r, setR] = useState<LinkReadout>(() => derive(bus ? bus.value : null));
   useEffect(() => {
