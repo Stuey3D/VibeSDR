@@ -3943,6 +3943,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   told nobody anything.
    * ★ AND IT GOES THE INSTANT THE GAIN MOVES. By then it has been acted on, and leaving it up
    *   would be describing a state the radio is no longer in. */
+  /* ★★ ARRIVING IN DIRECT SAMPLING SPENDS THE ONE GO (B10). gainIsAtMinimum is false there (no gain to
+   *  speak of), so the warning used to fire the moment the listener tuned UP out of HF — on top of, and
+   *  ahead of, "Direct Sample Off · Gain restored" (emulator: the server's notice then waited 30 s in the
+   *  queue behind it). The warning is for somebody ARRIVING at a flat waterfall; whoever arrived on HF
+   *  did not, and is mid-session by the time they reach a band with a gain. */
+  useEffect(() => { if (hwDsLive > 0) gainMinShownRef.current = true; }, [hwDsLive, radioCaps]);   // ★ caps re-arm it — see "A new radio"
   useEffect(() => {
     if (!gainIsAtMinimum) { setShowGainMinWarning(false); return; }
     if (gainMinShownRef.current) return;
@@ -8062,23 +8068,87 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  paths DEFER while a notice is up and leave vtsLastStation alone so "the next RDS tick" shows
    *  the name — but a PS-only station, or a bookmark you are parked on, has no next tick, so the
    *  bar simply stayed empty after the notice. At the deadline the latch is cleared and both paths
-   *  are re-run (vtsNoticeEnded is in their deps): the station comes back, or nothing does. */
+   *  are re-run (vtsNoticeEnded is in their deps): the station comes back, or nothing does.
+   * ★★★ AND NOTICES QUEUE RATHER THAN CLOBBER — the web client's rule (vtsPumpNotices), which the app
+   *  never had: it was last-writer-wins, so leaving direct sampling put "Direct Sample Off · Gain
+   *  restored" up and the gain-at-minimum warning, true the same instant, wiped it within a second
+   *  (emulator, B10). One showing, the rest wait their turn; the same words already showing or
+   *  waiting are not said twice (a refusal tapped five times is one notice); a withdrawn one goes
+   *  whether it is showing or still waiting. */
+  type QueuedNotice = { key: number; msg: string; ms: number };
   const vtsNoticeEndTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [vtsNoticeEnded, setVtsNoticeEnded] = useState(0);
-  useEffect(() => () => { if (vtsNoticeEndTimer.current) clearTimeout(vtsNoticeEndTimer.current); }, []);
-  /** ★ Published for the socket callbacks wired far above — see showVtsNoticeRef. */
-  const showVtsNotice = useCallback((msg: string, ms: number) => {
-    vtsNoticeUntil.current = Date.now() + ms;
-    vtsKey.current++;
-    setVtsNotif({ key: vtsKey.current, name: msg, kind: 'notice', ms });
-    if (vtsNoticeEndTimer.current) clearTimeout(vtsNoticeEndTimer.current);
-    vtsNoticeEndTimer.current = setTimeout(() => {
-      vtsNoticeEndTimer.current = null;
+  const vtsNoticeOps = useRef<{
+    show: (msg: string, ms: number) => number;
+    withdraw: (key: number) => void;
+    extend: (key: number, totalMs: number) => void;
+  } | null>(null);
+  if (!vtsNoticeOps.current) {
+    // ★ Built ONCE: everything it touches is a ref or a state setter, so nothing here goes stale.
+    let showing: QueuedNotice | null = null;
+    let startedAt = 0;
+    let queue: QueuedNotice[] = [];
+    const armEnd = (ms: number) => {
+      if (vtsNoticeEndTimer.current) clearTimeout(vtsNoticeEndTimer.current);
+      // ★ +50: the deferrals test Date.now() < vtsNoticeUntil, which must be over by then.
+      vtsNoticeEndTimer.current = setTimeout(endNotice, Math.max(0, ms) + 50);
+    };
+    const present = (n: QueuedNotice) => {
+      showing = n;
+      startedAt = Date.now();
+      vtsNoticeUntil.current = startedAt + n.ms;
+      setVtsNotif({ key: n.key, name: n.msg, kind: 'notice', ms: n.ms });
+      armEnd(n.ms);
+    };
+    const endNotice = () => {
+      if (vtsNoticeEndTimer.current) { clearTimeout(vtsNoticeEndTimer.current); vtsNoticeEndTimer.current = null; }
+      showing = null;
+      vtsNoticeUntil.current = 0;
+      const next = queue.shift();
+      if (next) { present(next); return; }
       vtsLastStation.current = '';
       setVtsNoticeEnded((g) => g + 1);
-    }, ms + 50);   // ★ +50: the deferral tests Date.now() < vtsNoticeUntil, which must be over by then
-    return vtsKey.current;      // ★ so a caller can withdraw exactly its own notice later
-  }, []);
+    };
+    vtsNoticeOps.current = {
+      show: (msg, ms) => {
+        if (showing && showing.msg === msg) return showing.key;
+        const waiting = queue.find((q) => q.msg === msg);
+        if (waiting) return waiting.key;
+        vtsKey.current++;
+        const n = { key: vtsKey.current, msg, ms };
+        if (showing) {
+          queue.push(n);
+          if (queue.length > 3) queue.shift();   // ★ the oldest waiting news is the stalest
+        } else {
+          present(n);
+        }
+        return n.key;
+      },
+      withdraw: (key) => {
+        queue = queue.filter((q) => q.key !== key);
+        if (!showing || showing.key !== key) return;
+        setVtsNotif((n) => (n && n.key === key ? null : n));
+        endNotice();
+      },
+      // ★ VTSBar asks for longer when a VFD needs it for one whole pass (onHoldExtended).
+      extend: (key, totalMs) => {
+        if (!showing || showing.key !== key) return;
+        const until = startedAt + totalMs;
+        if (until <= vtsNoticeUntil.current) return;
+        vtsNoticeUntil.current = until;
+        armEnd(until - Date.now());
+      },
+    };
+  }
+  useEffect(() => () => { if (vtsNoticeEndTimer.current) clearTimeout(vtsNoticeEndTimer.current); }, []);
+  /** ★ Published for the socket callbacks wired far above — see showVtsNoticeRef. */
+  const showVtsNotice = useCallback((msg: string, ms: number) => vtsNoticeOps.current!.show(msg, ms), []);
+  /** ★ Take down exactly this notice — showing or still waiting — and nothing that replaced it. */
+  const withdrawVtsNotice = useCallback((key: number) => vtsNoticeOps.current!.withdraw(key), []);
+  const onVtsHoldExtended = useCallback((key: number, ms: number) => vtsNoticeOps.current!.extend(key, ms), []);
+  /** ★ A timed notif (notice, band, bookmark) has gone from the bar: forget it, so a remounted bar is
+   *  not handed it again (VTSBar onTimedEnd). By key — never what has replaced it. */
+  const onVtsTimedEnd = useCallback((key: number) => setVtsNotif((n) => (n && n.key === key ? null : n)), []);
   // ★ Publish it for the socket callbacks, which are wired before this exists — see the ref.
   showVtsNoticeRef.current = showVtsNotice;
 
@@ -8097,9 +8167,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ WITHDRAWN WHEN THE GAIN MOVES, rather than left to run its 30 s — by then it has been
     //   acted on and it would be describing a state the radio is no longer in.
     // ★ ONLY IF IT IS STILL OURS. A blanket setVtsNotif(null) would wipe whatever had replaced
-    //   it — a station name, a band announcement — so the key is checked first.
-    setVtsNotif((n) => (n && n.key === gainMinNotifKey.current ? null : n));
-  }, [showGainMinWarning, showVtsNotice]);
+    //   it — a station name, a band announcement — so it is withdrawn by key (and from the queue).
+    withdrawVtsNotice(gainMinNotifKey.current);
+  }, [showGainMinWarning, showVtsNotice, withdrawVtsNotice]);
 
   /* ★★★ THE AGC IS STILL SETTING ITSELF UP — SAY SO, AND KEEP SAYING IT UNTIL IT IS DONE.
    *
@@ -8129,8 +8199,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         600000);
       return;
     }
-    setVtsNotif((n) => (n && n.key === agcInitNotifKey.current ? null : n));
-  }, [rspAgcInit, showVtsNotice]);
+    withdrawVtsNotice(agcInitNotifKey.current);
+  }, [rspAgcInit, showVtsNotice, withdrawVtsNotice]);
 
   /* ★★★ EXPLAIN THE ZOOM-FOLLOWING IF FILTER — nothing else behaves this way.
    *   A tuner whose real selectivity moves when you zoom is, as far as we know, ours alone, so a
@@ -10515,6 +10585,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
                 serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH}
+                onHoldExtended={onVtsHoldExtended}
+                onTimedEnd={onVtsTimedEnd}
                 /* ★ What a VFD display shows for a name it cannot draw (faceplates §7). */
                 freqLabel={status.frequency >= 30_000_000
                   ? `${(status.frequency / 1e6).toFixed(3)} MHz`

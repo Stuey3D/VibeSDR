@@ -71,8 +71,17 @@ const VFD_PASS_CAP_MS = 30000;
  *  display every glyph drawn in Nixie One is neon (§2) — including a notice that carries its own
  *  colour, which is then ignored. */
 
-export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel = '' }:
+export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel = '', onHoldExtended, onTimedEnd }:
     { notif: VtsNotifData | null; bottom: number; serverType?: string; onHeight?: (h: number) => void;
+      /** ★ A timed notif was held longer than asked (a VFD's one full pass, onVfdPass): its key and the
+       *  new total, so the screen's own deadline — which defers station names and starts the next
+       *  queued notice — moves with it instead of cutting the pass short. */
+      onHoldExtended?: (key: number, totalMs: number) => void;
+      /** ★★ A timed notif has had its time and gone. The screen must CLEAR it (if it is still the one
+       *  it holds), or the next mount of this bar — controls hidden and shown, Advanced RDS closed, a
+       *  rotation, a Mac window resized — is handed the same old notif and plays it all over again:
+       *  "Direct Sample Off · Gain restored" came back on the emulator a minute after it had gone. */
+      onTimedEnd?: (key: number) => void;
       /** The tuned frequency as text ("7310 kHz") — what a VFD shows when a name folds to nothing
        *  it can draw (§7: Cyrillic, CJK… until native transliteration lands). */
       freqLabel?: string }) {
@@ -107,6 +116,9 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
     fadeOut();
   };
+  // ★ Read through a ref: the hide timer is armed once per notif and must call the CURRENT callback.
+  const onTimedEndRef = useRef(onTimedEnd);
+  onTimedEndRef.current = onTimedEnd;
   /** When the showing TIMED notif appeared, and how long it was asked to stay (for the VFD pass). */
   const shownAtRef = useRef(0);
   const holdMsRef = useRef(0);
@@ -122,8 +134,10 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     const want = Math.min(passMs, VFD_PASS_CAP_MS);
     if (want <= holdMsRef.current) return;
     holdMsRef.current = want;
+    onHoldExtended?.(cur.key, want);
     clearTimeout(hideRef.current);
-    hideRef.current = setTimeout(() => { hideRef.current = null; fadeOut(); },
+    const k = cur.key;
+    hideRef.current = setTimeout(() => { hideRef.current = null; fadeOut(); onTimedEndRef.current?.(k); },
                                  Math.max(0, shownAtRef.current + want - Date.now()));
   };
 
@@ -140,7 +154,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
        *  FM → 7.092 MHz: the direct-sampling notice arrives, then the station clears to null.
        *  ★ A clear is a decision the screen made, so it is obeyed now; a notice the screen wants
        *    to KEEP is protected there (SDRScreen does not clear a showing notice for RDS). */
-      if (shownRef.current) dismiss();
+      if (shownRef.current && visibleRef.current) dismiss();
       return;
     }
     /* ★★★ LIVE DATA UPDATES IN PLACE — IT DOES NOT RE-ENTER (2026-09-29). Every held RDS update
@@ -168,7 +182,9 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     if (!notif.hold) {
       shownAtRef.current = Date.now();
       holdMsRef.current = notif.ms ?? NOTIF_MS;
-      hideRef.current = setTimeout(() => { hideRef.current = null; fadeOut(); }, holdMsRef.current);
+      const k = notif.key;
+      hideRef.current = setTimeout(() => { hideRef.current = null; fadeOut(); onTimedEndRef.current?.(k); },
+                                   holdMsRef.current);
     }
     return () => { if (hideRef.current) clearTimeout(hideRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -345,6 +361,8 @@ function vfdLineText(n: VtsNotifData, display: 'dot' | 'seg', freqLabel: string)
 /** Cell widths from the fonts' own metrics: DSEG14 is 816/1000 em, Doto 600/1000 em (monospaced),
  *  plus the 1 pt letter-spacing both are drawn with (Deck.mockup). */
 const SEG_PX = 15, DOT_PX = 19, CELL_LS = 1;
+/** ★ Spare cells of width the window's Text is laid out with, so the font's fractional excess never ellipsizes the last cell. */
+const TEXT_SLACK = 2;
 const SEG_CELL = SEG_PX * 0.816 + CELL_LS;
 const DOT_CELL = DOT_PX * 0.6 + CELL_LS;
 
@@ -394,15 +412,18 @@ function VfdStrip({ style, rgb, core, glow, text, loop, restartKey, onPassMs }: 
   return (
     <View style={styles.nameArea} onLayout={(e: any) => setW(e.nativeEvent.layout.width)}>
       {n > 0 && (
-        <View style={{ width: n * cellW, alignSelf: 'center', justifyContent: 'center' }}>
+        /* ★★ THE LAST CELL WAS NEVER SHOWN (B10). n cells come out a hair wider than n × cellW on the
+         *  real font, so a Text held to the window's width ran out of room by a fraction and the
+         *  default single-line "tail" swapped the LAST cell for "…" — on every line: Stuart's Mac read
+         *  "…GAIN CONTROL IS NOT AVAIL…", the emulator "RECT SAM…" in a 9-cell window, and a notice
+         *  never showed its final letter. ellipsizeMode="clip" is NOT the fix — on Android a clipped
+         *  single line breaks at a WORD and drops the rest ("RECT" alone; tried, B10). So the Text is
+         *  given room to spare (TEXT_SLACK cells) and the window itself clips the spill. */
+        <View style={{ width: n * cellW, alignSelf: 'center', justifyContent: 'center', overflow: 'hidden' }}>
           {seg
-            ? <Text style={[common, { color: rgba(rgb, 0.10) }]} numberOfLines={1} ellipsizeMode="clip">{segGhost(n)}</Text>
+            ? <Text style={[common, { color: rgba(rgb, 0.10), width: (n + TEXT_SLACK) * cellW }]} numberOfLines={1}>{segGhost(n)}</Text>
             : <GhostGrid rgb={rgb} pitch={3} dot={0.7} />}
-          {/* ★★ ellipsizeMode="clip" (B10): n cells come out a hair wider than n × cellW on the real
-              font, and the default "tail" then swapped the LAST cell for "…" — on every line, so a
-              notice never showed its final letter ("…GAIN CONTROL IS NOT AVAIL…" on Stuart's Mac;
-              "RECT SAM…" in a 9-cell window on the emulator). A VFD has no ellipsis glyph anyway. */}
-          <Text style={[common, lit, seg ? styles.overlay : null]} numberOfLines={1} ellipsizeMode="clip">{win.join('')}</Text>
+          <Text style={[common, lit, seg ? styles.overlay : null, { width: (n + TEXT_SLACK) * cellW }]} numberOfLines={1}>{win.join('')}</Text>
           {seg && run.units.map((u, i) => {
             const at = u.at - shift;
             if (at < 0 || at + u.len > n) return null;
