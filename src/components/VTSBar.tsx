@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import RdsMark from './RdsMark';
@@ -297,7 +297,13 @@ function VfdStrip({ style, rgb, core, glow, text, loop, restartKey }: {
     const t0 = Date.now();
     // Ticks faster than a step so each step lands on time; the offset only CHANGES by a whole
     // cell, and setting an unchanged number does not re-render.
-    const id = setInterval(() => setOffset(steppedOffset(Date.now() - t0, count, n, loop)), VFD_STEP_MS / 3);
+    // ★ NOT WHILE BACKGROUNDED / LOCKED (power audit 2026-10-01): background audio keeps the JS thread
+    //   alive, and a held RDS radiotext marquees FOREVER — 10 ticks and ~3 re-renders a second behind
+    //   a screen nobody can see, on the thread the audio path shares. The step is a function of the
+    //   clock (Date.now() − t0), so on return it is simply where it would have been. (useClock's rule.)
+    const id = setInterval(() => {
+      if (AppState.currentState === 'active') setOffset(steppedOffset(Date.now() - t0, count, n, loop));
+    }, VFD_STEP_MS / 3);
     return () => clearInterval(id);
   }, [restartKey, count, n, loop]);
   const win = cellWindow(run.cells, n, offset, seg ? '!' : ' ');
