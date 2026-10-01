@@ -226,6 +226,10 @@ if node --no-warnings scripts/test_blindTuneGate.ts; then pass=$((pass+1)); else
 #    object so the radio screen does not re-render for it, any drawn change still gets through, and
 #    the controls-bar clock re-renders on the minute, not every second (power audit, 2026-10-01).
 if node --no-warnings scripts/test_renderChurn.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ CONNECTION REFRESH (connectionRefresh.ts): every backend the radio screen hosts gets one, the
+#    audio it restarts matches the screen's own mount gates (native Opus after re-registration, the
+#    VibeServer/dongle pump, the OWRX/Kiwi adapter), and the row is hidden wherever it is a no-op.
+if node --no-warnings scripts/test_connectionRefresh.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens

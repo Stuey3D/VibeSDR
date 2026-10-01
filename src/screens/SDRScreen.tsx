@@ -119,7 +119,8 @@ import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule } from '../components/AudioPlayer';
-import LocalAudioPlayer from '../components/LocalAudioPlayer';
+import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
+import { connectionRefreshPlan, canRefreshConnection, restartAudioOnRegister } from '../services/connectionRefresh';
 import LocalHardwarePanel from '../components/LocalHardwarePanel';
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
@@ -1805,10 +1806,11 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const client    = useRef<SDRBackend | null>(null);
   const destroyed = useRef(false);
-  // Bumping connEpoch mints a fresh session uuid and re-runs the whole connect
-  // path (spectrum client + native audio engine + decoder) from scratch — used
-  // to recover from a data-saver disconnect, where reopening the old session's
-  // sockets lands in a broken half-state (frozen waterfall/zoom, no audio).
+  // Bumping connEpoch re-runs the whole connect path (spectrum client + audio + decoders) from
+  // scratch — used to recover from a data-saver disconnect, where reopening the old session's
+  // sockets lands in a broken half-state (frozen waterfall/zoom, no audio), and by Connection
+  // Refresh. ★ It does NOT mint a new session id any more (see sessionUuid) — which is exactly why
+  // the audio stopped following it: both audio players were keyed on the id. See fullReconnect.
   const [connEpoch, setConnEpoch] = useState(0);
   /** ★★★ REBUILD THE NATIVE AUDIO SOCKET AFTER A TAKEOVER. The engine carries no admin credential
    *  — the native side takes only a PIN — so on a busy receiver its socket is refused ("audio WS
@@ -1832,6 +1834,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *      for another server, or another session id, simply does not match, and there is no window
    *      in which it can. Seen on the device at 19:03 with the gate supposedly in place. */
   const [registeredKey, setRegisteredKey] = useState<string | null>(null);
+  /** ★★ A full reconnect is waiting for the new session registration to restart the native Opus
+   *  engine — see fullReconnect and onSessionRegistered. Ref: read in a backend callback. */
+  const audioRestartOnRegisterRef = useRef(false);
   /** ★★★ RE-REGISTER, THEN RESTART. The native watchdog reopens a socket the server will keep
    *  dropping until the session is registered again, so the reopen alone can never win.
    *  ★ Stable identity (useCallback): AudioPlayer subscribes to the native events in an effect
@@ -1920,6 +1925,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     const now = Date.now();
     if (now - lastReconnectAt.current < 2000) return;  // debounce double-triggers
     lastReconnectAt.current = now;
+    /* ★★★ AND THE AUDIO COMES BACK WITH IT — which, since 112206d1 (2026-08-15), it did not.
+     *  connEpoch was documented as re-running "spectrum client + native audio engine + decoder",
+     *  and both audio players were keyed on the SESSION ID — so when the id was made stable across
+     *  reconnects (rightly: a fresh one came back as a stranger and was refused by its own slot),
+     *  every reconnect silently stopped touching the audio. The spectrum came back; the audio socket
+     *  that had died was left dead. "PAUSED — TAP TO RECONNECT", the connection-lost Reconnect and
+     *  the reconnect-failed retry all brought back a waterfall over silence, unless an admin
+     *  credential happened to be held (onConnect restarts the engine then). Stuart, 2026-10-01,
+     *  DAB on the Sony: "only leaving the server and entering again fixed it."
+     *  ★ The native Opus engine waits for the new registration (issue #20: an audio socket for an
+     *    unregistered id is dropped on sight); the VibeServer / dongle pump follows connEpoch
+     *    directly (its restartKey); OWRX / Kiwi audio lives in the adapter, rebuilt with it. */
+    const plan = connectionRefreshPlan(route.params.serverType, !!route.params.isLocal);
+    audioRestartOnRegisterRef.current = plan.audio === 'native-after-register';
+    // ★ Decoders and chat: re-opened only if one is in use — their own retry gives up after five.
+    if (plan.decoders) decoderClient.current?.refresh();
     setConnEpoch((e: number) => e + 1);
     // If we don't connect within ~12s (server full / rate-limited), flag failure
     // so the lock-screen card + banner tell the user to open the app.
@@ -3543,6 +3564,41 @@ export default function SDRScreen({ route, navigation }: Props) {
     VibePowerModule?.setVoiceConnected?.(connected);
   }, [connected]);
 
+  /* ★★★ CONNECTION REFRESH — the browser's page refresh, for the receiver in front of you (Servers
+   *  menu). Every connection to this server is torn down and made again — spectrum, audio, decoders
+   *  — and the server's state is fetched afresh (occupancy, config, hwinfo, the dial), on the same
+   *  radio and as the SAME session, so the server re-affirms our slot and a guaranteed-time session
+   *  keeps its clock. See services/connectionRefresh.ts for why it is the ordinary reconnect.
+   *  ★★ IT TRANSMITS NOTHING OF ITS OWN. On a shared dial the new sockets ADOPT the server's dial
+   *     (the connect path's rule); on the listener's own dial the reconnect restores their own last
+   *     tune exactly as every reconnect does. Tapping the row is a user action, but it is a request
+   *     for the CONNECTION, not for a frequency — so it must not become a tune.
+   *  ★ The stale cards go first: the refresh is the answer to all of them, and leaving "Connection
+   *    lost" over a connection that is being rebuilt would only contradict it. A refusal is NOT
+   *    cleared — the row is not offered under one (canRefreshConnection). */
+  const onConnectionRefresh = useCallback(() => {
+    crumb('Connection Refresh — the listener asked');
+    noteAudioEvent('connection refresh — rebuilding every connection to this server');
+    if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
+    if (reinitTimer.current) { clearTimeout(reinitTimer.current); reinitTimer.current = null; }
+    resumingRef.current = false;
+    setConnLost(false); setSpecFailed(false); setReinit(false); setServerLost(false);
+    setServerBusy(false); setConnTimedOut(false); setDataSaverOff(false);
+    setReconnectFailedUi(false); VibePowerModule?.setReconnectFailed?.(false);
+    // ★ Every audio path comes back unmuted (each native start clears its mute), so say so.
+    setIsMuted(false);
+    // ★ A deliberate act is never swallowed by the double-trigger debounce meant for echoes.
+    lastReconnectAt.current = 0;
+    fullReconnect();
+  }, [fullReconnect]);
+  const canRefresh = canRefreshConnection({
+    serverType: route.params.serverType,
+    compatOnly: !!route.params?.compatOnly,
+    noSessionYet: doorPending || awaitingRadio,
+    refused: !!refusal,
+    kiwiRefused: !!kiwiRefused,
+  });
+
   // (Re)apply the network notch to the audio engine whenever the connection is up
   // or the toggle changes. Local sources are notched in the shim, not here.
   useEffect(() => {
@@ -4577,6 +4633,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ Stamped with the pair it was registered FOR — this closure belongs to this backend,
         //   which is created per connectBase/sessionUuid.
         if (!destroyed.current) setRegisteredKey(`${connectBase}|${sessionUuid}`);
+        // ★★ A full reconnect's native audio restart, now that the session exists to receive it.
+        if (!destroyed.current
+            && restartAudioOnRegister(audioRestartOnRegisterRef.current, !!adminAuthQRef.current)) {
+          noteAudioEvent('reconnect — session registered, restarting the audio engine');
+          setAudioRestart((n: number) => n + 1);
+        }
+        audioRestartOnRegisterRef.current = false;
       },
       onConnect:    () => { if (!destroyed.current) { connectedOnceRef.current = true;
         // ★ A NEW SESSION starts at the server's default NFM audio, so the remembered choice must
@@ -6407,6 +6470,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         if ((route.params.serverType ?? 'ubersdr') === 'ubersdr') {
           (NativeModules.VibePowerModule as { revive?: () => void })?.revive?.();
         }
+        /* ★★★ AND THE VIBESERVER / DONGLE AUDIO SOCKET, WHICH NOTHING CHECKED. It is the native
+         *  pump's (LocalAudioPlayer), not the Opus engine's, so revive() above never covered it —
+         *  and a suspension is exactly when the server drops it. Native waits two seconds for a
+         *  frame and reopens the socket only if none came (the DAB fault, 2026-10-01). */
+        if (route.params.isLocal) reviveLocalAudio();
         // Reopen the spectrum only AFTER the audio session re-registers
         // server-side: the spectrum WS subscribes to that same session, so if it
         // reopens first it gets no frames and the waterfall stays frozen (the bug
@@ -9060,6 +9128,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
         <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>☆  Set as default</Text>
       </View>
+      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,160,0,0.22)', marginHorizontal: 8 }} />
+      <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
+        <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>↻  Connection Refresh</Text>
+      </View>
     </View>
   );
 
@@ -9122,7 +9194,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, or to favourite this server and set it as your default.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.
@@ -10228,6 +10300,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onBack={onBackToPicker}
           onToggleFavourite={onToggleFavourite}
           onSetDefault={onSetDefault}
+          // ★ Only where a refresh can do something — never a dead row (AGENTS.md).
+          onRefresh={canRefresh ? onConnectionRefresh : undefined}
           openToken={serversToken}
           closeToken={serversCloseToken}
           onExpandedChange={setServersOpen}
@@ -11149,6 +11223,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           authSuffix={radioAuthSuffix || route.params.authSuffix}
           adminAuth={adminAuthWire}
           sessionId={sessionUuid}
+          // ★★★ A RECONNECT REOPENS THIS SOCKET TOO — see the prop, and fullReconnect.
+          restartKey={connEpoch}
           // ★★★ NOT ON A SHARED DIAL. This socket says `tune` as it opens, with whatever the screen
           //     is holding — and before the server's own state is adopted that is the app's DEFAULT,
           //     so joining somebody's shared receiver threw the room to 14.074 MHz, outside what
