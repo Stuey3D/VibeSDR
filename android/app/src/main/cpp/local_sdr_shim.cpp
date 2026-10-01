@@ -12074,20 +12074,53 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  as the mode switch it is. Sent as a plain `notice`, which every client already renders
      *  (a pill on the web, the scrolling bar in the app), so it needs no new message type on
      *  either side. */
+    /* ★★★ AND ONLY WHEN THE CHANGE HAS STOOD FOR A MOMENT (B10, 2026-10-01). A RETURNING listener crosses
+     *  the boundary TWICE without anybody moving anything: the fresh socket is a new session, the server
+     *  lands it on its landing frequency (FM — tuner), and the app then re-asserts its own HF dial (Q branch).
+     *  Measured on the emulator against the fake rtl_tcp: every reconnect said "Direct Sample Off · Gain
+     *  restored" AND THEN "Direct Sample Active · Gain not available" to somebody who had been on 7.092 MHz
+     *  throughout — and the app reconnects its spectrum socket every time it comes back from the background,
+     *  so the notice "kept coming back". Same for a dial dragged back and forth over the crossover.
+     *  So a crossing only arms the notice; it is SAID once the mode has held for kDsAnnounceSettleMs, and
+     *  only if it differs from what it was before the burst began. The STATE (hwinfo) still goes at once,
+     *  so the status row's "Direct Sample" never waits.
+     *  ★ One caller (onSpectrum, this radio's spectrum thread), so the burst lives in plain members. */
+    static constexpr int64_t kDsAnnounceSettleMs = 2000;
+    int     dsBurstFrom_ = -1;   // the mode before this burst (0 tuner, 1 DS); -1 = no burst pending
+    int64_t dsBurstAt_ = 0;      // when the burst last moved (steady ms)
+    int     dsSeen_ = -1;        // the mode at the last drain with no burst pending (-1 = not yet seen)
+    static int64_t dsNowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
     void drainDirectSamplingAnnounce() {
         const int a = g_dsAnnounce.exchange(0, std::memory_order_relaxed);
-        if (!a) return;
-        if (a == 3) { LocalSdrShim::instance().broadcastHwInfo(); return; }   // ★ state only — see dsAnnounceStateOnly
+        if (a) {
+            // ★ The state itself goes NOW, so the status row turns to "Direct Sample" (or back) at once,
+            //   not at the next hwinfo. See dsActive.
+            LocalSdrShim::instance().broadcastHwInfo();
+            if (a == 1 || a == 2) {
+                // ★ What it was before the burst: the mode seen at the last quiet drain — NOT inferred
+                //   from `a`, which is one slot, so two crossings inside one frame keep only the last.
+                if (dsBurstFrom_ < 0) dsBurstFrom_ = dsSeen_ >= 0 ? dsSeen_ : (a == 1 ? 0 : 1);
+                dsBurstAt_ = dsNowMs();
+            }
+            // a == 3: state only — see dsAnnounceStateOnly
+        }
+        const int now = g_dsNow.load(std::memory_order_relaxed) > 0 ? 1 : 0;
+        if (dsBurstFrom_ < 0) { dsSeen_ = now; return; }
+        if (dsNowMs() - dsBurstAt_ < kDsAnnounceSettleMs) return;
+        dsSeen_ = now;
+        const int from = dsBurstFrom_;
+        dsBurstFrom_ = -1;
+        if (now == from) return;   // ★ there and back (a reconnect's landing, a dial dragged over and back)
         const std::string body = std::string("{\"type\":\"notice\",\"vts\":\"")
-            + (a == 1
+            + (now == 1
                // ★ Short (B10, Stuart): a VFD strip scrolls it, and the long sentence never finished.
                ? "Direct Sample Active \xc2\xb7 Gain not available"
                : "Direct Sample Off \xc2\xb7 Gain restored")
             + "\"}";
         for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
-        // ★ And the state itself, so the status row turns to "Direct Sample" (or back) now,
-        //   not at the next hwinfo. See dsActive.
-        LocalSdrShim::instance().broadcastHwInfo();
     }
 
     // ── Demod chain (re)build ──────────────────────────────────────────────
