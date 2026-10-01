@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { APP_PROTO } from '../constants/version';
 // SDR directory providers — separate receiver lists the picker presents as
 // distinct "directories" (like different websites). Each is fetched on demand
@@ -28,7 +29,11 @@ export const DIRECTORIES: DirectoryMeta[] = [
   //    "it can be with the rest of the directories at the bottom, just at the top of the list
   //    above UberSDR"). It is a directory; it reads as one alongside the others, and being first
   //    is enough to say it is ours without inventing a second place for it to live.
-  { id: 'vibeserver',  name: 'VibeServer',  desc: 'Public VibeServers — list yours from the app',
+  // ★ Only ANDROID can host (and so list) a VibeServer from this app — an iPhone cannot (B9, Stuart): there
+  //   the line says where a server CAN run instead of promising a button that isn't there.
+  { id: 'vibeserver',  name: 'VibeServer',
+    desc: Platform.OS === 'android' ? 'Public VibeServers — list yours from the app'
+                                    : 'Public VibeServers — host one on Android, Mac or Linux',
     kinds: ['vibeserver'] },
   { id: 'ubersdr',     name: 'UberSDR',     desc: 'Official UberSDR instances',                 kinds: ['ubersdr'] },
   { id: 'receiverbook', name: 'Receiverbook', desc: 'OpenWebRX + KiwiSDR (receiverbook.de)',     kinds: ['owrx', 'kiwi'] },

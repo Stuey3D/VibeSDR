@@ -366,8 +366,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       //    Server Mode" — that label exists only in the Mac app; here the screen is reached by
       //    "Use as server" and the switch is "List this server publicly" under ADVERTISE ON
       //    VIBESDR.NET. And Directories is no longer the very bottom: MAPS ON THIS DEVICE sits below.
+      // ★ B9 (Stuart): an iPhone cannot host or list a server — "Use as server" exists only on Android.
       body: 'Under Directories, first in the list, as VibeServer. Running VibeServer yourself? '
-          + 'Tap Use as server and turn on List this server publicly, and yours appears there too.' },
+          + (Platform.OS === 'android'
+            ? 'Tap Use as server and turn on List this server publicly, and yours appears there too.'
+            : 'Host it on an Android phone, a Mac or Linux and turn on public listing there, and yours appears here too.') },
     { id: 'custom', title: 'Your own server',
       body: 'Got a private UberSDR, OpenWebRX, KiwiSDR or Web-888? Enter its address here to connect to it directly.',
       target: tourRef('customUrl') },
