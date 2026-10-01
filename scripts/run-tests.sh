@@ -168,6 +168,11 @@ if node scripts/test-web-decoder-refusal.mjs; then pass=$((pass+1)); else fail=$
 #    pixel), every swatch combination stays ≥ 3:1, SOLID is opaque with no backdrop-filter anywhere, the
 #    keys travel as VIEW_KEYS, and an older browser starts solid unless a stored choice says otherwise.
 if node --no-warnings scripts/test-web-control-colours.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ THE DESKTOP BAR STAYS GONE. The compact card (#mcard) is the web layout at every width; the old
+#     bar shipped hidden for months, still wired, and fixes landed on it that reached nobody. Checks the
+#     BUILT page (web/dist — run node scripts/build-web.mjs): no removed id as an element, a selector or
+#     a script literal, and the bar's real leftovers (#linkStats, search, bandwidth row) where they live.
+if node scripts/test-web-no-desktop-bar.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ THE FACEPLATE RULES (app). Nixie One is neon in every chassis × display × colour, dot/seg can
 #     never reach white by any route (picker, migration, stored prefs), and the DEFAULT settings
 #     resolve to today's literal colours — the pixel-identical promise, checked as data.

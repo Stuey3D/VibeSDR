@@ -1284,9 +1284,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (on !== srvShared) { srvShared = on; populateHw(); }
       // ★ sharing decides whether the IF filter is this listener's to set at all.
       syncIfMenu();
-      for (const id of ['chatBtn', 'mChat']) {
-        const b = document.getElementById(id) as HTMLButtonElement | null;
-        if (!b) continue;
+      const b = document.getElementById('mChat') as HTMLButtonElement | null;
+      if (b) {
         // ★★★ DISABLED, NOT HIDDEN (Stuart, 2026-08-20). A vanishing button collapsed the right
         //     stack to one cell and left portrait with three buttons where the layout wants four,
         //     so the island changed shape depending on which receiver you were on. Greying keeps
@@ -1571,12 +1570,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (!activeDec) hideDecBox();
       }
       // ★ And the door to them, when there is nothing left behind it.
-      const anyDec = ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots']
-        .some(d => !blockedModes.has(d));
-      const db = document.getElementById('decodersBtn');
-      if (db) db.hidden = !anyDec;
-      // (The compact card's sheet is built afresh each time it opens, so it reads the new list
-      //  through soleDecoder() with nothing more to do here.)
+      // (The card's mode picker is built afresh each time it opens, so it reads the new list
+      //  through soleDecoder() / anyDecoderLeft() with nothing more to do here.)
       // If we are somehow already ON a blocked mode (an owner switched it off mid-session),
       // move to the first one that is still allowed rather than leaving a dead selection.
       if (spec?.mode && isModeBlocked(String(spec.mode))) {
@@ -4292,7 +4287,7 @@ function drawDbAxis(ctx: CanvasRenderingContext2D, W: number, H: number) {
 
 // ── Signal meter (derived from the SPEC bins — the shim sends no S-meter) ────
 
-let sigSmooth = 0, sigPeak = 0;
+let sigSmooth = 0;
 /** ★ Module-level so the SPECTRUM FRAME handler can repaint the card's meter. It is set
  *  during UI init, which happens before any frame arrives; the `?.` covers the gap. */
 let mobileUi: ReturnType<typeof initMobileControls> | null = null;
@@ -4373,41 +4368,11 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   //    ★ Attack still faster than release. A meter that lags a signal appearing is useless; one
   //      that falls back gently is readable.
   sigSmooth += (norm - sigSmooth) * (norm > sigSmooth ? 0.30 : 0.12);
-  sigPeak = norm > sigPeak ? norm : Math.max(norm, sigPeak - 0.004);
-
-  setStyle($('sigFill'), 'width', `${(sigSmooth * 100).toFixed(1)}%`);
-  setStyle($('sigPeak'), 'left', `${(sigPeak * 100).toFixed(1)}%`);
 
   // Feed the squelch control the same live scale and signal the main meter is drawing, so the ball
   // sits on exactly the level the fill is showing.
   sqlScaleMin = dbMin; sqlScaleMax = dbMax; sqlSigNorm = sigSmooth;
   drawSquelchBar(sigDb);
-
-  // SQUELCH NEEDLE. The gate is a dBFS threshold and `sigDb` is dBFS, so the needle maps onto the
-  // bar through exactly the same normalisation as the fill — it lands where the signal would have
-  // to reach to open the gate, which is the only position that means anything.
-  const sqlOn = squelchDb > -100;
-  const sig = $('sig');
-  setClass(sig, 'sqlOn', sqlOn);
-  if (sqlOn) {
-    const sqlNorm = Math.max(0, Math.min(1, (squelchDb - dbMin) / Math.max(1, dbMax - dbMin)));
-    setStyle($('sigSql'), 'left', `${(sqlNorm * 100).toFixed(1)}%`);
-    // Compare against the RAW reading, not the smoothed fill: the smoothing has a slow decay, so a
-    // gate that has just closed would keep reading "passing" for most of a second.
-    setClass(sig, 'sqlClosed', sigDb < squelchDb);
-  } else {
-    setClass(sig, 'sqlClosed', false);
-  }
-
-  // FIXED-WIDTH fields so the row never shifts as values change length. The S-unit is the worst
-  // offender (S9+18 → S6 is 5→2 chars) and the row is centred, so any length change re-centres the
-  // whole line (Stuart 2026-07-24). Pad each field to its max width and reserve the SQL slot; with
-  // #sigLabel monospace + white-space:pre the line is now constant width.
-  const dbfsStr = `${sigDb.toFixed(0).padStart(4)} dBFS`;   // "-120 dBFS" .. "  -30 dBFS"
-  const suStr   = toSUnit(sigDb).padEnd(5);                 // "S9+60" .. "S6   "
-  const snrStr  = `SNR ${snrSmooth.toFixed(0).padStart(2)} dB`;
-  const sqlStr  = sqlOn && sigDb < squelchDb ? ' · SQL' : '      ';   // reserve the slot either way
-  setText($('sigLabel'), `${dbfsStr} · ${suStr} · ${snrStr}${sqlStr}`);
 }
 
 /** The squelch threshold in dBFS, mirrored here so the meter can draw the needle. −100 = off. */
@@ -5017,33 +4982,6 @@ function updateStatus() {
     //   (see the note above: a counter a listener cannot interpret reads as a fault report).
     //   The detail is window.__vibeFaults() in the console.
     + (faultTotal() ? ` · ${faultTotal()} bad message${faultTotal() === 1 ? '' : 's'} dropped (__vibeFaults())` : '');
-
-  // Faults go on the METER, not into the status text: a long message there ran
-  // off the edge of the screen, and the meter is where you're already looking
-  // when you're wondering why there's no sound.
-  let fault = '';
-  let info = '';
-  switch (audio?.health) {
-    case 'suspended': fault = 'AUDIO PAUSED — CLICK THE PAGE'; break;
-    case 'no-stream': fault = 'AUDIO DISCONNECTED'; break;
-    case 'silent':    fault = 'NO SOUND — IS THE TAB MUTED?'; break;
-    // ★ The one fault the LISTENER cannot fix: only the server's owner can allow the
-    //   uncompressed fallback, so say who has to act rather than just what is wrong.
-    // ★★ It should now be unreachable — every browser has the WASM decoder, so nothing is
-    //    turned away for lack of Opus. If it ever shows again, both decoders died, and that
-    //    is worth knowing rather than presenting as a mysterious silence.
-    case 'opus-stuck': fault = 'OPUS FAILING — OWNER MUST ALLOW UNCOMPRESSED AUDIO'; break;
-    // Squelch is NOT a fault and no longer takes an overlay — the message clipped inside the
-    // meter and hid the very bar you watch while waiting for a signal. It shows as the breathing
-    // SQL chip beside the link bars instead (below).
-  }
-  // A fault replaces the meter and pulses, to grab attention. Squelch does neither:
-  // it is expected behaviour, and the meter is exactly what you want to watch while
-  // waiting for a signal to break the threshold.
-  $('sig').classList.toggle('fault', !!fault);
-  $('sigFault').textContent = fault;
-  $('sigFault').classList.toggle('show', !!fault);
-  $('sigFault').classList.remove('info');
 
   // ★★ THE SQUELCH IS SAID ONCE, in the SNR field beside the frequency, where the eye already is
   //    when you are wondering why there is no audio. There used to be a second chip down in the
@@ -6144,7 +6082,7 @@ let rdsStereo = false;
  *  dabServiceStereo, shared with the app), never the FM pilot's, which stayed lit from the last FM
  *  station on a mono DAB service (Stuart, 2026-10-01). Off while the service is not yet known. */
 function syncStereoLight() {
-  $('stereo').classList.toggle('on', dabOn ? dabServiceStereo(dabState) : rdsStereo);
+  $('mStereo').classList.toggle('on', dabOn ? dabServiceStereo(dabState) : rdsStereo);
 }
 /** performance.now() when the listener last picked a DAB service; 0 once it has been heard. */
 let dabPickedAt = 0;
@@ -6934,21 +6872,20 @@ function dabTune(delta: number) {
  *  which also covers the wheel, the keys and the waterfall; this is the visible half. The arrows
  *  stay live because in DAB they step the multiplex (see nudge). */
 function dabLockControls(on: boolean) {
-  for (const id of ['zoomIn', 'zoomOut', 'zoomReset', 'mZoomIn', 'mZoomOut']) {
+  /* ★ FIT too: resetting the view is a zoom like any other, and it was greyed only on the retired
+   *  desktop bar's FIT button — the card's (#mPanelFit, in the menu) stayed live and did nothing. */
+  for (const id of ['mZoomIn', 'mZoomOut', 'mPanelFit']) {
     const el = document.getElementById(id) as HTMLButtonElement | null;
     if (!el) continue;
     el.disabled = on;
     if (on) { el.dataset.dabTitle = el.title; el.title = 'Zoom is locked in DAB — the span is the multiplex'; }
     else if (el.dataset.dabTitle !== undefined) { el.title = el.dataset.dabTitle; delete el.dataset.dabTitle; }
   }
-  const td = document.getElementById('tuneDown'); const tu = document.getElementById('tuneUp');
-  if (td) td.title = on ? 'Previous multiplex' : 'Tune down one step';
-  if (tu) tu.title = on ? 'Next multiplex' : 'Tune up one step';
   /* ★★★ AND THE FREQUENCY ENTRY, WHICH WAS THE ONE CONTROL LEFT LYING. The zoom, the arrows and the
    *  IF filter were all given their DAB meaning or greyed; typing a frequency was not, so the panel
    *  opened, took a number, and the server refused the tune — silently, since a refusal on a held
    *  dial says nothing. A locked box with a padlock and a reason is the same rule applied to the
-   *  last reader (Stuart, 2026-09-25). The gate itself is on #pill's handler, which every route
+   *  last reader (Stuart, 2026-09-25). The gate itself is in openFreqEntry(), which every route
    *  goes through; this is the visible half. */
   const lock = document.getElementById('mFreqLock');
   const fb   = document.getElementById('mFreqBox');
@@ -7185,13 +7122,6 @@ function dabUiOff() {
   }
 }
 
-/* ★★★ THE DESKTOP BAR'S MODE ROW IS GONE. #bar was retired in favour of the one unified card
- *  (it is `display:none` in every layout), so buildModeButtons() was building buttons into a
- *  container nobody can see, and marking the active one on them. The mode picker that exists is
- *  the card's, built in mobile.ts from deps.modes().
- *  ★ This is what hid the DAB button: it was added HERE, correctly, and drawn where no listener
- *    could ever look (Stuart, 2026-09-04). Deleting the row means the next control cannot be
- *    added to the dead one by mistake. */
 
 
 /** ★★★ ONE PLACE THAT KNOWS WHAT "MUTED" LOOKS LIKE.
@@ -7206,12 +7136,11 @@ function dabUiOff() {
 function setMuted(on: boolean): void {
   if (!audio) return;
   audio.muted = on;
-  document.getElementById('muteBtn')?.classList.toggle('on', on);
-  // ★ The desktop bar's AUDIO word goes red (it has no glyph to carry the state). The compact card's
-  //   speaker key (#mAudio) does NOT: it shows the prohibition-sign glyph in its own legend colour,
-  //   via the `muted` class mobile.ts mirrors from #muteBtn — red would vanish on red controls
-  //   (Stuart, 2026-10-01).
-  document.getElementById('audioBtn')?.classList.toggle('mutedRed', on);
+  // ★ Both speaker keys — the card's (#mAudio) and the audio panel's (#mPanelMute) — show the
+  //   prohibition-sign glyph in their own legend colour, never red: red would vanish on red controls
+  //   (Stuart, 2026-10-01). Written HERE, the one place that changes the state, so neither can
+  //   disagree with audio.muted. (They used to be mirrored by a 4 Hz poll from a hidden bar button.)
+  for (const id of ['mAudio', 'mPanelMute']) document.getElementById(id)?.classList.toggle('muted', on);
   const pop = document.getElementById('volPop');
   if (pop && !pop.hidden) {
     const pct = on ? 0 : Math.round(audio.volume * 100);
@@ -7229,7 +7158,7 @@ function setVolumePct(pct: number): void {
   if (!audio) return;
   const p = Math.max(0, Math.min(100, Math.round(pct)));
   audio.volume = p / 100;
-  const el = document.getElementById('vol') as HTMLInputElement | null;
+  const el = document.getElementById('mPanelVol') as HTMLInputElement | null;
   if (el) el.value = String(p);
   if (p > 0) savePref('volume', audio.volume);   // ★ never save 0 — that is mute, not a volume
   setMuted(p === 0);
@@ -7238,21 +7167,16 @@ function setVolumePct(pct: number): void {
 function buildControls() {
   buildVfo();
 
-  // No anchor = zoom about the LISTEN VFO: the station you're on stays put and the
-  // span closes in around it.
-  // A click keeps its familiar octave; a sweep uses a quarter of one, or holding
-  // the key would cross the entire zoom range before you could let go.
-  const zoomStep = (f: number) => () => { spec!.zoomBy(f); updateViewOverlays(); };
-  const OCT = Math.pow(2, 0.25);
-  attachHoldSweep($('zoomIn'),  zoomStep(2),   zoomStep(OCT));
-  attachHoldSweep($('zoomOut'), zoomStep(0.5), zoomStep(1 / OCT));
-  $('zoomReset').onclick = () => spec!.resetView();
+  // FIT: the whole span. (Greyed in DAB — see dabLockControls.)
+  $('mPanelFit').onclick = () => spec!.resetView();
 
-  const lock = $<HTMLButtonElement>('lockBtn');
+  // ★ LOCKED (the view follows the dial) / FREE. The label names the STATE and is written here, the
+  //   one place that changes it — it used to be mirrored from a hidden bar button by a 4 Hz poll.
+  const lock = $<HTMLButtonElement>('mPanelLock');
   lock.onclick = () => {
     spec!.followVfo = !spec!.followVfo;
-    lock.classList.toggle('on', spec!.followVfo);
-    lock.textContent = spec!.followVfo ? 'LOCK' : 'FREE';
+    lock.textContent = spec!.followVfo ? 'LOCKED' : 'FREE';
+    lock.classList.toggle('free', !spec!.followVfo);
     // Walls and the RF-centre marker only mean anything once the view is free to
     // wander. CENTRE is governed separately — see updateCentreBtn().
     updateViewOverlays();
@@ -7274,20 +7198,20 @@ function buildControls() {
       setHidden(chip, true);
     };
   }
-  $('centreBtn').onclick = () => {
-    spec!.pan(spec!.frequency);
-    updateViewOverlays();
-  };
+  // ★ One implementation of "snap back to the dial", for the menu's CENTRE and the floating button.
+  const centre = () => { spec!.pan(spec!.frequency); updateViewOverlays(); };
+  $('mPanelCentre').onclick = centre;
+  $('mCentreFloat').onclick = centre;
 
-  const vol = $<HTMLInputElement>('vol');
+  // ★★ THE VOLUME IS audio.volume; the slider in the audio panel is its control, not a copy.
+  const vol = $<HTMLInputElement>('mPanelVol');
   vol.value = String(((prefs().volume as number) ?? 0.8) * 100);
   audio!.volume = Number(vol.value) / 100;
   vol.oninput = () => {
     audio!.volume = Number(vol.value) / 100;
     savePref('volume', audio!.volume);
   };
-  const mute = $<HTMLButtonElement>('muteBtn');
-  mute.onclick = () => { setMuted(!audio!.muted); updateMediaSession(); };
+  $('mPanelMute').onclick = () => { setMuted(!audio!.muted); updateMediaSession(); };
 
   /* ★★★ THE WHEEL VOLUME, ON THE AUDIO BUTTON — a pointer-only convenience.
    *
@@ -7302,14 +7226,9 @@ function buildControls() {
    *    crossed the button on its way somewhere else. */
   const hasPointer = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
   if (hasPointer) {
-    /* ★★★ BOTH AUDIO BUTTONS. There are two — `audioBtn` in the desktop bar and `mAudio` on the
-     *  compact control card — and CSS alone decides which is on screen, so wiring only the first
-     *  meant the gesture did nothing for anyone using the card. Stuart hit exactly that: the
-     *  screenshot shows the card's own tooltip ("Audio: squelch, noise reduction, notch") and no
-     *  popover, on a desktop with a mouse (2026-09-25).
-     *  ★★ The same fault shape as the mute state earlier today: one behaviour, two controls, and
-     *     only one of them taught about it. */
-    const btns = ['audioBtn', 'mAudio']
+    /* ★★★ ON THE CARD'S SPEAKER KEY. It was first wired to the retired desktop bar's AUDIO button
+     *  alone, so the gesture did nothing for anyone using the card (Stuart, 2026-09-25). */
+    const btns = ['mAudio']
       .map(id => document.getElementById(id) as HTMLButtonElement | null)
       .filter((b): b is HTMLButtonElement => !!b);
     const pop = $<HTMLElement>('volPop');
@@ -7321,7 +7240,7 @@ function buildControls() {
      *  removing it — and only on pointer devices, where the popover exists to replace it. */
     for (const b of btns) b.removeAttribute('title');
     let dwell = 0, leave = 0;
-    /** ★ Anchored to whichever button the pointer is actually on — they sit in different places. */
+    /** ★ Anchored to the button the pointer is actually on. */
     let over: HTMLElement | null = null;
     const place = () => {
       const r = (over ?? btns[0]).getBoundingClientRect();
@@ -7361,12 +7280,15 @@ function buildControls() {
 
   initFreqEntry();
 
-  // ── Mobile control card ──────────────────────────────────────────────────
-  // ★ Wired unconditionally; CSS alone decides whether the card is on screen (≤1280px).
-  //   Gating the WIRING on width instead would mean a user who resizes the window gets a
-  //   dead card — and resizing is precisely how this layout is meant to be reached.
+  // ── The control card — the only control surface, at every width ──────────
   mobileUi = initMobileControls({
     nudgeSteps: (n) => nudge(n * step),
+    /* ★★★ THE TUNE PADS SWEEP THROUGH attachHoldSweep — the accelerating, ECHO-PACED sweep Stuart asked
+     *  for on 2026-09-27/28 ("it often goes faster than the connection can keep up with"; "it can
+     *  overwhelm a server especially a slower one"). Both fixes were made in attachHoldSweep, which then
+     *  drove only the retired desktop bar's hidden ◀ ▶ — the card's ‹ › kept a flat 14 steps/s that
+     *  never waits for the receiver, so neither fix ever reached a listener. */
+    holdSweep:  (el, tap) => attachHoldSweep(el, tap),
     zoomBy:     (f) => { spec?.zoomBy(f); updateViewOverlays(); },
     freqHz:     () => spec?.frequency ?? null,
     freqText:   () => cardFreqText(),
@@ -7377,8 +7299,7 @@ function buildControls() {
     mode:       () => dabOn ? 'DAB' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
-    // sigSmooth is the same 0..1 the desktop meter fills to, and the three readings come from
-    // the same figures its status line prints — so the card can never contradict the bar.
+    // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
     signal:     () => ({
       level: sigSmooth, snr: snrSmooth, dbfs: lastSigDb, sUnit: toSUnit(lastSigDb),
       // ★ The squelch threshold in the SAME normalisation the gradient is drawn in, so the
@@ -7392,11 +7313,10 @@ function buildControls() {
         ? Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / Math.max(1, sqlScaleMax - sqlScaleMin)))
         : -1,
     }),
-    openFreqEntry: () => $('pill').click(),
-    /* ★★★ BLOCKED MODES WERE NEVER FILTERED HERE. isModeBlocked() was applied only in
-     *  buildModeButtons — the DESKTOP bar's row — and that bar is retired and hidden, so an
-     *  owner who switched a demodulator off still had it offered in the only picker anybody
-     *  uses, and picking it was a no-op. AGENTS.md: never draw a control whose every use is a
+    openFreqEntry: () => openFreqEntry(),
+    /* ★★★ BLOCKED MODES WERE NEVER FILTERED HERE. isModeBlocked() was applied only to the retired
+     *  desktop bar's mode row, so an owner who switched a demodulator off still had it offered in
+     *  the only picker anybody uses, and picking it was a no-op. AGENTS.md: never draw a control whose every use is a
      *  no-op. The list is read fresh on every open, so a mid-session change takes effect. */
     modes:      () => MODES.filter(m => !isModeBlocked(m)) as unknown as string[],
     /* ★★★ CHOOSING A DEMODULATOR LEAVES DAB. DAB is not an SDRMode — it replaces the whole
@@ -7410,8 +7330,7 @@ function buildControls() {
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
     soleDecoder,
-    // ★★ The SAME dabCapable and the SAME toggle the desktop bar's button uses — not a second
-    //    copy of the rule, which is how the two pickers came to disagree in the first place.
+    anyDecoderLeft,
     dabCapable:    () => dabCapable,
     dabOn:         () => dabOn,
     toggleDab:     () => dabSetMode(!dabOn),
@@ -7515,7 +7434,6 @@ function updateCentreBtn() {
     const hi = lo + span;
     offscreen = spec.frequency < lo || spec.frequency > hi;
   }
-  setHidden($('centreBtn'), !offscreen && spec.followVfo);
 
   // ★★ AND THE FLOATING ONE, over the waterfall. The menu copy is no use for this: the whole
   //    point is that the dial has gone off screen and you want it back NOW, and a control you
@@ -8690,7 +8608,7 @@ function initBookmarks() {
     togglePanel('bookmarksPanel');
     renderBookmarks();
   };
-  $('bookmarksBtn').onclick = () => {
+  $('mBookmarks').onclick = () => {
     bmFilter = 'all';
     togglePanel('bookmarksPanel');
     renderBookmarks();
@@ -9011,16 +8929,14 @@ function initPanels() {
   // a box-shadow, so there is no backdrop element to hang this on.
   window.addEventListener('pointerdown', (e) => {
     const t = e.target as HTMLElement;
-    // ★★★ #mcard IS EXEMPT FOR THE SAME REASON #bar IS. This closer runs on POINTERDOWN, so
-    //     without the exemption every tap on a card control closed the panels a beat before
-    //     that control's own click handler tried to open one — the two fought, and buttons
-    //     needed several presses before one happened to land (Stuart, 2026-08-01). #bar was
-    //     exempted when it was the only control surface; the card is the second one and
-    //     inherited none of it.
+    // ★★★ #mcard IS EXEMPT. This closer runs on POINTERDOWN, so without the exemption every tap
+    //     on a card control closed the panels a beat before that control's own click handler
+    //     tried to open one — the two fought, and buttons needed several presses before one
+    //     happened to land (Stuart, 2026-08-01).
     //     ★ The popups are exempt too: #stepMenu and #mModeMenu are anchored menus rather than
     //     PANELS members, so a click on one of their options counted as "outside".
     if (!PANELS.some(id => $(id).contains(t))
-        && !t.closest('#bar') && !t.closest('#mcard') && !t.closest('#mCentreFloat')
+        && !t.closest('#mcard') && !t.closest('#mCentreFloat')
         && !t.closest('#stepMenu') && !t.closest('#mModeMenu')) closePanels();
   });
 }
@@ -9446,11 +9362,10 @@ function initDecoders(host: string, auth: AuthState) {
   initAhfControls();
   initAirspyControls();
   initHrfControls();
-  $('decodersBtn').onclick = () => togglePanel('decodersPanel');
   $('decClose').onclick = () => closePanels();
   // ★ The panel owns the unread count only while it is OPEN — chatOpened(false) on close is what
   //   lets it start counting again, so a message that lands while you are reading is not "unread".
-  $('chatBtn').onclick = () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); };
+  //   (Opened from the card's #mChat — see openChat in buildControls.)
   $('chatClose').onclick = () => { closePanels(); chatOpened(false); };
   initChat({
     say: (id) => spec?.send({ type: 'say', id }),
@@ -9494,21 +9409,14 @@ function initDecoders(host: string, auth: AuthState) {
     modes: () => MODES.filter((m) => !isModeBlocked(m)) as unknown as string[],
     freqHz: () => spec?.frequency ?? 0,
     onUnread: (n) => {
-      for (const id of ['chatUnread', 'mChatUnread']) {
-        const el = document.getElementById(id);
-        if (!el) continue;
-        el.textContent = String(n);
-        (el as HTMLElement).hidden = n <= 0;
+      {
+        const el = document.getElementById('mChatUnread');
+        if (el) { el.textContent = String(n); el.hidden = n <= 0; }
       }
       // ★★ AND THE BUTTON ITSELF BREATHES — see .chatBreathing. The count says how many; the
       //    pulse is what makes somebody LOOK, which on a shared dial is the whole point: a
       //    message is usually a question waiting on an answer.
-      //  ★ Both buttons, because the compact layout has its own and a message must not announce
-      //    itself on one screen size and stay silent on another.
-      for (const id of ['chatBtn', 'mChat']) {
-        const b = document.getElementById(id);
-        if (b) b.classList.toggle('chatBreathing', n > 0);
-      }
+      document.getElementById('mChat')?.classList.toggle('chatBreathing', n > 0);
     },
   });
 
@@ -9848,6 +9756,14 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
     + `<text x="${bodyW / 2 + 0.75 - (charging ? 5 : 1)}" y="${h / 2 + 4}" text-anchor="middle" font-size="10.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif" fill="#c98f2a">${text}</text>`
     + (charging ? `<text x="${bodyW - 4}" y="${h / 2 + 4}" text-anchor="middle" font-size="10" fill="#c98f2a">⚡</text>` : '')
     + `</svg>`;
+}
+
+/** ★ Is there ANY decoder (or the spot list) the owner has left switched on? When there is not, the
+ *  mode picker drops its DECODERS… door — a door to an empty room is a control whose every use is a
+ *  no-op (AGENTS.md). This rule used to hide the retired desktop bar's DECODERS button and nothing
+ *  else, so the card kept offering the empty panel. */
+function anyDecoderLeft(): boolean {
+  return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d));
 }
 
 function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
@@ -12078,21 +11994,30 @@ function recordingName(hz: number, mode: string, at: Date): string {
   return `VibeSDR_${(hz / 1e6).toFixed(3)}MHz_${mode.toUpperCase()}_${stamp}.wav`;
 }
 
+/** ★ The recorder's state on screen: the audio panel's REC/STOP button and the card's breathing
+ *  timer. Written by the recorder itself — the one writer — never mirrored from a second copy of
+ *  "am I recording", which is how a STOP button ends up starting a second recording. */
+function showRecording(on: boolean) {
+  $('mPanelRec').classList.toggle('rec', on);
+  setText($('mRecLbl'), on ? 'STOP' : 'REC');
+  if (!on) setText($('mRecVal'), '');
+  // The whole group (dot + digits) appears and disappears together.
+  setClass($('mRecTime'), 'on', on);
+}
+
 function initRecorder() {
-  const btn = $<HTMLButtonElement>('recBtn');
+  const btn = $<HTMLButtonElement>('mPanelRec');
   btn.onclick = async () => {
     if (!audio || !spec) return;
     if (!audio.recording) {
       audio.startRecording();
-      btn.classList.add('rec');
-      btn.textContent = '■ STOP';
+      showRecording(true);
+      updateRecTime();
       return;
     }
     const seconds = audio.recordedSeconds;
     const blob = audio.stopRecording();
-    btn.classList.remove('rec');
-    btn.textContent = '● REC';
-    $('recTime').textContent = '';
+    showRecording(false);
     if (!blob) return;
 
     // Kept, not just downloaded — a recording you can't find again isn't a feature.
@@ -12107,11 +12032,11 @@ function initRecorder() {
       bytes: blob.size,
       blob,
     });
-    $('recordingsBtn').classList.add('on');
-    setTimeout(() => $('recordingsBtn').classList.remove('on'), 1500);
+    $('mPanelRecs').classList.add('on');
+    setTimeout(() => $('mPanelRecs').classList.remove('on'), 1500);
   };
 
-  $('recordingsBtn').onclick = () => {
+  $('mPanelRecs').onclick = () => {
     togglePanel('recordingsPanel');
     void renderRecordings();
   };
@@ -12164,8 +12089,7 @@ async function renderRecordings() {
 function updateRecTime() {
   if (!audio?.recording) return;
   const s = Math.floor(audio.recordedSeconds);
-  $('recTime').textContent =
-    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  setText($('mRecVal'), `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`);
 }
 
 // ── Control colours (controlColours.ts) ──────────────────────────────────────
@@ -12369,11 +12293,9 @@ function nrPercent(strength: number): number {
 }
 
 function buildMenu() {
-  $('menuBtn').onclick   = () => togglePanel('menu');
   $('menuClose').onclick = () => $('menu').classList.remove('open');
   // Audio DSP lives in its own drawer (as the app's AudioSheet does) — these are
-  // controls you use WHILE listening, not settings you configure once.
-  $('audioBtn').onclick   = () => togglePanel('audioPanel');
+  // controls you use WHILE listening, not settings you configure once. Opened from #mAudio.
   $('audioClose').onclick = () => $('audioPanel').classList.remove('open');
 
   // ── Radio (server-side hardware; ranges filled in from hwinfo) ────────────
@@ -13086,11 +13008,10 @@ function setMode(m: SDRMode, send: boolean) {
   if (!spec) return;
   if (send) spec.setMode(m);
   else { spec.mode = m; const bw = MODE_BANDWIDTHS[m]; spec.bandwidthLow = bw[0]; spec.bandwidthHigh = bw[1]; }
-  // ★ The card's own readout (#mMode) is the one on screen; the bar's #modeLbl and its row of
-  //   buttons went with the bar. See the note above buildControls.
+  // ★ The card's own readout (#mMode) is the only one; it is refreshed by mobile.ts's poll.
   if (m !== 'wfm') {
     rdsStereo = false;
-    $('stereo').classList.remove('on');
+    $('mStereo').classList.remove('on');
     rdsName = ''; rdsText = ''; rdsIso = ''; rdsLogoUrl = ''; logoQuery = ''; logoDnsKey = ''; rdsLogoPi = -1;
     resetPsStab();
   rdsLogoProvisional = false;
@@ -13297,6 +13218,11 @@ function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = t
   el.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;            // ignore right/middle click
     e.preventDefault();                    // no text selection, no double-tap zoom
+    /* ★★★ CAPTURE THE POINTER (carried over from the card's own repeat helper, which this replaces
+     *  on the tune pads). Without it the release goes to whatever the finger is over — and on iOS a
+     *  long press raises the selection callout, which swallows it entirely: the sweep kept running
+     *  and the button stayed stuck down. With capture, pointerup/cancel always come back here. */
+    try { el.setPointerCapture(e.pointerId); } catch { /* synthetic event, or an old engine */ }
     stop();
     tap();
     holdT = window.setTimeout(() => {
@@ -13326,25 +13252,21 @@ function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = t
       tickT = window.setTimeout(tick, 1000 / SWEEP_LO);
     }, HOLD_MS);
   });
-  el.addEventListener('pointercancel', stop);
-  el.addEventListener('pointerleave', stop);
+  // ★ `lostpointercapture` matters as much as the rest: if the system takes the pointer away (a
+  //   callout, a gesture, a phone call) it is the ONLY event we get.
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture']) el.addEventListener(ev, stop);
   // ★ Release ANYWHERE ends it. Listening only on the element would leave a
   // sweep running forever if the pointer drifted off the button before lifting,
   // which is exactly what happens when you press hard and slide.
   window.addEventListener('pointerup', stop);
+  // A last resort for the same class of failure: hidden or blurred mid-hold, nothing above may fire.
+  window.addEventListener('blur', stop);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
 }
 
 function buildVfo() {
   const saved = prefs().step;
   if (typeof saved === 'number' && saved > 0) step = saved;
-  attachHoldSweep($('tuneDown'), () => nudge(-step));
-  attachHoldSweep($('tuneUp'),   () => nudge(step));
-  // ★★ WRAPPED, NOT PASSED DIRECTLY. openStepMenu now takes an optional anchor, and an
-  //    onclick handler is called WITH THE EVENT — so assigning it bare handed a MouseEvent in
-  //    as the anchor, getBoundingClientRect() did not exist on it, the handler threw and the
-  //    desktop step button stopped working entirely (Stuart, 2026-08-01). Any function that
-  //    grows a first parameter must be re-checked wherever it is used bare as a listener.
-  $('stepBtn').onclick  = () => openStepMenu();
   syncStep();
   renderFreq();
 }
@@ -13364,11 +13286,7 @@ function setStep(v: number) {
   //   the default passband — so a change of step is a change the readout and the filter follow.
   airbandFollowPassband();
   renderFreq();
-  $('stepBtn').textContent = formatStep(step);
-  // ★ The card's own step button carries the same label — updating only the desktop one left
-  //   the mobile button showing the previous step after every change.
-  const m = document.getElementById('mStep');
-  if (m) m.textContent = formatStep(step);
+  setText(document.getElementById('mStep'), formatStep(step));
   syncDialTips();
   savePref('step', step);
 }
@@ -13378,15 +13296,14 @@ function setStep(v: number) {
  *  that is a lot of clicks to go the wrong way round. A list you point at is the
  *  right control once the options stop being few (Stuart: "bothered me for ages").
  *  ★ The keyboard [ and ] keep cycling: there is nothing to aim at from a key. */
-/** ★ ANCHOR IS A PARAMETER because the same popup is opened from two buttons. Anchoring it
- *  to `stepBtn` unconditionally would have measured a HIDDEN element on a narrow window —
- *  the desktop bar is display:none there, so getBoundingClientRect() returns zeros and the
- *  menu lands in the top-left corner instead of on the button you tapped. */
+/** ★ Anchored to the button that was tapped (the card's #mStep). It once defaulted to a button in
+ *  the hidden desktop bar, whose getBoundingClientRect() is all zeros, so the menu landed in the
+ *  top-left corner instead of on the button. */
 function openStepMenu(anchor?: HTMLElement) {
   if (!spec) return;
   document.getElementById('stepMenu')?.remove();
   const steps = stepsForFreq(spec.frequency);
-  const btn = anchor ?? $('stepBtn');
+  const btn = anchor ?? $('mStep');
   const r = btn.getBoundingClientRect();
 
   const m = document.createElement('div');
@@ -13436,7 +13353,7 @@ function syncStep() {
     // Nearest step on the new ladder, so crossing the boundary doesn't jolt.
     step = steps.reduce((a, s) => Math.abs(s - step) < Math.abs(a - step) ? s : a, steps[0]);
   }
-  $('stepBtn').textContent = formatStep(step);
+  setText(document.getElementById('mStep'), formatStep(step));
   syncDialTips();   // ★ the ladder can change the step under us — the tooltips must not go stale
 }
 
@@ -13678,7 +13595,6 @@ function airbandFollowPassband() {
 type FreqUnit = 'hz' | 'khz' | 'mhz';
 const UNIT_DIV: Record<FreqUnit, number> = { hz: 1, khz: 1e3, mhz: 1e6 };
 const UNIT_DP:  Record<FreqUnit, number> = { hz: 0, khz: 3, mhz: 3 };
-const UNIT_LBL: Record<FreqUnit, string> = { hz: 'Hz', khz: 'kHz', mhz: 'MHz' };
 
 let freqUnit: FreqUnit = 'mhz';
 
@@ -13726,16 +13642,7 @@ function renderFreq() {
   updateVts();
   updateMediaSession();
   const hz = Math.round(spec.frequency);
-  /* ★★ ON AN AIRBAND CHANNEL THE NAME IS THE READOUT (in MHz), as on an aviation radio; the spacing
-   *  and the true frequency sit small beside it (#freqChan). Nothing changes anywhere else. */
-  const ch = airChannelNow();
-  $('freq').textContent = ch && freqUnit === 'mhz' ? ch.name
-    : (hz / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
-  $('freqUnit').textContent = UNIT_LBL[freqUnit];
-  {
-    const tag = document.getElementById('freqChan');
-    if (tag) { tag.hidden = !ch; tag.textContent = airChanTag(ch, freqUnit === 'mhz'); }
-  }
+  // ★ The readout itself is the card's (#mFreq / #mChan via cardFreqText(), on mobile.ts's poll).
   /* ★★ THE CARD'S INPUT FOLLOWS THE RADIO TOO. It was filled once when the panel opened and never
      again, so tuning from the search list left the box showing where you USED to be — 96.600 while
      the receiver sat on 93.000. Harmless until the list started surviving the tune, which is
@@ -13758,24 +13665,25 @@ function setFreqUnit(u: FreqUnit) {
   renderFreq();
 }
 
+/* ★★★ ONE GATE FOR EVERY ROUTE INTO THE KEYPAD. Every way in (the card's #mFreqBox via
+ *  deps.openFreqEntry) ends here, so the refusal lives here rather than at each call site — the one
+ *  that gets missed is always the bug. And it is a refusal WITH ITS REASON AND THE WAY OUT, not a
+ *  dead press: the padlock says the box is shut, this says why and what to do about it (Stuart,
+ *  2026-09-25: "advise it is locked due to DAB mode, or EXIT DAB MODE TO USE").
+ *  ★ It used to be the onclick of the retired desktop bar's hidden #pill, which the card CLICKED. */
+function openFreqEntry() {
+  if (dabOn) { showTuneGapMsg('Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
+  togglePanel('freqPanel');
+  const el = $<HTMLInputElement>('freqInput');
+  el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
+  $('freqMsg').textContent = '';
+  setTimeout(() => { el.focus(); el.select(); }, 60);
+}
+
 function initFreqEntry() {
   const saved = prefs().freqUnit;
   if (saved === 'hz' || saved === 'khz' || saved === 'mhz') freqUnit = saved;
 
-  $('pill').onclick = () => {
-    /* ★★★ ONE GATE FOR EVERY ROUTE INTO THE KEYPAD. #mFreqBox, the desktop pill and the keyboard
-     *  shortcut all end here (deps.openFreqEntry clicks this very element), so the refusal lives
-     *  here rather than at each call site — the one that gets missed is always the bug. And it is a
-     *  refusal WITH ITS REASON AND THE WAY OUT, not a dead press: the padlock says the box is shut,
-     *  this says why and what to do about it (Stuart, 2026-09-25: "advise it is locked due to DAB
-     *  mode, or EXIT DAB MODE TO USE"). */
-    if (dabOn) { showTuneGapMsg('Frequency is locked in DAB mode — there is no dial inside a multiplex. Press EXIT DAB to tune.'); return; }
-    togglePanel('freqPanel');
-    const el = $<HTMLInputElement>('freqInput');
-    el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
-    $('freqMsg').textContent = '';
-    setTimeout(() => { el.focus(); el.select(); }, 60);
-  };
   $('freqClose').onclick = () => closePanels();
 
   for (const b of Array.from($('freqUnitSeg').children) as HTMLButtonElement[]) {

@@ -24,7 +24,6 @@
      stacked ABOVE it must start from. See #mcard. */
   --mcard-bottom:  max(0.6em, env(safe-area-inset-bottom, 0px));
   --bg:            #080601;
-  --bar-bg:        rgba(10,8,4,0.84);
   --bar-border:    rgba(255,160,0,0.22);
   --btn-bg:        rgba(20,10,0,0.75);
   --pill-bg:       rgb(20,10,0);
@@ -38,7 +37,6 @@
   --amber:         #ffb833;
   --text-dim:      rgba(255,160,0,0.45);
   --meter-track:   rgba(105,98,82,0.30);
-  --peak-line:     rgba(255,245,200,0.92);
   --red:           #e05050;
   --green:         #28a745;
 }
@@ -366,38 +364,16 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 .adminTag { color: #ffb833; border: 1px solid rgba(255,160,0,0.55); border-radius: 3px;
             padding: 0 4px; font-size: 0.75em; letter-spacing: 0.08em; }
 
-/* ── Control bar — mirrors ControlsBar.tsx, drums swapped for buttons ─────── */
-/* UI SCALE. The app derives one from the viewport (useUiScale: clamp(0.58, W/926,
-   1.45)); the web equivalent is a single clamped font-size on the bar, with every
-   control sized in em from it. So a 1366x768 laptop gets a proportionally smaller
-   bar rather than a clipped one, and a 4K screen doesn't get a postage stamp.
-   Everything below is relative to this ONE number. */
-/* The coefficient is set by the SMALL end, not the large one. A 1366x768 laptop —
-   the commonest cheap-laptop resolution there is — could not fit the bar: the three
-   grid tracks collided by 46px, and the REC button sat underneath BOOKMARKS. 0.72vw
-   only got down to 9.8px there, which was ~10% too big for the content.
-   0.65vw fits 1280x720 with room to spare and costs the 1920 case just half a pixel,
-   because the 13px cap is what governs any screen worth calling large. */
-/* ══ MOBILE CONTROL CARD ══════════════════════════════════════════════════════
-   A port of the phone app's control layout (ControlsBar.tsx) for narrow windows.
+/* ══ THE CONTROL CARD ═════════════════════════════════════════════════════════
+   A port of the phone app's control layout (ControlsBar.tsx), and THE web layout at every width —
+   a 2000px desktop as much as a phone. There is no second control surface: the desktop bar it once
+   swapped with at a breakpoint is gone, markup, styles and wiring (2026-10-01).
 
-   ★★★ THE BREAKPOINTS ARE THE WHOLE DESIGN HERE. The desktop bar's three grid tracks
-   reach their min-content width and then OVERFLOW — the meter, search box and
-   right-hand controls are simply cut off the window edge with nothing to say so and no
-   way to reach them. That was reported in the field (a user on a smaller screen,
-   2026-08-01) at a width ABOVE the old 1100px stacking rule, which is why the rule
-   never fired: the number was set below the width where clipping had actually been
-   observed (~1230px). A control you cannot see or reach is the worst outcome in the
-   bar, so the switch now happens at 1280px — comfortably above the observed failure.
-
-   ★ Two stages below that, matching the app: LANDSCAPE (one row, drums beside the
-   pill) then PORTRAIT (stacked, as the app's portrait card). Gated on WIDTH, never on
-   user-agent — a tablet, a split-screen window and a handset each get the layout that
-   fits rather than the one their browser string implies, and a desktop user can test
-   the whole ladder by dragging the window edge. */
-/* ★★★ ALWAYS ON — see the markup. The bar/card swap is gone, so there is no breakpoint at
-   which a control can disappear and nothing to point into a hidden bar. */
-html #bar { display: none; }
+   ★ The breakpoints below change only the ARRANGEMENT, matching the app: wide, the pads flank the
+   pill on one row; narrow, they flow under it (portrait); a short wide window (a phone on its side)
+   keeps one row. Gated on WIDTH/HEIGHT, never on user-agent — a tablet, a split-screen window and a
+   handset each get the layout that fits, and a desktop user can test the whole ladder by dragging
+   the window edge. */
 
 #mcard {
   display: flex; flex-direction: column; gap: 0.4em;
@@ -581,8 +557,7 @@ html #bar { display: none; }
 #mSnr  { font-size: 0.78em; color: #fff; }
 /* ★★ THE STEREO BADGE, which the card never had. WFM stereo is the one thing on this radio you
    can HEAR change and could not SEE — and it drops to mono on a weak signal, so its absence is
-   information, not decoration. Same green ST mark the app and the old bar use, mirrored from
-   #stereo rather than tracked separately (see refresh()). */
+   information, not decoration. Written by syncStereoLight() in main.ts, its one writer. */
 /* ★★★ HIDDEN, NEVER REMOVED. `display:none` gave the slot back when the pilot dropped, so the
    whole island grew and shrank as a station faded in and out of stereo — on a fringe signal that
    is constant, and it moves every control under the user's pointer. `visibility` keeps the space
@@ -630,9 +605,9 @@ html #bar { display: none; }
       applicable — the `title` is set with the state, next to the code that sets the state. */
 .mBtn[disabled], .btn[disabled] { opacity: 0.38; cursor: default; pointer-events: none; }
 
-/* ★★ The card's step button carries the SAME full label as the desktop one ("6.25kHz", not
-   "6.25k"), and this stack is content-sized — so without a reserved width, changing step
-   resized the stack and pushed the island wider. Fixed width, same reasoning as #stepBtn. */
+/* ★★ The step button carries the full label ("6.25kHz", not "6.25k"), and this stack is
+   content-sized — so without a reserved width, changing step resized the stack and pushed the
+   island wider (Stuart, 2026-08-02). */
 #mStep { width: 100%; box-sizing: border-box;
          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ★★★ THE STEP BUTTON FILLS ITS CELL ON A PHONE — AND THIS RULE MUST LIVE *AFTER* THE ONE ABOVE.
@@ -783,9 +758,8 @@ html #bar { display: none; }
   min-width: min(92vw, 340px); max-width: 92vw;
 }
 .mModeGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
-/* ★ The bandwidth row is borrowed from the bar and needs a heading here: in the bar it sat
-   directly under the mode buttons and its context was obvious, but in a popup a bare pair of
-   sliders could be anything. */
+/* ★ The bandwidth row (parked in #bwHome, moved in while the picker is open) needs a heading
+   here: in a popup a bare pair of sliders could be anything. */
 .mBwSep {
   font-size: 0.72em; letter-spacing: 1px; color: var(--unit);
   border-top: 1px solid var(--btn-border); padding-top: 6px; margin-top: 2px;
@@ -825,13 +799,8 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* ── Tuning group: search + bookmarks travel with the dial ───────────────────── */
 #mTune { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5em; }
 
-/* ★★ ROWS THAT EXIST ONLY WHILE THE CARD DOES. The desktop bar carries controls the
-   panels do not (volume, mute, REC, recordings, lock, centre, fit), so hiding the bar on a
-   narrow window made them unreachable — no menu entry, no other route. Rather than
-   duplicate them on desktop, where the bar already has them, these rows appear only in the
-   width range where the bar is hidden. Same control, one visible copy at any width. */
-/* ★ Rows carrying controls the old desktop bar used to own. With that bar gone at every
-   width, these are no longer conditional — they are the only copy there is. */
+/* ★ Rows in the panels carrying volume, mute, REC, recordings, lock, centre and fit — the only
+   copy of each there is. (`mOnly` is a historical name from when a desktop bar duplicated them.) */
 .mOnly { display: flex; }
 .mOnly.mrow { align-items: center; gap: 0.6em; }
 .mOnlyGrid { display: grid !important; grid-template-columns: repeat(3, 1fr); gap: 0.5em; }
@@ -992,85 +961,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* ★ NO #gainMinNote HERE ANY MORE. The "gain is at minimum" warning became a VTS notice
    (vtsNotice in main.ts): it is transient, it needs to scroll when it is longer than the bar, and
    it must not invent a third overlay to collide with the top toast and the VTS itself. */
-#bar {
-  flex: 0 0 auto; background: var(--bar-bg); border-top: 1px solid var(--bar-border);
-  font-size: clamp(8px, 0.65vw, 13px);
-  padding: 0.8em 1.1em; display: flex; flex-direction: column; gap: 0.8em;
-}
-/* NEVER wrap. With flex-wrap:wrap the right-hand column jumped to a new line the
-   moment the content grew a few pixels (a longer status string was enough), which
-   read as the layout randomly rearranging itself. Let items SHRINK instead. */
-/* Three blocks: [tuner + demod] | [controls] | [meter + search].
-   The controls are centred on the SCREEN, not between their neighbours — the
-   tuning and search blocks are different widths, so "centred between them" lands
-   visibly off-centre.
-
-   Three GRID TRACKS, not absolute positioning. The two 1fr side tracks are always
-   equal, so the middle track is exactly screen-centred by construction — and being
-   a real track, it reserves its own space and can never overlap its neighbours.
-   The previous version centred #midBlock absolutely above a min-width media query,
-   but viewport width is the wrong test: it asks "is the window wide" when the real
-   question is "is there room between the side blocks". On a 2000px screen the guard
-   passed and the out-of-flow block still sat on top of the tuner.
-
-   NEVER wrap: flex-wrap made the right column jump to a new line the moment content
-   grew a few pixels (a longer status string was enough), which read as the layout
-   rearranging itself at random. Let items SHRINK instead. */
-/* GAPS IN em, NOT px. They were 12px flat — so as the bar's font-size scaled down for
-   a small screen, every button shrank and the space BETWEEN them did not. At 1366 the
-   gaps were the single biggest fixed cost left in the row, and they are exactly what
-   pushed the tracks into each other. Anything that doesn't scale with the bar is a bug
-   in a bar whose whole layout is scale-driven. */
-.barRow {
-  display: grid; grid-template-columns: 1fr auto 1fr;
-  align-items: center; gap: 1.1em; min-width: 0;
-}
-
-/* ★ NARROW WINDOWS: STACK, DON'T CLIP.
-   The three-track grid centres the middle block on the SCREEN, which is right whenever there is
-   room for it. Below ~1100px there isn't: the tracks reach their min-content width and the row
-   overflows, so the meter, the search box and the right-hand controls are simply cut off the edge
-   of the window (seen at ~1230px with DevTools docked).
-   Clipping is the worst possible answer — the controls are GONE, with nothing to say so and no way
-   to reach them. Stacking is merely less pretty. The bar sits at the bottom of a column layout and
-   the waterfall above it is the flexible one, so extra rows grow the bar UPWARDS and the waterfall
-   yields, which is the trade you want: a shorter waterfall over an unusable control bar.
-   NB the "never wrap" note above is about flex-wrap on the SAME row, which made the right-hand
-   column jump about as content grew by a few pixels. This is a deliberate switch of layout at a
-   threshold, not content-dependent reflow, so it cannot jitter. */
-@media (max-width: 1100px) {
-  .barRow {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    row-gap: 0.7em;
-  }
-  #midBlock { justify-self: center; flex-wrap: wrap; justify-content: center; }
-}
-#midBlock {
-  display: flex; align-items: center; gap: 1.1em;
-  min-width: 0; justify-self: center;
-}
-/* Side tracks hug the outer edges.
-   NO min-width:0 HERE. On a grid item that permits shrinking BELOW its own content,
-   and the tuner/demod block then spills straight out of its track and under the
-   middle block — which is the overlap this grid was meant to cure. Leaving the
-   default (min-width:auto = min-content) makes the 1fr track refuse to go narrower
-   than the buttons inside it, so the middle is pushed away rather than sat on.
-   The bar's clamped font-size is what absorbs a narrow window, not overflow. */
-#leftCol {
-  display: flex; align-items: center; gap: 1.1em;
-  justify-self: start;
-}
-/* The meter + search column. It was a flat 38em, which it held onto even when the
-   middle had nowhere left to go — the search box is the most elastic thing in the bar
-   (it's a text field; it can simply be narrower) and it was the least willing to give.
-   Now it yields: 34em preferred, down to 20em under pressure. */
-/* Wider by 3em so the status line ('… KB/s · fps · ms · IDLE') and the search placeholder
-   ('… frequencies') stop clipping off the right edge now the data-rate/fps counter is in the line. */
-#rightCol { justify-self: end; width: 37em; min-width: 20em; max-width: 48em; }
-#sigWrap { width: 100%; }
-#findRow { display: flex; gap: 0.6em; align-items: stretch; width: 100%; }
-#findRow #bookmarksBtn { flex: 0 0 auto; white-space: nowrap; }
 #rds { display: none; }   /* station identity moves into the VTS chip */
 
 /* Source glyphs: a MONITOR = saved in this browser; a SERVER RACK = saved on the
@@ -1082,10 +972,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
   background: rgba(255,255,255,0.9); flex: 0 0 auto; margin-right: 6px;
 }
 
-/* Readouts under the meter: signal on the left, link + bitrate on the right. */
-#sigLine { display: flex; align-items: center; justify-content: space-between; margin-top: 0.35em; gap: 0.6em; }
-#sigLabel { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.06em; white-space: pre;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-variant-numeric: tabular-nums; }
 #linkStats { display: flex; align-items: center; gap: 0.7em; }
 #status { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap;
   padding-right: 0.2em; }   /* clear the trailing letter-spacing so the last glyph never clips */
@@ -1301,35 +1187,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* Everything from here is pushed to the right edge, so BOOKMARKS lands directly
    under the search box above it and the two rows line up. */
 .pushRight { margin-left: auto; }
-/* Taller than the old 0.62em hairline — there is ample room in the bottom bar and the extra
-   height makes the SNR fill actually readable. */
-#sig { position: relative; height: 1.05em; border-radius: 0.5em; background: var(--meter-track); overflow: hidden; }
-/* A fault takes over the WHOLE meter: that's where you're already looking when
-   you wonder why there's no sound, and a long message in the status line just ran
-   off the edge of the screen. */
-#sig.fault { height: 1.6em; background: rgba(224,80,80,0.18); border: 1px solid var(--red); }
-#sig.fault #sigFill, #sig.fault #sigPeak { display: none; }
-/* Squelch closed is not a fault. Amber, steady, and the meter STAYS VISIBLE so you can
-   watch a signal climbing towards the threshold — which is the whole point of squelch. */
-#sig.squelched { border: 1px solid var(--amber); }
-#sigFault {
-  display: none; position: absolute; inset: 0; align-items: center; justify-content: center;
-  color: var(--red); font-size: 0.75em; letter-spacing: 0.12em; white-space: nowrap;
-  animation: recPulse 1.6s ease-in-out infinite;
-}
-#sigFault.info { color: var(--amber); animation: none; opacity: 0.85; }
-#sigFault.show { display: flex; }
-#sigFill { position: absolute; inset: 0 auto 0 0; width: 0%; background: linear-gradient(90deg, var(--green), var(--amber), var(--red)); }
-#sigPeak { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--peak-line); left: 0; }
-/* Squelch threshold needle — the same "point it just above the noise" control the watch and phone
-   use. Hidden entirely when squelch is off, so a meter with no gate stays uncluttered. */
-#sigSql { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; left: 0;
-          background: #3ddc84; box-shadow: 0 0 0 1px rgba(0,0,0,0.55); display: none; }
-#sig.sqlOn #sigSql { display: block; }
-/* Gate CLOSED (signal below the needle) — the fill dims and reddens, so silence is explained
-   rather than mysterious. This is the whole point of the indicator. */
-#sig.sqlClosed #sigFill { opacity: 0.55; filter: hue-rotate(-35deg) saturate(1.4); }
-#sig.fault #sigSql { display: none; }
 /* ── Squelch control: a live-signal bar with a draggable ball ─────────────────────────────────
    The bar fill is the live signal; the green needle + ball is the threshold. White fill = passing,
    red = the gate is muting. The needle PERSISTS across the full height so the ball is always in
@@ -1391,11 +1248,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .sqlAutoBtn { flex: none; }   /* ★ the .sqlAutoRow owns the spacing now */
 .rowNote { color: var(--text-dim); font-size: 11px; line-height: 1.35; margin: -2px 0 4px;
            opacity: 0.85; }
-/* NO font-size / letter-spacing here — a leftover from the pre-scaling layout that
-   silently overrode the em-based rule above and pinned this readout to a hard 10px.
-   It was the ONLY thing in the bar that didn't shrink, so on a 1366 laptop it ran
-   straight off the right-hand edge of the window. */
-#sigLabel { margin-top: 4px; }
 /* ★ An AF that has been glimpsed but not confirmed. Dimmed rather than hidden: on a noisy station
    these are usually phantoms from block errors, and seeing WHICH frequencies are suspect is the
    whole point of showing the list instead of a score. Still tuneable — it is exactly the one you
@@ -1404,87 +1256,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 /* ★ The network label under an address in the connection log — context, not a heading. */
 .cNet { font-size: 0.85em; opacity: .6; margin-top: 2px; }
 
-#pill {
-  display: flex; align-items: baseline; justify-content: center; gap: 0.75em;
-  background: var(--pill-bg); border: 1px solid var(--btn-border);
-  border-radius: 0.6em; padding: 0.5em 1em; cursor: pointer;
-}
-#pill:hover { border-color: var(--btn-active-bdr); }
-#freq { font-size: 2.3em; color: var(--freq); letter-spacing: 0.05em; font-variant-numeric: tabular-nums; }
-#freqUnit { font-size: 0.85em; color: var(--unit); }
-#freqChan { font-size: 0.72em; color: var(--unit); letter-spacing: 0.04em; white-space: nowrap; }
-#freqChan[hidden] { display: none; }
-#stereo { font-size: 0.78em; color: var(--green); border: 1px solid var(--green); border-radius: 3px; padding: 0 0.25em; display: none; }
-#stereo.on { display: inline; }
-
-/* ── Tuning block ─────────────────────────────────────────────────────────────
-   One unit: the frequency you READ sits directly above the arrows you USE, so
-   your eye and your hand stay in the same place. Bordered so it reads as a
-   single instrument rather than two loose controls. */
-#tuner {
-  display: flex; flex-direction: column; align-items: stretch; gap: 0.6em;
-  padding: 0.6em; border: 1px solid var(--btn-border); border-radius: 0.8em;
-  background: rgba(0,0,0,0.35);
-}
-
-/* VFO: step-tied left/right arrows — the desktop stand-in for the tuning drum.
-   These are the most-used control on the page, so they get the biggest targets. */
-#vfo { display: flex; gap: 0.45em; align-items: center; }
-#vfo .arrow {
-  font-size: 1.55em; line-height: 1; padding: 0.5em 0; flex: 1 1 0;
-  min-width: 4.6em;
-}
-/* ★★ FIXED WIDTH, NOT min-width — this button RESERVES ITS WIDEST READING. The label runs
-   "10Hz" → "6.25kHz" → "100kHz", and a min-width only holds the floor: stepping up from 1kHz
-   grew the button, which grew the stack, which grew the whole control island a few pixels
-   sideways (Stuart, 2026-08-02). Same rule as the recording timer and the IDLE marker — see
-   the island width notes above. 7.6em clears "6.25kHz", the longest label in the ladder. */
-/* ★★ RESERVED WIDTH SO CHANGING STEP DOES NOT RESIZE THE BAR — but it must YIELD when the window
-   is genuinely narrow. A hard `width` cannot shrink, so on a narrow window the bar ran out of room
-   and WRAPPED TO TWO ROWS (Stuart, 2026-08-03). max-width lets it give way at the point where
-   holding a constant width costs more than it buys: a slightly narrower button is invisible, a
-   control bar folding in half is not. */
-#stepBtn { width: 7.6em; max-width: 17vw; box-sizing: border-box; padding: 0.75em 0.6em;
-           font-size: 1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* Demodulator + the bandwidth that belongs to it. */
-#demod { display: flex; flex-direction: column; gap: 0.6em; }
-.bwRow { display: flex; align-items: center; gap: 0.6em; }
-.bwRow input[type=range] { flex: 1 1 auto; width: auto; min-width: 6em; }
 /* The low slider holds a MAGNITUDE and is mirrored, so its amber fill grows outward
    from the carrier just like the high one — both oranges then mean "this much
    bandwidth". Un-mirrored, a native range fills from its minimum, which on the low
    side drew the bandwidth you were NOT using. See syncBw(). */
 #bwLo { transform: scaleX(-1); }
 .bwRow .val { color: var(--unit); font-size: 0.82em; min-width: 3.4em; font-variant-numeric: tabular-nums; }
-
-.stack { display: flex; flex-direction: column; gap: 0.6em; }
-/* The button cluster shrinks before the right column does. */
-.stack.grow { flex: 0 1 auto; min-width: 0; align-items: stretch; }
-/* Both rows span the cluster, so the last button on each can be right-aligned
-   and they line up with each other instead of ending wherever their content does. */
-/* Button cluster. A grid, not two flex rows: DECODERS and RECORDINGS share a
-   column so they line up with each other, and stay next to the controls instead
-   of being flung to the cluster's far edge by an auto margin. The controls column
-   is as wide as the wider of the two rows, so the shorter row just carries a
-   little slack — which reads as alignment, not abandonment. */
-#cluster {
-  display: flex; flex-direction: column; gap: 0.6em;
-  flex: 0 1 auto; min-width: 0;
-}
-.panelBtn { justify-self: stretch; text-align: center; }
-/* Rows fill the controls column, and the volume slider takes up any slack — so
-   the shorter row ends flush instead of leaving a hole. It GROWS only; the floor
-   keeps it from ever getting shorter than it is now. */
-/* Rows fill the controls column and CENTRE within it. The two rows are never the
-   same natural width, so the slack has to go somewhere — split evenly reads as
-   deliberate, whereas dumping it all on one side reads as a mistake. */
-#cluster > .group { justify-content: flex-start; }
-#vol { flex: 0 1 auto; min-width: 8em; }
-.group.grow { flex: 1 1 auto; min-width: 0; }
-.sep.tall { height: 4.8em; }
-#tuner { flex: 0 0 auto; }          /* the tuning block never shrinks */
-#demod { flex: 0 1 auto; min-width: 0; }
 
 button.btn {
   background: var(--btn-bg); border: 1px solid var(--btn-border); color: var(--btn-text);
@@ -1501,47 +1278,17 @@ button.btn {
  *   state below. :not(.on) so hovering an ACTIVE button never dims it back down. */
 button.btn:hover:not(.on) { background: rgba(255,200,0,0.06); border-color: var(--btn-active-bdr); }
 button.btn[hidden] { display: none; }
-/* Tap/hold keys: suppress the double-tap-zoom delay so a press registers at once,
-   and light the key while it is sweeping so the mode change is visible as well as
-   felt. Scoped to the four tap/hold keys, not all buttons. */
-#tuneDown, #tuneUp, #zoomIn, #zoomOut { touch-action: manipulation; user-select: none; }
-#tuneDown.sweeping, #tuneUp.sweeping, #zoomIn.sweeping, #zoomOut.sweeping {
-  background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx);
-  box-shadow: 0 0 10px rgba(80,255,120,0.35);
-}
 /* ★★★ LIT, NOT TINTED. A 10 %-opacity wash over a dark panel is a difference you have to hunt
  *     for, and "is this filter in circuit?" is not a question anyone should squint at. This is the
  *     same treatment .dabAnn.on already uses for the same reason — solid amber, dark text — so an
  *     active toggle reads as a lamp that is ON from across the room.
- * ★ The glow matches the tap/hold keys above, which is the other place in this file where a
- *   control is deliberately "lit". */
+ */
 button.btn.on { background: var(--btn-active-tx); border-color: var(--btn-active-tx);
                 color: #0c0f0c; font-weight: 600;
                 box-shadow: 0 0 10px rgba(255,229,102,0.30); }
 button.btn.on:hover { background: #fff0a0; border-color: #fff0a0; }
 
-/* MUTE reads as a WARNING, not a mode: the amber "on" style looks like every
-   other active toggle, so it's easy to sit there wondering why there's no audio. */
-#muteBtn.on {
-  color: var(--red); border-color: var(--red);
-  background: rgba(224,80,80,0.16);
-}
 
-/* Recording: unmistakable, and it pulses so you can't leave it running by accident. */
-#recBtn.rec {
-  color: var(--red); border-color: var(--red);
-  background: rgba(224,80,80,0.12);
-  animation: recPulse 1.4s ease-in-out infinite;
-}
-@keyframes recPulse { 50% { background: rgba(224,80,80,0.3); } }
-/* REC/STOP and the timer must NOT change the row's width — the button's label
-   swaps (● REC -> ■ STOP) and the timer appears only while recording, so without
-   a fixed size the whole cluster reflows mid-recording and everything shifts. */
-#recBtn { min-width: 6.4em; }
-#recTime { color: var(--red); font-variant-numeric: tabular-nums; min-width: 3.2em; }
-
-.group { display: flex; gap: 0.35em; align-items: center; flex-wrap: nowrap; }
-.sep { width: 1px; height: 1.8em; background: var(--bar-border); flex: 0 0 1px; }
 .lbl { font-size: 0.78em; color: var(--text-dim); letter-spacing: 0.1em; white-space: nowrap; }
 /* ★★ PROSE MUST WRAP. `.lbl` is nowrap because most uses are short labels sitting beside a
    control, where wrapping would look broken — but the class is also used for explanatory
@@ -2929,8 +2676,8 @@ select.btn { padding: 6px 8px; }
 .swatches input[type=color].on { border-style: solid; border-color: #fff; }
 .ctlWarn { color: #ffcc88; }
 
-/* Same leftover as #sigLabel — the hard 10px pinned the KB/s · ms readout and pushed
-   it off the edge of a 1366 screen. Size comes from the em rule above. */
+/* No hard px size here — a 10px one pinned the KB/s · ms readout and pushed it off the edge of a
+   1366 screen. Size comes from the em rule above. */
 #status { margin-left: auto; text-align: right; }
 #status .bad { color: var(--red); }
 #rds { font-size: 11px; color: var(--amber); letter-spacing: 1px; min-height: 14px; }
@@ -3387,15 +3134,9 @@ select.btn { padding: 6px 8px; }
 </div>
   </div><!-- /#wfWrap -->
 
-  <!-- ══ MOBILE CONTROL CARD ═══════════════════════════════════════════════════
-       An HTML port of the phone app's control layout, for narrow windows.
-
-       ★★ GATED ON WIDTH, NOT ON BROWSER SNIFFING (Stuart). Shrink the window and the
-       desktop bar squishes until its tracks would overlap, then this card takes over —
-       landscape arrangement first, then portrait as it narrows further. A desktop user
-       dragging the window sees exactly what a phone user sees, which makes it testable
-       without a phone and means a tablet, a split-screen window and a handset all get
-       the layout that actually fits rather than the one their user-agent implies.
+  <!-- ══ THE CONTROL CARD ══════════════════════════════════════════════════════
+       An HTML port of the phone app's control layout — the web client's ONLY control surface,
+       at every width. A desktop user dragging the window sees exactly what a phone user sees.
 
        ★ Layout mirrors ControlsBar.tsx: the frequency pill (with the signal meter as its
        own background), a four-button row, twin drums, and the status line. Same design
@@ -3412,10 +3153,11 @@ select.btn { padding: 6px 8px; }
   <button id="mGainStuckFloat" hidden></button>
 
   <!-- ══ CONTROLS ══════════════════════════════════════════════════════════════
-       ★★★ ONE CONTROL SURFACE AT EVERY WIDTH. This and the desktop bar used to swap at a
+       ★★★ ONE CONTROL SURFACE AT EVERY WIDTH. A desktop bar used to swap with this at a
        breakpoint, and nearly every bug in this file came from that arrangement: both drawing
        at once, controls vanishing as the window narrowed, buttons pointing into a hidden bar
-       and silently doing nothing. The card is now simply THE controls; width changes only the
+       and silently doing nothing. The bar is gone (markup, styles and wiring, 2026-10-01) and
+       nothing may be added to a hidden copy again. The card is simply THE controls; width changes only the
        ARRANGEMENT — wide, the tune and zoom pads flank the frequency; narrow, they flow under
        it (Stuart). It also brings the web client into the app's design language rather than
        running a second one alongside it.
@@ -3499,191 +3241,60 @@ select.btn { padding: 6px 8px; }
     <div id="mStatus">
       <span id="mLeft">
         <span id="mClock">—</span>
-        <!-- ★★★ THE WARNING CHIPS SIT HERE, NOT WITH THE NETWORK READOUTS. They start life
-             inside #linkStats (the desktop bar) and mobile.ts moves them in — see the note
-             there for why the chips and the bars had to be separated at all.
+        <!-- ★★★ THE WARNING CHIPS SIT HERE, NOT WITH THE NETWORK READOUTS. The network line grows
+             every time a figure is added to it (ping, buf…) and an OVERLOAD chip expands exactly
+             when it fires, so the chips go on the clock line, which does not grow.
              ★ BEFORE the recording timer: the timer is absent unless you are recording, so
                putting the chips after it would leave them jumping sideways the moment REC
                starts — the same "it moves exactly when something is happening" fault this
                split exists to remove. -->
-        <span id="mChipHost"></span>
+        <span id="mChipHost"><!--
+          ★ Same chip language as SQL. The radio's gain control settles for a second after it
+            starts, which bounces the waterfall — saying so turns a transient that looks like a
+            fault into one that looks like a radio waking up.
+          --><span id="initChip" title="The receiver's automatic gain is still setting itself up — the picture will rearrange once or twice more before it is settled">INITIALISING AGC</span><!--
+          ★★ ON THE MAIN SCREEN, not only beside the gain controls. The gain panel is the right
+             place to ACT on an overload, but it is behind the menu — and a warning nobody sees is
+             not a warning (Stuart, 2026-07-26).
+             ★ The text is REPLACED at runtime on a dongle, where the server also acts on the
+               overload and the chip reports which way the gain went (see onOverload). On an RSP
+               the hardware raises the flag and we only report it, so it keeps this wording.
+          --><span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span></span>
         <!-- ★ A breathing dot beside the time. Recording is a state you can forget you are in,
              and a number alone reads as just another readout — motion is what catches an eye
              that is on the waterfall, not on the status line. -->
         <span id="mRecTime"><span id="mRecDot"></span><span id="mRecVal"></span></span>
       </span>
-      <!-- ★★★ THE REAL #linkStats IS MOVED IN HERE, not copied. It carries the link bars AND the
-           three chips — SQL (squelch), SETTLING (gain settling) and OVERLOAD — and every one of
-           those is a "this is why nothing is happening" indicator. They were stranded in the
-           hidden bar, so the card silently lost all three; a squelch gate closing looked
-           identical to a dead stream, which is the exact ambiguity this card is meant to
-           remove. Moving the node keeps their logic and leaves ONE copy. -->
-      <!-- ★ NO MIRRORED COPY OF THE STATUS TEXT. #status lives INSIDE #linkStats, so moving
-           that node brought the real one along — and mirroring it as well printed the
-           throughput twice, once either side of the bars. -->
-      <span id="mNet"><span id="mLinkHost"></span></span>
+      <!-- ★★★ #linkStats: the link bars, the throughput readout (#status), the direct-sampling chip
+           and the audio-processing tags — ONE copy of each, written here and nowhere else. -->
+      <span id="mNet"><span id="mLinkHost"><span id="linkStats"><!--
+        ★★★ THE TUNER IS BYPASSED AND YOU MAY NOT HAVE DONE IT (Stuart, 2026-09-20). On a shared dial
+            anyone may switch direct sampling on to reach HF; if they wander back up to FM and leave, the
+            next visitor meets a receiver that hears nothing above 30 MHz and concludes the SERVER is
+            broken. Only shown when the dial is ABOVE the crossover, where it is actually costing you. -->
+        <span id="dsChip" title="Direct sampling is on: the tuner is switched out and this receiver is listening to HF and below only (short wave, medium wave, long wave). Turn it off in the hardware panel to hear the VHF and UHF bands again.">DIRECT SAMPLING (HF AND BELOW)</span><!--
+        ★ THE BARS SIT WITH THE NUMBERS THEY DESCRIBE (Stuart, 2026-08-21). -->
+        <span id="linkBars" title="Link quality"><i></i><i></i><i></i></span>
+        <span id="status">—</span><!--
+        ★★★ WHAT IS BEING DONE TO THE AUDIO — shown only when something is. This page restores noise
+            reduction, the auto-notch and the blanker on every connect (see restorePrefs); a listener who
+            left NR on last week hears the artefacts and concludes the RECEIVER is broken (Stuart,
+            2026-09-24). Empty in the ordinary case, so it costs no space at all until it matters. -->
+        <span id="dspTags" title="Audio processing is on — click to open the audio panel"></span>
+      </span></span></span>
     </div>
   </div>
 
-  <!-- ★★★ "THE GAIN IS AT MINIMUM" — the notice that stops somebody leaving. Stuart: "dont want
-       people connecting to a server seeing a flat spectrum thinking this is fucked and then
-       leaving." A receiver at minimum gain looks EXACTLY like a broken one, and the HackRF makes
-       that ordinary rather than rare: every stage opens at ZERO by design, so a fresh server is
-       deaf until somebody raises it and the previous listener can leave it that way.
-       ★★★ ABOVE #bar, NOT IN THE TOP TOAST. That toast already carries the session TIMEOUT
-       warnings and the server MAINTENANCE messages; a third thing there means two get missed.
-       Here it sits directly above the tuning controls — next to the control it is talking about,
-       which is where an instruction belongs. A flex sibling rather than a fixed overlay, so it
-       cannot cover the VTS bar or anything else that shares the bottom of the screen.
-       ★★★ AND IT FADES. Minimum gain is sometimes CORRECT — 104.2 with a transmitter two miles
-       away wants 0 dB — so a standing warning would be wrong on a working receiver and would
-       train people to ignore it. Once per connection, then gone. -->
-  <div id="bar">
-    <div class="barRow">
-      <!-- LEFT TRACK. The demodulators are part of the tuning block and travel with
-           it, so tuner + demod are one grid child — the bar must have exactly three
-           children for the 1fr/auto/1fr centring to hold. -->
-      <div id="leftCol">
-      <!-- Tuner: what you READ sits above what you USE. -->
-      <div id="tuner">
-        <div id="pill" title="Click to enter a frequency">
-          <span id="freq">—</span><span id="freqUnit">MHz</span><span id="freqChan" hidden></span>
-          <span id="stereo">ST</span>
-        </div>
-        <div id="vfo">
-          <button class="btn arrow" id="tuneDown" title="Tune down one step">◀</button>
-          <button class="btn" id="stepBtn" title="Tuning step — click to change">1kHz</button>
-          <button class="btn arrow" id="tuneUp" title="Tune up one step">▶</button>
-        </div>
-      </div>
-
-      <div class="sep tall"></div>
-
-      <!-- Demodulator + its bandwidth. Part of the TUNING block: what you're
-           listening to and how you're demodulating it are one decision. -->
-      <div id="demod">
-        <!-- ★ The mode buttons lived here, in the retired desktop bar. The picker in use is the
-             card's, built in mobile.ts. Removed rather than left hidden: a control added to an
-             invisible row looks done and reaches nobody, which is exactly how the DAB button
-             came to be missing (2026-09-04). -->
-        <!-- ★★★ THE DECODERS LIVE WITH THE DEMODULATORS, as they do in the app (ModeSelector's
-             `decoderControls`). What you demodulate and what you decode out of it are one
-             decision — USB then RTTY, CW then TIME — and the app has always said so. This is
-             also what frees the cluster's button for the chat (Stuart, 2026-08-20).
-             ★ MOVED, NOT REBUILT: the panel it opens is unchanged. -->
-        <div class="group">
-          <button class="btn" id="decodersBtn" title="RTTY / NAVTEX / WEFAX / SSTV / FT8">DECODERS</button>
-        </div>
-        <!-- Bandwidth: mirrored sliders around the carrier (app's ModeSelector).
-             Slide the LEFT one left to widen the lower sideband, the RIGHT one
-             right to widen the upper. SYNC mirrors both edges. -->
-        <div class="bwRow">
-          <span class="val" id="bwLoVal">−5.0k</span>
-          <input type="range" id="bwLo" class="bwHalf">
-          <button class="btn" id="bwSync" title="Mirror both edges">SYNC</button>
-          <input type="range" id="bwHi" class="bwHalf">
-          <span class="val" id="bwHiVal">+5.0k</span>
-        </div>
-      </div>
-      </div><!-- /#leftCol -->
-
-      <!-- MIDDLE BLOCK — the controls, screen-centred by the grid's equal side
-           tracks. The bar reads as three groups:
-           [tune + demod] [controls] [meter + search]. -->
-      <div id="midBlock">
-      <div class="sep tall"></div>
-
-      <!-- Two flat rows. REC is LAST so the timer that appears while recording
-           can only grow rightwards — it can't shove the other buttons around. -->
-      <div id="cluster">
-        <div class="group">
-          <span class="lbl">ZOOM</span>
-          <button class="btn" id="zoomOut">−</button>
-          <button class="btn" id="zoomIn">+</button>
-          <button class="btn" id="zoomReset">FIT</button>
-          <button class="btn on" id="lockBtn" title="View follows the VFO">LOCK</button>
-          <!-- Only useful while unlocked: snap the view back onto the VFO. -->
-          <button class="btn" id="centreBtn" title="Centre the view on the VFO" hidden>CENTRE</button>
-          <button class="btn" id="menuBtn">MENU</button>
-          <!-- ★★ THE CHAT SITS WHERE DECODERS USED TO. On a shared-dial receiver it is not a
-               nicety: the server enforces nothing about who tunes, so this is how two strangers
-               agree. Greyed out on an ordinary receiver, where there is nobody to talk to — and
-               greyed rather than hidden so the cluster does not change shape per receiver. -->
-          <button class="btn" id="chatBtn" title="Ask about the dial — canned messages only" disabled>CHAT<span class="unread" id="chatUnread" hidden></span></button>
-        </div>
-        <div class="group">
-          <span class="lbl">VOL</span>
-          <input type="range" id="vol" min="0" max="100" value="80">
-          <button class="btn" id="muteBtn">MUTE</button>
-          <button class="btn" id="audioBtn" title="Squelch, noise reduction, notch, de-emphasis — hover and use the mouse wheel for volume">AUDIO</button>
-          <button class="btn" id="recordingsBtn" title="Saved recordings">RECORDINGS</button>
-          <button class="btn" id="recBtn" title="Record audio to a WAV file"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="4" fill="currentColor"/></svg> REC</button>
-          <span class="lbl" id="recTime"></span>
-        </div>
-      </div>
-      </div><!-- /#midBlock -->
-
-      <!-- Right column. The BOOKMARKS button + search box are ONE item for layout
-           purposes, and the signal meter spans exactly their combined width. -->
-      <div class="stack" id="rightCol">
-        <div id="sigWrap">
-          <div id="sig"><div id="sigFill"></div><div id="sigSql"></div><div id="sigPeak"></div><span id="sigFault"></span></div>
-          <div id="sigLine">
-            <span id="sigLabel">—</span>
-            <span id="linkStats">
-              <!-- ★ The squelch indicator lives in the SNR field beside the frequency, and only
-                   there. This second one said the same thing in a different rhythm — see the note
-                   in updateSignalUi(). -->
-              <!-- ★ Same chip language as SQL. The radio's gain control settles for a second
-                   after it starts, which bounces the waterfall — saying so turns a transient
-                   that looks like a fault into one that looks like a radio waking up. -->
-              <span id="initChip" title="The receiver's automatic gain is still setting itself up — the picture will rearrange once or twice more before it is settled">INITIALISING AGC</span>
-              <!-- ★★ ON THE MAIN SCREEN, not only beside the gain controls. The gain panel is
-                   the right place to ACT on an overload, but it is behind the menu — and a
-                   warning nobody sees is not a warning. Overload is the one condition that
-                   silently ruins reception (it is what has been destroying RDS all evening),
-                   so it belongs where the user is already looking (Stuart, 2026-07-26). -->
-              <!-- ★★★ THE TUNER IS BYPASSED AND YOU MAY NOT HAVE DONE IT (Stuart, 2026-09-20). On a shared dial
-                   anyone may switch direct sampling on to reach HF; if they wander back up to FM and leave, the
-                   next visitor meets a receiver that hears nothing above 30 MHz and concludes the SERVER is
-                   broken. It is not — it is in HF mode, and this says so where the fault would otherwise be
-                   blamed. Only shown when the dial is ABOVE the crossover, where it is actually costing you. -->
-              <span id="dsChip" title="Direct sampling is on: the tuner is switched out and this receiver is listening to HF and below only (short wave, medium wave, long wave). Turn it off in the hardware panel to hear the VHF and UHF bands again.">DIRECT SAMPLING (HF AND BELOW)</span><!--
-              --><span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span><!--
-                ★ The text is REPLACED at runtime on a dongle, where the server also acts on the
-                  overload and the chip reports which way the gain went (see onOverload). On an RSP
-                  the hardware raises the flag and we only report it, so it keeps this wording. -->
-              <!-- ★ THE BARS SIT WITH THE NUMBERS THEY DESCRIBE. They were first in the row, so
-                   the AGC chip came between the link quality and the KB/s · fps · ms it is a
-                   summary OF — two readings about the same thing with an unrelated one wedged
-                   between them (Stuart, 2026-08-21: "the connection meter needs to swap places
-                   with the agc info as it should be next to the actual connection info"). -->
-              <span id="linkBars" title="Link quality">
-                <i></i><i></i><i></i>
-              </span>
-              <span id="status">—</span>
-              <!-- ★★★ WHAT IS BEING DONE TO THE AUDIO — shown only when something is.
-                   This page has ALWAYS restored noise reduction, the auto-notch and the blanker on
-                   every connect (see restorePrefs), with nothing on screen to say so. A listener
-                   who left NR on last week hears the artefacts and concludes the RECEIVER is
-                   broken — "if a user forgets theyve enabled it they dont know its on and wonders
-                   why the audio sounds funny" (Stuart, 2026-09-24). The app grew the same badges
-                   on the same day; the objection was never to remembering, it was to remembering
-                   in silence.
-                   ★ Empty in the ordinary case, so it costs no space at all until it matters. -->
-              <span id="dspTags" title="Audio processing is on — click to open the audio panel"></span>
-            </span>
-          </div>
-        </div>
-        <div id="findRow">
-          <button class="btn" id="bookmarksBtn" title="Bookmarks">&#9733; BOOKMARKS</button>
-          <div id="searchWrap">
-            <input id="search" type="search" placeholder="Search stations, bands, frequency…"
-                   spellcheck="false" autocomplete="off">
-            <div id="searchResults"></div>
-          </div>
-        </div>
-      </div>
+  <!-- ★★ THE BANDWIDTH ROW'S PARKING SPACE. The mirrored sliders + SYNC are shown inside the mode
+       picker (mobile.ts moves the node in when it opens and back here when it closes, so every
+       listener stays bound to the one copy). Never displayed from here. -->
+  <div id="bwHome" hidden>
+    <div class="bwRow">
+      <span class="val" id="bwLoVal">−5.0k</span>
+      <input type="range" id="bwLo" class="bwHalf">
+      <button class="btn" id="bwSync" title="Mirror both edges">SYNC</button>
+      <input type="range" id="bwHi" class="bwHalf">
+      <span class="val" id="bwHiVal">+5.0k</span>
     </div>
   </div>
 </div>
@@ -3968,18 +3579,20 @@ select.btn { padding: 6px 8px; }
        own comment. On the card they had a row to themselves and ate a third of its height for
        two buttons a listener touches occasionally (Stuart). Finding a station, recalling one
        and typing one in are the same job, so they belong in the same place.
-       ★ .mOnly: the desktop bar already carries both, so this copy exists only at the widths
-       where that bar is hidden — one visible copy at any width, never two. -->
+       ★ The only copy of either. -->
   <div class="mrow mOnly" style="gap:0.5em">
     <button class="mPanelBtn" id="mBookmarks" style="flex:1">★ BOOKMARKS</button>
   </div>
-  <!-- ★★★ THE REAL SEARCH INPUT IS MOVED IN HERE, not copied. A button that focused #search
-       did nothing at all: that input lives in the desktop bar, which is display:none on a
-       narrow window, and a HIDDEN ELEMENT CANNOT TAKE FOCUS — so it read as a dead button
-       (Stuart). A second input would mean a second copy of the search logic, which would
-       drift. Moving the node keeps every handler bound to it, because listeners belong to the
-       element and not to where it sits. mobile.ts moves it back when the bar returns. -->
-  <div class="mrow mOnly" id="mSearchHost"></div>
+  <!-- ★★★ THE ONE SEARCH INPUT. It used to live in the hidden desktop bar and be moved in here at
+       run time; a HIDDEN ELEMENT CANNOT TAKE FOCUS, so anything pointing at it there was dead
+       (Stuart). Now it is simply written here. -->
+  <div class="mrow mOnly" id="mSearchHost">
+    <div id="searchWrap">
+      <input id="search" type="search" placeholder="Search stations, bands, frequency…"
+             spellcheck="false" autocomplete="off">
+      <div id="searchResults"></div>
+    </div>
+  </div>
   <div class="btnRow">
     <button class="btn" id="freqGo">TUNE</button>
     <button class="btn" id="freqShare" title="Copy a link to this frequency">SHARE</button>
@@ -4005,10 +3618,6 @@ select.btn { padding: 6px 8px; }
                        border-top: 1px solid rgba(255,255,255,0.10); }
 #volPop.muted .volPopFill { background: #ff4b4b; }
 #volPop.muted .volPopVal  { color: #ff8a8a; }
-/* ★ Muted is red on the desktop bar's AUDIO button however the mute happened — see setMuted(). It is a
-     WORD with no glyph to carry the state, so the colour is all it has. The deck's speaker key (#mAudio)
-     is NOT red: it shows the prohibition-sign glyph in its own legend colour (see .mIcMute). */
-#audioBtn.mutedRed { color: #ff6b6b; border-color: rgba(255,75,75,0.65); }
 @media (prefers-reduced-motion: reduce) { #volPop .volPopFill { transition: none; } }
 </style>
 </div>
@@ -4054,9 +3663,7 @@ select.btn { padding: 6px 8px; }
        row is hidden entirely rather than disabled, because an inert control still reads as an
        offer. Changing it reconnects the audio socket: the codec is fixed at connect time. -->
   <!-- ★ THE RECORDER LIVES WITH THE AUDIO (Stuart), matching the app — recording is an
-     audio decision, not a separate mode. Volume and mute come too: they are in the desktop
-     bar, so hiding the bar on a narrow window left a listener with no way to turn it down.
-     .mOnly keeps these to the widths where the bar is hidden, so desktop keeps ONE copy. -->
+     audio decision, not a separate mode. Volume and mute live here too — the only copy of each. -->
 <div class="mrow mOnly"><label>VOLUME</label>
   <button class="mPanelBtn mMuteBtn" id="mPanelMute" title="Mute" style="width:3.4em"><span class="mIcLive"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 8H6L10 4V16L6 12H3Z" fill="currentColor"/><path d="M12.5 8a3 3 0 0 1 0 4"/><path d="M14.5 6a6 6 0 0 1 0 8"/></svg></span><span class="mIcMute"><svg class="mGlyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.45 8.6H7.55L10.35 5.8V14.2L7.55 11.4H5.45Z" fill="currentColor" stroke="none"/><path d="M12.1 8.6a2.1 2.1 0 0 1 0 2.8M13.5 7.2a4.2 4.2 0 0 1 0 5.6" stroke-width="1.2"/><circle cx="10" cy="10" r="8.9"/><path d="M3.707 3.707L16.293 16.293"/></svg></span></button>
   <input type="range" id="mPanelVol" min="0" max="100" step="1" aria-label="Volume">
@@ -4327,8 +3934,7 @@ select.btn { padding: 6px 8px; }
        thing for a radio application to be coy about — and it matters more now there is more
        than one kind of radio behind it. -->
   <!-- ★ WATERFALL / SPECTRUM CONTROLS BELONG IN THE MENU (Stuart) — they are view
-     settings, and the menu is already where every other display setting lives. Present
-     only while the bar is hidden, which is the only time they are otherwise unreachable. -->
+     settings, and the menu is already where every other display setting lives. -->
 <!-- ★★ A NAME AND A STATE, NOT ONE WORD DOING BOTH. "LOCK" alone cannot say whether the
      view IS locked or whether pressing it WILL lock it, and the two readings are opposites
      (Stuart). The row now names the setting — VFO CENTRE, i.e. does the view stay centred on

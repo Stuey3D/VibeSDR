@@ -1,6 +1,6 @@
 // ── Mobile control card ──────────────────────────────────────────────────────
 // An HTML port of the phone app's control layout (src/components/ControlsBar.tsx), used at
-// every width — it replaced the desktop bar entirely. CSS handles the arrangement (pads flank
+// every width — the web client's only control surface. CSS handles the arrangement (pads flank
 // the pill when wide, flow under it when narrow); this module only wires behaviour.
 //
 // ★★ WHAT CAME FROM WHERE. The CONTROL SET and their ORDER come from ControlsBar.tsx as
@@ -17,19 +17,20 @@
 export type MobileDeps = {
   /** Tune by a signed number of STEPS (not Hz) — the caller owns step size and clamping. */
   nudgeSteps: (steps: number) => void;
+  /** ★ Tap = one step, hold = main.ts's accelerating sweep, paced on the receiver's own answer to
+   *  each tune (attachHoldSweep). Owned there so the pacing has ONE implementation. */
+  holdSweep: (el: HTMLElement, tap: () => void) => void;
   /** spec.zoomBy — a MAGNIFICATION factor, not a span multiplier: >1 zooms IN (narrower
-   *  span, more detail), <1 zooms OUT. The desktop bar wires zoomIn→2 and zoomOut→0.5, and
-   *  reading it the other way round is what got these two buttons swapped. */
+   *  span, more detail), <1 zooms OUT. Reading it the other way round is what once got the
+   *  − and + buttons swapped. */
   zoomBy: (factor: number) => void;
   /** Current dial frequency in Hz, or null before the first tune. */
   freqHz: () => number | null;
   /** ★★ THE UNIT THE USER CHOSE in the frequency panel, and the readout it produces. The card
    *  used to decide for itself (kHz below 10 MHz, MHz above), so picking kHz in the entry popup
-   *  changed the popup and nothing else — main.ts's renderFreq() applied the choice to the OLD
-   *  desktop bar, which no longer exists. Its comment states the intent exactly: "the unit chosen
-   *  in the entry popup also drives the tuning block's readout, so the two always agree — a dial
-   *  reading MHz while you type kHz is how people mis-tune by a factor of a thousand." That rule
-   *  did not follow the readout when it moved into this card. */
+   *  changed the popup and nothing else. The rule: "the unit chosen in the entry popup also drives
+   *  the readout, so the two always agree — a dial reading MHz while you type kHz is how people
+   *  mis-tune by a factor of a thousand." */
   /** `chan`: the airband channel's small line (spacing / true frequency / name) — absent elsewhere. */
   freqText: () => { main: string; fine: string; unit: string; chan?: string } | null;
   mode: () => string;
@@ -50,13 +51,14 @@ export type MobileDeps = {
   /** ★ The one decoder left when the owner has blocked all the others (and the spots) — drawn
    *  here in place of DECODERS… so a single button does not hide behind a door. See main.ts. */
   soleDecoder: () => { label: string; on: boolean; press: () => void } | null;
+  /** ★ False when the owner has switched off every decoder and the spot list — the DECODERS…
+   *  entry is then left out rather than opening an empty panel. */
+  anyDecoderLeft: () => boolean;
   /** ★★★ DAB, WHICH IS NOT AN SDRMode AND SO CANNOT COME THROUGH modes(). It replaces the whole
    *  chain rather than filtering a channel out of it, so it is offered here as its own entry —
    *  and ONLY where the server says the receiver can reach a multiplex.
-   *  ★ This is the second mode picker. The desktop bar has one and this card has another, and
-   *    DAB was added to the bar alone: on the phone layout (and on a Mac window narrow enough to
-   *    use this card) the button simply did not exist. Stuart, 2026-09-04, on a V4 and a V4L that
-   *    both report dab:true: "cant see the dab button". ONE RULE, TWO READERS. */
+   *  ★ It was once added to the retired desktop bar's mode row alone, where nobody could see it
+   *    (Stuart, 2026-09-04: "cant see the dab button"). There is one picker now: this one. */
   dabCapable: () => boolean;
   dabOn: () => boolean;
   toggleDab: () => void;
@@ -67,7 +69,7 @@ export type MobileDeps = {
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
-/** Press-and-hold repeat for the drums' − / + ends, for people who would rather tap. */
+/** Press-and-hold repeat for the zoom pad's − / +. (The tune pad uses deps.holdSweep.) */
 function attachRepeat(btn: HTMLElement, fire: () => void) {
   let hold = 0, rep = 0;
   const stop = () => {
@@ -133,18 +135,19 @@ export function initMobileControls(deps: MobileDeps) {
   // ★ The drag implementation is not carried here as dead code — it is in git history if the
   //   card is ever driven by a real touchscreen, where `pointer: coarse` would be the honest
   //   test for turning it back on.
-  attachRepeat($('mVfoDown'), () => deps.nudgeSteps(-1));
-  attachRepeat($('mVfoUp'),   () => deps.nudgeSteps(1));
-  // ★ IN magnifies, OUT widens — the same sense as the desktop bar (zoomIn→2, zoomOut→0.5).
-  //   These were the wrong way round: − zoomed in and + zoomed out.
+  // ★★ TUNING sweeps through deps.holdSweep (accelerating, and paced on the receiver's answer — a
+  //    flat-rate repeat outruns a slow server). ZOOM keeps the plain repeat below, unchanged — the
+  //    sweep fixes were made for, and measured on, tuning.
+  deps.holdSweep($('mVfoDown'), () => deps.nudgeSteps(-1));
+  deps.holdSweep($('mVfoUp'),   () => deps.nudgeSteps(1));
+  // ★ IN magnifies, OUT widens. These were once the wrong way round: − zoomed in and + zoomed out.
   attachRepeat($('mZoomIn'),  () => deps.zoomBy(2));
   attachRepeat($('mZoomOut'), () => deps.zoomBy(0.5));
 
   // ── Buttons — the app's order: step, audio, menu, [decoders] ────────────────
   // ★ A POPUP, NOT A CYCLER (Stuart). Cycling makes you tap through every step to reach the
   //   one you want and gives no sight of the ladder — and on a phone that is several taps of
-  //   a control that is already small. The desktop button opens a menu; so does this one, and
-  //   it is the SAME menu, anchored to whichever button was tapped.
+  //   a control that is already small. It opens the step ladder as a menu anchored to the button.
   $('mStep').onclick = () => deps.openStepMenu($('mStep'));
   $('mAudio').onclick = () => deps.openAudio();
   $('mMenu').onclick  = () => deps.openMenu();
@@ -216,91 +219,6 @@ export function initMobileControls(deps: MobileDeps) {
   $('mSnr').onclick = () => openMeterMenu($('mSnr'));
   $('mSnr').title = 'Signal reading: SNR / S-meter / dBFS';
 
-  // ── Controls the desktop bar owns, mirrored where they BELONG ───────────────
-  // ★★★ CLICK THE ORIGINAL, DO NOT REIMPLEMENT IT. Every one of these drives the existing
-  //     bar control, so behaviour, state and any future change live in exactly one place.
-  //     A second implementation of REC or LOCK would drift the first time either is touched.
-  const mirror = (fromId: string, toId: string) => {
-    const from = document.getElementById(fromId);
-    const to = document.getElementById(toId);
-    if (from && to) from.onclick = () => to.click();
-  };
-  mirror('mBookmarks', 'bookmarksBtn');
-  mirror('mCentreFloat', 'centreBtn');   // one implementation of "snap back to the dial"
-  mirror('mPanelRec', 'recBtn');
-  mirror('mPanelRecs', 'recordingsBtn');
-  mirror('mPanelMute', 'muteBtn');
-  mirror('mPanelLock', 'lockBtn');
-  mirror('mPanelCentre', 'centreBtn');
-  mirror('mPanelFit', 'zoomReset');
-
-  // ★★★ MOVE #linkStats INTO THE CARD. It holds the link bars and the SQL / SETTLING /
-  //     OVERLOAD chips — and #status, the throughput readout, is inside it too. All of them
-  //     live in the desktop bar, which is hidden at every width, so without this the whole
-  //     right-hand half of the status row is simply absent.
-  // ★★ THIS WAS DELETED BY ACCIDENT ONCE ALREADY: a later edit replaced a span of lines that
-  //    this block had been inserted into, and left behind a COMMENT further down still
-  //    asserting that the move happens. A comment describing behaviour that no longer exists
-  //    is worse than no comment — it stopped me looking here for two rounds (2026-08-01).
-  const stats = document.getElementById('linkStats');
-  const statsHost = document.getElementById('mLinkHost');
-  if (stats && statsHost && stats.parentElement !== statsHost) statsHost.appendChild(stats);
-
-  // ★★★ THE WARNING CHIPS GO ON THE CLOCK LINE, NOT THE NETWORK LINE.
-  //     Portrait already splits the status row in two (clock above, link cluster below), which
-  //     was enough while the throughput read "33 KB/s · 9.7 fps". Then ping and buf were added
-  //     to it, and the bottom line no longer had room for the chips as well — so OVERLOAD took
-  //     a THIRD line of its own, with the throughput pushed below it and the bars stranded
-  //     beside the chip (Stuart, iPhone 17 Pro Max portrait). The row had gone from two decided
-  //     lines back to three discovered ones.
-  // ★★ The clock line is the one with width to spare: it says "14:59 UTC · 15:59" and nothing
-  //    else, and it does not grow. The network line is the one that grows every time we add a
-  //    figure to it. So the split is by WHAT GROWS, not by what reads alike — chips with the
-  //    clock, and #mNet left as network readouts only.
-  // ★ Moved, never copied — same rule as #linkStats itself. These chips are driven by
-  //   updateSignalUi() and onOverload() by id; relocating the node keeps one of each, so their
-  //   logic never learns there are two places to write to.
-  const chipHost = document.getElementById('mChipHost');
-  if (chipHost) {
-    // ★ NO 'sqlChip'. It has no element — the squelch state lives in the SNR field beside the
-    //   frequency and only there. Its CSS outlived the markup, and that leftover is what made a
-    //   dead id look live enough to list here (Stuart spotted it, 2026-08-27).
-    for (const id of ['initChip', 'ovlChip']) {
-      const chip = document.getElementById(id);
-      if (chip && chip.parentElement !== chipHost) chipHost.appendChild(chip);
-    }
-  }
-
-  // ★★★ MOVE THE SEARCH BOX, DO NOT COPY IT. #searchWrap lives in the desktop bar, and that
-  //     bar is hidden at EVERY width now — an input inside it cannot be focused or typed into,
-  //     so anything pointing at it is dead. Relocating the NODE keeps every listener (they bind
-  //     to the element, not to its position in the tree), so there is still exactly one search.
-  // ★★ UNCONDITIONALLY. This used to be gated on a max-width media query, from when the bar
-  //    reappeared on wide windows. With the bar gone for good that gate simply left the search
-  //    box in a hidden container on any wide screen, and the frequency panel showed BOOKMARKS
-  //    with an empty space beside it (Stuart, 2026-08-01). A breakpoint that no longer means
-  //    anything is worse than no breakpoint: it still fires.
-  const wrap = document.getElementById('searchWrap');
-  const host = document.getElementById('mSearchHost');
-  if (wrap && host && wrap.parentElement !== host) host.appendChild(wrap);
-
-  // ★★ THE VOLUME SLIDER IS A VALUE, NOT AN ACTION — mirroring a click would do nothing.
-  //    Copy the value across and fire `input`, which is the event the audio path listens on;
-  //    seed from the original so the mobile slider opens where the audio actually is rather
-  //    than snapping it to a default the moment the panel is opened.
-  const vol = document.getElementById('vol') as HTMLInputElement | null;
-  const mVol = document.getElementById('mPanelVol') as HTMLInputElement | null;
-  if (vol && mVol) {
-    mVol.min = vol.min; mVol.max = vol.max; mVol.step = vol.step;
-    mVol.value = vol.value;
-    mVol.oninput = () => {
-      vol.value = mVol.value;
-      vol.dispatchEvent(new Event('input', { bubbles: true }));
-    };
-    // Keep in step if the desktop slider moves (a keyboard shortcut, a restored pref).
-    vol.addEventListener('input', () => { mVol.value = vol.value; });
-  }
-
   // ★★ THE VTS SITS IN THE SAME CORNER AS THIS CARD (#vts is bottom:14px), so without an
   //    offset the station strip draws straight over the controls. Publish the card's MEASURED
   //    height and let the stylesheet lift the VTS clear of it. A fixed number would be wrong
@@ -335,14 +253,12 @@ export function initMobileControls(deps: MobileDeps) {
       grid.appendChild(b);
     }
     menu.appendChild(grid);
-    // ★★★ THE BANDWIDTH ROW COMES WITH THE DEMODULATORS (Stuart). It lived in the desktop
-    //     bar's #demod block, beside the mode buttons, because the mode and the width you
+    // ★★★ THE BANDWIDTH ROW COMES WITH THE DEMODULATORS (Stuart): the mode and the width you
     //     listen at are one decision — pick USB and the first thing you reach for is how wide.
-    //     With the bar gone it was stranded, so the picker carries it.
     // ★★ MOVED, NOT REBUILT. Two mirrored sliders with a SYNC toggle is real behaviour; a
-    //    second copy would drift. Relocating the node keeps every listener bound to it, the
-    //    same reason the search box is moved rather than duplicated.
-    const bw = document.querySelector('#demod .bwRow') as HTMLElement | null;
+    //    second copy would drift. The row is parked in #bwHome (hidden) and the NODE is moved in
+    //    here, which keeps every listener bound to it; close() puts it back.
+    const bw = document.querySelector('#bwHome .bwRow') as HTMLElement | null;
     const bwHome = bw?.parentElement ?? null;
     if (bw) {
       const sep = document.createElement('div');
@@ -372,18 +288,20 @@ export function initMobileControls(deps: MobileDeps) {
     }
 
     const sole = deps.soleDecoder();
-    const decRow = document.createElement('button');
-    if (sole) {
-      // ★ One survivor: it stands where the door stood, and toggles exactly as it would inside.
-      decRow.className = 'mModeOpt' + (sole.on ? ' on' : '');
-      decRow.textContent = sole.label;
-      decRow.onclick = () => { sole.press(); close(); refresh(); };
-    } else {
-      decRow.className = 'mModeOpt';
-      decRow.textContent = 'DECODERS…';
-      decRow.onclick = () => { close(); deps.openDecoders(); };
+    if (sole || deps.anyDecoderLeft()) {
+      const decRow = document.createElement('button');
+      if (sole) {
+        // ★ One survivor: it stands where the door stood, and toggles exactly as it would inside.
+        decRow.className = 'mModeOpt' + (sole.on ? ' on' : '');
+        decRow.textContent = sole.label;
+        decRow.onclick = () => { sole.press(); close(); refresh(); };
+      } else {
+        decRow.className = 'mModeOpt';
+        decRow.textContent = 'DECODERS…';
+        decRow.onclick = () => { close(); deps.openDecoders(); };
+      }
+      grid.appendChild(decRow);
     }
-    grid.appendChild(decRow);
 
     // ★★ AN EXPLICIT WAY OUT. Dismiss-by-clicking-away is fine when the backdrop is inert; here
     //    the backdrop is the WATERFALL, and a click on it TUNES. So the only obvious way to leave
@@ -467,50 +385,12 @@ export function initMobileControls(deps: MobileDeps) {
     const chEl = document.getElementById('mChan');
     if (chEl) { chEl.hidden = !ft?.chan; put(chEl, ft?.chan ?? ''); }
     put($('mMode'), deps.mode().toUpperCase());
-    // ★ MIRRORED from the real #stereo badge, exactly as the mute state below is — the RDS
-    //   decoder already toggles that one, and a second copy of the same boolean is how a badge
-    //   ends up claiming stereo on a mono signal. It clears itself when the mode leaves WFM,
-    //   because setMode() clears the element this reads.
-    $('mStereo')?.classList.toggle('on',
-      document.getElementById('stereo')?.classList.contains('on') === true);
     put($('mStep'), deps.stepLabel());
-    // ★ Mirror the mute state from the real control rather than tracking our own copy — two
-    //   booleans for one setting is how a button ends up showing the opposite of the truth.
-    const mb = document.getElementById('muteBtn');
-    if (mb) {
-      const muted = mb.classList.contains('on');
-      $('mAudio').classList.toggle('muted', muted);
-      // ★ Both buttons read the SAME source. Two controls showing one fact from two copies is
-      //   how one ends up saying muted while the other says live.
-      $('mPanelMute')?.classList.toggle('muted', muted);
-    }
-    // ★ Mirrored from the real control: 'on' there means followVfo, i.e. the view is LOCKED
-    //   to the dial. Tracking our own copy is how a state label ends up saying the opposite.
-    const lb = document.getElementById('lockBtn');
-    if (lb) {
-      const locked = lb.classList.contains('on');
-      put($('mPanelLock'), locked ? 'LOCKED' : 'FREE');
-      $('mPanelLock')?.classList.toggle('free', !locked);
-    }
-
-    // ★ Throughput, fps, rtt and the link bars are not mirrored at all: #status and
-    //   #linkStats are MOVED into the card, so the real elements are already here. There is
-    //   nothing to copy and nothing that can disagree.
-    // ★ One timer, mirrored — a second countdown could drift from the recorder's own.
-    // ★ Mirrored from the real recorder button, never tracked separately — a second copy of
-    //   "am I recording" is how a STOP button ends up starting a second recording.
-    const rb = document.getElementById('recBtn');
-    if (rb) {
-      const recording = rb.classList.contains('rec');
-      $('mPanelRec')?.classList.toggle('rec', recording);
-      put($('mRecLbl'), recording ? 'STOP' : 'REC');
-    }
-
-    const rt = document.getElementById('recTime');
-    const rv = (rt?.textContent ?? '').trim();
-    put($('mRecVal'), rv);
-    // The whole group (dot + digits) appears and disappears together.
-    $('mRecTime').classList.toggle('on', rv !== '');
+    // ★ The stereo light, mute, LOCK/FREE and the recorder are NOT polled here: main.ts has ONE
+    //   writer for each (syncStereoLight, setMuted, the lock button, initRecorder/updateRecTime)
+    //   and it writes the card's own elements. They used to be mirrored from hidden desktop-bar
+    //   controls that acted as state holders — two copies of one fact, read four times a second.
+    // ★ Throughput, fps, rtt and the link bars live in the card's status row (#linkStats).
 
     paintSignal();
   }
