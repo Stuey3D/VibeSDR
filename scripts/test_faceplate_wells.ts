@@ -296,7 +296,12 @@ function recorder() {
   const cb = code('components/ControlsBar.tsx');
   eq('ControlsBar: all four portrait keys take keyProps (which carries lightReach)', (cb.match(/\{\.\.\.keyProps\}/g) ?? []).length, 4);
   ok('ControlsBar: keyProps carries the light', /height: KEY_SLOT, radius: s\.r\(8\), lightReach/.test(cb) && /minHeight: true, lightReach/.test(cb));
-  eq('ControlsBar: all four landscape keys are lit', (cb.match(/radius=\{6\} lightReach=\{lightReach\}/g) ?? []).length, 4);
+  eq('ControlsBar: all four landscape keys are lit', (cb.match(/radius=\{6\} lightReach=\{(?:chatOff \? 0 : )?lightReach\}/g) ?? []).length, 4);
+  // ★ B10: CHAT's lamp goes OFF (no light, unlit legend) on a server without chat — never a grey-out or a dead key.
+  ok('ControlsBar: chat with no chat = lamp off, still pressable (portrait + landscape)',
+     (cb.match(/lightReach=\{chatOff \? 0 : (?:keyProps\.)?lightReach\}/g) ?? []).length === 2
+     && (cb.match(/onPress=\{chatOff \? NOOP : onChat\}/g) ?? []).length === 2
+     && !/opacity: chatOff \? 0\.4/.test(cb) && !/disabled=\{chatOff\}/.test(cb));
   const tk = code('components/TunerKeys.tsx');
   ok('TunerKeys: both keys lit through DomeKey (one implementation)', /<DomeKey\s+lightReach=\{lightReach\}/.test(tk));
   ok('TunerKeys: unlit, the glyph is drawn exactly as today (α .55, 2.6, blur 3, under α .95 1.4)',
