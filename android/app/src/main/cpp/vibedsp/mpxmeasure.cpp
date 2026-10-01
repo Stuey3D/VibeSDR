@@ -87,10 +87,37 @@ void MpxMeasure::feed(const cf32* iq, int n, unsigned gen, bool gap) {
     if (n <= 0 || !(inRate_ > 0.0)) return;
     if (!threadedWant_) { process_(iq, n, gen, gap); return; }
     if (!running_) startWorker_();
-    // ★ The copy is made OUTSIDE the lock, into a spare buffer that is then swapped in — so the DSP
-    //   thread never holds the queue while copying, and never waits on a low-priority thread that
-    //   does. The worker only ever holds the lock for a swap.
-    spare_.assign(iq, iq + n);
+    /* ★★★ THE QUEUE IS COUNTED IN BLOCKS, SO A BLOCK MUST BE WORTH SOMETHING IN TIME. The radio
+     *  decides how big a block is: an RTL hands the DSP thread 16k samples (~7 ms), but the SDRplay
+     *  API calls back ~2900 times a second with ~1000 samples (0.34 ms) and the pipeline feeds us each
+     *  one. kQ = 6 of THOSE is two milliseconds of slack — and the DSP thread works in bursts (on the
+     *  Lenovo's RSP1A it slept ~30 times a second and ran ~90 blocks back to back each time), so the
+     *  queue filled in every burst while `vibe-mpx` sat at 4.8 % of a core waiting to be woken. It
+     *  dropped ~700 blocks a second, every drop is a hole, and a hole holds every figure for
+     *  kGapHoldSec — so the panel NEVER published: no pilot, no phase, empty eyes, on an i5 doing
+     *  nothing (2026-10-01, measured on the box; the same build's scopes worked on every RTL).
+     *  ★ So the feeder ACCUMULATES to kMinBlockSec before queueing. Six of those are >= 120 ms of
+     *    slack whatever the radio's callback size, and the low-priority thread is woken ~50 times a
+     *    second instead of ~3000. The instrument is a 6 Hz panel; 20 ms of latency is invisible.
+     *  ★ The copy is still made OUTSIDE the lock, into the spare buffer that is then swapped in — so
+     *    the DSP thread never holds the queue while copying, and never waits on a low-priority
+     *    thread that does. The worker only ever holds the lock for a swap.
+     *  ★ What is being accumulated belongs to ONE measurement and ONE side of any hole: a new `gen`
+     *    makes it obsolete (the worker would reset on the new gen anyway), and a hole sends it on
+     *    its way first so the gap flag lands on the samples AFTER the hole and no others. */
+    if (!spare_.empty() && gen != spareGen_) { spare_.clear(); spareGap_ = false; }
+    if (gap && !spare_.empty()) enqueue_();
+    if (spare_.empty()) { spareGen_ = gen; spareGap_ = gap; }
+    spare_.insert(spare_.end(), iq, iq + n);
+    const size_t minBlock = (size_t)std::max(1.0, std::ceil(inRate_ * kMinBlockSec));
+    if (spare_.size() >= minBlock) enqueue_();
+}
+
+void MpxMeasure::enqueue_() {
+    const unsigned gen = spareGen_;
+    const bool gap = spareGap_;
+    const int n = (int)spare_.size();
+    spareGap_ = false;
     std::unique_lock<std::mutex> lk(qM_);
     // ★ A hole UPSTREAM (the caller's) joins our own drops in gapPending_: if this very block is
     //   then dropped too, the flag waits for the next one that gets in, exactly as a drop does.
@@ -103,6 +130,7 @@ void MpxMeasure::feed(const cf32* iq, int n, unsigned gen, bool gap) {
     if (draining_ && qCount_ > kQ / 2 && !blocking_.load(std::memory_order_relaxed)) {
         dropped_.fetch_add(1, std::memory_order_relaxed);
         gapPending_ = true;
+        spare_.clear();
         return;
     }
     draining_ = false;
@@ -116,6 +144,7 @@ void MpxMeasure::feed(const cf32* iq, int n, unsigned gen, bool gap) {
             dropped_.fetch_add(1, std::memory_order_relaxed);
             gapPending_ = true;
             draining_ = true;
+            spare_.clear();
             return;
         }
     }
@@ -125,11 +154,13 @@ void MpxMeasure::feed(const cf32* iq, int n, unsigned gen, bool gap) {
     gapPending_ = false;
     ++qCount_;
     lk.unlock();
+    spare_.clear();                                  // the slot's old buffer, kept for its capacity
     qCv_.notify_one();
 }
 
 void MpxMeasure::configure(double inRate) {
     stop();
+    spare_.clear(); spareGap_ = false;   // half a block at the old rate belongs to nobody
     inRate_ = inRate;
     built_ = false;      // ★ designed on first use, on the worker — see build()
     gen_ = ~0u;          // the first block restarts everything
