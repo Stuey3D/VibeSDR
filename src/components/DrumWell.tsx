@@ -11,14 +11,15 @@
  *   callers put it in canvases the drum's rolling notches never touch.
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
-  BlurMask, Circle, Group, ImageShader, Line, LinearGradient, RadialGradient, Rect, RoundedRect,
-  Skia, vec,
+  BlurMask, Circle, Group, Image as SkImageNode, ImageShader, Line, LinearGradient, PaintStyle, RadialGradient,
+  Rect, RoundedRect, Skia, vec, type SkImage,
 } from '@shopify/react-native-skia';
 import { useTexture, TEXTURE_SAMPLING } from './DomeKey';
-import { ledA, type ChassisTokens, type LedColour } from '../constants/faceplate';
-import { POOL, WELL_GLOW_BLUR, WELL_R, poolEllipse } from '../constants/drumWell';
+import { glowPaint, makeSprite } from './glowSprite';
+import { hotA, ledA, type ChassisTokens, type LedColour } from '../constants/faceplate';
+import { POOL, RING_LIGHT, WELL_GLOW_BLUR, WELL_R, poolEllipse, ringRect } from '../constants/drumWell';
 
 /**
  * The panel face. Default drum well: TODAY'S machined gradient, drawn exactly as DrumWheel always
@@ -60,10 +61,16 @@ export function WellFace({ W, H, ct, keys = false }: {
  *   • default: today's inner glow (G .10, 5 pt, blur 6) and the lit 0.9 pt border (G .70) — as ever.
  *   • metal:   the dark 0.9 pt gap, the 1 pt controls-colour ring outside it, the 8 pt glow beyond
  *              (`0 0 0 1px L(a), 0 0 8px L(a)`), and the face's top lip (`inset 0 1px 0`).
+ *   • `lit` (every chassis, Transparency on): the ring becomes a LIGHT PIPE — RING_LIGHT's spill,
+ *              halo and hot outer edge over it, from one pre-rendered image (useRingLight).
  */
-export function WellEdge({ W, H, M, ct, led }: {
+export function WellEdge({ W, H, M, ct, led, lit = false }: {
   W: number; H: number; M: number; ct: ChassisTokens; led: LedColour;
+  /** ★ The ring is LIT (constants/drumWell.ts RING_LIGHT) — Transparency effects on. Off: the flat
+   *  ring as before. The caller's M must be wellOutset(ct, lit). */
+  lit?: boolean;
 }) {
+  const light = useRingLight(W, H, M, ct, led, lit);
   return (
     <Group transform={[{ translateX: M }, { translateY: M }]}>
       {ct.wellGlowA > 0 && (
@@ -87,8 +94,38 @@ export function WellEdge({ W, H, M, ct, led }: {
       )}
       <RoundedRect x={0.5} y={0.5} width={W - 1} height={H - 1} r={WELL_R}
                    color={ct.wellBorder ?? ledA(led, 0.70)} strokeWidth={0.9} style="stroke" />
+      {/* ★★ The light the ring spills — over the crisp ring, so the ring itself reads as the lit
+          part. ONE image, rasterised once per size × colour (useRingLight). */}
+      {light && <SkImageNode image={light} x={-M} y={-M} width={W + 2 * M} height={H + 2 * M} />}
     </Group>
   );
+}
+
+/**
+ * ★★★ THE RING'S LIGHT, RASTERISED ONCE (constants/drumWell.ts RING_LIGHT): the spill and the halo
+ * either side of the ring and the hot hair on its outer edge, drawn into one sprite the size of the
+ * edge canvas, at the screen's pixel ratio. Rebuilt only when the well's size, the chassis's ring or
+ * the colour changes — never on a drum step, never per frame. null when unlit (Transparency off).
+ */
+function useRingLight(W: number, H: number, M: number, ct: ChassisTokens, led: LedColour, lit: boolean): SkImage | null {
+  const key = ledA(led, 1) + '|' + hotA(led, 1);
+  return useMemo(() => {
+    if (!lit || !(W > 2) || !(H > 2) || !(M >= 0)) return null;
+    const rr = ringRect(ct, W, H, WELL_R);
+    const rrect = (d: number) => Skia.RRectXY(Skia.XYWHRect(M + rr.x - d, M + rr.y - d, rr.w + 2 * d, rr.h + 2 * d),
+                                              rr.r + d, rr.r + d);
+    return makeSprite(W + 2 * M, H + 2 * M, (c) => {
+      for (const layer of [RING_LIGHT.spill, RING_LIGHT.halo]) {
+        const p = glowPaint(ledA(led, layer.a), layer.blur);
+        p.setStyle(PaintStyle.Stroke); p.setStrokeWidth(layer.width);
+        c.drawRRect(rrect(0), p);
+      }
+      const e = glowPaint(hotA(led, RING_LIGHT.edge.a));
+      e.setStyle(PaintStyle.Stroke); e.setStrokeWidth(RING_LIGHT.edge.width);
+      c.drawRRect(rrect(0.5), e);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [W, H, M, ct.wellRingA, key, lit]);
 }
 
 /**

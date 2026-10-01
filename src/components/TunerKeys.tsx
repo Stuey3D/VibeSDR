@@ -270,7 +270,9 @@ export default function TunerKeys({
   }
 
   const dim = disabled ? 0.35 : 1;
-  const M = wellOutset(ct);
+  // ★ The ring is LIT (drumWell.ts RING_LIGHT) while Transparency effects are on; off = the flat ring.
+  const ringLit = fp.settings.transparency === 'on';
+  const M = wellOutset(ct, ringLit);
   // Default: today's outline key sits in its own dark slot (Deck.mockup `t.slot`, cap inset
   // 2 / 1.5 / 3). Metal: DomeKey's cap already sits in its slot, so it IS the slot.
   const slot = ct.keysSlot;
@@ -299,7 +301,7 @@ export default function TunerKeys({
       <View pointerEvents="none"
             style={{ position: 'absolute', left: -M, top: -M, width: W + 2 * M, height: H + 2 * M }}>
         <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
-          <WellEdge W={W} H={H} M={M} ct={ct} led={fp.controls} />
+          <WellEdge W={W} H={H} M={M} ct={ct} led={fp.controls} lit={ringLit} />
         </Canvas>
       </View>
 

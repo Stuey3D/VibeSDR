@@ -12,7 +12,7 @@ import {
 } from '../src/constants/faceplate.ts';
 import {
   POOL, poolEllipse, wellOutset, notchOrder, WELL_GLOW_BLUR, tunerKeysLayout,
-  TK_KEY_FRAC, TK_KEY_FRAC_LAND,
+  TK_KEY_FRAC, TK_KEY_FRAC_LAND, RING_LIGHT, ringRect,
 } from '../src/constants/drumWell.ts';
 
 let fails = 0, passes = 0;
@@ -87,6 +87,26 @@ for (const c of ['silver', 'black'] as const) {
   ok(`${c}: the edge canvas reaches past the 8 pt glow`, wellOutset(t) >= WELL_GLOW_BLUR);
   eq(`${c}: face base under the grain is flat (no gradient flash while it loads)`,
      new Set(t.wellFace).size, 1);
+}
+
+// ── ★★★ THE LIT RING (Stuart, 2026-10-01: "gently lit up like a real radio… right now they look just
+//     like random rectangle boxes") — a light pipe on every chassis, subtle, and only with Transparency ──
+{
+  const r = RING_LIGHT;
+  ok('lit ring: soft — every layer well under the ring\'s own alpha (not neon)',
+     r.spill.a < 0.25 && r.halo.a < 0.5 && r.edge.a < 0.5);
+  ok('lit ring: the spill is wider and softer than the halo (a falloff, not a second line)',
+     r.spill.blur > r.halo.blur && r.spill.width > r.halo.width && r.spill.a < r.halo.a);
+  ok('lit ring: the hot edge is a hair, thinner than the 1 pt ring', r.edge.width < 1);
+  for (const [c, t] of [['default', D], ['silver', S], ['black', B]] as const) {
+    ok(`${c}: lit, the edge canvas reaches past the ring's light`, wellOutset(t, true) >= r.reach + 1);
+    ok(`${c}: lit never draws LESS than unlit`, wellOutset(t, true) >= wellOutset(t, false));
+    const rr = ringRect(t, 100, 40, 6);
+    // The light is drawn on the ring the chassis already draws: default's border inside, metal's outside.
+    if (t.wellRingA > 0) eq(`${c}: the light follows the metal ring, outside the face`, [rr.x, rr.w, rr.r], [-0.5, 101, 6.5]);
+    else eq(`${c}: the light follows the lit border, inside the face`, [rr.x, rr.w, rr.r], [0.5, 99, 6]);
+  }
+  eq('Transparency off: the default well is its own size again (the flat ring)', wellOutset(D, false), 0);
 }
 
 // ── §6.1 the LED pool: 60 % × 75 % at 50 % 18 %, α .16 → .05 at 55 % → 0 ─────────

@@ -33,12 +33,44 @@ export function poolEllipse(x: number, y: number, w: number, h: number): Ellipse
 export const WELL_GLOW_BLUR = 8;
 
 /**
- * How far past its own box the well draws (points): the metal ring and its 8 pt glow sit OUTSIDE
- * the face, as a box-shadow does. 0 on the default well — its edge is its lit border, drawn inside,
- * exactly as today, so the default well's canvas is today's size.
+ * ★★★ THE RING IS A LIGHT PIPE, NOT A LINE (Stuart, 2026-10-01: "the rings surrounding the button
+ * controls — can you make them look like they are gently lit up like a real radio would be; right now
+ * they look just like random rectangle boxes"). On every chassis the well's ring — the default's lit
+ * border, the metal's ring outside its dark gap — gets the light a backlit bezel spills: a wide faint
+ * SPILL and a tighter HALO either side of it (low alpha, soft falloff), and a hair of the LED's
+ * white-hot core along the ring's OUTER edge, where light leaks from behind the panel. Warm, in the
+ * controls colour; subtle, not neon. Alphas are of the LED colour.
+ * ★★ PERF: rasterised ONCE per well size × colour (DrumWell.tsx useRingLight → glowSprite makeSprite)
+ *   and blitted — no live blur, nothing animated; the drums' rolling canvas never touches it.
+ * ★ Transparency effects OFF (chosen, or a low-end device's default): the flat ring, as before.
  */
-export function wellOutset(t: Pick<ChassisTokens, 'wellRingA' | 'wellGlowA'>): number {
-  return t.wellGlowA > 0 ? WELL_GLOW_BLUR + 4 : t.wellRingA > 0 ? 2 : 0;
+export const RING_LIGHT = {
+  spill: { width: 3,   blur: 10, a: 0.14 },
+  halo:  { width: 1.5, blur: 4,  a: 0.30 },
+  /** The hot hair on the ring's outer edge: hotA(led, a), this wide. */
+  edge:  { width: 0.6, a: 0.40 },
+  /** How far the light reaches past the ring (pt) — the edge canvas must reach at least this far. */
+  reach: 8,
+} as const;
+
+/**
+ * How far past its own box the well draws (points): the metal ring and its 8 pt glow sit OUTSIDE
+ * the face, as a box-shadow does; and the LIT ring's light (RING_LIGHT) spills past the default's
+ * border too. 0 only for an unlit default well — its edge is its lit border, drawn inside, exactly
+ * as before, so that well's canvas is its own size.
+ * @param lit the ring is lit (RING_LIGHT) — Transparency effects on.
+ */
+export function wellOutset(t: Pick<ChassisTokens, 'wellRingA' | 'wellGlowA'>, lit = false): number {
+  const own = t.wellGlowA > 0 ? WELL_GLOW_BLUR + 4 : t.wellRingA > 0 ? 2 : 0;
+  return lit ? Math.max(own, RING_LIGHT.reach + 2) : own;
+}
+
+/** Where the ring itself runs, in the well's own coordinates (x, y, w, h, corner radius): the
+ *  default's lit border half a point inside the box, the metal ring half a point outside it. */
+export function ringRect(t: Pick<ChassisTokens, 'wellRingA'>, W: number, H: number, r: number) {
+  return t.wellRingA > 0
+    ? { x: -0.5, y: -0.5, w: W + 1, h: H + 1, r: r + 0.5 }
+    : { x: 0.5, y: 0.5, w: W - 1, h: H - 1, r };
 }
 
 /** The well's corner radius (Deck.mockup `border-radius: 6px`, today's DrumWheel r = 6). */
