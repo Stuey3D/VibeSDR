@@ -615,12 +615,24 @@ public:
      *  Same reasoning as the spectrogram's saveIfDue: the network path raises a flag, the loop
      *  does the I/O. */
     void saveIfDue() {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (path_.empty() || !dirty_) return;
-        dirty_ = false;
-        FILE* f = fopen(path_.c_str(), "a");
+        /* ★★★ THE FILE IS WRITTEN WITHOUT mtx_. The append (and, every few thousand rows, a rotation
+         *  of thirteen files) used to happen under the lock the socket-close path waits for while it
+         *  holds clientMtx — and an SD card that stalls a write for a moment stalled the DSP with it.
+         *  The rows are swapped out under mtx_ and written under fileMtx_, which nothing near the
+         *  audio path ever takes. fileMtx_ is taken FIRST so two flushes still append in order. */
+        std::lock_guard<std::mutex> fk(fileMtx_);
+        std::vector<ConnRec> rows;
+        std::string path;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            if (path_.empty() || !dirty_) return;
+            dirty_ = false;
+            rows.swap(pending_);
+            path = path_;
+        }
+        FILE* f = fopen(path.c_str(), "a");
         if (!f) return;
-        for (const auto& r : pending_) {
+        for (const auto& r : rows) {
             fprintf(f, "{\"at\":%lld,\"end\":%lld,\"ip\":\"%s\",\"session\":\"%s\","
                        "\"agent\":\"%s\",\"cc\":\"%s\",\"reason\":\"%s\",\"bytes\":%llu,\"drops\":%llu,"
                        "\"admin\":%s%s}\n",
@@ -630,7 +642,6 @@ public:
                     r.admin ? "true" : "false", visitJson(r).c_str());
             ++written_;
         }
-        pending_.clear();
         fclose(f);
         /* ★★★ ROTATE, DO NOT TRUNCATE. This called rewriteLocked(), whose own comment says it writes
          *  the in-memory tail back out "discarding whatever the file held beyond it" — so history was
@@ -643,12 +654,13 @@ public:
          *     the file is the LOG, and the two had quietly become the same thing here.
          *  ★ Rotation rather than one huge file so retention drops a whole archive with an unlink
          *    instead of rewriting 25 MB on a Pi. */
-        if (written_ > kMax * 2) { rotateIfDueLocked(); written_ = 0; }
+        if (written_ > kMax * 2) { rotateIfDue(path); written_ = 0; }
     }
 
     void open(const std::string& ip, const std::string& session, const std::string& agent,
               const std::string& cc = "") {
         std::lock_guard<std::mutex> lk(mtx_);
+        ++gen_;
         const long long now = nowEpoch();
 
         // ★★★ THE CLIENT KNOCKS BEFORE IT COMES IN, AND THAT IS NOT A VISIT. The web client opens
@@ -730,6 +742,7 @@ public:
      *     would otherwise leave an entry for ever. */
     void markAdmin(const std::string& ip, const std::string& session) {
         std::lock_guard<std::mutex> lk(mtx_);
+        ++gen_;
         for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
             if (it->endEpoch) continue;
             const bool hit = session.empty() ? (it->ip == ip) : (it->session == session);
@@ -751,6 +764,7 @@ public:
                int stops = -1, int heard = 0, float bestSnr = 0, double parkedHz = 0,
                long long audioBytes = -1) {
         std::lock_guard<std::mutex> lk(mtx_);
+        ++gen_;
         for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
             if (it->endEpoch) continue;
             const bool hit = session.empty() ? (it->ip == ip) : (it->session == session);
@@ -822,6 +836,7 @@ public:
     bool noteAudio(const std::string& session, long long audioBytes) {
         if (session.empty() || audioBytes < 0) return false;
         std::lock_guard<std::mutex> lk(mtx_);
+        ++gen_;
         for (auto it = recs_.rbegin(); it != recs_.rend(); ++it) {
             if (it->session != session) continue;
             if (!it->endEpoch) { if (audioBytes > it->audioBytes) it->audioBytes = audioBytes; return false; }
@@ -831,12 +846,76 @@ public:
         return true;    // ★ no row for it at all (refused before it opened): nothing will ask
     }
 
-    /** Newest first, capped. */
+    /** Newest first, capped.
+     *
+     *  ★★★ SNAPSHOT UNDER THE LOCK, FORMAT OUTSIDE IT — THIS LOCK IS ONE STEP FROM THE DSP.
+     *      This used to build the whole page — 300 rows, a country AND an ASN lookup for each, every
+     *      string escaped — while holding mtx_. And mtx_ is taken by close() and noteAudio() from the
+     *      WebSocket close path WHILE THAT PATH HOLDS clientMtx, which the DSP thread (feedClient-
+     *      Channels) and the audio fan-out (allAudioSocks) take on every block. So: the admin page
+     *      polls this every 2 s → a listener's socket closes meanwhile (every web visit opens and
+     *      closes a reachability KNOCK) → it waits on mtx_ holding clientMtx → the DSP waits on
+     *      clientMtx → "IQ overrun — dropping a buffer (the DSP thread was blocked)". Measured on
+     *      an M4 with 2000 rows and the real tables: a close() waited up to 1.15 s behind back-to-
+     *      back admin reads; the Pi 2 is ~15-20x slower per read (2026-10-01, Pi 2 overruns at
+     *      16:43:51/53 with CONNECTION HISTORY open).
+     *  ★★ Now the lock covers a copy of the rows and nothing else; every lookup and every byte of
+     *     JSON happens after it is released.
+     *  ★ AND THE ANSWER IS CACHED until the log changes. The page asks every 2 s and the log
+     *    changes when somebody connects or leaves — almost never, by comparison. The lookups'
+     *    answers can move too (the country/ASN tables refresh weekly), so a cached page is also
+     *    retired after kJsonCacheSecs whatever happens. */
     std::string json(size_t limit = 300) {
-        std::lock_guard<std::mutex> lk(mtx_);
-        std::string j = "[";
+        const long long now = nowEpoch();
+        uint64_t gen;
+        { std::lock_guard<std::mutex> lk(mtx_); gen = gen_; }
+        {
+            std::lock_guard<std::mutex> ck(cacheMtx_);
+            if (cacheValid_ && cacheGen_ == gen && cacheLimit_ == limit
+                && now - cacheAt_ < kJsonCacheSecs && now >= cacheAt_)
+                return cache_;
+        }
+        std::vector<ConnRec> rows;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            gen = gen_;
+            rows.reserve(std::min(limit, recs_.size()));
+            size_t n = 0;
+            for (auto it = recs_.rbegin(); it != recs_.rend() && n < limit; ++it, ++n)
+                rows.push_back(*it);
+        }
+        std::string out = formatRows(rows);
+        {
+            std::lock_guard<std::mutex> ck(cacheMtx_);
+            cache_ = out; cacheGen_ = gen; cacheLimit_ = limit; cacheAt_ = now; cacheValid_ = true;
+        }
+        return out;
+    }
+
+    /** ★ Bumped by every change to the rows json() draws — the cache's key. Exposed for the tests. */
+    uint64_t generation() { std::lock_guard<std::mutex> lk(mtx_); return gen_; }
+
+private:
+    /** The rows as the page reads them. Called with NO lock held — see json(). The lookups are
+     *  memoised per address for the one call: a listener who visits twenty times is one lookup. */
+    static std::string formatRows(const std::vector<ConnRec>& rows) {
+        std::vector<std::pair<std::string, std::pair<std::string, std::string>>> memo;  // ip -> cc, net
+        auto look = [&memo](const ConnRec& r) -> const std::pair<std::string, std::string>& {
+            for (auto& m : memo) if (m.first == r.ip) return m.second;
+            memo.push_back({ r.ip, { liveCc(r.ip, std::string()), liveNet(r.ip) } });
+            return memo.back().second;
+        };
+        // ★ A linear memo, not a hash map: there are at most 300 rows and most share a handful
+        //   of addresses, and it keeps this header free of another include.
+        memo.reserve(64);
+        std::string j;
+        j.reserve(rows.size() * 400 + 2);
+        j += '[';
         size_t n = 0;
-        for (auto it = recs_.rbegin(); it != recs_.rend() && n < limit; ++it, ++n) {
+        for (auto rit = rows.begin(); rit != rows.end(); ++rit, ++n) {
+            const ConnRec* it = &*rit;
+            const auto& ln = look(*it);
+            const std::string& cc = ln.first.empty() ? it->cc : ln.first;
             if (n) j += ',';
             j += "{\"at\":" + std::to_string(it->atEpoch)
                + ",\"end\":" + std::to_string(it->endEpoch)
@@ -844,8 +923,8 @@ public:
                + ",\"session\":\"" + esc(it->session) + "\""
                + ",\"agent\":\"" + esc(it->agent) + "\""
                // ★ Fresh lookup first, stored snapshot second — see ccResolver().
-               + ",\"cc\":\"" + esc(liveCc(it->ip, it->cc)) + "\""
-               + ",\"net\":\"" + esc(liveNet(it->ip)) + "\""
+               + ",\"cc\":\"" + esc(cc) + "\""
+               + ",\"net\":\"" + esc(ln.second) + "\""
                + ",\"reason\":\"" + esc(it->endReason) + "\""
                + ",\"bytes\":" + std::to_string(it->bytes)
                + ",\"drops\":" + std::to_string(it->drops)
@@ -859,9 +938,11 @@ public:
                //   labels the row and leaves it out of visitor and country counts.
                + (cloudflareWorkerAddr(it->ip) ? ",\"cfw\":true" : "") + "}";
         }
-        return j + "]";
+        j += ']';
+        return j;
     }
 
+public:
     /** The country for a stored record: today's answer if we have one, else what was recorded. */
     static std::string liveCc(const std::string& ip, const std::string& stored) {
         if (ccResolver()) { const std::string v = ccResolver()(ip); if (!v.empty()) return v; }
@@ -875,29 +956,47 @@ public:
     /** ★★ TOP COUNTRIES, counted by DISTINCT ADDRESS rather than by connection.
      *  Counting connections would let one person who reloads forty times outrank a country that
      *  sent forty different listeners — which is the opposite of what the chart is for. */
+    /*  ★★★ COUNTED OUTSIDE THE LOCK, AND IN n log n. This was a linear search of every distinct
+     *      address for every row, under mtx_ — quadratic in the log's depth (2000 rows) on the lock
+     *      the socket-close path waits for while holding clientMtx (see json()). Now the lock covers
+     *      copying (cc, address) pairs — short strings, no allocation — and the counting happens
+     *      after it is released. */
     std::string topCountriesJson(long long secs, size_t limit = 8) {
-        std::lock_guard<std::mutex> lk(mtx_);
         const long long cut = nowEpoch() - secs;
-        std::vector<std::pair<std::string, std::vector<std::string>>> byCc;
-        for (const auto& r : recs_) {
-            if (r.atEpoch < cut || r.cc.empty()) continue;
-            if (cloudflareWorkerAddr(r.ip)) continue;   // ★ Cloudflare's Worker egress is nobody's country
-            auto it = std::find_if(byCc.begin(), byCc.end(),
-                                   [&](const std::pair<std::string, std::vector<std::string>>& e) {
-                                       return e.first == r.cc; });
-            if (it == byCc.end()) { byCc.push_back({r.cc, {r.ip}}); continue; }
-            if (std::find(it->second.begin(), it->second.end(), r.ip) == it->second.end())
-                it->second.push_back(r.ip);
+        struct Hit { std::string cc, ip; size_t order; };
+        std::vector<Hit> hits;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            hits.reserve(recs_.size());
+            for (const auto& r : recs_) {
+                if (r.atEpoch < cut || r.cc.empty()) continue;
+                hits.push_back({ r.cc, r.ip, hits.size() });
+            }
         }
-        std::sort(byCc.begin(), byCc.end(),
-                  [](const std::pair<std::string, std::vector<std::string>>& a,
-                     const std::pair<std::string, std::vector<std::string>>& b) {
-                      return a.second.size() > b.second.size(); });
+        // ★ Cloudflare's Worker egress is nobody's country.
+        hits.erase(std::remove_if(hits.begin(), hits.end(),
+                                  [](const Hit& h) { return cloudflareWorkerAddr(h.ip); }), hits.end());
+        std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) {
+            if (a.cc != b.cc) return a.cc < b.cc;
+            if (a.ip != b.ip) return a.ip < b.ip;
+            return a.order < b.order; });
+        // One entry per country: distinct addresses, and where the country FIRST appeared, so ties
+        // keep the order they always had (first seen first).
+        struct Cc { std::string cc; size_t n, first; };
+        std::vector<Cc> byCc;
+        for (size_t i = 0; i < hits.size(); i++) {
+            const bool newCc = byCc.empty() || byCc.back().cc != hits[i].cc;
+            if (newCc) { byCc.push_back({ hits[i].cc, 0, hits[i].order }); }
+            Cc& c = byCc.back();
+            if (newCc || hits[i].ip != hits[i - 1].ip) c.n++;
+            c.first = std::min(c.first, hits[i].order);
+        }
+        std::stable_sort(byCc.begin(), byCc.end(), [](const Cc& a, const Cc& b) {
+            return a.n != b.n ? a.n > b.n : a.first < b.first; });
         std::string j = "[";
         for (size_t i = 0; i < byCc.size() && i < limit; i++) {
             if (i) j += ',';
-            j += "{\"cc\":\"" + esc(byCc[i].first) + "\",\"n\":"
-               + std::to_string(byCc[i].second.size()) + "}";
+            j += "{\"cc\":\"" + esc(byCc[i].cc) + "\",\"n\":" + std::to_string(byCc[i].n) + "}";
         }
         return j + "]";
     }
@@ -935,11 +1034,19 @@ public:
         while (scans_.size() > kMaxScans) scans_.pop_front();
     }
 
+    /** ★ Copied under the lock, formatted (with its country lookups) outside it — see json(). */
     std::string scansJson(size_t limit = 60) {
-        std::lock_guard<std::mutex> lk(mtx_);
+        std::vector<ProbeRec> rows;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            rows.reserve(std::min(limit, scans_.size()));
+            size_t n = 0;
+            for (auto it = scans_.rbegin(); it != scans_.rend() && n < limit; ++it, ++n)
+                rows.push_back(*it);
+        }
         std::string j = "[";
         size_t n = 0;
-        for (auto it = scans_.rbegin(); it != scans_.rend() && n < limit; ++it, ++n) {
+        for (auto it = rows.begin(); it != rows.end(); ++it, ++n) {
             if (n) j += ',';
             j += "{\"at\":" + std::to_string(it->atEpoch)
                + ",\"ip\":\"" + esc(it->ip) + "\""
@@ -954,16 +1061,24 @@ public:
 
     /** How many distinct addresses connected in the last `secs`. The one number that says
      *  whether the receiver is being USED or being SCANNED. */
+    /*  ★★★ Same shape as topCountriesJson, and it was the WORST of them: a linear search of every
+     *      address seen for every row, under mtx_, asked twice by every status poll — 3.3 ms per
+     *      call on an M4 with 2000 rows, so the better part of 100 ms of lock on a Pi 2 per 2 s
+     *      poll. Copy the addresses under the lock; sort and count outside it. */
     int uniqueSince(long long secs) {
-        std::lock_guard<std::mutex> lk(mtx_);
         const long long cut = nowEpoch() - secs;
         std::vector<std::string> seen;
-        for (const auto& r : recs_) {
-            if (r.atEpoch < cut) continue;
-            if (cloudflareWorkerAddr(r.ip)) continue;   // ★ not a visitor — see cloudflareWorkerAddr
-            if (std::find(seen.begin(), seen.end(), r.ip) == seen.end()) seen.push_back(r.ip);
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            seen.reserve(recs_.size());
+            for (const auto& r : recs_)
+                if (r.atEpoch >= cut) seen.push_back(r.ip);
         }
-        return (int)seen.size();
+        // ★ not a visitor — see cloudflareWorkerAddr
+        seen.erase(std::remove_if(seen.begin(), seen.end(),
+                                  [](const std::string& ip) { return cloudflareWorkerAddr(ip); }), seen.end());
+        std::sort(seen.begin(), seen.end());
+        return (int)(std::unique(seen.begin(), seen.end()) - seen.begin());
     }
 
 private:
@@ -1028,7 +1143,8 @@ private:
             if (p.session == r.session && p.atEpoch == r.atEpoch)
                 mergeInto(p, bytes, drops, stops, heard, bestSnr, parkedHz, audioBytes);
     }
-    void rotateIfDueLocked() {
+    /** Called under fileMtx_ only — it touches the files, never the rows. */
+    static void rotateIfDue(const std::string& path_) {
         if (path_.empty()) return;
         long sz = 0;
         if (FILE* f = fopen(path_.c_str(), "rb")) { fseek(f, 0, SEEK_END); sz = ftell(f); fclose(f); }
@@ -1053,6 +1169,7 @@ private:
 
     void load() {
         std::lock_guard<std::mutex> lk(mtx_);
+        ++gen_;
         recs_.clear();
         if (path_.empty()) return;
         /* ★★ READ THE NEWEST ARCHIVE FIRST, THEN THE CURRENT FILE, so the deque ends up holding the
@@ -1155,6 +1272,19 @@ private:
     std::vector<ConnRec> pending_;      // closed since the last flush
     bool                 dirty_ = false;
     size_t               written_ = 0;
+    /** Bumped under mtx_ by everything that changes a row json() draws. */
+    uint64_t             gen_ = 0;
+    /** ★ json()'s last answer — see the note there. Its own lock: a reader copying 100 KB out of
+     *  the cache must not hold the lock the socket-close path needs. */
+    static const long long kJsonCacheSecs = 30;
+    std::mutex           cacheMtx_;
+    std::string          cache_;
+    uint64_t             cacheGen_ = 0;
+    size_t               cacheLimit_ = 0;
+    long long            cacheAt_ = 0;
+    bool                 cacheValid_ = false;
+    /** ★ Serialises the FILE (append + rotation) without holding mtx_ — see saveIfDue. */
+    std::mutex           fileMtx_;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -1627,15 +1757,27 @@ public:
         samples_.push_back(s);
         while (samples_.size() > kMax) samples_.pop_front();
     }
-    std::string json() {
-        std::lock_guard<std::mutex> lk(mtx_);
+    /** `after` > 0: only the samples taken AFTER that epoch second, and the reply says so
+     *  (`"after":N`) — the admin page asks for the new tail every 2 s instead of the whole hour
+     *  (~100 KB, up the same uplink as the audio). A reply without `after` is the whole ring, which
+     *  is what an older page (or an older server, to a newer page) gets. */
+    std::string json(long long after) {
+        std::vector<HistSample> rows;
+        {   // ★ Copied under the lock, formatted outside it.
+            std::lock_guard<std::mutex> lk(mtx_);
+            rows.reserve(samples_.size());
+            for (const auto& s : samples_) if (s.atEpoch > after) rows.push_back(s);
+        }
         // ★ ARRAY OF ARRAYS, not array of objects: 3600 copies of the key names is ~200 KB of
         //   text for 90 KB of data, on a link the owner may be reaching over 4G from a field.
         // ★ APPENDED, never inserted: the reader indexes by position, so a new column in the
         //   middle would silently shift every existing series by one.
-        std::string j = "{\"fields\":[\"at\",\"load1\",\"tempC\",\"listeners\",\"kbps\",\"mhz\"],\"rows\":[";
+        std::string j = "{\"fields\":[\"at\",\"load1\",\"tempC\",\"listeners\",\"kbps\",\"mhz\"],";
+        if (after > 0) j += "\"after\":" + std::to_string(after) + ",";
+        j += "\"rows\":[";
+        j.reserve(j.size() + rows.size() * 40 + 2);
         bool first = true;
-        for (const auto& s : samples_) {
+        for (const auto& s : rows) {
             char b[128];
             snprintf(b, sizeof b, "%s[%lld,%.2f,%.1f,%u,%u,%u]", first ? "" : ",",
                      s.atEpoch, s.load1, s.tempC, (unsigned)s.listeners, (unsigned)s.kbps,

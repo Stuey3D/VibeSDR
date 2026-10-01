@@ -70,8 +70,9 @@ async function q(): Promise<string> {
   if (!nonce) throw new Error('this server did not offer a challenge');
   return `vs_admin_nonce=${encodeURIComponent(nonce)}&vs_admin_auth=${vibeAuthToken(password, nonce)}`;
 }
-async function get(path: string): Promise<any> {
-  const r = await fetch(`${base()}/vibeserver/admin/${path}?${await q()}`, { cache: 'no-store' });
+async function get(path: string, extra = ''): Promise<any> {
+  const r = await fetch(`${base()}/vibeserver/admin/${path}?${await q()}${extra ? '&' + extra : ''}`,
+                        { cache: 'no-store' });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
@@ -810,21 +811,76 @@ async function discoverRadios(): Promise<void> {
   } catch { /* one radio, or an older server: fall back to just this process */ }
 }
 
-/** Ask every radio the same question at once, tagging each answer with the radio it came from. */
-async function fromEveryRadio(path: string): Promise<Array<{ radio: string; data: any }>> {
+/** Ask every radio the same question at once, tagging each answer with the radio it came from.
+ *  `extra(serial)` adds query parameters per radio ('' = the single-process case). */
+async function fromEveryRadio(path: string, extra: (serial: string) => string = () => ''):
+    Promise<Array<{ radio: string; serial: string; data: any }>> {
   if (!radioList.length) {
-    try { return [{ radio: '', data: await get(path) }]; } catch { return []; }
+    try { return [{ radio: '', serial: '', data: await get(path, extra('')) }]; } catch { return []; }
   }
   const q = await qCached();
   const out = await Promise.all(radioList.map(async (r) => {
     try {
-      const resp = await fetch(`${machineBase()}/r/${encodeURIComponent(r.serial)}/vibeserver/admin/${path}?${q}`,
+      const x = extra(r.serial);
+      const resp = await fetch(`${machineBase()}/r/${encodeURIComponent(r.serial)}/vibeserver/admin/${path}?${q}${x ? '&' + x : ''}`,
                                { cache: 'no-store' });
       if (!resp.ok) return null;
-      return { radio: r.label, data: await resp.json() };
+      return { radio: r.label, serial: r.serial, data: await resp.json() };
     } catch { return null; }
   }));
-  return out.filter(Boolean) as Array<{ radio: string; data: any }>;
+  return out.filter(Boolean) as Array<{ radio: string; serial: string; data: any }>;
+}
+
+/* ★★★ THE TWO BIG ANSWERS ARE ASKED FOR AS CHANGES, NOT AS WHOLES (2026-10-01).
+ *  Every 2 s this page pulled the whole connection log (~100 KB) and the whole hour of history
+ *  (~100 KB) from the receiver — up the owner's uplink, through the same tunnel as every listener's
+ *  audio, and built on a Pi 2 whose DSP was dropping buffers while the page was open. The
+ *  connection log changes when somebody arrives or leaves, the history grows by a row per poll.
+ *  ★ So: the log is fetched with the generation we already hold (`gen=`) and the server answers
+ *    `unchanged` when it is the same; the history asks for the rows `after` the last one it has.
+ *  ★★ BOTH DEGRADE TO THE OLD BEHAVIOUR. An older server ignores the parameters and sends the
+ *     whole thing — no `gen`, no `after` in the reply — and the page then takes it whole, exactly
+ *     as before. Nothing here assumes the server understood. */
+const connCache = new Map<string, { gen: string; data: any }>();
+let histRows: number[][] = [];
+let histFields: string[] = [];
+const HIST_MAX = 3600;     // ★ the server's own ring (History::kMax)
+
+async function connectionsFromEveryRadio(): Promise<Array<{ radio: string; data: any }>> {
+  const all = await fromEveryRadio('connections', (serial) => {
+    const c = connCache.get(serial);
+    return c ? `gen=${encodeURIComponent(c.gen)}` : '';
+  });
+  return all.map((r) => {
+    const c = connCache.get(r.serial);
+    if (r.data?.unchanged && c) return { radio: r.radio, data: c.data };
+    if (r.data?.gen !== undefined) connCache.set(r.serial, { gen: String(r.data.gen), data: r.data });
+    else connCache.delete(r.serial);       // ★ an older server: nothing to compare against next time
+    return { radio: r.radio, data: r.data };
+  });
+}
+
+async function historyTail(): Promise<any> {
+  const last = histRows.length ? Number(histRows[histRows.length - 1][0]) || 0 : 0;
+  // ★ Ask from the second BEFORE the last row we hold, and drop what we already have: two samples
+  //   can share an epoch second, and asking strictly after it would lose the second of them.
+  const h = await get('history', last > 1 ? `after=${last - 1}` : '');
+  const rows: number[][] = Array.isArray(h?.rows) ? h.rows : [];
+  if (Array.isArray(h?.fields)) histFields = h.fields;
+  if (h?.after === undefined || !last) {
+    histRows = rows;                       // ★ the whole ring (first poll, or an older server)
+  } else {
+    let have = 0;                          // rows we already hold from the second `last`
+    for (let i = histRows.length - 1; i >= 0 && Number(histRows[i][0]) === last; i--) have++;
+    for (const r of rows) {
+      const at = Number(r[0]) || 0;
+      if (at < last) continue;
+      if (at === last && have > 0) { have--; continue; }
+      histRows.push(r);
+    }
+    if (histRows.length > HIST_MAX) histRows = histRows.slice(histRows.length - HIST_MAX);
+  }
+  return { fields: histFields, rows: histRows };
 }
 
 /**
@@ -1402,11 +1458,14 @@ async function refresh() {
   try {
     if (!radioList.length) await discoverRadios();
     const [st, hist, sesAll, connsAll] = await Promise.all([
-      get('status'), get('history'), fromEveryRadio('sessions'), fromEveryRadio('connections'),
+      get('status'), historyTail(), fromEveryRadio('sessions'), connectionsFromEveryRadio(),
     ]);
     // ★ The machine's health comes from whichever process we asked (they all read the same /proc);
     //   the per-RADIO numbers have to come from each radio.
-    const statAll = await fromEveryRadio('status');
+    // ★★ With ONE process there is nobody else to ask: fromEveryRadio would send this same process
+    //    the same question a second time — twice the work on the receiver, and two history samples
+    //    per poll instead of one.
+    const statAll = radioList.length ? await fromEveryRadio('status') : [{ radio: '', serial: '', data: st }];
     // Merge, tagging every row with the radio it belongs to.
     const ses = {
       sessions: sesAll.flatMap((r) => (r.data?.sessions ?? []).map((x: any) => ({ ...x, radio: r.radio }))),
@@ -1682,6 +1741,8 @@ export function openAdmin(currentHost: string, adminPassword: string) {
   password = adminPassword;
   open = true;
   failures = 0;
+  // ★ Fresh wholes on every open — the host may be a different receiver this time.
+  connCache.clear(); histRows = []; histFields = [];
   $('adminPanel').hidden = false;
   // ★ What is showing RIGHT NOW, asked of the server — not what this page last sent.
   void refreshNotice();
