@@ -64,15 +64,13 @@ import {
   useSharedValue,
   useDerivedValue,
   useFrameCallback,
-  withTiming,
-  cancelAnimation,
-  Easing,
   runOnJS,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
 import type { SDRStatus } from '../services/UberSDRClient';
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
+import { useScreenCovered } from '../hooks/useScreenCovered';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN, BAND_HEX, type Band } from '../constants/bandPlan';
 
@@ -562,6 +560,12 @@ function WaterfallView({
   const avgWfGapMs = useRef(0);
   const uQuantSv    = useSharedValue(1); // 1 = crisp steps, 0 = boost glide
   const frameCount  = useRef(0);
+  /** ★ Covered by an opaque full-screen overlay (useScreenCovered): rows go into the ring, but no
+   *  texture is made and none of the display-rate drivers run. `ringDirty` = rows arrived meanwhile. */
+  const covered     = useScreenCovered();
+  const coveredRef  = useRef(covered);
+  coveredRef.current = covered;
+  const ringDirty   = useRef(false);
 
   // Palette = a 256×1 LUT texture; switching recolours ALL history instantly.
   const lutImage = useMemo(() => {
@@ -720,6 +724,7 @@ function WaterfallView({
     specDead.value = true;
     try { specTweenRef.current?.setActive(false); } catch {}
     try { revealRef.current?.setActive(false); } catch {}
+    try { glideRef.current?.setActive(false); } catch {}
     const a = specPathA, b = specPathB;
     setTimeout(() => { try { a.dispose(); b.dispose(); } catch {} }, 300);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -901,7 +906,20 @@ function WaterfallView({
       else         idxBuf.current.set(row.subarray(-off), slot);
     }
     frameCount.current += 1;
+    // ★★ COVERED (an opaque full-screen overlay — the map, recordings, About): the ROW is kept, the
+    //   PICTURE is not made. History stays continuous — closing the map shows what passed while it was
+    //   open — but no texture is built or uploaded and the shader does not run for a screen nobody
+    //   can see. publishRing() makes the one texture on uncover. See useScreenCovered.
+    if (coveredRef.current) { ringDirty.current = true; return; }
+    publishRing();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swapWfImage]);
 
+  /** Build the waterfall texture from the ring as it stands and hand it to the shader. */
+  const publishRing = useCallback(() => {
+    if (!idxBuf.current) return;
+    ringDirty.current = false;
+    const n = RING_W;
     const data = Skia.Data.fromBytes(idxBuf.current);
     const img = Skia.Image.MakeImage(
       { width: n, height: RING_ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
@@ -1068,6 +1086,7 @@ function WaterfallView({
     //     stale. The scroll now comes from rows being PUSHED, exactly as in the web client, not
     //     from a fraction being animated over a block of synthesised lines.
     scrollFrac.value = 1;
+    stopGlide();            // ★ a glide still running would overwrite the 1 on its next frame
     // n === 0 is legitimate: nothing extra is due THIS interval, but the stepper must stay alive
     // (see the caller). Only a negative count means "switch it off".
     if (n < 0) { setRevealActive(false); return; }
@@ -1086,6 +1105,86 @@ function WaterfallView({
   }, [setRevealActive]);
 
   useEffect(() => stopRevealStepper, [stopRevealStepper]); // stop on unmount
+
+  // ── The boost / low-fps glide, drawn at ≤ 60 Hz ───────────────────────────
+  /* ★★★ THIS WAS `scrollFrac.value = withTiming(1, { duration: dur, easing: linear })` — the SAME
+   *  linear ramp, and on a 120 Hz ProMotion panel a withTiming writes on EVERY display frame. Each
+   *  write is a new uniform, so the FULL-SCREEN waterfall shader re-ran 120 times a second — six-odd
+   *  texture reads and a LUT lookup for every physical pixel of the waterfall (~1320 × 2000 on a Pro
+   *  Max), and the island's BlurView above it re-blurred each time. The glide is ALWAYS on below
+   *  ~15 fps (lowFps: every UberSDR session, and a VibeServer feed that has stepped down to ~8 fps),
+   *  so on those feeds it was the dominant GPU load, permanently. Power audit 2026-10-01.
+   *  ★★ WHY 60 Hz LOOKS THE SAME: the glide moves the picture by ONE ROW (one point, 3 px) over the
+   *    whole row interval (~50–300 ms) — at 60 Hz that is ≤ 1 physical pixel per drawn frame, a
+   *    sub-pixel cross-fade (the shader's continuous blend, uQuant = 0). Halving how often a sub-pixel
+   *    fade is redrawn is not something an eye can see; motion that crosses whole pixels per frame
+   *    would be, and this does not. Every non-ProMotion phone has always shown it at 60.
+   *  ★ The ramp is the same function of TIME (linear, timestamp − start over dur), so a skipped frame
+   *    loses nothing: the next drawn frame is exactly where the withTiming would have been then.
+   *  ★ It lands EXACTLY on 1 (the last frame is always written), and it stays alive across the gap to
+   *    the next arrival so a 10 fps feed does not stop/start it per row — the stop/start round trip
+   *    is what halted the reveal stepper (build 73). It releases the display ~250 ms after a glide
+   *    ends with no new one: the feed stopped, a gesture ended on a fast feed. */
+  const glideStart = useSharedValue(-1);   // UI timestamp the current glide began; -1 = "on the next frame"
+  const glideDur   = useSharedValue(100);
+  const glideLast  = useSharedValue(0);    // timestamp of the last write
+  const glideGen   = useSharedValue(0);
+  const glideAsked = useSharedValue(0);
+  const glideGenRef = useRef(0);
+  const glideRef = useRef<{ setActive: (b: boolean) => void; isActive: boolean } | null>(null);
+  const setGlideActive = useCallback((on: boolean) => {
+    const t = glideRef.current;
+    if (t && t.isActive !== on) t.setActive(on);
+  }, []);
+  /** From the worklet: stop — unless a new glide was started after it looked (then it is needed). */
+  const glideSleep = useCallback((seen: number) => {
+    if (seen === glideGenRef.current) setGlideActive(false);
+  }, [setGlideActive]);
+  /** Stop any glide and leave scrollFrac where the caller puts it (replaces cancelAnimation). */
+  const stopGlide = useCallback(() => {
+    if (!glideRef.current?.isActive) return;   // the settled path calls this every frame: no hop if idle
+    glideGenRef.current += 1;
+    glideGen.value = glideGenRef.current;
+    setGlideActive(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setGlideActive]);
+  const startGlide = useCallback((dur: number) => {
+    glideGenRef.current += 1;
+    glideGen.value = glideGenRef.current;
+    glideDur.value = Math.max(1, dur);
+    glideStart.value = -1;
+    glideAsked.value = 0;
+    scrollFrac.value = 0;   // as the withTiming did: the new row starts unrevealed, this same frame
+    setGlideActive(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setGlideActive]);
+  const glideCb = useFrameCallback((fi) => {
+    'worklet';
+    if (specDead.value) return;   // component is gone — see specDead
+    const ts = fi.timestamp;
+    if (glideStart.value < 0) { glideStart.value = ts; glideLast.value = ts; return; }
+    const elapsed = ts - glideStart.value;
+    const p = Math.min(1, elapsed / glideDur.value);
+    if (scrollFrac.value < 1) {
+      // ≤ 60 Hz: skip a frame that comes < 12 ms after the last write — except the one that lands on 1.
+      if (p < 1 && ts - glideLast.value < 12) return;
+      glideLast.value = ts;
+      scrollFrac.value = p;
+    } else if (elapsed > glideDur.value + 250 && !glideAsked.value) {
+      glideAsked.value = 1;
+      runOnJS(glideSleep)(glideGen.value);
+    }
+  }, false);
+  glideRef.current = glideCb;
+
+  // ── Covered by an opaque full-screen overlay (useScreenCovered) ─────────────────────────────
+  // ★ Cover: stop every display-rate driver (they restart on the first data frame after uncover).
+  //   Uncover: ONE texture from the ring as it now stands, so the rows that arrived while covered
+  //   appear at once instead of waiting for the next frame.
+  useEffect(() => {
+    if (covered) { stopGlide(); stopRevealStepper(); stopSpecTween(); }
+    else if (ringDirty.current) publishRing();
+  }, [covered, stopGlide, stopRevealStepper, stopSpecTween, publishRing]);
 
   // ── Background gate ────────────────────────────────────────────────────────
   // On background/inactive: cancel any in-flight scroll glide and kill the
@@ -1119,7 +1218,7 @@ function WaterfallView({
       bgRef.current = bg;
       setActive(!bg);
       if (bg) {
-        cancelAnimation(scrollFrac);
+        stopGlide();
         stopRevealStepper();
         stopSpecTween();
       }
@@ -1267,6 +1366,11 @@ function WaterfallView({
       lastRow.current = new Uint8Array(frame.row.length);
     lastRow.current.set(frame.row);
     lastRowMeta.current = { centerHz: rowCentre, hzPerBin: rowHzBin };
+    // ★★ COVERED: the row is in the ring (pushRow) and the watch has had it (above). Nothing below —
+    //   repeat rows, the glide, the reveal stepper, the trace tween, the peak path — exists to be
+    //   SEEN, and nothing can be: stop here. (The dB axis was already updated, so it is right on
+    //   uncover.) The waterfall's display clocks are stopped by the uncover/cover effect.
+    if (coveredRef.current) return;
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
 
@@ -1325,8 +1429,8 @@ function WaterfallView({
       // ★★★ uN IS NOW ALWAYS 1 — see the note at WF_ROWS. The shader no longer maps history.
       uNSv.value = 1;
       stopRevealStepper();
-      scrollFrac.value = 0;
-      scrollFrac.value = withTiming(1, { duration: dur, easing: Easing.linear });
+      // ★ ≤ 60 Hz — see startGlide / glideCb. Same linear ramp over the same `dur`.
+      startGlide(dur);
     } else {
       // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
@@ -1347,6 +1451,7 @@ function WaterfallView({
       //     AVERAGE is exactly the rate the setting promises, on any feed.
       //     ★ Only possible because uN is 1: the row count per frame is now a local decision about
       //       new data, not a global mapping, so it may vary frame to frame at no cost.
+      stopGlide();                     // a boost glide still running would overwrite the 1
       scrollFrac.value = 1;            // uN is 1, so R must be 1 (see the shader note)
       // ★★★ NEVER STOP THE STEPPER BETWEEN ARRIVALS. At 30 rows/s on a 20 fps feed the extras
       //     alternate 0,1,0,1 — so stopping on the zero frames meant a stop/start round trip
@@ -1366,6 +1471,7 @@ function WaterfallView({
       //     ★ Self-cancelling on the next arrival, so a slow feed can never queue a burst.
     }
     }   // end !wfGated — everything below (trace, peaks, meters) runs for EVERY frame
+    if (coveredRef.current) return;   // ★ covered — see the same check above
 
     // 4. Spectrum + peak paths from normalised [0,1] traces
     if (cfg.specShow && cfg.specH > 4) {

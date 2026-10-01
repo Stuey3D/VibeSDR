@@ -170,6 +170,7 @@ const CALLS = {
   segmentTarget:  f => { f(4, 5.2, 0.3, true, false, false); f(4, 5.2, 0.3, false, false, false); f(4, 5.2, 0.3, false, true, true); },
   needleX:        f => f(4.2, 200),
   peakNeedleStep: f => f({ pos: 3, heldMs: 0 }, 2, 16),
+  meterTick:      f => { const st = { acc: 0 }; f(st, 8.3); f(st, 8.3); f(st, 16.7); },
   // The calibrated scale: every unit, below / inside / above its labels, and NaN.
   meterPos:       f => { for (const u of ['smeter', 'dbfs', 'snr', 'dbf']) for (const v of [-200, -73, 20, 55, 500, NaN]) f(u, v); },
   meterReading:   f => { f('snr', { dbfs: -80, snr: 12 }); f('smeter', { dbfs: -80, snr: 12 }); },
@@ -205,11 +206,11 @@ function runFrames(what, fc, shared, extra = {}) {
   const cb = onUi({ __initData: { code: fc.code }, __closure: closure });
   let t = 1000;
   tryRun(`${what} first frame (no timeSincePreviousFrame)`, () => cb({ timestamp: t, timeSincePreviousFrame: null }));
-  return (level, frames) => {
+  return (level, frames, dt = 16.7) => {
     for (let n = 0; n < frames; n++) {
-      t += 16.7;
+      t += dt;
       shared.__set?.(level, n);
-      cb({ timestamp: t, timeSincePreviousFrame: 16.7 });
+      cb({ timestamp: t, timeSincePreviousFrame: dt });
     }
   };
 }
@@ -219,11 +220,12 @@ function runFrames(what, fc, shared, extra = {}) {
   const S = {
     muPos: sv(0), sigma: sv(0), steadySv: sv(0), muting: sv(0),
     bright: sv(new Array(M.VU_SEGMENTS).fill(0)), litState: sv(new Array(M.VU_SEGMENTS).fill(0)),
-    peakIdx: sv(-1), peakAt: sv(0),
+    peakIdx: sv(-1), peakAt: sv(0), cadAcc: sv(0), gen: sv(7), asked: sv(0),
   };
   S.__set = (level) => { S.muPos.value = M.vuPos(level); S.sigma.value = 0.3; };
+  const sleeps = [];
   const fc = frameCallback('src/components/LedVu.tsx', 'segmentTarget(');
-  const run = runFrames('LedVu frame callback', fc, S, { thresholds: M.VU_THRESHOLDS });
+  const run = runFrames('LedVu frame callback', fc, S, { thresholds: M.VU_THRESHOLDS, sleep: (g) => sleeps.push(g) });
   if (run) {
     for (const [steady, muting] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
       S.steadySv.value = steady; S.muting.value = muting;
@@ -236,16 +238,91 @@ function runFrames(what, fc, shared, extra = {}) {
     tryRun('LedVu frames at full scale', () => run(1, 60));
     const lit = S.bright.value.filter(b => b > 0.9).length;
     if (lit === M.VU_SEGMENTS) pass(); else fail(`LedVu at full scale lit ${lit} of ${M.VU_SEGMENTS}`);
+
+    // ★★ POWER (audit 2026-10-01). A settled strip ASKS TO SLEEP, once, with the generation it saw…
+    sleeps.length = 0; S.asked.value = 0;
+    tryRun('LedVu settles', () => run(0.55, 200));
+    if (sleeps.length === 1 && sleeps[0] === 7) pass();
+    else fail(`LedVu settled at a steady level should ask to sleep exactly once with gen 7, asked ${JSON.stringify(sleeps)}`);
+    // …but NOT while a moving level is still easing, nor while the peak hold is above the level.
+    tryRun('LedVu at full scale again', () => run(1, 60));
+    sleeps.length = 0; S.asked.value = 0;   // (it settled up there — that is the case above)
+    tryRun('LedVu falling', () => run(0.2, 20));
+    if (sleeps.length === 0) pass();
+    else fail(`LedVu asked to sleep with the LEDs still falling / the peak held (${sleeps.length}×)`);
+    // ★★ ≤ 60 Hz on a 120 Hz panel: the brightness is WRITTEN on at most every other display frame.
+    //    (The callback holds this very object, so its writes are counted through an accessor.)
+    let store = S.bright.value, n120 = 0;
+    Object.defineProperty(S.bright, 'value', { get() { return store; }, set(v) { n120++; store = v; }, configurable: true });
+    tryRun('LedVu at 120 Hz', () => { run(0, 60, 1000 / 120); n120 = 0; run(0.9, 120, 1000 / 120); });
+    if (n120 > 0 && n120 <= 61) pass();
+    else fail(`LedVu at 120 Hz should redraw at most every other frame (≤ 61 of 120), wrote ${n120}`);
   }
 }
 
 // The analogue meter (EdgeMeter.tsx): the peak needle's frame callback.
 {
-  const S = { needle: sv(0), peak: sv(0), held: sv(0) };
+  const S = { needle: sv(0), peak: sv(0), held: sv(0), lastNeedle: sv(-1), gen: sv(3), asked: sv(0) };
   S.__set = (level) => { S.needle.value = M.vuPos(level); };
+  const sleeps = [];
   const fc = frameCallback('src/components/EdgeMeter.tsx', 'peakNeedleStep(');
-  const run = runFrames('EdgeMeter frame callback', fc, S);
-  if (run) tryRun('EdgeMeter frames', () => { for (const lvl of [0, 0.9, 0.2, 0]) run(lvl, 120); });
+  const run = runFrames('EdgeMeter frame callback', fc, S, { sleep: (g) => sleeps.push(g) });
+  if (run) {
+    tryRun('EdgeMeter frames', () => { for (const lvl of [0, 0.9, 0.2, 0]) run(lvl, 120); });
+    // ★★ POWER: the peak needle held above a fallen signal needle keeps it awake (~1 s hold + the
+    //   6 dB/s drift); once it has come down onto a still needle it asks to sleep, once.
+    tryRun('EdgeMeter up', () => run(0.9, 30));
+    sleeps.length = 0; S.asked.value = 0;   // (it settled up there)
+    tryRun('EdgeMeter peak held', () => run(0.3, 50));
+    if (sleeps.length === 0) pass(); else fail(`EdgeMeter asked to sleep with the peak needle still held up (${sleeps.length}×)`);
+    tryRun('EdgeMeter peak falls', () => run(0.3, 60 * 12));
+    if (sleeps.length === 1 && sleeps[0] === 3) pass();
+    else fail(`EdgeMeter with the peak down on a still needle should ask to sleep once with gen 3, asked ${JSON.stringify(sleeps)}`);
+  }
+}
+
+// The waterfall's boost / low-fps glide (WaterfallView.tsx glideCb) — ★★ POWER (audit 2026-10-01): it
+// replaced a withTiming that wrote the full-screen shader's uniform on every 120 Hz frame.
+{
+  const sleeps = [];
+  const fc = frameCallback('src/components/WaterfallView.tsx', 'glideStart.value');
+  if (fc) {
+    let writes = 0, frac = 0;
+    const scrollFrac = { get value() { return frac; }, set value(v) { writes++; frac = v; } };
+    const S = { specDead: sv(false), glideStart: sv(-1), glideLast: sv(0), glideDur: sv(125),
+                glideAsked: sv(0), glideGen: sv(9), scrollFrac };
+    const closure = {};
+    for (const k of fc.captured) {
+      if (k in S) closure[k] = S[k];
+      else if (k === 'glideSleep') closure[k] = (g) => sleeps.push(g);
+      else if (k === 'runOnJS') closure[k] = (fn) => fn;
+      else { fail(`glideCb captures '${k}', which this harness does not know — teach it`); }
+    }
+    const cb = onUi({ __initData: { code: fc.code }, __closure: closure });
+    const glide = (dt, frames, t0) => { let t = t0; for (let n = 0; n < frames; n++) { t += dt; cb({ timestamp: t, timeSincePreviousFrame: dt }); } return t; };
+    // 120 Hz: a 125 ms glide (an 8 fps feed) is 15 display frames — it must be drawn on ≤ 8 of them,
+    // and land EXACTLY on 1.
+    let t = 0;
+    tryRun('glide at 120 Hz', () => { cb({ timestamp: t, timeSincePreviousFrame: null }); t = glide(1000 / 120, 16, t); });
+    if (frac === 1) pass(); else fail(`the glide must land exactly on 1, it ended at ${frac}`);
+    if (writes >= 6 && writes <= 9) pass(); else fail(`a 125 ms glide at 120 Hz should be drawn ~8 times (≤ 60 Hz), it was drawn ${writes} times`);
+    // 60 Hz: every frame is drawn, as before — a non-ProMotion phone is untouched.
+    frac = 0; writes = 0; S.glideStart.value = -1;
+    tryRun('glide at 60 Hz', () => { cb({ timestamp: t, timeSincePreviousFrame: null }); t = glide(1000 / 60, 8, t); });
+    if (writes >= 7 && frac === 1) pass(); else fail(`at 60 Hz every frame of the glide should draw (${writes} writes, ended ${frac})`);
+    // Linear in time: halfway through, the drawn value is where the withTiming's would be.
+    frac = 0; writes = 0; S.glideStart.value = -1;
+    cb({ timestamp: 1000, timeSincePreviousFrame: null });
+    glide(1000 / 120, 8, 1000);   // 66.7 ms of 125
+    if (Math.abs(frac - 66.67 / 125) < 0.07) pass(); else fail(`halfway the glide should read ~0.53, it read ${frac}`);
+    // Idle after the glide ends: stays alive across a normal gap, then asks to sleep ONCE with its gen.
+    frac = 0; S.glideStart.value = -1; sleeps.length = 0; S.glideAsked.value = 0;
+    cb({ timestamp: 5000, timeSincePreviousFrame: null });
+    glide(1000 / 120, 30, 5000);   // 250 ms: glide done, inside the 250 ms grace
+    if (sleeps.length === 0) pass(); else fail('the glide asked to sleep inside the grace after it ended — a 10 fps feed would stop/start it per row');
+    glide(1000 / 120, 60, 5250);
+    if (sleeps.length === 1 && sleeps[0] === 9) pass(); else fail(`the glide should ask to sleep once with gen 9 after the grace, asked ${JSON.stringify(sleeps)}`);
+  }
 }
 
 console.log(`worklets as the UI thread runs them: ${passes} passed, ${fails} failed (${scanned} files, ${worklets} worklets)`);
