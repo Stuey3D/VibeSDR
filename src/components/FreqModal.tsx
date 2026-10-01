@@ -704,6 +704,11 @@ export default function FreqModal({
               //   Stuart: "a stupid Siri option comes up on first click and I have to click again").
               spellCheck={false}
               textContentType="none"
+              // ★★ AND NO EDIT MENU. selectTextOnFocus selects the old frequency so typing replaces it —
+              //   and on a Mac a selection raises the Cut / Copy / Look Up / Translate menu over the field,
+              //   eating the first click (Stuart: "a popup with Look Up etc in it"). Nothing in that menu
+              //   is useful on a frequency; the select-all stays.
+              contextMenuHidden
               selectTextOnFocus
               onSubmitEditing={confirm}
               // ★ A hardware Enter is handled by the VibeKeyDown listener above, NOT here.
