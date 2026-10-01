@@ -54,6 +54,7 @@ const PRINT = '#16120d';
 const RED_PRINT = '#b8160c';
 const RED_BAND  = '#c21a0e';
 const SQL_HAND  = '#d0140a';
+const PEAK_HAND = '#2a64c0';   // ★ blue: not the signal's brown, not the squelch's red
 
 // ── 1. The card ───────────────────────────────────────────────────────────────
 
@@ -171,7 +172,7 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
   const shapes = useMemo(() => ({
     signal:   pointed(-1.3, 1, 2.6, H - 6, 0.05),
     head:     tri(-5.5, H, 5.5, H, 0, H - 7),
-    peak:     pointed(-0.8, 3, 1.6, H - 3, 0.06),
+    peak:     pointed(-1.0, 3, 2.0, H - 3, 0.06),
     sqlHand:  Skia.Path.MakeFromSVGString(`M -0.7 0 h 1.4 v ${H - 3} h -1.4 Z`)!,
     sqlHead:  tri(-4.5, 0, 4.5, 0, 0, 6),
   }), [H]);
@@ -251,9 +252,12 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
             <Path path={shapes.sqlHand} color={SQL_HAND} />
             <Path path={shapes.sqlHead} color={SQL_HAND} />
           </Group>
-          {/* the peak-decay needle: translucent, no arrowhead */}
+          {/* the peak-decay needle: no arrowhead, and told apart by COLOUR, not size (B8, Stuart: easier to
+              read, never the signal needle's thickness or its triangle). 2.0 pt solid blue against the signal's
+              2.6 pt brown and the squelch's red; 4.4 : 1 on the card (it was a 1.6 pt brown at 62 %, which
+              washed out on the cream). */}
           <Group transform={peakT}>
-            <Path path={shapes.peak} color="rgba(38,26,14,0.62)" />
+            <Path path={shapes.peak} color={PEAK_HAND} />
           </Group>
           {/* the signal needle, its shadow on the card to its right, and its arrowhead at the bottom */}
           <Group transform={needleT}>
