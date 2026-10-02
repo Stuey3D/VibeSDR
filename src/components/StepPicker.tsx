@@ -128,7 +128,12 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
 
 const st = StyleSheet.create({
   backdrop:      { flex: 1 },
+  /* ★★ CAPPED AND CENTRED, like the audio sheet (maxWidth 640). On a Mac the window is the screen, and an
+   *  uncapped sheet stretched seven keys across ~2000 pt — and drew its brushed plate over only the left
+   *  half until it was closed and reopened (Stuart, B16): a canvas that wide being resized is the one
+   *  this sheet had no reason to be. A phone is narrower than the cap, so nothing changes there. */
   sheet: {
+    alignSelf: 'center', width: '100%', maxWidth: 640,
     backgroundColor: SHEET_BG,
     borderTopWidth: 1,
     borderTopLeftRadius: 14, borderTopRightRadius: 14,
