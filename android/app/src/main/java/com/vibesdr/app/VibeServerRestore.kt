@@ -188,6 +188,13 @@ object VibeServerRestore {
             Log.i(TAG, "radio back after ${gone / 1000} s — a blip, resuming the server")
             return true
         }
+        // ★★ A REBOOT WITH "START WHEN POWER RETURNS" ON IS THE BOOT STARTER'S (VibeBootStart), not ours to disarm.
+        //    On Android 5–7 the dongle present at boot can raise this attach too, before BOOT_COMPLETED has had
+        //    its turn — disarming here would cancel the very restart the owner asked for.
+        if (!prefs(ctx).contains(K_GONE_ELAPSED) && VibeBootStart.wanted(ctx)) {
+            Log.i(TAG, "radio attached at boot — start when power returns will bring the server back")
+            return false
+        }
         Log.i(TAG, when {
             !prefs(ctx).contains(K_GONE_ELAPSED) ->
                 "radio attached, but it was never seen to leave a running server (a restart?) — not resuming; press Start"

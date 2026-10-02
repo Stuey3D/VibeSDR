@@ -8,6 +8,7 @@
        ★ Notes claimed this went for build 86; no commit ever removed it (found 07-31, removed
        08-02 before the 10.0.2 Play submission).
        ★ iOS has the same intent expressed its own way: NSLocationDefaultAccuracyReduced = true. -->
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
   <!-- mDNS/NSD discovery of networked RTL-TCP servers -->
   <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
@@ -92,6 +93,13 @@
     <!-- ★★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — see VibeUpdateReceiver. A package replace
          stops the app and Android does not recreate the service, so an unattended receiver went
          dark and stayed dark; MY_PACKAGE_REPLACED is the one signal that says it happened. -->
+    <!-- ★ Start when power returns — acts only on Android 7.0 (this app's minSdk is 24, so 7.0 is the one
+         version in VibeBootStart's range), only if the owner switched it on. See VibeBootStart. -->
+    <receiver android:name=".VibeBootReceiver" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED"/>
+      </intent-filter>
+    </receiver>
     <receiver android:name=".VibeUpdateReceiver" android:exported="false">
       <intent-filter>
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>

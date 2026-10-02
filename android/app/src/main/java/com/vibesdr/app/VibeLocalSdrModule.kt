@@ -51,7 +51,17 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★ A television (the OS's own device type — its battery service is not to be believed; see
         //   VibeServerBoot.startBatteryMonitor). The server screen uses it for TV-appropriate defaults.
         "isTv" to (reactContext.packageManager.hasSystemFeature("android.hardware.type.television")
-                   || reactContext.packageManager.hasSystemFeature("android.software.leanback_only")))
+                   || reactContext.packageManager.hasSystemFeature("android.software.leanback_only")),
+        // ★ "Start automatically when power returns" is offered only where Android may allow it — VibeBootStart.
+        "startOnPowerSupported" to VibeBootStart.supported())
+
+    /** ★ The owner's "Start automatically when power returns" switch, stored natively because the boot
+     *  receiver reads it with no JS running. See VibeBootStart. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun getStartOnPower(): Boolean = VibeBootStart.isEnabled(reactContext)
+
+    @ReactMethod
+    fun setStartOnPower(on: Boolean) { VibeBootStart.setEnabled(reactContext, on) }
 
     private fun isRtlSdr(dev: UsbDevice): Boolean {
         val key = (dev.vendorId shl 16) or dev.productId

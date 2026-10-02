@@ -7,6 +7,8 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <!-- ★ "Start automatically when power returns" — Android 5.0–7.0 only (VibeBootStart.MAX_SDK). -->
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
   <uses-feature android:name="android.hardware.usb.host" android:required="true"/>
   <!-- ★ Android TV (Stuart 2026-09-19: retired TV boxes are the Lite audience). A TV has no touchscreen
        and runs the leanback launcher; neither may be REQUIRED or the phone/tablet install breaks. -->
@@ -37,9 +39,15 @@
     <!-- ★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — the main app's VibeUpdateReceiver, synced. Without it
          every Lite update left the server stopped until somebody pressed Start, which on a TV box means
          walking to the TV. -->
-    <!-- ★★ NO BOOT RECEIVER (removed 2026-09-28). Start-on-boot could not work: after a reboot the restore
-         waited a minute and ended "no USB permission" — Android grants a USB device only on a live attach.
-         The attach above is how a running server gets its radio back. -->
+    <!-- ★★ THE BOOT RECEIVER IS BACK, GATED (2026-10-03). Removed 2026-09-28 because modern Android (the Sony,
+         the XCover) never grants a USB radio present at boot. Android 5.0–7.0 with no lock screen does (Kiko's
+         Moto G), so VibeBootReceiver acts only there, only if the owner switched it on, and reports a refusal
+         instead of pretending. See VibeBootStart. -->
+    <receiver android:name=".VibeBootReceiver" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED"/>
+      </intent-filter>
+    </receiver>
     <receiver android:name=".VibeUpdateReceiver" android:exported="false">
       <intent-filter>
         <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>

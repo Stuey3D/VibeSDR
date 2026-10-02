@@ -44,6 +44,11 @@ class RtlTcpServerService : Service() {
          *  crash path signals the same thing with a null intent; this one cannot, because it is
          *  started deliberately and therefore always has one. */
         const val EXTRA_RESTORE = "restore"
+        /** ★ The restore is a BOOT start (VibeBootReceiver): wait for network + clock first, and if Android still
+         *  withholds the radio, say so in a tappable notification and stop — never sit there looking like a
+         *  running server. See VibeBootStart. */
+        const val EXTRA_BOOT = "bootStart"
+        private const val BOOT_NOTIF_ID = 4712
         private const val CHANNEL_ID = "vibesdr_rtltcp_server"
         private const val NOTIF_ID = 4711
         private const val TAG = "RtlTcpServerService"
@@ -142,7 +147,14 @@ class RtlTcpServerService : Service() {
         // default and would never match. VibeServerRestore's armed flag is the only
         // thing that survived, and it is the actual source of truth.
         if (intent == null || intent.getBooleanExtra(EXTRA_RESTORE, false)) {
+            val boot = intent?.getBooleanExtra(EXTRA_BOOT, false) == true
             Thread {
+                if (boot) {
+                    // ★ Say what it is waiting for, not "Sharing" — there is no server yet.
+                    restoreFailure = "Starting when the network is up (power returned)…"
+                    handler.post { updateNotification() }
+                    VibeBootStart.waitForNetworkAndClock(applicationContext)
+                }
                 /* ★★ RETRY A MISSING DONGLE FOR A WHILE, don't give up on the first look. Straight after a
                  *  package update the USB service can list NO devices for the new package for a moment: on the
                  *  Sony TV the restore ran 0.2 s after MY_PACKAGE_REPLACED, said "no SDR attached" with the
@@ -154,15 +166,26 @@ class RtlTcpServerService : Service() {
                 /* ★ 30 tries x 2 s: after an update the USB service may not list the device yet, and on an
                  *   ATTACH (MainActivity.resumeServerIfWanted) the default-association grant lands a moment
                  *   after the activity is launched.
-                 * ★★★ NOT A BOOT PATH ANY MORE. This loop was widened for start-on-boot, in the hope that the
-                 *     grant would arrive if we waited. It does not: on the Sony (2026-09-28) the boot restore
-                 *     waited the full minute and ended "no USB permission", because Android never grants a
-                 *     device that was present at boot. The switch and VibeBootReceiver are gone. */
+                 * ★★★ AT BOOT IT ONLY HELPS ON OLD ANDROID. On the Sony (2026-09-28) the boot restore waited the
+                 *     full minute and ended "no USB permission": modern Android never grants a device present at
+                 *     boot. Android 5–7 with no lock screen does (Kiko, 2026-10-02), so VibeBootStart offers the
+                 *     boot start there only — and reports a refusal below instead of pretending. */
                 while ((err == "no SDR attached" || err == "no USB permission") && tries < 30) {
                     Thread.sleep(2000); tries++
                     err = VibeServerRestore.restore(applicationContext)
                 }
-                if (err != null) {
+                if (err != null && boot) {
+                    // ★★ CHECK, DON'T PRETEND (VibeBootStart). Android still withholds the radio, or there is none:
+                    //    tell the owner where they will see it, and stop — the ongoing "Sharing" notification of a
+                    //    server with no radio behind it is exactly the zombie the restore exists to avoid.
+                    Log.w(TAG, "start when power returns: could not start — $err")
+                    postBootTapNotification(when (err) {
+                        "no USB permission" -> "Tap to start VibeServer — Android needs your OK for the radio"
+                        "no SDR attached" -> "Tap to start VibeServer — no radio found, check it is plugged in"
+                        else -> "Tap to start VibeServer — it could not start by itself ($err)"
+                    })
+                    handler.post { try { stopForeground(true) } catch (_: Throwable) {}; stopSelf() }
+                } else if (err != null) {
                     Log.w(TAG, "could not rebuild VibeServer: $err")
                     /* ★★★ AND SAY IT WHERE SOMEBODY CAN SEE IT. On a TV box nobody reads logcat, and a server
                      *  that silently never came back after a power cut looks exactly like a broken app. The
@@ -295,6 +318,29 @@ class RtlTcpServerService : Service() {
             .setContentIntent(pi)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
+
+    /** ★ A standalone, dismissable notification for a boot start that could not get its radio. Tapping it opens
+     *  the app, where Start asks Android for the radio as usual. */
+    private fun postBootTapNotification(text: String) {
+        try {
+            ensureChannel()
+            val launch = packageManager.getLaunchIntentForPackage(packageName)
+            val pi = PendingIntent.getActivity(
+                this, 1, launch,
+                (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                    or PendingIntent.FLAG_UPDATE_CURRENT)
+            val n = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("VibeServer did not start")
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .build()
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(BOOT_NOTIF_ID, n)
+        } catch (t: Throwable) { Log.w(TAG, "could not post the start-when-power-returns notice: $t") }
     }
 
     private fun updateNotification() {

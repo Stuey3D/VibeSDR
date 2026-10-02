@@ -307,6 +307,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const isLite = !!(NativeModules as any).VibeLocalSDR?.isLite;
   /** ★ A television: no battery (its battery service is invented — see VibeServerBoot), mains power. */
   const isTv = !!(NativeModules as any).VibeLocalSDR?.isTv;
+  /** ★ "Start automatically when power returns" — offered only on Android 5.0–7.0 (VibeBootStart.MAX_SDK), where
+   *  Android may give the radio back after a restart (Kiko's Moto G, 2026-10-02). Stored natively: the boot
+   *  receiver reads it with no JS running. */
+  const startOnPowerSupported = !!(NativeModules as any).VibeLocalSDR?.startOnPowerSupported;
+  const [startOnPower, setStartOnPowerState] = useState<boolean>(() => {
+    try { return !!(NativeModules as any).VibeLocalSDR?.getStartOnPower?.(); } catch { return false; }
+  });
+  const setStartOnPower = (on: boolean) => {
+    setStartOnPowerState(on);
+    try { (NativeModules as any).VibeLocalSDR?.setStartOnPower?.(on); } catch { /* ★ never blocks the screen */ }
+  };
   const [dabScanLabels, setDabScanLabels] = useState(-1);
   /* ★★★ NO "START ON BOOT" ANY MORE (2026-09-28). The switch promised a server that comes back by itself
    *  after a power cut, and on the Sony it could not: BOOT_COMPLETED started the restore, and 60 s later
@@ -2877,14 +2888,32 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 ★★ NOT the Linux "release when idle", which hands the dongle to another program:
                    Android's permission model means nothing else can pick it up anyway, so
                    releasing would cost the restart and buy nothing (Stuart, 2026-08-19). */}
-            {/* ★★★ THE "WHEN THIS DEVICE STARTS" SWITCH IS GONE (2026-09-28) — see the note where its state
-                used to be. A switch that promised the server back after a power cut, on a platform that
-                refuses the radio to anything started at boot, was a promise we could not keep. The line
-                below says what actually happens instead, so nobody goes looking for the switch. */}
+            {/* ★★★ START WHEN POWER RETURNS — BACK, BUT ONLY WHERE ANDROID MAY ALLOW IT (2026-10-03). Removed on
+                2026-09-28 because modern Android refuses the radio to anything started at boot (the Sony, the
+                XCover). Android 5.0–7.0 with no lock screen gives it back (Kiko's Moto G), so the switch shows
+                there only; everywhere else the line below says what actually happens. Wording: Stuart's, tidied. */}
+            {startOnPowerSupported ? (<>
+              <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHEN POWER RETURNS</Text>
+              <View style={[styles.card, { borderColor: C.border }]}>
+                <View style={styles.rowBetween}>
+                  <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                    Start automatically when power returns
+                  </Text>
+                  <Switch value={startOnPower} onValueChange={setStartOnPower}
+                    trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+                </View>
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                  This Android version should let the radio work again after a restart, but that isn't confirmed
+                  on every phone. Leaving it on can't break anything — if Android still blocks the radio, just
+                  start the server by hand.
+                </Text>
+              </View>
+            </>) : (
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 14 }]}>
               After this {isTv ? 'TV' : 'device'} restarts, open this app and press Start: Android does not
               let an app take a USB radio by itself while the {isTv ? 'TV' : 'device'} is starting up.
             </Text>
+            )}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>WHEN NOBODY IS LISTENING</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={styles.rowBetween}>
