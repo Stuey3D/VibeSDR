@@ -7295,6 +7295,8 @@ function buildControls() {
 
   // ── The control card — the only control surface, at every width ──────────
   mobileUi = initMobileControls({
+    // ★ The receiver's clock for the deck's "UTC · local" line — see clock() in mobile.ts.
+    serverClock: () => (srvTzOffsetMin === null ? null : { offsetMin: srvTzOffsetMin, abbr: srvTzAbbr }),
     nudgeSteps: (n) => nudge(n * step),
     /* ★★★ THE TUNE PADS SWEEP THROUGH attachHoldSweep — the accelerating, ECHO-PACED sweep Stuart asked
      *  for on 2026-09-27/28 ("it often goes faster than the connection can keep up with"; "it can

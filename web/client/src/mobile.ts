@@ -15,6 +15,9 @@
 // tuning a radio, because that's what it's modelled on."
 
 export type MobileDeps = {
+  /** ★★ The RECEIVER's clock: its UTC offset (minutes) and zone abbreviation, null until the server says
+   *  (an older build) — then the deck shows the browser's time as before. */
+  serverClock?: () => { offsetMin: number; abbr: string } | null;
   /** Tune by a signed number of STEPS (not Hz) — the caller owns step size and clamping. */
   nudgeSteps: (steps: number) => void;
   /** ★ Tap = one step, hold = main.ts's accelerating sweep, paced on the receiver's own answer to
@@ -421,11 +424,26 @@ export function initMobileControls(deps: MobileDeps) {
 
   // ★ UTC first, then local — the order every band plan, schedule and logbook uses, so
   //   the reading a listener needs is the one they see first.
+  /* ★★★ AND "LOCAL" IS THE RECEIVER'S, NOT YOURS — as the app shows it, and as this client's own pop-out
+   *  already did. The deck kept formatting the BROWSER's time, so on Kiko's receiver in Brazil it read
+   *  "18:41 UTC · 19:41" (Stuart's UK clock) while the app read "15:23 -03" (Stuart, 2026-10-02). The
+   *  label is the zone abbreviation, or the signed offset, so it is plainly not your own clock. */
   function clock() {
     const d = new Date();
     const p = (n: number) => String(n).padStart(2, '0');
     const utc = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`;
-    const loc = `${p(d.getHours())}:${p(d.getMinutes())}`;
+    const srv = deps.serverClock?.() ?? null;
+    let loc: string;
+    if (srv && Number.isFinite(srv.offsetMin)) {
+      // Shift UTC by the receiver's offset and read it back in UTC — no tz database needed.
+      const at = new Date(d.getTime() + srv.offsetMin * 60_000);
+      const off = srv.offsetMin, a = Math.abs(off);
+      const label = srv.abbr || (off === 0 ? 'UTC'
+        : `${off > 0 ? '+' : '-'}${p(Math.floor(a / 60))}${a % 60 ? ':' + p(a % 60) : ''}`);
+      loc = `${p(at.getUTCHours())}:${p(at.getUTCMinutes())} ${label}`;
+    } else {
+      loc = `${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
     put($('mClock'), `${utc} · ${loc}`);
   }
 
