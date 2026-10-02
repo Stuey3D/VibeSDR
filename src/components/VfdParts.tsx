@@ -5,6 +5,7 @@
  *   GhostGrid     the dot-matrix ghost: every dot of the glass, unlit, at text colour α .10.
  *   SegDigits     DRAWN 7-segment digits — polygons, skewX −7°, never a font — with every unlit
  *                 segment ghosted at text colour α .07 and a decimal point per cell.
+ *   VfdFilaments  the glass's filament WIRES, frontmost (BRIEF-lighting-and-vfd-glass §1).
  *
  * ★★ Both are split STATIC / LIT like the tubes: the ghost layer (every dot, every segment of every
  *   cell) is one memoised canvas redrawn only when its size or cell count changes; a tune step only
@@ -12,8 +13,9 @@
  */
 
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
-import { Canvas, Group, Image as SkImageNode, Path, Skia, type SkImage, type SkPath } from '@shopify/react-native-skia';
+import { PixelRatio, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { Canvas, Group, Image as SkImageNode, Path, Rect, Skia, type SkImage, type SkPath } from '@shopify/react-native-skia';
+import { devicePixel, filamentYs, FILAMENT_DARK, FILAMENT_LIGHT } from '../constants/vfdGlass';
 import { rgba } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
 import { segFit, SEG_CELL_W as CELL_W, SEG_CELL_H as CELL_H } from '../constants/spriteSizing';
@@ -238,3 +240,44 @@ export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, 
 }, (a, b) => a.text === b.text && a.rgb === b.rgb && a.core === b.core && a.glow === b.glow
              && a.designH === b.designH && a.align === b.align && sameStyle(a.style, b.style)
              && (a.smallLead ?? 0) === (b.smallLead ?? 0) && (a.smallTail ?? 0) === (b.smallTail ?? 0));
+
+// ── Filament wires (BRIEF-lighting-and-vfd-glass §1) ──────────────────────────
+
+const FilamentCanvas = React.memo(function FilamentCanvas({ w, h, radius }: { w: number; h: number; radius: number }) {
+  const pr = PixelRatio.get();
+  const px = devicePixel(pr);
+  const ys = useMemo(() => filamentYs(h, pr), [h, pr]);
+  const clip = useMemo(() => Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), radius, radius), [w, h, radius]);
+  return (
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
+      <Group clip={clip}>
+        {ys.map((y, i) => (
+          <Group key={i}>
+            {/* the hairline highlight directly ABOVE the wire — what reads over unlit glass */}
+            <Rect x={0} y={y - px} width={w} height={px} color={FILAMENT_LIGHT} />
+            {/* the wire itself, one device pixel — it shadows a lit segment */}
+            <Rect x={0} y={y} width={w} height={px} color={FILAMENT_DARK} />
+          </Group>
+        ))}
+      </Group>
+    </Canvas>
+  );
+});
+
+/**
+ * ★★ THE FILAMENT WIRES over a VFD window, filling its parent (absolute) — render it as the window's LAST
+ * child so it is the frontmost thing in the glass: above the ghost layer, the lit segments and sprites, and
+ * the RDS pictogram. ★★ TRAP (layer order): never inside the ghost canvas (GhostGrid / SegDigits' static
+ * layer) — those sit UNDER the lit sprites, so the glow would paint over the wires, the reverse of a tube.
+ * ★ Zero per-frame cost: one memoised canvas, redrawn only when the window's size changes. Keyed by size,
+ *   like ChassisPlate's canvases (a Mac resize once left a canvas drawing into its first surface). Static —
+ *   MOTION EFFECTS does not touch it. `radius` = the window's corner radius, which clips the wires.
+ */
+export function VfdFilaments({ radius = 0 }: { radius?: number }) {
+  const [{ w, h }, onLayout] = useBoxSize();
+  return (
+    <View style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }} onLayout={onLayout} pointerEvents="none">
+      {w > 0 && h > 0 && <FilamentCanvas key={`${w}x${h}`} w={w} h={h} radius={radius} />}
+    </View>
+  );
+}

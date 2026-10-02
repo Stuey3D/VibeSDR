@@ -16,7 +16,7 @@ import AnnunciatorLegend from './AnnunciatorLegend';
 import RdsMark from './RdsMark';
 import DabMark from './DabMark';
 import SectionIcon from './SectionIcon';
-import { GhostGrid } from './VfdParts';
+import { GhostGrid, VfdFilaments } from './VfdParts';
 import { rgba, FONT_HYPER, FONT_DOTO, FONT_SEG14 } from '../constants/faceplate';
 import {
   cellWindow, cellWindowLeft, flagToIso, segGhost, steppedOffset, toSegCells, toSegRun, toUpperDisplay,
@@ -372,6 +372,9 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
         </View>
       )}
       <Text style={[styles.arrow, { color: rightCol }]}>►</Text>
+      {/* ★ The glass's filament wires, frontmost — the strip IS a VFD on dot / seg (lighting brief §1).
+          11 = the bar's 12 pt corner less its 1 pt border, which is where an absolute child's box starts. */}
+      {vfd && <VfdFilaments radius={11} />}
     </View>
     </Animated.View>
   );

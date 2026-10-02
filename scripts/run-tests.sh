@@ -249,6 +249,9 @@ if node --no-warnings scripts/test_chat_share.ts; then pass=$((pass+1)); else fa
 #     timer last), SHARED TUNER shortens before it goes, the connection meter never goes, portrait never
 #     drops, the row packs before anything drops, and a 1 pt wobble cannot flap (hysteresis).
 if node --no-warnings scripts/test_faceplate_status.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ FACEPLATE LIGHTING + VFD GLASS (briefs/BRIEF-lighting-and-vfd-glass.md): the filament wires (count by
+#    height, device-pixel snapped), the one light angle (LEFT = today exactly), MOTION EFFECTS, LIGHT ANGLE.
+if node --no-warnings scripts/test_faceplate_lighting.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ THE BLIND TUNES OBEY THE SHARED DIAL (blindTuneGate.ts): lock-screen / headset / car ⏮⏭, a car
 #     pick and Siri are refused on a shared dial with others listening (and on spectator / listen-only),
 #     as FM-DX's always were; alone or exclusive they work; the native switch and a press agree.

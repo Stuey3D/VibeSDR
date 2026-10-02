@@ -50,7 +50,7 @@ import { useMacSilenced } from '../services/macAudio';
 import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
 import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
-import { GhostGrid, SegDigits } from './VfdParts';
+import { GhostGrid, SegDigits, VfdFilaments } from './VfdParts';
 import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
 import { composeModeLabel, modeBoxFit, MODE_BOX } from '../constants/modeBox';
 import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
@@ -1112,6 +1112,8 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
             freqWidth={freqWidth} unitFontSize={unitFontSize} pillPadH={pillPadH} pillPadV={pillPadV}
             gap={gap} shared={!!sharedTuner} />
         )}
+        {/* ★ The VFD glass's filament wires, frontmost (lighting brief §1) — dot / seg only. */}
+        {(dk.style === 'dot' || dk.style === 'seg') && <VfdFilaments radius={5} />}
       </TouchableOpacity>
       <TouchableOpacity
         ref={tourRef('modeBtn')}
@@ -1225,6 +1227,8 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
             shade would darken the domes' tips in the 35 pt window where they sit closest to it. */}
         {dk.style !== 'nixie' && <View pointerEvents="none" style={cd.shade} />}
         <View pointerEvents="none" style={[cd.lip, { backgroundColor: 'rgba(255,255,255,0.25)' }]} />
+        {/* ★ The VFD glass's filament wires, frontmost (lighting brief §1) — dot / seg only. */}
+        {(dk.style === 'dot' || dk.style === 'seg') && <VfdFilaments radius={8} />}
       </View>
       <View style={{ height: dl.meterGap }} />
       <MeterHousing kind={meterKind} height={dl.housingH} shared={shared} lip={lip} bus={bus} land={L}
@@ -1491,6 +1495,9 @@ function StatusWell({ plate, gap, style, children }: {
       <RecessedWindow lip={plate.windowLip} style={{ gap, ...style }}>
         <GhostGrid rgb={sd.rgb} pitch={3} dot={0.7} />
         {children}
+        {/* ★ The status display on silver / black is always dot-matrix — so it is glass, with wires
+            (lighting brief §1). 4 = the window's 5 pt corner less its 1 pt border. */}
+        <VfdFilaments radius={4} />
       </RecessedWindow>
     </StatusDisplayContext.Provider>
   );
