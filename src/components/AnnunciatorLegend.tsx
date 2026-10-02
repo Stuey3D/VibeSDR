@@ -15,7 +15,7 @@
  */
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
-import { Canvas, Image as SkImageNode, Path, PathOp, Skia, StrokeCap, StrokeJoin, type SkPath } from '@shopify/react-native-skia';
+import { Canvas, Image as SkImageNode, Path, PathOp, Skia, StrokeCap, StrokeJoin, useTypeface, type SkPath } from '@shopify/react-native-skia';
 import { glowPaint, makeSprite } from './glowSprite';
 
 export type AnnunciatorName = 'TP' | 'TA' | 'AF';
@@ -120,6 +120,76 @@ export default function AnnunciatorLegend({ name, height = 10, kind, color, glow
         {statics.meshA && <Path path={statics.meshA} color="rgba(0,0,0,0.55)" />}
         {statics.meshB && <Path path={statics.meshB} color="rgba(0,0,0,0.35)" />}
       </Canvas>
+    </View>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────
+ * ★★★ VfdTextLegend — a UNIT (MHz, kHz, dB, fps …) on the 14-segment strip, as a legend IN THE GLASS.
+ *  The strip's segments cannot do lower case (§7), so units were drawn in the app's sans laid OVER blank
+ *  cells — a flat, sharp, meshless word sitting on glowing phosphor, and the one thing on the display
+ *  that was not part of it (Stuart, 2026-10-02: "something that broke the immersion on the VFD
+ *  display", zoomed on "107.7 MHz"). A real tuner prints MHz/kHz as fixed phosphor legends, so here it
+ *  is one: the letters' OUTLINE (from the bundled Atkinson Hyperlegible, so it is the same shape on
+ *  every device — not the system font), lit with the strip's glow and seen through the same 60° wire
+ *  mesh as the RDS mark and the TP·TA·AF legends.
+ * ───────────────────────────────────────────────────────────────────────────────────────────────────── */
+const ATKINSON = require('../../assets/fonts/AtkinsonHyperlegible-Regular.ttf');
+
+/** The 60° mesh over any legend path, at RdsMark's proportions for a legend `h` points tall. */
+function meshOver(legend: SkPath, h: number): [SkPath, SkPath] {
+  const pitch = (42 / 260) * h, bar = Math.max(0.35, (8 / 260) * h);
+  const a = Skia.Path.Make(), b = Skia.Path.Make();
+  for (let k = -80; k <= 80; k++) {
+    a.addRect(Skia.XYWHRect(-400, pitch * k, 800, bar));
+    b.addRect(Skia.XYWHRect(pitch * k, -400, bar, 800));
+  }
+  const m = Skia.Matrix();
+  m.rotate((60 * Math.PI) / 180);
+  a.transform(m); b.transform(m);
+  return [Skia.Path.MakeFromOp(a, legend, PathOp.Intersect) ?? a, Skia.Path.MakeFromOp(b, legend, PathOp.Intersect) ?? b];
+}
+
+export function VfdTextLegend({ text, width, height, capH, color, glow }: {
+  text: string;
+  /** The box it sits in (the blank cells it replaces) — the legend is centred in it, narrowed to fit. */
+  width: number; height: number;
+  /** The letters' cap height, points — set to sit with the segments' digits. */
+  capH: number;
+  color: string; glow: string | null;
+}) {
+  const typeface = useTypeface(ATKINSON);
+  const built = useMemo(() => {
+    if (!typeface || !(width > 0) || !(height > 0) || !(capH > 0)) return null;
+    // Atkinson's cap height is ~0.70 em; size the font so the capitals stand capH tall.
+    const font = Skia.Font(typeface, capH / 0.70);
+    const raw = Skia.Path.MakeFromText(text, 0, 0, font);
+    if (!raw) return null;
+    const bb = raw.computeTightBounds();
+    if (!(bb.width > 0) || !(bb.height > 0)) return null;
+    const k = Math.min(1, (width - 2) / bb.width);           // narrowed only if the cells cannot hold it
+    const m = Skia.Matrix();
+    // Baseline: the capitals' bottom on the cell's optical baseline — capH, centred in the box.
+    const baseY = (height + capH * k) / 2;
+    m.translate((width - bb.width * k) / 2 - bb.x * k + MARGIN, baseY + MARGIN);
+    m.scale(k, k);
+    raw.transform(m);
+    return { path: raw, mesh: meshOver(raw, capH * k) };
+  }, [typeface, text, width, height, capH]);
+  const W = width + 2 * MARGIN, H = height + 2 * MARGIN;
+  const sprite = useMemo(() => built ? makeSprite(W, H, (c) => {
+    if (glow) c.drawPath(built.path, glowPaint(glow, 2));
+    c.drawPath(built.path, glowPaint(color));
+  }) : null, [built, W, H, color, glow]);
+  return (
+    <View style={{ position: 'absolute', width, height }} pointerEvents="none" accessibilityRole="text" accessibilityLabel={text}>
+      {built && (
+        <Canvas style={{ position: 'absolute', left: -MARGIN, top: -MARGIN, width: W, height: H }}>
+          {sprite && <SkImageNode image={sprite} x={0} y={0} width={W} height={H} />}
+          <Path path={built.mesh[0]} color="rgba(0,0,0,0.55)" />
+          <Path path={built.mesh[1]} color="rgba(0,0,0,0.35)" />
+        </Canvas>
+      )}
     </View>
   );
 }
