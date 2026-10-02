@@ -3382,15 +3382,26 @@ async function withLiveCounts(servers) {
       //     just left went on reading FULL — and a stale FULL is the bad direction: it turns
       //     people away from a receiver that is free, where a stale FREE costs only a wasted
       //     click (Stuart, 2026-08-23: "I closed the tab from the Pi and its still saying full").
-      //  ★★ BOUNDED ON PURPOSE. One request per radio, only where there is more than one radio —
-      //     a single-radio server IS its machine, so the answer above already covers it — and
-      //     only for the first few, so a directory of two hundred servers cannot turn one refresh
-      //     into a flood. What is not refreshed keeps the listing's figure, which is what it did
-      //     before.
+      //  ★★ BOUNDED ON PURPOSE. One request per radio, only where there is more than one radio,
+      //     and only for the first few, so a directory of two hundred servers cannot turn one
+      //     refresh into a flood. What is not refreshed keeps the listing's figure.
       //  ★ /r/<id>/vibeserver.json is the route the receiver's own landing page uses, so it is
       //    proven rather than assumed — the same lesson as the loopback probe that was pointed at
       //    a port nothing listened on.
       const radios = Array.isArray(s.radios) ? s.radios : [];
+      /* ★★★ A SINGLE-RADIO SERVER IS ITS MACHINE — SO COPY THE LIVE ANSWER ONTO THE RADIO. The note above
+       *  used to say the machine's answer "already covers it", and it did not: the radio card reads the
+       *  RADIO's own figure first, which is the ping's, up to fifteen minutes old. Every phone server
+       *  (one radio each) showed a stale count — Kiko's S8 read "0 OF 3 LISTENING" while Stuart had been
+       *  on it in the app for a while (2026-10-02), and the server had counted him all along. Same for
+       *  freeInSec and claimable beside it. */
+      if (radios.length === 1 && radios[0]) {
+        const rad = radios[0];
+        if (Number.isFinite(j.listeners)) rad.listeners = Number(j.listeners);
+        if (Number.isFinite(j.maxUsers))  rad.maxListeners = Number(j.maxUsers);
+        if (Number.isFinite(j.freeInSec)) rad.freeInSec = Number(j.freeInSec);
+        if (typeof j.claimable === 'boolean') rad.claimable = j.claimable;
+      }
       if (radios.length > 1) {
         await Promise.all(radios.slice(0, 6).map(async (rad) => {
           if (!rad || !rad.id) return;
