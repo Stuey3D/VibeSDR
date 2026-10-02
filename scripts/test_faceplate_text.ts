@@ -165,9 +165,11 @@ eq('CJK falls back', displayOrFallback('中国之声', 'dot', '9.500 MHz'), '9.5
 // ── The VTS strip on a VFD ───────────────────────────────────────────────────
 {
   const r = toSegRun('BAND 14.000 MHz');
-  eq('units never go through the 14-seg: blank cells', r.cells.join(''), 'BAND!14.000!!!!');
-  eq('…and a SegUnit in its own case', r.units, [{ at: 11, len: 3, text: 'MHz' }]);
-  eq('a unit glued to a number', toSegRun('-1.2kHz').units, [{ at: 3, len: 3, text: 'kHz' }]);
+  // ★ Units go THROUGH the segments in capitals, like the rest of the text (Stuart, 2026-10-02:
+  //   "it should just read like standard radio text does") — no separate unit overlay any more.
+  eq('units read like the rest of the text: MHZ in the segments', r.cells.join(''), 'BAND!14.000!MHZ');
+  eq('…and no separate unit overlay', r.units, []);
+  eq('a unit glued to a number, in the segments', toSegRun('-1.2kHz').cells.join(''), '-1.2KHZ');
   eq('a unit-looking word is just letters', toSegRun('HZONE').units, []);
   eq('no units: plain cells', toSegRun('Radio 1').cells.join(''), 'RADIO!1');
   eq('seg strip keeps the unit\'s case for toSegRun', vfdStripText('Tuned 7.1 MHz', undefined, 'seg', 'x'), 'Tuned 7.1 MHz');

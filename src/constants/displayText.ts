@@ -472,8 +472,12 @@ export function toSegRun(text: string): SegRun {
     const unit = i % 2 === 1 && !isLetter(prev ? prev[prev.length - 1] : undefined) && !isLetter(next ? next[0] : undefined);
     if (!unit) { carry += p; continue; }
     if (carry) { cells.push(...segCellList(toSegCells(carry))); carry = ''; }
-    units.push({ at: cells.length, len: p.length, text: p });
-    for (let k = 0; k < p.length; k++) cells.push(SEG_BLANK);
+    /* ★★★ UNITS GO THROUGH THE SEGMENTS, IN CAPITALS — "MHZ", "KHZ", "DB" (Stuart, 2026-10-02, choosing
+     *  between this and a printed legend). They were drawn in the app's sans over blank cells, then as a
+     *  meshed printed legend; both were a different thing sitting on the display, and both broke the VFD.
+     *  A real 14-segment display has no lower case and shows MHZ in its own segments, so this does too.
+     *  `units` stays in the type (always empty here) so a caller that still reads it draws nothing. */
+    cells.push(...segCellList(toSegCells(p.toUpperCase())));
   }
   if (carry) cells.push(...segCellList(toSegCells(carry)));
   return { cells, units };
@@ -482,7 +486,7 @@ export function toSegRun(text: string): SegRun {
 /**
  * The strip's text for a VFD display: the name (and any secondary line) folded for the display's
  * ROM — the frequency (+ Latin callsign) when a name folds to nothing — upper-cased with the units
- * kept on dot; left in its case on seg, where toSegRun() upper-cases everything but the units.
+ * kept on dot; left in its case on seg, where toSegRun() upper-cases everything, units included.
  * ★ Display only; the notif itself keeps the original text.
  */
 export function vfdStripText(name: string, secondary: string | undefined, display: 'dot' | 'seg', freqLabel: string): string {

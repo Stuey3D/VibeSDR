@@ -12,7 +12,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
-import AnnunciatorLegend, { VfdTextLegend } from './AnnunciatorLegend';
+import AnnunciatorLegend from './AnnunciatorLegend';
 import RdsMark from './RdsMark';
 import SectionIcon from './SectionIcon';
 import { GhostGrid } from './VfdParts';
@@ -391,8 +391,6 @@ function vfdLineText(n: VtsNotifData, display: 'dot' | 'seg', freqLabel: string)
 /** Cell widths from the fonts' own metrics: DSEG14 is 816/1000 em, Doto 600/1000 em (monospaced),
  *  plus the 1 pt letter-spacing both are drawn with (Deck.mockup). */
 const SEG_PX = 15, DOT_PX = 19, CELL_LS = 1;
-/** The 14-segment strip's line box (the old unit Text's lineHeight) — where a unit legend is centred. */
-const SEG_LINE_H = 19;
 /** ★ Spare cells of width the window's Text is laid out with, so the font's fractional excess never ellipsizes the last cell. */
 const TEXT_SLACK = 2;
 const SEG_CELL = SEG_PX * 0.816 + CELL_LS;
@@ -401,8 +399,8 @@ const DOT_CELL = DOT_PX * 0.6 + CELL_LS;
 /**
  * ★★ STEPPED, NEVER SMOOTH (§7, ref vfd-scroll.gif): a fixed window of whole cells; a long run waits
  * ~1.5 s, then moves ONE WHOLE CELL every ~300 ms — no easing, no pixel offsets. The ghost layer is
- * the window's own cells, always there. 14-segment: every character is one DSEG cell (toSegCells);
- * units are drawn in the sans over their blank cells, never through the segments. Dot: Doto, upper
+ * the window's own cells, always there. 14-segment: every character is one DSEG cell (toSegCells),
+ * units included, in capitals — MHZ reads like the rest of the text (toSegRun, 2026-10-02). Dot: Doto, upper
  * case with the units' case kept, over the ghost-dot grid (also stepped per whole cell — the brief
  * allows per-column, and one rule for both reads as one machine).
  */
@@ -456,18 +454,6 @@ function VfdStrip({ style, rgb, core, glow, text, loop, restartKey, onPassMs }: 
             ? <Text style={[common, { color: rgba(rgb, 0.10), width: (n + TEXT_SLACK) * cellW }]} numberOfLines={1}>{segGhost(n)}</Text>
             : <GhostGrid rgb={rgb} pitch={3} dot={0.7} />}
           <Text style={[common, lit, seg ? styles.overlay : null, { width: (n + TEXT_SLACK) * cellW }]} numberOfLines={1}>{win.join('')}</Text>
-          {/* ★★ Units are LEGENDS IN THE GLASS (VfdTextLegend), not the app's sans over blank cells — see
-              AnnunciatorLegend.tsx. Same cells, same stepping; only how the word is drawn changed. */}
-          {seg && run.units.map((u, i) => {
-            const at = u.at - shift;
-            if (at < 0 || at + u.len > n) return null;
-            return (
-              <View key={i} style={[styles.segUnit, { left: at * cellW, width: u.len * cellW }]} pointerEvents="none">
-                <VfdTextLegend text={u.text} width={u.len * cellW} height={SEG_LINE_H} capH={SEG_PX * 0.62}
-                  color={core} glow={glow} />
-              </View>
-            );
-          })}
         </View>
       )}
     </View>
@@ -601,11 +587,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     top: 0,
-  },
-  segUnit: {
-    position: 'absolute',
-    top: 0,
-    height: SEG_LINE_H,
   },
   isoSeg: {
     fontFamily: 'DSEG14 Classic',
