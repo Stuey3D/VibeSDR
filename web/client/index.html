@@ -2161,6 +2161,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #rdsMpxGrid .mpxHead { grid-row: 1; text-align: right; opacity: 0.85; }
 #rdsMpxGrid .mpxKey  { text-align: right; opacity: 0.75; }
 #rdsMpxGrid .mpxVal  { text-align: left; white-space: nowrap; }
+/* ★ "MPX power:" is wider than the other keys, and in the narrow plot column it wrapped to "MPX" / "power:"
+   beside its value (Stuart, 2026-10-02). It takes the head column too, so it right-aligns with the other keys
+   and never wraps. */
+#rdsMpxGrid .mpxKeyWide { grid-column: 1 / 3; white-space: nowrap; }
+#rdsMpxGrid .mpxVal { white-space: nowrap; }
 #rdsMpxPowSettle { grid-column: 1 / -1; text-align: center; opacity: 0.75; font-size: 0.92em; }
 #rdsMpxPowSettle:empty { display: none; }
 /* ★ The verdict keeps its own line, so a long one ("neighbour in the guard band, noise not
@@ -3170,8 +3175,7 @@ select.btn { padding: 6px 8px; }
             <!-- ★★ MPX POWER (ITU-R BS.412), the third figure to set against MPXtool's "Power" column
                  (2026-10-02). An average POWER has no detector ballistics to argue about, so if it
                  agrees with MPXtool while the peak does not, the difference is the peak detector. -->
-            <span></span>
-            <span class="mpxKey" title="MPX power (ITU-R BS.412): the mean power of the whole multiplex — audio, pilot, stereo and RDS — over a rolling 60 seconds, in dB against a sine at ±19 kHz deviation (0 dB). Regulators that enforce BS.412 set the limit at 0 dB (+3 dB in a few countries); it is how they stop a loudness war, separately from the 75 kHz peak. Until a full minute has been measured it reads "settling" and counts down the seconds left. The same figure MPXtool shows as Power.">MPX power:</span><span class="mpxVal" id="rdsMpxPowV">—</span>
+            <span class="mpxKey mpxKeyWide" title="MPX power (ITU-R BS.412): the mean power of the whole multiplex — audio, pilot, stereo and RDS — over a rolling 60 seconds, in dB against a sine at ±19 kHz deviation (0 dB). Regulators that enforce BS.412 set the limit at 0 dB (+3 dB in a few countries); it is how they stop a loudness war, separately from the 75 kHz peak. Until a full minute has been measured it reads "settling" and counts down the seconds left. The same figure MPXtool shows as Power.">MPX power:</span><span class="mpxVal" id="rdsMpxPowV">—</span>
             <!-- ★ The countdown to a full 60 s mean — its own line, so the figures column never widens. -->
             <span id="rdsMpxPowSettle"></span>
           </div>
