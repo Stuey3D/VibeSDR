@@ -5,15 +5,22 @@
  * ★★ OPAQUE. The default deck is glass (BlurView + tint) and blurs the waterfall behind it — on iOS
  *   the expensive case. A metal plate hides what is behind it, so on silver and black there is NO
  *   BlurView at all (§3.4); ControlsBar draws this instead.
- * ★★ DRAWN ONCE. Texture, lighting, lips, screws and border are one static Skia canvas that redraws
- *   only when its SIZE changes (a rotation). Nothing that moves — meter, digits, key presses — is in
- *   it: those are separate views above it, so a meter update never touches the plate.
+ * ★★ DRAWN ONCE. The plate is THREE stacked canvases, in today's paint order: the grain (base, texture,
+ *   veil), the LIGHT (sheen + radial hot-spot — PlateLight), then the top (bottom shade, lips, screws,
+ *   border). Grain and top redraw only when the SIZE changes. Nothing that moves — meter, digits, key
+ *   presses — is in them: those are separate views above, so a meter update never touches the plate.
+ * ★★★ THE LIGHT IS ITS OWN CANVAS (lighting brief §2) because it is the one layer that may MOVE: its
+ *   gradient points and hot-spot are useDerivedValues of FaceplateContext's `lightSv`, so a moving angle
+ *   costs one gradient fill per frame on the UI thread and NO React render; a still angle costs nothing.
+ *   ★ Split IN PAINT ORDER (grain → light → shade/lips/screws/border): source-over is associative, so the
+ *     three stacked layers composite as the one canvas did — and at 104° (LEFT) every value is today's.
  * ★ §3.4 TRAP: the lighting is its own layer, never baked into the texture, so it stays right in
  *   landscape and on tablets; and the grain is sampled linear + mipmapped, or it moirés when the
  *   1200 px image is drawn at 620 pt.
  */
 
 import React, { useCallback, useState } from 'react';
+import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
 import { StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import {
   Canvas, Circle, Group, ImageShader, Line, LinearGradient, RadialGradient, Rect, RoundedRect,
@@ -21,14 +28,14 @@ import {
 } from '@shopify/react-native-skia';
 import { useTexture, TEXTURE_SAMPLING } from './DomeKey';
 import type { PlateTokens } from '../constants/faceplate';
+import { cssAnglePts, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight } from '../constants/plateLight';
+import { useLight } from '../contexts/FaceplateContext';
 
 /** CSS `linear-gradient(<deg>, …)` → Skia start/end points over a w × h box. */
 export function cssAngle(deg: number, w: number, h: number) {
-  const a = (deg * Math.PI) / 180;
-  const dx = Math.sin(a), dy = -Math.cos(a);
-  const len = Math.abs(w * dx) + Math.abs(h * dy);
-  const cx = w / 2, cy = h / 2;
-  return { start: vec(cx - (dx * len) / 2, cy - (dy * len) / 2), end: vec(cx + (dx * len) / 2, cy + (dy * len) / 2) };
+  // ★ One formula: constants/plateLight.ts cssAnglePts (the worklet PlateLight derives from).
+  const p = cssAnglePts(deg, w, h);
+  return { start: vec(p.sx, p.sy), end: vec(p.ex, p.ey) };
 }
 
 function useSize() {
@@ -40,15 +47,17 @@ function useSize() {
   return [sz, onLayout] as const;
 }
 
-/** One corner screw (§3.2): 9 pt, radial #fff → #a7abb0 60% → #6d7176, its slot at its own angle. */
-function Screw({ x, y, angle }: { x: number; y: number; angle: number }) {
+/** One corner screw (§3.2): 9 pt, radial #fff → #a7abb0 60% → #6d7176, its slot at its own angle.
+ *  ★ Its highlight sits TOWARD the light (`light` = the settled angle; 104 → today's 35 % 30 %). */
+function Screw({ x, y, angle, light }: { x: number; y: number; angle: number; light: number }) {
   const r = 4.5, cx = x + r, cy = y + r;
   const a = (angle * Math.PI) / 180, l = r - 1;
+  const hl = screwHighlight(light);
   return (
     <Group>
       <Circle cx={cx} cy={cy + 1} r={r} color="rgba(255,255,255,0.8)" />
       <Circle cx={cx} cy={cy} r={r}>
-        <RadialGradient c={vec(x + 9 * 0.35, y + 9 * 0.30)} r={9 * 0.8}
+        <RadialGradient c={vec(x + 9 * hl.fx, y + 9 * hl.fy)} r={9 * 0.8}
           colors={['#ffffff', '#a7abb0', '#6d7176']} positions={[0, 0.6, 1]} />
       </Circle>
       <Circle cx={cx} cy={cy} r={r - 0.25} color="rgba(0,0,0,0.6)" style="stroke" strokeWidth={0.5} />
@@ -58,19 +67,17 @@ function Screw({ x, y, angle }: { x: number; y: number; angle: number }) {
   );
 }
 
-const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate }: {
+/** Layer 1 — the grain: base colour, the brushed texture, the veil. Static. */
+const PlateGrain = React.memo(function PlateGrain({ w, h, r, plate }: {
   w: number; h: number; r: number; plate: PlateTokens;
 }) {
   const img = useTexture(plate.texture);
   const clip = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), r, r);
-  const light = cssAngle(104, w, h);
   // `.tex-*`: the grain shown at 620 pt wide, centred. ★ Mirrored rather than repeated past its
   // edges (a landscape deck is wider than 620 pt), so no seam line crosses the plate.
   const k = 620 / 1200;
-  // `radial-gradient(140% 70% at 28% -10%)`: an ellipse, drawn as a circle squashed vertically.
-  const rx = 1.4 * w, ry = 0.7 * h, ecx = 0.28 * w, ecy = -0.10 * h;
   return (
-    <Canvas style={{ width: w, height: h }} pointerEvents="none">
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
       <Group clip={clip}>
         <Rect x={0} y={0} width={w} height={h} color={plate.base} />
         {img && (
@@ -81,15 +88,52 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate }: {
         )}
         {/* The veil over the grain (black: a touch darker than the mockup — PlateTokens.textureDim). */}
         {plate.textureDim > 0 && <Rect x={0} y={0} width={w} height={h} color={`rgba(0,0,0,${plate.textureDim})`} />}
-        {/* ── The lighting layer (separate from the grain, §3.4) ── */}
+      </Group>
+    </Canvas>
+  );
+});
+
+/**
+ * Layer 2 — PlateLight: the sheen gradient and the radial hot-spot, and NOTHING else (§3.4: the lighting
+ * is its own layer). Its start, end and centre are derived on the UI thread from the live angle `sv`.
+ * At 104° the numbers are today's: cssAngle(104, w, h), and the hot-spot at 28 % −10 %.
+ */
+const PlateLight = React.memo(function PlateLight({ w, h, r, plate, sv }: {
+  w: number; h: number; r: number; plate: PlateTokens; sv: SharedValue<number>;
+}) {
+  const clip = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), r, r);
+  const start = useDerivedValue(() => { const p = cssAnglePts(sv.value, w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
+  const end   = useDerivedValue(() => { const p = cssAnglePts(sv.value, w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
+  // `radial-gradient(140% 70% at <x> -10%)`: an ellipse, drawn as a circle squashed vertically about
+  // its centre. ★ The squash is in Y only, so the x of the centre does not enter the transform — which
+  // is what lets the centre MOVE without a re-render (translateX(ecx) … translateX(−ecx) cancelled anyway).
+  const rx = 1.4 * w, ry = 0.7 * h, ecy = HOTSPOT_Y * h;
+  const ecx = useDerivedValue(() => hotspotX(sv.value) * w, [w]);
+  const c = useDerivedValue(() => ({ x: hotspotX(sv.value) * w, y: HOTSPOT_Y * h }), [w, h]);
+  return (
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
+      <Group clip={clip}>
         <Rect x={0} y={0} width={w} height={h}>
-          <LinearGradient start={light.start} end={light.end} colors={plate.lightColors} positions={plate.lightPos} />
+          <LinearGradient start={start} end={end} colors={plate.lightColors} positions={plate.lightPos} />
         </Rect>
-        <Group transform={[{ translateX: ecx }, { translateY: ecy }, { scaleY: ry / rx }, { translateX: -ecx }, { translateY: -ecy }]}>
+        <Group transform={[{ translateY: ecy }, { scaleY: ry / rx }, { translateY: -ecy }]}>
           <Circle cx={ecx} cy={ecy} r={rx}>
-            <RadialGradient c={vec(ecx, ecy)} r={rx} colors={[plate.radialColor, 'rgba(255,255,255,0)']} positions={[0, 0.6]} />
+            <RadialGradient c={c} r={rx} colors={[plate.radialColor, 'rgba(255,255,255,0)']} positions={[0, 0.6]} />
           </Circle>
         </Group>
+      </Group>
+    </Canvas>
+  );
+});
+
+/** Layer 3 — the top: the bottom shade (gravity, never the lamp), the lips, the screws, the border. */
+const PlateTop = React.memo(function PlateTop({ w, h, r, plate, light }: {
+  w: number; h: number; r: number; plate: PlateTokens; light: number;
+}) {
+  const clip = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), r, r);
+  return (
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
+      <Group clip={clip}>
         {plate.bottomShade && (
           <Rect x={0} y={0} width={w} height={h}>
             <LinearGradient start={vec(0, 0)} end={vec(0, h)}
@@ -100,11 +144,12 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate }: {
         <Line p1={vec(0, 0.5)} p2={vec(w, 0.5)} color={plate.lipTop} strokeWidth={1} />
         <Line p1={vec(0, 2)} p2={vec(w, 2)} color={plate.lipTop2} strokeWidth={1.5} />
         <Line p1={vec(0, h - 1)} p2={vec(w, h - 1)} color={plate.lipBottom} strokeWidth={2} />
+        {/* ★ Screws follow the SETTLED light (brief §5.1: small and many — the eye does not track them live). */}
         {plate.screws && (<>
-          <Screw x={8} y={8} angle={35} />
-          <Screw x={w - 17} y={8} angle={-20} />
-          <Screw x={8} y={h - 17} angle={80} />
-          <Screw x={w - 17} y={h - 17} angle={10} />
+          <Screw x={8} y={8} angle={35} light={light} />
+          <Screw x={w - 17} y={8} angle={-20} light={light} />
+          <Screw x={8} y={h - 17} angle={80} light={light} />
+          <Screw x={w - 17} y={h - 17} angle={10} light={light} />
         </>)}
       </Group>
       <RoundedRect x={0.5} y={0.5} width={w - 1} height={h - 1} r={Math.max(0, r - 0.5)}
@@ -116,21 +161,29 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate }: {
 /** The plate, filling its parent. Mark the parent opaque; there is nothing to see through it. */
 export default function ChassisPlate({ plate, radius }: { plate: PlateTokens; radius: number }) {
   const [{ w, h }, onLayout] = useSize();
+  const light = useLight();
   return (
     <View style={StyleSheet.absoluteFill} onLayout={onLayout} pointerEvents="none">
       {/* ★★★ KEYED BY SIZE: a resize builds a FRESH canvas. On a Mac a sheet laid out narrow and then grew,
           and the canvas kept drawing into its first surface — the brushed plate covered the left half of
           the tuning-step sheet until it was closed and reopened, sometimes several times (Stuart, B16).
           A size change is rare (open, rotate, window resize), so a remount costs nothing that matters. */}
-      {w > 0 && h > 0 && <PlateCanvas key={`${w}x${h}`} w={w} h={h} r={radius} plate={plate} />}
+      {/* ★ All three layers keyed by size (the stale-surface fix above applies to each). */}
+      {w > 0 && h > 0 && (<>
+        <PlateGrain key={`g${w}x${h}`} w={w} h={h} r={radius} plate={plate} />
+        <PlateLight key={`l${w}x${h}`} w={w} h={h} r={radius} plate={plate} sv={light.sv} />
+        <PlateTop key={`t${w}x${h}`} w={w} h={h} r={radius} plate={plate} light={light.deg} />
+      </>)}
     </View>
   );
 }
 
-const GlossCanvas = React.memo(function GlossCanvas({ w, h, r, trim, squareBottom }: {
-  w: number; h: number; r: number; trim: boolean; squareBottom: boolean;
+const GlossCanvas = React.memo(function GlossCanvas({ w, h, r, trim, squareBottom, sv }: {
+  w: number; h: number; r: number; trim: boolean; squareBottom: boolean; sv: SharedValue<number>;
 }) {
-  const reflect = cssAngle(112, w, h);
+  // ★ The reflection follows the plate's light, 8° off it as it always was (104 → today's 112).
+  const rStart = useDerivedValue(() => { const p = cssAnglePts(glossAngle(sv.value), w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
+  const rEnd   = useDerivedValue(() => { const p = cssAnglePts(glossAngle(sv.value), w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
   const H = h + (trim ? 4 : 0);
   // Square bottom corners: round a box that runs r past the bottom, then only fill down to h.
   const shape = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h + (squareBottom ? r : 0)), r, r);
@@ -148,7 +201,7 @@ const GlossCanvas = React.memo(function GlossCanvas({ w, h, r, trim, squareBotto
         </Rect>
         {/* The hard diagonal reflection, 38–56 %, α .10 → .035. */}
         <Rect x={0} y={0} width={w} height={h}>
-          <LinearGradient start={reflect.start} end={reflect.end}
+          <LinearGradient start={rStart} end={rEnd}
             colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.10)', 'rgba(255,255,255,0.035)', 'rgba(255,255,255,0)']}
             positions={[0, 0.38, 0.385, 0.56, 0.565]} />
         </Rect>
@@ -167,10 +220,11 @@ export function GlossPanel({ style, radius, trim = true, squareBottom = false }:
   style?: StyleProp<ViewStyle>; radius: number; trim?: boolean; squareBottom?: boolean;
 }) {
   const [{ w, h }, onLayout] = useSize();
+  const { sv } = useLight();
   return (
     <View style={[StyleSheet.absoluteFill, style]} onLayout={onLayout} pointerEvents="none">
       {/* ★ Keyed by size for the same reason as ChassisPlate's canvas. */}
-      {w > 0 && h > 0 && <GlossCanvas key={`${w}x${h}`} w={w} h={h} r={radius} trim={trim} squareBottom={squareBottom} />}
+      {w > 0 && h > 0 && <GlossCanvas key={`${w}x${h}`} w={w} h={h} r={radius} trim={trim} squareBottom={squareBottom} sv={sv} />}
     </View>
   );
 }

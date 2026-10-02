@@ -20,6 +20,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
   type ReactNode } from 'react';
 import { AccessibilityInfo, AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { makeMutable, useSharedValue, type SharedValue } from 'react-native-reanimated';
+import { LIGHT_DEFAULT_DEG } from '../constants/plateLight';
 import {
   decideLaunch, DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, frameRateCapHz, parseSettings, resolveFaceplate, withDisplay, withText,
   withTransparency,
@@ -57,6 +59,13 @@ interface FaceplateContextValue {
   setText:    (t: TextColour) => void;
   /** The rest have no side effects. */
   set:        (patch: Partial<Pick<FaceplateSettings, 'chassis' | 'controls' | 'meter' | 'steadyLeds' | 'frameRate'>>) => void;
+  /** ★★ THE LIGHT (lighting brief §2): `lightDeg` is the SETTLED angle (CSS convention, 104 = LEFT = today) —
+   *  React state, read by the small surfaces that follow once the light settles (screws). `lightSv` is the
+   *  LIVE angle, a Reanimated SharedValue that only PlateLight canvases read on the UI thread.
+   *  ★★★ TRAP: never put a moving angle in React state — at 30 Hz that re-renders every consumer of this
+   *  context, i.e. the whole deck. ▶ Item 5 (tilt) writes `lightSv` around `lightDeg`; nothing else does. */
+  lightDeg: number;
+  lightSv:  SharedValue<number>;
 }
 
 const DEFAULT_THEME = resolveFaceplate(DEFAULT_SETTINGS);
@@ -65,6 +74,8 @@ const AUTO_ON: AutoTransparency = { transparency: 'on', reason: null };
 const FaceplateContext = createContext<FaceplateContextValue>({
   theme: DEFAULT_THEME, settings: DEFAULT_SETTINGS, autoTransparency: AUTO_ON, maxRefreshHz: null,
   setTransparency: () => {}, setDisplay: () => {}, setText: () => {}, set: () => {},
+  // ★ Outside a provider (tests, a stray tree) the light is today's, fixed.
+  lightDeg: LIGHT_DEFAULT_DEG, lightSv: makeMutable(LIGHT_DEFAULT_DEG),
 });
 
 /**
@@ -195,9 +206,13 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const onScreen = useMemo(() => settings.transparency === transparency ? settings : { ...settings, transparency },
                            [settings, transparency]);
   const theme = useMemo(() => resolveFaceplate(onScreen), [onScreen]);
+  // ★★ THE LIGHT: the settled angle (state) and the live one (SharedValue) — see the interface.
+  const lightDeg = LIGHT_DEFAULT_DEG;
+  const lightSv = useSharedValue(lightDeg);
+  useEffect(() => { lightSv.value = lightDeg; }, [lightDeg, lightSv]);
   const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz,
-                                 setTransparency, setDisplay, setText, set }),
-                        [theme, onScreen, auto, maxRefreshHz, setTransparency, setDisplay, setText, set]);
+                                 setTransparency, setDisplay, setText, set, lightDeg, lightSv }),
+                        [theme, onScreen, auto, maxRefreshHz, setTransparency, setDisplay, setText, set, lightDeg, lightSv]);
   return <FaceplateContext.Provider value={value}>{children}</FaceplateContext.Provider>;
 }
 
@@ -234,6 +249,13 @@ export function useSurfaceOpaque(): boolean {
  */
 export function useSurface(): SurfaceTokens {
   return useContext(FaceplateContext).theme.surface;
+}
+
+/** ★★ The light (lighting brief §2): the settled angle for small surfaces, the live SharedValue for the
+ *  PlateLight canvases. Reading `sv` in a Skia prop costs nothing per React render. */
+export function useLight(): { deg: number; sv: SharedValue<number> } {
+  const c = useContext(FaceplateContext);
+  return useMemo(() => ({ deg: c.lightDeg, sv: c.lightSv }), [c.lightDeg, c.lightSv]);
 }
 
 /** Settings + setters — for the settings pane (and ThemeContext's legacy setTheme). */

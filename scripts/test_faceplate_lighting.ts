@@ -8,6 +8,7 @@
  * Run: node --no-warnings scripts/test_faceplate_lighting.ts   (run-tests.sh does)
  */
 import { filamentCount, filamentYs, devicePixel } from '../src/constants/vfdGlass.ts';
+import { cssAnglePts, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight, LIGHT_DEFAULT_DEG } from '../src/constants/plateLight.ts';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -39,6 +40,33 @@ for (const pr of [1, 2, 3, 2.625]) {
 eq('40 pt @3x: ⅓ and ⅔, snapped', filamentYs(40, 3), [13.333333333333334, 26.666666666666668]);
 eq('one device pixel @3x', devicePixel(3), 1 / 3);
 eq('one device pixel, bad ratio → 1 pt', devicePixel(0), 1);
+
+// ── §2 One light angle: LEFT (104°) is today, exactly ─────────────────────────
+/** ChassisPlate's cssAngle as it stood before the light became shared — the reference. */
+function oldCssAngle(deg: number, w: number, h: number) {
+  const a = (deg * Math.PI) / 180;
+  const dx = Math.sin(a), dy = -Math.cos(a);
+  const len = Math.abs(w * dx) + Math.abs(h * dy);
+  const cx = w / 2, cy = h / 2;
+  return { sx: cx - (dx * len) / 2, sy: cy - (dy * len) / 2, ex: cx + (dx * len) / 2, ey: cy + (dy * len) / 2 };
+}
+eq('default angle is LEFT, 104°', LIGHT_DEFAULT_DEG, 104);
+for (const [w, h] of [[390, 210], [620, 180], [1180, 120], [300, 600]]) {
+  eq(`sheen at 104°, ${w}×${h}: identical to today's cssAngle(104)`, cssAnglePts(104, w, h), oldCssAngle(104, w, h));
+  eq(`gloss at 104°, ${w}×${h}: identical to today's cssAngle(112)`, cssAnglePts(glossAngle(104), w, h), oldCssAngle(112, w, h));
+}
+eq('hot-spot at 104°: today\'s 28 %, exactly', hotspotX(104), 0.28);
+eq('hot-spot y stays at −10 %', HOTSPOT_Y, -0.10);
+eq('screw highlight at 104°: today\'s 35 % 30 %, exactly', screwHighlight(104), { fx: 0.35, fy: 0.30 });
+ok('hot-spot: RIGHT (256°) mirrors LEFT', near(hotspotX(256), 0.72, 1e-12));
+ok('hot-spot: TOP (180°) is centred', near(hotspotX(180), 0.5, 1e-12));
+ok('screw: RIGHT mirrors LEFT (65 %)', near(screwHighlight(256).fx, 0.65, 1e-12));
+ok('screw: TOP centred', near(screwHighlight(180).fx, 0.5, 1e-12));
+for (const d of [104, 135, 180, 225, 256]) {
+  ok(`screw at ${d}°: lit from ABOVE (fy 30 %)`, screwHighlight(d).fy === 0.30);
+  ok(`hot-spot at ${d}°: on the lit side`, (d < 180 ? hotspotX(d) < 0.5 : d > 180 ? hotspotX(d) > 0.5 : near(hotspotX(d), 0.5, 1e-12)));
+}
+ok('gloss keeps its 8° offset at every angle', [104, 135, 180, 225, 256].every(d => glossAngle(d) === d + 8));
 
 console.log(`faceplate lighting: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);
