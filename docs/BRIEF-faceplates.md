@@ -296,7 +296,7 @@ The slim moving-coil meter from cassette decks: scale on a curved drum, needle m
   the needle's *on-screen* position, never the raw level, so it can't jump ahead. When the signal
   falls away it **holds ~1 s**, then **drifts down ~6 dB/s**, easing in, until caught again. Both
   needles animate on the same UI thread, or a gap opens between them.
-- **Squelch closed:** lamp dims 50%, needles fall (peak at its slow rate), red hand stays, SQL shows in the mode box.
+- **Squelch closed:** lamp dims 50%, needles KEEP READING (changed 2026-10-02 — they used to fall, the only meter that stopped measuring under squelch), red hand stays, SQL shows in the mode box.
 - Reduce Motion: keep the needles moving (they are the reading) but remove the overshoot.
 
 ### 4.6 SQL in the mode box (all meters)

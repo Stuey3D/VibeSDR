@@ -24,8 +24,10 @@
  *   • peak-decay needle — translucent, no arrowhead, PUSHED by the signal needle's ON-SCREEN position
  *     in the same UI-thread frame, holds ~1 s, then drifts down ~6 dB/s easing in.
  *   • red squelch hand — hangs from the top at the threshold, on the SAME table as the needles.
- * Squelch closed: the lamp dims 50 %, the needles fall (the peak at its slow rate), the red hand
- * stays, and the mode box says SQL (§4.6).
+ * Squelch closed: the lamp dims 50 %, the red hand stays, and the mode box says SQL (§4.6) — and the
+ * needles KEEP READING. They used to fall to zero, which made this the only meter that stopped measuring
+ * under squelch: the LED and default meters dim and go on reading (Stuart, 2026-10-02). Squelch mutes
+ * the AUDIO; the signal is still there, and watching it climb towards the red hand is the whole point.
  */
 
 import React, { useEffect, useMemo } from 'react';
@@ -198,8 +200,8 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
     let lastTarget = NaN, lastClosed: boolean | null = null;
     const take = (m: MeterValues) => {
       const closed = sqlClosedOf(m.sql ?? -1, m.gate, m.level);
-      // ★ The RAW level (§4.5 TRAP) — and while the squelch mutes, the needles fall.
-      const target = closed ? 0 : vuPos(m.raw ?? m.level);
+      // ★ The RAW level (§4.5 TRAP). Squelch only DIMS the lamp — the needles keep reading (see header).
+      const target = vuPos(m.raw ?? m.level);
       if (target !== lastTarget) { lastTarget = target; needle.value = withSpring(target, cfg); wake(); }
       sqlPos.value = m.sql != null && m.sql >= 0 ? vuPos(m.sql) : -1;
       if (closed !== lastClosed) { lastClosed = closed; dim.value = withTiming(closed ? 0.5 : 0, { duration: 180 }); }
