@@ -925,6 +925,89 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     resolve(Date().timeIntervalSince(lastPacketAt))
   }
 
+  // MARK: - B19 perf overlay
+
+  /* ★★ B19 PERF OVERLAY (src/constants/perfOverlay.ts — this build only, Stuart 2026-10-02): this process's CPU %,
+   *  its memory footprint and the main-thread frame clock, so the tilt light can be judged by toggling MOTION
+   *  EFFECTS and watching the figures. Called once a second by the overlay.
+   *  ★ GPU: iOS has no public per-app GPU-utilisation API, so none is reported (no invented number). The frame
+   *    figures are a CADisplayLink on the MAIN run loop: a long interval = the main thread missed a vsync.
+   *  ★ The display link runs only while the overlay is asking — it stops itself 3 s after the last call. */
+  private var perfLink: CADisplayLink?
+  private var perfLastTs: CFTimeInterval = 0
+  private var perfIntervals: [Double] = []
+  private var perfLastAsk: CFTimeInterval = 0
+
+  @objc private func perfTick(_ link: CADisplayLink) {
+    if perfLastTs > 0 { perfIntervals.append((link.timestamp - perfLastTs) * 1000.0) }
+    if perfIntervals.count > 240 { perfIntervals.removeFirst(perfIntervals.count - 240) }
+    perfLastTs = link.timestamp
+    if CACurrentMediaTime() - perfLastAsk > 3 {
+      link.invalidate(); perfLink = nil; perfLastTs = 0; perfIntervals.removeAll()
+    }
+  }
+
+  @objc func perfStats(_ resolve: @escaping RCTPromiseResolveBlock,
+                       reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      self.perfLastAsk = CACurrentMediaTime()
+      if self.perfLink == nil {
+        let l = CADisplayLink(target: self, selector: #selector(self.perfTick(_:)))
+        l.add(to: .main, forMode: .common)
+        self.perfLink = l
+      }
+      let xs = self.perfIntervals
+      self.perfIntervals.removeAll()
+      var fps = 0.0, p50 = 0.0, p90 = 0.0
+      if !xs.isEmpty {
+        let sorted = xs.sorted()
+        let total = xs.reduce(0, +)
+        fps = total > 0 ? Double(xs.count) * 1000.0 / total : 0
+        p50 = sorted[sorted.count / 2]
+        p90 = sorted[min(sorted.count - 1, (sorted.count * 9) / 10)]
+      }
+      resolve(["cpuPct": VibePowerModule.processCpuPct(),
+               "footprintMB": VibePowerModule.footprintMB(),
+               "uiFps": fps, "uiP50Ms": p50, "uiP90Ms": p90])
+    }
+  }
+
+  /** Sum of every thread's cpu_usage (100 % = one core) — what Xcode's CPU gauge shows. */
+  private static func processCpuPct() -> Double {
+    var threads: thread_act_array_t?
+    var count: mach_msg_type_number_t = 0
+    guard task_threads(mach_task_self_, &threads, &count) == KERN_SUCCESS, let list = threads else { return 0 }
+    var total = 0.0
+    for i in 0..<Int(count) {
+      var info = thread_basic_info()
+      var n = mach_msg_type_number_t(MemoryLayout<thread_basic_info>.size / MemoryLayout<integer_t>.size)
+      let kr = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(n)) {
+          thread_info(list[i], thread_flavor_t(THREAD_BASIC_INFO), $0, &n)
+        }
+      }
+      if kr == KERN_SUCCESS && (info.flags & TH_FLAGS_IDLE) == 0 {
+        total += Double(info.cpu_usage) / Double(TH_USAGE_SCALE) * 100.0
+      }
+      mach_port_deallocate(mach_task_self_, list[i])
+    }
+    vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: list)),
+                  vm_size_t(Int(count) * MemoryLayout<thread_t>.stride))
+    return total
+  }
+
+  /** phys_footprint, MB — the figure Xcode's memory gauge and Activity Monitor show. */
+  private static func footprintMB() -> Double {
+    var info = task_vm_info_data_t()
+    var n = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+    let kr = withUnsafeMutablePointer(to: &info) {
+      $0.withMemoryRebound(to: integer_t.self, capacity: Int(n)) {
+        task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &n)
+      }
+    }
+    return kr == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576.0 : 0
+  }
+
   // MARK: - Watchdog
 
   private func startHealthTimer() {

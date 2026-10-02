@@ -130,6 +130,8 @@ import ModeSelector    from '../components/ModeSelector';
 import AudioSheet      from '../components/AudioSheet';
 import HealthPill, { type Health, type HealthLevel } from '../components/HealthPill';
 import StepPicker      from '../components/StepPicker';
+import PerfOverlay from '../components/PerfOverlay';
+import { PERF_OVERLAY_THIS_BUILD } from '../constants/perfOverlay';
 import ChatDrawer,
   { type ChatMessage, type ShareItem } from '../components/ChatDrawer';
 import { DIAL_PHRASES, phraseText, dialSummary, speakerName,
@@ -11393,6 +11395,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         onPickImportFileToServer={adminAuthQ ? onPickImportFileToServer : undefined}
       />
       </PanelBoundary>
+
+      {/* ★ B19 ONLY — the perf overlay (src/constants/perfOverlay.ts: flip PERF_OVERLAY_THIS_BUILD off next build). */}
+      {PERF_OVERLAY_THIS_BUILD && <PerfOverlay />}
 
       {/* Chat drawer */}
       <PanelBoundary name="Chat" onClose={closeChat} resetKey={chatOpen}>

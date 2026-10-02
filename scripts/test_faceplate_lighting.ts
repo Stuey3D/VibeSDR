@@ -189,5 +189,18 @@ for (const c of CHASSIS) {
   ok('rung 3 → off', !tiltShouldRun({ ...base, rung: 3 }));
 }
 
+
+// ── The B19 perf overlay's text (src/constants/perfOverlay.ts) ──────────────────────────────────────
+{
+  const { perfLines } = await import('../src/constants/perfOverlay.ts');
+  const l = perfLines({ cpuPct: 12.4, footprintMB: 412.6, uiFps: 59.8, uiP50Ms: 16.7, uiP90Ms: 18.04 },
+                      { running: 'sensor', writesPerSec: 12.2, rendersPerSec: 0 });
+  eq('perf: CPU and RAM line', l[0], 'CPU 12%  RAM 413 MB');
+  eq('perf: UI line', l[1], 'UI 60fps p50 16.7 p90 18.0 ms');
+  eq('perf: tilt line', l[2], 'TILT sensor  12 w/s  0 renders/s');
+  eq('perf: off when nothing drives the light', perfLines({ cpuPct: 0, footprintMB: 0, uiFps: 0, uiP50Ms: 0, uiP90Ms: 0 },
+     { running: '', writesPerSec: 0, rendersPerSec: 0 })[2], 'TILT off  0 w/s  0 renders/s');
+}
+
 console.log(`faceplate lighting: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

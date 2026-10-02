@@ -46,7 +46,8 @@ export function handleTiltDebugLink(url: string): boolean {
 }
 
 /** FaceplateProvider bumps this on every render — the harness's evidence that tilt causes none. */
-export const tiltProbe = { providerRenders: 0, writes: 0 };
+export const tiltProbe: { providerRenders: number; writes: number; running: '' | 'sensor' | 'synthetic' } =
+  { providerRenders: 0, writes: 0, running: '' };   // `running`: what drives the light now — the B19 perf overlay
 
 /** The axis convention of accelerationIncludingGravity per platform — see tiltFromGravity's ▶ note. */
 const SX = 1;
@@ -90,6 +91,7 @@ export function startTilt(t: TiltTargets, baseDeg: number, rung: TiltRung, sourc
   };
 
   let stop: () => void;
+  tiltProbe.running = source;
   if (source === 'synthetic') {
     const t0 = Date.now();
     const id = setInterval(() => { const now = Date.now(); feed(syntheticGravity(now - t0), 0, 1, 1, now); }, TILT.intervalMs);
@@ -111,6 +113,7 @@ export function startTilt(t: TiltTargets, baseDeg: number, rung: TiltRung, sourc
   }
   return () => {
     stop();
+    tiltProbe.running = '';
     t.lightSv.value = baseDeg; t.shiftSv.value = 0; t.screwSv.value = baseDeg;
   };
 }

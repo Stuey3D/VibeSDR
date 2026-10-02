@@ -348,10 +348,84 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.shareRecordingNative(path)
     }
 
+    /* ★★ B19 PERF OVERLAY (src/constants/perfOverlay.ts — this build only, Stuart 2026-10-02): this process's
+     *  CPU %, its memory, and the UI frame rate / frame times, so the tilt light can be judged by toggling MOTION
+     *  EFFECTS and watching the figures. Called once a second by the overlay; @ReactMethod or JS cannot see it.
+     *  ★ The frame clock (Choreographer) runs only while the overlay is asking — it stops itself 3 s after the
+     *    last call, so a build with the overlay off pays nothing. */
+    @ReactMethod
+    fun perfStats(promise: Promise) {
+        try {
+            PerfStats.lastAsk = android.os.SystemClock.uptimeMillis()
+            PerfStats.ensureFrameClock()
+            val map = com.facebook.react.bridge.Arguments.createMap()
+            map.putDouble("cpuPct", PerfStats.cpuPct())
+            val mi = android.os.Debug.MemoryInfo()
+            android.os.Debug.getMemoryInfo(mi)
+            map.putDouble("footprintMB", mi.totalPss / 1024.0)          // PSS, kB → MB
+            val f = PerfStats.frames()
+            map.putDouble("uiFps", f[0]); map.putDouble("uiP50Ms", f[1]); map.putDouble("uiP90Ms", f[2])
+            promise.resolve(map)
+        } catch (e: Throwable) {
+            promise.reject("perf", e)
+        }
+    }
+
     // NativeEventEmitter housekeeping (events arrive via RCTDeviceEventEmitter)
     @ReactMethod
     fun addListener(eventName: String) { /* no-op */ }
 
     @ReactMethod
     fun removeListeners(count: Double) { /* no-op */ }
+}
+
+/** ★ B19 perf overlay — see perfStats. */
+private object PerfStats {
+    @Volatile var lastAsk = 0L
+    private var lastCpuTicks = -1L
+    private var lastWallMs = 0L
+    private val intervals = ArrayDeque<Double>()
+    private var lastFrameNs = 0L
+    private var running = false
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** CPU % of this process (100 % = one core), from /proc/self/stat utime+stime. */
+    fun cpuPct(): Double {
+        val parts = java.io.File("/proc/self/stat").readText().substringAfterLast(')').trim().split(' ')
+        val ticks = parts[11].toLong() + parts[12].toLong()             // utime, stime (fields 14, 15)
+        val now = android.os.SystemClock.elapsedRealtime()
+        val prev = lastCpuTicks; val prevMs = lastWallMs
+        lastCpuTicks = ticks; lastWallMs = now
+        if (prev < 0 || now <= prevMs) return 0.0
+        val hz = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK).toDouble()
+        return (ticks - prev) / hz / ((now - prevMs) / 1000.0) * 100.0
+    }
+
+    private val cb = object : android.view.Choreographer.FrameCallback {
+        override fun doFrame(ns: Long) {
+            if (lastFrameNs != 0L) synchronized(intervals) {
+                intervals.addLast((ns - lastFrameNs) / 1e6)
+                while (intervals.size > 240) intervals.removeFirst()
+            }
+            lastFrameNs = ns
+            if (android.os.SystemClock.uptimeMillis() - lastAsk > 3000) { running = false; lastFrameNs = 0L; return }
+            android.view.Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+
+    fun ensureFrameClock() {
+        main.post {
+            if (!running) { running = true; lastFrameNs = 0L; android.view.Choreographer.getInstance().postFrameCallback(cb) }
+        }
+    }
+
+    /** [fps, p50 ms, p90 ms] over the last second of frames; drained on read. */
+    fun frames(): DoubleArray {
+        val xs = synchronized(intervals) { val c = intervals.toMutableList(); intervals.clear(); c }
+        if (xs.isEmpty()) return doubleArrayOf(0.0, 0.0, 0.0)
+        val sorted = xs.sorted()
+        val total = xs.sum()
+        val fps = if (total > 0) xs.size * 1000.0 / total else 0.0
+        return doubleArrayOf(fps, sorted[sorted.size / 2], sorted[minOf(sorted.size - 1, (sorted.size * 9) / 10)])
+    }
 }
