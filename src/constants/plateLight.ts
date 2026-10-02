@@ -59,3 +59,15 @@ export function screwHighlight(deg: number): { fx: number; fy: number } {
   'worklet';
   return { fx: 0.5 - (0.15 * Math.sin((deg * Math.PI) / 180)) / Math.sin((104 * Math.PI) / 180), fy: 0.30 };
 }
+
+/**
+ * cssAnglePts with the sheen band SLID along the gradient by `shift` × its length (tilt's pitch, brief §5.1:
+ * "slides the sheen band ±10 % along the gradient by offsetting the gradient positions"). Moving both end points
+ * by the same amount along the gradient's direction IS offsetting every stop by `shift`. shift 0 = cssAnglePts.
+ */
+export function cssAnglePtsShifted(deg: number, w: number, h: number, shift: number): { sx: number; sy: number; ex: number; ey: number } {
+  'worklet';
+  const p = cssAnglePts(deg, w, h);
+  const dx = (p.ex - p.sx) * shift, dy = (p.ey - p.sy) * shift;
+  return { sx: p.sx + dx, sy: p.sy + dy, ex: p.ex + dx, ey: p.ey + dy };
+}

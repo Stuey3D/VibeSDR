@@ -11,6 +11,7 @@
  * paths) are de-duped within a short window.
  */
 
+import { handleTiltDebugLink } from '../services/tiltLight';
 import { useEffect, useRef } from 'react';
 import { Alert, Linking, ToastAndroid, Platform } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
@@ -118,6 +119,9 @@ export function useDeepLinks(ready: boolean) {
 
   const handle = (url: string | null) => {
     if (!url || !/^(vibesdr|sdr):\/\//i.test(url)) return;
+    // ★ The tilt-lighting measurement switch (services/tiltLight.ts) — handled here and nowhere else, BEFORE the
+    //   link is treated as a server link (it must not cancel the picker's auto-connect or navigate anywhere).
+    if (handleTiltDebugLink(url)) return;
     const now = Date.now();
     if (url === lastUrl.current && now - lastAt.current < 2000) return; // dedup
     lastUrl.current = url;

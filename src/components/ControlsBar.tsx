@@ -134,7 +134,7 @@ function ControlSlot({ report, style, children }: {
   );
 }
 import { useTheme } from '../contexts/ThemeContext';
-import { useFaceplate, useFaceplateOnTrial, useFaceplateSettings } from '../contexts/FaceplateContext';
+import { useDeckPresence, useFaceplate, useFaceplateOnTrial, useFaceplateSettings } from '../contexts/FaceplateContext';
 import { explainMeterFault } from '../services/faceplateGuard';
 import type { ChassisTokens, PlateTokens } from '../constants/faceplate';
 import { useUiScale } from '../hooks/useUiScale';
@@ -2332,6 +2332,8 @@ function ControlsBar({
   // ★★★ Entering a receiver is where the faceplate is really drawn: on trial from this first render
   //   (constants/faceplate.ts CRASH SAFETY) — a crash in the next few seconds brings the next launch up safe.
   useFaceplateOnTrial();
+  // ★ Tilt lighting runs only while a deck is on screen (lighting brief §5.1); HIDE CONTROLS unmounts this.
+  useDeckPresence();
   // ★ Flashes when a captured region hands the keyboard back — see useRegionHandback.
   const handback = useRegionHandback();
   const handbackFlash = useRef(new Animated.Value(0)).current;
