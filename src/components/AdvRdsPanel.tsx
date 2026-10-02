@@ -31,6 +31,7 @@ import { AlphaType, Canvas, ColorType, Image as SkiaImage, Path, Points, Rect, S
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
+import { mpxPowerParts } from '../services/mpxPower';
 import { scrollLane } from '../constants/popupTokens';
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component reads
@@ -631,11 +632,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
              avgPct: Math.max(0, Math.min(100, av)),
              hold: Math.max(0, Math.min(100, hd)) };
   }, [x?.mpxDev, x?.mpxAvg, x?.mpxHold, x?.mpxSnr, x?.mpxNoise]);
-  /** MPX power (BS.412) as drawn — see the row. "—" until the server has 5 s of it. */
+  /** MPX power (BS.412) as drawn — see the row and services/mpxPower.ts ("settling 44 s" until the minute is in). */
   const mpxPowTxt = useMemo(() => {
-    const ps = x?.mpxPowS ?? 0, pw = x?.mpxPow ?? 0;
-    if (!(ps > 0) || !Number.isFinite(pw)) return '—';
-    return `${pw >= 0 ? '+' : '−'}${Math.abs(pw).toFixed(1)} dB${ps < 59.5 ? ` (${ps.toFixed(0)} s)` : ''}`;
+    return mpxPowerParts(x?.mpxPow ?? 0, x?.mpxPowS ?? 0);   // ★ shared with the web panel
   }, [x?.mpxPow, x?.mpxPowS]);
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
   /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
@@ -1303,8 +1302,14 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                   seconds show until the minute is full. Same words as the web panel. */}
               <View style={s.devGrid}>
                 <Text style={[s.devKey, { color: C.rowLabel }]}>MPX power:</Text>
-                <Text style={[s.devVal, s.powVal, { color: C.rowLabel }]}>{mpxPowTxt}</Text>
+                <Text style={[s.devVal, s.powVal, { color: C.rowLabel }]}>{mpxPowTxt.value}</Text>
               </View>
+              {/* ★ The countdown to a full 60 s mean, on its own line — services/mpxPower.ts. */}
+              {!!mpxPowTxt.settling && (
+                <Text style={[s.verdict, s.devVerdict, { color: C.rowLabel, opacity: 0.75, marginTop: 1 }]}>
+                  {mpxPowTxt.settling}
+                </Text>
+              )}
             </View>
           </View>
           {/* ★ ONE SYMBOL PLOT, full width — the web's EYE. The app carried this AND a second

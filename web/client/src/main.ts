@@ -53,6 +53,7 @@ import {
 } from './search';
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
+import { mpxPowerParts } from '../../../src/services/mpxPower';
 import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
@@ -11058,7 +11059,7 @@ function drawMpxEye() {
      *     fill the steady average and the mark the peak — one line, deliberately left easy. */
     /* ★★ MPX POWER (BS.412). Drawn whatever the deviation gate says: a 60 s mean power is not
      *  thrown by a noisy instant the way a peak is, and the server only sends it once 5 s are in.
-     *  The seconds show until the minute is full — "+6.1 dB (24 s)" is honest about a young mean.
+     *  Until the minute is full it counts down — "+6.1 dB · settling 36 s" (src/services/mpxPower.ts).
      *  ★ Above 0 dB is over the BS.412 limit, a fact about the STATION, never a receiver fault — so
      *    no warning colour, just the words in the tooltip. */
     {
@@ -11066,9 +11067,16 @@ function drawMpxEye() {
       const ps = rdsExt?.mpxPowS ?? 0, pw = rdsExt?.mpxPow ?? 0;
       if (pwEl) {
         if (ps > 0 && Number.isFinite(pw)) {
-          pwEl.textContent = `${pw >= 0 ? '+' : '−'}${Math.abs(pw).toFixed(1)} dB${ps < 59.5 ? ` (${ps.toFixed(0)} s)` : ''}`;
+          const parts = mpxPowerParts(pw, ps);   // ★ shared with the app — src/services/mpxPower.ts
+          pwEl.textContent = parts.value;
+          const stEl = document.getElementById('rdsMpxPowSettle');
+          if (stEl) stEl.textContent = parts.settling;
           pwEl.title = pw > 0 ? `${pw.toFixed(1)} dB over the BS.412 limit of 0 dB` : 'within the BS.412 limit of 0 dB';
-        } else { pwEl.textContent = '—'; pwEl.title = ''; }
+        } else {
+          pwEl.textContent = '—'; pwEl.title = '';
+          const stEl = document.getElementById('rdsMpxPowSettle');
+          if (stEl) stEl.textContent = '';
+        }
       }
     }
     // ★ The bar is drawn either way — dimmed by the CSS when the reading is not trusted.
