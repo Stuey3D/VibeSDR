@@ -546,9 +546,15 @@ export function steppedOffset(ms: number, count: number, n: number, loop: boolea
  * ★ Anything else (Hz unit, no decimal point, letters) is returned untouched.
  */
 export function vfdFreqCells(text: string, unit: string): string {
+  return vfdFreqLayout(text, unit).text;
+}
+
+/** vfdFreqCells plus how many CELLS at each end are drawn small: the Hz digits (lit or dark) and the
+ *  matching dark cells on the left. 0/0 when the text was returned untouched. */
+export function vfdFreqLayout(text: string, unit: string): { text: string; smallLead: number; smallTail: number } {
   const u = unit.toLowerCase();
   const m = /^(\d+)\.(\d+)$/.exec(text.replace(/,/g, '').trim());
-  if (!m || (u !== 'mhz' && u !== 'khz')) return text;
+  if (!m || (u !== 'mhz' && u !== 'khz')) return { text, smallLead: 0, smallTail: 0 };
   const [, int, frac] = m;
   const always = u === 'mhz' ? Math.min(3, frac.length) : 0;   // MHz keeps its kHz digits lit
   let used = always;
@@ -556,5 +562,6 @@ export function vfdFreqCells(text: string, unit: string): string {
   const dark = frac.length - always;                             // the Hz cells, lit or not
   const lead = ' '.repeat(dark);
   const tail = ' '.repeat(frac.length - used);
-  return used > 0 ? `${lead}${int}.${frac.slice(0, used)}${tail}` : `${lead}${int}${tail}`;
+  const out = used > 0 ? `${lead}${int}.${frac.slice(0, used)}${tail}` : `${lead}${int}${tail}`;
+  return { text: out, smallLead: dark, smallTail: dark };
 }

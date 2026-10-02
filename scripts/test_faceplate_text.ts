@@ -11,7 +11,7 @@ import {
   toSegCells, segCellCount, segGhost, segCellList, foldForSeg, foldForDot, foldToAscii, dotoHas,
   toUpperDisplay, flagToIso, foldIsUsable, displayOrFallback, setTransliterator, SEG_BLANK,
   toSegRun, vfdStripText, cellWindow, steppedOffset, statusGainParts, statusGainText, STATUS_DIRECT_SAMPLE, transliterateNonLatin,
-  TRANSLIT_CACHE_MAX, vfdFreqCells,
+  TRANSLIT_CACHE_MAX, vfdFreqCells, vfdFreqLayout,
 } from '../src/constants/displayText.ts';
 
 let fails = 0, passes = 0;
@@ -211,6 +211,10 @@ eq('VCR kHz: 7074.5', vfdFreqCells('7074.500', 'kHz'), '   7074.5  ');
 eq('VCR: thousands commas ignored', vfdFreqCells('1,296.000000', 'MHz'), '   1296.000   ');
 eq('VCR: Hz unit untouched', vfdFreqCells('14230000', 'Hz'), '14230000');
 eq('VCR: the FM screen (no Hz digits) untouched', vfdFreqCells('96.600', 'MHz'), '96.600');
+// ★ The Hz cells (and the matching dark ones on the left) are drawn ¾ size — the counts SegDigits gets.
+eq('VCR small cells: MHz Hz digits, 3 each end', [vfdFreqLayout('128.590000', 'MHz').smallLead, vfdFreqLayout('128.590000', 'MHz').smallTail], [3, 3]);
+eq('VCR small cells: kHz Hz digits, 3 each end', [vfdFreqLayout('1250.000', 'kHz').smallLead, vfdFreqLayout('1250.000', 'kHz').smallTail], [3, 3]);
+eq('VCR small cells: none where the text is untouched', [vfdFreqLayout('96.600', 'MHz').smallLead, vfdFreqLayout('96.600', 'MHz').smallTail], [0, 0]);
 
 void SEG_BLANK;
 console.log(`faceplate text: ${passes} passed, ${fails} failed`);

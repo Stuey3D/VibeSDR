@@ -129,17 +129,20 @@ function useSegSprites(sh: number, core: string, glow: string): Record<string, S
   }, [sh, core, glow]);
 }
 
-const SegGhost = React.memo(function SegGhost({ w, h, n, sh, cw, gap, x0, y0, color }: {
-  w: number; h: number; n: number; sh: number; cw: number; gap: number; x0: number; y0: number; color: string;
+/** One cell's box: its left edge, its top, and its height (a small cell is shorter and sits lower). */
+type SegBox = { ox: number; oy: number; sh: number };
+
+const SegGhost = React.memo(function SegGhost({ w, h, boxes, boxKey, color }: {
+  w: number; h: number; boxes: SegBox[]; boxKey: string; color: string;
 }) {
   const path = useMemo(() => {
     const p = Skia.Path.Make();
-    for (let i = 0; i < n; i++) {
-      const ox = x0 + i * (cw + gap);
-      for (const s of [...Object.keys(SEG_POLYS), 'dp']) p.addPath(segPath(s, ox, y0, sh));
+    for (const b of boxes) {
+      for (const s of [...Object.keys(SEG_POLYS), 'dp']) p.addPath(segPath(s, b.ox, b.oy, b.sh));
     }
     return p;
-  }, [n, sh, cw, gap, x0, y0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxKey]);
   return (
     <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
       <Path path={path} color={color} />
@@ -156,7 +159,15 @@ const SegGhost = React.memo(function SegGhost({ w, h, n, sh, cw, gap, x0, y0, co
 type SegDigitsProps = { text: string; rgb: string; core: string; glow: string; designH: number; style?: StyleProp<ViewStyle>;
   /** ★ 'left' anchors the digits so a label of changing width beside them cannot push them about;
    *  'center' centres them in the window. Default 'right' (a counter's alignment). */
-  align?: 'left' | 'right' | 'center' };
+  align?: 'left' | 'right' | 'center';
+  /** ★★ SMALL CELLS at each end, drawn at SMALL_SEG of the height on the same baseline — the frequency
+   *  readout's Hz digits and the matching dark cells that keep it centred (vfdFreqLayout). Real radios
+   *  draw the sub-kHz digits small; it also keeps a 13-cell readout from crowding the airband label
+   *  and shifting over to make room (Stuart, 2026-10-02). */
+  smallLead?: number; smallTail?: number };
+
+/** A small cell's height as a share of a full one. */
+const SMALL_SEG = 0.75;
 
 /** ★ Shallow, by value: the caller builds its `style` object afresh on every render. */
 function sameStyle(a?: StyleProp<ViewStyle>, b?: StyleProp<ViewStyle>): boolean {
@@ -171,30 +182,51 @@ function sameStyle(a?: StyleProp<ViewStyle>, b?: StyleProp<ViewStyle>): boolean 
  *   changing). Every render of a Skia <Canvas> re-records and redraws it, and this one sits inside a
  *   deck that re-renders for unrelated reasons (meters, status); the digits only change on a retune.
  */
-export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, designH, style, align }: SegDigitsProps) {
+export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, designH, style, align,
+                                                         smallLead = 0, smallTail = 0 }: SegDigitsProps) {
   const [{ w, h }, onLayout] = useBoxSize();
   const cells = useMemo(() => segDigitCells(text), [text]);
   const n = cells.length;
   const gap = 1;
-  const { sh, cw } = segFit(w, h, n, gap, designH);
-  const span = n * cw + (n - 1) * gap;
+  const lead = Math.min(smallLead, n), tail = Math.min(smallTail, Math.max(0, n - lead));
+  const isSmall = (i: number) => i < lead || i >= n - tail;
+  // ★ Fit by WIDTH IN FULL CELLS: a small cell counts as SMALL_SEG of one.
+  const { sh, cw } = segFit(w, h, n - (lead + tail) * (1 - SMALL_SEG), gap, designH);
+  const shS = Math.round(sh * SMALL_SEG * 2) / 2, cwS = cw * (shS / (sh || 1));
+  const span = cells.reduce((a, _c, i) => a + (isSmall(i) ? cwS : cw), 0) + Math.max(0, n - 1) * gap;
   const x0 = align === 'left' ? 0 : align === 'center' ? Math.max(0, (w - span) / 2) : Math.max(0, w - span);
   const y0 = Math.max(0, (h - sh) / 2);
+  // Each cell's box; a small cell shares the full cells' BASELINE (its bottom edge), like a real readout.
+  const boxes = useMemo(() => {
+    const out: SegBox[] = [];
+    let x = x0;
+    for (let i = 0; i < n; i++) {
+      const small = isSmall(i);
+      out.push({ ox: x, oy: small ? y0 + (sh - shS) : y0, sh: small ? shS : sh });
+      x += (small ? cwS : cw) + gap;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [n, lead, tail, x0, y0, sh, shS, cw, cwS]);
+  const boxKey = `${n}|${lead}|${tail}|${x0}|${y0}|${sh}|${shS}`;
   const sprites = useSegSprites(sh, core, glow);
+  const spritesS = useSegSprites(lead + tail > 0 ? shS : 0, core, glow);
   return (
     <View style={style} onLayout={onLayout} pointerEvents="none">
       {w > 0 && sh > 0 && (<>
-        <SegGhost w={w} h={h} n={n} sh={sh} cw={cw} gap={gap} x0={x0} y0={y0} color={rgba(rgb, 0.07)} />
+        <SegGhost w={w} h={h} boxes={boxes} boxKey={boxKey} color={rgba(rgb, 0.07)} />
         {sprites && (
           <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
             {cells.map((c, i) => {
-              const ox = x0 + i * (cw + gap);
-              const g = SEG_MAP[c.ch] ? sprites[c.ch] : null;
-              const dp = c.dp ? sprites.dp : null;
+              const b = boxes[i];
+              const set = isSmall(i) && spritesS ? spritesS : sprites;
+              if (!b) return null;
+              const g = SEG_MAP[c.ch] ? set[c.ch] : null;
+              const dp = c.dp ? set.dp : null;
               return (
                 <Group key={i}>
-                  {g && <SkImageNode image={g.img} x={ox - g.m} y={y0 - g.m} width={g.w} height={g.h} />}
-                  {dp && <SkImageNode image={dp.img} x={ox - dp.m} y={y0 - dp.m} width={dp.w} height={dp.h} />}
+                  {g && <SkImageNode image={g.img} x={b.ox - g.m} y={b.oy - g.m} width={g.w} height={g.h} />}
+                  {dp && <SkImageNode image={dp.img} x={b.ox - dp.m} y={b.oy - dp.m} width={dp.w} height={dp.h} />}
                 </Group>
               );
             })}
@@ -204,4 +236,5 @@ export const SegDigits = React.memo(function SegDigits({ text, rgb, core, glow, 
     </View>
   );
 }, (a, b) => a.text === b.text && a.rgb === b.rgb && a.core === b.core && a.glow === b.glow
-             && a.designH === b.designH && a.align === b.align && sameStyle(a.style, b.style));
+             && a.designH === b.designH && a.align === b.align && sameStyle(a.style, b.style)
+             && (a.smallLead ?? 0) === (b.smallLead ?? 0) && (a.smallTail ?? 0) === (b.smallTail ?? 0));
