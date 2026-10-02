@@ -2667,6 +2667,11 @@ public:
     /** The span actually delivered — decimation is a power of two, so it is the next achievable
      *  span AT OR ABOVE what was asked for. A caller that assumes otherwise draws the scale wrong. */
     double zoomSpanHz() const { return zoomSpanOut_.load(std::memory_order_relaxed); }
+    /** ★★ The view offset the zoom channel was actually BUILT for (set on the DSP thread when it is
+     *  configured) — not the last one asked for. A frame's centre must come from this: the request
+     *  lands a block or more later, and stamping frames with the request labelled old data with the
+     *  new view (Nick's shared dial, 2026-10-02: one picture under two scales). */
+    double zoomOffsetHz() const { return zoomOffOut_.load(std::memory_order_relaxed); }
     void stop();
     ~RxPipeline();
     /** ★★★ THE SPECTRUM FFT ON ITS OWN THREAD — OPT-IN, OFF BY DEFAULT (2026-09-18, VibeServer Lite).
@@ -3021,7 +3026,7 @@ private:
     std::unique_ptr<ZoomSpectrum> zoom_;
     bool sharedChannels_ = false;
     std::atomic<double> zoomOffReq_{0.0}, zoomSpanReq_{0.0};
-    std::atomic<double> zoomSpanOut_{0.0};
+    std::atomic<double> zoomSpanOut_{0.0}, zoomOffOut_{0.0};
     std::atomic<double> zoomRateReq_{15.0};
     std::atomic<bool>   zoomDirty_{false};
     std::atomic<int>    zoomBins_{1024};

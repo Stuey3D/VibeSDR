@@ -2043,6 +2043,20 @@ export abstract class VibeServerWsClient {
       emit.centerHz     = v.centerHz;
       emit.binBandwidth = v.binBandwidth;
       emit.bwHz         = v.binBandwidth * s.binCount;
+    } else if (this.sharedDial && v.binBandwidth > 0 &&
+               (Math.abs(frequency - v.centerHz) > 1 ||
+                Math.abs(s.binBandwidth - v.binBandwidth) > v.binBandwidth * 1e-6)) {
+      /* ★★★ ON A SHARED DIAL THE SERVER'S VIEW IS THE VIEW — ADOPT IT NOW, NOT AFTER A SETTLE. With no
+       *  request of ours in flight, a frame under a different centre is the room's view moving (another
+       *  listener zoomed or panned), and this client has no vote (shared_dial_contract). Holding the old
+       *  view and re-arming a 300 ms settle on every such frame is what flipped the scale between two
+       *  centres on Nick's 4G link: any gap over 300 ms adopted the frame's view, the next frame put the
+       *  held one back (2026-10-02). The server now stamps each frame with the centre its bins were built
+       *  for, so the frame's own geometry is trustworthy — draw it, and make it this client's view. */
+      v.centerHz = frequency;
+      v.binBandwidth = s.binBandwidth;
+      if (this.settleTimer) { clearTimeout(this.settleTimer); this.settleTimer = null; }
+      this.callbacks.onStatus({ ...s });
     } else if (v.binBandwidth > 0 &&
                (Math.abs(frequency - v.centerHz) > 1 ||
                 Math.abs(s.binBandwidth - v.binBandwidth) > v.binBandwidth * 1e-6)) {

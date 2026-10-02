@@ -921,6 +921,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 zoom_->configure(zoomOffReq_.load(std::memory_order_relaxed), span,
                                  zoomRateReq_.load(std::memory_order_relaxed));
                 zoomSpanOut_.store(zoom_->spanHz(), std::memory_order_relaxed);
+                zoomOffOut_.store(zoomOffReq_.load(std::memory_order_relaxed), std::memory_order_relaxed);
             }
         }
         if (zoom_ && zoom_->enabled())

@@ -5377,6 +5377,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     static constexpr int kSlowAvgMax = 8;
     struct SlowAvg { std::deque<std::vector<float>> ring; std::vector<float> out; };
     SlowAvg wideSlow_, zoomSlow_;
+    double zoomSlowCentre_ = 0.0;   // the centre zoomSlow_'s rows were built for — see onZoomSpectrum
     std::vector<float> wideRowAvg_;
     void slowPush(SlowAvg& a, const float* row, int n) {
         a.ring.emplace_back(row, row + n);
@@ -9065,6 +9066,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    because this path SUPPRESSES that one (see `rx.zoomSpanHz()` in onSpectrum). Exactly
         //    one of the two advances each accumulator per frame; doing it in both would give every
         //    listener twice the rate it asked for.
+        /* ★★★ THE CENTRE THIS ROW WAS BUILT FOR, not the centre asked for since. The header used to
+         *  carry viewCenter.load() at SEND time, while the bins came from the zoom channel the engine
+         *  configured a block or more earlier — and through the slow average, several frames earlier
+         *  still. When the view moved, old data went out under the new centre: on Nick's shared dial
+         *  (3 listeners, 4G) the same picture was drawn alternately under 1.250 and 1.290 MHz, and
+         *  every client believed it (2026-10-02). rx.zoomOffsetHz() is the offset the channel was
+         *  actually configured with, set on the DSP thread that produced this row.
+         *  ★ And a change of built centre EMPTIES the slow average: averaging rows from two views is
+         *    a picture of neither. */
+        const double builtCentre = rtlCenter.load() + hwOffsetHz() + rx.zoomOffsetHz();
+        if (builtCentre != zoomSlowCentre_) { zoomSlow_.ring.clear(); zoomSlowCentre_ = builtCentre; }
         slowPush(zoomSlow_, db, nb);        // every engine frame, before the gate (see SlowAvg)
         auto due = dueForFrame(peers);
         {
@@ -9092,7 +9104,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         std::memcpy(&frame[6], &ts, 8);
-        uint64_t f = (uint64_t)llround(viewCenter.load());
+        uint64_t f = (uint64_t)llround(builtCentre);   // ★ see builtCentre above — never viewCenter here
         std::memcpy(&frame[14], &f, 8);
         // ★★★ THE WIRE PUTS DC AT BIN 0 — IT IS NOT FFTSHIFTED. onSpectrum builds every frame as
         //     `signedOut = (i <= outBins/2) ? i : i - outBins`: bin 0 is the VIEW CENTRE, positive
