@@ -1446,6 +1446,8 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                 x.mpxDevAvgKHz   = m.mpxDevAvgKHz;
                 x.mpxDevNoiseKHz = m.mpxDevNoiseKHz;
                 x.mpxDevHoldKHz  = m.mpxDevHoldKHz;
+                x.mpxPowerDb     = m.mpxPowerDb;
+                x.mpxPowerSecs   = m.mpxPowerSecs;
                 x.rdsDevKHz      = m.valid ? m.rdsAvgKHz : -1.0f;
                 x.rdsDevPeakKHz  = m.valid ? m.rdsPeakKHz : -1.0f;
                 x.rdsDevRawKHz   = m.valid ? m.rdsRawKHz : -1.0f;

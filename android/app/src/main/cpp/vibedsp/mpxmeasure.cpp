@@ -457,6 +457,8 @@ void MpxMeasure::reset_() {
     mpxDevDwellMax_ = 0.0f; mpxDevDwellT_ = 0.0;
     mpxNoiseSm_ = 0.0f; mpxDevOut_ = 0.0f; mpxDevAvgOut_ = 0.0f; mpxDevNoise_ = 0.0f;
     devWinCnt_ = 0; devWinGp_ = 0.0; devHist_.assign(kDevHistN, 0u);
+    devWinP_ = 0.0; powHead_ = 0; powN_ = 0; powSumPdt_ = 0.0; powSumDt_ = 0.0;
+    mpxPowerDb_ = 0.0f; mpxPowerSecs_ = 0.0f;
     extAvgInit_ = false; extPilotDev_ = 0.0f; extRdsDev_ = 0.0f; extRdsDevRaw_ = 0.0f;
     extCoh_ = 0.0f; extDrift_ = 0.0f; extRdsBad_ = 0; extSettle_ = 0.0;
     mpxAccN_ = 0; mpxSkip_ = 0;
@@ -626,6 +628,8 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
         }
         devWinN_ = (int)(fsM_ * 0.05);          // 50 ms, whatever the block size
         devWinCnt_ = 0; devWinGp_ = 0.0; devHist_.assign(kDevHistN, 0u);
+        devWinP_ = 0.0; powHead_ = 0; powN_ = 0; powSumPdt_ = 0.0; powSumDt_ = 0.0;
+        mpxPowerDb_ = 0.0f; mpxPowerSecs_ = 0.0f;
         mpxLpFs_ = fsM_;
     }
     // ★ Maintenance runs at the send rate, not per block — see eyeSince_. The
@@ -653,6 +657,12 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
         || !std::isfinite(mpxNoiseSm_) || !std::isfinite(devWinGp_) || !std::isfinite(mpxDevDwellMax_))
         { mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f; mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f; devWinGp_ = 0.0;
           mpxDevDwellMax_ = 0.0f; mpxDevDwellT_ = 0.0; }
+    // ★ MPX power joins the list: a NaN in the window sum or the ring's running sums would stick.
+    if (!std::isfinite(devWinP_) || !std::isfinite(powSumPdt_) || !std::isfinite(powSumDt_))
+        { devWinP_ = 0.0; powHead_ = 0; powN_ = 0; powSumPdt_ = 0.0; powSumDt_ = 0.0;
+          mpxPowerDb_ = 0.0f; mpxPowerSecs_ = 0.0f; }
+    if ((int)powMean_.size() != kPowSlots) { powMean_.assign(kPowSlots, 0.0f); powDt_.assign(kPowSlots, 0.0f);
+                                             powHead_ = 0; powN_ = 0; powSumPdt_ = 0.0; powSumDt_ = 0.0; }
     if ((int)devHist_.size() != kDevHistN) devHist_.assign(kDevHistN, 0u);
     if (!std::isfinite(eyePeak_)) eyePeak_ = 0.0f;
     /* ★★★ IN THE HOLD AFTER A HOLE: step every filter the loop below steps — the high-pass, the
@@ -700,6 +710,7 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
     const float halfH  = 0.5f * (float)kEyeH;
     float* acc0 = eyeAcc_[0].data(); float* acc1 = eyeAcc_[1].data(); float* acc2 = eyeAcc_[2].data();
     double devGp = devWinGp_;
+    double devP = devWinP_;
     uint32_t* hist = devHist_.data();
     const float kHistScale = (float)kDevHistN / 1.28f;
     /* ★★★ ONE PASS. This was five sweeps over the block — high-pass into a copy,
@@ -762,6 +773,7 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
         ++hist[hb];
         const float g = mpxGuard_[2].step(mpxGuard_[1].step(mpxGuard_[0].step(x)));
         devGp += (double)g * g;
+        devP  += (double)d * d;              // MPX power — see devWinP_
         // The fold — one x for all three bands: they share the trigger.
         const float t = bitClk_[i] * kTurns;
         /* ★★★ A NaN HERE SEGFAULTED THE LENOVO's RSP CHILD (dev 5.6.0, 2026-09-14). The
@@ -789,7 +801,7 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
     }
     eyePeak_ = blockPk;
     for (int b = 0; b < kEyeBands; ++b) eyeBandPk_[b] = bpk[b];
-    devWinGp_ = devGp; devWinCnt_ += n;
+    devWinGp_ = devGp; devWinP_ = devP; devWinCnt_ += n;
     /* ★★ THE 50 ms WINDOW CLOSES — see devWinN_. The bar is the AVERAGE of window
      *  maxima on the panel's 1.5 s clock (Stuart: "average it the same as the other
      *  measurements"); the tick is a slow peak-hold of the same corrected value. */
@@ -839,7 +851,8 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
             devHist_.assign(kDevHistN, 0u);
         }
         float gp = (float)(devWinGp_ / (double)devWinCnt_);
-        devWinCnt_ = 0; devWinGp_ = 0.0;
+        const double winP = devWinP_ / (double)devWinCnt_;     // this window's mean d² — MPX power
+        devWinCnt_ = 0; devWinGp_ = 0.0; devWinP_ = 0.0;
         /* ★★ A WINDOW THAT STRADDLED A DROPPED BLOCK IS NOT A MEASUREMENT. The instrument drops
          *  rather than make audio wait (see MpxMeasure::feed), and a hole in the IQ is a phase
          *  step — a discriminator spike the peak meter would publish as the station's deviation.
@@ -853,6 +866,7 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
          *  saying nothing after every tune — on top of the attack, it was ~5-6 s
          *  before the number meant anything (Onfliner: "the slow display of the
          *  deviation scale"). */
+        const bool settling = mpxDevSettle_ < 0.4;   // ★ MPX power skips these windows too
         if (mpxDevSettle_ < 0.4) { mpxDevSettle_ += dtW; pk = 0.0f; gp = 0.0f;
                                    mpxDevSm_ = 0.0f; mpxDevAvg_ = 0.0f;
                                    mpxDevHold_ = 0.0f; mpxNoiseSm_ = 0.0f;
@@ -932,6 +946,26 @@ void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
          *    quantity: judging "is a neighbour sitting in my guard band?" off a value
          *    that moves with every syllable would make the verdict flicker. */
         const bool guardOccupied = mpxDevAvg_ > 0.02f && removal > 0.6f * mpxDevAvg_;
+        /* ★★★ MPX POWER (BS.412) — see devWinP_. Power adds, so the noise power in the same band comes
+         *  straight off — unless the guard band holds a neighbour, when its "noise" is not noise (the
+         *  same verdict as the deviation's, for the same reason). One slot per measured window. */
+        if (!settling && winP >= 0.0 && std::isfinite(winP) && !powMean_.empty()) {
+            const double pClean = guardOccupied ? winP : std::max(0.0, winP - (double)sig2);
+            if (powN_ == kPowSlots) {                      // full: the oldest slot leaves
+                powSumPdt_ -= (double)powMean_[powHead_] * powDt_[powHead_];
+                powSumDt_  -= powDt_[powHead_];
+            } else ++powN_;
+            powMean_[powHead_] = (float)pClean; powDt_[powHead_] = (float)dtW;
+            powSumPdt_ += pClean * dtW; powSumDt_ += dtW;
+            powHead_ = (powHead_ + 1) % kPowSlots;
+            if (powSumDt_ < 0.0) powSumDt_ = 0.0;
+            if (powSumDt_ >= 5.0 && powSumPdt_ > 0.0) {
+                // 0 dBr = the power of a sine at ±19 kHz peak: (19/75)² / 2 in our ±1 = ±75 kHz units.
+                constexpr double kRef = (19.0 / 75.0) * (19.0 / 75.0) * 0.5;
+                mpxPowerDb_   = (float)(10.0 * std::log10((powSumPdt_ / powSumDt_) / kRef));
+                mpxPowerSecs_ = (float)std::min(60.0, powSumDt_);
+            } else { mpxPowerDb_ = 0.0f; mpxPowerSecs_ = 0.0f; }
+        }
         if (guardOccupied) {
             mpxDevNoise_ = -std::sqrt(std::max(0.0f, sig2));
             mpxDevOut_    = mpxDevSm_;
@@ -1202,6 +1236,7 @@ void MpxMeasure::publish_(bool grids) {
     out_.mpxDevAvgKHz = mpxDevAvgOut_ * 75.0f;
     out_.mpxDevNoiseKHz = mpxDevNoise_ * 75.0f;
     out_.mpxDevHoldKHz = mpxDevHold_ * 75.0f;
+    out_.mpxPowerDb = mpxPowerDb_; out_.mpxPowerSecs = mpxPowerSecs_;
     out_.snrDb = snrDb_; out_.snrOk = snrOk_;
     out_.multipath = multipathCorr_; out_.multipathOk = multipathOk_;
     out_.multipathRaw = multipath_.depth();

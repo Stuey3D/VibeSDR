@@ -178,6 +178,9 @@ struct Gen {
      *  an instrument reading that read 1-8 kHz above MPXtool on air. It stays as the CEILING for the
      *  dropped-block check, where "never above the signal's own maximum" is the right question. */
     double mpxPeak125 = 0.0;
+    /** ★★ THE TRUE MPX POWER of the composite this generator makes — Σ mpx² / n, from 1 s in (the
+     *  composite is stationary, so the mean of what was sent IS the 60 s mean BS.412 asks for). */
+    double powSum = 0.0; long powN = 0;
     std::vector<float> win;
     void closeWin() {
         const size_t k = (size_t)std::lround(125e-6 * fs);
@@ -209,6 +212,7 @@ struct Gen {
                              + aR * W.at(t * kFb * clk) * std::cos(3 * wp * clk + sig.rdsPhaseDeg * M_PI / 180.0);
             if (t > 0.01) {
                 mpxPeak = std::max(mpxPeak, std::fabs(mpx));
+                if (t > 1.0) { powSum += mpx * mpx; ++powN; }
                 win.push_back((float)std::fabs(mpx));
                 if (win.size() >= (size_t)(0.05 * fs)) closeWin();
             }
@@ -235,13 +239,17 @@ struct Reading {
     float pilot = 0, rdsAvg = 0, rdsPk = 0, rdsRaw = 0, mpxHold = 0, phase = -1, coh = 0, drift = 0;
     float snr = 0, mp = 0; int snrOk = 0, mpOk = 0, measured = 0;
     int groups = 0; int calls = 0; bool eye = false; unsigned dropped = 0;
+    float mpxPow = 0, mpxPowS = 0;       // BS.412 MPX power, dB, and the seconds it covers
 };
+/** The generator's true MPX power (dB re a ±19 kHz sine) of the last run() — see Gen::powSum. */
+static double g_truthPowDb = 0.0;
 struct Cap {
     Reading r;
     static void onExt(void* c, const RxPipeline::Callbacks::RdsExt& x) {
         auto* p = (Cap*)c;
         p->r.pilot = x.pilotDevKHz; p->r.rdsAvg = x.rdsDevKHz; p->r.rdsPk = x.rdsDevPeakKHz;
         p->r.rdsRaw = x.rdsDevRawKHz; p->r.mpxHold = x.mpxDevHoldKHz;
+        p->r.mpxPow = x.mpxPowerDb; p->r.mpxPowS = x.mpxPowerSecs;
         p->r.phase = x.pilotPhaseDeg; p->r.coh = x.pilotPhaseCoherence; p->r.drift = x.pilotPhaseDriftDegPerSec;
         p->r.groups = x.groupTotal; p->r.calls++;
         p->r.eye = x.eyeBand[0] != nullptr && x.eyeW > 0;
@@ -286,7 +294,8 @@ Reading run(double fs, double bw, double autoBw, const Sig& sig, double seconds,
     cap.r.dropped = rx.measureDropped();
 #endif
     rx.stop();
-    if (truthPeak) *truthPeak = gen.mpxPeak125 * 75.0;   // ★ the 125 µs peak — see Gen::mpxPeak125
+    if (truthPeak) *truthPeak = gen.mpxPeak125 * 75.0;
+    g_truthPowDb = gen.powN > 0 ? 10.0 * std::log10((gen.powSum / gen.powN) / ((19.0 / 75.0) * (19.0 / 75.0) * 0.5)) : 0.0;   // ★ the 125 µs peak — see Gen::mpxPeak125
     return cap.r;
 }
 
@@ -596,6 +605,24 @@ int main(int argc, char** argv) {
     Sig rot = locked; rot.rotHz = 0.01;  // 3.6 deg/s — an encoder not locked to the pilot
     const std::vector<Case> cases = { { "3.0 kHz RDS, LOCKED to the pilot", locked, false },
                                       { "3.0 kHz RDS, ROTATING 3.6 deg/s against the pilot", rot, true } };
+
+    /* ★★ MPX POWER (ITU-R BS.412) against the generator's own Σmpx²/n — the figure set beside MPXtool's
+     *  "Power" (2026-10-02). Long enough to pass the 5 s publish threshold with room to spare. A clean
+     *  composite must agree within 0.3 dB; a noisy one (noise power subtracted) is held to 0.5 dB. */
+    {
+        std::printf("\n── MPX power (BS.412) against the generator's true composite power ──\n");
+        for (int k = 0; k < 2; ++k) {
+            Sig s = locked; if (k == 1) s.noise = 0.1;
+            const Reading r = run(2400000.0, 100000.0, 0.0, s, 12.0);
+            const double truth = g_truthPowDb;
+            std::printf("   %-6s  measured %+.2f dB over %.0f s   true %+.2f dB   diff %+.2f dB\n",
+                        k ? "noisy" : "clean", r.mpxPow, r.mpxPowS, truth, r.mpxPow - truth);
+            char w[160];
+            std::snprintf(w, sizeof w, "MPX power, %s composite: within %.1f dB of the true power and published (%.0f s)",
+                          k ? "noisy" : "clean", k ? 0.5 : 0.3, r.mpxPowS);
+            ok(r.mpxPowS >= 5.0f && std::fabs(r.mpxPow - truth) <= (k ? 0.5 : 0.3), w);
+        }
+    }
 
     float idealPk = 0.0f;
     const float ideal = idealRaw(locked, secs, &idealPk);

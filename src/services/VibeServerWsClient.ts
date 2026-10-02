@@ -2258,6 +2258,8 @@ export abstract class VibeServerWsClient {
          *  the avg clause entirely rather than printing "avg 0 kHz". */
         mpxDev: num(msg.mpxDev, 0), mpxAvg: num(msg.mpxAvg, 0),
         mpxHold: num(msg.mpxHold, 0), mpxNoise: num(msg.mpxNoise, 0),
+        // ★ MPX power (BS.412) — sent only once there is a mean; 0 seconds = none (see sdrProtocol).
+        mpxPow: num(msg.mpxPow, 0), mpxPowS: num(msg.mpxPowS, 0),
         eon: Array.isArray(msg.eon) ? msg.eon.map((e: any) => ({
           pi: str(e?.pi), ps: str(e?.ps), af: num(e?.af, 0), ta: num(e?.ta, 0) })) : [],
         oda: Array.isArray(msg.oda) ? msg.oda.map((o: any) => ({

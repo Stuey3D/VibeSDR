@@ -2098,6 +2098,7 @@ public:
         float phaseDeg = -1.0f, coherence = 0.0f, driftDegPerSec = 0.0f;
         float eyeDevKHz = 0.0f, eyeBandKHz[3] = { 0, 0, 0 };
         float mpxDevKHz = 0.0f, mpxDevAvgKHz = 0.0f, mpxDevHoldKHz = 0.0f, mpxDevNoiseKHz = 0.0f;
+        float mpxPowerDb = 0.0f, mpxPowerSecs = 0.0f;   // BS.412 — see devWinP_
         float snrDb = 0.0f; bool snrOk = false;
         float multipath = 0.0f; bool multipathOk = false;
         float multipathRaw = 0.0f;       // before the noise floor is removed — for re-deriving kMpDepth
@@ -2370,6 +2371,24 @@ private:
     static constexpr int kDevHistN = 512;            // bins over 0..1.28 of full scale (0.19 kHz each)
     std::vector<uint32_t> devHist_;                  // the window's histogram of |LP(x)|
     double devWinGp_  = 0.0;                         // running guard-band power in this window
+    /** ★★★ MPX POWER (ITU-R BS.412) — the mean POWER of the whole composite over a rolling 60 s, in dB
+     *  against a sine of ±19 kHz peak deviation (0 dBr). Asked for 2026-10-02 as a second figure to set
+     *  against MPXtool's "Power" column: a peak can disagree for reasons of detector ballistics, an
+     *  average power cannot, so if both agree the scale is right.
+     *  ★ Measured on `d` — the same 66 kHz-band-limited composite the deviation meter reads — so it is the
+     *    COMPLETE multiplex as BS.412 defines it: audio, pilot, L−R and RDS (57 kHz is inside the band).
+     *    SCA above 66 kHz is not, which on a broadcast station is nothing.
+     *  ★ Power is ADDITIVE, so the measured noise power (σ² in the same band, see mpxDevNoise_) is simply
+     *    subtracted — unless the guard band holds a neighbour, the same verdict the deviation uses.
+     *  ★ A TRUE rolling mean: one slot per 50 ms window (Σd²/n and its duration), 1200 slots = 60 s.
+     *    A held, tainted or settling window is not a slot. Published from 5 s in, with the seconds it
+     *    covers, so "(24 s)" says how much of the minute is behind the number. */
+    double devWinP_   = 0.0;                         // Σ d² in this window
+    static constexpr int kPowSlots = 1200;
+    std::vector<float> powMean_, powDt_;             // per-window mean power and its duration
+    int    powHead_ = 0, powN_ = 0;
+    double powSumPdt_ = 0.0, powSumDt_ = 0.0;        // Σ mean·dt and Σ dt over the slots held
+    float  mpxPowerDb_ = 0.0f, mpxPowerSecs_ = 0.0f; // what publish_ hands out (secs 0 = none yet)
     /** ★★★ THE NOISE IS MEASURED, THEN REMOVED IN QUADRATURE. The maximum of signal+noise is
      *  biased high, and tgcfabian's 12-station MPXtool dataset showed the bias tracking received
      *  level: exact above −60 dBFS, +19 and +24 kHz at −70 — two compliant stations reported as
@@ -2600,6 +2619,12 @@ public:
              *  measurement band — see mpxDevNoise_. Zero when the guard band cannot be measured.
              *  Shown so a corrected reading can say what it corrected for. */
             float mpxDevNoiseKHz;
+            /** ★★ MPX POWER, ITU-R BS.412 — the composite's mean power over a rolling 60 s in dB
+             *  against a ±19 kHz sine (0 dBr; the regulators' limit, +3 in some countries). The figure
+             *  MPXtool shows as "Power". `mpxPowerSecs` is how many seconds the mean covers (≤ 60);
+             *  0 = not enough yet (under 5 s since the tune), and mpxPowerDb means nothing then. */
+            float mpxPowerDb;
+            float mpxPowerSecs;
             /** ★★ MPX S/N AND MULTIPATH AS THE INSTRUMENT SEES THEM — from MpxMeasure's fixed, flat
              *  ±150 kHz path, like every other figure in this struct (2026-09-29). The listener's own
              *  S/N (what drives the blend, the high-cut and auto bandwidth) is still blendSnrDb().

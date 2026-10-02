@@ -11056,6 +11056,21 @@ function drawMpxEye() {
      *   be read.
      *   ▶ If the fill still reads as a VU meter on air, swapping `pct` and `apct` below makes the
      *     fill the steady average and the mark the peak — one line, deliberately left easy. */
+    /* ★★ MPX POWER (BS.412). Drawn whatever the deviation gate says: a 60 s mean power is not
+     *  thrown by a noisy instant the way a peak is, and the server only sends it once 5 s are in.
+     *  The seconds show until the minute is full — "+6.1 dB (24 s)" is honest about a young mean.
+     *  ★ Above 0 dB is over the BS.412 limit, a fact about the STATION, never a receiver fault — so
+     *    no warning colour, just the words in the tooltip. */
+    {
+      const pwEl = document.getElementById('rdsMpxPowV');
+      const ps = rdsExt?.mpxPowS ?? 0, pw = rdsExt?.mpxPow ?? 0;
+      if (pwEl) {
+        if (ps > 0 && Number.isFinite(pw)) {
+          pwEl.textContent = `${pw >= 0 ? '+' : '−'}${Math.abs(pw).toFixed(1)} dB${ps < 59.5 ? ` (${ps.toFixed(0)} s)` : ''}`;
+          pwEl.title = pw > 0 ? `${pw.toFixed(1)} dB over the BS.412 limit of 0 dB` : 'within the BS.412 limit of 0 dB';
+        } else { pwEl.textContent = '—'; pwEl.title = ''; }
+      }
+    }
     // ★ The bar is drawn either way — dimmed by the CSS when the reading is not trusted.
     const pct  = Math.max(0, Math.min(100, md));                       // the fast PEAK — the fill
     const apct = Math.max(0, Math.min(100, rdsExt?.mpxAvg ?? 0));      // the steady AVERAGE — the mark

@@ -219,6 +219,10 @@ export interface RdsExt {
   mpxHold: number;
   /** What the deviation bar removed as noise, kHz rms in its 66 kHz measurement band. 0 = not measured. */
   mpxNoise: number;
+  /** ★★ MPX POWER, ITU-R BS.412 — dB against a ±19 kHz sine, mean over a rolling 60 s (MPXtool's
+   *  "Power"). `mpxPowS` = seconds the mean covers; 0 = none yet, or an older server. */
+  mpxPow: number;
+  mpxPowS: number;
 }
 
 /** What the RUNNING receiver can actually do. A dongle and an RSP are different radios with
@@ -1308,6 +1312,8 @@ export class SpectrumClient {
           mpxAvg: Number(msg.mpxAvg ?? 0),      // ★ 0 on an older server — see the type
           mpxHold: Number(msg.mpxHold ?? 0),
           mpxNoise: Number(msg.mpxNoise ?? 0),
+          mpxPow: Number(msg.mpxPow ?? 0),
+          mpxPowS: Number(msg.mpxPowS ?? 0),      // ★ 0 = not sent (fresh tune, older server)
         });
         break;
       case 'sig':

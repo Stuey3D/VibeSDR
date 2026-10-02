@@ -2154,7 +2154,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    ★ The heading sits on the FIRST row and the second row's first cell is empty, so the two
      readings line up under each other with the word used once. */
 #rdsMpxGrid {
-  display: grid; grid-template-columns: auto auto 5.5em;
+  display: grid; grid-template-columns: auto auto 7.5em;   /* ★ 7.5em: "+6.1 dB (24 s)" fits */
   column-gap: 0.5em; row-gap: 1px; align-items: baseline;
   font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
 }
@@ -3149,6 +3149,11 @@ select.btn { padding: 6px 8px; }
             <span class="mpxKey">Average:</span><span class="mpxVal" id="rdsMpxAvgV">—</span>
             <span></span>
             <span class="mpxKey">Peak:</span><span class="mpxVal" id="rdsMpxPkV">—</span>
+            <!-- ★★ MPX POWER (ITU-R BS.412), the third figure to set against MPXtool's "Power" column
+                 (2026-10-02). An average POWER has no detector ballistics to argue about, so if it
+                 agrees with MPXtool while the peak does not, the difference is the peak detector. -->
+            <span></span>
+            <span class="mpxKey" title="MPX power (ITU-R BS.412): the mean power of the whole multiplex — audio, pilot, stereo and RDS — over a rolling 60 seconds, in dB against a sine at ±19 kHz deviation (0 dB). Regulators that enforce BS.412 set the limit at 0 dB (+3 dB in a few countries); it is how they stop a loudness war, separately from the 75 kHz peak. Until a minute has been measured the seconds covered are shown beside it. The same figure MPXtool shows as Power.">MPX power:</span><span class="mpxVal" id="rdsMpxPowV">—</span>
           </div>
           <div id="rdsMpxVerdict">—</div>
         </div>

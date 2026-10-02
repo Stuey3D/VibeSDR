@@ -157,6 +157,11 @@ export interface RdsExt {
   mpxHold: number;
   /** What the deviation bar removed as noise, kHz rms in its measurement band (0 = not measured). */
   mpxNoise: number;
+  /** ★★ MPX POWER, ITU-R BS.412 — dB against a ±19 kHz sine, the mean over a rolling 60 s (MPXtool's
+   *  "Power"). `mpxPowS` = the seconds that mean covers; absent/0 = none yet (fresh tune) or an older
+   *  server. Optional so a client that does not parse it still type-checks. */
+  mpxPow?: number;
+  mpxPowS?: number;
   // ── The weak-signal readings (VibeServer 3.1) ──────────────────────────────────────────────
   /** Pilot against the transmitted-silence gap at 15-19 kHz, dB. NOT a calibrated SNR — the
    *  measuring filter's own leakage caps it near 34 — but the figure that drives NR, and directly

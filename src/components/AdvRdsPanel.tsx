@@ -631,6 +631,12 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
              avgPct: Math.max(0, Math.min(100, av)),
              hold: Math.max(0, Math.min(100, hd)) };
   }, [x?.mpxDev, x?.mpxAvg, x?.mpxHold, x?.mpxSnr, x?.mpxNoise]);
+  /** MPX power (BS.412) as drawn — see the row. "—" until the server has 5 s of it. */
+  const mpxPowTxt = useMemo(() => {
+    const ps = x?.mpxPowS ?? 0, pw = x?.mpxPow ?? 0;
+    if (!(ps > 0) || !Number.isFinite(pw)) return '—';
+    return `${pw >= 0 ? '+' : '−'}${Math.abs(pw).toFixed(1)} dB${ps < 59.5 ? ` (${ps.toFixed(0)} s)` : ''}`;
+  }, [x?.mpxPow, x?.mpxPowS]);
   const piNum = p.pi ? parseInt(p.pi, 16) : 0;
   /** Last real RDS deviation reading, so a momentary dropout does not blank the row. */
   const rdsHold = useRef<{ txt: string; col: string; at: number } | null>(null);
@@ -1291,6 +1297,14 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               <Text style={[s.verdict, { color: mpxDevInfo.c, minHeight: 15 }]}>
                 {mpxDevInfo.verdict}
               </Text>
+              {/* ★★ MPX POWER (ITU-R BS.412) — the 60 s mean power of the whole multiplex against a
+                  ±19 kHz sine, the figure MPXtool shows as "Power" (2026-10-02). Neutral colour: above
+                  0 dB is over the BS.412 limit, a fact about the STATION, never a receiver fault. The
+                  seconds show until the minute is full. Same words as the web panel. */}
+              <View style={s.devGrid}>
+                <Text style={[s.devKey, { color: C.rowLabel }]}>MPX power:</Text>
+                <Text style={[s.devVal, s.powVal, { color: C.rowLabel }]}>{mpxPowTxt}</Text>
+              </View>
             </View>
           </View>
           {/* ★ ONE SYMBOL PLOT, full width — the web's EYE. The app carried this AND a second
@@ -1386,6 +1400,8 @@ const makeStyles = (T: DecoderTokens) => { const C: Palette = palette(T); const 
   devKey:  { fontFamily: FONT, fontSize: 12, width: 132, textAlign: 'right' as const, opacity: 0.8 },
   devVal:  { fontFamily: FONT, fontSize: 12, width: 62, textAlign: 'right' as const,
              marginLeft: 6, fontVariant: ['tabular-nums'] as const },
+  // ★ "+6.1 dB (24 s)" is wider than a kHz figure; it grows rightwards so the numbers above stay put.
+  powVal:  { width: undefined, minWidth: 62, textAlign: 'left' as const },
   // ★ BRIGHTER THAN THE LABELS, deliberately. This is the sentence that TEACHES the plot — "two
   //   clear bands = every bit decided with margin" — so it is prose to be read, not a caption to
   //   be glanced at, and it is the longest run of small text sitting over a live waterfall.
