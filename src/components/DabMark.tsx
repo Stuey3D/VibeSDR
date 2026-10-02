@@ -36,7 +36,10 @@ import { Canvas, Image as SkImageNode, LinearGradient, Path, PathOp, Skia, vec, 
 import { DAB_LOGO_PATH, DAB_VIEWBOX } from './dabLogoPaths';
 import { glowPaint, makeSprite } from './glowSprite';
 
-/** ★ See the header: false = WorldDAB's toolkit to the letter (official colours, DAB+ only, unaltered). */
+/** ★ See the header: false = WorldDAB's toolkit to the letter (official colours, DAB+ only, unaltered).
+ *  ★★★ DECIDED: TRUE (Stuart, 2026-10-02) — "ship it as the VFD one to preserve the integrity, if we get a
+ *     takedown we will remove it. In the directory it is shown unmodified and that is the most visible
+ *     part." The directory's badge stays the official artwork, untouched. Do not flip this without him. */
 export const DAB_ALTERATIONS_ALLOWED = true;
 
 const VB = DAB_VIEWBOX;
