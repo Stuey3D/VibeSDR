@@ -953,6 +953,11 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
 }
 
 /** The mode label (+ stereo rings) over the reading / breathing SQL — the mode box's contents. */
+/** ★ Room for the stereo rings: whenever they are lit, and always in WFM (where they come and go). */
+function stereoSlot(modeLabel: string, fmStereo: boolean | undefined): boolean {
+  return !!fmStereo || /^WFM\b/i.test(modeLabel);
+}
+
 function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWidth, readingFontSize, oneLine = false }: {
   reading: ModeReading; modeLabel: string; fmStereo: boolean; modeFontSize: number; modeLs: number;
   snrWidth?: number;
@@ -983,7 +988,15 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
       </Text>
       {/* WFM stereo: V5's pilot-PLL lock (+ blend) is reliable, so the icon
           is back — shows the interlocking-rings symbol when stereo is active. */}
-      {fmStereo && <StereoIcon size={Math.round(modeFontSize * 0.95)} color={dk.mode} />}
+      {/* ★★ THE RINGS' ROOM IS ALWAYS KEPT IN WFM — they go INVISIBLE, never away. On a weak station
+          the pilot locks and unlocks several times a second, and a box that grew and shrank with the
+          rings made the frequency beside it wobble (Stuart, 2026-10-02). Same width with or without. */}
+      {stereoSlot(modeLabel, fmStereo) && (
+        <View style={{ opacity: fmStereo ? 1 : 0 }} accessibilityElementsHidden={!fmStereo}
+              importantForAccessibility={fmStereo ? 'auto' : 'no-hide-descendants'}>
+          <StereoIcon size={Math.round(modeFontSize * 0.95)} color={dk.mode} />
+        </View>
+      )}
     </View>
     {reading.sqlClosed ? (
       <Animated.Text style={[pm.snr, {
@@ -1150,7 +1163,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
   const modeFont0 = L ? L.modeFont : s.r(15);
   const readingFont = L ? L.readingFont : s.r(11);
   const mb = useMemo(() => modeBoxFit({
-    label: modeLabel, stereo: !!fmStereo, face: dk.modeFont === FONT_DOTO ? 'doto' : 'hyper',
+    label: modeLabel, stereo: stereoSlot(modeLabel, fmStereo), face: dk.modeFont === FONT_DOTO ? 'doto' : 'hyper',
     fontSize: modeFont0, letterSpacing: L ? 1.5 : 2, readingFont,
     minW: s.r(MODE_BOX.minW), padH: s.r(MODE_BOX.padH), windowW: winW,
   }), [modeLabel, fmStereo, dk.modeFont, modeFont0, L, readingFont, s, winW]);
