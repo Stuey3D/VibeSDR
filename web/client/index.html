@@ -2197,6 +2197,13 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    ★ `overscroll-behavior: contain` so a flick inside the panel does not scroll the page behind
    it, which on a touch screen is how you lose your place a second time. */
 #decBox.rds #decBody { max-height: 85vh; overflow-y: auto; overscroll-behavior: contain; }
+/* ★★★ ONE SCROLL BAR, NOT TWO. #rdsPanel scrolls at its own size (compact, or tall up to 78vh) — but on a
+   short screen the BOX's ceiling (the room above the controls) leaves #decBody shorter than that, so the
+   panel scrolled inside a body that scrolled too: Edge at 1366x768 showed two bars, the inner one moving
+   the middle of the range and the outer one the top and bottom (Stuart, 2026-10-02). As a shrinkable flex
+   item the panel now gives up whatever height the body has not got, and its own bar is the only one. */
+#decBox.rds #decBody { display: flex; flex-direction: column; }
+#decBox.rds #rdsPanel { flex: 0 1 auto; min-height: 0; }
 #decBox.min #decBody { display: none; }
 #decText {
   margin: 0; color: var(--btn-text); font-size: 12px;
