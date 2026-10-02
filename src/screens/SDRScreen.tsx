@@ -8790,7 +8790,11 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  The HF-only backends (UberSDR, Kiwi) never reach FM, so never have an RDS station to show it on. */
     const annunciators = wfm && !isOwrx && liveStation.rdsFlags ? liveStation.rdsFlags : undefined;
     // ★ A DAB service: the DAB mark in the RDS mark's slot, its "+]" lit for DAB+ (DabMark / VTSBar).
-    const dab = dabOn && liveBadgeRef.current === 'DAB' ? { plus: liveStation.dabPlus === true } : undefined;
+    /* ★★ A DAB SERVICE IS KNOWN BY ITS BADGE, NOT BY `dabOn`. Gating on both left the old green "DAB" pill on
+     *  screen whenever the station was DAB but this listener had not switched DAB on itself — a shared tuner
+     *  another listener put into DAB (Stuart, iPhone on the Sony, 2026-10-02). Whatever says it is DAB gets the
+     *  DAB mark, in every style. */
+    const dab = liveBadgeRef.current === 'DAB' ? { plus: liveStation.dabPlus === true } : undefined;
     const composite = `${vtsId}|${display}|${rt ?? ''}|${flag ?? ''}|${logoUrl ?? ''}|${dab ? (dab.plus ? 'D+' : 'D') : ''}`
       + `|${annunciators ? `${+annunciators.tp}${+annunciators.ta}${+annunciators.af}` : ''}`;
     // ★ Deferred, not dropped — see vtsNoticeUntil. vtsLastStation is deliberately NOT updated
