@@ -295,7 +295,13 @@ function ChatDrawerBody({
   if (!visible) return null;
 
   return (
-    <>
+    /* ★★★ ONE LAYER, ABOVE THE DECODER BOXES. This returned a bare fragment, so the backdrop and the
+     *  drawer sat loose in the screen with no zIndex — and every decoder box (DecoderShell wrap,
+     *  zIndex 200: Advanced RDS, DAB, the decoders) drew OVER the open chat, however recently the
+     *  chat was opened (Stuart, B12 on the Mac with the DAB list, then B13 on an iPhone with ADV
+     *  RDS). Chat is the thing the user just asked for; it sits on top. Android stacks by
+     *  ELEVATION, so that is above the shell's 16 as well. */
+    <View style={cd.layer} pointerEvents="box-none">
       {/* Backdrop */}
       <Animated.View
         // ★★★ Transparency OFF: no dim over the live waterfall — the view (and its tap-to-close)
@@ -637,13 +643,14 @@ function ChatDrawerBody({
 
         </Animated.View>
       </KeyboardAvoidingView>
-    </>
+    </View>
   );
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const makeCd = (pt: PopupTokens) => StyleSheet.create({
+  layer:    { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 300, elevation: 40 },
   backdrop: { backgroundColor: 'rgba(0,0,0,0.55)' },
   kavWrap:  { position: 'absolute', left: 0, right: 0, bottom: 0, top: 0, justifyContent: 'flex-end', pointerEvents: 'box-none' },
   drawer: {
