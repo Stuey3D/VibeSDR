@@ -43,6 +43,9 @@ export type { Transparency };
  *  touches motion that carries information: the VFD's stepped scroll, needles following the signal,
  *  dome-key presses, Nixie digit changes and afterglow. */
 export type MotionEffects    = 'on' | 'off';
+/** ★★ LIGHT ANGLE (lighting brief §4): where the light on the metal comes from. Never from below — hardware
+ *  is never lit from below, and it reads as wrong. */
+export type LightAngle       = 'left' | 'topLeft' | 'top' | 'topRight' | 'right';
 
 export interface FaceplateSettings {
   chassis:   Chassis;
@@ -76,6 +79,9 @@ export interface FaceplateSettings {
    *  `effectiveMotion`, and the auto value is never written back as if chosen. */
   motionEffects: MotionEffects;
   motionExplicit: boolean;
+  /** ★ LIGHT ANGLE — device-local like the rest of the faceplate. LEFT is today's look. With tilt lighting
+   *  (brief §5, not built yet) this is the angle the tilt swings AROUND. */
+  lightAngle: LightAngle;
 }
 
 export const CHASSIS:     Chassis[]        = ['default', 'silver', 'black'];
@@ -86,6 +92,11 @@ export const METERS:      SignalMeter[]    = ['bar', 'vu', 'edge'];
 export const TRANSPARENCIES: Transparency[] = ['on', 'off'];
 export const FRAME_RATES: FrameRate[] = ['full', '60'];
 export const MOTIONS: MotionEffects[] = ['on', 'off'];
+export const LIGHT_ANGLES: LightAngle[] = ['left', 'topLeft', 'top', 'topRight', 'right'];
+/** The CSS gradient angle for each (0 = upward, 90 = rightward). 104 = LEFT = today exactly; RIGHT mirrors it. */
+export const LIGHT_ANGLE_DEG: Record<LightAngle, number> = {
+  left: 104, topLeft: 135, top: 180, topRight: 225, right: 256,
+};
 
 /** ★★★ What the real display technology came in (§1). Nixie: none — locked neon (§2). Dot and
  *  segment VFDs never came in white. The first entry is the display's default. */
@@ -100,7 +111,7 @@ export const TEXT_ALLOWED: Record<DisplayStyle, TextColour[]> = {
 export const DEFAULT_SETTINGS: FaceplateSettings = {
   chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
   meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, frameRate: 'full',
-  textByDisplay: {}, motionEffects: 'on', motionExplicit: false,
+  textByDisplay: {}, motionEffects: 'on', motionExplicit: false, lightAngle: 'left',
 };
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
@@ -319,6 +330,7 @@ export function parseSettings(json: string | null, legacyThemeName?: string | nu
     frameRate: pick(raw.frameRate, FRAME_RATES, 'full'),
     textByDisplay,
     ...parseMotion(raw),
+    lightAngle: pick(raw.lightAngle, LIGHT_ANGLES, 'left'),
   };
 }
 
@@ -394,6 +406,22 @@ export const TRANSPARENCY_NOTE = 'Off · solid panels, easier to read and lighte
 export const MOTION_CHOICES: PaneChoice<MotionEffects>[] = [
   { value: 'on', label: 'ON' }, { value: 'off', label: 'OFF' },
 ];
+export const LIGHT_ANGLE_CHOICES: PaneChoice<LightAngle>[] = [
+  { value: 'left', label: 'LEFT' }, { value: 'topLeft', label: 'TOP-LEFT' }, { value: 'top', label: 'TOP' },
+  { value: 'topRight', label: 'TOP-RIGHT' }, { value: 'right', label: 'RIGHT' },
+];
+
+/**
+ * ★★ LIGHT ANGLE row: shown ONLY when it is the light in use (lighting brief §4) — on silver or black (the
+ * default chassis has no metal, so a light angle there would be a key that does nothing: AGENTS.md), AND
+ * while tilt is not driving the light. `tiltDriving` is false on every device today (tilt lighting, §5, is
+ * not built) — so on silver / black the row is there everywhere, which is exactly the brief's Mac rule
+ * ("no motion sensor"). ▶ Item 5 passes true where tilt is live, and the row hides there.
+ */
+export function lightAngleRowShown(chassis: Chassis, tiltDriving: boolean): boolean {
+  return chassis !== 'default' && !tiltDriving;
+}
+
 /** The MOTION EFFECTS row's subtitle: what OFF changes — and, as plainly, what it never does. */
 export const MOTION_NOTE = 'Off · no decorative movement — signal, tuning and keys still move';
 

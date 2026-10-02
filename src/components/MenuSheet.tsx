@@ -51,10 +51,10 @@ import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { useFaceplateSettings, useSurfaceOpaque } from '../contexts/FaceplateContext';
 import {
   CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
-  MOTION_CHOICES, MOTION_NOTE,
+  MOTION_CHOICES, MOTION_NOTE, LIGHT_ANGLE_CHOICES, lightAngleRowShown,
   COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver, frameRateChoices,
   FRAME_RATE_NOTE,
-  type PaneChoice, type Chassis, type SignalMeter, type FrameRate, type MotionEffects,
+  type PaneChoice, type Chassis, type SignalMeter, type FrameRate, type MotionEffects, type LightAngle,
 } from '../constants/faceplate';
 import { AUTO_REASON_NOTE } from '../constants/transparency';
 import {
@@ -725,7 +725,7 @@ function ControlCustomisationPane({
   const styles = usePopupStyles(makeStyles);
   // ★ App-wide, not per server (FaceplateContext) — the faceplate is the hardware in your hand.
   const { settings: fp, setDisplay, setText, set, setTransparency, autoTransparency: auto,
-          maxRefreshHz, setMotion } = useFaceplateSettings();
+          maxRefreshHz, setMotion, tiltDriving } = useFaceplateSettings();
   // ★ While the DEVICE chose OFF (never once the user has picked), say so — otherwise a new user on
   //   an old phone sees solid panels, the ON key unlit, and no reason why.
   const autoNote = !fp.transparencyExplicit && auto.reason ? AUTO_REASON_NOTE[auto.reason] : null;
@@ -765,6 +765,13 @@ function ControlCustomisationPane({
       </CtrlRow>
       <SelectorRow label="SIGNAL METER" choices={METER_CHOICES} value={fp.meter}
         onPick={(v: SignalMeter) => set({ meter: v })} />
+      {/* ★★ LIGHT ANGLE (lighting brief §4): where the light on the metal comes from — the sheen, the hot-spot,
+          the gloss reflection and the screws move together. Only on silver / black (no metal on default:
+          a key that did nothing), and only while tilt is not driving the light (faceplate.ts decides). */}
+      {lightAngleRowShown(fp.chassis, tiltDriving) && (
+        <SelectorRow label="LIGHT ANGLE" choices={LIGHT_ANGLE_CHOICES} value={fp.lightAngle}
+          onPick={(v: LightAngle) => set({ lightAngle: v })} />
+      )}
       {/* ★★★ ONE switch for every see-through surface — the deck, the decoder boxes, the menus
           (Stuart, 2026-09-30). It replaced the boxes' own Transparent / Solid row. The keys show
           what is ON SCREEN (the device's default until the user picks); a pick is stored as theirs. */}

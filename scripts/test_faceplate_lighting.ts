@@ -8,7 +8,8 @@
  * Run: node --no-warnings scripts/test_faceplate_lighting.ts   (run-tests.sh does)
  */
 import { filamentCount, filamentYs, devicePixel } from '../src/constants/vfdGlass.ts';
-import { DEFAULT_SETTINGS, effectiveMotion, withMotion, parseSettings, MOTION_CHOICES } from '../src/constants/faceplate.ts';
+import { DEFAULT_SETTINGS, effectiveMotion, withMotion, parseSettings, MOTION_CHOICES,
+  LIGHT_ANGLES, LIGHT_ANGLE_DEG, LIGHT_ANGLE_CHOICES, lightAngleRowShown, CHASSIS } from '../src/constants/faceplate.ts';
 import { cssAnglePts, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight, LIGHT_DEFAULT_DEG } from '../src/constants/plateLight.ts';
 
 let fails = 0, passes = 0;
@@ -85,6 +86,22 @@ eq('an older store (no motion keys) = not picked', [parseSettings('{"chassis":"s
 eq('an unpicked "off" in storage is NOT a pick', parseSettings('{"motionEffects":"off"}').motionExplicit, false);
 eq('a junk value is not a pick', parseSettings('{"motionEffects":"wobble","motionExplicit":true}').motionExplicit, false);
 eq('MOTION EFFECTS keys', MOTION_CHOICES.map(c => c.label), ['ON', 'OFF']);
+
+// ── §4 LIGHT ANGLE ───────────────────────────────────────────────────────────
+eq('five keys, in order', LIGHT_ANGLE_CHOICES.map(c => c.label), ['LEFT', 'TOP-LEFT', 'TOP', 'TOP-RIGHT', 'RIGHT']);
+eq('the angles', LIGHT_ANGLES.map(a => LIGHT_ANGLE_DEG[a]), [104, 135, 180, 225, 256]);
+eq('default is LEFT', DEFAULT_SETTINGS.lightAngle, 'left');
+eq('LEFT is today (104° = LIGHT_DEFAULT_DEG)', LIGHT_ANGLE_DEG.left, LIGHT_DEFAULT_DEG);
+ok('RIGHT mirrors LEFT about TOP', LIGHT_ANGLE_DEG.left + LIGHT_ANGLE_DEG.right === 2 * LIGHT_ANGLE_DEG.top);
+ok('TOP-LEFT / TOP-RIGHT mirror about TOP', LIGHT_ANGLE_DEG.topLeft + LIGHT_ANGLE_DEG.topRight === 2 * LIGHT_ANGLE_DEG.top);
+ok('never lit from below (every angle between 90° and 270°)', LIGHT_ANGLES.every(a => LIGHT_ANGLE_DEG[a] > 90 && LIGHT_ANGLE_DEG[a] < 270));
+eq('stored angle round-trips', parseSettings(JSON.stringify({ ...DEFAULT_SETTINGS, lightAngle: 'topRight' })).lightAngle, 'topRight');
+eq('an older store → LEFT', parseSettings('{"chassis":"black"}').lightAngle, 'left');
+eq('a junk angle → LEFT', parseSettings('{"lightAngle":"below"}').lightAngle, 'left');
+for (const c of CHASSIS) {
+  eq(`row on ${c}, no tilt`, lightAngleRowShown(c, false), c !== 'default');
+  eq(`row on ${c}, tilt driving → hidden`, lightAngleRowShown(c, true), false);
+}
 
 console.log(`faceplate lighting: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);
