@@ -269,6 +269,9 @@ const FilamentCanvas = React.memo(function FilamentCanvas({ w, h, radius }: { w:
  * child so it is the frontmost thing in the glass: above the ghost layer, the lit segments and sprites, and
  * the RDS pictogram. ★★ TRAP (layer order): never inside the ghost canvas (GhostGrid / SegDigits' static
  * layer) — those sit UNDER the lit sprites, so the glow would paint over the wires, the reverse of a tube.
+ * ★★ ONE canvas per window, and only because it is unavoidable: the wires must sit IN FRONT of what the window
+ *   draws, and the VTS text, the dot-matrix digits and the status rows are React Native Text, which no
+ *   existing canvas is above (the Mac GPU audit: every <Canvas> is a Metal layer — none is added lightly).
  * ★ Zero per-frame cost: one memoised canvas, redrawn only when the window's size changes. Keyed by size,
  *   like ChassisPlate's canvases (a Mac resize once left a canvas drawing into its first surface). Static —
  *   MOTION EFFECTS does not touch it. `radius` = the window's corner radius, which clips the wires.

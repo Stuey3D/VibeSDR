@@ -5,15 +5,14 @@
  * ★★ OPAQUE. The default deck is glass (BlurView + tint) and blurs the waterfall behind it — on iOS
  *   the expensive case. A metal plate hides what is behind it, so on silver and black there is NO
  *   BlurView at all (§3.4); ControlsBar draws this instead.
- * ★★ DRAWN ONCE. The plate is THREE stacked canvases, in today's paint order: the grain (base, texture,
- *   veil), the LIGHT (sheen + radial hot-spot — PlateLight), then the top (bottom shade, lips, screws,
- *   border). Grain and top redraw only when the SIZE changes. Nothing that moves — meter, digits, key
- *   presses — is in them: those are separate views above, so a meter update never touches the plate.
- * ★★★ THE LIGHT IS ITS OWN CANVAS (lighting brief §2) because it is the one layer that may MOVE: its
- *   gradient points and hot-spot are useDerivedValues of FaceplateContext's `lightSv`, so a moving angle
- *   costs one gradient fill per frame on the UI thread and NO React render; a still angle costs nothing.
- *   ★ Split IN PAINT ORDER (grain → light → shade/lips/screws/border): source-over is associative, so the
- *     three stacked layers composite as the one canvas did — and at 104° (LEFT) every value is today's.
+ * ★★ DRAWN ONCE. Texture, lighting, lips, screws and border are one Skia canvas that redraws only when
+ *   its SIZE changes (a rotation) — or, for the light alone, when the light angle moves. Nothing that
+ *   moves — meter, digits, key presses — is in it: those are separate views above it, so a meter update
+ *   never touches the plate.
+ * ★★★ THE LIGHT IS DERIVED, NOT A SEPARATE CANVAS (lighting brief §2, and the Mac GPU-memory audit — every
+ *   <Canvas> is its own Metal layer): the sheen's points and the hot-spot are useDerivedValues of
+ *   FaceplateContext's `lightSv`, so a moving angle repaints this canvas on the UI thread with NO React
+ *   render; a still angle costs nothing. At 104° (LEFT) every value is today's.
  * ★ §3.4 TRAP: the lighting is its own layer, never baked into the texture, so it stays right in
  *   landscape and on tablets; and the grain is sampled linear + mipmapped, or it moirés when the
  *   1200 px image is drawn at 620 pt.
@@ -33,7 +32,7 @@ import { useLight } from '../contexts/FaceplateContext';
 
 /** CSS `linear-gradient(<deg>, …)` → Skia start/end points over a w × h box. */
 export function cssAngle(deg: number, w: number, h: number) {
-  // ★ One formula: constants/plateLight.ts cssAnglePts (the worklet PlateLight derives from).
+  // ★ One formula: constants/plateLight.ts cssAnglePts (the worklet the plate's light derives from).
   const p = cssAnglePts(deg, w, h);
   return { start: vec(p.sx, p.sy), end: vec(p.ex, p.ey) };
 }
@@ -67,17 +66,34 @@ function Screw({ x, y, angle, light }: { x: number; y: number; angle: number; li
   );
 }
 
-/** Layer 1 — the grain: base colour, the brushed texture, the veil. Static. */
-const PlateGrain = React.memo(function PlateGrain({ w, h, r, plate }: {
-  w: number; h: number; r: number; plate: PlateTokens;
+/**
+ * The plate: ONE canvas, painted in today's order — grain (base, texture, veil), then the LIGHT (sheen +
+ * radial hot-spot), then the top (bottom shade, lips, screws, border).
+ * ★★★ ONE CANVAS, NOT A LAYER PER STRATUM (Mac performance audit, 2026-10-02: 1 GB RAM, ~400 MB of it GPU in
+ *   ~900 regions): every Skia <Canvas> is its own Metal layer with up to three full-size drawables, so the
+ *   light stays INSIDE this canvas as a Group. Its gradient points and hot-spot are useDerivedValues of the
+ *   live angle `sv`, so a moving angle still updates on the UI thread with no React render; a still angle
+ *   costs nothing.
+ */
+const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, light }: {
+  w: number; h: number; r: number; plate: PlateTokens; sv: SharedValue<number>; light: number;
 }) {
   const img = useTexture(plate.texture);
   const clip = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), r, r);
   // `.tex-*`: the grain shown at 620 pt wide, centred. ★ Mirrored rather than repeated past its
   // edges (a landscape deck is wider than 620 pt), so no seam line crosses the plate.
   const k = 620 / 1200;
+  // ── The light, derived from the live angle (lighting brief §2). At 104°: cssAngle(104, w, h), 28 % −10 %. ──
+  const start = useDerivedValue(() => { const p = cssAnglePts(sv.value, w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
+  const end   = useDerivedValue(() => { const p = cssAnglePts(sv.value, w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
+  // `radial-gradient(140% 70% at <x> -10%)`: an ellipse, drawn as a circle squashed vertically about its
+  // centre. ★ The squash is in Y only, so the centre's x does not enter the transform — which is what lets
+  // the centre MOVE without a re-render (today's translateX(ecx) … translateX(−ecx) cancelled anyway).
+  const rx = 1.4 * w, ry = 0.7 * h, ecy = HOTSPOT_Y * h;
+  const ecx = useDerivedValue(() => hotspotX(sv.value) * w, [w]);
+  const c = useDerivedValue(() => ({ x: hotspotX(sv.value) * w, y: HOTSPOT_Y * h }), [w, h]);
   return (
-    <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
+    <Canvas style={{ width: w, height: h }} pointerEvents="none">
       <Group clip={clip}>
         <Rect x={0} y={0} width={w} height={h} color={plate.base} />
         {img && (
@@ -88,31 +104,7 @@ const PlateGrain = React.memo(function PlateGrain({ w, h, r, plate }: {
         )}
         {/* The veil over the grain (black: a touch darker than the mockup — PlateTokens.textureDim). */}
         {plate.textureDim > 0 && <Rect x={0} y={0} width={w} height={h} color={`rgba(0,0,0,${plate.textureDim})`} />}
-      </Group>
-    </Canvas>
-  );
-});
-
-/**
- * Layer 2 — PlateLight: the sheen gradient and the radial hot-spot, and NOTHING else (§3.4: the lighting
- * is its own layer). Its start, end and centre are derived on the UI thread from the live angle `sv`.
- * At 104° the numbers are today's: cssAngle(104, w, h), and the hot-spot at 28 % −10 %.
- */
-const PlateLight = React.memo(function PlateLight({ w, h, r, plate, sv }: {
-  w: number; h: number; r: number; plate: PlateTokens; sv: SharedValue<number>;
-}) {
-  const clip = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), r, r);
-  const start = useDerivedValue(() => { const p = cssAnglePts(sv.value, w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
-  const end   = useDerivedValue(() => { const p = cssAnglePts(sv.value, w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
-  // `radial-gradient(140% 70% at <x> -10%)`: an ellipse, drawn as a circle squashed vertically about
-  // its centre. ★ The squash is in Y only, so the x of the centre does not enter the transform — which
-  // is what lets the centre MOVE without a re-render (translateX(ecx) … translateX(−ecx) cancelled anyway).
-  const rx = 1.4 * w, ry = 0.7 * h, ecy = HOTSPOT_Y * h;
-  const ecx = useDerivedValue(() => hotspotX(sv.value) * w, [w]);
-  const c = useDerivedValue(() => ({ x: hotspotX(sv.value) * w, y: HOTSPOT_Y * h }), [w, h]);
-  return (
-    <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
-      <Group clip={clip}>
+        {/* ── The lighting layer (separate from the grain, §3.4) — follows the ONE light angle ── */}
         <Rect x={0} y={0} width={w} height={h}>
           <LinearGradient start={start} end={end} colors={plate.lightColors} positions={plate.lightPos} />
         </Rect>
@@ -121,19 +113,7 @@ const PlateLight = React.memo(function PlateLight({ w, h, r, plate, sv }: {
             <RadialGradient c={c} r={rx} colors={[plate.radialColor, 'rgba(255,255,255,0)']} positions={[0, 0.6]} />
           </Circle>
         </Group>
-      </Group>
-    </Canvas>
-  );
-});
-
-/** Layer 3 — the top: the bottom shade (gravity, never the lamp), the lips, the screws, the border. */
-const PlateTop = React.memo(function PlateTop({ w, h, r, plate, light }: {
-  w: number; h: number; r: number; plate: PlateTokens; light: number;
-}) {
-  const clip = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), r, r);
-  return (
-    <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
-      <Group clip={clip}>
+        {/* ★ The bottom shade is GRAVITY, not the lamp — never derived from the angle. */}
         {plate.bottomShade && (
           <Rect x={0} y={0} width={w} height={h}>
             <LinearGradient start={vec(0, 0)} end={vec(0, h)}
@@ -168,12 +148,7 @@ export default function ChassisPlate({ plate, radius }: { plate: PlateTokens; ra
           and the canvas kept drawing into its first surface — the brushed plate covered the left half of
           the tuning-step sheet until it was closed and reopened, sometimes several times (Stuart, B16).
           A size change is rare (open, rotate, window resize), so a remount costs nothing that matters. */}
-      {/* ★ All three layers keyed by size (the stale-surface fix above applies to each). */}
-      {w > 0 && h > 0 && (<>
-        <PlateGrain key={`g${w}x${h}`} w={w} h={h} r={radius} plate={plate} />
-        <PlateLight key={`l${w}x${h}`} w={w} h={h} r={radius} plate={plate} sv={light.sv} />
-        <PlateTop key={`t${w}x${h}`} w={w} h={h} r={radius} plate={plate} light={light.deg} />
-      </>)}
+      {w > 0 && h > 0 && <PlateCanvas key={`${w}x${h}`} w={w} h={h} r={radius} plate={plate} sv={light.sv} light={light.deg} />}
     </View>
   );
 }
