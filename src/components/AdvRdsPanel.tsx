@@ -1294,7 +1294,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                 <Text style={[s.devKey, { color: mpxDevInfo.c }]}>Peak:</Text>
                 <Text style={[s.devVal, { color: mpxDevInfo.c }]}>{mpxDevInfo.peak}</Text>
               </View>
-              <Text style={[s.verdict, { color: mpxDevInfo.c, minHeight: 15 }]}>
+              <Text style={[s.verdict, s.devVerdict, { color: mpxDevInfo.c, minHeight: 15 }]}>
                 {mpxDevInfo.verdict}
               </Text>
               {/* ★★ MPX POWER (ITU-R BS.412) — the 60 s mean power of the whole multiplex against a
@@ -1397,6 +1397,10 @@ const makeStyles = (T: DecoderTokens) => { const C: Palette = palette(T); const 
   /* ★ One row of the deviation readout: key right-aligned in a fixed column, value left-aligned
      in another, so neither moves when the other changes width. */
   devGrid: { flexDirection: 'row' as const, alignItems: 'baseline' as const, marginTop: 2 },
+  /* ★ The verdict is CENTRED across the figures' block (key 132 + gap 6 + value 62), as the web panel's
+   *  #rdsMpxVerdict is — left-aligned it sat at the panel edge, out of line with every figure around it
+   *  (Stuart, 2026-10-02: "it's the nominal above it that isn't"). A long verdict wraps inside the block. */
+  devVerdict: { width: 200, textAlign: 'center' as const },
   devKey:  { fontFamily: FONT, fontSize: 12, width: 132, textAlign: 'right' as const, opacity: 0.8 },
   devVal:  { fontFamily: FONT, fontSize: 12, width: 62, textAlign: 'right' as const,
              marginLeft: 6, fontVariant: ['tabular-nums'] as const },
