@@ -2303,6 +2303,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #vts img { height: 16px; width: auto; border-radius: 3px; display: none; }
 #vts img.show { display: block; }
 #vtsRds { background: #fff; padding: 1px 3px; }
+#vtsAnn { display: none; gap: 5px; margin-left: 8px; align-items: center; flex-shrink: 0; }
+#vtsAnn.show { display: inline-flex; }
+#vtsAnn svg { height: 9px; width: auto; opacity: 0.18; }
+#vtsAnn svg path { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: butt; stroke-linejoin: miter; }
+#vtsAnn svg.on { opacity: 1; filter: drop-shadow(0 0 3px currentColor); }
 #vtsLogo { height: 20px; width: 20px; object-fit: contain; background: rgba(255,255,255,0.9); }
 #vtsSrc {
   display: none; font-size: 9px; letter-spacing: 1px; color: var(--unit);
@@ -2947,6 +2952,9 @@ select.btn { padding: 6px 8px; }
   <span id="vtsName">—</span>
   <span id="vtsRt"><span id="vtsRtInner"></span></span>
   <span id="vtsBand"></span>
+  <!-- ★★ TP · TA · AF — a car stereo's fixed legends (2026-10-02), the same letterforms as the app's
+       AnnunciatorLegend: lit when true, ghosted when not. Shown only when the server sends the flags. -->
+  <span id="vtsAnn" title="TP: traffic programmes · TA: traffic announcement now · AF: alternative frequencies listed"><svg data-a="tp" viewBox="-0.2 -0.2 22.6 14.4" aria-label="TP"><path d="M0,1.25H10M5,1.25V14M14.45,0V14M14.45,1.25H18.2Q20.95,1.25 20.95,4.4Q20.95,6.95 18.2,6.95H14.45"/></svg><svg data-a="ta" viewBox="-0.2 -0.2 22.6 14.4" aria-label="TA"><path d="M0,1.25H10M5,1.25V14M13.45,14L17.2,1.25L20.95,14M14.799999999999999,9.6H19.6"/></svg><svg data-a="af" viewBox="-0.2 -0.2 22.6 14.4" aria-label="AF"><path d="M1.25,14L5,1.25L8.75,14M2.6,9.6H7.4M14.45,0V14M14.45,1.25H22.2M14.45,7H20.2"/></svg></span>
 </div>
 
 <div id="decBox">

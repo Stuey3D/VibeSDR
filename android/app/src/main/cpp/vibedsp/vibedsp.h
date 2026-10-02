@@ -2525,6 +2525,10 @@ public:
         void (*rdsBer)(void* ctx, int percent) = nullptr;
         /** Recovered 57 kHz level relative to the pilot, dB. See subcarrierRelDb(). */
         void (*rdsSig)(void* ctx, float relDb) = nullptr;
+        /** ★★ THE CAR-STEREO ANNUNCIATORS (2026-10-02): TP, TA (each -1 unknown / 0 / 1) and how many AFs
+         *  the station lists, from the decoder's sticky aggregate — ALWAYS, whenever RDS is decoded, not
+         *  only while Advanced RDS is open (rdsExt is gated on that). On a change only, at most 4×/s. */
+        void (*rdsFlags)(void* ctx, int tp, int ta, int nAf) = nullptr;
         // ★ The Advanced RDS decoder's payload: the fields we used to discard, plus the
         // constellation. Only emitted when a client has the decoder OPEN — selecting it IS
         // the toggle, so nothing here is paid for while nobody is looking.
@@ -3212,6 +3216,8 @@ private:
     bool  multipathValid_ = false; // ...and whether that residual means anything at this S/N
     bool  snrValid_ = false;       // is there a real pilot to measure the S/N against at all?
     const std::atomic<bool>* rdsExtWantedFlag_ = nullptr;   // see setRdsExtWantedFlag — nullptr = wanted
+    int    rdsFlagTp_ = -2, rdsFlagTa_ = -2, rdsFlagAf_ = -2;   // last rdsFlags sent (-2 = none yet)
+    double rdsFlagAt_ = 0.0;                                     // when, steady seconds — see Callbacks::rdsFlags
     std::atomic<bool> resetReq_{false};      // see requestReset()
     std::atomic<bool> gapReq_{false};        // see noteInputGap()
     std::atomic<unsigned> inputGaps_{0};

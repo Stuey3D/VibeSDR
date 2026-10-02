@@ -12,6 +12,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
+import AnnunciatorLegend from './AnnunciatorLegend';
 import RdsMark from './RdsMark';
 import SectionIcon from './SectionIcon';
 import { GhostGrid } from './VfdParts';
@@ -57,6 +58,14 @@ export interface VtsNotifData {
   source?:    'eibi' | 'server' | 'user';  // bookmark origin → source icon
   flag?:      string;   // transmitter-country flag (EiBi bookmarks / RDS)
   logoUrl?:   string;   // resolved WFM RDS station logo (radio-browser favicon)
+  /** ★★ CAR-STEREO ANNUNCIATORS (Stuart, 2026-10-02: "go full car stereo and show TP/TA/AF") — drawn at
+   *  the strip's right end, ALWAYS, each LIT when true and dark (a ghost, like a VFD's unlit segments)
+   *  when false: TP = the station carries traffic programmes, TA = a traffic announcement is on NOW,
+   *  AF = it broadcasts an alternative-frequency list.
+   *  ★ Absent = no cluster at all. Only a source that genuinely has all three may pass it — an
+   *    annunciator that can never light reads as a broken feature (AGENTS.md). Today: FM-DX. A
+   *    VibeServer's plain RDS line carries none of the three (they ride the Advanced RDS stream). */
+  annunciators?: { tp: boolean; ta: boolean; af: boolean };
 }
 
 const NOTIF_MS = 8000;
@@ -94,6 +103,10 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
   const [textW, setTextW] = useState(0);
+  /** The two side blocks' natural widths — each reserves the wider, so the text window is centred. */
+  const [leftW, setLeftW] = useState(0);
+  const [rightW, setRightW] = useState(0);
+  const sideW = Math.max(leftW, rightW);
 
   // Report height 0 the moment we're hidden, so anything stacked above us (the decoder box)
   // drops back down instead of floating over the gap where the VTS used to be.
@@ -258,38 +271,45 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       {/* ★ The SAME glyph as the right arrow, mirrored: Apple draws ◄ (U+25C4) and ► (U+25BA) from
           different fallback fonts, so the left one came out visibly smaller (B8, Mac + iPhone). */}
       <Text style={[styles.arrow, styles.arrowLeft, { color: leftCol }]}>►</Text>
-      {/* Source mark: live-data badge (RDS mark / text) wins; otherwise the
-          bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
-          ★ On a VFD (dot / seg) the RDS annunciator is part of the GLASS: always there, lit only
-            on RDS; a colour station logo or a flag emoji cannot exist there (§7.1). */}
-      {vfd && (
-        <View style={styles.vfdMarks}>
-          <RdsMark kind="picto" height={13} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)}
-            lit={shown.badge === 'RDS'} />
-          <VfdIso style={COL.style as 'dot' | 'seg'} code={flagToIso(shown.flag)} rgb={COL.rgb} core={COL.core} glow={COL.glow} />
-        </View>
-      )}
-      {/* ★★ The RDS mark STAYS when the station's logo lands (B9, Stuart: it vanished as the logo rendered
-          in, though the bar has room): mark first, then the logo — the web bar's order. */}
-      {!vfd && shown.badge === 'RDS' && (
-        <View style={styles.rdsMark}><RdsMark kind="plain" height={13} color={COL.mark} glow={COL.markGlow} /></View>
-      )}
-      {!vfd && shown.logoUrl
-        ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
-        : !vfd && shown.badge === 'RDS'
-        ? null
-        : !!shown.badge && shown.badge !== 'RDS'
-          ? <Text style={styles.badge}>{shown.badge}</Text>
-          : vfd && shown.badge === 'RDS'
-            ? null
-          : shown.source === 'server'
-            ? <View style={styles.srcLogo}><SectionIcon name="instance" size={16} color={COL.mark} /></View>
-            : shown.source === 'eibi'
-              ? <Text style={styles.eibiMark}>EiBi</Text>
-              : shown.source === 'user'
-                ? <Text style={styles.phoneMark}>📱</Text>
-                : null}
-      {!vfd && !!shown.flag && <Text style={styles.flag}>{shown.flag}</Text>}
+      {/* ★★ THE LEFT BADGE BLOCK — the RDS mark, logo, flag or source. When the strip carries the
+          TP · TA · AF cluster, this block and that one reserve the SAME width (the wider of the two), so the
+          scrolling text sits centred on the strip whether or not anything is lit (Stuart, 2026-10-02). */}
+      <View style={[styles.sideBlock, shown.annunciators && { minWidth: sideW }]}>
+      <View style={styles.sideInner} onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setLeftW(Math.ceil(e.nativeEvent.layout.width))}>
+        {/* Source mark: live-data badge (RDS mark / text) wins; otherwise the
+            bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
+            ★ On a VFD (dot / seg) the RDS annunciator is part of the GLASS: always there, lit only
+              on RDS; a colour station logo or a flag emoji cannot exist there (§7.1). */}
+        {vfd && (
+          <View style={styles.vfdMarks}>
+            <RdsMark kind="picto" height={13} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)}
+              lit={shown.badge === 'RDS'} />
+            <VfdIso style={COL.style as 'dot' | 'seg'} code={flagToIso(shown.flag)} rgb={COL.rgb} core={COL.core} glow={COL.glow} />
+          </View>
+        )}
+        {/* ★★ The RDS mark STAYS when the station's logo lands (B9, Stuart: it vanished as the logo rendered
+            in, though the bar has room): mark first, then the logo — the web bar's order. */}
+        {!vfd && shown.badge === 'RDS' && (
+          <View style={styles.rdsMark}><RdsMark kind="plain" height={13} color={COL.mark} glow={COL.markGlow} /></View>
+        )}
+        {!vfd && shown.logoUrl
+          ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
+          : !vfd && shown.badge === 'RDS'
+          ? null
+          : !!shown.badge && shown.badge !== 'RDS'
+            ? <Text style={styles.badge}>{shown.badge}</Text>
+            : vfd && shown.badge === 'RDS'
+              ? null
+            : shown.source === 'server'
+              ? <View style={styles.srcLogo}><SectionIcon name="instance" size={16} color={COL.mark} /></View>
+              : shown.source === 'eibi'
+                ? <Text style={styles.eibiMark}>EiBi</Text>
+                : shown.source === 'user'
+                  ? <Text style={styles.phoneMark}>📱</Text>
+                  : null}
+        {!vfd && !!shown.flag && <Text style={styles.flag}>{shown.flag}</Text>}
+      </View>
+      </View>
       {!!shown.offset && tuneLeft && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
       {vfd ? (
         <VfdStrip style={COL.style as 'dot' | 'seg'} rgb={COL.rgb} core={COL.core} glow={COL.glow}
@@ -324,6 +344,20 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       </ScrollView>
       </>)}
       {!!shown.offset && shown.tuneDir === 'right' && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
+      {/* ★★ TP · TA · AF — fixed legends in the glass, drawn like the RDS mark (AnnunciatorLegend), on the
+          RIGHT inside the ▶ so they balance the badge block on the left; lit when true, ghosted when not. */}
+      {!!shown.annunciators && (
+        <View style={[styles.sideBlock, styles.sideRight, { minWidth: sideW }]}>
+          <View style={[styles.sideInner, styles.annun]}
+                onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setRightW(Math.ceil(e.nativeEvent.layout.width))}>
+            {(['TP', 'TA', 'AF'] as const).map(nm => (
+              <AnnunciatorLegend key={nm} name={nm} height={9} kind={vfd ? 'picto' : 'plain'}
+                color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, vfd ? 0.10 : 0.16)}
+                lit={shown.annunciators![nm.toLowerCase() as 'tp' | 'ta' | 'af']} />
+            ))}
+          </View>
+        </View>
+      )}
       <Text style={[styles.arrow, { color: rightCol }]}>►</Text>
     </View>
     </Animated.View>
@@ -479,6 +513,12 @@ const styles = StyleSheet.create({
     zIndex: 60,
   },
   arrowLeft: { transform: [{ scaleX: -1 }] },
+  // ★ The side blocks: content-sized, but each may be told to reserve the other's width (sideW).
+  sideBlock: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', flexShrink: 0 },
+  sideRight: { justifyContent: 'flex-end' },
+  sideInner: { flexDirection: 'row', alignItems: 'center' },
+  // ★ The TP · TA · AF cluster.
+  annun:     { gap: 5, marginLeft: 6, marginRight: 2 },
   arrow: {
     fontFamily: 'Atkinson Hyperlegible',
     fontSize: 15,

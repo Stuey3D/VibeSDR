@@ -6345,6 +6345,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         int rdsEcc = 0;                          // RDS Extended Country Code (0 = none)
         int rdsBer = -1;                         // RDS block error rate %, -1 = unknown
         float rdsSig = -99.0f;                   // 57 kHz level vs pilot, dB (-99 = none)
+        // ★★ TP · TA · AF for the station strip — ALWAYS fed (Callbacks::rdsFlags), unlike the extended
+        //    fields below, which arrive only while Advanced RDS is open. -1 = not known yet.
+        int rdsFlTp = -1, rdsFlTa = -1, rdsFlAf = -1;
         // Extended RDS, refreshed by the engine; guarded by rdsMtx like the rest.
         int rdsPty = -1, rdsTp = -1, rdsTa = -1, rdsMs = -1, rdsDi = -1;
         // ★ The same five UNCONFIRMED, for the client's RAW view. Live, never sticky.
@@ -6386,6 +6389,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         int lastSentBer_ = -2;   // -2 = never sent (distinct from -1 = decoder has no window)
         std::string lastSentPs_, lastSentRt_;
         int lastSentPi_ = -2; int lastSentEcc_ = -1; bool lastSentStereo_ = false;
+        int lastSentTp_ = -2, lastSentTa_ = -2, lastSentAf_ = -2;
     };
 
     /** This server's own RDS — used only when there is NO per-client pipeline (the phone and Mac
@@ -7441,6 +7445,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsExtCb_(c->rdsS, c->vfoHz, c->owner, x); }
     static void cRdsSig(void* ctx, float relDb) {
         auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsSigCb_(c->rdsS, c->vfoHz, c->owner, relDb); }
+    static void cRdsFlags(void* ctx, int tp, int ta, int nAf) {
+        auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsFlagsCb_(c->rdsS, tp, ta, nAf); }
     static void cRdsBer(void* ctx, int percent) {
         auto* c = (ClientDsp*)ctx; if (c && c->owner) rdsBerCb_(c->rdsS, c->vfoHz, c->owner, percent); }
     static void cRdsEcc(void* ctx, uint8_t ecc) {
@@ -7577,6 +7583,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::mutex> lk(c->rdsS.rdsMtx);
             c->rdsS.rdsPsName.clear(); c->rdsS.rdsText.clear();
             c->rdsS.rdsPi = -1; c->rdsS.rdsEcc = 0; c->rdsS.rdsBer = -1; c->rdsS.rdsSig = -99.0f;
+            c->rdsS.rdsFlTp = c->rdsS.rdsFlTa = c->rdsS.rdsFlAf = -1;
             c->rdsS.stereoDetected.store(false);
             // ★★★ HAVING CLEARED IT, ASK FOR IT BACK. The pipeline reports stereo on a CHANGE,
             //     and a retune inside WFM does not rebuild the chain, so the pilot stays locked
@@ -7641,6 +7648,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             cb.rdsBer = &Impl::cRdsBer; cb.rdsSig  = &Impl::cRdsSig;
             cb.rdsExt = &Impl::cRdsExt; cb.rdsText = &Impl::cRdsText;
             cb.rdsEcc = &Impl::cRdsEcc; cb.stereo  = &Impl::cStereo;
+            cb.rdsFlags = &Impl::cRdsFlags;
             // ★ A small FFT: this pipeline exists to DEMODULATE. The waterfall everyone sees is
             //   the shared wide one, so paying for a per-client spectrum here would be paying
             //   twice for a picture nobody reads.
@@ -11094,6 +11102,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::lock_guard<std::mutex> lk(st.rdsMtx);
         st.rdsSig = relDb;
     }
+    static void rdsFlagsCb_(RdsState& st, int tp, int ta, int nAf) {
+        std::lock_guard<std::mutex> lk(st.rdsMtx);
+        st.rdsFlTp = tp; st.rdsFlTa = ta; st.rdsFlAf = nAf;
+    }
     static void rdsBerCb_(RdsState& st, double vfoHz, Impl* im, int percent) {
         std::lock_guard<std::mutex> lk(st.rdsMtx);
         st.rdsBer = percent;
@@ -11122,6 +11134,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto* t = (Impl*)ctx; rdsSigCb_(t->rdsS, 0, t, relDb); }
     static void rdsBerCb(void* ctx, int percent) {
         auto* t = (Impl*)ctx; rdsBerCb_(t->rdsS, 0, t, percent); }
+    static void rdsFlagsCb(void* ctx, int tp, int ta, int nAf) {
+        auto* t = (Impl*)ctx; rdsFlagsCb_(t->rdsS, tp, ta, nAf); }
     static void rdsEccCb(void* ctx, uint8_t ecc) {
         auto* t = (Impl*)ctx; rdsEccCb_(t->rdsS, 0, t, ecc); }
     static void stereoCb(void* ctx, bool locked) {
@@ -12165,6 +12179,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void teardownAudio() {
         std::lock_guard<std::mutex> lk(rdsS.rdsMtx);
         rdsS.rdsPsName.clear(); rdsS.rdsText.clear(); rdsS.rdsPi = -1; rdsS.rdsEcc = 0; rdsS.rdsBer = -1; rdsS.rdsSig = -99.0f;
+        rdsS.rdsFlTp = rdsS.rdsFlTa = rdsS.rdsFlAf = -1;
         rdsS.stereoDetected.store(false);
         // ★★★ AND ASK FOR IT BACK. The stereo report is EDGE-triggered and a retune inside the
         //     same mode does not rebuild the chain, so the pilot never unlocks and there is no
@@ -12261,6 +12276,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         cb.rdsBer   = &Impl::rdsBerCb;
         cb.rdsSig   = &Impl::rdsSigCb;
         cb.rdsExt   = &Impl::rdsExtCb;
+        cb.rdsFlags = &Impl::rdsFlagsCb;
         rx.setRdsExtWantedFlag(&rdsxOn);       // ★ the eye + deviation block costs ~16 % of vibe-dsp on a Cortex-A7 — only while somebody has Advanced RDS open
         // ★ The pipeline's optional worker threads (spectrum, demod — VIBE_DSP_THREADS=1) are real-time
         //   work like vibe-dsp itself, so they get its name-and-priority treatment, not the default.
@@ -12346,6 +12362,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *               See sendFmMetaAll(). */
     bool sendFmMeta(const std::shared_ptr<net::Socket>& sock, std::string* out = nullptr) {
         std::string ps, rt; int pi = -1, ecc = 0, ber = -1; float sig = -99.0f;
+        int tp = -1, ta = -1, afN = -1;
         // ★★★ THIS LISTENER'S MODE, not the shared one. `mode` is the shared pipeline's, which in
         //     per-client mode is whatever the server started in — so a listener who tuned WFM
         //     themselves was judged "not FM" and the whole RDS message was suppressed. RDS,
@@ -12369,6 +12386,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (wfm) {
             std::lock_guard<std::mutex> lk(R.rdsMtx);
             ps = R.rdsPsName; rt = R.rdsText; pi = R.rdsPi; ecc = R.rdsEcc; ber = R.rdsBer; sig = R.rdsSig;
+            tp = R.rdsFlTp; ta = R.rdsFlTa; afN = R.rdsFlAf;
         }
         // trim trailing spaces RDS pads with
         auto trim = [](std::string s){ size_t e = s.find_last_not_of(" \t\r\n"); return e==std::string::npos?std::string():s.substr(0,e+1); };
@@ -12390,14 +12408,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ps/rt), so this is safe to send at the 1 Hz metadata cadence.
         if (ps == R.lastSentPs_ && rt == R.lastSentRt_ && pi == R.lastSentPi_ && ecc == R.lastSentEcc_
             && st == R.lastSentStereo_ && ber == R.lastSentBer_
+            && tp == R.lastSentTp_ && ta == R.lastSentTa_ && afN == R.lastSentAf_
             && std::fabs(sig - R.lastSentSig_) < 0.5f) return false;
         R.lastSentPs_ = ps; R.lastSentRt_ = rt; R.lastSentPi_ = pi; R.lastSentEcc_ = ecc; R.lastSentStereo_ = st;
         R.lastSentBer_ = ber; R.lastSentSig_ = sig;
-        char buf[512];
-        snprintf(buf, sizeof buf,
-            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d,\"ber\":%d,\"sig\":%.1f}",
+        R.lastSentTp_ = tp; R.lastSentTa_ = ta; R.lastSentAf_ = afN;
+        /* ★★ tp / ta / af — the station strip's TP · TA · AF annunciators (2026-10-02). -1 = not yet known;
+         *  af is the COUNT of alternative frequencies the station lists. A client that sees the keys knows
+         *  this server can light them; an older server simply does not send them, and the strip shows none. */
+        char buf[640];
+        const int wrote = snprintf(buf, sizeof buf,
+            "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d,\"ber\":%d,\"sig\":%.1f,"
+            "\"tp\":%d,\"ta\":%d,\"af\":%d}",
             st ? "true" : "false",
-            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber, sig);
+            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber, sig, tp, ta, afN);
+        // ★ snprintf returns what it WANTED — a truncated JSON is a message the client silently drops.
+        if (wrote < 0 || wrote >= (int)sizeof buf) return false;
         sendText(sock, buf);
         if (out) *out = buf;
         return true;

@@ -2188,7 +2188,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabSpeed, setDabSpeed] = useState<number>(1);
   // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
   //   Advanced RDS instrument, which must show what is on air rather than what we display.
-  const [liveStation, setLiveStation] = useState<{ name?: string; psRaw?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number; sid?: string }>({});
+  const [liveStation, setLiveStation] = useState<{ name?: string; psRaw?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number; sid?: string;
+    rdsFlags?: { tp: boolean; ta: boolean; af: boolean } }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   /* ★★★ THE RDS NAME GOES THROUGH A STABILISER BEFORE ANYTHING SEES IT (Stuart, 2026-09-29: "the
@@ -5526,7 +5527,8 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  BER or signal-level move as a change, and neither is drawn here — so a steady station
          *  rebuilt this object every second and re-rendered the whole screen with it, for the
          *  entire time anyone listened to FM (power audit, 2026-10-01). */
-        const nextLive = { name: stationName, psRaw: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc };
+        const nextLive = { name: stationName, psRaw: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc,
+                           rdsFlags: meta.rdsFlags };
         setLiveStation((cur) => keepIfSameStation(cur, nextLive));
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
         // meta.programmes is the full cached list (DAB) or [] (explicit clear);
@@ -8778,7 +8780,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     const wfm = status.mode === 'wfm' && !dabOn;
     const flag = wfm && validIso(liveStation.countryIso) ? isoToFlag(liveStation.countryIso) : undefined;
     const logoUrl = wfm ? (liveLogo ?? undefined) : undefined;
-    const composite = `${vtsId}|${display}|${rt ?? ''}|${flag ?? ''}|${logoUrl ?? ''}`;
+    /* ★★ TP · TA · AF (the car-stereo annunciators, 2026-10-02) — only on an FM RDS station whose backend
+     *  can light them (liveStation.rdsFlags is present only then). ★ NEVER ON OPENWEBRX, by name and on
+     *  purpose: Stuart, 2026-10-02 — OWRX is "the only supported server type with super-basic RDS (no
+     *  TP/TA/AF available)", so a cluster there could never light; this is the rule, not missing data.
+     *  The HF-only backends (UberSDR, Kiwi) never reach FM, so never have an RDS station to show it on. */
+    const annunciators = wfm && !isOwrx && liveStation.rdsFlags ? liveStation.rdsFlags : undefined;
+    const composite = `${vtsId}|${display}|${rt ?? ''}|${flag ?? ''}|${logoUrl ?? ''}`
+      + `|${annunciators ? `${+annunciators.tp}${+annunciators.ta}${+annunciators.af}` : ''}`;
     // ★ Deferred, not dropped — see vtsNoticeUntil. vtsLastStation is deliberately NOT updated
     //   here, so the next RDS tick after the notice ends still counts as a change and the station
     //   name appears then.
@@ -8789,10 +8798,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       // Live server data (RDS/DMR/DAB) holds on screen until it changes/clears
       // — only the static bookmark/band notifs time out. Badge flags the source.
       setVtsNotif({ key: vtsKey.current, name: display, rt, id: vtsId || undefined, idLabel: isDab ? 'SId' : 'PI',
-                    kind: 'station-on', hold: true, badge: liveBadgeRef.current ?? (vtsId ? 'RDS' : undefined), flag, logoUrl });
+                    kind: 'station-on', hold: true, badge: liveBadgeRef.current ?? (vtsId ? 'RDS' : undefined), flag, logoUrl,
+                    annunciators });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveStation.pi, liveStation.sid, liveLogo, status.mode, dabOn,
+  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveStation.pi, liveStation.sid, liveStation.rdsFlags, liveLogo, status.mode, dabOn,
       vtsNoticeEnded]);
   // ★ …and the bookmark you are parked on, once a notice has had its turn (see vtsNoticeEnded).
   //   vtsCheck hands over to the effect above itself when a live station owns the bar.

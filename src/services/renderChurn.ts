@@ -22,6 +22,8 @@ export interface LiveStationLike {
   countryIso?: string; pi?: string; ecc?: number;
   /** DAB service ID as hex ("C6D6") — DAB's identity in the VTS line, never an RDS PI. */
   sid?: string;
+  /** TP · TA · AF for the station strip (StationMeta.rdsFlags) — absent where the backend cannot know. */
+  rdsFlags?: { tp: boolean; ta: boolean; af: boolean };
 }
 
 /** True when two live-station labels would draw identically. Every field is compared, so adding
@@ -29,7 +31,9 @@ export interface LiveStationLike {
  *  explicit list rather than a generic shallow compare that a new field could slip past. */
 export function sameLiveStation(a: LiveStationLike, b: LiveStationLike): boolean {
   return a.name === b.name && a.psRaw === b.psRaw && a.text === b.text && a.badge === b.badge
-    && a.countryIso === b.countryIso && a.pi === b.pi && a.ecc === b.ecc && a.sid === b.sid;
+    && a.countryIso === b.countryIso && a.pi === b.pi && a.ecc === b.ecc && a.sid === b.sid
+    && a.rdsFlags?.tp === b.rdsFlags?.tp && a.rdsFlags?.ta === b.rdsFlags?.ta && a.rdsFlags?.af === b.rdsFlags?.af
+    && !!a.rdsFlags === !!b.rdsFlags;
 }
 
 /** Hand back `prev` when `next` says nothing new — for a functional setState. */

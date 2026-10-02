@@ -2107,6 +2107,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // an assumption. A Spanish station on sporadic-E has a nibble inconsistent with a
       // British receiver, so it resolves to nothing rather than to a wrong flag.
       rdsPi = m.pi;
+      rdsFlags = m.flags ?? null;
       rdsBer = m.ber;
       rdsSig = m.sig;
       rdsEcc = m.ecc || 0;
@@ -3257,6 +3258,8 @@ let rdsFreq = -1;
 // learned station and the FM-DX dial are all keyed on. Storing it inside the name meant
 // throwing away a confirmed identity for want of a label (Stuart, 2026-07-26).
 let rdsPi = -1;
+/** ★ TP · TA · AF from the server (RdsMeta.flags), or null when it does not send them. */
+let rdsFlags: { tp: boolean; ta: boolean; af: boolean } | null = null;
 /** ★ Whether the deviation readout is currently answering — latched, with hysteresis, so a
  *  station sitting near the S/N threshold does not make it blink. See the note at its use. */
 let devGateOpen = false;
@@ -3280,7 +3283,7 @@ function expireRdsIfRetuned() {
   resetPsStab();
   rdsLogoProvisional = false;
   logoFromIdentity = false;
-  rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null;
+  rdsPi = -1; rdsBer = -1; rdsSig = -99; rdsExt = null; rdsFlags = null;
   grpRate = 0; grpPrev = { tot: 0, at: 0 }; rdsEcc = 0;
   rdsFreq = -1;
 }
@@ -3841,7 +3844,7 @@ function updateVts() {
       applyVtsScroll(false);
       setDecBoxOffset();
     }
-    for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi'])
+    for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi', 'vtsAnn'])
       ($(id) as HTMLElement).style.display = 'none';
     setClass(vts, 'show', true);
     setClass(vts, 'on', false);
@@ -3858,7 +3861,7 @@ function updateVts() {
    *   has passed, so it can say so without depending on which timer survived. */
   if (vtsNoticeKey) { vtsNoticeKey = ''; vtsNoticeSized = false; vtsPumpNotices(); }
   vtsRenderedMsg = null;
-  for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi'])
+  for (const id of ['vtsRds', 'vtsSrc', 'vtsLogo', 'vtsFlag', 'vtsPi', 'vtsAnn'])
     ($(id) as HTMLElement).style.removeProperty('display');
 
   if (!name) {
@@ -3966,6 +3969,13 @@ function updateVts() {
   const haveRds = !inDab && (!!rdsName || rdsPi > 0);
   const rdsEl = $('vtsRds');
   rdsEl.classList.toggle('show', haveRds);
+  // ★★ TP · TA · AF — with the RDS mark, and only when this server sends them (see RdsMeta.flags).
+  const annEl = $('vtsAnn');
+  annEl.classList.toggle('show', haveRds && !!rdsFlags);
+  if (rdsFlags) for (const svg of Array.from(annEl.children) as HTMLElement[]) {
+    const k = svg.getAttribute('data-a') as 'tp' | 'ta' | 'af';
+    svg.classList.toggle('on', !!rdsFlags[k]);
+  }
   // ★ Block error rate on the badge, so RDS quality is a NUMBER rather than an opinion.
   // Errors are counted BEFORE correction, over the last 12 groups (as redsea defines
   // it), so it describes the link and not how hard the decoder worked — which is the

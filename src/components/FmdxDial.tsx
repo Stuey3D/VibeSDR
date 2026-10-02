@@ -34,9 +34,9 @@ export const DIAL_MAX = 300;
 
 // Match the VFO drum's LED palette: green digits (hue 120), warm red needle
 // (hue 4), on a near-black face.
-const GREEN      = 'hsl(120,100%,45%)';
-const GREEN_DIM  = 'hsla(120,100%,45%,0.28)';
-const GREEN_SOFT = 'hsla(120,100%,55%,0.92)';
+const GREEN_DEF      = 'hsl(120,100%,45%)';
+const GREEN_DIM_DEF  = 'hsla(120,100%,45%,0.28)';
+const GREEN_SOFT_DEF = 'hsla(120,100%,55%,0.92)';
 const RED        = 'hsl(4,95%,52%)';
 const FACE       = '#070806';
 
@@ -51,11 +51,18 @@ interface Props {
   /** Controlled zoom/pan window (so the zoom drum can drive it too). */
   view:         { lo: number; hi: number };
   onViewChange: (v: { lo: number; hi: number }) => void;
+  /** ★ The faceplate's display colour as an rgb triplet ('70,150,255') — the scale, its ticks and the
+   *  station names take it (Stuart, 2026-10-02: the FM-DX screen follows the colour scheme). Absent =
+   *  today's phosphor green. The tuned station and the needle stay RED: the pointer of a real dial. */
+  ink?: string;
 }
 
 const MIN_SPAN = 2_000_000;   // max zoom-in = 2 MHz visible
 
-function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, view, onViewChange }: Props) {
+function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, view, onViewChange, ink }: Props) {
+  const GREEN      = ink ? `rgba(${ink},1)`    : GREEN_DEF;
+  const GREEN_DIM  = ink ? `rgba(${ink},0.28)` : GREEN_DIM_DEF;
+  const GREEN_SOFT = ink ? `rgba(${ink},0.92)` : GREEN_SOFT_DEF;
   const [w, setW] = useState(0);
   const onLayout = (e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width);
   const fullSpan = Math.max(1, hiHz - loHz);

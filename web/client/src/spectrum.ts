@@ -100,6 +100,8 @@ export interface RdsMeta {
   ber: number;
   /** Recovered 57 kHz level relative to the pilot, dB (-99 = nothing). */
   sig: number;
+  /** ★ TP · TA · AF for the station bar (servers from B17). Absent = this server cannot say. */
+  flags?: { tp: boolean; ta: boolean; af: boolean };
 }
 
 /** The fields the normal RDS path discards, plus the constellation. */
@@ -1185,6 +1187,8 @@ export class SpectrumClient {
           pi: typeof msg.pi === 'number' ? msg.pi : -1, ecc: typeof msg.ecc === 'number' ? msg.ecc : 0,
           ber: typeof msg.ber === 'number' ? msg.ber : -1,
           sig: typeof msg.sig === 'number' ? msg.sig : -99,
+          flags: typeof msg.tp === 'number' && typeof msg.ta === 'number' && typeof msg.af === 'number'
+            ? { tp: msg.tp === 1, ta: msg.ta === 1, af: msg.af > 0 } : undefined,
         });
         break;
       case 'dial':

@@ -21,6 +21,9 @@ import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { watchProvider } from '../services/watchProvider';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
+import VTSBar, { type VtsNotifData } from '../components/VTSBar';
+import { useFaceplate } from '../contexts/FaceplateContext';
+import { rgba } from '../constants/faceplate';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
 import { dialKeyFor, pruneDial, stampUndatedDial } from '../services/dialSync';
@@ -98,8 +101,27 @@ let fmdxNoticeShownThisSession = false;
 
 export default function TunerScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName } = route.params;
-  const { theme } = useTheme();
+  const { theme: baseTheme } = useTheme();
   const insets = useSafeAreaInsets();
+  /* ★★★ THE FM-DX SCREEN FOLLOWS THE COLOUR SCHEME (Stuart, 2026-10-02, a blue VCR deck under a green and
+   *  yellow screen). On silver / black it takes the faceplate's DISPLAY text colour — the same resolved
+   *  colour the VTS and the deck's readouts light in, neon under Nixie (resolveTextColour) — for its text,
+   *  chips and borders, and the dial's scale. The default chassis keeps today's theme exactly (§13.1).
+   *  ★ Meaning colours stay: the favourite heart, the red errors and paused banner, the dial's red pointer. */
+  const fp = useFaceplate();
+  const skinned = fp.settings.chassis !== 'default';
+  const theme = useMemo<ThemeTokens>(() => {
+    if (!skinned) return baseTheme;
+    const tx = fp.text;
+    return {
+      ...baseTheme,
+      freqColor: tx.hot, btnText: tx.hot, btnActiveText: tx.core, snrColor: tx.core,
+      sectionColor: rgba(tx.rgb, 0.75), unitColor: rgba(tx.rgb, 0.62),
+      btnBorder: rgba(tx.rgb, 0.35), btnActiveBdr: rgba(tx.rgb, 0.8), btnActiveBg: rgba(tx.rgb, 0.14),
+      barBorder: rgba(tx.rgb, 0.25),
+    };
+  }, [baseTheme, skinned, fp.text]);
+  const dialInk = skinned ? fp.text.rgb : undefined;
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
   const backendRef = useRef<SDRBackend | null>(null);
@@ -286,7 +308,8 @@ export default function TunerScreen({ route, navigation }: Props) {
       return { lo, hi };
     });
   }, [displayFreq, fmLo, fmHi]);
-  const [bottomH, setBottomH] = useState(0);   // measured VTS+island height → ScrollView bottom padding
+  const [bottomH, setBottomH] = useState(0);   // measured island height (+ its bottom margin) → padding + VTS position
+  const [vtsH, setVtsH] = useState(0);         // the VTS strip's own height (VTSBar onHeight)
   const [forcedMono, setForcedMono] = useState(false);
   const [demodOpen, setDemodOpen] = useState(false);
   const [stepOpen, setStepOpen] = useState(false);
@@ -975,7 +998,27 @@ export default function TunerScreen({ route, navigation }: Props) {
 
   const ps = st?.ps?.trim() || (paused ? 'Paused' : connected ? '' : 'Connecting…');
   const resumeFromPause = useCallback(() => { (VibePowerModule as any)?.setMuted?.(false); }, []);
-  const monogram = (st?.ps?.trim() || '?').slice(0, 3).toUpperCase();
+  /* ★★★ THE STATION STRIP IS THE APP'S OWN VTS (Stuart, 2026-10-02: "make the bottom card part of the VTS
+   *  instead so it matches the main theme"). It replaces the FM-DX card (logo · flag · name · ST/TP/TA ·
+   *  RadioText): the VTS draws PI / name / RadioText in the faceplate's own style (a VFD strip on dot /
+   *  seg, the logo and flag on the others), and FM-DX — which knows all three — lights the car-stereo
+   *  TP · TA · AF legends on its right. ★ ST is NOT carried over: the stereo rings beside WFM on the deck
+   *  already say it (Stuart). Live data, so it HOLDS; a new key only when something drawn changes. */
+  const vtsKeyRef = useRef(0);
+  const vtsLastRef = useRef('');
+  const vtsNotif = useMemo<VtsNotifData | null>(() => {
+    const name = st?.ps?.trim() ?? '';
+    const pi = st?.pi || '';
+    const rt = st?.rt ? st.rt.replace(/\s{2,}/g, ' ').trim() : '';
+    if (!st || (!name && !pi && !rt)) return null;
+    const iso = countryOf(st);
+    const flag = isoToFlag(iso) || undefined;
+    const ann = { tp: !!st.tp, ta: !!st.ta, af: (st.af?.length ?? 0) > 0 };
+    const sig = `${pi}|${name}|${rt}|${flag ?? ''}|${logo ?? ''}|${+ann.tp}${+ann.ta}${+ann.af}`;
+    if (sig !== vtsLastRef.current) { vtsLastRef.current = sig; vtsKeyRef.current++; }
+    return { key: vtsKeyRef.current, name, rt: rt || undefined, id: pi || undefined, idLabel: 'PI',
+             kind: 'station-on', hold: true, badge: 'RDS', flag, logoUrl: logo ?? undefined, annunciators: ann };
+  }, [st, logo]);
   const sigNorm = Math.min(1, Math.max(0, (st?.sig ?? 0) / 70));
 
   return (
@@ -1020,7 +1063,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + bottomH, paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + bottomH + (vtsH ? vtsH + 8 : 0), paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
 
         {/* Vintage tuning dial — every RDS name we decode is pinned to its freq */}
@@ -1031,6 +1074,7 @@ export default function TunerScreen({ route, navigation }: Props) {
           stations={dialStations}
           onTune={onDialTune}
           theme={theme}
+          ink={dialInk}
           view={dialView}
           onViewChange={setDialView}
         />
@@ -1108,30 +1152,13 @@ export default function TunerScreen({ route, navigation }: Props) {
           controls were built to overlay a fixed-fill area, not sit in flex flow
           (which was clipping the island to 59px). onLayout feeds the ScrollView's
           bottom padding so nothing hides behind them. */}
+      {/* ★ The station strip — the app's VTS, floating just above the island exactly as on the SDR screen. */}
+      <VTSBar notif={vtsNotif} bottom={bottomH + 8} serverType="fmdx" onHeight={setVtsH}
+        freqLabel={`${(displayFreq / 1e6).toFixed(3)} MHz`} />
       <View
         onLayout={(e) => setBottomH(e.nativeEvent.layout.height)}
         style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}
       >
-      <View style={[styles.vts, { marginLeft: 14 + insets.left, marginRight: 14 + insets.right }]}>
-        <View style={styles.vtsLogo}>
-          {logo
-            ? <Image source={{ uri: logo }} style={styles.vtsLogoImg} resizeMode="contain" />
-            : <Text style={styles.vtsMono}>{monogram}</Text>}
-        </View>
-        <View style={{ flex: 1 }}>
-          <View style={styles.vtsTopRow}>
-            {!!isoToFlag(countryOf(st)) && <Text style={styles.vtsFlag}>{isoToFlag(countryOf(st))}</Text>}
-            <Text style={styles.vtsName} numberOfLines={1}>{ps || '—'}</Text>
-            {st?.stereo && <Pill label="ST" on styles={styles} />}
-            {st?.tp && <Pill label="TP" on styles={styles} />}
-            {st?.ta && <Pill label="TA" on styles={styles} />}
-          </View>
-          {!!st?.rt?.trim() && (
-            <Text style={styles.vtsRt} numberOfLines={1}>{st.rt.replace(/\s{2,}/g, ' ').trim()}</Text>
-          )}
-        </View>
-      </View>
-
       {/* The app's real control island — wrapped exactly like SDRScreen's
           pillWrap (inset 8px each side, bottom = safe-area + 8; bar's own
           bottomInset is 0 so the rounded corners aren't clipped). */}
@@ -1313,13 +1340,6 @@ function OptToggle({ label, on, onPress, styles, navOn }: { label: string; on: b
   );
 }
 
-function Pill({ label, on, styles }: { label: string; on?: boolean; styles: any }) {
-  return (
-    <View style={[styles.pill, on && styles.pillOn]}>
-      <Text style={[styles.pillTxt, on && styles.pillTxtOn]}>{label}</Text>
-    </View>
-  );
-}
 
 function makeStyles(t: ThemeTokens) {
   const F = t.font;
@@ -1349,11 +1369,6 @@ function makeStyles(t: ThemeTokens) {
     logo: { width: 68, height: 68 },
     monogram: { color: t.btnActiveText, fontFamily: F, fontSize: 22, fontWeight: 'bold' },
     station: { color: t.freqColor, fontFamily: F, fontSize: 22, fontWeight: 'bold' },
-    pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-    pill: { borderColor: t.btnBorder, borderWidth: 1, borderRadius: 5, paddingHorizontal: 8, paddingVertical: 4, backgroundColor: t.btnBg },
-    pillOn: { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
-    pillTxt: { color: t.unitColor, fontFamily: F, fontSize: 10, fontWeight: 'bold', letterSpacing: 1 },
-    pillTxtOn: { color: t.btnActiveText },
     metaRow: { flexDirection: 'row', gap: 12 },
     metaCell: { flex: 1 },
     metaLabel: { color: t.sectionColor, fontFamily: F, fontSize: 11, fontWeight: 'bold', letterSpacing: 2, marginBottom: 4 },
@@ -1365,11 +1380,6 @@ function makeStyles(t: ThemeTokens) {
     txName: { color: t.freqColor, fontFamily: F, fontSize: 15, fontWeight: 'bold', marginTop: 2 },
     txMeta: { color: t.unitColor, fontFamily: F, fontSize: 12, marginTop: 3 },
     af: { color: t.freqColor, fontFamily: F, fontSize: 15, marginTop: 4, letterSpacing: 1 },
-    vts: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 14, marginBottom: 6, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: t.barBg, borderRadius: 12, borderWidth: 1, borderColor: t.barBorder },
-    vtsLogo: { width: 40, height: 40, borderRadius: 8, backgroundColor: t.pillBg, borderWidth: 1, borderColor: t.barBorder, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-    vtsLogoImg: { width: 38, height: 38 },
-    vtsMono: { color: t.btnActiveText, fontFamily: F, fontSize: 14, fontWeight: 'bold' },
-    vtsTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     noticeBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 26 },
     noticeCard: { backgroundColor: '#14141f', borderRadius: 16, borderWidth: 1, borderColor: t.btnActiveBdr, padding: 22 },
     noticeTitle: { color: t.btnActiveText, fontFamily: F, fontSize: 14, fontWeight: 'bold', letterSpacing: 2, marginBottom: 12, textAlign: 'center' },
@@ -1395,9 +1405,6 @@ function makeStyles(t: ThemeTokens) {
     antBtnTxtOn: { color: t.btnActiveText, fontWeight: 'bold' },
     sheetClose: { marginTop: 14, alignItems: 'center', paddingVertical: 12, borderRadius: 8, borderWidth: 1, borderColor: t.btnBorder },
     sheetCloseTxt: { color: t.freqColor, fontFamily: F, fontSize: 14, fontWeight: 'bold', letterSpacing: 1 },
-    vtsFlag: { fontSize: 18 },
-    vtsName: { color: t.freqColor, fontFamily: F, fontSize: 17, fontWeight: 'bold', flexShrink: 1 },
-    vtsRt: { color: t.unitColor, fontFamily: F, fontSize: 12, marginTop: 1 },
     afRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
     afChip: { backgroundColor: t.btnBg, borderWidth: 1, borderColor: t.btnBorder, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 7 },
     afChipTxt: { color: t.btnActiveText, fontFamily: F, fontSize: 15, fontWeight: 'bold' },

@@ -2108,7 +2108,12 @@ export abstract class VibeServerWsClient {
       const pi = typeof msg.pi === 'number' && msg.pi >= 0
         ? msg.pi.toString(16).toUpperCase().padStart(4, '0') : undefined;
       const ecc = typeof msg.ecc === 'number' && msg.ecc > 0 ? msg.ecc : undefined;
+      // ★ TP · TA · AF (servers from B17): the KEYS being present is what says this server can light
+      //   them; -1 = not decoded yet, drawn dark. An older server sends none → no cluster.
+      const rdsFlags = typeof msg.tp === 'number' && typeof msg.ta === 'number' && typeof msg.af === 'number'
+        ? { tp: msg.tp === 1, ta: msg.ta === 1, af: msg.af > 0 } : undefined;
       (this.callbacks as any).onMetadata?.({
+        rdsFlags,
         stationName: ps || undefined,
         text: rt || undefined,
         // ★ Badge on ANY decoded RDS, not just a name — a text-only frame is still RDS, and

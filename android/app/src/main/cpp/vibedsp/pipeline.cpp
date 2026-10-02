@@ -1,4 +1,5 @@
 // VibeSDR V5 — RxPipeline: IQ -> {spectrum, audio}. Original VibeSDR code.
+#include <chrono>
 #include "vibedsp.h"
 #if defined(__linux__)
 #include <pthread.h>
@@ -1352,7 +1353,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
             // actually listening for RDS — that is a third of the PLL's per-sample
             // work, and with no subscriber it was being computed and thrown away.
             const bool wantRds = rdsEnabled_.load(std::memory_order_relaxed)
-                              && (cb_.rdsPs || cb_.rdsText || cb_.rdsPi || cb_.rdsSig || cb_.rdsExt);
+                              && (cb_.rdsPs || cb_.rdsText || cb_.rdsPi || cb_.rdsSig || cb_.rdsExt || cb_.rdsFlags);
             lprBuf_.assign(demodBuf_.begin(), demodBuf_.begin() + nc);   // L+R = MPX
             lmrBuf_.resize(nc);
             if (wantRds) { ref57Buf_.resize(nc); ref57qBuf_.resize(nc); bitClkBuf_.resize(nc); }
@@ -1384,6 +1385,22 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                 cb_.rdsBer(cb_.ctx, pll_.trackable() ? rdsDemod_.blockErrorPercent() : -1);
             if (wantRds && cb_.rdsSig)
                 cb_.rdsSig(cb_.ctx, rdsDemod_.subcarrierRelDb());
+            /* ★★ TP · TA · AF FOR THE STATION STRIP — see Callbacks::rdsFlags. At most every 250 ms, and only
+             *  when one of them changed. mergedAf() refreshes the sticky aggregate, so it runs first. */
+            if (wantRds && cb_.rdsFlags) {
+                const double now = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                if (now - rdsFlagAt_ >= 0.25) {
+                    rdsFlagAt_ = now;
+                    int afTmp[RdsDecoder::kMaxAf]; int afSeenTmp = 0;
+                    const int nAf = rdsDemod_.mergedAf(afTmp, RdsDecoder::kMaxAf, &afSeenTmp);
+                    const RdsDemod::Agg& ag = rdsDemod_.aggregate();
+                    if (ag.tp != rdsFlagTp_ || ag.ta != rdsFlagTa_ || nAf != rdsFlagAf_) {
+                        rdsFlagTp_ = ag.tp; rdsFlagTa_ = ag.ta; rdsFlagAf_ = nAf;
+                        cb_.rdsFlags(cb_.ctx, ag.tp, ag.ta, nAf);
+                    }
+                }
+            }
             if (wantRds && cb_.rdsExt && rdsExtWanted) {
                 const RdsDecoder* d = rdsDemod_.best();
                 float xy[RdsDemod::kConstPts * 2];

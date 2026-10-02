@@ -316,6 +316,10 @@ export interface StationMeta {
   pi?: string;
   /** ISO country (RDS ECC-derived, or receiver-location fallback) — flag + logo. */
   countryIso?: string;
+  /** ★★ The station strip's TP · TA · AF annunciators (2026-10-02). PRESENT only when this backend can
+   *  light them (a VibeServer from B17, which sends tp/ta/af on every RDS line) — absent = draw no
+   *  cluster at all, never a permanently dark one. `af` = the station lists alternative frequencies. */
+  rdsFlags?: { tp: boolean; ta: boolean; af: boolean };
 }
 
 /** Additive callbacks for v3 backends — UI ignores when absent. */
