@@ -11,7 +11,7 @@ import {
   toSegCells, segCellCount, segGhost, segCellList, foldForSeg, foldForDot, foldToAscii, dotoHas,
   toUpperDisplay, flagToIso, foldIsUsable, displayOrFallback, setTransliterator, SEG_BLANK,
   toSegRun, vfdStripText, cellWindow, steppedOffset, statusGainParts, statusGainText, STATUS_DIRECT_SAMPLE, transliterateNonLatin,
-  TRANSLIT_CACHE_MAX,
+  TRANSLIT_CACHE_MAX, vfdFreqCells,
 } from '../src/constants/displayText.ts';
 
 let fails = 0, passes = 0;
@@ -200,6 +200,17 @@ eq('on the tuner → the gain as written', statusGainText('GAIN ↓ 25.4 dB', 0)
 eq('unknown (−1 / absent) → the gain as written', [statusGainText('AGC', -1), statusGainText('AGC', undefined)], ['AGC', 'AGC']);
 eq('"Direct Sample" is not parsed as a gain reading', statusGainParts(STATUS_DIRECT_SAMPLE), null);
 ok('Doto really has no arrow to draw it with', !dotoHas('↓') && !dotoHas('↑'));
+
+// ── The VCR frequency readout: Hz digits dark until in use, the core centred (2026-10-02) ──────────
+eq('VCR MHz: 104.200000 shows 104.200, Hz cells dark, centred', vfdFreqCells('104.200000', 'MHz'), '   104.200   ');
+eq('VCR MHz: a Hz digit in use lights, nothing moves', vfdFreqCells('104.200500', 'MHz'), '   104.2005  ');
+eq('VCR MHz: every Hz digit in use', vfdFreqCells('104.200501', 'MHz'), '   104.200501');
+eq('VCR MHz: same cell count whatever is lit', vfdFreqCells('104.200501', 'MHz').length, vfdFreqCells('104.200000', 'MHz').length);
+eq('VCR kHz: whole kHz figure lit, point dark with the Hz', vfdFreqCells('1250.000', 'kHz'), '   1250   ');
+eq('VCR kHz: 7074.5', vfdFreqCells('7074.500', 'kHz'), '   7074.5  ');
+eq('VCR: thousands commas ignored', vfdFreqCells('1,296.000000', 'MHz'), '   1296.000   ');
+eq('VCR: Hz unit untouched', vfdFreqCells('14230000', 'Hz'), '14230000');
+eq('VCR: the FM screen (no Hz digits) untouched', vfdFreqCells('96.600', 'MHz'), '96.600');
 
 void SEG_BLANK;
 console.log(`faceplate text: ${passes} passed, ${fails} failed`);

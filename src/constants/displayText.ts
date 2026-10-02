@@ -530,3 +530,31 @@ export function steppedOffset(ms: number, count: number, n: number, loop: boolea
   if (t < VFD_PAUSE_MS) return 0;
   return Math.min(travel, Math.floor((t - VFD_PAUSE_MS) / VFD_STEP_MS) + 1);
 }
+
+/**
+ * ★★★ THE VCR FREQUENCY READOUT'S CELLS (Stuart, 2026-10-02: "about 3 extra 0's that are a bit distracting
+ * … centre the display as 104.200 and have the faded VFD numbers on either side that light up when in
+ * use"). Returns the text SegDigits draws, where a SPACE is a cell left unlit (its ghost segments show).
+ *   MHz  104.200000 → "   104.200   "     the Hz digits stay dark until they are in use;
+ *        104.200500 → "   104.2005  "     …and light from the left as they are;
+ *   kHz  1250.000   → "   1250   "        Hz digits dark, and the point with them;
+ *        7074.500   → "   7074.5  "
+ * ★ FIXED CELLS. Lighting a digit never moves one: the Hz digits sit in cells that were always there.
+ *   The equal run of dark cells on the LEFT is what keeps the always-lit core (MHz to the kHz digit, or
+ *   the whole kHz figure) CENTRED in the window — the readout only re-centres when the count of MHz/kHz
+ *   digits changes (99.9 → 100.0), as it always has.
+ * ★ Anything else (Hz unit, no decimal point, letters) is returned untouched.
+ */
+export function vfdFreqCells(text: string, unit: string): string {
+  const u = unit.toLowerCase();
+  const m = /^(\d+)\.(\d+)$/.exec(text.replace(/,/g, '').trim());
+  if (!m || (u !== 'mhz' && u !== 'khz')) return text;
+  const [, int, frac] = m;
+  const always = u === 'mhz' ? Math.min(3, frac.length) : 0;   // MHz keeps its kHz digits lit
+  let used = always;
+  for (let i = frac.length - 1; i >= always; i--) if (frac[i] !== '0') { used = i + 1; break; }
+  const dark = frac.length - always;                             // the Hz cells, lit or not
+  const lead = ' '.repeat(dark);
+  const tail = ' '.repeat(frac.length - used);
+  return used > 0 ? `${lead}${int}.${frac.slice(0, used)}${tail}` : `${lead}${int}${tail}`;
+}

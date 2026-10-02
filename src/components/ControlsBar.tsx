@@ -57,7 +57,7 @@ import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/facepl
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
-import { statusGainParts, statusGainText, statusFit, statusState, type StatusItem, type StatusRowSpec } from '../constants/displayText';
+import { statusGainParts, statusGainText, statusFit, statusState, vfdFreqCells, type StatusItem, type StatusRowSpec } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
 /**
@@ -890,7 +890,9 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
       ) : (
         // ★★ CENTRED, airband included (Stuart): the airband label's width is FIXED above (tagW), so it
         //    can no longer push the digits about as you tune.
-        <SegDigits text={freqStr.replace(/,/g, '')} rgb={dk.rgb} core={dk.core} glow={dk.glow}
+        // ★ vfdFreqCells: the Hz digits stay dark until they are in use, with as many dark cells on the
+        //   left, so 104.200 sits centred — not 104.200000 (Stuart, 2026-10-02).
+        <SegDigits text={vfdFreqCells(freqStr, unit)} rgb={dk.rgb} core={dk.core} glow={dk.glow}
           designH={segH} style={cellBox} align="center" />
       )}
       {label}
