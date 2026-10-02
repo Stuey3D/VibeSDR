@@ -94,6 +94,22 @@ import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
 } from '../../../src/services/vtsLine';
 
+/* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
+ *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
+ *  wall — MAIN (radio body, handle, "dab") and PLUS (the "+]"). DAB+ (AAC) lights both; MP2 or a codec not
+ *  yet known leaves the "+]" faint, an unlit electrode. Same width either way, so the name never moves.
+ *  Replaces the plain "DAB" source tag. ★ Third-party artwork — see src/components/DabMark.tsx's header
+ *  and assets/branding/dabplus/README.md before changing how it is drawn. */
+const DAB_MARK_D = (DABPLUS_LOGO_SVG.match(/<path d="([^"]+)"/) || ['', ''])[1];
+function dabMarkSvg(plus: boolean): string {
+  return `<svg class="dabmark${plus ? ' plus' : ''}" viewBox="0 0 100 59" role="img" aria-label="${plus ? 'DAB+' : 'DAB'}">`
+    + '<defs><clipPath id="dabMk"><path d="M0,0H100V16.5H66.4V59H0Z"/></clipPath>'
+    + '<clipPath id="dabPl"><rect x="67.4" y="16.5" width="40" height="50"/></clipPath></defs>'
+    + `<path class="dm" d="${DAB_MARK_D}" clip-path="url(#dabMk)"/>`
+    + `<path class="dp" d="${DAB_MARK_D}" clip-path="url(#dabPl)"/></svg>`;
+}
+
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 // ★ NO FM-DX. It briefly sat next to WFM, widening the channel filter to recover RDS subcarrier
@@ -3769,7 +3785,7 @@ function updateVts() {
   if (dabOn && dabState && dabState.sid) {
     const sv = dabState.services.find(x => x.sid === dabState!.sid);
     if (sv) {
-      name = sv.label; src = 'DAB'; dabSvcSid = sv.sid;
+      name = sv.label; src = dabMarkSvg(sv.codec === 'DAB+'); dabSvcSid = sv.sid;
       const ecc = sv.ecc ?? dabState.ecc ?? -1;
       /* ★ Same order as the station list: RadioDNS, then the multiplex's own carousel, then the
        *  picture the station transmits. The bar used to show a blank tile for a station whose
@@ -4007,8 +4023,9 @@ function updateVts() {
   const srcEl = $('vtsSrc');
   // innerHTML, not textContent: the source mark is an inline SVG glyph now, and
   // textContent would print the markup as literal text.
-  srcEl.innerHTML = src;
+  if (srcEl.innerHTML !== src) srcEl.innerHTML = src;
   srcEl.classList.toggle('show', !!src && !haveRds);
+  srcEl.classList.toggle('dabmark', src.startsWith('<svg class="dabmark'));
 
   const logoEl = $<HTMLImageElement>('vtsLogo');
   if (logo) {

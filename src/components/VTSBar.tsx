@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import AnnunciatorLegend from './AnnunciatorLegend';
 import RdsMark from './RdsMark';
+import DabMark from './DabMark';
 import SectionIcon from './SectionIcon';
 import { GhostGrid } from './VfdParts';
 import { rgba, FONT_HYPER, FONT_DOTO, FONT_SEG14 } from '../constants/faceplate';
@@ -66,6 +67,10 @@ export interface VtsNotifData {
    *    annunciator that can never light reads as a broken feature (AGENTS.md). Today: FM-DX. A
    *    VibeServer's plain RDS line carries none of the three (they ride the Advanced RDS stream). */
   annunciators?: { tp: boolean; ta: boolean; af: boolean };
+  /** ★★ A DAB SERVICE (2026-10-02): the DabMark takes the RDS mark's slot (no RDS mark, no green "DAB"
+   *  pill). `plus` = the service is DAB+ (AAC) — the "+]" group is drawn; false (MP2 / not yet known)
+   *  keeps its room but draws MAIN only. */
+  dab?: { plus: boolean };
 }
 
 const NOTIF_MS = 8000;
@@ -280,23 +285,31 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
             bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
             ★ On a VFD (dot / seg) the RDS annunciator is part of the GLASS: always there, lit only
               on RDS; a colour station logo or a flag emoji cannot exist there (§7.1). */}
+        {/* ★★ IN DAB THE DAB MARK TAKES THE RDS MARK'S SLOT — in every style. There is no RDS on a DAB
+            service, so a dark RDS annunciator beside it said nothing, and the green "DAB" pill that stood
+            in for it belonged to no display style (Stuart, 2026-10-02). */}
         {vfd && (
           <View style={styles.vfdMarks}>
-            <RdsMark kind="picto" height={13} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)}
-              lit={shown.badge === 'RDS'} />
+            {shown.dab
+              ? <DabMark kind="picto" height={15} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)} plus={shown.dab.plus} />
+              : <RdsMark kind="picto" height={13} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)}
+                  lit={shown.badge === 'RDS'} />}
             <VfdIso style={COL.style as 'dot' | 'seg'} code={flagToIso(shown.flag)} rgb={COL.rgb} core={COL.core} glow={COL.glow} />
           </View>
         )}
         {/* ★★ The RDS mark STAYS when the station's logo lands (B9, Stuart: it vanished as the logo rendered
             in, though the bar has room): mark first, then the logo — the web bar's order. */}
-        {!vfd && shown.badge === 'RDS' && (
+        {!vfd && shown.badge === 'RDS' && !shown.dab && (
           <View style={styles.rdsMark}><RdsMark kind="plain" height={13} color={COL.mark} glow={COL.markGlow} /></View>
+        )}
+        {!vfd && !!shown.dab && (
+          <View style={styles.rdsMark}><DabMark kind="plain" height={15} color={COL.mark} glow={COL.markGlow} ghost={rgba(COL.rgb, 0.16)} plus={shown.dab.plus} /></View>
         )}
         {!vfd && shown.logoUrl
           ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
           : !vfd && shown.badge === 'RDS'
           ? null
-          : !!shown.badge && shown.badge !== 'RDS'
+          : !!shown.badge && shown.badge !== 'RDS' && !shown.dab
             ? <Text style={styles.badge}>{shown.badge}</Text>
             : vfd && shown.badge === 'RDS'
               ? null

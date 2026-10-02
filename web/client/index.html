@@ -2314,6 +2314,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   border: 1px solid var(--btn-border); border-radius: 3px; padding: 0 3px;
 }
 #vtsSrc.show { display: inline; }
+/* ★ The DAB mark (dabMarkSvg in main.ts): the bar's own colour, no tag border; "+]" faint unless DAB+. */
+#vtsSrc.dabmark { border: 0; padding: 0; line-height: 0; color: inherit; }
+#vtsSrc.dabmark.show { display: inline-flex; align-items: center; }
+#vtsSrc svg.dabmark { height: 15px; width: auto; display: block; }
+#vtsSrc svg.dabmark path { fill: currentColor; }
+#vtsSrc svg.dabmark .dm { filter: drop-shadow(0 0 2px currentColor); }
+#vtsSrc svg.dabmark .dp { opacity: 0.16; }
+#vtsSrc svg.dabmark.plus .dp { opacity: 1; filter: drop-shadow(0 0 2px currentColor); }
 #vtsFlag { font-size: 15px; }
 /* ★ PI stays on screen ALONGSIDE the name, not merely as a fallback for it. It is the
    station's unambiguous identity — the key a database lookup, a learned station and the

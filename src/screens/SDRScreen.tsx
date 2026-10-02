@@ -2189,7 +2189,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
   //   Advanced RDS instrument, which must show what is on air rather than what we display.
   const [liveStation, setLiveStation] = useState<{ name?: string; psRaw?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number; sid?: string;
-    rdsFlags?: { tp: boolean; ta: boolean; af: boolean } }>({});
+    rdsFlags?: { tp: boolean; ta: boolean; af: boolean }; dabPlus?: boolean | null }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   /* ★★★ THE RDS NAME GOES THROUGH A STABILISER BEFORE ANYTHING SEES IT (Stuart, 2026-09-29: "the
@@ -4790,8 +4790,11 @@ export default function SDRScreen({ route, navigation }: Props) {
             // ★ The DAB state report repeats; an unchanged service keeps the same object (renderChurn).
             // ★ The SERVICE ID rides as `sid`, never as `pi` (see above): it is the DAB service's own
             //   identity for the VTS line ("SId: C6D6 / …"), and nothing keys a logo lookup on it.
+            // ★ The service's codec from FIG 0/2 (server: "DAB+" = AAC, "MP2" = Layer II, "?" = not yet
+            //   known) — drives the DAB mark's "+]" on the station strip (DabMark).
             const nextLive = { name: svcName, text: playing?.dls || st.dls || undefined, badge: 'DAB',
-                               sid: vtsHex(playing?.sid) || undefined };
+                               sid: vtsHex(playing?.sid) || undefined,
+                               dabPlus: playing?.codec === 'DAB+' ? true : playing?.codec === 'MP2' ? false : null };
             setLiveStation((cur) => keepIfSameStation(cur, nextLive));
           }
           // ★ FOLLOW THE SERVER'S BLOCK, not our own request. It may have landed elsewhere (a
@@ -8786,7 +8789,9 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  TP/TA/AF available)", so a cluster there could never light; this is the rule, not missing data.
      *  The HF-only backends (UberSDR, Kiwi) never reach FM, so never have an RDS station to show it on. */
     const annunciators = wfm && !isOwrx && liveStation.rdsFlags ? liveStation.rdsFlags : undefined;
-    const composite = `${vtsId}|${display}|${rt ?? ''}|${flag ?? ''}|${logoUrl ?? ''}`
+    // ★ A DAB service: the DAB mark in the RDS mark's slot, its "+]" lit for DAB+ (DabMark / VTSBar).
+    const dab = dabOn && liveBadgeRef.current === 'DAB' ? { plus: liveStation.dabPlus === true } : undefined;
+    const composite = `${vtsId}|${display}|${rt ?? ''}|${flag ?? ''}|${logoUrl ?? ''}|${dab ? (dab.plus ? 'D+' : 'D') : ''}`
       + `|${annunciators ? `${+annunciators.tp}${+annunciators.ta}${+annunciators.af}` : ''}`;
     // ★ Deferred, not dropped — see vtsNoticeUntil. vtsLastStation is deliberately NOT updated
     //   here, so the next RDS tick after the notice ends still counts as a change and the station
@@ -8799,10 +8804,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       // — only the static bookmark/band notifs time out. Badge flags the source.
       setVtsNotif({ key: vtsKey.current, name: display, rt, id: vtsId || undefined, idLabel: isDab ? 'SId' : 'PI',
                     kind: 'station-on', hold: true, badge: liveBadgeRef.current ?? (vtsId ? 'RDS' : undefined), flag, logoUrl,
-                    annunciators });
+                    annunciators, dab });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveStation.pi, liveStation.sid, liveStation.rdsFlags, liveLogo, status.mode, dabOn,
+  }, [liveStation.name, liveStation.text, liveStation.countryIso, liveStation.pi, liveStation.sid, liveStation.rdsFlags, liveStation.dabPlus, liveLogo, status.mode, dabOn,
       vtsNoticeEnded]);
   // ★ …and the bookmark you are parked on, once a notice has had its turn (see vtsNoticeEnded).
   //   vtsCheck hands over to the effect above itself when a live station owns the bar.
