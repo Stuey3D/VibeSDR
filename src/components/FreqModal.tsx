@@ -4,6 +4,7 @@ import {
   Pressable, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
 import { ScrollView } from 'react-native';
+import { isMacHost } from '../services/macAudio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MAX_FREQ_HZ, MIN_FREQ_HZ } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
@@ -296,7 +297,19 @@ export default function FreqModal({
   );
 
   // As the user types, resolve the nearest station to the DRAFT frequency.
-  const onChangeValue = (raw: string) => {
+  /* ★★★ ON A MAC THE FIELD IS NOT PRE-SELECTED — the first keystroke replaces it instead. A selection is
+   *  what raises macOS's own menu over the field (Ask Siri · Cut/Copy/Paste · Spelling and Grammar ·
+   *  Speech) and eats the click; contextMenuHidden only greys the iPhone-style items inside it (Stuart,
+   *  B16: "still getting this annoying bug"). So on a Mac: focus WITHOUT a selection, and the first edit
+   *  after focus starts a fresh number — the same "type to replace" the select-all gave everywhere else. */
+  const onMac = isMacHost();
+  const replaceOnType = useRef(false);
+  const onChangeValue = (raw0: string) => {
+    let raw = raw0;
+    if (onMac && replaceOnType.current) {
+      replaceOnType.current = false;
+      raw = raw0.startsWith(value) ? raw0.slice(value.length) : raw0.length < value.length ? '' : raw0;
+    }
     // ★ Normalise AS THEY TYPE, not just on parse, so the field shows a `.` even on a
     // keyboard whose decimal key is a comma — which is what the user actually asked for.
     // ★★ And STRIP anything that is not a digit or a point. keyboardType only constrains the
@@ -740,7 +753,8 @@ export default function FreqModal({
               //   eating the first click (Stuart: "a popup with Look Up etc in it"). Nothing in that menu
               //   is useful on a frequency; the select-all stays.
               contextMenuHidden
-              selectTextOnFocus
+              selectTextOnFocus={!onMac}
+              onFocus={() => { if (onMac) replaceOnType.current = true; }}
               onSubmitEditing={confirm}
               // ★ A hardware Enter is handled by the VibeKeyDown listener above, NOT here.
               // onKeyPress was tried and never fired: VibeKeyWindow was swallowing Enter
