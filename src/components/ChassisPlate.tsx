@@ -27,7 +27,7 @@ import {
 } from '@shopify/react-native-skia';
 import { useTexture, TEXTURE_SAMPLING } from './DomeKey';
 import type { PlateTokens } from '../constants/faceplate';
-import { cssAnglePts, cssAnglePtsShifted, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight } from '../constants/plateLight';
+import { cssAnglePts, cssAnglePtsShifted, glossAngle, hotspotX, hotspotY, sheenDeg, screwHighlight } from '../constants/plateLight';
 import { useLight } from '../contexts/FaceplateContext';
 
 /** CSS `linear-gradient(<deg>, …)` → Skia start/end points over a w × h box. */
@@ -88,14 +88,17 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, shiftS
   const k = 620 / 1200;
   // ── The light, derived from the live angle (lighting brief §2). At 104°: cssAngle(104, w, h), 28 % −10 %. ──
   // ★ Tilt's pitch slides the band along the gradient (shiftSv, 0 = today, so LEFT + no tilt is unchanged).
-  const start = useDerivedValue(() => { const p = cssAnglePtsShifted(sv.value, w, h, shiftSv.value); return { x: p.sx, y: p.sy }; }, [w, h]);
-  const end   = useDerivedValue(() => { const p = cssAnglePtsShifted(sv.value, w, h, shiftSv.value); return { x: p.ex, y: p.ey }; }, [w, h]);
+  const start = useDerivedValue(() => { const p = cssAnglePtsShifted(sheenDeg(sv.value), w, h, shiftSv.value); return { x: p.sx, y: p.sy }; }, [w, h]);
+  const end   = useDerivedValue(() => { const p = cssAnglePtsShifted(sheenDeg(sv.value), w, h, shiftSv.value); return { x: p.ex, y: p.ey }; }, [w, h]);
   // `radial-gradient(140% 70% at <x> -10%)`: an ellipse, drawn as a circle squashed vertically about its
   // centre. ★ The squash is in Y only, so the centre's x does not enter the transform — which is what lets
   // the centre MOVE without a re-render (today's translateX(ecx) … translateX(−ecx) cancelled anyway).
-  const rx = 1.4 * w, ry = 0.7 * h, ecy = HOTSPOT_Y * h;
+  const rx = 1.4 * w, ry = 0.7 * h;
+  // ★ The centre's y moves with tilt's pitch (hotspotY), so it — and the squash about it — are derived too.
+  const ecy = useDerivedValue(() => hotspotY(shiftSv.value) * h, [h]);
+  const squash = useDerivedValue(() => [{ translateY: ecy.value }, { scaleY: ry / rx }, { translateY: -ecy.value }], [h, rx, ry]);
   const ecx = useDerivedValue(() => hotspotX(sv.value) * w, [w]);
-  const c = useDerivedValue(() => ({ x: hotspotX(sv.value) * w, y: HOTSPOT_Y * h }), [w, h]);
+  const c = useDerivedValue(() => ({ x: hotspotX(sv.value) * w, y: hotspotY(shiftSv.value) * h }), [w, h]);
   return (
     <Canvas style={{ width: w, height: h }} pointerEvents="none">
       <Group clip={clip}>
@@ -112,7 +115,7 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, shiftS
         <Rect x={0} y={0} width={w} height={h}>
           <LinearGradient start={start} end={end} colors={plate.lightColors} positions={plate.lightPos} />
         </Rect>
-        <Group transform={[{ translateY: ecy }, { scaleY: ry / rx }, { translateY: -ecy }]}>
+        <Group transform={squash}>
           <Circle cx={ecx} cy={ecy} r={rx}>
             <RadialGradient c={c} r={rx} colors={[plate.radialColor, 'rgba(255,255,255,0)']} positions={[0, 0.6]} />
           </Circle>
@@ -161,8 +164,8 @@ const GlossCanvas = React.memo(function GlossCanvas({ w, h, r, trim, squareBotto
   w: number; h: number; r: number; trim: boolean; squareBottom: boolean; sv: SharedValue<number>;
 }) {
   // ★ The reflection follows the plate's light, 8° off it as it always was (104 → today's 112).
-  const rStart = useDerivedValue(() => { const p = cssAnglePts(glossAngle(sv.value), w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
-  const rEnd   = useDerivedValue(() => { const p = cssAnglePts(glossAngle(sv.value), w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
+  const rStart = useDerivedValue(() => { const p = cssAnglePts(glossAngle(sheenDeg(sv.value)), w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
+  const rEnd   = useDerivedValue(() => { const p = cssAnglePts(glossAngle(sheenDeg(sv.value)), w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
   const H = h + (trim ? 4 : 0);
   // Square bottom corners: round a box that runs r past the bottom, then only fill down to h.
   const shape = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h + (squareBottom ? r : 0)), r, r);
