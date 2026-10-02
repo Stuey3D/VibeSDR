@@ -6589,6 +6589,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Phase accumulator per listener, advanced once per emitted frame. Fractional, so a client
      *  asking 7 fps off a 20 fps engine gets 7 — not the nearest integer divisor. */
     std::map<net::Socket*, double> clientFpsAcc;
+    /** ★★★ WHAT THE ENGINE ACTUALLY EMITS, measured — see dueForFrame. The smoothed gap between
+     *  emitted frames (ms); 0 = not measured yet. Touched only in dueForFrame, under clientMtx. */
+    double emitGapEmaMs = 0.0, lastEmitMs = 0.0;
     /** ★★★ WHAT EACH LISTENER WAS ACTUALLY SENT — the per-client half of the SPEC RATE audit.
      *  The engine audit in onSpectrum counts ENGINE frames, which is the FASTEST listener's rate;
      *  everyone slower is decimated after it, in dueForFrame. So "asked 5, emitting 19.7" could
@@ -7975,12 +7978,32 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         {
         std::lock_guard<std::mutex> lk(clientMtx);
         const double nowMs = nowSecs() * 1000.0;
+        /* ★★★ SHARE OUT WHAT IS ACTUALLY MADE, NOT WHAT WAS ASKED FOR. The engine runs at the FASTEST
+         *  listener's rate, and each slower listener got `want / engine` of the frames — with `engine`
+         *  the TARGET. A box that cannot reach its target (the Pi 2: 7.7 fps made of 20 asked) then
+         *  starved everyone else twice over: Stuart's app asked 10 and was sent 7.7 × 10/20 = 3.9, its
+         *  rate controller saw 39 % and stepped down to 5, and was then sent 1.9 — "8 fps, a 2nd user
+         *  connects, 2 fps and holds it" (2026-10-02; the Pi 2's own log said "sent 1.9 fps, asked 5.0
+         *  (engine 20.0)"). Any 32-bit server does it; the Sony looked fine only because its second
+         *  listener asked for the same rate.
+         *  ★ Measured HERE because this runs exactly once per emitted frame. ~3 s smoothing, and a gap
+         *    over 3 s (capture parked, idle floor) restarts the measurement instead of averaging it in.
+         *  ★ On a box that reaches its target nothing changes: achieved ≈ engine. */
+        if (lastEmitMs > 0.0) {
+            const double gap = nowMs - lastEmitMs;
+            if (gap > 0.0 && gap < 3000.0)
+                emitGapEmaMs = emitGapEmaMs > 0.0 ? emitGapEmaMs + (gap - emitGapEmaMs) * (1.0 - std::exp(-gap / 3000.0))
+                                                  : gap;
+            else if (gap >= 3000.0) emitGapEmaMs = 0.0;
+        }
+        lastEmitMs = nowMs;
+        const double made = emitGapEmaMs > 0.0 ? std::min(engine, 1000.0 / emitGapEmaMs) : engine;
         for (size_t i = 0; i < peers.size(); i++) {
             const double want = peers[i].fps > 0 ? peers[i].fps : baseFftRate;
-            if (want <= 0 || want >= engine) clientFpsAcc[peers[i].sock.get()] = 0.0;
+            if (want <= 0 || want >= made) clientFpsAcc[peers[i].sock.get()] = 0.0;
             else {
                 double& a = clientFpsAcc[peers[i].sock.get()];
-                a += want / engine;
+                a += want / made;
                 if (a >= 1.0) { a -= 1.0; due[i] = 1; } else due[i] = 0;
                 // Never let the accumulator run away if the engine rate drops under us — a stored
                 // surplus would come back out as a burst of frames the listener did not ask for.
