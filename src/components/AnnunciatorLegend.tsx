@@ -16,7 +16,7 @@
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { Canvas, Image as SkImageNode, Path, PathOp, Skia, StrokeCap, StrokeJoin, type SkPath } from '@shopify/react-native-skia';
-import { glowPaint, makeSprite } from './glowSprite';
+import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 
 export type AnnunciatorName = 'TP' | 'TA' | 'AF';
 
@@ -101,11 +101,12 @@ export default function AnnunciatorLegend({ name, height = 10, kind, color, glow
   const k = height / CELL_H;
   const w = annunciatorWidth(height);
   const W = w + 2 * MARGIN, H = height + 2 * MARGIN;
-  const sprite = useMemo(() => makeSprite(W, H, (c) => {
+  // ★ Shared across instances and freed when unused — see useSharedSprite.
+  const sprite = useSharedSprite(`ann|${name}|${k}|${W}|${H}|${color}|${glow}|${kind}`, () => imageBuild(makeSprite(W, H, (c) => {
     const p = scaled(LEGENDS[name], k);
     if (glow) c.drawPath(p, glowPaint(glow, kind === 'picto' ? 2 : 4));
     c.drawPath(p, glowPaint(color));
-  }), [name, k, W, H, color, glow, kind]);
+  })));
   const statics = useMemo(() => ({
     ghost: scaled(LEGENDS[name], k),
     meshA: kind === 'picto' ? scaled(MESHES[name][0], k) : null,

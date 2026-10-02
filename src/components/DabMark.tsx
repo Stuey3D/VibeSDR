@@ -34,7 +34,7 @@ import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { Canvas, ClipOp, Image as SkImageNode, LinearGradient, Path, PathOp, Skia, vec, type SkPath } from '@shopify/react-native-skia';
 import { DAB_LOGO_PATH, DAB_VIEWBOX } from './dabLogoPaths';
-import { glowPaint, makeSprite } from './glowSprite';
+import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 
 /** ★ See the header: false = WorldDAB's toolkit to the letter (official colours, DAB+ only, unaltered).
  *  ★★★ DECIDED: TRUE (Stuart, 2026-10-02) — "ship it as the VFD one to preserve the integrity, if we get a
@@ -103,11 +103,11 @@ export default function DabMark({ height = 15, kind, color, glow, ghost, plus }:
   const W = w + 2 * MARGIN, H = height + 2 * MARGIN;
   const altered = DAB_ALTERATIONS_ALLOWED;
   // The lit groups and their glow, rasterised once per colour × size × codec.
-  const sprite = useMemo(() => {
-    if (!altered) return null;
+  // ★ Shared across instances and freed when unused — see useSharedSprite.
+  const sprite = useSharedSprite(altered ? `dab|${k}|${W}|${H}|${color}|${glow}|${kind}|${plus}` : null, () => {
     const p = scaled(MAIN, k);
     if (plus) p.addPath(scaled(PLUS, k));
-    return makeSprite(W, H, (c) => {
+    return imageBuild(makeSprite(W, H, (c) => {
       // ★★ The glow OUTSIDE the mark only: unclipped it filled the letter cut-outs and the "+", which at
       //    this size are a point or two across, and the logo read as a lit blob.
       if (glow) {
@@ -117,8 +117,8 @@ export default function DabMark({ height = 15, kind, color, glow, ghost, plus }:
         c.restore();
       }
       c.drawPath(p, glowPaint(color));
-    });
-  }, [k, W, H, color, glow, kind, plus, altered]);
+    }));
+  });
   const statics = useMemo(() => ({
     full: scaled(FULL, k),
     plusGhost: scaled(PLUS, k),

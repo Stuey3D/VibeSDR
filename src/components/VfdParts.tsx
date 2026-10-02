@@ -17,7 +17,7 @@ import { PixelRatio, View, type LayoutChangeEvent, type StyleProp, type ViewStyl
 import { Canvas, Group, Image as SkImageNode, Path, Rect, Skia, type SkImage, type SkPath } from '@shopify/react-native-skia';
 import { devicePixel, filamentYs, FILAMENT_DARK, FILAMENT_LIGHT } from '../constants/vfdGlass';
 import { rgba } from '../constants/faceplate';
-import { glowPaint, makeSprite } from './glowSprite';
+import { glowPaint, makeSprite, spriteBuild, useSharedSprite } from './glowSprite';
 import { segFit, SEG_CELL_W as CELL_W, SEG_CELL_H as CELL_H } from '../constants/spriteSizing';
 
 export function useBoxSize() {
@@ -112,8 +112,9 @@ interface Sprite { img: SkImage; w: number; h: number; m: number }
 
 /** The lit glyphs, glow included (`drop-shadow(0 0 3px glow)`), rasterised once per colour × size. */
 function useSegSprites(sh: number, core: string, glow: string): Record<string, Sprite> | null {
-  return useMemo(() => {
-    if (!(sh > 0)) return null;   // ★ NaN-proof: `sh <= 0` is false for NaN
+  // ★ One set per (height, colour), shared by every readout and freed when unused — see useSharedSprite.
+  //   ★ NaN-proof key: `sh > 0` is false for NaN, so no set is built for an unmeasured box.
+  return useSharedSprite(sh > 0 ? `seg|${sh}|${core}|${glow}` : null, () => {
     const k = sh / CELL_H;
     const m = 6;
     const w = CELL_W * k + 2 * m, h = CELL_H * k + 2 * m;
@@ -127,8 +128,8 @@ function useSegSprites(sh: number, core: string, glow: string): Record<string, S
       });
       if (img) out[key] = { img, w, h, m };
     }
-    return out;
-  }, [sh, core, glow]);
+    return spriteBuild(out, Object.values(out).map(s => s.img));
+  });
 }
 
 /** One cell's box: its left edge, its top, and its height (a small cell is shorter and sits lower). */

@@ -212,6 +212,7 @@ if node --no-warnings scripts/test_faceplate_landscape.ts; then pass=$((pass+1))
 #    server's `stereo` and, for an older server, its codec line; app and web share the one function.
 if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_sprite_sizing.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+if node --no-warnings scripts/test_sprite_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_platformCopy.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_grid.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node scripts/test_derived_values_pure.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi

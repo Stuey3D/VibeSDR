@@ -33,7 +33,7 @@ import {
   cathodeDepth, cathodeNeighbours, nixieGeometry, nixieReadout, nixieSpec, mhzDigitsFor,
   COLLAR_H, PIP_H, type NixieGeometry, type NixieLayout, type NixieSpec, type NixieUnit, type TubeDesign,
 } from '../constants/nixie';
-import { glowPaint, makeSprite, type GlowStack } from './glowSprite';
+import { glowPaint, makeSprite, spriteBuild, useSharedSprite, type GlowStack } from './glowSprite';
 
 const NIXIE_TTF = require('../../assets/fonts/NixieOne-Regular.ttf');
 
@@ -273,7 +273,8 @@ interface Sprite { img: SkImage; w: number; h: number }
 
 /** One glowing digit per 0-9, rasterised once per typeface × size. */
 function useDigitSprites(font: SkFont | null, nf: number): Record<string, Sprite> | null {
-  return useMemo(() => {
+  // ★ One set per digit size (the typeface is fixed), shared and freed when unused — see useSharedSprite.
+  return useSharedSprite(font ? `nixie|${nf}` : null, () => {
     if (!font) return null;
     const out: Record<string, Sprite> = {};
     const gk = Math.max(0.6, Math.min(1, nf / 30));        // the glow shrinks with the tube
@@ -288,13 +289,13 @@ function useDigitSprites(font: SkFont | null, nf: number): Record<string, Sprite
       });
       if (img) out[d] = { img, w, h };
     }
-    return out;
-  }, [font, nf]);
+    return spriteBuild(out, Object.values(out).map(s => s.img));
+  });
 }
 
 /** The lit bead with its glow, once. */
 function useBeadSprite(): Sprite | null {
-  return useMemo(() => {
+  return useSharedSprite('nixie-bead', () => {
     const m = 24, w = 4 + 2 * m, h = 5 + 2 * m;
     const img = makeSprite(w, h, (c) => {
       const oval = Skia.XYWHRect(m, m, 4, 5);
@@ -305,8 +306,8 @@ function useBeadSprite(): Sprite | null {
         [Skia.Color('#fff1dc'), Skia.Color('#ffbd70'), Skia.Color('#ff6a14')], [0, 0.4, 0.85], TileMode.Clamp));
       c.drawOval(oval, p);
     });
-    return img ? { img, w, h } : null;
-  }, []);
+    return spriteBuild(img ? { img, w, h } : null, [img]);
+  });
 }
 
 const NixieCathodes = React.memo(function NixieCathodes({ w, h, geo, tubes, bulbs, fading }: {

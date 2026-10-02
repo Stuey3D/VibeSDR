@@ -44,7 +44,7 @@ import { getControlHaptics } from './controlHaptics';
 import { buildGlyphPath } from './DrumWheel';
 import { DomeKey, DomeIcon, type IconStroke } from './DomeKey';
 import { WellFace } from './DrumWell';
-import { glowPaint, makeSprite } from './glowSprite';
+import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { useUiScale } from '../hooks/useUiScale';
 import { ledA, type LedColour } from '../constants/faceplate';
@@ -355,20 +355,19 @@ export default function TunerKeys({
 function useEtchGlow(path: SkPath, W: number, H: number, led: LedColour): SkImage | null {
   const key = ledA(led, 1);
   const pathKey = path.toSVGString();
-  return useMemo(() => {
-    if (!(W > 2) || !(H > 2)) return null;
+  // ★ Shared across wells with the same glyph, size and colour, freed when unused — see useSharedSprite.
+  return useSharedSprite(W > 2 && H > 2 ? `etch|${pathKey}|${W}|${H}|${key}` : null, () => {
     // The well's own size: the glyph sits in its middle with more than ETCH_LIGHT.reach clear all round
     // (test_faceplate_wells), and the keys either side are drawn over any bleed that reaches them.
-    return makeSprite(W, H, (c) => {
+    return imageBuild(makeSprite(W, H, (c) => {
       for (const l of [ETCH_LIGHT.bleed, ETCH_LIGHT.glow]) {
         const p = glowPaint(ledA(led, l.a), l.blur);
         p.setStyle(PaintStyle.Stroke); p.setStrokeWidth(l.width);
         p.setStrokeCap(StrokeCap.Round); p.setStrokeJoin(StrokeJoin.Round);
         c.drawPath(path, p);
       }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathKey, W, H, key]);
+    }));
+  });
 }
 
 function EtchGlow({ path, W, H, led, dim }: { path: SkPath; W: number; H: number; led: LedColour; dim: number }) {

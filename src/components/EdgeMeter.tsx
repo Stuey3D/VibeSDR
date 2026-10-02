@@ -45,7 +45,7 @@ import {
   METER_SCALES, VU_SEGMENTS, needleSpring, needleX, peakNeedleStep, scalePointX, sqlClosedOf, vuPos, type MeterUnit,
 } from '../constants/meters';
 import { FONT_HYPER } from '../constants/faceplate';
-import { glowPaint, makeSprite } from './glowSprite';
+import { glowPaint, makeSprite, spriteBuild, useSharedSprite } from './glowSprite';
 import { useBoxSize } from './VfdParts';
 import { useMotionEffects } from '../contexts/FaceplateContext';
 import { useFrameSleep } from '../hooks/useFrameSleep';
@@ -149,6 +149,7 @@ function tri(ax: number, ay: number, bx: number, by: number, cx: number, cy: num
   p.moveTo(ax, ay); p.lineTo(bx, by); p.lineTo(cx, cy); p.close();
   return p;
 }
+const NO_SHADOWS: { needle: SkImage | null; sql: SkImage | null } = { needle: null, sql: null };
 /** A soft shadow bar, rasterised once (a moving needle must not blur live every frame). */
 function shadowSprite(w: number, h: number, blur: number, colour: string): SkImage | null {
   const pad = blur * 2;
@@ -180,10 +181,12 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
     sqlHand:  Skia.Path.MakeFromSVGString(`M -0.7 0 h 1.4 v ${H - 3} h -1.4 Z`)!,
     sqlHead:  tri(-4.5, 0, 4.5, 0, 0, 6),
   }), [H]);
-  const shadows = useMemo(() => ({
-    needle: shadowSprite(3, H - 4, 1.4, 'rgba(0,0,0,0.30)'),
-    sql:    shadowSprite(2, H - 3, 1.2, 'rgba(0,0,0,0.22)'),
-  }), [H]);
+  // ★ Shared per meter height and freed when unused — see useSharedSprite.
+  const shadows = useSharedSprite(`edge-shadows|${H}`, () => {
+    const needle = shadowSprite(3, H - 4, 1.4, 'rgba(0,0,0,0.30)');
+    const sql    = shadowSprite(2, H - 3, 1.2, 'rgba(0,0,0,0.22)');
+    return spriteBuild({ needle, sql }, [needle, sql]);
+  }) ?? NO_SHADOWS;
 
   // ── The bus → shared values ──
   const needle = useSharedValue(0);      // segment position, springing

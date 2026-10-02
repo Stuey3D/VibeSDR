@@ -24,7 +24,7 @@ import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { Canvas, Image as SkImageNode, Path, PathOp, Skia, type SkPath } from '@shopify/react-native-skia';
 import { RDS_LOGO_PATHS, RDS_GROUP_DX, RDS_GROUP_DY, RDS_VIEWBOX } from './rdsLogoPaths';
-import { glowPaint, makeSprite } from './glowSprite';
+import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 
 /** ★ Flip to false if the RDS Forum's logo terms forbid recolouring / cutting (see the header). */
 export const RDS_ALTERATIONS_ALLOWED = true;
@@ -100,15 +100,16 @@ export default function RdsMark({ height = 13, kind, color, glow, ghost, lit = t
   const altered = RDS_ALTERATIONS_ALLOWED;
   const src = kind === 'picto' && altered ? CUT_MARK : MARK;
   // The lit mark and its glow, rasterised once per colour × size.
-  const sprite = useMemo(() => {
+  // ★ Shared across instances and freed when unused — see useSharedSprite. `src` follows kind + altered.
+  const sprite = useSharedSprite(`rds|${kind}|${altered}|${k}|${w}|${height}|${color}|${glow}`, () => {
     const W = w + 2 * MARGIN, H = height + 2 * MARGIN;
     const p = scaled(src, k, MARGIN, MARGIN);
     const g = altered ? glow : null;
-    return makeSprite(W, H, (c) => {
+    return imageBuild(makeSprite(W, H, (c) => {
       if (g) c.drawPath(p, glowPaint(g, kind === 'picto' ? 2 : 5));
       c.drawPath(p, glowPaint(color));
-    });
-  }, [src, k, w, height, color, glow, kind, altered]);
+    }));
+  });
   const statics = useMemo(() => kind === 'picto' ? {
     ghost: scaled(src, k, MARGIN, MARGIN),
     meshA: altered ? scaled(MESH[0], k, MARGIN, MARGIN) : null,
