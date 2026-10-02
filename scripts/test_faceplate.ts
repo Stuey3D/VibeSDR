@@ -139,8 +139,8 @@ eq('hyper: TEXT offers all six', textChoices('hyper')!.length, 6);
 for (const d of DISPLAYS) for (const t of textChoices(d) ?? []) {
   eq(`${d}: picking ${t} sticks`, withText(withDisplay(DEFAULT_SETTINGS, d), t).text, t);
 }
-eq('HAPTICS hidden without a motor; STEADY LEDS always', feelRows(false), ['steadyLeds']);
-eq('FEEL order with a motor', feelRows(true), ['haptics', 'steadyLeds']);
+eq('HAPTICS hidden without a motor; STEADY LEDS and MOTION EFFECTS always', feelRows(false), ['steadyLeds', 'motion']);
+eq('FEEL order with a motor', feelRows(true), ['haptics', 'steadyLeds', 'motion']);
 eq('default-chassis green dot is today\'s drum green', controlsDot('default', 'green'), 'rgb(0,230,0)');
 eq('silver green dot is the brief\'s LED', controlsDot('silver', 'green'), LED.green.core);
 ok('every colour key has a spoken name', [...CONTROLS, ...TEXTS].every(c => !!COLOUR_NAMES[c]));

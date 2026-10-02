@@ -51,9 +51,10 @@ import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { useFaceplateSettings, useSurfaceOpaque } from '../contexts/FaceplateContext';
 import {
   CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
+  MOTION_CHOICES, MOTION_NOTE,
   COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver, frameRateChoices,
   FRAME_RATE_NOTE,
-  type PaneChoice, type Chassis, type SignalMeter, type FrameRate,
+  type PaneChoice, type Chassis, type SignalMeter, type FrameRate, type MotionEffects,
 } from '../constants/faceplate';
 import { AUTO_REASON_NOTE } from '../constants/transparency';
 import {
@@ -724,7 +725,7 @@ function ControlCustomisationPane({
   const styles = usePopupStyles(makeStyles);
   // ★ App-wide, not per server (FaceplateContext) — the faceplate is the hardware in your hand.
   const { settings: fp, setDisplay, setText, set, setTransparency, autoTransparency: auto,
-          maxRefreshHz } = useFaceplateSettings();
+          maxRefreshHz, setMotion } = useFaceplateSettings();
   // ★ While the DEVICE chose OFF (never once the user has picked), say so — otherwise a new user on
   //   an old phone sees solid panels, the ON key unlit, and no reason why.
   const autoNote = !fp.transparencyExplicit && auto.reason ? AUTO_REASON_NOTE[auto.reason] : null;
@@ -815,10 +816,17 @@ function ControlCustomisationPane({
         <SelectorRow key={r} label="HAPTICS" value={hapticsEnabled ? 'on' : 'off'}
           choices={[{ value: 'off', label: 'OFF' }, { value: 'on', label: 'ON' }]}
           onPick={(v: string) => onHaptics?.(v === 'on')} />
-      ) : (
+      ) : r === 'steadyLeds' ? (
         <SelectorRow key={r} label="STEADY LEDS" value={fp.steadyLeds ? 'on' : 'off'}
           choices={[{ value: 'off', label: 'OFF' }, { value: 'on', label: 'ON' }]}
           onPick={(v: string) => set({ steadyLeds: v === 'on' })} />
+      ) : (
+        // ★★ MOTION EFFECTS (lighting brief §3): follows the OS's Reduce Motion / Remove animations until
+        //   picked — the keys show what is ON SCREEN, and a pick is stored as the user's from then on.
+        //   OFF forces steady LEDs; steady LEDs never force motion off (someone sensitive to PWM may still
+        //   want the light to move).
+        <SelectorRow key={r} label="MOTION EFFECTS" choices={MOTION_CHOICES} value={fp.motionEffects}
+          onPick={(v: MotionEffects) => setMotion(v)} note={MOTION_NOTE} />
       ))}
     </View>
   );

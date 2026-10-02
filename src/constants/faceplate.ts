@@ -38,6 +38,11 @@ export type FrameRate        = 'full' | '60';
  *  the decoder boxes' own Transparent / Solid row. `off` = alpha 1.0 EXACTLY and no BlurView anywhere
  *  ("I thought solid would be 1.0 fully solid for max GPU savings"). */
 export type { Transparency };
+/** ★★ MOTION EFFECTS (lighting brief §3): `off` turns off DECORATIVE motion only — the tilt light, the LED
+ *  VU's edge shimmer (steady LEDs are forced), the needle's overshoot, any future power-on effect. It NEVER
+ *  touches motion that carries information: the VFD's stepped scroll, needles following the signal,
+ *  dome-key presses, Nixie digit changes and afterglow. */
+export type MotionEffects    = 'on' | 'off';
 
 export interface FaceplateSettings {
   chassis:   Chassis;
@@ -66,6 +71,11 @@ export interface FaceplateSettings {
    *  if cheap to do" — it is). Leaving Hyperlegible-white for dot matrix falls back to teal; coming
    *  back restores white rather than leaving them on teal. */
   textByDisplay: Partial<Record<DisplayStyle, TextColour>>;
+  /** ★★ MOTION EFFECTS — the user's pick, meaningful ONLY when `motionExplicit`. Until then the OS decides
+   *  (iOS Reduce Motion / Android Remove animations): the Transparency Effects pattern exactly — see
+   *  `effectiveMotion`, and the auto value is never written back as if chosen. */
+  motionEffects: MotionEffects;
+  motionExplicit: boolean;
 }
 
 export const CHASSIS:     Chassis[]        = ['default', 'silver', 'black'];
@@ -75,6 +85,7 @@ export const TEXTS:       TextColour[]     = ['green', 'red', 'amber', 'blue', '
 export const METERS:      SignalMeter[]    = ['bar', 'vu', 'edge'];
 export const TRANSPARENCIES: Transparency[] = ['on', 'off'];
 export const FRAME_RATES: FrameRate[] = ['full', '60'];
+export const MOTIONS: MotionEffects[] = ['on', 'off'];
 
 /** ★★★ What the real display technology came in (§1). Nixie: none — locked neon (§2). Dot and
  *  segment VFDs never came in white. The first entry is the display's default. */
@@ -89,7 +100,7 @@ export const TEXT_ALLOWED: Record<DisplayStyle, TextColour[]> = {
 export const DEFAULT_SETTINGS: FaceplateSettings = {
   chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
   meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, frameRate: 'full',
-  textByDisplay: {},
+  textByDisplay: {}, motionEffects: 'on', motionExplicit: false,
 };
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
@@ -307,7 +318,31 @@ export function parseSettings(json: string | null, legacyThemeName?: string | nu
     steadyLeds: raw.steadyLeds === true,
     frameRate: pick(raw.frameRate, FRAME_RATES, 'full'),
     textByDisplay,
+    ...parseMotion(raw),
   };
+}
+
+/** MOTION EFFECTS from storage: a pick only counts when it was explicitly made (older stores have none). */
+function parseMotion(raw: any): Pick<FaceplateSettings, 'motionEffects' | 'motionExplicit'> {
+  const explicit = raw.motionExplicit === true && MOTIONS.includes(raw.motionEffects);
+  return { motionEffects: explicit ? raw.motionEffects : 'on', motionExplicit: explicit };
+}
+
+/** The user's pick from the pane: ON / OFF, and from now on it is theirs (explicit). */
+export function withMotion(s: FaceplateSettings, m: MotionEffects): FaceplateSettings {
+  return s.motionExplicit && s.motionEffects === m ? s : { ...s, motionEffects: m, motionExplicit: true };
+}
+
+/**
+ * ★★★ THE ONE RESOLVER for MOTION EFFECTS (lighting brief §3) — beside effectiveTransparency's pattern:
+ * the user's pick once made (it wins in BOTH directions), otherwise the OS's reduce-motion switch.
+ * ★★ TRAP: LedVu and EdgeMeter used to call useReduceMotion() directly, which would bypass the pick. They
+ *   read this (via FaceplateContext); useReduceMotion() is now only the OS INPUT here.
+ */
+export function effectiveMotion(s: Pick<FaceplateSettings, 'motionEffects' | 'motionExplicit'>,
+                                osReduceMotion: boolean): MotionEffects {
+  if (s.motionExplicit) return s.motionEffects;
+  return osReduceMotion ? 'off' : 'on';
 }
 
 /**
@@ -356,6 +391,11 @@ export const TRANSPARENCY_CHOICES: PaneChoice<Transparency>[] = [
 /** The TRANSPARENCY EFFECTS row's subtitle (§1 group layout; UK English): what OFF buys and costs
  *  nothing to read — it is the one faceplate choice that is also a performance setting. */
 export const TRANSPARENCY_NOTE = 'Off · solid panels, easier to read and lighter on older devices';
+export const MOTION_CHOICES: PaneChoice<MotionEffects>[] = [
+  { value: 'on', label: 'ON' }, { value: 'off', label: 'OFF' },
+];
+/** The MOTION EFFECTS row's subtitle: what OFF changes — and, as plainly, what it never does. */
+export const MOTION_NOTE = 'Off · no decorative movement — signal, tuning and keys still move';
 
 /** The note the TEXT row shows instead of colours under Nixie (§1; the mockup's exact words). */
 export const TEXT_LOCKED_NOTE = 'Locked to neon by the Nixie display';
@@ -379,9 +419,10 @@ export function controlsDot(chassis: Chassis, c: ControlsColour): string {
 }
 
 /** FEEL rows, in order. HAPTICS is hidden on a device with no haptic motor (§1: "as today") — a
- *  switch whose every use is a no-op. STEADY LEDS is always offered. */
-export function feelRows(hapticsHardware: boolean): Array<'haptics' | 'steadyLeds'> {
-  return hapticsHardware ? ['haptics', 'steadyLeds'] : ['steadyLeds'];
+ *  switch whose every use is a no-op. STEADY LEDS is always offered, and MOTION EFFECTS beside it
+ *  (lighting brief §3) — it always does something (the needle's overshoot at least, on every device). */
+export function feelRows(hapticsHardware: boolean): Array<'haptics' | 'steadyLeds' | 'motion'> {
+  return hapticsHardware ? ['haptics', 'steadyLeds', 'motion'] : ['steadyLeds', 'motion'];
 }
 
 /**

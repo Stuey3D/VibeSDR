@@ -8,6 +8,7 @@
  * Run: node --no-warnings scripts/test_faceplate_lighting.ts   (run-tests.sh does)
  */
 import { filamentCount, filamentYs, devicePixel } from '../src/constants/vfdGlass.ts';
+import { DEFAULT_SETTINGS, effectiveMotion, withMotion, parseSettings, MOTION_CHOICES } from '../src/constants/faceplate.ts';
 import { cssAnglePts, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight, LIGHT_DEFAULT_DEG } from '../src/constants/plateLight.ts';
 
 let fails = 0, passes = 0;
@@ -67,6 +68,23 @@ for (const d of [104, 135, 180, 225, 256]) {
   ok(`hot-spot at ${d}°: on the lit side`, (d < 180 ? hotspotX(d) < 0.5 : d > 180 ? hotspotX(d) > 0.5 : near(hotspotX(d), 0.5, 1e-12)));
 }
 ok('gloss keeps its 8° offset at every angle', [104, 135, 180, 225, 256].every(d => glossAngle(d) === d + 8));
+
+// ── §3 MOTION EFFECTS: follows the OS until picked; the pick wins both ways ────
+eq('default: not picked, ON', [DEFAULT_SETTINGS.motionEffects, DEFAULT_SETTINGS.motionExplicit], ['on', false]);
+eq('unpicked + OS reduce motion OFF → on', effectiveMotion(DEFAULT_SETTINGS, false), 'on');
+eq('unpicked + OS reduce motion ON → off', effectiveMotion(DEFAULT_SETTINGS, true), 'off');
+const pickedOn = withMotion(DEFAULT_SETTINGS, 'on'), pickedOff = withMotion(DEFAULT_SETTINGS, 'off');
+eq('a pick is explicit', [pickedOn.motionExplicit, pickedOff.motionExplicit], [true, true]);
+eq('picked ON beats the OS switch', effectiveMotion(pickedOn, true), 'on');
+eq('picked OFF beats the OS switch', effectiveMotion(pickedOff, false), 'off');
+ok('re-picking the same value is a no-op (same object)', withMotion(pickedOff, 'off') === pickedOff);
+eq('stored pick round-trips', parseSettings(JSON.stringify(pickedOff)).motionEffects, 'off');
+eq('stored pick stays explicit', parseSettings(JSON.stringify(pickedOff)).motionExplicit, true);
+eq('an older store (no motion keys) = not picked', [parseSettings('{"chassis":"silver"}').motionEffects,
+   parseSettings('{"chassis":"silver"}').motionExplicit], ['on', false]);
+eq('an unpicked "off" in storage is NOT a pick', parseSettings('{"motionEffects":"off"}').motionExplicit, false);
+eq('a junk value is not a pick', parseSettings('{"motionEffects":"wobble","motionExplicit":true}').motionExplicit, false);
+eq('MOTION EFFECTS keys', MOTION_CHOICES.map(c => c.label), ['ON', 'OFF']);
 
 console.log(`faceplate lighting: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

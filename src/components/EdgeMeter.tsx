@@ -47,7 +47,7 @@ import {
 import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
 import { useBoxSize } from './VfdParts';
-import { useReduceMotion } from '../hooks/useReduceMotion';
+import { useMotionEffects } from '../contexts/FaceplateContext';
 import { useFrameSleep } from '../hooks/useFrameSleep';
 import type { MeterBus, MeterValues } from './ControlsBar';
 
@@ -168,7 +168,9 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
 }) {
   const [{ w }, onLayout] = useBoxSize();
   const H = height;
-  const reduceMotion = useReduceMotion();
+  // ★★ MOTION EFFECTS (lighting brief §3) — the user's pick, or the OS's reduce-motion until they pick. Off
+  //   removes the needle's OVERSHOOT only (critically damped); the needle still follows the signal.
+  const reduceMotion = !useMotionEffects();
 
   // Shapes at x = 0 (the needle's centre line).
   const shapes = useMemo(() => ({
@@ -204,7 +206,10 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
       const target = vuPos(m.raw ?? m.level);
       if (target !== lastTarget) { lastTarget = target; needle.value = withSpring(target, cfg); wake(); }
       sqlPos.value = m.sql != null && m.sql >= 0 ? vuPos(m.sql) : -1;
-      if (closed !== lastClosed) { lastClosed = closed; dim.value = withTiming(closed ? 0.5 : 0, { duration: 180 }); }
+      // ★ The lamp's fade is decoration (the dim itself is the information): explicit, so the app's pick
+      //   wins over Reanimated's own OS handling (lighting brief §3 TRAP).
+      if (closed !== lastClosed) { lastClosed = closed;
+        dim.value = withTiming(closed ? 0.5 : 0, { duration: 180, reduceMotion: reduceMotion ? ReduceMotion.Always : ReduceMotion.Never }); }
     };
     take(bus.value);
     bus.subs.add(take);

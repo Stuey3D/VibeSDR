@@ -33,9 +33,8 @@ import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
 import { useBoxSize } from './VfdParts';
 import { useUiScale } from '../hooks/useUiScale';
-import { useReduceMotion } from '../hooks/useReduceMotion';
 import { useFrameSleep } from '../hooks/useFrameSleep';
-import { useFaceplate } from '../contexts/FaceplateContext';
+import { useFaceplate, useMotionEffects } from '../contexts/FaceplateContext';
 import type { MeterBus, MeterValues } from './ControlsBar';
 
 /** Glow reach round each LED in its sprite (the 14 pt glow). */
@@ -178,10 +177,12 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
   const sprites = useMemo(() => (ledW > 1 ? ledSprites(ledW, ledH) : null), [ledW, ledH]);
 
   // ── The bus → shared values (no React render per update) ──
-  /* ★★★ §4.4 STEADY LEDS: the setting, OR the OS's Reduce Motion / Remove animations — on
-   *  automatically, because someone who has asked the phone to stop moving things has asked us too. */
-  const reduceMotion = useReduceMotion();
-  const steady  = useFaceplate().settings.steadyLeds || reduceMotion;
+  /* ★★★ §4.4 STEADY LEDS: the setting, OR MOTION EFFECTS off (lighting brief §3) — which follows the OS's
+   *  Reduce Motion / Remove animations until the user picks, because someone who has asked the phone to stop
+   *  moving things has asked us too. ★ Through useMotionEffects(), never useReduceMotion() directly: that
+   *  would ignore a user who picked MOTION ON with the OS switch on. (Steady LEDs never force motion off.) */
+  const motion = useMotionEffects();
+  const steady  = useFaceplate().settings.steadyLeds || !motion;
   const steadySv = useSharedValue(steady ? 1 : 0);
   // ★ The frame callback below sleeps when the strip has settled (useFrameSleep) — so anything that
   //   changes what it draws must WAKE it, or the change waits for the next sample.

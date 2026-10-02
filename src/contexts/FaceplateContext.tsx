@@ -24,8 +24,8 @@ import { makeMutable, useSharedValue, type SharedValue } from 'react-native-rean
 import { LIGHT_DEFAULT_DEG } from '../constants/plateLight';
 import {
   decideLaunch, DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, frameRateCapHz, parseSettings, resolveFaceplate, withDisplay, withText,
-  withTransparency,
-  type FaceplateSettings, type FaceplateTheme, type DisplayStyle, type TextColour, type Transparency,
+  withTransparency, withMotion, effectiveMotion,
+  type FaceplateSettings, type MotionEffects, type FaceplateTheme, type DisplayStyle, type TextColour, type Transparency,
   type SurfaceTokens,
 } from '../constants/faceplate';
 import {
@@ -36,6 +36,7 @@ import { installNativeTransliterator } from '../services/transliterator';
 import { explainFaceplateReset, faceplateGuard, LAST_CRASHED_KEY, launchMarkOnce } from '../services/faceplateGuard';
 import { readNativeDeviceClass } from '../services/deviceClass';
 import { applyFrameRateCap, readMaxRefreshRate } from '../services/frameRate';
+import { useReduceMotion } from '../hooks/useReduceMotion';
 
 // ★ The dot-matrix / 14-segment displays transliterate non-Latin names with the platform's ICU
 //   (brief §7). Installed once, when the faceplate owner loads — before any display draws.
@@ -53,6 +54,9 @@ interface FaceplateContextValue {
   maxRefreshHz: number | null;
   /** A pick from the pane: ON / OFF, stored as the user's choice from then on. */
   setTransparency: (t: Transparency) => void;
+  /** ★★ MOTION EFFECTS (lighting brief §3): a pick from the pane, stored as the user's from then on. The
+   *  EFFECTIVE value (pick, or the OS's reduce-motion until picked) is in `settings.motionEffects`. */
+  setMotion: (m: MotionEffects) => void;
   /** Display, with its side effects (controls → neon for Nixie, back to amber leaving it; text
    *  colour clamped / restored per display). */
   setDisplay: (d: DisplayStyle) => void;
@@ -73,7 +77,7 @@ const AUTO_ON: AutoTransparency = { transparency: 'on', reason: null };
 
 const FaceplateContext = createContext<FaceplateContextValue>({
   theme: DEFAULT_THEME, settings: DEFAULT_SETTINGS, autoTransparency: AUTO_ON, maxRefreshHz: null,
-  setTransparency: () => {}, setDisplay: () => {}, setText: () => {}, set: () => {},
+  setTransparency: () => {}, setDisplay: () => {}, setText: () => {}, set: () => {}, setMotion: () => {},
   // ★ Outside a provider (tests, a stray tree) the light is today's, fixed.
   lightDeg: LIGHT_DEFAULT_DEG, lightSv: makeMutable(LIGHT_DEFAULT_DEG),
 });
@@ -199,20 +203,27 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const set        = useCallback((patch: Partial<FaceplateSettings>) =>
     commit(s => ({ ...s, ...patch })), [commit]);
   const setTransparency = useCallback((t: Transparency) => commit(s => withTransparency(s, t)), [commit]);
+  const setMotion = useCallback((m: MotionEffects) => commit(s => withMotion(s, m)), [commit]);
+  // ★★ The OS's Reduce Motion / Remove animations — the INPUT to effectiveMotion, followed live. It only moves
+  //   what is on screen while the user has not picked (the pick wins both ways).
+  const osReduceMotion = useReduceMotion();
 
   // ★ The effective settings: what the theme is resolved from and what the pane shows lit. The
   //   STORED object (`settings`) keeps the user's own `transparency` / `transparencyExplicit`.
   const transparency = effectiveTransparency(settings, auto);
-  const onScreen = useMemo(() => settings.transparency === transparency ? settings : { ...settings, transparency },
-                           [settings, transparency]);
+  const motionEffects = effectiveMotion(settings, osReduceMotion);
+  const onScreen = useMemo(() => settings.transparency === transparency && settings.motionEffects === motionEffects
+                             ? settings : { ...settings, transparency, motionEffects },
+                           [settings, transparency, motionEffects]);
   const theme = useMemo(() => resolveFaceplate(onScreen), [onScreen]);
   // ★★ THE LIGHT: the settled angle (state) and the live one (SharedValue) — see the interface.
   const lightDeg = LIGHT_DEFAULT_DEG;
   const lightSv = useSharedValue(lightDeg);
   useEffect(() => { lightSv.value = lightDeg; }, [lightDeg, lightSv]);
   const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz,
-                                 setTransparency, setDisplay, setText, set, lightDeg, lightSv }),
-                        [theme, onScreen, auto, maxRefreshHz, setTransparency, setDisplay, setText, set, lightDeg, lightSv]);
+                                 setTransparency, setDisplay, setText, set, setMotion, lightDeg, lightSv }),
+                        [theme, onScreen, auto, maxRefreshHz, setTransparency, setDisplay, setText, set, setMotion,
+                         lightDeg, lightSv]);
   return <FaceplateContext.Provider value={value}>{children}</FaceplateContext.Provider>;
 }
 
@@ -249,6 +260,12 @@ export function useSurfaceOpaque(): boolean {
  */
 export function useSurface(): SurfaceTokens {
   return useContext(FaceplateContext).theme.surface;
+}
+
+/** ★★ MOTION EFFECTS, resolved (lighting brief §3): true = decorative motion ON. The ONE reader for every
+ *  decorative animation — never call useReduceMotion() for this directly (it would bypass the user's pick). */
+export function useMotionEffects(): boolean {
+  return useContext(FaceplateContext).settings.motionEffects === 'on';
 }
 
 /** ★★ The light (lighting brief §2): the settled angle for small surfaces, the live SharedValue for the
