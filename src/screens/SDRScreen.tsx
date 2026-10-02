@@ -7621,7 +7621,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (dspParamTimer.current) clearTimeout(dspParamTimer.current);
   }, []);
 
-  const onTuneHz = useCallback((hz: number) => {
+  /** `mode` — only when the jump also changes demodulator (onEntryTune's band crossing): it travels in
+   *  the SAME tune message, so the server never runs the new frequency in the old mode. */
+  const onTuneHz = useCallback((hz: number, mode?: SDRMode) => {
     const c = client.current; if (!c) return;
     markInteract();
     const [loHz, hiHz] = c.caps.freqRange;
@@ -7629,18 +7631,50 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Discrete jump (freq modal, bookmark/VTS, Siri, search) → always land
     // centred, regardless of the VFO lock.
     userTuneSeq.current++;   // ★ a PERSON asked (entry/recentre) — see the note on userTuneSeq
-    c.tune(clamped, undefined, { recenter: true });
-    setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
+    c.tune(clamped, mode, { recenter: true });
+    if (mode) {
+      setStatus({ ...c.getStatus() });           // ★ the passband travels with the mode (_adoptMode)
+      if (mode !== 'wfm') setFmStereo(false);    // stereo icon only applies to WFM — as onMode does
+    } else {
+      setStatus((prev: SDRStatus) => ({ ...prev, frequency: clamped }));
+    }
   }, []);
 
   /** ★★ TYPED ENTRY, THE WAY A PILOT TYPES IT. In the COM band a value on a 5 kHz boundary is a
    *  channel NAME (118.010 → 118.0083 MHz; 121.5 → 121.500) and the name typed is the one the readout
    *  keeps. Names that do not exist are refused by FreqModal with the reason before they get here.
    *  Everything else — including every frequency outside 118–137 MHz — is exactly onTuneHz. */
+  /** ★ The receiver's ITU region for onEntryTune — a ref, because ituRegion is derived further down. */
+  const ituRegionRef = useRef(1);
   const onEntryTune = useCallback((hz: number) => {
     const ch = airbandEntry(hz);
     if (ch && !ch.ok) return;
-    onTuneHz(ch ? ch.hz : hz);
+    const target = ch ? ch.hz : hz;
+    /* ★★★ A TYPED FREQUENCY IN ANOTHER BAND TAKES THAT BAND'S DEMODULATOR — IN THE SAME TUNE.
+     *  The band-crossing effect below switches mode only when nobody's hands are on the app, and
+     *  onTuneHz marks an interaction, so a typed entry NEVER crossed: 96.6 typed from airband went
+     *  out as AM at the airband gain, the front end railed for 8 s, and WFM only arrived when the
+     *  listener opened the demodulator sheet and picked it by hand (Sony log, 2026-10-02 21:25:28 →
+     *  21:25:32 — two tunes, four seconds apart, for what was one intention). V8's note promised
+     *  this ("entering a frequency in a different band now switches to the right demodulator").
+     *  ★ Only on a BAND change, and only to that band's own default: within a band the mode the
+     *    listener chose stands. Sent as ONE tune (frequency + mode), never a tune then a mode.
+     *  ★ `in MODE_BANDWIDTHS`, the boundary effect's own check — canSetMode is declared further down. */
+    const c = client.current;
+    const fromHz = c ? c.getStatus().frequency : 0;
+    const dTo = bandTuneDefaults(target, ituRegionRef.current);
+    /* ★★ BROADCAST FM IS WFM HERE. The band plan leaves FM's mode unset on purpose — its note: a
+     *  boundary CROSS on OpenWebRX must not yank the audio, the profile's start_mod picks WFM — but a
+     *  frequency TYPED into the FM band from another band means WFM on every backend that reaches it. */
+    const bandMode = (f: number, d: { mode?: SDRMode }): SDRMode | undefined =>
+      d.mode ?? (f >= 87.5e6 && f < 108e6 ? ('wfm' as SDRMode) : undefined);
+    const toMode = bandMode(target, dTo);
+    const fromMode = fromHz > 0 ? bandMode(fromHz, bandTuneDefaults(fromHz, ituRegionRef.current)) : undefined;
+    const curMode = c ? String(c.getStatus().mode) : '';
+    const crossMode = toMode && toMode !== fromMode && toMode !== curMode && toMode in MODE_BANDWIDTHS
+      ? toMode : undefined;
+    onTuneHz(target, crossMode);
+    if (crossMode && dTo.step) setStep(dTo.step);
     if (ch) pinAirDesig({ hz: ch.hz, spacing: ch.spacing });
   }, [onTuneHz, pinAirDesig]);
 
@@ -8052,6 +8086,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // The WRIST needs it too — its band label reads off the same plan, and without the
   // region it was quoting the American 40m/41m border (7300) on a British receiver.
   useEffect(() => { watchProvider.setItuRegion(ituRegion); }, [ituRegion]);
+  ituRegionRef.current = ituRegion;   // ★ for onEntryTune, declared above this
   const vtsBookmarks = useRef<ServerBookmark[]>([]);
   const [searchBookmarks, setSearchBookmarks] = useState<ServerBookmark[]>([]);
   const [searchBands,     setSearchBands]     = useState<ServerBand[]>([]);
