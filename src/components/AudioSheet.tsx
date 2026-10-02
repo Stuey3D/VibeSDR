@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -599,6 +599,14 @@ export default function AudioSheet({
   const [iqRate, setIqRate] = useState(48000);   // ★ raw IQ out: the rate to ask for
   const { theme: t } = useTheme();
   const insets = useSafeAreaInsets();
+  /* ★★★ THE SHEET MUST FIT THE SCREEN IT IS ON. In landscape on a phone it was taller than the screen: its
+   *  top reached the status bar, where the handle sits under iOS's notification-centre swipe, and CLOSE was
+   *  pushed below the bottom where no scroll could reach it — with no backdrop left to tap either (Stuart,
+   *  2026-10-02). Now the sheet stops short of the top edge and the settings list gives up the height, so
+   *  the title, its ✕ and CLOSE are always on screen. */
+  const { width: winW, height: winH } = useWindowDimensions();
+  const landscape = winW > winH;
+  const sheetMaxH = winH - Math.max(insets.top, landscape ? 28 : 12);
   const surf = usePopupSurface();
   const metalFrame = usePopupFrame(16, true);
   const isOwrx = serverType === 'owrx';
@@ -664,8 +672,8 @@ export default function AudioSheet({
         // Landscape: keep clear of the Dynamic Island and don't sprawl the full
         // (very wide) width — cap it and centre it.
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,
-        paddingBottom: 40 + insets.bottom,
-        alignSelf: 'center', width: '100%', maxWidth: 640,
+        paddingBottom: (landscape ? 12 : 40) + insets.bottom,
+        alignSelf: 'center', width: '100%', maxWidth: 640, maxHeight: sheetMaxH,
       }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) }, metalFrame,
          metalFrame && { paddingTop: 0 }]}>
         <PopupPlate />
@@ -675,6 +683,17 @@ export default function AudioSheet({
           <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 0 }, st.sheetLabelMetal]}>
             AUDIO
           </Text>
+          {/* ★ A way out at the TOP, in every orientation — CLOSE is at the end of a list that scrolls. */}
+          <View style={st.titleClose}>
+            {pt.metal ? (
+              <PopupKey label="✕" onPress={onClose} height={30} fontSize={14} hitSlop={10}
+                accessibilityLabel="Close" style={{ width: 34, paddingHorizontal: 0 }} />
+            ) : (
+              <TouchableOpacity onPress={onClose} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
+                <Text style={{ fontFamily: t.font, fontSize: 18, color: t.btnText }}>✕</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         {/* ★★★ THE INDICATOR'S LANE (popupTokens SCROLL_LANE). It was printed over the NR readout and
@@ -1051,9 +1070,11 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
     padding: 16, paddingBottom: 40,
   },
   sheetLabel: { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 12 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginBottom: 12 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginBottom: 12, minHeight: 30 },
+  titleClose: { position: 'absolute', right: 0, top: 0, bottom: 0, justifyContent: 'center' },
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  scroll:     { maxHeight: 420 },
+  // ★ flexShrink: in a short (landscape) sheet the LIST gives up height, never the title or CLOSE.
+  scroll:     { maxHeight: 420, flexShrink: 1 },
 
   sectionBar: onMetal(pt, {
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.divider,
