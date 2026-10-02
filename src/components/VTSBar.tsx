@@ -291,7 +291,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
         {vfd && (
           <View style={styles.vfdMarks}>
             {shown.dab
-              ? <DabMark kind="picto" height={15} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)} plus={shown.dab.plus} />
+              ? <DabMark kind="picto" height={DAB_MARK_H} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)} plus={shown.dab.plus} />
               : <RdsMark kind="picto" height={13} color={COL.core} glow={COL.glow} ghost={rgba(COL.rgb, 0.10)}
                   lit={shown.badge === 'RDS'} />}
             <VfdIso style={COL.style as 'dot' | 'seg'} code={flagToIso(shown.flag)} rgb={COL.rgb} core={COL.core} glow={COL.glow} />
@@ -303,7 +303,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           <View style={styles.rdsMark}><RdsMark kind="plain" height={13} color={COL.mark} glow={COL.markGlow} /></View>
         )}
         {!vfd && !!shown.dab && (
-          <View style={styles.rdsMark}><DabMark kind="plain" height={15} color={COL.mark} glow={COL.markGlow} ghost={rgba(COL.rgb, 0.16)} plus={shown.dab.plus} /></View>
+          <View style={styles.rdsMark}><DabMark kind="plain" height={DAB_MARK_H} color={COL.mark} glow={COL.markGlow} ghost={rgba(COL.rgb, 0.16)} plus={shown.dab.plus} /></View>
         )}
         {!vfd && shown.logoUrl
           ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
@@ -404,6 +404,10 @@ function vfdLineText(n: VtsNotifData, display: 'dot' | 'seg', freqLabel: string)
 /** Cell widths from the fonts' own metrics: DSEG14 is 816/1000 em, Doto 600/1000 em (monospaced),
  *  plus the 1 pt letter-spacing both are drawn with (Deck.mockup). */
 const SEG_PX = 15, DOT_PX = 19, CELL_LS = 1;
+/** ★ The DAB+ mark's height — 20 pt, the tallest item the strip already holds (the 20 pt station logo), so the
+ *  bar does not grow. At 15 the near-square logo's "dab" and "+" were too small to read (Stuart, 2026-10-02:
+ *  "the RDS logo is bigger, so you do have a little room"); 20 × 34 pt is still narrower than RDS's 13 × 53. */
+const DAB_MARK_H = 20;
 /** ★ Spare cells of width the window's Text is laid out with, so the font's fractional excess never ellipsizes the last cell. */
 const TEXT_SLACK = 2;
 const SEG_CELL = SEG_PX * 0.816 + CELL_LS;

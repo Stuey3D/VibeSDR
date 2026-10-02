@@ -32,7 +32,7 @@
 
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
-import { Canvas, Image as SkImageNode, LinearGradient, Path, PathOp, Skia, vec, type SkPath } from '@shopify/react-native-skia';
+import { Canvas, ClipOp, Image as SkImageNode, LinearGradient, Path, PathOp, Skia, vec, type SkPath } from '@shopify/react-native-skia';
 import { DAB_LOGO_PATH, DAB_VIEWBOX } from './dabLogoPaths';
 import { glowPaint, makeSprite } from './glowSprite';
 
@@ -56,21 +56,22 @@ const rectPath = (r: ReturnType<typeof Skia.XYWHRect>) => { const p = Skia.Path.
 const PLUS: SkPath = Skia.Path.MakeFromOp(FULL, rectPath(PLUS_RECT), PathOp.Intersect) ?? Skia.Path.Make();
 const MAIN: SkPath = Skia.Path.MakeFromOp(FULL, rectPath(MAIN_CUT), PathOp.Difference) ?? FULL;
 
-/** The VFD mesh at RdsMark's proportions (42 units of pitch, 8 wide, on a 260-unit-tall mark). */
-function meshOver(p: SkPath): [SkPath, SkPath] {
-  const pitch = (42 / 260) * VB.h, bar = (8 / 260) * VB.h;
+/** ★★ The VFD mesh, at a FIXED pitch in points (1.6 pt, 0.25 pt bars), not RdsMark's share of the height.
+ *  At strip size the mark is ~15 pt tall and the logo's letter strokes are ~1 pt: a pitch scaled to the
+ *  mark put bars nearly as thick as the strokes and the "dab" and "+" turned to mush (Stuart, 2026-10-02:
+ *  "they are hard to make out" — and a bigger mark would spoil the bar). `k` = points per logo unit. */
+function meshOver(p: SkPath, k: number): [SkPath, SkPath] {
+  const pitch = 1.6 / k, bar = 0.25 / k;
   const a = Skia.Path.Make(), b = Skia.Path.Make();
-  for (let k = -40; k <= 40; k++) {
-    a.addRect(Skia.XYWHRect(-200, pitch * k, 400, bar));
-    b.addRect(Skia.XYWHRect(pitch * k, -200, bar, 400));
+  for (let i = -160; i <= 160; i++) {
+    a.addRect(Skia.XYWHRect(-200, pitch * i, 400, bar));
+    b.addRect(Skia.XYWHRect(pitch * i, -200, bar, 400));
   }
   const m = Skia.Matrix();
   m.rotate((60 * Math.PI) / 180);
   a.transform(m); b.transform(m);
   return [Skia.Path.MakeFromOp(a, p, PathOp.Intersect) ?? a, Skia.Path.MakeFromOp(b, p, PathOp.Intersect) ?? b];
 }
-const MESH_MAIN = meshOver(MAIN);
-const MESH_PLUS = meshOver(PLUS);
 
 /** Mark width for a height — the FULL mark's, whichever groups are drawn. */
 export const dabMarkWidth = (h: number) => (h * VB.w) / VB.h;
@@ -107,15 +108,22 @@ export default function DabMark({ height = 15, kind, color, glow, ghost, plus }:
     const p = scaled(MAIN, k);
     if (plus) p.addPath(scaled(PLUS, k));
     return makeSprite(W, H, (c) => {
-      if (glow) c.drawPath(p, glowPaint(glow, kind === 'picto' ? 2 : 5));
+      // ★★ The glow OUTSIDE the mark only: unclipped it filled the letter cut-outs and the "+", which at
+      //    this size are a point or two across, and the logo read as a lit blob.
+      if (glow) {
+        c.save();
+        c.clipPath(p, ClipOp.Difference, true);
+        c.drawPath(p, glowPaint(glow, kind === 'picto' ? 2 : 5));
+        c.restore();
+      }
       c.drawPath(p, glowPaint(color));
     });
   }, [k, W, H, color, glow, kind, plus, altered]);
   const statics = useMemo(() => ({
     full: scaled(FULL, k),
     plusGhost: scaled(PLUS, k),
-    meshMain: kind === 'picto' && altered ? [scaled(MESH_MAIN[0], k), scaled(MESH_MAIN[1], k)] : null,
-    meshPlus: kind === 'picto' && altered ? [scaled(MESH_PLUS[0], k), scaled(MESH_PLUS[1], k)] : null,
+    meshMain: kind === 'picto' && altered ? meshOver(MAIN, k).map(m => scaled(m, k)) : null,
+    meshPlus: kind === 'picto' && altered ? meshOver(PLUS, k).map(m => scaled(m, k)) : null,
   }), [k, kind, altered]);
 
   // ★ Unaltered mode: the official artwork in its own gradient, DAB+ only (the README's rule).
@@ -137,10 +145,11 @@ export default function DabMark({ height = 15, kind, color, glow, ghost, plus }:
       <Canvas style={{ position: 'absolute', left: -MARGIN, top: -MARGIN, width: W, height: H }}>
         {!plus && <Path path={statics.plusGhost} color={ghost} />}
         {sprite && <SkImageNode image={sprite} x={0} y={0} width={W} height={H} />}
-        {statics.meshMain && <Path path={statics.meshMain[0]} color="rgba(0,0,0,0.55)" />}
-        {statics.meshMain && <Path path={statics.meshMain[1]} color="rgba(0,0,0,0.35)" />}
-        {statics.meshPlus && <Path path={statics.meshPlus[0]} color="rgba(0,0,0,0.55)" />}
-        {statics.meshPlus && <Path path={statics.meshPlus[1]} color="rgba(0,0,0,0.35)" />}
+        {/* ★ Lighter than RdsMark's (0.55/0.35): the grid should be SEEN on the phosphor, not cut the letters. */}
+        {statics.meshMain && <Path path={statics.meshMain[0]} color="rgba(0,0,0,0.38)" />}
+        {statics.meshMain && <Path path={statics.meshMain[1]} color="rgba(0,0,0,0.22)" />}
+        {statics.meshPlus && <Path path={statics.meshPlus[0]} color="rgba(0,0,0,0.38)" />}
+        {statics.meshPlus && <Path path={statics.meshPlus[1]} color="rgba(0,0,0,0.22)" />}
       </Canvas>
     </View>
   );
