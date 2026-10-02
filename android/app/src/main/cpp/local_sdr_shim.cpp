@@ -37,6 +37,7 @@
 #include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_hwinfo.h"
+#include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
 #include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
 
 #include <algorithm>
@@ -2252,6 +2253,27 @@ static std::atomic<bool>     g_autoBwSnrOn{false};
 static std::atomic<bool>     g_rtlDigitalAgc{false};
 static std::atomic<bool>     g_adjNarrow{false};
 static std::atomic<bool>     g_adjRdsWasOn{false};
+/** ★★★ THE AUTO-IF HOLD AFTER A NEW START (vibe_agc_rules.h §1). Until this steady-clock second the
+ *  adjacent-narrow arm and auto bandwidth keep their hands off: the figures they steer by are still
+ *  re-acquiring. Set by autoIfFreshStart() on a real retune, a demodulator change and DAB off. */
+static std::atomic<double>   g_autoIfQuietUntil{0.0};
+/** A new station: forget the narrowing and the smoothed S/N, and hold the decisions for
+ *  vibeagc::kAutoIfSettleSec. The CALLER puts the filter back to wide (it owns `rx`). */
+static void autoIfFreshStart(const char* why) {
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    g_autoIfQuietUntil.store(now + vibeagc::kAutoIfSettleSec, std::memory_order_relaxed);
+    g_autoBwSnrOn.store(false, std::memory_order_relaxed);   // ★ new station, new average
+    g_adjNarrow.store(false, std::memory_order_relaxed);
+    g_adjRdsWasOn.store(false, std::memory_order_relaxed);
+    LOGI("auto bandwidth: wide, decisions held %.0f s (%s) — the figures they steer by are re-acquiring",
+         vibeagc::kAutoIfSettleSec, why);
+}
+/** ★★★ THE GAIN THAT LAST SETTLED IN EACH BAND (vibe_agc_rules.h §3), in AGC steps below the ceiling —
+ *  the same unit as g_dabGainMem. Learned at "settled: … gain holding"; applied when a retune crosses
+ *  into a band that has one. In-process only, like the DAB memory began. */
+static std::mutex            g_bandGainMtx;
+static std::map<int, int>    g_bandGainMem;
 /** Consecutive 1-second windows with, and without, samples on the rail. Written by the libusb
  *  callback (cheap: two stores), read by the DSP thread, which is the only one that may touch the
  *  radio — see the note on enqueueIq. */
@@ -4991,7 +5013,7 @@ std::string queryParam(const std::string& reqLine, const char* key) {
  *  write path (steps, settle, pending write, notify) without a decision. Returns false when the
  *  radio has no gain list to map through (an RSP, a HF+). See g_dabGainMem. */
 template <class ImplT>   // ★ Impl is LocalSdrShim's private type; deduced, never named
-static bool dabSeedGain(ImplT* p, int wantSteps, double now) {
+static bool dabSeedGain(ImplT* p, int wantSteps, double now, const char* what = nullptr) {
     if (!p) return false;
     std::lock_guard<std::recursive_mutex> hw(p->modeMtx);
     if (p->radioReleased.load()) return false;
@@ -5018,6 +5040,10 @@ static bool dabSeedGain(ImplT* p, int wantSteps, double now) {
     agcSettleAfterGain(now);
     p->lastGainTenthDb = applied;
     p->queueHwGain(applied);
+    if (what)   // ★ the same seed for an ordinary band (vibe_agc_rules.h §3)
+        LOGI("AGC: entering %s at the gain it last settled at: %.1f dB (%d steps below the ceiling)",
+             what, applied / 10.0, want);
+    else
     LOGI("[DAB] entering block %s at the gain it last decoded at: %.1f dB (%d steps below the ceiling)",
          vibedab::kBandIII[g_dabChannel.load() < 0 ? 0 : g_dabChannel.load()].name, applied / 10.0, want);
     LocalSdrShim::instance().broadcastHwInfo();   // ★ the clients' gain readout follows the radio
@@ -11254,6 +11280,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             else
                 LOGI("[DAB] mode OFF: VibeAGC back in charge");
         }
+        // ★★ LEAVING DAB IS A NEW START for auto-IF: at 21:23 it narrowed to 110 kHz 1.4 s after
+        //    DAB off and widened again 2 s later (Sony, 2026-10-02). See vibe_agc_rules.h §1.
+        autoIfFreshStart("DAB off");
+        rx.setAutoBandwidth(0.0);
+        g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
         updateZoomView();
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         /* ★★★ AND RE-ASSERT IT ON THE DSP THREAD, AFTER ANY REBUILD HAS LANDED.
@@ -12223,6 +12254,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vfoBwHz.store(mp.bandwidth);
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         LOGI("audio chain: mode=%s bw=%.0f ch=%d", mode.c_str(), mp.bandwidth, mp.channels);
+        // ★★ A DEMODULATOR CHANGE IS A NEW START for auto-IF too: AM -> WFM at 96.6 narrowed 0.7 s
+        //    later on an S/N read through an overloaded front end ("rds dead"; Sony 21:25:32).
+        autoIfFreshStart("demodulator changed");
+        rx.setAutoBandwidth(0.0);
+        g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
     }
 
     // (Re)start the V5 engine at the current sampleRate/fftSize. Wires the
@@ -12460,14 +12496,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double reHz = std::max(1000.0,
                                      0.5 * g_demodBwHz.load(std::memory_order_relaxed));
         if (std::fabs(freq - g_agcLearnedAtHz.load(std::memory_order_relaxed)) > reHz) {
+            const double fromHz = g_agcLearnedAtHz.load(std::memory_order_relaxed);
             g_agcLearnedAtHz.store(freq, std::memory_order_relaxed);
+            /* ★★★ INTO ANOTHER BAND, AT THE GAIN THAT LAST SETTLED THERE (vibe_agc_rules.h §3). Carrying
+             *  airband's 49.6 dB onto 96.6 put 56 % of the samples on the rail for 8 s (Sony,
+             *  2026-10-02 21:25). Seeded BEFORE the forget, so the forget's longer settle (the whole
+             *  chain re-converging after a retune) is the one that stands. */
+            const int toBand = vibeagc::agcBandKey(freq);
+            if (fromHz > 0.0 && vibeagc::agcBandKey(fromHz) != toBand) {
+                int learned = -1;
+                { std::lock_guard<std::mutex> lk(g_bandGainMtx);
+                  auto it = g_bandGainMem.find(toBand); if (it != g_bandGainMem.end()) learned = it->second; }
+                if (learned >= 0) dabSeedGain(this, learned, Impl::nowSecs(), "this band");
+            }
             agcForget("retuned");
             g_agcWideSteps.store(-1, std::memory_order_relaxed);   // ★ see g_agcWideSteps
             // ★★ A NEW STATION HAS NEW NEIGHBOURS, so the narrowing decision does not travel
-            //    with the dial. Re-earned from the measurement at the new frequency, or not at all.
-            g_autoBwSnrOn.store(false, std::memory_order_relaxed);   // ★ new station, new average
-            g_adjNarrow.store(false, std::memory_order_relaxed);
-            g_adjRdsWasOn.store(false, std::memory_order_relaxed);
+            //    with the dial. Re-earned from the measurement at the new frequency, or not at all —
+            //    and not in the first seconds, while that measurement is still settling.
+            autoIfFreshStart("retuned");
+            rx.setAutoBandwidth(0.0);
+            g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
         }
         // ★ …and the dial moving changes where the filter should sit, in Auto.
         applyAutoIf();
@@ -27151,6 +27200,8 @@ void LocalSdrShim::autoBandwidthTick() {
     //    that fixed, a momentary fade must not blank a working display or yank the filter open;
     //    keep the last decision until there is a new one worth making.
     if (!p->rx.snrValid()) return;   // no pilot, nothing to judge on — hold
+    // ★★★ …and not in the first seconds after a new start (vibe_agc_rules.h §1): wide until then.
+    if (vibeagc::autoIfHeld(Impl::nowSecs(), g_autoIfQuietUntil.load(std::memory_order_relaxed))) return;
 
     // ★ paramsFor takes the mode NAME, not the pipeline's enum — the two live either side of
     //   rxModeFor(). WFM's own bandwidth is the ceiling, so a mode whose width is retuned later
@@ -28183,6 +28234,13 @@ void LocalSdrShim::overloadTick() {
                      "peak we are on", sepNow);
             } else {
                 g_settled.store(true, std::memory_order_relaxed);
+                /* ★★ REMEMBER IT FOR THIS BAND (vibe_agc_rules.h §3) — the figure a later retune back into
+                 *    the band starts from. Not in DAB: that has its own per-block memory. */
+                if (!g_dabMode.load(std::memory_order_relaxed)) {
+                    const int band = vibeagc::agcBandKey(p->audioFreq.load());
+                    std::lock_guard<std::mutex> lk(g_bandGainMtx);
+                    g_bandGainMem[band] = g_ovlSteps.load(std::memory_order_relaxed);
+                }
                 LOGI("settled: %.1f dB %s, gain holding", sepNow,
                      p->sepFromShoulders.load() ? "above the neighbouring spectrum"
                                                 : "above the noise floor (signal fills the window)");
@@ -28840,7 +28898,10 @@ void LocalSdrShim::overloadTick() {
         const int from = tgtIdx - steps;                       // the rung we are on now
         if (from > 0) {
             const double peak = g_adcPeakDbfs.load(std::memory_order_relaxed);
-            const double shed = std::max(0.0, peak - agcTargetDbfs());
+            /* ★★★ …UNLESS THE PEAK HAS STOPPED BEING A MEASUREMENT (vibe_agc_rules.h §2). It cannot read
+             *  above 0 dBFS, so with half the samples on the rail it said "6 dB over" four times
+             *  running and the loop took 8 s to shed 26.7 dB (Sony, 2026-10-02 21:25). */
+            const double shed = vibeagc::grossOverloadShedDb(std::max(0.0, peak - agcTargetDbfs()), clipPct);
             int best = from - 1;                               // always at least one rung
             for (int i = from - 1; i >= 0; --i) {
                 best = i;
