@@ -163,6 +163,15 @@ export const scrollLane = { paddingRight: SCROLL_LANE } as const;
 /** The scroller's own style, when its parent has ≥ SCROLL_LANE right padding to lend it. */
 export const scrollLaneOutset = { marginRight: -SCROLL_LANE } as const;
 
+/**
+ * ★★★ EVERY BOTTOM SHEET IS CAPPED AT 640 pt AND CENTRED (Stuart, 2026-10-02: "any that need the
+ * treatment please do it"). On a Mac the window IS the screen and an uncapped sheet ran its keys across
+ * ~2000 pt — the tuning-step sheet first; the audio sheet already had this cap. A phone is narrower than
+ * 640 in portrait, so nothing changes there. One constant so the sheets cannot drift apart.
+ */
+export const SHEET_MAX_W = 640;
+export const sheetCap = { alignSelf: 'center', width: '100%', maxWidth: SHEET_MAX_W } as const;
+
 // ── Today's literals ─────────────────────────────────────────────────────────
 
 /** MenuSheet / AudioSheet `C.gold` and `C.goldDim` (the accessibility skin's pale yellow). */

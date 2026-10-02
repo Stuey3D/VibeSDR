@@ -12,7 +12,7 @@ import { meterText, useMeters, type MeterBus } from './ControlsBar';
 import { isKiwiProtocol } from '../services/sdrTypes';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
-  PopupKey, PopupFader, PopupPlate, PopupHandle, PopupScrim, PopupWindow, type PopupTokens,
+  PopupKey, PopupFader, PopupPlate, PopupHandle, sheetCap, PopupScrim, PopupWindow, type PopupTokens,
   scrollLane, scrollLaneOutset,
 } from './PopupShell';
 import { sMeterText, sqlClosedOf } from '../constants/meters';
@@ -673,7 +673,7 @@ export default function AudioSheet({
         // (very wide) width — cap it and centre it.
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,
         paddingBottom: (landscape ? 12 : 40) + insets.bottom,
-        alignSelf: 'center', width: '100%', maxWidth: 640, maxHeight: sheetMaxH,
+        ...sheetCap, maxHeight: sheetMaxH,
       }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) }, metalFrame,
          metalFrame && { paddingTop: 0 }]}>
         <PopupPlate />

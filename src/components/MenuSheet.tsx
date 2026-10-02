@@ -58,7 +58,7 @@ import {
 import { AUTO_REASON_NOTE } from '../constants/transparency';
 import {
   usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
-  PopupKey, PopupFader, PopupPlate, PopupHandle, type PopupTokens,
+  PopupKey, PopupFader, PopupPlate, PopupHandle, type PopupTokens, SHEET_MAX_W,
 } from './PopupShell';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -1043,13 +1043,14 @@ function MenuSheetBody({
   // fixed maxHeight that fits portrait but overflows the much shorter landscape
   // sheet, clipping the bottom of the list. Cap them to the live sheet height.
   const dropMaxH = Math.min(300, Math.max(140, Math.round(sheetH - 180)));
+  // ★ Portrait is capped too (SHEET_MAX_W) — an iPad in portrait, or a tall Mac window, ran it edge to edge.
   const sheetW = isLandscape
     ? Math.min(520, winW - sheetInsets.left - sheetInsets.right - 24)
-    : undefined;
+    : winW > SHEET_MAX_W ? SHEET_MAX_W : undefined;
   const opaque = useSurfaceOpaque();
   const metalFrame = usePopupFrame(16, true);
-  const sheetGeom = isLandscape
-    ? { height: sheetH, width: sheetW, left: (winW - (sheetW ?? winW)) / 2,
+  const sheetGeom = sheetW !== undefined
+    ? { height: sheetH, width: sheetW, left: (winW - sheetW) / 2,
         right: undefined, borderTopLeftRadius: 16, borderTopRightRadius: 16 }
     : { height: sheetH };
   const backdropOp = useRef(new Animated.Value(0)).current;

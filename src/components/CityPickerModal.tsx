@@ -3,7 +3,7 @@ import { Modal, View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet } 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
-  PopupKey, PopupPlate, PopupHandle, PopupWindow, type PopupTokens, scrollLane,
+  PopupKey, PopupPlate, PopupHandle, PopupWindow, type PopupTokens, scrollLane, sheetCap,
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
 
@@ -87,7 +87,7 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={[s.backdrop, dim && s.backdropDim]}>
-        <View style={[s.sheet, { paddingBottom: insets.bottom + 10 }, metalFrame, metalFrame && { paddingTop: 0 }]}>
+        <View style={[s.sheet, sheetCap, { paddingBottom: insets.bottom + 10 }, metalFrame, metalFrame && { paddingTop: 0 }]}>
           <PopupPlate radius={14} />
           <PopupHandle />
           <Text style={s.title}>SET LOCATION</Text>

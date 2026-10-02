@@ -9,7 +9,7 @@ import { decoderTokensFor } from '../constants/decoderTokens';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { solidOver } from '../constants/faceplate';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { usePopupTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, PopupWindow, scrollLane } from './PopupShell';
+import { usePopupTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, PopupWindow, scrollLane, sheetCap } from './PopupShell';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from './PanelNav';
 import GainSlider from './GainSlider';
 import Slider from '@react-native-community/slider';
@@ -566,7 +566,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.kbWrap} pointerEvents="box-none">
       <DecoderSurface transparency="on">
-      <View style={[styles.sheet, { borderColor: frameBorder, backgroundColor: sheetBg,
+      <View style={[styles.sheet, sheetCap, { borderColor: frameBorder, backgroundColor: sheetBg,
         paddingBottom: insets.bottom + 12,
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
       }, metalFrame, metalFrame && { paddingTop: 0 }]}>

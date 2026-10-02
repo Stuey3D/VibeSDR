@@ -13,7 +13,7 @@ import { STEP_833 } from '../utils/airband';
 import { useTheme } from '../contexts/ThemeContext';
 import { useListNav, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
 import {
-  usePopupTheme, usePopupSurface, usePopupFrame, engraveText, PopupKey, PopupPlate, PopupHandle,
+  usePopupTheme, usePopupSurface, usePopupFrame, engraveText, PopupKey, PopupPlate, PopupHandle, sheetCap,
 } from './PopupShell';
 
 /** Today's dim and sheet glass — Transparency OFF drops the first and makes the second opaque. */
@@ -133,7 +133,7 @@ const st = StyleSheet.create({
    *  half until it was closed and reopened (Stuart, B16): a canvas that wide being resized is the one
    *  this sheet had no reason to be. A phone is narrower than the cap, so nothing changes there. */
   sheet: {
-    alignSelf: 'center', width: '100%', maxWidth: 640,
+    ...sheetCap,
     backgroundColor: SHEET_BG,
     borderTopWidth: 1,
     borderTopLeftRadius: 14, borderTopRightRadius: 14,

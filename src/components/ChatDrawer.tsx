@@ -31,7 +31,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText, windowStyle,
   PopupKey, PopupPlate, PopupHandle, PopupWindow, POPUP_FONT, type PopupTokens,
-  scrollLane,
+  scrollLane, sheetCap,
 } from './PopupShell';
 import type { ChatUserRow } from '../services/DecoderClient';
 import { phrasePadMaxHeight } from '../constants/chatPad';
@@ -320,7 +320,7 @@ function ChatDrawerBody({
         {/* ★★ Side insets too: a landscape phone's nav bar (Android) or notch (iOS) sits over the
             drawer's right / left edge, and it had the ✕ key and the longest phrase's end under it —
             seen, and not tappable. The plate still runs edge to edge; only the contents step in. */}
-        <Animated.View style={[cd.drawer, { borderTopColor: cc.border, paddingBottom: insets.bottom + 8,
+        <Animated.View style={[cd.drawer, sheetCap, { borderTopColor: cc.border, paddingBottom: insets.bottom + 8,
                                             paddingLeft: insets.left, paddingRight: insets.right, transform: [{ translateY }] },
                                surf.opaque && !pt.metal && { backgroundColor: surf.fill(C.bg) }, surf.shadow, metalFrame]}>
           <PopupPlate radius={14} />

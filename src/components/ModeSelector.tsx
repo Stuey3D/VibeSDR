@@ -8,7 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction, useKeyboardMode } from './PanelNav';
 import {
   usePopupSurface, usePopupTheme, usePopupFrame, engraveText, windowStyle,
-  PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader,
+  PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader, sheetCap,
 } from './PopupShell';
 
 /** Today's dim and sheet glass — Transparency OFF drops the first and makes the second opaque.
@@ -366,7 +366,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (§10.2). */}
       <PopupScrim style={st.backdrop} color={BACKDROP} onPress={onClose} onTouchStart={noteTouchInteraction} />
-      <View style={[st.sheet, { borderTopColor: t.barBorder }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },
+      <View style={[st.sheet, sheetCap, { borderTopColor: t.barBorder }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },
                     metalFrame, metalFrame && { paddingTop: 0 }]} onTouchStart={noteTouchInteraction}>
         <PopupPlate />
         <PopupHandle />

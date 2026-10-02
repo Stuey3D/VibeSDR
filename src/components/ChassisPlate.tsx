@@ -118,7 +118,11 @@ export default function ChassisPlate({ plate, radius }: { plate: PlateTokens; ra
   const [{ w, h }, onLayout] = useSize();
   return (
     <View style={StyleSheet.absoluteFill} onLayout={onLayout} pointerEvents="none">
-      {w > 0 && h > 0 && <PlateCanvas w={w} h={h} r={radius} plate={plate} />}
+      {/* ★★★ KEYED BY SIZE: a resize builds a FRESH canvas. On a Mac a sheet laid out narrow and then grew,
+          and the canvas kept drawing into its first surface — the brushed plate covered the left half of
+          the tuning-step sheet until it was closed and reopened, sometimes several times (Stuart, B16).
+          A size change is rare (open, rotate, window resize), so a remount costs nothing that matters. */}
+      {w > 0 && h > 0 && <PlateCanvas key={`${w}x${h}`} w={w} h={h} r={radius} plate={plate} />}
     </View>
   );
 }
@@ -165,7 +169,8 @@ export function GlossPanel({ style, radius, trim = true, squareBottom = false }:
   const [{ w, h }, onLayout] = useSize();
   return (
     <View style={[StyleSheet.absoluteFill, style]} onLayout={onLayout} pointerEvents="none">
-      {w > 0 && h > 0 && <GlossCanvas w={w} h={h} r={radius} trim={trim} squareBottom={squareBottom} />}
+      {/* ★ Keyed by size for the same reason as ChassisPlate's canvas. */}
+      {w > 0 && h > 0 && <GlossCanvas key={`${w}x${h}`} w={w} h={h} r={radius} trim={trim} squareBottom={squareBottom} />}
     </View>
   );
 }
