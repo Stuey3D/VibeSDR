@@ -12584,6 +12584,11 @@ function buildMenu() {
     (v) => wf!.applySettings({ wfBrightness: v }), 'wfBrightness');
   // ★ MOUSE WHEEL — zoom (0) or tune (1). Remembered, like the app's.
   segment('wheelAction', 'v', (v) => { wheelTunes = v === 1; }, 'wheelAction');
+  /* ★★★ AND APPLY WHAT WAS SAVED. segment() restores the HIGHLIGHT on load but does not fire `apply` —
+   *  right for the server-bound groups (re-sending them on load would be a client transmitting without a
+   *  user action), wrong for this one, which is purely local. So the page said TUNE after a reload while
+   *  the wheel went on zooming (Onfliner, 2026-10-02: "not remembered when the page is refreshed"). */
+  wheelTunes = prefs()['wheelAction'] === 1;
   slider('contrast', 'contrastVal', (v) => String(v),
     (v) => wf!.applySettings({ wfContrast: v }), 'wfContrast');
   slider('sharp', 'sharpVal', (v) => String(v),
