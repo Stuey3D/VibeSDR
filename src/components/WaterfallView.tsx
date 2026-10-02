@@ -45,6 +45,7 @@ import { AppState, Image as RNImage, PixelRatio, StyleSheet, Text, View } from '
 import {
   Canvas,
   Fill,
+  Group,
   Skia,
   Image as SkiaImage,
   ImageShader,
@@ -1858,8 +1859,19 @@ function WaterfallView({
 
   // Needle + acrylics memoised likewise — only rebuilds when the needle
   // geometry or colour actually changes.
-  const needleCanvas = useMemo(() => (
-    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
+  /* ★★★ ELEMENTS, NOT A CANVAS OF THEIR OWN (B19 memory audit, 2026-10-02). This and the static overlay
+   *  below were each a FULL-WINDOW <Canvas>, and every <Canvas> is a Metal layer holding up to three
+   *  drawables at window pixel size — on Stuart's Mac the app's IOSurface was 138 MB with the window up.
+   *  Both are now Groups drawn INSIDE the two live canvases, in full-view coordinates:
+   *    · the spectrum canvas (0 … wfTop+1) draws the static overlay FIRST (under the trace, as before)
+   *      and the needle LAST (over it, as before), the needle clipped at wfTop;
+   *    · the waterfall canvas (wfTop … height) draws the needle over the waterfall Fill, shifted up by
+   *      wfTop — its own bounds clip it.
+   *  Same layer order everywhere except one: during "WATERFALL INITIALIZING…" (before the first row) the
+   *  splash text now sits over the needle in the waterfall area instead of under it.
+   *  ★ Still memoised ELEMENTS, so an unrelated re-render reuses the subtree and reconciles nothing. */
+  const needleNodes = useMemo(() => (
+    <Group>
 
       {/* ── Frosted backing (under the acrylics): smoked-glass band dims the
              waterfall across the passband so the needle keeps contrast on
@@ -1927,15 +1939,23 @@ function WaterfallView({
                    width={needleStrip.w} height={height} fit="fill" />
       )}
 
-    </Canvas>
+    </Group>
   ), [width, height, needle, needleStrip, edgeStrip, needleColor, needleFrost,
       wallOverlay, centerMarker, centerMarkerColor]);
+  /** The needle's two halves: above the waterfall (clipped so the 1 px overlap row is not drawn twice) and
+   *  over it (in the waterfall canvas's own coordinates). */
+  const needleTop = useMemo(() => (
+    <Group clip={Skia.XYWHRect(0, 0, width, wfTop)}>{needleNodes}</Group>
+  ), [needleNodes, width, wfTop]);
+  const needleWf = useMemo(() => (
+    <Group transform={[{ translateY: -wfTop }]}>{needleNodes}</Group>
+  ), [needleNodes, wfTop]);
 
   // Static overlay (band plan/ticks/dB lines) memoised as ELEMENTS — when the
   // component re-renders for unrelated reasons React reuses the subtree and
   // skips reconciling dozens of Skia nodes.
-  const staticOverlayCanvas = useMemo(() => (
-    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
+  const staticOverlay = useMemo(() => (
+    <Group>
       {/* Opaque backing for the band/tick strips only — the spectrum graph
           area stays transparent so the instance backdrop image (an RN Image
           UNDER this canvas) can show through; without an image the root's
@@ -1961,13 +1981,14 @@ function WaterfallView({
         <Rect key={i} x={0} y={d.y} width={width} height={0.5}
               color="rgba(255,180,0,0.12)" />
       ))}
-    </Canvas>
-  ), [width, height, specTop, tickTop, bandSegs, ticks, dbLabels, specShow]);
+    </Group>
+  ), [width, specTop, tickTop, bandSegs, ticks, dbLabels, specShow]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
-  // Canvas 1 (bottom): waterfall texture only — the ONLY thing the 120Hz
-  // Reanimated scroll repaints. Canvas 2 (top): everything else, repainted at
-  // the 10Hz data rate. The canvas bounds clip the over-tall scrolling image.
+  // Canvas 1 (bottom): the waterfall texture, then the needle's lower half over it.
+  // Canvas 2 (top): the static overlay, the live spectrum trace, then the needle's
+  // upper half. TWO canvases, not four — see needleNodes. The canvas bounds clip
+  // the over-tall scrolling image.
   return (
     <GestureDetector gesture={gesture}>
       <View style={[styles.root, { width, height }]}>
@@ -1998,10 +2019,9 @@ function WaterfallView({
               </Shader>
             </Fill>
           )}
+          {needleWf}
         </Canvas>
         )}
-
-        {active && staticOverlayCanvas}
 
         {/* Init splash — the spectrum WS takes 1-2s to deliver its first
             frame; show intent instead of a black void. texReady flips on the
@@ -2014,11 +2034,16 @@ function WaterfallView({
           </View>
         )}
 
-        {/* Canvas: LIVE spectrum trace — isolated so the ~30Hz tween repaints
-            ONLY these two paths, not the band plan/ticks/needle/acrylics
-            (sharing one canvas redrew the whole overlay per tween tick). */}
+        {/* Canvas: static overlay, LIVE spectrum trace, needle. ★ This canvas
+            was once the trace alone, because sharing one canvas "redrew the
+            whole overlay per tween tick". That was a React re-record per tick;
+            the overlay and needle here are memoised elements and the trace is
+            a SharedValue path, so a tween tick replays a few dozen recorded
+            rects on the GPU and re-renders nothing in React. Two full-window
+            Metal layers (≈ 2 × 3 drawables at window size) cost far more. */}
         {active && (
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height: wfTop + 1 }}>
+          {staticOverlay}
           {specShow && (
             <Path path={specPath} style="fill">
               <LinearGradient start={vec(0, specTop)} end={vec(0, wfTop)}
@@ -2028,10 +2053,9 @@ function WaterfallView({
           {specShow && peakHold && (
             <Path path={peakPath} paint={peakPaint} />
           )}
+          {needleTop}
         </Canvas>
         )}
-
-        {active && needleCanvas}
 
         {/* ── Text overlays (RN Text — crisp, uses expo-font faces) ── */}
 
