@@ -8267,8 +8267,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (rspAgcInit) {
       agcInitNotifKey.current = showVtsNotice(
-        'Initialising AGC — this receiver is setting its gain up. The picture will rearrange once '
-        + 'or twice more, and may go briefly flat, before it settles.',
+        // ★ Stuart's wording (2026-10-03) — the same line the server sends, so the two never disagree.
+        'SDRplay AGC initialising: noise floor and signals will bounce until it settles (approx. 30 seconds)',
         600000);
       return;
     }

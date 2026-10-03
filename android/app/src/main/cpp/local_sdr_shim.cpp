@@ -10056,8 +10056,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              *   that explains the bouncing noise floor to somebody who has never
                              *   seen it (Stuart, 2026-09-15: "a VTS notification too so users get a
                              *   prominent message and idea what is going on"). */
-                            { const std::string body = "{\"type\":\"notice\",\"vts\":\"Setting the receiver's gain \xe2\x80\x94 "
-                                  "the noise floor will bounce for about half a minute while the AGC finds its level.\"}";
+                            { /* ★ Stuart's wording (2026-10-03: the old line was "too long winded" for the strip). */
+                              const std::string body = "{\"type\":\"notice\",\"vts\":\"SDRplay AGC initialising: noise floor and "
+                                  "signals will bounce until it settles (approx. 30 seconds)\"}";
                               for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body); }
                             LOGI("AGC kick 1/6: LNA state -> %d (RF gain %d/%d)",
                                  sdrp->currentLnaState(),
@@ -10417,10 +10418,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      "initialising indicator goes NOW, not when the six-step kick ended.",
                      sdrp->currentLnaState(), std::max(0, sdrp->lnaStateCount() - 1),
                      sdrp->currentIfGr());
-                { const int n = std::max(1, sdrp->lnaStateCount() - 1);
-                  const std::string body = "{\"type\":\"notice\",\"vts\":\"Gain set \xe2\x80\x94 RF gain "
-                      + std::to_string(n - sdrp->currentLnaState()) + "/" + std::to_string(n)
-                      + ", IF reduction " + std::to_string(sdrp->currentIfGr()) + " dB. The AGC now holds it.\"}";
+                { /* ★ Stuart's wording; the gains it settled on stay in the log line above and the panel. */
+                  const std::string body = "{\"type\":\"notice\",\"vts\":\"SDRplay AGC initialised: SDR now ready to use\"}";
                   for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body); }
             }
 
@@ -30454,6 +30453,12 @@ std::string LocalSdrShim::radioCapsJson() const {
     std::string j = ",\"radio\":{\"driver\":\"sdrplay\",\"model\":\"" + d.model() + "\"";
     j += ",\"lnaStates\":" + std::to_string(d.lnaStateCount());
     j += ",\"ifGrMin\":20,\"ifGrMax\":59,\"agcSetPoint\":true";
+    /* ★★★ THE RSP'S OWN TUNING RANGE — the app widens its dial to whatever "ranges" says, and this
+     *  branch never said: so the app kept its RTL-era 100 kHz floor and an RSP could not be tuned
+     *  into VLF or the bottom of LW from the app, while the web client (and a shared dial moved by it)
+     *  went there happily (Stuart, 2026-10-03, an RSP1A on 60 kHz). SDRplay's datasheets: the original
+     *  RSP1 starts at 10 kHz, every later RSP at 1 kHz; all reach 2 GHz. */
+    j += std::string(",\"ranges\":[[") + (d.model() == "RSP1" ? "10000" : "1000") + ",2000000000]]";
     j += std::string(",\"rfNotch\":") + (d.hasRfNotch() ? "true" : "false");
     j += std::string(",\"dabNotch\":") + (d.hasDabNotch() ? "true" : "false");
     j += std::string(",\"biasT\":") + (d.hasBiasT() ? "true" : "false");
