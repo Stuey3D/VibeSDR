@@ -36,11 +36,34 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 #    26.6) landed on a runner where `brew install node` ended in "No such keg: /usr/local/Cellar/node"
 #    and the archive died at `node: command not found`. The official tarball from nodejs.org needs
 #    nothing from the image: fetched for this runner's architecture into $HOME and put on PATH.
+# ★★ PINNED AND HASH-CHECKED (audit 2026-10-03). It was `latest-v22.x` piped straight into tar, so
+#    whatever nodejs.org served that minute ran our build — unchecked. Now ONE version, downloaded to
+#    a file, its SHA-256 compared with the line for that exact filename in the release's
+#    SHASUMS256.txt, and only then unpacked. Any failure stops the build: fail closed.
+#    ★ Bump NODE_FALLBACK_VER deliberately (react-native wants ^22.13.0 on the 22 line).
 if ! command -v node >/dev/null 2>&1; then
+  NODE_FALLBACK_VER=v22.20.0
   ARCH=$(uname -m); case "$ARCH" in arm64) NARCH=arm64 ;; *) NARCH=x64 ;; esac
-  TAR=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | awk -v a="darwin-$NARCH.tar.gz" '$2 ~ a {print $2; exit}')
-  echo "Homebrew gave no Node; fetching https://nodejs.org/dist/latest-v22.x/$TAR"
-  mkdir -p "$HOME/node" && curl -fsSL "https://nodejs.org/dist/latest-v22.x/$TAR" | tar -xz -C "$HOME/node" --strip-components=1
+  NODE_BASE="https://nodejs.org/dist/$NODE_FALLBACK_VER"
+  TAR="node-$NODE_FALLBACK_VER-darwin-$NARCH.tar.gz"
+  NODE_DL=$(mktemp -d)
+  echo "Homebrew gave no Node; fetching $NODE_BASE/$TAR"
+  curl -fsSL --retry 3 "$NODE_BASE/SHASUMS256.txt" -o "$NODE_DL/SHASUMS256.txt"
+  WANT=$(awk -v f="$TAR" '$2 == f {print $1; exit}' "$NODE_DL/SHASUMS256.txt")
+  if [ -z "$WANT" ]; then
+    echo "!!! $TAR is not listed in $NODE_BASE/SHASUMS256.txt — refusing"
+    exit 1
+  fi
+  curl -fsSL --retry 3 "$NODE_BASE/$TAR" -o "$NODE_DL/$TAR"
+  GOT=$(shasum -a 256 "$NODE_DL/$TAR" | awk '{print $1}')
+  if [ "$GOT" != "$WANT" ]; then
+    echo "!!! SHA-256 MISMATCH for $TAR: got $GOT, SHASUMS256.txt says $WANT — refusing"
+    exit 1
+  fi
+  echo "$TAR SHA-256 verified ($GOT)"
+  mkdir -p "$HOME/node"
+  tar -xzf "$NODE_DL/$TAR" -C "$HOME/node" --strip-components=1
+  rm -rf "$NODE_DL"
   export PATH="$HOME/node/bin:$PATH"
 fi
 
