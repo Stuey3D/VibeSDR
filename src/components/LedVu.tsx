@@ -251,29 +251,38 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
       const mu = muPos.value, sg = sigma.value;
       const st = steadySv.value === 1, mute = muting.value === 1;
       const was = litState.value, prev = bright.value;
-      const tgt = new Array(VU_SEGMENTS);
-      const lit = new Array(VU_SEGMENTS);
+      /* ★★ ONE ARRAY PER FRAME, NOT THREE (audit 2026-10-03). `buf` holds the targets and is then
+       *  overwritten IN PLACE with the eased brightness, slot by slot (each target is read before its
+       *  slot is replaced), and that same array is what is published to `bright`. The lit flags are
+       *  built only on the rare frame one flips. Not zero: anything written to a shared value must be
+       *  a FRESH array (Segment's derived values read it), and a scratch held in a shared value and
+       *  mutated in place is a capture scripts/test_worklet_defaults.mjs cannot vouch for — so the
+       *  one remaining allocation stays. Drawing unchanged. */
+      const buf = new Array(VU_SEGMENTS);
       let litChanged = false;
       for (let i = 0; i < VU_SEGMENTS; i++) {
         const t = segmentTarget(i, mu, sg, st, mute, was[i] === 1, thresholds);
-        tgt[i] = t;
-        lit[i] = t >= 0.5 ? 1 : 0;
-        if (lit[i] !== was[i]) litChanged = true;
+        buf[i] = t;
+        if ((t >= 0.5 ? 1 : 0) !== was[i]) litChanged = true;
       }
-      if (litChanged) litState.value = lit;
+      if (litChanged) {
+        const lit = new Array(VU_SEGMENTS);
+        for (let i = 0; i < VU_SEGMENTS; i++) lit[i] = buf[i] >= 0.5 ? 1 : 0;
+        litState.value = lit;
+      }
       /* ★★ NO PEAK HOLD on the LED strip (Stuart, 2026-10-01: "no peak hold on the LED, it's too
        *  confusing"). A held segment one above the live edge made the edge read as DIMMING FIRST — the
        *  eye takes the held LED as the level and the real edge below it as the one fading. The strip
        *  shows the level and nothing else; the analogue meter keeps its peak NEEDLE (§4.5). */
       let changed = false;
-      const next = new Array(VU_SEGMENTS);
       for (let i = 0; i < VU_SEGMENTS; i++) {
-        let b = st ? tgt[i] : eyeStep(prev[i], tgt[i], dt);
-        if (Math.abs(b - tgt[i]) < 0.002) b = tgt[i];
-        next[i] = b;
+        const t = buf[i];
+        let b = st ? t : eyeStep(prev[i], t, dt);
+        if (Math.abs(b - t) < 0.002) b = t;
+        buf[i] = b;   // the target becomes the brightness — see `buf` above
         if (Math.abs(b - prev[i]) > 0.0005) changed = true;
       }
-      if (changed) bright.value = next;
+      if (changed) bright.value = buf;
       else if (!litChanged && !asked.value) { asked.value = 1; scheduleOnRN(sleep, gen.value); }
     } catch (e) {
       faulted.value = 1;
