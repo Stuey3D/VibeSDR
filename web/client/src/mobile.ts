@@ -386,7 +386,8 @@ export function initMobileControls(deps: MobileDeps) {
     }
     // ★ The airband channel line (src/utils/airband.ts) — hidden, and so taking no room, elsewhere.
     const chEl = document.getElementById('mChan');
-    if (chEl) { chEl.hidden = !ft?.chan; put(chEl, ft?.chan ?? ''); }
+    // ★ Write-on-change (4 Hz poll; the value almost never moves).
+    if (chEl) { const h = !ft?.chan; if (chEl.hidden !== h) chEl.hidden = h; put(chEl, ft?.chan ?? ''); }
     put($('mMode'), deps.mode().toUpperCase());
     put($('mStep'), deps.stepLabel());
     // ★ The stereo light, mute, LOCK/FREE and the recorder are NOT polled here: main.ts has ONE

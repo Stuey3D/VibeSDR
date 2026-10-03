@@ -166,8 +166,18 @@ function lastTuned(): { hz: number; mode: SDRMode } | null {
   return t && t.hz > 0 ? t : null;
 }
 
+/** ★ What saveTuned last wrote. It is called once a second (and on beforeunload); without this it
+ *  parsed the whole prefs blob (plus the master view), re-serialised it and wrote localStorage every
+ *  second while the dial sat still. Trade-off: if ANOTHER TAB writes a different dial for the same
+ *  server, this tab no longer re-asserts its own every second — it writes again only when its own
+ *  dial moves (last mover wins, which is the more honest answer anyway). Nothing in this page
+ *  deletes the `tuned` key, so a skipped write can never leave it missing. */
+let savedTunedKey = '';
 function saveTuned() {
   if (!spec || !currentHost || !spec.frequency) return;
+  const key = currentHost + '|' + Math.round(spec.frequency) + '|' + spec.mode;
+  if (key === savedTunedKey) return;
+  savedTunedKey = key;
   const all = (prefs().tuned ?? {}) as Record<string, { hz: number; mode: SDRMode }>;
   all[currentHost] = { hz: Math.round(spec.frequency), mode: spec.mode };
   savePref('tuned', all);
@@ -2070,9 +2080,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (!hwAgcOn || hwGainNow < 0) return;
       const chip = $('ovlChip');
       if (!chip.classList.contains('easing')) return;   // a move is being announced; leave it
-      chip.textContent = hwDsActive ? `${DS_PAUSED}${ifText()}${pkText()}`
-                                    : `AGC ${(hwGainNow / 10).toFixed(1)} dB${ifText()}${pkText()}`;
-      chip.classList.toggle('fault', adcClipPct >= 0.01);
+      // ★ Write-on-change: ADC stats arrive several times a second and the text rarely differs.
+      setText(chip, hwDsActive ? `${DS_PAUSED}${ifText()}${pkText()}`
+                               : `AGC ${(hwGainNow / 10).toFixed(1)} dB${ifText()}${pkText()}`);
+      setClass(chip, 'fault', adcClipPct >= 0.01);
     },
     onSigStat: (chan, floor) => {
       if (!Number.isFinite(chan) || !Number.isFinite(floor)) return;
@@ -2140,7 +2151,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         logoQuery = '';
         logoDnsKey = '';
         rdsLogoProvisional = false;
-  logoFromIdentity = false;
         logoFromIdentity = false;
       }
       // ★★★ AND UPGRADE A DERIVED ANSWER THE MOMENT THE REAL ECC ARRIVES. A logo found from an
@@ -3515,8 +3525,8 @@ function applyVtsScroll(isLive: boolean) {
    * ★★ DERIVED FROM THE DURATION ACTUALLY APPLIED ABOVE (vtsNameDurS), not recomputed here from
    *   the same inputs. Two derivations of one number is how they drift apart, which is exactly
    *   the fault this is fixing.
-   * ★ Once per notice (vtsNoticeSized). updateVts() runs on every spectrum frame and on the hold
-   *   timer, so extending on each pass would push the deadline for ever and it would never go. */
+   * ★ Once per notice (vtsNoticeSized). updateVts() runs on every RDS message, every tune and on the
+   *   hold timer, so extending on each pass would push the deadline for ever and it would never go. */
   if (vtsNoticeKey && !vtsNoticeSized && vtsNameOver > 4 && vtsNameDurS > 0) {
     vtsNoticeSized = true;
     // The travel occupies 94% of the run (keyframes 3%..97%), after a 0.35 s delay, and then a
@@ -3699,8 +3709,8 @@ let vtsFitSig = '';
  *   Stuart: on a phone "the DAB/DAB+ (Band III) is dropped, the RDS logo, then the flag". The
  *   decision is vtsFit() (shared, tested); this only MEASURES: the pill's content width, each mark's
  *   natural width with nothing dropped, and the line at no more than VTS_LINE_MIN_PX.
- * ★★ ONLY WHEN SOMETHING THAT COSTS WIDTH HAS CHANGED. updateVts() runs on every spectrum frame and
- *    measuring forces a layout; the signature is every input that can move the answer — the window,
+ * ★★ ONLY WHEN SOMETHING THAT COSTS WIDTH HAS CHANGED. updateVts() runs on every RDS message and tune
+ *    (several a second on WFM) and measuring forces a layout; the signature is every input that can move the answer — the window,
  *    the mode, which marks are up and what the band and flag say — so a steady station measures once.
  *    ★ A logo that finishes loading AFTER the render changes the signature, and so refits next frame.
  */
@@ -3839,8 +3849,10 @@ function updateVts() {
   //    it is about where you have just ARRIVED, which is exactly the moment it is worth reading.
   if (Date.now() < vtsBandUntil) {
     /* ★★★ ONLY WRITE THE TEXT WHEN IT CHANGES, or nothing can ever scroll.
-     *   updateVts() runs on EVERY spectrum frame — about fifteen times a second — and this branch
-     *   assigned textContent every time. That destroys the <span> the slide animation lives on,
+     *   updateVts() then ran on EVERY spectrum frame — about fifteen times a second — and this branch
+     *   assigned textContent every time. (It no longer runs per spectrum frame: today it runs on every
+     *   RDS message, every tune/renderFreq, DAB state and the notice timers — still several times a
+     *   second on a WFM station, so the guard is still load-bearing.) That destroys the <span> the slide animation lives on,
      *   applyVtsScroll dutifully rebuilds it, and rebuilding restarts the animation from zero. So
      *   the line twitched at the start and never advanced: "it attempted to scroll the message but
      *   then stopped" (Stuart, 2026-08-27). Every earlier fix — the missing applyVtsScroll call,
@@ -4343,17 +4355,24 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   const b0 = Math.max(0, Math.floor((spec.frequency + spec.bandwidthLow - lo) / hzPerBin));
   const b1 = Math.min(n - 1, Math.ceil((spec.frequency + spec.bandwidthHigh - lo) / hzPerBin));
 
-  // Signal = strongest bin in the demod passband.
   let sigDb = -160;
-  for (let i = b0; i <= b1; i++) if (bins[i] > sigDb) sigDb = bins[i];
+  let noiseDb = -120;
+  // ★ ONLY WHEN THE SERVER HAS NOT SENT ITS OWN FIGURES. Both values below are overwritten by
+  //   srvChanDb/srvFloorDb whenever srvSigValid (the normal case on any current VibeServer), so
+  //   the per-frame array build + n/8-element sort (~20 Hz) was computed and thrown away.
+  //   Trade-off: none — the result is identical; only discarded work is skipped.
+  if (!srvSigValid) {
+    // Signal = strongest bin in the demod passband.
+    for (let i = b0; i <= b1; i++) if (bins[i] > sigDb) sigDb = bins[i];
 
-  // Noise floor = a low percentile of the WHOLE frame. Not the mean: a strong
-  // carrier drags a mean upward and the SNR reads low exactly when the signal is
-  // strongest. Sampled every 8th bin — this runs per frame.
-  const sample: number[] = [];
-  for (let i = 0; i < n; i += 8) sample.push(bins[i]);
-  sample.sort((a, b) => a - b);
-  let noiseDb = sample[Math.floor(sample.length * 0.25)] ?? -120;
+    // Noise floor = a low percentile of the WHOLE frame. Not the mean: a strong
+    // carrier drags a mean upward and the SNR reads low exactly when the signal is
+    // strongest. Sampled every 8th bin — this runs per frame.
+    const sample: number[] = [];
+    for (let i = 0; i < n; i += 8) sample.push(bins[i]);
+    sample.sort((a, b) => a - b);
+    noiseDb = sample[Math.floor(sample.length * 0.25)] ?? -120;
+  }
 
   // ★★★ PREFER THE SERVER'S MEASUREMENT, BECAUSE EVERYTHING ABOVE IS MEASURED IN WHATEVER
   //     RESOLUTION THE USER HAPPENS TO BE ZOOMED TO. A frame's bins narrow as you zoom in, so a
@@ -4456,8 +4475,8 @@ function drawSquelchBar(sigDbRaw: number) {
   //    every meter frame because `srvSigValid` flips the moment the first `sig` lands.
   // ★ The slider belongs to the mode: no auto, no knob. A control for a mode that is off is the
   //   same dead control AGENTS.md warns about, just slower to notice.
-  const mw = document.getElementById('sqlAutoMarginWrap');
-  if (mw) mw.hidden = !sqlAuto;
+  // ★ Write-on-change (setHidden): this runs every meter frame and the value almost never moves.
+  setHidden(document.getElementById('sqlAutoMarginWrap'), !sqlAuto);
   const ab = document.getElementById('sqlAuto') as HTMLButtonElement | null;
   if (ab) {
     setClass(ab, 'on', sqlAuto);
@@ -6191,6 +6210,8 @@ function annLamp(d: DabState): string {
   return '';
 }
 
+/** True when dabRender skipped the (hidden) signal pane — see the note in dabRender. */
+let dabSigStale = false;
 function dabSetPane(p: 'stations' | 'signal') {
   dabPane = p;
   const st = document.getElementById('dabStations');
@@ -6202,6 +6223,9 @@ function dabSetPane(p: 'stations' | 'signal') {
   if (bt) bt.innerHTML = p === 'stations' ? 'SIGNAL &#9656;' : '&#9666; STATIONS';
   // ★ The pane just shown was built hidden — its labels have not been measured yet.
   const shown = p === 'stations' ? st : sg;
+  // ★ Fill the signal pane NOW if renders skipped it while hidden, rather than showing it stale
+  //   until the next stats block (~0.5 s).
+  if (p === 'signal' && dabSigStale && dabOn && dabState) dabRender();
   if (shown) requestAnimationFrame(() => dabArmMarquee(shown));
 }
 
@@ -6316,7 +6340,12 @@ function dabRender() {
   /* ★ The now-playing text (DLS) sits under the service it belongs to — the field OWRX omits
    *  and the reason Stuart asked for it. The .dls style has been in the sheet since 2026-09-04;
    *  nothing ever emitted the element. */
-  const listScroll = document.getElementById('decBody')?.scrollTop ?? 0;
+  /* ★ READ ONCE, BEFORE ANY WRITE. The scroll position was read here and AGAIN further down
+   *  (`keepScroll`), after the list and pane writes — a second forced synchronous layout per block.
+   *  Nothing between the two moves the scroll except the restore just below, which restores this
+   *  same value, so one read serves both. */
+  const body = document.getElementById('decBody');
+  const listScroll = body ? body.scrollTop : 0;
   /* ★★ ONLY REWRITE THE LIST WHEN IT CHANGED. The stats block arrives twice a second; rebuilding
    *  the rows each time restarted every scrolling label from its first frame, so long labels
    *  never actually travelled. A string compare is far cheaper than the layout it saves. */
@@ -6337,7 +6366,7 @@ function dabRender() {
           : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
     for (const el of Array.from(st.querySelectorAll('.dabSvc')) as HTMLElement[])
       el.onclick = () => { dabPickedAt = performance.now(); dabPcmRunStart = 0; dabPcmRoseAt = 0; audio?.holdHealing(6000); spec?.dabService(Number(el.dataset.sid)); dabRender(); };
-    { const b = document.getElementById('decBody'); if (b && listScroll) b.scrollTop = listScroll; }
+    if (body && listScroll) body.scrollTop = listScroll;
   }
   for (const sv of d.services) {
     const el = st.querySelector(`.dabSvc[data-sid="${sv.sid}"]`) as HTMLElement | null;
@@ -6360,12 +6389,26 @@ function dabRender() {
    *  station list"). Measured once per label, after layout; the travel is the overflow. */
   dabArmMarquee(st);
 
+  /* ★★ THE SIGNAL PANE IS ONLY BUILT WHILE IT IS SHOWING. It is ~60 rows rebuilt as strings, patched,
+   *  plus two canvases, twice a second — all into a display:none box while the station list is up
+   *  (the default pane). dabSetPane('signal') renders at once when it was skipped (dabSigStale), so
+   *  the pane is never seen out of date.
+   *  ★ dabTxRemember MUST STILL RUN EVERY BLOCK: it is the memory of which transmitters this
+   *    multiplex has had, and a site identified while the list was showing has to be in the pane
+   *    when it opens. */
+  if (dabPane !== 'signal') {
+    dabTxRemember(d);
+    dabSigStale = true;
+    if (body && listScroll) body.scrollTop = listScroll;
+    return;
+  }
+  dabSigStale = false;
+
   const row = (k: string, v: string) => { rowsKeys.push(k); return `<div class="row"><span>${k}</span><span>${v}</span></div>`; };
   /* ★ KEEP THE SCROLL. Both panes are rebuilt from every stats block, twice a second, and an
    *  innerHTML rewrite puts the box back to the top — "when scrolling down to see more info in
    *  the signal analysis window it kept snapping up" (Stuart, 2026-09-07). */
-  const body = document.getElementById('decBody');
-  const keepScroll = body ? body.scrollTop : 0;
+  const keepScroll = listScroll;
   const cur = d.services.find(x => x.sid === d.sid);
   /* ★ The pane opens with WHO you are listening to — a larger logo and the name — before the
    *  numbers (Stuart, 2026-09-07, from his screenshot of the pane). */
@@ -9437,7 +9480,31 @@ function initDecoders(host: string, auth: AuthState) {
       //    those would scroll 59 near-identical lines past the reader every minute, burying the
       //    decoded times among them. Only the time decoders use it; everything else appends
       //    exactly as before.
-      let text = el.textContent || '';
+      /* ★ APPEND, DON'T REWRITE. This used to rebuild the whole box — read textContent, add the
+       *  new characters, slice the last 8,000 and assign it back — on EVERY message, and RTTY
+       *  streams a character or two at a time, so each character cost an 8,000-char string build
+       *  and a fresh text node. Now the box holds ONE text node that is appended to in place
+       *  (appendData), with a \r progress line rewritten by deleteData, and the 8,000-character
+       *  cap applied in BATCHES: the head is trimmed back to 8,000 only once the node passes
+       *  8,000 + DEC_TRIM_SLACK.
+       *  Trade-off: the box can hold up to DEC_TRIM_SLACK (2,000) more characters of history between
+       *  trims, and a trim removes up to that much from the top at once instead of one character
+       *  per message. Everything else — the \r rule, the CR folding, auto-follow only at the
+       *  bottom — is unchanged. */
+      const DEC_TRIM_SLACK = 2000;
+      // ★★ Follow the newest text only if the reader is at the bottom (B11, Stuart: scrolling up to
+      //    read history snapped straight back on every new character). Measured BEFORE any write, as
+      //    before — the old code read it before replacing the text.
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      let node: Text;
+      if (el.firstChild && el.firstChild === el.lastChild && el.firstChild.nodeType === 3) {
+        node = el.firstChild as Text;
+      } else {
+        // Another writer (clear, a refusal message) left something else — fold it into one node.
+        node = document.createTextNode(el.textContent || '');
+        el.textContent = '';
+        el.appendChild(node);
+      }
       // ★★★ ONLY THE TIME DECODERS SPEAK THE TERMINAL CONVENTION — RTTY's CARRIAGE RETURNS ARE
       //     DATA. CR is a character in the Baudot alphabet (see the tables in fsk_decoder.cpp) and
       //     stations really send it, usually as CR CR LF and sometimes bare. Treating those as
@@ -9455,8 +9522,10 @@ function initDecoders(host: string, auth: AuthState) {
       if (!terminalCR) t = t.replace(/\r+\n?/g, '\n');
       for (const chunk of t.split(/(?=\r)/)) {
         if (chunk.startsWith('\r')) {
-          const cut = text.lastIndexOf('\n');
-          text = (cut >= 0 ? text.slice(0, cut + 1) : '') + chunk.slice(1);
+          const cut = node.data.lastIndexOf('\n');
+          const keep = cut >= 0 ? cut + 1 : 0;
+          if (node.length > keep) node.deleteData(keep, node.length - keep);
+          node.appendData(chunk.slice(1));
           decProgressLine = true;
         } else {
           // ★★ CLOSE THE PROGRESS LINE FIRST. It is written WITHOUT a trailing newline so the next
@@ -9464,14 +9533,11 @@ function initDecoders(host: string, auth: AuthState) {
           //    end of it: "second 59/59[MSF] locked — carrier +13 dB" (Stuart's screenshot,
           //    2026-08-11). Only after a progress line, because RTTY streams text character by
           //    character with no newlines of its own and must not be broken up.
-          if (decProgressLine) { text += '\n'; decProgressLine = false; }
-          text += chunk;
+          if (decProgressLine) { node.appendData('\n'); decProgressLine = false; }
+          node.appendData(chunk);
         }
       }
-      // ★★ Follow the newest text only if the reader is at the bottom (B11, Stuart: scrolling up to
-      //    read history snapped straight back on every new character).
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-      el.textContent = text.slice(-8000);
+      if (node.length > 8000 + DEC_TRIM_SLACK) node.deleteData(0, node.length - 8000);
       if (atBottom) el.scrollTop = el.scrollHeight;
       setDecLive(true);
     },
@@ -13692,17 +13758,47 @@ function clampTune(hz: number): number {
 /** ★ Black out the part of the window the radio cannot tune, and say what it is.
  *  Only ever ONE region: the visible span is far narrower than any real gap, so a window can
  *  overlap at most one edge. Handling several would be code for a case that cannot occur. */
+/** ★ updateRangeGap runs on EVERY spectrum frame (~20 Hz). It used to write left/width/textContent
+ *  unconditionally and then call getBoundingClientRect() — a forced synchronous layout per frame
+ *  while the overlay showed. Now: the overlay's state is reduced to a key (x0, x1, message, the
+ *  wrap's width) and nothing is written or measured while it is unchanged; the note's pixel width
+ *  is COMPUTED from #wfWrap's width (kept by a ResizeObserver, so no layout read on the frame path)
+ *  instead of measured. #rangeGap is absolute inside #wfWrap with `* { box-sizing: border-box }`,
+ *  so its rendered width is exactly (x1 - x0) × the wrap's width — the same number the rect gave.
+ *  Trade-off: one ResizeObserver on #wfWrap; on a browser without ResizeObserver it falls back to
+ *  measuring, but only when the key changed (and a window resize invalidates the key). */
+let rangeGapKey = '';
+let rangeGapWrapW = -1;            // #wfWrap width in CSS px from the ResizeObserver; -1 = unknown
+let rangeGapRoInit = false;
+function rangeGapInitRo() {
+  if (rangeGapRoInit) return;
+  rangeGapRoInit = true;
+  const wrap = document.getElementById('wfWrap');
+  if (wrap && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver((ents) => {
+      const e = ents[ents.length - 1];
+      if (e) rangeGapWrapW = e.contentRect.width;
+    }).observe(wrap);
+  } else {
+    window.addEventListener('resize', () => { rangeGapKey = ''; });
+  }
+}
+function rangeGapHide(el: HTMLElement | null) {
+  rangeGapKey = '';
+  setClass(el, 'show', false);
+}
+
 function updateRangeGap(centerHz: number, bwHz: number) {
   const el = document.getElementById('rangeGap');
   const note = document.getElementById('rangeGapNote');
   // ★ The same set the clamp uses, or the shading marks a wall the listener will not meet.
   const ranges = allowedRanges() ?? tuneRanges();
-  if (!el || !note || !ranges || bwHz <= 0) { el?.classList.remove('show'); return; }
+  if (!el || !note || !ranges || bwHz <= 0) { rangeGapHide(el); return; }
 
   const lo = centerHz - bwHz / 2, hi = centerHz + bwHz / 2;
   // The window's own edges, and the range that contains the middle of it.
   const inRange = ranges.find(([a, b]: [number, number]) => centerHz >= a && centerHz <= b);
-  if (!inRange) { el.classList.remove('show'); return; }
+  if (!inRange) { rangeGapHide(el); return; }
   const [rLo, rHi] = inRange;
 
   let x0 = 0, x1 = 0, msg = '';
@@ -13725,15 +13821,21 @@ function updateRangeGap(centerHz: number, bwHz: number) {
     msg = prev
       ? `${(rLo / 1e6).toFixed(3)} MHz — ${whyLo}.\nTune down again to jump to ${(prev[1] / 1e6).toFixed(3)} MHz.`
       : `${(rLo / 1e6).toFixed(3)} MHz — ${whyLo}.`;
-  } else { el.classList.remove('show'); return; }
+  } else { rangeGapHide(el); return; }
 
   x0 = Math.max(0, Math.min(1, x0)); x1 = Math.max(0, Math.min(1, x1));
-  if (x1 - x0 <= 0.005) { el.classList.remove('show'); return; }   // a sliver is just noise
-  el.style.left  = `${x0 * 100}%`;
-  el.style.width = `${(x1 - x0) * 100}%`;
-  note.textContent = msg;
-  el.classList.add('show');
-  el.hidden = false;
+  if (x1 - x0 <= 0.005) { rangeGapHide(el); return; }   // a sliver is just noise
+  rangeGapInitRo();
+  // ★ Nothing moved → nothing to write and nothing to measure. (The dial is still on nearly every
+  //   frame; this is the common case.)
+  const key = x0 + '|' + x1 + '|' + rangeGapWrapW + '|' + msg;
+  if (key === rangeGapKey) return;
+  rangeGapKey = key;
+  setStyle(el, 'left', `${x0 * 100}%`);
+  setStyle(el, 'width', `${(x1 - x0) * 100}%`);
+  setText(note, msg);
+  setClass(el, 'show', true);
+  setHidden(el, false);
 
   // ★★★ THE NOTE LIVES INSIDE THE DEAD SPACE, SO A NARROW GAP DESTROYS IT. Tune to the very edge
   //     of a band and the black region is a few percent of the width — the text then wraps to one
@@ -13746,7 +13848,9 @@ function updateRangeGap(centerHz: number, bwHz: number) {
   // ★ Measured in pixels, not percent: the same 6% is comfortable on a desktop and unusable on a
   //   phone, and it is the pixels the text has to fit into.
   const NOTE_MIN_PX = 170;
-  note.hidden = el.getBoundingClientRect().width < NOTE_MIN_PX;
+  // Computed, not measured, when the wrap's width is known (see above); measured only as a fallback.
+  const gapPx = rangeGapWrapW >= 0 ? (x1 - x0) * rangeGapWrapW : el.getBoundingClientRect().width;
+  setHidden(note, gapPx < NOTE_MIN_PX);
 }
 
 let gapMsgTimer: number | null = null;
