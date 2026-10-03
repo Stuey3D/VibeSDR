@@ -98,8 +98,11 @@ android {
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
     // Release/upload signing — loaded from android/keystore.properties (gitignored).
-    // If absent (e.g. a fresh clone), release falls back to the debug key so the
-    // project still builds; only the real upload AAB needs the upload key present.
+    // ★★★ A RELEASE WITHOUT THE UPLOAD KEY NOW FAILS (audit 2026-10-03). It used to fall back to
+    //     the debug key — the PUBLIC React Native one, committed in every RN template — and build
+    //     a "release" anyone could re-sign. The debug fallback below stays only so a fresh clone
+    //     still CONFIGURES (CodeQL runs assembleDebug); requireUploadKey, wired into
+    //     preReleaseBuild under the android block, stops any release task before it builds.
     def keystorePropsFile = rootProject.file("keystore.properties")
     def hasUploadKey = keystorePropsFile.exists()
     def keystoreProps = new Properties()
@@ -165,6 +168,23 @@ android {
         main { jniLibs.srcDirs += ["${buildDir}/sdrkit-jniLibs", "${buildDir}/cloudflared-jniLibs"] }
     }
 }
+
+// ★★★ NO RELEASE ON THE DEBUG KEY. preReleaseBuild is the first task of every release variant
+//     (assembleRelease, bundleRelease, installRelease…), so a missing android/keystore.properties
+//     stops the build there with a message, instead of producing a debug-signed "release".
+//     Debug builds never run preReleaseBuild and are unaffected.
+def releaseHasUploadKey = rootProject.file("keystore.properties").exists()
+tasks.register('requireUploadKey') {
+    doLast {
+        if (!releaseHasUploadKey) {
+            throw new GradleException(
+                "Release build refused: android/keystore.properties is missing, so there is no " +
+                "upload key and the release would be signed with the PUBLIC debug key. Restore " +
+                "keystore.properties (storeFile, storePassword, keyAlias, keyPassword) and retry.")
+        }
+    }
+}
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach { dependsOn 'requireUploadKey' }
 
 // Flatten the needed src/main/cpp/sdr-kit/<ABI>/lib/*.so -> build/sdrkit-jniLibs.
 // V5: only librtlsdr + libusb (symlinks dereferenced to real files by Copy).
