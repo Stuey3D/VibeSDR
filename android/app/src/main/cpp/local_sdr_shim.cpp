@@ -9365,8 +9365,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 { sendWs(peers[pi].sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++; }
         vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
         }   // end per-width loop
-        if (++zoomFrames_ == 1 || zoomFrames_ % 100 == 0)
+        // ★ The FIRST frame stays at LOGI — it is the proof the zoom path started. The every-100
+        //   heartbeat is LOGV (audit 2026-10-03): at 20 fps it was a journal line every 5 s for as
+        //   long as anybody listened, ~17 000 a day, saying nothing that changes.
+        if (++zoomFrames_ == 1)
             LOGI("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
+        else if (zoomFrames_ % 100 == 0)
+            LOGV("zoom spectrum: %lld frames sent", (long long)zoomFrames_);
     }
     void onSpectrum(const float* db, int bins) {
         // ★ The crossover cannot announce itself from the tuner thread — see g_dsAnnounce.
