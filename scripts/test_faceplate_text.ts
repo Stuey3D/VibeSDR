@@ -218,6 +218,12 @@ eq('VCR small cells: MHz Hz digits, 3 each end', [vfdFreqLayout('128.590000', 'M
 eq('VCR small cells: kHz Hz digits, 3 each end', [vfdFreqLayout('1250.000', 'kHz').smallLead, vfdFreqLayout('1250.000', 'kHz').smallTail], [3, 3]);
 eq('VCR small cells: none where the text is untouched', [vfdFreqLayout('96.600', 'MHz').smallLead, vfdFreqLayout('96.600', 'MHz').smallTail], [0, 0]);
 
+// ★★ Above 9.999 GHz (a Ku LNB / transverter in front of the radio): the VCR readout takes a fifth MHz cell —
+//    QO-100 10 489.5 MHz, 24 GHz 24 048.1 MHz — with the same dark/¾ Hz cell rules either side.
+eq('VCR: QO-100 10489.5 MHz', vfdFreqLayout('10489.500000', 'MHz'), { text: '   10489.500   ', smallLead: 3, smallTail: 3 });
+eq('VCR: 24 GHz with Hz in use', vfdFreqLayout('24048.100250', 'MHz'), { text: '   24048.10025 ', smallLead: 3, smallTail: 3 });
+eq('VCR: 10.489 GHz in kHz', vfdFreqCells('10489500.000', 'kHz'), '   10489500   ');
+
 void SEG_BLANK;
 console.log(`faceplate text: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

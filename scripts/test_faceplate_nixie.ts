@@ -138,5 +138,30 @@ eq('neighbours of 1: nothing in front', cathodeNeighbours('1').front, []);
 eq('neighbours of 3: nothing behind', cathodeNeighbours('3').back, []);
 eq('a switched-off tube shows four bare cathodes', cathodeNeighbours(null), { back: ['1', '6', '2', '7'], front: [] });
 
+// ── ★★ ABOVE 9.999 GHz — a converter in front of the radio (LNB / transverter) puts the DIAL above 10 GHz:
+//    QO-100's narrowband downlink at 10 489.5 MHz (a 9 750 MHz Ku LNB), the 10 GHz and 24 GHz ham bands.
+//    The fifth MHz tube LATCHES in (NixieTubes: mhzDigitsFor − the layout's own count), every digit is
+//    shown, and the group still fits its window (the tube narrows; it never pushes the window wider).
+{
+  for (const [hz, want] of [[10_489_500_000, '10489•500_000'], [24_048_100_000, '24048•100_000'],
+                            [99_999_999_999, '99999•999_999']] as [number, string][]) {
+    eq(`mhzDigitsFor(${hz / 1e6} MHz) = 5`, mhzDigitsFor(hz), 5);
+    for (const layout of ['hf', 'wide'] as const) {
+      const base = nixieSpec(layout);
+      const spec = nixieSpec(layout, base.mhzTubes + Math.max(0, mhzDigitsFor(hz) - base.mhzTubes));
+      eq(`${layout}: ${hz / 1e6} MHz latches 5 MHz tubes`, spec.mhzTubes, 5);
+      eq(`${layout}: ${hz / 1e6} MHz reads in full`, show(nixieReadout(hz, spec, 'mhz'), spec.bulbAt), want);
+      eq(`${layout}: ${hz / 1e6} MHz in kHz`, show(nixieReadout(hz, spec, 'khz'), spec.bulbAt).replace(/[•_ ]/g, ''),
+         String(Math.round(hz)));
+      for (const w of [150, 200, 260]) {
+        const g = nixieGeometry(w, 40, spec, TUBE_DESIGN.meter, { bar: false });
+        const last = g.tubes[g.tubes.length - 1];
+        ok(`${layout} ${hz / 1e6} MHz: 11 tubes fit a ${w} pt window`, g.tubes.length === 11 && last.x + last.w <= w + 0.01);
+      }
+    }
+  }
+  eq('9 999.999 MHz still needs only 4', mhzDigitsFor(9_999_999_999), 4);
+}
+
 console.log(`faceplate nixie: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);
