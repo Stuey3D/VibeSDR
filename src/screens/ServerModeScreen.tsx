@@ -19,9 +19,11 @@ const BLOCKABLE: { id: string; label: string }[] = [
   { id: 'spots', label: 'Digital spots / map' },
 ];
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
+  View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
 } from 'react-native';
+// ★ On a TV the remote must be able to move PAST a text field — see TvTextInput (Kiko, Android 6 box).
+import TextInput from '../components/TvTextInput';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
