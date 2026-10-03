@@ -11,9 +11,12 @@ RUN dpkg --add-architecture armhf && apt-get update && apt-get install -y --no-i
     && rm -rf /var/lib/apt/lists/*
 COPY sdrplay-inc/ /usr/local/include/
 COPY armhf-toolchain.cmake /opt/armhf-toolchain.cmake
-ARG RTLSDR_TAG=797f814
+# ★ osmocom/rtl-sdr 797f814 = v2.0.3 (Blog V4L), pinned to the FULL commit — a short hash is a
+#   prefix that a future colliding object could satisfy. Same SHA as vibeserver/mac/build-deps.sh.
+ARG RTLSDR_TAG=797f8143266d983c56d8f35d2d442527529dd8a5
 RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
     && git -C /tmp/rtlsdr checkout --quiet "${RTLSDR_TAG}" \
+    && test "$(git -C /tmp/rtlsdr rev-parse HEAD)" = "${RTLSDR_TAG}" \
     && cmake -S /tmp/rtlsdr -B /tmp/rtlsdr/b -DCMAKE_BUILD_TYPE=Release \
              -DCMAKE_TOOLCHAIN_FILE=/opt/armhf-toolchain.cmake \
              -DCMAKE_INSTALL_PREFIX=/opt/vibe-rtlsdr -DBUILD_SHARED_LIBS=ON \
@@ -27,16 +30,27 @@ RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
     && strings /opt/vibe-rtlsdr/lib/librtlsdr.so | grep -q "Blog V4L"
 # ★★★ THE ARMv6 HALF — a RASPBIAN bookworm sysroot (see armv6-toolchain.cmake). `extract` unpacks
 #     packages without running any of them, so no emulation is needed to build a foreign root.
+# ★★★ THE ARCHIVE KEY IS COMMITTED, NOT FETCHED. It used to be curl'd over plain http and trusted
+#     as-is — so anyone on the path could hand us their own key and then sign their own sysroot,
+#     and every ARMv6 binary we ship links against that sysroot. raspbian-archive-keyring.gpg is
+#     the dearmored raspbian.public.key, taken from the image that built 5.6.x (2026-09-29), and
+#     its fingerprint is checked here against the published one before mmdebstrap may use it.
+#     Mike Thompson (Raspberry Pi Debian armhf ARMv6+VFP), rsa2048 2012-04-01.
+# ★ https to the mirror as well: the key protects the Release file, https protects the rest.
 COPY armv6-toolchain.cmake /opt/armv6-toolchain.cmake
-RUN curl -fsSL http://raspbian.raspberrypi.com/raspbian.public.key | gpg --dearmor > /tmp/raspbian.gpg \
-    && mmdebstrap --variant=extract --architectures=armhf --keyring=/tmp/raspbian.gpg \
+COPY raspbian-archive-keyring.gpg /opt/raspbian-archive-keyring.gpg
+ARG RASPBIAN_KEY_FPR=A0DA38D0D76E8B5D638872819165938D90FDDD2E
+RUN fpr="$(gpg --show-keys --with-colons /opt/raspbian-archive-keyring.gpg | awk -F: '$1=="fpr"{print $10; exit}')" \
+    && { [ "$fpr" = "${RASPBIAN_KEY_FPR}" ] || { echo "!! raspbian key fingerprint '$fpr', expected ${RASPBIAN_KEY_FPR} — refusing"; exit 1; }; } \
+    && mmdebstrap --variant=extract --architectures=armhf --keyring=/opt/raspbian-archive-keyring.gpg \
          --include=libc6-dev,libstdc++-12-dev,libgcc-12-dev,libusb-1.0-0-dev,libopus-dev,libfftw3-dev,libncurses-dev,libhackrf-dev,libatomic1 \
-         bookworm /opt/rpi-sysroot http://raspbian.raspberrypi.com/raspbian \
+         bookworm /opt/rpi-sysroot https://raspbian.raspberrypi.com/raspbian \
     && rm -rf /opt/rpi-sysroot/var/cache/apt /opt/rpi-sysroot/var/lib/apt/lists \
     && ls /opt/rpi-sysroot/usr/lib/gcc/arm-linux-gnueabihf/12/crtbegin.o
 # ★ And the bundled librtlsdr, built the same way — an ARMv7 one beside an ARMv6 binary is the same crash.
 RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
     && git -C /tmp/rtlsdr checkout --quiet "${RTLSDR_TAG}" \
+    && test "$(git -C /tmp/rtlsdr rev-parse HEAD)" = "${RTLSDR_TAG}" \
     && cmake -S /tmp/rtlsdr -B /tmp/rtlsdr/b -DCMAKE_BUILD_TYPE=Release \
              -DCMAKE_TOOLCHAIN_FILE=/opt/armv6-toolchain.cmake \
              -DBUILD_SHARED_LIBS=ON -DDETACH_KERNEL_DRIVER=ON \

@@ -74,9 +74,11 @@ RUN ls /usr/local/include/sdrplay_api.h \
 #   dynamically, exactly as Debian's does.
 # ★ Installed to a PREFIX OF OUR OWN so it cannot be confused with, or overwrite, the system copy.
 #   The build picks it up from there and the package ships it to /usr/lib/vibeserver.
-ARG RTLSDR_TAG=797f814
+# ★ Pinned to the FULL commit of 797f814 (v2.0.3) — same SHA as vibeserver/mac/build-deps.sh.
+ARG RTLSDR_TAG=797f8143266d983c56d8f35d2d442527529dd8a5
 RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
     && git -C /tmp/rtlsdr checkout --quiet "${RTLSDR_TAG}" \
+    && test "$(git -C /tmp/rtlsdr rev-parse HEAD)" = "${RTLSDR_TAG}" \
     && cmake -S /tmp/rtlsdr -B /tmp/rtlsdr/b -DCMAKE_BUILD_TYPE=Release \
              -DCMAKE_INSTALL_PREFIX=/opt/vibe-rtlsdr -DBUILD_SHARED_LIBS=ON \
              -DDETACH_KERNEL_DRIVER=ON \
