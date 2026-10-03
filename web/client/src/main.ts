@@ -36,7 +36,7 @@ import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src
  *  never unlabelled. */
 const RTL_SAFE_RATE = 2_400_000;
 import {
-  BAND_PLAN, getBandsAtRegion, bandTuneDefaults, type Band,
+  BAND_PLAN, getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, type Band,
 } from '../../../src/constants/bandPlan';
 import { deriveItuRegion } from '../../../src/services/stations';
 import { resolveStationIso, isoToFlag, ituToIso } from '../../../src/services/rdsCountry';
@@ -13882,7 +13882,12 @@ function initFreqEntry() {
         `This receiver covers ${(win[0] / 1e6).toFixed(3)}–${(win[1] / 1e6).toFixed(3)} MHz`;
       return;
     }
-    spec!.tune(got, undefined, { recenter: true, retarget: true });
+    /* ★★ A TYPED FREQUENCY IN ANOTHER BAND TAKES THAT BAND'S MODE — the app's rule, one function (bandJumpDefaults).
+     *  It kept yours, so 121.5 typed from FM went out as WFM (Stuart, 2026-10-03: airband must land on AM 8.33).
+     *  Within a band the mode you chose stands; the step follows below either way. */
+    const jumpMode = bandJumpDefaults(spec!.frequency, got, String(spec!.mode ?? ''), ituRegion()).mode;
+    spec!.tune(got, jumpMode, { recenter: true, retarget: true });
+    if (jumpMode) setMode(jumpMode, false);
     airDesig = air && air.ok ? { hz: air.hz, spacing: air.spacing } : null;
     applyBandStep(got);
     airbandFollowPassband();

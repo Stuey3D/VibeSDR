@@ -176,7 +176,7 @@ import {
   exportBookmarksJSON, parseBookmarksAny, mergeBookmarks, setBookmarkSynced, bookmarkPassband,
   type UserBookmark,
 } from '../services/userBookmarks';
-import { getBandsAtRegion, bandTuneDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
+import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid } from '../services/grid';
@@ -7664,19 +7664,13 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  ★ `in MODE_BANDWIDTHS`, the boundary effect's own check — canSetMode is declared further down. */
     const c = client.current;
     const fromHz = c ? c.getStatus().frequency : 0;
-    const dTo = bandTuneDefaults(target, ituRegionRef.current);
-    /* ★★ BROADCAST FM IS WFM HERE. The band plan leaves FM's mode unset on purpose — its note: a
-     *  boundary CROSS on OpenWebRX must not yank the audio, the profile's start_mod picks WFM — but a
-     *  frequency TYPED into the FM band from another band means WFM on every backend that reaches it. */
-    const bandMode = (f: number, d: { mode?: SDRMode }): SDRMode | undefined =>
-      d.mode ?? (f >= 87.5e6 && f < 108e6 ? ('wfm' as SDRMode) : undefined);
-    const toMode = bandMode(target, dTo);
-    const fromMode = fromHz > 0 ? bandMode(fromHz, bandTuneDefaults(fromHz, ituRegionRef.current)) : undefined;
     const curMode = c ? String(c.getStatus().mode) : '';
-    const crossMode = toMode && toMode !== fromMode && toMode !== curMode && toMode in MODE_BANDWIDTHS
-      ? toMode : undefined;
+    // ★★ bandJumpDefaults — the web client's rule too. The STEP now follows on every typed jump, not only when the
+    //    mode changed: HF USB → 96.6 typed while already in WFM kept 500 Hz (Stuart, 2026-10-03).
+    const j = bandJumpDefaults(fromHz, target, curMode, ituRegionRef.current);
+    const crossMode = j.mode && j.mode in MODE_BANDWIDTHS ? j.mode : undefined;
     onTuneHz(target, crossMode);
-    if (crossMode && dTo.step) setStep(dTo.step);
+    if (j.step) setStep(j.step);
     if (ch) pinAirDesig({ hz: ch.hz, spacing: ch.spacing });
   }, [onTuneHz, pinAirDesig]);
 
@@ -9064,6 +9058,8 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  2026-09-09). The menu's search, the VTS skip and voice tunes all land here; the frequency
      *  card's rows carry the service id and take the dabGoTo path of their own. */
     if ((mode || '').toLowerCase() === 'dab' && dabGoTo(target, -1)) return;
+    const st0 = client.current?.getStatus();
+    const j = bandJumpDefaults(st0?.frequency ?? 0, target, String(st0?.mode ?? ''), ituRegion);
     onTuneHz(target);
     const d = bandTuneDefaults(target, ituRegion);
     const explicit = mode?.toLowerCase() as SDRMode | undefined;
@@ -9077,8 +9073,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       const m = (explicit && canSetMode(explicit)) ? explicit : d.mode;
       if (m && canSetMode(m)) onMode(m);
       if (d.step) setStep(d.step);
-    } else if (explicit && canSetMode(explicit)) {
-      onMode(explicit);  // plain bookmark tap — mode only, step untouched
+    } else {
+      // The bookmark's own mode wins; one saved without a mode takes the band's on a band change (121.5 from FM → AM).
+      const m = explicit && canSetMode(explicit) ? explicit : j.mode;
+      if (m && canSetMode(m)) onMode(m);
+      /* ★★ AND THE BAND'S STEP (Stuart, 2026-10-03): a bookmark is a jump, and a jump takes the landing band's step
+       *  — the web client's tuneTo always did. A bookmark on FM from an HF session kept 500 Hz, so the drums
+       *  crawled. A bookmark's own mode still wins over the band's. */
+      if (d.step) setStep(d.step);
     }
     /* ★★★ THE BOOKMARK'S PASSBAND, LAST. It was saved (bandwidth_low/high, UberSDR's own fields) and
      *  never applied, so a weak AM signal saved on ±3 kHz came back on the default ±5 (NickB,

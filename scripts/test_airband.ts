@@ -13,7 +13,7 @@ import {
   airbandEntry, airbandStepFrom, airbandPassband, AIR_PB_25, AIR_PB_833,
 } from '../src/utils/airband';
 import { stepsForFreq } from '../src/services/sdrTypes';
-import { bandTuneDefaults } from '../src/constants/bandPlan';
+import { bandTuneDefaults, bandJumpDefaults } from '../src/constants/bandPlan';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -169,6 +169,15 @@ eq('R1 airband default step', bandTuneDefaults(125_000_000, 1), { mode: 'am', st
 eq('R2 airband default step', bandTuneDefaults(125_000_000, 2), { mode: 'am', step: 25000 });
 eq('unknown region airband', bandTuneDefaults(125_000_000, 0).step, 25000);
 eq('VOR/ILS unchanged', bandTuneDefaults(113_000_000, 1), { mode: 'am', step: 25000 });
+
+// ★★ A JUMP (typed / bookmark / band plan — never the drums) takes the landing band's step, and its mode on a band
+//    change (Stuart, 2026-10-03). One rule for the app and the web client: bandJumpDefaults.
+eq('HF USB → FM typed: WFM + 100 kHz', bandJumpDefaults(14_200_000, 96_600_000, 'usb', 1), { mode: 'wfm', step: 100000 });
+eq('already WFM → FM: step only', bandJumpDefaults(14_200_000, 96_600_000, 'wfm', 1), { step: 100000 });
+eq('FM → airband R1: AM + 8.33', bandJumpDefaults(96_600_000, 121_500_000, 'wfm', 1), { mode: 'am', step: STEP_833 });
+eq('FM → airband R2: AM + 25k', bandJumpDefaults(96_600_000, 121_500_000, 'wfm', 2), { mode: 'am', step: 25000 });
+eq('within airband: NFM kept, step follows', bandJumpDefaults(121_500_000, 125_000_000, 'nfm', 1), { step: STEP_833 });
+eq('in no band: nothing', bandJumpDefaults(96_600_000, 3_000_000_000, 'wfm', 1), {});
 
 console.log(`${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

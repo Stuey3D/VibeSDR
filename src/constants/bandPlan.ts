@@ -220,3 +220,21 @@ export function bandTuneDefaults(
   if (!primary) return {};
   return { mode: primary.mode, step: primary.step };
 }
+
+/** ★★★ WHAT A JUMP TAKES FROM THE BAND IT LANDS IN — ONE RULE FOR THE APP AND THE WEB CLIENT (Stuart, 2026-10-03:
+ *  "gone to FM from HF and wondered why the tuning wasnt doing much only to find it was still on 500Hz"). A JUMP is
+ *  a typed frequency, a bookmark, a band-plan pick — NEVER the tune controls, which only ever move the dial.
+ *  - STEP: the landing band's, always (FM 100 kHz, SSB 500 Hz, MW 9/10 kHz, airband 8.33 kHz in Region 1).
+ *  - MODE: the landing band's, but only when the jump CHANGES band and that band's mode differs from both the band
+ *    left and the mode in use — within a band the listener's choice stands. FM broadcast is WFM here (the plan leaves
+ *    it unset so an OpenWebRX boundary cross does not yank the audio; a jump into it means WFM everywhere).
+ *  A frequency in no band, or a band that defines nothing, leaves both alone. */
+export function bandJumpDefaults(fromHz: number, toHz: number, curMode: string, region: number):
+    { mode?: SDRMode; step?: number } {
+  const modeOf = (f: number): SDRMode | undefined =>
+    bandTuneDefaults(f, region).mode ?? (f >= 87.5e6 && f < 108e6 ? ('wfm' as SDRMode) : undefined);
+  const toMode = modeOf(toHz);
+  const fromMode = fromHz > 0 ? modeOf(fromHz) : undefined;
+  const mode = toMode && toMode !== fromMode && toMode !== curMode.toLowerCase() ? toMode : undefined;
+  return { mode, step: bandTuneDefaults(toHz, region).step };
+}
