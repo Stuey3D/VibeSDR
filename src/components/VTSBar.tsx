@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import AnnunciatorLegend from './AnnunciatorLegend';
@@ -107,6 +107,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const slide   = useRef(new Animated.Value(0)).current;
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
+  const { width: winW } = useWindowDimensions();
   const [textW, setTextW] = useState(0);
   /** The two side blocks' natural widths — each reserves the wider, so the text window is centred. */
   const [leftW, setLeftW] = useState(0);
@@ -250,6 +251,11 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const tuneLeft = shown.tuneDir === 'left';
   const overflow = textW > areaW && areaW > 0;
   const vfd = COL.style === 'dot' || COL.style === 'seg';
+  /* ★★ Matching side widths (to centre the text window) only on a VFD style AND a wide strip. On a phone the left
+   *  block (RDS mark + PI block / logo + flag) is so much wider than TP·TA·AF that mirroring it ate a third of the
+   *  strip in dead black and squeezed the text to "NOW ON HEART" (Stuart, iPhone, VCR, 2026-10-03). On a Mac or iPad
+   *  width the reservation is a small share and the centred window is worth it. */
+  const centreSides = vfd && winW >= 700;   // ★ the WINDOW, not areaW — areaW shrinks with the reservation and would flip
   // ★ The offset carries a UNIT ("-1.2kHz"): never through the 14-segment (it has no lower case) —
   //   the sans on seg; Doto keeps the unit's case on dot.
   const offsetFont = COL.style === 'seg' ? FONT_HYPER : COL.font;
@@ -283,7 +289,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           reserve the same width. On Nixie / HYPER / default the text runs on from the logo and flag, and the
           left block (RDS mark + logo + flag) is far wider than TP·TA·AF — reserving it on the right left a band of
           dead black before the legends and squeezed the RadioText (Stuart, 2026-10-03). */}
-      <View style={[styles.sideBlock, vfd && shown.annunciators && { minWidth: sideW }]}>
+      <View style={[styles.sideBlock, centreSides && shown.annunciators && { minWidth: sideW }]}>
       <View style={styles.sideInner} onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setLeftW(Math.ceil(e.nativeEvent.layout.width))}>
         {/* Source mark: live-data badge (RDS mark / text) wins; otherwise the
             bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
@@ -364,7 +370,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       {/* ★★ TP · TA · AF — fixed legends in the glass, drawn like the RDS mark (AnnunciatorLegend), on the
           RIGHT inside the ▶ so they balance the badge block on the left; lit when true, ghosted when not. */}
       {!!shown.annunciators && (
-        <View style={[styles.sideBlock, styles.sideRight, vfd && { minWidth: sideW }]}>
+        <View style={[styles.sideBlock, styles.sideRight, centreSides && { minWidth: sideW }]}>
           <View style={[styles.sideInner, styles.annun]}
                 onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setRightW(Math.ceil(e.nativeEvent.layout.width))}>
             {(['TP', 'TA', 'AF'] as const).map(nm => (
