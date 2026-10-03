@@ -1,14 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- ★ Android 12+ (dataExtractionRules). Same exclusions as backup_rules.xml — see the note there.
      `cloud-backup` covers Google's backup; `device-transfer` covers phone-to-phone migration, and
-     the credential should not ride along on either. -->
+     the credentials should not ride along on either. Keep all three lists IDENTICAL. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="database" path="RKStorage" />
-        <exclude domain="sharedpref" path="vibesdr_secure.xml" />
+        <exclude domain="database" path="RKStorage-journal" />
+        <exclude domain="database" path="RKStorage-wal" />
+        <exclude domain="database" path="RKStorage-shm" />
+        <exclude domain="database" path="AsyncStorage" />
+        <exclude domain="database" path="AsyncStorage-journal" />
+        <exclude domain="database" path="AsyncStorage-wal" />
+        <exclude domain="database" path="AsyncStorage-shm" />
+        <exclude domain="sharedpref" path="vibe_server_restore.xml" />
+        <exclude domain="sharedpref" path="vibe_directory.xml" />
+        <exclude domain="file" path="vibe_bans.json" />
+        <exclude domain="file" path="vibe_connlog.json" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="RKStorage" />
-        <exclude domain="sharedpref" path="vibesdr_secure.xml" />
+        <exclude domain="database" path="RKStorage-journal" />
+        <exclude domain="database" path="RKStorage-wal" />
+        <exclude domain="database" path="RKStorage-shm" />
+        <exclude domain="database" path="AsyncStorage" />
+        <exclude domain="database" path="AsyncStorage-journal" />
+        <exclude domain="database" path="AsyncStorage-wal" />
+        <exclude domain="database" path="AsyncStorage-shm" />
+        <exclude domain="sharedpref" path="vibe_server_restore.xml" />
+        <exclude domain="sharedpref" path="vibe_directory.xml" />
+        <exclude domain="file" path="vibe_bans.json" />
+        <exclude domain="file" path="vibe_connlog.json" />
     </device-transfer>
 </data-extraction-rules>

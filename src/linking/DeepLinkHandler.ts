@@ -12,6 +12,7 @@
  */
 
 import { fetchInstances } from '../services/instancesApi';
+import { parseUrlStrict, SERVER_SCHEMES } from '../utils/safeUrl';
 import type { SDRMode } from '../services/UberSDRClient';
 
 export type LinkBackend = 'ubersdr' | 'kiwi' | 'web888' | 'owrx' | 'rtltcp' | 'vibeserver';
@@ -54,13 +55,13 @@ const MAX_URL_LEN = 2048;
  *   checked rather than matched with a prefix — the mistake that turns a private-only rule into
  *   an almost-private one.
  */
-function isPrivateHost(u: string): boolean {
-  const m = /^[a-z]+:\/\/([^/?#]+)/i.exec(u);
-  if (!m) return false;
-  let host = m[1];
-  const at = host.lastIndexOf('@');            // strip any userinfo before parsing the host
-  if (at >= 0) host = host.slice(at + 1);
-  host = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
+export function isPrivateHost(u: string): boolean {
+  /* ★★ PARSED STRICTLY (security, 2026-10-03). The old regex took everything up to the first '/', so
+   *  `http://192.168.1.2\@evil.example` read as the private host while a browser-style parser saw the
+   *  public one. parseUrlStrict refuses backslashes, userinfo and anything else that is not a plain host. */
+  const p = parseUrlStrict(u, SERVER_SCHEMES);
+  if (!p) return false;
+  const host = p.host.replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.localhost')) return true;
   if (host === '::1') return true;
   if (/^f[cd][0-9a-f]{2}:/.test(host)) return true;                  // IPv6 unique-local
@@ -118,8 +119,10 @@ export function parseVibeSdrUrl(raw: string): DeepLinkRequest | null {
   if (p.uuid && UUID_RE.test(p.uuid)) {
     req.uuid = p.uuid;
   } else if (p.url) {
-    let u: string;
-    try { u = p.url; } catch { return null; }
+    const u = p.url;
+    // ★ One strict parse decides everything below: scheme, host, no quotes/backslashes/whitespace/userinfo.
+    const parsedUrl = parseUrlStrict(u, SERVER_SCHEMES);
+    if (!parsedUrl) return null;
     const backend = (p.backend || '').toLowerCase();
     if (backend !== 'ubersdr' && backend !== 'kiwi' && backend !== 'web888'
         && backend !== 'owrx' && backend !== 'rtltcp' && backend !== 'vibeserver') return null;
@@ -133,7 +136,7 @@ export function parseVibeSdrUrl(raw: string): DeepLinkRequest | null {
     //    and link-local addresses, and .local names. Nothing routable is admitted, so a link from
     //    the internet still cannot talk the app into plaintext — it can only ever name a machine
     //    on the network the phone is already sitting on.
-    if (!/^(https|wss):\/\//i.test(u) && !(/^(http|ws):\/\//i.test(u) && isPrivateHost(u)))
+    if (parsedUrl.scheme !== 'https' && parsedUrl.scheme !== 'wss' && !isPrivateHost(u))
       return null;
     req.url = u.replace(/\/+$/, '');
     req.backend = backend as LinkBackend;

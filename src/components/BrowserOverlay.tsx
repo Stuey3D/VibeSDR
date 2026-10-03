@@ -12,8 +12,32 @@ import React, { useRef, useState } from 'react';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { useSuppressShortcuts } from './PanelNav';
 import {
-  ActivityIndicator, Modal, Share, StyleSheet, Text, TouchableOpacity, View,
+  ActivityIndicator, Alert, Linking, Modal, Share, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
+
+/* ★★★ ONLY WEB PAGES LOAD IN HERE (security, 2026-10-03). The pages are other people's receivers. Left to
+ *  its defaults, react-native-webview hands any URL outside http(s) straight to the OS — a page could dial a
+ *  number (tel:), start a message (sms:), open this app with a crafted vibesdr:// link, or offer an
+ *  enterprise install (itms-services:). Now: http(s) loads, subframe about:/data:/blob: load, the three
+ *  everyday schemes ASK first, and everything else is refused. */
+const ASK_SCHEMES = /^(mailto|tel|sms):/i;
+function allowBrowserLoad(req: { url?: string; isTopFrame?: boolean }): boolean {
+  const u = String(req?.url || '');
+  if (/^https?:\/\//i.test(u)) return true;
+  if (/^(about:blank|about:srcdoc|data:|blob:)/i.test(u)) return req?.isTopFrame === false || /^about:blank/i.test(u);
+  if (ASK_SCHEMES.test(u)) {
+    const what = u.split(':')[0].toLowerCase();
+    Alert.alert(
+      'Leave VibeSDR?',
+      `This page wants to open a ${what === 'tel' ? 'phone call' : what === 'sms' ? 'text message' : 'new email'}:\n\n${u.slice(0, 120)}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open', onPress: () => { Linking.openURL(u).catch(() => {}); } },
+      ],
+    );
+  }
+  return false;
+}
 import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -132,6 +156,9 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
           ref={webRef}
           source={{ uri: url }}
           style={styles.web}
+          /* ★ '*' so the whitelist never hands a URL to the OS by itself — allowBrowserLoad decides. */
+          originWhitelist={['*']}
+          onShouldStartLoadWithRequest={allowBrowserLoad}
           allowsBackForwardNavigationGestures
           onLoadStart={() => { setProgress(0); setLoading(true); }}
           onLoadProgress={({ nativeEvent }) => setProgress(nativeEvent.progress)}

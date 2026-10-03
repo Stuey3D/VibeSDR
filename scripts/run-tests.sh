@@ -197,6 +197,10 @@ if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); e
 if node --no-warnings scripts/test_worklet_defaults.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ No photo leaves this repo carrying EXIF — GPS above all (2026-10-03: twelve did, two of them on the live website).
 if node --no-warnings scripts/test_safe_text.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ Untrusted URLs (deep links, directories, a server's landing link) and the map page's literal/path guards.
+if node --no-warnings scripts/test_safe_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ The map WebView page parses, for all three kinds (a template-literal page tsc cannot check).
+if node scripts/check-map-overlay.mjs >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ node scripts/check-map-overlay.mjs"; fi
 echo "── image metadata (EXIF / GPS / XMP) ──"
 if python3 scripts/strip-image-metadata.py --check; then pass=$((pass+1)); echo "  none"; else fail=$((fail+1)); echo "  ✗ run: python3 scripts/strip-image-metadata.py"; fi
 # ★★★ A FACEPLATE CANNOT LOCK YOU OUT (faceplate.ts CRASH SAFETY): the mark is armed before a risky

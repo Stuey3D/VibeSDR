@@ -189,6 +189,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { crumb } from '../services/crumbs';
 import { PsStabiliser } from '../services/psStabiliser';
+import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -3419,10 +3420,13 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Tune/zoom sync IN: follow another user's tune (skin syncToUser)
   const applyChatSync = useCallback((u: ChatUserRow) => {
-    if (!u.frequency || !u.mode) return;
+    // ★ Another user's row, from the server: a mode that is not a string threw here (security pass,
+    //   2026-10-03), and `in` would have accepted '__proto__'.
+    if (typeof u.frequency !== 'number' || !Number.isFinite(u.frequency) || u.frequency <= 0
+        || typeof u.mode !== 'string' || !u.mode) return;
     onTuneHzRef.current?.(u.frequency);
     const m = u.mode.toLowerCase();
-    if (m in MODE_BANDWIDTHS) onModeRef.current?.(m as SDRMode);
+    if (Object.prototype.hasOwnProperty.call(MODE_BANDWIDTHS, m)) onModeRef.current?.(m as SDRMode);
     if (typeof u.bw_low === 'number' && typeof u.bw_high === 'number') {
       onFilterBothRef.current?.(u.bw_low, u.bw_high);
     }
@@ -9619,10 +9623,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           {!!door.landingMessage && (
             <Text style={styles.radioPickMsg}>{door.landingMessage}</Text>
           )}
-          {!!door.landingLinkUrl && (
+          {/* ★★ http(s) ONLY (security, 2026-10-03): this is opened by the OS, and a server must not be able
+              to hand us tel:, sms: or another app's scheme. Checked where it arrives AND here. */}
+          {!!door.landingLinkUrl && !!safeUrl(door.landingLinkUrl, HTTP_SCHEMES) && (
             <Text
               style={styles.radioPickLink}
-              onPress={() => Linking.openURL(door.landingLinkUrl!).catch(() => {})}
+              onPress={() => Linking.openURL(safeUrl(door.landingLinkUrl, HTTP_SCHEMES)).catch(() => {})}
             >
               {door.landingLinkLabel || door.landingLinkUrl}
             </Text>

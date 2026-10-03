@@ -1,5 +1,8 @@
 // Shared SDR types used across clients and UI
 import { STEP_833, isAirbandCom } from '../utils/airband';
+import { cleanText } from '../utils/safeText';
+import { cleanLines } from '../utils/cleanLines';
+import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 export type Mode = SDRMode; // alias
@@ -406,17 +409,15 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       rawIqActive: typeof j.rawIqActive === 'number' ? j.rawIqActive : undefined,
       uncompressed: j.uncompressed === 'choice' || j.uncompressed === 'compat'
                     || j.uncompressed === 'off' ? j.uncompressed : undefined,
-      version:   typeof j.version === 'string' && j.version ? j.version : undefined,
+      version:   cleanText(j.version, 32) || undefined,
       instance:  typeof j.instance === 'string' && j.instance ? j.instance : undefined,
-      notice:    typeof j.notice === 'string' && j.notice ? j.notice : undefined,
-      antenna:   typeof j.antenna === 'string' && j.antenna ? j.antenna : undefined,
+      notice:    cleanLines(j.notice, 500) || undefined,
+      // ★ Server text, cleaned on the way in; the link is opened, so http(s) only (security, 2026-10-03).
+      antenna:   cleanText(j.antenna, 64) || undefined,
       antennaIcon: typeof j.antennaIcon === 'string' ? j.antennaIcon : undefined,
-      landingMessage: typeof j.landingMessage === 'string' && j.landingMessage
-                      ? j.landingMessage : undefined,
-      landingLinkUrl: typeof j.landingLinkUrl === 'string' && j.landingLinkUrl
-                      ? j.landingLinkUrl : undefined,
-      landingLinkLabel: typeof j.landingLinkLabel === 'string' && j.landingLinkLabel
-                        ? j.landingLinkLabel : undefined,
+      landingMessage: cleanLines(j.landingMessage, 500) || undefined,
+      landingLinkUrl: safeUrl(j.landingLinkUrl, HTTP_SCHEMES) || undefined,
+      landingLinkLabel: cleanText(j.landingLinkLabel, 80) || undefined,
       dab:       j.dab === true,
     };
   } catch { return null; }

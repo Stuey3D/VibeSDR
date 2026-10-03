@@ -1,5 +1,7 @@
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import type { VibeRadio } from './vibeserverRadios';
+import { cleanText } from '../utils/safeText';
+import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 
 export interface SDRInstance {
   uuid:          string | null;  // collector `id` (UUIDv4) — used for vibesdr:// deep links
@@ -171,19 +173,23 @@ export async function fetchInstances(
   const resp = await fetch(BASE_URL, { signal: AbortSignal.timeout(10000) });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
-  const items: any[] = data.instances ?? [];
+  const items: any[] = Array.isArray(data?.instances) ? data.instances : [];
 
-  const result = items.map((item: any): SDRInstance => {
-    let publicUrl: string = item.public_url ?? '';
-    if (!publicUrl && item.host) {
-      const tls    = item.tls ?? false;
-      const port   = item.port ?? (tls ? 443 : 80);
+  /* ★★★ EVERY FIELD IS SOMEONE ELSE'S TYPING (security, 2026-10-03). The directory lists whatever each
+   *  instance reports: a name that is a number threw in `.trim()` downstream, and a URL is fetched, opened
+   *  in a WebView page and handed to a socket. Names are cleaned; a URL that is not a plain http(s)
+   *  address drops the row (the old code kept it and failed later, somewhere less obvious). */
+  const result = items.filter((item: any) => item && typeof item === 'object').map((item: any): SDRInstance => {
+    let publicUrl: string = typeof item.public_url === 'string' ? item.public_url : '';
+    if (!publicUrl && typeof item.host === 'string' && item.host) {
+      const tls    = item.tls === true;
+      const port   = Number.isInteger(item.port) ? item.port : (tls ? 443 : 80);
       const scheme = tls ? 'https' : 'http';
       publicUrl    = port === (tls ? 443 : 80)
         ? `${scheme}://${item.host}`
         : `${scheme}://${item.host}:${port}`;
     }
-    publicUrl = publicUrl.replace(/\/+$/, '');
+    publicUrl = safeUrl(publicUrl, HTTP_SCHEMES);
 
     // Best SNR across all reported band conditions
     let bestSnr: number | null = null;
@@ -195,17 +201,17 @@ export async function fetchInstances(
     }
 
     return {
-      uuid:      typeof item.id === 'string' && item.id ? item.id : null,
-      name:      item.name     || item.callsign || item.host || 'Unknown',
+      uuid:      typeof item.id === 'string' && item.id ? item.id.slice(0, 64) : null,
+      name:      cleanText(item.name) || cleanText(item.callsign, 32) || cleanText(item.host) || 'Unknown',
       url:       publicUrl,
-      location:  item.location  ?? '',
-      callsign:  item.callsign  ?? '',
-      users:     item.available_clients ?? 0,
-      maxUsers:  item.max_clients       ?? 0,
-      online:    item.is_online         ?? true,
-      version:   item.version           ?? null,
-      latitude:  item.latitude          ?? null,
-      longitude: item.longitude         ?? null,
+      location:  cleanText(item.location, 80),
+      callsign:  cleanText(item.callsign, 32),
+      users:     typeof item.available_clients === 'number' ? item.available_clients : 0,
+      maxUsers:  typeof item.max_clients === 'number' ? item.max_clients : 0,
+      online:    typeof item.is_online === 'boolean' ? item.is_online : true,
+      version:   typeof item.version === 'string' ? cleanText(item.version, 32) : null,
+      latitude:  typeof item.latitude === 'number' ? item.latitude : null,
+      longitude: typeof item.longitude === 'number' ? item.longitude : null,
       countryCode: typeof item.country_code === 'string' && item.country_code.length === 2
         ? item.country_code : null,
       distance:  (lat != null && lon != null
@@ -221,7 +227,7 @@ export async function fetchInstances(
         ? Math.max(1, Math.floor(item.max_session_time / 60))
         : undefined,
     };
-  });
+  }).filter((i) => !!i.url);
 
   _cache     = result;
   _cacheTime = Date.now();

@@ -28,7 +28,7 @@
  */
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
-import { AppState, Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { useRepeatingKeys } from './PanelNav';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import { WebView } from 'react-native-webview';
@@ -37,6 +37,8 @@ import { type SpotRow } from '../services/DecoderClient';
 import { ensureMapPack, writeMapPage } from '../services/mapPack';
 import { ensureMapglPack } from '../services/mapglPack';
 import { detailInstalled, readDetailRange } from '../services/mapglDetail';
+import { jsStringLiteral, isAllowedHostFetchPath } from '../utils/pageSafety';
+import { wsOriginFor } from '../utils/safeUrl';
 // ★ The GPU map's style — embedded into the page, because the page creates its map synchronously.
 import VIBEMAP_STYLE from '../../assets/mapgl/vibemap-style.json';
 /* ★★★ THE SHARED BASEMAP RENDERER, AS A STRING. The app has no file server, so the only way
@@ -97,8 +99,26 @@ function buildHtml(
   const gl = !!opts?.gl;
   const base = baseUrl.replace(/\/+$/, '');
   const wsBase = local && opts?.wsBase ? opts.wsBase.replace(/\/+$/, '') : base.replace(/^http/, 'ws');
-  const rxLat = opts?.rxLat ?? 0;
-  const rxLon = opts?.rxLon ?? 0;
+  const rxLat = Number.isFinite(opts?.rxLat as number) ? (opts!.rxLat as number) : 0;
+  const rxLon = Number.isFinite(opts?.rxLon as number) ? (opts!.rxLon as number) : 0;
+  /* ★★ CONTENT SECURITY POLICY. This page is a file:// document that may read its sibling files, and it draws
+   *  text from servers. If anything ever slips past esc(), the policy keeps an injected script from loading code
+   *  or sending what it reads anywhere: scripts only inline / beside the page / Leaflet's CDN; connections only
+   *  to files beside it and to THIS receiver's spot socket. MapLibre needs blob: for its worker and decoded
+   *  images. ★ Every source the page uses today is listed — check here first if a map layer goes missing. */
+  const wsOrigin = wsOriginFor(wsBase);
+  const CSP = [
+    "default-src 'none'",
+    "script-src 'unsafe-inline' file: blob: https://unpkg.com",
+    "style-src 'unsafe-inline' file: https://unpkg.com",
+    'img-src file: data: blob: https://unpkg.com',
+    'font-src file: data:',
+    `connect-src file: data: blob:${wsOrigin ? ' ' + wsOrigin : ''}`,
+    'worker-src blob: file:',
+    'child-src blob:',
+    "base-uri 'none'",
+    "form-action 'none'",
+  ].join('; ');
   const isHfdl = kind === 'hfdl';
   // Theme: HFDL amber (255,160,0), spots maps green (80,200,80) — skin parity.
   const T = isHfdl
@@ -114,6 +134,7 @@ function buildHtml(
   return `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${CSP}">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -390,7 +411,11 @@ ${!isHfdl ? `
   <div id="toast"></div>
 </div>
 <script>
-var BASE='${base}', WSBASE='${wsBase}', KIND='${kind}', UUID='${uuid}';
+var BASE=${jsStringLiteral(base)}, WSBASE=${jsStringLiteral(wsBase)}, KIND=${jsStringLiteral(kind)}, UUID=${jsStringLiteral(uuid)};
+/* ★★★ EVERY SERVER STRING THAT GOES INTO HTML GOES THROUGH esc(). Popups and the stats sheet are built as HTML;
+ *  a callsign, flight or station name is text from someone else's server and must never become markup. */
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function numOr(v,d){var n=typeof v==='number'?v:parseFloat(v);return isFinite(n)?n:d;}
 var LOCAL=${local ? 1 : 0};
 var GL_OK=${gl ? 1 : 0};
 var DETAIL_OK=${gl && opts?.detail ? 1 : 0};
@@ -972,24 +997,27 @@ if(KIND==='hfdl'){
   function buildACPopup(a,lat,lon,hdg){
     var fl=a.flight||a.reg||a.key;
     var dist=distKm(lat,lon);
-    var spd=a.gnd_spd_kts?Math.round(a.gnd_spd_kts)+' kts':'';
-    var gsN=gsNames[a.gs_id]||'';
-    var freq=a.freq_khz?(a.freq_khz/1000).toFixed(3)+' MHz':'';
+    var spd=numOr(a.gnd_spd_kts,0)?Math.round(numOr(a.gnd_spd_kts,0))+' kts':'';
+    var gsN=esc(gsNames[a.gs_id]||'');
+    var fk=numOr(a.freq_khz,0);
+    var freq=fk?(fk/1000).toFixed(3)+' MHz':'';
+    var sl=numOr(a.sig_level,0);
     // ★ The 3-bar meter beside the figure (Stuart, 2026-09-28: "I dont know what constitutes a good signal
     //   or bad one") — the SAME sigBars thresholds as the ground-station popups, so the two never disagree.
-    var sig=a.sig_level?sigMeterHTML(a.sig_level)+' <span style="margin-left:4px;">'+a.sig_level.toFixed(1)+' dBFS</span>':'';
-    var tracked=a.tracked_km?Math.round(a.tracked_km).toLocaleString()+' km'+(spd?' &bull; '+spd:''):spd;
+    var sig=sl?sigMeterHTML(sl)+' <span style="margin-left:4px;">'+sl.toFixed(1)+' dBFS</span>':'';
+    var tk=numOr(a.tracked_km,0);
+    var tracked=tk?Math.round(tk).toLocaleString()+' km'+(spd?' &bull; '+spd:''):spd;
     var row=function(label,val){return val?'<tr><td style="color:rgba(255,160,0,0.5);padding-right:8px;white-space:nowrap;">'+label+'</td><td style="color:rgba(255,210,80,0.9);">'+val+'</td></tr>':'';};
     return '<div style="font-size:13px;letter-spacing:0.8px;">'
-      +'<div style="font-size:15px;font-weight:600;color:rgba(255,210,60,1);margin-bottom:6px;">'+fl+(a.icao&&a.icao!==fl?' <span style="font-size:12px;color:rgba(255,180,60,0.55);">'+a.icao+'</span>':'')+'</div>'
+      +'<div style="font-size:15px;font-weight:600;color:rgba(255,210,60,1);margin-bottom:6px;">'+esc(fl)+(a.icao&&a.icao!==fl?' <span style="font-size:12px;color:rgba(255,180,60,0.55);">'+esc(a.icao)+'</span>':'')+'</div>'
       +'<table style="border-collapse:collapse;">'
       +row('Freq',freq)
       +row('Via',gsN)
       +row('Signal',sig)
       +row('Distance',dist?dist+' km':'')
       +row('Tracked',tracked)
-      +row('Msgs',a.msg_count||'')
-      +row('Seen',age(a.last_seen*1000))
+      +row('Msgs',numOr(a.msg_count,0)||'')
+      +row('Seen',age(numOr(a.last_seen,0)*1000))
       +'</table></div>';
   }
 
@@ -1002,9 +1030,9 @@ if(KIND==='hfdl'){
         var name=s.location||('GS '+id);
         if(s.lat==null||s.lon==null)return;
         gsNames[id]=name;
-        var freqs=s.frequencies||[];
-        var sig=(s.last_sig_level&&s.last_sig_level!==0)?s.last_sig_level:null;
-        var lastHeard=s.last_heard||0;
+        var freqs=Array.isArray(s.frequencies)?s.frequencies:[];
+        var sig=numOr(s.last_sig_level,0)||null;
+        var lastHeard=numOr(s.last_heard,0);
         var sigLine;
         if(sig){
           sigLine=sigMeterHTML(sig)+'<span style="font-size:11px;color:rgba(255,160,0,0.40);margin-left:3px;">'+sig.toFixed(1)+' dBFS</span>';
@@ -1017,7 +1045,7 @@ if(KIND==='hfdl'){
         }else{
           sigLine='<span style="font-size:11px;color:rgba(180,80,60,0.55);">&#10005; Never heard</span>';
         }
-        var ph='<div style="font-size:14px;letter-spacing:1px;color:rgba(255,200,80,0.9)">'+name+'</div>'
+        var ph='<div style="font-size:14px;letter-spacing:1px;color:rgba(255,200,80,0.9)">'+esc(name)+'</div>'
           +'<div style="margin-top:4px;display:flex;align-items:center;gap:6px;">'
           +'<span style="font-size:12px;color:rgba(255,160,0,0.55);">Signal:</span>'+sigLine+'</div>';
         var d=distKm(s.lat,s.lon);
@@ -1025,7 +1053,7 @@ if(KIND==='hfdl'){
         if(freqs.length){
           ph+='<div style="margin-top:6px;">';
           freqs.forEach(function(f){
-            var k=f.freq_khz||0,en=f.enabled!==false;
+            var k=numOr(f&&f.freq_khz,0),en=!f||f.enabled!==false;
             ph+='<div style="margin:3px 0;display:flex;align-items:center;gap:5px;">'
             +'<span style="color:'+(en?'rgba(255,180,60,0.9)':'rgba(180,120,30,0.45)')+';min-width:66px;font-size:13px;">'+(k?(k/1000).toFixed(3)+' MHz':'?')+'</span>'
             +(en?'<span style="color:rgba(80,220,80,0.7);font-size:11px;">&#9679; ON</span>':'<span style="color:rgba(255,80,80,0.35);font-size:11px;">&#9675; off</span>')
@@ -1152,7 +1180,7 @@ if(KIND==='digi'||KIND==='cw'){
     '17m':[18068000,18168000],'15m':[21000000,21450000],'12m':[24890000,24990000],'11m':[26965000,27405000],'10m':[28000000,29700000]};
   var BAND_ORDER=['2200m','630m','160m','80m','60m','40m','30m','20m','17m','15m','12m','11m','10m'];
 
-  function spotHz(f){if(!f)return 0;return f<1000?Math.round(f*1e6):Math.round(f);}
+  function spotHz(f){f=numOr(f,0);if(!f)return 0;return f<1000?Math.round(f*1e6):Math.round(f);}
   function bandFromHz(hz){for(var b in BAND_RANGES){var r=BAND_RANGES[b];if(hz>=r[0]&&hz<=r[1])return b;}return null;}
   function spotBand(s){return s.band||bandFromHz(spotHz(s.freq))||null;}
   function key(s){return (s.call||'?')+'|'+(s.band||'')+'|'+(s.mode||'');}
@@ -1182,14 +1210,14 @@ if(KIND==='digi'||KIND==='cw'){
   function popup(s){
     var hz=spotHz(s.freq);
     var band=spotBand(s);
-    return'<div style="font-size:14px;color:rgba(120,240,120,0.95);letter-spacing:1px;">'+s.call+'</div>'
+    return'<div style="font-size:14px;color:rgba(120,240,120,0.95);letter-spacing:1px;">'+esc(s.call)+'</div>'
     +'<div style="margin-top:4px;font-size:12px;color:rgba(80,200,80,0.70);">'
-    +(s.mode?'<span style="margin-right:6px;">'+s.mode+'</span>':'')
-    +(band?'<span style="margin-right:6px;">'+band+'</span>':'')
+    +(s.mode?'<span style="margin-right:6px;">'+esc(s.mode)+'</span>':'')
+    +(band?'<span style="margin-right:6px;">'+esc(band)+'</span>':'')
     +(hz?'<span>'+(hz/1e6).toFixed(4)+' MHz</span>':'')+'</div>'
     +'<div style="margin-top:3px;font-size:12px;color:rgba(80,200,80,0.55);">'
     +(s.snr!==undefined?'SNR: '+s.snr+' dB':'')+(s.wpm?' &bull; '+Math.round(s.wpm)+' wpm':'')
-    +(s.country?' &bull; '+abbr(s.country):'')+'</div>'
+    +(s.country?' &bull; '+esc(abbr(s.country)):'')+'</div>'
     +'<div style="margin-top:2px;font-size:11px;color:rgba(80,200,80,0.35);">'+age(s.t)
     +(s.distKm?' &bull; '+Math.round(s.distKm)+' km':'')+'</div>';
   }
@@ -1214,7 +1242,7 @@ if(KIND==='digi'||KIND==='cw'){
   var statsOpen=false;
   var stSheet=document.getElementById('stsheet');
   function barRow(label,n,max){
-    return'<div class="st-row"><span>'+label+'</span><span class="st-val">'+n+'</span></div>'
+    return'<div class="st-row"><span>'+esc(label)+'</span><span class="st-val">'+esc(n)+'</span></div>'
     +'<div class="st-bar"><div class="st-bf" style="width:'+Math.round(n/max*100)+'%"></div></div>';
   }
   function setH(id,v){var e=document.getElementById(id);if(e)e.innerHTML=v||'';}
@@ -1317,7 +1345,7 @@ if(KIND==='digi'||KIND==='cw'){
   function connect(){
     // Server validates this UUID against the registered /connection session —
     // random IDs are rejected with 400 before upgrade.
-    var ws=new WebSocket(WSBASE+'/ws/dxcluster?user_session_id='+UUID);
+    var ws=new WebSocket(WSBASE+'/ws/dxcluster?user_session_id='+encodeURIComponent(UUID));
     ws.onopen=function(){
       ws.send(JSON.stringify({type:isCW?'subscribe_cw_spots':'subscribe_digital_spots'}));
     };
@@ -1506,8 +1534,22 @@ export default function MapOverlay(
           allowingReadAccessToURL={(pageUri || '').replace(/\/[^/]*$/, '/')}
           allowFileAccess
           allowFileAccessFromFileURLs
-          allowUniversalAccessFromFileURLs
+          /* ★★★ allowUniversalAccessFromFileURLs IS GONE (security, 2026-10-03). It let this file:// page read
+           *  ANY origin without CORS — nothing here needs it: the layers are siblings on disk (the file-URL
+           *  grant above), the instance is fetched by React Native (hostFetch), and the spot WebSocket is not
+           *  subject to CORS at all. allowFileAccess + allowFileAccessFromFileURLs STAY: without them every
+           *  sibling layer read fails (see the note above).
+           *  ★ originWhitelist stays '*' ON PURPOSE: react-native-webview hands any URL that fails the whitelist
+           *    straight to the OS (Linking.openURL) — tel:, sms:, other apps' schemes. The filter is
+           *    onShouldStartLoadWithRequest instead: the page itself (file:) loads, a tapped http(s) link (the
+           *    map attribution) opens in the browser, and everything else is refused. */
           originWhitelist={['*']}
+          onShouldStartLoadWithRequest={(req) => {
+            const u = String(req?.url || '');
+            if (/^(file:|about:blank|blob:|data:)/i.test(u)) return true;
+            if (/^https?:\/\//i.test(u)) { Linking.openURL(u).catch(() => {}); }
+            return false;
+          }}
           style={mo.web}
           javaScriptEnabled
           /* ★★★ INSPECTABLE, BECAUSE FOUR BUILDS WENT ON GUESSES ABOUT WHAT THIS WEBVIEW WAS DOING.
@@ -1518,10 +1560,9 @@ export default function MapOverlay(
            *  ★★ This is the cheap version of the same thing. It costs nothing at runtime, shows the
            *     user nothing, and lets Safari's Develop menu attach to the WebView on macOS and iOS
            *     — real console, real network, real answers instead of another plausible theory.
-           *  ✗ REVIEW BEFORE THE V11 PUBLIC RELEASE: this also lets anyone with the device inspect
-           *    the page. Fine for TestFlight, where Stuart is the only internal tester; decide
-           *    deliberately whether it ships to the store. See PENDING-NEXT-RELEASE.md. */
-          webviewDebuggingEnabled
+           *  ★★ DEV BUILDS ONLY (security, 2026-10-03): inspectable in a release build lets anyone holding
+           *    the device attach to a page that can read files. A dev build still gets the whole console. */
+          webviewDebuggingEnabled={__DEV__}
           /* ★★ IF THE OS KILLS THE PAGE ANYWAY, BRING IT BACK. WKWebView's content process can be
            *  reclaimed under memory pressure (and Android's renderer likewise), which leaves a blank
            *  white map that nothing ever redraws. Reloading restarts it on the floor it can afford. */
@@ -1559,10 +1600,14 @@ export default function MapOverlay(
             if (m && (m as any).t === 'hostfetch' && (m as any).id) {
               const id = String((m as any).id);
               const path = String((m as any).path || '');
-              const url = baseUrl.replace(/\/+$/, '') + path;
               const deliver = (body: string) =>
                 webRef.current?.injectJavaScript(
                   `window.__hfDeliver&&window.__hfDeliver(${JSON.stringify(id)},${body});true;`);
+              /* ★★★ ONLY THE PATHS THE PAGE ACTUALLY ASKS FOR. This is React Native's fetch — no CORS, and on
+               *  the instance's own origin — so an injected script must not be able to steer it anywhere else:
+               *  '@' or '//' would change the HOST once appended to the base, '..' or '\\' would leave the path. */
+              if (!isAllowedHostFetchPath(path)) { deliver('null'); return; }
+              const url = baseUrl.replace(/\/+$/, '') + path;
               fetch(url, { signal: AbortSignal.timeout(10000) })
                 .then(r => (r.ok ? r.text() : null))
                 .then(t => {
@@ -1571,7 +1616,9 @@ export default function MapOverlay(
                    *  whole thing down. */
                   if (t === null) { deliver('null'); return; }
                   try { JSON.parse(t); } catch { deliver('null'); return; }
-                  deliver(t);
+                  // ★ Valid JSON is not yet valid JS SOURCE: U+2028/2029 end a line there (see mapdata below).
+                  deliver(t.replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
+                           .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029'));
                 })
                 .catch(() => deliver('null'));
               return;

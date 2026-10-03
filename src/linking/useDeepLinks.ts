@@ -20,6 +20,7 @@ import { getViewMode } from '../services/viewMode';
 import { parseVibeSdrUrl, resolveRequest, type ResolvedTarget } from './DeepLinkHandler';
 import { parseSdrUrl } from './SdrLinkHandler';
 import { markDeepLinkActive, markInitialLinkChecked } from './deepLinkState';
+import { parseUrlStrict, SERVER_SCHEMES } from '../utils/safeUrl';
 
 function toast(msg: string) {
   if (Platform.OS === 'android') ToastAndroid.show(msg, ToastAndroid.LONG);
@@ -101,8 +102,23 @@ export function useDeepLinks(ready: boolean) {
 
     // Cold start (nothing to interrupt) → connect directly. If we're already on
     // an SDR session, confirm before tearing it down.
+    /* ★★★ A url= LINK ALWAYS ASKS, COLD START INCLUDED (security, 2026-10-03). It names an arbitrary
+     *  host — a QR code, a forum post — and connecting tells that host our address and session. Only the
+     *  uuid form, which can only name a server already in the directory, still connects straight away.
+     *  The HOST is shown, not the link's own name for itself, as the sdr:// path already does. */
     const onSDR = navigationRef.getCurrentRoute?.()?.name === 'SDR';
-    if (onSDR) {
+    if (req.url) {
+      const host = parseUrlStrict(res.target.baseUrl, SERVER_SCHEMES)?.host || res.target.baseUrl;
+      Alert.alert(
+        'Open server from link?',
+        `${host}\n\nLinks can come from anyone — only connect to servers you trust.`
+          + (onSDR ? '\nThis will disconnect your current session.' : ''),
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Connect', onPress: () => { void goToTarget(res.target); } },
+        ],
+      );
+    } else if (onSDR) {
       Alert.alert(
         'Open server from link?',
         `Connect to ${res.target.instanceName}?\nThis will disconnect your current session.`,

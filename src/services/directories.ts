@@ -12,6 +12,8 @@ import { countryForCoord } from './countryLookup';   // Kiwi/Receiverbook carry 
 import { countryFromText } from './countryFromText'; // last resort: parse the name/location text
 import { isoForCallsign } from './callsignIso';       // final resort: map the callsign prefix
 import type { VibeRadio } from './vibeserverRadios';
+import { cleanText } from '../utils/safeText';
+import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 
 export type DirectoryId = 'vibeserver' | 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
@@ -78,7 +80,10 @@ export const DIRECTORIES: DirectoryMeta[] = [
  *  today — but a name that has been through here is safe to put anywhere, and that is worth having
  *  before somebody renders one into HTML.
  */
-const stripMarkup = (s: unknown): string => String(s ?? '').replace(/[<>]/g, '');
+/* ★ Directory text is someone else's typing: control/bidi characters are cleaned (cleanText) and angle
+ *  brackets dropped. Non-strings (a number for a name) become '' rather than '[object Object]'. */
+const stripMarkup = (s: unknown, max = 120): string =>
+  cleanText(typeof s === 'number' ? String(s) : s, max).replace(/[<>]/g, '');
 
 const DIR_TIMEOUT_MS = 12_000;
 const dirFetch = (url: string, init?: RequestInit) =>
@@ -131,16 +136,16 @@ function normaliseRadios(rows: any[]): VibeRadio[] {
     const cov = r.coverage;
     // Words may arrive under `allowedNames` (current) or under `coverage` (older Android).
     const names: string[] | undefined =
-      Array.isArray(r.allowedNames) && r.allowedNames.length ? r.allowedNames.map(String)
-      : (Array.isArray(cov) && typeof cov[0] === 'string') ? cov.map(String)
+      Array.isArray(r.allowedNames) && r.allowedNames.length ? r.allowedNames.map((x: unknown) => cleanText(x, 32))
+      : (Array.isArray(cov) && typeof cov[0] === 'string') ? cov.map((x: unknown) => cleanText(x, 32))
       : undefined;
     const allowed = isNumRanges(r.allowed) ? r.allowed
                   : isNumRanges(r.ranges)  ? r.ranges
                   : undefined;
     return {
-      id: String(r.id ?? ''),
-      label: String(r.name ?? r.label ?? 'Radio'),
-      driver: String(r.driver ?? ''),
+      id: typeof r.id === 'string' || typeof r.id === 'number' ? String(r.id).slice(0, 64) : '',
+      label: cleanText(r.name) || cleanText(r.label) || 'Radio',
+      driver: cleanText(r.driver, 32),
       // ★ The CAP. `maxListeners` is the current name; `users` is what the older publisher called
       //   the same number, so it is a fallback and not a second meaning.
       users: Number(r.maxListeners ?? r.users ?? 1) || 1,
@@ -157,7 +162,7 @@ function normaliseRadios(rows: any[]): VibeRadio[] {
       centreHz: typeof r.centreHz === 'number' ? r.centreHz : undefined,
       spanHz: typeof r.spanHz === 'number' ? r.spanHz : undefined,
       mode: typeof r.mode === 'string' ? r.mode : undefined,
-      antenna: typeof r.antenna === 'string' ? r.antenna : undefined,
+      antenna: typeof r.antenna === 'string' ? cleanText(r.antenna, 64) : undefined,
       coverage: isNumRanges(cov) ? cov : undefined,
       allowed,
       allowedNames: names,
@@ -179,15 +184,17 @@ async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance
     // ★ One radio: name it. Several: say how many rather than picking one to be the face of the
     //   machine — a front door holding an HF+ and a dongle is not "an HF+".
     const device = radios.length === 1
-      ? String(radios[0]?.name || radios[0]?.driver || '').trim() || undefined
+      ? (cleanText(radios[0]?.name) || cleanText(radios[0]?.driver, 32)) || undefined
       : radios.length > 1 ? `${radios.length} radios` : undefined;
     // ★ The tunnel first; `address` only where a listing has no direct URL at all.
-    const url = String(s.url || (s.address ? `https://${s.address}` : '')).replace(/\/+$/, '');
+    // ★ Only a plain http(s) address survives (safeUrl) — it is fetched, socketed and shown in a WebView.
+    const url = safeUrl(typeof s.url === 'string' && s.url ? s.url
+      : (typeof s.address === 'string' && s.address ? `https://${s.address}` : ''), HTTP_SCHEMES);
     return {
-      uuid: typeof s.id === 'string' ? s.id : null,
-      name: String(s.name || 'VibeServer'),
+      uuid: typeof s.id === 'string' ? s.id.slice(0, 64) : null,
+      name: cleanText(s.name) || 'VibeServer',
       url,
-      location: String(s.grid || ''),
+      location: cleanText(s.grid, 16),
       callsign: '',
       users,
       maxUsers: max || 1,
@@ -294,11 +301,11 @@ async function fetchReceiverbook(lat?: number, lon?: number): Promise<SDRInstanc
       const kind: SDRInstance['serverType'] | null =
         t === 'openwebrx' ? 'owrx' : t === 'kiwisdr' ? 'kiwi' : null;
       if (!kind) continue;                                   // drop WebSDR etc.
-      const url = ro?.url ?? site?.url;
+      const url = safeUrl(ro?.url ?? site?.url, HTTP_SCHEMES);
       if (!url) continue;
       out.push(blank({
-        name: stripMarkup(ro?.label ?? site?.label ?? 'Unknown').slice(0, 120),
-        url: String(url).replace(/\/+$/, ''),
+        name: stripMarkup(ro?.label ?? site?.label ?? 'Unknown') || 'Unknown',
+        url,
         latitude: Number.isFinite(slat) ? slat : null,
         longitude: Number.isFinite(slon) ? slon : null,
         countryCode: countryForCoord(slat, slon) || null,   // derived offline from coordinates
@@ -320,7 +327,7 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
   const arr = extractJsArray(js, 'var kiwisdr_com');
   if (!arr) return [];
   return arr
-    .filter((r) => r?.url && /^https?:\/\/[^\s/?#@]+/i.test(String(r.url))
+    .filter((r) => r?.url && safeUrl(r.url, HTTP_SCHEMES)
                    && String(r?.offline ?? '').toLowerCase() !== 'yes')
     .map((r) => {
       const gps = /\(([-\d.]+),\s*([-\d.]+)\)/.exec(String(r.gps ?? ''));
@@ -329,9 +336,9 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
       // "snr":"46,47" → best of the pair
       const snr = String(r.snr ?? '').split(',').map(Number).filter((n) => Number.isFinite(n));
       return blank({
-        name: stripMarkup(r.name ?? 'KiwiSDR').slice(0, 120),
-        url: String(r.url).replace(/\/+$/, ''),
-        location: String(r.loc ?? ''),
+        name: stripMarkup(r.name ?? 'KiwiSDR') || 'KiwiSDR',
+        url: safeUrl(r.url, HTTP_SCHEMES),
+        location: stripMarkup(r.loc, 80),
         users: Number(r.users) || 0,
         maxUsers: Number(r.users_max) || 0,
         latitude: glat, longitude: glon,
@@ -459,10 +466,10 @@ async function annotateExtApiFromKiwiDirectory(list: SDRInstance[]): Promise<SDR
  *  location carries "city · TUNER" so the row shows the tuner type at a glance. */
 async function fetchFmdx(lat?: number, lon?: number): Promise<SDRInstance[]> {
   const servers = await fetchFmdxServers(lat, lon);
-  return servers.map((s) => blank({
-    name: s.name,
-    url: s.url,
-    location: [s.city, s.tuner ? s.tuner.toUpperCase() : ''].filter(Boolean).join(' · '),
+  return servers.filter((s) => !!safeUrl(s.url, HTTP_SCHEMES)).map((s) => blank({
+    name: cleanText(s.name) || 'FM-DX',
+    url: safeUrl(s.url, HTTP_SCHEMES),
+    location: [cleanText(s.city, 64), cleanText(s.tuner, 24).toUpperCase()].filter(Boolean).join(' · '),
     latitude: s.lat, longitude: s.lon, distance: s.distance,
     countryCode: s.iso ? s.iso.toUpperCase() : null,
     serverType: 'fmdx',
@@ -485,7 +492,11 @@ async function fetchSpyServers(lat?: number, lon?: number): Promise<SDRInstance[
   const json = await res.json();
   const rows: any[] = Array.isArray(json?.servers) ? json.servers : [];
   return rows
-    .filter(r => r?.online && r?.streamingHost && r?.streamingPort)
+    // ★ The host and port are written into a spyserver:// address and opened as a raw socket: a plain host
+    //   name and an integer port only (security, 2026-10-03).
+    .filter(r => r?.online && typeof r?.streamingHost === 'string'
+      && /^[a-z0-9.-]{1,253}$/i.test(r.streamingHost)
+      && Number.isInteger(Number(r?.streamingPort)) && Number(r.streamingPort) > 0 && Number(r.streamingPort) < 65536)
     .map((r): SDRInstance => {
       const la = typeof r?.antennaLocation?.lat === 'number' ? r.antennaLocation.lat : null;
       const lo = typeof r?.antennaLocation?.long === 'number' ? r.antennaLocation.long : null;
@@ -495,9 +506,9 @@ async function fetchSpyServers(lat?: number, lon?: number): Promise<SDRInstance[
       const maxUsers = r.maxClients ?? 1;
       return {
         uuid: null,
-        name: r.ownerName || r.generalDescription || `${r.streamingHost}:${r.streamingPort}`,
-        url: `spyserver://${r.streamingHost}:${r.streamingPort}`,
-        location: r.antennaType || r.generalDescription || '',
+        name: cleanText(r.ownerName) || cleanText(r.generalDescription) || `${r.streamingHost}:${Number(r.streamingPort)}`,
+        url: `spyserver://${r.streamingHost}:${Number(r.streamingPort)}`,
+        location: cleanText(r.antennaType, 80) || cleanText(r.generalDescription, 80),
         callsign: '',
         users,
         maxUsers,

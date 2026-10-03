@@ -1,4 +1,7 @@
 import { APP_PROTO } from '../constants/version';
+import { cleanText } from '../utils/safeText';
+import { cleanLines } from '../utils/cleanLines';
+import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 /**
  * A multi-radio VibeServer (V3), from the app's side.
  *
@@ -114,9 +117,10 @@ export async function fetchFrontDoor(
     const radios: VibeRadio[] = j.radios
       .filter((x: any) => x && typeof x.id === 'string' && x.id)
       .map((x: any) => ({
-        id: String(x.id),
-        label: String(x.label || x.driver || 'Radio'),
-        driver: String(x.driver || ''),
+        id: String(x.id).slice(0, 64),
+        // ★ Server text, cleaned on the way in (security, 2026-10-03) — see utils/safeText.
+        label: cleanText(x.label) || cleanText(x.driver, 32) || 'Radio',
+        driver: cleanText(x.driver, 32),
         users: num(x.users, 1),
         locked: x.locked === true,
         restricted: x.restricted === true,
@@ -130,20 +134,19 @@ export async function fetchFrontDoor(
         allowedNames: Array.isArray(x.allowedNames)
           ? x.allowedNames.filter((n: any) => typeof n === 'string') : undefined,
         primary: x.primary === true,
-        antenna: typeof x.antenna === 'string' && x.antenna ? x.antenna : undefined,
+        antenna: cleanText(x.antenna, 64) || undefined,
         antennaIcon: typeof x.antennaIcon === 'string' ? x.antennaIcon : undefined,
         minProto: typeof x.minProto === 'number' ? x.minProto : 0,
       }));
     if (!radios.length) return null;         // a door with nothing behind it is not a choice
     return {
-      name: String(j.name || 'VibeServer'),
+      name: cleanText(j.name) || 'VibeServer',
       radios,
-      landingMessage: typeof j.landingMessage === 'string' && j.landingMessage
-        ? j.landingMessage : undefined,
-      landingLinkUrl: typeof j.landingLinkUrl === 'string' && j.landingLinkUrl
-        ? j.landingLinkUrl : undefined,
-      landingLinkLabel: typeof j.landingLinkLabel === 'string' && j.landingLinkLabel
-        ? j.landingLinkLabel : undefined,
+      landingMessage: cleanLines(j.landingMessage, 500) || undefined,
+      // ★★ The link is OPENED (Linking.openURL): a plain http(s) address only, never tel:/sms:/another
+      //    app's scheme a server chose for us (security, 2026-10-03).
+      landingLinkUrl: safeUrl(j.landingLinkUrl, HTTP_SCHEMES) || undefined,
+      landingLinkLabel: cleanText(j.landingLinkLabel, 80) || undefined,
     };
   } catch {
     return null;                             // offline, or not a VibeServer — same answer either way

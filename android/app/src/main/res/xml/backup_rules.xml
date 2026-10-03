@@ -7,9 +7,29 @@
      ★ Excluding the store outright rather than naming keys: AsyncStorage is one database, the keys
        inside it are not separable here, and the rest of what it holds is preferences that cost
        nothing to lose. Losing them on a restore is a far smaller harm than leaking the password.
+     ★★ 2026-10-03: these rules used to name `vibesdr_secure.xml`, which NOTHING writes, and missed
+       the stores that DO hold secrets — the hosted server's PIN/admin password (vibe_server_restore),
+       its directory key (vibe_directory), the ban list and the connection log. A rule naming a file
+       that does not exist protects nothing and looks as if it protects everything. When a new store
+       holds a credential, add it HERE and in backup_rules_v2.xml.
      ★ This file is the pre-Android-12 form (fullBackupContent); backup_rules_v2.xml is the one
        Android 12 and later reads. BOTH are needed — ONE RULE, TWO READERS. -->
 <full-backup-content>
+    <!-- AsyncStorage (@react-native-async-storage 2.x, legacy store): saved PINs, the admin password. -->
     <exclude domain="database" path="RKStorage" />
-    <exclude domain="sharedpref" path="vibesdr_secure.xml" />
+    <exclude domain="database" path="RKStorage-journal" />
+    <exclude domain="database" path="RKStorage-wal" />
+    <exclude domain="database" path="RKStorage-shm" />
+    <!-- AsyncStorage "Next" (Room) store — not enabled today; excluded so switching it on cannot leak. -->
+    <exclude domain="database" path="AsyncStorage" />
+    <exclude domain="database" path="AsyncStorage-journal" />
+    <exclude domain="database" path="AsyncStorage-wal" />
+    <exclude domain="database" path="AsyncStorage-shm" />
+    <!-- VibeServerRestore.kt: the hosted server's config, including its PIN and admin password. -->
+    <exclude domain="sharedpref" path="vibe_server_restore.xml" />
+    <!-- VibeTunnel.kt: this server's directory id and its secret key. -->
+    <exclude domain="sharedpref" path="vibe_directory.xml" />
+    <!-- VibeServerBoot.kt: listener bans and the connection log (listeners' addresses). -->
+    <exclude domain="file" path="vibe_bans.json" />
+    <exclude domain="file" path="vibe_connlog.json" />
 </full-backup-content>
