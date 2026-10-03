@@ -5,7 +5,8 @@
  * with two drawImage blits every frame — all CPU/main-thread work that scales with the PIXEL count, so
  * a Retina canvas pays 4× and a dpr-3 phone pays 9×. This moves the whole thing to the GPU:
  *
- *   • The history is a RING TEXTURE, `bins` wide × `rows` tall, single channel (the raw dB index 0-255).
+ *   • The history is a RING TEXTURE, `bins` wide × `rows` tall, single channel (the raw dB index 0-255,
+ *     a LUMINANCE texture — see ensureRing for why that is colour-identical to the old RGBA ring).
  *     A new row is one texSubImage2D of the bins — NO palette loop, NO downsample, NO per-pixel JS.
  *   • A fullscreen quad + fragment shader unwraps the ring (a `head` uniform, free) and colours it
  *     through the palette held as a 256×1 LUT texture. The GPU scales bins→width and does dpr for free,
@@ -29,7 +30,7 @@ void main() {
 
 const FRAG = `
 precision mediump float;
-uniform sampler2D uRing;   // RGBA, ringW × ringH — the dB index in R
+uniform sampler2D uRing;   // LUMINANCE, ringW × ringH — the dB index (WebGL1 samples L as .rgb)
 uniform sampler2D uLut;    // 256×1 RGBA palette
 uniform float uHead;       // newest row index in the ring
 uniform float uRows;       // ring height (fixed, generous)
@@ -113,13 +114,15 @@ export class WaterfallGL {
   private uCols: WebGLUniformLocation;
   private uSharp: WebGLUniformLocation;
   private uContrast: WebGLUniformLocation;
+  // ★ Looked up ONCE. render() used to call getAttribLocation + getUniformLocation ×2 every frame;
+  //   they are string lookups on the program and cost a driver round-trip on some stacks.
+  private aPos: number;
+  private uRing: WebGLUniformLocation;
+  private uLut: WebGLUniformLocation;
   /** 0…10 from the UI, mapped to the mask amount at draw time. */
   sharpness = 0;
   /** −10..10 from the slider; the shader takes −1..1. See the S-curve in the fragment shader. */
   contrast = 0;
-  // Reusable RGBA upload buffer (the dB index packed into R). The ring is RGBA, not LUMINANCE, so it
-  // is a color-RENDERABLE format — the FBO that preserves history across a resize needs that.
-  private rgba: Uint8Array | null = null;
 
   constructor(private canvas: HTMLCanvasElement) {
     // preserveDrawingBuffer keeps the backbuffer valid for the drawImage composite that follows the
@@ -152,6 +155,9 @@ export class WaterfallGL {
     this.uCols = gl.getUniformLocation(prog, 'uCols')!;
     this.uSharp = gl.getUniformLocation(prog, 'uSharp')!;
     this.uContrast = gl.getUniformLocation(prog, 'uContrast')!;
+    this.aPos = gl.getAttribLocation(prog, 'aPos');
+    this.uRing = gl.getUniformLocation(prog, 'uRing')!;
+    this.uLut = gl.getUniformLocation(prog, 'uLut')!;
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   }
 
@@ -176,8 +182,17 @@ export class WaterfallGL {
     const h = Math.max(rows, this.ringH);   // grow-only in height
     const next = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, next);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cols, h, 0, gl.RGBA, gl.UNSIGNED_BYTE,
-      new Uint8Array(cols * h * 4));    // index 0 = palette floor
+    // ★★ LUMINANCE, ONE BYTE PER TEXEL — was RGBA with the index in R and G/B unused, 4× the VRAM
+    //    (1024 × 2560 ring: 10.5 MB → 2.6 MB) and a per-row JS expansion loop in pushRow.
+    //    ★ COLOUR-IDENTICAL: WebGL1 samples a LUMINANCE texel L as vec4(L, L, L, 1), so the shader's
+    //      `.r` reads exactly the byte it read from R before (same UNSIGNED_BYTE /255 normalisation,
+    //      same LINEAR filter between the same byte values). Alpha was never read.
+    //    ★ The old comment here said RGBA was needed because an FBO copied the ring on resize. That
+    //      FBO no longer exists — the ring is never rendered INTO (resize leaves it alone), so it
+    //      does not need to be colour-renderable. LUMINANCE is core WebGL1: every device that can
+    //      make this context can make this texture.
+    //    ★ null = zero-filled by the WebGL spec (no 10 MB JS array). Index 0 = palette floor.
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, cols, h, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -186,30 +201,29 @@ export class WaterfallGL {
     this.ring = next;
     this.ringW = cols;
     this.ringH = h;
-    this.rgba = new Uint8Array(cols * 4);
   }
 
   get rows(): number { return this.ringH; }
 
-  /** Wipe the ring to the palette floor (clearHistory). */
+  /** Wipe the ring to the palette floor (clearHistory). Called on every discontinuous retune.
+   *  ★ Passes null: WebGL guarantees a texture allocated from null reads as zeros, so this no longer
+   *    builds a ring-sized JS array (10.5 MB under the old RGBA ring) on every jump for the GC. */
   clear() {
     const gl = this.gl;
     if (!this.ringW) return;
-    const zero = new Uint8Array(this.ringW * this.ringH * 4);
     gl.bindTexture(gl.TEXTURE_2D, this.ring);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.ringW, this.ringH, 0,
-      gl.RGBA, gl.UNSIGNED_BYTE, zero);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, this.ringW, this.ringH, 0,
+      gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
   }
 
-  /** Upload one row of dB indices (length must equal the ring width) at `headRow`. The index goes in
-   *  the R channel — the shader samples .r and colours through the palette LUT. */
+  /** Upload one row of dB indices (length must equal the ring width) at `headRow`. Uploaded as-is
+   *  (LUMINANCE, one byte per bin; UNPACK_ALIGNMENT is 1) — the shader samples .r and colours through
+   *  the palette LUT. */
   pushRow(row: Uint8Array, headRow: number) {
     const gl = this.gl;
-    if (!this.ringW || row.length !== this.ringW || !this.rgba) return;
-    const rgba = this.rgba;
-    for (let i = 0; i < this.ringW; i++) { const o = i << 2; rgba[o] = row[i]; rgba[o + 3] = 255; }
+    if (!this.ringW || row.length !== this.ringW) return;
     gl.bindTexture(gl.TEXTURE_2D, this.ring);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, headRow, this.ringW, 1, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, headRow, this.ringW, 1, gl.LUMINANCE, gl.UNSIGNED_BYTE, row);
   }
 
   /** Render the waterfall into this renderer's canvas at outW×outH. `head` is the newest row and
@@ -224,15 +238,14 @@ export class WaterfallGL {
     gl.viewport(0, 0, outW, outH);
     gl.useProgram(this.prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
-    const loc = gl.getAttribLocation(this.prog, 'aPos');
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(this.aPos);
+    gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 0, 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.ring);
-    gl.uniform1i(gl.getUniformLocation(this.prog, 'uRing'), 0);
+    gl.uniform1i(this.uRing, 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.lut);
-    gl.uniform1i(gl.getUniformLocation(this.prog, 'uLut'), 1);
+    gl.uniform1i(this.uLut, 1);
     gl.uniform1f(this.uHead, head);
     gl.uniform1f(this.uRows, this.ringH);
     gl.uniform1f(this.uVisible, Math.min(visibleRows, this.ringH));

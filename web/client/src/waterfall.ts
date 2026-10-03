@@ -58,6 +58,12 @@ function clampRatio(r: number): number {
   return Math.max(0, Math.min(0.8, r));
 }
 
+/** ★ `#noglow` — MEASUREMENT SWITCH, not a user setting. Turns off the canvas shadowBlur halos
+ *  (peak-hold line blur 2, sideband edges blur 8, needle layers 28/16/6) so their per-frame cost
+ *  can be measured against the default look. Read once at load, like #nowf / #noaudio in main.ts.
+ *  Default (no hash) = the look exactly as before. */
+const NO_GLOW = typeof location !== 'undefined' && location.hash.includes('noglow');
+
 /** '#rrggbb' + alpha -> 'rgba(...)'. Mirrors the app's hexRgba(). */
 function rgba(hex: string, a: number): string {
   const h = hex.replace('#', '');
@@ -430,7 +436,24 @@ export class Waterfall {
    *    TUNE_PASSTHROUGH_MS. */
   private passthroughUntil = 0;
 
+  /** ★ Recycled hold-queue buffers. push() used to allocate a fresh Float32Array copy of every
+   *  frame (~20/s × bins × 4 bytes) for the GC to collect a moment later; a queue of at most
+   *  `cap` entries only ever needs that many buffers. Trade-off: a few bins-sized buffers stay
+   *  resident (≤ HELD_POOL_MAX) in exchange for no per-frame allocation / GC churn. */
+  private heldPool: Float32Array[] = [];
+  private static readonly HELD_POOL_MAX = 32;
+  private _heldCopy(src: Float32Array): Float32Array {
+    let b = this.heldPool.pop();
+    if (!b || b.length !== src.length) b = new Float32Array(src.length);   // bin count changed → drop it
+    b.set(src);
+    return b;
+  }
+  private _heldRecycle(b: Float32Array) {
+    if (this.heldPool.length < Waterfall.HELD_POOL_MAX) this.heldPool.push(b);
+  }
+
   flushHeld() {
+    for (const f of this.held) this._heldRecycle(f.bins);
     this.held.length = 0;
     this.passthroughUntil = performance.now() + 400;
   }
@@ -444,12 +467,12 @@ export class Waterfall {
     if (this.holdMs > 0) {
       // ★ COPY. `bins` is a reused buffer owned by the caller — queueing the reference would hand
       //   the renderer whatever happened to be in it by release time, which is the NEXT row.
-      this.held.push({ bins: new Float32Array(bins), centerHz, bwHz,
+      this.held.push({ bins: this._heldCopy(bins), centerHz, bwHz,
                        at: performance.now() });
       // Bound it: a link that stalls for a second must not queue a second of catch-up to grind
       // through afterwards. Oldest goes first — it is the stalest picture.
       const cap = Math.max(4, Math.ceil(this.holdMs / 20) + 4);
-      while (this.held.length > cap) this.held.shift();
+      while (this.held.length > cap) this._heldRecycle(this.held.shift()!.bins);
       return;
     }
     this._pushNow(bins, centerHz, bwHz);
@@ -475,6 +498,9 @@ export class Waterfall {
     while (this.held.length && now - this.held[0].at >= eff) {
       const f = this.held.shift()!;
       this._pushNow(f.bins, f.centerHz, f.bwHz);
+      // ★ Safe to reuse: proc.process() copies what it keeps (dbAvg/specSmooth .set) and holds no
+      //   reference to `bins` after it returns.
+      this._heldRecycle(f.bins);
     }
   }
 
@@ -819,7 +845,7 @@ export class Waterfall {
       // peakPaint: needleColor at 0.85, blur 2).
       ctx.strokeStyle = rgba(this.vfoColor, 0.85);
       ctx.shadowColor = rgba(this.vfoColor, 0.85);
-      ctx.shadowBlur = 2;
+      ctx.shadowBlur = NO_GLOW ? 0 : 2;
       ctx.lineWidth = 1;
       ctx.stroke();
       ctx.shadowBlur = 0;
@@ -867,22 +893,15 @@ export class Waterfall {
     }
 
     // Acrylic sideband panels — 4-stop gradients rising toward the needle.
+    // ★ CACHED: the same gradient object is reused while its endpoints and colour are unchanged
+    //   (i.e. whenever the dial is still — nearly every frame). A CanvasGradient is immutable once
+    //   its stops are added, so reusing one with identical endpoints/stops paints identically.
     if (nX > loXc) {
-      const g = ctx.createLinearGradient(loXc, 0, nX, 0);
-      g.addColorStop(0,    rgba(col, 0.03));
-      g.addColorStop(0.15, rgba(col, 0.06));
-      g.addColorStop(0.55, rgba(col, 0.14));
-      g.addColorStop(1,    rgba(col, 0.28));
-      ctx.fillStyle = g;
+      ctx.fillStyle = this.sbGradient(ctx, 0, loXc, nX, col);
       ctx.fillRect(loXc, 0, nX - loXc, H);
     }
     if (hiXc > nX) {
-      const g = ctx.createLinearGradient(nX, 0, hiXc, 0);
-      g.addColorStop(0,    rgba(col, 0.28));
-      g.addColorStop(0.45, rgba(col, 0.14));
-      g.addColorStop(0.85, rgba(col, 0.06));
-      g.addColorStop(1,    rgba(col, 0.03));
-      ctx.fillStyle = g;
+      ctx.fillStyle = this.sbGradient(ctx, 1, nX, hiXc, col);
       ctx.fillRect(nX, 0, hiXc - nX, H);
     }
 
@@ -892,7 +911,7 @@ export class Waterfall {
       ctx.strokeStyle = rgba(col, 0.35);
       ctx.lineWidth = Math.max(0.75, 0.75);
       ctx.shadowColor = rgba(col, 0.35);
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = NO_GLOW ? 0 : 8;
       ctx.beginPath();
       ctx.moveTo(x + 0.5, 0);
       ctx.lineTo(x + 0.5, H);
@@ -910,6 +929,7 @@ export class Waterfall {
     // LED needle: three glow layers (28/16/6) + a crisp core filament.
     if (nX >= 0 && nX <= W) {
       const layer = (alpha: number, blur: number, sw: number) => {
+        if (NO_GLOW) return;
         ctx.strokeStyle = rgba(col, Math.min(1, alpha));
         ctx.lineWidth = sw;
         ctx.shadowColor = rgba(col, Math.min(1, alpha));
@@ -939,6 +959,33 @@ export class Waterfall {
     }
 
     ctx.restore();
+  }
+
+  /** Sideband gradient cache — [0] lower (rises toward the needle), [1] upper (falls away). */
+  private sbGrad: (CanvasGradient | null)[] = [null, null];
+  private sbGradX0 = [NaN, NaN];
+  private sbGradX1 = [NaN, NaN];
+  private sbGradCol = ['', ''];
+  private sbGradient(ctx: CanvasRenderingContext2D, side: 0 | 1, x0: number, x1: number,
+                     col: string): CanvasGradient {
+    const hit = this.sbGrad[side];
+    if (hit && this.sbGradX0[side] === x0 && this.sbGradX1[side] === x1
+        && this.sbGradCol[side] === col) return hit;
+    const g = ctx.createLinearGradient(x0, 0, x1, 0);
+    if (side === 0) {
+      g.addColorStop(0,    rgba(col, 0.03));
+      g.addColorStop(0.15, rgba(col, 0.06));
+      g.addColorStop(0.55, rgba(col, 0.14));
+      g.addColorStop(1,    rgba(col, 0.28));
+    } else {
+      g.addColorStop(0,    rgba(col, 0.28));
+      g.addColorStop(0.45, rgba(col, 0.14));
+      g.addColorStop(0.85, rgba(col, 0.06));
+      g.addColorStop(1,    rgba(col, 0.03));
+    }
+    this.sbGrad[side] = g;
+    this.sbGradX0[side] = x0; this.sbGradX1[side] = x1; this.sbGradCol[side] = col;
+    return g;
   }
 
   /** The live capture window (dongle ± Fs/2) — a bracket showing the 2.4 MHz the
