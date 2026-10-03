@@ -561,6 +561,9 @@ object VibeTunnel {
              *  Taken from the server's own vibeserver.json, as on Linux, so the number cannot drift. */
             j.optString("version").takeIf { it.isNotEmpty() }?.let { out.put("version", it) }
             j.optString("flavour").takeIf { it.isNotEmpty() }?.let { out.put("flavour", it) }
+            // ★ A fork's own name, version and link (vibe_fork.h) — absent on official builds.
+            for (k in listOf("forkName", "forkVersion", "forkUrl"))
+                j.optString(k).takeIf { it.isNotEmpty() }?.let { out.put(k, it) }
             // ★ The owner's landing-page message and link, so a listener who goes straight to a radio
             //   from the directory still sees it (Stuart, 2026-09-28). The Worker caps and checks them.
             for (k in listOf("landingMessage", "landingLinkUrl", "landingLinkLabel"))

@@ -446,6 +446,30 @@ async function verifyAddress(url, key, why) {
   }
 }
 
+/* ★★★ FORKS ARE LABELLED, NOT REFUSED (Stuart, 2026-10-03: "I dont mind thats absolutely fine, I just need to
+ *  be prepared for it ... like we do now with the server reporting do it for forks too. If the fork ends up low
+ *  quality that may break the directory or the app then we have to restrict but for now just do the labelling").
+ *  VibeServer is GPLv3; nothing can prove a build is official, so the directory shows what a fork says about
+ *  itself (vibe_fork.h) next to the build it came from: "Lite+ 1.2 — community fork of VibeServer Lite 11.0.0".
+ *  ★★ CHECKED LIKE `flavour`, because it is printed on the page: a closed character set and a length cap rather
+ *     than free text, and an official build name is DROPPED as a fork name — a listener reads it as ours.
+ *  ★ No name = not a fork; a version or link without a name means nothing and is dropped too. */
+const OFFICIAL_BUILD_NAMES = ['vibeserver', 'vibeserver lite', 'vibeserver inside vibesdr', 'vibesdr'];
+export function forkOf(status) {
+  const name = typeof status?.forkName === 'string' ? status.forkName.trim().replace(/\s+/g, ' ') : '';
+  // Letters, digits, combining marks (Indic, Tibetan), Tibetan tsheg/shad, ZWNJ/ZWJ, and . + - _ ( ) — no
+  // markup characters, no controls, no bidi overrides.
+  if (!/^[\p{L}\p{N}][\p{L}\p{M}\p{N} .+\-_()\u0f0b-\u0f14\u200c\u200d]{1,39}$/u.test(name)) return {};
+  if (OFFICIAL_BUILD_NAMES.includes(name.toLowerCase())) return {};
+  const ver = typeof status.forkVersion === 'string' ? status.forkVersion.trim() : '';
+  const url = typeof status.forkUrl === 'string' ? status.forkUrl.trim() : '';
+  return {
+    forkName: name,
+    forkVersion: /^[A-Za-z0-9][A-Za-z0-9.~+\-]{0,23}$/.test(ver) ? ver : '',
+    forkUrl: url.length <= 200 && /^https?:\/\/[^\s"'<>\\]{3,}$/i.test(url) ? url : '',
+  };
+}
+
 async function register(request, env) {
   const body = await readBody(request);
   if (!body) return json({ error: 'bad json' }, 400);
@@ -798,6 +822,8 @@ async function list(env, url, request) {
        *    than inventing a number. */
       flavour: ['VibeServer', 'VibeServer Lite', 'VibeServer inside VibeSDR']
                  .includes(status.flavour) ? status.flavour : '',
+      // ★★ A COMMUNITY FORK, said by the fork itself (vibe_fork.h) — see forkOf.
+      ...forkOf(status),
       /* ★ V11 betas carry a label — 11.0.0~b1 (dpkg's pre-release form). Digits and dots only threw
        *  away every B1 server's version the moment the estate moved (2026-09-28). */
       version: typeof status.version === 'string' && /^[0-9][0-9.]{0,15}(~[A-Za-z0-9]{1,8})?$/.test(status.version)

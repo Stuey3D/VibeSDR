@@ -14,6 +14,7 @@
 // the only remaining native dependency.
 
 #include "local_sdr_shim.h"
+#include "vibe_fork.h"
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
@@ -25855,6 +25856,15 @@ static std::string vsTunableJson() {
      *  app for older devices, and only that. `lite` above stays: it describes the MACHINE. */
     j += ",\"flavour\":\"VibeServer\"";
 #endif
+    /* ★★ A FORK SAYS SO (Stuart, 2026-10-03 — "like we do now with the server reporting, do it for forks
+     *  too"). `flavour` stays the build it was forked FROM; these name the fork itself. Set in vibe_fork.h,
+     *  empty on official builds — and an empty name sends nothing, so a listing never says "fork" by
+     *  accident. The directory checks and caps all three (directory/src/index.js forkOf). */
+    if (VIBE_FORK_NAME[0]) {
+        j += ",\"forkName\":\"" + dabEscape(VIBE_FORK_NAME) + "\"";
+        if (VIBE_FORK_VERSION[0]) j += ",\"forkVersion\":\"" + dabEscape(VIBE_FORK_VERSION) + "\"";
+        if (VIBE_FORK_URL[0])     j += ",\"forkUrl\":\""     + dabEscape(VIBE_FORK_URL)     + "\"";
+    }
     // ★ The contract, for the directory to forward (BRIEF-v11 §4): a client greys a server out by
     //   these, never by its version string.
     j += ",\"proto\":" + std::to_string(VS_PROTO) + ",\"minProto\":" + std::to_string(VS_MIN_PROTO);

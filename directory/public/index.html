@@ -213,6 +213,7 @@
      to this line to check, and the machine details underneath are context for them. Not the accent
      colour — that belongs to instructions ("ASK BEFORE TUNING"), not to a readout. */
   .rcHost .rcVer { color: var(--fg); font-weight: 600; letter-spacing: .04em; }
+  .rcHost .rcFork { font-style: italic; }
   /* ★ Brighter than the detail around it: it is an instruction, not another readout. */
   .radio .cap.ask { color: var(--accent); letter-spacing: 0.06em; margin-top: 3px; }
   /* ★★ THE ONE FILLED THING ON THE PAGE. Everything else here is an outline on near-black, which
@@ -1600,11 +1601,21 @@ function serverBlock(s) {
    *  ★ Versions are shown AS THEY ARE, not normalised: "don't bump the versions yet though display
    *    them as is" (Stuart, same message). */
   const flavour = s.flavour || (s.lite === true ? 'VibeServer Lite' : (s.lite === false ? 'VibeServer' : ''));
-  const verLine = flavour || s.version
+  const baseLine = flavour || s.version
     ? [flavour, s.version].filter(Boolean).join(' ')
     : '';
+  /* ★★ A COMMUNITY FORK leads with its own name and says what it was forked from (Stuart, 2026-10-03).
+   *  The Worker has already checked every field (forkOf); text stays text, and the link, if any, opens
+   *  the fork's own page rather than being printed. */
+  const forkName = typeof s.forkName === 'string' ? s.forkName : '';
+  const forkUrl = forkName && typeof s.forkUrl === 'string' && /^https?:\/\//i.test(s.forkUrl) ? s.forkUrl : '';
+  const verLine = forkName ? [forkName, s.forkVersion].filter(Boolean).join(' ') : baseLine;
+  const forkNote = forkName
+    ? `<br><span class="rcFork">community fork${baseLine ? ` of ${esc(baseLine)}` : ''}</span>`
+      + (forkUrl ? ` · <a href="${esc(forkUrl)}" target="_blank" rel="noopener noreferrer">about this fork</a>` : '')
+    : '';
   const extra = (s.host || s.platform || hwLine || verLine)
-    ? `<div class="rcHost">${verLine ? `<b class="rcVer">${esc(verLine)}</b>` : ''}`
+    ? `<div class="rcHost">${verLine ? `<b class="rcVer">${esc(verLine)}</b>${forkNote}` : ''}`
       + `${verLine && (s.host || s.platform || hwLine) ? '<br>' : ''}`
       + `${s.host ? `Server: ${esc(s.host)}` : ''}`
       + `${s.host && s.platform ? '<br>' : ''}${esc(s.platform || '')}`

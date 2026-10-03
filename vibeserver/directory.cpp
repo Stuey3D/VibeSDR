@@ -564,6 +564,12 @@ std::string buildStatus(int port) {
       if (!ver.empty()) j += ",\"version\":\"" + ver + "\""; }
     { const std::string fl = jsonStr(ident, "flavour");
       if (!fl.empty()) j += ",\"flavour\":\"" + fl + "\""; }
+    // ★ A fork's own name, version and link (vibe_fork.h) — absent on official builds. Raw (still escaped)
+    //   from vibeserver.json, like the landing fields below; the Worker checks and caps them.
+    for (const char* k : { "forkName", "forkVersion", "forkUrl" }) {
+        const std::string raw = jsonRawStr(ident, k);
+        if (!raw.empty()) j += std::string(",\"") + k + "\":\"" + raw + "\"";
+    }
     /* ★★ THE OWNER'S MESSAGE TRAVELS TO THE DIRECTORY (Stuart, 2026-09-28): a listener who clicks a
      *  radio straight from the directory skips the landing page, and with it the message the owner
      *  wrote there ("join the Discord", "donate"). Copied verbatim from vibeserver.json; the

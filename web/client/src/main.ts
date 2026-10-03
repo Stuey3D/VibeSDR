@@ -688,7 +688,12 @@ async function loadAudioPolicy(httpBase: string) {
     if (av) {
       const ver = typeof j.version === 'string' ? j.version : '';
       const flav = typeof j.flavour === 'string' ? j.flavour : 'VibeServer';
-      av.textContent = ver ? `This receiver runs ${flav} ${ver}.` : '';
+      // ★ A community fork says so, by its own name (vibe_fork.h) — Stuart, 2026-10-03.
+      const fork = typeof j.forkName === 'string' ? j.forkName.trim().slice(0, 40) : '';
+      const forkVer = fork && typeof j.forkVersion === 'string' ? j.forkVersion.trim().slice(0, 24) : '';
+      av.textContent = !ver ? ''
+        : fork ? `This receiver runs ${[fork, forkVer].filter(Boolean).join(' ')}, a community fork of ${flav} ${ver}.`
+        : `This receiver runs ${flav} ${ver}.`;
       av.hidden = !ver;
     }
     /* ★★ THE SERVER DECIDES WHETHER DAB IS OFFERED. Only it knows the EFFECTIVE limits — the
