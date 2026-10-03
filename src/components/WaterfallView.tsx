@@ -796,8 +796,11 @@ function WaterfallView({
     }
     let j = 0;
     pool[j].x = 0; pool[j].y = baseline; j++;
+    // ★ A reduced frame (one point per SPEC_PX_STEP, built in handleFrame) is indexed by step directly, so it
+    //   draws exactly the bins the full-frame mapping below would have picked — no float rounding between them.
+    const nDec = Math.ceil(w / SPEC_PX_STEP);
     for (let px = 0; px < wi; px += SPEC_PX_STEP) {
-      const v = disp[Math.floor((px / w) * n)];
+      const v = disp[n === nDec ? px / SPEC_PX_STEP : Math.floor((px / w) * n)];
       pool[j].x = px; pool[j].y = baseline - v * sh; j++;
     }
     pool[j].x = wi; pool[j].y = baseline;
@@ -1492,7 +1495,23 @@ function WaterfallView({
         // ★ Array.from, because a worklet cannot be handed a Float32Array — the shared value has to
         //   carry a plain array. This is once per DATA frame (~20/s), replacing thirty path builds
         //   a second on this thread, so the JS thread is left far quieter than before.
-        const next = Array.from(frame.spec);
+        /* ★★ ONLY THE POINTS THE TRACE DRAWS. The tween worklet samples ONE bin per SPEC_PX_STEP pixels
+         *  (disp[floor(px / w * n)]), so handing it every bin — 1024–4096 numbers, 8–32 KB, a fresh array per
+         *  data frame because Reanimated freezes what it is given — was mostly garbage: on the iPhone profile
+         *  (2026-10-03) Hermes GC was 14 % of the app. Pick the same bins here, in the same order, and the
+         *  worklet's own mapping lands on them exactly (floor(k·STEP / w · m) = k for m = ceil(w / STEP)):
+         *  ~w/2 numbers instead of every bin, the drawing unchanged. The peak-hold trace below still reads the
+         *  full frame. */
+        const fs = frame.spec, fn = fs.length;
+        const wDraw = Math.floor(cfg.width);
+        let next: number[];
+        if (wDraw > 0 && fn > Math.ceil(cfg.width / SPEC_PX_STEP)) {
+          const m = Math.ceil(cfg.width / SPEC_PX_STEP);   // ★ unfloored: keeps the worklet's floor(px/w·m) == k
+          next = new Array(m);
+          for (let k = 0; k < m; k++) next[k] = fs[Math.floor(((k * SPEC_PX_STEP) / cfg.width) * fn)];
+        } else {
+          next = Array.from(fs);
+        }
         specToSv.value = next;
         if (specDispSv.value.length !== next.length) specDispSv.value = Array.from(next);
         setSpecTweenActive(true);   // idle → running; a no-op while it already is
