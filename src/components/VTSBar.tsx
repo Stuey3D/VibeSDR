@@ -279,7 +279,11 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       {/* ★★ THE LEFT BADGE BLOCK — the RDS mark, logo, flag or source. When the strip carries the
           TP · TA · AF cluster, this block and that one reserve the SAME width (the wider of the two), so the
           scrolling text sits centred on the strip whether or not anything is lit (Stuart, 2026-10-02). */}
-      <View style={[styles.sideBlock, shown.annunciators && { minWidth: sideW }]}>
+      {/* ★★ SYMMETRIC ONLY ON THE VFD STYLES. There the strip's text is a centred window of cells, so both ends
+          reserve the same width. On Nixie / HYPER / default the text runs on from the logo and flag, and the
+          left block (RDS mark + logo + flag) is far wider than TP·TA·AF — reserving it on the right left a band of
+          dead black before the legends and squeezed the RadioText (Stuart, 2026-10-03). */}
+      <View style={[styles.sideBlock, vfd && shown.annunciators && { minWidth: sideW }]}>
       <View style={styles.sideInner} onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setLeftW(Math.ceil(e.nativeEvent.layout.width))}>
         {/* Source mark: live-data badge (RDS mark / text) wins; otherwise the
             bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
@@ -360,7 +364,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       {/* ★★ TP · TA · AF — fixed legends in the glass, drawn like the RDS mark (AnnunciatorLegend), on the
           RIGHT inside the ▶ so they balance the badge block on the left; lit when true, ghosted when not. */}
       {!!shown.annunciators && (
-        <View style={[styles.sideBlock, styles.sideRight, { minWidth: sideW }]}>
+        <View style={[styles.sideBlock, styles.sideRight, vfd && { minWidth: sideW }]}>
           <View style={[styles.sideInner, styles.annun]}
                 onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setRightW(Math.ceil(e.nativeEvent.layout.width))}>
             {(['TP', 'TA', 'AF'] as const).map(nm => (
