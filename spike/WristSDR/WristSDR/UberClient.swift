@@ -936,8 +936,15 @@ final class UberClient: ObservableObject {
           let (data, resp) = try? await httpSession.data(from: url),
           (resp as? HTTPURLResponse)?.statusCode == 200,
           let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let t = j["ticket"] as? String, !t.isEmpty else { return nil }
-    let ttl = (j["ttl"] as? Double) ?? 600
+          let t = j["ticket"] as? String, !t.isEmpty, t.count <= 512,
+          // ★ It is pasted into every URL as `&vs_admin_ticket=…`, so it must be URL-safe as it
+          //   stands — a ticket carrying `&` or `#` would rewrite the query it rides in.
+          t.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) && $0.isASCII
+                                        || "-_.~".unicodeScalars.contains($0) }) else { return nil }
+    // ★★ CLAMPED. The ttl becomes UInt64(seconds × 1e9) in startTicketRenewal, which TRAPS for a
+    //    huge, negative or NaN figure — one odd server reply took Jr down. 30 s … 24 h.
+    let raw = (j["ttl"] as? NSNumber)?.doubleValue ?? 600
+    let ttl = raw.isFinite ? min(86_400, max(30, raw)) : 600
     return (t, ttl)
   }
 
@@ -952,7 +959,9 @@ final class UberClient: ObservableObject {
     ticketRenewTask = Task { [weak self] in
       var wait = ttl
       while !Task.isCancelled {
-        let sleepFor = max(30.0, wait - 60.0)
+        // Clamped again here, so no caller can hand this a value UInt64() traps on.
+        let w = wait.isFinite ? min(86_400, max(30, wait)) : 600
+        let sleepFor = max(30.0, w - 60.0)
         try? await Task.sleep(nanoseconds: UInt64(sleepFor * 1_000_000_000))
         if Task.isCancelled { return }
         guard let self else { return }
@@ -1238,18 +1247,11 @@ final class UberClient: ObservableObject {
   /// valid UTF-8 by construction (invalid bytes became U+FFFD in JSONSerialization), so what is
   /// left to do is strip the controls and BOUND the length — a label longer than any legal one is
   /// corruption, not content, and must not be allowed to grow a row off the screen.
-  private func dabSafe(_ v: Any?, _ max: Int = 128) -> String {
-    guard let s = v as? String, !s.isEmpty else { return "" }
-    var out = ""
-    for ch in s.unicodeScalars {
-      if ch.properties.generalCategory == .control || ch.properties.generalCategory == .format {
-        out.unicodeScalars.append(" "); continue
-      }
-      out.unicodeScalars.append(ch)
-      if out.count >= max { break }
-    }
-    return out.trimmingCharacters(in: .whitespaces)
-  }
+  /// ★★ Now the shared cleaner (SafeText — the port of the app's safeText.ts). This used to blank
+  ///    every `.format` scalar, which included the joiners U+200C/U+200D that Indic scripts NEED —
+  ///    a Hindi or Bengali service name came out broken — and it re-counted the whole string on
+  ///    every scalar. SafeText strips exactly the dangerous format characters and keeps the joiners.
+  private func dabSafe(_ v: Any?, _ max: Int = 128) -> String { SafeText.clean(v, max: max) }
 
   private func onDabJSON(_ type: String, _ j: [String: Any]) {
     /* ★★★ HOLD THE SELF-HEAL FOR DAB CHANGES THIS WATCH DID NOT MAKE, TOO. On a shared dial another
@@ -1334,8 +1336,11 @@ final class UberClient: ObservableObject {
     // ★★ CAPPED. A corrupt length field is exactly how a service list becomes ten thousand rows,
     //    and the cost of that lands on a watch's render thread. 64 is far above any legal mux.
     if let svcs = j["services"] as? [[String: Any]] {
+      // ★★ One row per sid: DabProgramme.id feeds a ForEach, and a duplicate id there crashes.
+      var seenSid = Set<Int>()
       let list: [DabProgramme] = svcs.prefix(64).compactMap { sv in
-        guard let sid = (sv["sid"] as? NSNumber)?.intValue else { return nil }
+        guard let sid = (sv["sid"] as? NSNumber)?.intValue,   // same conversion as dabActiveSid
+              seenSid.insert(sid).inserted else { return nil }
         let name = dabSafe(sv["label"], 32)
         return DabProgramme(id: sid, name: name.isEmpty ? String(sid, radix: 16).uppercased() : name)
       }
@@ -1854,7 +1859,7 @@ final class UberClient: ObservableObject {
     //     black screen, the log could not say whether the preflight ran, what it answered, or
     //     which URL the sockets tried. We reasoned from symptoms for an hour (2026-08-18).
     //     The phone's fault was cracked the moment it could account for itself; this is that.
-    Vitals.crumb("UBER preflight POST \(cu.absoluteString)")
+    Vitals.crumb("UBER preflight POST \(Vitals.redact(cu))")
     var req = URLRequest(url: cu)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1953,7 +1958,13 @@ final class UberClient: ObservableObject {
     // ★★ NAMED IN THE QUERY TOO. The header is set as well, but a platform may own User-Agent on a
     //    WebSocket upgrade — and when it does, the owner's connection log shows "—" for us. The
     //    server prefers a real header and falls back to this.
-    let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&proto=\(JrVersion.proto)&mode=binary8\(binsParam)\(authSuffix)\(adminWire)&client=\(jrUserAgent.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "VibeSDR-Jr")")!
+    // ★★ nil, never a crash: host and radioPath come from a favourite or a directory row, and a
+    //    stray character made URL(string:) nil — the force-unwrap took Jr down on connect.
+    guard let url = URL(string: "\(scheme)://\(host)\(radioPath)/ws/user-spectrum?user_session_id=\(uuid)&proto=\(JrVersion.proto)&mode=binary8\(binsParam)\(authSuffix)\(adminWire)&client=\(jrUserAgent.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "VibeSDR-Jr")") else {
+      Vitals.crumb("UBER spec open ABORT — not a valid URL for host \(host)")
+      status = "bad server URL"
+      return
+    }
 
     specSock.onData = { [weak self] d in
       Task { @MainActor in self?.onSpectrumBinary(d) }
@@ -1998,7 +2009,9 @@ final class UberClient: ObservableObject {
     //    owner deciding whether to BLOCK an address is exactly who needs to know it is our app.
     //    ★ The /connection POST has always sent it; the SOCKET, which is what the log records,
     //      never did.
-    Vitals.crumb("UBER spec open \(url.absoluteString)")
+    // ★★★ REDACTED: this URL carries the PIN proof (vs_nonce/vs_auth) and any admin ticket, and
+    //     jr-vitals.log is a file the user shares with us. Credentials never go into it.
+    Vitals.crumb("UBER spec open \(Vitals.redact(url))")
     specSock.open(url: url, headers: [("User-Agent", jrUserAgent)])
   }
 
@@ -2484,8 +2497,9 @@ final class UberClient: ObservableObject {
     if type == "rds" {
       // Station naming from WFM RDS. An empty ps IS the "station lost" signal (the server change-detects
       // and sends it once), so assigning it straight through clears the band strip — no stale name.
-      rdsPs   = (j["ps"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-      rdsText = (j["radiotext"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+      // ★★ Decoded off the air — cleaned (SafeText) like every other station name.
+      rdsPs   = SafeText.clean(j["ps"], max: 16)
+      rdsText = SafeText.clean(j["radiotext"], max: 128)
       return
     }
     // ★ Session warnings arrive as their own message (T-120 / T-30). Treat them as a
@@ -3116,7 +3130,7 @@ final class UberClient: ObservableObject {
     //   eliminated from outside, so the remaining candidates are invisible without this: the
     //   URL not being what we think (a .local name cannot resolve on the watch), or URLSession
     //   declining to send. One attempt with these crumbs settles it.
-    Vitals.crumb("VIBE auth GET \(url.absoluteString)")
+    Vitals.crumb("VIBE auth GET \(Vitals.redact(url))")
     do {
       let (data, _) = try await httpSession.data(from: url)
       Vitals.crumb("VIBE auth OK \(data.count)B")

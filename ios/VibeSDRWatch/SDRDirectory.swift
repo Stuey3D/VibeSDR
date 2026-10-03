@@ -154,15 +154,33 @@ enum Directories {
   ]
 
   static func fetch(_ id: String) async throws -> [SDRServer] {
+    let list: [SDRServer]
     switch id {
-    case "vibeserver":   return try await fetchVibeServers()
-    case "ubersdr":      return try await fetchUberSDR()
-    case "fmdx":         return try await fetchFmdx()
-    case "kiwisdr":      return try await fetchKiwiList()
-    case "receiverbook": return try await fetchReceiverbook()
+    case "vibeserver":   list = try await fetchVibeServers()
+    case "ubersdr":      list = try await fetchUberSDR()
+    case "fmdx":         list = try await fetchFmdx()
+    case "kiwisdr":      list = try await fetchKiwiList()
+    case "receiverbook": list = try await fetchReceiverbook()
     default:             return []
     }
+    // ★★ ONE ROW PER URL. SDRServer.id IS the url, and a SwiftUI List with two rows of the same id
+    //    is undefined behaviour that has crashed watch apps — a directory can list a receiver twice
+    //    (Receiverbook does, per site). The first occurrence wins.
+    var seen = Set<String>()
+    return list.filter { seen.insert($0.id).inserted }
   }
+
+  // ── Numbers and text from a directory are CLAIMS ──────────────────────────────────
+  // ★★★ A row's numbers went straight into Int(x.rounded()) when it was drawn; on arm64_32 an SNR
+  //     of 1e10, or a "nan" coordinate string, took the picker down. Every quantity is finite and in
+  //     range here or it is absent; every name is cleaned (SafeText) before it is stored or drawn.
+  fileprivate static func num(_ v: Any?, _ r: ClosedRange<Double>) -> Double? { Wire.inRange(v, r) }
+  fileprivate static let latR: ClosedRange<Double> = -90...90
+  fileprivate static let lonR: ClosedRange<Double> = -180...180
+  fileprivate static let distR: ClosedRange<Double> = 0...40_100      // km
+  fileprivate static let snrR: ClosedRange<Double> = -100...200       // dB
+  /// A listener/slot count: 0…100000, as a safe Int.
+  fileprivate static func count(_ v: Any?) -> Int? { num(v, 0...100_000).map { Wire.int($0) } }
 
   // ── VibeServer — our own public directory ────────────────────────────────────
   /// ★ Ported from Jr verbatim in behaviour: same endpoint, same field names, same shape, so the
@@ -180,18 +198,18 @@ enum Directories {
       var publicUrl = (it["url"] as? String) ?? (address.isEmpty ? "" : "https://\(address)")
       publicUrl = publicUrl.trimmedTrailingSlash
       guard !publicUrl.isEmpty else { return nil }
-      let maxU = (it["maxListeners"] as? Int) ?? 0
-      let users = (it["listeners"] as? Int) ?? 0
-      let cc = it["country"] as? String
+      let maxU = count(it["maxListeners"]) ?? 0
+      let users = count(it["listeners"]) ?? 0
+      let cc = SafeText.cleanOpt(it["country"], max: 2)
       return SDRServer(
-        name: (it["name"] as? String) ?? "VibeServer",
+        name: SafeText.cleanOpt(it["name"], max: 120) ?? "VibeServer",
         url: publicUrl,
         host: URL(string: publicUrl)?.host ?? "",
         serverType: .vibeserver,
-        location: (it["grid"] as? String) ?? "",
+        location: SafeText.clean(it["grid"]),
         countryCode: (cc?.count == 2) ? cc?.uppercased() : nil,
-        latitude: (it["lat"] as? NSNumber)?.doubleValue,
-        longitude: (it["lon"] as? NSNumber)?.doubleValue,
+        latitude: num(it["lat"], latR),
+        longitude: num(it["lon"], lonR),
         users: users,
         maxUsers: maxU,
         full: maxU > 0 && users >= maxU
@@ -219,23 +237,24 @@ enum Directories {
       // best SNR across all reported band conditions
       var bestSnr: Double? = nil
       if let bc = it["band_conditions"] as? [String: Any] {
-        for v in bc.values { if let n = (v as? NSNumber)?.doubleValue, bestSnr == nil || n > bestSnr! { bestSnr = n } }
+        for v in bc.values { if let n = num(v, snrR), bestSnr == nil || n > bestSnr! { bestSnr = n } }
       }
-      let cc = it["country_code"] as? String
+      let cc = SafeText.cleanOpt(it["country_code"], max: 2)
       return SDRServer(
-        name: (it["name"] as? String) ?? (it["callsign"] as? String) ?? host,
+        name: SafeText.cleanOpt(it["name"], max: 120) ?? SafeText.cleanOpt(it["callsign"], max: 120)
+              ?? SafeText.clean(host, max: 120),
         url: publicUrl,
         host: URL(string: publicUrl)?.host ?? host,
         serverType: .ubersdr,
-        location: (it["location"] as? String) ?? "",
+        location: SafeText.clean(it["location"]),
         countryCode: (cc?.count == 2) ? cc?.uppercased() : nil,
-        latitude: (it["latitude"] as? NSNumber)?.doubleValue,
-        longitude: (it["longitude"] as? NSNumber)?.doubleValue,
-        distance: (it["distance"] as? NSNumber)?.doubleValue,
+        latitude: num(it["latitude"], latR),
+        longitude: num(it["longitude"], lonR),
+        distance: num(it["distance"], distR),
         bestSnr: bestSnr,
-        users: (it["available_clients"] as? Int) ?? 0,
-        maxUsers: (it["max_clients"] as? Int) ?? 0,
-        full: ((it["available_clients"] as? Int) ?? 1) <= 0
+        users: count(it["available_clients"]) ?? 0,
+        maxUsers: count(it["max_clients"]) ?? 0,
+        full: (num(it["available_clients"], -100_000...100_000) ?? 1) <= 0
       )
     }
   }
@@ -254,16 +273,16 @@ enum Directories {
       // Number(), which coerces strings; a plain NSNumber cast returns nil, leaving lat/lon empty so
       // the distance sort never runs. Coerce both number and string forms.
       let coords = r["coords"] as? [Any] ?? []
-      func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue ?? Double((v as? String) ?? "") }
-      let lat = coords.count >= 2 ? num(coords[0]) : nil
-      let lon = coords.count >= 2 ? num(coords[1]) : nil
+      // ★ Double("nan") and Double("inf") PARSE — the range gate refuses them.
+      let lat = coords.count >= 2 ? num(coords[0], latR) : nil
+      let lon = coords.count >= 2 ? num(coords[1], lonR) : nil
       return SDRServer(
-        name: (r["name"] as? String) ?? "FM-DX",
+        name: SafeText.cleanOpt(r["name"], max: 120) ?? "FM-DX",
         url: u,
         host: URL(string: u)?.host ?? u,
         serverType: .fmdx,
-        location: (r["city"] as? String) ?? (r["countryName"] as? String) ?? "",
-        countryCode: (r["country"] as? String)?.uppercased(),
+        location: SafeText.cleanOpt(r["city"]) ?? SafeText.clean(r["countryName"]),
+        countryCode: SafeText.cleanOpt(r["country"], max: 3)?.uppercased(),
         latitude: lat, longitude: lon
       )
     }
@@ -278,18 +297,18 @@ enum Directories {
     return arr.compactMap { r in
       guard let u0 = r["url"] as? String, !u0.isEmpty else { return nil }
       let u = u0.trimmedTrailingSlash
-      let snr = (r["snr"] as? String)?.split(separator: ",").compactMap { Double($0) }.max()
+      let snr = (r["snr"] as? String)?.split(separator: ",").compactMap { num(String($0), snrR) }.max()
       return SDRServer(
-        name: (r["name"] as? String) ?? "KiwiSDR",
+        name: SafeText.cleanOpt(r["name"], max: 120) ?? "KiwiSDR",
         url: u,
         host: URL(string: u)?.host ?? u,
         serverType: .kiwi,
-        location: (r["loc"] as? String) ?? "",
+        location: SafeText.clean(r["loc"]),
         latitude: parseCoord(r["gps"], 0),
         longitude: parseCoord(r["gps"], 1),
         bestSnr: snr,
-        users: Int((r["users"] as? String) ?? "") ?? 0,
-        maxUsers: Int((r["users_max"] as? String) ?? "") ?? 0
+        users: count(r["users"]) ?? 0,
+        maxUsers: count(r["users_max"]) ?? 0
       )
     }
   }
@@ -303,8 +322,8 @@ enum Directories {
     var out: [SDRServer] = []
     for site in sites {
       let coords = (site["location"] as? [String: Any])?["coordinates"] as? [Any] ?? []
-      let slon = coords.count >= 1 ? (coords[0] as? NSNumber)?.doubleValue : nil
-      let slat = coords.count >= 2 ? (coords[1] as? NSNumber)?.doubleValue : nil
+      let slon = coords.count >= 1 ? num(coords[0], lonR) : nil
+      let slat = coords.count >= 2 ? num(coords[1], latR) : nil
       for ro in (site["receivers"] as? [[String: Any]] ?? []) {
         let t = ((ro["type"] as? String) ?? "").lowercased()
         let kind: ServerType? = t == "openwebrx" ? .owrx : t == "kiwisdr" ? .kiwi : nil
@@ -314,7 +333,7 @@ enum Directories {
         let label = ((ro["label"] as? String) ?? (site["label"] as? String) ?? "Unknown")
           .replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
         out.append(SDRServer(
-          name: String(label.prefix(120)),
+          name: SafeText.cleanOpt(label, max: 120) ?? "Unknown",
           url: u, host: URL(string: u)?.host ?? u, serverType: kind,
           latitude: slat, longitude: slon
         ))
@@ -357,8 +376,10 @@ enum Directories {
     // Kiwi "gps" is like "(52.30, -1.08)" — pull the two numbers out.
     guard let s = gps as? String else { return nil }
     let nums = s.replacingOccurrences(of: "(", with: "").replacingOccurrences(of: ")", with: "")
-      .split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-    return nums.count > idx ? nums[idx] : nil
+      .split(separator: ",").map { Double($0.trimmingCharacters(in: .whitespaces)) }
+    // ★ Position-preserving, finite and in range: Double("nan") parses.
+    guard nums.count > idx, let v = nums[idx], v.isFinite else { return nil }
+    return (idx == 0 ? latR : lonR).contains(v) ? v : nil
   }
 }
 
@@ -403,7 +424,10 @@ final class FavStore: ObservableObject {
 
   init() {
     if let raw = UserDefaults.standard.data(forKey: Self.key),
-       let f = try? JSONDecoder().decode([Favourite].self, from: raw) { favourites = f }
+       let f = try? JSONDecoder().decode([Favourite].self, from: raw) {
+      var seen = Set<String>()                       // one row per url (id) — see setFromPhone
+      favourites = f.filter { seen.insert($0.url).inserted }
+    }
     if let s = UserDefaults.standard.string(forKey: Self.sortKey), let fs = FavSort(rawValue: s) { sort = fs }
   }
 
@@ -447,9 +471,12 @@ final class FavStore: ObservableObject {
   /// including its RTL-TCP / SpyServer entries the watch can't discover itself). In-memory only:
   /// the phone is the source of truth, so we don't persist a watch-local copy that could go stale.
   func setFromPhone(_ list: [WatchLink.Favourite]) {
-    favourites = list.map {
-      Favourite(name: $0.name.isEmpty ? $0.url : $0.name, url: $0.url,
-                serverType: ServerType(rawValue: $0.type ?? "ubersdr") ?? .ubersdr)
+    // ★★ One row per url: Favourite.id IS the url, and duplicate List ids crash SwiftUI.
+    var seen = Set<String>()
+    favourites = list.filter { seen.insert($0.url).inserted }.map {
+      let n = SafeText.clean($0.name, max: 120)
+      return Favourite(name: n.isEmpty ? $0.url : n, url: $0.url,
+                       serverType: ServerType(rawValue: $0.type ?? "ubersdr") ?? .ubersdr)
     }
   }
 

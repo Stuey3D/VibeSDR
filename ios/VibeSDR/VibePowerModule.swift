@@ -496,6 +496,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
   }
 
+  /// ★★★ A SERVER'S AUDIO RATE IS A CLAIM, CHECKED BEFORE IT IS BELIEVED. It arrives as four
+  ///     header bytes, so it can be anything up to 2^32-1, and `Int32(max(8000, rate))` TRAPS for
+  ///     anything at or above 2^31 — one corrupt frame took the app down mid-listen. Jr refuses
+  ///     the same range (UberClient.decodeVibeAudio). Every rate goes through this before ANY use:
+  ///     the Opus decoder, AVAudioFormat and the engine start.
+  static let audioRateRange: ClosedRange<Double> = 4_000...384_000
+
+  /// A socket URL fit for a log: credential-bearing query values (`vs_*` PIN/admin proofs and
+  /// tickets, the session id) replaced with "…". The key stays so the log still says what was sent.
+  static func redactURL(_ url: URL) -> String {
+    url.absoluteString.replacingOccurrences(of: "((?:vs_[A-Za-z_]+|user_session_id|password|token)=)[^&#\\s]*",
+                                            with: "$1…", options: .regularExpression)
+  }
+  static func audioRateOK(_ r: Double) -> Bool { r.isFinite && audioRateRange.contains(r) }
+
   @objc func startExternalAudio(_ sampleRate: NSNumber, pauseMode: String) {
     onMain { self.startExternalAudioOnMain(sampleRate, pauseMode: pauseMode) }
   }
@@ -505,7 +520,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     stopEngine()
     externalAudio = true
     externalPauseMode = pauseMode.isEmpty ? "release" : pauseMode
-    externalRate  = max(8000, sampleRate.doubleValue)
+    // A nonsense rate (NaN, 0, 2^32) falls back to 48 kHz rather than reaching AVAudioFormat.
+    let claimed = sampleRate.doubleValue
+    externalRate  = VibePowerModule.audioRateOK(claimed) ? max(8000, claimed) : 48_000
     isRunning     = true
     isMuted       = false
     dataSaverDisconnected = false
@@ -560,6 +577,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   func feedExternalPcm(_ data: Data, sampleRate: Double, stereo: Bool) {
     guard externalAudio, !isMuted, data.count >= 2 else { noteFeedRefused("pcm"); return }
+    guard VibePowerModule.audioRateOK(sampleRate) else { noteFeedRefused("pcm rate \(sampleRate)"); return }
     let rate = max(8000, sampleRate)
     let ch2  = stereo                   // interleaved L,R (local WFM stereo)
     audioQ.async { [weak self] in
@@ -639,7 +657,8 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   func feedExternalOpus(_ pkt: Data, sampleRate: Int, channels: Int) {
     guard externalAudio, !isMuted, pkt.count >= 3 else { noteFeedRefused("opus"); return }
-    let sr = Int32(max(8000, sampleRate))
+    guard VibePowerModule.audioRateOK(Double(sampleRate)) else { noteFeedRefused("opus rate \(sampleRate)"); return }
+    let sr = Int32(max(8000, sampleRate))     // safe: ≤ 384000 after the guard above
     let ch = Int32(channels == 2 ? 2 : 1)
     audioQ.async { [weak self] in
       guard let self else { return }
@@ -779,7 +798,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     guard let url = fmdxWsURL(fmdxBase) else {
       NSLog("[VibePowerModule] bad FM-DX audio URL from base: %@", fmdxBase); return
     }
-    NSLog("[VibePowerModule] opening FM-DX audio WS: %@", url.absoluteString)
+    NSLog("[VibePowerModule] opening FM-DX audio WS: %@", VibePowerModule.redactURL(url))
     fmdxGen &+= 1
     let gen = fmdxGen
 
@@ -2004,7 +2023,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     guard let url = audioWsURL(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid) else {
       NSLog("[VibePowerModule] bad WS URL from base: %@", baseUrl); return
     }
-    NSLog("[VibePowerModule] opening audio WS (NWConnection): %@", url.absoluteString)
+    NSLog("[VibePowerModule] opening audio WS (NWConnection): %@", VibePowerModule.redactURL(url))
     wsUsingNW = true
     wsNeedsTuneAssert = true
     wsBaseSr = 0
@@ -2250,7 +2269,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       guard let self, self.laGen == gen else { return }
       switch state {
       case .ready:
-        NSLog("[VibePowerModule] local audio WS ready: %@", url.absoluteString)
+        NSLog("[VibePowerModule] local audio WS ready: %@", VibePowerModule.redactURL(url))
         self.sendEvent(withName: "VibeLocalAudioState", body: ["state": reconnect ? "ready (reopened)" : "ready"])
         // ★★ The hello. A REOPEN on a shared dial says nothing — see laAssert.
         if !self.laTune.isEmpty && (!reconnect || self.laAssert) { self.sendLocalTune(self.laTune) }
@@ -2421,7 +2440,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let channels = Int(b[0]) == 2 ? 2 : 1
     let format   = Int(b[1])
     let rate = Int(b[2]) | (Int(b[3]) << 8) | (Int(b[4]) << 16) | (Int(b[5]) << 24)
-    guard rate > 0 else { return }
+    // ★★★ Refused HERE, before the engine start, Opus, PCM and ADPCM paths all see it — a rate at
+    //     or above 2^31 used to reach Int32(...) in feedExternalOpus and trap.
+    guard VibePowerModule.audioRateOK(Double(rate)) else { return }
 
     // ★ First audio starts the engine, at the rate the STREAM is actually using rather than an
     //   assumed 48k. feedExternalPcm/Opus both refuse while externalAudio is false, so this must
@@ -2518,7 +2539,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     guard let url = audioWsURL(baseUrl: baseUrl, frequency: frequency, mode: mode, uuid: uuid) else {
       NSLog("[VibePowerModule] bad WS URL from base: %@", baseUrl); return
     }
-    NSLog("[VibePowerModule] opening audio WS (URLSession): %@", url.absoluteString)
+    NSLog("[VibePowerModule] opening audio WS (URLSession): %@", VibePowerModule.redactURL(url))
     wsUsingNW = false
     let session = URLSession(configuration: .default)
     wsSession = session

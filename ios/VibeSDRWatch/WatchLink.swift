@@ -1730,7 +1730,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let j = m[WK.json] as? String,
          let d = j.data(using: .utf8),
          let st = try? JSONDecoder().decode(FmdxState.self, from: d) {
-        fmdx = st
+        fmdx = Self.cleanFmdx(st)
         isFmdx = true
         lastRowAt = Date()        // "the phone is talking to us" — same staleness clock
         everGotRow = true
@@ -1748,7 +1748,7 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     case "pinreq":
       // ★ Whatever else was on screen, this is now the question — the connect is stopped until it
       //   is answered, and a prompt nobody can see is what a pocketed phone already gave us.
-      if let n = m["name"] as? String { pinRequest = n.isEmpty ? "this server" : n }
+      if let n = m["name"] as? String { pinRequest = SafeText.cleanOpt(n, max: 64) ?? "this server" }
 
     case "sess":
       // ★ A NEGATIVE figure is the server saying it is not timing this session — it must clear the
@@ -1759,19 +1759,21 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let lim = m["lim"] as? Int { sessionLimitMin = lim }
 
     case "rx":
-      if let la = m["la"] as? Double, let lo = m["lo"] as? Double { rxLat = la; rxLon = lo }
+      if let la = Wire.inRange(m["la"], -90...90), let lo = Wire.inRange(m["lo"], -180...180) {
+        rxLat = la; rxLon = lo
+      }
 
     case "air":
       if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
          let list = try? JSONDecoder().decode([Aircraft].self, from: d) {
-        aircraft = list
+        aircraft = Self.cleanAircraft(list)
       }
 
     case "dab":
       if let j = m[WK.json] as? String,
          let d = j.data(using: .utf8),
          let st = try? JSONDecoder().decode(DabState.self, from: d) {
-        dab = st
+        dab = Self.cleanDab(st)
       }
 
     case "goodbye":
@@ -1819,15 +1821,19 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
       if let j = m[WK.json] as? String,
          let d = j.data(using: .utf8),
          let list = try? JSONDecoder().decode([Favourite].self, from: d) {
-        favourites = list
+        favourites = list.uniquedByID()          // id = url; duplicate List ids crash
       }
 
     case "radios":
       // ★ A question, not a state: the phone has stopped short of connecting and is waiting.
       if let j = m[WK.json] as? String, let d = j.data(using: .utf8),
          let msg = try? JSONDecoder().decode(RadiosMsg.self, from: d) {
-        radioChoiceName = msg.name
-        radioChoices = msg.radios
+        radioChoiceName = SafeText.clean(msg.name)
+        // ★★ One row per id (a duplicate ForEach id crashes); names are server text, cleaned.
+        radioChoices = msg.radios.uniquedByID().map {
+          RadioChoice(id: $0.id, name: SafeText.cleanOpt($0.name) ?? "Radio",
+                      users: max(0, min(100_000, $0.users)), shared: $0.shared)
+        }
       }
 
     case "dir":
@@ -1837,19 +1843,36 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
         // ★ The reply landed — cancel the watchdog so it cannot later blank a good list.
         browseTimers[msg.dir]?.invalidate(); browseTimers[msg.dir] = nil
         directoryPhoneSilent.remove(msg.dir)   // a real reply: whatever we assumed, the phone spoke
+        // ★★ One row per url (SDRServer.id) and one radio per id inside it — duplicate List ids
+        //    crash. Names are directory/server text and are cleaned (SafeText); the distance is a
+        //    finite figure or absent (the row draws it through Int).
         directories[msg.dir] = msg.servers.map { r in
-          SDRServer(name: r.name, url: r.id, host: URL(string: r.id)?.host ?? r.id,
+          SDRServer(name: SafeText.cleanOpt(r.name, max: 120) ?? r.id, url: r.id,
+                    host: URL(string: r.id)?.host ?? r.id,
                     serverType: ServerType(rawValue: r.type) ?? .ubersdr,
-                    countryCode: r.country, distance: r.dist, users: r.users, full: r.full,
-                    radios: r.radios)
-        }
+                    countryCode: SafeText.cleanOpt(r.country, max: 3),
+                    distance: r.dist.flatMap { ($0.isFinite && $0 >= 0 && $0 <= 40_100) ? $0 : nil },
+                    users: max(0, min(100_000, r.users)), full: r.full,
+                    radios: r.radios.map { rs in
+                      rs.uniquedByID().map { x in
+                        var y = x
+                        y.name = SafeText.cleanOpt(x.name) ?? "Radio"
+                        y.occupancy = SafeText.clean(x.occupancy)
+                        y.limits = SafeText.clean(x.limits, max: 96)
+                        return y
+                      }
+                    })
+        }.uniquedByID()
       }
 
     case "stations":
       if let j = m[WK.json] as? String,
          let d = j.data(using: .utf8),
          let list = try? JSONDecoder().decode([FmdxStation].self, from: d) {
-        stations = list
+        // ★★ One row per frequency (the id) — duplicate ids crash a ForEach; names are RDS text.
+        stations = list.filter { $0.freqHz.isFinite }.uniquedByID().map {
+          var x = $0; x.name = SafeText.clean($0.name, max: 16); return x
+        }
       }
 
     case "logo":
@@ -1943,5 +1966,88 @@ extension Color {
       green: Double((v >>  8) & 0xff) / 255,
       blue:  Double( v        & 0xff) / 255
     )
+  }
+}
+
+
+extension WatchLink {
+  /// ★★★ ONE ROW PER ICAO, AND EVERY FIGURE PLAUSIBLE. The table is the phone's relay of what an
+  ///     OpenWebRX server decoded, and a snapshot can carry the same aircraft twice — SwiftUI's
+  ///     ForEach CRASHES on a duplicate id ("ID occurs multiple times"). Jr has deduped since
+  ///     OwrxClient.applyAircraft; Buddy took the list as it came. The LAST record for an icao wins
+  ///     (it is the freshest), in first-seen order so rows do not jump.
+  ///  ★★ Numbers are clamped to what an aircraft can be — finite and in range, or absent — because
+  ///     the rows turn them into Int, which TRAPS on arm64_32 past ±2^31. Text is cleaned.
+  static func cleanAircraft(_ list: [Aircraft]) -> [Aircraft] {
+    func r(_ v: Double?, _ range: ClosedRange<Double>) -> Double? {
+      guard let v, v.isFinite, range.contains(v) else { return nil }
+      return v
+    }
+    var order: [String] = []
+    var byId: [String: Aircraft] = [:]
+    for a0 in list {
+      let icao = SafeText.clean(a0.icao, max: 12)
+      guard !icao.isEmpty else { continue }
+      var a = a0
+      a.icao = icao
+      a.flight = SafeText.cleanOpt(a.flight, max: 12)
+      a.country = SafeText.cleanOpt(a.country, max: 48)
+      a.ccode = SafeText.cleanOpt(a.ccode, max: 2)
+      a.squawk = SafeText.cleanOpt(a.squawk, max: 8)
+      a.altitude = r(a.altitude, -2_000...100_000)
+      a.speed = r(a.speed, 0...5_000)
+      a.vspeed = r(a.vspeed, -50_000...50_000)
+      a.course = r(a.course, -360...720)
+      a.rssi = r(a.rssi, -200...100)
+      a.lat = r(a.lat, -90...90)
+      a.lon = r(a.lon, -180...180)
+      a.distKm = r(a.distKm, 0...20_100)
+      a.bearing = r(a.bearing, -360...720)
+      if byId[icao] == nil { order.append(icao) }
+      byId[icao] = a
+    }
+    return order.compactMap { byId[$0] }
+  }
+}
+
+extension WatchLink {
+  /// ★★ RDS and transmitter text is decoded off the air (garbled, or sent by anyone with a
+  ///    transmitter) and relayed by the phone — cleaned here like every other server string, and
+  ///    the antenna list made one-row-per-id (two antennas with one id crash a ForEach).
+  static func cleanFmdx(_ s0: FmdxState) -> FmdxState {
+    var s = s0
+    s.ps = SafeText.clean(s.ps, max: 16)
+    s.rt = SafeText.clean(s.rt, max: 128)
+    s.pi = SafeText.clean(s.pi, max: 8)
+    s.tx = SafeText.clean(s.tx, max: 64)
+    s.city = SafeText.clean(s.city, max: 64)
+    s.rx = SafeText.clean(s.rx, max: 64)
+    s.pty = SafeText.clean(s.pty, max: 32)
+    s.flag = SafeText.clean(s.flag, max: 2)
+    s.meter = SafeText.clean(s.meter, max: 16)
+    if !(s.dist.isFinite && s.dist >= 0 && s.dist <= 20_050) { s.dist = 0 }
+    if !s.freq.isFinite { s.freq = 0 }
+    if !s.sig.isFinite { s.sig = 0 }
+    if !s.level.isFinite { s.level = 0 }
+    s.antennas = s.antennas.uniquedByID().map { FmdxAntenna(id: $0.id, name: SafeText.cleanOpt($0.name, max: 32) ?? "Antenna \($0.id + 1)") }
+    return s
+  }
+
+  /// ★★ The multiplex: service labels, the ensemble label and DLS are decoded off the air; the
+  ///    service list is made one-row-per-id (a duplicate id crashes a ForEach) and capped.
+  static func cleanDab(_ d0: DabState) -> DabState {
+    var d = d0
+    d.ensemble = SafeText.clean(d.ensemble, max: 32)
+    d.block = SafeText.clean(d.block, max: 8)
+    d.list = Array(d.list.uniquedByID().prefix(64)).map { sv in
+      var x = sv
+      x.name = SafeText.clean(sv.name, max: 32)
+      x.dls = SafeText.clean(sv.dls, max: 128)
+      return x
+    }
+    var b: [String: String] = [:]
+    for (k, v) in d.blocks.prefix(64) { b[k] = SafeText.clean(v, max: 40) }
+    d.blocks = b
+    return d
   }
 }

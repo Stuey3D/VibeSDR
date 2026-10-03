@@ -204,14 +204,17 @@ final class CloudSyncEngine: ObservableObject {
     var doc = CloudSync.readDoc(CloudSync.bmKey)
 
     let key: ([String: Any]) -> String? = { d in
-      guard let n = d["name"] as? String, let f = d["frequency"] as? Double else { return nil }
+      guard let n = d["name"] as? String, let f = d["frequency"] as? Double, f.isFinite else { return nil }
       // The phone writes integral Hz; format identically or the two devices key
       // the same bookmark differently and it duplicates rather than merges.
-      return "\(n)|\(Int(f.rounded()))"
+      // ★★ Wire.i64, never Int(): Int is 32 bits on arm64_32, so a 2.4 GHz bookmark from the
+      //    phone (or a corrupt figure in iCloud) TRAPPED here on every sync. Int64 prints the
+      //    same digits, so keys still match the phone's.
+      return "\(n)|\(Wire.i64(f))"
     }
 
     var tombs = CloudSync.pruneTombs(doc.tombs, now: now)
-    let localKeys = Set(local.map { "\($0.name)|\(Int($0.frequency.rounded()))" })
+    let localKeys = Set(local.map { "\($0.name)|\(Wire.i64($0.frequency))" })
     let snap = CloudSync.snapshot("bookmarks")
     guard store.loadOK else { return true }                // see syncFavourites
     for k in snap where !localKeys.contains(k) { tombs[k] = now }   // always re-stamp, see syncFavourites
@@ -263,9 +266,12 @@ final class CloudSyncEngine: ObservableObject {
   }
 
   private func bmFrom(_ d: [String: Any]) -> Bookmark? {
-    guard let name = d["name"] as? String, let f = d["frequency"] as? Double else { return nil }
+    // ★ A frequency that cannot be a radio's (NaN, negative, past 100 GHz) is not a bookmark.
+    guard let name = d["name"] as? String, let f = d["frequency"] as? Double,
+          f.isFinite, f >= 0, f <= 1e11 else { return nil }
+    let mode = (d["mode"] as? String ?? "wfm").lowercased().filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
     return Bookmark(name: name, frequency: f.rounded(),
-                    mode: (d["mode"] as? String ?? "wfm").lowercased(),
+                    mode: mode.isEmpty ? "wfm" : String(mode.prefix(12)),
                     updatedAt: d["updatedAt"] as? Double)
   }
 }

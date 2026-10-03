@@ -118,6 +118,10 @@ struct AircraftView: View {
   /// 41mm as "11,37" / "5ft", which reads as two different numbers. Rounding to the nearest 100
   /// drops the noise digits that caused it, and FL is shorter still.
   static func altText(_ ft: Double) -> String {
+    // ★★ A decoded altitude is a claim: clamped to what an aircraft can be at before it is made an
+    //    Int — on arm64_32 a corrupt 1e12 ft (or NaN) used to TRAP while drawing the row.
+    guard ft.isFinite else { return "— ft" }
+    let ft = max(-2_000, min(100_000, ft))
     if ft >= 18_000 {
       return "FL" + String(format: "%03d", Int((ft / 100).rounded()))
     }
@@ -155,14 +159,14 @@ struct AircraftView: View {
             Text(Self.altText(a)).font(.system(size: 10)).foregroundStyle(.white.opacity(0.6))
               .lineLimit(1).fixedSize(horizontal: true, vertical: false)
           }
-          if let s = p.speed { Text("\(Int(s))kt").font(.system(size: 10)).foregroundStyle(.white.opacity(0.6)) }
+          if let s = Self.shown(p.speed, 0...5_000) { Text("\(s)kt").font(.system(size: 10)).foregroundStyle(.white.opacity(0.6)) }
           if let c = p.ccode { Text("\(Self.flag(c)) \(c)").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.85)) }
         }
       }
       Spacer(minLength: 0)
       VStack(alignment: .trailing, spacing: 1) {
-        if let d = p.distKm { Text("\(Int(d))km").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white) }
-        if let r = p.rssi { Text("\(Int(r))dB").font(.system(size: 9)).foregroundStyle(.white.opacity(0.5)) }
+        if let d = Self.shown(p.distKm, 0...20_100) { Text("\(d)km").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white) }
+        if let r = Self.shown(p.rssi, -200...100) { Text("\(r)dB").font(.system(size: 9)).foregroundStyle(.white.opacity(0.5)) }
       }
     }
     .padding(.horizontal, 8).padding(.vertical, 6)
@@ -171,6 +175,13 @@ struct AircraftView: View {
 
   // Cap the map to the 60 NEAREST located aircraft — rendering 100+ MapKit annotations on the watch
   // hangs the UI. The list is lazy so it can show them all; the map is the expensive one.
+  /// A decoded figure fit to draw: finite and plausible, as an Int — or nil, and the field is not
+  /// shown. `Int(x)` on a Double TRAPS on NaN, infinity or (arm64_32) anything past ±2^31.
+  static func shown(_ v: Double?, _ r: ClosedRange<Double>) -> Int? {
+    guard let v, v.isFinite, r.contains(v) else { return nil }
+    return Int(v)
+  }
+
   /// ISO country code → flag emoji (regional indicator letters), like the companion/phone lists.
   static func flag(_ code: String) -> String {
     let c = code.uppercased()

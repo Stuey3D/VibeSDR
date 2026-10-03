@@ -263,7 +263,11 @@ final class WatchSpectrumForwarder {
     // frequency (spectrum centre) is bytes 14..21, u64 LE
     var f: UInt64 = 0
     for i in 0..<8 { f |= UInt64(b[14 + i]) << (8 * i) }
-    centerHz = Double(f)
+    // ★★ The centre is a server claim: 0…100 GHz or the frame is refused. A wild u64 here used to
+    //    flow into Int(floor(...)) in the crop below.
+    let fc = Double(f)
+    guard fc.isFinite, fc <= 1e11 else { return }
+    centerHz = fc
 
     let isDelta = (flags == 0x02 || flags == 0x04)
     let isU8    = (flags == 0x03 || flags == 0x04)
@@ -274,7 +278,11 @@ final class WatchSpectrumForwarder {
       if isU8 { return Double(b[off]) - 256.0 }         // u8 → dBFS
       var u: UInt32 = 0
       for i in 0..<4 { u |= UInt32(b[off + i]) << (8 * i) }
-      return Double(Float(bitPattern: u))
+      // ★★ A NaN/Inf bin would poison the floor/ceil EMAs below FOREVER (NaN never decays out
+      //    of an average) — it becomes the quietest plausible value instead, and finite values
+      //    are clamped to a sane dB range.
+      let v = Double(Float(bitPattern: u))
+      return v.isFinite ? max(-300, min(100, v)) : -300
     }
 
     if isDelta {
@@ -346,11 +354,17 @@ final class WatchSpectrumForwarder {
     let halfBins = span / binHz / 2
     let start = centreBin - halfBins
     let step = (halfBins * 2) / Double(Self.watchBins)
+    // ★★ tuneHz/filter/binBandwidth come over the bridge and centerHz off the wire; a NaN or a
+    //    huge value here would trap Int(floor(...)) or spin the inner loop for billions of bins.
+    guard start.isFinite, step.isFinite, step > 0, abs(start) < 1e12 else { return }
+    let lim = Double(n)
 
     var row = [UInt8](repeating: 0, count: Self.watchBins)
     for x in 0..<Self.watchBins {
-      let s0 = start + Double(x) * step
-      let s1 = s0 + step
+      // Clamped to just outside the bin range: indices are clamped anyway, so this only bounds
+      // the loop, it does not change what is drawn.
+      let s0 = max(-1, min(lim, start + Double(x) * step))
+      let s1 = max(-1, min(lim + 1, start + Double(x) * step + step))
       var i0 = Int(floor(s0))
       let i1 = max(i0 + 1, Int(ceil(s1)))
       var peak = 0.0

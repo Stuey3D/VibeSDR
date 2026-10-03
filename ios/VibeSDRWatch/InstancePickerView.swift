@@ -157,10 +157,10 @@ struct InstancePickerView: View {
     switch favs.sort {
     case .nearest:
       let d = meta[f.url.trimmedTrailingSlash.lowercased()]?.dist
-      return d != nil ? "◍ \(Int(d!.rounded())) km" : "◍ distance unknown"
+      return d != nil ? "◍ \(Wire.int(d!)) km" : "◍ distance unknown"
     case .snr:
       let s = meta[f.url.trimmedTrailingSlash.lowercased()]?.snr ?? f.bestSnr
-      return s != nil ? "▲ SNR \(Int(s!.rounded())) dB" : "▽ no SNR data"
+      return s != nil ? "▲ SNR \(Wire.int(s!)) dB" : "▽ no SNR data"
     case .type: return "▣ \(f.serverType.display)"
     default:    return f.visits > 0 ? "★ \(f.visits) visit\(f.visits == 1 ? "" : "s")" : f.url
     }
@@ -367,8 +367,9 @@ struct InstancePickerView: View {
   private func serverSubtitle(_ s: SDRServer) -> String {
     var bits: [String] = []
     if let cc = s.countryCode { bits.append(cc) } else if !s.location.isEmpty { bits.append(s.location) }
-    if let d = s.distance { bits.append("\(Int(d.rounded())) km") }
-    if let sn = s.bestSnr { bits.append("SNR \(Int(sn.rounded()))") }
+    // ★ Wire.int, never Int(x.rounded()): directory claims; on arm64_32 a huge or NaN value trapped.
+    if let d = s.distance { bits.append("\(Wire.int(d)) km") }
+    if let sn = s.bestSnr { bits.append("SNR \(Wire.int(sn))") }
     // ★ Kept, and now never fires: `connectable` is true for every type Buddy forwards. If one is
     //   ever added that the phone cannot drive, this is where the row says so.
     if !s.serverType.connectable { bits.append("· soon") }

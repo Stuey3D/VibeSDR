@@ -110,3 +110,87 @@ struct LearnedStation: Identifiable, Equatable, Codable {
     if let d = try? JSONEncoder().encode(capped) { UserDefaults.standard.set(d, forKey: key) }
   }
 }
+
+/// ★★★ NUMBERS FROM A SERVER, MADE SAFE TO CONVERT — a copy of Jr's `Wire` (spike Vitals.swift).
+/// `Int(x)` on a Double traps on NaN, infinity and anything outside Int's range, and on arm64_32
+/// (32-bit Int below watchOS 27) that range is ±2.1 billion. These clamp instead: a value that got
+/// past a parser can only be WRONG, never fatal.
+enum Wire {
+  /// Double → Int64, NaN → 0, clamped to Int64's range.
+  static func i64(_ d: Double) -> Int64 {
+    guard d.isFinite else { return 0 }
+    return Int64(max(-9.0e18, min(9.0e18, d.rounded())))
+  }
+  /// Double → Int, NaN → 0, clamped to THIS platform's Int (32-bit on arm64_32).
+  static func int(_ d: Double) -> Int {
+    guard d.isFinite else { return 0 }
+    let lim = Int.bitWidth == 32 ? 2_147_483_000.0 : 9.0e18
+    return Int(max(-lim, min(lim, d.rounded())))
+  }
+  /// A finite number in a range, or nil — the gate for anything the server sends as a quantity.
+  /// Accepts an NSNumber or a numeric string (directories send both).
+  static func inRange(_ v: Any?, _ r: ClosedRange<Double>) -> Double? {
+    let d: Double?
+    if let n = v as? NSNumber { d = n.doubleValue }
+    else if let s = v as? String { d = Double(s.trimmingCharacters(in: .whitespaces)) }
+    else { d = nil }
+    guard let d, d.isFinite, r.contains(d) else { return nil }
+    return d
+  }
+}
+
+/// ★★★ TEXT FROM ANY SERVER IS UNTRUSTED — the Swift port of the app's `src/utils/safeText.ts`
+/// `cleanText`, so the watch cleans a name exactly as the phone and the web client do. A station name
+/// can come from an admin's typing, from RDS/DAB decoded off the air (garbled, or sent by anyone with
+/// a transmitter), from a directory row, or from a stranger in an OpenWebRX chat.
+///  - C0/C1 control characters and DEL → a space.
+///  - Bidi overrides and isolates (U+202A–202E, U+2066–2069) → removed ("Trojan Source").
+///    Ordinary right-to-left scripts are untouched.
+///  - Zero-width space, word joiner and BOM (U+200B, U+2060, U+FEFF) → removed.
+///    ★ NOT the joiners U+200C/U+200D — Indic scripts and multi-part emoji need them; Tibetan,
+///    Arabic, Thai, Devanagari… all pass through.
+///  - Runs of whitespace collapsed to one space, trimmed, and capped at `max` CHARACTERS (grapheme
+///    clusters, so a cut never splits a surrogate pair, a combining mark or an emoji).
+///  ★ The scan itself is bounded: a 16 MB chat message is not walked to the end to keep 300 of it.
+enum SafeText {
+  static func clean(_ v: Any?, max: Int = 64) -> String {
+    guard let s = v as? String, max > 0 else { return "" }
+    var out = String.UnicodeScalarView()
+    var pendingSpace = false
+    var kept = 0
+    // Enough scalars for `max` characters even with heavy combining marks, and no more.
+    let scalarBudget = max * 8
+    for u in s.unicodeScalars {
+      let c = u.value
+      if c < 0x20 || (c >= 0x7F && c <= 0x9F) { pendingSpace = true; continue }   // C0, DEL, C1
+      if (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069) { continue } // bidi
+      if c == 0x200B || c == 0x2060 || c == 0xFEFF { continue }                     // zero-width
+      if u.properties.isWhitespace { pendingSpace = true; continue }
+      if pendingSpace && !out.isEmpty { out.append(" "); kept += 1 }
+      pendingSpace = false
+      out.append(u); kept += 1
+      if kept >= scalarBudget { break }
+    }
+    var r = String(out)
+    if r.count > max {
+      r = String(r.prefix(max))
+      while r.last?.isWhitespace == true { r.removeLast() }
+    }
+    return r
+  }
+  /// Optional form for fields where "absent" must stay absent rather than become "".
+  static func cleanOpt(_ v: Any?, max: Int = 64) -> String? {
+    let s = clean(v, max: max)
+    return s.isEmpty ? nil : s
+  }
+}
+
+extension Array where Element: Identifiable {
+  /// ★★ One element per id, first occurrence wins. A SwiftUI List/ForEach with two rows of the same
+  ///    id is undefined behaviour that crashes ("ID occurs multiple times") — and every list Buddy
+  ///    draws arrives from the phone, which relays what a server or directory said.
+  func uniquedByID() -> [Element] {
+    var seen = Set<Element.ID>()
+    return filter { seen.insert($0.id).inserted }
+  }
+}

@@ -141,8 +141,11 @@ final class FmDxClient: SDRClient {
     self.secure = sec
   }
 
-  private func wsURL(_ path: String) -> URL {
-    URL(string: "\(secure ? "wss" : "ws")://\(base)\(path)")!
+  /// ★★ nil, never a crash: `base` is whatever the favourite or directory row said, and a host
+  ///    with a space or a stray character made `URL(string:)` nil — the force-unwrap took Jr down
+  ///    on connect. A bad address now reads as a bad address.
+  private func wsURL(_ path: String) -> URL? {
+    URL(string: "\(secure ? "wss" : "ws")://\(base)\(path)")
   }
 
   func start() {
@@ -174,17 +177,24 @@ final class FmDxClient: SDRClient {
     URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
       guard let self, let data,
             let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-      let name = (j["tunerName"] as? String) ?? ""
+      let name = SafeText.clean(j["tunerName"], max: 64)
       // ANTENNAS. `ant` is { enabled, ant1: { enabled, name }, … }. Expose the switch ONLY when
       // ant.enabled, and only the individual antennas marked enabled — a server with one antenna
       // must show no control at all (same rule as OWRX's lockedRate: never offer a control whose
       // every use is a no-op). Keys are 1-based; the `Z` command and the `ant` state are 0-based.
+      // ★★ ONE ANTENNA PER ID. Two keys can map to the same index ("ant1" and "ant01", or two
+      //    keys with no digits at all falling back to the same count), and the ids feed a SwiftUI
+      //    ForEach — duplicate ids there are undefined behaviour that crashes. Keys are walked in
+      //    sorted order so which one wins is stable, and the first wins. The index is bounded too.
       var ants: [FmdxAntenna] = []
+      var seenIds = Set<Int>()
       if let ant = j["ant"] as? [String: Any], (ant["enabled"] as? Bool) == true {
-        for (k, v) in ant where k != "enabled" {
-          guard let d = v as? [String: Any], (d["enabled"] as? Bool) == true else { continue }
-          let n = Int(k.filter(\.isNumber)) ?? (ants.count + 1)
-          ants.append(FmdxAntenna(id: n - 1, name: (d["name"] as? String) ?? k))
+        for k in ant.keys.sorted() where k != "enabled" {
+          guard let d = ant[k] as? [String: Any], (d["enabled"] as? Bool) == true else { continue }
+          let n = Int(k.filter(\.isNumber).prefix(4)) ?? (ants.count + 1)
+          guard n >= 1, seenIds.insert(n - 1).inserted else { continue }
+          ants.append(FmdxAntenna(id: n - 1,
+                                  name: SafeText.cleanOpt(d["name"], max: 32) ?? SafeText.clean(k, max: 32)))
         }
       }
       let sorted = ants.sorted { $0.id < $1.id }
@@ -207,8 +217,9 @@ final class FmDxClient: SDRClient {
         if st.contains("failed") || st.contains("cancelled") { self.status = "reconnecting"; self.retry(self.openText) }
       }
     }
+    guard let u = wsURL("/text") else { status = "bad server URL"; return }
     status = "connecting"
-    textSock.open(url: wsURL("/text"), headers: [("User-Agent", "\(Self.ua) (text)")])
+    textSock.open(url: u, headers: [("User-Agent", "\(Self.ua) (text)")])
   }
 
   // FM-DX pushes a whole-state JSON snapshot per frame; non-JSON lines are keepalive.
@@ -234,10 +245,12 @@ final class FmDxClient: SDRClient {
     i.users = (j["users"] as? NSNumber)?.intValue ?? Int((j["users"] as? String) ?? "") ?? 0
     i.stereo = truthy(j["st"])
     i.rds = truthy(j["rds"])
-    i.pi = (j["pi"] as? String ?? "").replacingOccurrences(of: "?", with: "")
-    i.ps = (j["ps"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+    // ★★ Decoded off the air: garbled, or sent by anyone with a transmitter. SafeText strips
+    //    control/bidi/zero-width characters and caps the length (PS is 8, RT 64 on the air).
+    i.pi = SafeText.clean(j["pi"], max: 8).replacingOccurrences(of: "?", with: "")
+    i.ps = SafeText.clean(j["ps"], max: 16)
     let rtFlag = "\(j["rt_flag"] ?? "0")"
-    i.rt = ((rtFlag == "1" ? j["rt1"] : j["rt0"]) as? String ?? "").trimmingCharacters(in: .whitespaces)
+    i.rt = SafeText.clean(rtFlag == "1" ? j["rt1"] : j["rt0"], max: 128)
 
     // ★ Finite only — `Double("nan")` parses, and a NaN meter would read "nan dBf" on the wrist.
     let dBfRaw = (j["sig"] as? NSNumber)?.doubleValue ?? Double((j["sig"] as? String) ?? "") ?? 0
@@ -250,13 +263,13 @@ final class FmDxClient: SDRClient {
 
     var itu = ""
     if let tx = j["txInfo"] as? [String: Any] {
-      i.tx = (tx["tx"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-      i.city = (tx["city"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+      i.tx = SafeText.clean(tx["tx"], max: 64)
+      i.city = SafeText.clean(tx["city"], max: 64)
       let dist = (tx["dist"] as? NSNumber)?.doubleValue ?? Double((tx["dist"] as? String) ?? "") ?? 0
       // ★ The view draws `Int(dist)`, which traps on "inf" (a string Double() accepts). No
       //   transmitter is further than half the planet away; anything else is a corrupt field.
       i.dist = (dist.isFinite && dist >= 0 && dist <= 20_050) ? dist : 0
-      itu = (tx["itu"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+      itu = SafeText.clean(tx["itu"], max: 4)
     }
     // ★ THE TRANSMITTER'S country beats the RDS one. `country_iso` is decoded off
     // air and reads "UN" until the ECC arrives — often never on a weak signal —
@@ -314,14 +327,17 @@ final class FmDxClient: SDRClient {
       Task { @MainActor in guard let self else { return }
         if st.contains("failed") || st.contains("cancelled") { self.retry(self.openChat) } }
     }
-    chatSock.open(url: wsURL("/chat"), headers: [("User-Agent", "\(Self.ua) (chat)")])
+    guard let u = wsURL("/chat") else { return }
+    chatSock.open(url: u, headers: [("User-Agent", "\(Self.ua) (chat)")])
   }
 
   nonisolated private func onChatFrame(_ t: String) {
     guard t.hasPrefix("{"), let j = MsgFaults.json("fmdx chat", Data(t.utf8)) else { return }
     if (j["type"] as? String) == "clientIp" { return }   // the server telling us our own IP
-    guard let msg = j["message"] as? String, !msg.isEmpty else { return }
-    let nm = (j["nickname"] as? String) ?? "?"
+    // ★★ A stranger's text: cleaned and capped (300 chars) before it is kept or drawn.
+    let msg = SafeText.clean(j["message"], max: 300)
+    guard !msg.isEmpty else { return }
+    let nm = SafeText.cleanOpt(j["nickname"], max: 32) ?? "?"
     Task { @MainActor in self.appendChat(name: nm, text: msg) }
   }
 
@@ -360,7 +376,8 @@ final class FmDxClient: SDRClient {
         if st.contains("failed") || st.contains("cancelled") { self.retry(self.openAudio) }
       }
     }
-    audioSock.open(url: wsURL("/audio"), headers: [("User-Agent", "\(Self.ua) (audio)")])
+    guard let u = wsURL("/audio") else { status = "bad server URL"; return }
+    audioSock.open(url: u, headers: [("User-Agent", "\(Self.ua) (audio)")])
   }
 
   private func retry(_ reopen: @escaping () -> Void) {

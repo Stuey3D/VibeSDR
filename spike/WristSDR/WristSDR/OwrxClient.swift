@@ -474,12 +474,17 @@ final class OwrxClient: ObservableObject, SDRClient {
     case "profiles": let ps = buildProfiles(json["value"] as? [Any] ?? []); Task { @MainActor in self.profiles = ps }
     case "clients":  if let n = (json["value"] as? NSNumber)?.intValue { Task { @MainActor in self.clients = n } }
     case "chat_message":
-      let nm = (json["name"] as? String) ?? "?"
-      let tx = (json["text"] as? String) ?? ""
+      // ★★ A stranger's text, from a socket that accepts messages up to 16 MB: cleaned (control,
+      //    bidi and zero-width characters out) and capped at 300 characters before it is kept or
+      //    drawn. The cap bounds the work too — SafeText stops scanning once it has enough.
+      let nm = SafeText.cleanOpt(json["name"], max: 32) ?? "?"
+      let tx = SafeText.clean(json["text"], max: 300)
       if !tx.isEmpty { Task { @MainActor in self.appendChat(name: nm, text: tx) } }
     case "smeter":   if let v = (json["value"] as? NSNumber)?.doubleValue, v > 0 { let db = 10 * log10(v); Task { @MainActor in self.signalDb = db } }
     case "sdr_error", "demodulator_error":
-      let msg = String(describing: json["value"] ?? "OpenWebRX error"); Task { @MainActor in self.lastError = msg }
+      let msg = SafeText.cleanOpt(json["value"] as? String ?? json["value"].map { String(describing: $0) }, max: 200)
+        ?? "OpenWebRX error"
+      Task { @MainActor in self.lastError = msg }
     case "metadata":
       if let v = json["value"] as? [String: Any] { onMetadata(v) }
     case "modes":
@@ -539,21 +544,24 @@ final class OwrxClient: ObservableObject, SDRClient {
     guard let v = value as? [String: Any], let list = v["aircraft"] as? [[String: Any]] else { return }
     var parsed: [Aircraft] = []
     for a in list {
-      guard let icao = a["icao"] as? String, !icao.isEmpty else { continue }
+      // ★★ Every figure is a decoded CLAIM: finite and plausible, or absent. A NaN position reached
+      //    MapKit and the haversine; a 1e12 speed reached Int() in the row (arm64_32 trap). Text is
+      //    cleaned (SafeText) like every other server string.
+      guard let icao = SafeText.cleanOpt(a["icao"], max: 12) else { continue }
       parsed.append(Aircraft(
         icao: icao,
-        flight: (a["flight"] as? String)?.trimmingCharacters(in: .whitespaces),
-        country: a["country"] as? String,
-        ccode: a["ccode"] as? String,
-        altitude: (a["altitude"] as? NSNumber)?.doubleValue,
-        speed: (a["speed"] as? NSNumber)?.doubleValue,
-        vspeed: (a["vspeed"] as? NSNumber)?.doubleValue,
-        course: (a["course"] as? NSNumber)?.doubleValue,
-        squawk: a["squawk"] as? String,
-        rssi: (a["rssi"] as? NSNumber)?.doubleValue,
-        msgs: (a["msgs"] as? NSNumber)?.intValue,
-        lat: (a["lat"] as? NSNumber)?.doubleValue,
-        lon: (a["lon"] as? NSNumber)?.doubleValue,
+        flight: SafeText.cleanOpt(a["flight"], max: 12),
+        country: SafeText.cleanOpt(a["country"], max: 48),
+        ccode: SafeText.cleanOpt(a["ccode"], max: 2),
+        altitude: Wire.inRange(a["altitude"], -2_000...100_000),
+        speed: Wire.inRange(a["speed"], 0...5_000),
+        vspeed: Wire.inRange(a["vspeed"], -50_000...50_000),
+        course: Wire.inRange(a["course"], -360...720),
+        squawk: SafeText.cleanOpt(a["squawk"], max: 8),
+        rssi: Wire.inRange(a["rssi"], -200...100),
+        msgs: Wire.inRange(a["msgs"], 0...1e9).map { Wire.int($0) },
+        lat: Wire.inRange(a["lat"], -90...90),
+        lon: Wire.inRange(a["lon"], -180...180),
         distKm: nil, bearing: nil))
     }
     Task { @MainActor in self.applyAircraft(parsed) }
@@ -626,7 +634,8 @@ final class OwrxClient: ObservableObject, SDRClient {
     // so only a NON-EMPTY ps updates the name — a radiotext-only frame must not blank a known station.
     let proto = v["protocol"] as? String
     guard proto == "WFM" || v["ps"] != nil || v["radiotext"] != nil else { return }
-    if let ps = (v["ps"] as? String)?.trimmingCharacters(in: .whitespaces), !ps.isEmpty {
+    // ★ Decoded off the air — cleaned like every other station name (SafeText).
+    if let ps = SafeText.cleanOpt(v["ps"], max: 16) {
       Task { @MainActor in if self.stationName != ps { self.stationName = ps } }
     }
   }
@@ -637,13 +646,20 @@ final class OwrxClient: ObservableObject, SDRClient {
   nonisolated private func onDabMetadata(_ v: [String: Any]) {
     var progs: [DabProgramme] = []
     if let p = v["programmes"] as? [String: Any] {
-      for (k, name) in p { if let id = Int(k) { progs.append(DabProgramme(id: id, name: String(describing: name))) } }
+      // ★★ One programme per id: "1" and "01" are two keys and ONE Int, and DabProgramme.id feeds a
+      //    ForEach — a duplicate id there crashes. Names are cleaned (decoded off the air).
+      var seen = Set<Int>()
+      for k in p.keys.sorted() {
+        guard let id = Int(k), seen.insert(id).inserted else { continue }
+        let nm = SafeText.clean(p[k] as? String ?? (p[k].map { String(describing: $0) }), max: 32)
+        progs.append(DabProgramme(id: id, name: nm.isEmpty ? "Service \(id)" : nm))
+      }
       progs.sort { $0.id < $1.id }
     }
     // This OWRX+ build sends `ensemble_id` (a number), NOT `ensemble_label` — so there's often no label
     // on the wire. Fall back to the active profile's name (which carries the multiplex name, e.g.
     // "DAB 7A: NNDAB Northampton") in applyDabMeta when no label arrives.
-    let ensemble = (v["ensemble_label"] as? String)?.trimmingCharacters(in: .whitespaces)
+    let ensemble = SafeText.cleanOpt(v["ensemble_label"], max: 32)
     Task { @MainActor in self.applyDabMeta(progs, ensemble) }
   }
 
@@ -806,13 +822,16 @@ final class OwrxClient: ObservableObject, SDRClient {
   // Profile entries can be objects {id,name} OR bare strings — handle both (like the phone). Runs
   // OFF main (a large profiles list must not be grouped on the UI thread — that's the stall).
   nonisolated private func buildProfiles(_ list: [Any]) -> [SDRProfile] {
-    let raw: [(id: String, name: String)] = list.compactMap { el in
+    let raw0: [(id: String, name: String)] = list.compactMap { el in
       if let d = el as? [String: Any] {
         let id = (d["id"] as? String) ?? String(describing: d["id"] ?? "")
-        return id.isEmpty ? nil : (id, (d["name"] as? String) ?? id)
-      } else if let s = el as? String { return (s, s) }
+        return id.isEmpty ? nil : (id, SafeText.cleanOpt(d["name"], max: 64) ?? SafeText.clean(id, max: 64))
+      } else if let s = el as? String { return (s, SafeText.clean(s, max: 64)) }
       return nil
     }
+    // ★★ One profile per id — SDRProfile.id feeds a List, where a duplicate id crashes.
+    var seenIds = Set<String>()
+    let raw = raw0.filter { seenIds.insert($0.id).inserted }
     // Group by SDR (id prefix before "|"); SDR name = common prefix of the group's profile names.
     var groups: [String: [(id: String, name: String)]] = [:]
     for r in raw { groups[String(r.id.split(separator: "|").first ?? ""), default: []].append(r) }

@@ -247,10 +247,10 @@ struct InstancePickerView: View {
     switch favs.sort {
     case .nearest:
       let d = meta[f.url.trimmedTrailingSlash.lowercased()]?.dist
-      return d != nil ? "◍ \(Int(d!.rounded())) km" : "◍ distance unknown"
+      return d != nil ? "◍ \(Wire.int(d!)) km" : "◍ distance unknown"
     case .snr:
       let s = meta[f.url.trimmedTrailingSlash.lowercased()]?.snr ?? f.bestSnr
-      return s != nil ? "▲ SNR \(Int(s!.rounded())) dB" : "▽ no SNR data"
+      return s != nil ? "▲ SNR \(Wire.int(s!)) dB" : "▽ no SNR data"
     case .type: return "▣ \(f.serverType.display)"
     default:    return f.visits > 0 ? "★ \(f.visits) visit\(f.visits == 1 ? "" : "s")" : f.url
     }
@@ -382,8 +382,10 @@ struct InstancePickerView: View {
     if s.full { bits.append("FULL") }
     if s.maxUsers > 0 { bits.append("\(s.users)/\(s.maxUsers)") }
     if let cc = s.countryCode { bits.append(cc) } else if !s.location.isEmpty { bits.append(s.location) }
-    if let d = s.distance { bits.append("\(Int(d.rounded())) km") }
-    if let sn = s.bestSnr { bits.append("SNR \(Int(sn.rounded()))") }
+    // ★ Wire.int, never Int(x.rounded()): these are directory claims, and on arm64_32 an SNR of
+    //   1e10 (or NaN) used to TRAP while drawing the row. The parse bounds them too.
+    if let d = s.distance { bits.append("\(Wire.int(d)) km") }
+    if let sn = s.bestSnr { bits.append("SNR \(Wire.int(sn))") }
     if !s.serverType.connectable { bits.append("· soon") }
     return bits.joined(separator: " · ")
   }

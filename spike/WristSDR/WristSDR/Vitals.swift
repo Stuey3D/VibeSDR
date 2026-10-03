@@ -135,7 +135,23 @@ final class Vitals: ObservableObject {
   private static let logCap = 64 * 1024
   private static let logKeep = 32 * 1024
 
-  nonisolated static func crumb(_ s: String) {
+  /// ★★★ NO CREDENTIALS IN THE LOG. jr-vitals.log is the file a user SHARES with us, and the
+  ///     socket URLs carry the PIN proof (`vs_nonce`/`vs_auth`), the owner's admin proof
+  ///     (`vs_admin_nonce`/`vs_admin_auth`) or a live admin ticket (`vs_admin_ticket`) — a ticket
+  ///     in that file was a working admin credential for up to its TTL. Every `vs_*` value and the
+  ///     session id is replaced with "…"; the key stays, so the log still says WHICH proof was sent.
+  nonisolated static func redact(_ url: URL) -> String { redact(url.absoluteString) }
+  nonisolated static func redact(_ s: String) -> String {
+    guard s.contains("vs_") || s.contains("user_session_id") || s.contains("@") else { return s }
+    var out = s.replacingOccurrences(of: "((?:vs_[A-Za-z_]+|user_session_id)=)[^&#\\s]*",
+                                     with: "$1…", options: .regularExpression)
+    // user:password@host in a URL — never expected, never logged.
+    out = out.replacingOccurrences(of: "(://)[^/@\\s]*@", with: "$1…@", options: .regularExpression)
+    return out
+  }
+
+  nonisolated static func crumb(_ s0: String) {
+    let s = redact(s0)      // belt and braces: whatever a call site interpolated, scrub it here too
     let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     let u = docs.appendingPathComponent("jr-vitals.log")
     let line = "\(ISO8601DateFormatter().string(from: Date())) · \(s)\n"
@@ -308,5 +324,51 @@ enum Wire {
   nonisolated static func inRange(_ v: Any?, _ r: ClosedRange<Double>) -> Double? {
     guard let d = (v as? NSNumber)?.doubleValue, d.isFinite, r.contains(d) else { return nil }
     return d
+  }
+}
+
+/// ★★★ TEXT FROM ANY SERVER IS UNTRUSTED — the Swift port of the app's `src/utils/safeText.ts`
+/// `cleanText`, so the watch cleans a name exactly as the phone and the web client do. A station name
+/// can come from an admin's typing, from RDS/DAB decoded off the air (garbled, or sent by anyone with
+/// a transmitter), from a directory row, or from a stranger in an OpenWebRX chat.
+///  - C0/C1 control characters and DEL → a space.
+///  - Bidi overrides and isolates (U+202A–202E, U+2066–2069) → removed ("Trojan Source").
+///    Ordinary right-to-left scripts are untouched.
+///  - Zero-width space, word joiner and BOM (U+200B, U+2060, U+FEFF) → removed.
+///    ★ NOT the joiners U+200C/U+200D — Indic scripts and multi-part emoji need them; Tibetan,
+///    Arabic, Thai, Devanagari… all pass through.
+///  - Runs of whitespace collapsed to one space, trimmed, and capped at `max` CHARACTERS (grapheme
+///    clusters, so a cut never splits a surrogate pair, a combining mark or an emoji).
+///  ★ The scan itself is bounded: a 16 MB chat message is not walked to the end to keep 300 of it.
+enum SafeText {
+  nonisolated static func clean(_ v: Any?, max: Int = 64) -> String {
+    guard let s = v as? String, max > 0 else { return "" }
+    var out = String.UnicodeScalarView()
+    var pendingSpace = false
+    var kept = 0
+    // Enough scalars for `max` characters even with heavy combining marks, and no more.
+    let scalarBudget = max * 8
+    for u in s.unicodeScalars {
+      let c = u.value
+      if c < 0x20 || (c >= 0x7F && c <= 0x9F) { pendingSpace = true; continue }   // C0, DEL, C1
+      if (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069) { continue } // bidi
+      if c == 0x200B || c == 0x2060 || c == 0xFEFF { continue }                     // zero-width
+      if u.properties.isWhitespace { pendingSpace = true; continue }
+      if pendingSpace && !out.isEmpty { out.append(" "); kept += 1 }
+      pendingSpace = false
+      out.append(u); kept += 1
+      if kept >= scalarBudget { break }
+    }
+    var r = String(out)
+    if r.count > max {
+      r = String(r.prefix(max))
+      while r.last?.isWhitespace == true { r.removeLast() }
+    }
+    return r
+  }
+  /// Optional form for fields where "absent" must stay absent rather than become "".
+  nonisolated static func cleanOpt(_ v: Any?, max: Int = 64) -> String? {
+    let s = clean(v, max: max)
+    return s.isEmpty ? nil : s
   }
 }

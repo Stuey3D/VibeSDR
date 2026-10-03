@@ -82,22 +82,26 @@ enum FrontDoor {
         guard (j["frontDoor"] as? Bool) == true,
               let rows = j["radios"] as? [[String: Any]] else { return nil }
 
-        let radios: [VibeRadio] = rows.compactMap { r in
-            guard let id = r["id"] as? String, !id.isEmpty else { return nil }
+        // ★★ One row per id: VibeRadio.id feeds the picker's ForEach, where a duplicate id crashes.
+        //    Labels are server text and are cleaned (SafeText); the centre is a finite frequency.
+        var seenIds = Set<String>()
+        let radios: [VibeRadio] = rows.prefix(64).compactMap { r in
+            guard let id = r["id"] as? String, !id.isEmpty, id.count <= 128,
+                  seenIds.insert(id).inserted else { return nil }
             return VibeRadio(
                 id: id,
-                label: (r["label"] as? String) ?? (r["driver"] as? String) ?? "Radio",
-                driver: (r["driver"] as? String) ?? "",
-                users: (r["users"] as? Int) ?? 1,
+                label: SafeText.cleanOpt(r["label"]) ?? SafeText.cleanOpt(r["driver"]) ?? "Radio",
+                driver: SafeText.clean(r["driver"], max: 32),
+                users: Wire.inRange(r["users"], 0...100_000).map { Wire.int($0) } ?? 1,
                 locked: (r["locked"] as? Bool) ?? false,
                 restricted: (r["restricted"] as? Bool) ?? false,
-                centreHz: (r["centreHz"] as? Double) ?? Double((r["centreHz"] as? Int) ?? 0),
-                mode: (r["mode"] as? String) ?? "",
-                minProto: (r["minProto"] as? Int) ?? 0,
+                centreHz: Wire.inRange(r["centreHz"], 0...1e11) ?? 0,
+                mode: SafeText.clean(r["mode"], max: 12),
+                minProto: Wire.inRange(r["minProto"], 0...1_000_000).map { Wire.int($0) } ?? 0,
                 pinLocked: (r["pinLocked"] as? Bool) ?? false)
         }
         guard !radios.isEmpty else { return nil }   // a door with nothing behind it is not a choice
-        return VibeFrontDoor(name: (j["name"] as? String) ?? "VibeServer", radios: radios)
+        return VibeFrontDoor(name: SafeText.cleanOpt(j["name"]) ?? "VibeServer", radios: radios)
     }
 
     // ── Per-radio PIN ────────────────────────────────────────────────────────
