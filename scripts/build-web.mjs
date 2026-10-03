@@ -87,8 +87,42 @@ const brotli = (b) => zlib.brotliCompressSync(b, { params: {
   [zlib.constants.BROTLI_PARAM_SIZE_HINT]: b.length,
 } });
 
+/**
+ * ★★★ LEAFLET, SERVED BY THE RECEIVER ITSELF (security audit, 2026-10-03). It used to come from
+ *     unpkg.com with no integrity and ran on the receiver's origin, where the admin ticket lives.
+ *     The exact 1.9.4 files are the directory's vendored copy, CHECKED HERE against the SHA-256
+ *     Leaflet publishes for them — a changed byte fails the build rather than shipping. They become
+ *     /vs/ assets with content-hashed names (immutable, like the scripts), and their URLs and SRI
+ *     hashes reach the bundle through `define` (web/client/src/leafletAsset.ts).
+ *  ★ The CSS's url(images/…) icons are not shipped: no map here uses Leaflet's default marker or
+ *    layer-switcher images (divIcons and circle markers only), so those rules simply never fire.
+ */
+const LEAFLET_DIR = path.join(root, 'directory/public/vendor/leaflet');
+const LEAFLET_PINS = {
+  'leaflet.js':  'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=',
+  'leaflet.css': 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=',
+};
+async function leafletFiles() {
+  const out = {};
+  for (const [file, pin] of Object.entries(LEAFLET_PINS)) {
+    const bytes = await readFile(path.join(LEAFLET_DIR, file));
+    const sri = 'sha256-' + createHash('sha256').update(bytes).digest('base64');
+    if (sri !== pin) throw new Error(`Leaflet: ${file} is not the published 1.9.4 file (${sri} != ${pin})`);
+    const ext = path.extname(file);
+    const short = createHash('sha256').update(bytes).digest('hex').slice(0, 10);
+    out[ext.slice(1)] = { name: `leaflet-1.9.4-${short}${ext}`, bytes, sri,
+                          type: ext === '.css' ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8' };
+  }
+  return out;
+}
+
 async function bundle() {
+  const leaflet = await leafletFiles();
   const res = await build({
+    define: {
+      __VS_LEAFLET__: JSON.stringify({ js: JS_DIR + leaflet.js.name, css: JS_DIR + leaflet.css.name,
+                                       jsSri: leaflet.js.sri, cssSri: leaflet.css.sri }),
+    },
     entryPoints: { app: ENTRY },
     bundle: true,
     // ★★ ESM + splitting, so a module nobody needs yet can be a separate file fetched on demand
@@ -254,6 +288,8 @@ async function bundle() {
     assets.push({ path: JS_DIR + f.name, type: 'text/javascript; charset=utf-8', raw: f.bytes,
                   eager: eager.includes(f.name) });
   }
+  // ★ Leaflet's two files (see leafletFiles) — on demand, like the map renderer.
+  for (const f of Object.values(leaflet)) assets.push({ path: JS_DIR + f.name, type: f.type, raw: f.bytes, eager: false });
   for (const a of assets) {
     a.gz = gzip(a.raw);
     a.br = brotli(a.raw);

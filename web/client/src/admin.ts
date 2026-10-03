@@ -21,6 +21,7 @@ import { httpBase } from './origin';
 import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
 import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
+import { loadLeafletInto } from './leafletAsset';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
  *  textContent runs synchronously on append, so VibeMap exists by the time attach() is called.
@@ -593,33 +594,15 @@ let ccMarkers: any[] = [];
 let ccMapPending: Promise<boolean> | null = null;
 let leafletPending: Promise<boolean> | null = null;
 
-/** ★★ LOADED ONLY WHEN AN OWNER OPENS ADMIN, and from the same CDN the spots map already uses.
- *  ★★★ THE PAGE MUST NOT DEPEND ON IT. VibeServer runs on Pis behind LANs with no route out, and
- *      the admin page is otherwise entirely self-contained — so this resolves FALSE on failure and
- *      the bar chart stays. A map that cannot load must cost nothing but a map. */
+/** ★★ LOADED ONLY WHEN AN OWNER OPENS ADMIN — from THIS server's /vs/ (leafletAsset.ts), never a CDN.
+ *  ★★★ THE PAGE MUST NOT DEPEND ON IT. A map that cannot load must cost nothing but a map: this
+ *      resolves FALSE on failure and the bar chart stays.
+ *  ★ Leaflet used to come from unpkg.com with no integrity, running on this origin — where the admin
+ *    ticket lives. It is compiled into the server now, with an SRI hash, and works with no internet. */
 function loadLeaflet(): Promise<boolean> {
   if ((window as any).L) return Promise.resolve(true);
   if (leafletPending) return leafletPending;
-  leafletPending = new Promise<boolean>((resolve) => {
-    const css = document.createElement('link');
-    css.rel = 'stylesheet';
-    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-    document.head.appendChild(css);
-    /* ★ The .vsDarkTiles filter that used to live here is GONE with the tiles it darkened: the
-     *  vector basemap is dark by design and inverting it would fight its own palette. Removed
-     *  rather than left behind — a rule matching nothing is furniture that outlives its reason. */
-    /* ▶ STILL A THIRD-PARTY FETCH, AND IT IS THE LAST ONE. The MAP DATA is ours now and served by
-     *  this server, but Leaflet itself still comes from unpkg. So an admin page on a LAN with no
-     *  route to the internet gets no map at all — the basemap being local does not save it.
-     *  ✗ Do not claim this page works offline until Leaflet is bundled too. */
-    const js = document.createElement('script');
-    js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    js.onload = () => resolve(true);
-    js.onerror = () => resolve(false);
-    // ★ A server with no internet must not leave the panel waiting for ever.
-    setTimeout(() => resolve(!!(window as any).L), 6000);
-    document.head.appendChild(js);
-  });
+  leafletPending = loadLeafletInto(document);
   return leafletPending;
 }
 

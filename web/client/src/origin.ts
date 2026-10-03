@@ -39,8 +39,20 @@
  * ★ Absent on a LAN server, a port-forwarded one, or anything reached directly: then this returns
  *   the host it was given and nothing changes.
  */
+/* ★★ ALSO READ FROM A <meta name="vibe-direct-host"> (security audit, 2026-10-03). The directory used
+ *    to say this only with an injected inline <script>, which forces the receiver's CSP to allow
+ *    'unsafe-inline' script. It now injects the meta as well; a page served under a CSP without
+ *    'unsafe-inline' still learns the host from the meta. Only a bare host[:port] is believed. */
+function directHost(): string {
+  if (typeof window === 'undefined') return '';
+  const w = (window as any).__VIBE_DIRECT_HOST__;
+  const m = typeof document !== 'undefined'
+    ? document.querySelector('meta[name="vibe-direct-host"]')?.getAttribute('content') : '';
+  const v = String(w || m || '');
+  return /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(:\d{1,5})?$/.test(v) ? v : '';
+}
 function socketHost(host: string): string {
-  const direct = (typeof window !== 'undefined' && (window as any).__VIBE_DIRECT_HOST__) || '';
+  const direct = directHost();
   if (!direct) return host;
   // ★★ `host` MAY CARRY A /r/<id> PREFIX — see BASE_PATH in main.ts, where the front door routes
   //    several radios by path. Only the authority is swapped; the prefix has to survive or a

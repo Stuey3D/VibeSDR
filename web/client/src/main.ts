@@ -89,6 +89,7 @@ import {
  *  the page does not carry it (build-web.mjs splits every import() into one). */
 import { probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
+import { LEAFLET_ASSET } from './leafletAsset';
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
@@ -1246,7 +1247,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         return;
       }
       showRefusal('ALREADY LISTENING',
-        `You are already listening on <b>${radio}</b> from this browser.<br><br>`
+        `You are already listening on <b>${escapeHtml(radio)}</b> from this browser.<br><br>`
         + 'This receiver serves one listener per browser, so that nobody takes every slot. '
         + 'Close the other one and this will let you straight in.');
     },
@@ -5664,7 +5665,7 @@ async function showSplashRadios(): Promise<void> {
          + `<strong style="letter-spacing:.05em">${escapeHtml(r.label)}</strong>`
          + `<span style="display:flex;align-items:center;gap:10px">${dabBadge(r, st)}<span class="rcState" style="font-size:11px;opacity:.85">${state}</span></span></div>`
          + `<div class="sub" style="margin-top:2px;font-size:11px;opacity:.7"${
-              rangeTitle ? ` title="${rangeTitle.replace(/"/g, '&quot;')}"` : ''
+              rangeTitle ? ` title="${escapeHtml(rangeTitle)}"` : ''
             }>${escapeHtml(range)} · ${kind}</div>`
          // ★★ THE AERIAL, UNDER THE RANGE IT QUALIFIES. That order is the point: the range says
          //    where this radio CAN tune, and the aerial says where it will actually hear anything.
@@ -6330,7 +6331,7 @@ function dabRender() {
   if (skeleton !== dabLastListHtml) {
     dabLastListHtml = skeleton;
     st.innerHTML = d.services.length
-      ? d.services.map(sv => `<div class="dabSvc" data-sid="${sv.sid}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
+      ? d.services.map(sv => `<div class="dabSvc" data-sid="${Number(sv.sid) || 0}"><span class="lg"></span><span class="nm"><span class="nmT"></span><span class="dls" style="display:none"><span class="dlsIn"></span></span></span><span class="cod"></span></div>`).join('')
         + (d.held ? `<div style="padding:6px 9px;opacity:.5;font-size:10px">list held — the multiplex is not reading at the moment</div>` : '')
       : `<div style="padding:14px;opacity:.6">${d.truncated ? 'Signal block too long for the server to send'
           : d.locked ? 'Reading the multiplex…' : 'Searching for a multiplex…'}</div>`;
@@ -6663,8 +6664,18 @@ function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
    *  double quote. `https://x/a" onerror="…` broke out of the attribute and ran script on the
    *  receiver's own origin, where the admin ticket lives. The data-k beside it was already escaped,
    *  which is exactly what made this easy to miss. (Audit, 2026-09-10.) */
-  return known ? `<img class="dabLogo" src="${escapeHtml(known)}" alt="" data-k="${escapeHtml(key)}" onerror="this.remove();(window as any).dabLogoFailed&&(window as any).dabLogoFailed(this.dataset.k)">`.replace('(window as any)', 'window').replace('(window as any)', 'window') : dabSlideTag(sv, key);
+  /* ★★ NO INLINE onerror= ANY MORE — a handler written into markup is inline script, and it is the
+   *  one thing that kept the receiver's CSP needing 'unsafe-inline' for attributes. The failure is
+   *  caught by ONE capture-phase listener below (error events do not bubble, but they do capture). */
+  return known ? `<img class="dabLogo" src="${escapeHtml(known)}" alt="" data-k="${escapeHtml(key)}">` : dabSlideTag(sv, key);
 }
+document.addEventListener('error', (ev) => {
+  const t = ev.target;
+  if (!(t instanceof HTMLImageElement) || !t.classList.contains('dabLogo') || t.dataset.k == null) return;
+  const k = t.dataset.k;
+  t.remove();
+  (window as any).dabLogoFailed?.(k);
+}, true);
 
 /** ★★★ THE PICTURE THE STATION ITSELF TRANSMITS, AS THE LAST RESORT.
  *
@@ -7797,15 +7808,25 @@ function wantedFps(): number {
  * ★ `vs_admin_ttl` is honoured when sent, and a short default is used otherwise — a ticket we
  *   over-estimate is one that fails later looking like a wrong password.
  */
+/* ★★ THE FRAGMENT FIRST (#vs_admin_ticket=…, security audit 2026-10-03): a fragment is never sent
+ *    over the network, so the ticket stays out of the server's, the tunnel's and the directory
+ *    Worker's request logs, and out of any Referer. The query is still read for older directories and
+ *    the app. A bare "#admin" (the panel route) is left exactly as it was. */
 function adoptAdminTicketFromUrl() {
   const q = new URLSearchParams(location.search);
-  const t = q.get('vs_admin_ticket');
+  const rawHash = location.hash.replace(/^#/, '');
+  const h = /(^|&)vs_admin_ticket=/.test(rawHash) ? new URLSearchParams(rawHash) : null;
+  const src = h?.get('vs_admin_ticket') ? h : q;
+  const t = src.get('vs_admin_ticket');
   if (!t) return;
-  saveAdminTicket(t, Number(q.get('vs_admin_ttl')) || 600);
-  q.delete('vs_admin_ticket');
-  q.delete('vs_admin_ttl');
+  saveAdminTicket(t, Number(src.get('vs_admin_ttl')) || 600);
+  for (const u of h ? [h, q] : [q]) { u.delete('vs_admin_ticket'); u.delete('vs_admin_ttl'); }
   const rest = q.toString();
-  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+  // ★ What is left of a ticket-carrying fragment (e.g. "admin") goes back as it was written —
+  //   URLSearchParams would turn a bare "admin" into "admin=", and '#admin' routes the panel.
+  const frag = h ? Array.from(h.entries()).map(([k, v]) => v ? `${encodeURIComponent(k)}=${encodeURIComponent(v)}` : encodeURIComponent(k)).join('&')
+                 : location.hash.replace(/^#/, '');
+  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + (frag ? '#' + frag : ''));
 }
 adoptAdminTicketFromUrl();
 
@@ -7820,7 +7841,11 @@ adoptAdminTicketFromUrl();
  *    reconnect reuses it) and stripped from the address bar at once. */
 function pinProofKey(): string {
   const m = /^\/r\/([^/?#]+)/.exec(location.pathname);
-  try { return m ? 'vsPinProof:' + decodeURIComponent(m[1]) : ''; } catch { return ''; }
+  // ★ A single-radio host (the app, Lite) is opened at its ROOT with a whole-server proof — the
+  //   directory's server-PIN path. That proof used to be stripped and thrown away here (no /r/<id>/,
+  //   no key); it is kept under the root's own key now.
+  if (!m) return location.pathname === '/' ? 'vsPinProof:/' : '';
+  try { return 'vsPinProof:' + decodeURIComponent(m[1]); } catch { return ''; }
 }
 function adoptPinProofFromUrl() {
   const key = pinProofKey();
@@ -8495,7 +8520,7 @@ function initSearch() {
       row.className = 'sres' + (i === sel ? ' sel' : '');
       row.innerHTML =
         `<span class="f">${(r.frequency / 1e6).toFixed(3)}</span>` +
-        `<span class="n">${r.flag ? r.flag + ' ' : ''}${escapeHtml(r.name)}` +
+        `<span class="n">${r.flag ? escapeHtml(r.flag) + ' ' : ''}${escapeHtml(r.name)}` +
         (r.detail ? ` <span class="src">${escapeHtml(r.detail)}</span>` : '') +
         `</span>` +
         `<span class="src">${SRC_LABEL[r.source] ?? ''}</span>`;
@@ -11473,7 +11498,7 @@ function renderSpots() {
     row.innerHTML =
       `<span class="t">${fmtSpotTime(sp.timestamp)}</span>` +
       `<span class="band" style="color:${BAND_COLOUR[sp.band] || 'var(--text-dim)'}">${escapeHtml(sp.band)}</span>` +
-      `<span class="snr ${sp.snr >= 0 ? 'pos' : 'neg'}">${sp.snr}</span>` +
+      `<span class="snr ${Number(sp.snr) >= 0 ? 'pos' : 'neg'}">${Number(sp.snr) || 0}</span>` +
       `<span class="call">${escapeHtml(sp.callsign)}</span>` +
       `<span class="cty">${escapeHtml(abbrCountry(country) || '')}</span>` +
       `<span class="km">${km != null ? Math.round(km) + 'km' : ''}</span>` +
@@ -11621,7 +11646,11 @@ function pushSpotsToMap() {
   if (!spotsMapWin) return;
   if (spotsMapWin.closed) { spotsMapWin = null; return; }
   try {
-    spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints() }, '*');
+    // ★★ NEVER '*': the window could have navigated somewhere else since it opened, and the spots
+    //    would follow it there. '/' (and an http(s) origin, which is the same thing spelled out) means
+    //    "only if it is still on this page's origin" — the popup is about:blank and inherits ours.
+    spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints() },
+                            /^https?:$/.test(location.protocol) ? location.origin : '/');
   } catch { spotsMapWin = null; }      // window went away mid-push
 }
 
@@ -11777,6 +11806,45 @@ const TZ_ABBR = ${safe(srvTzAbbr)};
 const VIBEMAP_SRC = ${safe(VIBEMAP_JS)};
 // ★ Its data, on the server that opened this window — absolute, since this window is about:blank.
 const GL_DATA_BASE = ${safe(/^https?:$/.test(location.protocol) ? location.origin + '/mapdata/v1/' : '/mapdata/v1/')};
+// ★★★ LEAFLET FROM THE SERVER THAT OPENED THIS WINDOW, with its SRI hash — never a CDN. This
+//     window is about:blank and shares the receiver's origin, so a script it loads runs as the owner.
+const LEAFLET = ${safe(LEAFLET_ASSET ? { js: (/^https?:$/.test(location.protocol) ? location.origin : '') + LEAFLET_ASSET.js,
+                                          css: (/^https?:$/.test(location.protocol) ? location.origin : '') + LEAFLET_ASSET.css,
+                                          jsSri: LEAFLET_ASSET.jsSri, cssSri: LEAFLET_ASSET.cssSri } : null)};
+// ★ The origin of the page that opened this one. location.origin here is "null" (about:blank), so it is
+//   handed over rather than read.
+const OPENER_ORIGIN = ${safe(location.origin)};
+
+/* ★★★ EVERY FIELD IS UNTRUSTED, AND IS CLEANED AGAIN HERE. The opener sanitises the spots before it
+ *     sends them (spotsMapPoints), but this page must not rely on that: a message is checked for its
+ *     sender, re-cleaned to the same allow-lists, and every value is escaped where it meets
+ *     innerHTML or a popup. Off-air text (callsigns, grids) is whatever a transmitter sent. */
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function okStr(v, re, max) { return String(v == null ? '' : v).replace(re, '').slice(0, max); }
+function okNum(v) { const n = Number(v); return isFinite(n) ? n : 0; }
+function okColour(v) { return /^#[0-9a-fA-F]{3,8}$/.test(String(v)) ? String(v) : '#aaaaaa'; }
+function cleanSpots(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 5000).filter(function (s) { return s && typeof s === 'object'; }).map(function (s) {
+    const lat = okNum(s.lat), lon = okNum(s.lon);
+    return {
+      callsign: okStr(s.callsign, /[^A-Za-z0-9/\\-]/g, 16),
+      grid: okStr(s.grid, /[^A-Za-z0-9]/g, 8),
+      mode: okStr(s.mode, /[^A-Za-z0-9+-]/g, 12),
+      band: okStr(s.band, /[^A-Za-z0-9]/g, 8),
+      snr: okNum(s.snr), frequency: okNum(s.frequency), timestamp: okNum(s.timestamp),
+      lat: Math.max(-90, Math.min(90, lat)), lon: Math.max(-540, Math.min(540, lon)),
+      country: okStr(s.country, /[<>&"'\`]/g, 40),
+      km: s.km == null ? null : Math.round(okNum(s.km)),
+      colour: okColour(s.colour),
+    };
+  });
+}
+spots = cleanSpots(spots);
 
 /* ★★★ preferCanvas IS AN AUDIO FIX, WHICH IS NOT WHERE ANYONE WOULD LOOK FOR ONE. This map is a
  *     SAME-ORIGIN window.open, so it shares its main thread with the page that is playing the
@@ -11860,13 +11928,17 @@ function bootGPU() {
   }
 }
 
-/* The Leaflet map as it always was — Leaflet from unpkg, our vector basemap from /mapdata/v1/. */
+/* The Leaflet map — Leaflet from the receiver's own /vs/ (SRI-checked), our vector basemap from /mapdata/v1/. */
 function bootLeaflet() {
+  if (!LEAFLET) {
+    document.getElementById('empty').textContent = 'The map could not be loaded — the statistics still update.';
+    return;
+  }
   const css = document.createElement('link');
-  css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+  css.rel = 'stylesheet'; css.href = LEAFLET.css; css.integrity = LEAFLET.cssSri;
   document.head.appendChild(css);
   const js = document.createElement('script');
-  js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+  js.src = LEAFLET.js; js.integrity = LEAFLET.jsSri;
   js.onload = () => {
     L = window.L;
     ensureVibeMap();
@@ -11875,7 +11947,7 @@ function bootLeaflet() {
     render();
   };
   js.onerror = () => {
-    console.error('Spots map: Leaflet could not be loaded from unpkg.com, and the GPU map is not available here');
+    console.error('Spots map: Leaflet could not be loaded from this server, and the GPU map is not available here');
     document.getElementById('empty').textContent = 'The map could not be loaded — the statistics still update.';
   };
   document.head.appendChild(js);
@@ -11912,11 +11984,11 @@ function drawMarkers() {
       radius: radius(s.snr), color: '#00000066', weight: 1,
       fillColor: s.colour, fillOpacity: 0.85,
     }).addTo(spotLayer).bindPopup(
-      '<div class="pop"><b>' + s.callsign + '</b><br>' +
-      (s.country ? s.country + '<br>' : '') + s.grid +
-      (s.km != null ? ' · ' + s.km + ' km' : '') + '<br>' +
-      s.mode + ' · ' + s.band + ' · ' + (s.snr > 0 ? '+' : '') + s.snr + ' dB<br>' +
-      (s.frequency / 1e6).toFixed(3) + ' MHz</div>');
+      '<div class="pop"><b>' + esc(s.callsign) + '</b><br>' +
+      (s.country ? esc(s.country) + '<br>' : '') + esc(s.grid) +
+      (s.km != null ? ' · ' + esc(s.km) + ' km' : '') + '<br>' +
+      esc(s.mode) + ' · ' + esc(s.band) + ' · ' + (s.snr > 0 ? '+' : '') + esc(s.snr) + ' dB<br>' +
+      esc((s.frequency / 1e6).toFixed(3)) + ' MHz</div>');
   }
 }
 // ★★★ FIT ONCE, ON THE FIRST DRAW ONLY. Re-fitting on every update would yank the map away
@@ -11950,9 +12022,9 @@ function barList(counts, colourFor, limit) {
   if (!e.length) return '<div class="sub">Nothing yet</div>';
   const max = e[0][1];
   return e.map(([k, n]) =>
-    '<div class="row"><span>' + k + '</span><b>' + n + '</b></div>' +
+    '<div class="row"><span>' + esc(k) + '</span><b>' + esc(n) + '</b></div>' +
     '<div class="bar"><i style="width:' + Math.round(n / max * 100) + '%' +
-    (colourFor && colourFor(k) ? ';background:' + colourFor(k) : '') + '"></i></div>').join('');
+    (colourFor && colourFor(k) ? ';background:' + okColour(colourFor(k)) : '') + '"></i></div>').join('');
 }
 
 // ★ Everything below reads the spots list, so it all has to live in here to be re-runnable.
@@ -11985,12 +12057,12 @@ if (withKm.length) {
 if (withKm.length) {
   const c = withKm[0], f = withKm[withKm.length - 1];
   html += '<div class="sect">RANGE</div>' +
-    '<div class="row"><span>Closest</span><b>' + c.km + ' km</b></div>' +
-    '<div class="sub">' + c.callsign + ' (' + c.grid + ') · ' + (c.country || '') +
-    ' · ' + c.band + ' · ' + c.snr + 'dB</div>' +
-    '<div class="row"><span>Farthest</span><b>' + f.km + ' km</b></div>' +
-    '<div class="sub">' + f.callsign + ' (' + f.grid + ') · ' + (f.country || '') +
-    ' · ' + f.band + ' · ' + f.snr + 'dB</div>';
+    '<div class="row"><span>Closest</span><b>' + esc(c.km) + ' km</b></div>' +
+    '<div class="sub">' + esc(c.callsign) + ' (' + esc(c.grid) + ') · ' + esc(c.country || '') +
+    ' · ' + esc(c.band) + ' · ' + esc(c.snr) + 'dB</div>' +
+    '<div class="row"><span>Farthest</span><b>' + esc(f.km) + ' km</b></div>' +
+    '<div class="sub">' + esc(f.callsign) + ' (' + esc(f.grid) + ') · ' + esc(f.country || '') +
+    ' · ' + esc(f.band) + ' · ' + esc(f.snr) + 'dB</div>';
 } else if (spots.length) {
   html += '<div class="sect">RANGE</div><div class="sub">' +
     'No receiver location published — distances unavailable.</div>';
@@ -12028,7 +12100,7 @@ document.getElementById('legend').innerHTML =
   (me ? '<div class="lrow"><span style="display:inline-flex;width:12px;height:12px">' + RX_HOUSE.replace('width="22" height="22"', 'width="12" height="12"') + '</span>Receiver</div>' : '') +
   (bandsUsed.length
     ? bandsUsed.map(b => '<div class="lrow"><span class="sw" style="background:' +
-        (COL[b] || '#aaa') + '"></span>' + b + '</div>').join('')
+        okColour(COL[b] || '#aaa') + '"></span>' + esc(b) + '</div>').join('')
     : '<div class="lrow" style="color:var(--dim)">No bands yet</div>') +
   '<div class="lrow" style="color:var(--dim);font-size:9px;margin-top:4px">Size = SNR</div>';
 
@@ -12038,8 +12110,8 @@ const cCounts = tally(s => s.country);
 const rarest = Object.entries(cCounts).sort((a, b) => a[1] - b[1])[0];
 const latest = byTime[0];
 function cell(k, v, sub) {
-  return '<div><div class="k">' + k + '</div><div class="v">' + v + '</div>' +
-         (sub ? '<div class="k">' + sub + '</div>' : '') + '</div>';
+  return '<div><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div>' +
+         (sub ? '<div class="k">' + esc(sub) + '</div>' : '') + '</div>';
 }
 document.getElementById('summary').innerHTML = spots.length
   ? cell('LATEST', (latest.country || latest.callsign) + ' · ' + latest.band,
@@ -12053,9 +12125,11 @@ render();                                        // the statistics at once, map 
 if (bootGPU()) { setupMap(); render(); } else bootLeaflet();
 
 // ★★★ LIVE. The opener pushes a fresh point list whenever a spot arrives.
+// ★★★ ONLY FROM THE PAGE THAT OPENED THIS ONE, on its origin — any other window can post here too.
 addEventListener('message', (ev) => {
+  if (!window.opener || ev.source !== window.opener || ev.origin !== OPENER_ORIGIN) return;
   if (!ev.data || ev.data.type !== 'vibesdr-spots') return;
-  spots = ev.data.spots;
+  spots = cleanSpots(ev.data.spots);
   render();
 });
 

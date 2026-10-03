@@ -25,7 +25,9 @@
  */
 
 /** The settings that travel — what the Display menu's Reset already groups, plus the VFO look and a few
- *  personal ones. Hardware, tuning, squelch, DAB block and the like stay with the radio. */
+ *  personal ones. Hardware, tuning, squelch, DAB block and the like stay with the radio.
+ *  ★★ directory/public/store.html KEEPS ITS OWN COPY of this list and drops any other key a page
+ *     writes (security audit, 2026-10-03) — add a key here, add it there, or it will not travel. */
 export const VIEW_KEYS = [
   'palette', 'autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast', 'wfSharpness', 'wfCoarse',
   'wfSpeed', 'wfScroll', 'smoothingFrames', 'spatialSmooth', 'peakHold', 'specFloor', 'specPeakScale',
