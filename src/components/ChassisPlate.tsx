@@ -27,7 +27,7 @@ import {
 } from '@shopify/react-native-skia';
 import { useTexture, TEXTURE_SAMPLING } from './DomeKey';
 import type { PlateTokens } from '../constants/faceplate';
-import { cssAnglePts, cssAnglePtsShifted, hotspotX, hotspotY, sheenDeg, screwHighlight } from '../constants/plateLight';
+import { cssAnglePts, cssAnglePtsShifted, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight } from '../constants/plateLight';
 import { useLight } from '../contexts/FaceplateContext';
 
 /** CSS `linear-gradient(<deg>, …)` → Skia start/end points over a w × h box. */
@@ -102,17 +102,14 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, shiftS
   const k = 620 / 1200;
   // ── The light, derived from the live angle (lighting brief §2). At 104°: cssAngle(104, w, h), 28 % −10 %. ──
   // ★ Tilt's pitch slides the band along the gradient (shiftSv, 0 = today, so LEFT + no tilt is unchanged).
-  const start = useDerivedValue(() => { const p = cssAnglePtsShifted(sheenDeg(sv.value), w, h, shiftSv.value); return { x: p.sx, y: p.sy }; }, [w, h]);
-  const end   = useDerivedValue(() => { const p = cssAnglePtsShifted(sheenDeg(sv.value), w, h, shiftSv.value); return { x: p.ex, y: p.ey }; }, [w, h]);
+  const start = useDerivedValue(() => { const p = cssAnglePtsShifted(sv.value, w, h, shiftSv.value); return { x: p.sx, y: p.sy }; }, [w, h]);
+  const end   = useDerivedValue(() => { const p = cssAnglePtsShifted(sv.value, w, h, shiftSv.value); return { x: p.ex, y: p.ey }; }, [w, h]);
   // `radial-gradient(140% 70% at <x> -10%)`: an ellipse, drawn as a circle squashed vertically about its
   // centre. ★ The squash is in Y only, so the centre's x does not enter the transform — which is what lets
   // the centre MOVE without a re-render (today's translateX(ecx) … translateX(−ecx) cancelled anyway).
-  const rx = 1.4 * w, ry = 0.7 * h;
-  // ★ The centre's y moves with tilt's pitch (hotspotY), so it — and the squash about it — are derived too.
-  const ecy = useDerivedValue(() => hotspotY(shiftSv.value) * h, [h]);
-  const squash = useDerivedValue(() => [{ translateY: ecy.value }, { scaleY: ry / rx }, { translateY: -ecy.value }], [h, rx, ry]);
+  const rx = 1.4 * w, ry = 0.7 * h, ecy = HOTSPOT_Y * h;
   const ecx = useDerivedValue(() => hotspotX(sv.value) * w, [w]);
-  const c = useDerivedValue(() => ({ x: hotspotX(sv.value) * w, y: hotspotY(shiftSv.value) * h }), [w, h]);
+  const c = useDerivedValue(() => ({ x: hotspotX(sv.value) * w, y: HOTSPOT_Y * h }), [w, h]);
   return (
     <Canvas style={{ width: w, height: h }} pointerEvents="none">
       <Group clip={clip}>
@@ -129,7 +126,7 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, shiftS
         <Rect x={0} y={0} width={w} height={h}>
           <LinearGradient start={start} end={end} colors={plate.lightColors} positions={plate.lightPos} />
         </Rect>
-        <Group transform={squash}>
+        <Group transform={[{ translateY: ecy }, { scaleY: ry / rx }, { translateY: -ecy }]}>
           <Circle cx={ecx} cy={ecy} r={rx}>
             <RadialGradient c={c} r={rx} colors={[plate.radialColor, 'rgba(255,255,255,0)']} positions={[0, 0.6]} />
           </Circle>
@@ -178,14 +175,11 @@ export default function ChassisPlate({ plate, radius }: { plate: PlateTokens; ra
 const GlossCanvas = React.memo(function GlossCanvas({ w, h, r, trim, squareBottom, sv }: {
   w: number; h: number; r: number; trim: boolean; squareBottom: boolean; sv: SharedValue<number>;
 }) {
-  /* ★★ THE REFLECTION: DIFFUSE, AND IT DRIFTS WITH THE LIGHT RATHER THAN SWINGING WITH IT (Stuart, 2026-10-03).
-   *  The hard-edged .10 stripe across the frequency panel was the one thing he found distracting; with it softened,
-   *  he liked the moving light. A glossy panel's reflection is mostly the ROOM, so it moves a QUARTER as far as the
-   *  light (112° at LEFT, as today), which also keeps it a diagonal under TOP instead of a bar through the digits.
-   *  Soft-edged and faint: "barely noticeable but still realistic". */
-  const reflDeg = (v: number) => { 'worklet'; return 112 + (sheenDeg(v) - 104) * 0.25; };
-  const rStart = useDerivedValue(() => { const p = cssAnglePts(reflDeg(sv.value), w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
-  const rEnd   = useDerivedValue(() => { const p = cssAnglePts(reflDeg(sv.value), w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
+  /* ★★ THE REFLECTION IS A FIXED DIAGONAL (today's 112°), NOT THE LIGHT ANGLE + 8°. Following the light turned it
+   *  into a near-horizontal bar straight through the frequency digits under TOP, and even as a diagonal its hard
+   *  bright edge was "a bit distracting" — the thing Stuart noticed most on the black skin (2026-10-03). A glossy
+   *  panel's reflection is the ROOM, not the lamp; a fixed soft diagonal reads as acrylic without drawing the eye. */
+  const p0 = cssAnglePts(glossAngle(104), w, h);
   const H = h + (trim ? 4 : 0);
   // Square bottom corners: round a box that runs r past the bottom, then only fill down to h.
   const shape = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h + (squareBottom ? r : 0)), r, r);
@@ -201,10 +195,10 @@ const GlossCanvas = React.memo(function GlossCanvas({ w, h, r, trim, squareBotto
         <Rect x={0} y={0} width={w} height={h}>
           <LinearGradient start={vec(0, 0)} end={vec(0, h)} colors={['#111214', '#060607', '#0b0b0d']} positions={[0, 0.55, 1]} />
         </Rect>
-        {/* The diagonal reflection: soft-edged, α .04 → .015 (was a hard-edged .10 bar). */}
+        {/* The diagonal reflection: soft-edged, α .045 → .018 (was a hard-edged .10 bar). */}
         <Rect x={0} y={0} width={w} height={h}>
-          <LinearGradient start={rStart} end={rEnd}
-            colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.04)', 'rgba(255,255,255,0.015)', 'rgba(255,255,255,0)']}
+          <LinearGradient start={vec(p0.sx, p0.sy)} end={vec(p0.ex, p0.ey)}
+            colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.045)', 'rgba(255,255,255,0.018)', 'rgba(255,255,255,0)']}
             positions={[0, 0.30, 0.42, 0.56, 0.70]} />
         </Rect>
         <Line p1={vec(0, 0.5)} p2={vec(w, 0.5)} color="rgba(255,255,255,0.28)" strokeWidth={1} />
