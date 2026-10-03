@@ -17,16 +17,22 @@
 # most it can do is ask for one of these five things by name. That is the same argument that kept
 # a web terminal out of the admin page, applied one layer down.
 #
-# ★★ The request is DELETED BEFORE it is acted on. systemd's .path unit triggers on the file
-#    EXISTING, so a request left in place after a failure would re-trigger for ever — a reboot
+# ★★ The request is DELETED BEFORE it is acted on (just after the log is reset — see below).
+#    systemd's .path unit triggers on the file EXISTING, so a request left in place after a failure would re-trigger for ever — a reboot
 #    loop, on a machine in a loft.
 set -e
 
 REQ=/var/lib/vibeserver/maintenance.request
+# ★★★ THE REQUEST LIVES IN THE DAEMON'S DIRECTORY, AND THIS SCRIPT IS ROOT. A symlink there (to a
+#     FIFO, to /dev/zero, to a secret) is never followed: removed and ignored. Only a regular file
+#     is read, and at most 32 bytes of it, filtered to a-z and '-' — so the most the daemon can put
+#     in front of root is one of the action names below.
+if [ -L "$REQ" ]; then rm -f "$REQ"; exit 0; fi
 [ -f "$REQ" ] || exit 0
 
-action=$(head -c 32 "$REQ" | tr -cd 'a-z-')
-rm -f "$REQ"
+# ★ dd iflag=nofollow: the -L test above and this read are two moments, and a link swapped in
+#   between them must make the read FAIL, not follow. nonblock so a FIFO cannot hang root here.
+action=$(dd if="$REQ" bs=32 count=1 iflag=nofollow,nonblock 2>/dev/null | tr -cd 'a-z-' || true)
 
 # ★★★ EVERYTHING THIS SCRIPT PRINTS GOES SOMEWHERE THE ADMIN PAGE CAN READ IT.
 # Without this the output existed only in the journal, which the daemon cannot read (it is
@@ -36,11 +42,35 @@ rm -f "$REQ"
 # (Stuart, 2026-08-07).
 # ★ Truncated at the start of each action, so the page always shows THIS run and never a
 #   confusing tail of the last one.
-LOG=/var/lib/vibeserver/maintenance.log
-: > "$LOG"
-chmod 644 "$LOG" 2>/dev/null || true
-exec > >(tee -a "$LOG") 2>&1
-
+# ★★★ AND IT LIVES IN A ROOT-OWNED DIRECTORY, NOT THE DAEMON'S (2026-10-03 security pass). This used
+#     to be /var/lib/vibeserver/maintenance.log, and `: >`, `chmod` and `tee -a` all FOLLOW A
+#     SYMLINK — so a compromised daemon could plant one and have root truncate, chmod 644 and append
+#     to any file on the machine. /var/lib/vibeserver-maint is root:vibeserver 0750 and the log is
+#     0640: the daemon can READ it for the admin page and can neither replace nor redirect it.
+#  ★ /var/lib is root's, so nobody but root can have created this path; a link here is still
+#    refused rather than trusted, in case a hand edit put one there.
+LOGDIR=/var/lib/vibeserver-maint
+LOG=$LOGDIR/maintenance.log
+[ -L "$LOGDIR" ] && rm -f "$LOGDIR"
+# ★ Every step of the log set-up is allowed to fail: it is a convenience for the admin page, and
+#   under set -e a failure here would exit BEFORE the request is removed — the re-trigger loop the
+#   header warns about.
+install -d -o root -g vibeserver -m 0750 "$LOGDIR" 2>/dev/null \
+  || install -d -o root -g root -m 0755 "$LOGDIR" 2>/dev/null || true
+# ★ rm then create, so the file is always one this run made: 0640, root, the daemon's group.
+rm -f "$LOG" 2>/dev/null || true
+( umask 027 && : > "$LOG" ) 2>/dev/null || true
+chgrp vibeserver "$LOG" 2>/dev/null || true
+# ★★ THE REQUEST GOES ONLY NOW — AFTER THE LOG IS EMPTY. The daemon reports "waiting to start"
+#    for as long as the request file exists, and reads the log once it has gone; removing the
+#    request before truncating left a moment in which the page saw the PREVIOUS run's finished
+#    log and reported the new action as already done. Still before the action itself, so a
+#    failing action can never re-trigger the .path unit for ever.
+rm -f "$REQ"
+# ★ The old location, from before this moved. Removing a symlink removes only the link.
+rm -f /var/lib/vibeserver/maintenance.log
+# ★ Only once the log is there; without it the output goes to the journal as it always could.
+if [ -f "$LOG" ] && [ ! -L "$LOG" ]; then exec > >(tee -a "$LOG") 2>&1; fi
 # ★★ The daemon decides "still running?" by the ABSENCE of this marker, so it must be written on
 #    EVERY exit path — including a failure. A trap is the only way to be sure of that; an `echo`
 #    at the end of the happy path would leave a failed update looking like one still in progress,

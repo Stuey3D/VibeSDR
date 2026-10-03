@@ -63,5 +63,22 @@ DeviceAllow=char-usb_device rw
 DeviceAllow=/dev/vcio r
 DeviceAllow=/dev/vcio_gencmd r
 
+# ── Further hardening (2026-10-03 security pass) ─────────────────────────────────────────────
+# ★ The same set, for the same reasons, as vibeserver.service — every directive is explained there.
+#   KEEP THE TWO IN STEP: a radio instance is the process that holds the USB device, so it is the
+#   one that most needs AF_NETLINK (libusb hotplug) and the least able to tolerate a stray filter.
+UMask=0027
+StateDirectoryMode=0750
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# ★ SystemCallFilter= deliberately deferred — see vibeserver.service.
+
 [Install]
 WantedBy=multi-user.target

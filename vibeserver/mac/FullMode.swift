@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 // ── FULL MODE: the app as a launcher, not as the server ──────────────────────
 //
@@ -135,6 +136,113 @@ enum FullMode {
                                               options: [.prettyPrinted, .sortedKeys])
         // ★ Atomic: a half-written config read by the front door mid-start is a server that comes
         //   up wrong, which is much harder to diagnose than one that fails to come up.
-        try data.write(to: configURL, options: .atomic)
+        // ★★★ AND 0600 FROM THE FIRST BYTE (2026-10-03 security pass). This file holds the admin
+        //     password and the PIN in clear, and `Data.write(.atomic)` created it 0644 — readable
+        //     by every account on the Mac. Same discipline as the core's own save
+        //     (vibeserver_config.cpp): temp file created owner-only, then renamed into place, which
+        //     also tightens a config.json an earlier build left world-readable.
+        try writePrivate(data, to: configURL)
+    }
+
+    /// Owner-only atomic write: O_CREAT|O_EXCL|O_NOFOLLOW at mode 0600 into a temp name beside the
+    /// target, fsync, rename. A symlink or a leftover file at the temp name makes the open fail
+    /// rather than be written through.
+    static func writePrivate(_ data: Data, to url: URL) throws {
+        let tmp = url.path + ".tmp"
+        unlink(tmp)
+        let fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        var ok = fchmod(fd, 0o600) == 0
+        if ok {
+            ok = data.withUnsafeBytes { raw -> Bool in
+                guard var p = raw.baseAddress else { return true }   // empty data: nothing to write
+                var left = raw.count
+                while left > 0 {
+                    let n = write(fd, p, left)
+                    if n <= 0 { return false }
+                    p += n; left -= n
+                }
+                return true
+            }
+        }
+        if ok { ok = fsync(fd) == 0 }
+        let closed = close(fd) == 0
+        guard ok, closed, rename(tmp, url.path) == 0 else {
+            let e = errno
+            unlink(tmp)
+            throw POSIXError(POSIXErrorCode(rawValue: e) ?? .EIO)
+        }
+    }
+}
+
+// ── SECRETS IN THE KEYCHAIN, NOT IN UserDefaults (2026-10-03 security pass) ────
+//
+// ★★★ The admin password and the PIN were @AppStorage — a plain-text plist in ~/Library/Preferences
+//     that any process running as the user (and every backup) can read. They now live in the login
+//     Keychain as generic passwords, encrypted at rest and readable only by this app without a
+//     prompt.
+// ★★ ONE-TIME MIGRATION: the first read finds the Keychain empty and the old UserDefaults value
+//    present, copies it in, and DELETES the plist copy — but only once the Keychain write has
+//    succeeded, so a failure never loses the password the owner set.
+// ★ The legacy (file-based) login keychain, NOT kSecUseDataProtectionKeychain: the data-protection
+//   keychain needs a keychain-access-groups entitlement and a provisioning profile, which a
+//   Developer-ID app built with swiftc does not have (errSecMissingEntitlement). The item's ACL
+//   trusts the app's designated requirement, so a Developer-ID update reads it silently; an AD-HOC
+//   local build (`codesign --sign -`) has a new identity every build and macOS will ask once.
+enum SecretStore {
+    private static let service = "com.stuey3d.vibeserver"
+
+    private static func baseQuery(_ account: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: account]
+    }
+
+    /// The stored value, or nil if there is none (or the Keychain refused).
+    static func read(_ account: String) -> String? {
+        var q = baseQuery(account)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+              let data = out as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Store `value`; an EMPTY value deletes the item (an empty secret means "none set").
+    @discardableResult
+    static func write(_ account: String, _ value: String) -> Bool {
+        let q = baseQuery(account)
+        if value.isEmpty {
+            let st = SecItemDelete(q as CFDictionary)
+            return st == errSecSuccess || st == errSecItemNotFound
+        }
+        let data = Data(value.utf8)
+        let upd = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if upd == errSecSuccess { return true }
+        guard upd == errSecItemNotFound else { return false }
+        var add = q
+        add[kSecValueData as String] = data
+        // ★ Readable only while the Mac is unlocked, and never synced to iCloud or another Mac.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+    }
+
+    /// Read `account`, migrating a value left in UserDefaults under `legacyKey` on first use.
+    static func load(_ account: String, legacyKey: String) -> String {
+        if let v = read(account) {
+            // ★ Already migrated; a plist copy can only be a stale leftover — remove it.
+            if UserDefaults.standard.object(forKey: legacyKey) != nil {
+                UserDefaults.standard.removeObject(forKey: legacyKey)
+            }
+            return v
+        }
+        let legacy = UserDefaults.standard.string(forKey: legacyKey) ?? ""
+        if legacy.isEmpty {
+            UserDefaults.standard.removeObject(forKey: legacyKey)
+            return ""
+        }
+        if write(account, legacy) { UserDefaults.standard.removeObject(forKey: legacyKey) }
+        return legacy
     }
 }

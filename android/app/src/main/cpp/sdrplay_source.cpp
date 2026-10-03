@@ -4,6 +4,12 @@
 #ifdef VIBE_HAVE_SDRPLAY
 #include <sdrplay_api.h>
 #include <dlfcn.h>
+#include <glob.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <string>
+#include <sys/stat.h>
+#include <functional>
 #include <cstring>
 #include <algorithm>     // ★ std::find — the antenna name check
 #include <mutex>
@@ -50,21 +56,95 @@ struct Api {
     bool ok = false;
 };
 
+/** ★★★ ONLY LOAD A LIBRARY ROOT OWNS (2026-10-03 security pass). dlopen() runs the library's
+ *  constructors inside the server — and the Mac app is signed with disable-library-validation
+ *  (VibeServer.entitlements, so SDRplay's own signature is accepted), which means NOTHING else
+ *  checks what we load. The old list tried /usr/local/lib FIRST and then BARE NAMES: on an Intel
+ *  Mac with Homebrew /usr/local/lib is writable by the user, so any process of theirs could plant
+ *  a libsdrplay_api.dylib there and have it run inside a public server.
+ *  ★ Now a candidate is loaded only if its REAL path (after every symlink) is a regular file owned
+ *    by root, not group/world-writable, in a directory with the same properties — and that exact
+ *    resolved path is what is handed to dlopen, so it cannot be swapped between check and load
+ *    by anyone but root. */
+static bool rootOwnedNotWritable(const char* path, bool wantDir) {
+    struct stat st{};
+    if (::stat(path, &st) != 0) return false;
+    if (wantDir ? !S_ISDIR(st.st_mode) : !S_ISREG(st.st_mode)) return false;
+    return st.st_uid == 0 && (st.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+}
+
+static std::string trustedLibrary(const std::string& candidate, const char* mustStartWith = nullptr) {
+    char real[PATH_MAX];
+    if (!::realpath(candidate.c_str(), real)) return {};
+    const std::string r(real);
+    if (mustStartWith && r.compare(0, std::strlen(mustStartWith), mustStartWith) != 0) return {};
+    if (!rootOwnedNotWritable(r.c_str(), false)) return {};
+    const size_t slash = r.find_last_of('/');
+    if (slash == std::string::npos || slash == 0) return {};
+    if (!rootOwnedNotWritable(r.substr(0, slash).c_str(), true)) return {};
+    return r;
+}
+
+static std::vector<std::string> sdrplayCandidates() {
+    std::vector<std::string> out;
+#if defined(__APPLE__)
+    // ★★ macOS: THE INSTALLER'S OWN DIRECTORY, /Library/SDRplayAPI/<version>/lib — root's, and
+    //    versioned, so every installed version is found (newest first) rather than one hard-coded
+    //    3.15.1 path. The file there is libsdrplay_api.so.3.xx, NOT .dylib: the old list named a
+    //    .dylib in that directory that the installer never creates, so it had only ever worked via
+    //    /usr/local/lib.
+    glob_t g{};
+    if (::glob("/Library/SDRplayAPI/*/lib/libsdrplay_api*", 0, nullptr, &g) == 0) {
+        for (size_t i = 0; i < g.gl_pathc; i++) out.emplace_back(g.gl_pathv[i]);
+    }
+    ::globfree(&g);
+    std::sort(out.begin(), out.end(), std::greater<std::string>());
+    // ★ The installer ALSO links /usr/local/lib/libsdrplay_api.{so.3,dylib} into that directory, and
+    //   an older install may have only those. Kept for that reason — but see api(): a /usr/local
+    //   candidate is accepted only if it RESOLVES into /Library/SDRplayAPI/, so a planted file
+    //   there is never loaded.
+    out.emplace_back("/usr/local/lib/libsdrplay_api.so.3");
+    out.emplace_back("/usr/local/lib/libsdrplay_api.dylib");
+#else
+    // ★★ Linux: SDRplay's installer (install_lib.sh) puts the library in /usr/local/lib — that IS
+    //    its documented home, so it stays, with the distribution paths after it. Every one is held
+    //    to the root-owned check, which /usr/local/lib passes on any sane Linux.
+    out.emplace_back("/usr/local/lib/libsdrplay_api.so.3");
+    out.emplace_back("/usr/lib/libsdrplay_api.so.3");
+    out.emplace_back("/usr/lib/aarch64-linux-gnu/libsdrplay_api.so.3");
+    out.emplace_back("/usr/lib/arm-linux-gnueabihf/libsdrplay_api.so.3");
+    out.emplace_back("/usr/lib/x86_64-linux-gnu/libsdrplay_api.so.3");
+    out.emplace_back("/usr/local/lib64/libsdrplay_api.so.3");
+    out.emplace_back("/usr/lib64/libsdrplay_api.so.3");
+#endif
+    return out;
+}
+
 Api& api() {
     static Api a;
     static std::once_flag once;
     std::call_once(once, [&]{
-        // The installer's own location first, then the usual link paths.
-        const char* paths[] = {
-            "/usr/local/lib/libsdrplay_api.dylib",
-            "/Library/SDRplayAPI/3.15.1/lib/libsdrplay_api.dylib",
-            "libsdrplay_api.so.3",
-            "libsdrplay_api.dylib",
-        };
-        for (const char* p : paths) {
-            a.h = dlopen(p, RTLD_LAZY | RTLD_LOCAL);
+        for (const std::string& c : sdrplayCandidates()) {
+#if defined(__APPLE__)
+            const char* prefix = c.compare(0, 20, "/Library/SDRplayAPI/") == 0 ? nullptr
+                                                                             : "/Library/SDRplayAPI/";
+#else
+            const char* prefix = nullptr;
+#endif
+            const std::string real = trustedLibrary(c, prefix);
+            if (real.empty()) continue;
+            a.h = dlopen(real.c_str(), RTLD_LAZY | RTLD_LOCAL);
             if (a.h) break;
         }
+#if !defined(__APPLE__)
+        // ★ Linux only, LAST: the bare soname, resolved by ld.so through ld.so.cache — whose
+        //   directories are root's configuration. Kept so a library installed somewhere the list
+        //   above does not name (a distro package in an unusual multiarch dir) still works. The
+        //   only other input is LD_LIBRARY_PATH, which systemd does not set and sudo strips, so it
+        //   is only ever the invoking user's own choice for their own process. Never on macOS,
+        //   where library validation is off and DYLD search paths are not ours to trust.
+        if (!a.h) a.h = dlopen("libsdrplay_api.so.3", RTLD_LAZY | RTLD_LOCAL);
+#endif
         if (!a.h) return;
         auto sym = [&](const char* n) { return dlsym(a.h, n); };
         a.Open            = (sdrplay_api_Open_t)            sym("sdrplay_api_Open");

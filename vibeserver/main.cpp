@@ -926,12 +926,26 @@ static std::string vsBenchLoad() {
 //    reboot it did not schedule and a crash it did not expect.
 static std::string pendingSerialPath() { return "/var/lib/vibeserver/pending-serial.json"; }
 
+// ★★★ THIS RUNS AS ROOT (the serial rewrite needs the raw device) AND WRITES INTO THE DAEMON'S
+//     DIRECTORY. A plain fopen("w") there follows any symlink the daemon left at that name, so a
+//     compromised daemon could have pointed a root write at /etc/anything (2026-10-03 security
+//     pass). Written to a fresh temp name with O_CREAT|O_EXCL|O_NOFOLLOW — a link or a file
+//     already at that name makes the open FAIL — and renamed into place: rename REPLACES a
+//     symlink at the destination, it never writes through it.
 static void pendingSerialWrite(const std::string& oldSerial, const std::string& newSerial) {
     ::mkdir("/var/lib/vibeserver", 0755);
-    if (FILE* f = std::fopen(pendingSerialPath().c_str(), "w")) {
+    const std::string path = pendingSerialPath();
+    const std::string tmp  = path + ".tmp";
+    ::unlink(tmp.c_str());                       // a link here is removed, never followed
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) return;
+    if (FILE* f = ::fdopen(fd, "w")) {
         std::fprintf(f, "{\"old\":\"%s\",\"new\":\"%s\",\"at\":%lld}\n",
                      oldSerial.c_str(), newSerial.c_str(), (long long)std::time(nullptr));
-        std::fclose(f);
+        const bool ok = std::fclose(f) == 0;
+        if (!ok || ::rename(tmp.c_str(), path.c_str()) != 0) ::unlink(tmp.c_str());
+    } else {
+        ::close(fd); ::unlink(tmp.c_str());
     }
 }
 
@@ -1024,18 +1038,35 @@ static bool rtlSerialWrite(int index, const std::string& newSerial, const std::s
     // ── The backup, before anything is written ──────────────────────────────────────────────
     // ★ NO BACKUP, NO WRITE. Without it a failed write leaves nothing to restore from, and this is
     //   the operation where that matters most.
+    // ★★★ ROOT, WRITING INTO THE DAEMON'S DIRECTORY (2026-10-03 security pass). Three things a
+    //     compromised daemon could otherwise have used to aim this write anywhere on the machine:
+    //       · `eeprom` replaced by a symlink to a directory  → opened O_DIRECTORY|O_NOFOLLOW and
+    //         the file created RELATIVE to that descriptor, so a link there fails the open;
+    //       · a symlink planted at the backup's name           → O_CREAT|O_EXCL|O_NOFOLLOW fails;
+    //       · a serial read off the dongle containing '/' or ".." → only [A-Za-z0-9._-] survive
+    //         into the file name (the EEPROM is writable by anyone with the dongle; not trusted).
     ::mkdir("/var/lib/vibeserver", 0755);
     const std::string dir = "/var/lib/vibeserver/eeprom";
     ::mkdir(dir.c_str(), 0755);
     char stamp[32]; const std::time_t t = std::time(nullptr);
     std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&t));
-    const std::string backup = dir + "/" + (cur.serial.empty() ? "unnamed" : cur.serial)
-                             + "-" + stamp + ".bin";
-    if (FILE* f = std::fopen(backup.c_str(), "wb")) {
-        const bool wrote = std::fwrite(buf, 1, sizeof buf, f) == sizeof buf;
-        std::fclose(f);
-        if (!wrote) { say("the backup did not write fully — stopping here."); rtlsdr_close(dev); return false; }
+    std::string safeSerial = cur.serial.empty() ? "unnamed" : cur.serial;
+    for (char& c : safeSerial)
+        if (!std::isalnum((unsigned char)c) && c != '.' && c != '_' && c != '-') c = '_';
+    if (safeSerial[0] == '.') safeSerial = "_" + safeSerial;
+    const std::string leaf   = safeSerial + "-" + stamp + ".bin";
+    const std::string backup = dir + "/" + leaf;
+    const int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    const int bfd = dfd < 0 ? -1
+                  : ::openat(dfd, leaf.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (dfd >= 0) ::close(dfd);
+    FILE* bf = bfd >= 0 ? ::fdopen(bfd, "wb") : nullptr;
+    if (bf) {
+        const bool wrote  = std::fwrite(buf, 1, sizeof buf, bf) == sizeof buf;
+        const bool closed = std::fclose(bf) == 0;
+        if (!wrote || !closed) { say("the backup did not write fully — stopping here."); rtlsdr_close(dev); return false; }
     } else {
+        if (bfd >= 0) ::close(bfd);
         say("could not save a backup to " + backup + " — stopping here.");
         rtlsdr_close(dev); return false;
     }
@@ -2572,6 +2603,31 @@ int main(int argc, char** argv) {
     //     leaves a window in which we hold an SDR with nobody supervising us. No-op on Linux,
     //     where PR_SET_PDEATHSIG was already set before exec and survived it.
     if (o.supervised && o.radioGiven) vibe::dieWithParent();
+    // ★★★ AND DIE WITH THE MAC APP THAT LAUNCHED US (2026-10-03 security pass). In Full mode the
+    //     menu-bar app spawns the front door with no arguments, so neither branch above arms a
+    //     watch: a crashed or force-quit app left a PUBLIC server running — on the internet, with
+    //     the radios claimed — and nothing in any UI able to stop it. The app now passes its own
+    //     pid in VIBESERVER_PARENT_PID; the watch is the same kqueue NOTE_EXIT as dieWithParent.
+    //  ★ The radios the front door forks inherit the variable and watch the app too, which is
+    //    harmless: they already die with the front door, and the app is the front door's parent.
+    //  ★ Linux: watchPidForExit is a no-op there and nothing sets the variable; systemd supervises.
+    //  ★ SIGTERM ourselves first so the normal shutdown runs (directory unlisted, radios reaped,
+    //    spectrogram saved), then a hard _exit after 5 s if that shutdown wedges — the point is
+    //    that the server does NOT outlive the app, and a polite exit that hangs fails that.
+    if (const char* pp = getenv("VIBESERVER_PARENT_PID"); pp && *pp) {
+        char* end = nullptr;
+        const long ppid = std::strtol(pp, &end, 10);
+        if (end && *end == '\0' && ppid > 1 && ppid < INT32_MAX) {
+            vibe::watchPidForExit((int)ppid, [] {
+                std::fprintf(stderr, "VibeServer: the app that launched this server exited — shutting down\n");
+                ::kill(::getpid(), SIGTERM);
+                std::thread([] {
+                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                    ::_exit(0);
+                }).detach();
+            });
+        }
+    }
     /* ★★★ AND SHUT THE RESPONDER DOWN BEFORE RETURNING. The note at the failure path below says
      *     it in full: returning from main with a joinable std::thread runs ~thread(), which calls
      *     std::terminate — so this POLITE REFUSAL exited with SIGABRT, systemd read a crash rather
@@ -3234,10 +3290,38 @@ int main(int argc, char** argv) {
     // ★★ THE OUTPUT OF THE LAST MAINTENANCE ACTION. The helper tees everything it prints into
     //    this file; the admin page polls it so "Install updates" shows apt working rather than a
     //    button that goes silent for two minutes.
+    // ★★★ THE LOG IS ROOT'S NOW, IN /var/lib/vibeserver-maint (2026-10-03 security pass). It used
+    //     to sit in OUR state directory, where the root helper's truncate/chmod/append followed any
+    //     symlink this process left there — a compromised daemon could have pointed root's writes
+    //     at any file on the machine. The new directory is root:vibeserver 0750 and the file 0640:
+    //     we can read it for the page, and can neither replace nor delete it.
+    // ★★ SO "THE LAST RUN'S LOG IS STALE" IS DECIDED BY THE REQUEST FILE, NOT BY DELETING THE LOG.
+    //    While maintenance.request exists the helper has not started (it truncates the log BEFORE it
+    //    removes the request), so the page is told "waiting" instead of being shown the previous
+    //    run's finished output — the "first press did nothing" fault the old unlink existed to fix.
     LocalSdrShim::setAdminLogHandler([](std::string& text, bool& running, int& exitCode) {
         text.clear(); running = false; exitCode = 0;
-        FILE* f = fopen("/var/lib/vibeserver/maintenance.log", "rb");
-        if (!f) return;
+        struct stat rq{};
+        if (::lstat("/var/lib/vibeserver/maintenance.request", &rq) == 0) {
+            // ★ Bounded: a helper that never runs (path unit disabled, package half-removed) must
+            //   not leave the page saying "waiting" for ever — that is a silent no-op by another name.
+            if (std::time(nullptr) - (std::time_t)rq.st_mtime > 60) {
+                text = "The maintenance helper has not picked up the request after a minute — "
+                       "is vibeserver-maintenance.path enabled? (sudo systemctl enable --now "
+                       "vibeserver-maintenance.path)";
+                exitCode = 1;
+                return;
+            }
+            text = "Waiting for the maintenance helper to start…";
+            running = true;
+            return;
+        }
+        // ★ O_NOFOLLOW for symmetry with every other read here; the directory is root's, so a link
+        //   cannot appear in it, but if one ever did this refuses it instead of reading through it.
+        const int fd = ::open("/var/lib/vibeserver-maint/maintenance.log", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0) return;
+        FILE* f = ::fdopen(fd, "rb");
+        if (!f) { ::close(fd); return; }
         // ★ Tail, not the whole file: an apt run can print a lot, and this is polled every
         //   second. The page only ever shows the end of it anyway.
         fseek(f, 0, SEEK_END);
@@ -3312,15 +3396,12 @@ int main(int argc, char** argv) {
             err = "could not submit the maintenance request";
             return false;
         }
-        /* ★★★ CLEAR THE LAST ACTION'S LOG NOW, NOT WHEN THE HELPER STARTS. The helper truncates it,
-         *  but the helper is started by systemd noticing the request file, a second or so later —
-         *  and in that gap the admin page's first poll read the PREVIOUS run's output, complete
-         *  with its end marker, and concluded the new action had already finished. First press:
-         *  "Finished." over stale text; second press: follows the first one, now running (Stuart,
-         *  2026-09-10: "it didn't look like it was doing anything until I pressed it a 2nd time";
-         *  a user found the same). The daemon cannot write the root-owned log, but it owns the
-         *  directory, so it can unlink it. */
-        remove("/var/lib/vibeserver/maintenance.log");
+        /* ★★★ THE LAST ACTION'S LOG IS NO LONGER CLEARED HERE. Until 2026-10-03 this unlinked it so
+         *  the page's first poll could not read the PREVIOUS run's finished output in the second
+         *  before the helper started (Stuart, 2026-09-10: "it didn't look like it was doing anything
+         *  until I pressed it a 2nd time"). The log now lives in a root-owned directory we cannot
+         *  write to, and the same fault is closed by the log handler instead: while the request
+         *  file exists, the page is told "waiting", never shown the old log. */
         std::printf("VibeServer: maintenance '%s' requested\n", action.c_str());
         return true;
     });

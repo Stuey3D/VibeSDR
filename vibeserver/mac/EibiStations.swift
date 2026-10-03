@@ -70,7 +70,12 @@ enum EibiStations {
            let data = try? Data(contentsOf: cache) {
             return decodeWin1252(data)
         }
-        let url = URL(string: "http://www.eibispace.de/dx/\(file)")!
+        // ★★ Plain http on purpose for now: https://www.eibispace.de serves an EXPIRED certificate
+        //    (checked 2026-10-03), so https would fail every fetch. The parser treats every line as
+        //    untrusted. Same note as eibi.cpp — move both to https together once the cert is fixed.
+        guard let url = URL(string: "http://www.eibispace.de/dx/\(file)") else {
+            throw URLError(.badURL)
+        }
         let (data, resp) = try await URLSession.shared.data(from: url)
         guard (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else {
             // Fall back to any stale cache rather than failing outright.
@@ -110,7 +115,14 @@ enum EibiStations {
         // recognises the CRLF grapheme (and LF, CR, and the Unicode line separators).
         for line in csv.split(whereSeparator: { $0.isNewline }) {
             let f = line.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
-            guard f.count >= 5, let khz = Double(f[0].trimmingCharacters(in: .whitespaces)), khz > 0 else { continue }
+            // ★★★ A BAD LINE MUST NEVER CRASH THE MENU-BAR APP. This file arrives over plain http,
+            //     so every field is untrusted: f[5] is read below, so SIX columns are required (five
+            //     trapped on index out of range), and Double() accepts "inf", "nan" and "1e400" —
+            //     Int() of a non-finite or huge Double is a runtime trap, not an error. Finite and
+            //     bounded (1 GHz, far above any shortwave schedule) before the conversion.
+            guard f.count >= 6,
+                  let khz = Double(f[0].trimmingCharacters(in: .whitespaces)),
+                  khz.isFinite, khz > 0, khz <= 1_000_000 else { continue }
             let station = f[4].trimmingCharacters(in: .whitespaces)
             if station.isEmpty { continue }
             out.append(Entry(freqHz: Int((khz * 1000).rounded()),

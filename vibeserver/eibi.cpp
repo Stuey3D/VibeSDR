@@ -20,6 +20,7 @@
 
 #include "../android/app/src/main/cpp/local_sdr_shim.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -111,6 +112,11 @@ std::string toStationsJson(const std::string& csv, int& count) {
         if (f.size() < 6) continue;
         const double khz = atof(f[0].c_str());
         if (!(khz > 0)) continue;                 // skips the header row too
+        // ★★ FINITE AND BOUNDED before the integer cast. atof accepts "inf" and "1e400", and
+        //    (long long)inf is undefined behaviour — this file comes off the network over plain
+        //    http, so a hostile or corrupted line must be skipped, not trusted. 1 GHz is far above
+        //    anything EiBi lists (it is a shortwave schedule) and far below the cast's limit.
+        if (!std::isfinite(khz) || khz > 1.0e6) continue;
         auto trim = [](std::string s) {
             while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
             while (!s.empty() && isspace((unsigned char)s.back()))  s.pop_back();
@@ -204,6 +210,11 @@ int refresh(std::string& err) {
      *  leaving one shell command line in the daemon is how the next one gets written. stderr is
      *  merged into the output because curl's own message is what this reports to the owner when
      *  the fetch fails. */
+    // ★★ PLAIN http, ON PURPOSE AND FOR NOW (checked 2026-10-03): https://www.eibispace.de presents
+    //    an EXPIRED certificate, so an https URL here fails every fetch. The content is treated as
+    //    untrusted either way (the parser above bounds every number it casts). Move to https the
+    //    day the site's certificate is valid again — and keep the Mac app's copy in step
+    //    (vibeserver/mac/EibiStations.swift).
     std::string out;
     vibeproc::Child c = vibeproc::spawn(
         {"curl", "-fsSL", "--max-time", "45", "-o", tmp, "http://www.eibispace.de/dx/" + file}, true);

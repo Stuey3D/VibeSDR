@@ -12,7 +12,7 @@
 #    install: a single-radio server does not gain a unit, does not change port, and does not
 #    notice. This script only ever adds the SECOND and subsequent radios.
 #
-# ★ bash, not sh: `mapfile` and process substitution below. dash silently lacks both, which is how
+# ★ bash, not sh: `mapfile`, `[[ =~ ]]` and process substitution below. dash silently lacks both, which is how
 #   vibeserver-maintenance broke once already.
 set -uo pipefail
 
@@ -22,7 +22,43 @@ CONF="${VIBESERVER_CONFIG:-/etc/vibeserver/config.json}"
 # ── What SHOULD be running ───────────────────────────────────────────────────────────────────
 # Ask the binary rather than parsing JSON in shell: it already owns the rules for which radio is
 # primary and which port each one takes, and two implementations of that would drift.
-mapfile -t WANT < <(/usr/bin/vibeserver --list-secondary-radios 2>/dev/null)
+#
+# ★★★ BUT NOT AS ROOT (2026-10-03 security pass). This script is root, and config.json belongs to
+#     the daemon — so a compromised daemon controls every byte the parser sees. Parsing attacker-
+#     controlled JSON in a root process turns any parser bug into root. The listing therefore runs
+#     as the vibeserver user, with exactly the privilege the daemon already has, and only its
+#     OUTPUT crosses back — and that output is then checked line by line (valid_serial) before a
+#     single systemctl call is built from it.
+#  ★ runuser (util-linux, Essential on Debian) rather than su/sudo: no PAM session, no password,
+#    no NoNewPrivileges interaction. Only when we ARE root; run by hand as the user, it is already
+#    unprivileged.
+list_secondary() {
+    if [ "$(id -u)" = 0 ]; then
+        runuser -u vibeserver -- /usr/bin/vibeserver --list-secondary-radios 2>/dev/null
+    else
+        /usr/bin/vibeserver --list-secondary-radios 2>/dev/null
+    fi
+}
+
+# ★★ A SERIAL IS A UNIT INSTANCE NAME HANDED TO systemctl AS ROOT — so it is held to a strict
+#    alphabet first. Every real serial seen so far (RTL "00000001", SDRplay "2405xxxxxx", Airspy
+#    HF+ "3b52ab5dac9d3f4b", HackRF "4") fits; anything else — a space, a slash, a leading '-' that
+#    systemctl would read as an option, systemd's own '@' or '\' escapes — is refused and logged.
+#  ★ The leading character may not be '-' or '.', so an instance name can never be an option or a
+#    relative path component.
+valid_serial() {
+    [[ "$1" =~ ^[A-Za-z0-9_:][A-Za-z0-9._:-]{0,63}$ ]]
+}
+
+WANT=()
+while IFS= read -r serial; do
+    [ -z "$serial" ] && continue
+    if valid_serial "$serial"; then
+        WANT+=("$serial")
+    else
+        echo "vibeserver-radios: ignoring a radio with an unusable serial: $(printf '%q' "$serial")" >&2
+    fi
+done < <(list_secondary)
 
 declare -A want_set=()
 for serial in "${WANT[@]}"; do
@@ -43,9 +79,10 @@ mapfile -t RUNNING < <(systemctl list-units --plain --no-legend --all 'vibeserve
 # ★ The marker is removed by the server itself, and only once it has SEEN the new serial on the
 #   bus — never on a timer, so this cannot expire while the dongle still answers to the old name.
 PENDING=/var/lib/vibeserver/pending-serial.json
-if [ -r "$PENDING" ]; then
-    old_serial=$(sed -n 's/.*"old":"\([^"]*\)".*/\1/p' "$PENDING")
-    if [ -n "$old_serial" ]; then
+# ★ Daemon-written too: never followed if it is a link, and the serial checked like any other.
+if [ -f "$PENDING" ] && [ ! -L "$PENDING" ] && [ -r "$PENDING" ]; then
+    old_serial=$(head -c 512 "$PENDING" | sed -n 's/.*"old":"\([^"]*\)".*/\1/p' | head -n 1)
+    if [ -n "$old_serial" ] && valid_serial "$old_serial"; then
         echo "vibeserver-radios: serial change pending — keeping $old_serial until the reboot"
         want_set["$old_serial"]=1
     fi
@@ -56,6 +93,9 @@ fi
 #   and a newly enabled radio may be the same physical one under a different setting.
 for serial in "${RUNNING[@]}"; do
     [ -z "$serial" ] && continue
+    # ★ These come from systemd, not the daemon — but an instance someone created by hand with an
+    #   odd name is still not something to feed back into systemctl unchecked.
+    valid_serial "$serial" || continue
     if [ -z "${want_set[$serial]:-}" ]; then
         echo "vibeserver-radios: stopping $serial"
         systemctl stop "vibeserver@${serial}.service" 2>/dev/null
@@ -66,6 +106,7 @@ done
 # ── Start what is ────────────────────────────────────────────────────────────────────────────
 for serial in "${WANT[@]}"; do
     [ -z "$serial" ] && continue
+    valid_serial "$serial" || continue          # already filtered; checked again at the point of use
     echo "vibeserver-radios: serving $serial"
     systemctl enable "vibeserver@${serial}.service" 2>/dev/null
     # restart, not start: if it is already up on stale settings this is how it picks up new ones.

@@ -96,5 +96,48 @@ DeviceAllow=/dev/vcio r
 #    the Pi 500, 2026-09-30). It carries only the vcgencmd text interface; see vibe_vcio.h.
 DeviceAllow=/dev/vcio_gencmd r
 
+# ── Further hardening (2026-10-03 security pass) ─────────────────────────────────────────────
+# ★★★ EVERY LINE BELOW WAS CHECKED AGAINST WHAT THE DAEMON ACTUALLY DOES: raw USB through libusb
+#     (/dev/bus/usb + netlink hotplug), /dev/vcio_gencmd read, CAP_SYS_NICE, children it spawns
+#     (curl, cloudflared, ffmpeg, its own radios), writes to its state dir and /etc/vibeserver,
+#     reads of /proc/self, /proc/stat, /proc/cpuinfo and /sys cpufreq/thermal/hwmon. If a radio or
+#     a readout breaks after an upgrade, these are the lines to suspect — one at a time.
+#  ★ Unknown keys are WARNED about and skipped by an older systemd (ProtectProc= is v247+), so
+#    Buster-era boxes still start; they simply go without that one.
+# Files and directories the daemon creates are NOT world-readable (group keeps read, for the
+# helpers that run as the vibeserver group). config.json is 0600 regardless.
+UMask=0027
+# /var/lib/vibeserver: owner + group only. It holds the ban list, the connection log and the
+# directory key; nothing outside the service account reads it.
+StateDirectoryMode=0750
+# Other users' processes vanish from /proc. The daemon only reads /proc/self/* and the system-wide
+# files (/proc/stat, meminfo, cpuinfo, loadavg, uptime), which stay visible.
+ProtectProc=invisible
+# /proc/sys and /sys become read-only. Everything the daemon reads there (cpufreq, thermal, hwmon,
+# power_supply) is a READ; the governor is written by the root ExecStartPre, which this does not
+# reach (systemd applies the sandbox to the main process; "+" runs outside it).
+ProtectKernelTunables=yes
+# No module loading, no access to /usr/lib/modules. The DVB blacklist is a modprobe.d file, not us.
+ProtectKernelModules=yes
+# No kernel ring buffer (/dev/kmsg, /proc/kmsg, syslog(2)). The daemon never reads dmesg.
+ProtectKernelLogs=yes
+# The cgroup tree is read-only. We never move ourselves between cgroups.
+ProtectControlGroups=yes
+# No new namespaces of any kind — nothing here (or curl/cloudflared/ffmpeg) creates one.
+RestrictNamespaces=yes
+# personality(2) is locked to the default execution domain.
+LockPersonality=yes
+# Cannot create set-uid/set-gid files (the obvious step after a compromise).
+RestrictSUIDSGID=yes
+# ★★ AF_NETLINK IS REQUIRED: libusb's Linux hotplug listens on a NETLINK_KOBJECT_UEVENT socket, and
+#    getifaddrs() (mDNS, the LAN address shown in setup) is netlink too. Without it a replugged
+#    dongle is never seen again. AF_UNIX for the radio hand-off sockets and the SDRplay service.
+#    No AF_PACKET, no AF_BLUETOOTH, no raw anything.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# ★ SystemCallFilter= is DELIBERATELY DEFERRED. @system-service would very likely be fine, but the
+#   SDRplay API is a closed binary, ffmpeg and cloudflared are spawned children, and a filter that
+#   kills one of them with SIGSYS on a box in a cupboard is exactly the "dead after upgrade with
+#   nothing saying why" failure. It needs a soak on each radio type first, not a guess.
+
 [Install]
 WantedBy=multi-user.target

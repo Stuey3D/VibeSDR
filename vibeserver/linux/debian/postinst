@@ -65,20 +65,66 @@ case "$1" in
     # ★★ THE SERVER WRITES ITS OWN CONFIG NOW (config.json, saved from the browser setup page),
     #    so the directory must belong to the service user — not just be readable by it. Without
     #    this, Save fails with a permission error the owner cannot act on.
-    mkdir -p /etc/vibeserver
-    chown vibeserver:vibeserver /etc/vibeserver 2>/dev/null || true
-    chmod 755 /etc/vibeserver
-    # ★ And the config itself holds the admin password and PIN in clear: owner-only, always.
-    if [ -e /etc/vibeserver/config.json ]; then
-      chown vibeserver:vibeserver /etc/vibeserver/config.json 2>/dev/null || true
-      chmod 600 /etc/vibeserver/config.json
+    # ★★★ THIS SCRIPT IS ROOT AND /etc/vibeserver BELONGS TO THE DAEMON (2026-10-03 security pass).
+    #     Anything the daemon can write, a compromised daemon can turn into a SYMLINK — and a plain
+    #     `chown`/`chmod`/`cp` FOLLOWS it. `ln -s /etc/shadow /etc/vibeserver/config.json` followed
+    #     by the next `apt upgrade` would have handed /etc/shadow to the vibeserver user: a remote
+    #     bug in an internet-facing daemon promoted to root by our own package. So in this block:
+    #       · the DIRECTORY itself must be a real directory, not a link (a daemon cannot replace
+    #         /etc/vibeserver — /etc is root's — but an older install or a hand edit might have);
+    #       · a file is only touched if it is a REGULAR FILE and NOT a symlink; a symlink in its
+    #         place is removed, never followed (the daemon rewrites config.json from its own copy);
+    #       · `chown -h` so even a link that appears between the test and the call is not followed.
+    if [ -L /etc/vibeserver ]; then
+      echo "VibeServer: /etc/vibeserver is a symlink — refusing to touch it. Remove it and reinstall." >&2
+    else
+      mkdir -p /etc/vibeserver
+      chown -h vibeserver:vibeserver /etc/vibeserver 2>/dev/null || true
+      chmod 755 /etc/vibeserver
+      # ★ And the config itself holds the admin password and PIN in clear: owner-only, always.
+      CFG=/etc/vibeserver/config.json
+      if [ -L "$CFG" ]; then
+        echo "VibeServer: $CFG was a symlink — removed it rather than follow it." >&2
+        rm -f "$CFG"
+      elif [ -e "$CFG" ]; then
+        # ★★ OWNER AND MODE THROUGH ONE NO-FOLLOW FILE DESCRIPTOR, NOT BY NAME. A test-then-chmod
+        #    pair leaves a window in which the daemon can swap the file for a link, and chmod has no
+        #    -h on Linux — `chmod 600` through a link to /etc/passwd would lock every user out.
+        #    perl is Essential on Debian (perl-base), and its chown/chmod take a FILEHANDLE
+        #    (fchown/fchmod), so the change lands on exactly the inode that was opened with
+        #    O_NOFOLLOW — a link fails the open, a FIFO/device fails the -f, and nothing is followed.
+        perl -e 'use Fcntl; my ($p, $u) = @ARGV;
+                 sysopen(my $f, $p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) or exit 0;
+                 exit 0 unless -f $f;
+                 my (undef, undef, $uid, $gid) = getpwnam($u); exit 0 unless defined $uid;
+                 chown($uid, $gid, $f); chmod(0600, $f);' "$CFG" vibeserver || true
+      fi
+
+      # ★ The shipped defaults: copied on FIRST install only. A symlink in its place is removed, and
+      #   cp --remove-destination creates the new file with O_EXCL, so a link planted after the test
+      #   makes the copy FAIL rather than write through it. The mode comes from the source (0644)
+      #   under umask 022 — no chmod by name afterwards, for the reason above.
+      CONF=/etc/vibeserver/vibeserver.conf
+      [ -L "$CONF" ] && rm -f "$CONF"
+      if [ ! -e "$CONF" ]; then
+        ( umask 022 && cp --no-dereference --remove-destination \
+            /usr/share/vibeserver/vibeserver.conf "$CONF" ) || true
+      fi
     fi
 
-    if [ ! -e /etc/vibeserver/vibeserver.conf ]; then
-      mkdir -p /etc/vibeserver
-      cp /usr/share/vibeserver/vibeserver.conf /etc/vibeserver/vibeserver.conf
-      chmod 644 /etc/vibeserver/vibeserver.conf
-    fi
+    # ── 1b. Where the root maintenance helper writes its output ─────────────
+    # ★★★ NOT /var/lib/vibeserver. That directory belongs to the daemon, and the helper runs as
+    #     root: truncating, chmod-ing and appending to a file in it followed whatever symlink the
+    #     daemon left there. This directory is ROOT's, readable by the daemon's group and nothing
+    #     else, so the admin page can show the log and the daemon cannot redirect a root write.
+    #     The helper creates it too (an install that predates this postinst), the same way.
+    MAINT=/var/lib/vibeserver-maint
+    if [ -L "$MAINT" ]; then rm -f "$MAINT"; fi
+    install -d -o root -g vibeserver -m 0750 "$MAINT" 2>/dev/null \
+      || install -d -o root -g root -m 0755 "$MAINT"
+    # ★ The old location, removed so nothing ever reads a stale copy. rm on a symlink removes the
+    #   link, never its target.
+    rm -f /var/lib/vibeserver/maintenance.log
 
     # ── 2. USB access without root ───────────────────────────────────────────
     # ★ The rules file is installed by the package; udev must be told to re-read it, or the

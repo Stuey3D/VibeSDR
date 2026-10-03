@@ -14,7 +14,9 @@
 set -e
 CONF=/etc/vibeserver/config.json
 GOV=performance
-if [ -r "$CONF" ]; then
+# ★ Root reading a daemon-owned file: a symlink there is not followed (2026-10-03 security pass).
+#   The value is also held to [a-z]* and must be one the kernel lists, so nothing else can leak out.
+if [ -r "$CONF" ] && [ ! -L "$CONF" ]; then
   # No JSON parser here on purpose: this runs before the service, as root, on every boot. One sed
   # and a fallback is easier to trust than a dependency.
   V=$(sed -n 's/.*"cpuGovernor"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' "$CONF" | head -1)

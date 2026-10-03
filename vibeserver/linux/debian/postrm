@@ -34,6 +34,8 @@ case "$1" in
     #   ★ Everything else here is a rebuildable cache (spectrogram, eibi.csv, geoip.bin, asn.bin),
     #     so there is nothing to preserve and ~20 MB to reclaim.
     rm -rf /var/lib/vibeserver
+    # ★ The root-owned home of the maintenance helper's log (see postinst §1b).
+    rm -rf /var/lib/vibeserver-maint
 
     # ★ An earlier 2.0 build shipped a sudoers rule; remove it on purge whether or not this
     #   version installed one.

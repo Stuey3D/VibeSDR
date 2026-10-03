@@ -322,11 +322,18 @@ final class Server: ObservableObject {
     // Persisted so a restart keeps the operator's choices; the core still owns what they MEAN.
     @AppStorage("centreHz") var centreHz   = 96_600_000.0
     @AppStorage("mode")     var mode       = "wfm"
-    @AppStorage("pin")      var pin        = ""
+    /// ★★ The PIN and the admin password live in the KEYCHAIN (SecretStore, FullMode.swift), not
+    ///    @AppStorage: UserDefaults is a plain-text plist any process of this user can read. The
+    ///    first launch after the change migrates the old value across and deletes the plist copy.
+    @Published var pin: String = SecretStore.load("pin", legacyKey: "pin") {
+        didSet { if pin != oldValue { SecretStore.write("pin", pin) } }
+    }
     /// ★ A SECOND secret, gating CONTROL not ACCESS — see VsConfig.adminPassword. A public
     /// receiver is usually open to every listener and must still refuse a stranger switching
     /// the bias-T on.
-    @AppStorage("adminPassword") var adminPassword = ""
+    @Published var adminPassword: String = SecretStore.load("adminPassword", legacyKey: "adminPassword") {
+        didSet { if adminPassword != oldValue { SecretStore.write("adminPassword", adminPassword) } }
+    }
     /// ★ Per-listener time limit, minutes. 0 = unlimited, and the right answer for a private
     /// receiver. See the help text beside the picker.
     @AppStorage("sessionLimitMin") var sessionLimitMin = 0
@@ -788,14 +795,21 @@ final class Server: ObservableObject {
         //   than the core growing a second idea of where its config lives. The front door passes
         //   it on to every radio it forks, so all of them read the same file.
         env["VIBESERVER_CONFIG"] = FullMode.configURL.path
+        // ★★★ SO THE SERVER DIES WITH US. A front door started with no arguments arms no parent
+        //     watch of its own (that path is for radios forked BY the front door), so this pid is
+        //     what it watches with kqueue NOTE_EXIT — see the VIBESERVER_PARENT_PID block in
+        //     main.cpp. Without it a crashed or force-quit app left a public server running.
+        env["VIBESERVER_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         p.environment = env
         // ★★ NO ARGUMENTS. `vibeserver` with none IS the front door — the same invocation systemd
         //    uses on the Pi. Passing --device or --port here would take the front-door branch out
         //    of play and quietly start a single-radio server wearing Full mode's clothes.
         p.arguments = []
         // ★★★ IF THE APP DIES, THE SERVER MUST NOT LIVE ON. A front door outliving the app keeps
-        //     the radios and the port, and nothing in the UI can then stop it. The child watches
-        //     for our exit itself (parent_watch.cpp) — this is the tidy half of the same contract.
+        //     the radios and the port, and nothing in the UI can then stop it. The front door
+        //     watches for our exit itself because we pass VIBESERVER_PARENT_PID above (it arms
+        //     vibe::watchPidForExit on it); this handler is only the tidy half — it notices the
+        //     server stopping on ITS side and updates the menu.
         p.terminationHandler = { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }

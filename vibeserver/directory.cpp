@@ -11,6 +11,8 @@
 #include <ctime>
 #include <fstream>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
@@ -88,13 +90,47 @@ std::string run(const std::string& cmd) {
  *     for us. **0 means we never reached the directory at all** — the one case that must change
  *     nothing, because on a flaky link it is a weather report rather than a verdict.
  */
+/** ★★★ THE BODY NEVER GOES ON curl'S COMMAND LINE (2026-10-03 security pass). It carries the
+ *  directory KEY — the one secret that proves this listing is ours and that is sent exactly once —
+ *  and a command line is readable by every local user in /proc/<pid>/cmdline and `ps aux` for as
+ *  long as curl runs (up to twenty seconds on a bad link). It goes in a 0600 temp file instead,
+ *  created by mkstemp (O_EXCL, owner-only) in our own state directory, handed over as
+ *  `--data-binary @file` (exact bytes; `-d @` would strip newlines), and unlinked straight after.
+ *  ★ Only the temp file's PATH is on the command line, and it is still shellQuote()d. */
+static std::string writeBodyFile(const std::string& json) {
+    std::string tmpl = g_stateDir + "/.dirpost.XXXXXX";
+    std::vector<char> buf(tmpl.begin(), tmpl.end()); buf.push_back('\0');
+    int fd = ::mkstemp(buf.data());
+    if (fd < 0) {
+        // ★ The state directory should always be writable; if it is not, a private temp dir is the
+        //   next best place (PrivateTmp=yes under systemd, per-user on macOS) — never the argv.
+        const char* t = getenv("TMPDIR");
+        tmpl = std::string(t && *t ? t : "/tmp") + "/vibeserver-dirpost.XXXXXX";
+        buf.assign(tmpl.begin(), tmpl.end()); buf.push_back('\0');
+        fd = ::mkstemp(buf.data());
+        if (fd < 0) return {};
+    }
+    ::fchmod(fd, 0600);                     // mkstemp already does; said explicitly for the reader
+    size_t off = 0;
+    while (off < json.size()) {
+        const ssize_t w = ::write(fd, json.data() + off, json.size() - off);
+        if (w <= 0) { ::close(fd); ::unlink(buf.data()); return {}; }
+        off += (size_t)w;
+    }
+    ::close(fd);
+    return std::string(buf.data());
+}
+
 std::string httpPost(const std::string& path, const std::string& json, int* outStatus = nullptr) {
     if (outStatus) *outStatus = 0;
+    const std::string bodyFile = writeBodyFile(json);
+    if (bodyFile.empty()) return {};      // ★ a transport failure: status stays 0, nothing changes
     const std::string cmd =
-        "curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' -d "
-        + shellQuote(json) + " -w '\\n%{http_code}' "
+        "curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' --data-binary "
+        + shellQuote("@" + bodyFile) + " -w '\\n%{http_code}' "
         + shellQuote(std::string(kBase) + path) + " 2>/dev/null";
     const std::string out = run(cmd);
+    ::unlink(bodyFile.c_str());
     // ★ curl writes the -w line even when the transfer failed (as 000), so a missing one means
     //   curl itself never ran. Both are a transport failure; both leave the status at 0.
     const size_t nl = out.find_last_of('\n');
@@ -162,12 +198,31 @@ bool jsonBool(const std::string& j, const std::string& key) {
 
 std::string statePath() { return g_stateDir + "/directory.json"; }
 
+/** ★★★ 0600, FROM THE FIRST BYTE (2026-10-03 security pass). This file holds the directory KEY,
+ *  and std::ofstream created it 0644 — readable by every local account. Now: written to a temp
+ *  file created O_EXCL|O_NOFOLLOW with mode 0600 (fchmod'd too, in case an odd umask widened
+ *  nothing but narrowed the create), then renamed over the old one, which also corrects the mode
+ *  of a directory.json an earlier build left world-readable. Rename is atomic, so a crash
+ *  mid-write can no longer leave a truncated key — the key is unrecoverable if lost. */
 void saveState(const std::string& id, const std::string& key, const std::string& slug,
                long long until) {
-    std::ofstream f(statePath(), std::ios::trunc);
-    if (!f) return;
-    f << "{\"id\":\"" << id << "\",\"key\":\"" << key << "\",\"slug\":\"" << slug
-      << "\",\"until\":" << until << "}\n";
+    const std::string path = statePath();
+    const std::string tmp  = path + ".tmp";
+    ::unlink(tmp.c_str());
+    const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    ::fchmod(fd, 0600);
+    const std::string body = "{\"id\":\"" + id + "\",\"key\":\"" + key + "\",\"slug\":\"" + slug
+                           + "\",\"until\":" + std::to_string(until) + "}\n";
+    size_t off = 0;
+    bool ok = true;
+    while (off < body.size()) {
+        const ssize_t w = ::write(fd, body.data() + off, body.size() - off);
+        if (w <= 0) { ok = false; break; }
+        off += (size_t)w;
+    }
+    if (::close(fd) != 0) ok = false;
+    if (!ok || ::rename(tmp.c_str(), path.c_str()) != 0) ::unlink(tmp.c_str());
 }
 
 std::string loadState() {
