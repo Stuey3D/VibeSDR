@@ -56,6 +56,8 @@ import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioC
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
 import DoorSpectrogram from '../components/DoorSpectrogram';
+import { RecElapsed } from '../components/RecElapsed';
+import { shareDabServices } from '../services/dabShareServices';
 import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
@@ -3243,8 +3245,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Recording ─────────────────────────────────────────────────────────────
 
   const [isRecording, setIsRecording] = useState(false);
-  const [recSeconds,  setRecSeconds]  = useState(0);
-  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** ★★ WHEN the recording started (ms since epoch), or null. Not a seconds counter: a 1 Hz setState here
+   *  rendered this whole screen every second of a recording, screen locked included, and counting
+   *  interval firings drifted low. The displays derive the seconds themselves — RecElapsed.tsx. */
+  const [recStartedAt, setRecStartedAt] = useState<number | null>(null);
   // iOS: the native share sheet (UIActivityViewController) must NOT present while
   // the AudioSheet Modal is up — it presents OVER the modal and RN loses track,
   // wedging all touch/render on dismiss. So on stop we stash the path, close the
@@ -3257,14 +3261,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       // tracked on UberSDR's audio WS, so OWRX would otherwise show a stale freq.
       (VibePowerModule as any)?.startRecording(Math.round(status.frequency || 0), String(status.mode || ''))
         .then(() => {
-          setRecSeconds(0);
-          recTimerRef.current = setInterval(() => setRecSeconds((s: number) => s + 1), 1000);
+          setRecStartedAt(Date.now());
           setIsRecording(true);
         })
         .catch((e: Error) => Alert.alert('Recording', `Could not start recording: ${e.message}`));
     } else {
-      if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
-      setRecSeconds(0);
+      setRecStartedAt(null);
       setIsRecording(false);
       VibePowerModule?.stopRecording()
         .then(async (path: string | null) => {
@@ -3288,10 +3290,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         .catch(() => setAudioSheetOpen(false));
     }
   }, [isRecording, status.frequency, status.mode]);
-
-  useEffect(() => () => {
-    if (recTimerRef.current) clearInterval(recTimerRef.current);
-  }, []);
 
   // ── Chat ──────────────────────────────────────────────────────────────────
 
@@ -4022,8 +4020,54 @@ export default function SDRScreen({ route, navigation }: Props) {
   // in the saver's tick. A ref because that tick closes over its creation-time scope.
   const advRdsOpenRef = useRef(false);
   useEffect(() => { advRdsOpenRef.current = advRdsOpen; }, [advRdsOpen]);
-  const [decoderText,    setDecoderText]    = useState('');
-  const [decoderStatus,  setDecoderStatus]  = useState('listening…');
+  const [decoderText,    setDecoderTextNow]   = useState('');
+  const [decoderStatus,  setDecoderStatusNow] = useState('listening…');
+  /* ★★ DECODER OUTPUT IS BATCHED, ~4 RENDERS A SECOND AT MOST (audit 2026-10-03). Every text chunk
+   *   (and every CW status — its WPM changed in the tenths on each message) was a setState on THIS
+   *   screen, i.e. a render of the whole receiver per chunk while a decoder ran. Chunks now gather in
+   *   refs and land on one timer, the way the spots buffer does (spotBufRef, 400 ms); the timer only
+   *   runs while something is waiting, so an idle decoder costs nothing.
+   *   ★ Trade-off: decoded text and the decoder's own status can appear up to DECODER_FLUSH_MS later.
+   *   ★ setDecoderText / setDecoderStatus (clear on open / close / switch, local messages) stay
+   *     IMMEDIATE and drop anything queued, so a stale chunk can never land after a clear. */
+  const DECODER_FLUSH_MS = 250;
+  const decTextPending  = useRef('');
+  const decTextReplace  = useRef<string | null>(null);
+  const decStatusPending = useRef<string | null>(null);
+  const decFlushTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushDecoderOutput = useCallback(() => {
+    decFlushTimer.current = null;
+    const rep = decTextReplace.current, add = decTextPending.current, st = decStatusPending.current;
+    decTextReplace.current = null; decTextPending.current = ''; decStatusPending.current = null;
+    if (rep != null || add) {
+      setDecoderTextNow((prev: string) => { const base = rep ?? prev; return add ? appendDecoderText(base, add) : base; });
+    }
+    if (st != null) setDecoderStatusNow(st);
+  }, []);
+  const armDecoderFlush = useCallback(() => {
+    if (!decFlushTimer.current) decFlushTimer.current = setTimeout(flushDecoderOutput, DECODER_FLUSH_MS);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flushDecoderOutput]);
+  /** Decoder text arriving from a decoder: append (or, for `replace`, supersede the buffer) on the next flush. */
+  const queueDecoderText = useCallback((add: string, replace = false) => {
+    if (replace) { decTextReplace.current = add; decTextPending.current = ''; }
+    else decTextPending.current = appendDecoderText(decTextPending.current, add);   // same scrollback cap
+    armDecoderFlush();
+  }, [armDecoderFlush]);
+  /** A decoder's own status line: latest wins on the next flush. */
+  const queueDecoderStatus = useCallback((st: string) => {
+    decStatusPending.current = st;
+    armDecoderFlush();
+  }, [armDecoderFlush]);
+  const setDecoderText = useCallback((v: string) => {
+    decTextPending.current = ''; decTextReplace.current = null;
+    setDecoderTextNow(v);
+  }, []);
+  const setDecoderStatus = useCallback((v: string) => {
+    decStatusPending.current = null;
+    setDecoderStatusNow(v);
+  }, []);
+  useEffect(() => () => { if (decFlushTimer.current) { clearTimeout(decFlushTimer.current); decFlushTimer.current = null; } }, []);
   const [decoding,       setDecoding]       = useState(false);
   const [pillBottom,     setPillBottom]     = useState(200); // updated by pill layout
   const [rootH,          setRootH]          = useState(0);   // measured root height
@@ -4080,9 +4124,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       onText: (text: string) => {
         setDecoding(true);
         markDecodeOutput();          // ★ output = presence; see the idle-release effect
-        setDecoderText((prev: string) => appendDecoderText(prev, text));
+        queueDecoderText(text);      // ★ batched — see DECODER_FLUSH_MS
       },
-      onStatus: (s: string)  => setDecoderStatus(s),
+      onStatus: (s: string)  => queueDecoderStatus(s),
       onDot:    (d)          => setDecoding(d === 'active' || d === 'rx'),
       // WEFAX/SSTV — drive the panel's image canvas (skin canvas parity).
       // WEFAX lines are greyscale, SSTV lines are RGB; route by active decoder.
@@ -4758,10 +4802,15 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  thing the receiver KEEPS, not a picture of this frame). A frame where the FIC did not
          *  read arrives with no services, and painting it blanks the list under the reader's
          *  finger. Held while the channel and ensemble are unchanged; marked so the panel can say. */
+        /* ★ And an UNCHANGED list keeps its array (and each unchanged service its object) — every
+         *  report is freshly parsed, so without this `services` was new every second and no memo
+         *  keyed on it could hold (dabShareServices.ts, audit 2026-10-03). */
         setDabState(prev => (st && prev && prev.channel === st.channel && st.services.length === 0
                              && prev.services.length > 0 && (st.eid === prev.eid || !st.eid))
           ? { ...st, services: prev.services, label: st.label || prev.label, eid: st.eid || prev.eid, held: true }
-          : st);
+          : st && prev && prev.channel === st.channel
+            ? { ...st, services: shareDabServices(prev.services, st.services) }
+            : st);
         setDabError(why);
         /* ★ A REFUSAL IS SHOWN, NOT SWALLOWED. The box closed on `why`, so the reason the server
          *  gave was never seen — the mode just failed to happen. The web keeps its box and says
@@ -5268,10 +5317,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
         setDecoding(true);
         markDecodeOutput();          // ★ output = presence; see the idle-release effect
-        if (replace) { setDecoderText(line); return; }
-        // Append raw — the adapter newline-terminates records and char-stream
-        // decoders (RTTY/CW) carry their own line breaks.
-        setDecoderText((prev: string) => appendDecoderText(prev, line));
+        // ★ Batched — see DECODER_FLUSH_MS. Append raw — the adapter newline-terminates records and
+        // char-stream decoders (RTTY/CW) carry their own line breaks.
+        queueDecoderText(line, !!replace);
       },
       onDecoderImage: (ev) => {
         // OWRX decodes SSTV/Fax server-side and streams scanlines — paint them
@@ -10382,6 +10430,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}
       >
         <PanelBoundary name="Controls" autoRetry noticeTop={0}>
+        {/* ★ The recording timer ticks in RecElapsed (re-renders the bar, not this screen). */}
+        <RecElapsed startedAt={recStartedAt} render={(recSeconds) => (
         <ControlsBar
           srvTzOffsetMin={srvTz.offsetMin}
           srvTzAbbr={srvTz.abbr}
@@ -10460,6 +10510,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           //    is the "never offer a control whose every use is a no-op" rule, broken quietly.
           chatDisabled={isKiwi || (isVibeServer && !sharedDial)}
         />
+        )} />
         </PanelBoundary>
       </View>}
 
@@ -10714,6 +10765,8 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Menu sheet */}
       <PanelBoundary name="Menu" onClose={() => setMenuOpen(false)} resetKey={menuOpen}>
+      {/* ★ The timer ticks in RecElapsed, not here — and only while the menu is open. */}
+      <RecElapsed startedAt={menuOpen ? recStartedAt : null} render={(recSeconds) => (
       <MenuSheet
         visible={menuOpen}
         serverType={route.params.serverType ?? 'ubersdr'}
@@ -10902,6 +10955,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
         onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
       />
+      )} />
       </PanelBoundary>
 
       {/* ★ THE SERVER TURNED US AWAY — TIME UP or PLEASE WAIT, matching the web
@@ -11073,6 +11127,8 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Audio sheet — NR/NB/squelch/notch/REC + server NR */}
       <PanelBoundary name="Audio settings" onClose={() => setAudioSheetOpen(false)} resetKey={audioSheetOpen}>
+      {/* ★ The timer ticks in RecElapsed, not here — and only while the sheet is open. */}
+      <RecElapsed startedAt={audioSheetOpen ? recStartedAt : null} render={(recSeconds) => (
       <AudioSheet
         visible={audioSheetOpen}
         onClose={() => setAudioSheetOpen(false)}
@@ -11135,6 +11191,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onServerDspFilter={onServerDspFilter}
         onServerDspParam={onServerDspParam}
       />
+      )} />
       </PanelBoundary>
 
       {/* v4 local hardware: RTL-SDR controls submenu */}

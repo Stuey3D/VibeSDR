@@ -690,10 +690,13 @@ export class DecoderClient {
         const minRank = { all: 0, low: 1, medium: 2, high: 3 }[this.morseQuality];
         if (rank >= minRank) this.cb.onText(utf8(u8.subarray(18, 18 + tlen)));
         this.cb.onDot('active');
-        this.cb.onStatus(`${Math.round(pitch)}Hz · ${wpm.toFixed(1)} WPM · ${confName}`);
+        // ★ WPM to a WHOLE number (was one decimal): the estimate wanders in the tenths on every
+        //   chunk, so the status string changed on nearly every message and each change re-rendered
+        //   the whole receiver screen (audit 2026-10-03). Nobody keys at 18.3 WPM.
+        this.cb.onStatus(`${Math.round(pitch)}Hz · ${Math.round(wpm)} WPM · ${confName}`);
       } else if (t === 0x11) {
         if (u8.length < 9) return;
-        this.cb.onStatus(`${Math.round(v.getFloat32(1, false))}Hz · ${v.getFloat32(5, false).toFixed(1)} WPM`);
+        this.cb.onStatus(`${Math.round(v.getFloat32(1, false))}Hz · ${Math.round(v.getFloat32(5, false))} WPM`);
         this.cb.onDot('sync');
       } else if (t === 0x12) {
         if (u8.length < 5) return;
