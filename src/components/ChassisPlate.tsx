@@ -18,7 +18,7 @@
  *   1200 px image is drawn at 620 pt.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useDerivedValue, type SharedValue } from 'react-native-reanimated';
 import { StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import {
@@ -35,6 +35,20 @@ export function cssAngle(deg: number, w: number, h: number) {
   // ★ One formula: constants/plateLight.ts cssAnglePts (the worklet the plate's light derives from).
   const p = cssAnglePts(deg, w, h);
   return { start: vec(p.sx, p.sy), end: vec(p.ex, p.ey) };
+}
+
+/* ★★ A REMOUNT KEY THAT ONLY CHANGES ONCE A RESIZE HAS SETTLED. Keying the canvas by its live size fixed the stale
+ *  surface (half a plate after a Mac window grew), but a window DRAG changes the size every frame, so the plate
+ *  was torn down and rebuilt every frame — and the waterfall and spectrum paused while it happened (Stuart,
+ *  2026-10-03: "resizing now slightly pauses the waterfall and spectrum"). The canvas now follows the size live
+ *  without remounting, and is rebuilt ONCE, 250 ms after the size stops changing. */
+function useSettledKey(w: number, h: number): string {
+  const [key, setKey] = useState(`${w}x${h}`);
+  useEffect(() => {
+    const t = setTimeout(() => setKey(`${w}x${h}`), 250);
+    return () => clearTimeout(t);
+  }, [w, h]);
+  return key;
 }
 
 function useSize() {
@@ -148,6 +162,7 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, shiftS
 /** The plate, filling its parent. Mark the parent opaque; there is nothing to see through it. */
 export default function ChassisPlate({ plate, radius }: { plate: PlateTokens; radius: number }) {
   const [{ w, h }, onLayout] = useSize();
+  const settledKey = useSettledKey(w, h);
   const light = useLight();
   return (
     <View style={StyleSheet.absoluteFill} onLayout={onLayout} pointerEvents="none">
@@ -155,7 +170,7 @@ export default function ChassisPlate({ plate, radius }: { plate: PlateTokens; ra
           and the canvas kept drawing into its first surface — the brushed plate covered the left half of
           the tuning-step sheet until it was closed and reopened, sometimes several times (Stuart, B16).
           A size change is rare (open, rotate, window resize), so a remount costs nothing that matters. */}
-      {w > 0 && h > 0 && <PlateCanvas key={`${w}x${h}`} w={w} h={h} r={radius} plate={plate} sv={light.sv} shiftSv={light.shiftSv} screwSv={light.screwSv} />}
+      {w > 0 && h > 0 && <PlateCanvas key={settledKey} w={w} h={h} r={radius} plate={plate} sv={light.sv} shiftSv={light.shiftSv} screwSv={light.screwSv} />}
     </View>
   );
 }
@@ -207,11 +222,12 @@ export function GlossPanel({ style, radius, trim = true, squareBottom = false }:
   style?: StyleProp<ViewStyle>; radius: number; trim?: boolean; squareBottom?: boolean;
 }) {
   const [{ w, h }, onLayout] = useSize();
+  const settledKey = useSettledKey(w, h);
   const { sv } = useLight();
   return (
     <View style={[StyleSheet.absoluteFill, style]} onLayout={onLayout} pointerEvents="none">
       {/* ★ Keyed by size for the same reason as ChassisPlate's canvas. */}
-      {w > 0 && h > 0 && <GlossCanvas key={`${w}x${h}`} w={w} h={h} r={radius} trim={trim} squareBottom={squareBottom} sv={sv} />}
+      {w > 0 && h > 0 && <GlossCanvas key={settledKey} w={w} h={h} r={radius} trim={trim} squareBottom={squareBottom} sv={sv} />}
     </View>
   );
 }
