@@ -535,6 +535,9 @@ export interface ControlsBarProps {
   /** Screen rects of the two control slots, so a pointer scroll can be
    *  HOVER-SCOPED to whichever control it is over. */
   onControlRects?: (r: { vfo?: Rect; zoom?: Rect }) => void;
+  /** ★ Landscape only: the window x of the VFO drum's + and the zoom drum's −, the station strip's text anchors
+   *  (Stuart, 2026-10-03). null when there is no landscape pair (portrait, a single drum). */
+  onDrumAnchors?: (a: { left: number; right: number } | null) => void;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -1878,9 +1881,21 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
    *  it and worked; its twin did not, which is why it survived review: the same JSX, one bar broken.
    *  ★★ A destructured prop list is a hand-maintained copy of the props — anything the body uses must be in it. */
   sharedDial,
-  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate }: any) {
+  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, onDrumAnchors }: any) {
   const handbackFlash = useHandbackFlash();
   const { theme: t } = useTheme();
+  /* ★ The station strip anchors its text between the VFO drum's + and the zoom drum's − (DrumWheel draws them
+   *  max(3, 5 % of the drum) in from its edges). Measured in WINDOW coordinates, like onControlRects. */
+  const drumRects = useRef<{ vfo?: Rect; zoom?: Rect }>({});
+  const reportAnchors = useCallback(() => {
+    const { vfo, zoom } = drumRects.current;
+    if (!vfo || !zoom) return;
+    onDrumAnchors?.({ left: vfo.x + vfo.w - Math.max(3, vfo.w * 0.05), right: zoom.x + Math.max(3, zoom.w * 0.05) });
+  }, [onDrumAnchors]);
+  const onVfoRect = useCallback((r: Rect) => { drumRects.current.vfo = r; reportAnchors(); }, [reportAnchors]);
+  const onZoomRect = useCallback((r: Rect) => { drumRects.current.zoom = r; reportAnchors(); }, [reportAnchors]);
+  useEffect(() => () => onDrumAnchors?.(null), [onDrumAnchors]);
+  useEffect(() => { if (singleDrum) { drumRects.current.zoom = undefined; onDrumAnchors?.(null); } }, [singleDrum, onDrumAnchors]);
   // ★ Colours are the faceplate's: the chassis for keys, glass and status; the key LEGENDS resolve
   //   separately (§2 — white, or neon when the controls are neon, and Nixie One only when neon).
   const fp = useFaceplate();
@@ -1968,9 +1983,11 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           `flex: 1` on the drum let its view grow past the height its canvas was drawn at (a tablet's
           44 pt drum sat in a 62 pt band). The trapezoid is 40 % of it (25 pt of the mockup's 62). */}
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
+        <ControlSlot style={{ flex: 1 }} report={onVfoRect}>
         {vfoKeys
           ? <TunerKeys type="vfo" height={BAND_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} landscape />
           : <DrumWheel type="vfo" height={BAND_H} onDelta={onVfoDelta} noInertia={vfoNoInertia} />}
+        </ControlSlot>
       </View>
 
       {/* STEP + MENU column */}
@@ -2054,11 +2071,11 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
 
       {/* Zoom drum (omitted for FM-DX single-drum tuner) — sized to the band, like the VFO's. */}
       {!singleDrum && (
-        <View style={{ flex: 1, minWidth: s.r(80) }}>
+        <ControlSlot style={{ flex: 1, minWidth: s.r(80) }} report={onZoomRect}>
           {zoomKeys
             ? <TunerKeys type="zoom" height={BAND_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} landscape />
             : <DrumWheel type="zoom" height={BAND_H} onDelta={onBwDelta} />}
-        </View>
+        </ControlSlot>
       )}
 
       </View>
@@ -2318,7 +2335,7 @@ function ControlsBar({
   onZoomStep,
   onZoomSweep,
   vfoSweepRate,
-  onControlRects,
+  onControlRects, onDrumAnchors,
   /* ★★★ AND THE FIVE THE BARS NEED. They are declared in ControlsBarProps and were arriving from SDRScreen,
    *  but this destructure never took them — so `shared` could not pass them on, and my first attempt at that
    *  fix referenced names that were not in scope, which threw "Property 'readOnly' doesn't exist" and bounced
@@ -2454,7 +2471,7 @@ function ControlsBar({
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
     singleDrum, menuAsBack, vfoNoInertia,
-    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, onControlRects,
+    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, onControlRects, onDrumAnchors,
     /* ★★★ FIVE PROPS THE BARS DESTRUCTURE AND NEVER RECEIVED (Stuart, 2026-09-20: "no shared dial notification
      *  above the frequency"). ControlsBar took them, the bars declared them, and NOTHING carried them across
      *  this object — so `sharedDial` was undefined in both bars and the shared-tuner banner could not draw on

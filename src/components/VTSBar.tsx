@@ -82,7 +82,7 @@ const VFD_PASS_CAP_MS = 30000;
  *  display every glyph drawn in Nixie One is neon (§2) — including a notice that carries its own
  *  colour, which is then ignored. */
 
-export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel = '', onHoldExtended, onTimedEnd }:
+export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel = '', onHoldExtended, onTimedEnd, anchors = null }:
     { notif: VtsNotifData | null; bottom: number; serverType?: string; onHeight?: (h: number) => void;
       /** ★ A timed notif was held longer than asked (a VFD's one full pass, onVfdPass): its key and the
        *  new total, so the screen's own deadline — which defers station names and starts the next
@@ -95,7 +95,9 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       onTimedEnd?: (key: number) => void;
       /** The tuned frequency as text ("7310 kHz") — what a VFD shows when a name folds to nothing
        *  it can draw (§7: Cyrillic, CJK… until native transliteration lands). */
-      freqLabel?: string }) {
+      freqLabel?: string;
+      /** ★ Landscape: the window x of the VFO drum's + and the zoom drum's − (ControlsBar onDrumAnchors). */
+      anchors?: { left: number; right: number } | null }) {
   useFaceplateOnTrial();   // ★★★ the VFD strip is faceplate too (constants/faceplate.ts CRASH SAFETY)
   const fp = useFaceplate();
   const COL = fp.vts;
@@ -107,7 +109,13 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const slide   = useRef(new Animated.Value(0)).current;
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
-  const [symFit, setSymFit] = useState(false);
+  /** The VFD font's REAL cell advance, measured on the device (see the probe in the render). */
+  /** The bar's window x and width, and where the two side blocks sit in it (for the drum anchors). */
+  const barRef = useRef<View | null>(null);
+  const [barWin, setBarWin] = useState<{ x: number; w: number } | null>(null);
+  const [lBlockX, setLBlockX] = useState<number | null>(null);
+  const [rBlockEnd, setRBlockEnd] = useState<number | null>(null);
+  const [cellPx, setCellPx] = useState<{ style: string; px: number } | null>(null);
   const [textOnly, setTextOnly] = useState(false);
   const { width: winW, height: winH } = useWindowDimensions();
   const [textW, setTextW] = useState(0);
@@ -253,26 +261,18 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const tuneLeft = shown.tuneDir === 'left';
   const overflow = textW > areaW && areaW > 0;
   const vfd = COL.style === 'dot' || COL.style === 'seg';
-  /* ★★★ CENTRED WHEN IT FITS, THE WHOLE STRIP WHEN IT SCROLLS (Stuart, 2026-10-03). With TP·TA·AF on the right, the
-   *  left block (RDS mark + PI / logo + flag) is far wider than the legends. Mirroring it always centred the text but
-   *  wasted a third of a phone strip and cut the RadioText to "NOW ON HEART"; never mirroring wasted nothing but left
-   *  short text off-centre. So: mirror (the text sits on the strip's centre) only while the text FITS in the mirrored
-   *  window; a text too long for it gets the full, lopsided space and scrolls there.
-   *  ★ `symFit` is decided in an effect from widths that do not depend on the decision: the free width is the area
-   *    plus whatever the mirror is currently taking, so turning the mirror on cannot make it switch itself off. */
+  /* ★★★ THE TEXT WINDOW (Stuart, 2026-10-03): in landscape it runs from the tune drum's + to the zoom drum's −
+   *  (`anchored`, below); elsewhere both side blocks reserve the wider one's width, so it sits on the strip's centre.
+   *  Short text is centred in it, long text scrolls in it. A phone in portrait drops the sides altogether.
+   *  ★★ The "dead space before TP" was NOT the mirror: the VFD window was n × a cell width taken from a font metric
+   *    (Doto 0.6 em) that is wrong — Doto advances ~0.5 em — so the text filled only ~84% of its window and the rest
+   *    showed as black. The cell is now MEASURED (`cellPx`). */
+  const vfdSeg = COL.style === 'seg';
+  const cellW = vfd && cellPx && cellPx.style === COL.style && cellPx.px > 0 ? cellPx.px : (vfdSeg ? SEG_CELL : DOT_CELL);
   const vfdText = vfd ? vfdLineText(shown, COL.style as 'dot' | 'seg', freqLabel) : '';
   const needW = vfd
-    ? (COL.style === 'seg' ? toSegRun(vfdText).cells.length * SEG_CELL : Array.from(vfdText).length * DOT_CELL)
+    ? (vfdSeg ? toSegRun(vfdText).cells.length : Array.from(vfdText).length) * cellW
     : textW;
-  {
-    const asym = Math.abs(leftW - rightW);
-    const free = areaW + (symFit ? asym : 0);          // the text area as it would be WITHOUT the mirror
-    const fits = !!shown.annunciators && needW > 0 && free > 0 && needW <= free - asym - 4;
-    // ★ React's "adjust state while rendering" pattern: one extra render on a change, never a loop, since `free`
-    //   does not move when the mirror does.
-    if (fits !== symFit) setSymFit(fits);
-  }
-  const centreSides = symFit;
   /* ★★ PORTRAIT WITH NO ROOM: THE STRIP IS THE RADIOTEXT AND NOTHING ELSE (Stuart, 2026-10-03: "in portrait when
    *  there is no room we drop both sides and dedicate the VTS to radio text only, landscape gets the full whack").
    *  Both side blocks (RDS/DAB mark, logo, flag · TP·TA·AF) go when the line would not fit beside them; a line that
@@ -290,6 +290,19 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     const want = portrait && (winW < 600 || (needW > 0 && withSides > 0 && needW > withSides - 4));
     if (want !== textOnly) setTextOnly(want);
   }
+  /* ★★★ LANDSCAPE: THE TEXT RUNS FROM THE TUNE DRUM'S + TO THE ZOOM DRUM'S − (Stuart, 2026-10-03: "use the + of the
+   *  tune and − of the zoom as the anchor points for the radio text in landscape"). Mirroring the left block was
+   *  only as good as that block: with a logo it ended near the +, without one (VCR/DOT) the text ran past it. So
+   *  each side block is SIZED to reach its drum's sign; 6 = the text area's own margin. Falls back to the mirror
+   *  when there is no pair of drums or a block's contents would not fit in its share. */
+  let anchorL = 0, anchorR = 0;
+  const anchored = (() => {
+    if (textOnly || !anchors || !barWin || lBlockX == null || rBlockEnd == null || winW <= winH) return false;
+    anchorL = Math.round(anchors.left - barWin.x - lBlockX - 6);
+    anchorR = Math.round(rBlockEnd - (anchors.right - barWin.x) - 6);
+    return anchorL >= leftW && anchorR >= (shown.annunciators ? rightW + 8 : 0);
+  })();
+  const centreSides = !textOnly && !anchored;
   // ★ The offset carries a UNIT ("-1.2kHz"): never through the 14-segment (it has no lower case) —
   //   the sans on seg; Doto keeps the unit's case on dot.
   const offsetFont = COL.style === 'seg' ? FONT_HYPER : COL.font;
@@ -311,8 +324,13 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     //   too, so the bar stays centred over the deck. The side insets are 0 in portrait: portrait keeps 14.
     <Animated.View style={[styles.wrap, { bottom, opacity: fade, left: side, right: side }]}
                    pointerEvents="none">
-    <View style={[styles.bar, { backgroundColor: fp.chassis.vtsBg, borderColor: fp.chassis.vtsBorder }]}
-      onLayout={(e: { nativeEvent: { layout: { height: number } } }) => onHeight?.(e.nativeEvent.layout.height)}>
+    <View ref={barRef} collapsable={false} style={[styles.bar, { backgroundColor: fp.chassis.vtsBg, borderColor: fp.chassis.vtsBorder }]}
+      onLayout={(e: { nativeEvent: { layout: { height: number } } }) => {
+        onHeight?.(e.nativeEvent.layout.height);
+        barRef.current?.measureInWindow((x, _y, w) => {
+          if (w > 0 && (barWin?.x !== x || barWin?.w !== w)) setBarWin({ x, w });
+        });
+      }}>
       {/* ★ The SAME glyph as the right arrow, mirrored: Apple draws ◄ (U+25C4) and ► (U+25BA) from
           different fallback fonts, so the left one came out visibly smaller (B8, Mac + iPhone). */}
       <Text style={[styles.arrow, styles.arrowLeft, { color: leftCol }]}>►</Text>
@@ -323,7 +341,8 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           reserve the same width. On Nixie / HYPER / default the text runs on from the logo and flag, and the
           left block (RDS mark + logo + flag) is far wider than TP·TA·AF — reserving it on the right left a band of
           dead black before the legends and squeezed the RadioText (Stuart, 2026-10-03). */}
-      {!textOnly && (<View style={[styles.sideBlock, centreSides && shown.annunciators && { minWidth: sideW }]}>
+      {!textOnly && (<View style={[styles.sideBlock, centreSides && shown.annunciators && { minWidth: sideW }, anchored && { width: anchorL }]}
+        onLayout={(e: { nativeEvent: { layout: { x: number } } }) => setLBlockX(e.nativeEvent.layout.x)}>
       <View style={styles.sideInner} onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setLeftW(Math.ceil(e.nativeEvent.layout.width))}>
         {/* Source mark: live-data badge (RDS mark / text) wins; otherwise the
             bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
@@ -372,6 +391,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
         <View style={styles.vfdMeasure} onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setAreaW(e.nativeEvent.layout.width)}>
         <VfdStrip style={COL.style as 'dot' | 'seg'} rgb={COL.rgb} core={COL.core} glow={COL.glow}
           text={vfdText}
+          cellW={cellW}
           loop={!!shown.hold}
           restartKey={shown.hold ? lineKey(shown) : String(shown.key)}
           onPassMs={shown.hold ? undefined : onVfdPass} />
@@ -405,8 +425,11 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       {!!shown.offset && shown.tuneDir === 'right' && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
       {/* ★★ TP · TA · AF — fixed legends in the glass, drawn like the RDS mark (AnnunciatorLegend), on the
           RIGHT inside the ▶ so they balance the badge block on the left; lit when true, ghosted when not. */}
-      {!!shown.annunciators && !textOnly && (
-        <View style={[styles.sideBlock, styles.sideRight, centreSides && { minWidth: sideW }]}>
+      {/* ★ Drawn (empty) even with no TP·TA·AF, so the right anchor has a block to size. */}
+      {!textOnly && (
+        <View style={[styles.sideBlock, styles.sideRight, centreSides && !!shown.annunciators && { minWidth: sideW }, anchored && { width: anchorR }]}
+          onLayout={(e: { nativeEvent: { layout: { x: number; width: number } } }) => setRBlockEnd(e.nativeEvent.layout.x + e.nativeEvent.layout.width)}>
+          {!!shown.annunciators && (
           <View style={[styles.sideInner, styles.annun]}
                 onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setRightW(Math.ceil(e.nativeEvent.layout.width))}>
             {(['TP', 'TA', 'AF'] as const).map(nm => (
@@ -415,9 +438,23 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
                 lit={shown.annunciators![nm.toLowerCase() as 'tp' | 'ta' | 'af']} />
             ))}
           </View>
+          )}
         </View>
       )}
       <Text style={[styles.arrow, { color: rightCol }]}>►</Text>
+      {/* ★ The cell probe: PROBE_N cells in the strip's own font, invisible, so the window is sized by the font's
+          real advance on this device rather than by a metric from its spec. */}
+      {vfd && (
+        <View key={COL.style} style={styles.cellProbe} pointerEvents="none">
+          <Text style={vfdFont(vfdSeg)} numberOfLines={1}
+            onLayout={(e: { nativeEvent: { layout: { width: number } } }) => {
+              const px = e.nativeEvent.layout.width / PROBE_N;
+              if (px > 0 && (cellPx?.style !== COL.style || Math.abs(cellPx.px - px) > 0.01)) setCellPx({ style: COL.style, px });
+            }}>
+            {vfdSeg ? segGhost(PROBE_N) : '0'.repeat(PROBE_N)}
+          </Text>
+        </View>
+      )}
       {/* ★ The glass's filament wires, frontmost — the strip IS a VFD on dot / seg (lighting brief §1).
           11 = the bar's 12 pt corner less its 1 pt border, which is where an absolute child's box starts. */}
       {vfd && <VfdFilaments radius={11} />}
@@ -459,8 +496,15 @@ const SEG_PX = 15, DOT_PX = 19, CELL_LS = 1;
 const DAB_MARK_H = 20;
 /** ★ Spare cells of width the window's Text is laid out with, so the font's fractional excess never ellipsizes the last cell. */
 const TEXT_SLACK = 2;
+/** Fallbacks only, until the probe has measured the real advance (Doto's spec 0.6 em came out ~0.5 em on iOS). */
 const SEG_CELL = SEG_PX * 0.816 + CELL_LS;
 const DOT_CELL = DOT_PX * 0.6 + CELL_LS;
+const PROBE_N = 40;
+function vfdFont(seg: boolean) {
+  const px = seg ? SEG_PX : DOT_PX;
+  return { fontFamily: seg ? FONT_SEG14 : FONT_DOTO, fontSize: px, letterSpacing: CELL_LS,
+           lineHeight: Math.round(px * 1.25), includeFontPadding: false } as const;
+}
 
 /**
  * ★★ STEPPED, NEVER SMOOTH (§7, ref vfd-scroll.gif): a fixed window of whole cells; a long run waits
@@ -470,14 +514,13 @@ const DOT_CELL = DOT_PX * 0.6 + CELL_LS;
  * case with the units' case kept, over the ghost-dot grid (also stepped per whole cell — the brief
  * allows per-column, and one rule for both reads as one machine).
  */
-function VfdStrip({ style, rgb, core, glow, text, loop, restartKey, onPassMs }: {
-  style: 'dot' | 'seg'; rgb: string; core: string; glow: string; text: string; loop: boolean; restartKey: string;
+function VfdStrip({ style, rgb, core, glow, text, cellW, loop, restartKey, onPassMs }: {
+  style: 'dot' | 'seg'; rgb: string; core: string; glow: string; text: string; cellW: number; loop: boolean; restartKey: string;
   /** A one-shot (timed) line: told how long one full pass takes here, pauses included. */
   onPassMs?: (ms: number) => void;
 }) {
   const [w, setW] = useState(0);
   const seg = style === 'seg';
-  const cellW = seg ? SEG_CELL : DOT_CELL;
   const n = Math.max(0, Math.floor(w / cellW));
   const run = useMemo(() => (seg ? toSegRun(text) : { cells: Array.from(text), units: [] }), [seg, text]);
   const count = run.cells.length;
@@ -501,9 +544,7 @@ function VfdStrip({ style, rgb, core, glow, text, loop, restartKey, onPassMs }: 
   const win = cellWindow(run.cells, n, offset, seg ? '!' : ' ');
   const left = cellWindowLeft(count, n);
   const shift = count <= n ? -left : Math.max(0, Math.min(offset, count - n));
-  const px = seg ? SEG_PX : DOT_PX;
-  const common = { fontFamily: seg ? FONT_SEG14 : FONT_DOTO, fontSize: px, letterSpacing: CELL_LS,
-                   lineHeight: Math.round(px * 1.25), includeFontPadding: false } as const;
+  const common = vfdFont(seg);
   const lit = { color: core, textShadowColor: glow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } };
   return (
     <View style={styles.nameArea} onLayout={(e: any) => setW(e.nativeEvent.layout.width)}>
@@ -650,6 +691,8 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
   },
+  // Wide enough that 40 cells never wrap; opacity 0 so it is never seen.
+  cellProbe: { position: 'absolute', left: 0, top: 0, width: 2000, flexDirection: 'row', opacity: 0 },
   overlay: {
     position: 'absolute',
     left: 0,

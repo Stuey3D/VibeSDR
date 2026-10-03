@@ -9211,6 +9211,8 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const ctrlRects = useRef<{ vfo?: { x: number; y: number; w: number; h: number };
                              zoom?: { x: number; y: number; w: number; h: number } }>({});
+  /** ★ Landscape: the window x of the VFO drum's + and the zoom drum's − — the station strip's text anchors. */
+  const [drumAnchors, setDrumAnchors] = useState<{ left: number; right: number } | null>(null);
   const onControlRects = useCallback((r: { vfo?: any; zoom?: any }) => {
     if (r.vfo)  ctrlRects.current.vfo  = r.vfo;
     if (r.zoom) ctrlRects.current.zoom = r.zoom;
@@ -10407,6 +10409,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onZoomSweep={onZoomSweep}
           vfoSweepRate={vfoSweepRate}
           onControlRects={onControlRects}
+          onDrumAnchors={setDrumAnchors}
           onMode={onMode}
           onStep={onStepOpen}
           onMenu={onMenuOpen}
@@ -10682,6 +10685,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {!controlsHidden && !advRdsOpen && (
         <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
+                anchors={drumAnchors}
                 serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH}
                 onHoldExtended={onVtsHoldExtended}
                 onTimedEnd={onVtsTimedEnd}
