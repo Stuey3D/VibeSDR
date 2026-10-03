@@ -70,13 +70,23 @@ inline bool isPlainAddress(const std::string& s) {
  * Returns `peer` unchanged unless the peer is a trusted proxy AND the headers yield a valid
  * address — so every failure mode lands on the truth we can actually observe.
  */
+/** ★★★ "A PROXIED CLIENT WE COULD NOT IDENTIFY" — an address with NO privileges (TEST-NET-1, RFC 5737:
+ *  not loopback, not private, never a real host). Audit 2026-10-03: through the tunnel, an X-Forwarded-For
+ *  over the length cap (or of rubbish) fell back to the client's own X-Real-IP, and then to the PEER — which
+ *  for cloudflared is 127.0.0.1. So anyone on the internet could be "the person at the machine": PIN skipped,
+ *  loopback admin, bans and session limits bypassed. The proxy's own address must never stand in for a client
+ *  it relayed. */
+inline const std::string& unknownProxiedClient() { static const std::string a = "192.0.2.255"; return a; }
+
 inline std::string clientAddress(const TrustedProxies& tp, const std::string& peer,
                                  const std::string& xff, const std::string& xRealIp) {
     if (!tp.trusted(peer)) return peer;
 
-    // ★ The header is unbounded input that ends up in the connection log and possibly the ban
-    //   list. Cap it before doing any work — a megabyte of commas is not a proxy chain.
-    if (xff.size() <= 1024 && !xff.empty()) {
+    // ★ A header that is PRESENT speaks for the request: a trusted proxy (cloudflared, nginx) always appends
+    //   what it saw. If it cannot be read — over the cap, or no usable hop — the client is unknown, and
+    //   neither the forgeable X-Real-IP nor the proxy's own address may stand in for it.
+    if (!xff.empty()) {
+        if (xff.size() > 1024) return unknownProxiedClient();
         std::vector<std::string> hops;
         size_t start = 0;
         while (start <= xff.size()) {
@@ -89,17 +99,23 @@ inline std::string clientAddress(const TrustedProxies& tp, const std::string& pe
             if (comma == std::string::npos) break;
             start = comma + 1;
         }
-        // ★★ RIGHT TO LEFT, PAST OUR OWN INFRASTRUCTURE. The client can prepend whatever it likes,
-        //    so the LEFTMOST entry is forgeable even through a trusted proxy. Each trusted hop
-        //    appended what IT saw, so the first non-trusted address from the right is the earliest
-        //    one our own equipment actually observed.
+        // ★★ RIGHT TO LEFT, PAST OUR OWN INFRASTRUCTURE. The client can prepend whatever it likes, so the
+        //    LEFTMOST entry is forgeable even through a trusted proxy. Each trusted hop appended what IT saw,
+        //    so the first non-trusted address from the right is the earliest one our own equipment observed.
+        //  ★ A hop that is not a plain address ENDS the walk (unknown client): skipping it would walk on into
+        //    hops the client wrote itself.
+        if (hops.empty()) return unknownProxiedClient();   // present but empty: nothing names the client
         for (size_t i = hops.size(); i-- > 0;) {
-            if (!isPlainAddress(hops[i])) continue;
+            if (!isPlainAddress(hops[i])) return unknownProxiedClient();
             if (tp.trusted(hops[i])) continue;      // still inside our own chain
             return hops[i];
         }
+        // Every hop is the owner's own infrastructure: the request started inside it (cloudflared never yields
+        // this — Cloudflare always appends the real client), so the peer is the truthful answer.
+        return peer;
     }
 
+    // No X-Forwarded-For at all: a proxy that speaks X-Real-IP (nginx), or a genuinely local request.
     if (xRealIp.size() <= 64) {
         const size_t a = xRealIp.find_first_not_of(" \t");
         const size_t b = xRealIp.find_last_not_of(" \t\r\n");

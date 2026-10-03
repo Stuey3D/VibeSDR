@@ -9,15 +9,16 @@
  *  - C0/C1 control characters and DEL → a space: a newline or NUL in a label breaks layouts and storage.
  *  - Bidi overrides and isolates (U+202A–202E, U+2066–2069) → removed: they reverse the text drawn AFTER them
  *    on the same line ("Trojan Source" style). Ordinary right-to-left scripts are untouched.
- *  - Zero-width and BOM characters (U+200B–200D, U+2060, U+FEFF) → removed: invisible padding.
+ *  - Zero-width space, word joiner and BOM (U+200B, U+2060, U+FEFF) → removed: invisible padding. ★ NOT the
+ *    joiners U+200C/U+200D — Indic scripts and multi-part emoji need them (and Tibetan, Thai, Arabic… all pass).
  *  - Runs of spaces collapsed, trimmed, and capped (default 64 characters, never splitting a surrogate pair).
  */
 export function cleanText(v: unknown, max = 64): string {
   if (typeof v !== 'string') return '';
   let s = v
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
-    .replace(/[‪-‮⁦-⁩]/g, '')
-    .replace(/[​-‍⁠﻿]/g, '')
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/[\u200b\u2060\ufeff]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (s.length > max) {

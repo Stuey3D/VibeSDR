@@ -77,17 +77,25 @@ int main() {
     {
         TrustedProxies tp;
         tp.set({"127.0.0.1"});
-        eq(clientAddress(tp, "127.0.0.1", "not-an-ip", ""), "127.0.0.1",
-           "★ a non-address is refused, not stored");
-        eq(clientAddress(tp, "127.0.0.1", "999.1.1.1", ""), "127.0.0.1",
-           "★ an out-of-range octet is refused");
+        eq(clientAddress(tp, "127.0.0.1", "not-an-ip", ""), "192.0.2.255",
+           "★ a non-address is refused — and the client is UNKNOWN, never the proxy's loopback");
+        eq(clientAddress(tp, "127.0.0.1", "999.1.1.1", ""), "192.0.2.255",
+           "★ an out-of-range octet is refused — unknown client");
         eq(clientAddress(tp, "127.0.0.1", "", ""), "127.0.0.1",
            "no header at all -> the peer");
-        eq(clientAddress(tp, "127.0.0.1", ",,, ,", ""), "127.0.0.1",
-           "a header of separators -> the peer");
+        eq(clientAddress(tp, "127.0.0.1", ",,, ,", ""), "192.0.2.255",
+           "a header of separators -> unknown client");
         // ★ Length cap: the header is unbounded input and lands in logs and a ban list.
-        eq(clientAddress(tp, "127.0.0.1", std::string(9000, 'x'), ""), "127.0.0.1",
-           "an absurdly long header is refused");
+        eq(clientAddress(tp, "127.0.0.1", std::string(9000, 'x'), ""), "192.0.2.255",
+           "an absurdly long header is refused — unknown client");
+        // ★★★ AUDIT 2026-10-03: the tunnel bypass. An oversized header plus a forged X-Real-IP must NOT
+        //     yield loopback or the forged address.
+        eq(clientAddress(tp, "127.0.0.1", std::string(1100, '1') + ", 203.0.113.9", "127.0.0.1"), "192.0.2.255",
+           "★★★ oversized X-Forwarded-For + X-Real-IP 127.0.0.1 -> unknown, NOT loopback");
+        eq(clientAddress(tp, "127.0.0.1", "", "203.0.113.7"), "203.0.113.7",
+           "no X-Forwarded-For: X-Real-IP from a trusted proxy (nginx) is still believed");
+        eq(clientAddress(tp, "127.0.0.1", "198.51.100.1, garbage, 127.0.0.1", ""), "192.0.2.255",
+           "★ a non-address hop ends the walk — it cannot reach the client-written hops behind it");
     }
 
     std::printf("\nCIDR trust\n");
