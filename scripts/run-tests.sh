@@ -195,6 +195,9 @@ if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); e
 #     worklet in src/ is compiled with the app's plugin and checked, and the meters' frame callbacks are
 #     rebuilt from the plugin's output with no module scope and run — the test above cannot see it.
 if node --no-warnings scripts/test_worklet_defaults.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ No photo leaves this repo carrying EXIF — GPS above all (2026-10-03: twelve did, two of them on the live website).
+echo "── image metadata (EXIF / GPS / XMP) ──"
+if python3 scripts/strip-image-metadata.py --check; then pass=$((pass+1)); echo "  none"; else fail=$((fail+1)); echo "  ✗ run: python3 scripts/strip-image-metadata.py"; fi
 # ★★★ A FACEPLATE CANNOT LOCK YOU OUT (faceplate.ts CRASH SAFETY): the mark is armed before a risky
 #     faceplate draws and cleared after 5 s / on leaving the foreground; a launch that finds it comes up
 #     on HYPER / BAR / DEFAULT with the choice kept aside — a crash, a clean exit, a swipe-away, a torn
