@@ -5655,6 +5655,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  instead of ~25 blocks of the decoder's confusion counted as link errors. */
     struct IqBuf { std::vector<cf32> v; bool gap = false; };
     std::deque<IqBuf> iqQueue;
+    /** ★★ SPENT IQ BUFFERS, KEPT FOR THE NEXT BLOCK (efficiency audit 2026-10-03). Every block
+     *  used to be a fresh std::vector — ~600 KB at 2.4 Msps, ~31 a second — value-initialised
+     *  (every byte zeroed) and then overwritten by the conversion: each byte written twice, and on
+     *  armhf/Android an allocation that size is an mmap + munmap per block, i.e. a syscall pair
+     *  and fresh page faults on 150 pages, 31 times a second. Now the DSP thread hands back what
+     *  it consumed, the producer takes one, and resize() to the same size touches nothing.
+     *  ★ Bounded: kIqFreeMax buffers at most, and one that grew past kIqFreeMaxSamples is let go,
+     *    so a burst cannot pin megabytes. Steady state holds ONE (consumer returns one per block,
+     *    producer takes one per block) — the RAM held is one block, which used to be freed and
+     *    re-faulted instead. Guarded by iqMtx. */
+    std::vector<std::vector<cf32>> iqFree_;
+    static constexpr size_t kIqFreeMax = 4;
+    static constexpr size_t kIqFreeMaxSamples = 262144;   // 2 MB of cf32; RTL blocks are ~77k
+    /** Caller holds iqMtx. */
+    void recycleIqLocked(std::vector<cf32>&& v) {
+        if (v.capacity() == 0 || v.capacity() > kIqFreeMaxSamples || iqFree_.size() >= kIqFreeMax) return;
+        iqFree_.push_back(std::move(v));
+    }
+    /** A buffer of exactly `n` samples, recycled when one is spare. Its contents are stale and
+     *  are about to be overwritten in full — no zeroing once the block size is stable. */
+    std::vector<cf32> takeIqBuf(size_t n) {
+        std::vector<cf32> v;
+        {
+            std::lock_guard<std::mutex> lk(iqMtx);
+            if (!iqFree_.empty()) { v = std::move(iqFree_.back()); iqFree_.pop_back(); }
+        }
+        v.resize(n);   // ★ same size as last time = no write at all; a larger one zeroes only the tail
+        return v;
+    }
     /** ★ A drop emptied the queue: the NEXT buffer pushed follows the hole. Guarded by iqMtx. */
     bool iqGapNext = false;
     /** ★ The channelizer holds samples across calls, so a hole must mark the first BLOCK it emits
@@ -20421,7 +20450,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void enqueueIq(const uint8_t* buf, int sampCount, bool blockIfFull = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
-        std::vector<cf32> v((size_t)sampCount);
+        std::vector<cf32> v = takeIqBuf((size_t)sampCount);   // ★ recycled — see iqFree_
         // ★★★ ADC OVERLOAD, MEASURED WHILE WE ARE ALREADY HERE. See AdcStats: this is the RTL's
         //     answer to the flag the RSP gets in hardware. Evaluated once a second rather than per
         //     buffer — a single sample on the rail is a spark plug or a lightning crash, not an
@@ -20578,7 +20607,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void enqueueIqInt16(const int16_t* buf, int sampCount, bool blockIfFull, bool gapBefore = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
-        std::vector<cf32> v((size_t)sampCount);
+        std::vector<cf32> v = takeIqBuf((size_t)sampCount);   // ★ recycled — see iqFree_
         constexpr float kInv = 1.0f / 32768.0f;
         // ★ Eight int16 a go (NEON / SSE2) — this ran scalar for every RSP, Airspy and SpyServer
         //   sample while the u8 path had a vector kernel (2026-09-16).
@@ -20609,7 +20638,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void enqueueIqFloat(const float* interleaved, int sampCount, bool blockIfFull, bool gapBefore = false) {
         if (sampCount <= 0) return;
         if (sampCount > STREAM_BUFFER_SIZE) sampCount = STREAM_BUFFER_SIZE;
-        std::vector<cf32> v((size_t)sampCount);
+        std::vector<cf32> v = takeIqBuf((size_t)sampCount);   // ★ recycled — see iqFree_
         std::memcpy(v.data(), interleaved, (size_t)sampCount * sizeof(cf32));
         {
             std::unique_lock<std::mutex> lk(iqMtx);
@@ -20635,6 +20664,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (iqQueue.empty()) return;
         size_t n = iqQueue.front().v.size();
         iqQueuedSamples -= n;
+        recycleIqLocked(std::move(iqQueue.front().v));   // ★ see iqFree_
         iqQueue.pop_front();
         iqDroppedSamples.fetch_add(n, std::memory_order_relaxed);
         // ★ Whatever is consumed next follows the hole this just made — see IqBuf.
@@ -21114,6 +21144,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeAudioThread("vibe-dsp");
         while (dspRunning.load()) {
             std::vector<cf32> buf;
+            /* ★ Hand the block back to the producer at the end of every iteration — however it
+             *  ends (the `continue`s below included). Declared after `buf`, so it runs first. */
+            struct IqReturn {
+                Impl* self; std::vector<cf32>& b;
+                ~IqReturn() { std::lock_guard<std::mutex> lk(self->iqMtx); self->recycleIqLocked(std::move(b)); }
+            } iqReturn{this, buf};
             bool gap = false;
             {
                 std::unique_lock<std::mutex> lk(iqMtx);
