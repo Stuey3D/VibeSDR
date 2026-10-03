@@ -6,7 +6,7 @@
  * ▶▶ SET THIS TO false FOR THE NEXT BUILD. Nothing else needs touching: with it false the overlay never mounts,
  *    the native frame clock never starts, and nothing is polled.
  */
-export const PERF_OVERLAY_THIS_BUILD = true;
+export const PERF_OVERLAY_THIS_BUILD = false;
 
 /** One line of the overlay from the native stats + the tilt counters. Pure, so it is testable. */
 export function perfLines(s: { cpuPct: number; footprintMB: number; uiFps: number; uiP50Ms: number; uiP90Ms: number },
