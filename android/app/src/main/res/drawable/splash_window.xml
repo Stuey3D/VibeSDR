@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launch window: the brand's near-black with the icon centred (2026-10-03). It was the bare splash bitmap,
+     which Android STRETCHES across the whole window as a background. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+  <item android:drawable="@color/splashscreen_background"/>
+  <item><bitmap android:gravity="center" android:src="@drawable/splashscreen_logo"/></item>
+</layer-list>
