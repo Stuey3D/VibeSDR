@@ -292,6 +292,13 @@ export function applyControlLook(l: ControlLook, doc: Document = document): stri
   for (const k of CARD_VARS) cardEl?.style.removeProperty(k);
   for (const k of ROOT_VARS) rootEl.style.removeProperty(k);
   for (const [k, v] of Object.entries(vars.card)) cardEl?.style.setProperty(k, v);
+  /* ★★ THE DECODER BOX TAKES THE BUTTON RING TOO (Stuart, 2026-10-03: "the button colour in the webclient
+   *  needs to apply to the decoder box too"). Its frame and its header keys (CLR, size, minimise, close)
+   *  draw --btn-border, but the look was only ever put on #mcard, so the box stayed amber beside a blue
+   *  card. ONLY the ring travels: the box's text and readings keep their own colours. */
+  const decEl = doc.getElementById('decBox');
+  decEl?.style.removeProperty('--btn-border');
+  if (vars.card['--btn-border']) decEl?.style.setProperty('--btn-border', vars.card['--btn-border']);
   for (const [k, v] of Object.entries(vars.root)) rootEl.style.setProperty(k, v);
   return vars.warn;
 }
