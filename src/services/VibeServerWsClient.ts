@@ -1471,6 +1471,13 @@ export abstract class VibeServerWsClient {
       clearInterval(ping);
       clearInterval(qual);
       this.dbg('Spectrum WS closed code=' + e.code);
+      /* ★★★ A REPLACED SOCKET'S CLOSE IS NOT OUR CLOSE (Kiko, 2026-10-03: pull the server's power, it reboots,
+       *  the app reconnects and plays — then "Connection lost" pops up over the working stream). A dead peer sends
+       *  no FIN, so the watchdog replaces the socket (forceResubscribe closes it and nulls spectrumWs), but the old
+       *  socket's close cannot complete its handshake and is only REPORTED seconds later, after the new socket is up.
+       *  It then marked the session disconnected, armed the 3 s card and scheduled a second reopen. Only the
+       *  current socket may speak for the link. */
+      if (ws !== this.spectrumWs) { this.dbg('replaced spectrum socket closed — ignored'); return; }
       this.lastReconnectAt = Date.now();
       this.gapHist.length = 0;
       this.rttHist.length = 0;   // ★ a new socket, a new path — old pings describe the last one
