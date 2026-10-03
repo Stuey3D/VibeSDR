@@ -1,0 +1,25 @@
+# Dependabot version updates (audit 2026-10-03).
+#
+# ★ github-actions keeps the workflow actions current. They are referenced by TAG (@v4, @v3), not by
+#   commit SHA, because the SHAs could not be resolved when this was written; once they are pinned,
+#   Dependabot updates the SHA and its trailing `# vX` comment together.
+# ★ Weekly and few at a time: these are proposals to review, not merges.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
