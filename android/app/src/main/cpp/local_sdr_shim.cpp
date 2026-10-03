@@ -8071,7 +8071,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         sendClientAudio(c, sock, buf.data(), outFrames, ch);
     }
 
-    struct SpecPeer { std::shared_ptr<net::Socket> sock; int bins; double fps; };
+    /** ★ `dsp` is filled only by onSpectrum (once per frame, one clientMtx — see there); every
+     *  other caller leaves it null and must not read it. */
+    struct SpecPeer { std::shared_ptr<net::Socket> sock; int bins; double fps;
+                      std::shared_ptr<ClientDsp> dsp; };
 
     /** Everyone receiving spectrum right now, WITH the width each asked for — primary first.
      *  Call WITHOUT clientMtx held. */
@@ -9517,6 +9520,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    else's arrival. See clientBins.
         auto peers = allSpecPeers();
         std::shared_ptr<net::Socket> sock = peers.empty() ? nullptr : peers.front().sock;
+        /* ★★ EACH LISTENER'S ClientDsp, LOOKED UP ONCE PER FRAME (efficiency audit 2026-10-03).
+         *  This frame used to call dspFor() for the same peer up to five times — the view grouping,
+         *  the slow-average loop (once per VIEW per peer), the send loop, the meter and the
+         *  lightning badge — and every call takes clientMtx, the lock the control path and every
+         *  socket open/close also want, and on a miss scans every ClientDsp. At 20 fps with 10
+         *  listeners that was ~1000+ acquisitions a second on the DSP thread; now it is 20.
+         *  ★ Same answer as before: dspFor()'s own lookup, under the same lock, a few microseconds
+         *    earlier in the same frame. The shared_ptr keeps the object alive to the end of the
+         *    frame exactly as each `auto c = dspFor(...)` did for its own block. */
+        {
+            std::lock_guard<std::mutex> lk(clientMtx);
+            for (auto& p : peers) {
+                if (!p.sock) continue;
+                auto it = clientDsp.find(p.sock.get());
+                if (it != clientDsp.end()) { p.dsp = it->second; continue; }
+                for (auto& kv : clientDsp) if (kv.second->audio == p.sock) { p.dsp = kv.second; break; }
+            }
+        }
 
         // Hybrid waterfall: the IQ FFT only covers `sampleRate` of spectrum. When the
         // user is zoomed out past that (SpyServer only, where displaySpan is wider),
@@ -9570,7 +9591,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (size_t pi = 0; pi < peers.size(); pi++) {
                 auto& p = peers[pi];
                 if (!due[pi]) continue;      // not this listener's frame — don't build its view
-                auto c = dspFor(p.sock);
+                const auto& c = p.dsp;       // ★ resolved once for the frame — see above
                 // ★ `viewPriming` keeps a listener on the shared row for the moment its own view
                 //   takes to fill — see ClientDsp::viewPriming. Without it the display freezes.
                 if (c && c->ownView && !c->viewPriming.load()) continue;
@@ -9623,7 +9644,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             int slowM = 1;
             for (size_t pi = 0; pi < peers.size(); pi++) {
                 if (!due[pi] || peers[pi].bins != outBins) continue;
-                auto c = dspFor(peers[pi].sock);
+                const auto& c = peers[pi].dsp;
                 const double sp = (c && c->viewSpanHz > 0) ? c->viewSpanHz : shownHz;
                 const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
                 if (std::fabs(sp - view.span) >= 1 || std::fabs(ce - view.centre) >= 1) continue;
@@ -9673,7 +9694,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 auto& p = peers[pi];
                 if (!due[pi]) continue;      // this frame is not on this listener's clock
                 if (p.bins != outBins) continue;
-                auto c = dspFor(p.sock);
+                const auto& c = p.dsp;
                 // ★★ A listener drawing its OWN zoomed view must not also receive the shared wide
                 //    row: two sources writing one waterfall doubles the frame rate and the two
                 //    fight over the same texture, which is the exact failure the shared zoom path
@@ -10980,7 +11001,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const float floorDb = iqFloorDb.load();
                 for (auto& p : peers) {
                     float mine = peak;                       // shared VFO — the fallback
-                    if (auto c = dspFor(p.sock)) {
+                    if (const auto& c = p.dsp) {
                         const double off = c->vfoHz - rtlCenter.load() - hwOffsetHz();
                         const int cb = (int)llround(off / binHz);
                         const int hw2 = std::max(1, (int)(c->bwHz / 2.0 / binHz));
@@ -11075,8 +11096,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   as one. */
                     const double lxT = std::chrono::duration<double>(
                         std::chrono::steady_clock::now().time_since_epoch()).count();
-                    /* ★ Re-fetched: the `c` above is scoped to the block that computed the
-                     *   channel peak, and this needs the same listener's VFO.
+                    /* ★ Read again from p.dsp: the `c` above is scoped to the block that computed
+                     *   the channel peak, and this needs the same listener's VFO.
                      * ★★★ AND IT FALLS BACK TO THE RADIO'S OWN VFO, because dspFor() is NULL on a
                      *     receiver with no per-client DSP — which is the ordinary case, not an
                      *     edge one: a non-shared radio has a single pipeline and no per-listener
@@ -11086,7 +11107,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *     every client was told rate 0. The line above it already handles the
                      *     same null by falling back to the shared peak; this one did not, and
                      *     that asymmetry is the whole bug. */
-                    const auto lxC = dspFor(p.sock);
+                    const auto& lxC = p.dsp;   // ★ resolved once per frame (see `peers`); null = one pipeline
                     const double lxVfo = lxC ? lxC->vfoHz
                                              : LocalSdrShim::instance().listenFrequency();
                     const bool lxBand = lxVfo > 0 && lxVfo < 10e6;
