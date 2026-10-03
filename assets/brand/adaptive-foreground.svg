@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-256 -256 1536 1536" width="1024" height="1024"><defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#080b09"/><stop offset="1" stop-color="#030403"/></linearGradient>
+<radialGradient id="win" gradientUnits="userSpaceOnUse" cx="512" cy="571" r="640"><stop offset="0" stop-color="#66E07C" stop-opacity="0.26"/><stop offset="0.6" stop-color="#030504" stop-opacity="1"/></radialGradient>
+<linearGradient id="drum" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1024" y2="0"><stop offset="0" stop-color="#010201"/><stop offset="0.14" stop-color="#0b100c"/><stop offset="0.4" stop-color="#1d2520"/><stop offset="0.5" stop-color="#222b25"/><stop offset="0.62" stop-color="#1a211c"/><stop offset="0.86" stop-color="#0a0e0b"/><stop offset="1" stop-color="#010201"/></linearGradient>
+<radialGradient id="spill" cx="0.5" cy="0" r="0.6"><stop offset="0" stop-color="#66E07C" stop-opacity="0.22"/><stop offset="1" stop-color="#66E07C" stop-opacity="0"/></radialGradient>
+<linearGradient id="shade" gradientUnits="userSpaceOnUse" x1="0" y1="590" x2="0" y2="1024"><stop offset="0" stop-color="#000" stop-opacity="0.85"/><stop offset="0.2" stop-color="#000" stop-opacity="0.1"/><stop offset="0.7" stop-color="#000" stop-opacity="0.15"/><stop offset="1" stop-color="#000" stop-opacity="0.8"/></linearGradient>
+<linearGradient id="spec" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#e8fff0" stop-opacity="0"/><stop offset="0.5" stop-color="#e8fff0" stop-opacity="0.07"/><stop offset="1" stop-color="#e8fff0" stop-opacity="0"/></linearGradient>
+<clipPath id="rimclip"><rect x="12" y="12" width="1000" height="1000" rx="222"/></clipPath>
+<filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs><g filter="url(#glow)"><g fill="none" stroke="#66E07C" stroke-linecap="round" stroke-linejoin="round">
+<rect x="376" y="226" width="272" height="190" rx="10" stroke-width="16"/>
+<circle cx="448" cy="321" r="40" stroke-width="16"/>
+<line x1="540" y1="276" x2="540" y2="368" stroke-width="15"/><line x1="576" y1="276" x2="576" y2="368" stroke-width="15"/><line x1="612" y1="276" x2="612" y2="368" stroke-width="15"/>
+<line x1="616" y1="222" x2="574" y2="148" stroke-width="15"/>
+</g><circle cx="448" cy="321" r="16" fill="#66E07C"/></g></svg>
