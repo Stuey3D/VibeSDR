@@ -185,6 +185,22 @@ function tempSlot(temp: Health['temp']): { name: GlyphName; level: number; word:
   }
 }
 
+/**
+ * ★★ THE PILL'S OWN VERDICT, for anything else that has to agree with it — the edge tab the card tucks into, and
+ * SDRScreen's "pop the card back out over a decoder box when the server is in the red" (Stuart, 2026-10-03). One
+ * function, so the tab's colour and the pill's ring cannot disagree.
+ */
+export function healthSummary(health: Health): { worst: HealthLevel; colour: string } {
+  const temp = tempSlot(health.temp);
+  const cpu = clampLevel(health.cpu);
+  const ram = clampLevel(health.ram);
+  const batLevel = clampLevel(health.bat.level ?? 0);
+  const worst = Math.max(cpu, ram, temp ? temp.level : 0, health.bat.present ? batLevel : 0) as HealthLevel;
+  const worstPos = Math.max(health.cpuPos ?? cpu, health.ramPos ?? ram,
+    temp ? (temp.pos ?? temp.level) : 0, health.bat.present ? batLevel : 0);
+  return { worst, colour: healthColour(worst, worstPos) };
+}
+
 export default function HealthPill({
   health, style,
 }: { health: Health; style?: StyleProp<ViewStyle> }) {

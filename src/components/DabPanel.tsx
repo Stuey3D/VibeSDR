@@ -399,6 +399,9 @@ export interface DabPanelProps {
   /** ★ On a short portrait window (SDRScreen boxTopLimit): the y the box may reach up to — it then FILLS
    *  the room down to the controls, and BIG / SMALL go (there is nothing bigger to offer). */
   topLimit?: number;
+  /** ★ BIG's ceiling: just below the status row (SDRScreen boxTopSafe) — the health / time cards tuck away now
+   *  (EdgeChip), so BIG no longer has to stop short of them. */
+  topSafe?: number;
   /** ★ Bookmarks filtered to the DAB stations this receiver has learned — the web's `dabBm`. */
   onBookmarks?: () => void;
   /** The receiver's own base URL — logos are fetched FROM the server we are listening to, which is
@@ -433,9 +436,13 @@ export default function DabPanel(p: DabPanelProps) {
    *  itself on a bigger window). */
   const fitBody = p.topLimit != null
     ? Math.max(100, winH - p.bottomOffset - p.topLimit - 46 - decoderBodyInset(dtk)) : 0;
-  const bigUseful = p.topLimit == null && tallBody >= 230 + 80;
+  // ★ BIG back on every box (Stuart, 2026-10-03: "may as well restore it to the DAB box too") — up to the status row.
+  const bigBody = p.topSafe != null
+    ? Math.max(140, winH - p.bottomOffset - p.topSafe - 46 - decoderBodyInset(dtk)) : tallBody;
+  const smallBody = p.topLimit != null ? fitBody : 230;
+  const bigUseful = bigBody >= smallBody + 40;
   const tall = p.tall && bigUseful;
-  const maxBody = p.topLimit != null ? fitBody : tall ? tallBody : 230;
+  const maxBody = tall ? bigBody : smallBody;
   const d = p.d;
   const cur = d ? d.services.find(x => x.sid === d.sid) : undefined;
   const txLines = useMemo(() => (d ? rememberTransmitters(d) : []), [d]);

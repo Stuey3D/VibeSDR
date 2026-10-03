@@ -130,7 +130,8 @@ import LocalHardwarePanel from '../components/LocalHardwarePanel';
 import FreqModal       from '../components/FreqModal';
 import ModeSelector    from '../components/ModeSelector';
 import AudioSheet      from '../components/AudioSheet';
-import HealthPill, { type Health, type HealthLevel } from '../components/HealthPill';
+import HealthPill, { healthSummary, type Health, type HealthLevel } from '../components/HealthPill';
+import EdgeChip, { HealthTabIcon, ClockTabIcon } from '../components/EdgeChip';
 import StepPicker      from '../components/StepPicker';
 import PerfOverlay from '../components/PerfOverlay';
 import { PERF_OVERLAY_THIS_BUILD } from '../constants/perfOverlay';
@@ -8191,11 +8192,46 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ …AND THE RIGHT-HAND CARDS STEP ASIDE TOO (Stuart chose it, 2026-10-03). With only the strip gone the box
    *  still met the SERVER HEALTH and TIME cards: on the SE in Display Zoom that left a header and two rows, and
    *  SMALL's fixed 230 put EXIT DAB underneath the cards, which swallow touches. So while the box is open on a
-   *  short portrait window the health pill, the session clock, the listener count and the admin note are not
-   *  drawn, and the box FILLS from the server-name row (boxTopLimit) down to the controls. Minimise or close it
-   *  and they come back. */
+   *  short portrait window the listener count and the admin note are not drawn (the health and time cards TUCK —
+   *  see EdgeChip below), and SMALL fills from the server-name row (boxTopLimit); BIG reaches the status row.
+   *  Minimise or close it and they come back. */
   const boxTopLimit = boxHidesVts ? rightStackTop + 8 : undefined;
   useEffect(() => { if (boxHidesVts) setVtsBarH(0); }, [boxHidesVts]);
+
+  /* ★★★ THE HEALTH AND TIME CARDS TUCK INTO THE EDGE (Stuart, 2026-10-03: "the health and time chips when slid off
+   *  the screen minimise to 2 arrow boxes at the edge of the screen that can invoke them at any time … all devices
+   *  get the new hideable chips"). They had fouled every decoder box — Advanced RDS on the 17 Pro Max too — and
+   *  held RTTY / FT8 BIG down. EdgeChip does the sliding; THIS decides where each card is:
+   *   · 'tucked' — the user flicked it away; 'shown' — the user tapped its tab;
+   *   · 'auto'   — out, unless a decoder box is open and the card has nothing urgent to say.
+   *  ★ URGENT brings a card back out even from 'tucked', with "Slide to dismiss ›" over a box: the server in the
+   *    red (HealthPill healthSummary, level 3), the countdown turning yellow (< 5 min) or red (< 2 min) — "So if the
+   *    server is practically melting show it, and for the time when it goes yellow on the countdown then red".
+   *  ★ Opening a box puts a card the user had brought out back on 'auto', so it tucks for the box. */
+  const boxesDrawn = !isLandscape || isTablet;
+  const anyBoxOpen = boxesDrawn && (dabBoxOpen || decoderShown || (advRdsOpen && status.mode === 'wfm'));
+  const hs = health ? healthSummary(health) : null;
+  const healthHot = !!hs && hs.worst >= 3;
+  const timeStage = useCountdownStage(sessionEndsAt != null && !adminOk ? sessionEndsAt : null, limitSoft || borrowed);
+  type ChipPref = 'auto' | 'shown' | 'tucked';
+  const [chipPref, setChipPref] = useState<{ health: ChipPref; time: ChipPref }>({ health: 'auto', time: 'auto' });
+  const prevHot = useRef({ health: false, time: 0 });
+  useEffect(() => {
+    const up = { health: healthHot && !prevHot.current.health, time: timeStage > prevHot.current.time };
+    prevHot.current = { health: healthHot, time: timeStage };
+    if (up.health || up.time) setChipPref((p) => ({ health: up.health ? 'auto' : p.health, time: up.time ? 'auto' : p.time }));
+  }, [healthHot, timeStage]);
+  useEffect(() => {
+    if (anyBoxOpen) setChipPref((p) => ({ health: p.health === 'shown' ? 'auto' : p.health,
+                                          time: p.time === 'shown' ? 'auto' : p.time }));
+  }, [anyBoxOpen]);
+  const chipOut = (pref: ChipPref, hot: boolean) => pref === 'shown' || (pref === 'auto' && (!anyBoxOpen || hot));
+  const healthOut = chipOut(chipPref.health, healthHot);
+  const timeOut = chipOut(chipPref.time, timeStage > 0);
+  const TIME_TAB = ['#ffb833', '#ffe14d', '#ff6b6b'];
+  /* ★ BIG reaches the status row, never past it — "make sure we respect the status row at the top of the screen
+   *  so we can still use our buttons without fouling the OS". */
+  const boxTopSafe = insets.top + 6;
   const vtsKey            = useRef(0);
 
   /* ★★★ OUR OWN EXPLANATIONS GO THROUGH THE VTS, not through overlays of their own.
@@ -9588,7 +9624,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   The snails (2026-09-30): Stuart asked for them to be explained here — fire = heat, bolt = power,
     //   both read from the hardware, never guessed. On a server that draws no pill the card is centred.
     { id: 'health', title: 'Is the server coping?',
-      body: 'The SERVER HEALTH pill shows how the receiver itself is doing — its processor, memory, temperature and power. If the audio breaks up, read it with the connection bars: a struggling pill means the server is the problem, a healthy pill with poor bars means it is the link. A snail means the server is busy but running slower than it should: a snail with flames means it is too hot and has slowed itself down to cool off, a snail with a lightning bolt means its power supply cannot keep up. A plain snail means it has slowed down and cannot tell why.',
+      body: 'The SERVER HEALTH pill shows how the receiver itself is doing — its processor, memory, temperature and power. If the audio breaks up, read it with the connection bars: a struggling pill means the server is the problem, a healthy pill with poor bars means it is the link. A snail means the server is busy but running slower than it should: a snail with flames means it is too hot and has slowed itself down to cool off, a snail with a lightning bolt means its power supply cannot keep up. A plain snail means it has slowed down and cannot tell why. Flick the card to the right to tuck it into the screen edge — its tab keeps the colour — and tap the tab to bring it back.',
       target: tourRef('healthPill') },
     // ★★ THIS CARD USED TO BE WRONG, and a tour that misdirects is worse than no tour: it sends
     //    someone hunting through the cog for a noise-reduction slider that is not there, and they
@@ -10105,7 +10141,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onClear={() => setDecoderText('')}
           onClose={dismissDecoderPanel}
           onShownChange={setDecoderShown}
-          topLimit={boxTopLimit}
+          topLimit={boxTopLimit} topSafe={boxTopSafe}
           morseQuality={morseQuality}
           onMorseQuality={onMorseQuality}
           spotsKind={spotsKind}
@@ -10604,14 +10640,19 @@ export default function SDRScreen({ route, navigation }: Props) {
              is its requirement, and legible is the point of being compact.
           ★ pointerEvents none: it is a readout, and it sits over the frequency scale — a touch that
             lands on it must reach the scale, like every other pill anchored here. */}
-      {!!health && !boxHidesVts && (
-        <View pointerEvents="none" ref={tourRef('healthPill')} collapsable={false}
-              onLayout={(e) => setHealthPillH(Math.round(e.nativeEvent.layout.height))}
-              style={[styles.rxHealth, { top: rightStackTop, right: rightInset }]}>
-          <PanelBoundary name="Health">
-          <HealthPill health={health} />
-          </PanelBoundary>
-        </View>
+      {!!health && (
+        <EdgeChip top={rightStackTop} right={rightInset} tucked={!healthOut} label="Server health"
+          hint={anyBoxOpen && healthHot}
+          onTuck={() => setChipPref((p) => ({ ...p, health: 'tucked' }))}
+          onShow={() => setChipPref((p) => ({ ...p, health: 'shown' }))}
+          tabColour={hs!.colour} tabIcon={<HealthTabIcon colour={hs!.colour} />}>
+          <View ref={tourRef('healthPill')} collapsable={false}
+                onLayout={(e) => setHealthPillH(Math.round(e.nativeEvent.layout.height))}>
+            <PanelBoundary name="Health">
+            <HealthPill health={health} />
+            </PanelBoundary>
+          </View>
+        </EdgeChip>
       )}
 
       {/* ★ `&& !adminOk` is belt and braces, and deliberate: the controls pill has always preferred
@@ -10661,9 +10702,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         );
       })()}
 
-      {sessionEndsAt != null && !adminOk && !boxHidesVts && (
-        <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft || borrowed}
-                      top={rightStackTop + healthStackShift} right={rightInset} />
+      {sessionEndsAt != null && !adminOk && (
+        <EdgeChip top={rightStackTop + healthStackShift} right={rightInset} tucked={!timeOut} label="Time remaining"
+          hint={anyBoxOpen && timeStage > 0}
+          onTuck={() => setChipPref((p) => ({ ...p, time: 'tucked' }))}
+          onShow={() => setChipPref((p) => ({ ...p, time: 'shown' }))}
+          tabColour={TIME_TAB[timeStage]} tabIcon={<ClockTabIcon colour={TIME_TAB[timeStage]} />}>
+          <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft || borrowed} stage={timeStage} />
+        </EdgeChip>
       )}
 
       {/* ★ NO GAIN-MIN OVERLAY HERE ANY MORE. It became a VTS notice — see the effect that
@@ -10752,7 +10798,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           audioRunStartAt={() => audioRunStartRef.current}
           onExit={toggleDab}
           tall={dabTall} onTall={onDabTall}
-          topLimit={boxTopLimit}
+          topLimit={boxTopLimit} topSafe={boxTopSafe}
           onBookmarks={() => { setFreqModalDab(true); setFreqModalOpen(true); }}
           // ★ Above the VTS bar — the DAB box sat on top of it (Stuart, 2026-09-15 07:06).
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
@@ -11708,8 +11754,25 @@ export default function SDRScreen({ route, navigation }: Props) {
  * ✗ Display only. Nothing here may act on reaching zero: the SERVER ends a session, and the one
  *  message that clears the deadline (sessionSecsLeft < 0, or an admin grant) clears `endsAt`.
  */
-function SessionClock({ endsAt, limitSoft, top, right }:
-    { endsAt: number; limitSoft: boolean; top: number; right: number }) {
+/** ★ The countdown's urgency: 0 normal, 1 YELLOW (< 5 min), 2 RED (< 2 min) — hard limits only; a soft limit is a
+ *  guarantee, not a sentence, and never warns (see SessionClock). Ticks once a second only while there is a limit. */
+function useCountdownStage(endsAt: number | null, soft: boolean): 0 | 1 | 2 {
+  const [stage, setStage] = useState<0 | 1 | 2>(0);
+  useEffect(() => {
+    if (endsAt == null || soft) { setStage(0); return; }
+    const read = () => {
+      const left = endsAt - Date.now();
+      setStage(left < 120_000 ? 2 : left < 300_000 ? 1 : 0);
+    };
+    read();
+    const t = setInterval(() => { if (AppState.currentState === 'active') read(); }, 1000);
+    return () => clearInterval(t);
+  }, [endsAt, soft]);
+  return stage;
+}
+
+function SessionClock({ endsAt, limitSoft, stage }:
+    { endsAt: number; limitSoft: boolean; stage: 0 | 1 | 2 }) {
   const [left, setLeft] = useState(() => Math.max(0, endsAt - Date.now()));
   useEffect(() => {
     const read = () => setLeft(Math.max(0, endsAt - Date.now()));
@@ -11721,7 +11784,7 @@ function SessionClock({ endsAt, limitSoft, top, right }:
   }, [endsAt]);
   return (
     <View pointerEvents="none" style={[styles.rxClock, {
-      top, right,
+      position: 'relative',
       /* ★★★ A SOFT LIMIT IS A GUARANTEE, NOT A SENTENCE — SO IT MUST NOT COUNT DOWN LIKE ONE.
              "YOUR TURN ENDS IN 0:00" sat there on a soft server while nothing whatever
              happened, which is worse than saying nothing: it tells the listener they have been
@@ -11731,17 +11794,17 @@ function SessionClock({ endsAt, limitSoft, top, right }:
           ★★ AND NO RED. The urgent colouring says "something is about to be taken from you",
              which is true on a hard limit and false on a soft one — there, zero is the moment
              a guarantee expires, not the moment anything stops. */
-      borderColor: (!limitSoft && left < 120_000) ? 'rgba(255,90,90,0.75)'
+      borderColor: stage === 2 ? 'rgba(255,90,90,0.75)' : stage === 1 ? 'rgba(255,225,77,0.7)'
                                                : 'rgba(255,160,0,0.45)',
     }]}>
       <Text style={[styles.rxClockCap, {
-        color: (!limitSoft && left < 120_000) ? 'rgba(255,140,140,0.95)'
+        color: stage === 2 ? 'rgba(255,140,140,0.95)' : stage === 1 ? 'rgba(255,225,77,0.9)'
                                            : 'rgba(255,160,0,0.65)' }]}>
         {limitSoft ? (left <= 0 ? 'GUARANTEED TIME OVER' : 'GUARANTEED TIME ENDS IN')
                    : 'YOUR TURN ENDS IN'}
       </Text>
       <Text style={[limitSoft && left <= 0 ? styles.rxClockSoft : styles.rxClockNum, {
-        color: (!limitSoft && left < 120_000) ? '#ff6b6b' : '#ffb833' }]}>
+        color: stage === 2 ? '#ff6b6b' : stage === 1 ? '#ffe14d' : '#ffb833' }]}>
         {limitSoft && left <= 0
           ? 'yours until someone else wants it'
           : `${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`}

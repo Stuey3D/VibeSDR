@@ -48,6 +48,8 @@ export interface DecoderPanelProps {
   /** ★ On a short portrait window (SDRScreen boxTopLimit): the box fills from here down to the controls,
    *  and BIG / SMALL go. */
   topLimit?: number;
+  /** ★ BIG's ceiling — just below the status row (SDRScreen boxTopSafe). */
+  topSafe?: number;
   /** ★ Opens the tune box. Needed because on DAB this panel owns the keyboard outright, so
    *  Enter never reaches the main screen — see the T shortcut below. */
   onOpenFreq?: () => void;
@@ -214,7 +216,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit,
+  onOpenFreq, onShownChange, topLimit, topSafe,
 }: DecoderPanelProps) {
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
   //
@@ -248,9 +250,9 @@ export default function DecoderPanel({
   //   the reservation above never counted, so it is counted here or BIG reaches the notch again.
   const tk = useDecoderTokens();
   const dp = useDecoderStyles(makeDp);
-  const availH = topLimit != null
-    ? Math.max(100, winH - bottomOffset - topLimit - HEADER_H - decoderBodyInset(tk))
-    : Math.max(160, winH - bottomOffset - insets.top - 16 - HEADER_H - decoderBodyInset(tk));
+  // BIG's room: up to the status row. SMALL on a short window: up to the server-name row (topLimit).
+  const availH = Math.max(160, winH - bottomOffset - (topSafe ?? insets.top + 16) - HEADER_H - decoderBodyInset(tk));
+  const smallFit = topLimit != null ? Math.max(100, winH - bottomOffset - topLimit - HEADER_H - decoderBodyInset(tk)) : 200;
   // ★★★ ONE COMPUTED VALUE DRIVES ALL THREE PLACES THE 200 USED TO LIVE (the image canvas, the
   // ADS-B box and the text ScrollView). They MUST move together or BIG works in some modes and not
   // others.
@@ -262,10 +264,13 @@ export default function DecoderPanel({
   /* ★★ BIG ONLY WHERE IT IS BIGGER (Stuart, 2026-10-03, the SE in Display Zoom: "remove the option for Big
    *  since big and small take the full screen") — the DAB box's rule (DabPanel bigUseful): offered only when
    *  BIG gains at least 80 pt over SMALL's 200; otherwise SMALL, and no key. */
-  const bigUseful = topLimit == null && Math.min(availH, winH * 0.62) >= 200 + 80;
+  /* ★★ BIG IS THE ROOM, ON A PHONE — RTTY / FT8 were held short by the cards, which tuck away now (Stuart, 2026-10-03:
+   *  "we can have bigger decoder boxes for things like RTTY/FT8"). The 0.62 cap stays for a big window (a Mac
+   *  ~1300 pt tall, where it was "a decoder box swallowing the entire app"). */
+  const bigH = winH > 950 ? Math.min(availH, winH * 0.62) : availH;
+  const bigUseful = bigH >= smallFit + 40;
   const tall = tallPick && bigUseful;
-  // ★ topLimit: the box FILLS its room (the cards have stepped aside for it).
-  const bodyH = Math.round(topLimit != null ? availH : Math.min(availH, tall ? winH * 0.62 : 200));
+  const bodyH = Math.round(tall ? bigH : Math.min(availH, smallFit));
   // ★★★ EVERY SCROLLING BODY MUST USE THIS. `dp.body` used to carry `maxHeight: 200` and FOUR
   // places relied on it — the text ScrollView, the DAB list, the spots list and (via its own prop)
   // the image canvas. Moving the number inline and updating only ONE of them left DAB and SPOTS
