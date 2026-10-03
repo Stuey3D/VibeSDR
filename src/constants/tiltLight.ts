@@ -25,9 +25,9 @@ export const TILT = {
    *  stored angle instead of parking the highlight off the edge. */
   baseTauMs: 4000,
   /** Roll ±rollRange° relative to the baseline swings the angle ±angleSwing° around the stored angle. */
-  rollRange: 20, angleSwing: 90,   // ★ was 30: barely moved the light (Stuart, 2026-10-02) — ±90° crosses the plate
+  rollRange: 20, angleSwing: 30,
   /** Pitch ±pitchRange° slides the sheen band ±shiftSwing (fraction of the gradient length). */
-  pitchRange: 20, shiftSwing: 0.20,   // ★ was 0.10; also moves the hot-spot up/down (plateLight.hotspotY)
+  pitchRange: 20, shiftSwing: 0.10,
   /** The write gate: a SharedValue write only when the light has moved this much… */
   minDeg: 0.5, minShift: 0.005,
   /** …and no more often than this (rung 2 of the fallback ladder: 50 ms = 20 Hz). */

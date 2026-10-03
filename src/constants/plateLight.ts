@@ -40,33 +40,13 @@ export function glossAngle(deg: number): number {
  *   ("pixel-identical to today"). Scaling the slope (not offsetting it) keeps the mirror exact: RIGHT (256°)
  *   is 72 %, TOP (180°) is 50 % — and there is no step at 104° for tilt to cross.
  */
-/* ★★★ LINEAR IN THE ANGLE, NOT ITS SINE (Stuart, 2026-10-02, testing tilt on the iPhone: "the light source
- *  doesn't move … all they are doing is very subtly tilting the fixed light source and not actually moving it").
- *  sin() is flat around 90°, so a ±30° swing about LEFT (104°) moved the hot-spot ~3 % of the width — invisible.
- *  A straight line through the same three anchors (LEFT 104° → 28 %, TOP 180° → 50 %, RIGHT 256° → 72 %) keeps
- *  every one of them exactly where it was, and lets tilt — which may drive the angle past the five fixed ones —
- *  carry the light across the plate. Clamped inside the plate so the spot never leaves the metal. */
 export function hotspotX(deg: number): number {
   'worklet';
-  const x = 0.28 + ((deg - 104) / 152) * 0.44;
-  return x < 0.04 ? 0.04 : x > 0.96 ? 0.96 : x;
+  return 0.5 - (0.22 * Math.sin((deg * Math.PI) / 180)) / Math.sin((104 * Math.PI) / 180);
 }
 
-/** The sheen and gloss gradients only ever come from ABOVE (the brief: no light from below), so the angle that
- *  drives them is clamped to LEFT-horizontal … RIGHT-horizontal; the hot-spot (hotspotX) keeps the full travel. */
-export function sheenDeg(deg: number): number {
-  'worklet';
-  return deg < 90 ? 90 : deg > 270 ? 270 : deg;
-}
-
-/** The radial hot-spot's y at rest: −10 % (today's). Tilt's pitch moves it — see hotspotY. */
+/** The radial hot-spot's y: −10 %, fixed (the brief: y unchanged). */
 export const HOTSPOT_Y = -0.10;
-/** ★ Tilt's pitch (the `shift`, ±TILT.shiftSwing) moves the hot-spot DOWN or UP the plate as well as sliding the
- *  sheen band — tipping the phone toward you brings the light down the metal. shift 0 = today. */
-export function hotspotY(shift: number): number {
-  'worklet';
-  return HOTSPOT_Y + shift * 1.6;
-}
 
 /**
  * A screw's highlight centre, as fractions of its 9 pt box (today `radial-gradient(circle at 35% 30%)`).
