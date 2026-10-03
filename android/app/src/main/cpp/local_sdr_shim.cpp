@@ -6575,7 +6575,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // itself on a channel change. Guarded: only the macOS core links libopus today.
 #ifdef VIBE_HAVE_OPUS
     vibe::OpusAudioEncoder opusEnc;
-    /* ★★★ ONE LOCK FOR BOTH SHARED ENCODERS (opusEnc, opusSilence). Three threads reach them: the
+    /* ★★★ ONE LOCK FOR THE SHARED ENCODER (opusEnc, and the silence counter/cache beside it). Three threads reach them: the
      *  vibe-dsp thread (every demodulator's onAudio), the vibe-dabclk thread (pumpDabAudio → onAudio,
      *  and `dabInject_` is a plain bool, so the DSP thread can pass the DAB gate while the clock
      *  thread is injecting), and the network thread (`opusEnc.reset()` when the first listener's
@@ -7161,13 +7161,57 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     to set it muted EVERYBODY, and a newcomer heard nothing with no idea why. It is only a
      *     mute keyed on the signal level, so it is the one control that can be truly independent
      *     even when the dial is shared — the demodulation and the Opus encode stay single, and a
-     *     squelched listener is simply handed silence packets from a second encoder that runs in
-     *     lockstep. Keyed by session so the spectrum socket that carries the message and the audio
+     *     squelched listener is simply handed silence packets kept in lockstep with the stream
+     *     (a cached packet and a sample counter since 2026-10-03 — see silencePending_). Keyed by session so the spectrum socket that carries the message and the audio
      *     socket that receives the silence are the same listener. Guarded by clientMtx. */
     struct SessionSquelch { bool on = false; float db = -100.0f; };
     std::map<std::string, SessionSquelch> sessionSquelch;
 #ifdef VIBE_HAVE_OPUS
-    vibe::OpusAudioEncoder opusSilence;   // ★ zeros in, silence packets out, one per 20 ms like opusEnc
+    /* ★★ THE SILENCE STREAM IS ONE CACHED PACKET AND A SAMPLE COUNTER, NOT A SECOND ENCODER
+     *  (efficiency audit 2026-10-03). It used to be a full second OpusAudioEncoder fed zeros on
+     *  EVERY block — including the ~100% of the time nobody's squelch is closed, when its packets
+     *  were thrown away purely to keep it "in lockstep". Opus on digital silence emits the same
+     *  packet every frame, and the only lockstep that matters is the PACKET COUNT: the encoder
+     *  emits one packet per 960 samples/channel fed, carried across blocks, its remainder cleared
+     *  on a channel change. silencePending_ reproduces exactly that arithmetic, so a muted
+     *  listener receives the same number of 20 ms packets at the same moments as before, and the
+     *  first packet after a squelch closes is never a half-filled frame.
+     *  ★ MEASURED (M-series, complexity 6, stereo 96 kbps): libopus spots digital silence, so a
+     *    silent frame costs 20.7 µs against 83.6 µs for programme — a quarter of the real encode,
+     *    50 times a second, ~0.1% of a core here and ~1% on a Pi 2 (an estimate: ~10x slower),
+     *    plus a zero-filled vector per block. Small, but paid for nothing. The cached packet is
+     *    BYTE-IDENTICAL to the old encoder's steady output (3 bytes, every bitrate, mono and
+     *    stereo — checked 2026-10-03), and the packet COUNT matched over 200 odd-sized blocks.
+     *    Now: an integer add per block; one real encode (four frames, to steady state) only when
+     *    the wire channel count or bitrate changes. Guarded by opusMtx. */
+    int silencePending_ = 0;              // samples/channel not yet a whole 20 ms frame
+    int silenceCh_ = 0;                   // wire channels the counter is counting for
+    int silencePktCh_ = 0, silencePktBps_ = 0;
+    std::vector<uint8_t> silencePkt_;     // the steady-state Opus packet for 20 ms of zeros
+    /** Advance the silence counter by one block; returns how many 20 ms packets are now due. */
+    int silenceFramesDueLocked(int count, int wireCh) {
+        if (wireCh != silenceCh_) { silenceCh_ = wireCh; silencePending_ = 0; }   // = encode()'s buf_.clear()
+        silencePending_ += count;
+        const int n = silencePending_ / vibe::OpusAudioEncoder::kFrameSamples;
+        silencePending_ -= n * vibe::OpusAudioEncoder::kFrameSamples;
+        return n;
+    }
+    /** The cached silence packet for this shape, encoding it on first use or after a change. */
+    const std::vector<uint8_t>& silencePacketLocked(int wireCh, int bps) {
+        if (silencePkt_.empty() || silencePktCh_ != wireCh || silencePktBps_ != bps) {
+            vibe::OpusAudioEncoder e;
+            e.setBitrate(bps);
+            // ★ Four frames, keep the LAST: the first packet out of a fresh encoder can differ
+            //   (look-ahead, mode decision); by the fourth it is the steady silence packet the
+            //   old lockstep encoder was sending.
+            std::vector<int16_t> z((size_t)vibe::OpusAudioEncoder::kFrameSamples * 4 * wireCh, 0);
+            std::vector<std::vector<uint8_t>> pk;
+            e.encode(z.data(), vibe::OpusAudioEncoder::kFrameSamples * 4, wireCh, pk);
+            silencePkt_ = pk.empty() ? std::vector<uint8_t>{} : pk.back();
+            silencePktCh_ = wireCh; silencePktBps_ = bps;
+        }
+        return silencePkt_;
+    }
 #endif
     /** ★★ WHEN THIS SOCKET ARRIVED. On a SHARED dial there is one DSP fanned out to everybody, so
      *  an extra listener has no per-client chain and the admin table showed dashes for everything
@@ -12056,7 +12100,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  difference anyone can hear. */
     /** Split the shared dial's audio sockets into the ones that hear the audio and the ones whose
      *  own squelch is closed right now (their session's threshold against the shared channel
-     *  level), then send each group its own stream — the silence group from opusSilence. */
+     *  level), then send each group its own stream — the silence group from the cached silence packet. */
     void sendAudioPcmSquelchAware(const std::vector<std::shared_ptr<net::Socket>>& socks,
                                   const int16_t* pcm, int count, int ch) {
         std::vector<std::shared_ptr<net::Socket>> open, muted;
@@ -12076,25 +12120,50 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
         if (!open.empty()) sendAudioPcm(open, pcm, count, ch);
-        if (!muted.empty()) {
-            std::vector<int16_t> zeros((size_t)count * ch, 0);
-            sendAudioPcm(muted, zeros.data(), count, ch, /*silence=*/true);
-        }
 #ifdef VIBE_HAVE_OPUS
-        else if (audioWantsOpus.load()) {
-            // ★ Keep the silence encoder in lockstep even while nobody is muted, so the moment
-            //   somebody is, its first packet is not a half-filled frame.
-            std::vector<int16_t> zeros((size_t)count * (ch == 1 && !audioForceMono.load() ? 2 : ch), 0);
-            std::vector<std::vector<uint8_t>> drop;
-            std::lock_guard<std::mutex> lk(opusMtx);   // ★ see opusMtx
-            opusSilence.setBitrate(opusBitrateFor(ch));
-            opusSilence.encode(zeros.data(), count, ch == 1 && !audioForceMono.load() ? 2 : ch, drop);
+        if (audioWantsOpus.load()) {
+            // ★ The silence stream — see silencePending_. The counter advances on EVERY block,
+            //   muted or not, which is what "lockstep" always meant; no encode happens here.
+            //   Wire shape mirrors sendAudioPcm: forced mono stays mono, anything else goes out
+            //   stereo; the bitrate follows the content channels, as there.
+            const bool mono = audioForceMono.load();
+            const int wireCh = mono ? 1 : 2;
+            const int contentCh = mono ? 1 : ch;
+            int due = 0;
+            std::vector<uint8_t> frame;
+            {
+                std::lock_guard<std::mutex> lk(opusMtx);   // ★ see opusMtx
+                due = silenceFramesDueLocked(count, wireCh);
+                if (!muted.empty() && due > 0) {
+                    const auto& pkt = silencePacketLocked(wireCh, opusBitrateFor(contentCh));
+                    if (!pkt.empty()) {
+                        const uint32_t sr = (uint32_t)vibe::OpusAudioEncoder::kSampleRate;
+                        frame.reserve(6 + pkt.size());
+                        frame.push_back((uint8_t)wireCh); frame.push_back(3);   // [0]=ch, [1]=3 Opus
+                        frame.push_back((uint8_t)(sr & 0xff));         frame.push_back((uint8_t)((sr >> 8) & 0xff));
+                        frame.push_back((uint8_t)((sr >> 16) & 0xff)); frame.push_back((uint8_t)((sr >> 24) & 0xff));
+                        frame.insert(frame.end(), pkt.begin(), pkt.end());
+                    }
+                }
+            }
+            if (!frame.empty()) {
+                for (int k = 0; k < due; k++) {
+                    for (auto& sk : muted)
+                        if (sk && sk->isOpen()) sendWs(sk, 0x2, frame.data(), frame.size(), Out::Audio);
+                    vsAudioBytes.fetch_add(frame.size() * muted.size(), std::memory_order_relaxed);
+                }
+            }
+            return;
         }
 #endif
+        if (!muted.empty()) {
+            std::vector<int16_t> zeros((size_t)count * ch, 0);
+            sendAudioPcm(muted, zeros.data(), count, ch);   // raw PCM: zeros ARE the silence
+        }
     }
 
     void sendAudioPcm(const std::vector<std::shared_ptr<net::Socket>>& socks,
-                      const int16_t* pcm, int count, int ch, bool silence = false) {
+                      const int16_t* pcm, int count, int ch) {
         if (socks.empty()) return;
         auto fanOut = [&](const std::vector<uint8_t>& frame) {
             for (auto& sk : socks)
@@ -12125,7 +12194,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // Opus only when THIS client opted in (see acceptWs). A client that can't decode it — the
         // current web client — is never sent it, so nothing breaks; it gets PCM below.
         if (audioWantsOpus.load()) {
-            vibe::OpusAudioEncoder& enc = silence ? opusSilence : opusEnc;   // ★ two streams, one shape
+            vibe::OpusAudioEncoder& enc = opusEnc;   // ★ the silence stream never comes here — see silencePending_
             std::vector<std::vector<uint8_t>> packets;
             {
                 std::lock_guard<std::mutex> lk(opusMtx);   // ★ see opusMtx — the fan-out below is outside it
