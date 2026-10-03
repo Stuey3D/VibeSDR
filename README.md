@@ -23,9 +23,9 @@ It takes about five minutes, and the more of us who do it, the better the map ge
 | | |
 |---|---|
 | 💬 **[Discord](https://discord.gg/pr9EjUUBCA)** | Where the testing, the bug reports and the DX chat happen. |
-| 🤖 **[Android test group](https://groups.google.com/g/vibesdr-play-store-test)** | Join this to get the Android app from Play. |
 | 📱 **[VibeSDR on the App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** | iPhone + iPad, with the Apple Watch remote included. |
 | ⌚ **[VibeSDR Jr on the App Store](https://apps.apple.com/gb/app/vibesdr-jr/id6795507029)** | The standalone Apple Watch receiver — no phone involved. |
+| 🤖 **[Android APK](https://github.com/Stuey3D/VibeSDR/releases)** | VibeSDR for Android, straight from GitHub — no Google account needed. |
 | 🖥 **[VibeServer downloads](https://github.com/Stuey3D/VibeSDR/releases/latest)** | macOS app, and `apt` for Linux. |
 | 🌐 **[vibesdr.net](https://vibesdr.net)** · **[demo receiver](https://demo.vibesdr.net)** | The site, and our own radio to try right now. |
 
