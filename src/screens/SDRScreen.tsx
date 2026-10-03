@@ -8232,6 +8232,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★ BIG reaches the status row, never past it — "make sure we respect the status row at the top of the screen
    *  so we can still use our buttons without fouling the OS". */
   const boxTopSafe = insets.top + 6;
+  /** ★ The edge the health / time cards join — flush, clear of a landscape notch (EdgeChip). */
+  const edgeRight = insets.right;
   const vtsKey            = useRef(0);
 
   /* ★★★ OUR OWN EXPLANATIONS GO THROUGH THE VTS, not through overlays of their own.
@@ -10641,7 +10643,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ pointerEvents none: it is a readout, and it sits over the frequency scale — a touch that
             lands on it must reach the scale, like every other pill anchored here. */}
       {!!health && (
-        <EdgeChip top={rightStackTop} right={rightInset} tucked={!healthOut} label="Server health"
+        <EdgeChip top={rightStackTop} right={edgeRight} tucked={!healthOut} label="Server health"
           hint={anyBoxOpen && healthHot}
           onTuck={() => setChipPref((p) => ({ ...p, health: 'tucked' }))}
           onShow={() => setChipPref((p) => ({ ...p, health: 'shown' }))}
@@ -10649,7 +10651,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           <View ref={tourRef('healthPill')} collapsable={false}
                 onLayout={(e) => setHealthPillH(Math.round(e.nativeEvent.layout.height))}>
             <PanelBoundary name="Health">
-            <HealthPill health={health} />
+            {/* Bare: EdgeChip draws the frame (in the pill's own colour) round it and the › */}
+            <HealthPill health={health} style={{ borderWidth: 0, backgroundColor: 'transparent', borderRadius: 0 }} />
             </PanelBoundary>
           </View>
         </EdgeChip>
@@ -10703,11 +10706,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       })()}
 
       {sessionEndsAt != null && !adminOk && (
-        <EdgeChip top={rightStackTop + healthStackShift} right={rightInset} tucked={!timeOut} label="Time remaining"
+        <EdgeChip top={rightStackTop + healthStackShift} right={edgeRight} tucked={!timeOut} label="Time remaining"
           hint={anyBoxOpen && timeStage > 0}
           onTuck={() => setChipPref((p) => ({ ...p, time: 'tucked' }))}
           onShow={() => setChipPref((p) => ({ ...p, time: 'shown' }))}
-          tabColour={TIME_TAB[timeStage]} tabIcon={<ClockTabIcon colour={TIME_TAB[timeStage]} />}>
+          tabColour={TIME_TAB[timeStage]} tabIcon={<ClockTabIcon colour={TIME_TAB[timeStage]} />}
+          frameColour={['rgba(255,160,0,0.55)', 'rgba(255,225,77,0.7)', 'rgba(255,90,90,0.75)'][timeStage]}>
           <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft || borrowed} stage={timeStage} />
         </EdgeChip>
       )}
@@ -11784,7 +11788,7 @@ function SessionClock({ endsAt, limitSoft, stage }:
   }, [endsAt]);
   return (
     <View pointerEvents="none" style={[styles.rxClock, {
-      position: 'relative',
+      position: 'relative', borderWidth: 0, backgroundColor: 'transparent',   // bare: EdgeChip frames it
       /* ★★★ A SOFT LIMIT IS A GUARANTEE, NOT A SENTENCE — SO IT MUST NOT COUNT DOWN LIKE ONE.
              "YOUR TURN ENDS IN 0:00" sat there on a soft server while nothing whatever
              happened, which is worse than saying nothing: it tells the listener they have been

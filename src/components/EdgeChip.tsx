@@ -19,7 +19,11 @@ const TAB_H = 52;
 const HINT_MS = 2500;
 
 export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = false, tabColour, tabIcon, label,
-                                   children }: {
+                                   frameColour, children }: {
+  /** The card's frame (it draws ONE frame round the arrow and the content; the content is drawn bare).
+   *  Default: the tab's colour. */
+  frameColour?: string;
+  /** `right`: the screen edge the card joins — 0, or the safe-area inset where a notch sits there. */
   top: number; right: number;
   tucked: boolean;
   /** The user flicked the card away. */
@@ -82,7 +86,19 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = fa
       <Animated.View {...pan.panHandlers} pointerEvents={tucked ? 'none' : 'auto'}
         onLayout={(e) => { const v = Math.ceil(e.nativeEvent.layout.width); if (v > 0 && v !== w) setW(v); }}
         style={[ec.card, { top, right, transform: [{ translateX: x }] }]}>
-        <View style={hinting ? ec.hidden : undefined}>{children}</View>
+        {/* ★ JOINED TO THE EDGE, with a › pointing at it (Stuart, 2026-10-03: "move them to join the edge of the
+            screen and then put an arrow to the left of the content pointing to the edge of the screen to show the
+            card can be collapsed away"). The child squares its right side (see the callers); the arrow sits inside
+            its frame, on the left, and tapping it tucks the card too. */}
+        <View style={[ec.row, { borderColor: frameColour ?? tabColour }, hinting && ec.hidden]}>
+          <TouchableOpacity onPress={() => Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true })
+                                          .start(() => onTuckRef.current())}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 2 }} accessibilityRole="button" accessibilityLabel={`Hide ${label}`}
+            style={ec.arrowHit}>
+            <Text style={[ec.arrow, { color: tabColour }]}>›</Text>
+          </TouchableOpacity>
+          {children}
+        </View>
         {hinting && (
           <View pointerEvents="none" style={ec.hintWrap}>
             <Text style={ec.hint} numberOfLines={1}>Slide to dismiss ›</Text>
@@ -90,7 +106,7 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = fa
         )}
       </Animated.View>
       <Animated.View {...tabPan.panHandlers} pointerEvents={tucked ? 'auto' : 'none'}
-        style={[ec.tabWrap, { top, transform: [{ translateX: tabX }] }]}>
+        style={[ec.tabWrap, { top, right, transform: [{ translateX: tabX }] }]}>
         <TouchableOpacity onPress={onShow} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 10, right: 4 }}
           accessibilityRole="button" accessibilityLabel={`Show ${label}`}
           style={[ec.tab, { borderColor: tabColour }]}>
@@ -104,11 +120,16 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = fa
 
 const ec = StyleSheet.create({
   card:     { position: 'absolute', zIndex: 250 },
+  // ONE frame: rounded on the left, open and flush on the right — the card JOINS the edge.
+  row:      { flexDirection: 'row', alignItems: 'stretch', backgroundColor: 'rgba(8,10,8,0.86)',
+              borderWidth: 1.5, borderRightWidth: 0, borderTopLeftRadius: 12, borderBottomLeftRadius: 12 },
+  arrowHit: { justifyContent: 'center', paddingLeft: 7, paddingRight: 1 },
+  arrow:    { fontSize: 20, fontWeight: '700', lineHeight: 22 },
   hidden:   { opacity: 0 },
   hintWrap: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center',
               borderRadius: 8, backgroundColor: 'rgba(8,6,2,0.92)', borderWidth: 1, borderColor: 'rgba(255,184,51,0.55)' },
   hint:     { color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, fontWeight: '700', letterSpacing: 0.5 },
-  tabWrap:  { position: 'absolute', right: 0, zIndex: 251 },
+  tabWrap:  { position: 'absolute', zIndex: 251 },
   tab:      { width: TAB_W, height: TAB_H, borderTopLeftRadius: 12, borderBottomLeftRadius: 12,
               borderWidth: 1.5, borderRightWidth: 0, backgroundColor: 'rgba(14,12,8,0.88)',
               alignItems: 'center', justifyContent: 'center', gap: 2 },
