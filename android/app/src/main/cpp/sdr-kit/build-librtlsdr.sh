@@ -15,7 +15,7 @@
 #
 # Usage:  sdr-kit/build-librtlsdr.sh [tag]        (default: the release below)
 set -euo pipefail
-TAG="${1:-797f814}"                     # osmocom/rtl-sdr — Release 2.0.3 (has RTL-SDR Blog V4L)
+TAG="${1:-797f8143266d983c56d8f35d2d442527529dd8a5}"                     # osmocom/rtl-sdr — Release 2.0.3 (has RTL-SDR Blog V4L)
 NDK="${ANDROID_NDK:-$HOME/Library/Android/sdk/ndk/27.1.12297006}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$(mktemp -d)"
