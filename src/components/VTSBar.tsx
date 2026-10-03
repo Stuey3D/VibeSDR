@@ -108,7 +108,8 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
   const [symFit, setSymFit] = useState(false);
-  const { width: winW } = useWindowDimensions();
+  const [textOnly, setTextOnly] = useState(false);
+  const { width: winW, height: winH } = useWindowDimensions();
   const [textW, setTextW] = useState(0);
   /** The two side blocks' natural widths — each reserves the wider, so the text window is centred. */
   const [leftW, setLeftW] = useState(0);
@@ -272,11 +273,20 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     if (fits !== symFit) setSymFit(fits);
   }
   const centreSides = symFit;
-  /* ★ ON A NARROW STRIP THE STATION LOGO GOES FIRST (Stuart, 2026-10-03: "on this narrower portrait bar we can start
-   *  dropping icons … to keep it in parity with the VCR bar then the station logo first"). The VCR/DOT strip never
-   *  shows the logo; on a phone-width window with TP·TA·AF competing for the room, the plain styles drop it too, so
-   *  the RadioText gets the space. Decided by the WINDOW width (not the text), so it cannot flicker on and off. */
-  const dropLogo = !vfd && !!shown.annunciators && winW < 500;
+  /* ★★ PORTRAIT WITH NO ROOM: THE STRIP IS THE RADIOTEXT AND NOTHING ELSE (Stuart, 2026-10-03: "in portrait when
+   *  there is no room we drop both sides and dedicate the VTS to radio text only, landscape gets the full whack").
+   *  Both side blocks (RDS/DAB mark, logo, flag · TP·TA·AF) go when the line would not fit beside them; a line that
+   *  does fit keeps them. Landscape never drops them.
+   *  ★ Decided against the width the line WOULD have with the sides (`withSides`), which does not move when they
+   *    hide — so hiding them cannot make them come back. The widths are their last measurement (a hidden block is
+   *    unmounted); +8 is the legends' own margins, which onLayout of the inner row does not include. */
+  {
+    const portrait = winH > winW;
+    const sidesW = leftW + (shown.annunciators ? rightW + 8 : 0);
+    const withSides = textOnly ? areaW - sidesW : areaW;
+    const want = portrait && needW > 0 && withSides > 0 && needW > withSides - 4;
+    if (want !== textOnly) setTextOnly(want);
+  }
   // ★ The offset carries a UNIT ("-1.2kHz"): never through the 14-segment (it has no lower case) —
   //   the sans on seg; Doto keeps the unit's case on dot.
   const offsetFont = COL.style === 'seg' ? FONT_HYPER : COL.font;
@@ -310,7 +320,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           reserve the same width. On Nixie / HYPER / default the text runs on from the logo and flag, and the
           left block (RDS mark + logo + flag) is far wider than TP·TA·AF — reserving it on the right left a band of
           dead black before the legends and squeezed the RadioText (Stuart, 2026-10-03). */}
-      <View style={[styles.sideBlock, centreSides && shown.annunciators && { minWidth: sideW }]}>
+      {!textOnly && (<View style={[styles.sideBlock, centreSides && shown.annunciators && { minWidth: sideW }]}>
       <View style={styles.sideInner} onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setLeftW(Math.ceil(e.nativeEvent.layout.width))}>
         {/* Source mark: live-data badge (RDS mark / text) wins; otherwise the
             bookmark-origin icon — backend logo, EiBi mark, or phone glyph.
@@ -336,7 +346,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
         {!vfd && !!shown.dab && (
           <View style={styles.rdsMark}><DabMark kind="plain" height={DAB_MARK_H} color={COL.mark} glow={COL.markGlow} ghost={rgba(COL.rgb, 0.16)} plus={shown.dab.plus} /></View>
         )}
-        {!vfd && shown.logoUrl && !dropLogo
+        {!vfd && shown.logoUrl
           ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
           : !vfd && shown.badge === 'RDS'
           ? null
@@ -353,7 +363,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
                   : null}
         {!vfd && !!shown.flag && <Text style={styles.flag}>{shown.flag}</Text>}
       </View>
-      </View>
+      </View>)}
       {!!shown.offset && tuneLeft && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
       {vfd ? (
         <View style={styles.vfdMeasure} onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setAreaW(e.nativeEvent.layout.width)}>
@@ -392,7 +402,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       {!!shown.offset && shown.tuneDir === 'right' && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
       {/* ★★ TP · TA · AF — fixed legends in the glass, drawn like the RDS mark (AnnunciatorLegend), on the
           RIGHT inside the ▶ so they balance the badge block on the left; lit when true, ghosted when not. */}
-      {!!shown.annunciators && (
+      {!!shown.annunciators && !textOnly && (
         <View style={[styles.sideBlock, styles.sideRight, centreSides && { minWidth: sideW }]}>
           <View style={[styles.sideInner, styles.annun]}
                 onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setRightW(Math.ceil(e.nativeEvent.layout.width))}>
