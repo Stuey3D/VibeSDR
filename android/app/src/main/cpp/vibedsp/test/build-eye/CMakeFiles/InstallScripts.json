@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/stuey3d/VibeSDR/android/app/src/main/cpp/vibedsp/test/build-eye/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

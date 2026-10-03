@@ -141,3 +141,10 @@ dist/mapdata/
 
 # GPU map tile packs (scripts/gen-map-tiles.mjs) — large build output, never committed
 /build/maptiles/
+
+# ★ Build artefacts that had been committed (audit 2026-10-03). The JS bundle is generated fresh
+#   by the React Native Gradle plugin into app/build/generated/assets/react/<variant>/ for every
+#   release; a copy in src/main/assets was a July snapshot that debug APKs packaged as a fallback.
+#   The vibedsp host-test build trees carry .o files, binaries and the build machine's paths.
+android/app/src/main/assets/index.android.bundle
+android/app/src/main/cpp/vibedsp/test/build-*/
