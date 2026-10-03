@@ -260,8 +260,8 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
     implementation("androidx.media:media:1.7.0")
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("androidx.media3:media3-session:1.4.1")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-session:1.11.1")
     // Android Auto connection state (PROJECTION/NATIVE) for car-only band-aware tuning
     implementation("androidx.car.app:app:1.4.0")
 
