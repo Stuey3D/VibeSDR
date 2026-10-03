@@ -90,6 +90,9 @@ VIBE_BUILD=$(echo "$VIBE_VER" | awk -F. '{printf "%d", $1*10000 + $2*100 + $3}')
 VIBE_PRE=$(sed -n 's/^set(VIBESERVER_PRERELEASE "\([A-Za-z0-9]*\)").*/\1/p' "$ROOT/vibeserver/CMakeLists.txt")
 if [ -n "$VIBE_PRE" ]; then
   VIBE_PRE_N=$(echo "$VIBE_PRE" | tr -dc '0-9'); VIBE_PRE_N=${VIBE_PRE_N:-1}
+  # ★ A release candidate numbers ABOVE every beta (b1..b49 = 1..49, rc1 = 51): "rc1" alone gave 1 —
+  #   below B20's 109920, so RC1 would have looked older than the beta it replaces.
+  case "$VIBE_PRE" in rc*) VIBE_PRE_N=$((50 + VIBE_PRE_N)) ;; esac
   VIBE_BUILD=$((VIBE_BUILD - 100 + VIBE_PRE_N))
   echo "==> pre-release $VIBE_PRE"
 fi
