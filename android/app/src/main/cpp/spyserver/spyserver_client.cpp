@@ -49,6 +49,12 @@ bool SpyServerClient::readMessage(std::vector<uint8_t>& buf, size_t& msgLen, int
             msgLen = consumed;
             return true;
         }
+        /* ★ A header that already declares an impossible body is a desync now, not after 4 MB
+         *  more has been read to prove it (audit 2026-10-03 — see kMaxBodySize). */
+        if (rx_.size() >= 20 && getU32(rx_.data() + 16) > kMaxBodySize) {
+            LOGE("message declares a %u-byte body — dropping link", (unsigned)getU32(rx_.data() + 16));
+            return false;
+        }
         if (rx_.size() > kMaxMessageBytes) {   // desync guard: never grow unbounded
             LOGE("rx buffer overflow (%zu bytes) — dropping link", rx_.size());
             return false;

@@ -38,7 +38,10 @@ std::vector<uint8_t> encodePing(uint64_t token) {
 bool parseCommand(const uint8_t* buf, size_t len, Command_t* out, size_t* consumed) {
     if (len < 8) return false;
     const uint32_t bodySize = getU32(buf + 4);
-    if (len < (size_t)8 + bodySize) return false;
+    /* ★★★ SUBTRACT, NEVER ADD (audit 2026-10-03). On a 32-bit build size_t is 32 bits, so
+     *  8 + 0xFFFFFFFC wrapped to 4, passed this test, and handed back a body pointer and size
+     *  running 4 GB past the buffer. len >= 8 is established above, so len - 8 cannot wrap. */
+    if (bodySize > kMaxBodySize || bodySize > len - 8) return false;
     out->type = getU32(buf + 0);
     out->bodySize = bodySize;
     out->body = bodySize ? buf + 8 : nullptr;
@@ -114,7 +117,8 @@ std::vector<uint8_t> encodeMessage(uint32_t messageType, uint32_t streamType,
 bool parseMessage(const uint8_t* buf, size_t len, Message_t* out, size_t* consumed) {
     if (len < 20) return false;
     const uint32_t bodySize = getU32(buf + 16);
-    if (len < (size_t)20 + bodySize) return false;
+    // ★★★ SUBTRACT, NEVER ADD — the same 32-bit wrap as parseCommand (audit 2026-10-03)
+    if (bodySize > kMaxBodySize || bodySize > len - 20) return false;
     const uint32_t rawType = getU32(buf + 4);
     out->protocolId     = getU32(buf + 0);
     out->type           = messageTypeOf(rawType);

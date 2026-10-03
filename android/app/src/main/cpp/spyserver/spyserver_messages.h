@@ -49,6 +49,10 @@ struct Command_t {
     const uint8_t* body = nullptr;
     uint32_t bodySize = 0;
 };
+/** ★ The largest body either parser will accept (audit 2026-10-03). The biggest real message is
+ *  an int16 IQ block at low decimation — well under 1 MB; anything past 4 MB is a desync or an
+ *  attack, and the parsers report it as incomplete so the caller's overflow guard drops the link. */
+constexpr uint32_t kMaxBodySize = 4u * 1024 * 1024;
 bool parseCommand(const uint8_t* buf, size_t len, Command_t* out, size_t* consumed);
 
 // Body helpers for the commands a SERVER must understand.
