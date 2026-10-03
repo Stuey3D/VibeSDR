@@ -219,7 +219,8 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
         {/* Current-frequency needle (warm red, matches the drum) */}
         {w > 0 && needleX >= 0 && needleX <= w && (
           <>
-            <View style={{ position: 'absolute', left: needleX, top: 2, width: 2, height: height - 4, backgroundColor: RED }} />
+            {/* ★ Centred on needleX, like the arrow above it (it ran from needleX, so it sat 1 pt right of the arrow's tip). */}
+            <View style={{ position: 'absolute', left: needleX - 1, top: 2, width: 2, height: height - 4, backgroundColor: RED }} />
             <View style={{ position: 'absolute', left: needleX - 5, top: 0, width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: RED }} />
           </>
         )}
