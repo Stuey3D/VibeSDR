@@ -447,6 +447,11 @@ private:
             motFlush();
         } else if (app == kXpadMotCont) {
             if (motPend_.empty()) return;
+            /* ★★★ BYTE CAP (audit 2026-10-03). With no valid length indicator (motLen_ 0) nothing
+             *  ever flushed, and every continuation grew motPend_ without end. The indicator is
+             *  14 bits, so no MOT data group can be longer than 16383 bytes: past that it is a
+             *  broken series, not a big one. */
+            if (motPend_.size() + n > kMaxMotGroup) { motPend_.clear(); return; }
             motPend_.insert(motPend_.end(), d, d + n);
             motFlush();
         }
@@ -466,6 +471,7 @@ private:
         }
     }
 
+    static constexpr size_t kMaxMotGroup = 0x3FFF;   ///< the 14-bit data group length indicator
     DlsAssembler         dls_;
     MotAssembler         mot_;
     std::vector<uint8_t> motPend_, motLenBuf_;

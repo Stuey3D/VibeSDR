@@ -55,6 +55,10 @@ public:
             const uint8_t* d = f + p + 3;
             if (first) { buf_.clear(); open_ = true; }
             else if (open_ && ((lastCont_ + 1) & 3) != cont) { open_ = false; ++lost_; }   // a gap: this series is broken
+            /* ★★★ BYTE CAP (audit 2026-10-03). A sender that never sets `last` grew buf_ for
+             *  ever. An MSC data group is at most a 13-bit segment plus its headers and CRC
+             *  (EN 300 401 §5.3.3, EN 301 234 §5.1) — under 8.3 kB; 16 kB is double that. */
+            if (open_ && buf_.size() + useful > kMaxGroupBytes) { open_ = false; buf_.clear(); ++lost_; }
             if (open_) {
                 buf_.insert(buf_.end(), d, d + useful);
                 lastCont_ = cont;
@@ -73,6 +77,7 @@ public:
     const uint8_t* lastFail() const { return lastFail_; }
     int lastFailAddr() const { return lastFailAddr_; }
 
+    static constexpr size_t kMaxGroupBytes = 16384;
 private:
     int addr_ = -1;
     GroupFn sink_;

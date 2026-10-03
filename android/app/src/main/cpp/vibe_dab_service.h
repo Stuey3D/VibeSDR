@@ -37,8 +37,10 @@
 #include "vibe_thread.h"
 #include "vibe_dab_epg.h"
 #include "vibe_dab_stereo.h"
+#include "vibe_admin.h"   // vibeadmin::utf8Clean — esc() cleans what the air sent before it reaches JSON
 #include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>   // unlink — a refused cache file is removed (cacheLoad)
 
 namespace vibedab {
 
@@ -1359,18 +1361,27 @@ public:
         const std::string dir = cacheDir_ + "/" + cacheName(e.ecc, e.eid);
         DIR* d = opendir(dir.c_str());
         if (!d) return;
-        size_t loaded = 0;
+        /* ★★★ A SAVED OBJECT IS RE-READ ON EVERY TUNE (audit 2026-10-03), so one the carousel
+         *  will not take — over its per-object or total caps, or empty — must not stay on disk to be
+         *  read, refused and read again for ever. It is deleted, and comes back from the air if it
+         *  is real. Reading stops at the per-object cap + 1 so a huge file costs no more than that;
+         *  the SI parse itself is depth-capped (SpiDocument::kMaxDepth), so a hostile document
+         *  that was saved can no longer take the process down each time it is loaded. */
+        size_t loaded = 0, dropped = 0;
         while (dirent* en = readdir(d)) {
             const std::string n = en->d_name;
             if (!safeName(n)) continue;
-            FILE* f = fopen((dir + "/" + n).c_str(), "rb");
+            const std::string path = dir + "/" + n;
+            FILE* f = fopen(path.c_str(), "rb");
             if (!f) continue;
             std::vector<uint8_t> body; uint8_t buf[4096]; size_t r;
-            while ((r = fread(buf, 1, sizeof buf, f)) > 0) body.insert(body.end(), buf, buf + r);
+            while (body.size() <= MotCarousel::kMaxObjectBytes && (r = fread(buf, 1, sizeof buf, f)) > 0) body.insert(body.end(), buf, buf + r);
             fclose(f);
             int ct, st; typeFor(n, ct, st);
-            if (!body.empty()) { carousel_.inject(n, ct, st, std::move(body)); ++loaded; }
+            if (!body.empty() && carousel_.inject(n, ct, st, std::move(body))) ++loaded;
+            else { unlink(path.c_str()); ++dropped; }
         }
+        if (dropped) fprintf(stderr, "[DAB] %zu cached carousel files refused and removed\n", dropped);
         closedir(d);
         if (loaded) fprintf(stderr, "[DAB] %zu carousel files for %s from the cache\n", loaded, cacheName(e.ecc, e.eid).c_str());
     }
@@ -2141,7 +2152,12 @@ private:
         { std::lock_guard<std::mutex> ak(adtsM_); while (adts_.size() > 250) adts_.pop_front(); }
     }
 
-    static std::string esc(const std::string& s) {
+    /* ★★★ CLEANED FIRST (audit 2026-10-03). Everything esc() writes goes out in a WebSocket TEXT
+     *  frame, and a browser drops the whole socket on one ill-formed UTF-8 byte. Labels, DLS, MOT
+     *  names and SPI text all come off the air; the charset decoders try, but this is the choke
+     *  point, as it is for RDS — see vibeadmin::utf8Clean. */
+    static std::string esc(const std::string& raw) {
+        const std::string s = vibeadmin::utf8Clean(raw);
         std::string o;
         for (char c : s) {
             if (c == '"' || c == '\\') { o += '\\'; o += c; }

@@ -36,7 +36,7 @@ public:
     /** Parse a binary SI object. Returns the services with at least one bearer. */
     static std::vector<SpiService> parse(const uint8_t* d, size_t n) {
         std::vector<SpiService> out;
-        walk(d, n, 0, out, nullptr);
+        walk(d, n, 0, out, nullptr, 0);
         return out;
     }
 
@@ -52,7 +52,13 @@ private:
     /** Walk one element's content: attributes (tag < 0x80 for CDATA/token/lang, ≥ 0x80 for the
      *  element's own attributes — both are TLV), then child elements. Element tags and attribute
      *  tags share the byte space, so the ORDER rule decides: attributes come first. */
-    static void walk(const uint8_t* d, size_t n, int elemTag, std::vector<SpiService>& out, SpiService* cur) {
+    /** ★★★ DEPTH CAP (audit 2026-10-03). Every level costs the sender two bytes and costs us a
+     *  stack frame holding an SpiService, so a hostile object of nested empty elements walked us
+     *  off the end of the stack. A real SI document nests five deep (serviceInformation →
+     *  services → service → mediaDescription → multimedia); 16 is generous. */
+    static constexpr int kMaxDepth = 16;
+    static void walk(const uint8_t* d, size_t n, int elemTag, std::vector<SpiService>& out, SpiService* cur, int depth) {
+        if (depth > kMaxDepth) return;
         size_t p = 0; int tag; size_t len;
         SpiService svc; SpiService* here = cur;
         if (elemTag == 0x28) { here = &svc; }
@@ -79,7 +85,7 @@ private:
                 }
             } else {
                 // child element — descend, carrying the current service
-                walk(v, len, tag, out, here);
+                walk(v, len, tag, out, here, depth + 1);
             }
             p += len;
         }

@@ -285,9 +285,14 @@ private:
         else       { sid = (uint32_t(v[4]) << 8) | v[5]; }
     }
 
-    EpgProgramme readProgramme(const uint8_t* d, size_t n, const EpgSchedule& sch, bool isEvent) {
+    /** ★★★ DEPTH CAP (audit 2026-10-03): programmeEvent may nest in a programmeEvent, and each
+     *  level costs the sender two bytes but costs us a frame with five strings — a crafted object
+     *  overflowed the stack. Real schedules nest one deep; anything past 16 is dropped. */
+    static constexpr int kMaxEventDepth = 16;
+    EpgProgramme readProgramme(const uint8_t* d, size_t n, const EpgSchedule& sch, bool isEvent, int depth = 0) {
         EpgProgramme pr;
         pr.isEvent = isEvent;
+        if (depth > kMaxEventDepth) return pr;
         size_t p = 0; int tag; size_t len;
         std::string shortName, mediumName, longName, shortDesc, longDesc;
         while (readTl(d, n, p, tag, len)) {
@@ -306,7 +311,7 @@ private:
                  *  magazine show, or the tracks of a concert. Collected flat and marked, because
                  *  a listener reading "what is on" wants the same list either way, and a tree
                  *  would only be a tree for the handful of broadcasters that use them. */
-                case kEpgElProgrammeEvent: events_.push_back(readProgramme(v, len, sch, true)); break;
+                case kEpgElProgrammeEvent: events_.push_back(readProgramme(v, len, sch, true, depth + 1)); break;
                 default: break;
             }
             p += len;

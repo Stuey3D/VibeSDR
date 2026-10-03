@@ -91,7 +91,17 @@ inline std::string dabTextToUtf8(const uint8_t* p, size_t n, uint8_t charset = k
             const uint8_t c = p[i];
             size_t len = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
             if (len == 0 || i + len > n) { ok = false; break; }
-            for (size_t k = 1; k < len; ++k) if ((p[i + k] & 0xC0) != 0x80) { ok = false; break; }
+            uint32_t cp = len == 1 ? c : len == 2 ? (c & 0x1Fu) : len == 3 ? (c & 0x0Fu) : (c & 0x07u);
+            for (size_t k = 1; k < len; ++k) {
+                if ((p[i + k] & 0xC0) != 0x80) { ok = false; break; }
+                cp = (cp << 6) | (p[i + k] & 0x3Fu);
+            }
+            /* ★★ THE SHAPE IS NOT ENOUGH (audit 2026-10-03). An overlong form (C0 80 for NUL), a
+             *  UTF-16 surrogate (ED A0 80) or anything past U+10FFFF (F4 90 80 80) has the right lead
+             *  and continuation bits and is still ill-formed — and a browser closes a WebSocket on
+             *  an ill-formed text frame. The same three rules vibeadmin::utf8Clean applies. */
+            static const uint32_t kMin[5] = { 0, 0, 0x80u, 0x800u, 0x10000u };
+            if (ok && (cp < kMin[len] || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu))) ok = false;
             i += len;
         }
         if (ok) {

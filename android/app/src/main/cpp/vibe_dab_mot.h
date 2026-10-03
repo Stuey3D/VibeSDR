@@ -90,9 +90,17 @@ public:
         const size_t segSize = ((g[p] & 0x1F) << 8) | g[p + 1];   // repetition(3) size(13)
         p += 2;
         if (p + segSize > n) { ++bad_; return; }
+        /* ★★★ CAPS (audit 2026-10-03). The segment number is 15 bits and each segment up to 8 kB,
+         *  so one transport id could ask for 268 MB per map, and nothing bounded it. A slide is at
+         *  most 50 kB (TS 101 499 §6.1, basic profile) — 512 segments and 1 MB per object are
+         *  twenty times that and still cannot run a 1 GB phone out of memory. */
+        if (segNum >= kMaxSegs) { ++bad_; return; }
         Part& obj = parts_[tid];
         std::map<int, std::vector<uint8_t>>& segs = (type == 3) ? obj.hdr : obj.body;
         int& lastN = (type == 3) ? obj.hdrLast : obj.bodyLast;
+        { auto old = segs.find(segNum); if (old != segs.end()) obj.bytes -= old->second.size(); }
+        obj.bytes += segSize;
+        if (obj.bytes > kMaxObjectBytes) { parts_.erase(tid); ++bad_; return; }
         segs[segNum].assign(g + p, g + p + segSize);
         if (last) lastN = segNum;
         tryComplete(tid, obj);
@@ -110,11 +118,14 @@ public:
     uint32_t crcFails() const { return crcFail_; }
     uint32_t objects() const { return objects_; }
 
+    static constexpr int    kMaxSegs        = 512;           ///< segments per header or body
+    static constexpr size_t kMaxObjectBytes = 1024 * 1024;   ///< header + body of one slide
 private:
     struct Part {
         std::map<int, std::vector<uint8_t>> hdr, body;
         int hdrLast = -1, bodyLast = -1;
         bool emitted = false;
+        size_t bytes = 0;        ///< what hdr + body hold now — see the caps in feedDataGroup
     };
     static bool complete(const std::map<int, std::vector<uint8_t>>& segs, int lastN) {
         if (lastN < 0) return false;
@@ -199,6 +210,9 @@ public:
         if (p + 2 > n) return;
         const size_t segSize = ((g[p] & 0x1F) << 8) | g[p + 1]; p += 2;
         if (p + segSize > n) return;
+        /* ★★★ CAPS (audit 2026-10-03) — see kMaxSegs and friends below. A 15-bit segment number
+         *  with 8 kB segments let one directory or body grow to 268 MB. */
+        if (segNum >= kMaxSegs) return;
         if (type == 6) {
             if (haveTid && tid != dirTid_) { dirSegs_.clear(); dirLast_ = -1; dirTid_ = tid; }   // a new directory
             dirSegs_[segNum].assign(g + p, g + p + segSize);
@@ -211,7 +225,15 @@ public:
             if (it == byTid_.end()) return;                         // a body for an object the directory has not named yet
             Object& o = objects_[it->second];
             if (o.complete) return;
+            /* ★ Bodies in flight are capped in number, and each in bytes against the size the
+             *  directory declared (itself capped in parseDirectory): a body that outgrows its own
+             *  declared size is not going to complete, so it is dropped rather than kept. */
+            if (!bodySegs_.count(tid) && bodySegs_.size() >= kMaxInFlight) {
+                bodyLast_.erase(bodySegs_.begin()->first); bodySegs_.erase(bodySegs_.begin());
+            }
             std::map<int, std::vector<uint8_t>>& segs = bodySegs_[tid];
+            size_t held = 0; for (const auto& s2 : segs) if (s2.first != segNum) held += s2.second.size();
+            if (held + segSize > (o.bodySize ? size_t(o.bodySize) : kMaxObjectBytes)) { bodySegs_.erase(tid); bodyLast_.erase(tid); return; }
             segs[segNum].assign(g + p, g + p + segSize);
             if (last) bodyLast_[tid] = segNum;
             auto bl = bodyLast_.find(tid);
@@ -219,9 +241,14 @@ public:
                 bool ok = true; size_t total = 0;
                 for (int i = 0; i <= bl->second; ++i) { auto s2 = segs.find(i); if (s2 == segs.end()) { ok = false; break; } total += s2->second.size(); }
                 if (ok && (o.bodySize == 0 || total == o.bodySize)) {
-                    o.body.clear(); o.body.reserve(total);
-                    for (int i = 0; i <= bl->second; ++i) { const auto& s2 = segs[i]; o.body.insert(o.body.end(), s2.begin(), s2.end()); }
-                    o.complete = true; ++completed_; ++version_; justDone_.push_back(it->second);
+                    const std::string name = it->second;      // ★ makeRoom may erase map entries; keep the name
+                    if (!makeRoom(total, name)) { bodySegs_.erase(tid); bodyLast_.erase(tid); return; }
+                    Object& oo = objects_[name];
+                    oo.body.clear(); oo.body.reserve(total);
+                    for (int i = 0; i <= bl->second; ++i) { const auto& s2 = segs[i]; oo.body.insert(oo.body.end(), s2.begin(), s2.end()); }
+                    oo.complete = true; ++completed_; ++version_; completeBytes_ += oo.body.size();
+                    justDone_.push_back(name);
+                    if (justDone_.size() > kMaxObjects) justDone_.erase(justDone_.begin());   // nobody is collecting them
                     bodySegs_.erase(tid); bodyLast_.erase(tid);
                 }
             }
@@ -229,11 +256,15 @@ public:
     }
     const std::map<std::string, Object>& objects() const { return objects_; }
     /** ★ A complete object from the on-disk cache: instant logos on a later visit to the ensemble. */
-    void inject(const std::string& name, int ct, int st, std::vector<uint8_t> body) {
+    /** @return false when the object was refused (over a cap) — the caller should not keep it. */
+    bool inject(const std::string& name, int ct, int st, std::vector<uint8_t> body) {
+        { auto it = objects_.find(name); if (it != objects_.end() && it->second.complete) return true; }
+        if (body.size() > kMaxObjectBytes || !makeRoom(body.size(), name)) return false;
         Object& o = objects_[name];
-        if (o.complete) return;
         o.name = name; o.contentType = ct; o.subType = st; o.bodySize = uint32_t(body.size()); o.body = std::move(body); o.complete = true;
+        completeBytes_ += o.body.size();
         ++version_;
+        return true;
     }
     /** Names completed off the air since the last call (for the cache writer). */
     std::vector<std::string> takeCompleted() { std::vector<std::string> v; v.swap(justDone_); return v; }
@@ -245,9 +276,38 @@ public:
     uint32_t completeCount() const { uint32_t n = 0; for (const auto& kv : objects_) if (kv.second.complete) ++n; return n; }
     size_t   named() const { return objects_.size(); }
     bool     haveDirectory() const { return haveDir_; }
-    void reset() { dirSegs_.clear(); dirLast_ = -1; dirTid_ = 0; objects_.clear(); byTid_.clear(); bodySegs_.clear(); bodyLast_.clear(); haveDir_ = false; }
+    void reset() { dirSegs_.clear(); dirLast_ = -1; dirTid_ = 0; objects_.clear(); byTid_.clear(); bodySegs_.clear(); bodyLast_.clear(); haveDir_ = false; completeBytes_ = 0; }
+
+    /* ★★★ CAPS (audit 2026-10-03). Every map here was keyed by what the air sent and none was
+     *  ever pruned, so a carousel that kept renaming its objects grew without bound. The UK SPI
+     *  carousels hold a few dozen objects of a few kB (12B, 2026-09-08); a week of PI for a big
+     *  multiplex is a few hundred objects of tens of kB. These are an order of magnitude past that:
+     *    kMaxSegs           1024 segments per directory or body (8 MB at the 13-bit segment size)
+     *    kMaxObjectBytes    1 MB per object — anything bigger in the directory is not tracked
+     *    kMaxInFlight       32 bodies assembling at once
+     *    kMaxObjects        1024 named objects
+     *    kMaxCompleteBytes  16 MB of finished bodies, those the directory no longer names evicted first */
+    static constexpr int    kMaxSegs          = 1024;
+    static constexpr size_t kMaxObjectBytes   = 1024 * 1024;
+    static constexpr size_t kMaxInFlight      = 32;
+    static constexpr size_t kMaxObjects       = 1024;
+    static constexpr size_t kMaxCompleteBytes = 16u * 1024 * 1024;
 
 private:
+    /** Make room for `need` more bytes of finished body (and one more name): evict finished
+     *  objects the current directory no longer names, then refuse. `keep` is never evicted. */
+    bool makeRoom(size_t need, const std::string& keep) {
+        if (need > kMaxCompleteBytes) return false;
+        if (completeBytes_ + need <= kMaxCompleteBytes && (objects_.size() < kMaxObjects || objects_.count(keep))) return true;
+        std::map<std::string, bool> named; for (const auto& kv : byTid_) named[kv.second] = true;
+        for (auto it = objects_.begin(); it != objects_.end() && (completeBytes_ + need > kMaxCompleteBytes || objects_.size() >= kMaxObjects); ) {
+            if (it->first != keep && !named.count(it->first)) {
+                if (it->second.complete) completeBytes_ -= std::min(completeBytes_, it->second.body.size());
+                it = objects_.erase(it);
+            } else ++it;
+        }
+        return completeBytes_ + need <= kMaxCompleteBytes && (objects_.size() < kMaxObjects || objects_.count(keep));
+    }
     void parseDirectory() {
         std::vector<uint8_t> d;
         for (int i = 0; i <= dirLast_; ++i) { const auto& s = dirSegs_[i]; d.insert(d.end(), s.begin(), s.end()); }
@@ -277,12 +337,25 @@ private:
             }
             p += hdrSize;
             if (name.empty()) continue;
+            if (bodySize > kMaxObjectBytes) continue;                       // ★ cap — see kMaxObjectBytes
+            if (!objects_.count(name) && objects_.size() >= kMaxObjects) continue;
             Object& o = objects_[name];
-            if (o.bodySize != bodySize || o.contentType != ct) { o = Object{}; }   // a changed object starts again
+            if (o.bodySize != bodySize || o.contentType != ct) {           // a changed object starts again
+                if (o.complete) completeBytes_ -= std::min(completeBytes_, o.body.size());
+                o = Object{};
+            }
             o.name = name; o.contentType = ct; o.subType = st; o.bodySize = bodySize;
             newByTid[tid] = name;
         }
         byTid_ = newByTid;
+        /* ★ PRUNE (audit 2026-10-03): unfinished objects the new directory does not name will
+         *  never finish, and bodies for transport ids it does not list will never be claimed. The
+         *  finished ones stay — they are the logos — and makeRoom() evicts those when it must. */
+        std::map<std::string, bool> named; for (const auto& kv : byTid_) named[kv.second] = true;
+        for (auto it = objects_.begin(); it != objects_.end(); )
+            if (!it->second.complete && !named.count(it->first)) it = objects_.erase(it); else ++it;
+        for (auto it = bodySegs_.begin(); it != bodySegs_.end(); )
+            if (!byTid_.count(it->first)) { bodyLast_.erase(it->first); it = bodySegs_.erase(it); } else ++it;
         haveDir_ = true;
     }
 
@@ -292,6 +365,7 @@ private:
     std::map<uint16_t, std::map<int, std::vector<uint8_t>>> bodySegs_;
     std::map<uint16_t, int> bodyLast_;
     bool haveDir_ = false;
+    size_t completeBytes_ = 0;   ///< sum of finished bodies — see kMaxCompleteBytes
     std::vector<std::string> justDone_;
     uint32_t groups_ = 0, crcFail_ = 0, completed_ = 0, compressed_ = 0, version_ = 0;
 };

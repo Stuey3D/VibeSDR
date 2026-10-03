@@ -250,6 +250,27 @@ inline std::string shortLabelFromBytes(const uint8_t* p, uint16_t flags, uint8_t
     return s;
 }
 
+/* ★★★ CAPS ON WHAT THE FIC MAY GROW (audit 2026-10-03). Every map in Ensemble is keyed by a
+ *  number off the air — a 32-bit SId, a linkage set, a frequency-list id — and nothing ever
+ *  removed an entry, so a transmitter (or a corrupt FIB that passed its CRC-16) inventing new keys
+ *  grew them for as long as the tune lasted. FIG 0/7 allows at most 63 services in an ensemble;
+ *  a busy linkage table is a few dozen sets of a handful of ids. Each cap is several times that.
+ *  A key past the cap is parsed into a spare and dropped, so the FIG is still stepped over. */
+inline constexpr size_t kFicMaxServices  = 256;   ///< services (0/2, 1/1, 1/5)
+inline constexpr size_t kFicMaxLinks     = 256;   ///< linkage sets (0/6)
+inline constexpr size_t kFicMaxLinkIds   = 64;    ///< ids in one linkage set
+inline constexpr size_t kFicMaxFreqInfo  = 256;   ///< frequency lists (0/21)
+inline constexpr size_t kFicMaxFreqs     = 64;    ///< frequencies in one list
+inline constexpr size_t kFicMaxAnnounce  = 256;   ///< announcement support records (0/18)
+/** The entry for `k`, created only while the map is under `cap`; nullptr past it. */
+template <class M>
+inline typename M::mapped_type* ficSlot(M& m, const typename M::key_type& k, size_t cap) {
+    auto it = m.find(k);
+    if (it != m.end()) return &it->second;
+    if (m.size() >= cap) return nullptr;
+    return &m[k];
+}
+
 /** Parse one 32-byte FIB into `e`. Returns false when the CRC fails (and changes nothing).
  *
  *  ★★★ A FAILED CRC MUST CHANGE NOTHING. Half-applying a corrupt FIB is how a station list starts
@@ -320,6 +341,12 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                         sc.sizeCu    = ((q[j + 2] & 0x03) << 8) | q[j + 3];
                         j += 4;
                     }
+                    /* ★★★ A CIF IS 864 CUs (EN 300 401 §5.1.3) and the 10-bit start address can
+                     *  say up to 1023. The MSC slices the sub-channel straight out of the CIF at
+                     *  startCu x 64 bits for sizeCu CUs, so one that runs off the end is a read past
+                     *  the buffer, not a bad decode. Refuse it here (audit 2026-10-03); the short
+                     *  form's size comes from the UEP table and is checked again in profileFor(). */
+                    if (sc.startCu >= 864 || sc.startCu + sc.sizeCu > 864) continue;
                     if (sc.id >= 0) e.subChannels[sc.id] = sc;
                 }
             } else if (ext == 2 && !foreign) {         // service organisation
@@ -330,7 +357,8 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                                   | (uint32_t(q[j+2]) << 8) | q[j+3]; j += 4; }
                     else    { sid = (uint32_t(q[j]) << 8) | q[j + 1]; j += 2; }
                     const int ncomp = q[j] & 0x0F; ++j;
-                    Service& s = e.services[sid];
+                    Service spare; Service* sp = ficSlot(e.services, sid, kFicMaxServices);
+                    Service& s = sp ? *sp : spare;                   // ★ cap: parsed, then dropped
                     s.sid    = sid;
                     s.isData = pd;
                     std::vector<ServiceComponent> comps;
@@ -484,7 +512,8 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                     const int idlq = (q[j] >> 5) & 3;
                     const int n    = q[j] & 0x0F;
                     j += 1;
-                    LinkSet& ls = e.links[(uint32_t(lsn) << 2) | uint32_t(idlq)];
+                    LinkSet spare; LinkSet* lp = ficSlot(e.links, (uint32_t(lsn) << 2) | uint32_t(idlq), kFicMaxLinks);
+                    LinkSet& ls = lp ? *lp : spare;                  // ★ cap: parsed, then dropped
                     ls.lsn = lsn; ls.hard = sh; ls.active = la; ls.ils = ils; ls.idlq = idlq;
                     for (int k = 0; k < n; ++k) {
                         uint32_t id;
@@ -493,7 +522,7 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                         else          { if (j + 2 > qn) break; id = (uint32_t(q[j]) << 8) | q[j+1]; j += 2; }
                         bool have = false;
                         for (uint32_t x : ls.ids) if (x == id) { have = true; break; }
-                        if (!have) ls.ids.push_back(id);   // a set may be split across FIGs: merge
+                        if (!have && ls.ids.size() < kFicMaxLinkIds) ls.ids.push_back(id);   // a set may be split across FIGs: merge
                     }
                 }
             } else if (ext == 21) {                    // frequency information (8.1.8); OE entries are other ensembles' frequencies
@@ -506,9 +535,10 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                         const size_t flen = q[j + 2] & 0x07;
                         j += 3;
                         if (j + flen > end) break;
-                        FreqInfo& fi = e.freqInfo[(uint32_t(rm) << 16) | id];
+                        FreqInfo spare; FreqInfo* fp = ficSlot(e.freqInfo, (uint32_t(rm) << 16) | id, kFicMaxFreqInfo);
+                        FreqInfo& fi = fp ? *fp : spare;             // ★ cap: parsed, then dropped
                         fi.id = id; fi.rm = rm;
-                        auto add = [&fi](uint32_t hz) { for (uint32_t x : fi.hz) if (x == hz) return; fi.hz.push_back(hz); };
+                        auto add = [&fi](uint32_t hz) { for (uint32_t x : fi.hz) if (x == hz) return; if (fi.hz.size() < kFicMaxFreqs) fi.hz.push_back(hz); };
                         if (rm == 0) {                     // DAB: control(5) + freq a(19) in 16 kHz units
                             for (size_t k = 0; k + 3 <= flen; k += 3)
                                 add(((uint32_t(q[j+k] & 0x07) << 16) | (uint32_t(q[j+k+1]) << 8) | q[j+k+2]) * 16000u);
@@ -540,7 +570,8 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                     const size_t   nc  = size_t(q[j + 4] & 0x1F);
                     j += 5;
                     if (j + nc > qn) break;                    // truncated record — take none of it
-                    AnnouncementSupport& a = e.announceSupport[sid];
+                    AnnouncementSupport spare; AnnouncementSupport* ap = ficSlot(e.announceSupport, sid, kFicMaxAnnounce);
+                    AnnouncementSupport& a = ap ? *ap : spare;       // ★ cap: parsed, then dropped
                     a.asuFlags = asu;
                     a.clusters.assign(q + j, q + j + nc);
                     j += nc;
@@ -582,13 +613,17 @@ inline bool parseFib(const uint8_t* fib32, Ensemble& e) {
                 if (len >= 1 + 2 + 18) e.shortLabel = shortLabelFromBytes(p + 3, uint16_t((p[19] << 8) | p[20]), charset);
             } else if (ext == 1 && len >= 1 + 2 + 16) {
                 const uint32_t sid = uint32_t((p[1] << 8) | p[2]);
-                Service& s = e.services[sid];
+                Service* sp = ficSlot(e.services, sid, kFicMaxServices);
+                if (!sp) continue;                                   // ★ cap — see kFicMaxServices
+                Service& s = *sp;
                 s.sid   = sid;
                 s.label = labelFromBytes(p + 3, 16, charset);
                 if (len >= 1 + 2 + 18) s.shortLabel = shortLabelFromBytes(p + 3, uint16_t((p[19] << 8) | p[20]), charset);
             } else if (ext == 5 && len >= 1 + 4 + 16) {
                 const uint32_t sid = (uint32_t(p[1]) << 24) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 8) | p[4];
-                Service& s = e.services[sid];
+                Service* sp = ficSlot(e.services, sid, kFicMaxServices);
+                if (!sp) continue;                                   // ★ cap — see kFicMaxServices
+                Service& s = *sp;
                 s.sid = sid; s.isData = true;
                 s.label = labelFromBytes(p + 5, 16, charset);
                 if (len >= 1 + 4 + 18) s.shortLabel = shortLabelFromBytes(p + 5, uint16_t((p[21] << 8) | p[22]), charset);

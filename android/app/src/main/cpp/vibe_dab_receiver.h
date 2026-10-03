@@ -610,6 +610,8 @@ public:
             uprof = uepProfile(ix.bitrateKbps, ix.protLevel);
             if (!uprof.valid) return false;
             sel.sizeCu = ix.sizeCu;
+            // ★★★ inside the CIF or not at all — pumpSlot/pumpService read sizeCu CUs from startCu (audit 2026-10-03)
+            if (sel.startCu < 0 || sel.sizeCu <= 0 || sel.startCu + sel.sizeCu > kCifCus) return false;
             codedBits  = ix.sizeCu * kCuBits;
             dataBits   = ix.bitrateKbps * 24;          // kbit/s x 24 ms
             bitrate    = ix.bitrateKbps;
@@ -618,6 +620,8 @@ public:
         /* ★★★ THE OPTION IS ON AIR — USE IT, DO NOT GUESS IT (folding it into protLevel is the
          *  bug that took 11D out entirely). */
         if (sel.sizeCu <= 0) return false;
+        // ★★★ a sub-channel that runs past CU 864 would be read past the CIF buffer (audit 2026-10-03)
+        if (sel.startCu < 0 || sel.startCu + sel.sizeCu > kCifCus) return false;
         codedBits = sel.sizeCu * kCuBits;
         const bool eepB = (sel.option == 1);
         const int  mult = eepB ? 32 : 8;
