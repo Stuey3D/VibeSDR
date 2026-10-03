@@ -1,0 +1,14 @@
+# vibesdr.net — security headers for the static assets (Workers Static Assets reads this file;
+# it is not served). Security audit, 2026-10-03.
+#
+# ★ Enforced: only what cannot break a page — no sniffing, a sane Referer, and no framing (nothing
+#   frames vibesdr.net; the portable store that IS framed lives on vibeserver.vibesdr.net).
+# ★ The full CSP is REPORT-ONLY until it has been watched in a browser: the home page reads the
+#   directory, the GitHub releases API and /api/spectrogram, and Cloudflare Web Analytics may inject
+#   its beacon. Promote it to Content-Security-Policy once the console shows no reports.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'self'
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self'; font-src 'self' data:; connect-src 'self' https://vibeserver.vibesdr.net https://api.github.com https://cloudflareinsights.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'

@@ -204,6 +204,43 @@
       });
   });
 
+  /* ★★★ WHAT ANY *.vibeserver.vibesdr.net PAGE MAY WRITE HERE IS BOUNDED (security audit, 2026-10-03).
+     Every receiver on a vibesdr.net name can message this frame — and a receiver is a stranger's
+     machine — so a write that was taken whole could park megabytes in every listener's store, or hand
+     the next server page values of any type. The VIEW keeps only the keys portable.ts VIEW_KEYS
+     names (keep the two lists in step), each a plain number, boolean or short string; BOOKMARKS are
+     capped in count and size, and a list over the cap is refused rather than cut silently. */
+  var VIEW_KEYS = ['palette', 'autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast', 'wfSharpness',
+    'wfCoarse', 'wfSpeed', 'wfScroll', 'smoothingFrames', 'spatialSmooth', 'peakHold', 'specFloor',
+    'specPeakScale', 'specAlpha', 'specRatio', 'specShow', 'vfoColor', 'vfoIntensity', 'vfoFrost', 'freqUnit',
+    'volume', 'ctlBg', 'ctlBtn', 'ctlFont', 'ctlSolid'];
+  var BM_MAX = 2000, BM_ITEM_MAX = 4096, BM_TOTAL_MAX = 1024 * 1024;
+  function cleanView(v) {
+    var out = {};
+    VIEW_KEYS.forEach(function (k) {
+      if (!Object.prototype.hasOwnProperty.call(v, k)) return;
+      var x = v[k];
+      if (typeof x === 'boolean' || (typeof x === 'number' && isFinite(x))) out[k] = x;
+      else if (typeof x === 'string' && x.length <= 64) out[k] = x;
+    });
+    return out;
+  }
+  function cleanBookmarks(list) {
+    if (list.length > BM_MAX) return null;
+    var out = [], total = 0;
+    for (var i = 0; i < list.length; i++) {
+      var b = list[i];
+      if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
+      var j;
+      try { j = JSON.stringify(b); } catch (e) { continue; }
+      if (j.length > BM_ITEM_MAX) continue;
+      total += j.length;
+      if (total > BM_TOTAL_MAX) return null;
+      out.push(JSON.parse(j));       // ★ a plain-data copy: nothing but what JSON carries
+    }
+    return out;
+  }
+
   var queue = Promise.resolve();   // ★ one operation at a time: a read-modify-write must not interleave
   window.addEventListener('message', function (e) {
     if (!OK.test(e.origin) || !e.data || typeof e.data.id !== 'number') return;
@@ -226,9 +263,11 @@
            ★★ A SEPARATE EPOCH FROM resetAt, NOT A REUSE OF IT. resetAt is also read by the BOOKMARK
               side (search.ts clears the list when it advances), so stamping it here would have made
               changing a colour delete the listener's bookmarks on every other server. */
-        s.view = d.view; s.viewAt = Date.now();
+        s.view = cleanView(d.view); s.viewAt = Date.now();
       } else if (d.op === 'setBookmarks' && Array.isArray(d.bookmarks)) {
-        s.bookmarks = d.bookmarks;
+        var bm = cleanBookmarks(d.bookmarks);
+        if (!bm) { console.warn('portable store: refused a bookmark list that is too large'); return; }
+        s.bookmarks = bm;
       } else { console.warn('portable store: unknown operation', d.op); return; }
       return save(s).then(function (ok) { r.ok = ok; });
     }).catch(function (err) { console.error('portable store: %s failed', String(d.op), err); })

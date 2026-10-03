@@ -70,6 +70,7 @@ const json = (body, status = 200, extra = {}) =>
       'content-type': 'application/json; charset=utf-8',
       // ★ The apps fetch this cross-origin. Read-only data, deliberately public.
       'access-control-allow-origin': '*',
+      'x-content-type-options': 'nosniff',
       ...extra,
     },
   });
@@ -208,19 +209,139 @@ function validUrl(u) {
    *  upstream status and the connection error back to the caller, which is a port scanner.
    *  A receiver on a private address is served by the LAN or by the operator's own tunnel; it has
    *  no business being reachable THROUGH us. (Audit, 2026-09-10.) */
-  const h = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const h = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') ||
-      h === '::1' || h === '0.0.0.0' || h.startsWith('fe80:') ||
-      h.startsWith('fc') || h.startsWith('fd')) return null;
-  const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    if (a === 127 || a === 10 || a === 0 ||
-        (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) ||
-        (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) ||
-        a >= 224) return null;
+      h.endsWith('.internal') || h.endsWith('.home.arpa') || h === '0.0.0.0') return null;
+  if (privateV4(h)) return null;
+  /* ★★ IPv6 — ONLY WHEN IT IS ONE. The fc/fd test used to run on every hostname, so a real server at
+   *  "fdx-radio.example" was refused as a ULA. Applied to literals only now (the URL parser has
+   *  already put them in canonical form: `[::ffff:127.0.0.1]` arrives as `::ffff:7f00:1`).
+   *  ★★★ AND THE FORMS THAT CARRY AN IPv4 ADDRESS INSIDE THEM (security audit, 2026-10-03):
+   *      IPv4-mapped (::ffff:a.b.c.d), IPv4-compatible (::a.b.c.d), IPv4-translated (::ffff:0:…),
+   *      NAT64 (64:ff9b::/96 and the local-use 64:ff9b:1::/48) and 6to4 (2002::/16) all reach
+   *      an IPv4 address the earlier test never saw. Every ::/8-prefixed literal is refused outright
+   *      (no public server lives there); NAT64 and 6to4 are judged by the IPv4 they embed. */
+  if (h.includes(':')) {
+    if (h === '::' || h === '::1' || h.startsWith('::')) return null;      // unspecified, loopback, mapped, compatible
+    if (/^(fc|fd)[0-9a-f]{0,2}:/.test(h)) return null;                     // unique local fc00::/7
+    if (/^fe[89ab][0-9a-f]:/.test(h)) return null;                         // link-local fe80::/10
+    if (/^fe[c-f][0-9a-f]:/.test(h)) return null;                          // site-local fec0::/10
+    if (/^ff[0-9a-f]{2}:/.test(h)) return null;                            // multicast
+    if (/^0{0,4}:/.test(h)) return null;                                   // 0::/16 written longhand
+    if (/^2001:0?db8:/.test(h)) return null;                               // documentation
+    if (/^64:ff9b:1:/.test(h)) return null;                                // local-use NAT64
+    const embedded = embeddedV4(h);
+    if (embedded && privateV4(embedded)) return null;
   }
   return parsed.origin;
+}
+
+/** True for an IPv4 dotted quad in a range no public receiver can live at. */
+function privateV4(h) {
+  const v4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!v4) return false;
+  const [a, b, c] = [Number(v4[1]), Number(v4[2]), Number(v4[3])];
+  return a === 127 || a === 10 || a === 0 ||
+         (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) ||
+         (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) ||
+         (a === 192 && b === 0 && (c === 0 || c === 2)) ||                 // IETF protocol / TEST-NET-1
+         (a === 198 && (b === 18 || b === 19)) ||                         // benchmarking
+         (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) ||
+         a >= 224;
+}
+
+/** The IPv4 address inside a NAT64 (64:ff9b::/96) or 6to4 (2002::/16) literal, else ''. */
+function embeddedV4(h) {
+  const full = expandV6(h);
+  if (!full) return '';
+  const g = full.split(':').map((x) => parseInt(x, 16));
+  const quad = (hi, lo) => [hi >> 8, hi & 255, lo >> 8, lo & 255].join('.');
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 0 && g[3] === 0 && g[4] === 0 && g[5] === 0) return quad(g[6], g[7]);
+  if (g[0] === 0x2002) return quad(g[1], g[2]);
+  return '';
+}
+
+/** An IPv6 literal as eight 4-digit groups, or '' if it cannot be read. */
+function expandV6(h) {
+  let s = h;
+  const dotted = s.match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (dotted) {
+    const n = dotted.slice(1).map(Number);
+    s = s.slice(0, dotted.index) + ((n[0] << 8) | n[1]).toString(16) + ':' + ((n[2] << 8) | n[3]).toString(16);
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return '';
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  if (fill < 0 || (halves.length === 1 && head.length !== 8)) return '';
+  const groups = [...head, ...Array(fill).fill('0'), ...tail];
+  if (groups.length !== 8 || groups.some((x) => !/^[0-9a-f]{1,4}$/.test(x))) return '';
+  return groups.map((x) => x.padStart(4, '0')).join(':');
+}
+
+/* ★★★ THE STATUS BLOB IS BOUNDED (security audit, 2026-10-03). It is stored whole in D1 and handed
+ *     to every directory visitor, and nothing limited it: one registration could park megabytes in
+ *     the table and make /api/directory heavy for everybody. A real multi-radio server sends a few KB.
+ *  ★ Too big is not an error the server sees — that would risk a ping loop dropping a working listing.
+ *    The oversized status is simply not stored (a ping keeps the previous one) and logged by id. */
+const STATUS_MAX_BYTES = 16 * 1024;
+function statusJsonFor(status, fallback, who) {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return fallback;
+  let s;
+  try { s = JSON.stringify(status); } catch { return fallback; }
+  if (s.length > STATUS_MAX_BYTES) {
+    console.warn('status too large, not stored', who, s.length);
+    return fallback;
+  }
+  return s;
+}
+
+/* ★★ EVERY RADIO PASSED THROUGH list() IS SHAPE- AND SIZE-CAPPED. The radio objects are copied whole
+ *    from the server's /vibeserver/radios (directory.cpp), and the page, the app and the watch each
+ *    read different fields of them — so a key whitelist here would silently blank a feature the
+ *    next time a field is added. Instead: plain identifier keys only, at most 48 of them; strings
+ *    capped; arrays and nested objects bounded and one level deep at most. Text stays text. */
+const RADIO_KEY = /^[A-Za-z][A-Za-z0-9_]{0,31}$/;
+function capScalar(v, maxStr) {
+  if (typeof v === 'string') return v.slice(0, maxStr);
+  if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+  if (typeof v === 'boolean' || v === null) return v;
+  return undefined;
+}
+function capFlat(o, maxKeys, maxStr) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return undefined;
+  const out = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(o)) {
+    if (n >= maxKeys || !RADIO_KEY.test(k)) continue;
+    const c = Array.isArray(v) ? v.slice(0, 16).map((x) => capScalar(x, 80)).filter((x) => x !== undefined)
+                               : capScalar(v, maxStr);
+    if (c !== undefined) { out[k] = c; n++; }
+  }
+  return out;
+}
+function capRadio(r) {
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+  const out = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(r)) {
+    if (n >= 48 || !RADIO_KEY.test(k)) continue;
+    let c;
+    if (Array.isArray(v)) {
+      // ★ ranges / allowed / coverage are arrays of [lo, hi] pairs — kept as small scalar tuples.
+      c = v.slice(0, 64).map((x) => Array.isArray(x) ? x.slice(0, 8).map((y) => capScalar(y, 80)).filter((y) => y !== undefined)
+                                  : (x && typeof x === 'object') ? capFlat(x, 16, 120)
+                                  : capScalar(x, 120))
+           .filter((x) => x !== undefined);
+    } else if (v && typeof v === 'object') {
+      c = capFlat(v, 32, 200);
+    } else {
+      c = capScalar(v, 300);
+    }
+    if (c !== undefined) { out[k] = c; n++; }
+  }
+  return out;
 }
 
 async function readBody(request) {
@@ -441,7 +562,7 @@ async function register(request, env) {
                             status_json, created_at, updated_at, expires_at, slug, until)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).bind(id, await sha256Hex(key), name, url, kind, grid, pos.lat, pos.lon, country,
-           JSON.stringify(body.status || {}), t, t, t + ttlSeconds(body), wanted,
+           statusJsonFor(body.status, '{}', 'register ' + id), t, t, t + ttlSeconds(body), wanted,
            untilFrom(body, 0)),
     env.DB.prepare('INSERT INTO reg_log (ip, at) VALUES (?,?)').bind(ip, t),
     // ★ Housekeeping on the write path rather than a cron: free, and cron is one more thing to fail.
@@ -478,9 +599,7 @@ async function ping(request, env) {
   //    is sent — that is what makes a radio disappearing from the server disappear here too — but
   //    "said nothing" and "said I have no radios" are different statements, and only the second
   //    should empty the entry.
-  const status = (body.status && typeof body.status === 'object')
-    ? JSON.stringify(body.status)
-    : row.status_json;
+  const status = statusJsonFor(body.status, row.status_json, 'ping ' + row.id);
 
   // ★★★ PROVE THE ADDRESS WHILE IT IS UNPROVEN, AND AGAIN WHENEVER IT CHANGES. A Quick Tunnel
   //     hostname rotates on every restart, so "verified once" would leave a proven server quietly
@@ -615,8 +734,11 @@ async function eibi(request) {
  *  that sends `proto=N` gets every radio and greys out the ones above N itself. */
 async function list(env, url, request) {
   const reqProto = url && url.searchParams.has('proto') ? Number(url.searchParams.get('proto')) || 0 : null;
-  const radiosFor = (rows) => !Array.isArray(rows) ? []
-    : reqProto === null ? rows.filter((r) => !(Number(r && r.minProto) > 0)) : rows;
+  const radiosFor = (rows0) => {
+    if (!Array.isArray(rows0)) return [];
+    const rows = rows0.slice(0, 32).map(capRadio).filter(Boolean);     // ★ see capRadio
+    return reqProto === null ? rows.filter((r) => !(Number(r && r.minProto) > 0)) : rows;
+  };
   // ★★★ EXPIRY EVALUATED AT READ TIME. Nothing sweeps; a server that stopped pinging is simply
   //     not selected. See schema.sql.
   const { results } = await env.DB.prepare(
@@ -1246,6 +1368,14 @@ async function serveBySlug(host, request, env) {
   //     ("VibeServer directory visitor (via Cloudflare)") instead of drawing a lurker. It believes
   //     this header only from Cloudflare's Worker range, so nobody can relabel themselves with it.
   fwd.set('x-vibesdr-via', 'directory');
+  /* ★★★ NO CREDENTIALS OF OURS GO TO SOMEBODY ELSE'S BOX (security audit, 2026-10-03). Every
+   *     <slug>.vibeserver.vibesdr.net is one SITE with the directory, so a browser sends this
+   *     proxied request any cookie scoped to .vibesdr.net / vibeserver.vibesdr.net — the portable
+   *     store's included — and a receiver is a stranger's machine. VibeServer uses neither cookies nor
+   *     HTTP auth (its credentials are the vs_* parameters), so nothing it needs is lost. */
+  fwd.delete('cookie');
+  fwd.delete('authorization');
+  fwd.delete('proxy-authorization');
 
   /* ★★★ A LISTED SERVER THAT DOES NOT ANSWER GETS OUR PAGE, NOT CLOUDFLARE'S. A fetch that threw
    *     used to escape the Worker entirely (Cloudflare's 1101 page), and a tunnel with nobody behind
@@ -1262,7 +1392,7 @@ async function serveBySlug(host, request, env) {
   const ctl = page ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => ctl.abort(), DOC_TIMEOUT_MS) : null;
   const down = async (why) => {
-    console.warn('slug upstream not responding', slug, why);
+    console.warn('slug upstream not responding', slug, String(why).replace(/[?#]\S*/g, '?…'));   // ★ never a query string in a log
     if (!page) {
       return new Response(`${row.name} is not responding at the moment. Please try again shortly.`, {
         status: 503,
@@ -1328,23 +1458,34 @@ async function serveBySlug(host, request, env) {
     }
   }
 
+  /* ★★★ AND NO COOKIE COMES BACK FROM IT. A receiver's Set-Cookie would be stored for a vibesdr.net
+   *     name — and with `Domain=vibesdr.net` for EVERY vibesdr.net page, the directory and the
+   *     portable store included (cookie tossing). VibeServer sets none, so all are dropped. */
+  const upHeaders = new Headers(res.headers);
+  upHeaders.delete('set-cookie');
+
   if (!type.includes('text/html')) {
-    // ★ Everything that is not the document streams through untouched.
+    // ★ Everything that is not the document streams through untouched (bar the cookie, above).
     return new Response(res.body, {
       status: res.status,
-      headers: res.headers,
+      headers: upHeaders,
     });
   }
 
   // ★★ TELL THE PAGE WHERE THE RECEIVER ACTUALLY IS. Injected rather than built into the client,
   //    because the tunnel hostname is not knowable at build time and changes under us.
+  // ★★ AS A <meta> TOO (audit, 2026-10-03): an inline script needs 'unsafe-inline' in the receiver's
+  //    CSP; the meta does not (web/client/src/origin.ts reads either). The script stays for clients
+  //    older than the meta reader.
   const html = await res.text();
-  const inject = `<script>window.__VIBE_DIRECT_HOST__=${JSON.stringify(new URL(origin).host)};</script>`;
+  const direct = new URL(origin).host;
+  const inject = `<meta name="vibe-direct-host" content="${direct.replace(/[^A-Za-z0-9.:\[\]-]/g, '')}">`
+               + `<script>window.__VIBE_DIRECT_HOST__=${JSON.stringify(direct).replace(/</g, '\\u003c')};</script>`;
   const out = html.includes('</head>')
     ? html.replace('</head>', inject + '</head>')
     : inject + html;
 
-  const headers = new Headers(res.headers);
+  const headers = upHeaders;
   // ★ The document must not be cached: the host it names changes when the tunnel restarts.
   headers.set('cache-control', 'no-store');
   headers.delete('content-length');
@@ -1448,8 +1589,101 @@ async function servePmtiles(request, env) {
   return new Response(body.slice(a, b + 1), { status: 206, headers: { ...headers, 'content-range': `bytes ${a}-${b}/${size}` } });
 }
 
+const SPEEDTEST_MAX = 8 * 1024 * 1024;
+
+/* ★★★ IQ CODE LOOKUPS ARE RATE-LIMITED PER ADDRESS (security audit, 2026-10-03). A lookup answers
+ *     with the session TOKEN the receiver checks on /ws/iq, and a code is six characters — so an
+ *     unlimited GET was a way to walk the code space and collect live tokens. Registration was
+ *     already limited (IQ_PER_HOUR); lookup was not.
+ *  ★ Cloudflare's Rate Limiting binding (IQ_LOOKUP_LIMIT in wrangler.jsonc: 30 a minute per address)
+ *    when it is bound; a per-isolate counter otherwise (wrangler dev, or a deploy before the binding
+ *    exists) — weaker, since isolates are many, but never nothing. No D1 write per GET. */
+const IQ_LOOKUPS_PER_MIN = 30;
+const iqLocal = new Map();     // ip -> { n, start }
+async function iqLookupAllowed(request, env) {
+  const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+  if (env && env.IQ_LOOKUP_LIMIT && typeof env.IQ_LOOKUP_LIMIT.limit === 'function') {
+    try { return (await env.IQ_LOOKUP_LIMIT.limit({ key: 'iq:' + ip })).success; }
+    catch (e) { console.error('iq lookup limiter failed', String((e && e.message) || e)); }
+  }
+  const t = Date.now();
+  const rec = iqLocal.get(ip);
+  if (!rec || t - rec.start > 60000) {
+    if (iqLocal.size > 5000) iqLocal.clear();
+    iqLocal.set(ip, { n: 1, start: t });
+    return true;
+  }
+  rec.n++;
+  return rec.n <= IQ_LOOKUPS_PER_MIN;
+}
+
+/* ★★★ SECURITY HEADERS ON EVERYTHING THE DIRECTORY SERVES ITSELF (security audit, 2026-10-03). Not
+ *     on a proxied receiver's responses — those carry the receiver's own policy.
+ *  ★★ store.html IS FRAMED ON PURPOSE, by every https://<slug>.vibeserver.vibesdr.net page
+ *     (web/client/src/portable.ts) — so its frame-ancestors names exactly them, and it gets no
+ *     X-Frame-Options (which cannot express a list). Every other page may not be framed at all.
+ *  ★ The directory page's full CSP is REPORT-ONLY for now: it loads Leaflet, MapLibre (blob:
+ *    workers), live counts from every receiver and the pmtiles, and a policy that broke the map would
+ *    be worse than none. The enforced header carries only what cannot break it. Tighten once the
+ *    report-only one has run clean in a browser. */
+const SEC_BASE = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+};
+const CSP_STORE = "default-src 'none'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; "
+                + "frame-ancestors https://*.vibeserver.vibesdr.net";
+const CSP_PAGE_ENFORCED = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'";
+const CSP_PAGE_REPORT = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                      + "img-src 'self' data: blob: https:; font-src 'self' data:; "
+                      + "connect-src 'self' https: wss: data: blob:; worker-src 'self' blob:; child-src 'self' blob:; "
+                      + "frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+function withSecurityHeaders(res, pathname) {
+  let out;
+  try { out = new Response(res.body, res); } catch { return res; }   // ★ e.g. a 101 — leave it be
+  const h = out.headers;
+  for (const [k, v] of Object.entries(SEC_BASE)) if (!h.has(k)) h.set(k, v);
+  const type = h.get('content-type') || '';
+  if (type.includes('text/html')) {
+    if (pathname === '/store' || pathname === '/store.html') {
+      h.set('content-security-policy', CSP_STORE);
+      h.delete('x-frame-options');
+    } else {
+      h.set('x-frame-options', 'DENY');
+      h.set('content-security-policy', CSP_PAGE_ENFORCED);
+      h.set('content-security-policy-report-only', CSP_PAGE_REPORT);
+    }
+  }
+  return out;
+}
+
 export default {
-  async fetch(request, env) {
+  /* ★★★ THE REQUEST LOG CARRIES NO QUERY STRING (security audit, 2026-10-03). Proxied receiver
+   *     requests carry credentials in their query (vs_nonce + vs_auth, a reusable hour-long session
+   *     proof; vs_admin_nonce + vs_admin_auth; an older directory's vs_admin_ticket), and Workers
+   *     Logs' automatic INVOCATION log records the full request URL. wrangler.jsonc turns invocation
+   *     logs off; this line replaces them — host, path, method, status, country — so the traffic
+   *     record ("traffic_drop" queries) survives without a single credential in it. */
+  async fetch(request, env, ctx) {
+    const t0 = Date.now();
+    let res, err = null;
+    try { res = await handle(request, env, ctx); }
+    catch (e) { err = e; throw e; }
+    finally {
+      try {
+        const u = new URL(request.url);
+        console.log(JSON.stringify({
+          req: request.method, host: u.hostname, path: u.pathname.slice(0, 200),
+          status: res ? res.status : 500, ms: Date.now() - t0,
+          country: (request.cf && request.cf.country) || '', ...(err ? { error: String(err).slice(0, 200) } : {}),
+        }));
+      } catch { /* logging must never fail a request */ }
+    }
+    return res;
+  },
+};
+
+async function handle(request, env) {
+  {
     const url = new URL(request.url);
     const p = url.pathname;
 
@@ -1482,13 +1716,34 @@ export default {
       //   Read and dropped, never stored; capped so it cannot be used to push arbitrary volumes through us.
       if (p === '/api/speedtest' && request.method === 'POST') {
         const len = Number(request.headers.get('content-length') || 0);
-        if (len > 8 * 1024 * 1024) return json({ error: 'too large' }, 413);
-        const buf = await request.arrayBuffer();
-        return json({ bytes: buf.byteLength });
+        if (len > SPEEDTEST_MAX) return json({ error: 'too large' }, 413);
+        /* ★★ COUNTED AS IT ARRIVES (audit, 2026-10-03). A chunked upload carries no content-length,
+         *    so the check above passed it and arrayBuffer() buffered whatever was sent. Now the
+         *    bytes are read and dropped as they stream, and the upload is cut at the cap. */
+        let bytes = 0;
+        if (request.body) {
+          const reader = request.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes += value.byteLength;
+            if (bytes > SPEEDTEST_MAX) {
+              try { await reader.cancel(); } catch { /* already gone */ }
+              return json({ error: 'too large' }, 413);
+            }
+          }
+        }
+        return json({ bytes });
       }
       if (p === '/api/iq' && request.method === 'POST') return await iqRegister(request, env);
       if (p === '/api/iq/off' && request.method === 'POST') return await iqOff(request, env);
-      if (p.startsWith('/api/iq/') && request.method === 'GET') return await iqLookup(p.slice('/api/iq/'.length), env);
+      if (p.startsWith('/api/iq/') && request.method === 'GET') {
+        if (!await iqLookupAllowed(request, env)) {
+          return json({ error: 'too many lookups from this address, try again in a minute' }, 429,
+                      { 'retry-after': '60', 'cache-control': 'no-store' });
+        }
+        return await iqLookup(p.slice('/api/iq/'.length), env);
+      }
     } catch (err) {
       // ★ Never leak a D1 error to a caller; it names tables.
       console.error('directory error', (err && err.stack) || String(err));
@@ -1496,6 +1751,6 @@ export default {
     }
 
     if (p.startsWith('/mapgl/') && p.endsWith('.pmtiles') && request.method === 'GET') return servePmtiles(request, env);
-    return env.ASSETS.fetch(request);
-  },
-};
+    return withSecurityHeaders(await env.ASSETS.fetch(request), p);
+  }
+}

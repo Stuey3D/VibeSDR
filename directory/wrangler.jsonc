@@ -41,5 +41,17 @@
     { "pattern": "*.vibeserver.vibesdr.net/*", "zone_name": "vibesdr.net" }
   ],
 
-  "observability": { "enabled": true, "head_sampling_rate": 1 }
+  // ★★ Per-address limit on GET /api/iq/<code> (src/index.js iqLookupAllowed): a lookup returns a
+  //    live IQ session token, and codes are six characters. 30 a minute is far above a person typing.
+  "ratelimits": [
+    { "name": "IQ_LOOKUP_LIMIT", "namespace_id": "4101", "simple": { "limit": 30, "period": 60 } }
+  ],
+
+  // ★★★ NO INVOCATION LOGS (security audit, 2026-10-03). The automatic invocation log records every
+  //     request's FULL URL, and requests proxied to receivers carry credentials in the query
+  //     (vs_nonce/vs_auth — a reusable hour-long session proof — vs_admin_nonce/vs_admin_auth, and
+  //     an older directory's vs_admin_ticket). The Worker logs one line per request itself instead —
+  //     host, path, method, status, country, never the query — so traffic stays measurable.
+  //  ★ Sampling stays at 1: console logs (that line, and errors) are still wanted for every request.
+  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": false } }
 }
