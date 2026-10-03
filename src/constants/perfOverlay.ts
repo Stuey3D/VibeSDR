@@ -9,10 +9,12 @@
 export const PERF_OVERLAY_THIS_BUILD = true;
 
 /** One line of the overlay from the native stats + the tilt counters. Pure, so it is testable. */
-export function perfLines(s: { cpuPct: number; footprintMB: number; uiFps: number; uiP50Ms: number; uiP90Ms: number }): string[] {
+export function perfLines(s: { cpuPct: number; footprintMB: number; uiFps: number; uiP50Ms: number; uiP90Ms: number },
+                          tilt: { running: string; writesPerSec: number; rendersPerSec: number }): string[] {
   const f = (n: number, d = 0) => (Number.isFinite(n) ? n.toFixed(d) : '—');
   return [
     `CPU ${f(s.cpuPct)}%  RAM ${f(s.footprintMB)} MB`,
     `UI ${f(s.uiFps)}fps p50 ${f(s.uiP50Ms, 1)} p90 ${f(s.uiP90Ms, 1)} ms`,
+    `TILT ${tilt.running || 'off'}  ${f(tilt.writesPerSec)} w/s  ${f(tilt.rendersPerSec)} renders/s`,
   ];
 }
