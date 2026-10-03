@@ -386,8 +386,14 @@ std::string httpGetRaw(const std::string& url) {
     const int fd = mkstemp(tmpl);
     if (fd < 0) return {};
     close(fd);
-    const std::string cmd = "curl -fsSL --max-time 15 -o '" + std::string(tmpl) + "' '" + url + "' 2>/dev/null";
-    const int rc = system(cmd.c_str());
+    /* ★★ NO SHELL, AND BOUNDED like httpGet (audit 2026-10-03). This URL comes from a broadcaster's SI.xml; it
+     *  went through system() guarded only by refusing a single quote, followed any redirect to any scheme, and
+     *  had no size limit — so an SI.xml publisher could stream gigabytes into /tmp and RAM. Now: argv (no
+     *  shell), http/https only (redirects too), three hops, a 1 MB ceiling (a station logo is a few KB). */
+    std::string ignored;
+    const int rc = vibeproc::run({"curl", "-fsS", "--max-time", "15", "-L", "--max-redirs", "3",
+                                  "--proto", "=http,https", "--proto-redir", "=http,https",
+                                  "--max-filesize", "1048576", "-o", std::string(tmpl), url}, &ignored);
     std::string out;
     if (rc == 0) {
         if (FILE* f = fopen(tmpl, "rb")) { char buf[8192]; size_t r; while ((r = fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, r); fclose(f); }
@@ -469,6 +475,9 @@ static std::string logoViaFqdn(const std::string& fqdn, const std::string& beare
     }
 
     std::lock_guard<std::mutex> lk(g_mtx);
+    // ★ BOUNDED (audit 2026-10-03): keyed on identifiers anyone can invent in a request, so it grew forever.
+    //   Real receivers hear a few hundred stations; past 4096 the cache simply starts again.
+    if (g_cache.size() >= 4096) g_cache.clear();
     g_cache[fqdn] = Entry{ url, name, now, url.empty() && g_lastQueryTransient };
     if (nameOut) *nameOut = name;
     return url;

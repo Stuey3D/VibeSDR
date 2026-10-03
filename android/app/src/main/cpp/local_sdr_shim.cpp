@@ -1122,7 +1122,11 @@ static void dabEnsSaveLocked() {
  *  and a label is DECODED FROM THE AIR — a quote, a backslash or a control byte in it would break
  *  every client's parser, so this must never be skipped. Control bytes are dropped rather than
  *  \u-escaped: nothing legitimate in a DAB ensemble label is one. */
-static std::string dabEscape(const std::string& s) {
+static std::string dabEscape(const std::string& s_raw) {
+    // ★★ VALID UTF-8 FIRST (audit 2026-10-03): text off the air can carry bytes that are not UTF-8, and a
+    //    WebSocket TEXT frame that is not valid UTF-8 makes browsers close the socket — every listener loses
+    //    tuning and the waterfall while that text is current. RDS text was already cleaned; DAB was not.
+    const std::string s = vibeadmin::utf8Clean(s_raw);
     std::string o;
     o.reserve(s.size() + 8);
     for (unsigned char c : s) {
@@ -1293,9 +1297,39 @@ static std::mutex          g_vsBlockedModesMtx;
 static std::string         g_vsBlockedModesCsv;
 
 /** True when the owner has switched this mode or decoder off on this receiver. */
+/** ★★★ A MODE IS ONE OF OURS, OR IT IS REFUSED (audit 2026-10-03). Any string a client sent was stored as the
+ *  shared mode and printed into every listener's config JSON unescaped: a trailing backslash broke the JSON for
+ *  everyone on a shared dial, ~500 bytes overflowed the config buffer so NOBODY got config, and markup rode along
+ *  to every client. Every path that accepts a mode already asks vsModeBlocked, so an unknown mode is refused here,
+ *  once, for all of them. */
+/** ★ Hex of a fixed length range — the shape every broadcast identifier has (PI 4, ECC 2, EId 4, SId 4 or 8). */
+static bool isHexLen(const std::string& v, size_t lo, size_t hi) {
+    if (v.size() < lo || v.size() > hi) return false;
+    for (char c : v) if (!std::isxdigit((unsigned char)c)) return false;
+    return true;
+}
+/** ★★ AT MOST TWO LOGO LOOKUPS AT ONCE (audit 2026-10-03). An unauthenticated logo request with an invented
+ *  identity made this box spawn a chain of curl lookups (up to ~40 processes with ECC unknown) and hold the
+ *  connection thread while they ran — a loop of them was a process and thread flood. Past two in flight the
+ *  answer is the normal "no logo" ({}), which every client already falls back from. */
+static std::atomic<int> g_logoLookups{0};
+struct LogoLookupSlot {
+    bool ok;
+    LogoLookupSlot() : ok(g_logoLookups.fetch_add(1) < 2) {}
+    ~LogoLookupSlot() { g_logoLookups.fetch_sub(1); }
+};
+
+static bool vsModeKnown(const std::string& m) {
+    static const char* const kModes[] = { "usb", "lsb", "am", "sam", "cw", "cwu", "cwl",
+                                          "fm", "nfm", "wfm", "fmdx", "dab" };
+    for (const char* k : kModes) if (m == k) return true;
+    return false;
+}
+
 static bool vsModeBlocked(const std::string& name) {
     std::string want;
     for (char c : name) want += char(std::tolower((unsigned char)c));
+    if (want.size() > 8 || !vsModeKnown(want)) return true;
     std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
     if (g_vsBlockedModesCsv.empty()) return false;
     std::string tok;
@@ -1610,7 +1644,8 @@ static std::string bmTrim(const std::string& s) {
  *  decoded off the air from a garbled or hostile RDS/DAB label) went into the JSON raw, the list stopped
  *  parsing, and every listener's bookmarks vanished. Control characters become a space here as the last
  *  line of defence; bmClean() keeps them out of the store in the first place. */
-static std::string bmEsc(const std::string& n) {
+static std::string bmEsc(const std::string& n_raw) {
+    const std::string n = vibeadmin::utf8Clean(n_raw);   // ★ valid UTF-8, or a browser closes the socket
     std::string e;
     for (char c : n) {
         if ((unsigned char)c < 0x20 || c == 0x7f) { e += ' '; continue; }
@@ -1622,7 +1657,8 @@ static std::string bmEsc(const std::string& n) {
 
 /** ★ What a stored name or mode may be: no control characters, trimmed, and bounded — a station name is a
  *  few dozen characters, never a megabyte. Cut on a UTF-8 boundary so a capped name stays valid text. */
-static std::string bmClean(const std::string& in, size_t maxBytes) {
+static std::string bmClean(const std::string& in_raw, size_t maxBytes) {
+    const std::string in = vibeadmin::utf8Clean(in_raw);   // ★ and valid UTF-8 (JNI aborts on bad UTF-8 too)
     std::string o;
     for (char c : in) o += ((unsigned char)c < 0x20 || c == 0x7f) ? ' ' : c;
     o = bmTrim(o);
@@ -4644,6 +4680,14 @@ struct VsAuth {
     std::string issue() {
         std::lock_guard<std::mutex> lk(mtx);
         int64_t now = nowMs(); prune(now);
+        /* ★★★ BOUNDED (audit 2026-10-03). Every anonymous GET /vibeserver/auth added an entry kept for an hour
+         *  — a loop on it grew this without limit (a 1 GB Pi dies) and slowed every PIN/admin check, which
+         *  scans it under this lock. 8192 live nonces is far beyond any real audience; past it the OLDEST goes. */
+        if (issued.size() >= 8192) {
+            auto oldest = issued.begin();
+            for (auto it = issued.begin(); it != issued.end(); ++it) if (it->second < oldest->second) oldest = it;
+            issued.erase(oldest);
+        }
         uint8_t raw[16];
         uint64_t a = nextRandom(), b = nextRandom();
         memcpy(raw, &a, 8); memcpy(raw + 8, &b, 8);
@@ -8196,7 +8240,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::mutex> lk(clientMtx);
             // ★ Bounded. Each waiter costs a thread and a socket; past some depth the honest
             //   answer is "too many waiting" rather than a queue position nobody will reach.
-            if (distinctWaitingLocked() >= kMaxWaiting) {
+            /* ★★ SOCKETS ARE BOUNDED TOO (audit 2026-10-03). The ceiling counted distinct SESSIONS, so many sockets
+             *  under one session id stayed "one person" and were all admitted — each a held thread, and the
+             *  O(n²) counts below run under clientMtx, which the DSP thread takes. A person holds two sockets
+             *  (spectrum + audio); four per session and twice the people ceiling in total is generous. */
+            int mine = 0;
+            for (const auto& w : waitQueue) if (w.who == me) ++mine;
+            if (distinctWaitingLocked() >= kMaxWaiting || (int)waitQueue.size() >= 2 * kMaxWaiting || mine >= 4) {
                 sendWs(sock, 0x1, (const uint8_t*)"{\"type\":\"busy\",\"queueFull\":true}", 34);
                 outboxClose(sock);
                 return;
@@ -12837,7 +12887,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     static bool recvN(const std::shared_ptr<net::Socket>& s, uint8_t* buf, size_t n) {
         size_t got = 0;
-        while (got < n) { int r = s->recv(buf+got, n-got, true, net::NO_TIMEOUT); if (r <= 0) return false; got += (size_t)r; }
+        // ★ Once a frame has started, the rest must arrive within 30 s (audit 2026-10-03): with no timeout here, a
+        //   peer that sent one header byte and stopped wedged this reader for good and its liveness check never ran.
+        while (got < n) { int r = s->recv(buf+got, n-got, true, 30000); if (r <= 0) return false; got += (size_t)r; }
         return true;
     }
     // idleMs: if not NO_TIMEOUT, the FIRST header byte read honours this timeout. On timeout (the
@@ -13068,9 +13120,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   The app showed a POWER SAVE pill while sending NEITHER (Stuart, 2026-08-01), so the
         //   question is not "was it honoured" but "which path did it take, if any".
         if (type == "set_rate") {
-            if (jsonNum(msg,"divisor",v)) {
-                LOGI("client asked for divisor %d", (int)llround(v));
-                rateDivisor.store(std::max(1,(int)llround(v)));
+            /* ★★ BOUNDED (audit 2026-10-03): one shared divisor, so {"divisor":2147483647} froze the waterfall
+             *  for EVERY listener until somebody reconnected, and 1e300 made llround undefined. A finite 1..16
+             *  covers every rung any client uses. */
+            if (jsonNum(msg,"divisor",v) && std::isfinite(v)) {
+                const int d = (int)std::min(16.0, std::max(1.0, std::round(v)));
+                LOGI("client asked for divisor %d", d);
+                rateDivisor.store(d);
             }
             return;
         }
@@ -13149,7 +13205,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             } else if (!g_vsAuthState.blocked(ip) && !nonce.empty() && !token.empty()
                        && g_vsAuthState.verify(secret, nonce, token)) {
                 ok = true; g_vsAuthState.recordOk(ip);
-            } else {
+            } else if (!nonce.empty() && !token.empty()) {
+                // ★ Only a request that OFFERED credentials is a wrong guess (audit 2026-10-03), as on every HTTP
+                //   route. Counting empty ones let anyone — behind an untrusted tunnel, where everyone is
+                //   127.0.0.1 — lock the owner out with three empty messages.
                 g_vsAuthState.recordFail(ip);
             }
             setAdminNow(sock, ok);
@@ -15653,6 +15712,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!sock) continue;
             std::lock_guard<std::mutex> lk(connMtx);
             reapConnThreadsLocked();
+            /* ★★★ A CEILING ON CONNECTIONS (audit 2026-10-03). A thread per connection with no cap let a few
+             *  thousand idle sockets exhaust a Pi's threads and memory. 512 is far above any real audience
+             *  (listeners hold 2-3 sockets each); past it a new connection is closed at once, not threaded. */
+            if (connThreads.size() >= 512) {
+                static std::atomic<int64_t> lastWarn{0};
+                const int64_t now = (int64_t)time(nullptr);
+                if (now - lastWarn.load() >= 60) { lastWarn = now; LOGI("connection ceiling reached (512) — refusing new connections"); }
+                sock->close();
+                continue;
+            }
             auto done = std::make_shared<std::atomic<bool>>(false);
             connThreads.push_back({ std::thread([this, sock, done]{
                 routeOrHandle(sock); done->store(true, std::memory_order_release); }), done });
@@ -15731,6 +15800,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             auto sock = std::make_shared<net::Socket>(fd);
             std::lock_guard<std::mutex> lk(connMtx);
             reapConnThreadsLocked();
+            /* ★★★ A CEILING ON CONNECTIONS (audit 2026-10-03). A thread per connection with no cap let a few
+             *  thousand idle sockets exhaust a Pi's threads and memory. 512 is far above any real audience
+             *  (listeners hold 2-3 sockets each); past it a new connection is closed at once, not threaded. */
+            if (connThreads.size() >= 512) {
+                static std::atomic<int64_t> lastWarn{0};
+                const int64_t now = (int64_t)time(nullptr);
+                if (now - lastWarn.load() >= 60) { lastWarn = now; LOGI("connection ceiling reached (512) — refusing new connections"); }
+                sock->close();
+                continue;
+            }
             auto done = std::make_shared<std::atomic<bool>>(false);
             connThreads.push_back({ std::thread([this, sock, done]{
                 handleConnection(sock); done->store(true, std::memory_order_release); }), done });
@@ -15819,11 +15898,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         std::string cfWorkerHeader, vibeViaHeader;   // ★ see vsViaOf
+        std::string originHeader, hostHeader;        // ★ see the cross-site check after the proxy resolution
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         bool acceptsGzip = false;         // ★ /mapdata/ and the web client — see the header capture below
         bool acceptsBr = false;           // ★ the web client only: brotli, pre-compressed at build time
         std::string rangeHeader;          // ★ only /mapgl/ reads it: PMTiles are read by Range
-        if (sock->recvline(reqLine, 8192, 5000) <= 0) { sock->close(); return; }
+        /* ★★★ ONE DEADLINE FOR THE WHOLE REQUEST (audit 2026-10-03). recvline's 5 s is PER BYTE, so a client
+         *  sending one byte every 4.9 s held this thread for hours (8 KB lines, unlimited lines). The request
+         *  line and headers now have 15 s in total and at most 128 header lines. */
+        const auto reqStart = std::chrono::steady_clock::now();
+        auto reqMsLeft = [&reqStart]() -> int {
+            const long long used = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - reqStart).count();
+            return (int)std::max(0LL, std::min(5000LL, 15000LL - used));
+        };
+        const long long reqDeadline = std::chrono::duration_cast<std::chrono::milliseconds>(
+            reqStart.time_since_epoch()).count() + 15000;
+        if (sock->recvlineUntil(reqLine, 8192, 5000, reqDeadline) <= 0) { sock->close(); return; }
         // ★★★ STRIP OUR OWN /r/<serial> PREFIX, ONCE, RIGHT HERE.
         //
         //     When several radios share one forwarded port, the front door routes on a path prefix
@@ -15973,8 +16064,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
             }
         }
-        while (sock->recvline(line, 8192, 5000) > 0) {
-            if (line.empty() || line == "\r") break;
+        int headerLines = 0;
+        bool headersOk = false;
+        while (true) {
+            const int left = reqMsLeft();
+            if (left <= 0 || ++headerLines > 128) break;
+            if (sock->recvlineUntil(line, 8192, left, reqDeadline) <= 0) break;
+            if (line.empty() || line == "\r") { headersOk = true; break; }
+            {   // ★ Origin and Host, for the cross-site check below.
+                auto hv = [&line](size_t n) { size_t a2 = line.find_first_not_of(" \t", n), b2 = line.find_last_not_of(" \t\r\n");
+                                              return a2 == std::string::npos ? std::string() : line.substr(a2, b2 - a2 + 1); };
+                if (line.size() > 7 && strncasecmp(line.c_str(), "origin:", 7) == 0) originHeader = hv(7);
+                else if (line.size() > 5 && strncasecmp(line.c_str(), "host:", 5) == 0) hostHeader = hv(5);
+            }
             if (line.size() > 15) {
                 std::string cl = line.substr(0, 15);
                 for (auto& c : cl) c = (char)tolower(c);
@@ -16086,6 +16188,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
             }
         }
+        if (!headersOk) { sock->close(); return; }   // ★ the deadline or the line cap ran out: no request
         // ★★★ RESOLVE WHO THIS ACTUALLY IS, BEFORE ANYTHING READS THE ADDRESS. Bans, geo/ASN,
         //     the connection log and the admin lockout all call peerAddress(); doing the
         //     substitution once here means none of them change, and none of them can be missed.
@@ -16099,6 +16202,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                 xffHeader, xRealIpHeader);
             }
             if (real != sock->socketPeerAddress()) sock->setEffectiveAddress(real);
+        }
+
+        /* ★★★ A WEB PAGE ON THIS MACHINE IS NOT THE PERSON AT THIS MACHINE (audit 2026-10-03). A local request
+         *  skips the PIN, and with no admin password (or not serving on the LAN) it is admin — so ANY website
+         *  open in a browser on the host (the phone running the app, the TV box, the Mac) could open a socket to
+         *  127.0.0.1 and switch bias-T on, retune, or write bookmarks. Browsers always send Origin on WebSockets
+         *  and cross-site requests; a LOCAL request whose Origin names another site is refused outright.
+         *  ★ Local only: a request through the tunnel or the LAN is not loopback and is untouched, so the web
+         *    client, the directory proxy and the apps are unaffected. "null" (sandboxed frames, file://) refused. */
+        if (!originHeader.empty() && isLoopback(sock->peerAddress())) {
+            auto hostOf = [](std::string u) {
+                const size_t sch = u.find("://"); if (sch != std::string::npos) u = u.substr(sch + 3);
+                const size_t sl = u.find('/'); if (sl != std::string::npos) u = u.substr(0, sl);
+                if (!u.empty() && u[0] == '[') { const size_t rb = u.find(']'); return rb == std::string::npos ? u : u.substr(1, rb - 1); }
+                const size_t co = u.rfind(':'); if (co != std::string::npos) u = u.substr(0, co);
+                for (auto& ch : u) ch = (char)std::tolower((unsigned char)ch);
+                return u;
+            };
+            const std::string oh = hostOf(originHeader), hh = hostOf(hostHeader);
+            const bool localName = oh == "127.0.0.1" || oh == "localhost" || oh == "::1";
+            if (!(localName || (!oh.empty() && oh == hh))) {
+                LOGI("refused a cross-site local request (Origin %s, Host %s)", originHeader.substr(0, 80).c_str(), hostHeader.substr(0, 80).c_str());
+                sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                sock->close(); return;
+            }
         }
 
         bool wsSpec  = reqLine.find("/ws/user-spectrum") != std::string::npos;
@@ -17280,7 +17408,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const std::string ecc = queryParam(reqLine, "ecc");
             double hz = atof(queryParam(reqLine, "freq").c_str());
             std::string url;
-            if (fn && !pi.empty() && !ecc.empty() && hz > 0) url = fn(pi, ecc, hz);
+            // ★ Only a real identity is looked up: PI 4 hex, ECC 1-2 hex, a broadcast-band frequency.
+            if (fn && isHexLen(pi, 4, 4) && isHexLen(ecc, 1, 2) && hz > 30e6 && hz < 300e6) {
+                LogoLookupSlot slot;
+                if (slot.ok) url = fn(pi, ecc, hz);
+            }
             const std::string body = url.empty() ? "{}" : "{\"logo\":\"" + vibeadmin::esc(url) + "\"}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=3600\r\n"
@@ -17370,7 +17502,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::string url;
             const int eccN = int(strtol(ecc.c_str(), nullptr, 16)); const uint16_t eidN = uint16_t(strtoul(eid.c_str(), nullptr, 16)); const uint32_t sidN = uint32_t(strtoul(sid.c_str(), nullptr, 16));
             std::string ext, stored = dabLogoStoreFind(eccN, eidN, sidN, ext);
-            if (stored.empty() && fn && !ecc.empty() && !eid.empty() && !sid.empty()) {
+            LogoLookupSlot slot;   // ★ see LogoLookupSlot; identities must be real hex, too
+            if (stored.empty() && fn && slot.ok && isHexLen(ecc, 1, 2) && isHexLen(eid, 4, 4)
+                && (isHexLen(sid, 4, 4) || isHexLen(sid, 8, 8)) && scids >= 0 && scids <= 15) {
                 url = fn(ecc, eid, sid, scids);
                 LocalSdrShim::LogoBytesFn bf;
                 { std::lock_guard<std::mutex> lk(g_vsLogoBytesMtx); bf = g_vsLogoBytesFn; }
@@ -17399,6 +17533,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    path uses; the directory rate-limits its own callers on top of that. */
             const std::string nonce = queryParam(reqLine, "vs_nonce");
             const std::string token = queryParam(reqLine, "vs_auth");
+            /* ★★★ THE BACKOFF NOW REALLY APPLIES (audit 2026-10-03). The note above said it did; it did not —
+             *  VsAuth::verify never touches the fail table, so this was an unthrottled PIN oracle: one nonce,
+             *  then HMAC(guess) offline and as many requests as the attacker liked, each testing every PIN on
+             *  the machine at once. A locked-out caller gets the same empty answer, so the lockout reveals
+             *  nothing about the PIN either. */
+            const std::string ip = sock->peerAddress();
+            if (g_vsAuthState.blocked(ip)) {
+                static const std::string empty = "{\"radios\":[]}";
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                              "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
+                              + std::to_string(empty.size()) + "\r\n\r\n" + empty);
+                sock->close(); return;
+            }
             /* ★ An admin opens everything — see vsAuthOk. Asked HERE rather than inside the
              *  handler because the proof is over the whole request line, which the handler
              *  (living in main.cpp, one layer up) does not see. */
@@ -17406,6 +17553,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LocalSdrShim::UnlockFn ufn;
             { std::lock_guard<std::mutex> lk(g_vsConfigMtx); ufn = g_vsUnlockFn; }
             const std::string body = ufn ? ufn(nonce, token, isAdmin) : std::string("{\"radios\":[]}");
+            // ★ Credentials offered and nothing opened = a wrong guess; something opened = a right one.
+            if (!nonce.empty() && !token.empty() && !isAdmin) {
+                if (body.find("\"radios\":[]") != std::string::npos) g_vsAuthState.recordFail(ip);
+                else g_vsAuthState.recordOk(ip);
+            }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);

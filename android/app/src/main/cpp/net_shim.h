@@ -105,6 +105,9 @@ public:
     // '\r' kept). Returns line length (0 for a blank line), -1 on error/close.
     int recvline(std::string& str, int maxLen = 0, int timeout = NO_TIMEOUT,
                  Address* dest = nullptr);
+    /** ★ recvline with an ABSOLUTE deadline (steady-clock ms since epoch) as well as the per-byte timeout —
+     *  a drip-fed line (one byte every few seconds) must not outlive the request's budget (audit 2026-10-03). */
+    int recvlineUntil(std::string& str, int maxLen, int perByteTimeout, long long deadlineSteadyMs);
 
     /* ★★★ WHAT THIS SOCKET ACTUALLY DELIVERED, and how long it lived.
      *

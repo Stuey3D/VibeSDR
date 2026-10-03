@@ -181,6 +181,23 @@ int Socket::recvline(std::string& str, int maxLen, int timeout, Address*) {
     return (int)str.size();
 }
 
+int Socket::recvlineUntil(std::string& str, int maxLen, int perByteTimeout, long long deadlineSteadyMs) {
+    str.clear();
+    uint8_t c;
+    while (maxLen <= 0 || (int)str.size() < maxLen) {
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const long long left = deadlineSteadyMs - now;
+        if (left <= 0) return -1;
+        int r = recvRaw(&c, 1, (int)std::min<long long>(perByteTimeout, left));
+        if (r < 0) return -1;
+        if (r == 0) { if (!open_) return str.empty() ? -1 : (int)str.size(); else return -1; }
+        if (c == '\n') return (int)str.size();      // newline stripped, '\r' kept
+        str.push_back((char)c);
+    }
+    return (int)str.size();
+}
+
 // ── Listener ────────────────────────────────────────────────────────────────
 Listener::~Listener() { stop(); }
 
@@ -199,6 +216,9 @@ std::shared_ptr<Socket> Listener::accept(Address*, int timeout) {
         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return nullptr;
     }
     int cfd = ::accept(fd_, nullptr, nullptr);
+    // ★ Close-on-exec (audit 2026-10-03): otherwise every child we spawn (curl, cloudflared, ffmpeg) inherits
+    //   listeners' sockets. fcntl rather than accept4 — the same code builds for macOS, which has no accept4.
+    if (cfd >= 0) ::fcntl(cfd, F_SETFD, FD_CLOEXEC);
     if (cfd < 0) return nullptr;
     int one = 1;
     ::setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
