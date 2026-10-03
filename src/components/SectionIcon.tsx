@@ -14,7 +14,7 @@ import Svg, { Path, Circle, Rect } from 'react-native-svg';
 export type SectionIconName =
   | 'audio' | 'nr' | 'decoder' | 'station' | 'spectrum' | 'controls'
   | 'maps' | 'profile' | 'admin' | 'instance' | 'hardware' | 'dab'
-  | 'spots' | 'server' | 'monitor';
+  | 'spots' | 'server' | 'monitor' | 'zoomIn' | 'zoomOut';
 
 const DEFAULT_COLOR = 'rgba(180,190,210,0.85)';
 
@@ -45,6 +45,10 @@ function glyph(
       return <>{p('M1.8 12.5c1.2-3 2.4-3 3.6 0s2.4 3 3.6 0', 1.8)}{p('M12 6v12', 1.8)}{p('M14.2 18 17 7.2 19.8 18', 1.8)}{p('M15.1 14.2h3.8', 1.8)}</>;
     case 'station':    // location pin
       return <>{p('M12 21s-6-5.3-6-10a6 6 0 1 1 12 0c0 4.7-6 10-6 10Z')}<Circle cx={12} cy={11} r={2} fill="none" stroke={color} strokeWidth={1.7} /></>;
+    case 'zoomIn':     // magnifier with + — the zoom drum's glass (DrumWheel buildIconPath), at 24
+      return <><Circle cx={10} cy={10} r={6.5} fill="none" stroke={color} strokeWidth={1.9} />{p('M14.8 14.8 21 21', 2.2)}{p('M7 10h6M10 7v6', 1.9)}</>;
+    case 'zoomOut':    // magnifier with −
+      return <><Circle cx={10} cy={10} r={6.5} fill="none" stroke={color} strokeWidth={1.9} />{p('M14.8 14.8 21 21', 2.2)}{p('M7 10h6', 1.9)}</>;
     case 'spectrum':   // spectrum bars
       return p('M4 15v3M8 9v9M12 5v13M16 11v7M20 8v10');
     case 'controls':   // faders

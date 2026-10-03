@@ -1813,6 +1813,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   const isLandscape = screenW > screenH;
   // Tablets (iPad) have room for the decoder panel in landscape; phones don't.
   const isTablet = Math.min(screenW, screenH) >= 768;
+  /* ★★ ANDROID PHONES GO FULL SCREEN IN LANDSCAPE (2026-10-03). The 3-button navigation bar sits down the right
+   *  edge in landscape and the zoom drum and the right-hand cards were drawn under it (emulator at 320 × 568 dp —
+   *  a 480p Android phone). iOS hides its own status bar in landscape; this matches it: system bars hidden, a
+   *  swipe from the edge shows them for a moment (VibeLocalSdrModule.setImmersive). Off again on the way out. */
+  useEffect(() => {
+    if (Platform.OS !== 'android' || (Platform as any).isTV) return;
+    (NativeModules as any).VibeLocalSDR?.setImmersive?.(isLandscape && !isTablet);
+  }, [isLandscape, isTablet]);
+  useEffect(() => () => {
+    if (Platform.OS === 'android') (NativeModules as any).VibeLocalSDR?.setImmersive?.(false);
+  }, []);
 
   // ── Spec ratio (portrait + landscape stored separately) ───────────────────
   const [specRatioPortrait,  setSpecRatioPortrait]  = useState(0.28);
@@ -9590,7 +9601,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    what lives where has to be re-read every time one of those places changes — the previous
     //    breakage was this same card, and the half of the sentence nobody was editing.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog. Audio is separate — noise reduction, the auto notch, squelch, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — noise reduction, the auto notch, squelch, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.

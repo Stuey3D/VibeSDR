@@ -10,6 +10,9 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONObject
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.LifecycleEventListener
@@ -62,6 +65,29 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
      *  receiver reads it with no JS running. See VibeBootStart. */
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun getStartOnPower(): Boolean = VibeBootStart.isEnabled(reactContext)
+
+    /**
+     * ★★ FULL SCREEN IN LANDSCAPE (2026-10-03). Android's 3-button navigation bar sits down the RIGHT edge in
+     *    landscape (~64 dp), and the radio screen drew its zoom drum and the right-hand cards underneath it —
+     *    found on an emulator at the SE's 320 × 568 dp, which is a 480p Android phone exactly. iOS hides its
+     *    status bar in landscape on its own; this does the same here: system bars hidden, a swipe from the edge
+     *    shows them for a moment. SDRScreen calls it on entering landscape and turns it off on the way out.
+     */
+    @ReactMethod
+    fun setImmersive(on: Boolean) {
+        val act = reactContext.currentActivity ?: return
+        act.runOnUiThread {
+            try {
+                val c = WindowCompat.getInsetsController(act.window, act.window.decorView)
+                if (on) {
+                    c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    c.hide(WindowInsetsCompat.Type.systemBars())
+                } else {
+                    c.show(WindowInsetsCompat.Type.systemBars())
+                }
+            } catch (t: Throwable) { Log.w("VibeLocalSDR", "setImmersive: ${t.message}") }
+        }
+    }
 
     @ReactMethod
     fun setStartOnPower(on: Boolean) { VibeBootStart.setEnabled(reactContext, on) }

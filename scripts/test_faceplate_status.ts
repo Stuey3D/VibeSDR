@@ -162,5 +162,33 @@ for (const a of [0, 100, 300, 568, 2000]) {
   eq('idempotent', twice.step, once.step);
 }
 
+// ── ★★ CENTRE FIRST (Stuart, 2026-10-03: SHARED TUNER must stay centred; IF / GAIN matter less) ──────────
+{
+  const cf = (w: number) => statusFit(w, S, { centreFirst: 3 });
+  const RnoIf = R - 60 - 4;                                           // 193
+  eq('centreFirst: 1 pt short of centred drops IF and STAYS CENTRED',
+     [hid(cf(centred - 1).hidden), cf(centred - 1).packed], [['if'], false]);
+  eq('centreFirst: exactly centred with IF gone', cf(2 * Math.max(L, RnoIf) + C + 16).packed, false);
+  // With IF and GAIN gone the right side (109) is already narrower than the left (162): L sets the halves, so
+  // the link icons have nothing to give, and the next pt short of it packs with all three centred drops made.
+  const c3 = 2 * Math.max(L, 30 + 4 + 16 + 4 + 55) + C + 16;
+  eq('centreFirst: two drops, still centred', [hid(cf(c3).hidden), cf(c3).packed], [['if', 'gain'], false]);
+  eq('centreFirst: past the three it PACKS, keeping them dropped',
+     [hid(cf(c3 - 1).hidden), cf(c3 - 1).packed], [['if', 'gain', 'linkIcons'], true]);
+  eq('centreFirst: nothing fits → everything droppable gone', hid(cf(0).hidden), [...STATUS_DROP_ORDER]);
+  let same = true;
+  for (let w = 0; w <= 900; w += 3) {
+    const a = statusFit(w, S), b = statusFit(w, S, { centreFirst: 0 });
+    if (a.step !== b.step || a.packed !== b.packed || hid(a.hidden).join() !== hid(b.hidden).join()) same = false;
+  }
+  ok('centreFirst 0 is exactly §8.2 at every width', same);
+  // Hysteresis still holds on the new sequence: a step only comes back with 8 pt to spare.
+  const at = cf(centred - 1);
+  eq('centreFirst hysteresis: 4 pt of room does not bring IF back',
+     hid(statusFit(centred + 3, S, { centreFirst: 3, prevStep: at.step, hysteresis: 8 }).hidden), ['if']);
+  eq('centreFirst hysteresis: 8 pt does',
+     hid(statusFit(centred + 8, S, { centreFirst: 3, prevStep: at.step, hysteresis: 8 }).hidden), []);
+}
+
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate status row: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

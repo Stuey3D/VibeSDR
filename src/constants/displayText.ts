@@ -420,13 +420,6 @@ export function statusFits(available: number, spec: StatusRowSpec, st: StatusFit
   return need <= available + 0.5;
 }
 
-/** The fewest steps that fit — the last step (everything droppable gone) when nothing does. */
-function minStep(available: number, spec: StatusRowSpec, order: readonly StatusItem[]): number {
-  const n = statusStepCount(order);
-  for (let k = 0; k < n; k++) if (statusFits(available, spec, statusState(k, order))) return k;
-  return n - 1;
-}
-
 /**
  * ★★★ §8.2 — WHAT THE LANDSCAPE STATUS ROW DROPS TO FIT, from MEASURED widths (never the device model).
  *   Items go strictly in STATUS_DROP_ORDER (IF first … the recording timer last); SHARED TUNER
@@ -439,14 +432,39 @@ function minStep(available: number, spec: StatusRowSpec, order: readonly StatusI
  */
 export function statusFit(available: number, spec: StatusRowSpec, opts: {
   portrait?: boolean; prevStep?: number; hysteresis?: number; order?: readonly StatusItem[];
+  /** ★★ CENTRE FIRST (Stuart, 2026-10-03: "I dont like the shared tuner message being off centre"; "gain and
+   *  filter are less important if the signals are clean"): the first `centreFirst` items of the order may DROP
+   *  WHILE THE SIDES STAY EQUAL — the centre stays centred — before the row packs. 0 / absent = §8.2 as built. */
+  centreFirst?: number;
 } = {}): StatusFit {
   const order = opts.order ?? STATUS_DROP_ORDER;
   if (opts.portrait) return statusState(0, order);
-  const k = minStep(available, spec, order);
+  const seq = statusSequence(order, opts.centreFirst ?? 0);
+  const first = (avail: number) => {
+    for (let i = 0; i < seq.length; i++) if (statusFits(avail, spec, seq[i])) return i;
+    return seq.length - 1;
+  };
+  const k = first(available);
   const prev = opts.prevStep;
-  if (prev === undefined || k >= prev) return statusState(k, order);
+  const at = (i: number) => ({ ...seq[i], step: i });
+  if (prev === undefined || k >= prev) return at(k);
   // Room to bring something back — only with the hysteresis to spare, and never past where we were.
-  return statusState(Math.min(prev, minStep(available - (opts.hysteresis ?? 0), spec, order)), order);
+  return at(Math.min(prev, first(available - (opts.hysteresis ?? 0))));
+}
+
+/** The states a row tries, in order: with `centreFirst` = n, the first n drops UNPACKED (centred), then §8.2's
+ *  packed steps from the one that already has those n dropped. n = 0 is exactly §8.2's sequence. */
+export function statusSequence(order: readonly StatusItem[], centreFirst: number): StatusFit[] {
+  const n = Math.max(0, Math.min(centreFirst, order.filter(it => it !== 'shared').length));
+  if (n === 0) return Array.from({ length: statusStepCount(order) }, (_, k) => statusState(k, order));
+  const seq: StatusFit[] = [];
+  for (let j = 0; j <= n; j++) {
+    // State 2 + (j - 1) of §8.2 hides the first j items; take its items, unpacked.
+    const st = j === 0 ? statusState(0, order) : statusState(1 + j, order);
+    seq.push({ ...st, packed: false });
+  }
+  for (let k = 1 + n; k < statusStepCount(order); k++) seq.push(statusState(k, order));
+  return seq;
 }
 
 // ── The VTS strip on a VFD ───────────────────────────────────────────────────

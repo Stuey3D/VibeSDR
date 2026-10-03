@@ -59,8 +59,9 @@ import {
 import { AUTO_REASON_NOTE } from '../constants/transparency';
 import {
   usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
-  PopupKey, PopupFader, PopupPlate, PopupHandle, type PopupTokens, SHEET_MAX_W,
+  PopupKey, PopupFader, PopupPlate, PopupHandle, type PopupTokens, SHEET_MAX_W, POPUP_FONT,
 } from './PopupShell';
+import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -475,8 +476,11 @@ function BtnRow({ children, col }: { children: React.ReactNode; col?: boolean })
   );
 }
 
-function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip }: {
+function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip, a11y }: {
+  /** '' with an `icon` = an icon-only key (give it `a11y`). */
   label: string; active?: boolean; danger?: boolean;
+  /** What a screen reader says — required in practice for an icon-only key. */
+  a11y?: string;
   onPress?: () => void; full?: boolean; style?: object; icon?: SectionIconName;
   /** Keep OUT of the keyboard focus order — used for buttons that open the receiver's own
    *  pages, where none of our shortcuts apply. See useNavButton. */
@@ -497,8 +501,8 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip }
     return (
       <PopupKey ref={viewRef as any} label={label} active={!!active} pip={pip ?? active !== undefined}
         danger={danger} onPress={onPress} focused={focused} height={36} fontSize={12}
-        style={[{ minWidth: 58 }, full && styles.btnFull, style]}
-        icon={icon ? (c: string) => <SectionIcon name={icon} size={15} color={c} /> : undefined} />
+        style={[{ minWidth: 58 }, full && styles.btnFull, style]} accessibilityLabel={a11y ?? label}
+        icon={icon ? (c: string) => <SectionIcon name={icon} size={label ? 15 : 20} color={c} /> : undefined} />
     );
   }
   return (
@@ -508,11 +512,12 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip }
               icon && { flexDirection: 'row', gap: 7 }, style,
               focused && styles.btnFocused]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
+      accessibilityRole="button" accessibilityLabel={a11y ?? label}
     >
-      {icon && <SectionIcon name={icon} size={15} color={active ? pt.gold.sel : C.muted} />}
-      <Text style={[styles.btnText, active && styles.btnTextActive, danger && styles.btnTextDanger]}>
+      {icon && <SectionIcon name={icon} size={label ? 15 : 20} color={active ? pt.gold.sel : C.muted} />}
+      {!!label && <Text style={[styles.btnText, active && styles.btnTextActive, danger && styles.btnTextDanger]}>
         {label}
-      </Text>
+      </Text>}
     </TouchableOpacity>
   );
 }
@@ -624,8 +629,10 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
 //   pane draws a key, so the swap lives there, not in the pane. The rows lay out through CtrlRow.
 
 /** One key in a selector row: a legend, or (colour rows) a lit LED dot in that colour. */
-function SelectorKey({ label, dot, active, onPress, a11y }: {
+function SelectorKey({ label, dot, active, onPress, a11y, width }: {
   label?: string; dot?: string; active: boolean; onPress: () => void; a11y?: string;
+  /** A fixed width — the scrolling row (KeyScrollRow) sizes every key to its whole label. */
+  width?: number;
 }) {
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
@@ -636,13 +643,13 @@ function SelectorKey({ label, dot, active, onPress, a11y }: {
     return (
       <PopupKey ref={viewRef as any} label={label} dot={dot} active={active} pip onPress={onPress}
         focused={focused} height={dot ? 30 : 32} fontSize={10} accessibilityLabel={a11y ?? label}
-        style={{ flex: 1, paddingHorizontal: 2 }} />
+        style={width ? { width, paddingHorizontal: 2 } : { flex: 1, paddingHorizontal: 2 }} />
     );
   }
   return (
     <TouchableOpacity
       ref={viewRef as any}
-      style={[styles.btn, styles.selKey, active && styles.btnActive, focused && styles.btnFocused]}
+      style={[styles.btn, styles.selKey, width ? { flex: 0, width } : null, active && styles.btnActive, focused && styles.btnFocused]}
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
       accessibilityRole="button" accessibilityState={{ selected: active }}
       accessibilityLabel={a11y ?? label}
@@ -662,14 +669,126 @@ function SelectorRow<T extends string>({ label, choices, value, onPick, note }: 
 }) {
   return (
     <CtrlRow label={label} note={note}>
-      <BtnRow>
-        {choices.map(c => (
-          <SelectorKey key={c.value} label={c.label} active={c.value === value} onPress={() => onPick(c.value)} />
-        ))}
-      </BtnRow>
+      <KeyScrollRow choices={choices} value={value} onPick={onPick} />
     </CtrlRow>
   );
 }
+
+/**
+ * ★★★ A ROW THAT DOES NOT FIT SCROLLS — IT NEVER CUTS THE NAMES (Stuart, 2026-10-03, the SE in Display Zoom:
+ * "when there is a row of buttons in the menu but the names arent long enough to see make them scroll left and
+ * right with shadows and subtle arrows on either side"). CHASSIS read DEFA…, DISPLAY NI… HY… D…, LIGHT ANGLE
+ * L… T… T…: equal flex keys squeezed until the legend was an ellipsis, and a choice you cannot read is a
+ * choice you cannot make.
+ *  ★★ MEASURED, NEVER BY DEVICE: an invisible twin lays every legend out at its natural width (the key's own
+ *     font); the row's width comes from its onLayout. When the keys fit, the row is TODAY's — equal keys,
+ *     nothing moves. When they do not, each key takes its whole legend and the row scrolls sideways.
+ *  ★ The shadow and the ‹ › appear only on a side that HAS more to reach — an arrow that cannot move is the
+ *    same lie as a control that does nothing (DecoderPanel's header run, the same rule). Tapping one nudges.
+ *  ★ The chosen key is scrolled into view when the row first scrolls, so the lit choice is never off-screen.
+ */
+const KEY_GAP = 6;            // styles.btnRow gap
+const EDGE = 26;              // the shadow's width
+function KeyScrollRow<T extends string>({ choices, value, onPick }: {
+  choices: PaneChoice<T>[]; value: T; onPick: (v: T) => void;
+}) {
+  const styles = usePopupStyles(makeStyles);
+  const pt = usePopupTheme();
+  const [avail, setAvail] = useState(0);
+  const [textW, setTextW] = useState<Record<string, number>>({});
+  // The key's own legend type, and what the key adds round it: metal = PopupKey's cap (8 + 8 padding,
+  // 1 + 1 border); default = styles.selKey (4 + 4 padding, 1 + 1 border). +4 so a rounding never ellipsises.
+  const legend = pt.metal
+    ? { fontFamily: POPUP_FONT, fontSize: 10, fontWeight: '700' as const, letterSpacing: 1 }
+    : StyleSheet.flatten([styles.btnText, styles.selKeyText]);
+  const chrome = pt.metal ? 22 : 14;
+  const widths = choices.map(c => (textW[c.label] ?? 0) + chrome);
+  const known = choices.every(c => textW[c.label] != null);
+  const total = widths.reduce((a, b) => a + b, 0) + KEY_GAP * (choices.length - 1);
+  const scroll = known && avail > 0 && total > avail + 0.5;
+
+  const ref = useRef<ScrollView | null>(null);
+  const [x, setX] = useState(0);
+  const [contentW, setContentW] = useState(0);
+  const canL = scroll && x > 1;
+  const canR = scroll && x < contentW - avail - 1;
+  const nudge = (dir: 1 | -1) => {
+    const to = Math.max(0, Math.min(contentW - avail, x + dir * Math.max(80, avail * 0.7)));
+    ref.current?.scrollTo({ x: to, animated: true });
+  };
+  // Bring the lit key into view once the row becomes a scroller (and when the choice moves).
+  useEffect(() => {
+    if (!scroll) return;
+    const i = choices.findIndex(c => c.value === value);
+    if (i < 0) return;
+    const left = widths.slice(0, i).reduce((a, b) => a + b + KEY_GAP, 0);
+    const right = left + widths[i];
+    if (left < x || right > x + avail) ref.current?.scrollTo({ x: Math.max(0, right - avail + EDGE), animated: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scroll, value]);
+
+  const shade = pt.metal && !pt.silver ? '0,0,0' : pt.silver ? '60,58,54' : '0,0,0';
+  const fade = (side: 'l' | 'r') => (
+    <View pointerEvents="box-none" style={[ksr.edge, side === 'l' ? { left: 0 } : { right: 0 }]}>
+      <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>
+        <Rect x={0} y={0} width={EDGE} height={60}>
+          <LinearGradient start={vec(0, 0)} end={vec(EDGE, 0)}
+            colors={side === 'l' ? [`rgba(${shade},0.85)`, `rgba(${shade},0)`] : [`rgba(${shade},0)`, `rgba(${shade},0.85)`]} />
+        </Rect>
+      </Canvas>
+      <TouchableOpacity hitSlop={8} onPress={() => nudge(side === 'l' ? -1 : 1)}
+        accessibilityRole="button" accessibilityLabel={side === 'l' ? 'More choices to the left' : 'More choices to the right'}
+        style={[ksr.arrow, side === 'l' ? { alignItems: 'flex-start' } : { alignItems: 'flex-end' }]}>
+        <Text style={[ksr.arrowTxt, { color: pt.metal ? pt.legend : '#c9922e' }]}>{side === 'l' ? '‹' : '›'}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  return (
+    <View onLayout={(e) => { const w = Math.floor(e.nativeEvent.layout.width); setAvail(p => (p === w ? p : w)); }}>
+      {/* The measuring twin: every legend at its natural width, invisible and out of the layout. */}
+      <View pointerEvents="none" style={ksr.twin} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+        {choices.map(c => (
+          <Text key={c.value} style={[legend, { flexShrink: 0 }]} numberOfLines={1}
+            onLayout={(e) => { const w = Math.ceil(e.nativeEvent.layout.width);
+                               setTextW(p => (p[c.label] === w ? p : { ...p, [c.label]: w })); }}>
+            {c.label}
+          </Text>
+        ))}
+      </View>
+      {scroll ? (
+        <NavRow>
+          <View>
+            <ScrollView ref={ref} horizontal showsHorizontalScrollIndicator={false} scrollEventThrottle={16}
+              onScroll={(e) => setX(e.nativeEvent.contentOffset.x)}
+              onContentSizeChange={(w) => setContentW(w)}
+              contentContainerStyle={[styles.btnRow, { flexWrap: 'nowrap' }]}>
+              {choices.map((c, i) => (
+                <SelectorKey key={c.value} label={c.label} width={widths[i]} active={c.value === value}
+                  onPress={() => onPick(c.value)} />
+              ))}
+            </ScrollView>
+            {canL && fade('l')}
+            {canR && fade('r')}
+          </View>
+        </NavRow>
+      ) : (
+        <BtnRow>
+          {choices.map(c => (
+            <SelectorKey key={c.value} label={c.label} active={c.value === value} onPress={() => onPick(c.value)} />
+          ))}
+        </BtnRow>
+      )}
+    </View>
+  );
+}
+const ksr = StyleSheet.create({
+  // ★ Its own wide box: inside the row's width a legend would be measured already cut short.
+  twin:     { position: 'absolute', left: 0, top: 0, width: 4000, flexDirection: 'row', opacity: 0 },
+  edge:     { position: 'absolute', top: 0, bottom: 0, width: EDGE, overflow: 'hidden' },
+  arrow:    { flex: 1, justifyContent: 'center', paddingHorizontal: 2 },
+  arrowTxt: { fontSize: 18, fontWeight: '700', opacity: 0.85, marginTop: -2 },
+});
 
 /** A pane's ‹ BACK header. Default: today's bar. Silver / black: the mockup's small ‹ dome key
  *  beside the pane's engraved title. */
@@ -681,14 +800,17 @@ function BackRow({ title, onPress }: { title: string; onPress: () => void }) {
       <View style={styles.backRowMetal}>
         <PopupKey label="‹" onPress={onPress} height={30} fontSize={16} style={{ width: 40 }}
           accessibilityLabel="Back" />
-        <Text style={styles.backRowTitle}>{title}</Text>
+        <Text style={[styles.backRowTitle, { flexShrink: 1 }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>{title}</Text>
       </View>
     );
   }
+  /* ★ The title SHRINKS to fit beside BACK, never runs past the box (Stuart, 2026-10-03, the SE in Display Zoom:
+   *  "‹ BACKCONTROL CUSTOMISATION" — no gap, and the title out through the right edge). */
   return (
-    <TouchableOpacity style={styles.backRow} onPress={onPress} activeOpacity={0.7}>
-      <Text style={styles.backRowChevron}>‹  BACK</Text>
-      <Text style={styles.backRowTitle}>{title}</Text>
+    <TouchableOpacity style={[styles.backRow, { gap: 12 }]} onPress={onPress} activeOpacity={0.7}>
+      <Text style={[styles.backRowChevron, { flexShrink: 0 }]}>‹  BACK</Text>
+      <Text style={[styles.backRowTitle, { flexShrink: 1, textAlign: 'right' }]} numberOfLines={1}
+            adjustsFontSizeToFit minimumFontScale={0.7}>{title}</Text>
     </TouchableOpacity>
   );
 }
@@ -1290,9 +1412,11 @@ function MenuSheetBody({
                 and was confusing to read). */}
             {!dispSettingsOpen && !bookmarksOpen && !custOpen && (<>
 
-            {/* ── LOCAL HARDWARE (V4 Android — RTL-SDR controls submenu) ── */}
+            {/* ── SDR CONTROLS (the radio's own controls submenu) ──
+                ★ Not "LOCAL HARDWARE" (Stuart, 2026-10-03): the heading showed over a REMOTE VibeServer's radio
+                  too — on every app — and described a phone's USB dongle only. */}
             {onLocalHardware && (<>
-              <SectionLabel label="LOCAL HARDWARE" icon="hardware" first />
+              <SectionLabel label="SDR CONTROLS" icon="hardware" first />
               {/* ★ The BUTTON has to name the radio too, not just the panel it opens. The
                   header was fixed and this was not, so the menu still announced an RTL-SDR
                   while the panel behind it said Airspy (Stuart, 2026-07-27). */}
@@ -1318,8 +1442,10 @@ function MenuSheetBody({
                 used to push it over). MIN = full span out, MAX = full zoom in. */}
             <BtnRow>
               <Btn label="MIN"    onPress={onZoomMin} style={{ flex: 1 }} />
-              <Btn label="− ZOOM" onPress={onZoomOut} style={{ flex: 1 }} />
-              <Btn label="+ ZOOM" onPress={onZoomIn}  style={{ flex: 1 }} />
+              {/* ★ The zoom drum's magnifier, not words: "− ZOOM" broke mid-word on the SE in Display Zoom
+                  ("- ZO / OM"); Stuart, 2026-10-03: "that truncated zoom text can be a magnifying glass". */}
+              <Btn label="" icon="zoomOut" a11y="Zoom out" onPress={onZoomOut} style={{ flex: 1 }} />
+              <Btn label="" icon="zoomIn"  a11y="Zoom in"  onPress={onZoomIn}  style={{ flex: 1 }} />
               <Btn label="MAX"    onPress={onZoomMax} style={{ flex: 1 }} />
             </BtnRow>
             <BtnRow>

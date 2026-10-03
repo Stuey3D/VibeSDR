@@ -589,6 +589,9 @@ export const LAND = {
    *  icon 10 — a floor, because scaling the band with the WIDTH is what shrank the keys below legibility.
    *  Applies to every phone deck, the untouched default bar included; tablets are already well over it. */
   phoneFloor:    40,
+  /** ★ …and no phone KEY narrower than 40 pt (2026-10-03, emulator at the SE's 568 pt less Android's navigation
+   *  bar: r(56) at 0.565 = 32 pt, and SET read "SE", 100k read "100"). The drums give the width back. */
+  phoneKeyMinW:  40,
   growToH:       430,
   /** SDRScreen `pillWrap`: 8 pt each side of the bar. */
   screenMargin:  8,
@@ -715,7 +718,7 @@ export function landscapeDeck(o: { plate: { screws: boolean; gloss: boolean } | 
   const rowGap = r(LAND.rowGap);
   const keyH = (bandH - rowGap) / 2;
   const colGap = r(plate ? LAND.colGap : LAND.todayGap);
-  const keyW = r(plate ? LAND.keyW : LAND.todayKeyW);
+  const keyW = Math.max(r(plate ? LAND.keyW : LAND.todayKeyW), o.tablet ? 0 : LAND.phoneKeyMinW);
   const dispW = r(plate ? LAND.dispW : LAND.todayDispW);
   const padH = !plate ? r(12) : r(plate.screws ? 24 : 12);
   const inner = o.W - 2 * LAND.screenMargin - 2 * padH;
