@@ -403,11 +403,6 @@ function WaterfallView({
   //         waterfall row-set every 300 ms; the frames in between are skipped FOR THE WATERFALL.
   //     ★ The SPECTRUM TRACE is not gated and still follows every frame — the trade is time
   //       resolution in the waterfall, which is the thing being bought, not liveness elsewhere.
-  /** Lines-per-frame derived from the MEASURED feed rate and then frozen. Null until the rate has
-   *  settled — see WF_ROWS. Frozen because uN maps all waterfall history: it may be WRONG (the old
-   *  floor-based guess) or RIGHT, but it must never keep changing. */
-  const [wfRowsLatched, setWfRowsLatched] = useState<number | null>(null);
-  const wfRateFrames = useRef(0);
   // ★★★ 20 / 30 / 40 ROWS PER SECOND. Raised from 20/30 because on a feed at or above the target
   //     the app cannot express a SLOWER setting: its rows are one POINT tall, so "one row per
   //     frame" already IS 20 rows/s, and SHARP and DEFAULT collapsed together. Making the other
@@ -417,21 +412,12 @@ function WaterfallView({
   //       pixel tall and its rate is speed x dpr, so SHARP there is genuinely slower. Matching
   //       that means a device-resolution ring, which needs the full-ring upload fixed first.
   const WF_TARGET_ROWS = wfScroll === 'smooth' ? 40 : wfScroll === 'default' ? 30 : 0;
-  // Sized off the BACKEND'S FLOOR, so it is a constant for the session: UberSDR 20/3.3 -> 6x,
-  // VibeServer 20/4 -> 5x. Never recomputed from what is arriving right now.
-  // ★★★ SIZED FROM THE RATE THE SERVER IS ACTUALLY SENDING, LATCHED ONCE — NOT FROM THE BACKEND'S
-  //     WORST CASE. `feedFloorFps` is a static per-backend guess (5 for VibeServer, 3.3 for
-  //     UberSDR), so a server genuinely running 20 fps was sized as if it ran at 5: WF_ROWS = 4,
-  //     a 200 ms gate, and therefore FOUR FRAMES IN EVERY FIVE THROWN AWAY for the waterfall,
-  //     each kept row then repeated 4x down the screen.
-  //     ★★ That is the chunky, blurry, detail-free picture in Stuart's side-by-side against the
-  //     web client (2026-08-04) — identical server, identical 20 fps into both, and the browser
-  //     showing 20 rows/s of real data against the app's 5. The input was never the difference.
-  //     ★ Latched ONCE, after the measured rate settles, so uN is still a constant for the session
-  //       — which is the property the floor was protecting. It just protects it at the RIGHT value.
-  //       A single rescale at latch time, ~1 s in on a nearly empty waterfall, is the whole cost.
-  const WF_ROWS = WF_TARGET_ROWS <= 0 ? 1
-    : (wfRowsLatched ?? Math.max(1, Math.min(8, Math.round(WF_TARGET_ROWS / Math.max(1, feedFloorFps)))));
+  // ★★ WF_ROWS (a lines-per-frame figure LATCHED from the measured feed rate) is GONE
+  //     (2026-10-03). Since uN was pinned to 1 nothing read it — it only fed `cfg.rowsPerFrame`,
+  //     which no code read either. Its latch never latched (handleFrame is a []-deps callback and
+  //     saw the first render's null forever), so after 25 frames it called setState EVERY frame
+  //     and re-rendered this whole view whenever the rounded value flipped. The row count a slow
+  //     feed needs is decided by `targetRows` + rowCarry in handleFrame.
   /** ★★★ NO GATE ANY MORE — EVERY DATA FRAME BECOMES A ROW.
    *  The gate existed only because uN had to be constant: holding rows/sec fixed with a fixed
    *  multiplier meant discarding source frames on a fast feed (a 200 ms gate at 20 fps threw away
@@ -517,8 +503,9 @@ function WaterfallView({
   }, [lut]);
 
   // ── Intensity ring buffer (Gray_8, ring order — the shader does the
-  // display-order mapping via uHead). Each push = one row write + a 256KB
-  // single-channel image (vs the old 1MB RGBA full rebuild + CPU colourise).
+  // display-order mapping via uHead). Each push = one row write + a 1 MiB
+  // single-channel image (RING_W x RING_ROWS = 1024 x 1024 Gray_8 — vs the old RGBA full
+  // rebuild + CPU colourise).
   /** A copy of the newest row, so the stepper can push the extra rows a SLOW feed needs to hold
    *  the chosen scroll rate. frame.row is a reused buffer, hence the copy. */
   /** Fractional row credit carried between arrivals — see the emit note. Without it a target rate
@@ -589,7 +576,12 @@ function WaterfallView({
   // props); empty path = draw nothing (Path doesn't take null).
   const wfImage  = useSharedValue<SkImage | null>(null);
   const specPath = useSharedValue<SkPath>(Skia.Path.Make());
-  const peakPath = useSharedValue<SkPath>(Skia.Path.Make());
+  /** ★ ONE persistent empty path for "peak hold off / paused". It was a fresh Skia.Path.Make() on
+   *  EVERY data frame while peak hold was off (the common case) — an allocation, a shared-value write
+   *  and a 300 ms dispose timer per frame to draw nothing. Never mutated, never disposed by swapPath
+   *  (see the guard there), so the UI thread can draw it at any time. */
+  const peakEmpty = useMemo(() => Skia.Path.Make(), []);
+  const peakPath = useSharedValue<SkPath>(peakEmpty);
   const [liveRange, setLiveRange] = useState({ dbMin: -120, dbMax: -20 });
   // ── Deterministic Skia disposal ─────────────────────────────────────────────
   // Hermes only sees the tiny JS wrappers, NOT the ~1MB native buffer behind
@@ -623,8 +615,9 @@ function WaterfallView({
   const pathPending = useRef<Set<SkPath>>(new Set());
   const swapPath = useCallback((sv: { value: SkPath }, p: SkPath) => {
     const old = sv.value;
+    if (old === p) return;            // already showing it (the shared empty path) — nothing to do
     sv.value = p;
-    if (old) {
+    if (old && old !== peakEmpty) {   // ★ the shared empty path is permanent — never dispose it
       pathPending.current.add(old);
       setTimeout(() => { if (pathPending.current.delete(old)) { try { old.dispose(); } catch {} } }, 300);
     }
@@ -934,7 +927,7 @@ function WaterfallView({
       n,
     );
     if (img) {
-      swapWfImage(img, data); // UI-thread swap + retire old pair (~256KB now)
+      swapWfImage(img, data); // UI-thread swap + retire old pair (1 MiB: 1024x1024 Gray_8)
       uHead.value = frameCount.current;
       if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
     } else {
@@ -1240,10 +1233,10 @@ function WaterfallView({
   // per frame (~a full core of CPU). Per-render config is mirrored into a ref
   // so the stable callback never closes over stale props.
   const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
-                            smoothTune, rowsPerFrame: WF_ROWS, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
+                            smoothTune, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
                             minGapMs: WF_MIN_GAP_MS });
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
-                       smoothTune, rowsPerFrame: WF_ROWS, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
+                       smoothTune, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
                        minGapMs: WF_MIN_GAP_MS };
 
   // Geometry the watch needs to crop a VFO-centred slice out of the row.
@@ -1307,15 +1300,6 @@ function WaterfallView({
       const dt = now - lastFrameTs.current;
       avgFrameMs.current = avgFrameMs.current * 0.8 + dt * 0.2;
       uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
-      // ★★★ LATCH THE LINES-PER-FRAME FROM THE MEASURED RATE, ONCE. See WF_ROWS. Waits ~25 frames
-      //     so the smoothed average has actually converged — latching on the first sample would
-      //     freeze whatever the connection handshake happened to look like. After this the value
-      //     never changes again for the session, which is the constancy uN requires.
-      if (wfRowsLatched === null && ++wfRateFrames.current >= 25 && avgFrameMs.current > 0) {
-        const fps = 1000 / avgFrameMs.current;
-        const target = wfScroll === 'smooth' ? 30 : wfScroll === 'default' ? 20 : 0;
-        if (target > 0) setWfRowsLatched(Math.max(1, Math.min(8, Math.round(target / Math.max(1, fps)))));
-      }
     }
     lastFrameTs.current = now;
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
@@ -1433,7 +1417,7 @@ function WaterfallView({
       // identical to what settles afterwards, so nothing rescales.
       // ★ The same constant as the settled path. The old static hold existed only because that
       //   path derived a LIVE value that jumped during a gesture — there is nothing live left.
-      // ★★★ uN IS NOW ALWAYS 1 — see the note at WF_ROWS. The shader no longer maps history.
+      // ★★★ uN IS NOW ALWAYS 1 — see the note at WF_TARGET_ROWS. The shader no longer maps history.
       uNSv.value = 1;
       stopRevealStepper();
       // ★ ≤ 60 Hz — see startGlide / glideCb. Same linear ramp over the same `dur`.
@@ -1539,7 +1523,7 @@ function WaterfallView({
         // so the processor can't see the shift) and smear the display. Clear
         // and hide; it re-seeds within a frame or two of settling.
         if (boost) proc.current.resetPeakHold();
-        swapPath(peakPath, Skia.Path.Make()); // empty = draw nothing
+        swapPath(peakPath, peakEmpty); // empty = draw nothing (a no-op once already empty)
       }
     } else {
       // Spectrum hidden — nothing needs inter-frame smoothness; the panel can
@@ -1552,7 +1536,7 @@ function WaterfallView({
       // anyway, and it leaves both buffers valid.
       specPathA.reset(); specPathB.reset();
       specPath.value = specPathA;
-      swapPath(peakPath, Skia.Path.Make());
+      swapPath(peakPath, peakEmpty);
     }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1783,7 +1767,11 @@ function WaterfallView({
     crisp.setStyle(1);
     crisp.setAntiAlias(true);
     c.drawPath(path, crisp);
-    return { img: surface.makeImageSnapshot(), halfW, w };
+    // ★ The snapshot owns its pixels; the raster surface and the path are scratch — free them now
+    //   rather than leave a full-height dpr-scaled buffer waiting for a GC Hermes never feels.
+    const img = surface.makeImageSnapshot();
+    try { surface.dispose(); path.dispose(); } catch {}
+    return { img, halfW, w };
   }, [needleColor, needleIntensity, needle?.scaleQ, height, dpr]);
 
   const edgeStrip = useMemo(() => {
@@ -1812,8 +1800,22 @@ function WaterfallView({
     pc.setStyle(1);
     pc.setAntiAlias(true);
     c.drawPath(path, pc);
-    return { img: surface.makeImageSnapshot(), halfW, w, h };
+    const img = surface.makeImageSnapshot();
+    try { surface.dispose(); path.dispose(); } catch {}
+    return { img, halfW, w, h };
   }, [needleColor, needle?.scaleQ, height, dpr]);
+
+  // ★ RETIRE A REPLACED STRIP. A colour / intensity / height / rotation change rebuilds these; the
+  //   old image was left for GC. Same 300 ms grace as swapWfImage: the cleanup runs after the
+  //   render that swapped in the new image, and the UI thread may still be mid-draw on the old one.
+  useEffect(() => {
+    const s = needleStrip;
+    return () => { if (s) setTimeout(() => { try { s.img.dispose(); } catch {} }, 300); };
+  }, [needleStrip]);
+  useEffect(() => {
+    const s = edgeStrip;
+    return () => { if (s) setTimeout(() => { try { s.img.dispose(); } catch {} }, 300); };
+  }, [edgeStrip]);
 
   // ── Gestures (tap-to-tune / pan / pinch-zoom) ───────────────────────────────
   const lastPanX = useRef(0);

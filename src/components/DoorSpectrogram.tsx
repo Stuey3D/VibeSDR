@@ -15,7 +15,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { PixelRatio, StyleSheet, Text, View } from 'react-native';
-import { AlphaType, Canvas, ColorType, Image as SkImage, Skia, type SkImage as SkImageT } from '@shopify/react-native-skia';
+import { AlphaType, Canvas, ColorType, Image as SkImage, Skia, type SkData, type SkImage as SkImageT } from '@shopify/react-native-skia';
 
 // ★ The real stops of the app's own 'Sonar Green' palette — see src/assets/colormaps.ts.
 const SONAR_GREEN: [number, number, number][] = [
@@ -37,7 +37,14 @@ const LUT: Uint8Array = (() => {
   return out;
 })();
 
-async function fetchSpectrogram(base: string, bins: number, rows: number): Promise<{ img: SkImageT; hours: number } | null> {
+type Pic = { img: SkImageT; data: SkData; hours: number };
+
+/** ★ Free a picture's native side. The image wraps `data` without copying (as WaterfallView's ring), so
+ *  both go together. Up to 2048 x 1440 RGBA = 11.8 MB that Hermes would otherwise hold until a GC it
+ *  never feels pressure to run. */
+const disposePic = (p: Pic | null) => { if (p) { try { p.img.dispose(); p.data.dispose(); } catch {} } };
+
+async function fetchSpectrogram(base: string, bins: number, rows: number): Promise<Pic | null> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8000);
   try {
@@ -75,26 +82,33 @@ async function fetchSpectrogram(base: string, bins: number, rows: number): Promi
     const data = Skia.Data.fromBytes(rgba);
     const img = Skia.Image.MakeImage(
       { width: nb, height: nr, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque }, data, nb * 4);
-    if (!img) return null;
+    if (!img) { data.dispose(); return null; }
     // The row header carries the row's time; first and last give the span the picture covers.
     const t0 = dv.getFloat64(25, true), t1 = dv.getFloat64(25 + (nr - 1) * (8 + nb), true);
     const hours = Number.isFinite(t0) && Number.isFinite(t1) && t1 > t0 ? (t1 - t0) / 3600 : 0;
-    return { img, hours };
+    return { img, data, hours };
   } catch { return null; }
   finally { clearTimeout(t); }
 }
 
 export default function DoorSpectrogram({ base, width, height }: { base: string; width: number; height: number }) {
-  const [pic, setPic] = useState<{ img: SkImageT; hours: number } | null>(null);
+  const [pic, setPic] = useState<Pic | null>(null);
   useEffect(() => {
     let dead = false;
     if (!(width > 0 && height > 0)) return;
     const dpr = PixelRatio.get();
     const bins = Math.min(2048, Math.max(512, Math.floor(width * dpr)));
     const rows = Math.min(1440, Math.max(180, Math.floor(height * dpr)));
-    fetchSpectrogram(base.replace(/\/+$/, ''), bins, rows).then(p => { if (!dead) setPic(p); });
+    fetchSpectrogram(base.replace(/\/+$/, ''), bins, rows).then(p => { if (dead) disposePic(p); else setPic(p); });
     return () => { dead = true; };
   }, [base, width, height]);
+  // ★ RETIRE THE PICTURE IT REPLACES (a resize / rotation / another server refetches), and the last one on
+  //   unmount. The cleanup runs after the render that swapped the new one in; the 300 ms grace is
+  //   WaterfallView's swapWfImage rule — the UI thread may still be mid-draw on the old image.
+  useEffect(() => {
+    const p = pic;
+    return () => { if (p) setTimeout(() => disposePic(p), 300); };
+  }, [pic]);
   if (!pic) return null;
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">

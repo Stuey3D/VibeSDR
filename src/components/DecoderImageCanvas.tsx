@@ -12,8 +12,9 @@
  *   - save() encodes the visible image to PNG and opens the share sheet
  *     (skin used navigator.share with the same mode_timestamp.png naming).
  *
- * Rendering: pixel buffer → SkImage, rebuilt at most every REBUILD_LINES lines
- * (or 150ms) so a 1809-wide WEFAX at 120 LPM doesn't thrash the GPU upload.
+ * Rendering: pixel buffer → SkImage, rebuilt at most once per REBUILD_MS (with a
+ * trailing rebuild so the last lines always land) so a 1809-wide WEFAX at 120 LPM
+ * doesn't thrash the GPU upload; each replaced image is disposed after a grace.
  * Displayed scaled to panel width, aspect preserved, scrolls as it grows.
  */
 
@@ -25,11 +26,22 @@ import { ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-
 import { File, Paths } from 'expo-file-system';
 import {
   Canvas, Image as SkiaImage, Skia,
-  AlphaType, ColorType, ImageFormat, type SkImage,
+  AlphaType, ColorType, ImageFormat, type SkData, type SkImage,
 } from '@shopify/react-native-skia';
 
-const REBUILD_LINES = 8;
-const REBUILD_MS    = 150;
+/* ★★ AT MOST ONE REBUILD PER REBUILD_MS, AND ONLY WHEN A LINE HAS LANDED (2026-10-03). The gate was
+ *   `lines < 8 && ms < 150` → skip, i.e. rebuild on 8 lines OR 150 ms — so at WEFAX's 2 lines/s
+ *   (500 ms apart) EVERY line rebuilt, each a full copy of the written picture (up to 1809 x 1200 x 4
+ *   = 8.7 MB) into a new SkData + SkImage, and nothing disposed the old pair. A fast SSTV mode (or
+ *   a burst of queued lines after a stall) rebuilt per line too. Now: time-gated, with a TRAILING
+ *   rebuild so the final lines of a burst always appear even if no further line arrives.
+ *   ★ Trade-off: the picture can lag the newest line by up to REBUILD_MS. At WEFAX's 2 lines/s
+ *   that is unchanged (one line per rebuild either way — the saving there is the disposal);
+ *   on faster image modes and bursts it caps copies at ~2.5/s. */
+const REBUILD_MS    = 400;
+/** Grace before a replaced image is freed — WaterfallView swapWfImage's rule: the UI thread may
+ *  still be drawing it. */
+const RETIRE_MS     = 300;
 const WEFAX_INIT_H  = 500;  // skin: _initCanvas(w, 500)
 const GROW_ROWS     = 100;  // skin: _canvas.height = ln + 100
 
@@ -141,25 +153,70 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
 
     const linesSince = useRef(0);
     const lastBuild  = useRef(0);
+    const trailTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // ── Deterministic disposal (WaterfallView swapWfImage pattern) ───────────
+    // Hermes sees only the tiny JS wrapper, never the multi-MB native pixels behind each image, so
+    // replaced images waited for a GC that native memory never triggers. Retire the old pair after
+    // a TIME grace (not a count): the render thread may still be drawing it.
+    const imgLive    = useRef<{ img: SkImage; data: SkData } | null>(null);
+    const imgPending = useRef<Set<{ img: SkImage; data: SkData }>>(new Set());
+    const swapImg = useCallback((next: { img: SkImage; data: SkData } | null) => {
+      const old = imgLive.current;
+      imgLive.current = next;
+      setImg(next ? next.img : null);
+      if (old) {
+        imgPending.current.add(old);
+        setTimeout(() => {
+          if (imgPending.current.delete(old)) { try { old.img.dispose(); old.data.dispose(); } catch {} }
+        }, RETIRE_MS);
+      }
+    }, []);
+    useEffect(() => () => {   // unmount: the store keeps the PIXELS; the Skia copies can all go
+      if (trailTimer.current) { clearTimeout(trailTimer.current); trailTimer.current = null; }
+      imgPending.current.forEach(r => { try { r.img.dispose(); r.data.dispose(); } catch {} });
+      imgPending.current.clear();
+      const cur = imgLive.current;
+      imgLive.current = null;
+      if (cur) setTimeout(() => { try { cur.img.dispose(); cur.data.dispose(); } catch {} }, RETIRE_MS);
+    }, []);
 
     // ── SkImage rebuild ──────────────────────────────────────────────────────
     const rebuild = useCallback((buf: PixBuf | null, force = false) => {
-      if (!buf) { setImg(null); return; }
+      // A forced rebuild (new image, PREV/LIVE switch, done, reset) supersedes any trailing one —
+      // which would otherwise repaint the LIVE buffer over a PREV the user just asked for.
+      if (force && trailTimer.current) { clearTimeout(trailTimer.current); trailTimer.current = null; }
+      if (!buf) { swapImg(null); return; }
       const now = Date.now();
-      if (!force && linesSince.current < REBUILD_LINES && now - lastBuild.current < REBUILD_MS) return;
+      if (!force) {
+        if (linesSince.current === 0) return;
+        const wait = REBUILD_MS - (now - lastBuild.current);
+        if (wait > 0) {
+          if (!trailTimer.current) {
+            // ★ live.current, not `buf`: a WEFAX grow (+100 rows) replaces the buffer object meanwhile.
+            //   Only the live view ever takes the ungated path — PREV/LIVE switches are forced and clear this.
+            trailTimer.current = setTimeout(() => { trailTimer.current = null; rebuild(live.current); }, wait);
+          }
+          return;
+        }
+      }
+      if (trailTimer.current) { clearTimeout(trailTimer.current); trailTimer.current = null; }
       linesSince.current = 0;
       lastBuild.current = now;
       // Crop display to written lines (+2 margin) so a fresh 500-row WEFAX
       // buffer doesn't show as a giant black void
       const visH = Math.max(1, Math.min(buf.h, buf.maxLine + 2));
       const slice = buf.data.subarray(0, buf.w * visH * 4);
+      const data = Skia.Data.fromBytes(slice);
       const sk = Skia.Image.MakeImage(
         { width: buf.w, height: visH, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
-        Skia.Data.fromBytes(slice),
+        data,
         buf.w * 4,
       );
-      if (sk) { setImg(sk); setDispDims({ w: buf.w, h: visH }); }
-    }, []);
+      if (sk) { swapImg({ img: sk, data }); setDispDims({ w: buf.w, h: visH }); }
+      else data.dispose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [swapImg]);
 
     const rollToPrev = useCallback(() => {
       if (live.current?.complete) {
@@ -252,7 +309,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         live.current = null;  store.live = null;
         prev.current = null;  store.prev = null;
         setViewingPrev(false);
-        setImg(null);
+        rebuild(null, true);   // clears any trailing rebuild and retires the shown image
         onPrevState(false, false);
       },
 
