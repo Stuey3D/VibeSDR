@@ -1285,7 +1285,14 @@ void RdsDecoder::parseGroup() {
         if (blkOk_[3]) {
             const uint16_t aid = blk_[3];
             const uint8_t grp = (uint8_t)(blk_[1] & 0x1F);
-            if (aid == 0x4BD7) rtpGroup_ = grp;       // RT+
+            /* ★★ ONLY A GROUP AN ODA MAY USE (audit 2026-10-03). The RT+ branch below sits ahead of
+             *  2A, 4A, 1A, 10A, 14 and 15 in this chain, so a 3A (or one bit error in it) naming 2A
+             *  swallowed RadioText for the rest of the tune — and the clock, ECC and EON with it.
+             *  RT+ reads blocks C and D, so it must ride an A group, and IEC 62106 allows ODAs in
+             *  5A, 6A, 7A, 8A, 9A, 11A, 12A and 13A (8A/9A/13A when TMC/EWS/paging is not there). */
+            const bool odaA = grp == 10 || grp == 12 || grp == 14 || grp == 16 || grp == 18
+                           || grp == 22 || grp == 24 || grp == 26;
+            if (aid == 0x4BD7 && odaA) rtpGroup_ = grp;       // RT+
             bool seen = false;
             for (int i = 0; i < odaN_; ++i)
                 if (oda_[i].aid == aid) { oda_[i].group = grp; seen = true; break; }

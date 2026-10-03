@@ -137,7 +137,9 @@ struct RtlTcpServer::Impl {
                 // table so index-based clients still work.
                 {
                     int n = rtlsdr_get_tuner_gains(dev, nullptr);
-                    if (n > 0 && (int)param < n) {
+                    /* ★ UNSIGNED (audit 2026-10-03): param is a client's uint32; (int)0xFFFFFFFF
+                     *  is -1, passed "< n", and indexed gains[] 4 GB before its start. */
+                    if (n > 0 && param < (uint32_t)n) {
                         std::vector<int> gains(n);
                         rtlsdr_get_tuner_gains(dev, gains.data());
                         rtlsdr_set_tuner_gain(dev, gains[param]);
