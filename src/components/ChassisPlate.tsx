@@ -27,7 +27,7 @@ import {
 } from '@shopify/react-native-skia';
 import { useTexture, TEXTURE_SAMPLING } from './DomeKey';
 import type { PlateTokens } from '../constants/faceplate';
-import { cssAnglePts, cssAnglePtsShifted, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight } from '../constants/plateLight';
+import { cssAnglePts, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight } from '../constants/plateLight';
 import { useLight } from '../contexts/FaceplateContext';
 
 /** CSS `linear-gradient(<deg>, …)` → Skia start/end points over a w × h box. */
@@ -61,18 +61,16 @@ function useSize() {
 }
 
 /** One corner screw (§3.2): 9 pt, radial #fff → #a7abb0 60% → #6d7176, its slot at its own angle.
- *  ★ Its highlight sits TOWARD the light — the SCREWS' angle (`sv`, FaceplateContext screwSv): the stored angle,
- *    or under tilt the light once it has SETTLED (≥ 3°, held 200 ms — small and many, the eye does not track them
- *    live). A SharedValue, so following it costs no React render. 104 → today's 35 % 30 %. */
-function Screw({ x, y, angle, sv }: { x: number; y: number; angle: number; sv: SharedValue<number> }) {
+ *  ★ Its highlight sits TOWARD the light (`light` = the settled angle; 104 → today's 35 % 30 %). */
+function Screw({ x, y, angle, light }: { x: number; y: number; angle: number; light: number }) {
   const r = 4.5, cx = x + r, cy = y + r;
   const a = (angle * Math.PI) / 180, l = r - 1;
-  const hc = useDerivedValue(() => { const hl = screwHighlight(sv.value); return { x: x + 9 * hl.fx, y: y + 9 * hl.fy }; }, [x, y]);
+  const hl = screwHighlight(light);
   return (
     <Group>
       <Circle cx={cx} cy={cy + 1} r={r} color="rgba(255,255,255,0.8)" />
       <Circle cx={cx} cy={cy} r={r}>
-        <RadialGradient c={hc} r={9 * 0.8}
+        <RadialGradient c={vec(x + 9 * hl.fx, y + 9 * hl.fy)} r={9 * 0.8}
           colors={['#ffffff', '#a7abb0', '#6d7176']} positions={[0, 0.6, 1]} />
       </Circle>
       <Circle cx={cx} cy={cy} r={r - 0.25} color="rgba(0,0,0,0.6)" style="stroke" strokeWidth={0.5} />
@@ -91,9 +89,8 @@ function Screw({ x, y, angle, sv }: { x: number; y: number; angle: number; sv: S
  *   live angle `sv`, so a moving angle still updates on the UI thread with no React render; a still angle
  *   costs nothing.
  */
-const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, shiftSv, screwSv }: {
-  w: number; h: number; r: number; plate: PlateTokens; sv: SharedValue<number>;
-  shiftSv: SharedValue<number>; screwSv: SharedValue<number>;
+const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, light }: {
+  w: number; h: number; r: number; plate: PlateTokens; sv: SharedValue<number>; light: number;
 }) {
   const img = useTexture(plate.texture);
   const clip = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), r, r);
@@ -101,9 +98,8 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, shiftS
   // edges (a landscape deck is wider than 620 pt), so no seam line crosses the plate.
   const k = 620 / 1200;
   // ── The light, derived from the live angle (lighting brief §2). At 104°: cssAngle(104, w, h), 28 % −10 %. ──
-  // ★ Tilt's pitch slides the band along the gradient (shiftSv, 0 = today, so LEFT + no tilt is unchanged).
-  const start = useDerivedValue(() => { const p = cssAnglePtsShifted(sv.value, w, h, shiftSv.value); return { x: p.sx, y: p.sy }; }, [w, h]);
-  const end   = useDerivedValue(() => { const p = cssAnglePtsShifted(sv.value, w, h, shiftSv.value); return { x: p.ex, y: p.ey }; }, [w, h]);
+  const start = useDerivedValue(() => { const p = cssAnglePts(sv.value, w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
+  const end   = useDerivedValue(() => { const p = cssAnglePts(sv.value, w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
   // `radial-gradient(140% 70% at <x> -10%)`: an ellipse, drawn as a circle squashed vertically about its
   // centre. ★ The squash is in Y only, so the centre's x does not enter the transform — which is what lets
   // the centre MOVE without a re-render (today's translateX(ecx) … translateX(−ecx) cancelled anyway).
@@ -144,10 +140,10 @@ const PlateCanvas = React.memo(function PlateCanvas({ w, h, r, plate, sv, shiftS
         <Line p1={vec(0, h - 1)} p2={vec(w, h - 1)} color={plate.lipBottom} strokeWidth={2} />
         {/* ★ Screws follow the SETTLED light (brief §5.1: small and many — the eye does not track them live). */}
         {plate.screws && (<>
-          <Screw x={8} y={8} angle={35} sv={screwSv} />
-          <Screw x={w - 17} y={8} angle={-20} sv={screwSv} />
-          <Screw x={8} y={h - 17} angle={80} sv={screwSv} />
-          <Screw x={w - 17} y={h - 17} angle={10} sv={screwSv} />
+          <Screw x={8} y={8} angle={35} light={light} />
+          <Screw x={w - 17} y={8} angle={-20} light={light} />
+          <Screw x={8} y={h - 17} angle={80} light={light} />
+          <Screw x={w - 17} y={h - 17} angle={10} light={light} />
         </>)}
       </Group>
       <RoundedRect x={0.5} y={0.5} width={w - 1} height={h - 1} r={Math.max(0, r - 0.5)}
@@ -167,7 +163,7 @@ export default function ChassisPlate({ plate, radius }: { plate: PlateTokens; ra
           and the canvas kept drawing into its first surface — the brushed plate covered the left half of
           the tuning-step sheet until it was closed and reopened, sometimes several times (Stuart, B16).
           A size change is rare (open, rotate, window resize), so a remount costs nothing that matters. */}
-      {w > 0 && h > 0 && <PlateCanvas key={settledKey} w={w} h={h} r={radius} plate={plate} sv={light.sv} shiftSv={light.shiftSv} screwSv={light.screwSv} />}
+      {w > 0 && h > 0 && <PlateCanvas key={settledKey} w={w} h={h} r={radius} plate={plate} sv={light.sv} light={light.deg} />}
     </View>
   );
 }

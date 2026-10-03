@@ -37,10 +37,6 @@ import { explainFaceplateReset, faceplateGuard, LAST_CRASHED_KEY, launchMarkOnce
 import { readNativeDeviceClass } from '../services/deviceClass';
 import { applyFrameRateCap, readMaxRefreshRate } from '../services/frameRate';
 import { useReduceMotion } from '../hooks/useReduceMotion';
-import { tiltRungFor, tiltShouldRun } from '../constants/tiltLight';
-import {
-  onTiltDebugMode, startTilt, tiltDebugMode, tiltProbe, tiltSensorAvailable, type TiltDebugMode, type TiltTargets,
-} from '../services/tiltLight';
 
 // ★ The dot-matrix / 14-segment displays transliterate non-Latin names with the platform's ICU
 //   (brief §7). Installed once, when the faceplate owner loads — before any display draws.
@@ -75,16 +71,9 @@ interface FaceplateContextValue {
    *  context, i.e. the whole deck. ▶ Item 5 (tilt) writes `lightSv` around `lightDeg`; nothing else does. */
   lightDeg: number;
   lightSv:  SharedValue<number>;
-  /** ★ Tilt's other two outputs (item 5, services/tiltLight.ts): the sheen band's slide along the gradient
-   *  (pitch, a fraction of its length, 0 = today) and the SCREWS' angle, which follows only once the light
-   *  has settled (≥ 3°, held 200 ms). SharedValues for the same reason as lightSv. */
-  shiftSv:  SharedValue<number>;
-  screwSv:  SharedValue<number>;
-  /** ★ Is tilt driving the light? true only while the sensor (or the measurement's synthetic source) runs — the
-   *  LIGHT ANGLE row hides then (faceplate.ts lightAngleRowShown). */
+  /** ★ Is tilt driving the light? false everywhere until item 5 — so the LIGHT ANGLE row shows on silver /
+   *  black on every device (faceplate.ts lightAngleRowShown). */
   tiltDriving: boolean;
-  /** A deck says it is on screen (ControlsBar — HIDE CONTROLS unmounts it): tilt runs only while one is. */
-  deckMounted: (on: boolean) => void;
 }
 
 const DEFAULT_THEME = resolveFaceplate(DEFAULT_SETTINGS);
@@ -95,7 +84,6 @@ const FaceplateContext = createContext<FaceplateContextValue>({
   setTransparency: () => {}, setDisplay: () => {}, setText: () => {}, set: () => {}, setMotion: () => {},
   // ★ Outside a provider (tests, a stray tree) the light is today's, fixed.
   lightDeg: LIGHT_DEFAULT_DEG, lightSv: makeMutable(LIGHT_DEFAULT_DEG), tiltDriving: false,
-  shiftSv: makeMutable(0), screwSv: makeMutable(LIGHT_DEFAULT_DEG), deckMounted: () => {},
 });
 
 /**
@@ -233,25 +221,17 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
                            [settings, transparency, motionEffects]);
   const theme = useMemo(() => resolveFaceplate(onScreen), [onScreen]);
   // ★★ THE LIGHT: the settled angle (state, from LIGHT ANGLE) and the live one (SharedValue) — see the interface.
-  // ★★ ITEM 5 — TILT (lighting brief §5, services/tiltLight.ts). The stored angle is the centre; while tilt runs
-  //    the sensor callback writes ONLY the SharedValues below, never React state. `tiltDriving` is the one piece of
-  //    state, and it changes only when the sensor starts or stops (it hides the LIGHT ANGLE row).
+  // ✗ NO TILT LIGHTING. Built (lighting brief §5, d94bf9d3), reverted, re-applied, and removed for good on
+  //   2026-10-03 — Stuart, after living with it: "glitchiness … when I hold the iPhone flat the light shine seems to
+  //   go full circle and has little sticky moments", not worth the time. The light is the LIGHT ANGLE the user picks.
   const lightDeg = LIGHT_ANGLE_DEG[settings.lightAngle] ?? LIGHT_DEFAULT_DEG;
+  const tiltDriving = false;
   const lightSv = useSharedValue(lightDeg);
-  const shiftSv = useSharedValue(0);
-  const screwSv = useSharedValue(lightDeg);
-  const [deckCount, setDeckCount] = useState(0);
-  const deckMounted = useCallback((on: boolean) => setDeckCount(n => Math.max(0, n + (on ? 1 : -1))), []);
-  const tiltDriving = useTiltLight({
-    chassis: onScreen.chassis, motionOn: motionEffects === 'on', deckVisible: deckCount > 0,
-    baseDeg: lightDeg, targets: { lightSv, shiftSv, screwSv },
-  });
-  tiltProbe.providerRenders++;
+  useEffect(() => { lightSv.value = lightDeg; }, [lightDeg, lightSv]);
   const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz,
-                                 setTransparency, setDisplay, setText, set, setMotion, lightDeg, lightSv, tiltDriving,
-                                 shiftSv, screwSv, deckMounted }),
+                                 setTransparency, setDisplay, setText, set, setMotion, lightDeg, lightSv, tiltDriving }),
                         [theme, onScreen, auto, maxRefreshHz, setTransparency, setDisplay, setText, set, setMotion,
-                         lightDeg, lightSv, tiltDriving, shiftSv, screwSv, deckMounted]);
+                         lightDeg, lightSv, tiltDriving]);
   return <FaceplateContext.Provider value={value}>{children}</FaceplateContext.Provider>;
 }
 
@@ -298,52 +278,9 @@ export function useMotionEffects(): boolean {
 
 /** ★★ The light (lighting brief §2): the settled angle for small surfaces, the live SharedValue for the
  *  PlateLight canvases. Reading `sv` in a Skia prop costs nothing per React render. */
-export function useLight(): { deg: number; sv: SharedValue<number>; shiftSv: SharedValue<number>; screwSv: SharedValue<number> } {
+export function useLight(): { deg: number; sv: SharedValue<number> } {
   const c = useContext(FaceplateContext);
-  return useMemo(() => ({ deg: c.lightDeg, sv: c.lightSv, shiftSv: c.shiftSv, screwSv: c.screwSv }),
-                 [c.lightDeg, c.lightSv, c.shiftSv, c.screwSv]);
-}
-
-/** A deck calls this while mounted: tilt runs only while a deck is on screen (brief §5.1). */
-export function useDeckPresence(): void {
-  const { deckMounted } = useContext(FaceplateContext);
-  useEffect(() => { deckMounted(true); return () => deckMounted(false); }, [deckMounted]);
-}
-
-/**
- * ★★ The tilt hook (brief §5.1): starts the sensor (or the measurement's synthetic source) only while
- *   tiltShouldRun says so — silver/black, MOTION EFFECTS on, sensor present, app ACTIVE (foreground, screen on),
- *   a deck on screen, and the device class not on rung 3 — and stops it the moment any of them goes. Returns
- *   whether tilt is driving. Otherwise the live light simply IS the stored angle.
- */
-function useTiltLight(o: { chassis: string; motionOn: boolean; deckVisible: boolean; baseDeg: number;
-                           targets: TiltTargets }): boolean {
-  const [active, setActive] = useState(AppState.currentState === 'active');
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (st: string) => setActive(st === 'active'));
-    return () => sub.remove();
-  }, []);
-  const [sensor, setSensor] = useState(false);
-  const rung = useMemo(() => tiltRungFor(baseSignals()), []);
-  useEffect(() => {
-    if (rung >= 3) return;
-    let live = true;
-    tiltSensorAvailable().then((ok: boolean) => { if (live) setSensor(ok); });
-    return () => { live = false; };
-  }, [rung]);
-  const [dbg, setDbg] = useState<TiltDebugMode>(tiltDebugMode());
-  useEffect(() => onTiltDebugMode(() => setDbg(tiltDebugMode())), []);
-  const run = dbg !== 'off' && tiltShouldRun({
-    chassis: o.chassis, motionOn: o.motionOn, active, deckVisible: o.deckVisible, rung,
-    sensor: dbg === 'synthetic' ? true : sensor,
-  });
-  const { lightSv, shiftSv, screwSv } = o.targets;
-  useEffect(() => {
-    lightSv.value = o.baseDeg; shiftSv.value = 0; screwSv.value = o.baseDeg;
-    if (!run) return;
-    return startTilt({ lightSv, shiftSv, screwSv }, o.baseDeg, rung, dbg === 'synthetic' ? 'synthetic' : 'sensor');
-  }, [run, o.baseDeg, rung, dbg, lightSv, shiftSv, screwSv]);
-  return run;
+  return useMemo(() => ({ deg: c.lightDeg, sv: c.lightSv }), [c.lightDeg, c.lightSv]);
 }
 
 /** Settings + setters — for the settings pane (and ThemeContext's legacy setTheme). */

@@ -62,8 +62,6 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>VibeSDR uses local network access to scan for and connect to SDR servers on your network, such as RTL-TCP servers and local KiwiSDR, UberSDR or OpenWebRX receivers.</string>
-	<key>NSMotionUsageDescription</key>
-	<string>VibeSDR tilts the light on its metal faceplates as you move the phone. It reads only the phone's orientation, never your activity, and nothing leaves the device.</string>
 	<key>NSLocationDefaultAccuracyReduced</key>
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>

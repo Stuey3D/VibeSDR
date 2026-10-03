@@ -65,12 +65,6 @@
       "expo-audio",
       "expo-status-bar",
       [
-        "expo-sensors",
-        {
-          "motionPermission": "VibeSDR tilts the light on its metal faceplates as you move the phone. It reads only the phone's orientation, never your activity, and nothing leaves the device."
-        }
-      ],
-      [
         "@react-native-tvos/config-tv",
         {
           "isTV": true,

@@ -192,27 +192,6 @@ Use the Samsung Xcover 4S, the oldest supported iPhone, and a Mac. Compare again
 | CPU, phone held still for 60 s | ≤ +1 % |
 | Battery, 30 min, screen on, waterfall running | no measurable difference beyond noise |
 
-### 5.2a How to measure (the harness, built 2026-10-02)
-The same build is measured with tilt OFF and ON. Switch modes with a link (`services/tiltLight.ts`):
-`vibesdr://debug/tilt/off`, `…/synthetic`, `…/auto`. `synthetic` feeds a deterministic slow tilt through the
-**same** path as the sensor, so runs are repeatable without moving the phone. A relaunch is always `auto`.
-While a mode is set, the app logs `[tilt] mode=… writes=… providerRenders=…` every 10 s:
-`providerRenders` must not rise with tilt (the "0 React renders" line).
-
-**Android (XCover):** `scripts/measure-tilt-android.sh [seconds] [adb-serial]`. Open the app on a receiver,
-silver/black chassis, MOTION EFFECTS on, phone flat and still. It runs OFF, SYNTHETIC and AUTO (real sensor,
-phone still) and prints each figure against the budget.
-
-**iPhone (oldest supported) — Instruments, on a Release build from Xcode on the Mac:**
-1. Open the app on a receiver as above, phone flat on the desk.
-2. In Safari or Notes on the phone, open `vibesdr://debug/tilt/off`; switch back to the app.
-3. Xcode ▸ Open Developer Tool ▸ Instruments ▸ **Animation Hitches** (UI/GPU frame time) — record 60 s.
-   Then **Time Profiler** (CPU %) — record 60 s.
-4. Open `vibesdr://debug/tilt/synthetic`; repeat step 3. Then `…/auto` with the phone still; repeat the CPU run.
-5. Compare: hitch time ratio and frame durations (UI ≤ +0.5 ms, GPU ≤ +0.5 ms), CPU (still) ≤ +1 %.
-   The `[tilt]` lines are in Xcode's console (or Console.app, process VibeSDR).
-Record the rung each device ends on in the ladder comment in `src/constants/tiltLight.ts`.
-
 ### 5.3 Fallback ladder (apply in order until the budget is met)
 1. Dome caps, drum wells and screws stop following tilt; only the large plates move.
 2. Cap writes at 20 Hz.

@@ -3,18 +3,14 @@
  *   §1 filament wires: count by HEIGHT, even spacing, snapped to the device-pixel grid;
  *   §2 the one light angle: 104° (LEFT) reproduces today's numbers exactly — sheen, gloss, hot-spot, screws;
  *   §3 MOTION EFFECTS: follows the OS until picked, then the pick wins both ways;
- *   §4 LIGHT ANGLE: the five keys, and the row shown only where it is the light in use;
- *   §5 TILT: gravity → screen tilt in every orientation, the filters, the clamps, the write gate, the screws'
- *      settle, the synthetic source (identical every run, through the same path), the ladder and the run rule.
+ *   §4 LIGHT ANGLE: the five keys, and the row shown only where it is the light in use.
  *
  * Run: node --no-warnings scripts/test_faceplate_lighting.ts   (run-tests.sh does)
  */
 import { filamentCount, filamentYs, devicePixel } from '../src/constants/vfdGlass.ts';
 import { DEFAULT_SETTINGS, effectiveMotion, withMotion, parseSettings, MOTION_CHOICES,
   LIGHT_ANGLES, LIGHT_ANGLE_DEG, LIGHT_ANGLE_CHOICES, lightAngleRowShown, CHASSIS } from '../src/constants/faceplate.ts';
-import { cssAnglePts, cssAnglePtsShifted, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight, LIGHT_DEFAULT_DEG } from '../src/constants/plateLight.ts';
-import { TILT, tiltFromGravity, lowPass, lightFromTilt, shouldWrite, screwStep, syntheticGravity, tiltRungFor,
-  rungWriteMs, tiltShouldRun } from '../src/constants/tiltLight.ts';
+import { cssAnglePts, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight, LIGHT_DEFAULT_DEG } from '../src/constants/plateLight.ts';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -107,97 +103,13 @@ for (const c of CHASSIS) {
   eq(`row on ${c}, tilt driving → hidden`, lightAngleRowShown(c, true), false);
 }
 
-// ── §5 Tilt ───────────────────────────────────────────────────────────────────
-{
-  const G = 9.80665, d2r = Math.PI / 180;
-  // A phone tilted 10° right-edge-down in portrait.
-  const g = { x: G * Math.sin(10 * d2r), y: 0, z: -G * Math.cos(10 * d2r) };
-  const t0 = tiltFromGravity(g, 0, 1, 1);
-  ok('portrait: right edge down = +roll', near(t0.roll, 10, 1e-6) && near(t0.pitch, 0, 1e-6));
-  // The same device-frame tilt read in landscape is a PITCH on screen, and in 180 it is mirrored.
-  const t90 = tiltFromGravity(g, 90, 1, 1), t180 = tiltFromGravity(g, 180, 1, 1), tm90 = tiltFromGravity(g, -90, 1, 1);
-  ok('landscape 90: device roll → screen pitch', near(t90.roll, 0, 1e-6) && near(Math.abs(t90.pitch), 10, 1e-6));
-  ok('landscape -90 is the opposite of 90', near(tm90.pitch, -t90.pitch, 1e-6));
-  ok('upside down mirrors roll', near(t180.roll, -10, 1e-6));
-  ok('flat on a desk = no tilt', (() => { const t = tiltFromGravity({ x: 0, y: 0, z: -G }, 0, 1, 1); return near(t.roll, 0) && near(t.pitch, 0); })());
-  ok('gravity-only input is all it needs (no gyro)', Number.isFinite(t0.roll));
-
-  // Filters: frame-rate independent, and the time constants are the brief's.
-  ok('low-pass: one tau reaches 63 %', near(lowPass(0, 1, TILT.lpTauMs, TILT.lpTauMs), 1 - Math.exp(-1), 1e-12));
-  ok('low-pass: two half-steps = one step', near(lowPass(lowPass(0, 1, 75, 150), 1, 75, 150), lowPass(0, 1, 150, 150), 1e-12));
-  ok('low-pass: dt 0 changes nothing', lowPass(0.3, 1, 0, 150) === 0.3);
-  eq('brief numbers: 30 Hz, 150 ms, 4 s', [TILT.intervalMs, TILT.lpTauMs, TILT.baseTauMs], [33, 150, 4000]);
-
-  // Mapping and clamps.
-  eq('no tilt = the stored angle, no shift', lightFromTilt(0, 0, 104), { deg: 104, shift: 0 });
-  eq('roll +20 → +30°', lightFromTilt(20, 0, 104).deg, 134);
-  eq('roll clamps at ±20', lightFromTilt(45, 0, 104).deg, 134);
-  eq('pitch +20 → +10 % shift', lightFromTilt(0, 20, 104).shift, 0.10);
-  eq('pitch clamps', lightFromTilt(0, -90, 180).shift, -0.10);
-  eq('tilt swings around TOP when TOP is stored', lightFromTilt(-20, 0, 180).deg, 150);
-
-  // The write gate: > 0.5° or > 0.005 shift, and not faster than the rung allows.
-  ok('a 0.4° move is not written', !shouldWrite(104, 0, 104.4, 0, 0, 1000, 33));
-  ok('a 0.6° move is written', shouldWrite(104, 0, 104.6, 0, 0, 1000, 33));
-  ok('…but not 20 ms after the last write', !shouldWrite(104, 0, 110, 0, 990, 1010, 33));
-  ok('a shift move alone is written', shouldWrite(104, 0, 104, 0.01, 0, 1000, 33));
-  eq('rung 0/1 write at 30 Hz, rung 2 at 20 Hz', [rungWriteMs(0), rungWriteMs(1), rungWriteMs(2)], [33, 33, 50]);
-  ok('shift 0 = today\'s sheen points exactly', JSON.stringify(cssAnglePtsShifted(104, 380, 220, 0)) === JSON.stringify(cssAnglePts(104, 380, 220)));
-  {
-    const a = cssAnglePts(104, 380, 220), b = cssAnglePtsShifted(104, 380, 220, 0.1);
-    ok('shift slides BOTH ends by 10 % of the gradient', near(b.sx - a.sx, (a.ex - a.sx) * 0.1, 1e-9) && near(b.ey - a.ey, (a.ey - a.sy) * 0.1, 1e-9));
-  }
-
-  // The screws: follow only a change of ≥ 3° held for 200 ms.
-  let st = { shown: 104, cand: 104, since: 0 };
-  let r = screwStep(st, 106, 0); st = r.st;
-  ok('a 2° move never moves the screws', r.emit === null);
-  r = screwStep(st, 110, 100); st = r.st;
-  ok('a 6° move starts the hold, no emit yet', r.emit === null);
-  r = screwStep(st, 111, 250); st = r.st;
-  ok('still within 3° of the candidate at 150 ms: wait', r.emit === null);
-  r = screwStep(st, 111, 320); st = r.st;
-  eq('held 220 ms: the screws follow', r.emit, 111);
-  r = screwStep(st, 115, 330); r = screwStep(r.st, 120, 400); r = screwStep(r.st, 126, 650);
-  ok('a light still MOVING never settles the screws', r.emit === null);
-
-  // The synthetic source: deterministic, inside the clamps, and through the same gravity path.
-  const s1 = syntheticGravity(1234), s2 = syntheticGravity(1234);
-  ok('synthetic is identical every run', JSON.stringify(s1) === JSON.stringify(s2));
-  ok('synthetic is a real gravity vector (|g| = g)', near(Math.hypot(s1.x, s1.y, s1.z), 9.80665, 1e-6));
-  {
-    let maxR = 0, maxP = 0;
-    for (let t = 0; t < 18000; t += 33) { const tt = tiltFromGravity(syntheticGravity(t), 0, 1, 1); maxR = Math.max(maxR, Math.abs(tt.roll)); maxP = Math.max(maxP, Math.abs(tt.pitch)); }
-    ok('synthetic roll reaches ±15° (inside the ±20 clamp)', near(maxR, 15, 0.05));
-    ok('synthetic pitch reaches ±10°', near(maxP, 10, 0.05));
-  }
-
-  // The ladder and the run rule.
-  eq('Mac → rung 3 (no sensor: the LIGHT ANGLE row)', tiltRungFor({ isMac: true }), 3);
-  eq('TV → rung 3', tiltRungFor({ isTV: true }), 3);
-  eq('a phone starts on rung 0 (until measured)', tiltRungFor({}), 0);
-  const base = { chassis: 'silver', motionOn: true, sensor: true, active: true, deckVisible: true, rung: 0 as const };
-  ok('runs: silver, motion on, sensor, active, deck shown', tiltShouldRun(base));
-  ok('black runs too', tiltShouldRun({ ...base, chassis: 'black' }));
-  ok('NEVER on the default chassis', !tiltShouldRun({ ...base, chassis: 'default' }));
-  ok('MOTION EFFECTS off → no sensor', !tiltShouldRun({ ...base, motionOn: false }));
-  ok('no sensor → off (the row shows)', !tiltShouldRun({ ...base, sensor: false }));
-  ok('background / screen locked → off', !tiltShouldRun({ ...base, active: false }));
-  ok('controls hidden → off', !tiltShouldRun({ ...base, deckVisible: false }));
-  ok('rung 3 → off', !tiltShouldRun({ ...base, rung: 3 }));
-}
-
-
 // ── The B19 perf overlay's text (src/constants/perfOverlay.ts) ──────────────────────────────────────
 {
   const { perfLines } = await import('../src/constants/perfOverlay.ts');
-  const l = perfLines({ cpuPct: 12.4, footprintMB: 412.6, uiFps: 59.8, uiP50Ms: 16.7, uiP90Ms: 18.04 },
-                      { running: 'sensor', writesPerSec: 12.2, rendersPerSec: 0 });
+  const l = perfLines({ cpuPct: 12.4, footprintMB: 412.6, uiFps: 59.8, uiP50Ms: 16.7, uiP90Ms: 18.04 });
   eq('perf: CPU and RAM line', l[0], 'CPU 12%  RAM 413 MB');
   eq('perf: UI line', l[1], 'UI 60fps p50 16.7 p90 18.0 ms');
-  eq('perf: tilt line', l[2], 'TILT sensor  12 w/s  0 renders/s');
-  eq('perf: off when nothing drives the light', perfLines({ cpuPct: 0, footprintMB: 0, uiFps: 0, uiP50Ms: 0, uiP90Ms: 0 },
-     { running: '', writesPerSec: 0, rendersPerSec: 0 })[2], 'TILT off  0 w/s  0 renders/s');
+  eq('perf: two lines (tilt removed)', l.length, 2);
 }
 
 console.log(`faceplate lighting: ${passes} passed, ${fails} failed`);
