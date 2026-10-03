@@ -12,7 +12,7 @@
 import { filamentCount, filamentYs, devicePixel } from '../src/constants/vfdGlass.ts';
 import { DEFAULT_SETTINGS, effectiveMotion, withMotion, parseSettings, MOTION_CHOICES,
   LIGHT_ANGLES, LIGHT_ANGLE_DEG, LIGHT_ANGLE_CHOICES, lightAngleRowShown, CHASSIS } from '../src/constants/faceplate.ts';
-import { cssAnglePts, cssAnglePtsShifted, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight, LIGHT_DEFAULT_DEG } from '../src/constants/plateLight.ts';
+import { cssAnglePts, cssAnglePtsShifted, glossAngle, hotspotX, hotspotY, sheenDeg, HOTSPOT_Y, screwHighlight, LIGHT_DEFAULT_DEG } from '../src/constants/plateLight.ts';
 import { TILT, tiltFromGravity, lowPass, lightFromTilt, shouldWrite, screwStep, syntheticGravity, tiltRungFor,
   rungWriteMs, tiltShouldRun } from '../src/constants/tiltLight.ts';
 
@@ -66,6 +66,12 @@ eq('hot-spot y stays at −10 %', HOTSPOT_Y, -0.10);
 eq('screw highlight at 104°: today\'s 35 % 30 %, exactly', screwHighlight(104), { fx: 0.35, fy: 0.30 });
 ok('hot-spot: RIGHT (256°) mirrors LEFT', near(hotspotX(256), 0.72, 1e-12));
 ok('hot-spot: TOP (180°) is centred', near(hotspotX(180), 0.5, 1e-12));
+// ★ Tilt must MOVE the light (Stuart, 2026-10-02): a full roll about LEFT carries the hot-spot across the plate.
+ok('hot-spot: a full roll about LEFT moves it ≥ 25 % of the width', hotspotX(194) - hotspotX(104) >= 0.25);
+ok('hot-spot never leaves the plate', hotspotX(-500) >= 0.04 && hotspotX(900) <= 0.96);
+eq('hot-spot y at rest is today\'s −10 %', hotspotY(0), HOTSPOT_Y);
+ok('pitch moves the hot-spot down the plate', hotspotY(0.2) > hotspotY(0) + 0.25);
+eq('sheen never comes from below: clamped to 90…270', [sheenDeg(10), sheenDeg(194), sheenDeg(350)], [90, 194, 270]);
 ok('screw: RIGHT mirrors LEFT (65 %)', near(screwHighlight(256).fx, 0.65, 1e-12));
 ok('screw: TOP centred', near(screwHighlight(180).fx, 0.5, 1e-12));
 for (const d of [104, 135, 180, 225, 256]) {
@@ -130,11 +136,11 @@ for (const c of CHASSIS) {
 
   // Mapping and clamps.
   eq('no tilt = the stored angle, no shift', lightFromTilt(0, 0, 104), { deg: 104, shift: 0 });
-  eq('roll +20 → +30°', lightFromTilt(20, 0, 104).deg, 134);
-  eq('roll clamps at ±20', lightFromTilt(45, 0, 104).deg, 134);
-  eq('pitch +20 → +10 % shift', lightFromTilt(0, 20, 104).shift, 0.10);
-  eq('pitch clamps', lightFromTilt(0, -90, 180).shift, -0.10);
-  eq('tilt swings around TOP when TOP is stored', lightFromTilt(-20, 0, 180).deg, 150);
+  eq('roll +20 → +90° (tilt MOVES the light across the plate)', lightFromTilt(20, 0, 104).deg, 194);
+  eq('roll clamps at ±20', lightFromTilt(45, 0, 104).deg, 194);
+  eq('pitch +20 → +20 % shift', lightFromTilt(0, 20, 104).shift, 0.20);
+  eq('pitch clamps', lightFromTilt(0, -90, 180).shift, -0.20);
+  eq('tilt swings around TOP when TOP is stored', lightFromTilt(-20, 0, 180).deg, 90);
 
   // The write gate: > 0.5° or > 0.005 shift, and not faster than the rung allows.
   ok('a 0.4° move is not written', !shouldWrite(104, 0, 104.4, 0, 0, 1000, 33));
