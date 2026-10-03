@@ -826,7 +826,9 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   const tagW = chanTag ? Math.round(Math.max(unitFontSize * 0.72 * 0.62 * Math.max(chanTag.length, 15), unitW)) : 0;
   const labelW = Math.max(unitW, tagW);
   const label = (
-    <View style={[pm.chanCol, { width: labelW, height: H, paddingBottom: Math.max(2, pillPadV), paddingRight: 3,
+    // ★ flexShrink 0 + one line: in a narrow Mac window the column was squeezed and "MHz" broke as "MH" / "z"
+    //   (Stuart, 2026-10-03). The digits beside it shrink to fit; the unit never does.
+    <View style={[pm.chanCol, { width: labelW, flexShrink: 0, height: H, paddingBottom: Math.max(2, pillPadV), paddingRight: 3,
                                 position: dk.style === 'nixie' ? 'absolute' : 'relative', right: 0, bottom: 0 }]}>
       {chanTag ? (
         <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.unitFont,
@@ -834,7 +836,7 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
           {chanTag}
         </Text>
       ) : null}
-      <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.unitFont, fontSize: unitFontSize, paddingBottom: 0 }]}>
+      <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.unitFont, fontSize: unitFontSize, paddingBottom: 0 }]} numberOfLines={1}>
         {unit}
       </Text>
     </View>
@@ -1098,12 +1100,12 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
                   numberOfLines={1}>
               {chanTag}
             </Text>
-            <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]}>
+            <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]} numberOfLines={1}>
               {unit}
             </Text>
           </View>
         ) : (
-          <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]}>
+          <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]} numberOfLines={1}>
             {unit}
           </Text>
         )}
@@ -1205,7 +1207,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
                   {chanTag}
                 </Text>
               ) : null}
-              <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFont, paddingBottom: 0 }]}>
+              <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFont, paddingBottom: 0 }]} numberOfLines={1}>
                 {unit}
               </Text>
             </View>
