@@ -116,20 +116,14 @@ export function syntheticGravity(tMs: number): Vec3 {
  *   3  tilt OFF for this class — it gets the fixed LIGHT ANGLE row, as the Mac does
  * ▶▶ RECORD THE RUNG EACH TESTED DEVICE ENDED ON HERE (brief §5.3), with the numbers (scripts/measure-tilt-android.sh,
  *    the iPhone Instruments procedure in the brief §5.2):
- *      Samsung XCover 4S (Android, slowest supported) — rung 3 PROVISIONALLY (B19, Stuart 2026-10-02: option 2):
- *        the emulator proved 0 React renders and the write gate, but its frame-time/CPU figures were noise
- *        (two identical runs swung +100 % / −45 % CPU). ALL Android is held at rung 3 until the XCover is
- *        measured: scripts/measure-tilt-android.sh 60 192.168.86.111:36408, twice. Then set the rung here.
+ *      Samsung XCover 4S (Android, slowest supported) — rung ?, not yet measured
  *      oldest supported iPhone                        — rung ?, not yet measured
  *      Mac (iPad app on Apple silicon)                — rung 3 by definition: no motion sensor (Stuart)
  *      Apple TV / Android TV                          — rung 3 by definition: no motion sensor
  */
 export type TiltRung = 0 | 1 | 2 | 3;
-/** ★ Android held at rung 3 until the XCover is measured (see the ladder above). Flip to false then. */
-export const ANDROID_TILT_UNMEASURED = true;
-export function tiltRungFor(d: { isMac?: boolean; isTV?: boolean; modelId?: string | null; os?: string }): TiltRung {
+export function tiltRungFor(d: { isMac?: boolean; isTV?: boolean; modelId?: string | null }): TiltRung {
   if (d.isMac || d.isTV) return 3;
-  if (d.os === 'android' && ANDROID_TILT_UNMEASURED) return 3;
   return 0;
 }
 /** The write interval a rung allows. */
