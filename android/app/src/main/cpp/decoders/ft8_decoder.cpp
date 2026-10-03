@@ -30,7 +30,10 @@ bool ht_lookup(ftx_callsign_hash_type_t type, uint32_t hash, char* callsign) {
               : (type == FTX_CALLSIGN_HASH_12_BITS) ? 10 : 0;
     for (int i = 0; i < HT_MAX; i++) {
         if (g_ht[i].callsign[0] && (g_ht[i].hash >> shift) == hash) {
+            /* ★ TERMINATED (audit 2026-10-03): strncpy of 11 leaves no NUL when the stored call is
+             *  11 long, and ft8_lib's caller strlen()s it. Its buffer is char[12] (message.c). */
             std::strncpy(callsign, g_ht[i].callsign, 11);
+            callsign[11] = '\0';
             return true;
         }
     }
@@ -55,7 +58,11 @@ void ht_save(const char* callsign, uint32_t n22) {
 ftx_callsign_hash_interface_t g_hashIf = { ht_lookup, ht_save };
 
 constexpr int kMaxCandidates = 140;
-constexpr int kMaxDecoded    = 50;
+/* ★★★ THE DEDUP TABLE MUST OUTNUMBER THE CANDIDATES (audit 2026-10-03). It was 50 slots against up
+ *  to 140 decodes, and the probe loop below only ends on an empty slot or a duplicate — so the 51st
+ *  distinct message in a busy slot (a contest weekend on 20 m) spun the decode thread for ever.
+ *  Twice the candidate count keeps the open-addressing table under half full. */
+constexpr int kMaxDecoded    = 2 * kMaxCandidates;
 constexpr int kLdpcIters     = 25;
 constexpr int kMinScore      = 10;
 constexpr int kFreqOsr       = 2;

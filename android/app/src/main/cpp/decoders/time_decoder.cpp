@@ -183,6 +183,11 @@ void TimeDecoder::process(const int16_t* samples, int count) {
  *     how long the dip was. Timing off the rising edge would put every bit 100–200 ms late and
  *     make the two MSF sample windows land in the wrong slots.
  */
+/* ★★★ EVERY WRITE TO bitsA_/bitsB_ IS CHECKED (audit 2026-10-03). They hold 60 entries and the
+ *  index is a second counter driven by off-air timing; WWV stepped it by a rounded gap length,
+ *  wrapped it ONCE, and a long fade (a 2-minute gap is a step of 120) wrote past the array. */
+static inline bool inMinute(int s) { return s >= 0 && s < 60; }
+
 void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
     if (snrDb_ < 3.0) return;
     if (state_ == State::NoSignal) setState(State::Searching);
@@ -202,7 +207,7 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         const double sinceSecondMs =
             secondStartClock_ > 0 ? (dipStartClock_ - secondStartClock_) * 1000.0 / sr_ : 1e9;
 
-        if (sinceSecondMs > 150.0 && sinceSecondMs < 400.0 && second_ >= 0) {
+        if (sinceSecondMs > 150.0 && sinceSecondMs < 400.0 && inMinute(second_)) {
             // The B window of the second already in progress.
             bitsB_[second_] = 1;
             return;
@@ -227,6 +232,7 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         }
         // A dip running past 150 ms carries A=1; past 250 ms it also carries B=1 (the two windows
         // ran together). A separate dip near 200 ms is handled above.
+        if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
         bitsA_[second_] = dipMs > kMsfSampleA ? 1 : 0;
         bitsB_[second_] = dipMs > kMsfSampleB ? 1 : 0;
         if (onBit) onBit(second_, bitsA_[second_]);
@@ -250,7 +256,8 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         //        to recognise. One pulse plus the dip after it IS one second by construction, so
         //        rounding that period gives how many seconds to step — including the 2 s step over
         //        a missing pulse. The unreadable second is recorded as 0 and the frame survives.
-        const int steps = std::max(1, (int)std::lround((gapMs + dipMs) / 1000.0));
+        // ★ capped at a minute BEFORE the int cast: a gap of hours is still just "lost the frame"
+        const int steps = std::max(1, (int)std::lround(std::min(60.0, (gapMs + dipMs) / 1000.0)));
 
         // ★★★ THE SYMBOL BELONGS TO THE SECOND THAT HAS JUST ENDED, NOT THE ONE BEGINNING.
         //     The rising edge we are standing on STARTS the next second's pulse, so what we have
@@ -322,6 +329,7 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
             const int measured = (int)(((59 + (long long)std::lround(since)) % 60 + 60) % 60);
             if (measured >= 0 && measured <= 59) second_ = measured;
         }
+        if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
         bitsA_[second_] = (sym == 1) ? 1 : 0;
         if (sym >= 0 && onBit) onBit(second_, bitsA_[second_]);
         emitPartial();
@@ -344,7 +352,7 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         second_ += steps;
         // ★ Stepped clean over the minute without seeing second 59 — a dropout on the marker
         //   itself. Wrap, and drop the corroboration chain rather than decode a half frame.
-        if (second_ > 59) { second_ -= 60; lastStamp_ = 0; }
+        if (second_ > 59) { second_ %= 60; lastStamp_ = 0; }   // ★ % not -= : see inMinute
         return;
     } else if (station_ == Station::WWVB) {
         // ── WWVB ─────────────────────────────────────────────────────────────
@@ -360,7 +368,7 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         else if (second_ < 0) { lastWasMarker_ = (sym == 2); return; }
         else second_++;
         lastWasMarker_ = (sym == 2);
-        if (second_ > 59) { second_ = -1; setState(State::Searching); return; }
+        if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
         bitsA_[second_] = (sym == 1) ? 1 : 0;
         if (onBit) onBit(second_, bitsA_[second_]);
     } else if (station_ == Station::RWM) {
@@ -391,6 +399,7 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         }
         setState(State::Reading);
         const int bit = near(dipMs, 2 * kDipUnit, 50.0) ? 1 : 0;
+        if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
         bitsA_[second_] = bit;
         if (onBit) onBit(second_, bit);
     }

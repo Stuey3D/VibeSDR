@@ -169,7 +169,11 @@ private:
     enum State { WaitingVIS, Decoding };
     double sampleRate; bool autoSync, adaptive;
     SstvBuffer pcm;
-    SstvVIS* vis = nullptr;
+    SstvVIS* vis = nullptr;   ///< ★ owned by the process() thread ALONE — see visReset
+    /** ★★★ The video thread asks for a fresh VIS detector; process() does the delete (audit
+     *  2026-10-03). The video thread used to delete `vis` itself AFTER storing WaitingVIS, so the
+     *  feeding thread could already be inside vis->process() on the object being freed. */
+    std::atomic<bool> visReset{false};
     const SstvMode* mode = nullptr;
     int headerShift = 0;
     std::atomic<State> state{WaitingVIS};

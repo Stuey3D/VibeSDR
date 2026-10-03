@@ -572,6 +572,8 @@ void SstvDecoder::process(const int16_t* mono, int count) {
         accum.erase(accum.begin(), accum.begin() + samps10ms);
 
         if (state.load() == WaitingVIS) {
+            // ★ visReset is set BEFORE the video thread stores WaitingVIS, so it is seen here.
+            if (visReset.exchange(false)) { delete vis; vis = nullptr; }
             if (!vis) { vis = new SstvVIS(sampleRate); vis->onTone = [](double){}; }
             uint8_t modeIdx; int shift;
             if (vis->process(pcm, modeIdx, shift)) {
@@ -609,7 +611,8 @@ void SstvDecoder::videoThread() {
         static const double MIN_SYNC_CONF = 0.25;
         if (conf < MIN_SYNC_CONF) {
             if (onStatus) onStatus("slant not corrected \u2014 sync too weak");
-            state.store(WaitingVIS); pcm.reset(); delete vis; vis = nullptr;
+            // ★ reset first, publish the state LAST — see visReset (audit 2026-10-03)
+            pcm.reset(); visReset.store(true); state.store(WaitingVIS);
             return;
         }
         // ★★★ APPLY THE OFFSET TO THE WHOLE PICTURE, NOT A SHEAR. findSync returns TWO corrections:
@@ -686,10 +689,12 @@ void SstvDecoder::videoThread() {
         }
     }
 
-    // Reset for the next image.
-    state.store(WaitingVIS);
+    // Reset for the next image. ★ The state is published LAST, and `vis` is not touched here: it
+    // belongs to the process() thread, which is free to use it the moment it sees WaitingVIS
+    // (audit 2026-10-03 — this deleted it out from under that thread).
     pcm.reset();
-    delete vis; vis = nullptr;
+    visReset.store(true);
+    state.store(WaitingVIS);
 }
 
 } // namespace vibe

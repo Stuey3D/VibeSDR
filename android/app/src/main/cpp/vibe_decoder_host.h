@@ -51,6 +51,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <map>
 #include <memory>
@@ -256,7 +257,15 @@ public:
                 clearLocked_();
                 startKey_ = key;
                 name_ = ext;
-                buildLocked_(ext, msg);
+                /* ★ NO THROW MAY ESCAPE (audit 2026-10-03): this runs on a socket thread, where an
+                 *  uncaught bad_alloc from a decoder's buffers is std::terminate — the whole server,
+                 *  for every listener. The parameters are clamped now, so this is the backstop. */
+                try { buildLocked_(ext, msg); }
+                catch (const std::exception& ex) {
+                    clearLocked_(); startKey_.clear(); name_.clear();
+                    log(std::string("decoder attach failed: ") + ex.what());
+                    return Start::Refused;
+                }
                 return Start::Ok;
             }
         }
@@ -428,6 +437,9 @@ private:
         ++p; while (p < j.size() && (j[p] == ' ' || j[p] == '"')) ++p;
         char* e = nullptr; const double v = std::strtod(j.c_str() + p, &e);
         if (e == j.c_str() + p) return false;
+        /* ★★ strtod reads "nan" and "inf" (audit 2026-10-03), and every number here sizes a buffer
+         *  or divides something in a decoder. A non-finite value is treated as absent: the default. */
+        if (!std::isfinite(v)) return false;
         out = v; return true;
     }
     static std::string str(const std::string& j, const char* k) {
@@ -494,11 +506,14 @@ private:
         if (ext == "wefax") {
             WefaxDecoder::Config cfg;
             double v;
-            if (num(msg, "lpm", v))         cfg.lpm        = (int)v;
-            if (num(msg, "image_width", v)) cfg.imageWidth = (int)v;
+            /* ★ Clamped BEFORE the int cast — (int)1e300 is undefined behaviour, not a big number.
+             *  The decoder then whitelists lpm and clamps the width itself (audit 2026-10-03). */
+            auto toInt = [](double x) { return (int)std::max(-1.0e6, std::min(1.0e6, x)); };
+            if (num(msg, "lpm", v))         cfg.lpm        = toInt(v);
+            if (num(msg, "image_width", v)) cfg.imageWidth = toInt(v);
             if (num(msg, "carrier", v))     cfg.carrier    = v;
             if (num(msg, "deviation", v))   cfg.deviation  = v;
-            if (num(msg, "bandwidth", v))   cfg.bandwidth  = (int)v;
+            if (num(msg, "bandwidth", v))   cfg.bandwidth  = toInt(v);
             cfg.usePhasing = msg.find("\"use_phasing\":false") == std::string::npos;
             cfg.autoStop   = msg.find("\"auto_stop\":true")    != std::string::npos;
             cfg.autoStart  = msg.find("\"auto_start\":true")   != std::string::npos;

@@ -28,7 +28,8 @@ double BiQuad::filter(double in) {
 // ── ITA2 ─────────────────────────────────────────────────────────────────────
 Ita2::Ita2(const std::string& framing) {
     // Parse framing <data>N<stop> (e.g. 5N1.5).
-    if (framing.size() >= 3 && framing[1] == 'N') {
+    // ★ 5..8 data bits only (audit 2026-10-03): anything else shifts past the 16-bit code word.
+    if (framing.size() >= 3 && framing[1] == 'N' && framing[0] >= '5' && framing[0] <= '8') {
         dataBits = framing[0] - '0';
         double stop = 1.0;
         std::string s = framing.substr(2);
@@ -144,10 +145,27 @@ char32_t Ccir476::processChar(uint16_t code, bool& success) {
 }
 
 // ── FskDecoder ───────────────────────────────────────────────────────────────
+/* ★★★ THE ATTACH PARAMETERS ARE A STRANGER'S (audit 2026-10-03). Any listener's JSON reaches this
+ *  constructor. A NaN or huge baud made bitSampleCount 0 or negative (a modulo by zero per sample),
+ *  a centre of 0 divided by zero in updateFilters, and a framing of "9N2" or "0N1" gave the ITA2
+ *  coder shifts past its 16-bit code word. Real RTTY runs 45.45 to a few hundred baud, NAVTEX 100:
+ *  10..1200 is the range, the tones must sit inside the 48 kHz audio, and framing is <5-8>N<1|1.5|2>
+ *  (1.5 only with 5 data bits — the doubled-rate trick below is only defined for 5N1.5). */
+static double clampFinite(double v, double lo, double hi, double dflt) {
+    if (!std::isfinite(v)) return dflt;
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+static bool validItaFraming(const std::string& f) {
+    if (f.size() < 3 || f[0] < '5' || f[0] > '8' || f[1] != 'N') return false;
+    const std::string stop = f.substr(2);
+    return stop == "1" || stop == "2" || (stop == "1.5" && f[0] == '5');
+}
+
 FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
                        const std::string& fr, const std::string& enc, bool inv)
-    : sampleRate((double)sr), centerFrequency(cf), shiftHz(sh), baudRate(baud),
-      inverted(inv), framing(fr), encoding(enc) {
+    : sampleRate((double)sr), centerFrequency(clampFinite(cf, 100.0, 10000.0, 1000.0)),
+      shiftHz(clampFinite(sh, 10.0, 2000.0, 170.0)), baudRate(clampFinite(baud, 10.0, 1200.0, 45.45)),
+      inverted(inv), framing(validItaFraming(fr) ? fr : "5N1.5"), encoding(enc) {
     deviationF = shiftHz / 2.0;
     audioAverageTC = 1000.0 / sampleRate;
     if (baudRate < 10) baudRate = 10;
@@ -161,8 +179,11 @@ FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
     }
     double bitDur = 1.0 / baudRate;
     bitSampleCount = (int)(sampleRate * bitDur + 0.5);
+    if (bitSampleCount < zeroCrossingsDivisor) bitSampleCount = zeroCrossingsDivisor;   // never 0: it is a divisor
     halfBitSampleCount = bitSampleCount / 2;
-    zeroCrossings.assign(bitSampleCount / zeroCrossingsDivisor, 0);
+    /* ★ ROUNDED UP (audit 2026-10-03): process() indexes it with (0..bitSampleCount-1) / divisor,
+     *  so a bitSampleCount that is not a multiple of 4 wrote one past the end with the floor. */
+    zeroCrossings.assign((bitSampleCount + zeroCrossingsDivisor - 1) / zeroCrossingsDivisor, 0);
     updateFilters();
 }
 void FskDecoder::updateFilters() {
@@ -197,7 +218,9 @@ void FskDecoder::process(const int16_t* samples, int count) {
         if (markState != oldMarkState) {
             if ((bitDuration % bitSampleCount) > halfBitSampleCount) {
                 int index = (sampleCount - nextEventCount + bitSampleCount * 8) % bitSampleCount;
-                zeroCrossings[index / zeroCrossingsDivisor]++;
+                if (index < 0) index += bitSampleCount;
+                const size_t zi = (size_t)(index / zeroCrossingsDivisor);
+                if (zi < zeroCrossings.size()) zeroCrossings[zi]++;
             }
             bitDuration = 0;
         }

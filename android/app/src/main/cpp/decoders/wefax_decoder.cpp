@@ -40,9 +40,18 @@ static int percentileOf(std::vector<int> v, int pct) {
 }
 
 // ── Decoder ─────────────────────────────────────────────────────────────────
+/* ★★★ THE ATTACH MESSAGE IS A STRANGER'S (audit 2026-10-03). lpm and image_width arrive from any
+ *  listener's JSON: lpm 0 divided by zero, a width of 0 or 2^31 sized every buffer below, and a NaN
+ *  deviation turned every pixel into undefined behaviour. WEFAX is transmitted at 60, 90, 120 or 240
+ *  lines per minute and nothing else; IOC 576 is 1809 pixels and IOC 288 is 904, so 256..4096
+ *  covers every real chart with room to spare. Anything else falls back to the defaults. */
+static int saneLpm(int v) { return (v == 60 || v == 90 || v == 120 || v == 240) ? v : 120; }
+static int saneWidth(int v) { return v < 256 ? 256 : (v > 4096 ? 4096 : v); }
+static double saneHz(double v, double lo, double hi, double dflt) { return (std::isfinite(v) && v >= lo && v <= hi) ? v : dflt; }
+
 WefaxDecoder::WefaxDecoder(int sampleRate, const Config& cfg)
-    : lpm(cfg.lpm), imageWidth(cfg.imageWidth), bandwidth(cfg.bandwidth),
-      carrier(cfg.carrier), deviation(cfg.deviation),
+    : lpm(saneLpm(cfg.lpm)), imageWidth(saneWidth(cfg.imageWidth)), bandwidth(cfg.bandwidth),
+      carrier(saneHz(cfg.carrier, 100.0, 20000.0, 1900.0)), deviation(saneHz(cfg.deviation, 10.0, 5000.0, 400.0)),
       usePhasing(cfg.usePhasing), autoStop(cfg.autoStop), autoStart(cfg.autoStart),
       includeHeaders(cfg.includeHeaders),
       samplesPerSec((double)sampleRate),
@@ -55,7 +64,7 @@ WefaxDecoder::WefaxDecoder(int sampleRate, const Config& cfg)
     demodData.assign(samplesPerLine, 0);
     phasingPos.assign(phasingLines, 0);
 
-    imgData.assign((size_t)imageWidth * imgHeight, 0);
+    imgData.assign((size_t)imageWidth * 2, 0);   // ★ two lines, not the image — see decodeFaxLine
     outImage.assign(imageWidth, 0);
     lineIncrFrac = (double)imageWidth / (M_PI * 576.0);
 }
@@ -193,10 +202,11 @@ void WefaxDecoder::decodeFaxLine() {
 
     if (includeHeaders || !usePhasing ||
         (lineType == HeaderImage && phasingLinesLeft < -phasingSkipLines)) {
-        if (imageLine >= imgHeight) {
-            imgHeight *= 2;
-            imgData.resize((size_t)imageWidth * imgHeight, 0);
-        }
+        /* ★★★ TWO LINES, NOT THE WHOLE FAX (audit 2026-10-03). imgData doubled every time the line
+         *  count passed it and was never trimmed, so a receiver left on a fax frequency (no stop tone
+         *  with auto-stop off) grew without end — and nothing ever reads more than this line and the
+         *  one before it, for the blend. Line N lives in slot N & 1. */
+        imgPos = (imageLine & 1) * imageWidth;
         bool shouldDecode = !autoStopped && (!autoStart || autoStarted);
         if (shouldDecode) decodeImageLine();
 
@@ -205,7 +215,6 @@ void WefaxDecoder::decodeFaxLine() {
             skip = phasingSkipData;
             havePhasing = true;
         }
-        imgPos += imageWidth;
         imageLine++;
     }
 }
@@ -249,7 +258,7 @@ void WefaxDecoder::decodeImageLine() {
         if (imageLine != 0 && lineIncrAcc != 0) {
             double lineNextBlend = lineIncrAcc / lineBlend;
             double linePrevBlend = 1.0 - lineNextBlend;
-            int prevLineStart = imgPos - imageWidth;
+            int prevLineStart = ((imageLine + 1) & 1) * imageWidth;   // the other slot — see decodeFaxLine
             for (int i = 0; i < imageWidth; i++) {
                 double pixel = (double)imgData[imgPos + i] * lineNextBlend +
                                (double)imgData[prevLineStart + i] * linePrevBlend;
