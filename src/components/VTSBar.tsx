@@ -284,7 +284,10 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     const portrait = winH > winW;
     const sidesW = leftW + (shown.annunciators ? rightW + 8 : 0);
     const withSides = textOnly ? areaW - sidesW : areaW;
-    const want = portrait && needW > 0 && withSides > 0 && needW > withSides - 4;
+    // ★ A phone in portrait never has the room (Stuart, 03:10: "in portrait drop the icons, centre justify and then
+    //   expand and scroll"), so there it is always the text alone — no sides popping in and out between messages.
+    //   A wider portrait window (iPad) keeps them while the line fits.
+    const want = portrait && (winW < 600 || (needW > 0 && withSides > 0 && needW > withSides - 4));
     if (want !== textOnly) setTextOnly(want);
   }
   // ★ The offset carries a UNIT ("-1.2kHz"): never through the 14-segment (it has no lower case) —
