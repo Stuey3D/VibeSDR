@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import AnnunciatorLegend from './AnnunciatorLegend';
@@ -108,6 +108,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
   const [symFit, setSymFit] = useState(false);
+  const { width: winW } = useWindowDimensions();
   const [textW, setTextW] = useState(0);
   /** The two side blocks' natural widths — each reserves the wider, so the text window is centred. */
   const [leftW, setLeftW] = useState(0);
@@ -271,6 +272,11 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     if (fits !== symFit) setSymFit(fits);
   }
   const centreSides = symFit;
+  /* ★ ON A NARROW STRIP THE STATION LOGO GOES FIRST (Stuart, 2026-10-03: "on this narrower portrait bar we can start
+   *  dropping icons … to keep it in parity with the VCR bar then the station logo first"). The VCR/DOT strip never
+   *  shows the logo; on a phone-width window with TP·TA·AF competing for the room, the plain styles drop it too, so
+   *  the RadioText gets the space. Decided by the WINDOW width (not the text), so it cannot flicker on and off. */
+  const dropLogo = !vfd && !!shown.annunciators && winW < 500;
   // ★ The offset carries a UNIT ("-1.2kHz"): never through the 14-segment (it has no lower case) —
   //   the sans on seg; Doto keeps the unit's case on dot.
   const offsetFont = COL.style === 'seg' ? FONT_HYPER : COL.font;
@@ -330,7 +336,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
         {!vfd && !!shown.dab && (
           <View style={styles.rdsMark}><DabMark kind="plain" height={DAB_MARK_H} color={COL.mark} glow={COL.markGlow} ghost={rgba(COL.rgb, 0.16)} plus={shown.dab.plus} /></View>
         )}
-        {!vfd && shown.logoUrl
+        {!vfd && shown.logoUrl && !dropLogo
           ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
           : !vfd && shown.badge === 'RDS'
           ? null
