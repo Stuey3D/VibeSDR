@@ -5,8 +5,7 @@
  *
  *  ★ The tab carries the card's state at a glance: the health tab is the pill's own colour (HealthPill
  *    healthSummary), the time tab turns yellow, then red, as the countdown does.
- *  ★ `hint`: when a card comes out BY ITSELF over an open decoder box (the server in the red, the countdown
- *    running out), it says "Slide to dismiss ›" for a moment first, so nobody has to guess it can go.
+ *  ★ No "Slide to dismiss" hint: the card joined to the edge with a › pointing at it says so (Stuart, 2026-10-03).
  *  ★ Tucked or shown is the CALLER's state (SDRScreen decides it from the boxes and the urgency); this only
  *    animates between them and reports the user's flick / tap.
  */
@@ -16,9 +15,8 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 const TAB_W = 26;
 const TAB_H = 52;
-const HINT_MS = 2500;
 
-export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = false, tabColour, tabIcon, label,
+export default function EdgeChip({ top, right, tucked, onTuck, onShow, tabColour, tabIcon, label,
                                    frameColour, children }: {
   /** The card's frame (it draws ONE frame round the arrow and the content; the content is drawn bare).
    *  Default: the tab's colour. */
@@ -30,8 +28,6 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = fa
   onTuck: () => void;
   /** The user asked for it back (tapped / dragged the tab). */
   onShow: () => void;
-  /** Show "Slide to dismiss ›" for a moment when the card appears. */
-  hint?: boolean;
   tabColour: string;
   tabIcon: React.ReactNode;
   /** What the card is, for the tab's accessibility label ("Server health", "Time remaining"). */
@@ -48,15 +44,6 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = fa
                          useNativeDriver: true }).start();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tucked]);
-
-  // The hint, shown each time the card comes out with `hint` set.
-  const [hinting, setHinting] = useState(false);
-  useEffect(() => {
-    if (tucked || !hint) { setHinting(false); return; }
-    setHinting(true);
-    const t = setTimeout(() => setHinting(false), HINT_MS);
-    return () => clearTimeout(t);
-  }, [tucked, hint]);
 
   const offRef = useRef(off); offRef.current = off;
   const pan = useRef(PanResponder.create({
@@ -90,7 +77,7 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = fa
             screen and then put an arrow to the left of the content pointing to the edge of the screen to show the
             card can be collapsed away"). The child squares its right side (see the callers); the arrow sits inside
             its frame, on the left, and tapping it tucks the card too. */}
-        <View style={[ec.row, { borderColor: frameColour ?? tabColour }, hinting && ec.hidden]}>
+        <View style={[ec.row, { borderColor: frameColour ?? tabColour }]}>
           <TouchableOpacity onPress={() => Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true })
                                           .start(() => onTuckRef.current())}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 2 }} accessibilityRole="button" accessibilityLabel={`Hide ${label}`}
@@ -99,11 +86,6 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, hint = fa
           </TouchableOpacity>
           {children}
         </View>
-        {hinting && (
-          <View pointerEvents="none" style={ec.hintWrap}>
-            <Text style={ec.hint} numberOfLines={1}>Slide to dismiss ›</Text>
-          </View>
-        )}
       </Animated.View>
       <Animated.View {...tabPan.panHandlers} pointerEvents={tucked ? 'auto' : 'none'}
         style={[ec.tabWrap, { top, right, transform: [{ translateX: tabX }] }]}>
@@ -125,10 +107,6 @@ const ec = StyleSheet.create({
               borderWidth: 1.5, borderRightWidth: 0, borderTopLeftRadius: 12, borderBottomLeftRadius: 12 },
   arrowHit: { justifyContent: 'center', paddingLeft: 7, paddingRight: 1 },
   arrow:    { fontSize: 20, fontWeight: '700', lineHeight: 22 },
-  hidden:   { opacity: 0 },
-  hintWrap: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'center',
-              borderRadius: 8, backgroundColor: 'rgba(8,6,2,0.92)', borderWidth: 1, borderColor: 'rgba(255,184,51,0.55)' },
-  hint:     { color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, fontWeight: '700', letterSpacing: 0.5 },
   tabWrap:  { position: 'absolute', zIndex: 251 },
   tab:      { width: TAB_W, height: TAB_H, borderTopLeftRadius: 12, borderBottomLeftRadius: 12,
               borderWidth: 1.5, borderRightWidth: 0, backgroundColor: 'rgba(14,12,8,0.88)',

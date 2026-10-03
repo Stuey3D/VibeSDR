@@ -8204,7 +8204,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  held RTTY / FT8 BIG down. EdgeChip does the sliding; THIS decides where each card is:
    *   · 'tucked' — the user flicked it away; 'shown' — the user tapped its tab;
    *   · 'auto'   — out, unless a decoder box is open and the card has nothing urgent to say.
-   *  ★ URGENT brings a card back out even from 'tucked', with "Slide to dismiss ›" over a box: the server in the
+   *  ★ URGENT brings a card back out even from 'tucked' (it slides in, over a box too): the server in the
    *    red (HealthPill healthSummary, level 3), the countdown turning yellow (< 5 min) or red (< 2 min) — "So if the
    *    server is practically melting show it, and for the time when it goes yellow on the countdown then red".
    *  ★ Opening a box puts a card the user had brought out back on 'auto', so it tucks for the box. */
@@ -10644,7 +10644,6 @@ export default function SDRScreen({ route, navigation }: Props) {
             lands on it must reach the scale, like every other pill anchored here. */}
       {!!health && (
         <EdgeChip top={rightStackTop} right={edgeRight} tucked={!healthOut} label="Server health"
-          hint={anyBoxOpen && healthHot}
           onTuck={() => setChipPref((p) => ({ ...p, health: 'tucked' }))}
           onShow={() => setChipPref((p) => ({ ...p, health: 'shown' }))}
           tabColour={hs!.colour} tabIcon={<HealthTabIcon colour={hs!.colour} />}>
@@ -10707,7 +10706,6 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {sessionEndsAt != null && !adminOk && (
         <EdgeChip top={rightStackTop + healthStackShift} right={edgeRight} tucked={!timeOut} label="Time remaining"
-          hint={anyBoxOpen && timeStage > 0}
           onTuck={() => setChipPref((p) => ({ ...p, time: 'tucked' }))}
           onShow={() => setChipPref((p) => ({ ...p, time: 'shown' }))}
           tabColour={TIME_TAB[timeStage]} tabIcon={<ClockTabIcon colour={TIME_TAB[timeStage]} />}
