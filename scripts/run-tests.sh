@@ -213,6 +213,8 @@ if node --no-warnings scripts/test_faceplate_landscape.ts; then pass=$((pass+1))
 if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_sprite_sizing.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_sprite_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★ The waterfall jitter buffer's pooled frame copies (framePool.ts): independent copies, reuse, bounded.
+if node --no-warnings scripts/test_frame_pool.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_platformCopy.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_grid.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node scripts/test_derived_values_pure.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi

@@ -70,6 +70,10 @@ import {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
 import type { SDRStatus } from '../services/UberSDRClient';
+import { FramePool, type FrameSlot } from '../services/framePool';
+/** Pooled jitter-buffer slots kept for reuse: the queue's bound (3) + the push before the bound bites + the one
+ *  being drawn. More would only ever sit idle. */
+const JB_MAX_QUEUE_SLOTS = 5;
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { useScreenCovered } from '../hooks/useScreenCovered';
 import { watchProvider } from '../services/watchProvider';
@@ -1541,7 +1545,12 @@ function WaterfallView({
   // arrival jitter never reaches the display — the reason Jr and the web client feel smooth at a
   // variable/low frame rate where the phone (rendering per-arrival) juddered. targetDepth = 1 frame of
   // banked latency (insurance against a late row); prefill/hold when dry, catch up when backed up.
-  const jbQueue       = useRef<Array<{ bins: Float32Array; status: SDRStatus }>>([]);
+  const jbQueue       = useRef<FrameSlot[]>([]);
+  /* ★★ The queued copies come from a small pool, not a fresh `bins.slice()` + status spread per frame
+   *  (framePool.ts — the biggest steady-state allocation in the 2026-10-03 iPhone profile). A slot goes back
+   *  only after handleFrame has finished with it, or when it is dropped unread. */
+  const jbPool        = useRef(new FramePool(JB_MAX_QUEUE_SLOTS));
+  const jbClear = () => { const q = jbQueue.current; for (const f of q) jbPool.current.release(f); q.length = 0; };
   const jbArrivalMs   = useRef(150);   // measured arrival cadence (drives the drain rate)
   const jbLastArrival = useRef(0);
   const jbTimer       = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1551,7 +1560,7 @@ function WaterfallView({
 
   const drainFrame = useCallback(() => {
     jbTimer.current = null;
-    if (bgRef.current) { jbQueue.current.length = 0; jbPrefill.current = true; return; }
+    if (bgRef.current) { jbClear(); jbPrefill.current = true; return; }
     const q = jbQueue.current;
     if (jbPrefill.current) {
       if (q.length >= JB_TARGET_DEPTH) jbPrefill.current = false;
@@ -1559,7 +1568,8 @@ function WaterfallView({
     }
     if (q.length === 0) { jbPrefill.current = true; return; }   // ran dry → hold, re-prefill
     const f = q.shift()!;
-    handleFrame(f.bins, f.status);
+    handleFrame(f.bins, f.status);       // reads synchronously and keeps nothing (see framePool.ts)…
+    jbPool.current.release(f);           // …so the slot is free again
     // Reschedule at the arrival cadence (steady); a little faster if backed up, to catch up.
     const dur = Math.max(40, Math.min(1000,
       q.length > JB_TARGET_DEPTH ? jbArrivalMs.current * 0.6 : jbArrivalMs.current));
@@ -1576,7 +1586,7 @@ function WaterfallView({
     // they render straight through. Flush the queue and render this frame now; re-bank afterwards.
     if (interacting) {
       if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; }
-      jbQueue.current.length = 0;
+      jbClear();
       jbPrefill.current = true;          // re-prefill once the gesture ends
       jbLastArrival.current = now;       // don't let the resume gap spike jbArrivalMs
       handleFrame(bins, status);         // consumed synchronously — parent's reused buffers are safe
@@ -1588,8 +1598,8 @@ function WaterfallView({
     }
     jbLastArrival.current = now;
     const q = jbQueue.current;
-    q.push({ bins: bins.slice(), status: { ...status } });   // copy: the parent reuses its buffers
-    if (q.length > JB_MAX_QUEUE) q.shift();                   // bound the latency
+    q.push(jbPool.current.take(bins, status));   // copy (into a pooled slot): the parent reuses its buffers
+    if (q.length > JB_MAX_QUEUE) jbPool.current.release(q.shift()!);   // bound the latency
     if (!jbTimer.current) jbTimer.current = setTimeout(drainFrame, 0);  // kick the drain
   }, [drainFrame, handleFrame, lastInteractAt]);
 

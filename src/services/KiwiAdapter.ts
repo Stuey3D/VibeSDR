@@ -842,6 +842,9 @@ export class KiwiAdapter implements SDRBackend {
   }
 
   // ── waterfall (W/F binary) ─────────────────────────────────────────────────
+  /** The waterfall row handed to onSpectrum — reused frame to frame (see onWfBinary). */
+  private rowBuf: Float32Array = new Float32Array(0);
+
   private onWfBinary(buf: Uint8Array): void {
     if (buf.length < 16) return;
     // bytes 0..3 = tag; u32[1..3] @ offset 4 = x_bin, zoom|flags, seq
@@ -854,7 +857,12 @@ export class KiwiAdapter implements SDRBackend {
     if (n < 8) return;
 
     // u8 → dBm (bin − 255); relative level, the UI auto-ranges absolute scale.
-    const row = new Float32Array(n);
+    // ★ ONE ROW BUFFER, REFILLED (2026-10-03 profile: per-frame allocation fed Hermes' GC). Safe because every
+    //   reader of onSpectrum's bins finishes with them before the next frame — the waterfall copies into its
+    //   jitter pool (framePool.ts) or draws synchronously, the watch and the meters read synchronously — the
+    //   same contract the UberSDR / VibeServer clients' reused `bins` have always relied on.
+    if (this.rowBuf.length !== n) this.rowBuf = new Float32Array(n);
+    const row = this.rowBuf;
     for (let i = 0; i < n; i++) row[i] = bins[i] - 255;
 
     if (!this.viewInit) { this.viewInit = true; }
