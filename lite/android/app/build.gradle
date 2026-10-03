@@ -74,9 +74,36 @@ android {
             res.srcDirs     += ["${buildDir}/rn-res"]
         }
     }
-    buildTypes {
-        release { signingConfig signingConfigs.debug; minifyEnabled false }
+    // ★★★ LITE'S OWN RELEASE KEY (2026-10-03, from V11 RC4). Until RC3 Lite was signed with this Mac's
+    //     debug key. The key and its passwords live ONLY in ~/Documents/VibeSDR-keys (Time Machine + iCloud,
+    //     beside the apt key) and are read from there — never copied into the repo or onto a receiver.
+    //     Override the path with -PliteSigningProps=… on another machine. No file = a release build REFUSES
+    //     (a debug-signed Lite would not install over the real one).
+    def liteProps = new Properties()
+    def litePropsFile = file(findProperty('liteSigningProps') ?:
+        "${System.getProperty('user.home')}/Documents/VibeSDR-keys/vibeserver-lite-release.properties")
+    if (litePropsFile.exists()) litePropsFile.withInputStream { liteProps.load(it) }
+    signingConfigs {
+        if (liteProps['storeFile']) {
+            liteRelease {
+                storeFile file(liteProps['storeFile'])
+                storePassword liteProps['storePassword']
+                keyAlias liteProps['keyAlias']
+                keyPassword liteProps['keyPassword']
+            }
+        }
     }
+    buildTypes {
+        release {
+            if (liteProps['storeFile']) signingConfig signingConfigs.liteRelease
+            minifyEnabled false
+        }
+    }
+}
+
+gradle.taskGraph.whenReady { g ->
+    if (g.allTasks.any { it.name.toLowerCase().contains('release') } && !android.signingConfigs.findByName('liteRelease'))
+        throw new GradleException("Lite release key missing: expected ~/Documents/VibeSDR-keys/vibeserver-lite-release.properties (or -PliteSigningProps=…)")
 }
 
 // ★★ THE SHARED KOTLIN IS SYNCED, NOT COPIED INTO THE REPO. These are the React-free files that
