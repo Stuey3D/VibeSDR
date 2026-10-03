@@ -61,7 +61,7 @@ import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
-import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth } from '../services/vibeAuth';
+import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/backendFactory';
 import {
@@ -1475,7 +1475,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           // ★★ THE SCHEME COMES FROM THE ADDRESS WE CONNECTED ON, not from an assumption. This
           //    was hardcoded http:// back when "remote shim" meant a LAN address — a tunnelled
           //    server is https on 443, so it asked http://host:443 and got nothing.
-          const r = await fetch(`${connectBase.replace(/\/+$/, '')}/location`);
+          // ★ With the PIN proof — a PIN-locked server refuses /location without it (audit 2026-10-03).
+          const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/location`,
+                                             radioAuthRef.current || route.params.authSuffix || ''));
           const j = await r.json();
           // ★★★ A LOCATOR IS A POSITION, AND A POSITION HAS A COUNTRY. Without a country there is
           //     no ECC, and without an ECC the RadioDNS lookup is SKIPPED ENTIRELY — so a server
@@ -2754,7 +2756,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       fetchOccupancy(connectBase).then((occ) => {
         if (!cancelled && occ?.notice) setOwnerNotice(occ.notice);
       }).catch(() => {});
-      fetchReceiverInfo(connectBase).then((r: ReceiverInfo | null) => {
+      fetchReceiverInfo(connectBase, radioAuthRef.current || route.params.authSuffix || '').then((r: ReceiverInfo | null) => {
         if (cancelled || !r) return;
         if (r.serverVersion) setServerVersion(r.serverVersion);
         if (overlayOff) return;
@@ -8360,7 +8362,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         //    reached it, because this branch was taken first. A fix on a path that does not run is
         //    indistinguishable from no fix at all, and it cost a whole build to find out.
         const p = isRemoteShim && connectBase
-          ? fetchBookmarks(connectBase)          // somebody else's shim, over HTTP
+          ? fetchBookmarks(connectBase, radioAuthRef.current || route.params.authSuffix || '')   // somebody else's shim, over HTTP (PIN proof: audit 2026-10-03)
           : getLearnedBookmarksNow();            // our own, in this process
         /* ★★ AN UNCHANGED LIST KEEPS THE OLD ARRAY. This runs every 30 s for the whole session,
          *  locked in a pocket included, and each answer is a NEW array — which re-rendered the
@@ -10676,6 +10678,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to
            *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */
           base={connectBase.replace(/\/+$/, '')}
+          readAuth={radioAuthSuffix || route.params.authSuffix || ''}
         />
         </PanelBoundary>
       )}

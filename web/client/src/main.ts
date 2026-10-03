@@ -20,7 +20,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
 import { initMobileControls } from './mobile';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
-import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken,
+import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
@@ -1063,6 +1063,7 @@ async function connect(host: string, pin: string) {
 
 function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthState) {
   authState = auth;
+  setReadAuth(auth.query);   // ★ the PIN proof for the plain HTTP reads — see readAuthUrl (audit 2026-10-03)
   $('splash').classList.add('hidden');
   $('app').classList.add('live');
   // ★ The owner's notice had to outrank the splash to be seen at all; on the receiver it must
@@ -3411,7 +3412,7 @@ let bandCond: { measured: Record<string, number>; predicted: Record<string, stri
 
 async function refreshBandConditions(): Promise<void> {
   try {
-    const r = await fetch(P('/vibeserver/conditions'), { cache: 'no-store' });
+    const r = await fetch(readAuthUrl(P('/vibeserver/conditions')), { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     const m: Record<string, number> = {};
@@ -3803,7 +3804,7 @@ function updateVts() {
        *  logo was drawn perfectly well two panes away. */
       logo = dabLogos.get(`${ecc}|${dabState.eid}|${sv.sid}`)
              || (sv.logoAir ? P(`/vibeserver/dablogoair?sid=${sv.sid}`) : '')
-             || (sv.logoSlide ? P(`/vibeserver/dabslide?sid=${sv.sid}`) : '')
+             || (sv.logoSlide ? readAuthUrl(P(`/vibeserver/dabslide?sid=${sv.sid}`)) : '')
              || '';
       flag = ecc === 0xE1 ? isoToFlag('GB') : '';
       dabRt = dabState.dls || '';
@@ -5807,7 +5808,7 @@ async function showSplashConditions(): Promise<void> {
   const el = document.getElementById('splashConditions');
   if (!el) return;
   try {
-    const r = await fetch(P('/vibeserver/conditions'), { cache: 'no-store' });
+    const r = await fetch(readAuthUrl(P('/vibeserver/conditions')), { cache: 'no-store' });
     if (!r.ok) return;
     const j = await r.json();
     const measured: Array<{ band: string; snrDb: number }> = j.measured || [];
@@ -5855,7 +5856,7 @@ async function drawSplashSpectrogram(): Promise<void> {
   const wantH = Math.min(1440, Math.max(180, Math.floor(cv.clientHeight * devicePixelRatio)));
   let buf: ArrayBuffer;
   try {
-    const r = await fetch(P(`/vibeserver/spectrogram?bins=${wantW}&rows=${wantH}`), { cache: 'no-store' });
+    const r = await fetch(readAuthUrl(P(`/vibeserver/spectrogram?bins=${wantW}&rows=${wantH}`)), { cache: 'no-store' });
     if (!r.ok) return;
     buf = await r.arrayBuffer();
   } catch { return; }
@@ -6415,7 +6416,7 @@ function dabRender() {
   /* ★ OFF THE AIR FIRST: the slideshow image the service is transmitting (TS 101 499) outranks
    *  the RadioDNS file — it is what the broadcaster is sending THIS listener right now. The
    *  station list keeps RadioDNS, which covers every row. */
-  const slideUrl = d.slide && d.slide.seq ? P(`/vibeserver/dabslide?seq=${d.slide.seq}`) : '';
+  const slideUrl = d.slide && d.slide.seq ? readAuthUrl(P(`/vibeserver/dabslide?seq=${d.slide.seq}`)) : '';
   const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
   const curLogo = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   const head = cur
@@ -6735,10 +6736,10 @@ document.addEventListener('error', (ev) => {
  *    a second, so a speculative one FLASHES — the fault the RadioDNS name search taught us. */
 function dabSlideTag(sv: DabState['services'][number], key?: string): string {
   if (!sv.logoSlide) return '';
-  const url = P(`/vibeserver/dabslide?sid=${sv.sid}`);
+  const url = readAuthUrl(P(`/vibeserver/dabslide?sid=${sv.sid}`));
   // ★ PROVISIONAL: cover art, kept only while the station has nothing better — see dabKeepAirLogo.
   if (key) void dabKeepAirLogo(key, url, true);
-  return `<img class="dabLogo" src="${url}" alt="" loading="lazy">`;
+  return `<img class="dabLogo" src="${escapeHtml(url)}" alt="" loading="lazy">`;   // ★ escaped: it now carries a query
 }
 (window as any).dabLogoFailed = (k: string) => { dabLogos.set(k, null); try { const raw = localStorage.getItem(DAB_LOGO_STORE); if (raw) { const j = JSON.parse(raw); delete j[k]; localStorage.setItem(DAB_LOGO_STORE, JSON.stringify(j)); } } catch { /* ignore */ } };
 async function dabLogoLookup(key: string, sv: DabState['services'][number], d: DabState, ecc: number) {
@@ -7703,7 +7704,7 @@ function updateMediaSession() {
   if (dabOn && dabState) {
     const d = dabState;
     const cur = d.services.find(x => x.sid === d.sid);
-    const slideUrl = d.slide && d.slide.seq ? P(`/vibeserver/dabslide?seq=${d.slide.seq}`) : '';
+    const slideUrl = d.slide && d.slide.seq ? readAuthUrl(P(`/vibeserver/dabslide?seq=${d.slide.seq}`)) : '';
     const airUrl = cur && cur.logoAir ? P(`/vibeserver/dablogoair?sid=${cur.sid}`) : '';
     dabArt = slideUrl || airUrl || (cur ? (dabLogos.get(`${cur.ecc ?? d.ecc ?? -1}|${d.eid}|${cur.sid}`) || '') : '');
   }
@@ -9349,7 +9350,7 @@ function paintTimeLeft() {
 
 async function loadServerLocation(host: string) {
   try {
-    const r = await fetch(`${httpBase(host)}/location`, { cache: 'no-store' });
+    const r = await fetch(readAuthUrl(`${httpBase(host)}/location`), { cache: 'no-store' });
     const j = await r.json();
     serverName = typeof j.name === 'string' ? j.name : '';
     serverIso = typeof j.iso === 'string' ? j.iso : '';

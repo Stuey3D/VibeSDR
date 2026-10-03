@@ -29,7 +29,8 @@ export interface AuthState {
 
 // HMAC-SHA256(pin, nonce) — the app's implementation, shared verbatim. The nonce
 // is HMAC'd as its ASCII hex TEXT, not decoded to bytes.
-import { vibeAuthToken } from '../../../src/services/vibeAuth';
+import { vibeAuthToken, withReadAuth } from '../../../src/services/vibeAuth';
+import { adminTicketQuery } from './adminticket';
 export { vibeAuthToken };
 
 /** Ask the server whether a PIN is needed, and for the session nonce. */
@@ -103,4 +104,18 @@ export function withAuth(path: string, auth: AuthState): string {
   if (!auth.query) return path;
   // The /ws/audio 401 bug: path had no query, so '&vs_nonce' was invalid.
   return path + (path.includes('?') ? '&' : '?') + auth.query;
+}
+
+/* ★★★ THE PIN PROOF ON THE PAGE'S PLAIN HTTP READS (audit 2026-10-03). With a listener PIN set the
+ *  server now refuses /stations, GET /bookmarks, /location, /vibeserver/spectrogram,
+ *  /vibeserver/conditions and /vibeserver/dabslide without the proof the sockets carry. connect()
+ *  records the resolved query here once; every such read goes through readAuthUrl().
+ *  ★ Only the PIN pair is lifted out (withReadAuth) — the admin override and takeover flag in the
+ *    socket query are not for image URLs. With no PIN pair the live admin ticket is used, so an
+ *    owner who walked in from the door as admin is not refused. Neither ⇒ the URL is untouched,
+ *    and an open server sees the same request it always did. */
+let readSuffix = '';
+export function setReadAuth(query: string): void { readSuffix = query || ''; }
+export function readAuthUrl(url: string): string {
+  return withReadAuth(url, readSuffix, adminTicketQuery());
 }

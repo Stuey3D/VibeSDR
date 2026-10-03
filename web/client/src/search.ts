@@ -27,6 +27,7 @@ import { BAND_PLAN } from '../../../src/constants/bandPlan';
 import type { SDRMode } from './spectrum';
 import { httpBase } from './origin';
 import { adminTicketQuery } from './adminticket';
+import { readAuthUrl } from './auth';
 
 export type ResultSource = 'user' | 'server' | 'eibi' | 'band';
 
@@ -90,7 +91,7 @@ export async function loadServerBookmarks(host: string, authSuffix = ''): Promis
   bmHost = host;
   bmAuth = authSuffix;
   try {
-    const r = await fetch(`${httpBase(host)}/bookmarks`, { cache: 'no-store' });
+    const r = await fetch(readAuthUrl(`${httpBase(host)}/bookmarks`), { cache: 'no-store' });   // ★ PIN-gated when set (audit 2026-10-03)
     if (!r.ok) return 0;
     const arr = await r.json();
     serverBookmarks = Array.isArray(arr)
@@ -187,7 +188,7 @@ export async function removeFromServer(frequency: number, sid?: number): Promise
 /** Pull the server's station list. Absent/offline is fine — we degrade. */
 export async function loadStations(host: string): Promise<number> {
   try {
-    const r = await fetch(`${httpBase(host)}/stations`, { cache: 'no-store' });
+    const r = await fetch(readAuthUrl(`${httpBase(host)}/stations`), { cache: 'no-store' });   // ★ PIN-gated when set (audit 2026-10-03)
     if (!r.ok) return 0;
     const arr = await r.json();
     stations = Array.isArray(arr) ? safeList(arr) : [];

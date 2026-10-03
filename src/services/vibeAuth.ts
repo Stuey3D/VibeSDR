@@ -201,3 +201,26 @@ export async function resolveVibeAuth(baseUrl: string, pin: string): Promise<str
   const token = vibeAuthToken(pin ?? '', j.nonce);
   return `&vs_nonce=${encodeURIComponent(j.nonce)}&vs_auth=${token}`;
 }
+
+/**
+ * ★★★ THE PIN PROOF ON A PLAIN HTTP READ (audit 2026-10-03). With a listener PIN set, the server
+ *     now refuses the reads that show what the radio is doing — /stations, GET /bookmarks,
+ *     /location, /vibeserver/spectrogram, /vibeserver/conditions, /vibeserver/dabslide — unless
+ *     they carry the same proof the sockets do. This appends it.
+ *  ★ ONLY the PIN pair (vs_nonce + vs_auth) is lifted out of `suffix`, which may also carry admin
+ *    credentials and a takeover flag: those belong on the socket, not in an image URL. With no
+ *    PIN pair, `ticketQuery` (the owner's admin ticket, which opens everything) is used instead.
+ *  ★ No proof at all ⇒ the URL is returned untouched, so an OPEN server sees exactly the request
+ *    it always did.
+ */
+export function withReadAuth(url: string, suffix: string, ticketQuery = ''): string {
+  // ★ A regex, not URLSearchParams: React Native's URLSearchParams has no working get() on every
+  //   version we ship, and the values are already URL-encoded as the server wants them.
+  let q = '';
+  const n = /(?:^|[?&])vs_nonce=([^&#]*)/.exec(suffix || '')?.[1];
+  const a = /(?:^|[?&])vs_auth=([^&#]*)/.exec(suffix || '')?.[1];
+  if (n && a) q = `vs_nonce=${n}&vs_auth=${a}`;
+  if (!q && ticketQuery) q = ticketQuery.replace(/^[?&]+/, '');
+  if (!q) return url;
+  return url + (url.includes('?') ? '&' : '?') + q;
+}

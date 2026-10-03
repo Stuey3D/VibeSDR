@@ -4753,6 +4753,14 @@ struct VsAuth {
     void recordOk(const std::string& ip) {
         std::lock_guard<std::mutex> lk(mtx); fails.erase(ip);
     }
+    /** Is this a nonce we issued and still hold? An unknown one cannot be a PIN guess — a guess
+     *  has to be made against a nonce the server handed out — so callers may refuse it without
+     *  counting it (see vsPinHttpOk). */
+    bool knows(const std::string& nonce) {
+        std::lock_guard<std::mutex> lk(mtx);
+        prune(nowMs());
+        return issued.count(nonce) != 0;
+    }
     /** ★ 64 bits straight from the OS — see vsRandomBytes. */
     uint64_t nextRandom() { return vsRandom64(); }
     // Consume the nonce (single-use) and confirm HMAC(secret, nonce)==token.
@@ -15960,11 +15968,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(g_vsMtx);
           if (g_vsSecret.empty() && g_vsRadioSecret.empty()) return true; }
         if (isLoopback(sock->peerAddress())) return true;
-        const bool offered =
-               (!queryParam(reqLine, "vs_nonce").empty() && !queryParam(reqLine, "vs_auth").empty())
-            || (!queryParam(reqLine, "vs_admin_nonce").empty() && !queryParam(reqLine, "vs_admin_auth").empty())
+        const std::string pinNonce = queryParam(reqLine, "vs_nonce");
+        const bool pinPair = !pinNonce.empty() && !queryParam(reqLine, "vs_auth").empty();
+        const bool adminOffered =
+               (!queryParam(reqLine, "vs_admin_nonce").empty() && !queryParam(reqLine, "vs_admin_auth").empty())
             || !queryParam(reqLine, "vs_admin_ticket").empty();
-        if (offered) return vsAuthOk(sock, reqLine);
+        /* ★★ A STALE NONCE IS NOT A GUESS. Clients reuse one nonce for the whole visit and it lives an
+         *  hour; a page left open keeps polling /vibeserver/conditions and refreshing bookmarks with
+         *  it after that. Counting those as failures would lock the listener's address out — and the
+         *  same backoff guards the SOCKET, so their next reconnect with the right PIN would be
+         *  refused. Unknown nonce, no admin credential ⇒ refused, uncounted. */
+        if (pinPair && !adminOffered && !g_vsAuthState.knows(pinNonce)) {
+            sock->sendstr("HTTP/1.1 401 Unauthorized\r\nAccess-Control-Allow-Origin: *\r\n"
+                          "Connection: close\r\nContent-Length: 0\r\n\r\n");
+            return false;
+        }
+        if (pinPair || adminOffered) return vsAuthOk(sock, reqLine);
         sock->sendstr("HTTP/1.1 401 Unauthorized\r\nAccess-Control-Allow-Origin: *\r\n"
                       "Connection: close\r\nContent-Length: 0\r\n\r\n");
         return false;

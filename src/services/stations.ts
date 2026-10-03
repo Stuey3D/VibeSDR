@@ -1,4 +1,5 @@
 import { cleanText, cleanMode } from '../utils/safeText';
+import { withReadAuth } from './vibeAuth';
 /**
  * stations.ts — VTS station/bookmark engine + search (skin parity).
  *
@@ -70,10 +71,12 @@ export interface ServerBand {
  * ★ Merged and de-duplicated by frequency and name, because a server could one day serve both and
  *   a list with everything twice is worse than either half.
  */
-export async function fetchBookmarks(baseUrl: string): Promise<ServerBookmark[]> {
+export async function fetchBookmarks(baseUrl: string, readAuth = ''): Promise<ServerBookmark[]> {
   const base = baseUrl.replace(/\/+$/, '');
   const one = async (path: string): Promise<ServerBookmark[]> => {
-    const res = await fetch(`${base}${path}`);
+    // ★ The PIN proof on VibeServer's /bookmarks, which a PIN-locked server now requires
+    //   (withReadAuth, audit 2026-10-03). Not on UberSDR's /api/bookmarks — that is not ours.
+    const res = await fetch(path === '/bookmarks' ? withReadAuth(`${base}${path}`, readAuth) : `${base}${path}`);
     if (!res.ok) throw new Error(`bookmarks HTTP ${res.status}`);
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data?.bookmarks ?? []);
@@ -128,7 +131,7 @@ export interface ReceiverInfo {
   serverVersion?: string;
 }
 
-export async function fetchReceiverInfo(baseUrl: string): Promise<ReceiverInfo | null> {
+export async function fetchReceiverInfo(baseUrl: string, readAuth = ''): Promise<ReceiverInfo | null> {
   const base = baseUrl.replace(/\/+$/, '');
   try {
     const res = await fetch(`${base}/api/description`);
@@ -157,7 +160,7 @@ export async function fetchReceiverInfo(baseUrl: string): Promise<ReceiverInfo |
    *    formats it — coordinates then locator — because on a VibeServer that is all there is, and a
    *    locator is the one thing a DX listener actually wants. */
   try {
-    const res = await fetch(`${base}/location`);
+    const res = await fetch(withReadAuth(`${base}/location`, readAuth));   // ★ PIN-gated when set
     if (!res.ok) return null;
     const j = await res.json() as
       { name?: string; label?: string; country?: string; grid?: string; lat?: number; lon?: number };

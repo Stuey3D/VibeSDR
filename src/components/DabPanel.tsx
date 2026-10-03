@@ -28,6 +28,7 @@ import type { DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, DAB_PTY, dabBlockAt } from '../services/dabBlocks';
 import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
+import { withReadAuth } from '../services/vibeAuth';
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component below
  *  reads `useDecoderStyles(makeStyles)`, so a chassis, colour or Transparency change reaches
@@ -146,7 +147,7 @@ const ImpulseResponse = React.memo(function ImpulseResponse({ ir, width, height 
 const logoCache = new Map<string, string | null>();
 
 function useServiceLogo(base: string, d: DabState | null,
-                        sv: DabState['services'][number] | undefined): string | null {
+                        sv: DabState['services'][number] | undefined, readAuth = ''): string | null {
   const ecc = sv?.ecc ?? d?.ecc ?? -1;
   const key = `${ecc}|${d?.eid ?? 0}|${sv?.sid ?? 0}`;
   const [, bump] = React.useState(0);
@@ -195,7 +196,7 @@ function useServiceLogo(base: string, d: DabState | null,
     })();
   }
   if (known) return known;
-  return sv.logoSlide ? `${base}/vibeserver/dabslide?sid=${sv.sid}` : null;
+  return sv.logoSlide ? withReadAuth(`${base}/vibeserver/dabslide?sid=${sv.sid}`, readAuth) : null;
 }
 
 /** ★★ THE SIGNAL PANE OPENS WITH WHO YOU ARE LISTENING TO — the web client's `dabHead`: a large
@@ -205,13 +206,13 @@ function useServiceLogo(base: string, d: DabState | null,
  *  map). The app had no header at all; the slide was only a last-resort row logo. Keyed on the
  *  slide's sequence number so a new picture replaces the old one and an unchanged one is not
  *  refetched twice a second. */
-const SignalHead = React.memo(function SignalHead({ d, cur, base }: {
-  d: DabState; cur: DabState['services'][number] | undefined; base: string;
+const SignalHead = React.memo(function SignalHead({ d, cur, base, readAuth }: {
+  d: DabState; cur: DabState['services'][number] | undefined; base: string; readAuth: string;
 }) {
   const { s } = useDecoderStyles(makeStyles);
-  const logo = useServiceLogo(base, d, cur);
+  const logo = useServiceLogo(base, d, cur, readAuth);
   const [dead, setDead] = React.useState<string | null>(null);
-  const slide = d.slide && d.slide.seq ? `${base}/vibeserver/dabslide?seq=${d.slide.seq}` : null;
+  const slide = d.slide && d.slide.seq ? withReadAuth(`${base}/vibeserver/dabslide?seq=${d.slide.seq}`, readAuth) : null;
   const air = cur?.logoAir ? `${base}/vibeserver/dablogoair?sid=${cur.sid}` : null;
   const pick = [slide, air, logo].find(u => !!u && u !== dead) ?? null;
   if (!cur) return null;
@@ -312,14 +313,14 @@ const SvcLogo = React.memo(function SvcLogo({ uri }: { uri: string | null }) {
  * ★ `sv.dls` is per service and already gated (dabTypes.parseDabMessage); `d.dls` is the tuned
  *   one's and is the fallback for the row that is playing, since the server sends it there.
  */
-const ServiceRow = React.memo(function ServiceRow({ sv, d, base, onPress, waiting }: {
-  sv: DabState['services'][number]; d: DabState; base: string; onPress: () => void;
+const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPress, waiting }: {
+  sv: DabState['services'][number]; d: DabState; base: string; readAuth: string; onPress: () => void;
   /** The "tuning in" line, shown in this row's live-text slot while it is the picked station. */
   waiting?: string;
 }) {
   const { s, C } = useDecoderStyles(makeStyles);
   const active = sv.sid === d.sid;
-  const logo = useServiceLogo(base, d, sv);
+  const logo = useServiceLogo(base, d, sv, readAuth);
   const text = (active && waiting) || sv.dls || (active ? d.dls : '') || '';
   /* ★ THE ANNOUNCEMENT LAMP — a car's TA indicator with TA SWITCHING OFF. Stuart: "dont auto tune
    *  but if we can show the signal being recieved that would be good. Like in a car with TA off."
@@ -400,6 +401,9 @@ export interface DabPanelProps {
   /** The receiver's own base URL — logos are fetched FROM the server we are listening to, which is
    *  the only thing that holds this multiplex's carousel. */
   base: string;
+  /** ★ The PIN proof for /vibeserver/dabslide, which a PIN-locked server now requires (the
+   *  socket's auth suffix; withReadAuth lifts the PIN pair out of it). '' on an open server. */
+  readAuth?: string;
 }
 
 export default function DabPanel(p: DabPanelProps) {
@@ -508,7 +512,7 @@ export default function DabPanel(p: DabPanelProps) {
   React.useEffect(() => { setPane('stations'); }, [eid]);
   // ★ The playing service's artwork, for the lock-screen card — same three sources as its row.
   const activeSv = d ? d.services.find(x => x.sid === d.sid) : undefined;
-  const activeLogo = useServiceLogo(p.base, d, activeSv);
+  const activeLogo = useServiceLogo(p.base, d, activeSv, p.readAuth ?? '');
   React.useEffect(() => { p.onActiveLogo?.(activeLogo); }, [activeLogo]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const block = p.blockIndex >= 0 ? DAB_BLOCKS[p.blockIndex] : undefined;
@@ -541,7 +545,7 @@ export default function DabPanel(p: DabPanelProps) {
             </Text>
           )}
           {d.services.map(sv => (
-            <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base}
+            <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base} readAuth={p.readAuth ?? ''}
                         waiting={sv.sid === d.sid ? waitingText : ''}
                         onPress={() => pick(sv.sid)} />
           ))}
@@ -553,7 +557,7 @@ export default function DabPanel(p: DabPanelProps) {
 
       {!!d && pane === 'signal' && (
         <>
-          <SignalHead d={d} cur={cur} base={p.base} />
+          <SignalHead d={d} cur={cur} base={p.base} readAuth={p.readAuth ?? ''} />
           <Section t="SERVICE" />
           <Row label="Codec" value={d.codecDetail ?? cur?.codec ?? DASH} />
           <Row label="Bit rate" value={d.bitrate ? `${d.bitrate} kbit/s` : DASH} />
