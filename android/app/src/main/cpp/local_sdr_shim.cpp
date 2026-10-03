@@ -4780,7 +4780,6 @@ VsAuth g_vsAuthState;
 /** ★ The raw-IQ token/code ledger — a separate backoff so a bridge retrying a dead token cannot
  *  lock its owner out of the PIN (see acceptIqWs, audit 2026-10-03). Only blocked/recordFail/
  *  recordOk are used; its nonce map stays empty. */
-VsAuth g_vsIqAuthState;
 
 /** ★ Adapter so vibe_admin_ticket.h can stay free of this file's internals — it takes the MAC as a
  *  function so it is testable on its own, and this is the real one. */
@@ -20106,30 +20105,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         iq->writeTh = std::thread([this, iq]{ iqWriteLoop(iq); });
         if (iq->lis) {
             std::shared_ptr<net::Socket> spec = sock;
-            /* ★★★ ONLY THE ADDRESS THAT ASKED FOR IT (audit 2026-10-03). The port binds 0.0.0.0 on a
-             *  LAN server, and the first connector won — so anyone on the network who scanned
-             *  50001-50100 while a stream was on could take it, retune the radio through it, and
-             *  lock the owner's own SDR++ out. rtl_tcp has no way to carry a token (a client opens
-             *  the socket and reads), so the credential is the requester's ADDRESS: the consumer
-             *  must connect from the same IP as the session that turned IQ out on. Loopback is
-             *  accepted only when the requester was itself on this host.
-             *  ★ Trade-off: asking from one machine (a phone) and consuming on another (a PC) is now
-             *    refused — turn IQ out on from the machine that will read it. */
-            auto bare = [](std::string a) {
-                if (a.rfind("::ffff:", 0) == 0) a = a.substr(7);
-                return a;
-            };
-            const std::string want = bare(peer);
-            iq->acceptTh = std::thread([this, iq, spec, want, bare]{
+            /* ★★ NO ADDRESS RESTRICTION HERE, ON PURPOSE (Stuart, 2026-10-03). An audit proposed accepting only the
+             *  requester's IP; that breaks turning IQ out on from one device and reading it in SDR++ on another,
+             *  which works with third-party apps today. The risk was weighed and accepted: it is the LOCAL network,
+             *  it is only an IQ stream with tuning back, and the hardware itself stays controlled by the server and
+             *  any admin session. Do not re-propose it. */
+            iq->acceptTh = std::thread([this, iq, spec]{
                 while (serverRunning.load() && iq->run.load()) {
                     auto conn = iq->lis->accept(nullptr, 1000);
                     if (!conn) continue;
-                    const std::string from = bare(conn->peerAddress());
-                    if (from != want && !(isLoopback(from) && isLoopback(want))) {
-                        LOGI("raw IQ out: refused a consumer from %s — the stream was requested by %s",
-                             from.c_str(), want.c_str());
-                        conn->close(); continue;
-                    }
                     if (!iq->claim(conn, false)) { conn->close(); continue; }   // ★ one consumer, atomically
                     iqSendHeader(conn);
                     LOGI("raw IQ out: consumer connected from %s at %d Hz", conn->peerAddress().c_str(), iq->rate);
@@ -20164,20 +20148,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  as 5-byte binary frames or `iqtune` text frames from the VibeIQ bridge. */
     void acceptIqWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, const std::string& tok) {
         std::shared_ptr<IqOut> iq; std::shared_ptr<net::Socket> spec;
-        /* ★★ GUESSING IS SLOW, AND THE COMPARE TELLS NOTHING (audit 2026-10-03). The public pairing
-         *  CODE is six characters typed by a person — ~10^9, enumerable at line rate with no
-         *  backoff — and the compare was `==`, which returns at the first differing byte. Now an
-         *  address that keeps missing is locked out by the same backoff as a wrong PIN, and every
-         *  candidate is compared in constant time.
-         *  ★★ ITS OWN LEDGER, not g_vsAuthState's. The VibeIQ bridge retries a dead token every
-         *     15 s for as long as it runs (bridge.go), from the listener's own PC — sharing the PIN
-         *     ledger would have locked that listener out of the RADIO with a correct PIN. Same
-         *     class, same backoff, separate counts. */
-        const std::string ip = sock->peerAddress();
-        if (g_vsIqAuthState.blocked(ip)) {
-            sock->sendstr("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-            sock->close(); return;
-        }
+        /* ★ THE COMPARE TELLS NOTHING (audit 2026-10-03): every candidate is compared in constant time. Raw IQ
+         *  is otherwise left exactly as it was — no lockout — by Stuart's decision (see the LAN accept loop). */
         {
             std::lock_guard<std::mutex> lk(clientMtx);
             // ★ The token, or the pairing CODE on a public session: a page that is not on a
@@ -20196,12 +20168,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        && (ctEqual(iqDirect->token, tok) || (iqDirect->pub && !iqDirect->code.empty() && ctEqual(iqDirect->code, tok)))) {
                        iq = iqDirect; spec = iqDirectSock; } }
         if (!iq) {
-            // ★ An empty token is not a guess (a bare probe), so it does not count — same rule as
-            //   the admin proof: only a real attempt feeds the backoff.
-            if (!tok.empty()) g_vsIqAuthState.recordFail(ip);
             sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return;
         }
-        g_vsIqAuthState.recordOk(ip);
         if (iq->hasConsumer()) { sock->sendstr("HTTP/1.1 409 Conflict\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
