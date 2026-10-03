@@ -613,11 +613,20 @@ function WaterfallView({
   // Paths share the same hazard (the trace/peak redraw every tween + zoom frame),
   // so dispose them on the same time grace rather than a count window.
   const pathPending = useRef<Set<SkPath>>(new Set());
+  /* ★★★ WHICH PATH IS SHOWING IS KEPT HERE, NEVER READ BACK FROM THE SHARED VALUE (fixed 2026-10-03; the
+   *  audit's shared empty path crashed Android within seconds of the first screen tour closing, "Attempted
+   *  to access a disposed object", reproduced 2/2 → 0/3 by bisection on an emulator). `sv.value` read on
+   *  the JS thread is not guaranteed to be the SAME JS object that was stored — Reanimated may hand back
+   *  another wrapper round the same native path — so `old !== peakEmpty` said "not the empty path" about
+   *  the empty path itself, disposed it, and the next frame drew a dead object. Identity is only reliable
+   *  on objects we hold, so the current path lives in a ref. */
+  const peakCur = useRef<SkPath | null>(null);
   const swapPath = useCallback((sv: { value: SkPath }, p: SkPath) => {
-    const old = sv.value;
+    const old = peakCur.current ?? peakEmpty;
     if (old === p) return;            // already showing it (the shared empty path) — nothing to do
+    peakCur.current = p;
     sv.value = p;
-    if (old && old !== peakEmpty) {   // ★ the shared empty path is permanent — never dispose it
+    if (old !== peakEmpty) {          // ★ the shared empty path is permanent — never dispose it
       pathPending.current.add(old);
       setTimeout(() => { if (pathPending.current.delete(old)) { try { old.dispose(); } catch {} } }, 300);
     }
