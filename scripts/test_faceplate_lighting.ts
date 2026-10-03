@@ -176,6 +176,8 @@ for (const c of CHASSIS) {
   eq('Mac → rung 3 (no sensor: the LIGHT ANGLE row)', tiltRungFor({ isMac: true }), 3);
   eq('TV → rung 3', tiltRungFor({ isTV: true }), 3);
   eq('a phone starts on rung 0 (until measured)', tiltRungFor({}), 0);
+  eq('an iPhone is rung 0', tiltRungFor({ os: 'ios' }), 0);
+  eq('Android held at rung 3 until the XCover is measured (B19)', tiltRungFor({ os: 'android' }), 3);
   const base = { chassis: 'silver', motionOn: true, sensor: true, active: true, deckVisible: true, rung: 0 as const };
   ok('runs: silver, motion on, sensor, active, deck shown', tiltShouldRun(base));
   ok('black runs too', tiltShouldRun({ ...base, chassis: 'black' }));
