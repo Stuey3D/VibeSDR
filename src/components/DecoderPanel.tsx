@@ -43,6 +43,11 @@ export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
+  /** Called with true while the box is open and not minimised — the screen hides the station strip then. */
+  onShownChange?: (shown: boolean) => void;
+  /** ★ On a short portrait window (SDRScreen boxTopLimit): the box fills from here down to the controls,
+   *  and BIG / SMALL go. */
+  topLimit?: number;
   /** ★ Opens the tune box. Needed because on DAB this panel owns the keyboard outright, so
    *  Enter never reaches the main screen — see the T shortcut below. */
   onOpenFreq?: () => void;
@@ -209,7 +214,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq,
+  onOpenFreq, onShownChange, topLimit,
 }: DecoderPanelProps) {
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
   //
@@ -229,7 +234,7 @@ export default function DecoderPanel({
   // Sizing copied from AdvRdsPanel, which solved this first — including the hazard its own comment
   // records: "LEAVE THE STATUS BAR ALONE. In BIG mode the panel is anchored at the bottom and grew
   // straight up past the notch, covering the clock and battery." Inherited, not rediscovered.
-  const [tall, setTall] = useState(false);
+  const [tallPick, setTall] = useState(false);
   const { height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   // ★★★ THE HEADER IS PART OF THE PANEL AND WAS NOT COUNTED. AdvRdsPanel applies its computed
@@ -243,7 +248,9 @@ export default function DecoderPanel({
   //   the reservation above never counted, so it is counted here or BIG reaches the notch again.
   const tk = useDecoderTokens();
   const dp = useDecoderStyles(makeDp);
-  const availH = Math.max(160, winH - bottomOffset - insets.top - 16 - HEADER_H - decoderBodyInset(tk));
+  const availH = topLimit != null
+    ? Math.max(100, winH - bottomOffset - topLimit - HEADER_H - decoderBodyInset(tk))
+    : Math.max(160, winH - bottomOffset - insets.top - 16 - HEADER_H - decoderBodyInset(tk));
   // ★★★ ONE COMPUTED VALUE DRIVES ALL THREE PLACES THE 200 USED TO LIVE (the image canvas, the
   // ADS-B box and the text ScrollView). They MUST move together or BIG works in some modes and not
   // others.
@@ -252,7 +259,13 @@ export default function DecoderPanel({
   // app (Stuart, 2026-07-31: "on the Mac the SSTV box is too big"). Images additionally shrink to
   // their own natural size — see DecoderImageCanvas — so this ceiling mostly governs the text and
   // list modes, which genuinely benefit from the rows.
-  const bodyH = Math.round(Math.min(availH, tall ? winH * 0.62 : 200));
+  /* ★★ BIG ONLY WHERE IT IS BIGGER (Stuart, 2026-10-03, the SE in Display Zoom: "remove the option for Big
+   *  since big and small take the full screen") — the DAB box's rule (DabPanel bigUseful): offered only when
+   *  BIG gains at least 80 pt over SMALL's 200; otherwise SMALL, and no key. */
+  const bigUseful = topLimit == null && Math.min(availH, winH * 0.62) >= 200 + 80;
+  const tall = tallPick && bigUseful;
+  // ★ topLimit: the box FILLS its room (the cards have stepped aside for it).
+  const bodyH = Math.round(topLimit != null ? availH : Math.min(availH, tall ? winH * 0.62 : 200));
   // ★★★ EVERY SCROLLING BODY MUST USE THIS. `dp.body` used to carry `maxHeight: 200` and FOUR
   // places relied on it — the text ScrollView, the DAB list, the spots list and (via its own prop)
   // the image canvas. Moving the number inline and updating only ONE of them left DAB and SPOTS
@@ -379,6 +392,9 @@ export default function DecoderPanel({
 
   // Appear / disappear
   const panelOn = !!activeDecoder || isSpotsMode || isDabMode;
+  // ★ Tells the screen whether the box is OPEN (and not minimised) — on a short portrait window the station
+  //   strip gives the box its room (SDRScreen boxHidesVts).
+  useEffect(() => { onShownChange?.(panelOn && !minimised); }, [panelOn, minimised, onShownChange]);
   useEffect(() => {
     if (panelOn) {
       setMinimised(false);
@@ -982,12 +998,14 @@ export default function DecoderPanel({
           )}
           {/* ★★ BIG / SMALL — offered for EVERY decoder, not just images. See the block at the top
               of this component for why the 200 pt cap was wrong on large screens. */}
+          {bigUseful && (
           <HBtn active={tall} run hitSlop={6}
-            onPress={(e: any) => { e?.stopPropagation(); setTall((v: boolean) => !v); }}>
+            onPress={(e: any) => { e?.stopPropagation(); setTall(!tall); }}>
             <DecoderKeyLabel active={tall}>
               {tall ? 'SMALL' : 'BIG'}
             </DecoderKeyLabel>
           </HBtn>
+          )}
           {isImageMode && !!imageInfo && (
             <Text style={[dp.status, dp.hdrStatus]} numberOfLines={1}>
               {imageInfo}

@@ -583,6 +583,12 @@ export const LAND = {
    *  wise, its portrait that was tight"). A floor, not a new curve: the mid phones and the Pro Max are
    *  where the curve already puts them; the SE gains 6 pt. Never on a tablet (its today is already 62). */
   phoneLift:     6,
+  /** ★★★ …and NO PHONE BAND BELOW 40 pt, in absolute points (Stuart, 2026-10-03, the SE in Display Zoom:
+   *  "the icons on the buttons are blurry blobs … in landscape mode you have room to make the control bar
+   *  slightly higher"). The width-scaled band was 27 pt there (r(44) at 0.61), so each key was 12 pt and its
+   *  icon 10 — a floor, because scaling the band with the WIDTH is what shrank the keys below legibility.
+   *  Applies to every phone deck, the untouched default bar included; tablets are already well over it. */
+  phoneFloor:    40,
   growToH:       430,
   /** SDRScreen `pillWrap`: 8 pt each side of the bar. */
   screenMargin:  8,
@@ -645,8 +651,8 @@ export interface LandscapeLayout {
  *     t    = clamp((H − 375) / (430 − 375), 0, 1)
  *     band = max(today, round(today + (62 − today) × t))
  *
- *   SE 667 × 375 ........ t 0    → today's 32 (unchanged, to the point)
- *   SE Display Zoom 320 .. t 0    → today's
+ *   SE 667 × 375 ........ t 0    → 40 (the phone floor; today's was 32)
+ *   SE Display Zoom 320 .. t 0    → 40 (the phone floor; today's was 27)
  *   iPhone 14 844 × 390 .. t .27  → 46   (today 40)
  *   iPhone 16 852 × 393 .. t .33  → 47   (today 40)
  *   iPhone 17 874 × 402 .. t .49  → 52   (today 42)
@@ -666,10 +672,13 @@ export function landscapeBand(o: { plate: unknown; meter: MeterKind; tablet: boo
   //   Any other Display grows too — Nixie tubes on the default chassis were the ones "tiny in landscape on a
   //   17 Pro Max" (Stuart, 2026-09-30). `display` absent = treated as Hyperlegible (today's callers/tests).
   const untouched = !o.plate && o.meter === 'bar' && (o.display == null || o.display === 'hyper');
-  if (o.H == null || untouched) return today;
+  if (o.H == null) return today;
+  // ★ The phone floor (LAND.phoneFloor) — the untouched default bar included (Stuart's SE screenshot was it).
+  const floor = o.tablet ? 0 : LAND.phoneFloor;
+  if (untouched) return Math.max(today, floor);
   const t = Math.max(0, Math.min(1, (o.H - LAND.growFromH) / (LAND.growToH - LAND.growFromH)));
   const lifted = o.tablet ? today : Math.min(LAND.band, today + LAND.phoneLift);
-  return Math.max(today, lifted, Math.round(today + (LAND.band - today) * t));
+  return Math.max(today, lifted, floor, Math.round(today + (LAND.band - today) * t));
 }
 
 /**

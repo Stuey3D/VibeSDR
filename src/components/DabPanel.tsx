@@ -21,7 +21,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
-import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, engraveStyle,
+import { DecoderShell, decoderBodyInset, useDecoderTokens, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, engraveStyle,
          useDecoderStyles, type DecoderTokens } from './DecoderShell';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import type { DabState } from '../services/dabTypes';
@@ -396,6 +396,9 @@ export interface DabPanelProps {
    *  just a height. Stuart: "the big/small button is missing". */
   tall: boolean;
   onTall: (v: boolean) => void;
+  /** ★ On a short portrait window (SDRScreen boxTopLimit): the y the box may reach up to — it then FILLS
+   *  the room down to the controls, and BIG / SMALL go (there is nothing bigger to offer). */
+  topLimit?: number;
   /** ★ Bookmarks filtered to the DAB stations this receiver has learned — the web's `dabBm`. */
   onBookmarks?: () => void;
   /** The receiver's own base URL — logos are fetched FROM the server we are listening to, which is
@@ -410,6 +413,7 @@ export default function DabPanel(p: DabPanelProps) {
   const { s, C } = useDecoderStyles(makeStyles);
   const [pane, setPane] = React.useState<'stations' | 'signal'>('stations');
   const { height: winH, width: winW } = useWindowDimensions();
+  const dtk = useDecoderTokens();
   /* ★★★ THE PANEL MUST NOT GROW UP INTO THE TOP CHIPS, AND THE REASON IS TOUCH, NOT LOOKS.
    *  A full multiplex is ~20 services, which made the panel tall enough to reach the "Servers"
    *  chip, the session timer and the listener count — and those are drawn ABOVE it and swallow
@@ -421,7 +425,17 @@ export default function DabPanel(p: DabPanelProps) {
    *  the iPhone its header rode over the GUARANTEED TIME card top-right (Stuart's screenshot,
    *  2026-09-14 23:52). The card sits below the server name, itself below the safe area; 280
    *  clears it on every notched phone. Tablets and the Mac keep the tighter reserve. */
-  const maxBody = p.tall ? Math.max(140, winH - p.bottomOffset - (winW < 500 ? 280 : 190)) : 230;
+  const tallBody = Math.max(140, winH - p.bottomOffset - (winW < 500 ? 280 : 190));
+  /* ★★ BIG ONLY WHERE IT IS BIGGER (Stuart, 2026-10-03, the SE in Display Zoom: "remove the option for Big
+   *  since big and small take the full screen"). There, BIG's body came out at its 140 floor — SMALLER than
+   *  SMALL's 230 — so the key did nothing useful and pushed EXIT DAB off the header. Offered only when BIG
+   *  gains at least 80 pt; otherwise the box is SMALL and the key is not drawn (a saved BIG comes back by
+   *  itself on a bigger window). */
+  const fitBody = p.topLimit != null
+    ? Math.max(100, winH - p.bottomOffset - p.topLimit - 46 - decoderBodyInset(dtk)) : 0;
+  const bigUseful = p.topLimit == null && tallBody >= 230 + 80;
+  const tall = p.tall && bigUseful;
+  const maxBody = p.topLimit != null ? fitBody : tall ? tallBody : 230;
   const d = p.d;
   const cur = d ? d.services.find(x => x.sid === d.sid) : undefined;
   const txLines = useMemo(() => (d ? rememberTransmitters(d) : []), [d]);
@@ -787,7 +801,7 @@ export default function DabPanel(p: DabPanelProps) {
   );
 
   return (
-    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tall={p.tall}>
+    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tall={tall}>
         <DecoderHeader>
           <DecoderTitle>DAB</DecoderTitle>
           {/* ★★★ A READOUT, NOT A CONTROL. This was a pair of chevrons either side of the block —
@@ -798,17 +812,19 @@ export default function DabPanel(p: DabPanelProps) {
                  do the drum and the lock-screen skip. One meaning, in the controls the hand is
                  already on. AGENTS.md: when a control moves, the copy that says where it is moves
                  with it — which is why nothing here says "tap these". */}
-          <Text style={s.blockTxt}>
+          {/* ★★★ THE TEXT GIVES WAY, NEVER EXIT DAB (Stuart, 2026-10-03: on the SE in Display Zoom the keys
+              ran off the right edge and EXIT DAB could not be reached). The block and multiplex shrink and
+              truncate; every key keeps its width. A clipped decoration is untidy; a clipped way out is a trap. */}
+          <Text style={[s.blockTxt, { flexShrink: 1, minWidth: 0 }]} numberOfLines={1}>
             {block ? `${block.name}` : DASH}
             <Text style={s.blockHz}>{block ? `  ${(block.hz / 1e6).toFixed(3)}` : ''}</Text>
           </Text>
-          <Text style={s.mux} numberOfLines={1}>{muxTitle}</Text>
-          <View style={{ flex: 1 }} />
+          <Text style={[s.mux, { flex: 1, flexShrink: 1, minWidth: 0 }]} numberOfLines={1}>{muxTitle}</Text>
           {/* ★ The label names where the button GOES, and the state is readable without pressing
               it — the browser's rule for this same control. */}
           <DecoderKey active onPress={() => setPane(pane === 'stations' ? 'signal' : 'stations')}
                       label={pane === 'stations' ? 'SIGNAL' : 'STATIONS'} />
-          <DecoderKey active={p.tall} onPress={() => p.onTall(!p.tall)} label={p.tall ? 'SMALL' : 'BIG'} />
+          {bigUseful && <DecoderKey active={tall} onPress={() => p.onTall(!tall)} label={tall ? 'SMALL' : 'BIG'} />}
           {!!p.onBookmarks && (
             <DecoderKey onPress={p.onBookmarks} accessibilityLabel="DAB bookmarks" label="★" />
           )}

@@ -52,7 +52,10 @@ for (const [W, H, tablet] of DEVICES) {
   //    and on a phone never below today's + LAND.phoneLift.
   const t = Math.max(0, Math.min(1, (H - LAND.growFromH) / (LAND.growToH - LAND.growFromH)));
   const lifted = tablet ? todayBand : Math.min(62, todayBand + LAND.phoneLift);   // B8: the SE's little lift
-  const grown = Math.max(todayBand, lifted, Math.round(todayBand + (62 - todayBand) * t));
+  // ★★★ And no phone band below LAND.phoneFloor (40 pt absolute — Stuart, 2026-10-03, the SE in Display Zoom:
+  //     "the icons on the buttons are blurry blobs"), the untouched default bar included.
+  const floor = tablet ? 0 : LAND.phoneFloor;
+  const grown = Math.max(todayBand, lifted, floor, Math.round(todayBand + (62 - todayBand) * t));
   for (const [cname, plate] of CHASSIS) {
     const heights = new Set<number>();
     for (const meter of METERS) for (const shared of [false, true]) for (const singleDrum of [false, true]) {
@@ -65,11 +68,12 @@ for (const [W, H, tablet] of DEVICES) {
       if (!defaultBar) heights.add(d.bandH);
       ok(`${tag}: never taller than the mockup's 62 or today's (${d.bandH})`, d.bandH <= Math.max(todayBand, 62));
       ok(`${tag}: never shorter than today's (${d.bandH} ≥ ${todayBand})`, d.bandH >= todayBand);
-      eq(`${tag}: the band`, d.bandH, defaultBar ? todayBand : grown);
+      eq(`${tag}: the band`, d.bandH, defaultBar ? Math.max(todayBand, floor) : grown);
       // ★ B8 (Stuart, SE in Display Zoom): "landscape has a little room to spare height wise" — the SE
       //   grows, but only a LITTLE: at most 8 pt over today's in Display Zoom, 14 at standard zoom.
-      if (H <= 375 && !defaultBar) eq(`${tag}: ★ the SE grows a LITTLE (today's ${todayBand} + ${LAND.phoneLift})`, d.bandH, todayBand + LAND.phoneLift);
-      if (defaultBar) eq(`${tag}: ★ the default chassis's bar is today's (§3.1)`, d.bandH, todayBand);
+      //   2026-10-03: that LITTLE was still a 33 pt band and 14 pt keys; the SE now takes the phone floor.
+      if (H <= 375) eq(`${tag}: ★ the SE takes the phone floor (${LAND.phoneFloor})`, d.bandH, Math.max(todayBand + (defaultBar ? 0 : LAND.phoneLift), LAND.phoneFloor));
+      if (defaultBar) eq(`${tag}: ★ the default chassis's bar is today's (§3.1), or the phone floor`, d.bandH, Math.max(todayBand, floor));
       // §11: four identical keys, two rows and the gap exactly fill the band.
       eq(`${tag}: two keys + the row gap = the band`, 2 * d.keyH + d.rowGap, d.bandH);
       ok(`${tag}: keys are positive`, d.keyH > 0);
@@ -202,10 +206,9 @@ for (const [W, H, tablet] of DEVICES) {
      [dev(956, 440, 'vu', null).bandH, dev(956, 440, 'bar', null).bandH], [62, 45]);
   for (const meter of ['bar', 'vu', 'edge'] as const) for (const plate of [null, { screws: true, gloss: false }]) {
     const today = landscapeDeck({ plate, meter, tablet: false, W: 667, scale: 667 / 926, r: (n: number) => Math.round(n * 667 / 926) });
-    // The untouched default bar stays today's to the point; every other deck grows a little on the SE.
-    if (!plate && meter === 'bar') eq(`SE (667 × 375) default bar: the whole deck is today's`, dev(667, 375, meter, plate), today);
-    else ok(`SE (667 × 375) ${plate ? 'silver' : 'default'} ${meter}: grows a little (${today.bandH} → ${dev(667, 375, meter, plate).bandH})`,
-            dev(667, 375, meter, plate).bandH === today.bandH + LAND.phoneLift);
+    // ★ Every SE deck, the untouched default bar included, takes the phone floor (2026-10-03).
+    ok(`SE (667 × 375) ${plate ? 'silver' : 'default'} ${meter}: takes the phone floor (${today.bandH} → ${dev(667, 375, meter, plate).bandH})`,
+       dev(667, 375, meter, plate).bandH === Math.max(LAND.phoneFloor, today.bandH + (!plate && meter === 'bar' ? 0 : LAND.phoneLift)));
   }
   // Monotone: a taller window never gets a shorter band.
   let prev = 0, mono = true;

@@ -8169,6 +8169,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   //   height — so the LAST one would stand for ever and everything above it would keep a gap for
   //   a bar that is not on screen. Clear it here rather than relying on the child to say goodbye.
   useEffect(() => { if (advRdsOpen) setVtsBarH(0); }, [advRdsOpen]);
+  /* ★★★ A SHORT PORTRAIT WINDOW GIVES AN OPEN DECODER BOX THE STRIP'S ROOM (Stuart, 2026-10-03, the SE in
+   *  Display Zoom: "we need to loose the VTS when the decoder box is open … We did have the no VTS when decoder
+   *  open rule in place for the SE but it seems to have been forgotten"). The box already names the station
+   *  (the DAB list, the decoder's own text), and on a 568 pt screen the strip cost it a whole row.
+   *  ★ By the WINDOW, not the device: any portrait window under 700 pt tall — the SE at both zooms; a minimised
+   *    box gives the strip back. vtsBarH goes to 0 alongside, as for Advanced RDS. */
+  const [decoderShown, setDecoderShown] = useState(false);
+  const boxHidesVts = !isLandscape && screenH < 700 && (dabBoxOpen || decoderShown);
+  /* ★★ …AND THE RIGHT-HAND CARDS STEP ASIDE TOO (Stuart chose it, 2026-10-03). With only the strip gone the box
+   *  still met the SERVER HEALTH and TIME cards: on the SE in Display Zoom that left a header and two rows, and
+   *  SMALL's fixed 230 put EXIT DAB underneath the cards, which swallow touches. So while the box is open on a
+   *  short portrait window the health pill, the session clock, the listener count and the admin note are not
+   *  drawn, and the box FILLS from the server-name row (boxTopLimit) down to the controls. Minimise or close it
+   *  and they come back. */
+  const boxTopLimit = boxHidesVts ? rightStackTop + 8 : undefined;
+  useEffect(() => { if (boxHidesVts) setVtsBarH(0); }, [boxHidesVts]);
   const vtsKey            = useRef(0);
 
   /* ★★★ OUR OWN EXPLANATIONS GO THROUGH THE VTS, not through overlays of their own.
@@ -10077,6 +10093,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClear={() => setDecoderText('')}
           onClose={dismissDecoderPanel}
+          onShownChange={setDecoderShown}
+          topLimit={boxTopLimit}
           morseQuality={morseQuality}
           onMorseQuality={onMorseQuality}
           spotsKind={spotsKind}
@@ -10575,7 +10593,7 @@ export default function SDRScreen({ route, navigation }: Props) {
              is its requirement, and legible is the point of being compact.
           ★ pointerEvents none: it is a readout, and it sits over the frequency scale — a touch that
             lands on it must reach the scale, like every other pill anchored here. */}
-      {!!health && (
+      {!!health && !boxHidesVts && (
         <View pointerEvents="none" ref={tourRef('healthPill')} collapsable={false}
               onLayout={(e) => setHealthPillH(Math.round(e.nativeEvent.layout.height))}
               style={[styles.rxHealth, { top: rightStackTop, right: rightInset }]}>
@@ -10612,7 +10630,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★ ONLY WHEN SOMEONE ELSE IS HERE, AND NOT AT ALL ON A SHARED DIAL (noobish via Stuart, 2026-09-19).
          *    "1 listening of 5" with you alone reads as ONE OTHER person; and a shared dial's banner above the
          *    frequency now carries the count where it matters ("ASK TO TUNE · 3/5"). */
-        if (n == null || n <= 1 || sharedDialProp) return null;
+        if (n == null || n <= 1 || sharedDialProp || boxHidesVts) return null;
         return (
           <View pointerEvents="none" style={[styles.rxListeners, {
             top: rightStackTop + healthStackShift
@@ -10632,7 +10650,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         );
       })()}
 
-      {sessionEndsAt != null && !adminOk && (
+      {sessionEndsAt != null && !adminOk && !boxHidesVts && (
         <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft || borrowed}
                       top={rightStackTop + healthStackShift} right={rightInset} />
       )}
@@ -10641,7 +10659,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            pushes it into setVtsNotif. Stuart: "we can also move the 0 Gain message we added last
            night to the VTS too so we arent inventing new popups." It still lands at the bottom by
            the tuning controls, because that is where the VTS bar already is. */}
-      {!!adminNote && (
+      {!!adminNote && !boxHidesVts && (
         <View pointerEvents="none" style={[styles.adminNote, {
           top: rightStackTop + healthStackShift,
           left: Math.max(12, insets.left + 8),
@@ -10723,6 +10741,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           audioRunStartAt={() => audioRunStartRef.current}
           onExit={toggleDab}
           tall={dabTall} onTall={onDabTall}
+          topLimit={boxTopLimit}
           onBookmarks={() => { setFreqModalDab(true); setFreqModalOpen(true); }}
           // ★ Above the VTS bar — the DAB box sat on top of it (Stuart, 2026-09-15 07:06).
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
@@ -10744,7 +10763,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ vtsBarH is forced to 0 alongside, or everything that reserves space above the bar —
           the decoder box, the powersave pill, the idle-terms notice — would keep a gap for a bar
           that is not there. See the vtsBarH rule further up. */}
-      {!controlsHidden && !advRdsOpen && (
+      {!controlsHidden && !advRdsOpen && !boxHidesVts && (
         <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
                 anchors={drumAnchors}

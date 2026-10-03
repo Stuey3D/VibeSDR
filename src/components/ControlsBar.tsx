@@ -51,7 +51,7 @@ import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
 import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
 import { GhostGrid, SegDigits, VfdFilaments } from './VfdParts';
-import { TUBE_DESIGN, type NixieLayout } from '../constants/nixie';
+import { TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, type NixieLayout } from '../constants/nixie';
 import { composeModeLabel, modeBoxFit, MODE_BOX } from '../constants/modeBox';
 import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
@@ -807,7 +807,7 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
  * ★ The unit label has a FIXED width, so kHz / MHz / Hz cannot shift the digits beside it (§7 TRAP).
  */
 function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFontSize, pillPadH, pillPadV, gap, shared,
-  winH, land = false }: {
+  winH, land = false, fill = false }: {
   freqStr: string; unit: string; chanTag: string | null; freqFontSize: number; freqWidth: number;
   unitFontSize: number; pillPadH: number; pillPadV: number; gap: number; shared: boolean;
   /** ★ The LED / analogue frequency window (§4.1): its height, which the deck's fixed block decided
@@ -816,6 +816,10 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   winH?: number;
   /** The landscape LED / analogue window (§9): Deck.mockup `fvL` — tubes 15 × 27, Doto 22, 7-segment 23. */
   land?: boolean;
+  /** ★★ The phone landscape bar's full-width window (Stuart, 2026-10-03): the digits are sized by the
+   *  window's HEIGHT and shrink only to its width — not by the width-derived UI scale, which on the SE in
+   *  Display Zoom (0.61) made them a third of the window. */
+  fill?: boolean;
 }) {
   const dk = useFaceplate().deck;
   const s = useUiScale();
@@ -850,7 +854,9 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
     //   analogue + shared = 35 pt against a 37 pt design stack (test_faceplate_meters.ts).
     return (
       <NixieTubes hz={ro.hz} unit={ro.unit} layout={ro.layout}
-        design={land ? TUBE_DESIGN.meterLand : shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter} bar={false} scale={s.scale}
+        design={land ? TUBE_DESIGN.meterLand : shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter} bar={false}
+        // ★ fill: the stack (glass + pip + collar + clearance) is the window's height; the width still fits it.
+        scale={fill ? H / (TUBE_DESIGN.meterLand.th + PIP_H + COLLAR_H + 2 * CLEAR) : s.scale}
         radius={8} reserveRight={labelW} style={{ flex: 1, height: H, minWidth: 0 }}>
         {label}
       </NixieTubes>
@@ -874,8 +880,8 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   //   centred in the full-width window; the bar pill keeps its own sizes.
   const cellBox: ViewStyle = compact ? { flex: 1, minWidth: 0, alignItems: 'center' }
                                      : { width: winW, flexShrink: 1, minWidth: 0 };
-  const dotSize = compact ? s.r(land ? 22 : shared ? 23 : 27) : s.r(shared ? 24 : 28);
-  const segH = compact ? Math.min(s.r(land ? 23 : shared ? 25 : 29), H - 4) : s.r(shared ? 27 : 30);
+  const dotSize = fill ? H : compact ? s.r(land ? 22 : shared ? 23 : 27) : s.r(shared ? 24 : 28);
+  const segH = fill ? H - 6 : compact ? Math.min(s.r(land ? 23 : shared ? 25 : 29), H - 4) : s.r(shared ? 27 : 30);
   return (
     <View style={[{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
                     flexShrink: 1, minWidth: 0 }, compact && { flex: 1 }]}>
@@ -1028,10 +1034,38 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
   </>);
 }
 
+/** The banner's type size, from the pill's frequency size (see FreqModePill). */
+const sharedBannerFont = (freqFontSize: number) => Math.max(9, Math.min(13, Math.round(freqFontSize * 0.34)));
+/** Can the bar frame hold the SHARED TUNER banner AND the pill (its frequency at the shared 80 %)? The banner is
+ *  its line + pm.sharedBox's 2 + 2 padding, 1 + 1 border and 3 margin; 2 pt of meter ring stays visible. */
+function barFitsBanner(frameH: number, freqFontSize: number, pillPadV: number): boolean {
+  const banner = Math.round(sharedBannerFont(freqFontSize) * 1.25) + 9;
+  const pill = Math.round(Math.round(freqFontSize * 0.8) * 1.12) + 2 * Math.max(1, Math.round(pillPadV * 0.6));
+  return banner + pill + 2 <= frameH;
+}
+
+/** The SHARED TUNER banner as a strip of its own (see PortraitBar bannerOut) — FreqModePill's own box. */
+function SharedBanner({ st, fontSize, tight }: { st: SharedTuner; fontSize: number; tight: boolean }) {
+  const fp = useFaceplate();
+  return (
+    <View style={[pm.sharedBox, { backgroundColor: fp.chassis.pillBg, borderColor: fp.chassis.sharedBorder, alignSelf: 'center' }]}
+          accessibilityRole="text" accessibilityLabel={sharedBannerLabel(st)}>
+      <Text style={[pm.sharedTxt, { fontFamily: fp.deck.bannerFont, fontSize, color: st.alone ? fp.deck.bannerFree : fp.deck.bannerAsk }]}
+            numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+        {sharedBannerText(st, tight)}
+      </Text>
+    </View>
+  );
+}
+
 function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLabel, snrText, connected, signalActive,
   onFreqTap, onModeTap, freqFontSize, freqWidth, unitFontSize, modeFontSize,
   modeLs, snrWidth, pillPadH, pillPadV, modePadH, modePadV, gap, bus, meterMode,
   tight = false, fmStereo = false, wide = false, sharedTuner = null,
+  /** ★★ The phone landscape bar (Stuart, 2026-10-03): the pill takes the display column's whole width and
+   *  height `full`, the frequency flexes into it, and the signal meter is a thin strip beneath — see
+   *  LandscapeBar. Absent = today's pill, centred inside the meter. */
+  full = 0,
 }: any) {
   /* ★★ THE TEXT ROLES ARE THE FACEPLATE'S (fp.deck): frequency, unit, mode, reading, banner — each
    *  with its own font, because under the Nixie display (§2) the frequency and banner are Nixie One
@@ -1046,7 +1080,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
    *  amount" on a Mac, then "not enough room" on the phone — both true of the same fixed number). The pill's
    *  own frequency size already knows how much width this layout has, so the banner takes a share of it and
    *  is clamped at both ends: never smaller than the 9 it shipped at, never bigger than a phone can hold. */
-  const sharedFontSize = Math.max(9, Math.min(13, Math.round(freqFontSize * 0.34)));
+  const sharedFontSize = sharedBannerFont(freqFontSize);
   if (sharedTuner) {
     freqFontSize = Math.round(freqFontSize * 0.8); modeFontSize = Math.round(modeFontSize * 0.8);
     unitFontSize = Math.round(unitFontSize * 0.85); pillPadV = Math.max(1, Math.round(pillPadV * 0.6));
@@ -1058,7 +1092,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
     // screens (SE / Moto G35) and with Android font metrics the fixed dp
     // widths overflow the frame; the freq text's adjustsFontSizeToFit
     // absorbs the squeeze (meter stays visible ≥13% each side).
-    <View style={{ maxWidth: tight ? '66%' : '74%', alignSelf: 'center', alignItems: 'stretch' }}>
+    <View style={full ? { flex: 1, alignSelf: 'stretch' } : { maxWidth: tight ? '66%' : '74%', alignSelf: 'center', alignItems: 'stretch' }}>
     {sharedTuner && (
       /* ★★ CONTEXT-AWARE (noobish via Stuart, 2026-09-19): alone, you may just tune; with company, ask — and
        *    the room's count lives HERE, where the question is asked, not in a corner badge. */
@@ -1072,10 +1106,11 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
         </Text>
       </View>
     )}
-    <View style={pm.row}>
+    <View style={[pm.row, full ? { flex: 1 } : null]}>
       <TouchableOpacity
         ref={tourRef('freqBox')}
-        style={[pm.freqBox, dk.style === 'hyper'
+        style={[pm.freqBox, full ? { flex: 1, justifyContent: 'center', alignItems: dk.style === 'hyper' ? 'flex-end' : 'stretch' } : null,
+          dk.style === 'hyper'
           ? { backgroundColor: ct.pillBg, paddingHorizontal: pillPadH, paddingVertical: pillPadV, gap }
           // ★ The display windows draw their own glass (the Nixie recess, the VFD's black) edge to edge.
           : { backgroundColor: dk.style === 'nixie' ? '#060403' : '#050505', overflow: 'hidden' }]}
@@ -1086,7 +1121,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
           // ★ A channel name is seven characters where the frequency is ten, so the digits give up
           //   the room the small spacing/true-frequency line needs — the pill does not grow.
           color: dk.freq, fontSize: freqFontSize,
-          width: chanTag && chanMain ? Math.round(freqWidth * 0.74) : freqWidth,
+          ...(full ? { flex: 1 } : { width: chanTag && chanMain ? Math.round(freqWidth * 0.74) : freqWidth }),
           fontFamily: dk.freqFont, textShadowColor: dk.freqGlow, letterSpacing: dk.freqSpacing,
           // Tight line metrics — Atkinson's tall default line-height (and
           // Android's extra font padding) inflated the pill to fill the
@@ -1115,14 +1150,14 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
         </>) : (
           <DisplayFreq freqStr={freqStr} unit={unit} chanTag={chanTag} freqFontSize={freqFontSize}
             freqWidth={freqWidth} unitFontSize={unitFontSize} pillPadH={pillPadH} pillPadV={pillPadV}
-            gap={gap} shared={!!sharedTuner} />
+            gap={gap} shared={!!sharedTuner} {...(full ? { winH: full, land: true, fill: true } : null)} />
         )}
         {/* ★ The VFD glass's filament wires, frontmost (lighting brief §1) — dot / seg only. */}
         {(dk.style === 'dot' || dk.style === 'seg') && <VfdFilaments radius={5} />}
       </TouchableOpacity>
       <TouchableOpacity
         ref={tourRef('modeBtn')}
-        style={[pm.modeBtn, { backgroundColor: ct.pillBg, borderLeftColor: ct.modeDivider, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: tight ? 72 : 84 }]}
+        style={[pm.modeBtn, { backgroundColor: ct.pillBg, borderLeftColor: ct.modeDivider, paddingHorizontal: modePadH, paddingVertical: modePadV, minWidth: full ? 56 : tight ? 72 : 84 }]}
         onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
       >
         {/* ★ The bar's button grows to its label (minWidth + content) — the rule the LED / analogue box
@@ -1657,6 +1692,12 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   const PILL_GAP   = s.r(5);
   const BTN_FONT   = s.f(t.btnSize);
   const CLOCK_FONT = s.f(8);
+  /* ★★ THE SHARED TUNER BANNER LEAVES THE METER WHEN IT CANNOT SHARE IT (found on an emulator at the SE in
+   *  Display Zoom's 320 × 568, 2026-10-03): the bar frame is r(40) = 33 pt there, the banner ~20 of it, and the
+   *  frequency underneath was cut in half. Shrinking the digits to fit would have left them ~9 pt, so instead the
+   *  banner becomes its own strip above the frame — as the LED / analogue display already draws it — and the
+   *  pill keeps the whole frame. Only where they cannot both fit: every larger phone is unchanged. */
+  const bannerOut = !dl.compact && !!sharedDial && !barFitsBanner(dl.displayH, FREQ_FONT, PILL_PAD_V);
 
   return (
     <View style={{ gap: ROW_GAP }}>
@@ -1668,6 +1709,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
                              paddingHorizontal: plateInset.h, paddingTop: plateInset.top,
                              paddingBottom: s.r(12) } : undefined}>
       {gloss && <GlossPanel radius={plateInset.radius} squareBottom />}
+      {bannerOut && <SharedBanner st={sharedDial!} fontSize={sharedBannerFont(FREQ_FONT)} tight={tight} />}
       {dl.compact ? (
         <CompactDisplay dl={dl} meterKind={meterKind}
           freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
@@ -1686,7 +1728,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           modeFontSize={MODE_FONT} modeLs={MODE_LS} snrWidth={SNR_W}
           pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
           modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
-          tight={tight} sharedTuner={sharedDial ?? null}
+          tight={tight} sharedTuner={bannerOut ? null : sharedDial ?? null}
         />
       </View>
       )}
@@ -1935,7 +1977,11 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   const MODE_PAD_H = s.r(7);
   const MODE_PAD_V = s.r(4);
   const PILL_GAP  = s.r(4);
-  const CLOCK_FONT = s.f(7);
+  /* ★★ LEGIBILITY FLOORS, IN POINTS (Stuart, 2026-10-03, the SE in Display Zoom: "the clock though is
+   *  basically just a blur and nothing can be read on it"). The landscape scale is the WIDTH over 926, so the
+   *  SE's 568 pt took the clock to 4.3 pt and the key legends to 6.7 — a scale is not a floor. These only
+   *  bite on the smallest windows; from an iPhone 14 up the scaled sizes are already above them. */
+  const CLOCK_FONT = Math.max(9, s.f(7));
   /* ★★★ EVERY LANDSCAPE KEY IS KEY_H TALL, SET, NOT NEGOTIATED (brief §11). The keys used to be
      `flex: 1` in their column, and a flex item's share is argued out against its CONTENT: the step
      key's Text (scaled lineHeight, adjustsFontSizeToFit) and the cog's Skia Canvas report different
@@ -1949,10 +1995,11 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   // ★★ The panel-gap light (constants/keyLight.ts) — its share of the tightest gap round a landscape key:
   //   the row gap between the two stacked keys, the column gap to the drum and the display.
   const lightReach = keyLightReach(Math.min(GAP, COL_GAP));
-  const ICON_SZ   = isCap ? Math.max(8, Math.min(Math.round(s.r(20) * lay.legendScale), KEY_H - 6))
-                          : Math.min(s.r(18), KEY_H - 2);   // − the 1 pt border top and bottom
-  const KEY_FONT  = isCap ? s.f(t.btnSize) * lay.legendScale : s.f(11);
-  const KEY_LH    = isCap ? Math.round(KEY_FONT * 1.27) : s.f(14);   // default: today's exactly
+  // ★ Floors (see CLOCK_FONT): a 12 / 14 pt icon and a 9 pt legend, still capped to the key.
+  const ICON_SZ   = isCap ? Math.max(8, Math.min(Math.max(12, Math.round(s.r(20) * lay.legendScale)), KEY_H - 6))
+                          : Math.min(Math.max(14, s.r(18)), KEY_H - 2);   // − the 1 pt border top and bottom
+  const KEY_FONT  = Math.max(9, isCap ? s.f(t.btnSize) * lay.legendScale : s.f(11));
+  const KEY_LH    = isCap ? Math.round(KEY_FONT * 1.27) : Math.max(s.f(14), Math.round(KEY_FONT * 1.27));   // default: today's where no floor bites
   const compact   = lay.meter !== 'bar';
   /* The LED / analogue column as CompactDisplay reads it: the band, no banner (§9: the SHARED TUNER
      banner lives in the status row in landscape, so the display column never grows). */
@@ -1960,7 +2007,16 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
     compact: true, displayH: BAND_H, keySlot: KEY_H, legendScale: lay.legendScale, bannerH: 0, bannerGap: 0,
     meterGap: lay.meterGap, housingH: lay.housingH, freqH: lay.freqH, blockH: BAND_H,
   }), [BAND_H, KEY_H, lay.legendScale, lay.meterGap, lay.housingH, lay.freqH]);
-  const dispH     = compact ? BAND_H : SIG_H;
+  /* ★★★ THE PHONE BAR: FREQUENCY ACROSS, METER UNDER (Stuart, 2026-10-03, the SE in Display Zoom: "there is a
+   *  huge amount of signal meter and not much frequency … expand the frequency to the full width and put a very
+   *  thin signal meter underneath it rather than surrounding it"). The pill was capped at 74 % of the bar frame
+   *  so the meter showed either side of it, which on a phone left the digits a third of the column.
+   *  ★ Phone windows only (by size, not device): a tablet's or Mac's bar keeps today's look. */
+  const stack     = !compact && !s.isTablet;
+  const THIN_H    = Math.max(4, s.r(7));
+  const THIN_GAP  = Math.max(2, s.r(3));
+  const PILL_H    = BAND_H - THIN_H - THIN_GAP;
+  const dispH     = compact || stack ? BAND_H : SIG_H;
 
   return (
     /* ★ A COLUMN NOW: the controls in one row, the status in another beneath it. This function's
@@ -2028,6 +2084,23 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
             signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
             onFreqTap={onFreqTap} onModeTap={onModeTap} sharedTuner={null} tight={false}
             freqWidth={FREQ_W} />
+        ) : stack ? (
+        <View style={{ height: BAND_H, gap: THIN_GAP }}>
+          <FreqModePill full={PILL_H}
+            freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
+            connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
+            onFreqTap={onFreqTap} onModeTap={onModeTap}
+            freqFontSize={Math.floor((PILL_H - 2 * PILL_PAD_V) / 1.12)} freqWidth={FREQ_W}
+            unitFontSize={Math.max(8, UNIT_FONT)}
+            modeFontSize={Math.max(10, MODE_FONT)} modeLs={MODE_LS} snrWidth={SNR_W}
+            pillPadH={PILL_PAD_H} pillPadV={PILL_PAD_V}
+            modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
+            sharedTuner={null}
+          />
+          <View style={[lnd.sigFrame, { height: THIN_H, borderRadius: THIN_H / 2 }]}>
+            <SignalCanvas width={sigW} height={THIN_H} signal={signal} peak={peak} bus={bus} />
+          </View>
+        </View>
         ) : (
         <View style={[lnd.sigFrame, { height: SIG_H }]}>
           <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
