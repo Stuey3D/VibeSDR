@@ -11,6 +11,13 @@ def serverVersion = (vsCmake =~ /project\(vibeserver VERSION ([0-9.]+)/)[0][1]
 def vsPre = (vsCmake =~ /set\(VIBESERVER_PRERELEASE "([A-Za-z0-9]*)"\)/)
 if (vsPre.find() && vsPre.group(1)) serverVersion = serverVersion + "~" + vsPre.group(1)
 
+// ★★★ Lite's signing keys — see the note at signingConfigs below.
+def liteProps = new Properties()
+def litePropsFile = file(findProperty('liteSigningProps') ?:
+    "${System.getProperty('user.home')}/Documents/VibeSDR-keys/vibeserver-lite-release.properties")
+if (litePropsFile.exists()) litePropsFile.withInputStream { liteProps.load(it) }
+def liteKeysOk = ['storeFile', 'oldStoreFile', 'lineageFile'].every { liteProps[it] && file(liteProps[it]).exists() }
+
 android {
     // ★ The NAMESPACE stays com.vibesdr.app: the engine's JNI symbols are Java_com_vibesdr_app_*,
     //   and the shared Kotlin lives in that package. The APPLICATION ID is Lite's own, so both
@@ -74,37 +81,81 @@ android {
             res.srcDirs     += ["${buildDir}/rn-res"]
         }
     }
-    // ★★★ LITE'S OWN RELEASE KEY (2026-10-03, from V11 RC4). Until RC3 Lite was signed with this Mac's
-    //     debug key. The key and its passwords live ONLY in ~/Documents/VibeSDR-keys (Time Machine + iCloud,
-    //     beside the apt key) and are read from there — never copied into the repo or onto a receiver.
-    //     Override the path with -PliteSigningProps=… on another machine. No file = a release build REFUSES
-    //     (a debug-signed Lite would not install over the real one).
-    def liteProps = new Properties()
-    def litePropsFile = file(findProperty('liteSigningProps') ?:
-        "${System.getProperty('user.home')}/Documents/VibeSDR-keys/vibeserver-lite-release.properties")
-    if (litePropsFile.exists()) litePropsFile.withInputStream { liteProps.load(it) }
+    // ★★★ LITE'S OWN RELEASE KEY, ROTATED FROM THE OLD ONE (2026-10-03, from V11 RC4). Until RC3 Lite was
+    //     signed with this Mac's debug key. Stuart: "I want the simplest option for our users" — so RC4
+    //     must install OVER any older Lite and keep its settings, directory listing and address.
+    //     ★ Android 9+ reads the v3 signature: the NEW key, plus a lineage the old key signed ("this key
+    //       now speaks for me"), so an update is accepted and only the new key is trusted after it.
+    //     ★ Android 5–8 cannot read v3; they check the v1/v2 signatures, which stay on the OLD key.
+    //       So while minSdk < 28 EVERY Lite release is signed with BOTH keys — do not drop the old one.
+    //     Keys, passwords and lineage live ONLY in ~/Documents/VibeSDR-keys (Time Machine + iCloud) and
+    //     are read in place, never copied. Override with -PliteSigningProps=… . No file = a release
+    //     build REFUSES.
+    // (the keys are loaded at the top of this file — liteProps / liteKeysOk)
     signingConfigs {
-        if (liteProps['storeFile']) {
-            liteRelease {
-                storeFile file(liteProps['storeFile'])
-                storePassword liteProps['storePassword']
-                keyAlias liteProps['keyAlias']
-                keyPassword liteProps['keyPassword']
+        if (liteKeysOk) {
+            // gradle signs with the OLD key; signLiteRelease below re-signs with both + the lineage.
+            liteOld {
+                storeFile file(liteProps['oldStoreFile'])
+                storePassword liteProps['oldStorePassword']
+                keyAlias liteProps['oldKeyAlias']
+                keyPassword liteProps['oldKeyPassword']
             }
         }
     }
     buildTypes {
         release {
-            if (liteProps['storeFile']) signingConfig signingConfigs.liteRelease
+            if (liteKeysOk) signingConfig signingConfigs.liteOld
             minifyEnabled false
         }
     }
 }
 
 gradle.taskGraph.whenReady { g ->
-    if (g.allTasks.any { it.name.toLowerCase().contains('release') } && !android.signingConfigs.findByName('liteRelease'))
-        throw new GradleException("Lite release key missing: expected ~/Documents/VibeSDR-keys/vibeserver-lite-release.properties (or -PliteSigningProps=…)")
+    if (g.allTasks.any { it.name.toLowerCase().contains('release') } && !android.signingConfigs.findByName('liteOld'))
+        throw new GradleException("Lite release keys missing: expected ~/Documents/VibeSDR-keys/vibeserver-lite-release.properties with both keys and the lineage (or -PliteSigningProps=…)")
 }
+
+// ★★★ The APK in outputs/ is ALWAYS the rotated one: assembleRelease cannot finish without this step,
+//     and it verifies its own result (v3 signer = the new key, v1/v2 = the old) before it succeeds.
+tasks.register('signLiteRelease') {
+    doLast {
+        def p = liteProps
+        def apksigner = "${android.sdkDirectory}/build-tools/${android.buildToolsVersion}/apksigner"
+        def dir = file("${buildDir}/outputs/apk/release")
+        def apk = new File(dir, 'app-release.apk')
+        if (!apk.exists()) throw new GradleException("signLiteRelease: no ${apk}")
+        def tmp = new File(dir, 'app-release.rotated.apk')
+        // ★ A failure must not leave an old-key-only APK in outputs/ looking finished.
+        def fail = { String m -> apk.delete(); tmp.delete(); throw new GradleException(m) }
+        def env = [OLDPW: p['oldStorePassword'], OLDKP: p['oldKeyPassword'], NEWPW: p['storePassword'], NEWKP: p['keyPassword']]
+        def run = { List cmd ->
+            def pb = new ProcessBuilder(cmd.collect { it.toString() }).redirectErrorStream(true)
+            pb.environment().putAll(env)
+            def pr = pb.start(); def out = pr.inputStream.text
+            if (pr.waitFor() != 0) fail("apksigner failed:\n${out}")
+            out
+        }
+        try {
+            run([apksigner, 'sign',
+                 '--ks', p['oldStoreFile'], '--ks-key-alias', p['oldKeyAlias'], '--ks-pass', 'env:OLDPW', '--key-pass', 'env:OLDKP',
+                 '--next-signer',
+                 '--ks', p['storeFile'], '--ks-key-alias', p['keyAlias'], '--ks-pass', 'env:NEWPW', '--key-pass', 'env:NEWKP',
+                 '--lineage', p['lineageFile'], '--rotation-min-sdk-version', '28', '--v4-signing-enabled', 'false',
+                 '--out', tmp.path, apk.path])
+            // As Android 9+ sees it: v3, the NEW key. As Android 5–8 see it: v1/v2, the OLD key.
+            def v = run([apksigner, 'verify', '-v', '--print-certs', tmp.path])
+            def vOld = run([apksigner, 'verify', '-v', '--print-certs', '--max-sdk-version', '27', tmp.path])
+            if (!v.contains('Verified using v3 scheme (APK Signature Scheme v3): true') ||
+                !v.contains('25a55af72ea9b8fef55dd0098ad2168a740b09844a7bbc151815f2c99ec2f8b3') ||
+                !vOld.contains('d64da39b919d463a1582b68e88d369b3e377c57ca2b1db83a606ad46430a9214'))
+                fail("signLiteRelease: the rotated APK does not carry both keys:\n${v}\n--- Android 5-8 view ---\n${vOld}")
+        } catch (Throwable e) { apk.delete(); tmp.delete(); throw e }
+        apk.delete(); tmp.renameTo(apk)
+        logger.lifecycle("Lite release signed with both keys (old v1/v2, new v3 + lineage)")
+    }
+}
+tasks.matching { it.name == 'assembleRelease' }.configureEach { finalizedBy 'signLiteRelease' }
 
 // ★★ THE SHARED KOTLIN IS SYNCED, NOT COPIED INTO THE REPO. These are the React-free files that
 //    start and keep a VibeServer; Lite compiles the main app's own copies, so a fix there is a fix
