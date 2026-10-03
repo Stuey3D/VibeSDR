@@ -11034,6 +11034,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
                              mine, floorDb);
                     sendText(p.sock, sb, Out::Sig);
+                    /* ★★ `adc` AND `lx` GO ON THIS LISTENER'S OWN FRAME CLOCK; `sig` DOES NOT
+                     *  (efficiency audit 2026-10-03). Both were sent on EVERY ENGINE frame to every
+                     *  peer — 20/s to a listener who asked for 5 fps. Neither can use that rate: the
+                     *  ADC figures are recomputed once a second (enqueueIq's 1 s window) and the
+                     *  lightning rate is per MINUTE, so a listener's own frame rate (≥ 1 fps in
+                     *  practice) already carries every new value promptly. Saves two snprintf +
+                     *  two outbox enqueues per slow listener per skipped frame — 30 messages a
+                     *  second for one 5 fps listener on a 20 fps engine.
+                     *  ★ `sig` deliberately stays on every engine frame: it is the S meter, and
+                     *    its responsiveness is a documented requirement (Stuart, 2026-08-05 —
+                     *    see "EVERY FRAME, NOT EVERY FOURTH" above). Gating it would make an
+                     *    idle-saver or a "Low" waterfall rate also make the meter sluggish.
+                     *  ★ `due` is empty when this frame was not the spectrum path's to emit (the
+                     *    zoom spectrum owns the waterfall, or a SpyServer zoom-out): then nobody's
+                     *    clock was advanced here, and everybody gets them, exactly as before. */
+                    const size_t pIdx = (size_t)(&p - peers.data());
+                    if (!due.empty() && pIdx < due.size() && !due[pIdx]) continue;
                     snprintf(sb, sizeof sb,
                              "{\"type\":\"adc\",\"peak\":%.1f,\"clip\":%.4f}",
                              g_adcPeakDbfs.load(std::memory_order_relaxed),
