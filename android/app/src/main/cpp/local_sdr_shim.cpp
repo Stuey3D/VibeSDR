@@ -719,6 +719,18 @@ static void vsProbeHostBattery() {
 constexpr int VS_PROTO     = 1;
 constexpr int VS_MIN_PROTO = 0;
 std::string queryParam(const std::string& reqLine, const char* key);   // defined below
+/** ★★ THE CLIENT'S SESSION ID, VALIDATED WHERE IT IS FIRST READ (audit 2026-10-03). It is the
+ *  client's own word and it becomes a map key, a log field and a JSON string in the admin pages —
+ *  so it is held to the shape every real client sends (a UUID: hex and dashes; Jr and the apps
+ *  likewise) and anything else is treated as NO session id, which every path already handles
+ *  (older clients send none). Same rule as `bid` beside it: short, and safe characters only. */
+static std::string vsSessionIdOf(const std::string& reqLine) {
+    std::string s = queryParam(reqLine, "user_session_id");
+    if (s.size() > 64) return std::string();
+    for (char c : s)
+        if (!isalnum((unsigned char)c) && c != '-' && c != '_') return std::string();
+    return s;
+}
 /** The requester's protocol number off its request line — 0 when it sent none (legacy). */
 static int protoOf(const std::string& reqLine) {
     const std::string p = queryParam(reqLine, "proto");
@@ -4661,7 +4673,7 @@ namespace {
 struct VsAuth {
     std::mutex mtx;
     std::unordered_map<std::string, int64_t> issued;    // nonce hex -> issue ms
-    struct Fail { int count = 0; int64_t until = 0; };  // lockout epoch ms
+    struct Fail { int count = 0; int64_t until = 0; int64_t last = 0; };  // lockout / last failure, steady ms
     std::unordered_map<std::string, Fail> fails;
 
     static int64_t nowMs() {
@@ -4712,7 +4724,26 @@ struct VsAuth {
     }
     void recordFail(const std::string& ip) {
         std::lock_guard<std::mutex> lk(mtx);
+        const int64_t now = nowMs();
+        /* ★★ BOUNDED (audit 2026-10-03). An entry was only ever removed by a SUCCESS from the same
+         *  address, so every address that ever failed once stayed for the life of the process —
+         *  a scanner rotating through addresses (or a busy tunnel's worth of strangers) grew this
+         *  without limit. Entries whose last failure is an hour old and whose lockout has long
+         *  ended are forgotten; past 4096 the stalest go first. An address forgotten this way only
+         *  loses a count it was no longer being punished for. */
+        if (fails.size() >= 1024) {
+            for (auto it = fails.begin(); it != fails.end();)
+                it = (now - it->second.last > 3600000 && now > it->second.until) ? fails.erase(it) : std::next(it);
+            while (fails.size() >= 4096) {
+                auto oldest = fails.begin();
+                for (auto it = fails.begin(); it != fails.end(); ++it)
+                    if (it->second.last < oldest->second.last) oldest = it;
+                if (oldest->first == ip) break;
+                fails.erase(oldest);
+            }
+        }
         auto& f = fails[ip];
+        f.last = now;
         f.count++;
         if (f.count >= 3) {                              // backoff: 2s,4s,8s… ≤60s
             int64_t wait = (int64_t)2000 << std::min(f.count - 3, 5);
@@ -4738,6 +4769,10 @@ struct VsAuth {
     }
 };
 VsAuth g_vsAuthState;
+/** ★ The raw-IQ token/code ledger — a separate backoff so a bridge retrying a dead token cannot
+ *  lock its owner out of the PIN (see acceptIqWs, audit 2026-10-03). Only blocked/recordFail/
+ *  recordOk are used; its nonce map stays empty. */
+VsAuth g_vsIqAuthState;
 
 /** ★ Adapter so vibe_admin_ticket.h can stay free of this file's internals — it takes the MAC as a
  *  function so it is testable on its own, and this is the real one. */
@@ -4749,10 +4784,13 @@ static int64_t vsNowEpoch() { return (int64_t)::time(nullptr); }
 /** Mint an admin ticket that EVERY radio on this machine will accept. See vibe_admin_ticket.h:
  *  the per-process nonce cannot cross a process boundary, and with a radio per process that is
  *  every interesting case. */
-static std::string vsMintAdminTicket() {
+/** ★★★ `originEpoch` is when the PASSWORD was last proved — now, for a password proof; the
+ *  presented ticket's own origin, for a renewal by ticket. Never "now" for a renewal: that is what
+ *  let one leaked ticket renew itself for ever (audit 2026-10-03, see kTicketMaxLifeSec). */
+static std::string vsMintAdminTicket(int64_t originEpoch) {
     std::string secret;
     { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
-    return vibeadmin::mintTicket(secret, vsNowEpoch() + vibeadmin::kTicketTtlSec, &vsTicketMac);
+    return vibeadmin::mintTicket(secret, originEpoch, vsNowEpoch() + vibeadmin::kTicketTtlSec, &vsTicketMac);
 }
 /** ★★★ ONE PLACE THAT KNOWS WHAT ADMIN PROOF LOOKS LIKE. There were FIVE copies of
  *  "nonce + token + not locked out + verify", and adminOkFor's own comment warns why that is
@@ -4788,11 +4826,12 @@ static VsAdminProof vsAdminProof(const std::string& secret, const std::string& r
     return p;
 }
 
-static bool vsTicketOk(const std::string& ticket) {
+static bool vsTicketOk(const std::string& ticket, vibeadmin::TicketInfo* info) {
     std::string secret;
     { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
-    return vibeadmin::verifyTicket(secret, ticket, vsNowEpoch(), &vsTicketMac);
+    return vibeadmin::verifyTicket(secret, ticket, vsNowEpoch(), &vsTicketMac, info);
 }
+static bool vsTicketOk(const std::string& ticket) { return vsTicketOk(ticket, nullptr); }
 
 /** Is this peer the host itself? IPv4 loopback, IPv6 loopback, and the v4-mapped form. */
 static bool isLoopback(const std::string& ip) {
@@ -12902,6 +12941,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (r == 0) return s->isOpen() ? -2 : -1;            // -2 = idle (still open), -1 = closed
         if (!recvN(s, &h[1], 1)) return -1;
         int opcode = h[0] & 0x0F; bool masked = h[1] & 0x80; uint64_t len = h[1] & 0x7F;
+        /* ★★ ONLY WHOLE, MASKED FRAMES (audit 2026-10-03). Every reader of this is the SERVER side
+         *  of a client's socket, and RFC 6455 §5.1 requires a client to mask every frame — an
+         *  unmasked one is not a browser, the app or the VibeIQ bridge (all mask), so it is closed.
+         *  ★ And a FRAGMENT (FIN clear, or a continuation opcode) was handed up as if it were a
+         *    whole message: half a JSON command parsed on its own, and a continuation frame (opcode
+         *    0) fell through every handler. No client of ours fragments — browsers, OkHttp and
+         *    SocketRocket send a small text message as one frame, and the bridge writes FIN on
+         *    every frame (ws.go) — so rather than reassemble for nobody, a fragmented message
+         *    closes the socket. */
+        if (!masked || !(h[0] & 0x80) || opcode == 0x0) {
+            LOGI("websocket: %s frame from %s refused — closing",
+                 !masked ? "unmasked" : "fragmented", s->peerAddress().c_str());
+            return -1;
+        }
         if (len == 126) { uint8_t e[2]; if(!recvN(s,e,2)) return -1; len=(e[0]<<8)|e[1]; }
         else if (len == 127) { uint8_t e[8]; if(!recvN(s,e,8)) return -1; len=0; for(int i=0;i<8;i++) len=(len<<8)|e[i]; }
         /* ★★★ A LENGTH OFF THE WIRE IS NOT AN ALLOCATION SIZE. `len` is up to 2^64-1 from a
@@ -15894,6 +15947,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return false;
     }
 
+    /** ★★★ THE LISTENER PIN, FOR HTTP ROUTES THAT SHOW WHAT THE RADIO IS DOING (audit 2026-10-03).
+     *  With a PIN set, the sockets were closed to strangers but the spectrogram, the bookmarks,
+     *  the station list, the location, the DAB slide and the conditions page were not — so
+     *  everything a PIN is there to keep private could be read without it. This is the SAME gate
+     *  as the socket (vsAuthOk: master or radio PIN, admin above both, loopback exempt, the same
+     *  backoff), with one difference: a request carrying NO credential is refused WITHOUT being
+     *  counted. A landing page or an older client fetches these before it has a PIN; scoring
+     *  those as wrong guesses would lock the listener out of the socket with the right one.
+     *  ★ An open server (no PIN) stays open — this returns true before reading anything. */
+    bool vsPinHttpOk(const std::shared_ptr<net::Socket>& sock, const std::string& reqLine) {
+        { std::lock_guard<std::mutex> lk(g_vsMtx);
+          if (g_vsSecret.empty() && g_vsRadioSecret.empty()) return true; }
+        if (isLoopback(sock->peerAddress())) return true;
+        const bool offered =
+               (!queryParam(reqLine, "vs_nonce").empty() && !queryParam(reqLine, "vs_auth").empty())
+            || (!queryParam(reqLine, "vs_admin_nonce").empty() && !queryParam(reqLine, "vs_admin_auth").empty())
+            || !queryParam(reqLine, "vs_admin_ticket").empty();
+        if (offered) return vsAuthOk(sock, reqLine);
+        sock->sendstr("HTTP/1.1 401 Unauthorized\r\nAccess-Control-Allow-Origin: *\r\n"
+                      "Connection: close\r\nContent-Length: 0\r\n\r\n");
+        return false;
+    }
+
     void handleConnection(std::shared_ptr<net::Socket> sock) {
         vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
@@ -16229,9 +16305,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
 
-        bool wsSpec  = reqLine.find("/ws/user-spectrum") != std::string::npos;
-        bool wsAudio = reqLine.find("/ws/audio") != std::string::npos;
-        bool wsDx    = reqLine.find("/ws/dxcluster") != std::string::npos;
+        /* ★★★ ROUTES MATCH THE PATH, NOT A SUBSTRING ANYWHERE IN THE REQUEST LINE (audit 2026-10-03).
+         *  These were `reqLine.find("/ws/audio") != npos`, so `GET /setup?x=/ws/audio` — or any path
+         *  that merely CONTAINED a route — was answered by the WebSocket handler, the ticket minter
+         *  or the PIN pre-flight. The same fault already bit once (/connection, below). The path
+         *  is cut out ONCE here, query and fragment stripped, after the /r/<serial> prefix has been
+         *  removed above, and the routes in this block compare against it exactly.
+         *  ★ The later `rfind("GET /x", 0)` routes are anchored at the start of the line already,
+         *    so a query cannot reach them; they are left as they are. */
+        const std::string reqPath = [&reqLine]() -> std::string {
+            const size_t a = reqLine.find(' ');
+            if (a == std::string::npos) return std::string();
+            size_t b = reqLine.find(' ', a + 1);
+            if (b == std::string::npos) b = reqLine.size();
+            std::string p = reqLine.substr(a + 1, b - a - 1);
+            const size_t q = p.find_first_of("?#");
+            if (q != std::string::npos) p.resize(q);
+            return p;
+        }();
+        bool wsSpec  = reqPath == "/ws/user-spectrum";
+        bool wsAudio = reqPath == "/ws/audio";
+        bool wsDx    = reqPath == "/ws/dxcluster";
 
         // VibeServer PIN pre-flight: the client fetches a nonce here, computes
         // HMAC(pin, nonce), then opens the WS with ?vs_nonce=&vs_auth=. When no
@@ -16244,7 +16338,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ Getting a ticket requires being admin ALREADY — adminOkFor() applies the same
         //    handshake, lockout and empty-secret rules as every other admin route. This mints a
         //    lease on that proof; it never creates it.
-        if (reqLine.find("/vibeserver/admin-ticket") != std::string::npos) {
+        if (reqPath == "/vibeserver/admin-ticket") {
             std::string secret;
             { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
             if (secret.empty()) {
@@ -16256,9 +16350,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LOGI("admin ticket refused for %s", sock->peerAddress().c_str());
                 sock->close(); return;
             }
-            const std::string ticket = vsMintAdminTicket();
+            /* ★★★ WHERE DOES THIS CHAIN START (audit 2026-10-03)? A PASSWORD proof starts a fresh
+             *  one, now. A TICKET proof continues the presented ticket's chain — same origin — so
+             *  renewing cannot outlive vibeadmin::kTicketMaxLifeSec from the password, however
+             *  often it is done. The password is checked FIRST so a client sending both (an app
+             *  that has just re-typed it) is rewarded with a fresh chain, not a dying one. */
+            const int64_t nowE = vsNowEpoch();
+            int64_t origin = 0;
+            {
+                const std::string n = queryParam(reqLine, "vs_admin_nonce");
+                const std::string a = queryParam(reqLine, "vs_admin_auth");
+                if (!n.empty() && !a.empty() && g_vsAuthState.verify(secret, n, a)) origin = nowE;
+                vibeadmin::TicketInfo ti;
+                if (!origin && vsTicketOk(queryParam(reqLine, "vs_admin_ticket"), &ti)) origin = ti.origin;
+            }
+            // ★ adminOkFor has already required one of the two, so origin 0 should be unreachable —
+            //   but if it ever is, say no rather than mint a chain from nothing.
+            if (origin <= 0 || nowE - origin >= vibeadmin::kTicketMaxLifeSec) {
+                sock->sendstr("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                LOGI("admin ticket renewal refused for %s — the session is past its absolute lifetime",
+                     sock->peerAddress().c_str());
+                sock->close(); return;
+            }
+            const std::string ticket = vsMintAdminTicket(origin);
+            // ★ The ttl is what THIS ticket has left — clamped near the end of a chain — so the
+            //   clients schedule their renewal against the truth rather than a fixed ten minutes.
+            int64_t ttl = std::min<int64_t>(vibeadmin::kTicketTtlSec,
+                                            origin + vibeadmin::kTicketMaxLifeSec - nowE);
+            if (ttl < 0) ttl = 0;
             const std::string body = "{\"ticket\":\"" + ticket + "\",\"ttl\":"
-                                   + std::to_string(vibeadmin::kTicketTtlSec) + "}";
+                                   + std::to_string(ttl) + "}";
             // ★ no-store: a cached admin ticket in a shared proxy would outlive the tab it was
             //   minted for, which is the one thing a short lease is meant to prevent.
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -16268,7 +16389,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sock->close(); return;
         }
 
-        if (reqLine.find("/vibeserver/auth/verify") != std::string::npos) {
+        if (reqPath == "/vibeserver/auth/verify") {
             /* ★★★ A CHEAP WAY TO ASK "DOES THIS PIN FIT?" — 200 or 401, nothing else.
              *  Without it the only thing that exercises the PIN gate is a WebSocket upgrade, so a
              *  client wanting to test a PIN had to open a spectrum socket and close it again. On a
@@ -16287,7 +16408,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close(); return;
         }
-        if (reqLine.find("/vibeserver/auth") != std::string::npos) {
+        if (reqPath == "/vibeserver/auth") {
             /* ★★★ EITHER PIN MAKES THIS RADIO "REQUIRED". This read the master secret alone, so a
              *  radio locked by its OWN PIN answered required:false — and a client that believes a
              *  radio is open sends no credential, gets refused at the socket, and has nothing on
@@ -16323,7 +16444,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
 
-        if (reqLine.find("/ws/iq") != std::string::npos && !wsKey.empty()) {
+        if (reqPath == "/ws/iq" && !wsKey.empty()) {
             // ★ The raw IQ stream over a WebSocket, for the tunnel. The TOKEN is the credential —
             //   minted with the session's IQ out, dies with it. No PIN pre-flight: the token proves
             //   a session that already passed it.
@@ -16335,7 +16456,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // reach the port could attach decoders and start the FT8 engine without
             // the PIN — burning the host's CPU on an unattended (solar) server.
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
-            acceptDxcluster(sock, wsKey, queryParam(reqLine, "user_session_id"));
+            acceptDxcluster(sock, wsKey, vsSessionIdOf(reqLine));
         } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
             // FFT/bin lever: a spectrum client may ask for fewer output bins (?bins=N) to shrink each
@@ -16375,7 +16496,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sock->close(); return;
             }
             compatRecord(wsAudio ? "ws-audio" : "ws-spectrum", reqLine, userAgent);
-            acceptWs(sock, wsKey, wsAudio, queryParam(reqLine, "user_session_id"),
+            acceptWs(sock, wsKey, wsAudio, vsSessionIdOf(reqLine),
                      // ★★★ ON A SHARED DIAL, OPUS IS NOT A REQUEST — IT IS THE STREAM. One encode
                      //     is fanned out to everybody, so an older client asking for raw would
                      //     otherwise re-cut what every other listener is receiving (and cost the
@@ -16414,8 +16535,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    preflight, so the admin connection log returned {"allowed":true} and looked, from
         //    outside, like an unauthenticated endpoint leaking. A substring match against a whole
         //    request line is a route that grows new meanings every time somebody adds a URL.
-        } else if (reqLine.find("/connection ") != std::string::npos ||
-                   reqLine.find("/connection?") != std::string::npos) {
+        } else if (reqPath == "/connection") {
             // Preflight for a manually-added server (the phone/web asks before opening sockets).
             // Report occupancy HERE so a full server says "in use, try again later" up front,
             // instead of the client opening a socket only to be refused with type:"busy". A
@@ -16430,7 +16550,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ The id must come from the QUERY STRING: only the request line is
             // available here, so an id sent in the POST body cannot be seen. Old
             // clients send nothing, and fall back to the previous behaviour.
-            const std::string me = queryParam(reqLine, "user_session_id");
+            const std::string me = vsSessionIdOf(reqLine);
             compatRecord("preflight", reqLine, userAgent);
             // ★★★ ROOM, NOT OCCUPANCY. This asked "is somebody else here", which is the right
             //     question for a one-at-a-time receiver and the wrong one for a shared dial: with
@@ -16528,6 +16648,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Deliberately NOT admin-gated: it is the public face of the receiver, and it shows
         //   nothing a listener could not see by watching the waterfall for a day.
         } else if (reqLine.rfind("GET /vibeserver/spectrogram", 0) == 0) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ PIN-gated when a PIN is set — see vsPinHttpOk (audit 2026-10-03)
             vsNoteVisitor(sock->peerAddress(),    // the page refreshes this while it is open
                           vsViaOf(sock->peerAddress(), cfWorkerHeader, vibeViaHeader));
             // ★★ The caller says how big its canvas is; we downsample to fit. Sending the full
@@ -17370,6 +17491,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /location", 0) == 0) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ PIN-gated when a PIN is set — see vsPinHttpOk (audit 2026-10-03)
             // The RECEIVER's coarse position (or a city the host picked). Clients
             // use it for spot distances, map centring and the ITU region — all of
             // which are properties of the ANTENNA, not the listener.
@@ -17382,6 +17504,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /vibeserver/conditions", 0) == 0) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ PIN-gated when a PIN is set — see vsPinHttpOk (audit 2026-10-03)
             // ★★ BOTH HALVES IN ONE REPLY, because the whole point is the comparison: what the
             //    solar numbers SUGGEST beside what this receiver can actually HEAR. Two endpoints
             //    would let a page render half of it and imply the other half agrees.
@@ -17420,13 +17543,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /vibeserver/dabmot", 0) == 0) {
-            /* ★ Any complete object of the multiplex's MOT carousel, by content name. */
+            /* ★ Any complete object of the multiplex's MOT carousel, by content name.
+             *  ★★ nosniff on every air-sourced body here, dablogoair and dabslide (audit 2026-10-03):
+             *     the BYTES are whatever a transmitter sent, served from the receiver's origin, and
+             *     a browser that sniffs an "image" into HTML would run a stranger's page there. */
             const std::string name = urlDecode(queryParam(reqLine, "name"));
             std::vector<uint8_t> bytes; int ct = -1, st = -1;
             if (!name.empty() && g_dab.carouselObject(name, bytes, ct, st)) {
                 const std::string mime = ct == 2 && st == 1 ? "image/jpeg" : ct == 2 && st == 3 ? "image/png" : "application/octet-stream";
                 std::string body(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\nAccess-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             }
@@ -17461,13 +17587,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (!ok) mime = "application/octet-stream";
                 }
                 sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + mime + "\r\n"
-                              "Access-Control-Allow-Origin: *\r\nCache-Control: max-age=600\r\n"
+                              "Access-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: max-age=600\r\n"
                               "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
             } else {
                 sock->sendstr("HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
             }
             sock->close();
         } else if (reqLine.rfind("GET /vibeserver/dabslide", 0) == 0) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ PIN-gated when a PIN is set — see vsPinHttpOk (audit 2026-10-03)
             /* ★ The slideshow image the playing service is sending over the air (TS 101 499) —
              *  the station logo or now-playing artwork, off the multiplex itself. */
             /* ★ With ?sid= this answers the KEPT picture for that service, from memory or the
@@ -17482,7 +17609,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (haveSlide && !sl.bytes.empty()) {
                 std::string body(reinterpret_cast<const char*>(sl.bytes.data()), sl.bytes.size());
                 sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: " + sl.mime + "\r\n"
-                              "Access-Control-Allow-Origin: *\r\nCache-Control: "
+                              "Access-Control-Allow-Origin: *\r\nX-Content-Type-Options: nosniff\r\nCache-Control: "
                               + (slideSid.empty() ? "no-cache" : "max-age=60") + "\r\n"
                               "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
             } else {
@@ -17678,6 +17805,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sock->close(); return;
 
         } else if (reqLine.rfind("GET /stations", 0) == 0) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ PIN-gated when a PIN is set — see vsPinHttpOk (audit 2026-10-03)
             // Station list for the web client's search: the EiBi schedule the APP
             // already downloaded and cached, handed to the shim when Server mode
             // starts (setStationsJson).
@@ -17831,6 +17959,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
         } else if (reqLine.rfind("GET /bookmarks", 0) == 0) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ PIN-gated when a PIN is set — see vsPinHttpOk (audit 2026-10-03)
             // Stations this receiver has actually HEARD, learned from RDS, plus any
             // saved by hand. Expired entries are pruned on the way out (see bmPrune).
             std::string body = bmJson();
@@ -17968,9 +18097,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★★ A CONTENT SECURITY POLICY — bounding where the page may fetch, connect, frame
              *  and post, on top of the XSS fixes themselves. It carried a script nonce for one
              *  afternoon; see the note below the policy for why that came out again.
-             *  ★★ What the page genuinely needs from elsewhere, and nothing more: Leaflet from
-             *     unpkg for the map, OpenStreetMap tiles, station logos (which are arbitrary https
-             *     hosts by nature), and websockets back to this server. `style-src` keeps
+             *  ★★ What the page genuinely needs from elsewhere, and nothing more: OpenStreetMap
+             *     tiles, station logos (which are arbitrary https hosts by nature), the portable
+             *     settings store, and websockets back to this server.
+             *  ★★ NO THIRD-PARTY SCRIPT OR STYLE (audit 2026-10-03). Leaflet used to come from
+             *     unpkg.com, unpinned, onto the origin where the admin ticket lives; it is served
+             *     from /vs/ now (web/client/src/leafletAsset.ts), so unpkg is gone from script-src
+             *     and style-src — the page can only run script this server shipped. `style-src` keeps
              *     'unsafe-inline' because the page styles inline throughout and injected CSS is a
              *     far smaller prize than injected script.
              *  ★ frame-ancestors/base-uri/object-src/form-action cost nothing here — the page has
@@ -18000,8 +18133,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  that does not say so — with no ordinary console violation, which is exactly how
                  *  it hid: zero reported violations and a client stuck on the splash (measured
                  *  headless, 2026-09-10). blob: is for the AudioWorklet, which is addModule'd from
-                 *  a Blob URL on a secure origin. Neither weakens the injection defence: an
-                 *  attacker still cannot run inline script without the nonce. */
+                 *  a Blob URL on a secure origin.
+                 *  ★★ THERE IS NO NONCE (corrected, audit 2026-10-03 — this note used to claim one).
+                 *     script-src carries 'unsafe-inline', so this policy does NOT stop an injected
+                 *     inline script; it stops script from ANYWHERE ELSE. The defence against
+                 *     injection is the escaping at the source (see the nonce note above). */
                 /* ★★★ 'unsafe-eval' IS GONE (2026-09-30). It was forced by our own build: the page
                  *  carried its JavaScript as base64 and eval()d the lot, so a policy without it
                  *  could not run the page at all. The script is a real file now (/vs/, see the route
@@ -18010,8 +18146,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  longer has to allow one. A future bug that feeds attacker text into an eval sink
                  *  is refused by the browser rather than run.
                  *  ★ 'wasm-unsafe-eval' stays for the Opus decoder; blob: for the AudioWorklet. */
-                "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://unpkg.com; "
-                "style-src 'self' 'unsafe-inline' https://unpkg.com; "
+                "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; "
+                "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data: blob: https: http:; "
                 "media-src 'self' data: blob:; "
                 "font-src 'self' data:; "
@@ -18230,6 +18366,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *   ordinary cooldown, which the clients already render honestly, and the log
                  *   names it. Loopback and admins are exempt exactly as the cooldown is. */
                 {
+                    /* ★ BOUNDED (audit 2026-10-03). A key was created for every address that ever
+                     *  connected and never removed, so the map only grew. Past 256 addresses the
+                     *  ones with nothing inside the last minute are dropped (an empty window counts
+                     *  for nothing), and so are cooldowns that have run out. */
+                    if (connectStorm.size() >= 256) {
+                        for (auto it = connectStorm.begin(); it != connectStorm.end();)
+                            it = (it->second.empty() || it->second.back() < now - 60.0) ? connectStorm.erase(it) : std::next(it);
+                        for (auto it = cooldownUntil.begin(); it != cooldownUntil.end();)
+                            it = (it->second <= now) ? cooldownUntil.erase(it) : std::next(it);
+                    }
                     auto& hits = connectStorm[sock->peerAddress()];
                     hits.push_back(now);
                     while (!hits.empty() && hits.front() < now - 60.0) hits.pop_front();
@@ -19211,12 +19357,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (op == 0xA) continue;                          // pong — liveness only for legacy
             if (op == 0x1) {
                 lastApp = lastRx;
-                if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sessionLastAppMs[session] = lastApp; }
+                if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx);
+                    /* ★ BOUNDED (audit 2026-10-03): a stamp older than twice the liveness window
+                     *  decides nothing, so past 1024 sessions those are swept here; the close
+                     *  below removes a session's stamp when its last socket goes. */
+                    if (sessionLastAppMs.size() >= 1024 && !sessionLastAppMs.count(session))
+                        for (auto it = sessionLastAppMs.begin(); it != sessionLastAppMs.end();)
+                            it = (lastApp - it->second > 2 * kAppLivenessMs) ? sessionLastAppMs.erase(it) : std::next(it);
+                    sessionLastAppMs[session] = lastApp; }
                 if (appMsgsSeen < 12) { ++appMsgsSeen; compatRecord(isAudio ? "msg-audio" : "msg-spectrum", payload, "", ",\"session\":\"" + session.substr(0, 8) + "\""); }
                 handleControl(sock, payload);
             }
         }
-        { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get()); }
+        { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get());
+          /* ★★ AND THE SESSION'S LIVENESS STAMP, WHEN THIS WAS ITS LAST SOCKET (audit 2026-10-03).
+           *  It was written on every text frame and never erased, so every session that ever spoke
+           *  stayed in the map for the life of the process. Kept while a sibling socket of the
+           *  same session is still open — that one is still reading it. */
+          if (!session.empty()) {
+              bool sibling = false;
+              for (const auto& kv : sockSession)
+                  if (kv.first != sock.get() && kv.second == session) { sibling = true; break; }
+              if (!sibling) sessionLastAppMs.erase(session);
+          } }
         bool bothGone = false;
         bool rdsxGone = false;            // ★ an Advanced RDS subscriber left — recompute OUTSIDE clientMtx
         /* ★★★ THE CONNECTION LOG IS WRITTEN AFTER clientMtx IS RELEASED, NEVER UNDER IT.
@@ -19924,10 +20087,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         iq->writeTh = std::thread([this, iq]{ iqWriteLoop(iq); });
         if (iq->lis) {
             std::shared_ptr<net::Socket> spec = sock;
-            iq->acceptTh = std::thread([this, iq, spec]{
+            /* ★★★ ONLY THE ADDRESS THAT ASKED FOR IT (audit 2026-10-03). The port binds 0.0.0.0 on a
+             *  LAN server, and the first connector won — so anyone on the network who scanned
+             *  50001-50100 while a stream was on could take it, retune the radio through it, and
+             *  lock the owner's own SDR++ out. rtl_tcp has no way to carry a token (a client opens
+             *  the socket and reads), so the credential is the requester's ADDRESS: the consumer
+             *  must connect from the same IP as the session that turned IQ out on. Loopback is
+             *  accepted only when the requester was itself on this host.
+             *  ★ Trade-off: asking from one machine (a phone) and consuming on another (a PC) is now
+             *    refused — turn IQ out on from the machine that will read it. */
+            auto bare = [](std::string a) {
+                if (a.rfind("::ffff:", 0) == 0) a = a.substr(7);
+                return a;
+            };
+            const std::string want = bare(peer);
+            iq->acceptTh = std::thread([this, iq, spec, want, bare]{
                 while (serverRunning.load() && iq->run.load()) {
                     auto conn = iq->lis->accept(nullptr, 1000);
                     if (!conn) continue;
+                    const std::string from = bare(conn->peerAddress());
+                    if (from != want && !(isLoopback(from) && isLoopback(want))) {
+                        LOGI("raw IQ out: refused a consumer from %s — the stream was requested by %s",
+                             from.c_str(), want.c_str());
+                        conn->close(); continue;
+                    }
                     if (!iq->claim(conn, false)) { conn->close(); continue; }   // ★ one consumer, atomically
                     iqSendHeader(conn);
                     LOGI("raw IQ out: consumer connected from %s at %d Hz", conn->peerAddress().c_str(), iq->rate);
@@ -19962,6 +20145,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  as 5-byte binary frames or `iqtune` text frames from the VibeIQ bridge. */
     void acceptIqWs(std::shared_ptr<net::Socket> sock, const std::string& wsKey, const std::string& tok) {
         std::shared_ptr<IqOut> iq; std::shared_ptr<net::Socket> spec;
+        /* ★★ GUESSING IS SLOW, AND THE COMPARE TELLS NOTHING (audit 2026-10-03). The public pairing
+         *  CODE is six characters typed by a person — ~10^9, enumerable at line rate with no
+         *  backoff — and the compare was `==`, which returns at the first differing byte. Now an
+         *  address that keeps missing is locked out by the same backoff as a wrong PIN, and every
+         *  candidate is compared in constant time.
+         *  ★★ ITS OWN LEDGER, not g_vsAuthState's. The VibeIQ bridge retries a dead token every
+         *     15 s for as long as it runs (bridge.go), from the listener's own PC — sharing the PIN
+         *     ledger would have locked that listener out of the RADIO with a correct PIN. Same
+         *     class, same backoff, separate counts. */
+        const std::string ip = sock->peerAddress();
+        if (g_vsIqAuthState.blocked(ip)) {
+            sock->sendstr("HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+            sock->close(); return;
+        }
         {
             std::lock_guard<std::mutex> lk(clientMtx);
             // ★ The token, or the pairing CODE on a public session: a page that is not on a
@@ -19969,11 +20166,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   address and the code alone (see the web client's note). The code is only ever
             //   issued for public sessions, so it is only accepted for them.
             auto matches = [&](const std::shared_ptr<IqOut>& q) {
-                return q && !tok.empty() && (q->token == tok || (q->pub && !q->code.empty() && q->code == tok)); };
+                if (!q || tok.empty()) return false;
+                const bool byTok  = ctEqual(q->token, tok);
+                const bool byCode = q->pub && !q->code.empty() && ctEqual(q->code, tok);
+                return byTok || byCode; };
             for (auto& kv : clientDsp) if (matches(kv.second->iq)) { iq = kv.second->iq; spec = kv.second->spec; break; }
         }
-        if (!iq) { std::lock_guard<std::mutex> lk(iqDirectMtx); if (iqDirect && !tok.empty() && (iqDirect->token == tok || (iqDirect->pub && iqDirect->code == tok))) { iq = iqDirect; spec = iqDirectSock; } }
-        if (!iq) { sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
+        if (!iq) { std::lock_guard<std::mutex> lk(iqDirectMtx);
+                   if (iqDirect && !tok.empty()
+                       && (ctEqual(iqDirect->token, tok) || (iqDirect->pub && !iqDirect->code.empty() && ctEqual(iqDirect->code, tok)))) {
+                       iq = iqDirect; spec = iqDirectSock; } }
+        if (!iq) {
+            // ★ An empty token is not a guess (a bare probe), so it does not count — same rule as
+            //   the admin proof: only a real attempt feeds the backoff.
+            if (!tok.empty()) g_vsIqAuthState.recordFail(ip);
+            sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return;
+        }
+        g_vsIqAuthState.recordOk(ip);
         if (iq->hasConsumer()) { sock->sendstr("HTTP/1.1 409 Conflict\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"); sock->close(); return; }
         std::string acc = wsKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         uint8_t digest[20]; Sha1().hash((const uint8_t*)acc.data(), acc.size(), digest);
