@@ -156,9 +156,11 @@ export default function ChassisPlate({ plate, radius }: { plate: PlateTokens; ra
 const GlossCanvas = React.memo(function GlossCanvas({ w, h, r, trim, squareBottom, sv }: {
   w: number; h: number; r: number; trim: boolean; squareBottom: boolean; sv: SharedValue<number>;
 }) {
-  // ★ The reflection follows the plate's light, 8° off it as it always was (104 → today's 112).
-  const rStart = useDerivedValue(() => { const p = cssAnglePts(glossAngle(sv.value), w, h); return { x: p.sx, y: p.sy }; }, [w, h]);
-  const rEnd   = useDerivedValue(() => { const p = cssAnglePts(glossAngle(sv.value), w, h); return { x: p.ex, y: p.ey }; }, [w, h]);
+  /* ★★ THE REFLECTION IS A FIXED DIAGONAL (today's 112°), NOT THE LIGHT ANGLE + 8°. Following the light turned it
+   *  into a near-horizontal bar straight through the frequency digits under TOP, and even as a diagonal its hard
+   *  bright edge was "a bit distracting" — the thing Stuart noticed most on the black skin (2026-10-03). A glossy
+   *  panel's reflection is the ROOM, not the lamp; a fixed soft diagonal reads as acrylic without drawing the eye. */
+  const p0 = cssAnglePts(glossAngle(104), w, h);
   const H = h + (trim ? 4 : 0);
   // Square bottom corners: round a box that runs r past the bottom, then only fill down to h.
   const shape = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h + (squareBottom ? r : 0)), r, r);
@@ -174,11 +176,11 @@ const GlossCanvas = React.memo(function GlossCanvas({ w, h, r, trim, squareBotto
         <Rect x={0} y={0} width={w} height={h}>
           <LinearGradient start={vec(0, 0)} end={vec(0, h)} colors={['#111214', '#060607', '#0b0b0d']} positions={[0, 0.55, 1]} />
         </Rect>
-        {/* The hard diagonal reflection, 38–56 %, α .10 → .035. */}
+        {/* The diagonal reflection: soft-edged, α .045 → .018 (was a hard-edged .10 bar). */}
         <Rect x={0} y={0} width={w} height={h}>
-          <LinearGradient start={rStart} end={rEnd}
-            colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.10)', 'rgba(255,255,255,0.035)', 'rgba(255,255,255,0)']}
-            positions={[0, 0.38, 0.385, 0.56, 0.565]} />
+          <LinearGradient start={vec(p0.sx, p0.sy)} end={vec(p0.ex, p0.ey)}
+            colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0)', 'rgba(255,255,255,0.045)', 'rgba(255,255,255,0.018)', 'rgba(255,255,255,0)']}
+            positions={[0, 0.30, 0.42, 0.56, 0.70]} />
         </Rect>
         <Line p1={vec(0, 0.5)} p2={vec(w, 0.5)} color="rgba(255,255,255,0.28)" strokeWidth={1} />
       </Group>
