@@ -26,7 +26,9 @@ cp -R "$CPP/sdr-kit/$ABI/include/." "$KIT/include/"      # same headers as the m
 
 echo "==> librtlsdr 797f814 (2.0.3, Blog V4L) + the fd patch @ android-$API"
 git clone --quiet https://github.com/osmocom/rtl-sdr.git "$WORK/rtl"
-git -C "$WORK/rtl" checkout --quiet 797f814
+RTL_SHA=797f8143266d983c56d8f35d2d442527529dd8a5        # 797f814 in full — same pin as vibeserver/mac/build-deps.sh
+git -C "$WORK/rtl" checkout --quiet "$RTL_SHA"
+[ "$(git -C "$WORK/rtl" rev-parse HEAD)" = "$RTL_SHA" ] || { echo "!! rtl-sdr is not at $RTL_SHA"; exit 1; }
 git -C "$WORK/rtl" apply "$CPP/sdr-kit/librtlsdr-android.patch"
 cmake -S "$WORK/rtl" -B "$WORK/rtlb" -DCMAKE_TOOLCHAIN_FILE="$TC" -DANDROID_ABI=$ABI \
   -DANDROID_PLATFORM=android-$API -DCMAKE_BUILD_TYPE=Release \
@@ -36,7 +38,16 @@ cmake --build "$WORK/rtlb" --target rtlsdr -j8 >/dev/null
 cp "$WORK/rtlb/src/librtlsdr.so" "$KIT/lib/"
 
 echo "==> opus 1.5.2 @ android-$API"
-curl -sL "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz" | tar -xz -C "$WORK"
+# ★★ PINNED SHA-256 (audit 2026-10-03). The tarball was `curl -sL` with no -f and no check, so an
+#    error page or a swapped file went straight into a library we ship. Value = xiph's published
+#    SHA256SUMS for opus-1.5.2.tar.gz (also Homebrew's pin for 1.5.2) — written in offline, so if it
+#    ever refuses, compare the "got" hash with https://downloads.xiph.org/releases/opus/SHA256SUMS.txt
+#    before changing it. Same pattern as vibeserver/mac/build-deps.sh fetch().
+OPUS_SHA256="65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1"   # opus-1.5.2.tar.gz
+curl -fsSL --retry 3 "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz" -o "$WORK/opus.tgz"
+GOT="$(shasum -a 256 "$WORK/opus.tgz" | awk '{print $1}')"
+[ "$GOT" = "$OPUS_SHA256" ] || { echo "!! SHA-256 MISMATCH for opus-1.5.2.tar.gz: got $GOT, pinned $OPUS_SHA256 — refusing"; exit 1; }
+tar -xzf "$WORK/opus.tgz" -C "$WORK"
 cmake -S "$WORK/opus-1.5.2" -B "$WORK/opusb" -DCMAKE_TOOLCHAIN_FILE="$TC" -DANDROID_ABI=$ABI \
   -DANDROID_PLATFORM=android-$API -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
   -DOPUS_BUILD_TESTING=OFF -DOPUS_BUILD_PROGRAMS=OFF >/dev/null

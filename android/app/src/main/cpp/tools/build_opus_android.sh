@@ -14,6 +14,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CPP="$(cd "$HERE/.." && pwd)"                 # android/app/src/main/cpp
 OUT="$CPP/opus"
 VER="1.5.2"
+OPUS_SHA256="65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1"   # opus-1.5.2.tar.gz
 ABIS=("arm64-v8a" "armeabi-v7a")
 API=24                                         # minSdk 24 (see memory: minSdk has ALWAYS been 24)
 
@@ -23,7 +24,14 @@ TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 echo "==> Fetching opus $VER source"
-curl -sL "https://downloads.xiph.org/releases/opus/opus-$VER.tar.gz" -o "$WORK/opus.tgz"
+# ★★ PINNED SHA-256 (audit 2026-10-03). The tarball was `curl -sL` with no -f and no check, so an
+#    error page or a swapped file went straight into a library we ship. Value = xiph's published
+#    SHA256SUMS for opus-1.5.2.tar.gz (also Homebrew's pin for 1.5.2) — written in offline, so if it
+#    ever refuses, compare the "got" hash with https://downloads.xiph.org/releases/opus/SHA256SUMS.txt
+#    before changing it. Same pattern as vibeserver/mac/build-deps.sh fetch().
+curl -fsSL --retry 3 "https://downloads.xiph.org/releases/opus/opus-$VER.tar.gz" -o "$WORK/opus.tgz"
+GOT="$(shasum -a 256 "$WORK/opus.tgz" | awk '{print $1}')"
+[ "$GOT" = "$OPUS_SHA256" ] || { echo "!! SHA-256 MISMATCH for opus-$VER.tar.gz: got $GOT, pinned $OPUS_SHA256 — refusing"; exit 1; }
 tar -xzf "$WORK/opus.tgz" -C "$WORK"
 SRC="$WORK/opus-$VER"
 
