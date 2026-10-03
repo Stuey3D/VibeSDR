@@ -1605,10 +1605,33 @@ static std::string bmTrim(const std::string& s) {
     return s.substr(a, b - a + 1);
 }
 
+/* ★★★ A CONTROL CHARACTER WAS NEVER ESCAPED (Stuart, 2026-10-03: "someone cannot enter some weird text
+ *  string that breaks things"). Only " and \ were — so a newline or a NUL in a name (typed by an admin, or
+ *  decoded off the air from a garbled or hostile RDS/DAB label) went into the JSON raw, the list stopped
+ *  parsing, and every listener's bookmarks vanished. Control characters become a space here as the last
+ *  line of defence; bmClean() keeps them out of the store in the first place. */
 static std::string bmEsc(const std::string& n) {
     std::string e;
-    for (char c : n) { if (c == '"' || c == '\\') e += '\\'; e += c; }
+    for (char c : n) {
+        if ((unsigned char)c < 0x20 || c == 0x7f) { e += ' '; continue; }
+        if (c == '"' || c == '\\') e += '\\';
+        e += c;
+    }
     return e;
+}
+
+/** ★ What a stored name or mode may be: no control characters, trimmed, and bounded — a station name is a
+ *  few dozen characters, never a megabyte. Cut on a UTF-8 boundary so a capped name stays valid text. */
+static std::string bmClean(const std::string& in, size_t maxBytes) {
+    std::string o;
+    for (char c : in) o += ((unsigned char)c < 0x20 || c == 0x7f) ? ' ' : c;
+    o = bmTrim(o);
+    if (o.size() > maxBytes) {
+        size_t cut = maxBytes;
+        while (cut > 0 && ((unsigned char)o[cut] & 0xC0) == 0x80) --cut;   // never split a multi-byte char
+        o = bmTrim(o.substr(0, cut));
+    }
+    return o;
 }
 
 /** ★★★ SNAP A LEARNED FM STATION TO ITS CHANNEL. The shared key is 1 kHz — rightly, because
@@ -1633,7 +1656,7 @@ static double bmSnapFm(double hz) {
 static void bmTryRadioDnsName(long long key, int pi, int ecc, double hz);
 
 static void bmLearn(double hzRaw, int pi, const std::string& psRaw, int ecc) {
-    const std::string ps = bmTrim(psRaw);
+    const std::string ps = bmClean(psRaw, 64);   // ★ off the air: anything a transmitter sends
     const double hz = bmSnapFm(hzRaw);
     if (hz <= 0 || pi <= 0) return;          // no PI = not locked on to anything
     const long long key = bmKey(hz);
@@ -1799,7 +1822,7 @@ static void bmLearn(double hzRaw, int pi, const std::string& psRaw, int ecc) {
  *  is needed: a DAB label arrives CRC-checked, so one reading is the truth.
  *  ★ A bookmark the owner saved by hand at the same identity is left alone. */
 static void bmLearnDab(double hz, int eid, int ecc, uint32_t sid, const std::string& label) {
-    const std::string n = bmTrim(label);
+    const std::string n = bmClean(label, 64);   // ★ off the air, like an RDS PS
     if (n.empty() || hz <= 0 || sid == 0) return;
     std::lock_guard<std::mutex> lk(g_bmMtx);
     const long long key = bmKeyFor(hz, int(sid));
@@ -1822,14 +1845,17 @@ static void bmLearnDab(double hz, int eid, int ecc, uint32_t sid, const std::str
 
 static void bmAddManual(double hz, const std::string& name, const std::string& mode,
                         bool hasBw = false, int bwLo = 0, int bwHi = 0) {
-    const std::string n = bmTrim(name);
+    const std::string n = bmClean(name, 64);
     if (n.empty() || hz <= 0) return;
+    // ★ A mode is a demodulator name (am, usb, wfm, dab…): lower-case letters and digits, a few of them.
+    std::string md;
+    for (char c : mode) if (md.size() < 12 && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) md += c;
     std::lock_guard<std::mutex> lk(g_bmMtx);
     LearnedBm b;
     b.name = n;
     b.pi = -1;
     b.hz = (long long)llround(hz);
-    b.mode = mode.empty() ? "am" : mode;
+    b.mode = md.empty() ? "am" : md;
     // ★ Only a real passband: both edges, low below high. Anything else is "use the mode default".
     if (hasBw && bwHi > bwLo) { b.hasBw = true; b.bwLo = bwLo; b.bwHi = bwHi; }
     b.lastHeard = (long long)time(nullptr);
@@ -25678,7 +25704,7 @@ static void bmTryRadioDnsName(long long key, int pi, int ecc, double hz) {
     char eccHex[8]; std::snprintf(eccHex, sizeof eccHex, "%02X", (unsigned)(ecc & 0xFF));
     std::thread([fn, key, pi, hz, sPi = std::string(piHex), sEcc = std::string(eccHex)] {
         vibeThreadName("vibe-rdns");
-        const std::string name = bmTrim(fn(sPi, sEcc, hz));
+        const std::string name = bmClean(fn(sPi, sEcc, hz), 64);   // ★ RadioDNS is a network answer: clean it too
         if (name.empty()) return;
         std::lock_guard<std::mutex> lk(g_bmMtx);
         auto it = g_bookmarks.find(key);

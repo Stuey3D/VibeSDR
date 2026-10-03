@@ -1,3 +1,4 @@
+import { cleanText, cleanMode } from '../utils/safeText';
 /**
  * stations.ts — VTS station/bookmark engine + search (skin parity).
  *
@@ -76,9 +77,11 @@ export async function fetchBookmarks(baseUrl: string): Promise<ServerBookmark[]>
     if (!res.ok) throw new Error(`bookmarks HTTP ${res.status}`);
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data?.bookmarks ?? []);
-    return (list as ServerBookmark[]).filter(
-      (b) => b && typeof b.frequency === 'number' && b.frequency > 0 && !!b.name,
-    );
+    // ★ Every name and mode cleaned on the way in (utils/safeText) — a server's text is untrusted.
+    return (list as ServerBookmark[])
+      .filter((b) => b && typeof b.frequency === 'number' && Number.isFinite(b.frequency) && b.frequency > 0)
+      .map((b) => ({ ...b, name: cleanText(b.name), ...(b.mode !== undefined ? { mode: cleanMode(b.mode) || undefined } : {}) }))
+      .filter((b) => !!b.name);
   };
   const results = await Promise.allSettled([one('/api/bookmarks'), one('/bookmarks')]);
   const ok = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<ServerBookmark[]>[];

@@ -1,3 +1,4 @@
+import { cleanText, cleanMode } from '../../../src/utils/safeText';
 /**
  * search.ts — station/bookmark/band search for the web client.
  *
@@ -75,6 +76,16 @@ let bmHost = '';
 /** The auth suffix, so writes carry the PIN. Empty on an open server. */
 let bmAuth = '';
 
+/** ★★★ A SERVER'S LIST IS UNTRUSTED (Stuart, 2026-10-03: "sandbox it all"). Every entry needs a real, finite
+ *  frequency; every name and mode is cleaned on the way in (src/utils/safeText — the app does the same), and an
+ *  entry whose name cleans to nothing is dropped. Nothing downstream ever sees raw server text. */
+function safeList(arr: any[]): any[] {
+  return arr
+    .filter((s: any) => s && typeof s.frequency === 'number' && isFinite(s.frequency) && s.frequency > 0)
+    .map((s: any) => ({ ...s, name: cleanText(s.name), ...(s.mode !== undefined ? { mode: cleanMode(s.mode) || undefined } : {}) }))
+    .filter((s: any) => !!s.name);
+}
+
 export async function loadServerBookmarks(host: string, authSuffix = ''): Promise<number> {
   bmHost = host;
   bmAuth = authSuffix;
@@ -83,7 +94,7 @@ export async function loadServerBookmarks(host: string, authSuffix = ''): Promis
     if (!r.ok) return 0;
     const arr = await r.json();
     serverBookmarks = Array.isArray(arr)
-      ? arr.filter((s: any) => s && s.name && s.frequency)
+      ? safeList(arr)
            .map((s: any) => ({ ...s, source: 'server' as const }))
       : [];
   } catch {
@@ -147,7 +158,7 @@ export async function saveToServer(
     if (!r.ok) return false;
     const arr = await r.json();
     if (Array.isArray(arr)) {
-      serverBookmarks = arr.filter((s: any) => s && s.name && s.frequency)
+      serverBookmarks = safeList(arr)
                            .map((s: any) => ({ ...s, source: 'server' as const }));
     }
     return true;
@@ -166,7 +177,7 @@ export async function removeFromServer(frequency: number, sid?: number): Promise
     if (!r.ok) return false;
     const arr = await r.json();
     if (Array.isArray(arr)) {
-      serverBookmarks = arr.filter((s: any) => s && s.name && s.frequency)
+      serverBookmarks = safeList(arr)
                            .map((s: any) => ({ ...s, source: 'server' as const }));
     }
     return true;
@@ -179,7 +190,7 @@ export async function loadStations(host: string): Promise<number> {
     const r = await fetch(`${httpBase(host)}/stations`, { cache: 'no-store' });
     if (!r.ok) return 0;
     const arr = await r.json();
-    stations = Array.isArray(arr) ? arr.filter(s => s && s.name && s.frequency) : [];
+    stations = Array.isArray(arr) ? safeList(arr) : [];
   } catch {
     stations = [];   // no internet on the phone, or an older shim
   }
