@@ -27,6 +27,7 @@
  */
 import { DAB_BLOCKS } from './dabBlocks';
 import type { DialState } from './dialChat';
+import { cleanText } from '../utils/safeText';
 
 export type ShareKind = 'bookmark' | 'dab';
 
@@ -164,8 +165,8 @@ export function shareSummary(s: ShareOut | SharedStation): string {
 }
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
-const str = (v: unknown, max = 80): string | undefined =>
-  typeof v === 'string' && v.length > 0 ? v.slice(0, max) : undefined;
+// ★ The server's words, but a server is not always ours: control/bidi characters cleaned, length capped.
+const str = (v: unknown, max = 80): string | undefined => cleanText(v, max) || undefined;
 
 /** ★ The server's relayed share -> what this client draws, or null when it is not drawable.
  *  Accepts the pre-2026-10-01 line too (hz + mode, no kind): that is an analogue share with no name. */

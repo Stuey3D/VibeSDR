@@ -199,6 +199,8 @@ if node --no-warnings scripts/test_worklet_defaults.mjs; then pass=$((pass+1)); 
 if node --no-warnings scripts/test_safe_text.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ Untrusted URLs (deep links, directories, a server's landing link) and the map page's literal/path guards.
 if node --no-warnings scripts/test_safe_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ A gzipped spectrum-socket frame cannot inflate past its ceiling (gzip bomb).
+if node --no-warnings scripts/test_bounded_inflate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ The map WebView page parses, for all three kinds (a template-literal page tsc cannot check).
 if node scripts/check-map-overlay.mjs >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ node scripts/check-map-overlay.mjs"; fi
 echo "── image metadata (EXIF / GPS / XMP) ──"

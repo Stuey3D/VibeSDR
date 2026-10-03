@@ -56,7 +56,7 @@
 import type { DabState } from './dabTypes';
 import type { ShareOut } from './chatShare';
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
-import { ungzip } from 'pako';
+import { ungzipToStringCapped } from '../utils/boundedInflate';   // ★ capped: a gzip bomb is dropped, not inflated
 import { VibePowerModule } from '../components/AudioPlayer';
 import { noteUnhandled, noteDecision } from './protocolLog';
 import { guard, guardJson, noteFault, msgKind } from './faultLog';
@@ -84,6 +84,7 @@ const POWERSAVE_FPS = 5;
 
 import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState } from './sdrProtocol';
 import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, clampVibePassband } from './sdrProtocol';
+import { cleanKeepSpacing } from '../utils/cleanLines';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -1508,7 +1509,7 @@ export abstract class VibeServerWsClient {
       //   gzip frame and a handler that chokes on a well-formed message are counted as what they are.
       let msg: Record<string, unknown> | null = null;
       if (!guard('vibe-spec', 'gzip-json', () => {
-        msg = JSON.parse(ungzip(bytes, { to: 'string' })) as Record<string, unknown>;
+        msg = JSON.parse(ungzipToStringCapped(bytes)) as Record<string, unknown>;
       }, `len=${bytes.length}`)) return;
       const m = msg as Record<string, unknown> | null;
       if (!m || typeof m !== 'object') { noteFault('vibe-spec', 'gzip-json', new Error('not an object')); return; }
@@ -2107,8 +2108,9 @@ export abstract class VibeServerWsClient {
     // frequency→pixel mapping (needle, band plan, gestures) is dead.
     // V4 local hardware: FM RDS + stereo → reuse the OWRX metadata display path.
     if (msg.type === 'rds') {
-      const ps = typeof msg.ps === 'string' ? msg.ps.trim() : '';
-      const rt = typeof msg.radiotext === 'string' ? msg.radiotext.trim() : '';
+      // ★ Off-air text: control/bidi characters replaced one-for-one, spacing kept (cleanKeepSpacing).
+      const ps = cleanKeepSpacing(msg.ps, 16).trim();
+      const rt = cleanKeepSpacing(msg.radiotext, 64).trim();
       const stereo = msg.stereo === true;
       // PI (hex) + ECC → station country (for the flag + logo lookup), same as
       // the FM-DX backend. The shim sends pi (int, -1 = none) and ecc (0 = none).

@@ -108,6 +108,11 @@ export interface DabState {
  *   • BOUNDED. 128 characters is longer than any legal DAB label or DLS line (16 / 128), so a
  *     length beyond it is corruption, not content, and it must not be allowed to grow a row.
  *
+ *   • BIDI OVERRIDES AND ZERO-WIDTH PADDING OUT — the same set utils/safeText's cleanText removes
+ *     (U+202A–202E, U+2066–2069, U+200B, U+2060, U+FEFF): a label can reverse the text drawn after it.
+ * ★ NOT folded into cleanText (security pass, 2026-10-03), deliberately: cleanText collapses runs of
+ *   spaces and does not drop LONE surrogates, and this must do the second and must not do the first
+ *   (a DLS line's spacing is the broadcaster's). The removal set is kept identical to cleanText's.
  * ★ Returns '' rather than throwing: a bad label costs its own row, never the panel.
  */
 export function dabSafeText(v: unknown, max = 128): string {
@@ -117,6 +122,8 @@ export function dabSafeText(v: unknown, max = 128): string {
     const c = ch.codePointAt(0) ?? 0;
     if (c >= 0xd800 && c <= 0xdfff) continue;  // lone surrogate (a pair never yields one here)
     if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) { out += ' '; continue; }
+    if ((c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
+        || c === 0x200b || c === 0x2060 || c === 0xfeff) continue;
     out += ch;
     if (out.length >= max) break;
   }

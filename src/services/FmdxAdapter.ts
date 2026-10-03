@@ -19,6 +19,8 @@ import { NativeModules } from 'react-native';
 import { FMDX_TUNE_LO, FMDX_TUNE_HI } from '../constants/fmBand';
 import { USER_AGENT } from '../constants/version';
 import { guard, guardJson, noteFault } from './faultLog';
+import { cleanText } from '../utils/safeText';
+import { cleanKeepSpacing } from '../utils/cleanLines';
 
 const Vibe = NativeModules.VibePowerModule as {
   startFmdxAudio?: (baseUrl: string) => void;
@@ -201,7 +203,7 @@ export class FmdxAdapter implements SDRBackend {
       guardJson('fmdx-chat', e.data, (j) => {
         if (j?.type === 'clientIp') return;
         if (j?.message != null) {
-          this.cb.onChatMessage?.(String(j.nickname ?? '?'), String(j.message));
+          this.cb.onChatMessage?.(cleanText(j.nickname, 32) || '?', cleanText(j.message, 300));
         }
       });
     };
@@ -266,8 +268,9 @@ export class FmdxAdapter implements SDRBackend {
     this.freq = freqHz;
 
     const rtFlag = String(j?.rt_flag ?? '0') === '1';
-    const rt = String((rtFlag ? j?.rt1 : j?.rt0) ?? '').trim();
-    const ps = String(j?.ps ?? '').trim();
+    // ★ Off-air text: control/bidi characters replaced one-for-one, spacing kept (cleanKeepSpacing).
+    const rt = cleanKeepSpacing(rtFlag ? j?.rt1 : j?.rt0, 64).trim();
+    const ps = cleanKeepSpacing(j?.ps, 16).trim();
     const tx = j?.txInfo && typeof j.txInfo === 'object' ? {
       tx:   j.txInfo.tx   != null ? String(j.txInfo.tx)   : undefined,
       city: j.txInfo.city != null ? String(j.txInfo.city) : undefined,

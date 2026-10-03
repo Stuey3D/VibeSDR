@@ -33,6 +33,7 @@ const Vibe = NativeModules.VibePowerModule as {
 } | undefined;
 
 import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
+import { cleanText } from '../utils/safeText';
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';   // for the decoder below
 
 /** Longest common leading substring across the strings (for deriving an SDR's
@@ -447,11 +448,13 @@ export class OwrxAdapter implements SDRBackend {
       /* ★ The server's own words — see onLogMessage. "This profile is locked, keeping current
        *   profile." is the one a listener needs; the device-failure notices are useful too. */
       case 'log_message': {
-        const t = typeof json.value === 'string' ? json.value.trim() : '';
+        const t = cleanText(json.value, 300);
         if (t) this.cb.onLogMessage?.(t);
         break;
       }
-      case 'chat_message': this.cb.onChatMessage?.(String(json.name ?? '?'), String(json.text ?? ''), json.color); break;
+      // ★ Someone else's typing via someone else's server: cleaned on the way in (security, 2026-10-03).
+      case 'chat_message': this.cb.onChatMessage?.(cleanText(json.name, 32) || '?', cleanText(json.text, 300),
+        typeof json.color === 'string' ? json.color.slice(0, 32) : undefined); break;
       case 'modes': {
         const arr = (json.value || []) as any[];
         this.serverModes = arr.map((m) => ({

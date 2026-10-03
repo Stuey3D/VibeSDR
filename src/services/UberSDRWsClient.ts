@@ -47,7 +47,7 @@
 //   8-bit variants: same layout but values are uint8 (0..255 mapped to dBFS range)
 
 import 'react-native-get-random-values'; // polyfill for crypto.getRandomValues
-import { ungzip } from 'pako';
+import { ungzipToStringCapped } from '../utils/boundedInflate';   // ★ capped: a gzip bomb is dropped, not inflated
 import { VibePowerModule } from '../components/AudioPlayer';
 import { noteUnhandled, noteDecision } from './protocolLog';
 import { guard, guardJson, noteFault, msgKind } from './faultLog';
@@ -1366,7 +1366,7 @@ export abstract class UberSDRWsClient {
       //   gzip frame and a handler that chokes on a well-formed message are counted as what they are.
       let msg: Record<string, unknown> | null = null;
       if (!guard('uber-spec', 'gzip-json', () => {
-        msg = JSON.parse(ungzip(bytes, { to: 'string' })) as Record<string, unknown>;
+        msg = JSON.parse(ungzipToStringCapped(bytes)) as Record<string, unknown>;
       }, `len=${bytes.length}`)) return;
       const m = msg as Record<string, unknown> | null;
       if (!m || typeof m !== 'object') { noteFault('uber-spec', 'gzip-json', new Error('not an object')); return; }

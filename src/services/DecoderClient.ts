@@ -46,6 +46,7 @@
 
 import { USER_AGENT } from '../constants/version';
 import { guard, guardJson } from './faultLog';
+import { cleanText, cleanMode } from '../utils/safeText';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -192,6 +193,30 @@ export interface ChatUserRow {
   zoom_bw?:      number;
   cat?:          boolean;
   tx?:           boolean;
+}
+
+/** ★★ A chat user row from the server, checked field by field (security pass, 2026-10-03). The list arrived
+ *  as `m.data.users ?? []` cast straight to rows: an object instead of an array, or a row whose `mode` was a
+ *  number, threw later in render or in applyChatSync. A row without a usable name is dropped. */
+export function cleanChatUserRow(v: unknown): ChatUserRow | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  const username = cleanText(r.username, 32);
+  if (!username) return null;
+  const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : undefined);
+  const out: ChatUserRow = { username };
+  if (typeof r.is_idle === 'boolean') out.is_idle = r.is_idle;
+  if (n(r.idle_minutes) !== undefined) out.idle_minutes = n(r.idle_minutes);
+  const country = cleanText(r.country, 48); if (country) out.country = country;
+  if (typeof r.country_code === 'string' && /^[A-Za-z]{2}$/.test(r.country_code)) out.country_code = r.country_code;
+  if (n(r.frequency) !== undefined) out.frequency = n(r.frequency);
+  const mode = cleanMode(r.mode); if (mode) out.mode = mode;
+  if (n(r.bw_low) !== undefined) out.bw_low = n(r.bw_low);
+  if (n(r.bw_high) !== undefined) out.bw_high = n(r.bw_high);
+  if (n(r.zoom_bw) !== undefined) out.zoom_bw = n(r.zoom_bw);
+  if (typeof r.cat === 'boolean') out.cat = r.cat;
+  if (typeof r.tx === 'boolean') out.tx = r.tx;
+  return out;
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -430,14 +455,14 @@ export class DecoderClient {
           //    and what was refused is FORGOTTEN so the reconnect in onopen does not ask again in
           //    a loop; the listener asks again when they choose to.
           else if (m.type === 'decoder_refused') {
-            const msg = String(m.message ?? 'The server could not start that decoder.');
+            const msg = cleanText(m.message, 200) || 'The server could not start that decoder.';
             if (m.what === 'spots') this.spotsKind = null; else this.active = null;
             this.cb.onStatus(msg);
             this.cb.onDot('idle');
           }
           else if (m.type === 'audio_extension_error') {
             // Server field is `error` (audio_extension_manager.go sendErrorSafe)
-            const msg = String(m.error ?? m.message ?? 'extension error');
+            const msg = cleanText(m.error, 200) || cleanText(m.message, 200) || 'extension error';
             this.cb.onStatus('error: ' + msg);
             this.cb.onError?.(msg);
             this.cb.onDot('idle');
@@ -446,14 +471,14 @@ export class DecoderClient {
             this.cb.onSpot?.({
               kind: 'digi',
               time: spotTime(d.timestamp),
-              mode: String(d.mode ?? '').toUpperCase(),
-              band: String(d.band ?? ''),
-              call: String(d.callsign ?? ''),
+              mode: cleanText(d.mode, 12).toUpperCase(),
+              band: cleanText(d.band, 12),
+              call: cleanText(d.callsign, 20),
               snr:  typeof d.snr === 'number' ? d.snr : undefined,
               freqHz: spotFreqHz(d.frequency),
               distKm: typeof d.distance_km === 'number' ? d.distance_km : undefined,
-              grid: d.grid ? String(d.grid) : undefined,
-              country: String(d.country ?? ''),
+              grid: cleanText(d.grid, 8) || undefined,
+              country: cleanText(d.country, 48),
               // ★ The wire key is NOT confirmed — the UberSDR web UI's column headings ("Message",
               // "Bearing") are not necessarily the field names. Accept the plausible spellings
               // rather than betting on one and silently showing nothing; the cost of the extra
@@ -467,49 +492,54 @@ export class DecoderClient {
               kind: 'cw',
               time: spotTime(d.time),
               mode: 'CW',
-              band: String(d.band ?? ''),
-              call: String(d.dx_call ?? ''),
+              band: cleanText(d.band, 12),
+              call: cleanText(d.dx_call, 20),
               snr:  typeof d.snr === 'number' ? d.snr : undefined,
               wpm:  typeof d.wpm === 'number' ? d.wpm : undefined,
               freqHz: spotFreqHz(d.frequency),
               distKm: typeof d.distance_km === 'number' ? d.distance_km : undefined,
-              country: String(d.country ?? ''),
+              country: cleanText(d.country, 48),
             });
           } else if (m.type === 'chat_message' && m.data) {
             const d = m.data;
-            const user = String(d.username ?? '');
-            const text = String(d.message ?? '');
-            const ts   = String(d.timestamp ?? '');
+            // ★ Someone else's typing, relayed by a server that may not be ours: cleaned on the way in.
+            const user = cleanText(d.username, 32);
+            const text = cleanText(d.message, 300);
+            const ts   = cleanText(d.timestamp, 40);
             // Dedupe across buffer replays (server re-sends history on every
             // subscribe — reconnects must never re-notify)
             if (!this._chatSeenBefore(`m|${user}|${ts}|${text}`)) {
               this.cb.onChatMessage?.(user, text, ts, this._chatIsHistory());
             }
           } else if (m.type === 'chat_user_joined' && m.data) {
-            const user = String(m.data.username ?? '');
-            const ts   = String(m.data.timestamp ?? '');
+            const user = cleanText(m.data.username, 32);
+            const ts   = cleanText(m.data.timestamp, 40);
             if (user && !this._chatSeenBefore(`j|${user}|${ts}`)) {
               this.cb.onChatJoined?.(user, this._chatIsHistory());
             }
           } else if (m.type === 'chat_user_left' && m.data) {
-            const user = String(m.data.username ?? '');
-            const ts   = String(m.data.timestamp ?? '');
+            const user = cleanText(m.data.username, 32);
+            const ts   = cleanText(m.data.timestamp, 40);
             if (user && !this._chatSeenBefore(`l|${user}|${ts}`)) {
               this.cb.onChatLeft?.(user, this._chatIsHistory());
             }
           } else if (m.type === 'chat_active_users' && m.data) {
+            const rows = Array.isArray(m.data.users) ? m.data.users : [];
+            const count = Number(m.data.count ?? 0);
             this.cb.onChatUsers?.(
-              (m.data.users ?? []) as ChatUserRow[],
-              Number(m.data.count ?? 0),
+              rows.map(cleanChatUserRow).filter((u: ChatUserRow | null): u is ChatUserRow => !!u),
+              Number.isFinite(count) && count >= 0 ? count : 0,
             );
           } else if (m.type === 'chat_user_update' && m.data) {
-            this.cb.onChatUserUpdate?.(m.data as ChatUserRow);
-          } else if (m.type === 'chat_idle_updates' && m.data?.users) {
-            for (const u of m.data.users as ChatUserRow[]) {
-              this.cb.onChatUserUpdate?.(u);
+            const u = cleanChatUserRow(m.data);
+            if (u) this.cb.onChatUserUpdate?.(u);
+          } else if (m.type === 'chat_idle_updates' && Array.isArray(m.data?.users)) {
+            for (const raw of m.data.users) {
+              const u = cleanChatUserRow(raw);
+              if (u) this.cb.onChatUserUpdate?.(u);
             }
           } else if (m.type === 'chat_error') {
-            this.cb.onChatError?.(String(m.error ?? 'chat error'));
+            this.cb.onChatError?.(cleanText(m.error, 200) || 'chat error');
           }
         });
       }
