@@ -9,7 +9,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import AnnunciatorLegend from './AnnunciatorLegend';
@@ -107,7 +107,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const slide   = useRef(new Animated.Value(0)).current;
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
-  const { width: winW } = useWindowDimensions();
+  const [symFit, setSymFit] = useState(false);
   const [textW, setTextW] = useState(0);
   /** The two side blocks' natural widths — each reserves the wider, so the text window is centred. */
   const [leftW, setLeftW] = useState(0);
@@ -251,11 +251,26 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const tuneLeft = shown.tuneDir === 'left';
   const overflow = textW > areaW && areaW > 0;
   const vfd = COL.style === 'dot' || COL.style === 'seg';
-  /* ★★ Matching side widths (to centre the text window) only on a VFD style AND a wide strip. On a phone the left
-   *  block (RDS mark + PI block / logo + flag) is so much wider than TP·TA·AF that mirroring it ate a third of the
-   *  strip in dead black and squeezed the text to "NOW ON HEART" (Stuart, iPhone, VCR, 2026-10-03). On a Mac or iPad
-   *  width the reservation is a small share and the centred window is worth it. */
-  const centreSides = vfd && winW >= 700;   // ★ the WINDOW, not areaW — areaW shrinks with the reservation and would flip
+  /* ★★★ CENTRED WHEN IT FITS, THE WHOLE STRIP WHEN IT SCROLLS (Stuart, 2026-10-03). With TP·TA·AF on the right, the
+   *  left block (RDS mark + PI / logo + flag) is far wider than the legends. Mirroring it always centred the text but
+   *  wasted a third of a phone strip and cut the RadioText to "NOW ON HEART"; never mirroring wasted nothing but left
+   *  short text off-centre. So: mirror (the text sits on the strip's centre) only while the text FITS in the mirrored
+   *  window; a text too long for it gets the full, lopsided space and scrolls there.
+   *  ★ `symFit` is decided in an effect from widths that do not depend on the decision: the free width is the area
+   *    plus whatever the mirror is currently taking, so turning the mirror on cannot make it switch itself off. */
+  const vfdText = vfd ? vfdLineText(shown, COL.style as 'dot' | 'seg', freqLabel) : '';
+  const needW = vfd
+    ? (COL.style === 'seg' ? toSegRun(vfdText).cells.length * SEG_CELL : Array.from(vfdText).length * DOT_CELL)
+    : textW;
+  {
+    const asym = Math.abs(leftW - rightW);
+    const free = areaW + (symFit ? asym : 0);          // the text area as it would be WITHOUT the mirror
+    const fits = !!shown.annunciators && needW > 0 && free > 0 && needW <= free - asym - 4;
+    // ★ React's "adjust state while rendering" pattern: one extra render on a change, never a loop, since `free`
+    //   does not move when the mirror does.
+    if (fits !== symFit) setSymFit(fits);
+  }
+  const centreSides = symFit;
   // ★ The offset carries a UNIT ("-1.2kHz"): never through the 14-segment (it has no lower case) —
   //   the sans on seg; Doto keeps the unit's case on dot.
   const offsetFont = COL.style === 'seg' ? FONT_HYPER : COL.font;
@@ -335,11 +350,13 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       </View>
       {!!shown.offset && tuneLeft && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
       {vfd ? (
+        <View style={styles.vfdMeasure} onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setAreaW(e.nativeEvent.layout.width)}>
         <VfdStrip style={COL.style as 'dot' | 'seg'} rgb={COL.rgb} core={COL.core} glow={COL.glow}
-          text={vfdLineText(shown, COL.style as 'dot' | 'seg', freqLabel)}
+          text={vfdText}
           loop={!!shown.hold}
           restartKey={shown.hold ? lineKey(shown) : String(shown.key)}
           onPassMs={shown.hold ? undefined : onVfdPass} />
+        </View>
       ) : (<>
       {/* Horizontal ScrollView = unconstrained content width, so the text
           measures at its TRUE size (a plain View clamps Text to the parent
@@ -561,6 +578,7 @@ const styles = StyleSheet.create({
   rdsMark: {
     marginRight: 5,
   },
+  vfdMeasure: { flex: 1, minWidth: 0, alignSelf: 'stretch', justifyContent: 'center' },
   vfdMarks: {
     flexDirection: 'row',
     alignItems: 'center',
