@@ -297,7 +297,11 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
    *  when there is no pair of drums or a block's contents would not fit in its share. */
   let anchorL = 0, anchorR = 0;
   const anchored = (() => {
-    if (textOnly || !anchors || !barWin || lBlockX == null || rBlockEnd == null || winW <= winH) return false;
+    // ★ A PHONE ONLY (shorter side under 500 pt). On a Mac window or an iPad the drums sit far in from the strip's
+    //   ends, so anchoring to them threw away a third of the strip (Stuart, 2026-10-03, Mac screenshot): there the
+    //   mirrored side blocks give the text the room.
+    if (textOnly || !anchors || !barWin || lBlockX == null || rBlockEnd == null || winW <= winH
+        || Math.min(winW, winH) >= 500) return false;
     anchorL = Math.round(anchors.left - barWin.x - lBlockX - 6);
     anchorR = Math.round(rBlockEnd - (anchors.right - barWin.x) - 6);
     return anchorL >= leftW && anchorR >= (shown.annunciators ? rightW + 8 : 0);
