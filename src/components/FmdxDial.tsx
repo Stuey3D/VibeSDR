@@ -190,7 +190,7 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
           const lbl = Number.isInteger(mhz) ? String(mhz) : mhz.toFixed(1);
           return (
             <React.Fragment key={`m${hz}`}>
-              <View style={{ position: 'absolute', left: px, top: SCALE_Y, width: 1, height: major ? 12 : 6, backgroundColor: GREEN_DIM }} />
+              <View style={{ position: 'absolute', left: px - 0.5, top: SCALE_Y, width: 1, height: major ? 12 : 6, backgroundColor: GREEN_DIM }} />
               {major && (
                 <Text style={[styles.tickLbl, { left: px - 16, width: 32, top: SCALE_Y + 13, color: GREEN, fontFamily: t.font }]}>{lbl}</Text>
               )}
@@ -200,7 +200,7 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
 
         {/* A tick for every saved station, hanging off the scale */}
         {staTicks.map(({ key, px }) => (
-          <View key={`t${key}`} style={{ position: 'absolute', left: px, top: SCALE_Y - 6, width: 1, height: 12, backgroundColor: key === curKey ? RED : GREEN_SOFT }} />
+          <View key={`t${key}`} style={{ position: 'absolute', left: px - 0.5, top: SCALE_Y - 6, width: 1, height: 12, backgroundColor: key === curKey ? RED : GREEN_SOFT }} />
         ))}
 
         {/* Station name labels — cascading down one side; tuned station in red */}
