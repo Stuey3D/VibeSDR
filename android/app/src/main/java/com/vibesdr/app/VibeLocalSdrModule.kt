@@ -52,6 +52,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         //   VibeServerBoot.startBatteryMonitor). The server screen uses it for TV-appropriate defaults.
         "isTv" to (reactContext.packageManager.hasSystemFeature("android.hardware.type.television")
                    || reactContext.packageManager.hasSystemFeature("android.software.leanback_only")),
+        // ★ No touchscreen at all — a TV box driven by a remote or a keyboard that may not report the TV UI mode
+        //   (Kiko, 2026-10-03: an Android TV box where Tab could not leave a text field). TvTextInput reads it.
+        "noTouchscreen" to !reactContext.packageManager.hasSystemFeature("android.hardware.touchscreen"),
         // ★ "Start automatically when power returns" is offered only where Android may allow it — VibeBootStart.
         "startOnPowerSupported" to VibeBootStart.supported())
 

@@ -5,7 +5,7 @@
  *     from the remote. Stuart's Android 9 Sony let focus out; an Android 6 box did not. Plug-and-play on a
  *     TV box means the remote alone must reach everything.
  *
- *  So ON A TV ONLY (Platform.isTV — the system's own television UI mode), a field is drawn as a focusable
+ *  So ON A TV ONLY (see useTvFields below), a field is drawn as a focusable
  *  box showing its value. The D-pad moves past it like any other control; OK opens a small edit sheet with
  *  the field focused (and the on-screen keyboard), and DONE / BACK leave it. Phones and tablets get the
  *  plain TextInput, untouched.
@@ -13,10 +13,22 @@
  *    onBlur — so callers that save on change or on blur behave exactly as they do with a keyboard.
  */
 import React, { useState } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { Modal, NativeModules, Platform, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
+
+/* ★★ WHO GETS THE TV FIELD. Platform.isTV is the system's television UI MODE, and Kiko's Android TV box
+ *  (2026-10-03) could not tab between fields with a hardware keyboard either — a box may not report that
+ *  mode. So also: the device declares itself a television (android.hardware.type.television / leanback —
+ *  the server screen's own test), or it has NO TOUCHSCREEN at all (VibeLocalSDR.noTouchscreen, from
+ *  PackageManager). A phone or tablet always has a touchscreen, so neither ever changes there.
+ *  ★ Decided once: none of these can change while the app runs. An APK older than the constant reads
+ *    undefined, i.e. today's behaviour. */
+const useTvFields: boolean = Platform.isTV || (Platform.OS === 'android' && (() => {
+  const m = (NativeModules as any).VibeLocalSDR;
+  return m?.isTv === true || m?.noTouchscreen === true;
+})());
 
 export default function TvTextInput(props: TextInputProps) {
-  if (!Platform.isTV) return <TextInput {...props} />;
+  if (!useTvFields) return <TextInput {...props} />;
   return <TvField {...props} />;
 }
 
