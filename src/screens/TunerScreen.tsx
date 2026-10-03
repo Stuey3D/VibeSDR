@@ -23,6 +23,8 @@ import { watchProvider } from '../services/watchProvider';
 import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { useFaceplate } from '../contexts/FaceplateContext';
+import RdsMark from '../components/RdsMark';
+import AnnunciatorLegend from '../components/AnnunciatorLegend';
 import { rgba } from '../constants/faceplate';
 import FreqModal from '../components/FreqModal';
 import FmdxDial, { type DialStation } from '../components/FmdxDial';
@@ -1020,6 +1022,7 @@ export default function TunerScreen({ route, navigation }: Props) {
              kind: 'station-on', hold: true, badge: 'RDS', flag, logoUrl: logo ?? undefined, annunciators: ann };
   }, [st, logo]);
   const sigNorm = Math.min(1, Math.max(0, (st?.sig ?? 0) / 70));
+  const cardFlag = st ? isoToFlag(countryOf(st)) : '';
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -1105,9 +1108,34 @@ export default function TunerScreen({ route, navigation }: Props) {
 
         {/* PI (signal reading lives under the mode label; station name + RDS
             RadioText moved to the VTS strip above the island) */}
-        <View style={styles.panel}>
-          <Text style={styles.metaLabel}>PI CODE</Text>
-          <Text style={styles.metaVal}>{st?.pi || '––––'}</Text>
+        {/* ★★ THE STATION CARD (Stuart, 2026-10-03: "that PI Code box is rather empty and bleak"): what a phone's
+            portrait strip has no room for lives here — RDS mark, flag and PI on the left, the station's logo CENTRED,
+            TP · TA · AF on the right. The two sides are equal flex columns, so the logo sits on the card's centre
+            whatever either side holds. Shown in landscape too (the strip keeps its own icons there). */}
+        <View style={[styles.panel, styles.idRow]}>
+          <View style={styles.idSide}>
+            <RdsMark kind="plain" height={15} color={fp.vts.mark} glow={fp.vts.markGlow} />
+            <View style={styles.idPiRow}>
+              {!!cardFlag && <Text style={styles.idFlag}>{cardFlag}</Text>}
+              <Text style={styles.idPi} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                <Text style={styles.idPiLabel}>PI </Text>{st?.pi || '––––'}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.idLogo}>
+            {logo
+              ? <Image source={{ uri: logo }} style={styles.idLogoImg} resizeMode="contain" />
+              : <Text style={styles.monogram} numberOfLines={1} adjustsFontSizeToFit>{(st?.ps?.trim() || '··').slice(0, 3).toUpperCase()}</Text>}
+          </View>
+          <View style={[styles.idSide, styles.idSideRight]}>
+            <View style={styles.idAnn}>
+              {(['TP', 'TA', 'AF'] as const).map(nm => (
+                <AnnunciatorLegend key={nm} name={nm} height={12} kind="plain"
+                  color={fp.vts.core} glow={fp.vts.glow} ghost={rgba(fp.vts.rgb, 0.16)}
+                  lit={nm === 'TP' ? !!st?.tp : nm === 'TA' ? !!st?.ta : (st?.af?.length ?? 0) > 0} />
+              ))}
+            </View>
+          </View>
         </View>
 
         {/* Transmitter (relative to the RECEIVER's location) */}
@@ -1370,6 +1398,17 @@ function makeStyles(t: ThemeTokens) {
     monogram: { color: t.btnActiveText, fontFamily: F, fontSize: 22, fontWeight: 'bold' },
     station: { color: t.freqColor, fontFamily: F, fontSize: 22, fontWeight: 'bold' },
     metaRow: { flexDirection: 'row', gap: 12 },
+    idRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    idSide: { flex: 1, minWidth: 0, gap: 6, alignItems: 'flex-start' },
+    idSideRight: { alignItems: 'flex-end' },
+    idPiRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    idFlag: { fontSize: 20 },
+    idPi: { color: t.freqColor, fontFamily: F, fontSize: 22, fontWeight: 'bold', flexShrink: 1 },
+    idPiLabel: { color: t.sectionColor, fontSize: 12, letterSpacing: 1 },
+    idLogo: { width: 68, height: 68, borderRadius: 10, backgroundColor: t.pillBg, borderWidth: 1, borderColor: t.barBorder,
+              alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+    idLogoImg: { width: 64, height: 64 },
+    idAnn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     metaCell: { flex: 1 },
     metaLabel: { color: t.sectionColor, fontFamily: F, fontSize: 11, fontWeight: 'bold', letterSpacing: 2, marginBottom: 4 },
     metaVal: { color: t.freqColor, fontFamily: F, fontSize: 26, fontWeight: 'bold' },
