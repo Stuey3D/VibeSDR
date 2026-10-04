@@ -182,10 +182,14 @@ for (const chassis of ['silver', 'black'] as const) {
     ['components/CityPickerModal.tsx',  /dim && s\.backdropDim/],
     ['components/PasswordModal.tsx',    /dim && styles\.overlayDim/],
     ['components/IdentModal.tsx',       /dim && styles\.overlayDim/],
-    ['components/MenuSheet.tsx',        /!opaque && styles\.backdrop/],
     ['components/LocalHardwarePanel.tsx', /fp\.opaque && styles\.backdropNone/],
   ];
   for (const [f, re] of scrims) ok(`${f}: its dim follows Transparency OFF`, re.test(src(f)));
+  // ★★ The bottom sheets carry NO dim at all (Stuart, 2026-10-04: the Audio/Mode scrim darkened only the space above the
+  //   sheet; "I don't mind not having the transparency layer when the menu is up" — and it saves a full-screen blend).
+  ok('MenuSheet: no dim behind the menu', !/styles\.backdrop\b/.test(src('components/MenuSheet.tsx')));
+  for (const f of ['components/AudioSheet.tsx', 'components/ModeSelector.tsx'])
+    ok(`${f}: its scrim is transparent (tap-to-close only)`, /<PopupScrim[^>]*color="transparent"/.test(src(f)));
   // ★ The popups that moved their dim INTO PopupScrim carry no colour in the style any more (the
   //   scrim owns it), so nothing can bring an unconditional dim back through that style.
   for (const f of ['components/FreqModal.tsx', 'components/AudioSheet.tsx', 'components/KeyboardShortcuts.tsx',

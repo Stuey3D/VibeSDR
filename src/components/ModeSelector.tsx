@@ -17,7 +17,6 @@ import {
  *  labels; every button a SILENT dome key (only the front panel clicks) with an LED pip on every key in a
  *  pick-one or on/off group (the demodulators, the decoders, SYNC); the bandwidth sliders become slide
  *  faders; the decoder list sits in a recessed window. The default chassis is today's, untouched. */
-const BACKDROP = 'rgba(0,0,0,0.50)';
 const SHEET_BG = 'rgba(8,6,1,0.97)';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
@@ -365,7 +364,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (§10.2). */}
-      <PopupScrim style={st.backdrop} color={BACKDROP} onPress={onClose} onTouchStart={noteTouchInteraction} />
+      {/* ★★ NO DIM behind a bottom sheet (Stuart, 2026-10-04): the scrim filled only the space ABOVE the sheet, so on a
+          wide window — sheets are capped at 640 pt — the top half went dark and the strips beside the sheet stayed
+          clean. "I don't mind not having the transparency layer when the menu is up". The tap-to-close view stays. */}
+      <PopupScrim style={st.backdrop} color="transparent" onPress={onClose} onTouchStart={noteTouchInteraction} />
       <View style={[st.sheet, sheetCap, { borderTopColor: t.barBorder }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },
                     metalFrame, metalFrame && { paddingTop: 0 }]} onTouchStart={noteTouchInteraction}>
         <PopupPlate />

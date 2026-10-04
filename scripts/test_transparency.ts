@@ -261,7 +261,9 @@ ok('the pane subtitle is the brief\'s', TRANSPARENCY_NOTE === 'Off · solid pane
   const src = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
   ok('ControlsBar: the deck drops its shadow with OFF', /fpTheme\.opaque \? NO_DROP_SHADOW/.test(src('components/ControlsBar.tsx')));
   ok('DecoderShell: the boxes drop their shadow with OFF', /opaque && NO_DROP_SHADOW/.test(src('components/DecoderShell.tsx')));
-  ok('MenuSheet: no scrim with OFF (the tap-to-close view stays)', /!opaque && styles\.backdrop/.test(src('components/MenuSheet.tsx')));
+  // ★ No scrim at all now, ON or OFF (2026-10-04, test_popup.ts) — the tap-to-close view stays.
+  ok('MenuSheet: no scrim, ON or OFF (the tap-to-close view stays)', !/styles\.backdrop\b/.test(src('components/MenuSheet.tsx'))
+     && /<TouchableWithoutFeedback onPress=\{onClose\}>/.test(src('components/MenuSheet.tsx')));
   ok('LocalHardwarePanel: no scrim with OFF', /fp\.opaque && styles\.backdropNone/.test(src('components/LocalHardwarePanel.tsx')));
 }
 

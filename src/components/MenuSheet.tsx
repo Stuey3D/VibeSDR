@@ -1383,7 +1383,8 @@ function MenuSheetBody({
         <TouchableWithoutFeedback onPress={onClose}>
           {/* ★★★ Transparency OFF: no dim — a full-screen blend over the live waterfall. The view
               stays (invisible, free to composite) so a tap outside still closes the menu. */}
-          <Animated.View style={[StyleSheet.absoluteFill, !opaque && styles.backdrop, { opacity: backdropOp }]} />
+          {/* ★★ No dim behind the menu either (Stuart, 2026-10-04) — the bottom sheets match: live, undimmed waterfall. */}
+          <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOp }]} />
         </TouchableWithoutFeedback>
 
         <Animated.View style={[styles.sheet, sheetGeom, { transform: [{ translateY }] },
@@ -2006,7 +2007,6 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   adminUnlockBtn:   { borderWidth: 1, borderColor: 'rgba(255,160,0,0.55)', borderRadius: 6,
                       paddingHorizontal: 12, paddingVertical: 9 },
   adminUnlockBtnTxt:{ color: pt.gold.amber, fontSize: 12, letterSpacing: 0.5 },
-  backdrop: { backgroundColor: 'rgba(0,0,0,0.55)' },
   sheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0, height: SHEET_H,
     borderTopLeftRadius: 16, borderTopRightRadius: 16,

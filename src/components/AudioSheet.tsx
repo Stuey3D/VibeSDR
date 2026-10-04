@@ -21,9 +21,8 @@ import { macVolumeLabel } from '../constants/macAudio';
 
 // Local copy of the menu's accessibility palette so this sheet is self-contained
 // (no shared-internals refactor of MenuSheet). Values mirror MenuSheet's `C`.
-/** Today's dim behind the sheet, and the sheet's own glass — see PopupScrim / usePopupSurface for
- *  what Transparency OFF does with each. */
-const BACKDROP = 'rgba(0,0,0,0.50)';
+/** The sheet's own glass — see usePopupSurface for what Transparency OFF does with it. (No dim behind the sheet since
+ *  2026-10-04 — see the PopupScrim below.) */
 const SHEET_BG = 'rgba(8,6,1,0.97)';
 /** The squelch fader's index line while the gate MUTES (§4.3's closed-ring red). */
 const SQL_MUTING = '#ff3a2e';
@@ -666,7 +665,10 @@ export default function AudioSheet({
            onDismiss={onDismiss}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (PopupScrim). */}
-      <PopupScrim style={st.backdrop} color={BACKDROP} onPress={onClose} onTouchStart={noteTouchInteraction} />
+      {/* ★★ NO DIM behind a bottom sheet (Stuart, 2026-10-04): the scrim filled only the space ABOVE the sheet, so on a
+          wide window — sheets are capped at 640 pt — the top half went dark and the strips beside the sheet stayed
+          clean. "I don't mind not having the transparency layer when the menu is up". The tap-to-close view stays. */}
+      <PopupScrim style={st.backdrop} color="transparent" onPress={onClose} onTouchStart={noteTouchInteraction} />
       <View style={[st.sheet, {
         borderTopColor: t.barBorder,
         // Landscape: keep clear of the Dynamic Island and don't sprawl the full
