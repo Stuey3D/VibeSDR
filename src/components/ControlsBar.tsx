@@ -1042,7 +1042,10 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
         fontSize: rf, lineHeight: rl,
         includeFontPadding: false,
         fontWeight: dot ? 'normal' : '700',
-        opacity: reading.active ? 1.0 : 0.65,
+        /* ★★ ALWAYS SOLID (Stuart, 2026-10-04: "why is the S+8 readout fading in and out? It should be solid … only the LED
+         *  VU Meter Signal bar should have that fading"). It dimmed to 0.65 whenever `active` was false — SNR ≤ 6 dB — and on
+         *  DAB, which fills the whole passband, the measured SNR sits on that line, so the number blinked. A reading is a
+         *  reading; the LED VU carries the signal's liveliness. */
       }]}>
         {reading.text}
       </Text>
