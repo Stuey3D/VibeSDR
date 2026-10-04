@@ -227,7 +227,12 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [swapImg]);
 
+    /* ★★ ANY PICTURE WITH LINES IN IT GOES TO PREV when the next one starts — finished or not (Stuart,
+     *  2026-10-04: "once an image has been received it stays on screen until the next one is received, and then
+     *  when the new image is started the old one goes into a previous button"). It waited for `complete`, so a
+     *  partial SSTV frame (signal faded, late join) was simply thrown away by the next image's start. */
     const rollToPrev = useCallback(() => {
+      if (live.current && live.current.maxLine > 0) live.current.complete = true;
       if (live.current?.complete) {
         prev.current = live.current;  store.prev = prev.current;
         onPrevState(true, false);

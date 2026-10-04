@@ -9581,7 +9581,16 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(!!st);
     },
     onImageStart: (w, h) => startDecImage(w, h),
-    onImageLine: (y, w, px, rgb) => { drawDecLine(y, w, px, rgb); setDecLive(true); },
+    // ★ Once the server reports WEFAX phases, a line alone no longer lights the LED — noise draws lines too.
+    onImageLine: (y, w, px, rgb) => { drawDecLine(y, w, px, rgb); if (!wefaxPhaseKnown) setDecLive(true); },
+    /* ★★ WHAT PART OF THE TRANSMISSION IS ARRIVING (Stuart, 2026-10-04: "when nothing is received … standing by;
+     *  when the signal is being received it then lights green and shows receiving, bonus points if you can show
+     *  the part of the transmission … such as the phasing lines"). Server-side: wefax_decoder onPhase. */
+    onWefaxPhase: (p) => {
+      wefaxPhaseKnown = true;
+      $('decStatus').textContent = WEFAX_PHASE_TEXT[p] ?? 'receiving';
+      setDecLive(p >= 1 && p <= 3);
+    },
     onImageDone: () => { $('decStatus').textContent = 'image complete'; markDecImageComplete(); },
     onSstvMode: (name) => { $('decStatus').textContent = name; },
     onStatus: (t) => { $('decStatus').textContent = t; },
@@ -9728,6 +9737,8 @@ function initDecoders(host: string, auth: AuthState) {
   $('decClr').onclick = () => { $('decText').textContent = ''; };
   $('decPrev').onclick = () => toggleDecPrev();
   $('decSave').onclick = () => saveDecImage();
+  $('decZoomIn').onclick = () => setDecZoom(decZoomI + 1);
+  $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
     $<HTMLButtonElement>('spotsBtn').classList.remove('on'); hideDecBox(); };
@@ -10045,6 +10056,8 @@ function showDecBox(what: string) {
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
+  setDecZoom(0);   // ★ a new decoder opens at FIT
+  wefaxPhaseKnown = false;
   $('decText').classList.toggle('off', image || isSpots);
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
@@ -11440,6 +11453,8 @@ function drawConstellation() {
 }
 
 let decLiveTimer = 0;
+const WEFAX_PHASE_TEXT = ['standing by', 'start tone', 'phasing', 'receiving chart', 'stop tone'];
+let wefaxPhaseKnown = false;   // this server reports WEFAX phases (0x04) — reset when a decoder opens
 function setDecLive(on: boolean) {
   const dot = $('decDot');
   dot.classList.toggle('live', on);
@@ -11460,6 +11475,16 @@ function blitToVisible(src: HTMLCanvasElement | null) {
   ctx?.drawImage(src, 0, 0);
 }
 
+/** ★ Picture zoom over FIT, as in the app: 1, 1.5, 2, 3, 4×. − only once zoomed; + stops at 4×. */
+const DEC_ZOOMS = [1, 1.5, 2, 3, 4];
+let decZoomI = 0;
+function setDecZoom(i: number) {
+  decZoomI = Math.max(0, Math.min(DEC_ZOOMS.length - 1, i));
+  const wrap = $('decImgWrap');
+  wrap.classList.toggle('zoomed', decZoomI > 0);
+  wrap.style.setProperty('--decZoom', String(DEC_ZOOMS[decZoomI]));
+  updateDecImageButtons();
+}
 function updateDecImageButtons() {
   const prevBtn = $<HTMLButtonElement>('decPrev');
   const hasPrev = !!decPrevCv;
@@ -11468,12 +11493,19 @@ function updateDecImageButtons() {
   prevBtn.textContent = decViewingPrev ? 'LIVE' : 'PREV';
   // SAVE is available whenever there is something to save (live has any content, or a prev exists).
   $<HTMLButtonElement>('decSave').style.display = (decLiveCv || decPrevCv) ? '' : 'none';
+  const pic = !!(decLiveCv || decPrevCv);
+  $<HTMLButtonElement>('decZoomOut').style.display = pic && decZoomI > 0 ? '' : 'none';
+  const zin = $<HTMLButtonElement>('decZoomIn');
+  zin.style.display = pic && decZoomI < DEC_ZOOMS.length - 1 ? '' : 'none';
+  zin.textContent = decZoomI > 0 ? `+ ${DEC_ZOOMS[decZoomI]}×` : '+';
 }
 
 function startDecImage(w: number, h: number) {
   // A new transmission is starting. If the live image was COMPLETED, bank it as PREV so it isn't lost
   // before the user saves it. An incomplete live image (partial, we retuned) is just replaced.
-  if (decLiveComplete && decLiveCv) {
+  // ★★ …or any image with lines in it (Stuart, 2026-10-04): a partial SSTV frame or a chart joined late is
+  //    still the picture the listener watched arrive, and the next one must not throw it away.
+  if ((decLiveComplete || decLiveMaxY > 0) && decLiveCv) {
     decPrevCv = decLiveCv;
     decLiveCv = null; decLiveCtx = null;
   }
@@ -11485,12 +11517,23 @@ function startDecImage(w: number, h: number) {
   decLiveCtx = cv.getContext('2d');
   decLiveCtx?.clearRect(0, 0, cv.width, cv.height);
   decLiveComplete = false;
+  decLiveMaxY = -1;
   if (!decViewingPrev) blitToVisible(decLiveCv);
   updateDecImageButtons();
 }
 
+let decLiveMaxY = -1;   // the highest line drawn into the live image (see drawDecLine)
 function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
   decIsRgb = rgb;
+  /* ★★★ THE LINE COUNT GOING BACK IS A NEW PICTURE (Stuart, 2026-10-04). A WEFAX chart has no image-start
+   *  message — the server just numbers the next chart's lines from 0 again after its START tone — so the
+   *  next chart was painted OVER the last one, and only a decoded STOP tone had ever made it saveable.
+   *  Bank the old one as finished (PREV + SAVE) and start clean; the app's canvas does the same. A step
+   *  back of ≤ 2 lines is tolerated, never a reason to lose a picture. */
+  if (decLiveCv && decLiveMaxY > 0 && (y === 0 || y < decLiveMaxY - 2)) {
+    decLiveComplete = true;
+    startDecImage(w, 0);
+  }
   if (!decLiveCtx || !decLiveCv || decLiveCv.width !== w) startDecImage(w, 0);
   if (!decLiveCtx || !decLiveCv) return;
   const cv = decLiveCv;
@@ -11518,6 +11561,7 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     img.data[o + 3] = 255;
   }
   decLiveCtx.putImageData(img, 0, y);
+  if (y > decLiveMaxY) decLiveMaxY = y;
   // Mirror the just-drawn line to the visible canvas when we're watching live.
   if (!decViewingPrev) {
     const vis = $<HTMLCanvasElement>('decImage');

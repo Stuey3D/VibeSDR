@@ -227,6 +227,8 @@ export class DecoderClient {
   private ws:      WebSocket | null = null;
   private cb:      DecoderCallbacks;
   private active:  DecoderName | null = null;
+  /** This server reports WEFAX phases (0x04) — set by the first one, cleared on every attach. */
+  private wefaxPhases = false;
   private destroyed = false;
   private retries   = 0;
 
@@ -570,6 +572,7 @@ export class DecoderClient {
   }
 
   private _attach() {
+    this.wefaxPhases = false;
     if (!this.ws || !this.active) return;
     const { extension_name, params } = this._paramsFor(this.active);
     this.ws.send(JSON.stringify({
@@ -658,7 +661,15 @@ export class DecoderClient {
         const ln = v.getUint32(1, false);
         const w  = v.getUint32(5, false);
         this.cb.onImageLine?.(ln, w, u8.subarray(9));
-        this.cb.onDot('rx');
+        // ★ Once the server reports phases (0x04), a line alone does not light the dot — noise draws lines too.
+        if (!this.wefaxPhases) this.cb.onDot('rx');
+      } else if (t === 0x04 && u8.length >= 2) {
+        /* ★★ WHAT PART OF THE TRANSMISSION IS ARRIVING (Stuart, 2026-10-04): standing by when nothing is, green
+         *  and named while it is — start tone, phasing, the chart — and the stop tone. wefax_decoder onPhase. */
+        this.wefaxPhases = true;
+        const p = u8[1];
+        this.cb.onStatus(['standing by', 'start tone', 'phasing', 'receiving chart', 'stop tone'][p] ?? 'receiving');
+        this.cb.onDot(p >= 1 && p <= 3 ? 'rx' : 'idle');
       } else if (t === 0x02) { this.cb.onStatus('START received'); this.cb.onDot('sync'); }
       else if (t === 0x03) {
         this.cb.onStatus('transmission complete');

@@ -529,6 +529,8 @@ private:
             };
             wefax_->onStart = [this]() { uint8_t b = 0x02; broadcast(&b, 1); };
             wefax_->onStop  = [this]() { uint8_t b = 0x03; broadcast(&b, 1); };
+            // ★ 0x04 <phase> — start tone / phasing / image / stop tone, on change (older clients ignore it).
+            wefax_->onPhase = [this](int ph) { uint8_t b[2] = { 0x04, (uint8_t)ph }; broadcast(b, 2); };
             log("decoder attached: wefax lpm=" + std::to_string(cfg.lpm) + " width=" + std::to_string(cfg.imageWidth));
         } else if (ext == "sstv") {
             // ★ autoSync ON — see the long note that lived in the shim's startSstv (redrawFromLuminance

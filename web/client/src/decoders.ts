@@ -62,6 +62,8 @@ export interface DecoderCallbacks {
   /** SSTV mode name, e.g. "Martin 1". */
   onSstvMode?: (name: string) => void;
   onStatus?: (text: string) => void;
+  /** WEFAX transmission phase (server 0x04): 0 standing by, 1 start tone, 2 phasing, 3 receiving chart, 4 stop tone. */
+  onWefaxPhase?: (phase: number) => void;
   /** An FT8/FT4 decode. */
   onSpot?: (spot: Spot) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
@@ -261,6 +263,8 @@ export class DecoderClient {
           this.cb.onImageStart?.(0, 0);                 // width arrives with the first line
         } else if (op === 0x03) {
           this.cb.onImageDone?.();
+        } else if (op === 0x04 && buf.byteLength >= 2) {
+          this.cb.onWefaxPhase?.(dv.getUint8(1));
         }
         return;
 

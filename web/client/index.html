@@ -2219,6 +2219,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decText.off { display: none; }
 #decImage { display: none; width: 100%; background: #000; image-rendering: pixelated; }
 #decImage.on { display: block; }
+/* ★★ ZOOM AND PAN (Stuart, 2026-10-04: "user has a zoom function which can then zoom in and then pan left and right and
+   up and down"). At 1x the picture fits whole exactly as before (#decImage's max-height + object-fit: contain). Zoomed,
+   it is drawn wider than the box at its own aspect and this wrapper scrolls both ways. */
+#decImgWrap { overflow: auto; max-height: calc(100dvh - var(--decBoxBottom, 14px) - 150px); }
+#decImgWrap.zoomed #decImage { max-height: none; object-fit: fill; height: auto; width: calc(var(--decZoom, 1) * 100%); }
 #spotList { display: none; }
 #spotList.on { display: block; }
 
@@ -2997,6 +3002,8 @@ select.btn { padding: 6px 8px; }
          continues; SAVE downloads the shown image. Hidden for text/spot decoders. -->
     <button class="btn" id="decPrev" title="View previous image" style="display:none">PREV</button>
     <button class="btn" id="decSave" title="Save image" style="display:none">SAVE</button>
+    <button class="btn" id="decZoomOut" title="Zoom out" aria-label="Zoom out" style="display:none">−</button>
+    <button class="btn" id="decZoomIn" title="Zoom in" aria-label="Zoom in" style="display:none">+</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <!-- ★ DAB: CLR clears a text pane DAB does not have, so in DAB this stands in its place
          (Stuart, 2026-09-07): the stations this receiver has learnt, bookmarks filtered to DAB. -->
@@ -3033,7 +3040,7 @@ select.btn { padding: 6px 8px; }
     <div id="dabStations" style="display:none"></div>
     <div id="dabSignal" style="display:none"></div>
     <pre id="decText"></pre>
-    <canvas id="decImage"></canvas>
+    <div id="decImgWrap"><canvas id="decImage"></canvas></div>
     <div id="spotList"></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data

@@ -47,6 +47,10 @@ public:
     std::function<void(uint32_t lineNo, uint32_t width, const uint8_t* px)> onLine;
     std::function<void()> onStart;
     std::function<void()> onStop;
+    /** ★ Which part of the transmission each line is — 0 standing by (noise), 1 start tone, 2 phasing, 3 image, 4 stop tone — sent
+     *  ONLY when it changes (Stuart, 2026-10-04: "show the part of the transmission it is receiving such as the
+     *  phasing lines"). The clients draw it as the status; the image lines themselves say "receiving". */
+    std::function<void(int phase)> onPhase;
 
 private:
     void decodeFaxLine();
@@ -103,6 +107,8 @@ private:
 
     // Control
     bool autoStopped = false, autoStarted = false;
+    int lastPhase = -1, pendingPhase = -1, pendingCount = 0;
+    double corrAvg = 0.0;   // smoothed line-to-line correlation — chart vs noise (decodeImageLine)
 };
 
 } // namespace vibe

@@ -186,6 +186,25 @@ void WefaxDecoder::decodeFaxLine() {
         }
     }
 
+    {
+        // ★ The phase this line belongs to, reported on change only (see onPhase in the header).
+        // ★ A TONE ONLY COUNTS WHEN IT HOLDS — one noisy line reads as start or stop on its own, which is why
+        //   the start/stop events above wait for a run (typeCount). Three in a row here.
+        const bool tone = lineType != HeaderImage && lineType == lastType && typeCount >= 3;
+        int phase = tone ? (lineType == HeaderStart ? 1 : 4)
+                  : (usePhasing && phasingLinesLeft > 0) ? 2 : 3;
+        // ★ A start tone or phasing IS a transmission: assume a chart follows (the measure below only sees
+        //   image lines, so it would otherwise still be remembering the noise from before the start tone).
+        if (phase == 1 || phase == 2) corrAvg = 1.0;
+        //   …and a stop tone ENDS it: what follows is noise until it proves to be another chart.
+        if (phase == 4) corrAvg = 0.0;
+        // ★ "Image" lines that do not look like a chart are noise: 0, standing by.
+        if (phase == 3 && corrAvg < 0.25) phase = 0;
+        // ★ And a change must hold for two lines before it is reported, so the status cannot flicker.
+        if (phase == pendingPhase) pendingCount++; else { pendingPhase = phase; pendingCount = 1; }
+        if (pendingCount >= 2 && phase != lastPhase) { lastPhase = phase; if (onPhase) onPhase(phase); }
+    }
+
     if (usePhasing && phasingLinesLeft > 0 && phasingLinesLeft <= phasingLines - phasingSkipLines)
         phasingPos[phasingLinesLeft - 1] = faxPhasingLinePosition(demodData.data());
 
@@ -249,6 +268,22 @@ void WefaxDecoder::decodeImageLine() {
         for (int s = firstSample; s <= lastSample; s++) { pixel += demodData[s]; n++; }
         if (n > 0) pixel /= n;
         imgData[imgPos + i] = (uint8_t)pixel;
+    }
+
+    /* ★★ IS THIS A CHART OR NOISE? A fax line looks like the one before it (coastlines and isobars run
+     *  DOWN the page); noise does not. Pearson correlation with the previous line, smoothed — the
+     *  "standing by" vs "receiving" in the clients' status (onPhase 0 vs 3). */
+    if (imageLine > 0) {
+        const int other = ((imageLine + 1) & 1) * imageWidth;
+        double sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+        for (int i = 0; i < imageWidth; i++) {
+            const double a = imgData[imgPos + i], b = imgData[other + i];
+            sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b;
+        }
+        const double n = imageWidth;
+        const double va = saa - sa * sa / n, vb = sbb - sb * sb / n, cov = sab - sa * sb / n;
+        const double c = (va > 1e-9 && vb > 1e-9) ? cov / std::sqrt(va * vb) : 0.0;
+        corrAvg = 0.8 * corrAvg + 0.2 * c;
     }
 
     // Line blending for sample-rate adaptation.
