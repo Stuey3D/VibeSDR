@@ -45,6 +45,8 @@ flags_for() {
     test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ Hostile attach messages through the real decoders (audit 2026-10-03) — same deps as the hosts.
     test-decoder-hardening) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★ FT8's hashed-callsign table + spot filter (audit 2026-10-04, row 10), through ft8_lib's real pack/unpack.
+    test-ft8-callhash)     echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     *)               echo "" ;;
   esac
 }
@@ -93,6 +95,9 @@ deps_for() {
     test-decoder-hardening) echo "android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
+    # ★ NAVTEX's CCIR 476 coder, word by word (audit 2026-10-04, rows 11-13); the audio half is scripts/test-navtex.sh.
+    test-navtex-fec)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
+    test-ft8-callhash)  echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
     test-decoder-hosts|test-bench-decoders) echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
@@ -105,7 +110,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-decoder-hardening)
+    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-ft8-callhash)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -268,6 +273,9 @@ if node --no-warnings scripts/test_fmdx_layout.ts >/dev/null; then pass=$((pass+
 if node --no-warnings scripts/test_wefax_align.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_wefax_align.ts"; fi
 if node --no-warnings scripts/test_wefax_crisp.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_wefax_crisp.ts"; fi
 if bash scripts/test-rtty-auto.sh >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-rtty-auto.sh"; fi
+# ★★ NAVTEX on audio (audit 2026-10-04): impulse bursts + selective fading, CER against the old decoder's numbers, and
+#    the BEL control byte never in the output.
+if bash scripts/test-navtex.sh >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-navtex.sh"; fi
 # ★★★ SHARE A STATION (canned chat, app + web): a bookmark's LABEL never reaches the payload, the server's
 #     relayed line is what is drawn, and TUNE asks first on a shared dial somebody else is on. The server half
 #     (validation, naming, the line itself) is vibeserver/test-chat-share.cpp, run with the C++ tests above.
