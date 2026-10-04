@@ -25,6 +25,31 @@ import com.facebook.react.bridge.ReadableType
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 
+
+/** Is any attached input device a touchscreen? (InputDevice.SOURCE_TOUCHSCREEN; a touchpad or an air mouse is not.) */
+fun hasTouchscreenDevice(): Boolean = try {
+    android.view.InputDevice.getDeviceIds().any { id ->
+        val d = android.view.InputDevice.getDevice(id)
+        d != null && (d.sources and android.view.InputDevice.SOURCE_TOUCHSCREEN) == android.view.InputDevice.SOURCE_TOUCHSCREEN
+    }
+} catch (_: Throwable) { true }   // ★ unknown = assume a touchscreen: today's behaviour
+
+/**
+ * ★★★ IS THIS DEVICE DRIVEN BY A REMOTE? ONE RULE, read by TvTextInput (JS, via the noTouchscreen/isTv constants)
+ * AND by Lite's native TV navigation (TvTextInputManager.isTv → TvNav). They disagreed on Kiko's BTV B9 (2026-10-04):
+ * the text fields were fixed but the row bar and highlight never appeared, because Lite asked only for the system's
+ * television UI MODE. A TV in UI mode, a device that DECLARES itself a TV (television / leanback), or one with no
+ * touchscreen — by feature or, on boxes that claim one they do not have, by the attached input devices.
+ */
+fun remoteDriven(ctx: android.content.Context): Boolean {
+    val pm = ctx.packageManager
+    val tvMode = (ctx.getSystemService(android.content.Context.UI_MODE_SERVICE) as? android.app.UiModeManager)
+        ?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+    return tvMode || pm.hasSystemFeature("android.hardware.type.television")
+        || pm.hasSystemFeature("android.software.leanback_only")
+        || !pm.hasSystemFeature("android.hardware.touchscreen") || !hasTouchscreenDevice()
+}
+
 /**
  * VibeSDR V4 — local-SDR USB bridge (Android only).
  *
@@ -48,14 +73,6 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         get() = reactContext.getSystemService(Context.USB_SERVICE) as? UsbManager
 
     override fun getName() = "VibeLocalSDR"
-
-    /** Is any attached input device a touchscreen? (InputDevice.SOURCE_TOUCHSCREEN; a touchpad or an air mouse is not.) */
-    private fun hasTouchscreenDevice(): Boolean = try {
-        android.view.InputDevice.getDeviceIds().any { id ->
-            val d = android.view.InputDevice.getDevice(id)
-            d != null && (d.sources and android.view.InputDevice.SOURCE_TOUCHSCREEN) == android.view.InputDevice.SOURCE_TOUCHSCREEN
-        }
-    } catch (_: Throwable) { true }   // ★ unknown = assume a touchscreen: today's behaviour
 
     /** ★ isLite: the shared ServerModeScreen shows Lite-only options (the DAB label-scan switch) when the
      *  package is VibeServer Lite. Read synchronously as NativeModules.VibeLocalSDR.isLite. */

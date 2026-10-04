@@ -31,9 +31,9 @@ class TvTextInputManager : ReactTextInputManager() {
     }
 
     companion object {
-        fun isTv(ctx: Context): Boolean =
-            (ctx.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager)?.currentModeType ==
-                Configuration.UI_MODE_TYPE_TELEVISION
+        /** ★ The shared rule (VibeLocalSdrModule.kt remoteDriven): it was the TV UI mode alone, which a cheap box
+         *  running a phone launcher never reports — so TvNav (row bar + highlight) never started there. */
+        fun isTv(ctx: Context): Boolean = remoteDriven(ctx)
     }
 }
 
