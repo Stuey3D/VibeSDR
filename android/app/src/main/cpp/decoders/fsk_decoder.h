@@ -48,21 +48,31 @@ private:
 };
 
 // ── CCIR476 (NAVTEX / SITOR-B) — 7-bit FEC, 4 mark bits per char ─────────────
+// ★ SITOR-B sends every character twice: the DX copy, then the RX copy five character slots (35 bits) later, the two
+//   streams interleaved. `alphaPhase` = "this slot is an RX slot" (fldigi's name: the RX slot is the one decoded, the
+//   DX copy five slots back — c1 here — is the spare). Phasing: DX slots carry 0x66 (rep), RX slots 0x0F (alpha).
 class Ccir476 {
 public:
     Ccir476();
-    void reset() { shift = false; alphaPhase = false; c1 = c2 = c3 = 0; }
+    void reset() { shift = false; alphaPhase = false; phaseKnown = false; phaseVotes = 0; c1 = c2 = c3 = 0; }
     int nbits() const { return 7; }
     uint16_t msb() const { return 0x40; }
     bool checkBits(uint16_t code) const;
-    // Returns decoded char (0 = none). `success` set to bit validity.
-    char32_t processChar(uint16_t code, bool& success);
+    /** Returns the decoded char (0 = none). `score` is fldigi's process_bytes result for an RX slot — +1 the RX copy
+     *  was good, 0 the DX copy repaired it (or the slot was phasing), -2 neither copy was readable (prints '_') —
+     *  and 0 for a DX slot, which is only stored for later. */
+    char32_t processChar(uint16_t code, int& score);
+    /** ★ A character slot went by with no word read (the bit hunt after a resync): keep the DX/RX phase and the
+     *  DX history in step, so a resync does not have to re-learn the phase from the next phasing signal. */
+    void skipSlot();
 private:
     static bool fourMarkBits(uint8_t v);
     char32_t codeToChar(uint8_t code, bool fig) const;
+    char32_t decode(uint8_t chr);
     char32_t ltrs[128], figs[128]; bool validCodes[128] = {false};
     std::map<uint8_t, char32_t> codeLtrs, codeFigs;
-    bool shift = false, alphaPhase = false;
+    bool shift = false, alphaPhase = false, phaseKnown = false;
+    int phaseVotes = 0;
     uint8_t c1 = 0, c2 = 0, c3 = 0;
     const uint8_t codeAlpha = 0x0f, codeBeta = 0x33, codeChar32 = 0x6a,
                   codeRep = 0x66, letters = 0x5a, figures = 0x36;
@@ -100,7 +110,7 @@ private:
     void updateFilters();
     void setState(State s);
     void processBit(bool bit);
-    bool processCharacter(uint16_t code);   // returns success
+    int  processCharacter(uint16_t code);   // ITA2: 1; CCIR476: the RX-slot score (Ccir476::processChar)
 
     double sampleRate, centerFrequency, shiftHz, deviationF, baudRate;
     bool inverted;
@@ -133,6 +143,11 @@ private:
     int bitCount = 0; uint16_t codeBits = 0; int nbits = 0; uint16_t msb = 0;
     bool syncSetup = false; std::vector<uint16_t> syncChars; int validCount = 0, errorCount = 0;
     bool waiting = false, stopVariable = false;
+
+    // ★ NAVTEX (2026-10-04): a resync forced by bad characters keeps the coder's shift and DX/RX phase (only a loss of
+    //   signal resets them); bitClock_/ccirLastEnd_ count the bits the re-hunt skipped, so the phase stays in step.
+    bool keepCoderState_ = false;
+    unsigned long bitClock_ = 0, ccirLastEnd_ = 0;
 
     Ita2*    ita2 = nullptr;
     Ccir476* ccir476 = nullptr;

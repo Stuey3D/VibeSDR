@@ -107,10 +107,13 @@ Ccir476::Ccir476() {
         U,U,U,U,U,U,U,U'\'',U,U,U,U'!',U,U':',U'(',U,
         U,U,U,U,U,U,U,U'2',U,U,U,U'6',U,U'0',U'1',U,
         U,U,U,U,U,U'&',U,U,U,U'.',U'/',U,U';',U,U,U,
-        U,U,U,U,U,U,U,U'-',U,U,U,7,U,U'8',U'7',U,
+        U,U,U,U,U,U,U,U'-',U,U,U,U'\'',U,U'8',U'7',U,   // 0x4B = BEL: printed as ' (below)
         U,U,U,U'$',U,U'4',U'3',U,U,U',',U,U,U' ',U,U,U,
         U,U,U,U'"',U,U')',U,U,U,U'#',U,U,U'\n',U,U,U,
         U,U'9',U'?',U,U'5',U,U,U,U'\r',U,U,U,U,U,U,U };
+    /* ★ FIGS 0x4B IS BEL (audit 2026-10-04, row 13). The table held a raw 7, which went through the host to the UI as a
+     *  control byte. fldigi's filter_print prints an apostrophe for it ("it should be a beep, but French NAVTEX
+     *  displays a quote") — the same here, in the table, so no path can emit the 7. */
     for (int c = 0; c < 128; c++) { ltrs[c] = L[c]; figs[c] = F[c];
         if (fourMarkBits((uint8_t)c)) { validCodes[c] = true;
             if (L[c] != U'_') codeLtrs[(uint8_t)c] = L[c];
@@ -121,27 +124,48 @@ char32_t Ccir476::codeToChar(uint8_t code, bool fig) const {
     auto& m = fig ? codeFigs : codeLtrs; auto it = m.find(code);
     return it == m.end() ? 0 : it->second;
 }
-char32_t Ccir476::processChar(uint16_t code, bool& success) {
-    uint8_t code7 = (uint8_t)(code & 0x7F);
-    success = fourMarkBits(code7);
-    uint8_t chr = 0xff;
-    if (code7 == codeRep) alphaPhase = false;
-    else if (code7 == codeAlpha) alphaPhase = true;
-    if (!alphaPhase) { c1 = c2; c2 = c3; c3 = code7; }
+char32_t Ccir476::decode(uint8_t chr) {
+    if (chr == codeRep || chr == codeAlpha || chr == codeBeta || chr == codeChar32) return 0;
+    if (chr == letters) { shift = false; return 0; }
+    if (chr == figures) { shift = true; return 0; }
+    return codeToChar(chr, shift);
+}
+char32_t Ccir476::processChar(uint16_t code, int& score) {
+    const uint8_t code7 = (uint8_t)(code & 0x7F);
+    const bool valid = fourMarkBits(code7);
+    score = 0;
+    /* ★★ TWO PHASING CODES IN A ROW BEFORE THE PHASE MOVES (audit 2026-10-04, row 12). One 0x66 or 0x0F set the phase
+     *  outright, and a single misread character (one bit from many valid words) flipped DX and RX for the rest of the
+     *  message: every character then "repaired" from the wrong copy. In real phasing the codes come in a run (66 0F
+     *  66 0F …), so a wrong phase sees two contradictions in consecutive slots at once; a lone misread never does.
+     *  fldigi needs two reps in a row (process_char). Only an UNKNOWN phase (after a reset) takes a single one. */
+    if (code7 == codeRep || code7 == codeAlpha) {
+        const bool says = code7 == codeAlpha;   // the phase this code says this slot is
+        if (says == alphaPhase) phaseVotes = 0;
+        else if (!phaseKnown || ++phaseVotes >= 2) { alphaPhase = says; phaseVotes = 0; }
+        phaseKnown = true;
+    } else phaseVotes = 0;
+    char32_t out = 0;
+    if (!alphaPhase) { c1 = c2; c2 = c3; c3 = code7; }    // a DX copy: held for its RX copy five slots on
     else {
-        if (success && c1 == code7) chr = code7;
-        else if (success) chr = code7;
-        else if (fourMarkBits(c1)) chr = c1;
-        if (chr != 0xff) {
-            alphaPhase = !alphaPhase;
-            if (chr == codeRep || chr == codeAlpha || chr == codeBeta || chr == codeChar32) return 0;
-            if (chr == letters) { shift = false; return 0; }
-            if (chr == figures) { shift = true; return 0; }
-            return codeToChar(chr, shift);
-        }
+        /* ★★ fldigi's process_bytes scoring (audit 2026-10-04, row 11): +1 the RX copy was good, 0 the DX copy
+         *  repaired it, -2 neither. The decoder resyncs on the running total, so a character the FEC saved no
+         *  longer counts against the lock. A DX copy that is a phasing code means this is phasing: nothing to print.
+         *  ★ Neither copy readable → '_' (ITU-R M.476: an unrecoverable character is printed as an error symbol, so a
+         *    reader sees text is missing — it was silently dropped).
+         *  ★ An RX copy that reads as a PHASING code while its DX copy is a real character is the misread of row 12:
+         *    phasing never puts a character in the DX slot, so the DX copy is the one to print. */
+        const bool realDx = fourMarkBits(c1) && c1 != codeRep && c1 != codeAlpha;
+        if (valid && !(realDx && (code7 == codeRep || code7 == codeAlpha))) { out = decode(code7); score = 1; }
+        else if (fourMarkBits(c1)) { if (c1 != codeRep) out = decode(c1); }
+        else { out = U'_'; score = -2; }
     }
     alphaPhase = !alphaPhase;
-    return 0;
+    return out;
+}
+void Ccir476::skipSlot() {
+    if (!alphaPhase) { c1 = c2; c2 = c3; c3 = 0; }
+    alphaPhase = !alphaPhase;
 }
 
 // ── FskDecoder ───────────────────────────────────────────────────────────────
@@ -269,7 +293,7 @@ void FskDecoder::process(const int16_t* samples, int count) {
             syncDelta = 0;
         }
         if (audioAverage < audioMinimum && state != NoSignal) setState(NoSignal);
-        else if (state == NoSignal) syncSetup = true;
+        else if (state == NoSignal) { syncSetup = true; keepCoderState_ = false; }   // signal lost: a new start
         if (!pulseEdgeEvent) { sampleCount++; continue; }
         processBit(averagedMarkState);
         sampleCount++;
@@ -282,10 +306,11 @@ static inline bool ckCode(Ita2* i, Ccir476* c, uint16_t code) {
 
 void FskDecoder::processBit(bool bit) {
     uint16_t bitVal = bit ? 1 : 0;
+    bitClock_++;
     if (syncSetup) {
         bitCount = 0; codeBits = 0; errorCount = 0; validCount = 0; lockRequired_ = 2;
         if (ita2) ita2->reset();
-        if (ccir476) ccir476->reset();
+        if (ccir476 && !keepCoderState_) ccir476->reset();
         syncChars.clear(); setState(Sync1); syncSetup = false;
     }
     switch (state) {
@@ -310,7 +335,18 @@ void FskDecoder::processBit(bool bit) {
                     //   decoder was already in step a moment ago, so one is enough to resume.
                     int required = ccir476 ? 4 : lockRequired_;
                     if (validCount >= required) {
+                        /* ★ NAVTEX re-lock after a resync that kept the coder (2026-10-04): step the DX/RX phase over
+                         *  the character slots the hunt skipped (rounded — a bit slip lands between two), so the
+                         *  first character is read in the right slot without waiting for phasing that will not come. */
+                        if (ccir476 && keepCoderState_) {
+                            const unsigned long first = bitClock_ - 7ul * syncChars.size();
+                            unsigned long n = first > ccirLastEnd_ ? (first - ccirLastEnd_ + 3) / 7 : 0;
+                            if (n > 7) n = 6 + (n & 1);   // only the parity and the 3-slot DX history matter
+                            for (unsigned long k = 0; k < n; k++) ccir476->skipSlot();
+                        }
+                        keepCoderState_ = false;
                         for (uint16_t c : syncChars) processCharacter(c);
+                        ccirLastEnd_ = bitClock_;
                         setState(ReadData);
                     }
                 } else { codeBits = 0; bitCount = 0; syncSetup = true; }
@@ -336,28 +372,39 @@ void FskDecoder::processBit(bool bit) {
                     break;
                 }
                 if (ita2) goodFrames_++;
-                bool ok = processCharacter(codeBits);
-                if (ok) { if (errorCount > 0) errorCount--; }
-                else { errorCount++; if (errorCount > 2) syncSetup = true; }
+                const int score = processCharacter(codeBits);
+                if (ita2) { if (errorCount > 0) errorCount--; }   // ITA2: every frame that reached here is good
+                else {
+                    /* ★★★ NAVTEX RESYNCS ON fldigi's SCORE, AND KEEPS ITS STATE (audit 2026-10-04, row 11). Any 3 bad
+                     *  words forced a full resync — DX copies included, and RX copies the FEC had just repaired from
+                     *  them — and the resync wiped the shift and the DX/RX phase, then needed 4 new valid words before
+                     *  anything printed. One lightning crash cost a line. Now only RX slots score (+1 good, 0 repaired,
+                     *  -2 lost), the resync comes past 5 (fldigi's handle_bit_value), and it re-hunts the bit timing
+                     *  only: letters/figures and the phase are the sender's and have not changed. */
+                    ccirLastEnd_ = bitClock_;
+                    errorCount -= score;
+                    if (errorCount < 0) errorCount = 0;
+                    if (errorCount > 5) { syncSetup = true; keepCoderState_ = true; }
+                }
                 codeBits = 0; bitCount = 0; waiting = true;
             }
             break;
         }
     }
 }
-bool FskDecoder::processCharacter(uint16_t code) {
+int FskDecoder::processCharacter(uint16_t code) {
     if (ita2) {
         char32_t ch = ita2->processChar(code);
         if (ch != 0 && onChar) onChar(ch);
-        return true;   // ITA2 has no error correction
+        return 1;   // ITA2 has no error correction
     }
     if (ccir476) {
-        bool ok = false;
-        char32_t ch = ccir476->processChar(code, ok);
+        int score = 0;
+        char32_t ch = ccir476->processChar(code, score);
         if (ch != 0 && onChar) onChar(ch);
-        return ok;
+        return score;
     }
-    return false;
+    return 0;
 }
 
 } // namespace vibe

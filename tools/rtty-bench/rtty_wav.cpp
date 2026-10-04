@@ -4,6 +4,9 @@
 //
 //   rtty_wav in.wav [centre=1000] [shift=450] [baud=50] [framing=5N1.5] [inverted=1]
 //   rtty_wav in.wav auto        — RttyAuto: finds shift, centre, baud and polarity itself
+//   rtty_wav in.wav [centre] [shift] [baud] 4/7 [inverted] — NAVTEX: CCIR476 (SITOR-B FEC); the framing "4/7" picks it
+//   rtty_wav in.wav CCIR476 [centre=500] [shift=170] [baud=100] [inverted=0] — the same, with NAVTEX's defaults
+//   (★ 2026-10-04: the encoding argument was added for NAVTEX; the ITA2 and auto forms above are unchanged.)
 //   (DWD weather RTTY: 450 Hz shift, 50 baud, inverted — the app's 'weather' preset.)
 //   Convert first if needed:  ffmpeg -i rec.m4a -ac 1 -ar 48000 -c:a pcm_s16le in.wav
 #include "decoders/fsk_decoder.h"
@@ -13,6 +16,17 @@
 #include <cstring>
 #include <string>
 #include <vector>
+
+static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, double sh, double baud,
+                  const std::string& fr, const std::string& enc, bool inv) {
+    vibe::FskDecoder d(48000, cf, sh, baud, fr, enc, inv);
+    std::string out; long chars = 0;
+    d.onChar = [&](char32_t c) { chars++; if (c == U'\r') return; out += c < 128 ? (char)c : '?'; };
+    for (size_t i = 0; i < mono.size(); i += 960) d.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
+    std::printf("%s\n", out.c_str());
+    std::fprintf(stderr, "── %.1f s, %ld chars, resyncs %lu\n", frames / 48000.0, chars, d.resyncs());
+    return 0;
+}
 
 int main(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr, "usage: %s in.wav [centre] [shift] [baud] [framing] [inverted]\n", argv[0]); return 2; }
@@ -40,13 +54,13 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "── auto chose: %s", a.chosen().empty() ? "nothing\n" : a.chosen().c_str());
         return 0;
     }
+    if (argc > 2 && std::string(argv[2]) == "CCIR476") {
+        const double cf = argc > 3 ? std::atof(argv[3]) : 500, sh = argc > 4 ? std::atof(argv[4]) : 170,
+                     baud = argc > 5 ? std::atof(argv[5]) : 100;
+        const bool inv = argc > 6 ? std::atoi(argv[6]) != 0 : false;
+        return runFsk(mono, frames, cf, sh, baud, "4/7", "CCIR476", inv);
+    }
     const double cf = argc > 2 ? std::atof(argv[2]) : 1000, sh = argc > 3 ? std::atof(argv[3]) : 450, baud = argc > 4 ? std::atof(argv[4]) : 50;
     const std::string fr = argc > 5 ? argv[5] : "5N1.5"; const bool inv = argc > 6 ? std::atoi(argv[6]) != 0 : true;
-    vibe::FskDecoder d(48000, cf, sh, baud, fr, "ITA2", inv);
-    std::string out; long chars = 0;
-    d.onChar = [&](char32_t c) { chars++; if (c == U'\r') return; out += c < 128 ? (char)c : '?'; };
-    for (size_t i = 0; i < mono.size(); i += 960) d.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
-    std::printf("%s\n", out.c_str());
-    std::fprintf(stderr, "── %.1f s, %ld chars, resyncs %lu\n", frames / 48000.0, chars, d.resyncs());
-    return 0;
+    return runFsk(mono, frames, cf, sh, baud, fr, fr == "4/7" ? "CCIR476" : "ITA2", inv);
 }

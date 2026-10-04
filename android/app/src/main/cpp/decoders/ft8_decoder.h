@@ -23,6 +23,34 @@ extern "C" {
 
 namespace vibe {
 
+/* ★★★ THE HASHED-CALLSIGN TABLE (audit 2026-10-04, row 10). A non-standard call ("PJ4/K1ABC") goes over the air as a
+ *  10-, 12- or 22-bit hash, and only a table of calls already heard in full can turn it back into a call. The old one
+ *  held 512 calls, never forgot one, and stopped SAVING when full — every decoded call is saved, so on a busy band it
+ *  filled within hours and the receiver could resolve nothing it heard after that. And it returned the FIRST call
+ *  whose hash matched: 512 calls in 1024 ten-bit buckets put a second call under a 10-bit hash about half the time,
+ *  so a hashed call printed as somebody else's.
+ *  ★ Now: least-recently-used (each entry carries the stamp of its last save or lookup; a full table evicts the
+ *    oldest), and a hash that matches two DIFFERENT calls is unknown — "<...>", which the spot filter drops —
+ *    rather than a guess. WSJT-X keeps its table the same way (recent calls, never a guess). */
+class Ft8CallHashTable {
+public:
+    static constexpr int kCapacity = 512;
+    /** ft8_lib's save_hash: `call` heard in full, its 22-bit hash `n22` (the 12- and 10-bit hashes are its top bits). */
+    void save(const char* call, uint32_t n22);
+    /** ft8_lib's lookup_hash: `bits` = 10, 12 or 22. Writes the call (NUL-terminated, at most 11 chars) into `out[12]`,
+     *  or "" and false when no call — or more than one different call — has that hash. */
+    bool lookup(int bits, uint32_t hash, char* out);
+    void clear();
+    int  size();
+private:
+    struct Entry { char call[12]; uint32_t n22; uint64_t stamp; };   // stamp 0 = empty
+    std::mutex mtx_;
+    Entry e_[kCapacity] = {};
+    uint64_t clock_ = 0;
+};
+/** The one table every FT8/FT4 decoder shares (call hashes are global — a call heard on FT8 resolves on FT4). */
+Ft8CallHashTable& ft8CallHashes();
+
 class Ft8Decoder {
 public:
     Ft8Decoder(int sampleRate, bool ft4);
@@ -32,6 +60,11 @@ public:
     void process(const int16_t* mono, int count);
 
     bool isFt4() const { return ft4; }
+
+    /** ★ The callsign a spot may carry, from ft8_lib's de-call field: false for an empty one or an unresolved hash
+     *  ("<...>"); a resolved hash ("<PJ4/K1ABC>") loses its brackets. Nothing with a '<' or '>' is ever spotted —
+     *  the host's whitelist turned "<...>" into "" and the map got an EMPTY-callsign spot (audit 2026-10-04). */
+    static bool spotCallsign(const char* deField, std::string& out);
 
     // call_to, call_de, grid (any may be empty), snr dB, audio offset Hz.
     std::function<void(const std::string& callTo, const std::string& callDe,
