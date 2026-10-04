@@ -142,7 +142,14 @@ function enhanceWefax(buf: PixBuf) {
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName }, ref) {
     const { width: winW } = useWindowDimensions();
-    const panelW = winW - 16 - 24; // wrap margins + body padding
+    /* ★★★ THE WIDTH THIS CANVAS ACTUALLY HAS — MEASURED, not the window's. It was `winW - 16 - 24`, true
+     *  on a phone (the box is full-bleed there) and false everywhere else since the box was capped at
+     *  PANEL_MAX_W (760, DecoderPanel, 2026-07-31): on a full-screen Mac the WEFAX scale came out ~1.08
+     *  for a ~645 pt box, so the chart was drawn ~1950 wide and CLIPPED — the left third, magnified, with
+     *  no way to pan (Stuart, 2026-10-04: "seems too zoomed in and I also cannot pan it"). The window
+     *  figure is only the first-frame guess until onLayout reports the real one. */
+    const [boxW, setBoxW] = useState(0);
+    const panelW = boxW > 0 ? boxW : winW - 16 - 24;
 
     const store = getImgStore(decoderName || 'img');
     const live = useRef<PixBuf | null>(store.live);
@@ -390,6 +397,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
 
     return (
       <ScrollView style={{ height: boxH, maxHeight }} showsVerticalScrollIndicator
+                  onLayout={(e) => { const w = Math.floor(e.nativeEvent.layout.width); setBoxW((p) => (p === w ? p : w)); }}
                   /* ★ scroll lane: a picture, centred, no controls in it */>
         {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would
             otherwise sit against the left edge with dead space beside it. */}
