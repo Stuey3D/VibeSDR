@@ -23,4 +23,18 @@ python3 tools/rtty-bench/synth_rtty.py $T/fade.wav 15 20 90 1 1 >/dev/null
 $T/rtty $T/fade.wav 1000 450 50 5N1.5 1 > $T/fade.txt 2>/dev/null
 g=$(python3 tools/rtty-bench/score.py $T/fade.txt $T/fade.wav.txt | sed 's/.*garbage \([0-9]*\) of.*/\1/')
 [ "$g" -le 10 ]; ok $? "selective fading (15 dB SNR, 20 dB tone fades): $g garbage characters (old decoder: 54)"
+# 3. ★ REAL AIR: Stuart's recording of DWD on 4582 kHz USB (Airspy HF+, 2026-10-04 ~20:26 BST) — the one that printed
+#    "CQ CQ CQNDZPXX0XXV…" on the old decoder. Old: 1 clean frequency line, 3 runs of 10+ garbage characters.
+R=tools/rtty-bench/data/dwd-4582khz-2026-10-04.m4a
+if command -v ffmpeg >/dev/null && [ -f $R ]; then
+  ffmpeg -loglevel error -y -i $R -ac 1 -ar 48000 -c:a pcm_s16le $T/real.wav
+  $T/rtty $T/real.wav auto > $T/real.txt 2> $T/real.err
+  grep -q "50 baud, 450 Hz shift, reverse\]" $T/real.err; ok $? "REAL DWD: AUTO → 50 baud, 450 Hz, reverse ($(sed 's/.*chose: //' $T/real.err))"
+  n=$(grep -c 'FREQUENCIES   4583 KHZ   7646 KHZ   10100.8 KHZ' $T/real.txt)
+  [ "$n" -ge 3 ]; ok $? "REAL DWD: $n complete frequency lines (old decoder: 1)"
+  j=$(grep -oE '[A-QS-XZ0-9]{10,}' $T/real.txt | wc -l | tr -d ' ')
+  [ "$j" -eq 0 ]; ok $? "REAL DWD: $j runs of 10+ garbage characters (old decoder: 3)"
+else
+  echo "  --   REAL DWD recording: not run (needs ffmpeg)"
+fi
 exit $fail
