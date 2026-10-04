@@ -1309,12 +1309,6 @@ static std::atomic<bool>   g_dabRetuneAfterRebuild{false};
 static std::mutex          g_vsBlockedModesMtx;
 static std::string         g_vsBlockedModesCsv;
 
-/** True when the owner has switched this mode or decoder off on this receiver. */
-/** ★★★ A MODE IS ONE OF OURS, OR IT IS REFUSED (audit 2026-10-03). Any string a client sent was stored as the
- *  shared mode and printed into every listener's config JSON unescaped: a trailing backslash broke the JSON for
- *  everyone on a shared dial, ~500 bytes overflowed the config buffer so NOBODY got config, and markup rode along
- *  to every client. Every path that accepts a mode already asks vsModeBlocked, so an unknown mode is refused here,
- *  once, for all of them. */
 /** ★ Hex of a fixed length range — the shape every broadcast identifier has (PI 4, ECC 2, EId 4, SId 4 or 8). */
 static bool isHexLen(const std::string& v, size_t lo, size_t hi) {
     if (v.size() < lo || v.size() > hi) return false;
@@ -1332,6 +1326,10 @@ struct LogoLookupSlot {
     ~LogoLookupSlot() { g_logoLookups.fetch_sub(1); }
 };
 
+/** ★★★ A MODE IS ONE OF OURS, OR IT IS REFUSED (audit 2026-10-03). Any string a client sent was stored as the
+ *  shared mode and printed into every listener's config JSON unescaped: a trailing backslash broke the JSON for
+ *  everyone on a shared dial, ~500 bytes overflowed the config buffer so NOBODY got config, and markup rode along
+ *  to every client. Every path that ACCEPTS a mode asks vsModeRefused (below), which is this plus the owner's list. */
 static bool vsModeKnown(const std::string& m) {
     static const char* const kModes[] = { "usb", "lsb", "am", "sam", "cw", "cwu", "cwl",
                                           "fm", "nfm", "wfm", "fmdx", "dab" };
@@ -1339,10 +1337,15 @@ static bool vsModeKnown(const std::string& m) {
     return false;
 }
 
+/** True when the owner has switched this mode or decoder off on this receiver.
+ *  ★★★ OWNER'S LIST ONLY — NOT "IS THIS A MODE". It is asked about DECODERS and FEATURES too ("rds" for
+ *  Advanced RDS, "rtty", "time", "spots"…). RC4 folded vsModeKnown into it, so every one of those names read
+ *  as blocked: Advanced RDS opened and never populated, every decoder was refused, and the directory card
+ *  dropped them all (Stuart, 2026-10-04: "RC4 has killed advanced RDS"). A client-sent MODE goes through
+ *  vsModeRefused, which adds the known-mode check. ONE FUNCTION, TWO QUESTIONS — keep them apart. */
 static bool vsModeBlocked(const std::string& name) {
     std::string want;
     for (char c : name) want += char(std::tolower((unsigned char)c));
-    if (want.size() > 8 || !vsModeKnown(want)) return true;
     std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
     if (g_vsBlockedModesCsv.empty()) return false;
     std::string tok;
@@ -1354,6 +1357,13 @@ static bool vsModeBlocked(const std::string& name) {
         } else tok += char(std::tolower((unsigned char)c));
     }
     return false;
+}
+
+/** A mode a client sent: refused when it is not one of ours, or the owner has switched it off. */
+static bool vsModeRefused(const std::string& m) {
+    std::string want;
+    for (char c : m) want += char(std::tolower((unsigned char)c));
+    return want.size() > 8 || !vsModeKnown(want) || vsModeBlocked(want);
 }
 
 /** The same list as a JSON array, for hwinfo's `blocked` field. */
@@ -13206,7 +13216,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::string m = jsonStr(msg, "mode");
                 // ★ …and in the per-listener path, which claims tune/mode/bandwidth before the
                 //   shared handlers ever run. Same rule, third reader.
-                if (!m.empty() && vsModeBlocked(m)) {
+                if (!m.empty() && vsModeRefused(m)) {
                     LOGI("mode %s refused for this listener — the owner has switched it off", m.c_str());
                     m.clear();
                 }
@@ -14555,7 +14565,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!vibechat::parseRequest(msg, req)) { refuse("that share could not be read"); return; }
                 vibechat::Caps caps;
                 for (const auto& r : vsTunableRanges()) caps.ranges.emplace_back(r.lo, r.hi);
-                caps.modeBlocked = [](const std::string& m) { return vsModeBlocked(m); };
+                caps.modeBlocked = [](const std::string& m) { return vsModeRefused(m); };
                 // ★ Asked only for a DAB share: the capability probe can reach the hardware's rate.
                 std::string lm = req.mode;
                 for (auto& ch : lm) ch = (char)tolower((unsigned char)ch);
@@ -14645,7 +14655,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  and every client sends the mode INSIDE its tune — so `{"type":"tune","mode":"wfm"}`
              *  walked straight past the owner's blocked list. ONE RULE, TWO READERS, and only one
              *  of them enforced it (audit, 2026-09-10). */
-            if (!m.empty() && vsModeBlocked(m)) {
+            if (!m.empty() && vsModeRefused(m)) {
                 LOGI("mode %s refused in a tune — the owner has switched it off", m.c_str());
                 m.clear();
             }
@@ -14664,7 +14674,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  client, a second tab or a hand-rolled tool asks anyway, and a rule that only the
              *  UI keeps is not a rule. Stuart's case: WFM on an RSP1B locked to HF, where the
              *  mode cannot do anything useful and should not be reachable at all. */
-            if (!m.empty() && vsModeBlocked(m)) {
+            if (!m.empty() && vsModeRefused(m)) {
                 LOGI("mode %s refused — the server owner has switched it off on this receiver", m.c_str());
                 return;
             }
