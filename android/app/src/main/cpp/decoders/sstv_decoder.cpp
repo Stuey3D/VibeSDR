@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace vibe {
@@ -14,7 +15,11 @@ static const SstvMode kModes[] = {
     {"Martin M2",4.862e-3,0.572e-3,0.572e-3,0.2288e-3,226.7986e-3,320,256,1,SSTV_GBR,false},
     {"Martin M3",4.862e-3,0.572e-3,0.572e-3,0.2288e-3,446.446e-3,320,128,2,SSTV_GBR,false},
     {"Martin M4",4.862e-3,0.572e-3,0.572e-3,0.2288e-3,226.7986e-3,320,128,2,SSTV_GBR,false},
-    {"Scottie S1",9e-3,1.5e-3,1.5e-3,0.4320e-3,428.38e-3,320,256,1,SSTV_GBR,false},
+    // ★★ S1's line is 428.22 ms (9 + 1.5 + 3×138.24 + 2×1.5 — the spec, QSSTV and MMSSTV). slowrx's
+    //    428.38 is the one entry here that is not the sum of its own parts; slowrx always applied its
+    //    slant fix, which hid it. Ours did not, so every S1 picture leaned 95 px over the frame — the
+    //    line fit measured it as a "+373 ppm sender" on a perfect one (test-sstv-quality, 2026-10-04).
+    {"Scottie S1",9e-3,1.5e-3,1.5e-3,0.4320e-3,428.22e-3,320,256,1,SSTV_GBR,false},
     {"Scottie S2",9e-3,1.5e-3,1.5e-3,0.2752e-3,277.692e-3,320,256,1,SSTV_GBR,false},
     {"Scottie DX",9e-3,1.5e-3,1.5e-3,1.08053e-3,1050.3e-3,320,256,1,SSTV_GBR,false},
     {"Robot 72",9e-3,3e-3,4.7e-3,0.2875e-3,300e-3,320,240,1,SSTV_YUV,false},
@@ -53,7 +58,20 @@ static const uint8_t kVisMap[128] = {
 const SstvMode* sstvModeByIndex(uint8_t i) { return i < (sizeof(kModes)/sizeof(kModes[0])) ? &kModes[i] : nullptr; }
 uint8_t sstvModeByVis(uint8_t v) { return v < 128 ? kVisMap[v] : 0; }
 
-static inline uint8_t clip(double v) { return v < 0 ? 0 : (v > 255 ? 255 : (uint8_t)v); }
+// ★ ROUNDED, not truncated (2026-10-04): truncation took half a level off every pixel on average.
+static inline uint8_t clip(double v) { return v < 0 ? 0 : (v > 255 ? 255 : (uint8_t)std::lround(v)); }
+
+// ★★★ ROBOT AND PD SEND STUDIO-RANGE YUV — BT.601, Y 16–235 and chroma 16–240 about 128 (audit
+// 2026-10-04, row 4; the Dayton/Barber spec, and what MMSSTV and QSSTV transmit). It was decoded as
+// FULL range (slowrx's R = Y + 1.40(V−128)): black came out at 16, white at 235 and the colours ~13 %
+// short of saturation — measured 18 levels of error on 100 % bars. One function, so the live
+// lines and the redraw cannot disagree.
+static inline void yuvToRgb(uint8_t y, uint8_t v, uint8_t u, uint8_t* rgb) {
+    const double Y = 1.164 * ((double)y - 16.0), V = (double)v - 128.0, U = (double)u - 128.0;
+    rgb[0] = clip(Y + 1.596 * V);
+    rgb[1] = clip(Y - 0.813 * V - 0.392 * U);
+    rgb[2] = clip(Y + 2.017 * U);
+}
 static double deg2rad(double d) { return d * M_PI / 180.0; }
 static const int MinSlant_ = 30, MaxSlant_ = 150;   // slant search range (degrees)
 
@@ -200,6 +218,7 @@ SstvVideo::SstvVideo(const SstvMode* mode, double sr, int shift, bool ad)
     else
         maxLen = (int)(m->lineTime*m->numLines*sr*1.3) + 15000;
     hasSync.assign(maxLen/13 + 1, 0);
+    syncLevel.assign(hasSync.size(), -1.0f);
     storedLum.assign(maxLen, 0);
     fin.assign(1024, 0);
 }
@@ -256,7 +275,10 @@ std::vector<SstvPixel> SstvVideo::pixelGrid(double rate, int skip) {
                     uint8_t ch;
                     if (robot) ch = (c == 1) ? (y%2==0 ? 1 : 2) : 0;
                     else ch = (uint8_t)c;
-                    double t = (double)y*m->lineTime + chanStart[c] + ((double)x-0.5)/m->imgWidth*chanLen[ch];
+                    // ★ The CENTRE of pixel x, as the PD branch above has it (2026-10-04). slowrx's
+                    //   (x − 0.5) sampled the centre of pixel x−1, so every Martin/Scottie/Robot
+                    //   picture sat one pixel right — measured +1.0 px on the test card.
+                    double t = (double)y*m->lineTime + chanStart[c] + ((double)x+0.5)/m->imgWidth*chanLen[ch];
                     int sn = (int)std::lround(rate*t) + skip;
                     px.push_back({sn,x,y,ch});
                 }
@@ -268,21 +290,33 @@ std::vector<SstvPixel> SstvVideo::pixelGrid(double rate, int skip) {
 }
 
 void SstvVideo::detectSync(SstvBuffer& pcm, int targetBin, int idx) {
-    int16_t s[64]; pcm.getWindow(-32, 64, s);
-    for (int i = 0; i < 64; i++) fin[i] = (i < (int)hannWins[1].size()) ? (float)(s[i]/32768.0*hannWins[1][i]) : 0;
-    for (int i = 64; i < (int)fin.size(); i++) fin[i] = 0;
+    // ★★★ CENTRE THE WINDOW ON THE SAMPLE IT REPORTS (audit 2026-10-04, row 3). This read 64
+    // samples from -32 — slowrx's numbers at 44.1 kHz — but at 12 kHz the Hann window is 17 long,
+    // so only samples -32..-16 were weighted: every flag described the signal 24 samples (2 ms)
+    // BEFORE the sample it was filed under, and every aligned picture came out 4–10 px off.
+    const int L = std::min((int)hannWins[1].size(), (int)fin.size());
+    int16_t s[1024]; pcm.getWindow(-L/2, L, s);   // L <= fin.size() == 1024
+    for (int i = 0; i < L; i++) fin[i] = (float)(s[i]/32768.0*hannWins[1][i]);
+    for (int i = L; i < (int)fin.size(); i++) fin[i] = 0;
     fft.run(fin.data());
     double pRaw = 0, pSync = 0;
     int minB = getBin(1500.0+headerShift), maxB = getBin(2300.0+headerShift);
     for (int i = minB; i <= maxB; i++) pRaw += fft.power(i);
     for (int i = targetBin-1; i <= targetBin+1; i++) { double w = 1.0 - 0.5*std::fabs((double)(targetBin-i)); pSync += fft.power(i)*w; }
     pRaw /= (double)(maxB - minB); pSync /= 2.0;
-    if (idx < (int)hasSync.size()) hasSync[idx] = (pSync > 2*pRaw) ? 1 : 0;
+    if (idx < (int)hasSync.size()) {
+        hasSync[idx] = (pSync > 2*pRaw) ? 1 : 0;
+        syncLevel[idx] = (float)std::log10((pSync + 1e-30) / (2*pRaw + 1e-30));
+    }
 }
 
 double SstvVideo::estimateSNR(SstvBuffer& pcm) {
-    int16_t s[1024]; pcm.getWindow(-512, 1024, s);
-    for (int i = 0; i < 1024; i++) fin[i] = (i < (int)hannWins[6].size()) ? (float)(s[i]/32768.0*hannWins[6][i]) : 0;
+    // ★ Same fault as detectSync (2026-10-04): 1024 from -512 with a 279-sample window measured the
+    //   SNR 31 ms in the past. Centred now; it only picks the demod window size, so the effect is
+    //   small, but it was the same arithmetic.
+    const int L = std::min((int)hannWins[6].size(), (int)fin.size());
+    int16_t s[1024]; pcm.getWindow(-L/2, L, s);
+    for (int i = 0; i < (int)fin.size(); i++) fin[i] = (i < L) ? (float)(s[i]/32768.0*hannWins[6][i]) : 0;
     fft.run(fin.data());
     double pVN = 0; int minB = getBin(1500.0+headerShift), maxB = getBin(2300.0+headerShift);
     for (int i = minB; i <= maxB; i++) pVN += fft.power(i);
@@ -298,7 +332,7 @@ double SstvVideo::estimateSNR(SstvBuffer& pcm) {
     return 10.0 * std::log10(pSignal/pNoise);
 }
 
-double SstvVideo::demodFreq(SstvBuffer& pcm, double snr) {
+double SstvVideo::demodFreq(SstvBuffer& pcm, double snr, int ahead) {
     int winIdx = 0;
     if (adaptive) {
         if (snr >= 20) winIdx = 0; else if (snr >= 10) winIdx = 1; else if (snr >= 9) winIdx = 2;
@@ -306,7 +340,7 @@ double SstvVideo::demodFreq(SstvBuffer& pcm, double snr) {
         if (std::string(m->name) == "Scottie DX" && winIdx < 6) winIdx++;
     }
     int L = hannLens[winIdx];
-    std::vector<int16_t> s(L); pcm.getWindow(-L/2, L, s.data());
+    std::vector<int16_t> s(L); pcm.getWindow(-L/2 + ahead, L, s.data());
     std::fill(fin.begin(), fin.end(), 0.0f);
     for (int i = 0; i < L && i < (int)fin.size(); i++) fin[i] = (float)(s[i]/32768.0*hannWins[winIdx][i]);
     fft.run(fin.data());
@@ -333,7 +367,14 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
     int length;
     if (m->color == SSTV_YUV && m->imgWidth >= 512) length = (int)(m->lineTime*m->numLines/2*sampleRate);
     else length = (int)(m->lineTime*m->numLines*sampleRate);
+    // ★★ CAPTURE A LITTLE PAST THE NOMINAL END (2026-10-04). A sender whose clock runs SLOW makes
+    //    the picture longer than the mode says — 0.05 % at -500 ppm — and a start a few ms early
+    //    pushes the end later too. The slant correction can only redraw from samples it has, so
+    //    keep 0.25 % (the 2000 ppm gate in findSync, plus room) and 20 ms more. Lines are emitted
+    //    on the grid exactly as before; this only extends storedLum and the sync record.
+    length += (int)(length * 0.0025) + (int)(0.02 * sampleRate);
     int syncTargetBin = getBin(1200.0 + headerShift);
+    const bool pd = (m->color == SSTV_YUV && m->imgWidth >= 512);
 
     int numChans = 3;
     std::string nm = m->name;
@@ -359,7 +400,10 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
         }
         if (sampleNum == nextSync) { detectSync(pcm, syncTargetBin, syncSampleNum); nextSync += 13; syncSampleNum++; }
         if (sampleNum == nextSNR) { snr = estimateSNR(pcm); nextSNR += 256; }
-        if (sampleNum % 6 == 0) freq = demodFreq(pcm, snr);
+        // ★ The estimate is HELD for the next 6 samples, so centre it on them (s+2.5), not on the
+        //   first: centred on `s` it lagged the picture by 2.5 samples — half a Martin pixel, most
+        //   of a Robot one (2026-10-04, measured with the line fit in place).
+        if (sampleNum % 6 == 0) freq = demodFreq(pcm, snr, 3);
 
         uint8_t lum = clip((freq - (1500.0 + headerShift)) / 3.1372549);
         if (sampleNum < (int)storedLum.size()) { storedLum[sampleNum] = lum; storedLumWritten = sampleNum + 1; }
@@ -370,24 +414,29 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
             if (p.channel > 0 && (nm == "Robot 36" || nm == "Robot 24") && p.y+1 < m->numLines)
                 IMG(p.x, p.y+1, p.channel) = lum;
 
-            if (lineSender && p.x == m->imgWidth-1 && (int)p.channel >= numChans-1) {
+            // ★★ PD NEVER SENT A LIVE LINE (found 2026-10-04 by test-sstv-quality). Its last pixel of a
+            //    pair is the second line's Y — channel 0 — so `channel >= numChans-1` (3) was never
+            //    true: a PD picture (the ISS's mode) stayed blank until the redraw, and stayed blank
+            //    for good whenever the redraw was refused. A pair is complete on that pixel.
+            const bool lineDone = pd ? (p.x == m->imgWidth-1 && p.channel == 0 && (p.y & 1))
+                                     : (p.x == m->imgWidth-1 && (int)p.channel >= numChans-1);
+            if (lineSender && lineDone) {
                 std::vector<uint8_t> line((size_t)m->imgWidth*3);
-                for (int x = 0; x < m->imgWidth; x++) {
-                    int o = x*3;
-                    uint8_t c0=IMG(x,p.y,0), c1=IMG(x,p.y,1), c2=IMG(x,p.y,2);
-                    switch (m->color) {
-                        case SSTV_RGB: line[o]=c0; line[o+1]=c1; line[o+2]=c2; break;
-                        case SSTV_GBR: line[o]=c2; line[o+1]=c0; line[o+2]=c1; break;
-                        case SSTV_YUV:
-                            line[o]   = clip((100*(double)c0 + 140*(double)c1 - 17850)/100.0);
-                            line[o+1] = clip((100*(double)c0 - 71*(double)c1 - 33*(double)c2 + 13260)/100.0);
-                            line[o+2] = clip((100*(double)c0 + 178*(double)c2 - 22695)/100.0);
-                            break;
-                        case SSTV_BW: line[o]=line[o+1]=line[o+2]=c0; break;
+                for (int y = pd ? p.y - 1 : p.y; y <= p.y; y++) {
+                    if (y < 0 || y >= m->numLines) continue;
+                    for (int x = 0; x < m->imgWidth; x++) {
+                        int o = x*3;
+                        uint8_t c0=IMG(x,y,0), c1=IMG(x,y,1), c2=IMG(x,y,2);
+                        switch (m->color) {
+                            case SSTV_RGB: line[o]=c0; line[o+1]=c1; line[o+2]=c2; break;
+                            case SSTV_GBR: line[o]=c2; line[o+1]=c0; line[o+2]=c1; break;
+                            case SSTV_YUV: yuvToRgb(c0, c1, c2, &line[o]); break;
+                            case SSTV_BW: line[o]=line[o+1]=line[o+2]=c0; break;
+                        }
                     }
+                    lineSender(y, line.data());
+                    if (y + 1 > linesReceived) linesReceived = y + 1;
                 }
-                lineSender(p.y, line.data());
-                if (p.y + 1 > linesReceived) linesReceived = p.y + 1;
             }
             pixelIdx++;
         }
@@ -405,11 +454,7 @@ std::vector<uint8_t> SstvVideo::toRGB(const std::vector<uint8_t>& img) {
             switch (m->color) {
                 case SSTV_RGB: rgb[o]=c0; rgb[o+1]=c1; rgb[o+2]=c2; break;
                 case SSTV_GBR: rgb[o]=c2; rgb[o+1]=c0; rgb[o+2]=c1; break;
-                case SSTV_YUV:
-                    rgb[o]   = clip((100*(double)c0 + 140*(double)c1 - 17850)/100.0);
-                    rgb[o+1] = clip((100*(double)c0 - 71*(double)c1 - 33*(double)c2 + 13260)/100.0);
-                    rgb[o+2] = clip((100*(double)c0 + 178*(double)c2 - 22695)/100.0);
-                    break;
+                case SSTV_YUV: yuvToRgb(c0, c1, c2, &rgb[o]); break;
                 case SSTV_BW: rgb[o]=rgb[o+1]=rgb[o+2]=c0; break;
             }
         }
@@ -473,7 +518,26 @@ std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool*
 }
 
 // ── Sync corrector ───────────────────────────────────────────────────────────
+// ★★★ WHERE THE SLANT COMES FROM (audit 2026-10-04, row 2). The TRANSMITTING station's sound card:
+// it believes it runs at 48000 Hz and really runs at 48000·(1+ε), with ε of 100–1000 ppm on
+// ordinary PC hardware. Every line it sends is 1/(1+ε) as long as the mode says, and an exact
+// receive clock — an SDR's — receives that error faithfully. 100 ppm is about 25 px over a Martin
+// M1 frame. It is not a receiver fault, and no receiver clock can remove it.
+//
+// Two stages, both measured by vibeserver/test-sstv-quality.cpp:
+//   1. slowrx's Linear Hough on the sync image — a COARSE rate, good to a fraction of a sync pulse
+//      over the frame. Its only job is to seed stage 2.
+//   2. A least-squares line through the sync pulse on every line — the rate is the slope, the
+//      start of the picture is the intercept. Every line votes, outliers are thrown out, and the
+//      slope comes with a standard error, so "is this slant real" is a number, not a hope. The
+//      audit's suggestion; the Hough alone resolves only 0.5° — 132 ppm per step on Robot 36.
+static const int SyncStep = 13;   // hasSync holds one flag per 13 samples (demodulate's nextSync)
+
 void SstvSync::findSync(double& rateOut, int& skipOut, double* confOut) {
+    const bool pd = (m->color == SSTV_YUV && m->imgWidth >= 512);
+    // ★ PD sends ONE sync per PAIR of lines and its lineTime is the pair — so it has numLines/2
+    //   sync lines. Scanning numLines of them fed the search half a picture of empty space.
+    const int syncLines = pd ? m->numLines / 2 : m->numLines;
     double rate = sampleRate;
     int lineWidth = (int)(m->lineTime / m->syncTime * 4);
     if (lineWidth < 1) lineWidth = 1;
@@ -481,72 +545,204 @@ void SstvSync::findSync(double& rateOut, int& skipOut, double* confOut) {
 
     for (;;) {
         // draw sync image
-        std::vector<std::vector<uint8_t>> syncImg(lineWidth, std::vector<uint8_t>(m->numLines, 0));
-        for (int y = 0; y < m->numLines; y++)
+        std::vector<std::vector<uint8_t>> syncImg(lineWidth, std::vector<uint8_t>(syncLines, 0));
+        for (int y = 0; y < syncLines; y++)
             for (int x = 0; x < lineWidth; x++) {
                 double t = ((double)y + (double)x/lineWidth) * m->lineTime;
-                int sn = (int)(t * rate / 13.0);
+                int sn = (int)(t * rate / (double)SyncStep);
                 if (sn >= 0 && sn < (int)hasSync.size()) syncImg[x][y] = hasSync[sn];
             }
         // Hough
         std::vector<std::vector<uint16_t>> lines(600, std::vector<uint16_t>((MaxSlant_-MinSlant_)*2, 0));
-        int dMost = 0, qMost = 0;
-        for (int cy = 0; cy < m->numLines; cy++)
+        for (int cy = 0; cy < syncLines; cy++)
             for (int cx = 0; cx < lineWidth; cx++) {
                 if (!syncImg[cx][cy]) continue;
                 for (int q = MinSlant_*2; q < MaxSlant_*2; q++) {
                     double ang = deg2rad(q/2.0);
                     int d = lineWidth + (int)std::lround(-(double)cx*std::sin(ang) + (double)cy*std::cos(ang));
-                    if (d > 0 && d < lineWidth && d < (int)lines.size()) {
-                        int qi = q - MinSlant_*2;
-                        if (qi >= 0 && qi < (int)lines[d].size()) {
-                            lines[d][qi]++;
-                            int qmi = qMost - MinSlant_*2;
-                            if (qmi >= 0 && qmi < (int)lines[dMost].size() && lines[d][qi] > lines[dMost][qmi]) { dMost = d; qMost = q; }
-                        }
-                    }
+                    if (d > 0 && d < lineWidth && d < (int)lines.size()) lines[d][q - MinSlant_*2]++;
                 }
             }
-        if (qMost == 0) break;
+        // ★★★ THE PEAK IS FOUND AFTER THE VOTE, NOT DURING IT (audit 2026-10-04, row 1). The running
+        // maximum started at qMost = 0, so its index into the table was 0 - MinSlant_*2 = -60, the
+        // `>= 0` guard rejected it, and it was never updated: `qMost == 0` broke out on the first
+        // pass, every time, since a8b7464c. The rate this function returned was ALWAYS nominal.
+        // ★★ So the "shear" blamed in ed1ebd12 and ca092485 can never have been applied — those
+        //    pictures were torn by the offset (the half-line wrap below) and the unwritten tail.
+        int qMost = 0; unsigned best = 0;
+        for (int d = 1; d < lineWidth && d < (int)lines.size(); d++)
+            for (int qi = 0; qi < (int)lines[d].size(); qi++)
+                if (lines[d][qi] > best) { best = lines[d][qi]; qMost = qi + MinSlant_*2; }
+        if (best == 0) break;
         double slant = qMost/2.0;
         rate += std::tan(deg2rad(90-slant)) / (double)lineWidth * rate;
         if (slant > 89.0 && slant < 91.0) break;
         if (retries >= maxRetries) { rate = sampleRate; break; }
         retries++;
     }
+    houghPpm = (sampleRate / rate - 1.0) * 1e6;
 
-    // find sync position
-    std::vector<uint16_t> xAcc(700, 0);
-    for (int y = 0; y < m->numLines; y++)
-        for (int x = 0; x < 700; x++) {
-            double t = (double)y*m->lineTime + (double)x/700.0*m->lineTime;
-            int sn = (int)(t / (13.0/sampleRate) * rate / sampleRate);
-            if (sn >= 0 && sn < (int)hasSync.size() && hasSync[sn]) xAcc[x]++;
-        }
-    double conv[8] = {1,1,1,1,-1,-1,-1,-1};
-    double maxC = 0; int xMax = 0;
-    for (int x = 0; x < 700-8; x++) {
-        double c = 0; for (int i = 0; i < 8; i++) c += xAcc[x+i]*conv[i];
-        if (c > maxC) { maxC = c; xMax = x+4; }
+    // ── Stage 2: least squares through the sync pulses ──────────────────────────────────────
+    const double P0 = rate * m->lineTime;                 // samples per sync line, seeded by stage 1
+    const double syncS = m->syncTime * sampleRate;        // pulse length, samples
+    const int nFlags = (int)hasSync.size();
+    // Phase: fold every flag onto one line at the seed rate and take the densest pulse-wide window.
+    const int NB = 700;
+    std::vector<double> hist(NB, 0.0);
+    for (int i = 0; i < nFlags; i++)
+        if (hasSync[i]) hist[(int)(std::fmod((double)i * SyncStep, P0) / P0 * NB) % NB] += 1.0;
+    const int boxW = std::max(1, (int)std::lround(syncS / P0 * NB));
+    double bestBox = -1; int bestStart = 0;
+    for (int b = 0; b < NB; b++) {
+        double acc = 0; for (int k = 0; k < boxW; k++) acc += hist[(b + k) % NB];
+        if (acc > bestBox) { bestBox = acc; bestStart = b; }
     }
-    if (xMax > 350) xMax -= 350;
-    double skipTime = (double)xMax/700.0*m->lineTime - m->syncTime;
-    std::string nm = m->name;
-    if (nm == "Scottie S1" || nm == "Scottie S2" || nm == "Scottie DX")
-        skipTime += m->porchTime*2 - m->pixelTime*m->imgWidth/2.0;
-    rateOut = rate;
-    skipOut = (int)(skipTime * rate);
+    const double phase = (bestStart + boxW / 2.0) / NB * P0;   // a pulse centre, samples
 
-    // ★★★ HOW MUCH DID THE DATA ACTUALLY SUPPORT THIS? `maxC` is the strength of the convolution
-    // peak that chose xMax — the horizontal shift applied to EVERY line. On a clean signal roughly
-    // one sync edge per line contributes, so maxC scales with numLines. On a weak or noisy signal
-    // few sync pulses are detected, the peak is essentially arbitrary, and the "correction" becomes
-    // a RANDOM SHIFT of the whole picture.
+    // Measure the pulse on each line near the predicted one: the longest run of flags in a ±1-pulse
+    // window (a line without a run of at least half a pulse abstains), placed by its TRAILING edge.
+    // ★★★ THE TRAILING EDGE, NOT THE MIDDLE. Every mode follows the pulse with a 1500 Hz porch, so
+    //     that edge has the same neighbour on every line and its bias is a CONSTANT — calibrated
+    //     out below. The leading edge borders PICTURE: a white or a black last pixel moves it by
+    //     samples, so a picture whose bottom differs from its top tilted a both-edges fit
+    //     (measured −1.4 ppm on PD-120 from a checkerboard in the bottom quarter — a 1 px lean, on
+    //     a perfect signal), and Robot's 1900 Hz chroma neighbour put the middle 2 samples early.
+    // ★ The constant: the detector's 17-sample window says "sync" until a little of the porch is
+    //   in it, so the edge it reports is ~2 samples before the real one at 12 kHz (0.12 of the
+    //   window; measured +3 M1, +1.5 S1, +2 R36, +1 PD, unchanged from 20 to 10 dB SNR once the
+    //   gaps below are bridged).
+    const int hannLen = std::max(8, (int)std::lround(64.0 * sampleRate / 44100.0));   // detectSync's window (SstvVideo)
+    const double trailBias = 0.12 * (double)hannLen;
+    std::vector<double> ks, ms;
+    std::vector<uint8_t> keep;
+    auto measure = [&](double A0, double B0) {
+        ks.clear(); ms.clear();
+        for (int k = -1; k <= syncLines + 1; k++) {
+            const double c = A0 + B0 * k;
+            const int i0 = std::max(0, (int)std::floor((c - syncS) / SyncStep));
+            const int i1 = std::min(nFlags - 1, (int)std::ceil((c + syncS) / SyncStep));
+            if (i1 <= i0) continue;
+            // ★ Runs are bridged across gaps of up to MaxGap flags. In noise a long pulse (PD's is 18
+            //   flags) loses a flag or two in the middle, the "longest run" became a FRAGMENT, and
+            //   its edge was not the pulse's edge — 23 samples off on PD-120 at 10 dB.
+            const int MaxGap = 2;
+            int bestFirst = -1, bestLast = -1, curFirst = -1, curLast = -1;
+            for (int i = i0; i <= i1; i++) {
+                if (!hasSync[i]) continue;
+                if (curFirst >= 0 && i - curLast <= MaxGap + 1) curLast = i;
+                else { curFirst = curLast = i; }
+                if (curLast - curFirst > bestLast - bestFirst) { bestFirst = curFirst; bestLast = curLast; }
+            }
+            if (bestFirst < 0 || (bestLast - bestFirst + 1) * SyncStep < syncS * 0.5) continue;
+            // The whole run, even where it leaves the window — a clipped run has a false edge.
+            int first = bestFirst, last = bestLast;
+            const int maxRun = (int)(2.0 * syncS / SyncStep) + 2;
+            auto onNear = [&](int i, int dir) { for (int g = 1; g <= MaxGap + 1; g++) { const int j = i + dir * g; if (j < 0 || j >= nFlags) return -1; if (hasSync[j]) return j; } return -1; };
+            for (int j; last - first < maxRun && (j = onNear(first, -1)) >= 0; ) first = j;
+            for (int j; last - first < maxRun && (j = onNear(last, +1)) >= 0; ) last = j;
+            // ★★ THE EDGE BETWEEN TWO FLAGS. A flag is every 13 samples — nearly a whole Robot 36
+            //    chroma pixel. The level each flag was thresholded from says where between the last
+            //    flag on and the first flag off the threshold was actually crossed.
+            double trail = last + 0.5;
+            if (level && (int)level->size() == nFlags && last + 1 < nFlags) {
+                const double a = (*level)[last], b = (*level)[last + 1];
+                if (a > b) trail = last + a / (a - b);
+            }
+            ks.push_back(k);
+            ms.push_back(trail * SyncStep + trailBias - syncS / 2.0);   // → the pulse's centre
+        }
+    };
+    double A = phase, B = P0, seB = 1e9; int inliers = 0;
+    // ★ Robust: fit, drop anything more than 3 robust sigmas (and at least half a pulse) off the
+    //   line, refit. A noise burst that looks like a sync must not drag the whole picture with it.
+    auto fit = [&]() -> bool {
+        keep.assign(ks.size(), 1);
+        for (int pass = 0; pass < 3; pass++) {
+            double n = 0, sk = 0, sm = 0, skk = 0, skm = 0;
+            for (size_t i = 0; i < ks.size(); i++) if (keep[i]) { n++; sk += ks[i]; sm += ms[i]; skk += ks[i]*ks[i]; skm += ks[i]*ms[i]; }
+            const double den = n * skk - sk * sk;
+            if (n < 8 || den <= 0) return false;
+            B = (n * skm - sk * sm) / den; A = (sm - B * sk) / n;
+            std::vector<double> r;
+            for (size_t i = 0; i < ks.size(); i++) if (keep[i]) r.push_back(std::fabs(ms[i] - (A + B * ks[i])));
+            std::nth_element(r.begin(), r.begin() + r.size()/2, r.end());
+            const double rs = std::max(1.4826 * r[r.size()/2], (double)SyncStep / 2.0);
+            const double cut = std::max(3.0 * rs, syncS * 0.5);
+            inliers = 0; double ss = 0, kbar = 0, kk = 0;
+            for (size_t i = 0; i < ks.size(); i++) {
+                const double e = ms[i] - (A + B * ks[i]);
+                keep[i] = std::fabs(e) <= cut;
+                if (keep[i]) { inliers++; ss += e * e; kbar += ks[i]; }
+            }
+            if (inliers < 8) return false;
+            kbar /= inliers;
+            for (size_t i = 0; i < ks.size(); i++) if (keep[i]) kk += (ks[i] - kbar) * (ks[i] - kbar);
+            const double sigma = std::sqrt(ss / std::max(1, inliers - 2));
+            seB = (kk > 0) ? sigma / std::sqrt(kk) : 1e9;
+        }
+        return true;
+    };
+    bool fitted = false;
+    // ★ Repeated: each pass measures around the FITTED line, which matters at the bottom of the
+    //   frame when the seed rate was a little off and the windows had begun to walk off the pulse.
+    for (int it = 0; it < 3; it++) { measure(A, B); fitted = fit(); if (!fitted) break; }
+
+    // ★★★ APPLY THE RATE ONLY WHEN IT IS BOTH CONFIDENT AND REAL — the gate ca092485 asked for
+    // before this was switched back on. A shear on a picture with no slant lines up the top and
+    // walks the rest away, so all four must hold:
+    //   • a quarter of the frame's sync lines are inliers of the fit;
+    //   • the slant is beyond 30 ppm (≈ 7 px over an M1 frame — below that the eye cannot see it,
+    //     and a correction can only add risk);
+    //   • it is at least 4 standard errors from zero — MEASURED, not noise;
+    //   • and it is inside 2000 ppm — no sound card is that far out, so beyond it the fit has locked
+    //     onto something that is not the sync train.
+    // Otherwise the rate stays nominal. Either way the offset is the MEDIAN over every inlier line
+    // of its pulse centre less the chosen slope — taken from the whole frame, not the top line.
+    const double nomB = sampleRate * m->lineTime;
+    rateApplied = false; fitPpm = 0; fitPpmSE = 0;
+    if (fitted) {
+        fitPpm = (nomB / B - 1.0) * 1e6;                  // + = the transmitter's clock runs fast
+        fitPpmSE = seB / B * 1e6;
+        const bool enough = inliers >= std::max(8, syncLines / 4);
+        if (enough && std::fabs(fitPpm) > 30.0 && std::fabs(fitPpm) > 4.0 * fitPpmSE && std::fabs(fitPpm) < 2000.0)
+            rateApplied = true;
+        if (!rateApplied) B = nomB;
+        std::vector<double> a0;
+        for (size_t i = 0; i < ks.size(); i++) if (keep[i]) a0.push_back(ms[i] - B * ks[i]);
+        if (!a0.empty()) { std::nth_element(a0.begin(), a0.begin() + a0.size()/2, a0.end()); A = a0[a0.size()/2]; }
+    } else {
+        A = phase; B = nomB;
+    }
+    rate = B / m->lineTime;
+
+    // ── Where the picture starts ─────────────────────────────────────────────────────────────
+    // `A` is the CENTRE of a sync pulse; pixelGrid's line starts at the pulse's START — except
+    // Scottie, whose pulse sits two colour channels into the line.
+    std::string nm = m->name;
+    const bool scottie = (nm == "Scottie S1" || nm == "Scottie S2" || nm == "Scottie DX");
+    double syncInLine = 0, expect = 0;
+    if (scottie) {
+        syncInLine = 2.0 * m->septrTime + 2.0 * m->pixelTime * m->imgWidth;
+        // ★ Scottie opens with ONE extra sync pulse before line 0, so line 0 begins a pulse late.
+        expect = m->syncTime;
+    }
+    double startS = A - (m->syncTime / 2.0 + syncInLine) * rate;
+    // ★★★ WRAP BY A WHOLE LINE, TO THE START NEAREST WHERE THE PICTURE SHOULD BEGIN (audit
+    // 2026-10-04, row 5). The old `if (xMax > 350) xMax -= 350` (from slowrx) took HALF a line off a
+    // position measured in 700ths of one: a start a few ms late — line 0's sync just BEFORE the
+    // decode began — folded to the far end of the line and came back half a line out. The VIS
+    // hand-off puts the start within about ±10 ms, so the nearest whole-line image of the measured
+    // start is the right one, for every mode, Scottie's mid-line pulse included.
+    startS -= std::round((startS - expect * rate) / B) * B;
+    rateOut = rate;
+    skipOut = (int)std::lround(startS);
+
+    // ★★★ HOW MUCH DID THE DATA ACTUALLY SUPPORT THIS? The fraction of the frame's sync lines that
+    // agreed with the fitted line. On a weak or noisy signal few pulses are found, and an offset
+    // taken from them is a RANDOM SHIFT of the whole picture.
     // ★★ That is the failure Stuart hit on 2026-07-31: a Martin M2 at S4 decoded roughly aligned,
-    // then "Correcting slant..." displaced the middle and bottom and made it unreadable. The rate
-    // loop already gives up safely (it restores sampleRate after maxRetries); the sync POSITION had
-    // no such protection and was applied however weak the evidence.
-    if (confOut) *confOut = (m->numLines > 0) ? (maxC / (double)m->numLines) : 0.0;
+    // then "Correcting slant..." displaced the middle and bottom and made it unreadable.
+    if (confOut) *confOut = (fitted && syncLines > 0) ? std::min(1.0, (double)inliers / syncLines) : 0.0;
 }
 
 // ── Top-level decoder ────────────────────────────────────────────────────────
@@ -601,7 +797,7 @@ void SstvDecoder::videoThread() {
 
     if (autoSync) {
         if (onStatus) onStatus("Correcting slant...");
-        SstvSync sync(mode, sampleRate, video.syncFlags());
+        SstvSync sync(mode, sampleRate, video.syncFlags(), &video.syncLevels());
         double aRate; int aSkip; double conf = 0;
         sync.findSync(aRate, aSkip, &conf);
         // ★★★ DO NOT "CORRECT" ON EVIDENCE THIS WEAK. Below this the sync peak is indistinguishable
@@ -627,23 +823,22 @@ void SstvDecoder::videoThread() {
         // Scottie S2 and Martin M2 (Stuart, 2026-07-31): "all you have to do is literally do the
         // alignment at the top to the whole picture, not just a slice."
         //
-        // ★★★ AND THERE SHOULD BE NO SLANT TO CORRECT ON AN SDR. Slant correction exists for
-        // SOUNDCARD CLOCK DRIFT — a sample rate that is not quite what it claims to be. An SDR's
-        // clock is locked and its rate exact, so the timebase is already right and only the line
-        // START is wrong. Estimating a shear from sync pulses in noise then invents a correction for
-        // a fault that does not exist, and can only make the picture worse.
         // ★★ WHAT THE PICTURES ACTUALLY SHOW (Stuart, over an evening of live SSTV): "some come
         // through slanted, but MOST have been fine just with a tiny strip of the right side on the
         // left." So the common defect by far is a pure constant offset, and the shear is the rare
-        // case — which is the wrong way round from what the code assumed, since it applied the
-        // shear every time and thereby broke the many to serve the few.
-        // ★ `aRate` is still computed — findSync needs it internally to locate the sync position —
-        // and deliberately NOT applied. Re-enabling it should be gated on a slant estimate that is
-        // both CONFIDENT and LARGE ENOUGH TO BE REAL, so the common offset-only case is never
-        // sheared. Do not simply switch it back on.
+        // case — the common case must never be sheared.
+        // ★★★ BUT THE SLANT IS REAL, AND IT IS NOT OURS (audit 2026-10-04, row 2). This used to say
+        // an SDR's locked clock leaves nothing to correct. The slant comes from the TRANSMITTING
+        // station's sound card (100–1000 ppm), which an exact receive clock records faithfully —
+        // 300 ppm measured 75 px over a Martin M1 frame (test-sstv-quality). And the shear this
+        // comment blamed was never applied: findSync's Hough could not return anything but the
+        // nominal rate until 2026-10-04 (see the note there).
+        // ★ So `aRate` IS applied now — but only through findSync's gate: a line fit with a quarter
+        //   of the frame's lines behind it, |ε| > 30 ppm, more than 4 standard errors from zero and
+        //   under 2000 ppm. Anything less and findSync returns the nominal rate, so the common
+        //   offset-only picture is shifted, never sheared — exactly as before.
         bool ok = false;
-        auto pixels = video.redrawFromLuminance(sampleRate, aSkip, &ok);
-        (void)aRate;
+        auto pixels = video.redrawFromLuminance(aRate, aSkip, &ok);
         // ★★★ REPLACE THE PICTURE UNLESS THE CORRECTION WOULD TEAR IT. A redraw that runs FAR past
         // the captured samples produces an image whose top is aligned and whose bottom is not —
         // "sliced up and assembled out of alignment" (Stuart, 2026-07-31, on a Scottie S2 that had
@@ -673,6 +868,13 @@ void SstvDecoder::videoThread() {
             for (int y = 0; y < upto; y++)
                 if (onLine) onLine(y, mode->imgWidth, pixels.data() + (size_t)y*mode->imgWidth*3);
             if (onComplete) onComplete();
+            // ★ Say when a SHEAR was applied, with its size: it is the rarer, riskier correction,
+            //   and the number is what tells a real sound-card slant from a fit that went wrong.
+            if (sync.rateApplied && !partialOk && onStatus) {
+                char b[96];
+                std::snprintf(b, sizeof b, "slant corrected — sender's clock %+.0f ppm", sync.fitPpm);
+                onStatus(b);
+            }
             if (partialOk && onStatus)
                 onStatus("aligned \u2014 signal ended after " + std::to_string(have) + " lines");
         } else if (onStatus) {
