@@ -4474,7 +4474,10 @@ export default function SDRScreen({ route, navigation }: Props) {
             shift: p.shift, baud: p.baud,
             encoding: p.encoding === 'CCIR476' || p.encoding === 'ASCII' ? p.encoding : 'ITA2',
             inverted: !!p.inverted,
-            auto: p.auto === true,
+            /* ★★ ALWAYS STARTS IN AUTO (Stuart, 2026-10-04: "it doesnt default to auto though"). The memory was for ham vs
+             *  weather chosen BY HAND; AUTO now finds both (and PBB's 1 stop bit), so a launch starts in AUTO and the last
+             *  manual values wait underneath — one tap on any of them turns AUTO off with the rest as they were. */
+            auto: true,
             stop: p.stop === 1 || p.stop === 2 ? p.stop : 1.5,
             usos: p.usos === true,
             dataBits: p.dataBits === 8 ? 8 : 7,
