@@ -141,6 +141,13 @@ private:
     bool  decodeWwv(TimeStamp& out) const;
     bool  decodeWwvb(TimeStamp& out) const;
     void  emitPartial();
+    // ── Framing by elapsed time (MSF, DCF77, WWVB) — see the note above onSecondEdge ──────────
+    void  beginFrame(long long anchorClock);
+    void  place(int sec, int a, int b, int sym, bool readable);
+    void  closeFrame();
+    void  loseFrame();
+    void  finishMinute(bool decoded, const TimeStamp& ts);
+    bool  slotsComplete(int from, int to) const;
 
     const int      sr_;
     const Station  station_;
@@ -160,12 +167,23 @@ private:
     double dipSamples_ = 0, gapSamples_ = 0;
     /** ★ The gap measured at the dip's START. Read at its END — see the note in process(). */
     double gapBeforeMs_ = 0;
-    /** ★ A sample clock, and where the CURRENT second began. MSF needs it: a second can contain
-     *  two dips (A=0,B=1 is off-on-off), so "the next dip" is not "the next second". */
-    long long clock_ = 0, dipStartClock_ = 0, secondStartClock_ = 0;
-    /** ★★★ WWV: the sample the minute anchor was seen at. The second counter is DERIVED from the
-     *  distance to it, never incremented per pulse — see onSecondEdge. */
-    long long wwvAnchorClock_ = 0;
+    /** ★ A sample clock, and where the current dip began. */
+    long long clock_ = 0, dipStartClock_ = 0;
+    /** ★★★ The sample the minute anchor was seen at (0 = not anchored), on EVERY station that
+     *  carries a code. The second is DERIVED from the distance to it, never incremented per dip —
+     *  a counter is shifted for the rest of the minute by one missed or one extra dip (audit
+     *  2026-10-04 row 9). WWV did this first; MSF, DCF77 and WWVB now do the same. */
+    long long anchorClock_ = 0;
+    /** DCF77 while hunting: where the previous dip began. WWVB: where the previous MARKER began. */
+    long long lastDipClock_ = 0;
+    /** The current minute has been decoded (or abandoned); later dips must not decode it again. */
+    bool      frameClosed_ = true;
+    /** ★★ Per second of the minute: 0 = nothing arrived, 1 = exactly one readable symbol,
+     *  2 = ERASED (unreadable, or two symbols claimed the same second). A minute with an erasure
+     *  in it is not decoded — it is a failed minute, never a guessed one. */
+    unsigned char slot_[60] = {0};
+    /** WWVB: the symbol per second (0, 1, 2 = marker), for the marker-position framing check. */
+    signed char   sym_[60] = {0};
 
     // ★ MSF carries TWO bits per second (A and B) in different 100 ms windows, DCF77 one. Both
     //   fit here; B stays zero where a station has no B bit.

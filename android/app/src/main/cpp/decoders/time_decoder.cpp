@@ -15,8 +15,6 @@ namespace {
 constexpr double kTol         = 35.0;
 constexpr double kMsfMinute   = 500.0;   ///< MSF: carrier off 500 ms marks second 0
 constexpr double kDipUnit     = 100.0;   ///< both stations' base dip
-constexpr double kMsfSampleA  = 150.0;   ///< MSF bit A is the carrier state 100–200 ms in
-constexpr double kMsfSampleB  = 250.0;   ///< MSF bit B, 200–300 ms in
 constexpr double kSecond      = 1000.0;
 
 inline bool near(double v, double target, double tol = kTol) { return std::fabs(v - target) <= tol; }
@@ -49,6 +47,91 @@ int parityOdd(const int* bits, int from, int to) {
     for (int i = from; i <= to; i++) n += bits[i] ? 1 : 0;
     return n & 1;
 }
+
+// ── The NIST field maps — ONE table per station, read by the decode AND the progress line ────
+// ★★★ THERE WERE TWO COPIES OF THE WWV MAP AND THEY DISAGREED (audit 2026-10-04 row 6). The
+//     decode was corrected to the IRIG-H positions on 2026-08-12; the progress line kept the old
+//     map (minute at seconds 1-8, hour at 10-16), so the panel showed the minute's bits as the
+//     hour while the decode was right. One rule, two readers — now one table each.
+// ★ Every position below is from NIST SP 432 (2002 ed.): WWV/WWVH Table 3.13 (p. 47), WWVB
+//   Table 2.3 (p. 20). Both are BCD; WWV sends each group LSB first, WWVB MSB first.
+struct BcdField { int n; int sec[10]; int wt[10]; };
+constexpr BcdField kWwvMinute    = { 7, {10,11,12,13,15,16,17},             {1,2,4,8,10,20,40} };
+constexpr BcdField kWwvHour      = { 6, {20,21,22,23,25,26},                {1,2,4,8,10,20} };
+constexpr BcdField kWwvDoy       = {10, {30,31,32,33,35,36,37,38,40,41},    {1,2,4,8,10,20,40,80,100,200} };
+/** ★★ THE WWV YEAR IS SPLIT ACROSS THE FRAME — SP 432 p. 48: "The last digit of the year is sent
+ *  using bits 4 through 7. The next to last digit of the year, or the decade indicator, is sent
+ *  using bits 51 through 54." Each digit is a 1-2-4-8 group, LSB first. */
+constexpr BcdField kWwvYearUnits = { 4, {4,5,6,7},                          {1,2,4,8} };
+constexpr BcdField kWwvYearTens  = { 4, {51,52,53,54},                      {1,2,4,8} };
+constexpr int      kWwvDst1 = 2, kWwvLsw = 3, kWwvDst2 = 55;   // SP 432 Table 3.13 / p. 48
+constexpr BcdField kWwvbMinute   = { 7, {1,2,3,5,6,7,8},                    {40,20,10,8,4,2,1} };
+constexpr BcdField kWwvbHour     = { 6, {12,13,15,16,17,18},                {20,10,8,4,2,1} };
+constexpr BcdField kWwvbDoy      = {10, {22,23,25,26,27,28,30,31,32,33},    {200,100,80,40,20,10,8,4,2,1} };
+constexpr BcdField kWwvbYear     = { 8, {45,46,47,48,50,51,52,53},          {80,40,20,10,8,4,2,1} };
+
+int readField(const int* bits, const BcdField& f) {
+    int v = 0;
+    for (int i = 0; i < f.n; i++) if (bits[f.sec[i]]) v += f.wt[i];
+    return v;
+}
+/** The second at which the field's last bit has arrived — the progress line may show it from then. */
+int fieldDone(const BcdField& f) {
+    int m = 0;
+    for (int i = 0; i < f.n; i++) if (f.sec[i] > m) m = f.sec[i];
+    return m;
+}
+
+bool isLeap(int y) { return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0); }
+int  daysIn(int y, int m) {
+    static const int len[12] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
+    return (m == 2 && isLeap(y)) ? 29 : len[(m - 1) % 12];
+}
+
+/** Day-of-year to month/day. False if the day is past the end of that year. */
+bool doyToDate(int year, int doy, int& month, int& day) {
+    if (doy < 1) return false;
+    int d = doy;
+    for (int m = 1; m <= 12; m++) {
+        if (d <= daysIn(year, m)) { month = m; day = d; return true; }
+        d -= daysIn(year, m);
+    }
+    return false;
+}
+
+/** ★★ A REAL MINUTE COUNT, so "exactly one minute later" survives the end of a short month.
+ *  The old key packed every month as 31 days, so 30 April 23:59 -> 1 May 00:00 was 1441 "minutes"
+ *  apart and the corroboration chain broke at four month-ends a year. That never mattered while
+ *  WWV/WWVB reported the minute ENDING — the +1 carry below now crosses those boundaries itself.
+ *  (Howard Hinnant's days_from_civil.) */
+long long minuteIndex(int y, int m, int d, int hh, int mm) {
+    y -= m <= 2;
+    const long long era = (y >= 0 ? y : y - 399) / 400;
+    const long long yoe = y - era * 400;
+    const long long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const long long days = era * 146097 + doe - 719468;
+    return days * 1440 + hh * 60 + mm;
+}
+
+/** ★★★ ONE MINUTE ON, WITH EVERY CARRY — hour, day, month, year, and 29 February. */
+void addMinute(TimeDecoder::TimeStamp& t) {
+    if (++t.minute < 60) return;
+    t.minute = 0;
+    if (++t.hour < 24) return;
+    t.hour = 0;
+    if (t.weekday) t.weekday = t.weekday % 7 + 1;
+    if (++t.day <= daysIn(t.year, t.month)) return;
+    t.day = 1;
+    if (++t.month <= 12) return;
+    t.month = 1;
+    t.year++;
+}
+
+/** ★ A dip must begin within this of a whole second after the anchor to count as that second's.
+ *  The real second edges are a quartz-exact 1.000 s apart; 120 ms is three times the envelope's
+ *  edge scatter on a marginal signal and still far from the mid-second where noise lands. */
+constexpr double kGridTolS = 0.12;
 
 }  // namespace
 
@@ -171,7 +254,10 @@ void TimeDecoder::process(const int16_t* samples, int count) {
 
         // ★ No carrier at all: say NoSignal rather than sitting in Reading with a stale time on
         //   screen. 6 dB is the floor below which these are not decodable anyway.
-        if (snrDb_ < 3.0 && state_ != State::NoSignal) { second_ = -1; setState(State::NoSignal); }
+        if (snrDb_ < 3.0 && state_ != State::NoSignal) {
+            second_ = -1; anchorClock_ = 0; frameClosed_ = true; lastStamp_ = 0;
+            setState(State::NoSignal);
+        }
     }
 }
 
@@ -201,41 +287,62 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         //     case: bits B54–B58 are the PARITY bits and are carried with A=0, so a decoder that
         //     mis-frames them fails on exactly the bits that were meant to validate the minute.
         //
-        //     So the second boundary is a CLOCK, not "the next dip": a dip beginning more than
-        //     ~700 ms after the current second started is the next second; one beginning around
-        //     200 ms in is this second's B window.
-        const double sinceSecondMs =
-            secondStartClock_ > 0 ? (dipStartClock_ - secondStartClock_) * 1000.0 / sr_ : 1e9;
-
-        if (sinceSecondMs > 150.0 && sinceSecondMs < 400.0 && inMinute(second_)) {
-            // The B window of the second already in progress.
-            bitsB_[second_] = 1;
-            return;
-        }
-
-        secondStartClock_ = dipStartClock_;
-        // ★ The 500 ms dip IS second zero. Nothing else in the minute is that long, which is why
-        //   MSF needs no gap-counting trick to find the minute.
-        if (near(dipMs, kMsfMinute, 120.0)) {
-            second_ = 0;
-            setState(State::Reading);
-            bitsA_[0] = bitsB_[0] = 0;
+        // ★★★ AND THE SECOND IS MEASURED FROM THE MINUTE MARKER, NOT COUNTED (2026-10-04, audit
+        //     row 9). This used to step a counter on every dip more than 400 ms into the second, so
+        //     ONE faded dip or ONE noise dip mid-second moved every later bit by a second — and the
+        //     minute then read as a plausible neighbour's data rather than as a failure. Now each
+        //     dip's START is placed by its distance from the 500 ms marker: within ±120 ms of a
+        //     whole second it is that second's; 150–400 ms past one it is that second's B window;
+        //     anywhere else it is noise and is ignored. A missing or unreadable second is an
+        //     ERASURE and the minute is not decoded — never decoded one place out.
+        const bool marker = near(dipMs, kMsfMinute, 120.0);
+        if (marker) {
+            // ★ The 500 ms dip IS second zero. Nothing else in the minute is that long, so the
+            //   newest marker always wins: if it is not ~60 s after the last one, the last one was
+            //   a merged pair of dips and the minute it began is abandoned (closeFrame fails it on
+            //   its erasures), not decoded against the wrong origin.
+            if (anchorClock_ > 0) closeFrame();
+            beginFrame(dipStartClock_);
             if (onBit) onBit(0, 0);
+            emitPartial();
             return;
         }
-        if (second_ < 0) return;                       // still hunting for the minute
-        second_++;
-        if (second_ > 59) {                            // a minute passed with no marker
-            second_ = -1;
-            setState(State::Searching);
+        if (anchorClock_ == 0) return;                   // still hunting for the minute marker
+        double e = (double)(dipStartClock_ - anchorClock_) / sr_;
+        if (e > 59.5 + kGridTolS) {
+            // ★ Past second 59 with no marker seen: the marker itself faded. Keep the grid (it is
+            //   quartz on both ends) for one more minute, but nothing in it can be decoded without
+            //   its second 0 — and two minutes without one is lost lock.
+            closeFrame();
+            if (e > 119.5) { loseFrame(); return; }
+            beginFrame(anchorClock_ + 60LL * sr_);
+            e -= 60.0;
+        }
+        const long r = std::lround(e);
+        if (std::fabs(e - (double)r) <= kGridTolS && r >= 1 && r <= 59) {
+            // The second's own dip. 100 ms = A0 B0; 200 = A1 B0; 300 = A1 B1 (the two windows ran
+            // together). Anything else is unreadable — an erasure, not a best guess.
+            int a = 0, bb = 0; bool readable = true;
+            if      (near(dipMs, 100.0, 50.0)) { a = 0; bb = 0; }
+            else if (near(dipMs, 200.0, 50.0)) { a = 1; bb = 0; }
+            else if (near(dipMs, 300.0, 50.0)) { a = 1; bb = 1; }
+            else readable = false;
+            place((int)r, a, bb, a, readable);
+            second_ = (int)r;
+            if (onBit) onBit(second_, bitsA_[second_]);
+            emitPartial();
+            if (r == 59) closeFrame();
             return;
         }
-        // A dip running past 150 ms carries A=1; past 250 ms it also carries B=1 (the two windows
-        // ran together). A separate dip near 200 ms is handled above.
-        if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
-        bitsA_[second_] = dipMs > kMsfSampleA ? 1 : 0;
-        bitsB_[second_] = dipMs > kMsfSampleB ? 1 : 0;
-        if (onBit) onBit(second_, bitsA_[second_]);
+        const int s = (int)std::floor(e);
+        const double f = e - s;
+        if (s >= 1 && s <= 59 && f >= 0.15 && f <= 0.40) {
+            // The B window of second s — legal only as a 100 ms dip after a 100 ms (A=0) one.
+            if (slot_[s] == 1 && !bitsA_[s] && !bitsB_[s] && near(dipMs, 100.0, 50.0)) bitsB_[s] = 1;
+            else slot_[s] = 2;
+            return;
+        }
+        return;                                          // off the grid: noise, not a second
     } else if (station_ == Station::WWV) {
         // ── WWV/WWVH ─────────────────────────────────────────────────────────
         // ★★★ HERE THE SYMBOL IS THE PULSE, NOT THE DIP — the polarity is inverted relative to
@@ -288,10 +395,13 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         //         THIS call's symbol, not the previous one's. Testing lastWasMarker_ here framed
         //         one minute and then lost it — right rule, read one second late.
         constexpr double kWwvHoleMs = 1050.0;
+        // ★ A frame read while HUNTING was never read at all — its bits are whatever the last
+        //   minute left. Only a minute that began at an anchor may be decoded.
+        const bool frameWasRead = second_ >= 0;
         if (sym == 2 && dipMs > kWwvHoleMs) {
             // ★★★ THE ANCHOR IS A CLOCK REFERENCE, NOT JUST A RESET. Everything after it is placed
             //     by DISTANCE from here — see below.
-            wwvAnchorClock_ = (long long)((double)dipStartClock_ - gapMs * sr_ / 1000.0);
+            anchorClock_ = (long long)((double)dipStartClock_ - gapMs * sr_ / 1000.0);
             second_ = 59;                          // this marker is second 59; the hole after it is 0
             setState(State::Reading);
         } else if (second_ < 0) {
@@ -317,42 +427,50 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         //        the frame, and a missed pulse leaves a gap instead of pulling everything back.
         //     ★ Only when anchored. Before the first anchor the count is all we have, and it is
         //       discarded anyway (second_ < 0 returns above).
-        if (wwvAnchorClock_ > 0) {
+        if (anchorClock_ > 0) {
             // ★★★ MEASURE FROM THE PULSE'S START, NOT ITS END. Every second's pulse BEGINS at a
             //     fixed 30 ms past the tick and then runs for 170, 470 or 770 ms depending on what
             //     it is saying — so the end moves by 600 ms with the DATA. Timing off the end put
             //     symbols half a second either side of the truth and rounded them into the wrong
             //     second; timing off the start is the same instant every time.
             const double pulseStart = (double)dipStartClock_ - gapMs * sr_ / 1000.0;
-            const double since = (pulseStart - (double)wwvAnchorClock_) / (double)sr_;
+            const double since = (pulseStart - (double)anchorClock_) / (double)sr_;
             // The anchor IS second 59, so everything is measured relative to that.
             const int measured = (int)(((59 + (long long)std::lround(since)) % 60 + 60) % 60);
             if (measured >= 0 && measured <= 59) second_ = measured;
         }
         if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
         bitsA_[second_] = (sym == 1) ? 1 : 0;
+        // ★★ Which seconds actually arrived readable. WWV still records an unreadable pulse as 0
+        //    and decodes on (a live HF minute drops 3-8 pulses, and an all-or-nothing rule would
+        //    never decode one) — but the YEAR is only taken from the air when all eight of its
+        //    seconds were read; otherwise decodeWwv falls back to the host. See there.
+        slot_[second_] = (slot_[second_] == 0 && sym >= 0) ? 1 : 2;
         if (sym >= 0 && onBit) onBit(second_, bitsA_[second_]);
-        emitPartial();
+        // ★ Not on the anchoring edge after a hunt: second_ is 59 there, so every field would be
+        //   "complete" — and drawn from bits nobody read (a progress line of 00:00, year 2000).
+        if (frameWasRead) emitPartial();
         if (second_ == 59) {
-            TimeStamp ts;
-            if (decodeWwv(ts)) {
-                const long long stamp = (((long long)ts.year * 12 + ts.month) * 31 + ts.day) * 1440
-                                      + ts.hour * 60 + ts.minute;
-                const bool follows = (lastStamp_ != 0) && (stamp == lastStamp_ + 1);
-                lastStamp_ = stamp;
-                if (follows) { good_++; setState(State::Locked); if (onTime) onTime(ts); }
-            } else { bad_++; lastStamp_ = 0; }
+            if (frameWasRead) {
+                TimeStamp ts;
+                const bool ok = decodeWwv(ts);
+                finishMinute(ok, ts);
+            }
             // ★★★ THE NEXT SYMBOL IS SECOND 1's, NOT SECOND 0's. Second 0 is the hole and never
             //     produces an edge at all, so resetting to 0 here left every following bit one
             //     second early for the whole minute.
             bitsA_[0] = 0;                         // the hole carries no data
+            for (int i = 0; i < 60; i++) slot_[i] = 0;
             second_ = 1;
             return;
         }
         second_ += steps;
         // ★ Stepped clean over the minute without seeing second 59 — a dropout on the marker
         //   itself. Wrap, and drop the corroboration chain rather than decode a half frame.
-        if (second_ > 59) { second_ %= 60; lastStamp_ = 0; }   // ★ % not -= : see inMinute
+        if (second_ > 59) {                    // ★ % not -= : see inMinute
+            second_ %= 60; lastStamp_ = 0;
+            for (int i = 0; i < 60; i++) slot_[i] = 0;
+        }
         return;
     } else if (station_ == Station::WWVB) {
         // ── WWVB ─────────────────────────────────────────────────────────────
@@ -361,16 +479,52 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         const int sym = near(dipMs, 800.0, 130.0) ? 2
                       : near(dipMs, 500.0, 110.0) ? 1
                       : near(dipMs, 200.0, 90.0)  ? 0 : -1;
-        if (sym < 0) return;
-        // ★★ The minute is TWO MARKERS IN A ROW (second 59's P6 then second 0's frame reference),
-        //    exactly as WWV does it — WWVB transmits no unique minute pulse to look for.
-        if (sym == 2 && lastWasMarker_) { second_ = 0; setState(State::Reading); }
-        else if (second_ < 0) { lastWasMarker_ = (sym == 2); return; }
-        else second_++;
-        lastWasMarker_ = (sym == 2);
-        if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
-        bitsA_[second_] = (sym == 1) ? 1 : 0;
+        const long long prevMarker = lastDipClock_;
+        if (sym == 2) lastDipClock_ = dipStartClock_;
+        // ★★ The minute is TWO MARKERS IN A ROW (second 59's P0 then second 0's Pr, SP 432 p. 21)
+        //    — WWVB transmits no unique minute pulse to look for. ★ "In a row" is now a MEASURED
+        //    1.0 s between their leading edges, not "the previous dip we happened to classify".
+        if (anchorClock_ == 0) {
+            if (sym == 2 && prevMarker > 0
+                && std::fabs((double)(dipStartClock_ - prevMarker) / sr_ - 1.0) <= kGridTolS) {
+                beginFrame(dipStartClock_);
+                place(0, 0, 0, 2, true);
+                if (onBit) onBit(0, 0);
+                emitPartial();
+            }
+            return;
+        }
+        // ★★★ PLACED BY ELAPSED TIME, NOT COUNTED (2026-10-04, audit row 9). This used to
+        //     `return` on an unreadable dip WITHOUT advancing the second, and count every
+        //     readable one — so one fade moved the rest of the minute a second early, and a
+        //     noise dip of about 200 ms moved it a second late. Now each dip is the second its
+        //     leading edge falls on (±120 ms), an unreadable one ERASES that second, and a dip
+        //     between the seconds is noise and ignored.
+        const double e = (double)(dipStartClock_ - anchorClock_) / sr_;
+        long r = std::lround(e);
+        if (std::fabs(e - (double)r) > kGridTolS) return;     // off the grid: noise
+        if (r >= 60) {
+            closeFrame();
+            if (r == 60 && sym == 2) {                          // ~60 s on: the next Pr, re-anchor
+                beginFrame(dipStartClock_);
+                place(0, 0, 0, 2, true);
+                if (onBit) onBit(0, 0);
+                emitPartial();
+                return;
+            }
+            // ★ A readable NON-marker where second 0 must be means the anchor was wrong (a noise
+            //   marker beside a real one). Hunt again rather than read a minute out of phase.
+            if (r >= 120 || (r == 60 && sym >= 0)) { loseFrame(); return; }
+            beginFrame(anchorClock_ + 60LL * sr_);              // Pr itself faded: keep the grid
+            r -= 60;
+        }
+        if (r < 1) return;
+        place((int)r, sym == 1 ? 1 : 0, 0, sym, sym >= 0);
+        second_ = (int)r;
         if (onBit) onBit(second_, bitsA_[second_]);
+        emitPartial();
+        if (r == 59) closeFrame();
+        return;
     } else if (station_ == Station::RWM) {
         // ── RWM ──────────────────────────────────────────────────────────────
         // ★★★ RWM SENDS NO TIMECODE, so there is nothing here to decode into a clock and this
@@ -389,63 +543,133 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         // ★★★ THE MINUTE IS MARKED BY AN ABSENCE. Second 59 carries NO dip, so the tell is a gap
         //     of about two seconds between dips — the next dip is second 0. A decoder looking for
         //     a special pulse would never find one, because there isn't one.
-        if (gapMs > 1500.0) {
-            second_ = 0;
-        } else if (second_ >= 0) {
-            second_++;
-            if (second_ > 59) { second_ = -1; setState(State::Searching); return; }
-        } else {
-            return;                                     // hunting for the minute gap
+        // ★★★ BUT ONE MISSED DIP LOOKS EXACTLY THE SAME (2026-10-04, audit row 9). A 1.9 s gap
+        //     was taken as a minute start wherever it fell, so one faded second re-anchored the
+        //     frame mid-minute, and a noise dip mid-second stepped the counter. Now:
+        //       • the minute gap is accepted only when it is the FIRST one (hunting), or when the
+        //         dip after it lands ~60 s after the current anchor;
+        //       • every other dip is placed by the distance of its leading edge from the anchor
+        //         (±120 ms of a whole second, or it is noise and ignored);
+        //       • a missing or unreadable second is an ERASURE and fails the minute;
+        //       • a dip AT second 59 is something DCF77 never sends, so the anchor was a missed
+        //         dip, not the minute — drop it and hunt again. (A leap second does put a dip at 59;
+        //         it costs one minute of lock twice a decade, which is the right way round.)
+        const bool readable = near(dipMs, kDipUnit, 50.0) || near(dipMs, 2 * kDipUnit, 50.0);
+        const int  bit = near(dipMs, 2 * kDipUnit, 50.0) ? 1 : 0;
+        const double sinceLast = lastDipClock_ > 0
+            ? (double)(dipStartClock_ - lastDipClock_) / sr_ : 1e9;
+        lastDipClock_ = dipStartClock_;
+        if (anchorClock_ == 0) {
+            if (sinceLast < 1.85) return;                       // hunting for the minute gap
+            beginFrame(dipStartClock_);
+            place(0, bit, 0, bit, readable);
+            if (onBit) onBit(0, bit);
+            emitPartial();
+            return;
         }
-        setState(State::Reading);
-        const int bit = near(dipMs, 2 * kDipUnit, 50.0) ? 1 : 0;
-        if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
-        bitsA_[second_] = bit;
+        const double e = (double)(dipStartClock_ - anchorClock_) / sr_;
+        long r = std::lround(e);
+        if (std::fabs(e - (double)r) > kGridTolS) return;     // off the grid: noise
+        if (r == 59) { loseFrame(); return; }                   // see above: the anchor was wrong
+        if (r >= 60) {
+            closeFrame();
+            if (r >= 120) { loseFrame(); return; }
+            // r == 60 is the consistent minute gap: re-anchor on the real edge. Past it, second 0
+            // itself faded — keep the grid; that minute fails on its erasure.
+            beginFrame(r == 60 ? dipStartClock_ : anchorClock_ + 60LL * sr_);
+            r -= 60;
+        }
+        place((int)r, bit, 0, bit, readable);
+        second_ = (int)r;
         if (onBit) onBit(second_, bit);
+        emitPartial();
+        if (r == 58) closeFrame();
+        return;
     }
+}
 
-    // ★ Tell the UI what we have SO FAR, every second. See TimeDecoder::Partial.
-    emitPartial();
+// ── Framing by elapsed time ──────────────────────────────────────────────────────────────────
+void TimeDecoder::beginFrame(long long anchorClock) {
+    anchorClock_ = anchorClock;
+    for (int i = 0; i < 60; i++) { bitsA_[i] = bitsB_[i] = 0; slot_[i] = 0; sym_[i] = 0; }
+    frameClosed_ = false;
+    second_ = 0;
+    setState(State::Reading);
+}
 
-    // A complete minute — try to read it.
-    const bool endOfMinute = (station_ == Station::MSF)   ? (second_ == 59)
-                           : (station_ == Station::WWV)   ? (second_ == 59)
-                           : (station_ == Station::WWVB)  ? (second_ == 59)
-                                                          : (second_ == 58);
-    if (endOfMinute) {
-        TimeStamp ts;
-        if (decodeMinute(ts)) {
-            // ★★★ PARITY ALONE IS NOT ENOUGH, AND ON AIR THAT IS NOT THEORETICAL. MSF carries FOUR
-            //     parity bits, so random noise satisfies all of them one time in sixteen — over a
-            //     few minutes of marginal signal a false lock is likely rather than exotic. The
-            //     first live run against Anthorn produced a confidently parity-checked
-            //     "2064-02-22 06:16", which is exactly what that failure looks like: plausible
-            //     structure, impossible content.
-            //     ★★ So a minute must AGREE WITH THE ONE BEFORE IT — be exactly 60 seconds later.
-            //        Two independent noise minutes landing one minute apart is ~1 in a million,
-            //        and the cost to a real signal is one extra minute before the first reading.
-            //        For a clock, being a minute late is nothing; being wrong is everything.
-            const long long stamp = (((long long)ts.year * 12 + ts.month) * 31 + ts.day) * 1440
-                                  + ts.hour * 60 + ts.minute;
-            const bool follows = (lastStamp_ != 0) && (stamp == lastStamp_ + 1);
-            lastStamp_ = stamp;
-            if (!follows) {
-                // Not yet corroborated. Keep reading rather than announcing a time we cannot back.
-                setState(State::Reading);
-                second_ = -1;
-                return;
-            }
-            good_++;
-            setState(State::Locked);
-            if (onTime) onTime(ts);
-        } else {
-            lastStamp_ = 0;         // ★ a bad minute breaks the chain; corroboration restarts
-            // ★ A failed parity is DISCARDED, not shown with a warning. See the header: a clock
-            //   that is confidently wrong is worse than one that says it is still waiting.
-            bad_++;
-            setState(State::Reading);
+void TimeDecoder::place(int sec, int a, int b, int sym, bool readable) {
+    if (!inMinute(sec)) return;
+    // ★ Two symbols claiming one second is not "take the later one": one of them is noise and we
+    //   cannot say which, so the second is erased.
+    if (slot_[sec] != 0) { slot_[sec] = 2; return; }
+    slot_[sec] = readable ? 1 : 2;
+    bitsA_[sec] = a; bitsB_[sec] = b; sym_[sec] = (signed char)sym;
+}
+
+bool TimeDecoder::slotsComplete(int from, int to) const {
+    for (int i = from; i <= to; i++) if (slot_[i] != 1) return false;
+    return true;
+}
+
+void TimeDecoder::loseFrame() {
+    anchorClock_ = 0;
+    frameClosed_ = true;
+    second_ = -1;
+    lastStamp_ = 0;
+    setState(State::Searching);
+}
+
+/** Decode the minute in hand, once. ★★ An erasure anywhere the station sends code fails it. */
+void TimeDecoder::closeFrame() {
+    if (frameClosed_) return;
+    frameClosed_ = true;
+    TimeStamp ts;
+    bool ok = false;
+    switch (station_) {
+        case Station::MSF:   ok = slotsComplete(1, 59) && decodeMsf(ts);   break;
+        case Station::DCF77: ok = slotsComplete(0, 58) && decodeDcf77(ts); break;
+        case Station::WWVB: {
+            // ★ The free framing check: markers at 0, 9, 19 … 59 and nowhere else (SP 432
+            //   Table 2.3). A complete minute with them elsewhere was read out of phase.
+            const bool complete = slotsComplete(0, 59);
+            bool framed = complete;
+            for (int i = 0; framed && i < 60; i++)
+                if ((sym_[i] == 2) != (i == 0 || i % 10 == 9)) framed = false;
+            if (complete && !framed) { finishMinute(false, ts); loseFrame(); return; }
+            ok = framed && decodeWwvb(ts);
+            break;
         }
+        default: break;
     }
+    finishMinute(ok, ts);
+}
+
+void TimeDecoder::finishMinute(bool decoded, const TimeStamp& ts) {
+    if (!decoded) {
+        lastStamp_ = 0;         // ★ a bad minute breaks the chain; corroboration restarts
+        // ★ A failed parity is DISCARDED, not shown with a warning. See the header: a clock
+        //   that is confidently wrong is worse than one that says it is still waiting.
+        bad_++;
+        setState(State::Reading);
+        return;
+    }
+    // ★★★ PARITY ALONE IS NOT ENOUGH, AND ON AIR THAT IS NOT THEORETICAL. MSF carries FOUR
+    //     parity bits, so random noise satisfies all of them one time in sixteen — over a
+    //     few minutes of marginal signal a false lock is likely rather than exotic. The
+    //     first live run against Anthorn produced a confidently parity-checked
+    //     "2064-02-22 06:16", which is exactly what that failure looks like: plausible
+    //     structure, impossible content.
+    //     ★★ So a minute must AGREE WITH THE ONE BEFORE IT — be exactly 60 seconds later.
+    //        Two independent noise minutes landing one minute apart is ~1 in a million,
+    //        and the cost to a real signal is one extra minute before the first reading.
+    //        For a clock, being a minute late is nothing; being wrong is everything.
+    const long long stamp = minuteIndex(ts.year, ts.month, ts.day, ts.hour, ts.minute);
+    const bool follows = (lastStamp_ != 0) && (stamp == lastStamp_ + 1);
+    lastStamp_ = stamp;
+    if (!follows) { setState(State::Reading); return; }   // not yet corroborated
+    good_++;
+    setState(State::Locked);
+    if (onTime) onTime(ts);
 }
 
 /**
@@ -480,19 +704,32 @@ void TimeDecoder::emitPartial() {
             if (second_ >= 57) { p.t.year    = 2000 + bcd(A, 50, 57); p.year = true; }
             break;
         case Station::WWV: {
-            auto w = [&](int bit, int weight) { return A[bit] ? weight : 0; };
-            if (second_ >= 8)  { p.t.minute = w(1,1)+w(2,2)+w(3,4)+w(4,8)+w(6,10)+w(7,20)+w(8,40);
-                                 p.minute = true; }
-            if (second_ >= 16) { p.t.hour   = w(10,1)+w(11,2)+w(12,4)+w(13,8)+w(15,10)+w(16,20);
-                                 p.hour = true; }
+            // ★★★ THE SAME TABLE decodeWwv READS (audit 2026-10-04 row 6) — this used the pre-
+            //     2026-08-12 map, minute at 1-8 and hour at 10-16, so the line showed the MINUTE's
+            //     bits as the hour. These are the transmitted fields: the time at the START of
+            //     this frame, which is the minute in progress (SP 432 p. 46).
+            if (second_ >= fieldDone(kWwvMinute)) { p.t.minute = readField(A, kWwvMinute); p.minute = true; }
+            if (second_ >= fieldDone(kWwvHour))   { p.t.hour   = readField(A, kWwvHour);   p.hour = true; }
+            // ★ The day needs the year (for leap), and the year's tens digit is the LAST field to
+            //   arrive (second 54) — so date and year appear together, once both halves are in.
+            if (second_ >= fieldDone(kWwvYearTens)) {
+                const int u = readField(A, kWwvYearUnits), t = readField(A, kWwvYearTens);
+                if (u <= 9 && t <= 9) {
+                    p.t.year = 2000 + t * 10 + u; p.year = true;
+                    if (doyToDate(p.t.year, readField(A, kWwvDoy), p.t.month, p.t.day))
+                        p.month = p.day = true;
+                }
+            }
             break;
         }
         case Station::WWVB: {
-            auto w = [&](int bit, int weight) { return A[bit] ? weight : 0; };
-            if (second_ >= 8)  { p.t.minute = w(1,40)+w(2,20)+w(3,10)+w(5,8)+w(6,4)+w(7,2)+w(8,1);
-                                 p.minute = true; }
-            if (second_ >= 18) { p.t.hour   = w(12,20)+w(13,10)+w(15,8)+w(16,4)+w(17,2)+w(18,1);
-                                 p.hour = true; }
+            if (second_ >= fieldDone(kWwvbMinute)) { p.t.minute = readField(A, kWwvbMinute); p.minute = true; }
+            if (second_ >= fieldDone(kWwvbHour))   { p.t.hour   = readField(A, kWwvbHour);   p.hour = true; }
+            if (second_ >= fieldDone(kWwvbYear))   {
+                p.t.year = 2000 + readField(A, kWwvbYear); p.year = true;
+                if (doyToDate(p.t.year, readField(A, kWwvbDoy), p.t.month, p.t.day))
+                    p.month = p.day = true;
+            }
             break;
         }
         case Station::RWM:
@@ -586,43 +823,37 @@ bool TimeDecoder::decodeMinute(TimeStamp& out) const {
  */
 bool TimeDecoder::decodeWwvb(TimeStamp& out) const {
     const int* b = bitsA_;
-    auto w = [&](int bit, int weight) { return b[bit] ? weight : 0; };
-
-    const int minute = w(1,40)+w(2,20)+w(3,10) + w(5,8)+w(6,4)+w(7,2)+w(8,1);
-    const int hour   = w(12,20)+w(13,10) + w(15,8)+w(16,4)+w(17,2)+w(18,1);
-    const int doy    = w(22,200)+w(23,100)
-                     + w(25,80)+w(26,40)+w(27,20)+w(28,10)
-                     + w(30,8)+w(31,4)+w(32,2)+w(33,1);
-    const int yy     = w(45,80)+w(46,40)+w(47,20)+w(48,10)
-                     + w(50,8)+w(51,4)+w(52,2)+w(53,1);
+    const int minute = readField(b, kWwvbMinute);
+    const int hour   = readField(b, kWwvbHour);
+    const int doy    = readField(b, kWwvbDoy);
+    const int yy     = readField(b, kWwvbYear);
 
     if (hour > 23 || minute > 59 || doy < 1 || doy > 366 || yy > 99) return false;
 
     const int year = 2000 + yy;
     // ★ WWVB states the leap year itself (bit 55) — but deriving it is safer than trusting one
     //   unparity-checked bit, and the two must agree or the frame is suspect.
-    const bool leapCalc = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    if (b[55] != (leapCalc ? 1 : 0)) return false;
-    static const int len[12] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
-    int d = doy, m = 0;
-    for (; m < 12; m++) {
-        const int dm = len[m] + ((m == 1 && leapCalc) ? 1 : 0);
-        if (d <= dm) break;
-        d -= dm;
-    }
-    if (m >= 12) return false;
+    if (b[55] != (isLeap(year) ? 1 : 0)) return false;
+    int month = 0, day = 0;
+    if (!doyToDate(year, doy, month, day)) return false;
 
-    out.year = year; out.month = m + 1; out.day = d;
+    out.year = year; out.month = month; out.day = day;
     out.hour = hour; out.minute = minute;
     out.weekday = 0;                       // WWVB sends no weekday
     out.dst = b[58] != 0;                  // DST in effect
     out.leapSecondPending = b[56] != 0;
+    // ★★★ THE FRAME CARRIES THE MINUTE THAT IS ENDING, NOT THE ONE ABOUT TO BEGIN — the opposite
+    //     of MSF and DCF77 (audit 2026-10-04 row 8). SP 432 p. 21: "The on-time reference point of
+    //     the time code frame is the leading edge of the reference bit Pr" — second 0 — so the
+    //     bits describe the minute that STARTED at this frame's second 0. We decode at second 59,
+    //     0.2-0.8 s before the next minute begins, and announce THAT minute, as MSF/DCF77 do;
+    //     reporting the frame's own value made the clock a minute late.
+    addMinute(out);
     return true;
 }
 
 bool TimeDecoder::decodeWwv(TimeStamp& out) const {
     const int* b = bitsA_;
-    auto w = [&](int bit, int weight) { return b[bit] ? weight : 0; };
 
     // ★★★ THE FIELDS SIT ONE DECADE LATER THAN THIS USED TO LOOK — WWV IS AN IRIG-H FRAME.
     //
@@ -640,50 +871,70 @@ bool TimeDecoder::decodeWwv(TimeStamp& out) const {
     // ★★ Verified against the same frames: hour=19 and day-of-year=224 both come out right, and
     //    the bits that differ between consecutive minutes are the 1, 2 and 4 weights of the minute
     //    field — 5, 6, 7 in LSB-first BCD — sitting in the second decade.
-    const int minute = w(10,1)+w(11,2)+w(12,4)+w(13,8) + w(15,10)+w(16,20)+w(17,40);
-    const int hour   = w(20,1)+w(21,2)+w(22,4)+w(23,8) + w(25,10)+w(26,20);
-    const int doy    = w(30,1)+w(31,2)+w(32,4)+w(33,8)
-                     + w(35,10)+w(36,20)+w(37,40)+w(38,80)
-                     + w(40,100)+w(41,200);
-    // ★★★ THE YEAR COMES FROM THE HOST, NOT FROM THE AIR — AND THAT IS DELIBERATE.
-    //
-    //     WWV does transmit a year, but I could not locate its field against real signals: across
-    //     six frames from two receivers (WT8P and K3FEF, 2026-08-12), NO placement of a two-digit
-    //     BCD year in the tail of the frame yields the correct 26 — the whole region carries only
-    //     three set bits. Rather than ship a number that merely looks decoded, this reads the
-    //     year the machine already knows.
-    // ★★★ AND A WRONG YEAR IS NOT A COSMETIC FAULT: it decided LEAP, so a misread 2012 gave
-    //     February 29 days and put every date one day early. The time was right and the date was
-    //     wrong for a reason that had nothing to do with the date field — day-of-year decoded
-    //     perfectly at second 30 on both captures.
-    // ★★ A receiver knows the year; it does not know the second. Taking the one thing we cannot
-    //    verify from the local clock, and everything we CAN verify from the transmission, is the
-    //    honest division — and it is stated here so nobody later mistakes this for a decode.
-    // ▶ If someone identifies the year field on a live signal, restore it and delete this note.
-    const time_t nowT = time(nullptr);
-    const struct tm* utc = gmtime(&nowT);
-    const int yy = utc ? (utc->tm_year + 1900) % 100 : 0;
+    const int minute = readField(b, kWwvMinute);
+    const int hour   = readField(b, kWwvHour);
+    const int doy    = readField(b, kWwvDoy);
+    if (hour > 23 || minute > 59 || doy < 1 || doy > 366) return false;
 
-    if (hour > 23 || minute > 59 || doy < 1 || doy > 366 || yy > 99) return false;
-
-    const int year = 2000 + yy;
-    const bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    static const int len[12] = { 31,28,31,30,31,30,31,31,30,31,30,31 };
-    int d = doy, m = 0;
-    for (; m < 12; m++) {
-        const int dm = len[m] + ((m == 1 && leap) ? 1 : 0);
-        if (d <= dm) break;
-        d -= dm;
+    // ★★★ THE YEAR IS ON THE AIR — SPLIT ACROSS THE FRAME, WHICH IS WHY IT WAS NEVER FOUND
+    //     (2026-10-04, audit row 7). The 2026-08-12 note here said no placement of a two-digit
+    //     BCD year in the TAIL of the frame gave 26, so the year was taken from the host clock.
+    //     That search was looking for one field; SP 432 p. 48 sends two: "The last digit of the
+    //     year is sent using bits 4 through 7. The next to last digit … using bits 51 through 54."
+    //     For 26 that is 6 at seconds 5+6 and 2 at second 52 — one set bit in the tail, which is
+    //     what those six live frames showed.
+    // ★★ CROSS-CHECKED AGAINST THE HOST, NOT TRUSTED BLIND: WWV has no parity, and the year
+    //    decides leap (a misread 2012 once put every date a day early). So:
+    //      • all eight year seconds read cleanly and both digits valid → the air's year — unless
+    //        the host has a believable clock and differs by more than one, in which case one of
+    //        them is wrong and with no parity we cannot say which: the minute is not decoded;
+    //      • any year second unreadable → the host's year (the old behaviour), and only then.
+    int hostYear = 0, hostYday = 0;
+    {
+        const time_t nowT = time(nullptr);
+        const struct tm* utc = gmtime(&nowT);
+        if (utc) { hostYear = utc->tm_year + 1900; hostYday = utc->tm_yday; }
     }
-    if (m >= 12) return false;                   // day-of-year past the end of the year
+    const bool hostBelievable = hostYear >= 2024;   // ★ a reset device boots in 1970 or 2000
+    bool yearRead = true;
+    for (int i = 0; i < 4; i++)
+        if (slot_[kWwvYearUnits.sec[i]] != 1 || slot_[kWwvYearTens.sec[i]] != 1) yearRead = false;
+    const int units = readField(b, kWwvYearUnits), tens = readField(b, kWwvYearTens);
+    int year = 0;
+    if (yearRead && units <= 9 && tens <= 9) {
+        year = 2000 + tens * 10 + units;
+        if (hostBelievable && std::abs(year - hostYear) > 1) return false;
+    } else if (hostBelievable) {
+        // ★ The frame describes its own START, so on 1 January a frame for 31 December belongs
+        //   to the host's PREVIOUS year.
+        year = (doy > 300 && hostYday < 31) ? hostYear - 1 : hostYear;
+    } else {
+        return false;                                // neither source can be believed
+    }
 
-    out.year = year; out.month = m + 1; out.day = d;
+    int month = 0, day = 0;
+    if (!doyToDate(year, doy, month, day)) return false;   // day-of-year past the end of the year
+
+    out.year = year; out.month = month; out.day = day;
     out.hour = hour; out.minute = minute;
-    // ★ WWV broadcasts UTC and sends no weekday and no local DST — reporting either would be
-    //   inventing information the station does not carry.
+    // ★ WWV broadcasts UTC and sends no weekday — reporting one would be inventing it.
     out.weekday = 0;
-    out.dst = false;
-    out.leapSecondPending = false;
+    // ★★ DST AND THE LEAP-SECOND WARNING ARE ON THE AIR TOO, and were hard-coded false.
+    //    SP 432 p. 48: DST at seconds 2 and 55 — both 0 in standard time, both 1 in DST; on a
+    //    change day second 55 flips at 0000 UTC and second 2 "exactly 24 hours later". So 55 is
+    //    the status for the day ahead and 2 the status the day began with; `dst` takes second 2,
+    //    the same lagging bit decodeWwvb reads (WWVB's 58 also flips 24 h after 57, p. 21).
+    //    Leap-second warning: second 3, "a leap second will be added to UTC at the end of the
+    //    current month".
+    out.dst = b[kWwvDst1] != 0;
+    out.leapSecondPending = b[kWwvLsw] != 0;
+    (void)kWwvDst2;
+    // ★★★ AND THE TIME IS THE MINUTE JUST ENDED (audit 2026-10-04 row 8). SP 432 p. 46: "The
+    //     information in the time code refers to the time at the start of the one-minute frame."
+    //     The frame is closed by the first pulse of the NEXT minute (1.03 s into it), so the
+    //     minute in progress when this is reported is the frame's own value plus one. Reporting
+    //     the frame's value made WWV a minute late — unlike MSF and DCF77, which announce ahead.
+    addMinute(out);
     return true;
 }
 
@@ -731,6 +982,7 @@ bool TimeDecoder::decodeMsf(TimeStamp& out) const {
  */
 bool TimeDecoder::decodeDcf77(TimeStamp& out) const {
     const int* b = bitsA_;
+    if (b[0]) return false;                         // ★ M: start of minute, always 0 (PTB) — free
     if (!b[20]) return false;                       // start of encoded time
     if (b[17] == b[18]) return false;               // CEST/CET flags must differ
 
