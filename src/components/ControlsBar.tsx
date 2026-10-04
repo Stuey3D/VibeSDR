@@ -57,7 +57,7 @@ import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/facepl
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
-import { statusGainParts, statusGainText, statusFit, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec } from '../constants/displayText';
+import { statusGainParts, statusGainText, statusFit, statusFits, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
 /**
@@ -2291,9 +2291,14 @@ function LandscapeStatus({ plate, marginTop, clock, font, clockFont, isRecording
    *  timezone"). Two clocks made the left side the widest, the sides could not take equal halves, the row
    *  packed and SHARED TUNER slid off centre. The receiver's clock keeps its zone label (a UTC receiver reads
    *  "UTC"); portrait still shows both. */
-  const noUtc = true;
-  // …and its zone as an offset — "19:40 +1" (shortOffset).
-  clock = useMemo(() => ({ ...clock, srv: (clock as any).srvShort ?? clock.srv }), [clock]);
+  /* ★★ …BUT ONLY WHEN THE ROW IS SHORT OF ROOM — the WINDOW decides, never the device (Stuart, 2026-10-04, the
+   *  Mac app full screen: "our iPhone SE optimisations bled across … even when it is massive on a mac and can
+   *  show the UTC time too"). Wide = the whole row at step 0 — UTC, the receiver's full clock, everything else,
+   *  sides equal, nothing dropped — fits with 8 pt to spare (to switch on; it stays on while it fits at all).
+   *  Otherwise the SE form: no UTC, the zone as an offset ("19:40 +1"). */
+  const clockFull = clock;
+  const clockShort = useMemo(() => ({ ...clock, srv: (clock as any).srvShort ?? clock.srv }), [clock]);
+  const wideRef = useRef(false);
   // ★ The reserved slot holds the timer's own shape, so it does not grow when recording starts.
   const recText = isRecording && recTime ? recTime : '0:00:00';
   const sharedFull = sharedDial ? sharedBannerText(sharedDial, true) : null;
@@ -2312,13 +2317,14 @@ function LandscapeStatus({ plate, marginTop, clock, font, clockFont, isRecording
   }, []);
 
   const w = (id: string) => measured[id] ?? 0;
-  const spec: StatusRowSpec = {
+  const specFor = (noUtc: boolean): StatusRowSpec => ({
     sectionGap: SECTION_GAP,
     sharedShort: sharedDial ? w('sharedShort') : undefined,
     // leads = the gaps the row lays out: pm.clockRow 4, lnd.statusSide 8, lnd.statusCentre 8, pm.linkRow 4
     // ★ The recording timer takes room only WHILE recording (2026-10-03): its idle reservation was an invisible
     //   0:00:00 that alone tipped the row into packing.
-    left:   [{ item: 'utc', width: noUtc ? 0 : w('utc'), lead: 0 }, { item: 'localTime', width: w('localTime'), lead: 4 },
+    left:   [{ item: 'utc', width: noUtc ? 0 : w('utc'), lead: 0 },
+             { item: 'localTime', width: noUtc ? w('localTimeShort') : w('localTime'), lead: 4 },
              { item: 'rec', width: isRecording ? w('rec') : 0, lead: 8 }],
     centre: [{ item: 'shared', width: sharedDial ? w('shared') : 0, lead: 8 },
              { item: 'dsp', width: dspOn ? w('dsp') : 0, lead: 8 }],
@@ -2328,7 +2334,13 @@ function LandscapeStatus({ plate, marginTop, clock, font, clockFont, isRecording
              { item: 'rate', width: link.showRate ? w('rate') : 0, lead: 4 },
              { item: 'gain', width: link.agcText ? w('gain') : 0, lead: 4 },
              { item: 'if', width: link.ifText ? w('if') : 0, lead: 4 }],
-  };
+  });
+  const wide = avail > 0 && w('localTimeShort') > 0
+    && statusFits(avail - (wideRef.current ? 0 : s.r(8)), specFor(false), statusState(0));
+  wideRef.current = wide;
+  const noUtc = !wide;
+  clock = noUtc ? clockShort : clockFull;
+  const spec = specFor(noUtc);
   const stepRef = useRef<number | undefined>(undefined);
   let fit = statusState(0);
   if (avail > 0) {
@@ -2360,7 +2372,8 @@ function LandscapeStatus({ plate, marginTop, clock, font, clockFont, isRecording
           <LinkIndicator readout={link} hide={hide} noNode={!!sharedDial} oneLine />
         </View>
       </View>
-      <StatusMeasure onUnit={onUnit} utc={clock.utc} srv={clock.srv} fromServer={clock.fromServer}
+      <StatusMeasure onUnit={onUnit} utc={clockFull.utc} srv={clockFull.srv} srvShort={clockShort.srv}
+        fromServer={clock.fromServer}
         clockColor={ct.clock} font={font} clockFont={clockFont} recText={recText}
         sharedFull={sharedFull} dspNr={!!dspNr} dspNb={!!dspNb} dspAn={!!dspAn}
         link={link} noNode={!!sharedDial} />
@@ -2438,17 +2451,22 @@ function PortraitStats({ bus }: { bus?: MeterBus }) {
   );
 }
 
-const StatusMeasure = React.memo(function StatusMeasure({ onUnit, utc, srv, fromServer, clockColor, font,
+const StatusMeasure = React.memo(function StatusMeasure({ onUnit, utc, srv, srvShort, fromServer, clockColor, font,
     clockFont, recText, sharedFull, dspNr, dspNb, dspAn, link, noNode }: {
-  onUnit: OnUnit; utc: string; srv: string; fromServer: boolean; clockColor: string; font?: string;
+  onUnit: OnUnit; utc: string; srv: string; srvShort?: string; fromServer: boolean; clockColor: string; font?: string;
   clockFont: number; recText: string; sharedFull: string | null;
   dspNr: boolean; dspNb: boolean; dspAn: boolean; link: LinkReadout; noNode: boolean;
 }) {
   const clock = useMemo(() => ({ utc, srv, fromServer }), [utc, srv, fromServer]);
+  // ★ The SE form's clock too ("19:40 +1"), as `localTimeShort` — so the row can tell which one fits.
+  const clockShort = useMemo(() => ({ utc, srv: srvShort ?? srv, fromServer }), [utc, srv, srvShort, fromServer]);
+  const onShort = useCallback<OnUnit>((id, wd) => { if (id === 'localTime') onUnit('localTimeShort', wd); },
+                                       [onUnit]);
   return (
     <View style={lnd.statusGhost} pointerEvents="none"
           accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <ClockRow clock={clock} color={clockColor} font={font} size={clockFont} onUnit={onUnit} />
+      <ClockRow clock={clockShort} color={clockColor} font={font} size={clockFont} onUnit={onShort} />
       <Unit id="rec" onUnit={onUnit}><RecSlot recording text={recText} font={font} size={clockFont} /></Unit>
       {sharedFull !== null && <Unit id="shared" onUnit={onUnit}><SharedText text={sharedFull} colour={clockColor} size={clockFont} /></Unit>}
       {sharedFull !== null && <Unit id="sharedShort" onUnit={onUnit}><SharedText text={SHARED_SHORT} colour={clockColor} size={clockFont} /></Unit>}
