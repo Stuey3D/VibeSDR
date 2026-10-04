@@ -185,6 +185,8 @@ for (const chassis of ['silver', 'black'] as const) {
     ['components/LocalHardwarePanel.tsx', /fp\.opaque && styles\.backdropNone/],
   ];
   for (const [f, re] of scrims) ok(`${f}: its dim follows Transparency OFF`, re.test(src(f)));
+  // ★★ No corner screws on a decoder box (2026-10-04, silver: they sat on the status dot and the × key).
+  ok('DecoderShell: the plate has no screws (popupPlate)', /const plate = deckPlate \? popupPlate\(deckPlate\)/.test(src('components/DecoderShell.tsx')));
   // ★★ The bottom sheets carry NO dim at all (Stuart, 2026-10-04: the Audio/Mode scrim darkened only the space above the
   //   sheet; "I don't mind not having the transparency layer when the menu is up" — and it saves a full-screen blend).
   ok('MenuSheet: no dim behind the menu', !/styles\.backdrop\b/.test(src('components/MenuSheet.tsx')));

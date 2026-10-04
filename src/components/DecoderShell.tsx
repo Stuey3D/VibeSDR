@@ -53,6 +53,7 @@ import { useFaceplate } from '../contexts/FaceplateContext';
 import { decoderTokensFor, type DecoderTokens } from '../constants/decoderTokens';
 import { NO_DROP_SHADOW, type Transparency } from '../constants/faceplate';
 import ChassisPlate from './ChassisPlate';
+import { popupPlate } from './PopupShell';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
 import { CAP_SHEEN } from '../constants/capSheen';
 
@@ -136,7 +137,12 @@ export interface DecoderShellProps {
 export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, borderColor,
   wrapStyle, onTouchStart, children }: DecoderShellProps) {
   const tk = useDecoderTokens();
-  const plate = useFaceplate().chassis.plate;
+  /* ★★ NO CORNER SCREWS on a decoder box (Stuart, 2026-10-04, silver chassis: "the screws are merged into the button and
+   *  indicator for the decoder box" — the top screws sat on the status dot and the × key, the bottom ones on the window's
+   *  corners). The menus and pop-ups already have none (popupPlate), and the black chassis never showed them; insetting
+   *  everything round four screws would cost every box ~10 pt of width and height on a small phone. */
+  const deckPlate = useFaceplate().chassis.plate;
+  const plate = deckPlate ? popupPlate(deckPlate) : deckPlate;
   const metal = tk.surface === 'metal' && plate != null;
   // ★★★ Transparency OFF on default: one opaque colour ON this view — no BlurView, no tint layer,
   //   no drop shadow (any chassis). See the header.

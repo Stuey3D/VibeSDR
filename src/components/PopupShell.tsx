@@ -155,8 +155,9 @@ export function usePopupSurface() {
 // ── Plate + handle ────────────────────────────────────────────────────────────
 
 const plateNoScrews = new WeakMap<PlateTokens, PlateTokens>();
-/** The deck's plate WITHOUT its corner screws — the mockup's popups have none. */
-function popupPlate(p: PlateTokens): PlateTokens {
+/** The deck's plate WITHOUT its corner screws — the mockup's popups have none, and nor do the decoder boxes
+ *  (DecoderShell, 2026-10-04). */
+export function popupPlate(p: PlateTokens): PlateTokens {
   let q = plateNoScrews.get(p);
   if (!q) { q = { ...p, screws: false }; plateNoScrews.set(p, q); }
   return q;
