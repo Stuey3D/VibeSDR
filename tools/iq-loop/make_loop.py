@@ -133,6 +133,28 @@ def colourise(db, lo, hi):
 
 # ── buzz detection ─────────────────────────────────────────────────────────────────────────────────────
 def buzz_envelope(x, band, carrier_hz, fs=OUT_RATE, frame=60):
+    """Energy per 10 ms frame on the BUZZ'S OWN COMB LINES. ★ The Buzzer's energy sits on narrow lines; summing the
+    whole band (the first version) was mostly noise — buzz and gap only 5.9 dB apart on the real capture, buzzes
+    merged. 50 ms windows (20 Hz bins) hopped every 10 ms; the comb = the in-band bins whose level swings most over
+    time (on during a buzz, off between); the envelope sums only those."""
+    win, hop = 300, frame
+    n = (len(x) - win) // hop
+    if n < 10:
+        return _buzz_envelope_flat(x, band, carrier_hz, fs, frame)
+    idx = np.arange(win)[None, :] + hop * np.arange(n)[:, None]
+    X = np.fft.fft(x[idx] * np.hanning(win), axis=1)
+    f = np.fft.fftfreq(win, 1 / fs)
+    m = (f >= band[0]) & (f <= band[1])
+    if carrier_hz is not None:
+        m &= np.abs(f - carrier_hz) > 40
+    P = np.abs(X[:, m]) ** 2
+    swing = np.std(10 * np.log10(P + 1e-20), axis=0)
+    comb = swing >= np.percentile(swing, 80)
+    env = P[:, comb].sum(axis=1)
+    return np.concatenate([env, np.full((len(x) // frame) - n, env[-1])])
+
+
+def _buzz_envelope_flat(x, band, carrier_hz, fs=OUT_RATE, frame=60):
     """Energy per 10 ms frame in the buzz band, with ±40 Hz round the steady carrier left out (it never
     stops, so it would only raise the floor)."""
     n = len(x) // frame
@@ -190,6 +212,8 @@ def main():
     ap.add_argument('--band', default='-1000,1200', help='buzz band relative to the capture centre, Hz')
     ap.add_argument('--carrier', type=float, default=4625000.0, help='the steady carrier, Hz (excluded)')
     ap.add_argument('--no-dc-shift', action='store_true')
+    ap.add_argument('--offset', type=float, default=0.0,
+                    help='Hz to move to the middle before anything else (the buzz comb\'s centre, relative to --centre)')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
@@ -202,6 +226,13 @@ def main():
     band = [float(v) for v in a.band.split(',')]
     centre = a.centre
     shift = 0.0
+    if a.offset:
+        # ★ Centre the buzz comb (brief §1: "centre on the buzz energy … verify on the actual capture and adjust").
+        n = np.arange(len(x))
+        x = (x * np.exp(-2j * np.pi * a.offset / a.rate * n)).astype(np.complex64)
+        centre += a.offset
+        band = [band[0] - a.offset, band[1] - a.offset]
+        log(f'   re-centred by {a.offset:+.0f} Hz → {centre / 1e3:.4f} kHz')
     if not a.no_dc_shift:
         f, P = long_psd(x[: a.rate * 60], a.rate, nfft=1 << int(round(math.log2(a.rate / 5))))
         win = (f > -150) & (f < 150)
@@ -236,6 +267,19 @@ def main():
     p = (med_iv - med_dur) / 2
     p_s = int(round(p * OUT_RATE))
 
+    # ★ DROPPED-SAMPLE CLICKS. The recorder can lose samples (0.7 % on the 2026-10-04 capture, writing to the Pi's SD
+    #   card); each gap is a phase jump, i.e. a broadband click — energy far out of band where there is only noise.
+    #   Any loop window containing one is rejected.
+    nf = len(y) // 60
+    Yf = np.fft.fft(y[:nf * 60].reshape(nf, 60) * np.hanning(60), axis=1)
+    ff = np.fft.fftfreq(60, 1 / OUT_RATE)
+    oob = (np.abs(ff) > 1700) & (np.abs(ff) < 2400)
+    e_oob = 10 * np.log10((np.abs(Yf[:, oob]) ** 2).sum(axis=1) + 1e-20)
+    click = np.where(e_oob > np.median(e_oob) + 10)[0] * 60          # sample positions of clicks
+    log(f'   {len(click)} click frames (dropped-sample gaps) found')
+    def clean(a0, a1):
+        return not np.any((click >= a0 - 120) & (click <= a1 + 360))
+
     # 4. Choose (i, j).
     edb = 10 * np.log10(env + 1e-20)
     fr = OUT_RATE / 60
@@ -249,6 +293,8 @@ def main():
                 break
             start, end = ons[i] - p_s, ons[j] - p_s
             if start < 0 or end + 400 > len(y):
+                continue
+            if not clean(start, end):
                 continue
             seam_gap = (ons[j] - ons[j - 1]) / OUT_RATE
             w_iv = iv[i:j]
@@ -302,7 +348,7 @@ def main():
     dead = (np.abs(fN) > 1900) & (np.abs(fN) < 2300)
     w = nuttall(1024)
     noise_pow_per_bin = np.median(PN[dead]) / (w ** 2).sum()
-    noise_rms = math.sqrt(noise_pow_per_bin * 1024 / 2)      # per component
+    noise_rms = math.sqrt(noise_pow_per_bin / 2)             # per component: E|X|² = σ²·Σw², σ² split over I and Q
     q = np.clip(np.round(np.stack([out.real, out.imag], 1).ravel() * scale), -127, 127)
     clip = float(np.mean(np.abs(np.stack([out.real, out.imag], 1).ravel() * scale) > 127.5))
     nrms_lsb = noise_rms * scale
@@ -348,7 +394,10 @@ def main():
         log(f'   {tt:7.2f} s  {v:.3f} s {"★" if c else ""}')
     seam_vals = [v for _, v, c in rows if c]
     others = [v for _, v, c in rows if not c]
-    within = all(min(others) <= v <= max(others) for v in seam_vals)
+    # ★ ±10 ms: the seam interval IS a recorded one; what moves it is the ±5 ms phase slide and onset-measurement noise.
+    #   A waterfall row at 20 rows/s is 50 ms, so 10 ms cannot be seen (real capture 2026-10-04: 3.457 vs max 3.451).
+    TOL = 0.010
+    within = all(min(others) - TOL <= v <= max(others) + TOL for v in seam_vals)
     log(f'   seam intervals {["%.3f" % v for v in seam_vals]} within the others\' {min(others):.3f}–{max(others):.3f}: '
         f'{"YES" if within else "NO"}')
 
