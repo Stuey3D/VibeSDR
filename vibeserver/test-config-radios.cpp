@@ -8,7 +8,10 @@
 #include "vibeserver_config.h"
 #include "sdr_presence.h"
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static int failures = 0, checks = 0;
 static void ok(bool cond, const char* what, const std::string& extra = "") {
@@ -576,6 +579,56 @@ int main() {
         ok(decidePresence("hackrf", "", {}, 0, 0) == Presence::Uncertain, "no serial to look for → never absent");
         ok(decidePresence("airspy", "X", {det("airspyhf", "X")}, 0, 0) == Presence::Absent,
            "★ another DRIVER's device with the same serial is not this radio");
+    }
+
+    // ★★★ "IN USE BY ANOTHER APP" IS SAID ONLY WHEN KNOWN (Stuart, 2026-10-04).
+    std::printf("\nIn use elsewhere: known, never guessed\n");
+    {
+        using vibe::knownInUseElsewhere;
+        ok(knownInUseElsewhere(true, -1, -1, 0), "★ an RTL's own LIBUSB_ERROR_BUSY is proof");
+        ok(!knownInUseElsewhere(false, 1, -1, 0), "★★ no claim information (macOS) → never said");
+        ok(!knownInUseElsewhere(false, -1, 1, 0), "★★ no bus count → never said");
+        ok(knownInUseElsewhere(false, 1, 1, 0), "one HF+ on the bus, claimed, none of ours running → known");
+        ok(!knownInUseElsewhere(false, 1, 0, 0), "one on the bus, nobody has claimed it → not 'in use'");
+        ok(!knownInUseElsewhere(false, 2, 1, 1), "★ our sibling holds the only claimed one → not this radio");
+        ok(knownInUseElsewhere(false, 2, 2, 1), "two RSPs: our sibling holds one, another program the other → known");
+        ok(!knownInUseElsewhere(false, 3, 2, 1),
+           "★ an extra unclaimed RSP on the bus makes it ambiguous which is ours → never said");
+    }
+
+    // The sysfs reader, against a fake tree shaped like /sys/bus/usb/devices.
+    std::printf("\nsysfs: who has claimed which radio\n");
+    {
+        char tmpl[] = "/tmp/vs-sysfs-XXXXXX";
+        const char* rootC = mkdtemp(tmpl);
+        ok(rootC != nullptr, "a scratch tree");
+        if (rootC) {
+            const std::string root = rootC;
+            auto mk = [&](const std::string& rel) { ::mkdir((root + "/" + rel).c_str(), 0755); };
+            auto put = [&](const std::string& rel, const std::string& v) {
+                if (FILE* f = std::fopen((root + "/" + rel).c_str(), "w")) { std::fputs(v.c_str(), f); std::fclose(f); }
+            };
+            auto dev = [&](const std::string& d, const char* vid, const char* pid, const char* itfDriver) {
+                mk(d); put(d + "/idVendor", vid); put(d + "/idProduct", pid);
+                mk(d + ":1.0");
+                if (itfDriver) ::symlink((std::string("../../../bus/usb/drivers/") + itfDriver).c_str(),
+                                         (root + "/" + d + ":1.0/driver").c_str());
+            };
+            dev("1-1",   "03eb\n", "800c\n", "usbfs");       // an HF+ another program holds
+            dev("1-2",   "1df7\n", "3050\n", nullptr);       // an RSP1B nobody holds
+            dev("1-3",   "1df7\n", "3000\n", "usbfs");       // an RSP1A somebody holds
+            dev("1-4",   "1d50\n", "6089\n", "usbfs");       // a HackRF somebody holds
+            dev("1-5",   "1d50\n", "60a1\n", "uvcvideo");    // an Airspy bound to some other kernel driver
+            dev("2-1",   "046d\n", "c52b\n", "usbfs");       // a mouse receiver: not a radio
+            int sp = -1, ahf = -1, hrf = -1, asp = -1;
+            ok(vibe::sysfsClaimedCounts(root, sp, ahf, hrf, asp), "the tree reads");
+            ok(ahf == 1 && sp == 1 && hrf == 1 && asp == 0,
+               "★ claimed through usbfs: HF+ 1, RSP 1 of 2, HackRF 1; a kernel driver is not usbfs",
+               std::to_string(ahf) + " " + std::to_string(sp) + " " + std::to_string(hrf) + " " + std::to_string(asp));
+            ok(!vibe::sysfsClaimedCounts(root + "/nope", sp, ahf, hrf, asp), "an unreadable root = unknown");
+            std::string cmd = "rm -rf '" + root + "'";
+            (void)!std::system(cmd.c_str());
+        }
     }
 
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);

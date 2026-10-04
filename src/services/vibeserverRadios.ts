@@ -45,6 +45,10 @@ export interface VibeRadio {
    *      mode; two keys of one name in a JSON object is not an error, the second simply wins.
    *  ★ Absent on an older server, which must read as "open to anyone", so `=== true`. */
   pinLocked?: boolean;
+  /** ★★★ ANOTHER PROGRAM ON THAT SERVER HAS THIS RADIO — said only when the server KNOWS (it proved
+   *  it from the USB bus). The picker shows it greyed, "IN USE BY ANOTHER APP", and not selectable.
+   *  Absent = unknown, never "free" (Stuart, 2026-10-04). */
+  inUseElsewhere?: boolean;
   /** Where it is pointed right now, so the picker can say what a radio is FOR. */
   centreHz?: number;
   spanHz?: number;
@@ -126,6 +130,7 @@ export async function fetchFrontDoor(
         restricted: x.restricted === true,
         // ★ An older door says nothing here; `=== true` makes that "open", never "locked".
         pinLocked: x.pinLocked === true,
+        inUseElsewhere: x.inUseElsewhere === true,
         centreHz: typeof x.centreHz === 'number' ? x.centreHz : undefined,
         spanHz: typeof x.spanHz === 'number' ? x.spanHz : undefined,
         mode: typeof x.mode === 'string' ? x.mode : undefined,

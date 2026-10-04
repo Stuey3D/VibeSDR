@@ -5,6 +5,7 @@
 #include "hackrf_source.h"
 #include "airspy_source.h"
 #include <algorithm>
+#include "sdr_presence.h"   // sysfsClaimedCounts
 #if __has_include(<libusb.h>)
 #  include <libusb.h>
 #  define VIBE_HAVE_LIBUSB_H 1
@@ -143,6 +144,11 @@ UsbBusCounts usbBusCounts() {
     libusb_exit(ctx);
     // ★ librtlsdr's own table (dozens of VID:PIDs) — counted by the same descriptor walk inside it.
     if (c.ok) c.rtlsdr = (int)rtlsdr_get_device_count();
+#endif
+#if defined(__linux__)
+    // ★★ WHO HAS CLAIMED WHAT, from sysfs — never by asking the device. See sysfsClaimedCounts.
+    c.claimedOk = sysfsClaimedCounts("/sys/bus/usb/devices", c.claimedSdrplay, c.claimedAirspyhf,
+                                     c.claimedHackrf, c.claimedAirspy);
 #endif
     return c;
 }

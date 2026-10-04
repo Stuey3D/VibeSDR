@@ -3475,11 +3475,34 @@ static double              g_radioBusyAt = 0.0;
  *    program is actively streaming from, and this project has already learned what talking to a
  *    busy radio costs (rtl_sdr tools, the usb nudge). The next real listener finds out for us. */
 static constexpr double    kRadioBusyTtlSec = 60.0;
+/* ★★★ KNOWN, NOT GUESSED — see LocalSdrShim::setRadioBusyHook. The daemon sets this only when the
+ *  USB bus proves another program holds the radio; it ages out with radioBusy. */
+static LocalSdrShim::RadioBusyHook g_radioBusyHook;          // guarded by g_radioBusyMtx
+static double                      g_radioInUseKnownAt = 0.0; // guarded by g_radioBusyMtx
+static std::string                 g_radioDisplayName;        // guarded by g_radioBusyMtx
 static void setRadioBusyReason(const std::string& why) {
+    LocalSdrShim::RadioBusyHook hook;
+    {
+        std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+        g_radioBusyWhy = why;
+        g_radioBusyAt  = why.empty() ? 0.0
+            : std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (why.empty()) g_radioInUseKnownAt = 0.0;   // ★ ours again: nothing to say any more
+        hook = g_radioBusyHook;
+    }
+    // ★ Outside the lock: the daemon reads the USB bus and calls setRadioInUseElsewhere back.
+    if (hook) hook(why);
+}
+static bool radioInUseElsewhereNow() {
     std::lock_guard<std::mutex> lk(g_radioBusyMtx);
-    g_radioBusyWhy = why;
-    g_radioBusyAt  = why.empty() ? 0.0
-        : std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (g_radioInUseKnownAt <= 0.0) return false;
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now - g_radioInUseKnownAt <= kRadioBusyTtlSec;
+}
+static std::string radioDisplayName() {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    return g_radioDisplayName;
 }
 static std::string radioBusyReason() {
     std::lock_guard<std::mutex> lk(g_radioBusyMtx);
@@ -17716,6 +17739,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                               *    and a newer one reads absence as "nothing to say". */
                              + (radioBusyReason().empty() ? std::string()
                                   : ",\"radioBusy\":\"" + vibeadmin::esc(radioBusyReason()) + "\"")
+                             /* ★★★ AND WHEN WE KNOW IT IS ANOTHER PROGRAM, SAY SO PLAINLY — `radioBusy`
+                              *  is set on ANY failed take-back; this one only when the USB bus proved
+                              *  another program holds the radio (setRadioInUseElsewhere). Absent =
+                              *  unknown, never "free". */
+                             + (radioInUseElsewhereNow() ? std::string(",\"inUseElsewhere\":true") : std::string())
                              // ★★★ WHO MAY TUNE — the third usage mode. OMITTED when exclusive, so
                              //     an older client sees exactly what it saw before and a newer one
                              //     reads absence as "today's behaviour". Same rule as limitMode.
@@ -22953,6 +22981,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string j = std::string("{\"type\":\"device\",\"present\":") + (present ? "true" : "false");
         const std::string why = radioBusyReason();
         if (!present && !why.empty()) j += ",\"reason\":\"" + vibeadmin::esc(why) + "\"";
+        /* ★★★ KNOWN TO BE ANOTHER PROGRAM'S — the client then says, in Stuart's words, "<radio> is
+         *  currently in use with another app on this server and is not available, please try again
+         *  later." The name travels with it because the client may not have one (a direct link). */
+        if (!present && radioInUseElsewhereNow()) {
+            j += ",\"inUseElsewhere\":true";
+            const std::string nm = radioDisplayName();
+            if (!nm.empty()) j += ",\"radio\":\"" + vibeadmin::esc(nm) + "\"";
+        }
         return j + "}";
     }
     /** Tell every connected client whether we currently have a radio. They draw the message. */
@@ -26047,6 +26083,20 @@ void LocalSdrShim::setBenchmarkHandlers(BenchRunFn run, BenchGetFn get) {
     std::lock_guard<std::mutex> lk(g_vsBenchMtx);
     g_vsBenchRun = std::move(run);
     g_vsBenchGet = std::move(get);
+}
+
+void LocalSdrShim::setRadioBusyHook(RadioBusyHook hook) {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    g_radioBusyHook = std::move(hook);
+}
+void LocalSdrShim::setRadioInUseElsewhere(bool known) {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    g_radioInUseKnownAt = known ? std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count() : 0.0;
+}
+void LocalSdrShim::setRadioDisplayName(const std::string& name) {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    g_radioDisplayName = name.substr(0, 80);
 }
 
 void LocalSdrShim::setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set) {
@@ -29971,10 +30021,16 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         // ★ BY SERIAL, NOT BY INDEX — findOurDevice refuses to grab a DIFFERENT dongle that has
         //   taken our slot while we were away. With three radios on one machine that matters.
         const int idx = impl->findOurDevice();
+        int rc = 0;
         if (idx < 0) { err = "the radio is not there"; }
-        else if (rtlsdr_open(&impl->dev, (uint32_t)idx) != 0 || !impl->dev) {
+        else if ((rc = rtlsdr_open(&impl->dev, (uint32_t)idx)) != 0 || !impl->dev) {
             impl->dev = nullptr;
-            err = "the radio is in use by another program on this machine";
+            /* ★★ ONLY LIBUSB_ERROR_BUSY (-6) IS "IN USE BY ANOTHER PROGRAM" — the kernel saying an
+             *  interface is claimed. Anything else is a radio that would not open, and calling that
+             *  "in use" is the guess Stuart ruled out (2026-10-04). The daemon's hook keys on this
+             *  exact sentence for an RTL. */
+            err = rc == -6 ? "the radio is in use by another program on this machine"
+                           : "the radio would not open (rtlsdr_open " + std::to_string(rc) + ")";
         } else {
             rtlsdr_set_sample_rate(impl->dev, (uint32_t)impl->sampleRate);
             // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.

@@ -622,6 +622,19 @@ public:
     using SdrChangeSetFn  = std::function<std::string(const std::string& body, int& status)>;
     static void setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set);
 
+    /** ★★★ "IN USE BY ANOTHER APP" — ONLY WHEN WE KNOW (Stuart, 2026-10-04). The shim learns the
+     *  radio is not ours only by failing to take it back (radioBusyReason); whether that failure
+     *  PROVES another program has it is the daemon's call, because the daemon can read the USB bus
+     *  (sdr_presence.h). So: the hook hears every reclaim failure ("" = reclaimed), and the daemon
+     *  answers with setRadioInUseElsewhere(true) only when it knows. Published as
+     *  `inUseElsewhere:true` in /vibeserver.json and on the `device` message, for 60 s like
+     *  radioBusy itself; never set = never said (Android, macOS without proof).
+     *  ★ The display name rides the `device` message so the listener's refusal can name the radio. */
+    using RadioBusyHook = std::function<void(const std::string& why)>;
+    static void setRadioBusyHook(RadioBusyHook hook);
+    static void setRadioInUseElsewhere(bool known);
+    static void setRadioDisplayName(const std::string& name);
+
     /** ★★★ THE SERVER BENCHMARK (vibe_benchmark.h). Run = measure this box and save the result; Get = the last
      *  saved result, or "" if it has never run. The HTTP endpoints live here because every platform serves them
      *  from the same place the config endpoints are served; the WORK lives in the daemon, which owns the radio

@@ -30,8 +30,12 @@
 
 #include "radios.h"
 
+#include <cstdio>
 #include <string>
 #include <vector>
+#include <dirent.h>
+#include <limits.h>
+#include <unistd.h>
 
 namespace vibe {
 
@@ -73,6 +77,72 @@ inline Presence decidePresence(const std::string& driver, const std::string& ser
     if (onBus < 0 || serial.empty()) return Presence::Uncertain;
     const int unaccounted = onBus - named - (heldUnseen > 0 ? heldUnseen : 0);
     return unaccounted > 0 ? Presence::Uncertain : Presence::Absent;
+}
+
+/** ★★★ WHO HAS CLAIMED WHICH RADIO, FROM sysfs (Linux) — never by asking the device.
+ *  `<root>/<dev>` carries idVendor/idProduct; each interface `<dev>:<cfg>.<if>` has a `driver` link,
+ *  and an interface a program claimed through libusb (every SDR program) points at "usbfs".
+ *  Readable by any user, the sandboxed service included: it is sysfs, not /proc, so
+ *  ProtectProc=invisible does not hide it. It says THAT something holds the radio, never WHO.
+ *  ★ RTL is not counted (librtlsdr's VID:PID table is its own); an RTL's busy comes exactly from
+ *    rtlsdr_open's LIBUSB_ERROR_BUSY instead.
+ *  ★ Header-only and root-parameterised so the test can point it at a fake tree.
+ *  Returns false when the directory cannot be read (= unknown). */
+inline bool sysfsClaimedCounts(const std::string& root, int& sdrplay, int& airspyhf, int& hackrf, int& airspy) {
+    sdrplay = airspyhf = hackrf = airspy = 0;
+    DIR* d = ::opendir(root.c_str());
+    if (!d) return false;
+    std::vector<std::string> names;
+    while (dirent* e = ::readdir(d)) if (e->d_name[0] != '.') names.push_back(e->d_name);
+    ::closedir(d);
+    auto readHex = [](const std::string& path) -> int {
+        FILE* f = std::fopen(path.c_str(), "r");
+        if (!f) return -1;
+        unsigned v = 0; const int n = std::fscanf(f, "%x", &v); std::fclose(f);
+        return n == 1 ? (int)v : -1;
+    };
+    const std::string base = root + "/";
+    for (const auto& dev : names) {
+        if (dev.find(':') != std::string::npos) continue;           // an interface, not a device
+        const int vid = readHex(base + dev + "/idVendor"), pid = readHex(base + dev + "/idProduct");
+        if (vid < 0 || pid < 0) continue;
+        int* slot = nullptr;
+        if (vid == 0x1df7) slot = &sdrplay;
+        else if (vid == 0x03eb && pid == 0x800c) slot = &airspyhf;
+        else if (vid == 0x1d50 && (pid == 0x6089 || pid == 0x604b || pid == 0xcc15)) slot = &hackrf;
+        else if (vid == 0x1d50 && pid == 0x60a1) slot = &airspy;
+        if (!slot) continue;
+        for (const auto& itf : names) {
+            if (itf.rfind(dev + ":", 0) != 0) continue;
+            char link[PATH_MAX] = {0};
+            const ssize_t n = ::readlink((base + itf + "/driver").c_str(), link, sizeof link - 1);
+            if (n <= 0) continue;
+            const std::string drv(link, (size_t)n);
+            const size_t sl = drv.find_last_of('/');
+            if ((sl == std::string::npos ? drv : drv.substr(sl + 1)) == "usbfs") { (*slot)++; break; }
+        }
+    }
+    return true;
+}
+
+/** ★★★ DO WE *KNOW* ANOTHER PROGRAM HAS THIS RADIO? Stuart's rule for saying "in use by another app"
+ *  anywhere a listener can see it: only when we KNOW, never as a guess — unknown says nothing.
+ *  Known when:
+ *    • an RTL's own open said LIBUSB_ERROR_BUSY (`rtlBusy`) — the kernel's word, about this device; or
+ *    • (Linux) a device of this kind is claimed by a program that is not one of OUR running radios,
+ *      AND it is the only device of this kind on the bus that our running radios do not account
+ *      for — so it is this radio's, held by someone else.
+ *  @param onBus       devices of this driver on the bus (UsbBusCounts::forDriver), <0 unknown
+ *  @param claimed     devices of this driver claimed through usbfs (claimedForDriver), <0 unknown
+ *  @param runningOurs OUR other radios of this driver that are running (each holds one device)
+ *  ★ The one case it cannot see through: ours unplugged AND a different radio of the same kind,
+ *    not in our config, plugged in AND held by another program. Rare enough to accept; the
+ *    alternative is never saying it at all on an RSP, the radio people most often lend out. */
+inline bool knownInUseElsewhere(bool rtlBusy, int onBus, int claimed, int runningOurs) {
+    if (rtlBusy) return true;
+    if (onBus < 0 || claimed < 0) return false;
+    const int ours = runningOurs > 0 ? runningOurs : 0;
+    return claimed - ours >= 1 && onBus == ours + 1;
 }
 
 }  // namespace vibe

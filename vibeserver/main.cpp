@@ -1075,6 +1075,35 @@ static vibe::Presence radioPresence(const vsconfig::ServerConfig& srv, const vsc
     return vibe::decidePresence(r.driver, r.serial, detected, bus.forDriver(r.driver), heldUnseen);
 }
 
+/** OUR other radios of this driver that should be running, each holding one device: enabled,
+ *  configured, and no failure on file. (A released one holds nothing — counted anyway, which only
+ *  ever makes knownInUseElsewhere say LESS, the safe direction.) */
+static int runningOursOf(const vsconfig::ServerConfig& srv, const vsconfig::RadioConfig& r) {
+    int n = 0;
+    for (const auto& o : srv.radios) {
+        if (o.serial == r.serial || o.driver != r.driver) continue;
+        if (!o.enabled || !o.configured || o.serial.empty()) continue;
+        if (radioStatusRead(o.serial).present) continue;
+        n++;
+    }
+    return n;
+}
+
+/** ★★★ DO WE KNOW ANOTHER PROGRAM HAS THIS RADIO? See vibe::knownInUseElsewhere for the rule. */
+static bool radioKnownInUse(const vsconfig::ServerConfig& srv, const vsconfig::RadioConfig& r,
+                            const vibe::UsbBusCounts& bus, bool rtlBusy) {
+    return vibe::knownInUseElsewhere(rtlBusy && r.driver == "rtlsdr", bus.forDriver(r.driver),
+                                     bus.claimedForDriver(r.driver), runningOursOf(srv, r));
+}
+
+/** "busy" records age out like the shim's radioBusy: we only learn it by failing to take the
+ *  radio, and the other program may have let go since. A radio stuck failing at start re-writes
+ *  its record every few seconds, so a live one is always fresh. */
+static constexpr long long kInUseFreshSec = 60;
+static bool radioStatusInUseFresh(const RadioStatus& st) {
+    return st.present && st.state == "busy" && (long long)std::time(nullptr) - st.last <= kInUseFreshSec;
+}
+
 /** What the USB bus reports right now, so the page can PROVE the change took rather than assuming
  *  it did. A verified write to a chip that never lost power still reads the old serial. */
 static std::vector<std::string> rtlSerialsOnBus() {
@@ -2046,10 +2075,21 @@ int main(int argc, char** argv) {
                 if (!r.configured) continue;              // not served: no process, nothing to miss
                 const RadioStatus st = radioStatusRead(r.serial);
                 if (!st.present) continue;                // its process opened the radio: all well
-                vibe::Presence p = radioPresence(srv, r, detected, bus);
-                if (p == vibe::Presence::Attached) {
-                    if (st.state == "notfound") continue; // back on the bus; its process takes it next
-                    p = vibe::Presence::Busy;             // named, but it would not open
+                vibe::Presence p;
+                if (st.state == "busy") {
+                    // ★ KNOWN another program's (its process proved it from the bus) — while fresh.
+                    if (!radioStatusInUseFresh(st)) continue;
+                    p = vibe::Presence::Busy;
+                } else {
+                    p = radioPresence(srv, r, detected, bus);
+                    if (p == vibe::Presence::Attached) {
+                        if (st.state == "notfound") continue; // back on the bus; its process takes it next
+                        // ★ Named but would not open: another program's only if the bus proves it.
+                        p = radioKnownInUse(srv, r, bus, false) ? vibe::Presence::Busy
+                                                                : vibe::Presence::Uncertain;
+                    } else if (p == vibe::Presence::Uncertain && radioKnownInUse(srv, r, bus, false)) {
+                        p = vibe::Presence::Busy;
+                    }
                 }
                 /* ★★★ KNOWN TO BE IN SOMEONE ELSE'S HANDS → "inuse", whatever the release setting.
                  *  An owner experimenting over SSH can leave another app running that grabs the dongle
@@ -2305,6 +2345,11 @@ int main(int argc, char** argv) {
              *     so a PIN flag called `locked` would have been silently overwritten by the tuning
              *     mode and the directory would have read one as the other. */
             j += ",\"pinLocked\":" + std::string(r.pin.empty() ? "false" : "true");
+            /* ★★★ IN USE BY ANOTHER APP ON THIS SERVER — only when KNOWN (its process proved it from
+             *  the USB bus and the record is fresh). The landing cards, the directory and the app's
+             *  picker then show it as unavailable instead of a radio that "is not responding" or,
+             *  worse, FREE. Absent = unknown, never "free" — and nothing about WHO has it. */
+            if (radioStatusInUseFresh(radioStatusRead(r.serial))) j += ",\"inUseElsewhere\":true";
             j += ",\"serial\":\"" + jsonEscape(r.serial) + "\"";
             // ★ PUBLIC listing — the landing page renders this, so the serial comes out of the
             //   name. The setup and admin pages read the config API instead and keep the full one.
@@ -3007,12 +3052,17 @@ int main(int argc, char** argv) {
                  *  says "not found since T"; whether that is UNPLUGGED or LENT is judged by the front
                  *  door with the USB bus as witness (sdr_presence.h) — this process only reports. */
                 {
-                    std::string drvName;
+                    const vsconfig::RadioConfig* me = nullptr;
                     for (const auto& r : g_serverConfig.radios)
-                        if (r.serial == o.radioSerial) { drvName = r.driver; break; }
-                    radioStatusWrite(o.radioSerial, drvName, "notfound",
-                                     all.empty() ? "no radios are detected at all"
-                                                 : "the driver did not list this serial");
+                        if (r.serial == o.radioSerial) { me = &r; break; }
+                    // ★★ An RSP lent to OpenWebRX is exactly "not listed by the driver" — so ask the
+                    //    bus whether another program is holding a radio of this kind before calling
+                    //    it anything (sdr_presence.h). Read-only: descriptors and sysfs.
+                    const bool known = me && radioKnownInUse(g_serverConfig, *me, vibe::usbBusCounts(), false);
+                    radioStatusWrite(o.radioSerial, me ? me->driver : "", known ? "busy" : "notfound",
+                                     known ? "another program on this machine has it"
+                                           : all.empty() ? "no radios are detected at all"
+                                                         : "the driver did not list this serial");
                 }
                 if (all.empty()) {
                     std::fprintf(stderr, "VibeServer: no radios are detected at all — check the "
@@ -3061,8 +3111,37 @@ int main(int argc, char** argv) {
             /* ★★ NAMED BUT NOT OPENED is a different fact from "not there": the device is on the bus
              *  and something — another program, a wedged chip — has it. Recorded as such, so the page
              *  never calls a radio that is plainly attached "unplugged". Opened = the record goes. */
-            if (port <= 0) radioStatusWrite(o.radioSerial, drv, "openfailed", err);
-            else           radioStatusClear(o.radioSerial);
+            if (port <= 0) {
+                // ★ An RTL's open says LIBUSB_ERROR_BUSY in its own words; the others, the bus can.
+                const bool rtlBusy = drv == "rtlsdr" && err.find("failed: -6 ") != std::string::npos;
+                bool known = false;
+                for (const auto& r : g_serverConfig.radios)
+                    if (r.serial == o.radioSerial) { known = radioKnownInUse(g_serverConfig, r, vibe::usbBusCounts(), rtlBusy); break; }
+                radioStatusWrite(o.radioSerial, drv, known ? "busy" : "openfailed", err);
+            } else {
+                radioStatusClear(o.radioSerial);
+                /* ★★★ AND WHEN WE LEND IT OUT AND CANNOT TAKE IT BACK. The shim learns that only by
+                 *  failing a take-back; this decides whether the failure PROVES another program has
+                 *  it, tells the shim (which then says so to listeners) and records it for the front
+                 *  door, whose radio list and setup page cannot see inside this process. */
+                std::string myLabel;
+                for (const auto& r : g_serverConfig.radios)
+                    if (r.serial == o.radioSerial) { myLabel = r.label.empty() ? r.driver : r.label; break; }
+                LocalSdrShim::setRadioDisplayName(vsconfig::publicLabel(myLabel));
+                const std::string mySerial = o.radioSerial, myDrv = drv;
+                LocalSdrShim::setRadioBusyHook([mySerial, myDrv](const std::string& why) {
+                    if (why.empty()) { radioStatusClear(mySerial); return; }
+                    vsconfig::ServerConfig srv; std::string e;
+                    if (!vsconfig::loadServer(g_configPath, srv, e)) srv = g_serverConfig;
+                    const vsconfig::RadioConfig* me = nullptr;
+                    for (const auto& r : srv.radios) if (r.serial == mySerial) { me = &r; break; }
+                    const bool rtlBusy = myDrv == "rtlsdr"
+                                      && why == "the radio is in use by another program on this machine";
+                    const bool known = me && radioKnownInUse(srv, *me, vibe::usbBusCounts(), rtlBusy);
+                    LocalSdrShim::setRadioInUseElsewhere(known);
+                    if (known) radioStatusWrite(mySerial, myDrv, "busy", why);
+                });
+            }
         } else {
         // ★★★ PICK A RADIO OUT OF THE FLAT LIST — the SAME list vs_device_count() and
         //     vs_device_name() publish, so "the third radio" means the same thing to the setup

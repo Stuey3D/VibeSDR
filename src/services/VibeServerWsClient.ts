@@ -2185,6 +2185,18 @@ export abstract class VibeServerWsClient {
       this.callbacks.onEvicted?.();
       return;
     }
+    if (msg.type === 'device') {
+      /* ★★★ THE RADIO WAS LENT OUT AND ANOTHER PROGRAM STILL HAS IT. The server sends this on arrival
+       *  when it could not take its radio back — and the app never read it, so a listener sat on a
+       *  blank waterfall with no idea why. Said only when the server KNOWS it is another program
+       *  (inUseElsewhere), in Stuart's exact words (2026-10-04). Not terminal: the radio comes back
+       *  the moment the other program lets go, so the session is left as it is. */
+      if (msg.present === false && msg.inUseElsewhere === true) {
+        const nm = typeof msg.radio === 'string' && msg.radio.trim() ? msg.radio.trim().slice(0, 80) : 'This radio';
+        this.callbacks.onRefused?.(`${nm} is currently in use with another app on this server and is not available, please try again later.`);
+      }
+      return;
+    }
     if (msg.type === 'session_warning') {
       // ★ NOT terminal — we are still connected and still listening. Setting `refused` here
       //   would tear down a perfectly good session two minutes early.

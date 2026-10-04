@@ -61,6 +61,22 @@ struct UsbBusCounts {
         if (driver == "airspy")   return airspy;
         return -1;
     }
+    /** ★★★ HOW MANY OF EACH KIND SOME PROCESS HAS CLAIMED — Linux only, read from sysfs: an
+     *  interface claimed through usbfs (libusb, which is what every SDR program uses) has its
+     *  `driver` link pointing at "usbfs". Read-only, no open, nothing sent to the device.
+     *  ★ RTL is not counted here (librtlsdr's VID:PID table is long and private to it); an RTL's
+     *    busy is known exactly instead, from rtlsdr_open's own LIBUSB_ERROR_BUSY. -1 = unknown
+     *    (macOS, no sysfs, or an RTL). */
+    bool claimedOk = false;
+    int claimedSdrplay = 0, claimedAirspyhf = 0, claimedHackrf = 0, claimedAirspy = 0;
+    int claimedForDriver(const std::string& driver) const {
+        if (!claimedOk) return -1;
+        if (driver == "sdrplay")  return claimedSdrplay;
+        if (driver == "airspyhf") return claimedAirspyhf;
+        if (driver == "hackrf")   return claimedHackrf;
+        if (driver == "airspy")   return claimedAirspy;
+        return -1;
+    }
 };
 UsbBusCounts usbBusCounts();
 

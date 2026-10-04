@@ -310,6 +310,9 @@ export function parseServerAddress(
  *  and the user's conclusion is that our software does not work (Stuart, 2026-07-27). */
 export interface ServerOccupancy {
   busy: boolean;
+  /** ★★★ The server KNOWS another program on that machine has the radio (inUseElsewhere). Absent on
+   *  an older server and whenever it cannot prove it — read that as unknown, never as free. */
+  inUseElsewhere?: boolean;
   /**
    * ★★★ HOW MANY MAY LISTEN AT ONCE — and on a single-radio server that is also the only thing a
    *  client can read to tell a SHARED DIAL from a private one before it connects. More than one
@@ -396,6 +399,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
     if (!j || j.server !== 'vibeserver') return null;
     return {
       busy:      j.busy === true,
+      inUseElsewhere: j.inUseElsewhere === true,
       maxUsers:  typeof j.maxUsers === 'number' ? j.maxUsers : 0,
       // ★ Older servers predate these fields. Defaulting freeInSec to -1 keeps "unknown"
       // distinct from "free now", which are very different things to show someone.
