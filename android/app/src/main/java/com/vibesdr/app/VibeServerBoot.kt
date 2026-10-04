@@ -39,6 +39,43 @@ import java.io.File
  *   itself in SharedPreferences unchanged.
  */
 object VibeServerBoot {
+    /**
+     * ★★★ ONE VibeServer PER DEVICE (BRIEF-android-package-migration, 2026-10-04). VibeSDR (net.vibesdr.app) and
+     *     VibeSDR (legacy) (com.vibesdr.app) can be installed side by side, and each would happily take the next
+     *     free port in 48000-48049 — two servers fighting over one dongle, two mDNS names, two directory listings.
+     *     So before starting: is a VibeServer ALREADY answering on this device's loopback? Plain HTTP to our own
+     *     ports, no cross-app IPC. VibeServer Lite on the same device counts too — it wants the same dongle.
+     *  ★ Call AFTER stopping our own server, so the answer is never ourselves.
+     *  ★ On a worker thread and joined: the restore path may be on the main thread, where Android forbids
+     *    network calls; a closed loopback port refuses at once, so this is quick.
+     * @return the other server's flavour ("VibeServer inside VibeSDR", "VibeServer Lite"), or null.
+     */
+    fun otherServerOnDevice(): String? {
+        var found: String? = null
+        val t = Thread {
+            for (p in 48000..48009) {
+                try {
+                    val c = java.net.URL("http://127.0.0.1:$p/vibeserver.json").openConnection() as java.net.HttpURLConnection
+                    c.connectTimeout = 300; c.readTimeout = 800
+                    try {
+                        if (c.responseCode == 200) {
+                            val j = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                            if (j.optString("server") == "vibeserver") { found = j.optString("flavour").ifEmpty { "VibeServer" }; break }
+                        }
+                    } finally { c.disconnect() }
+                } catch (_: Throwable) { /* nothing on that port */ }
+            }
+        }
+        t.start()
+        try { t.join(6000) } catch (_: InterruptedException) {}
+        return found
+    }
+
+    /** The words for a refusal — the brief's, when it is the other VibeSDR app. */
+    fun otherServerMessage(flavour: String): String =
+        if (flavour == "VibeServer inside VibeSDR") "VibeServer is already running in the other VibeSDR app."
+        else "VibeServer is already running in $flavour on this device."
+
     /* ★★★ THE PHONE'S BATTERY, PUSHED INTO THE SERVER. ACTION_BATTERY_CHANGED is a sticky broadcast:
      *     registering hands back the current state at once, then every change. The server uses it
      *     for the level it publishes and for its low power state (Stuart, 2026-09-17: a phone on a

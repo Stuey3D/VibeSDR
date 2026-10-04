@@ -36,7 +36,7 @@
       }
     },
     "android": {
-      "package": "com.vibesdr.app",
+      "package": "net.vibesdr.app",
       "adaptiveIcon": {
         "backgroundColor": "#0A0A12",
         "foregroundImage": "./assets/android-icon-foreground.png",

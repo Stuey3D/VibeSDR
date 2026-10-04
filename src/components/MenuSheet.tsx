@@ -62,6 +62,7 @@ import {
   PopupKey, PopupFader, PopupPlate, PopupHandle, type PopupTokens, SHEET_MAX_W, POPUP_FONT,
 } from './PopupShell';
 import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
+import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1461,6 +1462,12 @@ function MenuSheetBody({
             <BtnRow>
               <Btn label="▼ HIDE CONTROLS" full onPress={onHideControls} />
             </BtnRow>
+            {/* ★ The legacy (com.vibesdr.app) build only: the way back to "VibeSDR has a new home". */}
+            {isLegacyPackage && (
+              <BtnRow>
+                <Btn label="VIBESDR HAS A NEW HOME" full onPress={openLegacyNotice} />
+              </BtnRow>
+            )}
             </>)}
 
 

@@ -87,15 +87,37 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.vibesdr.app'
+    namespace 'com.vibesdr.app'   // ★ the CODE package — unchanged; only the applicationId moves (see productFlavors)
     defaultConfig {
-        applicationId 'com.vibesdr.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 529
+        // ★ RC4 (530) is above every com.vibesdr.app APK ever released on GitHub (the last was RC3, 529), so the
+        //   legacy build installs over a sideload; net.vibesdr.app starts its own sequence at the same number.
+        versionCode 530
         versionName "11.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
+    }
+    /* ★★★ TWO APPLICATION IDs FROM ONE CODEBASE (BRIEF-android-package-migration, 2026-10-04). The Play listing moves
+     *  to a new account under net.vibesdr.app; GitHub follows it, and for ONE transitional release also ships the old
+     *  id as "VibeSDR (legacy)" — its final update, installable over an existing sideload and side by side with the
+     *  new app. Only the applicationId differs: namespace, Kotlin packages and JNI symbols stay com.vibesdr.app.
+     *    ./gradlew :app:assembleCurrentRelease   → net.vibesdr.app  "VibeSDR"           (the only one from now on)
+     *    ./gradlew :app:assembleLegacyRelease    → com.vibesdr.app  "VibeSDR (legacy)"  (final release)
+     *  ★ legacy's label and its OLD icon (pre-11.0 rebrand, Stuart: "so that there is a visual difference for users")
+     *    live in src/legacy/res and override main's. IS_LEGACY_PACKAGE drives the "new home" notice. */
+    flavorDimensions 'pkg'
+    productFlavors {
+        current {
+            dimension 'pkg'
+            applicationId 'net.vibesdr.app'
+            buildConfigField 'boolean', 'IS_LEGACY_PACKAGE', 'false'
+        }
+        legacy {
+            dimension 'pkg'
+            applicationId 'com.vibesdr.app'
+            buildConfigField 'boolean', 'IS_LEGACY_PACKAGE', 'true'
+        }
     }
     // Release/upload signing — loaded from android/keystore.properties (gitignored).
     // ★★★ A RELEASE WITHOUT THE UPLOAD KEY NOW FAILS (audit 2026-10-03). It used to fall back to
@@ -184,7 +206,8 @@ tasks.register('requireUploadKey') {
         }
     }
 }
-tasks.matching { it.name == 'preReleaseBuild' }.configureEach { dependsOn 'requireUploadKey' }
+// ★ Every release variant's first task: preReleaseBuild, and per flavour preCurrentReleaseBuild / preLegacyReleaseBuild.
+tasks.matching { it.name ==~ /pre\w*ReleaseBuild/ }.configureEach { dependsOn 'requireUploadKey' }
 
 // Flatten the needed src/main/cpp/sdr-kit/<ABI>/lib/*.so -> build/sdrkit-jniLibs.
 // V5: only librtlsdr + libusb (symlinks dereferenced to real files by Copy).

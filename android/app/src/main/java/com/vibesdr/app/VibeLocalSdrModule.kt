@@ -40,7 +40,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     private val TAG = "VibeLocalSDR"
-    private val ACTION_USB_PERMISSION = "com.vibesdr.app.USB_PERMISSION"
+    // ★ Prefixed with the INSTALLED package (2026-10-04): VibeSDR and VibeSDR (legacy) can be installed side by side,
+    //   and an app-private action must be that app's own. The broadcast was already setPackage-scoped.
+    private val ACTION_USB_PERMISSION get() = "${reactContext.packageName}.USB_PERMISSION"
 
     private val usbManager: UsbManager?
         get() = reactContext.getSystemService(Context.USB_SERVICE) as? UsbManager
@@ -58,6 +60,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★ No touchscreen at all — a TV box driven by a remote or a keyboard that may not report the TV UI mode
         //   (Kiko, 2026-10-03: an Android TV box where Tab could not leave a text field). TvTextInput reads it.
         "noTouchscreen" to !reactContext.packageManager.hasSystemFeature("android.hardware.touchscreen"),
+        // ★ The legacy com.vibesdr.app build (BRIEF-android-package-migration): it shows the "new home" notice.
+        "isLegacyPackage" to BuildConfig.IS_LEGACY_PACKAGE,
         // ★ "Start automatically when power returns" is offered only where Android may allow it — VibeBootStart.
         "startOnPowerSupported" to VibeBootStart.supported())
 
@@ -729,6 +733,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     ) {
         stopSpectrumInternal()
         stopServerInternal()
+        // ★★★ Not while another VibeServer serves on this device (the other VibeSDR app, or Lite) — VibeServerBoot.
+        VibeServerBoot.otherServerOnDevice()?.let { promise.reject("other_server", VibeServerBoot.otherServerMessage(it)); return }
         val conn = mgr.openDevice(dev)
             ?: run { promise.reject("open_failed", "openDevice returned null"); return }
         val fd = conn.fileDescriptor

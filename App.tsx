@@ -37,6 +37,7 @@ import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
 import ServerModeScreen     from './src/screens/ServerModeScreen';
+import LegacyPackageNotice  from './src/components/LegacyPackageNotice';
 import TunerScreen          from './src/screens/TunerScreen';
 import CrashBoundary        from './src/components/CrashBoundary';
 import { installCrashGuard } from './src/services/crashGuard';
@@ -927,6 +928,8 @@ export default function App() {
             } catch {}
           }}>
           <StatusBar style="light" />
+          {/* ★ Legacy com.vibesdr.app build only — draws nothing anywhere else. */}
+          <LegacyPackageNotice />
           <Stack.Navigator
             initialRouteName="InstancePicker"
             screenOptions={{

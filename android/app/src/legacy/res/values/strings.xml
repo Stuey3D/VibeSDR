@@ -1,0 +1,4 @@
+<resources>
+  <!-- ★ The legacy (com.vibesdr.app) build's launcher label — see productFlavors in build.gradle. -->
+  <string name="app_name">VibeSDR (legacy)</string>
+</resources>

@@ -47,6 +47,8 @@ android {
 
     defaultConfig {
         applicationId 'com.vibesdr.serverlite'
+        // ★ The shared VibeLocalSdrModule reads this (the main app's legacy-package notice). Lite is never legacy.
+        buildConfigField 'boolean', 'IS_LEGACY_PACKAGE', 'false'
         minSdkVersion 21            // Android 5.0 — a 2017 Fire 7 is 5.1.1 (API 22)
         targetSdkVersion 28         // ★ sideload-only: old enough that an old tablet's rules apply
         versionCode 26

@@ -253,6 +253,8 @@ object VibeServerRestore {
         val p = prefs(ctx)
         if (!p.getBoolean(K_ARMED, false)) return "not armed"
         if (isShimServing()) return null                 // never double-open the dongle
+        // ★★★ …nor take it from ANOTHER app's server on this device (VibeServerBoot.otherServerOnDevice).
+        VibeServerBoot.otherServerOnDevice()?.let { return VibeServerBoot.otherServerMessage(it) }
         // ★★ THE BLIP RULE ON THIS DOOR TOO (RADIO_BLIP_WINDOW_MS). A process that died while its radio was
         //    away comes back here, and a radio gone longer than the window is the owner's to restart.
         if (radioGoneTooLong(ctx)) { disarm(ctx); return RADIO_GONE_TOO_LONG }
