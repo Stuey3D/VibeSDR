@@ -2051,6 +2051,13 @@ int main(int argc, char** argv) {
     //   lent out while VibeServer stays up never appears here in the first place.
     LocalSdrShim::setSdrChangeHandlers(
         []() -> std::string {
+#if defined(__APPLE__)
+            /* ★★ ON A MAC THE APP'S OWN WINDOW MANAGES THE RADIOS (Stuart, 2026-10-04: "the mac is a gui so
+             *  this isnt really needed for that"). Its rescan + Start already adds them, and its writeConfig
+             *  re-adds any attached radio a browser Remove took out — two managers would fight. Only the
+             *  display order stays, which the app does not offer. */
+            return "{\"managedByApp\":true}";
+#endif
             vsconfig::ServerConfig srv; std::string err;
             if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
             const auto detected = vibe::detectRadios();
@@ -2157,6 +2164,9 @@ int main(int argc, char** argv) {
             const std::string action = field("action");
             const std::string serial = field("serial");
             const std::string newSerial = field("newSerial");
+#if defined(__APPLE__)
+            if (action != "order") return fail(409, "radios on a Mac are added and removed in the VibeServer app");
+#endif
 
             // ★★★ RE-READ BEFORE WRITING — the same rule as the config save: other radio processes
             //     persist into this file, and a copy from startup would revert what they wrote.

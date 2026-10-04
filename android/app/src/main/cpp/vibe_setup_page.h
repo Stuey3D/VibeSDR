@@ -4629,6 +4629,15 @@ async function sdrChangesLoad() {
     }
     if (!r.ok) { msg.textContent = "Could not check (" + r.status + ")."; return; }
     SDR = await r.json();
+    // ★ A Mac: the VibeServer app's own window adds and removes radios (see main.cpp). Say so, offer nothing.
+    if (SDR && SDR.managedByApp) {
+      SDR = null; SDR_ALARM = new Set();
+      box.innerHTML = '<div class="hint">Radios on this Mac are added and removed in the VibeServer app.</div>';
+      msg.textContent = "";
+      $("sdrCheckAgain").hidden = true;
+      renderTabs();
+      return;
+    }
   } catch (e) { msg.textContent = "Could not check — " + ((e && e.message) || e); return; }
   msg.textContent = "";
   sdrRender();
