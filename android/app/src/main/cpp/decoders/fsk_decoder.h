@@ -89,6 +89,7 @@ public:
     // ★ `audioLevel` is what it is actually seeing, on the int16 scale the threshold uses, so the
     //   two can be compared directly instead of guessed at.
     unsigned long resyncs() const { return resyncCount_; }
+    unsigned long framingErrors() const { return framingErrors_; }
     double        audioLevel() const { return audioAverage; }
     double        audioThreshold() const { return audioMinimum; }
     int           stateNow() const { return (int)state; }
@@ -108,6 +109,14 @@ private:
     int bitSampleCount = 0, halfBitSampleCount = 0;
 
     BiQuad biquadMark, biquadSpace, biquadLowpass;
+    // ★★ OPTIMAL ATC (2026-10-04) — each tone's envelope smoothed on its own (biquadLpMark/Space), with a peak
+    //    tracker per tone and a shared noise floor, so a tone fading on its own (HF selective fading) no longer
+    //    tilts the mark/space decision. Kahn's diversity-combining rule, as fldigi's "optimal ATC". See process().
+    BiQuad biquadLpMark, biquadLpSpace;
+    double markEnv = 0, spaceEnv = 0, noiseFloor = 0, symLen = 0;
+    // ★ Framing errors in ReadData (ITA2) — each one re-hunts the start bit instead of printing garbage on.
+    unsigned long framingErrors_ = 0;
+    int lockRequired_ = 2;
 
     State state = NoSignal;
     double audioAverage = 0.1;

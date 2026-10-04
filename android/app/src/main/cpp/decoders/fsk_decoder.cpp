@@ -184,6 +184,9 @@ FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
     /* ★ ROUNDED UP (audit 2026-10-03): process() indexes it with (0..bitSampleCount-1) / divisor,
      *  so a bitSampleCount that is not a multiple of 4 wrote one past the end with the floor. */
     zeroCrossings.assign((bitSampleCount + zeroCrossingsDivisor - 1) / zeroCrossingsDivisor, 0);
+    // One SIGNALLING element in samples (5N1.5 doubles baudRate above to sample half-bits; the ATC's time
+    // constants are in whole symbols).
+    symLen = sampleRate / (stopVariable ? baudRate / 2.0 : baudRate);
     updateFilters();
 }
 void FskDecoder::updateFilters() {
@@ -193,6 +196,8 @@ void FskDecoder::updateFilters() {
     biquadMark.configure(BiQuad::Bandpass, markF, sampleRate, markSpaceFilterQ);
     biquadSpace.configure(BiQuad::Bandpass, spaceF, sampleRate, markSpaceFilterQ);
     biquadLowpass.configure(BiQuad::Lowpass, lowpassFilterF, sampleRate, 1.0 / std::sqrt(2.0));
+    biquadLpMark.configure(BiQuad::Lowpass, lowpassFilterF, sampleRate, 1.0 / std::sqrt(2.0));
+    biquadLpSpace.configure(BiQuad::Lowpass, lowpassFilterF, sampleRate, 1.0 / std::sqrt(2.0));
 }
 void FskDecoder::setState(State s) {
     if (s == state) return;
@@ -210,8 +215,22 @@ void FskDecoder::process(const int16_t* samples, int count) {
         double maxAbs = std::max(markAbs, spaceAbs);
         audioAverage += (maxAbs - audioAverage) * audioAverageTC;
         audioAverage = std::max(0.1, audioAverage);
-        double diffAbs = (markAbs - spaceAbs) / audioAverage;
-        double logic = biquadLowpass.filter(diffAbs);
+        /* ★★★ OPTIMAL ATC, NOT A STRAIGHT DIFFERENCE (Stuart, 2026-10-04: "I can hear it clearly but the text is breaking
+         *  up"). On HF the two tones fade INDEPENDENTLY; comparing mark − space directly means a faded tone loses every
+         *  decision even while it is still keyed — measured on a synthetic DWD signal, 12 dB SNR with 20 dB selective
+         *  fades: 39 % of the text recovered, 337 of 581 characters garbage. Each tone's envelope is tracked against its
+         *  OWN peak and a shared noise floor, and the decision is Kahn's optimum combiner (fldigi's "optimal ATC"):
+         *    v = (m̂ − n)(M − n) − (ŝ − n)(S − n) − ¼[(M − n)² − (S − n)²],   m̂ = min(m, M), ŝ = min(s, S)
+         *  Peaks: attack in ¼ symbol, decay over 16; noise: down in ¼, up over 48 (fldigi's constants). */
+        const double m = std::max(0.0, biquadLpMark.filter(markAbs)), sp = std::max(0.0, biquadLpSpace.filter(spaceAbs));
+        auto track = [](double& avg, double in, double w) { avg += (in - avg) / std::max(1.0, w); };
+        track(markEnv,  m,  m  > markEnv  ? symLen / 4 : symLen * 16);
+        track(spaceEnv, sp, sp > spaceEnv ? symLen / 4 : symLen * 16);
+        const double lo = std::min(m, sp);
+        track(noiseFloor, lo, lo < noiseFloor ? symLen / 4 : symLen * 48);
+        const double mc = std::min(m, markEnv) - noiseFloor, sc = std::min(sp, spaceEnv) - noiseFloor;
+        const double M = markEnv - noiseFloor, S = spaceEnv - noiseFloor;
+        const double logic = mc * M - sc * S - 0.25 * (M * M - S * S);
         bool markState = logic > 0;
         signalAccumulator += markState ? 1 : -1;
         bitDuration++;
@@ -264,7 +283,7 @@ static inline bool ckCode(Ita2* i, Ccir476* c, uint16_t code) {
 void FskDecoder::processBit(bool bit) {
     uint16_t bitVal = bit ? 1 : 0;
     if (syncSetup) {
-        bitCount = 0; codeBits = 0; errorCount = 0; validCount = 0;
+        bitCount = 0; codeBits = 0; errorCount = 0; validCount = 0; lockRequired_ = 2;
         if (ita2) ita2->reset();
         if (ccir476) ccir476->reset();
         syncChars.clear(); setState(Sync1); syncSetup = false;
@@ -286,7 +305,10 @@ void FskDecoder::processBit(bool bit) {
             if (bitCount == nbits) {
                 if (ckCode(ita2, ccir476, codeBits)) {
                     syncChars.push_back(codeBits); codeBits = 0; bitCount = 0; validCount++;
-                    int required = ccir476 ? 4 : 1;
+                    // ★ ITA2: two good characters after the first before anything prints (three in a row) — one alone
+                    //   was enough to lock on noise or mid-character. After a framing slip (lockRequired_ = 1) the
+                    //   decoder was already in step a moment ago, so one is enough to resume.
+                    int required = ccir476 ? 4 : lockRequired_;
                     if (validCount >= required) {
                         for (uint16_t c : syncChars) processCharacter(c);
                         setState(ReadData);
@@ -301,6 +323,18 @@ void FskDecoder::processBit(bool bit) {
             waiting = false;
             codeBits = (uint16_t)((codeBits >> 1) | (bitVal * msb)); bitCount++;
             if (bitCount == nbits) {
+                /* ★★★ CHECK THE FRAME (Stuart, 2026-10-04: S9+20 DWD printing "CQ CQ CQNDZPXX0XXVQPXXMMMAZQ…"). The start and
+                 *  stop bits were checked only while locking on; once decoding, ITA2 never looked again, so one misread
+                 *  bit put the decoder out of step and it printed garbage until the signal dropped out altogether. A bad
+                 *  frame is now dropped and the start bit re-hunted from the bits already in hand — the shift state
+                 *  (letters/figures) is kept, since the sender's has not changed. */
+                if (ita2 && !ita2->checkBits(codeBits)) {
+                    framingErrors_++;
+                    syncChars.clear(); validCount = 0; lockRequired_ = 1;
+                    bitCount = 0; waiting = false;
+                    setState(Sync1);          // codeBits stays: Sync1 slides it one bit at a time to the next frame
+                    break;
+                }
                 bool ok = processCharacter(codeBits);
                 if (ok) { if (errorCount > 0) errorCount--; }
                 else { errorCount++; if (errorCount > 2) syncSetup = true; }
