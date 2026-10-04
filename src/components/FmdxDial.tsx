@@ -55,11 +55,16 @@ interface Props {
    *  station names take it (Stuart, 2026-10-02: the FM-DX screen follows the colour scheme). Absent =
    *  today's phosphor green. The tuned station and the needle stay RED: the pointer of a real dial. */
   ink?: string;
+  /** ★ Typography + geometry scale for a big window (fmdxLayout.ts — Stuart, 2026-10-04: the dial grows into
+   *  the iPad/Mac's dead space). 1 = today's dial exactly; the gestures are untouched, only label sizes,
+   *  tick lengths, row spacing and the label collision gap follow it. */
+  scale?: number;
 }
 
 const MIN_SPAN = 2_000_000;   // max zoom-in = 2 MHz visible
 
-function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, view, onViewChange, ink }: Props) {
+function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, view, onViewChange, ink, scale = 1 }: Props) {
+  const k = scale > 0 ? scale : 1;
   const GREEN      = ink ? `rgba(${ink},1)`    : GREEN_DEF;
   const GREEN_DIM  = ink ? `rgba(${ink},0.28)` : GREEN_DIM_DEF;
   const GREEN_SOFT = ink ? `rgba(${ink},0.92)` : GREEN_SOFT_DEF;
@@ -110,12 +115,15 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
 
   // Scale sits at the TOP; station names cascade DOWN one side (vintage-radio
   // style). Rows step down below the MHz numbers.
-  const SCALE_Y = 20;
+  const SCALE_Y = Math.round(20 * k);
   const ROWS = useMemo(() => {
     const out: number[] = [];
-    for (let y = SCALE_Y + 24; y <= height - 12; y += 15) out.push(y);
+    const step = Math.round(15 * k);
+    for (let y = SCALE_Y + Math.round(24 * k); y <= height - Math.round(12 * k); y += step) out.push(y);
     return out;
-  }, [height]);
+  }, [height, k, SCALE_Y]);
+  const LBL_W = Math.round(60 * k);       // station-name box (centred on its frequency)
+  const MHZ_W = Math.round(32 * k);       // MHz label box
 
   // Which learned station are we tuned to (for the highlight)?
   const curKey = useMemo(() => {
@@ -148,7 +156,7 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
   const { ticks: staTicks, labels } = useMemo(() => {
     const empty = { ticks: [] as { key: string; px: number }[], labels: [] as { key: string; px: number; name: string; top: number }[] };
     if (!w) return empty;
-    const MIN_GAP = 46;
+    const MIN_GAP = 46 * k;
     const inRange = [...stations].filter(s => s.freqHz >= vLo && s.freqHz <= vHi && s.name)
       .sort((a, b) => a.freqHz - b.freqHz);
     const ticks = inRange.map(s => ({ key: `${s.freqHz}`, px: x(s.freqHz) }));
@@ -168,7 +176,7 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
       labels.push({ key: `${s.freqHz}`, px, name: s.name, top: ROWS[placed] });
     }
     return { ticks, labels };
-  }, [stations, w, vLo, vHi, freqHz, ROWS]);
+  }, [stations, w, vLo, vHi, freqHz, ROWS, k]);
 
   const needleX = w ? x(freqHz) : 0;
 
@@ -190,9 +198,10 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
           const lbl = Number.isInteger(mhz) ? String(mhz) : mhz.toFixed(1);
           return (
             <React.Fragment key={`m${hz}`}>
-              <View style={{ position: 'absolute', left: px - 0.5, top: SCALE_Y, width: 1, height: major ? 12 : 6, backgroundColor: GREEN_DIM }} />
+              <View style={{ position: 'absolute', left: px - 0.5, top: SCALE_Y, width: 1, height: Math.round((major ? 12 : 6) * k), backgroundColor: GREEN_DIM }} />
               {major && (
-                <Text style={[styles.tickLbl, { left: px - 16, width: 32, top: SCALE_Y + 13, color: GREEN, fontFamily: t.font }]}>{lbl}</Text>
+                <Text style={[styles.tickLbl, { left: px - MHZ_W / 2, width: MHZ_W, top: SCALE_Y + Math.round(13 * k), color: GREEN, fontFamily: t.font },
+                  k !== 1 && { fontSize: Math.round(10 * k) }]}>{lbl}</Text>
               )}
             </React.Fragment>
           );
@@ -200,7 +209,7 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
 
         {/* A tick for every saved station, hanging off the scale */}
         {staTicks.map(({ key, px }) => (
-          <View key={`t${key}`} style={{ position: 'absolute', left: px - 0.5, top: SCALE_Y - 6, width: 1, height: 12, backgroundColor: key === curKey ? RED : GREEN_SOFT }} />
+          <View key={`t${key}`} style={{ position: 'absolute', left: px - 0.5, top: SCALE_Y - Math.round(6 * k), width: 1, height: Math.round(12 * k), backgroundColor: key === curKey ? RED : GREEN_SOFT }} />
         ))}
 
         {/* Station name labels — cascading down one side; tuned station in red */}
@@ -209,7 +218,8 @@ function FmdxDial({ freqHz, loHz, hiHz, stations, onTune, theme, height = 158, v
             key={`l${key}`}
             numberOfLines={1}
             style={[styles.staLbl, {
-              left: px - 30, width: 60, fontFamily: t.font, top, textAlign: 'center',
+              left: px - LBL_W / 2, width: LBL_W, fontFamily: t.font, top, textAlign: 'center',
+              ...(k !== 1 ? { fontSize: Math.round(9 * k) } : null),
               color: key === curKey ? RED : GREEN_SOFT,
               fontWeight: key === curKey ? 'bold' : 'normal',
             }]}

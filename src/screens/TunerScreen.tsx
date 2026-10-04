@@ -31,6 +31,7 @@ import FmdxDial, { type DialStation } from '../components/FmdxDial';
 import { dialKeyFor, pruneDial, stampUndatedDial } from '../services/dialSync';
 import { fmdxDeclaredRange } from '../services/fmdxDirectory';
 import { requestSync } from '../services/cloudSync';
+import { fmdxLayout, LOGO_BOX_COMPACT } from '../constants/fmdxLayout';
 import { FMDX_TUNE_LO, FMDX_TUNE_HI, FMDX_DIAL_VIEW_LO, FMDX_DIAL_VIEW_HI } from '../constants/fmBand';
 
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
@@ -312,6 +313,9 @@ export default function TunerScreen({ route, navigation }: Props) {
   }, [displayFreq, fmLo, fmHi]);
   const [bottomH, setBottomH] = useState(0);   // measured island height (+ its bottom margin) → padding + VTS position
   const [vtsH, setVtsH] = useState(0);         // the VTS strip's own height (VTSBar onHeight)
+  // ★★ THE SCROLL AREA'S OWN SIZE — the window, not the device (fmdxLayout.ts). It is the ScrollView's frame
+  // (flex: 1), which does not depend on its content, so the growth below cannot feed back into it.
+  const [scrollBox, setScrollBox] = useState({ w: 0, h: 0 });
   const [forcedMono, setForcedMono] = useState(false);
   const [demodOpen, setDemodOpen] = useState(false);
   const [stepOpen, setStepOpen] = useState(false);
@@ -1023,6 +1027,14 @@ export default function TunerScreen({ route, navigation }: Props) {
   }, [st, logo]);
   const sigNorm = Math.min(1, Math.max(0, (st?.sig ?? 0) / 70));
   const cardFlag = st ? isoToFlag(countryOf(st)) : '';
+  /* ★★★ BIG WINDOW → BIG DIAL + BIG LOGO (Stuart, 2026-10-04). Only the SPARE height of a WIDE window is handed
+   *  out; a phone-sized window gets exactly today's sizes (fmdxLayout returns COMPACT, every scale 1). */
+  const lay = useMemo(() => fmdxLayout(
+    scrollBox.w - 28 - insets.left - insets.right,
+    scrollBox.h - 14 - (14 + bottomH + (vtsH ? vtsH + 8 : 0)),
+  ), [scrollBox.w, scrollBox.h, insets.left, insets.right, bottomH, vtsH]);
+  const cs = lay.cardScale;
+  const big = lay.logoBox !== LOGO_BOX_COMPACT;
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
@@ -1066,7 +1078,10 @@ export default function TunerScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + bottomH + (vtsH ? vtsH + 8 : 0), paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
+      <ScrollView style={{ flex: 1 }}
+        onLayout={(e) => { const { width, height } = e.nativeEvent.layout;
+          setScrollBox(b => (b.w === width && b.h === height ? b : { w: width, h: height })); }}
+        contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + bottomH + (vtsH ? vtsH + 8 : 0), paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
 
         {/* Vintage tuning dial — every RDS name we decode is pinned to its freq */}
@@ -1080,6 +1095,8 @@ export default function TunerScreen({ route, navigation }: Props) {
           ink={dialInk}
           view={dialView}
           onViewChange={setDialView}
+          height={lay.dialH}
+          scale={lay.dialScale}
         />
 
         {/* Band extent. Absent entirely on a normal server — the dial reads
@@ -1113,24 +1130,25 @@ export default function TunerScreen({ route, navigation }: Props) {
             TP · TA · AF on the right. The two sides are equal flex columns, so the logo sits on the card's centre
             whatever either side holds. Shown in landscape too (the strip keeps its own icons there). */}
         <View style={[styles.panel, styles.idRow]}>
-          <View style={styles.idSide}>
-            <RdsMark kind="plain" height={15} color={fp.vts.mark} glow={fp.vts.markGlow} />
+          <View style={[styles.idSide, big && { gap: Math.round(6 * cs) }]}>
+            <RdsMark kind="plain" height={Math.round(15 * cs)} color={fp.vts.mark} glow={fp.vts.markGlow} />
             <View style={styles.idPiRow}>
-              {!!cardFlag && <Text style={styles.idFlag}>{cardFlag}</Text>}
-              <Text style={styles.idPi} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-                <Text style={styles.idPiLabel}>PI </Text>{st?.pi || '––––'}
+              {!!cardFlag && <Text style={[styles.idFlag, big && { fontSize: Math.round(20 * cs) }]}>{cardFlag}</Text>}
+              <Text style={[styles.idPi, big && { fontSize: Math.round(22 * cs) }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+                <Text style={[styles.idPiLabel, big && { fontSize: Math.round(12 * cs) }]}>PI </Text>{st?.pi || '––––'}
               </Text>
             </View>
           </View>
-          <View style={styles.idLogo}>
+          {/* ★ The logo box follows the window: 68 on a phone, up to 240 on a big iPad / Mac window (fmdxLayout). */}
+          <View style={[styles.idLogo, big && { width: lay.logoBox, height: lay.logoBox, borderRadius: Math.round(lay.logoBox * 0.15) }]}>
             {logo
-              ? <Image source={{ uri: logo }} style={styles.idLogoImg} resizeMode="contain" />
-              : <Text style={styles.monogram} numberOfLines={1} adjustsFontSizeToFit>{(st?.ps?.trim() || '··').slice(0, 3).toUpperCase()}</Text>}
+              ? <Image source={{ uri: logo }} style={[styles.idLogoImg, big && { width: lay.logoBox - 4, height: lay.logoBox - 4 }]} resizeMode="contain" />
+              : <Text style={[styles.monogram, big && { fontSize: Math.round(22 * lay.logoBox / LOGO_BOX_COMPACT) }]} numberOfLines={1} adjustsFontSizeToFit>{(st?.ps?.trim() || '··').slice(0, 3).toUpperCase()}</Text>}
           </View>
           <View style={[styles.idSide, styles.idSideRight]}>
-            <View style={styles.idAnn}>
+            <View style={[styles.idAnn, big && { gap: Math.round(6 * cs) }]}>
               {(['TP', 'TA', 'AF'] as const).map(nm => (
-                <AnnunciatorLegend key={nm} name={nm} height={12} kind="plain"
+                <AnnunciatorLegend key={nm} name={nm} height={Math.round(12 * cs)} kind="plain"
                   color={fp.vts.core} glow={fp.vts.glow} ghost={rgba(fp.vts.rgb, 0.16)}
                   lit={nm === 'TP' ? !!st?.tp : nm === 'TA' ? !!st?.ta : (st?.af?.length ?? 0) > 0} />
               ))}
