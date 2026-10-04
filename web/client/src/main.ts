@@ -4043,13 +4043,22 @@ function updateVts() {
   const srcEl = $('vtsSrc');
   // innerHTML, not textContent: the source mark is an inline SVG glyph now, and
   // textContent would print the markup as literal text.
-  if (srcEl.innerHTML !== src) srcEl.innerHTML = src;
+  /* ★★ COMPARE WHAT WE WROTE, NOT WHAT THE BROWSER READS BACK. innerHTML re-serialises an inline SVG
+   *  (the DAB+ mark) differently from the string that made it, so this never matched in DAB and the
+   *  mark was rewritten on every render — part of the VTS flicker in DAB (Stuart, 2026-10-04). */
+  if (srcEl.dataset.src !== src) { srcEl.dataset.src = src; srcEl.innerHTML = src; }
   srcEl.classList.toggle('show', !!src && !haveRds);
   srcEl.classList.toggle('dabmark', src.startsWith('<svg class="dabmark'));
 
   const logoEl = $<HTMLImageElement>('vtsLogo');
+  /* ★★★ THE SAME URL SPELT TWO WAYS IS NOT A NEW LOGO. logoEl.src is always ABSOLUTE; a DAB logo is
+   *  usually RELATIVE (/vibeserver/dablogoair?sid=…, the slide). So in DAB the two never matched, and
+   *  every render — several a second — hid the logo and reloaded it: the VTS flicker in DAB (Stuart,
+   *  2026-10-04). FM never showed it because an RDS logo URL is already absolute. */
+  let logoAbs = logo;
+  try { if (logo) logoAbs = new URL(logo, location.href).href; } catch { /* keep as given */ }
   if (logo) {
-    if (logoEl.src !== logo) {
+    if (logoEl.src !== logoAbs) {
       // ★★★ A URL THAT RESOLVES IS NOT A PICTURE THAT LOADS. radio-browser's favicons are
       //     submitted by users and plenty are dead links, expired hosts or hotlink-blocked — the
       //     lookup succeeds, the <img> 404s, and the bar shows an EMPTY BOX where a logo should
