@@ -2690,7 +2690,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       })
       .catch(() => {});
     return () => { dead = true; };
-  }, [route.params.localHost, route.params.localPort]);
+  // ★★ AND AGAIN WHEN THE RADIO IS CHOSEN. This ran once, on the FRONT DOOR's address, before radioBase was
+  //    known — so a radio behind a door showed the DOOR's policy: RAW IQ offered on a V4 whose owner had it off
+  //    (the server then refused: "the owner has raw IQ out switched off on this receiver" — Stuart, 2026-10-04).
+  //    Each radio answers for itself at /r/<id>/vibeserver.json.
+  }, [route.params.localHost, route.params.localPort, connectBase]);
   // ★★★ HOW MUCH IS STACKED ABOVE THE CONTROLS RIGHT NOW. The decoder panel adds this to its
   // bottom offset, so notices are never covered by the box that they are often about.
   // ★★ Stuart, 2026-07-31: "the top stays, the box shrinks with how much it is pushed up by the

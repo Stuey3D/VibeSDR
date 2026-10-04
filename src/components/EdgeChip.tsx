@@ -45,6 +45,19 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, tabColour
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tucked]);
 
+  /* ★★ ROTATION (Stuart, 2026-10-04: "the health and clock anchors at the edge of the screen are not lining up upon
+   *  rotation to landscape"). `off` depends on `right` (the notch inset — 0 in portrait, ~45 pt in landscape) and
+   *  the card's width, and the card was only ever placed when tucked/shown CHANGED. After a rotation a tucked card
+   *  and its tab sat at the portrait distances. Re-place them, without animating, whenever `off` moves. */
+  const lastOff = useRef(off);
+  useEffect(() => {
+    if (lastOff.current === off) return;
+    lastOff.current = off;
+    x.stopAnimation();
+    x.setValue(tucked ? off : 0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [off]);
+
   const offRef = useRef(off); offRef.current = off;
   const pan = useRef(PanResponder.create({
     onMoveShouldSetPanResponder: (_e, g) => g.dx > 6 && Math.abs(g.dx) > Math.abs(g.dy),
@@ -61,7 +74,9 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, tabColour
   const onTuckRef = useRef(onTuck); onTuckRef.current = onTuck;
 
   // The tab is the card's mirror: in when the card is out, out when it is in.
-  const tabX = x.interpolate({ inputRange: [0, off], outputRange: [TAB_W + 4, 0], extrapolate: 'clamp' });
+  // ★ "Out" is PAST THE SCREEN EDGE: the tab is anchored at `right` (the notch inset), so sliding it only its own
+  //   width left it showing in the inset — beside the open card, in landscape (Stuart's screenshot, 2026-10-04).
+  const tabX = x.interpolate({ inputRange: [0, off], outputRange: [TAB_W + right + 4, 0], extrapolate: 'clamp' });
   const tabPan = useRef(PanResponder.create({
     onMoveShouldSetPanResponder: (_e, g) => g.dx < -6 && Math.abs(g.dx) > Math.abs(g.dy),
     onPanResponderRelease: (_e, g) => { if (g.dx < -20) onShowRef.current(); },
