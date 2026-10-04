@@ -39,12 +39,15 @@ RUN git clone --quiet https://github.com/osmocom/rtl-sdr.git /tmp/rtlsdr \
 # ★ https to the mirror as well: the key protects the Release file, https protects the rest.
 COPY armv6-toolchain.cmake /opt/armv6-toolchain.cmake
 COPY raspbian-archive-keyring.gpg /opt/raspbian-archive-keyring.gpg
+# ★★ HTTP, NOT HTTPS (2026-10-04): raspbian.raspberrypi.com REFUSES port 443 (connection refused), so the audit's https
+#    mirror broke every armhf image build — found cutting RC4. Integrity never depended on the transport: apt checks the
+#    signed InRelease against the pinned keyring whose fingerprint is verified just below.
 ARG RASPBIAN_KEY_FPR=A0DA38D0D76E8B5D638872819165938D90FDDD2E
 RUN fpr="$(gpg --show-keys --with-colons /opt/raspbian-archive-keyring.gpg | awk -F: '$1=="fpr"{print $10; exit}')" \
     && { [ "$fpr" = "${RASPBIAN_KEY_FPR}" ] || { echo "!! raspbian key fingerprint '$fpr', expected ${RASPBIAN_KEY_FPR} — refusing"; exit 1; }; } \
     && mmdebstrap --variant=extract --architectures=armhf --keyring=/opt/raspbian-archive-keyring.gpg \
          --include=libc6-dev,libstdc++-12-dev,libgcc-12-dev,libusb-1.0-0-dev,libopus-dev,libfftw3-dev,libncurses-dev,libhackrf-dev,libatomic1 \
-         bookworm /opt/rpi-sysroot https://raspbian.raspberrypi.com/raspbian \
+         bookworm /opt/rpi-sysroot http://raspbian.raspberrypi.com/raspbian \
     && rm -rf /opt/rpi-sysroot/var/cache/apt /opt/rpi-sysroot/var/lib/apt/lists \
     && ls /opt/rpi-sysroot/usr/lib/gcc/arm-linux-gnueabihf/12/crtbegin.o
 # ★ And the bundled librtlsdr, built the same way — an ARMv7 one beside an ARMv6 binary is the same crash.
