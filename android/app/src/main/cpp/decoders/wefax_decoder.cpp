@@ -273,14 +273,20 @@ void WefaxDecoder::decodeImageLine() {
     /* ★★ IS THIS A CHART OR NOISE? A fax line looks like the one before it (coastlines and isobars run
      *  DOWN the page); noise does not. Pearson correlation with the previous line, smoothed — the
      *  "standing by" vs "receiving" in the clients' status (onPhase 0 vs 3). */
+    /* ★★ ON 8-PIXEL AVERAGES, NOT RAW PIXELS (measured on Northwood 4610, Stuart's HF+, 2026-10-04): a real
+     *  chart's raw lines correlate only ~0.27 (median) — the speckle — which sat on the threshold, so a chart
+     *  joined mid-way read "standing by". Averaged over 8 px the same lines read ~0.68 (p10 0.44); noise
+     *  stays near 0 either way. */
     if (imageLine > 0) {
         const int other = ((imageLine + 1) & 1) * imageWidth;
+        const int K = 8, blocks = imageWidth / K;
         double sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
-        for (int i = 0; i < imageWidth; i++) {
-            const double a = imgData[imgPos + i], b = imgData[other + i];
+        for (int j = 0; j < blocks; j++) {
+            double a = 0, b = 0;
+            for (int k = 0; k < K; k++) { a += imgData[imgPos + j * K + k]; b += imgData[other + j * K + k]; }
             sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b;
         }
-        const double n = imageWidth;
+        const double n = blocks;
         const double va = saa - sa * sa / n, vb = sbb - sb * sb / n, cov = sab - sa * sb / n;
         const double c = (va > 1e-9 && vb > 1e-9) ? cov / std::sqrt(va * vb) : 0.0;
         corrAvg = 0.8 * corrAvg + 0.2 * c;
