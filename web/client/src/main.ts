@@ -28,6 +28,7 @@ import { dabServiceStereo } from '../../../src/services/dabTypes';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { limiter } from '../../../src/utils/limit';
+import { MARGIN_AFTER_LINES, SHIFT_STEP, SLANT_STEP, findMargin, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
@@ -9738,6 +9739,12 @@ function initDecoders(host: string, auth: AuthState) {
   $('decPrev').onclick = () => toggleDecPrev();
   $('decSave').onclick = () => saveDecImage();
   $('decZoomIn').onclick = () => setDecZoom(decZoomI + 1);
+  $('decAdj').onclick = () => { const r = $('decAdjRow'); const open = r.style.display === 'none'; r.style.display = open ? '' : 'none'; $('decAdj').classList.toggle('on', open); };
+  $('decShiftL').onclick = () => { decManualShift = (decManualShift ?? decAutoShift ?? 0) + SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
+  $('decShiftR').onclick = () => { decManualShift = (decManualShift ?? decAutoShift ?? 0) - SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
+  $('decSlantDn').onclick = () => setDecAlign({ ...decAlign, slant: decAlign.slant - SLANT_STEP });
+  $('decSlantUp').onclick = () => setDecAlign({ ...decAlign, slant: decAlign.slant + SLANT_STEP });
+  $('decAdjReset').onclick = () => { decManualShift = null; setDecAlign(null); };
   $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
@@ -10058,6 +10065,9 @@ function showDecBox(what: string) {
   $('decImage').classList.toggle('on', image);
   setDecZoom(0);   // ★ a new decoder opens at FIT
   wefaxPhaseKnown = false;
+  $('decAdj').style.display = what === 'wefax' ? '' : 'none';
+  if (what !== 'wefax') $('decAdjRow').style.display = 'none';
+  if (what === 'wefax') { decAlignKey = ''; loadDecAlign(); }
   $('decText').classList.toggle('off', image || isSpots);
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
@@ -11518,11 +11528,66 @@ function startDecImage(w: number, h: number) {
   decLiveCtx?.clearRect(0, 0, cv.width, cv.height);
   decLiveComplete = false;
   decLiveMaxY = -1;
+  decLiveRaw = [];
+  decAutoShift = undefined; decManualShift = null;   // ★ a new chart finds its own margin
   if (!decViewingPrev) blitToVisible(decLiveCv);
   updateDecImageButtons();
 }
 
 let decLiveMaxY = -1;   // the highest line drawn into the live image (see drawDecLine)
+let decLiveRaw: Uint8Array[] = [];   // WEFAX lines as received — a SHIFT / SLANT change redraws from these
+let decAlign: WefaxAlign = { shift: 0, slant: 0 };   // ★ the SLANT is the station's (saved); shift below is per chart
+/* ★★ SHIFT IS PER CHART (Stuart, 2026-10-04, from FLDigi: the margin "had shifted again and needed setting every
+ *  time"): found by findMargin once each chart is MARGIN_AFTER_LINES long; ◀ ▶ nudge THIS chart only. */
+let decAutoShift: number | null | undefined;   // undefined = not looked yet this chart
+let decManualShift: number | null = null;
+function decEffAlign(): WefaxAlign {
+  const shift = decManualShift ?? decAutoShift ?? 0;
+  return { shift, slant: decAlign.slant };
+}
+let decAlignSaved = false;
+let decAlignKey = '';
+/** Load this frequency's SHIFT / SLANT (the listener's own, else the station preset) and redraw if it changed. */
+function loadDecAlign() {
+  const hz = spec?.frequency ?? 0;
+  const key = wefaxAlignKey(hz);
+  if (key === decAlignKey) return;
+  decAlignKey = key;
+  let a: WefaxAlign | null = null;
+  try { const v = localStorage.getItem(key); a = v ? parseAlign(JSON.parse(v)) : null; } catch { a = null; }
+  decAlignSaved = !!a;
+  setDecAlign(a ?? wefaxPreset(hz), false);
+}
+function setDecAlign(a: WefaxAlign | null, save = true) {
+  const hz = spec?.frequency ?? 0;
+  if (!a) { try { localStorage.removeItem(decAlignKey); } catch {} decAlignSaved = false; a = wefaxPreset(hz); }
+  else if (save) {
+    a = { shift: 0, slant: Math.round(a.slant * 1000) / 1000 };   // ★ only the slant is the station's
+    try { localStorage.setItem(decAlignKey, JSON.stringify(a)); } catch {}
+    decAlignSaved = true;
+  }
+  decAlign = a;
+  updateDecAdjLabels();
+  redrawDecAlign();
+}
+function updateDecAdjLabels() {
+  $('decAdjShift').textContent = decManualShift != null ? `SHIFT ${decManualShift}`
+    : decAutoShift != null ? `SHIFT auto ${decAutoShift}` : 'SHIFT auto';
+  $('decAdjSlant').textContent = `SLANT ${decAlign.slant.toFixed(3)}`;
+  $('decAdjReset').style.display = decAlignSaved || decManualShift != null ? '' : 'none';
+}
+/** Redraw the WHOLE live chart from its kept lines, so a correction lands on what is on screen. */
+function redrawDecAlign() {
+  if (!decLiveCtx || !decLiveCv || !decLiveRaw.length) return;
+  const w = decLiveCv.width, row = decLiveCtx.createImageData(w, 1), a = decEffAlign();
+  for (let y = 0; y < decLiveRaw.length; y++) {
+    const r = decLiveRaw[y]; if (!r) continue;
+    const off = wefaxOffset(a, y, w);
+    for (let x = 0; x < w; x++) { const v = r[(x + off) % w] ?? 0, o = x << 2; row.data[o] = row.data[o + 1] = row.data[o + 2] = v; row.data[o + 3] = 255; }
+    decLiveCtx.putImageData(row, 0, y);
+  }
+  if (!decViewingPrev) blitToVisible(decLiveCv);
+}
 function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
   decIsRgb = rgb;
   /* ★★★ THE LINE COUNT GOING BACK IS A NEW PICTURE (Stuart, 2026-10-04). A WEFAX chart has no image-start
@@ -11547,6 +11612,20 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     if (!decViewingPrev) blitToVisible(cv);
   }
 
+  // ★ WEFAX: keep the line as received, then draw it moved by this frequency's SHIFT / SLANT (wefaxAlign).
+  let src: ArrayLike<number> = px;
+  if (!rgb) {
+    loadDecAlign();   // ★ a retune while WEFAX is open picks up that frequency's setting (a string compare)
+    decLiveRaw[y] = px.slice(0, w);
+    if (decAutoShift === undefined && decManualShift === null && y >= MARGIN_AFTER_LINES) {
+      const m = findMargin(decLiveRaw, w, decAlign.slant);
+      decAutoShift = m === null ? null : m - 2;
+      if (decAutoShift !== null) redrawDecAlign();
+      updateDecAdjLabels();
+    }
+    const off = wefaxOffset(decEffAlign(), y, w);
+    if (off) { const r = new Uint8Array(w); for (let x = 0; x < w; x++) r[x] = px[(x + off) % w]; src = r; }
+  }
   const img = decLiveCtx.createImageData(w, 1);
   for (let x = 0; x < w; x++) {
     const o = x << 2;
@@ -11555,7 +11634,7 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
       img.data[o + 1] = px[x * 3 + 1];
       img.data[o + 2] = px[x * 3 + 2];
     } else {
-      const v = px[x];                     // WEFAX is greyscale
+      const v = src[x];                    // WEFAX is greyscale
       img.data[o] = img.data[o + 1] = img.data[o + 2] = v;
     }
     img.data[o + 3] = 255;

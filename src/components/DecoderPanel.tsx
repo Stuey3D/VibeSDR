@@ -26,6 +26,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { NAV_FOCUS, captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SHIFT_STEP, SLANT_STEP, parseAlign, wefaxAlignKey, wefaxPreset, type WefaxAlign } from '../utils/wefaxAlign';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
@@ -61,6 +63,8 @@ export interface DecoderPanelProps {
   aircraft?:     Aircraft[];
   decoderStatus: string;   // 'listening…' | 'decoding…' | custom
   decoding:      boolean;  // true = green dot
+  /** The tuned (dial) frequency, Hz — WEFAX SHIFT / SLANT are remembered per frequency. */
+  tunedHz?:      number;
   bottomOffset:  number;   // distance from bottom of screen (pillTop - 8)
   /** Clear the text output (skin CLR — text decoders only). */
   onClear?:      () => void;
@@ -216,7 +220,7 @@ export default function DecoderPanel({
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
-  onOpenFreq, onShownChange, topLimit, topSafe,
+  onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0,
 }: DecoderPanelProps) {
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
   //
@@ -328,6 +332,38 @@ export default function DecoderPanel({
   const IMG_ZOOMS = [1, 1.5, 2, 3, 4];
   const [imgZoomI, setImgZoomI] = useState(0);
   useEffect(() => { setImgZoomI(0); }, [activeDecoder]);
+  /* ★★ WEFAX SHIFT / SLANT, per frequency (utils/wefaxAlign): the listener's own setting if saved, else the
+   *  station preset (Northwood), else none. ADJ opens the strip; every change is saved at once. */
+  const isWefax = activeDecoder === 'wefax';
+  const alignKey = wefaxAlignKey(tunedHz);
+  const [align, setAlign] = useState<WefaxAlign>(() => wefaxPreset(tunedHz));
+  const [alignSaved, setAlignSaved] = useState(false);
+  const [adjOpen, setAdjOpen] = useState(false);
+  const [autoShift, setAutoShift] = useState<number | null>(null);
+  /* ★★ SHIFT IS PER CHART, SLANT PER STATION (Stuart, 2026-10-04, from FLDigi: "slant correction dialled in … you
+   *  could move it across so the black line was at the edge, but then next decode happened and the position had
+   *  shifted again and needed setting every time"). So only the slant is saved; each chart's margin is found
+   *  automatically, and ◀ ▶ nudge THIS chart only — cleared when the next chart's margin is found. */
+  const [manualShift, setManualShift] = useState<number | null>(null);
+  const onChartShift = useCallback((s: number | null) => { setAutoShift(s); setManualShift(null); }, []);
+  useEffect(() => {
+    if (!isWefax || !tunedHz) return;
+    let dead = false;
+    AsyncStorage.getItem(alignKey).then((v: string | null) => {
+      if (dead) return;
+      let a: WefaxAlign | null = null;
+      try { a = v ? parseAlign(JSON.parse(v)) : null; } catch { a = null; }
+      setAlign(a ?? wefaxPreset(tunedHz)); setAlignSaved(!!a);
+    }).catch(() => { if (!dead) { setAlign(wefaxPreset(tunedHz)); setAlignSaved(false); } });
+    return () => { dead = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isWefax, alignKey]);
+  const changeAlign = (a: WefaxAlign | null) => {
+    if (!a) { AsyncStorage.removeItem(alignKey).catch(() => {}); setAlign(wefaxPreset(tunedHz)); setAlignSaved(false); return; }
+    const r = { shift: 0, slant: Math.round(a.slant * 1000) / 1000 };   // ★ only the slant is the station's
+    setAlign(r); setAlignSaved(true);
+    AsyncStorage.setItem(alignKey, JSON.stringify(r)).catch(() => {});
+  };
   const [minimised, setMinimised] = useState(false);
   const [dabSpeedOpen, setDabSpeedOpen] = useState(false);   // DAB speed-fix popup
   // ★★ The spots filters were CYCLERS: each tap advanced by one and you read the label to find
@@ -1012,6 +1048,12 @@ export default function DecoderPanel({
               <DecoderKeyLabel>−</DecoderKeyLabel>
             </HBtn>
           )}
+          {isImageMode && isWefax && (
+            <HBtn run hitSlop={6} accessibilityLabel="Adjust shift and slant"
+              onPress={(e: any) => { e?.stopPropagation(); setAdjOpen((o) => !o); }}>
+              <DecoderKeyLabel active={adjOpen}>ADJ</DecoderKeyLabel>
+            </HBtn>
+          )}
           {isImageMode && imgZoomI < IMG_ZOOMS.length - 1 && (
             <HBtn run hitSlop={6} accessibilityLabel="Zoom in"
               onPress={(e: any) => { e?.stopPropagation(); setImgZoomI((i) => Math.min(IMG_ZOOMS.length - 1, i + 1)); }}>
@@ -1071,9 +1113,34 @@ export default function DecoderPanel({
             DecoderBody is nothing at all. Not drawn when minimised — an empty window is not "hidden". */}
         {!minimised && (<DecoderBody>
         {/* Body — hidden when minimised; image canvas for WEFAX/SSTV */}
+        {!minimised && isImageMode && isWefax && adjOpen && (
+          <View style={dp.adjRow}>
+            <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>
+              {manualShift != null ? `SHIFT ${manualShift}` : autoShift != null ? `SHIFT auto ${autoShift}` : 'SHIFT auto'}
+            </Text>
+            <HBtn run hitSlop={6} accessibilityLabel="Shift left"
+              onPress={() => setManualShift((manualShift ?? autoShift ?? 0) + SHIFT_STEP)}><DecoderKeyLabel>◀</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={6} accessibilityLabel="Shift right"
+              onPress={() => setManualShift((manualShift ?? autoShift ?? 0) - SHIFT_STEP)}><DecoderKeyLabel>▶</DecoderKeyLabel></HBtn>
+            <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>
+              {`SLANT ${align.slant.toFixed(3)}`}
+            </Text>
+            <HBtn run hitSlop={6} accessibilityLabel="Slant less"
+              onPress={() => changeAlign({ ...align, slant: align.slant - SLANT_STEP })}><DecoderKeyLabel>−</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={6} accessibilityLabel="Slant more"
+              onPress={() => changeAlign({ ...align, slant: align.slant + SLANT_STEP })}><DecoderKeyLabel>+</DecoderKeyLabel></HBtn>
+            {(alignSaved || manualShift != null) && (
+              <HBtn run hitSlop={6} accessibilityLabel="Back to automatic"
+                onPress={() => { changeAlign(null); setManualShift(null); }}><DecoderKeyLabel>RESET</DecoderKeyLabel></HBtn>
+            )}
+          </View>
+        )}
         {!minimised && isImageMode && imageRef && (
           <View style={dp.bodyContent}>
             <DecoderImageCanvas
+              align={isWefax ? { shift: manualShift ?? 0, slant: align.slant } : undefined}
+              autoMargin={isWefax && manualShift == null}
+              onAutoShift={onChartShift}
               ref={imageRef}
               maxHeight={bodyH}
               decoderName={activeDecoder ?? 'image'}
@@ -1211,6 +1278,9 @@ export default function DecoderPanel({
 
 /** ★ Built once per setting (useDecoderStyles) — never per render, never at load. */
 const makeDp = (T: DecoderTokens) => StyleSheet.create({
+  /* ★ The WEFAX SHIFT / SLANT strip under the header (ADJ). Wraps on a narrow box rather than clipping. */
+  adjRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  adjLabel: { minWidth: 70 },
   // Sits over the whole box; only ever an opacity animation, so it stays on the native driver.
   flash: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,

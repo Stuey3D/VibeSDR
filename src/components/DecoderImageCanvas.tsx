@@ -24,6 +24,7 @@ import React, {
 import { ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
 // ★★ A REAL FILE, NOT A data: URL — see save() below for why.
 import { File, Paths } from 'expo-file-system';
+import { MARGIN_AFTER_LINES, WEFAX_ALIGN_ZERO, findMargin, wefaxOffset, type WefaxAlign } from '../utils/wefaxAlign';
 import {
   Canvas, Image as SkiaImage, Skia,
   AlphaType, ColorType, ImageFormat, type SkData, type SkImage,
@@ -51,6 +52,10 @@ interface PixBuf {
   data: Uint8Array;   // RGBA
   complete: boolean;
   maxLine: number;    // highest line written (display crop)
+  /** ★ WEFAX: each line AS RECEIVED (greyscale, w×h), so a SHIFT/SLANT change can redraw the whole chart. */
+  raw?: Uint8Array;
+  /** ★ WEFAX: the shift findMargin chose for THIS chart (undefined = not looked yet, null = no margin found). */
+  autoShift?: number | null;
 }
 
 // Persistent per-decoder image store. The live/prev buffers live OUTSIDE the
@@ -86,6 +91,24 @@ export interface DecoderImageCanvasProps {
   /** PREV button availability + current view, for the panel header. */
   onPrevState: (hasPrev: boolean, viewingPrev: boolean) => void;
   decoderName: string;   // for the save filename: wefax_2026-06-10T18-31-02.png
+  /** ★ WEFAX SHIFT / SLANT for this frequency (utils/wefaxAlign) — applied as each line is drawn. */
+  align?: WefaxAlign;
+  /** ★ Find each chart's margin and move it to the left edge (utils/wefaxAlign findMargin) — off once the listener
+   *  has saved their own SHIFT for this frequency. */
+  autoMargin?: boolean;
+  /** Reports the per-chart automatic shift (null = none found) for the ADJ strip. */
+  onAutoShift?: (shift: number | null) => void;
+}
+
+/** Draw row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping). */
+function drawRawRow(buf: PixBuf, y: number, a: WefaxAlign) {
+  if (!buf.raw) return;
+  const w = buf.w, off = wefaxOffset(a, y, w), base = y * w, o0 = y * w * 4;
+  for (let x = 0; x < w; x++) {
+    const v = buf.raw[base + ((x + off) % w)];
+    const o = o0 + x * 4;
+    buf.data[o] = v; buf.data[o + 1] = v; buf.data[o + 2] = v; buf.data[o + 3] = 255;
+  }
 }
 
 function mkBuf(w: number, h: number): PixBuf {
@@ -142,7 +165,15 @@ function enhanceWefax(buf: PixBuf) {
 }
 
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
-  function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1 }, ref) {
+  function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
+                               autoMargin = false, onAutoShift }, ref) {
+    const alignRef = useRef<WefaxAlign>(align ?? WEFAX_ALIGN_ZERO);
+    alignRef.current = align ?? WEFAX_ALIGN_ZERO;
+    const autoRef = useRef(autoMargin);
+    autoRef.current = autoMargin;
+    /** The SHIFT / SLANT a buffer is drawn with: the station's slant, and this chart's own margin when found. */
+    const effAlign = (buf: PixBuf): WefaxAlign =>
+      autoRef.current && buf.autoShift != null ? { shift: buf.autoShift, slant: alignRef.current.slant } : alignRef.current;
     const { width: winW } = useWindowDimensions();
     /* ★★★ THE WIDTH THIS CANVAS ACTUALLY HAS — MEASURED, not the window's. It was `winW - 16 - 24`, true
      *  on a phone (the box is full-bleed there) and false everywhere else since the box was capped at
@@ -231,6 +262,21 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
      *  2026-10-04: "once an image has been received it stays on screen until the next one is received, and then
      *  when the new image is started the old one goes into a previous button"). It waited for `complete`, so a
      *  partial SSTV frame (signal faded, late join) was simply thrown away by the next image's start. */
+    /* ★ A SHIFT / SLANT change redraws the WHOLE live chart from its kept lines — not only the lines to come —
+     *  so the listener sees the correction land on the picture they are looking at. A finished chart is
+     *  enhanced again afterwards (the redraw starts from the raw lines). */
+    const alignKey = `${align?.shift ?? 0}|${align?.slant ?? 0}|${autoMargin ? 1 : 0}`;
+    const firstAlign = useRef(true);
+    useEffect(() => {
+      if (firstAlign.current) { firstAlign.current = false; return; }
+      const buf = live.current;
+      if (!buf?.raw) return;
+      for (let y = 0; y <= buf.maxLine && y < buf.h; y++) drawRawRow(buf, y, effAlign(buf));
+      if (buf.complete && (decoderName || '').toLowerCase() === 'wefax') { try { enhanceWefax(buf); } catch {} }
+      if (!viewingPrev) rebuild(buf, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [alignKey]);
+
     const rollToPrev = useCallback(() => {
       if (live.current && live.current.maxLine > 0) live.current.complete = true;
       if (live.current?.complete) {
@@ -244,6 +290,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     const growTo = useCallback((buf: PixBuf, newH: number): PixBuf => {
       const next = mkBuf(buf.w, newH);
       next.data.set(buf.data);
+      if (buf.raw) { next.raw = new Uint8Array(buf.w * newH); next.raw.set(buf.raw); }
       next.maxLine = buf.maxLine;
       next.complete = buf.complete;
       return next;
@@ -293,13 +340,20 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
           buf = live.current = growTo(buf, ln + GROW_ROWS); store.live = buf;
           onInfo(`${w}x${ln + 1}`);
         }
-        const off = ln * buf.w * 4;
         const n = Math.min(w, buf.w);
-        for (let x = 0; x < n; x++) {
-          const v = px[x] ?? 0;
-          const o = off + x * 4;
-          buf.data[o] = v; buf.data[o + 1] = v; buf.data[o + 2] = v; buf.data[o + 3] = 255;
+        // ★ Keep the line as received, then draw it moved by this frequency's SHIFT / SLANT (utils/wefaxAlign).
+        if (!buf.raw) buf.raw = new Uint8Array(buf.w * buf.h);
+        buf.raw.set(px.subarray(0, n), ln * buf.w);
+        // ★ Once the chart is long enough, find its margin (once) and redraw the whole chart around it.
+        if (autoRef.current && buf.autoShift === undefined && ln >= MARGIN_AFTER_LINES) {
+          const rows: Uint8Array[] = [];
+          for (let y = 0; y <= ln; y++) rows.push(buf.raw.subarray(y * buf.w, (y + 1) * buf.w));
+          const m = findMargin(rows, buf.w, alignRef.current.slant);
+          buf.autoShift = m === null ? null : m - 2;
+          onAutoShift?.(buf.autoShift);
+          if (buf.autoShift !== null) for (let y = 0; y < ln; y++) drawRawRow(buf, y, effAlign(buf));
         }
+        drawRawRow(buf, ln, effAlign(buf));
         if (ln > buf.maxLine) buf.maxLine = ln;
         linesSince.current++;
         if (!viewingPrev) rebuild(buf);

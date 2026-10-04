@@ -10153,6 +10153,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="Decoder" onClose={dismissDecoderPanel}>
         <DecoderPanel
           activeDecoder={activeDecoder}
+          tunedHz={status.frequency}
           decoderText={decoderText}
           aircraft={aircraft}
           decoderStatus={decoderStatus}
