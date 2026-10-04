@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""colour_icons.py — the app icon and the Now Playing art in every illumination colour (Stuart, 2026-10-04).
+
+The icon and album art were green only, and green drew criticism; the user picks their buttons' colour, so the
+icon and art can follow. Each colour is recoloured from the SAME masters as the shipped icon (icon-ios.svg,
+artwork.svg), with the mapping Stuart approved on the contact sheet ("they look good"):
+  • the lit strokes (#66E07C)   → the app's own LED core for that colour (src/constants/faceplate.ts LED);
+  • the pale tints (L > 0.8)    → that LED's white-hot centre;
+  • the faintly tinted darks    → the LED's hue at the original lightness, a little richer (white: barely tinted).
+GREEN is the shipped icon and art, untouched — nobody who never picks a colour sees any change.
+
+Writes (run from the repo root):  python3 assets/brand/colour_icons.py
+  ios/VibeSDR/Images.xcassets/AppIcon-<Colour>.appiconset   iOS alternate icons (1024, no alpha)
+  ios/VibeSDR/Images.xcassets/artwork_<colour>.imageset     Now Playing art base, 600 x 600
+  ios/VibeSDR/Images.xcassets/logo_vibeserver_<colour>.imageset   the VibeServer mark inlaid on that art
+Needs rsvg-convert (brew install librsvg) and Pillow.
+"""
+import colorsys, json, os, re, subprocess, tempfile
+from PIL import Image
+
+R = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+BRAND = os.path.join(R, 'assets', 'brand')
+# The app's LEDs (faceplate.ts LED): core = the lit colour, hot = its white-hot centre. GREEN is the shipped art.
+LED = {'red': ('#ff3a2e', '#ffcbc6'), 'amber': ('#ffae1a', '#ffe4b3'), 'blue': ('#3d9bff', '#d0e7ff'),
+       'white': ('#eef3ff', '#ffffff'), 'teal': ('#46ffd7', '#c8fff2'), 'neon': ('#ff7a26', '#ffc48a')}
+
+
+def h2r(h): h = h.lstrip('#'); return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+def r2h(r): return '#%02x%02x%02x' % tuple(round(max(0, min(1, c)) * 255) for c in r)
+
+
+def recolour(svg, colour):
+    core, hot = LED[colour]
+    ch = colorsys.rgb_to_hls(*h2r(core))[0]
+    def sub(m):
+        src = m.group(0); _, ll, ss = colorsys.rgb_to_hls(*h2r(src))
+        if ss < 0.02: return src
+        if src.lower() == '#66e07c': return core
+        if ll > 0.8: return hot
+        return r2h(colorsys.hls_to_rgb(ch, ll, min(1, ss * (0.4 if colour == 'white' else 1.6))))
+    return re.sub(r'#[0-9a-fA-F]{6}', sub, svg)
+
+
+def render(svg_text, size):
+    fd, p = tempfile.mkstemp(suffix='.svg'); os.write(fd, svg_text.encode()); os.close(fd)
+    out = p + '.png'
+    subprocess.run(['rsvg-convert', '-w', str(size), '-h', str(size), p, '-o', out], check=True)
+    im = Image.open(out).convert('RGBA'); os.remove(p); os.remove(out)
+    bg = Image.new('RGB', im.size, (3, 4, 3)); bg.paste(im, (0, 0), im)   # ★ App Store icons: no alpha
+    return bg
+
+
+def recolour_png(src_png, colour):
+    """Recolour a raster logo the way recolour() does the SVGs: every tinted pixel takes the LED's hue at its own
+    lightness (white: barely tinted), so the inlaid mark's lit strokes match the icon. Used for the VibeServer mark
+    inlaid on the art — ios/VibeSDR/Images.xcassets/logo_vibeserver.imageset/vibeserver.png, which predates the
+    11.0 family mark and is raster only."""
+    import numpy as np
+    np.seterr(divide='ignore', invalid='ignore')   # grey pixels divide 0/0 — masked out by the where()
+    im = Image.open(src_png).convert('RGB'); a = np.asarray(im).astype(np.float64) / 255
+    mx, mn = a.max(2), a.min(2); l = (mx + mn) / 2; d = mx - mn
+    s_ = np.where(d == 0, 0, d / np.where(l < 0.5, mx + mn, 2 - mx - mn + 1e-12))
+    ch = colorsys.rgb_to_hls(*h2r(LED[colour][0]))[0]
+    s2 = s_ * (0.4 if colour == 'white' else 1.0)
+    def hue2(p, q, t):
+        t = t % 1.0
+        return np.where(t < 1/6, p + (q - p) * 6 * t, np.where(t < 1/2, q, np.where(t < 2/3, p + (q - p) * (2/3 - t) * 6, p)))
+    q = np.where(l < 0.5, l * (1 + s2), l + s2 - l * s2); p = 2 * l - q
+    out = np.stack([hue2(p, q, ch + 1/3), hue2(p, q, ch), hue2(p, q, ch - 1/3)], 2)
+    out = np.where((s_ < 0.02)[..., None], a, out)
+    return Image.fromarray((np.clip(out, 0, 1) * 255 + 0.5).astype('uint8'))
+
+
+def main():
+    icon, art = open(os.path.join(BRAND, 'icon-ios.svg')).read(), open(os.path.join(BRAND, 'artwork.svg')).read()
+    xc = os.path.join(R, 'ios', 'VibeSDR', 'Images.xcassets')
+    for c in LED:
+        d = os.path.join(xc, f'AppIcon-{c.capitalize()}.appiconset'); os.makedirs(d, exist_ok=True)
+        render(recolour(icon, c), 1024).save(os.path.join(d, 'App-Icon-1024x1024@1x.png'), optimize=True)
+        json.dump({'images': [{'filename': 'App-Icon-1024x1024@1x.png', 'idiom': 'universal', 'platform': 'ios',
+                               'size': '1024x1024'}], 'info': {'version': 1, 'author': 'xcode'}},
+                  open(os.path.join(d, 'Contents.json'), 'w'), indent=2)
+        d = os.path.join(xc, f'artwork_{c}.imageset'); os.makedirs(d, exist_ok=True)
+        render(recolour(art, c), 600).save(os.path.join(d, f'artwork_{c}.png'), optimize=True)
+        json.dump({'images': [{'filename': f'artwork_{c}.png', 'idiom': 'universal'}],
+                   'info': {'version': 1, 'author': 'xcode'}}, open(os.path.join(d, 'Contents.json'), 'w'), indent=2)
+        # ★ The inlaid VibeServer mark on the art follows the colour too (Stuart); other server types keep their own.
+        d = os.path.join(xc, f'logo_vibeserver_{c}.imageset'); os.makedirs(d, exist_ok=True)
+        recolour_png(os.path.join(xc, 'logo_vibeserver.imageset', 'vibeserver.png'), c).save(
+            os.path.join(d, f'logo_vibeserver_{c}.png'), optimize=True)
+        json.dump({'images': [{'filename': f'logo_vibeserver_{c}.png', 'idiom': 'universal'}],
+                   'info': {'version': 1, 'author': 'xcode'}}, open(os.path.join(d, 'Contents.json'), 'w'), indent=2)
+        print('wrote', c)
+
+
+if __name__ == '__main__':
+    main()

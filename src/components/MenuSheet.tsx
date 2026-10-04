@@ -43,6 +43,7 @@ import {
   syncDiagnostic, type SyncStatus,
 } from '../services/cloudSync';
 import { linkDebug } from '../services/linkManager';
+import { appIconSupported, setAppIcon } from '../services/appIcon';
 import { APP_VERSION } from '../constants/version';
 import UsbSdrIcon from './UsbSdrIcon';
 import VfoLockIcon from './VfoLockIcon';
@@ -51,7 +52,7 @@ import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { useFaceplateSettings, useSurfaceOpaque } from '../contexts/FaceplateContext';
 import {
   CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
-  MOTION_CHOICES, MOTION_NOTE, LIGHT_ANGLE_CHOICES, lightAngleRowShown,
+  MOTION_CHOICES, MOTION_NOTE, LIGHT_ANGLE_CHOICES, lightAngleRowShown, ICON_COLOURS, ICON_NOTE, ART_ONLY_NOTE,
   COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver, frameRateChoices,
   FRAME_RATE_NOTE,
   type PaneChoice, type Chassis, type SignalMeter, type FrameRate, type MotionEffects, type LightAngle,
@@ -853,6 +854,9 @@ function ControlCustomisationPane({
   //   an old phone sees solid panels, the ON key unlit, and no reason why.
   const autoNote = !fp.transparencyExplicit && auto.reason ? AUTO_REASON_NOTE[auto.reason] : null;
   const texts = textChoices(fp.display);
+  // ★ Asked once per opening: can this device change its icon? (null until the answer comes back.)
+  const [iconOk, setIconOk] = useState<boolean | null>(null);
+  useEffect(() => { let live = true; appIconSupported().then(v => { if (live) setIconOk(v); }); return () => { live = false; }; }, []);
   return (
     <View style={styles.subPanel}>
       <BackRow title="CONTROL CUSTOMISATION" onPress={onBack} />
@@ -888,6 +892,18 @@ function ControlCustomisationPane({
       </CtrlRow>
       <SelectorRow label="SIGNAL METER" choices={METER_CHOICES} value={fp.meter}
         onPick={(v: SignalMeter) => set({ meter: v })} />
+      {/* ★★ ICON & ART (Stuart, 2026-10-04): the app icon and the Now Playing art in the illumination colours.
+          The art follows at once; the icon changes only on this pick (iOS confirms each change). Where the
+          device cannot change its icon the row is the art alone, and says so. */}
+      <CtrlRow label={iconOk ? 'ICON & ART' : 'ART'} note={iconOk ? ICON_NOTE : iconOk === false ? ART_ONLY_NOTE : undefined}>
+        <BtnRow>
+          {ICON_COLOURS.map(c => (
+            <SelectorKey key={c} dot={LED[c].core} a11y={`${COLOUR_NAMES[c]} icon and art`}
+              active={fp.iconColour === c}
+              onPress={() => { set({ iconColour: c }); if (iconOk) void setAppIcon(c); }} />
+          ))}
+        </BtnRow>
+      </CtrlRow>
       {/* ★★ LIGHT ANGLE (lighting brief §4): where the light on the metal comes from — the sheen, the hot-spot,
           the gloss reflection and the screws move together. Only on silver / black (no metal on default:
           a key that did nothing), and only while tilt is not driving the light (faceplate.ts decides). */}

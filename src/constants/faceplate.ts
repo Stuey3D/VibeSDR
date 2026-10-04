@@ -46,6 +46,10 @@ export type MotionEffects    = 'on' | 'off';
 /** ★★ LIGHT ANGLE (lighting brief §4): where the light on the metal comes from. Never from below — hardware
  *  is never lit from below, and it reads as wrong. */
 export type LightAngle       = 'left' | 'topLeft' | 'top' | 'topRight' | 'right';
+/** ★★ ICON & ART colour (Stuart, 2026-10-04: green drew criticism, and the icon and the Now Playing art were green
+ *  only). The illumination presets; `green` is the SHIPPED icon and art, untouched. iOS alternate icons and art
+ *  made by assets/brand/colour_icons.py. Device-local like the rest of the faceplate. */
+export type IconColour       = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'teal' | 'neon';
 
 export interface FaceplateSettings {
   chassis:   Chassis;
@@ -82,11 +86,14 @@ export interface FaceplateSettings {
   /** ★ LIGHT ANGLE — device-local like the rest of the faceplate. LEFT is today's look. With tilt lighting
    *  (brief §5, not built yet) this is the angle the tilt swings AROUND. */
   lightAngle: LightAngle;
+  /** ★ ICON & ART — the app icon (where the device can change it) and the Now Playing art base. */
+  iconColour: IconColour;
 }
 
 export const CHASSIS:     Chassis[]        = ['default', 'silver', 'black'];
 export const DISPLAYS:    DisplayStyle[]   = ['hyper', 'nixie', 'dot', 'seg'];
 export const CONTROLS:    ControlsColour[] = ['green', 'red', 'amber', 'blue', 'white', 'neon'];
+export const ICON_COLOURS: IconColour[]   = ['green', 'red', 'amber', 'blue', 'white', 'teal', 'neon'];
 export const TEXTS:       TextColour[]     = ['green', 'red', 'amber', 'blue', 'white', 'teal'];
 export const METERS:      SignalMeter[]    = ['bar', 'vu', 'edge'];
 export const TRANSPARENCIES: Transparency[] = ['on', 'off'];
@@ -112,6 +119,7 @@ export const DEFAULT_SETTINGS: FaceplateSettings = {
   chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
   meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, frameRate: 'full',
   textByDisplay: {}, motionEffects: 'on', motionExplicit: false, lightAngle: 'left',
+  iconColour: 'green',
 };
 
 // ── Colour tokens ─────────────────────────────────────────────────────────────
@@ -331,6 +339,7 @@ export function parseSettings(json: string | null, legacyThemeName?: string | nu
     textByDisplay,
     ...parseMotion(raw),
     lightAngle: pick(raw.lightAngle, LIGHT_ANGLES, 'left'),
+    iconColour: pick(raw.iconColour, ICON_COLOURS, 'green'),
   };
 }
 
@@ -424,6 +433,11 @@ export function lightAngleRowShown(chassis: Chassis, tiltDriving: boolean): bool
 
 /** The MOTION EFFECTS row's subtitle: what OFF changes — and, as plainly, what it never does. */
 export const MOTION_NOTE = 'Off · no decorative movement — signal, tuning and keys still move';
+
+/** The ICON & ART row's subtitle where the icon can change — iOS asks for confirmation every time. */
+export const ICON_NOTE = 'The app icon and the Now Playing art';
+/** …and where it cannot (the system says so), the row is the art alone. */
+export const ART_ONLY_NOTE = 'The Now Playing art · this device cannot change the app icon';
 
 /** The note the TEXT row shows instead of colours under Nixie (§1; the mockup's exact words). */
 export const TEXT_LOCKED_NOTE = 'Locked to neon by the Nixie display';

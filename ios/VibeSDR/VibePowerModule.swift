@@ -3206,6 +3206,37 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   /** Album art: VibeSDR icon with the server-type logo inset bottom-right
    *  (multi-server prep — type picks the overlay, "ubersdr" for now). */
+  // ── ICON & ART colour (Stuart, 2026-10-04: the icon and art were green only, and green drew criticism) ──
+  // The art base is drawn in the user's pick — artwork_<colour> in Images.xcassets, made from the same master by
+  // assets/brand/colour_icons.py. "green" (or anything unknown) is the shipped artwork_base.
+  private var artColour = "green"
+  @objc func setArtColour(_ colour: String) {
+    guard colour != artColour else { return }
+    artColour = colour
+    DispatchQueue.main.async { self.lastArtworkKey = ""; self.updateNowPlaying() }
+  }
+
+  /// ★ Can THIS device change its icon? The system's own answer. Where it is false the settings row offers the
+  /// art alone (AGENTS.md: never a control that does nothing). ▶ UNVERIFIED on a Mac running the iPad app — the
+  /// first test build is how we find out whether the Dock icon follows (Stuart, 2026-10-04).
+  @objc func appIconSupported(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async { resolve(UIApplication.shared.supportsAlternateIcons) }
+  }
+
+  /// The icon: "green" = the primary (shipped) icon, otherwise AppIcon-<Colour>. iOS shows its own confirmation
+  /// alert after every change; apps cannot suppress it. Resolves the name now in use, rejects with the reason.
+  @objc func setAppIcon(_ colour: String, resolver resolve: @escaping RCTPromiseResolveBlock,
+                        rejecter reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      guard UIApplication.shared.supportsAlternateIcons else { reject("unsupported", "This device cannot change its icon", nil); return }
+      let name: String? = colour == "green" ? nil : "AppIcon-\(colour.prefix(1).uppercased())\(colour.dropFirst())"
+      guard UIApplication.shared.alternateIconName != name else { resolve(colour); return }
+      UIApplication.shared.setAlternateIconName(name) { err in
+        if let err = err { reject("failed", err.localizedDescription, err) } else { resolve(colour) }
+      }
+    }
+  }
+
   @objc func setArtwork(_ serverType: String) {
     guard serverType != npArtworkType else { return }
     npArtworkType = serverType
@@ -3251,10 +3282,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   private func refreshArtwork() {
-    guard let base = UIImage(named: "artwork_base") else { return }
-    let key = reconnectFailed ? "fail"
+    guard let base = (artColour == "green" ? nil : UIImage(named: "artwork_\(artColour)")) ?? UIImage(named: "artwork_base")
+    else { return }
+    let key = "\(artColour)|" + (reconnectFailed ? "fail"
             : dataSaverDisconnected ? "disc"
-            : "play-\(npArtworkType)-\(stationLogoImg != nil ? stationLogoUrl : "")-\(skipAllowed ? "" : "shared")"
+            : "play-\(npArtworkType)-\(stationLogoImg != nil ? stationLogoUrl : "")-\(skipAllowed ? "" : "shared")")
     guard key != lastArtworkKey else { return }
     lastArtworkKey = key
 
@@ -3282,6 +3314,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       } else if npArtworkType == "fmdx", let icon = UIImage(named: "logo_fmdx") {
         // FM-DX brand mark (green, already coloured) centred on the album base.
         drawAspectFit(icon, in: rect.insetBy(dx: rect.width * 0.05, dy: rect.height * 0.05))
+      } else if npArtworkType == "vibeserver", artColour != "green",
+                let overlay = UIImage(named: "logo_vibeserver_\(artColour)") {
+        // ★ OUR mark follows the ICON & ART colour (Stuart, 2026-10-04); every other server type keeps its own.
+        drawAspectFit(overlay, in: rect)
       } else if let overlay = UIImage(named: "logo_\(npArtworkType)") {
         drawAspectFit(overlay, in: rect)
       }

@@ -36,6 +36,7 @@ import { installNativeTransliterator } from '../services/transliterator';
 import { explainFaceplateReset, faceplateGuard, LAST_CRASHED_KEY, launchMarkOnce } from '../services/faceplateGuard';
 import { readNativeDeviceClass } from '../services/deviceClass';
 import { applyFrameRateCap, readMaxRefreshRate } from '../services/frameRate';
+import { setArtColour } from '../services/appIcon';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 
 // ★ The dot-matrix / 14-segment displays transliterate non-Latin names with the platform's ICU
@@ -63,7 +64,7 @@ interface FaceplateContextValue {
   setText:    (t: TextColour) => void;
   /** The rest have no side effects. */
   set:        (patch: Partial<Pick<FaceplateSettings, 'chassis' | 'controls' | 'meter' | 'steadyLeds' | 'frameRate'
-                                       | 'lightAngle'>>) => void;
+                                       | 'lightAngle' | 'iconColour'>>) => void;
   /** ★★ THE LIGHT (lighting brief §2): `lightDeg` is the SETTLED angle (CSS convention, 104 = LEFT = today) —
    *  React state, read by the small surfaces that follow once the light settles (screws). `lightSv` is the
    *  LIVE angle, a Reanimated SharedValue that only PlateLight canvases read on the UI thread.
@@ -182,6 +183,9 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const capHz = frameRateCapHz(settings);
   const capKnown = storedKnown || touched.current;
   useEffect(() => { if (capKnown) applyFrameRateCap(capHz); }, [capKnown, capHz]);
+  // ★ ICON & ART: the Now Playing art follows the pick, live (services/appIcon.ts). The ICON is changed only by
+  //   the pick itself (MenuSheet) — never at launch, because iOS shows an alert on every change.
+  useEffect(() => { if (capKnown) setArtColour(settings.iconColour); }, [capKnown, settings.iconColour]);
   const [maxRefreshHz, setMaxRefreshHz] = useState<number | null>(null);
   useEffect(() => {
     let live = true;

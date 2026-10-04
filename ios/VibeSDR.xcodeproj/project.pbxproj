@@ -576,6 +576,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BDE2697BFF3E4C598287A545 /* Pods-VibeSDR.debug.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIcon-Red AppIcon-Amber AppIcon-Blue AppIcon-White AppIcon-Teal AppIcon-Neon";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = VibeSDR/VibeSDR.entitlements;
@@ -615,6 +616,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = A4E2299D81CB8EA18B6F9962 /* Pods-VibeSDR.release.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIcon-Red AppIcon-Amber AppIcon-Blue AppIcon-White AppIcon-Teal AppIcon-Neon";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = VibeSDR/VibeSDR.entitlements;

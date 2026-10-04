@@ -226,5 +226,15 @@ for (const chassis of CHASSIS) for (const display of DISPLAYS) for (const text o
   }
 }
 
+// ── ICON & ART colour (2026-10-04) ───────────────────────────────────────────
+{
+  const { parseSettings: ps, DEFAULT_SETTINGS: D, ICON_COLOURS: IC } = await import('../src/constants/faceplate.ts');
+  ok('icon & art: the default is the shipped green', D.iconColour === 'green');
+  ok('icon & art: a stored pick is kept', ps(JSON.stringify({ iconColour: 'blue' })).iconColour === 'blue');
+  ok('icon & art: an unknown value falls back to green', ps(JSON.stringify({ iconColour: 'mauve' })).iconColour === 'green');
+  ok('icon & art: older stores (no field) read green', ps(JSON.stringify({ controls: 'blue' })).iconColour === 'green');
+  ok('icon & art: every illumination colour offered, teal included', IC.join() === 'green,red,amber,blue,white,teal,neon');
+}
+
 console.log(`${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
