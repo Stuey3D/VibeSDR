@@ -9444,16 +9444,18 @@ function fmtSpotTimeSec(t: number): string {
   return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}z`;
 }
 
-interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean }
+interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean; auto?: boolean }
 
 // Verbatim from the app (DecoderClient RTTY_PRESETS).
 const RTTY_PRESETS: Record<string, RttySettings> = {
+  // ★★ AUTO (2026-10-04): the server finds shift, centre, baud and polarity itself — the default, one click.
+  auto:      { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false, auto: true },
   ham:       { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false },
   weather:   { shift: 450, baud: 50,    encoding: 'ITA2',    inverted: true  },
   'sitor-b': { shift: 170, baud: 100,   encoding: 'CCIR476', inverted: false },
 };
 
-let rtty: RttySettings = { ...RTTY_PRESETS.ham };
+let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
 let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null = null;
 /** True while the last thing written to the decoder panel was a replace-in-place progress line,
@@ -9499,6 +9501,7 @@ function decParams(mode: string): Record<string, unknown> {
     return {
       center_frequency: 1000, shift: rtty.shift, baud_rate: rtty.baud,
       encoding: rtty.encoding, inverted: rtty.inverted, framing: '5N1.5',
+      ...(rtty.auto && rtty.encoding === 'ITA2' ? { auto: true } : {}),
     };
   }
   if (mode === 'wefax') {
@@ -9711,16 +9714,19 @@ function initDecoders(host: string, auth: AuthState) {
     syncRttyControls();
     reattachIf('rtty');
   });
-  segButtons('rttyShift', 'shift', (v) => { rtty.shift = Number(v); reattachIf('rtty'); });
-  segButtons('rttyBaud', 'baud', (v) => { rtty.baud = Number(v); reattachIf('rtty'); });
-  segButtons('rttyEnc', 'enc', (v) => { rtty.encoding = String(v); reattachIf('rtty'); });
+  // ★ A value picked by hand turns AUTO off (and the preset row then shows no preset, or the one it matches).
+  const manual = () => { rtty.auto = false; syncRttyControls(); };
+  segButtons('rttyShift', 'shift', (v) => { rtty.shift = Number(v); manual(); reattachIf('rtty'); });
+  segButtons('rttyBaud', 'baud', (v) => { rtty.baud = Number(v); manual(); reattachIf('rtty'); });
+  segButtons('rttyEnc', 'enc', (v) => { rtty.encoding = String(v); manual(); reattachIf('rtty'); });
   const inv = $<HTMLButtonElement>('rttyInv');
   inv.onclick = () => {
-    rtty.inverted = !rtty.inverted;
+    rtty.inverted = !rtty.inverted; rtty.auto = false; syncRttyControls();
     inv.classList.toggle('on', rtty.inverted);
     inv.textContent = rtty.inverted ? 'ON' : 'OFF';
     reattachIf('rtty');
   };
+  syncRttyControls();   // ★ the page's buttons show the starting settings (AUTO), not the HTML's defaults
   segButtons('wefaxLpm', 'lpm', (v) => { wefaxLpm = Number(v); reattachIf('wefax'); });
 
   // Spots + map.
@@ -9821,8 +9827,12 @@ function syncRttyControls() {
       b.classList.toggle('on', b.dataset[attr] === val);
     }
   };
-  mark('rttyShift', 'shift', String(rtty.shift));
-  mark('rttyBaud', 'baud', String(rtty.baud));
+  // ★ Under AUTO no shift / baud is "chosen" — the server picks them — so none is lit.
+  mark('rttyShift', 'shift', rtty.auto ? '' : String(rtty.shift));
+  mark('rttyBaud', 'baud', rtty.auto ? '' : String(rtty.baud));
+  const pk = Object.entries(RTTY_PRESETS).find(([, p]) => p.shift === rtty.shift && p.baud === rtty.baud
+    && p.encoding === rtty.encoding && p.inverted === rtty.inverted && !!p.auto === !!rtty.auto)?.[0] ?? '';
+  mark('rttyPreset', 'preset', pk);
   mark('rttyEnc', 'enc', rtty.encoding);
   const inv = $<HTMLButtonElement>('rttyInv');
   inv.classList.toggle('on', rtty.inverted);

@@ -168,6 +168,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/spyserver/spyserver_client.cpp"
     "${CPP_DIR}/spyserver/spyserver_messages.cpp"
     "${CPP_DIR}/decoders/fsk_decoder.cpp"
+    "${CPP_DIR}/decoders/rtty_auto.cpp"
     "${CPP_DIR}/decoders/wefax_decoder.cpp"
     "${CPP_DIR}/decoders/ft8_decoder.cpp"
     "${CPP_DIR}/decoders/sstv_decoder.cpp"

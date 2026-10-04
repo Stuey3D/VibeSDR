@@ -335,6 +335,7 @@ void FskDecoder::processBit(bool bit) {
                     setState(Sync1);          // codeBits stays: Sync1 slides it one bit at a time to the next frame
                     break;
                 }
+                if (ita2) goodFrames_++;
                 bool ok = processCharacter(codeBits);
                 if (ok) { if (errorCount > 0) errorCount--; }
                 else { errorCount++; if (errorCount > 2) syncSetup = true; }

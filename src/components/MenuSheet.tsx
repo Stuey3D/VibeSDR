@@ -1079,34 +1079,34 @@ function RttySettingsRows({ s, onChange }:
   { s: RttySettings; onChange: (s: RttySettings) => void }) {
   const presetKey = Object.entries(RTTY_PRESETS).find(([, p]) =>
     p.shift === s.shift && p.baud === s.baud &&
-    p.encoding === s.encoding && p.inverted === s.inverted)?.[0] ?? '';
+    p.encoding === s.encoding && p.inverted === s.inverted && !!p.auto === !!s.auto)?.[0] ?? '';
   return (
     <>
       <SubLabel label="Preset" />
       <OptRow>
-        {([['ham','HAM'],['weather','WX'],['sitor-b','SITOR-B']] as const).map(([k, l]) => (
+        {([['auto','AUTO'],['ham','HAM'],['weather','WX'],['sitor-b','SITOR-B']] as const).map(([k, l]) => (
           <SegBtn key={k} label={l} active={presetKey === k}
                   onPress={() => onChange({ ...RTTY_PRESETS[k] })} />
         ))}
       </OptRow>
       <SubLabel label="Shift (Hz)" />
       <OptRow>{[170, 200, 425, 450, 850].map(v => (
-        <SegBtn key={v} label={String(v)} active={s.shift === v}
-                onPress={() => onChange({ ...s, shift: v })} />
+        <SegBtn key={v} label={String(v)} active={!s.auto && s.shift === v}
+                onPress={() => onChange({ ...s, shift: v, auto: false })} />
       ))}</OptRow>
       <SubLabel label="Baud" />
       <OptRow>{[45.45, 50, 75, 100].map(v => (
-        <SegBtn key={v} label={String(v)} active={s.baud === v}
-                onPress={() => onChange({ ...s, baud: v })} />
+        <SegBtn key={v} label={String(v)} active={!s.auto && s.baud === v}
+                onPress={() => onChange({ ...s, baud: v, auto: false })} />
       ))}</OptRow>
       <SubLabel label="Encoding" />
       <OptRow>{(['ITA2', 'ASCII', 'CCIR476'] as const).map(v => (
         <SegBtn key={v} label={v} active={s.encoding === v}
-                onPress={() => onChange({ ...s, encoding: v })} />
+                onPress={() => onChange({ ...s, encoding: v, auto: false })} />
       ))}</OptRow>
       <OptRow>
         <Btn label={s.inverted ? 'INVERT: ON' : 'INVERT: OFF'} active={s.inverted}
-             onPress={() => onChange({ ...s, inverted: !s.inverted })} />
+             onPress={() => onChange({ ...s, inverted: !s.inverted, auto: false })} />
       </OptRow>
     </>
   );

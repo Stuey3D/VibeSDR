@@ -90,6 +90,8 @@ public:
     //   two can be compared directly instead of guessed at.
     unsigned long resyncs() const { return resyncCount_; }
     unsigned long framingErrors() const { return framingErrors_; }
+    /** ★ Frames that passed the start/stop check while decoding (ITA2) — RttyAuto scores candidates on this. */
+    unsigned long goodFrames() const { return goodFrames_; }
     double        audioLevel() const { return audioAverage; }
     double        audioThreshold() const { return audioMinimum; }
     int           stateNow() const { return (int)state; }
@@ -115,7 +117,7 @@ private:
     BiQuad biquadLpMark, biquadLpSpace;
     double markEnv = 0, spaceEnv = 0, noiseFloor = 0, symLen = 0;
     // ★ Framing errors in ReadData (ITA2) — each one re-hunts the start bit instead of printing garbage on.
-    unsigned long framingErrors_ = 0;
+    unsigned long framingErrors_ = 0, goodFrames_ = 0;
     int lockRequired_ = 2;
 
     State state = NoSignal;

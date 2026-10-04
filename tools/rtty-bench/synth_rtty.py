@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""synth_rtty.py — a DWD-style RTTY test signal (50 baud, 450 Hz shift, 5N1.5) with noise and SELECTIVE FADING
+"""synth_rtty.py  (env BAUD / CF / SHIFT override DWD's 50 / 1000 / 450)
+ — a DWD-style RTTY test signal (50 baud, 450 Hz shift, 5N1.5) with noise and SELECTIVE FADING
 (mark and space fade independently, as on HF). For checking rtty_wav before and after a decoder change.
   python3 synth_rtty.py out.wav [snr_db=10] [fade_depth_db=20] [seconds=120] [inverted=1] [seed=0]"""
 import sys, wave, numpy as np
 out = sys.argv[1]; snr = float(sys.argv[2]) if len(sys.argv) > 2 else 10; fd = float(sys.argv[3]) if len(sys.argv) > 3 else 20
 secs = float(sys.argv[4]) if len(sys.argv) > 4 else 120; inv = int(sys.argv[5]) if len(sys.argv) > 5 else 1
 seed = int(sys.argv[6]) if len(sys.argv) > 6 else 0
-FS, BAUD, CF, SH = 48000, 50.0, 1000.0, 450.0
+import os
+FS, BAUD, CF, SH = 48000, float(os.environ.get('BAUD', 50.0)), float(os.environ.get('CF', 1000.0)), float(os.environ.get('SHIFT', 450.0))
 L = {'E':1,'\n':2,'A':3,' ':4,'S':5,'I':6,'U':7,'\r':8,'D':9,'R':10,'J':11,'N':12,'F':13,'C':14,'K':15,'T':16,'Z':17,'L':18,'W':19,'H':20,'Y':21,'P':22,'Q':23,'O':24,'B':25,'G':26,'M':28,'X':29,'V':30}
 F = {'3':1,'-':3,'8':6,'7':7,'4':10,',':12,'!':13,':':14,'(':15,'5':16,'"':17,')':18,'2':19,'6':21,'0':22,'1':23,'9':24,'?':25,'&':26,'.':28,'/':29,';':30}
 LTRS, FIGS = 31, 27

@@ -134,6 +134,7 @@ add_library(vibelocalsdr SHARED
     ${AIRSPY_SRC}
     spyserver/spyserver_messages.cpp spyserver/spyserver_client.cpp
     decoders/fsk_decoder.cpp
+    decoders/rtty_auto.cpp
     decoders/wefax_decoder.cpp
     decoders/ft8_decoder.cpp
     decoders/sstv_decoder.cpp

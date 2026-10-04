@@ -3,9 +3,11 @@
 // real recording: build once against the old decoder and once against the new, run both on the same file.
 //
 //   rtty_wav in.wav [centre=1000] [shift=450] [baud=50] [framing=5N1.5] [inverted=1]
+//   rtty_wav in.wav auto        — RttyAuto: finds shift, centre, baud and polarity itself
 //   (DWD weather RTTY: 450 Hz shift, 50 baud, inverted — the app's 'weather' preset.)
 //   Convert first if needed:  ffmpeg -i rec.m4a -ac 1 -ar 48000 -c:a pcm_s16le in.wav
 #include "decoders/fsk_decoder.h"
+#include "decoders/rtty_auto.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +31,15 @@ int main(int argc, char** argv) {
     if (!pcm || bits != 16 || rate != 48000) { std::fprintf(stderr, "need 16-bit 48 kHz PCM (got %d-bit %d Hz) — convert with ffmpeg\n", bits, rate); return 1; }
     std::vector<int16_t> mono(frames);
     for (size_t i = 0; i < frames; i++) mono[i] = pcm[i * ch];
+    if (argc > 2 && std::string(argv[2]) == "auto") {
+        vibe::RttyAuto a(48000);
+        std::string out;
+        a.onChar = [&](char32_t c) { if (c == U'\r') return; out += c < 128 ? (char)c : '?'; };
+        for (size_t i = 0; i < mono.size(); i += 960) a.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
+        std::printf("%s\n", out.c_str());
+        std::fprintf(stderr, "── auto chose: %s", a.chosen().empty() ? "nothing\n" : a.chosen().c_str());
+        return 0;
+    }
     const double cf = argc > 2 ? std::atof(argv[2]) : 1000, sh = argc > 3 ? std::atof(argv[3]) : 450, baud = argc > 4 ? std::atof(argv[4]) : 50;
     const std::string fr = argc > 5 ? argv[5] : "5N1.5"; const bool inv = argc > 6 ? std::atoi(argv[6]) != 0 : true;
     vibe::FskDecoder d(48000, cf, sh, baud, fr, "ITA2", inv);

@@ -4442,7 +4442,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [closeDecoder, stopSpots, startSpotFlush]);
 
   // RTTY settings — applying requires a re-attach (server reads params at attach)
-  const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.ham });
+  const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.auto });
   /**
    * ★★★ REMEMBERED, because RTTY IS NOT ONE THING. The ham preset (170 shift, 45.45 baud) and the
    *     weather preset (450, 50, inverted) decode different stations, and a decoder pointed at the
@@ -4464,6 +4464,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             shift: p.shift, baud: p.baud,
             encoding: typeof p.encoding === 'string' ? p.encoding : 'ITA2',
             inverted: !!p.inverted,
+            auto: p.auto === true,
           };
           setRttySettings(next);
           if (decoderClient.current) decoderClient.current.rttySettings = { ...next };

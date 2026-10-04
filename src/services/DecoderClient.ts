@@ -93,10 +93,14 @@ export interface RttySettings {
   baud:     number;            // 45.45 | 50 | 75 | 100
   encoding: 'ITA2' | 'ASCII' | 'CCIR476';
   inverted: boolean;
+  /** ★★ AUTO (2026-10-04): the server finds shift, centre, baud and polarity from the signal (decoders/rtty_auto.h).
+   *  The other fields are still sent — an older server simply decodes with them. */
+  auto?:    boolean;
 }
 
-/** Skin RPRESETS, verbatim. */
+/** Skin RPRESETS, verbatim — plus AUTO, first and the default ("a one click use for users", Stuart 2026-10-04). */
 export const RTTY_PRESETS: Record<string, RttySettings> = {
+  auto:      { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false, auto: true },
   ham:       { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false },
   weather:   { shift: 450, baud: 50,    encoding: 'ITA2',    inverted: true  },
   'sitor-b': { shift: 170, baud: 100,   encoding: 'CCIR476', inverted: false },
@@ -233,7 +237,7 @@ export class DecoderClient {
   private retries   = 0;
 
   // Per-decoder user settings
-  rttySettings:  RttySettings = { ...RTTY_PRESETS.ham };
+  rttySettings:  RttySettings = { ...RTTY_PRESETS.auto };
   /** ★ Set from the tuned frequency before attaching — see timeStationFor. MSF is the default
    *  only because something must be; it is overwritten on every start. */
   timeStation:   TimeStation = 'msf';
@@ -592,6 +596,7 @@ export class DecoderClient {
           inverted: S.inverted,
           framing: S.encoding === 'CCIR476' ? '4/7' : '5N1.5',
           encoding: S.encoding,
+          ...(S.auto && S.encoding === 'ITA2' ? { auto: true } : {}),
         }};
       }
       case 'navtex':

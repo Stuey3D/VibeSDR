@@ -35,6 +35,7 @@
 //     starve another listener's RTTY either.
 #pragma once
 #include "decoders/fsk_decoder.h"
+#include "decoders/rtty_auto.h"
 #include "decoders/wefax_decoder.h"
 #include "decoders/sstv_decoder.h"
 #include "decoders/time_decoder.h"
@@ -359,11 +360,15 @@ public:
      *  on decoderKind: "attached" was once true while nothing had been constructed). */
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
-        return wefax_ ? "wefax" : sstv_ ? "sstv" : fsk_ ? "fsk" : time_ ? "time" : "none";
+        return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
         std::lock_guard<std::mutex> lk(decMtx_);
+        if (rttyAuto_) {
+            resyncs = rttyAuto_->resyncs(); level = rttyAuto_->audioLevel(); threshold = rttyAuto_->audioThreshold();
+            state = rttyAuto_->stateNow(); return true;
+        }
         if (!fsk_) return false;
         resyncs = fsk_->resyncs(); level = fsk_->audioLevel(); threshold = fsk_->audioThreshold(); state = fsk_->stateNow();
         return true;
@@ -425,7 +430,8 @@ private:
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
         for (const char* f : { "encoding", "framing", "station" }) { k += str(msg, f); k += ','; }
-        for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true" })
+        for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
+                               "\"auto\":true" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
         return k;
     }
@@ -451,9 +457,10 @@ private:
         return j.substr(p + 1, e - p - 1);
     }
 
-    bool running_() const { return fsk_ || wefax_ || sstv_ || time_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_; }
     void clearLocked_() {
         delete fsk_;   fsk_ = nullptr;
+        delete rttyAuto_; rttyAuto_ = nullptr;
         delete wefax_; wefax_ = nullptr;
         delete sstv_;  sstv_ = nullptr;
         delete time_;  time_ = nullptr;
@@ -568,6 +575,18 @@ private:
             std::string which = ext == "time" ? str(msg, "station") : ext;
             if (which.empty()) which = "msf";
             buildTimeLocked_(which);
+        } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
+            /* ★★ RTTY, ONE CLICK (Stuart, 2026-10-04: "auto config the baud and shift etc so again its a one click use"). The
+             *  shift, centre, baud and polarity are found from the signal (decoders/rtty_auto.h); what it chose is printed
+             *  into the text. A client that sends "auto" also sends a preset's values, which an older server simply uses. */
+            rttyAuto_ = new RttyAuto(48000);
+            rttyAuto_->onChar = [this](char32_t ch) {
+                std::lock_guard<std::mutex> bl(textMtx_);
+                if (ch < 0x80) textBuf_.push_back((char)ch);
+                else if (ch < 0x800) { textBuf_.push_back((char)(0xC0 | (ch >> 6))); textBuf_.push_back((char)(0x80 | (ch & 0x3F))); }
+            };
+            rttyAuto_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+            log("decoder attached: fsk auto");
         } else {
             const bool navtex = ext == "navtex";
             double cf, sh, baud;
@@ -750,6 +769,7 @@ private:
             //     channel, drained below (an early return once decoded perfectly and sent nothing).
             if (time_) time_->process(mono.data(), count);
             else if (fsk_) fsk_->process(mono.data(), count);
+            else if (rttyAuto_) rttyAuto_->process(mono.data(), count);
             { std::lock_guard<std::mutex> bl(textMtx_); text.swap(textBuf_); }
         }
         if (!text.empty()) textFrame(text);
@@ -780,6 +800,7 @@ private:
     std::mutex decMtx_;
     std::string name_, startKey_;
     FskDecoder*   fsk_   = nullptr;
+    RttyAuto*     rttyAuto_ = nullptr;   // ★ RTTY with "auto":true — finds shift, baud and polarity itself
     WefaxDecoder* wefax_ = nullptr;
     SstvDecoder*  sstv_  = nullptr;
     TimeDecoder*  time_  = nullptr;
