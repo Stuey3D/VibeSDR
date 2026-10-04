@@ -3475,11 +3475,34 @@ static double              g_radioBusyAt = 0.0;
  *    program is actively streaming from, and this project has already learned what talking to a
  *    busy radio costs (rtl_sdr tools, the usb nudge). The next real listener finds out for us. */
 static constexpr double    kRadioBusyTtlSec = 60.0;
+/* ★★★ KNOWN, NOT GUESSED — see LocalSdrShim::setRadioBusyHook. The daemon sets this only when the
+ *  USB bus proves another program holds the radio; it ages out with radioBusy. */
+static LocalSdrShim::RadioBusyHook g_radioBusyHook;          // guarded by g_radioBusyMtx
+static double                      g_radioInUseKnownAt = 0.0; // guarded by g_radioBusyMtx
+static std::string                 g_radioDisplayName;        // guarded by g_radioBusyMtx
 static void setRadioBusyReason(const std::string& why) {
+    LocalSdrShim::RadioBusyHook hook;
+    {
+        std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+        g_radioBusyWhy = why;
+        g_radioBusyAt  = why.empty() ? 0.0
+            : std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (why.empty()) g_radioInUseKnownAt = 0.0;   // ★ ours again: nothing to say any more
+        hook = g_radioBusyHook;
+    }
+    // ★ Outside the lock: the daemon reads the USB bus and calls setRadioInUseElsewhere back.
+    if (hook) hook(why);
+}
+static bool radioInUseElsewhereNow() {
     std::lock_guard<std::mutex> lk(g_radioBusyMtx);
-    g_radioBusyWhy = why;
-    g_radioBusyAt  = why.empty() ? 0.0
-        : std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (g_radioInUseKnownAt <= 0.0) return false;
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now - g_radioInUseKnownAt <= kRadioBusyTtlSec;
+}
+static std::string radioDisplayName() {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    return g_radioDisplayName;
 }
 static std::string radioBusyReason() {
     std::lock_guard<std::mutex> lk(g_radioBusyMtx);
@@ -4369,6 +4392,8 @@ static LocalSdrShim::BenchRunFn      g_vsBenchRun;
 static LocalSdrShim::BenchGetFn      g_vsBenchGet;
 static std::mutex                    g_vsBenchMtx;
 static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
+static LocalSdrShim::SdrChangesGetFn g_vsSdrChangesGet;   // ★ guarded by g_vsConfigMtx
+static LocalSdrShim::SdrChangeSetFn  g_vsSdrChangeSet;
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
@@ -16202,6 +16227,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/dabmot", 0) == 0
                 || path0.rfind("/vibeserver/auth", 0) == 0
                 || path0.rfind("/vibeserver/config", 0) == 0
+                // ★ The setup page's missing/new radio banner — the machine's USB bus, not a radio's.
+                || path0.rfind("/vibeserver/sdr-change", 0) == 0
                 || path0.rfind("/vibeserver/benchmark", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
                 || path0.rfind("/vibeserver/conditions", 0) == 0
@@ -17095,6 +17122,66 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             reply(200, "OK", j);
             return;
 
+        } else if (reqLine.rfind("GET /vibeserver/sdr-changes", 0) == 0 ||
+                   reqLine.rfind("POST /vibeserver/sdr-change", 0) == 0) {
+            /* ★★★ ADD / REPLACE / REMOVE / PAUSE A RADIO — ADMIN, AND ONLY FROM THE LOCAL NETWORK.
+             *  These delete a radio's settings, re-point them at different hardware, and walk the USB
+             *  bus on demand. An admin password is the gate for every config change; this one ALSO
+             *  requires being on the owner's own network, because it is about hardware you can only
+             *  act on standing next to the machine (Stuart, 2026-10-04).
+             *  ★★ NOT A NEW RULE: it is the raw-IQ "local network only" test — isPrivateIp() on the
+             *     RESOLVED address (so a tunnel visitor is their real, public address, and a proxied
+             *     client nobody could identify is TEST-NET and fails) — plus viaTunnel(), so a request
+             *     that came through cloudflared is refused even if its forwarded address looks local.
+             *  ★ Loopback passes isPrivateIp: the person at the machine is on its network. */
+            const bool isPost = reqLine.rfind("POST", 0) == 0;
+            LocalSdrShim::SdrChangesGetFn getFn; LocalSdrShim::SdrChangeSetFn setFn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); getFn = g_vsSdrChangesGet; setFn = g_vsSdrChangeSet; }
+            auto reply = [&](int code, const char* status, const std::string& body) {
+                sock->sendstr("HTTP/1.1 " + std::to_string(code) + " " + status +
+                              "\r\nContent-Type: application/json\r\nCache-Control: no-store"
+                              "\r\nConnection: close\r\nContent-Length: " +
+                              std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            if (!getFn || !setFn) {
+                reply(501, "Not Implemented", "{\"error\":\"this build does not manage radios\"}");
+                return;
+            }
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+            const std::string ip = sock->peerAddress();
+            const VsAdminProof pr = vsAdminProof(secret, reqLine);
+            if (!pr.ok || g_vsAuthState.blocked(ip)) {
+                if (!secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
+                reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
+                return;
+            }
+            g_vsAuthState.recordOk(ip);
+            if (!isPrivateIp(ip) || viaTunnel(*sock)) {
+                reply(403, "Forbidden", "{\"error\":\"lan-only\",\"lanOnly\":true}");
+                return;
+            }
+            if (!isPost) { reply(200, "OK", getFn()); return; }
+            const long long clen = contentLength;
+            if (clen <= 0 || clen > 16 * 1024) {
+                reply(400, "Bad Request", "{\"error\":\"missing or oversized body\"}");
+                return;
+            }
+            std::string body((size_t)clen, '\0');
+            size_t got = 0;
+            while (got < body.size()) {
+                int n = sock->recv((uint8_t*)&body[got], body.size() - got, false, 5000);
+                if (n <= 0) break;
+                got += (size_t)n;
+            }
+            if (got != body.size()) { reply(400, "Bad Request", "{\"error\":\"short body\"}"); return; }
+            int code = 200;
+            const std::string out = setFn(body, code);
+            LOGI("sdr-change by %s -> %d", ip.c_str(), code);
+            reply(code, code == 200 ? "OK" : code == 409 ? "Conflict" : "Bad Request", out);
+            return;
+
         } else if (reqLine.rfind("GET /vibeserver/config", 0) == 0 ||
                    reqLine.rfind("POST /vibeserver/config", 0) == 0) {
             const bool isPost = reqLine.rfind("POST", 0) == 0;
@@ -17652,6 +17739,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                               *    and a newer one reads absence as "nothing to say". */
                              + (radioBusyReason().empty() ? std::string()
                                   : ",\"radioBusy\":\"" + vibeadmin::esc(radioBusyReason()) + "\"")
+                             /* ★★★ AND WHEN WE KNOW IT IS ANOTHER PROGRAM, SAY SO PLAINLY — `radioBusy`
+                              *  is set on ANY failed take-back; this one only when the USB bus proved
+                              *  another program holds the radio (setRadioInUseElsewhere). Absent =
+                              *  unknown, never "free". */
+                             + (radioInUseElsewhereNow() ? std::string(",\"inUseElsewhere\":true") : std::string())
                              // ★★★ WHO MAY TUNE — the third usage mode. OMITTED when exclusive, so
                              //     an older client sees exactly what it saw before and a newer one
                              //     reads absence as "today's behaviour". Same rule as limitMode.
@@ -22889,6 +22981,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string j = std::string("{\"type\":\"device\",\"present\":") + (present ? "true" : "false");
         const std::string why = radioBusyReason();
         if (!present && !why.empty()) j += ",\"reason\":\"" + vibeadmin::esc(why) + "\"";
+        /* ★★★ KNOWN TO BE ANOTHER PROGRAM'S — the client then says, in Stuart's words, "<radio> is
+         *  currently in use with another app on this server and is not available, please try again
+         *  later." The name travels with it because the client may not have one (a direct link). */
+        if (!present && radioInUseElsewhereNow()) {
+            j += ",\"inUseElsewhere\":true";
+            const std::string nm = radioDisplayName();
+            if (!nm.empty()) j += ",\"radio\":\"" + vibeadmin::esc(nm) + "\"";
+        }
         return j + "}";
     }
     /** Tell every connected client whether we currently have a radio. They draw the message. */
@@ -25983,6 +26083,26 @@ void LocalSdrShim::setBenchmarkHandlers(BenchRunFn run, BenchGetFn get) {
     std::lock_guard<std::mutex> lk(g_vsBenchMtx);
     g_vsBenchRun = std::move(run);
     g_vsBenchGet = std::move(get);
+}
+
+void LocalSdrShim::setRadioBusyHook(RadioBusyHook hook) {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    g_radioBusyHook = std::move(hook);
+}
+void LocalSdrShim::setRadioInUseElsewhere(bool known) {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    g_radioInUseKnownAt = known ? std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count() : 0.0;
+}
+void LocalSdrShim::setRadioDisplayName(const std::string& name) {
+    std::lock_guard<std::mutex> lk(g_radioBusyMtx);
+    g_radioDisplayName = name.substr(0, 80);
+}
+
+void LocalSdrShim::setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsSdrChangesGet = std::move(get);
+    g_vsSdrChangeSet  = std::move(set);
 }
 
 void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
@@ -29901,10 +30021,16 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         // ★ BY SERIAL, NOT BY INDEX — findOurDevice refuses to grab a DIFFERENT dongle that has
         //   taken our slot while we were away. With three radios on one machine that matters.
         const int idx = impl->findOurDevice();
+        int rc = 0;
         if (idx < 0) { err = "the radio is not there"; }
-        else if (rtlsdr_open(&impl->dev, (uint32_t)idx) != 0 || !impl->dev) {
+        else if ((rc = rtlsdr_open(&impl->dev, (uint32_t)idx)) != 0 || !impl->dev) {
             impl->dev = nullptr;
-            err = "the radio is in use by another program on this machine";
+            /* ★★ ONLY LIBUSB_ERROR_BUSY (-6) IS "IN USE BY ANOTHER PROGRAM" — the kernel saying an
+             *  interface is claimed. Anything else is a radio that would not open, and calling that
+             *  "in use" is the guess Stuart ruled out (2026-10-04). The daemon's hook keys on this
+             *  exact sentence for an RTL. */
+            err = rc == -6 ? "the radio is in use by another program on this machine"
+                           : "the radio would not open (rtlsdr_open " + std::to_string(rc) + ")";
         } else {
             rtlsdr_set_sample_rate(impl->dev, (uint32_t)impl->sampleRate);
             // ★ Setting the rate re-derives the tuner's IF filter, so ours has to go back on.

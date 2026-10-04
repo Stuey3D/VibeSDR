@@ -1,5 +1,6 @@
 #include "vibeserver_config.h"
 #include <vector>
+#include <algorithm>
 
 #include <cstdio>
 #include <cstdlib>
@@ -444,6 +445,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("rspHdr", r.rspHdr); B("rspAmNotch", r.rspAmNotch); B("rspExtRef", r.rspExtRef);
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     B("enabled", r.enabled); B("configured", r.configured);
+    I("order", r.order);   // ★ display only — see RadioConfig::order. Written below too.
     I("port", r.port);
     // ★ SAME VOCABULARY AS THE TOP-LEVEL FIELD — "locked"/"single", not a second spelling.
     //   Mode is about the radio's WINDOW (does the owner pin it); how many people may listen is
@@ -509,6 +511,7 @@ std::string radioToJson(const RadioConfig& r) {
     //   the note further down records what a field in only one of them costs.
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     B("enabled", r.enabled); B("configured", r.configured);
+    N("order", r.order);
     N("port", r.port);
     S("mode", r.mode == Mode::LockedRange ? "locked" : "single");
     N("freq", r.freq); N("rate", r.rate); N("lockFreq", r.lockFreq); N("lockRate", r.lockRate);
@@ -748,8 +751,15 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
             RadioConfig incoming; radioFromJson(o, incoming);
             if (incoming.serial.empty()) continue;      // cannot be matched, cannot be trusted
             bool merged = false;
+            // ★ A page or app that predates the display order posts no `order`; that must not
+            //   undo an order the owner set. Absent keeps what is there — the patch rule above.
+            double ordN = 0;
+            const bool hasOrder = getNum(o, "order", ordN);
             for (auto& existing : c.radios)
-                if (existing.serial == incoming.serial) { existing = incoming; merged = true; break; }
+                if (existing.serial == incoming.serial) {
+                    if (!hasOrder) incoming.order = existing.order;
+                    existing = incoming; merged = true; break;
+                }
             if (!merged) c.radios.push_back(incoming);
         }
     }
@@ -796,6 +806,92 @@ int spectrogramRadio(const ServerConfig& cfg) {
     return -1;   // ★ A real answer: no radio can draw one, so the page must not pretend.
 }
 
+std::vector<size_t> displayOrder(const ServerConfig& cfg) {
+    std::vector<size_t> idx(cfg.radios.size());
+    for (size_t i = 0; i < idx.size(); i++) idx[i] = i;
+    auto key = [&](size_t i) -> long long {
+        return cfg.radios[i].order >= 0 ? cfg.radios[i].order : (long long)i;
+    };
+    std::stable_sort(idx.begin(), idx.end(), [&](size_t a, size_t b) { return key(a) < key(b); });
+    return idx;
+}
+
+bool validSerial(const std::string& s) {
+    if (s.empty() || s.size() > 64) return false;
+    auto alnum = [](unsigned char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+    };
+    const unsigned char first = (unsigned char)s[0];
+    if (!(alnum(first) || first == '_' || first == ':')) return false;
+    for (unsigned char ch : s)
+        if (!(alnum(ch) || ch == '.' || ch == '_' || ch == ':' || ch == '-')) return false;
+    return true;
+}
+
+bool applySdrChange(ServerConfig& cfg, const std::string& action, const std::string& serial,
+                    const std::string& newSerial, const std::string& newDriver,
+                    const std::string& newLabel, std::string& err) {
+    if (!validSerial(serial)) { err = "that is not a usable serial"; return false; }
+    auto find = [&](const std::string& s) -> int {
+        for (size_t i = 0; i < cfg.radios.size(); i++) if (cfg.radios[i].serial == s) return (int)i;
+        return -1;
+    };
+    if (action == "add") {
+        if (find(serial) >= 0) { err = "that radio is already set up here"; return false; }
+        if (newDriver.empty()) { err = "no driver for the new radio"; return false; }
+        RadioConfig nr;
+        nr.serial = serial; nr.driver = newDriver;
+        nr.label = newLabel.empty() ? newDriver : newLabel;
+        nr.enabled = true;       // ★ they plugged it in and pressed ADD: that is "serve it"
+        nr.configured = false;   // ★ …but it goes on air only once its tab is saved, as everywhere
+        cfg.radios.push_back(nr);
+        return true;
+    }
+    const int i = find(serial);
+    if (i < 0) { err = "no radio with that serial is set up here"; return false; }
+    auto& r = cfg.radios[(size_t)i];
+    if (action == "remove") {
+        // ★ Array order shifts; ports follow the array (portForRadio), exactly as they already do
+        //   when a radio is switched off. The display order of the rest is untouched.
+        cfg.radios.erase(cfg.radios.begin() + i);
+        return true;
+    }
+    if (action == "pause")  { r.enabled = false; return true; }
+    if (action == "resume") { r.enabled = true;  return true; }
+    if (action == "replace") {
+        if (!validSerial(newSerial)) { err = "the new radio's serial is not usable"; return false; }
+        if (find(newSerial) >= 0) { err = "the new radio is already set up here"; return false; }
+        if (!newDriver.empty() && newDriver != r.driver) {
+            err = "a radio can only be replaced by one of the same kind — its settings are for that driver";
+            return false;
+        }
+        r.serial = newSerial;
+        r.usbPath.clear();   // ★ the old socket says nothing about the new radio
+        return true;
+    }
+    err = "unknown action";
+    return false;
+}
+
+bool setDisplayOrder(ServerConfig& cfg, const std::vector<std::string>& serials, std::string& err) {
+    std::vector<int> pos(cfg.radios.size(), -1);
+    for (size_t k = 0; k < serials.size(); k++) {
+        int hit = -1;
+        for (size_t i = 0; i < cfg.radios.size(); i++)
+            if (cfg.radios[i].serial == serials[k]) { hit = (int)i; break; }
+        if (hit < 0) { err = "unknown radio in the order"; return false; }
+        if (pos[(size_t)hit] >= 0) { err = "a radio is listed twice in the order"; return false; }
+        pos[(size_t)hit] = (int)k;
+    }
+    // ★ Anything not listed follows, in its current display order — never dropped, never shuffled.
+    int next = (int)serials.size();
+    for (size_t i : displayOrder(cfg)) if (pos[i] < 0) pos[i] = next++;
+    for (size_t i = 0; i < cfg.radios.size(); i++) cfg.radios[i].order = pos[i];
+    return true;
+}
+
+/* ★★★ ARRAY ORDER, NEVER RadioConfig::order — see the note there. Reordering the cards on the setup
+ *  page must not make a different radio the primary. */
 int primaryRadio(const ServerConfig& cfg) {
     for (size_t i = 0; i < cfg.radios.size(); i++)
         if (cfg.radios[i].enabled && cfg.radios[i].configured) return (int)i;
@@ -803,6 +899,7 @@ int primaryRadio(const ServerConfig& cfg) {
 }
 
 int portForRadio(const ServerConfig& cfg, size_t index) {
+    // ★★★ ARRAY ORDER ONLY. RadioConfig::order is for display and must never move a port.
     const int base = cfg.port > 0 ? cfg.port : 48000;
     if (index >= cfg.radios.size()) return base;
     // ★ An explicit per-radio port always wins — an owner who pinned one did it for a router rule.

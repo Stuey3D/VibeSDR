@@ -558,7 +558,9 @@ void statusScreen(vsconfig::Config& cfg) {
          *     already working, which are also the ones we must not touch.
          *  ★★ ADD ONLY. A radio missing from this scan may simply be in use, or unplugged for a
          *     minute; removing it because it did not answer would throw away an owner's settings
-         *     for a temporary condition. Untick with space, delete in the browser.
+         *     for a temporary condition. Untick with space (= PAUSED: settings kept), then
+         *     delete in the browser — the setup page lists paused and missing radios above
+         *     its tabs with Remove (and Resume / Pause) beside each.
          *  ★ Matched on driver+serial. RTL dongles ship with duplicate default serials, which is
          *    what usbPath exists to break — so two identical unconfigured dongles will still read
          *    as one here. Rare, recoverable, and better than refusing to adopt anything. */

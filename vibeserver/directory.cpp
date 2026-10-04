@@ -435,6 +435,10 @@ std::string buildStatus(int port) {
                     //     looks like it should. Over loopback to ourselves it costs nothing.
                     const std::string rid = jsonStr(r, "id");
                     long long rmax = jsonNum(r, "users", 0);
+                    /* ★★★ IN USE BY ANOTHER APP ON THAT MACHINE — only when the server KNOWS (the
+                     *  front door's list, or the radio's own answer). The directory then shows the
+                     *  radio as unavailable rather than FREE or NOT RESPONDING. Absent = unknown. */
+                    bool inUse = jsonBool(r, "inUseElsewhere");
                     if (!rid.empty()) {
                         const std::string ri = httpGetLocal(port, "/r/" + rid + "/vibeserver.json");
                         // ★★ A RADIO THAT DID NOT ANSWER IS A RADIO STILL STARTING. After a reboot the
@@ -450,6 +454,7 @@ std::string buildStatus(int port) {
                             // ★ Whether this RADIO can decode DAB — its own answer, which is the only one
                             //   that knows its rate lock and band lists. Drives the DAB+ badge on the card.
                             j += std::string(",\"dab\":") + (jsonBool(ri, "dab") ? "true" : "false");
+                            if (jsonBool(ri, "inUseElsewhere")) inUse = true;
                             const long long fi = jsonNum(ri, "freeInSec", -1);
                             if (fi >= 0) j += ",\"freeInSec\":" + std::to_string(fi);
                             // ★ WHAT IT OFFERS — the directory's badges (raw IQ through the tunnel,
@@ -479,6 +484,7 @@ std::string buildStatus(int port) {
                         }
                     }
                     j += ",\"maxListeners\":" + std::to_string(rmax);
+                    if (inUse) j += ",\"inUseElsewhere\":true";
                     // ★★ WORDS in coverage, NUMBERS in ranges — see the note above.
                     auto arr = [&](const std::string& key) -> std::string {
                         const std::string k2 = "\"" + key + "\":";

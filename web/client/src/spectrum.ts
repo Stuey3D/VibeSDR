@@ -378,7 +378,8 @@ export interface SpectrumCallbacks {
   /** Lightning for THIS listener: flashes/min (0 = nothing to say), and how long ago. */
   onLightning?: (ratePerMin: number, agoSecs: number) => void;
   /** The server's radio was unplugged (false) or came back (true). */
-  onDevice?: (present: boolean, reason?: string) => void;
+  /** ★ `inUse` = the server KNOWS another program has the radio (inUseElsewhere); `radioName` names it. */
+  onDevice?: (present: boolean, reason?: string, inUse?: boolean, radioName?: string) => void;
   /** The owner's notice to listeners, pushed when it is posted or cleared ('' = nothing). */
   onNotice?: (text: string) => void;
   /** ★ The server host's battery — level, charging, the owner's floor, and whether it is suspended. */
@@ -1047,7 +1048,9 @@ export class SpectrumClient {
       case 'device':
         // The server has lost (or regained) its radio. Without this the page just stops updating
         // and looks broken — a black waterfall with working controls, which tells the user nothing.
-        this.cb.onDevice?.(msg.present !== false, typeof msg.reason === 'string' ? msg.reason : undefined);
+        this.cb.onDevice?.(msg.present !== false, typeof msg.reason === 'string' ? msg.reason : undefined,
+                           msg.inUseElsewhere === true,
+                           typeof msg.radio === 'string' ? msg.radio.slice(0, 80) : undefined);
         break;
       case 'summon':
         // The host machine is looking for this tab. Handled by main.ts (flash + focus attempt).

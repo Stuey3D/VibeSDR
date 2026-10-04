@@ -121,6 +121,26 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .bandChip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12.5px;background:#0a0704}
   .bandChip button{background:none;border:0;color:var(--dim);cursor:pointer;font-size:14px;padding:0 2px}
   .bandChip button:hover{color:var(--bad)}
+  /* ★ The missing / new radio notices. ALARM only for a radio that is gone or failed; a radio that
+     may simply be lent out is a NOTICE, and one known to be lent is a plain line — see sdrRender. */
+  .sdrCard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;
+           margin:0 0 12px;font-size:14px}
+  .sdrAlarm{border-color:var(--bad);background:rgba(255,107,94,.09)}
+  .sdrSoft{border-left:3px solid var(--amber)}
+  .sdrFound{border-color:#3c9a55}
+  .sdrLine{color:var(--dim);font-size:13.5px;margin:0 0 10px}
+  .sdrBtns{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  .sdrBtns button{padding:8px 14px;font-size:13.5px}
+  a.inl{color:var(--amber);text-decoration:underline;cursor:pointer}
+  /* ★ Radio order: press-and-hold cards. pan-y keeps an ordinary swipe scrolling the page; the
+     drag takes the finger only once the hold has lifted a card. */
+  .ordItem{display:flex;align-items:center;gap:10px;padding:10px 12px;margin:6px 0;
+           border:1px solid var(--line);border-radius:8px;background:#0a0704;cursor:grab;
+           user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:pan-y}
+  .ordItem.lift{border-color:var(--amber);box-shadow:0 6px 18px rgba(0,0,0,.55);cursor:grabbing;
+                position:relative;z-index:5}
+  .ordItem:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  .ordGrip{color:var(--dim);font-size:18px;line-height:1}
 </style>
 <div class="wrap">
   <h1>VibeServer</h1>
@@ -142,6 +162,18 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   <!-- ── 2. SETUP ────────────────────────────────────────────────────────── -->
   <div id="setup" class="hide">
     <p class="sub">Set this receiver up. You can change any of it later from Admin.</p>
+
+    <!-- ★★★ FRONT AND CENTRE: A RADIO THAT HAS GONE, OR ONE THAT HAS ARRIVED (Stuart, 2026-10-04).
+         Above the tabs, because a radio stuck restarting every five seconds is the first thing an
+         owner needs to know about this machine, and until now only the journal knew. Filled by
+         sdrChangesLoad() on sign-in and on "Check again" — never on a timer. -->
+    <div id="sdrChangesWrap" style="margin:6px 0 14px">
+      <div id="sdrChanges"></div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button type="button" class="ghost" id="sdrCheckAgain" style="padding:6px 12px;font-size:13px">Check again</button>
+        <span class="hint" id="sdrCheckMsg" style="margin:0"></span>
+      </div>
+    </div>
 
     <!-- ★★★ ONE TAB PER RADIO. Hidden entirely when there is only one, so a single-radio server's
          setup page is exactly the page it has always been. Each tab is the whole settings form for
@@ -168,6 +200,17 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            features off; everywhere else it is a button, because a full-sized box is assumed to cope.
            ★★ It is NOT free to run: the radio goes off the air for about two minutes and the server restarts
               afterwards, so the page says so before the owner presses it rather than after. -->
+      <!-- ★★ RADIO ORDER — display only. The tabs above, the landing page, the public directory and
+           the VibeSDR app list the radios in this order; no radio's port changes with it. -->
+      <div class="card" id="orderCard" style="display:none">
+      <h2>Radio order</h2>
+      <p class="why">The order your radios are listed in — on this page, on the landing page, in the public
+         directory and in the VibeSDR app. Press and hold a radio, then drag it into place (or select it and use
+         the arrow keys). Moving a radio here never changes its port.</p>
+      <div id="orderList" role="list"></div>
+      <div class="hint" id="orderMsg"></div>
+      </div>
+
       <div class="card" id="benchCard">
       <h2>What this box can carry</h2>
       <p class="why">Measures this machine with the real receiver, so the settings below can be set to what it
@@ -3563,9 +3606,21 @@ function refreshHw() {
   return hwPending;
 }
 
-/** The radios the owner ticked in the setup screen. A radio that was NOT ticked has no tab: it is
- *  not going to be served, and offering somewhere to configure it would say otherwise. */
-function radioList() { return Array.isArray(cfg.radios) ? cfg.radios.filter(r => r.enabled !== false) : []; }
+/** ★★★ EVERY RADIO IN THE CONFIG, PAUSED ONES INCLUDED, IN THE OWNER'S DISPLAY ORDER.
+ *  This used to drop a radio that was not enabled, on the reasoning that it was not going to be
+ *  served — but PAUSE (Stuart, 2026-10-04) is exactly "not served, settings kept", and a paused
+ *  radio that vanished from the page took its settings out of reach and left nothing to RESUME it
+ *  from. A paused tab is drawn as such (renderTabs) and the notice above the tabs resumes it.
+ *  ★★ Sorted by `order` (absent or -1 = its place in the file), stable — the same rule as the
+ *     server's vsconfig::displayOrder, so this page and the landing cards agree. curRadio is an
+ *     index into THIS list, which is why a re-order re-points it (orderSave). */
+function radioList() {
+  if (!Array.isArray(cfg.radios)) return [];
+  const key = (r, i) => (typeof r.order === "number" && r.order >= 0) ? r.order : i;
+  return cfg.radios.map((r, i) => [r, i])
+    .sort((a, b) => (key(a[0], a[1]) - key(b[0], b[1])) || (a[1] - b[1]))
+    .map(x => x[0]);
+}
 function radio()     { return radioList()[curRadio] || {}; }
 
 function renderTabs() {
@@ -3590,15 +3645,26 @@ function renderTabs() {
   tabs.innerHTML = serverTab + list.map((r, i) => {
     const on = i === curRadio;
     const ready = !!r.configured;
-    const dot = ready ? "" : " •";
+    // ★★ TWO MORE STATES (2026-10-04). PAUSED: grey, and says so — the owner chose it. MISSING: the
+    //    server says it is gone or failed (sdr-changes, alarm notices only — a radio that may just be
+    //    lent out is never highlighted), so its tab carries the warning even while it is selected.
+    const paused = r.enabled === false;
+    const missing = SDR_ALARM.has(r.serial);
+    const dot = paused ? " (paused)" : missing ? " ⚠" : ready ? "" : " •";
     const colour = on     ? "background:var(--amber);color:#000;border-color:var(--amber)"
+                 : paused ? "background:rgba(160,142,115,.10);color:var(--dim);border-color:var(--line);border-style:dashed"
+                 : missing ? "background:rgba(255,107,94,.18);color:#ff9b9b;border-color:var(--bad)"
                  : ready  ? "background:rgba(60,200,90,.14);color:#6ede8a;border-color:#3c9a55"
                           : "background:rgba(230,80,80,.14);color:#ff9b9b;border-color:#b04a4a";
-    return `<button type="button" data-i="${i}" title="${ready ? "Set up — will be served"
-                                                              : "Not set up yet — will not be served"}"`
-         + ` style="padding:6px 12px;border-radius:6px;border:1px solid;cursor:pointer;${colour}">`
-         + `${(r.label || r.driver || "Radio " + (i + 1))}${dot}</button>`;
+    const title = paused ? "Paused — VibeServer is not looking for it; every setting is kept"
+                : missing ? "Not detected — see the notice above"
+                : ready ? "Set up — will be served" : "Not set up yet — will not be served";
+    return `<button type="button" data-i="${i}" title="${title}"`
+         + ` style="padding:6px 12px;border-radius:6px;border:1px solid;cursor:pointer;${colour}`
+         + `${missing && on ? ";box-shadow:0 0 0 2px var(--bad)" : ""}">`
+         + `${esc(r.label || r.driver || "Radio " + (i + 1))}${dot}</button>`;
   }).join("");
+  renderOrder();
   Array.from(tabs.querySelectorAll("button")).forEach(b => {
     b.onclick = () => {
       // ★ Switching tabs KEEPS what you typed, in memory, so flipping between two radios to
@@ -3617,7 +3683,7 @@ function renderTabs() {
       if (curRadio >= 0) { fill(); refreshHw(); }
     };
   });
-  const unsaved = list.filter(r => !r.configured).length;
+  const unsaved = list.filter(r => !r.configured && r.enabled !== false).length;
   if (curRadio < 0) { hint.textContent = "Settings that belong to this machine, not to any one radio."; return; }
   hint.textContent = unsaved
     ? `Pick a radio to set it up. ${unsaved} still to do — a radio marked • is not on air yet.`
@@ -4511,6 +4577,8 @@ async function signIn(fromTicket) {
     //   meant two readers of one rule, and this one disagreed with the other on a single radio.
     renderTabs();
     fill();
+    // ★ Missing and newly attached radios — asked once now, and again only on "Check again".
+    sdrChangesLoad();
     // ★ Also picks up a change written BEFORE a reboot that has since happened — the page can
     //   then confirm it took, which is the whole point of keeping the marker on disk.
     serialStatus();
@@ -4527,6 +4595,287 @@ async function signIn(fromTicket) {
   } catch (e) { $("signinErr").textContent = "Could not reach the server."; }
 }
 
+// ── ★★★ RADIOS THAT HAVE GONE, RADIOS THAT HAVE ARRIVED (Stuart, 2026-10-04) ───────────────────
+//
+// A radio in the config whose serial is not attached used to be known only to the journal: its
+// process exited, systemd started it again five seconds later, for ever. The owner, looking at
+// THIS page, saw nothing. And a dongle plugged in after setup was noticed by nothing at all.
+//
+// ★★ ASKED WHEN THE PAGE OPENS AND WHEN THE OWNER PRESSES "Check again" — NEVER ON A TIMER. The
+//    server walks the USB bus to answer, and repeated probing has disturbed running radios before.
+// ★★★ THE SERVER DECIDES WHICH NOTICE, NOT THIS PAGE. Whether a radio is unplugged or merely LENT
+//     to another program is judged there with the USB bus as witness (sdr_presence.h), and Stuart's
+//     hard rule is that a radio on loan is never called unplugged. This page only draws the answer.
+// ★ ADMIN and LOCAL-NETWORK only, on the server. From outside the LAN the page says so and offers
+//   nothing — these actions are about hardware you can only fix standing next to it.
+let SDR = null;                 // the last /vibeserver/sdr-changes answer
+let SDR_ALARM = new Set();      // serials whose tab is highlighted as missing
+
+function sdrName(x) { return x.label || x.name || x.driver || "Radio"; }
+
+async function sdrChangesLoad() {
+  const box = $("sdrChanges"), msg = $("sdrCheckMsg");
+  msg.textContent = "Checking…";
+  try {
+    const r = await fetch("/vibeserver/sdr-changes?" + await authQuery(), {cache: "no-store"});
+    if (r.status === 403) {
+      SDR = null; SDR_ALARM = new Set();
+      box.innerHTML = '<div class="hint">Missing and newly attached radios can only be managed from '
+                    + 'this server’s own network.</div>';
+      msg.textContent = "";
+      $("sdrCheckAgain").hidden = true;
+      renderTabs();
+      return;
+    }
+    if (!r.ok) { msg.textContent = "Could not check (" + r.status + ")."; return; }
+    SDR = await r.json();
+  } catch (e) { msg.textContent = "Could not check — " + ((e && e.message) || e); return; }
+  msg.textContent = "";
+  sdrRender();
+  renderTabs();
+}
+
+function sdrRender() {
+  const box = $("sdrChanges");
+  if (!SDR) { box.innerHTML = ""; return; }
+  SDR_ALARM = new Set();
+  const out = [];
+  const btn = (act, serial, text, extra) =>
+    `<button type="button" data-sdr="${act}" data-serial="${esc(serial)}"${extra || ""}>${text}</button>`;
+  const ghost = (act, serial, text, extra) =>
+    `<button type="button" class="ghost" data-sdr="${act}" data-serial="${esc(serial)}"${extra || ""}>${text}</button>`;
+  for (const m of (SDR.missing || [])) {
+    const n = esc(sdrName(m)), s = esc(m.serial);
+    if (m.notice === "missing") {
+      SDR_ALARM.add(m.serial);
+      // ★★★ STUART'S WORDS, EXACTLY — the "click here"s are live, and so are the buttons under them.
+      //     "…or the radio may have failed" only when the bus cannot PROVE it is gone: then it is
+      //     on the bus and not opening, or unknowable, and a cable is not the only suspect.
+      const failed = m.variant === "failed" ? ", or the radio may have failed" : "";
+      out.push(`<div class="sdrCard sdrAlarm">${n}: Serial Number ${s} is not detected, please check the USB `
+        + `connection${failed}. If the SDR has been intentionally removed then `
+        + `<a class="inl" data-sdr="remove" data-serial="${s}" tabindex="0">click here</a> to remove it. `
+        + `If it has only temporarily been removed for use in another project etc `
+        + `<a class="inl" data-sdr="pause" data-serial="${s}" tabindex="0">click here</a> to pause VibeServer `
+        + `looking for it, your settings will be saved and applied again when you select it again.`
+        + `<div class="sdrBtns">${btn("remove", m.serial, "REMOVE")}${ghost("pause", m.serial, "PAUSE")}</div></div>`);
+    } else if (m.notice === "soft") {
+      // ★ A radio set to be RELEASED whose driver cannot tell unplugged from lent: most likely on
+      //   loan, so a notice, not the alarm — and no highlighted tab.
+      out.push(`<div class="sdrCard sdrSoft"><b>${n} (serial ${s}) can’t be seen right now.</b><br>`
+        + `It’s set to be released when VibeServer isn’t using it, and its driver can’t tell us `
+        + `whether it has been unplugged or is simply in use by another program. If another program is `
+        + `using it, you can ignore this. If you’ve unplugged it, choose what VibeServer should do:`
+        + `<div class="sdrBtns">${ghost("remove", m.serial, "Remove it")}`
+        + `${ghost("pause", m.serial, "Pause it — keep its settings")}</div></div>`);
+    } else if (m.notice === "inuse") {
+      // ★★ KNOWN to be held by another program. Released: that is the deal, a plain line. Not
+      //    released: something TOOK it — an app left running over SSH that grabs the dongle at boot
+      //    is the case Stuart named — so it is a problem with a fix.
+      const who = m.holder ? ` (${esc(m.holder)})` : "";
+      out.push(m.release
+        ? `<div class="sdrLine">${n} in use with another app on this server${who}</div>`
+        : `<div class="sdrCard sdrSoft">${n} is in use by another app on this server${who}, so VibeServer `
+          + `cannot serve it. Stop that app (or set this radio to be released when not in use) and `
+          + `VibeServer will pick it up again.</div>`);
+    }
+  }
+  for (const p of (SDR.paused || [])) {
+    out.push(`<div class="sdrCard sdrPaused"><b>${esc(sdrName(p))}</b> (serial ${esc(p.serial)}) is paused — `
+      + `VibeServer is not looking for it, and every setting is kept.`
+      // ★ Remove beside Resume: pausing (here, or unticking in the TUI) then removing is how a radio
+      //   that is still attached is deleted — the TUI tells owners to "delete in the browser".
+      + `<div class="sdrBtns">${btn("resume", p.serial, "RESUME")}${ghost("remove", p.serial, "Remove")}</div></div>`);
+  }
+  for (const f of (SDR.found || [])) {
+    const n = esc(f.name || f.driver), s = esc(f.serial);
+    if (f.collides) {
+      // ★★ TWO DONGLES, ONE SERIAL — stock RTLs all ship as 00000001. Guessing which settings belong
+      //    to which is how a locked range lands on the wrong receiver, so do not offer to.
+      out.push(`<div class="sdrCard sdrSoft">VibeServer has found a new SDR: ${n}, serial ${s} — but another `
+        + `radio on this machine answers to the same serial, so VibeServer cannot tell them apart. Give one `
+        + `of them a new serial with <b>Change this dongle’s serial</b> on its tab, reboot, then Check again.</div>`);
+      continue;
+    }
+    const repl = (f.replace || []).map(t =>
+      ghost("replace", t.serial, `REPLACE ‘${esc(t.label || t.serial)}’ (not found)`,
+            ` data-new="${s}"`)).join("");
+    out.push(`<div class="sdrCard sdrFound">VibeServer has found a new SDR: ${n}, serial ${s}`
+      + `<div class="sdrBtns">${btn("add", f.serial, "ADD AS A NEW RADIO")}${repl}</div></div>`);
+  }
+  box.innerHTML = out.length ? out.join("")
+    : '<div class="hint">No missing or newly attached radios.</div>';
+  Array.from(box.querySelectorAll("[data-sdr]")).forEach(el => {
+    const go = () => sdrAct(el.getAttribute("data-sdr"), el.getAttribute("data-serial"),
+                            el.getAttribute("data-new") || "");
+    el.onclick = go;
+    if (el.tagName === "A") el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } };
+  });
+}
+
+/** Re-read the radios after a change, KEEPING what has been typed: the machine's fields and every
+ *  radio still present keep their in-page edits; only what the action changed comes from the file. */
+async function sdrReloadRadios() {
+  stashRadio(); stashServer();
+  const r = await fetch("/vibeserver/config?" + await authQuery(), {cache: "no-store"});
+  if (!r.ok) return;
+  const fresh = await r.json();
+  const local = new Map((cfg.radios || []).map(x => [x.serial, x]));
+  cfg.radios = (fresh.radios || []).map(fr => {
+    const l = local.get(fr.serial);
+    if (!l) return fr;
+    l.enabled = fr.enabled; l.order = fr.order; l.usbPath = fr.usbPath;
+    return l;
+  });
+  curRadio = -1;
+  renderTabs(); fill(); paintPanes();
+}
+
+async function sdrAct(action, serial, newSerial) {
+  const msg = $("sdrCheckMsg");
+  const rad = (cfg.radios || []).find(x => x.serial === serial);
+  const name = rad ? (rad.label || rad.driver) : serial;
+  if (action === "remove" && !confirm(`Remove ${name} (serial ${serial}) and all of its settings? `
+                                      + "This cannot be undone. Pause keeps its settings instead.")) return;
+  if (action === "replace" && !confirm(`Move every setting of ${name} onto the new radio (serial ${newSerial})?`)) return;
+  msg.textContent = "Working…";
+  Array.from($("sdrChanges").querySelectorAll("button")).forEach(b => b.disabled = true);
+  let j = {};
+  try {
+    const r = await fetch("/vibeserver/sdr-change?" + await authQuery(), {
+      method: "POST", body: JSON.stringify({action, serial, newSerial})});
+    j = await r.json().catch(() => ({}));
+    if (!r.ok) { msg.textContent = j.error || ("Refused (" + r.status + ")."); sdrRender(); return; }
+  } catch (e) { msg.textContent = "Failed — " + ((e && e.message) || e); sdrRender(); return; }
+  await sdrReloadRadios();
+  if (!j.restart) {
+    msg.textContent = action === "add" ? "Added. Set it up on its tab and save it to put it on air." : "Done.";
+    sdrChangesLoad();
+    return;
+  }
+  // ★ The same restart the footer's Apply button uses, so the radios' processes follow the change.
+  msg.textContent = "Done. VibeServer is restarting so the radios follow the change…";
+  for (let i = 0; i < 90; i++) {
+    await new Promise(res => setTimeout(res, 1000));
+    try {
+      const s = await (await fetch("/vibeserver.json", {cache: "no-store"})).json();
+      if (s.instance && s.instance !== BOOT_ID) { BOOT_ID = s.instance; break; }
+    } catch (e) { /* down while it restarts — expected */ }
+  }
+  msg.textContent = "";
+  // ★ A moment for the radios behind the door to start (or fail) before asking again.
+  setTimeout(sdrChangesLoad, 6000);
+}
+
+// ── ★★ RADIO ORDER — display only (RadioConfig::order) ───────────────────────────────────────────
+// The tabs here, the landing cards, the public directory and the app's picker all follow it; no
+// radio's PORT does (portForRadio stays array-based). Press and hold, then drag — pointer events,
+// so it is the same code for a mouse, a finger and a pen; or focus a card and use the arrow keys.
+// ★ Hold first, THEN drag: on a phone a plain swipe must still scroll the page.
+function renderOrder() {
+  const list = $("orderList"), card = $("orderCard");
+  const rs = radioList();
+  card.style.display = rs.length > 1 ? "" : "none";
+  list.innerHTML = rs.map(r =>
+    `<div class="ordItem" role="listitem" tabindex="0" data-serial="${esc(r.serial)}"`
+    + ` aria-label="${esc(r.label || r.driver)} — press and hold to drag, or use the arrow keys">`
+    + `<span class="ordGrip" aria-hidden="true">≡</span><span>${esc(r.label || r.driver)}</span>`
+    + `<span class="hint" style="margin:0 0 0 auto">${r.enabled === false ? "paused" : esc(r.driver)}</span></div>`
+  ).join("");
+  Array.from(list.children).forEach(orderWire);
+}
+
+let ORDER_DRAG = null;
+function orderWire(el) {
+  el.addEventListener("pointerdown", e => {
+    if (e.button !== undefined && e.button !== 0) return;
+    const st = {el, id: e.pointerId, x: e.clientX, y: e.clientY, live: false};
+    st.timer = setTimeout(() => {
+      st.live = true;
+      el.classList.add("lift");
+      try { el.setPointerCapture(st.id); } catch (_) {}
+      if (navigator.vibrate) try { navigator.vibrate(15); } catch (_) {}
+    }, 350);
+    ORDER_DRAG = st;
+  });
+  el.addEventListener("pointermove", e => {
+    const st = ORDER_DRAG;
+    if (!st || st.el !== el || e.pointerId !== st.id) return;
+    if (!st.live) {
+      // ★ Moved before the hold landed: that was a scroll or a click, not a drag.
+      if (Math.abs(e.clientX - st.x) > 8 || Math.abs(e.clientY - st.y) > 8) { clearTimeout(st.timer); ORDER_DRAG = null; }
+      return;
+    }
+    e.preventDefault();
+    const list = el.parentNode;
+    const others = Array.from(list.children).filter(c => c !== el);
+    let before = null;
+    for (const c of others) {
+      const b = c.getBoundingClientRect();
+      if (e.clientY < b.top + b.height / 2) { before = c; break; }
+    }
+    if (before !== el.nextSibling) list.insertBefore(el, before);
+  });
+  const end = () => {
+    const st = ORDER_DRAG;
+    if (!st || st.el !== el) return;
+    clearTimeout(st.timer);
+    ORDER_DRAG = null;
+    if (!st.live) return;
+    el.classList.remove("lift");
+    orderSave();
+  };
+  el.addEventListener("pointerup", end);
+  el.addEventListener("pointercancel", end);
+  // ★ Once a hold has lifted the card, the finger belongs to the drag, not to the page's scroll.
+  el.addEventListener("touchmove", e => { if (ORDER_DRAG && ORDER_DRAG.live && ORDER_DRAG.el === el) e.preventDefault(); },
+                      {passive: false});
+  el.addEventListener("contextmenu", e => { if (ORDER_DRAG) e.preventDefault(); });
+  el.addEventListener("keydown", e => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+    e.preventDefault();
+    const list = el.parentNode;
+    if (e.key === "ArrowUp" && el.previousElementSibling) list.insertBefore(el, el.previousElementSibling);
+    else if (e.key === "ArrowDown" && el.nextElementSibling) list.insertBefore(el.nextElementSibling, el);
+    else return;
+    el.focus();
+    clearTimeout(ORDER_KEY_TIMER);
+    ORDER_KEY_TIMER = setTimeout(orderSave, 600);   // ★ one save for a run of key presses
+  });
+}
+let ORDER_KEY_TIMER = 0;
+
+async function orderSave() {
+  const serials = Array.from($("orderList").children).map(c => c.getAttribute("data-serial"));
+  const msg = $("orderMsg");
+  msg.textContent = "Saving the order…";
+  try {
+    const r = await fetch("/vibeserver/sdr-change?" + await authQuery(),
+                          {method: "POST", body: JSON.stringify({action: "order", order: serials})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      msg.textContent = r.status === 403 ? "The order can only be changed from this server’s own network."
+                                         : (j.error || ("Could not save the order (" + r.status + ")."));
+      renderOrder();
+      return;
+    }
+  } catch (e) { msg.textContent = "Could not save the order — " + ((e && e.message) || e); renderOrder(); return; }
+  // ★★ STASH BEFORE THE LIST MOVES. curRadio is an index into radioList(), which follows the order —
+  //    stashing after would copy the open form into whichever radio now sits at that index.
+  const oldCur = curRadio;
+  const keep = curRadio >= 0 ? radioList()[curRadio] : null;
+  stashRadio();
+  // ★ Keep the page's copy in step, or the next settings save would post the OLD positions back.
+  serials.forEach((s, i) => { const r = (cfg.radios || []).find(x => x.serial === s); if (r) r.order = i; });
+  if (keep) {
+    curRadio = radioList().indexOf(keep);
+    if (formRadio === oldCur) formRadio = curRadio;
+  }
+  msg.textContent = "Saved — listeners see the new order straight away.";
+  renderTabs();
+}
+
+$("sdrCheckAgain").addEventListener("click", () => sdrChangesLoad());
 $("benchRun").addEventListener("click", () => benchRun(false));
 $("signinBtn").onclick = () => signIn(false);
 

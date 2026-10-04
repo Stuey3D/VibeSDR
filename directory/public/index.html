@@ -1462,6 +1462,15 @@ function radioLine(r, s) {
   //     is precisely the failed connection this whole arrangement exists to avoid. So: greyed, a
   //     padlock, and the PIN box above the list is the way in.
   const url = radioUrl(r, s);
+  /* ★★★ IN USE BY ANOTHER APP ON THAT SERVER (Stuart, 2026-10-04) — said only when the server KNOWS
+   *  (`inUseElsewhere`), and like a locked radio it is shown, greyed, and links nowhere: there is
+   *  nothing a visitor can do with it until the other program lets go. */
+  if (radioInUse(r, s)) {
+    return `<div class="rcard rcLocked" title="Another app on this server is using this receiver">
+        ${card.replace(/^<div class="rcard">/, '').replace(/<\/div>$/, '')}
+        <div class="rcStateRow"><span class="rcState full">IN USE BY ANOTHER APP</span></div>
+      </div>`;
+  }
   if (radioGated(r, s)) {
     return `<div class="rcard rcLocked" title="This receiver needs a PIN — enter it above">
         ${card.replace(/^<div class="rcard">/, '').replace(/<\/div>$/, '')}
@@ -1900,8 +1909,15 @@ function renderModeBar() {
  *     cards, and the same rule as client_infers_server_decisions.
  */
 
+/** ★ Known to be held by another program on its server — the server's word, never inferred here. */
+function radioInUse(r, s) {
+  const solo = !!(s && Array.isArray(s.radios) && s.radios.length === 1);
+  return !!(r && (r.inUseElsewhere === true || (solo && s && s.inUseElsewhere === true)));
+}
+
 /** One radio's slot state: true free, false busy, null nobody said. */
 function radioFree(r, s) {
+  if (radioInUse(r, s)) return false;
   // ★ A SINGLE-RADIO SERVER IS ITS RADIO — the one case where the machine's figures state a fact
   //   about the receiver rather than assume one. Anything else must have said it per radio.
   const solo = !!(s && Array.isArray(s.radios) && s.radios.length === 1);
@@ -3435,6 +3451,7 @@ async function withLiveCounts(servers) {
         if (Number.isFinite(j.maxUsers))  rad.maxListeners = Number(j.maxUsers);
         if (Number.isFinite(j.freeInSec)) rad.freeInSec = Number(j.freeInSec);
         if (typeof j.claimable === 'boolean') rad.claimable = j.claimable;
+        rad.inUseElsewhere = j.inUseElsewhere === true;   // ★ live answer: absent = not known now
       }
       if (radios.length > 1) {
         await Promise.all(radios.slice(0, 6).map(async (rad) => {
@@ -3458,6 +3475,8 @@ async function withLiveCounts(servers) {
             //     soft limit and a new user can connect and displace me but the website doesnt
             //     show that"). A wrong FULL turns people away from a radio they could have had.
             if (typeof rj.claimable === 'boolean') rad.claimable = rj.claimable;
+            // ★ The radio's own live word on whether another program has it (absent = not known now).
+            rad.inUseElsewhere = rj.inUseElsewhere === true;
           } catch { /* ★ keep the listing's figure — one slow radio is not news about the rest */ }
         }));
       }

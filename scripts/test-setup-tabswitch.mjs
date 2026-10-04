@@ -84,6 +84,9 @@ const page = new Function(`${js}
            get curRadio(){return curRadio}, set curRadio(v){curRadio=v},
            get formRadio(){ return typeof formRadio === "undefined" ? null : formRadio },
            stashRadio, fill, collectRadio,
+           radioList: (typeof radioList === "function") ? radioList : null,
+           sdrRender: (typeof sdrRender === "function") ? sdrRender : null,
+           set SDR(v){ SDR = v }, get SDR_ALARM(){ return SDR_ALARM },
            refreshHw: (typeof refreshHw === "function") ? refreshHw : null };`)();
 
 console.log('\nSwitching tabs must not carry a rate between radios');
@@ -157,6 +160,68 @@ console.log('\nThe SERVER tab has no radio, and must not try to mark one');
   } catch (e) { threw = e; }
   ok(!threw, '★★★ marking configured from the server tab does not throw', String(threw));
   ok(list[0].configured === true, 'and the radio is left exactly as it was');
+}
+
+// ★★★ MISSING / NEW RADIOS AND THE DISPLAY ORDER (Stuart, 2026-10-04). The server decides which
+//     notice a radio gets (sdr_presence.h); the page must draw exactly that, in Stuart's words,
+//     highlight a tab ONLY for the alarm, and keep a PAUSED radio on the page.
+console.log('\nPaused radios stay on the page, in the owner\'s order');
+{
+  page.cfg = { name: 't', radios: [
+    { serial: 'A', driver: 'rtlsdr', label: 'First in file', order: 2, enabled: true },
+    { serial: 'B', driver: 'sdrplay', label: 'Paused one', order: 0, enabled: false },
+    { serial: 'C', driver: 'airspyhf', label: 'No order set' },
+  ] };
+  const l = page.radioList();
+  ok(l.length === 3, '★★ a paused (enabled:false) radio still has a tab', String(l.length));
+  ok(l.map((r) => r.serial).join() === 'B,A,C', '★ tabs follow `order`; unset = its place in the file; ties keep file order (as vsconfig::displayOrder)',
+     l.map((r) => r.serial).join());
+}
+
+console.log('\nThe notices: the server decides, the page draws it in Stuart\'s words');
+{
+  page.SDR = {
+    missing: [
+      { serial: '00000003', driver: 'rtlsdr', label: 'RTL-SDR Blog V4', release: false, notice: 'missing', variant: 'absent' },
+      { serial: '00000004', driver: 'rtlsdr', label: 'Second V4', release: false, notice: 'missing', variant: 'failed' },
+      { serial: 'DD52B980BE4946DA', driver: 'airspyhf', label: 'Airspy HF+', release: true, notice: 'soft' },
+      { serial: 'R1', driver: 'sdrplay', label: 'RSP1B', release: true, notice: 'inuse' },
+      { serial: 'R2', driver: 'sdrplay', label: 'RSPdx', release: false, notice: 'inuse' },
+    ],
+    paused: [{ serial: 'P1', driver: 'rtlsdr', label: 'Paused V4', presence: 'absent' }],
+    found: [
+      { serial: '00000009', driver: 'rtlsdr', name: 'RTL-SDR Blog V4', collides: false,
+        replace: [{ serial: '00000003', label: 'RTL-SDR Blog V4', paused: false }] },
+      { serial: '00000001', driver: 'rtlsdr', name: 'Generic RTL', collides: true, replace: [] },
+    ],
+  };
+  page.sdrRender();
+  const h = $el('sdrChanges').innerHTML;
+  const text = h.replace(/<[^>]+>/g, '');
+  ok(text.includes('RTL-SDR Blog V4: Serial Number 00000003 is not detected, please check the USB connection. '
+     + 'If the SDR has been intentionally removed then click here to remove it. If it has only temporarily been '
+     + 'removed for use in another project etc click here to pause VibeServer looking for it, your settings will '
+     + 'be saved and applied again when you select it again.'), '★★★ the missing radio, word for word');
+  ok(text.includes('Second V4: Serial Number 00000004 is not detected, please check the USB connection, or the radio may have failed.'),
+     '★ "or the radio may have failed" when the bus cannot prove it is gone');
+  ok(/data-sdr="remove" data-serial="00000003"/.test(h) && /data-sdr="pause" data-serial="00000003"/.test(h),
+     'REMOVE and PAUSE act on that radio');
+  ok(text.includes('Airspy HF+ (serial DD52B980BE4946DA) can’t be seen right now.')
+     && text.includes('It’s set to be released when VibeServer isn’t using it'),
+     '★★ release ON + cannot tell → the softer notice');
+  ok(text.includes('RSP1B in use with another app on this server'), '★★ known in use, release ON → a plain line');
+  ok(!/data-serial="R1"/.test(h), '  …with no Remove or Pause beside it');
+  ok(text.includes('RSPdx is in use by another app on this server, so VibeServer cannot serve it. Stop that app'),
+     '★★ known in use, release OFF → a problem to fix');
+  ok(text.includes('Paused V4') && /data-sdr="resume" data-serial="P1"/.test(h), 'a paused radio offers RESUME');
+  ok(text.includes('VibeServer has found a new SDR: RTL-SDR Blog V4, serial 00000009')
+     && /data-sdr="add" data-serial="00000009"/.test(h), 'a new radio offers ADD AS A NEW RADIO');
+  ok(/data-sdr="replace" data-serial="00000003" data-new="00000009"/.test(h) && text.includes('REPLACE ‘RTL-SDR Blog V4’ (not found)'),
+     'and REPLACE against the missing radio of the same driver');
+  ok(text.includes('answers to the same serial') && !/data-serial="00000001"/.test(h),
+     '★ a colliding serial points at the rename control and offers no button');
+  const alarm = [...page.SDR_ALARM].sort().join();
+  ok(alarm === '00000003,00000004', '★★ only the ALARM highlights a tab — not the soft or in-use ones', alarm);
 }
 
 console.log(fail ? `\n${fail} FAILED\n` : '\nall good\n');

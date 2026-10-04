@@ -908,7 +908,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    radio, so it is the only honest source. In parallel, and failures simply stay unknown: a
    *    radio that does not answer must not be labelled free.
    */
-  const [radioBusy, setRadioBusy] = useState<Record<string, { busy: boolean; freeInSec: number; dab?: boolean }>>({});
+  const [radioBusy, setRadioBusy] = useState<Record<string, { busy: boolean; freeInSec: number; dab?: boolean; inUse?: boolean }>>({});
   useEffect(() => {
     if (!door || !door.radios.length) { setRadioBusy({}); return; }
     /* ★★★ ONLY WHILE THE PICKER IS ON SCREEN — which is what the note below always said, and the
@@ -923,11 +923,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       door.radios.forEach((r) => {
         fetchOccupancy(radioBaseUrl(baseUrl, r.id)).then((o) => {
           if (dead || !o) return;
-          const next = { busy: o.busy, freeInSec: o.freeInSec, dab: o.dab === true };
+          const next = { busy: o.busy, freeInSec: o.freeInSec, dab: o.dab === true, inUse: o.inUseElsewhere === true };
           // ★ An unchanged answer keeps the same object, so it re-renders nothing.
           setRadioBusy((prev) => {
             const cur = prev[r.id];
             return cur && cur.busy === next.busy && cur.freeInSec === next.freeInSec && cur.dab === next.dab
+                       && cur.inUse === next.inUse
               ? prev : { ...prev, [r.id]: next };
           });
         }).catch(() => {});
@@ -9786,7 +9787,13 @@ export default function SDRScreen({ route, navigation }: Props) {
              *    they are independent on purpose — the server would refuse the socket, so offering
              *    the row would only offer a refusal. The box below takes their PIN like anyone's. */
             const gated = r.pinLocked === true && !unlockedRadios[r.id];
-            const blocked = (busy && !adminAuthQ) || unsupported || gated;
+            /* ★★★ ANOTHER APP ON THAT SERVER HAS IT — the door's list says so even when the radio's own
+             *  process cannot answer (an app that grabbed the dongle at boot), and the radio says so
+             *  when it lent the device out and could not take it back. Only when the server KNOWS.
+             *  Not selectable for anyone, owner included: no password takes a device from another
+             *  program (Stuart, 2026-10-04). */
+            const inUseApp = r.inUseElsewhere === true || radioBusy[r.id]?.inUse === true;
+            const blocked = (busy && !adminAuthQ) || unsupported || gated || inUseApp;
             return (
               <Pressable
                 key={r.id}
@@ -9827,13 +9834,16 @@ export default function SDRScreen({ route, navigation }: Props) {
                   {/* ★★★ SAID INSTEAD OF THE OCCUPANCY, NEVER BESIDE IT. "FREE · PIN REQUIRED"
                       invites the tap it is there to prevent, and whether anyone is listening is
                       not the listener's problem on a radio they cannot enter at all. */}
-                  {gated && (
+                  {inUseApp && (
+                    <Text style={styles.radioPickBusy}>IN USE BY ANOTHER APP</Text>
+                  )}
+                  {!inUseApp && gated && (
                     <Text style={styles.radioPickBusy}>PIN REQUIRED</Text>
                   )}
-                  {!gated && radioBusy[r.id]?.busy === true && (
+                  {!inUseApp && !gated && radioBusy[r.id]?.busy === true && (
                     <Text style={styles.radioPickBusy}>IN USE</Text>
                   )}
-                  {!gated && radioBusy[r.id]?.busy === false && (
+                  {!inUseApp && !gated && radioBusy[r.id]?.busy === false && (
                     <Text style={styles.radioPickFree}>FREE</Text>
                   )}
                 </View>
@@ -9848,8 +9858,9 @@ export default function SDRScreen({ route, navigation }: Props) {
                       the right code staring at a dead row with no idea the box below is the way
                       in. The PIN and the owner's password are different doors, so they are named
                       separately: one is ACCESS, the other CONTROL. */}
-                  {gated ? ' · PIN below to open it' : ''}
-                  {blocked && !gated ? ' · owner’s password below to take it' : ''}
+                  {inUseApp ? ' · another app on this server is using it — try again later' : ''}
+                  {!inUseApp && gated ? ' · PIN below to open it' : ''}
+                  {blocked && !gated && !inUseApp ? ' · owner’s password below to take it' : ''}
                   {busy && !!adminAuthQ ? ' · you can take this one' : ''}
                 </Text>
                 {/* ★★★ THE AERIAL, UNDER THE RANGE IT QUALIFIES — the same order the browser's

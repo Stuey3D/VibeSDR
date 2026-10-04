@@ -1356,7 +1356,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }
     },
     onSessionWarning: (secs) => setTimeLeft(secs),
-    onDevice: (present, reason) => showDeviceBanner(present, reason),
+    onDevice: (present, reason, inUse, radioName) => showDeviceBanner(present, reason, inUse, radioName),
     // ★ Pushed the instant the owner posts one — the people already watching the spectrum
     //   misbehave are exactly who it is for.
     onNotice: (text: string) => showOwnerNotice(text),
@@ -5230,7 +5230,14 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
    *  server and concluded the RTL was broken.
    *  ★ Blocked rather than merely labelled: there is nothing a visitor can do here, and a
    *    clickable card that leads to a dead waterfall is worse than one they cannot click. */
-  const busyElsewhere = typeof st?.radioBusy === 'string' && st.radioBusy !== '';
+  /* ★★★ AND WHEN THE SERVER *KNOWS* IT IS ANOTHER PROGRAM'S (Stuart, 2026-10-04) — `inUseElsewhere`,
+   *  from the radio itself OR from the front door's list. The door's copy is the one that matters
+   *  when the radio's own process cannot answer at all: an app left running over SSH that grabbed
+   *  the dongle at boot keeps VibeServer's radio from ever starting, and the card read NOT
+   *  RESPONDING — a broken server, when the truth is "somebody else has it". Absent = unknown. */
+  const inUseElsewhere = r?.inUseElsewhere === true || st?.inUseElsewhere === true;
+  const busyElsewhere = inUseElsewhere || (typeof st?.radioBusy === 'string' && st.radioBusy !== '');
+  if (inUseElsewhere) return { state: 'IN USE BY ANOTHER APP', blocked: true };
   /* ★★★ BEHIND ITS OWN PIN, AND NOT YET OPENED. Said BEFORE anything about listeners or queues,
    *  because it is the only fact that matters here: however free this receiver is, this visitor
    *  cannot walk into it, and "FREE" over a card that refuses them is the worst answer available.
@@ -8126,7 +8133,7 @@ function showOwnerNotice(text: string) {
   document.body.appendChild(el);
 }
 
-function showDeviceBanner(present: boolean, reason?: string) {
+function showDeviceBanner(present: boolean, reason?: string, inUse?: boolean, radioName?: string) {
   const id = 'deviceBanner';
   document.getElementById(id)?.remove();
   if (present) return;
@@ -8145,11 +8152,21 @@ function showDeviceBanner(present: boolean, reason?: string) {
    *  ★ So the server now sends a REASON when it has one, and it is shown instead. The radio is
    *    coming back on its own here — the idle release exists precisely so another program may
    *    borrow it — so the advice is to wait, not to go and unplug things. */
+  /* ★★★ KNOWN TO BE ANOTHER PROGRAM'S — the server proved it from the USB bus (inUseElsewhere), so
+   *  say exactly what Stuart asked for (2026-10-04), naming the radio. Only then: a take-back that
+   *  failed for a reason the server could NOT pin on another program keeps the gentler wording
+   *  below, which no longer claims to know who has it. */
+  if (inUse) {
+    const nm = (radioName || '').trim() || 'This radio';
+    el.textContent = `${nm} is currently in use with another app on this server and is not available, please try again later.`;
+    document.body.appendChild(el);
+    return;
+  }
   el.innerHTML = reason
-    ? 'The radio on this server is in use by another program<br>' +
+    ? 'The radio on this server is not available right now<br>' +
       '<span style="opacity:0.7;font-size:11px">' + escapeHtml(reason) +
       '. It was released while nobody was listening, which is deliberate — it returns as soon as ' +
-      'the other program lets go. Nothing is broken and there is nothing to reconnect.</span>'
+      'whatever has it lets go.</span>'
     : 'No radio connected to this server<br>' +
       '<span style="opacity:0.7;font-size:11px">The receiver was unplugged or has failed. ' +
       'Reconnect it and restart VibeServer to resume.</span>';

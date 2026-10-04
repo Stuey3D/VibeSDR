@@ -6,8 +6,12 @@
 // config.json itself was introduced and took the demo off the air. A test on a FRESH config can
 // never catch that, so the first thing here is a REAL old-format file.
 #include "vibeserver_config.h"
+#include "sdr_presence.h"
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static int failures = 0, checks = 0;
 static void ok(bool cond, const char* what, const std::string& extra = "") {
@@ -431,6 +435,200 @@ int main() {
                     old, err), "a config written before the curve existed loads", err);
         ok(old.radios.size() == 1 && old.radios[0].gainCurves.empty(),
            "★ ...with no curve, which the server reads as Linearity");
+    }
+
+    // ★★★ THE USB-CHANGE ACTIONS (Stuart, 2026-10-04): a radio that has gone away is REMOVED or
+    //     PAUSED from the setup page, and a new one is ADDED or REPLACES an old one. Each is a pure
+    //     edit of the config, so each is checked here without a server.
+    auto threeRadios = []() {
+        ServerConfig s; s.configured = true; s.fullMode = true; s.port = 48000;
+        RadioConfig a; a.serial = "00000001"; a.driver = "rtlsdr";  a.label = "V4 FM";
+                       a.configured = true; a.gainLimits = "fm:250"; a.antenna = "Discone"; a.usbPath = "1-2";
+        RadioConfig b; b.serial = "240513CA60"; b.driver = "sdrplay"; b.label = "HF";
+                       b.configured = true; b.users = 30;
+        RadioConfig c; c.serial = "DD52B980BE4946DA"; c.driver = "airspyhf"; c.label = "HF+";
+                       c.configured = true;
+        s.radios = {a, b, c};
+        return s;
+    };
+
+    std::printf("\nREMOVE deletes exactly one radio\n");
+    {
+        ServerConfig s = threeRadios();
+        ok(applySdrChange(s, "remove", "240513CA60", "", "", "", err), "remove succeeds", err);
+        ok(s.radios.size() == 2 && s.radios[0].serial == "00000001" && s.radios[1].serial == "DD52B980BE4946DA",
+           "★ only the named radio went, the others kept their place");
+        ok(!applySdrChange(s, "remove", "240513CA60", "", "", "", err), "removing it again is refused");
+        ok(!applySdrChange(s, "remove", "../etc", "", "", "", err), "★ a serial outside the alphabet is refused");
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err) && back.radios.size() == 2, "the removal survives a save", err);
+    }
+
+    std::printf("\nPAUSE keeps every setting; RESUME brings it back\n");
+    {
+        ServerConfig s = threeRadios();
+        ok(applySdrChange(s, "pause", "00000001", "", "", "", err), "pause succeeds", err);
+        const auto& r = s.radios[0];
+        ok(!r.enabled, "★ paused = enabled false (the reconcile stops its unit)");
+        ok(r.configured && r.gainLimits == "fm:250" && r.antenna == "Discone" && r.usbPath == "1-2",
+           "★★ every setting is still there");
+        ok(primaryRadio(s) == 1, "a paused radio is not the primary", std::to_string(primaryRadio(s)));
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err) && !back.radios[0].enabled && back.radios[0].gainLimits == "fm:250",
+           "the pause survives a save, settings and all");
+        ok(applySdrChange(back, "resume", "00000001", "", "", "", err) && back.radios[0].enabled,
+           "resume sets enabled again", err);
+        ok(back.radios[0].gainLimits == "fm:250" && back.radios[0].configured, "★ with its settings intact");
+    }
+
+    std::printf("\nREPLACE re-points the serial and keeps everything else\n");
+    {
+        ServerConfig s = threeRadios();
+        ok(applySdrChange(s, "replace", "00000001", "00000007", "rtlsdr", "", err), "replace succeeds", err);
+        const auto& r = s.radios[0];
+        ok(r.serial == "00000007", "★ the entry now names the new radio", r.serial);
+        ok(r.usbPath.empty(), "★ the old USB socket is forgotten");
+        ok(r.label == "V4 FM" && r.gainLimits == "fm:250" && r.antenna == "Discone" && r.configured && r.enabled,
+           "★★ label, limits, aerial and both gates are kept");
+        ok(s.radios.size() == 3, "no radio was added or lost");
+        ServerConfig t = threeRadios();
+        ok(!applySdrChange(t, "replace", "00000001", "999", "airspy", "", err),
+           "★ a different driver is refused — the settings are that driver's");
+        ok(!applySdrChange(t, "replace", "00000001", "240513CA60", "rtlsdr", "", err),
+           "★ a serial already in the config is refused");
+        ok(!applySdrChange(t, "replace", "00000001", "-rf", "rtlsdr", "", err),
+           "★ a new serial systemctl would read as an option is refused");
+    }
+
+    std::printf("\nADD adopts a radio the same way the TUI does\n");
+    {
+        ServerConfig s = threeRadios();
+        ok(applySdrChange(s, "add", "00000009", "", "rtlsdr", "RTL-SDR Blog V4", err), "add succeeds", err);
+        ok(s.radios.size() == 4 && s.radios[3].serial == "00000009" && s.radios[3].enabled && !s.radios[3].configured,
+           "★ appended, enabled, NOT configured — on air once its tab is saved");
+        ok(!applySdrChange(s, "add", "00000009", "", "rtlsdr", "", err), "adding it twice is refused");
+    }
+
+    std::printf("\nDISPLAY ORDER moves the cards and NOTHING ELSE\n");
+    {
+        ServerConfig s = threeRadios();
+        int portsBefore[3]; for (size_t i = 0; i < 3; i++) portsBefore[i] = portForRadio(s, i);
+        const int primBefore = primaryRadio(s);
+        auto d0 = displayOrder(s);
+        ok(d0.size() == 3 && d0[0] == 0 && d0[1] == 1 && d0[2] == 2, "★ no order set = array order");
+        ok(setDisplayOrder(s, {"DD52B980BE4946DA", "00000001", "240513CA60"}, err), "the owner drags them", err);
+        auto d = displayOrder(s);
+        ok(d.size() == 3 && d[0] == 2 && d[1] == 0 && d[2] == 1, "★ shown in the dragged order");
+        bool same = true; for (size_t i = 0; i < 3; i++) same = same && portForRadio(s, i) == portsBefore[i];
+        ok(same, "★★★ every radio keeps its PORT — ports follow the array, never the display order");
+        ok(primaryRadio(s) == primBefore, "★★★ the primary is unchanged");
+        ok(s.radios[0].serial == "00000001", "★ the array itself was not reordered");
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err) && displayOrder(back)[0] == 2, "the order survives a save", err);
+        // A page that predates `order` posts the radios without it — must not undo the owner's order.
+        ServerConfig merged = back;
+        ok(fromJson(R"({"radios":[{"serial":"DD52B980BE4946DA","driver":"airspyhf","label":"HF+ renamed","configured":true}]})",
+                    merged, err), "an old page's save merges", err);
+        ok(merged.radios[2].order == 0 && merged.radios[2].label == "HF+ renamed",
+           "★★ an absent `order` keeps the owner's order", std::to_string(merged.radios[2].order));
+        ok(!setDisplayOrder(s, {"00000001", "00000001"}, err), "a radio listed twice is refused");
+        ok(!setDisplayOrder(s, {"nope"}, err), "an unknown radio is refused");
+        // Partial list: the unlisted follow, in their current display order.
+        ServerConfig p = threeRadios();
+        ok(setDisplayOrder(p, {"240513CA60"}, err), "a partial order is accepted", err);
+        auto dp = displayOrder(p);
+        ok(dp[0] == 1 && dp[1] == 0 && dp[2] == 2, "★ the unlisted follow, nothing dropped");
+        // Stability: equal keys keep array order.
+        ServerConfig q = threeRadios(); q.radios[0].order = 5; q.radios[1].order = 5; q.radios[2].order = 1;
+        auto dq = displayOrder(q);
+        ok(dq[0] == 2 && dq[1] == 0 && dq[2] == 1, "★ the sort is stable for equal positions");
+    }
+
+    std::printf("\nvalidSerial matches vibeserver-radios' alphabet\n");
+    {
+        ok(validSerial("00000001") && validSerial("240513CA60") && validSerial("a1:b2_c3.d-4"), "real serials pass");
+        ok(!validSerial("") && !validSerial("-x") && !validSerial(".x") && !validSerial("a/b")
+           && !validSerial("a b") && !validSerial("a@b") && !validSerial(std::string(65, 'a')),
+           "★ empty, leading -/., slash, space, @, over 64 are refused");
+    }
+
+    // ★★★ STUART'S HARD RULE: a radio LENT to another program, or held by anything else, is NEVER
+    //     reported as unplugged. "Absent" needs the BUS as a witness (sdr_presence.h).
+    std::printf("\nPresence: busy and lent are never 'absent'\n");
+    {
+        using vibe::Presence; using vibe::decidePresence; using vibe::DetectedRadio;
+        auto det = [](const char* drv, const char* ser) { DetectedRadio d; d.driver = drv; d.serial = ser; return d; };
+        // An RSP lent to OpenWebRX: the SDRplay API omits it, but the bus still counts it.
+        ok(decidePresence("sdrplay", "240513CA60", {}, 1, 0) == Presence::Uncertain,
+           "★★★ RSP released to OpenWebRX (API cannot see it, bus can) → NOT absent");
+        ok(decidePresence("sdrplay", "240513CA60", {}, 0, 0) == Presence::Absent,
+           "an RSP with nothing of its kind on the bus → absent");
+        // A dongle another program holds, whose serial could not be read (open failed).
+        ok(decidePresence("rtlsdr", "00000003", {det("rtlsdr", "")}, 1, 0) == Presence::Uncertain,
+           "★★★ RTL held elsewhere, serial unreadable → NOT absent");
+        // Two dongles on the bus, both named, neither ours: provably gone.
+        ok(decidePresence("rtlsdr", "00000003", {det("rtlsdr", "00000001"), det("rtlsdr", "00000002")}, 2, 0)
+           == Presence::Absent, "every RTL on the bus named, none ours → absent");
+        ok(decidePresence("rtlsdr", "00000001", {det("rtlsdr", "00000001")}, 1, 0) == Presence::Attached,
+           "named by the driver → attached");
+        // A sibling radio process of ours streams the only RSP the API cannot see; ours is gone.
+        ok(decidePresence("sdrplay", "AAA", {}, 1, 1) == Presence::Absent,
+           "★ the only unseen RSP is our own sibling's → this one is absent");
+        ok(decidePresence("airspyhf", "DD52", {}, -1, 0) == Presence::Uncertain,
+           "★★ the bus walk failed → no witness, never absent");
+        ok(decidePresence("hackrf", "", {}, 0, 0) == Presence::Uncertain, "no serial to look for → never absent");
+        ok(decidePresence("airspy", "X", {det("airspyhf", "X")}, 0, 0) == Presence::Absent,
+           "★ another DRIVER's device with the same serial is not this radio");
+    }
+
+    // ★★★ "IN USE BY ANOTHER APP" IS SAID ONLY WHEN KNOWN (Stuart, 2026-10-04).
+    std::printf("\nIn use elsewhere: known, never guessed\n");
+    {
+        using vibe::knownInUseElsewhere;
+        ok(knownInUseElsewhere(true, -1, -1, 0), "★ an RTL's own LIBUSB_ERROR_BUSY is proof");
+        ok(!knownInUseElsewhere(false, 1, -1, 0), "★★ no claim information (macOS) → never said");
+        ok(!knownInUseElsewhere(false, -1, 1, 0), "★★ no bus count → never said");
+        ok(knownInUseElsewhere(false, 1, 1, 0), "one HF+ on the bus, claimed, none of ours running → known");
+        ok(!knownInUseElsewhere(false, 1, 0, 0), "one on the bus, nobody has claimed it → not 'in use'");
+        ok(!knownInUseElsewhere(false, 2, 1, 1), "★ our sibling holds the only claimed one → not this radio");
+        ok(knownInUseElsewhere(false, 2, 2, 1), "two RSPs: our sibling holds one, another program the other → known");
+        ok(!knownInUseElsewhere(false, 3, 2, 1),
+           "★ an extra unclaimed RSP on the bus makes it ambiguous which is ours → never said");
+    }
+
+    // The sysfs reader, against a fake tree shaped like /sys/bus/usb/devices.
+    std::printf("\nsysfs: who has claimed which radio\n");
+    {
+        char tmpl[] = "/tmp/vs-sysfs-XXXXXX";
+        const char* rootC = mkdtemp(tmpl);
+        ok(rootC != nullptr, "a scratch tree");
+        if (rootC) {
+            const std::string root = rootC;
+            auto mk = [&](const std::string& rel) { ::mkdir((root + "/" + rel).c_str(), 0755); };
+            auto put = [&](const std::string& rel, const std::string& v) {
+                if (FILE* f = std::fopen((root + "/" + rel).c_str(), "w")) { std::fputs(v.c_str(), f); std::fclose(f); }
+            };
+            auto dev = [&](const std::string& d, const char* vid, const char* pid, const char* itfDriver) {
+                mk(d); put(d + "/idVendor", vid); put(d + "/idProduct", pid);
+                mk(d + ":1.0");
+                if (itfDriver) ::symlink((std::string("../../../bus/usb/drivers/") + itfDriver).c_str(),
+                                         (root + "/" + d + ":1.0/driver").c_str());
+            };
+            dev("1-1",   "03eb\n", "800c\n", "usbfs");       // an HF+ another program holds
+            dev("1-2",   "1df7\n", "3050\n", nullptr);       // an RSP1B nobody holds
+            dev("1-3",   "1df7\n", "3000\n", "usbfs");       // an RSP1A somebody holds
+            dev("1-4",   "1d50\n", "6089\n", "usbfs");       // a HackRF somebody holds
+            dev("1-5",   "1d50\n", "60a1\n", "uvcvideo");    // an Airspy bound to some other kernel driver
+            dev("2-1",   "046d\n", "c52b\n", "usbfs");       // a mouse receiver: not a radio
+            int sp = -1, ahf = -1, hrf = -1, asp = -1;
+            ok(vibe::sysfsClaimedCounts(root, sp, ahf, hrf, asp), "the tree reads");
+            ok(ahf == 1 && sp == 1 && hrf == 1 && asp == 0,
+               "★ claimed through usbfs: HF+ 1, RSP 1 of 2, HackRF 1; a kernel driver is not usbfs",
+               std::to_string(ahf) + " " + std::to_string(sp) + " " + std::to_string(hrf) + " " + std::to_string(asp));
+            ok(!vibe::sysfsClaimedCounts(root + "/nope", sp, ahf, hrf, asp), "an unreadable root = unknown");
+            std::string cmd = "rm -rf '" + root + "'";
+            (void)!std::system(cmd.c_str());
+        }
     }
 
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
