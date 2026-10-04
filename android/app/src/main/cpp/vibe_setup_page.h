@@ -4683,7 +4683,9 @@ function sdrRender() {
   for (const p of (SDR.paused || [])) {
     out.push(`<div class="sdrCard sdrPaused"><b>${esc(sdrName(p))}</b> (serial ${esc(p.serial)}) is paused — `
       + `VibeServer is not looking for it, and every setting is kept.`
-      + `<div class="sdrBtns">${btn("resume", p.serial, "RESUME")}</div></div>`);
+      // ★ Remove beside Resume: pausing (here, or unticking in the TUI) then removing is how a radio
+      //   that is still attached is deleted — the TUI tells owners to "delete in the browser".
+      + `<div class="sdrBtns">${btn("resume", p.serial, "RESUME")}${ghost("remove", p.serial, "Remove")}</div></div>`);
   }
   for (const f of (SDR.found || [])) {
     const n = esc(f.name || f.driver), s = esc(f.serial);
