@@ -3065,6 +3065,17 @@ async function renderHw() {
   //     near long wave in a picker — the one order a radio person does not read a band list in.
   //     Sorted here rather than in the server, because the grouping is right for other callers and
   //     this is a presentation choice. ★ No edges sorts last: an unknown is not "at DC".
+  /* ★★★ AND WHEN THE RADIO DID NOT ANSWER, FROM THE DOOR. The band plan is the SERVER's, the same in every
+   *  process — but it only rode in on the radio's own /hardware, so a radio that was not running (the usual
+   *  case while setting one up), or one behind its own PIN, left the per-band ceiling picker with nothing
+   *  but "All bands" (Stuart, 2026-10-04: "I've seen this happen a lot especially when setting up a new
+   *  radio"). This process answers /vibeserver/hardware too, front door included, with the same list. */
+  if (!(hw && Array.isArray(hw.bands) && hw.bands.length)) {
+    try {
+      const own = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json();
+      if (own && Array.isArray(own.bands) && own.bands.length) hw = Object.assign({}, hw || {}, { bands: own.bands });
+    } catch (e) { /* the page still offers "All bands" */ }
+  }
   if (hw && Array.isArray(hw.bands) && hw.bands.length)
     BANDS = hw.bands.slice().sort((a, b) =>
       (a.lo === undefined ? Infinity : a.lo) - (b.lo === undefined ? Infinity : b.lo));
