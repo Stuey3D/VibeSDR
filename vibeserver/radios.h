@@ -41,4 +41,27 @@ std::vector<DetectedRadio> detectRadios();
  *  the caller must either fall back to the physical port or offer to rename one. */
 bool serialsCollide(const std::vector<DetectedRadio>& radios);
 
+/** ★★★ HOW MANY OF EACH KIND ARE ON THE USB BUS, BY VID:PID — WITHOUT OPENING ANY OF THEM.
+ *  The witness sdr_presence.h needs: a device another program holds cannot be NAMED by its driver
+ *  (that needs an open) but it is still COUNTED here, because reading a device descriptor needs no
+ *  open and no claim. `ok` false = the walk itself failed, which proves nothing either way.
+ *  ★ RTL uses librtlsdr's own count, which walks its VID:PID table the same way — so "an RTL" here
+ *    means exactly what it means to the driver. The others: SDRplay 1df7:any, Airspy HF+ 03eb:800c,
+ *    HackRF 1d50:6089/604b/cc15, Airspy R2/Mini 1d50:60a1 (the vendored libraries' own constants). */
+struct UsbBusCounts {
+    bool ok = false;
+    int rtlsdr = 0, sdrplay = 0, airspyhf = 0, hackrf = 0, airspy = 0;
+    /** -1 for an unknown driver or a failed walk — "no witness". */
+    int forDriver(const std::string& driver) const {
+        if (!ok) return -1;
+        if (driver == "rtlsdr")   return rtlsdr;
+        if (driver == "sdrplay")  return sdrplay;
+        if (driver == "airspyhf") return airspyhf;
+        if (driver == "hackrf")   return hackrf;
+        if (driver == "airspy")   return airspy;
+        return -1;
+    }
+};
+UsbBusCounts usbBusCounts();
+
 }  // namespace vibe

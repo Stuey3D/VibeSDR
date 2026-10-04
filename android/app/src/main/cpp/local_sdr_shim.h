@@ -612,6 +612,16 @@ public:
     using ConfigSetFn = std::function<bool(const std::string&, std::string&)>;    // JSON, &err
     static void setConfigHandlers(ConfigGetFn get, ConfigSetFn set);
 
+    /** ★★★ "SOMETHING CHANGED ON THE USB BUS" — GET /vibeserver/sdr-changes and POST
+     *  /vibeserver/sdr-change (Stuart, 2026-10-04). Get = which configured radios are missing,
+     *  paused or uncertain and which attached radios are new; Set = add / replace / remove / pause /
+     *  resume / order. The daemon owns the work (it owns the config file and the radios); the shim
+     *  owns the gate, which is ADMIN **and** LAN-only — see the route.
+     *  ★ Set returns the JSON reply and sets `status` (200, 400, 409). */
+    using SdrChangesGetFn = std::function<std::string()>;
+    using SdrChangeSetFn  = std::function<std::string(const std::string& body, int& status)>;
+    static void setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set);
+
     /** ★★★ THE SERVER BENCHMARK (vibe_benchmark.h). Run = measure this box and save the result; Get = the last
      *  saved result, or "" if it has never run. The HTTP endpoints live here because every platform serves them
      *  from the same place the config endpoints are served; the WORK lives in the daemon, which owns the radio

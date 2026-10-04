@@ -381,6 +381,14 @@ struct RadioConfig {
      *  takes it off the air and KEEPS its settings. */
     bool enabled = true;
     bool configured = false;
+    /** ★★★ WHERE THIS RADIO SITS IN THE LISTS PEOPLE SEE — DISPLAY ONLY. The setup tabs, the landing
+     *  cards, the directory and the app's picker follow it; NOTHING ELSE DOES. -1 = "where it is in
+     *  the array", which is every radio until the owner drags one (Stuart, 2026-10-04).
+     *  ★★★ PORTS AND THE PRIMARY STAY ARRAY-BASED. portForRadio() and primaryRadio() read radios[]
+     *      order and must never read this: reordering the cards must not move a receiver to a
+     *      different port under its listeners, or turn a forwarded router rule onto another radio.
+     *      That is exactly why it is a separate number and not a reorder of the array. */
+    int  order = -1;
 
     int  port = 0;           // 0 = assigned automatically; bound to loopback behind the front door
 
@@ -840,6 +848,37 @@ int primaryRadio(const ServerConfig& cfg);
  *  between addresses under their listeners. The primary always takes the machine's own port so a
  *  single-radio server keeps answering exactly where it always has. */
 int portForRadio(const ServerConfig& cfg, size_t index);
+
+/** ★★ THE ORDER RADIOS ARE SHOWN IN — indices into cfg.radios, sorted by RadioConfig::order
+ *  (an unset order counts as the radio's array index), STABLE so equal keys keep array order.
+ *  ★ Display only. See RadioConfig::order for why ports and the primary never consult it. */
+std::vector<size_t> displayOrder(const ServerConfig& cfg);
+
+/** ★★ A SERIAL WE WILL PUT IN A FILE NAME OR HAND TO systemctl. The SAME alphabet
+ *  vibeserver-radios' valid_serial() enforces: ^[A-Za-z0-9_:][A-Za-z0-9._:-]{0,63}$ — so a serial
+ *  this accepts is one the reconcile will actually start, and nothing with a slash, a space or a
+ *  leading '-' ever reaches either. */
+bool validSerial(const std::string& serial);
+
+/** ★★★ THE SETUP PAGE'S "SOMETHING CHANGED ON THE USB BUS" ACTIONS, as pure edits of the config so
+ *  they are tested without a server (test-config-radios). The caller re-reads the file, applies
+ *  this, writes it back — the same read-modify-write every other writer here follows.
+ *    remove  — delete the entry. Its settings go with it; that is what the owner asked for.
+ *    pause   — enabled = false. EVERY setting kept; the reconcile stops its unit.
+ *    resume  — enabled = true.
+ *    replace — re-point the entry at `newSerial` (usbPath cleared: the old socket no longer means
+ *              anything) and keep every other setting. Same driver only.
+ *    add     — append {serial, driver, label}, enabled but NOT configured, exactly as the TUI's `d`
+ *              and the Mac app adopt a radio: it goes on air once its tab is saved.
+ *  ★ Refuses (false + err) rather than guessing: an unknown serial, a new serial already in the
+ *    config, a driver mismatch on replace. */
+bool applySdrChange(ServerConfig& cfg, const std::string& action, const std::string& serial,
+                    const std::string& newSerial, const std::string& newDriver,
+                    const std::string& newLabel, std::string& err);
+
+/** ★ Give the listed serials display positions 0..n-1 in that order; any radio not listed keeps
+ *  its relative place after them. False + err for an unknown or repeated serial. */
+bool setDisplayOrder(ServerConfig& cfg, const std::vector<std::string>& serials, std::string& err);
 
 /** Flatten the shared settings and one radio's settings into the Config a single VibeServer
  *  process consumes. ★ This is what makes process-per-radio cheap: the existing single-radio code

@@ -21,6 +21,7 @@
 #include "local_sdr_shim.h"
 #include "directory.h"
 #include <functional>
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <unistd.h>
@@ -30,6 +31,7 @@
 #include <rtl-sdr.h>
 #include "rtl_eeprom.h"
 #include "radios.h"
+#include "sdr_presence.h"   // ★ unplugged vs lent — the USB bus as witness
 #include "radiodns.h"
 #include "parent_watch.h"   // die-with-the-front-door; a no-op on Linux
 #include "airspyhf_source.h"
@@ -971,6 +973,108 @@ static bool pendingSerialRead(std::string& oldSerial, std::string& newSerial) {
 
 static void pendingSerialClear() { ::unlink(pendingSerialPath().c_str()); }
 
+// ── ★★★ A CONFIGURED RADIO THAT IS NOT THERE — told to the setup page, not only the journal ───
+//
+// Stuart, 2026-10-04: a radio in config.json whose serial is not attached printed "no radio with
+// serial X is attached" and exited, and systemd started it again five seconds later — for ever.
+// Only the journal knew. The owner, looking at the setup page, saw nothing at all.
+//
+// ★★ ONE SMALL FILE PER RADIO, in the same data directory as the ban list and the notice
+//    (vsDataDir), so it works wherever those do — /var/lib/vibeserver on Linux, Application Support
+//    on a Mac. Per radio, not one shared file: several radio processes fail and recover at once,
+//    and one file with several writers is a read-modify-write race on every restart.
+// ★★ WRITTEN BY THE RADIO, JUDGED BY THE FRONT DOOR. The file says only "this radio's process could
+//    not find (or could not open) its device, since T". Whether that means UNPLUGGED is decided
+//    afresh by whoever reads it, with the USB bus as the witness — see sdr_presence.h and Stuart's
+//    hard rule there: a radio lent to another program is NEVER reported as unplugged.
+// ★ Cleared by the radio the moment it opens its device, and by the front door when the owner
+//   removes, pauses or replaces it — never on a timer.
+static std::string radioStatusPath(const std::string& serial) {
+    return vsDataDir() + "/radio-status-" + serial + ".json";
+}
+
+struct RadioStatus {
+    bool present = false;       // a file exists
+    std::string state;          // "notfound" (the driver could not name it) | "openfailed"
+    std::string detail;         // the driver's own words, for the page
+    long long since = 0, last = 0;
+};
+
+static RadioStatus radioStatusRead(const std::string& serial) {
+    RadioStatus st;
+    if (!vsconfig::validSerial(serial)) return st;
+    FILE* f = std::fopen(radioStatusPath(serial).c_str(), "r");
+    if (!f) return st;
+    char buf[1024] = {0};
+    const size_t n = std::fread(buf, 1, sizeof buf - 1, f);
+    std::fclose(f);
+    const std::string j(buf, n);
+    auto str = [&](const char* key) {
+        const std::string k = std::string("\"") + key + "\":\"";
+        const size_t a = j.find(k);
+        if (a == std::string::npos) return std::string();
+        const size_t b = j.find('"', a + k.size());
+        return b == std::string::npos ? std::string() : j.substr(a + k.size(), b - a - k.size());
+    };
+    auto num = [&](const char* key) -> long long {
+        const std::string k = std::string("\"") + key + "\":";
+        const size_t a = j.find(k);
+        return a == std::string::npos ? 0 : std::atoll(j.c_str() + a + k.size());
+    };
+    st.state = str("state");
+    if (st.state.empty()) return st;
+    st.present = true;
+    st.detail = str("detail");
+    st.since = num("since"); st.last = num("last");
+    return st;
+}
+
+static void radioStatusWrite(const std::string& serial, const std::string& driver,
+                             const std::string& state, const std::string& detail) {
+    if (!vsconfig::validSerial(serial)) return;
+    const RadioStatus prev = radioStatusRead(serial);
+    const long long now = (long long)std::time(nullptr);
+    // ★ `since` survives the 5-second restart loop, so the page can say how long it has been gone.
+    const long long since = (prev.present && prev.since > 0) ? prev.since : now;
+    std::string clean;
+    for (char c : detail) clean += (c == '"' || c == '\\' || (unsigned char)c < 0x20) ? ' ' : c;
+    if (clean.size() > 300) clean.resize(300);
+    const std::string path = radioStatusPath(serial), tmp = path + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        std::fprintf(f, "{\"serial\":\"%s\",\"driver\":\"%s\",\"state\":\"%s\",\"detail\":\"%s\","
+                        "\"since\":%lld,\"last\":%lld}\n",
+                     serial.c_str(), driver.c_str(), state.c_str(), clean.c_str(), since, now);
+        const bool ok = std::fclose(f) == 0;
+        if (!ok || std::rename(tmp.c_str(), path.c_str()) != 0) std::remove(tmp.c_str());
+    }
+}
+
+static void radioStatusClear(const std::string& serial) {
+    if (!vsconfig::validSerial(serial)) return;
+    ::unlink(radioStatusPath(serial).c_str());
+}
+
+/** ★★★ IS THIS CONFIGURED RADIO UNPLUGGED? See sdr_presence.h for the rule and why.
+ *  `heldUnseen` = OUR OWN radios of the same driver that should be running (enabled, configured, no
+ *  failure on file) and that the driver did not name — a sibling process streaming an RSP makes it
+ *  invisible to the SDRplay API, and without this every RSP machine with two radios would read
+ *  "uncertain" for ever. A sibling with a failure on file is NOT counted: it is not holding anything. */
+static vibe::Presence radioPresence(const vsconfig::ServerConfig& srv, const vsconfig::RadioConfig& r,
+                                    const std::vector<vibe::DetectedRadio>& detected,
+                                    const vibe::UsbBusCounts& bus) {
+    int heldUnseen = 0;
+    for (const auto& o : srv.radios) {
+        if (o.serial == r.serial || o.driver != r.driver) continue;
+        if (!o.enabled || !o.configured || o.serial.empty()) continue;
+        bool named = false;
+        for (const auto& d : detected) if (d.driver == o.driver && d.serial == o.serial) { named = true; break; }
+        if (named) continue;
+        if (radioStatusRead(o.serial).present) continue;
+        heldUnseen++;
+    }
+    return vibe::decidePresence(r.driver, r.serial, detected, bus.forDriver(r.driver), heldUnseen);
+}
+
 /** What the USB bus reports right now, so the page can PROVE the change took rather than assuming
  *  it did. A verified write to a chip that never lost power still reads the old serial. */
 static std::vector<std::string> rtlSerialsOnBus() {
@@ -1898,6 +2002,201 @@ int main(int argc, char** argv) {
             return true;
         });
 
+    // ── ★★★ RADIOS THAT HAVE GONE, RADIOS THAT HAVE ARRIVED (Stuart, 2026-10-04) ───────────────
+    // The setup page asks on load and on "Check again" — ON DEMAND ONLY. Never a timer, never a
+    // hotplug loop: repeated USB probing has disturbed running radios before, and the owner looking
+    // at the page is the only moment the answer is wanted.
+    //
+    // ★★★ THE NOTICES, AND WHO GETS WHICH:
+    //   • "missing" (alarm, tab highlighted) — PROVABLY absent from the bus, released or not; or NOT
+    //     set to be released and the bus cannot tell unplugged from held — nothing else should be
+    //     holding it, so it is unplugged or it has failed.
+    //       variant "absent" = provably not on the bus; "failed" = on the bus or unknowable, and
+    //       not opening — the page adds "or the radio may have failed".
+    //   • "soft" (notice, no highlight) — set to be released when idle AND the bus cannot say
+    //     whether it is unplugged or lent. Another program may well have it.
+    //   • "inuse" — KNOWN to be held elsewhere (named on the bus, would not open). Never called
+    //     unplugged (Stuart's hard rule). Release ON: a plain line, it is on loan. Release OFF: a
+    //     problem to fix — something else took it, and VibeServer cannot serve it.
+    // ★ A radio whose process is running has no status file at all, released or not — so a radio
+    //   lent out while VibeServer stays up never appears here in the first place.
+    LocalSdrShim::setSdrChangeHandlers(
+        []() -> std::string {
+            vsconfig::ServerConfig srv; std::string err;
+            if (!vsconfig::loadServer(g_configPath, srv, err)) srv = g_serverConfig;
+            const auto detected = vibe::detectRadios();
+            const auto bus = vibe::usbBusCounts();
+            auto label = [](const vsconfig::RadioConfig& r) { return r.label.empty() ? r.driver : r.label; };
+
+            std::string missing, paused, found;
+            auto add = [](std::string& list, const std::string& item) { list += (list.empty() ? "" : ",") + item; };
+            std::vector<std::string> absentSerials;   // ★ the ONLY radios a Replace may point at
+            for (size_t i : vsconfig::displayOrder(srv)) {
+                const auto& r = srv.radios[i];
+                if (r.serial.empty()) continue;
+                const std::string head = "{\"serial\":\"" + jsonEscape(r.serial) + "\",\"driver\":\""
+                                       + jsonEscape(r.driver) + "\",\"label\":\"" + jsonEscape(label(r)) + "\""
+                                       + ",\"release\":" + (r.releaseWhenIdle ? "true" : "false");
+                if (!r.enabled) {
+                    const auto p = radioPresence(srv, r, detected, bus);
+                    if (p == vibe::Presence::Absent) absentSerials.push_back(r.serial);
+                    add(paused, head + ",\"presence\":\"" + vibe::presenceName(p) + "\"}");
+                    continue;
+                }
+                if (!r.configured) continue;              // not served: no process, nothing to miss
+                const RadioStatus st = radioStatusRead(r.serial);
+                if (!st.present) continue;                // its process opened the radio: all well
+                vibe::Presence p = radioPresence(srv, r, detected, bus);
+                if (p == vibe::Presence::Attached) {
+                    if (st.state == "notfound") continue; // back on the bus; its process takes it next
+                    p = vibe::Presence::Busy;             // named, but it would not open
+                }
+                /* ★★★ KNOWN TO BE IN SOMEONE ELSE'S HANDS → "inuse", whatever the release setting.
+                 *  An owner experimenting over SSH can leave another app running that grabs the dongle
+                 *  at boot before VibeServer does (Stuart, 2026-10-04) — they need telling. With
+                 *  release OFF it is worded as a problem to fix; with release ON it is a plain line. */
+                std::string notice;
+                if (p == vibe::Presence::Busy)          notice = "inuse";
+                else if (p == vibe::Presence::Absent)   notice = "missing";
+                else if (!r.releaseWhenIdle)            notice = "missing";   // nothing else should have it
+                else                                    notice = "soft";      // released + cannot tell
+                if (p == vibe::Presence::Absent) absentSerials.push_back(r.serial);
+                add(missing, head + ",\"presence\":\"" + vibe::presenceName(p) + "\",\"notice\":\"" + notice
+                           + "\",\"variant\":\"" + (p == vibe::Presence::Absent ? "absent" : "failed")
+                           + "\",\"since\":" + std::to_string(st.since)
+                           + ",\"detail\":\"" + jsonEscape(st.detail) + "\"}");
+            }
+            // ── New radios: attached, named, and not in the config ───────────────────────────
+            for (size_t k = 0; k < detected.size(); k++) {
+                const auto& d = detected[k];
+                if (d.serial.empty()) continue;           // cannot be identified, so cannot be adopted
+                int same = 0; bool firstOfSerial = true;
+                for (size_t m = 0; m < detected.size(); m++)
+                    if (detected[m].serial == d.serial) { same++; if (m < k) firstOfSerial = false; }
+                if (!firstOfSerial) continue;
+                // ★★ RTL EEPROM COLLISIONS: two dongles answering to one serial cannot both be
+                //    adopted, and guessing which settings belong to which is how a locked range
+                //    lands on the wrong receiver. Say so; the page points at "Change this dongle's
+                //    serial" rather than offering ADD or REPLACE.
+                const bool collides = same > 1;
+                bool known = false;
+                for (const auto& r : srv.radios) if (r.serial == d.serial) { known = true; break; }
+                if (known && !collides) continue;
+                std::string repl;
+                if (!collides)
+                    for (size_t i : vsconfig::displayOrder(srv)) {
+                        const auto& r = srv.radios[i];
+                        if (r.driver != d.driver) continue;
+                        if (std::find(absentSerials.begin(), absentSerials.end(), r.serial) == absentSerials.end()) continue;
+                        add(repl, "{\"serial\":\"" + jsonEscape(r.serial) + "\",\"label\":\"" + jsonEscape(label(r))
+                                  + "\",\"paused\":" + (r.enabled ? "false" : "true") + "}");
+                    }
+                add(found, "{\"serial\":\"" + jsonEscape(d.serial) + "\",\"driver\":\"" + jsonEscape(d.driver)
+                           + "\",\"name\":\"" + jsonEscape(d.name) + "\",\"collides\":" + (collides ? "true" : "false")
+                           + ",\"replace\":[" + repl + "]}");
+            }
+            return "{\"busOk\":" + std::string(bus.ok ? "true" : "false")
+                 + ",\"missing\":[" + missing + "],\"paused\":[" + paused + "],\"found\":[" + found + "]}";
+        },
+        [](const std::string& body, int& status) -> std::string {
+            auto field = [&](const char* key) {
+                const std::string k = std::string("\"") + key + "\"";
+                size_t a = body.find(k);
+                if (a == std::string::npos) return std::string();
+                a = body.find(':', a + k.size());
+                if (a == std::string::npos) return std::string();
+                a = body.find('"', a);
+                if (a == std::string::npos) return std::string();
+                const size_t b = body.find('"', a + 1);
+                return b == std::string::npos ? std::string() : body.substr(a + 1, b - a - 1);
+            };
+            auto fail = [&](int code, const std::string& why) {
+                status = code;
+                return "{\"error\":\"" + jsonEscape(why) + "\"}";
+            };
+            const std::string action = field("action");
+            const std::string serial = field("serial");
+            const std::string newSerial = field("newSerial");
+
+            // ★★★ RE-READ BEFORE WRITING — the same rule as the config save: other radio processes
+            //     persist into this file, and a copy from startup would revert what they wrote.
+            vsconfig::ServerConfig next; std::string err;
+            if (!vsconfig::loadServer(g_configPath, next, err)) next = g_serverConfig;
+
+            if (action == "order") {
+                // ★ Display only: /vibeserver/radios re-reads the file on every request, so the new
+                //   order is live at once — no restart, nobody dropped.
+                std::vector<std::string> serials;
+                const size_t a = body.find("\"order\"");
+                const size_t lb = a == std::string::npos ? a : body.find('[', a);
+                const size_t rb = lb == std::string::npos ? lb : body.find(']', lb);
+                if (rb == std::string::npos) return fail(400, "no order given");
+                const std::string arr = body.substr(lb + 1, rb - lb - 1);
+                for (size_t p = arr.find('"'); p != std::string::npos; ) {
+                    const size_t q = arr.find('"', p + 1);
+                    if (q == std::string::npos) break;
+                    serials.push_back(arr.substr(p + 1, q - p - 1));
+                    p = arr.find('"', q + 1);
+                }
+                if (serials.size() > 64) return fail(400, "too many radios");
+                if (!vsconfig::setDisplayOrder(next, serials, err)) return fail(400, err);
+                if (!vsconfig::saveServer(g_configPath, next, err)) return fail(400, err);
+                g_serverConfig = next;
+                return "{\"ok\":true,\"restart\":false}";
+            }
+
+            if (!vsconfig::validSerial(serial)) return fail(400, "that is not a usable serial");
+            std::string newDriver, newLabel;
+            const vsconfig::RadioConfig* target = nullptr;
+            for (const auto& r : next.radios) if (r.serial == serial) { target = &r; break; }
+            const bool wasServed = target && target->enabled && target->configured;
+
+            if (action == "add" || action == "replace") {
+                // ★★ THE NEW RADIO MUST BE ON THE BUS NOW, and its driver and name come from the
+                //    driver — never from the request. One enumeration, on demand, as the page asked.
+                const std::string want = action == "add" ? serial : newSerial;
+                if (!vsconfig::validSerial(want)) return fail(400, "the new radio's serial is not usable");
+                const auto detected = vibe::detectRadios();
+                int same = 0;
+                for (const auto& d : detected)
+                    if (d.serial == want) { same++; newDriver = d.driver; newLabel = d.name; }
+                if (same == 0) return fail(409, "that radio is not attached any more — check again");
+                if (same > 1)
+                    return fail(409, "two radios answer to serial " + want + " — give one a new serial first "
+                                     "(Change this dongle's serial)");
+                if (action == "replace") {
+                    if (!target) return fail(400, "no radio with that serial is set up here");
+                    // ★★★ NEVER RE-POINT A RADIO THAT MIGHT ONLY BE ON LOAN. Re-checked here, not
+                    //     trusted from the page: only a radio PROVABLY absent from the bus may have
+                    //     its settings handed to new hardware.
+                    if (radioPresence(next, *target, detected, vibe::usbBusCounts()) != vibe::Presence::Absent)
+                        return fail(409, "'" + (target->label.empty() ? target->driver : target->label)
+                                         + "' may still be attached (or in use by another program), so it "
+                                           "cannot be replaced — remove or pause it instead");
+                }
+            }
+            if (!vsconfig::applySdrChange(next, action, serial, newSerial, newDriver, newLabel, err))
+                return fail(400, err);
+            if (!vsconfig::saveServer(g_configPath, next, err)) return fail(400, err);
+            g_serverConfig = next;
+            // ★ The old serial's record means nothing once the entry is gone, paused or re-pointed.
+            if (action == "remove" || action == "pause" || action == "replace") radioStatusClear(serial);
+            if (g_applyDirectory) g_applyDirectory(next, true);
+
+            // ★★ THE SAME RESTART THE SETUP PAGE'S "APPLY AND RESTART" USES — and only when the set
+            //    of served radios actually changed. Adding a radio does not (it is not configured
+            //    yet), and removing or resuming one nobody serves bounces every listener for nothing.
+            bool restart = false;
+            if (action == "remove" || action == "pause") restart = wasServed;
+            else if (action == "replace") restart = wasServed;
+            else if (action == "resume") restart = target != nullptr && target->configured;
+            if (restart) {
+                g_restartNotBefore.store(nowMonoSecs() + 1.5);
+                g_restartRequested.store(true);
+            }
+            return std::string("{\"ok\":true,\"restart\":") + (restart ? "true" : "false") + "}";
+        });
+
     // ── Which radios this machine offers ────────────────────────────────────────────────────
     // ★★ ANSWERED FROM THE FILE, re-read each time, because the OTHER radios are separate
     //    processes and this one cannot see their live state. What it can state truthfully is what
@@ -1969,7 +2268,12 @@ int main(int argc, char** argv) {
         }
         j += ",\"radios\":[";
         bool first = true;
-        for (size_t i = 0; i < srv.radios.size(); i++) {
+        /* ★★ IN THE OWNER'S DISPLAY ORDER (RadioConfig::order), stable, array order when unset. Every
+         *  reader of this list — the landing cards, the directory, the app's picker — keeps the order
+         *  it is given, so this one sort is what puts them all in the order the owner dragged.
+         *  ★★★ `i` is still the ARRAY index, and portForRadio(srv, i) / primary below still read the
+         *      array: reordering the cards must never move a radio's port. */
+        for (size_t i : vsconfig::displayOrder(srv)) {
             const auto& r = srv.radios[i];
             if (!r.enabled || !r.configured) continue;   // ★ both gates, same as the supervisor
             /* ★★★ THE LOWEST CLIENT PROTOCOL WITH CONTROLS FOR THIS RADIO (BRIEF-v11 §7) — set
@@ -2699,6 +3003,17 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "VibeServer: no radio with serial %s is attached\n",
                              o.radioSerial.c_str());
                 const auto all = vibe::detectRadios();
+                /* ★★★ AND TELL THE SETUP PAGE, NOT ONLY THE JOURNAL (Stuart, 2026-10-04). The file
+                 *  says "not found since T"; whether that is UNPLUGGED or LENT is judged by the front
+                 *  door with the USB bus as witness (sdr_presence.h) — this process only reports. */
+                {
+                    std::string drvName;
+                    for (const auto& r : g_serverConfig.radios)
+                        if (r.serial == o.radioSerial) { drvName = r.driver; break; }
+                    radioStatusWrite(o.radioSerial, drvName, "notfound",
+                                     all.empty() ? "no radios are detected at all"
+                                                 : "the driver did not list this serial");
+                }
                 if (all.empty()) {
                     std::fprintf(stderr, "VibeServer: no radios are detected at all — check the "
                                          "USB connection and permissions\n");
@@ -2743,6 +3058,11 @@ int main(int argc, char** argv) {
                                   o.fftSize, o.fftRate, o.mode, err);
             std::printf("VibeServer: using %s %d (serial %s)\n",
                         drv.c_str(), drvIdx, o.radioSerial.c_str());
+            /* ★★ NAMED BUT NOT OPENED is a different fact from "not there": the device is on the bus
+             *  and something — another program, a wedged chip — has it. Recorded as such, so the page
+             *  never calls a radio that is plainly attached "unplugged". Opened = the record goes. */
+            if (port <= 0) radioStatusWrite(o.radioSerial, drv, "openfailed", err);
+            else           radioStatusClear(o.radioSerial);
         } else {
         // ★★★ PICK A RADIO OUT OF THE FLAT LIST — the SAME list vs_device_count() and
         //     vs_device_name() publish, so "the third radio" means the same thing to the setup

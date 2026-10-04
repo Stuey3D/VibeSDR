@@ -5,6 +5,10 @@
 #include "hackrf_source.h"
 #include "airspy_source.h"
 #include <algorithm>
+#if __has_include(<libusb.h>)
+#  include <libusb.h>
+#  define VIBE_HAVE_LIBUSB_H 1
+#endif
 
 namespace vibe {
 
@@ -110,6 +114,37 @@ bool serialsCollide(const std::vector<DetectedRadio>& radios) {
         seen.push_back(r.serial);
     }
     return false;
+}
+
+UsbBusCounts usbBusCounts() {
+    UsbBusCounts c;
+#if VIBE_HAVE_LIBUSB_H
+    /* ★★ A PRIVATE CONTEXT, and nothing but descriptors. libusb_get_device_descriptor() reads the
+     *    copy the OS cached at enumeration (Linux: sysfs/usbfs, macOS: IOKit) — no open, no control
+     *    transfer, no claim — so this cannot disturb a radio somebody is streaming. That matters:
+     *    repeated USB probing has knocked running radios over before, and this runs only on demand. */
+    libusb_context* ctx = nullptr;
+    if (libusb_init(&ctx) != 0) return c;
+    libusb_device** list = nullptr;
+    const ssize_t n = libusb_get_device_list(ctx, &list);
+    if (n >= 0) {
+        c.ok = true;
+        for (ssize_t i = 0; i < n; i++) {
+            libusb_device_descriptor d{};
+            if (libusb_get_device_descriptor(list[i], &d) != 0) continue;
+            if (d.idVendor == 0x1df7) c.sdrplay++;
+            else if (d.idVendor == 0x03eb && d.idProduct == 0x800c) c.airspyhf++;
+            else if (d.idVendor == 0x1d50 && (d.idProduct == 0x6089 || d.idProduct == 0x604b
+                                              || d.idProduct == 0xcc15)) c.hackrf++;
+            else if (d.idVendor == 0x1d50 && d.idProduct == 0x60a1) c.airspy++;
+        }
+        libusb_free_device_list(list, 1);
+    }
+    libusb_exit(ctx);
+    // ★ librtlsdr's own table (dozens of VID:PIDs) — counted by the same descriptor walk inside it.
+    if (c.ok) c.rtlsdr = (int)rtlsdr_get_device_count();
+#endif
+    return c;
 }
 
 }  // namespace vibe

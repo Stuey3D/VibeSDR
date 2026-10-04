@@ -4369,6 +4369,8 @@ static LocalSdrShim::BenchRunFn      g_vsBenchRun;
 static LocalSdrShim::BenchGetFn      g_vsBenchGet;
 static std::mutex                    g_vsBenchMtx;
 static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
+static LocalSdrShim::SdrChangesGetFn g_vsSdrChangesGet;   // ★ guarded by g_vsConfigMtx
+static LocalSdrShim::SdrChangeSetFn  g_vsSdrChangeSet;
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
@@ -16202,6 +16204,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/dabmot", 0) == 0
                 || path0.rfind("/vibeserver/auth", 0) == 0
                 || path0.rfind("/vibeserver/config", 0) == 0
+                // ★ The setup page's missing/new radio banner — the machine's USB bus, not a radio's.
+                || path0.rfind("/vibeserver/sdr-change", 0) == 0
                 || path0.rfind("/vibeserver/benchmark", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
                 || path0.rfind("/vibeserver/conditions", 0) == 0
@@ -17093,6 +17097,66 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const std::string j = runFn(force, err);
             if (j.empty()) { reply(409, "Conflict", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
             reply(200, "OK", j);
+            return;
+
+        } else if (reqLine.rfind("GET /vibeserver/sdr-changes", 0) == 0 ||
+                   reqLine.rfind("POST /vibeserver/sdr-change", 0) == 0) {
+            /* ★★★ ADD / REPLACE / REMOVE / PAUSE A RADIO — ADMIN, AND ONLY FROM THE LOCAL NETWORK.
+             *  These delete a radio's settings, re-point them at different hardware, and walk the USB
+             *  bus on demand. An admin password is the gate for every config change; this one ALSO
+             *  requires being on the owner's own network, because it is about hardware you can only
+             *  act on standing next to the machine (Stuart, 2026-10-04).
+             *  ★★ NOT A NEW RULE: it is the raw-IQ "local network only" test — isPrivateIp() on the
+             *     RESOLVED address (so a tunnel visitor is their real, public address, and a proxied
+             *     client nobody could identify is TEST-NET and fails) — plus viaTunnel(), so a request
+             *     that came through cloudflared is refused even if its forwarded address looks local.
+             *  ★ Loopback passes isPrivateIp: the person at the machine is on its network. */
+            const bool isPost = reqLine.rfind("POST", 0) == 0;
+            LocalSdrShim::SdrChangesGetFn getFn; LocalSdrShim::SdrChangeSetFn setFn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); getFn = g_vsSdrChangesGet; setFn = g_vsSdrChangeSet; }
+            auto reply = [&](int code, const char* status, const std::string& body) {
+                sock->sendstr("HTTP/1.1 " + std::to_string(code) + " " + status +
+                              "\r\nContent-Type: application/json\r\nCache-Control: no-store"
+                              "\r\nConnection: close\r\nContent-Length: " +
+                              std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            if (!getFn || !setFn) {
+                reply(501, "Not Implemented", "{\"error\":\"this build does not manage radios\"}");
+                return;
+            }
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+            const std::string ip = sock->peerAddress();
+            const VsAdminProof pr = vsAdminProof(secret, reqLine);
+            if (!pr.ok || g_vsAuthState.blocked(ip)) {
+                if (!secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
+                reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
+                return;
+            }
+            g_vsAuthState.recordOk(ip);
+            if (!isPrivateIp(ip) || viaTunnel(*sock)) {
+                reply(403, "Forbidden", "{\"error\":\"lan-only\",\"lanOnly\":true}");
+                return;
+            }
+            if (!isPost) { reply(200, "OK", getFn()); return; }
+            const long long clen = contentLength;
+            if (clen <= 0 || clen > 16 * 1024) {
+                reply(400, "Bad Request", "{\"error\":\"missing or oversized body\"}");
+                return;
+            }
+            std::string body((size_t)clen, '\0');
+            size_t got = 0;
+            while (got < body.size()) {
+                int n = sock->recv((uint8_t*)&body[got], body.size() - got, false, 5000);
+                if (n <= 0) break;
+                got += (size_t)n;
+            }
+            if (got != body.size()) { reply(400, "Bad Request", "{\"error\":\"short body\"}"); return; }
+            int code = 200;
+            const std::string out = setFn(body, code);
+            LOGI("sdr-change by %s -> %d", ip.c_str(), code);
+            reply(code, code == 200 ? "OK" : code == 409 ? "Conflict" : "Bad Request", out);
             return;
 
         } else if (reqLine.rfind("GET /vibeserver/config", 0) == 0 ||
@@ -25983,6 +26047,12 @@ void LocalSdrShim::setBenchmarkHandlers(BenchRunFn run, BenchGetFn get) {
     std::lock_guard<std::mutex> lk(g_vsBenchMtx);
     g_vsBenchRun = std::move(run);
     g_vsBenchGet = std::move(get);
+}
+
+void LocalSdrShim::setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsSdrChangesGet = std::move(get);
+    g_vsSdrChangeSet  = std::move(set);
 }
 
 void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
