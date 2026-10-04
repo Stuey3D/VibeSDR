@@ -270,6 +270,21 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
         return true;
     }
 
+    // ★★★ NOT WHERE THE HANDLE CAME FROM AN fd (Android). openFd leaves impl_->serial at 0, so the reopen
+    //     below could never succeed: the deep path only ever CLOSED the radio for good — and on Nick's
+    //     Pixel 6 that close was the SIGABRT (Play vitals, 2026-10-04). A fresh fd has to come from the Java
+    //     layer, which this cannot ask for, so keep the handle and let the shallow restart (which now really
+    //     restarts a stream that died on its own — see libairspyhf kill_io_threads) keep trying.
+    if (impl_->serial == 0) {
+        err = "the Airspy HF+ stream stalled; retrying on the same handle (an fd-opened radio cannot be reopened here)";
+        if (!open_ || !impl_->dev) return false;
+        if (streaming_) { airspyhf_stop(impl_->dev); streaming_ = false; }
+        if (!start(err)) return false;
+        lost_ = false;
+        std::fprintf(stderr, "airspyhf: stream restarted on the same handle (fd-opened; no deep reopen)\n");
+        return true;
+    }
+
     // ── Deep: the handle itself is suspect, so throw it away and open a fresh one. ──
     // ★ BY SERIAL, NOT BY INDEX. Enumeration order is not stable across a re-plug, and this
     //   box may well have more than one radio on it — reopening "device 0" could hand us a

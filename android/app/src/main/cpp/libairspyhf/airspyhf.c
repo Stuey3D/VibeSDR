@@ -129,6 +129,12 @@ typedef struct airspyhf_device
 	volatile int received_buffer_count;
 	airspyhf_complex_float_t *output_buffer;
 	void* ctx;
+	/* ★ VibeSDR (2026-10-04): the stream's threads exist (created, not yet joined) — independent of
+	   `streaming`, which the USB callback drops by itself when a transfer fails. */
+	volatile bool threads_running;
+	/* ★ VibeSDR: transfers submitted and not yet returned for good (a completed transfer that is
+	   resubmitted stays counted). What the stop waits on before anything frees them. */
+	volatile int in_flight;
 } airspyhf_device_t;
 
 typedef struct calibration_record
@@ -272,6 +278,7 @@ static int prepare_transfers(airspyhf_device_t* device, const uint_fast8_t endpo
 			{
 				return AIRSPYHF_ERROR;
 			}
+			__atomic_add_fetch(&device->in_flight, 1, __ATOMIC_SEQ_CST);
 		}
 		return AIRSPYHF_SUCCESS;
 	}
@@ -430,8 +437,10 @@ static void airspyhf_libusb_transfer_callback(struct libusb_transfer* usb_transf
 	airspyhf_complex_int16_t *temp;
 	airspyhf_device_t* device = (airspyhf_device_t*) usb_transfer->user_data;
 
+	/* ★ VibeSDR: every path that does NOT resubmit returns the transfer for good — count it out. */
 	if (!device->streaming || device->stop_requested)
 	{
+		__atomic_sub_fetch(&device->in_flight, 1, __ATOMIC_SEQ_CST);
 		return;
 	}
 
@@ -462,11 +471,13 @@ static void airspyhf_libusb_transfer_callback(struct libusb_transfer* usb_transf
 
 		if (libusb_submit_transfer(usb_transfer) != 0)
 		{
+			__atomic_sub_fetch(&device->in_flight, 1, __ATOMIC_SEQ_CST);
 			device->streaming = false;
 		}
 	}
 	else
 	{
+		__atomic_sub_fetch(&device->in_flight, 1, __ATOMIC_SEQ_CST);
 		device->streaming = false;
 	}
 }
@@ -500,23 +511,47 @@ static void* transfer_threadproc(void* arg)
 	return NULL;
 }
 
+/* ★★★ VibeSDR (2026-10-04) — WAIT FOR EVERY TRANSFER TO COME BACK BEFORE ANYTHING MAY FREE IT.
+   Play vitals, Nick's Pixel 6 HF+ server: SIGABRT "pthread_mutex_lock called on a destroyed mutex" in
+   libusb_close ← airspyhf_close ← the deep restart's close thread. libusb_close walks the transfers
+   still in flight and locks each one; free_transfers() had already destroyed them. Transfers were left
+   in flight because the stop below only acted `if (device->streaming)` — and the USB callback drops
+   `streaming` BY ITSELF when a transfer fails (a USB hiccup), so a stream that had died on its own was
+   never cancelled, never reaped, and its threads never joined. Cancelling is not enough either: a
+   cancelled transfer is only finished when the event loop delivers it, so it is pumped here, bounded. */
+static void reap_transfers(airspyhf_device_t* device)
+{
+	struct timeval tv = { 0, 100000 };
+	int tries = 0;
+	while (__atomic_load_n(&device->in_flight, __ATOMIC_SEQ_CST) > 0 && tries++ < 10 && device->usb_context)
+	{
+		libusb_handle_events_timeout_completed(device->usb_context, &tv, NULL);
+	}
+}
+
 static int kill_io_threads(airspyhf_device_t* device)
 {
-	if (device->streaming)
+	/* ★ Keyed on the THREADS, not on `streaming` — see reap_transfers. */
+	if (device->threads_running || __atomic_load_n(&device->in_flight, __ATOMIC_SEQ_CST) > 0)
 	{
 		device->stop_requested = true;
 		cancel_transfers(device);
 
-		pthread_mutex_lock(&device->consumer_mp);
-		pthread_cond_signal(&device->consumer_cv);
-		pthread_mutex_unlock(&device->consumer_mp);
+		if (device->threads_running)
+		{
+			pthread_mutex_lock(&device->consumer_mp);
+			pthread_cond_signal(&device->consumer_cv);
+			pthread_mutex_unlock(&device->consumer_mp);
 
-		pthread_join(device->transfer_thread, NULL);
-		pthread_join(device->consumer_thread, NULL);
+			pthread_join(device->transfer_thread, NULL);
+			pthread_join(device->consumer_thread, NULL);
+			device->threads_running = false;
+		}
 
+		reap_transfers(device);
 		device->stop_requested = false;
-		device->streaming = false;
 	}
+	device->streaming = false;
 
 	return AIRSPYHF_SUCCESS;
 }
@@ -526,7 +561,14 @@ static int create_io_threads(airspyhf_device_t* device, airspyhf_sample_block_cb
 	int result;
 	pthread_attr_t attr;
 
-	if (!device->streaming && !device->stop_requested)
+	/* ★ VibeSDR: a stream that died on its own still has threads (and maybe transfers) — finish it first,
+	   or the new thread ids overwrite ones never joined and resubmitting a live transfer fails BUSY. */
+	if (device->threads_running || __atomic_load_n(&device->in_flight, __ATOMIC_SEQ_CST) > 0)
+	{
+		kill_io_threads(device);
+	}
+
+	if (!device->threads_running && !device->stop_requested)
 	{
 		device->callback = callback;
 		device->streaming = true;
@@ -534,6 +576,9 @@ static int create_io_threads(airspyhf_device_t* device, airspyhf_sample_block_cb
 		result = prepare_transfers(device, LIBUSB_ENDPOINT_IN | AIRSPYHF_ENDPOINT_IN, (libusb_transfer_cb_fn)airspyhf_libusb_transfer_callback);
 		if (result != AIRSPYHF_SUCCESS)
 		{
+			/* ★ VibeSDR: undo what was submitted rather than leave `streaming` up with no threads. */
+			device->streaming = false;
+			kill_io_threads(device);
 			return result;
 		}
 
@@ -547,16 +592,30 @@ static int create_io_threads(airspyhf_device_t* device, airspyhf_sample_block_cb
 		result = pthread_create(&device->consumer_thread, &attr, consumer_threadproc, device);
 		if (result != 0)
 		{
+			pthread_attr_destroy(&attr);
+			device->streaming = false;
+			kill_io_threads(device);
 			return AIRSPYHF_ERROR;
 		}
 
 		result = pthread_create(&device->transfer_thread, &attr, transfer_threadproc, device);
 		if (result != 0)
 		{
+			pthread_attr_destroy(&attr);
+			/* The consumer exists: stop and join it alone, then return the transfers. */
+			device->stop_requested = true;
+			pthread_mutex_lock(&device->consumer_mp);
+			pthread_cond_signal(&device->consumer_cv);
+			pthread_mutex_unlock(&device->consumer_mp);
+			pthread_join(device->consumer_thread, NULL);
+			device->stop_requested = false;
+			device->streaming = false;
+			kill_io_threads(device);
 			return AIRSPYHF_ERROR;
 		}
 
 		pthread_attr_destroy(&attr);
+		device->threads_running = true;
 	}
 	else {
 		return AIRSPYHF_ERROR;
@@ -1084,23 +1143,25 @@ int ADDCALL airspyhf_close(airspyhf_device_t* device)
 		pthread_cond_destroy(&device->consumer_cv);
 		pthread_mutex_destroy(&device->consumer_mp);
 
-		/* ★★★ FREE THE TRANSFERS BEFORE DESTROYING THE CONTEXT THAT OWNS THEM.
-		   Upstream has these the other way round: airspyhf_open_exit() calls libusb_close()
-		   and libusb_exit(), and free_transfers() then calls libusb_free_transfer() on
-		   transfers belonging to a context that no longer exists. libusb_free_transfer
-		   dereferences the transfer's internal state and takes a context lock, so this is a
-		   use-after-free.
-
-		   On a desktop it usually gets away with it — the allocator has not reused the memory
-		   yet. On Android it is fatal and reproducible: SIGSEGV in libusb_free_transfer with
-		   "FORTIFY: pthread_mutex_lock called on a destroyed mutex" alongside, every time the
-		   user backed out of VibeServer (Stuart, 2026-07-27).
-
-		   Swapping the two lines is the whole fix. free_transfers() cancels nothing — that has
-		   already happened in airspyhf_stop() above — so there is no ordering reason for it to
-		   come second. */
+		/* ★★★ VibeSDR — THE ORDER IS: stop (above: cancels, joins, REAPS every transfer), close the
+		   handle, free the transfers, and only then destroy the context.
+		   ★ 2026-07-27: upstream freed the transfers AFTER libusb_exit() — a use-after-free on a destroyed
+		     context (SIGSEGV in libusb_free_transfer every time the user backed out of VibeServer). That
+		     fix moved free_transfers() before airspyhf_open_exit() — i.e. before libusb_close() too.
+		   ★★ 2026-10-04: and libusb_close() walks the transfers still in flight on the handle, locking
+		     each — so any transfer left in flight was locked AFTER free_transfers() destroyed it: SIGABRT
+		     "pthread_mutex_lock called on a destroyed mutex" (Play vitals, Nick's Pixel 6). The stop now
+		     reaps them, and close comes first anyway: libusb_close() only unlinks a straggler (and logs);
+		     libusb_free_transfer() after it touches no context; libusb_exit() is last. */
+		if (device->usb_device != NULL)
+		{
+			libusb_release_interface(device->usb_device, 0);
+			libusb_close(device->usb_device);
+			device->usb_device = NULL;
+		}
 		free_transfers(device);
-		airspyhf_open_exit(device);
+		libusb_exit(device->usb_context);
+		device->usb_context = NULL;
 		free(device->supported_samplerates);
 		free(device->samplerate_architectures);
 		iq_balancer_destroy(device->iq_balancer);
