@@ -285,6 +285,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
    *      an unlisted VibeServer does — it is removed from the directory, not switched off
    *      (Stuart, 2026-08-22: "it simply reverts to an unlisted but still active vibeserver"). */
   const [publicTemp, setPublicTemp]   = useState(false);
+  /* ★★★ THE TOGGLE SHOWS THE SHARE THE SERVER HAS, NOT A FRESH `false`. It always opened OFF, while the
+   *  end time lives in VibeTunnel's prefs and in the directory — so a temporary share set and then
+   *  restarted over (the app updated, the box rebooted) read OFF on screen, still ended on its own,
+   *  and switching it "off" did nothing because it already looked off. The Sony, 2026-10-04: listed as
+   *  a temporary share nobody could see on the TV. tunnelStatus().until is the server's own end. */
+  const [publicUntil, setPublicUntil] = useState(0);
+  const publicTempRef = useRef(false);
+  publicTempRef.current = publicTemp;
+  /** Set when the toggle is moved to match the server, so the republish effect does not treat it as
+   *  the owner changing their mind (which would send a NEW end, or clear the real one). */
+  const tempFromStatus = useRef(false);
+  /** When the owner last moved it — the status lags a republish, so it must not undo a fresh choice. */
+  const tempTouchedAt = useRef(0);
   const [publicForN, setPublicForN]   = useState('1');
   const [publicForU, setPublicForU]   = useState<'minutes'|'hours'|'days'|'weeks'|'months'>('days');
 
@@ -1015,6 +1028,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           const j = JSON.parse(st);
           setPublicOn(!!j.running);
           setPublicAddr(j.address || '');
+          // ★ The share's real end (see publicUntil). Only while listed: an unlisted server has none.
+          const until = j.running ? Number(j.until) || 0 : 0;
+          const live = until > Date.now() / 1000;
+          setPublicUntil(live ? until : 0);
+          if (j.running && live !== publicTempRef.current && Date.now() - tempTouchedAt.current > 8000) { tempFromStatus.current = true; setPublicTemp(live); }
           // ★ CLEARED as well as set — this only ever set it, so one transient failure stuck to
           //   the switch permanently. The status is the whole truth each time it is read.
           setPublicErr(j.error || '');
@@ -1063,6 +1081,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const shareTouched = useRef(false);
   useEffect(() => {
     if (!shareTouched.current) { shareTouched.current = true; return; }
+    // ★ The toggle was moved to MATCH the server (publicUntil) — nobody changed their mind.
+    if (tempFromStatus.current) { tempFromStatus.current = false; return; }
     if (!publicOn || !running?.port) return;
     const nm = (publicName || name || '').trim();
     if (nm.length < 2) return;
@@ -1666,9 +1686,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
                   Temporary — ends by itself
                 </Text>
-                <Switch value={publicTemp} disabled={publicBusy} onValueChange={setPublicTemp}
+                <Switch value={publicTemp} disabled={publicBusy} onValueChange={(v) => { tempTouchedAt.current = Date.now(); setPublicTemp(v); }}
                   trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
               </View>
+              {publicTemp && publicUntil > 0 ? (
+                <Text style={[styles.value, { color: C.goldDim, fontFamily: F, marginTop: 6 }]}>
+                  {`Ends ${new Date(publicUntil * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} \u2014 switch off to keep it listed`}
+                </Text>
+              ) : null}
               {publicTemp ? (
                 <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' }}>
                   <TextInput value={publicForN} onChangeText={setPublicForN}
