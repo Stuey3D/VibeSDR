@@ -23,14 +23,21 @@ class MainActivity : ReactActivity() {
         super.onNewIntent(intent)
         if (intent?.action == android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED) usbLaunchPending = true
     }
-    // ★ On a TV the remote drives rows + a highlight (TvNav.kt); elsewhere this stays null and nothing changes.
+    // ★★ The remote drives rows + a highlight (TvNav.kt) on EVERY device the moment a remote, keyboard or controller is
+    //    used, and a real touch puts it away (Stuart, 2026-10-04). A device nobody presses a key on never sees it.
     private var tvNav: TvNav? = null
     override fun onPostCreate(savedInstanceState: android.os.Bundle?) {
         super.onPostCreate(savedInstanceState)
-        if (TvTextInputManager.isTv(this)) tvNav = TvNav(this)
+        tvNav = TvNav(this)
     }
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
         tvNav?.handle(event) == true || super.dispatchKeyEvent(event)
+    /** ★ A FINGER (not a mouse or air-mouse click — those are pointer events too) ends remote mode. */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN &&
+            ev.isFromSource(android.view.InputDevice.SOURCE_TOUCHSCREEN)) tvNav?.hide()
+        return super.dispatchTouchEvent(ev)
+    }
     override fun getMainComponentName(): String = "VibeServerLite"
     override fun createReactActivityDelegate(): ReactActivityDelegate =
         DefaultReactActivityDelegate(this, mainComponentName, false)

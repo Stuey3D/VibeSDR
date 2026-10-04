@@ -22,7 +22,9 @@ import com.facebook.react.views.textinput.ReactTextInputManager
  */
 class TvTextInputManager : ReactTextInputManager() {
     override fun createViewInstance(ctx: ThemedReactContext): ReactEditText {
-        val v = if (isTv(ctx)) TvEditText(ctx) else ReactEditText(ctx)
+        // ★ Every field can be reached by a remote / keyboard / controller now (TvNav runs everywhere); in TOUCH mode a
+        //   TvEditText is exactly RN's ReactEditText (see requestFocus), so phones and tablets are unchanged.
+        val v = TvEditText(ctx)
         // The same three steps as ReactTextInputManager.createViewInstance (0.73.11, javap).
         v.inputType = v.inputType and 0x20000.inv()   // ~TYPE_TEXT_FLAG_MULTI_LINE
         v.setReturnKeyType("done")
@@ -40,6 +42,7 @@ class TvTextInputManager : ReactTextInputManager() {
 class TvEditText(ctx: Context) : ReactEditText(ctx) {
     /** D-pad focus: take it, but do not throw the keyboard over the screen on every pass through the page. */
     override fun requestFocus(direction: Int, previouslyFocusedRect: Rect?): Boolean {
+        if (isInTouchMode) return super.requestFocus(direction, previouslyFocusedRect)   // a finger: RN's own behaviour
         if (isFocused) return true
         val soft = showSoftInputOnFocus
         showSoftInputOnFocus = false

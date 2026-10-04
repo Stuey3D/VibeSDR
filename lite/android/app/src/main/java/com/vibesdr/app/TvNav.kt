@@ -30,7 +30,11 @@ import java.lang.ref.WeakReference
  *  - UP/DOWN move a full-width green BAR from row to row and scroll it into view;
  *  - LEFT/RIGHT move a smaller highlight along the row — or, on a lone slider, move the slider;
  *  - OK presses it: click a button, flip a switch, open the keyboard on a text field.
- * Nothing here runs on a phone or tablet (MainActivity only builds this on a TV).
+ * ★★ AND ON ANY DEVICE THE MOMENT A REMOTE, KEYBOARD OR CONTROLLER IS USED (Stuart, 2026-10-04: "put it in remote
+ * mode if ANYTHING other than a touch screen interacts"). MainActivity builds this everywhere: the first arrow /
+ * D-pad / controller key shows the bar, the next real touch hides it (hide()). On a phone that is never touched by
+ * a key, nothing ever appears. While a text field is being TYPED in, LEFT / RIGHT / ENTER stay with the text (cursor,
+ * submit) and only UP / DOWN leave it — the original trap, without stealing the keyboard.
  */
 class TvNav(private val act: Activity) {
     private var cur: WeakReference<View>? = null
@@ -112,12 +116,23 @@ class TvNav(private val act: Activity) {
         hl.invalidateSelf()
     }
 
+    /** A touch: back to touch mode — the bar and highlight go until the next key. */
+    fun hide() {
+        if (cur == null) return
+        cur = null; row = emptyList(); hl.invalidateSelf()
+    }
+
     fun handle(e: KeyEvent): Boolean {
         val kc = e.keyCode
         val up = kc == KeyEvent.KEYCODE_DPAD_UP; val down = kc == KeyEvent.KEYCODE_DPAD_DOWN
         val left = kc == KeyEvent.KEYCODE_DPAD_LEFT; val right = kc == KeyEvent.KEYCODE_DPAD_RIGHT
+        // ★ A controller's A is OK, as on every Android TV launcher.
         val ok = kc == KeyEvent.KEYCODE_DPAD_CENTER || kc == KeyEvent.KEYCODE_ENTER || kc == KeyEvent.KEYCODE_NUMPAD_ENTER
+            || kc == KeyEvent.KEYCODE_BUTTON_A
         if (!(up || down || left || right || ok)) return false
+        // ★ Typing in a field: the cursor keys and Enter are the TEXT's (a keyboard user editing); UP / DOWN leave.
+        val typing = act.currentFocus.let { it is EditText && it.isFocused }
+        if (typing && (left || right || kc == KeyEvent.KEYCODE_ENTER || kc == KeyEvent.KEYCODE_NUMPAD_ENTER)) return false
         attach()
         if (e.action != KeyEvent.ACTION_DOWN) return true
         val rows = rows()
