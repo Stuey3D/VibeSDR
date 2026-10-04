@@ -127,7 +127,8 @@ void RttyAuto::evaluate_() {
         if (cands_[best].score >= 12 && cands_[best].score >= second + 6) {
             winner_ = best;
             const auto& c = cands_[best];
-            std::snprintf(buf, sizeof buf, "[RTTY auto: %s baud, %.0f Hz shift%s]\n",
+            // ★ On its OWN line (Stuart's screenshot, 2026-10-04: "ITY[RTTY auto: …" — glued to text from an earlier search).
+            std::snprintf(buf, sizeof buf, "\n[RTTY auto: %s baud, %.0f Hz shift%s]\n",
                           c.baud == 45.45 ? "45.45" : (c.baud == 50 ? "50" : "75"), shift_, c.inv ? ", reverse" : "");
             chosenText_ = buf;
             say_(buf);
