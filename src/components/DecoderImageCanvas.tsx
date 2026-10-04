@@ -267,9 +267,21 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
 
       wefaxLine(ln: number, w: number, px: Uint8Array) {
         if (!live.current) { live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current; }  // lazy init
-        if (ln === 0 && live.current.complete) {                            // new image
+        /* ★★★ THE LINE COUNT GOING BACK IS A NEW CHART — complete or not. This waited for `complete`, which only
+         *  the STOP tone sets; the app does not ask for auto-stop (so it can draw from mid-chart), so a chart
+         *  joined part-way never completed and the NEXT chart, numbered from 0 again, was painted OVER it
+         *  (Stuart, 2026-10-04: "the new image is writing over the old one … the previous image is meant to go
+         *  into a buffer so the user can press previous image to view and save it"). The old one is finished
+         *  as imageDone() would (enhance), rolled to PREV, and the new chart starts on a clean canvas.
+         *  ★ A small step back (≤ 2) is tolerated — never a reason to throw a picture away. */
+        if (live.current.maxLine > 0 && (ln === 0 || ln < live.current.maxLine - 2)) {     // new image
+          if (!live.current.complete) {
+            live.current.complete = true;
+            if ((decoderName || '').toLowerCase() === 'wefax') { try { enhanceWefax(live.current); } catch {} }
+          }
           rollToPrev();
           live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current;
+          onStatus('new chart — the last one is under PREV');
         }
         let buf = live.current;
         if (ln >= buf.h) {                                                  // grow +100
