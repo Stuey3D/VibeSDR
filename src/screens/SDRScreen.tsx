@@ -184,6 +184,7 @@ import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid } from '../services/grid';
 import { countryForCallsign } from '../services/callsignCountry';
+import { cleanText } from '../utils/safeText';
 import { onCollectionChanged, requestSync } from '../services/cloudSync';
 import { kvsAvailable } from '../services/cloudKvs';
 import { markServerPrefsReset, setActiveSyncServer } from '../services/perServerSync';
@@ -5056,6 +5057,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
       onReceiverLoc: (lat, lon) => { recvLocRef.current = { lat, lon }; if (!destroyed.current) setRecvLoc({ lat, lon }); },
+      /* ★★ KIWI AND OPENWEBRX NAME THEMSELVES TOO — in the same top-right badge UberSDR, FM-DX and
+       *  VibeServer fill (MacHa's request, Stuart 2026-10-04: "we need to show the same for all servers").
+       *  Their adapters read it off the status page they already poll; a badge already set by the
+       *  server's own description is left alone. Text is a stranger's: cleaned, and capped. */
+      onReceiverIdent: ({ name, location }) => {
+        if (destroyed.current) return;
+        const n = cleanText(name, 120), l = location ? cleanText(location, 160) : '';
+        if (!n) return;
+        setStationId((cur) => cur ?? { line1: n, line2: l || undefined, color: '#ffffff' });
+      },
       // ★★ THE SERVER TURNING US AWAY, SAID PLAINLY — the same two screens the web
       // client shows, with the same words, because a listener who uses both should
       // meet the same explanation. Both are TERMINAL: the client stops retrying

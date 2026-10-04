@@ -255,7 +255,17 @@ export class KiwiAdapter implements SDRBackend {
       const http = this.wsBase.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
       const r = await fetch(http + '/status', { signal: AbortSignal.timeout(8000) });
       if (!r.ok) return;
-      const m = /gps=\(([-\d.]+),\s*([-\d.]+)\)/.exec(await r.text());
+      const text = await r.text();
+      /* ★ THE SAME PAGE NAMES THE RECEIVER — read it here rather than asking the Kiwi twice (we are a
+       *  guest on somebody else's receiver; see third_party_receiver_etiquette). Kiwi percent-encodes
+       *  the admin's text on /status. */
+      const field = (k: string) => {
+        const v = new RegExp('^' + k + '=(.*)$', 'm').exec(text)?.[1] ?? '';
+        try { return decodeURIComponent(v).trim(); } catch { return v.trim(); }
+      };
+      const kName = field('name'), kLoc = field('loc');
+      if (kName) this.cb.onReceiverIdent?.({ name: kName, location: kLoc || undefined });
+      const m = /gps=\(([-\d.]+),\s*([-\d.]+)\)/.exec(text);
       if (m) {
         const lat = Number(m[1]); const lon = Number(m[2]);
         if (Number.isFinite(lon)) this.cb.onReceiverLon?.(lon);

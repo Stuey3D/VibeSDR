@@ -393,6 +393,10 @@ export interface BackendCallbacks extends SDRCallbacks {
   /** Full receiver lat/lon (Kiwi `gps=(lat,lon)`) — drives FT8 spot distances and
    *  the on-device-decoder map for Local/Kiwi. */
   onReceiverLoc?: (lat: number, lon: number) => void;
+  /** The receiver's own NAME and where it is, from a server that publishes them on a status page
+   *  (Kiwi /status `name=` `loc=`, OWRX /status.json `receiver.name/location`) — the top-right badge
+   *  UberSDR, FM-DX and VibeServer already fill (MacHa's request). Sent once per connection. */
+  onReceiverIdent?: (ident: { name: string; location?: string }) => void;
   /** OWRX: server bookmarks + dial-frequency markers arrive over the WS (no REST
    *  endpoint like UberSDR). Feeds the VTS station readout + the search bar. */
   onBookmarks?: (list: { name: string; frequency: number; mode?: string; repeater?: boolean }[]) => void;

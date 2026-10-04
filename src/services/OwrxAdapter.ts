@@ -171,6 +171,7 @@ export class OwrxAdapter implements SDRBackend {
   private cb: BackendCallbacks;
   private wsUrl: string;
   private httpBase: string;   // http(s)://host:port — for /status.json polling
+  private identSent = false;  // the receiver's name/location reported once (onReceiverIdent)
   private statusTimer: ReturnType<typeof setInterval> | null = null;
   // ── Incoming-rate readout ───────────────────────────────────────────────────
   // ★ OWRX showed no KB/s or fps at all. It has always measured frame TIMING for
@@ -272,6 +273,12 @@ export class OwrxAdapter implements SDRBackend {
       // Receiver location → ITU region (MW 9/10 kHz). Emit once.
       const lon = j?.receiver?.gps?.lon;
       if (typeof lon === 'number' && !this.lonSent) { this.lonSent = true; this.cb.onReceiverLon?.(lon); }
+      // ★ The receiver's own name and place, for the top-right badge — from this same poll, once.
+      if (!this.identSent) {
+        const rn = typeof j?.receiver?.name === 'string' ? j.receiver.name.trim() : '';
+        const rl = typeof j?.receiver?.location === 'string' ? j.receiver.location.trim() : '';
+        if (rn) { this.identSent = true; this.cb.onReceiverIdent?.({ name: rn, location: rl || undefined }); }
+      }
       // Keep the full position: ADS-B sends aircraft POSITIONS, not distances, so
       // the range from the receiver has to be computed here.
       const rlat = j?.receiver?.gps?.lat;
