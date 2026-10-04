@@ -354,6 +354,17 @@ else
 fi
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★★ AN OPEN DECODER KEEPS ITS LISTENER'S TURN (2026-10-04, Stuart's minimised + muted WEFAX on the Airspy came
+#     back to a FRESH 30 minutes). Shared dial, hard 1-minute limit: decoder-only listener ended at the end of the
+#     ORIGINAL turn, decoder refused inside the cooldown. ~80 s, so only with VIBESERVER_SLOW=1.
+printf '\n\033[1m── session turn: an open decoder is present (end to end) ──\033[0m\n'
+if [ "${VIBESERVER_SLOW:-0}" = "1" ]; then
+  node scripts/test-session-decoder-presence.mjs; rc=$?
+else
+  echo '   not run — ~80 s; set VIBESERVER_SLOW=1'; rc=3
+fi
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ MODERN ROOTS FOR OLD PHONES (B10: a Lite on Android 5.1 could not fetch RIPE/APNIC, so Europe had
 #     no flags). VibeTls.kt itself, on the desktop JVM, against the real chains, with an old store
 #     simulated — and still refusing expired / self-signed / untrusted / wrong-host. Needs the network.

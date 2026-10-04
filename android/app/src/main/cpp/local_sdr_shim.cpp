@@ -6721,6 +6721,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::string sharedDecoderBy_;
     /** Every open decoder socket — so a shutdown can close them all. Guarded by clientMtx. */
     std::set<std::shared_ptr<net::Socket>> dxSocks;
+    /** ★ Each decoder socket's listener session — so an open decoder can keep that listener's TURN
+     *  (enforceSharedDialLimit). Guarded by clientMtx. */
+    std::map<const net::Socket*, std::string> dxSockSession;
+    /** ★ session → the turn key its spectrum/audio sockets were given (browser id or address), kept
+     *  after those sockets close: the decoder socket carries the session but no browser id. clientMtx. */
+    std::map<std::string, std::string> sessionTurnKey;
     /** ★ Is anything actually DECODING on this radio? (Not "is a decoder socket open": the web client
      *  opens one on every visit, so that answered yes for anybody who had merely loaded the page.) */
     bool decodingNow() { return decoders_.anyRunning(); }
@@ -16664,6 +16670,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // reach the port could attach decoders and start the FT8 engine without
             // the PIN — burning the host's CPU on an unattended (solar) server.
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
+            /* ★ The session limit's cooldown holds the decoders too: a decoder ended by the limit
+             *  (enforceSharedDialLimit) must not reconnect straight back onto the radio. The owner and
+             *  the host's own listening are exempt, as for every other socket. */
+            if (!isLoopback(sock->peerAddress())) {
+                std::string adminSess;
+                { std::lock_guard<std::mutex> al(adminSockMtx); adminSess = adminSessionId; }
+                const std::string dxSess = vsSessionIdOf(reqLine);
+                bool cooling = false;
+                if (dxSess.empty() || dxSess != adminSess) {
+                    std::lock_guard<std::mutex> lk(clientMtx);
+                    const auto it = cooldownUntil.find(sock->peerAddress());
+                    cooling = it != cooldownUntil.end() && it->second > Impl::nowSecs();
+                }
+                if (cooling) {
+                    LOGI("dxcluster WS refused — cooling down");
+                    sock->sendstr("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                    sock->close(); return;
+                }
+            }
             acceptDxcluster(sock, wsKey, vsSessionIdOf(reqLine));
         } else if ((wsSpec || wsAudio) && !wsKey.empty()) {
             if (!vsAuthOk(sock, reqLine)) { sock->close(); return; }
@@ -18504,7 +18529,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               //     the countdown timer resets" (Stuart, 2026-09-15; measured on the Airspy: two
               //     sockets 15 s apart from one address both told 1800). Same rule as the
               //     occupant and the per-client DSP: a reload does not buy a fresh half hour.
-              sockSince[sock.get()] = turnStartForLocked(turnKeyLocked(sock.get(), sock->peerAddress()), Impl::nowSecs()); }
+              sockSince[sock.get()] = turnStartForLocked(turnKeyLocked(sock.get(), sock->peerAddress()), Impl::nowSecs());
+              if (sessionTurnKey.size() > 256)   // ★ bounded: drop sessions whose turn has gone
+                  for (auto it = sessionTurnKey.begin(); it != sessionTurnKey.end(); )
+                      it = turnBook.has(it->second) ? std::next(it) : sessionTurnKey.erase(it);
+              sessionTurnKey[session] = turnKeyLocked(sock.get(), sock->peerAddress()); }
 
         // ★★★ FROM HERE ON, ONE THREAD AND ONLY ONE THREAD WRITES TO THIS SOCKET.
         // Registered immediately after the handshake, because the moment this client is published
@@ -20499,7 +20528,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!perVfo || !sess.empty()) host = decoders_.hostFor(sess, perVfo);
         auto peer = std::make_shared<DxPeer>(this, sock);
         const bool mirror = host ? host->addPeer(peer) : false;
-        { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.insert(sock); }
+        { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.insert(sock); dxSockSession[sock.get()] = session; }
         LOGI("dxcluster (decoder) WS connected%s%s", perVfo ? " — own decoders" : (mirror ? " (mirror)" : ""),
              perVfo && sess.empty() ? " — NO SESSION, decoders refused" : "");
         bool rdsHere = false;
@@ -20577,7 +20606,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     socket's tail run (Stuart, 2026-07-27: the Advanced RDS box went blank and stayed so).
         //     Counting the host's open sockets is that guard: the reconnected one is already there.
         if (rdsHere) rdsxDecoderSub(sock.get(), "", false);
-        { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.erase(sock); }
+        { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.erase(sock); dxSockSession.erase(sock.get()); }
         const size_t left = host ? host->removePeer(peer.get()) : 0;
         if (host && left == 0) {
             // ★ A listener's own host goes with them, slots and all — freed at once for the next.
@@ -22619,13 +22648,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double now = Impl::nowSecs();
         const int maxUsers = g_vsMaxUsers.load();
 
-        struct Cand { std::shared_ptr<net::Socket> sk; double since; std::string session; bool kept; };
+        struct Cand { std::shared_ptr<net::Socket> sk; double since; std::string session; bool kept; bool dx = false; };
         std::vector<Cand> over;
         std::vector<std::pair<std::shared_ptr<net::Socket>, int>> toWarn;
         int waiters = 0, listeners = 0;
+        // ★ Read before clientMtx, as enforceIdleListeners does (the router has its own lock).
+        const bool decoding = decodingNow();
+        std::string adminSess;
+        { std::lock_guard<std::mutex> al(adminSockMtx); adminSess = adminSessionId; }
         {
             std::lock_guard<std::mutex> lk(clientMtx);
             if (!clientDsp.empty()) return;              // per-client receivers: handled above
+            std::set<std::string> present;               // turn keys with a spectrum socket here
             waiters = distinctWaitingLocked();
             std::vector<std::shared_ptr<net::Socket>> socks;
             if (specClient) socks.push_back(specClient);
@@ -22640,6 +22674,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 auto si = sockSince.find(sk.get());
                 if (si == sockSince.end() || si->second <= 0) continue;
                 const std::string tk = turnKeyLocked(sk.get(), addr);
+                present.insert(tk);
                 touchTurnLocked(tk, now);   // still here — the turn does not lapse
                 const double left = (double)limitMin * 60.0 - (now - si->second);
                 if (left > 0) {
@@ -22652,6 +22687,38 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     over.push_back({sk, si->second, sess, vibeturn::keptUntilWanted(soft, turnSpentLocked(tk, now))});
                 }
             }
+            /* ★★★ AN OPEN DECODER IS A LISTENER WHO IS STILL HERE (Stuart, 2026-10-04). The app closes
+             *     its waterfall when minimised and its audio when muted; WEFAX ran on for 1 h 45 m on the
+             *     decoder socket alone, the turn lapsed after the 15-minute break, and on return the
+             *     countdown showed a FRESH 30 minutes — "I was expecting to be in the soft limit still".
+             *     Now a running decoder keeps its listener's turn, under the SAME rules as listening:
+             *     a hard limit ends it on time; a soft one keeps it until the radio is full and
+             *     somebody is waiting ("booted if 9 users were active and a 10th then wanted the
+             *     slot"), so it counts towards full too.
+             *  ★ Only while a decoder is RUNNING — the web client opens this socket on every visit.
+             *  ★ Keyed by the session's own turn key, so the listener's spectrum socket, when it comes
+             *    back, continues the same turn; counted once per key. */
+            if (decoding) {
+                for (auto& dx : dxSocks) {
+                    if (!dx || !dx->isOpen()) continue;
+                    const std::string addr = dx->peerAddress();
+                    if (addr.empty() || isLoopback(addr)) continue;
+                    std::string sess;
+                    { auto it = dxSockSession.find(dx.get()); if (it != dxSockSession.end()) sess = it->second; }
+                    if (!sess.empty() && sess == adminSess) continue;            // the owner is exempt
+                    std::string tk;
+                    { auto it = sess.empty() ? sessionTurnKey.end() : sessionTurnKey.find(sess);
+                      tk = it != sessionTurnKey.end() ? it->second : occKeyFor(std::string(), addr); }
+                    if (!present.insert(tk).second) continue;                    // already counted
+                    ++listeners;
+                    const double started = turnBook.heldStart(tk, now);
+                    if ((double)limitMin * 60.0 - (now - started) <= 0)
+                        over.push_back({dx, started, sess, vibeturn::keptUntilWanted(soft, turnSpentLocked(tk, now)), true});
+                }
+            }
+            // ★ Forget a session's key once its turn has gone (the book prunes after the break).
+            for (auto it = sessionTurnKey.begin(); it != sessionTurnKey.end(); )
+                it = turnBook.has(it->second) ? std::next(it) : sessionTurnKey.erase(it);
         }
 
         for (auto& w : toWarn) {
@@ -22700,7 +22767,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           sockSince.erase(victim.sk.get());              // ★ not a candidate again while it drains
           if (!addr.empty()) {
               cooldownUntil[addr] = now + kSessionCooldownSec;
-              turnBook.markSpent(turnKeyLocked(victim.sk.get(), addr), now);   // ★ borrowed time later (B10)
+              std::string tk = turnKeyLocked(victim.sk.get(), addr);
+              if (victim.dx) { auto it = sessionTurnKey.find(victim.session);
+                               if (it != sessionTurnKey.end()) tk = it->second; }
+              turnBook.markSpent(tk, now);   // ★ borrowed time later (B10)
           }
           // ★ The same session's audio goes with it, as `au` does above.
           auto same = [&](const std::shared_ptr<net::Socket>& a) {

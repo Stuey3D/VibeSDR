@@ -83,6 +83,16 @@ public:
         t.seen = now;
         t.spent = true;
     }
+    /** ★ When the turn under `key` began, or a new turn begun now if there is none live (the same
+     *  rule as startFor, without moving a live turn: for a listener who is STILL HERE on another
+     *  socket — an open decoder — so nothing was spent away). Touches it. */
+    double heldStart(const std::string& key, double now) {
+        if (key.empty()) return now;
+        auto it = turns.find(key);
+        if (it != turns.end() && (now - it->second.seen) <= breakS) { it->second.seen = now; return it->second.started; }
+        return startFor(key, now);
+    }
+    bool has(const std::string& key) const { return turns.count(key) > 0; }
     /** ★ Is this listener on BORROWED time — back after the limit already ended their turn? */
     bool spent(const std::string& key, double now) const {
         if (key.empty()) return false;
