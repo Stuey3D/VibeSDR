@@ -182,7 +182,7 @@ import {
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
-import { distanceKmToGrid } from '../services/grid';
+import { distanceKmToGrid, gridToLatLon } from '../services/grid';
 import { countryForCallsign } from '../services/callsignCountry';
 import { cleanText } from '../utils/safeText';
 import { onCollectionChanged, requestSync } from '../services/cloudSync';
@@ -1496,6 +1496,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (!cancelled) {
             const iso = typeof j?.iso === 'string' ? j.iso : '';
             setReceiverIso(iso || receiverIsoFromGrid(j?.grid || j?.locator || ''));
+            /* ★★ AND THE ITU REGION. The VibeServer adapter looked for the longitude in /status.json (the
+             *  UberSDR/OWRX shape), which VibeServer does not serve — so a VibeServer reached outside the
+             *  directory had NO region, both AM-broadcast entries matched, and the Americas' 10 kHz won: MW
+             *  bookmarks and typed entries landed on 10 kHz steps on a British receiver while the web client
+             *  (which falls back to Region 1) chose 9 (Stuart, 2026-10-04). /location has lon, or a grid. */
+            const lon = typeof j?.lon === 'number' ? j.lon : gridToLatLon(j?.grid || j?.locator || '')?.lon;
+            if (typeof lon === 'number' && Number.isFinite(lon)) setRecvLon(lon);
           }
         } catch { if (!cancelled) setReceiverIso(''); }
         return;
@@ -1512,7 +1519,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!cancelled) setReceiverIso('');   // network instance: we don't know where it is
     })();
     return () => { cancelled = true; setReceiverIso(''); };
-  }, [isLocal, isRemoteShim]);
+    // ★★ connectBase: re-ask once the RADIO is chosen. On the front door's address /location is the door's page, not
+  //    JSON — so every radio behind a door lost its country (RadioDNS logos) and, now, its ITU region.
+  }, [isLocal, isRemoteShim, connectBase]);
 
   // The shim learns station names from RDS whenever it runs — serving OR listening —
   // but it has no storage, so something has to write the list down. On a REMOTE shim
@@ -6277,6 +6286,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    touches it — which is the whole point.
    */
   const userTuneSeq = useRef(0);
+  /** ★ userTuneSeq as of the last band check — a crossing applies the band's mode/step only if it moved (vtsCheck). */
+  const bandSeqSeen = useRef(0);
   /** ★ Forces a redraw so the userTuneSeq REF reaches LocalAudioPlayer as a prop. A restore
    *  happens on a quiet reconnect where nothing else redraws, so without this the bump is
    *  invisible to the component that needs it. See onRestoredTune. */
@@ -8822,6 +8833,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [baseUrl, ituRegion]);
 
   const vtsCheck = useCallback((hz: number) => {
+    // ★ Did a PERSON tune since the last check? (See the band-defaults note below.) Read and reset on every check.
+    const userMoved = userTuneSeq.current !== bandSeqSeen.current;
+    bandSeqSeen.current = userTuneSeq.current;
     // Band crossing
     const order: Record<string, number> = { ham: 0, broadcast: 1, utility: 2 };
     const bands = getBandsAtRegion(hz, ituRegion)
@@ -8850,7 +8864,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       // any touch) so the demod/step they're dialling in isn't yanked away.
       // 1.5s window comfortably covers the drum's inertia glide after release.
       const handsOn = Date.now() - lastInteractRef.current < 1500;
-      if (!handsOn) {
+      /* ★★★ ONLY A CROSSING THIS LISTENER CAUSED (Stuart, 2026-10-04: "I've just connected to something I left at
+       *  7074 USB and the app switched it to LSB"). On connect the server's frequency arrives and counts as a
+       *  crossing from wherever the screen started, and so did another listener retuning a shared dial — and
+       *  onMode SENDS the mode: the client changing the radio with no user action, the shared-dial contract's
+       *  one rule. userTuneSeq moves ONLY when a person tunes (drum, step, entry, bookmark, media skip, voice,
+       *  car pick) — so a crossing with no movement since the last check came from the server, and is left alone. */
+      if (!handsOn && userMoved) {
         const d = bandTuneDefaults(hz, ituRegion);
         if (d.mode && d.mode in MODE_BANDWIDTHS) onMode(d.mode);
         if (d.step) setStep(d.step);

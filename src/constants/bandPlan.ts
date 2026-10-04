@@ -29,8 +29,10 @@ export const BAND_PLAN: Band[] = [
   { lo: 148500,    hi: 283500,    name: 'NDB / Navigational Beacons', type: 'utility', mode: 'usb', step: 500 },
   { lo: 283500,    hi: 525000,    name: 'NDB / Maritime Beacons',     type: 'utility', mode: 'usb', step: 500 },
   { lo: 472000,    hi: 479000,    name: '630m Ham Band',              type: 'ham',  bandLabel: '630m', mode: 'cwu', step: 100 },
-  { lo: 525000,    hi: 1605000,   name: 'AM Broadcast Band',          type: 'broadcast', regions: [2, 3], mode: 'am', step: 10000 },
-  { lo: 525000,    hi: 1705000,   name: 'AM Broadcast Band',          type: 'broadcast', regions: [1], mode: 'am', step: 9000 },
+  // ★ ITU (Stuart, 2026-10-04 — "region based on the ITU bandplan"): Regions 1 AND 3 are 526.5–1606.5 kHz on 9 kHz
+  //   channels; Region 2 (the Americas) is 525–1705 kHz on 10 kHz. This had R3 on 10 kHz and the two upper edges swapped.
+  { lo: 525000,    hi: 1705000,   name: 'AM Broadcast Band',          type: 'broadcast', regions: [2], mode: 'am', step: 10000 },
+  { lo: 526500,    hi: 1606500,   name: 'AM Broadcast Band',          type: 'broadcast', regions: [1, 3], mode: 'am', step: 9000 },
   { lo: 1800000,   hi: 2000000,   name: '160m Ham Band',              type: 'ham',  bandLabel: '160m', mode: 'lsb', step: 500 },
   { lo: 2300000,   hi: 2495000,   name: '120m Tropical Broadcast',    type: 'broadcast', mode: 'am', step: 1000 },
   { lo: 2495000,   hi: 2850000,   name: '90m Tropical Broadcast',     type: 'broadcast', mode: 'am', step: 1000 },
