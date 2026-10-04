@@ -13,6 +13,7 @@ Writes (run from the repo root):  python3 assets/brand/colour_icons.py
   ios/VibeSDR/Images.xcassets/AppIcon-<Colour>.appiconset   iOS alternate icons (1024, no alpha)
   ios/VibeSDR/Images.xcassets/artwork_<colour>.imageset     Now Playing art base, 600 x 600
   ios/VibeSDR/Images.xcassets/logo_vibeserver[_<colour>].imageset   the 11.0 VibeServer mark inlaid on that art
+  ios/VibeSDRWatch/Assets.xcassets/AppIcon.appiconset/AppIcon.png  Buddy's watch icon, fixed amber
 Needs rsvg-convert (brew install librsvg) and Pillow.
 """
 import colorsys, json, os, re, subprocess, tempfile
@@ -76,12 +77,28 @@ def vibeserver_mark(base_svg, colour=None):
     return recolour(svg, colour) if colour else svg
 
 
+def buddy_icon(base_svg, colour=None):
+    """Buddy (the iPhone app's watch companion): the round master with the phone glyph — family_icons.py's 'phone'
+    on legacy-round.svg; the green rebuild matches the shipped icon pixel for pixel. ★ watchOS has NO alternate
+    icons, so Buddy cannot follow the user's pick; it is fixed AMBER (Stuart, 2026-10-04: "the opposite choice in
+    the app against the green") so it stands apart from Jr's green on the watch."""
+    G = '#66E07C'; X, Y, W = 596, 598, 232; cx, cy, sc = X + W / 2, Y + W / 2, W / 264
+    glyph = (f'<g transform="translate({cx} {cy}) scale({sc})"><rect x="-58" y="-100" width="116" height="200" rx="26" fill="none" stroke="{G}" stroke-width="13"/>'
+             f'<rect x="-22" y="-80" width="44" height="13" rx="6.5" fill="{G}"/><rect x="-24" y="74" width="48" height="9" rx="4.5" fill="{G}"/></g>')
+    plate = f'<rect x="{X}" y="{Y}" width="{W}" height="{W}" rx="{W*46/264:.1f}" fill="#040605" stroke="{G}" stroke-width="10"/>'
+    svg = base_svg.replace('</svg>', f'<g filter="url(#glow)">{plate}{glyph}</g></svg>')
+    return recolour(svg, colour) if colour else svg
+
+
 def main():
     icon, art = open(os.path.join(BRAND, 'icon-ios.svg')).read(), open(os.path.join(BRAND, 'artwork.svg')).read()
     xc = os.path.join(R, 'ios', 'VibeSDR', 'Images.xcassets')
     # ★ The green inlay is the 11.0 mark too (it was the older radio-and-node art until 2026-10-04).
     icon_shape(render(vibeserver_mark(icon), 1024).resize((320, 320), Image.LANCZOS)).save(
         os.path.join(xc, 'logo_vibeserver.imageset', 'vibeserver.png'), optimize=True)
+    # ★ Buddy, fixed amber (see buddy_icon).
+    render(buddy_icon(open(os.path.join(BRAND, 'legacy-round.svg')).read(), 'amber'), 1024).save(
+        os.path.join(R, 'ios', 'VibeSDRWatch', 'Assets.xcassets', 'AppIcon.appiconset', 'AppIcon.png'), optimize=True)
     for c in LED:
         d = os.path.join(xc, f'AppIcon-{c.capitalize()}.appiconset'); os.makedirs(d, exist_ok=True)
         render(recolour(icon, c), 1024).save(os.path.join(d, 'App-Icon-1024x1024@1x.png'), optimize=True)
