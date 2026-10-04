@@ -13441,6 +13441,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //    listener is waiting for the reply.
             sendText(sock, ok ? "{\"type\":\"admin\",\"ok\":true}"
                               : "{\"type\":\"admin\",\"ok\":false}");
+            /* ★★★ AND THE LOCKS THIS LISTENER NO LONGER HAS, AT ONCE. hwinfo's agcLocked is per connection
+             *  (false for a signed-in admin, 68e1995f) — but nothing re-sent it here, so the VibeAGC switch
+             *  stayed locked until some unrelated hwinfo happened along. Stuart, 2026-10-04: "I cannot
+             *  disable VibeAGC" … "it seemed to appear after a little while". */
+            sendHwInfo(sock);
             return;
         }
         // ★★★ ON A SHARED RECEIVER, NOTHING SHARED IS UNLOCKED. The radio's front end and the
