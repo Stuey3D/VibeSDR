@@ -29,6 +29,7 @@ import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassb
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, newHist } from '../../../src/utils/wefaxCrisp';
+import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { MARGIN_AFTER_LINES, SHIFT_STEP, SLANT_STEP, findMargin, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
@@ -9444,7 +9445,7 @@ function fmtSpotTimeSec(t: number): string {
   return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}z`;
 }
 
-interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean; auto?: boolean }
+interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean; auto?: boolean; stop?: 1 | 1.5 }
 
 // Verbatim from the app (DecoderClient RTTY_PRESETS).
 const RTTY_PRESETS: Record<string, RttySettings> = {
@@ -9500,7 +9501,9 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'rtty') {
     return {
       center_frequency: 1000, shift: rtty.shift, baud_rate: rtty.baud,
-      encoding: rtty.encoding, inverted: rtty.inverted, framing: '5N1.5',
+      encoding: rtty.encoding, inverted: rtty.inverted,
+      // ★ Stop bits (2026-10-04, PBB Den Helder sends 1): the manual setting; AUTO tries both on the server.
+      framing: rtty.stop === 1 ? '5N1' : '5N1.5',
       ...(rtty.auto && rtty.encoding === 'ITA2' ? { auto: true } : {}),
     };
   }
@@ -9582,8 +9585,14 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(true);
     },
     onState: (st) => {
-      $('decStatus').textContent = st ? 'decoding…' : 'listening…';
+      decStateText = st ? 'decoding…' : 'listening…';
+      if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
       setDecLive(!!st);
+    },
+    // ★ RTTY AUTO's tuning guide ("< 100Hz or 500Hz >", Stuart 2026-10-04) — the dial direction from this mode.
+    onTuneHint: (hz) => {
+      decTuneHint = tuneHintLabel(hz, String(spec?.mode ?? ''));
+      $('decStatus').textContent = decTuneHint || decStateText;
     },
     onImageStart: (w, h) => startDecImage(w, h),
     // ★ Once the server reports WEFAX phases, a line alone no longer lights the LED — noise draws lines too.
@@ -9688,6 +9697,7 @@ function initDecoders(host: string, auth: AuthState) {
       const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds';
       if (activeDec === mode) { stopDecoder(); return; }
       activeDec = mode;
+      decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
       decoders!.attach(mode, decParams(mode));
       if (mode === 'rds') spec?.rdsxLight(true);   // ★ the lighter eye stream — see SpectrumClient.rdsxLight
       showDecBox(mode);
@@ -9719,6 +9729,7 @@ function initDecoders(host: string, auth: AuthState) {
   segButtons('rttyShift', 'shift', (v) => { rtty.shift = Number(v); manual(); reattachIf('rtty'); });
   segButtons('rttyBaud', 'baud', (v) => { rtty.baud = Number(v); manual(); reattachIf('rtty'); });
   segButtons('rttyEnc', 'enc', (v) => { rtty.encoding = String(v); manual(); reattachIf('rtty'); });
+  segButtons('rttyStop', 'stop', (v) => { rtty.stop = Number(v) === 1 ? 1 : 1.5; manual(); reattachIf('rtty'); });
   const inv = $<HTMLButtonElement>('rttyInv');
   inv.onclick = () => {
     rtty.inverted = !rtty.inverted; rtty.auto = false; syncRttyControls();
@@ -9830,8 +9841,10 @@ function syncRttyControls() {
   // ★ Under AUTO no shift / baud is "chosen" — the server picks them — so none is lit.
   mark('rttyShift', 'shift', rtty.auto ? '' : String(rtty.shift));
   mark('rttyBaud', 'baud', rtty.auto ? '' : String(rtty.baud));
+  mark('rttyStop', 'stop', rtty.auto ? '' : String(rtty.stop ?? 1.5));
   const pk = Object.entries(RTTY_PRESETS).find(([, p]) => p.shift === rtty.shift && p.baud === rtty.baud
-    && p.encoding === rtty.encoding && p.inverted === rtty.inverted && !!p.auto === !!rtty.auto)?.[0] ?? '';
+    && p.encoding === rtty.encoding && p.inverted === rtty.inverted && !!p.auto === !!rtty.auto
+    && (p.stop ?? 1.5) === (rtty.stop ?? 1.5))?.[0] ?? '';
   mark('rttyPreset', 'preset', pk);
   mark('rttyEnc', 'enc', rtty.encoding);
   const inv = $<HTMLButtonElement>('rttyInv');
@@ -9842,7 +9855,7 @@ function syncRttyControls() {
 /** A settings change while running must re-attach — the shim builds the decoder
  *  from the attach params, so it can't be tweaked in place. */
 function reattachIf(mode: string) {
-  if (activeDec === mode) decoders?.attach(mode as 'rtty' | 'wefax', decParams(mode));
+  if (activeDec === mode) { decTuneHint = ''; decoders?.attach(mode as 'rtty' | 'wefax', decParams(mode)); }
 }
 
 function stopDecoder() {
@@ -11545,6 +11558,9 @@ function startDecImage(w: number, h: number) {
   updateDecImageButtons();
 }
 
+/** ★ RTTY AUTO's tuning guide as shown ('' = none), and the decoder state it stands in for. */
+let decTuneHint = '';
+let decStateText = 'listening…';
 let decLiveMaxY = -1;   // the highest line drawn into the live image (see drawDecLine)
 let decLiveRaw: Uint8Array[] = [];   // WEFAX lines as received — a SHIFT / SLANT change redraws from these
 let decLiveAl: Uint8Array[] = [];    // …and after SHIFT / SLANT: what the crisp rendering smooths (wefaxCrisp)

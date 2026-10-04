@@ -54,6 +54,8 @@ export interface DecoderCallbacks {
   onText?: (text: string) => void;
   /** Decoder lock/idle state (RTTY/NAVTEX). */
   onState?: (state: number) => void;
+  /** ★ RTTY AUTO's tuning guide (server 0x06 | i16 BE): audio-pitch move in Hz (+ = up), 0 = fine. */
+  onTuneHint?: (audioHz: number) => void;
   /** A new image is starting. height is 0 for WEFAX (it grows without bound). */
   onImageStart?: (width: number, height: number) => void;
   /** One image line. `rgb` is true for SSTV (3 bytes/px), false for WEFAX (grey). */
@@ -250,6 +252,8 @@ export class DecoderClient {
           if (text) this.cb.onText?.(text);
         } else if (op === 0x03 && buf.byteLength >= 2) {
           this.cb.onState?.(dv.getUint8(1));
+        } else if (op === 0x06 && buf.byteLength >= 3 && this.mode === 'rtty') {
+          this.cb.onTuneHint?.(dv.getInt16(1, false));
         }
         return;
 

@@ -37,4 +37,18 @@ if command -v ffmpeg >/dev/null && [ -f $R ]; then
 else
   echo "  --   REAL DWD recording: not run (needs ffmpeg)"
 fi
+# 4. ★ REAL AIR: PBB Den Helder (Royal Netherlands Navy) on 2474 kHz, 75 Bd, 850 Hz, reverse, ONE stop bit, idle gaps between
+#    characters (Stuart's recording, 2026-10-04 ~21:56 UTC). Nothing decoded it before: only 5N1.5 waited for the start bit,
+#    the 1-stop path read the start bit as data, and AUTO never tried 1 stop.
+R=tools/rtty-bench/data/pbb-2474khz-2026-10-04.m4a
+if command -v ffmpeg >/dev/null && [ -f $R ]; then
+  ffmpeg -loglevel error -y -i $R -ac 1 -ar 48000 -c:a pcm_s16le $T/pbb.wav
+  $T/rtty $T/pbb.wav auto > $T/pbb.txt 2> $T/pbb.err
+  grep -q "75 baud, 850 Hz shift, reverse, 1 stop bit\]" $T/pbb.err; ok $? "REAL PBB: AUTO → 75 baud, 850 Hz, reverse, 1 stop ($(sed 's/.*chose: //' $T/pbb.err | tr -d '\n'))"
+  n=$(grep -c '02A   04B   06A   08B   12X   17B   22X   26Y' $T/pbb.txt)
+  [ "$n" -ge 3 ]; ok $? "REAL PBB: $n complete '02A … 26Y' lines"
+  grep -q 'PBB' $T/pbb.txt; ok $? "REAL PBB: the callsign PBB decodes"
+else
+  echo "  --   REAL PBB recording: not run (needs ffmpeg)"
+fi
 exit $fail

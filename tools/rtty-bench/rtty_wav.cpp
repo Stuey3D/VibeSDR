@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
         vibe::RttyAuto a(48000);
         std::string out;
         a.onChar = [&](char32_t c) { if (c == U'\r') return; out += c < 128 ? (char)c : '?'; };
+        a.onTuneHint = [&](int hz) { std::fprintf(stderr, "── tune hint: %+d Hz (audio)\n", hz); };
         for (size_t i = 0; i < mono.size(); i += 960) a.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
         std::printf("%s\n", out.c_str());
         std::fprintf(stderr, "── auto chose: %s", a.chosen().empty() ? "nothing\n" : a.chosen().c_str());

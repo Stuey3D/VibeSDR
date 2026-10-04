@@ -91,7 +91,10 @@ export function timeStationFor(hz: number, receiverLonDeg?: number | null): Time
 export interface RttySettings {
   shift:    number;            // 170 | 200 | 425 | 450 | 850
   baud:     number;            // 45.45 | 50 | 75 | 100
-  encoding: 'ITA2' | 'ASCII' | 'CCIR476';
+  encoding: 'ITA2' | 'ASCII' | 'CCIR476';   // ★ 'ASCII' is no longer offered (the server never decoded it); stored → ITA2
+  /** ★ Stop bits for ITA2 (2026-10-04): 1.5 is the norm (amateur, DWD); 1 for e.g. PBB Den Helder. 2-stop signals decode
+   *  with 1 (the decoder waits for each start bit). Absent = 1.5. */
+  stop?:    1 | 1.5;
   inverted: boolean;
   /** ★★ AUTO (2026-10-04): the server finds shift, centre, baud and polarity from the signal (decoders/rtty_auto.h).
    *  The other fields are still sent — an older server simply decodes with them. */
@@ -170,6 +173,8 @@ export interface DecoderCallbacks {
   onImageStart?:(width: number, height: number) => void;
   onImageDone?: () => void;
   onError?:     (msg: string) => void;
+  /** ★ RTTY AUTO's tuning guide (server 0x06): how far the tones should move in AUDIO pitch (+ = up), 0 = fine. */
+  onTuneHint?:  (audioHz: number) => void;
   /** Digital/CW spots stream (after startSpots). */
   onSpot?:      (spot: SpotRow) => void;
   /** Chat (rides this WS — chat_websocket.go via the dxcluster handler).
@@ -594,7 +599,7 @@ export class DecoderClient {
         return { extension_name: 'fsk', params: {
           center_frequency: 1000, shift: S.shift, baud_rate: S.baud,
           inverted: S.inverted,
-          framing: S.encoding === 'CCIR476' ? '4/7' : '5N1.5',
+          framing: S.encoding === 'CCIR476' ? '4/7' : S.stop === 1 ? '5N1' : '5N1.5',
           encoding: S.encoding,
           ...(S.auto && S.encoding === 'ITA2' ? { auto: true } : {}),
         }};
@@ -656,6 +661,8 @@ export class DecoderClient {
         const s = u8[1];
         this.cb.onStatus(['no signal', 'sync 1', 'sync 2', 'decoding'][s] ?? 'state ' + s);
         this.cb.onDot(s === 3 ? 'active' : s >= 1 ? 'sync' : 'idle');
+      } else if (name === 'rtty' && t === 0x06 && u8.length >= 3) {
+        this.cb.onTuneHint?.(v.getInt16(1, false));
       } else if (name === 'navtex' && t === 0x02) {
         this.cb.onDot('sync');
       }

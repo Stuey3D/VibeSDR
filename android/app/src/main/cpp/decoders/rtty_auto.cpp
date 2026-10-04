@@ -40,12 +40,23 @@ void RttyAuto::say_(const std::string& s) {
     for (char c : s) onChar((char32_t)(unsigned char)c);
 }
 
+// ★ Debounced: a hint must hold for two spectrum steps (~1 s) before it is shown or changed, so a fading tone does not
+//   make the arrow flicker.
+void RttyAuto::hint_(int audioHz) {
+    if (audioHz == pendingHint_) hintVotes_++; else { pendingHint_ = audioHz; hintVotes_ = 1; }
+    if (hintVotes_ < 2 || audioHz == lastHint_) return;
+    lastHint_ = audioHz;
+    if (onTuneHint) onTuneHint(audioHz);
+}
+
 void RttyAuto::startCandidates_(double centre, double shift) {
     cands_.clear(); winner_ = -1; chosenText_.clear(); searchSamples_ = 0; badWinnerSec_ = 0;
     centre_ = centre; shift_ = shift;
-    for (double b : kBauds) for (int inv = 0; inv < 2; inv++) {
-        Cand c; c.baud = b; c.inv = inv != 0;
-        c.d.reset(new FskDecoder(sr_, centre, shift, b, "5N1.5", "ITA2", c.inv));
+    // ★ 1.5 AND 1 stop bit (PBB Den Helder sends 1, 2026-10-04). A 1-stop decoder that waits for each start bit also
+    //   reads 2-stop signals (the extra stop is idle to it), so these two framings cover every async ITA2 station.
+    for (double b : kBauds) for (int one = 0; one < 2; one++) for (int inv = 0; inv < 2; inv++) {
+        Cand c; c.baud = b; c.inv = inv != 0; c.oneStop = one != 0;
+        c.d.reset(new FskDecoder(sr_, centre, shift, b, c.oneStop ? "5N1" : "5N1.5", "ITA2", c.inv));
         cands_.push_back(std::move(c));
     }
     for (size_t i = 0; i < cands_.size(); i++) {
@@ -74,21 +85,32 @@ void RttyAuto::spectrumStep_() {
     psdFrames_++;
     if (psdFrames_ < 4) return;
     const double bin = (double)sr_ / kN;
-    const int lo = (int)(250 / bin), hi = (int)(3200 / bin);
+    const int lo = (int)(120 / bin), hi = (int)(3200 / bin);   // ★ from 120 Hz: a low tone must be SEEN to advise on it
     std::vector<double> sorted(psd_.begin() + lo, psd_.begin() + hi);
     std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
     const double noise = std::max(1e-12, sorted[sorted.size() / 2]);
     auto peakAt = [&](int b) { return b > lo && b < hi && psd_[b] >= psd_[b - 1] && psd_[b] >= psd_[b + 1]; };
     int p1 = -1;
     for (int b = lo + 1; b < hi; b++) if (peakAt(b) && (p1 < 0 || psd_[b] > psd_[p1])) p1 = b;
-    if (p1 < 0 || psd_[p1] < noise * 30) return;                       // nothing tone-like (≥ ~15 dB)
+    if (p1 < 0 || psd_[p1] < noise * 30) { hint_(0); return; }         // nothing tone-like (≥ ~15 dB): no advice
+    // ★ Where the tones should sit: the middle of a typical SSB passband (≈ 300–2700 Hz), with room either side.
+    constexpr double kLoEdge = 400, kHiEdge = 2500, kAim = 1500;
+    auto round100 = [](double v) { return (int)std::lround(v / 100.0) * 100; };
     int p2 = -1;
     for (int b = lo + 1; b < hi; b++) {
         const double d = std::fabs(b - p1) * bin;
         if (d < 100 || d > 1000 || !peakAt(b)) continue;
         if (p2 < 0 || psd_[b] > psd_[p2]) p2 = b;
     }
-    if (p2 < 0 || psd_[p2] < noise * 30 || psd_[p2] < psd_[p1] * 0.03) return;   // second tone within 15 dB of the first
+    if (p2 < 0 || psd_[p2] < noise * 30 || psd_[p2] < psd_[p1] * 0.03) {   // second tone within 15 dB of the first
+        // ★ ONE tone: near an edge its partner is probably beyond the filter — bring it in towards the middle, far enough
+        //   for a partner up to 850 Hz away on the cut side to fit. Mid-band alone it may be an idle carrier: no advice.
+        const double f1 = p1 * bin;
+        if (f1 < 700)       hint_(round100(1900 - f1));
+        else if (f1 > 2300) hint_(round100(1100 - f1));
+        else                hint_(0);
+        return;
+    }
     // Sub-bin centres (parabolic), then the standard shift if it is close.
     auto refine = [&](int b) {
         const double y0 = std::log(psd_[b - 1] + 1e-12), y1 = std::log(psd_[b] + 1e-12), y2 = std::log(psd_[b + 1] + 1e-12);
@@ -97,6 +119,9 @@ void RttyAuto::spectrumStep_() {
     };
     const double f1 = refine(p1), f2 = refine(p2);
     const double centre = (f1 + f2) / 2;
+    // ★ BOTH tones heard: advise only when one is hard against an edge — AUTO decodes them anywhere in the passband.
+    if (std::min(f1, f2) < kLoEdge || std::max(f1, f2) > kHiEdge) hint_(round100(kAim - centre));
+    else hint_(0);
     double shift = std::fabs(f1 - f2);
     { double bestS = 0, bestD = 1e9;   // ★ the NEAREST standard shift within 12 % (445 Hz measured is DWD's 450, not 425)
       for (double s : kShifts) { const double d = std::fabs(shift - s); if (d <= s * 0.12 && d < bestD) { bestD = d; bestS = s; } }
@@ -122,14 +147,20 @@ void RttyAuto::evaluate_() {
     char buf[96];
     if (winner_ < 0) {
         // ★ Choose once the best is clearly a decode: a few seconds of mostly clean frames, and ahead of the rest.
+        // ★ Against candidates with a DIFFERENT speed or polarity only: a 1-stop decoder that waits for each start bit reads
+        //   a 1.5-stop signal too, so the two stop lengths of the right speed tie — and waiting for one to pull 6 ahead of
+        //   the other never ended (2026-10-04). Between them, the higher score wins.
         double second = -1e9;
-        for (size_t i = 0; i < cands_.size(); i++) if ((int)i != best) second = std::max(second, cands_[i].score);
+        for (size_t i = 0; i < cands_.size(); i++)
+            if ((int)i != best && (cands_[i].baud != cands_[best].baud || cands_[i].inv != cands_[best].inv))
+                second = std::max(second, cands_[i].score);
         if (cands_[best].score >= 12 && cands_[best].score >= second + 6) {
             winner_ = best;
             const auto& c = cands_[best];
             // ★ On its OWN line (Stuart's screenshot, 2026-10-04: "ITY[RTTY auto: …" — glued to text from an earlier search).
-            std::snprintf(buf, sizeof buf, "\n[RTTY auto: %s baud, %.0f Hz shift%s]\n",
-                          c.baud == 45.45 ? "45.45" : (c.baud == 50 ? "50" : "75"), shift_, c.inv ? ", reverse" : "");
+            std::snprintf(buf, sizeof buf, "\n[RTTY auto: %s baud, %.0f Hz shift%s%s]\n",
+                          c.baud == 45.45 ? "45.45" : (c.baud == 50 ? "50" : "75"), shift_, c.inv ? ", reverse" : "",
+                          c.oneStop ? ", 1 stop bit" : "");
             chosenText_ = buf;
             say_(buf);
             for (char ch : c.pending) if (onChar) onChar((char32_t)(unsigned char)ch);

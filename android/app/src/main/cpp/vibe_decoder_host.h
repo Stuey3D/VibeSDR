@@ -586,6 +586,12 @@ private:
                 else if (ch < 0x800) { textBuf_.push_back((char)(0xC0 | (ch >> 6))); textBuf_.push_back((char)(0x80 | (ch & 0x3F))); }
             };
             rttyAuto_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+            // ★ 0x06 | i16 BE: the tuning guide, in AUDIO Hz (+ = the tones should go up in pitch); 0 = clear.
+            rttyAuto_->onTuneHint = [this](int hz) {
+                const int16_t v = (int16_t)std::max(-32000, std::min(32000, hz));
+                uint8_t m[3] = { 0x06, (uint8_t)((uint16_t)v >> 8), (uint8_t)((uint16_t)v & 0xff) };
+                broadcast(m, 3);
+            };
             log("decoder attached: fsk auto");
         } else {
             const bool navtex = ext == "navtex";

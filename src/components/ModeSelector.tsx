@@ -141,7 +141,7 @@ function SegBtn({ label, active, onPress }: { label: string; active: boolean; on
 }
 function RttySettingsRows({ s, onChange }: { s: RttySettings; onChange: (s: RttySettings) => void }) {
   const presetKey = Object.entries(RTTY_PRESETS).find(([, p]) =>
-    p.shift === s.shift && p.baud === s.baud && p.encoding === s.encoding && p.inverted === s.inverted && !!p.auto === !!s.auto)?.[0] ?? '';
+    p.shift === s.shift && p.baud === s.baud && p.encoding === s.encoding && p.inverted === s.inverted && !!p.auto === !!s.auto && (p.stop ?? 1.5) === (s.stop ?? 1.5))?.[0] ?? '';
   return (
     <>
       <SubLabel label="Preset" />
@@ -156,8 +156,12 @@ function RttySettingsRows({ s, onChange }: { s: RttySettings; onChange: (s: Rtty
       <OptRow>{[45.45, 50, 75, 100].map(v => (
         <SegBtn key={v} label={String(v)} active={!s.auto && s.baud === v} onPress={() => onChange({ ...s, baud: v, auto: false })} />
       ))}</OptRow>
+      <SubLabel label="Stop bits" />
+      <OptRow>{([1, 1.5] as const).map(v => (
+        <SegBtn key={v} label={String(v)} active={!s.auto && (s.stop ?? 1.5) === v} onPress={() => onChange({ ...s, stop: v, auto: false })} />
+      ))}</OptRow>
       <SubLabel label="Encoding" />
-      <OptRow>{(['ITA2', 'ASCII', 'CCIR476'] as const).map(v => (
+      <OptRow>{(['ITA2', 'CCIR476'] as const).map(v => (
         <SegBtn key={v} label={v} active={s.encoding === v} onPress={() => onChange({ ...s, encoding: v, auto: false })} />
       ))}</OptRow>
       <OptRow>

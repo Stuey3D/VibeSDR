@@ -7,7 +7,8 @@
 //  • TONES — RTTY is two steady tones, so the audio spectrum (averaged over a couple of seconds) shows two peaks. Their
 //    midpoint is the centre and their spacing the shift; a spacing within 12 % of a standard shift (170, 200, 425, 450,
 //    850 Hz) is snapped to it.
-//  • BAUD + POLARITY — six FskDecoders run side by side on the same audio (45.45, 50, 75 baud × normal, reverse) and
+//  • BAUD + POLARITY + STOP — twelve FskDecoders run side by side on the same audio (45.45, 50, 75 baud × normal,
+//    reverse × 1.5 or 1 stop bit) and
 //    are scored on frames that pass the start/stop check against frames that fail it (FskDecoder::goodFrames /
 //    framingErrors). The winner's text is shown, starting with what it had already decoded while the choice was made.
 //  • It says what it chose, IN THE TEXT ("[RTTY auto: 50 baud, 450 Hz shift, reverse]"), so the app and the web client
@@ -29,6 +30,10 @@ public:
     void process(const int16_t* samples, int count);
     std::function<void(char32_t)> onChar;
     std::function<void(int)>      onState;
+    /** ★★ TUNING GUIDE (Stuart, 2026-10-04: "something like < 100Hz or 500Hz >"): how far the tones should move IN AUDIO
+     *  PITCH (+ = higher) to sit comfortably in the passband, rounded to 100 Hz; 0 = fine (clears it). Sent only when
+     *  it changes. The client turns it into a dial direction from its mode (USB: lower the dial to raise the pitch). */
+    std::function<void(int)>      onTuneHint;
     // Health, as FskDecoder's (the admin page): the WINNER's, or the first candidate's while searching.
     unsigned long resyncs() const;
     double        audioLevel() const;
@@ -39,7 +44,7 @@ public:
 
 private:
     struct Cand {
-        std::unique_ptr<FskDecoder> d; double baud; bool inv;
+        std::unique_ptr<FskDecoder> d; double baud; bool inv; bool oneStop = false;
         std::string pending;                       // text decoded before the choice (replayed to the winner)
         unsigned long lastGood = 0, lastBad = 0;
         double score = 0;                          // recent good − 3 × bad, decayed
@@ -63,6 +68,8 @@ private:
     long samplesSinceEval_ = 0, searchSamples_ = 0, badWinnerSec_ = 0;
     std::string chosenText_;
     int lastState_ = -1;
+    int lastHint_ = 0, hintVotes_ = 0, pendingHint_ = 0;
+    void hint_(int audioHz);
 };
 
 } // namespace vibe

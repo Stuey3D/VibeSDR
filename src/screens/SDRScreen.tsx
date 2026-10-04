@@ -183,6 +183,7 @@ import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type B
 import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
+import { tuneHintLabel } from '../utils/tuneHint';
 import { countryForCallsign } from '../services/callsignCountry';
 import { cleanText } from '../utils/safeText';
 import { onCollectionChanged, requestSync } from '../services/cloudSync';
@@ -4082,6 +4083,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     armDecoderFlush();
   }, [armDecoderFlush]);
   /** A decoder's own status line: latest wins on the next flush. */
+  /** ★ RTTY AUTO's tuning guide, as shown ('' = none), and the decoder's own state it stands in for. */
+  const tuneHintText = useRef('');
+  const decStateText = useRef('');
   const queueDecoderStatus = useCallback((st: string) => {
     decStatusPending.current = st;
     armDecoderFlush();
@@ -4156,7 +4160,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         markDecodeOutput();          // ★ output = presence; see the idle-release effect
         queueDecoderText(text);      // ★ batched — see DECODER_FLUSH_MS
       },
-      onStatus: (s: string)  => queueDecoderStatus(s),
+      // ★ While RTTY AUTO's tuning guide is up it IS the status; the decoder's own state returns when it clears.
+      onStatus: (s: string)  => { decStateText.current = s; if (!tuneHintText.current) queueDecoderStatus(s); },
+      onTuneHint: (audioHz: number) => {
+        tuneHintText.current = tuneHintLabel(audioHz, String(client.current?.getStatus().mode ?? ''));
+        queueDecoderStatus(tuneHintText.current || decStateText.current);
+      },
       onDot:    (d)          => setDecoding(d === 'active' || d === 'rx'),
       // WEFAX/SSTV — drive the panel's image canvas (skin canvas parity).
       // WEFAX lines are greyscale, SSTV lines are RGB; route by active decoder.
@@ -4358,6 +4367,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       timeStationRef.current = st;
       setDecoderStatus(`${st.toUpperCase()}${forced ? '' : ' (auto)'} — waiting for the minute`);
     }
+    tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
     decoderClient.current?.start(type);
   }, [status.frequency, timeStationPref]);
 
@@ -4462,9 +4472,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (typeof p?.shift === 'number' && typeof p?.baud === 'number') {
           const next: RttySettings = {
             shift: p.shift, baud: p.baud,
-            encoding: typeof p.encoding === 'string' ? p.encoding : 'ITA2',
+            encoding: p.encoding === 'CCIR476' ? 'CCIR476' : 'ITA2',   // ★ a stored 'ASCII' (never decoded) reads ITA2
             inverted: !!p.inverted,
             auto: p.auto === true,
+            stop: p.stop === 1 ? 1 : 1.5,
           };
           setRttySettings(next);
           if (decoderClient.current) decoderClient.current.rttySettings = { ...next };
@@ -4480,6 +4491,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     dc.rttySettings = { ...s };
     if (activeDecRef.current === 'rtty') {
       setDecoderStatus('re-attaching…');
+      tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
       dc.start('rtty');
     }
   }, []);

@@ -76,7 +76,9 @@ char32_t Ita2::processChar(uint16_t code) {
         dataB = 0; uint8_t dMSB = (uint8_t)(1 << (dataBits - 1));
         for (int b = 0; b < dataBits; b++) { uint16_t d = v & 3; dataB = (uint8_t)((dataB >> 1) | (d != 0 ? dMSB : 0)); v >>= 2; }
     } else {
-        dataB = (uint8_t)(code & ((1 << (unsigned)dataBits) - 1));
+        // ★ Bit 0 is the START bit (checkBits above): the data are bits 1..dataBits. This read bits 0..4 — the start bit
+        //   and four data bits — and was never noticed because every client sent 5N1.5 until AUTO tried 1 stop (PBB, 2026-10-04).
+        dataB = (uint8_t)((code >> 1) & ((1 << (unsigned)dataBits) - 1));
     }
     if (firstChar) { lastCode = dataB; firstChar = false; return 0; }
     char32_t out = 0;
@@ -324,7 +326,12 @@ void FskDecoder::processBit(bool bit) {
             break;
         }
         case Sync2: {
-            if (stopVariable && waiting && bit) return;
+            /* ★★★ WAIT FOR THE START BIT AT EVERY STOP LENGTH (Stuart, 2026-10-04: PBB Den Helder, 75 Bd 850 Hz reverse,
+             *  1 stop bit, would not decode at any setting). Only 5N1.5 waited; 5N1 / 5N2 assumed characters back to back,
+             *  so the idle mark between PBB's characters (69 % of its airtime) knocked every frame out of step. A real
+             *  teleprinter is asynchronous: after the stop it waits on mark for the next start bit. Measured on Stuart's
+             *  recording: a textbook start-bit UART decodes 538 frames, 0 bad, "02A 04B 06A 08B 12X 17B 22X 26Y PBB". */
+            if ((stopVariable || ita2) && waiting && bit) return;   // ★ ITA2 is ASYNC at every stop length — see Sync2
             waiting = false;
             codeBits = (uint16_t)((codeBits >> 1) | (bitVal * msb)); bitCount++;
             if (bitCount == nbits) {
@@ -355,7 +362,7 @@ void FskDecoder::processBit(bool bit) {
             break;
         }
         case ReadData: {
-            if (stopVariable && waiting && bit) return;
+            if ((stopVariable || ita2) && waiting && bit) return;
             waiting = false;
             codeBits = (uint16_t)((codeBits >> 1) | (bitVal * msb)); bitCount++;
             if (bitCount == nbits) {
