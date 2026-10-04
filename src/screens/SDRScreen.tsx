@@ -4132,6 +4132,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     };
   }, [isKiwi, baseUrl]);
 
+  /** The PIN proof for the decoder socket — the same one the spectrum socket and the door's reads carry.
+   *  Not for Kiwi: its decoders run on the phone's own loopback sidecar, which has no PIN. */
+  const decoderAuth = isKiwi ? '' : (radioAuthSuffix || route.params.authSuffix || '');
   useEffect(() => {
     if (!decoderBase) return;
     const dc = new DecoderClient(decoderBase, sessionUuid, {
@@ -4201,7 +4204,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           AsyncStorage.removeItem('lsv_chat_callsign:' + baseUrl).catch(() => {});
         }
       },
-    }, password);
+    // ★★★ AND THE RADIO'S PIN PROOF — see DecoderClient.authSuffix. Without it a PIN-locked radio refused
+    //     every decoder and the retries locked the listener out (2026-10-04).
+    }, password, decoderAuth);
     decoderClient.current = dc;
 
     // Saved callsign → auto-join on connect (skin autoLogin parity); the
@@ -4219,7 +4224,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // arrives from startDecoderService) — it MUST be a dep, or the DecoderClient is
   // never (re)built when the port lands, leaving Kiwi decoders/spots with no output.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, sessionUuid, decoderBase]);
+  }, [baseUrl, sessionUuid, decoderBase, decoderAuth]);
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =

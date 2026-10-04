@@ -239,13 +239,20 @@ export class DecoderClient {
   whisperLang    = 'auto';
   morseQuality: MorseQuality = 'all';
 
-  constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string) {
+  constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string, authSuffix = '') {
     this.baseUrl  = baseUrl.replace(/\/+$/, '');
     this.uuid     = uuid;
     this.cb       = callbacks;
     this.password = password ?? null;
+    this.authSuffix = /^&vs_/.test(authSuffix) ? authSuffix : (authSuffix ? '&' + authSuffix.replace(/^[?&]+/, '') : '');
   }
   private password: string | null = null;
+  /** ★★★ THE PIN PROOF (`&vs_nonce=…&vs_auth=…`), as the spectrum and audio sockets carry it. A PIN-locked
+   *  VibeServer gates /ws/dxcluster exactly like them (since 2026-07) — and this socket carried NOTHING, so on
+   *  any PIN-protected radio every decoder was refused at the upgrade, retried every 2 s, and each refusal
+   *  counted as a wrong PIN until the listener's own address was locked out (Stuart's HF+ with a per-radio
+   *  PIN, 2026-10-04: "All of our decoders are fucked"). The web client always sent it (withAuth). */
+  private authSuffix = '';
 
   /** Start a decoder. Replaces any running one (server enforces one/session). */
   start(name: DecoderName) {
@@ -423,7 +430,8 @@ export class DecoderClient {
     if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) return;
     const url = this.baseUrl.replace(/^http/, 'ws')
       + `/ws/dxcluster?user_session_id=${this.uuid}`
-      + (this.password ? `&password=${encodeURIComponent(this.password)}` : '');
+      + (this.password ? `&password=${encodeURIComponent(this.password)}` : '')
+      + this.authSuffix;
     // ★ Same reason as the spectrum socket: the decoder connection is logged too. Cast for the
     //   same reason — RN takes a third options argument the DOM type does not describe.
     const ws = new (WebSocket as unknown as {
