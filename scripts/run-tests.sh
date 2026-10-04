@@ -45,6 +45,9 @@ flags_for() {
     test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ Hostile attach messages through the real decoders (audit 2026-10-03) — same deps as the hosts.
     test-decoder-hardening) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★ SSTV geometry + colour on synthetic pictures with a known sender clock error (audit 2026-10-04)
+    #   — 16 full frames, ~25 min of audio; optimised or it takes minutes.
+    test-sstv-quality)     echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     *)               echo "" ;;
   esac
 }
@@ -96,6 +99,7 @@ deps_for() {
     test-decoder-hosts|test-bench-decoders) echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
+    test-sstv-quality)  echo "android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;
     *)                  echo "" ;;
   esac
 }
@@ -105,7 +109,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-decoder-hardening)
+    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
         local o="$d/$(basename "$f" .c).o"

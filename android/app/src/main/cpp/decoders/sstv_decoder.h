@@ -114,12 +114,13 @@ public:
      *  belongs to the caller, which is the only place that knows what it is about to send. */
     int linesReceived = 0;
     const std::vector<uint8_t>& syncFlags() const { return hasSync; }
+    const std::vector<float>& syncLevels() const { return syncLevel; }
 
     std::vector<SstvPixel> pixelGrid(double rate, int skip);
 private:
     void   detectSync(SstvBuffer& pcm, int targetBin, int idx);
     double estimateSNR(SstvBuffer& pcm);
-    double demodFreq(SstvBuffer& pcm, double snr);
+    double demodFreq(SstvBuffer& pcm, double snr, int ahead = 0);   // ahead: window centre, samples
     int    getBin(double f) const { return (int)(f / sampleRate * fftSize); }
     std::vector<uint8_t> toRGB(const std::vector<uint8_t>& img);
 
@@ -130,6 +131,9 @@ private:
     std::vector<float> fin;
     SstvFFT fft;
     std::vector<uint8_t> hasSync;   // 1/0 per sync sample
+    /** ★ The same decision as a level: log10(pSync / 2·pRaw), so > 0 is exactly hasSync = 1. Lets
+     *  the slant fit place each pulse edge BETWEEN two 13-sample flags (2026-10-04). */
+    std::vector<float> syncLevel;
     std::vector<uint8_t> storedLum;
     /** ★★ HOW MUCH OF storedLum WAS ACTUALLY WRITTEN. The buffer is allocated with 1.3x headroom
      *  but only filled while the decode loop runs, and that loop BREAKS EARLY when the audio runs
@@ -140,13 +144,21 @@ private:
 // ── Sync corrector ───────────────────────────────────────────────────────────
 class SstvSync {
 public:
-    SstvSync(const SstvMode* mode, double sampleRate, const std::vector<uint8_t>& hasSync)
-        : m(mode), sampleRate(sampleRate), hasSync(hasSync) {}
-    /** ★ `confOut` (0..1) is how much the sync data supports the answer. Near zero means the
-     *  Hough peak is noise and the "correction" is a random shift — see the guard in videoThread. */
+    SstvSync(const SstvMode* mode, double sampleRate, const std::vector<uint8_t>& hasSync,
+             const std::vector<float>* syncLevel = nullptr)
+        : m(mode), sampleRate(sampleRate), hasSync(hasSync), level(syncLevel) {}
+    /** ★ `confOut` (0..1) is how much the sync data supports the answer: the fraction of the
+     *  frame's sync lines that agree with the fitted line. Near zero means the "correction" would be
+     *  a random shift — see the guard in videoThread. */
     void findSync(double& rateOut, int& skipOut, double* confOut = nullptr);
+    /** ★ What the last findSync measured (2026-10-04): the coarse Hough estimate, the line fit's
+     *  transmitter clock error and its standard error (ppm, + = the sender runs fast), and whether
+     *  that rate passed the gate and was returned — otherwise rateOut is the nominal rate. */
+    double houghPpm = 0, fitPpm = 0, fitPpmSE = 0;
+    bool rateApplied = false;
 private:
     const SstvMode* m; double sampleRate; const std::vector<uint8_t>& hasSync;
+    const std::vector<float>* level;
 };
 
 // ── Top-level decoder ────────────────────────────────────────────────────────
