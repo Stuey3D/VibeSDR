@@ -49,6 +49,14 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName() = "VibeLocalSDR"
 
+    /** Is any attached input device a touchscreen? (InputDevice.SOURCE_TOUCHSCREEN; a touchpad or an air mouse is not.) */
+    private fun hasTouchscreenDevice(): Boolean = try {
+        android.view.InputDevice.getDeviceIds().any { id ->
+            val d = android.view.InputDevice.getDevice(id)
+            d != null && (d.sources and android.view.InputDevice.SOURCE_TOUCHSCREEN) == android.view.InputDevice.SOURCE_TOUCHSCREEN
+        }
+    } catch (_: Throwable) { true }   // ★ unknown = assume a touchscreen: today's behaviour
+
     /** ★ isLite: the shared ServerModeScreen shows Lite-only options (the DAB label-scan switch) when the
      *  package is VibeServer Lite. Read synchronously as NativeModules.VibeLocalSDR.isLite. */
     override fun getConstants(): Map<String, Any> = mapOf(
@@ -59,7 +67,12 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                    || reactContext.packageManager.hasSystemFeature("android.software.leanback_only")),
         // ★ No touchscreen at all — a TV box driven by a remote or a keyboard that may not report the TV UI mode
         //   (Kiko, 2026-10-03: an Android TV box where Tab could not leave a text field). TvTextInput reads it.
-        "noTouchscreen" to !reactContext.packageManager.hasSystemFeature("android.hardware.touchscreen"),
+        // ★★ …OR NO TOUCHSCREEN ATTACHED (Kiko, 2026-10-04, BTV B9 / Amlogic S905X, Android 6, telemetry dump): cheap
+        //    boxes DECLARE the touchscreen feature and run a phone launcher, so neither test above fired and the setup
+        //    screen still trapped the remote in a text field. Its real inputs were aml_keypad, gpio_keypad and
+        //    cec_input — no touchscreen among them. Ask the hardware: a phone or tablet always has one attached.
+        "noTouchscreen" to (!reactContext.packageManager.hasSystemFeature("android.hardware.touchscreen")
+                            || !hasTouchscreenDevice()),
         // ★ The legacy com.vibesdr.app build (BRIEF-android-package-migration): it shows the "new home" notice.
         "isLegacyPackage" to BuildConfig.IS_LEGACY_PACKAGE,
         // ★ "Start automatically when power returns" is offered only where Android may allow it — VibeBootStart.
