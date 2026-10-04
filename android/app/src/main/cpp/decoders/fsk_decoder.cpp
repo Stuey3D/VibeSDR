@@ -27,14 +27,16 @@ double BiQuad::filter(double in) {
 
 // ── ITA2 ─────────────────────────────────────────────────────────────────────
 Ita2::Ita2(const std::string& framing) {
-    // Parse framing <data>N<stop> (e.g. 5N1.5).
+    // Parse framing <data><parity><stop> (e.g. 5N1.5, 7E1, 8N2) — parity N/E/O/M/S (2026-10-04, the full RTTY spec).
     // ★ 5..8 data bits only (audit 2026-10-03): anything else shifts past the 16-bit code word.
-    if (framing.size() >= 3 && framing[1] == 'N' && framing[0] >= '5' && framing[0] <= '8') {
+    if (framing.size() >= 3 && std::string("NEOMS").find(framing[1]) != std::string::npos
+        && framing[0] >= '5' && framing[0] <= '8') {
         dataBits = framing[0] - '0';
+        parity_ = framing[1];
         double stop = 1.0;
         std::string s = framing.substr(2);
         if (s == "1.5") stop = 1.5; else if (s == "2") stop = 2.0; else stop = 1.0;
-        double total = 1.0 + dataBits + stop;       // start + data + stop
+        double total = 1.0 + dataBits + (parity_ != 'N' ? 1 : 0) + stop;       // start + data + parity + stop
         nbits_ = (stop == 1.5) ? (int)(total * 2) : (int)total;
     } else {
         nbits_ = dataBits;
@@ -59,8 +61,16 @@ bool Ita2::checkBits(uint16_t code) const {
         return v == 0;
     }
     if ((v & 1) != 0) return false; v >>= 1;
+    const uint16_t data = v & (uint16_t)((1 << (unsigned)dataBits) - 1);
     v >>= (unsigned)dataBits;
-    int stopBits = nbits_ - 1 - dataBits;
+    if (parity_ != 'N') {
+        // ★ The parity bit follows the data. Even/odd count the data's ones; mark/space are a fixed 1/0.
+        int ones = 0; for (uint16_t d = data; d; d &= d - 1) ones++;
+        const int p = v & 1; v >>= 1;
+        const int want = parity_ == 'E' ? (ones & 1) : parity_ == 'O' ? !(ones & 1) : parity_ == 'M' ? 1 : 0;
+        if (p != want) return false;
+    }
+    int stopBits = nbits_ - 1 - dataBits - (parity_ != 'N' ? 1 : 0);
     uint16_t mask = (uint16_t)((1 << (unsigned)stopBits) - 1);
     return (v & mask) == mask;
 }
@@ -80,11 +90,17 @@ char32_t Ita2::processChar(uint16_t code) {
         //   and four data bits — and was never noticed because every client sent 5N1.5 until AUTO tried 1 stop (PBB, 2026-10-04).
         dataB = (uint8_t)((code >> 1) & ((1 << (unsigned)dataBits) - 1));
     }
+    if (ascii) {
+        // ★ ASCII: the character itself — printable, or CR / LF / TAB; anything else (NUL, idle, control) is dropped.
+        const uint8_t c = dataB & 0x7f;
+        return (c >= 0x20 && c < 0x7f) || c == '\r' || c == '\n' || c == '\t' ? (char32_t)c : 0;
+    }
     if (firstChar) { lastCode = dataB; firstChar = false; return 0; }
     char32_t out = 0;
     if (lastCode == letters)      shift = false;
     else if (lastCode == figures) shift = true;
     else                          out = codeToChar(lastCode, shift);
+    if (usos && out == U' ') shift = false;   // ★ unshift on space (option, off by default)
     lastCode = dataB;
     return out;
 }
@@ -182,9 +198,10 @@ static double clampFinite(double v, double lo, double hi, double dflt) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 static bool validItaFraming(const std::string& f) {
-    if (f.size() < 3 || f[0] < '5' || f[0] > '8' || f[1] != 'N') return false;
+    if (f.size() < 3 || f[0] < '5' || f[0] > '8' || std::string("NEOMS").find(f[1]) == std::string::npos) return false;
     const std::string stop = f.substr(2);
-    return stop == "1" || stop == "2" || (stop == "1.5" && f[0] == '5');
+    // ★ 1.5 stop is the 5-bit, no-parity Baudot case only (it uses the half-bit sampler).
+    return stop == "1" || stop == "2" || (stop == "1.5" && f[0] == '5' && f[1] == 'N');
 }
 
 FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
@@ -200,6 +217,7 @@ FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
         nbits = ccir476->nbits(); msb = ccir476->msb();
     } else {
         ita2 = new Ita2(framing.empty() ? "5N1.5" : framing);
+        ita2->ascii = encoding == "ASCII";   // ★ ASCII is decoded now (it was silently ITA2 until 2026-10-04)
         nbits = ita2->nbits(); msb = ita2->msb();
         if (framing == "5N1.5") { baudRate *= 2; stopVariable = true; }
     }

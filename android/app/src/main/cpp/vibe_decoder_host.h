@@ -431,7 +431,7 @@ private:
         }
         for (const char* f : { "encoding", "framing", "station" }) { k += str(msg, f); k += ','; }
         for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
-                               "\"auto\":true" })
+                               "\"auto\":true", "\"usos\":true" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
         return k;
     }
@@ -603,6 +603,7 @@ private:
             std::string enc = str(msg, "encoding"); if (enc.empty()) enc = navtex ? "CCIR476" : "ITA2";
             std::string framing = str(msg, "framing"); if (framing.empty()) framing = navtex ? "4/7" : "5N1.5";
             fsk_ = new FskDecoder(48000, cf, sh, baud, framing, enc, inv);
+            if (msg.find("\"usos\":true") != std::string::npos) fsk_->setUsos(true);   // ★ unshift on space (manual RTTY)
             fsk_->onChar = [this](char32_t ch) {
                 std::lock_guard<std::mutex> bl(textMtx_);
                 if (ch < 0x80) textBuf_.push_back((char)ch);

@@ -30,6 +30,7 @@ import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassb
 import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
+import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
 import { MARGIN_AFTER_LINES, SHIFT_STEP, SLANT_STEP, findMargin, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
@@ -9445,7 +9446,8 @@ function fmtSpotTimeSec(t: number): string {
   return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}z`;
 }
 
-interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean; auto?: boolean; stop?: 1 | 1.5 }
+interface RttySettings { shift: number; baud: number; encoding: string; inverted: boolean; auto?: boolean; stop?: 1 | 1.5 | 2; usos?: boolean;
+  dataBits?: 7 | 8; parity?: RttyParity }
 
 // Verbatim from the app (DecoderClient RTTY_PRESETS).
 const RTTY_PRESETS: Record<string, RttySettings> = {
@@ -9503,7 +9505,8 @@ function decParams(mode: string): Record<string, unknown> {
       center_frequency: 1000, shift: rtty.shift, baud_rate: rtty.baud,
       encoding: rtty.encoding, inverted: rtty.inverted,
       // ★ Stop bits (2026-10-04, PBB Den Helder sends 1): the manual setting; AUTO tries both on the server.
-      framing: rtty.stop === 1 ? '5N1' : '5N1.5',
+      framing: rttyFraming(rtty),
+      ...(!rtty.auto && rtty.usos && rtty.encoding === 'ITA2' ? { usos: true } : {}),   // ★ unshift on space (manual)
       ...(rtty.auto && rtty.encoding === 'ITA2' ? { auto: true } : {}),
     };
   }
@@ -9728,8 +9731,14 @@ function initDecoders(host: string, auth: AuthState) {
   const manual = () => { rtty.auto = false; syncRttyControls(); };
   segButtons('rttyShift', 'shift', (v) => { rtty.shift = Number(v); manual(); reattachIf('rtty'); });
   segButtons('rttyBaud', 'baud', (v) => { rtty.baud = Number(v); manual(); reattachIf('rtty'); });
-  segButtons('rttyEnc', 'enc', (v) => { rtty.encoding = String(v); manual(); reattachIf('rtty'); });
-  segButtons('rttyStop', 'stop', (v) => { rtty.stop = Number(v) === 1 ? 1 : 1.5; manual(); reattachIf('rtty'); });
+  segButtons('rttyEnc', 'enc', (v) => {
+    rtty.encoding = String(v);
+    if (rtty.encoding === 'ASCII' && (rtty.stop ?? 1.5) === 1.5) rtty.stop = 1;   // 1.5 is the 5-bit Baudot case only
+    manual(); reattachIf('rtty');
+  });
+  segButtons('rttyStop', 'stop', (v) => { const n = Number(v); rtty.stop = n === 1 || n === 2 ? n : 1.5; manual(); reattachIf('rtty'); });
+  segButtons('rttyBits', 'bits', (v) => { rtty.dataBits = Number(v) === 8 ? 8 : 7; manual(); reattachIf('rtty'); });
+  segButtons('rttyParity', 'parity', (v) => { rtty.parity = v as RttyParity; manual(); reattachIf('rtty'); });
   const inv = $<HTMLButtonElement>('rttyInv');
   inv.onclick = () => {
     rtty.inverted = !rtty.inverted; rtty.auto = false; syncRttyControls();
@@ -9738,6 +9747,8 @@ function initDecoders(host: string, auth: AuthState) {
     reattachIf('rtty');
   };
   syncRttyControls();   // ★ the page's buttons show the starting settings (AUTO), not the HTML's defaults
+  const usosBtn = $<HTMLButtonElement>('rttyUsos');
+  usosBtn.onclick = () => { rtty.usos = !rtty.usos; rtty.auto = false; syncRttyControls(); reattachIf('rtty'); };
   segButtons('wefaxLpm', 'lpm', (v) => { wefaxLpm = Number(v); reattachIf('wefax'); });
 
   // Spots + map.
@@ -9841,15 +9852,28 @@ function syncRttyControls() {
   // ★ Under AUTO no shift / baud is "chosen" — the server picks them — so none is lit.
   mark('rttyShift', 'shift', rtty.auto ? '' : String(rtty.shift));
   mark('rttyBaud', 'baud', rtty.auto ? '' : String(rtty.baud));
-  mark('rttyStop', 'stop', rtty.auto ? '' : String(rtty.stop ?? 1.5));
+  const ascii = rtty.encoding === 'ASCII', sitor = rtty.encoding === 'CCIR476';
+  mark('rttyStop', 'stop', rtty.auto ? '' : String(rtty.stop ?? (ascii ? 1 : 1.5)));
+  mark('rttyBits', 'bits', rtty.auto ? '' : String(rtty.dataBits ?? 7));
+  mark('rttyParity', 'parity', rtty.auto ? '' : (rtty.parity ?? 'N'));
+  // ★ Rows only where they mean something (rttySpec.ts): bits + parity are ASCII's, unshift-on-space ITA2's, 1.5 stop
+  //   Baudot's, and SITOR-B has fixed 4-of-7 framing.
+  $('rttyBitsRow').hidden = !ascii;
+  $('rttyParityRow').hidden = !ascii;
+  $('rttyStopRow').hidden = sitor;
+  $('rttyStop15').hidden = rtty.encoding !== 'ITA2';
+  $('rttyUsosRow').hidden = rtty.encoding !== 'ITA2';
   const pk = Object.entries(RTTY_PRESETS).find(([, p]) => p.shift === rtty.shift && p.baud === rtty.baud
     && p.encoding === rtty.encoding && p.inverted === rtty.inverted && !!p.auto === !!rtty.auto
-    && (p.stop ?? 1.5) === (rtty.stop ?? 1.5))?.[0] ?? '';
+    && (p.stop ?? 1.5) === (rtty.stop ?? 1.5) && !p.usos === !rtty.usos)?.[0] ?? '';
   mark('rttyPreset', 'preset', pk);
-  mark('rttyEnc', 'enc', rtty.encoding);
+  mark('rttyEnc', 'enc', rtty.auto ? '' : rtty.encoding);   // ★ as the app: nothing manual lit under AUTO
   const inv = $<HTMLButtonElement>('rttyInv');
   inv.classList.toggle('on', rtty.inverted);
   inv.textContent = rtty.inverted ? 'ON' : 'OFF';
+  const us = $<HTMLButtonElement>('rttyUsos');
+  us.classList.toggle('on', !!rtty.usos);
+  us.textContent = rtty.usos ? 'ON' : 'OFF';
 }
 
 /** A settings change while running must re-attach — the shim builds the decoder

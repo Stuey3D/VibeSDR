@@ -63,5 +63,7 @@ int main(int argc, char** argv) {
     }
     const double cf = argc > 2 ? std::atof(argv[2]) : 1000, sh = argc > 3 ? std::atof(argv[3]) : 450, baud = argc > 4 ? std::atof(argv[4]) : 50;
     const std::string fr = argc > 5 ? argv[5] : "5N1.5"; const bool inv = argc > 6 ? std::atoi(argv[6]) != 0 : true;
-    return runFsk(mono, frames, cf, sh, baud, fr, fr == "4/7" ? "CCIR476" : "ITA2", inv);
+    // ★ RTTY_ENC=ASCII decodes 7/8-bit ASCII with the framing's parity (e.g. 7E1, 8N2) — the full RTTY spec, 2026-10-04.
+    const char* encEnv = std::getenv("RTTY_ENC");
+    return runFsk(mono, frames, cf, sh, baud, fr, fr == "4/7" ? "CCIR476" : (encEnv && *encEnv ? encEnv : "ITA2"), inv);
 }

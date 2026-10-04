@@ -37,6 +37,16 @@ if command -v ffmpeg >/dev/null && [ -f $R ]; then
 else
   echo "  --   REAL DWD recording: not run (needs ffmpeg)"
 fi
+# 3b. ASCII (the full RTTY spec, 2026-10-04): 7E1 at 110 Bd and 8N2 at 300 Bd decode; a 7E1 signal read as 7O1 does not.
+python3 tools/rtty-bench/synth_ascii.py $T/a7e1.wav 7E1 110 >/dev/null
+RTTY_ENC=ASCII $T/rtty $T/a7e1.wav 1500 170 110 7E1 0 2>/dev/null > $T/a7e1.txt
+grep -q "QUICK BROWN FOX 0123456789" $T/a7e1.txt; ok $? "ASCII 7E1 110 Bd decodes"
+python3 tools/rtty-bench/synth_ascii.py $T/a8n2.wav 8N2 300 >/dev/null
+RTTY_ENC=ASCII $T/rtty $T/a8n2.wav 1500 170 300 8N2 0 2>/dev/null > $T/a8n2.txt
+grep -q "BROWN FOX" $T/a8n2.txt; ok $? "ASCII 8N2 300 Bd decodes"
+RTTY_ENC=ASCII $T/rtty $T/a7e1.wav 1500 170 110 7O1 0 2>/dev/null > $T/a7o1.txt
+! grep -q "BROWN" $T/a7o1.txt; ok $? "...and the wrong parity (7O1) does not"
+
 # 4. ★ REAL AIR: PBB Den Helder (Royal Netherlands Navy) on 2474 kHz, 75 Bd, 850 Hz, reverse, ONE stop bit, idle gaps between
 #    characters (Stuart's recording, 2026-10-04 ~21:56 UTC). Nothing decoded it before: only 5N1.5 waited for the start bit,
 #    the 1-stop path read the start bit as data, and AUTO never tried 1 stop.

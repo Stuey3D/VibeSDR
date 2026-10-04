@@ -45,6 +45,7 @@
  */
 
 import { USER_AGENT } from '../constants/version';
+import { rttyFraming } from '../utils/rttySpec';
 import { guard, guardJson } from './faultLog';
 import { cleanText, cleanMode } from '../utils/safeText';
 
@@ -91,10 +92,16 @@ export function timeStationFor(hz: number, receiverLonDeg?: number | null): Time
 export interface RttySettings {
   shift:    number;            // 170 | 200 | 425 | 450 | 850
   baud:     number;            // 45.45 | 50 | 75 | 100
-  encoding: 'ITA2' | 'ASCII' | 'CCIR476';   // ★ 'ASCII' is no longer offered (the server never decoded it); stored → ITA2
+  encoding: 'ITA2' | 'ASCII' | 'CCIR476';   // ★ ASCII is decoded by the server since 2026-10-04 (7/8 bits + parity)
   /** ★ Stop bits for ITA2 (2026-10-04): 1.5 is the norm (amateur, DWD); 1 for e.g. PBB Den Helder. 2-stop signals decode
    *  with 1 (the decoder waits for each start bit). Absent = 1.5. */
-  stop?:    1 | 1.5;
+  stop?:    1 | 1.5 | 2;
+  /** ★ ASCII only (the full RTTY spec, 2026-10-04): data bits and parity. */
+  dataBits?: 7 | 8;
+  parity?:  'N' | 'E' | 'O' | 'M' | 'S';
+  /** ★ Unshift on space: back to letters after each space (many amateur stations). Off by default — it turns DWD's
+   *  number groups into letters. Manual decoding only; AUTO leaves it off. */
+  usos?:    boolean;
   inverted: boolean;
   /** ★★ AUTO (2026-10-04): the server finds shift, centre, baud and polarity from the signal (decoders/rtty_auto.h).
    *  The other fields are still sent — an older server simply decodes with them. */
@@ -599,9 +606,10 @@ export class DecoderClient {
         return { extension_name: 'fsk', params: {
           center_frequency: 1000, shift: S.shift, baud_rate: S.baud,
           inverted: S.inverted,
-          framing: S.encoding === 'CCIR476' ? '4/7' : S.stop === 1 ? '5N1' : '5N1.5',
+          framing: rttyFraming(S),
           encoding: S.encoding,
           ...(S.auto && S.encoding === 'ITA2' ? { auto: true } : {}),
+          ...(!S.auto && S.usos && S.encoding === 'ITA2' ? { usos: true } : {}),
         }};
       }
       case 'navtex':

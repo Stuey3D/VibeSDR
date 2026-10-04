@@ -3916,9 +3916,11 @@ select.btn { padding: 6px 8px; }
         <button class="btn" data-preset="sitor-b">SITOR-B</button>
       </div>
     </div>
+    <!-- ★ The full manual RTTY spec (2026-10-04) — src/utils/rttySpec.ts; rows show only where they mean something. -->
     <div class="mrow">
       <label>SHIFT</label>
       <div class="seg" id="rttyShift">
+        <button class="btn" data-shift="85">85</button>
         <button class="btn on" data-shift="170">170</button>
         <button class="btn" data-shift="200">200</button>
         <button class="btn" data-shift="425">425</button>
@@ -3928,30 +3930,58 @@ select.btn { padding: 6px 8px; }
     </div>
     <div class="mrow">
       <label>BAUD</label>
-      <div class="seg" id="rttyBaud">
+      <div class="seg" id="rttyBaud" style="flex-wrap:wrap">
         <button class="btn on" data-baud="45.45">45.45</button>
         <button class="btn" data-baud="50">50</button>
+        <button class="btn" data-baud="56.88">56.88</button>
         <button class="btn" data-baud="75">75</button>
         <button class="btn" data-baud="100">100</button>
-      </div>
-    </div>
-    <div class="mrow">
-      <label>STOP BITS</label>
-      <div class="seg" id="rttyStop">
-        <button class="btn" data-stop="1">1</button>
-        <button class="btn on" data-stop="1.5">1.5</button>
+        <button class="btn" data-baud="110">110</button>
+        <button class="btn" data-baud="150">150</button>
+        <button class="btn" data-baud="200">200</button>
+        <button class="btn" data-baud="300">300</button>
       </div>
     </div>
     <div class="mrow">
       <label>ENCODING</label>
       <div class="seg" id="rttyEnc">
         <button class="btn on" data-enc="ITA2">ITA2</button>
-        <button class="btn" data-enc="CCIR476">CCIR476</button>
+        <button class="btn" data-enc="ASCII">ASCII</button>
+        <button class="btn" data-enc="CCIR476">SITOR-B</button>
+      </div>
+    </div>
+    <div class="mrow" id="rttyBitsRow" hidden>
+      <label>DATA BITS</label>
+      <div class="seg" id="rttyBits">
+        <button class="btn on" data-bits="7">7</button>
+        <button class="btn" data-bits="8">8</button>
+      </div>
+    </div>
+    <div class="mrow" id="rttyParityRow" hidden>
+      <label>PARITY</label>
+      <div class="seg" id="rttyParity">
+        <button class="btn on" data-parity="N">NONE</button>
+        <button class="btn" data-parity="E">EVEN</button>
+        <button class="btn" data-parity="O">ODD</button>
+        <button class="btn" data-parity="M">MARK</button>
+        <button class="btn" data-parity="S">SPACE</button>
+      </div>
+    </div>
+    <div class="mrow" id="rttyStopRow">
+      <label>STOP BITS</label>
+      <div class="seg" id="rttyStop">
+        <button class="btn" data-stop="1">1</button>
+        <button class="btn on" data-stop="1.5" id="rttyStop15">1.5</button>
+        <button class="btn" data-stop="2">2</button>
       </div>
     </div>
     <div class="mrow">
       <label>INVERTED</label>
       <div class="seg"><button class="btn" id="rttyInv">OFF</button></div>
+    </div>
+    <div class="mrow" id="rttyUsosRow">
+      <label>UNSHIFT ON SPACE</label>
+      <div class="seg"><button class="btn" id="rttyUsos">OFF</button></div>
     </div>
   </div>
 

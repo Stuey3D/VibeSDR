@@ -32,6 +32,11 @@ class Ita2 {
 public:
     explicit Ita2(const std::string& framing);
     void reset() { shift = false; lastCode = 0; firstChar = true; }
+    /** ★ UNSHIFT ON SPACE (2026-10-04): back to letters after every space, as many amateur machines send. OFF by
+     *  default — DWD sends whole groups of figures under ONE FIGS shift, which this would turn into letters. */
+    bool usos = false;
+    /** ★ ASCII (2026-10-04, the full RTTY spec): 7 or 8 data bits, read as characters directly — no LTRS/FIGS shift. */
+    bool ascii = false;
     int nbits() const { return nbits_; }
     uint16_t msb() const { return (uint16_t)(1 << (nbits_ - 1)); }
     bool checkBits(uint16_t code) const;
@@ -45,6 +50,7 @@ private:
     uint8_t lastCode = 0;
     const uint8_t letters = 0x1f, figures = 0x1b;
     int dataBits = 5, nbits_ = 5;
+    char parity_ = 'N';     // N none, E even, O odd, M mark (always 1), S space (always 0)
 };
 
 // ── CCIR476 (NAVTEX / SITOR-B) — 7-bit FEC, 4 mark bits per char ─────────────
@@ -102,6 +108,8 @@ public:
     unsigned long framingErrors() const { return framingErrors_; }
     /** ★ Frames that passed the start/stop check while decoding (ITA2) — RttyAuto scores candidates on this. */
     unsigned long goodFrames() const { return goodFrames_; }
+    /** Unshift on space (ITA2 only) — see Ita2::usos. */
+    void setUsos(bool on) { if (ita2) ita2->usos = on; }
     double        audioLevel() const { return audioAverage; }
     double        audioThreshold() const { return audioMinimum; }
     int           stateNow() const { return (int)state; }

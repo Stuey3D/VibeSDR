@@ -4472,10 +4472,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (typeof p?.shift === 'number' && typeof p?.baud === 'number') {
           const next: RttySettings = {
             shift: p.shift, baud: p.baud,
-            encoding: p.encoding === 'CCIR476' ? 'CCIR476' : 'ITA2',   // ★ a stored 'ASCII' (never decoded) reads ITA2
+            encoding: p.encoding === 'CCIR476' || p.encoding === 'ASCII' ? p.encoding : 'ITA2',
             inverted: !!p.inverted,
             auto: p.auto === true,
-            stop: p.stop === 1 ? 1 : 1.5,
+            stop: p.stop === 1 || p.stop === 2 ? p.stop : 1.5,
+            usos: p.usos === true,
+            dataBits: p.dataBits === 8 ? 8 : 7,
+            parity: p.parity && 'NEOMS'.includes(p.parity) ? p.parity : 'N',
           };
           setRttySettings(next);
           if (decoderClient.current) decoderClient.current.rttySettings = { ...next };

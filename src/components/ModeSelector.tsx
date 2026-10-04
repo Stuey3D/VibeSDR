@@ -20,6 +20,7 @@ import {
 const SHEET_BG = 'rgba(8,6,1,0.97)';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
+import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time';
 
@@ -141,7 +142,12 @@ function SegBtn({ label, active, onPress }: { label: string; active: boolean; on
 }
 function RttySettingsRows({ s, onChange }: { s: RttySettings; onChange: (s: RttySettings) => void }) {
   const presetKey = Object.entries(RTTY_PRESETS).find(([, p]) =>
-    p.shift === s.shift && p.baud === s.baud && p.encoding === s.encoding && p.inverted === s.inverted && !!p.auto === !!s.auto && (p.stop ?? 1.5) === (s.stop ?? 1.5))?.[0] ?? '';
+    p.shift === s.shift && p.baud === s.baud && p.encoding === s.encoding && p.inverted === s.inverted && !!p.auto === !!s.auto
+    && (p.stop ?? 1.5) === (s.stop ?? 1.5) && !p.usos === !s.usos)?.[0] ?? '';
+  // ★ The full manual spec (utils/rttySpec.ts). A hand-picked value turns AUTO off; under AUTO nothing manual is lit.
+  const set = (patch: Partial<RttySettings>) => onChange({ ...s, ...patch, auto: false });
+  const man = !s.auto;
+  const ascii = s.encoding === 'ASCII', sitor = s.encoding === 'CCIR476';
   return (
     <>
       <SubLabel label="Preset" />
@@ -149,25 +155,46 @@ function RttySettingsRows({ s, onChange }: { s: RttySettings; onChange: (s: Rtty
         <SegBtn key={k} label={l} active={presetKey === k} onPress={() => onChange({ ...RTTY_PRESETS[k] })} />
       ))}</OptRow>
       <SubLabel label="Shift (Hz)" />
-      <OptRow>{[170, 200, 425, 450, 850].map(v => (
-        <SegBtn key={v} label={String(v)} active={!s.auto && s.shift === v} onPress={() => onChange({ ...s, shift: v, auto: false })} />
+      <OptRow>{RTTY_SHIFTS.map(v => (
+        <SegBtn key={v} label={String(v)} active={man && s.shift === v} onPress={() => set({ shift: v })} />
       ))}</OptRow>
       <SubLabel label="Baud" />
-      <OptRow>{[45.45, 50, 75, 100].map(v => (
-        <SegBtn key={v} label={String(v)} active={!s.auto && s.baud === v} onPress={() => onChange({ ...s, baud: v, auto: false })} />
-      ))}</OptRow>
-      <SubLabel label="Stop bits" />
-      <OptRow>{([1, 1.5] as const).map(v => (
-        <SegBtn key={v} label={String(v)} active={!s.auto && (s.stop ?? 1.5) === v} onPress={() => onChange({ ...s, stop: v, auto: false })} />
-      ))}</OptRow>
+      {RTTY_BAUD_ROWS.map((row, i) => (
+        <OptRow key={i}>{row.map(v => (
+          <SegBtn key={v} label={String(v)} active={man && s.baud === v} onPress={() => set({ baud: v })} />
+        ))}</OptRow>
+      ))}
       <SubLabel label="Encoding" />
-      <OptRow>{(['ITA2', 'CCIR476'] as const).map(v => (
-        <SegBtn key={v} label={v} active={s.encoding === v} onPress={() => onChange({ ...s, encoding: v, auto: false })} />
+      <OptRow>{(['ITA2', 'ASCII', 'CCIR476'] as const).map(v => (
+        <SegBtn key={v} label={v === 'CCIR476' ? 'SITOR-B' : v} active={man && s.encoding === v}
+                onPress={() => set({ encoding: v, ...(v === 'ASCII' && (s.stop ?? 1.5) === 1.5 ? { stop: 1 } : {}) })} />
       ))}</OptRow>
+      {ascii && (<>
+        <SubLabel label="Data bits" />
+        <OptRow>{([7, 8] as const).map(v => (
+          <SegBtn key={v} label={String(v)} active={man && (s.dataBits ?? 7) === v} onPress={() => set({ dataBits: v })} />
+        ))}</OptRow>
+        <SubLabel label="Parity" />
+        <OptRow>{RTTY_PARITIES.map(([v, l]) => (
+          <SegBtn key={v} label={l} active={man && (s.parity ?? 'N') === v} onPress={() => set({ parity: v })} />
+        ))}</OptRow>
+      </>)}
+      {!sitor && (<>
+        <SubLabel label="Stop bits" />
+        <OptRow>{rttyStops(s.encoding).map(v => (
+          <SegBtn key={v} label={String(v)} active={man && (s.stop ?? (ascii ? 1 : 1.5)) === v} onPress={() => set({ stop: v })} />
+        ))}</OptRow>
+      </>)}
       <OptRow>
         <SegBtn label={s.inverted ? 'INVERT: ON' : 'INVERT: OFF'} active={s.inverted}
-                onPress={() => onChange({ ...s, inverted: !s.inverted, auto: false })} />
+                onPress={() => set({ inverted: !s.inverted })} />
       </OptRow>
+      {s.encoding === 'ITA2' && (
+        <OptRow>
+          <SegBtn label={s.usos ? 'UNSHIFT ON SPACE: ON' : 'UNSHIFT ON SPACE: OFF'} active={!!s.usos}
+                  onPress={() => set({ usos: !s.usos })} />
+        </OptRow>
+      )}
     </>
   );
 }
