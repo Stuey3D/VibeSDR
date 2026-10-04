@@ -65,6 +65,7 @@ import {
   useDerivedValue,
   useFrameCallback,
   runOnJS,
+  runOnUI,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { getColorLUT } from '../assets/colormapUtils';
@@ -632,12 +633,20 @@ function WaterfallView({
     }
   }, []);
 
+  /* ★★★ UNMOUNT FREES ON THE SAME GRACE AS EVERY SWAP. It disposed the LIVE image at once — the one the
+   *  ImageShader is drawing — while the Skia mapper for it is only torn down later on the UI thread, so a
+   *  frame already queued drew a disposed object: "Attempted to access a disposed object" thrown in the
+   *  worklets AnimationFrameCallback (Play vitals, build 350, CppException). Hand everything over, clear
+   *  the sets (so a swap's own pending timer finds nothing and never frees it twice), and free 300 ms
+   *  later — the grace swapWfImage/swapPath already rely on. */
   useEffect(() => () => { // unmount: flush the pending-dispose sets + the live image
-    wfPending.current.forEach(r => { try { r.img.dispose(); r.data.dispose(); } catch {} });
-    wfPending.current.clear();
-    if (wfLive.current) { try { wfLive.current.img.dispose(); wfLive.current.data.dispose(); } catch {} wfLive.current = null; }
-    pathPending.current.forEach(p => { try { p.dispose(); } catch {} });
-    pathPending.current.clear();
+    const live = wfLive.current, imgs = [...wfPending.current], paths = [...pathPending.current];
+    wfLive.current = null; wfPending.current.clear(); pathPending.current.clear();
+    setTimeout(() => {
+      if (live) { try { live.img.dispose(); live.data.dispose(); } catch {} }
+      imgs.forEach(r => { try { r.img.dispose(); r.data.dispose(); } catch {} });
+      paths.forEach(p => { try { p.dispose(); } catch {} });
+    }, 300);
   }, []);
 
   // ── Smooth scroll (UI thread) — fed to the shader as a sub-pixel sample
@@ -1543,8 +1552,14 @@ function WaterfallView({
       // resets and reuses every tick — disposing it would hand the worklet a dead native object
       // the next time the spectrum came back. Emptying in place is what "draw nothing" needs
       // anyway, and it leaves both buffers valid.
-      specPathA.reset(); specPathB.reset();
-      specPath.value = specPathA;
+      // ★★ ON THE UI THREAD: the tween's last tick may still be rebuilding these same native paths there
+      //    (stopSpecTween takes effect later), and a reset from JS mid-addPoly is a native race. Queued on
+      //    the UI runtime it lands after that tick. (Crash review of Play vitals, 2026-10-04.)
+      runOnUI(() => {
+        'worklet';
+        specPathA.reset(); specPathB.reset();
+        specPath.value = specPathA;
+      })();
       swapPath(peakPath, peakEmpty);
     }
 

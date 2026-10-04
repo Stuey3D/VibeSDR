@@ -548,9 +548,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         mp3Thread?.interrupt(); mp3Thread = null
         mp3Queue.clear()
         laWanted = false; closeLocalAudioConn(); lastLocalTune = null
+        // ★★ The writer owns its AudioTrack and releases it itself (see startExtWriter) — releasing the
+        //    shared field here, while that thread could be inside write(), was the IllegalStateException.
+        extGen++
         extThread?.interrupt(); extThread = null
         extQueue.clear()
-        extTrack?.release(); extTrack = null; extRate = 0
         abandonAudioFocus()
         watchdog?.let { mainHandler.removeCallbacks(it) }
         watchdog = null
@@ -842,6 +844,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         externalPauseMode = "release"
         laWanted = false; closeLocalAudioConn(); lastLocalTune = null
         running = false
+        extGen++
         extThread?.interrupt(); extThread = null
         extQueue.clear()
         abandonAudioFocus()
@@ -1410,15 +1413,26 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
     }
 
+    /** ★★★ ONE WRITER, ONE TRACK — EACH THREAD OWNS ITS OWN. Play vitals (build 86): an IllegalStateException
+     *  in this lambda. The AudioTrack lived in a field three parties released: stopEngine() on the main thread,
+     *  ensureExtTrack(), and the writer's own `finally`. startExternalAudio() → stopEngine() → a NEW writer runs
+     *  on every connect/reconnect while the OLD one can still be blocked in write() (up to the ~500 ms buffer);
+     *  when the old one woke, its finally released the field — which by then held the NEW writer's track — and
+     *  the new writer's next write() threw. Now a writer creates, writes to and releases only `mine`, and leaves
+     *  the loop as soon as a newer writer exists (extGen). No join: the main thread never waits on audio. */
+    @Volatile private var extGen = 0
     private fun startExtWriter() {
+        val gen = ++extGen
         val t = Thread({
             // Real audio-thread priority (not just JVM MAX_PRIORITY ≈ nice -8):
             // this thread feeds the AudioTrack, and under the New Architecture the
             // Fabric/worklets/JS threads can preempt it on weak cores (Moto/Unisoc)
             // → bursty writes → AudioTrack underruns → thin/sibilant/breaking audio.
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            var mine: AudioTrack? = null
+            var myRate = 0; var myCh = 0
             try {
-                while (running && externalAudio) {
+                while (running && externalAudio && gen == extGen) {
                     /* ★ Hold back until the cushion exists. Only while a bursty mode is
                      *  selected; re-armed whenever the queue runs dry, because that is exactly
                      *  when the cushion has been spent. See extBurstMs. */
@@ -1437,11 +1451,18 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                     handleRecRequests()   // arm/stop the recorder on this thread too
                     if (item == null) continue
                     extQueuedFrames.addAndGet(-(item.third.size / item.second))
-                    ensureExtTrack(item.first, item.second)
+                    if (mine == null || myRate != item.first || myCh != item.second) {
+                        mine?.release()
+                        mine = buildExtTrack(item.first, item.second)
+                        myRate = item.first; myCh = item.second
+                        if (gen == extGen) extTrack = mine        // volume changes reach the current writer only
+                    }
                     if (!muted) {
                         notchShorts(item.third, item.second)   // auto notch (network)
                         if (!squelchOpen) java.util.Arrays.fill(item.third, 0)  // squelch gate
-                        extTrack?.write(item.third, 0, item.third.size)  // blocking = backpressure
+                        // ★ A track released under us (it should no longer happen) ends THIS writer, not the app.
+                        try { mine?.write(item.third, 0, item.third.size) }  // blocking = backpressure
+                        catch (e: IllegalStateException) { Log.w(TAG, "ext AudioTrack gone mid-write: ${e.message}"); break }
                     }
                     // Feed the recorder encoder (the UberSDR decode loop isn't
                     // running on this path, so recording is driven from here).
@@ -1455,7 +1476,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             } catch (e: InterruptedException) {
                 // normal shutdown
             } finally {
-                extTrack?.release(); extTrack = null; extRate = 0
+                try { mine?.release() } catch (_: Throwable) {}
+                if (extTrack === mine) { extTrack = null; extRate = 0 }   // only if nobody newer has replaced it
             }
         }, "vibesdr-ext")
         t.priority = Thread.MAX_PRIORITY
@@ -1463,9 +1485,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         t.start()
     }
 
-    private fun ensureExtTrack(rate: Int, channels: Int = 1) {
-        if (extTrack != null && extRate == rate && extChannels == channels) return
-        extTrack?.release()
+    /** Build and start a stream AudioTrack. The CALLER owns it (see startExtWriter) and must release it. */
+    private fun buildExtTrack(rate: Int, channels: Int = 1): AudioTrack {
         val mask = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
         val minBuf = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
         val t = AudioTrack.Builder()
@@ -1487,10 +1508,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             .build()
         t.setVolume(volume)
         t.play()
-        extTrack = t
         extRate = rate
         extChannels = channels
         Log.i(TAG, "ext AudioTrack ${rate}Hz ch=$channels")
+        return t
     }
 
     fun setVolumeNative(v: Float) {
