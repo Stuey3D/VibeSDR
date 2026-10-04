@@ -141,6 +141,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
                 position:relative;z-index:5}
   .ordItem:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
   .ordGrip{color:var(--dim);font-size:18px;line-height:1}
+  .ordMv{padding:4px 10px;font-size:13px;line-height:1}
 </style>
 <div class="wrap">
   <h1>VibeServer</h1>
@@ -4606,8 +4607,7 @@ async function signIn(fromTicket) {
 // ★★★ THE SERVER DECIDES WHICH NOTICE, NOT THIS PAGE. Whether a radio is unplugged or merely LENT
 //     to another program is judged there with the USB bus as witness (sdr_presence.h), and Stuart's
 //     hard rule is that a radio on loan is never called unplugged. This page only draws the answer.
-// ★ ADMIN and LOCAL-NETWORK only, on the server. From outside the LAN the page says so and offers
-//   nothing — these actions are about hardware you can only fix standing next to it.
+// ★ ADMIN only, on the server (the admin password — from home or through the tunnel alike).
 let SDR = null;                 // the last /vibeserver/sdr-changes answer
 let SDR_ALARM = new Set();      // serials whose tab is highlighted as missing
 
@@ -4620,8 +4620,7 @@ async function sdrChangesLoad() {
     const r = await fetch("/vibeserver/sdr-changes?" + await authQuery(), {cache: "no-store"});
     if (r.status === 403) {
       SDR = null; SDR_ALARM = new Set();
-      box.innerHTML = '<div class="hint">Missing and newly attached radios can only be managed from '
-                    + 'this server’s own network.</div>';
+      box.innerHTML = '<div class="hint">This server refused to manage its radios from here.</div>';
       msg.textContent = "";
       $("sdrCheckAgain").hidden = true;
       renderTabs();
@@ -4789,7 +4788,10 @@ function renderOrder() {
     `<div class="ordItem" role="listitem" tabindex="0" data-serial="${esc(r.serial)}"`
     + ` aria-label="${esc(r.label || r.driver)} — press and hold to drag, or use the arrow keys">`
     + `<span class="ordGrip" aria-hidden="true">≡</span><span>${esc(r.label || r.driver)}</span>`
-    + `<span class="hint" style="margin:0 0 0 auto">${r.enabled === false ? "paused" : esc(r.driver)}</span></div>`
+    + `<span class="hint" style="margin:0 0 0 auto">${r.enabled === false ? "paused" : esc(r.driver)}</span>`
+    // ★ Always-visible ▲▼: the one way to move a card that nobody has to discover.
+    + `<button type="button" class="ordMv ghost" data-mv="-1" aria-label="Move up">▲</button>`
+    + `<button type="button" class="ordMv ghost" data-mv="1" aria-label="Move down">▼</button></div>`
   ).join("");
   Array.from(list.children).forEach(orderWire);
 }
@@ -4798,13 +4800,20 @@ let ORDER_DRAG = null;
 function orderWire(el) {
   el.addEventListener("pointerdown", e => {
     if (e.button !== undefined && e.button !== 0) return;
-    const st = {el, id: e.pointerId, x: e.clientX, y: e.clientY, live: false};
-    st.timer = setTimeout(() => {
+    if (e.target.closest && e.target.closest(".ordMv")) return;   // the ▲▼ buttons are clicks, not drags
+    const st = {el, id: e.pointerId, x: e.clientX, y: e.clientY, live: false,
+                mouse: e.pointerType === "mouse"};
+    const lift = () => {
       st.live = true;
       el.classList.add("lift");
       try { el.setPointerCapture(st.id); } catch (_) {}
-      if (navigator.vibrate) try { navigator.vibrate(15); } catch (_) {}
-    }, 350);
+      if (!st.mouse && navigator.vibrate) try { navigator.vibrate(15); } catch (_) {}
+    };
+    /* ★★ A MOUSE DRAGS AT ONCE. Hold-then-drag exists so a FINGER can still scroll the page; with a mouse
+     *  you press and move straight away, which the 350 ms hold cancelled — the card never moved and the
+     *  list looked dead (Stuart, 2026-10-04: "very slow to respond to the point I assumed it wasnt
+     *  working"). A finger keeps a short hold. */
+    if (st.mouse) { e.preventDefault(); lift(); } else st.timer = setTimeout(lift, 220);
     ORDER_DRAG = st;
   });
   el.addEventListener("pointermove", e => {
@@ -4840,6 +4849,14 @@ function orderWire(el) {
   el.addEventListener("touchmove", e => { if (ORDER_DRAG && ORDER_DRAG.live && ORDER_DRAG.el === el) e.preventDefault(); },
                       {passive: false});
   el.addEventListener("contextmenu", e => { if (ORDER_DRAG) e.preventDefault(); });
+  el.querySelectorAll(".ordMv").forEach(b => b.addEventListener("click", () => {
+    const list = el.parentNode;
+    if (b.getAttribute("data-mv") === "-1") { if (!el.previousElementSibling) return; list.insertBefore(el, el.previousElementSibling); }
+    else { if (!el.nextElementSibling) return; list.insertBefore(el.nextElementSibling, el); }
+    b.focus();
+    clearTimeout(ORDER_KEY_TIMER);
+    ORDER_KEY_TIMER = setTimeout(orderSave, 600);   // ★ one save for a run of presses, as the keys
+  }));
   el.addEventListener("keydown", e => {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
     e.preventDefault();
@@ -4863,7 +4880,7 @@ async function orderSave() {
                           {method: "POST", body: JSON.stringify({action: "order", order: serials})});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
-      msg.textContent = r.status === 403 ? "The order can only be changed from this server’s own network."
+      msg.textContent = r.status === 403 ? "This server refused to change the order from here."
                                          : (j.error || ("Could not save the order (" + r.status + ")."));
       renderOrder();
       return;

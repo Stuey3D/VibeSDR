@@ -17124,16 +17124,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
         } else if (reqLine.rfind("GET /vibeserver/sdr-changes", 0) == 0 ||
                    reqLine.rfind("POST /vibeserver/sdr-change", 0) == 0) {
-            /* ★★★ ADD / REPLACE / REMOVE / PAUSE A RADIO — ADMIN, AND ONLY FROM THE LOCAL NETWORK.
-             *  These delete a radio's settings, re-point them at different hardware, and walk the USB
-             *  bus on demand. An admin password is the gate for every config change; this one ALSO
-             *  requires being on the owner's own network, because it is about hardware you can only
-             *  act on standing next to the machine (Stuart, 2026-10-04).
-             *  ★★ NOT A NEW RULE: it is the raw-IQ "local network only" test — isPrivateIp() on the
-             *     RESOLVED address (so a tunnel visitor is their real, public address, and a proxied
-             *     client nobody could identify is TEST-NET and fails) — plus viaTunnel(), so a request
-             *     that came through cloudflared is refused even if its forwarded address looks local.
-             *  ★ Loopback passes isPrivateIp: the person at the machine is on its network. */
+            /* ★★★ ADD / REPLACE / REMOVE / PAUSE A RADIO — ADMIN PASSWORD REQUIRED, from anywhere.
+             *  These delete a radio's settings, re-point them at different hardware, and walk the USB bus on
+             *  demand — so the admin password is the gate, exactly as for every other config change. It was
+             *  briefly LAN-only too; Stuart lifted that the same day (owners connect through the tunnel by
+             *  habit) — see the note below the password check. */
             const bool isPost = reqLine.rfind("POST", 0) == 0;
             LocalSdrShim::SdrChangesGetFn getFn; LocalSdrShim::SdrChangeSetFn setFn;
             { std::lock_guard<std::mutex> lk(g_vsConfigMtx); getFn = g_vsSdrChangesGet; setFn = g_vsSdrChangeSet; }
@@ -17158,10 +17153,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return;
             }
             g_vsAuthState.recordOk(ip);
-            if (!isPrivateIp(ip) || viaTunnel(*sock)) {
-                reply(403, "Forbidden", "{\"error\":\"lan-only\",\"lanOnly\":true}");
-                return;
-            }
+            /* ★★ ADMIN IS ENOUGH — NOT LAN-ONLY (Stuart, 2026-10-04). It was refused over the tunnel, but owners
+             *  reach their own server through its tunnel address by habit ("that is how I've always
+             *  connected"), and with the TUI no longer the way radios are managed there is nothing the LAN
+             *  rule protected that the admin password does not. The password check above is the gate. */
             if (!isPost) { reply(200, "OK", getFn()); return; }
             const long long clen = contentLength;
             if (clen <= 0 || clen > 16 * 1024) {
