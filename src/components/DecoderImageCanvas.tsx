@@ -25,6 +25,7 @@ import { ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-
 // ★★ A REAL FILE, NOT A data: URL — see save() below for why.
 import { File, Paths } from 'expo-file-system';
 import { MARGIN_AFTER_LINES, WEFAX_ALIGN_ZERO, findMargin, wefaxOffset, type WefaxAlign } from '../utils/wefaxAlign';
+import { addToHist, crispLevels, crispLine, newHist } from '../utils/wefaxCrisp';
 import {
   Canvas, Image as SkiaImage, Skia,
   AlphaType, ColorType, ImageFormat, type SkData, type SkImage,
@@ -56,6 +57,10 @@ interface PixBuf {
   raw?: Uint8Array;
   /** ★ WEFAX: the shift findMargin chose for THIS chart (undefined = not looked yet, null = no margin found). */
   autoShift?: number | null;
+  /** ★ WEFAX: each line AFTER shift/slant (greyscale) — what the crisp rendering smooths (utils/wefaxCrisp). */
+  al?: Uint8Array;
+  /** ★ WEFAX: histogram of every raw pixel received — the chart's own paper and ink levels. */
+  hist?: Uint32Array;
 }
 
 // Persistent per-decoder image store. The live/prev buffers live OUTSIDE the
@@ -100,68 +105,46 @@ export interface DecoderImageCanvasProps {
   onAutoShift?: (shift: number | null) => void;
 }
 
-/** Draw row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping). */
-function drawRawRow(buf: PixBuf, y: number, a: WefaxAlign) {
+/** Row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping) — into `al`. */
+function alignRow(buf: PixBuf, y: number, a: WefaxAlign) {
   if (!buf.raw) return;
-  const w = buf.w, off = wefaxOffset(a, y, w), base = y * w, o0 = y * w * 4;
-  for (let x = 0; x < w; x++) {
-    const v = buf.raw[base + ((x + off) % w)];
-    const o = o0 + x * 4;
-    buf.data[o] = v; buf.data[o + 1] = v; buf.data[o + 2] = v; buf.data[o + 3] = 255;
+  if (!buf.al) buf.al = new Uint8Array(buf.w * buf.h);
+  const w = buf.w, off = wefaxOffset(a, y, w), base = y * w;
+  for (let x = 0; x < w; x++) buf.al[base + x] = buf.raw[base + ((x + off) % w)];
+}
+
+/** Paint rows y0..y1 of a WEFAX buffer from `al`, crisp (utils/wefaxCrisp) once the chart's levels are known; rows
+ *  past maxLine have not arrived and count as missing to the smoothing. */
+const crispTmp = { out: new Uint8Array(0) };
+function paintRows(buf: PixBuf, y0: number, y1: number) {
+  if (!buf.al) return;
+  const w = buf.w, last = buf.maxLine, al = buf.al;
+  const lv = buf.hist ? crispLevels(buf.hist) : null;
+  if (crispTmp.out.length < w) crispTmp.out = new Uint8Array(w);
+  const out = crispTmp.out;
+  const row = (j: number) => (j >= 0 && j <= last && j < buf.h ? al.subarray(j * w, (j + 1) * w) : undefined);
+  for (let y = Math.max(0, y0); y <= y1 && y < buf.h; y++) {
+    if (lv) crispLine(row, y, w, lv, out);
+    else out.set(al.subarray(y * w, (y + 1) * w));
+    const o0 = y * w * 4;
+    for (let x = 0; x < w; x++) {
+      const v = out[x], o = o0 + x * 4;
+      buf.data[o] = v; buf.data[o + 1] = v; buf.data[o + 2] = v; buf.data[o + 3] = 255;
+    }
   }
+}
+
+/** Re-align and repaint the whole chart (a SHIFT/SLANT change, a margin found, the chart finished — final levels). */
+function redrawAll(buf: PixBuf, a: WefaxAlign) {
+  if (!buf.raw) return;
+  for (let y = 0; y <= buf.maxLine && y < buf.h; y++) alignRow(buf, y, a);
+  paintRows(buf, 0, buf.maxLine);
 }
 
 function mkBuf(w: number, h: number): PixBuf {
   const data = new Uint8Array(w * h * 4); // zero-filled = black, alpha set on write
   for (let i = 3; i < data.length; i += 4) data[i] = 255;
   return { w, h, data, complete: false, maxLine: 0 };
-}
-
-// WEFAX post-process (greyscale): auto-level contrast stretch + 3×3 median
-// despeckle. Runs once on the completed image — weak HF fax comes in faint and
-// speckled, this pulls the black/white levels to the 2nd/98th percentile and
-// removes salt-and-pepper noise. Operates in place on the RGBA buffer (R=G=B).
-function enhanceWefax(buf: PixBuf) {
-  const { w, data } = buf;
-  const h = Math.max(1, buf.maxLine + 1);
-  const N = w * h;
-  if (N < w * 4) return; // too little to bother
-
-  const g = new Uint8Array(N);
-  for (let i = 0; i < N; i++) g[i] = data[i * 4];
-
-  // Auto-level: stretch the 2nd…98th percentile to full range.
-  const hist = new Uint32Array(256);
-  for (let i = 0; i < N; i++) hist[g[i]]++;
-  const loCount = N * 0.02, hiCount = N * 0.98;
-  let acc = 0, lo = 0, hi = 255;
-  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= loCount) { lo = v; break; } }
-  acc = 0;
-  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= N - hiCount) { hi = v; break; } }
-  if (hi <= lo) hi = lo + 1;
-  const scale = 255 / (hi - lo);
-  const lut = new Uint8Array(256);
-  for (let v = 0; v < 256; v++) { const x = (v - lo) * scale; lut[v] = x < 0 ? 0 : x > 255 ? 255 : x; }
-
-  // 3×3 median despeckle (on the raw luma), then apply the contrast LUT.
-  const win = new Uint8Array(9);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let m: number;
-      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
-        m = g[y * w + x];
-      } else {
-        let k = 0;
-        for (let dy = -1; dy <= 1; dy++)
-          for (let dx = -1; dx <= 1; dx++) win[k++] = g[(y + dy) * w + (x + dx)];
-        for (let a = 1; a < 9; a++) { const t = win[a]; let b = a - 1; while (b >= 0 && win[b] > t) { win[b + 1] = win[b]; b--; } win[b + 1] = t; }
-        m = win[4];
-      }
-      const v = lut[m];
-      const o = (y * w + x) * 4;
-      data[o] = v; data[o + 1] = v; data[o + 2] = v;
-    }
-  }
 }
 
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
@@ -263,16 +246,14 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
      *  when the new image is started the old one goes into a previous button"). It waited for `complete`, so a
      *  partial SSTV frame (signal faded, late join) was simply thrown away by the next image's start. */
     /* ★ A SHIFT / SLANT change redraws the WHOLE live chart from its kept lines — not only the lines to come —
-     *  so the listener sees the correction land on the picture they are looking at. A finished chart is
-     *  enhanced again afterwards (the redraw starts from the raw lines). */
+     *  so the listener sees the correction land on the picture they are looking at. */
     const alignKey = `${align?.shift ?? 0}|${align?.slant ?? 0}|${autoMargin ? 1 : 0}`;
     const firstAlign = useRef(true);
     useEffect(() => {
       if (firstAlign.current) { firstAlign.current = false; return; }
       const buf = live.current;
       if (!buf?.raw) return;
-      for (let y = 0; y <= buf.maxLine && y < buf.h; y++) drawRawRow(buf, y, effAlign(buf));
-      if (buf.complete && (decoderName || '').toLowerCase() === 'wefax') { try { enhanceWefax(buf); } catch {} }
+      redrawAll(buf, effAlign(buf));
       if (!viewingPrev) rebuild(buf, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [alignKey]);
@@ -291,6 +272,9 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       const next = mkBuf(buf.w, newH);
       next.data.set(buf.data);
       if (buf.raw) { next.raw = new Uint8Array(buf.w * newH); next.raw.set(buf.raw); }
+      if (buf.al) { next.al = new Uint8Array(buf.w * newH); next.al.set(buf.al); }
+      next.hist = buf.hist;
+      next.autoShift = buf.autoShift;
       next.maxLine = buf.maxLine;
       next.complete = buf.complete;
       return next;
@@ -329,7 +313,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         if (live.current.maxLine > 0 && (ln === 0 || ln < live.current.maxLine - 2)) {     // new image
           if (!live.current.complete) {
             live.current.complete = true;
-            if ((decoderName || '').toLowerCase() === 'wefax') { try { enhanceWefax(live.current); } catch {} }
+            try { redrawAll(live.current, effAlign(live.current)); } catch {}   // final levels, last rows settled
           }
           rollToPrev();
           live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current;
@@ -344,17 +328,23 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         // ★ Keep the line as received, then draw it moved by this frequency's SHIFT / SLANT (utils/wefaxAlign).
         if (!buf.raw) buf.raw = new Uint8Array(buf.w * buf.h);
         buf.raw.set(px.subarray(0, n), ln * buf.w);
+        addToHist(buf.hist ??= newHist(), px.subarray(0, n));
         // ★ Once the chart is long enough, find its margin (once) and redraw the whole chart around it.
+        let moved = false;
         if (autoRef.current && buf.autoShift === undefined && ln >= MARGIN_AFTER_LINES) {
           const rows: Uint8Array[] = [];
           for (let y = 0; y <= ln; y++) rows.push(buf.raw.subarray(y * buf.w, (y + 1) * buf.w));
           const m = findMargin(rows, buf.w, alignRef.current.slant);
           buf.autoShift = m === null ? null : m - 2;
           onAutoShift?.(buf.autoShift);
-          if (buf.autoShift !== null) for (let y = 0; y < ln; y++) drawRawRow(buf, y, effAlign(buf));
+          if (buf.autoShift !== null) { for (let y = 0; y < ln; y++) alignRow(buf, y, effAlign(buf)); moved = true; }
         }
-        drawRawRow(buf, ln, effAlign(buf));
+        alignRow(buf, ln, effAlign(buf));
         if (ln > buf.maxLine) buf.maxLine = ln;
+        // ★ The gold-standard rendering (utils/wefaxCrisp): this line and the two above it, which now have it below.
+        // ★ Line 40: the paper/ink levels have settled — repaint the top, drawn while they were still being learned.
+        if (moved || ln === 40) paintRows(buf, 0, ln);
+        else paintRows(buf, ln - 2, ln);
         linesSince.current++;
         if (!viewingPrev) rebuild(buf);
       },
@@ -376,10 +366,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       imageDone() {
         if (live.current) {
           live.current.complete = true;
-          // WEFAX: enhance the finished greyscale fax (contrast + despeckle).
-          if ((decoderName || '').toLowerCase() === 'wefax') {
-            try { enhanceWefax(live.current); } catch {}
-          }
+          // WEFAX: repaint the finished chart with its final levels (utils/wefaxCrisp).
+          if (live.current.raw) { try { redrawAll(live.current, effAlign(live.current)); } catch {} }
           rebuild(live.current, true);
         }
         onStatus('done — tap SAVE');

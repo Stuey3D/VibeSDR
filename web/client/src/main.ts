@@ -28,6 +28,7 @@ import { dabServiceStereo } from '../../../src/services/dabTypes';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { limiter } from '../../../src/utils/limit';
+import { addToHist, crispLevels, crispLine, newHist } from '../../../src/utils/wefaxCrisp';
 import { MARGIN_AFTER_LINES, SHIFT_STEP, SLANT_STEP, findMargin, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
@@ -11528,7 +11529,7 @@ function startDecImage(w: number, h: number) {
   decLiveCtx?.clearRect(0, 0, cv.width, cv.height);
   decLiveComplete = false;
   decLiveMaxY = -1;
-  decLiveRaw = [];
+  decLiveRaw = []; decLiveAl = []; decLiveHist = newHist();
   decAutoShift = undefined; decManualShift = null;   // ★ a new chart finds its own margin
   if (!decViewingPrev) blitToVisible(decLiveCv);
   updateDecImageButtons();
@@ -11536,6 +11537,8 @@ function startDecImage(w: number, h: number) {
 
 let decLiveMaxY = -1;   // the highest line drawn into the live image (see drawDecLine)
 let decLiveRaw: Uint8Array[] = [];   // WEFAX lines as received — a SHIFT / SLANT change redraws from these
+let decLiveAl: Uint8Array[] = [];    // …and after SHIFT / SLANT: what the crisp rendering smooths (wefaxCrisp)
+let decLiveHist = newHist();         // every raw pixel of this chart — its own paper and ink levels
 let decAlign: WefaxAlign = { shift: 0, slant: 0 };   // ★ the SLANT is the station's (saved); shift below is per chart
 /* ★★ SHIFT IS PER CHART (Stuart, 2026-10-04, from FLDigi: the margin "had shifted again and needed setting every
  *  time"): found by findMargin once each chart is MARGIN_AFTER_LINES long; ◀ ▶ nudge THIS chart only. */
@@ -11579,14 +11582,41 @@ function updateDecAdjLabels() {
 /** Redraw the WHOLE live chart from its kept lines, so a correction lands on what is on screen. */
 function redrawDecAlign() {
   if (!decLiveCtx || !decLiveCv || !decLiveRaw.length) return;
-  const w = decLiveCv.width, row = decLiveCtx.createImageData(w, 1), a = decEffAlign();
-  for (let y = 0; y < decLiveRaw.length; y++) {
-    const r = decLiveRaw[y]; if (!r) continue;
-    const off = wefaxOffset(a, y, w);
-    for (let x = 0; x < w; x++) { const v = r[(x + off) % w] ?? 0, o = x << 2; row.data[o] = row.data[o + 1] = row.data[o + 2] = v; row.data[o + 3] = 255; }
-    decLiveCtx.putImageData(row, 0, y);
+  const w = decLiveCv.width, a = decEffAlign();
+  for (let y = 0; y < decLiveRaw.length; y++) if (decLiveRaw[y]) decLiveAl[y] = decAlignRow(decLiveRaw[y], y, w, a);
+  paintDecRows(0, decLiveRaw.length - 1, w);
+}
+function decAlignRow(r: Uint8Array, y: number, w: number, a: WefaxAlign): Uint8Array {
+  const off = wefaxOffset(a, y, w);
+  if (!off) return r;
+  const o = new Uint8Array(w);
+  for (let x = 0; x < w; x++) o[x] = r[(x + off) % w] ?? 0;
+  return o;
+}
+/* ★★★ THE GOLD-STANDARD RENDERING (src/utils/wefaxCrisp — the app's canvas runs the same code): smoothed, then
+ *  the chart's own paper → white and ink → black, greys kept. A line is repainted as the two below it arrive. */
+const decCrispOut = { a: new Uint8Array(0) };
+function paintDecRows(y0: number, y1: number, w: number) {
+  if (!decLiveCtx || !decLiveCv) return;
+  const lv = crispLevels(decLiveHist);
+  if (decCrispOut.a.length < w) decCrispOut.a = new Uint8Array(w);
+  const out = decCrispOut.a, last = decLiveMaxY;
+  const row = (j: number) => (j >= 0 && j <= last ? decLiveAl[j] : undefined);
+  const ys = Math.max(0, y0), n = y1 - ys + 1;
+  if (n <= 0) return;
+  const img = decLiveCtx.createImageData(w, n);
+  for (let y = ys; y <= y1; y++) {
+    const al = decLiveAl[y]; if (!al) continue;
+    if (lv) crispLine(row, y, w, lv, out); else out.set(al.subarray(0, w));
+    const o0 = (y - ys) * w * 4;
+    for (let x = 0; x < w; x++) { const v = out[x], o = o0 + (x << 2); img.data[o] = img.data[o + 1] = img.data[o + 2] = v; img.data[o + 3] = 255; }
   }
-  if (!decViewingPrev) blitToVisible(decLiveCv);
+  decLiveCtx.putImageData(img, 0, ys);
+  if (!decViewingPrev) {
+    const vis = $<HTMLCanvasElement>('decImage');
+    if (vis.width !== decLiveCv.width || vis.height !== decLiveCv.height) blitToVisible(decLiveCv);
+    else vis.getContext('2d')?.putImageData(img, 0, ys);
+  }
 }
 function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
   decIsRgb = rgb;
@@ -11597,6 +11627,7 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
    *  back of ≤ 2 lines is tolerated, never a reason to lose a picture. */
   if (decLiveCv && decLiveMaxY > 0 && (y === 0 || y < decLiveMaxY - 2)) {
     decLiveComplete = true;
+    if (!rgb) redrawDecAlign();   // its final levels and last two rows, before it goes to PREV
     startDecImage(w, 0);
   }
   if (!decLiveCtx || !decLiveCv || decLiveCv.width !== w) startDecImage(w, 0);
@@ -11612,31 +11643,31 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     if (!decViewingPrev) blitToVisible(cv);
   }
 
-  // ★ WEFAX: keep the line as received, then draw it moved by this frequency's SHIFT / SLANT (wefaxAlign).
-  let src: ArrayLike<number> = px;
+  // ★ WEFAX: keep the line as received, move it by this frequency's SHIFT / SLANT (wefaxAlign), and paint it
+  //   and the two above it in the gold-standard rendering (wefaxCrisp).
   if (!rgb) {
     loadDecAlign();   // ★ a retune while WEFAX is open picks up that frequency's setting (a string compare)
-    decLiveRaw[y] = px.slice(0, w);
+    const raw = px.slice(0, w);
+    decLiveRaw[y] = raw;
+    addToHist(decLiveHist, raw);
+    if (y > decLiveMaxY) decLiveMaxY = y;
     if (decAutoShift === undefined && decManualShift === null && y >= MARGIN_AFTER_LINES) {
       const m = findMargin(decLiveRaw, w, decAlign.slant);
       decAutoShift = m === null ? null : m - 2;
-      if (decAutoShift !== null) redrawDecAlign();
       updateDecAdjLabels();
+      if (decAutoShift !== null) { redrawDecAlign(); return; }
     }
-    const off = wefaxOffset(decEffAlign(), y, w);
-    if (off) { const r = new Uint8Array(w); for (let x = 0; x < w; x++) r[x] = px[(x + off) % w]; src = r; }
+    decLiveAl[y] = decAlignRow(raw, y, w, decEffAlign());
+    // ★ Line 40: the paper/ink levels have settled — repaint the top, drawn while they were still being learned.
+    if (y === 40) paintDecRows(0, y, w); else paintDecRows(y - 2, y, w);
+    return;
   }
   const img = decLiveCtx.createImageData(w, 1);
   for (let x = 0; x < w; x++) {
     const o = x << 2;
-    if (rgb) {
-      img.data[o] = px[x * 3];
-      img.data[o + 1] = px[x * 3 + 1];
-      img.data[o + 2] = px[x * 3 + 2];
-    } else {
-      const v = src[x];                    // WEFAX is greyscale
-      img.data[o] = img.data[o + 1] = img.data[o + 2] = v;
-    }
+    img.data[o] = px[x * 3];
+    img.data[o + 1] = px[x * 3 + 1];
+    img.data[o + 2] = px[x * 3 + 2];
     img.data[o + 3] = 255;
   }
   decLiveCtx.putImageData(img, 0, y);
@@ -11652,6 +11683,7 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
 /** Bank the live image as saveable once it finishes; enable PREV on the next image start. */
 function markDecImageComplete() {
   decLiveComplete = true;
+  if (!decIsRgb) redrawDecAlign();   // ★ the finished chart with its final levels and its last two rows settled
   updateDecImageButtons();
 }
 

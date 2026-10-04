@@ -266,6 +266,7 @@ if node --no-warnings scripts/test_chat_pad.ts; then pass=$((pass+1)); else fail
 # ★★ The FM-DX screen grows its dial + logo into a big window; a phone-sized window keeps today's layout exactly.
 if node --no-warnings scripts/test_fmdx_layout.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_fmdx_layout.ts"; fi
 if node --no-warnings scripts/test_wefax_align.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_wefax_align.ts"; fi
+if node --no-warnings scripts/test_wefax_crisp.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_wefax_crisp.ts"; fi
 # ★★★ SHARE A STATION (canned chat, app + web): a bookmark's LABEL never reaches the payload, the server's
 #     relayed line is what is drawn, and TUNE asks first on a shared dial somebody else is on. The server half
 #     (validation, naming, the line itself) is vibeserver/test-chat-share.cpp, run with the C++ tests above.
