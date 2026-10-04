@@ -263,6 +263,8 @@ if node --no-warnings scripts/test_popup.ts; then pass=$((pass+1)); else fail=$(
 #     overflows the drawer on any phone (the SE lost phrases 7–14 below its edge), and a dome key's
 #     sheen is flex shares, never percentage heights (Yoga drew ghost slabs over a multi-line wrap).
 if node --no-warnings scripts/test_chat_pad.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ The FM-DX screen grows its dial + logo into a big window; a phone-sized window keeps today's layout exactly.
+if node --no-warnings scripts/test_fmdx_layout.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_fmdx_layout.ts"; fi
 # ★★★ SHARE A STATION (canned chat, app + web): a bookmark's LABEL never reaches the payload, the server's
 #     relayed line is what is drawn, and TUNE asks first on a shared dial somebody else is on. The server half
 #     (validation, naming, the line itself) is vibeserver/test-chat-share.cpp, run with the C++ tests above.
