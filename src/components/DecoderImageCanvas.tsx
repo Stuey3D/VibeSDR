@@ -77,6 +77,8 @@ export interface DecoderImageHandle {
 }
 
 export interface DecoderImageCanvasProps {
+  /** ★ The listener's zoom over FIT (1 = the whole width in the box). The header's − / + (DecoderPanel). */
+  zoom?: number;
   maxHeight: number;
   /** Header info string updates: "1809x500", "prev — 1809x842", … */
   onInfo:    (info: string) => void;
@@ -140,7 +142,7 @@ function enhanceWefax(buf: PixBuf) {
 }
 
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
-  function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName }, ref) {
+  function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1 }, ref) {
     const { width: winW } = useWindowDimensions();
     /* ★★★ THE WIDTH THIS CANVAS ACTUALLY HAS — MEASURED, not the window's. It was `winW - 16 - 24`, true
      *  on a phone (the box is full-bleed there) and false everywhere else since the box was capped at
@@ -377,7 +379,11 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     // ★★ WEFAX IS THE EXCEPTION AND MUST KEEP SCROLLING. It is an endless fax roll that grows
     // continuously, so "fit the whole thing" would shrink it to a thread. Shrink-to-fit is right for
     // a FIXED-SIZE frame and wrong for a stream, so it is chosen per decoder rather than globally.
-    const fitsWhole = decoderName !== 'wefax';
+    /* ★★★ …SUPERSEDED (Stuart, 2026-10-04): "We want the image to be seen in its full in the decoder window, with
+     *  zoom and pan as needed, but by default the whole image is shown correctly". Every picture — the WEFAX roll
+     *  included — fits WHOLE by default; as a chart grows it scales down to stay whole, and the header's − / +
+     *  magnifies from there with panning both ways. */
+    const fitsWhole = true;
     const wScale = dispDims.w > 0 ? panelW / dispDims.w : 1;
     const hScale = dispDims.h > 0 ? maxHeight / dispDims.h : 1;
     // ★★★ NEVER MAGNIFY PAST THE SOURCE BY MORE THAN THIS. An SSTV frame is 320x240 — on a Mac
@@ -387,7 +393,11 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     // ★ 2x is the honest ceiling: enough that a phone still fills its width, not so much that a
     // desktop turns a postage stamp into a poster.
     const MAX_UPSCALE = 2;
-    const scale = Math.min(fitsWhole ? Math.min(wScale, hScale) : wScale, MAX_UPSCALE);
+    /* ★★ FIT FIRST, THEN THE LISTENER'S ZOOM (Stuart, 2026-10-04: "the picture needs to be scaled to the box but
+     *  we could add a zoom in and out to the header"). zoom 1 is exactly the fit above; more magnifies from there,
+     *  still never past MAX_UPSCALE source pixels — beyond that there is nothing more to see. */
+    const fit = Math.min(fitsWhole ? Math.min(wScale, hScale) : wScale, MAX_UPSCALE);
+    const scale = zoom > 1 ? Math.min(fit * zoom, Math.max(fit, MAX_UPSCALE)) : fit;
     const drawW  = Math.max(1, Math.round(dispDims.w * scale));
     const drawH  = Math.max(1, Math.round(dispDims.h * scale));
     // ★★★ AND THE BOX TAKES WHAT THE IMAGE NEEDS, NOT WHAT IT IS ALLOWED. maxHeight is a CEILING;
@@ -401,13 +411,17 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
                   /* ★ scroll lane: a picture, centred, no controls in it */>
         {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would
             otherwise sit against the left edge with dead space beside it. */}
-        <View style={[styles.canvasWrap, { width: drawW, height: drawH, alignSelf: 'center' }]}>
-          {img && (
-            <Canvas style={{ width: drawW, height: drawH }}>
-              <SkiaImage image={img} x={0} y={0} width={drawW} height={drawH} fit="fill" />
-            </Canvas>
-          )}
-        </View>
+        {/* ★ Zoomed wider than the box: the picture pans SIDEWAYS too (the outer view scrolls down). */}
+        <ScrollView horizontal scrollEnabled={drawW > panelW + 1} showsHorizontalScrollIndicator={drawW > panelW + 1}
+                    contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}>
+          <View style={[styles.canvasWrap, { width: drawW, height: drawH, alignSelf: 'center' }]}>
+            {img && (
+              <Canvas style={{ width: drawW, height: drawH }}>
+                <SkiaImage image={img} x={0} y={0} width={drawW} height={drawH} fit="fill" />
+              </Canvas>
+            )}
+          </View>
+        </ScrollView>
       </ScrollView>
     );
   },

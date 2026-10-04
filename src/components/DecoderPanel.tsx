@@ -324,6 +324,10 @@ export default function DecoderPanel({
     else             imageRef?.current?.showPrev();
   };
   const onSave = () => { imageRef?.current?.save(); };
+  /* ★ Picture zoom over FIT — − / + in the header (Stuart, 2026-10-04). Back to fit when the decoder changes. */
+  const IMG_ZOOMS = [1, 1.5, 2, 3, 4];
+  const [imgZoomI, setImgZoomI] = useState(0);
+  useEffect(() => { setImgZoomI(0); }, [activeDecoder]);
   const [minimised, setMinimised] = useState(false);
   const [dabSpeedOpen, setDabSpeedOpen] = useState(false);   // DAB speed-fix popup
   // ★★ The spots filters were CYCLERS: each tap advanced by one and you read the label to find
@@ -1001,6 +1005,19 @@ export default function DecoderPanel({
               <DecoderKeyLabel tone="accent">SAVE</DecoderKeyLabel>
             </HBtn>
           )}
+          {/* ★ Zoom out / in over the fitted picture. − only once zoomed (never a dead key); + stops at 4×. */}
+          {isImageMode && imgZoomI > 0 && (
+            <HBtn run hitSlop={6} accessibilityLabel="Zoom out"
+              onPress={(e: any) => { e?.stopPropagation(); setImgZoomI((i) => Math.max(0, i - 1)); }}>
+              <DecoderKeyLabel>−</DecoderKeyLabel>
+            </HBtn>
+          )}
+          {isImageMode && imgZoomI < IMG_ZOOMS.length - 1 && (
+            <HBtn run hitSlop={6} accessibilityLabel="Zoom in"
+              onPress={(e: any) => { e?.stopPropagation(); setImgZoomI((i) => Math.min(IMG_ZOOMS.length - 1, i + 1)); }}>
+              <DecoderKeyLabel active={imgZoomI > 0}>{imgZoomI > 0 ? `+ ${IMG_ZOOMS[imgZoomI]}×` : '+'}</DecoderKeyLabel>
+            </HBtn>
+          )}
           {/* ★★ BIG / SMALL — offered for EVERY decoder, not just images. See the block at the top
               of this component for why the 200 pt cap was wrong on large screens. */}
           {bigUseful && (
@@ -1060,6 +1077,7 @@ export default function DecoderPanel({
               ref={imageRef}
               maxHeight={bodyH}
               decoderName={activeDecoder ?? 'image'}
+              zoom={IMG_ZOOMS[imgZoomI]}
               onInfo={setImageInfo}
               onStatus={(s: string) => onImageStatus?.(s)}
               onPrevState={(hp: boolean, vp: boolean) => { setHasPrev(hp); setViewingPrev(vp); }}
