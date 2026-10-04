@@ -27,6 +27,7 @@ import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { dabServiceStereo } from '../../../src/services/dabTypes';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
+import { limiter } from '../../../src/utils/limit';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
@@ -6747,13 +6748,15 @@ function dabSlideTag(sv: DabState['services'][number], key?: string): string {
   return `<img class="dabLogo" src="${escapeHtml(url)}" alt="" loading="lazy">`;   // ★ escaped: it now carries a query
 }
 (window as any).dabLogoFailed = (k: string) => { dabLogos.set(k, null); try { const raw = localStorage.getItem(DAB_LOGO_STORE); if (raw) { const j = JSON.parse(raw); delete j[k]; localStorage.setItem(DAB_LOGO_STORE, JSON.stringify(j)); } } catch { /* ignore */ } };
+const dabLogoQueue = limiter(3);
 async function dabLogoLookup(key: string, sv: DabState['services'][number], d: DabState, ecc: number) {
   let url: string | null = null;
   try {
     if (ecc >= 0 && d.eid) {
       const q = `ecc=${ecc.toString(16).toUpperCase().padStart(2, '0')}&eid=${d.eid.toString(16).toUpperCase().padStart(4, '0')}`
               + `&sid=${sv.sid.toString(16).toUpperCase().padStart(4, '0')}&scids=${Math.max(0, sv.scids ?? 0)}`;
-      const r = await fetch(P(`/vibeserver/dablogo?${q}`), { cache: 'no-store' });
+      // ★ Three at a time — under the server's cap of four, so every service gets its real answer (src/utils/limit.ts).
+      const r = await dabLogoQueue(() => fetch(P(`/vibeserver/dablogo?${q}`), { cache: 'no-store' }));
       if (r.ok) url = String((await r.json())?.logo ?? '') || null;
     }
   } catch { url = null; }

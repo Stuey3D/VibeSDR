@@ -29,6 +29,10 @@ import { DAB_BLOCKS, DAB_PTY, dabBlockAt } from '../services/dabBlocks';
 import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
 import { withReadAuth } from '../services/vibeAuth';
+import { limiter } from '../utils/limit';
+
+/** ★ Three RadioDNS lookups at a time — under the server's cap of four (src/utils/limit.ts). */
+const dabLogoQueue = limiter(3);
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component below
  *  reads `useDecoderStyles(makeStyles)`, so a chassis, colour or Transparency change reaches
@@ -181,7 +185,7 @@ function useServiceLogo(base: string, d: DabState | null,
       if (!(ecc >= 0 && d.eid)) return null;
       const q = `ecc=${hex(ecc, 2)}&eid=${hex(d.eid, 4)}&sid=${hex(sv.sid, 4)}&scids=${Math.max(0, sv.scids ?? 0)}`;
       try {
-        const r = await fetch(`${base}/vibeserver/dablogo?${q}`);
+        const r = await dabLogoQueue(() => fetch(`${base}/vibeserver/dablogo?${q}`));
         if (!r.ok) return null;
         const j: { logo?: string } | null = await r.json();
         const u = j && typeof j.logo === 'string' && j.logo ? j.logo : '';

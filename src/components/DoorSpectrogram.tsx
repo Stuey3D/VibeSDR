@@ -16,6 +16,7 @@
 import React, { useEffect, useState } from 'react';
 import { PixelRatio, StyleSheet, Text, View } from 'react-native';
 import { AlphaType, Canvas, ColorType, Image as SkImage, Skia, type SkData, type SkImage as SkImageT } from '@shopify/react-native-skia';
+import { withReadAuth } from '../services/vibeAuth';
 
 // ★ The real stops of the app's own 'Sonar Green' palette — see src/assets/colormaps.ts.
 const SONAR_GREEN: [number, number, number][] = [
@@ -44,11 +45,12 @@ type Pic = { img: SkImageT; data: SkData; hours: number };
  *  never feels pressure to run. */
 const disposePic = (p: Pic | null) => { if (p) { try { p.img.dispose(); p.data.dispose(); } catch {} } };
 
-async function fetchSpectrogram(base: string, bins: number, rows: number): Promise<Pic | null> {
+async function fetchSpectrogram(base: string, bins: number, rows: number, readAuth: string): Promise<Pic | null> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const r = await fetch(`${base}/vibeserver/spectrogram?bins=${bins}&rows=${rows}`, { signal: ctrl.signal });
+    // ★ PIN proof: a PIN-locked server gates this since RC4 (audit 2026-10-03) — bare, the door lost its backdrop.
+    const r = await fetch(withReadAuth(`${base}/vibeserver/spectrogram?bins=${bins}&rows=${rows}`, readAuth), { signal: ctrl.signal });
     if (!r.ok) return null;
     const buf = await r.arrayBuffer();
     if (buf.byteLength < 25) return null;
@@ -91,7 +93,7 @@ async function fetchSpectrogram(base: string, bins: number, rows: number): Promi
   finally { clearTimeout(t); }
 }
 
-export default function DoorSpectrogram({ base, width, height }: { base: string; width: number; height: number }) {
+export default function DoorSpectrogram({ base, width, height, readAuth = '' }: { base: string; width: number; height: number; readAuth?: string }) {
   const [pic, setPic] = useState<Pic | null>(null);
   useEffect(() => {
     let dead = false;
@@ -99,9 +101,9 @@ export default function DoorSpectrogram({ base, width, height }: { base: string;
     const dpr = PixelRatio.get();
     const bins = Math.min(2048, Math.max(512, Math.floor(width * dpr)));
     const rows = Math.min(1440, Math.max(180, Math.floor(height * dpr)));
-    fetchSpectrogram(base.replace(/\/+$/, ''), bins, rows).then(p => { if (dead) disposePic(p); else setPic(p); });
+    fetchSpectrogram(base.replace(/\/+$/, ''), bins, rows, readAuth).then(p => { if (dead) disposePic(p); else setPic(p); });
     return () => { dead = true; };
-  }, [base, width, height]);
+  }, [base, width, height, readAuth]);
   // ★ RETIRE THE PICTURE IT REPLACES (a resize / rotation / another server refetches), and the last one on
   //   unmount. The cleanup runs after the render that swapped the new one in; the 300 ms grace is
   //   WaterfallView's swapWfImage rule — the UI thread may still be mid-draw on the old image.

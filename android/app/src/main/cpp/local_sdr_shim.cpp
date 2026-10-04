@@ -1315,14 +1315,14 @@ static bool isHexLen(const std::string& v, size_t lo, size_t hi) {
     for (char c : v) if (!std::isxdigit((unsigned char)c)) return false;
     return true;
 }
-/** ★★ AT MOST TWO LOGO LOOKUPS AT ONCE (audit 2026-10-03). An unauthenticated logo request with an invented
+/** ★★ AT MOST FOUR LOGO LOOKUPS AT ONCE (audit 2026-10-03; two → four 2026-10-04, a DAB list asks ~20 at once). An unauthenticated logo request with an invented
  *  identity made this box spawn a chain of curl lookups (up to ~40 processes with ECC unknown) and hold the
- *  connection thread while they ran — a loop of them was a process and thread flood. Past two in flight the
+ *  connection thread while they ran — a loop of them was a process and thread flood. Past four in flight the
  *  answer is the normal "no logo" ({}), which every client already falls back from. */
 static std::atomic<int> g_logoLookups{0};
 struct LogoLookupSlot {
     bool ok;
-    LogoLookupSlot() : ok(g_logoLookups.fetch_add(1) < 2) {}
+    LogoLookupSlot() : ok(g_logoLookups.fetch_add(1) < 4) {}
     ~LogoLookupSlot() { g_logoLookups.fetch_sub(1); }
 };
 
@@ -4784,7 +4784,13 @@ struct VsAuth {
         uint8_t mac[32];
         hmacSha256((const uint8_t*)secret.data(), secret.size(),
                    (const uint8_t*)nonce.data(), nonce.size(), mac);
-        return ctEqual(toHex(mac, 32), token);
+        const bool ok = ctEqual(toHex(mac, 32), token);
+        /* ★★★ A NONCE IN USE STAYS ALIVE (2026-10-04). Clients prove the PIN with ONE nonce for the whole visit,
+         *  and RC4 put the spectrogram, bookmarks, stations, location, DAB slides and conditions behind it — so
+         *  an hour after connecting every one of those went 401 while the sockets played on. The hour now
+         *  counts from the last PROVEN use, not from issue: a listener who is still here keeps their reads. */
+        if (ok) it->second = now;
+        return ok;
     }
 };
 VsAuth g_vsAuthState;
@@ -17804,9 +17810,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::string url;
             const int eccN = int(strtol(ecc.c_str(), nullptr, 16)); const uint16_t eidN = uint16_t(strtoul(eid.c_str(), nullptr, 16)); const uint32_t sidN = uint32_t(strtoul(sid.c_str(), nullptr, 16));
             std::string ext, stored = dabLogoStoreFind(eccN, eidN, sidN, ext);
-            LogoLookupSlot slot;   // ★ see LogoLookupSlot; identities must be real hex, too
-            if (stored.empty() && fn && slot.ok && isHexLen(ecc, 1, 2) && isHexLen(eid, 4, 4)
-                && (isHexLen(sid, 4, 4) || isHexLen(sid, 8, 8)) && scids >= 0 && scids <= 15) {
+            /* ★★ THE SLOT ONLY WHEN THE NETWORK IS ASKED. It was taken before the store was even consulted, so
+             *  with two lookups pending a logo already kept on this server answered {} — and a multiplex's list
+             *  fires ~20 of these at once, so most services fell back to a name search (2026-10-04 review). */
+            std::unique_ptr<LogoLookupSlot> slot;
+            const bool realId = isHexLen(ecc, 1, 2) && isHexLen(eid, 4, 4)
+                && (isHexLen(sid, 4, 4) || isHexLen(sid, 8, 8)) && scids >= 0 && scids <= 15;
+            if (stored.empty() && fn && realId) slot.reset(new LogoLookupSlot());
+            if (slot && slot->ok) {
                 url = fn(ecc, eid, sid, scids);
                 LocalSdrShim::LogoBytesFn bf;
                 { std::lock_guard<std::mutex> lk(g_vsLogoBytesMtx); bf = g_vsLogoBytesFn; }

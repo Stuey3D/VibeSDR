@@ -9711,7 +9711,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           {/* ★ The receiver's last day behind the list — the web landing page's backdrop. Sized
               to the screen; absent silently on a server without history. */}
           <PanelBoundary name="Door spectrogram">
-          <DoorSpectrogram base={baseUrl} width={screenW} height={rootH || screenH} />
+          <DoorSpectrogram base={baseUrl} width={screenW} height={rootH || screenH} readAuth={radioAuthSuffix || route.params.authSuffix || ''} />
           </PanelBoundary>
           {/* ★★★ THE WAY OUT. This screen covers the whole app and nothing on it went back, so a
               listener who opened the wrong server was stuck with the system gesture (or nothing at
@@ -9864,7 +9864,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             ); })}
             {/* ★ Predicted vs actual band conditions and where the receiver is — the web's block. */}
             <PanelBoundary name="Band conditions">
-            <DoorConditions base={baseUrl} />
+            <DoorConditions base={baseUrl} readAuth={radioAuthSuffix || route.params.authSuffix || ''} />
             </PanelBoundary>
           </ScrollView>
 

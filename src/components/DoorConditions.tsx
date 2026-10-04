@@ -11,11 +11,12 @@
  */
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { withReadAuth } from '../services/vibeAuth';
 
 type Cond = { measured: { band: string; snrDb: number }[]; solar?: { sfi?: number; kp?: number; bands?: Record<string, string> } };
 const rate = (db: number) => db >= 15 ? 'Excellent' : db >= 9 ? 'Good' : db >= 4 ? 'Fair' : 'Poor';
 
-export default function DoorConditions({ base }: { base: string }) {
+export default function DoorConditions({ base, readAuth = '' }: { base: string; readAuth?: string }) {
   const [c, setC] = useState<Cond | null>(null);
   const [loc, setLoc] = useState('');
   useEffect(() => {
@@ -23,11 +24,12 @@ export default function DoorConditions({ base }: { base: string }) {
     const b = base.replace(/\/+$/, '');
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 8000);
-    fetch(`${b}/vibeserver/conditions`, { signal: ctrl.signal }).then(r => r.ok ? r.json() : null)
+    // ★ PIN proof on both: a PIN-locked server gates them since RC4 (audit 2026-10-03).
+    fetch(withReadAuth(`${b}/vibeserver/conditions`, readAuth), { signal: ctrl.signal }).then(r => r.ok ? r.json() : null)
       .then(j => { if (!dead && j && Array.isArray(j.measured) && j.measured.length) setC(j); })
       .catch(() => {});
     // ★ "Receiver: Moulton, United Kingdom IO92ng" — the web's locLine(), same precedence.
-    fetch(`${b}/location`, { signal: ctrl.signal }).then(r => r.ok ? r.json() : null)
+    fetch(withReadAuth(`${b}/location`, readAuth), { signal: ctrl.signal }).then(r => r.ok ? r.json() : null)
       .then(j => {
         if (dead || !j) return;
         const lat = typeof j.lat === 'number' ? j.lat : null, lon = typeof j.lon === 'number' ? j.lon : null;
@@ -40,7 +42,7 @@ export default function DoorConditions({ base }: { base: string }) {
       })
       .catch(() => {});
     return () => { dead = true; clearTimeout(t); };
-  }, [base]);
+  }, [base, readAuth]);
   if (!c && !loc) return null;
   return (
     <View style={s.wrap}>
