@@ -281,6 +281,8 @@ export function lookVars(l: ControlLook): LookVars {
 /** Every variable either list may set — so a change can REMOVE what the last look set. */
 export const CARD_VARS = ['--ctl-card-bg', '--btn-bg', '--btn-text', '--ctl-glyph', '--ctl-status', '--btn-border', '--bar-border', '--ctl-freq', '--ctl-freq-fine'];
 export const ROOT_VARS = [...OVERLAYS.map((o) => o.v), '--ov-panel-shadow'];
+/** What the decoder box takes from the look: the ring, the font and the dividers — never the card's fill. */
+export const DEC_VARS = ['--btn-border', '--btn-text', '--ctl-glyph', '--bar-border'];
 
 
 
@@ -295,10 +297,14 @@ export function applyControlLook(l: ControlLook, doc: Document = document): stri
   /* ★★ THE DECODER BOX TAKES THE BUTTON RING TOO (Stuart, 2026-10-03: "the button colour in the webclient
    *  needs to apply to the decoder box too"). Its frame and its header keys (CLR, size, minimise, close)
    *  draw --btn-border, but the look was only ever put on #mcard, so the box stayed amber beside a blue
-   *  card. ONLY the ring travels: the box's text and readings keep their own colours. */
+   *  card.
+   * ★★ AND THE FONT (Stuart, 2026-10-04: "the font only applies to the buttons and not the decoder box
+   *  which remains amber"). The box's text — station names, decoded text, header labels — already
+   *  draws --btn-text; it simply never received it. Its divider lines follow as on the card. The
+   *  MEANING colours (the tuned station's green, warnings) are literals and stay what they mean. */
   const decEl = doc.getElementById('decBox');
-  decEl?.style.removeProperty('--btn-border');
-  if (vars.card['--btn-border']) decEl?.style.setProperty('--btn-border', vars.card['--btn-border']);
+  for (const k of DEC_VARS) decEl?.style.removeProperty(k);
+  for (const k of DEC_VARS) if (vars.card[k]) decEl?.style.setProperty(k, vars.card[k]);
   for (const [k, v] of Object.entries(vars.root)) rootEl.style.setProperty(k, v);
   return vars.warn;
 }
