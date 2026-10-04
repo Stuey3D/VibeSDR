@@ -12,7 +12,7 @@ GREEN is the shipped icon and art, untouched — nobody who never picks a colour
 Writes (run from the repo root):  python3 assets/brand/colour_icons.py
   ios/VibeSDR/Images.xcassets/AppIcon-<Colour>.appiconset   iOS alternate icons (1024, no alpha)
   ios/VibeSDR/Images.xcassets/artwork_<colour>.imageset     Now Playing art base, 600 x 600
-  ios/VibeSDR/Images.xcassets/logo_vibeserver_<colour>.imageset   the VibeServer mark inlaid on that art
+  ios/VibeSDR/Images.xcassets/logo_vibeserver[_<colour>].imageset   the 11.0 VibeServer mark inlaid on that art
 Needs rsvg-convert (brew install librsvg) and Pillow.
 """
 import colorsys, json, os, re, subprocess, tempfile
@@ -50,30 +50,38 @@ def render(svg_text, size):
     return bg
 
 
-def recolour_png(src_png, colour):
-    """Recolour a raster logo the way recolour() does the SVGs: every tinted pixel takes the LED's hue at its own
-    lightness (white: barely tinted), so the inlaid mark's lit strokes match the icon. Used for the VibeServer mark
-    inlaid on the art — ios/VibeSDR/Images.xcassets/logo_vibeserver.imageset/vibeserver.png, which predates the
-    11.0 family mark and is raster only."""
-    import numpy as np
-    np.seterr(divide='ignore', invalid='ignore')   # grey pixels divide 0/0 — masked out by the where()
-    im = Image.open(src_png).convert('RGB'); a = np.asarray(im).astype(np.float64) / 255
-    mx, mn = a.max(2), a.min(2); l = (mx + mn) / 2; d = mx - mn
-    s_ = np.where(d == 0, 0, d / np.where(l < 0.5, mx + mn, 2 - mx - mn + 1e-12))
-    ch = colorsys.rgb_to_hls(*h2r(LED[colour][0]))[0]
-    s2 = s_ * (0.4 if colour == 'white' else 1.0)
-    def hue2(p, q, t):
-        t = t % 1.0
-        return np.where(t < 1/6, p + (q - p) * 6 * t, np.where(t < 1/2, q, np.where(t < 2/3, p + (q - p) * (2/3 - t) * 6, p)))
-    q = np.where(l < 0.5, l * (1 + s2), l + s2 - l * s2); p = 2 * l - q
-    out = np.stack([hue2(p, q, ch + 1/3), hue2(p, q, ch), hue2(p, q, ch - 1/3)], 2)
-    out = np.where((s_ < 0.02)[..., None], a, out)
-    return Image.fromarray((np.clip(out, 0, 1) * 255 + 0.5).astype('uint8'))
+def icon_shape(im, n=5.0):
+    """The icon's own outline (Apple's continuous corner, superellipse n = 5 — family_icons.py se_alpha), so the
+    inlay reads as a small app icon on the art, not a dark square."""
+    from PIL import ImageDraw
+    import math
+    sz = im.size[0]; S = sz * 4; m = Image.new('L', (S, S), 0); a = S / 2; pts = []
+    for i in range(1440):
+        t = 2 * math.pi * i / 1440; co, si = math.cos(t), math.sin(t)
+        pts.append((a + a * math.copysign(abs(co) ** (2 / n), co), a + a * math.copysign(abs(si) ** (2 / n), si)))
+    ImageDraw.Draw(m).polygon(pts, fill=255)
+    o = im.convert('RGBA'); o.putalpha(m.resize((sz, sz), Image.LANCZOS)); return o
+
+
+def vibeserver_mark(base_svg, colour=None):
+    """The 11.0 VibeServer mark — the app icon with the glowing node plate — built exactly as family_icons.py builds
+    assets/vibeserver-icon.png (the green rebuild matches it pixel for pixel), then recoloured whole. Stuart
+    (2026-10-04): "the full 11 artwork including on the inlaid art" — it replaced the older radio-and-node mark."""
+    G = '#66E07C'; X, Y, W = 676, 668, 264; cx, cy, sc = X + W / 2, Y + W / 2, W / 264
+    glyph = (f'<g transform="translate({cx} {cy}) scale({sc})"><g stroke="{G}" stroke-width="13" stroke-linecap="round">'
+             f'<line x1="-62" y1="-50" x2="62" y2="-50"/><line x1="-62" y1="-50" x2="0" y2="62"/><line x1="62" y1="-50" x2="0" y2="62"/></g>'
+             f'<g fill="{G}"><circle cx="-62" cy="-50" r="24"/><circle cx="62" cy="-50" r="24"/><circle cx="0" cy="62" r="24"/></g></g>')
+    plate = f'<rect x="{X}" y="{Y}" width="{W}" height="{W}" rx="{W*46/264:.1f}" fill="#040605" stroke="{G}" stroke-width="10"/>'
+    svg = base_svg.replace('</svg>', f'<g filter="url(#glow)">{plate}{glyph}</g></svg>')
+    return recolour(svg, colour) if colour else svg
 
 
 def main():
     icon, art = open(os.path.join(BRAND, 'icon-ios.svg')).read(), open(os.path.join(BRAND, 'artwork.svg')).read()
     xc = os.path.join(R, 'ios', 'VibeSDR', 'Images.xcassets')
+    # ★ The green inlay is the 11.0 mark too (it was the older radio-and-node art until 2026-10-04).
+    icon_shape(render(vibeserver_mark(icon), 1024).resize((320, 320), Image.LANCZOS)).save(
+        os.path.join(xc, 'logo_vibeserver.imageset', 'vibeserver.png'), optimize=True)
     for c in LED:
         d = os.path.join(xc, f'AppIcon-{c.capitalize()}.appiconset'); os.makedirs(d, exist_ok=True)
         render(recolour(icon, c), 1024).save(os.path.join(d, 'App-Icon-1024x1024@1x.png'), optimize=True)
@@ -86,7 +94,7 @@ def main():
                    'info': {'version': 1, 'author': 'xcode'}}, open(os.path.join(d, 'Contents.json'), 'w'), indent=2)
         # ★ The inlaid VibeServer mark on the art follows the colour too (Stuart); other server types keep their own.
         d = os.path.join(xc, f'logo_vibeserver_{c}.imageset'); os.makedirs(d, exist_ok=True)
-        recolour_png(os.path.join(xc, 'logo_vibeserver.imageset', 'vibeserver.png'), c).save(
+        icon_shape(render(vibeserver_mark(icon, c), 1024).resize((320, 320), Image.LANCZOS)).save(
             os.path.join(d, f'logo_vibeserver_{c}.png'), optimize=True)
         json.dump({'images': [{'filename': f'logo_vibeserver_{c}.png', 'idiom': 'universal'}],
                    'info': {'version': 1, 'author': 'xcode'}}, open(os.path.join(d, 'Contents.json'), 'w'), indent=2)
