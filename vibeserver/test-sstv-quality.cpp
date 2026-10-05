@@ -76,8 +76,10 @@ static void vis(Sched& s, int code, double stop) {
     s.add(par ? 1100 : 1300, 0.030);
     s.add(1200, stop);
 }
-enum Mode { M1, S1, R36, PD120 };
-static const char* modeName(Mode m) { return m==M1?"Martin M1":m==S1?"Scottie S1":m==R36?"Robot 36":"PD-120"; }
+// ★ PD-50 and Robot 72 added 2026-10-05: PD-50 was decoded as a one-line mode (PD chosen by width
+//   >= 512) and R72 with three equal 92 ms channels — neither showed up here because neither was here.
+enum Mode { M1, S1, R36, PD120, PD50, R72 };
+static const char* modeName(Mode m) { return m==M1?"Martin M1":m==S1?"Scottie S1":m==R36?"Robot 36":m==PD120?"PD-120":m==PD50?"PD-50":"Robot 72"; }
 static Sched schedule(Mode m, const Card& c, double stop) {
     Sched s; s.add(1900, 0.0); // placeholder
     s.s.clear();
@@ -110,15 +112,28 @@ static Sched schedule(Mode m, const Card& c, double stop) {
                 s.add(lumHz((y & 1) ? (U0+U1)/2 : (V0+V1)/2), 0.275e-3);
             }
         }
+    } else if (m == R72) {
+        // Y 138 ms, then R-Y and B-Y 69 ms each after 4.5 ms separator + 1.5 ms porch (Dayton spec)
+        vis(s, 12, stop);
+        const double pt = 138e-3 / W;
+        for (int y = 0; y < H; y++) {
+            s.add(1200, 9e-3); s.add(1500, 3e-3);
+            for (int x = 0; x < W; x++) { double Y, U, V; yuv(c.px(x, y), Y, U, V); s.add(lumHz(Y), pt); }
+            s.add(1500, 4.5e-3); s.add(1900, 1.5e-3);
+            for (int x = 0; x < W; x += 2) { double Y, U0, V0, U1, V1; yuv(c.px(x, y), Y, U0, V0); yuv(c.px(x+1, y), Y, U1, V1); s.add(lumHz((V0+V1)/2), pt); }
+            s.add(2300, 4.5e-3); s.add(1500, 1.5e-3);
+            for (int x = 0; x < W; x += 2) { double Y, U0, V0, U1, V1; yuv(c.px(x, y), Y, U0, V0); yuv(c.px(x+1, y), Y, U1, V1); s.add(lumHz((U0+U1)/2), pt); }
+        }
     } else {
-        vis(s, 95, stop);
+        const double pt = (m == PD50) ? 0.286e-3 : 0.19e-3;
+        vis(s, m == PD50 ? 93 : 95, stop);
         for (int y = 0; y < H; y += 2) {
             s.add(1200, 20e-3); s.add(1500, 2.08e-3);
             double Y, U, V, Y2, U2, V2;
-            for (int x = 0; x < W; x++) { yuv(c.px(x, y), Y, U, V); s.add(lumHz(Y), 0.19e-3); }
-            for (int x = 0; x < W; x++) { yuv(c.px(x, y), Y, U, V); yuv(c.px(x, y+1), Y2, U2, V2); s.add(lumHz((V+V2)/2), 0.19e-3); }
-            for (int x = 0; x < W; x++) { yuv(c.px(x, y), Y, U, V); yuv(c.px(x, y+1), Y2, U2, V2); s.add(lumHz((U+U2)/2), 0.19e-3); }
-            for (int x = 0; x < W; x++) { yuv(c.px(x, y+1), Y, U, V); s.add(lumHz(Y), 0.19e-3); }
+            for (int x = 0; x < W; x++) { yuv(c.px(x, y), Y, U, V); s.add(lumHz(Y), pt); }
+            for (int x = 0; x < W; x++) { yuv(c.px(x, y), Y, U, V); yuv(c.px(x, y+1), Y2, U2, V2); s.add(lumHz((V+V2)/2), pt); }
+            for (int x = 0; x < W; x++) { yuv(c.px(x, y), Y, U, V); yuv(c.px(x, y+1), Y2, U2, V2); s.add(lumHz((U+U2)/2), pt); }
+            for (int x = 0; x < W; x++) { yuv(c.px(x, y+1), Y, U, V); s.add(lumHz(Y), pt); }
         }
     }
     return s;
@@ -235,6 +250,10 @@ int main(int argc, char** argv) {
     //   moves the picture 18 ms earlier against the VIS hand-off, which otherwise lands ~7 ms early.
     //   The old half-line wrap turned exactly this into a half-line shift.
     for (Mode m : {M1, S1, R36, PD120}) cases.push_back({m, 0.0, 0.012, "late"});
+    for (Mode m : {PD50, R72}) for (double p : {0.0, 300.0}) cases.push_back({m, p, 0.030, ""});
+    // ★ No VIS at all (2026-10-05): the picture must be found by its sync train and come out as
+    //   aligned as one that announced itself.
+    for (Mode m : {M1, S1, PD120}) cases.push_back({m, 0.0, 0.030, "novis"});
     std::vector<Score> finals(cases.size()), lives(cases.size());
     std::vector<int> redrew(cases.size());
     std::vector<std::string> lastStatus(cases.size());
@@ -244,12 +263,14 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < cases.size(); i++)
         th.emplace_back([&, i] {
             const Mode m = cases[i].m;
-            const int W = (m == PD120) ? 640 : 320, H = (m == PD120) ? 496 : (m == R36 ? 240 : 256);
+            const int W = (m == PD120) ? 640 : 320, H = (m == PD120) ? 496 : ((m == R36 || m == R72) ? 240 : 256);
             const Card c = makeCard(W, H);
             // ★ SSTV_SEED / SSTV_NOISE (--report only) re-run the matrix on other noise, to see the spread.
             const char* es = report ? std::getenv("SSTV_SEED") : nullptr;
             const char* en = report ? std::getenv("SSTV_NOISE") : nullptr;
-            const auto a = render(schedule(m, c, cases[i].stop), cases[i].ppm, en ? std::atof(en) : 0.1,
+            Sched sc = schedule(m, c, cases[i].stop);
+            if (!std::strcmp(cases[i].tag, "novis")) sc.s.erase(sc.s.begin(), sc.s.begin() + 13);   // the 13 VIS tones
+            const auto a = render(sc, cases[i].ppm, en ? std::atof(en) : 0.1,
                                   (es ? (unsigned)std::atoi(es) : 1000u) + (unsigned)i);
             const Decoded d = decode(a);
             lives[i]  = (d.W == W) ? score(d.live, W, H) : Score{};

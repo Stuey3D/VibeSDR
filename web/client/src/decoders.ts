@@ -64,6 +64,8 @@ export interface DecoderCallbacks {
   /** One image line. `rgb` is true for SSTV (3 bytes/px), false for WEFAX (grey). */
   onImageLine?: (y: number, width: number, px: Uint8Array, rgb: boolean) => void;
   onImageDone?: () => void;
+  /** SSTV 0x08: the server is about to repaint the CURRENT picture with its slant/offset fixed. */
+  onImageRedraw?: () => void;
   /** SSTV mode name, e.g. "Martin 1". */
   onSstvMode?: (name: string) => void;
   onStatus?: (text: string) => void;
@@ -310,7 +312,13 @@ export class DecoderClient {
             this.cb.onImageDone?.();
             return;
           case 0x08:
-            this.cb.onImageStart?.(0, 0);                // redraw of the current image
+            // ★★ A REDRAW IS NOT A NEW PICTURE (audit 2026-10-04, decoders.ts:303 / main.ts:11514). This
+            //    called onImageStart, so the web client banked the UNCORRECTED copy as PREV (the
+            //    picture had just completed) and drew the corrected one on a fresh 600-line canvas —
+            //    every slant-corrected SSTV picture left its own crooked twin behind as PREV. The app
+            //    (DecoderClient.ts) ignores 0x08 and lets the repainted lines land in place; so now
+            //    does this, through onImageRedraw.
+            this.cb.onImageRedraw?.();
             return;
           default:
             return;                                      // 0x04 sync — nothing to show
