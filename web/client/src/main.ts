@@ -9683,6 +9683,8 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(p >= 1 && p <= 3);
     },
     onImageDone: () => { $('decStatus').textContent = 'image complete'; markDecImageComplete(); },
+    // ★ SSTV 0x08: the same picture repainted in place (see decoders.ts) — the lines overwrite it.
+    onImageRedraw: () => { decLiveComplete = false; },
     onSstvMode: (name) => { $('decStatus').textContent = name; },
     onStatus: (t) => { $('decStatus').textContent = t; },
     onSpot: (sp) => {
