@@ -134,12 +134,96 @@ int  SstvBuffer::available() { std::lock_guard<std::mutex> lk(mu); return availa
 void SstvBuffer::reset() { std::lock_guard<std::mutex> lk(mu); std::fill(buf.begin(), buf.end(), 0); wptr = writePos = fillPos = 0; total = advanced = 0; primed = false; }
 
 // ── VIS detector ─────────────────────────────────────────────────────────────
-SstvVIS::SstvVIS(double sr) : sampleRate(sr), fft(2048) {
+SstvVIS::SstvVIS(double sr, bool energy) : byEnergy(energy), sampleRate(sr), fft(2048) {
     int samps20 = (int)(sr * 20e-3);
     hann.resize(samps20);
     for (int i = 0; i < samps20; i++) hann[i] = 0.5 * (1.0 - std::cos(2.0 * M_PI * i / (samps20 - 1)));
     headerBuf.assign(45, 0); toneBuf.assign(45, 0);
     fin.assign(2048, 0);
+    specLo = getBin(700.0); specN = getBin(2700.0) - specLo;
+    spec.assign((size_t)kRing * specN, 0.0f);
+}
+
+// ★★★ VIS BY ENERGY OVER EACH 30 ms BIT (2026-10-05, the audit's "VIS bits by energy"). The peak
+// detector below asks every one of ~15 single 20 ms frames to land within ±50 Hz of its tone; one
+// fade, one click, one QRM spike anywhere in the 600 ms header and the picture is never started. On
+// a Watterson-faded channel (2 paths, 1 ms, 0.5 Hz — tools/sstv_bench --fade 1) that lost 11 of 36
+// pictures OUTRIGHT, as far up as 6 dB. Here every element is an ENERGY summed over its frames:
+//   • leader: 200 ms of 1900 Hz must stand ≥ 6 dB above the band's median per-tone power — and its
+//     peak IS the tuning offset, measured on 20 frames rather than one;
+//   • start and stop bits: 1200 Hz must beat 1100, 1300 and 1900 over their 30 ms;
+//   • each data bit: whichever of 1100 / 1300 holds more energy over the bit, and it must hold at
+//     least 1.5× the other and be present at all;
+//   • parity and a mode we decode, as before.
+// A false VIS is cheap now: the sync-train gate drops a VIS no picture follows without showing it,
+// and the VIS watch keeps listening during a decode. The peak detector stays as a second chance.
+bool SstvVIS::decideByEnergy(uint8_t& modeOut, int& shiftOut, int& startOffMs) {
+    if (frames < kRing) return false;
+    // frame f (0 = oldest kept … kRing-1 = newest) → its spectrum
+    const int newest = (frames - 1) % kRing;
+    auto row = [&](int f) -> const float* { return &spec[(size_t)((newest - (kRing - 1 - f) + kRing) % kRing) * specN]; };
+    const double hz = sampleRate / fftSize;
+    // tone energy: 7 bins (±17 Hz) around f Hz, summed over frames [a, b]
+    auto E = [&](double f, int a, int b) -> double {
+        const int c = (int)std::lround(f / hz) - specLo; double e = 0;
+        for (int fr = a; fr <= b; fr++) { const float* r = row(fr); for (int k = c - 3; k <= c + 3; k++) if (k >= 0 && k < specN) e += r[k]; }
+        return e;
+    };
+    struct Cand { bool ok = false; double margin = 0; uint8_t mode = 0; double shift = 0; };
+    auto tryAt = [&](int f0) -> Cand {
+        Cand cd;
+        if (f0 - 20 < 0 || f0 + 29 >= kRing) return cd;
+        // leader: average spectrum over 20 frames, its peak in 1650..2150 Hz, against the median bin
+        std::vector<double> avg(specN, 0.0);
+        for (int fr = f0 - 20; fr < f0; fr++) { const float* r = row(fr); for (int k = 0; k < specN; k++) avg[k] += r[k]; }
+        int pk = -1; double pv = 0;
+        for (int k = (int)(1650 / hz) - specLo; k <= (int)(2150 / hz) - specLo; k++) if (avg[k] > pv) { pv = avg[k]; pk = k; }
+        if (pk <= 0 || pk >= specN - 1) return cd;
+        std::vector<double> srt(avg); std::nth_element(srt.begin(), srt.begin() + srt.size() / 2, srt.end());
+        const double med = std::max(1e-30, srt[srt.size() / 2]);
+        double lead = 0; for (int k = pk - 3; k <= pk + 3; k++) if (k >= 0 && k < specN) lead += avg[k];
+        if (lead < 4.0 * 7.0 * med) return cd;                     // ≥ 6 dB over the median tone power
+        const double a = avg[pk - 1], b = avg[pk], c = avg[pk + 1];
+        const double d = (a - 2*b + c) != 0 ? 0.5 * (a - c) / (a - 2*b + c) : 0.0;
+        const double shift = (pk + specLo + d) * hz - 1900.0;
+        const double noise1 = 7.0 * med / 20.0;                    // one tone's noise, per frame
+        auto isTone = [&](double f, int fa, int fb, std::initializer_list<double> rivals) -> double {
+            const double e = E(f + shift, fa, fb);
+            double r = 0; for (double g : rivals) r = std::max(r, E(g + shift, fa, fb));
+            if (e < 2.0 * noise1 * (fb - fa + 1) || e < 1.5 * r) return -1;
+            return (e - r) / (e + r);
+        };
+        const double st = isTone(1200, f0, f0 + 2, {1100, 1300, 1900});
+        const double sp = isTone(1200, f0 + 27, f0 + 29, {1100, 1300, 1900});
+        if (st < 0 || sp < 0) return cd;
+        uint8_t bits[8]; double margin = st + sp;
+        for (int k = 0; k < 8; k++) {
+            const int fa = f0 + 3 + 3*k, fb = fa + 2;
+            const double e1 = E(1100 + shift, fa, fb), e0 = E(1300 + shift, fa, fb);
+            const double hi = std::max(e1, e0), lo = std::min(e1, e0);
+            if (hi < 2.0 * noise1 * 3 || hi < 1.5 * lo) return cd;
+            bits[k] = e1 > e0; margin += (hi - lo) / (hi + lo);
+        }
+        const uint8_t vis = bits[0]|(bits[1]<<1)|(bits[2]<<2)|(bits[3]<<3)|(bits[4]<<4)|(bits[5]<<5)|(bits[6]<<6);
+        uint8_t parity = bits[0]^bits[1]^bits[2]^bits[3]^bits[4]^bits[5]^bits[6];
+        if (kVisMap[vis] == M_R12BW) parity = 1 - parity;
+        if (parity != bits[7]) return cd;
+        const uint8_t mode = sstvModeByVis(vis);
+        const SstvMode* ms = mode ? sstvModeByIndex(mode) : nullptr;
+        if (!ms || ms->unsupported) return cd;
+        cd.ok = true; cd.margin = margin; cd.mode = mode; cd.shift = shift;
+        return cd;
+    };
+    // The stop bit ends one frame ago; the frames either side are scored too and the best taken.
+    const int f0 = kRing - 31;
+    Cand best = tryAt(f0); int bestF = f0;
+    if (!best.ok) return false;
+    for (int f : {f0 - 1, f0 + 1}) { Cand c = tryAt(f); if (c.ok && c.margin > best.margin) { best = c; bestF = f; } }
+    modeOut = best.mode; shiftOut = (int)std::lround(best.shift);
+    // frame centres lie 5, 15, 25 ms into a 30 ms bit, so the start bit began 5 ms before frame bestF's
+    // centre and the video begins 300 ms after that; the newest frame's centre is the window pointer.
+    startOffMs = (bestF - (kRing - 1)) * 10 + 298;
+    return true;
 }
 bool SstvVIS::checkRange(int idx, double lo, double hi) {
     if (idx < 0 || idx >= (int)toneBuf.size()) return false;
@@ -176,6 +260,14 @@ bool SstvVIS::process(SstvBuffer& pcm, uint8_t& modeOut, int& shiftOut) {
     }
     headerBuf[headerPtr] = peak;
     headerPtr = (headerPtr + 1) % (int)headerBuf.size();
+    { float* r = &spec[(size_t)(frames % kRing) * specN]; for (int k = 0; k < specN; k++) r[k] = (float)powers[specLo + k]; frames++; }
+    {
+        int offMs = 0;
+        if (byEnergy && decideByEnergy(modeOut, shiftOut, offMs)) {
+            pcm.advanceWindow((int)std::lround(offMs * 1e-3 * sampleRate));
+            return true;
+        }
+    }
     if (onTone && iter % 50 == 0) onTone(peak);
     for (int i = 0; i < (int)toneBuf.size(); i++) toneBuf[i] = headerBuf[(headerPtr + i) % headerBuf.size()];
 
@@ -909,7 +1001,7 @@ void SstvDecoder::process(const int16_t* mono, int count) {
             }
             visWatchPcm.write(chunk.data(), samps10ms);
             if (!visWatchPcm.ready()) continue;
-            if (!visWatch) { visWatch = new SstvVIS(sampleRate); visWatch->onTone = [](double){}; }
+            if (!visWatch) { visWatch = new SstvVIS(sampleRate, /*byEnergy=*/false); visWatch->onTone = [](double){}; }
             uint8_t modeIdx; int shift;
             if (visWatch->process(visWatchPcm, modeIdx, shift)) {
                 const SstvMode* nm = sstvModeByIndex(modeIdx);

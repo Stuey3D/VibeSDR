@@ -84,7 +84,12 @@ private:
 // ── VIS detector ─────────────────────────────────────────────────────────────
 class SstvVIS {
 public:
-    explicit SstvVIS(double sampleRate);
+    /** `byEnergy`: also accept a VIS decided by energy (decideByEnergy). ★ OFF for the watch that runs
+     *  DURING a picture: picture content holds 1900/1200/1100/1300 Hz energy too, and the energy
+     *  test found "VIS" in a Scottie S2 face at 10 dB and cut it short (tools/sstv_bench, 2026-10-05).
+     *  The peak test asks for single tones within ±50 Hz frame by frame, which a picture does not make. */
+    explicit SstvVIS(double sampleRate, bool byEnergy = true);
+    bool byEnergy;
     // returns true on detect, sets mode index + headerShift
     bool process(SstvBuffer& pcm, uint8_t& modeOut, int& shiftOut);
     std::function<void(double)> onTone;
@@ -97,6 +102,11 @@ private:
     int headerPtr = 0, iter = 0;
     std::vector<float> fin;
     SstvFFT fft;
+    /** ★ By energy (2026-10-05): the last kRing frames' power, bins specLo.., for decideByEnergy. */
+    static const int kRing = 52;
+    std::vector<float> spec;
+    int specLo = 0, specN = 0, frames = 0;
+    bool decideByEnergy(uint8_t& modeOut, int& shiftOut, int& startOffMs);
 };
 
 // ── Video demodulator ────────────────────────────────────────────────────────

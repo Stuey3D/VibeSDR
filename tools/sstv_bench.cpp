@@ -287,7 +287,7 @@ static std::vector<std::string> split(const std::string& s) { std::vector<std::s
 
 int main(int argc, char** argv) {
     std::string imgPath, outDir; std::vector<std::string> modes = {"M1","M2","S1","S2","R36","PD50","PD120"};
-    std::vector<double> snrs = {20, 10, 6, 3, 0}, ppms = {0}; int fade = 0, seeds = 1, abandon = 0; double noiseSec = 0, gapSec = 2.0;
+    std::vector<double> snrs = {20, 10, 6, 3, 0}, ppms = {0}; int fade = 0, seeds = 1, abandon = 0, visTrials = 0; double noiseSec = 0, gapSec = 2.0;
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i]; auto nx = [&]() { return std::string(i + 1 < argc ? argv[++i] : ""); };
         if (a == "--img") imgPath = nx();
@@ -297,6 +297,7 @@ int main(int argc, char** argv) {
         else if (a == "--fade") fade = atoi(nx().c_str());
         else if (a == "--seeds") seeds = atoi(nx().c_str());
         else if (a == "--out") outDir = nx();
+        else if (a == "--vis") visTrials = atoi(nx().c_str());
         else if (a == "--noise") noiseSec = atof(nx().c_str());
         else if (a == "--abandon") { abandon = 1; gapSec = atof(nx().c_str()); }
     }
@@ -314,6 +315,25 @@ int main(int argc, char** argv) {
         return 0;
     }
     Img src; const bool haveImg = !imgPath.empty() && readPpm(imgPath.c_str(), src);
+    if (visTrials > 0) {
+        // ★ How often is a picture STARTED at all? VIS + the first 60 lines of each mode, `visTrials`
+        //   different noise/fading draws per SNR. (The VIS-by-energy measurement, 2026-10-05.)
+        printf("mode\tsnr\tfade\tstarted\n");
+        for (auto& m : modes) for (double snr : snrs) {
+            const ModeDef* d = defOf(m);
+            const Img truth = haveImg ? resized(src, d->W, d->H) : card(d->W, d->H);
+            auto sc = schedule(m, truth);
+            int ok = 0;
+            for (int t = 0; t < visTrials; t++) {
+                auto part = sc; part.resize(15 + (sc.size() - 15) / 6);   // VIS + the first sixth of the picture
+                const auto pcm = transmit(part, 0, snr, fade != 0, 99991 + t * 131 + (unsigned)(snr * 7));
+                ok += decodeAll(pcm).empty() ? 0 : 1;
+            }
+            printf("%s\t%.0f\t%d\t%d/%d\n", m.c_str(), snr, fade, ok, visTrials);
+            fflush(stdout);
+        }
+        return 0;
+    }
     if (abandon) {
         // ★ An abandoned picture, then the real one: the sender stops mode A a third of the way in,
         //   waits `gap` s and sends mode B. Was B decoded, and how well? (VIS-during-decode, 2026-10-05)
