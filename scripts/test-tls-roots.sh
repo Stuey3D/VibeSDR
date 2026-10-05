@@ -12,10 +12,14 @@ cd "$(dirname "$0")/.."
 G="$HOME/.gradle/caches/modules-2/files-2.1"
 pick() { ls "$G"/$1 2>/dev/null | grep -v sources | sort | tail -1; }
 KC="$(pick 'org.jetbrains.kotlin/kotlin-compiler-embeddable/2.*/*/kotlin-compiler-embeddable-2.*.jar')"
-STD="$(pick 'org.jetbrains.kotlin/kotlin-stdlib/2.*/*/kotlin-stdlib-2.*.jar')"
-SCR="$(pick 'org.jetbrains.kotlin/kotlin-script-runtime/2.*/*/kotlin-script-runtime-2.*.jar')"
-REF="$(pick 'org.jetbrains.kotlin/kotlin-reflect/2.*/*/kotlin-reflect-2.*.jar')"
-DMN="$(pick 'org.jetbrains.kotlin/kotlin-daemon-embeddable/2.*/*/kotlin-daemon-embeddable-2.*.jar')"
+# ★ THE LIBRARIES MUST BE THE COMPILER'S OWN VERSION (2026-10-05). Each jar was picked as the newest on its own, so
+#   when a Kotlin 2.4 stdlib reached the Gradle cache (a declined Gradle 9.8 trial) the 2.1 compiler was handed it and
+#   failed with "metadata version 2.4.0 … can read up to 2.2.0" — a toolchain mismatch reported as a build failure.
+KV="$(basename "$(dirname "$(dirname "$KC")")")"
+STD="$(pick "org.jetbrains.kotlin/kotlin-stdlib/$KV/*/kotlin-stdlib-$KV.jar")"
+SCR="$(pick "org.jetbrains.kotlin/kotlin-script-runtime/$KV/*/kotlin-script-runtime-$KV.jar")"
+REF="$(pick "org.jetbrains.kotlin/kotlin-reflect/$KV/*/kotlin-reflect-$KV.jar")"
+DMN="$(pick "org.jetbrains.kotlin/kotlin-daemon-embeddable/$KV/*/kotlin-daemon-embeddable-$KV.jar")"
 TRV="$(pick 'org.jetbrains.intellij.deps/trove4j/*/*/trove4j-*.jar')"
 COR="$(pick 'org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/*/*/kotlinx-coroutines-core-jvm-*.jar')"
 ANN="$(pick 'org.jetbrains/annotations/*/*/annotations-*.jar')"
