@@ -19,12 +19,31 @@
 
 static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, double sh, double baud,
                   const std::string& fr, const std::string& enc, bool inv) {
-    vibe::FskDecoder d(48000, cf, sh, baud, fr, enc, inv);
+    /* ★ NAVTEX_OPTS (2026-10-05): switch one of NavtexRx's measured changes off for an A/B on the same build, e.g.
+     *  NAVTEX_OPTS=rc=0,el=0 — keys rc (raised-cosine demod), el (early/late clock), log (log soft values),
+     *  atc (½ ATC + floor clip), fec (soft FEC tiers), vote (RX/DX disagreement by soft score), ml (ML over
+     *  both copies), inv (auto polarity), afc. */
+    vibe::NavtexOptions no;
+    if (const char* e = std::getenv("NAVTEX_OPTS")) {
+        std::string o = e; o += ',';
+        for (size_t a = 0, b; (b = o.find(',', a)) != std::string::npos; a = b + 1) {
+            const std::string kv = o.substr(a, b - a); const size_t q = kv.find('=');
+            if (q == std::string::npos) continue;
+            const std::string k = kv.substr(0, q); const bool v = kv.substr(q + 1) != "0";
+            if (k == "rc") no.rcDemod = v; else if (k == "el") no.earlyLate = v; else if (k == "log") no.logSoft = v;
+            else if (k == "atc") no.atcHalf = v; else if (k == "fec") no.softFec = v; else if (k == "vote") no.fecVote = v; else if (k == "ml") no.fecMl = v; else if (k == "inv") no.autoInvert = v;
+            else if (k == "afc") no.afc = v;
+        }
+    }
+    vibe::FskDecoder d(48000, cf, sh, baud, fr, enc, inv, &no);
     std::string out; long chars = 0;
     d.onChar = [&](char32_t c) { chars++; if (c == U'\r') return; out += c < 128 ? (char)c : '?'; };
     for (size_t i = 0; i < mono.size(); i += 960) d.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
     std::printf("%s\n", out.c_str());
     std::fprintf(stderr, "── %.1f s, %ld chars, resyncs %lu\n", frames / 48000.0, chars, d.resyncs());
+    if (const vibe::NavtexRx* n = d.navtex())
+        std::fprintf(stderr, "── NAVTEX: %lu clean, %lu repaired, %lu lost; %s polarity; AFC %+.1f Hz\n", n->total.clean,
+                     n->total.repaired, n->total.failed, n->invertedNow() ? "inverted" : "normal", n->afcOffsetHz());
     return 0;
 }
 

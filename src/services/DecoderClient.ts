@@ -27,8 +27,7 @@
  *
  * Binary protocols (all multi-byte ints BIG-endian, per the skin parsers):
  *   RTTY/NAVTEX: 0x01 text  — u32 len @9, utf8 @13
- *                0x03 state — u8 @1: 0 no-signal, 1/2 sync, 3 decoding (rtty)
- *                0x02 sync  — (navtex)
+ *                0x03 state — u8 @1: 0 no-signal, 1/2 sync, 3 decoding (rtty AND navtex)
  *   WEFAX:       0x01 line  — u32 lineNo @1, u32 width @5, pixels u8[] @9
  *                0x02 START, 0x03 transmission complete
  *   SSTV:        0x07 imageStart — u32 w @1, u32 h @5
@@ -664,15 +663,19 @@ export class DecoderClient {
         if (tl <= 0 || u8.length < 13 + tl) return;
         this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
         this.cb.onDot('active');
-      } else if (name === 'rtty' && t === 0x03) {
+      } else if ((name === 'rtty' || name === 'navtex') && t === 0x03) {
+        /* ★★ NAVTEX'S STATE IS 0x03 TOO (2026-10-05). The host sends every FSK decoder's state as 0x03
+         *  (vibe_decoder_host.h, fsk_->onState); this waited for a 0x02 'sync' frame for NAVTEX that nothing
+         *  sends, so the app's NAVTEX panel never said it had found a signal — the web client always read 0x03. */
         if (u8.length < 2) return;
         const s = u8[1];
-        this.cb.onStatus(['no signal', 'sync 1', 'sync 2', 'decoding'][s] ?? 'state ' + s);
+        const words = name === 'navtex'
+          ? ['no signal', 'searching', 'searching', 'decoding']   // NAVTEX hunts in one step: no 'sync 1/2' to tell apart
+          : ['no signal', 'sync 1', 'sync 2', 'decoding'];
+        this.cb.onStatus(words[s] ?? 'state ' + s);
         this.cb.onDot(s === 3 ? 'active' : s >= 1 ? 'sync' : 'idle');
       } else if (name === 'rtty' && t === 0x06 && u8.length >= 3) {
         this.cb.onTuneHint?.(v.getInt16(1, false));
-      } else if (name === 'navtex' && t === 0x02) {
-        this.cb.onDot('sync');
       }
 
     } else if (name === 'wefax') {
