@@ -93,8 +93,8 @@ private:
  *  decoder. They exist so the bench can take one away and show what it was worth. */
 struct NavtexOptions {
     bool rcDemod    = false;   // tones mixed to baseband + raised-cosine lowpass (else the Q≈3 biquad bandpasses)
-    bool earlyLate  = false;   // early/prompt/late bit clock (else the zero-crossing histogram)
-    bool logSoft    = false;   // bit values from log-compressed ATC levels (else ±1 per sample)
+    bool earlyLate  = true;   // early/prompt/late bit clock (else the zero-crossing histogram)
+    bool logSoft    = true;   // bit values from log-compressed ATC levels (else ±1 per sample)
     bool atcHalf    = false;   // W7AY ATC: ½ and clipped to the noise floor (else ¼, clipped to the envelope only)
     bool softFec    = true;   // the soft FEC tiers (else RX, then DX, then '_')
     bool fecVote    = true;   // RX and DX both valid but different: the one the summed soft bits favour (else RX)
