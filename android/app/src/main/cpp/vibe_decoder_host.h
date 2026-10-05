@@ -630,7 +630,11 @@ private:
         time_ = new TimeDecoder(48000, st);
         std::string name = which; for (auto& c : name) c = (char)std::toupper((unsigned char)c);
         TimeDecoder* td = time_;
-        time_->onTime = [this, name](const TimeDecoder::TimeStamp& t) {
+        // ★★ WWV's line names the transmitter actually heard — "WWV" (Fort Collins) or "WWVH"
+        //    (Kauai), from the seconds tick — and says "WWV/WWVH" until one is clearly stronger
+        //    (2026-10-05). Every other station's tag is its own name.
+        time_->onTime = [this, td](const TimeDecoder::TimeStamp& t) {
+            const std::string name = td->stationTag();
             static const char* kDay[8] = { "", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
             // ★ Display-only extras on the end of the same line (2026-10-05): DUT1 where the station
             //   states it, and WWV/WWVB's "DST changes today" — their second DST bit differs from
@@ -649,7 +653,8 @@ private:
             textBuf_ += buf;
         };
         // ★★★ FILL THE FIELDS AS THEY ARRIVE — a replace-in-place line (see the shim's old note).
-        time_->onPartial = [this, name](const TimeDecoder::Partial& p) {
+        time_->onPartial = [this, td](const TimeDecoder::Partial& p) {
+            const std::string name = td->stationTag();
             { std::lock_guard<std::mutex> bl(textMtx_);
               if (morse_.size() >= 3) { textBuf_ += "RWM ID: " + morse_ + "\n"; morse_.clear(); } }
             char buf[200], yy[8], mo[4], dd[4], hh[4], mi[4];

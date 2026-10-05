@@ -155,6 +155,10 @@ public:
     int  secondNow() const { return second_; }
     /** True for a station that can never produce a TimeStamp — the UI must not sit waiting. */
     bool carriesTimeCode() const { return station_ != Station::RWM; }
+    /** ★★ Which transmitter: "WWV" (Fort Collins, 1000 Hz tick) or "WWVH" (Kauai, 1200 Hz), from
+     *  the seconds tick folded over many seconds; "WWV/WWVH" until one is clearly the stronger.
+     *  The other stations return their own name. */
+    const char* stationTag() const;
 
 private:
     void  setState(State s);
@@ -227,6 +231,13 @@ private:
     /** Minutes in a row whose minute mark was not seen (the grid coasts; 3 = lost). */
     int    unconfirmed_ = 0;
     double lowSnrS_ = 0;
+    // ── WWV/WWVH tick fold ──
+    void   tickSample(double raw);
+    double tickBp_[2][4] = {{0}}, tickSt_[2][4] = {{0}}, tickAcc_[2] = {0};
+    double tickFold_[2][kHistBins] = {{0}};
+    int    tickN_ = 0, tickSecs_ = 0;
+    long long tickBlock_ = 0;
+    int    tag_ = 0, tagPending_ = 0, tagPendingN_ = 0, tagContrary_ = 0, tagUnsupported_ = 0;
 
     const int      sr_;
     const Station  station_;

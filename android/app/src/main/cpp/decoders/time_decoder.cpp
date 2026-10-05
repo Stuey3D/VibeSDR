@@ -229,6 +229,7 @@ void TimeDecoder::process(const int16_t* samples, int count) {
     for (int i = 0; i < count; i++) {
         double raw = (double)samples[i];
         if (station_ == Station::WWV) {
+            tickSample(raw);                       // ★ WWV or WWVH, off the unfiltered audio
             const double y = bpB0_ * raw + bpB1_ * bpX1_ + bpB2_ * bpX2_ - bpA1_ * bpY1_ - bpA2_ * bpY2_;
             bpX2_ = bpX1_; bpX1_ = raw; bpY2_ = bpY1_; bpY1_ = y;
             raw = y;
@@ -770,6 +771,90 @@ void TimeDecoder::onSecond(const SecRec& r) {
         return;
     }
     default: return;
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// ★★ WWV OR WWVH? THE SECONDS TICK SAYS (2026-10-05). Both share 2.5/5/10/15 MHz and the same
+//    time code; what differs is the 5 ms tick at each second — 1000 Hz from Fort Collins, 1200 Hz
+//    from Kauai (NIST SP 432). One tick is buried in the programme audio, but it repeats at the
+//    same phase every second while voice and tones do not, so each band's energy is FOLDED
+//    modulo one second (5 ms bins, leaky, ~100 s memory) and the tick stands up out of its own
+//    fold. The station is the band whose folded tick EXCESS (peak bins over the fold's median)
+//    is clearly larger: a lone station's tick leaks into the other filter at about a third.
+//    Method and timings from madpsy/ubersdr-ntp (GPL-3.0-or-later; decoders from
+//    madpsy/ubersdr-clock), WwvDecoder.cpp onSeriesSample() — ★ whose comments say 2000/2200 Hz;
+//    that is stale, its filters (and the stations) are 1000/1200 Hz.
+//    ★ Adopt a tag after 10 identical verdicts (once 20 s of fold exist), switch after 30
+//      contrary ones, release after 120 s unsupported — a fade must not flap it. Both heard at
+//      similar strength stays "WWV/WWVH": honest, not a coin toss.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+namespace {
+constexpr double kTickFoldDecay = 0.99;
+constexpr double kTagRatio = 1.5, kTagHold = 1.2;
+constexpr int    kTagWarmS = 20, kTagConfirmS = 10, kTagSwitchS = 30, kTagReleaseS = 120;
+void designBp(double f0, double Q, int sr, double* c) {   // RBJ bandpass, 0 dB peak: b0 b2 a1 a2
+    const double w0 = 2.0 * M_PI * f0 / sr, al = std::sin(w0) / (2.0 * Q), a0 = 1.0 + al;
+    c[0] = al / a0; c[1] = -al / a0; c[2] = -2.0 * std::cos(w0) / a0; c[3] = (1.0 - al) / a0;
+}
+double foldExcess(const double* fold, int n, double& z) {
+    std::vector<double> t(fold, fold + n);
+    std::nth_element(t.begin(), t.begin() + n / 2, t.end());
+    const double med = t[(size_t)n / 2];
+    int arg = 0; for (int i = 1; i < n; i++) if (fold[i] > fold[arg]) arg = i;
+    for (double& v : t) v = std::fabs(v - med);
+    std::nth_element(t.begin(), t.begin() + n / 2, t.end());
+    const double mad = 1.4826 * t[(size_t)n / 2];
+    z = mad > 0 ? (fold[arg] - med) / mad : 0;
+    double e = 0; for (int d = -1; d <= 1; d++) e += fold[(arg + d + n) % n] - med;
+    return std::max(0.0, e);
+}
+}  // namespace
+
+void TimeDecoder::tickSample(double raw) {
+    if (tickBp_[0][0] == 0.0) { designBp(1000.0, 6.0, sr_, tickBp_[0]); designBp(1200.0, 7.2, sr_, tickBp_[1]); }
+    for (int b = 0; b < 2; b++) {
+        double* c = tickBp_[b]; double* st = tickSt_[b];      // x1 x2 y1 y2
+        const double y = c[0] * raw + c[1] * st[1] - c[2] * st[2] - c[3] * st[3];
+        st[1] = st[0]; st[0] = raw; st[3] = st[2]; st[2] = y;
+        tickAcc_[b] += std::fabs(y);
+    }
+    if (++tickN_ < decim_) return;
+    const int ph = (int)(tickBlock_++ % kHistBins);
+    for (int b = 0; b < 2; b++) {
+        tickFold_[b][ph] = tickFold_[b][ph] * kTickFoldDecay + tickAcc_[b] / tickN_;
+        tickAcc_[b] = 0;
+    }
+    tickN_ = 0;
+    if (ph != kHistBins - 1) return;
+    // ── once a second: the verdict ──
+    if (++tickSecs_ < kTagWarmS) return;
+    double zV, zH;
+    const double eV = foldExcess(tickFold_[0], kHistBins, zV), eH = foldExcess(tickFold_[1], kHistBins, zH);
+    // ★ A verdict needs a tick at all: the stronger band's peak well clear of its own spread.
+    const bool tick = std::max(zV, zH) > 8.0;
+    const int v = !tick ? 0 : (eV > 0 && eV >= kTagRatio * eH) ? 1 : (eH > 0 && eH >= kTagRatio * eV) ? 2 : 0;
+    const bool supported = (tag_ == 1 && tick && eV >= kTagHold * eH) || (tag_ == 2 && tick && eH >= kTagHold * eV);
+    if (tag_ == 0) {
+        if (v != 0 && v == tagPending_) { if (++tagPendingN_ >= kTagConfirmS) { tag_ = v; tagContrary_ = tagUnsupported_ = 0; } }
+        else { tagPending_ = v; tagPendingN_ = v ? 1 : 0; }
+    } else if (supported) {
+        tagContrary_ = tagUnsupported_ = 0;
+    } else {
+        ++tagUnsupported_;
+        tagContrary_ = (v != 0 && v != tag_) ? tagContrary_ + 1 : 0;
+        if (tagContrary_ >= kTagSwitchS) { tag_ = v; tagContrary_ = tagUnsupported_ = 0; }
+        else if (tagUnsupported_ >= kTagReleaseS) { tag_ = 0; tagPending_ = 0; tagPendingN_ = 0; tagContrary_ = tagUnsupported_ = 0; }
+    }
+}
+
+const char* TimeDecoder::stationTag() const {
+    switch (station_) {
+        case Station::MSF:   return "MSF";
+        case Station::DCF77: return "DCF77";
+        case Station::WWVB:  return "WWVB";
+        case Station::RWM:   return "RWM";
+        default: return tag_ == 1 ? "WWV" : tag_ == 2 ? "WWVH" : "WWV/WWVH";
     }
 }
 
