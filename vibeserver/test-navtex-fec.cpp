@@ -145,6 +145,32 @@ int main() {
     { auto b = clean; softWord(0x00, 1, w); setSlot(b, rxSlot(P, 0) - 4, w); setSlot(b, rxSlot(P, 0) - 9, w);   // an RX slot and its DX
       const Run r = decode(b); ok(r.text == msg, "...but a lost word in PHASING prints nothing"); }
 
+    std::printf("── 5. soft FEC ──\n");
+    const uint8_t S = codes[iS];
+    { // both copies one bit wrong, different bits, weakly: the sum is right
+      auto b = clean; softWord(S, 1, w); softWord(S, 1, w2);
+      w[0] = -w[0] * 0.3; w2[3] = -w2[3] * 0.3;                 // RX: bit 0 flipped weakly; DX: bit 3 flipped weakly
+      setSlot(b, rxSlot(P, iS), w); setSlot(b, dxSlot(P, iS), w2);
+      const Run r = decode(b); ok(r.text == msg, "both copies one bit wrong (different bits): the two summed are right"); }
+    { // ★ RX with a SPACE read weakly as MARK (5 marks), DX lost: flip the weakest mark → fldigi never made this repair
+      auto b = clean; softWord(S, 1, w);
+      int sp = -1; for (int i = 0; i < 7; i++) if (!(S >> i & 1)) { sp = i; break; }
+      w[sp] = 0.2;                                               // a weak mark where a space was sent
+      setSlot(b, rxSlot(P, iS), w); softWord(0x00, 1, w2); setSlot(b, dxSlot(P, iS), w2);
+      const Run r = decode(b); ok(r.text == msg, "5 marks (a weak extra mark), DX lost: the weakest mark flipped back"); }
+    { // RX with a MARK read weakly as SPACE (3 marks), DX lost
+      auto b = clean; softWord(S, 1, w);
+      int mk = -1; for (int i = 0; i < 7; i++) if (S >> i & 1) { mk = i; break; }
+      w[mk] = -0.2;
+      setSlot(b, rxSlot(P, iS), w); softWord(0x00, 1, w2); setSlot(b, dxSlot(P, iS), w2);
+      const Run r = decode(b); ok(r.text == msg, "3 marks (a weak missing mark), DX lost: the weakest space flipped back"); }
+    { // ★ two VALID copies that disagree: a burst turned the RX copy into another letter (two weak bits); DX is sure
+      auto b = clean; softWord(S, 1, w);
+      int mk = -1, sp = -1; for (int i = 0; i < 7; i++) { if ((S >> i & 1) && mk < 0) mk = i; if (!(S >> i & 1) && sp < 0) sp = i; }
+      w[mk] = -0.3; w[sp] = 0.3;                                 // still 4 marks: a valid, WRONG word
+      setSlot(b, rxSlot(P, iS), w);
+      const Run r = decode(b); ok(r.text == msg, "RX copy a different VALID letter (weak bits), DX sure: the DX copy wins"); }
+
     std::printf("── 6. row 13: BEL ──\n");
     { const std::string m = "ZCZC GA43\r\n\x07NNNN\r\n";
       const Run r = decode(bits(fec(encode(m), P)));

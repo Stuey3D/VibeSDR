@@ -96,8 +96,8 @@ struct NavtexOptions {
     bool earlyLate  = false;   // early/prompt/late bit clock (else the zero-crossing histogram)
     bool logSoft    = false;   // bit values from log-compressed ATC levels (else ±1 per sample)
     bool atcHalf    = false;   // W7AY ATC: ½ and clipped to the noise floor (else ¼, clipped to the envelope only)
-    bool softFec    = false;   // the soft FEC tiers (else RX, then DX, then '_')
-    bool fecVote    = false;   // RX and DX both valid but different: the one the summed soft bits favour (else RX)
+    bool softFec    = true;   // the soft FEC tiers (else RX, then DX, then '_')
+    bool fecVote    = true;   // RX and DX both valid but different: the one the summed soft bits favour (else RX)
     bool autoInvert = true;   // the character sync tries both polarities
     bool afc        = false;  // follow a drifting signal
 };
