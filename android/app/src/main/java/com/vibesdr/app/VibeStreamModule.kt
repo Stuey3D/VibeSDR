@@ -371,6 +371,31 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
+    /* ★★ DIAGNOSTICS (2026-10-05) — the iOS methods of the same names, so diagnostics.ts reads ONE API on both
+     *  platforms. Android had none of the three, which is why a VibeServer/libairspyhf crash on Nick's Pixel left
+     *  no trace in a report that said "none recorded". The exit record comes from the system — see VibeExitInfo.
+     *  ★ @ReactMethod on each, or JS sees undefined and prints "none recorded" — the very lie being fixed. */
+    @ReactMethod
+    fun getNativeCrash(promise: Promise) {
+        try { promise.resolve(VibeExitInfo.read(reactContext)) }
+        catch (e: Throwable) { promise.reject("exitinfo", e) }
+    }
+
+    @ReactMethod
+    fun clearNativeCrash() {
+        try { VibeExitInfo.clear(reactContext) } catch (_: Throwable) {}
+    }
+
+    /** Device identifiers for the report — the model and OS, no name, no account, no serial. */
+    @ReactMethod
+    fun getDeviceInfo(promise: Promise) {
+        val map = com.facebook.react.bridge.Arguments.createMap()
+        map.putString("model", "${Build.MANUFACTURER} ${Build.MODEL}")
+        map.putString("os", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+        map.putString("systemName", "Android")
+        promise.resolve(map)
+    }
+
     // NativeEventEmitter housekeeping (events arrive via RCTDeviceEventEmitter)
     @ReactMethod
     fun addListener(eventName: String) { /* no-op */ }

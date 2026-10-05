@@ -28,6 +28,9 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // ★ 2026-10-05: names the build on this process's exit record, so Diagnostics can say which version
+    //   crashed (Nick's overnight VibeServer crash had no version, no log, nothing). See VibeExitInfo.
+    VibeExitInfo.stampProcess(this)
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
     } catch (e: IllegalArgumentException) {

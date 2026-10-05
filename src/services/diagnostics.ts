@@ -104,18 +104,28 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
     }
   } catch { lines.push('unavailable'); }
 
-  // ── Native uncaught ObjC exception (VibeCrashLog) ────────────────────────
-  lines.push('', '--- last native exception ---');
+  // ── Native crash: iOS uncaught ObjC exception (VibeCrashLog) / Android exit record (VibeExitInfo) ──
+  /* ★★ ONE SECTION, BOTH PLATFORMS (2026-10-05). Android had no getNativeCrash at all, so a crash in the
+   *  C++ engine (VibeServer, libairspyhf, the DSP) printed "none recorded" — Nick's overnight crash on a
+   *  Pixel hosting VibeServer left nothing to read. Android now answers with the system's own record of
+   *  how the app last died: reason, signal, the decoded native backtrace / ANR stacks, and a history.
+   *  The extra fields are Android-only and print only when present, so the iOS lines are unchanged.
+   * ★ `name` absent with a `history` present = no abnormal exit, but here is how the app last ended. */
+  lines.push('', '--- last native crash ---');
   try {
     const n = await Vibe?.getNativeCrash?.();
-    if (!n) lines.push('none recorded');
+    if (!n || !n.name) lines.push('none recorded');
     else {
       lines.push(`when   : ${when(Number(n.ts))}`);
       lines.push(`name   : ${String(n.name ?? '?')}`);
       lines.push(`reason : ${String(n.reason ?? '')}`);
       lines.push(`os     : ${String(n.os ?? '?')} on ${String(n.model ?? '?')}`);
-      if (n.stack) lines.push('stack  :', String(n.stack).slice(0, 3000));
+      for (const k of ['version', 'process', 'status', 'importance', 'memory'] as const) {
+        if (n[k] != null) lines.push(`${k.padEnd(7)}: ${String(n[k])}`);
+      }
+      if (n.stack) lines.push('stack  :', String(n.stack).slice(0, 8000));
     }
+    if (n?.history) lines.push('how the app\'s processes last ended (newest first):', String(n.history));
   } catch { lines.push('unavailable on this device'); }
 
   /* ★★ BOOT BREADCRUMBS — the launch timeline, native and JS interleaved. Primary route is the
