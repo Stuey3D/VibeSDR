@@ -19410,6 +19410,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *       enter DAB twice.)
              *    3. An admin taking the receiver back, or a session that has already tuned
              *       (preTuned), is not landed — and still gets the remembered multiplex, as before.
+             *       ★ EXCEPT the first arrival after a start on a radio set to start in DAB: that is
+             *         the radio's first state, not a move — see startOnDab (2026-10-05).
              *    4. DAB blocked by the owner, or a radio that cannot reach a multiplex: no DAB
              *       landing at all, whatever the config says — the plain landing applies instead.
              *  ★ Through handleControl, the SAME entry the remembered-block resume uses, never
@@ -19424,7 +19426,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              && (g_vsLandingHz.load() > 0 || !g_vsLandingMode.empty()); }
             const bool startLanding = firstEver && !adminOk.load() && !preTuned
                                    && (landDabCh >= 0 || plainLandingSet);
-            if (startLanding && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
+            /* ★★★ A RADIO SET TO START IN DAB STARTS IN DAB — WHOEVER ARRIVES FIRST (2026-10-05).
+             *  Stuart: "No server seems to honour the start in DAB mode." The owner's app carries the
+             *  admin credential on EVERY socket once the password is saved, so on every one of his
+             *  servers the first arrival after a start was an admin — `startLanding` said no, the
+             *  radio stayed on FM, and `firstEver` was SPENT on him. On a shared dial that was final:
+             *  nobody after him was ever landed, until the next restart. Reproduced on fake rtl_tcp
+             *  (scripts/test-server-dab-landing.mjs): admin first, shared dial — neither he nor the
+             *  stranger after him saw a single `dab` report.
+             *  ★★ The admin and pre-tuned exemptions are about a session's TUNE — "never move an owner
+             *     off where they are". The PLAIN landing never needed them at a start because the
+             *     capture itself STARTS on the landing frequency (vibeserver_config effectiveFor), so
+             *     an owner arriving first already finds the radio there. A multiplex cannot be the
+             *     capture before anyone listens (DAB decodes only for a listener), so this IS that
+             *     start, made at the first arrival: the radio's first state, not a move of anybody.
+             *  ★ After the first arrival every exemption stands exactly as before. */
+            const bool startOnDab = firstEver && landDabCh >= 0;
+            if ((startLanding || startOnDab) && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
                 && !g_dabMode.load(std::memory_order_relaxed)) {
                 LOGI("[DAB] first listener since this server started — the owner's landing applies, not "
                      "block %d that it was last left on (a remembered dial resumes only within a running server)",
@@ -19434,8 +19452,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 vsPersist("{\"dabChannel\":-1,\"dabSid\":0}");
             }
             bool landOnDab = false;
-            if (newSession && landDabCh >= 0 && !adminOk.load() && !preTuned
-                && (!sharedDialNow || startLanding)) {
+            if (newSession && landDabCh >= 0
+                && (startOnDab || (!adminOk.load() && !preTuned && !sharedDialNow))) {
                 if (vsModeBlocked("dab"))
                     LOGI("[DAB] landing station ignored — DAB is blocked on this radio; the plain landing applies");
                 else if (!vsDabCapable())
