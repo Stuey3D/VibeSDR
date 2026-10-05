@@ -2862,7 +2862,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     )
 
     private fun buildNotification(): Notification {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val launchIntent = appEntryIntent(this)
         val contentPi = PendingIntent.getActivity(
             this, 0, launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

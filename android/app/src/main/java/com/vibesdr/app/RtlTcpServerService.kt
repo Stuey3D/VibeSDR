@@ -304,7 +304,7 @@ class RtlTcpServerService : Service() {
     }
 
     private fun buildNotification(text: String): Notification {
-        val launch = packageManager.getLaunchIntentForPackage(packageName)
+        val launch = appEntryIntent(this)
         val pi = PendingIntent.getActivity(
             this, 0, launch,
             (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
@@ -325,7 +325,7 @@ class RtlTcpServerService : Service() {
     private fun postBootTapNotification(text: String) {
         try {
             ensureChannel()
-            val launch = packageManager.getLaunchIntentForPackage(packageName)
+            val launch = appEntryIntent(this)
             val pi = PendingIntent.getActivity(
                 this, 1, launch,
                 (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
