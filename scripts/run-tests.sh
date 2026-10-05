@@ -239,6 +239,9 @@ if node --no-warnings scripts/test_faceplate_landscape.ts; then pass=$((pass+1))
 if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★ An unchanged DAB service list keeps its array and objects across the once-a-second reports.
 if node --no-warnings scripts/test_dab_share_services.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ DAB tuning keys: a burst of presses is ONE block change on the server (the one stopped on), and
+#    leaving DAB drops the DAB station from the VTS (Stuart, 2026-10-05 — both).
+if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_sprite_sizing.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_sprite_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★ The waterfall jitter buffer's pooled frame copies (framePool.ts): independent copies, reuse, bounded.

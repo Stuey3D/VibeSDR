@@ -62,6 +62,7 @@ import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
+import { DabBlockStepper, liveStationAfterDab } from '../services/dabStepper';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
@@ -2206,6 +2207,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ onDabBlock is defined further down; the drum and the media-skip closures are created once,
    *  so they reach it through a ref rather than closing over the first render's undefined. */
   const onDabBlockRef = useRef<((i: number) => void) | null>(null);
+  /* ★★★ EVERY "NEXT BLOCK" GOES THROUGH ONE STEPPER (2026-10-05) — the tuning keys, the drum's
+   *  hardware routes and the lock-screen skip. The label moves on each press; the server is told the
+   *  block the user STOPPED on, once, after the presses settle (services/dabStepper.ts says why). A
+   *  burst of blocks each sent as its own `dab` was what threw the server about ("goes erratic
+   *  switching to NFM etc", Stuart). A PICK (watch list, bookmark) cancels a burst: it is the answer. */
+  const dabStepper = useRef<DabBlockStepper | null>(null);
+  if (!dabStepper.current) {
+    dabStepper.current = new DabBlockStepper(DAB_BLOCKS.length,
+      (i) => onDabBlockRef.current?.(i),
+      (i) => setDabBlock(i));
+  }
+  const stepDabBlock = (steps: number) => { dabStepper.current?.step(dabBlockRef.current, steps); };
+  useEffect(() => () => dabStepper.current?.cancel(), []);
   const dabBlockKeyRef = useRef('lsv_dab_block');
   useEffect(() => { dabOnRef.current = dabOn; }, [dabOn]);
   useEffect(() => { dabBoxOpenRef.current = dabBoxOpen; }, [dabBoxOpen]);
@@ -2252,6 +2266,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     }, due + 20);
   };
   useEffect(() => () => { if (psTickTimer.current) clearTimeout(psTickTimer.current); }, []);
+  /* ★★★ LEAVING DAB TAKES THE DAB STATION WITH IT (Stuart, 2026-10-05: "After exiting DAB mode I went
+   *  to the airband and the DAB VTS was stuck in place, it correctly showed the AGC and IF state but
+   *  rather than dropping away it stayed and showed the last tuned station name"). The service is put
+   *  into liveStation by the DAB state report and nothing took it out: RDS clears itself with an empty
+   *  metadata frame, AM sends no metadata at all, so the name held the bar — and liveStationRef made
+   *  vtsCheck skip the bookmarks under it. ONE place, on the transition, whichever door was used to
+   *  leave (EXIT DAB, the mode grid, the wrist, a server report). The decision is liveStationAfterDab
+   *  (services/dabStepper.ts, held by scripts/test_dab_stepper.ts). A burst still settling dies too. */
+  const dabWasOn = useRef(false);
+  useEffect(() => {
+    const was = dabWasOn.current;
+    dabWasOn.current = dabOn;
+    if (!was || dabOn) return;
+    dabStepper.current?.cancel();
+    if (liveBadgeRef.current === 'DAB') { liveBadgeRef.current = undefined; liveStationRef.current = ''; }
+    setLiveStation((cur) => liveStationAfterDab(was, dabOn, cur));
+  }, [dabOn]);
   const [liveLogo, setLiveLogo] = useState<string | null>(null);   // WFM RDS station favicon
   const [dabActiveLogo, setDabActiveLogo] = useState<string | null>(null);   // the playing DAB service's logo
   const lastLiveLogoKey = useRef('');
@@ -2323,6 +2354,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const idx = DAB_BLOCKS.findIndex(b => Math.abs(b.hz - hz) < 50_000);
     if (idx < 0) return false;
     markInteract();
+    dabStepper.current?.cancel();             // ★ a bookmark is a pick — a pending burst must not override it
     const svc = sid >= 0 ? sid : undefined;   // ★ no service id = the block, whatever plays
     AsyncStorage.setItem(dabBlockKeyRef.current, DAB_BLOCKS[idx].name).catch(() => {});
     setDabBlock(idx);
@@ -3582,9 +3614,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     /* ★ In DAB the lock-screen skip steps the MULTIPLEX, for the same reason the drum does: there
      *  is nothing else a "next" can mean inside one block. */
     if (dabOnRef.current) {
-      const n = DAB_BLOCKS.length;
-      const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
-      onDabBlockRef.current?.(((cur + (dir === 'right' ? 1 : -1)) % n + n) % n);
+      stepDabBlock(dir === 'right' ? 1 : -1);   // ★ coalesced — see dabStepper
       return;
     }
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
@@ -4911,7 +4941,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           //   rows exist to settle.
           if (st.channel) {
             const i = dabBlockIndex(st.channel);
-            if (i >= 0) {
+            /* ★ Not while a key burst is settling (dabStepper): the report names the block we are
+             *  LEAVING, and adopting it dragged the label back under the user's thumb. */
+            if (i >= 0 && (dabStepper.current?.pending() ?? -1) < 0) {
               setDabBlock(i);
               // ★ Remembered from the SERVER's report, as the web client does (savePref) — so a
               //   block the server chose for us is offered back next time, not just one we chose.
@@ -6988,9 +7020,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     const steps = Math.trunc(dabPendingPx.current / PX_PER_BLOCK);
     if (!steps) return true;
     dabPendingPx.current -= steps * PX_PER_BLOCK;
-    const n = DAB_BLOCKS.length;
-    const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
-    onDabBlockRef.current?.(((cur + steps) % n + n) % n);
+    // ★ The on-screen drum is not drawn in DAB any more (keys instead — see vfoKeys below); this is
+    //   still the door for the hardware wheel and the trackpad, so it goes through the same stepper.
+    stepDabBlock(steps);
     return true;
   }, []);
 
@@ -7144,6 +7176,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // the next tick. See sweepTargetRate in TunerKeys for why this also makes the
   // VFO wobble a constant fraction of screen width.
   const vfoSweepRate = useCallback(() => {
+    // ★ A held key in DAB walks the LABEL (nothing is sent until release + settle) — slow enough to
+    //   read each block name as it passes; at the frequency ceiling 38 blocks went by in a second.
+    if (dabOnRef.current) return DAB_SWEEP_BLOCKS_PER_SEC;
     const c = client.current;
     const v = c?.getView();
     const span = (v?.binBandwidth || 0) * (v?.binCount || 0);
@@ -7151,6 +7186,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   const SWEEP_SEND_MS = 90;
+  const DAB_SWEEP_BLOCKS_PER_SEC = 4;
   const sweepTune = useRef<{ hz: number | null; sentAt: number; timer: ReturnType<typeof setTimeout> | null }>(
     { hz: null, sentAt: 0, timer: null });
 
@@ -7164,10 +7200,11 @@ export default function SDRScreen({ route, navigation }: Props) {
      *     second, smaller pair of arrows hidden in a panel header. This is the keys' entry point;
      *     the drum has its own (dabDrumStep) and the lock-screen skip a third, and all three now
      *     agree. */
+    /* ★★★ COALESCED (2026-10-05). TunerKeys is built so rapid taps are rapid steps, and that is right
+     *  for a frequency; for a multiplex each step is a whole re-acquire on the server. The label moves
+     *  per press, the server hears the settled block once — see dabStepper. */
     if (dabOnRef.current) {
-      const n = DAB_BLOCKS.length;
-      const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
-      onDabBlockRef.current?.(((cur + dir) % n + n) % n);
+      stepDabBlock(dir);
       return;
     }
     const c = client.current; if (!c) return;
@@ -7938,10 +7975,12 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  Turning it back into a delta here would reintroduce the bug the picker exists to kill. */
       onDabBlockPick: (index: number) => {
         if (!dabOnRef.current) return;
+        dabStepper.current?.cancel();   // ★ the wrist's pick outranks a burst still settling on the phone
         onDabBlockRef.current?.(Math.max(0, Math.min(DAB_BLOCKS.length - 1, index)));
       },
       onDabBlockStep: (step: number) => {
         if (!dabOnRef.current || !step) return;
+        dabStepper.current?.cancel();
         const n = DAB_BLOCKS.length;
         const cur = dabBlockRef.current < 0 ? 0 : dabBlockRef.current;
         // ★ Still wraps: the crown is a ring, and Buddy sends a step it worked out from the SAME
@@ -9704,7 +9743,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
     { id: 'schemes', title: 'Pick your control scheme',
-      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog.',
+      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named between them.',
       target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard drives the whole thing',
       body: 'Pair a keyboard — to an iPhone, iPad or Mac — and nearly every control has a key behind it: tuning, zoom, mode, bookmarks, the menus. The full list is in the settings cog, and Esc always steps back out of whatever is open.',
@@ -10600,7 +10639,15 @@ export default function SDRScreen({ route, navigation }: Props) {
           chatUnread={chatUnread}
           onVfoDelta={onVfoDelta}
           onBwDelta={onBwDelta}
-          vfoKeys={vfoKeys}
+          /* ★★★ IN DAB THE TUNING CONTROL IS ALWAYS THE KEYS, whatever the user chose (Stuart,
+           *  2026-10-05: "the drum is too sensitive and causes super fast tunes which then cause the
+           *  server to have a massive nightmare trying to keep up … so in DAB mode all apps get the
+           *  tuning buttons not the drum"). One press = one multiplex, coalesced (dabStepper), with the
+           *  block lit between the keys so the swap reads as intended. Only the TUNING control: zoom
+           *  keeps the user's own drum/keys (and stays locked in DAB as before). Leaving DAB hands back
+           *  `vfoKeys` untouched — the preference is never written. */
+          vfoKeys={vfoKeys || dabOn}
+          vfoMuxLabel={dabOn ? (dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '—') : undefined}
           zoomKeys={zoomKeys}
           onVfoStep={onVfoStep}
           onZoomStep={onZoomStep}

@@ -542,6 +542,10 @@ export interface ControlsBarProps {
   /** Steps/sec ceiling for the VFO sweep — derived from step size + visible span
    *  so signals cross the screen at a consistent rate. */
   vfoSweepRate?: () => number;
+  /** ★★ DAB (2026-10-05): the multiplex the tuning keys step, drawn between them. Set only in DAB,
+   *  where SDRScreen also forces the VFO control to the keys (the drum's flicks retuned the
+   *  multiplex faster than the server could re-acquire). The zoom control keeps the user's choice. */
+  vfoMuxLabel?: string;
   /** Screen rects of the two control slots, so a pointer scroll can be
    *  HOVER-SCOPED to whichever control it is over. */
   onControlRects?: (r: { vfo?: Rect; zoom?: Rect }) => void;
@@ -1607,7 +1611,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
-  onControlRects, plateInset }: any) {
+  vfoMuxLabel, onControlRects, plateInset }: any) {
   const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
@@ -1850,7 +1854,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           }} />
         <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ vfo: r })}>
           {vfoKeys
-            ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} />
+            ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} centreLabel={vfoMuxLabel} />
             : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} noInertia={vfoNoInertia} />}
         </ControlSlot>
         {!singleDrum && (
@@ -1974,7 +1978,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
    *  it and worked; its twin did not, which is why it survived review: the same JSX, one bar broken.
    *  ★★ A destructured prop list is a hand-maintained copy of the props — anything the body uses must be in it. */
   sharedDial,
-  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, onDrumAnchors }: any) {
+  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, onDrumAnchors }: any) {
   const handbackFlash = useHandbackFlash();
   const { theme: t } = useTheme();
   /* ★ The station strip anchors its text between the VFO drum's + and the zoom drum's − (DrumWheel draws them
@@ -2092,7 +2096,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
         <ControlSlot style={{ flex: 1 }} report={onVfoRect}>
         {vfoKeys
-          ? <TunerKeys type="vfo" height={BAND_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} landscape />
+          ? <TunerKeys type="vfo" height={BAND_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} centreLabel={vfoMuxLabel} landscape />
           : <DrumWheel type="vfo" height={BAND_H} onDelta={onVfoDelta} noInertia={vfoNoInertia} />}
         </ControlSlot>
       </View>
@@ -2545,6 +2549,7 @@ function ControlsBar({
   onZoomStep,
   onZoomSweep,
   vfoSweepRate,
+  vfoMuxLabel,
   onControlRects, onDrumAnchors,
   /* ★★★ AND THE FIVE THE BARS NEED. They are declared in ControlsBarProps and were arriving from SDRScreen,
    *  but this destructure never took them — so `shared` could not pass them on, and my first attempt at that
@@ -2681,7 +2686,7 @@ function ControlsBar({
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
     singleDrum, menuAsBack, vfoNoInertia,
-    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, onControlRects, onDrumAnchors,
+    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, onControlRects, onDrumAnchors,
     /* ★★★ FIVE PROPS THE BARS DESTRUCTURE AND NEVER RECEIVED (Stuart, 2026-09-20: "no shared dial notification
      *  above the frequency"). ControlsBar took them, the bars declared them, and NOTHING carried them across
      *  this object — so `sharedDial` was undefined in both bars and the shared-tuner banner could not draw on
