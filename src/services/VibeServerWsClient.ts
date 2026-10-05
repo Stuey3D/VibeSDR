@@ -85,6 +85,7 @@ const POWERSAVE_FPS = 5;
 import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState } from './sdrProtocol';
 import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, clampVibePassband } from './sdrProtocol';
 import { cleanKeepSpacing } from '../utils/cleanLines';
+import { reopenRestoreTune } from './reopenTune';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -406,6 +407,7 @@ export abstract class VibeServerWsClient {
     //    IS the answer and must not be argued with — that is a new listener with no memory, which
     //    is the case the landing frequency exists for.
     this.wantTune = opts?.allowServerDefault ? null : { frequency, mode };
+    this.hadConfig = false;   // ★ connect() decides the first open itself — see reopenTune.ts
     // Mirror the server's per-mode bandwidth defaults for the CONNECT mode
     // too (setMode already does) — without this, connecting in a restored
     // non-USB mode kept the constructor's USB edges and the first emission
@@ -1361,8 +1363,21 @@ export abstract class VibeServerWsClient {
     return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
   }
 
+  /** ★ At least one `config` has arrived on this client, so the next open is a REOPEN. */
+  private hadConfig = false;
   private _openSpectrumWs() {
     if (this.destroyed) return;
+    /* ★★★ A REOPEN CARRIES OUR OWN VFO BACK — ON A PER-LISTENER DIAL ONLY (2026-10-05).
+     *  Only connect() ever set wantTune, so a socket reopened by a resume from background or an
+     *  auto-reconnect held no memory: the server built the returning socket a fresh channel at
+     *  its landing frequency and we adopted it as "another listener moved the dial" — on a radio
+     *  where nobody else can move ours. Stuart, on the Pi 500's RSP (locked range, independent
+     *  VFOs): "when I went back to it the frequency reset to 4778 every time". The decision, and
+     *  why it cannot touch a SHARED dial, is in reopenTune.ts. */
+    this.wantTune = reopenRestoreTune({
+      hadConfig: this.hadConfig, sharedDial: this.sharedDial, inDab: this.dabHeld,
+      pending: this.wantTune, frequency: Number(this.status.frequency), mode: this.status.mode,
+    });
 
     const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
     // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
@@ -2601,6 +2616,7 @@ export abstract class VibeServerWsClient {
       return;
     }
     if (msg.type === 'config') {
+      this.hadConfig = true;
       this._restoreViewOnConfig(msg);
       /* ★★★ THE RADIO'S IF FILTER AND GAIN, FROM THE SAME MESSAGE AS ITS FREQUENCY AND ZOOM —
        *  the server's full state in one place (2026-09-22). hwinfo still carries them for older
