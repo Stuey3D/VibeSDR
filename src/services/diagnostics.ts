@@ -124,6 +124,13 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
         if (n[k] != null) lines.push(`${k.padEnd(7)}: ${String(n[k])}`);
       }
       if (n.stack) lines.push('stack  :', String(n.stack).slice(0, 8000));
+      /* ★ Android: the last log lines the tombstone kept (2026-10-05, Stuart approved) — REDACTED on the device
+       *  (TombstoneReader.redact: addresses, PINs/keys/tokens, email, callsign, blobs → <placeholders>). The TAIL
+       *  is kept under the cap: the lines nearest the crash are the ones that matter. */
+      if (n.log) {
+        const log = String(n.log);
+        lines.push('log (last lines before the crash, private parts removed):', log.length > 6000 ? '…' + log.slice(-6000) : log);
+      }
     }
     if (n?.history) lines.push('how the app\'s processes last ended (newest first):', String(n.history));
   } catch { lines.push('unavailable on this device'); }

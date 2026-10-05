@@ -28,13 +28,20 @@ package com.vibesdr.app
  * ★ PURE KOTLIN — no android.* imports — so it can be compiled and tested off-device.
  *
  * ★ PRIVACY: the tombstone also carries logcat (log_buffers, 18), open fds (19) and raw memory
- *  dumps. NONE of those are read: logcat can hold anything the app ever logged — a URL with a PIN
- *  in it included — and this report is shown to the user and sent by them. Frames, thread names and
- *  the signal are code addresses, not user data.
+ *  dumps. Fds and memory are never read. Logcat can hold anything the app ever logged — a URL with a
+ *  PIN in it included — and this report is shown to the user and sent by them.
+ *  ★★ (2026-10-05, Stuart approved) The LAST [MAX_LOG_LINES] log lines are read now ([logLines]), each
+ *  passed through [redact] first: addresses, secrets after pin= / key= / token= / password=, emails,
+ *  callsigns and long hex/base64 blobs become <placeholders>; the time, level, tag and the rest of the
+ *  message stay — "what was the engine saying when it died" is the half of a crash a backtrace lacks.
+ *    LogBuffer: name 1, logs 2 · LogMessage: timestamp 1, pid 2, tid 3, priority 4, tag 5, message 6
+ *  Frames, thread names and the signal are code addresses, not user data.
  */
 object TombstoneReader {
     const val MAX_FRAMES = 40
     const val MAX_OTHER_THREADS = 60
+    const val MAX_LOG_LINES = 80
+    private const val MAX_LOG_LINE_CHARS = 300
 
     private class Frame(
         var relPc: Long = 0, var functionName: String = "", var functionOffset: Long = 0,
@@ -79,7 +86,9 @@ object TombstoneReader {
     /** The readable report, or — if the bytes will not decode — their printable strings. Never throws. */
     fun describe(bytes: ByteArray): String =
         try { decode(bytes) } catch (e: Throwable) {
-            "(tombstone did not decode: ${e.message}; printable strings follow)\n" + printableStrings(bytes)
+            // ★ Redacted: the raw strings include the log buffers' text (2026-10-05 — they went out as-is before).
+            "(tombstone did not decode: ${e.message}; printable strings follow)\n" +
+                printableStrings(bytes).lineSequence().joinToString("\n") { redact(it) }
         }
 
     fun decode(bytes: ByteArray): String {
@@ -241,5 +250,101 @@ object TombstoneReader {
         for (x in bytes) { val c = x.toInt() and 0xff; if (c in 0x20..0x7e) cur.append(c.toChar()) else flush() }
         flush()
         return out.toString().take(maxChars).trimEnd()
+    }
+
+    // ── Log lines (log_buffers, 18) — REDACTED ─────────────────────────────────────────────────────
+
+    private class LogLine(val time: String, val prio: Int, val tag: String, val msg: String)
+
+    /**
+     * The last [max] log lines in the tombstone, every buffer merged in time order, each REDACTED
+     * ([redact]) and cut to [MAX_LOG_LINE_CHARS]: "10-05 03:40:12.345 E VibeServer: message".
+     * "" when there are none or the bytes will not decode. Never throws.
+     */
+    fun logLines(bytes: ByteArray, max: Int = MAX_LOG_LINES): String = try {
+        val all = ArrayList<LogLine>()
+        val p = Pb(bytes, 0, bytes.size)
+        while (p.more()) {
+            val (f, w) = p.tag().let { it[0] to it[1] }
+            if (f == 18 && w == 2) logBuffer(p.sub(p.lenRange()), all) else p.skip(w)
+        }
+        // ★ Stable sort on "MM-DD HH:MM:SS.mmm": buffers (main, system, crash…) arrive one after another.
+        all.sortedBy { it.time }.takeLast(max).joinToString("\n") { l ->
+            val line = "${l.time} ${prioLetter(l.prio)} ${redact(l.tag)}: ${redact(l.msg.trimEnd())}"
+            if (line.length > MAX_LOG_LINE_CHARS) line.take(MAX_LOG_LINE_CHARS) + "…" else line
+        }
+    } catch (_: Throwable) { "" }
+
+    private fun logBuffer(p: Pb, into: MutableList<LogLine>) {
+        while (p.more()) {
+            val (f, w) = p.tag().let { it[0] to it[1] }
+            if (f == 2 && w == 2) {
+                val m = p.sub(p.lenRange())
+                var time = ""; var prio = 0; var tag = ""; var msg = ""
+                while (m.more()) {
+                    val (g, x) = m.tag().let { it[0] to it[1] }
+                    when {
+                        g == 1 && x == 2 -> time = m.str(m.lenRange())
+                        g == 4 && x == 0 -> prio = m.varint().toInt()
+                        g == 5 && x == 2 -> tag = m.str(m.lenRange())
+                        g == 6 && x == 2 -> msg = m.str(m.lenRange())
+                        else -> m.skip(x)       // pid 2, tid 3 — not needed
+                    }
+                }
+                // ★ A multi-line message (a Java stack in one log call) is kept as one entry, its lines joined.
+                into += LogLine(time, prio, tag, msg.replace('\n', ' '))
+            } else p.skip(w)
+        }
+    }
+
+    private fun prioLetter(p: Int) = when (p) { 2 -> 'V'; 3 -> 'D'; 4 -> 'I'; 5 -> 'W'; 6 -> 'E'; 7 -> 'F'; else -> '?' }
+
+    // ★★ WHAT COUNTS AS PRIVATE (Stuart, 2026-10-05): where the user connects (URLs, host:port, IP
+    //  addresses), what unlocks it (PINs, keys, tokens, passwords, admin codes), who they are (email,
+    //  callsign) and anything opaque enough to be one of those (long hex / base64). ORDER MATTERS: a URL
+    //  goes whole before its host or its ?pin= could be half-matched.
+    private val URL = Regex("""\b(?:https?|wss?|ftp|rtsp|rtmp|file|content)://[^\s"'<>]*""", RegexOption.IGNORE_CASE)
+    private val SECRET_JSON = Regex(""""(pin|key|token|password|passwd|pwd|admin|secret|auth|apikey|api_key)"\s*:\s*"[^"]*"""", RegexOption.IGNORE_CASE)
+    private val SECRET = Regex("""\b(pin|key|token|password|passwd|pwd|admin|secret|auth|apikey|api_key)(\s*[=:]\s*)[^\s&,;"']+""", RegexOption.IGNORE_CASE)
+    private val EMAIL = Regex("""[\w.+-]+@[\w-]+(?:\.[\w-]+)+""")
+    private val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b""")
+    private val IPV6 = Regex("""\[?\b[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}\b\]?(?::\d{1,5})?""")
+    private val HOST_PORT = Regex("""\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*:\d{2,5}\b""")
+    private val DOMAIN = Regex("""\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:com|net|org|io|co|uk|de|nl|fr|eu|me|info|dev|tv|xyz|online|local|lan|home|arpa|ddns|duckdns|freemyip)\b""", RegexOption.IGNORE_CASE)
+    private val CODE_PREFIX = Regex("""^(?:com|org|net|android|androidx|java|javax|kotlin|kotlinx|dalvik|io)\.""", RegexOption.IGNORE_CASE)
+    private val CALLSIGN = Regex("""\b(?:[A-Z]{1,2}|\d[A-Z])\d{1,2}[A-Z]{1,4}(?:/[A-Z0-9]{1,4})?\b""")
+    private val HEX = Regex("""\b(?:0x)?[0-9A-Fa-f]{16,}\b""")
+    private val B64 = Regex("""[A-Za-z0-9+/_-]{24,}={0,2}""")
+
+    /** One log string with the private parts replaced by <placeholders>. Public for the test harness. */
+    fun redact(s: String): String {
+        var r = URL.replace(s, "<url>")
+        r = SECRET_JSON.replace(r) { "\"${it.groupValues[1]}\":\"<redacted>\"" }
+        r = SECRET.replace(r) { "${it.groupValues[1]}${it.groupValues[2]}<redacted>" }
+        r = EMAIL.replace(r, "<email>")
+        r = IPV4.replace(r, "<ip>")
+        // ★ "12:34:56" is three hex groups too: an address needs "::", six or more groups (a MAC
+        //   included), or a hex LETTER — a time of day has none of those.
+        r = IPV6.replace(r) { m ->
+            val v = m.value; val groups = v.trim('[', ']').split(':').size
+            if (v.contains("::") || groups >= 6 || v.any { it in 'a'..'f' || it in 'A'..'F' }) "<ip>" else v
+        }
+        // ★ host:port needs a dotted name (or localhost): "rate:48000" is a log field, not an address.
+        r = HOST_PORT.replace(r) { m ->
+            val h = m.value.substringBefore(':')
+            if (h.any { it.isLetter() } && (h.contains('.') || h.equals("localhost", true))) "<host>" else m.value
+        }
+        // ★ A bare domain (a server's name) — not a Java/Android package (com.vibesdr.app ends in ".app").
+        r = DOMAIN.replace(r) { m -> if (CODE_PREFIX.containsMatchIn(m.value)) m.value else "<host>" }
+        r = CALLSIGN.replace(r, "<call>")
+        r = HEX.replace(r, "<hex>")
+        // ★ A blob needs a digit AND a letter: long identifiers (VibeStreamModuleListener) are not secrets.
+        //   A path (/vendor/lib64/libairspyhf) is judged per segment, so only a blob-like segment hides it.
+        r = B64.replace(r) { m ->
+            fun blob(x: String) = x.length >= 16 && x.any { it.isDigit() } && x.any { it.isLetter() }
+            val v = m.value
+            if (if ('/' in v) v.split('/').any { blob(it) } else blob(v)) "<blob>" else v
+        }
+        return r
     }
 }
