@@ -9758,7 +9758,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
     { id: 'schemes', title: 'Pick your control scheme',
-      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named between them.',
+      body: 'Prefer buttons to the drum? Tune and Zoom each switch independently between the weighted DRUM and KEYS you tap to step and hold to sweep. Both are under Control Customisation in the settings cog. In DAB, Tune is always the keys — one press steps one multiplex, named above them.',
       target: tourRef('menuBtn'), illustration: schemeMock },
     { id: 'keys', title: 'A keyboard drives the whole thing',
       body: 'Pair a keyboard — to an iPhone, iPad or Mac — and nearly every control has a key behind it: tuning, zoom, mode, bookmarks, the menus. The full list is in the settings cog, and Esc always steps back out of whatever is open.',
@@ -10659,7 +10659,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  2026-10-05: "the drum is too sensitive and causes super fast tunes which then cause the
            *  server to have a massive nightmare trying to keep up … so in DAB mode all apps get the
            *  tuning buttons not the drum"). One press = one multiplex, coalesced (dabStepper), with the
-           *  block lit between the keys so the swap reads as intended. Only the TUNING control: zoom
+           *  block lit ABOVE the keys so the swap reads as intended. Only the TUNING control: zoom
            *  keeps the user's own drum/keys (and stays locked in DAB as before). Leaving DAB hands back
            *  `vfoKeys` untouched — the preference is never written. */
           vfoKeys={vfoKeys || dabOn}

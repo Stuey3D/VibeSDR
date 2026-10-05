@@ -222,11 +222,11 @@ interface Props {
   disabled?: boolean;
   /** The landscape bar: keys 34 % of the well and a 6 pt padding (Deck.mockup `tk`). */
   landscape?: boolean;
-  /** ★★ DAB (2026-10-05): the multiplex the keys are stepping ("12B"), lit in place of the etched
-   *  glyph between them, under a small MUX legend. Stuart: "put the multiplex number above the < >
-   *  … as that then shows the user the control switch was intentional." The well has no row above
-   *  the keys to put it in (the keys are the well's full height), so it sits in the centre slot the
-   *  glyph had, legend on top — the same place the eye already reads as "what these keys move". */
+  /** ★★ DAB (2026-10-05): the multiplex the keys are stepping ("12B"), lit in a row ABOVE the keys —
+   *  "MUX 12B". Stuart: "put the multiplex number above the < > … as that then shows the user the
+   *  control switch was intentional." It first went BETWEEN the keys, because they filled the well;
+   *  now the keys give up a little height for the row (tunerKeysLayout `label`), the well stays its
+   *  size, and the etched glyph is back between them. */
   centreLabel?: string;
 }
 
@@ -267,7 +267,8 @@ export default function TunerKeys({
   const onDown = useCallback((dir: -1 | 1) => { if (!disabled) press(dir); }, [press, disabled]);
   const onUp   = useCallback(() => release(), [release]);
 
-  const L = useMemo(() => tunerKeysLayout(W, H, landscape, s.r), [W, H, landscape, s.r]);
+  const hasLabel = centreLabel != null;
+  const L = useMemo(() => tunerKeysLayout(W, H, landscape, s.r, hasLabel), [W, H, landscape, s.r, hasLabel]);
   const glyphPath = useMemo(
     () => buildGlyphPath(type === 'vfo', L.glyphCx, L.glyphCy, L.glyphSz),
     [type, L.glyphCx, L.glyphCy, L.glyphSz]);
@@ -308,35 +309,34 @@ export default function TunerKeys({
             today's glow BEHIND a crisp stroke, as the drum's icon is drawn. Lit, the glow and the
             light bleeding out of the etching come from one sprite (useEtchGlow); unlit, today's
             drawing exactly. */}
-        {centreLabel != null ? null : lit
+        {lit
           ? <EtchGlow path={glyphPath} W={W} H={H} led={fp.controls} dim={dim} />
           : <Path path={glyphPath} color={G(0.55 * dim)} strokeWidth={2.6} style="stroke"
                   strokeCap="round" strokeJoin="round">
               <BlurMask blur={3} style="normal" respectCTM />
             </Path>}
-        {centreLabel == null &&
-          <Path path={glyphPath} color={G(0.95 * dim)} strokeWidth={1.4} style="stroke"
-                strokeCap="round" strokeJoin="round" />}
+        <Path path={glyphPath} color={G(0.95 * dim)} strokeWidth={1.4} style="stroke"
+              strokeCap="round" strokeJoin="round" />
       </Canvas>
 
-      {centreLabel != null && (() => {
-        // The slot between the keys, less a little air either side.
-        const gapW = Math.max(0, L.rightX - (L.leftX + L.keyW) - 4);
-        const big  = Math.max(9, Math.min(s.r(20), L.keyH * 0.42));
+      {hasLabel && (() => {
+        // ★ One line over the whole pair, inside the padding: the MUX legend dim, the block lit. The type
+        //   fills the row's height (lineHeight = the row, so no font's ascender pushes it out of the well).
+        const fs   = Math.max(7, L.labelH - 2);
         const glow = lit ? { textShadowColor: fp.controls.glow, textShadowRadius: 4,
                              textShadowOffset: { width: 0, height: 0 } } : null;
         return (
           <View pointerEvents="none"
                 accessible accessibilityLabel={`Multiplex ${centreLabel}`}
-                style={{ position: 'absolute', left: L.leftX + L.keyW + 2, width: gapW,
-                         top: L.pad, height: L.keyH, alignItems: 'center', justifyContent: 'center',
-                         opacity: dim }}>
+                style={{ position: 'absolute', left: L.pad, right: L.pad, top: L.labelY, height: L.labelH,
+                         flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                         overflow: 'hidden', opacity: dim }}>
             <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}
-                  style={{ color: G(0.7), fontFamily: fp.keyLegend.font, fontSize: Math.max(7, big * 0.42),
-                           letterSpacing: 1 }}>MUX</Text>
-            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}
-                  style={{ color: fp.controls.core, fontFamily: fp.keyLegend.font, fontSize: big,
-                           letterSpacing: 0.5, ...glow }}>{centreLabel}</Text>
+                  style={{ color: fp.controls.core, fontFamily: fp.keyLegend.font, fontSize: fs, lineHeight: L.labelH,
+                           letterSpacing: 0.5, includeFontPadding: false, ...glow }}>
+              <Text style={{ color: G(0.7), fontSize: Math.max(6, fs * 0.72), letterSpacing: 1 }}>MUX  </Text>
+              {centreLabel}
+            </Text>
           </View>
         );
       })()}
@@ -344,7 +344,7 @@ export default function TunerKeys({
       {/* ── The two keys, each in its own dark slot, a step below the plate ── */}
       {([-1, 1] as const).map(dir => (
         <View key={`k${dir}`}
-              style={{ position: 'absolute', left: dir === 1 ? L.rightX : L.leftX, top: L.pad,
+              style={{ position: 'absolute', left: dir === 1 ? L.rightX : L.leftX, top: L.keyY,
                        width: L.keyW, height: L.keyH, opacity: dim,
                        ...(slot ? { backgroundColor: slot, borderRadius: TK_SLOT_R,
                                     paddingTop: capInset.top, paddingHorizontal: capInset.x } : null) }}>
@@ -359,7 +359,8 @@ export default function TunerKeys({
             onPressIn={() => onDown(dir)}
             onPressOut={onUp}
             // Into the padding and the gap — the keys are the well's only targets.
-            hitSlop={{ top: L.pad, bottom: L.pad, left: dir === 1 ? 4 : L.pad, right: dir === 1 ? L.pad : 4 }}
+            // ★ Up to the label row, not over it: tapping "MUX 12B" to read it must not step the multiplex.
+            hitSlop={{ top: L.keyY - (L.labelY + L.labelH), bottom: L.pad, left: dir === 1 ? 4 : L.pad, right: dir === 1 ? L.pad : 4 }}
             accessibilityLabel={
               type === 'vfo'
                 ? (dir === 1 ? 'Tune up' : 'Tune down')

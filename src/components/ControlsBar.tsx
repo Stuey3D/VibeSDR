@@ -542,7 +542,7 @@ export interface ControlsBarProps {
   /** Steps/sec ceiling for the VFO sweep — derived from step size + visible span
    *  so signals cross the screen at a consistent rate. */
   vfoSweepRate?: () => number;
-  /** ★★ DAB (2026-10-05): the multiplex the tuning keys step, drawn between them. Set only in DAB,
+  /** ★★ DAB (2026-10-05): the multiplex the tuning keys step, drawn ABOVE them. Set only in DAB,
    *  where SDRScreen also forces the VFO control to the keys (the drum's flicks retuned the
    *  multiplex faster than the server could re-acquire). The zoom control keeps the user's choice. */
   vfoMuxLabel?: string;

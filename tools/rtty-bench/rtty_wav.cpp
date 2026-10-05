@@ -36,6 +36,7 @@ static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, do
         }
     }
     vibe::FskDecoder d(48000, cf, sh, baud, fr, enc, inv, &no);
+    if (const char* e = std::getenv("RTTY_AFC")) d.setAfc(std::atoi(e) != 0);   // ★ RTTY_AFC=0: the decoder without AFC (A/B)
     std::string out; long chars = 0;
     d.onChar = [&](char32_t c) { chars++; if (c == U'\r') return; out += c < 128 ? (char)c : '?'; };
     for (size_t i = 0; i < mono.size(); i += 960) d.process(&mono[i], (int)std::min<size_t>(960, mono.size() - i));
@@ -44,6 +45,7 @@ static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, do
     if (const vibe::NavtexRx* n = d.navtex())
         std::fprintf(stderr, "── NAVTEX: %lu clean, %lu repaired, %lu lost; %s polarity; AFC %+.1f Hz\n", n->total.clean,
                      n->total.repaired, n->total.failed, n->invertedNow() ? "inverted" : "normal", n->afcOffsetHz());
+    else std::fprintf(stderr, "── RTTY AFC %+.1f Hz\n", d.afcOffsetHz());
     return 0;
 }
 

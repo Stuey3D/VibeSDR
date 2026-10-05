@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""synth_rtty.py  (env BAUD / CF / SHIFT override DWD's 50 / 1000 / 450)
+"""synth_rtty.py  (env BAUD / CF / SHIFT override DWD's 50 / 1000 / 450; DRIFT = Hz/s, both tones, from CF at t=0)
  — a DWD-style RTTY test signal (50 baud, 450 Hz shift, 5N1.5) with noise and SELECTIVE FADING
 (mark and space fade independently, as on HF). For checking rtty_wav before and after a decoder change.
   python3 synth_rtty.py out.wav [snr_db=10] [fade_depth_db=20] [seconds=120] [inverted=1] [seed=0]"""
@@ -35,7 +35,8 @@ for v, dur in bits:
     mark_on[a:min(b, n_total)] = v == 1; pos += dur * spb
 t = np.arange(n_total) / FS
 fm = CF + (SH / 2 if not inv else -SH / 2); fs_ = CF - (SH / 2 if not inv else -SH / 2)
-f_inst = np.where(mark_on, fm, fs_)
+# ★ DRIFT (2026-10-05): the whole signal moves at DRIFT Hz/s from CF at t=0 — a transmitter or receiver warming up.
+f_inst = np.where(mark_on, fm, fs_) + float(os.environ.get('DRIFT', 0.0)) * t
 phase = 2 * np.pi * np.cumsum(f_inst) / FS
 rng = np.random.default_rng(1 + 1000 * seed)
 def fade(seed):   # slow independent fading, 0 dB to -fd dB, ~0.3 Hz

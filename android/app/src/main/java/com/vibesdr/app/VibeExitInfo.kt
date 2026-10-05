@@ -33,7 +33,7 @@ import java.util.zip.GZIPInputStream
  *  is listed in the history only — "how the app last ended" is context, not a fault.
  *
  * ★ LOCAL ONLY, like everything in the report: read on demand, shown to the user, sent by them.
- *  Nothing personal is read — see TombstoneReader's privacy note (logcat is deliberately skipped).
+ *  Nothing personal is read — see TombstoneReader's privacy note (the last log lines are read REDACTED).
  */
 object VibeExitInfo {
     private const val PREFS = "vibe_exit_info"
@@ -125,15 +125,19 @@ object VibeExitInfo {
         val stamped = try { e.processStateSummary?.toString(Charsets.UTF_8) } catch (_: Throwable) { null }
         map.putString("version", stamped ?: guessVersion(ctx, e.timestamp))
 
+        var log: String? = null
         val stack = try {
             when (e.reason) {
-                5 -> if (Build.VERSION.SDK_INT >= 31) e.traceInputStream?.let { TombstoneReader.describe(readCapped(it)) }
+                // ★ The tombstone is read ONCE: its backtrace, and its last log lines REDACTED (TombstoneReader.logLines).
+                5 -> if (Build.VERSION.SDK_INT >= 31) e.traceInputStream?.let { s ->
+                         val b = readCapped(s); log = TombstoneReader.logLines(b); TombstoneReader.describe(b) }
                      else null
                 6 -> e.traceInputStream?.let { anrExcerpt(String(readCapped(it), Charsets.UTF_8)) }
                 else -> null
             }
         } catch (t: Throwable) { "(trace unreadable: ${t.javaClass.simpleName}: ${t.message})" }
         if (!stack.isNullOrEmpty()) map.putString("stack", stack)
+        log?.takeIf { it.isNotEmpty() }?.let { map.putString("log", it) }
         return map
     }
 

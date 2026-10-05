@@ -207,6 +207,22 @@ ok('keyLightReach caps at the full reach', keyLightReach(100) === KEY_LIGHT.reac
       ok(`${tag} tuner: the two keys' lights never meet across the glyph`, L.rightX - (L.leftX + L.keyW) >= 2 * tr);
       ok(`${tag} tuner: the etched glyph's glow stays inside the well`,
          L.glyphCy - L.glyphSz / 2 - ETCH_LIGHT.reach >= 0 && L.glyphCx - L.glyphSz / 2 - ETCH_LIGHT.reach >= 0);
+      // ★★ DAB (2026-10-05): "MUX 12B" in a row ABOVE the keys. The well keeps its size (the zoom control and
+      //    the deck do not move); the keys give up the row's height and nothing else — same x, same width, same
+      //    bottom padding (so their light still ends before the neighbour) — and nothing overlaps.
+      const D = tunerKeysLayout(w.W, w.H, w.land, w.r, true);
+      const dt = `${tag} tuner (DAB label ${w.W.toFixed(0)}×${w.H})`;
+      ok(`${dt}: the label row is inside the well, above the keys`,
+         D.labelY >= 0 && D.labelH >= drumWell.TK_LABEL_MIN && D.labelY + D.labelH <= D.keyY);
+      ok(`${dt}: the keys keep their x, width and bottom padding`,
+         D.leftX === L.leftX && D.rightX === L.rightX && D.keyW === L.keyW && D.keyY + D.keyH === L.pad + L.keyH);
+      ok(`${dt}: the keys stay keys (${D.keyH} of ${L.keyH} pt, ≥ 70 % and ≥ 20 pt)`,
+         D.keyH >= 0.7 * L.keyH && D.keyH >= 20);
+      ok(`${dt}: the glyph is back between the keys, inside their height`,
+         L.leftX + L.keyW <= D.glyphCx - D.glyphSz / 2 && D.glyphCx + D.glyphSz / 2 <= L.rightX
+         && D.glyphCy - D.glyphSz / 2 >= D.keyY && D.glyphCy + D.glyphSz / 2 <= D.keyY + D.keyH);
+      ok(`${dt}: the etched glyph's glow stays inside the well`,
+         D.glyphCy + D.glyphSz / 2 + ETCH_LIGHT.reach <= w.H && D.glyphCx - D.glyphSz / 2 - ETCH_LIGHT.reach >= 0);
     }
   }
   eq('the tightest deck gap is the SE\'s landscape row (4 pt) — DECK_MIN_GAP', tightest, DECK_MIN_GAP);

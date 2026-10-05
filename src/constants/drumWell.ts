@@ -72,22 +72,46 @@ export interface TunerKeysLayout {
   glyphCy: number;
   /** The glyph's size — bounded by the gap between the keys, so it never touches a cap. */
   glyphSz: number;
+  /** The keys' top edge — `pad`, or below the label row when there is one. */
+  keyY:   number;
+  /** ★ DAB: the label row ABOVE the keys (0 tall when there is none). */
+  labelY: number;
+  labelH: number;
 }
+
+/** ★★ DAB (2026-10-05): the multiplex label's row above the keys — a share of the well, within these
+ *  bounds, and the air above it and between it and the keys' tops (1 pt: every point the row does not
+ *  take is the keys' — a 40 pt landscape band keeps 24 of its 32 pt keys, a 60 pt portrait well 36 of 44). */
+export const TK_LABEL_FRAC = 0.24;
+export const TK_LABEL_MIN  = 10;
+export const TK_LABEL_MAX  = 15;
+export const TK_LABEL_AIR  = 1;
 
 /**
  * [key] [glyph] [key] inside the well. `r` scales the design points (useUiScale's r), so the padding
  * shrinks with the rest of the deck on a small screen. The keys share the space as the mockup's
  * flex row does: `width: 31%` of the content box, pushed to the edges.
+ *
+ * ★★ `label` (DAB, 2026-10-05): a row ABOVE the keys for the multiplex ("MUX 12B"). Stuart asked for the
+ *  multiplex "above the < >" (as the web client's multiplex bar sits above its controls); it had been
+ *  squeezed BETWEEN them because the keys filled the well. The row takes the top padding and a share of
+ *  the height (TK_LABEL_*), and the keys give up that much height — the well itself never grows, so
+ *  the zoom control beside it and every row of the deck stay exactly where they are.
  */
 export function tunerKeysLayout(W: number, H: number, landscape: boolean,
-                                r: (n: number) => number = n => n): TunerKeysLayout {
+                                r: (n: number) => number = n => n, label = false): TunerKeysLayout {
   const pad  = Math.max(2, r(landscape ? TK_PAD_LAND : TK_PAD));
   const inner = Math.max(0, W - pad * 2);
   const keyW = inner * (landscape ? TK_KEY_FRAC_LAND : TK_KEY_FRAC);
-  const keyH = Math.max(0, H - pad * 2);
   const gap  = Math.max(0, inner - keyW * 2);
+  // The label row starts a little inside the top edge (the padding is where it gets its room from).
+  const labelY = label ? Math.min(pad, TK_LABEL_AIR) : 0;
+  const labelH = label ? Math.round(Math.max(TK_LABEL_MIN, Math.min(TK_LABEL_MAX, H * TK_LABEL_FRAC))) : 0;
+  const keyY = label ? labelY + labelH + TK_LABEL_AIR : pad;
+  const keyH = Math.max(0, H - pad - keyY);
   // The mockup's icon is 24 pt; today's TunerKeys glyph was 42 % of the well. Take the smaller of
-  // those and what fits between the keys with a little air.
-  const glyphSz = Math.max(9, Math.min(Math.round(H * 0.42), r(24), gap - 6));
-  return { pad, keyW, keyH, leftX: pad, rightX: W - pad - keyW, glyphCx: W / 2, glyphCy: H / 2, glyphSz };
+  // those and what fits between the keys with a little air (and, with a label row, the keys' height).
+  const glyphSz = Math.max(9, Math.min(Math.round(H * 0.42), r(24), gap - 6, label ? keyH * 0.6 : Infinity));
+  return { pad, keyW, keyH, leftX: pad, rightX: W - pad - keyW, glyphCx: W / 2,
+           glyphCy: keyY + keyH / 2, glyphSz, keyY, labelY, labelH };
 }

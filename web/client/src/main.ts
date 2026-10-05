@@ -28,7 +28,7 @@ import { dabServiceStereo } from '../../../src/services/dabTypes';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { limiter } from '../../../src/utils/limit';
-import { addToHist, crispLevels, crispLine, newHist } from '../../../src/utils/wefaxCrisp';
+import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle } from '../../../src/utils/navtex';
@@ -11721,7 +11721,13 @@ function redrawDecAlign() {
   if (!decLiveCtx || !decLiveCv || !decLiveRaw.length) return;
   const w = decLiveCv.width, a = decEffAlign();
   for (let y = 0; y < decLiveRaw.length; y++) if (decLiveRaw[y]) decLiveAl[y] = decAlignRow(decLiveRaw[y], y, w, a);
+  fillDecLost(0, decLiveRaw.length - 1);
   paintDecRows(0, decLiveRaw.length - 1, w);
+}
+/** ★ Lost lines (2026-10-05, src/utils/wefaxCrisp fillLostLines — the app does the same): a line that never came is
+ *  DRAWN as the one above, not left blank. `decLiveRaw` keeps the hole, so the aligner and the levels never see it. */
+function fillDecLost(y0: number, y1: number) {
+  fillLostLines((j) => !!decLiveRaw[j], (y) => { decLiveAl[y] = decLiveAl[y - 1]; }, y0, y1);
 }
 function decAlignRow(r: Uint8Array, y: number, w: number, a: WefaxAlign): Uint8Array {
   const off = wefaxOffset(a, y, w);
@@ -11785,6 +11791,7 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
   if (!rgb) {
     loadDecAlign();   // ★ a retune while WEFAX is open picks up that frequency's setting (a string compare)
     const raw = px.slice(0, w);
+    const prevMax = decLiveMaxY;
     decLiveRaw[y] = raw;
     addToHist(decLiveHist, raw);
     if (y > decLiveMaxY) decLiveMaxY = y;
@@ -11797,8 +11804,11 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
       if (moved) { redrawDecAlign(); return; }
     }
     decLiveAl[y] = decAlignRow(raw, y, w, decEffAlign());
+    // ★ Lost lines: a jump in the line number leaves rows that never came; a late line (≤ 2 back) re-seeds those under it.
+    const g0 = Math.min(prevMax + 1, y + 1);
+    if (y !== prevMax + 1) fillDecLost(g0, decLiveMaxY);
     // ★ Line 40: the paper/ink levels have settled — repaint the top, drawn while they were still being learned.
-    if (y === 40) paintDecRows(0, y, w); else paintDecRows(y - 2, y, w);
+    if (y === 40) paintDecRows(0, y, w); else paintDecRows(Math.min(y, g0) - 2, decLiveMaxY, w);
     return;
   }
   const img = decLiveCtx.createImageData(w, 1);

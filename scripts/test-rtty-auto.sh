@@ -23,6 +23,25 @@ python3 tools/rtty-bench/synth_rtty.py $T/fade.wav 15 20 90 1 1 >/dev/null
 $T/rtty $T/fade.wav 1000 450 50 5N1.5 1 > $T/fade.txt 2>/dev/null
 g=$(python3 tools/rtty-bench/score.py $T/fade.txt $T/fade.wav.txt | sed 's/.*garbage \([0-9]*\) of.*/\1/')
 [ "$g" -le 10 ]; ok $? "selective fading (15 dB SNR, 20 dB tone fades): $g garbage characters (old decoder: 54)"
+# 2b. ★ AFC (2026-10-05): a DRIFTING station stays decoded. 120 s from synth_rtty.py with DRIFT (Hz/s). Without AFC:
+#     DWD 2 Hz/s at 6 dB 3 lines (504 of 717 chars), ham 1 Hz/s at 6 dB 2 lines (369 of 655); AUTO on DWD 2 Hz/s at 10 dB
+#     re-searched 9 times and printed 0 complete lines (802 garbage of 1152) — every 25 Hz of drift read as a retune.
+DRIFT=2 python3 tools/rtty-bench/synth_rtty.py $T/drift.wav 6 0 120 1 >/dev/null
+$T/rtty $T/drift.wav 1000 450 50 5N1.5 1 > $T/drift.txt 2> $T/drift.err
+n=$(grep -c 'FREQUENCIES 4583 KHZ 7646 KHZ 10100.8 KHZ' $T/drift.txt)
+[ "$n" -ge 4 ]; ok $? "AFC: DWD drifting 2 Hz/s, 6 dB: $n complete frequency lines (no AFC: 3) — $(grep -o 'AFC.*' $T/drift.err)"
+DRIFT=1 BAUD=45.45 CF=1500 SHIFT=170 python3 tools/rtty-bench/synth_rtty.py $T/hdrift.wav 6 0 120 0 >/dev/null
+$T/rtty $T/hdrift.wav 1500 170 45.45 5N1.5 0 > $T/hdrift.txt 2> $T/hdrift.err
+n=$(grep -c 'CQ CQ CQ DE DDK2 DDH7 DDK9' $T/hdrift.txt)
+[ "$n" -ge 4 ]; ok $? "AFC: ham 170 Hz drifting 1 Hz/s, 6 dB: $n complete CQ lines (no AFC: 2) — $(grep -o 'AFC.*' $T/hdrift.err)"
+DRIFT=2 python3 tools/rtty-bench/synth_rtty.py $T/adrift.wav 10 0 120 1 >/dev/null
+$T/rtty $T/adrift.wav auto > $T/adrift.txt 2>/dev/null
+n=$(grep -c 'FREQUENCIES 4583 KHZ 7646 KHZ 10100.8 KHZ' $T/adrift.txt); s=$(grep -c 'RTTY auto' $T/adrift.txt)
+[ "$n" -ge 4 ] && [ "$s" -eq 1 ]; ok $? "AFC: AUTO on DWD drifting 2 Hz/s: $n complete lines, $s search(es) (no AFC: 0 lines, 9 searches)"
+python3 tools/rtty-bench/synth_rtty.py $T/still.wav 6 0 60 1 >/dev/null
+RTTY_AFC=0 $T/rtty $T/still.wav 1000 450 50 5N1.5 1 > $T/still0.txt 2>/dev/null
+$T/rtty $T/still.wav 1000 450 50 5N1.5 1 > $T/still1.txt 2>/dev/null
+cmp -s $T/still0.txt $T/still1.txt; ok $? "AFC: a steady signal decodes byte-identically with AFC on and off"
 # 3. ★ REAL AIR: Stuart's recording of DWD on 4582 kHz USB (Airspy HF+, 2026-10-04 ~20:26 BST) — the one that printed
 #    "CQ CQ CQNDZPXX0XXV…" on the old decoder. Old: 1 clean frequency line, 3 runs of 10+ garbage characters.
 R=tools/rtty-bench/data/dwd-4582khz-2026-10-04.m4a
@@ -34,6 +53,9 @@ if command -v ffmpeg >/dev/null && [ -f $R ]; then
   [ "$n" -ge 3 ]; ok $? "REAL DWD: $n complete frequency lines (old decoder: 1)"
   j=$(grep -oE '[A-QS-XZ0-9]{10,}' $T/real.txt | wc -l | tr -d ' ')
   [ "$j" -eq 0 ]; ok $? "REAL DWD: $j runs of 10+ garbage characters (old decoder: 3)"
+  RTTY_AFC=0 $T/rtty $T/real.wav 1000 450 50 5N1.5 1 > $T/real0.txt 2>/dev/null
+  $T/rtty $T/real.wav 1000 450 50 5N1.5 1 > $T/real1.txt 2>/dev/null
+  cmp -s $T/real0.txt $T/real1.txt; ok $? "REAL DWD: AFC on decodes byte-identically to AFC off (the station sits on tune)"
 else
   echo "  --   REAL DWD recording: not run (needs ffmpeg)"
 fi
