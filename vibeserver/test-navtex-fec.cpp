@@ -67,11 +67,14 @@ static std::vector<double> bits(const std::vector<uint8_t>& slots, int tail = 20
 static void setSlot(std::vector<double>& b, size_t slot, const double (&v)[7]) { for (int i = 0; i < 7; i++) b[slot * 7 + i] = v[i]; }
 static void softWord(uint8_t code, double mag, double (&out)[7]) { for (int i = 0; i < 7; i++) out[i] = (code >> i & 1) ? mag : -mag; }
 
-struct Run { std::string text; NavtexRx::Counts total, last; bool inverted = false; int lockedAt = -1; };
+struct Run { std::string text; NavtexRx::Counts total, last; bool inverted = false; int lockedAt = -1;
+             int ends = 0; NavtexRx::Counts ended; std::string textAtEnd; };
 static Run decode(const std::vector<double>& b, size_t from = 0, const NavtexOptions& o = NavtexOptions()) {
     NavtexRx rx(48000, 500, 170, 100, false, o);
     Run r;
     rx.onChar = [&](char32_t c) { r.text += (char)c; };
+    // ★ 2026-10-05: what the host sends as op 0x07 — once per NNNN, after its last N has been printed.
+    rx.onMessageEnd = [&](const NavtexRx::Counts& c) { r.ends++; r.ended = c; r.textAtEnd = r.text; };
     for (size_t i = from; i < b.size(); i++) {
         rx.pushBit(b[i]);
         if (r.lockedAt < 0 && rx.stateNow() == NavtexRx::ReadData) r.lockedAt = (int)(i - from);
@@ -97,7 +100,11 @@ int main() {
 
     std::printf("── 1. the lock ──\n");
     { const Run r = decode(clean); ok(r.text == msg, "clean stream decodes exactly: " + show(r.text.substr(0, 40)) + "…");
-      ok(r.last.clean > 60 && r.last.repaired == 0 && r.last.failed == 0, "...the message counted all clean (" + std::to_string(r.last.clean) + ")"); }
+      ok(r.last.clean > 60 && r.last.repaired == 0 && r.last.failed == 0, "...the message counted all clean (" + std::to_string(r.last.clean) + ")");
+      ok(r.ends == 1 && r.ended.clean == r.last.clean && r.ended.repaired == 0 && r.ended.failed == 0,
+         "...onMessageEnd fired once, with the message's counts (the host's 0x07)");
+      ok(r.textAtEnd.size() >= 4 && r.textAtEnd.compare(r.textAtEnd.size() - 4, 4, "NNNN") == 0,
+         "...AFTER the NNNN reached onChar, so the box has closed the message it belongs to"); }
     { const Run r = decode(clean, 7);   // one slot late: the first slot seen is an RX slot
       ok(r.text == msg, "starting one slot late (an RX slot first): exact"); }
     { const Run r = decode(clean, 3);   // and mid-word
@@ -119,7 +126,8 @@ int main() {
     std::printf("── 2. one copy lost: the other repairs it ──\n");
     { auto b = clean; softWord(0x00, 1, w); setSlot(b, rxSlot(P, iS), w);
       const Run r = decode(b); ok(r.text == msg, "RX copy unreadable → repaired from the DX copy");
-      ok(r.last.repaired == 1 && r.last.failed == 0, "...counted as repaired"); }
+      ok(r.last.repaired == 1 && r.last.failed == 0, "...counted as repaired");
+      ok(r.ends == 1 && r.ended.repaired == 1, "...and onMessageEnd carries the repair"); }
     { auto b = clean; softWord(0x00, 1, w); setSlot(b, dxSlot(P, iS), w);
       const Run r = decode(b); ok(r.text == msg, "DX copy unreadable → the RX copy prints");
       ok(r.last.repaired == 0, "...and the DX slot is not counted at all"); }

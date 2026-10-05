@@ -9671,6 +9671,8 @@ function initDecoders(host: string, auth: AuthState) {
       decTuneHint = tuneHintLabel(hz, String(spec?.mode ?? ''));
       $('decStatus').textContent = decTuneHint || decStateText;
     },
+    // ★ NAVTEX: the server's own FEC count for the message its NNNN just closed — into the title (2026-10-05).
+    onNavtexFec: (fec) => { if (activeDec === 'navtex' && navtexAsm.setFec(fec)) queueNavtexRender(); },
     onImageStart: (w, h) => startDecImage(w, h),
     // ★ Once the server reports WEFAX phases, a line alone no longer lights the LED — noise draws lines too.
     onImageLine: (y, w, px, rgb) => { drawDecLine(y, w, px, rgb); if (!wefaxPhaseKnown) setDecLive(true); },

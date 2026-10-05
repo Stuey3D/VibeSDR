@@ -1,5 +1,6 @@
 /**
- * navtex — the decoder's character stream cut into NAVTEX MESSAGES (app + web; client-side, no server change).
+ * navtex — the decoder's character stream cut into NAVTEX MESSAGES (app + web; client-side — the server adds only
+ *          each message's FEC count, op 0x07, see setFec).
  *
  * ★★★ WHY (Stuart, 2026-10-05): "navtex I imagine to be a hybrid of RTTY & WEFAX as navtex is transmitted in
  *     designated message blocks with a start and end … message arrives and is displayed with the option to save it
@@ -55,7 +56,13 @@ export interface NavtexMessage {
   /** Characters lost ('_') and characters received (letters, digits, '_') in the text. */
   lost: number;
   chars: number;
+  /** ★ The decoder's OWN per-message FEC count, when the server sends one (VibeServer op 0x07, 2026-10-05) — absent
+   *  from an older server, UberSDR or OpenWebRX, which leave the '_'-derived figures above as the only measure. */
+  fec?: NavtexFec;
 }
+
+/** clean = the RX copy read, repaired = rebuilt from the DX copy or the soft tiers, lost = printed as '_'. */
+export interface NavtexFec { clean: number; repaired: number; lost: number }
 
 /** ITU-R M.540 / IMO NAVTEX Manual subject indicators (B2), short enough for a decoder-box title. */
 const SUBJECTS: Record<string, string> = {
@@ -81,18 +88,29 @@ export function navtexSubject(b2: string | null): string | null {
   return SUBJECTS[b2] ?? `Subject ${b2}`;
 }
 
-/** "Station G · Met warning · #98", or "[start lost]" for a message joined part way through. */
+/** "Station G · Met warning · #98", or "[start lost]" for a message joined part way through. With the server's FEC
+ *  count: "Station G · Met warning · #98 · 2 repaired · 1 lost" — or "· no errors" when every character read clean. */
 export function navtexTitle(m: NavtexMessage): string {
   if (m.startLost) return 'Start lost';
   const parts: string[] = [];
   parts.push(m.station ? `Station ${m.station}` : 'Station ?');
   parts.push(navtexSubject(m.subject) ?? 'Subject ?');
   parts.push(m.serial ? `#${m.serial}` : '#??');
+  if (m.fec) {
+    // ★ Only what happened: a repaired count of 0 is not news. A REPAIRED character prints exactly like a clean one,
+    //   so this is the only place a reader can learn the FEC worked for it (the '_' count cannot see it).
+    if (m.fec.repaired > 0) parts.push(`${m.fec.repaired} repaired`);
+    if (m.fec.lost > 0) parts.push(`${m.fec.lost} lost`);
+    if (m.fec.repaired === 0 && m.fec.lost === 0) parts.push('no errors');
+  }
   return parts.join(' · ');
 }
 
-/** Share of characters lost, 0–100 (whole per cent), or null with nothing to judge yet. */
+/** Share of characters lost, 0–100 (whole per cent), or null with nothing to judge yet.
+ *  ★ null too once the server's own count is in the title (m.fec) — "1 lost" and "2% lost" side by side would be two
+ *    answers to one question, and the '_' count is the weaker of them. */
 export function navtexLostPct(m: NavtexMessage): number | null {
+  if (m.fec) return null;
   if (m.chars <= 0) return null;
   return Math.round((100 * m.lost) / m.chars);
 }
@@ -267,6 +285,19 @@ export class NavtexAssembler {
   get prev(): NavtexMessage | null {
     const f = this.finished;
     return this.current() ? (f[f.length - 1] ?? null) : (f[f.length - 2] ?? null);
+  }
+
+  /** ★ The server's per-message FEC count (VibeServer op 0x07, 2026-10-05). It is sent BEHIND the text carrying its
+   *  NNNN, on the same socket, so the message it belongs to is the one just closed by an NNNN. Attached only there:
+   *  never to a message closed "[end lost]" (the server saw no NNNN either, so this is not its count), never to a
+   *  "[start lost]" fragment (the server counted from ITS last boundary, which a joiner did not see), never twice.
+   *  Returns true when it was attached — the caller redraws. */
+  setFec(c: NavtexFec): boolean {
+    const m = this.finished[this.finished.length - 1];
+    if (!m || !m.done || m.endLost || m.startLost || m.fec) return false;
+    m.fec = { clean: c.clean, repaired: c.repaired, lost: c.lost };
+    this.version++;
+    return true;
   }
 
   private finish(m: NavtexMessage): void {

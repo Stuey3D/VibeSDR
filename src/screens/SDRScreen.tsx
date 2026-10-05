@@ -4117,6 +4117,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  OWRX's text decoders); emptied with the text (open / close / switch / CLR). The panel reads it on its renders. */
   const navtexAsmRef = useRef<NavtexAssembler | null>(null);
   if (!navtexAsmRef.current) navtexAsmRef.current = new NavtexAssembler();
+  /** ★ A VibeServer's per-message FEC count (0x07) lands after the text batch may already have drawn — one render
+   *  per finished message puts "2 repaired · 1 lost" in the title (2026-10-05). */
+  const [, setNavtexFecSeq] = useState(0);
   /** Decoder text arriving from a decoder: append (or, for `replace`, supersede the buffer) on the next flush. */
   const queueDecoderText = useCallback((add: string, replace = false) => {
     if (!replace && activeDecRef.current === 'navtex') navtexAsmRef.current?.push(add, Date.now());
@@ -4209,6 +4212,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         tuneHintText.current = tuneHintLabel(audioHz, String(client.current?.getStatus().mode ?? ''));
         queueDecoderStatus(tuneHintText.current || decStateText.current);
       },
+      onNavtexFec: (fec) => { if (navtexAsmRef.current?.setFec(fec)) setNavtexFecSeq((n) => n + 1); },
       onDot:    (d)          => setDecoding(d === 'active' || d === 'rx'),
       // WEFAX/SSTV — drive the panel's image canvas (skin canvas parity).
       // WEFAX lines are greyscale, SSTV lines are RGB; route by active decoder.

@@ -831,9 +831,11 @@ void NavtexRx::processRx(int pos) {
         if (c) {
             tail_ += (char)(c < 128 ? c : '?');
             if (tail_.size() > 4) tail_.erase(0, tail_.size() - 4);
+            const bool ended = tail_ == "NNNN";
             if (tail_ == "ZCZC") message = Counts();
-            else if (tail_ == "NNNN") { lastMessage = message; message = Counts(); }
+            else if (ended) { lastMessage = message; message = Counts(); }
             if (onChar) onChar(c);
+            if (ended && onMessageEnd) onMessageEnd(lastMessage);   // ★ after the 'N', so the text is ahead of it
         }
     }
     errorCount_ -= r;
