@@ -334,6 +334,12 @@ decoders and vibedsp, about 114,500 lines). Counted 2026-10-05.
 | `haveServiceManager()` = systemd check | main.cpp | On Windows the front door supervises its radio processes itself (already supported for "no systemd"), inside a Job Object. | S |
 
 ### 4.3 Radio libraries
+> ★ 2026-10-05 (Stuart asked how Airspy and HackRF work on Windows): **Airspy (HF+, R2, Mini)** are believed to carry
+> Microsoft OS (WCID) descriptors, so Windows binds its own WinUSB on first plug — no Zadig, no install (why SDR# works
+> with them out of the box); libairspyhf over libusb's WinUSB backend should be plug and play. **HackRF One** the same
+> with recent firmware; older firmware may need WinUSB, which the UsbDk borrow also covers. **SDRplay**: the user's own
+> API install, as on every other platform. All [unverified on Windows here] → **Milestone 1 adds: plug the Airspy HF+
+> (and a HackRF if available) into a PC with no drivers installed and confirm it opens straight away.**
 | Library | Windows | Size |
 |---|---|---|
 | libusb 1.0.30 | Builds with MinGW. WinUSB backend by default; UsbDk only as an option (§3). | S |
