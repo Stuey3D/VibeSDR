@@ -185,6 +185,7 @@ import { loadActiveEibi } from '../services/eibi';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
 import { tuneHintLabel } from '../utils/tuneHint';
+import { NavtexAssembler } from '../utils/navtex';
 import { countryForCallsign } from '../services/callsignCountry';
 import { cleanText } from '../utils/safeText';
 import { onCollectionChanged, requestSync } from '../services/cloudSync';
@@ -4106,8 +4107,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!decFlushTimer.current) decFlushTimer.current = setTimeout(flushDecoderOutput, DECODER_FLUSH_MS);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flushDecoderOutput]);
+  /* ★★ NAVTEX MESSAGES (Stuart, 2026-10-05): the same text stream, cut into ZCZC…NNNN blocks as it ARRIVES
+   *  (utils/navtex) — so each message carries the minute it began (the save file is named by it), which a re-parse
+   *  of the capped scrollback cannot know. Fed here, before the batching, from every source (the decoder socket and
+   *  OWRX's text decoders); emptied with the text (open / close / switch / CLR). The panel reads it on its renders. */
+  const navtexAsmRef = useRef<NavtexAssembler | null>(null);
+  if (!navtexAsmRef.current) navtexAsmRef.current = new NavtexAssembler();
   /** Decoder text arriving from a decoder: append (or, for `replace`, supersede the buffer) on the next flush. */
   const queueDecoderText = useCallback((add: string, replace = false) => {
+    if (!replace && activeDecRef.current === 'navtex') navtexAsmRef.current?.push(add, Date.now());
     if (replace) { decTextReplace.current = add; decTextPending.current = ''; }
     else decTextPending.current = appendDecoderText(decTextPending.current, add);   // same scrollback cap
     armDecoderFlush();
@@ -4122,6 +4130,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [armDecoderFlush]);
   const setDecoderText = useCallback((v: string) => {
     decTextPending.current = ''; decTextReplace.current = null;
+    if (!v) navtexAsmRef.current?.reset();
     setDecoderTextNow(v);
   }, []);
   const setDecoderStatus = useCallback((v: string) => {
@@ -10251,6 +10260,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // smaller screen, the box itself gets smaller" asks for, with no separate logic.
           bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClear={() => setDecoderText('')}
+          navtex={navtexAsmRef.current}
           onClose={dismissDecoderPanel}
           onShownChange={setDecoderShown}
           topLimit={boxTopLimit} topSafe={boxTopSafe}

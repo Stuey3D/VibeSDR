@@ -15,7 +15,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   FlatList,
+  Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -27,6 +29,9 @@ import { NativeEventEmitter, NativeModules } from 'react-native';
 import { NAV_FOCUS, captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File, Paths } from 'expo-file-system';
+import { type NavtexAssembler, type NavtexMessage, navtexTitle, navtexLostPct, navtexBody, navtexFileName,
+         navtexFileText } from '../utils/navtex';
 import { SHIFT_STEP, SLANT_STEP, parseAlign, wefaxAlignKey, wefaxPreset, type WefaxAlign } from '../utils/wefaxAlign';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
@@ -68,6 +73,8 @@ export interface DecoderPanelProps {
   bottomOffset:  number;   // distance from bottom of screen (pillTop - 8)
   /** Clear the text output (skin CLR — text decoders only). */
   onClear?:      () => void;
+  /** ★ NAVTEX: the stream cut into messages (utils/navtex), fed by SDRScreen as text arrives. */
+  navtex?:       NavtexAssembler | null;
   onClose:       () => void;
   /** Image canvas (WEFAX/SSTV) — SDRScreen drives lines via this ref. */
   imageRef?:      React.RefObject<DecoderImageHandle | null>;
@@ -215,7 +222,7 @@ const FONT = DECODER_FONT;
 
 export default function DecoderPanel({
   activeDecoder, decoderText, aircraft, decoderStatus, decoding,
-  bottomOffset, onClear, onClose,
+  bottomOffset, onClear, onClose, navtex,
   imageRef, onImageStatus,
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
@@ -328,6 +335,49 @@ export default function DecoderPanel({
     else             imageRef?.current?.showPrev();
   };
   const onSave = () => { imageRef?.current?.save(); };
+
+  /* ★★★ NAVTEX — A MESSAGE AT A TIME (Stuart, 2026-10-05): "a hybrid of RTTY & WEFAX … message arrives and is
+   *  displayed with the option to save it … next message arrives previous message gets moved in the background and
+   *  user can alternate between live receive or previous message like WEFAX." The text is RTTY's stream; the blocks
+   *  (ZCZC…NNNN, damaged ones too) are found by utils/navtex, shared with the web client. LIVE is the message
+   *  arriving (or the last one finished); PREV the one before it — one only, as WEFAX keeps one picture.
+   *  ★ Between messages it says STANDING BY, as WEFAX does between charts. */
+  const isNavtex = activeDecoder === 'navtex' && !!navtex && !isSpotsMode && !isDabMode && !isImageMode && !isAircraftMode;
+  const [nvViewPrev, setNvViewPrev] = useState(false);
+  const [, setNvTick] = useState(0);
+  // ★ A lost NNNN ends the message after 75 s of silence (NAVTEX_END_LOST_MS) — nothing else would redraw the box
+  //   then, so look every 5 s while NAVTEX is open. Nothing runs for any other decoder.
+  useEffect(() => {
+    if (!isNavtex) return;
+    const id = setInterval(() => { if (navtex?.tick(Date.now())) setNvTick((n) => n + 1); }, 5000);
+    return () => clearInterval(id);
+  }, [isNavtex, navtex]);
+  const nvPrevMsg = isNavtex ? navtex!.prev : null;
+  const nvLiveMsg = isNavtex ? navtex!.live : null;
+  const nvViewingPrev = nvViewPrev && !!nvPrevMsg;
+  const nvShown: NavtexMessage | null = nvViewingPrev ? nvPrevMsg : nvLiveMsg;
+  const nvReceiving = isNavtex && navtex!.receiving;
+  // ★ Cleared (CLR) or reopened: back to LIVE — there is no previous any more.
+  useEffect(() => { if (!decoderText) setNvViewPrev(false); }, [decoderText]);
+  const onNavtexSave = async () => {
+    const m = nvShown;
+    if (!m) return;
+    const name = navtexFileName(m);
+    const body = navtexFileText(m);
+    try {
+      // ★ A REAL .txt FILE on iOS / Mac (Save to Files, AirDrop, Mail with an attachment) — the same reason
+      //   DecoderImageCanvas.save writes a file rather than a data: URL. Android's share sheet ignores `url`, so
+      //   there the message itself is shared as text (what SDRScreen's station share does for the same reason).
+      if (Platform.OS === 'ios') {
+        const f = new File(Paths.cache, name);
+        try { f.create({ overwrite: true }); } catch {}
+        f.write(body);
+        await Share.share({ url: f.uri } as any, { subject: name } as any);
+      } else {
+        await Share.share({ title: name, message: body });
+      }
+    } catch {}
+  };
   /* ★ Picture zoom over FIT — − / + in the header (Stuart, 2026-10-04). Back to fit when the decoder changes. */
   const IMG_ZOOMS = [1, 1.5, 2, 3, 4];
   const [imgZoomI, setImgZoomI] = useState(0);
@@ -478,12 +528,13 @@ export default function DecoderPanel({
   // ★ Cleared or reopened: back to following the newest line.
   useEffect(() => { if (!decoderText || !minimised) followTail.current = true; }, [!decoderText, minimised]);
   useEffect(() => {
-    if (minimised || !followTail.current) return;
+    // ★ NAVTEX's PREV is a finished message being READ — new text belongs to LIVE and must not move it.
+    if (minimised || !followTail.current || nvViewingPrev) return;
     const t = setTimeout(() => {
       try { outputRef.current?.scrollToEnd({ animated: false }); } catch {}
     }, 40);
     return () => clearTimeout(t);
-  }, [decoderText, minimised]);
+  }, [decoderText, minimised, nvViewingPrev]);
 
   // ── Keyboard: the decoder box takes the keyboard on TAB ─────────────────────
   //
@@ -927,6 +978,8 @@ export default function DecoderPanel({
                                                   : 'enter to select · tab for controls')
                  : 'scroll with ↑↓ · tab for controls')
               : isDabMode ? (dabEnsemble || 'reading multiplex…')
+              // ★ NAVTEX says where it is in the broadcast; a refusal or an error still speaks for itself.
+              : isNavtex && !/^(error|not started)/.test(decoderStatus) ? (nvReceiving ? 'receiving' : 'standing by')
               : decoderStatus}
           </Text>
 
@@ -1027,6 +1080,33 @@ export default function DecoderPanel({
               <DecoderKeyLabel tone="accent">
                 {MORSE_QUALITY_LABELS[morseQuality]}
               </DecoderKeyLabel>
+            </HBtn>
+          )}
+
+          {/* ★ NAVTEX PREV/LIVE + SAVE — WEFAX's pair, for a message. PREV only once there is one; SAVE only
+              with a message on screen (never a dead key). */}
+          {isNavtex && !!nvPrevMsg && (
+            <HBtn run hitSlop={6} accessibilityLabel={nvViewingPrev ? 'Show the live message' : 'Show the previous message'}
+              onPress={(e: any) => {
+                e?.stopPropagation();
+                const toPrev = !nvViewingPrev;
+                setNvViewPrev(toPrev);
+                // PREV opens at its top (it is read from the start); LIVE goes back to following the newest text.
+                followTail.current = !toPrev;
+                requestAnimationFrame(() => {
+                  try {
+                    if (toPrev) outputRef.current?.scrollTo({ y: 0, animated: false });
+                    else outputRef.current?.scrollToEnd({ animated: false });
+                  } catch {}
+                });
+              }}>
+              <DecoderKeyLabel>{nvViewingPrev ? 'LIVE' : 'PREV'}</DecoderKeyLabel>
+            </HBtn>
+          )}
+          {isNavtex && !!nvShown && (
+            <HBtn run hitSlop={6} accessibilityLabel="Save this message as a text file"
+              onPress={(e: any) => { e?.stopPropagation(); onNavtexSave(); }}>
+              <DecoderKeyLabel tone="accent">SAVE</DecoderKeyLabel>
             </HBtn>
           )}
 
@@ -1166,7 +1246,41 @@ export default function DecoderPanel({
             <AircraftPanel aircraft={aircraft!} scrollRef={aircraftRef} />
           </View>
         )}
-        {!minimised && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
+        {/* ★ NAVTEX: one message at a time — its title line (station · subject · serial, and how much was lost),
+            then the text. Standing by until the first one arrives. */}
+        {!minimised && isNavtex && (
+          <ScrollView
+            ref={outputRef}
+            style={[dp.body, bodySize]}
+            contentContainerStyle={[dp.bodyContent, scrollLane]}
+            {...bodyScroll}
+            showsVerticalScrollIndicator
+          >
+            {nvShown ? (
+              <>
+                <View style={[dp.nvHead, { borderBottomColor: tk.divider }]}>
+                  <Text style={[dp.nvTitle, { color: tk.accent, fontFamily: FONT }]} numberOfLines={2}>
+                    {navtexTitle(nvShown)}
+                  </Text>
+                  <Text style={[dp.nvMeta, { color: tk.muted, fontFamily: FONT }]} numberOfLines={1}>
+                    {/* ★ Where it is, under the title too — on an SE the header's status is the first thing squeezed out. */}
+                    {[nvViewingPrev ? 'PREVIOUS' : !nvShown.done ? 'RECEIVING' : 'STANDING BY',
+                      navtexLostPct(nvShown) != null ? `${navtexLostPct(nvShown)}% lost` : '']
+                      .filter(Boolean).join(' · ')}
+                  </Text>
+                </View>
+                <Text style={[dp.output, { color: dc.output, fontFamily: FONT }]} selectable>
+                  {navtexBody(nvShown)}
+                </Text>
+              </>
+            ) : (
+              <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: FONT }]}>
+                standing by — each message appears here as it arrives
+              </Text>
+            )}
+          </ScrollView>
+        )}
+        {!minimised && !isNavtex && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
             ref={outputRef}
             // ★★★ minHeight AS WELL AS maxHeight. As a cap alone, BIG did NOTHING on a text
@@ -1333,6 +1447,12 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   spotDetail:  { fontSize: 11, letterSpacing: 0.2, color: 'rgba(255,255,255,0.62)',
                  marginLeft: 44, marginTop: 3 },
   spotEmpty:   { padding: 12, textAlign: 'center' },
+  /* ★ NAVTEX's title line: what the message is on the left, how it arrived on the right; wraps rather than
+   *  clipping on the SE. A hairline under it, as the list rows have. */
+  nvHead:      { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 10, rowGap: 2,
+                 paddingBottom: 6, marginBottom: 6, borderBottomWidth: StyleSheet.hairlineWidth },
+  nvTitle:     { flexShrink: 1, fontSize: 12, fontWeight: '700', letterSpacing: 0.6 },
+  nvMeta:      { marginLeft: 'auto', fontSize: 10, letterSpacing: 1 },
   // 7-column layout (Time·Call·Band·Mode·SNR·Country·Distance) — fixed widths sized
   // for the SE's ~340pt panel; call + country flex the remainder
   // ★ Data WHITE, callsign AMBER — the reverse of the original. Dim amber on black at 10pt was

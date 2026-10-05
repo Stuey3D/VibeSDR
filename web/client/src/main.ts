@@ -31,6 +31,7 @@ import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
+import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle } from '../../../src/utils/navtex';
 import { SHIFT_STEP, SLANT_STEP, chartAlignStep, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
@@ -7055,6 +7056,7 @@ function dabUiOn() {
   $('spotFilters').classList.remove('show');
   $('decImage').classList.remove('on');
   $('decBox').classList.remove('wide');
+  $('decBox').classList.remove('navtex');
   $<HTMLButtonElement>('decPrev').style.display = 'none';
   $<HTMLButtonElement>('decSave').style.display = 'none';
   /* ★★★ WRITE THE PAIR DOWN NOW, WHILE IT IS STILL TRUE. Once DAB has the dial the live values are
@@ -9461,6 +9463,73 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
 let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null = null;
+/* ★★★ NAVTEX — A MESSAGE AT A TIME (Stuart, 2026-10-05): "a hybrid of RTTY & WEFAX … message arrives and is displayed
+ *  with the option to save it … next message arrives previous message gets moved in the background and user can
+ *  alternate between live receive or previous message like WEFAX." The text arrives as RTTY's does; the blocks
+ *  (ZCZC…NNNN, damaged ones too) are found by src/utils/navtex — the app's file — and PREV / SAVE are WEFAX's keys. */
+const navtexAsm = new NavtexAssembler();
+let nvViewPrev = false;
+let nvRenderQueued = false;
+/** Redraw the NAVTEX view — at most once a frame, since RTTY-style text arrives a character or two at a time. */
+function queueNavtexRender() {
+  if (nvRenderQueued) return;
+  nvRenderQueued = true;
+  requestAnimationFrame(() => { nvRenderQueued = false; renderNavtex(); });
+}
+function renderNavtex() {
+  if (activeDec !== 'navtex') return;
+  const view = $('navtexView');
+  const prev = navtexAsm.prev, live = navtexAsm.live;
+  if (!prev) nvViewPrev = false;
+  const shown = nvViewPrev ? prev : live;
+  // ★ Follow the newest text only while the reader is at the bottom, as #decText does; PREV never follows.
+  const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+  view.classList.toggle('has', !!shown);
+  if (shown) {
+    $('nvTitle').textContent = navtexTitle(shown);
+    const pct = navtexLostPct(shown);
+    // ★ Where it is, under the title too — on a phone the header's status is the first thing squeezed out.
+    $('nvMeta').textContent = [nvViewPrev ? 'PREVIOUS' : !shown.done ? 'RECEIVING' : 'STANDING BY',
+                               pct != null ? `${pct}% lost` : ''].filter(Boolean).join(' · ');
+    const body = navtexBody(shown);
+    const pre = $('nvText');
+    if (pre.textContent !== body) pre.textContent = body;
+  }
+  if (!nvViewPrev && atBottom) view.scrollTop = view.scrollHeight;
+  // ★ The status says where it is in the broadcast — WEFAX's "standing by" between charts.
+  if (!decTuneHint) $('decStatus').textContent = navtexAsm.receiving ? 'receiving' : 'standing by';
+  setDecLive(navtexAsm.receiving);
+  const prevBtn = $<HTMLButtonElement>('decPrev');
+  prevBtn.style.display = prev ? '' : 'none';
+  prevBtn.textContent = nvViewPrev ? 'LIVE' : 'PREV';
+  prevBtn.title = nvViewPrev ? 'Show the live message' : 'Show the previous message';
+  const saveBtn = $<HTMLButtonElement>('decSave');
+  saveBtn.style.display = shown ? '' : 'none';
+  saveBtn.title = 'Save this message as a text file';
+}
+function toggleNavtexPrev() {
+  if (!navtexAsm.prev && !nvViewPrev) return;
+  nvViewPrev = !nvViewPrev;
+  renderNavtex();
+  const view = $('navtexView');
+  view.scrollTop = nvViewPrev ? 0 : view.scrollHeight;   // PREV reads from its start; LIVE follows again
+}
+/** SAVE: the shown message as a plain .txt (share sheet where the browser has one, else a download). */
+function saveNavtex() {
+  const m = nvViewPrev ? navtexAsm.prev : navtexAsm.live;
+  if (!m) return;
+  const name = navtexFileName(m);
+  const blob = new Blob([navtexFileText(m)], { type: 'text/plain;charset=utf-8' });
+  const file = new File([blob], name, { type: 'text/plain' });
+  const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
+  if (nav.canShare?.({ files: [file] })) { nav.share?.({ files: [file] }).catch(() => {}); return; }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function resetNavtex() { navtexAsm.reset(); nvViewPrev = false; }
+
 /** True while the last thing written to the decoder panel was a replace-in-place progress line,
  *  which carries no trailing newline. See onText. */
 let decProgressLine = false;
@@ -9520,6 +9589,8 @@ function decParams(mode: string): Record<string, unknown> {
 function initDecoders(host: string, auth: AuthState) {
   decoders = new DecoderClient(host, auth, {
     onText: (t: string) => {
+      // ★ NAVTEX: into the message assembler, drawn by renderNavtex — #decText is hidden while it has the box.
+      if (activeDec === 'navtex') { navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
       const el = $('decText');
       // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
       //    a progress line once a SECOND — the fields filling in as they arrive — and appending
@@ -9588,6 +9659,7 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(true);
     },
     onState: (st) => {
+      if (activeDec === 'navtex') { renderNavtex(); return; }   // ★ its status is the broadcast's — see renderNavtex
       decStateText = st ? 'decoding…' : 'listening…';
       if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
       setDecLive(!!st);
@@ -9631,6 +9703,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (what === 'spots') $<HTMLButtonElement>('spotsBtn').classList.remove('on');
       else if (activeDec && activeDec !== 'rds') { activeDec = null; syncDecButtons(); }
       $('decStatus').textContent = 'not started';
+      $('decBox').classList.remove('navtex');   // ★ the refusal is written to #decText — NAVTEX's view must make way
       const el = $('decText');
       el.classList.remove('off');
       el.textContent = message;
@@ -9764,9 +9837,11 @@ function initDecoders(host: string, auth: AuthState) {
 
   // Output box chrome.
   initSpotFilters();
-  $('decClr').onclick = () => { $('decText').textContent = ''; };
-  $('decPrev').onclick = () => toggleDecPrev();
-  $('decSave').onclick = () => saveDecImage();
+  $('decClr').onclick = () => { $('decText').textContent = ''; if (activeDec === 'navtex') { resetNavtex(); renderNavtex(); } };
+  $('decPrev').onclick = () => (activeDec === 'navtex' ? toggleNavtexPrev() : toggleDecPrev());
+  $('decSave').onclick = () => (activeDec === 'navtex' ? saveNavtex() : saveDecImage());
+  // ★ A lost NNNN ends its message after 75 s of silence (NAVTEX_END_LOST_MS); nothing else would redraw then.
+  setInterval(() => { if (activeDec === 'navtex' && navtexAsm.tick(Date.now())) renderNavtex(); }, 5000);
   $('decZoomIn').onclick = () => setDecZoom(decZoomI + 1);
   $('decAdj').onclick = () => { const r = $('decAdjRow'); const open = r.style.display === 'none'; r.style.display = open ? '' : 'none'; $('decAdj').classList.toggle('on', open); };
   $('decShiftL').onclick = () => { decManualShift = (decManualShift ?? decAuto.al?.shift ?? 0) + SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
@@ -10116,7 +10191,10 @@ function showDecBox(what: string) {
   $('decAdj').style.display = what === 'wefax' ? '' : 'none';
   if (what !== 'wefax') $('decAdjRow').style.display = 'none';
   if (what === 'wefax') { decAlignKey = ''; loadDecAlign(); }
-  $('decText').classList.toggle('off', image || isSpots);
+  const isNavtex = what === 'navtex';
+  $('decText').classList.toggle('off', image || isSpots || isNavtex);
+  $('decBox').classList.toggle('navtex', isNavtex);
+  resetNavtex();   // ★ a fresh box: no message, no PREV — standing by
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
@@ -10134,7 +10212,7 @@ function showDecBox(what: string) {
   $('rdsSize').classList.toggle('show', true);
   // RAW is an ADV RDS concept only — hide the button outright for every other decoder.
   applyRdsSize();
-  $('decText').classList.toggle('off', image || isSpots || isRds);
+  $('decText').classList.toggle('off', image || isSpots || isRds || isNavtex);
   if (isRds) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
   updateVts();
   // Image buffers/buttons only apply to WEFAX/SSTV — reset the buffers on open/switch, and hide the
@@ -10144,7 +10222,11 @@ function showDecBox(what: string) {
     $<HTMLButtonElement>('decPrev').style.display = 'none';
     $<HTMLButtonElement>('decSave').style.display = 'none';
   }
+  // ★ The image decoders' titles back (NAVTEX renames them for a message).
+  $<HTMLButtonElement>('decPrev').title = 'View previous image';
+  $<HTMLButtonElement>('decSave').title = 'Save image';
   setDecLive(false);
+  if (isNavtex) renderNavtex();
 }
 
 function hideDecBox() {

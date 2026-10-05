@@ -1959,6 +1959,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
     line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #decBox.dab .decHeadArr { bottom: 20px; }
+  /* ★ NAVTEX (2026-10-05): PREV + SAVE squeeze the status to a stray letter ("r") on a phone. The message's own
+     title line says RECEIVING / STANDING BY / PREVIOUS, and the empty box says "standing by", so here it goes. */
+  #decBox.navtex #decStatus { display: none; }
 }
 /* ★★★ THE BACKSTOP. `overflow-wrap: anywhere` on the values is right — an unbroken 32-character
    Long PS has to go somewhere — but it means a value squeezed to near-zero width breaks EVERY
@@ -2217,6 +2220,18 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   white-space: pre-wrap; word-break: break-word; min-height: 60px;
 }
 #decText.off { display: none; }
+/* ★★ NAVTEX (2026-10-05): one message — its title line, then the text — shown only while NAVTEX has the box.
+   It scrolls itself at #decText's sizes, BIG included, so the two text decoders feel the same. */
+#navtexView { display: none; max-height: 300px; overflow-y: auto; min-height: 60px; }
+#decBox.navtex #navtexView { display: block; }
+#decBox.big #navtexView { min-height: clamp(240px, 50vh, 560px); max-height: clamp(300px, 62vh, 700px); }
+#nvHead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px;
+          padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--bar-border); }
+#nvTitle { color: var(--amber); font-size: 12px; font-weight: 700; letter-spacing: 0.6px; overflow-wrap: anywhere; }
+#nvMeta { margin-left: auto; color: var(--text-dim); font-size: 10px; letter-spacing: 1px; white-space: nowrap; }
+#nvText { margin: 0; color: var(--btn-text); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+#nvIdle { color: var(--text-dim); font-size: 12px; padding: 12px; text-align: center; }
+#navtexView.has #nvIdle, #navtexView:not(.has) #nvHead, #navtexView:not(.has) #nvText { display: none; }
 #decImage { display: none; width: 100%; background: #000; image-rendering: pixelated; }
 #decImage.on { display: block; }
 /* ★★ ZOOM AND PAN (Stuart, 2026-10-04: "user has a zoom function which can then zoom in and then pan left and right and
@@ -3054,6 +3069,13 @@ select.btn { padding: 6px 8px; }
     <div id="dabStations" style="display:none"></div>
     <div id="dabSignal" style="display:none"></div>
     <pre id="decText"></pre>
+    <!-- ★★ NAVTEX, a message at a time (Stuart, 2026-10-05) — the stream cut into ZCZC…NNNN blocks by
+         src/utils/navtex.ts, the same file the app uses. LIVE / PREV and SAVE are the image decoders' keys. -->
+    <div id="navtexView">
+      <div id="nvHead"><span id="nvTitle"></span><span id="nvMeta"></span></div>
+      <pre id="nvText"></pre>
+      <div id="nvIdle">standing by — each message appears here as it arrives</div>
+    </div>
     <div id="decImgWrap"><canvas id="decImage"></canvas></div>
     <div id="spotList"></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
