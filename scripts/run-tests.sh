@@ -50,6 +50,8 @@ flags_for() {
     test-sstv-quality)     echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ FT8's hashed-callsign table + spot filter (audit 2026-10-04, row 10), through ft8_lib's real pack/unpack.
     test-ft8-callhash)     echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★ FT8's extra passes, their CPU gate and the capture-clock slot (2026-10-05) — optimised, it times passes.
+    test-ft8-passes)       echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     *)               echo "" ;;
   esac
 }
@@ -103,6 +105,7 @@ deps_for() {
     # ★ NAVTEX's CCIR 476 coder, word by word (audit 2026-10-04, rows 11-13); the audio half is scripts/test-navtex.sh.
     test-navtex-fec)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
     test-ft8-callhash)  echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
+    test-ft8-passes)    echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
     test-decoder-hosts|test-bench-decoders) echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
@@ -116,7 +119,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash)
+    test-decoder-hosts|test-bench-decoders|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       for f in $FT8C/ft8/*.c $FT8C/fft/kiss_fft.c $FT8C/fft/kiss_fftr.c $FT8C/common/monitor.c; do
         local o="$d/$(basename "$f" .c).o"

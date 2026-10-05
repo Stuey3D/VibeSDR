@@ -8977,6 +8977,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  the server already publishes (dspCpu, demodWaits, the health pill's CPU rung and snail), so what
      *  the pacing does can be read off /vibeserver.json from outside: tunePaceMs and tunesMerged. */
     int tunePaceMs() {
+        // ★ VIBESERVER_TUNE_PACE_MS sets a FLOOR, for measurement and for the end-to-end test
+        //   (scripts/test-server-tune-burst.mjs), which cannot make an idle Mac look like a Pi 2.
+        static const int floorMs = [] {
+            const char* e = std::getenv("VIBESERVER_TUNE_PACE_MS");
+            return e && *e ? std::max(0, std::min(2000, std::atoi(e))) : 0;
+        }();
+        return std::max(floorMs, vibetune::paceMs(serverLoad()));
+    }
+    /** The load figures tune pacing judges by — and FT8's extra decode passes (2026-10-05): a box that would
+     *  pace a tune (paceMs > 0) is a box that gets ONE FT8 pass, today's cost. One reading, two consumers. */
+    vibetune::Load serverLoad() {
         vibetune::Load l;
         l.dspPct = dspLoadPct;
         l.cpuLevel = g_healthCpuLevel.load(std::memory_order_relaxed);
@@ -8987,13 +8998,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         l.demodBlocked = rise > 0 && paceNowMs() - rise < 10000;
         size_t q; { std::lock_guard<std::mutex> lk(iqMtx); q = iqQueuedSamples; }
         l.backlogMs = sampleRate > 0 ? (double)q / sampleRate * 1000.0 : 0.0;
-        // ★ VIBESERVER_TUNE_PACE_MS sets a FLOOR, for measurement and for the end-to-end test
-        //   (scripts/test-server-tune-burst.mjs), which cannot make an idle Mac look like a Pi 2.
-        static const int floorMs = [] {
-            const char* e = std::getenv("VIBESERVER_TUNE_PACE_MS");
-            return e && *e ? std::max(0, std::min(2000, std::atoi(e))) : 0;
-        }();
-        return std::max(floorMs, vibetune::paceMs(l));
+        return l;
     }
     /** The occupant's address, so a timeout can put THAT address on cooldown. */
     std::string occupantAddr;
@@ -20755,6 +20760,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ The decoder-only sidecar decodes a network radio's audio for the app on this phone — it
         //   serves nobody else, so it is not a server decoder and takes no slot.
         e.slots = decoderOnly ? nullptr : &vsDecoderSlots();
+        // ★★ FT8/FT4 earn a 2nd/3rd pass only on spare CPU — the same rungs that pace a tune (2026-10-05).
+        e.loaded = [this] { return vibetune::paceMs(serverLoad()) > 0; };
         if (session.empty()) e.dialHz = [this] { return audioFreq.load(); };
         else e.dialHz = [this, session] {
             // ★ THIS listener's dial. A spot's RF frequency is dial + audio offset, and on a per-VFO
