@@ -24,7 +24,7 @@ import React, {
 import { ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
 // ★★ A REAL FILE, NOT A data: URL — see save() below for why.
 import { File, Paths } from 'expo-file-system';
-import { MARGIN_AFTER_LINES, WEFAX_ALIGN_ZERO, findMargin, wefaxOffset, type WefaxAlign } from '../utils/wefaxAlign';
+import { WEFAX_ALIGN_ZERO, chartAlignStep, wefaxOffset, type ChartAlignState, type WefaxAlign } from '../utils/wefaxAlign';
 import { addToHist, crispLevels, crispLine, newHist } from '../utils/wefaxCrisp';
 import {
   Canvas, Image as SkiaImage, Skia,
@@ -55,8 +55,8 @@ interface PixBuf {
   maxLine: number;    // highest line written (display crop)
   /** ★ WEFAX: each line AS RECEIVED (greyscale, w×h), so a SHIFT/SLANT change can redraw the whole chart. */
   raw?: Uint8Array;
-  /** ★ WEFAX: the shift findMargin chose for THIS chart (undefined = not looked yet, null = no margin found). */
-  autoShift?: number | null;
+  /** ★ WEFAX: THIS chart's own alignment (utils/wefaxAlign chartAlignStep — margin, else blank border). */
+  auto?: ChartAlignState;
   /** ★ WEFAX: each line AFTER shift/slant (greyscale) — what the crisp rendering smooths (utils/wefaxCrisp). */
   al?: Uint8Array;
   /** ★ WEFAX: histogram of every raw pixel received — the chart's own paper and ink levels. */
@@ -98,11 +98,13 @@ export interface DecoderImageCanvasProps {
   decoderName: string;   // for the save filename: wefax_2026-06-10T18-31-02.png
   /** ★ WEFAX SHIFT / SLANT for this frequency (utils/wefaxAlign) — applied as each line is drawn. */
   align?: WefaxAlign;
-  /** ★ Find each chart's margin and move it to the left edge (utils/wefaxAlign findMargin) — off once the listener
-   *  has saved their own SHIFT for this frequency. */
+  /** ★ Find each chart's margin (or DDK-style blank border) and move it to the left edge (utils/wefaxAlign
+   *  chartAlignStep) — off while the listener is nudging the shift by hand. */
   autoMargin?: boolean;
-  /** Reports the per-chart automatic shift (null = none found) for the ADJ strip. */
-  onAutoShift?: (shift: number | null) => void;
+  /** ★ Use the slant MEASURED on each chart (off when the listener has saved their own slant — theirs wins). */
+  autoSlant?: boolean;
+  /** Reports the per-chart automatic alignment (null = nothing found) for the ADJ strip. */
+  onAutoAlign?: (a: WefaxAlign | null) => void;
 }
 
 /** Row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping) — into `al`. */
@@ -149,14 +151,20 @@ function mkBuf(w: number, h: number): PixBuf {
 
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
-                               autoMargin = false, onAutoShift }, ref) {
+                               autoMargin = false, autoSlant = true, onAutoAlign }, ref) {
     const alignRef = useRef<WefaxAlign>(align ?? WEFAX_ALIGN_ZERO);
     alignRef.current = align ?? WEFAX_ALIGN_ZERO;
     const autoRef = useRef(autoMargin);
     autoRef.current = autoMargin;
-    /** The SHIFT / SLANT a buffer is drawn with: the station's slant, and this chart's own margin when found. */
-    const effAlign = (buf: PixBuf): WefaxAlign =>
-      autoRef.current && buf.autoShift != null ? { shift: buf.autoShift, slant: alignRef.current.slant } : alignRef.current;
+    const autoSlantRef = useRef(autoSlant);
+    autoSlantRef.current = autoSlant;
+    /** The SHIFT / SLANT a buffer is drawn with: this chart's own when found (its measured slant unless the listener
+     *  saved one), else the frequency's. */
+    const effAlign = (buf: PixBuf): WefaxAlign => {
+      const a = buf.auto?.al;
+      if (!autoRef.current || !a) return alignRef.current;
+      return { shift: a.shift, slant: autoSlantRef.current ? a.slant : alignRef.current.slant };
+    };
     const { width: winW } = useWindowDimensions();
     /* ★★★ THE WIDTH THIS CANVAS ACTUALLY HAS — MEASURED, not the window's. It was `winW - 16 - 24`, true
      *  on a phone (the box is full-bleed there) and false everywhere else since the box was capped at
@@ -274,7 +282,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       if (buf.raw) { next.raw = new Uint8Array(buf.w * newH); next.raw.set(buf.raw); }
       if (buf.al) { next.al = new Uint8Array(buf.w * newH); next.al.set(buf.al); }
       next.hist = buf.hist;
-      next.autoShift = buf.autoShift;
+      next.auto = buf.auto;
       next.maxLine = buf.maxLine;
       next.complete = buf.complete;
       return next;
@@ -329,16 +337,18 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         if (!buf.raw) buf.raw = new Uint8Array(buf.w * buf.h);
         buf.raw.set(px.subarray(0, n), ln * buf.w);
         addToHist(buf.hist ??= newHist(), px.subarray(0, n));
-        // ★ Once the chart is long enough, find its margin (once) and redraw the whole chart around it.
+        // ★ Once the chart is long enough, find its margin / border and redraw the whole chart around it — and once
+        //   more later if a longer look disagrees (chartAlignStep).
         let moved = false;
-        if (autoRef.current && buf.autoShift === undefined && ln >= MARGIN_AFTER_LINES) {
-          const rows: Uint8Array[] = [];
-          for (let y = 0; y <= ln; y++) rows.push(buf.raw.subarray(y * buf.w, (y + 1) * buf.w));
-          const m = findMargin(rows, buf.w, alignRef.current.slant);
-          buf.autoShift = m === null ? null : m - 2;
-          onAutoShift?.(buf.autoShift);
-          if (buf.autoShift !== null) { for (let y = 0; y < ln; y++) alignRow(buf, y, effAlign(buf)); moved = true; }
+        const st = buf.auto ??= {};
+        const before = st.al;
+        const raw = buf.raw;
+        if (autoRef.current && chartAlignStep(st, () => Array.from({ length: ln + 1 },
+              (_, y) => raw.subarray(y * buf.w, (y + 1) * buf.w)), buf.w, alignRef.current.slant, ln)) {
+          for (let y = 0; y < ln; y++) alignRow(buf, y, effAlign(buf));
+          moved = true;
         }
+        if (st.al !== before && st.al !== undefined) onAutoAlign?.(st.al);
         alignRow(buf, ln, effAlign(buf));
         if (ln > buf.maxLine) buf.maxLine = ln;
         // ★ The gold-standard rendering (utils/wefaxCrisp): this line and the two above it, which now have it below.

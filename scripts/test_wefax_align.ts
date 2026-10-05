@@ -1,7 +1,8 @@
 // test_wefax_align.ts — WEFAX SHIFT / SLANT and the per-chart margin finder (src/utils/wefaxAlign.ts).
 // Synthetic charts: a speckled page with a few curved "isobars", plus (or not) a black margin line that drifts with
 // the station's slant — the shape measured on Northwood 4610, 2026-10-04 (margin 40 px in on one chart, ~370 on another).
-import { findMargin, wefaxOffset, wefaxPreset, MARGIN_AFTER_LINES } from '../src/utils/wefaxAlign.ts';
+import { findMargin, findMarginSlant, findGutter, findChartAlign, chartAlignStep, wefaxOffset, wefaxPreset, MARGIN_AFTER_LINES,
+         type ChartAlignState } from '../src/utils/wefaxAlign.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 const W = 1809;
@@ -23,6 +24,43 @@ ok(near(findMargin(chart(MARGIN_AFTER_LINES, 368, -0.06), W, -0.06), 368), 'marg
 ok(near(findMargin(chart(MARGIN_AFTER_LINES, 5, 0), W, 0), 5), 'DWD-like: margin at the edge, no slant → found at 5 (a 3 px move)');
 ok(findMargin(chart(MARGIN_AFTER_LINES, null, 0), W, 0) === null, 'no margin on the chart → null (nothing is moved)');
 ok(findMargin(chart(40, 42, -0.06), W, -0.06) === null, 'too few lines yet → null');
+
+// ★ 2026-10-05 — slant MEASURED per chart (MadPsy: "depends on the frequency accuracy of the particular hardware").
+{ const m = findMarginSlant(chart(300, 42, -0.09), W, -0.06, 0, 300);   // Northwood + ~16 ppm of receiver clock
+  ok(!!m && near(m.col, 42) && Math.abs(m.slant + 0.09) <= 0.003, `slant measured, not preset: -0.09 found as ${m?.slant}`); }
+{ const m = findMarginSlant(chart(300, 400, 0.03), W, 0, 0, 300);
+  ok(!!m && near(m.col, 400) && Math.abs(m.slant - 0.03) <= 0.003, `a fast receiver clock on a straight station: +0.03 found as ${m?.slant}`); }
+// ★ DDK-style: a map in a thin black FRAME on a white border (no margin). Phased → border at the edges.
+function bordered(lines: number, roll: number): Uint8Array[] {
+  const rows: Uint8Array[] = [];
+  for (let y = 0; y < lines; y++) {
+    const r = new Uint8Array(W).fill(252);
+    for (let x = 55; x <= 1745; x++) r[x] = 215 + Math.floor(rnd() * 40) - (rnd() < 0.08 ? 150 : 0);  // the map
+    r[55] = r[56] = r[1744] = r[1745] = 10;                                                             // the frame
+    for (const c of [500, 1100]) { const cx = Math.round(c - 0.17 * y); r[cx] = r[cx + 1] = 20; }      // meridians
+    const o = new Uint8Array(W);
+    for (let x = 0; x < W; x++) o[x] = r[(x + roll) % W];
+    rows.push(o);
+  }
+  return rows;
+}
+ok(findChartAlign(bordered(300, 0), W, 0, 300) === null, 'DDK phased: frame is NOT a margin, border already at the edge → not moved');
+{ const a = findChartAlign(bordered(300, 900), W, 0, 300);
+  // joined mid-way: line starts 900 px late, so the border (orig 1746…54) sits at 846…963 — centre ≈ 900 → moved to the edge
+  ok(!!a && Math.abs(a.shift - 900) <= 6 && a.slant === 0, `DDK joined mid-chart: the white border is cut at ${a?.shift} (≈900)`); }
+ok(findGutter(chart(300, 42, -0.06), W, -0.06, 0, 300) === null, 'a Northwood-style chart has no blank band');
+{ const a = findChartAlign(chart(300, 42, -0.06), W, -0.06, 300);
+  ok(!!a && near(a.shift, 40), 'Northwood: margin path still wins'); }
+// ★ chartAlignStep: decided at 300, refines at 600 only a chart it moved; a phased DDK chart stays untouched.
+{ const rows = chart(700, 42, -0.06); const st: ChartAlignState = {};
+  ok(!chartAlignStep(st, () => rows, W, -0.06, 299) && st.al === undefined, 'nothing before line 300');
+  ok(chartAlignStep(st, () => rows.slice(0, 301), W, -0.06, 300) && !!st.al, 'decided at 300 → redraw');
+  ok(!chartAlignStep(st, () => rows, W, -0.06, 450), 'no second look before 600');
+  chartAlignStep(st, () => rows, W, -0.06, 601);
+  ok(st.refined === true, 'second look taken once, at ≥600 (a dropped row 600 cannot skip it)'); }
+{ const rows = bordered(700, 0); const st: ChartAlignState = {};
+  chartAlignStep(st, () => rows.slice(0, 301), W, 0, 300);
+  ok(st.al === null && !chartAlignStep(st, () => rows, W, 0, 600) && st.al === null, 'phased DDK: left alone at 300 stays alone at 600'); }
 // The arithmetic the canvases use
 ok(wefaxOffset({ shift: 40, slant: -0.06 }, 0, W) === 40 && wefaxOffset({ shift: 40, slant: -0.06 }, 1000, W) === W - 20, 'offset wraps');
 ok(wefaxPreset(4608100).slant === -0.06 && wefaxPreset(4608100).shift === 0, 'Northwood preset = slant only');

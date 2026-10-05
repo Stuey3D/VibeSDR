@@ -31,7 +31,7 @@ import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
-import { MARGIN_AFTER_LINES, SHIFT_STEP, SLANT_STEP, findMargin, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type WefaxAlign } from '../../../src/utils/wefaxAlign';
+import { SHIFT_STEP, SLANT_STEP, chartAlignStep, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
@@ -9769,10 +9769,10 @@ function initDecoders(host: string, auth: AuthState) {
   $('decSave').onclick = () => saveDecImage();
   $('decZoomIn').onclick = () => setDecZoom(decZoomI + 1);
   $('decAdj').onclick = () => { const r = $('decAdjRow'); const open = r.style.display === 'none'; r.style.display = open ? '' : 'none'; $('decAdj').classList.toggle('on', open); };
-  $('decShiftL').onclick = () => { decManualShift = (decManualShift ?? decAutoShift ?? 0) + SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
-  $('decShiftR').onclick = () => { decManualShift = (decManualShift ?? decAutoShift ?? 0) - SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
-  $('decSlantDn').onclick = () => setDecAlign({ ...decAlign, slant: decAlign.slant - SLANT_STEP });
-  $('decSlantUp').onclick = () => setDecAlign({ ...decAlign, slant: decAlign.slant + SLANT_STEP });
+  $('decShiftL').onclick = () => { decManualShift = (decManualShift ?? decAuto.al?.shift ?? 0) + SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
+  $('decShiftR').onclick = () => { decManualShift = (decManualShift ?? decAuto.al?.shift ?? 0) - SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
+  $('decSlantDn').onclick = () => setDecAlign({ ...decAlign, slant: decEffAlign().slant - SLANT_STEP });
+  $('decSlantUp').onclick = () => setDecAlign({ ...decAlign, slant: decEffAlign().slant + SLANT_STEP });
   $('decAdjReset').onclick = () => { decManualShift = null; setDecAlign(null); };
   $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
@@ -11577,7 +11577,7 @@ function startDecImage(w: number, h: number) {
   decLiveComplete = false;
   decLiveMaxY = -1;
   decLiveRaw = []; decLiveAl = []; decLiveHist = newHist();
-  decAutoShift = undefined; decManualShift = null;   // ★ a new chart finds its own margin
+  decAuto = {}; decManualShift = null;   // ★ a new chart finds its own margin / border
   if (!decViewingPrev) blitToVisible(decLiveCv);
   updateDecImageButtons();
 }
@@ -11591,12 +11591,15 @@ let decLiveAl: Uint8Array[] = [];    // …and after SHIFT / SLANT: what the cri
 let decLiveHist = newHist();         // every raw pixel of this chart — its own paper and ink levels
 let decAlign: WefaxAlign = { shift: 0, slant: 0 };   // ★ the SLANT is the station's (saved); shift below is per chart
 /* ★★ SHIFT IS PER CHART (Stuart, 2026-10-04, from FLDigi: the margin "had shifted again and needed setting every
- *  time"): found by findMargin once each chart is MARGIN_AFTER_LINES long; ◀ ▶ nudge THIS chart only. */
-let decAutoShift: number | null | undefined;   // undefined = not looked yet this chart
+ *  time"): found per chart by chartAlignStep (margin, else blank border; slant measured); ◀ ▶ nudge THIS chart only. */
+let decAuto: ChartAlignState = {};   // ★ this chart's own alignment (wefaxAlign chartAlignStep: margin, else border)
 let decManualShift: number | null = null;
 function decEffAlign(): WefaxAlign {
-  const shift = decManualShift ?? decAutoShift ?? 0;
-  return { shift, slant: decAlign.slant };
+  const shift = decManualShift ?? decAuto.al?.shift ?? 0;
+  // ★★ The slant: the listener's own if saved for this frequency, else THIS chart's measured one (findMarginSlant —
+  //    MadPsy/Stuart 2026-10-05: never tied to one radio's clock), else the station's.
+  const slant = !decAlignSaved && decAuto.al ? decAuto.al.slant : decAlign.slant;
+  return { shift, slant };
 }
 let decAlignSaved = false;
 let decAlignKey = '';
@@ -11625,8 +11628,8 @@ function setDecAlign(a: WefaxAlign | null, save = true) {
 }
 function updateDecAdjLabels() {
   $('decAdjShift').textContent = decManualShift != null ? `SHIFT ${decManualShift}`
-    : decAutoShift != null ? `SHIFT auto ${decAutoShift}` : 'SHIFT auto';
-  $('decAdjSlant').textContent = `SLANT ${decAlign.slant.toFixed(3)}`;
+    : decAuto.al ? `SHIFT auto ${decAuto.al.shift}` : 'SHIFT auto';
+  $('decAdjSlant').textContent = !decAlignSaved && decAuto.al ? `SLANT auto ${decEffAlign().slant.toFixed(3)}` : `SLANT ${decAlign.slant.toFixed(3)}`;
   $('decAdjReset').style.display = decAlignSaved || decManualShift != null ? '' : 'none';
 }
 /** Redraw the WHOLE live chart from its kept lines, so a correction lands on what is on screen. */
@@ -11701,11 +11704,13 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     decLiveRaw[y] = raw;
     addToHist(decLiveHist, raw);
     if (y > decLiveMaxY) decLiveMaxY = y;
-    if (decAutoShift === undefined && decManualShift === null && y >= MARGIN_AFTER_LINES) {
-      const m = findMargin(decLiveRaw, w, decAlign.slant);
-      decAutoShift = m === null ? null : m - 2;
-      updateDecAdjLabels();
-      if (decAutoShift !== null) { redrawDecAlign(); return; }
+    // ★ Once the chart is long enough, find its margin / border and redraw around it — and once more later if a
+    //   longer look disagrees (chartAlignStep).
+    if (decManualShift === null) {
+      const before = decAuto.al;
+      const moved = chartAlignStep(decAuto, () => decLiveRaw, w, decAlign.slant, y);
+      if (decAuto.al !== before) updateDecAdjLabels();
+      if (moved) { redrawDecAlign(); return; }
     }
     decLiveAl[y] = decAlignRow(raw, y, w, decEffAlign());
     // ★ Line 40: the paper/ink levels have settled — repaint the top, drawn while they were still being learned.

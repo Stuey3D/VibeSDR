@@ -339,13 +339,17 @@ export default function DecoderPanel({
   const [align, setAlign] = useState<WefaxAlign>(() => wefaxPreset(tunedHz));
   const [alignSaved, setAlignSaved] = useState(false);
   const [adjOpen, setAdjOpen] = useState(false);
-  const [autoShift, setAutoShift] = useState<number | null>(null);
+  const [autoAl, setAutoAl] = useState<WefaxAlign | null>(null);   // ★ this chart's own (margin / border + slant)
+  const autoShift = autoAl ? autoAl.shift : null;
   /* ★★ SHIFT IS PER CHART, SLANT PER STATION (Stuart, 2026-10-04, from FLDigi: "slant correction dialled in … you
    *  could move it across so the black line was at the edge, but then next decode happened and the position had
    *  shifted again and needed setting every time"). So only the slant is saved; each chart's margin is found
    *  automatically, and ◀ ▶ nudge THIS chart only — cleared when the next chart's margin is found. */
   const [manualShift, setManualShift] = useState<number | null>(null);
-  const onChartShift = useCallback((s: number | null) => { setAutoShift(s); setManualShift(null); }, []);
+  const onChartAlign = useCallback((a: WefaxAlign | null) => { setAutoAl(a); setManualShift(null); }, []);
+  /* ★★ The slant drawn: the listener's own if saved for this frequency, else THIS chart's measured one (utils/wefaxAlign
+   *  findMarginSlant — MadPsy/Stuart 2026-10-05: never tied to one radio's clock), else the station's. */
+  const drawSlant = !alignSaved && autoAl ? autoAl.slant : align.slant;
   useEffect(() => {
     if (!isWefax || !tunedHz) return;
     let dead = false;
@@ -1123,12 +1127,12 @@ export default function DecoderPanel({
             <HBtn run hitSlop={6} accessibilityLabel="Shift right"
               onPress={() => setManualShift((manualShift ?? autoShift ?? 0) - SHIFT_STEP)}><DecoderKeyLabel>▶</DecoderKeyLabel></HBtn>
             <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>
-              {`SLANT ${align.slant.toFixed(3)}`}
+              {!alignSaved && autoAl ? `SLANT auto ${drawSlant.toFixed(3)}` : `SLANT ${align.slant.toFixed(3)}`}
             </Text>
             <HBtn run hitSlop={6} accessibilityLabel="Slant less"
-              onPress={() => changeAlign({ ...align, slant: align.slant - SLANT_STEP })}><DecoderKeyLabel>−</DecoderKeyLabel></HBtn>
+              onPress={() => changeAlign({ ...align, slant: drawSlant - SLANT_STEP })}><DecoderKeyLabel>−</DecoderKeyLabel></HBtn>
             <HBtn run hitSlop={6} accessibilityLabel="Slant more"
-              onPress={() => changeAlign({ ...align, slant: align.slant + SLANT_STEP })}><DecoderKeyLabel>+</DecoderKeyLabel></HBtn>
+              onPress={() => changeAlign({ ...align, slant: drawSlant + SLANT_STEP })}><DecoderKeyLabel>+</DecoderKeyLabel></HBtn>
             {(alignSaved || manualShift != null) && (
               <HBtn run hitSlop={6} accessibilityLabel="Back to automatic"
                 onPress={() => { changeAlign(null); setManualShift(null); }}><DecoderKeyLabel>RESET</DecoderKeyLabel></HBtn>
@@ -1138,9 +1142,10 @@ export default function DecoderPanel({
         {!minimised && isImageMode && imageRef && (
           <View style={dp.bodyContent}>
             <DecoderImageCanvas
-              align={isWefax ? { shift: manualShift ?? 0, slant: align.slant } : undefined}
+              align={isWefax ? { shift: manualShift ?? 0, slant: drawSlant } : undefined}
               autoMargin={isWefax && manualShift == null}
-              onAutoShift={onChartShift}
+              onAutoAlign={onChartAlign}
+              autoSlant={!alignSaved}
               ref={imageRef}
               maxHeight={bodyH}
               decoderName={activeDecoder ?? 'image'}

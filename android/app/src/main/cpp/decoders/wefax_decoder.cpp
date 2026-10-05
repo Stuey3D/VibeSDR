@@ -288,8 +288,17 @@ void WefaxDecoder::decodeImageLine() {
         }
         const double n = blocks;
         const double va = saa - sa * sa / n, vb = sbb - sb * sb / n, cov = sab - sa * sb / n;
-        const double c = (va > 1e-9 && vb > 1e-9) ? cov / std::sqrt(va * vb) : 0.0;
-        corrAvg = 0.8 * corrAvg + 0.2 * c;
+        /* ★★ A FLAT LINE IS NO EVIDENCE EITHER WAY (Stuart, 2026-10-05: DDK sends its phasing, then a pure
+         *  continuous tone for a minute or two, and we read "standing by" until the chart started). A steady tone
+         *  demodulates to a line of one grey; its variance is ~0, so it scored 0 — noise — and the status dropped.
+         *  Noise is never flat (8-px block sums of noise vary by ~200), so a flat pair just HOLDS the verdict:
+         *  after a start tone/phasing it stays "receiving", after noise it stays "standing by". Threshold: block
+         *  sums within ~16 grey (2 per pixel) of their mean. */
+        const double flatVar = 16.0 * 16.0 * n;
+        if (va > flatVar || vb > flatVar) {
+            const double c = (va > 1e-9 && vb > 1e-9) ? cov / std::sqrt(va * vb) : 0.0;
+            corrAvg = 0.8 * corrAvg + 0.2 * c;
+        }
     }
 
     // Line blending for sample-rate adaptation.
