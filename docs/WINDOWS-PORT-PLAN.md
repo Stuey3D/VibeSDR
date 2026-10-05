@@ -391,8 +391,9 @@ Likely shape: the Store as the main way in, the GitHub download (signed via Sign
   **SignPath Foundation (free for open source)**. The VibeSDR repo is **public and GPL-3.0** (checked with `gh repo
   view`), which meets its licence requirement. As recalled, to be **[verified against their current terms before
   applying]**: artefacts must come from public CI (GitHub Actions — the Windows build lives there anyway); a short
-  code-signing policy on the project page; two-factor on maintainers' accounts. ▶ Open question: **the SDRplay API is
-  a closed binary** — if SignPath objects to bundling it, ship SDRplay support as an optional separate download.
+  code-signing policy on the project page; two-factor on maintainers' accounts. ✓ No closed-source snag: **we do not ship the
+  SDRplay API — it is the user's own separate install** (Stuart, 2026-10-05), loaded at runtime, as on the other
+  platforms. Stuart: "signpath seems like a good fit".
   Free fallback to check: the Microsoft Store individual developer account (believed free now — unverified — but a
   driver-switching server may not fit the Store's packaging rules).
 - Cheaper routes than the declined EV certificate (all paid; kept for reference):
