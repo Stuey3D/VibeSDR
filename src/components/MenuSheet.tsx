@@ -936,7 +936,10 @@ function ControlCustomisationPane({
           accessibility route — a labelled target for anyone who cannot make a drag gesture. */}
       <SelectorRow label="TUNE" value={vfoKeys ? 'keys' : 'drum'}
         choices={[{ value: 'drum', label: 'DRUM' }, { value: 'keys', label: 'KEYS' }]}
-        onPick={(v: string) => onVfoKeys?.(v === 'keys')} />
+        onPick={(v: string) => onVfoKeys?.(v === 'keys')}
+        /* ★ 2026-10-05: in DAB the tuning control is ALWAYS the keys (a drum flick stepped multiplexes
+           faster than the server could re-acquire) — said here so this row is not read as ignored. */
+        note="In DAB, tuning is always the keys — one press, one multiplex." />
       <SelectorRow label="ZOOM" value={zoomKeys ? 'keys' : 'drum'}
         choices={[{ value: 'drum', label: 'DRUM' }, { value: 'keys', label: 'KEYS' }]}
         onPick={(v: string) => onZoomKeys?.(v === 'keys')} />

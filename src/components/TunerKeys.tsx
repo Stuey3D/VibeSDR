@@ -36,7 +36,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, ViewStyle } from 'react-native';
+import { View, Text, StyleSheet, ViewStyle } from 'react-native';
 import { Canvas, Path, Skia, BlurMask, Image as SkImageNode, PaintStyle, StrokeCap, StrokeJoin,
   type SkImage, type SkPath } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
@@ -222,6 +222,12 @@ interface Props {
   disabled?: boolean;
   /** The landscape bar: keys 34 % of the well and a 6 pt padding (Deck.mockup `tk`). */
   landscape?: boolean;
+  /** ★★ DAB (2026-10-05): the multiplex the keys are stepping ("12B"), lit in place of the etched
+   *  glyph between them, under a small MUX legend. Stuart: "put the multiplex number above the < >
+   *  … as that then shows the user the control switch was intentional." The well has no row above
+   *  the keys to put it in (the keys are the well's full height), so it sits in the centre slot the
+   *  glyph had, legend on top — the same place the eye already reads as "what these keys move". */
+  centreLabel?: string;
 }
 
 /** The key legends, drawn in the mockup's 24-unit SVG space: ‹ › for tune, − + for zoom. */
@@ -239,7 +245,7 @@ function legendStrokes(type: TunerKeyType, dir: -1 | 1): IconStroke[] {
 
 export default function TunerKeys({
   type, height, onStep, sweepRate, onSweepStep, width: widthProp = 0, style, disabled = false,
-  landscape = false,
+  landscape = false, centreLabel,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
@@ -302,15 +308,38 @@ export default function TunerKeys({
             today's glow BEHIND a crisp stroke, as the drum's icon is drawn. Lit, the glow and the
             light bleeding out of the etching come from one sprite (useEtchGlow); unlit, today's
             drawing exactly. */}
-        {lit
+        {centreLabel != null ? null : lit
           ? <EtchGlow path={glyphPath} W={W} H={H} led={fp.controls} dim={dim} />
           : <Path path={glyphPath} color={G(0.55 * dim)} strokeWidth={2.6} style="stroke"
                   strokeCap="round" strokeJoin="round">
               <BlurMask blur={3} style="normal" respectCTM />
             </Path>}
-        <Path path={glyphPath} color={G(0.95 * dim)} strokeWidth={1.4} style="stroke"
-              strokeCap="round" strokeJoin="round" />
+        {centreLabel == null &&
+          <Path path={glyphPath} color={G(0.95 * dim)} strokeWidth={1.4} style="stroke"
+                strokeCap="round" strokeJoin="round" />}
       </Canvas>
+
+      {centreLabel != null && (() => {
+        // The slot between the keys, less a little air either side.
+        const gapW = Math.max(0, L.rightX - (L.leftX + L.keyW) - 4);
+        const big  = Math.max(9, Math.min(s.r(20), L.keyH * 0.42));
+        const glow = lit ? { textShadowColor: fp.controls.glow, textShadowRadius: 4,
+                             textShadowOffset: { width: 0, height: 0 } } : null;
+        return (
+          <View pointerEvents="none"
+                accessible accessibilityLabel={`Multiplex ${centreLabel}`}
+                style={{ position: 'absolute', left: L.leftX + L.keyW + 2, width: gapW,
+                         top: L.pad, height: L.keyH, alignItems: 'center', justifyContent: 'center',
+                         opacity: dim }}>
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}
+                  style={{ color: G(0.7), fontFamily: fp.keyLegend.font, fontSize: Math.max(7, big * 0.42),
+                           letterSpacing: 1 }}>MUX</Text>
+            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}
+                  style={{ color: fp.controls.core, fontFamily: fp.keyLegend.font, fontSize: big,
+                           letterSpacing: 0.5, ...glow }}>{centreLabel}</Text>
+          </View>
+        );
+      })()}
 
       {/* ── The two keys, each in its own dark slot, a step below the plate ── */}
       {([-1, 1] as const).map(dir => (
