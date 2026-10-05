@@ -211,23 +211,25 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
     }
     {
         if (step) step("Decoder: FT8 + FT4");
-        // ★ The spotter aligns to UTC slots. The radio is stopped for the benchmark, so for the length
-        //   of this row the corrected clock is set to the start of a slot, and put back afterwards.
-        const int64_t savedOffset = clockOffsetUs().load();
-        timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
-        const double now = ts.tv_sec + ts.tv_nsec / 1e9;
-        const double want = std::floor((now + savedOffset / 1e6) / 15.0) * 15.0 + 15.0 + 0.8 + 0.05;
-        clockOffsetUs().store(savedOffset + (int64_t)((want - (now + savedOffset / 1e6)) * 1e6));
+        /* ★ The spotter cuts UTC slots by each block's CAPTURE time (2026-10-05), so the band is fed with
+         *  stamps of its own: sample 0 on a slot boundary, as if heard in real time. No clock is touched.
+         *  ★★ ONE PASS: the extra passes only ever run on spare CPU and stop when the server is loaded, so the
+         *     cost a decoder limit must budget for is the single pass — what a loaded box actually pays. */
+        const double slot0 = std::floor(vibeUtcNow() / 15.0) * 15.0;
         const auto band = ft8Band(20, 15.5);
         double pct;
         std::atomic<int> got{0};
         {
             Ft8Decoder ft8(12000, false), ft4(12000, true);
+            ft8.maxPasses = 1; ft4.maxPasses = 1;
             ft8.onSpot = [&](const std::string&, const std::string&, const std::string&, int, float) { got.fetch_add(1); };
-            pct = timeIt(15.0, [&] { chunked(band, 240, [&](const int16_t* p, int n) { ft8.process(p, n); ft4.process(p, n); }); },
+            size_t fed = 0;
+            pct = timeIt(15.0, [&] { chunked(band, 240, [&](const int16_t* p, int n) {
+                                         fed += (size_t)n;
+                                         const double utc = slot0 + (double)fed / 12000.0;
+                                         ft8.process(p, n, utc); ft4.process(p, n, utc); }); },
                          [] { settleCpu(20.0); });
         }
-        clockOffsetUs().store(savedOffset);
         rows.push_back({ "dec_ft8", "Decoder: FT8 + FT4 spots", pct, got.load() });
     }
     return rows;

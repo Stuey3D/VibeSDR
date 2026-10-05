@@ -130,12 +130,16 @@ static std::vector<float> ft8(const char* msg, double f0) {
 }
 /** Feed a listener's audio faster than real time — but PACED on the host's queue, because the host
  *  (rightly) drops audio it is 4 s behind on, and a test that outruns it measures the drop. */
-static void feedAll(DecoderRouter& r, const std::string& s, const std::vector<float>& v) {
+/** ★ `clock` (optional): the capture UTC of v[0], advanced past v — FT8 cuts its slots by capture time, so audio
+ *  fed faster than real time carries the times it WOULD have been heard at. */
+static void feedAll(DecoderRouter& r, const std::string& s, const std::vector<float>& v, double* clock = nullptr) {
     auto h = r.find(s);
     for (size_t o = 0; o < v.size(); o += 960) {
         while (h && h->queued() > 48000) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        r.feedSession(s, v.data() + o, (int)std::min<size_t>(960, v.size() - o), 1);
+        const int n = (int)std::min<size_t>(960, v.size() - o);
+        r.feedSession(s, v.data() + o, n, 1, clock ? *clock + (double)(o + (size_t)n) / 48000.0 : NAN);
     }
+    if (clock) *clock += (double)v.size() / 48000.0;
 }
 template <class F> static bool waitFor(F f, double secs) {
     for (int i = 0; i < (int)(secs * 50); ++i) { if (f()) return true; std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
@@ -175,18 +179,13 @@ int main() {
     ok(hA->name() == "fsk" && hB->name() == "wefax" && hC->spotsOn(), "a refusal disturbs nobody already decoding");
 
     std::printf("── each listener's audio, each listener's output ──\n");
-    // ★ FT8 aligns to UTC slots: put the corrected clock 0.05 s past a boundary (+ the decoder's 0.8 s
-    //   time shift) so the first block starts a slot, then feed a whole slot faster than real time.
-    {
-        timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
-        const double now = ts.tv_sec + ts.tv_nsec / 1e9;
-        const double want = std::floor(now / 15.0) * 15.0 + 15.0 + 0.8 + 0.05;
-        clockOffsetUs().store((int64_t)((want - now) * 1e6));
-    }
+    // ★ FT8 cuts UTC slots by CAPTURE time (2026-10-05): C's audio is stamped as if heard from a slot boundary
+    //   on, then fed faster than real time.
+    double cClock = std::floor(vibeUtcNow() / 15.0) * 15.0 + 15.0;
     feedAll(router, "A", rtty("RYRY THE QUICK BROWN FOX ", 8.0));
     feedAll(router, "B", wefax(4.0));
-    feedAll(router, "C", ft8("CQ G4ABC IO92", 1200.0));
-    feedAll(router, "C", std::vector<float>(48000 * 1, 0.0f));     // a little of the next slot
+    feedAll(router, "C", ft8("CQ G4ABC IO92", 1200.0), &cClock);
+    feedAll(router, "C", std::vector<float>(48000 * 1, 0.0f), &cClock);     // a little of the next slot
     ok(waitFor([&] { return pA->decodedText().find("QUICK") != std::string::npos; }, 20), "A's socket decodes A's RTTY (\"" + pA->decodedText().substr(0, 40) + "\")");
     ok(waitFor([&] { return pB->wefaxLines(1809) >= 3; }, 20), "B's socket draws B's WEFAX lines (" + std::to_string(pB->wefaxLines(1809)) + ")");
     ok(waitFor([&] { return pC->spots("G4ABC") >= 1; }, 30), "C's socket gets C's FT8 decode of G4ABC");

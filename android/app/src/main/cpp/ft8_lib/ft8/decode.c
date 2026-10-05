@@ -590,3 +590,15 @@ static void pack_bits(const uint8_t bit_array[], int num_bits, uint8_t packed[])
         }
     }
 }
+
+// VibeSDR local change (2026-10-05): the candidate's normalised bit log-likelihoods, exactly as
+// ftx_decode_candidate hands them to the LDPC decoder — so a decoder whose BP fails can try OSD on
+// the same evidence (decoders/ft8_decoder.cpp). Not in upstream ft8_lib.
+void ftx_candidate_log174(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
+{
+    if (wf->protocol == FTX_PROTOCOL_FT4)
+        ft4_extract_likelihood(wf, cand, log174);
+    else
+        ft8_extract_likelihood(wf, cand, log174);
+    ftx_normalize_logl(log174);
+}

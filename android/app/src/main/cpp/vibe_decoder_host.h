@@ -40,6 +40,7 @@
 #include "decoders/sstv_decoder.h"
 #include "decoders/time_decoder.h"
 #include "decoders/ft8_decoder.h"
+#include "vibe_clock.h"
 #include "vibe_thread.h"
 
 #include <algorithm>
@@ -202,6 +203,10 @@ public:
         std::function<void(const std::string&)> log;
         /** Box-wide slots; null = unlimited (a decoder-only sidecar serving one app). */
         DecoderSlots* slots = nullptr;
+        /** ★ Is the server loaded right now? (vibe_tune_pace.h's rungs: dspCpu, a full demod queue, the CPU
+         *  rung, the snail.) FT8/FT4 read it before every EXTRA decode pass — loaded = one pass, today's cost.
+         *  Empty = never loaded. */
+        std::function<bool()> loaded;
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
@@ -294,6 +299,12 @@ public:
         ft4_ = new Ft8Decoder(12000, true);
         ft8_->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(false, to, de, g, s, f); };
         ft4_->onSpot = [this](const std::string& to, const std::string& de, const std::string& g, int s, float f) { emitSpot(true,  to, de, g, s, f); };
+        /* ★★ EXTRA FT8 PASSES ONLY ON SPARE CPU (2026-10-05): the server says it is loaded, or this host's own
+         *  queue is a second behind (the decode thread is not keeping up) — either way, one pass. */
+        ft8_->loadProbe = ft4_->loadProbe = [this] {
+            if (env_.loaded && env_.loaded()) return true;
+            return queued() > 48000;
+        };
         spotDecim_ = 0; spotAcc_ = 0.0f;
         spotsOn_ = true;
         spotsActive_.store(true, std::memory_order_relaxed);
@@ -319,9 +330,13 @@ public:
     /** Anything running that wants audio? Cheap: read on every block of a listener's audio. */
     bool wantsAudio() const { return active_.load(std::memory_order_relaxed) || spotsActive_.load(std::memory_order_relaxed); }
     /** Hand the decoders `count` frames of 48 kHz audio, `stride` floats apart (1 = mono, 2 = take the
-     *  left of interleaved stereo). Copies and returns at once — NEVER decodes on the caller's thread. */
-    void feed(const float* pcm, int count, int stride = 1) {
+     *  left of interleaved stereo). Copies and returns at once — NEVER decodes on the caller's thread.
+     *  ★ `captureUtc`: the corrected UTC of the block's LAST frame, stamped HERE, on the audio thread — the
+     *    decode thread may run seconds behind, and FT8's slot is cut by when the audio was heard, not decoded
+     *    (2026-10-05). NaN = now (every server caller); a test feeding faster than real time passes its own. */
+    void feed(const float* pcm, int count, int stride = 1, double captureUtc = NAN) {
         if (count <= 0 || !wantsAudio()) return;
+        if (!std::isfinite(captureUtc)) captureUtc = vibeUtcNow();
         std::vector<float> v((size_t)count);
         for (int i = 0; i < count; ++i) v[(size_t)i] = pcm[(size_t)i * (size_t)stride];
         fed_.fetch_add((uint64_t)count, std::memory_order_relaxed);
@@ -330,12 +345,14 @@ public:
             if (!qThread_.joinable()) { qStop_ = false; replayStop_.store(false); qThread_ = std::thread([this] { loop_(); }); }
             qFrames_ += v.size();
             q_.push_back(std::move(v));
+            qUtc_.push_back(captureUtc);
             // ★ DROP, NEVER WAIT — see the file note. The oldest goes: a decoder resumes on fresh
             //   audio, and 4 s is a whole WEFAX line and more than an FT8 symbol run.
             while (qFrames_ > kMaxFrames && q_.size() > 1) {
                 qFrames_ -= q_.front().size();
                 dropped_.fetch_add(q_.front().size(), std::memory_order_relaxed);
                 q_.pop_front();
+                qUtc_.pop_front();
             }
         }
         qCv_.notify_one();
@@ -758,11 +775,13 @@ private:
             qCv_.wait(lk, [this] { return !q_.empty() || qStop_; });
             if (qStop_) return;
             std::vector<float> v = std::move(q_.front());
+            const double utc = qUtc_.front();
             q_.pop_front();
+            qUtc_.pop_front();
             qFrames_ -= v.size();
             lk.unlock();
             decode_(v.data(), (int)v.size());
-            spots_(v.data(), (int)v.size());
+            spots_(v.data(), (int)v.size(), utc);
             lk.lock();
         }
     }
@@ -771,7 +790,7 @@ private:
         { std::lock_guard<std::mutex> tl(replayThrMtx_);
           for (auto& j : replayThreads_) if (j->th.joinable()) j->th.join();
           replayThreads_.clear(); }
-        { std::lock_guard<std::mutex> lk(qM_); qStop_ = true; q_.clear(); qFrames_ = 0; }
+        { std::lock_guard<std::mutex> lk(qM_); qStop_ = true; q_.clear(); qUtc_.clear(); qFrames_ = 0; }
         qCv_.notify_all();
         if (qThread_.joinable()) qThread_.join();
     }
@@ -821,7 +840,7 @@ private:
             broadcast(m, sizeof m);
         }
     }
-    void spots_(const float* data, int count) {
+    void spots_(const float* data, int count, double captureUtc) {
         std::lock_guard<std::mutex> lk(spotsMtx_);
         if (!spotsOn_) return;
         std::vector<int16_t> dec; dec.reserve((size_t)count / 4 + 1);
@@ -834,8 +853,8 @@ private:
             }
         }
         if (dec.empty()) return;
-        if (ft8_) ft8_->process(dec.data(), (int)dec.size());
-        if (ft4_) ft4_->process(dec.data(), (int)dec.size());
+        if (ft8_) ft8_->process(dec.data(), (int)dec.size(), captureUtc);
+        if (ft4_) ft4_->process(dec.data(), (int)dec.size(), captureUtc);
     }
 
     Env env_;
@@ -878,6 +897,7 @@ private:
     std::mutex qM_;
     std::condition_variable qCv_;
     std::deque<std::vector<float>> q_;
+    std::deque<double> qUtc_;            // ★ each block's capture time (feed), in step with q_
     size_t qFrames_ = 0;
     bool   qStop_ = false;
     std::thread qThread_;
@@ -920,13 +940,13 @@ public:
         return it == bySession_.end() ? nullptr : it->second;
     }
     /** A listener's audio (per-VFO). Costs an atomic read when no listener has a host. */
-    void feedSession(const std::string& session, const float* pcm, int count, int stride) {
+    void feedSession(const std::string& session, const float* pcm, int count, int stride, double captureUtc = NAN) {
         if (!anyPer_.load(std::memory_order_relaxed)) return;
         std::shared_ptr<DecoderHost> h;
         { std::lock_guard<std::mutex> lk(m_);
           auto it = bySession_.find(session);
           if (it != bySession_.end()) h = it->second; }
-        if (h) h->feed(pcm, count, stride);
+        if (h) h->feed(pcm, count, stride, captureUtc);
     }
     /** The one pipeline's audio. */
     void feedShared(const float* pcm, int count, int stride) {
