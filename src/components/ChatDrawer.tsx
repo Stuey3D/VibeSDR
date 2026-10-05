@@ -18,6 +18,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -39,6 +40,7 @@ import {
   shareFromManual, manualFieldFrom, MANUAL_SHARE_MODES, SHARE_MODE_LABEL,
   type ShareOut, type SharedStation,
 } from '../services/chatShare';
+import { canHide, visibleMessages, withHidden, hiddenSummary, hideLabel } from '../services/chatHide';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -107,6 +109,33 @@ export interface ChatDrawerProps {
   onShare?:          (out: ShareOut) => void;
   /** TUNE on a shared line — a USER action, through the host's ordinary tune path. */
   onShareTune?:      (s: SharedStation) => void;
+  /** ★★★ HIDE THIS USER (2026-10-05, src/services/chatHide.ts) — senders this listener has hidden for
+   *  this server connection; their lines, past and new, are not drawn. Host-owned (the drawer unmounts
+   *  when shut), from `useHiddenChatUsers`. Absent `onHideUser` = no Hide option at all. */
+  hiddenUsers?:      ReadonlySet<string>;
+  /** Long-press → "Hide <name>". Client-side only: nothing is sent anywhere. */
+  onHideUser?:       (name: string) => void;
+  /** "N hidden · Show" — one tap restores everyone, so a mis-tap is never a dead end. */
+  onShowHidden?:     () => void;
+}
+
+const NO_HIDDEN: ReadonlySet<string> = new Set<string>();
+
+/** ★★ The hidden set lives with the HOST SCREEN, not the drawer: the drawer unmounts every time it
+ *  shuts, and a hide that came undone on reopening would be no hide at all. Keyed on the server
+ *  connection — a new `sessionKey` (another server, or this one re-entered) starts with nobody
+ *  hidden (Stuart: the generic User2381 names change on reconnection, so it is session only).
+ *  `hiddenRef` is for socket callbacks, so a hidden sender's new line does not light the unread pulse. */
+export function useHiddenChatUsers(sessionKey: string) {
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(NO_HIDDEN);
+  const hiddenRef = useRef<ReadonlySet<string>>(NO_HIDDEN);
+  useEffect(() => { hiddenRef.current = hidden; }, [hidden]);
+  useEffect(() => { hiddenRef.current = NO_HIDDEN; setHidden(NO_HIDDEN); }, [sessionKey]);
+  const hide = useCallback((name: string, myName: string | null) => {
+    setHidden((prev: ReadonlySet<string>) => withHidden(prev, name, myName));
+  }, []);
+  const showAll = useCallback(() => { hiddenRef.current = NO_HIDDEN; setHidden(NO_HIDDEN); }, []);
+  return { hidden, hiddenRef, hide, showAll };
 }
 
 function fmtUserFreq(hz?: number): string {
@@ -148,6 +177,7 @@ function ChatDrawerBody({
   onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, dialLine,
   shareEnabled = false, onPickShare, shareDraft, onClearShareDraft, manualStartHz = 0, manualStartMode,
   onShare, onShareTune,
+  hiddenUsers = NO_HIDDEN, onHideUser, onShowHidden,
 }: ChatDrawerProps) {
   const cd = usePopupStyles(makeCd);
   const pt = usePopupTheme();
@@ -234,6 +264,12 @@ function ChatDrawerBody({
     </TouchableOpacity>
   );
   const joined = isCanned || !!myCallsign;
+  /** ★★ Hide is for TYPED chat from third-party servers. Canned mode has nothing typed and its people
+   *  are server ordinals, so it gets no Hide (and the web client, canned only, has none either). */
+  const hideOn = !!onHideUser && !isCanned;
+  const shown = hideOn ? visibleMessages(messages, hiddenUsers) : messages;
+  /** The line whose "Hide <name>" strip is open (one at a time; a long-press elsewhere moves it). */
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   // ★★ The phrase pad's cap (constants/chatPad.ts) comes off the drawer's body: its fixed height
   //    less the bottom inset + padding, the handle and the header (measured — metal keys are taller
   //    than the default's glyphs), and the room line above the chips.
@@ -271,10 +307,10 @@ function ChatDrawerBody({
   const followTail = useRef(true);
   useEffect(() => { if (visible) followTail.current = true; }, [visible]);
   useEffect(() => {
-    if (visible && messages.length > 0 && followTail.current) {
+    if (visible && shown.length > 0 && followTail.current) {
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 60);
     }
-  }, [messages.length, visible]);
+  }, [shown.length, visible]);
 
   // Server username rules: 1–15 chars, letters/digits plus - _ / inside,
   // NO spaces, mixed case preserved (capitals not required)
@@ -467,7 +503,8 @@ function ChatDrawerBody({
             <PopupWindow style={cd.msgList} metalStyle={cd.threadWin}>
             <FlatList
               ref={listRef}
-              data={messages}
+              data={shown}
+              extraData={menuFor}
               keyExtractor={(m: ChatMessage) => m.id}
               style={cd.msgList}
               /* ★ scroll lane: msgContent's own 14 pt side padding */
@@ -481,7 +518,9 @@ function ChatDrawerBody({
                 if (n?.contentSize && n?.layoutMeasurement)
                   followTail.current = n.contentSize.height - (n.contentOffset.y + n.layoutMeasurement.height) < 24;
               }}
-              renderItem={({ item: m }: { item: ChatMessage }) => (
+              renderItem={({ item: m }: { item: ChatMessage }) => {
+                const hideable = hideOn && canHide(m, myCallsign);
+                const row = (
                 <View style={[cd.msg, m.type === 'system' && cd.msgSystem]}>
                   <Text style={[cd.msgTime, { color: cc.timeCl, fontFamily: ff }]}>{m.ts}</Text>
                   {m.type !== 'system' && (
@@ -495,7 +534,10 @@ function ChatDrawerBody({
                     m.type === 'system' && { color: cc.sysCl },
                     // ★ Metal: system lines in the mockup's grey italic (a meaning, not a look).
                     m.type === 'system' && pt.metal && cd.msgTextSystem,
-                  ]} selectable>
+                  // ★ Not selectable when the line offers Hide: a selectable Text takes the long-press
+                  //   for its own copy menu (iOS and Android), so the Hide strip would open only when
+                  //   the finger happened to land on the name. Own and system lines stay selectable.
+                  ]} selectable={!hideable}>
                     {m.text}
                   </Text>
                   {/* ★★ TUNE is the RECEIVER's choice — arriving never moves anything. On a shared dial
@@ -510,9 +552,38 @@ function ChatDrawerBody({
                     </TouchableOpacity>
                   ))}
                 </View>
-              )}
+                );
+                if (!hideable) return row;
+                return (
+                  <View>
+                    <Pressable onLongPress={() => setMenuFor(m.id)} delayLongPress={400}
+                      accessibilityHint={`Long-press to ${hideLabel(m.user!).toLowerCase()} for this session`}>
+                      {row}
+                    </Pressable>
+                    {/* ★★ The name is IN the key, so a mis-aimed long-press says who before it acts. */}
+                    {menuFor === m.id && (
+                      <View style={cd.hideRow}>
+                        {shareKey('__hide', hideLabel(m.user!), () => { setMenuFor(null); onHideUser?.(m.user!); })}
+                        {shareKey('__hidex', 'Cancel', () => setMenuFor(null))}
+                      </View>
+                    )}
+                  </View>
+                );
+              }}
             />
             </PopupWindow>
+          )}
+
+          {/* ★★ THE UNDO — "N hidden · Show", one tap restores everyone. Small and on the plate, like
+               the room line; absent when nobody is hidden. */}
+          {joined && !showUsers && hideOn && hiddenUsers.size > 0 && !!onShowHidden && (
+            <TouchableOpacity style={cd.hiddenLine} onPress={onShowHidden} hitSlop={8} activeOpacity={0.6}
+              accessibilityRole="button" accessibilityLabel={`${hiddenSummary(hiddenUsers.size)}. Show everyone`}>
+              <Text style={[cd.cannedLine, cd.hiddenTxt, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}
+                    numberOfLines={1}>
+                {hiddenSummary(hiddenUsers.size)} · <Text style={{ color: pt.metal ? pt.label : cc.btnText, fontWeight: '700' }}>Show</Text>
+              </Text>
+            </TouchableOpacity>
           )}
 
           {/* ★★ THE PHRASE PAD — canned mode's entire means of speaking. Wrapped, not a row: the
@@ -784,6 +855,10 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
   inputMetal: onMetal(pt, {}, { ...windowStyle(pt), borderRadius: pt.window.radius }),
   hkey: { minWidth: 34, paddingHorizontal: 4 },
   threadWin: { marginHorizontal: 14, marginVertical: 4 },
+  // ★ Hide this user: the strip under a long-pressed line, and the undo line under the thread.
+  hideRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
+  hiddenLine: { alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 2 },
+  hiddenTxt:  { width: undefined, marginBottom: 0 },
 });
 
 /** ★ Same rule as MenuSheet: no hooks run for a drawer that is shut. */

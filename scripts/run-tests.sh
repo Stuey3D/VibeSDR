@@ -295,6 +295,9 @@ if bash scripts/test-navtex.sh >/dev/null 2>&1; then pass=$((pass+1)); else fail
 #     relayed line is what is drawn, and TUNE asks first on a shared dial somebody else is on. The server half
 #     (validation, naming, the line itself) is vibeserver/test-chat-share.cpp, run with the C++ tests above.
 if node --no-warnings scripts/test_chat_share.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ HIDE THIS USER (chatHide.ts, 2026-10-05): a hidden sender's lines go, past and new; own and system lines
+#     never; the name is matched exactly; session only, client-side only, never in canned mode.
+if node --no-warnings scripts/test_chat_hide.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ THE SMALL-SCREEN STATUS ROW (faceplates §8.2): dropped strictly in order (IF first, the recording
 #     timer last), SHARED TUNER shortens before it goes, the connection meter never goes, portrait never
 #     drops, the row packs before anything drops, and a 1 pt wobble cannot flap (hysteresis).

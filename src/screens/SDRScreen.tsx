@@ -137,7 +137,7 @@ import StepPicker      from '../components/StepPicker';
 import PerfOverlay from '../components/PerfOverlay';
 import { PERF_OVERLAY_THIS_BUILD } from '../constants/perfOverlay';
 import ChatDrawer,
-  { type ChatMessage, type ShareItem } from '../components/ChatDrawer';
+  { type ChatMessage, type ShareItem, useHiddenChatUsers } from '../components/ChatDrawer';
 import { DIAL_PHRASES, phraseText, dialSummary, speakerName,
          type DialState } from '../services/dialChat';
 import { shareFromBookmark, shareSummary, parseShared, sharedLineText, shareTuneStep,
@@ -3389,6 +3389,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { chatMutedRef.current = chatMuted; },   [chatMuted]);
   useEffect(() => { syncedUserRef.current = syncedUser; }, [syncedUser]);
   useEffect(() => { zoomSyncRef.current = zoomSync; },     [zoomSync]);
+  /** ★★★ HIDE THIS USER (2026-10-05, src/services/chatHide.ts): this listener's hidden senders, for THIS
+   *  server connection only — cleared when connectBase changes, gone when the screen goes. */
+  const { hidden: chatHidden, hiddenRef: chatHiddenRef, hide: hideChatUser, showAll: showChatHidden } =
+    useHiddenChatUsers(connectBase);
 
   /** quiet=true (history replay / muted) — render without the unread pulse */
   const addChatMsg = useCallback((msg: ChatMessage, quiet = false) => {
@@ -4228,7 +4232,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           { id: 'c' + String(++chatIdRef.current),
             type: own ? 'own' : 'other', user, text, ts: chatTs(ts) },
         ]);
-        if (!isHistory && !own && !chatMutedRef.current) {
+        // ★ A hidden sender's line is kept (Show brings it back) but must not light the unread pulse.
+        if (!isHistory && !own && !chatMutedRef.current && !chatHiddenRef.current.has(user)) {
           setChatOpen((open: boolean) => {
             if (!open) setChatUnread(true);
             return open;
@@ -5391,7 +5396,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           ...prev.slice(-99),
           { id: 'c' + String(++chatIdRef.current), type: own ? 'own' : 'other', user: name, text, ts: chatTs(new Date().toISOString()) },
         ]);
-        if (!own && !chatMutedRef.current && !chatOpenRef.current) setChatUnread(true);
+        // ★ A hidden sender's line is kept (Show brings it back) but must not light the unread pulse.
+        if (!own && !chatMutedRef.current && !chatOpenRef.current && !chatHiddenRef.current.has(name)) setChatUnread(true);
       },
       onModes:      (list) => { if (!destroyed.current) setServerModes(list); },
       onServerDspDefaults: (d) => {
@@ -11710,6 +11716,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         manualStartMode={String(status.mode)}
         onShare={onShare}
         onShareTune={onShareTune}
+        hiddenUsers={chatHidden}
+        onHideUser={(name: string) => hideChatUser(name, myCallsign)}
+        onShowHidden={showChatHidden}
       />
       </PanelBoundary>
 

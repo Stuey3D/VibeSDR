@@ -20,7 +20,7 @@ import { useTheme, type ThemeTokens } from '../contexts/ThemeContext';
 import ControlsBar, { createMeterBus } from '../components/ControlsBar';
 import { VibePowerModule } from '../components/AudioPlayer';
 import { watchProvider } from '../services/watchProvider';
-import ChatDrawer, { type ChatMessage } from '../components/ChatDrawer';
+import ChatDrawer, { type ChatMessage, useHiddenChatUsers } from '../components/ChatDrawer';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import RdsMark from '../components/RdsMark';
@@ -406,6 +406,9 @@ export default function TunerScreen({ route, navigation }: Props) {
   const lastNpTitle = useRef('');   // dedupe lock-screen now-playing pushes
   useEffect(() => { myCallsignRef.current = myCallsign; }, [myCallsign]);
   useEffect(() => { chatOpenRef.current = chatOpen; }, [chatOpen]);
+  /** ★★★ HIDE THIS USER (2026-10-05, src/services/chatHide.ts) — for this FM-DX connection only. */
+  const { hidden: chatHidden, hiddenRef: chatHiddenRef, hide: hideChatUser, showAll: showChatHidden } =
+    useHiddenChatUsers(baseUrl);
 
   const CALLSIGN_KEY = `lsv_chat_callsign:${baseUrl}`;
   const dismissNotice = useCallback(() => { setShowNotice(false); fmdxNoticeShownThisSession = true; }, []);
@@ -520,7 +523,8 @@ export default function TunerScreen({ route, navigation }: Props) {
         setChatMessages((prev) => [...prev.slice(-99), {
           id: `m${msgId.current++}`, type: own ? 'own' : 'other', user: name, text, ts: zulu(),
         }]);
-        if (!chatOpenRef.current) setChatUnread(true);
+        // ★ A hidden sender's line is kept (Show brings it back) but must not light the unread pulse.
+        if (!chatOpenRef.current && !own && !chatHiddenRef.current.has(name)) setChatUnread(true);
       },
     });
     backendRef.current = backend;
@@ -1369,6 +1373,9 @@ export default function TunerScreen({ route, navigation }: Props) {
         onClose={() => setChatOpen(false)}
         onChangeName={() => setMyCallsign(null)}
         textOnly
+        hiddenUsers={chatHidden}
+        onHideUser={(name: string) => hideChatUser(name, myCallsign)}
+        onShowHidden={showChatHidden}
       />
     </SafeAreaView>
   );
