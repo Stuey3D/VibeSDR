@@ -991,14 +991,17 @@ void SstvSync::findSync(double& rateOut, int& skipOut, double* confOut) {
 // every line carries a 1200 Hz pulse at a period that names the mode (M1 446 ms, S2 278 ms, PD-120
 // 508 ms …). This watches for such a train while waiting for a VIS: 1200 Hz flags every 13
 // samples (a 4 ms window — the video's 17-sample one is ~1.4 kHz wide and flags a steady 1460 Hz
-// tone), folded at each mode's line period for clock errors of 0, ±500 and ±1000 ppm. A mode is
-// taken when, over the last 8–12 lines, a pulse-wide box holds ≥ 45 % of its flags, ≥ 70 % of the
-// lines have the pulse, the rest of the line is ≤ 10 % flagged and NO second pulse sits elsewhere
+// tone), folded at each mode's line period (13 modes, not Robot 36) for clock errors of 0, ±500
+// and ±1000 ppm. A mode is taken when, over the last ≥ 5 s (8–32 lines), a pulse-wide box holds
+// ≥ 45 % of its flags, ≥ 70 % of the lines have the pulse, the rest of the line is ≤ 10 % flagged and NO second pulse sits elsewhere
 // in the fold (that is a period twice the true one — R72 folded on Robot 36). The picture's start
 // is then found by walking back, line by line, while the pulse is there: the audio is all still in
 // the ring, so a picture found 6 s in is decoded from its first line.
 namespace {
-const int kTrainModes[] = { M_M1, M_M2, M_S1, M_S2, M_SDX, M_R36, M_R72, M_PD50, M_PD90,
+// ★ Not Robot 36: its 150 ms line is a syllable's length, and BOTH trains this found on Stuart's
+//   90 min recording that were not pictures (19:08 and 19:51 UTC — SSB voice) were "Robot 36".
+//   A Robot 36 is 36 s long, so missing its VIS costs least; it still needs one.
+const int kTrainModes[] = { M_M1, M_M2, M_S1, M_S2, M_SDX, M_R72, M_PD50, M_PD90,
                             M_PD120, M_PD160, M_PD180, M_PD240, M_PD290 };
 }
 SstvSyncTrain::SstvSyncTrain(double sr) : sampleRate(sr) {
@@ -1059,7 +1062,9 @@ bool SstvSyncTrain::evaluate(uint8_t& modeOut, long long& startOut) {
         const SstvMode* m = sstvModeByIndex((uint8_t)mi);
         const double P0 = m->lineTime * sampleRate, w = m->syncTime * sampleRate;
         const int bw = std::max(2, (int)std::lround(w / 13.0));
-        const int K = std::max(8, std::min(12, (int)(12.0 * sampleRate / P0)));
+        // ★ At least 5 s of evidence, not 12 lines: 12 Robot 36 lines are 1.8 s, and on Stuart's 90 min
+        //   recording a voice-like signal at 19:51:22 UTC held a "150 ms pulse train" that long.
+        const int K = std::max(8, std::min(32, (int)std::ceil(5.0 * sampleRate / P0)));
         // the newest K lines, ending a pulse + a little before the newest flag
         const int endF = nF - 1 - (int)((w + 0.02 * sampleRate) / 13.0);
         for (double ppm : {0.0, 500.0, -500.0, 1000.0, -1000.0}) {
