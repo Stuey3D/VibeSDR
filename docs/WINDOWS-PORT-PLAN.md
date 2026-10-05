@@ -362,13 +362,18 @@ decoders and vibedsp, about 114,500 lines). Counted 2026-10-05.
 - WiX/MSI is possible later (`wixl` from msitools builds an MSI on Linux) if enterprise deployment
   ever matters.
 
-### 4.7 Code signing [decide]: the biggest non-technical risk
+### 4.7 Code signing [decide]: a risk for SOME new PCs, decided before a public release
 - **SmartScreen** shows "Windows protected your PC" and allows *More info → Run anyway*. It is
   accepted in August as the SDR norm.
-- **Smart App Control (Windows 11)** is different. It **blocks unsigned executables outright, with
-  no override** [verified, Microsoft Q&A and multiple GitHub issues]. It is on (or in evaluation
-  mode) on clean Windows 11 installs, so **an unsigned VibeServer cannot run at all on some new PCs.**
-  This was not known in August.
+- **Smart App Control (Windows 11)** is different, but it applies only to machines where it is ON. Where it is on, it
+  **blocks unsigned executables outright, with no override** [verified, Microsoft Q&A and multiple GitHub issues].
+  It exists only on clean installs of Windows 11 22H2 or later, starts in an evaluation mode and then decides on its
+  own whether to stay on; machines upgraded from Windows 10, and machines where it has been switched off, never
+  enforce it. **Everyone else gets the SmartScreen "Run anyway" above** — which is what Stuart sees on his own PC
+  (2026-10-05: "I've been able to run apps without a certificate on windows with a Run Anyway prompt").
+  How large the SAC-on share of SDR users is, is **[unverified]**: ask the first Windows testers what Windows
+  Security → App & browser control → Smart App Control says, and decide on signing from that. Unsigned test builds
+  (Milestone 1) are unaffected on Stuart's PC if his setting is Off. This was not known in August.
 - Cheaper routes than the declined EV certificate:
   - **SignPath Foundation**: free OV signing for open-source projects. Whether VibeServer qualifies
     under its licence is **[decide]**.
@@ -468,10 +473,10 @@ llvm-mingw and cloudflared allow.
 1. **Default driver path:** accept "Give this dongle to VibeServer" (inbox WinUSB, persistent but
    reversible) as the default, with UsbDk borrow as opt-in? Or insist on borrow-first if Milestone 1
    passes?
-2. **Signing:** Smart App Control blocks unsigned apps with *no override* on clean Windows 11. Is a
-   UK company (which makes Azure Artifact Signing about US$10/month available), SignPath (if the
-   licence qualifies), or an OV certificate acceptable? Or do we accept that SAC machines cannot run
-   it?
+2. **Signing (before a public release, not for testing):** on the subset of Windows 11 PCs where Smart App Control
+   is ON, an unsigned app is blocked with *no override*; everyone else gets SmartScreen's "Run anyway". Once early
+   testers tell us how common SAC-on is: a UK company (which makes Azure Artifact Signing about US$10/month
+   available), SignPath (if the licence qualifies), an OV certificate — or accept that SAC-on machines cannot run it?
 3. **Is VibeServer open source** for SignPath's purposes? Under which licence?
 4. **Tray app first, service later**, or is a headless service needed from day one?
 5. **Firewall rule:** Private networks only by default, or Public too?
