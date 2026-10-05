@@ -231,6 +231,17 @@ certificate. That is off the table (§1.1). **Not needed** if §2.4's inbox rout
 
 ## 3. Ranked recommendation for the driver
 
+> ★★★ **STUART'S DECISION, 2026-10-05 — UsbDk "borrow" is the INTENDED DEFAULT, as agreed in August**, provided
+> Milestone 1 proves it on his PC. His words: *"it effectively borrows the hardware and use it with our built in drivers
+> and then when done it is handed back to windows. No Zadig step, no windows trying to install the DVB-T drivers back
+> over it, just clean plug and play use, simplicity is the king. I dont want people to have to have computer science or
+> RF engineering degrees to be able to use VibeServer."*
+> Milestone 1 must show, on his Windows 11 build: UsbDk installs and the PC REBOOTS normally (the #134 report); it
+> borrows a V3 and a V4 from the DVB-T driver; 2.4 MS/s streams clean; hand-back and re-borrow are reliable (the
+> close/reopen race). If it passes, it ships as the default. The in-box WinUSB bind (item 2 below) becomes the FALLBACK
+> for machines where UsbDk cannot run (Windows on ARM, or a failed M1 criterion). Item 1 (already WinUSB) is unchanged.
+> The ranking below is the research's original order, kept for the reasoning.
+
 1. **Always: use what is already there.** If `…&MI_00` is on `WinUSB`, `libusbK` or `libusb0`,
    open it with stock libusb (WinUSB backend; libusbK/libusb0 through `libusbK.dll`). Show **"RTL-SDR
    found — using its WinUSB driver (set up by Zadig/SDR#)"**. No action is needed, and SDR# keeps
