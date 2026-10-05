@@ -30278,6 +30278,20 @@ bool LocalSdrShim::releaseRadio() {
      *  the transfer; reacquireRadio() start()s it again with every setting re-stated (applyAll). */
     const bool asp = impl->useAirspy();
 
+    /* ★★★ AN HF+ OPENED FROM AN ANDROID DESCRIPTOR IS PARKED, NEVER RELEASED (2026-10-05). Releasing
+     *     closes it, and the only way back is reacquireRadio()'s ahf->open(ahfIndex) — and ahfIndex is
+     *     -1 here, because Android forbids enumeration and the fd was the only way in. So "release when
+     *     idle" (or the battery floor) turned an Android HF+ server into a dead radio until it was
+     *     restarted. Parking keeps the handle and drops the samples at the source, which is what every
+     *     other fd radio's idle path does; nothing else on the phone could have taken the radio anyway.
+     *  ★ Returns false: the radio was NOT let go, and the caller must not believe it was. */
+    if (ahf && (impl->ahfIndex < 0 || impl->ahf->fdOpened())) {
+        LOGI("Airspy HF+ opened from an Android USB descriptor cannot be released (it could not be "
+             "reopened) — parking it instead");
+        impl->pauseCaptureIdle();
+        return false;
+    }
+
     if (rsp)      impl->sdrp->setPaused(true);
     else if (ahf) impl->ahf->setPaused(true);
     else if (hrf) impl->hrf->setPaused(true);
