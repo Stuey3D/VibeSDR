@@ -313,7 +313,7 @@ bool SstvVIS::process(SstvBuffer& pcm, uint8_t& modeOut, int& shiftOut) {
 
 // ── Video demodulator ────────────────────────────────────────────────────────
 SstvVideo::SstvVideo(const SstvMode* mode, double sr, int shift, bool ad)
-    : m(mode), sampleRate(sr), headerShift(shift), adaptive(ad), fft(1024) {
+    : m(mode), sampleRate(sr), headerShift(shift), adaptive(ad), fft(1024), fft512(512) {
     double sf = sr / 44100.0;
     int base[7] = {48,64,96,128,256,512,1024};
     hannLens.resize(7);
@@ -456,22 +456,30 @@ double SstvVideo::demodFreq(SstvBuffer& pcm, double snr, int ahead) {
         if (std::string(m->name) == "Scottie DX" && winIdx < 6) winIdx++;
     }
     int L = hannLens[winIdx];
-    std::vector<int16_t> s(L); pcm.getWindow(-L/2 + ahead, L, s.data());
-    std::fill(fin.begin(), fin.end(), 0.0f);
-    for (int i = 0; i < L && i < (int)fin.size(); i++) fin[i] = (float)(s[i]/32768.0*hannWins[winIdx][i]);
-    fft.run(fin.data());
-    int minB = getBin(1500.0+headerShift) - 1, maxBL = getBin(2300.0+headerShift) + 1;
+    // ★ THE FFT FITS THE WINDOW (2026-10-05). Every estimate ran a 1024-point FFT, even for a
+    //   13-sample window: 1000 zeros of padding. 512 points serve any window up to 256 samples (all
+    //   but the -10 dB ones) at under half the cost; 256 points was tried and measured worse (its
+    //   11.7→47 Hz bins bias the Gaussian peak fit: mean SSIM -0.004 on tools/sstv_bench). The
+    //   saving pays for estimating twice as often (demodulate). No heap work per estimate either.
+    SstvFFT& F = (L <= 256) ? fft512 : fft;
+    const int N = F.size();
+    int16_t s[1024]; pcm.getWindow(-L/2 + ahead, L, s);
+    float in[1024];
+    for (int i = 0; i < N; i++) in[i] = (i < L) ? (float)(s[i]/32768.0*hannWins[winIdx][i]) : 0.0f;
+    F.run(in);
+    auto bin = [&](double f) { return (int)(f / sampleRate * N); };
+    int minB = bin(1500.0+headerShift) - 1, maxBL = bin(2300.0+headerShift) + 1;
     int maxBin = 0; double maxP = 0;
-    std::vector<double> powers(fftSize, 0);
-    for (int i = minB; i <= maxBL && i < fftSize; i++) { powers[i] = fft.power(i); if (powers[i] > maxP) { maxP = powers[i]; maxBin = i; } }
+    double powers[520];
+    for (int i = std::max(0, minB - 1); i <= maxBL + 1 && i <= N / 2; i++) { powers[i] = F.power(i); if (i >= minB && i <= maxBL && powers[i] > maxP) { maxP = powers[i]; maxBin = i; } }
     double freq;
     if (maxBin > minB && maxBin < maxBL && powers[maxBin] > 0 && powers[maxBin-1] > 0 && powers[maxBin+1] > 0) {
         double num = powers[maxBin+1]/powers[maxBin-1];
         double den = (powers[maxBin]*powers[maxBin])/(powers[maxBin+1]*powers[maxBin-1]);
-        if (num > 0 && den > 0) freq = (maxBin + std::log(num)/(2.0*std::log(den)))/(double)fftSize*sampleRate;
-        else freq = (double)maxBin/fftSize*sampleRate;
+        if (num > 0 && den > 0) freq = (maxBin + std::log(num)/(2.0*std::log(den)))/(double)N*sampleRate;
+        else freq = (double)maxBin/N*sampleRate;
     } else {
-        freq = (maxBin > getBin(1900.0+headerShift)) ? 2300.0+headerShift : 1500.0+headerShift;
+        freq = (maxBin > bin(1900.0+headerShift)) ? 2300.0+headerShift : 1500.0+headerShift;
     }
     return freq;
 }
@@ -601,10 +609,14 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
         }
         if (sampleNum == nextSync) { detectSync(pcm, syncTargetBin, syncSampleNum); nextSync += 13; syncSampleNum++; }
         if (sampleNum == nextSNR) { snr = estimateSNR(pcm); nextSNR += 256; }
-        // ★ The estimate is HELD for the next 6 samples, so centre it on them (s+2.5), not on the
-        //   first: centred on `s` it lagged the picture by 2.5 samples — half a Martin pixel, most
-        //   of a Robot one (2026-10-04, measured with the line fit in place).
-        if (sampleNum % 6 == 0) freq = demodFreq(pcm, snr, 3);
+        // ★ The estimate is HELD for the next 3 samples, so centre it on them (s+1), not on the
+        //   first: centred on `s` it lagged the picture (2026-10-04, measured with the line fit).
+        // ★★ EVERY 3 SAMPLES, NOT 6 (2026-10-05, the audit's "horizontal resolution"). At 12 kHz six
+        //    samples is 0.5 ms — two PD-50 / Martin M2 pixels and three of a Robot 36 chroma pixel
+        //    shared ONE estimate. With the 512-point FFT this costs LESS than before (harness user
+        //    CPU on the 15:38 clip 1.54 s → 1.43 s). Every 2 was measured too: +0.0013 mean SSIM
+        //    more for +15 % CPU — not taken.
+        if (sampleNum % 3 == 0) freq = demodFreq(pcm, snr, 1);
 
         uint8_t lum = clip((freq - (1500.0 + headerShift)) / 3.1372549);
         if (sampleNum < (int)storedLum.size()) { storedLum[sampleNum] = lum; storedLumWritten = sampleNum + 1; }

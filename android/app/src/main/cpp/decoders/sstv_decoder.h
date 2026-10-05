@@ -157,7 +157,7 @@ private:
     std::vector<std::vector<double>> hannWins; std::vector<int> hannLens;
     int fftSize = 1024;
     std::vector<float> fin;
-    SstvFFT fft;
+    SstvFFT fft, fft512;   // ★ 512 for windows ≤ 256 samples (demodFreq, 2026-10-05)
     std::vector<uint8_t> hasSync;   // 1/0 per sync sample
     /** ★ The same decision as a level: log10(pSync / 2·pRaw), so > 0 is exactly hasSync = 1. Lets
      *  the slant fit place each pulse edge BETWEEN two 13-sample flags (2026-10-04). */
