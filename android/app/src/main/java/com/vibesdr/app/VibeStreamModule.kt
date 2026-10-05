@@ -233,6 +233,30 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         VibeStreamService.instance?.setArtworkNative(serverType)
     }
 
+    // ── ICON & ART (2026-10-05, the Android half of iOS's VibePowerModule methods; src/services/appIcon.ts) ──
+
+    /** The Now Playing art base (artwork_<colour>) and our VibeServer inlay in the user's colour. Live. */
+    @ReactMethod
+    fun setArtColour(colour: String) {
+        VibeStreamService.setArtColour(colour)
+    }
+
+    /** ★ Every Android launcher honours a disabled/enabled launcher alias, so the answer is yes. (iOS asks the
+     *  system; a Mac running the iPad app says no.) */
+    @ReactMethod
+    fun appIconSupported(promise: Promise) {
+        promise.resolve(true)
+    }
+
+    /** Records the pick; the launcher icon changes when the app next leaves the screen (VibeAppIcon — doing it
+     *  on screen can close the task). Resolves the colour, like iOS. */
+    @ReactMethod
+    fun setAppIcon(colour: String, promise: Promise) {
+        if (!VibeAppIcon.isKnown(colour)) { promise.reject("unknown", "No icon in $colour"); return }
+        VibeAppIcon.request(reactContext, colour)
+        promise.resolve(colour)
+    }
+
     @ReactMethod
     fun setMediaSkipMode(mode: String) {
         VibeStreamService.instance?.skipMode = mode

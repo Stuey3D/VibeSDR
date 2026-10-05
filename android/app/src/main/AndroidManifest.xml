@@ -60,11 +60,17 @@
     <meta-data android:name="expo.modules.updates.ENABLE_BSDIFF_PATCH_SUPPORT" android:value="true"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
-    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="unspecified">
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
+    <!-- ★★★ ICON & ART (2026-10-05): the launcher icon follows the user's colour through <activity-alias>es, one
+         per colour, switched with setComponentEnabledSetting (VibeAppIcon.kt). The REAL activity is VibeActivity
+         (a bare subclass of MainActivity — all the code stays in MainActivity.kt) and carries no MAIN/LAUNCHER.
+         ★ The GREEN alias is NAMED ".MainActivity" on purpose: it is the very component every existing install's
+           home-screen shortcut points at, so an update changes nothing for anyone who never picks a colour.
+         ★ The deep links (vibesdr://, sdr://) and USB_DEVICE_ATTACHED stay on the REAL activity, which is never
+           disabled — they work whichever alias is on. Android keeps a USB "always open with" choice per PACKAGE,
+           not per component, so moving the filter off the old component name loses nobody's default.
+         ★ Anything that launches the app explicitly must use getLaunchIntentForPackage (it resolves the enabled
+           alias) or VibeActivity — never `.MainActivity`, which is disabled while another colour is picked. -->
+    <activity android:name=".VibeActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="unspecified">
       <!-- vibesdr:// deep links (QR / "Open in VibeSDR" from UberSDR overlay) -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>
@@ -89,6 +95,48 @@
       <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                  android:resource="@xml/device_filter"/>
     </activity>
+    <activity-alias android:name=".MainActivity" android:targetActivity=".VibeActivity" android:enabled="true" android:exported="true" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconRed" android:targetActivity=".VibeActivity" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_red" android:roundIcon="@mipmap/ic_launcher_red_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconAmber" android:targetActivity=".VibeActivity" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_amber" android:roundIcon="@mipmap/ic_launcher_amber_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconBlue" android:targetActivity=".VibeActivity" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_blue" android:roundIcon="@mipmap/ic_launcher_blue_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconWhite" android:targetActivity=".VibeActivity" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_white" android:roundIcon="@mipmap/ic_launcher_white_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconTeal" android:targetActivity=".VibeActivity" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_teal" android:roundIcon="@mipmap/ic_launcher_teal_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
+    <activity-alias android:name=".IconNeon" android:targetActivity=".VibeActivity" android:enabled="false" android:exported="true" android:icon="@mipmap/ic_launcher_neon" android:roundIcon="@mipmap/ic_launcher_neon_round">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity-alias>
     <service android:name=".RtlTcpServerService" android:foregroundServiceType="connectedDevice" android:exported="false"/>
     <!-- ★★★ PUT A RUNNING SERVER BACK AFTER AN UPDATE — see VibeUpdateReceiver. A package replace
          stops the app and Android does not recreate the service, so an unattended receiver went

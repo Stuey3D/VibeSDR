@@ -27,7 +27,8 @@ import {
   useWindowDimensions,
 
   NativeEventEmitter,
-  NativeModules,} from 'react-native';
+  NativeModules,
+  Platform,} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import Slider from '@react-native-community/slider';
@@ -53,7 +54,7 @@ import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { useFaceplateSettings, useSurfaceOpaque } from '../contexts/FaceplateContext';
 import {
   CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
-  MOTION_CHOICES, MOTION_NOTE, LIGHT_ANGLE_CHOICES, lightAngleRowShown, ICON_COLOURS, ICON_NOTE, ART_ONLY_NOTE,
+  MOTION_CHOICES, MOTION_NOTE, LIGHT_ANGLE_CHOICES, lightAngleRowShown, ICON_COLOURS, ICON_NOTE, ICON_NOTE_ANDROID, ART_ONLY_NOTE,
   COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver, frameRateChoices,
   FRAME_RATE_NOTE,
   type PaneChoice, type Chassis, type SignalMeter, type FrameRate, type MotionEffects, type LightAngle,
@@ -895,8 +896,11 @@ function ControlCustomisationPane({
         onPick={(v: SignalMeter) => set({ meter: v })} />
       {/* ★★ ICON & ART (Stuart, 2026-10-04): the app icon and the Now Playing art in the illumination colours.
           The art follows at once; the icon changes only on this pick (iOS confirms each change). Where the
-          device cannot change its icon the row is the art alone, and says so. */}
-      <CtrlRow label={iconOk ? 'ICON & ART' : 'ART'} note={iconOk ? ICON_NOTE : iconOk === false ? ART_ONLY_NOTE : undefined}>
+          device cannot change its icon the row is the art alone, and says so.
+          ★ Android (2026-10-05): the launcher alias switches when the app leaves the screen, and some launchers
+          re-add the icon elsewhere — its note says so. */}
+      <CtrlRow label={iconOk ? 'ICON & ART' : 'ART'}
+        note={iconOk ? (Platform.OS === 'android' ? ICON_NOTE_ANDROID : ICON_NOTE) : iconOk === false ? ART_ONLY_NOTE : undefined}>
         <BtnRow>
           {ICON_COLOURS.map(c => (
             <SelectorKey key={c} dot={LED[c].core} a11y={`${COLOUR_NAMES[c]} icon and art`}

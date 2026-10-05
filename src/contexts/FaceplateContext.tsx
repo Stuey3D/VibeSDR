@@ -184,7 +184,8 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const capKnown = storedKnown || touched.current;
   useEffect(() => { if (capKnown) applyFrameRateCap(capHz); }, [capKnown, capHz]);
   // ★ ICON & ART: the Now Playing art follows the pick, live (services/appIcon.ts). The ICON is changed only by
-  //   the pick itself (MenuSheet) — never at launch, because iOS shows an alert on every change.
+  //   the pick itself (MenuSheet) — never at launch, because iOS shows an alert on every change
+  //   (and Android's launcher-alias switch can move the home-screen icon).
   useEffect(() => { if (capKnown) setArtColour(settings.iconColour); }, [capKnown, settings.iconColour]);
   const [maxRefreshHz, setMaxRefreshHz] = useState<number | null>(null);
   useEffect(() => {

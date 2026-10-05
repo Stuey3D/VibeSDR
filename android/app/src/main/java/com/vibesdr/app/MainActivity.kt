@@ -12,7 +12,9 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 
 import expo.modules.ReactActivityDelegateWrapper
 
-class MainActivity : ReactActivity() {
+/** ★ `open` for VibeActivity, the class the manifest actually declares (2026-10-05, ICON & ART): the component
+ *  name ".MainActivity" now belongs to the GREEN launcher alias. Every line of the activity still lives here. */
+open class MainActivity : ReactActivity() {
   companion object {
     // Set when the app is launched (or resumed) by plugging in a matching RTL-SDR
     // dongle — the USB_DEVICE_ATTACHED intent declared for this activity. JS reads
@@ -34,6 +36,13 @@ class MainActivity : ReactActivity() {
     super.onNewIntent(intent)
     setIntent(intent)
     noteUsbLaunch(intent)   // warm start (singleTask): picker consumes on next focus
+  }
+
+  /** ★ ICON & ART (2026-10-05): a picked launcher colour is applied when the app LEAVES the screen — never while it
+   *  is on it, never at launch. Disabling the alias the task was started from can close the task. See VibeAppIcon. */
+  override fun onStop() {
+    super.onStop()
+    if (!isChangingConfigurations) VibeAppIcon.applyPending(this)
   }
 
   private fun noteUsbLaunch(intent: Intent?) {

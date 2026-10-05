@@ -47,8 +47,8 @@ export type MotionEffects    = 'on' | 'off';
  *  is never lit from below, and it reads as wrong. */
 export type LightAngle       = 'left' | 'topLeft' | 'top' | 'topRight' | 'right';
 /** ★★ ICON & ART colour (Stuart, 2026-10-04: green drew criticism, and the icon and the Now Playing art were green
- *  only). The illumination presets; `green` is the SHIPPED icon and art, untouched. iOS alternate icons and art
- *  made by assets/brand/colour_icons.py. Device-local like the rest of the faceplate. */
+ *  only). The illumination presets; `green` is the SHIPPED icon and art, untouched. iOS alternate icons, Android launcher
+ *  icons (one alias per colour) and the art made by assets/brand/colour_icons.py. Device-local like the rest of the faceplate. */
 export type IconColour       = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'teal' | 'neon';
 
 export interface FaceplateSettings {
@@ -436,6 +436,9 @@ export const MOTION_NOTE = 'Off · no decorative movement — signal, tuning and
 
 /** The ICON & ART row's subtitle where the icon can change — iOS asks for confirmation every time. */
 export const ICON_NOTE = 'The app icon and the Now Playing art';
+/** ★ Android (2026-10-05): the launcher icon switches when you leave the app, and some launchers re-add it —
+ *  it can move on the home screen. Said up front so a moved icon is not a surprise. */
+export const ICON_NOTE_ANDROID = 'The app icon and the Now Playing art · the icon changes when you leave the app; some launchers move it';
 /** …and where it cannot (the system says so), the row is the art alone. */
 export const ART_ONLY_NOTE = 'The Now Playing art · this device cannot change the app icon';
 

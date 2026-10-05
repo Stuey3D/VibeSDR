@@ -150,6 +150,18 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             instance?.refreshSkipControls()
         }
 
+        /** ★ ICON & ART (2026-10-05): the art base and our VibeServer inlay in the user's colour — artwork_<c> and
+         *  logo_vibeserver_<c> in drawable-nodpi (assets/brand/colour_icons.py); "green" = the shipped
+         *  artwork_base + logo_vibeserver. In the COMPANION for the same reason as skipAllowedGlobal: JS pushes it
+         *  at launch, usually before the service exists. */
+        @Volatile var artColour = "green"
+            private set
+        fun setArtColour(colour: String) {
+            if (artColour == colour) return
+            artColour = colour
+            instance?.let { s -> s.mainHandler.post { s.updateMetadataSession(); s.updateNotification() } }
+        }
+
         // IMA-ADPCM tables (VibeServer compressed-audio decode).
         private val ADPCM_STEP = intArrayOf(
             7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,
@@ -2663,7 +2675,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     // data saver drops the stream. Keyed so it only recomposites on change.
     private var lastArtworkKey = ""
     private fun refreshArtwork() {
-        val key = when {
+        val colour = artColour
+        val key = "$colour|" + when {
             reconnectFailed -> "fail"
             dataSaverDisconnected -> "disc"
             else -> "play-$npArtworkType"
@@ -2671,8 +2684,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         if (key == lastArtworkKey) return
         lastArtworkKey = key
         try {
+            // ★ ICON & ART: the base in the user's colour; green (or a colour with no drawable) is artwork_base.
+            val colourId = if (colour == "green") 0 else resources.getIdentifier("artwork_$colour", "drawable", packageName)
             val base = android.graphics.BitmapFactory.decodeResource(
-                resources, R.drawable.artwork_base) ?: return
+                resources, if (colourId != 0) colourId else R.drawable.artwork_base) ?: return
             val composed = base.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
             val canvas = android.graphics.Canvas(composed)
             val inset = composed.width * 0.30f
@@ -2691,7 +2706,13 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 // the same dark inset, matching its menu card.
                 npArtworkType == "rtltcp" -> drawInsetTintedBitmap(canvas, dst, R.drawable.logo_rtltcp, 0xFFFFB833.toInt())
                 else -> {
-                    val overlayId = resources.getIdentifier("logo_$npArtworkType", "drawable", packageName)
+                    // ★★ OUR mark follows the ICON & ART colour, as on iOS (Stuart, 2026-10-04); every other server
+                    //    type keeps its own logo. Until 2026-10-05 Android had no logo_vibeserver at all, so a
+                    //    VibeServer session showed the bare art — no inlay in any colour.
+                    val colouredId = if (npArtworkType == "vibeserver" && colour != "green")
+                        resources.getIdentifier("logo_vibeserver_$colour", "drawable", packageName) else 0
+                    val overlayId = if (colouredId != 0) colouredId
+                        else resources.getIdentifier("logo_$npArtworkType", "drawable", packageName)
                     if (overlayId != 0) {
                         android.graphics.BitmapFactory.decodeResource(resources, overlayId)?.let {
                             canvas.drawBitmap(it, null, aspectFit(it.width, it.height, dst), null)
