@@ -91,3 +91,45 @@ export function liveStationAfterDab<T extends { badge?: string }>(
   if (!wasOn || nowOn) return cur;
   return cur.badge === 'DAB' ? {} : cur;
 }
+
+/** ★★★ A `dab` REPORT THAT ARRIVES AFTER WE LEFT IS A GHOST (Stuart, 2026-10-05 23:06, iPhone → Pi 2:
+ *  "I pressed the Exit DAB button which took me back to MW … but for some reason after a few seconds the
+ *  DAB decoder box popped up again this time over the MW signal and needed to have exit DAB pressed
+ *  again. It's been a bug for a little while now, it sometimes works normally though.")
+ *  The server reports DAB twice a second from its DSP thread, so a report already on the wire when our
+ *  `dab off` lands — or, on a server before the fix, one sent AFTER its `dab_off` — reaches us out of DAB.
+ *  The report handler reads "a report while we are out" as "somebody put this receiver on a multiplex"
+ *  (right for a shared dial) and opened the box again. Then the box's EXIT, a toggle, saw "not in DAB"
+ *  and ENTERED it: the Pi's journal has "mode ON: channel 13B" ten seconds after the off with no tune,
+ *  no landing and no resume — the last block, because a toggle sends none. That is the "needed to
+ *  press exit again": the first press put him back in.
+ *  ★ So reports are DROPPED from our own `dab off` until the server's `dab_off` (bounded, in case that
+ *    never comes), and for a short tail after it for a server that still sends one late. Our own
+ *    entry ends the quiet at once. Somebody ELSE entering DAB on a shared dial is still seen — the
+ *    reports keep coming twice a second and the first one after the quiet opens the box (the same
+ *    holds for a reconnect inside the quiet: its reports get through once it ends).
+ *  Pure, with the clock passed in, so scripts/test_dab_stepper.ts drives it. */
+export const DAB_EXIT_AWAIT_OFF_MS = 5000;   // our off sent, the server's dab_off not seen yet
+export const DAB_EXIT_TAIL_MS = 1500;        // dab_off seen: stragglers from a server that races
+
+export class DabExitGuard {
+  private quietUntil = 0;
+  /** We sent `dab off`. */
+  left(now: number): void { this.quietUntil = now + DAB_EXIT_AWAIT_OFF_MS; }
+  /** We sent `dab on` (any block) — our own entry is never a ghost. */
+  entered(): void { this.quietUntil = 0; }
+  /** The server said `dab_off`. Only shortens a quiet we started; a server-driven exit opens none. */
+  offConfirmed(now: number): void {
+    if (this.quietUntil > now) this.quietUntil = Math.min(this.quietUntil, now + DAB_EXIT_TAIL_MS);
+  }
+  /** Should a `dab` report arriving now be believed? */
+  accept(now: number): boolean { return now >= this.quietUntil; }
+}
+
+/** ★★★ THE DAB BOX'S EXIT NEVER ENTERS DAB. It was wired to the DAB toggle, and a toggle pressed while
+ *  the app thinks it is out of DAB goes IN — so any box left on screen out of DAB (a ghost report, a
+ *  `dab_off` that did not close it) turned EXIT into ENTER. 'leave' sends `dab off`; 'close' only puts
+ *  the box away (there is nothing to leave). */
+export function dabExitAction(dabOn: boolean): 'leave' | 'close' {
+  return dabOn ? 'leave' : 'close';
+}

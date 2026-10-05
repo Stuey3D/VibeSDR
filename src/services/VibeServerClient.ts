@@ -18,6 +18,7 @@
 import { VibeServerWsClient, LADDERS_FOR } from './VibeServerWsClient';
 import { parseDabMessage, dabSafeText, type DabState } from './dabTypes';
 import { holdNativeHealing } from '../components/AudioPlayer';
+import { DabExitGuard } from './dabStepper';
 
 export {
   MODE_BANDWIDTHS,
@@ -83,10 +84,14 @@ export class VibeServerClient extends VibeServerWsClient {
   private dabSeenChannel: string | null = null;
   private dabSeenSid: number | null = null;
 
+  /** ★★★ Reports that arrive after our own `dab off` are ghosts — see DabExitGuard (dabStepper.ts). */
+  private dabExit = new DabExitGuard();
+
   dab(on: boolean, channel?: number, sid?: number) {
     holdNativeHealing(VibeServerClient.DAB_MUX_HOLD_MS,
       on ? `DAB on${channel !== undefined ? ' block #' + channel : ''}` : 'DAB off');
     if (!on) { this.dabSeenChannel = null; this.dabSeenSid = null; }
+    if (on) this.dabExit.entered(); else this.dabExit.left(Date.now());
     if (on) this.cancelPacedTune();   // ★ a held tune must not land on top of the multiplex (tunePace.ts)
     this.dabHeld = on;
     const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
@@ -110,6 +115,9 @@ export class VibeServerClient extends VibeServerWsClient {
   protected handleServerMessage(msg: Record<string, unknown>): boolean {
     switch (msg.type) {
       case 'dab': {
+        /* ★★★ NOT A REPORT WE ASKED TO STOP. Dropped before it touches anything — dabHeld above all,
+         *  which would lock the dial out on a receiver that is back on MW (DabExitGuard says why). */
+        if (!this.dabExit.accept(Date.now())) return true;
         const st = parseDabMessage(msg);
         /* ★★ A TRANSITION NOBODY HERE ASKED FOR — the server landing on DAB after a connect, or
          *    another listener moving the shared dial. Held on a CHANGE only: `dab` arrives every
@@ -131,6 +139,7 @@ export class VibeServerClient extends VibeServerWsClient {
         return true;
       }
       case 'dab_off':
+        this.dabExit.offConfirmed(Date.now());
         if (this.dabHeld) holdNativeHealing(VibeServerClient.DAB_MUX_HOLD_MS, 'server reports DAB off');
         this.dabHeld = false;
         this.dabSeenChannel = null; this.dabSeenSid = null;

@@ -923,6 +923,23 @@ static void dabTxDbInit() {
  *    hard-coding it — so a Dual Port and a Discovery each get their own honest answer. */
 static std::atomic<uint32_t> g_vsHwMaxRate{0};
 static std::atomic<bool>   g_dabMode{false};
+/* ★★★ NO `dab` REPORT MAY FOLLOW `dab_off` (2026-10-05). The twice-a-second report is built and sent
+ *  on the DSP thread; DAB is ended on a socket thread. Nothing ordered the two, so a report the DSP
+ *  thread had already decided to send could reach the client AFTER `dab_off` — and a client that
+ *  sees a report while it is out of DAB reads it as "somebody put this receiver on a multiplex" and
+ *  opens the box again. Stuart, 2026-10-05 23:06 on the Pi 2: "I pressed the Exit DAB button which
+ *  took me back to MW … after a few seconds the DAB decoder box popped up again … and needed to have
+ *  exit DAB pressed again". The box that came back was a ghost; the app's EXIT on it was a toggle, so
+ *  pressing it ENTERED DAB (journal: "mode ON: channel 13B" 10 s after the off, no tune, no landing,
+ *  no resume line). A slow box makes the window wide, which is why it was the Pi 2 and "sometimes".
+ *  ★ One mutex, held across "is DAB still on?" + the send, and taken to switch DAB off: a report
+ *    then either went out wholly BEFORE the off (and the client's dab_off overtakes it) or not at
+ *    all. Clients drop a stale report too (VibeServerClient / spectrum.ts) — old servers stay racy. */
+static std::mutex          g_dabReportMtx;
+static void dabModeEnd() {
+    std::lock_guard<std::mutex> lk(g_dabReportMtx);
+    g_dabMode.store(false);
+}
 
 /** ★★★ WHAT THE LISTENER IS ACTUALLY ON, WHEN IT IS A MULTIPLEX. The admin page read `mode` — the
  *  DEMODULATOR — and in DAB that is still whatever it was before the mode was entered, so a
@@ -9025,7 +9042,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★ A receiver already on a multiplex tells the client NOW, not at the next half-second
          *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
          *  the second listener on a shared radio got audio and no box). */
-        if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, dabStatusJson());
+        { std::lock_guard<std::mutex> rl(g_dabReportMtx);   // ★ never after a dab_off — see dabModeEnd
+          if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, dabStatusJson()); }
         if (vsSharedDial()) {
             std::lock_guard<std::mutex> lk(clientMtx);
             auto it = sockSession.find(sock.get());
@@ -11646,7 +11664,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  like three separate faults. */
     void dabRestore() {
         if (!g_dabLockHeld.exchange(false)) return;
-        g_dabMode.store(false);
+        dabModeEnd();   // ★ under g_dabReportMtx — see dabModeEnd
         /* ★ Give the audio chain back, and reset it: it has seen no samples for the whole DAB
          *  session, so every recursive state in it (the pilot PLL, de-emphasis, the AGC) is stale
          *  by exactly the length of the gap. requestReset() is the existing way to say that. */
@@ -11875,7 +11893,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double tExit = nowSecs();
         // ★ Hand it back as a departing listener would — and WITHOUT the "off" message's clearing of
         //   the remembered multiplex (that is a person saying no; this is nobody saying anything).
-        g_dabMode.store(false);
+        dabModeEnd();
         dabPrimed_ = false;
         stopDabClock();
         dabRestore();
@@ -12133,7 +12151,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 lastDabJson_ = tnow;
                 std::vector<std::shared_ptr<net::Socket>> socks;
                 { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
-                for (auto& sk : socks) sendText(sk, j);
+                // ★★★ Checked and sent under one lock, so it can never land after dab_off — see dabModeEnd.
+                std::lock_guard<std::mutex> rl(g_dabReportMtx);
+                if (g_dabMode.load(std::memory_order_relaxed))
+                    for (auto& sk : socks) sendText(sk, j);
             }
             if (dabClockRun_.load(std::memory_order_relaxed)) return;
         }
@@ -14107,6 +14128,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  sends it (spectrum.ts dab(): `on: on ? 1 : 0`); this is for everything else. */
             double onV = 0; jsonNum(msg, "on", onV);
             const bool on = onV != 0;
+            /* ★★★ SAY WHO ASKED (2026-10-05). "mode ON: channel 13B" ten seconds after an EXIT, with no
+             *  tune, landing or resume line around it, left a whole evening of candidates — the app's
+             *  toggle, a key burst, a bookmark, the watch, a server resume — because this handler never
+             *  wrote down which socket spoke. Every internal entry (landing, remembered block, quick
+             *  scan) already logs its own reason before calling in; a CLIENT's request is named here,
+             *  with its session and socket kind, so the next ghost entry names its sender. */
+            {
+                std::string asker, kind = sock ? "socket" : "internal";
+                if (sock) {
+                    std::lock_guard<std::mutex> lk(clientMtx);
+                    auto it = sockSession.find(sock.get());
+                    if (it != sockSession.end()) asker = it->second;
+                    for (auto& sk : allSpecClientsLocked()) if (sk.get() == sock.get()) { kind = "spectrum"; break; }
+                    if (kind == "socket") kind = "non-spectrum (audio)";
+                }
+                double chV = -1; const bool hasCh = jsonNum(msg, "channel", chV) || msg.find("\"channel\"") != std::string::npos;
+                LOGI("[DAB] %s asked by %s [%s]%s (DAB is %s)", on ? "ON" : "OFF", kind.c_str(),
+                     asker.empty() ? "?" : asker.c_str(), on ? (hasCh ? " with a block" : " — no block, the last one") : "",
+                     g_dabMode.load(std::memory_order_relaxed) ? "on" : "off");
+            }
             if (!on) {
                 /* ★★★ ON A SHARED RADIO, ONE LISTENER CANNOT END DAB FOR THE OTHERS. Measured on
                  *  the Xcover (2026-09-07, three headless clients): the second listener pressed
@@ -14135,7 +14176,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 g_dabWantChannel.store(-1, std::memory_order_relaxed);
                 g_dabWantSid.store(0, std::memory_order_relaxed);
                 vsPersist("{\"dabChannel\":-1,\"dabSid\":0}");   // ★ and on disk: "no" must outlive the process too
-                g_dabMode.store(false);
+                dabModeEnd();   // ★ no report may follow the dab_off below — see dabModeEnd
                 dabPrimed_ = false;
                 stopDabClock();
                 /* ★★★ GIVE THE SHARED RECEIVER BACK EXACTLY AS WE FOUND IT. Restoring the lock
@@ -14568,7 +14609,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "dab_service") {
             double sid = 0; jsonNum(msg, "sid", sid);
             g_dab.setService(uint32_t(sid));
-            sendText(sock, dabStatusJson());
+            /* ★ Only while DAB is on. Out of DAB this reply is a `dab` report about a multiplex the
+             *  radio is not on, and a client reads that as "the receiver is in DAB" (see dabModeEnd). */
+            if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, dabStatusJson());
             return;
         }
 

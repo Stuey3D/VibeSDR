@@ -824,11 +824,16 @@ export class SpectrumClient {
   private _handleMessage(msg: any) {
     switch (msg.type) {
       case 'dab':
+        // ★★★ A report after our own exit is a ghost — see dabQuietUntil.
+        if (Date.now() < this.dabQuietUntil) return;
         this.cb.onDab?.(msg as unknown as DabState);
         return;
-      case 'dab_off':
+      case 'dab_off': {
+        const now = Date.now();
+        if (this.dabQuietUntil > now) this.dabQuietUntil = Math.min(this.dabQuietUntil, now + 1500);
         this.cb.onDab?.(null as unknown as DabState);
         return;
+      }
       case 'dab_error':
         this.cb.onNotice?.(String(msg.why ?? 'DAB is not available on this receiver'));
         return;
@@ -1580,8 +1585,16 @@ export class SpectrumClient {
    *    at each call site. The multiplex is stepped through dab(), which is the one door left open. */
   dabHeld = false;
 
+  /** ★★★ REPORTS FROM BEFORE OUR EXIT ARE DROPPED (2026-10-05). The server reports DAB twice a second
+   *  from its DSP thread, so one already on the wire when our `dab off` lands — or, on a server without
+   *  dabModeEnd, one sent AFTER its `dab_off` — arrives out of DAB, and onDab reads a report while out as
+   *  "somebody put this receiver on a multiplex" and re-opens the box (Stuart, Pi 2, 23:06: the box
+   *  "popped up again … over the MW signal"). Quiet from our off until the server's dab_off (5 s at
+   *  most) plus a 1.5 s tail; our own entry ends it. The app's DabExitGuard is the same rule. */
+  private dabQuietUntil = 0;
   dab(on: boolean, channel?: number, sid?: number) {
     if (on) this.tunePacer.cancel();   // ★ a held tune must not land on top of the multiplex
+    this.dabQuietUntil = on ? 0 : Date.now() + 5000;
     this.dabHeld = on;
     const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
     if (channel !== undefined) m.channel = channel;

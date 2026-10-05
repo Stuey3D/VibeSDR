@@ -379,6 +379,13 @@ printf '\n\033[1m── DAB landing (end to end) ──\033[0m\n'
 node scripts/test-server-dab-landing.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★★ EXIT DAB STICKS (Stuart, 2026-10-05 23:06, Pi 2: the box "popped up again … over the MW signal"): no
+#     `dab` report after `dab_off` over many cycles, none in reply to a service pick out of DAB, no re-entry,
+#     and the log names who asked. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── DAB exit (end to end) ──\033[0m\n'
+node scripts/test-server-dab-exit.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ SHARE A STATION THROUGH THE REAL SERVER: two listeners on a shared dial; the line the room receives is
 #     named from the receiver's own store, a smuggled label is not relayed, out-of-range / closed-mode shares
 #     are refused with a reason, flood control covers shares. Same VIBESERVER_BIN rule: not run without one.
