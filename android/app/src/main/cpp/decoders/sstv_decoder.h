@@ -72,6 +72,10 @@ public:
     /** Samples stored since reset, and the window's total advance — the restart's coordinates. */
     long long writtenTotal();
     long long consumed();
+    /** Read `n` samples at writtenTotal position `pos`; false if they are no longer (or not yet) held. */
+    bool readAbs(long long pos, int n, int16_t* out);
+    /** Move the window to `keep` samples behind the newest. */
+    void skipToHead(int keep);
 private:
     std::vector<int16_t> buf;
     int size, wptr = 0, writePos = 0, fillPos = 0;
@@ -189,6 +193,30 @@ private:
     const std::vector<float>* level;
 };
 
+// ── Sync-train detector: a picture found without its VIS (2026-10-05, see the .cpp) ────
+class SstvSyncTrain {
+public:
+    explicit SstvSyncTrain(double sampleRate);
+    void reset();
+    /** Feed audio whose first sample sits at `pos0` in the main ring's writtenTotal coordinates.
+     *  True when a mode's sync train is found: `startOut` is where its first line's video begins. */
+    bool feed(const int16_t* x, int n, long long pos0, uint8_t& modeOut, long long& startOut);
+    /** Where the next sample fed is expected (-1 = nothing fed since reset). */
+    long long nextPos() const { return next; }
+    /** Ignore this mode for the first 30 s after a reset (the picture that just ended). 0 = none. */
+    void quiet(int modeIdx) { quietMode = modeIdx; }
+private:
+    int quietMode = 0;
+    bool evaluate(uint8_t& modeOut, long long& startOut);
+    double sampleRate;
+    std::vector<double> win, hist, cs, ss;
+    std::vector<std::vector<double>> cv, sv;
+    std::vector<uint8_t> flags, lvl;
+    std::vector<long long> setIdx;          ///< absolute numbers of the set flags (flags[0] is `dropped`)
+    long long base = -1, next = -1, dropped = 0;
+    int hp = 0, filled = 0, sinceEval = 0, untilFlag = 13;
+};
+
 // ── Top-level decoder ────────────────────────────────────────────────────────
 class SstvDecoder {
 public:
@@ -239,6 +267,11 @@ private:
     uint8_t nextModeIdx = 0;
     int nextShift = 0;
     std::atomic<bool> interrupt{false};
+    SstvSyncTrain train;            ///< process() thread only, while WaitingVIS
+    bool noVisStart = false;
+    bool keepRing = false;                  ///< video thread: the picture was a false VIS
+    std::atomic<bool> keepTrain{false};     ///< …so process() keeps the train's history
+    std::atomic<int> lastMode{0};           ///< the picture that just ended, for SstvSyncTrain::quiet
     int samps10ms;
     bool statusSent = false;
 };

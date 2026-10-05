@@ -216,17 +216,20 @@ static std::vector<int16_t> transmit(const std::vector<Seg>& sc, double ppm, dou
 
 // ── Decode, paced like the harness (pendingSamples) ──────────────────────────────────────────
 struct Pic { int W = 0, H = 0; std::vector<uint8_t> img; bool redrew = false; std::string status; };
+// ★ every decode the decoder began, and every one it dropped as "no picture followed" (a false VIS)
+static int gIgnored = 0, gDecodes = 0; static size_t gFed = 0;
 static std::vector<Pic> decodeAll(const std::vector<int16_t>& pcm) {
+    if (const char* wp = getenv("SSTV_BENCH_WAV")) { FILE* f = fopen(wp, "wb"); uint32_t n = (uint32_t)pcm.size() * 2, r = 12000, br = 24000, c16 = 16, sz = 36 + n; uint16_t one = 1, ba = 2, bits = 16; fwrite("RIFF", 1, 4, f); fwrite(&sz, 4, 1, f); fwrite("WAVEfmt ", 1, 8, f); fwrite(&c16, 4, 1, f); fwrite(&one, 2, 1, f); fwrite(&one, 2, 1, f); fwrite(&r, 4, 1, f); fwrite(&br, 4, 1, f); fwrite(&ba, 2, 1, f); fwrite(&bits, 2, 1, f); fwrite("data", 1, 4, f); fwrite(&n, 4, 1, f); fwrite(pcm.data(), 2, pcm.size(), f); fclose(f); }
     std::vector<Pic> pics; std::mutex mu;
     SstvDecoder dec(FS, true, true);
     dec.onImageStart = [&](int w, int h) { std::lock_guard<std::mutex> l(mu); Pic p; p.W = w; p.H = h; p.img.assign((size_t)w*h*3, 0); pics.push_back(p); };
     dec.onLine = [&](int y, int w, const uint8_t* rgb) { std::lock_guard<std::mutex> l(mu); if (pics.empty()) return; auto& p = pics.back(); if (y >= 0 && y < p.H && w == p.W) std::memcpy(&p.img[(size_t)y*w*3], rgb, (size_t)w*3); };
     dec.onRedrawStart = [&]() { std::lock_guard<std::mutex> l(mu); if (!pics.empty()) pics.back().redrew = true; };
-    dec.onStatus = [&](const std::string& s) { std::lock_guard<std::mutex> l(mu); if (!pics.empty() && s.rfind("Decoding", 0) != 0) { auto& st = pics.back().status; if (!st.empty()) st += " | "; st += s; } };
+    dec.onStatus = [&](const std::string& s) { std::lock_guard<std::mutex> l(mu); if (getenv("SSTV_DBG")) fprintf(stderr, "STATUS @fed %zu %s\n", gFed, s.c_str()); if (s.rfind("ignored", 0) == 0) gIgnored++; if (s.rfind("Decoding", 0) == 0) gDecodes++; if (!pics.empty() && s.rfind("Decoding", 0) != 0) { auto& st = pics.back().status; if (!st.empty()) st += " | "; st += s; } };
     const int B = 120;
     for (size_t i = 0; i < pcm.size(); i += B) {
         while (dec.pendingSamples() > 1500) std::this_thread::yield();
-        dec.process(&pcm[i], (int)std::min<size_t>(B, pcm.size() - i));
+        dec.process(&pcm[i], (int)std::min<size_t>(B, pcm.size() - i)); gFed = i + B;
     }
     std::vector<int16_t> z(B, 0);
     for (int k = 0; k < 300; k++) { while (dec.pendingSamples() > 1500) std::this_thread::yield(); dec.process(z.data(), B); }
@@ -287,7 +290,7 @@ static std::vector<std::string> split(const std::string& s) { std::vector<std::s
 
 int main(int argc, char** argv) {
     std::string imgPath, outDir; std::vector<std::string> modes = {"M1","M2","S1","S2","R36","PD50","PD120"};
-    std::vector<double> snrs = {20, 10, 6, 3, 0}, ppms = {0}; int fade = 0, seeds = 1, abandon = 0, visTrials = 0; double noiseSec = 0, gapSec = 2.0;
+    std::vector<double> snrs = {20, 10, 6, 3, 0}, ppms = {0}; int fade = 0, seeds = 1, abandon = 0, visTrials = 0, noVis = 0; double noiseSec = 0, gapSec = 2.0;
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i]; auto nx = [&]() { return std::string(i + 1 < argc ? argv[++i] : ""); };
         if (a == "--img") imgPath = nx();
@@ -298,6 +301,7 @@ int main(int argc, char** argv) {
         else if (a == "--seeds") seeds = atoi(nx().c_str());
         else if (a == "--out") outDir = nx();
         else if (a == "--vis") visTrials = atoi(nx().c_str());
+        else if (a == "--novis") noVis = 1;
         else if (a == "--noise") noiseSec = atof(nx().c_str());
         else if (a == "--abandon") { abandon = 1; gapSec = atof(nx().c_str()); }
     }
@@ -311,7 +315,7 @@ int main(int argc, char** argv) {
             const auto pics = decodeAll(pcm); starts += (int)pics.size(); total += noiseSec;
             for (auto& p : pics) printf("  noise start: %dx%d  %s\n", p.W, p.H, p.status.c_str());
         }
-        printf("noise: %d picture starts in %.0f s (%.2f / hour)\n", starts, total, starts * 3600.0 / total);
+        printf("noise: %d picture starts in %.0f s (%.2f / hour); %d decodes begun, %d dropped as no picture\n", starts, total, starts * 3600.0 / total, gDecodes, gIgnored);
         return 0;
     }
     Img src; const bool haveImg = !imgPath.empty() && readPpm(imgPath.c_str(), src);
@@ -363,7 +367,9 @@ int main(int argc, char** argv) {
         const ModeDef* d = defOf(m); if (!d) { fprintf(stderr, "unknown mode %s\n", m.c_str()); continue; }
         const Img truth = haveImg ? resized(src, d->W, d->H) : card(d->W, d->H);
         for (double ppm : ppms) for (double snr : snrs) for (int sd = 0; sd < seeds; sd++) {
-            const auto pcm = transmit(schedule(m, truth), ppm, snr, fade != 0, 1234 + sd * 7919 + (unsigned)(snr * 10));
+            auto sched = schedule(m, truth);
+            if (noVis) sched.erase(sched.begin(), sched.begin() + 13);   // ★ the VIS lost (13 segments)
+            const auto pcm = transmit(sched, ppm, snr, fade != 0, 1234 + sd * 7919 + (unsigned)(snr * 10));
             const auto pics = decodeAll(pcm);
             Score s; std::string st = "NO PICTURE";
             if (!pics.empty() && pics[0].W == d->W && pics[0].H == d->H) { s = score(truth, pics[0].img); st = pics[0].status; }

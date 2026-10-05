@@ -62,6 +62,7 @@ static const uint8_t kVisMap[128] = {
 };
 const SstvMode* sstvModeByIndex(uint8_t i) { return i < (sizeof(kModes)/sizeof(kModes[0])) ? &kModes[i] : nullptr; }
 uint8_t sstvModeByVis(uint8_t v) { return v < 128 ? kVisMap[v] : 0; }
+static int sstvIndexOf(const SstvMode* m) { return m ? (int)(m - kModes) : 0; }
 
 // ★ ROUNDED, not truncated (2026-10-04): truncation took half a level off every pixel on average.
 static inline uint8_t clip(double v) { return v < 0 ? 0 : (v > 255 ? 255 : (uint8_t)std::lround(v)); }
@@ -129,6 +130,18 @@ bool SstvBuffer::getWindow(int offset, int length, int16_t* out) {
 void SstvBuffer::advanceWindow(int n) { std::lock_guard<std::mutex> lk(mu); wptr = ((wptr + n) % size + size) % size; advanced += n; }
 long long SstvBuffer::writtenTotal() { std::lock_guard<std::mutex> lk(mu); return total; }
 long long SstvBuffer::consumed() { std::lock_guard<std::mutex> lk(mu); return advanced; }
+bool SstvBuffer::readAbs(long long pos, int n, int16_t* out) {
+    std::lock_guard<std::mutex> lk(mu);
+    if (!primed || pos < total - (long long)size + 4096 || pos + n > total) return false;
+    const long long rel = pos - (512 + advanced);
+    for (int i = 0; i < n; i++) { long long q = (wptr + rel + i) % size; if (q < 0) q += size; out[i] = buf[(size_t)q]; }
+    return true;
+}
+void SstvBuffer::skipToHead(int keep) {
+    std::lock_guard<std::mutex> lk(mu);
+    const int n = availableLocked() - keep;
+    if (n > 0) { wptr = (wptr + n) % size; advanced += n; }
+}
 int  SstvBuffer::windowPtr() { std::lock_guard<std::mutex> lk(mu); return wptr; }
 int  SstvBuffer::available() { std::lock_guard<std::mutex> lk(mu); return availableLocked(); }
 void SstvBuffer::reset() { std::lock_guard<std::mutex> lk(mu); std::fill(buf.begin(), buf.end(), 0); wptr = writePos = fillPos = 0; total = advanced = 0; primed = false; }
@@ -182,7 +195,7 @@ bool SstvVIS::decideByEnergy(uint8_t& modeOut, int& shiftOut, int& startOffMs) {
         std::vector<double> srt(avg); std::nth_element(srt.begin(), srt.begin() + srt.size() / 2, srt.end());
         const double med = std::max(1e-30, srt[srt.size() / 2]);
         double lead = 0; for (int k = pk - 3; k <= pk + 3; k++) if (k >= 0 && k < specN) lead += avg[k];
-        if (lead < 4.0 * 7.0 * med) return cd;                     // ≥ 6 dB over the median tone power
+        if (lead < 8.0 * 7.0 * med) return cd;                     // ≥ 9 dB over the median tone power
         const double a = avg[pk - 1], b = avg[pk], c = avg[pk + 1];
         const double d = (a - 2*b + c) != 0 ? 0.5 * (a - c) / (a - 2*b + c) : 0.0;
         const double shift = (pk + specLo + d) * hz - 1900.0;
@@ -190,18 +203,26 @@ bool SstvVIS::decideByEnergy(uint8_t& modeOut, int& shiftOut, int& startOffMs) {
         auto isTone = [&](double f, int fa, int fb, std::initializer_list<double> rivals) -> double {
             const double e = E(f + shift, fa, fb);
             double r = 0; for (double g : rivals) r = std::max(r, E(g + shift, fa, fb));
-            if (e < 2.0 * noise1 * (fb - fa + 1) || e < 1.5 * r) return -1;
+            if (e < 6.0 * noise1 * (fb - fa + 1) || e < 1.5 * r) return -1;
             return (e - r) / (e + r);
         };
-        const double st = isTone(1200, f0, f0 + 2, {1100, 1300, 1900});
-        const double sp = isTone(1200, f0 + 27, f0 + 29, {1100, 1300, 1900});
+        // ★★ The start and stop bits are 30 ms of 1200 Hz — longer than any sync pulse a picture
+        //    carries (Martin 5, Scottie/Robot 9, PD 20 ms). So each of their three frames must be
+        //    1200-led ON ITS OWN, not only their sum: summed, a Martin M2's sync pulses and black
+        //    porches made a "Scottie S1 VIS" out of picture content (tools/sstv_bench --novis).
+        auto bitOfSync = [&](int fa) -> double {
+            for (int fr = fa; fr <= fa + 2; fr++) if (isTone(1200, fr, fr, {1100, 1300, 1500, 1900}) < 0) return -1;
+            return isTone(1200, fa, fa + 2, {1100, 1300, 1500, 1900});
+        };
+        const double st = bitOfSync(f0);
+        const double sp = bitOfSync(f0 + 27);
         if (st < 0 || sp < 0) return cd;
         uint8_t bits[8]; double margin = st + sp;
         for (int k = 0; k < 8; k++) {
             const int fa = f0 + 3 + 3*k, fb = fa + 2;
             const double e1 = E(1100 + shift, fa, fb), e0 = E(1300 + shift, fa, fb);
             const double hi = std::max(e1, e0), lo = std::min(e1, e0);
-            if (hi < 2.0 * noise1 * 3 || hi < 1.5 * lo) return cd;
+            if (hi < 4.0 * noise1 * 3 || hi < 1.5 * lo || hi < 1.2 * E(1500 + shift, fa, fb)) return cd;
             bits[k] = e1 > e0; margin += (hi - lo) / (hi + lo);
         }
         const uint8_t vis = bits[0]|(bits[1]<<1)|(bits[2]<<2)|(bits[3]<<3)|(bits[4]<<4)|(bits[5]<<5)|(bits[6]<<6);
@@ -521,7 +542,10 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
     //   • The picture is not STARTED on the client until CONFIRM lines have shown that pulse where
     //     the mode puts it. Its lines are held, then sent in one go (about a second on a good signal).
     //   • No confirmation within the first `abortN` lines → it was never a picture: dropped unseen.
-    //   • Once confirmed, at most 15 % of the last `lostN` lines (≥ 8 s) with a pulse → the sender
+    //   • Once confirmed, at most 10 % of the last `lostN` lines (≥ 15 s) with a pulse → the sender
+    //     stopped or faded out: end the picture there. ★ Conservative on purpose: a new VIS is heard
+    //     during a picture anyway (the VIS watch), and at 8 s / 15 % a weak S2 that dipped was cut
+    //     at line 99 and then found again by the sync train as a second, headless picture.
     //     stopped or faded out: end the picture there and listen for the next VIS.
     // The audit's "abort after ~20 lines with no sync". Measured: see the commit table.
     const double P = rate * m->lineTime;                               // samples per sync line
@@ -531,7 +555,7 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
     // Scottie: the starting pulse, then the line's two colours ahead of its own pulse.
     const double syncOff = scottie ? (m->syncTime + 2.0 * m->septrTime + 2.0 * m->pixelTime * m->imgWidth) * rate : 0.0;
     const int abortN = std::max(12, std::min(20, (int)std::ceil(12.0 * sampleRate / P)));
-    const int lostN  = std::max(20, (int)std::ceil(8.0 * sampleRate / P));
+    const int lostN  = std::max(30, (int)std::ceil(15.0 * sampleRate / P));
     const int CONFIRM = 5;
     bool confirmed = !gateOnSync;
     int evalLine = 0, synced = 0;
@@ -597,7 +621,7 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
                 } else if (evalLine >= abortN) { endReason = EndNoSync; return; }
             } else if (gateOnSync && evalLine >= lostN) {
                 int recent = 0; for (int i = evalLine - lostN; i < evalLine; i++) recent += lineSync[i];
-                if (recent <= std::max(1, lostN * 15 / 100)) { endReason = EndSignalLost; return; }
+                if (recent <= std::max(1, lostN / 10)) { endReason = EndSignalLost; return; }
             }
         }
         if (pcm.available() < 1024) {
@@ -959,9 +983,166 @@ void SstvSync::findSync(double& rateOut, int& skipOut, double* confOut) {
     if (confOut) *confOut = (fitted && syncLines > 0) ? std::min(1.0, (double)inliers / syncLines) : 0.0;
 }
 
+
+// ── Sync-train detector (no-VIS start) ───────────────────────────────────────
+// ★★★ A PICTURE WITHOUT ITS VIS (2026-10-05, the audit's "no-VIS start from periodic 1200 Hz
+// sync"). The VIS is 0.6 s at the very start of a 1–10 minute transmission: tune in late, or lose it
+// to one fade, and the whole picture was lost — the ISS's PD-120/PD-180 passes most of all. But
+// every line carries a 1200 Hz pulse at a period that names the mode (M1 446 ms, S2 278 ms, PD-120
+// 508 ms …). This watches for such a train while waiting for a VIS: 1200 Hz flags every 13
+// samples (a 4 ms window — the video's 17-sample one is ~1.4 kHz wide and flags a steady 1460 Hz
+// tone), folded at each mode's line period for clock errors of 0, ±500 and ±1000 ppm. A mode is
+// taken when, over the last 8–12 lines, a pulse-wide box holds ≥ 45 % of its flags, ≥ 70 % of the
+// lines have the pulse, the rest of the line is ≤ 10 % flagged and NO second pulse sits elsewhere
+// in the fold (that is a period twice the true one — R72 folded on Robot 36). The picture's start
+// is then found by walking back, line by line, while the pulse is there: the audio is all still in
+// the ring, so a picture found 6 s in is decoded from its first line.
+namespace {
+const int kTrainModes[] = { M_M1, M_M2, M_S1, M_S2, M_SDX, M_R36, M_R72, M_PD50, M_PD90,
+                            M_PD120, M_PD160, M_PD180, M_PD240, M_PD290 };
+}
+SstvSyncTrain::SstvSyncTrain(double sr) : sampleRate(sr) {
+    const int L = (int)std::lround(0.004 * sr);
+    win.resize(L); for (int i = 0; i < L; i++) win[i] = 0.5 * (1.0 - std::cos(2.0 * M_PI * i / (L - 1)));
+    hist.assign(2 * L, 0);   // written twice, so a window is one contiguous run
+    auto mk = [&](double f, std::vector<double>& c, std::vector<double>& sn) {
+        c.resize(L); sn.resize(L);
+        for (int i = 0; i < L; i++) { c[i] = std::cos(2*M_PI*f*i/sr) * win[i]; sn[i] = std::sin(2*M_PI*f*i/sr) * win[i]; }
+    };
+    mk(1200.0, cs, ss);
+    for (int k = 0; k < 9; k++) { std::vector<double> c, sn; mk(1500.0 + 100.0 * k, c, sn); cv.push_back(c); sv.push_back(sn); }
+}
+void SstvSyncTrain::reset() { flags.clear(); lvl.clear(); setIdx.clear(); dropped = 0; base = -1; hp = 0; filled = 0; sinceEval = 0; untilFlag = 13; next = -1; }
+bool SstvSyncTrain::feed(const int16_t* x, int n, long long pos0, uint8_t& modeOut, long long& startOut) {
+    const int L = (int)win.size();
+    bool found = false;
+    next = pos0 + n;
+    for (int i = 0; i < n; i++) {
+        hist[hp] = hist[hp + L] = x[i] / 32768.0; hp = (hp + 1) % L; if (filled < L) filled++;
+        if (--untilFlag > 0) continue;
+        untilFlag = 13;
+        if (filled < L) continue;
+        auto pw = [&](const std::vector<double>& c, const std::vector<double>& sn) {
+            double re = 0, im = 0;
+            const double* hw = &hist[hp];
+            for (int k = 0; k < L; k++) { re += hw[k] * c[k]; im += hw[k] * sn[k]; }
+            return re*re + im*im;
+        };
+        const double pS = pw(cs, ss);
+        double pR = 0; for (size_t k = 0; k < cv.size(); k++) pR += pw(cv[k], sv[k]); pR /= cv.size();
+        const long long centre = pos0 + i - L / 2;
+        if (base < 0) base = centre;
+        flags.push_back(pS > 4.0 * pR ? 1 : 0);
+        if (flags.back()) setIdx.push_back(dropped + (long long)flags.size() - 1);
+        // the margin too, in quarter-dB (0 = at or below the band) — see the walk back in evaluate
+        lvl.push_back((uint8_t)std::max(0.0, std::min(255.0, 40.0 * std::log10((pS + 1e-30) / (pR + 1e-30)))));
+        // keep ~120 s: enough to walk back to the start of all but the longest modes
+        const size_t cap = (size_t)(120.0 * sampleRate / 13.0);
+        // ★ trimmed in 10 % steps: one flag at a time was a 110 kB memmove per flag once full
+        if (flags.size() > cap + cap / 10) {
+            const size_t drop = flags.size() - cap; flags.erase(flags.begin(), flags.begin() + drop); lvl.erase(lvl.begin(), lvl.begin() + drop);
+            base += (long long)drop * 13; dropped += (long long)drop;
+            setIdx.erase(setIdx.begin(), std::lower_bound(setIdx.begin(), setIdx.end(), dropped));
+        }
+        if (++sinceEval >= 80 && !found) { sinceEval = 0; found = evaluate(modeOut, startOut); }
+    }
+    return found;
+}
+bool SstvSyncTrain::evaluate(uint8_t& modeOut, long long& startOut) {
+    const int nF = (int)flags.size();
+    double bestScore = 0; int bestMode = 0; long long bestStart = 0;
+    const double heard = (double)(dropped + nF) * 13.0 / sampleRate;   // seconds since reset
+    for (int mi : kTrainModes) {
+        // ★ Not the mode of the picture that just ended, for its first 30 s: its tail (or a dip the
+        //   signal-lost test took for the end) must not come back as a second, headless picture.
+        if (mi == quietMode && heard < 30.0) continue;
+        const SstvMode* m = sstvModeByIndex((uint8_t)mi);
+        const double P0 = m->lineTime * sampleRate, w = m->syncTime * sampleRate;
+        const int bw = std::max(2, (int)std::lround(w / 13.0));
+        const int K = std::max(8, std::min(12, (int)(12.0 * sampleRate / P0)));
+        // the newest K lines, ending a pulse + a little before the newest flag
+        const int endF = nF - 1 - (int)((w + 0.02 * sampleRate) / 13.0);
+        for (double ppm : {0.0, 500.0, -500.0, 1000.0, -1000.0}) {
+            const double P = P0 / (1.0 + ppm * 1e-6), Pf = P / 13.0;
+            const int nb = (int)std::ceil(Pf);
+            const int startF = endF - (int)std::ceil(K * Pf);
+            if (startF < 0) continue;
+            std::vector<int> h(nb, 0); int tot = 0;
+            { const int end = startF + (int)(K * Pf);
+              // ★ Fold only the SET flags (~8 % of them on noise): folding every flag was 70 % of
+              //   the decoder's idle CPU (sampled on tools/sstv_bench --noise, 2026-10-05).
+              for (auto it = std::lower_bound(setIdx.begin(), setIdx.end(), dropped + startF); it != setIdx.end() && *it < dropped + end; ++it) {
+                  const double d = (double)(*it - dropped - startF); const double q = d - std::floor(d / Pf) * Pf;
+                  h[std::min(nb - 1, (int)q)]++; tot++;
+              } }
+            int best = 0, phi = 0;
+            { int a = 0; for (int j = 0; j < bw; j++) a += h[j % nb];   // sliding box
+              for (int b = 0; b < nb; b++) { if (a > best) { best = a; phi = b; } a += h[(b + bw) % nb] - h[b]; } }
+            const double fill = (double)best / (K * bw);
+            const double bg = (double)(tot - best) / std::max(1.0, K * (Pf - bw));
+            if (fill < 0.45 || bg > 0.10) continue;
+            // no second pulse elsewhere in the fold
+            int second = 0;
+            for (int b = 0; b < nb; b++) {
+                const int d = std::min((b - phi + nb) % nb, (phi - b + nb) % nb);
+                if (d < 2 * bw) continue;
+                int a = 0; for (int j = 0; j < bw; j++) a += h[(b + j) % nb]; second = std::max(second, a);
+            }
+            if ((double)second / (K * bw) >= 0.3) continue;
+            // per line, and then back along the train to its first line
+            auto pulseAt = [&](double fStart) -> bool {
+                const int f0 = (int)std::lround(fStart);
+                int a = 0, cnt = 0;
+                for (int f = f0 - 1; f < f0 + bw + 1; f++) { if (f < 0 || f >= nF) continue; a += flags[f]; cnt++; }
+                return cnt > 0 && a >= std::max(3, (bw + 1) / 2);   // noise flags ~8 %: 3 of 6 ≈ 1 %
+            };
+            // a pulse's strength: the mean margin of its best pulse-wide run of flags
+            auto strength = [&](double fStart) -> double {
+                const int f0 = (int)std::lround(fStart); double best = 0;
+                for (int a = f0 - 1; a <= f0 + 1; a++) {
+                    double m = 0; int c = 0;
+                    for (int f = a; f < a + bw; f++) if (f >= 0 && f < nF) { m += lvl[f]; c++; }
+                    if (c) best = std::max(best, m / c);
+                }
+                return best;
+            };
+            int ok = 0; std::vector<double> st;
+            for (int k = 0; k < K; k++) if (pulseAt(startF + phi + k * Pf)) { ok++; st.push_back(strength(startF + phi + k * Pf)); }
+            if (ok < 0.7 * K) continue;
+            const double score = fill - bg + 0.2 * ok / K;
+            if (score <= bestScore) continue;
+            // walk back from the NEWEST line while the pulse is there (up to 2 misses in a row) — the
+            // folded window can begin before the picture did, so its own first line proves nothing
+            // ★ …and a pulse back there must be about as strong as this train's own (within 6 dB of
+            //   their median): band noise makes 1200 Hz flags in CLUSTERS of 3–5 (the 4 ms window
+            //   spans four flags), and a walk that took a cluster for a pulse began the picture two
+            //   noise lines early (tools/sstv_bench --novis, M1 at 10 dB).
+            std::nth_element(st.begin(), st.begin() + st.size() / 2, st.end());
+            const double floorLvl = st[st.size() / 2] - 24.0;
+            int first = K - 1, miss = 0;
+            for (int k = K - 1; ; k--) {
+                const double f = startF + phi + k * Pf;
+                if (f < 1) break;
+                if (pulseAt(f) && strength(f) >= floorLvl) { first = k; miss = 0; } else if (++miss > 2) break;
+            }
+            const int syncLines = (m->name[0] == 'P' && m->name[1] == 'D') ? m->numLines / 2 : m->numLines;
+            const int newest = K - 1;
+            if (newest - first + 1 > syncLines) first = newest - syncLines + 1;
+            double pulseStart = base + (startF + phi + first * Pf) * 13.0 - 6.0;   // flag centre → pulse start
+            const std::string nm = m->name;
+            if (nm == "Scottie S1" || nm == "Scottie S2" || nm == "Scottie DX")
+                pulseStart -= (m->syncTime + 2.0 * m->septrTime + 2.0 * m->pixelTime * m->imgWidth) * sampleRate;
+            bestScore = score; bestMode = mi; bestStart = (long long)std::llround(pulseStart);
+        }
+    }
+    if (!bestMode) return false;
+    modeOut = (uint8_t)bestMode; startOut = bestStart;
+    return true;
+}
+
 // ── Top-level decoder ────────────────────────────────────────────────────────
 SstvDecoder::SstvDecoder(double sr, bool autoSync_, bool adaptive_)
-    : sampleRate(sr), autoSync(autoSync_), adaptive(adaptive_), pcm(16384), visWatchPcm(32768, true) {
+    : sampleRate(sr), autoSync(autoSync_), adaptive(adaptive_), pcm(16384), visWatchPcm(32768, true), train(sr) {
     samps10ms = (int)(sr * 10e-3);
     accum.reserve(samps10ms * 2);
 }
@@ -985,11 +1166,45 @@ void SstvDecoder::process(const int16_t* mono, int count) {
 
         if (state.load() == WaitingVIS) {
             // ★ visReset is set BEFORE the video thread stores WaitingVIS, so it is seen here.
-            if (visReset.exchange(false)) { delete vis; vis = nullptr; }
+            if (visReset.exchange(false)) {
+                delete vis; vis = nullptr;
+                if (!keepTrain.exchange(false)) { train.reset(); train.quiet(lastMode.exchange(0)); }
+            }
+            {
+                uint8_t tm = 0; long long at = 0; bool hit = false;
+                const long long pos0 = pcm.writtenTotal() - samps10ms;
+                // ★★ A DROPPED VIS GIVES ITS AUDIO BACK. While a VIS that no picture followed was being
+                //    disproved (12–20 lines), the train was not fed; the audio is still in the ring, so
+                //    feed it now, and a picture that was running underneath — a VIS found in its
+                //    content, the commonest false VIS of all — is found and decoded from its first line.
+                if (train.nextPos() >= 0 && train.nextPos() < pos0) {
+                    int16_t tmp[1200];
+                    for (long long q = train.nextPos(); q < pos0 && !hit; ) {
+                        const int n = (int)std::min<long long>(1200, pos0 - q);
+                        if (!pcm.readAbs(q, n, tmp)) { train.reset(); break; }
+                        hit = train.feed(tmp, n, q, tm, at);
+                        q += n;
+                    }
+                }
+                if (!hit) hit = train.feed(chunk.data(), samps10ms, pos0, tm, at);
+                if (hit) {
+                    // ★ A picture found by its sync train — start it at its first line (see SstvSyncTrain).
+                    mode = sstvModeByIndex(tm); headerShift = 0; noVisStart = true;
+                    pcm.advanceWindow((int)(at - (512 + pcm.consumed())));
+                    train.reset(); delete vis; vis = nullptr;
+                    if (onMode) onMode(tm, mode->name);
+                    watchReset = true;
+                    state.store(Decoding);
+                    abort.store(false);
+                    if (vthread.joinable()) vthread.join();
+                    vthread = std::thread([this]{ videoThread(); });
+                    continue;
+                }
+            }
             if (!vis) { vis = new SstvVIS(sampleRate); vis->onTone = [](double){}; }
             uint8_t modeIdx; int shift;
             if (vis->process(pcm, modeIdx, shift)) {
-                mode = sstvModeByIndex(modeIdx); headerShift = shift;
+                mode = sstvModeByIndex(modeIdx); headerShift = shift; noVisStart = false;
                 if (!mode || mode->unsupported) { if (onStatus) onStatus("Mode not supported"); continue; }
                 if (onMode) onMode(modeIdx, mode->name);
                 // ★ onImageStart is sent by the video thread once the sync train confirms the
@@ -1051,7 +1266,10 @@ void SstvDecoder::videoThread() {
         // Reset for the next image. ★ The state is published LAST, and `vis` is not touched here: it
         // belongs to the process() thread, which is free to use it the moment it sees WaitingVIS
         // (audit 2026-10-03 — this deleted it out from under that thread).
-        pcm.reset();
+        // ★ After a VIS that no picture followed, the audio stays: the window jumps to the head for
+        //   the VIS detector and the sync train is handed what it missed (see process()).
+        if (keepRing) { keepRing = false; pcm.skipToHead(1024); keepTrain.store(true); }
+        else { pcm.reset(); lastMode.store(sstvIndexOf(mode)); }
         visReset.store(true);
         state.store(WaitingVIS);
         return;
@@ -1059,7 +1277,8 @@ void SstvDecoder::videoThread() {
 }
 
 void SstvDecoder::decodePicture() {
-    if (onStatus) onStatus(std::string("Decoding ") + mode->name + "...");
+    if (onStatus) onStatus(std::string("Decoding ") + mode->name + (noVisStart ? " (no VIS \u2014 found by its sync)..." : "..."));
+    noVisStart = false;
     SstvVideo video(mode, sampleRate, headerShift, adaptive);
     auto sender = [this](int y, const uint8_t* rgb) { if (onLine) onLine(y, mode->imgWidth, rgb); };
     video.onConfirmed = [this]() { if (onImageStart) onImageStart(mode->imgWidth, mode->numLines); };
@@ -1068,6 +1287,7 @@ void SstvDecoder::decodePicture() {
     if (video.endReason == SstvVideo::EndNoSync) {
         // ★ Never a picture: nothing was opened on the client, so there is nothing to close.
         if (onStatus) onStatus(std::string("ignored a ") + mode->name + " VIS — no picture followed");
+        keepRing = true;
         return;
     }
     if (onComplete) onComplete();
