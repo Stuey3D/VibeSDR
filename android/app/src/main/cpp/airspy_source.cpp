@@ -8,6 +8,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
+#include <future>
+#include <memory>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 #include "vibe_thread.h"
 
@@ -100,15 +105,30 @@ bool AirspySource::open(int index, double sampleRateHz, double centreHz, int gai
     if (airspy_list_devices(serials.data(), n) < 0) { err = "could not list Airspy devices"; return false; }
     const int rc = airspy_open_sn(&dev_, serials[(size_t)index]);
     if (rc != AIRSPY_SUCCESS || !dev_) { err = std::string("airspy_open_sn: ") + airspy_error_name((airspy_error)rc); dev_ = nullptr; return false; }
+    fdOpened_ = false;   // ★ by serial: reopenable from here, so release/restart may close it
     return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
 }
 
 bool AirspySource::openFd(int fd, double sampleRateHz, double centreHz, int gainTenthDb,
                           std::string& err) {
     close();
-    // ★ libusb takes ownership of the fd (upstream airspy_open_fd → libusb_wrap_sys_device).
-    const int rc = airspy_open_fd(&dev_, fd);
-    if (rc != AIRSPY_SUCCESS || !dev_) { err = std::string("airspy_open_fd: ") + airspy_error_name((airspy_error)rc); dev_ = nullptr; return false; }
+    /* ★★★ OUR OWN dup() OF THE DESCRIPTOR (2026-10-05). This said "libusb takes ownership of the fd"
+     *  and it does not: libusb_wrap_sys_device leaves it to the caller, and libusb_close() leaves it
+     *  open. Wrapping Kotlin's fd directly let the UsbDeviceConnection's close() — a stop, or the
+     *  re-plug recovery replacing a dead connection — pull it from under a live handle. The RTL, HF+
+     *  and HackRF paths all open on a dup for this reason; ours is closed in close(), after the handle. */
+    if (fd < 0) { err = "invalid USB file descriptor"; return false; }
+    const int own = ::dup(fd);
+    if (own < 0) { err = "could not duplicate the Airspy USB descriptor (errno " + std::to_string(errno) + ")"; return false; }
+    const int rc = airspy_open_fd(&dev_, own);
+    if (rc != AIRSPY_SUCCESS || !dev_) {
+        err = std::string("airspy_open_fd: ") + airspy_error_name((airspy_error)rc);
+        dev_ = nullptr;
+        ::close(own);
+        return false;
+    }
+    fd_ = own;
+    fdOpened_ = true;
     return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
 }
 
@@ -175,7 +195,90 @@ bool AirspySource::finishOpen(double sampleRateHz, double centreHz, int gainTent
 void AirspySource::close() {
     stop();
     if (dev_) { airspy_close(dev_); dev_ = nullptr; }
+    // ★ Our dup, and only AFTER the handle that used it is closed — see openFd.
+    if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
     open_ = false;
+}
+
+/** ★★★ CLOSE THE HELD HANDLE ON A 3 s DEADLINE (2026-10-05) — the HF+'s closeHandleOnDeadline. A radio
+ *  whose descriptor has gone can block in airspy_close (it stops the stream and joins libairspy's
+ *  threads, which may be waiting on transfers that will never complete), and the watchdog calling this
+ *  must not be parked with it. Past the deadline the handle is ABANDONED to the worker: never closed
+ *  from here, and its fd (our dup) is closed by the worker only after airspy_close returns, so a stuck
+ *  call never has its descriptor recycled under it. False = timed out. */
+bool AirspySource::closeHandleOnDeadline() {
+    airspy_device* dying = dev_;
+    const int fd = fd_;
+    dev_ = nullptr;
+    streaming_ = false;
+    open_ = false;
+    fd_ = -1;
+    if (!dying) { if (fd >= 0) ::close(fd); return true; }
+    auto done = std::make_shared<std::promise<void>>();
+    auto fut  = done->get_future();
+    std::thread([done, dying, fd]() {
+        airspy_close(dying);          // stops the stream itself first
+        if (fd >= 0) ::close(fd);
+        done->set_value();
+    }).detach();
+    return fut.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+}
+
+/** ★ Is the USB descriptor we opened on still attached? usbfs answers a read with the device
+ *  descriptor while it is, and -ENODEV for ever once it has gone or re-enumerated — the presence test
+ *  the RTL, HF+ and HackRF use. True when there is no fd to ask (a serial-opened radio). */
+bool AirspySource::fdAlive() const {
+    if (fd_ < 0) return !fdOpened_ || dev_ != nullptr;
+    uint8_t d[18];
+    return ::pread(fd_, d, sizeof d, 0) == (ssize_t)sizeof d;
+}
+
+/** ★★★ LET GO OF A DEAD fd-OPENED HANDLE (Android, 2026-10-05). Nothing is sent to it again and the
+ *  kernel can free the old device instance. Every setting, and whether the stream was WANTED, is kept
+ *  for reopenOnFd. Idempotent. */
+void AirspySource::releaseDeadHandle() {
+    if (!dev_ && fd_ < 0) return;
+    if (closeHandleOnDeadline())
+        ASLOG("Airspy: released the dead USB handle — nothing will be sent to it again");
+    else
+        ASLOG("Airspy: closing the dead USB handle TIMED OUT after 3 s — abandoned to its worker");
+}
+
+/** ★★★ ADOPT A FRESH USB DESCRIPTOR AFTER A RE-PLUG (Android, 2026-10-05) — the R2/Mini half of the
+ *  HF+'s reopenOnFd, in the same safe order: the old handle (if any) closed first on the deadline, fd
+ *  after handle; only then the new descriptor, on our own dup.
+ *  ★★ finishOpen() RESETS the gain mode from the single number it is given (the first-open rule), so
+ *     everything the owner chose — mode, both preset positions, the three stages and their AGCs — is
+ *     taken before and put back after. start() then re-states it all on the live stream (applyAll). */
+bool AirspySource::reopenOnFd(int fd, std::string& err) {
+    const double rate   = rateHz_ > 0 ? rateHz_ : 0.0;
+    const double centre = centreHz_;
+    const bool   wanted = wantStreaming_;
+    const int  mode = mode_, gainTenth = gainTenth_, lna = lna_, mixer = mixer_, vga = vga_;
+    const int  p0 = presetTenth_[0], p1 = presetTenth_[1];
+    const bool lnaAgc = lnaAgc_, mixerAgc = mixerAgc_;
+    if (dev_ || fd_ >= 0) {
+        if (!closeHandleOnDeadline()) {
+            err = "the old Airspy handle did not close — not opening a second one on the same radio";
+            ASLOG("Airspy: fresh fd NOT adopted: %s", err.c_str());
+            return false;
+        }
+    }
+    const bool ok = openFd(fd, rate > 0 ? rate : (rates_.empty() ? 3e6 : (double)rates_.front()),
+                           centre, gainTenth, err);
+    // ★ Put back what finishOpen overwrote — on failure too, so the NEXT fresh fd gets it all.
+    mode_ = mode; gainTenth_ = gainTenth; lna_ = lna; mixer_ = mixer; vga_ = vga;
+    presetTenth_[0] = p0; presetTenth_[1] = p1; lnaAgc_ = lnaAgc; mixerAgc_ = mixerAgc;
+    wantStreaming_ = wanted;
+    centreHz_ = centre;
+    if (!ok) { ASLOG("Airspy: opening on the fresh USB fd FAILED: %s", err.c_str()); return false; }
+    if (wanted && !start(err)) {
+        ASLOG("Airspy: fresh USB fd opened but the stream would not start: %s", err.c_str());
+        return false;
+    }
+    ASLOG("Airspy: radio back on a fresh USB fd (%.3f MS/s, %.3f MHz, %s)",
+          rateHz_ / 1e6, centre / 1e6, wanted ? "streaming" : "not streaming");
+    return true;
 }
 
 /** ★★★ EVERY SETTING, RE-STATED, AFTER THE STREAM IS RUNNING.
@@ -222,6 +325,7 @@ bool AirspySource::start(std::string& err) {
     const int rc = airspy_start_rx(dev_, &airspyRxCallback, this);
     if (rc != AIRSPY_SUCCESS) { err = std::string("airspy_start_rx: ") + airspy_error_name((airspy_error)rc); return false; }
     streaming_ = true;
+    wantStreaming_ = true;
     // ★ A fresh clock, so the stall watchdog does not read the time before a restart as silence.
     lastRx_.store(nowSecsMono(), std::memory_order_relaxed);
     // ★★★ AFTER the stream, never before — see applyAll().
@@ -230,13 +334,16 @@ bool AirspySource::start(std::string& err) {
 }
 
 void AirspySource::stop() {
+    wantStreaming_ = false;   // ★ an explicit stop — a dead handle being let go is not one
     if (dev_ && streaming_) airspy_stop_rx(dev_);
     streaming_ = false;
 }
 
 void AirspySource::setFrequency(double hz) {
-    if (!dev_) return;
+    // ★ Remembered FIRST (2026-10-05): a tune that lands while the handle is dead is where the radio
+    //   should come back — see reopenOnFd.
     centreHz_ = hz;
+    if (!dev_) return;
     airspy_set_freq(dev_, (uint32_t)llround(hz));
 }
 
@@ -404,6 +511,9 @@ void AirspySource::setLnaAgc(bool) {}
 void AirspySource::setMixerAgc(bool) {}
 void AirspySource::setBiasTee(bool) {}
 void AirspySource::setPacking(bool) {}
+bool AirspySource::fdAlive() const { return true; }
+void AirspySource::releaseDeadHandle() {}
+bool AirspySource::reopenOnFd(int, std::string& err) { err = "built without Airspy support"; return false; }
 void AirspySource::deliver(const float*, int) {}
 double AirspySource::secondsSinceLastRx() const { return 1e9; }
 } // namespace vibe

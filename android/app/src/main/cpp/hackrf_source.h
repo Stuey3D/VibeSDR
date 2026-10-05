@@ -63,11 +63,26 @@ public:
 
     bool open(int index, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     /** ★ Open from a USB descriptor Android already opened. The ONLY way in on Android, where
-     *  enumeration is forbidden and open() above has no device list to index. libusb takes
-     *  ownership of the fd on success — the caller must NOT close it. */
+     *  enumeration is forbidden and open() above has no device list to index.
+     *  ★★ We open on our OWN dup() of it (2026-10-05) — libusb_wrap_sys_device does NOT take
+     *     ownership, so the caller keeps (and closes) its fd; ours is closed in close(), after
+     *     hackrf_close(). Same rule as AirspyHfSource::openFd(). */
     bool openFd(int fd, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     void close();
     bool isOpen() const { return open_; }
+    /** ★ Did this radio come in by an Android descriptor? Such a radio has no index to reopen by:
+     *  the shim must PARK it rather than release it, and a re-plug needs a fresh fd (reopenOnFd). */
+    bool fdOpened() const { return fdOpened_; }
+
+    /** ★★★ ANDROID RE-PLUG RECOVERY (2026-10-05) — the HackRF half of the shim's usbFdDead/freshUsbFd,
+     *  the same three calls the HF+ has (see AirspyHfSource).
+     *  fdAlive(): is the descriptor we opened on still attached (usbfs read of the device descriptor)?
+     *  releaseDeadHandle(): stop + close the dead handle and our fd, on a deadline; settings kept.
+     *  reopenOnFd(): close whatever is left, open on a FRESH descriptor (our own dup — the caller keeps
+     *  `fd`), put back rate, tuning and the four stages, restart a wanted stream. */
+    bool fdAlive() const;
+    void releaseDeadHandle();
+    bool reopenOnFd(int fd, std::string& err);
 
     void setSink(IqSink sink) { sink_ = std::move(sink); }
     bool start(std::string& err);
@@ -122,11 +137,16 @@ public:
 private:
     /** Everything after the handle exists — shared by open() and openFd(). */
     bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
+    /** Stop + close the held handle on a 3 s deadline, our fd after it. False = timed out. */
+    bool closeHandleOnDeadline();
 
     struct Impl;
     Impl*   impl_ = nullptr;
     IqSink  sink_;
     bool    open_  = false;
+    int     fd_    = -1;          // our dup of the Android USB descriptor; -1 = none (see openFd)
+    bool    fdOpened_ = false;
+    bool    wantStreaming_ = false; // start() sets, stop() clears — survives a dead handle (reopenOnFd)
     /* ★★★ EVERY STAGE STARTS AT ZERO, AND THE RF AMP AND BIAS-T START OFF. THIS IS A HARDWARE
      *     SAFETY DEFAULT, NOT A TASTE ONE. Stuart: "the hackrf MUST DEFAULT TO 0 GAIN AND PREAMP,
      *     those things have a bad habit of blowing up their preamps." A HackRF has no AGC and no
