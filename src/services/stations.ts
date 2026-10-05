@@ -1,5 +1,6 @@
 import { cleanText, cleanMode } from '../utils/safeText';
 import { withReadAuth } from './vibeAuth';
+import { receiverPlaceLine } from './grid';
 /**
  * stations.ts — VTS station/bookmark engine + search (skin parity).
  *
@@ -166,11 +167,8 @@ export async function fetchReceiverInfo(baseUrl: string, readAuth = ''): Promise
       { name?: string; label?: string; country?: string; grid?: string; lat?: number; lon?: number };
     const name = (j?.name ?? '').trim();
     const place = (j?.label ?? '').trim() || (j?.country ?? '').trim();
-    const coords = (typeof j?.lat === 'number' && typeof j?.lon === 'number')
-      ? `${j.lat.toFixed(2)}, ${j.lon.toFixed(2)}` : '';
-    const grid = (j?.grid ?? '').trim();
-    const location = [place || coords, place && coords ? coords : '', grid]
-      .filter(Boolean).join(' · ');
+    // ★ The one badge format, shared with Kiwi and OpenWebRX (grid.ts receiverPlaceLine, 2026-10-05).
+    const location = receiverPlaceLine(place, j?.lat, j?.lon, j?.grid);
     if (!name && !location) return null;
     return { name, location };
   } catch {

@@ -136,6 +136,36 @@ for (const bad of ['Z__C GB98', 'ZC C GB98', 'ZCZC ____', 'ZCZC _ _9', 'ZCZE GB9
   ok(navtexLostPct(a.live!) === 18, 'lost % = 2 of 11: ' + navtexLostPct(a.live!));
 }
 
+// 9b. The server's own FEC count (VibeServer op 0x07, 2026-10-05), sent behind the text with its NNNN.
+{
+  const a = new NavtexAssembler();
+  feed(a, 'ZCZC GB98\r\r\nGA_E WARNING\r\r\nNNNN\r\r\n', 4);
+  ok(navtexTitle(a.live!) === 'Station G · Met warning · #98', 'no count yet: the plain title');
+  const v = a.version;
+  ok(a.setFec({ clean: 14, repaired: 2, lost: 1 }) && a.version > v, 'the count attaches to the message NNNN closed');
+  ok(navtexTitle(a.live!) === 'Station G · Met warning · #98 · 2 repaired · 1 lost', 'title: ' + navtexTitle(a.live!));
+  ok(navtexLostPct(a.live!) === null, 'and the _-derived % steps aside (one answer, not two)');
+  ok(navtexFileText(a.live!).startsWith('NAVTEX · Station G · Met warning · #98 · 2 repaired · 1 lost\nReceived '),
+     'the saved file carries it: ' + JSON.stringify(navtexFileText(a.live!).split('\n').slice(0, 2)));
+  ok(!a.setFec({ clean: 1, repaired: 0, lost: 0 }), 'never twice for one message');
+  // The next message arrives: the count is its own, and PREV keeps the old one.
+  feed(a, 'ZCZC GA01\r\r\nNO MESSAGES\r\r\nNNNN\r\r\n', 5, T0 + 600_000);
+  ok(a.setFec({ clean: 20, repaired: 0, lost: 0 }), 'a second message takes a second count');
+  ok(navtexTitle(a.live!) === 'Station G · Nav warning · #01 · no errors', 'all clean says so: ' + navtexTitle(a.live!));
+  ok(navtexTitle(a.prev!).endsWith('2 repaired · 1 lost'), 'PREV keeps its own count');
+}
+{
+  // A message closed "[end lost]" (no NNNN) is not the server's message: no count lands on it.
+  const a = new NavtexAssembler();
+  feed(a, 'ZCZC GB98\r\r\nGALE\r\r\nZCZC GB99\r\r\nX', 4);
+  ok(a.prev?.endLost === true && !a.setFec({ clean: 5, repaired: 0, lost: 0 }), 'no count on an [end lost] message');
+  // Nor on a "[start lost]" fragment: the server counted from a boundary this box never saw.
+  const b = new NavtexAssembler();
+  feed(b, 'VIKING NORTH UTSIRE SOUTHWEST 7 TO SEVERE GALE 9\r\r\nNNNN\r\r\n', 4);
+  ok(b.live?.startLost === true && !b.setFec({ clean: 5, repaired: 0, lost: 0 }), 'no count on a [start lost] fragment');
+  ok(!new NavtexAssembler().setFec({ clean: 1, repaired: 0, lost: 0 }), 'nothing to attach to: ignored');
+}
+
 // 10. reset() clears everything (CLR / reopen).
 {
   const a = new NavtexAssembler();

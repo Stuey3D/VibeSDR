@@ -283,8 +283,10 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
     implementation("androidx.media:media:1.7.0")
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("androidx.media3:media3-session:1.4.1")
+    // ★ 2026-10-05: media3-exoplayer / media3-session 1.4.1 removed. Nothing in this app imports
+    //   androidx.media3 — VibeStreamService's lock-screen session is androidx.media (above) — and
+    //   expo-audio brings its own media3 at the version IT was built against. A second, older pin
+    //   here was dead weight at best and a version clash with expo-audio's at worst.
     // Android Auto connection state (PROJECTION/NATIVE) for car-only band-aware tuning
     implementation("androidx.car.app:app:1.4.0")
 

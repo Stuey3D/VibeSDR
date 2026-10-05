@@ -123,6 +123,9 @@ public:
      *  is the finished one, frozen at its NNNN. */
     struct Counts { unsigned long clean = 0, repaired = 0, failed = 0; };
     Counts total, message, lastMessage;
+    /** ★ Fired once per NNNN, AFTER its last 'N' has gone to onChar, with lastMessage (2026-10-05) — the host sends it
+     *  to the message box behind the text, so the title can say "2 repaired · 1 lost" from the FEC, not from '_'s. */
+    std::function<void(const Counts&)> onMessageEnd;
 
     unsigned long resyncs() const { return resyncs_; }
     double audioLevel() const { return audioAverage_; }

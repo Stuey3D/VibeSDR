@@ -27,6 +27,28 @@ export function latLonToGrid(lat: number, lon: number): string {
   return `${A[f1]}${A[f2]}${s1}${s2}${a[u1]}${a[u2]}`;
 }
 
+/**
+ * The receiver badge's second line — "Northampton · 52.31, -0.88 · IO92nh" — one format for every server type
+ * (2026-10-05). VibeServer's /location, a Kiwi's /status (loc= + gps=) and OpenWebRX's /status.json
+ * (receiver.location + receiver.gps) all carry a place and a position; the badge used to show the position only for
+ * VibeServer. The grid is derived from the position when the server does not state one.
+ * ★ (0, 0) is "not set", not the Gulf of Guinea — a Kiwi with no GPS fix and no admin position reports exactly that.
+ * ★ The place is shown once: a Kiwi admin often types the locator or the coordinates into loc= themselves.
+ */
+export function receiverPlaceLine(place?: string | null, lat?: number | null, lon?: number | null,
+                                  grid?: string | null): string {
+  const p = (place ?? '').trim();
+  const hasPos = typeof lat === 'number' && typeof lon === 'number' && Number.isFinite(lat) && Number.isFinite(lon)
+    && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0);
+  const coords = hasPos ? `${lat!.toFixed(2)}, ${lon!.toFixed(2)}` : '';
+  // ★ A place that IS a locator already says it — a second, derived one would only disagree in the subsquare.
+  const placeIsGrid = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/i.test(p);
+  const g = placeIsGrid ? '' : (grid ?? '').trim() || (hasPos ? latLonToGrid(lat!, lon!) : '');
+  const inPlace = (s: string) => !!s && p.toUpperCase().includes(s.toUpperCase());
+  return [p || coords, p && coords && !inPlace(coords) ? coords : '', g && !inPlace(g) && g !== (p || coords) ? g : '']
+    .filter(Boolean).join(' · ');
+}
+
 /** Decode a 4- or 6-char Maidenhead locator to the centre of its square.
  *  Returns null for anything that isn't a valid locator. */
 export function gridToLatLon(grid?: string | null): { lat: number; lon: number } | null {

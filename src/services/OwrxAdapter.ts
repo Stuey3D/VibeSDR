@@ -34,6 +34,7 @@ const Vibe = NativeModules.VibePowerModule as {
 
 import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
 import { cleanText } from '../utils/safeText';
+import { receiverPlaceLine } from './grid';
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';   // for the decoder below
 
 /** Longest common leading substring across the strings (for deriving an SDR's
@@ -277,7 +278,9 @@ export class OwrxAdapter implements SDRBackend {
       if (!this.identSent) {
         const rn = typeof j?.receiver?.name === 'string' ? j.receiver.name.trim() : '';
         const rl = typeof j?.receiver?.location === 'string' ? j.receiver.location.trim() : '';
-        if (rn) { this.identSent = true; this.cb.onReceiverIdent?.({ name: rn, location: rl || undefined }); }
+        // ★ Place · coordinates · locator, as a VibeServer's badge reads (2026-10-05) — receiver.gps, same poll.
+        const line = receiverPlaceLine(rl, j?.receiver?.gps?.lat, j?.receiver?.gps?.lon);
+        if (rn) { this.identSent = true; this.cb.onReceiverIdent?.({ name: rn, location: line || undefined }); }
       }
       // Keep the full position: ADS-B sends aircraft POSITIONS, not distances, so
       // the range from the receiver has to be computed here.

@@ -279,7 +279,7 @@ public:
         clearLocked_();
         startKey_.clear(); name_.clear();
         if (textSlot_ >= 0) { if (env_.slots) env_.slots->release(textSlot_); textSlot_ = -1; }
-        { std::lock_guard<std::mutex> bl(textMtx_); textBuf_.clear(); morse_.clear(); }
+        { std::lock_guard<std::mutex> bl(textMtx_); textBuf_.clear(); morse_.clear(); nvCounts_.clear(); }
     }
     /** FT8 + FT4 spots — a second, independent slot. Idempotent. */
     Start startSpots() {
@@ -610,6 +610,17 @@ private:
                 else if (ch < 0x800) { textBuf_.push_back((char)(0xC0 | (ch >> 6))); textBuf_.push_back((char)(0x80 | (ch & 0x3F))); }
             };
             fsk_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+            /* ★★ NAVTEX: THE FEC'S OWN COUNT OF EACH MESSAGE (2026-10-05) — clean / repaired / lost, sent as op 0x07
+             *  BEHIND the text that carries its NNNN (queued here, sent after the text frame in decode_), so the box
+             *  attaches it to the message it just closed. Clients older than this ignore an op they do not know
+             *  (DecoderClient / decoders.ts only act on 0x01/0x03/0x06) and keep deriving "% lost" from the '_'s —
+             *  which cannot see a REPAIRED character at all: it prints like a clean one. */
+            if (NavtexRx* nr = fsk_->navtex()) {
+                nr->onMessageEnd = [this](const NavtexRx::Counts& c) {
+                    std::lock_guard<std::mutex> bl(textMtx_);
+                    if (nvCounts_.size() < 8) nvCounts_.push_back(c);
+                };
+            }
             char b[160];
             std::snprintf(b, sizeof b, "decoder attached: fsk cf=%.0f shift=%.0f baud=%.2f enc=%s", cf, sh, baud, enc.c_str());
             log(b);
@@ -766,6 +777,7 @@ private:
     }
     void decode_(const float* data, int count) {
         std::string text;
+        std::vector<NavtexRx::Counts> counts;
         {
             std::lock_guard<std::mutex> lk(decMtx_);
             if (!running_()) return;
@@ -794,9 +806,20 @@ private:
             if (time_) time_->process(mono.data(), count);
             else if (fsk_) fsk_->process(mono.data(), count);
             else if (rttyAuto_) rttyAuto_->process(mono.data(), count);
-            { std::lock_guard<std::mutex> bl(textMtx_); text.swap(textBuf_); }
+            { std::lock_guard<std::mutex> bl(textMtx_); text.swap(textBuf_); counts.swap(nvCounts_); }
         }
         if (!text.empty()) textFrame(text);
+        // ★ 0x07 | u32 BE clean | u32 BE repaired | u32 BE lost — after the text, never before it (see fsk attach).
+        for (const auto& c : counts) {
+            uint8_t m[13]; m[0] = 0x07;
+            const unsigned long v[3] = { c.clean, c.repaired, c.failed };
+            for (int k = 0; k < 3; k++) {
+                const uint32_t x = (uint32_t)std::min<unsigned long>(v[k], 0xffffffffUL);
+                m[1 + 4 * k] = (uint8_t)(x >> 24); m[2 + 4 * k] = (uint8_t)(x >> 16);
+                m[3 + 4 * k] = (uint8_t)(x >> 8);  m[4 + 4 * k] = (uint8_t)x;
+            }
+            broadcast(m, sizeof m);
+        }
     }
     void spots_(const float* data, int count) {
         std::lock_guard<std::mutex> lk(spotsMtx_);
@@ -834,6 +857,7 @@ private:
     std::atomic<int>  imageKind_{0};          // 0 none · 1 WEFAX · 2 SSTV — what record() keeps
     std::mutex textMtx_;
     std::string textBuf_, morse_;
+    std::vector<NavtexRx::Counts> nvCounts_;   // ★ NAVTEX per-message FEC counts, sent after the text (0x07)
     std::mutex sstvSendMtx_;
 
     std::mutex spotsMtx_;
