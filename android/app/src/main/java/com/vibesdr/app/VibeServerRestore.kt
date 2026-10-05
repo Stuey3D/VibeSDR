@@ -314,7 +314,7 @@ object VibeServerRestore {
             conn.close()
             return "native startSpectrum failed"
         }
-        heldConn = conn      // the shim owns this fd; it must not be collected
+        holdServerConn(conn, dev)   // the shim works on its own dup; this must not be collected
         noteRadioBack(ctx)   // ★ whatever gap there was, the server has its radio again
 
         // Hand back the identity + station list JS would normally have published.
@@ -336,8 +336,25 @@ object VibeServerRestore {
      *  connection is not collected, and so a DEAD one can be closed when a fresh one replaces it. */
     @Volatile private var heldConn: android.hardware.usb.UsbDeviceConnection? = null
 
-    /** The app's start path hands its connection here, so the recovery below can let go of it. */
-    fun holdServerConn(conn: android.hardware.usb.UsbDeviceConnection?) { heldConn = conn }
+    /** ★★ WHICH RADIO THE SERVER IS RUNNING, as (vid shl 16) or pid; -1 = not known (2026-10-05). The
+     *  re-enumeration recovery below looked only for a DONGLE (isRtlSdr), so a re-plugged Airspy HF+ was
+     *  never found and never handed back (Nick's Pixel 6). It now looks for the radio the server was
+     *  actually started with — which also keeps it from handing a server some OTHER radio on the hub. */
+    @Volatile private var heldVidPid: Int = -1
+
+    /** The app's start path hands its connection here, so the recovery below can let go of it.
+     *  ★ Pass the device too, so the recovery knows which radio to look for. */
+    fun holdServerConn(conn: android.hardware.usb.UsbDeviceConnection?, dev: UsbDevice? = null) {
+        heldConn = conn
+        heldVidPid = if (conn != null && dev != null) (dev.vendorId shl 16) or dev.productId else -1
+    }
+
+    /** ★ Is `dev` the radio this server runs? Falls back to "any dongle" — the old rule — when the start
+     *  path did not say, so nothing that worked before stops working. */
+    private fun isServedRadio(dev: UsbDevice): Boolean {
+        val want = heldVidPid
+        return if (want >= 0) ((dev.vendorId shl 16) or dev.productId) == want else isRtlSdr(dev)
+    }
 
     /** A deliberate stop: close whatever connection the server was last given. Safe to call twice —
      *  the start path may close the same object itself. */
@@ -378,17 +395,21 @@ object VibeServerRestore {
         }
         noteRadioGone(ctx, "the engine's USB handle died")
         if (radioGoneTooLong(ctx)) return RADIO_GONE_TOO_LONG
-        val dev = mgr.deviceList.values.firstOrNull { isRtlSdr(it) } ?: return "waiting for the dongle to come back"
-        if (!mgr.hasPermission(dev)) return "waiting for USB permission for the dongle"
+        // ★ The radio the server was STARTED with (heldVidPid) — a dongle or, since 2026-10-05, an HF+.
+        val dev = mgr.deviceList.values.firstOrNull { isServedRadio(it) } ?: return "waiting for the radio to come back"
+        if (!mgr.hasPermission(dev)) return "waiting for USB permission for the radio"
         val conn = mgr.openDevice(dev) ?: return "openDevice returned null"
         if (conn.fileDescriptor < 0 || !VibeLocalSDR.adoptFreshUsbFd(conn.fileDescriptor)) {
             conn.close()
             return "the engine did not take the fresh handle"
         }
+        // ★ The engine took its OWN dup of the new fd, and closes the old handle + its own old dup
+        //   itself (after the library is done with them) — so closing the old connection here is safe.
         val old = heldConn
         heldConn = conn
         try { old?.close() } catch (t: Throwable) { Log.w(TAG, "closing the dead USB connection: ${t.message}") }
-        Log.i(TAG, "dongle handed back to the engine on a fresh USB handle (${dev.deviceName})")
+        Log.i(TAG, "radio handed back to the engine on a fresh USB handle (${dev.deviceName}, " +
+                   "%04x:%04x)".format(dev.vendorId, dev.productId))
         noteRadioBack(ctx)
         return "handed back"
     }

@@ -771,7 +771,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         if (fd < 0) { conn.close(); promise.reject("bad_fd", "Invalid file descriptor"); return }
         sessionConn = conn
         // ★ Shared with the re-enumeration recovery, which closes it when it has to replace it.
-        VibeServerRestore.holdServerConn(conn)
+        VibeServerRestore.holdServerConn(conn, dev)   // ★ and which radio — see heldVidPid
 
         // ★★★ THE CONFIG TRAVELS WHOLE. Every setting is read and applied by VibeServerBoot, which
         //     the CRASH-RESTORE path also uses — see that file for why there is no longer a second,

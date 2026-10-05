@@ -155,6 +155,15 @@ public:
      *  pretend. */
     bool restartStream(bool deep, std::string& err);
 
+    /** ★★★ ANDROID RE-PLUG RECOVERY (2026-10-05) — the HF+ half of the shim's usbFdDead/freshUsbFd.
+     *  fdAlive(): is the descriptor we opened on still attached (usbfs read of the device descriptor)?
+     *  releaseDeadHandle(): stop + close the dead handle and our fd, on a deadline; settings kept.
+     *  reopenOnFd(): close whatever is left, open on a FRESH descriptor from UsbManager (our own dup —
+     *  the caller keeps its fd), re-apply rate/tuning/gain/threshold/preamp, restart a wanted stream. */
+    bool fdAlive() const;
+    void releaseDeadHandle();
+    bool reopenOnFd(int fd, std::string& err);
+
     /** ★★★ SAMPLES libairspyhf THREW AWAY BEFORE THEY REACHED US. The library parks each USB buffer
      *  in a small ring for its own consumer thread; when that thread is late and the ring is full,
      *  the next buffer is DROPPED and the count rides on the following transfer as
@@ -180,6 +189,7 @@ private:
     /** Stop + start on the held handle, on a deadline. Caller holds impl_->mtx. See the .cpp. */
     bool restartOnHandle(std::string& err);
     void abandonHandle();
+    bool closeHandleOnDeadline();
     struct Impl;
     Impl* impl_ = nullptr;
     IqSink sink_;
@@ -188,6 +198,7 @@ private:
     uint32_t hwRate_ = 0;        // the rate THIS handle is programmed at; 0 = none yet (setSampleRate)
     int  fd_ = -1;             // our dup of the Android USB descriptor; -1 = none (see openFd)
     bool fdOpened_ = false;
+    bool wantStreaming_ = false; // start() sets, stop() clears — survives a dead handle (reopenOnFd)
     bool agc_ = true, agcHigh_ = false, lna_ = false;
     int  att_ = 0;
     // ★ WHAT WE WERE LAST ASKED FOR — kept solely so restartStream(deep) can put the radio

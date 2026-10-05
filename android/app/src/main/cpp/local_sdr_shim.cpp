@@ -23746,6 +23746,57 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // up with nobody having to touch anything.
                 // ★ And do not "recover" a radio we have deliberately lent out: reopening it would
                 //   take it back from the program we just handed it to.
+#ifdef __ANDROID__
+                /* ★★★ AN fd-OPENED HF+ THAT WAS UNPLUGGED NEEDS A NEW fd, NOT ANOTHER RESTART (2026-10-05).
+                 *     Nick's Pixel 6: after an overnight crash the HF+ "couldn't be found" until it was
+                 *     unplugged and re-plugged — and a running server never took it back even then,
+                 *     because this path only ever retried stop/start on the descriptor it had, which usbfs
+                 *     binds to the OLD device instance (-ENODEV for ever). The RTL path learned this on
+                 *     the Sony (see usbFdDead); this is the same three steps for the HF+:
+                 *       1. silent, and the fd no longer reads the device descriptor -> usbFdDead, and the
+                 *          dead handle is RELEASED (closed on a deadline, never reused);
+                 *       2. Kotlin's recoverUsbIfNeeded sees usbNeedsFreshFd(), opens the HF+ afresh
+                 *          through UsbManager and hands it in (adoptFreshUsbFd -> freshUsbFd, our dup);
+                 *       3. here, OUTSIDE the restart back-off so it is taken on the next tick: reopen on
+                 *          it and re-state everything the owner set.
+                 *  ★ devMtx then modeMtx, the documented order, as every other close/reopen of a radio
+                 *    here takes them — the control setters reach the HF+ under modeMtx. */
+                if (useAirspyHf() && ahf && ahf->fdOpened() && !radioReleased.load()) {
+                    if (silent && !usbFdDead.load() && !ahf->fdAlive()) {
+                        usbFdDead.store(true);
+                        LOGE("Airspy HF+: our USB handle is dead (errno %d) — the radio has gone or re-enumerated. "
+                             "Releasing it; waiting for Android to hand the HF+ back on a fresh USB fd", errno);
+                        { std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                          std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+                          ahf->releaseDeadHandle(); }
+                        if (!deviceLost.exchange(true)) { captureDown.store(true); notifyDeviceState(); }
+                    }
+                    if (usbFdDead.load()) {
+                        if (const int fresh = freshUsbFd.exchange(-1); fresh >= 0) {
+                            std::string ferr;
+                            bool fok;
+                            { std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                              std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+                              fok = ahf->reopenOnFd(fresh, ferr);
+                              // ★ The owner's attenuator / AGC / calibration — what finishOpen cannot know.
+                              if (fok) LocalSdrShim::applyDesiredDsp(this); }
+                            ::close(fresh);   // ★ reopenOnFd took its own dup; this one was ours to close
+                            if (fok) {
+                                usbFdDead.store(false);
+                                lastIqAt.store(nowSecs(), std::memory_order_relaxed);
+                                srcRestarts = 0;
+                                deviceLost.store(false);
+                                captureDown.store(false);
+                                LOGI("Airspy HF+: back on the fresh USB fd Android handed over — capture resumed");
+                                notifyDeviceState();
+                                continue;
+                            }
+                            // ★ Still dead: usbNeedsFreshFd() goes true again and Kotlin offers another.
+                            LOGE("Airspy HF+: the fresh USB fd did not open (%s) — waiting for another", ferr.c_str());
+                        }
+                    }
+                }
+#endif
                 const bool recoverable = silent && !captureIdle.load() && !radioReleased.load() &&
                                          ((useSdrplay() && sdrp) || (useAirspyHf() && ahf)
                                           // ★ A HackRF stall is recoverable in place too — it has
@@ -23869,10 +23920,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             // case where a nudged USB plug left the device enumerated (LEDs still
                             // lit) but the handle dead.
                             const bool deep = srcRestarts > 2;
-                            LOGE("no IQ for 3s on an Airspy HF+ — %s (attempt %d)",
-                                 deep ? "reopening the device" : "restarting the stream",
-                                 srcRestarts);
-                            ok = ahf->restartStream(deep, rerr);
+                            if (usbFdDead.load()) {
+                                // ★ Nothing to restart — the handle is gone (see the re-plug block above).
+                                //   Said on every back-off tick so the log shows the wait, not a silence.
+                                rerr = "the Airspy HF+'s USB handle is dead — waiting for Android to hand it back "
+                                       "on a fresh fd (unplug and re-plug it if this persists)";
+                            } else {
+                                LOGE("no IQ for 3s on an Airspy HF+ — %s (attempt %d)",
+                                     deep ? "reopening the device" : "restarting the stream",
+                                     srcRestarts);
+                                ok = ahf->restartStream(deep, rerr);
+                            }
                         }
                         if (ok) {
                             // Give it a fresh clock, or the next tick sees the OLD timestamp
@@ -23968,7 +24026,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ EVERY DRIVER ASKS ITS OWN LIBRARY. findOurDevice() is librtlsdr, so leaving a
                 //   HackRF to the final branch would have it probing for a dongle that is not
                 //   there and concluding the radio is gone for ever.
-                const bool back = useAirspyHf() ? (ahf  ? true : vibe::AirspyHfSource::deviceCount() > 0)
+                // ★ An fd-opened HF+ whose descriptor is dead is NOT back, whatever the object says —
+                //   see the re-plug block above (usbFdDead is only ever set for an fd radio).
+                const bool back = useAirspyHf() ? (ahf  ? !usbFdDead.load() : vibe::AirspyHfSource::deviceCount() > 0)
                                 : useSdrplay()  ? (sdrp ? true : vibe::SdrplaySource::deviceCount() > 0)
                                 : useHackRf()   ? (hrf  ? true : vibe::HackRfSource::deviceCount() > 0)
                                 // ★ And the R2 / Mini — left to findOurDevice() (librtlsdr), a
@@ -28638,11 +28698,14 @@ bool LocalSdrShim::adoptFreshUsbFd(int fd) {
 #ifdef __ANDROID__
     if (!p || fd < 0) return false;
     // ★ Only when asked: swapping a LIVE handle under a running stream is how a working radio dies.
-    if (!p->usbFdDead.load()) { LOGI("RTL-SDR: a fresh USB handle was offered but ours is alive — not taken"); return false; }
+    // ★ Named per radio (2026-10-05): the HF+ comes back through this door too now, and a log that
+    //   says "RTL-SDR" about an Airspy sends whoever reads Nick's Diagnostics after the wrong radio.
+    const char* who = p->useAirspyHf() ? "Airspy HF+" : "RTL-SDR";
+    if (!p->usbFdDead.load()) { LOGI("%s: a fresh USB handle was offered but ours is alive — not taken", who); return false; }
     const int d = ::dup(fd);
-    if (d < 0) { LOGE("RTL-SDR: dup() of the fresh USB handle failed (errno %d)", errno); return false; }
+    if (d < 0) { LOGE("%s: dup() of the fresh USB handle failed (errno %d)", who, errno); return false; }
     if (const int old = p->freshUsbFd.exchange(d); old >= 0) ::close(old);
-    LOGI("RTL-SDR: Android handed the dongle back on a fresh USB handle — the watchdog will reopen on it");
+    LOGI("%s: Android handed the radio back on a fresh USB handle — the watchdog will reopen on it", who);
     return true;
 #else
     (void)fd;

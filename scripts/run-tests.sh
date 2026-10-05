@@ -50,6 +50,9 @@ flags_for() {
     test-sstv-quality)     echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ FT8's hashed-callsign table + spot filter (audit 2026-10-04, row 10), through ft8_lib's real pack/unpack.
     test-ft8-callhash)     echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★ AirspyHfSource against a STUB libairspyhf (the test defines the C API) — the vendored header
+    #   for the types, and the fd entry points switched on (2026-10-05).
+    test-airspyhf-restart) echo "-DVIBE_HAVE_AIRSPYHF -DVIBE_AIRSPYHF_HAS_FD -I android/app/src/main/cpp/libairspyhf -lpthread" ;;
     *)               echo "" ;;
   esac
 }
@@ -82,6 +85,8 @@ deps_for() {
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
+    # ★★ The HF+'s recovery ORDER — hung-restart deadline, fd dup ownership, rate guard, fresh-fd reopen.
+    test-airspyhf-restart) echo "android/app/src/main/cpp/airspyhf_source.cpp" ;;
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
     test-connlog)       echo "" ;;
     # ★★★ An admin read must never hold the connection log's lock while it works (Pi 2 IQ overruns
