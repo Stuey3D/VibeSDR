@@ -87,6 +87,7 @@ export class VibeServerClient extends VibeServerWsClient {
     holdNativeHealing(VibeServerClient.DAB_MUX_HOLD_MS,
       on ? `DAB on${channel !== undefined ? ' block #' + channel : ''}` : 'DAB off');
     if (!on) { this.dabSeenChannel = null; this.dabSeenSid = null; }
+    if (on) this.cancelPacedTune();   // ★ a held tune must not land on top of the multiplex (tunePace.ts)
     this.dabHeld = on;
     const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
     if (channel !== undefined) m.channel = channel;

@@ -18,6 +18,7 @@
  */
 
 import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services/faultLog';
+import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
@@ -644,6 +645,24 @@ export class SpectrumClient {
   private lastSendAt = 0;
   private pingTimer: number | null = null;
   private lastPingAt = 0;
+  /* ★★★ TUNES ON THE WIRE ARE PACED BY THE SERVER'S LOAD (src/services/tunePace.ts — the app's rule, one
+   *  file). Stuart, 2026-10-05: "if the server's CPU is reporting that it is struggling we need to slow
+   *  down the amount of tune commands". The page sent EVERY tune at once — a held step key or a drag
+   *  is dozens a second. Latest wins, the trailing send is guaranteed, the dial moves at once; on a
+   *  healthy server the gap is 0 and the send is synchronous, exactly as before.
+   *  ★ The payload is BUILT AT SEND TIME from the current fields, so a passband or mode set while a
+   *    tune is held goes out with it rather than being overwritten by a stale copy. */
+  private tunePacer = new TunePacer<null>(() => this._send({
+    type: 'tune', frequency: this.frequency, mode: this.mode,
+    bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh,
+  }));
+  private tuneLoad: { cpuLevel: number; throttled: boolean } = { cpuLevel: 0, throttled: false };
+  /** The last 8 ping RTTs — a median, as the app keeps, so one late ping on Wi-Fi moves nothing. */
+  private rttHist: number[] = [];
+  private _retuneTunePace() {
+    const s = [...this.rttHist].sort((a, b) => a - b);
+    this.tunePacer.setGap(tunePaceMs({ ...this.tuneLoad, rttMs: s.length ? s[s.length >> 1] : 0 }));
+  }
   private pendingGain: { tenthDb: number; auto: boolean } | null = null;
   private gainTimer: number | null = null;
   private lastGainAt = 0;
@@ -746,6 +765,7 @@ export class SpectrumClient {
   }
 
   close() {
+    this.tunePacer.flush();   // ★ the last tune is never dropped (tunePace.ts)
     this.closedByUs = true;
     this._stopTimers();
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
@@ -1001,6 +1021,9 @@ export class SpectrumClient {
                               pauseAt: Number(msg.pauseAt ?? 0), resumeAt: Number(msg.resumeAt ?? 0), paused: msg.paused === true });
         break;
       case 'health':
+        // ★ The tune pacing reads the SAME verdict the pill draws (tunePace.ts) — the CPU rung and the snail.
+        this.tuneLoad = { cpuLevel: Number(msg.cpu) || 0, throttled: healthThrottled(msg.temp?.kind) };
+        this._retuneTunePace();
         this.cb.onHealth?.({
           cpu: Number(msg.cpu) || 0, ram: Number(msg.ram) || 0,
           /* ★★ UNDEFINED, NOT ZERO, WHEN ABSENT — and this layer is where that is decided. `Number(x)
@@ -1336,7 +1359,13 @@ export class SpectrumClient {
                             Number(msg.overload) === 1, Number(msg.settling) === 1, msg);
         break;
       case 'pong':
-        if (this.lastPingAt) this.cb.onRtt?.(performance.now() - this.lastPingAt);
+        if (this.lastPingAt) {
+          const rtt = performance.now() - this.lastPingAt;
+          this.cb.onRtt?.(rtt);
+          this.rttHist.push(rtt);
+          if (this.rttHist.length > 8) this.rttHist.shift();
+          this._retuneTunePace();   // ★ a slow path clumps tunes too — the "ping" half of tunePace.ts
+        }
         break;
     }
   }
@@ -1412,10 +1441,7 @@ export class SpectrumClient {
       if (prev && Math.abs(this.frequency - prev) > bw) this.cb.onRetuneJump?.();
     }
     if (mode) this.setMode(mode);
-    else this._send({
-      type: 'tune', frequency: this.frequency, mode: this.mode,
-      bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh,
-    });
+    else this.tunePacer.push(null);   // ★ paced by the server's load — see tunePacer
     if (this.followVfo || opts?.recenter) {
       const n = this.cfg.binCount || 4096;
       let bb: number;
@@ -1438,6 +1464,8 @@ export class SpectrumClient {
   }
 
   setMode(mode: SDRMode) {
+    // ★ The mode's own tune carries the current frequency, so a frequency still held is already in it.
+    this.tunePacer.cancel();
     this.mode = mode;
     const bw = MODE_BANDWIDTHS[mode];
     if (bw) { this.bandwidthLow = bw[0]; this.bandwidthHigh = bw[1]; }
@@ -1553,6 +1581,7 @@ export class SpectrumClient {
   dabHeld = false;
 
   dab(on: boolean, channel?: number, sid?: number) {
+    if (on) this.tunePacer.cancel();   // ★ a held tune must not land on top of the multiplex
     this.dabHeld = on;
     const m: Record<string, unknown> = { type: 'dab', on: on ? 1 : 0 };
     if (channel !== undefined) m.channel = channel;
