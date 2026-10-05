@@ -13,6 +13,18 @@
  */
 
 const PING_SEC = 900;              // 15 minutes — the sdr.hu interval, arrived at independently.
+/**
+ * ★★★ NOTHING ABOUT A SERVER IS KEPT MORE THAN 90 DAYS AFTER IT WAS LAST SEEN (2026-10-05, Google Play's Data safety
+ *     form: "data is deleted automatically within 90 days"; PRIVACY.md says the same). Before this, a server that
+ *     simply stopped pinging lost its ADDRESS after the hold (≤ 7 days) but its ROW — name, url, grid, position —
+ *     stayed for ever, and a delisted address's note (4-char square, country, bands) stayed 180 days.
+ *  ★★ Nothing a person can see changes (Stuart: unhosting must stay as it is — "that is what allows Nick to use his
+ *     pixel as a temporary server and keep the same address"): the address was already released after the hold;
+ *     the device keeps its own friendly name and asks for it back; and a server whose row is gone gets 404
+ *     "unknown server", which both clients answer by registering again (VibeTunnel.kt ~889, directory.cpp ~653).
+ *  ★ Housekeeping on the write path, as reg_log's is — no cron (purgeStale).
+ */
+const RETAIN_SEC = 90 * 86400;
 const DEFAULT_TTL_MIN = 30;        // ★ Two missed pings, not one: a single lost request is normal.
 const MAX_TTL_MIN = 60 * 24;
 const REG_PER_HOUR = 10;           // per source address
@@ -470,6 +482,19 @@ export function forkOf(status) {
   };
 }
 
+/** ★ RETAIN_SEC's housekeeping: server rows not seen for 90 days, and address notes older than 90 days. Exported
+ *  for directory/scripts/test-retention.mjs. A failure is logged and never costs the request it rode on. */
+export async function purgeStale(env, t = now()) {
+  try {
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM servers WHERE updated_at < ? AND expires_at < ?').bind(t - RETAIN_SEC, t),
+      env.DB.prepare('DELETE FROM gone_slugs WHERE gone_at < ?').bind(t - RETAIN_SEC),
+    ]);
+  } catch (e) {
+    console.error('purgeStale failed', (e && e.stack) || String(e));
+  }
+}
+
 async function register(request, env) {
   const body = await readBody(request);
   if (!body) return json({ error: 'bad json' }, 400);
@@ -592,6 +617,7 @@ async function register(request, env) {
     // ★ Housekeeping on the write path rather than a cron: free, and cron is one more thing to fail.
     env.DB.prepare('DELETE FROM reg_log WHERE at < ?').bind(since),
   ]);
+  await purgeStale(env, t);   // ★ RETAIN_SEC — after the insert, so it can never touch the row just written
   // ★ The address belongs to somebody again, so the note about who had it before goes — and old
   //   notes are pruned here too (see 0007-gone-slugs.sql). Kept OUT of the batch above: a failure
   //   here must never cost a server its registration. (A stale note is harmless anyway — a listed
@@ -665,6 +691,9 @@ async function ping(request, env) {
          //   without a log pipeline. Cleared the moment it succeeds.
          verified ? '' : JSON.stringify(why).slice(0, 200),
          row.id).run();
+  // ★ RETAIN_SEC housekeeping rides ~1 ping in 50 (every live server pings every 15 min, so it runs many times a day
+  //   without costing every ping a DELETE). After the update, so it never touches this row.
+  if (Math.random() < 0.02) await purgeStale(env, t);
 
   // ★★ TELL A RETURNING SERVER THE TRUTH ABOUT ITS ADDRESS. If it was away longer than the hold
   //    and somebody else took the name, `slug` is now NULL — the switch must be able to say so
@@ -934,7 +963,7 @@ async function checkName(url, env) {
  *      asset, a socket — gets the same status in plain text, never HTML inside a JSON reply.
  */
 const AWAY_PAGE_SEC = 86400;              // offline this long before the 503 carries alternatives
-const GONE_KEEP_SEC = 180 * 86400;        // how long a delisted address's note is kept
+const GONE_KEEP_SEC = RETAIN_SEC;          // how long a delisted address's note is kept — see RETAIN_SEC
 const SUGGEST_MAX = 6;
 // Statuses that mean "the tunnel reached nobody" — Cloudflare's and cloudflared's, never VibeServer's.
 const UPSTREAM_DOWN = new Set([502, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]);

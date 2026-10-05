@@ -104,8 +104,17 @@ it goes to three places:
 In every case it is the centre of the Maidenhead grid square only, never a fix: a
 square a few kilometres on a side (about 5.6 km by 4.6 km in the UK), so it says
 which town, not which street. The directory and Nominatim are always reached over
-an encrypted (HTTPS) connection. Unlisting the server, or turning its location off,
-removes the position from the directory.
+an encrypted (HTTPS) connection. Turning a server's public listing off, or its
+location off, removes its listing from the directory straight away.
+
+**How long the directory keeps anything.** Nothing about a server is kept more than
+90 days after the server was last seen. A server that stops reporting in drops out of
+the list within the hour, and its address is held for it for up to a week so it can
+come back under the same name; its record is deleted 90 days after it was last
+seen. When a listing is turned off, the directory keeps only a short note under the
+old address — the region (a grid square about 180 × 110 km), the country and the
+radio bands it covered — so that anyone following an old link is offered similar
+receivers nearby; that note is deleted after 90 days.
 
 **A word of advice if you serve from somewhere remote.** A grid square hides a
 person well in a town, a suburb or a village, where it covers thousands of

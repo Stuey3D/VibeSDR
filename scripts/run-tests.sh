@@ -287,6 +287,10 @@ if node --no-warnings scripts/test_tune_hint.ts >/dev/null; then pass=$((pass+1)
 # ★★★ A REOPENED SPECTRUM SOCKET CARRIES THE LISTENER'S OWN VFO BACK on a per-listener dial, and NEVER on a
 #     shared one (2026-10-05: the RSP on a locked range reset to its landing on every resume from background).
 if node --no-warnings scripts/test_reopenTune.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_reopenTune.ts"; fi
+# ★ The directory Worker against real SQLite: dead-address pages, and the 90-day retention (PRIVACY.md, Play form).
+for t in directory/scripts/test-gone.mjs directory/scripts/test-retention.mjs; do
+  if node --no-warnings "$t" >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ $t"; fi
+done
 if node --no-warnings scripts/test_rtty_spec.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_rtty_spec.ts"; fi
 # ★★ NAVTEX on audio (audit 2026-10-04): impulse bursts + selective fading, CER against the old decoder's numbers, and
 #    the BEL control byte never in the output.
