@@ -83,5 +83,36 @@ for (const [name, shape, flags, pin, want] of cases) {
   console.log((ok ? '  ok   ' : '  FAIL ') + name + ' -> opened=' + got
               + (ok ? '' : ' (wanted ' + want + ')') + '   [' + log.join(' ') + ']');
 }
-console.log(`\n${pass}/${cases.length} pass`);
-process.exit(pass === cases.length ? 0 : 1);
+
+/* ★★ WHERE A TAB IS AIMED (CodeQL #94-#96, 2026-10-05): openUnlocked() must only ever point the window
+ *    it opened at https://<slug>.vibeserver.vibesdr.net — never a listing's javascript:, an IP, or a
+ *    look-alike — and must shut the blank tab rather than aim it anywhere else. */
+const ADDRESS_OK_SRC = (html.match(/const ADDRESS_OK = (\/.*\/);/) || [])[1];
+if (!ADDRESS_OK_SRC) throw new Error('not found: ADDRESS_OK');
+const aimSrc = ['isValidReceiverAddress', 'radioUrl', 'pinStoreKey', 'pinRestore', 'openUnlocked'].map(grab).join('\n');
+const aimCases = [
+  // [name, address, want: 'closed' | url prefix]
+  ['our address, no PIN in memory', 'pi500.vibeserver.vibesdr.net', 'https://pi500.vibeserver.vibesdr.net/r/r1/?join=1'],
+  ['javascript: as an address    ', 'javascript:alert(1)//',        'closed'],
+  ['an arbitrary origin          ', 'evil.example',                  'closed'],
+  ['look-alike suffix            ', 'x.vibeserver.vibesdr.net.evil.example', 'closed'],
+  ['userinfo trick               ', 'evil.example@x.vibeserver.vibesdr.net', 'closed'],
+  ['nulled by ownAddresses       ', null,                            'closed'],
+];
+let aimPass = 0;
+for (const [name, address, want] of aimCases) {
+  store.clear();
+  const open = new Function('ADDRESS_OK', 'PIN_OPEN', 'ADMIN_TICKET', 'sessionStorage', 'fetch',
+    aimSrc + '; return openUnlocked;')(new RegExp(ADDRESS_OK_SRC.slice(1, -1)), new Map(), new Map(), sessionStorage,
+                                       async () => { throw new Error('no network in this test'); });
+  const win = { location: '', closed: false, close() { this.closed = true; } };
+  await open({ id: 'r1' }, { address }, win);
+  const got = win.closed ? 'closed' : String(win.location);
+  const ok = got === want;
+  if (ok) aimPass++;
+  console.log((ok ? '  ok   ' : '  FAIL ') + name + ' -> ' + got + (ok ? '' : ' (wanted ' + want + ')'));
+}
+
+const all = cases.length + aimCases.length, passed = pass + aimPass;
+console.log(`\n${passed}/${all} pass`);
+process.exit(passed === all ? 0 : 1);

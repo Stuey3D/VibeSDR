@@ -66,7 +66,7 @@ import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
-import { httpBase, wsBase } from './origin';
+import { httpBase, wsBase, isValidServerHost } from './origin';
 import { saveAdminTicket, getAdminTicket, clearAdminTicket, inAdminMode, adminTicketQuery } from './adminticket';
 
 /** True when THIS process is the front door — it owns no radio, so START and the PIN are
@@ -222,7 +222,9 @@ function initSplash() {
 
   if (isDev) {
     $('hostRow').hidden = false;
-    hostEl.value = (prefs().lastHost as string) || 'localhost:48000';
+    // ★ Only a remembered value that is a host[:port] comes back (isValidServerHost, 2026-10-05).
+    const lastHost = prefs().lastHost;
+    hostEl.value = isValidServerHost(lastHost) ? lastHost : 'localhost:48000';
   } else {
     hostEl.value = location.host + BASE_PATH;
   }
@@ -374,6 +376,9 @@ function initSplash() {
     const host = hostEl.value.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
     const pin = pinEl.value.trim();
     if (!host) { msg.textContent = 'Enter a server address'; return; }
+    // ★★ `host` becomes the authority of every request this page makes (origin.ts httpBase) — a
+    //    host[:port] and nothing else, or nothing is fetched (CodeQL #97-#99, 2026-10-05).
+    if (!isValidServerHost(host)) { msg.textContent = 'Enter a server address as host or host:port'; return; }
     msg.className = 'info';
     msg.textContent = 'Connecting…';
     // ★ Resolve the admin credentials BEFORE connect(), which picks them up from sessionStorage
@@ -470,7 +475,7 @@ function initSplash() {
   // answer: no PIN => a single START button, nothing to fill in. Don't
   // auto-connect — the click is also the user gesture the browser wants before
   // it will start audio.
-  if (!isDev) void shapeSplash(hostEl.value);
+  if (!isDev && isValidServerHost(hostEl.value)) void shapeSplash(hostEl.value);   // ★ same shape rule as go()
 }
 
 /** No PIN on this server? Then there is nothing to ask — just START. */

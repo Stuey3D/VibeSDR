@@ -61,6 +61,21 @@ function socketHost(host: string): string {
   return slash === -1 ? direct : direct + host.slice(slash);
 }
 
+/* ★★ WHAT MAY STAND WHERE `host` STANDS (CodeQL js/request-forgery #97-#99, 2026-10-05). Every URL in
+ *    this file is `scheme://${host}…`, so `host` is an AUTHORITY plus at most the front door's
+ *    /r/<id> prefix (BASE_PATH in main.ts) — never a scheme, a userinfo '@' before the host, a query,
+ *    a fragment or a backslash. On a receiver the value is location.host + BASE_PATH and always
+ *    passes; only the dev page (port 8080) lets a person type one, and its remembered `lastHost`
+ *    comes back out of the same prefs blob that server-supplied fields are written into. That
+ *    blob is why CodeQL drew a path from a server bookmark to fetch(): not reachable in practice,
+ *    but a shape check costs nothing and makes the rule explicit.
+ *  ★ The /r/ segment is a URL path segment as location.pathname gives it (already %-encoded), so
+ *    anything but '/', '?', '#', '\' and whitespace may appear in it. */
+const SERVER_HOST_RE = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+)(:\d{1,5})?(\/r\/[^/?#\\\s]+)?$/;
+export function isValidServerHost(h: unknown): h is string {
+  return typeof h === 'string' && h.length <= 300 && SERVER_HOST_RE.test(h);
+}
+
 /** True when this page was served over https (so everything it loads must be too). */
 export function pageIsSecure(): boolean {
   return typeof location !== 'undefined' && location.protocol === 'https:';
