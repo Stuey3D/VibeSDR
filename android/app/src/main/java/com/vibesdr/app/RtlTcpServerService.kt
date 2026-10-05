@@ -193,7 +193,7 @@ class RtlTcpServerService : Service() {
                     restoreFailure = when (err) {
                         "no USB permission" ->
                             "Waiting for USB permission — open VibeServer Lite once and allow the radio"
-                        "no SDR attached" -> "No radio found — check the dongle is plugged in"
+                        "no SDR attached" -> "No radio found — check the radio is plugged in"   // ★ any radio now (K_VIDPID)
                         "no stored config" -> "Nothing saved to restore — start the server once from the app"
                         VibeServerRestore.RADIO_GONE_TOO_LONG ->
                             "The radio was unplugged for more than 5 minutes, so the server was not restarted — open the app and press Start"
@@ -279,6 +279,11 @@ class RtlTcpServerService : Service() {
         if (mode == "vibeserver") {
             return try {
                 val j = JSONObject(VibeLocalSDR.getVibeServerStatus())
+                // ★★ A RADIO THAT NEEDS A HAND ON THE CABLE SAYS SO HERE FIRST (2026-10-05). On a headless phone
+                //    or TV box the notification is the only surface there is, and "waiting for client" over a
+                //    wedged HF+ is the zombie this service exists to avoid. The engine's own sentence.
+                val problem = j.optString("radioProblem", "")
+                if (problem.isNotEmpty()) return problem
                 val client = j.optBoolean("client", false)
                 val addr = j.optString("clientAddr", "")
                 val spec = j.optLong("specBytesPerSec", 0)

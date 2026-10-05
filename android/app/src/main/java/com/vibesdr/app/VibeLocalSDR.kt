@@ -228,6 +228,10 @@ object VibeLocalSDR {
     /** ★★★ Is the running engine waiting for its dongle to be handed back after a re-enumeration? See
      *  VibeServerRestore.recoverUsbIfNeeded. False when the library is not loaded (nothing is running). */
     fun usbNeedsFreshFd(): Boolean = loaded && nativeUsbNeedsFreshFd()
+    /** ★★ Is the engine's USB handle dead, even while it is backing off between fresh-fd requests? See
+     *  VibeServerRestore.recoverUsbIfNeeded — that quiet must never read as "the radio is back". */
+    fun usbHandleDead(): Boolean = loaded && nativeUsbHandleDead()
+    private external fun nativeUsbHandleDead(): Boolean
     /** Hand the engine a fresh fd for its dongle. It dups it; the caller keeps its UsbDeviceConnection. */
     fun adoptFreshUsbFd(fd: Int): Boolean = loaded && nativeAdoptFreshUsbFd(fd)
     private external fun nativeUsbNeedsFreshFd(): Boolean

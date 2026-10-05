@@ -181,6 +181,14 @@ public:
      *  descriptor has gone dead (it dropped off the bus, or re-enumerated on a new path) and the engine
      *  is waiting for a FRESH descriptor — which only UsbManager can supply. Always false elsewhere. */
     bool usbNeedsFreshFd() const;
+    /** ★★ Is the engine's USB handle dead — whether or not it is asking for a fresh fd RIGHT NOW? After
+     *  a fresh fd that would not open, usbNeedsFreshFd() goes quiet for a back-off (2 s doubling to
+     *  60 s) while the radio is still gone; Kotlin reads this so that quiet is never taken for "the
+     *  radio is back", which would reset the five-minute radio-gone clock (2026-10-05). */
+    bool usbHandleDead() const;
+    /** ★ What the owner has to do about the radio, when only a hand on the cable will fix it ("… needs
+     *  unplugging and plugging back in"); "" = nothing to say. See radioProblem in the .cpp. */
+    std::string radioProblemText() const;
     /** Hand the engine a fresh descriptor for its dongle after usbNeedsFreshFd(). The engine takes its
      *  own dup, so the caller keeps (and later closes) its UsbDeviceConnection as usual. Refused
      *  (false) when nothing asked for one — a live handle is never swapped underneath a stream. */
@@ -952,6 +960,9 @@ public:
         /** The radio has stopped delivering IQ — unplugged or failed. The server is still up and
          *  still serving; it simply has nothing to serve. */
         bool     deviceLost       = false;
+        /** ★ The radio needs a human — "needs unplugging and plugging back in" — or "". The host's
+         *  own screen shows it; see radioProblem in the .cpp (2026-10-05). */
+        std::string radioProblem;
         /** ★★★ THE SAME COUNT THE ADMIN PAGE AND EVERY PICKER USE (specListenerCount). The host's
          *  own screen used to derive "is anybody on" from the spectrum socket alone, which is a
          *  SECOND definition of the same state — and the two disagreed exactly when it mattered.

@@ -54,11 +54,28 @@ public:
     static bool tuneRangeContains(double hz);
 
     bool open(int index, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
-    /** ★★ Android hands out an already-open USB fd and forbids enumeration; libusb takes
-     *  ownership of it. Upstream libairspy provides this entry point (see the header note). */
+    /** ★★ Android hands out an already-open USB fd and forbids enumeration. Upstream libairspy
+     *  provides this entry point (see the header note).
+     *  ★★★ We open on our OWN dup() of it (2026-10-05): libusb_wrap_sys_device does NOT take
+     *      ownership (this comment used to say it did), so the caller keeps and closes its fd and
+     *      ours is closed in close(), after airspy_close(). Same rule as the RTL, HF+ and HackRF. */
     bool openFd(int fd, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     void close();
     bool isOpen() const { return open_; }
+    /** ★ Did this radio come in by an Android descriptor? Such a radio has no index to reopen by:
+     *  the shim must PARK it rather than release it, and a re-plug needs a fresh fd (reopenOnFd). */
+    bool fdOpened() const { return fdOpened_; }
+
+    /** ★★★ ANDROID RE-PLUG RECOVERY (2026-10-05) — the R2/Mini half of the shim's usbFdDead/freshUsbFd,
+     *  the same three calls the HF+ and HackRF have.
+     *  fdAlive(): is the descriptor we opened on still attached (usbfs read of the device descriptor)?
+     *  releaseDeadHandle(): stop + close the dead handle and our fd, on a deadline; settings kept.
+     *  reopenOnFd(): close whatever is left, open on a FRESH descriptor (our own dup — the caller keeps
+     *  `fd`), put back rate, tuning, gain mode + stages, bias-T and packing, restart a wanted stream.
+     *  ★ No mutex of its own, like every other call here: the shim calls these under devMtx + modeMtx. */
+    bool fdAlive() const;
+    void releaseDeadHandle();
+    bool reopenOnFd(int fd, std::string& err);
 
     void setSink(IqSink sink) { sink_ = std::move(sink); }
     bool start(std::string& err);
@@ -174,6 +191,8 @@ private:
     void applyGain();
     /** The one place the three gain modes are turned into libairspy calls. */
     void applyGainMode();
+    /** Close the held handle on a 3 s deadline, our fd after it. False = timed out (abandoned). */
+    bool closeHandleOnDeadline();
 
     airspy_device* dev_ = nullptr;
     IqSink sink_;
@@ -191,6 +210,9 @@ private:
     bool lnaAgc_ = false, mixerAgc_ = false;
     bool bias_ = false, packing_ = false;
     bool open_ = false, streaming_ = false;
+    bool wantStreaming_ = false;   // start() sets, stop() clears — survives a dead handle (reopenOnFd)
+    int  fd_ = -1;                 // our dup of the Android USB descriptor; -1 = none (see openFd)
+    bool fdOpened_ = false;
     std::atomic<bool>   paused_{false};
     std::atomic<double> lastRx_{0.0};   // steady-clock seconds of the last buffer; 0 = never
     std::atomic<uint64_t> usbDropped_{0}, usbDropEvents_{0}, usbDropPending_{0};   // see noteUsbDropped()

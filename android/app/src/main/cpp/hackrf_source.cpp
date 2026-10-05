@@ -8,7 +8,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
+#include <future>
+#include <memory>
 #include <mutex>
+#include <thread>
+#include <unistd.h>
 #include "vibe_thread.h"
 
 #if defined(VIBE_HAS_HACKRF)
@@ -211,6 +216,7 @@ bool HackRfSource::open(int index, double sampleRateHz, double centreHz,
         err = "could not open the HackRF (is another program using it?)";
         return false;
     }
+    fdOpened_ = false;   // ★ by index: reopenable from here, so release/restart may close it
 
     return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
 }
@@ -220,9 +226,11 @@ bool HackRfSource::open(int index, double sampleRateHz, double centreHz,
  *  list to index into. hackrf_open_fd() is our patch to the vendored libhackrf; see
  *  cpp/libhackrf/hackrf.c.
  *
- *  ★ OWNERSHIP OF THE DESCRIPTOR PASSES TO libusb on success. Do not close it here or in the
- *  caller: the UsbDeviceConnection must outlive the stream, and closing it twice takes the radio
- *  down mid-capture. Same rule as AirspyHfSource::openFd(). */
+ *  ★★★ WE OPEN ON OUR OWN dup() OF THE DESCRIPTOR (2026-10-05). This used to say ownership passed to
+ *  libusb — it does not: libusb_wrap_sys_device leaves the fd to its caller, so Kotlin's close of the
+ *  UsbDeviceConnection (a stop, or the re-plug recovery replacing a dead connection) could pull the
+ *  descriptor out from under a live handle, and a recycled fd number sends our ioctls to some other
+ *  file. The RTL and HF+ paths learned this first; our dup is closed in close(), AFTER hackrf_close. */
 bool HackRfSource::openFd(int fd, double sampleRateHz, double centreHz,
                           int gainTenthDb, std::string& err) {
 #ifndef VIBE_HACKRF_HAS_FD
@@ -239,11 +247,19 @@ bool HackRfSource::openFd(int fd, double sampleRateHz, double centreHz,
     if (!g_initOk) { err = "libhackrf could not start"; return false; }
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (fd < 0) { err = "invalid USB file descriptor"; return false; }
-    if (hackrf_open_fd(&impl_->dev, fd) != HACKRF_SUCCESS || !impl_->dev) {
+    const int own = ::dup(fd);   // ★ see the note above
+    if (own < 0) {
+        err = "could not duplicate the HackRF USB descriptor (errno " + std::to_string(errno) + ")";
+        return false;
+    }
+    if (hackrf_open_fd(&impl_->dev, own) != HACKRF_SUCCESS || !impl_->dev) {
         impl_->dev = nullptr;
+        ::close(own);
         err = "could not open the HackRF from the USB descriptor";
         return false;
     }
+    fd_ = own;
+    fdOpened_ = true;
     // ★ Enumeration is what carries the serial, and there is none here. Left empty rather than
     //   invented: a made-up serial would flow into the radio list and the directory.
     impl_->serial = "";
@@ -285,7 +301,93 @@ void HackRfSource::close() {
         hackrf_close(impl_->dev);
         impl_->dev = nullptr;
     }
+    // ★ Our dup, and only AFTER the handle that used it is closed — see openFd.
+    if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
+    wantStreaming_ = false;
     open_ = false;
+}
+
+/** ★★★ CLOSE THE HELD HANDLE ON A 3 s DEADLINE (2026-10-05) — the HF+'s closeHandleOnDeadline, for
+ *  the Android dead-fd release and the fresh-fd reopen. A HackRF whose descriptor has gone can block in
+ *  hackrf_stop_rx/hackrf_close (libusb waiting on transfers that will never complete), and the
+ *  watchdog calling this must not be parked with it. So the close runs on a detached worker; past the
+ *  deadline the handle is ABANDONED to it — never closed from here, and its fd (our dup) is closed by
+ *  the worker only after hackrf_close returns, so a stuck call never has its descriptor recycled.
+ *  Caller holds impl_->mtx. False = timed out. */
+bool HackRfSource::closeHandleOnDeadline() {
+    hackrf_device* dying = impl_->dev;
+    const int fd = fd_;
+    impl_->dev = nullptr;
+    open_ = false;
+    fd_ = -1;
+    if (!dying) { if (fd >= 0) ::close(fd); return true; }
+    auto done = std::make_shared<std::promise<void>>();
+    auto fut  = done->get_future();
+    std::thread([done, dying, fd]() {
+        hackrf_stop_rx(dying);
+        hackrf_close(dying);
+        if (fd >= 0) ::close(fd);
+        done->set_value();
+    }).detach();
+    return fut.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+}
+
+/** ★ Is the USB descriptor we opened on still attached? usbfs answers a read with the device
+ *  descriptor while it is, and -ENODEV for ever once it has gone or re-enumerated — the presence test
+ *  the RTL and HF+ paths use. True when there is no fd to ask (an index-opened radio). */
+bool HackRfSource::fdAlive() const {
+    if (!impl_) return true;
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    if (fd_ < 0) return !fdOpened_ || impl_->dev != nullptr;
+    uint8_t d[18];
+    return ::pread(fd_, d, sizeof d, 0) == (ssize_t)sizeof d;
+}
+
+/** ★★★ LET GO OF A DEAD fd-OPENED HANDLE (Android, 2026-10-05). Nothing is sent to it again and the
+ *  kernel can free the old device instance. The stages, rate, centre and whether the stream was
+ *  WANTED are all kept for reopenOnFd. Idempotent. */
+void HackRfSource::releaseDeadHandle() {
+    if (!impl_) return;
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    if (!impl_->dev && fd_ < 0) return;
+    if (closeHandleOnDeadline())
+        std::fprintf(stderr, "[hackrf] released the dead USB handle — nothing will be sent to it again\n");
+    else
+        std::fprintf(stderr, "[hackrf] closing the dead USB handle TIMED OUT after 3 s — abandoned to its worker\n");
+}
+
+/** ★★★ ADOPT A FRESH USB DESCRIPTOR AFTER A RE-PLUG (Android, 2026-10-05) — the HackRF half of the
+ *  HF+'s reopenOnFd, and the same safe order: whatever is left of the old handle is closed first (on
+ *  the deadline, fd after handle), and only then is the new descriptor opened, on our own dup.
+ *  ★★ The four stages come back from the members (finishOpen re-applies amp/LNA/VGA/bias-T), and the
+ *     gain is passed as -1 so nothing is re-derived from a single number — the zero-start safety
+ *     default in the header is about a FRESH radio, not about forgetting what the owner chose. */
+bool HackRfSource::reopenOnFd(int fd, std::string& err) {
+    if (!impl_) { err = "no HackRF"; return false; }
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    const double rate   = impl_->rate > 0 ? impl_->rate : 2000000.0;
+    const double centre = impl_->centre;
+    const bool   wanted = wantStreaming_;
+    if (impl_->dev || fd_ >= 0) {
+        if (!closeHandleOnDeadline()) {
+            err = "the old HackRF handle did not close — not opening a second one on the same radio";
+            std::fprintf(stderr, "[hackrf] fresh fd NOT adopted: %s\n", err.c_str());
+            return false;
+        }
+    }
+    open_ = false;
+    if (!openFd(fd, rate, centre, -1, err)) {
+        wantStreaming_ = wanted;   // ★ the next fresh fd must still stream
+        std::fprintf(stderr, "[hackrf] opening on the fresh USB fd FAILED: %s\n", err.c_str());
+        return false;
+    }
+    if (wanted && !start(err)) {
+        std::fprintf(stderr, "[hackrf] fresh USB fd opened but the stream would not start: %s\n", err.c_str());
+        return false;
+    }
+    std::fprintf(stderr, "[hackrf] radio back on a fresh USB fd (rate %.0f, centre %.0f Hz, %s)\n",
+                 impl_->rate, centre, wanted ? "streaming" : "not streaming");
+    return true;
 }
 
 bool HackRfSource::start(std::string& err) {
@@ -296,6 +398,7 @@ bool HackRfSource::start(std::string& err) {
                         &impl_->dcI, &impl_->dcQ };
     const int rc = hackrf_start_rx(impl_->dev, rxCallback, &impl_->ctx);
     if (rc != HACKRF_SUCCESS) { err = "the HackRF refused to start receiving"; return false; }
+    wantStreaming_ = true;
     impl_->lastRx.store(nowSecsMono(), std::memory_order_relaxed);
     return true;
 }
@@ -303,6 +406,7 @@ bool HackRfSource::start(std::string& err) {
 void HackRfSource::stop() {
     if (!impl_) return;
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    wantStreaming_ = false;   // ★ an explicit stop — a dead handle being let go is not one
     if (impl_->dev) hackrf_stop_rx(impl_->dev);
 }
 
@@ -320,8 +424,10 @@ double HackRfSource::secondsSinceLastRx() const {
 void HackRfSource::setFrequency(double hz) {
     if (!impl_) return;
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
-    if (!impl_->dev) return;
+    // ★ Remembered FIRST (2026-10-05): a tune that lands while the handle is dead is where the radio
+    //   should come back — see reopenOnFd.
     impl_->centre = hz;
+    if (!impl_->dev) return;
     hackrf_set_freq(impl_->dev, (uint64_t)llround(hz));
 }
 
@@ -434,5 +540,8 @@ void HackRfSource::setAmpEnable(bool) {}
 void HackRfSource::setLnaGainDb(int) {}
 void HackRfSource::setVgaGainDb(int) {}
 void HackRfSource::setBiasTee(bool) {}
+bool HackRfSource::fdAlive() const { return true; }
+void HackRfSource::releaseDeadHandle() {}
+bool HackRfSource::reopenOnFd(int, std::string& err) { err = "no HackRF support"; return false; }
 }  // namespace vibe
 #endif

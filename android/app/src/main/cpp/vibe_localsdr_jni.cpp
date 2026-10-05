@@ -790,6 +790,15 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetVibeServerStatus(JNIEnv* env, jobject
     j += ",\"listeners\":"       + std::to_string(s.listeners);
     j += ",\"maxUsers\":"        + std::to_string(s.maxUsers);
     j += ",\"port\":"            + std::to_string(s.port);
+    /* ★★ AND WHETHER THE RADIO IS THERE, AND WHAT THE OWNER MUST DO WHEN IT IS NOT (2026-10-05). The host's
+     *  own screen is the one place a phone owner looks, and a wedged HF+ that needs re-plugging was
+     *  invisible there — the struct carried deviceLost and this JSON dropped it. */
+    j += ",\"deviceLost\":"      + std::string(s.deviceLost ? "true" : "false");
+    if (!s.radioProblem.empty()) {
+        std::string e;
+        for (char c : s.radioProblem) { if (c == '"' || c == '\\') e += '\\'; e += c; }
+        j += ",\"radioProblem\":\"" + e + "\"";
+    }
     j += "}";
     return env->NewStringUTF(j.c_str());
 }
@@ -1151,6 +1160,11 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeUsbNeedsFreshFd(JNIEnv*, jobject) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeAdoptFreshUsbFd(JNIEnv*, jobject, jint fd) {
     return vibe::LocalSdrShim::instance().adoptFreshUsbFd((int)fd) ? JNI_TRUE : JNI_FALSE;
+}
+/** ★★ Dead handle, whether or not a fresh fd is wanted right now — see LocalSdrShim::usbHandleDead. */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeUsbHandleDead(JNIEnv*, jobject) {
+    return vibe::LocalSdrShim::instance().usbHandleDead() ? JNI_TRUE : JNI_FALSE;
 }
 
 /** ★ The name the USB descriptor gives this dongle, handed down from Kotlin because the

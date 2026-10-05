@@ -1661,6 +1661,14 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               <Row C={C} F={F} k="NAME" v={`${mdnsHost}.local:${running.port}`} vc={C.amber} />
             )}
             <Row C={C} F={F} k="ACCESS" v={effectivePin ? `PIN ${effectivePin}` : 'Open (no PIN)'} vc={effectivePin ? C.green : C.amber} />
+            {/* ★★ A RADIO THAT NEEDS A HAND ON THE CABLE (2026-10-05) — a wedged Airspy HF+ that no fresh
+                USB handle will open. The engine's own sentence; shown only while it is true. Its own
+                wrapping line rather than a Row: a Row's value is one line, and this is a sentence. */}
+            {!!status?.radioProblem && (
+              <Text style={[styles.value, { color: C.red, fontFamily: F, marginTop: 8 }]}>
+                {status.radioProblem}
+              </Text>
+            )}
           {/* ─── ADVERTISE ON VIBESDR.NET ──────────────────────────────────────────────────
               ★★★ TWO FIELDS AND NOTHING ELSE (Stuart, 2026-08-22): a public name, and the switch.
                   Everything else the directory needs — the locator, the place, the radios — the
