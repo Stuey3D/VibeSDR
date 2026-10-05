@@ -57,6 +57,7 @@ void RttyAuto::startCandidates_(double centre, double shift) {
     for (double b : kBauds) for (int one = 0; one < 2; one++) for (int inv = 0; inv < 2; inv++) {
         Cand c; c.baud = b; c.inv = inv != 0; c.oneStop = one != 0;
         c.d.reset(new FskDecoder(sr_, centre, shift, b, c.oneStop ? "5N1" : "5N1.5", "ITA2", c.inv));
+        c.d->setAfc(false);   // ★ AFC on the WINNER only (evaluate_) — twelve of them would double the search's CPU
         cands_.push_back(std::move(c));
     }
     for (size_t i = 0; i < cands_.size(); i++) {
@@ -126,8 +127,13 @@ void RttyAuto::spectrumStep_() {
     { double bestS = 0, bestD = 1e9;   // ★ the NEAREST standard shift within 12 % (445 Hz measured is DWD's 450, not 425)
       for (double s : kShifts) { const double d = std::fabs(shift - s); if (d <= s * 0.12 && d < bestD) { bestD = d; bestS = s; } }
       if (bestS > 0) shift = bestS; }
+    lastCentre_ = centre; lastShift_ = shift;
     // New tones, or the old ones moved (a retune): start again.
-    if (centre_ == 0 || std::fabs(centre - centre_) > 25 || std::fabs(shift - shift_) > 30) {
+    // ★ AFC (2026-10-05): against where the WINNER is tuned now — its AFC follows a drifting station, so a slow drift no
+    //   longer reads as a retune (it restarted the search every 25 Hz: 2 Hz/s DWD printed 403 garbage characters of
+    //   592). A move past the AFC's ±shift/2 still restarts here, on the new centre.
+    const double tunedTo = winner_ >= 0 ? cands_[winner_].d->centreHz() : centre_;
+    if (centre_ == 0 || std::fabs(centre - tunedTo) > 25 || std::fabs(shift - shift_) > 30) {
         if (centre_ != 0 && winner_ >= 0) say_("\n");
         startCandidates_(centre, shift);
     }
@@ -157,6 +163,7 @@ void RttyAuto::evaluate_() {
         if (cands_[best].score >= 12 && cands_[best].score >= second + 6) {
             winner_ = best;
             const auto& c = cands_[best];
+            c.d->setAfc(true);
             // ★ On its OWN line (Stuart's screenshot, 2026-10-04: "ITY[RTTY auto: …" — glued to text from an earlier search).
             std::snprintf(buf, sizeof buf, "\n[RTTY auto: %s baud, %.0f Hz shift%s%s]\n",
                           c.baud == 45.45 ? "45.45" : (c.baud == 50 ? "50" : "75"), shift_, c.inv ? ", reverse" : "",
@@ -172,7 +179,12 @@ void RttyAuto::evaluate_() {
     }
     // ★ A winner whose frames have gone bad for a while (the station changed its settings) — look again.
     const auto& w = cands_[winner_];
-    if (w.score < -6) { if (++badWinnerSec_ >= 8) { say_("\n"); startCandidates_(centre_, shift_); } }
+    // ★ The rest follow the winner's AFC, so they stay a fair comparison for the look-again below.
+    const double wc = w.d->centreHz();
+    for (auto& x : cands_) if (x.d.get() != w.d.get() && x.d->centreHz() != wc) x.d->retune(wc);
+    if (w.score < -6) {
+        if (++badWinnerSec_ >= 8) { say_("\n"); startCandidates_(lastCentre_ > 0 ? lastCentre_ : centre_, lastShift_ > 0 ? lastShift_ : shift_); }
+    }
     else badWinnerSec_ = 0;
 }
 

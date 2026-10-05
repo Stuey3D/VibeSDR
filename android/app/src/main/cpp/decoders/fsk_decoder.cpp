@@ -284,6 +284,48 @@ FskDecoder::FskDecoder(int sr, double cf, double sh, double baud,
     // constants are in whole symbols).
     symLen = sampleRate / (stopVariable ? baudRate / 2.0 : baudRate);
     updateFilters();
+    // ★ AFC (setAfc): each tone's baseband lowpass — wide enough for a keyed tone and ±50 Hz of error, narrow enough
+    //   (two poles) that the OTHER tone, a shift away, is ~20 dB down. Two poles at 54–60 Hz for 170 and 450 Hz.
+    centre0_ = centerFrequency;
+    const double fc = std::max(20.0, std::min(shiftHz * 0.35, sampleRate / symLen * 1.2));
+    afcLpK_ = 1.0 - std::exp(-2.0 * M_PI * fc / sampleRate);
+    if (navtex_) afcOn_ = false;
+    retune(centerFrequency);
+}
+void FskDecoder::retune(double cf) {
+    centerFrequency = cf;
+    if (navtex_) return;
+    updateFilters();
+    const double wh = 2.0 * M_PI * (cf + deviationF) / sampleRate, wl = 2.0 * M_PI * (cf - deviationF) / sampleRate;
+    hiStRe_ = std::cos(wh); hiStIm_ = -std::sin(wh); loStRe_ = std::cos(wl); loStIm_ = -std::sin(wl);
+    pHiRe_ = pHiIm_ = pLoRe_ = pLoIm_ = 0;   // a rotation measured across the step would be the step, not drift
+}
+/* ★★ AFC, once a second (setAfc). The rotation of each tone's baseband over the second is its frequency error — the
+ *  sum of z·conj(z₋₁) is weighted by the tone's own power, so a faded tone or noise counts for little. */
+void FskDecoder::afcStep_() {
+    const double wHi = std::hypot(accHiRe_, accHiIm_), wLo = std::hypot(accLoRe_, accLoIm_);
+    const double k = sampleRate / (2.0 * M_PI);
+    const double eHi = wHi > 0 ? std::atan2(accHiIm_, accHiRe_) * k : 0, eLo = wLo > 0 ? std::atan2(accLoIm_, accLoRe_) * k : 0;
+    accHiRe_ = accHiIm_ = accLoRe_ = accLoIm_ = 0;
+    const unsigned long good = goodFrames_ - afcGood_, bad = framingErrors_ - afcBad_;
+    afcGood_ = goodFrames_; afcBad_ = framingErrors_;
+    if (state == NoSignal || wHi + wLo <= 0) { afcStreak_ = 0; return; }
+    // Both tones heard but disagreeing by more than a quarter shift: not a drift (a second signal, a wrong shift).
+    const double wMin = std::min(wHi, wLo), wMax = std::max(wHi, wLo);
+    if (wMin > 0.2 * wMax && std::fabs(eHi - eLo) > shiftHz / 4) { afcStreak_ = 0; return; }
+    const double e = (eHi * wHi + eLo * wLo) / (wHi + wLo);
+    constexpr double kDeadband = 3.0;   // Hz — inside it the decoder is as good as on tune
+    if (std::fabs(e) < kDeadband) { afcStreak_ = 0; afcLastE_ = e; return; }
+    afcStreak_ = (afcStreak_ > 0 && (e > 0) == (afcLastE_ > 0)) ? afcStreak_ + 1 : 1;
+    afcLastE_ = e;
+    // ★ "Never while characters are being decoded cleanly unless drift is consistent": clean = frames this second and
+    //   no framing errors → three seconds in a row the same way; otherwise two (one noisy second moved it on real DWD).
+    const bool clean = good > 0 && bad == 0;
+    if (afcStreak_ < (clean ? 3 : 2)) return;
+    const double maxStep = shiftHz / 10;
+    const double step = std::max(-maxStep, std::min(maxStep, e * 0.5));
+    const double c = std::max(centre0_ - shiftHz / 2, std::min(centre0_ + shiftHz / 2, centerFrequency + step));
+    if (c != centerFrequency) retune(c);
 }
 void FskDecoder::updateFilters() {
     markSpaceFilterQ = 6.0 * centerFrequency / 1000.0;
@@ -329,6 +371,26 @@ void FskDecoder::process(const int16_t* samples, int count) {
         const double M = markEnv - noiseFloor, S = spaceEnv - noiseFloor;
         const double logic = mc * M - sc * S - 0.25 * (M * M - S * S);
         bool markState = logic > 0;
+        if (afcOn_) {   // ★ AFC (setAfc): the keyed tone's baseband rotation, summed for afcStep_
+            double r = hiRe_ * hiStRe_ - hiIm_ * hiStIm_; hiIm_ = hiRe_ * hiStIm_ + hiIm_ * hiStRe_; hiRe_ = r;
+            r = loRe_ * loStRe_ - loIm_ * loStIm_; loIm_ = loRe_ * loStIm_ + loIm_ * loStRe_; loRe_ = r;
+            if ((++oscN_ & 1023) == 0) {
+                const double gh = 1.0 / std::hypot(hiRe_, hiIm_), gl = 1.0 / std::hypot(loRe_, loIm_);
+                hiRe_ *= gh; hiIm_ *= gh; loRe_ *= gl; loIm_ *= gl;
+            }
+            const double k = afcLpK_;
+            zHi_[0] += (dv * hiRe_ - zHi_[0]) * k; zHi_[1] += (dv * hiIm_ - zHi_[1]) * k;
+            zHi_[2] += (zHi_[0] - zHi_[2]) * k;    zHi_[3] += (zHi_[1] - zHi_[3]) * k;
+            zLo_[0] += (dv * loRe_ - zLo_[0]) * k; zLo_[1] += (dv * loIm_ - zLo_[1]) * k;
+            zLo_[2] += (zLo_[0] - zLo_[2]) * k;    zLo_[3] += (zLo_[1] - zLo_[3]) * k;
+            if (logic > 0) {        // the high tone is the one keyed (biquadMark is the high filter)
+                accHiRe_ += zHi_[2] * pHiRe_ + zHi_[3] * pHiIm_; accHiIm_ += zHi_[3] * pHiRe_ - zHi_[2] * pHiIm_;
+            } else if (logic < 0) {
+                accLoRe_ += zLo_[2] * pLoRe_ + zLo_[3] * pLoIm_; accLoIm_ += zLo_[3] * pLoRe_ - zLo_[2] * pLoIm_;
+            }
+            pHiRe_ = zHi_[2]; pHiIm_ = zHi_[3]; pLoRe_ = zLo_[2]; pLoIm_ = zLo_[3];
+            if (++afcN_ >= (int)sampleRate) { afcN_ = 0; afcStep_(); }
+        }
         signalAccumulator += markState ? 1 : -1;
         bitDuration++;
         if (markState != oldMarkState) {

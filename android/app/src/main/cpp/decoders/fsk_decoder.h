@@ -208,7 +208,19 @@ public:
     double        audioThreshold() const { return navtex_ ? navtex_->audioThreshold() : audioMinimum; }
     int           stateNow() const { return navtex_ ? navtex_->stateNow() : (int)state; }
 
+    /** ★★ AFC (2026-10-05): follow a station that DRIFTS — a transmitter warming up, a receiver without a TCXO. Each
+     *  tone is mixed to baseband and its rotation measured over a second, only while that tone is the one keyed; the
+     *  centre is moved by half the error, no further than ±shift/2 from where it was set. While frames decode cleanly
+     *  it moves only after three seconds in a row agree on the direction, so a clean decode is never pushed about by
+     *  noise. ON by default for RTTY (measured, tools/rtty-bench); RttyAuto turns it on for its winner only. */
+    void   setAfc(bool on) { afcOn_ = on && !navtex_; }
+    double afcOffsetHz() const { return centerFrequency - centre0_; }
+    double centreHz() const { return centerFrequency; }
+    /** Move the tones' centre, keeping the decoder's state (bit clock, framing, shift) — AFC, and RttyAuto's candidates. */
+    void   retune(double centreHz);
+
 private:
+    void afcStep_();
     void updateFilters();
     void setState(State s);
     void processBit(bool bit);
@@ -248,6 +260,17 @@ private:
 
     Ita2*     ita2 = nullptr;
     NavtexRx* navtex_ = nullptr;
+
+    // ── AFC (see setAfc) ──
+    bool   afcOn_ = true;
+    double centre0_ = 0, afcLpK_ = 0, afcLastE_ = 0;
+    double hiRe_ = 1, hiIm_ = 0, loRe_ = 1, loIm_ = 0, hiStRe_ = 1, hiStIm_ = 0, loStRe_ = 1, loStIm_ = 0;
+    double zHi_[4] = {0}, zLo_[4] = {0};                     // two one-pole stages each: re1 im1 re2 im2
+    double pHiRe_ = 0, pHiIm_ = 0, pLoRe_ = 0, pLoIm_ = 0;   // the previous stage-2 output
+    double accHiRe_ = 0, accHiIm_ = 0, accLoRe_ = 0, accLoIm_ = 0;
+    int    afcN_ = 0, afcStreak_ = 0;
+    long   oscN_ = 0;
+    unsigned long afcGood_ = 0, afcBad_ = 0;
 };
 
 } // namespace vibe

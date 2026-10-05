@@ -62,6 +62,7 @@ private:
     std::vector<double> psd_;                      // smoothed power, bins 0..kN/2
     int psdFrames_ = 0;
     double centre_ = 0, shift_ = 0;                // what the candidates were started with (0 = none)
+    double lastCentre_ = 0, lastShift_ = 0;        // ★ the tones as last measured — a look-again starts there (AFC)
     // candidates
     std::vector<Cand> cands_;
     int winner_ = -1;
