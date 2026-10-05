@@ -1041,8 +1041,19 @@ function listenUrl(s) {
  *  directory last looked, the receiver sends them back to the door with a note (see the web
  *  client's showBusy). No id, or no address, means no deep link — the LISTEN button remains. */
 function radioUrl(r, s) {
-  if (!s || !s.address || !r || !r.id || s.demo) return '';
+  if (!s || !isValidReceiverAddress(s.address) || !r || !r.id || s.demo) return '';
   return `https://${s.address}/r/${encodeURIComponent(r.id)}/?join=1`;
+}
+
+/** ★★ THE ADDRESS RULE, ASKED AGAIN WHERE A TAB IS AIMED (CodeQL js/client-side-unvalidated-url-
+ *  redirection #94-#96, 2026-10-05). ownAddresses() already nulls any address that is not
+ *  <slug>.vibeserver.vibesdr.net the moment the listing arrives, so a visitor sees no change — but the
+ *  window.location writes below sat three hundred lines from that rule with nothing in between, and a
+ *  later path that skips ownAddresses (the demo set, a refactor) would have aimed a tab wherever a
+ *  listing said. The scheme is always ours (https://); the listing only ever supplies the host.
+ *  ★ ADDRESS_OK is declared further down the same script; this only runs on a click, long after. */
+function isValidReceiverAddress(a) {
+  return typeof a === 'string' && ADDRESS_OK.test(a);
 }
 
 /* ══ PINS, ANSWERED HERE SO NOBODY'S SERVER COLLECTS THE FAILURES ═══════════════════════════════
@@ -1239,17 +1250,20 @@ async function refreshUnlockedRadios(s) {
  *    never the thing that grants entry. The window is opened synchronously (a popup blocker will
  *    not honour one opened after an await) and then pointed at the signed URL. */
 async function openUnlocked(r, s, win) {
-  const rec = pinRestore(s.address);
+  // ★ Not one of ours: shut the blank tab rather than aim it (see isValidReceiverAddress).
+  if (!s || !isValidReceiverAddress(s.address)) { if (win) win.close(); return; }
+  const addr = s.address;
+  const rec = pinRestore(addr);
   const url = radioUrl(r, s);
-  if (!rec || !rec.pin || !url) { if (win) win.location = url || `https://${s.address}/`; return; }
+  if (!rec || !rec.pin || !url) { if (win) win.location = url || `https://${addr}/`; return; }
   try {
-    const base = `https://${s.address}/r/${encodeURIComponent(r.id)}`;
+    const base = `https://${addr}/r/${encodeURIComponent(r.id)}`;
     const ch = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' }).then((x) => x.json());
     const token = ch && ch.nonce ? await pinToken(rec.pin, ch.nonce) : '';
     /* ★ An operator carries their TICKET through as well as the PIN proof. The receiver reads the
      *  ticket for the reserved controls and the proof for the door; sending only one of the two
      *  would sign them in and then refuse them their own gain slider. */
-    const tk = ADMIN_TICKET.get(s.address);
+    const tk = ADMIN_TICKET.get(addr);
     const adm = tk ? `vs_admin_ticket=${encodeURIComponent(tk)}` : '';
     /* ★★ THE PROOF RIDES IN THE FRAGMENT (#…): a browser never sends it to the network, so it is not in
      *  any proxy or edge log, and the receiver strips it from the address bar on arrival
@@ -3158,6 +3172,8 @@ document.getElementById('list').addEventListener('click', (ev) => {
   const s = ALL.find((x) => x.address === a.dataset.unlockedSrv);
   const rec = s && s.address ? pinRestore(s.address) : null;
   if (!s || !rec || !rec.pin) return;     // ★ fall through to the plain href (no secret in memory)
+  if (!isValidReceiverAddress(s.address)) return;   // ★ not one of ours: never aim a tab at it (2026-10-05)
+  const addr = s.address;
   ev.preventDefault();
   /* ★★★ NO 'noopener' HERE, AND THAT IS NOT AN OVERSIGHT. window.open() WITH noopener RETURNS
    *     NULL — that is what the option means: no handle back. So this opened a blank tab and then
@@ -3169,7 +3185,7 @@ document.getElementById('list').addEventListener('click', (ev) => {
   const win = window.open('', '_blank');
   try { if (win) win.opener = null; } catch (e) { /* cross-origin once it navigates */ }
   void (async () => {
-    const base = `https://${s.address}`;
+    const base = `https://${addr}`;
     try {
       const ch = await fetch(`${base}/vibeserver/auth`, { cache: 'no-store' }).then((x) => x.json());
       const token = ch && ch.nonce ? await pinToken(rec.pin, ch.nonce) : '';
