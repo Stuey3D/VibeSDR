@@ -110,6 +110,7 @@
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
+#include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
 #include "vibe_rtl_tuner_restore.h"   // ★ the ONE "put the tuner back after its re-init" (both direct-sampling routes)
 #include <dlfcn.h>                    // ★ rtlsdr_get_r82xx_state, looked up where librtlsdr is not ours (checkTunerChip)
@@ -2390,6 +2391,18 @@ static std::atomic<double> g_dspWorkMaxMs{0.0};
 /* ★ Mirrors g_dspWorkMaxMs: the DSP thread is where the pipeline is in scope, and the status JSON
  *  only sees globals. See the note beside "demodWaits" in the JSON for why this figure matters. */
 static std::atomic<unsigned> g_demodWaits{0u};
+/* ★★ TUNE PACING'S VIEW OF THE LOAD (vibe_tune_pace.h, 2026-10-05). demodWaits is cumulative, so what
+ *  pacing needs is WHEN it last moved: a queue that filled ten minutes ago says nothing about now. The
+ *  health levels are copied out of healthTick as plain atomics, because g_healthLast is a struct the
+ *  health thread rewrites and a socket reader must not read it torn. */
+static std::atomic<int64_t> g_demodWaitsRiseMs{0};
+static std::atomic<int>     g_healthCpuLevel{0};
+static std::atomic<bool>    g_healthThrottled{false};
+static std::atomic<unsigned long long> g_tunesMerged{0ull};
+static inline int64_t paceNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 static std::atomic<double> g_dspStatAt{0.0};
 static std::atomic<double>    g_iqLastDropAt{0.0};
 /** ★★★ IQ THE RADIO'S OWN LIBRARY LOST BEFORE WE EVER SAW IT — the hole iqDrops cannot see.
@@ -8958,6 +8971,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     unsigned long long soleLastBytes = 0;   ///< previous sample, for the uplink rate
     double soleLastAt = 0;
     double dspLoadPct = 0;              ///< last measured total DSP load, %
+    /** ★★★ HOW LONG A SOCKET'S READER WAITS BETWEEN TWO APPLIED TUNES (vibe_tune_pace.h, 2026-10-05).
+     *  Stuart: "if the server's CPU is reporting that it is struggling we need to slow down the amount
+     *  of tune commands so that we don't overload it" — the Pi 2 in the garage. Every figure here is one
+     *  the server already publishes (dspCpu, demodWaits, the health pill's CPU rung and snail), so what
+     *  the pacing does can be read off /vibeserver.json from outside: tunePaceMs and tunesMerged. */
+    int tunePaceMs() {
+        vibetune::Load l;
+        l.dspPct = dspLoadPct;
+        l.cpuLevel = g_healthCpuLevel.load(std::memory_order_relaxed);
+        l.throttled = g_healthThrottled.load(std::memory_order_relaxed);
+        const int64_t rise = g_demodWaitsRiseMs.load(std::memory_order_relaxed);
+        // ★ 10 s: the DSP's own load figure is refreshed every ~5 s, so a rise inside two of its
+        //   windows is "now"; older than that and the pipeline has had time to catch up.
+        l.demodBlocked = rise > 0 && paceNowMs() - rise < 10000;
+        size_t q; { std::lock_guard<std::mutex> lk(iqMtx); q = iqQueuedSamples; }
+        l.backlogMs = sampleRate > 0 ? (double)q / sampleRate * 1000.0 : 0.0;
+        // ★ VIBESERVER_TUNE_PACE_MS sets a FLOOR, for measurement and for the end-to-end test
+        //   (scripts/test-server-tune-burst.mjs), which cannot make an idle Mac look like a Pi 2.
+        static const int floorMs = [] {
+            const char* e = std::getenv("VIBESERVER_TUNE_PACE_MS");
+            return e && *e ? std::max(0, std::min(2000, std::atoi(e))) : 0;
+        }();
+        return std::max(floorMs, vibetune::paceMs(l));
+    }
     /** The occupant's address, so a timeout can put THAT address on cooldown. */
     std::string occupantAddr;
     /** Warnings already sent this session, so each fires once: bit 0 = 2 min, bit 1 = 30 s.
@@ -17758,6 +17795,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                               *  them, in one HTTP GET instead of a day of measurement. */
                              + ",\"demodWaits\":" + std::to_string(
                                    g_demodWaits.load(std::memory_order_relaxed))
+                             /* ★ TUNE PACING, readable from outside (vibe_tune_pace.h, 2026-10-05): the
+                              *  gap a tune would be held for right now (0 / 150 / 350 ms), and how many
+                              *  tunes have been merged into a newer one since start. */
+                             + ",\"tunePaceMs\":" + std::to_string(tunePaceMs())
+                             + ",\"tunesMerged\":" + std::to_string(
+                                   g_tunesMerged.load(std::memory_order_relaxed))
                              + ",\"iqDropAgo\":" + std::to_string((int)llround(
                                    g_iqLastDropAt.load(std::memory_order_relaxed) > 0
                                        ? (double)vsNowEpoch() - g_iqLastDropAt.load(std::memory_order_relaxed)
@@ -19749,9 +19792,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             return t;
         };
+        /* ★★★ TUNES ARE HELD, AND THE NEWEST WINS (vibe_tune_pace.h, 2026-10-05). This reader applied
+         *  every tune it was sent, in order, so a drum spin that arrived as a clump — a slow link, a busy
+         *  box — was worked through retune by retune to reach a frequency the user had already left.
+         *  Now a tune is HELD: a newer one of the same shape replaces it, and it is applied when its
+         *  pace is up, when any other message arrives (order is kept), or when the socket goes. On an
+         *  idle server the pace is 0, so a lone tune still lands the instant it arrives and only a
+         *  backlog ALREADY in the socket is merged. */
+        vibetune::TuneHold tuneHold;
+        auto applyHeldTune = [&] {
+            const std::string m = tuneHold.take();
+            if (m.empty()) return;
+            handleControl(sock, m);
+            tuneHold.applied(monoMs());
+        };
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
-            int op = recvWs(sock, payload, 5000);
+            const int heldWait = tuneHold.waitMs(monoMs());
+            int op = recvWs(sock, payload, heldWait >= 0 ? std::min(heldWait, 5000) : 5000);
+            if (op == -2 && tuneHold.holding()) {             // the hold's window — apply when due
+                if (tuneHold.waitMs(monoMs()) == 0) applyHeldTune();
+                continue;
+            }
             if (op == -2) {                                   // quiet slice — probe liveness
                 const int64_t now = monoMs();
                 if (proto >= 1) {
@@ -19783,9 +19845,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             it = (lastApp - it->second > 2 * kAppLivenessMs) ? sessionLastAppMs.erase(it) : std::next(it);
                     sessionLastAppMs[session] = lastApp; }
                 if (appMsgsSeen < 12) { ++appMsgsSeen; compatRecord(isAudio ? "msg-audio" : "msg-spectrum", payload, "", ",\"session\":\"" + session.substr(0, 8) + "\""); }
-                handleControl(sock, payload);
+                bool passThrough = false;
+                const uint64_t mergedBefore = tuneHold.merged;
+                const std::string first = tuneHold.offer(payload, monoMs(), [&] { return tunePaceMs(); }, passThrough);
+                if (tuneHold.merged != mergedBefore) g_tunesMerged.fetch_add(1, std::memory_order_relaxed);
+                if (!first.empty()) { handleControl(sock, first); tuneHold.applied(monoMs()); }
+                if (passThrough) handleControl(sock, payload);
             }
         }
+        // ★ The last tune is never lost: one still held when the socket goes is applied, exactly as it
+        //   would have been without the hold.
+        if (tuneHold.holding()) applyHeldTune();
         { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get());
           /* ★★ AND THE SESSION'S LIVENESS STAMP, WHEN THIS WAS ITS LAST SOCKET (audit 2026-10-03).
            *  It was written on every text frame and never erased, so every session that ever spoke
@@ -21750,7 +21820,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     g_dspWorkMaxMs.store(workMs, std::memory_order_relaxed);
                 // ★ Cumulative, not a peak: what matters is whether it MOVES while somebody
                 //   listens. Zero and staying zero means the demod thread is keeping up.
-                g_demodWaits.store(rx.demodQueueWaits(), std::memory_order_relaxed);
+                {
+                    const unsigned w = rx.demodQueueWaits();
+                    // ★ A RISE is the signal tune pacing reads (see g_demodWaitsRiseMs) — the clock is
+                    //   read only when the counter moved, so a keeping-up pipeline pays nothing.
+                    if (w > g_demodWaits.load(std::memory_order_relaxed))
+                        g_demodWaitsRiseMs.store(paceNowMs(), std::memory_order_relaxed);
+                    g_demodWaits.store(w, std::memory_order_relaxed);
+                }
                 /* ★★★ RATE-LIMIT BY TIME, NOT BY BLOCK COUNT — "every 200 blocks" is not a
                  *     rate at all, because a block is not a fixed amount of time. Measured on
                  *     Stuart's Pi: ONE radio produced 44,680 of these lines in 25 minutes — THIRTY
@@ -26512,6 +26589,12 @@ void LocalSdrShim::healthTick() {
     if (now - lastAt < 2000) return;
     lastAt = now;
     const vibehealth::Health h = g_health.sample(g_vsBatteryLevel.load(), g_vsBatteryCharging.load());
+    // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
+    //   so they follow every sample, not only the ones that changed a level.
+    g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);
+    g_healthThrottled.store(h.tempKind == vibehealth::TempKind::ThrottleThermal
+                            || h.tempKind == vibehealth::TempKind::ThrottlePower
+                            || h.tempKind == vibehealth::TempKind::ThrottleUnknown, std::memory_order_relaxed);
     const bool first = !g_healthValid.load();
     if (!first && !vibehealth::differs(h, g_healthLast)) { g_healthLast = h; return; }
     g_healthLast = h; g_healthValid.store(true);

@@ -86,6 +86,7 @@ import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, I
 import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, clampVibePassband } from './sdrProtocol';
 import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
+import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -859,8 +860,25 @@ export abstract class VibeServerWsClient {
    *    `currentFreq` in step — that, not the socket, is what the reconnect reads. */
   private _routeTune(frequency: number, mode: string) {
     if (!(frequency > 0)) return;
-    VibePowerModule?.sendTuneCommand(frequency, mode);
+    /* ★★★ PACED BY THE SERVER'S LOAD (tunePace.ts, Stuart 2026-10-05: "if the server's CPU is reporting
+     *  that it is struggling we need to slow down the amount of tune commands"). Latest wins and the
+     *  last one always goes, so the radio ends where the user stopped; the dial on screen has already
+     *  moved (tune() set status before this). On a healthy server the gap is 0 and this calls native
+     *  synchronously, exactly as before. Native's own 80 ms coalescing still sits underneath. */
+    this.tunePacer.push({ frequency, mode });
   }
+
+  /** ★ One pacer per client: the frequency and mode travel together, so the newest pair wins whole. */
+  private tunePacer = new TunePacer<{ frequency: number; mode: string }>(
+    (t) => VibePowerModule?.sendTuneCommand(t.frequency, t.mode));
+  /** The last health levels and RTT the pacer was set from — see _retuneTunePace. */
+  private tuneLoad: { cpuLevel: number; throttled: boolean } = { cpuLevel: 0, throttled: false };
+  private _retuneTunePace() {
+    this.tunePacer.setGap(tunePaceMs({ ...this.tuneLoad, rttMs: this.rttAvg }));
+  }
+  /** ★ Drop a tune still being held — DAB has taken the dial, and a late frequency must not land on
+   *  top of the multiplex. Called by VibeServerClient.dab(). */
+  protected cancelPacedTune() { this.tunePacer.cancel(); }
 
   private _sendView(frequency: number, binBandwidth: number) {
     this.pendingView = { frequency, binBandwidth };
@@ -1165,6 +1183,8 @@ export abstract class VibeServerWsClient {
 
   destroy() {
     this.destroyed = true;
+    // ★ A tune still held by the pacer goes NOW — the last tune is never dropped (tunePace.ts).
+    this.tunePacer.flush();
     if (this.tuneSettleAsk) { clearTimeout(this.tuneSettleAsk); this.tuneSettleAsk = null; }
     this.stopLinkManager();
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
@@ -2112,6 +2132,7 @@ export abstract class VibeServerWsClient {
         this.rttAvg = med(this.rttHist);
         this.rttJit = this.rttHist.length >= 3
           ? med(this.rttHist.map(r => Math.abs(r - this.rttAvg))) : 0;
+        this._retuneTunePace();   // ★ a slow path clumps tunes too — the "ping" half of tunePace.ts
       }
       return;
     }
@@ -2403,6 +2424,9 @@ export abstract class VibeServerWsClient {
       const kind: ServerHealth['temp']['kind'] =
         t.kind === 'sensor' || t.kind === 'thermal' || t.kind === 'power' || t.kind === 'throttle'
           ? t.kind : 'none';
+      // ★ The tune pacing reads the SAME verdict the pill draws (tunePace.ts) — the CPU rung and the snail.
+      this.tuneLoad = { cpuLevel: Number(msg.cpu) || 0, throttled: healthThrottled(kind) };
+      this._retuneTunePace();
       this.callbacks.onHealth?.({
         cpu: Number(msg.cpu) || 0,
         ram: Number(msg.ram) || 0,

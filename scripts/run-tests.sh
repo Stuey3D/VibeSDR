@@ -89,6 +89,8 @@ deps_for() {
     test-connlog-lock)  echo "" ;;
     # ★★ The map's shared byte budget (vibe_bulk_pace.h), on a synthetic clock.
     test-bulk-pace)     echo "" ;;
+    # ★★ A burst of tunes: the newest wins, paced by the server's load (vibe_tune_pace.h, 2026-10-05).
+    test-tune-pace)     echo "" ;;
     test-time-decoder)  echo "android/app/src/main/cpp/decoders/time_decoder.cpp" ;;
     test-radiodns-ecc)  echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
     test-radiodns-name) echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
@@ -242,6 +244,10 @@ if node --no-warnings scripts/test_dab_share_services.ts; then pass=$((pass+1));
 # ★★ DAB tuning keys: a burst of presses is ONE block change on the server (the one stopped on), and
 #    leaving DAB drops the DAB station from the VTS (Stuart, 2026-10-05 — both).
 if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ TUNE PACING ON THE CLIENT (tunePace.ts, Stuart 2026-10-05: "if the server's CPU is reporting that it is
+#     struggling we need to slow down the amount of tune commands"): the health rung, the snail and the ping
+#     set the gap; latest wins, the first tune goes at once, the last one always lands.
+if node --no-warnings scripts/test_tune_pace.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_sprite_sizing.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_sprite_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★ The waterfall jitter buffer's pooled frame copies (framePool.ts): independent copies, reuse, bounded.
@@ -360,6 +366,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★★ SHARE A STATION THROUGH THE REAL SERVER: two listeners on a shared dial; the line the room receives is
 #     named from the receiver's own store, a smuggled label is not relayed, out-of-range / closed-mode shares
 #     are refused with a reason, flood control covers shares. Same VIBESERVER_BIN rule: not run without one.
+printf '\n\033[1m── tune burst (end to end) ──\033[0m\n'
+# ★★★ A BURST OF TUNES LANDS ON ITS LAST FREQUENCY (vibe_tune_pace.h, 2026-10-05 — the Pi 2 in the garage):
+#     50 tunes in a second, the same 50 as one clump, a mode switch inside a clump, and a loaded server's
+#     hold timer landing the trailing tune on its own. Same VIBESERVER_BIN rule: not run without one.
+node scripts/test-server-tune-burst.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 printf '\n\033[1m── chat share (end to end) ──\033[0m\n'
 node scripts/test-server-chat-share.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
