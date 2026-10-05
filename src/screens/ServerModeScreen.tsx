@@ -2953,9 +2953,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               </View>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                 {idleGrace > 0
-                  ? 'After five minutes with nobody connected the radio stops capturing and draws '
-                    + 'much less power. It is never unplugged or handed away, so the next listener '
-                    + 'starts it again immediately.'
+                  /* ★ WHAT IT REALLY DOES (2026-10-05, Kiko asked why Lite "never powers down the dongle"): parking stops
+                   *  the PROCESSING — nearly all the CPU and battery — but every radio keeps streaming and the samples are
+                   *  dropped (pauseCaptureIdle: stopping a stream is what crashed libusb and froze RSPs). "Draws much less
+                   *  power" read as the dongle switching off, which it never does. */
+                  ? 'After five minutes with nobody connected the server stops processing the radio, '
+                    + 'so this device does far less work. The radio itself stays plugged in and '
+                    + 'powered, so the next listener starts it again immediately.'
                   : 'The radio keeps capturing whether or not anybody is listening — warmer device, '
                     + 'flatter battery, and the only way to draw the 24-hour spectrogram.'}
               </Text>
