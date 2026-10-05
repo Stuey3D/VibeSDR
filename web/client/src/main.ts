@@ -9660,7 +9660,9 @@ function initDecoders(host: string, auth: AuthState) {
     },
     onState: (st) => {
       if (activeDec === 'navtex') { renderNavtex(); return; }   // ★ its status is the broadcast's — see renderNavtex
-      decStateText = st ? 'decoding…' : 'listening…';
+      // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
+      //   syncing told the listener text was coming when it was still hunting (2026-10-05).
+      decStateText = st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
       if (!decTuneHint) $('decStatus').textContent = decStateText;   // ★ the tuning guide, while up, IS the status
       setDecLive(!!st);
     },
