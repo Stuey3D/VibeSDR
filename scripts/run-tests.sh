@@ -217,6 +217,8 @@ if node --no-warnings scripts/test_worklet_defaults.mjs; then pass=$((pass+1)); 
 if node --no-warnings scripts/test_safe_text.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ Untrusted URLs (deep links, directories, a server's landing link) and the map page's literal/path guards.
 if node --no-warnings scripts/test_safe_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ The web client's `host` is an authority (+ /r/<id>) and nothing else (CodeQL #97-#99, 2026-10-05).
+if node --no-warnings scripts/test_server_host.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ A gzipped spectrum-socket frame cannot inflate past its ceiling (gzip bomb).
 if node --no-warnings scripts/test_bounded_inflate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ The map WebView page parses, for all three kinds (a template-literal page tsc cannot check).
