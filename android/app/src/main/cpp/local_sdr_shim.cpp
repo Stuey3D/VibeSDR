@@ -23518,6 +23518,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return true;
     }
 
+    /** ★★ THE NON-RTL RADIO THIS SERVER OPENED FROM AN ANDROID DESCRIPTOR, by name — nullptr when the
+     *  source is anything else (a dongle has its own usbFd path; an index/serial-opened radio, an RSP
+     *  or a network source has no descriptor to go dead). One question for the three radios that share
+     *  the watchdog's re-plug block, so none of them can be left out of it again (2026-10-05). */
+    const char* fdRadioName() const {
+        if (useAirspyHf()) return ahf->fdOpened() ? "Airspy HF+" : nullptr;
+        if (useHackRf())   return hrf->fdOpened() ? "HackRF" : nullptr;
+        if (useAirspy())   return asp->fdOpened() ? "Airspy R2/Mini" : nullptr;
+        return nullptr;
+    }
+    /** ★ Does that radio's descriptor still read the device descriptor? True when there is none. */
+    bool fdRadioAlive() const {
+        if (useAirspyHf()) return ahf->fdAlive();
+        if (useHackRf())   return hrf->fdAlive();
+        if (useAirspy())   return asp->fdAlive();
+        return true;
+    }
+
     /** ★★★ LET GO OF A DEAD USB HANDLE — Android only, see usbFdDead. Stops the reader, closes the
      *  librtlsdr device and our dup of the fd, so nothing (a tune from a control thread, a gain from the
      *  AGC) is ever issued on it again and the kernel can free the old device instance. Idempotent.
@@ -23760,25 +23778,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *       3. here, OUTSIDE the restart back-off so it is taken on the next tick: reopen on
                  *          it and re-state everything the owner set.
                  *  ★ devMtx then modeMtx, the documented order, as every other close/reopen of a radio
-                 *    here takes them — the control setters reach the HF+ under modeMtx. */
-                if (useAirspyHf() && ahf && ahf->fdOpened() && !radioReleased.load()) {
-                    if (silent && !usbFdDead.load() && !ahf->fdAlive()) {
+                 *    here takes them — the control setters reach the HF+ under modeMtx.
+                 *  ★★★ AND THE HACKRF AND THE AIRSPY R2/MINI, THROUGH THE SAME THREE STEPS (2026-10-05).
+                 *      Both had the HF+'s gap exactly — opened from a descriptor, no index, and nothing
+                 *      that could ever bring them back after a re-plug — and each source now has the same
+                 *      fdAlive / releaseDeadHandle / reopenOnFd. One block, three radios: a rule written
+                 *      per radio is how two of them were left out the first time. */
+                const char* fdWho = fdRadioName();
+                if (fdWho && !radioReleased.load()) {
+                    if (silent && !usbFdDead.load() && !fdRadioAlive()) {
                         usbFdDead.store(true);
-                        LOGE("Airspy HF+: our USB handle is dead (errno %d) — the radio has gone or re-enumerated. "
-                             "Releasing it; waiting for Android to hand the HF+ back on a fresh USB fd", errno);
+                        LOGE("%s: our USB handle is dead (errno %d) — the radio has gone or re-enumerated. "
+                             "Releasing it; waiting for Android to hand it back on a fresh USB fd", fdWho, errno);
                         { std::lock_guard<std::recursive_mutex> dlk(devMtx);
                           std::lock_guard<std::recursive_mutex> mlk(modeMtx);
-                          ahf->releaseDeadHandle(); }
+                          if (ahf) ahf->releaseDeadHandle();
+                          else if (hrf) hrf->releaseDeadHandle();
+                          else if (asp) asp->releaseDeadHandle(); }
                         if (!deviceLost.exchange(true)) { captureDown.store(true); notifyDeviceState(); }
                     }
                     if (usbFdDead.load()) {
                         if (const int fresh = freshUsbFd.exchange(-1); fresh >= 0) {
                             std::string ferr;
-                            bool fok;
+                            bool fok = false;
                             { std::lock_guard<std::recursive_mutex> dlk(devMtx);
                               std::lock_guard<std::recursive_mutex> mlk(modeMtx);
-                              fok = ahf->reopenOnFd(fresh, ferr);
-                              // ★ The owner's attenuator / AGC / calibration — what finishOpen cannot know.
+                              if (ahf)      fok = ahf->reopenOnFd(fresh, ferr);
+                              else if (hrf) fok = hrf->reopenOnFd(fresh, ferr);
+                              else if (asp) fok = asp->reopenOnFd(fresh, ferr);
+                              // ★ The owner's per-radio switches — what finishOpen cannot know (HF+: att /
+                              //   AGC / calibration). The R2 and HackRF sources keep their own, but this is
+                              //   the same call the deep restart makes after an R2 reopen, so it runs for all.
                               if (fok) LocalSdrShim::applyDesiredDsp(this); }
                             ::close(fresh);   // ★ reopenOnFd took its own dup; this one was ours to close
                             if (fok) {
@@ -23787,12 +23817,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                 srcRestarts = 0;
                                 deviceLost.store(false);
                                 captureDown.store(false);
-                                LOGI("Airspy HF+: back on the fresh USB fd Android handed over — capture resumed");
+                                LOGI("%s: back on the fresh USB fd Android handed over — capture resumed", fdWho);
                                 notifyDeviceState();
                                 continue;
                             }
                             // ★ Still dead: usbNeedsFreshFd() goes true again and Kotlin offers another.
-                            LOGE("Airspy HF+: the fresh USB fd did not open (%s) — waiting for another", ferr.c_str());
+                            LOGE("%s: the fresh USB fd did not open (%s) — waiting for another", fdWho, ferr.c_str());
                         }
                     }
                 }
@@ -23883,13 +23913,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             const bool isHrf = useHackRf();
                             const int  idx   = isHrf ? hrfIndex : aspIndex;
                             const bool deep  = srcRestarts > 2 && idx >= 0;
+                            std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                            std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+                            const double phys = rtlCenter.load() + hwOffsetHz();
+                            if (usbFdDead.load()) {
+                                // ★ Nothing to restart — the handle is gone (the re-plug block above,
+                                //   2026-10-05). Said on every back-off tick so the log shows the wait.
+                                rerr = std::string("the ") + (isHrf ? "HackRF" : "Airspy R2/Mini")
+                                     + "'s USB handle is dead — waiting for Android to hand it back on a "
+                                       "fresh fd (unplug and re-plug it if this persists)";
+                            } else {
                             LOGE("no IQ for 3s on %s — %s (attempt %d)",
                                  isHrf ? "a HackRF" : "an Airspy R2/Mini",
                                  deep ? "reopening the device" : "restarting the stream",
                                  srcRestarts);
-                            std::lock_guard<std::recursive_mutex> dlk(devMtx);
-                            std::lock_guard<std::recursive_mutex> mlk(modeMtx);
-                            const double phys = rtlCenter.load() + hwOffsetHz();
                             if (isHrf) {
                                 hrf->stop();
                                 if (deep) {
@@ -23913,6 +23950,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                     ok = asp->start(rerr);   // start() re-states every setting
                                 }
                             }
+                            }   // ★ !usbFdDead
                         } else if (useAirspyHf() && ahf) {
                             // ★ ESCALATE. The first two goes restart the stream on the handle we
                             // hold, which is all a stalled-but-present radio needs. After that the
@@ -24028,12 +24066,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //   there and concluding the radio is gone for ever.
                 // ★ An fd-opened HF+ whose descriptor is dead is NOT back, whatever the object says —
                 //   see the re-plug block above (usbFdDead is only ever set for an fd radio).
+                // ★ And the HackRF and the R2/Mini the same way, since they share the re-plug block (2026-10-05).
                 const bool back = useAirspyHf() ? (ahf  ? !usbFdDead.load() : vibe::AirspyHfSource::deviceCount() > 0)
                                 : useSdrplay()  ? (sdrp ? true : vibe::SdrplaySource::deviceCount() > 0)
-                                : useHackRf()   ? (hrf  ? true : vibe::HackRfSource::deviceCount() > 0)
+                                : useHackRf()   ? (hrf  ? !usbFdDead.load() : vibe::HackRfSource::deviceCount() > 0)
                                 // ★ And the R2 / Mini — left to findOurDevice() (librtlsdr), a
                                 //   stalled R2 was declared gone for good.
-                                : useAirspy()   ? (asp  ? true : vibe::AirspySource::deviceCount() > 0)
+                                : useAirspy()   ? (asp  ? !usbFdDead.load() : vibe::AirspySource::deviceCount() > 0)
                                                 : (findOurDevice() >= 0);
                 if (back == deviceLost.load()) {      // state changed
                     deviceLost.store(!back);
@@ -28700,7 +28739,8 @@ bool LocalSdrShim::adoptFreshUsbFd(int fd) {
     // ★ Only when asked: swapping a LIVE handle under a running stream is how a working radio dies.
     // ★ Named per radio (2026-10-05): the HF+ comes back through this door too now, and a log that
     //   says "RTL-SDR" about an Airspy sends whoever reads Nick's Diagnostics after the wrong radio.
-    const char* who = p->useAirspyHf() ? "Airspy HF+" : "RTL-SDR";
+    // ★ And the HackRF and R2/Mini, which share the door since the same day (fdRadioName).
+    const char* who = p->fdRadioName() ? p->fdRadioName() : "RTL-SDR";
     if (!p->usbFdDead.load()) { LOGI("%s: a fresh USB handle was offered but ours is alive — not taken", who); return false; }
     const int d = ::dup(fd);
     if (d < 0) { LOGE("%s: dup() of the fresh USB handle failed (errno %d)", who, errno); return false; }
