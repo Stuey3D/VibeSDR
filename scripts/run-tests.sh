@@ -281,6 +281,9 @@ if node --no-warnings scripts/test_wefax_align.ts >/dev/null; then pass=$((pass+
 if node --no-warnings scripts/test_wefax_crisp.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_wefax_crisp.ts"; fi
 if bash scripts/test-rtty-auto.sh >/dev/null 2>&1; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test-rtty-auto.sh"; fi
 if node --no-warnings scripts/test_tune_hint.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_tune_hint.ts"; fi
+# ★★★ A REOPENED SPECTRUM SOCKET CARRIES THE LISTENER'S OWN VFO BACK on a per-listener dial, and NEVER on a
+#     shared one (2026-10-05: the RSP on a locked range reset to its landing on every resume from background).
+if node --no-warnings scripts/test_reopenTune.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_reopenTune.ts"; fi
 if node --no-warnings scripts/test_rtty_spec.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_rtty_spec.ts"; fi
 # ★★ NAVTEX on audio (audit 2026-10-04): impulse bursts + selective fading, CER against the old decoder's numbers, and
 #    the BEL control byte never in the output.

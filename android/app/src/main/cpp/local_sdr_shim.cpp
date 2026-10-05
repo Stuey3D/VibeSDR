@@ -7209,6 +7209,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     person, and overruling them is the opposite of what the feature is for.
      *  ★ Guarded by clientMtx, like pendingAudio beside it. */
     std::string preTunedSession;
+    /** ★★★ A RETURNING LISTENER'S OWN VFO, BY SESSION — on a per-listener (locked-range) radio only.
+     *  A ClientDsp is keyed by its SPECTRUM SOCKET and dies with it, so a listener whose socket
+     *  dropped — an iPhone put in the background, a waterfall reconnect, a blip — came back to a
+     *  brand-new channel built at the owner's LANDING frequency: Stuart, 2026-10-05, on the Pi 500's
+     *  RSP (locked range, independent VFOs), "putting the app in the background to reply on Discord
+     *  killed the socket and when I went back to it the frequency reset to 4778 every time".
+     *  ★★ The landing's own rule already says this, one screen up: "Remembered by id: the same
+     *     listener returning is not a new arrival." It was honoured for the radio-wide landing
+     *     (landedSession) and never for the per-listener channel, which re-landed every socket.
+     *  ★★ THE WEB CLIENT HAD IT TOO — its spectrum socket reconnects with the same session id and
+     *     adopts the config's vfo — so this is fixed HERE, once, for every client, old apps and Jr
+     *     included, rather than taught to each of them.
+     *  ★ Never consulted on a SHARED dial: perClientDsp() is false there and no channel is built.
+     *  ★ Within a running server only, like every remembered dial (Rule 0: a start is not a
+     *    resume), and only for kSessionVfoKeepSec — a listener who comes back tomorrow is a new
+     *    arrival and gets the owner's landing. Guarded by clientMtx. */
+    struct SessionVfo { double vfoHz = 0, bwHz = 0, at = 0; std::string mode; };
+    std::map<std::string, SessionVfo> sessionVfo;
+    static constexpr double kSessionVfoKeepSec = 30.0 * 60.0;
+    static constexpr size_t kSessionVfoMax     = 256;
     /** ★★★ SESSION BY SOCKET, ON EVERY RADIO. `pendingAudio` records the same thing but ONLY when
      *  perClientDsp() is true — which needs a LOCKED CENTRE and maxUsers > 1. A single-listener
      *  receiver has neither, so every per-client structure is dead code there, and two fixes for
@@ -19567,15 +19587,54 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //     for someone who tuned to 90.1 a moment ago on their audio socket. The tune
                 //     they sent is already in `audioFreq`/`mode` — the shared handler applied it —
                 //     so adopt that rather than the owner's default.
+                /* ★★★ A RETURNING SESSION RESUMES ITS OWN VFO — see sessionVfo (2026-10-05).
+                 *  Only if it is still reachable: the owner may have moved or narrowed the locked
+                 *  window, or switched the mode off, since — then the landing is the right answer,
+                 *  exactly as for a stranger. preTuned still wins: a tune this session has just
+                 *  sent is newer than anything remembered. */
+                SessionVfo resume; bool resumed = false;
+                if (!preTuned && !session.empty()) {
+                    std::lock_guard<std::mutex> lk(clientMtx);
+                    auto it = sessionVfo.find(session);
+                    if (it != sessionVfo.end()) {
+                        if (Impl::nowSecs() - it->second.at <= kSessionVfoKeepSec) { resume = it->second; resumed = true; }
+                        sessionVfo.erase(it);       // ★ once: the live channel is the memory now
+                    }
+                    // ★★ THE GHOST IS NEWER STILL. A suspended phone's old spectrum socket can sit
+                    //    half-open until the liveness ping notices — on a multi-user radio it is not
+                    //    closed on arrival (only the SAME role on a one-listener radio is) — so its
+                    //    channel is still in clientDsp, carrying exactly the VFO we want, and its
+                    //    teardown would write the memo only after this channel had been landed.
+                    for (auto& kv : clientDsp) {
+                        if (!kv.second || kv.second->session != session || kv.second->vfoHz <= 0) continue;
+                        resume = SessionVfo{ kv.second->vfoHz, kv.second->bwHz, Impl::nowSecs(), kv.second->mode };
+                        resumed = true;
+                        break;
+                    }
+                }
+                if (resumed) {
+                    const double half = displaySpan() * 0.5;
+                    if (resume.vfoHz < rtlCenter.load() - half || resume.vfoHz > rtlCenter.load() + half
+                        || resume.mode.empty() || vsModeRefused(resume.mode)) {
+                        LOGI("listener %s: remembered %.3f kHz %s is no longer reachable — landing instead",
+                             session.c_str(), resume.vfoHz / 1e3, resume.mode.c_str());
+                        resumed = false;
+                    }
+                }
                 if (preTuned) {
                     c->vfoHz = audioFreq.load();
                     c->mode  = mode;
+                } else if (resumed) {
+                    c->vfoHz = resume.vfoHz;
+                    c->mode  = resume.mode;
                 } else {
                     c->vfoHz = g_vsLandingHz.load() > 0 ? g_vsLandingHz.load() : audioFreq.load();
                     { std::lock_guard<std::mutex> lk(g_vsLandingMtx);
                       c->mode = g_vsLandingMode.empty() ? mode : g_vsLandingMode; }
                 }
-                c->bwHz = paramsFor(c->mode).bandwidth;
+                c->bwHz = resumed && resume.bwHz > 0 ? resume.bwHz : paramsFor(c->mode).bandwidth;
+                if (resumed)
+                    LOGI("listener %s returned — resuming their own VFO, not the landing", session.c_str());
                 { std::lock_guard<std::mutex> lk(clientMtx); clientDsp[sock.get()] = c; }
                 clientRetune(c.get());
                 startClientThread(c);            // its own DSP thread, from here on
@@ -19922,6 +19981,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           if (goneDsp && goneDsp->audio && goneDsp->audio->isOpen() && goneDsp->audio != sock
               && !goneDsp->session.empty())
               pendingAudio[goneDsp->session] = PendingAudio{ goneDsp->audio, goneDsp->wantsOpus, goneDsp->forceMono };
+          // ★★★ AND REMEMBER WHERE THIS LISTENER WAS, so their returning socket resumes it rather
+          //     than re-landing (see sessionVfo). clientMtx is held here.
+          if (goneDsp && !goneDsp->session.empty() && goneDsp->vfoHz > 0) {
+              const double nowS = Impl::nowSecs();
+              for (auto it = sessionVfo.begin(); it != sessionVfo.end(); )
+                  it = (nowS - it->second.at > kSessionVfoKeepSec) ? sessionVfo.erase(it) : std::next(it);
+              if (sessionVfo.size() >= kSessionVfoMax && !sessionVfo.count(goneDsp->session)) {
+                  auto oldest = sessionVfo.begin();
+                  for (auto it = sessionVfo.begin(); it != sessionVfo.end(); ++it)
+                      if (it->second.at < oldest->second.at) oldest = it;
+                  sessionVfo.erase(oldest);
+              }
+              sessionVfo[goneDsp->session] = SessionVfo{ goneDsp->vfoHz, goneDsp->bwHz, nowS, goneDsp->mode };
+          }
           for (auto& kv : clientDsp) if (kv.second->audio == sock) kv.second->audio = nullptr;
           { std::lock_guard<std::mutex> al(adminSockMtx); adminSocks.erase(sock.get()); }
           if (audioClient == sock) {
