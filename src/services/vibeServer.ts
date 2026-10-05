@@ -678,6 +678,19 @@ export async function setServerLocationMode(m: LocationMode): Promise<void> {
  * Returns null when the owner has opted out ('off') or the fix is unavailable — the caller must
  * treat that as "no location", never as a reason to invent one.
  */
+/**
+ * ★★★ THE POSITION THAT LEAVES THE DEVICE IS THE GRID SQUARE'S CENTRE — nothing finer (2026-10-05, for the Google
+ *     Play Data safety form). PRIVACY.md has always promised "the Maidenhead grid square only, never a fix: a square
+ *     a few kilometres on a side"; the code published the coarse fix rounded to 0.01° (~1 km) beside the square, so
+ *     it said more than the policy did. Snapping to the 6-character square's centre (about 5.6 × 4.6 km in the UK)
+ *     makes the promise true for the directory, the server's listeners and the reverse-geocode alike; spot
+ *     distances move by at most ~3 km.
+ */
+function gridCentre(lat: number, lon: number): { lat: number; lon: number } {
+  const c = gridToLatLon(latLonToGrid(lat, lon));
+  return c ? { lat: Math.round(c.lat * 10000) / 10000, lon: Math.round(c.lon * 10000) / 10000 } : { lat, lon };
+}
+
 export async function getResolvedServerLocation():
     Promise<{ lat: number; lon: number; grid: string; label?: string; country?: string } | null> {
   try {
@@ -686,10 +699,8 @@ export async function getResolvedServerLocation():
     const manual = await getManualServerLocation();
     const loc = mode === 'manual' ? manual : await getUserLocation();
     if (!loc) return null;
-    // ★ Coarsened to ~1 km, exactly as publishLocation does — a grid square is a square, not a
-    //   house, and the two must not disagree about where this receiver is.
-    const lat = Math.round(loc.lat * 100) / 100;
-    const lon = Math.round(loc.lon * 100) / 100;
+    // ★ Snapped to its GRID SQUARE'S CENTRE, exactly as publishLocation does — see gridCentre.
+    const { lat, lon } = gridCentre(loc.lat, loc.lon);
     const rev = await reverseGeocode(lat, lon);
     return {
       lat, lon,
@@ -731,10 +742,9 @@ export async function publishLocation(): Promise<void> {
     const loc = mode === 'manual' ? manual : await getUserLocation();
     if (!loc) { emit(); return; }
 
-    // Coarsened to ~1 km — enough for distances, rings and the ITU region, and
-    // nowhere near enough to point at a house. It is served to every client.
-    const lat = Math.round(loc.lat * 100) / 100;
-    const lon = Math.round(loc.lon * 100) / 100;
+    // ★ Snapped to its GRID SQUARE'S CENTRE (see gridCentre) — enough for distances, rings and
+    //   the ITU region, and nowhere near enough to point at a house. It is served to every client.
+    const { lat, lon } = gridCentre(loc.lat, loc.lon);
 
     // A bare "52.29, -0.85" means nothing to a human. On the DEVICE path there's no
     // label to show, so name the place — once, here, and cached — rather than make

@@ -1,6 +1,6 @@
 # VibeSDR — Privacy Policy
 
-_Last updated: 15 September 2026_
+_Last updated: 5 October 2026_
 
 This policy covers the whole VibeSDR family:
 
@@ -88,11 +88,24 @@ above, unless you set a city or grid reference.
 
 **Where it goes.** All directory sorting and every map view is handled on the
 device: no directory, and no receiver, is ever told where a listener is. A
-position leaves a device in exactly two cases — to show a server's location when
-its owner lists it on vibesdr.net, and to the clients connected to that server,
-for the decoders that show location-based data on a map. In both cases it is the
-Maidenhead grid square only, never a fix: a square a few kilometres on a side
-(about 5.6 km by 4.6 km in the UK), so it says which town, not which street.
+position leaves a device only when a server's owner gives the server one, and then
+it goes to three places:
+
+- to the vibesdr.net directory, to show the server's location when its owner lists
+  it there;
+- to the clients connected to that server, for the decoders that show
+  location-based data on a map;
+- to OpenStreetMap's Nominatim service (nominatim.openstreetmap.org), to turn the
+  position into the name of the nearest town and its country, for display. The
+  answer is remembered on the device, so this happens once per position. If the
+  owner types a city instead, that name is sent to Nominatim to find where it is.
+  Nominatim's own privacy policy applies to those requests.
+
+In every case it is the centre of the Maidenhead grid square only, never a fix: a
+square a few kilometres on a side (about 5.6 km by 4.6 km in the UK), so it says
+which town, not which street. The directory and Nominatim are always reached over
+an encrypted (HTTPS) connection. Unlisting the server, or turning its location off,
+removes the position from the directory.
 
 **A word of advice if you serve from somewhere remote.** A grid square hides a
 person well in a town, a suburb or a village, where it covers thousands of
@@ -119,6 +132,16 @@ view is held in the server's memory on the owner's hardware, is not sent to the
 developer or anywhere else, and lets the owner block abuse of their radio. Servers
 reached through the public directory pass through Cloudflare's network on the way,
 as any website does.
+
+### Chat
+Some receivers — OpenWebRX, UberSDR and FM-DX servers — have a chat room of their
+own, and the app shows it. Chat belongs to the receiver: what you type goes
+straight from your device to that receiver, exactly as it would from its own web
+page, and the receiver's owner runs and moderates it. The developer never receives,
+stores or relays any chat. Many receivers are plain `http://` sites, so chat on them
+is not encrypted, as with any unencrypted website. You can hide any user's messages
+from your own view for the rest of your visit (long-press a message); that choice
+stays on your device and nobody is told. VibeServer has no free-text chat.
 
 ### Public sharing, the tunnel and the directory
 A VibeServer is private to your own network until you switch public sharing on.
