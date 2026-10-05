@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
+#include <unistd.h>
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -140,10 +142,23 @@ bool AirspyHfSource::open(int index, double sampleRateHz, double centreHz,
     return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
 }
 
-/** ★ OWNERSHIP OF THE DESCRIPTOR PASSES TO libusb. Do not close it here or in the caller: on
- *  Android the UsbDeviceConnection must outlive the stream, and closing it twice takes the
- *  radio down mid-capture. */
 double AirspyHfSource::lastRxSecs() const { return impl_->lastRx.load(std::memory_order_relaxed); }
+
+/* ★★★ WE OPEN ON OUR OWN dup() OF THE DESCRIPTOR, NOT ON KOTLIN'S (2026-10-05) — the RTL path has done
+ *  this since the use-after-free it documents in local_sdr_shim.cpp (`usbFd`). libusb_wrap_sys_device
+ *  does NOT take ownership: libusb_close() leaves the fd open, so whoever closes it decides when the
+ *  kernel's handle goes. Wrapping Kotlin's fd directly meant the UsbDeviceConnection's close() (a stop,
+ *  or the re-attach recovery replacing a dead connection) could pull the descriptor out from under a
+ *  libusb handle still in use — and a recycled fd number under a live handle sends our ioctls to some
+ *  other file. Our dup is an independent descriptor on the same open file: Kotlin closes its copy when
+ *  it likes, and we close ours in close(), AFTER airspyhf_close(). */
+static int dupForLibusb(int fd) {
+#ifdef VIBE_AIRSPYHF_HAS_FD
+    return fd >= 0 ? ::dup(fd) : -1;
+#else
+    (void)fd; return -1;
+#endif
+}
 
 bool AirspyHfSource::openFd(int fd, double sampleRateHz, double centreHz,
                             int gainTenthDb, std::string& err) {
@@ -155,11 +170,20 @@ bool AirspyHfSource::openFd(int fd, double sampleRateHz, double centreHz,
     if (open_) return true;
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (fd < 0) { err = "invalid USB file descriptor"; return false; }
-    if (airspyhf_open_fd(&impl_->dev, fd) != AIRSPYHF_SUCCESS || !impl_->dev) {
+    const int own = dupForLibusb(fd);   // ★ see dupForLibusb
+    if (own < 0) {
+        err = "could not duplicate the Airspy HF+ USB descriptor (errno " + std::to_string(errno) + ")";
+        std::fprintf(stderr, "airspyhf: %s\n", err.c_str());
+        return false;
+    }
+    if (airspyhf_open_fd(&impl_->dev, own) != AIRSPYHF_SUCCESS || !impl_->dev) {
         impl_->dev = nullptr;
+        ::close(own);
         err = "could not open the Airspy HF+ from the USB descriptor";
         return false;
     }
+    fd_ = own;
+    fdOpened_ = true;
     impl_->serial = 0;   // enumeration is unavailable here, so there is no serial to read
     return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
 #endif
@@ -168,6 +192,7 @@ bool AirspyHfSource::openFd(int fd, double sampleRateHz, double centreHz,
 /** Everything after the handle exists — identical whichever way it was obtained. */
 bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
                                 int gainTenthDb, std::string& err) {
+    hwRate_ = 0;   // ★ a new handle has no rate programmed yet — see setSampleRate
     // ★ ASK THE RADIO what rates it has. An HF+ Discovery tops out near 912 kHz where a dongle
     // does 2.4 MSPS, so a hard-coded list would offer rates it cannot do — and the failure
     // would be a stream that never starts rather than an error anyone could read.
@@ -224,11 +249,13 @@ bool AirspyHfSource::start(std::string& err) {
         return false;
     }
     streaming_ = true;
+    wantStreaming_ = true;
     return true;
 }
 
 void AirspyHfSource::stop() {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    wantStreaming_ = false;   // ★ an explicit stop — a dead handle being let go is not one
     if (!streaming_ || !impl_->dev) return;
     airspyhf_stop(impl_->dev);
     streaming_ = false;
@@ -238,7 +265,156 @@ void AirspyHfSource::close() {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     stop();
     if (impl_->dev) { airspyhf_close(impl_->dev); impl_->dev = nullptr; }
+    // ★ Our dup, and only AFTER the handle that used it is closed — see dupForLibusb.
+    if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
     open_ = false;
+}
+
+/* ★★★ STOP + START ON THE HANDLE WE HOLD — ON A DEADLINE (2026-10-05). The shallow and the fd-opened
+ *  restarts used to run airspyhf_stop/airspyhf_start INLINE, holding impl_->mtx, with none of the
+ *  deep path's guard. On a wedged-but-present HF+ (Nick's Pixel 6, overnight) a control transfer that
+ *  never answered then held the mutex for ever: every control thread queued behind it, shutdown
+ *  queued behind them, and on Android that is an ANR rather than a radio the watchdog can retry.
+ *  libairspyhf's control transfers now time out at 1 s each, so this SHOULD always return — the
+ *  deadline is the belt to those braces, because "should" is what the last hang said too.
+ *  ★ 5 s, not the close's 3: a stop + start is several bounded transfers plus the transfer reap
+ *    (up to 1 s), and a slow-but-alive radio must not be abandoned for being slow.
+ *  ★★ ON A TIMEOUT THE HANDLE IS ABANDONED, NOT REUSED — the worker is still inside the library with
+ *     it, and a second call on the same handle is how a stuck radio becomes a stuck process. The
+ *     worker is detached (joining would inherit the hang), exactly as the deep path's close is, and
+ *     the radio needs a fresh handle: a deep reopen by serial on a desktop, a fresh fd from
+ *     UsbManager on Android. */
+bool AirspyHfSource::restartOnHandle(std::string& err) {
+    airspyhf_device* dev = impl_->dev;
+    if (!dev) { err = "device not open"; return false; }
+    const bool wasStreaming = streaming_;
+    streaming_ = false;
+    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx, this };
+#ifdef VIBE_AIRSPYHF_HAS_FD
+    airspyhf_set_thread_hook(&ahfThreadHook);   // ★ before start: the threads are made there
+#endif
+    CbCtx* ctx = &impl_->ctx;
+    auto done = std::make_shared<std::promise<int>>();
+    auto fut  = done->get_future();
+    std::thread([done, dev, wasStreaming, ctx]() {
+        // ★ A failure to stop is EXPECTED and must not abort the restart — see restartStream.
+        if (wasStreaming) airspyhf_stop(dev);
+        done->set_value(airspyhf_start(dev, &streamCb, ctx));
+    }).detach();
+    if (fut.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        abandonHandle();
+        err = "the Airspy HF+ did not answer a stream restart within 5 s — handle abandoned, it needs a fresh one";
+        std::fprintf(stderr, "airspyhf: stream restart TIMED OUT after 5 s — abandoning the handle "
+                             "(the radio is wedged; it needs reopening, or replugging on Android)\n");
+        return false;
+    }
+    if (fut.get() != AIRSPYHF_SUCCESS) {
+        err = "the Airspy HF+ would not start streaming";
+        std::fprintf(stderr, "airspyhf: stream restart: start FAILED on the held handle\n");
+        return false;
+    }
+    streaming_ = true;
+    lost_ = false;
+    return true;
+}
+
+/** ★★★ CLOSE THE HELD HANDLE ON A 3 s DEADLINE — the deep restart's close, now shared with the Android
+ *  dead-fd release below. See the long note in restartStream for why it is a detached worker.
+ *  ★ OUR FD IS CLOSED IN THE WORKER, AFTER airspyhf_close — so a close that never returns never has its
+ *    descriptor pulled from under it (see abandonHandle). Caller holds impl_->mtx. False = timed out. */
+bool AirspyHfSource::closeHandleOnDeadline() {
+    airspyhf_device* dying = impl_->dev;
+    const bool wasStreamingNow = streaming_;
+    const int fd = fd_;
+    streaming_ = false;
+    impl_->dev = nullptr;
+    open_ = false;
+    fd_ = -1;
+    hwRate_ = 0;
+    if (!dying) { if (fd >= 0) ::close(fd); return true; }
+    auto done = std::make_shared<std::promise<void>>();
+    auto fut  = done->get_future();
+    std::thread([done, dying, wasStreamingNow, fd]() {
+        if (wasStreamingNow) airspyhf_stop(dying);
+        airspyhf_close(dying);
+        if (fd >= 0) ::close(fd);
+        done->set_value();
+    }).detach();
+    return fut.wait_for(std::chrono::seconds(3)) == std::future_status::ready;
+}
+
+/** ★ Is the USB descriptor we opened on still attached to a device? usbfs answers a read with the
+ *  device descriptor while it is, and -ENODEV for ever once it has gone or re-enumerated — the same
+ *  presence test the shim's RTL path uses (findOurDevice). True when there is no fd to ask. */
+bool AirspyHfSource::fdAlive() const {
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    if (fd_ < 0) return !fdOpened_ || impl_->dev != nullptr;
+    uint8_t d[18];
+    return ::pread(fd_, d, sizeof d, 0) == (ssize_t)sizeof d;
+}
+
+/** ★★★ LET GO OF A DEAD fd-OPENED HANDLE (Android, 2026-10-05). Stop + close on the deadline, then our
+ *  dup, so nothing is ever issued on it again and the kernel can free the old device instance. The
+ *  settings, and whether the stream was WANTED, are kept for reopenOnFd. Idempotent. */
+void AirspyHfSource::releaseDeadHandle() {
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    lost_ = true;
+    if (!impl_->dev && fd_ < 0) return;
+    if (closeHandleOnDeadline())
+        std::fprintf(stderr, "airspyhf: released the dead USB handle — nothing will be sent to it again\n");
+    else
+        std::fprintf(stderr, "airspyhf: closing the dead USB handle TIMED OUT after 3 s — abandoned to its worker\n");
+}
+
+/** ★★★ ADOPT A FRESH USB DESCRIPTOR AFTER A RE-PLUG (Android, 2026-10-05) — the HF+ half of what the RTL
+ *  path does in reopenDevice() with freshUsbFd. Nick's HF+ "couldn't be found" after a crash until it was
+ *  unplugged and re-plugged, and even then the running server never took it back: the fd path only ever
+ *  retried on the DEAD handle, and the Kotlin recovery only knew how to find a dongle.
+ *  ★ SAFE ORDER: the old handle (if any) is closed first — on the deadline, fd after handle — and only
+ *    then is the new descriptor opened (on our own dup; the caller keeps `fd`). Rate, tuning and gain
+ *    come back through finishOpen from the members we hold, then the AGC threshold and preamp; the shim
+ *    re-states the owner's per-radio switches (attenuator, AGC, calibration) after this returns. */
+bool AirspyHfSource::reopenOnFd(int fd, std::string& err) {
+    std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    const double rate   = curRate_ > 0.0 ? curRate_ : 0.0;
+    const double centre = curCentre_;
+    const int    gain   = curGainTenth_;
+    const bool   wanted = wantStreaming_;
+    if (impl_->dev || fd_ >= 0) {
+        if (!closeHandleOnDeadline()) {
+            err = "the old Airspy HF+ handle did not close — not opening a second one on the same radio";
+            std::fprintf(stderr, "airspyhf: fresh fd NOT adopted: %s\n", err.c_str());
+            return false;
+        }
+    }
+    open_ = false;
+    if (!openFd(fd, rate, centre, gain, err)) {
+        wantStreaming_ = wanted;   // ★ a failed open's close() cleared it; the next fresh fd must still stream
+        std::fprintf(stderr, "airspyhf: opening on the fresh USB fd FAILED: %s\n", err.c_str());
+        return false;
+    }
+    setAgcThreshold(agcHigh_);
+    setLna(lna_);
+    if (wanted && !start(err)) {
+        std::fprintf(stderr, "airspyhf: fresh USB fd opened but the stream would not start: %s\n", err.c_str());
+        return false;
+    }
+    lost_ = false;
+    std::fprintf(stderr, "airspyhf: radio back on a fresh USB fd (rate %u, centre %.0f Hz, %s)\n",
+                 hwRate_, centre, wanted ? "streaming" : "not streaming");
+    return true;
+}
+
+/** ★ Forget a handle a timed-out worker still holds. Never closed from here — see restartOnHandle.
+ *  ★ Its fd (our dup) is LEAKED with it, on purpose: closing a descriptor a stuck ioctl may still be
+ *    using lets the number be reused, and the library's next call would land on some other file. */
+void AirspyHfSource::abandonHandle() {
+    if (fd_ >= 0) std::fprintf(stderr, "airspyhf: leaking fd %d with the abandoned handle\n", fd_);
+    fd_ = -1;
+    impl_->dev = nullptr;
+    streaming_ = false;
+    open_ = false;
+    lost_ = true;
 }
 
 // ★★★ See the header for why this is safe here and deliberately absent on the RTL path.
@@ -262,10 +438,8 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
         //   precisely because the device is misbehaving, and refusing to re-start because the
         //   teardown of an already-broken stream complained would leave the radio dead for
         //   good. Same reasoning as the RSP's Uninit.
-        if (streaming_) { airspyhf_stop(impl_->dev); streaming_ = false; }
-        // start() re-seeds the callback context and sets streaming_ — don't duplicate it here.
-        if (!start(err)) return false;
-        lost_ = false;
+        // ★ On a deadline since 2026-10-05 — see restartOnHandle.
+        if (!restartOnHandle(err)) return false;
         std::fprintf(stderr, "airspyhf: stream restarted after a stall\n");
         return true;
     }
@@ -278,9 +452,7 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
     if (impl_->serial == 0) {
         err = "the Airspy HF+ stream stalled; retrying on the same handle (an fd-opened radio cannot be reopened here)";
         if (!open_ || !impl_->dev) return false;
-        if (streaming_) { airspyhf_stop(impl_->dev); streaming_ = false; }
-        if (!start(err)) return false;
-        lost_ = false;
+        if (!restartOnHandle(err)) return false;
         std::fprintf(stderr, "airspyhf: stream restarted on the same handle (fd-opened; no deep reopen)\n");
         return true;
     }
@@ -308,24 +480,10 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
     // ★ We do NOT then reopen after a timed-out close: the library still owns that handle, and
     //   opening a second one on the same device is how you turn a stuck radio into a stuck
     //   PROCESS. Report it, keep the server up, and let the ladder try again later.
-    {
-        auto done = std::make_shared<std::promise<void>>();
-        auto fut  = done->get_future();
-        airspyhf_device* dying = impl_->dev;
-        const bool wasStreamingNow = streaming_;
-        std::thread([done, dying, wasStreamingNow]() mutable {
-            if (wasStreamingNow) airspyhf_stop(dying);
-            airspyhf_close(dying);
-            done->set_value();
-        }).detach();
-        streaming_ = false;
-        impl_->dev = nullptr;
-        open_ = false;
-        if (fut.wait_for(std::chrono::seconds(3)) != std::future_status::ready) {
-            err = "the Airspy HF+ did not respond to being closed — it needs replugging";
-            std::fprintf(stderr, "airspyhf: close timed out; not reopening\n");
-            return false;
-        }
+    if (!closeHandleOnDeadline()) {
+        err = "the Airspy HF+ did not respond to being closed — it needs replugging";
+        std::fprintf(stderr, "airspyhf: close timed out; not reopening\n");
+        return false;
     }
 
     if (serial == 0 ||
@@ -357,9 +515,11 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
 // ── Tuning and rate ─────────────────────────────────────────────────────────
 void AirspyHfSource::setFrequency(double hz) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    // ★ Remembered FIRST (2026-10-05): a tune that lands while the handle is dead (waiting for a fresh
+    //   fd on Android) is where the listener wants the radio when it comes back — see reopenOnFd.
+    curCentre_ = hz;           // remembered for restartStream(deep) / reopenOnFd
     if (!impl_->dev) return;
     airspyhf_set_freq(impl_->dev, (uint32_t)std::llround(hz));
-    curCentre_ = hz;           // remembered for restartStream(deep)
 }
 
 uint32_t AirspyHfSource::nearestRate(double hz) const {
@@ -405,9 +565,22 @@ bool AirspyHfSource::setSampleRate(double hz) {
         std::fprintf(stderr, "airspyhf: asked for %.0f Hz, using this radio's own rate %u Hz "
                              "(other rates change the tuner architecture and mis-tune MW)\n", hz, r);
     if (!r) return false;
-    if (airspyhf_set_samplerate(impl_->dev, r) != AIRSPYHF_SUCCESS) return false;
-    curRate_ = (double)r;      // remembered for restartStream(deep)
-    return true;
+    /* ★★★ AN UNCHANGED RATE NEVER REACHES THE LIBRARY (2026-10-05). airspyhf_set_samplerate() begins
+     *     with libusb_clear_halt() on the bulk endpoint the stream is reading — a known way to kill a
+     *     live stream — and the shim calls this on EVERY rate change it handles, while streaming, with
+     *     a rate that (see above) can only ever resolve to the one this handle already runs at. So it
+     *     was all risk and no change. hwRate_ is per HANDLE: 0 after any open, so a fresh handle is
+     *     always programmed. */
+    if (r == hwRate_) { curRate_ = (double)r; return true; }
+    // ★ A REAL change on a live stream: stop, set, start — never clear_halt under running transfers.
+    //   (Unreachable today, since every request resolves to the top rate; here so it stays safe.)
+    const bool wasStreaming = streaming_;
+    if (wasStreaming) { airspyhf_stop(impl_->dev); streaming_ = false; }
+    const bool ok = airspyhf_set_samplerate(impl_->dev, r) == AIRSPYHF_SUCCESS;
+    if (ok) { hwRate_ = r; curRate_ = (double)r; }   // curRate_ remembered for restartStream(deep)
+    else std::fprintf(stderr, "airspyhf: set sample rate %u FAILED\n", r);
+    if (wasStreaming) { std::string e; if (!start(e)) std::fprintf(stderr, "airspyhf: restart after the rate change FAILED: %s\n", e.c_str()); }
+    return ok;
 }
 
 // ── Gain ────────────────────────────────────────────────────────────────────
@@ -420,8 +593,8 @@ bool AirspyHfSource::setSampleRate(double hz) {
 // is the right default on an HF+ — unlike a dongle, its AGC is good.
 void AirspyHfSource::setGainTenthDb(int tenthDb) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+    curGainTenth_ = tenthDb;   // remembered for restartStream(deep) / reopenOnFd — first, as setFrequency
     if (!impl_->dev) return;
-    curGainTenth_ = tenthDb;   // remembered for restartStream(deep)
     if (tenthDb < 0) { setAgc(true); return; }
     setAgc(false);
     const int wantDb = std::min(480, tenthDb) / 10;      // 0..48 dB of wanted gain
@@ -509,6 +682,11 @@ void AirspyHfSource::setCalibrationPpb(int) {}
 std::string AirspyHfSource::model() const { return ""; }
 double AirspyHfSource::lastRxSecs() const { return 0.0; }
 bool AirspyHfSource::restartStream(bool, std::string& err) {
+    err = "this build has no Airspy HF+ support"; return false;
+}
+bool AirspyHfSource::fdAlive() const { return true; }
+void AirspyHfSource::releaseDeadHandle() {}
+bool AirspyHfSource::reopenOnFd(int, std::string& err) {
     err = "this build has no Airspy HF+ support"; return false;
 }
 }  // namespace vibe

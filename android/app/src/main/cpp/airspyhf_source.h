@@ -56,10 +56,15 @@ public:
     /** ★★ OPEN AN ALREADY-OPEN USB FILE DESCRIPTOR — the only way in on Android, where
      *  UsbManager hands you an fd and forbids enumeration entirely. Needs the vendored
      *  libairspyhf (VIBE_AIRSPYHF_HAS_FD); Homebrew's build has no such entry point, so this
-     *  fails cleanly on a desktop rather than pretending. libusb takes ownership of the fd. */
+     *  fails cleanly on a desktop rather than pretending.
+     *  ★ We open on our OWN dup() of `fd` and close it ourselves (2026-10-05); the caller keeps and
+     *    closes its own descriptor whenever it likes. See dupForLibusb in the .cpp. */
     bool openFd(int fd, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     void close();
     bool isOpen() const { return open_; }
+    /** True once this source has been opened from a USB descriptor (Android) — it stays true after
+     *  a close, because such a radio can only ever come back through a fresh descriptor. */
+    bool fdOpened() const { return fdOpened_; }
 
     void setSink(IqSink sink) { sink_ = std::move(sink); }
     bool start(std::string& err);
@@ -150,6 +155,15 @@ public:
      *  pretend. */
     bool restartStream(bool deep, std::string& err);
 
+    /** ★★★ ANDROID RE-PLUG RECOVERY (2026-10-05) — the HF+ half of the shim's usbFdDead/freshUsbFd.
+     *  fdAlive(): is the descriptor we opened on still attached (usbfs read of the device descriptor)?
+     *  releaseDeadHandle(): stop + close the dead handle and our fd, on a deadline; settings kept.
+     *  reopenOnFd(): close whatever is left, open on a FRESH descriptor from UsbManager (our own dup —
+     *  the caller keeps its fd), re-apply rate/tuning/gain/threshold/preamp, restart a wanted stream. */
+    bool fdAlive() const;
+    void releaseDeadHandle();
+    bool reopenOnFd(int fd, std::string& err);
+
     /** ★★★ SAMPLES libairspyhf THREW AWAY BEFORE THEY REACHED US. The library parks each USB buffer
      *  in a small ring for its own consumer thread; when that thread is late and the ring is full,
      *  the next buffer is DROPPED and the count rides on the following transfer as
@@ -172,11 +186,19 @@ public:
 private:
     std::atomic<uint64_t> usbDropped_{0}, usbDropEvents_{0}, usbDropPending_{0};
     bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
+    /** Stop + start on the held handle, on a deadline. Caller holds impl_->mtx. See the .cpp. */
+    bool restartOnHandle(std::string& err);
+    void abandonHandle();
+    bool closeHandleOnDeadline();
     struct Impl;
     Impl* impl_ = nullptr;
     IqSink sink_;
     std::vector<uint32_t> rates_;
     bool open_ = false, streaming_ = false, lost_ = false, paused_ = false;
+    uint32_t hwRate_ = 0;        // the rate THIS handle is programmed at; 0 = none yet (setSampleRate)
+    int  fd_ = -1;             // our dup of the Android USB descriptor; -1 = none (see openFd)
+    bool fdOpened_ = false;
+    bool wantStreaming_ = false; // start() sets, stop() clears — survives a dead handle (reopenOnFd)
     bool agc_ = true, agcHigh_ = false, lna_ = false;
     int  att_ = 0;
     // ★ WHAT WE WERE LAST ASKED FOR — kept solely so restartStream(deep) can put the radio

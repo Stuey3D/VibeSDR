@@ -67,6 +67,16 @@ typedef int bool;
  *   ★ MUST STAY A POWER OF TWO — head and tail are masked with (RAW_BUFFER_COUNT - 1). */
 #define RAW_BUFFER_COUNT (64)
 #define AIRSPYHF_SERIAL_SIZE (28)
+/* ★★★ VibeSDR (2026-10-05): EVERY CONTROL TRANSFER GETS A DEADLINE. Upstream passes timeout 0 to
+ *     libusb_control_transfer, which libusb reads as WAIT FOREVER. On an HF+ that is wedged but still
+ *     enumerated (Nick's Pixel 6, overnight) the first SET_FREQ / RECEIVER_MODE never returns, and the
+ *     caller is holding AirspyHfSource's mutex — so the stall watchdog, every control thread and
+ *     shutdown queue up behind it, and on Android that is an ANR, not a recoverable radio.
+ *     1 s is ~1000x a healthy round trip (sub-ms), so a slow-but-alive radio never trips it.
+ *   ★ A timeout returns LIBUSB_ERROR_TIMEOUT (negative). Every check below must treat a NEGATIVE
+ *     result as failure — `result < sizeof(buf)` did NOT (int -> size_t made -7 a huge success), so
+ *     those comparisons are cast to int. */
+#define AIRSPYHF_CTRL_TIMEOUT_MS (1000)
 
 #define MAX_SAMPLERATE_INDEX (100)
 #define DEFAULT_SAMPLERATE (768000)
@@ -648,7 +658,7 @@ static int airspyhf_read_samplerates_from_fw(airspyhf_device_t* device, uint32_t
 		len,
 		(unsigned char*) buffer,
 		(len > 0 ? len : 1) * (int16_t) sizeof(uint32_t),
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < 1)
 	{
@@ -669,7 +679,7 @@ static int airspyhf_read_samplerate_architectures_from_fw(airspyhf_device_t* dev
 		len,
 		(unsigned char*) buffer,
 		(len > 0 ? len : 1) * (int16_t) sizeof(uint32_t),
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < 1)
 	{
@@ -1244,9 +1254,9 @@ int ADDCALL airspyhf_set_samplerate(airspyhf_device_t* device, uint32_t samplera
 			0,
 			(unsigned char*) &buf,
 			sizeof(buf),
-			0);
+			AIRSPYHF_CTRL_TIMEOUT_MS);
 
-		if (result < sizeof(buf))
+		if (result < (int) sizeof(buf))
 		{
 			return AIRSPYHF_ERROR;
 		}
@@ -1262,7 +1272,7 @@ int ADDCALL airspyhf_set_samplerate(airspyhf_device_t* device, uint32_t samplera
 		samplerate,
 		NULL,
 		0,
-		0
+		AIRSPYHF_CTRL_TIMEOUT_MS
 		);
 
 	if (result != 0)
@@ -1278,7 +1288,7 @@ int ADDCALL airspyhf_set_samplerate(airspyhf_device_t* device, uint32_t samplera
 		0,
 		&gain,
 		sizeof(uint8_t),
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result == sizeof(uint8_t))
 	{
@@ -1305,7 +1315,7 @@ int ADDCALL airspyhf_set_receiver_mode(airspyhf_device_t* device, receiver_mode_
 		0,
 		NULL,
 		0,
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result != 0)
 	{
@@ -1387,11 +1397,11 @@ int ADDCALL airspyhf_set_freq(airspyhf_device_t* device, const uint32_t freq_hz)
 			0,
 			(unsigned char*) &buf,
 			sizeof(buf),
-			0);
+			AIRSPYHF_CTRL_TIMEOUT_MS);
 
 		iq_balancer_set_optimal_point(device->iq_balancer, device->optimal_point);
 
-		if (result < sizeof(buf))
+		if (result < (int) sizeof(buf))
 		{
 			return AIRSPYHF_ERROR;
 		}
@@ -1421,9 +1431,9 @@ static int airspyhf_config_write(airspyhf_device_t* device, uint8_t *buffer, uin
 		0,
 		buf,
 		sizeof(buf),
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
-	if (result < sizeof(buf))
+	if (result < (int) sizeof(buf))
 	{
 		return AIRSPYHF_ERROR;
 	}
@@ -1444,11 +1454,11 @@ static int airspyhf_config_read(airspyhf_device_t* device, uint8_t *buffer, uint
 		0,
 		buf,
 		sizeof(buf),
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	memcpy(buffer, buf, MIN(length, sizeof(buf)));
 
-	if (result < sizeof(buf))
+	if (result < (int) sizeof(buf))
 	{
 		return AIRSPYHF_ERROR;
 	}
@@ -1519,7 +1529,7 @@ int ADDCALL airspyhf_board_partid_serialno_read(airspyhf_device_t* device, airsp
 		0,
 		(unsigned char*)read_partid_serialno,
 		length,
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < length)
 	{
@@ -1542,7 +1552,7 @@ int ADDCALL airspyhf_version_string_read(airspyhf_device_t* device, char* versio
 		0,
 		(unsigned char*) version_local,
 		(MAX_VERSION_STRING_SIZE - 1),
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < 0)
 	{
@@ -1575,7 +1585,7 @@ int ADDCALL airspyhf_set_user_output(airspyhf_device_t* device, airspyhf_user_ou
 		(uint16_t)value,
 		NULL,
 		0,
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < 0)
 	{
@@ -1597,7 +1607,7 @@ int ADDCALL airspyhf_set_hf_agc(airspyhf_device_t* device, uint8_t flag)
 		0,
 		NULL,
 		0,
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < 0)
 	{
@@ -1619,7 +1629,7 @@ int ADDCALL airspyhf_set_hf_agc_threshold(airspyhf_device_t* device, uint8_t fla
 		0,
 		NULL,
 		0,
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < 0)
 	{
@@ -1641,7 +1651,7 @@ int ADDCALL airspyhf_set_hf_att(airspyhf_device_t* device, uint8_t value)
 		0,
 		NULL,
 		0,
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < 0)
 	{
@@ -1663,7 +1673,7 @@ int ADDCALL airspyhf_set_hf_lna(airspyhf_device_t* device, uint8_t flag)
 		0,
 		NULL,
 		0,
-		0);
+		AIRSPYHF_CTRL_TIMEOUT_MS);
 
 	if (result < 0)
 	{
