@@ -62,7 +62,7 @@ import DoorConditions from '../components/DoorConditions';
 import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
-import { DabBlockStepper, liveStationAfterDab } from '../services/dabStepper';
+import { DabBlockStepper, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
@@ -2345,6 +2345,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabError(undefined);
     c.dab(true);
     setDabOn(true);
+  }, []);
+
+  /** ★★★ EXIT DAB — THE BOX'S BUTTON AND THE WRIST'S. Never toggleDab: that is the DAB *button*, and a
+   *  toggle pressed while the app believes it is out of DAB ENTERS it. A box left on screen out of DAB
+   *  (a late report re-opened it) made EXIT put Stuart straight back on 13B (2026-10-05 23:06, Pi 2 —
+   *  dabExitAction / DabExitGuard in services/dabStepper.ts say the rest). Out of DAB it only puts the
+   *  box away; there is nothing to leave. */
+  const exitDab = useCallback(() => {
+    const c = client.current;
+    if (dabExitAction(dabOnRef.current) === 'leave') c?.dab?.(false);
+    dabOnRef.current = false;
+    setDabOn(false); setDabBoxOpen(false); setDabState(null); setDabError(undefined);
   }, []);
 
   /** ★ A DAB bookmark: the multiplex AND the service, in one go — the web client's dabGoTo.
@@ -4975,7 +4987,10 @@ export default function SDRScreen({ route, navigation }: Props) {
             }
           }
         } else {
-          setDabOn(false);
+          /* ★★★ THE MODE ENDED, SO THE BOX GOES WITH IT. Only the flag was cleared, so a box a late
+           *  report had re-opened stayed on screen over MW with its EXIT now meaning ENTER (see
+           *  exitDab). The web client closes its box on dab_off too (dabUiOff). */
+          setDabOn(false); dabOnRef.current = false; setDabBoxOpen(false);
         }
       },
       // ★★★ THE RADIO IS THE AUTHORITY ON ITS OWN GAIN, and until the server sent this the app had
@@ -7995,7 +8010,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       /* ★ The wrist asking for DAB. Buddy has no route of its own — see watchProvider's note on
        *  the demodulator grid — so this is the whole mechanism. */
-      onDabMode: (on: boolean) => { if (on !== dabOnRef.current) toggleDab(); },
+      /* ★★ ENTER IS THE TOGGLE, EXIT IS exitDab. The toggle with the phone's box shut only RE-OPENED
+       *  the box ("show me that again"), so the wrist's EXIT DAB left the radio in DAB. */
+      onDabMode: (on: boolean) => {
+        if (!on) { if (dabOnRef.current) exitDab(); return; }
+        if (!dabOnRef.current) toggleDab();
+      },
       /* ★ A PICK, not a nudge: the wrist chose this block from the list, so tune it directly.
        *  Turning it back into a delta here would reintroduce the bug the picker exists to kill. */
       onDabBlockPick: (index: number) => {
@@ -10942,7 +10962,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onActiveLogo={setDabActiveLogo}
           lastAudioAt={() => lastAudioAtRef.current}
           audioRunStartAt={() => audioRunStartRef.current}
-          onExit={toggleDab}
+          onExit={exitDab}
           tall={dabTall} onTall={onDabTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
           onBookmarks={() => { setFreqModalDab(true); setFreqModalOpen(true); }}
