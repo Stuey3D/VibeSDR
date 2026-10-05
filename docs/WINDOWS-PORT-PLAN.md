@@ -374,7 +374,15 @@ decoders and vibedsp, about 114,500 lines). Counted 2026-10-05.
   How large the SAC-on share of SDR users is, is **[unverified]**: ask the first Windows testers what Windows
   Security → App & browser control → Smart App Control says, and decide on signing from that. Unsigned test builds
   (Milestone 1) are unaffected on Stuart's PC if his setting is Off. This was not known in August.
-- Cheaper routes than the declined EV certificate:
+- ★★ **STUART'S DECISION (2026-10-05): sign, but not for ~£120 a year on a free app.** Recommended route:
+  **SignPath Foundation (free for open source)**. The VibeSDR repo is **public and GPL-3.0** (checked with `gh repo
+  view`), which meets its licence requirement. As recalled, to be **[verified against their current terms before
+  applying]**: artefacts must come from public CI (GitHub Actions — the Windows build lives there anyway); a short
+  code-signing policy on the project page; two-factor on maintainers' accounts. ▶ Open question: **the SDRplay API is
+  a closed binary** — if SignPath objects to bundling it, ship SDRplay support as an optional separate download.
+  Free fallback to check: the Microsoft Store individual developer account (believed free now — unverified — but a
+  driver-switching server may not fit the Store's packaging rules).
+- Cheaper routes than the declined EV certificate (all paid; kept for reference):
   - **SignPath Foundation**: free OV signing for open-source projects. Whether VibeServer qualifies
     under its licence is **[decide]**.
   - **Azure Artifact Signing (Trusted Signing), about US$10/month**: trusted by both SmartScreen and
@@ -477,6 +485,7 @@ llvm-mingw and cloudflared allow.
    is ON, an unsigned app is blocked with *no override*; everyone else gets SmartScreen's "Run anyway". Once early
    testers tell us how common SAC-on is: a UK company (which makes Azure Artifact Signing about US$10/month
    available), SignPath (if the licence qualifies), an OV certificate — or accept that SAC-on machines cannot run it?
+   ★ ANSWERED 2026-10-05: sign, free route preferred — SignPath Foundation (repo is public GPL-3.0); see §4.7.
 3. **Is VibeServer open source** for SignPath's purposes? Under which licence?
 4. **Tray app first, service later**, or is a headless service needed from day one?
 5. **Firewall rule:** Private networks only by default, or Public too?
