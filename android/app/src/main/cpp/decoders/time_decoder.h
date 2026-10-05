@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace vibe {
 
@@ -146,29 +147,102 @@ public:
      *  a few failures is a marginal antenna, all failures is the wrong station or the wrong mode. */
     unsigned long minutesGood() const { return good_; }
     unsigned long minutesFailed() const { return bad_; }
+    /** Of minutesGood(), how many were announced by the multi-minute vote rather than one clean
+     *  minute corroborated by the next. */
+    unsigned long minutesVoted() const { return voted_; }
     /** ★ RWM has no date to report, so "how many second markers have been counted cleanly" IS the
      *  reading. Also useful on the other stations as a framing sanity check. */
     int  secondNow() const { return second_; }
     /** True for a station that can never produce a TimeStamp — the UI must not sit waiting. */
     bool carriesTimeCode() const { return station_ != Station::RWM; }
+    /** ★★ Which transmitter: "WWV" (Fort Collins, 1000 Hz tick) or "WWVH" (Kauai, 1200 Hz), from
+     *  the seconds tick folded over many seconds; "WWV/WWVH" until one is clearly the stronger.
+     *  The other stations return their own name. */
+    const char* stationTag() const;
 
 private:
     void  setState(State s);
-    void  onSecondEdge(double dipMs, double gapMs);
-    void  pushBit(int bit);
+    void  onRwmEdge();
     bool  decodeMinute(TimeStamp& out) const;
     bool  decodeMsf(TimeStamp& out) const;
     bool  decodeDcf77(TimeStamp& out) const;
     bool  decodeWwv(TimeStamp& out) const;
     bool  decodeWwvb(TimeStamp& out) const;
     void  emitPartial();
-    // ── Framing by elapsed time (MSF, DCF77, WWVB) — see the note above onSecondEdge ──────────
-    void  beginFrame(long long anchorClock);
+    void  pushBit(int bit);
+
+    // ── The matched-filter reader (MSF, DCF77, WWVB, WWV) — see the block in the .cpp ─────────
+    /** One second as read: the best symbol overall and its margin; the best DATA symbol and its
+     *  margin; the soft value of each bit (+1 = surely 1, -1 = surely 0, 0 = nothing known). */
+    struct SecRec {
+        long long idx = -1;            ///< flywheel second number (-1 = none)
+        signed char cls = -1, dcls = -1;
+        float conf = 0, dconf = 0, softA = 0, softB = 0;
+        bool contrast = false;         ///< the levels allowed a read at all
+    };
+    static constexpr int    kMaxCls = 6, kMaxWin = 170, kHistBins = 200;
+    static constexpr size_t kRecRing = 256;
+    void   initReader();
+    void   readerStep();
+    void   classify(SecRec& r) const;
+    void   onSecond(const SecRec& r);
+    void   placeRec(int pos, const SecRec& r);
+    int    symbolOf(const SecRec& r, bool& readable) const;
+    bool   strongKind(const SecRec& r, int kind) const;
+    const SecRec& rec(long long idx) const;
+    float  envAt(long long i) const;
+    double zAt(double pos) const;
+    bool   contrastOk() const;
+    bool   isEdge(long long i, double& pos) const;
+    int    phaseBin(double pos) const;
+    double histTriple(int b) const;
+    int    histBest(double& score, bool& clear) const;
+    void   seedAt(double edgePos);
+    // ── Framing ──
+    void  startFrame(long long idx);
     void  place(int sec, int a, int b, int sym, bool readable);
     void  closeFrame();
     void  loseFrame();
-    void  finishMinute(bool decoded, const TimeStamp& ts);
+    bool  finishMinute(bool decoded, const TimeStamp& ts);
+    void  announce(const TimeStamp& ts);
+    // ── Multi-minute voting — see tryVote() ──
+    struct VoteFrame { long long idx0 = 0; float sA[60] = {0}, sB[60] = {0}; };
+    std::vector<VoteFrame> votes_;           ///< newest last, at most kVoteWindow
+    void  pushVoteFrame(long long idx0, int len);
+    void  leapFrameMsf(long long idx0, int len);
+    long long lastMarkIdx_ = -1;     ///< MSF: the last 500 ms marker actually seen
+    long long failedAfter_ = 0;      ///< the corroborated stamp a failed minute broke the chain after
+    bool  dcfLeap_ = false;          ///< DCF77: this minute is 61 s (a dip at 59, bit 19 set)
+    bool  lastStampSolid_ = false;   ///< WWV: lastStamp_ came from a minute with every field read
+    void  noteAnchor(long long idx);
+    void  tryVote();
+    /** Expected bits of a frame carrying `f` (-1 = not fixed by the time): A and B arrays. */
+    void  encodeFrame(const TimeStamp& f, signed char* A, signed char* B) const;
     bool  slotsComplete(int from, int to) const;
+
+    int    nCls_ = 0, win_ = 0;
+    signed char clsKind_[kMaxCls] = {0}, clsA_[kMaxCls] = {0}, clsB_[kMaxCls] = {0};
+    unsigned char tpl_[kMaxCls][kMaxWin] = {{0}};
+    int    nd_[kMaxCls][kMaxCls] = {{0}};
+    double hist_[kHistBins] = {0};
+    long long scanPos_ = 0;
+    bool   phaseKnown_ = false;
+    double curEdge_ = 0, period_ = 200, periodNom_ = 200;
+    int    trkN_ = 0, missRun_ = 0, stage_ = 0;
+    long long secIdx_ = 0;
+    SecRec recs_[kRecRing];
+    /** The flywheel second that is second 0 of the minute being read (-1 = hunting). */
+    long long anchorIdx_ = -1;
+    /** Minutes in a row whose minute mark was not seen (the grid coasts; 3 = lost). */
+    int    unconfirmed_ = 0;
+    double lowSnrS_ = 0;
+    // ── WWV/WWVH tick fold ──
+    void   tickSample(double raw);
+    double tickBp_[2][4] = {{0}}, tickSt_[2][4] = {{0}}, tickAcc_[2] = {0};
+    double tickFold_[2][kHistBins] = {{0}};
+    int    tickN_ = 0, tickSecs_ = 0;
+    long long tickBlock_ = 0;
+    int    tag_ = 0, tagPending_ = 0, tagPendingN_ = 0, tagContrary_ = 0, tagUnsupported_ = 0;
 
     const int      sr_;
     const Station  station_;
@@ -181,22 +255,23 @@ private:
      *  Two biquad states; the coefficients are computed once in the constructor. */
     double bpB0_ = 1, bpB1_ = 0, bpB2_ = 0, bpA1_ = 0, bpA2_ = 0;
     double bpX1_ = 0, bpX2_ = 0, bpY1_ = 0, bpY2_ = 0;
-    double onLevel_ = 0, offLevel_ = 0;      // adaptive, so no fixed threshold to get wrong
+    double onLevel_ = 0, offLevel_ = 0;      // adaptive, so no fixed threshold to get wrong (RWM)
+    /** ★★ Every other station: the 5th and 90th percentiles of the last 3 s of envelope — see
+     *  process(). Kept at 200 Hz in a ring, which the matched-filter reader also reads. */
+    bool   pushEnvelope();
+    int    decim_ = 240, decimCount_ = 0;
+    std::vector<float> env_, pctScratch_;
+    long long envCount_ = 0;
+    double pLo_ = 0, pHi_ = 0;
+    bool   pctReady_ = false;
     double snrDb_ = 0;
 
     bool   inDip_ = false;
     double dipSamples_ = 0, gapSamples_ = 0;
-    /** ★ The gap measured at the dip's START. Read at its END — see the note in process(). */
+    /** RWM: the gap measured at the dip's START, read at its END. */
     double gapBeforeMs_ = 0;
-    /** ★ A sample clock, and where the current dip began. */
-    long long clock_ = 0, dipStartClock_ = 0;
-    /** ★★★ The sample the minute anchor was seen at (0 = not anchored), on EVERY station that
-     *  carries a code. The second is DERIVED from the distance to it, never incremented per dip —
-     *  a counter is shifted for the rest of the minute by one missed or one extra dip (audit
-     *  2026-10-04 row 9). WWV did this first; MSF, DCF77 and WWVB now do the same. */
-    long long anchorClock_ = 0;
-    /** DCF77 while hunting: where the previous dip began. WWVB: where the previous MARKER began. */
-    long long lastDipClock_ = 0;
+    /** ★ The input sample clock. */
+    long long clock_ = 0;
     /** The current minute has been decoded (or abandoned); later dips must not decode it again. */
     bool      frameClosed_ = true;
     /** ★★ Per second of the minute: 0 = nothing arrived, 1 = exactly one readable symbol,
@@ -210,12 +285,10 @@ private:
     //   fit here; B stays zero where a station has no B bit.
     int    bitsA_[60] = {0}, bitsB_[60] = {0};
     int    second_ = -1;                     // -1 until the minute marker is seen
-    unsigned long good_ = 0, bad_ = 0;
+    unsigned long good_ = 0, bad_ = 0, voted_ = 0;
     /** ★ The previous parity-passing minute, as a minute count. A reading is only announced when
-     *  it is exactly one minute later than this — see the note in onSecondEdge(). */
+     *  it is exactly one minute later than this — see the note in finishMinute(). */
     long long lastStamp_ = 0;
-    /** WWV: the minute is two position markers in a row, so the previous symbol matters. */
-    bool lastWasMarker_ = false;
     /** ★★ What the NEXT frame's raw fields must read, from the last CORROBORATED minute, and the
      *  sample it was decoded at (0 = no expectation). The progress line compares against it,
      *  advanced by the whole minutes elapsed since; it expires after kExpectTtlS. */
