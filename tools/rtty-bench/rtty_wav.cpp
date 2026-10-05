@@ -21,7 +21,8 @@ static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, do
                   const std::string& fr, const std::string& enc, bool inv) {
     /* ★ NAVTEX_OPTS (2026-10-05): switch one of NavtexRx's measured changes off for an A/B on the same build, e.g.
      *  NAVTEX_OPTS=rc=0,el=0 — keys rc (raised-cosine demod), el (early/late clock), log (log soft values),
-     *  atc (½ ATC + floor clip), fec (soft FEC tiers), vote (RX/DX disagreement by soft score), inv (auto polarity), afc. */
+     *  atc (½ ATC + floor clip), fec (soft FEC tiers), vote (RX/DX disagreement by soft score), ml (ML over
+     *  both copies), inv (auto polarity), afc. */
     vibe::NavtexOptions no;
     if (const char* e = std::getenv("NAVTEX_OPTS")) {
         std::string o = e; o += ',';
@@ -30,7 +31,7 @@ static int runFsk(const std::vector<int16_t>& mono, size_t frames, double cf, do
             if (q == std::string::npos) continue;
             const std::string k = kv.substr(0, q); const bool v = kv.substr(q + 1) != "0";
             if (k == "rc") no.rcDemod = v; else if (k == "el") no.earlyLate = v; else if (k == "log") no.logSoft = v;
-            else if (k == "atc") no.atcHalf = v; else if (k == "fec") no.softFec = v; else if (k == "vote") no.fecVote = v; else if (k == "inv") no.autoInvert = v;
+            else if (k == "atc") no.atcHalf = v; else if (k == "fec") no.softFec = v; else if (k == "vote") no.fecVote = v; else if (k == "ml") no.fecMl = v; else if (k == "inv") no.autoInvert = v;
             else if (k == "afc") no.afc = v;
         }
     }

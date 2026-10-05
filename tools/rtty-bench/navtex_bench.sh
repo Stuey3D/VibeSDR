@@ -26,6 +26,8 @@ ROWS=(
   "fade 20 dB, 6 dB|           |6 20 0 0"
   "mistune +15 Hz, 3 dB|CF=515  |3 0 0 0"
   "mistune -30 Hz, 6 dB|CF=470  |6 0 0 0"
+  "mistune +50 Hz, -3 dB|CF=550 |-3 0 0 0"
+  "mistune -50 Hz, -3 dB|CF=450 |-3 0 0 0"
   "clock +0.05 %, 3 dB|BAUD=100.05|3 0 0 0"
   "join mid-message, 6 dB|JOIN=23|6 0 0 0"
   "inverted tones, 10 dB|INV=1  |10 0 0 0"

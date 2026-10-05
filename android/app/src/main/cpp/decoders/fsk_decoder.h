@@ -69,10 +69,11 @@ public:
     /** The tiers of fldigi's process_bytes, for one RX slot with (if `dx`) its DX copy 35 bits earlier:
      *    +1 the RX copy is a valid word · 0 the DX copy is (a straight repair) · -1 a SOFT repair (the two copies summed,
      *    or the least certain bit flipped in the RX copy, the DX copy, then the sum) · -2 nothing found.
-     *  `code` gets the word to print (-1 = none). `softFec` false keeps only the first two tiers (the old decoder's).
+     *  `code` gets the word to print (-1 = none). `softFec` false keeps only the first two tiers (the old decoder's);
+     *  `ml` replaces the sum and flip tiers with the best of all 35 valid words on the summed copies (-1, or -2 on a tie).
      *  ★ An RX copy that reads as a PHASING code while its DX copy is a real character is a misread (phasing never
      *    puts a character in the DX slot): the DX copy is the one used (audit 2026-10-04, row 12). */
-    static int decodeSoft(const double* rx, const double* dx, bool softFec, int& code, bool vote = true);
+    static int decodeSoft(const double* rx, const double* dx, bool softFec, int& code, bool vote = true, bool ml = true);
     /** Print a word: shift codes and phasing print nothing (0); FIGS BEL prints '\''. `phaseWrong` is set when this is
      *  the SECOND phasing rep (0x66) in a row read in an RX slot — fldigi's process_char: the DX/RX phase is out by one. */
     char32_t emit(int code, bool& phaseWrong);
@@ -95,9 +96,10 @@ struct NavtexOptions {
     bool rcDemod    = true;   // tones mixed to baseband + raised-cosine lowpass (else the Q≈3 biquad bandpasses)
     bool earlyLate  = true;   // early/prompt/late bit clock (else the zero-crossing histogram)
     bool logSoft    = true;   // bit values from log-compressed ATC levels (else ±1 per sample)
-    bool atcHalf    = false;   // W7AY ATC: ½ and clipped to the noise floor (else ¼, clipped to the envelope only)
+    bool atcHalf    = false;  // W7AY ATC: ½ and clipped to the noise floor (else ¼, clipped to the envelope only)
     bool softFec    = true;   // the soft FEC tiers (else RX, then DX, then '_')
     bool fecVote    = true;   // RX and DX both valid but different: the one the summed soft bits favour (else RX)
+    bool fecMl      = true;   // neither copy valid: the best of the 35 valid words on the summed copies (else fldigi's tiers)
     bool autoInvert = true;   // the character sync tries both polarities
     bool afc        = false;  // follow a drifting signal
 };
@@ -150,7 +152,7 @@ private:
     BiQuad bpMark_, bpSpace_, lpMark_, lpSpace_;                            // !rcDemod
     double markEnv_ = 0, spaceEnv_ = 0, markNoise_ = 0, spaceNoise_ = 0, noiseFloor_ = 0;
     // ── AFC ──
-    double afcHz_ = 0;
+    double afcHz_ = 0, afcRe_ = 0, afcIm_ = 0, afcPrev_[4] = {0}; int afcN_ = 0;
     // ── bit clock ──
     long long sampleCount_ = 0;
     double early_ = 0, prompt_ = 0, late_ = 0, nextEarly_ = 0, nextPrompt_ = 0, nextLate_ = 0;

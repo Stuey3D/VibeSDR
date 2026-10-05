@@ -164,7 +164,7 @@ static int flipWeakest(const double* w) {
     if (flip < 0) return -1;
     return Ccir476::hardCode(w) ^ (1 << flip);
 }
-int Ccir476::decodeSoft(const double* rx, const double* dx, bool softFec, int& code, bool vote) {
+int Ccir476::decodeSoft(const double* rx, const double* dx, bool softFec, int& code, bool vote, bool ml) {
     code = -1;
     const int r = hardCode(rx), d = dx ? hardCode(dx) : -1;
     const bool rOk = fourMarkBits((uint8_t)r), dOk = d >= 0 && fourMarkBits((uint8_t)d);
@@ -189,6 +189,24 @@ int Ccir476::decodeSoft(const double* rx, const double* dx, bool softFec, int& c
     if (!softFec) return -2;
     double sum[7];
     for (int i = 0; i < 7; i++) sum[i] = rx[i] + dx[i];
+    if (ml) {
+        /* ★★ MAXIMUM LIKELIHOOD ON BOTH COPIES (2026-10-05, beyond fldigi). The sum and single-flip tiers below try
+         *  three or four guesses; every one of them is a valid word scored by the same evidence. So score ALL 35 valid
+         *  words against the summed soft bits and take the best — unless the runner-up is within 5 % of a bit of it
+         *  (a near tie is noise deciding), which still prints '_'. Measured over fldigi's tiers, 8 seeds:
+         *  -6 dB 40.7 → 31.4 % CER, 20 dB fades 9.6 → 8.7, ±50 Hz mistune at -3 dB 15.4/11.1 → 9.2/8.1; a margin of
+         *  20 % kept fewer (35.9 at -6 dB), 50 % was worse than the tiers. */
+        double best = -1e300, second = -1e300, mag = 0; int bc = -1;
+        for (int i = 0; i < 7; i++) mag += std::fabs(sum[i]);
+        for (int k = 0; k < 128; k++) {
+            if (!fourMarkBits((uint8_t)k)) continue;
+            double sc = 0;
+            for (int i = 0; i < 7; i++) sc += (k >> i & 1) ? sum[i] : -sum[i];
+            if (sc > best) { second = best; best = sc; bc = k; } else if (sc > second) second = sc;
+        }
+        if (best - second >= 0.05 * mag / 7) { code = bc; return -1; }
+        return -2;
+    }
     int c = hardCode(sum);
     if (fourMarkBits((uint8_t)c)) { code = c; return -1; }
     for (const double* w : { rx, dx, (const double*)sum }) {
@@ -553,6 +571,23 @@ void NavtexRx::process(const int16_t* samples, int count) {
         }
         // ×2: a tone of amplitude A mixes to A/2 at 0 Hz. The level gate is the RTTY decoder's (mean |bandpass| = 2A/π).
         const double m = 2 * std::hypot(out[0], out[1]), s = 2 * std::hypot(out[2], out[3]);
+        if (o_.afc) {
+            /* AFC: whichever tone is on turns at the mistuning, so z(n)·conj(z(n-1)) of the stronger channel gives it,
+             *  weighted by power. Averaged for a second, only while locked (not following noise), and moved a third of
+             *  the way each time, within ±half the shift. */
+            const int c = m >= s ? 0 : 2;
+            afcRe_ += out[c] * afcPrev_[c] + out[c + 1] * afcPrev_[c + 1];
+            afcIm_ += out[c + 1] * afcPrev_[c] - out[c] * afcPrev_[c + 1];
+            for (int k = 0; k < 4; k++) afcPrev_[k] = out[k];
+            if (++afcN_ >= (int)frontRate_) {
+                if (state_ == ReadData && (afcRe_ != 0 || afcIm_ != 0)) {
+                    const double d = std::atan2(afcIm_, afcRe_) * frontRate_ / (2 * M_PI);
+                    afcHz_ = std::max(-shift_ / 2, std::min(shift_ / 2, afcHz_ + d / 3));
+                    retune();
+                }
+                afcRe_ = afcIm_ = 0; afcN_ = 0;
+            }
+        }
         frontSample(m, s, (2 / M_PI) * std::max(m, s));
     }
 }
@@ -720,7 +755,7 @@ void NavtexRx::processRx(int pos) {
         if (haveDx) dx[b] = pol_ * bits_[pos - kDx + b];
     }
     int code = -1;
-    const int r = Ccir476::decodeSoft(rx, haveDx ? dx : nullptr, o_.softFec, code, o_.fecVote);
+    const int r = Ccir476::decodeSoft(rx, haveDx ? dx : nullptr, o_.softFec, code, o_.fecVote, o_.fecMl);
     lastRxAbs_ = absBit_ - kBits + pos;
     if (code >= 0 || r == -2) {
         bool phaseWrong = false;

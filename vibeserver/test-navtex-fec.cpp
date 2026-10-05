@@ -68,8 +68,8 @@ static void setSlot(std::vector<double>& b, size_t slot, const double (&v)[7]) {
 static void softWord(uint8_t code, double mag, double (&out)[7]) { for (int i = 0; i < 7; i++) out[i] = (code >> i & 1) ? mag : -mag; }
 
 struct Run { std::string text; NavtexRx::Counts total, last; bool inverted = false; int lockedAt = -1; };
-static Run decode(const std::vector<double>& b, size_t from = 0) {
-    NavtexRx rx(48000, 500, 170, 100, false);
+static Run decode(const std::vector<double>& b, size_t from = 0, const NavtexOptions& o = NavtexOptions()) {
+    NavtexRx rx(48000, 500, 170, 100, false, o);
     Run r;
     rx.onChar = [&](char32_t c) { r.text += (char)c; };
     for (size_t i = from; i < b.size(); i++) {
@@ -147,23 +147,34 @@ int main() {
 
     std::printf("── 5. soft FEC ──\n");
     const uint8_t S = codes[iS];
-    { // both copies one bit wrong, different bits, weakly: the sum is right
-      auto b = clean; softWord(S, 1, w); softWord(S, 1, w2);
-      w[0] = -w[0] * 0.3; w2[3] = -w2[3] * 0.3;                 // RX: bit 0 flipped weakly; DX: bit 3 flipped weakly
-      setSlot(b, rxSlot(P, iS), w); setSlot(b, dxSlot(P, iS), w2);
-      const Run r = decode(b); ok(r.text == msg, "both copies one bit wrong (different bits): the two summed are right"); }
-    { // ★ RX with a SPACE read weakly as MARK (5 marks), DX lost: flip the weakest mark → fldigi never made this repair
-      auto b = clean; softWord(S, 1, w);
-      int sp = -1; for (int i = 0; i < 7; i++) if (!(S >> i & 1)) { sp = i; break; }
-      w[sp] = 0.2;                                               // a weak mark where a space was sent
-      setSlot(b, rxSlot(P, iS), w); softWord(0x00, 1, w2); setSlot(b, dxSlot(P, iS), w2);
-      const Run r = decode(b); ok(r.text == msg, "5 marks (a weak extra mark), DX lost: the weakest mark flipped back"); }
-    { // RX with a MARK read weakly as SPACE (3 marks), DX lost
-      auto b = clean; softWord(S, 1, w);
-      int mk = -1; for (int i = 0; i < 7; i++) if (S >> i & 1) { mk = i; break; }
-      w[mk] = -0.2;
-      setSlot(b, rxSlot(P, iS), w); softWord(0x00, 1, w2); setSlot(b, dxSlot(P, iS), w2);
-      const Run r = decode(b); ok(r.text == msg, "3 marks (a weak missing mark), DX lost: the weakest space flipped back"); }
+    for (bool ml : { false, true }) {   // fldigi's tiers (sum, then the flips), and maximum likelihood over both copies
+      NavtexOptions o; o.fecMl = ml; const std::string tag = ml ? "  [ML]" : "  [fldigi's tiers]";
+      { // both copies one bit wrong, different bits, weakly: the sum is right
+        auto b = clean; softWord(S, 1, w); softWord(S, 1, w2);
+        w[0] = -w[0] * 0.3; w2[3] = -w2[3] * 0.3;                 // RX: bit 0 flipped weakly; DX: bit 3 flipped weakly
+        setSlot(b, rxSlot(P, iS), w); setSlot(b, dxSlot(P, iS), w2);
+        const Run r = decode(b, 0, o); ok(r.text == msg, "both copies one bit wrong (different bits): the two summed are right" + tag); }
+      { // ★ RX with a SPACE read weakly as MARK (5 marks), DX lost: flip the weakest mark → fldigi never made this repair
+        auto b = clean; softWord(S, 1, w);
+        int sp = -1; for (int i = 0; i < 7; i++) if (!(S >> i & 1)) { sp = i; break; }
+        w[sp] = 0.2;                                               // a weak mark where a space was sent
+        setSlot(b, rxSlot(P, iS), w); softWord(0x00, 1, w2); setSlot(b, dxSlot(P, iS), w2);
+        const Run r = decode(b, 0, o); ok(r.text == msg, "5 marks (a weak extra mark), DX lost: the weakest mark flipped back" + tag); }
+      { // RX with a MARK read weakly as SPACE (3 marks), DX lost
+        auto b = clean; softWord(S, 1, w);
+        int mk = -1; for (int i = 0; i < 7; i++) if (S >> i & 1) { mk = i; break; }
+        w[mk] = -0.2;
+        setSlot(b, rxSlot(P, iS), w); softWord(0x00, 1, w2); setSlot(b, dxSlot(P, iS), w2);
+        const Run r = decode(b, 0, o); ok(r.text == msg, "3 marks (a weak missing mark), DX lost: the weakest space flipped back" + tag); }
+      { // two mark bits weak and wrong in BOTH copies: every tier sees 2 marks and gives up; the best word is still S
+        auto b = clean; softWord(S, 1, w); softWord(S, 1, w2);
+        int m1 = -1, m2 = -1; for (int i = 0; i < 7; i++) if (S >> i & 1) { if (m1 < 0) m1 = i; else if (m2 < 0) m2 = i; }
+        w[m1] = w[m2] = -0.2; w2[m1] = w2[m2] = -0.3;
+        setSlot(b, rxSlot(P, iS), w); setSlot(b, dxSlot(P, iS), w2);
+        std::string want = msg; if (!ml) want[want.find("SW")] = '_';
+        const Run r = decode(b, 0, o);
+        ok(r.text == want, std::string(ml ? "two weak wrong bits in both copies: recovered" : "two weak wrong bits in both copies: '_'") + tag); }
+    }
     { // ★ two VALID copies that disagree: a burst turned the RX copy into another letter (two weak bits); DX is sure
       auto b = clean; softWord(S, 1, w);
       int mk = -1, sp = -1; for (int i = 0; i < 7; i++) { if ((S >> i & 1) && mk < 0) mk = i; if (!(S >> i & 1) && sp < 0) sp = i; }
