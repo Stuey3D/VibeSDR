@@ -7008,7 +7008,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     struct ClientDsp {
         std::shared_ptr<IqOut> iq;              // ★ raw IQ out, while the listener has it on
-        std::shared_ptr<net::Socket> spec;      // whose channel this is
+        /** Whose channel this is. ★★ May be CLOSED while the channel lives on: a pocketed app keeps
+         *  only its audio socket, and the channel survives on that (see "THE CHANNEL OUTLIVES ITS
+         *  SPECTRUM SOCKET", 2026-10-05). Always test isOpen(). Replaced only by adoptChannel(),
+         *  which holds this channel's `mtx` AND clientMtx — the client thread reads it under `mtx`
+         *  (onClientZoom), everybody else under clientMtx. */
+        std::shared_ptr<net::Socket> spec;
         std::shared_ptr<net::Socket> audio;     // its own audio socket, or null until one opens
         std::string session;
         /** ★★★ WHEN THIS LISTENER ARRIVED. There was no per-listener clock at all, and on a SHARED
@@ -9602,6 +9607,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  ★ Same answer as before: dspFor()'s own lookup, under the same lock, a few microseconds
          *    earlier in the same frame. The shared_ptr keeps the object alive to the end of the
          *    frame exactly as each `auto c = dspFor(...)` did for its own block. */
+        std::vector<std::shared_ptr<ClientDsp>> specless;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
             for (auto& p : peers) {
@@ -9610,6 +9616,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (it != clientDsp.end()) { p.dsp = it->second; continue; }
                 for (auto& kv : clientDsp) if (kv.second->audio == p.sock) { p.dsp = kv.second; break; }
             }
+            /* ★★ AND THE CHANNELS NOBODY IS WATCHING — a pocketed app's, kept alive by its audio
+             *  socket (see "THE CHANNEL OUTLIVES ITS SPECTRUM SOCKET", 2026-10-05). They are in no
+             *  peer list, so the meter loop below never measured them: sigChanDb froze at whatever
+             *  it read the moment the screen went off, and a listener with squelch on was stuck
+             *  open or — worse — shut for the whole time the phone was in their pocket. */
+            for (auto& kv : clientDsp)
+                if (kv.second && !(kv.second->spec && kv.second->spec->isOpen())) specless.push_back(kv.second);
         }
 
         // Hybrid waterfall: the IQ FFT only covers `sampleRate` of spectrum. When the
@@ -11190,6 +11203,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     // ★★★ Out::Lx, NOT Out::Adc — see the enum. Sharing the class made this frame
                     //     delete the converter telemetry every tick.
                     sendText(p.sock, sb, Out::Lx);
+                }
+                // ★ The pocketed channels (see `specless`): the same measurement, nobody to send it
+                //   to — it is only the squelch gate in onClientAudio that reads it.
+                for (auto& c : specless) {
+                    const double off = c->vfoHz - rtlCenter.load() - hwOffsetHz();
+                    const int cb = (int)llround(off / binHz);
+                    const int hw2 = std::max(1, (int)(c->bwHz / 2.0 / binHz));
+                    float pk = -1e9f;
+                    for (int o = -hw2; o <= hw2; o++) pk = std::max(pk, dbAt(cb + o));
+                    c->sigChanDb.store(pk, std::memory_order_relaxed);
                 }
             }
         }
@@ -19537,9 +19560,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     LOGI("new session — landing on %.3f kHz %s", hz / 1e3,
                          lm.empty() ? mode.c_str() : lm.c_str());
             }
+            // ★★★ THIS LISTENER'S OWN CHANNEL — STILL RUNNING, IF THEIR AUDIO KEPT IT ALIVE.
+            //     A pocketed app closed only its spectrum socket; its channel played on. Take it
+            //     back rather than build another (see adoptChannel, 2026-10-05). The landing above
+            //     cannot have moved it: a channel is only ever moved by its own listener.
+            std::shared_ptr<ClientDsp> adopted;
+            if (perClientDsp()) {
+                bool proved = false;
+                { std::lock_guard<std::mutex> al(adminSockMtx); proved = sock && adminSocks.count(sock.get()) > 0; }
+                adopted = adoptChannel(session, sock, userAgent, proved);
+                if (adopted) {
+                    adoptAudioForSession(session);   // ★ harmless when it already has its audio
+                    LOGI("listener %s returned — their channel kept running at %.3f kHz %s; adopted, not rebuilt",
+                         session.c_str(), adopted->vfoHz / 1e3, adopted->mode.c_str());
+                }
+            }
             // ★★★ THIS LISTENER'S OWN CHANNEL. Created before sendConfig so the config it is sent
             //     already describes its own VFO rather than somebody else's.
-            if (perClientDsp()) {
+            if (perClientDsp() && !adopted) {
                 auto c = std::make_shared<ClientDsp>();
                 c->owner = this;
                 // ★ The owner's configured defaults are what a new listener starts from.
@@ -19773,6 +19811,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           int stops = -1, heard = 0; float best = 0; double parked = 0; long long audio = -1; } logClose;
         std::string logAudioSess; long long logAudioBytes = -1;
         std::shared_ptr<ClientDsp> goneDsp;
+        std::shared_ptr<ClientDsp> keptDsp;   // ★ see "THE CHANNEL OUTLIVES ITS SPECTRUM SOCKET"
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (specClient == sock) {
               // Promote the next listener so the survivors keep their stream — every path that
@@ -19948,9 +19987,56 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           // ★ The channel goes with the listener: its pipeline, its slice, its encoder.
           // ★ Lift it out under the lock, stop its thread OUTSIDE — joining a thread while
           //   holding clientMtx would deadlock against anything that thread wants.
+          /* ★★★ THE CHANNEL OUTLIVES ITS SPECTRUM SOCKET — IT GOES WITH THE LISTENER, NOT THE SOCKET
+           *     (2026-10-05). Stuart, on the Pi 500's RSP (locked range, a VFO per listener): "why
+           *     did the full socket drop when minimised though, especially as I had audio and a
+           *     decoder running". The app closes ONLY its spectrum socket in the background, to save
+           *     power; audio and the decoder socket stay open. But the channel — pipeline, VFO,
+           *     encoder, and the decoder host fed from it — was keyed by the SPECTRUM socket and
+           *     erased with it, so the audio socket was parked with nothing feeding it (silence) and
+           *     the decoder starved. On a shared dial there is no channel to lose, which is why
+           *     background audio only ever worked there.
+           *  ★★ So while the session's AUDIO socket is still open the channel is RE-KEYED to it and
+           *     keeps running; the returning spectrum socket takes it back (adoptChannel). It is
+           *     retired only when no socket of the listener's remains.
+           *  ★ `spec` is NOT nulled here: the client thread reads it under the channel's own mtx,
+           *    which cannot be taken under clientMtx (onClientAudio takes them the other way round).
+           *    A closed socket is what every reader already tests for — `specOpen` throughout.
+           *  ★ A DECODER socket alone does not keep it. It is not counted as a listener anywhere —
+           *    not by the session limit, the idle check or the listener table — so a channel held
+           *    only by one would be a radio slot nobody can see or time out, and reapDecoderOrphans
+           *    could never free its slot. Audio + decoder (Stuart's case) is covered; a MUTED
+           *    pocketed decode is not, and is no worse than before.
+           *  ★ A TWIN — a second channel of the same session with a live spectrum socket (the ghost
+           *    case in the creation path) — takes the audio instead, or the listener would hear the
+           *    old channel while tuning the new one. */
           { auto it = clientDsp.find(sock.get());
-            if (it != clientDsp.end()) { goneDsp = it->second; clientDsp.erase(it); } }
-          if (goneDsp && goneDsp->iq) iqStop(goneDsp.get());   // ★ the port dies with the session
+            if (it != clientDsp.end()) {
+                auto c = it->second;
+                clientDsp.erase(it);
+                if (c && c->audio == sock) c->audio = nullptr;
+                const bool audioLives = c && c->audio && c->audio->isOpen();
+                std::shared_ptr<ClientDsp> twin;
+                if (audioLives && !c->session.empty())
+                    for (auto& kv : clientDsp)
+                        if (kv.second && kv.second->session == c->session
+                            && kv.second->spec && kv.second->spec->isOpen()) { twin = kv.second; break; }
+                if (audioLives && !twin) {
+                    clientDsp[c->audio.get()] = c;
+                    keptDsp = c;
+                } else {
+                    if (twin && (!twin->audio || !twin->audio->isOpen())) {
+                        twin->audio = c->audio;
+                        twin->wantsOpus = c->wantsOpus;
+                        twin->forceMono = c->forceMono;
+                    }
+                    if (twin) c->audio = nullptr;    // ★ one channel per audio socket, from now
+                    goneDsp = c;
+                }
+            } }
+          if (keptDsp)
+              LOGI("listener %s: spectrum socket closed, audio still open — their channel keeps running at %.3f kHz",
+                   keptDsp->session.empty() ? "(anon)" : keptDsp->session.c_str(), keptDsp->vfoHz / 1e3);
           { bool mine = false;
             { std::lock_guard<std::mutex> dl(iqDirectMtx); mine = iqDirect && iqDirectSock == sock; }
             if (mine) iqStopDirect(); }                          // ★ and so does the direct-mode one
@@ -19973,14 +20059,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           for (auto it = pendingAudio.begin(); it != pendingAudio.end(); ) {
               if (it->second.sock == sock) it = pendingAudio.erase(it); else ++it;
           }
-          // ★★ THE OTHER ORDERING: the SPECTRUM socket went and the audio socket is still playing
-          //    (a waterfall reconnect, a backgrounded app). Its channel was just erased, and nothing
-          //    held the audio socket any more — so the returning spectrum socket built a new
-          //    channel with no audio and the listener heard silence until audio reconnected too.
-          //    Park it again, codec and all, exactly as if it had arrived first.
-          if (goneDsp && goneDsp->audio && goneDsp->audio->isOpen() && goneDsp->audio != sock
-              && !goneDsp->session.empty())
-              pendingAudio[goneDsp->session] = PendingAudio{ goneDsp->audio, goneDsp->wantsOpus, goneDsp->forceMono };
+          // ★★ THE OTHER ORDERING — the spectrum socket went, the audio socket is still playing —
+          //    used to PARK the audio here for the returning spectrum socket's new channel. The
+          //    channel now simply stays, keyed by that audio socket (above), so there is nothing
+          //    to park: a retired channel never has a live audio socket left on it.
           // ★★★ AND REMEMBER WHERE THIS LISTENER WAS, so their returning socket resumes it rather
           //     than re-landing (see sessionVfo). clientMtx is held here.
           if (goneDsp && !goneDsp->session.empty() && goneDsp->vfoHz > 0) {
@@ -20029,6 +20111,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (bothGone) { { std::lock_guard<std::mutex> ol(g_occMtx); g_occHeldIp.clear(); }
                         occWrite(""); }
         outboxClose(sock);   // drain, then close — see outboxClose()
+        /* ★★★ AND NOW, OUTSIDE clientMtx, WHAT THE CHANNEL'S FATE NEEDS.
+         *  • The raw IQ port dies with the SPECTRUM socket, kept channel or not — it is the
+         *    spectrum socket the tunnel's tunes are routed through, and a kept channel is keyed by
+         *    the audio socket, so an `iqtune` would otherwise fall through to the SHARED handler.
+         *    It ran UNDER clientMtx before, taking the channel's mtx the wrong way round against
+         *    onClientAudio; here it takes nothing held.
+         *  • A KEPT channel stops drawing a private zoomed view nobody can see — the returning
+         *    socket asks for its view again, exactly as a new channel's would.
+         *  ★★★ • A RETIRED channel's THREAD IS STOPPED. It never was: the close only erased the map
+         *    entry, so every per-VFO listener who ever left left a `vibe-listener` thread blocked on
+         *    its queue for the life of the process, holding its whole pipeline — the thread's own
+         *    shared_ptr kept the ClientDsp alive. Now that a channel can be retired from a second
+         *    place (the audio socket's close), it is stopped where it is retired, every time. */
+        if (keptDsp) {
+            if (keptDsp->iq) iqStop(keptDsp.get());
+            std::lock_guard<std::mutex> cl(keptDsp->mtx);
+            keptDsp->ownView = false; keptDsp->viewSpanHz = 0;
+            if (keptDsp->viewRx) { keptDsp->viewRx.reset(); keptDsp->viewChanBins = 0; }
+        }
+        if (goneDsp) {
+            if (goneDsp->iq) iqStop(goneDsp.get());   // ★ the port dies with the session
+            stopClientThread(goneDsp);
+            rdsResweep();      // ★ it may have been the RDS decoder for its frequency
+        }
         // ★★ AND STOP THE ANALYSER IF THEY WERE ITS LAST READER. The subscription was erased above
         //    and never recomputed, so a listener leaving with the panel open kept the instrument (and
         //    its ~95 % of an A53 core on the Sony) running for nobody until somebody else toggled it.
@@ -21180,7 +21286,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!c || !c->adminOk.load()) continue;
                 if (keep && (c->spec == keep || c->audio == keep)) continue;
                 c->adminOk.store(false);
-                if (c->spec) told.push_back(c->spec);
+                if (c->spec && c->spec->isOpen()) told.push_back(c->spec);
+                else if (c->audio) told.push_back(c->audio);   // ★ a pocketed listener hears it here
             }
         }
         // ★★ SAY SO. A control that silently stops working reads as a bug — the same reasoning as
@@ -21215,6 +21322,47 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             pendingAudio.erase(it);
             return;
         }
+    }
+
+    /** ★★★ A RETURNING SPECTRUM SOCKET TAKES BACK ITS OWN, STILL-RUNNING CHANNEL (2026-10-05).
+     *  The other half of "THE CHANNEL OUTLIVES ITS SPECTRUM SOCKET" (see the close path): a session
+     *  whose channel was kept alive by its audio socket gets THAT channel back — the same VFO, mode,
+     *  filter, AGC state, effects, decoder host and turn clock — instead of a new one built from a
+     *  memo. Nothing is rebuilt, so the audio that kept playing in the pocket does not even blip.
+     *  ★ Only a channel whose spectrum socket is CLOSED. One whose socket still reads open is a
+     *    ghost (a suspended phone, no FIN yet) or a second live socket on the same session, and
+     *    stealing it from a live socket would leave that socket's tunes falling through to the
+     *    SHARED handler. The creation path still handles the ghost as it always has.
+     *  ★ Locks: the channel's `mtx` FIRST, then clientMtx — the order onClientAudio already uses
+     *    (it takes clientMtx inside feedOneClient). `spec` is read under either, so it is written
+     *    under both. Call WITHOUT clientMtx held. Returns the channel, or null to build a new one. */
+    std::shared_ptr<ClientDsp> adoptChannel(const std::string& session, const std::shared_ptr<net::Socket>& sock,
+                                            const std::string& agent, bool provedAdmin) {
+        if (session.empty() || !sock) return nullptr;
+        std::shared_ptr<ClientDsp> c;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          for (auto& kv : clientDsp) {
+              auto& d = kv.second;
+              if (!d || d->session != session || (d->spec && d->spec->isOpen())) continue;
+              c = d; break;
+          } }
+        if (!c) return nullptr;
+        std::lock_guard<std::mutex> cl(c->mtx);
+        std::lock_guard<std::mutex> lk(clientMtx);
+        // ★ Found again under both locks: it may have been retired or re-keyed while neither was held.
+        auto it = std::find_if(clientDsp.begin(), clientDsp.end(),
+                               [&](const std::pair<net::Socket* const, std::shared_ptr<ClientDsp>>& kv){ return kv.second == c; });
+        if (it == clientDsp.end() || (c->spec && c->spec->isOpen())) return nullptr;
+        clientDsp.erase(it);
+        c->spec = sock;
+        clientDsp[sock.get()] = c;
+        c->lastAsk = Impl::nowSecs();      // ★ arriving is not being idle — same as a new channel
+        c->idleAskAt = 0;
+        if (!agent.empty()) c->agent = agent;
+        // ★ A credential proved on THIS socket's handshake counts; one not proved takes nothing away —
+        //   it is the same session, and the idle re-lock still runs on its own clock.
+        if (provedAdmin) { c->adminOk.store(true); c->lastAdminTouch.store(Impl::nowSecs()); }
+        return c;
     }
 
     /** Do one client's channels for this block. Pure per-client work — no shared mutable state,
@@ -25745,8 +25893,11 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
         std::lock_guard<std::mutex> lk(p->clientMtx);
         for (auto& kv : p->clientDsp) {
             auto& c = kv.second;
-            if (!c || !c->spec) continue;
-            const std::string addr = c->spec->peerAddress();
+            // ★ Whichever socket is alive answers — a pocketed listener's spectrum socket is closed
+            //   and its channel lives on its audio one (see "THE CHANNEL OUTLIVES ITS SPECTRUM SOCKET").
+            if (!c || (!c->spec && !c->audio)) continue;
+            const auto& live = (c->spec && (c->spec->isOpen() || !c->audio)) ? c->spec : c->audio;
+            const std::string addr = live->peerAddress();
             const bool hit = (!session.empty() && c->session == session)
                           || (session.empty() && !ip.empty() && addr == ip);
             if (!hit) continue;
@@ -25793,8 +25944,11 @@ int LocalSdrShim::adminKickMatching(const std::string& cidr) {
         std::lock_guard<std::mutex> lk(p->clientMtx);
         for (auto& kv : p->clientDsp) {
             auto& c = kv.second;
-            if (!c || !c->spec) continue;
-            const std::string addr = c->spec->peerAddress();
+            // ★ Whichever socket is alive answers — a pocketed listener's spectrum socket is closed
+            //   and its channel lives on its audio one (see "THE CHANNEL OUTLIVES ITS SPECTRUM SOCKET").
+            if (!c || (!c->spec && !c->audio)) continue;
+            const auto& live = (c->spec && (c->spec->isOpen() || !c->audio)) ? c->spec : c->audio;
+            const std::string addr = live->peerAddress();
             // ★★ AN ASN RULE MATCHES BY NETWORK, NOT BY ADDRESS — vibeadmin::matches() returns
             //    false for one by design (its `net` is meaningless). Without this branch a
             //    "block this network" would store the rule, report success, and leave everyone
