@@ -2792,6 +2792,12 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    /* ★★ NOT ON A KIWI OR AN OPENWEBRX (2026-10-05). Everything below is an UberSDR / VibeServer endpoint
+     *  (/api/ui-config, /vibeserver.json, /api/description, /location): on somebody else's Kiwi or OWRX that was
+     *  four requests per connect for pages it does not have. Their badge comes from the status page their adapter
+     *  already reads (onReceiverIdent) — see third_party_receiver_etiquette. */
+    const st = route.params.serverType;
+    if (st === 'owrx' || isKiwiProtocol(st)) return;
     // ★★ The RADIO's config, not the door's: a front door owns no receiver and answers
     //    about the machine, so asking it here described the wrong thing.
     fetchUiConfig(connectBase).then((cfg: ServerUiConfig | null) => {

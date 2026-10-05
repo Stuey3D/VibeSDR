@@ -60,6 +60,7 @@ const KIWI_FULL_BW = 30_000_000;   // zoom 0 span (Hz) — Kiwi's nominal 0–30
 const KIWI_MAX_ZOOM = 12;
 const WF_BINS = 1024;              // Kiwi waterfall is a fixed 1024-bin row
 
+import { receiverPlaceLine } from './grid';
 import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
 
 // SND flags (audio.js)
@@ -264,8 +265,10 @@ export class KiwiAdapter implements SDRBackend {
         try { return decodeURIComponent(v).trim(); } catch { return v.trim(); }
       };
       const kName = field('name'), kLoc = field('loc');
-      if (kName) this.cb.onReceiverIdent?.({ name: kName, location: kLoc || undefined });
       const m = /gps=\(([-\d.]+),\s*([-\d.]+)\)/.exec(text);
+      // ★ Place · coordinates · locator, as a VibeServer's badge reads (2026-10-05) — from the gps= on this same page.
+      const kLine = receiverPlaceLine(kLoc, m ? Number(m[1]) : null, m ? Number(m[2]) : null);
+      if (kName) this.cb.onReceiverIdent?.({ name: kName, location: kLine || undefined });
       if (m) {
         const lat = Number(m[1]); const lon = Number(m[2]);
         if (Number.isFinite(lon)) this.cb.onReceiverLon?.(lon);
