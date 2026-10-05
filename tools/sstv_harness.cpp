@@ -18,6 +18,10 @@
 // last word: passing them proves the decoder handles a good signal, and off-air remains the proof.
 #include "decoders/sstv_decoder.h"
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
 #include <ctime>
 #include <cstdlib>
 #include <cstdio>
@@ -66,13 +70,90 @@ static bool readWav(const char* path, std::vector<int16_t>& out, int& rate) {
     return false;
 }
 
+// ── --all: every picture in a long recording ─────────────────────────────────────────────────
+// ★ (2026-10-05) A 90-minute off-air recording holds dozens of pictures AND an hour of noise, and the
+//   noise is half the test: a decoder that starts a "picture" on it costs the listener a box full of
+//   static. So this decodes them ALL and names each by its start time, to be matched against the
+//   reference decoder's gallery for the same minutes.
+// ★★ PACED TO THE VIDEO THREAD. Fed as fast as the file reads, the producer runs minutes ahead of
+//   the decode, and the end-of-picture pcm.reset() then throws away everything queued — the next
+//   picture's VIS with it. Real time never queues much more than the 1024-sample look-ahead, so
+//   neither does this (pendingSamples() held under ~1500).
+static void writePpm(const std::string& path, int W, int H, const std::vector<uint8_t>& img) {
+    FILE* o = fopen(path.c_str(), "wb");
+    if (!o) { fprintf(stderr, "cannot write %s\n", path.c_str()); return; }
+    fprintf(o, "P6\n%d %d\n255\n", W, H);
+    fwrite(img.data(), 1, img.size(), o);
+    fclose(o);
+}
+
+static int runAll(const char* wavPath, const std::string& prefix, bool autoSync) {
+    std::vector<int16_t> pcm; int rate = 0;
+    if (!readWav(wavPath, pcm, rate)) return 1;
+    fprintf(stderr, "%s: %zu samples @ %d Hz (%.1fs)\n", wavPath, pcm.size(), rate, pcm.size() / (double)rate);
+    vibe::SstvDecoder dec((double)rate, autoSync);
+    struct Pic { int W = 0, H = 0; double t0 = 0; std::string mode, status; std::vector<uint8_t> live, fin;
+                 int lines = 0; bool redrew = false; };
+    std::vector<Pic> pics;
+    std::mutex mu;
+    size_t fed = 0;
+    std::string pendingMode;
+    dec.onMode = [&](uint8_t, const std::string& name) { std::lock_guard<std::mutex> l(mu); pendingMode = name; };
+    dec.onImageStart = [&](int w, int h) {
+        std::lock_guard<std::mutex> l(mu);
+        Pic p; p.W = w; p.H = h; p.mode = pendingMode; p.live.assign((size_t)w * h * 3, 0);
+        p.t0 = ((double)fed - dec.pendingSamples()) / rate;
+        pics.push_back(std::move(p));
+    };
+    dec.onLine = [&](int y, int w, const uint8_t* rgb) {
+        std::lock_guard<std::mutex> l(mu);
+        if (pics.empty()) return;
+        Pic& p = pics.back();
+        auto& img = p.redrew ? p.fin : p.live;
+        if (y >= 0 && y < p.H && w == p.W) memcpy(&img[(size_t)y * w * 3], rgb, (size_t)w * 3);
+        if (!p.redrew) p.lines++;
+    };
+    dec.onRedrawStart = [&]() { std::lock_guard<std::mutex> l(mu); if (!pics.empty()) { pics.back().redrew = true; pics.back().fin = pics.back().live; } };
+    dec.onStatus = [&](const std::string& s) {
+        std::lock_guard<std::mutex> l(mu);
+        if (!pics.empty() && s.rfind("Decoding", 0) != 0) { if (!pics.back().status.empty()) pics.back().status += " | "; pics.back().status += s; }
+    };
+    const int BLOCK = rate / 100;
+    for (size_t i = 0; i < pcm.size(); i += BLOCK) {
+        while (dec.pendingSamples() > 1500) std::this_thread::yield();
+        const int n = (int)std::min((size_t)BLOCK, pcm.size() - i);
+        { std::lock_guard<std::mutex> l(mu); fed = i + n; }
+        dec.process(&pcm[i], n);
+    }
+    // The last picture may still be decoding: give it a few seconds of silence to finish on.
+    std::vector<int16_t> tail(BLOCK, 0);
+    for (int k = 0; k < 600; k++) { while (dec.pendingSamples() > 1500) std::this_thread::yield(); dec.process(tail.data(), (int)tail.size()); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::lock_guard<std::mutex> l(mu);
+    printf("# n\tstart_s\tmode\tlines\tredraw\tstatus\n");
+    for (size_t k = 0; k < pics.size(); k++) {
+        const Pic& p = pics[k];
+        char nm[64]; snprintf(nm, sizeof nm, "_%03zu_%07.1f.ppm", k, p.t0);
+        writePpm(prefix + nm, p.W, p.H, p.redrew ? p.fin : p.live);
+        printf("%zu\t%.1f\t%s\t%d\t%s\t%s\n", k, p.t0, p.mode.c_str(), p.lines, p.redrew ? "yes" : "no", p.status.c_str());
+    }
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    if (argc < 3) { fprintf(stderr, "usage: sstv_harness in.wav out.ppm [autosync=0|1]\n"); return 2; }
+    if (argc < 3) { fprintf(stderr, "usage: sstv_harness in.wav out.ppm [autosync=0|1]\n"
+                                    "       sstv_harness --all in.wav outprefix [autosync=0|1, default 1 as the server]\n"); return 2; }
+    if (!strcmp(argv[1], "--all")) {
+        if (argc < 4) return 2;
+        return runAll(argv[2], argv[3], argc > 4 ? atoi(argv[4]) != 0 : true);
+    }
     // ★★★ MATCH WHAT THE RADIO ACTUALLY RUNS. local_sdr_shim.cpp:3361 constructs the decoder with
     //     autoSync=FALSE — the post-reception cleanup was switched off on 2026-08-01 because it was
     //     the thing breaking the picture. A harness that leaves the default ON tests a code path the
     //     product no longer executes, which is exactly how a "fix" gets verified against nothing.
-    const bool autoSync = (argc > 3) ? (atoi(argv[3]) != 0) : false;
+    // ★ (2026-10-05) …and the same rule now says ON: vibe_decoder_host.h, the one place every server
+    //   starts SSTV, constructs it with autoSync=TRUE (re-enabled with the audit's slant fix).
+    const bool autoSync = (argc > 3) ? (atoi(argv[3]) != 0) : true;
 
     std::vector<int16_t> pcm; int rate = 0;
     if (!readWav(argv[1], pcm, rate)) return 1;

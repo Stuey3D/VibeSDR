@@ -72,6 +72,15 @@ static inline void yuvToRgb(uint8_t y, uint8_t v, uint8_t u, uint8_t* rgb) {
     rgb[1] = clip(Y - 0.813 * V - 0.392 * U);
     rgb[2] = clip(Y + 2.017 * U);
 }
+// ★★★ PD IS A FAMILY, NOT A WIDTH (2026-10-05). PD sends TWO picture lines per sync — Y, R-Y, B-Y, Y —
+// and every PD branch here was chosen by `YUV && imgWidth >= 512`, slowrx's shortcut that leaves out
+// PD-50 and PD-90: they are 320 wide. Both were decoded as a one-line-per-sync mode — the whole
+// picture squeezed into the TOP HALF of the frame and 25 s of after-the-end noise smeared through
+// the bottom half (the "horizontal streaks in the lower half" of Stuart's PD-50 of 15:40 UTC
+// 2026-10-05, where UberSDR — fixed upstream with a PDFormat flag — still read "HA7BJ").
+// PD-50 is one of 20 m's commonest modes. Measured on tools/sstv_bench, PD-50 at 20 dB:
+// SSIM 0.06 → see the commit table.
+static inline bool isPD(const SstvMode* m) { return m->name[0] == 'P' && m->name[1] == 'D'; }
 static double deg2rad(double d) { return d * M_PI / 180.0; }
 static const int MinSlant_ = 30, MaxSlant_ = 150;   // slant search range (degrees)
 
@@ -213,7 +222,7 @@ SstvVideo::SstvVideo(const SstvMode* mode, double sr, int shift, bool ad)
         for (int i = 0; i < L; i++) hannWins[j][i] = 0.5 * (1.0 - std::cos(2.0*M_PI*i/(L-1)));
     }
     int maxLen;
-    if (m->color == SSTV_YUV && m->imgWidth >= 512)
+    if (isPD(m))
         maxLen = (int)(m->lineTime*m->numLines/2*sr*1.3) + 15000;
     else
         maxLen = (int)(m->lineTime*m->numLines*sr*1.3) + 15000;
@@ -229,7 +238,7 @@ std::vector<SstvPixel> SstvVideo::pixelGrid(double rate, int skip) {
     std::string nm = m->name;
     bool robot = (nm == "Robot 36" || nm == "Robot 24");
     bool scottie = (nm == "Scottie S1" || nm == "Scottie S2" || nm == "Scottie DX");
-    bool pd = (m->color == SSTV_YUV && m->imgWidth >= 512);
+    bool pd = isPD(m);
 
     if (robot) {
         chanLen[0] = m->pixelTime*m->imgWidth*2; chanLen[1] = m->pixelTime*m->imgWidth; chanLen[2] = chanLen[1];
@@ -365,7 +374,7 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
                            const std::atomic<bool>& abort) {
     auto grid = pixelGrid(rate, skip);
     int length;
-    if (m->color == SSTV_YUV && m->imgWidth >= 512) length = (int)(m->lineTime*m->numLines/2*sampleRate);
+    if (isPD(m)) length = (int)(m->lineTime*m->numLines/2*sampleRate);
     else length = (int)(m->lineTime*m->numLines*sampleRate);
     // ★★ CAPTURE A LITTLE PAST THE NOMINAL END (2026-10-04). A sender whose clock runs SLOW makes
     //    the picture longer than the mode says — 0.05 % at -500 ppm — and a start a few ms early
@@ -374,12 +383,12 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
     //    on the grid exactly as before; this only extends storedLum and the sync record.
     length += (int)(length * 0.0025) + (int)(0.02 * sampleRate);
     int syncTargetBin = getBin(1200.0 + headerShift);
-    const bool pd = (m->color == SSTV_YUV && m->imgWidth >= 512);
+    const bool pd = isPD(m);
 
     int numChans = 3;
     std::string nm = m->name;
     if (nm == "Robot 36" || nm == "Robot 24") numChans = 2;
-    else if (m->color == SSTV_YUV && m->imgWidth >= 512) numChans = 4;
+    else if (isPD(m)) numChans = 4;
     else if (m->color == SSTV_BW) numChans = 1;
 
     // image[x][y][3]
@@ -534,7 +543,7 @@ std::vector<uint8_t> SstvVideo::redrawFromLuminance(double rate, int skip, bool*
 static const int SyncStep = 13;   // hasSync holds one flag per 13 samples (demodulate's nextSync)
 
 void SstvSync::findSync(double& rateOut, int& skipOut, double* confOut) {
-    const bool pd = (m->color == SSTV_YUV && m->imgWidth >= 512);
+    const bool pd = isPD(m);
     // ★ PD sends ONE sync per PAIR of lines and its lineTime is the pair — so it has numLines/2
     //   sync lines. Scanning numLines of them fed the search half a picture of empty space.
     const int syncLines = pd ? m->numLines / 2 : m->numLines;

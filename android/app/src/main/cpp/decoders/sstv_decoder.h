@@ -167,6 +167,10 @@ public:
     explicit SstvDecoder(double sampleRate, bool autoSync = true, bool adaptive = true);
     ~SstvDecoder();
     void process(const int16_t* mono, int count);   // audio thread
+    /** ★ Audio fed but not yet consumed (2026-10-05). For an OFFLINE feeder only — tools/sstv_harness
+     *  replays a 90-minute recording far faster than real time and must not run ahead of the video
+     *  thread, or the end-of-picture reset throws away the next picture's VIS. */
+    int pendingSamples() { return pcm.available(); }
 
     // Frame callbacks (already big-endian framed payloads where relevant).
     std::function<void(int w, int h)>              onImageStart;
