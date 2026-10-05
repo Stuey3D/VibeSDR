@@ -192,6 +192,7 @@ bool AirspyHfSource::openFd(int fd, double sampleRateHz, double centreHz,
 /** Everything after the handle exists — identical whichever way it was obtained. */
 bool AirspyHfSource::finishOpen(double sampleRateHz, double centreHz,
                                 int gainTenthDb, std::string& err) {
+    hwRate_ = 0;   // ★ a new handle has no rate programmed yet — see setSampleRate
     // ★ ASK THE RADIO what rates it has. An HF+ Discovery tops out near 912 kHz where a dongle
     // does 2.4 MSPS, so a hard-coded list would offer rates it cannot do — and the failure
     // would be a stream that never starts rather than an error anyone could read.
@@ -487,9 +488,22 @@ bool AirspyHfSource::setSampleRate(double hz) {
         std::fprintf(stderr, "airspyhf: asked for %.0f Hz, using this radio's own rate %u Hz "
                              "(other rates change the tuner architecture and mis-tune MW)\n", hz, r);
     if (!r) return false;
-    if (airspyhf_set_samplerate(impl_->dev, r) != AIRSPYHF_SUCCESS) return false;
-    curRate_ = (double)r;      // remembered for restartStream(deep)
-    return true;
+    /* ★★★ AN UNCHANGED RATE NEVER REACHES THE LIBRARY (2026-10-05). airspyhf_set_samplerate() begins
+     *     with libusb_clear_halt() on the bulk endpoint the stream is reading — a known way to kill a
+     *     live stream — and the shim calls this on EVERY rate change it handles, while streaming, with
+     *     a rate that (see above) can only ever resolve to the one this handle already runs at. So it
+     *     was all risk and no change. hwRate_ is per HANDLE: 0 after any open, so a fresh handle is
+     *     always programmed. */
+    if (r == hwRate_) { curRate_ = (double)r; return true; }
+    // ★ A REAL change on a live stream: stop, set, start — never clear_halt under running transfers.
+    //   (Unreachable today, since every request resolves to the top rate; here so it stays safe.)
+    const bool wasStreaming = streaming_;
+    if (wasStreaming) { airspyhf_stop(impl_->dev); streaming_ = false; }
+    const bool ok = airspyhf_set_samplerate(impl_->dev, r) == AIRSPYHF_SUCCESS;
+    if (ok) { hwRate_ = r; curRate_ = (double)r; }   // curRate_ remembered for restartStream(deep)
+    else std::fprintf(stderr, "airspyhf: set sample rate %u FAILED\n", r);
+    if (wasStreaming) { std::string e; if (!start(e)) std::fprintf(stderr, "airspyhf: restart after the rate change FAILED: %s\n", e.c_str()); }
+    return ok;
 }
 
 // ── Gain ────────────────────────────────────────────────────────────────────

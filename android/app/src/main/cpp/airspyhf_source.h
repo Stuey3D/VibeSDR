@@ -185,7 +185,8 @@ private:
     IqSink sink_;
     std::vector<uint32_t> rates_;
     bool open_ = false, streaming_ = false, lost_ = false, paused_ = false;
-    int  fd_ = -1;               // our dup of the Android USB descriptor; -1 = none (see openFd)
+    uint32_t hwRate_ = 0;        // the rate THIS handle is programmed at; 0 = none yet (setSampleRate)
+    int  fd_ = -1;             // our dup of the Android USB descriptor; -1 = none (see openFd)
     bool fdOpened_ = false;
     bool agc_ = true, agcHigh_ = false, lna_ = false;
     int  att_ = 0;
