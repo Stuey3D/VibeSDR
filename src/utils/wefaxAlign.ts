@@ -76,7 +76,7 @@ const MARGIN_INK = 140;
 
 /** The strongest margin-like column at one slant, its strength, and whether it passes findMargin's test. */
 function marginPeak(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, slant: number,
-                    fromRow: number, count: number): { col: number; strength: number; ok: boolean } | null {
+                    fromRow: number, count: number, minRows = count / 2): { col: number; strength: number; ok: boolean } | null {
   const W = width;
   if (!W) return null;
   const acc = new Float64Array(W);
@@ -88,7 +88,7 @@ function marginPeak(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: n
     for (let x = 0; x < W; x++) acc[x] += 255 - (r[(x + off) % W] ?? 255);
     n++;
   }
-  if (n < count / 2) return null;
+  if (n < minRows) return null;
   const sm = new Float64Array(W);
   for (let x = 0; x < W; x++) {
     let a = 0;
@@ -144,10 +144,10 @@ export const SLANT_SEARCH = 0.05;
  * Steps of 0.005, then 0.001 around the best. Null when no slant shows a margin.
  */
 export function findMarginSlant(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, centre: number,
-                                fromRow = 0, count = MARGIN_AFTER_LINES): { col: number; slant: number } | null {
+                                fromRow = 0, count = MARGIN_AFTER_LINES, minRows = count / 2): { col: number; slant: number } | null {
   let best: { col: number; strength: number; slant: number } | null = null;
   const tryAt = (k: number) => {
-    const m = marginPeak(rows, width, k, fromRow, count);
+    const m = marginPeak(rows, width, k, fromRow, count, minRows);
     if (m && m.ok && (!best || m.strength > best.strength)) best = { col: m.col, strength: m.strength, slant: k };
   };
   for (let i = -10; i <= 10; i++) tryAt(centre + i * SLANT_SEARCH / 10);
@@ -160,6 +160,8 @@ export function findMarginSlant(rows: ReadonlyArray<ArrayLike<number> | undefine
 
 /** ★ The narrowest blank border findGutter accepts, px. DDK's is ~115 (left border + right border, joined). */
 const GUTTER_MIN = 24;
+/** ★ The share of lines a column may be dark on and still be blank paper (noise specks) — see findGutter. */
+const GUTTER_SPECKS = 0.02;
 
 /**
  * ★★★ NO MARGIN? FIND THE BLANK BORDER (Stuart, 2026-10-05, joined a DDK chart half way: "chart is wrapped around on
@@ -170,19 +172,25 @@ const GUTTER_MIN = 24;
  *     Returns the band's centre column and width, or null when there is none.
  */
 export function findGutter(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, slant: number,
-                           fromRow = 0, count = MARGIN_AFTER_LINES): { col: number; len: number } | null {
+                           fromRow = 0, count = MARGIN_AFTER_LINES, minRows = count / 2): { col: number; len: number } | null {
   const W = width;
   if (!W) return null;
-  const inked = new Uint8Array(W);
+  const dark = new Uint32Array(W);
   let n = 0;
   for (let y = fromRow; y < fromRow + count && y < rows.length; y++) {
     const r = rows[y];
     if (!r) continue;
     const off = ((Math.round(slant * y) % W) + W) % W;
-    for (let x = 0; x < W; x++) if ((r[(x + off) % W] ?? 255) < 160) inked[x] = 1;
+    for (let x = 0; x < W; x++) if ((r[(x + off) % W] ?? 255) < 160) dark[x]++;
     n++;
   }
-  if (n < count / 2) return null;
+  if (n < minRows) return null;
+  // ★★ A FEW SPECKS DO NOT INK A COLUMN (120 RX888 charts, 2026-10-05): requiring NO dark pixel on ANY line let
+  //    noise specks hide DDK's border on half its charts, the frame then passed for a margin and the chart was cut
+  //    inside the map. Dark on ≤ GUTTER_SPECKS of lines still counts as blank: DDK charts with a band ≥ 24 px went
+  //    31 → 51 of 60; the widest band on 60 Northwood charts is 9 px at this tolerance (none qualify).
+  const inked = new Uint8Array(W);
+  for (let x = 0; x < W; x++) inked[x] = dark[x] > GUTTER_SPECKS * n ? 1 : 0;
   // Longest circular run of un-inked columns.
   let start = -1;
   for (let x = 0; x < W; x++) if (inked[x]) { start = x; break; }
@@ -207,47 +215,77 @@ export const ALIGN_CHECK_LINES = [300, 600];
  * else the station's own.
  */
 export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, stationSlant: number,
-                               count: number): WefaxAlign | null {
+                               count: number, minRows = count / 2): WefaxAlign | null {
   // ★★ A BORDERED CHART NEVER HAS ITS FRAME TAKEN FOR A MARGIN: a blank band means a DDK-style chart, and its
   //    frame and meridians are as straight as a margin (5 of 60 DDK charts were mis-moved by the margin search
   //    when it ran first). Measured: no Northwood chart of 60 has a blank band.
-  const g = findGutter(rows, width, stationSlant, 0, count);
+  const g = findGutter(rows, width, stationSlant, 0, count, minRows);
   if (g) {
     // Already at the edge (a phased chart) → leave it exactly as received; a phased DDK chart's border is split
     // between the two edges, so its band's centre sits within half a band of column 0.
     const fromEdge = Math.min(g.col, width - g.col);
     return fromEdge <= g.len / 2 + GUTTER_MIN ? null : { shift: g.col, slant: stationSlant };
   }
-  const m = findMarginSlant(rows, width, stationSlant, 0, count);
+  const m = findMarginSlant(rows, width, stationSlant, 0, count, minRows);
   return m ? { shift: m.col - 2, slant: m.slant } : null;
 }
 
 /** Per-station slant (px per line); the shift comes from findMargin per chart. Northwood −0.06, everything else 0. */
 export function stationSlant(dialHz: number): number { return wefaxPreset(dialHz).slant; }
 
-/** ★ One chart's automatic alignment: `al` undefined = not looked yet, null = looked and nothing to move. */
-export interface ChartAlignState { al?: WefaxAlign | null; refined?: boolean }
+/** ★ One chart's automatic alignment: `al` undefined = not looked yet, null = looked and nothing to move; `n` = lines
+ *  with content seen so far (see FLAT_ROW). */
+export interface ChartAlignState { al?: WefaxAlign | null; refined?: boolean; n?: number }
+
+/** ★★ A FEATURELESS LINE TELLS THE ALIGNMENT NOTHING (DDK 7880 off air, Stuart's RX888, 2026-10-05). DDK sends a
+ *  steady tone for ~2 minutes before the chart; a listener who tunes in during it gets ~270 lines of flat grey at the
+ *  top. Grey is ink to findGutter, so those lines filled every column and DDK's white border could never be found.
+ *  Measured as the spread of 8-px block averages across a line: the tone 12.7–14 (p50–p99); chart lines with
+ *  content 18–35 (p5–p50); the only chart lines flatter are blank white ones, which carry no layout either.
+ *  Lines under FLAT_ROW are skipped, and the decision points count only lines with content. */
+export const FLAT_ROW = 16;
+export function rowIsFlat(r: ArrayLike<number>, width: number): boolean {
+  const B = Math.floor(width / 8);
+  if (B < 2) return true;
+  let s = 0, ss = 0;
+  for (let j = 0; j < B; j++) {
+    let a = 0;
+    for (let k = 0; k < 8; k++) a += r[j * 8 + k] ?? 0;
+    a /= 8; s += a; ss += a * a;
+  }
+  const m = s / B;
+  return Math.sqrt(Math.max(0, ss / B - m * m)) < FLAT_ROW;
+}
 
 /**
- * ★ The per-chart alignment as line `line` arrives, for both clients: decided once the chart reaches
- * ALIGN_CHECK_LINES[0], checked once more at [1] (by ≥, so a dropped row cannot skip either). Updates `st` and
- * returns true when the chart must be redrawn. `getRows` is called only on those two lines.
+ * ★ The per-chart alignment as each line arrives, for both clients: decided once the chart has ALIGN_CHECK_LINES[0]
+ * lines WITH CONTENT, checked once more at [1]. `row` is the line just received (it is counted here, so a dropped row
+ * cannot skip either point). Updates `st` and returns true when the chart must be redrawn. `getRows` is called only
+ * at those two points.
  * The second look only REFINES a chart the first one moved: on two phased DDK charts (RX888 set) the white border
  * had collected enough noise specks by line 600 to hide it, and the frame then passed for a margin — so a chart
- * left alone at 300 stays alone.
+ * left alone at the first look stays alone.
  */
 export function chartAlignStep(st: ChartAlignState, getRows: () => ReadonlyArray<ArrayLike<number> | undefined>,
-                               width: number, stationSlant: number, line: number): boolean {
+                               width: number, stationSlant: number, row: ArrayLike<number>): boolean {
+  if (!rowIsFlat(row, width)) st.n = (st.n ?? 0) + 1;
+  const n = st.n ?? 0;
+  const look = () => {
+    const rows = getRows();
+    // every row so far, featureless ones blanked (their y still sets the slant offset); half must have content
+    return findChartAlign(rows.map((r) => (r && !rowIsFlat(r, width) ? r : undefined)), width, stationSlant,
+                          rows.length, n / 2);
+  };
   if (st.al === undefined) {
-    if (line < ALIGN_CHECK_LINES[0]) return false;
-    st.al = findChartAlign(getRows(), width, stationSlant, line);
+    if (n !== ALIGN_CHECK_LINES[0]) return false;
+    st.al = look();
     return st.al !== null;
   }
-  if (st.refined || line < ALIGN_CHECK_LINES[1]) return false;
+  if (st.refined || n !== ALIGN_CHECK_LINES[1]) return false;
   st.refined = true;
   const cur = st.al;
   if (!cur) return false;
-  const r = findChartAlign(getRows(), width, stationSlant, line);
+  const r = look();
   if (!r) return false;
   const d = (((r.shift - cur.shift) % width) + width) % width;
   if (Math.min(d, width - d) <= 2 && Math.abs(r.slant - cur.slant) < 0.002) return false;

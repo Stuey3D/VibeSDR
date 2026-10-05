@@ -292,9 +292,11 @@ void WefaxDecoder::decodeImageLine() {
          *  continuous tone for a minute or two, and we read "standing by" until the chart started). A steady tone
          *  demodulates to a line of one grey; its variance is ~0, so it scored 0 — noise — and the status dropped.
          *  Noise is never flat (8-px block sums of noise vary by ~200), so a flat pair just HOLDS the verdict:
-         *  after a start tone/phasing it stays "receiving", after noise it stays "standing by". Threshold: block
-         *  sums within ~16 grey (2 per pixel) of their mean. */
-        const double flatVar = 16.0 * 16.0 * n;
+         *  after a start tone/phasing it stays "receiving", after noise it stays "standing by".
+         *  ★★ THRESHOLD MEASURED ON DDK 7880 OFF AIR (Stuart's RX888, 2026-10-05), not on a clean synthetic tone:
+         *     the real tone carries receiver noise — its block sums vary by 19–24 (p10–p90); chart lines 59–105.
+         *     40 sits between them. (16, set from a noiseless synthetic tone, never fired on the real one.) */
+        const double flatVar = 40.0 * 40.0 * n;
         if (va > flatVar || vb > flatVar) {
             const double c = (va > 1e-9 && vb > 1e-9) ? cov / std::sqrt(va * vb) : 0.0;
             corrAvg = 0.8 * corrAvg + 0.2 * c;

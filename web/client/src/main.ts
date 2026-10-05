@@ -11708,7 +11708,7 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     //   longer look disagrees (chartAlignStep).
     if (decManualShift === null) {
       const before = decAuto.al;
-      const moved = chartAlignStep(decAuto, () => decLiveRaw, w, decAlign.slant, y);
+      const moved = chartAlignStep(decAuto, () => decLiveRaw, w, decAlign.slant, raw);
       if (decAuto.al !== before) updateDecAdjLabels();
       if (moved) { redrawDecAlign(); return; }
     }

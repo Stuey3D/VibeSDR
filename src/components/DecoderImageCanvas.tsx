@@ -344,7 +344,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         const before = st.al;
         const raw = buf.raw;
         if (autoRef.current && chartAlignStep(st, () => Array.from({ length: ln + 1 },
-              (_, y) => raw.subarray(y * buf.w, (y + 1) * buf.w)), buf.w, alignRef.current.slant, ln)) {
+              (_, y) => raw.subarray(y * buf.w, (y + 1) * buf.w)), buf.w, alignRef.current.slant,
+              raw.subarray(ln * buf.w, (ln + 1) * buf.w))) {
           for (let y = 0; y < ln; y++) alignRow(buf, y, effAlign(buf));
           moved = true;
         }

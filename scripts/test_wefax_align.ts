@@ -51,16 +51,27 @@ ok(findChartAlign(bordered(300, 0), W, 0, 300) === null, 'DDK phased: frame is N
 ok(findGutter(chart(300, 42, -0.06), W, -0.06, 0, 300) === null, 'a Northwood-style chart has no blank band');
 { const a = findChartAlign(chart(300, 42, -0.06), W, -0.06, 300);
   ok(!!a && near(a.shift, 40), 'Northwood: margin path still wins'); }
-// ★ chartAlignStep: decided at 300, refines at 600 only a chart it moved; a phased DDK chart stays untouched.
+// ★ chartAlignStep: decided at 300 lines WITH CONTENT, refines at 600 only a chart it moved; phased DDK untouched.
+const feed = (st: ChartAlignState, rows: Uint8Array[], slant: number, upto: number) => {
+  let moved = 0;
+  for (let y = 0; y < upto; y++) if (chartAlignStep(st, () => rows.slice(0, y + 1), W, slant, rows[y])) moved++;
+  return moved;
+};
 { const rows = chart(700, 42, -0.06); const st: ChartAlignState = {};
-  ok(!chartAlignStep(st, () => rows, W, -0.06, 299) && st.al === undefined, 'nothing before line 300');
-  ok(chartAlignStep(st, () => rows.slice(0, 301), W, -0.06, 300) && !!st.al, 'decided at 300 → redraw');
-  ok(!chartAlignStep(st, () => rows, W, -0.06, 450), 'no second look before 600');
-  chartAlignStep(st, () => rows, W, -0.06, 601);
-  ok(st.refined === true, 'second look taken once, at ≥600 (a dropped row 600 cannot skip it)'); }
+  ok(feed(st, rows, -0.06, 299) === 0 && st.al === undefined, 'nothing before 300 lines');
+  const st2: ChartAlignState = {}; ok(feed(st2, rows, -0.06, 300) === 1 && !!st2.al && near(st2.al.shift, 40), 'decided at 300 → one redraw, margin to the edge');
+  const st3: ChartAlignState = {}; feed(st3, rows, -0.06, 650);
+  ok(st3.refined === true, 'second look taken once, by 600'); }
 { const rows = bordered(700, 0); const st: ChartAlignState = {};
-  chartAlignStep(st, () => rows.slice(0, 301), W, 0, 300);
-  ok(st.al === null && !chartAlignStep(st, () => rows, W, 0, 600) && st.al === null, 'phased DDK: left alone at 300 stays alone at 600'); }
+  ok(feed(st, rows, 0, 700) === 0 && st.al === null, 'phased DDK: left alone at 300, still alone at 600'); }
+// ★ DDK's steady tone before the chart (off air, 2026-10-05): ~270 flat grey lines, then a chart joined without
+//   phasing. The grey must not hide the border, and the flat lines must not count towards the 300.
+{ const tone = Array.from({ length: 270 }, () => { const r = new Uint8Array(W); for (let x = 0; x < W; x++) r[x] = 100 + Math.floor(rnd() * 20); return r; });
+  const rows = [...tone, ...bordered(600, 900)]; const st: ChartAlignState = {};
+  ok(feed(st, rows, 0, 300) === 0 && st.al === undefined && (st.n ?? 0) < 300, 'tone lines are not counted (no decision at line 300)');
+  const st2: ChartAlignState = {}; let moved = 0;
+  for (let y = 0; y < rows.length && st2.al === undefined; y++) if (chartAlignStep(st2, () => rows.slice(0, y + 1), W, 0, rows[y])) moved++;
+  ok(moved === 1 && !!st2.al && Math.abs(st2.al.shift - 900) <= 6, `after the tone, the border is still found: cut at ${st2.al?.shift} (≈900)`); }
 // The arithmetic the canvases use
 ok(wefaxOffset({ shift: 40, slant: -0.06 }, 0, W) === 40 && wefaxOffset({ shift: 40, slant: -0.06 }, 1000, W) === W - 20, 'offset wraps');
 ok(wefaxPreset(4608100).slant === -0.06 && wefaxPreset(4608100).shift === 0, 'Northwood preset = slant only');
