@@ -96,12 +96,14 @@ struct NavtexOptions {
     bool rcDemod    = true;   // tones mixed to baseband + raised-cosine lowpass (else the Q≈3 biquad bandpasses)
     bool earlyLate  = true;   // early/prompt/late bit clock (else the zero-crossing histogram)
     bool logSoft    = true;   // bit values from log-compressed ATC levels (else ±1 per sample)
-    bool atcHalf    = false;  // W7AY ATC: ½ and clipped to the noise floor (else ¼, clipped to the envelope only)
+    bool atcHalf    = false;  // W7AY ATC: ½ and clipped to the noise floor (else ¼, clipped to the envelope only) —
+                              // -6 dB 41 → 68 % on the bench, level on real audio: OFF
     bool softFec    = true;   // the soft FEC tiers (else RX, then DX, then '_')
     bool fecVote    = true;   // RX and DX both valid but different: the one the summed soft bits favour (else RX)
     bool fecMl      = true;   // neither copy valid: the best of the 35 valid words on the summed copies (else fldigi's tiers)
     bool autoInvert = true;   // the character sync tries both polarities
-    bool afc        = false;  // follow a drifting signal
+    bool afc        = false;  // follow a mistuned signal — ±50 Hz at -3 dB 9.2/8.1 → 0.6/0.7 % CER on the bench, but the
+                              // 518 kHz recording sat on tune (AFC settled at +2 Hz) and lost more (6 → 16 chars): OFF
 };
 
 class NavtexRx {
