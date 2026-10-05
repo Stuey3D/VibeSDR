@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
+#include <unistd.h>
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -140,10 +142,23 @@ bool AirspyHfSource::open(int index, double sampleRateHz, double centreHz,
     return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
 }
 
-/** ★ OWNERSHIP OF THE DESCRIPTOR PASSES TO libusb. Do not close it here or in the caller: on
- *  Android the UsbDeviceConnection must outlive the stream, and closing it twice takes the
- *  radio down mid-capture. */
 double AirspyHfSource::lastRxSecs() const { return impl_->lastRx.load(std::memory_order_relaxed); }
+
+/* ★★★ WE OPEN ON OUR OWN dup() OF THE DESCRIPTOR, NOT ON KOTLIN'S (2026-10-05) — the RTL path has done
+ *  this since the use-after-free it documents in local_sdr_shim.cpp (`usbFd`). libusb_wrap_sys_device
+ *  does NOT take ownership: libusb_close() leaves the fd open, so whoever closes it decides when the
+ *  kernel's handle goes. Wrapping Kotlin's fd directly meant the UsbDeviceConnection's close() (a stop,
+ *  or the re-attach recovery replacing a dead connection) could pull the descriptor out from under a
+ *  libusb handle still in use — and a recycled fd number under a live handle sends our ioctls to some
+ *  other file. Our dup is an independent descriptor on the same open file: Kotlin closes its copy when
+ *  it likes, and we close ours in close(), AFTER airspyhf_close(). */
+static int dupForLibusb(int fd) {
+#ifdef VIBE_AIRSPYHF_HAS_FD
+    return fd >= 0 ? ::dup(fd) : -1;
+#else
+    (void)fd; return -1;
+#endif
+}
 
 bool AirspyHfSource::openFd(int fd, double sampleRateHz, double centreHz,
                             int gainTenthDb, std::string& err) {
@@ -155,11 +170,20 @@ bool AirspyHfSource::openFd(int fd, double sampleRateHz, double centreHz,
     if (open_) return true;
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (fd < 0) { err = "invalid USB file descriptor"; return false; }
-    if (airspyhf_open_fd(&impl_->dev, fd) != AIRSPYHF_SUCCESS || !impl_->dev) {
+    const int own = dupForLibusb(fd);   // ★ see dupForLibusb
+    if (own < 0) {
+        err = "could not duplicate the Airspy HF+ USB descriptor (errno " + std::to_string(errno) + ")";
+        std::fprintf(stderr, "airspyhf: %s\n", err.c_str());
+        return false;
+    }
+    if (airspyhf_open_fd(&impl_->dev, own) != AIRSPYHF_SUCCESS || !impl_->dev) {
         impl_->dev = nullptr;
+        ::close(own);
         err = "could not open the Airspy HF+ from the USB descriptor";
         return false;
     }
+    fd_ = own;
+    fdOpened_ = true;
     impl_->serial = 0;   // enumeration is unavailable here, so there is no serial to read
     return finishOpen(sampleRateHz, centreHz, gainTenthDb, err);
 #endif
@@ -238,6 +262,8 @@ void AirspyHfSource::close() {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     stop();
     if (impl_->dev) { airspyhf_close(impl_->dev); impl_->dev = nullptr; }
+    // ★ Our dup, and only AFTER the handle that used it is closed — see dupForLibusb.
+    if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
     open_ = false;
 }
 
@@ -289,8 +315,12 @@ bool AirspyHfSource::restartOnHandle(std::string& err) {
     return true;
 }
 
-/** ★ Forget a handle a timed-out worker still holds. Never closed from here — see restartOnHandle. */
+/** ★ Forget a handle a timed-out worker still holds. Never closed from here — see restartOnHandle.
+ *  ★ Its fd (our dup) is LEAKED with it, on purpose: closing a descriptor a stuck ioctl may still be
+ *    using lets the number be reused, and the library's next call would land on some other file. */
 void AirspyHfSource::abandonHandle() {
+    if (fd_ >= 0) std::fprintf(stderr, "airspyhf: leaking fd %d with the abandoned handle\n", fd_);
+    fd_ = -1;
     impl_->dev = nullptr;
     streaming_ = false;
     open_ = false;
