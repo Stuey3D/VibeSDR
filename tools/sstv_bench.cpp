@@ -193,7 +193,7 @@ static std::vector<int16_t> transmit(const std::vector<Seg>& sc, double ppm, dou
         const double tau = (double)i / FS * k;
         while (si + 1 < sc.size() && tau >= segEnd) { si++; segEnd += sc[si].dur; }
         p += 2.0 * M_PI * sc[si].f * k / FS; if (p > 2*M_PI) p -= 2*M_PI;
-        ph[N0 + i] = p; on[N0 + i] = 1;
+        ph[N0 + i] = p; on[N0 + i] = sc[si].f > 0;
     }
     std::vector<double> x(ph.size(), 0.0);
     if (!fade) { for (size_t i = 0; i < x.size(); i++) if (on[i]) x[i] = A * std::sin(ph[i]); }
@@ -287,7 +287,7 @@ static std::vector<std::string> split(const std::string& s) { std::vector<std::s
 
 int main(int argc, char** argv) {
     std::string imgPath, outDir; std::vector<std::string> modes = {"M1","M2","S1","S2","R36","PD50","PD120"};
-    std::vector<double> snrs = {20, 10, 6, 3, 0}, ppms = {0}; int fade = 0, seeds = 1; double noiseSec = 0;
+    std::vector<double> snrs = {20, 10, 6, 3, 0}, ppms = {0}; int fade = 0, seeds = 1, abandon = 0; double noiseSec = 0, gapSec = 2.0;
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i]; auto nx = [&]() { return std::string(i + 1 < argc ? argv[++i] : ""); };
         if (a == "--img") imgPath = nx();
@@ -298,6 +298,7 @@ int main(int argc, char** argv) {
         else if (a == "--seeds") seeds = atoi(nx().c_str());
         else if (a == "--out") outDir = nx();
         else if (a == "--noise") noiseSec = atof(nx().c_str());
+        else if (a == "--abandon") { abandon = 1; gapSec = atof(nx().c_str()); }
     }
     if (noiseSec > 0) {
         // ★ False starts: band noise alone, at a level where a real picture would be at ~3 dB.
@@ -313,6 +314,30 @@ int main(int argc, char** argv) {
         return 0;
     }
     Img src; const bool haveImg = !imgPath.empty() && readPpm(imgPath.c_str(), src);
+    if (abandon) {
+        // ★ An abandoned picture, then the real one: the sender stops mode A a third of the way in,
+        //   waits `gap` s and sends mode B. Was B decoded, and how well? (VIS-during-decode, 2026-10-05)
+        printf("first\tsecond\tsnr\tgap\tpics\tsecond_found\trmse\tssim\tstatus\n");
+        for (size_t a = 0; a < modes.size(); a++) for (size_t b = 0; b < modes.size(); b++) for (double snr : snrs) {
+            const ModeDef* da = defOf(modes[a]); const ModeDef* db = defOf(modes[b]);
+            const Img ta = haveImg ? resized(src, da->W, da->H) : card(da->W, da->H);
+            const Img tb = haveImg ? resized(src, db->W, db->H) : card(db->W, db->H);
+            auto sa = schedule(modes[a], ta); sa.resize(sa.size() / 3);
+            sa.push_back({0.0, gapSec});   // silence (0 Hz) — the noise carries on over it
+            auto sb = schedule(modes[b], tb);
+            sa.insert(sa.end(), sb.begin(), sb.end());
+            const auto pcm = transmit(sa, 0, snr, fade != 0, 4321 + (unsigned)(a * 31 + b * 7));
+            const auto pics = decodeAll(pcm);
+            int found = -1;
+            for (size_t k = 0; k < pics.size(); k++) if (pics[k].W == db->W && pics[k].H == db->H && (k > 0 || modes[a] != modes[b])) found = (int)k;
+            if (modes[a] == modes[b] && pics.size() >= 2) found = (int)pics.size() - 1;
+            Score s; if (found >= 0) s = score(tb, pics[found].img);
+            printf("%s\t%s\t%.0f\t%.1f\t%zu\t%s\t%.1f\t%.3f\t%s\n", modes[a].c_str(), modes[b].c_str(), snr, gapSec, pics.size(),
+                   found >= 0 ? "yes" : "NO", s.rmse, s.ssim, found >= 0 ? pics[found].status.c_str() : "");
+            fflush(stdout);
+        }
+        return 0;
+    }
     printf("mode\tsnr\tppm\tfade\tseed\tpics\trmse\tssim\tstreak\tdx\tdy\tstatus\n");
     for (auto& m : modes) {
         const ModeDef* d = defOf(m); if (!d) { fprintf(stderr, "unknown mode %s\n", m.c_str()); continue; }

@@ -57,16 +57,26 @@ private:
 // ── Circular PCM buffer (mirrors pcm_buffer.go) ──────────────────────────────
 class SstvBuffer {
 public:
-    explicit SstvBuffer(int size);
+    /** `exact`: honour a small size (the VIS watch's ring, 2026-10-05) — otherwise at least 8 M. */
+    explicit SstvBuffer(int size, bool exact = false);
     void write(const int16_t* s, int n);
     bool getWindow(int offset, int length, int16_t* out);
     void advanceWindow(int n);
     int  windowPtr();
     int  available();
     void reset();
+    /** ★ Primed = the initial 1024-sample fill is done. Was `windowPtr() == 0`, which is ALSO true
+     *  each time the window wraps the 8 M ring — fatal once pictures run back to back without a
+     *  reset (restart on a new VIS, 2026-10-05): writes went to the fill branch and were dropped. */
+    bool ready() { std::lock_guard<std::mutex> lk(mu); return primed; }
+    /** Samples stored since reset, and the window's total advance — the restart's coordinates. */
+    long long writtenTotal();
+    long long consumed();
 private:
     std::vector<int16_t> buf;
     int size, wptr = 0, writePos = 0, fillPos = 0;
+    long long total = 0, advanced = 0;
+    bool primed = false;
     std::mutex mu;
     int availableLocked();
 };
@@ -98,7 +108,7 @@ public:
     // Demodulate consuming from pcm; lineSender(y, rgb[w*3]) called per line.
     void demodulate(SstvBuffer& pcm, double rate, int skip,
                     const std::function<void(int, const uint8_t*)>& lineSender,
-                    const std::atomic<bool>& abort);
+                    const std::atomic<bool>& abort, const std::atomic<bool>* interrupt = nullptr);
     /** RGB w*h*3. ★ `okOut` reports whether every pixel came from a REAL captured sample —
      *  false means the redraw ran past the end of what was actually decoded and the result must
      *  NOT be shown. See the slant-correction guard in videoThread(). */
@@ -113,6 +123,14 @@ public:
      *  harmless to leave out of a correction, the second is a tear. Public because that decision
      *  belongs to the caller, which is the only place that knows what it is about to send. */
     int linesReceived = 0;
+    /** ★ The sync-train gate (2026-10-05, see demodulate): lines are HELD until the sync train
+     *  confirms a picture, `onConfirmed` fires just before they are sent, and `endReason` says why
+     *  demodulate returned. gateOnSync=false sends every line at once, as before. */
+    bool gateOnSync = true;
+    std::function<void()> onConfirmed;
+    enum EndReason { EndComplete, EndNoSync, EndSignalLost, EndInterrupted };
+    EndReason endReason = EndComplete;
+    int syncLinesSeen = 0;
     const std::vector<uint8_t>& syncFlags() const { return hasSync; }
     const std::vector<float>& syncLevels() const { return syncLevel; }
 
@@ -182,6 +200,7 @@ public:
     std::function<void()>                          onRedrawStart;
 private:
     void videoThread();
+    void decodePicture();
     enum State { WaitingVIS, Decoding };
     double sampleRate; bool autoSync, adaptive;
     SstvBuffer pcm;
@@ -195,7 +214,21 @@ private:
     std::atomic<State> state{WaitingVIS};
     std::atomic<bool> abort{false};
     std::thread vthread;
-    std::vector<int16_t> accum;
+    std::vector<int16_t> accum, chunk;
+    /** ★★ THE VIS WATCH (2026-10-05): a second detector on its own small ring, run by process()
+     *  while a picture decodes. Owned by the process() thread; `watchReset` restarts it per picture.
+     *  On a VIS it publishes the next picture under ctlMu and sets `interrupt`; the video thread
+     *  ends the current picture and jumps the main ring to `nextStart` (its writtenTotal coords). */
+    SstvBuffer visWatchPcm;
+    SstvVIS* visWatch = nullptr;
+    bool watchReset = true;
+    std::mutex ctlMu;
+    bool restartPending = false;
+    long long nextStart = 0;
+    const SstvMode* nextMode = nullptr;
+    uint8_t nextModeIdx = 0;
+    int nextShift = 0;
+    std::atomic<bool> interrupt{false};
     int samps10ms;
     bool statusSent = false;
 };

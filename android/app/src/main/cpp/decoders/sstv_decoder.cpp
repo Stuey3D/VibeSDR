@@ -98,8 +98,8 @@ double SstvFFT::re(int b) const { return (b < 0 || b > n / 2) ? 0 : out[b].r; }
 double SstvFFT::im(int b) const { return (b < 0 || b > n / 2) ? 0 : out[b].i; }
 
 // ── Circular buffer ──────────────────────────────────────────────────────────
-SstvBuffer::SstvBuffer(int requested) {
-    int minSize = 8 * 1024 * 1024;
+SstvBuffer::SstvBuffer(int requested, bool exact) {
+    int minSize = exact ? 4096 : 8 * 1024 * 1024;
     size = requested > minSize ? requested : minSize;
     buf.assign(size, 0);
 }
@@ -108,11 +108,14 @@ int SstvBuffer::availableLocked() {
 }
 void SstvBuffer::write(const int16_t* s, int n) {
     std::lock_guard<std::mutex> lk(mu);
-    if (wptr == 0) {
-        for (int i = 0; i < n && fillPos < 1024; i++) buf[fillPos++] = s[i];
-        if (fillPos >= 1024) { wptr = 512; writePos = fillPos; }
+    // ★ `total` counts samples STORED: the initial fill drops whatever overshoots 1024, and the
+    //   restart arithmetic (writtenTotal vs 512 + consumed) must be in the buffer's own coordinates.
+    if (!primed) {
+        for (int i = 0; i < n && fillPos < 1024; i++) { buf[fillPos++] = s[i]; total++; }
+        if (fillPos >= 1024) { wptr = 512; writePos = fillPos; primed = true; }
     } else {
         for (int i = 0; i < n; i++) { buf[writePos] = s[i]; writePos = (writePos + 1) % size; }
+        total += n;
     }
 }
 bool SstvBuffer::getWindow(int offset, int length, int16_t* out) {
@@ -123,10 +126,12 @@ bool SstvBuffer::getWindow(int offset, int length, int16_t* out) {
     }
     return true;
 }
-void SstvBuffer::advanceWindow(int n) { std::lock_guard<std::mutex> lk(mu); wptr = (wptr + n) % size; }
+void SstvBuffer::advanceWindow(int n) { std::lock_guard<std::mutex> lk(mu); wptr = ((wptr + n) % size + size) % size; advanced += n; }
+long long SstvBuffer::writtenTotal() { std::lock_guard<std::mutex> lk(mu); return total; }
+long long SstvBuffer::consumed() { std::lock_guard<std::mutex> lk(mu); return advanced; }
 int  SstvBuffer::windowPtr() { std::lock_guard<std::mutex> lk(mu); return wptr; }
 int  SstvBuffer::available() { std::lock_guard<std::mutex> lk(mu); return availableLocked(); }
-void SstvBuffer::reset() { std::lock_guard<std::mutex> lk(mu); std::fill(buf.begin(), buf.end(), 0); wptr = writePos = fillPos = 0; }
+void SstvBuffer::reset() { std::lock_guard<std::mutex> lk(mu); std::fill(buf.begin(), buf.end(), 0); wptr = writePos = fillPos = 0; total = advanced = 0; primed = false; }
 
 // ── VIS detector ─────────────────────────────────────────────────────────────
 SstvVIS::SstvVIS(double sr) : sampleRate(sr), fft(2048) {
@@ -381,7 +386,7 @@ double SstvVideo::demodFreq(SstvBuffer& pcm, double snr, int ahead) {
 
 void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
                            const std::function<void(int, const uint8_t*)>& lineSender,
-                           const std::atomic<bool>& abort) {
+                           const std::atomic<bool>& abort, const std::atomic<bool>* interrupt) {
     auto grid = pixelGrid(rate, skip);
     int length;
     if (isPD(m)) length = (int)(m->lineTime*m->numLines/2*sampleRate);
@@ -408,8 +413,93 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
     int pixelIdx = 0, nextSync = 0, nextSNR = 0, syncSampleNum = 0;
     double snr = 0, freq = 0;
 
+    // ★★★ A VIS IS A PROMISE, THE SYNC TRAIN IS THE PICTURE (2026-10-05). The VIS detector can be
+    // satisfied by a VIS that no picture follows, and once it was, the decoder painted the mode's
+    // whole length (58 s for a Martin M2) and stayed DEAF to every VIS meanwhile — Stuart's 20 m
+    // recording of 15:38 UTC: an M2 VIS, ~4 s of tone, and the Scottie S2 that began 10 s later
+    // was never heard. A picture has a sync pulse at the same place on every line; noise does not.
+    //   • The picture is not STARTED on the client until CONFIRM lines have shown that pulse where
+    //     the mode puts it. Its lines are held, then sent in one go (about a second on a good signal).
+    //   • No confirmation within the first `abortN` lines → it was never a picture: dropped unseen.
+    //   • Once confirmed, at most 15 % of the last `lostN` lines (≥ 8 s) with a pulse → the sender
+    //     stopped or faded out: end the picture there and listen for the next VIS.
+    // The audit's "abort after ~20 lines with no sync". Measured: see the commit table.
+    const double P = rate * m->lineTime;                               // samples per sync line
+    const int syncLines = pd ? m->numLines / 2 : m->numLines;
+    const double syncS = m->syncTime * sampleRate;
+    const bool scottie = (nm == "Scottie S1" || nm == "Scottie S2" || nm == "Scottie DX");
+    // Scottie: the starting pulse, then the line's two colours ahead of its own pulse.
+    const double syncOff = scottie ? (m->syncTime + 2.0 * m->septrTime + 2.0 * m->pixelTime * m->imgWidth) * rate : 0.0;
+    const int abortN = std::max(12, std::min(20, (int)std::ceil(12.0 * sampleRate / P)));
+    const int lostN  = std::max(20, (int)std::ceil(8.0 * sampleRate / P));
+    const int CONFIRM = 5;
+    bool confirmed = !gateOnSync;
+    int evalLine = 0, synced = 0;
+    std::vector<uint8_t> lineSync;                                     // per sync line, 1 = pulse found
+    std::vector<std::pair<int, std::vector<uint8_t>>> held;
+    endReason = EndComplete;
+    syncLinesSeen = 0;
+    auto emit = [&](int y, const uint8_t* rgb) {
+        if (confirmed) { lineSender(y, rgb); return; }
+        held.emplace_back(y, std::vector<uint8_t>(rgb, rgb + (size_t)m->imgWidth * 3));
+    };
+    // ★★ WHERE TO LOOK: near the LAST pulse found, one line on — not at k·P from the VIS. From the
+    //    VIS the window has to widen with the sender's possible clock error (1500 ppm × 255 M2 lines
+    //    = 87 ms, most of the line), and a window that wide finds a "pulse" in anything: the first
+    //    version of this confirmed 250 of 256 lines of that M2 VIS's tone. Anchored, it is ±8 ms.
+    double anchor = -1; int anchorK = -1;
+    auto window = [&](int k, double& c, double& slack) {
+        if (anchorK >= 0 && k - anchorK <= 12) { c = anchor + (k - anchorK) * P; slack = 0.008 * sampleRate + 1500e-6 * (k - anchorK) * P; }
+        else { c = k * P + syncOff; slack = 0.020 * sampleRate + 1000e-6 * k * P; }  // VIS hand-off + clock
+    };
+    // Is there a PULSE in the window — a pulse-wide box mostly flagged — standing out of a line that
+    // mostly is NOT flagged? ★ Both halves: a steady tone just below 1500 Hz (the 17-sample detector
+    // window is ~700 Hz wide) can flag "sync" everywhere.
+    double lastBox = 0, lastBg = 0;
+    auto lineHasSync = [&](int k) -> bool {
+        double c, slack; window(k, c, slack);
+        const int n = (int)hasSync.size();
+        const int i0 = std::max(0, (int)std::floor((c - slack) / 13.0));
+        const int i1 = std::min(n - 1, (int)std::ceil((c + syncS + slack) / 13.0));
+        const int bw = std::max(2, (int)std::lround(syncS / 13.0));
+        int best = 0, bestAt = i0;
+        for (int i = i0; i + bw - 1 <= i1; i++) {
+            int a = 0; for (int j = 0; j < bw; j++) a += hasSync[i + j];
+            if (a > best) { best = a; bestAt = i; }
+        }
+        // the rest of this line: from a pulse after this one to a pulse before the next
+        const int b0 = bestAt + 2 * bw, b1 = std::min(n - 1, bestAt + (int)((P - syncS) / 13.0));
+        int on = 0, cnt = 0; for (int i = b0; i <= b1; i++) { on += hasSync[i]; cnt++; }
+        lastBox = (double)best / bw; lastBg = cnt ? (double)on / cnt : 1.0;
+        // ★ A third of a long pulse is plenty against a 1–5 % background: the weak PD-50 of 15:40 UTC
+        //   showed 6–8 of its 18 flags per pulse, and half (the first threshold) dropped it unseen.
+        const bool ok = best >= 2 && lastBox >= 0.3 && lastBg <= 0.3 && lastBox >= lastBg + 0.25;
+        if (ok) { anchor = bestAt * 13.0; anchorK = k; }
+        return ok;
+    };
+
     for (int sampleNum = 0; sampleNum < length; sampleNum++) {
         if (abort.load()) return;
+        if (interrupt && interrupt->load()) { endReason = confirmed ? EndInterrupted : EndNoSync; return; }
+        // Judge each sync line once its window and the line after it have been flagged.
+        while (evalLine < syncLines) {
+            double c, slack; window(evalLine, c, slack);
+            if (sampleNum <= c + P + slack + 32) break;
+            const bool s = lineHasSync(evalLine++);
+            lineSync.push_back(s ? 1 : 0);
+            if (s) { synced++; syncLinesSeen++; }
+            if (!confirmed) {
+                if (synced >= CONFIRM) {
+                    confirmed = true;
+                    if (onConfirmed) onConfirmed();
+                    for (auto& h : held) lineSender(h.first, h.second.data());
+                    held.clear();
+                } else if (evalLine >= abortN) { endReason = EndNoSync; return; }
+            } else if (gateOnSync && evalLine >= lostN) {
+                int recent = 0; for (int i = evalLine - lostN; i < evalLine; i++) recent += lineSync[i];
+                if (recent <= std::max(1, lostN * 15 / 100)) { endReason = EndSignalLost; return; }
+            }
+        }
         if (pcm.available() < 1024) {
             for (int i = 0; i < 500 && pcm.available() < 1024; i++) {
                 if (abort.load()) return;
@@ -453,7 +543,7 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
                             case SSTV_BW: line[o]=line[o+1]=line[o+2]=c0; break;
                         }
                     }
-                    lineSender(y, line.data());
+                    emit(y, line.data());
                     if (y + 1 > linesReceived) linesReceived = y + 1;
                 }
             }
@@ -461,6 +551,7 @@ void SstvVideo::demodulate(SstvBuffer& pcm, double rate, int skip,
         }
         pcm.advanceWindow(1);
     }
+    if (!confirmed) endReason = EndNoSync;   // the audio ran out before the picture proved itself
 }
 
 std::vector<uint8_t> SstvVideo::toRGB(const std::vector<uint8_t>& img) {
@@ -766,7 +857,7 @@ void SstvSync::findSync(double& rateOut, int& skipOut, double* confOut) {
 
 // ── Top-level decoder ────────────────────────────────────────────────────────
 SstvDecoder::SstvDecoder(double sr, bool autoSync_, bool adaptive_)
-    : sampleRate(sr), autoSync(autoSync_), adaptive(adaptive_), pcm(16384) {
+    : sampleRate(sr), autoSync(autoSync_), adaptive(adaptive_), pcm(16384), visWatchPcm(32768, true) {
     samps10ms = (int)(sr * 10e-3);
     accum.reserve(samps10ms * 2);
 }
@@ -774,16 +865,18 @@ SstvDecoder::~SstvDecoder() {
     abort.store(true);
     if (vthread.joinable()) vthread.join();
     delete vis;
+    delete visWatch;
 }
 
 void SstvDecoder::process(const int16_t* mono, int count) {
     if (!statusSent) { if (onStatus) onStatus("Waiting for signal..."); statusSent = true; }
     // Initial buffer fill.
-    if (pcm.windowPtr() == 0) { pcm.write(mono, count); return; }
+    if (!pcm.ready()) { pcm.write(mono, count); return; }
 
     accum.insert(accum.end(), mono, mono + count);
     while ((int)accum.size() >= samps10ms) {
-        pcm.write(accum.data(), samps10ms);
+        chunk.assign(accum.begin(), accum.begin() + samps10ms);
+        pcm.write(chunk.data(), samps10ms);
         accum.erase(accum.begin(), accum.begin() + samps10ms);
 
         if (state.load() == WaitingVIS) {
@@ -795,24 +888,89 @@ void SstvDecoder::process(const int16_t* mono, int count) {
                 mode = sstvModeByIndex(modeIdx); headerShift = shift;
                 if (!mode || mode->unsupported) { if (onStatus) onStatus("Mode not supported"); continue; }
                 if (onMode) onMode(modeIdx, mode->name);
-                if (onImageStart) onImageStart(mode->imgWidth, mode->numLines);
+                // ★ onImageStart is sent by the video thread once the sync train confirms the
+                //   picture (2026-10-05) — a VIS on its own no longer opens a picture on the client.
+                watchReset = true;
                 state.store(Decoding);
                 abort.store(false);
                 if (vthread.joinable()) vthread.join();
                 vthread = std::thread([this]{ videoThread(); });
             }
         }
-        // While Decoding, the video thread consumes pcm; we keep feeding it.
+        else {
+            // ★★★ LISTEN FOR THE NEXT VIS WHILE DECODING (2026-10-05; the audit's "VIS during decode,
+            // restart on new VIS"). Decoding used to be deaf: a picture that is abandoned, or one we
+            // took for longer than it was, swallowed every VIS until its nominal end — the S2 of
+            // 15:38:53 UTC on Stuart's recording began 10 s into an abandoned M2 and was lost. A second
+            // detector watches its own small copy of the audio; a VIS there ends the current picture
+            // (it keeps what arrived) and the video thread jumps to the new one's first sample.
+            if (watchReset) {
+                watchReset = false; visWatchPcm.reset(); delete visWatch; visWatch = nullptr;
+            }
+            visWatchPcm.write(chunk.data(), samps10ms);
+            if (!visWatchPcm.ready()) continue;
+            if (!visWatch) { visWatch = new SstvVIS(sampleRate); visWatch->onTone = [](double){}; }
+            uint8_t modeIdx; int shift;
+            if (visWatch->process(visWatchPcm, modeIdx, shift)) {
+                const SstvMode* nm = sstvModeByIndex(modeIdx);
+                watchReset = true;
+                if (!nm || nm->unsupported) continue;
+                std::lock_guard<std::mutex> lk(ctlMu);
+                if (state.load() != Decoding) continue;
+                // The new video starts `back` samples behind the write head — the same in both rings.
+                const int back = visWatchPcm.available();
+                nextStart = pcm.writtenTotal() - back;
+                nextMode = nm; nextModeIdx = modeIdx; nextShift = shift;
+                restartPending = true;
+                interrupt.store(true);
+            }
+        }
     }
 }
 
 void SstvDecoder::videoThread() {
+    for (;;) {
+        decodePicture();
+        if (abort.load()) return;
+        std::lock_guard<std::mutex> lk(ctlMu);
+        if (restartPending) {
+            // ★ The next picture's VIS was heard while this one was still decoding (see process()):
+            //   skip the window to where its video begins — the audio is all still in the ring — and
+            //   go straight on. NOT a pcm.reset(): that would throw the new picture away.
+            restartPending = false; interrupt.store(false);
+            mode = nextMode; headerShift = nextShift;
+            const long long at = 512 + pcm.consumed();
+            pcm.advanceWindow((int)(nextStart - at));
+            if (onMode) onMode(nextModeIdx, mode->name);
+            continue;
+        }
+        // Reset for the next image. ★ The state is published LAST, and `vis` is not touched here: it
+        // belongs to the process() thread, which is free to use it the moment it sees WaitingVIS
+        // (audit 2026-10-03 — this deleted it out from under that thread).
+        pcm.reset();
+        visReset.store(true);
+        state.store(WaitingVIS);
+        return;
+    }
+}
+
+void SstvDecoder::decodePicture() {
     if (onStatus) onStatus(std::string("Decoding ") + mode->name + "...");
     SstvVideo video(mode, sampleRate, headerShift, adaptive);
     auto sender = [this](int y, const uint8_t* rgb) { if (onLine) onLine(y, mode->imgWidth, rgb); };
-    video.demodulate(pcm, sampleRate, 0, sender, abort);
+    video.onConfirmed = [this]() { if (onImageStart) onImageStart(mode->imgWidth, mode->numLines); };
+    video.demodulate(pcm, sampleRate, 0, sender, abort, &interrupt);
     if (abort.load()) return;
+    if (video.endReason == SstvVideo::EndNoSync) {
+        // ★ Never a picture: nothing was opened on the client, so there is nothing to close.
+        if (onStatus) onStatus(std::string("ignored a ") + mode->name + " VIS — no picture followed");
+        return;
+    }
     if (onComplete) onComplete();
+    if (video.endReason == SstvVideo::EndSignalLost && onStatus)
+        onStatus("signal lost after " + std::to_string(video.linesReceived) + " lines");
+    if (video.endReason == SstvVideo::EndInterrupted && onStatus)
+        onStatus("cut short after " + std::to_string(video.linesReceived) + " lines \u2014 a new picture began");
 
     if (autoSync) {
         if (onStatus) onStatus("Correcting slant...");
@@ -826,8 +984,6 @@ void SstvDecoder::videoThread() {
         static const double MIN_SYNC_CONF = 0.25;
         if (conf < MIN_SYNC_CONF) {
             if (onStatus) onStatus("slant not corrected \u2014 sync too weak");
-            // ★ reset first, publish the state LAST — see visReset (audit 2026-10-03)
-            pcm.reset(); visReset.store(true); state.store(WaitingVIS);
             return;
         }
         // ★★★ APPLY THE OFFSET TO THE WHOLE PICTURE, NOT A SHEAR. findSync returns TWO corrections:
@@ -910,12 +1066,6 @@ void SstvDecoder::videoThread() {
         }
     }
 
-    // Reset for the next image. ★ The state is published LAST, and `vis` is not touched here: it
-    // belongs to the process() thread, which is free to use it the moment it sees WaitingVIS
-    // (audit 2026-10-03 — this deleted it out from under that thread).
-    pcm.reset();
-    visReset.store(true);
-    state.store(WaitingVIS);
 }
 
 } // namespace vibe
