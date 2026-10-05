@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace vibe {
 
@@ -154,21 +155,66 @@ public:
 
 private:
     void  setState(State s);
-    void  onSecondEdge(double dipMs, double gapMs);
-    void  pushBit(int bit);
+    void  onRwmEdge();
     bool  decodeMinute(TimeStamp& out) const;
     bool  decodeMsf(TimeStamp& out) const;
     bool  decodeDcf77(TimeStamp& out) const;
     bool  decodeWwv(TimeStamp& out) const;
     bool  decodeWwvb(TimeStamp& out) const;
     void  emitPartial();
-    // ── Framing by elapsed time (MSF, DCF77, WWVB) — see the note above onSecondEdge ──────────
-    void  beginFrame(long long anchorClock);
+    void  pushBit(int bit);
+
+    // ── The matched-filter reader (MSF, DCF77, WWVB, WWV) — see the block in the .cpp ─────────
+    /** One second as read: the best symbol overall and its margin; the best DATA symbol and its
+     *  margin; the soft value of each bit (+1 = surely 1, -1 = surely 0, 0 = nothing known). */
+    struct SecRec {
+        long long idx = -1;            ///< flywheel second number (-1 = none)
+        signed char cls = -1, dcls = -1;
+        float conf = 0, dconf = 0, softA = 0, softB = 0;
+        bool contrast = false;         ///< the levels allowed a read at all
+    };
+    static constexpr int    kMaxCls = 6, kMaxWin = 170, kHistBins = 200;
+    static constexpr size_t kRecRing = 256;
+    void   initReader();
+    void   readerStep();
+    void   classify(SecRec& r) const;
+    void   onSecond(const SecRec& r);
+    void   placeRec(int pos, const SecRec& r);
+    int    symbolOf(const SecRec& r, bool& readable) const;
+    bool   strongKind(const SecRec& r, int kind) const;
+    const SecRec& rec(long long idx) const;
+    float  envAt(long long i) const;
+    double zAt(double pos) const;
+    bool   contrastOk() const;
+    bool   isEdge(long long i, double& pos) const;
+    int    phaseBin(double pos) const;
+    double histTriple(int b) const;
+    int    histBest(double& score, bool& clear) const;
+    void   seedAt(double edgePos);
+    // ── Framing ──
+    void  startFrame(long long idx);
     void  place(int sec, int a, int b, int sym, bool readable);
     void  closeFrame();
     void  loseFrame();
     void  finishMinute(bool decoded, const TimeStamp& ts);
     bool  slotsComplete(int from, int to) const;
+
+    int    nCls_ = 0, win_ = 0;
+    signed char clsKind_[kMaxCls] = {0}, clsA_[kMaxCls] = {0}, clsB_[kMaxCls] = {0};
+    unsigned char tpl_[kMaxCls][kMaxWin] = {{0}};
+    int    nd_[kMaxCls][kMaxCls] = {{0}};
+    double hist_[kHistBins] = {0};
+    long long scanPos_ = 0;
+    bool   phaseKnown_ = false;
+    double curEdge_ = 0, period_ = 200, periodNom_ = 200;
+    int    trkN_ = 0, missRun_ = 0, stage_ = 0;
+    long long secIdx_ = 0;
+    SecRec recs_[kRecRing];
+    /** The flywheel second that is second 0 of the minute being read (-1 = hunting). */
+    long long anchorIdx_ = -1;
+    /** Minutes in a row whose minute mark was not seen (the grid coasts; 3 = lost). */
+    int    unconfirmed_ = 0;
+    double lowSnrS_ = 0;
 
     const int      sr_;
     const Station  station_;
@@ -181,22 +227,23 @@ private:
      *  Two biquad states; the coefficients are computed once in the constructor. */
     double bpB0_ = 1, bpB1_ = 0, bpB2_ = 0, bpA1_ = 0, bpA2_ = 0;
     double bpX1_ = 0, bpX2_ = 0, bpY1_ = 0, bpY2_ = 0;
-    double onLevel_ = 0, offLevel_ = 0;      // adaptive, so no fixed threshold to get wrong
+    double onLevel_ = 0, offLevel_ = 0;      // adaptive, so no fixed threshold to get wrong (RWM)
+    /** ★★ Every other station: the 5th and 90th percentiles of the last 3 s of envelope — see
+     *  process(). Kept at 200 Hz in a ring, which the matched-filter reader also reads. */
+    bool   pushEnvelope();
+    int    decim_ = 240, decimCount_ = 0;
+    std::vector<float> env_, pctScratch_;
+    long long envCount_ = 0;
+    double pLo_ = 0, pHi_ = 0;
+    bool   pctReady_ = false;
     double snrDb_ = 0;
 
     bool   inDip_ = false;
     double dipSamples_ = 0, gapSamples_ = 0;
-    /** ★ The gap measured at the dip's START. Read at its END — see the note in process(). */
+    /** RWM: the gap measured at the dip's START, read at its END. */
     double gapBeforeMs_ = 0;
-    /** ★ A sample clock, and where the current dip began. */
-    long long clock_ = 0, dipStartClock_ = 0;
-    /** ★★★ The sample the minute anchor was seen at (0 = not anchored), on EVERY station that
-     *  carries a code. The second is DERIVED from the distance to it, never incremented per dip —
-     *  a counter is shifted for the rest of the minute by one missed or one extra dip (audit
-     *  2026-10-04 row 9). WWV did this first; MSF, DCF77 and WWVB now do the same. */
-    long long anchorClock_ = 0;
-    /** DCF77 while hunting: where the previous dip began. WWVB: where the previous MARKER began. */
-    long long lastDipClock_ = 0;
+    /** ★ The input sample clock. */
+    long long clock_ = 0;
     /** The current minute has been decoded (or abandoned); later dips must not decode it again. */
     bool      frameClosed_ = true;
     /** ★★ Per second of the minute: 0 = nothing arrived, 1 = exactly one readable symbol,
@@ -212,10 +259,8 @@ private:
     int    second_ = -1;                     // -1 until the minute marker is seen
     unsigned long good_ = 0, bad_ = 0;
     /** ★ The previous parity-passing minute, as a minute count. A reading is only announced when
-     *  it is exactly one minute later than this — see the note in onSecondEdge(). */
+     *  it is exactly one minute later than this — see the note in finishMinute(). */
     long long lastStamp_ = 0;
-    /** WWV: the minute is two position markers in a row, so the previous symbol matters. */
-    bool lastWasMarker_ = false;
     /** ★★ What the NEXT frame's raw fields must read, from the last CORROBORATED minute, and the
      *  sample it was decoded at (0 = no expectation). The progress line compares against it,
      *  advanced by the whole minutes elapsed since; it expires after kExpectTtlS. */

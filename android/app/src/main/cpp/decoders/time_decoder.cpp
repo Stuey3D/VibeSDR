@@ -1,23 +1,13 @@
 #include "time_decoder.h"
 #include <ctime>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
 
 namespace vibe {
 namespace {
-
-// ── Timing, in milliseconds ──────────────────────────────────────────────────
-// ★ Generous windows. These are 1 bit/second signals received on a wire aerial in a house full of
-//   switch-mode noise; a decoder that insists on ±10 ms will decode nothing real. The patterns are
-//   100 ms apart, so ±35 ms is still unambiguous.
-constexpr double kTol         = 35.0;
-constexpr double kMsfMinute   = 500.0;   ///< MSF: carrier off 500 ms marks second 0
-constexpr double kDipUnit     = 100.0;   ///< both stations' base dip
-constexpr double kSecond      = 1000.0;
-
-inline bool near(double v, double target, double tol = kTol) { return std::fabs(v - target) <= tol; }
 
 int parityOdd(const int* bits, int from, int to) {
     int n = 0;
@@ -157,25 +147,26 @@ void addMinute(TimeDecoder::TimeStamp& t) {
     t.year++;
 }
 
-/** ★ A dip must begin within this of a whole second after the anchor to count as that second's.
- *  The real second edges are a quartz-exact 1.000 s apart; 120 ms is three times the envelope's
- *  edge scatter on a marginal signal and still far from the mid-second where noise lands. */
-constexpr double kGridTolS = 0.12;
-
 /** ★★ How long the progress line keeps holding a frame to the last locked minute (2026-10-05).
  *  Five minutes: long enough to ride out a fade of a minute or two (which is exactly when a
  *  half-read frame shows nonsense), short enough that a lock lost for good stops judging. */
 constexpr double kExpectTtlS = 300.0;
 
-/** ★★ WWV: once anchored, a new marker-then-hole is believed only this close to a whole number of
- *  minutes after the last anchor — or once the anchor has gone unconfirmed for kWwvAnchorLostS. */
-constexpr double kWwvAnchorTolS  = 2.0;
-constexpr double kWwvAnchorLostS = 120.0;
+// ── The envelope history (2026-10-05) ──
+// ★ 200 envelope samples a second (5 ms): finer than any edge this decoder times, coarse enough
+//   that 3 s of percentiles is 600 values. Ring of ~20 s.
+constexpr int    kEnvHz   = 200;
+constexpr size_t kEnvRing = 4096;
+constexpr int    kPctWin  = 600;     ///< 3 s of envelope for the percentiles
+constexpr double kClipX   = 3.0;     ///< |x| past this many times the "on" level is an impulse
 
 }  // namespace
 
 TimeDecoder::TimeDecoder(int sampleRate, Station station)
     : sr_(sampleRate > 0 ? sampleRate : 48000), station_(station) {
+    decim_ = std::max(1, sr_ / kEnvHz);
+    env_.assign(kEnvRing, 0.0f);
+    if (station_ != Station::RWM) initReader();
     // ★★ WWV's code is on a 100 Hz SUBCARRIER, so the envelope has to be taken of THAT, not of the
     //    audio as a whole — WWV also carries voice announcements and 500/600 Hz tones, and an
     //    envelope of the lot would follow the announcer rather than the timecode. A narrow
@@ -187,6 +178,30 @@ TimeDecoder::TimeDecoder(int sampleRate, Station station)
         bpB0_ =  alpha / a0; bpB1_ = 0.0; bpB2_ = -alpha / a0;
         bpA1_ = (-2.0 * c) / a0; bpA2_ = (1.0 - alpha) / a0;
     }
+}
+
+/** One input sample's worth of envelope bookkeeping: every decim_ samples the envelope is kept
+ *  (200 per second), and every 100 ms the 3 s percentiles are re-read from those. */
+bool TimeDecoder::pushEnvelope() {
+    if (++decimCount_ < decim_) return false;
+    decimCount_ = 0;
+    env_[(size_t)(envCount_ % kEnvRing)] = (float)envFast_;
+    envCount_++;
+    if (envCount_ % (kEnvHz / 10) != 0) return true;
+    const long long n = std::min<long long>(kPctWin, envCount_);
+    if (n < kEnvHz / 4) return true;
+    pctScratch_.resize((size_t)n);
+    for (long long i = 0; i < n; i++) pctScratch_[(size_t)i] = env_[(size_t)((envCount_ - n + i) % kEnvRing)];
+    const size_t k05 = (size_t)(0.05 * (double)n), k90 = (size_t)(0.90 * (double)n);
+    std::nth_element(pctScratch_.begin(), pctScratch_.begin() + k05, pctScratch_.end());
+    pLo_ = pctScratch_[k05];
+    std::nth_element(pctScratch_.begin(), pctScratch_.begin() + k90, pctScratch_.end());
+    pHi_ = pctScratch_[k90];
+    pctReady_ = true;
+    // ★ The carrier-to-dip ratio as the reader sees it — the "carrier" figure on the state line.
+    const double d = pLo_ > 1.0 ? pLo_ : 1.0;
+    snrDb_ = 20.0 * std::log10((pHi_ > d ? pHi_ : d) / d);
+    return true;
 }
 
 void TimeDecoder::setState(State s) {
@@ -218,10 +233,23 @@ void TimeDecoder::process(const int16_t* samples, int count) {
             bpX2_ = bpX1_; bpX1_ = raw; bpY2_ = bpY1_; bpY1_ = y;
             raw = y;
         }
-        const double x = std::fabs(raw);
+        double x = std::fabs(raw);
+        clock_ += 1;
+        // ★★ A LIGHTNING CRASH IS CLIPPED BEFORE IT REACHES THE ENVELOPE (2026-10-05). A rectified
+        //    sine never exceeds ~1.6x its own average and a carrier-plus-noise rarely 3x, so
+        //    anything past 3x the "on" level is an impulse — and unclipped, a 5 ms crash at 30x
+        //    the carrier lifts the envelope above the carrier for ~50 ms, which inside a dip reads
+        //    as the carrier coming back. RWM keeps the old path (its Morse timer is tuned to it).
+        if (station_ != Station::RWM) {
+            if (pHi_ > 0.0 && x > kClipX * pHi_) x = kClipX * pHi_;
+            envFast_ += aFast * (x - envFast_);
+            if (pushEnvelope()) readerStep();
+            continue;
+        }
         envFast_ += aFast * (x - envFast_);
         envSlow_ += aSlow * (x - envSlow_);
 
+        // ── RWM: the edge-reactive path, unchanged ──────────────────────────────────────────
         // ★★ ADAPTIVE LEVELS, NOT A FIXED THRESHOLD. The carrier's absolute level depends on the
         //    aerial, the gain and the hour of the day — LF propagation alone moves it enormously
         //    between noon and midnight. What is stable is the RATIO between "carrier present" and
@@ -246,20 +274,8 @@ void TimeDecoder::process(const int16_t* samples, int count) {
 
         // ★ Hysteresis, or a noisy envelope crossing the threshold chatters and every dip is read
         //   as several. 40/60 % of the way between off and on.
-        // ★★★ EXCEPT ON WWV, WHERE 40/60 SAT TOO HIGH AND CLIPPED EVERY PULSE SHORT. `onLevel_`
-        //     tracks the PEAK — attack fast, release very slowly — which is right for MSF and
-        //     DCF77, whose carrier is steady and whose peak IS the "on" level. WWV arrives over a
-        //     fading HF path where the peak is far above a typical pulse, so the threshold ended up
-        //     near the top of the envelope: MEASURED on a K3FEF capture, only 14.5 % of the time
-        //     was spent above `hi` where WWV's duty cycle is 25-30 %, and the symbols came out as
-        //     60-140 ms fragments of the 170 ms they should have been.
-        //     ★ 0.15/0.28 measured against the same capture: 205 symbols -> 228, of a theoretical
-        //       254. Lower still is worse (0.10/0.20 gives 197), which is the noise floor being
-        //       crossed — so this is a measured optimum, not a guess in a direction.
-        const double loFrac = (station_ == Station::WWV) ? 0.15 : 0.40;
-        const double hiFrac = (station_ == Station::WWV) ? 0.28 : 0.60;
-        const double lo = offLevel_ + loFrac * (onLevel_ - offLevel_);
-        const double hi = offLevel_ + hiFrac * (onLevel_ - offLevel_);
+        const double lo = offLevel_ + 0.40 * (onLevel_ - offLevel_);
+        const double hi = offLevel_ + 0.60 * (onLevel_ - offLevel_);
 
         const bool wasDip = inDip_;
         if (inDip_) { if (envFast_ > hi) inDip_ = false; }
@@ -267,18 +283,11 @@ void TimeDecoder::process(const int16_t* samples, int count) {
 
         if (inDip_) dipSamples_ += 1; else gapSamples_ += 1;
 
-        // ★★★ CAPTURE THE GAP WHEN THE DIP BEGINS, NOT WHEN IT ENDS. This read gapSamples_ at the
-        //     dip's END while zeroing it at the dip's START, so the "gap before this dip" was
-        //     always ~0 — and DCF77's minute detection, which is entirely "was there a gap of
-        //     about two seconds?", could never fire. The decoder sat in Searching for ever on a
-        //     signal it was otherwise reading perfectly.
-        //     ★ DCF77 marks its minute by an ABSENCE, so the gap is not incidental telemetry
-        //       here: it is the only synchronising feature the station transmits.
-        clock_ += 1;
+        // ★★★ CAPTURE THE GAP WHEN THE DIP BEGINS, NOT WHEN IT ENDS — a gap read at the dip's end
+        //     after being zeroed at its start was always ~0.
         if (!wasDip && inDip_) {
             gapBeforeMs_ = gapSamples_ * 1000.0 / sr_;
             gapSamples_ = 0;
-            dipStartClock_ = clock_;
         }
         // A rising edge ends a dip: measure it and act.
         if (wasDip && !inDip_) {
@@ -287,367 +296,486 @@ void TimeDecoder::process(const int16_t* samples, int count) {
             // ★★ RWM's callsign, off the SAME envelope. In CW the ID keys the carrier ON, so a
             //    MARK is a gap between dips and the dip we have just measured is the SILENCE
             //    after it — which is exactly the pair the Morse timer needs.
-            if (station_ == Station::RWM) { morseMark(gapBeforeMs_); morseGap(dipMs); }
-            onSecondEdge(dipMs, gapBeforeMs_);
+            morseMark(gapBeforeMs_); morseGap(dipMs);
+            onRwmEdge();
         }
 
         // ★ No carrier at all: say NoSignal rather than sitting in Reading with a stale time on
-        //   screen. 6 dB is the floor below which these are not decodable anyway.
+        //   screen.
         if (snrDb_ < 3.0 && state_ != State::NoSignal) {
-            second_ = -1; anchorClock_ = 0; frameClosed_ = true; lastStamp_ = 0;
-            expectClock_ = 0;           // ★ no carrier: nothing to hold the next frame to
+            second_ = -1;
             setState(State::NoSignal);
         }
     }
 }
 
-/**
- * One dip has ended. `dipMs` is how long the carrier was down, `gapMs` how long it was up before.
- *
- * ★★★ THE SECOND BOUNDARY IS THE FALLING EDGE, not the rising one. Both stations drop the carrier
- *     AT the second, so the leading edge is the timing reference; the trailing edge only tells us
- *     how long the dip was. Timing off the rising edge would put every bit 100–200 ms late and
- *     make the two MSF sample windows land in the wrong slots.
- */
-/* ★★★ EVERY WRITE TO bitsA_/bitsB_ IS CHECKED (audit 2026-10-03). They hold 60 entries and the
- *  index is a second counter driven by off-air timing; WWV stepped it by a rounded gap length,
- *  wrapped it ONCE, and a long fade (a 2-minute gap is a step of 120) wrote past the array. */
-static inline bool inMinute(int s) { return s >= 0 && s < 60; }
-
-void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
+/** ★★★ RWM SENDS NO TIMECODE, so there is nothing here to decode into a clock and this
+ *  deliberately never produces one. What it can honestly report is that the station is being
+ *  heard and that its second markers are being counted — which is what RWM is actually for:
+ *  calibration and propagation. Anything more would be invented. */
+void TimeDecoder::onRwmEdge() {
     if (snrDb_ < 3.0) return;
     if (state_ == State::NoSignal) setState(State::Searching);
+    if (second_ < 0) { second_ = 0; setState(State::Reading); }
+    else second_ = (second_ + 1) % 60;
+    if (onBit) onBit(second_, 1);
+    // ★ Still report progress: RWM has no minute to decode, but the host uses this tick to
+    //   flush any callsign heard — and a panel with no heartbeat looks dead.
+    emitPartial();
+}
 
-    if (station_ == Station::MSF) {
-        // ★★★ A SECOND MAY CONTAIN TWO DIPS, AND THAT IS THE WHOLE DIFFICULTY OF MSF.
-        //
-        //     A and B are INDEPENDENT 100 ms windows: [0,100) is always off, [100,200) is off if
-        //     A=1, [200,300) is off if B=1. So A=0,B=1 transmits as off-on-off — TWO dips inside
-        //     one second. Reading every dip as a new second gets that wrong, and it is not an edge
-        //     case: bits B54–B58 are the PARITY bits and are carried with A=0, so a decoder that
-        //     mis-frames them fails on exactly the bits that were meant to validate the minute.
-        //
-        // ★★★ AND THE SECOND IS MEASURED FROM THE MINUTE MARKER, NOT COUNTED (2026-10-04, audit
-        //     row 9). This used to step a counter on every dip more than 400 ms into the second, so
-        //     ONE faded dip or ONE noise dip mid-second moved every later bit by a second — and the
-        //     minute then read as a plausible neighbour's data rather than as a failure. Now each
-        //     dip's START is placed by its distance from the 500 ms marker: within ±120 ms of a
-        //     whole second it is that second's; 150–400 ms past one it is that second's B window;
-        //     anywhere else it is noise and is ignored. A missing or unreadable second is an
-        //     ERASURE and the minute is not decoded — never decoded one place out.
-        const bool marker = near(dipMs, kMsfMinute, 120.0);
-        if (marker) {
-            // ★ The 500 ms dip IS second zero. Nothing else in the minute is that long, so the
-            //   newest marker always wins: if it is not ~60 s after the last one, the last one was
-            //   a merged pair of dips and the minute it began is abandoned (closeFrame fails it on
-            //   its erasures), not decoded against the wrong origin.
-            if (anchorClock_ > 0) closeFrame();
-            beginFrame(dipStartClock_);
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// ★★★ THE MATCHED-FILTER READER (2026-10-05) — MSF, DCF77, WWVB, WWV.
+//
+// What it replaced: a dip was measured edge to edge and its length matched against ±35-50 ms
+// windows. Every ingredient of that is fragile on a marginal signal — one noise crossing inside a
+// dip splits it in two, one crash merges two, and the second was found only by seeing an edge.
+// The design below is the one madpsy/ubersdr-ntp (GPL-3.0-or-later; decoders from
+// madpsy/ubersdr-clock) uses for WWVB/DCF77/MSF/WWV, adapted to this decoder's framing and
+// checks — WwvbDecoder.cpp trackEdge()/findFallingEdgeNear()/classifyAndAdvance():
+//
+//  ★★ A ONE-SECOND FLYWHEEL. The stations' second edges are quartz, exactly one second apart, so
+//     once the phase is known the NEXT edge is predicted, searched for only ±40 ms around the
+//     prediction, and COASTED through when it is not there. A faded second is still a second —
+//     it can no longer shift the frame, and a noise edge mid-second is never even looked at.
+//     An alpha-beta tracker follows a receiver sample clock that is not quite 48 kHz.
+//  ★★ EACH SECOND READ WHOLE, AGAINST EVERY SYMBOL IT COULD BE. The envelope over the second is
+//     normalised between the 5th and 90th percentiles (0 = carrier down, 1 = up, clipped) and
+//     compared with each symbol's template (squared error; with clipping, the decision is a
+//     vote of every 5 ms slot where two symbols differ). The CONFIDENCE is the margin of the
+//     best over the runner-up, per slot where they differ: 1 = clean, 0 = a coin toss. A slot
+//     corrupted by a crash costs one slot's vote, not the symbol.
+//  ★ The phase is found from a histogram of falling edges folded modulo one second — one noise
+//    edge never seeds it, and a seed is held only while edges keep arriving there.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+namespace {
+enum ClsKind : signed char { kData = 0, kMark = 1, kNone = 2 };
+struct ClsDef { ClsKind kind; signed char a, b; int nlo; double lo[2][2]; };
+// ★ Each symbol as the intervals (ms from the second's edge) in which the envelope is LOW.
+//   WWV is read INVERTED — its symbol is the pulse of subcarrier, so "low" there means "pulse".
+const ClsDef kMsfCls[]  = { {kData,0,0,1,{{0,100},{0,0}}}, {kData,1,0,1,{{0,200},{0,0}}},
+                            {kData,1,1,1,{{0,300},{0,0}}}, {kData,0,1,2,{{0,100},{200,300}}},
+                            {kMark,0,0,1,{{0,500},{0,0}}}, {kNone,0,0,0,{{0,0},{0,0}}} };
+const ClsDef kDcfCls[]  = { {kData,0,0,1,{{0,100},{0,0}}}, {kData,1,0,1,{{0,200},{0,0}}},
+                            {kNone,0,0,0,{{0,0},{0,0}}} };
+const ClsDef kWwvbCls[] = { {kData,0,0,1,{{0,200},{0,0}}}, {kData,1,0,1,{{0,500},{0,0}}},
+                            {kMark,0,0,1,{{0,800},{0,0}}}, {kNone,0,0,0,{{0,0},{0,0}}} };
+// WWV: measured from the pulse's START, which is 30 ms after the second's tick.
+const ClsDef kWwvCls[]  = { {kData,0,0,1,{{0,170},{0,0}}}, {kData,1,0,1,{{0,470},{0,0}}},
+                            {kMark,0,0,1,{{0,770},{0,0}}}, {kNone,0,0,0,{{0,0},{0,0}}} };
+
+constexpr double kMinContrast = 1.4;   ///< p90 / p05 below this: no dip to read (≈ 2.9 dB)
+constexpr int    kEdgeTol     = 8;     ///< ±40 ms searched around the predicted edge
+constexpr int    kScanLag     = 300;   ///< 1.5 s: edges are judged once the percentiles span them
+constexpr double kHistDecay   = 0.95;  ///< per second — a stale phase fades in ~20 s
+constexpr double kSeedScore   = 3.0;   ///< ~4 aligned edges to seed the phase
+constexpr double kTrkAlpha    = 1.0 / 8.0, kTrkBeta = 1.0 / 128.0;
+constexpr int    kTrkWarm     = 8;
+/** ★★ A symbol at least this clear of its runner-up is READ; below it the second is an erasure.
+ *  0.4 puts the 0/1 boundary where the old duration windows had it (WWV: a pulse of 260 ms or
+ *  less is a 0, 380 or more a 1 — the old windows said 260 and 360). */
+constexpr float  kReadConf    = 0.40f;
+/** A marker / hole this clear is believed for FRAMING (anchoring a minute). */
+constexpr float  kSyncConf    = 0.50f;
+}  // namespace
+
+void TimeDecoder::initReader() {
+    const ClsDef* t = kMsfCls; int n = 6, winMs = 550;
+    switch (station_) {
+        case Station::DCF77: t = kDcfCls;  n = 3; winMs = 250; break;
+        case Station::WWVB:  t = kWwvbCls; n = 4; winMs = 830; break;
+        case Station::WWV:   t = kWwvCls;  n = 4; winMs = 830; break;
+        default: break;
+    }
+    // ★ The window stops just after the longest symbol ends — so MSF's second 59 is read 550 ms
+    //   in, WWVB's 830 ms in: each minute is still decoded BEFORE the next minute begins.
+    nCls_ = n;
+    win_ = winMs * kEnvHz / 1000;
+    period_ = periodNom_ = (double)sr_ / (double)decim_;
+    for (int c = 0; c < n; c++) {
+        clsKind_[c] = (signed char)t[c].kind; clsA_[c] = t[c].a; clsB_[c] = t[c].b;
+        for (int k = 0; k < win_; k++) {
+            const double ms = (k + 0.5) * 1000.0 / kEnvHz;
+            bool low = false;
+            for (int j = 0; j < t[c].nlo; j++) if (ms >= t[c].lo[j][0] && ms < t[c].lo[j][1]) low = true;
+            tpl_[c][k] = low ? 0 : 1;
+        }
+    }
+    for (int a = 0; a < n; a++) for (int b = 0; b < n; b++) {
+        int d = 0; for (int k = 0; k < win_; k++) d += tpl_[a][k] != tpl_[b][k];
+        nd_[a][b] = d > 0 ? d : 1;
+    }
+}
+
+float TimeDecoder::envAt(long long i) const {
+    if (i < 0 || i >= envCount_ || envCount_ - i > (long long)kEnvRing) return 0.0f;
+    return env_[(size_t)(i % kEnvRing)];
+}
+
+/** Normalised envelope at a fractional position: 0 = carrier down, 1 = up (WWV: 1 = no pulse). */
+double TimeDecoder::zAt(double pos) const {
+    const long long i0 = (long long)std::floor(pos);
+    const double f = pos - (double)i0;
+    const double e = envAt(i0) * (1.0 - f) + envAt(i0 + 1) * f;
+    const double span = pHi_ - pLo_;
+    double z = span > 1e-9 ? (e - pLo_) / span : 0.5;
+    return station_ == Station::WWV ? 1.0 - z : z;
+}
+
+bool TimeDecoder::contrastOk() const {
+    return pctReady_ && pHi_ >= kMinContrast * std::max(pLo_, 1e-9);
+}
+
+/** A falling edge between i-1 and i: high before, held low after. `pos` = the 0.5 crossing. */
+bool TimeDecoder::isEdge(long long i, double& pos) const {
+    const double z1 = zAt((double)i - 1), z0 = zAt((double)i);
+    if (!(z1 >= 0.5 && z0 < 0.5)) return false;
+    int high = 0, low = 0;
+    for (int d = 2; d <= 6; d++) if (zAt((double)(i - d)) >= 0.6) high++;
+    if (high < 3) return false;
+    for (int d = 0; d <= 7; d++) if (zAt((double)(i + d)) < 0.5) low++;
+    if (low < 6) return false;
+    pos = (double)(i - 1) + (z1 - 0.5) / (z1 - z0);
+    return true;
+}
+
+int TimeDecoder::phaseBin(double pos) const {
+    double ph = std::fmod(pos, periodNom_);
+    if (ph < 0) ph += periodNom_;
+    int b = (int)(ph * kEnvHz / periodNom_);
+    return b >= kEnvHz ? kEnvHz - 1 : b;
+}
+
+double TimeDecoder::histTriple(int b) const {
+    return hist_[(b + kEnvHz - 1) % kEnvHz] + hist_[b] + hist_[(b + 1) % kEnvHz];
+}
+
+/** The best-supported phase bin, and whether it stands clear of every other phase. */
+int TimeDecoder::histBest(double& score, bool& clear) const {
+    int best = 0; score = -1;
+    for (int b = 0; b < kEnvHz; b++) { const double s = histTriple(b); if (s > score) { score = s; best = b; } }
+    double other = 0;
+    for (int b = 0; b < kEnvHz; b++) {
+        int d = std::abs(b - best); d = std::min(d, kEnvHz - d);
+        if (d > 10) other = std::max(other, histTriple(b));
+    }
+    clear = score >= 2.0 * other;
+    return best;
+}
+
+void TimeDecoder::seedAt(double edgePos) {
+    // ★★ BACK-FILL FROM THE RING: the edges that built the histogram are still in it, so the
+    //    seconds before the seed are read too — the first minute is not lost to acquisition.
+    const long long first = std::max<long long>(0, envCount_ - (long long)kEnvRing) + 8;
+    int back = (int)std::floor((edgePos - (double)first) / period_);
+    back = std::max(0, std::min(back, 15));
+    phaseKnown_ = true;
+    curEdge_ = edgePos - (double)(back + 1) * period_;   // stage 1 searches near edgePos - back*period
+    period_ = periodNom_;
+    trkN_ = 0;
+    missRun_ = 0;
+    stage_ = 1;
+}
+
+/** ★ A new envelope sample has arrived: look for edges (for the phase), then read every second
+ *  whose window is now complete. */
+void TimeDecoder::readerStep() {
+    // ── the "no carrier" floor ──
+    if (envCount_ % (kEnvHz / 10) == 0 && pctReady_) {
+        if (!contrastOk()) {
+            lowSnrS_ += 0.1;
+            if (state_ != State::NoSignal) setState(State::NoSignal);
+            // ★ Two minutes with nothing to read: whatever was locked is not any more.
+            if (lowSnrS_ > 120.0 && (phaseKnown_ || anchorIdx_ >= 0)) {
+                loseFrame(); phaseKnown_ = false; expectClock_ = 0;
+                for (double& h : hist_) h = 0;
+            }
+        } else {
+            lowSnrS_ = 0;
+            if (state_ == State::NoSignal) setState(anchorIdx_ >= 0 ? State::Reading : State::Searching);
+        }
+    }
+    // ── edges into the phase histogram ──
+    if (envCount_ % (long long)kEnvHz == 0) for (double& h : hist_) h *= kHistDecay;
+    const long long scanTo = envCount_ - kScanLag;
+    if (scanPos_ < scanTo - 2 * kEnvHz) scanPos_ = scanTo - 2 * kEnvHz;
+    while (scanPos_ < scanTo) {
+        const long long i = scanPos_++;
+        double pos;
+        if (i < 8 || !contrastOk() || !isEdge(i, pos)) continue;
+        const int b = phaseBin(pos);
+        hist_[b] += 1.0;
+        scanPos_ = i + 10;                       // one edge per 50 ms
+        if (!phaseKnown_) {
+            double score; bool clear;
+            const int best = histBest(score, clear);
+            int d = std::abs(best - b); d = std::min(d, kEnvHz - d);
+            if (score >= kSeedScore && clear && d <= 1) seedAt(pos);
+        }
+    }
+    // ── the flywheel ──
+    while (phaseKnown_) {
+        if (stage_ == 0) {
+            if ((double)envCount_ < curEdge_ + win_ + 2) break;
+            SecRec r;
+            classify(r);
+            r.idx = secIdx_++;
+            recs_[(size_t)(r.idx & (kRecRing - 1))] = r;
+            onSecond(r);
+            stage_ = 1;
+        } else {
+            const double pred = curEdge_ + period_;
+            if ((double)envCount_ < pred + kEdgeTol + 10) break;
+            double best = 0, bestD = 1e9; bool found = false;
+            if (contrastOk())
+                for (long long i = (long long)std::floor(pred) - kEdgeTol; i <= (long long)std::ceil(pred) + kEdgeTol; i++) {
+                    double pos;
+                    if (i < 8 || !isEdge(i, pos)) continue;
+                    const double dd = std::fabs(pos - pred);
+                    if (dd < bestD && dd <= kEdgeTol) { bestD = dd; best = pos; found = true; }
+                }
+            if (found) {
+                const double r = best - pred;
+                trkN_++;
+                curEdge_ = pred + std::max(1.0 / trkN_, kTrkAlpha) * r;
+                if (trkN_ > kTrkWarm)
+                    period_ = std::min(periodNom_ * (1 + 3e-3), std::max(periodNom_ * (1 - 3e-3), period_ + kTrkBeta * r));
+                missRun_ = 0;
+            } else {
+                curEdge_ = pred;
+                missRun_++;
+                // ★ Edges have stopped arriving where the flywheel expects them. If the histogram
+                //   now holds a clear phase ELSEWHERE, the stream jumped (a re-tune, a dropped
+                //   buffer): re-seed there — and the minute framing goes with it.
+                if (missRun_ >= 6) {
+                    double score; bool clear;
+                    const int hb = histBest(score, clear);
+                    int d = std::abs(hb - phaseBin(curEdge_)); d = std::min(d, kEnvHz - d);
+                    if (score >= kSeedScore && clear && d > 6) {
+                        loseFrame();
+                        phaseKnown_ = false;
+                        break;
+                    }
+                }
+            }
+            stage_ = 0;
+        }
+    }
+}
+
+/** ★★ Read one second against every symbol it could be (see the block comment above). */
+void TimeDecoder::classify(SecRec& r) const {
+    r.contrast = contrastOk();
+    float err[kMaxCls];
+    for (int c = 0; c < nCls_; c++) err[c] = 0;
+    for (int k = 0; k < win_; k++) {
+        double z = zAt(curEdge_ + k + 0.5);
+        z = z < 0 ? 0 : z > 1 ? 1 : z;
+        for (int c = 0; c < nCls_; c++) { const double d = z - tpl_[c][k]; err[c] += (float)(d * d); }
+    }
+    auto margin = [&](int a, int b) { return (err[b] - err[a]) / (float)nd_[a][b]; };
+    int best = 0;
+    for (int c = 1; c < nCls_; c++) if (err[c] < err[best]) best = c;
+    int run = -1;
+    for (int c = 0; c < nCls_; c++) if (c != best && (run < 0 || err[c] < err[run])) run = c;
+    int dBest = -1, dRun = -1;
+    for (int c = 0; c < nCls_; c++) if (clsKind_[c] == kData && (dBest < 0 || err[c] < err[dBest])) dBest = c;
+    for (int c = 0; c < nCls_; c++) if (clsKind_[c] == kData && c != dBest && (dRun < 0 || err[c] < err[dRun])) dRun = c;
+    r.cls = (signed char)best;
+    r.conf = r.contrast ? margin(best, run) : 0.0f;
+    r.dcls = (signed char)dBest;
+    r.dconf = r.contrast ? margin(dBest, dRun) : 0.0f;
+    // Soft bits: the best symbol with the bit at 0 against the best with it at 1, in [-1, 1].
+    auto soft = [&](bool isB) {
+        int z0 = -1, z1 = -1;
+        for (int c = 0; c < nCls_; c++) {
+            if (clsKind_[c] != kData) continue;
+            const int v = isB ? clsB_[c] : clsA_[c];
+            int& s = v ? z1 : z0;
+            if (s < 0 || err[c] < err[s]) s = c;
+        }
+        if (z0 < 0 || z1 < 0) return 0.0f;
+        return (err[z0] - err[z1]) / (float)nd_[z0][z1];
+    };
+    r.softA = r.contrast ? soft(false) : 0.0f;
+    r.softB = (r.contrast && station_ == Station::MSF) ? soft(true) : 0.0f;
+    // ★ A second that is plainly a marker or a missing dip carries no data bit, whatever the
+    //   nearest data symbol would have been.
+    if (clsKind_[best] != kData && margin(best, dBest) >= kSyncConf) { r.dconf = 0; r.softA = r.softB = 0; }
+}
+
+const TimeDecoder::SecRec& TimeDecoder::rec(long long idx) const {
+    static const SecRec kNoRec{};
+    if (idx < 0) return kNoRec;
+    const SecRec& r = recs_[(size_t)(idx & (kRecRing - 1))];
+    return r.idx == idx ? r : kNoRec;
+}
+
+bool TimeDecoder::strongKind(const SecRec& r, int kind) const {
+    return r.idx >= 0 && r.contrast && r.cls >= 0 && clsKind_[r.cls] == kind && r.conf >= kSyncConf;
+}
+
+/** The symbol a second contributes to the frame: 2 = marker, 0/1 = data, -1 = unreadable. */
+int TimeDecoder::symbolOf(const SecRec& r, bool& readable) const {
+    readable = false;
+    if (!r.contrast) return -1;
+    if (clsKind_[r.cls] == kMark && r.conf >= kReadConf) { readable = true; return 2; }
+    if (r.dcls >= 0 && r.dconf >= kReadConf) { readable = true; return clsA_[r.dcls]; }
+    return -1;
+}
+
+void TimeDecoder::placeRec(int pos, const SecRec& r) {
+    bool readable;
+    const int sym = symbolOf(r, readable);
+    int a = 0, b = 0;
+    if (sym >= 0 && sym != 2) { a = clsA_[r.dcls]; b = clsB_[r.dcls]; }
+    // MSF and DCF77 have no marker inside the minute: a marker there is an unreadable second.
+    if (sym == 2 && (station_ == Station::MSF || station_ == Station::DCF77)) readable = false;
+    place(pos, a, b, sym, readable);
+    second_ = pos;
+    if (onBit) onBit(second_, bitsA_[second_]);
+    emitPartial();
+}
+
+/**
+ * ★★★ ONE SECOND HAS BEEN READ; WHERE IS IT IN THE MINUTE?
+ *
+ * The flywheel guarantees exactly one read per second, so once a minute is anchored its seconds
+ * are COUNTED — and a count of flywheel seconds cannot be shifted by a lost or an extra dip the
+ * way a count of dips was (audit 2026-10-04 row 9). What each station anchors on:
+ *  • MSF   — the 500 ms marker IS second 0;
+ *  • DCF77 — second 59 carries NO dip; the dip after the missing one is second 0;
+ *  • WWVB  — two markers in a row: second 59's P0, then second 0's Pr (SP 432 p. 21);
+ *  • WWV   — second 59's marker, then a second with NO pulse (the hole) = second 0.
+ * ★ The newest MSF marker always wins, as before; the other stations re-anchor only at a whole
+ *   minute's distance (±2 s) from the last anchor, or once the anchor has gone two minutes
+ *   unconfirmed — a fade looks exactly like DCF77's missing dip and WWV's hole.
+ */
+void TimeDecoder::onSecond(const SecRec& r) {
+    if (state_ == State::NoSignal && r.contrast) setState(anchorIdx_ >= 0 ? State::Reading : State::Searching);
+    const SecRec& p1 = rec(r.idx - 1);
+    const long long pos = anchorIdx_ >= 0 ? r.idx - anchorIdx_ : -1;
+    switch (station_) {
+    case Station::MSF: {
+        if (strongKind(r, kMark)) {
+            if (anchorIdx_ >= 0 && !frameClosed_) closeFrame();
+            startFrame(r.idx);
+            unconfirmed_ = 0;
             if (onBit) onBit(0, 0);
             emitPartial();
             return;
         }
-        if (anchorClock_ == 0) return;                   // still hunting for the minute marker
-        double e = (double)(dipStartClock_ - anchorClock_) / sr_;
-        if (e > 59.5 + kGridTolS) {
-            // ★ Past second 59 with no marker seen: the marker itself faded. Keep the grid (it is
-            //   quartz on both ends) for one more minute, but nothing in it can be decoded without
-            //   its second 0 — and two minutes without one is lost lock.
-            closeFrame();
-            if (e > 119.5) { loseFrame(); return; }
-            beginFrame(anchorClock_ + 60LL * sr_);
-            e -= 60.0;
+        if (anchorIdx_ < 0) return;                                // hunting for the marker
+        long long p = pos;
+        if (p >= 60) {
+            // ★ Second 0 with no marker: the marker itself faded. The flywheel kept the count, so
+            //   the grid carries on into the next minute — three minutes without one is lost lock.
+            if (!frameClosed_) closeFrame();
+            if (++unconfirmed_ >= 3) { loseFrame(); return; }
+            startFrame(anchorIdx_ + 60);
+            p -= 60;
+            if (p == 0) { if (onBit) onBit(0, 0); emitPartial(); return; }
         }
-        const long r = std::lround(e);
-        if (std::fabs(e - (double)r) <= kGridTolS && r >= 1 && r <= 59) {
-            // The second's own dip. 100 ms = A0 B0; 200 = A1 B0; 300 = A1 B1 (the two windows ran
-            // together). Anything else is unreadable — an erasure, not a best guess.
-            int a = 0, bb = 0; bool readable = true;
-            if      (near(dipMs, 100.0, 50.0)) { a = 0; bb = 0; }
-            else if (near(dipMs, 200.0, 50.0)) { a = 1; bb = 0; }
-            else if (near(dipMs, 300.0, 50.0)) { a = 1; bb = 1; }
-            else readable = false;
-            place((int)r, a, bb, a, readable);
-            second_ = (int)r;
-            if (onBit) onBit(second_, bitsA_[second_]);
-            emitPartial();
-            if (r == 59) closeFrame();
-            return;
-        }
-        const int s = (int)std::floor(e);
-        const double f = e - s;
-        if (s >= 1 && s <= 59 && f >= 0.15 && f <= 0.40) {
-            // The B window of second s — legal only as a 100 ms dip after a 100 ms (A=0) one.
-            if (slot_[s] == 1 && !bitsA_[s] && !bitsB_[s] && near(dipMs, 100.0, 50.0)) bitsB_[s] = 1;
-            else slot_[s] = 2;
-            return;
-        }
-        return;                                          // off the grid: noise, not a second
-    } else if (station_ == Station::WWV) {
-        // ── WWV/WWVH ─────────────────────────────────────────────────────────
-        // ★★★ HERE THE SYMBOL IS THE PULSE, NOT THE DIP — the polarity is inverted relative to
-        //     MSF and DCF77, and getting that backwards would decode noise very convincingly.
-        //     Each second begins with ~30 ms of NO subcarrier, then the subcarrier is present for
-        //     170 ms (0), 470 ms (1) or 770 ms (a position marker). So at every rising edge the
-        //     short dip is the second tick and the gap BEFORE it is the previous second's symbol.
-        const double pulse = gapMs;
-        const int sym = near(pulse, 770.0, 120.0) ? 2
-                      : near(pulse, 470.0, 110.0) ? 1
-                      : near(pulse, 170.0, 90.0)  ? 0 : -1;
-        // ★★★ AN UNREADABLE PULSE MUST STILL ADVANCE THE CLOCK. `return` here kept the second
-        //     counter where it was, so ONE fade shifted every remaining bit of the minute one
-        //     second early — and the fields then read as plausible nonsense rather than as an
-        //     obvious failure (a live minute decoded as "20:12, day 24, year 120"). On a real HF
-        //     path this is not rare: 15 MHz from K3FEF dropped 3-8 pulses a minute.
-        //     ★★ So the second is derived from ELAPSED TIME, not from a count of pulses we happened
-        //        to recognise. One pulse plus the dip after it IS one second by construction, so
-        //        rounding that period gives how many seconds to step — including the 2 s step over
-        //        a missing pulse. The unreadable second is recorded as 0 and the frame survives.
-        // ★ capped at a minute BEFORE the int cast: a gap of hours is still just "lost the frame"
-        const int steps = std::max(1, (int)std::lround(std::min(60.0, (gapMs + dipMs) / 1000.0)));
-
-        // ★★★ THE SYMBOL BELONGS TO THE SECOND THAT HAS JUST ENDED, NOT THE ONE BEGINNING.
-        //     The rising edge we are standing on STARTS the next second's pulse, so what we have
-        //     just measured is the PREVIOUS second's. Recording it against the new second put
-        //     every bit one second late — and because the data bits are sparse, the fields read
-        //     back as zeros rather than as anything obviously wrong. All four came out 0 and the
-        //     frame simply never validated.
-        //     ★ So: place the symbol, THEN advance.
-        // ★★★ THE MINUTE IS A HOLE, NOT A DOUBLE MARKER — MEASURED OFF THE AIR, NOT ASSUMED.
-        //
-        //     This waited for two 770 ms markers in a row and WWV NEVER SENDS THAT, so the only
-        //     alignment rule the decoder had could not fire: it sat in Searching for ever and
-        //     emitted not one bit. Recorded from K3FEF (Milford PA) on 15 MHz, 2026-08-11, the
-        //     markers arrive at a flat 10.000 s cadence across a whole minute — 9, 19, 29, 39,
-        //     49, 59 — with no pair anywhere.
-        //
-        //     What identifies the minute is that SECOND 0 CARRIES NO PULSE AT ALL. After second
-        //     59's marker the subcarrier stays down for ~1.23 s (the marker's own 230 ms tail,
-        //     then a silent second, then the 30 ms lead-in) where every other second gives at
-        //     most 830 ms. In the capture that hole landed exactly on 20:57:00 UTC.
-        //     ★★ So the threshold sits between those two: 830 ms is the longest ordinary dip (it
-        //        follows a 170 ms "0") and 1230 ms is the hole. 1050 leaves ~200 ms either side,
-        //        which is the margin a fading HF path actually needs.
-        //     ★ The pulse being measured when this fires is therefore SECOND 1, not second 0 —
-        //       the silent second is the one that was skipped, and it carries no data.
-        //     ★★★ AND THE MARKER AND ITS HOLE ARRIVE ON THE SAME EDGE. onSecondEdge is handed the
-        //         pulse and THEN the dip that followed it, so the marker that precedes the hole is
-        //         THIS call's symbol, not the previous one's. Testing lastWasMarker_ here framed
-        //         one minute and then lost it — right rule, read one second late.
-        constexpr double kWwvHoleMs = 1050.0;
-        // ★ A frame read while HUNTING was never read at all — its bits are whatever the last
-        //   minute left. Only a minute that began at an anchor may be decoded.
-        const bool frameWasRead = second_ >= 0;
-        // ★★★ BUT A FADE LOOKS LIKE A HOLE (2026-10-05). Any marker followed by >1050 ms of silence
-        //     used to re-anchor — so a fade straight after marker 29 (or 9, 19 …) re-framed the
-        //     minute 30 s out: that frame and the next were read against the wrong origin. Once
-        //     anchored, a new anchor is believed only a whole number of minutes (±2 s) after the
-        //     last one, or once none has been for >2 min (lost — and that also re-acquires after a
-        //     slip, e.g. a leap second, two minutes later). Rule ported from madpsy/ubersdr-ntp
-        //     (GPL-3.0-or-later), WwvDecoder.cpp tryAnchor/feedPendingFrames: anchor once, then step
-        //     frames by 60 s. ★ Their re-align-by-one-second on a slipped skeleton is NOT ported:
-        //     ours places by elapsed time from the anchor, and the lost-anchor rule covers a slip.
-        bool newAnchor = sym == 2 && dipMs > kWwvHoleMs;
-        if (newAnchor && anchorClock_ > 0 && second_ >= 0) {
-            const double cand  = (double)dipStartClock_ - gapMs * sr_ / 1000.0;
-            const double since = (cand - (double)anchorClock_) / sr_;
-            const double mins  = std::round(since / 60.0);
-            newAnchor = since > kWwvAnchorLostS + kWwvAnchorTolS
-                     || (mins >= 1.0 && std::fabs(since - 60.0 * mins) <= kWwvAnchorTolS);
-        }
-        if (newAnchor) {
-            // ★★★ THE ANCHOR IS A CLOCK REFERENCE, NOT JUST A RESET. Everything after it is placed
-            //     by DISTANCE from here — see below.
-            anchorClock_ = (long long)((double)dipStartClock_ - gapMs * sr_ / 1000.0);
-            second_ = 59;                          // this marker is second 59; the hole after it is 0
-            setState(State::Reading);
-        } else if (second_ < 0) {
-            lastWasMarker_ = (sym == 2);
-            return;                                // still hunting for the marker-then-hole
-        }
-        lastWasMarker_ = (sym == 2);
-        // ★★★ WHICH SECOND IS THIS? MEASURE IT, DO NOT COUNT IT.
-        //
-        //     Incrementing per symbol assumes exactly one symbol per second, and on a real HF path
-        //     that is not true: a fading pulse SPLITS and arrives as two events, so the counter
-        //     gains a second and every field after it reads its neighbour's data. Measured on a
-        //     live WT8P capture (2026-08-12): the frame decoded with hour=5,6,7 across three
-        //     consecutive minutes — the MINUTE counter, sitting where the hour should be — and the
-        //     array's own content put the hour field 10 places later than the map looked, with the
-        //     minute field one place before that. Two different offsets in one frame is the
-        //     signature of counting rather than measuring, since each slip moves everything after
-        //     it and nothing before.
-        //     ★★ The anchor gives a hard reference once a minute, and every second in that minute
-        //        is a known distance from it: second N begins N seconds after second 0, which is
-        //        the hole immediately following the anchor. So place each symbol by rounding that
-        //        distance — a split pulse then lands in the SAME second twice instead of shifting
-        //        the frame, and a missed pulse leaves a gap instead of pulling everything back.
-        //     ★ Only when anchored. Before the first anchor the count is all we have, and it is
-        //       discarded anyway (second_ < 0 returns above).
-        if (anchorClock_ > 0) {
-            // ★★★ MEASURE FROM THE PULSE'S START, NOT ITS END. Every second's pulse BEGINS at a
-            //     fixed 30 ms past the tick and then runs for 170, 470 or 770 ms depending on what
-            //     it is saying — so the end moves by 600 ms with the DATA. Timing off the end put
-            //     symbols half a second either side of the truth and rounded them into the wrong
-            //     second; timing off the start is the same instant every time.
-            const double pulseStart = (double)dipStartClock_ - gapMs * sr_ / 1000.0;
-            const double since = (pulseStart - (double)anchorClock_) / (double)sr_;
-            // The anchor IS second 59, so everything is measured relative to that.
-            const int measured = (int)(((59 + (long long)std::lround(since)) % 60 + 60) % 60);
-            if (measured >= 0 && measured <= 59) second_ = measured;
-        }
-        if (!inMinute(second_)) { second_ = -1; setState(State::Searching); return; }
-        bitsA_[second_] = (sym == 1) ? 1 : 0;
-        // ★★ Which seconds actually arrived readable. WWV still records an unreadable pulse as 0
-        //    and decodes on (a live HF minute drops 3-8 pulses, and an all-or-nothing rule would
-        //    never decode one) — but the YEAR is only taken from the air when all eight of its
-        //    seconds were read; otherwise decodeWwv falls back to the host. See there.
-        slot_[second_] = (slot_[second_] == 0 && sym >= 0) ? 1 : 2;
-        if (sym >= 0 && onBit) onBit(second_, bitsA_[second_]);
-        // ★ Not on the anchoring edge after a hunt: second_ is 59 there, so every field would be
-        //   "complete" — and drawn from bits nobody read (a progress line of 00:00, year 2000).
-        if (frameWasRead) emitPartial();
-        if (second_ == 59) {
-            if (frameWasRead) {
-                TimeStamp ts;
-                const bool ok = decodeWwv(ts);
-                finishMinute(ok, ts);
-            }
-            // ★★★ THE NEXT SYMBOL IS SECOND 1's, NOT SECOND 0's. Second 0 is the hole and never
-            //     produces an edge at all, so resetting to 0 here left every following bit one
-            //     second early for the whole minute.
-            bitsA_[0] = 0;                         // the hole carries no data
-            for (int i = 0; i < 60; i++) slot_[i] = 0;
-            second_ = 1;
-            return;
-        }
-        second_ += steps;
-        // ★ Stepped clean over the minute without seeing second 59 — a dropout on the marker
-        //   itself. Wrap, and drop the corroboration chain rather than decode a half frame.
-        if (second_ > 59) {                    // ★ % not -= : see inMinute
-            second_ %= 60; lastStamp_ = 0;
-            for (int i = 0; i < 60; i++) slot_[i] = 0;
-        }
+        placeRec((int)p, r);
+        if (p == 59) closeFrame();
         return;
-    } else if (station_ == Station::WWVB) {
-        // ── WWVB ─────────────────────────────────────────────────────────────
-        // ★ Same polarity as MSF/DCF77 — the carrier is ATTENUATED and the dip carries the symbol,
-        //   so this reuses the envelope path they prove rather than WWV's subcarrier one.
-        const int sym = near(dipMs, 800.0, 130.0) ? 2
-                      : near(dipMs, 500.0, 110.0) ? 1
-                      : near(dipMs, 200.0, 90.0)  ? 0 : -1;
-        const long long prevMarker = lastDipClock_;
-        if (sym == 2) lastDipClock_ = dipStartClock_;
-        // ★★ The minute is TWO MARKERS IN A ROW (second 59's P0 then second 0's Pr, SP 432 p. 21)
-        //    — WWVB transmits no unique minute pulse to look for. ★ "In a row" is now a MEASURED
-        //    1.0 s between their leading edges, not "the previous dip we happened to classify".
-        if (anchorClock_ == 0) {
-            if (sym == 2 && prevMarker > 0
-                && std::fabs((double)(dipStartClock_ - prevMarker) / sr_ - 1.0) <= kGridTolS) {
-                beginFrame(dipStartClock_);
-                place(0, 0, 0, 2, true);
-                if (onBit) onBit(0, 0);
-                emitPartial();
+    }
+    case Station::DCF77: {
+        if (anchorIdx_ < 0) {
+            // ★★★ THE MINUTE IS MARKED BY AN ABSENCE: second 59 carries NO dip, so a missing dip
+            //     followed by a dip makes the dip second 0.
+            if (strongKind(p1, kNone) && r.contrast && r.dcls >= 0 && r.dconf >= kSyncConf
+                && clsKind_[r.cls] == kData) {
+                startFrame(r.idx);
+                unconfirmed_ = 0;
+                placeRec(0, r);
             }
             return;
         }
-        // ★★★ PLACED BY ELAPSED TIME, NOT COUNTED (2026-10-04, audit row 9). This used to
-        //     `return` on an unreadable dip WITHOUT advancing the second, and count every
-        //     readable one — so one fade moved the rest of the minute a second early, and a
-        //     noise dip of about 200 ms moved it a second late. Now each dip is the second its
-        //     leading edge falls on (±120 ms), an unreadable one ERASES that second, and a dip
-        //     between the seconds is noise and ignored.
-        const double e = (double)(dipStartClock_ - anchorClock_) / sr_;
-        long r = std::lround(e);
-        if (std::fabs(e - (double)r) > kGridTolS) return;     // off the grid: noise
-        if (r >= 60) {
-            closeFrame();
-            if (r == 60 && sym == 2) {                          // ~60 s on: the next Pr, re-anchor
-                beginFrame(dipStartClock_);
-                place(0, 0, 0, 2, true);
-                if (onBit) onBit(0, 0);
-                emitPartial();
-                return;
+        long long p = pos;
+        if (p == 59) {
+            // ★ A DIP at second 59 is something DCF77 never sends, so the anchor was a missed dip,
+            //   not the minute — drop it and hunt again.
+            if (r.contrast && clsKind_[r.cls] == kData && r.conf >= kSyncConf) { loseFrame(); return; }
+            if (strongKind(r, kNone)) unconfirmed_ = 0;
+            second_ = 59;
+            return;
+        }
+        if (p >= 60) {
+            if (!frameClosed_) closeFrame();
+            if (++unconfirmed_ >= 3) { loseFrame(); return; }
+            startFrame(anchorIdx_ + 60);
+            p -= 60;
+        }
+        placeRec((int)p, r);
+        if (p == 58) closeFrame();
+        return;
+    }
+    case Station::WWVB: {
+        if (anchorIdx_ < 0) {
+            if (strongKind(p1, kMark) && strongKind(r, kMark)) {
+                startFrame(r.idx);
+                unconfirmed_ = 0;
+                placeRec(0, r);
             }
+            return;
+        }
+        long long p = pos;
+        if (p >= 60) {
+            if (!frameClosed_) closeFrame();
             // ★ A readable NON-marker where second 0 must be means the anchor was wrong (a noise
             //   marker beside a real one). Hunt again rather than read a minute out of phase.
-            if (r >= 120 || (r == 60 && sym >= 0)) { loseFrame(); return; }
-            beginFrame(anchorClock_ + 60LL * sr_);              // Pr itself faded: keep the grid
-            r -= 60;
+            if (r.contrast && clsKind_[r.cls] == kData && r.conf >= kSyncConf) { loseFrame(); return; }
+            if (strongKind(r, kMark)) unconfirmed_ = 0;
+            else if (++unconfirmed_ >= 3) { loseFrame(); return; }
+            startFrame(anchorIdx_ + 60);
+            p -= 60;
         }
-        if (r < 1) return;
-        place((int)r, sym == 1 ? 1 : 0, 0, sym, sym >= 0);
-        second_ = (int)r;
-        if (onBit) onBit(second_, bitsA_[second_]);
-        emitPartial();
-        if (r == 59) closeFrame();
+        placeRec((int)p, r);
+        if (p == 59) closeFrame();
         return;
-    } else if (station_ == Station::RWM) {
-        // ── RWM ──────────────────────────────────────────────────────────────
-        // ★★★ RWM SENDS NO TIMECODE, so there is nothing here to decode into a clock and this
-        //     branch deliberately never produces one. What it can honestly report is that the
-        //     station is being heard and that its second markers are being counted — which is what
-        //     RWM is actually for: calibration and propagation. Anything more would be invented.
-        if (second_ < 0) { second_ = 0; setState(State::Reading); }
-        else second_ = (second_ + 1) % 60;
-        if (onBit) onBit(second_, 1);
-        // ★ Still report progress: RWM has no minute to decode, but the host uses this tick to
-        //   flush any callsign heard — and a panel with no heartbeat looks dead.
-        emitPartial();
-        return;                                   // never falls through to a minute decode
-    } else {
-        // ── DCF77 ────────────────────────────────────────────────────────────
-        // ★★★ THE MINUTE IS MARKED BY AN ABSENCE. Second 59 carries NO dip, so the tell is a gap
-        //     of about two seconds between dips — the next dip is second 0. A decoder looking for
-        //     a special pulse would never find one, because there isn't one.
-        // ★★★ BUT ONE MISSED DIP LOOKS EXACTLY THE SAME (2026-10-04, audit row 9). A 1.9 s gap
-        //     was taken as a minute start wherever it fell, so one faded second re-anchored the
-        //     frame mid-minute, and a noise dip mid-second stepped the counter. Now:
-        //       • the minute gap is accepted only when it is the FIRST one (hunting), or when the
-        //         dip after it lands ~60 s after the current anchor;
-        //       • every other dip is placed by the distance of its leading edge from the anchor
-        //         (±120 ms of a whole second, or it is noise and ignored);
-        //       • a missing or unreadable second is an ERASURE and fails the minute;
-        //       • a dip AT second 59 is something DCF77 never sends, so the anchor was a missed
-        //         dip, not the minute — drop it and hunt again. (A leap second does put a dip at 59;
-        //         it costs one minute of lock twice a decade, which is the right way round.)
-        const bool readable = near(dipMs, kDipUnit, 50.0) || near(dipMs, 2 * kDipUnit, 50.0);
-        const int  bit = near(dipMs, 2 * kDipUnit, 50.0) ? 1 : 0;
-        const double sinceLast = lastDipClock_ > 0
-            ? (double)(dipStartClock_ - lastDipClock_) / sr_ : 1e9;
-        lastDipClock_ = dipStartClock_;
-        if (anchorClock_ == 0) {
-            if (sinceLast < 1.85) return;                       // hunting for the minute gap
-            beginFrame(dipStartClock_);
-            place(0, bit, 0, bit, readable);
-            if (onBit) onBit(0, bit);
-            emitPartial();
+    }
+    case Station::WWV: {
+        const bool holeAfterMarker = strongKind(p1, kMark) && strongKind(r, kNone);
+        if (anchorIdx_ < 0) {
+            if (holeAfterMarker) { startFrame(r.idx); unconfirmed_ = 0; second_ = 0; }
             return;
         }
-        const double e = (double)(dipStartClock_ - anchorClock_) / sr_;
-        long r = std::lround(e);
-        if (std::fabs(e - (double)r) > kGridTolS) return;     // off the grid: noise
-        if (r == 59) { loseFrame(); return; }                   // see above: the anchor was wrong
-        if (r >= 60) {
-            closeFrame();
-            if (r >= 120) { loseFrame(); return; }
-            // r == 60 is the consistent minute gap: re-anchor on the real edge. Past it, second 0
-            // itself faded — keep the grid; that minute fails on its erasure.
-            beginFrame(r == 60 ? dipStartClock_ : anchorClock_ + 60LL * sr_);
-            r -= 60;
+        long long p = pos;
+        // ★★★ A FADE LOOKS LIKE A HOLE. A marker-then-hole re-anchors only a whole minute (±2 s)
+        //     after the last anchor, or once the anchor has gone unconfirmed for two minutes
+        //     (rule from madpsy/ubersdr-ntp, GPL-3.0-or-later, WwvDecoder.cpp tryAnchor).
+        const long long m = ((p % 60) + 60) % 60;
+        if (holeAfterMarker && p % 60 != 0 && (m <= 2 || m >= 58 || unconfirmed_ >= 2)) {
+            if (!frameClosed_) closeFrame();
+            startFrame(r.idx);
+            unconfirmed_ = 0; second_ = 0;
+            return;
         }
-        place((int)r, bit, 0, bit, readable);
-        second_ = (int)r;
-        if (onBit) onBit(second_, bit);
-        emitPartial();
-        if (r == 58) closeFrame();
+        if (p >= 60) {
+            // ★ The hole of the next minute: the frame just read is decoded HERE, as before — its
+            //   time is the minute that began at its own second 0, so the minute in progress now
+            //   is that plus one (SP 432 p. 46; audit 2026-10-04 row 8).
+            if (!frameClosed_) closeFrame();
+            if (holeAfterMarker) unconfirmed_ = 0; else unconfirmed_++;
+            startFrame(anchorIdx_ + 60);
+            second_ = 0;
+            p -= 60;
+            if (p == 0) return;
+        }
+        if (p == 0) return;
+        placeRec((int)p, r);
         return;
+    }
+    default: return;
     }
 }
 
-// ── Framing by elapsed time ──────────────────────────────────────────────────────────────────
-void TimeDecoder::beginFrame(long long anchorClock) {
-    anchorClock_ = anchorClock;
+// ── Framing ──────────────────────────────────────────────────────────────────────────────────
+static inline bool inMinute(int s) { return s >= 0 && s < 60; }
+
+void TimeDecoder::startFrame(long long idx) {
+    anchorIdx_ = idx;
     for (int i = 0; i < 60; i++) { bitsA_[i] = bitsB_[i] = 0; slot_[i] = 0; sym_[i] = 0; }
     frameClosed_ = false;
     second_ = 0;
@@ -669,14 +797,15 @@ bool TimeDecoder::slotsComplete(int from, int to) const {
 }
 
 void TimeDecoder::loseFrame() {
-    anchorClock_ = 0;
+    anchorIdx_ = -1;
     frameClosed_ = true;
     second_ = -1;
     lastStamp_ = 0;
     setState(State::Searching);
 }
 
-/** Decode the minute in hand, once. ★★ An erasure anywhere the station sends code fails it. */
+/** Decode the minute in hand, once. ★★ An erasure anywhere the station sends code fails it
+ *  (WWV excepted: it decodes over a dropped pulse, as it always has — see decodeWwv). */
 void TimeDecoder::closeFrame() {
     if (frameClosed_) return;
     frameClosed_ = true;
@@ -685,6 +814,7 @@ void TimeDecoder::closeFrame() {
     switch (station_) {
         case Station::MSF:   ok = slotsComplete(1, 59) && decodeMsf(ts);   break;
         case Station::DCF77: ok = slotsComplete(0, 58) && decodeDcf77(ts); break;
+        case Station::WWV:   ok = decodeWwv(ts); break;
         case Station::WWVB: {
             // ★ The free framing check: markers at 0, 9, 19 … 59 and nowhere else (SP 432
             //   Table 2.3). A complete minute with them elsewhere was read out of phase.
@@ -916,7 +1046,7 @@ bool TimeDecoder::decodeMinute(TimeStamp& out) const {
         case Station::MSF:  return decodeMsf(out);
         case Station::WWV:  return decodeWwv(out);
         case Station::WWVB: return decodeWwvb(out);
-        case Station::RWM:  return false;          // no timecode — see the note in onSecondEdge
+        case Station::RWM:  return false;          // no timecode — see onRwmEdge
         default:            return decodeDcf77(out);
     }
 }
