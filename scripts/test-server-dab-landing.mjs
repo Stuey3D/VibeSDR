@@ -20,6 +20,14 @@
 //        state, not a licence to land owners;
 //     6. ★ NEGATIVE, on its own fresh server: no DAB landing configured → no `dab` report at all, so
 //        the positive cases above cannot pass by accident.
+//     7. ★★★ THE APP'S OWN ORDER (2026-10-05, RC14 on the Pi 2: "first thing I asked for has failed").
+//        The app opens AUDIO first — /ws/audio?user_session_id=…&codec=opus, NO frequency — and its
+//        spectrum socket a second later; then it restores its remembered tune on both sockets. Its own
+//        audio socket made the room look occupied, `firstOfSession` was false, and the landing block
+//        decided nothing in silence. Pinned on a shared dial (owner) and a single radio (stranger),
+//        with the capture idle-parked before anyone arrives, as on the Pi;
+//     8. ★ the same through a FRONT DOOR handing the sockets to a separate radio process (/r/<serial>),
+//        the Pi's multi-radio shape.
 // ★ SILENT: audio frames are received and discarded, never played.
 //
 //   usage: VIBESERVER_BIN=… node scripts/test-server-dab-landing.mjs
@@ -90,7 +98,7 @@ function adminTicket() {
   return `2.${now}.${exp}.${mac}`;
 }
 
-async function server(radio, tag) {
+async function server(radio, tag, { frontDoor = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-dabland-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
   const rtlPort = await freePort(), port = await freePort(), front = await freePort();
@@ -106,15 +114,35 @@ async function server(radio, tag) {
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
                 VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
-  const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2048000',
+  // ★ As a radio PROCESS behind a front door, it names its serial — which is what gives it a hand-off
+  //   socket (<runtime>/fake.sock) and the /r/fake prefix — exactly as the door's own children are run.
+  const srv = spawn(BIN, [...(frontDoor ? ['--radio-serial', 'fake'] : []),
+                          '--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2048000',
                           '--idle-grace', '0', '--admin-pass', ADMIN_PASS], { env, stdio: ['ignore', log, log] });
-  for (let i = 0; i < 100; i++) {            // wait for the port
-    const up = await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); });
-    if (up) break;
-    await sleep(100);
-  }
+  const waitPort = async (p) => {
+    for (let i = 0; i < 100; i++) {
+      const up = await new Promise((r) => { const c = net.connect(p, '127.0.0.1'); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); });
+      if (up) return true;
+      await sleep(100);
+    }
+    return false;
+  };
+  await waitPort(port);
   await sleep(500);
-  return { port, dir, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); } };
+  let door = null;
+  if (frontDoor) {
+    // ★★ THE FRONT DOOR: no --tcp and no radio named, in full mode = a process that owns no radio and
+    //    hands each connection to the radio's process over the hand-off socket. It would also fork a
+    //    child for `fake` (no service manager here); that child finds our radio process holding the
+    //    radio's lock and leaves it to us — the one-process-per-radio rule doing its job.
+    const dlog = fs.openSync(path.join(dir, 'door.log'), 'w');
+    door = spawn(BIN, ['--admin-pass', ADMIN_PASS], { env, stdio: ['ignore', dlog, dlog] });
+    await waitPort(front);
+    await sleep(800);
+  }
+  return { port: frontDoor ? front : port, prefix: frontDoor ? '/r/fake' : '', dir,
+           log: () => { try { return fs.readFileSync(path.join(dir, 'server.log'), 'utf8'); } catch { return ''; } },
+           stop: () => { srv.kill('SIGTERM'); door?.kill('SIGTERM'); rtl.kill('SIGTERM'); } };
 }
 /** Spectrum first, then audio — the web client's order. `admin` = the owner's app, credential on every socket. */
 async function listener(port, sid, { admin = false } = {}) {
@@ -127,6 +155,27 @@ async function listener(port, sid, { admin = false } = {}) {
   L.close = () => { L.spec.close(); L.aud.close(); };
   return L;
 }
+
+/** ★★★ THE APP'S ORDER against a VibeServer: AUDIO first (LocalAudioPlayer → /ws/audio, the session id and
+ *  codec only — "THE URL NEVER STATES A FREQUENCY"), the spectrum socket about a second later
+ *  (VibeServerWsClient), and then the remembered tune going out on both sockets — the native audio
+ *  pump and the spectrum client (the Pi 2's "tune -> 96100.000 kHz asked by session" right after
+ *  "spectrum WS connected"). That restore is not a user action and must not move a radio in DAB. */
+async function appListener(S, sid, { admin = false } = {}) {
+  const adm = admin ? `&vs_admin_ticket=${adminTicket()}` : '';
+  const L = {};
+  L.aud = ws(S.port, `${S.prefix}/ws/audio?user_session_id=${sid}&codec=opus${adm}`);
+  await sleep(1000);
+  L.spec = ws(S.port, `${S.prefix}/ws/user-spectrum?user_session_id=${sid}&mode=binary8&bins=256${adm}`);
+  await sleep(600);
+  const restore = { type: 'tune', frequency: FM, mode: 'wfm' };
+  L.spec.send(restore); L.aud.send(restore);
+  await sleep(2500);
+  L.close = () => { L.spec.close(); L.aud.close(); };
+  return L;
+}
+const inDab = (L) => dabs(L.spec).some((d) => d.channel === '7C') && !L.spec.txt.some((t) => t.includes('"type":"dab_off"'));
+const lastConfig = (st) => { const c = parsed(st, 'config'); return c[c.length - 1] || {}; };
 
 // ── 1-3. A SHARED dial, the owner first ─────────────────────────────────────────────────────────
 {
@@ -181,6 +230,48 @@ async function listener(port, sid, { admin = false } = {}) {
     const A = await listener(S.port, 'eeee5555', { admin: true });
     ok(dabs(A.spec).length === 0 && firstConfig(A.spec).centerFreq !== CENTRE_7C,
        `no DAB landing configured → no dab report (centerFreq ${firstConfig(A.spec).centerFreq})`);
+    A.close();
+  } finally { S.stop(); }
+}
+
+// ── 7. THE APP'S ORDER — audio first, then spectrum, then the restore — on a parked capture ─────
+for (const [label, radio, admin] of [
+  ['shared dial (5 listeners), the OWNER', { users: 5 }, true],
+  ['single listener, a stranger', { users: 1 }, false],
+]) {
+  console.log(`── app order (audio first), ${label}, DAB landing 7C, capture parked ──`);
+  const S = await server({ ...radio, landingDabChannel: BLOCK_7C, landingDabSid: 0 }, 'app');
+  try {
+    // ★ Park the capture first, as the Pi's was (22:40:45, two minutes before the listener), so the
+    //   arrival also resumes a paused dongle — the Pi's exact path. A boot-time park waits on a USB
+    //   radio's watchdog tick that an rtl_tcp source does not run, so an audio socket with NO session
+    //   comes and goes instead: its close arms the park (--idle-grace 0 = at once), and an audio
+    //   socket never spends the once-per-start landing (only a spectrum socket decides it).
+    const probe = ws(S.port, `${S.prefix}/ws/audio?codec=opus`);
+    await sleep(800); probe.close();
+    for (let i = 0; i < 150 && !/dongle capture paused/.test(S.log()); i++) await sleep(100);
+    ok(/dongle capture paused/.test(S.log()), 'the capture was idle-parked before anyone arrived');
+    const A = await appListener(S, 'ffff6666', { admin });
+    ok(inDab(A) && lastConfig(A.spec).centerFreq === CENTRE_7C,
+       `${label} arriving audio-first lands on 7C, and the restore tune does not undo it `
+       + `(${dabs(A.spec).length} dab reports, centerFreq ${lastConfig(A.spec).centerFreq})`);
+    ok(/\[DAB\] new session — landing on DAB block 7C/.test(S.log()), 'the server log says it landed');
+    A.close();
+  } finally { S.stop(); }
+  await sleep(500);
+}
+
+// ── 8. THROUGH A FRONT DOOR, to a separate radio process (the Pi's multi-radio shape) ────────────
+{
+  console.log('── front door → radio process, shared dial (5), app order, the OWNER, DAB landing 7C ──');
+  const S = await server({ users: 5, landingDabChannel: BLOCK_7C, landingDabSid: 0 }, 'door', { frontDoor: true });
+  try {
+    await sleep(2000);
+    const A = await appListener(S, 'abab7777', { admin: true });
+    ok(A.spec.open && A.aud.open, 'both sockets were handed through the front door');
+    ok(inDab(A) && lastConfig(A.spec).centerFreq === CENTRE_7C,
+       `the owner, audio-first through the door, lands on 7C (${dabs(A.spec).length} dab reports, `
+       + `centerFreq ${lastConfig(A.spec).centerFreq})`);
     A.close();
   } finally { S.stop(); }
 }

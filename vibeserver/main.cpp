@@ -3922,6 +3922,7 @@ int main(int argc, char** argv) {
                 (void)!::write(2, msg, sizeof msg - 1);
                 _exit(0);
             }).detach();
+            LocalSdrShim::noteProcessExiting();   // ★ exit or execv next — see stopLocked (2026-10-05)
             shim.stop();
             // ★★★ IF NOTHING WILL BRING US BACK, BRING OURSELVES BACK. "Restart" here is `return
             //     0` and a reliance on systemd's Restart=always — so on a box with no init, every
@@ -3970,6 +3971,9 @@ int main(int argc, char** argv) {
     //     timeline is what identified it, since the message names nothing).
     //     ★ Harmless in itself, and exactly the kind of noise that hides the first REAL crash.
     LocalSdrShim::stopMdns();
+    // ★★★ THE PROCESS ENDS HERE, so the dongle is left to the kernel — closing it after the cancel is
+    //     the libusb abort every stop of the Pi 2's radio took (see stopLocked, 2026-10-05).
+    LocalSdrShim::noteProcessExiting();
     shim.stop();
     return 0;
 }

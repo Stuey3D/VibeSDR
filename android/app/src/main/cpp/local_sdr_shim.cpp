@@ -3465,6 +3465,8 @@ static std::atomic<bool>   g_vsPublicSharing{false};
  *  start must say THAT rather than let libusb report a device that is plugged in and busy as a
  *  device that is missing. */
 static std::atomic<bool>   g_radioOrphaned{false};
+/** ★ Set by the standalone server just before its last stop() — see LocalSdrShim::noteProcessExiting. */
+static std::atomic<bool>   g_vsProcessExiting{false};
 /** ★★★ WHY THE RADIO IS NOT OURS RIGHT NOW — and it must reach the LISTENER, not just the log.
  *  When the idle park has released the dongle so another program can use it, and that program
  *  took it, resumeCaptureIdle's reacquire fails. That failure was only LOGI'd, so a listener saw
@@ -8767,6 +8769,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         s_listenersCached.store(n, std::memory_order_relaxed);
         return n;
+    }
+    /** ★★★ HOW MANY *OTHER* SESSIONS ARE LISTENING — the arriving spectrum socket's own session left
+     *  out (2026-10-05). Call WITH clientMtx held, BEFORE the socket is registered.
+     *
+     *  ★★★ THE APP OPENS ITS AUDIO SOCKET FIRST, and specListenerCountLocked() rightly counts an
+     *      audio-only session as a listener (the pocketed phone). So by the time the app's own
+     *      spectrum socket asked "is anybody here?" the answer was "yes — you", `firstOfSession` was
+     *      false, and the whole landing block — the start-in-DAB landing included — decided nothing
+     *      and logged nothing. The Pi 2 on RC14 (vibeserver@00000001, 2026-10-05 22:42:40): "audio WS
+     *      connected", "spectrum WS connected", "tune -> 96100" — and not one [DAB] line, nor even
+     *      "landing skipped". The test that passed opened SPECTRUM first, the web client's order.
+     *  ★★ Only the shared-stream audio sockets (audioClient/audioExtra) are discounted, and only the
+     *     one this session holds: a per-client channel's audio waits in pendingAudio and was never
+     *     counted, and a channel kept running by its own audio (adoptChannel) is still counted —
+     *     that listener never left, so their return is not an arrival.
+     *  ★ Still calls specListenerCountLocked() so the idle gate's cached count is refreshed exactly
+     *    as before. */
+    int otherListenersLocked(const std::string& session) {
+        const int n = specListenerCountLocked();
+        if (session.empty()) return n;
+        auto mine = [&](const std::shared_ptr<net::Socket>& s) {
+            if (!s || !s->isOpen()) return false;
+            auto it = sockSession.find(s.get());
+            return it != sockSession.end() && it->second == session;
+        };
+        bool specMine = mine(specClient);
+        for (auto& s : specExtra) specMine = specMine || mine(s);
+        if (specMine) return n;                  // counted as a spectrum listener: a second socket
+        bool audioMine = mine(audioClient);
+        for (auto& a : audioExtra) audioMine = audioMine || mine(a);
+        return audioMine ? std::max(0, n - 1) : n;   // ★ exactly the one audioOnly entry it added
     }
     /** How many listeners are attached. Call WITHOUT clientMtx held. */
     int specListenerCount() {
@@ -19373,10 +19406,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     the frames and the config in the broadcast loops.
             bool asExtra = false;
             bool firstOfSession = false;
+            int othersAtArrival = 0;
             { std::lock_guard<std::mutex> lk(clientMtx);
               // ★ Nobody listening yet? Then this is a NEW SESSION and the owner's landing
               //   frequency applies. Counted under the lock, applied outside it.
-              firstOfSession = (specListenerCountLocked() == 0);
+              // ★★★ NOBODY ELSE — this session's own audio socket, opened first by the app, is not
+              //     "somebody already listening". See otherListenersLocked (2026-10-05).
+              othersAtArrival = otherListenersLocked(session);
+              firstOfSession = (othersAtArrival == 0);
               // prune anything that has gone away since
               specExtra.erase(std::remove_if(specExtra.begin(), specExtra.end(),
                   [](const std::shared_ptr<net::Socket>& c){ return !c || !c->isOpen(); }),
@@ -19562,6 +19599,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     start, made at the first arrival: the radio's first state, not a move of anybody.
              *  ★ After the first arrival every exemption stands exactly as before. */
             const bool startOnDab = firstEver && landDabCh >= 0;
+            /* ★★ AND SAY SO WHEN THE START LANDING IS NOT EVEN CONSIDERED (2026-10-05). The RC14 fault
+             *  left NO line at all — the block above decided nothing in silence because the app's own
+             *  audio socket made the room look occupied — and "no log" was the whole evidence. Only
+             *  before the first landing has happened, so a normal joiner never writes it. */
+            if (!firstOfSession && landDabCh >= 0 && !anySessionYet.load())
+                LOGI("[DAB] start landing not considered for session [%s] — %d other listener(s) already here",
+                     session.c_str(), othersAtArrival);
             if ((startLanding || startOnDab) && g_dabWantChannel.load(std::memory_order_relaxed) >= 0
                 && !g_dabMode.load(std::memory_order_relaxed)) {
                 LOGI("[DAB] first listener since this server started — the owner's landing applies, not "
@@ -26358,6 +26402,7 @@ void LocalSdrShim::setVibeServerDabAgc(bool on, int target) {
 }
 void LocalSdrShim::setVibeServerUserNotch(bool allowed) { g_dsp.rspUserNotch.store(allowed ? 1 : 0); }
 void LocalSdrShim::setProvidesSpectrogram(bool on) { g_vsProvidesSpectrogram.store(on); }
+void LocalSdrShim::noteProcessExiting() { g_vsProcessExiting.store(true); }
 
 void LocalSdrShim::setBandRegion(int region) {
     vibebands::defaultRegion() = (region >= 1 && region <= 3) ? region : 1;
@@ -28306,6 +28351,30 @@ void LocalSdrShim::stopLocked() {
       for (auto& c : impl->connThreads) joinSafely(c.th, "connection thread");
       impl->connThreads.clear(); }
 
+    /* ★★★ AND WHEN THE PROCESS IS GOING AWAY, DO NOT CLOSE THE DONGLE — THE KERNEL DOES IT (2026-10-05).
+     *  EVERY stop of the Pi 2's RTL radio process ABORTED, rc13 and rc14 alike — 13 in ten days in the
+     *  journal, each within a second of "Stopping…" or "restarting to apply it":
+     *      vibeserver: ../../libusb/os/threads_posix.h:46: usbi_mutex_lock:
+     *        Assertion `pthread_mutex_lock(mutex) == 0' failed.        → status=6/ABRT
+     *  (pid 16359 is rc14: started 22:35:31 after the 22:34 apt install, aborted at 22:35:40.)
+     *  ★★ THE SAME FAULT pauseCaptureIdle() ALREADY DOCUMENTS: rtlsdr_read_async() returns after a cancel
+     *     while libusb still has a transfer it will complete later, and the NEXT synchronous control
+     *     transfer runs libusb's event loop over a transfer librtlsdr has already freed — an assert, not an
+     *     error. rtlsdr_close() IS that next control transfer: rtlsdr_deinit_baseband() writes registers
+     *     before libusb_close(). The idle path was cured by never cancelling; a stop has to cancel.
+     *  ★★ So a stop that is the END OF THE PROCESS leaves the handle alone: the reader is cancelled and
+     *     joined (so nothing writes into a freed Impl), and the process exit closes the usbfs fd (libusb
+     *     opens it O_CLOEXEC, so an execv restart does too), which makes the kernel kill the URBs and
+     *     release the interface. The next start's rtlsdr_open() re-inits the dongle from scratch — and it
+     *     has been doing exactly that after every one of those aborts, which never got past this line.
+     *  ★ An IN-PROCESS stop (the Android app, the Mac app, a release) still closes: there the process
+     *    lives on and the device must be given back. That path keeps the hazard; it needs the cancel
+     *    fixed in librtlsdr itself, which is not ours on Linux. */
+    if (impl->dev && g_vsProcessExiting.load()) {
+        LOGI("process exiting — leaving the dongle to the kernel rather than rtlsdr_close() "
+             "(a close after a cancel aborts in libusb)");
+        impl->dev = nullptr;
+    }
     if (impl->dev) rtlsdr_close(impl->dev);
     impl->tcpSock = nullptr;             // RTL-TCP socket already closed above
     // Close our own dup last (rtlsdr_close/libusb don't own it). Kotlin's

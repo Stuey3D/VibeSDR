@@ -460,6 +460,9 @@ public:
      *  a 24-hour picture — so it is exempt from the idle PAUSE. It is not exempt from RELEASE,
      *  because letting the device go already means giving those up. */
     static void setProvidesSpectrogram(bool on);
+    /** ★★★ THE NEXT stop() IS THE PROCESS GOING AWAY (the standalone server's exit and self-restart).
+     *  A dongle is then NOT rtlsdr_close()d — see the note in stopLocked() (2026-10-05). */
+    static void noteProcessExiting();
     /** ITU region (1/2/3) for the named band presets — derived from where the owner says the
      *  receiver is. See vibe_bands.h: the allocations genuinely differ between regions. */
     static void setBandRegion(int region);
