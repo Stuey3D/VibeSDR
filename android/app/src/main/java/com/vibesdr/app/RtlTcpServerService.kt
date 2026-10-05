@@ -364,3 +364,18 @@ class RtlTcpServerService : Service() {
         super.onDestroy()
     }
 }
+
+/** ★★ THE APP'S OWN ENTRY, NEVER A LAUNCHER ALIAS (2026-10-05, ICON & ART on Android). getLaunchIntentForPackage
+ *  names whichever colour alias is enabled NOW; a notification built with it keeps that name, and when the icon
+ *  colour switches (on leaving the app — exactly while the media notification is up) the alias is disabled and a
+ *  tap does nothing. VibeActivity is the real activity and is never disabled.
+ *  ★ HERE, in a file Lite shares (lite/android/app/build.gradle SHARED), not in VibeActivity.kt: Lite has no colour
+ *    aliases and no VibeActivity, so it falls back to its ordinary launch intent (RC14 Lite build, 2026-10-05). */
+internal fun appEntryIntent(ctx: android.content.Context): android.content.Intent {
+    val cls = try { Class.forName("com.vibesdr.app.VibeActivity") } catch (_: Throwable) { null }
+    val i = if (cls != null) android.content.Intent(ctx, cls)
+            else (ctx.packageManager.getLaunchIntentForPackage(ctx.packageName) ?: android.content.Intent())
+    return i.setAction(android.content.Intent.ACTION_MAIN)
+        .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+}
