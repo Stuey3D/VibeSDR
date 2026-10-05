@@ -326,6 +326,13 @@ printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
 node scripts/test-server-decoders.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★★ A RADIO SET TO START IN DAB STARTS IN DAB (Stuart, 2026-10-05: "No server seems to honour the start
+#     in DAB mode"): the owner's admin arrival first on a shared dial, a client's restored tune refused, a
+#     stranger joining, the exemption standing after the start, and a no-landing negative. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── DAB landing (end to end) ──\033[0m\n'
+node scripts/test-server-dab-landing.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ SHARE A STATION THROUGH THE REAL SERVER: two listeners on a shared dial; the line the room receives is
 #     named from the receiver's own store, a smuggled label is not relayed, out-of-range / closed-mode shares
 #     are refused with a reason, flood control covers shares. Same VIBESERVER_BIN rule: not run without one.
