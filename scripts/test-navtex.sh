@@ -6,6 +6,10 @@
 #     (mean 9.5). New: 0.9 / 1.2 / 1.1 / 3.2 %.
 #  2. Bursts (12/min, 10 dB) on 12 dB independent mark/space fading — old 14.3 / 16.5 %, new 1.2 / 0.8 %.
 #  3. FIGS 0x4B (BEL) is printed as an apostrophe (fldigi), never as the raw control byte.
+#  4. ★ NavtexRx (2026-10-05, fldigi's receiver + ML FEC), scored against the WHOLE reference (SCORE_FULL): -3 dB SNR
+#     (old 21.1 / 17.9 %), 20 dB selective fading at 6 dB (old 17.4 / 95.2 %), joining mid-message with no phasing
+#     (old 8.2 %), swapped tones (old 99.8 % — nothing), and two minutes of noise prints nothing (old: 20 characters).
+#     The full table is tools/rtty-bench/navtex_bench.sh.
 set -u
 cd "$(dirname "$0")/.."
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -35,4 +39,23 @@ awk "BEGIN{exit !($c <= 0.5)}"; ok $? "clean 15 dB: CER $c %"
 n=$(tr -cd '\007' < $T/last.txt | wc -c | tr -d ' ')
 [ "$n" -eq 0 ]; ok $? "no BEL (0x07) in the output ($n; old decoder: 2)"
 grep -q "^'NNNN" $T/last.txt; ok $? "...it is printed as an apostrophe, as fldigi does"
+cerf() {  # as cer, the whole reference counted; env passed to the synth
+  env "$@" python3 tools/rtty-bench/synth_navtex.py $T/s.wav $SNR $FADE 120 0 0 $SEED >/dev/null
+  $T/nav $T/s.wav CCIR476 > $T/last.txt 2>/dev/null
+  SCORE_FULL=1 python3 tools/rtty-bench/score.py $T/last.txt $T/s.wav.txt | sed 's/^CER \([0-9.]*\).*/\1/'
+}
+for SEED in 0 1; do
+  SNR=-3 FADE=0; c=$(cerf X=0)
+  awk "BEGIN{exit !($c <= 3)}"; ok $? "-3 dB SNR, seed $SEED: CER $c % (≤ 3; old 21.1 / 17.9 %)"
+  SNR=6 FADE=20; c=$(cerf X=0)
+  awk "BEGIN{exit !($c <= 15)}"; ok $? "20 dB selective fading at 6 dB, seed $SEED: CER $c % (≤ 15; old 17.4 / 95.2 %)"
+done
+SEED=0 SNR=6 FADE=0; c=$(cerf JOIN=23)
+awk "BEGIN{exit !($c <= 2)}"; ok $? "joins mid-message, no phasing: CER $c % (≤ 2; old 8.2 %)"
+SNR=10; c=$(cerf INV=1)
+awk "BEGIN{exit !($c <= 1)}"; ok $? "swapped tones, decoder not told: CER $c % (≤ 1; old 99.8 %)"
+python3 tools/rtty-bench/synth_navtex.py $T/s.wav -30 0 120 >/dev/null
+$T/nav $T/s.wav CCIR476 > $T/last.txt 2>/dev/null
+n=$(tr -d '\n' < $T/last.txt | wc -c | tr -d ' ')
+[ "$n" -eq 0 ]; ok $? "two minutes of noise: $n characters printed (old decoder: 20)"
 exit $fail
