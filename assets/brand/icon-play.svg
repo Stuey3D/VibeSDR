@@ -5,7 +5,7 @@
 <radialGradient id="spill" cx="0.5" cy="0" r="0.6"><stop offset="0" stop-color="#66E07C" stop-opacity="0.22"/><stop offset="1" stop-color="#66E07C" stop-opacity="0"/></radialGradient>
 <linearGradient id="shade" gradientUnits="userSpaceOnUse" x1="0" y1="590" x2="0" y2="1024"><stop offset="0" stop-color="#000" stop-opacity="0.85"/><stop offset="0.2" stop-color="#000" stop-opacity="0.1"/><stop offset="0.7" stop-color="#000" stop-opacity="0.15"/><stop offset="1" stop-color="#000" stop-opacity="0.8"/></linearGradient>
 <linearGradient id="spec" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#e8fff0" stop-opacity="0"/><stop offset="0.5" stop-color="#e8fff0" stop-opacity="0.07"/><stop offset="1" stop-color="#e8fff0" stop-opacity="0"/></linearGradient>
-<clipPath id="rimclip"><rect x="12" y="12" width="1000" height="1000" rx="192.8"/></clipPath>
+<clipPath id="rimclip"><rect x="40" y="40" width="944" height="944" rx="216.0"/></clipPath>
 <filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
 </defs><rect x="0" y="-300" width="1024" height="1190" fill="url(#bg)"/>
 <rect x="0" y="590" width="1024" height="434" fill="#010201"/>
@@ -20,4 +20,4 @@
 <circle cx="448" cy="321" r="40" stroke-width="16"/>
 <line x1="540" y1="276" x2="540" y2="368" stroke-width="15"/><line x1="576" y1="276" x2="576" y2="368" stroke-width="15"/><line x1="612" y1="276" x2="612" y2="368" stroke-width="15"/>
 <line x1="616" y1="222" x2="574" y2="148" stroke-width="15"/>
-</g><circle cx="448" cy="321" r="16" fill="#66E07C"/></g><g filter="url(#glow)" fill="none" stroke="#66E07C" stroke-width="13"><polyline points="123,-20 313,571 711,571 901,-20" stroke-linejoin="round" clip-path="url(#rimclip)"/><rect x="12" y="12" width="1000" height="1000" rx="192.8"/></g></svg>
+</g><circle cx="448" cy="321" r="16" fill="#66E07C"/></g><g filter="url(#glow)" fill="none" stroke="#66E07C" stroke-width="13"><polyline points="123,-20 313,571 711,571 901,-20" stroke-linejoin="round" clip-path="url(#rimclip)"/><rect x="40" y="40" width="944" height="944" rx="216.0"/></g></svg>

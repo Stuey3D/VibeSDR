@@ -19,9 +19,11 @@ assert ios.count(RIM_OLD)==2  # the clip AND the drawn rim
 se=superellipse(512,512,500)
 ios_se=ios.replace(RIM_OLD, f'<path d="{se}"/>')
 open(f'{OUT}/icon-ios.svg','w').write(ios_se)
-# Play: the same art, rim on Google's mask (corner radius 20 % of the icon), inset 12.
-r=0.20*1024-12
-play=ios.replace(RIM_OLD, f'<rect x="12" y="12" width="1000" height="1000" rx="{r:.1f}"/>')
+# Play: the same art, rim on a 25 % rounded square, inset 40 (2026-10-05). ★ At Google's 20 % with the set's 12 px inset
+#   the rim's stroke and glow reached the mask, and Play's listing preview CLIPPED all four corners (Stuart: "we need
+#   one with more rounded corners to avoid the clipping"). 40 px of background is left for Play's mask to trim.
+INSET=40; r=0.25*1024-INSET
+play=ios.replace(RIM_OLD, f'<rect x="{INSET}" y="{INSET}" width="{1024-2*INSET}" height="{1024-2*INSET}" rx="{r:.1f}"/>')
 open(f'{OUT}/icon-play.svg','w').write(play)
 # Android adaptive background: the set's background plus a circle rim at the viewport's edge, inset 12.
 bg=open(f'{SRC}/adaptive-background.svg').read()
