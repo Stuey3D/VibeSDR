@@ -56,6 +56,7 @@ enum CannedDial {
     ("all_yours",      "Done — all yours"),
     ("thanks",         "Thanks!"),
     ("sorry",          "Sorry, didn't realise!"),
+    ("tune_back",      "Tuning back — I was listening to that"),
   ]
   private static let map: [String: String] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0.text) })
   /// nil when this build cannot draw the id — the caller DROPS it rather than showing it raw.

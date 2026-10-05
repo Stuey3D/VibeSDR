@@ -8955,6 +8955,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "all_yours",       // Done — all yours
             "thanks",          // Thanks!
             "sorry",           // Sorry, didn't realise!
+            // ★ The other side of "sorry" (Stuart, 2026-10-05): somebody moved the dial off what you were hearing.
+            "tune_back",       // Tuning back — I was listening to that
             /* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced
              *  RDS". A shared receiver is a room of people finding things, and until now they could agree who
              *  tunes but never say WHAT they found — the one thing worth saying on a radio.

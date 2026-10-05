@@ -43,6 +43,8 @@ export const DIAL_PHRASES: Phrase[] = [
   { id: 'all_yours',      text: 'Done — all yours' },
   { id: 'thanks',         text: 'Thanks!' },
   { id: 'sorry',          text: "Sorry, didn't realise!" },
+  // ★ The other side of "sorry" (Stuart, 2026-10-05): somebody moved the shared dial off what you were hearing.
+  { id: 'tune_back',      text: 'Tuning back — I was listening to that' },
 ];
 
 const TEXT: Record<string, string> = Object.fromEntries(DIAL_PHRASES.map(p => [p.id, p.text]));

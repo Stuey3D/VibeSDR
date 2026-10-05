@@ -46,6 +46,7 @@ export const PHRASES: Array<{ id: string; text: string }> = [
   { id: 'all_yours',      text: 'Done — all yours' },
   { id: 'thanks',         text: 'Thanks!' },
   { id: 'sorry',          text: "Sorry, didn't realise!" },
+  { id: 'tune_back',      text: 'Tuning back — I was listening to that' },
 ];
 
 const TEXT: Record<string, string> = Object.fromEntries(PHRASES.map(p => [p.id, p.text]));
