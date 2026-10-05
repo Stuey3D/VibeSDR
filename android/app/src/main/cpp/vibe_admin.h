@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <arpa/inet.h>   // inet_pton — cloudflareWorkerAddr
 #include <netinet/in.h>
+#include "vibe_hwinfo.h"   // ★ presentCpus — the hardware core count
 // ★ sysconf(_SC_CLK_TCK) and clock_gettime for the per-process CPU fallback — named rather than
 //   relied on transitively, the same lesson <cmath> taught in vibe_bands.h this afternoon.
 #include <unistd.h>
@@ -1656,7 +1657,13 @@ inline SysStats readSys() {
 #endif
     s.cpuPct = cpuUsagePct();
     s.cpuIsProcess = cpuPctIsProcess();
-    s.cores = (int)std::max(1u, std::thread::hardware_concurrency());
+    /* ★★ EVERY CORE THE CHIP HAS, NOT JUST THE ONES AWAKE (Kiko, 2026-10-05: the TV box's admin page "only shows 2
+     *  or 3 CPU cores"). hardware_concurrency() is the ONLINE count on Android/bionic, and a TV box or phone switches
+     *  idle cores off — so "load 1.2 of 2 cores" bounced between 2 and 3 on a quad-core box. presentCpus() reads
+     *  /sys/devices/system/cpu/present (the hardware), the same fix the directory's hardware card got 2026-09-27;
+     *  it falls back to the online count where /sys is absent (macOS). Load thresholds follow it: the kernel wakes
+     *  offline cores under load, so the hardware is the right yardstick. */
+    s.cores = (int)std::max(1L, vibe::presentCpus());
     return s;
 }
 
