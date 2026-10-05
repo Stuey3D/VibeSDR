@@ -843,6 +843,209 @@ int main() {
            "★★★ RWM: the Morse callsign is decoded off the envelope");
     }
 
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    // ★★★ THE ROBUSTNESS PASS (2026-10-05) — damage a good minute survives now, and noise that
+    //     still must never become a time. The 20-seed bench behind these lives in the commit
+    //     messages; these are the regression pins, one deterministic case each.
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    using St = TimeDecoder::Station;
+    auto wrongOf = [](const std::vector<Heard>& h, Hhmm f0, double preS, int offsetMin) {
+        int wrong = 0;
+        for (const auto& x : h) {
+            const int k = (int)std::floor((x.atS - preS) / 60.0);
+            if (!same(x.t, plus(f0, k + offsetMin))) {
+                wrong++;
+                std::printf("    WRONG at %.1f s: %04d-%02d-%02d %02d:%02d\n", x.atS, x.t.year, x.t.month,
+                            x.t.day, x.t.hour, x.t.minute);
+            }
+        }
+        return wrong;
+    };
+    // ── LIGHTNING: a 5 ms full-scale crash every ~1.3 s, on top of a good DCF77 ──
+    // ★★★ The old peak tracker took ~20 s to forget each crash, so a storm was a dead receiver.
+    {
+        const Hhmm f0 {2026, 8, 11, 14, 10};
+        std::vector<int16_t> a;
+        emit(a, 3000.0, 1.0);
+        for (int k = 0; k < 5; k++) dcfMinuteDamaged(a, plus(f0, k), -1, -1);
+        unsigned s = 777;
+        for (size_t at = SR / 3; at + SR / 200 < a.size(); at += (size_t)(SR * 1.3)) {
+            for (int i = 0; i < SR / 200; i++) {
+                s = s * 1103515245u + 12345u;
+                a[at + i] = (int16_t)((s >> 16) & 1 ? 32767 : -32767);
+            }
+        }
+        TimeDecoder d(SR, St::DCF77);
+        const auto h = runTimed(d, a);
+        std::printf("    DCF77 through lightning: %zu announced\n", h.size());
+        ok(h.size() >= 3 && wrongOf(h, f0, 3.0, 0) == 0, "★★★ DCF77 in a lightning storm: still read, nothing wrong");
+    }
+    // ── VOTING: every minute has ONE second faded — a different one each time ──
+    // ★★★ No single minute is clean, so the single-minute decoder can never announce; the vote
+    //     reads each faded bit from the minutes either side.
+    {
+        const Hhmm f0 {2026, 8, 11, 7, 10};
+        const int dropAt[6] = { 25, 40, 19, 47, 33, 22 };   // year, hour, year, minute, day, month
+        std::vector<int16_t> a;
+        emit(a, 3000.0, 1.0);
+        for (int k = 0; k < 6; k++) msfMinuteDamaged(a, plus(f0, k), dropAt[k], -1);
+        emit(a, 1500.0, 1.0);
+        TimeDecoder d(SR, St::MSF);
+        const auto h = runTimed(d, a);
+        std::printf("    MSF, a second faded in every minute: %zu announced (%lu by vote)\n", h.size(), d.minutesVoted());
+        ok(!h.empty() && d.minutesVoted() >= 1, "★★★ MSF: no clean minute at all, and the vote still locks");
+        ok(wrongOf(h, f0, 3.0, 0) == 0, "★★★ ... and every voted minute is the right one");
+    }
+    {
+        // ★★ The same on WWVB (no parity, no weekday — the vote leans on the host's year only).
+        const Hhmm f0 {2026, 8, 11, 14, 10};
+        const int dropAt[6] = { 6, 13, 26, 51, 2, 31 };
+        std::vector<int16_t> a;
+        emit(a, 3000.0, 1.0);
+        for (int k = 0; k < 6; k++) wwvbMinuteDamaged(a, plus(f0, k), dropAt[k], -1);
+        TimeDecoder d(SR, St::WWVB);
+        const auto h = runTimed(d, a);
+        std::printf("    WWVB, a second faded in every minute: %zu announced (%lu by vote)\n", h.size(), d.minutesVoted());
+        ok(!h.empty() && wrongOf(h, f0, 3.0, 1) == 0, "★★ WWVB: no clean minute, locked by the vote, nothing wrong");
+    }
+    // ── LEAP SECONDS ──
+    // ★★ MSF: the 61-second minute's fields from 17A/52B count from the END (an extra 0 after 16).
+    {
+        // the minute 23:59 UTC 31 Dec: its frame carries 00:00 1 Jan and runs 61 s
+        const Hhmm f0 {2026, 12, 31, 23, 56};
+        std::vector<int16_t> a;
+        emit(a, 3000.0, 1.0);
+        std::vector<double> starts;
+        for (int k = 0; k < 6; k++) {
+            starts.push_back((double)a.size() / SR);
+            const bool leap = plus(f0, k).h == 23 && plus(f0, k).mi == 59;
+            std::vector<int16_t> m;
+            msfMinuteDamaged(m, plus(f0, k + 1), -1, -1);
+            if (leap) {   // insert one 100 ms-dip second after second 16
+                const size_t at = (size_t)17 * SR;
+                std::vector<int16_t> extra;
+                emit(extra, 100.0, 0.0); emit(extra, 900.0, 1.0);
+                m.insert(m.begin() + (long)at, extra.begin(), extra.end());
+            }
+            a.insert(a.end(), m.begin(), m.end());
+        }
+        starts.push_back((double)a.size() / SR);      // the end: the last minute's successor
+        TimeDecoder d(SR, St::MSF);
+        const auto h = runTimed(d, a);
+        int wrong = 0; bool after = false;
+        for (const auto& x : h) {
+            int k = 0; while (k + 1 < (int)starts.size() && starts[k + 1] <= x.atS + 1.5) k++;
+            if (!same(x.t, plus(f0, k))) { wrong++; std::printf("    WRONG at %.1f s: %02d:%02d\n", x.atS, x.t.hour, x.t.minute); }
+            if (same(x.t, Hhmm{2027, 1, 1, 0, 0})) after = true;
+        }
+        std::printf("    MSF across a leap second: %zu announced, %d wrong\n", h.size(), wrong);
+        ok(wrong == 0 && after && h.size() == 5, "★★ MSF: the 61-second minute is read (00:00 announced), none lost or wrong");
+    }
+    {
+        // ★★ DCF77: bit 19 set for the hour; the leap minute has a 0 at second 59, no dip at 60.
+        const Hhmm f0 {2027, 1, 1, 0, 56};                   // CET = UTC+1: the leap is 00:59:60 local
+        std::vector<int16_t> a;
+        emit(a, 3000.0, 1.0);
+        std::vector<double> starts;
+        gTamper = [](int* b) { b[19] = 1; };
+        for (int k = 0; k < 6; k++) {
+            starts.push_back((double)a.size() / SR);
+            const Hhmm lab = plus(f0, k);
+            int b[59]; dcfBitsFor(plus(lab, 1), b);
+            for (int s = 0; s < 59; s++) { emit(a, b[s] ? 200.0 : 100.0, 0.15); emit(a, b[s] ? 800.0 : 900.0, 1.0); }
+            if (lab.h == 0 && lab.mi == 59) { emit(a, 100.0, 0.15); emit(a, 900.0, 1.0); }
+            emit(a, 1000.0, 1.0);
+        }
+        gTamper = nullptr;
+        starts.push_back((double)a.size() / SR);      // the end: the last minute's successor
+        TimeDecoder d(SR, St::DCF77);
+        const auto h = runTimed(d, a);
+        int wrong = 0; bool after = false;
+        for (const auto& x : h) {
+            int k = 0; while (k + 1 < (int)starts.size() && starts[k + 1] <= x.atS + 3.0) k++;
+            if (!same(x.t, plus(f0, k))) { wrong++; std::printf("    WRONG at %.1f s: %02d:%02d\n", x.atS, x.t.hour, x.t.minute); }
+            if (same(x.t, Hhmm{2027, 1, 1, 1, 0})) after = true;
+        }
+        std::printf("    DCF77 across a leap second: %zu announced, %d wrong\n", h.size(), wrong);
+        ok(wrong == 0 && after && h.size() >= 4, "★★ DCF77: a dip at second 59 with bit 19 set is the leap second, not a lost anchor");
+    }
+    {
+        // ★★ WWVB: three markers in a row (59, 60, 0).
+        const Hhmm f0 {2026, 12, 31, 23, 56};
+        std::vector<int16_t> a;
+        emit(a, 3000.0, 1.0);
+        std::vector<double> starts;
+        for (int k = 0; k < 6; k++) {
+            starts.push_back((double)a.size() / SR);
+            const Hhmm lab = plus(f0, k);
+            wwvbMinuteDamaged(a, lab, -1, -1);
+            if (lab.h == 23 && lab.mi == 59) { emit(a, 800.0, 0.15); emit(a, 200.0, 1.0); }
+        }
+        starts.push_back((double)a.size() / SR);      // the end: the last minute's successor
+        TimeDecoder d(SR, St::WWVB);
+        const auto h = runTimed(d, a);
+        int wrong = 0; bool after = false;
+        for (const auto& x : h) {
+            int k = 0; while (k + 1 < (int)starts.size() && starts[k + 1] <= x.atS + 2.0) k++;
+            if (!same(x.t, plus(f0, k))) { wrong++; std::printf("    WRONG at %.1f s: %02d:%02d\n", x.atS, x.t.hour, x.t.minute); }
+            if (same(x.t, Hhmm{2027, 1, 1, 0, 1})) after = true;
+        }
+        std::printf("    WWVB across a leap second: %zu announced, %d wrong\n", h.size(), wrong);
+        ok(wrong == 0 && after, "★★ WWVB: a third marker re-anchors the minute — the next one is read on time");
+    }
+    // ── WWV or WWVH: the seconds tick ──
+    {
+        const time_t nowT = time(nullptr);
+        const struct tm* utcNow = gmtime(&nowT);
+        const int hostYear = utcNow ? utcNow->tm_year + 1900 : 2026;
+        auto tagFor = [&](double tickHz) {
+            std::vector<int16_t> w;
+            toneHz = 100.0;
+            emit(w, 2000.0, 0.0);
+            const Hhmm t0 { hostYear, 8, 10, 12, 10 };
+            for (int k = 0; k < 3; k++) wwvMinuteSpec(w, plus(t0, k), hostYear % 100, false, false);
+            toneHz = 800.0;
+            {
+                for (size_t s0 = (size_t)(2 * SR); s0 + SR / 200 < w.size(); s0 += SR) {
+                    const int sec = (int)(((s0 / SR) - 2) % 60);
+                    if (sec == 29 || sec == 59) continue;
+                    for (int i = 0; i < SR / 200; i++) {
+                        const double v = w[s0 + i] + (tickHz > 0 ? 12000.0 * std::sin(2 * M_PI * tickHz * i / SR) : 9000.0 * (std::sin(2 * M_PI * 1000.0 * i / SR) + std::sin(2 * M_PI * 1200.0 * i / SR)));
+                        w[s0 + i] = (int16_t)std::max(-32767.0, std::min(32767.0, v));
+                    }
+                }
+            }
+            TimeDecoder d(SR, St::WWV);
+            d.process(w.data(), (int)w.size());
+            return std::string(d.stationTag());
+        };
+        const std::string v = tagFor(1000.0), hh = tagFor(1200.0), both = tagFor(0.0);
+        std::printf("    tags: 1000 Hz tick -> %s, 1200 Hz -> %s, both at once -> %s\n", v.c_str(), hh.c_str(), both.c_str());
+        ok(v == "WWV",  "★★ WWV: a 1000 Hz seconds tick is Fort Collins");
+        ok(hh == "WWVH", "★★ WWVH: a 1200 Hz seconds tick is Kauai");
+        ok(both == "WWV/WWVH", "★ both ticks heard alike: \"WWV/WWVH\", not a guess");
+    }
+    // ── NOISE, LONGER, ON EVERY STATION: still nothing ──
+    // ★★★ The vote pools eight minutes; this is where a decoder that "finds" a time in noise
+    //     would show it. Five minutes of band-limited noise per station, and not one time.
+    for (St st : { St::MSF, St::DCF77, St::WWVB, St::WWV }) {
+        std::vector<int16_t> junk;
+        double y1 = 0, y2 = 0;
+        for (int i = 0; i < SR * 300; i++) {
+            const double x = noise() * 6000.0;
+            const double y = 0.06 * x + 1.85 * y1 - 0.9 * y2;     // a crude ~800 Hz resonator
+            y2 = y1; y1 = y;
+            junk.push_back((int16_t)std::lround(std::max(-32767.0, std::min(32767.0, y))));
+        }
+        TimeDecoder d(SR, st);
+        bool any = false;
+        d.onTime = [&](const TimeDecoder::TimeStamp&) { any = true; };
+        d.process(junk.data(), (int)junk.size());
+        char msg[120];
+        std::snprintf(msg, sizeof msg, "★★★ %s: 5 min of noise yields NO timestamp (voted %lu)", d.stationTag(), d.minutesVoted());
+        ok(!any, msg);
+    }
+
     // ── Pure noise must produce NOTHING ─────────────────────────────────────
     {
         std::vector<int16_t> junk;

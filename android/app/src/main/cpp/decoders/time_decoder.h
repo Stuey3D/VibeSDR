@@ -208,7 +208,12 @@ private:
     // ── Multi-minute voting — see tryVote() ──
     struct VoteFrame { long long idx0 = 0; float sA[60] = {0}, sB[60] = {0}; };
     std::vector<VoteFrame> votes_;           ///< newest last, at most kVoteWindow
-    void  pushVoteFrame(long long idx0);
+    void  pushVoteFrame(long long idx0, int len);
+    void  leapFrameMsf(long long idx0, int len);
+    long long lastMarkIdx_ = -1;     ///< MSF: the last 500 ms marker actually seen
+    long long failedAfter_ = 0;      ///< the corroborated stamp a failed minute broke the chain after
+    bool  dcfLeap_ = false;          ///< DCF77: this minute is 61 s (a dip at 59, bit 19 set)
+    bool  lastStampSolid_ = false;   ///< WWV: lastStamp_ came from a minute with every field read
     void  noteAnchor(long long idx);
     void  tryVote();
     /** Expected bits of a frame carrying `f` (-1 = not fixed by the time): A and B arrays. */

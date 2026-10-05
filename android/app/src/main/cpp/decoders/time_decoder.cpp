@@ -659,7 +659,19 @@ void TimeDecoder::onSecond(const SecRec& r) {
     switch (station_) {
     case Station::MSF: {
         if (strongKind(r, kMark)) {
-            if (anchorIdx_ >= 0 && !frameClosed_) closeFrame();
+            // ★★ A LEAP SECOND: the marker arrives 61 s after the last one (59 s for a negative
+            //    leap), and the minute it closes was 61 s long. NPL inserts the second so that
+            //    the fields from 17A (and 52B) on are counted back from the END of the minute;
+            //    read that way, the minute decodes. Without this the minute failed and the lock
+            //    broke for two minutes. (Mapping as madpsy/ubersdr-ntp, GPL-3.0-or-later,
+            //    MsfDecoder.cpp bitAt().)
+            const long long n = lastMarkIdx_ >= 0 ? r.idx - lastMarkIdx_ : -1;
+            if ((n == 61 || n == 59) && anchorIdx_ >= 0) {
+                frameClosed_ = true;                     // the "virtual" minute after second 59
+                if (n == 61 && unconfirmed_ == 1) unconfirmed_ = 0;
+                leapFrameMsf(lastMarkIdx_, (int)n);
+            } else if (anchorIdx_ >= 0 && !frameClosed_) closeFrame();
+            lastMarkIdx_ = r.idx;
             noteAnchor(r.idx);
             startFrame(r.idx);
             unconfirmed_ = 0;
@@ -698,16 +710,28 @@ void TimeDecoder::onSecond(const SecRec& r) {
         if (p == 59) {
             // ★ A DIP at second 59 is something DCF77 never sends, so the anchor was a missed dip,
             //   not the minute — drop it and hunt again.
-            if (r.contrast && clsKind_[r.cls] == kData && r.conf >= kSyncConf) { loseFrame(); return; }
+            // ★★ EXCEPT IN A LEAP MINUTE (2026-10-05): then second 59 is a 0 and the missing dip
+            //    moves to second 60. PTB announces it in bit 19 for the hour before, so a dip at
+            //    59 in a minute whose bit 19 was read as 1 extends the minute instead — this used
+            //    to drop the lock at every leap second.
+            if (r.contrast && clsKind_[r.cls] == kData && r.conf >= kSyncConf) {
+                if (slot_[19] == 1 && bitsA_[19] == 1) { dcfLeap_ = true; second_ = 59; return; }
+                loseFrame(); return;
+            }
             if (strongKind(r, kNone)) unconfirmed_ = 0;
             second_ = 59;
+            return;
+        }
+        if (p == 60 && dcfLeap_) {
+            if (strongKind(r, kNone)) unconfirmed_ = 0;
             return;
         }
         if (p >= 60) {
             if (!frameClosed_) closeFrame();
             if (++unconfirmed_ >= 3) { loseFrame(); return; }
-            startFrame(anchorIdx_ + 60);
-            p -= 60;
+            const int len = dcfLeap_ ? 61 : 60;
+            startFrame(anchorIdx_ + len);
+            p -= len;
         }
         placeRec((int)p, r);
         if (p == 58) closeFrame();
@@ -732,6 +756,16 @@ void TimeDecoder::onSecond(const SecRec& r) {
             else if (++unconfirmed_ >= 3) { loseFrame(); return; }
             startFrame(anchorIdx_ + 60);
             p -= 60;
+        }
+        // ★★ A LEAP SECOND IS A THIRD MARKER: 59, 60, then 0 (NIST SP 250-67). The second we
+        //    took for 0 was 23:59:60; this one is the real 0 — re-anchor here rather than read the
+        //    next minute one second late and lose it to the framing check. (madpsy/ubersdr-ntp,
+        //    GPL-3.0-or-later, WwvbDecoder.cpp updateSync().)
+        if (p == 1 && strongKind(r, kMark) && strongKind(p1, kMark) && strongKind(rec(r.idx - 2), kMark)) {
+            noteAnchor(r.idx);
+            startFrame(r.idx);
+            placeRec(0, r);
+            return;
         }
         placeRec((int)p, r);
         if (p == 59) closeFrame();
@@ -858,11 +892,37 @@ const char* TimeDecoder::stationTag() const {
     }
 }
 
+/** ★★ MSF's 61-second (or 59-second) minute, read with its fields counted from the end. It was
+ *  already tried — and failed — as a 60-second minute at its second 59; this is the second try,
+ *  and it is held to the minute before that failure for corroboration. */
+void TimeDecoder::leapFrameMsf(long long idx0, int len) {
+    for (int i = 0; i < 60; i++) { bitsA_[i] = bitsB_[i] = 0; slot_[i] = 0; }
+    for (int p = 1; p < 60; p++) {
+        const SecRec& ra = rec(idx0 + p + (p >= 17 ? len - 60 : 0));
+        const SecRec& rb = rec(idx0 + p + (p >= 52 ? len - 60 : 0));
+        bool okA, okB;
+        const int sa = symbolOf(ra, okA), sb = symbolOf(rb, okB);
+        if (!okA || !okB || sa == 2 || sb == 2) { slot_[p] = 2; continue; }
+        slot_[p] = 1;
+        bitsA_[p] = clsA_[ra.dcls];
+        bitsB_[p] = clsB_[rb.dcls];
+    }
+    TimeStamp ts;
+    const bool ok = slotsComplete(1, 59) && decodeMsf(ts);
+    pushVoteFrame(idx0, len);
+    if (!ok) { tryVote(); return; }
+    if (bad_ > 0) bad_--;                         // its 60-second reading was not a real failure
+    const long long stamp = minuteIndex(ts.year, ts.month, ts.day, ts.hour, ts.minute);
+    if (failedAfter_ && stamp == failedAfter_ + 1) announce(ts);
+    else { lastStamp_ = stamp; tryVote(); }
+}
+
 // ── Framing ──────────────────────────────────────────────────────────────────────────────────
 static inline bool inMinute(int s) { return s >= 0 && s < 60; }
 
 void TimeDecoder::startFrame(long long idx) {
     anchorIdx_ = idx;
+    dcfLeap_ = false;
     for (int i = 0; i < 60; i++) { bitsA_[i] = bitsB_[i] = 0; slot_[i] = 0; sym_[i] = 0; }
     frameClosed_ = false;
     second_ = 0;
@@ -902,7 +962,30 @@ void TimeDecoder::closeFrame() {
     switch (station_) {
         case Station::MSF:   ok = slotsComplete(1, 59) && decodeMsf(ts);   break;
         case Station::DCF77: ok = slotsComplete(0, 58) && decodeDcf77(ts); break;
-        case Station::WWV:   ok = decodeWwv(ts); break;
+        case Station::WWV: {
+            // ★★★ AN UNREADABLE PULSE IS NO LONGER READ AS 0 IN THE TIME FIELDS (2026-10-05).
+            //     WWV decodes on over a dropped pulse, recording it as 0, because an all-or-nothing
+            //     rule never decoded a live HF minute. But WWV has no parity, and the SAME faded
+            //     day bit in two minutes in a row corroborated a WRONG date — measured on the
+            //     bench: 6 wrong locks in 80 noisy runs ("08-09" for 08-11), and main made them
+            //     too. So a minute read over a dropped minute/hour/day pulse is now announced
+            //     only when it follows a minute whose fields were ALL read — that one cannot
+            //     share its misread — and it is never itself the minute the next one leans on.
+            //     Anything else waits for the multi-minute vote, which reads the lost bit from
+            //     the minutes either side. (The year still falls back to the host.)
+            bool fields = true;
+            for (const BcdField* f : { &kWwvMinute, &kWwvHour, &kWwvDoy })
+                for (int i = 0; i < f->n; i++) if (slot_[f->sec[i]] != 1) fields = false;
+            ok = decodeWwv(ts);
+            if (ok && !fields && !(lastStampSolid_ && lastStamp_ != 0
+                    && minuteIndex(ts.year, ts.month, ts.day, ts.hour, ts.minute) == lastStamp_ + 1))
+                ok = false;
+            pushVoteFrame(anchorIdx_, 60);
+            const bool said = finishMinute(ok, ts);
+            lastStampSolid_ = ok && fields;
+            if (!said) tryVote();
+            return;
+        }
         case Station::WWVB: {
             // ★ The free framing check: markers at 0, 9, 19 … 59 and nowhere else (SP 432
             //   Table 2.3). A complete minute with them elsewhere was read out of phase.
@@ -916,7 +999,7 @@ void TimeDecoder::closeFrame() {
         }
         default: break;
     }
-    pushVoteFrame(anchorIdx_);
+    pushVoteFrame(anchorIdx_, 60);
     if (!finishMinute(ok, ts)) tryVote();
 }
 
@@ -1020,14 +1103,16 @@ void TimeDecoder::encodeFrame(const TimeStamp& f, signed char* A, signed char* B
 }
 
 /** The minute just closed, as soft bits, into the voting window. */
-void TimeDecoder::pushVoteFrame(long long idx0) {
+void TimeDecoder::pushVoteFrame(long long idx0, int len) {
     if (station_ == Station::RWM || idx0 < 0) return;
     VoteFrame f;
     f.idx0 = idx0;
     for (int p = 0; p < 60; p++) {
-        const SecRec& r = rec(idx0 + p);
-        if (r.idx < 0) continue;
-        f.sA[p] = r.softA; f.sB[p] = r.softB;
+        // ★ In a leap minute (len 61/59) MSF's fields from 17A and 52B are counted from the end.
+        const SecRec& ra = rec(idx0 + p + (p >= 17 ? len - 60 : 0));
+        const SecRec& rb = rec(idx0 + p + (p >= 52 ? len - 60 : 0));
+        if (ra.idx >= 0) f.sA[p] = ra.softA;
+        if (rb.idx >= 0) f.sB[p] = rb.softB;
     }
     // ★ Older than the window (a gap in the minutes): no longer the same stretch of signal.
     while (!votes_.empty() && idx0 - votes_.front().idx0 > (long long)(kVoteWindow + 2) * 60)
@@ -1167,6 +1252,7 @@ void TimeDecoder::tryVote() {
 
 bool TimeDecoder::finishMinute(bool decoded, const TimeStamp& ts) {
     if (!decoded) {
+        if (lastStamp_) failedAfter_ = lastStamp_;   // for an MSF leap minute — see leapFrameMsf
         lastStamp_ = 0;         // ★ a bad minute breaks the chain; corroboration restarts
         // ★ A failed parity is DISCARDED, not shown with a warning. See the header: a clock
         //   that is confidently wrong is worse than one that says it is still waiting.
@@ -1195,6 +1281,7 @@ bool TimeDecoder::finishMinute(bool decoded, const TimeStamp& ts) {
 /** A corroborated minute (two in a row, or a vote across several): say it. */
 void TimeDecoder::announce(const TimeStamp& ts) {
     lastStamp_ = minuteIndex(ts.year, ts.month, ts.day, ts.hour, ts.minute);
+    lastStampSolid_ = true;
     // ★★ WHAT THE NEXT FRAME MUST SAY — for the progress line, which shows fields before their
     //    parity arrives (see emitPartial). Each station's convention, as its decode reports it:
     //    MSF and DCF77 frames describe the minute BEGINNING at their end, so `ts` is this frame's
