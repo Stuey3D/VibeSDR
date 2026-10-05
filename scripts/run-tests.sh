@@ -332,6 +332,14 @@ printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
 node scripts/test-server-decoders.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★★ A POCKETED APP KEEPS ITS CHANNEL (Stuart, 2026-10-05: "why did the full socket drop when minimised
+#     though, especially as I had audio and a decoder running"): on a per-VFO radio, closing ONLY the
+#     spectrum socket keeps audio and the decoder running; the returning socket adopts the same channel
+#     (its first config is its own VFO); closing everything leaves the memo. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── per-VFO channel survives the background (end to end) ──\033[0m\n'
+node scripts/test-server-vfo-background.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ A RADIO SET TO START IN DAB STARTS IN DAB (Stuart, 2026-10-05: "No server seems to honour the start
 #     in DAB mode"): the owner's admin arrival first on a shared dial, a client's restored tune refused, a
 #     stranger joining, the exemption standing after the start, and a no-landing negative. Same VIBESERVER_BIN rule.
