@@ -62,3 +62,31 @@ export function crispLine(row: (j: number) => ArrayLike<number> | undefined, y: 
     out[x] = t <= 0 ? 0 : t >= 1 ? 255 : Math.round(t * 255);
   }
 }
+
+/* ★★ LOST LINES (2026-10-05). A line the client never got (a gap in the line numbers — dropped on the way, or
+ *  skipped by the decoder) was left BLANK: a black stripe across the chart. A WEFAX chart changes little from one
+ *  line to the next (120 lpm, ~0.2 mm a line), so the line above is the best guess there is — the way a fax
+ *  machine smears its last line over a dropout. Only the DRAWN rows are filled: the received rows (`raw`) stay as
+ *  they came, so a filled row never counts as content to findChartAlign or to the paper/ink histogram.
+ *  ★ A run longer than WEFAX_FILL_MAX is an outage, not a lost line — smearing one line down 2 cm of chart would
+ *    draw weather that was never sent, so a long gap stays blank (honest). */
+export const WEFAX_FILL_MAX = 8;
+
+/**
+ * Fill every lost row in y0..y1 from the row above. `received(j)` — line j arrived; `copyAbove(y)` — make drawn row y
+ * a copy of drawn row y-1 (the caller's storage). Rows are walked top-down, so a run of lost lines all repeat the last
+ * received one. A run starting at the top of the chart (nothing above) or longer than `maxRun` is left alone.
+ */
+export function fillLostLines(received: (j: number) => boolean, copyAbove: (y: number) => void,
+                              y0: number, y1: number, maxRun = WEFAX_FILL_MAX): void {
+  for (let y = Math.max(1, y0); y <= y1; y++) {
+    if (received(y)) continue;
+    let k = y - 1;
+    while (k >= 0 && !received(k)) k--;
+    if (k < 0) continue;                                   // nothing received above it yet
+    let e = y + 1;                                         // the run's end: first received row below (or y1+1)
+    while (e <= y1 && !received(e)) e++;
+    if (e - k - 1 > maxRun) { y = e - 1; continue; }       // an outage, not a lost line — leave it blank
+    copyAbove(y);
+  }
+}

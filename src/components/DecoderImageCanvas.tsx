@@ -25,7 +25,7 @@ import { ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-
 // ★★ A REAL FILE, NOT A data: URL — see save() below for why.
 import { File, Paths } from 'expo-file-system';
 import { WEFAX_ALIGN_ZERO, chartAlignStep, wefaxOffset, type ChartAlignState, type WefaxAlign } from '../utils/wefaxAlign';
-import { addToHist, crispLevels, crispLine, newHist } from '../utils/wefaxCrisp';
+import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../utils/wefaxCrisp';
 import {
   Canvas, Image as SkiaImage, Skia,
   AlphaType, ColorType, ImageFormat, type SkData, type SkImage,
@@ -61,6 +61,9 @@ interface PixBuf {
   al?: Uint8Array;
   /** ★ WEFAX: histogram of every raw pixel received — the chart's own paper and ink levels. */
   hist?: Uint32Array;
+  /** ★ WEFAX: 1 per line that ARRIVED — a lost line is drawn as the one above (wefaxCrisp fillLostLines), never
+   *  counted as received (2026-10-05). */
+  got?: Uint8Array;
 }
 
 // Persistent per-decoder image store. The live/prev buffers live OUTSIDE the
@@ -115,6 +118,14 @@ function alignRow(buf: PixBuf, y: number, a: WefaxAlign) {
   for (let x = 0; x < w; x++) buf.al[base + x] = buf.raw[base + ((x + off) % w)];
 }
 
+/** ★ Draw the lost lines in y0..y1 as the line above (utils/wefaxCrisp fillLostLines) — `al` only, never `raw`. */
+function fillLost(buf: PixBuf, y0: number, y1: number) {
+  const got = buf.got, al = buf.al;
+  if (!got || !al) return;
+  const w = buf.w;
+  fillLostLines((j) => got[j] === 1, (y) => al.copyWithin(y * w, (y - 1) * w, y * w), y0, Math.min(y1, buf.h - 1));
+}
+
 /** Paint rows y0..y1 of a WEFAX buffer from `al`, crisp (utils/wefaxCrisp) once the chart's levels are known; rows
  *  past maxLine have not arrived and count as missing to the smoothing. */
 const crispTmp = { out: new Uint8Array(0) };
@@ -140,6 +151,7 @@ function paintRows(buf: PixBuf, y0: number, y1: number) {
 function redrawAll(buf: PixBuf, a: WefaxAlign) {
   if (!buf.raw) return;
   for (let y = 0; y <= buf.maxLine && y < buf.h; y++) alignRow(buf, y, a);
+  fillLost(buf, 0, buf.maxLine);
   paintRows(buf, 0, buf.maxLine);
 }
 
@@ -281,6 +293,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       next.data.set(buf.data);
       if (buf.raw) { next.raw = new Uint8Array(buf.w * newH); next.raw.set(buf.raw); }
       if (buf.al) { next.al = new Uint8Array(buf.w * newH); next.al.set(buf.al); }
+      if (buf.got) { next.got = new Uint8Array(newH); next.got.set(buf.got); }
       next.hist = buf.hist;
       next.auto = buf.auto;
       next.maxLine = buf.maxLine;
@@ -336,6 +349,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         // ★ Keep the line as received, then draw it moved by this frequency's SHIFT / SLANT (utils/wefaxAlign).
         if (!buf.raw) buf.raw = new Uint8Array(buf.w * buf.h);
         buf.raw.set(px.subarray(0, n), ln * buf.w);
+        (buf.got ??= new Uint8Array(buf.h))[ln] = 1;
+        const prevMax = buf.maxLine;
         addToHist(buf.hist ??= newHist(), px.subarray(0, n));
         // ★ Once the chart is long enough, find its margin / border and redraw the whole chart around it — and once
         //   more later if a longer look disagrees (chartAlignStep).
@@ -352,10 +367,14 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         if (st.al !== before && st.al !== undefined) onAutoAlign?.(st.al);
         alignRow(buf, ln, effAlign(buf));
         if (ln > buf.maxLine) buf.maxLine = ln;
+        // ★ Lost lines (2026-10-05): a jump in the line number leaves rows that never came — draw them as the line
+        //   above. A late line (≤ 2 back) re-seeds the lost rows under it. After a re-align, all of them.
+        const g0 = moved ? 0 : Math.min(prevMax + 1, ln + 1);
+        if (moved || ln !== prevMax + 1) fillLost(buf, g0, buf.maxLine);
         // ★ The gold-standard rendering (utils/wefaxCrisp): this line and the two above it, which now have it below.
         // ★ Line 40: the paper/ink levels have settled — repaint the top, drawn while they were still being learned.
         if (moved || ln === 40) paintRows(buf, 0, ln);
-        else paintRows(buf, ln - 2, ln);
+        else paintRows(buf, Math.min(ln, g0) - 2, buf.maxLine);
         linesSince.current++;
         if (!viewingPrev) rebuild(buf);
       },
