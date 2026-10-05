@@ -92,7 +92,7 @@ private:
  *  synthetic bench (tools/rtty-bench/navtex_bench.sh) and Stuart's 518 kHz recording; the defaults are the shipped
  *  decoder. They exist so the bench can take one away and show what it was worth. */
 struct NavtexOptions {
-    bool rcDemod    = false;   // tones mixed to baseband + raised-cosine lowpass (else the Q≈3 biquad bandpasses)
+    bool rcDemod    = true;   // tones mixed to baseband + raised-cosine lowpass (else the Q≈3 biquad bandpasses)
     bool earlyLate  = true;   // early/prompt/late bit clock (else the zero-crossing histogram)
     bool logSoft    = true;   // bit values from log-compressed ATC levels (else ±1 per sample)
     bool atcHalf    = false;   // W7AY ATC: ½ and clipped to the noise floor (else ¼, clipped to the envelope only)
@@ -142,7 +142,7 @@ private:
     double audioAverage_ = 0.1, audioMinimum_ = 256.0, audioTC_ = 0;
 
     // ── front end ──
-    int decim_ = 1; double frontRate_ = 0, bitSamples_ = 0;
+    int decim_ = 1, rcStep_ = 1, rcCount_ = 0; double mixRate_ = 0, frontRate_ = 0, bitSamples_ = 0;
     std::vector<double> decH_, decBuf_; int decPos_ = 0, decCount_ = 0;      // decimating lowpass (rcDemod)
     std::vector<double> rcH_; std::vector<double> rcBuf_[4]; int rcPos_ = 0; // raised cosine, mark I/Q + space I/Q
     double mRe_ = 1, mIm_ = 0, sRe_ = 1, sIm_ = 0, mStepRe_ = 1, mStepIm_ = 0, sStepRe_ = 1, sStepIm_ = 0;

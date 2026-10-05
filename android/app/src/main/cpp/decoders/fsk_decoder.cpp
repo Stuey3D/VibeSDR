@@ -453,7 +453,11 @@ NavtexRx::NavtexRx(int sr, double cf, double sh, double baud, bool inv, const Na
          *  largest step that keeps the upper tone (+ the filter's 140 Hz) well inside the new Nyquist. */
         const double top = cf_ + shift_ / 2 + 150;
         for (int d : { 8, 6, 4, 3, 2, 1 }) if (d == 1 || fs_ / d / 2 >= top * 1.25) { decim_ = d; break; }
-        frontRate_ = fs_ / decim_;
+        mixRate_ = fs_ / decim_;
+        /* ★ ...and the raised cosine is only READ every rcStep_-th sample: at baseband the signal is ±140 Hz wide, so
+         *  ~20 samples a bit (2 kHz) carry it all. Measured: the same CER as reading every sample, a third of the cost. */
+        rcStep_ = std::max(1, (int)(mixRate_ / (20 * baud_)));
+        frontRate_ = mixRate_ / rcStep_;
         if (decim_ > 1) {
             // Blackman windowed sinc, cut at the new Nyquist; transition = the room between the upper tone and its alias
             const double tw = frontRate_ / 2 - top;
@@ -472,13 +476,13 @@ NavtexRx::NavtexRx(int sr, double cf, double sh, double baud, bool inv, const Na
          *  measured best for CER at -9 dB SNR — so 140 Hz at 100 baud, and the other tone (170 Hz away) is rejected.
          *  Built from its frequency response, ±2 bits long, Hann-tapered. */
         const double W = 1.4 * baud_;
-        const int half = (int)std::lround(2 * frontRate_ / baud_);
+        const int half = (int)std::lround(2 * mixRate_ / baud_);
         rcH_.resize(2 * half + 1); double sum = 0;
         for (int k = -half; k <= half; k++) {
             double h = 0; const int steps = 400;
             for (int i = 0; i <= steps; i++) {
                 const double F = W * i / steps, c = std::cos(M_PI * F / (2 * W));
-                h += (i == 0 || i == steps ? 0.5 : 1.0) * c * c * std::cos(2 * M_PI * F * k / frontRate_);
+                h += (i == 0 || i == steps ? 0.5 : 1.0) * c * c * std::cos(2 * M_PI * F * k / mixRate_);
             }
             h *= 0.5 + 0.5 * std::cos(M_PI * k / (half + 1));
             rcH_[k + half] = h; sum += h;
@@ -487,7 +491,7 @@ NavtexRx::NavtexRx(int sr, double cf, double sh, double baud, bool inv, const Na
         for (auto& b : rcBuf_) b.assign(2 * rcH_.size(), 0.0);
     } else {
         // the RTTY decoder's front end, as it was (Q ≈ 3 bandpasses with ka9q's qv offset, 140 Hz envelope lowpass)
-        frontRate_ = fs_;
+        frontRate_ = mixRate_ = fs_;
         const double q = 6.0 * cf_ / 1000.0, qv = cf_ + 4000.0 / cf_;
         bpMark_.configure(BiQuad::Bandpass, qv + shift_ / 2, fs_, q);
         bpSpace_.configure(BiQuad::Bandpass, qv - shift_ / 2, fs_, q);
@@ -503,8 +507,8 @@ NavtexRx::NavtexRx(int sr, double cf, double sh, double baud, bool inv, const Na
 }
 void NavtexRx::retune() {
     const double fm = cf_ + afcHz_ + shift_ / 2, fsp = cf_ + afcHz_ - shift_ / 2;
-    mStepRe_ = std::cos(2 * M_PI * fm / frontRate_);  mStepIm_ = -std::sin(2 * M_PI * fm / frontRate_);
-    sStepRe_ = std::cos(2 * M_PI * fsp / frontRate_); sStepIm_ = -std::sin(2 * M_PI * fsp / frontRate_);
+    mStepRe_ = std::cos(2 * M_PI * fm / mixRate_);  mStepIm_ = -std::sin(2 * M_PI * fm / mixRate_);
+    sStepRe_ = std::cos(2 * M_PI * fsp / mixRate_); sStepIm_ = -std::sin(2 * M_PI * fsp / mixRate_);
 }
 void NavtexRx::setState(State s) {
     if (s == state_) return;
@@ -538,11 +542,12 @@ void NavtexRx::process(const int16_t* samples, int count) {
         }
         const int N = (int)rcH_.size();
         rcPos_ = (rcPos_ + 1) % N;
+        for (int c = 0; c < 4; c++) rcBuf_[c][rcPos_] = rcBuf_[c][rcPos_ + N] = in[c];
+        if (++rcCount_ < rcStep_) continue;
+        rcCount_ = 0;
         double out[4];
         for (int c = 0; c < 4; c++) {
-            std::vector<double>& b = rcBuf_[c];
-            b[rcPos_] = b[rcPos_ + N] = in[c];
-            const double* p = &b[rcPos_ + 1]; double acc = 0;
+            const double* p = &rcBuf_[c][rcPos_ + 1]; double acc = 0;
             for (int k = 0; k < N; k++) acc += rcH_[k] * p[k];
             out[c] = acc;
         }
