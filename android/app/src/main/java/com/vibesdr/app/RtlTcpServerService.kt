@@ -279,6 +279,11 @@ class RtlTcpServerService : Service() {
         if (mode == "vibeserver") {
             return try {
                 val j = JSONObject(VibeLocalSDR.getVibeServerStatus())
+                // ★★ A RADIO THAT NEEDS A HAND ON THE CABLE SAYS SO HERE FIRST (2026-10-05). On a headless phone
+                //    or TV box the notification is the only surface there is, and "waiting for client" over a
+                //    wedged HF+ is the zombie this service exists to avoid. The engine's own sentence.
+                val problem = j.optString("radioProblem", "")
+                if (problem.isNotEmpty()) return problem
                 val client = j.optBoolean("client", false)
                 val addr = j.optString("clientAddr", "")
                 val spec = j.optLong("specBytesPerSec", 0)

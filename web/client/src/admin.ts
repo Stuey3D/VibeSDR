@@ -352,7 +352,10 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
         ? `${mhz(radio.centreHz)} · ${(radio.spanHz / 1e6).toFixed(1)} MHz span`
           + ` · ${(d.txKbps ?? 0).toFixed(0)} kbps`
           + (d.waiting ? ` · ${d.waiting} waiting` : '')
-        : 'the receiver was unplugged or has failed',
+        // ★★ The server's own advice when it has some (radio.problem, 2026-10-05) — "unplugged or has
+        //    failed" is no help to an owner whose radio is still plugged in and wedged.
+        : (typeof radio.problem === 'string' && radio.problem ? radio.problem
+                                                              : 'the receiver was unplugged or has failed'),
       radio.present ? 'ok' : 'critical'));
   }
 

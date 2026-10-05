@@ -1049,6 +1049,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             //   clientConnected in getVibeServerStatus() — the screen used to have its own idea.
             m.putInt("listeners", o.optInt("listeners", 0))
             m.putInt("maxUsers", o.optInt("maxUsers", 1))
+            // ★★ What the owner has to do about the radio — "needs unplugging and plugging back in" — or ""
+            //    (2026-10-05). Field by field, as the note above warns: left out here, the screen never sees it.
+            m.putString("radioProblem", o.optString("radioProblem", ""))
             // ★★★ THE DECORATIONS MUST NOT BE ABLE TO KILL THE READING. Everything above comes
             //     from the shim's own JSON and is the ANSWER; everything in this block is a nicety
             //     read from the phone — the local address, a CPU percentage out of /proc, the core

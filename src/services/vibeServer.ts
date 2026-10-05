@@ -238,6 +238,11 @@ export type VibeServerStatus = {
    *  server can no longer hold different opinions about whether anybody is on. */
   listeners: number;
   maxUsers: number;
+  /** ★★ What the owner has to do about the radio when only a hand on the cable will fix it ("The Airspy
+   *  HF+ has stopped answering and needs unplugging and plugging back in …"); absent/empty = nothing to
+   *  say. The engine's own sentence, the same one the admin page and every listener's banner show
+   *  (2026-10-05). Android only; older builds never send it. */
+  radioProblem?: string;
 };
 
 /**

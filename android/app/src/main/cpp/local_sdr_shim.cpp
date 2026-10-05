@@ -36,6 +36,7 @@
 #endif
 #include <unistd.h>
 #include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
+#include "vibe_usb_recovery.h"   // ★ park-not-release, fresh-fd back-off, the re-plug advice (2026-10-05)
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_hwinfo.h"
 #include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
@@ -3517,6 +3518,23 @@ static std::string radioDisplayName() {
     std::lock_guard<std::mutex> lk(g_radioBusyMtx);
     return g_radioDisplayName;
 }
+/** ★★★ A RADIO THAT NEEDS A HUMAN (2026-10-05) — "the Airspy HF+ has stopped answering and needs
+ *  unplugging and plugging back in". Set by the watchdog after usbrecovery::kReplugAfterFailures fresh
+ *  fds would not open, cleared the moment one does (or the server stops). Unlike radioBusy it does NOT
+ *  age out: nothing changes until somebody touches the cable, and a message that vanished after a
+ *  minute would leave the owner with a dead radio and no explanation.
+ *  ★ Read by the device message every listener's banner draws, the admin status, and the app's own
+ *    server screen — one sentence, every surface (see vibe_usb_recovery.h). */
+static std::mutex          g_radioProblemMtx;
+static std::string         g_radioProblem;
+static void setRadioProblem(const std::string& why) {
+    std::lock_guard<std::mutex> lk(g_radioProblemMtx);
+    g_radioProblem = why;
+}
+static std::string radioProblem() {
+    std::lock_guard<std::mutex> lk(g_radioProblemMtx);
+    return g_radioProblem;
+}
 static std::string radioBusyReason() {
     std::lock_guard<std::mutex> lk(g_radioBusyMtx);
     if (g_radioBusyWhy.empty()) return {};
@@ -5249,6 +5267,17 @@ struct LocalSdrShim::Impl {
      *    dup. The watchdog's reopen takes it from there, exactly as for an ordinary stall. */
     mutable std::atomic<bool> usbFdDead{false};
     std::atomic<int>          freshUsbFd{-1};
+    /* ★★★ AND A FRESH FD THAT WILL NOT OPEN IS NOT ASKED FOR AGAIN EVERY TWO SECONDS (2026-10-05).
+     *  A WEDGED-BUT-PRESENT HF+ — still plugged in, its abandoned handle's fd still claiming the
+     *  interface — fails every fresh fd, and usbNeedsFreshFd() went straight back to true, so Kotlin
+     *  opened the radio again on its next 2 s tick, for ever, and each "handed back" reset the five-
+     *  minute radio-gone clock, so the server never stopped either. Only a physical re-plug ended it.
+     *  ★ Now each failure pushes the next request out (usbrecovery::freshFdRetryDelaySecs: 2 s doubling
+     *    to 60 s), and after kReplugAfterFailures the owner is told plainly — needsReplug + radioProblem.
+     *    usbHandleDead() lets Kotlin tell "waiting out a back-off" from "the radio is back". */
+    std::atomic<int>          freshFdFails{0};
+    std::atomic<double>       freshFdRetryAt{0.0};
+    std::atomic<bool>         needsReplug{false};
     /** ★★ Has any listener arrived since THIS SERVER started? A member, not a static, so every start —
      *  a boot, an app restart, an update, a settings save — begins false. See the landing rule. */
     std::atomic<bool>         anySessionYet{false};
@@ -23362,6 +23391,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string j = std::string("{\"type\":\"device\",\"present\":") + (present ? "true" : "false");
         const std::string why = radioBusyReason();
         if (!present && !why.empty()) j += ",\"reason\":\"" + vibeadmin::esc(why) + "\"";
+        // ★ A radio that needs re-plugging says so on every listener's banner (radioProblem, 2026-10-05).
+        else if (!present) {
+            const std::string prob = radioProblem();
+            if (!prob.empty()) j += ",\"reason\":\"" + vibeadmin::esc(prob) + "\"";
+        }
         /* ★★★ KNOWN TO BE ANOTHER PROGRAM'S — the client then says, in Stuart's words, "<radio> is
          *  currently in use with another app on this server and is not available, please try again
          *  later." The name travels with it because the client may not have one (a direct link). */
@@ -23787,6 +23821,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const char* fdWho = fdRadioName();
                 if (fdWho && !radioReleased.load()) {
                     if (silent && !usbFdDead.load() && !fdRadioAlive()) {
+                        // ★ A new death: a fresh set of tries, with no back-off owed from an earlier one.
+                        freshFdFails.store(0);
+                        freshFdRetryAt.store(0.0);
                         usbFdDead.store(true);
                         LOGE("%s: our USB handle is dead (errno %d) — the radio has gone or re-enumerated. "
                              "Releasing it; waiting for Android to hand it back on a fresh USB fd", fdWho, errno);
@@ -23813,6 +23850,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             ::close(fresh);   // ★ reopenOnFd took its own dup; this one was ours to close
                             if (fok) {
                                 usbFdDead.store(false);
+                                freshFdFails.store(0);
+                                freshFdRetryAt.store(0.0);
+                                if (needsReplug.exchange(false)) setRadioProblem("");
                                 lastIqAt.store(nowSecs(), std::memory_order_relaxed);
                                 srcRestarts = 0;
                                 deviceLost.store(false);
@@ -23821,8 +23861,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                 notifyDeviceState();
                                 continue;
                             }
-                            // ★ Still dead: usbNeedsFreshFd() goes true again and Kotlin offers another.
-                            LOGE("%s: the fresh USB fd did not open (%s) — waiting for another", fdWho, ferr.c_str());
+                            // ★ Still dead: usbNeedsFreshFd() goes true again — but only after the back-off
+                            //   (see freshFdFails), and after kReplugAfterFailures the owner is told why.
+                            const int nFail = ++freshFdFails;
+                            const double waitS = vibe::usbrecovery::freshFdRetryDelaySecs(nFail);
+                            freshFdRetryAt.store(nowSecs() + waitS);
+                            LOGE("%s: the fresh USB fd did not open (%s) — attempt %d; asking Android for "
+                                 "another in %.0f s", fdWho, ferr.c_str(), nFail, waitS);
+                            if (vibe::usbrecovery::needsReplug(nFail) && !needsReplug.exchange(true)) {
+                                const std::string advice = std::string("The ") + fdWho
+                                                         + vibe::usbrecovery::replugAdvice();
+                                LOGE("%s (%d fresh USB handles from Android would not open — the old one is "
+                                     "most likely still holding the radio)", advice.c_str(), nFail);
+                                setRadioProblem(advice);
+                                notifyDeviceState();
+                            }
                         }
                     }
                 }
@@ -25518,6 +25571,11 @@ std::string LocalSdrShim::adminStatusJson() {
                                               : isAirspyHf() ? "airspyhf"
                                               : isHackRf()   ? "hackrf"
                                               : isAirspy()   ? "airspy" : "rtl") + "\"";   // ★ R2/Mini was "rtl" (2026-09-28)
+        // ★★ AND WHAT THE OWNER HAS TO DO ABOUT IT, when only a hand on the cable will fix it (2026-10-05).
+        //    The card said "unplugged or has failed" — true, and no help to an owner whose radio is still
+        //    plugged in and wedged. Omitted when there is nothing to say.
+        { const std::string prob = radioProblem();
+          if (!prob.empty()) j += ",\"problem\":\"" + vibeadmin::esc(prob) + "\""; }
         j += ",\"centreHz\":" + std::to_string((long long)(g_vsLockedCentre.load() > 0
                                     ? g_vsLockedCentre.load() : (p ? p->rtlCenter.load() : 0)));
         j += ",\"spanHz\":" + std::to_string((long long)captureSpanHz());
@@ -28248,6 +28306,7 @@ void LocalSdrShim::stopLocked() {
     if (impl->usbFd >= 0) { ::close(impl->usbFd); impl->usbFd = -1; }
     // ★ And a fresh handle handed in by Kotlin that the watchdog never got to adopt — see usbFdDead.
     if (const int f = impl->freshUsbFd.exchange(-1); f >= 0) ::close(f);
+    setRadioProblem("");   // ★ a stopped server has no radio to be wrong with (radioProblem)
     delete impl;
     LOGI("local SDR stopped");
 }
@@ -28728,11 +28787,21 @@ void LocalSdrShim::setGain(int gainTenthDb) {
 int LocalSdrShim::currentGainTenthDb() const { return p ? p->lastGainTenthDb : -1; }
 bool LocalSdrShim::usbNeedsFreshFd() const {
 #ifdef __ANDROID__
-    return p && p->usbFdDead.load() && p->freshUsbFd.load() < 0;
+    // ★ Not before the back-off after a fresh fd that would not open — see freshFdFails (2026-10-05).
+    return p && p->usbFdDead.load() && p->freshUsbFd.load() < 0
+             && Impl::nowSecs() >= p->freshFdRetryAt.load();
 #else
     return false;
 #endif
 }
+bool LocalSdrShim::usbHandleDead() const {
+#ifdef __ANDROID__
+    return p && p->usbFdDead.load();
+#else
+    return false;
+#endif
+}
+std::string LocalSdrShim::radioProblemText() const { return radioProblem(); }
 bool LocalSdrShim::adoptFreshUsbFd(int fd) {
 #ifdef __ANDROID__
     if (!p || fd < 0) return false;
@@ -30392,9 +30461,10 @@ bool LocalSdrShim::releaseRadio() {
      *      hrfIndex/aspIndex are -1 on the fd path — and reacquireRadio() could only WORD their failure
      *      ("unplug it and plug it back in"). A rule that names one of three fd radios is the "control
      *      that only works on one radio" fault in code form. */
-    const char* fdParked = (ahf && (impl->ahfIndex < 0 || impl->ahf->fdOpened())) ? "Airspy HF+"
-                         : (hrf && (impl->hrfIndex < 0 || impl->hrf->fdOpened())) ? "HackRF"
-                         : (asp && (impl->aspIndex < 0 || impl->asp->fdOpened())) ? "Airspy R2/Mini"
+    using vibe::usbrecovery::parkInsteadOfRelease;   // ★ one rule, tested (vibe_usb_recovery.h)
+    const char* fdParked = (ahf && parkInsteadOfRelease(impl->ahf->fdOpened(), impl->ahfIndex)) ? "Airspy HF+"
+                         : (hrf && parkInsteadOfRelease(impl->hrf->fdOpened(), impl->hrfIndex)) ? "HackRF"
+                         : (asp && parkInsteadOfRelease(impl->asp->fdOpened(), impl->aspIndex)) ? "Airspy R2/Mini"
                          : nullptr;
     if (fdParked) {
         LOGI("%s opened from an Android USB descriptor cannot be released (it could not be "
@@ -31440,6 +31510,7 @@ LocalSdrShim::VibeServerStatus LocalSdrShim::getVibeServerStatus() {
     if (!p) return s;
     s.running   = g_serveOnLan.load();
     s.deviceLost = p->deviceLost.load();
+    s.radioProblem = radioProblem();   // ★ "needs unplugging and plugging back in" — see radioProblem
     s.fftRate   = p->fftRate;
     s.bandwidthHz = p->vfoBwHz.load();
     s.sampleRate  = p->sampleRate;

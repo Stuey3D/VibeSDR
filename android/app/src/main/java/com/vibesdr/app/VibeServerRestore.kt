@@ -388,6 +388,15 @@ object VibeServerRestore {
         if (!VibeLocalSDR.usbNeedsFreshFd()) {
             // ★ No server running: a stopped or not-yet-restored server is restore()'s to judge, not this.
             if (!isShimServing()) return null
+            /* ★★★ STILL DEAD, JUST NOT ASKING (2026-10-05). After a fresh fd that would not open the engine backs
+             *     off (2 s doubling to 60 s) before it asks again, and a fd handed over but not yet adopted reads
+             *     the same way. Neither is "back": a WEDGED-BUT-PRESENT HF+ is listed by UsbManager the whole
+             *     time, so the rule below would have called it back and reset the five-minute clock on every
+             *     cycle — the server never stopped, and only a physical re-plug ended it. Judge the clock only. */
+            if (VibeLocalSDR.usbHandleDead()) {
+                noteRadioGone(ctx, "the engine's USB handle died")
+                return if (radioGoneTooLong(ctx)) RADIO_GONE_TOO_LONG else "waiting before asking for the radio again"
+            }
             // ★ Nothing for the engine to adopt. A radio that left (the detach broadcast stamped it) and is
             //   listed again with the engine's handle alive is back; one still missing is judged on the clock.
             if (radioGoneForMs(ctx) >= 0 && mgr.deviceList.values.any { isServable(it) }) { noteRadioBack(ctx); return null }
@@ -410,7 +419,10 @@ object VibeServerRestore {
         try { old?.close() } catch (t: Throwable) { Log.w(TAG, "closing the dead USB connection: ${t.message}") }
         Log.i(TAG, "radio handed back to the engine on a fresh USB handle (${dev.deviceName}, " +
                    "%04x:%04x)".format(dev.vendorId, dev.productId))
-        noteRadioBack(ctx)
+        // ★★★ NOT noteRadioBack here (2026-10-05). Handing a fd over is not the radio coming back: the engine
+        //     may fail to open it (a wedged HF+ fails every one), and resetting the gone-clock on each hand-over
+        //     meant the five-minute rule never fired. The radio is back when the engine says its handle is
+        //     alive again — the usbHandleDead() check above, on the next tick.
         return "handed back"
     }
 
