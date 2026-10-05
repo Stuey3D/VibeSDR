@@ -22,7 +22,12 @@ static const SstvMode kModes[] = {
     {"Scottie S1",9e-3,1.5e-3,1.5e-3,0.4320e-3,428.22e-3,320,256,1,SSTV_GBR,false},
     {"Scottie S2",9e-3,1.5e-3,1.5e-3,0.2752e-3,277.692e-3,320,256,1,SSTV_GBR,false},
     {"Scottie DX",9e-3,1.5e-3,1.5e-3,1.08053e-3,1050.3e-3,320,256,1,SSTV_GBR,false},
-    {"Robot 72",9e-3,3e-3,4.7e-3,0.2875e-3,300e-3,320,240,1,SSTV_YUV,false},
+    // ★★ R72 is Y 138 ms + R-Y 69 ms + B-Y 69 ms, each chroma after a 4.5 ms separator and a 1.5 ms
+    //    porch (the Dayton spec; MMSSTV) — 9+3+138+6+69+6+69 = 300. slowrx's 0.2875 ms pixel cut it
+    //    into three EQUAL 92 ms channels: Y read two-thirds of the line, chroma read Y. Measured on a
+    //    generated R72 (tools/sstv_bench, 2026-10-05, audit "Robot 72 timing"): SSIM 0.17 → see the
+    //    commit. pixelTime is the CHROMA pixel; Y is twice it, as Robot 36 has it.
+    {"Robot 72",9e-3,3e-3,6e-3,0.215625e-3,300e-3,320,240,1,SSTV_YUV,false},
     {"Robot 36",9e-3,3e-3,6e-3,0.1375e-3,150e-3,320,240,1,SSTV_YUV,false},
     {"Robot 24",9e-3,3e-3,6e-3,0.1375e-3,150e-3,320,240,1,SSTV_YUV,false},
     {"Robot 24 B/W",7e-3,0,0,0.291e-3,100e-3,320,240,1,SSTV_BW,false},
@@ -245,6 +250,11 @@ std::vector<SstvPixel> SstvVideo::pixelGrid(double rate, int skip) {
         chanStart[0] = m->syncTime + m->porchTime;
         chanStart[1] = chanStart[0] + chanLen[0] + m->septrTime; chanStart[2] = chanStart[1];
         numChans = 2;
+    } else if (nm == "Robot 72") {
+        chanLen[0] = m->pixelTime*m->imgWidth*2; chanLen[1] = chanLen[2] = m->pixelTime*m->imgWidth;
+        chanStart[0] = m->syncTime + m->porchTime;
+        chanStart[1] = chanStart[0] + chanLen[0] + m->septrTime;
+        chanStart[2] = chanStart[1] + chanLen[1] + m->septrTime;
     } else if (scottie) {
         chanLen[0]=chanLen[1]=chanLen[2]=m->pixelTime*m->imgWidth;
         chanStart[0] = m->septrTime;
