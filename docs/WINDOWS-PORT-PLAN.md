@@ -362,6 +362,19 @@ decoders and vibedsp, about 114,500 lines). Counted 2026-10-05.
 - WiX/MSI is possible later (`wixl` from msitools builds an MSI on Linux) if enterprise deployment
   ever matters.
 
+### 4.6b Microsoft Store — Stuart's preferred distribution (2026-10-05: "I would like a store app if i could")
+Store apps are signed by Microsoft — no SmartScreen warning, no Smart App Control block, no certificate to buy — with
+one-click install and automatic updates. To settle FIRST, ideally with a real Store test submission once Milestone 1's
+build exists (all **[unverified]** today):
+1. **Account cost** — believed free for individual developers now; confirm the current terms.
+2. **The driver bind from a Store app** — binding the in-box WinUSB needs admin once; packaged (MSIX) apps are limited
+   on elevation and drivers. Options: a restricted capability with a justification Microsoft reviews, or a small
+   separate elevated helper. Dongles already on WinUSB (Zadig / SDR# / SDR++ users) need no bind at all.
+3. **Running in the background** — MSIX can carry a Windows service, but that is also a restricted capability.
+4. Whether the Store's unpackaged-installer (MSI/EXE) route helps — it is believed to still require the installer to be
+   signed with a CA certificate of our own, which would undo the point.
+Likely shape: the Store as the main way in, the GitHub download (signed via SignPath, §4.7) alongside.
+
 ### 4.7 Code signing [decide]: a risk for SOME new PCs, decided before a public release
 - **SmartScreen** shows "Windows protected your PC" and allows *More info → Run anyway*. It is
   accepted in August as the SDR norm.
