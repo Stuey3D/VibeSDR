@@ -147,6 +147,9 @@ public:
      *  a few failures is a marginal antenna, all failures is the wrong station or the wrong mode. */
     unsigned long minutesGood() const { return good_; }
     unsigned long minutesFailed() const { return bad_; }
+    /** Of minutesGood(), how many were announced by the multi-minute vote rather than one clean
+     *  minute corroborated by the next. */
+    unsigned long minutesVoted() const { return voted_; }
     /** ★ RWM has no date to report, so "how many second markers have been counted cleanly" IS the
      *  reading. Also useful on the other stations as a framing sanity check. */
     int  secondNow() const { return second_; }
@@ -196,7 +199,16 @@ private:
     void  place(int sec, int a, int b, int sym, bool readable);
     void  closeFrame();
     void  loseFrame();
-    void  finishMinute(bool decoded, const TimeStamp& ts);
+    bool  finishMinute(bool decoded, const TimeStamp& ts);
+    void  announce(const TimeStamp& ts);
+    // ── Multi-minute voting — see tryVote() ──
+    struct VoteFrame { long long idx0 = 0; float sA[60] = {0}, sB[60] = {0}; };
+    std::vector<VoteFrame> votes_;           ///< newest last, at most kVoteWindow
+    void  pushVoteFrame(long long idx0);
+    void  noteAnchor(long long idx);
+    void  tryVote();
+    /** Expected bits of a frame carrying `f` (-1 = not fixed by the time): A and B arrays. */
+    void  encodeFrame(const TimeStamp& f, signed char* A, signed char* B) const;
     bool  slotsComplete(int from, int to) const;
 
     int    nCls_ = 0, win_ = 0;
@@ -257,7 +269,7 @@ private:
     //   fit here; B stays zero where a station has no B bit.
     int    bitsA_[60] = {0}, bitsB_[60] = {0};
     int    second_ = -1;                     // -1 until the minute marker is seen
-    unsigned long good_ = 0, bad_ = 0;
+    unsigned long good_ = 0, bad_ = 0, voted_ = 0;
     /** ★ The previous parity-passing minute, as a minute count. A reading is only announced when
      *  it is exactly one minute later than this — see the note in finishMinute(). */
     long long lastStamp_ = 0;

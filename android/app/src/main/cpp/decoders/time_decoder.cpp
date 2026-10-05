@@ -659,6 +659,7 @@ void TimeDecoder::onSecond(const SecRec& r) {
     case Station::MSF: {
         if (strongKind(r, kMark)) {
             if (anchorIdx_ >= 0 && !frameClosed_) closeFrame();
+            noteAnchor(r.idx);
             startFrame(r.idx);
             unconfirmed_ = 0;
             if (onBit) onBit(0, 0);
@@ -748,6 +749,7 @@ void TimeDecoder::onSecond(const SecRec& r) {
         const long long m = ((p % 60) + 60) % 60;
         if (holeAfterMarker && p % 60 != 0 && (m <= 2 || m >= 58 || unconfirmed_ >= 2)) {
             if (!frameClosed_) closeFrame();
+            noteAnchor(r.idx);
             startFrame(r.idx);
             unconfirmed_ = 0; second_ = 0;
             return;
@@ -798,6 +800,7 @@ bool TimeDecoder::slotsComplete(int from, int to) const {
 
 void TimeDecoder::loseFrame() {
     anchorIdx_ = -1;
+    votes_.clear();
     frameClosed_ = true;
     second_ = -1;
     lastStamp_ = 0;
@@ -828,17 +831,263 @@ void TimeDecoder::closeFrame() {
         }
         default: break;
     }
-    finishMinute(ok, ts);
+    pushVoteFrame(anchorIdx_);
+    if (!finishMinute(ok, ts)) tryVote();
 }
 
-void TimeDecoder::finishMinute(bool decoded, const TimeStamp& ts) {
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// ★★★ MULTI-MINUTE VOTING (2026-10-05) — LOCK WHERE NO SINGLE MINUTE IS CLEAN, NEVER ON NOISE.
+//
+// A minute with ONE unreadable second is thrown away whole, and on a fading path that is most
+// minutes: at one erasure in five seconds, a clean minute turns up about once a century. But the
+// minutes either side carry the SAME date and a time one minute apart, so every second's soft
+// read can be pooled across them: a bit faded in this minute was read cleanly in the last two.
+// Idea and window from madpsy/ubersdr-ntp (GPL-3.0-or-later; decoders from
+// madpsy/ubersdr-clock), TimeFrameVoter.h: 8 minutes, each aged by 0.9 per minute, votes weighted
+// by each second's read confidence. ★★ The ACCEPTANCE is ours and is stricter — their voter
+// false-locked live on 2006-01-01 at quality 100 (TimeFrameVoter.h, minBitConfidence note): a
+// deep fade biases the SAME bits the same way in every minute, so a unanimous vote is not
+// evidence. So here:
+//   • the candidate is a TIME, not a pile of bits: every (time of day, date) is scored against
+//     every stored minute as that minute must have sent it (a minute earlier per minute of age),
+//     so a vote can only ever produce a time the station could have sent — valid BCD, a real
+//     date, the date's own weekday, the parity bits that go with it;
+//   • the date is searched only within ±1 year of the host clock (no believable host clock, no
+//     vote) — 2006 cannot win;
+//   • EVERY bit of the winner must be read strongly (soft ≥ 0.5) in agreement in at least THREE
+//     minutes, with strong disagreements no more than a quarter of those, and the newest minute
+//     must itself agree on at least half of its bits — the "two independent readings" rule,
+//     made per bit;
+//   • and the winner is re-encoded and run through the same decode as a single minute, so every
+//     cb2f0f2b check still has the last word.
+// ★ A vote is only TRIED when the single minute was not announced: a good minute reads exactly
+//   as before.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+namespace {
+constexpr size_t kVoteWindow  = 8;
+constexpr double kVoteAge     = 0.9;
+constexpr float  kVoteStrong  = 0.5f;
+constexpr int    kVoteMinAgree = 3;
+
+/** Write `v` into a BCD field (the inverse of readField). */
+void writeField(signed char* bits, const BcdField& f, int v) {
+    const int d[3] = { v % 10, (v / 10) % 10, v / 100 };
+    for (int i = 0; i < f.n; i++) {
+        const int w = f.wt[i];
+        const int digit = w >= 100 ? d[2] : w >= 10 ? d[1] : d[0];
+        const int unit  = w >= 100 ? w / 100 : w >= 10 ? w / 10 : w;
+        bits[f.sec[i]] = (digit & unit) ? 1 : 0;
+    }
+}
+int parityOf(const signed char* bits, int from, int to) {
+    int n = 0; for (int i = from; i <= to; i++) n += bits[i] == 1; return n & 1;
+}
+/** Civil date of a day number (inverse of daysFromCivil; Hinnant). */
+void civilFromDays(long long z, int& y, int& m, int& d) {
+    z += 719468;
+    const long long era = (z >= 0 ? z : z - 146096) / 146097;
+    const long long doe = z - era * 146097;
+    const long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    const long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const long long mp = (5 * doy + 2) / 153;
+    d = (int)(doy - (153 * mp + 2) / 5 + 1);
+    m = (int)(mp < 10 ? mp + 3 : mp - 9);
+    y = (int)(yoe + era * 400 + (m <= 2));
+}
+}  // namespace
+
+void TimeDecoder::encodeFrame(const TimeStamp& f, signed char* A, signed char* B) const {
+    for (int i = 0; i < 60; i++) { A[i] = -1; B[i] = -1; }
+    const int yy = f.year % 100;
+    switch (station_) {
+    case Station::MSF:
+        writeField(A, kMsfYear, yy); writeField(A, kMsfMonth, f.month); writeField(A, kMsfDay, f.day);
+        writeField(A, kMsfWeekday, isoWeekday(f.year, f.month, f.day) % 7);
+        writeField(A, kMsfHour, f.hour); writeField(A, kMsfMin, f.minute);
+        for (int j = 0; j < 8; j++) A[52 + j] = (signed char)kMsfIdentifier[j];
+        B[54] = (signed char)(1 - parityOf(A, 17, 24)); B[55] = (signed char)(1 - parityOf(A, 25, 35));
+        B[56] = (signed char)(1 - parityOf(A, 36, 38)); B[57] = (signed char)(1 - parityOf(A, 39, 51));
+        break;
+    case Station::DCF77:
+        A[0] = 0; A[20] = 1;
+        writeField(A, kDcfMinute, f.minute); writeField(A, kDcfHour, f.hour); writeField(A, kDcfDay, f.day);
+        writeField(A, kDcfWeekday, isoWeekday(f.year, f.month, f.day));
+        writeField(A, kDcfMonth, f.month); writeField(A, kDcfYear, yy);
+        A[28] = (signed char)parityOf(A, 21, 27); A[35] = (signed char)parityOf(A, 29, 34);
+        A[58] = (signed char)parityOf(A, 36, 57);
+        break;
+    case Station::WWVB: {
+        const int doy = (int)(daysFromCivil(f.year, f.month, f.day) - daysFromCivil(f.year, 1, 1)) + 1;
+        writeField(A, kWwvbMinute, f.minute); writeField(A, kWwvbHour, f.hour);
+        writeField(A, kWwvbDoy, doy); writeField(A, kWwvbYear, yy);
+        for (int s : kWwvbZeroBits) A[s] = 0;
+        A[55] = isLeap(f.year) ? 1 : 0;
+        break;
+    }
+    case Station::WWV: {
+        const int doy = (int)(daysFromCivil(f.year, f.month, f.day) - daysFromCivil(f.year, 1, 1)) + 1;
+        writeField(A, kWwvMinute, f.minute); writeField(A, kWwvHour, f.hour); writeField(A, kWwvDoy, doy);
+        writeField(A, kWwvYearUnits, yy % 10); writeField(A, kWwvYearTens, yy / 10);
+        break;
+    }
+    default: break;
+    }
+}
+
+/** The minute just closed, as soft bits, into the voting window. */
+void TimeDecoder::pushVoteFrame(long long idx0) {
+    if (station_ == Station::RWM || idx0 < 0) return;
+    VoteFrame f;
+    f.idx0 = idx0;
+    for (int p = 0; p < 60; p++) {
+        const SecRec& r = rec(idx0 + p);
+        if (r.idx < 0) continue;
+        f.sA[p] = r.softA; f.sB[p] = r.softB;
+    }
+    // ★ Older than the window (a gap in the minutes): no longer the same stretch of signal.
+    while (!votes_.empty() && idx0 - votes_.front().idx0 > (long long)(kVoteWindow + 2) * 60)
+        votes_.erase(votes_.begin());
+    if (!votes_.empty() && votes_.back().idx0 == idx0) votes_.back() = f;
+    else votes_.push_back(f);
+    while (votes_.size() > kVoteWindow) votes_.erase(votes_.begin());
+}
+
+/** ★ A new minute anchor: if it is not a whole number of minutes (±2 s) from the stored ones,
+ *  they were read against a different minute and can no longer be pooled. */
+void TimeDecoder::noteAnchor(long long idx) {
+    if (votes_.empty()) return;
+    const long long d = idx - votes_.back().idx0;
+    const long long m = ((d % 60) + 60) % 60;
+    if (!(m <= 2 || m >= 58)) votes_.clear();
+}
+
+void TimeDecoder::tryVote() {
+    if (votes_.size() < (size_t)kVoteMinAgree) return;
+    // ── the host clock bounds the date: no believable clock, no vote ──
+    const time_t nowT = time(nullptr);
+    const struct tm* utc = gmtime(&nowT);
+    if (!utc || utc->tm_year + 1900 < 2024) return;
+    const long long hostDay = daysFromCivil(utc->tm_year + 1900, utc->tm_mon + 1, utc->tm_mday);
+
+    const VoteFrame& newest = votes_.back();
+    const size_t nf = votes_.size();
+    int age[kVoteWindow]; double w[kVoteWindow];
+    for (size_t i = 0; i < nf; i++) {
+        age[i] = (int)std::llround((double)(newest.idx0 - votes_[i].idx0) / 60.0);
+        w[i] = std::pow(kVoteAge, age[i]);
+        if (age[i] < 0 || age[i] > 59) return;
+    }
+    // Which bits a time fixes, split by what they depend on.
+    signed char eA[60], eB[60], todA[60], todB[60];
+    {
+        TimeStamp a{}, b{};
+        a.year = 2026; a.month = 1; a.day = 1; a.hour = 0; a.minute = 0;
+        b = a; b.hour = 23; b.minute = 59;
+        signed char aA[60], aB[60], bA[60], bB[60];
+        encodeFrame(a, aA, aB); encodeFrame(b, bA, bB);
+        // ★ a bit belongs to the time of day if changing only the time can change it; found by
+        //   encoding every minute of a day once — cheap, and no second table to drift.
+        for (int i = 0; i < 60; i++) { todA[i] = 0; todB[i] = 0; }
+        for (int m = 0; m < 1440; m++) {
+            TimeStamp t = a; t.hour = m / 60; t.minute = m % 60;
+            encodeFrame(t, eA, eB);
+            for (int i = 0; i < 60; i++) { if (eA[i] != aA[i]) todA[i] = 1; if (eB[i] != aB[i]) todB[i] = 1; }
+        }
+    }
+    auto frameTime = [&](long long day0, int tod0, int a, TimeStamp& t) {
+        long long day = day0; int tod = tod0 - a;
+        while (tod < 0) { tod += 1440; day--; }
+        civilFromDays(day, t.year, t.month, t.day);
+        t.hour = tod / 60; t.minute = tod % 60;
+    };
+    auto scoreBits = [&](size_t i, const signed char* A, const signed char* B, int want /*1 tod, 0 date, -1 all*/) {
+        double s = 0;
+        for (int p = 0; p < 60; p++) {
+            if (A[p] >= 0 && (want < 0 || todA[p] == want)) s += (A[p] ? 1.0 : -1.0) * votes_[i].sA[p];
+            if (B[p] >= 0 && (want < 0 || todB[p] == want)) s += (B[p] ? 1.0 : -1.0) * votes_[i].sB[p];
+        }
+        return s;
+    };
+    // ── 1. the time of day: 1440 candidates ──
+    int bestTod = -1; double bestS = -1e18;
+    for (int m = 0; m < 1440; m++) {
+        double s = 0;
+        for (size_t i = 0; i < nf; i++) {
+            TimeStamp t; frameTime(hostDay, m, age[i], t);
+            encodeFrame(t, eA, eB);
+            s += w[i] * scoreBits(i, eA, eB, 1);
+        }
+        if (s > bestS) { bestS = s; bestTod = m; }
+    }
+    // ── 2. the date, within a year of the host's ──
+    long long bestDay = 0; bestS = -1e18;
+    for (long long d = hostDay - 366; d <= hostDay + 366; d++) {
+        double s = 0;
+        for (size_t i = 0; i < nf; i++) {
+            TimeStamp t; frameTime(d, bestTod, age[i], t);
+            encodeFrame(t, eA, eB);
+            s += w[i] * scoreBits(i, eA, eB, 0);
+        }
+        if (s > bestS) { bestS = s; bestDay = d; }
+    }
+    // ── 3. every bit of the winner, strongly read in agreement in ≥ 3 minutes ──
+    int agree[2][60] = {{0}}, against[2][60] = {{0}};
+    int newestAgree = 0, newestAgainst = 0, newestBits = 0;
+    for (size_t i = 0; i < nf; i++) {
+        TimeStamp t; frameTime(bestDay, bestTod, age[i], t);
+        encodeFrame(t, eA, eB);
+        for (int ab = 0; ab < 2; ab++) for (int p = 0; p < 60; p++) {
+            const signed char e = ab ? eB[p] : eA[p];
+            if (e < 0) continue;
+            const float v = (e ? 1.0f : -1.0f) * (ab ? votes_[i].sB[p] : votes_[i].sA[p]);
+            if (v >= kVoteStrong) agree[ab][p]++;
+            if (v <= -kVoteStrong) against[ab][p]++;
+            if (i == nf - 1) { newestBits++; if (v >= kVoteStrong) newestAgree++; if (v <= -kVoteStrong) newestAgainst++; }
+        }
+    }
+    TimeStamp f0; frameTime(bestDay, bestTod, 0, f0);
+    encodeFrame(f0, eA, eB);
+    for (int ab = 0; ab < 2; ab++) for (int p = 0; p < 60; p++) {
+        if ((ab ? eB[p] : eA[p]) < 0) continue;
+        if (agree[ab][p] < kVoteMinAgree || against[ab][p] * 4 > agree[ab][p]) return;
+    }
+    if (newestBits == 0 || newestAgree * 2 < newestBits || newestAgainst * 10 > newestBits) return;
+
+    // ── 4. the winner through the single-minute decode, every check intact ──
+    int sA[60], sB[60]; unsigned char sSlot[60]; signed char sSym[60];
+    for (int i = 0; i < 60; i++) { sA[i] = bitsA_[i]; sB[i] = bitsB_[i]; sSlot[i] = slot_[i]; sSym[i] = sym_[i]; }
+    // the flags no time fixes: DST, the leap warning — the pooled sign of their reads
+    auto pooled = [&](int p, bool isB) {
+        double s = 0; for (size_t i = 0; i < nf; i++) s += w[i] * (isB ? votes_[i].sB[p] : votes_[i].sA[p]);
+        return s > 0 ? 1 : 0;
+    };
+    for (int i = 0; i < 60; i++) {
+        bitsA_[i] = eA[i] >= 0 ? eA[i] : pooled(i, false);
+        bitsB_[i] = eB[i] >= 0 ? eB[i] : (station_ == Station::MSF ? pooled(i, true) : 0);
+        slot_[i] = 1;
+        sym_[i] = (signed char)((station_ == Station::WWVB && (i == 0 || i % 10 == 9)) ? 2 : bitsA_[i]);
+    }
+    if (station_ == Station::WWVB) for (int i = 0; i < 60; i++) if (i == 0 || i % 10 == 9) bitsA_[i] = 0;
+    if (station_ == Station::DCF77) { bitsA_[17] = pooled(17, false); bitsA_[18] = 1 - bitsA_[17]; }
+    if (station_ == Station::MSF) for (int i = 1; i <= 16; i++) bitsB_[i] = 0;   // DUT1: not voted
+    TimeStamp ts;
+    const bool ok = decodeMinute(ts);
+    for (int i = 0; i < 60; i++) { bitsA_[i] = sA[i]; bitsB_[i] = sB[i]; slot_[i] = sSlot[i]; sym_[i] = sSym[i]; }
+    if (!ok) return;
+    ts.dut1Known = false;
+    ts.dut1Tenths = 0;
+    voted_++;
+    announce(ts);
+}
+
+bool TimeDecoder::finishMinute(bool decoded, const TimeStamp& ts) {
     if (!decoded) {
         lastStamp_ = 0;         // ★ a bad minute breaks the chain; corroboration restarts
         // ★ A failed parity is DISCARDED, not shown with a warning. See the header: a clock
         //   that is confidently wrong is worse than one that says it is still waiting.
         bad_++;
         setState(State::Reading);
-        return;
+        return false;
     }
     // ★★★ PARITY ALONE IS NOT ENOUGH, AND ON AIR THAT IS NOT THEORETICAL. MSF carries FOUR
     //     parity bits, so random noise satisfies all of them one time in sixteen — over a
@@ -853,7 +1102,14 @@ void TimeDecoder::finishMinute(bool decoded, const TimeStamp& ts) {
     const long long stamp = minuteIndex(ts.year, ts.month, ts.day, ts.hour, ts.minute);
     const bool follows = (lastStamp_ != 0) && (stamp == lastStamp_ + 1);
     lastStamp_ = stamp;
-    if (!follows) { setState(State::Reading); return; }   // not yet corroborated
+    if (!follows) { setState(State::Reading); return false; }   // not yet corroborated
+    announce(ts);
+    return true;
+}
+
+/** A corroborated minute (two in a row, or a vote across several): say it. */
+void TimeDecoder::announce(const TimeStamp& ts) {
+    lastStamp_ = minuteIndex(ts.year, ts.month, ts.day, ts.hour, ts.minute);
     // ★★ WHAT THE NEXT FRAME MUST SAY — for the progress line, which shows fields before their
     //    parity arrives (see emitPartial). Each station's convention, as its decode reports it:
     //    MSF and DCF77 frames describe the minute BEGINNING at their end, so `ts` is this frame's
