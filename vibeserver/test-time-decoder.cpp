@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <functional>
 #include <vector>
 
 using vibe::TimeDecoder;
@@ -98,6 +99,21 @@ static bool same(const TimeDecoder::TimeStamp& a, const Hhmm& b) {
     return a.year == b.y && a.month == b.mo && a.day == b.d && a.hour == b.h && a.minute == b.mi;
 }
 struct Heard { double atS; TimeDecoder::TimeStamp t; };
+
+/** ★★ DAMAGE THAT PARITY CANNOT SEE (2026-10-05). `gTamper` runs on a generator's bits after the
+ *  time is encoded and BEFORE the parity is computed — so the parity PASSES on the tampered bits,
+ *  which is exactly the case the content checks exist for. `gPostTamper` runs after the parity:
+ *  a plain misread bit, which parity should catch. Both see one frame's bits per call (MSF: A;
+ *  DCF77: the bit array; WWV/WWVB: the symbol array, 0/1/2). `gTamperB` is MSF's B array.
+ *  Null = an honest transmitter. */
+static std::function<void(int*)> gTamper, gPostTamper, gTamperB;
+static int isoWd(const Hhmm& t) {            // ISO 1..7, counted from 2026-01-01 (a Thursday)
+    long days = 0;
+    if (t.y >= 2026) { for (int y = 2026; y < t.y; y++) days += leapY(y) ? 366 : 365; }
+    else             { for (int y = t.y; y < 2026; y++) days -= leapY(y) ? 366 : 365; }
+    days += doyOf(t) - 1;
+    return (int)(((3 + days) % 7 + 7) % 7) + 1;
+}
 /** Feeds 100 ms at a time so each announcement carries the moment it was made. */
 static std::vector<Heard> runTimed(TimeDecoder& d, const std::vector<int16_t>& a) {
     std::vector<Heard> out;
@@ -132,15 +148,15 @@ static void dcfBitsFor(const Hhmm& t, int b[59]) {
         int rem = val;
         for (int i = to, k = to - from; i >= from; i--, k--) if (rem >= w[k]) { b[i] = 1; rem -= w[k]; }
     };
-    int wd = 0; { // weekday, ISO 1..7 (Zeller-free: count from 2026-01-01, a Thursday)
-        long days = 0; for (int y = 2026; y < t.y; y++) days += leapY(y) ? 366 : 365;
-        days += doyOf(t) - 1; wd = (int)((3 + days) % 7) + 1; }
+    const int wd = isoWd(t);
     put(21, 27, t.mi); put(29, 34, t.h); put(36, 41, t.d); put(42, 44, wd); put(45, 49, t.mo);
     put(50, 57, t.y % 100);
+    if (gTamper) gTamper(b);
     auto evenPar = [&](int from, int to, int pbit) {
         int n = 0; for (int i = from; i <= to; i++) n += b[i]; b[pbit] = (n & 1);
     };
     evenPar(21, 27, 28); evenPar(29, 34, 35); evenPar(36, 57, 58);
+    if (gPostTamper) gPostTamper(b);
 }
 static void dcfMinuteDamaged(std::vector<int16_t>& out, const Hhmm& t, int drop, int extra) {
     int b[59]; dcfBitsFor(t, b);
@@ -156,13 +172,20 @@ static void msfMinuteDamaged(std::vector<int16_t>& out, const Hhmm& t, int drop,
         const int n = to - from + 1; int rem = val;
         for (int i = 0; i < n; i++) { const int wt = w10[8 - n + i]; if (rem >= wt) { A[from + i] = 1; rem -= wt; } }
     };
-    putA(17, 24, t.y % 100); putA(25, 29, t.mo); putA(30, 35, t.d); putA(36, 38, 2);
+    // ★ The weekday from the DATE (0 = Sunday), not a constant 2 — the decoder now checks it.
+    putA(17, 24, t.y % 100); putA(25, 29, t.mo); putA(30, 35, t.d); putA(36, 38, isoWd(t) % 7);
     putA(39, 44, t.h); putA(45, 51, t.mi);
+    // ★★ A52-A59 = 01111110, NPL's minute identifier — every real MSF minute carries it, and the
+    //    decoder now requires it. This generator left it out until 2026-10-05.
+    for (int i = 53; i <= 58; i++) A[i] = 1;
+    if (gTamper) gTamper(A);
     auto oddPar = [&](int from, int to, int pbit) {
         int n = 0; for (int i = from; i <= to; i++) n += A[i]; B[pbit] = (n & 1) ? 0 : 1;
     };
     oddPar(17, 24, 54); oddPar(25, 35, 55); oddPar(36, 38, 56); oddPar(39, 51, 57);
     B[58] = 1;
+    if (gPostTamper) gPostTamper(A);
+    if (gTamperB) gTamperB(B);
     emit(out, 500.0, 0.0); emit(out, 500.0, 1.0);
     for (int sec = 1; sec <= 59; sec++) {
         if (sec == drop) { emit(out, 1000.0, 1.0); continue; }   // the whole second faded
@@ -188,6 +211,7 @@ static void wwvbMinuteDamaged(std::vector<int16_t>& out, const Hhmm& t, int drop
     { const int bi[] = {45,46,47,48,50,51,52,53};
       const int wt[] = {80,40,20,10,8,4,2,1};                                      put(bi,wt,8,t.y % 100); }
     sym[55] = leapY(t.y) ? 1 : 0;
+    if (gTamper) gTamper(sym);
     for (int sec = 0; sec < 60; sec++) {
         const double dip = sym[sec] == 2 ? 800.0 : sym[sec] == 1 ? 500.0 : 200.0;
         lfSecond(out, dip, 0.15, sec == drop, sec == extra, 200.0);
@@ -196,7 +220,7 @@ static void wwvbMinuteDamaged(std::vector<int16_t>& out, const Hhmm& t, int drop
 
 // ── WWV (SP 432 Table 3.13): 100 Hz subcarrier, pulse = symbol, frame = minute at its START ──
 static void wwvMinuteSpec(std::vector<int16_t>& out, const Hhmm& t, int yy, bool dst, bool lsw,
-                          int corruptSec = -1) {
+                          int corruptSec = -1, int fadeSec = -1) {
     int sym[60] = {0};
     for (int p : { 9, 19, 29, 39, 49, 59 }) sym[p] = 2;
     auto put = [&](const int* bits, const int* wts, int n, int val) {
@@ -211,8 +235,10 @@ static void wwvMinuteSpec(std::vector<int16_t>& out, const Hhmm& t, int yy, bool
     { const int bi[] = {51,52,53,54}; const int wt[] = {1,2,4,8}; put(bi,wt,4,yy / 10); }
     if (dst) { sym[2] = 1; sym[55] = 1; }
     if (lsw) sym[3] = 1;
+    if (gTamper) gTamper(sym);
     for (int sec = 0; sec < 60; sec++) {
-        if (sec == 0) { emit(out, 1000.0, 0.0); continue; }
+        // ★ second 0 is the hole; a FADED second is the same silence anywhere else
+        if (sec == 0 || sec == fadeSec) { emit(out, 1000.0, 0.0); continue; }
         const double pulse = sec == corruptSec ? 270.0                 // between a 0 and a 1: unreadable
                            : sym[sec] == 2 ? 770.0 : sym[sec] == 1 ? 470.0 : 170.0;
         emit(out, 30.0, 0.0); emit(out, pulse, 1.0); emit(out, 1000.0 - 30.0 - pulse, 0.0);
@@ -352,6 +378,7 @@ int main() {
         putA(36, 38, 2);       // Tuesday
         putA(39, 44, 7);       // 07
         putA(45, 51, MINUTE);  // :45 then :46
+        for (int i = 53; i <= 58; i++) A[i] = 1;   // ★ A52-A59 = 01111110, the minute identifier
         auto oddPar = [&](int from, int to, int pbit) {
             int n = 0; for (int i = from; i <= to; i++) n += A[i];
             B[pbit] = (n & 1) ? 0 : 1;            // ODD parity over the data
@@ -569,6 +596,205 @@ int main() {
     damageCase("WWVB",  TimeDecoder::Station::WWVB,  {2026, 8, 11, 14, 30}, Damage::ExtraEveryMinute, 3, wwvbMinuteDamaged, 1, 2);
     damageCase("MSF",   TimeDecoder::Station::MSF,   {2026, 8, 11, 7, 45},  Damage::ExtraEveryMinute, 44, msfMinuteDamaged, 0, 1);
     damageCase("DCF77", TimeDecoder::Station::DCF77, {2026, 8, 11, 14, 30}, Damage::ExtraEveryMinute, 30, dcfMinuteDamaged, 0, 1);
+
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    // ★★★ CONTENT CHECKS — A MINUTE THAT PASSES PARITY AND IS STILL WRONG (2026-10-05)
+    //     Each case is FOUR consecutive minutes with the same defect, built with gTamper BEFORE
+    //     the parity is computed, so parity passes. The old decoder announced every one of these
+    //     (corroboration cannot help: the defect is the same in each minute, so they agree).
+    //     The control — the same four minutes honestly sent — must still be announced.
+    // ════════════════════════════════════════════════════════════════════════════════════════
+    {
+        auto run = [&](TimeDecoder::Station st, void (*gen)(std::vector<int16_t>&, const Hhmm&, int, int),
+                       Hhmm f0, int n) {
+            std::vector<int16_t> a;
+            emit(a, 3000.0, 1.0);
+            for (int k = 0; k < n; k++) gen(a, plus(f0, k), -1, -1);
+            emit(a, 1500.0, 1.0);
+            TimeDecoder d(SR, st);
+            return runTimed(d, a);
+        };
+        using St = TimeDecoder::Station;
+        // Re-encode a field's value with ALL of it in the units nibble (e.g. 12 -> tens 0, units
+        // 1100): a digit past 9 that sums to the right number, so only the digit check can see it.
+        auto unitsOnly = [](int* bits, const int* secs, const int* wts, int n, int v) {
+            for (int i = 0; i < n; i++) bits[secs[i]] = 0;
+            for (int i = 0; i < n; i++) if (wts[i] < 10 && (v & wts[i])) bits[secs[i]] = 1;
+        };
+        char msg[200];
+        auto expectNone = [&](const char* what, const std::vector<Heard>& h) {
+            if (!h.empty()) std::printf("    announced %04d-%02d-%02d %02d:%02d\n", h[0].t.year, h[0].t.month,
+                                        h[0].t.day, h[0].t.hour, h[0].t.minute);
+            std::snprintf(msg, sizeof msg, "★★ %s: REJECTED (nothing announced)", what);
+            ok(h.empty(), msg);
+        };
+
+        // ── controls: an honest transmitter is still read, with the new checks in place ──
+        const Hhmm msf0 {2026, 8, 11, 7, 10}, dcf0 {2026, 8, 11, 14, 10}, wwvb0 {2026, 8, 11, 14, 10};
+        ok(run(St::MSF,   msfMinuteDamaged,  msf0, 4).size() == 3, "★★★ MSF control: 3 of 4 honest minutes announced");
+        ok(run(St::DCF77, dcfMinuteDamaged,  dcf0, 4).size() == 3, "★★★ DCF77 control: 3 of 4 honest minutes announced");
+        ok(run(St::WWVB,  wwvbMinuteDamaged, wwvb0, 4).size() == 2, "★★★ WWVB control: 2 of 4 honest minutes announced");
+
+        // ── a BCD digit past 9 ──
+        { const int sec[] = {45,46,47,48,49,50,51}, wt[] = {40,20,10,8,4,2,1};
+          gTamper = [&](int* A) { int v = 0; for (int i = 0; i < 7; i++) if (A[sec[i]]) v += wt[i];
+                                  unitsOnly(A, sec, wt, 7, v); };
+          expectNone("MSF minute sent as units 1010-1101 (\"10\"-\"13\")", run(St::MSF, msfMinuteDamaged, msf0, 4)); }
+        { const int sec[] = {21,22,23,24,25,26,27}, wt[] = {1,2,4,8,10,20,40};
+          gTamper = [&](int* b) { int v = 0; for (int i = 0; i < 7; i++) if (b[sec[i]]) v += wt[i];
+                                  unitsOnly(b, sec, wt, 7, v); };
+          expectNone("DCF77 minute sent as units 1010-1101", run(St::DCF77, dcfMinuteDamaged, dcf0, 4)); }
+        { const int sec[] = {1,2,3,5,6,7,8}, wt[] = {40,20,10,8,4,2,1};
+          gTamper = [&](int* s) { int v = 0; for (int i = 0; i < 7; i++) if (s[sec[i]] == 1) v += wt[i];
+                                  unitsOnly(s, sec, wt, 7, v); };
+          expectNone("WWVB minute sent as units 1010-1101", run(St::WWVB, wwvbMinuteDamaged, wwvb0, 4)); }
+        gTamper = nullptr;
+
+        // ── a date that does not exist ──
+        expectNone("MSF 30 February", run(St::MSF, msfMinuteDamaged, {2026, 2, 30, 10, 0}, 4));
+        expectNone("DCF77 31 April", run(St::DCF77, dcfMinuteDamaged, {2026, 4, 31, 10, 0}, 4));
+
+        // ── the weekday is not the date's ──
+        gTamper = [](int* A) { A[36] = 0; A[37] = 0; A[38] = 1; };      // Monday, for a Tuesday
+        expectNone("MSF weekday Monday on Tuesday 11 Aug", run(St::MSF, msfMinuteDamaged, msf0, 4));
+        gTamper = [](int* b) { b[42] = 1; b[43] = 0; b[44] = 1; };      // 5 = Friday, for a Tuesday
+        expectNone("DCF77 weekday Friday on Tuesday 11 Aug", run(St::DCF77, dcfMinuteDamaged, dcf0, 4));
+        // ★★★ MSF weekday 7 — MSF sends 0-6; this used to be accepted and shown as Sunday. Sunday
+        //     16 Aug, so the only thing wrong is the 7 where MSF's Sunday is 0.
+        gTamper = [](int* A) { A[36] = 1; A[37] = 1; A[38] = 1; };
+        expectNone("MSF weekday 7 (on a Sunday, whose code is 0)", run(St::MSF, msfMinuteDamaged, {2026, 8, 16, 7, 10}, 4));
+        gTamper = nullptr;
+        ok(run(St::MSF, msfMinuteDamaged, {2026, 8, 16, 7, 10}, 4).size() == 3, "MSF: the same Sunday sent as 0 is read");
+
+        // ── MSF's minute identifier, A52-A59 = 01111110 ──
+        gTamper = [](int* A) { A[52] = 1; };
+        expectNone("MSF identifier 11111110 (A52 set)", run(St::MSF, msfMinuteDamaged, msf0, 4));
+        gTamper = [](int* A) { A[55] = 0; };
+        expectNone("MSF identifier 01101110 (A55 clear)", run(St::MSF, msfMinuteDamaged, msf0, 4));
+        gTamper = nullptr;
+
+        // ── WWVB's always-zero seconds: one set is tolerated (see decodeWwvb), two are not ──
+        gTamper = [](int* s) { s[4] = 1; };
+        ok(run(St::WWVB, wwvbMinuteDamaged, wwvb0, 4).size() == 2, "WWVB: ONE always-zero second set is tolerated (still read)");
+        gTamper = [](int* s) { s[4] = 1; s[24] = 1; };
+        expectNone("WWVB two always-zero seconds set", run(St::WWVB, wwvbMinuteDamaged, wwvb0, 4));
+        gTamper = nullptr;
+
+        // ── WWV: a digit past 9 (WWV has no parity at all) ──
+        {
+            const time_t nowT = time(nullptr);
+            const struct tm* utcNow = gmtime(&nowT);
+            const int hostYear = utcNow ? utcNow->tm_year + 1900 : 2026;
+            auto runWwv = [&](int fade, int fadeFrame) {
+                std::vector<int16_t> w;
+                toneHz = 100.0;
+                emit(w, 2000.0, 0.0);
+                const Hhmm t0 { hostYear, 8, 10, 12, 10 };
+                for (int k = 0; k < 7; k++)
+                    wwvMinuteSpec(w, plus(t0, k), hostYear % 100, false, false, -1, k == fadeFrame ? fade : -1);
+                toneHz = 800.0;
+                TimeDecoder d(SR, TimeDecoder::Station::WWV);
+                return runTimed(d, w);
+            };
+            const auto control = runWwv(-1, -1);
+            { const int sec[] = {10,11,12,13,15,16,17}, wt[] = {1,2,4,8,10,20,40};
+              gTamper = [&](int* s) { int v = 0; for (int i = 0; i < 7; i++) if (s[sec[i]] == 1) v += wt[i];
+                                      unitsOnly(s, sec, wt, 7, v); };
+              expectNone("WWV minute sent as units 1010-1111", runWwv(-1, -1)); }
+            gTamper = nullptr;
+
+            // ★★★ WWV: A FADE RIGHT AFTER MARKER 29 IS NOT THE MINUTE. Marker 29, then second 30
+            //     lost: >1050 ms of silence after a marker, which is the minute's own signature.
+            //     It used to re-anchor there and read the rest of that minute — and the next —
+            //     30 s out. Now an anchor must come a whole minute after the last.
+            //     ★ 10 August (doy 222): second 30 is the day's 1-weight, 0 in every frame, so a
+            //       lost second 30 costs this frame nothing and EVERY minute must still be read.
+            const auto faded = runWwv(30, 3);
+            int wrong = 0;
+            for (const auto& h : faded) {
+                const int k = (int)std::floor((h.atS - 2.0) / 60.0);
+                if (!same(h.t, plus(Hhmm{ hostYear, 8, 10, 12, 10 }, k))) wrong++;
+            }
+            std::printf("    WWV control %zu announced, with the fade %zu, %d wrong\n", control.size(), faded.size(), wrong);
+            ok(control.size() >= 4, "WWV control: the honest minutes are announced");
+            ok(wrong == 0 && faded.size() == control.size(),
+               "★★★ WWV: a fade after marker 29 does not re-frame — no minute lost, none wrong");
+        }
+
+        // ── DUT1, display only ──
+        gTamperB = [](int* B) { B[1] = 1; B[2] = 1; };                  // +0.2 s
+        { std::vector<int16_t> a; emit(a, 3000.0, 1.0);
+          for (int k = 0; k < 3; k++) msfMinuteDamaged(a, plus(msf0, k), -1, -1);
+          TimeDecoder d(SR, St::MSF); const auto h = runTimed(d, a);
+          ok(!h.empty() && h.back().t.dut1Known && h.back().t.dut1Tenths == 2, "MSF: DUT1 +0.2 s read from B1-B2"); }
+        gTamperB = nullptr;
+        gTamper = [](int* s) { s[36] = 0; s[37] = 1; s[38] = 0; s[42] = 1; s[43] = 1; };   // −0.3 s
+        { const auto h = run(St::WWVB, wwvbMinuteDamaged, wwvb0, 3);
+          ok(!h.empty() && h.back().t.dut1Known && h.back().t.dut1Tenths == -3, "WWVB: DUT1 -0.3 s read from s36-38 + s40-43"); }
+        gTamper = nullptr;
+    }
+
+    // ── THE PROGRESS LINE AFTER A LOCK: one misread year bit is "??", the rest are the time ──
+    // ★★★ Stuart, 2026-10-05: "Occasionally MSF will give a real odd date and time of like 2014".
+    //     The year is complete at second 24 and checked at 54 — so the line showed it unchecked.
+    {
+        const Hhmm f0 {2026, 8, 11, 7, 10};
+        std::vector<int16_t> a;
+        emit(a, 3000.0, 1.0);
+        int frame = 0;
+        // Frame 2 has its year's 1-bit (A24) flipped AFTER parity: 2026 reads 2027, parity fails.
+        // Frames 0 and 1 are honest, so the decoder is LOCKED when frame 2 is read.
+        gPostTamper = [&](int* A) { if (frame++ == 2) A[24] = !A[24]; };
+        for (int k = 0; k < 5; k++) msfMinuteDamaged(a, plus(f0, k), -1, -1);
+        gPostTamper = nullptr;
+        TimeDecoder d(SR, TimeDecoder::Station::MSF);
+        std::vector<std::pair<int, TimeDecoder::Partial>> parts;   // (frame index, partial)
+        int fi = -1;
+        d.onPartial = [&](const TimeDecoder::Partial& p) { if (p.second == 0) fi++; parts.push_back({ fi, p }); };
+        const auto h = runTimed(d, a);
+        bool f0YearShown = false;
+        bool f2YearDoubted = false, f2RestRight = false, f2RestDoubted = false;
+        bool f3Clean = true, f1Clean = true;
+        for (const auto& [k, p] : parts) {
+            if (k == 0 && p.year && !p.yearBad && p.t.year == 2026) f0YearShown = true;
+            if (k == 1 && (p.yearBad || p.monthBad || p.dayBad || p.hourBad || p.minuteBad || p.weekdayBad)) f1Clean = false;
+            if (k == 2 && p.second >= 51) {
+                const Hhmm want = plus(f0, 2);
+                if (p.year && p.yearBad && p.t.year == 2027) f2YearDoubted = true;
+                if (p.month && p.day && p.hour && p.minute && p.t.month == want.mo && p.t.day == want.d
+                    && p.t.hour == want.h && p.t.minute == want.mi) f2RestRight = true;
+                if (p.monthBad || p.dayBad || p.hourBad || p.minuteBad || p.weekdayBad) f2RestDoubted = true;
+            }
+            if (k == 3 && (p.yearBad || p.monthBad || p.dayBad || p.hourBad || p.minuteBad || p.weekdayBad)) f3Clean = false;
+        }
+        ok(f0YearShown, "progress line, before lock: a possible year is still shown");
+        ok(f1Clean, "progress line: an honest frame is not doubted");
+        ok(f2YearDoubted, "★★★ progress line, AFTER lock: the misread year (2027) is doubted -> \"????\"");
+        ok(f2RestRight && !f2RestDoubted, "★★★ ... and month, day, hour, minute in that frame are shown, correct");
+        ok(f3Clean, "progress line: the frame after the bad one is held to the right minute (not doubted)");
+        // The locked clock itself never saw 2027: the flipped bit failed parity.
+        bool any2027 = false; for (const auto& x : h) if (x.t.year != 2026) any2027 = true;
+        ok(!h.empty() && !any2027, "the locked clock never announced the misread year");
+    }
+
+    // ── BEFORE any lock: an impossible field is "??" all the same ──
+    // ★ No lock means nothing to compare against — only the digit and range checks can doubt it.
+    {
+        std::vector<int16_t> a;
+        emit(a, 3000.0, 1.0);
+        gTamper = [](int* A) { A[25] = 0; A[26] = A[27] = A[28] = A[29] = 1; };   // month units 1111
+        msfMinuteDamaged(a, {2026, 8, 11, 7, 10}, -1, -1);
+        gTamper = nullptr;
+        TimeDecoder d(SR, TimeDecoder::Station::MSF);
+        bool doubted = false, yearOk = false;
+        d.onPartial = [&](const TimeDecoder::Partial& p) {
+            if (p.month && p.monthBad) doubted = true;
+            if (p.year && !p.yearBad && p.t.year == 2026) yearOk = true;
+        };
+        runTimed(d, a);
+        ok(doubted, "★★ progress line, BEFORE lock: an impossible month (BCD 1111) is doubted");
+        ok(yearOk, "... and the possible year beside it is still shown");
+    }
 
     // ── RWM carries no timecode, and must never pretend otherwise ───────────
     {

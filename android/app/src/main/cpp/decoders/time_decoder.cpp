@@ -19,29 +19,6 @@ constexpr double kSecond      = 1000.0;
 
 inline bool near(double v, double target, double tol = kTol) { return std::fabs(v - target) <= tol; }
 
-/** BCD out of a bit range, LSB first — which is how both stations send it. */
-int bcd(const int* bits, int from, int to) {
-    static const int w[] = { 1, 2, 4, 8, 10, 20, 40, 80 };
-    int v = 0;
-    for (int i = from, k = 0; i <= to && k < 8; i++, k++) if (bits[i]) v += w[k];
-    return v;
-}
-
-/** ★★★ BCD, MOST SIGNIFICANT BIT FIRST — which is how MSF sends every field.
- *  bit 17A is 80, 18A is 40 … 24A is 1 (NPL's published table). The LSB-first reader below is for
- *  stations that do it the other way; using the wrong one produces a bit-REVERSED number that is
- *  still a plausible date, which is precisely how Anthorn decoded as "2064-02-22 06:16". */
-int bcdMsb(const int* bits, int from, int to) {
-    int v = 0;
-    for (int i = from; i <= to; i++) v = (v * 2) + (bits[i] ? 1 : 0);
-    // The field is BCD-weighted, not plain binary: rebuild from the published weights.
-    int out = 0, n = to - from + 1;
-    static const int w10[] = { 80, 40, 20, 10, 8, 4, 2, 1 };
-    for (int i = 0; i < n; i++) if (bits[from + i]) out += w10[8 - n + i];
-    (void)v;
-    return out;
-}
-
 int parityOdd(const int* bits, int from, int to) {
     int n = 0;
     for (int i = from; i <= to; i++) n += bits[i] ? 1 : 0;
@@ -69,11 +46,48 @@ constexpr BcdField kWwvbMinute   = { 7, {1,2,3,5,6,7,8},                    {40,
 constexpr BcdField kWwvbHour     = { 6, {12,13,15,16,17,18},                {20,10,8,4,2,1} };
 constexpr BcdField kWwvbDoy      = {10, {22,23,25,26,27,28,30,31,32,33},    {200,100,80,40,20,10,8,4,2,1} };
 constexpr BcdField kWwvbYear     = { 8, {45,46,47,48,50,51,52,53},          {80,40,20,10,8,4,2,1} };
+/** ★★ MSF AND DCF77 FROM TABLES TOO (2026-10-05), so the BCD-digit check below can see each
+ *  digit's bits — the old bcd()/bcdMsb() readers summed the weights and could not tell "10" sent
+ *  as tens=1 from "10" sent as units=1010, which no transmitter sends and parity cannot catch.
+ *  The VALUES are what those readers gave, weight for weight: MSF is MSB first (NPL — bit 17A is
+ *  80 … 24A is 1), DCF77 LSB first (PTB). */
+constexpr BcdField kMsfYear      = { 8, {17,18,19,20,21,22,23,24},          {80,40,20,10,8,4,2,1} };
+constexpr BcdField kMsfMonth     = { 5, {25,26,27,28,29},                   {10,8,4,2,1} };
+constexpr BcdField kMsfDay       = { 6, {30,31,32,33,34,35},                {20,10,8,4,2,1} };
+constexpr BcdField kMsfWeekday   = { 3, {36,37,38},                         {4,2,1} };
+constexpr BcdField kMsfHour      = { 6, {39,40,41,42,43,44},                {20,10,8,4,2,1} };
+constexpr BcdField kMsfMin       = { 7, {45,46,47,48,49,50,51},             {40,20,10,8,4,2,1} };
+constexpr BcdField kDcfMinute    = { 7, {21,22,23,24,25,26,27},             {1,2,4,8,10,20,40} };
+constexpr BcdField kDcfHour      = { 6, {29,30,31,32,33,34},                {1,2,4,8,10,20} };
+constexpr BcdField kDcfDay       = { 6, {36,37,38,39,40,41},                {1,2,4,8,10,20} };
+constexpr BcdField kDcfWeekday   = { 3, {42,43,44},                         {1,2,4} };
+constexpr BcdField kDcfMonth     = { 5, {45,46,47,48,49},                   {1,2,4,8,10} };
+constexpr BcdField kDcfYear      = { 8, {50,51,52,53,54,55,56,57},          {1,2,4,8,10,20,40,80} };
+/** ★ MSF's minute identifier, bits A52-A59 (NPL): 0 1 1 1 1 1 1 0. Port of the check in
+ *  madpsy/ubersdr-ntp (GPL-3.0-or-later), MsfDecoder.cpp identifierAt(). */
+constexpr int kMsfIdentifier[8] = { 0, 1, 1, 1, 1, 1, 1, 0 };
+/** ★ WWVB seconds that are always 0 (SP 432 Table 2.3). */
+constexpr int kWwvbZeroBits[11] = { 4, 10, 11, 14, 20, 21, 24, 34, 35, 44, 54 };
 
 int readField(const int* bits, const BcdField& f) {
     int v = 0;
     for (int i = 0; i < f.n; i++) if (bits[f.sec[i]]) v += f.wt[i];
     return v;
+}
+/** ★★★ EVERY BCD DIGIT ≤ 9 (2026-10-05). A nibble of 1010-1111 is a misread that the field's
+ *  RANGE check can miss — minute units 1010 sums to "10", a perfectly good minute — and that
+ *  parity passes whenever the misread came in pairs. Digits are grouped by decade of weight
+ *  (1-8 units, 10-80 tens, 100-200 hundreds). Ported from madpsy/ubersdr-ntp
+ *  (GPL-3.0-or-later): Dcf77Decoder.cpp / MsfDecoder.cpp check each digit; their WWV/WWVB do
+ *  not, and ours do — those two stations have no parity at all, so they need it most. */
+bool digitsOk(const int* bits, const BcdField& f) {
+    int d[3] = { 0, 0, 0 };
+    for (int i = 0; i < f.n; i++) {
+        if (!bits[f.sec[i]]) continue;
+        const int w = f.wt[i];
+        if (w >= 100) d[2] += w / 100; else if (w >= 10) d[1] += w / 10; else d[0] += w;
+    }
+    return d[0] <= 9 && d[1] <= 9 && d[2] <= 9;
 }
 /** The second at which the field's last bit has arrived — the progress line may show it from then. */
 int fieldDone(const BcdField& f) {
@@ -104,14 +118,29 @@ bool doyToDate(int year, int doy, int& month, int& day) {
  *  apart and the corroboration chain broke at four month-ends a year. That never mattered while
  *  WWV/WWVB reported the minute ENDING — the +1 carry below now crosses those boundaries itself.
  *  (Howard Hinnant's days_from_civil.) */
-long long minuteIndex(int y, int m, int d, int hh, int mm) {
+long long daysFromCivil(int y, int m, int d) {
     y -= m <= 2;
     const long long era = (y >= 0 ? y : y - 399) / 400;
     const long long yoe = y - era * 400;
     const long long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     const long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    const long long days = era * 146097 + doe - 719468;
-    return days * 1440 + hh * 60 + mm;
+    return era * 146097 + doe - 719468;
+}
+long long minuteIndex(int y, int m, int d, int hh, int mm) {
+    return daysFromCivil(y, m, d) * 1440 + hh * 60 + mm;
+}
+/** ISO weekday, 1 = Monday .. 7 = Sunday (1970-01-01 was a Thursday). */
+int isoWeekday(int y, int m, int d) {
+    const long long days = daysFromCivil(y, m, d);
+    return (int)(((days + 3) % 7 + 7) % 7) + 1;
+}
+/** ★★ THE DATE MUST EXIST AND THE WEEKDAY MUST BE ITS WEEKDAY (2026-10-05). MSF and DCF77 send
+ *  both, so a 30 February, or a Tuesday the calendar calls a Thursday, is a misread that happened
+ *  to pass parity — and it costs nothing on a real minute, where they always agree. Ported from
+ *  madpsy/ubersdr-ntp (GPL-3.0-or-later), Dcf77Decoder.cpp / MsfDecoder.cpp. */
+bool dateOk(int year, int month, int day, int isoWday) {
+    if (month < 1 || month > 12 || day < 1 || day > daysIn(year, month)) return false;
+    return isoWday == 0 || isoWeekday(year, month, day) == isoWday;
 }
 
 /** ★★★ ONE MINUTE ON, WITH EVERY CARRY — hour, day, month, year, and 29 February. */
@@ -132,6 +161,16 @@ void addMinute(TimeDecoder::TimeStamp& t) {
  *  The real second edges are a quartz-exact 1.000 s apart; 120 ms is three times the envelope's
  *  edge scatter on a marginal signal and still far from the mid-second where noise lands. */
 constexpr double kGridTolS = 0.12;
+
+/** ★★ How long the progress line keeps holding a frame to the last locked minute (2026-10-05).
+ *  Five minutes: long enough to ride out a fade of a minute or two (which is exactly when a
+ *  half-read frame shows nonsense), short enough that a lock lost for good stops judging. */
+constexpr double kExpectTtlS = 300.0;
+
+/** ★★ WWV: once anchored, a new marker-then-hole is believed only this close to a whole number of
+ *  minutes after the last anchor — or once the anchor has gone unconfirmed for kWwvAnchorLostS. */
+constexpr double kWwvAnchorTolS  = 2.0;
+constexpr double kWwvAnchorLostS = 120.0;
 
 }  // namespace
 
@@ -256,6 +295,7 @@ void TimeDecoder::process(const int16_t* samples, int count) {
         //   screen. 6 dB is the floor below which these are not decodable anyway.
         if (snrDb_ < 3.0 && state_ != State::NoSignal) {
             second_ = -1; anchorClock_ = 0; frameClosed_ = true; lastStamp_ = 0;
+            expectClock_ = 0;           // ★ no carrier: nothing to hold the next frame to
             setState(State::NoSignal);
         }
     }
@@ -398,7 +438,24 @@ void TimeDecoder::onSecondEdge(double dipMs, double gapMs) {
         // ★ A frame read while HUNTING was never read at all — its bits are whatever the last
         //   minute left. Only a minute that began at an anchor may be decoded.
         const bool frameWasRead = second_ >= 0;
-        if (sym == 2 && dipMs > kWwvHoleMs) {
+        // ★★★ BUT A FADE LOOKS LIKE A HOLE (2026-10-05). Any marker followed by >1050 ms of silence
+        //     used to re-anchor — so a fade straight after marker 29 (or 9, 19 …) re-framed the
+        //     minute 30 s out: that frame and the next were read against the wrong origin. Once
+        //     anchored, a new anchor is believed only a whole number of minutes (±2 s) after the
+        //     last one, or once none has been for >2 min (lost — and that also re-acquires after a
+        //     slip, e.g. a leap second, two minutes later). Rule ported from madpsy/ubersdr-ntp
+        //     (GPL-3.0-or-later), WwvDecoder.cpp tryAnchor/feedPendingFrames: anchor once, then step
+        //     frames by 60 s. ★ Their re-align-by-one-second on a slipped skeleton is NOT ported:
+        //     ours places by elapsed time from the anchor, and the lost-anchor rule covers a slip.
+        bool newAnchor = sym == 2 && dipMs > kWwvHoleMs;
+        if (newAnchor && anchorClock_ > 0 && second_ >= 0) {
+            const double cand  = (double)dipStartClock_ - gapMs * sr_ / 1000.0;
+            const double since = (cand - (double)anchorClock_) / sr_;
+            const double mins  = std::round(since / 60.0);
+            newAnchor = since > kWwvAnchorLostS + kWwvAnchorTolS
+                     || (mins >= 1.0 && std::fabs(since - 60.0 * mins) <= kWwvAnchorTolS);
+        }
+        if (newAnchor) {
             // ★★★ THE ANCHOR IS A CLOCK REFERENCE, NOT JUST A RESET. Everything after it is placed
             //     by DISTANCE from here — see below.
             anchorClock_ = (long long)((double)dipStartClock_ - gapMs * sr_ / 1000.0);
@@ -667,9 +724,32 @@ void TimeDecoder::finishMinute(bool decoded, const TimeStamp& ts) {
     const bool follows = (lastStamp_ != 0) && (stamp == lastStamp_ + 1);
     lastStamp_ = stamp;
     if (!follows) { setState(State::Reading); return; }   // not yet corroborated
+    // ★★ WHAT THE NEXT FRAME MUST SAY — for the progress line, which shows fields before their
+    //    parity arrives (see emitPartial). Each station's convention, as its decode reports it:
+    //    MSF and DCF77 frames describe the minute BEGINNING at their end, so `ts` is this frame's
+    //    raw value and the next frame reads ts + 1. WWV and WWVB frames describe the minute that
+    //    began at their own second 0 and the decode has already added one, so `ts` IS the next
+    //    frame's raw value. Only a CORROBORATED minute sets it: a lone parity pass is wrong one
+    //    time in sixteen, and would then mark a whole correct frame "??".
+    expectNext_ = ts;
+    if (station_ == Station::MSF || station_ == Station::DCF77) addMinute(expectNext_);
+    expectClock_ = clock_ > 0 ? clock_ : 1;
     good_++;
     setState(State::Locked);
     if (onTime) onTime(ts);
+}
+
+bool TimeDecoder::expectedNow(TimeStamp& e) const {
+    if (expectClock_ == 0 || second_ < 0) return false;
+    const double el = (double)(clock_ - expectClock_) / sr_;
+    if (el < 0.0 || el > kExpectTtlS) return false;
+    // ★ Whole minutes since the locked one, measured from where THIS frame began: every station
+    //   decodes within ~2 s of its frame's end, so (elapsed − second) is a whole minute ± 2 s.
+    long k = std::lround((el - (double)second_) / 60.0);
+    if (k < 0) k = 0;
+    e = expectNext_;
+    for (long i = 0; i < k; i++) addMinute(e);
+    return true;
 }
 
 /**
@@ -679,61 +759,99 @@ void TimeDecoder::finishMinute(bool decoded, const TimeStamp& ts) {
  *    own order — MSF puts the year first and the minute last, DCF77 the minute first and the year
  *    last. So this is per-station, and reporting a field before its last bit has arrived would
  *    show a number that is briefly, confidently wrong.
+ * ★★★ AND A FIELD THAT HAS ARRIVED IS STILL UNCHECKED (2026-10-05). MSF's year is complete at
+ *     second 24 and its parity at 54; one flipped bit showed "2014" for half a minute, in a line
+ *     shaped exactly like a confident time. Each field is now DOUBTED (xxxBad, drawn "??") when
+ *     it is not a possible value, or when a recent lock says what this frame must read and it
+ *     disagrees. The full decode is untouched — this only stops the line asserting a misread.
+ *     ★ Twice a year (MSF/DCF77 send LOCAL time) the hour jumps at the clock change and is shown
+ *       "??" for that one frame; the locked line still reads it correctly.
  */
 void TimeDecoder::emitPartial() {
     if (!onPartial || second_ < 0) return;
     Partial p;
     p.second = second_;
     const int* A = bitsA_;
+    // A field that is complete: its value, and whether its digits are digits.
+    auto take = [&](const BcdField& f, bool& ready, bool& bad, int& v, int add = 0) {
+        if (second_ < fieldDone(f)) return;
+        ready = true; v = readField(A, f) + add; bad = !digitsOk(A, f);
+    };
+    // WWV/WWVB: the date is a day-of-year, convertible only once the year is in and sane.
+    auto dateFromDoy = [&](const BcdField& doyF) {
+        if (!p.year) return;
+        p.month = p.day = true;
+        if (p.yearBad || !digitsOk(A, doyF) || !doyToDate(p.t.year, readField(A, doyF), p.t.month, p.t.day))
+            p.monthBad = p.dayBad = true;
+    };
     switch (station_) {
         case Station::MSF:
-            if (second_ >= 24) { p.t.year    = 2000 + bcdMsb(A, 17, 24); p.year = true; }
-            if (second_ >= 29) { p.t.month   = bcdMsb(A, 25, 29);        p.month = true; }
-            if (second_ >= 35) { p.t.day     = bcdMsb(A, 30, 35);        p.day = true; }
-            if (second_ >= 38) { const int wd = bcdMsb(A, 36, 38);
-                                 p.t.weekday = wd == 0 ? 7 : wd;         p.weekday = true; }
-            if (second_ >= 44) { p.t.hour    = bcdMsb(A, 39, 44);        p.hour = true; }
-            if (second_ >= 51) { p.t.minute  = bcdMsb(A, 45, 51);        p.minute = true; }
+            take(kMsfYear,   p.year,   p.yearBad,   p.t.year, 2000);
+            take(kMsfMonth,  p.month,  p.monthBad,  p.t.month);
+            take(kMsfDay,    p.day,    p.dayBad,    p.t.day);
+            if (second_ >= fieldDone(kMsfWeekday)) {
+                const int wd = readField(A, kMsfWeekday);
+                p.weekday = true;
+                p.weekdayBad = wd > 6;                  // ★ MSF sends 0-6; 7 is a misread
+                p.t.weekday = wd == 0 ? 7 : wd;
+            }
+            take(kMsfHour,   p.hour,   p.hourBad,   p.t.hour);
+            take(kMsfMin, p.minute, p.minuteBad, p.t.minute);
             break;
         case Station::DCF77:
-            if (second_ >= 27) { p.t.minute  = bcd(A, 21, 27);        p.minute = true; }
-            if (second_ >= 34) { p.t.hour    = bcd(A, 29, 34);        p.hour = true; }
-            if (second_ >= 41) { p.t.day     = bcd(A, 36, 41);        p.day = true; }
-            if (second_ >= 44) { p.t.weekday = bcd(A, 42, 44);        p.weekday = true; }
-            if (second_ >= 49) { p.t.month   = bcd(A, 45, 49);        p.month = true; }
-            if (second_ >= 57) { p.t.year    = 2000 + bcd(A, 50, 57); p.year = true; }
+            take(kDcfMinute, p.minute, p.minuteBad, p.t.minute);
+            take(kDcfHour,   p.hour,   p.hourBad,   p.t.hour);
+            take(kDcfDay,    p.day,    p.dayBad,    p.t.day);
+            if (second_ >= fieldDone(kDcfWeekday)) {
+                p.weekday = true; p.t.weekday = readField(A, kDcfWeekday);
+                p.weekdayBad = p.t.weekday < 1;         // DCF77 sends 1-7
+            }
+            take(kDcfMonth,  p.month,  p.monthBad,  p.t.month);
+            take(kDcfYear,   p.year,   p.yearBad,   p.t.year, 2000);
             break;
         case Station::WWV: {
             // ★★★ THE SAME TABLE decodeWwv READS (audit 2026-10-04 row 6) — this used the pre-
             //     2026-08-12 map, minute at 1-8 and hour at 10-16, so the line showed the MINUTE's
             //     bits as the hour. These are the transmitted fields: the time at the START of
             //     this frame, which is the minute in progress (SP 432 p. 46).
-            if (second_ >= fieldDone(kWwvMinute)) { p.t.minute = readField(A, kWwvMinute); p.minute = true; }
-            if (second_ >= fieldDone(kWwvHour))   { p.t.hour   = readField(A, kWwvHour);   p.hour = true; }
+            take(kWwvMinute, p.minute, p.minuteBad, p.t.minute);
+            take(kWwvHour,   p.hour,   p.hourBad,   p.t.hour);
             // ★ The day needs the year (for leap), and the year's tens digit is the LAST field to
             //   arrive (second 54) — so date and year appear together, once both halves are in.
             if (second_ >= fieldDone(kWwvYearTens)) {
-                const int u = readField(A, kWwvYearUnits), t = readField(A, kWwvYearTens);
-                if (u <= 9 && t <= 9) {
-                    p.t.year = 2000 + t * 10 + u; p.year = true;
-                    if (doyToDate(p.t.year, readField(A, kWwvDoy), p.t.month, p.t.day))
-                        p.month = p.day = true;
-                }
+                p.year = true;
+                p.t.year = 2000 + readField(A, kWwvYearTens) * 10 + readField(A, kWwvYearUnits);
+                p.yearBad = !digitsOk(A, kWwvYearUnits) || !digitsOk(A, kWwvYearTens);
+                dateFromDoy(kWwvDoy);
             }
             break;
         }
         case Station::WWVB: {
-            if (second_ >= fieldDone(kWwvbMinute)) { p.t.minute = readField(A, kWwvbMinute); p.minute = true; }
-            if (second_ >= fieldDone(kWwvbHour))   { p.t.hour   = readField(A, kWwvbHour);   p.hour = true; }
-            if (second_ >= fieldDone(kWwvbYear))   {
-                p.t.year = 2000 + readField(A, kWwvbYear); p.year = true;
-                if (doyToDate(p.t.year, readField(A, kWwvbDoy), p.t.month, p.t.day))
-                    p.month = p.day = true;
-            }
+            take(kWwvbMinute, p.minute, p.minuteBad, p.t.minute);
+            take(kWwvbHour,   p.hour,   p.hourBad,   p.t.hour);
+            take(kWwvbYear,   p.year,   p.yearBad,   p.t.year, 2000);
+            if (p.year) dateFromDoy(kWwvbDoy);
             break;
         }
         case Station::RWM:
             break;      // nothing to fill in — it carries no timecode
+    }
+    // ── Ranges, the same ones the full decode applies ──
+    if (p.month  && (p.t.month < 1 || p.t.month > 12)) p.monthBad = true;
+    if (p.day    && (p.t.day < 1 || p.t.day > 31))     p.dayBad = true;
+    if (p.day && p.month && !p.dayBad && !p.monthBad
+        && p.t.day > daysIn(p.year && !p.yearBad ? p.t.year : 2000, p.t.month)) p.dayBad = true;
+    if (p.hour   && p.t.hour > 23)   p.hourBad = true;
+    if (p.minute && p.t.minute > 59) p.minuteBad = true;
+    // ── After a lock: what THIS frame must say ──
+    TimeStamp e;
+    if (station_ != Station::RWM && expectedNow(e)) {
+        if (p.year    && p.t.year    != e.year)    p.yearBad = true;
+        if (p.month   && p.t.month   != e.month)   p.monthBad = true;
+        if (p.day     && p.t.day     != e.day)     p.dayBad = true;
+        if (p.hour    && p.t.hour    != e.hour)    p.hourBad = true;
+        if (p.minute  && p.t.minute  != e.minute)  p.minuteBad = true;
+        if (p.weekday && e.weekday && p.t.weekday != e.weekday) p.weekdayBad = true;
     }
     onPartial(p);
 }
@@ -829,6 +947,19 @@ bool TimeDecoder::decodeWwvb(TimeStamp& out) const {
     const int yy     = readField(b, kWwvbYear);
 
     if (hour > 23 || minute > 59 || doy < 1 || doy > 366 || yy > 99) return false;
+    // ★★ WWVB HAS NO PARITY, so these are the only content checks it gets (2026-10-05):
+    //  • every BCD digit ≤ 9 (madpsy/ubersdr-ntp checks this on DCF77/MSF only);
+    if (!digitsOk(b, kWwvbMinute) || !digitsOk(b, kWwvbHour) || !digitsOk(b, kWwvbDoy)
+        || !digitsOk(b, kWwvbYear)) return false;
+    //  • the always-zero seconds. ★ MORE THAN ONE set is refused; ONE is tolerated. A slot only
+    //    reaches here READABLE (an unreadable dip already erased and failed the minute), so a 1
+    //    in a zero slot is a 200 ms dip measured as ~500 — a lengthened dip, which an LF fade
+    //    right after the carrier returns does produce. One such in a reserved second leaves every
+    //    data bit as read, and the data is still held to corroboration (two minutes agreeing);
+    //    two or more means the dip lengths themselves are not being read, and the minute goes.
+    int zeroSet = 0;
+    for (int s : kWwvbZeroBits) zeroSet += b[s] ? 1 : 0;
+    if (zeroSet > 1) return false;
 
     const int year = 2000 + yy;
     // ★ WWVB states the leap year itself (bit 55) — but deriving it is safer than trusting one
@@ -842,6 +973,18 @@ bool TimeDecoder::decodeWwvb(TimeStamp& out) const {
     out.weekday = 0;                       // WWVB sends no weekday
     out.dst = b[58] != 0;                  // DST in effect
     out.leapSecondPending = b[56] != 0;
+    // ★ Display only (2026-10-05). s57 = DST at 24:00 UTC today, s58 at 00:00 (SP 432 p. 21).
+    //   DUT1: sign s36-38 is 1 0 1 for + and 0 1 0 for −; magnitude s40-43 = 0.8/0.4/0.2/0.1 s.
+    //   Any other sign pattern is a misread and is not shown. (Map as madpsy/ubersdr-ntp,
+    //   GPL-3.0-or-later, WwvbDecoder.cpp decodeFrame.)
+    out.hasDst2 = true;
+    out.dst2 = b[57] != 0;
+    {
+        const bool plus = b[36] && !b[37] && b[38], minus = !b[36] && b[37] && !b[38];
+        const int mag = (b[40] ? 8 : 0) + (b[41] ? 4 : 0) + (b[42] ? 2 : 0) + (b[43] ? 1 : 0);
+        out.dut1Known = (plus || minus) && mag <= 9;
+        out.dut1Tenths = minus ? -mag : mag;
+    }
     // ★★★ THE FRAME CARRIES THE MINUTE THAT IS ENDING, NOT THE ONE ABOUT TO BEGIN — the opposite
     //     of MSF and DCF77 (audit 2026-10-04 row 8). SP 432 p. 21: "The on-time reference point of
     //     the time code frame is the leading edge of the reference bit Pr" — second 0 — so the
@@ -875,6 +1018,9 @@ bool TimeDecoder::decodeWwv(TimeStamp& out) const {
     const int hour   = readField(b, kWwvHour);
     const int doy    = readField(b, kWwvDoy);
     if (hour > 23 || minute > 59 || doy < 1 || doy > 366) return false;
+    // ★★ Every BCD digit ≤ 9 (2026-10-05) — WWV has no parity, so this and the calendar are all
+    //    the content checking it gets. (The year's two digits are checked where it is read.)
+    if (!digitsOk(b, kWwvMinute) || !digitsOk(b, kWwvHour) || !digitsOk(b, kWwvDoy)) return false;
 
     // ★★★ THE YEAR IS ON THE AIR — SPLIT ACROSS THE FRAME, WHICH IS WHY IT WAS NEVER FOUND
     //     (2026-10-04, audit row 7). The 2026-08-12 note here said no placement of a two-digit
@@ -928,7 +1074,17 @@ bool TimeDecoder::decodeWwv(TimeStamp& out) const {
     //    current month".
     out.dst = b[kWwvDst1] != 0;
     out.leapSecondPending = b[kWwvLsw] != 0;
-    (void)kWwvDst2;
+    // ★ Display only (2026-10-05): DST2 (s55 — DST at 24:00 UTC today) and DUT1 (sign s50, 1 = +;
+    //   magnitude s56/57/58 = 0.1/0.2/0.4 s; SP 432 p. 48; map as madpsy/ubersdr-ntp,
+    //   GPL-3.0-or-later, WwvDecoder.cpp). WWV keeps decoding over a dropped pulse and records it
+    //   as 0, so each is shown only when every second it needs actually arrived readable.
+    out.hasDst2 = slot_[kWwvDst2] == 1;
+    out.dst2 = out.hasDst2 && b[kWwvDst2] != 0;
+    out.dut1Known = slot_[50] == 1 && slot_[56] == 1 && slot_[57] == 1 && slot_[58] == 1;
+    {
+        const int mag = (b[56] ? 1 : 0) + (b[57] ? 2 : 0) + (b[58] ? 4 : 0);
+        out.dut1Tenths = out.dut1Known ? (b[50] ? mag : -mag) : 0;
+    }
     // ★★★ AND THE TIME IS THE MINUTE JUST ENDED (audit 2026-10-04 row 8). SP 432 p. 46: "The
     //     information in the time code refers to the time at the start of the one-minute frame."
     //     The frame is closed by the first pulse of the NEXT minute (1.03 s into it), so the
@@ -948,14 +1104,14 @@ bool TimeDecoder::decodeMsf(TimeStamp& out) const {
     const int* A = bitsA_;
     const int* B = bitsB_;
 
-    // ★★★ MSB FIRST. See bcdMsb() — reading these LSB-first bit-reverses every field and yields a
-    //     date that passes every range check while being completely wrong.
-    const int year  = bcdMsb(A, 17, 24);
-    const int month = bcdMsb(A, 25, 29);
-    const int day   = bcdMsb(A, 30, 35);
-    const int wday  = bcdMsb(A, 36, 38);
-    const int hour  = bcdMsb(A, 39, 44);
-    const int min   = bcdMsb(A, 45, 51);
+    // ★★★ MSB FIRST. See the kMsf* tables — reading these LSB-first bit-reverses every field and
+    //     yields a date that passes every range check while being completely wrong.
+    const int year  = readField(A, kMsfYear);
+    const int month = readField(A, kMsfMonth);
+    const int day   = readField(A, kMsfDay);
+    const int wday  = readField(A, kMsfWeekday);
+    const int hour  = readField(A, kMsfHour);
+    const int min   = readField(A, kMsfMin);
 
     // Odd parity, each over its own span.
     if (parityOdd(A, 17, 24) == B[54]) return false;
@@ -966,12 +1122,34 @@ bool TimeDecoder::decodeMsf(TimeStamp& out) const {
     if (month < 1 || month > 12 || day < 1 || day > 31) return false;
     if (hour > 23 || min > 59) return false;
 
+    // ★★ THE CHECKS PARITY CANNOT MAKE (2026-10-05). Four parity bits pass one wrong minute in
+    //    sixteen; these cost a real minute nothing, because a real minute always satisfies them.
+    //  • A52-A59 must read 01111110 — NPL's minute identifier. Our A reading at 53-58 is the same
+    //    200/300 ms classifier every data bit uses (A=1 there, with B=1 a single 300 ms dip), and
+    //    52/59 are the plain 100 ms "A=0" — no less reliable than the date bits, so EXACT, not a
+    //    tolerance: one wrong bit there is a misread minute, the same as one wrong bit anywhere.
+    for (int j = 0; j < 8; j++) if (A[52 + j] != kMsfIdentifier[j]) return false;
+    //  • every BCD digit ≤ 9;
+    if (!digitsOk(A, kMsfYear) || !digitsOk(A, kMsfMonth) || !digitsOk(A, kMsfDay)
+        || !digitsOk(A, kMsfHour) || !digitsOk(A, kMsfMin)) return false;
+    //  • ★★★ THE WEEKDAY IS 0-6 (0 = Sunday). 7 is not a day MSF can send, and this used to map
+    //    it — like 0 — to Sunday and accept it.
+    if (wday > 6) return false;
+    //  • the date exists, and the weekday sent is that date's weekday.
+    if (!dateOk(2000 + year, month, day, wday == 0 ? 7 : wday)) return false;
+
     out.year = 2000 + year;
     out.month = month; out.day = day;
     out.weekday = wday == 0 ? 7 : wday;     // MSF sends Sunday as 0; we report ISO 1..7
     out.hour = hour; out.minute = min;
     out.dst = B[58] != 0;
     out.leapSecondPending = false;
+    // ★ DUT1, display only: B1-B8 each +0.1 s, B9-B16 each −0.1 s (NPL). Both signs at once is
+    //   a contradiction, so then it is not shown. (Mapping as madpsy/ubersdr-ntp, GPL-3.0-or-later.)
+    int pos = 0, neg = 0;
+    for (int i = 1; i <= 16; i++) if (B[i]) (i <= 8 ? pos : neg)++;
+    out.dut1Known = !(pos && neg);
+    out.dut1Tenths = pos ? pos : -neg;
     return true;
 }
 
@@ -986,12 +1164,12 @@ bool TimeDecoder::decodeDcf77(TimeStamp& out) const {
     if (!b[20]) return false;                       // start of encoded time
     if (b[17] == b[18]) return false;               // CEST/CET flags must differ
 
-    const int min   = bcd(b, 21, 27);
-    const int hour  = bcd(b, 29, 34);
-    const int day   = bcd(b, 36, 41);
-    const int wday  = bcd(b, 42, 44);
-    const int month = bcd(b, 45, 49);
-    const int year  = bcd(b, 50, 57);
+    const int min   = readField(b, kDcfMinute);
+    const int hour  = readField(b, kDcfHour);
+    const int day   = readField(b, kDcfDay);
+    const int wday  = readField(b, kDcfWeekday);
+    const int month = readField(b, kDcfMonth);
+    const int year  = readField(b, kDcfYear);
 
     if (parityOdd(b, 21, 28) != 0) return false;    // even parity => sum over data+parity is even
     if (parityOdd(b, 29, 35) != 0) return false;
@@ -999,6 +1177,11 @@ bool TimeDecoder::decodeDcf77(TimeStamp& out) const {
 
     if (month < 1 || month > 12 || day < 1 || day > 31) return false;
     if (hour > 23 || min > 59 || wday < 1 || wday > 7) return false;
+    // ★★ What three EVEN parity bits cannot catch — any two flips inside one span (2026-10-05):
+    //    every BCD digit ≤ 9, the date exists, and the weekday sent is that date's weekday.
+    if (!digitsOk(b, kDcfMinute) || !digitsOk(b, kDcfHour) || !digitsOk(b, kDcfDay)
+        || !digitsOk(b, kDcfMonth) || !digitsOk(b, kDcfYear)) return false;
+    if (!dateOk(2000 + year, month, day, wday)) return false;
 
     out.year = 2000 + year;
     out.month = month; out.day = day; out.weekday = wday;

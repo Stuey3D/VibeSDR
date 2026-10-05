@@ -64,6 +64,17 @@ public:
         /** ★ The station's own warning that a leap second is coming — worth surfacing because it
          *  is the one night a year a clock disagrees with everybody for a good reason. */
         bool leapSecondPending = false;
+        /** ★ DISPLAY ONLY (2026-10-05) — none of these decides whether a minute is accepted.
+         *  DUT1 = UT1 − UTC in tenths of a second, as the station states it (MSF B1-B16, WWV
+         *  s50 + s56-58, WWVB s36-38 + s40-43; DCF77 does not send it). `dut1Known` is false when
+         *  the station sends none or the bits contradict themselves (both signs set). */
+        bool dut1Known = false;
+        int  dut1Tenths = 0;
+        /** ★ WWV/WWVB only: DST in force at 24:00 UTC TODAY (WWV s55, WWVB s57), where `dst` is the
+         *  status at 00:00 UTC. The two differ on exactly the day the clocks change — the one day
+         *  this flag is worth showing. `hasDst2` is false on stations that do not send it. */
+        bool hasDst2 = false;
+        bool dst2 = false;
     };
 
     TimeDecoder(int sampleRate, Station station);
@@ -95,6 +106,16 @@ public:
     struct Partial {
         TimeStamp t;
         bool year = false, month = false, day = false, weekday = false, hour = false, minute = false;
+        /** ★★★ AND WHICH OF THOSE ARE NOT TO BE BELIEVED (2026-10-05). A field arrives seconds —
+         *  up to half a minute — before the parity bits that check it, so a raw field is shown
+         *  unchecked; Stuart: "Occasionally MSF will give a real odd date and time of like 2014 or
+         *  something but it usually corrects itself on the next pass". It read like a confident
+         *  time. A field is DOUBTED (drawn as "??", never as its number) when:
+         *    • it cannot be a field at all — a BCD digit past 9, month 13, hour 24 … — always;
+         *    • or, after a recent locked minute, it disagrees with what THIS frame must say.
+         *  Before any lock a valid raw field is still shown: the state line says "reading". */
+        bool yearBad = false, monthBad = false, dayBad = false, weekdayBad = false,
+             hourBad = false, minuteBad = false;
         int  second = -1;      ///< how far through the minute we are
     };
     std::function<void(const Partial&)> onPartial;
@@ -195,6 +216,13 @@ private:
     long long lastStamp_ = 0;
     /** WWV: the minute is two position markers in a row, so the previous symbol matters. */
     bool lastWasMarker_ = false;
+    /** ★★ What the NEXT frame's raw fields must read, from the last CORROBORATED minute, and the
+     *  sample it was decoded at (0 = no expectation). The progress line compares against it,
+     *  advanced by the whole minutes elapsed since; it expires after kExpectTtlS. */
+    TimeStamp expectNext_{};
+    long long expectClock_ = 0;
+    /** True if this frame's raw fields are expected to equal `e` (fills `e`), false if unknown. */
+    bool  expectedNow(TimeStamp& e) const;
 
     // ── RWM's Morse identifier ───────────────────────────────────────────────
     // ★ A dot/dash classifier over the SAME envelope the markers use. `unitMs_` adapts to the

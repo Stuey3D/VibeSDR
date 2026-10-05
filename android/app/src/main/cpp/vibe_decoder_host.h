@@ -632,11 +632,19 @@ private:
         TimeDecoder* td = time_;
         time_->onTime = [this, name](const TimeDecoder::TimeStamp& t) {
             static const char* kDay[8] = { "", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
-            char buf[160];
-            std::snprintf(buf, sizeof(buf), "%s  %s %04d-%02d-%02d %02d:%02d  %s%s\n",
+            // ★ Display-only extras on the end of the same line (2026-10-05): DUT1 where the station
+            //   states it, and WWV/WWVB's "DST changes today" — their second DST bit differs from
+            //   the first on exactly that day, and on no other.
+            char extra[48] = "";
+            if (t.dut1Known) std::snprintf(extra, sizeof(extra), "  DUT1 %+.1f s", t.dut1Tenths / 10.0);
+            const char* dstChange = (t.hasDst2 && t.dst2 != t.dst)
+                                  ? (t.dst2 ? " DST BEGINS TODAY" : " DST ENDS TODAY") : "";
+            char buf[200];
+            std::snprintf(buf, sizeof(buf), "%s  %s %04d-%02d-%02d %02d:%02d  %s%s%s%s\n",
                           name.c_str(), kDay[t.weekday >= 1 && t.weekday <= 7 ? t.weekday : 0],
                           t.year, t.month, t.day, t.hour, t.minute,
-                          t.dst ? "(summer time)" : "", t.leapSecondPending ? " LEAP SECOND PENDING" : "");
+                          t.dst ? "(summer time)" : "", t.leapSecondPending ? " LEAP SECOND PENDING" : "",
+                          dstChange, extra);
             std::lock_guard<std::mutex> bl(textMtx_);
             textBuf_ += buf;
         };
@@ -645,11 +653,15 @@ private:
             { std::lock_guard<std::mutex> bl(textMtx_);
               if (morse_.size() >= 3) { textBuf_ += "RWM ID: " + morse_ + "\n"; morse_.clear(); } }
             char buf[200], yy[8], mo[4], dd[4], hh[4], mi[4];
-            std::snprintf(yy, sizeof(yy), p.year  ? "%04d" : "----", p.t.year);
-            std::snprintf(mo, sizeof(mo), p.month ? "%02d" : "--",   p.t.month);
-            std::snprintf(dd, sizeof(dd), p.day   ? "%02d" : "--",   p.t.day);
-            std::snprintf(hh, sizeof(hh), p.hour  ? "%02d" : "--",   p.t.hour);
-            std::snprintf(mi, sizeof(mi), p.minute? "%02d" : "--",   p.t.minute);
+            // ★★★ "??" FOR A DOUBTED FIELD, NEVER ITS NUMBER (2026-10-05). A field is shown before
+            //     the parity that checks it arrives, and MSF's "2014" read as a confident date for
+            //     half a minute (Stuart). See TimeDecoder::Partial — Bad = impossible, or not what
+            //     this frame must say after a lock. Width-matched, so the line does not jump.
+            std::snprintf(yy, sizeof(yy), !p.year ? "----" : p.yearBad   ? "????" : "%04d", p.t.year);
+            std::snprintf(mo, sizeof(mo), !p.month ? "--"  : p.monthBad  ? "??"   : "%02d", p.t.month);
+            std::snprintf(dd, sizeof(dd), !p.day   ? "--"  : p.dayBad    ? "??"   : "%02d", p.t.day);
+            std::snprintf(hh, sizeof(hh), !p.hour  ? "--"  : p.hourBad   ? "??"   : "%02d", p.t.hour);
+            std::snprintf(mi, sizeof(mi), !p.minute? "--"  : p.minuteBad ? "??"   : "%02d", p.t.minute);
             std::snprintf(buf, sizeof(buf), "\r%s  %s-%s-%s %s:%s   second %02d/59", name.c_str(), yy, mo, dd, hh, mi, p.second);
             std::lock_guard<std::mutex> bl(textMtx_);
             textBuf_ += buf;
