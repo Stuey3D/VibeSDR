@@ -30347,10 +30347,18 @@ bool LocalSdrShim::releaseRadio() {
      *     idle" (or the battery floor) turned an Android HF+ server into a dead radio until it was
      *     restarted. Parking keeps the handle and drops the samples at the source, which is what every
      *     other fd radio's idle path does; nothing else on the phone could have taken the radio anyway.
-     *  ★ Returns false: the radio was NOT let go, and the caller must not believe it was. */
-    if (ahf && (impl->ahfIndex < 0 || impl->ahf->fdOpened())) {
-        LOGI("Airspy HF+ opened from an Android USB descriptor cannot be released (it could not be "
-             "reopened) — parking it instead");
+     *  ★ Returns false: the radio was NOT let go, and the caller must not believe it was.
+     *  ★★★ AND THE HACKRF AND THE AIRSPY R2/MINI, THE SAME WAY (2026-10-05). Both had the identical gap —
+     *      hrfIndex/aspIndex are -1 on the fd path — and reacquireRadio() could only WORD their failure
+     *      ("unplug it and plug it back in"). A rule that names one of three fd radios is the "control
+     *      that only works on one radio" fault in code form. */
+    const char* fdParked = (ahf && (impl->ahfIndex < 0 || impl->ahf->fdOpened())) ? "Airspy HF+"
+                         : (hrf && (impl->hrfIndex < 0 || impl->hrf->fdOpened())) ? "HackRF"
+                         : (asp && (impl->aspIndex < 0 || impl->asp->fdOpened())) ? "Airspy R2/Mini"
+                         : nullptr;
+    if (fdParked) {
+        LOGI("%s opened from an Android USB descriptor cannot be released (it could not be "
+             "reopened) — parking it instead", fdParked);
         impl->pauseCaptureIdle();
         return false;
     }
@@ -30492,8 +30500,19 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         //   taken our slot while we were away. With three radios on one machine that matters.
         const int idx = impl->findOurDevice();
         int rc = 0;
+        /* ★★★ ON ANDROID, REOPEN ON THE DESCRIPTOR WE STILL HOLD (2026-10-05). releaseRadio() closes the
+         *     librtlsdr handle but keeps our dup of the fd (usbFd), and Android forbids enumeration — so
+         *     rtlsdr_open(idx) below can never succeed there, and "release when idle" or the battery
+         *     floor left an Android dongle server unable to take its radio back until restarted. The
+         *     watchdog's reopenDevice() has always reopened on usbFd; this is the same call. */
+        auto openOurs = [&]() -> int {
+#ifdef __ANDROID__
+            if (impl->usbFd >= 0) return rtlsdr_open_sys_dev(&impl->dev, (intptr_t)impl->usbFd);
+#endif
+            return rtlsdr_open(&impl->dev, (uint32_t)idx);
+        };
         if (idx < 0) { err = "the radio is not there"; }
-        else if ((rc = rtlsdr_open(&impl->dev, (uint32_t)idx)) != 0 || !impl->dev) {
+        else if ((rc = openOurs()) != 0 || !impl->dev) {
             impl->dev = nullptr;
             /* ★★ ONLY LIBUSB_ERROR_BUSY (-6) IS "IN USE BY ANOTHER PROGRAM" — the kernel saying an
              *  interface is claimed. Anything else is a radio that would not open, and calling that
