@@ -3,7 +3,11 @@
    score.py decoded.txt reference.txt  →  % of reference characters recovered in order, and garbage chars."""
 import sys, difflib
 d = open(sys.argv[1]).read().replace('\r', ''); r = open(sys.argv[2]).read().replace('\r', '')
-r = r[:max(len(d) + 200, 1)] if len(d) < len(r) else r
+import os
+# ★ SCORE_FULL=1 (2026-10-05): score against the whole reference. By default it is trimmed to the decode's length + 200,
+#   which suits a short test run but lets a decoder that prints LESS off the missing tail.
+if os.environ.get('SCORE_FULL') != '1':
+    r = r[:max(len(d) + 200, 1)] if len(d) < len(r) else r
 sm = difflib.SequenceMatcher(None, r, d, autojunk=False)
 ok = sum(b.size for b in sm.get_matching_blocks())
 # character error rate: edit operations to turn the reference (as long as the decode) into the decode

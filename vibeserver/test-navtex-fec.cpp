@@ -1,17 +1,22 @@
-// test-navtex-fec.cpp — the NAVTEX (CCIR 476 / SITOR-B FEC) coder, word by word (audit 2026-10-04, rows 11-13).
+// test-navtex-fec.cpp — the NAVTEX (CCIR 476 / SITOR-B FEC) receiver's character layer, bit by bit (audit 2026-10-04,
+// rows 11-13; rewritten 2026-10-05 for NavtexRx).
 //
 // ★★ WHY. SITOR-B sends every character twice — the DX copy, then the RX copy five slots later — and the decoder's
-//    whole job is to keep the two streams apart and use one copy to repair the other. Three ways it failed:
-//     · one misread character that happened to be a PHASING code (0x66 / 0x0F) swapped DX and RX for the rest of the
-//       message (row 12);
-//     · bad words were counted in BOTH slots, repaired or not, and three of them threw away the shift and the phase
-//       (row 11 — measured on audio by scripts/test-navtex.sh);
-//     · FIGS 0x4B (BEL) reached the UI as a raw control byte (row 13).
-//  These drive Ccir476 with exact code streams, built the way a transmitter builds them (fldigi's create_fec), so each
-//  failure is one corrupted word and the expected text is known to the character. Against the coder before 2026-10-04
-//  eight of these fail (the scoring, three of the four phasing misreads, the '_' and both BEL checks).
+//    whole job is to find which slots are which and use one copy to repair the other. These drive NavtexRx::pushBit
+//    with exact bit streams built the way a transmitter builds them (fldigi's create_fec), each bit a SOFT value
+//    (+1 mark, -1 space, smaller = less sure), so every failure is one corrupted word and the expected text is known
+//    to the character. Covered:
+//     · the lock: from phasing, one slot late, MID-MESSAGE with no phasing at all, inverted tones, and never on noise
+//       (the old rule — four valid words in a row — locks on random bits: 27 % of 7-bit words are valid);
+//     · a phasing code misread in either copy does not swap DX and RX (row 12); a real phasing run in the other
+//       parity (after a slip) is followed;
+//     · FEC: either copy lost; both lost → '_' (and only in text); the soft tiers — the two copies summed, the least
+//       certain bit flipped (BOTH ways: fldigi's flip_smallest_bit never made the 5-mark → 4-mark repair), and two
+//       valid copies that disagree settled by their soft bits;
+//     · FIGS BEL prints an apostrophe (row 13); the per-message clean / repaired / lost counts.
 #include "decoders/fsk_decoder.h"
 #include <cstdio>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -47,18 +52,31 @@ static std::vector<uint8_t> fec(const std::vector<uint8_t>& c, int phasing) {
     s.push_back(CHAR32); s.push_back(c[c.size() - 2]); s.push_back(CHAR32); s.push_back(c.back());
     return s;
 }
-/** Slot of the DX / RX copy of code `i` in a stream from fec(.., phasing). */
 static size_t dxSlot(int phasing, size_t i) { return 2 * phasing + 2 * i; }
 static size_t rxSlot(int phasing, size_t i) { return 2 * phasing + 2 * i + 5; }
 
-struct Run { std::string text; int score = 0, worst = 1; };
-static Run decode(const std::vector<uint8_t>& s, size_t from = 0) {
-    Ccir476 c; c.reset(); Run r;
-    for (size_t i = from; i < s.size(); i++) {
-        int sc = 0; const char32_t ch = c.processChar(s[i], sc);
-        r.score += sc; if (sc < r.worst) r.worst = sc;
-        if (ch) r.text += (char)ch;
+/** Slots → soft bits, least significant bit first (+1 mark). Then phasing after, so the last characters flush. */
+static std::vector<double> bits(const std::vector<uint8_t>& slots, int tail = 20) {
+    std::vector<double> b;
+    auto put = [&](uint8_t c) { for (int i = 0; i < 7; i++) b.push_back((c >> i & 1) ? 1.0 : -1.0); };
+    for (uint8_t c : slots) put(c);
+    for (int i = 0; i < tail; i++) { put(REP); put(ALPHA); }
+    return b;
+}
+/** Overwrite the soft bits of one slot (7 values). */
+static void setSlot(std::vector<double>& b, size_t slot, const double (&v)[7]) { for (int i = 0; i < 7; i++) b[slot * 7 + i] = v[i]; }
+static void softWord(uint8_t code, double mag, double (&out)[7]) { for (int i = 0; i < 7; i++) out[i] = (code >> i & 1) ? mag : -mag; }
+
+struct Run { std::string text; NavtexRx::Counts total, last; bool inverted = false; int lockedAt = -1; };
+static Run decode(const std::vector<double>& b, size_t from = 0) {
+    NavtexRx rx(48000, 500, 170, 100, false);
+    Run r;
+    rx.onChar = [&](char32_t c) { r.text += (char)c; };
+    for (size_t i = from; i < b.size(); i++) {
+        rx.pushBit(b[i]);
+        if (r.lockedAt < 0 && rx.stateNow() == NavtexRx::ReadData) r.lockedAt = (int)(i - from);
     }
+    r.total = rx.total; r.last = rx.lastMessage; r.inverted = rx.invertedNow();
     return r;
 }
 static std::string show(std::string s) {
@@ -70,50 +88,66 @@ int main() {
     const std::string msg = "ZCZC GA42\r\nWIND SW 6 TO 8, GUSTS 45KT (ROUGH)\r\nPOSN 51-23.4N 001-45.2E\r\nNNNN\r\n";
     const int P = 20;
     const auto codes = encode(msg);
-    const auto clean = fec(codes, P);
+    const auto slots = fec(codes, P);
+    const auto clean = bits(slots);
     // the code that prints the 'S' of "SW" — the message's first S, a letter in the middle of a line
     size_t iS = 0;
     for (size_t i = 0; i < codes.size(); i++) if (codes[i] == find(LT, 'S')) { iS = i; break; }
+    double w[7], w2[7];
 
-    std::printf("── 1. clean stream ──\n");
-    { const Run r = decode(clean); ok(r.text == msg, "decodes exactly: " + show(r.text.substr(0, 40)) + "…"); }
+    std::printf("── 1. the lock ──\n");
+    { const Run r = decode(clean); ok(r.text == msg, "clean stream decodes exactly: " + show(r.text.substr(0, 40)) + "…");
+      ok(r.last.clean > 60 && r.last.repaired == 0 && r.last.failed == 0, "...the message counted all clean (" + std::to_string(r.last.clean) + ")"); }
+    { const Run r = decode(clean, 7);   // one slot late: the first slot seen is an RX slot
+      ok(r.text == msg, "starting one slot late (an RX slot first): exact"); }
+    { const Run r = decode(clean, 3);   // and mid-word
+      ok(r.text == msg, "starting three bits into a word: exact"); }
+    { // ★ MID-MESSAGE, no phasing at all: join at the DX copy of character 20
+      const size_t from = dxSlot(P, 20) * 7; const Run r = decode(clean, from);
+      const bool suffix = r.text.size() <= msg.size() && msg.compare(msg.size() - r.text.size(), r.text.size(), r.text) == 0;
+      ok(suffix && r.text.size() + 30 >= msg.size() - 18,
+         "joining mid-message (no phasing) prints the rest exactly, phase and all: …" + show(r.text.substr(0, 24)));
+      ok(r.lockedAt >= 0 && r.lockedAt <= 110, "...locked " + std::to_string(r.lockedAt) + " bits in (one second is 100)"); }
+    { auto inv = clean; for (double& v : inv) v = -v;
+      const Run r = decode(inv); ok(r.text == msg && r.inverted, "inverted tones: found the polarity itself, exact"); }
+    { // ★ NOISE NEVER LOCKS: 10 minutes of random soft bits
+      std::mt19937 g(5); std::normal_distribution<double> n(0, 1);
+      std::vector<double> noise(60000); for (double& v : noise) v = n(g);
+      const Run r = decode(noise); ok(r.lockedAt < 0 && r.text.empty(), "10 minutes of noise: no lock, nothing printed ("
+                                      + std::to_string(r.text.size()) + " chars)"); }
 
-    std::printf("── 2. one copy lost: the other repairs it, and only an RX loss scores ──\n");
-    { auto s = clean; s[rxSlot(P, iS)] = 0x00;            // RX copy unreadable
-      const Run r = decode(s); ok(r.text == msg, "RX copy unreadable → repaired from the DX copy");
-      ok(r.worst == 0, "...scored 0 (repaired), not -2"); }
-    { auto s = clean; s[dxSlot(P, iS)] = 0x00;            // DX copy unreadable
-      const Run r = decode(s); ok(r.text == msg, "DX copy unreadable → the RX copy prints");
-      ok(r.worst >= 0, "...and the DX slot does not score at all"); }
+    std::printf("── 2. one copy lost: the other repairs it ──\n");
+    { auto b = clean; softWord(0x00, 1, w); setSlot(b, rxSlot(P, iS), w);
+      const Run r = decode(b); ok(r.text == msg, "RX copy unreadable → repaired from the DX copy");
+      ok(r.last.repaired == 1 && r.last.failed == 0, "...counted as repaired"); }
+    { auto b = clean; softWord(0x00, 1, w); setSlot(b, dxSlot(P, iS), w);
+      const Run r = decode(b); ok(r.text == msg, "DX copy unreadable → the RX copy prints");
+      ok(r.last.repaired == 0, "...and the DX slot is not counted at all"); }
 
     std::printf("── 3. row 12: one misread word that is a PHASING code does not swap DX and RX ──\n");
-    { auto s = clean; s[rxSlot(P, iS)] = REP;
-      const Run r = decode(s); ok(r.text == msg, "RX copy misread as 0x66 → still exact: " + show(r.text.substr(11, 12))); }
-    { auto s = clean; s[rxSlot(P, iS)] = ALPHA;
-      const Run r = decode(s); ok(r.text == msg, "RX copy misread as 0x0F → still exact"); }
-    { auto s = clean; s[dxSlot(P, iS)] = ALPHA;
-      const Run r = decode(s); ok(r.text == msg, "DX copy misread as 0x0F → still exact"); }
-    { auto s = clean; s[dxSlot(P, iS)] = REP;
-      const Run r = decode(s); ok(r.text == msg, "DX copy misread as 0x66 → still exact"); }
-
-    std::printf("── 4. ...but real phasing in the wrong phase IS followed ──\n");
-    { const Run r = decode(clean, 1);   // start one slot late: the decoder's first guess is the wrong phase
-      ok(r.text == msg, "starting on an RX slot, the phasing run sets the phase: " + show(r.text.substr(0, 20))); }
+    for (uint8_t bad : { REP, ALPHA })
+        for (bool rxCopy : { true, false }) {
+            auto b = clean; softWord(bad, 1, w); setSlot(b, rxCopy ? rxSlot(P, iS) : dxSlot(P, iS), w);
+            const Run r = decode(b);
+            ok(r.text == msg, std::string(rxCopy ? "RX" : "DX") + " copy misread as " + (bad == REP ? "0x66" : "0x0F") + " → still exact");
+        }
     { // a message, then a second one whose phasing arrives in the OPPOSITE slot parity (as after a slip)
-      auto s = clean; s.push_back(CHAR32); const auto two = fec(encode("ZCZC GB17\r\nNNNN\r\n"), P);
+      auto s = slots; s.push_back(CHAR32); const auto two = fec(encode("ZCZC GB17\r\nNNNN\r\n"), P);
       s.insert(s.end(), two.begin(), two.end());
-      const Run r = decode(s); ok(r.text == msg + "ZCZC GB17\r\nNNNN\r\n", "a later phasing run in the other parity re-phases");
+      const Run r = decode(bits(s)); ok(r.text == msg + "ZCZC GB17\r\nNNNN\r\n", "a later phasing run in the other parity re-phases");
     }
 
-    std::printf("── 5. both copies lost → '_' (ITU-R M.476), never a silent gap ──\n");
-    { auto s = clean; s[rxSlot(P, iS)] = 0x00; s[dxSlot(P, iS)] = 0x00;
+    std::printf("── 4. both copies lost → '_' (ITU-R M.476), in text only ──\n");
+    { auto b = clean; softWord(0x00, 1, w); setSlot(b, rxSlot(P, iS), w); setSlot(b, dxSlot(P, iS), w);
       std::string want = msg; want[want.find("SW")] = '_';
-      const Run r = decode(s); ok(r.text == want, "prints " + show(r.text.substr(10, 12)));
-      ok(r.worst == -2, "...and scores -2"); }
+      const Run r = decode(b); ok(r.text == want, "prints " + show(r.text.substr(10, 12)));
+      ok(r.last.failed == 1, "...and counts one lost"); }
+    { auto b = clean; softWord(0x00, 1, w); setSlot(b, rxSlot(P, 0) - 4, w); setSlot(b, rxSlot(P, 0) - 9, w);   // an RX slot and its DX
+      const Run r = decode(b); ok(r.text == msg, "...but a lost word in PHASING prints nothing"); }
 
     std::printf("── 6. row 13: BEL ──\n");
     { const std::string m = "ZCZC GA43\r\n\x07NNNN\r\n";
-      const Run r = decode(fec(encode(m), P));
+      const Run r = decode(bits(fec(encode(m), P)));
       ok(r.text.find('\x07') == std::string::npos, "no BEL (0x07) in the output: " + show(r.text));
       ok(r.text == "ZCZC GA43\r\n'NNNN\r\n", "printed as an apostrophe, as fldigi does"); }
 

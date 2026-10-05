@@ -4,8 +4,8 @@
 // biquad.go + ita2.go). Takes mono int16 audio at a fixed sample rate and emits
 // decoded characters (+ a coarse decoder state) via callbacks. The shim wraps
 // this in the /ws/dxcluster audio-extension protocol so the existing VibeSDR
-// decoder UI works unchanged. Encoding: ITA2 (RTTY) implemented; CCIR476
-// (NAVTEX) is a later add.
+// decoder UI works unchanged. Encodings: ITA2 and ASCII (RTTY, below); CCIR476
+// (NAVTEX) has its own receiver, NavtexRx (2026-10-05).
 #pragma once
 #include <cstdint>
 #include <functional>
@@ -55,33 +55,118 @@ private:
 
 // ── CCIR476 (NAVTEX / SITOR-B) — 7-bit FEC, 4 mark bits per char ─────────────
 // ★ SITOR-B sends every character twice: the DX copy, then the RX copy five character slots (35 bits) later, the two
-//   streams interleaved. `alphaPhase` = "this slot is an RX slot" (fldigi's name: the RX slot is the one decoded, the
-//   DX copy five slots back — c1 here — is the spare). Phasing: DX slots carry 0x66 (rep), RX slots 0x0F (alpha).
+//   streams interleaved. Phasing: DX slots carry 0x66 (rep), RX slots 0x0F (alpha).
+// ★★ (2026-10-05) The coder works on SOFT words — seven bit values, sign = mark/space, size = how sure — so a character
+//    neither copy of which reads cleanly can still be recovered from the two together (decodeSoft). The DX/RX phase
+//    belongs to NavtexRx, which finds it in the bit stream itself. Ported from fldigi's navtex.cxx (process_bytes,
+//    process_char) — Rémi Chateauneu F4ECW, Rik van Riel AB1KW; via madpsy/ubersdr_navtex (Franco Venturi's port). GPL-3.0+.
 class Ccir476 {
 public:
     Ccir476();
-    void reset() { shift = false; alphaPhase = false; phaseKnown = false; phaseVotes = 0; c1 = c2 = c3 = 0; }
-    int nbits() const { return 7; }
-    uint16_t msb() const { return 0x40; }
-    bool checkBits(uint16_t code) const;
-    /** Returns the decoded char (0 = none). `score` is fldigi's process_bytes result for an RX slot — +1 the RX copy
-     *  was good, 0 the DX copy repaired it (or the slot was phasing), -2 neither copy was readable (prints '_') —
-     *  and 0 for a DX slot, which is only stored for later. */
-    char32_t processChar(uint16_t code, int& score);
-    /** ★ A character slot went by with no word read (the bit hunt after a resync): keep the DX/RX phase and the
-     *  DX history in step, so a resync does not have to re-learn the phase from the next phasing signal. */
-    void skipSlot();
-private:
+    void reset() { shift = false; lastCode = -1; }
     static bool fourMarkBits(uint8_t v);
+    static uint8_t hardCode(const double* w);   // bit i = w[i] > 0 (least significant bit first, as sent)
+    /** The tiers of fldigi's process_bytes, for one RX slot with (if `dx`) its DX copy 35 bits earlier:
+     *    +1 the RX copy is a valid word · 0 the DX copy is (a straight repair) · -1 a SOFT repair (the two copies summed,
+     *    or the least certain bit flipped in the RX copy, the DX copy, then the sum) · -2 nothing found.
+     *  `code` gets the word to print (-1 = none). `softFec` false keeps only the first two tiers (the old decoder's).
+     *  ★ An RX copy that reads as a PHASING code while its DX copy is a real character is a misread (phasing never
+     *    puts a character in the DX slot): the DX copy is the one used (audit 2026-10-04, row 12). */
+    static int decodeSoft(const double* rx, const double* dx, bool softFec, int& code, bool vote = true);
+    /** Print a word: shift codes and phasing print nothing (0); FIGS BEL prints '\''. `phaseWrong` is set when this is
+     *  the SECOND phasing rep (0x66) in a row read in an RX slot — fldigi's process_char: the DX/RX phase is out by one. */
+    char32_t emit(int code, bool& phaseWrong);
+    bool shifted() const { return shift; }
+private:
     char32_t codeToChar(uint8_t code, bool fig) const;
-    char32_t decode(uint8_t chr);
     char32_t ltrs[128], figs[128]; bool validCodes[128] = {false};
     std::map<uint8_t, char32_t> codeLtrs, codeFigs;
-    bool shift = false, alphaPhase = false, phaseKnown = false;
-    int phaseVotes = 0;
-    uint8_t c1 = 0, c2 = 0, c3 = 0;
-    const uint8_t codeAlpha = 0x0f, codeBeta = 0x33, codeChar32 = 0x6a,
-                  codeRep = 0x66, letters = 0x5a, figures = 0x36;
+    bool shift = false;
+    int lastCode = -1;
+    static const uint8_t codeAlpha = 0x0f, codeBeta = 0x33, codeChar32 = 0x6a,
+                         codeRep = 0x66, letters = 0x5a, figures = 0x36;
+};
+
+// ── NAVTEX receiver: demodulator, bit clock, character sync and FEC ─────────
+/** ★★★ ONE SWITCH PER MEASURED CHANGE (2026-10-05). Each was kept only if the CER held or improved on BOTH the
+ *  synthetic bench (tools/rtty-bench/navtex_bench.sh) and Stuart's 518 kHz recording; the defaults are the shipped
+ *  decoder. They exist so the bench can take one away and show what it was worth. */
+struct NavtexOptions {
+    bool rcDemod    = false;   // tones mixed to baseband + raised-cosine lowpass (else the Q≈3 biquad bandpasses)
+    bool earlyLate  = false;   // early/prompt/late bit clock (else the zero-crossing histogram)
+    bool logSoft    = false;   // bit values from log-compressed ATC levels (else ±1 per sample)
+    bool atcHalf    = false;   // W7AY ATC: ½ and clipped to the noise floor (else ¼, clipped to the envelope only)
+    bool softFec    = false;   // the soft FEC tiers (else RX, then DX, then '_')
+    bool fecVote    = false;   // RX and DX both valid but different: the one the summed soft bits favour (else RX)
+    bool autoInvert = true;   // the character sync tries both polarities
+    bool afc        = false;  // follow a drifting signal
+};
+
+class NavtexRx {
+public:
+    enum State { NoSignal = 0, Hunting = 1, ReadData = 3 };   // the FskDecoder::State numbers (Sync1 = hunting)
+    NavtexRx(int sampleRate, double centerFreq, double shiftHz, double baudRate, bool inverted,
+             const NavtexOptions& opts = NavtexOptions());
+    void process(const int16_t* samples, int count);
+    /** One bit's soft value (> 0 mark) — the demodulator's output; public so the coder can be tested on exact streams. */
+    void pushBit(double v);
+
+    std::function<void(char32_t)> onChar;
+    std::function<void(int)>      onState;
+
+    /** ★ Per-character FEC outcome, for a later per-message report: clean (RX copy good), repaired (from the DX copy
+     *  or the soft tiers), failed ('_'). `total` counts since start; `message` since the last ZCZC, and `lastMessage`
+     *  is the finished one, frozen at its NNNN. */
+    struct Counts { unsigned long clean = 0, repaired = 0, failed = 0; };
+    Counts total, message, lastMessage;
+
+    unsigned long resyncs() const { return resyncs_; }
+    double audioLevel() const { return audioAverage_; }
+    double audioThreshold() const { return audioMinimum_; }
+    int    stateNow() const { return (int)state_; }
+    bool   invertedNow() const { return pol_ < 0; }
+    double afcOffsetHz() const { return afcHz_; }
+
+private:
+    void setState(State s);
+    void frontSample(double m, double s, double level);   // the two tone magnitudes at frontRate_, + the gate level
+    int  findAlpha(int& pol) const;
+    void processRx(int pos);
+    void retune();
+
+    NavtexOptions o_;
+    double fs_, cf_, shift_, baud_;
+    int pol_ = 1;
+    State state_ = NoSignal;
+    unsigned long resyncs_ = 0;
+    double audioAverage_ = 0.1, audioMinimum_ = 256.0, audioTC_ = 0;
+
+    // ── front end ──
+    int decim_ = 1; double frontRate_ = 0, bitSamples_ = 0;
+    std::vector<double> decH_, decBuf_; int decPos_ = 0, decCount_ = 0;      // decimating lowpass (rcDemod)
+    std::vector<double> rcH_; std::vector<double> rcBuf_[4]; int rcPos_ = 0; // raised cosine, mark I/Q + space I/Q
+    double mRe_ = 1, mIm_ = 0, sRe_ = 1, sIm_ = 0, mStepRe_ = 1, mStepIm_ = 0, sStepRe_ = 1, sStepIm_ = 0;
+    long   oscCount_ = 0;
+    BiQuad bpMark_, bpSpace_, lpMark_, lpSpace_;                            // !rcDemod
+    double markEnv_ = 0, spaceEnv_ = 0, markNoise_ = 0, spaceNoise_ = 0, noiseFloor_ = 0;
+    // ── AFC ──
+    double afcHz_ = 0;
+    // ── bit clock ──
+    long long sampleCount_ = 0;
+    double early_ = 0, prompt_ = 0, late_ = 0, nextEarly_ = 0, nextPrompt_ = 0, nextLate_ = 0;
+    double avgEarly_ = 0, avgPrompt_ = 0, avgLate_ = 0;
+    // zero-crossing clock (!earlyLate) — the old FskDecoder's
+    int zcBitCount_ = 0, zcHalf_ = 0, zcDuration_ = 0, zcNext_ = 0, zcRounds_ = 0; double zcDelta_ = 0;
+    std::vector<int> zcHist_; bool zcOld_ = false;
+    // ── bits and characters ──
+    static const int kBits = 100;                      // one second of bit values: 14 characters
+    double bits_[kBits] = {0};
+    long long absBit_ = 0, lastRxAbs_ = -1000, lostAt_ = 0;
+    bool quiet_ = false;
+    int cursor_ = 0, errorCount_ = 0;
+    bool alphaPhase_ = false;
+    Ccir476 coder_;
+    std::string tail_;                                 // the last four characters printed, for ZCZC / NNNN
 };
 
 // ── FSK demodulator + decoder ───────────────────────────────────────────────
@@ -89,8 +174,13 @@ class FskDecoder {
 public:
     enum State { NoSignal, Sync1, Sync2, ReadData };
     FskDecoder(int sampleRate, double centerFreq, double shiftHz, double baudRate,
-               const std::string& framing, const std::string& encoding, bool inverted);
+               const std::string& framing, const std::string& encoding, bool inverted,
+               const NavtexOptions* navtexOpts = nullptr);
+    ~FskDecoder();
+    FskDecoder(const FskDecoder&) = delete; FskDecoder& operator=(const FskDecoder&) = delete;   // owns its coders
     void process(const int16_t* samples, int count);
+    /** ★ NAVTEX (CCIR476) runs its own receiver (2026-10-05) — null for RTTY. */
+    NavtexRx* navtex() const { return navtex_; }
 
     std::function<void(char32_t)> onChar;   // decoded character
     std::function<void(int)>      onState;  // State change (0..3)
@@ -104,21 +194,21 @@ public:
     //    up and starting again because the signal dipped.
     // ★ `audioLevel` is what it is actually seeing, on the int16 scale the threshold uses, so the
     //   two can be compared directly instead of guessed at.
-    unsigned long resyncs() const { return resyncCount_; }
+    unsigned long resyncs() const { return navtex_ ? navtex_->resyncs() : resyncCount_; }
     unsigned long framingErrors() const { return framingErrors_; }
     /** ★ Frames that passed the start/stop check while decoding (ITA2) — RttyAuto scores candidates on this. */
     unsigned long goodFrames() const { return goodFrames_; }
     /** Unshift on space (ITA2 only) — see Ita2::usos. */
     void setUsos(bool on) { if (ita2) ita2->usos = on; }
-    double        audioLevel() const { return audioAverage; }
-    double        audioThreshold() const { return audioMinimum; }
-    int           stateNow() const { return (int)state; }
+    double        audioLevel() const { return navtex_ ? navtex_->audioLevel() : audioAverage; }
+    double        audioThreshold() const { return navtex_ ? navtex_->audioThreshold() : audioMinimum; }
+    int           stateNow() const { return navtex_ ? navtex_->stateNow() : (int)state; }
 
 private:
     void updateFilters();
     void setState(State s);
     void processBit(bool bit);
-    int  processCharacter(uint16_t code);   // ITA2: 1; CCIR476: the RX-slot score (Ccir476::processChar)
+    void processCharacter(uint16_t code);
 
     double sampleRate, centerFrequency, shiftHz, deviationF, baudRate;
     bool inverted;
@@ -152,13 +242,8 @@ private:
     bool syncSetup = false; std::vector<uint16_t> syncChars; int validCount = 0, errorCount = 0;
     bool waiting = false, stopVariable = false;
 
-    // ★ NAVTEX (2026-10-04): a resync forced by bad characters keeps the coder's shift and DX/RX phase (only a loss of
-    //   signal resets them); bitClock_/ccirLastEnd_ count the bits the re-hunt skipped, so the phase stays in step.
-    bool keepCoderState_ = false;
-    unsigned long bitClock_ = 0, ccirLastEnd_ = 0;
-
-    Ita2*    ita2 = nullptr;
-    Ccir476* ccir476 = nullptr;
+    Ita2*     ita2 = nullptr;
+    NavtexRx* navtex_ = nullptr;
 };
 
 } // namespace vibe

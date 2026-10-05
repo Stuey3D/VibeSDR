@@ -13,6 +13,10 @@ For checking rtty_wav's CCIR476 path before and after a decoder change (scored w
    Ccir476 — identical to fldigi's code_to_ltrs / code_to_figs).
  * Bursts: Poisson arrivals, each 20-200 ms of white noise burst_db above the SIGNAL (lightning crashes, ignition).
  * Fading: mark and space fade independently, 0 to -fade_depth dB, ~0.3 Hz (as synth_rtty.py).
+ * ★ (2026-10-05) env JOIN=<s>: the receiver joins mid-transmission — the first <s> seconds are cut from the audio
+   and the reference holds only the characters whose RX copy starts after the cut (no phasing to lock on).
+   env INV=1: the tones swapped (space the higher) — a station or receiver in the other sideband.
+   Mistune: synthesise with CF=<Hz> and decode at the nominal centre.
  * The message carries a FIGS BEL (0x4B) — the reference text holds an apostrophe there, which is what the decoder
    must print (fldigi's filter_print); a raw 0x07 in the output is a failure.
 Writes out.wav (48 kHz mono int16) and out.wav.txt (the text a perfect decoder prints, '\\r' removed by score.py)."""
@@ -23,6 +27,7 @@ secs = float(a[4]) if len(a) > 4 else 120; bpm = float(a[5]) if len(a) > 5 else 
 bdb = float(a[6]) if len(a) > 6 else 10; seed = int(a[7]) if len(a) > 7 else 0
 FS, BAUD = 48000, float(os.environ.get('BAUD', 100.0))
 CF, SH = float(os.environ.get('CF', 500.0)), float(os.environ.get('SHIFT', 170.0))
+JOIN, INV = float(os.environ.get('JOIN', 0)), os.environ.get('INV', '0') == '1'
 
 # code -> char, from fsk_decoder.cpp's Ccir476 tables (rows of 16)
 LT = ('________________' '_______J___F_CK_' '_______W___Y_PQ_' '_____G___MX_V___'
@@ -91,7 +96,8 @@ while len(slots) < n_slots:
     enc = [(LTRS, '')] + encode(m)
     s, rx = fec([c for c, _ in enc], 40 if not slots else 15)   # 5.6 s of phasing first, 2.1 s between
     # the reference holds only what was SENT in full: a character whose RX copy is past the end is not counted
-    ref += ''.join(pr for (_, pr), r in zip(enc, rx) if len(slots) + r < n_slots - 1)
+    j0 = int(JOIN * BAUD / 7) + 1     # the first whole slot after the join
+    ref += ''.join(pr for (_, pr), r in zip(enc, rx) if j0 <= len(slots) + r < n_slots - 1)
     slots += s
 bits = []
 for c in slots[:n_slots]:
@@ -101,7 +107,7 @@ n_total = int(secs * FS)
 idx = np.minimum((np.arange(n_total) / spb).astype(int), len(bits) - 1)
 mark_on = np.array(bits, bool)[idx]
 t = np.arange(n_total) / FS
-f_inst = np.where(mark_on, CF + SH / 2, CF - SH / 2)
+f_inst = np.where(mark_on != INV, CF + SH / 2, CF - SH / 2)
 phase = 2 * np.pi * np.cumsum(f_inst) / FS
 rng = np.random.default_rng(7 + 1000 * seed)
 def fade(sd):
@@ -123,7 +129,7 @@ if bpm > 0:
 # ★ A FIXED signal level (-12 dBFS peak), clipped — NOT normalised to the loudest sample: a normalised file puts the
 #   signal wherever the biggest burst leaves it, and at +10 dB bursts that sank it towards the decoder's audio floor
 #   (a NoSignal reset per fade), which measures the file, not the decoder. Radio audio clips a crash the same way.
-y = np.clip((sig + noise) * 0.25, -1.0, 1.0)
+y = np.clip((sig + noise) * 0.25, -1.0, 1.0)[int(JOIN * FS):]
 with wave.open(out, 'wb') as w:
     w.setnchannels(1); w.setsampwidth(2); w.setframerate(FS); w.writeframes((y * 32767).astype('<i2').tobytes())
 # the reference: every message begun (score.py trims it to the length decoded)
