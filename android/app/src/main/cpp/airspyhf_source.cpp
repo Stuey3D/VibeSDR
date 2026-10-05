@@ -241,6 +241,62 @@ void AirspyHfSource::close() {
     open_ = false;
 }
 
+/* ★★★ STOP + START ON THE HANDLE WE HOLD — ON A DEADLINE (2026-10-05). The shallow and the fd-opened
+ *  restarts used to run airspyhf_stop/airspyhf_start INLINE, holding impl_->mtx, with none of the
+ *  deep path's guard. On a wedged-but-present HF+ (Nick's Pixel 6, overnight) a control transfer that
+ *  never answered then held the mutex for ever: every control thread queued behind it, shutdown
+ *  queued behind them, and on Android that is an ANR rather than a radio the watchdog can retry.
+ *  libairspyhf's control transfers now time out at 1 s each, so this SHOULD always return — the
+ *  deadline is the belt to those braces, because "should" is what the last hang said too.
+ *  ★ 5 s, not the close's 3: a stop + start is several bounded transfers plus the transfer reap
+ *    (up to 1 s), and a slow-but-alive radio must not be abandoned for being slow.
+ *  ★★ ON A TIMEOUT THE HANDLE IS ABANDONED, NOT REUSED — the worker is still inside the library with
+ *     it, and a second call on the same handle is how a stuck radio becomes a stuck process. The
+ *     worker is detached (joining would inherit the hang), exactly as the deep path's close is, and
+ *     the radio needs a fresh handle: a deep reopen by serial on a desktop, a fresh fd from
+ *     UsbManager on Android. */
+bool AirspyHfSource::restartOnHandle(std::string& err) {
+    airspyhf_device* dev = impl_->dev;
+    if (!dev) { err = "device not open"; return false; }
+    const bool wasStreaming = streaming_;
+    streaming_ = false;
+    impl_->ctx = CbCtx{ &sink_, &lost_, &paused_, &impl_->lastRx, this };
+#ifdef VIBE_AIRSPYHF_HAS_FD
+    airspyhf_set_thread_hook(&ahfThreadHook);   // ★ before start: the threads are made there
+#endif
+    CbCtx* ctx = &impl_->ctx;
+    auto done = std::make_shared<std::promise<int>>();
+    auto fut  = done->get_future();
+    std::thread([done, dev, wasStreaming, ctx]() {
+        // ★ A failure to stop is EXPECTED and must not abort the restart — see restartStream.
+        if (wasStreaming) airspyhf_stop(dev);
+        done->set_value(airspyhf_start(dev, &streamCb, ctx));
+    }).detach();
+    if (fut.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        abandonHandle();
+        err = "the Airspy HF+ did not answer a stream restart within 5 s — handle abandoned, it needs a fresh one";
+        std::fprintf(stderr, "airspyhf: stream restart TIMED OUT after 5 s — abandoning the handle "
+                             "(the radio is wedged; it needs reopening, or replugging on Android)\n");
+        return false;
+    }
+    if (fut.get() != AIRSPYHF_SUCCESS) {
+        err = "the Airspy HF+ would not start streaming";
+        std::fprintf(stderr, "airspyhf: stream restart: start FAILED on the held handle\n");
+        return false;
+    }
+    streaming_ = true;
+    lost_ = false;
+    return true;
+}
+
+/** ★ Forget a handle a timed-out worker still holds. Never closed from here — see restartOnHandle. */
+void AirspyHfSource::abandonHandle() {
+    impl_->dev = nullptr;
+    streaming_ = false;
+    open_ = false;
+    lost_ = true;
+}
+
 // ★★★ See the header for why this is safe here and deliberately absent on the RTL path.
 bool AirspyHfSource::restartStream(bool deep, std::string& err) {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
@@ -262,10 +318,8 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
         //   precisely because the device is misbehaving, and refusing to re-start because the
         //   teardown of an already-broken stream complained would leave the radio dead for
         //   good. Same reasoning as the RSP's Uninit.
-        if (streaming_) { airspyhf_stop(impl_->dev); streaming_ = false; }
-        // start() re-seeds the callback context and sets streaming_ — don't duplicate it here.
-        if (!start(err)) return false;
-        lost_ = false;
+        // ★ On a deadline since 2026-10-05 — see restartOnHandle.
+        if (!restartOnHandle(err)) return false;
         std::fprintf(stderr, "airspyhf: stream restarted after a stall\n");
         return true;
     }
@@ -278,9 +332,7 @@ bool AirspyHfSource::restartStream(bool deep, std::string& err) {
     if (impl_->serial == 0) {
         err = "the Airspy HF+ stream stalled; retrying on the same handle (an fd-opened radio cannot be reopened here)";
         if (!open_ || !impl_->dev) return false;
-        if (streaming_) { airspyhf_stop(impl_->dev); streaming_ = false; }
-        if (!start(err)) return false;
-        lost_ = false;
+        if (!restartOnHandle(err)) return false;
         std::fprintf(stderr, "airspyhf: stream restarted on the same handle (fd-opened; no deep reopen)\n");
         return true;
     }

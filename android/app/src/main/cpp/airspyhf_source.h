@@ -172,6 +172,9 @@ public:
 private:
     std::atomic<uint64_t> usbDropped_{0}, usbDropEvents_{0}, usbDropPending_{0};
     bool finishOpen(double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
+    /** Stop + start on the held handle, on a deadline. Caller holds impl_->mtx. See the .cpp. */
+    bool restartOnHandle(std::string& err);
+    void abandonHandle();
     struct Impl;
     Impl* impl_ = nullptr;
     IqSink sink_;
