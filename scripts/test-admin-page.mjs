@@ -127,7 +127,12 @@ console.log('\n3. ABSENT IS ABSENT — never a fake zero');
   const h = text('adminHealth');
   ok(/not available/.test(h), 'a missing sensor reads "not available"', h.slice(0, 160));
   ok(!/0\.0°C/.test(h) && !/0°C/.test(h), 'and NEVER as 0 °C', h.slice(0, 160));
-  ok($('adminHealth').querySelectorAll('.aCard.none').length >= 2, 'both unknowns are styled as absent');
+  // ★ 2026-10-05: ONE absent card, not two. Since 9081ac71 (2026-09-19) a machine with no thermal
+  //   sensor gets NO temperature tile at all — a tile permanently reading "not available" is a
+  //   control with nothing behind it (AGENTS.md). The CPU card still says "not available", styled as
+  //   absent, because CPU is always a real question. This test still asked for two and failed.
+  ok($('adminHealth').querySelectorAll('.aCard.none').length >= 1, 'the unknown CPU is styled as absent');
+  ok(!/CPU TEMP/.test(h), 'and there is NO temperature tile where there is no sensor', h.slice(0, 160));
   responses.status = STATUS;
   mod.openAdmin('127.0.0.1:48111', 'secret');
   await new Promise((r) => setTimeout(r, 150));
@@ -241,29 +246,34 @@ console.log('\n8. THE PAGE STATES ITS OWN LIMITS');
   ok(/Tailscale|WireGuard/.test(body), 'and points at the right answer for a real shell');
 }
 
-console.log('\n8b. SIMPLE MODE HIDES THE STRANGER-MANAGEMENT PANELS');
+console.log('\n8b. SIMPLE MODE HIDES ONLY THE VISITOR MAP');
 {
+  // ★★ 2026-10-05: REWRITTEN TO MATCH THE PAGE. Since 25e0d523 (2026-08-20) "who is on my receiver"
+  //    is for EVERY owner — Simple mode now means a shareable receiver (several people on one FM-DX
+  //    dial), not one listener — so listeners, blocking and history show in both modes and only the
+  //    WHERE-FROM map is gated. The "local sharing" note went with it: it explained a short page
+  //    that no longer exists. This section still asserted the August 7 page and failed 4 times.
   responses.status = { ...STATUS, publicSharing: false };
   mod.openAdmin('127.0.0.1:48111', 'secret');
   await new Promise((r) => setTimeout(r, 200));
-  for (const id of ['secListeners', 'secBlocking', 'secHistory', 'secCountries']) {
-    ok($(id).hidden === true, `${id} is hidden`, `(hidden=${$(id).hidden})`);
+  for (const id of ['secListeners', 'secBlocking', 'secHistory']) {
+    ok($(id).hidden === false, `${id} is still shown — who is here matters on any receiver`, `(hidden=${$(id).hidden})`);
   }
+  ok($('secCountries').hidden === true, 'secCountries (where they came from) is hidden');
   // ★★ HEALTH AND MAINTENANCE STAY. They are useful on a household receiver too — "your Pi is at
   //    82 °C" does not care how many people are listening — and removing the maintenance buttons
   //    would take away the easiest way for a non-technical owner to update.
   ok(!$('adminHealth').hidden && text('adminHealth').length > 0, 'health is still shown');
   ok(text('adminPanelBody').includes('CHECK FOR UPDATES'), 'maintenance is still shown');
-  // ★ And it EXPLAINS the shorter page, so nothing reads as missing or broken.
-  ok($('adminSimpleNote').hidden === false, 'the "local sharing" note is shown');
-  ok(/local sharing/i.test(text('adminSimpleNote')), 'and says why');
+  // ★ The note described panels that were missing; none are, so it must not be on screen.
+  ok($('adminSimpleNote').hidden === true, 'the old "local sharing" note is NOT shown — nothing is missing');
   // ★ The header must still update — an early return past it would leave it stale.
   ok(text('adminHost').includes('127.0.0.1'), 'the header still names the server');
 
   responses.status = STATUS;
   mod.openAdmin('127.0.0.1:48111', 'secret');
   await new Promise((r) => setTimeout(r, 200));
-  ok($('secListeners').hidden === false, 'and Full mode brings them back');
+  ok($('secCountries').hidden === false, 'and Full mode brings the map back');
 }
 
 console.log('\n8c. A PLATFORM THAT CANNOT DO MAINTENANCE IS NOT OFFERED IT');
@@ -298,7 +308,15 @@ console.log('\n9. CLOSING STOPS THE POLLING');
   ok(mod.isAdminOpen() === false, 'and reports itself closed');
   let calls = 0;
   const real = global.fetch;
-  global.fetch = window.fetch = async (...a) => { calls++; return real(...a); };
+  // ★ 2026-10-05: count POLL requests only. Every admin request now fetches its own single-use
+  //   nonce from /vibeserver/auth first, and a server whose /vibeserver/radios 404s (this stub, an
+  //   older server) is asked again each poll — so one poll is 9 fetches, and counting all of them
+  //   read ONE poll as "multiplied". The thing guarded here is the polling RATE, so count the four
+  //   things a poll asks for.
+  const isPoll = (u) => /\/vibeserver\/admin\/(status|history|sessions|connections)\b/.test(String(u));
+  //   The closed-page check below still counts EVERY request: a closed page must ask for nothing.
+  let polls = 0;
+  global.fetch = window.fetch = async (...a) => { calls++; if (isPoll(a[0])) polls++; return real(...a); };
   await new Promise((r) => setTimeout(r, 300));
   ok(calls === 0, 'and makes no further requests — a closed page must not poll the machine',
      `(${calls} calls)`);
@@ -315,11 +333,11 @@ console.log('\n9. CLOSING STOPS THE POLLING');
   for (let i = 0; i < 4; i++) { mod.openAdmin('127.0.0.1:48111', 'secret'); mod.closeAdmin(); }
   mod.openAdmin('127.0.0.1:48111', 'secret');
   await new Promise((r) => setTimeout(r, 120));   // let the immediate refresh finish
-  calls = 0;
+  polls = 0;
   await new Promise((r) => setTimeout(r, 2400));  // ~1 poll at the 2 s interval
   const perPoll = 4;                              // status + sessions + connections + history
-  ok(calls <= perPoll * 2, 'repeated open/close does not multiply the polling rate',
-     `(${calls} requests in one interval; one poll is ${perPoll})`);
+  ok(polls <= perPoll * 2, 'repeated open/close does not multiply the polling rate',
+     `(${polls} poll requests in one interval; one poll is ${perPoll})`);
   mod.closeAdmin();
 }
 
