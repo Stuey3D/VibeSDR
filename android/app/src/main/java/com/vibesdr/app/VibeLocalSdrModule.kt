@@ -839,7 +839,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // Remember the live config so the service can rebuild the shim if the process
         // dies under it (START_STICKY brings the service back, but not the radio).
         if (autoRestore) {
-            VibeServerRestore.arm(reactContext, cfg)
+            VibeServerRestore.arm(reactContext, cfg, dev)   // ★ and which radio — see K_VIDPID
         } else {
             VibeServerRestore.disarm(reactContext)
         }

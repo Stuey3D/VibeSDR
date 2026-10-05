@@ -42,17 +42,25 @@ object VibeServerRestore {
      *  ★ Now there is nothing to remember: the config is stored whole and replayed through the same
      *    VibeServerBoot.applyAndStart the normal start uses. */
     private const val K_CONFIG    = "configJson"
+    /** ★★★ WHICH RADIO THE SERVER WAS STARTED WITH, as (vid shl 16) or pid; absent = not recorded (a config
+     *  stored by an older build). restore() used to look only for a DONGLE (isRtlSdr), so a server running
+     *  an Airspy HF+, an R2/Mini or a HackRF that lost its process — a crash, a low-memory kill, an update —
+     *  came back as "no SDR attached" with the radio sitting right there (2026-10-05). Persisted, because
+     *  the in-memory heldVidPid dies with the very process this file exists to replace. */
+    private const val K_VIDPID    = "radioVidPid"
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** Remember the live config, whole. Called when the server starts. */
-    fun arm(ctx: Context, cfg: org.json.JSONObject) {
-        prefs(ctx).edit()
+    /** Remember the live config, whole. Called when the server starts.
+     *  ★ And WHICH radio it runs (`dev`), so restore() reopens that one — see K_VIDPID. */
+    fun arm(ctx: Context, cfg: org.json.JSONObject, dev: UsbDevice? = null) {
+        val e = prefs(ctx).edit()
             .putBoolean(K_ARMED, true)
             .putString(K_CONFIG, cfg.toString())
             // ★ A fresh start has its radio: no earlier departure may be held against it.
             .remove(K_GONE_ELAPSED).remove(K_GONE_BOOTWALL).remove(K_GONE_BOOTNO)
-            .apply()
+        if (dev != null) e.putInt(K_VIDPID, (dev.vendorId shl 16) or dev.productId) else e.remove(K_VIDPID)
+        e.apply()
     }
 
     /**
@@ -261,10 +269,13 @@ object VibeServerRestore {
 
         val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager
             ?: return "no USB service"
-        val dev: UsbDevice = mgr.deviceList.values.firstOrNull { isRtlSdr(it) }
+        // ★★★ THE RADIO THE SERVER WAS STARTED WITH (K_VIDPID, 2026-10-05) — an HF+, an R2/Mini or a HackRF
+        //     as well as a dongle. The reason strings are unchanged: the service's retry loop keys on them.
+        val want = p.getInt(K_VIDPID, -1)
+        val dev: UsbDevice = mgr.deviceList.values.firstOrNull { isRestoreRadio(it, want) }
             ?: return "no SDR attached"
         // No prompt is possible here (no activity), but after a crash the grant is
-        // still live — the dongle never left.
+        // still live — the radio never left. Same check, whatever the radio.
         if (!mgr.hasPermission(dev)) return "no USB permission"
 
         val conn = mgr.openDevice(dev) ?: return "openDevice returned null"
@@ -435,6 +446,16 @@ object VibeServerRestore {
     internal fun isShimServing(): Boolean = try {
         VibeLocalSDR.getVibeServerStatus().contains("\"running\":true")
     } catch (_: Throwable) { false }
+
+    /** ★★ Is `dev` the radio restore() should reopen? `want` is the stored K_VIDPID (-1 = none recorded).
+     *  ★ A DONGLE IS STILL "ANY DONGLE" — exactly the old rule — whether the stored id is an RTL's or there
+     *    is none (an older build's config), so nothing about restoring an RTL server changes: a V3 swapped
+     *    for a V4 between crash and restore still comes back as before. Any other radio must match its own
+     *    VID:PID, which also keeps a restore from handing an HF+ server some dongle on the same hub. */
+    private fun isRestoreRadio(dev: UsbDevice, want: Int): Boolean {
+        if (want < 0 || VibeLocalSdrModule.RTL_SDR_VIDPIDS.contains(want)) return isRtlSdr(dev)
+        return ((dev.vendorId shl 16) or dev.productId) == want
+    }
 
     private fun isRtlSdr(dev: UsbDevice): Boolean {
         val key = (dev.vendorId shl 16) or dev.productId
