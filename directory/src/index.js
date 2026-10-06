@@ -333,14 +333,37 @@ function capFlat(o, maxKeys, maxStr) {
   }
   return out;
 }
-function capRadio(r) {
+/* ★★ THE AERIAL'S RANGES AND FILTERS (2026-10-06) — the owner's own text, per radio
+ *  ("0-300MHz Wideband loop; [B] 144-146MHz 2 m", "bandstop 87.5-108MHz FM band-stop"), drawn on the
+ *  card under the antenna line. Cleaned like the other owner text and then some, because the page
+ *  PARSES it: text only, no markup characters, no control or direction-override characters, one line.
+ *  ★ Capped at 800 — the server's own limit (BANDS_TEXT_MAX) — and cut at the last whole entry, so a
+ *    truncated entry can never be read as a different band. Empty after cleaning = omitted, so an
+ *    older server (which sends neither) and an owner who set nothing look exactly the same. */
+export const BANDS_TEXT_MAX = 800;
+export function cleanBandsText(v) {
+  if (typeof v !== 'string') return '';
+  let s = v.replace(/[\u0000-\u001f\u007f<>"\\`\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, ' ')
+           .replace(/\s+/g, ' ').trim();
+  if (s.length > BANDS_TEXT_MAX) {
+    s = s.slice(0, BANDS_TEXT_MAX);
+    const cut = s.lastIndexOf(';');
+    s = cut > 0 ? s.slice(0, cut) : '';
+  }
+  return s.replace(/[;\s]+$/, '').trim();
+}
+const BANDS_KEYS = new Set(['antennaRanges', 'antennaFilters']);
+
+export function capRadio(r) {
   if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
   const out = {};
   let n = 0;
   for (const [k, v] of Object.entries(r)) {
     if (n >= 48 || !RADIO_KEY.test(k)) continue;
     let c;
-    if (Array.isArray(v)) {
+    if (BANDS_KEYS.has(k)) {
+      c = cleanBandsText(v) || undefined;
+    } else if (Array.isArray(v)) {
       // ★ ranges / allowed / coverage are arrays of [lo, hi] pairs — kept as small scalar tuples.
       c = v.slice(0, 64).map((x) => Array.isArray(x) ? x.slice(0, 8).map((y) => capScalar(y, 80)).filter((y) => y !== undefined)
                                   : (x && typeof x === 'object') ? capFlat(x, 16, 120)
