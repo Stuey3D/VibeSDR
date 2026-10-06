@@ -445,7 +445,7 @@ const longest = (face: ModeFace) => CANDIDATES.reduce((a, c) => {
   eq('★ a standalone digimode is its own label (was MESHCORE: MESHCORE)', composeModeLabel('meshcore', 'meshcore'), 'MESHCORE');
   eq('DAB is DAB whatever the decoder', composeModeLabel('wfm', 'rtty', true), 'DAB');
 }
-const DISPLAYS: [string, ModeFace][] = [['hyper', 'hyper'], ['nixie', 'hyper'], ['seg', 'hyper'], ['dot', 'doto']];
+const DISPLAYS: [string, ModeFace][] = [['hyper', 'hyper'], ['nixie', 'hyper'], ['seg', 'seg'], ['dot', 'doto']];  // ★ seg: the VCR fixed fields (2026-10-06)
 for (const W of [320, 375, 390, 393, 402, 430, 440, 768, 1024]) {
   const scale = Math.max(0.75, Math.min(1.45, W / 390));
   const r = (n: number) => Math.round(n * scale);
@@ -460,7 +460,7 @@ for (const W of [320, 375, 390, 393, 402, 430, 440, 768, 1024]) {
         const f = modeBoxFit({ label: c.label, stereo: c.stereo, face, fontSize: r(15), letterSpacing: 2,
                                readingFont: r(11), minW: r(MODE_BOX.minW), padH: r(MODE_BOX.padH), windowW: winW });
         const t = `${tag} "${c.label}"${c.stereo ? '+rings' : ''}`;
-        const need = modeTextWidth(c.label, f.fontSize, f.letterSpacing, face) + (c.stereo ? stereoWidth(f.fontSize) : 0)
+        const need = modeTextWidth(c.label, f.fontSize, f.letterSpacing, face) + (c.stereo && face !== 'seg' ? stereoWidth(f.fontSize) : 0)
                      + 2 * r(MODE_BOX.padH);
         ok(`${t}: ONE line (need ${need.toFixed(1)} ≤ box ${f.width})`, need <= f.width + 1e-9);
         ok(`${t}: legible (${f.fontSize} ≥ ${MODE_MIN_FONT})`, f.fontSize >= MODE_MIN_FONT);

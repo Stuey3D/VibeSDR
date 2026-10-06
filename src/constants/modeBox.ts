@@ -37,10 +37,60 @@ export const ATKINSON_BOLD_K = 1.08;
 /** Doto Black (the `dot` Display's mode font) is monospaced: every glyph 0.6 em, one weight. */
 export const DOTO_EM = 0.6;
 
-export type ModeFace = 'hyper' | 'doto';
+/** ★ 'seg' (2026-10-06): the VCR Display draws the mode box as FIXED 14-segment fields (components/SegField,
+ *  constants/segField) — the same width whatever the label, the stereo rings inside it. */
+export type ModeFace = 'hyper' | 'doto' | 'seg';
 
-/** The width (pt) RN lays `text` out at, letter-spacing included (RN adds it after every glyph). */
+// ── The VCR (14-segment) fields' geometry ────────────────────────────────────
+
+/** DSEG14 Classic's advance, em — 816 / 1000 in the TTF's hmtx (every cell glyph; its digits fill the whole
+ *  em, 0 … 1000, so the font size IS the cell's height). */
+export const SEG14_ADV = 0.816;
+/** ★ Extra room between cells, em: the colon electrode (DSEG's own ':' glyph, 0.16 em of dots) rides in the
+ *  gap after the demod, and the font's own 0.124 em gap is too tight for it. */
+export const SEG14_GAP = 0.08;
+export const SEG14_PITCH = SEG14_ADV + SEG14_GAP;
+/** The width (pt) of `n` cells at font size `fs` — the last cell's own advance, no trailing gap. */
+export const segCellsWidth = (n: number, fs: number) => (n > 0 ? ((n - 1) * SEG14_PITCH + SEG14_ADV) * fs : 0);
+/** The mode field's cell height for the mode box's (Atkinson) type size: DSEG14's digit is the full em,
+ *  Atkinson's capitals ~0.67 em, so 0.66 × keeps "WFM" the height it was. */
+export const SEG_MODE_FONT_K = 0.66;
+/** The readout's cell height for the reading's type size. */
+export const SEG_READ_FONT_K = 0.8;
+/** The mode field: SEG_MODE_CELLS (constants/segField — 10) cells. */
+export const SEG_MODE_FIELD_CELLS = 10;
+export const segModeFont = (modeFontSize: number) => Math.max(6, modeFontSize * SEG_MODE_FONT_K);
+export const segModeFieldWidth = (modeFontSize: number) => segCellsWidth(SEG_MODE_FIELD_CELLS, segModeFont(modeFontSize));
+/** ★ AnnunciatorLegend's letter cell (CELL_W, CELL_H, GAP) — the readout's dB / F / S legends are its strokes.
+ *  test_faceplate_segfield holds the two copies equal. */
+export const SEG_LEGEND = { cellW: 10, cellH: 14, gap: 2.2 } as const;
+
+export interface SegReadingGeometry {
+  /** The cells' height (font size). */
+  fs: number;
+  cellsW: number;
+  /** The legends' height, bottom-aligned with the cells. */
+  lh: number;
+  dB: { x: number; w: number }; F: { x: number; w: number }; S: { x: number; w: number };
+  width: number;
+}
+/** The readout "-88+88 dB F S" for the reading's type size: six cells, then dB, then F S set close as one word. */
+export function segReadingGeometry(readingFont: number): SegReadingGeometry {
+  const fs = Math.max(5, readingFont * SEG_READ_FONT_K);
+  const cellsW = segCellsWidth(6, fs);
+  const lh = fs * 0.62;
+  const k = lh / SEG_LEGEND.cellH;
+  const one = SEG_LEGEND.cellW * k, gapL = SEG_LEGEND.gap * k;
+  const dB = { x: cellsW + 0.3 * fs, w: 2 * one + gapL };
+  const F = { x: dB.x + dB.w + 0.3 * fs, w: one };
+  const S = { x: F.x + one + gapL, w: one };
+  return { fs, cellsW, lh, dB, F, S, width: S.x + one };
+}
+
+/** The width (pt) RN lays `text` out at, letter-spacing included (RN adds it after every glyph).
+ *  'seg': the fixed mode field, whatever the text. */
 export function modeTextWidth(text: string, size: number, letterSpacing: number, face: ModeFace): number {
+  if (face === 'seg') return segModeFieldWidth(size);
   let em = 0;
   for (const ch of text) em += face === 'doto' ? DOTO_EM : (ATKINSON_EM[ch.toUpperCase()] ?? ATKINSON_EM_MAX);
   const k = face === 'doto' ? 1 : ATKINSON_BOLD_K;
@@ -148,9 +198,11 @@ export interface ModeBoxFit {
 export function modeBoxFit(o: { label: string; stereo: boolean; face: ModeFace; fontSize: number;
                                 letterSpacing: number; readingFont: number; minW: number; padH: number;
                                 windowW: number }): ModeBoxFit {
+  // ★ 'seg': the rings live INSIDE the fixed field (their slot is cells in every other mode), and the reading is
+  //   the fixed "-88+88 dB F S" readout — so neither depends on the label.
   const need = (fs: number, ls: number) => Math.max(
-    modeTextWidth(o.label, fs, ls, o.face) + (o.stereo ? stereoWidth(fs) : 0),
-    modeTextWidth(READING_LONGEST, o.readingFont, 0, o.face),
+    modeTextWidth(o.label, fs, ls, o.face) + (o.stereo && o.face !== 'seg' ? stereoWidth(fs) : 0),
+    o.face === 'seg' ? segReadingGeometry(o.readingFont).width : modeTextWidth(READING_LONGEST, o.readingFont, 0, o.face),
   ) + 2 * o.padH;
   const maxW = o.windowW > 0 ? Math.max(o.minW, Math.floor(o.windowW * MODE_BOX_MAX_SHARE)) : Infinity;
   const fs0 = o.fontSize, ls0 = o.letterSpacing;

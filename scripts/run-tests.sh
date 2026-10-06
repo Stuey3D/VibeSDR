@@ -213,6 +213,9 @@ if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fai
 #    cell (its space is 200 wide and its ! is the BLANK cell), accents fold like a display ROM,
 #    units keep their case, and a string that folds to nothing shows the frequency, never tofu.
 if node --no-warnings scripts/test_faceplate_text.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ THE VCR MODE BOX (2026-10-06): every label the app composes fits the ten-cell field whole (WFM keeps the
+#    rings' slot, every other mode gets those cells), and the "-88+88 dB F S" readout lights only electrodes it has.
+if node --no-warnings scripts/test_faceplate_segfield.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ NIXIE: real hardware never adds or removes a tube. Units change only the lit bulb, leading
 #     zeros are switched off, and the TUBE shrinks to its window (smallest window first) — domes
 #     are never clipped.
