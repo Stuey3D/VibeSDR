@@ -1,11 +1,13 @@
 /**
- * The status row on VCR / DOT, modelled for the faceplate tests (2026-10-06): every run's cells (constants/statusField)
- * and its width at a window's status size, then ControlsBar's own fit — row 9's statusFit in landscape, PortraitStats'
- * drop order in portrait — at every width from an SE in Display Zoom to a full-screen Mac. Shared by
- * test_faceplate_segfield.ts (VCR) and test_faceplate_dotfield.ts (DOT).
+ * The status row, modelled for the faceplate tests (2026-10-06): every run's width at a window's status size, then
+ * ControlsBar's own fit — row 9's statusFit in landscape, PortraitStats' drop order in portrait — at every width from
+ * an SE in Display Zoom to a full-screen Mac. Shared by test_faceplate_segfield.ts (VCR), test_faceplate_dotfield.ts
+ * (DOT) and test_faceplate_screenfont.ts (★ Nixie One and Atkinson — the status row takes the display's font now).
  *
- * ★ The widths here are the cells' ARITHMETIC (n cells × the fixed pitch) — exactly what StatusRun lays out and what
- *   the measuring twin reports. The window's own margins are an estimate (EDGE below), stated as one.
+ * ★ VCR / DOT widths are the cells' ARITHMETIC (n cells × the fixed pitch) — exactly what StatusRun lays out and what
+ *   the measuring twin reports. ★ Nixie / Hyper widths are the TTF's own advances (lib_font_metrics, no kerning —
+ *   it errs wide) with StatusText's 0.4 letter-spacing and the row's drawn pieces (the node icon, the bars, the
+ *   gain arrow, the DSP pills) at ControlsBar's sizes. The window's own margins are an estimate (EDGE below).
  */
 import { statusFit, statusFits, statusState, type StatusItem, type StatusRowSpec } from '../src/constants/displayText.ts';
 import { segCellList, toSegCells } from '../src/constants/displayText.ts';
@@ -13,8 +15,14 @@ import { dotChar } from '../src/constants/dotField.ts';
 import {
   statusDotSlots, statusParts, statusRunWidth, statusSegFs, statusSegSlots, statusTags, type StatusPart, type StatusSlots,
 } from '../src/constants/statusField.ts';
+import { DOTO, HYPER, NIXIE } from './lib_font_metrics.ts';
 
 export type Face = 'seg' | 'dot';
+/** ★ A TEXT face (2026-10-06): the status row in the display's font, not in cells. 'doto' is the Doto run every metal
+ *  Display drew before (RC18) — kept for the comparison. */
+export type TextFace = 'nixie' | 'hyper' | 'doto';
+export type RowFace = Face | TextFace;
+const isText = (f: RowFace): f is TextFace => f === 'nixie' || f === 'hyper' || f === 'doto';
 export const segCells = (t: string) => segCellList(toSegCells(t)).map(c => c.replace(/^!/, ''));
 export const slotsFor = (face: Face, parts: StatusPart[]): StatusSlots =>
   face === 'seg' ? statusSegSlots(parts, segCells) : statusDotSlots(parts, dotChar);
@@ -22,7 +30,14 @@ export const slotsFor = (face: Face, parts: StatusPart[]): StatusSlots =>
 /** useUiScale's scale, and StatusWell's status size: Doto 12 × scale, 10 pt floor. */
 export const scaleFor = (W: number, landscape: boolean) =>
   landscape ? Math.max(0.58, Math.min(1.45, W / 926)) : Math.max(0.75, Math.min(1.45, W / 390));
-export const statusSize = (W: number, landscape: boolean) => Math.max(10, 12 * scaleFor(W, landscape));
+export const statusSize = (W: number, landscape: boolean, face: RowFace = 'dot', chassis: Chassis = 'metal') => {
+  if (chassis === 'metal') return Math.max(10, 12 * scaleFor(W, landscape));     // 12 pt on every Display
+  // ★ The default chassis (2026-10-06, statusDisplayFor): the footer's own CLOCK_FONT — portrait s.f(8), landscape
+  //   max(9, s.f(7)) — in the display's font; the cells keep their 10 pt floor.
+  const clock = landscape ? Math.max(9, 7 * scaleFor(W, true)) : 8 * scaleFor(W, false);
+  return isText(face) ? clock : Math.max(10, clock);
+};
+export type Chassis = 'metal' | 'default';
 
 /** The worst case the row can show: a shared server with listeners, recording, all three DSP badges, a fast rate,
  *  a stepping gain, the IF filter. */
@@ -52,8 +67,26 @@ export function runs(face: Face): Record<string, StatusPart[]> {
   };
 }
 
+/** ★ A text face's item widths (pt) — ControlsBar's sd-text path: StatusText (letter-spacing 0.4), SectionIcon
+ *  round(1.1 × size) + its 4 pt gap, LinkBars (3 × 3 + 2 × 1.5), GainArrow (11/12 × size), the DSP pills (pm.dspTag:
+ *  11 pt, spacing 1, 5 + 5 padding, 1 + 1 border, 6 apart), the recording dot (5 + 3 gap). */
+export function textWidths(face: TextFace, size: number): Record<string, number> {
+  const f = face === 'nixie' ? NIXIE() : face === 'doto' ? DOTO() : HYPER();
+  const t = (s: string) => f.width(s, size, 0.4);
+  const icon = Math.round(size * 1.1) + 4;
+  const tag = (s: string) => f.width(s, 11, 1) + 12;
+  return {
+    utc: t(WORST.utc), localTime: icon + t(WORST.srv), localTimeShort: icon + t(WORST.srvShort),
+    rec: 5 + 3 + t(WORST.rec), shared: t(WORST.shared), sharedShort: t(WORST.sharedShort),
+    dsp: WORST.dsp.reduce((a, d, i) => a + tag(d) + (i ? 6 : 0), 0),
+    meter: 3 * 3 + 2 * 1.5, linkIconsB: Math.round(size * 1.1),
+    rate: t(WORST.rate), gain: t('· ' + WORST.gain.label) + (11 / 12) * size + t(WORST.gain.value), if: t(WORST.if),
+  };
+}
+
 /** Item widths (pt) at a status size. The DSP run on VCR carries its frame padding (StatusField framePad + 0.5). */
-export function widths(face: Face, size: number): Record<string, number> {
+export function widths(face: RowFace, size: number): Record<string, number> {
+  if (isText(face)) return textWidths(face, size);
   const out: Record<string, number> = {};
   for (const [k, parts] of Object.entries(runs(face))) {
     out[k] = statusRunWidth(face, slotsFor(face, parts).cells.length, size);
@@ -70,8 +103,8 @@ export interface LandscapeFit { W: number; size: number; avail: number; hidden: 
   sharedShort: boolean }
 
 /** LandscapeStatus' fit at window width W (shared server, recording, DSP on, a reading in every item). */
-export function landscapeFit(face: Face, W: number): LandscapeFit {
-  const size = statusSize(W, true);
+export function landscapeFit(face: RowFace, W: number, chassis: Chassis = 'metal'): LandscapeFit {
+  const size = statusSize(W, true, face, chassis);
   const w = widths(face, size);
   const avail = W - EDGE(W, true);
   const specFor = (noUtc: boolean): StatusRowSpec => ({
@@ -95,8 +128,8 @@ export function landscapeFit(face: Face, W: number): LandscapeFit {
 
 /** PortraitStats' drop order and its fit at window width W (the stats line: bars, rate, gain, IF). */
 const PORTRAIT_ORDER = ['if', 'gain', 'linkIcons', 'rate'] as const;
-export function portraitStatsFit(face: Face, W: number): { W: number; size: number; hidden: string[]; fits: boolean } {
-  const size = statusSize(W, false);
+export function portraitStatsFit(face: RowFace, W: number, chassis: Chassis = 'metal'): { W: number; size: number; hidden: string[]; fits: boolean } {
+  const size = statusSize(W, false, face, chassis);
   const w = widths(face, size);
   const avail = W - EDGE(W, false);
   const width = (k: number) => {
@@ -111,8 +144,8 @@ export function portraitStatsFit(face: Face, W: number): { W: number; size: numb
 }
 
 /** Portrait row 4 (it never drops — it shrinks): both clocks, the recording timer and the DSP badges. */
-export function portraitClockRow(face: Face, W: number): { W: number; need: number; avail: number } {
-  const size = statusSize(W, false);
+export function portraitClockRow(face: RowFace, W: number, chassis: Chassis = 'metal'): { W: number; need: number; avail: number } {
+  const size = statusSize(W, false, face, chassis);
   const w = widths(face, size);
   const need = w.utc + 4 + w.localTime + 8 + w.rec + 8 + w.dsp;
   return { W, need, avail: W - EDGE(W, false) };

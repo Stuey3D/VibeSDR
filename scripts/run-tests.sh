@@ -216,6 +216,9 @@ if node --no-warnings scripts/test_faceplate_text.ts; then pass=$((pass+1)); els
 # ★★ THE VCR MODE BOX (2026-10-06): every label the app composes fits the ten-cell field whole (WFM keeps the
 #    rings' slot, every other mode gets those cells), and the "-88+88 dB F S" readout lights only electrodes it has.
 if node --no-warnings scripts/test_faceplate_segfield.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ EVERY BIG ON-SCREEN ELEMENT FOLLOWS THE MAIN DISPLAY'S FONT (2026-10-06): one source (faceplate.ts ScreenText),
+#    every listed element reading it, Nixie One's glyphs and widths from its TTF, and the status row fitting in it.
+if node --no-warnings scripts/test_faceplate_screenfont.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ THE DOT MODE BOX (2026-10-06): the same fields as true 5 × 7 dot-matrix cells — Doto's own dots (read out of the
 #    TTF and checked against it), every label whole, the rings in dots, "S9+27 dBFS" / "kHz" fixed width.
 if node --no-warnings scripts/test_faceplate_dotfield.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
