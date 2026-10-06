@@ -105,6 +105,8 @@ import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type ChatUserRow }                            from '../services/DecoderClient';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { registerIqCode } from '../services/iqPairing';
+import AntennaBandNotice from '../components/AntennaBandNotice';
+import { parseAntennaBands, hasAntennaBands, type AntennaBands } from '../utils/antennaBands';
 import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq, fetchOccupancy,
          isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { v4 as uuidv4 }                                from 'uuid';
@@ -675,12 +677,22 @@ export default function SDRScreen({ route, navigation }: Props) {
    *
    *  ★ Re-probed whenever that address changes, and cleared first: an answer belonging to the
    *    previous radio is worse than no answer. */
+  // ★★ THE AERIAL'S RANGES AND FILTERS (2026-10-06) — read from the same probe, per RADIO for the
+  //    same reason (connectBase is the radio once it is resolved). Drawn by AntennaBandNotice.
+  const [antBands, setAntBands] = useState<AntennaBands | null>(null);
+  const [antNoticeH, setAntNoticeH] = useState(0);
   useEffect(() => {
     let dead = false;
     setDabCapable(false);
+    setAntBands(null);
     if ((route.params.serverType ?? 'ubersdr') !== 'vibeserver') return;
     fetchOccupancy(connectBase.replace(/\/+$/, ''))
-      .then(o => { if (!dead) setDabCapable(o?.dab === true); })
+      .then(o => {
+        if (dead) return;
+        setDabCapable(o?.dab === true);
+        const b = parseAntennaBands(o?.antennaRanges, o?.antennaFilters);
+        setAntBands(hasAntennaBands(b) ? b : null);
+      })
       .catch(() => {});
     return () => { dead = true; };
   }, [connectBase, route.params.serverType]);
@@ -2756,7 +2768,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // pills." That is exactly what happens for free — DecoderPanel derives its available height from
   // this same offset, so a taller stack shrinks the body rather than pushing it past the notch.
   // ★ The "still listening?" card is CENTRED, not stacked, so it contributes nothing here.
-  const noticeStackH = (showIdleTerms ? NOTICE_PILL_H : 0);
+  const noticeStackH = (showIdleTerms ? NOTICE_PILL_H : 0) + (antNoticeH ? antNoticeH + 6 : 0);
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
   // swallow the needle whatever colour it is (Stuart 2026-06-12 eve)
@@ -10220,10 +10232,20 @@ export default function SDRScreen({ route, navigation }: Props) {
           hunting for a gesture. Any touch anywhere cancels it via markInteract. */}
       {/* ★ The receiver's terms, stated on arrival. Its own wording: this is the SERVER's liveness
           rule, not ours, and it exists so somebody else can have a turn on a busy receiver. */}
+      {/* ★★ "FM band-stop filter fitted" / "Outside this antenna's range" — the owner's aerial
+          ranges and filters (2026-10-06). The free slot at pillBottom + 8, clear of the VTS bar;
+          the idle-terms pill and the decoder box stack above it by its measured height. */}
+      {antBands && !controlsHidden ? (
+        <AntennaBandNotice hz={status.frequency} bands={antBands}
+          port={(radioCaps as { antenna?: string } | null)?.antenna ?? null}
+          bottom={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0)}
+          onHeight={setAntNoticeH} />
+      ) : null}
       {showIdleTerms && idleWarnLeftMs === null ? (
         <View pointerEvents="none"
               style={[styles.powersavePill,
-                      { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + 34,
+                      { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + 34
+                                + (antNoticeH ? antNoticeH + 6 : 0),
                         // ★★★ ABOVE THE DECODER PANEL. `powersavePill` is zIndex 55 and
                         // DecoderPanel is 200, so anything using that style is drawn BEHIND an open
                         // decoder box — which is exactly why Stuart never saw the idle warning with
