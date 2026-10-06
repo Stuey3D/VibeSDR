@@ -287,6 +287,9 @@ public:
     bool claimableNow() const;
     /** Which aerial picture this radio shows — a key, see RadioConfig::antennaIcon. */
     void setAntennaIcon(const std::string& key);
+    /** ★ The aerial's ranges and filters, as the owner's text — see RadioConfig::antennaRanges.
+     *  Published on /vibeserver.json for the clients to parse; empty = omitted. */
+    void setAntennaBands(const std::string& ranges, const std::string& filters);
     void setLandingInfo(const std::string& antenna, const std::string& message,
                         const std::string& linkUrl, const std::string& linkLabel);
     void setOccupancyRegistry(const std::string& dir, const std::string& serial,

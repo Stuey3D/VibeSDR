@@ -444,6 +444,15 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
      *  followed from the start. */
     B("rspHdr", r.rspHdr); B("rspAmNotch", r.rspAmNotch); B("rspExtRef", r.rspExtRef);
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
+    // ★ The aerial's ranges and filters (2026-10-06) — read here AND written in radioToJson. Clamped
+    //   rather than refused: an over-long list keeps its first entries instead of vanishing.
+    S("antennaRanges", r.antennaRanges); S("antennaFilters", r.antennaFilters);
+    //   Cut at the last whole entry (`;`), so a clamp never leaves half a name or half a UTF-8 glyph.
+    for (std::string* t : { &r.antennaRanges, &r.antennaFilters }) {
+        if (t->size() <= 800) continue;
+        const size_t cut = t->rfind(';', 800);
+        t->resize(cut == std::string::npos ? 0 : cut);
+    }
     B("enabled", r.enabled); B("configured", r.configured);
     I("order", r.order);   // ★ display only — see RadioConfig::order. Written below too.
     I("port", r.port);
@@ -510,6 +519,7 @@ std::string radioToJson(const RadioConfig& r) {
     // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
     //   the note further down records what a field in only one of them costs.
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
+    S("antennaRanges", r.antennaRanges); S("antennaFilters", r.antennaFilters);   // ★ see the reader
     B("enabled", r.enabled); B("configured", r.configured);
     N("order", r.order);
     N("port", r.port);

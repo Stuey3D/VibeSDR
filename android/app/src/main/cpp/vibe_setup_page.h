@@ -65,6 +65,25 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       background:rgba(255,184,51,.09)}
   .antIcons button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
   .antIcons .none{font-size:11px;letter-spacing:.1em}
+  /* ★ The aerial's ranges and filters (2026-10-06): one row per entry. The numbers sit on one line
+     with their unit; the name takes what is left and WRAPS beneath them on a phone rather than
+     squeezing the numbers into boxes too narrow to read. */
+  .abList{display:flex;flex-direction:column;gap:8px}
+  .abRow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid var(--line);
+         border-radius:8px;background:#0a0704}
+  /* ★ Three groups that wrap AS GROUPS: the type/socket, the numbers with their unit (never split —
+     a "108" on one line and its "MHz" on the next reads as two settings), then the name and ✕. */
+  .abRow .abNums{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  .abRow .abName{display:flex;align-items:center;gap:6px;flex:1 1 180px;min-width:0}
+  .abRow input[type=number]{width:84px;flex:0 0 84px;padding:7px 8px}
+  .abRow select{width:auto;flex:0 0 auto;padding:7px 8px}
+  .abRow input[type=text]{flex:1 1 auto;width:auto;min-width:0;padding:7px 8px}
+  .abRow .abDash{color:var(--dim)}
+  .abRow button.abX{background:none;border:1px solid var(--line);color:var(--dim);border-radius:7px;
+         width:34px;height:34px;padding:0;font-size:16px;line-height:1;flex:0 0 34px}
+  .abRow button.abX:hover{color:var(--bad);border-color:var(--bad)}
+  .abAdd{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+  .abAdd select{width:auto;max-width:100%;padding:6px 8px;font-size:13px}
   .row>label{flex:1 1 200px}
   button{background:var(--amber);color:#1a1200;border:0;border-radius:8px;
          padding:11px 20px;font:600 15px/1 inherit;cursor:pointer}
@@ -651,6 +670,38 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
         <div id="antIconPick" class="antIcons"></div>
         <p class="why">Shown to everybody who visits, so keep it about the aerial &mdash; not
            about where you live.</p>
+        <!-- ★★★ WHAT THE AERIAL COVERS, AND WHAT YOU HAVE FILTERED OUT (Stuart, 2026-10-06). A
+             listener tuned FM on the Pi 2, where an FM band-stop is fitted, heard it sound poor and
+             had only a note in the name above to explain why. Filled in here, the listener is told
+             in plain words the moment they tune into it — once, on the way in, not on every step.
+             ★★ BOTH OPTIONAL AND BOTH START EMPTY: an aerial nobody describes says nothing, which is
+                every radio that existed before this. Each "+ Add" adds one row per tap.
+             ★ Rows are edited straight onto the radio object (antBandEdit), like the band chips, so
+               a tab switch cannot drop what was typed — stashRadio() has nothing to copy. -->
+        <div style="border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
+          <span class="lbl" style="display:block">Frequency ranges this aerial covers <span style="color:var(--dim)">(optional)</span></span>
+          <p class="why" style="margin:2px 0 6px">A listener tuned outside all of them is told
+             &ldquo;Outside this antenna&rsquo;s range &mdash; reception may be poor&rdquo;. A wideband
+             loop is one row (0&ndash;300&nbsp;MHz); a dual-band vertical is two (2&nbsp;m and 70&nbsp;cm).</p>
+          <div id="antRanges" class="abList"></div>
+          <div class="abAdd">
+            <button type="button" class="convPreset" id="antRangeAdd">+ Add range</button>
+            <select id="antRangePreset" aria-label="Fill in a band"></select>
+          </div>
+          <span class="lbl" style="display:block;margin-top:16px">Filters fitted <span style="color:var(--dim)">(optional)</span></span>
+          <p class="why" style="margin:2px 0 6px">Anything in the feed that deliberately cuts a band
+             &mdash; an FM band-stop, a medium-wave high-pass. A listener tuned into it is told
+             &ldquo;FM band-stop filter fitted &mdash; reception here is deliberately reduced&rdquo;,
+             so they blame the filter rather than the receiver.</p>
+          <div id="antFilters" class="abList"></div>
+          <div class="abAdd">
+            <button type="button" class="convPreset" id="antFilterAdd">+ Add filter</button>
+            <select id="antFilterPreset" aria-label="Fill in a filter"></select>
+          </div>
+          <div class="hint">Band edges differ by country (2&nbsp;m is 144&ndash;146&nbsp;MHz in the UK,
+            144&ndash;148&nbsp;MHz in the US) &mdash; a preset only fills the row in, so check it and
+            edit it to suit.</div>
+        </div>
         <!-- ★★★ WHICH SOCKET, AND WHEN — the RSP's aerial switch (GitHub #29). Drawn only for a
              radio that HAS more than one socket: hidden for every RSP1 and every dongle, because
              a selector for a radio with one aerial is a question with one answer.
@@ -3849,6 +3900,267 @@ function fillAntennaSuggestions() {
   }
 }
 
+/* ★★★ THE AERIAL'S RANGES AND FILTERS (Stuart, 2026-10-06) — see the card's comment.
+ *  ★★ THE PARSER AND WRITER ARE A COPY of src/utils/antennaBands.ts, which both clients import;
+ *     this page is a C++ raw string and cannot. scripts/test_antenna_bands.ts lifts the block
+ *     between the ANTBANDS markers out of this file and checks it reads and writes exactly what
+ *     the shared one does — so the markers are load-bearing, and so is keeping the block free of
+ *     anything else on this page (no esc(), no $()).
+ *  ★ The format is the owner's text: "144-146MHz 2 m; [B] 430-440MHz 70 cm" and
+ *    "bandstop 87.5-108MHz FM band-stop; highpass 1.7MHz". An unfinished row is simply not
+ *    written, so a half-typed range can never become a notice on the wrong frequency. */
+// ANTBANDS-BEGIN
+const AB_UNIT = { hz: 1, khz: 1e3, mhz: 1e6, ghz: 1e9 };
+const AB_UNAME = { hz: "Hz", khz: "kHz", mhz: "MHz", ghz: "GHz" };
+const AB_KINDS = ["bandstop", "bandpass", "highpass", "lowpass"];
+function antCleanName(s) {
+  return String(s == null ? "" : s).replace(/[\u0000-\u001f\u007f;[\]"\\]/g, " ").replace(/\s+/g, " ").trim()
+    .slice(0, 40).trim();
+}
+function antCleanPort(s) {
+  return String(s == null ? "" : s).replace(/[\u0000-\u001f\u007f;[\]]/g, "").trim().slice(0, 32);
+}
+function antNum(hz, unit) {
+  const v = hz / AB_UNIT[String(unit).toLowerCase()];
+  return String(Math.round(v * 1e6) / 1e6);
+}
+function antEntries(s) {
+  if (typeof s !== "string" || !s.trim()) return [];
+  return s.slice(0, 800).split(";").map(e => e.trim()).filter(Boolean);
+}
+function antPort(e) {
+  const m = /^\s*\[([^\]]*)\]\s*/.exec(e);
+  return m ? [antCleanPort(m[1]), e.slice(m[0].length)] : ["", e];
+}
+function antRangeText(t) {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(hz|khz|mhz|ghz)?\s*[-\u2013\u2014]\s*(\d+(?:\.\d+)?)\s*(hz|khz|mhz|ghz)?\b\s*/i.exec(t);
+  if (!m) return null;
+  const u1 = m[2] ? m[2].toLowerCase() : null, u2 = m[4] ? m[4].toLowerCase() : null;
+  const uHi = u2 || u1, uLo = u1 || u2;
+  if (!uHi || !uLo) return null;
+  const lo = parseFloat(m[1]) * AB_UNIT[uLo], hi = parseFloat(m[3]) * AB_UNIT[uHi];
+  if (!isFinite(lo) || !isFinite(hi) || hi <= lo || lo < 0) return null;
+  const unit = AB_UNAME[uHi];
+  return { from: antNum(lo, unit), to: antNum(hi, unit), unit, rest: t.slice(m[0].length) };
+}
+function antOneText(t) {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*(hz|khz|mhz|ghz)?\b\s*/i.exec(t);
+  if (!m || !m[2]) return null;
+  const u = m[2].toLowerCase(), hz = parseFloat(m[1]) * AB_UNIT[u];
+  if (!isFinite(hz) || hz <= 0) return null;
+  return { from: antNum(hz, AB_UNAME[u]), unit: AB_UNAME[u], rest: t.slice(m[0].length) };
+}
+/** Rows as the form holds them: numbers as the owner's STRINGS, in the row's unit. */
+function antParseRanges(s) {
+  const out = [];
+  antEntries(s).forEach(e => {
+    const pb = antPort(e), r = antRangeText(pb[1]);
+    if (r) out.push({ from: r.from, to: r.to, unit: r.unit, name: antCleanName(r.rest), port: pb[0] });
+  });
+  return out;
+}
+function antParseFilters(s) {
+  const out = [];
+  antEntries(s).forEach(e => {
+    const pb = antPort(e), body = pb[1];
+    const km = /^\s*([a-z-]+)\s+/i.exec(body);
+    if (!km) return;
+    const kind = km[1].toLowerCase().replace(/-/g, "");
+    if (AB_KINDS.indexOf(kind) < 0) return;
+    const t = body.slice(km[0].length);
+    if (kind === "bandstop" || kind === "bandpass") {
+      const r = antRangeText(t);
+      if (r) out.push({ kind, from: r.from, to: r.to, unit: r.unit, name: antCleanName(r.rest), port: pb[0] });
+    } else {
+      const o = antOneText(t);
+      if (o) out.push({ kind, from: o.from, to: "", unit: o.unit, name: antCleanName(o.rest), port: pb[0] });
+    }
+  });
+  return out;
+}
+/** A row's numbers, or null while it is unfinished — and an unfinished row is not written. */
+function antRowHz(row, needTo) {
+  const k = AB_UNIT[String(row.unit || "MHz").toLowerCase()];
+  if (!k) return null;
+  const a = String(row.from == null ? "" : row.from).trim(), b = String(row.to == null ? "" : row.to).trim();
+  if (!/^\d+(\.\d+)?$/.test(a)) return null;
+  const lo = parseFloat(a) * k;
+  if (!needTo) return lo > 0 ? { lo, hi: 0 } : null;
+  if (!/^\d+(\.\d+)?$/.test(b)) return null;
+  const hi = parseFloat(b) * k;
+  return (hi > lo && lo >= 0) ? { lo, hi } : null;
+}
+function antUnitOf(row) { return AB_UNAME[String(row.unit || "MHz").toLowerCase()] || "MHz"; }
+function antFormatRanges(rows) {
+  return rows.map(r => {
+    const hz = antRowHz(r, true); if (!hz) return "";
+    const u = antUnitOf(r), name = antCleanName(r.name), port = antCleanPort(r.port);
+    return (port ? "[" + port + "] " : "") + antNum(hz.lo, u) + "-" + antNum(hz.hi, u) + u + (name ? " " + name : "");
+  }).filter(Boolean).join("; ");
+}
+function antFormatFilters(rows) {
+  return rows.map(f => {
+    const kind = String(f.kind || "");
+    if (AB_KINDS.indexOf(kind) < 0) return "";
+    const band = kind === "bandstop" || kind === "bandpass";
+    const hz = antRowHz(f, band); if (!hz) return "";
+    const u = antUnitOf(f), name = antCleanName(f.name), port = antCleanPort(f.port);
+    const freq = band ? antNum(hz.lo, u) + "-" + antNum(hz.hi, u) + u : antNum(hz.lo, u) + u;
+    return (port ? "[" + port + "] " : "") + kind + " " + freq + (name ? " " + name : "");
+  }).filter(Boolean).join("; ");
+}
+// ANTBANDS-END
+
+/** ★★ QUICK-FILL, NEVER LOCKED IN. Amateur band edges are REGIONAL — 2 m is 144–146 MHz in the UK
+ *  and 144–148 MHz in the US — so both are offered, labelled, and a preset only fills in a row the
+ *  owner can then edit. Figures: UK = Ofcom / IARU Region 1, US = FCC Part 97 / Region 2. */
+const AB_RANGE_PRESETS = [
+  ["Amateur bands — UK / IARU Region 1", [
+    ["160 m", "1.81", "2", "MHz"], ["80 m", "3.5", "3.8", "MHz"], ["40 m", "7", "7.2", "MHz"],
+    ["20 m", "14", "14.35", "MHz"], ["15 m", "21", "21.45", "MHz"], ["10 m", "28", "29.7", "MHz"],
+    ["6 m", "50", "52", "MHz"], ["4 m", "70", "70.5", "MHz"], ["2 m", "144", "146", "MHz"],
+    ["70 cm", "430", "440", "MHz"], ["23 cm", "1240", "1325", "MHz"]]],
+  ["Amateur bands — US / Region 2", [
+    ["160 m", "1.8", "2", "MHz"], ["80 m", "3.5", "4", "MHz"], ["40 m", "7", "7.3", "MHz"],
+    ["20 m", "14", "14.35", "MHz"], ["15 m", "21", "21.45", "MHz"], ["10 m", "28", "29.7", "MHz"],
+    ["6 m", "50", "54", "MHz"], ["2 m", "144", "148", "MHz"], ["1.25 m", "222", "225", "MHz"],
+    ["70 cm", "420", "450", "MHz"], ["23 cm", "1240", "1300", "MHz"]]],
+  ["Whole aerials", [
+    ["Wideband loop", "0", "300", "MHz"], ["HF", "0", "30", "MHz"], ["VHF/UHF discone", "25", "1300", "MHz"],
+    ["Airband", "118", "137", "MHz"], ["FM broadcast", "87.5", "108", "MHz"]]],
+];
+const AB_FILTER_PRESETS = [
+  ["FM broadcast band-stop 87.5–108 MHz", "bandstop", "87.5", "108", "MHz", "FM band-stop"],
+  ["FM broadcast band-stop 88–108 MHz (US)", "bandstop", "88", "108", "MHz", "FM band-stop"],
+  ["DAB band-stop 174–240 MHz", "bandstop", "174", "240", "MHz", "DAB band-stop"],
+  ["Medium-wave high-pass 1.7 MHz", "highpass", "1.7", "", "MHz", "Medium-wave high-pass"],
+  ["HF low-pass 30 MHz", "lowpass", "30", "", "MHz", "HF low-pass"],
+  ["Airband band-pass 118–137 MHz", "bandpass", "118", "137", "MHz", "Airband band-pass"],
+  ["ADS-B band-pass 1090 MHz", "bandpass", "1085", "1095", "MHz", "ADS-B band-pass"],
+  ["2 m band-pass 144–146 MHz", "bandpass", "144", "146", "MHz", "2 m band-pass"],
+];
+const AB_KIND_NAMES = { bandstop: "Band-stop", bandpass: "Band-pass", highpass: "High-pass", lowpass: "Low-pass" };
+
+/* ★★★ THE ROWS LIVE PER RADIO OBJECT, NOT IN THE FORM. A WeakMap keyed by the radio, so an
+ *  unfinished row (a "from" with no "to" yet) survives a tab switch without ever being written —
+ *  and radio.antennaRanges / antennaFilters always hold just the finished rows, which is what
+ *  collectRadio() carries and the server stores. A freshly loaded config is a new object, so it
+ *  re-reads the saved text: the page shows exactly what the server has. */
+const antBandRows = new WeakMap();
+function antRowsFor(r) {
+  let m = antBandRows.get(r);
+  if (!m) {
+    m = { ranges: antParseRanges(r.antennaRanges || ""), filters: antParseFilters(r.antennaFilters || "") };
+    antBandRows.set(r, m);
+  }
+  return m;
+}
+function antCommit(r) {
+  const m = antRowsFor(r);
+  r.antennaRanges = antFormatRanges(m.ranges);
+  r.antennaFilters = antFormatFilters(m.filters);
+}
+/** Every edit goes through here — the inputs, the presets and scripts/test-setup-tabswitch.mjs. */
+function antBandEdit(r, list, i, field, value) {
+  const rows = antRowsFor(r)[list];
+  if (!rows[i]) return;
+  rows[i][field] = value;
+  antCommit(r);
+}
+function antBandAdd(r, list, row) {
+  antRowsFor(r)[list].push(row || (list === "ranges"
+    ? { from: "", to: "", unit: "MHz", name: "", port: "" }
+    : { kind: "bandstop", from: "", to: "", unit: "MHz", name: "", port: "" }));
+  antCommit(r);
+}
+function antBandRemove(r, list, i) {
+  antRowsFor(r)[list].splice(i, 1);
+  antCommit(r);
+}
+
+function renderAntBands() {
+  const hostR = $("antRanges"), hostF = $("antFilters");
+  if (!hostR || !hostF || curRadio < 0) return;
+  const r = radio();                       // ★ captured: every handler below edits THIS radio
+  const m = antRowsFor(r);
+  const ports = Array.isArray(r.antennas) ? r.antennas : [];
+  // ★ A socket picker only where there is more than one socket — a choice of one is not a control.
+  const portSel = (row) => ports.length > 1
+    ? `<select data-f="port" aria-label="Which aerial socket">`
+      + `<option value="">Any socket</option>`
+      + ports.map(p => `<option value="${esc(p)}"${p === row.port ? " selected" : ""}>Socket ${esc(p)}</option>`).join("")
+      + (row.port && ports.indexOf(row.port) < 0 ? `<option value="${esc(row.port)}" selected>${esc(row.port)}</option>` : "")
+      + `</select>` : "";
+  const unitSel = (row) => `<select data-f="unit" aria-label="Units">`
+    + ["kHz", "MHz", "GHz"].map(u => `<option${u === antUnitOf(row) ? " selected" : ""}>${u}</option>`).join("")
+    + `</select>`;
+  const num = (f, v, ph) => `<input type="number" data-f="${f}" min="0" step="any" inputmode="decimal"`
+    + ` value="${esc(v == null ? "" : String(v))}" placeholder="${ph}" aria-label="${ph}">`;
+  const nameIn = (v, ph) => `<input type="text" data-f="name" maxlength="40" value="${esc(v || "")}"`
+    + ` placeholder="${ph}" aria-label="Name (optional)">`;
+  const x = `<button type="button" class="abX" data-x="1" aria-label="Remove" title="Remove">✕</button>`;
+  hostR.innerHTML = m.ranges.map((row, i) => `<div class="abRow" data-l="ranges" data-i="${i}">`
+    + portSel(row)
+    + `<span class="abNums">` + num("from", row.from, "From") + `<span class="abDash">–</span>` + num("to", row.to, "To")
+    + unitSel(row) + `</span>`
+    + `<span class="abName">` + nameIn(row.name, "Name, e.g. 2 m (optional)") + x + `</span></div>`).join("");
+  hostF.innerHTML = m.filters.map((row, i) => {
+    const band = row.kind === "bandstop" || row.kind === "bandpass";
+    return `<div class="abRow" data-l="filters" data-i="${i}">`
+      + portSel(row)
+      + `<select data-f="kind" aria-label="Filter type">`
+      + AB_KINDS.map(k => `<option value="${k}"${k === row.kind ? " selected" : ""}>${AB_KIND_NAMES[k]}</option>`).join("")
+      + `</select>`
+      + `<span class="abNums">`
+      + (band ? num("from", row.from, "From") + `<span class="abDash">–</span>` + num("to", row.to, "To")
+              : num("from", row.from, row.kind === "highpass" ? "Passes above" : "Passes below"))
+      + unitSel(row) + `</span>`
+      + `<span class="abName">` + nameIn(row.name, "Name, e.g. FM band-stop (optional)") + x + `</span></div>`;
+  }).join("");
+  [hostR, hostF].forEach(host => {
+    Array.from(host.querySelectorAll(".abRow")).forEach(rowEl => {
+      const list = rowEl.getAttribute("data-l"), i = parseInt(rowEl.getAttribute("data-i"), 10);
+      Array.from(rowEl.querySelectorAll("[data-f]")).forEach(inp => {
+        const f = inp.getAttribute("data-f");
+        // ★ input, not change: typing then switching tab must already be on the radio object.
+        inp.oninput = inp.onchange = () => {
+          antBandEdit(r, list, i, f, inp.value);
+          // ★ The type decides whether there is a "to" box, so a type change redraws the row.
+          if (f === "kind") renderAntBands();
+        };
+      });
+      const xb = rowEl.querySelector("[data-x]");
+      if (xb) xb.onclick = () => { antBandRemove(r, list, i); renderAntBands(); };
+    });
+  });
+  if ($("antRangeAdd")) $("antRangeAdd").onclick = () => { antBandAdd(r, "ranges"); renderAntBands(); };
+  if ($("antFilterAdd")) $("antFilterAdd").onclick = () => { antBandAdd(r, "filters"); renderAntBands(); };
+  const rp = $("antRangePreset");
+  if (rp) {
+    rp.innerHTML = `<option value="">Fill in a band…</option>` + AB_RANGE_PRESETS.map((g, gi) =>
+      `<optgroup label="${esc(g[0])}">` + g[1].map((p, pi) =>
+        `<option value="${gi}:${pi}">${esc(p[0])} · ${esc(p[1])}–${esc(p[2])} ${p[3]}</option>`).join("") + `</optgroup>`).join("");
+    rp.value = "";
+    rp.onchange = () => {
+      const ix = (rp.value || "").split(":").map(Number);
+      const g = AB_RANGE_PRESETS[ix[0]], p = g && g[1][ix[1]];
+      if (p) { antBandAdd(r, "ranges", { from: p[1], to: p[2], unit: p[3], name: p[0], port: "" }); renderAntBands(); }
+      rp.value = "";
+    };
+  }
+  const fp = $("antFilterPreset");
+  if (fp) {
+    fp.innerHTML = `<option value="">Fill in a filter…</option>`
+      + AB_FILTER_PRESETS.map((p, i) => `<option value="${i}">${esc(p[0])}</option>`).join("");
+    fp.value = "";
+    fp.onchange = () => {
+      const p = AB_FILTER_PRESETS[parseInt(fp.value, 10)];
+      if (p) { antBandAdd(r, "filters", { kind: p[1], from: p[2], to: p[3], unit: p[4], name: p[5], port: "" }); renderAntBands(); }
+      fp.value = "";
+    };
+  }
+}
+
 function fill() {
   // ★ The MACHINE — the same on every tab.
   $("name").value = cfg.name || "";
@@ -3939,6 +4251,7 @@ function fill() {
   }
   antIconSel = r.antennaIcon || "";
   renderAntIcons();
+  renderAntBands();   // ★ ranges + filters — rows edited straight onto the radio, see antBandEdit
   fillAntennaSuggestions();
   // ★ Default ON for a shared receiver. The 1024-bin window only stays sharp BECAUSE of the zoom
   //   resampling — without it, deep zoom interpolates and looks blocky, which is what a listener
@@ -4285,6 +4598,10 @@ function collectRadio() {
     landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,
+    // ★ The aerial's ranges and filters: the rows write the finished text straight onto the radio
+    //   object (antCommit), so this only carries it — there is no form field to read back.
+    antennaRanges: radio().antennaRanges || "",
+    antennaFilters: radio().antennaFilters || "",
     // ★ The radio's display name. Empty is sent as empty on purpose: the server refills it from
     //   the device's own name (see the save handler in main.cpp) — that IS "no name = default".
     label: ($("radioName").value || "").trim(),

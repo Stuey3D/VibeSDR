@@ -913,6 +913,9 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    The bars and chips never shrink: they are the whole point of the row. */
 #mStatus #status { color: var(--ctl-status, #c9922e); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #mStatus #linkBars, #mStatus #initChip, #mStatus #dsChip, #mStatus #ovlChip { flex: 0 0 auto; }
+/* ★ The aerial chip may be the longest thing on the clock line ("FM BAND-STOP FILTER FITTED"), so it is
+   the one that gives way on a phone: it shrinks and ellipsises rather than pushing the clock off. */
+#mStatus #antChip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ★★ TABULAR FIGURES, so a digit changing does not change the WIDTH. Proportional numerals make
    1 narrower than 8, so a counter ticking over reflows the row and nudges everything after it —
    the signal and AGC meters wobbled twice a second beside a bouncing fps figure (Stuart,
@@ -1045,6 +1048,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
           border-radius: 3px; border: 1px solid rgba(255,180,60,0.8); color: var(--amber);
           line-height: 1.2; }
 #dsChip.set { display: inline-block; }
+/* ★ Same voice as DIRECT SAMPLING — amber and still. Clickable (it says the full sentence again). */
+#antChip { display: none; font-size: 0.62em; letter-spacing: 0.14em; padding: 1px 4px;
+           border-radius: 3px; border: 1px solid rgba(255,180,60,0.8); color: var(--amber);
+           line-height: 1.2; cursor: pointer; vertical-align: middle; max-width: 100%; }
+#antChip.set { display: inline-block; }
 /* ★ RECOVERING IS GOOD NEWS, so it must not wear the fault's colours or its urgency: the gain is
    going back UP because the band calmed down. Same chip, quieter voice — and it stops breathing,
    because nothing needs attention any more. */
@@ -3428,7 +3436,11 @@ select.btn { padding: 6px 8px; }
              ★ The text is REPLACED at runtime on a dongle, where the server also acts on the
                overload and the chip reports which way the gain went (see onOverload). On an RSP
                the hardware raises the flag and we only report it, so it keeps this wording.
-          --><span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span></span>
+          --><span id="ovlChip" title="The receiver's front end is overloading — reduce RF gain, or switch a notch in">OVERLOAD</span><!--
+          ★★ THE OWNER'S FILTER OR THE AERIAL'S EDGE (2026-10-06): "FM BAND-STOP FILTER FITTED" while you
+             are tuned inside it, "OUTSIDE ANTENNA RANGE" past the aerial — see antennaNotice.ts. Still and
+             amber like DIRECT SAMPLING: a state the owner chose, not a fault. Click to read the sentence.
+          --><span id="antChip" role="button" tabindex="0"></span></span>
         <!-- ★ A breathing dot beside the time. Recording is a state you can forget you are in,
              and a number alone reads as just another readout — motion is what catches an eye
              that is on the waterfall, not on the status line. -->

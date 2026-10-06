@@ -3585,6 +3585,9 @@ static std::atomic<int>    g_vsMaxRadiosPerIp{1};
 //   down. Two different meanings of "landing" in one file; this one is the site blurb.
 static std::mutex          g_vsSiteMtx;
 static std::string         g_vsAntenna, g_vsAntennaIcon, g_vsLandingMsg, g_vsLandingUrl, g_vsLandingLabel;
+// ★★ The aerial's ranges and filters (2026-10-06) — RadioConfig::antennaRanges / antennaFilters,
+//    carried as the owner's text and parsed by the CLIENTS (src/utils/antennaBands.ts). Same lock.
+static std::string         g_vsAntennaRanges, g_vsAntennaFilters;
 
 /** ★★★ AN OWNER-SUPPLIED LINK, MADE SAFE TO PUT IN AN href — http and https ONLY.
  *
@@ -12910,6 +12913,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string j;
         if (!g_vsAntenna.empty())    j += ",\"antenna\":\""        + jsonEscape(g_vsAntenna)    + "\"";
         if (!g_vsAntennaIcon.empty()) j += ",\"antennaIcon\":\"" + jsonEscape(g_vsAntennaIcon) + "\"";
+        // ★ What the aerial covers and what is filtered out — omitted when unset, like the two above,
+        //   so an older client and an unconfigured radio both see exactly what they saw before.
+        if (!g_vsAntennaRanges.empty())  j += ",\"antennaRanges\":\""  + jsonEscape(g_vsAntennaRanges)  + "\"";
+        if (!g_vsAntennaFilters.empty()) j += ",\"antennaFilters\":\"" + jsonEscape(g_vsAntennaFilters) + "\"";
         if (!g_vsLandingMsg.empty()) j += ",\"landingMessage\":\"" + jsonEscape(g_vsLandingMsg) + "\"";
         // ★ The URL was checked before it was stored (setLandingInfo) — stored empty if it did
         //   not pass — so an unsafe value never became this string in the first place.
@@ -25555,6 +25562,12 @@ bool LocalSdrShim::claimableNow() const {
 void LocalSdrShim::setAntennaIcon(const std::string& key) {
     std::lock_guard<std::mutex> lk(g_vsSiteMtx);
     g_vsAntennaIcon = key;
+}
+
+void LocalSdrShim::setAntennaBands(const std::string& ranges, const std::string& filters) {
+    std::lock_guard<std::mutex> lk(g_vsSiteMtx);
+    g_vsAntennaRanges = ranges;
+    g_vsAntennaFilters = filters;
 }
 
 void LocalSdrShim::setLandingInfo(const std::string& antenna, const std::string& message,

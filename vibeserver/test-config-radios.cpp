@@ -437,6 +437,46 @@ int main() {
            "★ ...with no curve, which the server reads as Linearity");
     }
 
+    // ★★★ THE AERIAL'S RANGES AND FILTERS (2026-10-06). An old file has neither and must load with
+    //     both empty (= nothing shown anywhere); a new one must survive the writer the setup page
+    //     reads and the reader behind it — a field in only one of them is the fault this file
+    //     keeps recording.
+    std::printf("\nAntenna ranges and filters: old files load empty, new ones round-trip\n");
+    {
+        ServerConfig old;
+        ok(fromJson("{\"name\":\"x\",\"radios\":[{\"serial\":\"S1\",\"driver\":\"rtlsdr\","
+                    "\"antenna\":\"Discone\",\"antennaIcon\":\"discone\"}]}", old, err),
+           "a config written before ranges/filters existed loads", err);
+        ok(old.radios.size() == 1 && old.radios[0].antennaRanges.empty() && old.radios[0].antennaFilters.empty(),
+           "★ ...with no ranges and no filters, so nothing is shown");
+        ok(old.radios[0].antenna == "Discone" && old.radios[0].antennaIcon == "discone",
+           "and the aerial it had is untouched");
+
+        ServerConfig s; s.configured = true; s.fullMode = true;
+        RadioConfig a; a.serial = "P2"; a.driver = "rtlsdr"; a.configured = true;
+        a.antenna = "Loop"; a.antennaRanges = "0-300MHz Wideband loop; [B] 144-146MHz 2 m";
+        a.antennaFilters = "bandstop 87.5-108MHz FM band-stop; highpass 1.7MHz \"MW\" filter";
+        s.radios = {a};
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err) && back.radios.size() == 1, "a radio with both saves and loads", err);
+        ok(back.radios[0].antennaRanges == a.antennaRanges, "★★ the ranges survive the writer",
+           back.radios[0].antennaRanges);
+        ok(back.radios[0].antennaFilters == a.antennaFilters, "★★ the filters survive it — quotes and all",
+           back.radios[0].antennaFilters);
+        ok(back.radios[0].antenna == "Loop", "the description beside them is not mixed up with them",
+           back.radios[0].antenna);
+
+        // ★ An over-long list is cut at a whole entry, never mid-name.
+        std::string longer;
+        for (int k = 0; k < 60; k++) longer += (k ? "; " : "") + std::string("144-146MHz Two metres");
+        ServerConfig big;
+        ok(fromJson("{\"name\":\"x\",\"radios\":[{\"serial\":\"S2\",\"driver\":\"rtlsdr\","
+                    "\"antennaRanges\":\"" + longer + "\"}]}", big, err), "an over-long list loads", err);
+        const std::string& got = big.radios.empty() ? std::string() : big.radios[0].antennaRanges;
+        ok(!got.empty() && got.size() <= 800 && got.substr(got.size() - 6) == "metres",
+           "★ ...clamped to 800 characters at an entry boundary", std::to_string(got.size()));
+    }
+
     // ★★★ THE USB-CHANGE ACTIONS (Stuart, 2026-10-04): a radio that has gone away is REMOVED or
     //     PAUSED from the setup page, and a new one is ADDED or REPLACES an old one. Each is a pure
     //     edit of the config, so each is checked here without a server.

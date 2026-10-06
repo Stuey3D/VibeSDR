@@ -370,6 +370,11 @@ export interface ServerOccupancy {
    *  antenna details or landing screen text then it connects straight through"). */
   antenna?: string;
   antennaIcon?: string;
+  /** ★★ What the aerial covers and what the owner has filtered out (2026-10-06) — the owner's TEXT,
+   *  parsed by src/utils/antennaBands.ts. Absent on an older server and on any radio whose owner
+   *  never filled them in, which shows nothing. */
+  antennaRanges?: string;
+  antennaFilters?: string;
   landingMessage?: string;
   landingLinkUrl?: string;
   landingLinkLabel?: string;
@@ -419,6 +424,9 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       // ★ Server text, cleaned on the way in; the link is opened, so http(s) only (security, 2026-10-03).
       antenna:   cleanText(j.antenna, 64) || undefined,
       antennaIcon: typeof j.antennaIcon === 'string' ? j.antennaIcon : undefined,
+      // ★ Text only; the parser drops anything it cannot read, so a bad value shows nothing.
+      antennaRanges: typeof j.antennaRanges === 'string' ? j.antennaRanges.slice(0, 800) : undefined,
+      antennaFilters: typeof j.antennaFilters === 'string' ? j.antennaFilters.slice(0, 800) : undefined,
       landingMessage: cleanLines(j.landingMessage, 500) || undefined,
       landingLinkUrl: safeUrl(j.landingLinkUrl, HTTP_SCHEMES) || undefined,
       landingLinkLabel: cleanText(j.landingLinkLabel, 80) || undefined,

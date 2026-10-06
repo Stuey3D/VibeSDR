@@ -372,6 +372,24 @@ struct RadioConfig {
      *      rendering nothing. That matters because this list will grow.
      *  ★ Empty = the generic aerial, which is what every existing radio has. */
     std::string antennaIcon;
+    /** ★★★ WHAT THE AERIAL COVERS, AND WHAT THE OWNER HAS FILTERED OUT (Stuart, 2026-10-06).
+     *  A listener tuned FM on the Pi 2, where an FM band-stop is fitted because the local FM is
+     *  strong enough to overload everything else. FM sounded poor and the only explanation was a
+     *  note in `antenna` above, which nobody reads — so they blamed the receiver. With these filled
+     *  in, both clients say "FM band-stop filter fitted — reception here is deliberately reduced"
+     *  the moment someone tunes into it ("that way they don't think the user's SDR or our software
+     *  is shit").
+     *  ★★ TEXT, IN THE SHAPE `allowRanges` AND `antennaMap` ALREADY USE, so the file stays readable
+     *     by the owner and the server never has to understand it — it only carries it:
+     *       antennaRanges   "0-300MHz Wideband loop; 144-146MHz 2 m; [B] 430-440MHz 70 cm"
+     *       antennaFilters  "bandstop 87.5-108MHz FM band-stop; highpass 1.7MHz"
+     *     `[port]` ties an entry to one of the RSP's sockets (antennaList); none = every socket.
+     *     The ONE parser lives in src/utils/antennaBands.ts (both clients import it); the setup page
+     *     carries a copy, checked against it by scripts/test_antenna_bands.ts.
+     *  ★ Empty = nothing shown anywhere, which is every radio that existed before this. Clamped to
+     *    800 characters on load, the same figure the parser reads up to. */
+    std::string antennaRanges;
+    std::string antennaFilters;
 
     /** ★★ TWO GATES, AND THEY MEAN DIFFERENT THINGS. `enabled` is the owner saying "serve this
      *  radio" (the TUI toggle); `configured` is "I have said what it should do" (its setup tab was
