@@ -15,8 +15,9 @@
  */
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
-import { Canvas, Image as SkImageNode, Path, PathOp, Skia, StrokeCap, StrokeJoin, type SkPath } from '@shopify/react-native-skia';
+import { Canvas, Image as SkImageNode, Path, Skia, StrokeCap, StrokeJoin, type SkPath } from '@shopify/react-native-skia';
 import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
+import { MESH_SHADES, vfdMesh } from './vfdMesh';
 
 export type AnnunciatorName = 'TP' | 'TA' | 'AF';
 
@@ -57,18 +58,8 @@ const LEGENDS: Record<AnnunciatorName, SkPath> = (() => {
 })();
 
 /** The VFD mesh at RdsMark's proportions (a 42-unit pitch on a 260-unit mark = 16 % of the height). */
-function meshFor(legend: SkPath): [SkPath, SkPath] {
-  const pitch = (42 / 260) * CELL_H, bar = (8 / 260) * CELL_H;
-  const a = Skia.Path.Make(), b = Skia.Path.Make();
-  for (let k = -60; k <= 60; k++) {
-    a.addRect(Skia.XYWHRect(-200, pitch * k, 400, bar));
-    b.addRect(Skia.XYWHRect(pitch * k, -200, bar, 400));
-  }
-  const m = Skia.Matrix();
-  m.rotate((60 * Math.PI) / 180);
-  a.transform(m); b.transform(m);
-  return [Skia.Path.MakeFromOp(a, legend, PathOp.Intersect) ?? a, Skia.Path.MakeFromOp(b, legend, PathOp.Intersect) ?? b];
-}
+const meshFor = (legend: SkPath): [SkPath, SkPath] =>
+  vfdMesh(legend, (42 / 260) * CELL_H, (8 / 260) * CELL_H, { count: 60, extent: 200 });
 const MESHES: Record<AnnunciatorName, [SkPath, SkPath]> = {
   TP: meshFor(LEGENDS.TP), TA: meshFor(LEGENDS.TA), AF: meshFor(LEGENDS.AF),
 };
@@ -118,8 +109,8 @@ export default function AnnunciatorLegend({ name, height = 10, kind, color, glow
       <Canvas style={{ position: 'absolute', left: -MARGIN, top: -MARGIN, width: W, height: H }}>
         {!lit && <Path path={statics.ghost} color={ghost} />}
         {lit && sprite && <SkImageNode image={sprite} x={0} y={0} width={W} height={H} />}
-        {statics.meshA && <Path path={statics.meshA} color="rgba(0,0,0,0.55)" />}
-        {statics.meshB && <Path path={statics.meshB} color="rgba(0,0,0,0.35)" />}
+        {statics.meshA && <Path path={statics.meshA} color={MESH_SHADES[0]} />}
+        {statics.meshB && <Path path={statics.meshB} color={MESH_SHADES[1]} />}
       </Canvas>
     </View>
   );

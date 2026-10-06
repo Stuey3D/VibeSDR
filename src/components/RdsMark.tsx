@@ -22,9 +22,10 @@
 
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
-import { Canvas, Image as SkImageNode, Path, PathOp, Skia, type SkPath } from '@shopify/react-native-skia';
+import { Canvas, Image as SkImageNode, Path, Skia, type SkPath } from '@shopify/react-native-skia';
 import { RDS_LOGO_PATHS, RDS_GROUP_DX, RDS_GROUP_DY, RDS_VIEWBOX } from './rdsLogoPaths';
 import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
+import { MESH_SHADES, placePath, vfdCut, vfdMesh } from './vfdMesh';
 
 /** ★ Flip to false if the RDS Forum's logo terms forbid recolouring / cutting (see the header). */
 export const RDS_ALTERATIONS_ALLOWED = true;
@@ -44,44 +45,17 @@ const MARK: SkPath = (() => {
 })();
 
 /** §7.1 electrode cuts, logo units: (210,30)→(238,300) 16 wide; (30,193)→(440,193) 13 wide. */
-const CUT_MARK: SkPath = (() => {
-  const line = (x1: number, y1: number, x2: number, y2: number, w: number) => {
-    const l = Skia.Path.Make();
-    l.moveTo(x1 - VB.x, y1 - VB.y); l.lineTo(x2 - VB.x, y2 - VB.y);
-    return l.stroke({ width: w }) ?? Skia.Path.Make();
-  };
-  const cuts = line(210, 30, 238, 300, 16);
-  cuts.addPath(line(30, 193, 440, 193, 13));
-  return Skia.Path.MakeFromOp(MARK, cuts, PathOp.Difference) ?? MARK;
-})();
+const CUT_MARK: SkPath = vfdCut(MARK, [[210, 30, 238, 300, 16], [30, 193, 440, 193, 13]], -VB.x, -VB.y);
 
 /** §7.1 VFD mesh: a 42-unit pattern at 60°, bars 8 wide — α .55 one way, .35 the other — over the mark. */
-const MESH: [SkPath, SkPath] = (() => {
-  const a = Skia.Path.Make(), b = Skia.Path.Make();
-  for (let k = -40; k <= 40; k++) {
-    a.addRect(Skia.XYWHRect(-2000, 42 * k, 4000, 8));
-    b.addRect(Skia.XYWHRect(42 * k, -2000, 8, 4000));
-  }
-  const m = Skia.Matrix();
-  m.translate(-VB.x, -VB.y);
-  m.rotate((60 * Math.PI) / 180);
-  a.transform(m); b.transform(m);
-  return [Skia.Path.MakeFromOp(a, CUT_MARK, PathOp.Intersect) ?? a, Skia.Path.MakeFromOp(b, CUT_MARK, PathOp.Intersect) ?? b];
-})();
+const MESH: [SkPath, SkPath] = vfdMesh(CUT_MARK, 42, 8, { count: 40, extent: 2000, dx: -VB.x, dy: -VB.y });
 
 /** Mark width for a height (≈ 53 pt at 13). */
 export const rdsMarkWidth = (h: number) => (h * VB.w) / VB.h;
 
 const MARGIN = 8;
 
-function scaled(p: SkPath, k: number, ox: number, oy: number): SkPath {
-  const c = p.copy();
-  const m = Skia.Matrix();
-  m.translate(ox, oy);
-  m.scale(k, k);
-  c.transform(m);
-  return c;
-}
+const scaled = placePath;
 
 export default function RdsMark({ height = 13, kind, color, glow, ghost, lit = true }: {
   height?: number;
@@ -123,8 +97,8 @@ export default function RdsMark({ height = 13, kind, color, glow, ghost, lit = t
         {sprite && (kind === 'plain' || lit) && (
           <SkImageNode image={sprite} x={0} y={0} width={w + 2 * MARGIN} height={height + 2 * MARGIN} />
         )}
-        {statics?.meshA && <Path path={statics.meshA} color="rgba(0,0,0,0.55)" />}
-        {statics?.meshB && <Path path={statics.meshB} color="rgba(0,0,0,0.35)" />}
+        {statics?.meshA && <Path path={statics.meshA} color={MESH_SHADES[0]} />}
+        {statics?.meshB && <Path path={statics.meshB} color={MESH_SHADES[1]} />}
       </Canvas>
     </View>
   );
