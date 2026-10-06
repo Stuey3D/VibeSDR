@@ -192,6 +192,10 @@ export type VibeServerConfig = {
    *    TypeScript reports only the FIRST unknown property of an object literal. */
   batteryPauseAt?: number;
   batteryResumeAt?: number;
+  /** ★★★ KEEP RADIO ALIVE (Android, 2026-10-06): a running server waits for its radio however long it is away
+   *  and takes it back the moment it attaches, and never releases it while serving. Absent = this device's
+   *  default (ON on a TV or TV box) — read natively by VibeServerBoot.keepRadioAlive. */
+  keepRadioAlive?: boolean;
   /** ★ Raw-IQ span cap for LAN listeners, Hz. 0 = the general `rawIqMax`. */
   rawIqLanMaxHz?: number;
   /** Crystal correction in ppm. Absent = leave the radio alone. */
@@ -338,6 +342,9 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     dabScanLabels: cfg.dabScanLabels ?? -1,
     batteryPauseAt: cfg.batteryPauseAt ?? 0,
     batteryResumeAt: cfg.batteryResumeAt ?? 40,
+    // ★ Sent at a definite value, so the stored restore config says what the owner chose rather than leaving the
+    //   device default to be worked out again on the other side.
+    keepRadioAlive: cfg.keepRadioAlive ?? (Local?.keepRadioAliveDefault === true),
     rawIqLanMaxHz: String(Math.round(cfg.rawIqLanMaxHz ?? 0)),
     /* ★★★ BIAS-T IN THE CONFIG (2026-09-29) — sent only for a radio that HAS one (the caller decides;
      *  absent = leave the radio alone). It used to be a separate call after start, so every start that
@@ -345,6 +352,12 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
      *  aerial with no DC. VibeServerBoot applies it once the radio is open. */
     ...(cfg.biasT != null ? { biasT: cfg.biasT === true } : {}),
   };
+}
+
+/** ★★★ Keep radio alive, applied to the RUNNING server as well as remembered for its next start — see
+ *  VibeLocalSdrModule.setKeepRadioAlive. Harmless with no server running. */
+export async function setKeepRadioAlive(on: boolean): Promise<void> {
+  try { await Local?.setKeepRadioAlive?.(on); } catch { /* the start config carries it regardless */ }
 }
 
 export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServerInfo> {
