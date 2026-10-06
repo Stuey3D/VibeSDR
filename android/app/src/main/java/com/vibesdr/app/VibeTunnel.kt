@@ -1031,6 +1031,25 @@ object VibeTunnel {
         } catch (t: Throwable) { Log.w(TAG, "restoreIfWanted failed", t) }
     }
 
+    /**
+     * ★★★ THE SERVER WAS STOPPED, SO ITS PUBLIC DOOR CLOSES WITH IT (2026-10-06).
+     *
+     * Nothing closed it: a Stop left cloudflared running and the directory renewal pinging, so the
+     * Sony went on "publishing" a server that was not there — "could not read /vibeserver.json:
+     * Failed to connect to /127.0.0.1:48000" every 30 s for as long as the app lived (logcat
+     * 20:22:35 → 20:26), a listing that looked alive and a public address answering an error.
+     * ★ NOT a delist: the switch is a standing instruction (K_WANT, the id and the key all stay), so
+     *   the next Start re-lists through restoreIfWanted, on the same directory address. Only the
+     *   process and the timers stop; the entry lapses by itself if the server stays off.
+     */
+    fun pauseForServerStop() {
+        if (!running.get() && !wantTunnel) return
+        stopPinging()
+        expiryTask?.cancel(false); expiryTask = null
+        stopTunnel()
+        Log.i(TAG, "server stopped — tunnel closed; the listing comes back with the next start")
+    }
+
     fun delist(ctx: Context) {
         stopPinging()
         // ★ A share ended by hand has no end left to schedule — and leaving the timer armed would

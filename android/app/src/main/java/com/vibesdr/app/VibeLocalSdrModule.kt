@@ -375,8 +375,33 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun dabScanPhase(promise: Promise) { promise.resolve(scanPhase) }
 
+    /** ★★★ THE SCAN'S ANSWER, KEPT WHERE THE SCREEN CAN ASK FOR IT AGAIN (2026-10-06).
+     *  Stuart's Sony: the scan finished in 4.7 s ("11A — 30 station(s) (complete)", "+4744 ms — done") and
+     *  the screen went on counting — "SCANNING 11A… 38 s" under a line promising 15 s, and on to 86 s. The
+     *  promise was the ONLY road back, and whatever lost it, the screen had no other way to find out. Now the
+     *  outcome is also kept here, and the screen's progress poll reads it, so a finished scan is shown as
+     *  finished even if the promise never lands. JSON {"ok":true,"body":…} / {"ok":false,"why":…}; null while
+     *  a scan runs or before the first. Cleared when a scan starts. */
+    @Volatile private var scanOutcome: String? = null
+    /** ★ Which scan an outcome belongs to, so the screen can never take the LAST scan's answer for this one. */
+    @Volatile private var scanSeq = 0
+    private fun keepScanOutcome(ok: Boolean, bodyOrWhy: String) {
+        scanOutcome = org.json.JSONObject().apply {
+            put("seq", scanSeq); put("ok", ok); put(if (ok) "body" else "why", bodyOrWhy)
+        }.toString()
+    }
     @ReactMethod
-    fun dabQuickScan(block: String, known: Boolean, ownerConfigJson: String, promise: Promise) {
+    fun dabScanOutcome(promise: Promise) { promise.resolve(scanOutcome) }
+
+    @ReactMethod
+    fun dabQuickScan(block: String, known: Boolean, ownerConfigJson: String, raw: Promise) {
+        scanSeq++
+        scanOutcome = null
+        // ★ Every settle also leaves the outcome for dabScanOutcome — see the note there.
+        val promise = object : Promise by raw {
+            override fun resolve(value: Any?) { keepScanOutcome(true, value?.toString() ?: ""); raw.resolve(value) }
+            override fun reject(code: String?, message: String?) { keepScanOutcome(false, message ?: code ?: "the scan failed"); raw.reject(code, message) }
+        }
         Thread {
             val t0 = android.os.SystemClock.elapsedRealtime()
             /* ★★★ EVERY PHASE STAMPED IN THE LOG, so the next slow scan names the phase that was slow
@@ -865,6 +890,10 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         VibeServerRestore.releaseServerConn()
         VibeLocalSDR.setServeOnLan(false)
         VibeLocalSDR.setVibeServerAuth("")   // clear the secret from process memory
+        // ★★ AND THE PUBLIC DOOR — see VibeTunnel.pauseForServerStop. Inline, not on tunnelWork: it is only a
+        //    process kill and two timer cancels (no network), and queued behind a slow publish it could land
+        //    AFTER the next Start's restore and close the door that Start had just reopened.
+        try { VibeTunnel.pauseForServerStop() } catch (t: Throwable) { Log.w(TAG, "tunnel pause: ${t.message}") }
         promise.resolve(null)
     }
 
@@ -1410,6 +1439,19 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     //     annotation the method simply is not exported, and `Local?.foo?.()` returns UNDEFINED
     //     rather than throwing — two days were lost to exactly that, twice.
 
+    /* ★★★ THE LISTING'S NETWORK WORK NEVER RUNS ON THE BRIDGE THREAD (2026-10-06).
+     *  tunnelStart / tunnelRepublish / tunnelStop did their HTTP inline — two loopback reads of the
+     *  server's own status plus a POST to vibesdr.net, on OkHttp timeouts of 15 s to connect and 30 s
+     *  to read (seen on the Sony's logcat, 20:22:30: VibeTunnel.buildStatus inside tunnelRepublish on
+     *  MessageQueueThreadImpl). On the old architecture EVERY module's methods share that one thread
+     *  (mqt_native_modules) — AsyncStorage's reads, the DAB scan, the scan's progress poll, the server
+     *  status — so a slow directory or a server not answering on 48000 froze all of them behind it.
+     *  ★ One SERIAL worker, so a start, a republish and a stop still happen in the order they were
+     *    asked for. The promise resolves when the work is done, exactly as before. */
+    private val tunnelWork = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "vibe-tunnel-ui").apply { isDaemon = true }
+    }
+
     /** ★ Is the tunnel binary in this build at all? arm64 only — the switch must be ABSENT, not
      *  inert, where it cannot work (AGENTS.md). */
     @ReactMethod
@@ -1437,15 +1479,19 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                     radioModel: String, radioDriver: String,
                     antenna: String, coverage: String, locked: Boolean,
                     shareForSec: Double, promise: Promise) {
-        try {
-            VibeTunnel.applyLoopbackTrust(true, ownerProxies)
-            VibeTunnel.startTunnel(reactApplicationContext, port) { url ->
-                if (url == null) { promise.resolve(VibeTunnel.statusJson()); return@startTunnel }
-                VibeTunnel.publish(reactApplicationContext, name, locator, port, radioModel, radioDriver,
-                                   antenna, coverage, locked, shareForSec.toLong())
-                promise.resolve(VibeTunnel.statusJson())
-            }
-        } catch (t: Throwable) { promise.reject("tunnel_start", t) }
+        // ★ Off the bridge thread — see tunnelWork. (An already-running tunnel calls back at once,
+        //   which put the directory POST straight onto the bridge.)
+        tunnelWork.execute {
+            try {
+                VibeTunnel.applyLoopbackTrust(true, ownerProxies)
+                VibeTunnel.startTunnel(reactApplicationContext, port) { url ->
+                    if (url == null) { promise.resolve(VibeTunnel.statusJson()); return@startTunnel }
+                    VibeTunnel.publish(reactApplicationContext, name, locator, port, radioModel, radioDriver,
+                                       antenna, coverage, locked, shareForSec.toLong())
+                    promise.resolve(VibeTunnel.statusJson())
+                }
+            } catch (t: Throwable) { promise.reject("tunnel_start", t) }
+        }
     }
 
     /**
@@ -1466,10 +1512,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                         radioModel: String, radioDriver: String,
                         antenna: String, coverage: String, locked: Boolean,
                         shareForSec: Double, promise: Promise) {
-        try {
-            if (!VibeTunnel.isTunnelRunning() || port <= 0 || name.length < 2) {
-                promise.resolve(VibeTunnel.statusJson()); return
-            }
+        if (!VibeTunnel.isTunnelRunning() || port <= 0 || name.length < 2) {
+            promise.resolve(VibeTunnel.statusJson()); return
+        }
+        // ★ Off the bridge thread — see tunnelWork. This is the one the Sony's logcat caught.
+        tunnelWork.execute { try {
             // ★★★ -1 means "leave the share window alone", 0 means "permanent", >0 sets a window.
             //     The periodic refresh sends -1, so it can never extend an offer by accident; only
             //     a deliberate change from the switch carries 0 or a length. Two states were not
@@ -1479,18 +1526,21 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                                radioModel, radioDriver, antenna, coverage, locked,
                                shareForSec.toLong())
             promise.resolve(VibeTunnel.statusJson())
-        } catch (t: Throwable) { promise.reject("tunnel_republish", t) }
+        } catch (t: Throwable) { promise.reject("tunnel_republish", t) } }
     }
 
     /** ★ Off means OFF: delist immediately so the public address is freed now, not at expiry. */
     @ReactMethod
     fun tunnelStop(ownerProxies: String, promise: Promise) {
-        try {
-            VibeTunnel.delist(reactApplicationContext)
-            VibeTunnel.stopTunnel()
-            VibeTunnel.applyLoopbackTrust(false, ownerProxies)
-            promise.resolve(VibeTunnel.statusJson())
-        } catch (t: Throwable) { promise.reject("tunnel_stop", t) }
+        // ★ Off the bridge thread — see tunnelWork. delist() is a POST to vibesdr.net.
+        tunnelWork.execute {
+            try {
+                VibeTunnel.delist(reactApplicationContext)
+                VibeTunnel.stopTunnel()
+                VibeTunnel.applyLoopbackTrust(false, ownerProxies)
+                promise.resolve(VibeTunnel.statusJson())
+            } catch (t: Throwable) { promise.reject("tunnel_stop", t) }
+        }
     }
 
     companion object {
