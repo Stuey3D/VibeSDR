@@ -24,6 +24,10 @@ import {
 } from '../src/constants/modeBox.ts';
 import { formatReading, sMeterText } from '../src/constants/meters.ts';
 import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
+import {
+  statusDotCols, statusDotMarks, statusDotPitch, statusDotSlots, statusParts, statusTags, DOT_CROSS, DOT_NODE, DOT_NODE_W,
+} from '../src/constants/statusField.ts';
+import * as SR from './lib_status_row.ts';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -182,6 +186,57 @@ for (const W of [320, 375, 390, 430, 768, 1024]) {
   }
 }
 eq('the mode field is the Doto label\'s height: 7 dots at 0.1 em = 0.7 em', DOT_ROWS * dotPitch(15), 15 * 0.7);
+
+// ── The status row in 5 × 7 cells (2026-10-06: constants/statusField, components/StatusField) ──
+{
+  const D = (t: string) => statusDotSlots(statusParts(t), dotChar);
+  eq('17:03 UTC — a real colon cell, one cell per character', D('17:03 UTC').cells, ['1', '7', ':', '0', '3', '', 'U', 'T', 'C']);
+  eq('23k/s 10fps — real lower case, the raised p', D('23k/s 10fps').cells, ['2', '3', 'k', '/', 's', '', '1', '0', 'f', 'p', 's']);
+  eq('· IF 1400k auto — "·" a cell of its own, its spaces gone', D('· IF 1400k auto').cells.join('|'), '·|I|F||1|4|0|0|k||a|u|t|o');
+  eq('44.5dB — the point a cell (a character display\'s way)', D('44.5dB').cells, ['4', '4', '.', '5', 'd', 'B']);
+  eq('symbols are ROM glyphs: ⚡ ⚿ 👤 ●', statusDotSlots([{ kind: 'bolt' }, { kind: 'key' }, { kind: 'person' }, { kind: 'rec' }], dotChar).cells,
+     ['⚡', '⚿', '👤', '●']);
+  eq('the gain arrow is a cell; steady = a dark cell', [{ kind: 'arrow', dir: 'up' }, { kind: 'arrow', dir: 'down' }, { kind: 'arrow', dir: null }]
+     .map(a => statusDotSlots([a as any], dotChar).cells[0]), ['↑', '↓', '']);
+  {
+    const s = statusDotSlots([{ kind: 'node' }, ...statusParts('18:03 BST')], dotChar);
+    const m = statusDotMarks(s);
+    eq('the server mark: two cells with no dot ghosts of their own, then the clock', s.ghost.slice(0, 3), ['', '', '#']);
+    ok('…drawn as its own mark, centred in its two cells', m.length === 1 && m[0].col >= 0 && m[0].col + DOT_NODE_W <= statusDotCols(2)
+       && isBitmap(DOT_NODE, DOT_NODE_W, DOT_ROWS));
+  }
+  {
+    const m = statusDotMarks(statusDotSlots([{ kind: 'bars', q: 2 }], dotChar));
+    eq('bars: three marks, the first q lit', m.map(x => x.lit), [true, true, false]);
+    ok('…each a 5 × 7 bitmap in one cell', m.every(x => isBitmap(x.rows, DOT_COLS, DOT_ROWS) && x.col === 0));
+    ok('disconnected: the ✕ mark', isBitmap(DOT_CROSS, DOT_COLS, DOT_ROWS)
+       && statusDotMarks(statusDotSlots([{ kind: 'cross' }], dotChar))[0].rows === DOT_CROSS);
+  }
+  eq('DSP tags bracketed', statusTags(['NR', 'NB'], 'dot').text, '[NR][NB]');
+  // Every lit cell of every run the row can show has a glyph in the atlas.
+  for (const [k, parts] of Object.entries(SR.runs('dot'))) {
+    const s = statusDotSlots(parts, dotChar);
+    for (const c of s.cells) ok(`${k}: cell "${c}" has a glyph`, c === '' || !!dotGlyph(c));
+  }
+  for (const ch of ['g', 'j', 'p', 'q', 'y', '·', '↑', '↓', '⚡', '⚿', '●', '👤'])
+    ok(`ROM glyph ${ch} is a 5 × 7 bitmap in the atlas`, isBitmap(dotGlyph(ch)!, DOT_COLS, DOT_ROWS) && [...DOT_ALPHABET].includes(ch));
+  eq('a run is n cells, one dead column apart, no trailing one', [1, 2, 10].map(statusDotCols), [5, 11, 59]);
+  eq('…at Doto\'s own pitch (dot for dot the text it replaces)', statusDotPitch(12), dotPitch(12));
+  // ── It fits, at every width ──
+  for (const W of SR.LANDSCAPE_WIDTHS) {
+    const f = SR.landscapeFit('dot', W);
+    ok(`DOT landscape ${W} pt: the row fits after its drops`, f.fits);
+    ok(`DOT landscape ${W} pt: the recording timer is never dropped`, !f.hidden.includes('rec'));
+    console.log(`  DOT landscape ${W} pt (status ${f.size.toFixed(1)} pt): drops ${f.hidden.length ? f.hidden.join(', ') : 'nothing'}${f.sharedShort ? ' (SHARED TUNER → SHARED)' : ''}`);
+  }
+  ok('DOT: a full-screen Mac shows everything', SR.landscapeFit('dot', 1920).hidden.length === 0);
+  for (const W of SR.PORTRAIT_WIDTHS) {
+    const p = SR.portraitStatsFit('dot', W), c = SR.portraitClockRow('dot', W);
+    ok(`DOT portrait ${W} pt: the stats line fits after its drops`, p.fits);
+    ok(`DOT portrait ${W} pt: clocks + recording + three DSP badges fit row 4 (${c.need.toFixed(0)} of ${c.avail})`, c.need <= c.avail);
+    console.log(`  DOT portrait ${W} pt: stats line drops ${p.hidden.length ? p.hidden.join(', ') : 'nothing'}`);
+  }
+}
 
 console.log(fails ? `FAIL faceplate dotfield: ${passes} passed, ${fails} failed` : `ok  faceplate dotfield: ${passes} passed, 0 failed`);
 process.exit(fails ? 1 : 0);

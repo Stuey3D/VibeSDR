@@ -12,10 +12,12 @@ import { segModeCells, segReadingCells, segUnitCells, SEG_MODE_CELLS, SEG_READ_G
 import { toSegCells, segCellList } from '../src/constants/displayText.ts';
 import {
   composeModeLabel, modeLabelCandidates, modeBoxFit, segReadingGeometry, segModeFieldWidth, SEG_MODE_FIELD_CELLS,
-  SEG_LEGEND, MODE_BOX, segUnitFont, segCellsWidth, SEG_UNIT_FIELD_CELLS,
+  SEG_LEGEND, MODE_BOX, segUnitFont, segCellsWidth, SEG_UNIT_FIELD_CELLS, SEG14_ADV, SEG14_PITCH,
 } from '../src/constants/modeBox.ts';
 import { formatReading, sMeterText } from '../src/constants/meters.ts';
 import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
+import { statusParts, statusSegSlots, statusSegWidth, STATUS_SEG_ADV, STATUS_SEG_PITCH } from '../src/constants/statusField.ts';
+import * as SR from './lib_status_row.ts';
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -136,6 +138,55 @@ for (let size = 6; size <= 22; size += 0.5) {
   const fs = segUnitFont(size, colW);
   ok(`unit ${size} pt: three cells (${segCellsWidth(SEG_UNIT_CELLS, fs).toFixed(2)}) fit the column (${colW})`,
      segCellsWidth(SEG_UNIT_CELLS, fs) <= colW + 1e-9);
+}
+
+// ── The status row in 14-segment cells (2026-10-06: constants/statusField, components/StatusField) ──
+{
+  const SEG14 = readFileSync(new URL('../src/components/SegField.tsx', import.meta.url), 'utf8');
+  const alphaSrc = /const ALPHABET = ("(?:[^"\\]|\\.)*");/.exec(SEG14)?.[1];
+  const alpha: string = alphaSrc ? JSON.parse(alphaSrc) : '';
+  ok('SegField\'s atlas alphabet found', alpha.length > 40);
+  eq('statusField\'s DSEG14 cell copies = modeBox\'s', [STATUS_SEG_ADV, STATUS_SEG_PITCH], [SEG14_ADV, SEG14_PITCH]);
+  eq('a run is n cells at the fixed pitch', [1, 2, 10].map(n => statusSegWidth(n, 10)), [1, 2, 10].map(n => segCellsWidth(n, 10)));
+  const S = (t: string) => statusSegSlots(statusParts(t), SR.segCells);
+  eq('17:03 UTC — four digits, the colon in the GAP after "7", a blank, UTC', S('17:03 UTC'),
+     { cells: ['1', '7', '0', '3', '', 'U', 'T', 'C'], ghost: Array(8).fill('~'), colons: [1], logos: [] });
+  eq('0:12:34 — two gap colons', S('0:12:34').colons, [0, 2]);
+  eq('44.5dB — the point on its cell, capitals (no lower case on 14 segments)', S('44.5dB').cells, ['4', '4.', '5', 'D', 'B']);
+  eq('…its ghost carries that point', S('44.5dB').ghost, ['~', '~.', '~', '~', '~']);
+  eq('23k/s 10fps → 23K/S 10FPS, "/" is DSEG14\'s own', S('23k/s 10fps').cells, ['2', '3', 'K', '/', 'S', '', '1', '0', 'F', 'P', 'S']);
+  eq('IF 1400k auto → AUTO', S('· IF 1400k auto').cells.join('|'), '·|I|F||1|4|0|0|K||A|U|T|O');
+  eq('"·" swallows its spaces and is the raised point, alone in its cell', S('TUNER · FREE'),
+     { cells: ['T', 'U', 'N', 'E', 'R', '·', 'F', 'R', 'E', 'E'], ghost: ['~', '~', '~', '~', '~', '·', '~', '~', '~', '~'], colons: [], logos: [] });
+  eq('+ and ( ) as themselves', S('(You+2)').cells, ['(', 'Y', 'O', 'U', '+', '2', ')']);
+  eq('symbols are logos: ⚡ ⚿ 👤 ⛛ ↑ ↓', statusParts('⚡ STORMS ⚿ 👤 ⛛ ↑↓').filter(p => typeof p !== 'string').map(p => (p as any).kind),
+     ['bolt', 'key', 'person', 'node', 'arrow', 'arrow']);
+  eq('the server mark takes two cells, no segments', statusSegSlots([{ kind: 'node' }, '18:03'], SR.segCells).ghost.slice(0, 3), ['', '', '~']);
+  // Every lit cell of every run the row can show is a glyph SegField can light (or its point / the raised point).
+  for (const [k, parts] of Object.entries(SR.runs('seg'))) {
+    const s = statusSegSlots(parts, SR.segCells);
+    eq(`${k}: one ghost per cell`, s.ghost.length, s.cells.length);
+    for (const c of s.cells) ok(`${k}: cell "${c}" is drawable`, c === '' || c === '·' || [...c.replace(/\.$/, '')].every(ch => alpha.includes(ch)));
+  }
+  // ★ No jitter: a reading changing its digits keeps the cell count; a run only grows when its text does.
+  eq('GAIN ↓44.5dB and ↑ 9.0dB… same cells; a steady gain keeps the arrow\'s cell (dark)',
+     [{ dir: 'down', v: '44.5dB' }, { dir: 'up', v: '12.0dB' }, { dir: null, v: '44.5dB' }].map(g =>
+       statusSegSlots([...statusParts('· GAIN'), { kind: 'arrow', dir: g.dir as any }, ...statusParts(g.v)], SR.segCells).cells.length),
+     [11, 11, 11]);
+  // ── It fits, at every width ──
+  for (const W of SR.LANDSCAPE_WIDTHS) {
+    const f = SR.landscapeFit('seg', W);
+    ok(`VCR landscape ${W} pt: the row fits after its drops`, f.fits);
+    ok(`VCR landscape ${W} pt: the connection bars and the recording timer are never dropped`, !f.hidden.includes('rec'));
+    console.log(`  VCR landscape ${W} pt (status ${f.size.toFixed(1)} pt): drops ${f.hidden.length ? f.hidden.join(', ') : 'nothing'}${f.sharedShort ? ' (SHARED TUNER → SHARED)' : ''}`);
+  }
+  ok('VCR: a full-screen Mac shows everything', SR.landscapeFit('seg', 1920).hidden.length === 0);
+  for (const W of SR.PORTRAIT_WIDTHS) {
+    const p = SR.portraitStatsFit('seg', W), c = SR.portraitClockRow('seg', W);
+    ok(`VCR portrait ${W} pt: the stats line fits after its drops`, p.fits);
+    ok(`VCR portrait ${W} pt: clocks + recording + three DSP badges fit row 4 (${c.need.toFixed(0)} of ${c.avail})`, c.need <= c.avail);
+    console.log(`  VCR portrait ${W} pt: stats line drops ${p.hidden.length ? p.hidden.join(', ') : 'nothing'}`);
+  }
 }
 
 console.log(fails ? `FAIL faceplate segfield: ${passes} passed, ${fails} failed` : `ok  faceplate segfield: ${passes} passed, 0 failed`);

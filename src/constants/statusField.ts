@@ -155,7 +155,7 @@ export const statusSegFs = (size: number) => Math.max(5, Math.round(size * STATU
 /** DSEG14's cell, em — copies of modeBox SEG14_ADV / SEG14_PITCH (this file has no runtime imports; the test holds
  *  them equal). */
 export const STATUS_SEG_ADV = 0.816;
-export const STATUS_SEG_PITCH = 0.896;
+export const STATUS_SEG_PITCH = STATUS_SEG_ADV + 0.08;   // modeBox SEG14_ADV + SEG14_GAP, the same sum
 /** A VCR run's width (pt): n cells at the fixed pitch. */
 export const statusSegWidth = (n: number, fs: number) => (n > 0 ? ((n - 1) * STATUS_SEG_PITCH + STATUS_SEG_ADV) * fs : 0);
 /** DOT: the dot pitch for the status size — Doto's own (0.1 em), so the cells are dot for dot the Doto text they replace. */
