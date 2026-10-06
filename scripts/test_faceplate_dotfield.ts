@@ -52,7 +52,8 @@ for (const ch of [...DOT_ALPHABET]) ok(`glyph ${JSON.stringify(ch)}: a 5 × 7 bi
 ok('a real lower case: k, z, d, f, and B, F, S, H, M', [...'kzdfBFSHM'].every(c => DOTO_GLYPHS[c]));
 ok('a real S, not a 5', DOTO_GLYPHS.S !== DOTO_GLYPHS['5']);
 ok('a real colon, plus and minus', !!dotGlyph(':') && !!DOTO_GLYPHS['+'] && !!DOTO_GLYPHS['-']);
-eq('a descender falls back to its capital; a space is dark; the unknown is ?', [dotChar('g'), dotChar(' '), dotChar('€')], ['G', '', '?']);
+eq('a descender is the ROM\'s raised form (2026-10-06, "10fps" not "10fPs"); a space is dark; the unknown is ?',
+   [dotChar('g'), dotChar('p'), dotChar(' '), dotChar('€')], ['g', 'p', '', '?']);
 
 // ── One rule, two readers ──
 eq('mode field: ten cells, three demod, three for the rings — segField\'s numbers', [DOT_MODE_CELLS, DOT_DEMOD_CELLS, DOT_STEREO_CELLS],
