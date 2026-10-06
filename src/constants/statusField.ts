@@ -97,13 +97,16 @@ export type StatusToCells = (text: string) => string[];
  *  own (its 'd' IS its 'D', measured from the TTF), so the cell lights two of its glyphs at once, the way the readout's
  *  "-1" half-digit does: 'J' (segments b c d e) and '-' (the centre bar, g1 g2) — together the classic VFD d, b c d e g.
  *  ★★ The unit ONLY: a case-sensitive "dB" token (dB, dBFS, dBm, dBf) not glued to a letter in front. "DAB", "BBC",
- *  "D" in any word stay the 14-seg alphabet (memory vfd_seg14_glyphs_are_fine). The B stays the 14-seg B. */
+ *  "D" in any word stay the 14-seg alphabet (memory vfd_seg14_glyphs_are_fine). The B stays the 14-seg B.
+ *  ★ 2026-10-06: ONE RULE, TWO READERS — displayText isDbUnitDAt is the same rule for every plain DSEG14 string (the
+ *  VTS strip, the DAB meter, the notices); this file has no runtime imports, so it keeps a copy, and
+ *  test_faceplate_vcr_db holds the two equal over a corpus. dBu / dBuV (dBµV folded) joined both on that day. */
 export const SEG_LOWER_D = 'J-';
-const DB_UNIT_AT = /^dB(?:FS|m|f)?(?![A-Za-z])/;
+const DB_UNIT_AT = /^dB(?:FS|m|f|uV|u)?(?![A-Za-z])/;
 const isLetterCh = (c: string | undefined) => !!c && c.toLowerCase() !== c.toUpperCase();
 /** Is the 'd' at `i` (a code-point index into `chars`) the d of a dB unit? */
 export const isDbUnitD = (chars: readonly string[], i: number) =>
-  !isLetterCh(chars[i - 1]) && DB_UNIT_AT.test(chars.slice(i, i + 5).join(''));
+  chars[i] === 'd' && !isLetterCh(chars[i - 1]) && DB_UNIT_AT.test(chars.slice(i, i + 6).join(''));
 
 /** A run in 14-segment cells (VCR). `toCells` folds and upper-cases (ControlsBar segCells). */
 export function statusSegSlots(parts: readonly StatusPart[], toCells: StatusToCells): StatusSlots {

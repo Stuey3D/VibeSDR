@@ -13,10 +13,11 @@
  * ★ Subscribes to the faceplate itself, so the screen around it (SDRScreen) does not have to.
  */
 import React from 'react';
-import { StyleSheet, Text, type TextProps } from 'react-native';
+import { StyleSheet, type TextProps } from 'react-native';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { screenInk, screenOneWeight } from '../constants/faceplate';
 import { screenString } from '../constants/displayText';
+import SegLowerDText from './SegLowerDText';
 
 export default function DisplayFontText({ style, children, keepColor = false, wrap = false, ...rest }:
     Omit<TextProps, 'children'> & { children: string; keepColor?: boolean;
@@ -27,15 +28,15 @@ export default function DisplayFontText({ style, children, keepColor = false, wr
   const own = typeof flat.color === 'string' ? flat.color : '#ffffff';
   const size = typeof flat.fontSize === 'number' ? flat.fontSize : 12;
   const lit = !sc.allowOverride && !keepColor;
+  // ★ SegLowerDText (2026-10-06): on VCR a dB unit's d is the lower-case d (J + the centre bar); otherwise a plain Text.
   return (
-    <Text {...rest} accessibilityLabel={rest.accessibilityLabel ?? children} style={[flat, {
+    <SegLowerDText {...rest} seg={sc.style === 'seg'} cells={screenString(sc.style, children, { wrap })}
+      accessibilityLabel={rest.accessibilityLabel ?? children} style={[flat, {
       fontFamily: sc.font,
       // ★ The cells keep §8.2's 10 pt floor (dot matrix and segments fall apart below it).
       fontSize: sc.face ? Math.max(10, size * sc.sizeK) : size,
       color: keepColor ? own : screenInk(sc, own),
       ...(lit ? { textShadowColor: sc.glow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null),
-    }, screenOneWeight(sc)]}>
-      {screenString(sc.style, children, { wrap })}
-    </Text>
+    }, screenOneWeight(sc)]} />
   );
 }

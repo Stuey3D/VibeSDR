@@ -71,7 +71,7 @@ import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
 import { statusGainParts, statusGainText, statusFit, statusFits, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec,
-         cellWindow, screenString, segCellList, steppedOffset, toSegCells, VFD_STEP_MS } from '../constants/displayText';
+         cellWindow, screenString, segFieldCells, steppedOffset, VFD_STEP_MS } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
 /**
@@ -1140,8 +1140,9 @@ function stereoSlot(modeLabel: string, fmStereo: boolean | undefined): boolean {
   return !!fmStereo || /^WFM\b/i.test(modeLabel);
 }
 
-/** Text → 14-segment cells, one string per cell ('' = dark): displayText's toSegCells, the VTS strip's own rules. */
-const segCells = (t: string) => segCellList(toSegCells(t)).map(c => c.replace(/^!/, ''));
+/** Text → 14-segment cells, one string per cell ('' = dark): displayText's toSegCells, the VTS strip's own rules
+ *  (a dB unit's d as 'J-', 2026-10-06 — segFieldCells). */
+const segCells = segFieldCells;
 
 /** ★ A label too long for the field steps through it a WHOLE cell at a time (the VTS strip's rule), never cut. */
 function useSegMarquee(count: number, n: number, key: string): number {

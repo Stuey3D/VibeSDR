@@ -10,7 +10,7 @@
  *   gain arrow, the DSP pills) at ControlsBar's sizes. The window's own margins are an estimate (EDGE below).
  */
 import { statusFit, statusFits, statusState, type StatusItem, type StatusRowSpec } from '../src/constants/displayText.ts';
-import { segCellList, toSegCells } from '../src/constants/displayText.ts';
+import { segFieldCells } from '../src/constants/displayText.ts';
 import { dotChar } from '../src/constants/dotField.ts';
 import {
   statusDotSlots, statusParts, statusRunWidth, statusSegFs, statusSegSlots, statusTags, type StatusPart, type StatusSlots,
@@ -23,7 +23,7 @@ export type Face = 'seg' | 'dot';
 export type TextFace = 'nixie' | 'hyper' | 'doto';
 export type RowFace = Face | TextFace;
 const isText = (f: RowFace): f is TextFace => f === 'nixie' || f === 'hyper' || f === 'doto';
-export const segCells = (t: string) => segCellList(toSegCells(t)).map(c => c.replace(/^!/, ''));
+export const segCells = segFieldCells;
 export const slotsFor = (face: Face, parts: StatusPart[]): StatusSlots =>
   face === 'seg' ? statusSegSlots(parts, segCells) : statusDotSlots(parts, dotChar);
 
