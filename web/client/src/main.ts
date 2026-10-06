@@ -25,6 +25,7 @@ import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAu
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { dabServiceStereo } from '../../../src/services/dabTypes';
+import { DabQualityMeter, type DabQuality } from '../../../src/utils/dabQuality';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { limiter } from '../../../src/utils/limit';
@@ -1475,6 +1476,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         d.held = true;
       }
       dabState = d; dabRender(); updateVts(); syncStereoLight();
+      dabQuality = dabQualityMeter.push(d, Date.now());
     },
     onAdmin: (ok, refused) => {
       if (refused) {
@@ -6158,6 +6160,11 @@ let dabBoost = false;
 let dabBoostUseful = false;
 let dabOn = false;
 let dabState: DabState | null = null;
+/** ★★★ THE DAB RECEPTION METER (Stuart, 2026-10-06) — the card's signal bar in DAB: can this multiplex be HEARD,
+ *  from ~5 s of the report's own counters (src/utils/dabQuality.ts, the app's copy too). Pushed once per report;
+ *  reset in dabUiOff, so no verdict outlives the mode. Read by the card only while dabOn AND dabState. */
+const dabQualityMeter = new DabQualityMeter();
+let dabQuality: DabQuality | null = null;
 /** The FM pilot's last word (the `rds` message's `stereo`), kept so leaving DAB shows it again: the
  *  server only sends `rds` when something CHANGES, so the light cannot wait for the next one. */
 let rdsStereo = false;
@@ -7207,6 +7214,7 @@ function dabSetMode(on: boolean) {
   dabRender();
 }
 function dabUiOff() {
+  dabQualityMeter.reset(); dabQuality = null;
   dabLockControls(false);
   if (spec) spec.dabHeld = false;
   const mux = document.getElementById('dabMux'); if (mux) mux.style.display = 'none';
@@ -7455,6 +7463,8 @@ function buildControls() {
     anyDecoderLeft,
     dabCapable:    () => dabCapable,
     dabOn:         () => dabOn,
+    // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
+    dabQuality:    () => (dabOn && dabState ? dabQuality : null),
     toggleDab:     () => dabSetMode(!dabOn),
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });

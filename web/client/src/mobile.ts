@@ -14,6 +14,8 @@
 // weighted drums with real inertia. Spin them, flick them, let them coast. It feels like
 // tuning a radio, because that's what it's modelled on."
 
+import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
+
 export type MobileDeps = {
   /** ★★ The RECEIVER's clock: its UTC offset (minutes) and zone abbreviation, null until the server says
    *  (an older build) — then the deck shows the browser's time as before. */
@@ -64,6 +66,8 @@ export type MobileDeps = {
    *    (Stuart, 2026-09-04: "cant see the dab button"). There is one picker now: this one. */
   dabCapable: () => boolean;
   dabOn: () => boolean;
+  /** ★★★ The DAB reception verdict (src/utils/dabQuality.ts) — null before a multiplex's first report. */
+  dabQuality?: () => DabQuality | null;
   toggleDab: () => void;
   /** ★ On a shared-dial receiver only — see chat.ts. The button that opens it is hidden
    *  everywhere else, because on an ordinary receiver there is nobody to talk to. */
@@ -409,6 +413,7 @@ export function initMobileControls(deps: MobileDeps) {
    *  ★ Called from the spectrum frame handler, so it paints exactly as often as there is
    *    something new to paint, and never more. */
   function paintSignal() {
+    if (paintDab()) return;
     const sig = deps.signal();
     // Clamp: a level outside 0..1 would paint the gradient past the pill or invert it.
     const w = `${Math.max(0, Math.min(1, sig.level)) * 100}%`;
@@ -421,6 +426,41 @@ export function initMobileControls(deps: MobileDeps) {
     const sql = $('mSqlLine');
     if (sig.sqlNorm >= 0) { if (sql.hidden) sql.hidden = false; const l = `${sig.sqlNorm * 100}%`; if (sql.style.left !== l) sql.style.left = l; }
     else if (!sql.hidden) sql.hidden = true;
+  }
+
+  /** ★★★ THE DAB RECEPTION METER (Stuart, 2026-10-06). In DAB the gradient measures power in the passband —
+   *  S9 for an hour on a multiplex that listed its stations and never played a sound. So in DAB the pill's
+   *  gradient and squelch line go, the reading box says the verdict's one word, and a text bar under the
+   *  frequency carries three bars and the sentence: "Multiplex weak · No or heavily broken audio · 14 % frames
+   *  lost". Returns false outside DAB — and takes the bar down, so nothing of it survives the exit. */
+  let dabShown = '';
+  function paintDab(): boolean {
+    const pill = $('mPill');
+    const bar = $('mDabQ');
+    const q = deps.dabOn() ? (deps.dabQuality?.() ?? DAB_SEARCHING) : null;
+    if (pill.classList.contains('dab') !== !!q) pill.classList.toggle('dab', !!q);
+    if (!q) {
+      if (!bar.hidden) { bar.hidden = true; dabShown = ''; }
+      return false;
+    }
+    const mSig = $('mSig');
+    if (mSig.style.width !== '0%') mSig.style.width = '0%';
+    const sql = $('mSqlLine'); if (!sql.hidden) sql.hidden = true;
+    const snrEl = $('mSnr');
+    if (snrEl.classList.contains('sql')) snrEl.classList.remove('sql');
+    put(snrEl, q.short);
+    // ★ Write on change: this runs on every spectrum frame, the verdict changes about once a second at most.
+    const key = `${q.level}|${q.label}|${q.advice}|${q.detail ?? ''}`;
+    if (key !== dabShown) {
+      dabShown = key;
+      bar.hidden = false;
+      bar.dataset.level = String(q.level);
+      bar.title = [q.label, q.advice, q.detail].filter(Boolean).join(' · ');
+      put($('mDabQLbl'), q.label);
+      put($('mDabQAdv'), q.advice);
+      put($('mDabQDet'), q.detail ?? '');
+    }
+    return true;
   }
 
   // ★ UTC first, then local — the order every band plan, schedule and logbook uses, so

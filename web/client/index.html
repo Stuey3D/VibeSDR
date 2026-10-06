@@ -504,6 +504,33 @@ html[data-frontdoor] #splashListeners { display: none !important; }
   background: var(--amber, #ffa000); box-shadow: 0 0 4px rgba(0,0,0,0.8);
 }
 #mSqlLine[hidden] { display: none; }
+/* ★★★ THE DAB RECEPTION METER (2026-10-06). In DAB the pill stacks: the readout row, then this text bar in
+   the readout's own boxed backing and type (the card's font, white, the pill's text shadow), at the size of
+   the airband channel line. The gradient behind is emptied by paintDab — the bars carry the level now.
+   ★ The parts drop as the card narrows — the error figure first, then the advice — so a phone keeps the
+     verdict on one line rather than wrapping the pill taller. */
+#mPill.dab { flex-direction: column; align-items: stretch; justify-content: center; gap: 0.2em; padding: 0.2em 0; }
+#mDabQ {
+  position: relative; z-index: 2; display: flex; align-items: center; gap: 0.5em;
+  margin: 0 0.7em; padding: 0.12em 0.5em; border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.38); background: rgba(0, 0, 0, 0.62);
+  font-size: 0.68em; color: #fff; text-shadow: 0 1px 3px #000, 0 0 6px #000;
+  white-space: nowrap; overflow: hidden; container-type: inline-size;
+}
+#mDabQ[hidden] { display: none; }
+#mDabQ .dqTxt { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#mDabQ .dqDet { color: rgba(255, 255, 255, 0.72); }
+#mDabQ .dqBars { display: inline-flex; align-items: flex-end; gap: 2px; height: 1em; flex: none; }
+#mDabQ .dqBars i { display: block; width: 3px; border-radius: 1px; background: rgba(255, 255, 255, 0.18); }
+#mDabQ .dqBars i:nth-child(1) { height: 45%; }
+#mDabQ .dqBars i:nth-child(2) { height: 72%; }
+#mDabQ .dqBars i:nth-child(3) { height: 100%; }
+/* The app's link-bar colours (faceplate linkBad / linkFair / linkGood): lit bars = the level. */
+#mDabQ[data-level="1"] .dqBars i:nth-child(-n+1) { background: #e04040; }
+#mDabQ[data-level="2"] .dqBars i:nth-child(-n+2) { background: #e0b020; }
+#mDabQ[data-level="3"] .dqBars i:nth-child(-n+3) { background: #33cc44; }
+@container (max-width: 34em) { #mDabQ .dqDet { display: none; } }
+@container (max-width: 24em) { #mDabQ .dqAdv { display: none; } }
 
 #mPillIn {
   position: relative; z-index: 2; display: flex; align-items: baseline;
@@ -3327,6 +3354,12 @@ select.btn { padding: 6px 8px; }
             stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8" cy="8" r="7"/><circle
             cx="17.9" cy="8" r="7"/></svg></span><span id="mSnr"></span>
         </div>
+        <!-- ★★★ THE DAB RECEPTION METER (Stuart, 2026-10-06): in DAB the gradient above is power in the passband,
+             which read S9 on a multiplex that never played. This bar says whether it can be HEARD — three bars
+             and the sentence. Shown only in DAB (mobile.ts paintDab); src/utils/dabQuality.ts decides. -->
+        <div id="mDabQ" hidden role="status" aria-live="polite"><span class="dqBars" aria-hidden="true"><i></i><i></i><i></i></span><span
+          class="dqTxt"><b id="mDabQLbl"></b><span class="dqAdv"> · <span id="mDabQAdv"></span></span><span
+          class="dqDet"> · <span id="mDabQDet"></span></span></span></div>
       </div>
 
       <div class="mStack" id="mStackR">
