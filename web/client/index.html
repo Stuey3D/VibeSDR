@@ -2264,9 +2264,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* ★★ ZOOM AND PAN (Stuart, 2026-10-04: "user has a zoom function which can then zoom in and then pan left and right and
    up and down"). At 1x the picture fits whole exactly as before (#decImage's max-height + object-fit: contain). Zoomed,
    it is drawn wider than the box at its own aspect and this wrapper scrolls both ways. */
-#decAdjRow, #decAlignRow { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 6px 10px;
+#decAdjRow, #decAlignRow, #decSlantRow { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 6px 10px;
              font-size: 12px; color: var(--btn-text); }
-#decAdjRow span { min-width: 84px; }
+#decAlignRow span, #decSlantRow span { min-width: 70px; font-variant-numeric: tabular-nums; }
+#decBox .adjKey.arrowKey { min-width: 64px; }   /* wider, so a thumb on ◀ cannot reach ▶ */
 /* ★ 2026-10-06: the adjust keys are 44 px touch targets, 12 px apart — the header-key size was why neighbours got hit.
    touch-action/user-select: a held key must not scroll the page or start a text selection. */
 #decBox .adjKey { min-width: 48px; min-height: 44px; padding: 4px 10px; font-size: 14px;
@@ -3088,20 +3089,26 @@ select.btn { padding: 6px 8px; }
   </div>
   <!-- ★ WEFAX ALIGN / SLANT (ADJ) — see utils/wefaxAlign.ts. ★★ 2026-10-06 (Stuart: the ◀ ▶ keys were "really hard
        to press … cannot be held"): ALIGN makes the picture a drag target with 1 / 5 px keys and DONE in place of this
-       row; the slant keys are big and repeat while held. Same as the app's DecoderPanel. -->
+       row; the slant keys are big and repeat while held. Same as the app's DecoderPanel.
+       ★★ …and only the keys in use (Stuart, same day): ADJ opens on the SUMMARY — the margin and slant actually
+       applied, each a key — and MARGIN / SLANT swap it for that one's keys + DONE. MARGIN has ◀ ▶ only: four arrows +
+       DONE at 44 px do not fit an SE-width row, and a held key goes ×5 anyway. -->
   <div id="decAdjRow" style="display:none">
-    <button class="btn adjKey" id="decAlign" title="Drag the chart sideways to align it">ALIGN</button>
-    <span id="decAdjSlant">SLANT 0.000</span>
-    <button class="btn adjKey" id="decSlantDn" title="Slant less (hold to repeat)" aria-label="Slant less">−</button>
-    <button class="btn adjKey" id="decSlantUp" title="Slant more (hold to repeat)" aria-label="Slant more">+</button>
+    <button class="btn adjKey" id="decAlign" title="Adjust the margin: drag the chart sideways">MARGIN AUTO 0 px</button>
+    <button class="btn adjKey" id="decSlant" title="Adjust the slant">SLANT AUTO 0.000</button>
     <button class="btn adjKey" id="decAdjReset" title="Back to automatic" style="display:none">RESET</button>
   </div>
   <div id="decAlignRow" style="display:none">
-    <button class="btn adjKey" id="decShiftL5" title="Move the chart left 5 px (hold to repeat)">&#9664; 5</button>
-    <button class="btn adjKey" id="decShiftL1" title="Move the chart left 1 px (hold to repeat)">&#9664; 1</button>
-    <button class="btn adjKey" id="decShiftR1" title="Move the chart right 1 px (hold to repeat)">1 &#9654;</button>
-    <button class="btn adjKey" id="decShiftR5" title="Move the chart right 5 px (hold to repeat)">5 &#9654;</button>
+    <button class="btn adjKey arrowKey" id="decShiftL" title="Move the chart left (hold to repeat)" aria-label="Move the chart left">&#9664;</button>
+    <button class="btn adjKey arrowKey" id="decShiftR" title="Move the chart right (hold to repeat)" aria-label="Move the chart right">&#9654;</button>
+    <span id="decAlignVal">0 px</span>
     <button class="btn adjKey on" id="decAlignDone" title="Finish aligning">DONE</button>
+  </div>
+  <div id="decSlantRow" style="display:none">
+    <button class="btn adjKey arrowKey" id="decSlantDn" title="Slant less (hold to repeat)" aria-label="Slant less">−</button>
+    <button class="btn adjKey arrowKey" id="decSlantUp" title="Slant more (hold to repeat)" aria-label="Slant more">+</button>
+    <span id="decSlantVal">0.000</span>
+    <button class="btn adjKey on" id="decSlantDone" title="Finish setting the slant">DONE</button>
   </div>
   <div id="decBody">
     <!-- ★ DAB: one pane at a time, each getting the WHOLE box. A split would have made both

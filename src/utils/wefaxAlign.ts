@@ -44,7 +44,8 @@ export function wefaxOffset(a: WefaxAlign, y: number, width: number): number {
 export function rotateLine(src: ArrayLike<number>, dst: Uint8Array | number[], width: number, off: number): void {
   for (let x = 0; x < width; x++) dst[x] = src[(x + off) % width] ?? 0;
 }
-/** Steps for the adjust keys: SHIFT_STEP is the coarse fine-tune key (◀ 5 / 5 ▶ beside ◀ 1 / 1 ▶).
+/** Steps for the adjust keys. ★ The margin keys step 1 px (the 5 px pair went 2026-10-06 — see DecoderPanel's
+ *  'ONLY THE KEYS IN USE'); held, a key steps ×5 (useHoldRepeat). SHIFT_STEP is no longer used by either client.
  *  ★ SLANT_STEP 0.005 → 0.001 (2026-10-06): the slants now measured are 0.007–0.012 on the RX888's DDK charts, so
  *    0.005 a tap could not land on one; a HELD key moves 5× a step once it is going (useHoldRepeat), so the coarse
  *    range is still quick. 0.001 is 1.3 px over a 1300-line chart. */
