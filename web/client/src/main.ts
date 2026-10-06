@@ -33,7 +33,7 @@ import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../..
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle } from '../../../src/utils/navtex';
-import { SHIFT_STEP, SLANT_STEP, chartAlignStep, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
+import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
@@ -9883,21 +9883,23 @@ function initDecoders(host: string, auth: AuthState) {
   $('decAdj').onclick = () => {
     const open = !$('decAdj').classList.contains('on');
     $('decAdj').classList.toggle('on', open);
-    setDecAligning(false);   // ADJ always opens on the ALIGN / SLANT row; closing it closes ALIGN too
-    if (!open) { $('decAdjRow').style.display = 'none'; $('decAlignRow').style.display = 'none'; }
+    setDecAdjMode('summary');   // ADJ always opens on the summary; closing it closes MARGIN / SLANT too (rows hidden)
   };
-  $('decAlign').onclick = () => setDecAligning(true);
-  $('decAlignDone').onclick = () => setDecAligning(false);
-  const nudgeShift = (d: number) => { decManualShift = decEffAlign().shift + d; updateDecAdjLabels(); redrawDecAlign(); };
-  const nudgeSlant = (d: number) => setDecAlign({ ...decAlign, slant: Math.round((decEffAlign().slant + d) * 1000) / 1000 });
-  holdRepeat($('decShiftL5'), (m) => nudgeShift(SHIFT_STEP * m));
-  holdRepeat($('decShiftL1'), (m) => nudgeShift(m));
-  holdRepeat($('decShiftR1'), (m) => nudgeShift(-m));
-  holdRepeat($('decShiftR5'), (m) => nudgeShift(-SHIFT_STEP * m));
+  // ★ Adjusting means correcting: MARGIN / SLANT take RAW off (the correction underneath comes back first).
+  const unRaw = () => { if (decRaw) { decRaw = false; redrawDecAlign(); } };
+  $('decAlign').onclick = () => { unRaw(); setDecAdjMode('align'); };
+  $('decSlant').onclick = () => { unRaw(); setDecAdjMode('slant'); };
+  $('decRaw').onclick = () => { decRaw = !decRaw; updateDecAdjLabels(); redrawDecAlign(); };
+  $('decAlignDone').onclick = () => setDecAdjMode('summary');
+  $('decSlantDone').onclick = () => setDecAdjMode('summary');
+  const nudgeShift = (d: number) => { decManualShift = decCorrAlign().shift + d; updateDecAdjLabels(); redrawDecAlign(); };
+  const nudgeSlant = (d: number) => setDecAlign({ ...decAlign, slant: Math.round((decCorrAlign().slant + d) * 1000) / 1000 });
+  holdRepeat($('decShiftL'), (m) => nudgeShift(m));
+  holdRepeat($('decShiftR'), (m) => nudgeShift(-m));
   holdRepeat($('decSlantDn'), (m) => nudgeSlant(-SLANT_STEP * m));
   holdRepeat($('decSlantUp'), (m) => nudgeSlant(SLANT_STEP * m));
   initDecAlignDrag();
-  $('decAdjReset').onclick = () => { decManualShift = null; setDecAlign(null); };
+  $('decAdjReset').onclick = () => { decManualShift = null; decRaw = false; setDecAlign(null); };
   $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
@@ -11709,7 +11711,8 @@ function startDecImage(w: number, h: number) {
   decLiveComplete = false;
   decLiveMaxY = -1;
   decLiveRaw = []; decLiveAl = []; decLiveHist = newHist();
-  decAuto = {}; decManualShift = null;   // ★ a new chart finds its own margin / border
+  decAuto = {}; decManualShift = null; decRaw = false;   // ★ a new chart finds its own margin / border, unRAW
+  if (activeDec === 'wefax') updateDecAdjLabels();
   if (!decViewingPrev) blitToVisible(decLiveCv);
   updateDecImageButtons();
 }
@@ -11726,7 +11729,14 @@ let decAlign: WefaxAlign = { shift: 0, slant: 0 };   // ★ the SLANT is the sta
  *  time"): found per chart by chartAlignStep (margin, else blank border; slant measured); ALIGN moves THIS chart only. */
 let decAuto: ChartAlignState = {};   // ★ this chart's own alignment (wefaxAlign chartAlignStep: margin, else border)
 let decManualShift: number | null = null;
-function decEffAlign(): WefaxAlign {
+/* ★★ RAW (Stuart, 2026-10-06: "a No Correct or RAW button shows the image without any correction at all"): per chart
+ *  like the shift (cleared when the next chart starts), geometry only (wefaxAlign drawnAlign). The correction below
+ *  is kept underneath, so RAW off restores auto or manual exactly. SAVE saves the picture shown — raw when RAW. */
+let decRaw = false;
+/** The geometry the chart is DRAWN with (RAW → none). */
+function decEffAlign(): WefaxAlign { return drawnAlign(decCorrAlign(), decRaw); }
+/** The correction in effect, RAW or not: this chart's shift (auto or manual) and the slant. */
+function decCorrAlign(): WefaxAlign {
   const shift = decManualShift ?? decAuto.al?.shift ?? 0;
   // ★★ The slant: the listener's own if saved for this frequency, else THIS chart's measured one (findMarginSlant —
   //    MadPsy/Stuart 2026-10-05: never tied to one radio's clock), else the station's.
@@ -11758,17 +11768,32 @@ function setDecAlign(a: WefaxAlign | null, save = true) {
   updateDecAdjLabels();
   redrawDecAlign();
 }
+/** ★ The figures APPLIED (Stuart, 2026-10-06: "when opening the adjust it shows the auto margin and auto slant
+ *  figures"): this chart's shift and the slant drawn, AUTO until the listener sets one. */
 function updateDecAdjLabels() {
-  $('decAlign').classList.toggle('on', decManualShift != null);   // lit = this chart's shift was set by hand
-  $('decAdjSlant').textContent = !decAlignSaved && decAuto.al ? `SLANT auto ${decEffAlign().slant.toFixed(3)}` : `SLANT ${decAlign.slant.toFixed(3)}`;
-  $('decAdjReset').style.display = decAlignSaved || decManualShift != null ? '' : 'none';
-  setDecAlignHint(decEffAlign().shift);
+  const a = decCorrAlign();
+  const manual = decManualShift != null;
+  $('decAlign').classList.toggle('on', !decRaw && manual);   // lit = this chart's shift was set by hand
+  $('decAlign').textContent = decRaw ? 'MARGIN RAW' : `MARGIN ${manual ? 'MANUAL' : 'AUTO'} ${decSignedPx(a.shift)} px`;
+  $('decSlant').classList.toggle('on', !decRaw && decAlignSaved);
+  $('decSlant').textContent = decRaw ? 'SLANT RAW' : `SLANT ${decAlignSaved ? 'MANUAL' : 'AUTO'} ${decSignedSlant(a.slant)}`;
+  $('decAlignVal').textContent = `${decSignedPx(a.shift)} px`;
+  $('decSlantVal').textContent = decSignedSlant(a.slant);
+  $('decRaw').classList.toggle('on', decRaw);
+  $('decRaw').setAttribute('aria-pressed', String(decRaw));
+  // ★ AUTO and RAW are a mode pair (AUTO replaced RESET, 2026-10-06): AUTO lit while nothing manual and no RAW.
+  $('decAdjReset').classList.toggle('on', !decRaw && !decAlignSaved && !manual);
+  setDecAlignHint(a.shift);
 }
-/** The shift as the listener reads it over the picture: px, signed, the short way round. */
-function setDecAlignHint(shift: number) {
+/** The shift as the listener reads it: px, signed, the short way round. */
+function decSignedPx(shift: number): string {
   const W = decLiveCv?.width || decImgWidth || 1809;
   const s = Math.round((((shift % W) + W + W / 2) % W) - W / 2);
-  $('decAlignHint').textContent = `◀ ─── drag ───▶   SHIFT ${s > 0 ? '+' : ''}${s}`;
+  return `${s > 0 ? '+' : s < 0 ? '−' : ''}${Math.abs(s)}`;
+}
+function decSignedSlant(k: number): string { return `${k > 0 ? '+' : k < 0 ? '−' : ''}${Math.abs(k).toFixed(3)}`; }
+function setDecAlignHint(shift: number) {
+  $('decAlignHint').textContent = `◀ ─── drag ───▶   ${decSignedPx(shift)} px`;
 }
 /* ★★★ ALIGN BY DRAGGING (Stuart, 2026-10-06: the ◀ ▶ keys were "really hard to press and are finicky and cannot be
  *  held … on the ALIGN button have an overlay pop up over the chart <-----------> drag for rough alignment then use
@@ -11777,16 +11802,22 @@ function setDecAlignHint(shift: number) {
  *  once, on release. The shift stays THIS chart's only (decManualShift), exactly as the old keys set it. */
 let decAligning = false;
 let decDragging = false;
-function setDecAligning(on: boolean) {
-  decAligning = on && !decViewingPrev && activeDec === 'wefax';
+/** ★ ADJ shows ONE row: the summary, MARGIN's keys (+ the drag cover) or SLANT's — only the keys in use. */
+let decAdjMode: 'summary' | 'align' | 'slant' = 'summary';
+function setDecAdjMode(m: 'summary' | 'align' | 'slant') {
+  if (m === 'align' && (decViewingPrev || activeDec !== 'wefax')) m = 'summary';
+  decAdjMode = m;
+  decAligning = m === 'align';
   const adjOpen = $('decAdj').classList.contains('on');
-  $('decAdjRow').style.display = adjOpen && !decAligning ? '' : 'none';
-  $('decAlignRow').style.display = adjOpen && decAligning ? '' : 'none';
+  $('decAdjRow').style.display = adjOpen && m === 'summary' ? '' : 'none';
+  $('decAlignRow').style.display = adjOpen && m === 'align' ? '' : 'none';
+  $('decSlantRow').style.display = adjOpen && m === 'slant' ? '' : 'none';
   $('decAlignCover').style.display = decAligning ? '' : 'none';
   $('decImgWrap').classList.toggle('aligning', decAligning);
   $('decAlign').style.display = decViewingPrev ? 'none' : '';
-  if (decAligning) updateDecAdjLabels();
+  updateDecAdjLabels();
 }
+function setDecAligning(on: boolean) { setDecAdjMode(on ? 'align' : 'summary'); }
 function initDecAlignDrag() {
   const cover = $('decAlignCover');
   let x0 = 0, start = 0, shown = 0, scale = 1;

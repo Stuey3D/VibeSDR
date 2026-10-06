@@ -24,7 +24,7 @@ import React, {
 import { PanResponder, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 // ★★ A REAL FILE, NOT A data: URL — see save() below for why.
 import { File, Paths } from 'expo-file-system';
-import { WEFAX_ALIGN_ZERO, chartAlignStep, wefaxOffset, type ChartAlignState, type WefaxAlign } from '../utils/wefaxAlign';
+import { WEFAX_ALIGN_ZERO, chartAlignStep, drawnAlign, wefaxOffset, type ChartAlignState, type WefaxAlign } from '../utils/wefaxAlign';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../utils/wefaxCrisp';
 import {
   Canvas, Image as SkiaImage, Skia,
@@ -113,6 +113,11 @@ export interface DecoderImageCanvasProps {
   alignPreview?: number;
   /** ★ ALIGN open: a sideways drag on the picture has ended — the SHIFT to commit (previewed here while dragging). */
   onAlignDrag?: (shift: number, done: boolean) => void;
+  /** ★ RAW: draw every line exactly as received — no shift, no slant (utils/wefaxAlign drawnAlign). The automatic
+   *  alignment still runs underneath, so turning RAW off restores it. */
+  raw?: boolean;
+  /** ★ A new chart has started on this canvas (the line count went back) — RAW and a manual shift are per chart. */
+  onNewChart?: () => void;
 }
 
 /** Row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping) — into `al`. */
@@ -169,7 +174,9 @@ function mkBuf(w: number, h: number): PixBuf {
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
                                autoMargin = false, autoSlant = true, onAutoAlign,
-                               alignPreview, onAlignDrag }, ref) {
+                               alignPreview, onAlignDrag, raw = false, onNewChart }, ref) {
+    const rawRef = useRef(raw);
+    rawRef.current = raw;
     const alignRef = useRef<WefaxAlign>(align ?? WEFAX_ALIGN_ZERO);
     alignRef.current = align ?? WEFAX_ALIGN_ZERO;
     const autoRef = useRef(autoMargin);
@@ -180,8 +187,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
      *  saved one), else the frequency's. */
     const effAlign = (buf: PixBuf): WefaxAlign => {
       const a = buf.auto?.al;
-      if (!autoRef.current || !a) return alignRef.current;
-      return { shift: a.shift, slant: autoSlantRef.current ? a.slant : alignRef.current.slant };
+      if (!autoRef.current || !a) return drawnAlign(alignRef.current, rawRef.current);
+      return drawnAlign({ shift: a.shift, slant: autoSlantRef.current ? a.slant : alignRef.current.slant }, rawRef.current);
     };
     const { width: winW } = useWindowDimensions();
     /* ★★★ THE WIDTH THIS CANVAS ACTUALLY HAS — MEASURED, not the window's. It was `winW - 16 - 24`, true
@@ -278,7 +285,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
      *  partial SSTV frame (signal faded, late join) was simply thrown away by the next image's start. */
     /* ★ A SHIFT / SLANT change redraws the WHOLE live chart from its kept lines — not only the lines to come —
      *  so the listener sees the correction land on the picture they are looking at. */
-    const alignKey = `${align?.shift ?? 0}|${align?.slant ?? 0}|${autoMargin ? 1 : 0}`;
+    const alignKey = `${align?.shift ?? 0}|${align?.slant ?? 0}|${autoMargin ? 1 : 0}|${raw ? 1 : 0}`;
     const firstAlign = useRef(true);
     useEffect(() => {
       if (firstAlign.current) { firstAlign.current = false; return; }
@@ -350,6 +357,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
           rollToPrev();
           live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current;
           onStatus('new chart — the last one is under PREV');
+          onNewChart?.();
         }
         let buf = live.current;
         if (ln >= buf.h) {                                                  // grow +100
