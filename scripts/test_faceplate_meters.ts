@@ -445,7 +445,7 @@ const longest = (face: ModeFace) => CANDIDATES.reduce((a, c) => {
   eq('★ a standalone digimode is its own label (was MESHCORE: MESHCORE)', composeModeLabel('meshcore', 'meshcore'), 'MESHCORE');
   eq('DAB is DAB whatever the decoder', composeModeLabel('wfm', 'rtty', true), 'DAB');
 }
-const DISPLAYS: [string, ModeFace][] = [['hyper', 'hyper'], ['nixie', 'hyper'], ['seg', 'seg'], ['dot', 'dot']];  // ★ seg / dot: the VCR / DOT fixed fields (2026-10-06)
+const DISPLAYS: [string, ModeFace][] = [['hyper', 'hyper'], ['nixie', 'nixie'], ['seg', 'seg'], ['dot', 'dot']];  // ★ seg / dot: the VCR / DOT fixed fields (2026-10-06)
 for (const W of [320, 375, 390, 393, 402, 430, 440, 768, 1024]) {
   const scale = Math.max(0.75, Math.min(1.45, W / 390));
   const r = (n: number) => Math.round(n * scale);

@@ -66,25 +66,21 @@ import { legendPath, LEGEND_CELL_H } from './AnnunciatorLegend';
 import { placePath } from './vfdMesh';
 import { StatusGhostContext, StatusRun } from './StatusField';
 import { statusParts, statusTags, type StatusPart } from '../constants/statusField';
-import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
+import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW, screenOneWeight, statusDisplayFor, type StatusDisplay } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
 import { statusGainParts, statusGainText, statusFit, statusFits, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec,
-         cellWindow, segCellList, steppedOffset, toSegCells, VFD_STEP_MS } from '../constants/displayText';
+         cellWindow, screenString, segCellList, steppedOffset, toSegCells, VFD_STEP_MS } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
 /**
- * ★★ THE STATUS DISPLAY (§8.1) on silver / black: a recessed sub-display in Doto 900 12 pt, in the
- *   TEXT colour, over the ghost-dot grid. The default chassis keeps today's footer exactly — the
- *   context is null there and every status piece draws as it always has. A context rather than props
- *   because the pieces (ClockRow, LinkIndicator, DspBadges, the bars' own inline texts) are spread
- *   through both bars.
+ * ★★ THE STATUS DISPLAY (§8.1): the status row in the DISPLAY's font and colour — faceplate.ts statusDisplayFor()
+ *   from `fp.screen` (★ 2026-10-06: it was Doto on every metal Display). Recessed on silver / black; bare on the
+ *   default chassis. Only the default deck on HYPER keeps today's footer exactly — the context is null there and every
+ *   status piece draws as it always has. A context rather than props because the pieces (ClockRow, LinkIndicator,
+ *   DspBadges, the bars' own inline texts) are spread through both bars.
  */
-interface StatusDisplay { font: string; color: string; glow: string; rgb: string; size: number;
-  /** ★★ The Display's own cells (2026-10-06): 'seg' on VCR, 'dot' on DOT — every status run is drawn in them
-   *  (StatusField), the logos as electrodes / dots. null = the Doto text run (the Hyper and Nixie Displays). */
-  face: 'seg' | 'dot' | null }
 const StatusDisplayContext = React.createContext<StatusDisplay | null>(null);
 
 /** A text child as one string, or null when it is not plain text. */
@@ -105,7 +101,8 @@ function StatusCells({ sd, parts, label, color, glow, frames, opacity }: {
     opacity={opacity} />;
 }
 
-/** A status text: today's style on the default deck; Doto in the text colour inside the display; on VCR / DOT the
+/** A status text: today's style on the default deck; the display's font and colour elsewhere (Nixie One neon, Atkinson —
+ *  2026-10-06); on VCR / DOT the
  *  Display's own cells (StatusField — symbols ⛛ ⚡ ⚿ 👤 ↑ ↓ drawn as logos).
  *  `keepColor` for meaning colours (the recording red) that no faceplate colour may replace. */
 function StatusText({ style, keepColor = false, children, ...rest }:
@@ -416,7 +413,7 @@ function ClockRow({ clock, color, font, size, hide, onUnit }:
     );
   }
   if (sd) {
-    // §8.1: `08:37 UTC 09:37 BST` — Doto, text colour, one run; the node mark stays (it means
+    // §8.1: `08:37 UTC 09:37 BST` — the display's font and colour, one run; the node mark stays (it means
     // "the receiver's clock"), drawn in the display's colour.
     return (
       <View style={pm.clockRow}>
@@ -1304,6 +1301,8 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
   const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
   const rl = readingFontSize ? Math.round(readingFontSize * 1.15) : Math.round(Math.max(9, modeFontSize * 0.75) * 1.15);
   const dot = dk.modeFont === FONT_DOTO;
+  // ★ One-weight faces (Doto, and Nixie One since 2026-10-06) are never asked for bold — the platform would substitute.
+  const oneWeight = dot || dk.style === 'nixie';
   return (<>
     <View style={[{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }, oneLine && { maxWidth: '100%' }]}>
       <Text style={[pm.modeLbl, {
@@ -1311,7 +1310,7 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
         textShadowColor: dk.modeGlow,
         // ★ Doto is ONE weight (the Black cut is the file); asking it for bold makes Android
         //   fall back to the system font.
-        ...(dot ? { fontWeight: 'normal' as const } : null),
+        ...(oneWeight ? { fontWeight: 'normal' as const } : null),
         lineHeight: Math.round(modeFontSize * 1.15), includeFontPadding: false,
       }, oneLine && { flexShrink: 1 }]}
         {...(oneLine ? { numberOfLines: 1, adjustsFontSizeToFit: true, minimumFontScale: 0.6 } : null)}>
@@ -1334,7 +1333,7 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
       <Animated.Text style={[pm.snr, {
         color: dk.sqlClosed, fontFamily: dk.modeFont, width: snrWidth,
         fontSize: rf, lineHeight: rl,
-        includeFontPadding: false, fontWeight: dot ? 'normal' : '800', opacity: reading.breathe,
+        includeFontPadding: false, fontWeight: oneWeight ? 'normal' : '800', opacity: reading.breathe,
         // §4.6: neon under Nixie (`#ff9a55`, the rule outranks red), red elsewhere, with the mockup's
         // glow; the default deck keeps today's unglowing SQL.
         ...(dk.sqlGlow ? { textShadowColor: dk.sqlGlow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null),
@@ -1346,7 +1345,7 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
         color: dk.reading, fontFamily: dk.modeFont, width: snrWidth,
         fontSize: rf, lineHeight: rl,
         includeFontPadding: false,
-        fontWeight: dot ? 'normal' : '700',
+        fontWeight: oneWeight ? 'normal' : '700',
         /* ★★ ALWAYS SOLID (Stuart, 2026-10-04: "why is the S+8 readout fading in and out? It should be solid … only the LED
          *  VU Meter Signal bar should have that fading"). It dimmed to 0.65 whenever `active` was false — SNR ≤ 6 dB — and on
          *  DAB, which fills the whole passband, the measured SNR sits on that line, so the number blinked. A reading is a
@@ -1374,9 +1373,10 @@ function SharedBanner({ st, fontSize, tight }: { st: SharedTuner; fontSize: numb
   return (
     <View style={[pm.sharedBox, { backgroundColor: fp.chassis.pillBg, borderColor: fp.chassis.sharedBorder, alignSelf: 'center' }]}
           accessibilityRole="text" accessibilityLabel={sharedBannerLabel(st)}>
-      <Text style={[pm.sharedTxt, { fontFamily: fp.deck.bannerFont, fontSize, color: st.alone ? fp.deck.bannerFree : fp.deck.bannerAsk }]}
+      <Text style={[pm.sharedTxt, { fontFamily: fp.deck.bannerFont, fontSize: fontSize * fp.screen.sizeK,
+                    color: st.alone ? fp.deck.bannerFree : fp.deck.bannerAsk }, screenOneWeight(fp.screen)]}
             numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-        {sharedBannerText(st, tight)}
+        {screenString(fp.deck.style, sharedBannerText(st, tight))}
       </Text>
     </View>
   );
@@ -1423,10 +1423,10 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
       <View style={[pm.sharedBox, { backgroundColor: ct.pillBg, borderColor: ct.sharedBorder }]}
             accessibilityRole="text"
             accessibilityLabel={sharedBannerLabel(sharedTuner)}>
-        <Text style={[pm.sharedTxt, { fontFamily: dk.bannerFont, fontSize: sharedFontSize,
-                      color: sharedTuner.alone ? dk.bannerFree : dk.bannerAsk }]}
+        <Text style={[pm.sharedTxt, { fontFamily: dk.bannerFont, fontSize: sharedFontSize * fp.screen.sizeK,
+                      color: sharedTuner.alone ? dk.bannerFree : dk.bannerAsk }, screenOneWeight(fp.screen)]}
               numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-          {sharedBannerText(sharedTuner, tight)}
+          {screenString(dk.style, sharedBannerText(sharedTuner, tight))}
         </Text>
       </View>
     )}
@@ -1530,7 +1530,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
   const readingFont = L ? L.readingFont : s.r(11);
   const mb = useMemo(() => modeBoxFit({
     label: modeLabel, stereo: stereoSlot(modeLabel, fmStereo),
-    face: dk.style === 'seg' ? 'seg' : dk.style === 'dot' ? 'dot' : dk.modeFont === FONT_DOTO ? 'doto' : 'hyper',
+    face: dk.style === 'seg' ? 'seg' : dk.style === 'dot' ? 'dot' : dk.modeFont === FONT_DOTO ? 'doto' : dk.style === 'nixie' ? 'nixie' : 'hyper',
     fontSize: modeFont0, letterSpacing: L ? 1.5 : 2, readingFont,
     minW: s.r(MODE_BOX.minW), padH: s.r(MODE_BOX.padH), windowW: winW,
   }), [modeLabel, fmStereo, dk.modeFont, dk.style, modeFont0, L, readingFont, s, winW]);
@@ -1539,11 +1539,11 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
       {sharedTuner && (
         <View style={[cd.banner, { height: dl.bannerH, marginBottom: dl.bannerGap }]}
               accessibilityRole="text" accessibilityLabel={sharedBannerLabel(sharedTuner)}>
-          <Text style={[cd.bannerTxt, { fontFamily: dk.bannerFont, fontSize: s.f(10.5),
+          <Text style={[cd.bannerTxt, { fontFamily: dk.bannerFont, fontSize: s.f(10.5) * fp.screen.sizeK,
                         color: sharedTuner.alone ? dk.bannerFree : dk.bannerAsk,
-                        textShadowColor: fp.chassis.plate ? dk.glow : 'transparent' }]}
+                        textShadowColor: fp.chassis.plate ? dk.glow : 'transparent' }, screenOneWeight(fp.screen)]}
                 numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
-            {sharedBannerText(sharedTuner, tight)}
+            {screenString(dk.style, sharedBannerText(sharedTuner, tight))}
           </Text>
           <View pointerEvents="none" style={[cd.lip, { backgroundColor: 'rgba(255,255,255,0.18)' }]} />
         </View>
@@ -1855,29 +1855,29 @@ function RecordIcon({ size, progress }: { size: number; progress?: SharedValue<n
 }
 
 /** The status rows: bare on the default glass deck, in a recessed window on a metal plate. */
-function StatusWell({ plate, gap, style, children }: {
-  plate: PlateTokens | null; gap: number; style?: ViewStyle; children: React.ReactNode;
+function StatusWell({ plate, gap, size, style, children }: {
+  plate: PlateTokens | null; gap: number;
+  /** The default deck's footer size (CLOCK_FONT) — the size the row keeps there in the display's font. */
+  size: number;
+  style?: ViewStyle; children: React.ReactNode;
 }) {
   const fp = useFaceplate();
   const s = useUiScale();
-  const deckStyle = fp.deck.style;
-  const sd = useMemo<StatusDisplay | null>(() => plate ? {
-    // ★ Doto 900 12 pt, with §8.2's 10 pt floor (dot matrix falls apart below it; what does not fit
-    //   is dropped by row 9, never squeezed). Text colour — neon under Nixie (the rule outranks it).
-    font: FONT_DOTO, color: fp.text.core, glow: fp.text.glow, rgb: fp.text.rgb, size: Math.max(10, s.f(12)),
-    face: deckStyle === 'seg' || deckStyle === 'dot' ? deckStyle : null,
-  } : null, [plate, fp.text, s, deckStyle]);
-  if (!plate || !sd) return <>{children}</>;
+  const screen = fp.screen;
+  const scaled = s.f(12);
+  const sd = useMemo<StatusDisplay | null>(() => statusDisplayFor(screen, !!plate, scaled, size),
+                                           [screen, plate, scaled, size]);
+  if (!sd) return <>{children}</>;
+  if (!plate) return <StatusDisplayContext.Provider value={sd}>{children}</StatusDisplayContext.Provider>;
   return (
     <StatusDisplayContext.Provider value={sd}>
       <RecessedWindow lip={plate.windowLip} style={{ gap, ...style }}>
-        {/* ★ VCR / DOT: no ghost grid behind the runs — their cells carry their own ghosts, on their own pitch (a 3 pt
-            grid under 14-segment cells, or under dots at another pitch, would be two displays in one window). */}
-        {!sd.face && <GhostGrid rgb={sd.rgb} pitch={3} dot={0.7} />}
+        {/* ★ No ghost grid: VCR / DOT runs carry their own ghosts on their own pitch, and a dot grid under Nixie One
+            or Atkinson would be a second display in one window (2026-10-06 — it was there for the Doto run). */}
         {children}
-        {/* ★ The status display on silver / black is always dot-matrix — so it is glass, with wires
-            (lighting brief §1). 4 = the window's 5 pt corner less its 1 pt border. */}
-        <VfdFilaments radius={4} />
+        {/* ★ Wires only on VFD glass (lighting brief §1), as the frequency window: VCR / DOT. Nixie and Hyperlegible
+            draw none there either. 4 = the window's 5 pt corner less its 1 pt border. */}
+        {sd.face && <VfdFilaments radius={4} />}
       </RecessedWindow>
     </StatusDisplayContext.Provider>
   );
@@ -2199,10 +2199,10 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         )}
       </View>}
 
-      {/* Rows 4–5 — the status. ★ On silver / black it is the recessed STATUS DISPLAY (§8.1): Doto in
-          the text colour over the ghost grid, two lines in portrait — the clocks, then the link. The
-          default deck keeps today's two-line footer untouched. */}
-      <StatusWell plate={ct.plate} gap={ROW_GAP}>
+      {/* Rows 4–5 — the status. ★ On silver / black it is the recessed STATUS DISPLAY (§8.1), two lines in portrait —
+          the clocks, then the link — in the DISPLAY's font and colour (2026-10-06: faceplate.ts statusDisplayFor). The
+          default deck on HYPER keeps today's two-line footer untouched. */}
+      <StatusWell plate={ct.plate} gap={ROW_GAP} size={CLOCK_FONT}>
       {/* Row 4 — clock · link quality · rec */}
       <View style={por.clockRow}>
         {/* ★★ minWidth 0 + shrink, OR THE CLOCK RUNS UNDER THE LINK ICONS. A row child's default
@@ -2580,7 +2580,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
 
 /**
  * ★ SHARED TUNER in the landscape status row (§8.1 / §9): the banner's own words and colours (free /
- * ask), on one line. On the status display (silver / black) it is Doto in the text colour's role; on
+ * ask), on one line. In the status display it is the display's font (2026-10-06) in the banner's colours; on
  * the default deck it is today's banner font at the row's size.
  * ★★ Row 9 (§8.2): it is never SQUEEZED (dot matrix and segments fall apart below 10 pt) — when the
  *    row is short of room it shortens to `SHARED` (`short`), and after that it is dropped.
@@ -2707,7 +2707,7 @@ function LandscapeStatus({ plate, marginTop, clock, font, clockFont, isRecording
   const side = fit.packed ? lnd.statusSidePacked : lnd.statusSide;
 
   return (
-    <StatusWell plate={plate} gap={0} style={{ marginTop }}>
+    <StatusWell plate={plate} gap={0} size={clockFont} style={{ marginTop }}>
       <View style={[lnd.statusRow, plate && { marginTop: 0 }]} onLayout={onRowLayout}>
         <View style={side}>
           {(!hide.utc || !hide.localTime) &&

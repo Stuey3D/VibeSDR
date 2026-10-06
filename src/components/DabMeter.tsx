@@ -13,24 +13,21 @@
  *    • `housing` — the LED strip's / edgewise meter's black housing (two lines when it is tall enough);
  *    • `frame`   — the bottom of the tablet / Mac bar frame, under the centred pill.
  *
- * ★★ THE TYPE IS THE MODE BOX'S READING (fp.deck: modeFont, reading colour), its nearest neighbour — so it
- *    follows the display font the user picked (Doto on the dot-matrix display, Atkinson elsewhere) and the
- *    text colour, and on a lit display (dot / seg / Nixie) it glows like the rest of the glass. The bars are
+ * ★★ THE TYPE IS THE DISPLAY'S (fp.screen — faceplate.ts ScreenText, the one source for every big element, ★
+ *    2026-10-06) in the mode box's reading colour, its nearest neighbour: Atkinson, Nixie One, Doto, or DSEG14
+ *    cells on VCR (it was Atkinson there, beside a segment mode box), and on a lit display (dot / seg / Nixie) it
+ *    glows like the rest of the glass. The bars are
  *    LinkBars' (the status row's link meter): the link colours on a plain display, the display's own colour
  *    with dim unlit segments on a VFD — one colour, as a VFD is.
  */
 import React, { useState } from 'react';
 import { Text, View, type LayoutChangeEvent } from 'react-native';
 import { useFaceplate } from '../contexts/FaceplateContext';
-import { FONT_DOTO, LED, NEON_TEXT, rgba } from '../constants/faceplate';
+import { LED, NEON_TEXT, rgba, screenOneWeight } from '../constants/faceplate';
+import { screenString } from '../constants/displayText';
 import type { DabQuality } from '../utils/dabQuality';
 
 export type DabMeterVariant = 'line' | 'housing' | 'frame';
-
-/** ★ Character width as a share of the font size — enough to choose which parts fit before drawing.
- *  Doto is a wide dot-matrix face; Atkinson Hyperlegible an ordinary proportional one. adjustsFontSizeToFit
- *  is the safety net under the estimate, never the plan (a shrunk sentence reads as a glitch). */
-const CHAR_W = { doto: 0.66, hyper: 0.56 };
 
 export default function DabMeter({ q, height, variant, padH = 6 }: {
   q: DabQuality; height: number; variant: DabMeterVariant; padH?: number;
@@ -39,8 +36,11 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
   const dk = fp.deck;
   const ct = fp.chassis;
   const [w, setW] = useState(0);
+  const screen = fp.screen;
   const lit = dk.style !== 'hyper';                      // dot / seg / nixie: a lit display
-  const dot = dk.modeFont === FONT_DOTO;
+  const oneWeight = screen.oneWeight;                    // one-weight face: never bold
+  // ★ DSEG14's cell is the whole em — scaled so its capitals stand as tall as the other faces' (ScreenText.sizeK).
+  const k = screen.sizeK;
   const twoLines = variant === 'housing' && height >= 26;
 
   // ── Sizes from the slot ──
@@ -52,9 +52,11 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
   const barsW = 3 * barW + 2 * barGap;
 
   // ── Which parts fit (most important first: the verdict, then what you will hear, then the figure) ──
-  const cw = (dot ? CHAR_W.doto : CHAR_W.hyper);
+  // ★ The display font's character width (ScreenText.charEm) — enough to choose which parts fit before drawing.
+  //   adjustsFontSizeToFit is the safety net under the estimate, never the plan (a shrunk sentence reads as a glitch).
+  const cw = screen.charEm;
   const room = Math.max(0, w - 2 * padH - barsW - 6);
-  const fits = (s: string, f: number) => s.length * f * cw <= room;
+  const fits = (s: string, f: number) => s.length * f * k * cw <= room;
   const parts: string[] = [];
   let line2 = '';
   if (twoLines) {
@@ -84,9 +86,9 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
   const glow = lit ? { textShadowColor: nixie ? NEON_TEXT.readingGlow : dk.glow, textShadowRadius: 4,
                        textShadowOffset: { width: 0, height: 0 } } : null;
   const txt = {
-    color: dk.reading, fontFamily: dk.modeFont, includeFontPadding: false,
-    // ★ Doto is ONE weight (the Black cut is the file) — asking it for bold falls back to the system font.
-    fontWeight: dot ? 'normal' as const : '700' as const, letterSpacing: dot ? 0.4 : 0.2,
+    color: dk.reading, fontFamily: screen.font, includeFontPadding: false,
+    // ★ Doto / Nixie One / DSEG14 are ONE weight — asking for bold makes the platform substitute the system font.
+    fontWeight: '700' as const, ...screenOneWeight(screen), letterSpacing: oneWeight ? 0.4 : 0.2,
     ...glow,
   };
   const dim = lit ? rgba(litRgb, 0.75) : 'rgba(255,255,255,0.70)';
@@ -113,13 +115,13 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
       </View>
       <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }} importantForAccessibility="no-hide-descendants">
         <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
-              style={[txt, { fontSize: font1, lineHeight: Math.round(font1 * 1.2) }]}>
-          {parts[0]}
+              style={[txt, { fontSize: font1 * k, lineHeight: Math.round(font1 * 1.2) }]}>
+          {screenString(screen.style, parts[0])}
         </Text>
         {twoLines && !!line2 && (
           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
-                style={[txt, { fontSize: font2, lineHeight: Math.round(font2 * 1.2), color: dim, fontWeight: dot ? 'normal' : '600' }]}>
-            {line2}
+                style={[txt, { fontSize: font2 * k, lineHeight: Math.round(font2 * 1.2), color: dim, fontWeight: oneWeight ? 'normal' : '600' }]}>
+            {screenString(screen.style, line2)}
           </Text>
         )}
       </View>

@@ -14,15 +14,17 @@
  *    back is a new entry (antennaNoticeTrack).
  * ★★ NOT A MODAL, and not dismissible: it is a standing fact about where you are tuned, like the
  *    SHARED TUNER banner, and it goes away by itself when it stops being true.
- * ★ THE CONTROLS' OWN CLOTHES. Font and colour come from the faceplate the user picked — Doto in the
- *   text colour inside a metal chassis (as the status display draws, ControlsBar StatusWell), the
- *   banner font (Nixie One under the Nixie display) on the default deck — with the frequency pill's
- *   dark window behind it. Transparency OFF draws it opaque with no shadow (useSurface).
+ * ★★★ THE DISPLAY'S FONT (Stuart, 2026-10-06, RC18 on Nixie: "the FM filter message should be in the Nixie font").
+ *   It was Doto on every metal chassis, whatever the Display. Now fp.screen — faceplate.ts ScreenText, the one
+ *   source every big element reads: Atkinson / Nixie One neon / Doto / DSEG14 cells (screenString), in the display's
+ *   colour and glow on a lit display; Hyperlegible keeps the notice's own amber. The frequency pill's dark window
+ *   behind it. Transparency OFF draws it opaque with no shadow (useSurface).
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, type LayoutChangeEvent } from 'react-native';
+import { StyleSheet, TouchableOpacity, type LayoutChangeEvent } from 'react-native';
 import { useFaceplate, useSurface } from '../contexts/FaceplateContext';
-import { FONT_DOTO, NO_DROP_SHADOW } from '../constants/faceplate';
+import { NO_DROP_SHADOW } from '../constants/faceplate';
+import DisplayFontText from './DisplayFontText';
 import { useUiScale } from '../hooks/useUiScale';
 import { antennaNoticeAt, antennaNoticeTrack, hasAntennaBands, type AntennaBands } from '../utils/antennaBands';
 
@@ -68,13 +70,6 @@ export default function AntennaBandNotice({ hz, bands, port, bottom, onHeight }:
   if (!notice) return null;
 
   const plate = fp.chassis.plate;
-  // ★ Doto is a dot-matrix face with a small glyph set: the dash and the curly apostrophe are spelt
-  //   in ASCII for it, as a real VFD would have to.
-  const dot = !!plate;
-  const raw = loud ? notice.text : notice.short;
-  const text = dot ? raw.replace(/—/g, '-').replace(/’/g, "'") : raw;
-  const color = dot ? fp.text.core : fp.deck.style === 'nixie' ? fp.deck.bannerFree : '#ffd479';
-  const glow = dot ? fp.text.glow : fp.deck.style === 'nixie' ? fp.deck.modeGlow : 'transparent';
 
   return (
     <TouchableOpacity
@@ -91,18 +86,14 @@ export default function AntennaBandNotice({ hz, bands, port, bottom, onHeight }:
         maxWidth: s.isLandscape ? '60%' : '92%',
         paddingHorizontal: s.r(12), paddingVertical: s.r(5),
       }, surf.dropShadow ? st.shadow : NO_DROP_SHADOW]}>
-      <Text numberOfLines={loud ? 2 : 1} adjustsFontSizeToFit={!loud} minimumFontScale={0.8}
-            style={{
-              color, textAlign: 'center',
-              fontFamily: dot ? FONT_DOTO : fp.deck.bannerFont,
-              // ★ Doto's 10 pt floor (§8.2): dot matrix falls apart below it.
-              fontSize: dot ? Math.max(10, s.f(12)) : Math.max(11, s.f(12.5)),
-              fontWeight: dot ? 'normal' : '600', letterSpacing: dot ? 0.4 : 0.3,
-              textShadowColor: glow, textShadowRadius: glow === 'transparent' ? 0 : 4,
-              textShadowOffset: { width: 0, height: 0 },
-            }}>
-        {text}
-      </Text>
+      {/* ★ DisplayFontText: the display's font, made drawable (DSEG14 cells with break points when it may wrap,
+          Doto's glyph set), its colour and glow on a lit display — the notice's own amber on Hyperlegible. */}
+      <DisplayFontText numberOfLines={loud ? 2 : 1} adjustsFontSizeToFit={!loud} minimumFontScale={0.8} wrap={loud}
+            accessibilityLabel={notice.text}
+            style={{ color: '#ffd479', textAlign: 'center', fontSize: Math.max(11, s.f(12.5)),
+                     fontWeight: '600', letterSpacing: fp.screen.oneWeight ? 0.4 : 0.3 }}>
+        {loud ? notice.text : notice.short}
+      </DisplayFontText>
     </TouchableOpacity>
   );
 }

@@ -36,10 +36,21 @@ export const ATKINSON_EM_MAX = 0.84;
 export const ATKINSON_BOLD_K = 1.08;
 /** Doto Black (the `dot` Display's mode font) is monospaced: every glyph 0.6 em, one weight. */
 export const DOTO_EM = 0.6;
+/** ★ Nixie One Regular's advances (em), read from assets/fonts' hmtx the same way (2026-10-06: the Nixie Display's
+ *  mode box is Nixie One now — the display's font for every big element). ONE weight, drawn as it is (never bold), so
+ *  no emboldening pad. Its capitals are wide (W 1.013, M 0.972): the box grows to them, out of the tube window. */
+export const NIXIE_EM: Readonly<Record<string, number>> = {
+  A: 0.724, B: 0.651, C: 0.695, D: 0.734, E: 0.614, F: 0.586, G: 0.764, H: 0.782, I: 0.322, J: 0.505,
+  K: 0.696, L: 0.578, M: 0.972, N: 0.785, O: 0.786, P: 0.633, Q: 0.787, R: 0.688, S: 0.645, T: 0.618,
+  U: 0.776, V: 0.724, W: 1.013, X: 0.661, Y: 0.627, Z: 0.615,
+  0: 0.654, 1: 0.346, 2: 0.595, 3: 0.601, 4: 0.578, 5: 0.572, 6: 0.597, 7: 0.466, 8: 0.644, 9: 0.597,
+  ':': 0.252, ' ': 0.280, '+': 0.501, '-': 0.572, '.': 0.242, '/': 0.518,
+};
+export const NIXIE_EM_MAX = 1.013;
 
 /** ★ 'seg' (2026-10-06): the VCR Display draws the mode box as FIXED 14-segment fields (components/SegField,
  *  constants/segField) — the same width whatever the label, the stereo rings inside it. */
-export type ModeFace = 'hyper' | 'doto' | 'seg' | 'dot';
+export type ModeFace = 'hyper' | 'nixie' | 'doto' | 'seg' | 'dot';
 /** ★ 'dot' (2026-10-06): the DOT Display's mode box as FIXED dot-matrix fields (components/DotField,
  *  constants/dotField) — like 'seg', the same width whatever the label, the stereo rings inside it. ('doto' is the
  *  Doto-font label it replaced, kept for the tests' comparison.) */
@@ -116,8 +127,12 @@ export function modeTextWidth(text: string, size: number, letterSpacing: number,
   if (face === 'seg') return segModeFieldWidth(size);
   if (face === 'dot') return dotModeFieldWidth(size);
   let em = 0;
-  for (const ch of text) em += face === 'doto' ? DOTO_EM : (ATKINSON_EM[ch.toUpperCase()] ?? ATKINSON_EM_MAX);
-  const k = face === 'doto' ? 1 : ATKINSON_BOLD_K;
+  for (const ch of text) {
+    em += face === 'doto' ? DOTO_EM
+        : face === 'nixie' ? (NIXIE_EM[ch.toUpperCase()] ?? NIXIE_EM_MAX)
+        : (ATKINSON_EM[ch.toUpperCase()] ?? ATKINSON_EM_MAX);
+  }
+  const k = face === 'hyper' ? ATKINSON_BOLD_K : 1;
   return em * size * k + letterSpacing * [...text].length;
 }
 

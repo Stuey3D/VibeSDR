@@ -912,6 +912,97 @@ export interface VtsText {
   glow:    string;
 }
 
+/**
+ * ★★★ THE DISPLAY'S TYPE FOR EVERY BIG ON-SCREEN ELEMENT (Stuart, 2026-10-06, iPhone RC18 on Nixie: "the bottom bar
+ * and the FM filter message should be in the Nixie font. Whatever font the main display is set to is for all the
+ * big on screen elements should follow, only decoder boxes etc need to have the hyperlegible as those have super
+ * small text").
+ *
+ * ONE SOURCE for: the status row (ControlsBar StatusWell → StatusDisplayContext), the SHARED TUNER banners
+ * (deck.bannerFont), the mode box and its DAB meter (deck.modeFont), the notice pills over the controls
+ * (AntennaBandNotice, SDRScreen's idle-terms and rotate hints). The VTS strip has its own (vts.font) and agrees.
+ *   hyper → Atkinson    nixie → Nixie One, neon (§2: the rule outranks every colour)
+ *   dot   → Doto        seg   → DSEG14 — only ever through screenString() / the status cells (its space is not a cell)
+ * ★ Left on Hyperlegible, on purpose: decoder boxes (DecoderShell / DecoderPanel), DabPanel's rows, menus and
+ *   sheets — dense small text (brief §10; theme.ts Fonts.decoder).
+ * ★ `face`: VCR / DOT draw a status run in their own CELLS (components/StatusField), not in the font.
+ */
+export interface ScreenText {
+  style:    DisplayStyle;
+  font:     string;
+  face:     'seg' | 'dot' | null;
+  /** The font has ONE weight (Nixie One, Doto, DSEG14): asking for bold makes the platform substitute the system
+   *  font (Android) or smear a synthetic bold (iOS). Callers drop their fontWeight when this is set. */
+  oneWeight: boolean;
+  /** A plain display (Hyperlegible): an element keeps its own colours. A lit display (Nixie / VFD) is one
+   *  colour, so its type is drawn in `color` with `glow` — meaning colours (recording red, warnings) excepted. */
+  allowOverride: boolean;
+  color:    string;
+  glow:     string;
+  rgb:      string;
+  /** The status row's type at scale 1 (StatusWell): Doto's §8.1 12 pt; Nixie One's small x-height reads a
+   *  point smaller, so it gets 13. */
+  statusSize: number;
+  /** Multiply a TEXT size by this for the display's font: DSEG14's cell is the whole em where Atkinson's capitals
+   *  are ~0.66 of it (modeBox SEG_MODE_FONT_K), so a segment string at the same size would stand half again taller. */
+  sizeK:    number;
+  /** A sentence's average character width, em of the RENDERED size — for an element that chooses what fits before it
+   *  draws (DabMeter). Doto 0.66 (a 0.6 em cell + letter-spacing); Atkinson 0.56; Nixie One 0.6 (wider capitals and
+   *  round letters); DSEG14 0.82 (its fixed 0.816 em cell). test_faceplate_screenfont holds each to its font file. */
+  charEm:   number;
+}
+
+/** The display's type (above), from the display alone and its resolved text colour. Pure. */
+export function screenTextFor(display: DisplayStyle, text: ResolvedTextColour): ScreenText {
+  const lit = { color: text.core, glow: text.glow, rgb: text.rgb };
+  if (display === 'nixie') {
+    return { style: 'nixie', font: FONT_NIXIE, face: null, oneWeight: true, allowOverride: false,
+             color: NEON_TEXT.core, glow: NEON_TEXT.glow, rgb: LED.neon.rgb, statusSize: 13, sizeK: 1, charEm: 0.6 };
+  }
+  if (display === 'dot') return { style: 'dot', font: FONT_DOTO, face: 'dot', oneWeight: true, allowOverride: false, ...lit, statusSize: 12, sizeK: 1,
+                                  charEm: 0.66 };
+  if (display === 'seg') return { style: 'seg', font: FONT_SEG14, face: 'seg', oneWeight: true, allowOverride: false, ...lit, statusSize: 12, sizeK: 0.66,
+                                  charEm: 0.82 };
+  return { style: 'hyper', font: FONT_HYPER, face: null, oneWeight: false, allowOverride: true, ...lit, statusSize: 12, sizeK: 1, charEm: 0.56 };
+}
+
+/** A big element's own colour, unless the display is lit (Nixie neon, a one-colour VFD) — then the display's. Pass
+ *  only a colour that may give way: a MEANING colour (recording red, a warning) is drawn as it is. */
+export function screenInk(screen: ScreenText, own: string): string {
+  return screen.allowOverride ? own : screen.color;
+}
+
+/** `{ fontWeight: 'normal' }` for a one-weight display font (see ScreenText.oneWeight), else nothing. */
+export function screenOneWeight(screen: Pick<ScreenText, 'oneWeight'>): { fontWeight: 'normal' } | null {
+  return screen.oneWeight ? { fontWeight: 'normal' } : null;
+}
+
+/** The controls' STATUS ROW type (ControlsBar's StatusDisplayContext). `face` = draw each run in the display's
+ *  own cells (VCR / DOT, components/StatusField); null = text in `font`. */
+export interface StatusDisplay { font: string; color: string; glow: string; rgb: string; size: number;
+  face: 'seg' | 'dot' | null }
+
+/**
+ * ★★★ THE STATUS ROW TAKES THE DISPLAY'S FONT (Stuart, 2026-10-06, RC18 on Nixie: "the bottom bar … should be in the
+ * Nixie font"). It was Doto on every metal Display — a dot-matrix sub-display under Nixie tubes or Hyperlegible
+ * digits — and today's footer on the default chassis whatever the Display. Now the ScreenText on every faceplate:
+ * Atkinson / Nixie One neon / DOT cells / VCR cells, in the display's colour and glow. Only the default deck on
+ * HYPER keeps today's footer exactly (its font already IS the display's): null there.
+ * @param metal        silver / black — the recessed status window.
+ * @param scaledSize   s.f(12): the window's §8.1 size at this scale.
+ * @param defaultSize  the default deck's footer size (ControlsBar CLOCK_FONT).
+ */
+export function statusDisplayFor(screen: ScreenText, metal: boolean, scaledSize: number,
+                                 defaultSize: number): StatusDisplay | null {
+  if (!metal && screen.style === 'hyper') return null;
+  // ★ Metal: §8.1's 12 pt (Nixie One 13 — its small x-height). The default deck: its own footer size, scaled the
+  //   same way, so the bar does not grow under a new font. The cells, and the metal window, keep §8.2's 10 pt floor
+  //   (dot matrix and segments fall apart below it; what does not fit is dropped, never squeezed).
+  const size = (metal ? scaledSize : defaultSize) * (screen.statusSize / 12);
+  return { font: screen.font, color: screen.color, glow: screen.glow, rgb: screen.rgb,
+           size: metal || screen.face ? Math.max(10, size) : size, face: screen.face };
+}
+
 export interface FaceplateTheme {
   settings:  FaceplateSettings;
   chassis:   ChassisTokens;
@@ -920,6 +1011,8 @@ export interface FaceplateTheme {
   deck:      DeckText;
   keyLegend: KeyLegend;
   vts:       VtsText;
+  /** ★★★ The display's type for every big on-screen element (ScreenText above) — 2026-10-06. */
+  screen:    ScreenText;
   /** ★★★ Transparency OFF: every see-through surface is drawn at alpha 1.0 with no BlurView. Read
    *  through `useSurfaceOpaque()` (FaceplateContext) — the deck, DecoderShell, MenuSheet and row 10's
    *  PopupShell all take it from here, so there is one switch and one reader of it. */
@@ -986,6 +1079,7 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
   const controls = resolveControlsColour(s.chassis, s.controls);
   const text     = resolveTextColour(s.display, s.text);
   const nixie    = s.display === 'nixie';
+  const screen   = screenTextFor(s.display, text);
 
   const deckDefault = s.chassis === 'default';
   const GREY_UNIT = 'rgba(255,255,255,0.55)';      // Deck.mockup's unit label, every display
@@ -994,12 +1088,13 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
   if (nixie) {
     // ★★★ Real tubes for the frequency (§7) — the tubes ARE Nixie One glyphs, so freqFont says so and
     //   the colour is the neon core. The unit label beside them is the mockup's grey sans (not Nixie
-    //   One, so the rule does not reach it); the mode box is Barlow in the brief — not bundled, so
-    //   Atkinson, in the brief's neon.
+    //   One, so the rule does not reach it). ★ 2026-10-06: the mode box is the DISPLAY's font now (Stuart: "whatever
+    //   font the main display is set to is for all the big on screen elements") — Nixie One, in the brief's neon
+    //   (it was Atkinson standing in for the brief's unbundled Barlow). constants/modeBox.ts NIXIE_EM sizes it.
     deck = {
       style: 'nixie', freqFont: FONT_NIXIE, freq: NEON_TEXT.core, freqGlow: NEON_TEXT.glow, freqSpacing: 1.5,
       unit: GREY_UNIT, unitFont: FONT_HYPER,
-      modeFont: FONT_HYPER, mode: NEON_TEXT.mode, reading: NEON_TEXT.reading, sqlClosed: NEON_TEXT.reading, sqlGlow: NEON_TEXT.readingGlow,
+      modeFont: FONT_NIXIE, mode: NEON_TEXT.mode, reading: NEON_TEXT.reading, sqlClosed: NEON_TEXT.reading, sqlGlow: NEON_TEXT.readingGlow,
       modeGlow: NEON_TEXT.readingGlow,
       bannerFont: FONT_NIXIE, bannerFree: NEON_TEXT.core, bannerAsk: NEON_TEXT.reading, ...lit,
     };
@@ -1026,15 +1121,16 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
     };
   } else {
     // dot / seg: the text colour lights the readouts (§2 TRAP: never Nixie One here). Dot: Doto for
-    // the frequency and the mode box. Seg: the digits are DRAWN; the mode box is "sans" (Barlow in
-    // the mockup, not bundled → Atkinson).
+    // the frequency and the mode box. Seg: the digits are DRAWN, and so is the mode box (SegModeReadout's cells);
+    // `modeFont` stays Atkinson only for what never reaches the glass. ★ 2026-10-06: the SHARED TUNER banner takes
+    // the display's font (screen.font — Doto, or DSEG14 through screenString()), as every big element does.
     const dot = s.display === 'dot';
     deck = {
       style: s.display, freqFont: dot ? FONT_DOTO : FONT_HYPER, freq: text.core, freqGlow: text.glow, freqSpacing: 1,
       unit: GREY_UNIT, unitFont: FONT_HYPER,
       modeFont: dot ? FONT_DOTO : FONT_HYPER, mode: text.core, reading: text.core, sqlClosed: TODAY_TEXT.sqlRed, sqlGlow: SQL_RED_GLOW,
       modeGlow: text.glow,
-      bannerFont: FONT_HYPER, bannerFree: text.core, bannerAsk: rgba(text.rgb, 0.75), ...lit,
+      bannerFont: screen.font, bannerFree: text.core, bannerAsk: rgba(text.rgb, 0.75), ...lit,
     };
   }
 
@@ -1075,7 +1171,7 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
   }
 
   const opaque = s.transparency === 'off';
-  return { settings: s, chassis, controls, text, deck, keyLegend, vts, opaque, surface: surfaceTokens(opaque) };
+  return { settings: s, chassis, controls, text, deck, keyLegend, vts, screen, opaque, surface: surfaceTokens(opaque) };
 }
 
 // ── Crash safety ──────────────────────────────────────────────────────────────

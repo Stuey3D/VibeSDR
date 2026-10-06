@@ -21,7 +21,7 @@ import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
 /** Every label the code can compose (constants/modeBox.ts), and the two mode-box typefaces: Atkinson
  *  under Hyperlegible / Nixie / 7-segment, Doto under the VFD. */
 const CANDIDATES = modeLabelCandidates(WHOLE_PROFILE_MODES);
-const FACES: ModeFace[] = ['hyper', 'doto', 'seg', 'dot'];  // ★ dot: the DOT fixed dot-matrix fields (2026-10-06)
+const FACES: ModeFace[] = ['hyper', 'nixie', 'doto', 'seg', 'dot'];  // ★ dot: the DOT fixed dot-matrix fields; nixie: Nixie One (2026-10-06)
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {

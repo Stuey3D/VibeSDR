@@ -314,6 +314,28 @@ export function displayOrFallback(text: string, display: 'dot' | 'seg', freqLabe
   return callsign ? `${freqLabel} ${callsign}` : freqLabel;
 }
 
+// ── A big on-screen element in the display's font (2026-10-06) ───────────────
+
+/**
+ * ★★★ A string as the DISPLAY'S FONT can draw it (faceplate.ts ScreenText: the status row, the SHARED TUNER banner,
+ * the notice pills, the DAB meter all take the display's type — Stuart, 2026-10-06).
+ *   seg   → DSEG14 cells (toSegCells: upper case, one cell per character, a space a blank cell). With `wrap`, a
+ *           zero-width break after each blank cell — DSEG's blank `!` is not whitespace, so a two-line notice
+ *           would otherwise have nowhere to wrap but mid-word.
+ *   dot   → foldForDot (Doto keeps its accents, its dashes and curly quotes; case kept — the status row's DOT has
+ *           real lower case).
+ *   nixie / hyper → unchanged (a missing glyph is the OS's fallback, as anywhere).
+ * ★ Display only — never written back.
+ */
+export function screenString(style: 'hyper' | 'nixie' | 'dot' | 'seg', text: string, opts: { wrap?: boolean } = {}): string {
+  if (style === 'seg') {
+    const cells = toSegCells(text);
+    return opts.wrap ? cells.replace(/!(?!\.)/g, '!​') : cells;
+  }
+  if (style === 'dot') return foldForDot(text);
+  return text;
+}
+
 // ── The status display (§8.1) ────────────────────────────────────────────────
 
 export interface GainParts { label: string; dir: 'up' | 'down' | null; value: string; tail: string }
