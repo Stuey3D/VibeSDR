@@ -24,7 +24,7 @@ import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSh
 import { DecoderShell, decoderBodyInset, useDecoderTokens, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, engraveStyle,
          useDecoderStyles, type DecoderTokens } from './DecoderShell';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
-import type { DabState } from '../services/dabTypes';
+import { dabLicensedTail, type DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, DAB_PTY, dabBlockAt } from '../services/dabBlocks';
 import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
@@ -660,13 +660,15 @@ export default function DabPanel(p: DabPanelProps) {
             : <Row label="Transmitters" value={!d.locked ? DASH
                 : (d.tiiDiag && d.tiiDiag.frames > 0 && d.tiiDiag.f4s < 2
                     ? 'none transmitted — no TII in the null symbol' : 'none identified yet')} />}
-          {/* ★ Ofcom's licence record, ONLY when the air gives nothing to go on. With a real site
-              identified it is clutter (Stuart: "that just adds too much in a small space"). */}
+          {/* ★ The regulator's licence record, ONLY when the air gives nothing to go on. With a real
+              site identified it is clutter (Stuart: "that just adds too much in a small space").
+              ★ Whose record it is comes from the server (2026-10-06): Ofcom, BAKOM, ČTÚ, RDI or the
+                owner's own list — dabLicensedTail, shared with the web client. */}
           {!txLines.some(e => !!e.t.site) && d.licensed?.map((l, i) => (
             <Row key={l.code + i} label={i === 0 ? 'Licensed sites' : ''}
                  value={`${l.site}${l.area && l.area !== l.site ? ` (${l.area})` : ''}`
                       + (l.km >= 0 ? ` · ${(l.km * 0.621371).toFixed(l.km < 16 ? 1 : 0)} mi` : '')
-                      + ` · ${l.code} · Ofcom record`} />
+                      + dabLicensedTail(l)} />
           ))}
           {/* ★ Always present, whatever it says: a row that comes and goes with its value rebuilds
               the pane and makes everything below it jump. */}
