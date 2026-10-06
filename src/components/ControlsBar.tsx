@@ -64,6 +64,8 @@ import { dotModeCellCol, dotPitch, dotReadingCells, dotUnitCells, dotUnitPitch, 
   DOT_UNIT_COLS } from '../constants/dotField';
 import { legendPath, LEGEND_CELL_H } from './AnnunciatorLegend';
 import { placePath } from './vfdMesh';
+import { StatusGhostContext, StatusRun } from './StatusField';
+import { statusParts, statusTags, type StatusPart } from '../constants/statusField';
 import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
@@ -79,16 +81,46 @@ import Svg, { Path as SvgPath } from 'react-native-svg';
  *   because the pieces (ClockRow, LinkIndicator, DspBadges, the bars' own inline texts) are spread
  *   through both bars.
  */
-interface StatusDisplay { font: string; color: string; glow: string; rgb: string; size: number }
+interface StatusDisplay { font: string; color: string; glow: string; rgb: string; size: number;
+  /** ★★ The Display's own cells (2026-10-06): 'seg' on VCR, 'dot' on DOT — every status run is drawn in them
+   *  (StatusField), the logos as electrodes / dots. null = the Doto text run (the Hyper and Nixie Displays). */
+  face: 'seg' | 'dot' | null }
 const StatusDisplayContext = React.createContext<StatusDisplay | null>(null);
 
-/** A status text: today's style on the default deck; Doto in the text colour inside the display.
+/** A text child as one string, or null when it is not plain text. */
+function childText(children: React.ReactNode): string | null {
+  if (typeof children === 'string' || typeof children === 'number') return String(children);
+  if (Array.isArray(children) && children.every(c => typeof c === 'string' || typeof c === 'number')) return children.join('');
+  return null;
+}
+
+/** A status run in the Display's cells (VCR / DOT): `parts` in the display colour, or `color` for a meaning colour. */
+type VfdStatus = StatusDisplay & { face: 'seg' | 'dot' };
+function StatusCells({ sd, parts, label, color, glow, frames, opacity }: {
+  sd: VfdStatus; parts: readonly StatusPart[]; label?: string;
+  color?: string; glow?: string | null; frames?: ReadonlyArray<readonly [number, number]>; opacity?: number;
+}) {
+  return <StatusRun parts={parts} face={sd.face} size={sd.size} color={color ?? sd.color}
+    glow={glow === undefined ? sd.glow : glow} ghostColor={rgba(sd.rgb, 0.10)} label={label} frames={frames}
+    opacity={opacity} />;
+}
+
+/** A status text: today's style on the default deck; Doto in the text colour inside the display; on VCR / DOT the
+ *  Display's own cells (StatusField — symbols ⛛ ⚡ ⚿ 👤 ↑ ↓ drawn as logos).
  *  `keepColor` for meaning colours (the recording red) that no faceplate colour may replace. */
 function StatusText({ style, keepColor = false, children, ...rest }:
     React.ComponentProps<typeof Text> & { keepColor?: boolean }) {
   const sd = React.useContext(StatusDisplayContext);
   if (!sd) return <Text style={style} {...rest}>{children}</Text>;
   const flat = StyleSheet.flatten(style) ?? {};
+  const text = sd.face ? childText(children) : null;
+  if (sd.face && text !== null) {
+    return <StatusCells sd={sd as VfdStatus} parts={statusParts(text)}
+      label={rest.accessibilityLabel ?? text}
+      color={keepColor ? (flat.color as string | undefined) : undefined}
+      glow={keepColor ? ((flat.textShadowColor as string | undefined) ?? null) : undefined}
+      opacity={typeof flat.opacity === 'number' ? flat.opacity : undefined} />;
+  }
   return (
     <Text {...rest} style={[flat, {
       fontFamily: sd.font, fontSize: sd.size, fontWeight: 'normal', letterSpacing: 0.4,
@@ -369,6 +401,20 @@ function ClockRow({ clock, color, font, size, hide, onUnit }:
     { clock: { utc: string; srv: string; fromServer: boolean }; color: string; font?: string; size: number;
       hide?: Partial<Record<StatusItem, boolean>>; onUnit?: OnUnit }) {
   const sd = React.useContext(StatusDisplayContext);
+  if (sd?.face) {
+    // ★ VCR / DOT (2026-10-06): the clocks in the Display's cells, the colon its electrode in the gap; the server
+    //   mark is an electrode in the receiver clock's own run (two cells before "18:03 BST"), so the two are one item.
+    const vfd = sd as VfdStatus;
+    return (
+      <View style={pm.clockRow}>
+        {!hide?.utc && <Unit id="utc" onUnit={onUnit}><StatusCells sd={vfd} parts={statusParts(clock.utc)} label={clock.utc} /></Unit>}
+        {!hide?.localTime && <Unit id="localTime" onUnit={onUnit}>
+          <StatusCells sd={vfd} label={clock.srv}
+            parts={clock.fromServer ? [{ kind: 'node' }, ...statusParts(clock.srv)] : statusParts(clock.srv)} />
+        </Unit>}
+      </View>
+    );
+  }
   if (sd) {
     // §8.1: `08:37 UTC 09:37 BST` — Doto, text colour, one run; the node mark stays (it means
     // "the receiver's clock"), drawn in the display's colour.
@@ -629,6 +675,14 @@ function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, 
 function LinkBars({ q }: { q: 0 | 1 | 2 | 3 }) {
   const ct = useFaceplate().chassis;
   const sd = React.useContext(StatusDisplayContext);
+  // ★ VCR / DOT (2026-10-06): the bars are three electrodes / dot columns in one cell, every one a ghost, the count lit;
+  //   disconnected, that cell is the ✕ — still in the link's red, the meaning colour.
+  if (sd?.face) {
+    const vfd = sd as VfdStatus;
+    return q === 0
+      ? <StatusCells sd={vfd} parts={[{ kind: 'cross' }]} color={ct.linkBad} glow={null} label="Disconnected" />
+      : <StatusCells sd={vfd} parts={[{ kind: 'bars', q }]} label={`Link quality ${q} of 3`} />;
+  }
   // Disconnected (q=0) → a clear red ✕ rather than ambiguous dim bars.
   if (q === 0) {
     return (
@@ -689,6 +743,15 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
   if (nb) on.push('NB');
   if (an) on.push('AN');
   if (!on.length) return null;                 // ★ the ordinary case costs nothing
+  if (sd?.face) {
+    // ★ VCR / DOT (2026-10-06): the tags in the Display's cells — framed electrodes on VCR (a boxed annunciator),
+    //   bracketed on DOT (a character display's way) — one run for all of them.
+    const t = statusTags(on, sd.face);
+    const cells = <StatusCells sd={sd as VfdStatus} parts={[t.text]} frames={t.frames} label={on.join(' ')} />;
+    return onPress
+      ? <TouchableOpacity onPress={onPress} activeOpacity={0.7} hitSlop={8}>{cells}</TouchableOpacity>
+      : cells;
+  }
   const body = (
     <View style={pm.dspRow}>
       {on.map((k) => (
@@ -789,12 +852,18 @@ export function LinkIndicator({ bus, hide, noNode = false, readout, onUnit, oneL
             the first icons row 9 drops anyway), the arrow is DRAWN. */}
         <Unit id="meter" onUnit={onUnit}><LinkBars q={q} /></Unit>
         {!hide?.linkIcons && !noNode && <Unit id="linkIconsB" onUnit={onUnit}>
-          <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} />
+          {sd.face
+            ? <StatusCells sd={sd as VfdStatus} parts={[{ kind: 'node' }]} label="Server" />
+            : <SectionIcon name="instance" size={Math.round(sd.size * 1.1)} color={sd.color} />}
         </Unit>}
         {showRate && !hide?.rate ? <Unit id="rate" onUnit={onUnit}><StatusText>{`${r.kbps}k/s ${r.fps}fps`}</StatusText></Unit> : null}
         {r.agcText && !hide?.gain ? <Unit id="gain" onUnit={onUnit}>{(() => {
           const g = statusGainParts(r.agcText);
           if (!g) return <StatusText>{`· ${r.agcText}`}</StatusText>;
+          // ★ VCR / DOT: one run, the arrow its own cell — always there (dark when steady), so the value never
+          //   shifts by a cell when the loop starts or stops stepping.
+          if (sd.face) return <StatusCells sd={sd as VfdStatus} label={r.agcText}
+            parts={[...statusParts('· ' + g.label), { kind: 'arrow', dir: g.dir }, ...statusParts(g.value + g.tail)]} />;
           return (
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <StatusText>{`· ${g.label}`}</StatusText>
@@ -1143,7 +1212,7 @@ function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
   return (<>
     <View style={{ height: Math.round(modeFontSize * 1.15), justifyContent: 'center' }}>
       <SegField fs={fs} width={width} ghost={ghost} lit={lit}
-        colonAfter={lay.marquee ? null : SEG_DEMOD_CELLS - 1} colonLit={lay.colon}
+        colonAfter={lay.split ? SEG_DEMOD_CELLS - 1 : null} colonLit={lay.colon}
         extras={modeExtras} extrasKey={rings?.key ?? ''}
         color={dk.mode} glow={dk.modeGlow} ghostColor={ghostCol}
         accessibilityLabel={`${modeLabel}${lay.stereoSlot ? (fmStereo ? ', stereo' : ', mono') : ''}`} />
@@ -1159,6 +1228,8 @@ function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
 
 /** The DOT mode field's cells' first dot columns (the colon column sits after the demod's three). */
 const DOT_MODE_CELL_COLS: readonly number[] = Array.from({ length: DOT_MODE_CELLS }, (_, i) => dotModeCellCol(i));
+/** The DOT mode field's cells for a PLAIN mode (no decoder): one dead column apart, no colon column. */
+const DOT_PLAIN_CELL_COLS: readonly number[] = Array.from({ length: DOT_MODE_CELLS }, (_, i) => i * DOT_ADV);
 /** The DOT readout's cells' first dot columns. */
 const DOT_READ_CELL_COLS: readonly number[] = Array.from({ length: DOT_READ_CELLS }, (_, i) => i * DOT_ADV);
 
@@ -1183,8 +1254,11 @@ function DotModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
                       [modeLabel, fmStereo]);
   const offset = useSegMarquee(lay.cells.length, lay.textCells, `${modeLabel}|${lay.textCells}`);
   const lit = lay.marquee ? cellWindow(lay.cells, lay.textCells, offset, '') : lay.cells;
-  const cellCols = useMemo(() => DOT_MODE_CELL_COLS.slice(0, lay.textCells), [lay.textCells]);
-  const marks: DotMark[] = [{ col: DOT_COLON_COL, rows: DOT_COLON, lit: lay.colon }];
+  // ★ The colon column exists only while the field is SPLIT (a decoder running): a plain mode is one tight word on
+  //   the plain cell pitch — "MESHTASTIC" no longer has a dead colon column between its S and H (2026-10-06).
+  const cellCols = useMemo(() => (lay.split ? DOT_MODE_CELL_COLS : DOT_PLAIN_CELL_COLS).slice(0, lay.textCells),
+                           [lay.split, lay.textCells]);
+  const marks: DotMark[] = lay.split ? [{ col: DOT_COLON_COL, rows: DOT_COLON, lit: lay.colon }] : [];
   if (lay.stereoSlot) marks.push({ col: DOT_RINGS_COL, rows: DOT_RINGS, lit: fmStereo });
 
   // ── The readout ──
@@ -1786,16 +1860,20 @@ function StatusWell({ plate, gap, style, children }: {
 }) {
   const fp = useFaceplate();
   const s = useUiScale();
+  const deckStyle = fp.deck.style;
   const sd = useMemo<StatusDisplay | null>(() => plate ? {
     // ★ Doto 900 12 pt, with §8.2's 10 pt floor (dot matrix falls apart below it; what does not fit
     //   is dropped by row 9, never squeezed). Text colour — neon under Nixie (the rule outranks it).
     font: FONT_DOTO, color: fp.text.core, glow: fp.text.glow, rgb: fp.text.rgb, size: Math.max(10, s.f(12)),
-  } : null, [plate, fp.text, s]);
+    face: deckStyle === 'seg' || deckStyle === 'dot' ? deckStyle : null,
+  } : null, [plate, fp.text, s, deckStyle]);
   if (!plate || !sd) return <>{children}</>;
   return (
     <StatusDisplayContext.Provider value={sd}>
       <RecessedWindow lip={plate.windowLip} style={{ gap, ...style }}>
-        <GhostGrid rgb={sd.rgb} pitch={3} dot={0.7} />
+        {/* ★ VCR / DOT: no ghost grid behind the runs — their cells carry their own ghosts, on their own pitch (a 3 pt
+            grid under 14-segment cells, or under dots at another pitch, would be two displays in one window). */}
+        {!sd.face && <GhostGrid rgb={sd.rgb} pitch={3} dot={0.7} />}
         {children}
         {/* ★ The status display on silver / black is always dot-matrix — so it is glass, with wires
             (lighting brief §1). 4 = the window's 5 pt corner less its 1 pt border. */}
@@ -2181,8 +2259,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
               only invisible while the stats were short enough to leave a gap. */}
         {isRecording && (
           <View style={[por.recRow, { flexShrink: 0 }]}>
-            <View style={[por.recDot, { backgroundColor: ct.recRed }]} />
-            <StatusText keepColor style={[por.recTime, { color: ct.recRed, fontFamily: t.font, fontSize: CLOCK_FONT }]}>{recTime}</StatusText>
+            <RecTimer text={recTime} font={t.font} size={CLOCK_FONT} dotStyle={por.recDot} textStyle={por.recTime} />
           </View>
         )}
         {/* ★★★ THE AUDIO CHAIN, ON THE END OF THE TIMES ROW — and the STATS get a line of their
@@ -2660,13 +2737,29 @@ const SECTION_GAP = 8;   // lnd.statusRow gap
 
 /** The recording timer's reserved slot (§8.1): laid out whether or not recording, so nothing moves. */
 function RecSlot({ recording, text, font, size }: { recording: boolean; text: string; font?: string; size: number }) {
-  const ct = useFaceplate().chassis;
   return (
     <View style={[lnd.recRow, !recording && { opacity: 0 }]} pointerEvents="none">
-      <View style={[lnd.recDot, { backgroundColor: ct.recRed }]} />
-      <StatusText keepColor style={[lnd.recTime, { color: ct.recRed, fontFamily: font, fontSize: size }]}>{text}</StatusText>
+      <RecTimer text={text} font={font} size={size} dotStyle={lnd.recDot} textStyle={lnd.recTime} />
     </View>
   );
+}
+
+/** The recording dot and timer, in the recording red (a meaning colour, never the faceplate's). ★ VCR / DOT
+ *  (2026-10-06): one run in the Display's cells — the dot a round electrode / a 5 × 7 disc in the first cell, the
+ *  timer's colons electrodes in the gaps. */
+function RecTimer({ text, font, size, dotStyle, textStyle }: {
+  text?: string; font?: string; size: number; dotStyle: ViewStyle; textStyle: object;
+}) {
+  const ct = useFaceplate().chassis;
+  const sd = React.useContext(StatusDisplayContext);
+  if (sd?.face) {
+    return <StatusCells sd={sd as VfdStatus} parts={[{ kind: 'rec' }, ...statusParts(text ?? '')]}
+                        color={ct.recRed} glow={null} label={`Recording ${text ?? ''}`} />;
+  }
+  return (<>
+    <View style={[dotStyle, { backgroundColor: ct.recRed }]} />
+    <StatusText keepColor style={[textStyle, { color: ct.recRed, fontFamily: font, fontSize: size }]}>{text}</StatusText>
+  </>);
 }
 
 /**
@@ -2720,7 +2813,9 @@ function PortraitStats({ bus }: { bus?: MeterBus }) {
       <LinkIndicator readout={link} hide={hideFor(k)} oneLine />
       <View style={lnd.statusGhost} pointerEvents="none"
             accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        <LinkIndicator readout={link} onUnit={onUnit} />
+        <StatusGhostContext.Provider value={true}>
+          <LinkIndicator readout={link} onUnit={onUnit} />
+        </StatusGhostContext.Provider>
       </View>
     </View>
   );
@@ -2740,6 +2835,8 @@ const StatusMeasure = React.memo(function StatusMeasure({ onUnit, utc, srv, srvS
   return (
     <View style={lnd.statusGhost} pointerEvents="none"
           accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      {/* ★ VCR / DOT: the runs measure as empty boxes of their computed width — no canvases in the twin. */}
+      <StatusGhostContext.Provider value={true}>
       <ClockRow clock={clock} color={clockColor} font={font} size={clockFont} onUnit={onUnit} />
       <ClockRow clock={clockShort} color={clockColor} font={font} size={clockFont} onUnit={onShort} />
       <Unit id="rec" onUnit={onUnit}><RecSlot recording text={recText} font={font} size={clockFont} /></Unit>
@@ -2747,6 +2844,7 @@ const StatusMeasure = React.memo(function StatusMeasure({ onUnit, utc, srv, srvS
       {sharedFull !== null && <Unit id="sharedShort" onUnit={onUnit}><SharedText text={SHARED_SHORT} colour={clockColor} size={clockFont} /></Unit>}
       {(dspNr || dspNb || dspAn) && <Unit id="dsp" onUnit={onUnit}><DspBadges nr={dspNr} nb={dspNb} an={dspAn} font={font} /></Unit>}
       <LinkIndicator readout={link} noNode={noNode} onUnit={onUnit} />
+      </StatusGhostContext.Provider>
     </View>
   );
 });

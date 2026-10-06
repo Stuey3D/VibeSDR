@@ -18,7 +18,8 @@
  *
  * The fields (all FIXED width — nothing moves when the value or the mode changes):
  *
- *   THE MODE FIELD   DOT_MODE_CELLS (10) cells: the demod right-aligned in the first three, then a COLON COLUMN of
+ *   THE MODE FIELD   DOT_MODE_CELLS (10) cells. ★ 2026-10-06: a PLAIN mode is one tight word on the plain cell pitch
+ *                    ("AM", "MESHTASTIC" — no colon column); with a decoder: the demod right-aligned in three, a COLON COLUMN of
  *                    its own (two dots wide — Doto Black's colon is a heavy cluster, so 2 × 2 blocks, not single
  *                    dots), then seven cells: "USB:RTTY", "USB:WHISPER", "MESHTASTIC". In WFM the last three
  *                    cells' room is the STEREO RINGS — drawn in dots on the same pitch (DOT_RINGS); in every other
@@ -142,13 +143,30 @@ export const DOTO_GLYPHS: Readonly<Record<string, string>> = {
 
 /**
  * The glyphs Doto draws OUTSIDE 5 × 7 (Black's heavy ':' and '.' clusters hang below the baseline; Q's tail and the
- * descenders g j p q y do too), drawn the way a 5 × 7 character ROM draws them. The descenders fall back to their
- * capitals (dotChar) — no label the mode box shows has one.
+ * descenders g j p q y do too), drawn the way a 5 × 7 character ROM draws them.
+ * ★ 2026-10-06, the STATUS ROW in dots ("23k/s 10fps", "Direct Sample", listener counts): the descenders are the 5 × 7
+ *   ROM's RAISED forms — the bowl on the x-height's top three rows, the tail in the last two — instead of falling
+ *   back to capitals ("10fPs" read as a typo). And the status row's symbols, as a ROM's extra characters: the middle
+ *   dot separator, the gain arrows, the lightning bolt (⚡ STORMS), the admin key (⚿), the recording dot and the
+ *   listener figure (👤). The connection bars, the ✕ and the server mark are not cells — they are marks
+ *   (constants/statusField DOT_BARS / DOT_CROSS / DOT_NODE).
  */
 export const DOT_EXTRA_GLYPHS: Readonly<Record<string, string>> = {
   ':': '..... .##.. .##.. ..... .##.. .##.. .....',
   '.': '..... ..... ..... ..... ..... .##.. .##..',
   'Q': '.###. #...# #...# #...# #.#.# #..#. .##.#',
+  'g': '..... ..... .#### #...# .#### ....# .###.',
+  'j': '...#. ..... ..##. ...#. ...#. #..#. .##..',
+  'p': '..... ..... ####. #...# ####. #.... #....',
+  'q': '..... ..... .#### #...# .#### ....# ....#',
+  'y': '..... ..... #...# #...# .#### ....# .###.',
+  '·': '..... ..... ..... ..#.. ..... ..... .....',
+  '↑': '..#.. .###. #.#.# ..#.. ..#.. ..#.. ..#..',
+  '↓': '..#.. ..#.. ..#.. ..#.. #.#.# .###. ..#..',
+  '⚡': '...## ..##. .##.. ##### ..##. .##.. ##...',
+  '⚿': '.###. #...# .###. ..#.. ..##. ..#.. ..##.',
+  '●': '..... .###. ##### ##### ##### .###. .....',
+  '👤': '.###. .###. .###. ..... .###. ##### #####',
 };
 
 /** A cell's glyph rows for `ch` (top first), or null for a dark cell. */

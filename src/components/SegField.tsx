@@ -2,7 +2,8 @@
  * SegField — a FIXED run of 14-segment cells, drawn the VCR Display's way (2026-10-06): DSEG14, the VTS
  * strip's own face, every electrode always there as a ghost (text colour α .10), the lit glyphs glowing on
  * top, and the 60° grid mesh over the lot — the RDS mark's treatment (vfdMesh.ts), so the mode box reads
- * as part of the same glass. Used by ControlsBar's VCR mode box: the mode field and the S-readout.
+ * as part of the same glass. Used by ControlsBar's VCR mode box: the mode field and the S-readout — and, from
+ * 2026-10-06, every run of the status row (StatusField: gap colons for the clocks, the raised point for `·`).
  *
  * ★ The cells are DRAWN, not React Native Text: the mesh is a path intersected with the electrodes, and a
  *   Text has no path. Skia's own DSEG14 outlines (Path.MakeFromText) give the electrodes; the TTF is loaded
@@ -33,6 +34,12 @@ const GLOW_M = 4;
 /** DSEG14's ':' is 0.2 em wide with its dots centred in it; '.' is zero-width, drawn just LEFT of the pen. */
 const COLON_ADV = 0.2;
 const DP_LEFT = 0.12;
+/** ★ The RAISED POINT (2026-10-06, the status row's `·` separator: a 14-segment cell has no middle dot). The cell's
+ *  own point electrode lifted to the centre line and centred on the slanted centre bar — DSEG14's '.' ink is
+ *  −0.106 … 0.018 em of its pen and 0 … 0.124 em up; the centre bar ('-') runs 0.175 … 0.640 em at 0.438 … 0.562 em.
+ *  A cell token '·' places it; a '·' cell has no segments, only this. */
+const MID_DOT_PEN = (0.175 + 0.640) / 2 + 0.044;
+const MID_DOT_RAISE = 0.5 - 0.062;
 
 /** Where a glyph's PEN goes within its atlas slot (the point hangs left of its pen). */
 const penIn = (ch: string, fs: number) => GLOW_M + (ch === '.' ? DP_LEFT * fs : 0);
@@ -44,15 +51,17 @@ export const segCellX = (i: number, fs: number) => i * SEG14_PITCH * fs;
  *  (a glyph's ink runs 0.062 … 0.754 em of its cell). */
 export const segColonX = (i: number, fs: number) => segCellX(i, fs) + ((0.754 + SEG14_PITCH + 0.062) / 2 - COLON_ADV / 2) * fs;
 
-/** A lit or ghost glyph at a place: the char and its pen. */
-type Placed = { ch: string; x: number };
+/** A lit or ghost glyph at a place: the char, its pen, and how far it is raised (pt; the '·' point only). */
+type Placed = { ch: string; x: number; up?: number };
 
-/** A cell's glyphs as pens: each overlay char at the cell's pen, a '.' after the glyph, a ':' centred. */
+/** A cell's glyphs as pens: each overlay char at the cell's pen, a '.' after the glyph, a ':' centred, a '·' the
+ *  point raised to the centre line. */
 function placeCell(cell: string, i: number, fs: number): Placed[] {
   const x0 = segCellX(i, fs);
   const out: Placed[] = [];
   for (const ch of cell) {
-    if (ch === '.') out.push({ ch, x: x0 + SEG14_ADV * fs });
+    if (ch === '·') out.push({ ch: '.', x: x0 + MID_DOT_PEN * fs, up: MID_DOT_RAISE * fs });
+    else if (ch === '.') out.push({ ch, x: x0 + SEG14_ADV * fs });
     else if (ch === ':') out.push({ ch, x: x0 + ((SEG14_ADV - COLON_ADV) / 2) * fs });
     else out.push({ ch, x: x0 });
   }
@@ -62,7 +71,7 @@ function placeCell(cell: string, i: number, fs: number): Placed[] {
 function glyphsPath(font: SkFont, placed: Placed[], baseline: number): SkPath {
   const p = Skia.Path.Make();
   for (const g of placed) {
-    const gp = Skia.Path.MakeFromText(g.ch, g.x, baseline, font);
+    const gp = Skia.Path.MakeFromText(g.ch, g.x, baseline - (g.up ?? 0), font);
     if (gp) p.addPath(gp);
   }
   return p;
@@ -83,6 +92,9 @@ export interface SegFieldProps {
   /** The colon electrode in the gap after this cell (always ghosted), or null for none. */
   colonAfter?: number | null;
   colonLit?: boolean;
+  /** ★ LIT colon electrodes in the gaps after these cells (2026-10-06, the status row's clocks: `17:03`, `0:00:10`),
+   *  ghosted with them — besides `colonAfter`. */
+  gapColons?: readonly number[];
   extras?: readonly SegExtra[];
   /** Names everything `extras` draws (their shapes and places) — the static layer's memo key. */
   extrasKey?: string;
@@ -94,8 +106,10 @@ export interface SegFieldProps {
 
 const M = GLOW_M;
 
+const NO_COLONS: readonly number[] = [];
+
 export const SegField = React.memo(function SegField({ fs, width, ghost, lit, colonAfter = null, colonLit = false,
-  extras = [], extrasKey = '', color, glow, ghostColor, accessibilityLabel }: SegFieldProps) {
+  gapColons = NO_COLONS, extras = [], extrasKey = '', color, glow, ghostColor, accessibilityLabel }: SegFieldProps) {
   const typeface = useTypeface(DSEG14_TTF);
   const font = useMemo(() => (typeface ? Skia.Font(typeface, fs) : null), [typeface, fs]);
   const H = fs;
@@ -132,28 +146,33 @@ export const SegField = React.memo(function SegField({ fs, width, ghost, lit, co
     })));
 
   // ── The static layer: every electrode as a ghost, and the mesh over all of them. ──
-  const ghostKey = `${ghost.join('|')}|${colonAfter}|${extrasKey}`;
+  const ghostKey = `${ghost.join('|')}|${colonAfter}|${gapColons.join(',')}|${extrasKey}`;
   const statics = useMemo(() => {
     if (!font) return null;
     const placed: Placed[] = [];
     ghost.forEach((g, i) => placed.push(...placeCell(g, i, fs)));
     if (colonAfter != null) placed.push({ ch: ':', x: segColonX(colonAfter, fs) });
+    for (const c of gapColons) placed.push({ ch: ':', x: segColonX(c, fs) });
     const g = glyphsPath(font, placed, baseline);
     for (const e of extras) g.addPath(e.path);
     // The lit glyphs are inside their electrodes, so the mesh over the GHOST covers them too.
-    const mesh = vfdMesh(g, MESH_FINE_PITCH, MESH_FINE_BAR, { count: 200, extent: 320 });
+    // ★ The grid must reach the far end of the field: ±320 pt covered every mode-box field, but a status run on a
+    //   wide Mac window is longer (2026-10-06). The same 200 bars / 320 pt for anything that fits in it.
+    const reach = Math.max(320, width + fs + 2 * M);
+    const mesh = vfdMesh(g, MESH_FINE_PITCH, MESH_FINE_BAR, { count: Math.ceil(reach / MESH_FINE_PITCH), extent: reach });
     const t = Skia.Matrix(); t.translate(M, M);
     g.transform(t); mesh[0].transform(t); mesh[1].transform(t);
     return { ghost: g, mesh };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [font, fs, ghostKey]);
+  }, [font, fs, ghostKey, width]);
 
   const litPlaced = useMemo(() => {
     const out: Placed[] = [];
     lit.forEach((l, i) => out.push(...placeCell(l, i, fs)));
     if (colonLit && colonAfter != null) out.push({ ch: ':', x: segColonX(colonAfter, fs) });
+    for (const c of gapColons) out.push({ ch: ':', x: segColonX(c, fs) });
     return out;
-  }, [lit, fs, colonLit, colonAfter]);
+  }, [lit, fs, colonLit, colonAfter, gapColons]);
 
   return (
     <View style={{ width, height: H }} pointerEvents="none" accessibilityRole="text" accessibilityLabel={accessibilityLabel}>
@@ -164,11 +183,11 @@ export const SegField = React.memo(function SegField({ fs, width, ghost, lit, co
           {atlas && litPlaced.map((g, k) => {
             const i = ALPHABET.indexOf(g.ch);
             if (i < 0) return null;
-            const x = M + g.x - penIn(g.ch, fs);
+            const x = M + g.x - penIn(g.ch, fs), y = -(g.up ?? 0);
             const col = i % ATLAS_COLS, row = Math.floor(i / ATLAS_COLS);
             return (
-              <Group key={k} clip={Skia.XYWHRect(x, 0, atlas.sw, atlas.sh)}>
-                <SkImageNode image={atlas.img} x={x - col * atlas.sw} y={-row * atlas.sh}
+              <Group key={k} clip={Skia.XYWHRect(x, y, atlas.sw, atlas.sh)}>
+                <SkImageNode image={atlas.img} x={x - col * atlas.sw} y={y - row * atlas.sh}
                   width={atlas.sw * ATLAS_COLS} height={atlas.sh * ATLAS_ROWS} />
               </Group>
             );
