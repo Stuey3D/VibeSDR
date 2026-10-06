@@ -571,6 +571,12 @@ foreach(v native boost)
   endif()
   add_test(NAME health-snail-${v} COMMAND test-health-snail-${v})
 endforeach()
+# ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
+#   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
+#   (prints SKIP elsewhere).
+add_executable(test-crash-report "${CMAKE_CURRENT_SOURCE_DIR}/test-crash-report.cpp")
+target_link_libraries(test-crash-report PRIVATE Threads::Threads)
+add_test(NAME crash-report COMMAND test-crash-report)
 # The offline replay harness: the same chain over a VIBE_IQ_DUMP capture, in seconds.
 # ★ dab-offline and the receiver test take the PFFFT path so the SERVER's transform is what gets
 #   replayed and tested; the other DAB tests keep the header-only radix-2, which is the reference.

@@ -329,6 +329,26 @@ int main() {
         CHECK(tagObs > 1000 && resolved > 1000, "★ the fuzz actually reached the DL Plus path");
     }
 
+    /* ★★ DAB+ (exact): a field WITHOUT an indicator list after one WITH a longer list must append only
+     *  the bytes it carries (2026-10-06). It appended the previous field's length, reading past the end
+     *  of the logical buffer — ASan: container-overflow in PadReader::append. */
+    {
+        PadReader pr;
+        // Frame 1: variable X-PAD, CI flag set: [CI = DLS start, 16 bytes][end marker][16 bytes].
+        std::vector<uint8_t> logical = { uint8_t((4 << 5) | kXpadDlsStart), 0x00 };
+        logical.push_back(0x0F);                              // a 16-char segment: the group is not complete yet
+        for (int i = 1; i < 16; ++i) logical.push_back(uint8_t('A' + i));
+        std::vector<uint8_t> wire(logical.rbegin(), logical.rend());
+        wire.push_back(0x20); wire.push_back(0x02);           // F-PAD: variable X-PAD, CI present
+        pr.feed(wire.data(), wire.size(), true);
+        const uint32_t before = pr.dlsBytes();
+        CHECK(before == 16, "the first field's 16 DLS bytes were taken");
+        // Frame 2: the same application continues with NO indicator list, and this AU's field is 4 bytes.
+        std::vector<uint8_t> w2 = { 'w', 'x', 'y', 'z', 0x20, 0x00 };
+        pr.feed(w2.data(), w2.size(), true);
+        CHECK(pr.dlsBytes() - before == 4, "★ a short field after a long one appends only its own 4 bytes");
+    }
+
     if (fails == 0) printf("  all passed\n");
     else            printf("  %d FAILED\n", fails);
     return fails ? 1 : 0;
