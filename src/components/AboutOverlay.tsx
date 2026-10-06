@@ -331,6 +331,14 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'Shortwave broadcast schedules used for live station bookmarks and the directory’s station finder.' },
   { name: 'Ofcom',
     detail: 'The UK DAB transmitter list that names the transmitter you are hearing. Contains public sector information licensed under the Open Government Licence v3.0.' },
+  /* ★ The other countries' DAB sites (2026-10-06) — each a regulator's own list under a licence that
+   *  lets a public repository carry it; docs/DAB-SITES-SOURCES.md has the survey and who was left out. */
+  { name: 'BAKOM — Federal Office of Communications, Switzerland',
+    detail: 'Switzerland’s DAB+ transmitter sites (“Swiss radio and TV broadcasters”, opendata.swiss, open use), shown as “BAKOM record” under Licensed sites.' },
+  { name: 'ČTÚ — Czech Telecommunication Office',
+    detail: 'Czechia’s DAB transmitter sites (“Rozhlasové vysílače”, data.gov.cz; no copyright or database right claimed), shown as “ČTÚ record”.' },
+  { name: 'RDI — Rijksinspectie Digitale Infrastructuur, the Netherlands',
+    detail: 'The Netherlands’ DAB transmitter sites (“Overzicht DAB en DVB‑T2 zenders”, CC0 1.0), shown as “RDI record”.' },
   { name: 'NOAA Space Weather Prediction Center',
     detail: 'Public domain. The solar flux and K index behind VibeServer’s band conditions.' },
   { name: 'The regional internet registries and iptoasn.com',
