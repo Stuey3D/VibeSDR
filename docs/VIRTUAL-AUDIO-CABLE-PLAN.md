@@ -1,5 +1,15 @@
 # Virtual Audio Cable — research and plan
 
+> **DECISIONS — Stuart, 2026-10-06 (these override the recommendations below where they differ):**
+> - **Opus, not PCM.** The audio is the Opus stream every listener already gets — it carries data modes (FT8/JS8 on
+>   SSB, APRS/packet on NFM) well enough for another app to decode, and it is what keeps low-end connections working.
+>   Uncompressed stays exactly what it is today: an owner setting. No new PCM stream, no server change for Tier 1.
+> - **Windows = Tier 1 only.** Once VB-CABLE is installed the browser does the whole job (the "Send audio to…"
+>   picker, or Windows' own per-app output device), so VibeIQ on Windows would only add a second install. Not built.
+> - **VibeIQ audio only where it removes an install:** Linux (creates the device itself, trivial) and possibly macOS
+>   (our own BlackHole-derived device). Elsewhere, and until then, Tier 1 + a free cable is the answer.
+> - Still open: one pairing code or two; whether VibeIQ alone keeps the session alive; the owner switch default.
+
 *2026-10-06. Research only: no product code. Stuart's idea, the facts per platform as of October 2026, and a
 ranked plan. Sources are linked inline and listed at the end. Claims marked **[unverified]** need a test before
 anyone relies on them.*
