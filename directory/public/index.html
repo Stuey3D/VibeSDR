@@ -3549,7 +3549,29 @@ async function withLiveCounts(servers) {
        *  (one radio each) showed a stale count — Kiko's S8 read "0 OF 3 LISTENING" while Stuart had been
        *  on it in the app for a while (2026-10-02), and the server had counted him all along. Same for
        *  freeInSec and claimable beside it. */
-      if (radios.length === 1 && radios[0]) {
+      /* ★★★ BUT A LINUX SERVER'S ONE RADIO IS NOT ITS MACHINE (2026-10-06). The tunnel reaches the FRONT
+       *  DOOR, which holds no radio and always answers listeners 0 — so a US listener on the Lenovo's RSP1A
+       *  (counted by its radio process, and by the ping) was overwritten with 0 and the card said
+       *  "0 OF 10 LISTENING" (Stuart's screenshot, 22:28). Ask the radio itself first, as the multi-radio
+       *  path does; only a server with no per-radio route (a phone: one process) falls back to the machine. */
+      let soloFromRadio = false;
+      if (radios.length === 1 && radios[0] && radios[0].id) {
+        try {
+          const c3 = new AbortController();
+          const t3 = setTimeout(() => c3.abort(), 4000);
+          const r3 = await fetch(`https://${s.address}/r/${encodeURIComponent(radios[0].id)}/vibeserver.json`,
+                                 { signal: c3.signal, cache: 'no-store' });
+          clearTimeout(t3);
+          if (r3.ok) {
+            const rj = await r3.json();
+            if (Number.isFinite(rj.listeners)) { radios[0].listeners = Number(rj.listeners); soloFromRadio = true; }
+            if (Number.isFinite(rj.maxUsers))   radios[0].maxListeners = Number(rj.maxUsers);
+            if (Number.isFinite(rj.freeInSec))  radios[0].freeInSec = Number(rj.freeInSec);
+            if (typeof rj.claimable === 'boolean') radios[0].claimable = rj.claimable;
+          }
+        } catch { /* no per-radio route: a phone server — the machine's answer below is the radio's */ }
+      }
+      if (radios.length === 1 && radios[0] && !soloFromRadio) {
         const rad = radios[0];
         if (Number.isFinite(j.listeners)) rad.listeners = Number(j.listeners);
         if (Number.isFinite(j.maxUsers))  rad.maxListeners = Number(j.maxUsers);
