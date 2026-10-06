@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import {
   parseAntennaRanges, parseAntennaFilters, parseAntennaBands, formatAntennaRanges, formatAntennaFilters,
-  antennaNoticeAt, antennaNoticeTrack, hasAntennaBands, antennaBandsSummary, cleanBandName,
+  antennaNoticeAt, antennaNoticeTrack, hasAntennaBands, antennaBandsSummary, antennaBandsCard, cleanBandName,
   type AntennaNotice,
 } from '../src/utils/antennaBands';
 
@@ -131,6 +131,41 @@ eq('summary for a card', antennaBandsSummary(parseAntennaBands('144-146MHz 2 m',
     for (const s of fsamples) {
       eq(`page filters agree: ${s}`, page.antFormatFilters(page.antParseFilters(s)), formatAntennaFilters(parseAntennaFilters(s)));
     }
+  }
+}
+
+// ── The directory card (2026-10-06): the two lines, and the directory page's own copy ─────────
+const card = (r: string, f: string) => antennaBandsCard(parseAntennaBands(r, f));
+eq('card: Stuart’s example', card('0-300MHz Wideband loop; [B] 144-146MHz 2 m', 'bandstop 87.5-108MHz FM band-stop; highpass 1.7MHz'),
+   { covers: 'Covers 0–300 MHz (Wideband loop) · 144–146 MHz (2 m, Ant B)',
+     filters: 'Filters fitted: FM band-stop · High-pass 1.7 MHz' });
+eq('card: one named filter', card('', 'bandstop 87.5-108MHz FM band-stop').filters, 'FM band-stop filter fitted');
+eq('card: a name saying "filter" is not doubled', card('', 'bandstop 87.5-108MHz FM trap filter').filters, 'FM trap filter fitted');
+eq('card: an unnamed filter says its frequency', card('', 'lowpass 30MHz').filters, 'Low-pass 30 MHz filter fitted');
+eq('card: a socket on a filter', card('', '[Antenna A] bandpass 118-137MHz').filters, 'Band-pass 118–137 MHz filter (Antenna A) fitted');
+eq('card: nothing set = nothing shown', card('', ''), { covers: '', filters: '' });
+eq('card: nothing parses = nothing shown', card('144-146 2 m', 'notch 1MHz'), { covers: '', filters: '' });
+eq('card: more than four', card('1-2MHz; 3-4MHz; 5-6MHz; 7-8MHz; 9-10MHz; 11-12MHz', '').covers,
+   'Covers 1–2 MHz · 3–4 MHz · 5–6 MHz · 7–8 MHz · +2');
+{
+  const src = fs.readFileSync(new URL('../directory/public/index.html', import.meta.url), 'utf8');
+  const m = /\/\/ ANTBANDS-CARD-BEGIN([\s\S]*?)\/\/ ANTBANDS-CARD-END/.exec(src);
+  if (!m) { fails++; console.error('FAIL the directory page carries no ANTBANDS-CARD block'); }
+  else {
+    const antCardLines = new Function(`${m[1]}; return antCardLines;`)();
+    const rs = ['', rtR, '0-300MHz Wideband loop; [B] 144-146MHz 2 m', '500kHz-30MHz HF; 144–148 MHz 2 m (US); junk; 146-144MHz',
+      '[Tuner 1 50Ω] 0-30MHz', '[Antenna C] 1-2GHz L band; 153-279kHz', '1-2MHz; 3-4MHz; 5-6MHz; 7-8MHz; 9-10MHz',
+      '0.1357-0.1378MHz 2200 m', 'x'.repeat(900), `1-2MHz ${'n'.repeat(80)}`, '1-2MHz a "quoted" <b>name</b>'];
+    const fsx = ['', rtF, 'band-pass 118-137MHz Airband; notch 1MHz; bandstop 100MHz; highpass 1.7 MHz MW',
+      'bandstop 87.5-108MHz FM trap filter', '[B] lowpass 30MHz', 'lowpass 30MHz; highpass 1MHz; bandstop 1-2MHz; bandpass 3-4MHz; lowpass 5MHz',
+      'highpass 1.7MHz <script>x</script>'];
+    for (let i = 0; i < Math.max(rs.length, fsx.length); i++) {
+      const r = rs[i % rs.length], f = fsx[i % fsx.length];
+      eq(`directory page agrees: ${r.slice(0, 40)} | ${f.slice(0, 40)}`, antCardLines(r, f), card(r, f));
+    }
+    for (const r of rs) eq(`directory page agrees (ranges): ${r.slice(0, 40)}`, antCardLines(r, '').covers, card(r, '').covers);
+    for (const f of fsx) eq(`directory page agrees (filters): ${f.slice(0, 40)}`, antCardLines('', f).filters, card('', f).filters);
+    eq('directory page: non-strings say nothing', antCardLines(undefined, 42), { covers: '', filters: '' });
   }
 }
 
