@@ -216,6 +216,9 @@ if node --no-warnings scripts/test_faceplate_text.ts; then pass=$((pass+1)); els
 # ★★ THE VCR MODE BOX (2026-10-06): every label the app composes fits the ten-cell field whole (WFM keeps the
 #    rings' slot, every other mode gets those cells), and the "-88+88 dB F S" readout lights only electrodes it has.
 if node --no-warnings scripts/test_faceplate_segfield.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ THE DOT MODE BOX (2026-10-06): the same fields as true 5 × 7 dot-matrix cells — Doto's own dots (read out of the
+#    TTF and checked against it), every label whole, the rings in dots, "S9+27 dBFS" / "kHz" fixed width.
+if node --no-warnings scripts/test_faceplate_dotfield.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ NIXIE: real hardware never adds or removes a tube. Units change only the lit bulb, leading
 #     zeros are switched off, and the TUBE shrinks to its window (smallest window first) — domes
 #     are never clipped.
