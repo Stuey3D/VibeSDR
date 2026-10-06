@@ -398,6 +398,15 @@ std::string buildStatus(int port) {
                     //  ★ The aerial is per RADIO here — one machine can hold three, on three
                     //    different antennas, and the machine-level one cannot say that.
                     j += ",\"antenna\":\"" + jsonStr(r, "antenna") + "\"";
+                    /* ★★ AND WHAT THAT AERIAL COVERS AND WHAT IS FILTERED OUT (2026-10-06) — the owner's
+                     *  antennaRanges / antennaFilters, so the card can say "FM band-stop filter fitted"
+                     *  before anybody connects. Owner text, so copied as its JSON literal (jsonRawStr,
+                     *  escapes intact) rather than through jsonStr's naive unescape; omitted when unset,
+                     *  exactly as /vibeserver/radios omits them. The directory cleans them again. */
+                    for (const char* k : { "antennaRanges", "antennaFilters" }) {
+                        const std::string v = jsonRawStr(r, k);
+                        if (!v.empty()) j += std::string(",\"") + k + "\":\"" + v + "\"";
+                    }
                     j += ",\"centreHz\":" + std::to_string(jsonNum(r, "centreHz", 0));
                     j += ",\"spanHz\":" + std::to_string(jsonNum(r, "spanHz", 0));
                     // ★★★ AND THE CAP THIS RADIO ACTUALLY HAS. The listing carried the SERVER's

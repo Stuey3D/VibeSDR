@@ -205,6 +205,11 @@
              white-space: nowrap; flex: 0 0 auto; }
   .rcSub { margin-top: 3px; font-size: 12px; color: var(--dim); letter-spacing: .03em;
            line-height: 1.5; }
+  /* ★ The aerial's ranges and filters (2026-10-06). Owner text, so a long name must wrap inside the
+     card rather than push it wider on a phone. A fitted filter is in the card's accent: it is the
+     fact that stops a listener blaming the receiver, so it should be read. */
+  .rcBands { margin-top: 1px; overflow-wrap: anywhere; }
+  .rcFilt { color: var(--accent); }
   /* ★ Brighter than the detail around it: an instruction, not another readout. */
   .rcAsk { margin-top: 4px; font-size: 12px; color: var(--accent); letter-spacing: .06em; }
   .rcHost { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -857,6 +862,84 @@ function batteryIcon(level, charging, paused, w = 54, h = 20) {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/* ★★ WHAT THE AERIAL COVERS AND WHAT IS FILTERED OUT, ON THE CARD (2026-10-06). Stuart: listeners should
+ *  know BEFORE connecting that FM has a band-stop fitted, or that the antenna covers 0–300 MHz — not
+ *  find out from a poor signal and blame the receiver. The radio's `antennaRanges` / `antennaFilters`
+ *  are the owner's own text ("0-300MHz Wideband loop; [B] 144-146MHz 2 m").
+ *  ★★★ A COPY — this page is static and cannot import src/utils/antennaBands.ts, whose
+ *      antennaBandsCard() is the original. scripts/test_antenna_bands.ts lifts this block out by its
+ *      markers and runs both on the same strings; change one, change the other, run the test.
+ *  ★ Anything that does not parse is dropped, never guessed at — as in the original. */
+// ANTBANDS-CARD-BEGIN
+function antCardLines(rangesText, filtersText, max = 4) {
+  const UHZ = { hz: 1, khz: 1e3, mhz: 1e6, ghz: 1e9 }, UNAME = { hz: 'Hz', khz: 'kHz', mhz: 'MHz', ghz: 'GHz' };
+  const KLABEL = { bandstop: 'Band-stop', bandpass: 'Band-pass', highpass: 'High-pass', lowpass: 'Low-pass' };
+  const cleanName = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f;[\]"\\]/g, ' ').replace(/\s+/g, ' ').trim()
+    .slice(0, 40).trim();
+  const cleanPort = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f;[\]]/g, '').trim().slice(0, 32);
+  const RANGE_RE = /^\s*(\d+(?:\.\d+)?)\s*(hz|khz|mhz|ghz)?\s*[-–—]\s*(\d+(?:\.\d+)?)\s*(hz|khz|mhz|ghz)?\b\s*/i;
+  const ONE_RE = /^\s*(\d+(?:\.\d+)?)\s*(hz|khz|mhz|ghz)?\b\s*/i;
+  const entries = (s) => (typeof s === 'string' && s.trim())
+    ? s.slice(0, 800).split(';').map((e) => e.trim()).filter(Boolean) : [];
+  const takePort = (e) => { const m = /^\s*\[([^\]]*)\]\s*/.exec(e); return m ? [cleanPort(m[1]), e.slice(m[0].length)] : ['', e]; };
+  const rangeOf = (t) => {
+    const m = RANGE_RE.exec(t);
+    if (!m) return null;
+    const u1 = m[2] && m[2].toLowerCase(), u2 = m[4] && m[4].toLowerCase();
+    const uHi = u2 || u1, uLo = u1 || u2;
+    if (!uHi || !uLo) return null;
+    const lo = parseFloat(m[1]) * UHZ[uLo], hi = parseFloat(m[3]) * UHZ[uHi];
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo || lo < 0) return null;
+    return { lo, hi, unit: UNAME[uHi], rest: t.slice(m[0].length) };
+  };
+  const oneOf = (t) => {
+    const m = ONE_RE.exec(t);
+    if (!m || !m[2]) return null;
+    const hz = parseFloat(m[1]) * UHZ[m[2].toLowerCase()];
+    if (!Number.isFinite(hz) || hz <= 0) return null;
+    return { hz, unit: UNAME[m[2].toLowerCase()], rest: t.slice(m[0].length) };
+  };
+  const inUnit = (hz, u) => String(Math.round(hz / UHZ[u.toLowerCase()] * 1e6) / 1e6);
+  const span = (lo, hi, u) => `${inUnit(lo, u)}–${inUnit(hi, u)} ${u}`;
+  const portTag = (p) => { const c = cleanPort(p); return !c ? '' : /^ant/i.test(c) ? c : `Ant ${c}`; };
+  const cap = (parts) => parts.length <= max ? parts.join(' · ')
+    : parts.slice(0, max).join(' · ') + ` · +${parts.length - max}`;
+
+  const rs = [];
+  for (const e of entries(rangesText)) {
+    const [port, body] = takePort(e);
+    const r = rangeOf(body);
+    if (!r) continue;
+    const extra = [cleanName(r.rest), portTag(port)].filter(Boolean).join(', ');
+    rs.push(span(r.lo, r.hi, r.unit) + (extra ? ` (${extra})` : ''));
+  }
+  const fs = [];
+  for (const e of entries(filtersText)) {
+    const [port, body] = takePort(e);
+    const km = /^\s*([a-z-]+)\s+/i.exec(body);
+    if (!km) continue;
+    const kind = km[1].toLowerCase().replace(/-/g, '');
+    if (!KLABEL[kind]) continue;
+    const t = body.slice(km[0].length);
+    let freq, rest;
+    if (kind === 'bandstop' || kind === 'bandpass') {
+      const r = rangeOf(t); if (!r) continue;
+      freq = span(r.lo, r.hi, r.unit); rest = r.rest;
+    } else {
+      const o = oneOf(t); if (!o) continue;
+      freq = `${inUnit(o.hz, o.unit)} ${o.unit}`; rest = o.rest;
+    }
+    const name = cleanName(rest).replace(/\s*\bfilter$/i, '') || `${KLABEL[kind]} ${freq}`;
+    fs.push({ name, port: portTag(port) });
+  }
+  const withPort = (s, f) => (f.port ? `${s} (${f.port})` : s);
+  const filters = fs.length === 0 ? ''
+    : fs.length === 1 ? `${withPort(`${fs[0].name} filter`, fs[0])} fitted`
+    : `Filters fitted: ${cap(fs.map((f) => withPort(f.name, f)))}`;
+  return { covers: rs.length ? `Covers ${cap(rs)}` : '', filters };
+}
+// ANTBANDS-CARD-END
+
 /** ★ A two-letter country code to its flag, via regional indicator symbols. No image assets. */
 function flag(cc) {
   if (!/^[A-Z]{2}$/.test(cc || '')) return '🌐';
@@ -1456,6 +1539,9 @@ function radioLine(r, s) {
   //    three receivers on three different antennas. A dongle advertising 1 kHz – 1.7 GHz above
   //    "YouLoop into an LNA" tells a visitor something neither line says alone.
   const ant = String(r.antenna || (s && s.radios && s.radios.length === 1 ? s.antenna : '') || '').trim();
+  // ★ Under the aerial, what it covers and what is filtered out (2026-10-06) — see antCardLines.
+  //   An older server sends neither field and the card is exactly as it was.
+  const bands = antCardLines(r.antennaRanges, r.antennaFilters);
 
   const etiquette = sharedDial
     ? `<div class="rcAsk">ASK BEFORE TUNING — everyone here shares one dial</div>` : '';
@@ -1467,6 +1553,8 @@ function radioLine(r, s) {
         <span class="rcRight">${modesTag(modesOf(r))}${iqBadge(r)}${advRdsBadge(r)}${dabBadge(r)}</span></div>
       <div class="rcSub" title="${esc(kindTitle)}">${bits.join(' · ')}</div>
       ${ant ? `<div class="rcSub">⚲ ${esc(ant)}</div>` : ''}
+      ${bands.covers ? `<div class="rcSub rcBands">${esc(bands.covers)}</div>` : ''}
+      ${bands.filters ? `<div class="rcSub rcBands rcFilt">${esc(bands.filters)}</div>` : ''}
       ${etiquette}
       ${stateTxt ? `<div class="rcStateRow"><span class="rcState ${isFull ? 'full' : ''}${s && s.unreachable ? ' down' : ''}">${esc(stateTxt)}</span></div>` : ''}
     </div>`;
@@ -3552,7 +3640,9 @@ function demoRadio(i, kind) {
   if (kind === 'wide') return { ...base, id: `w${i}`, name: 'RTLSDRBlog Blog V4', driver: 'rtlsdr',
     mode: 'wfm', centreHz: 96600000, spanHz: 2400000, coverage: [[500000, 1766000000]],
     allowed: [[500000, 1766000000]], ranges: [[500000, 1766000000]],
-    listeners: i % 4 === 0 ? 1 : 0, maxListeners: 1 };
+    listeners: i % 4 === 0 ? 1 : 0, maxListeners: 1,
+    // ★ The aerial's ranges and filters (2026-10-06), so the demo shows both card lines.
+    antennaRanges: '0-300MHz Wideband loop; 144-146MHz 2 m', antennaFilters: 'bandstop 87.5-108MHz FM band-stop' };
   if (kind === 'hf') return { ...base, id: `h${i}`, name: 'Airspy HF+', driver: 'airspyhf',
     mode: 'usb', centreHz: 7100000, spanHz: 768000, coverage: [[9000, 31000000]],
     allowed: [[9000, 31000000]], ranges: [[9000, 31000000]],
@@ -3560,7 +3650,8 @@ function demoRadio(i, kind) {
   if (kind === 'locked') return { ...base, id: `l${i}`, name: 'SDRplay RSP1B', driver: 'sdrplay',
     mode: 'usb', locked: true, centreHz: 6800000, spanHz: 8000000,
     coverage: [[1000, 2000000000]], allowed: [[1000, 2000000000]], ranges: [[1000, 2000000000]],
-    listeners: 0, maxListeners: 10 };
+    listeners: 0, maxListeners: 10,
+    antennaRanges: '0-30MHz HF wire', antennaFilters: 'highpass 1.7MHz; lowpass 30MHz' };
   // ★ The honest awkward case: a server that says nothing about occupancy.
   return { ...base, id: `q${i}`, name: 'Unknown receiver', driver: 'rtl',
     coverage: ['FM Broadcast Band'], ranges: [[87500000, 108000000]] };

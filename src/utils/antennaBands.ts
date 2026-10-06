@@ -291,3 +291,47 @@ export function antennaBandsSummary(b: AntennaBands | null | undefined, max = 4)
   if (parts.length <= max) return parts.join(' · ');
   return parts.slice(0, max).join(' · ') + ` · +${parts.length - max}`;
 }
+
+/**
+ * ★★ THE DIRECTORY CARD'S TWO LINES (2026-10-06) — what a listener reads BEFORE connecting:
+ *      "Covers 0–300 MHz (Wideband loop) · 144–146 MHz (2 m, Ant B)"
+ *      "FM band-stop filter fitted"   /   "Filters fitted: FM band-stop · High-pass 1.7 MHz"
+ *  ★ Every entry is listed, whatever its socket: the card describes the RADIO and cannot know which
+ *    socket a listener will land on — so a per-socket entry carries its socket's name rather than
+ *    being hidden (contrast antennaNoticeAt, which knows the socket in use).
+ *  ★ The same filter words as the in-app notice (filterLabel, "… fitted"), so the card and the
+ *    notice a listener then meets say the same thing.
+ *  ★★ ONE RULE, TWO READERS: directory/public/index.html is a static page that cannot import this
+ *     file and carries its OWN copy between `// ANTBANDS-CARD-BEGIN` / `-END`;
+ *     scripts/test_antenna_bands.ts runs both on the same strings and fails if they ever differ.
+ *  Empty strings for a line with nothing to say. `max` entries per line, then "+N".
+ */
+export function antennaBandsCard(b: AntennaBands | null | undefined, max = 4):
+    { covers: string; filters: string } {
+  if (!b) return { covers: '', filters: '' };
+  const portTag = (p: string) => {
+    const c = cleanPort(p);
+    return !c ? '' : /^ant/i.test(c) ? c : `Ant ${c}`;
+  };
+  const cap = (parts: string[]) => parts.length <= max ? parts.join(' · ')
+    : parts.slice(0, max).join(' · ') + ` · +${parts.length - max}`;
+  const span = (lo: number, hi: number, u: BandUnit) => `${fmtInUnit(lo, u)}–${fmtInUnit(hi, u)} ${u}`;
+  const freqOf = (f: AntennaFilter) => f.kind === 'highpass' ? `${fmtInUnit(f.loHz, f.unit)} ${f.unit}`
+    : f.kind === 'lowpass' ? `${fmtInUnit(f.hiHz, f.unit)} ${f.unit}` : span(f.loHz, f.hiHz, f.unit);
+
+  const rs = b.ranges.map((r) => {
+    const extra = [cleanBandName(r.name), portTag(r.port)].filter(Boolean).join(', ');
+    return span(r.loHz, r.hiHz, r.unit) + (extra ? ` (${extra})` : '');
+  });
+  // A filter's own words: the owner's name for it, or its kind and frequency when it has none.
+  const fname = (f: AntennaFilter) => {
+    const n = cleanBandName(f.name).replace(/\s*\bfilter$/i, '');
+    return n || `${FILTER_KIND_LABEL[f.kind]} ${freqOf(f)}`;
+  };
+  const withPort = (s: string, f: AntennaFilter) => (portTag(f.port) ? `${s} (${portTag(f.port)})` : s);
+  const fs = b.filters;
+  const filters = fs.length === 0 ? ''
+    : fs.length === 1 ? `${withPort(`${fname(fs[0])} filter`, fs[0])} fitted`
+    : `Filters fitted: ${cap(fs.map((f) => withPort(fname(f), f)))}`;
+  return { covers: rs.length ? `Covers ${cap(rs)}` : '', filters };
+}
