@@ -407,6 +407,10 @@ object VibeTunnel {
                     if (r.has("dab")) put("dab", r.optBoolean("dab", false))
                     // ★ What it is and where it is pointed, so a chooser can tell two apart.
                     r.optString("antenna").takeIf { it.isNotEmpty() }?.let { put("antenna", it) }
+                    // ★ And what that aerial covers / what is filtered out (2026-10-06) — the same two
+                    //   keys directory.cpp forwards; omitted when unset. The directory cleans them.
+                    for (k in arrayOf("antennaRanges", "antennaFilters"))
+                        r.optString(k).takeIf { it.isNotEmpty() }?.let { put(k, it) }
                     if (r.has("centreHz")) put("centreHz", r.optLong("centreHz", 0L))
                     if (r.has("spanHz"))   put("spanHz",   r.optLong("spanHz", 0L))
                     /* ★★★ CORRECTED, AND THIS IS THE FAULT THAT SPLIT THE DIRECTORY IN TWO. The
@@ -482,6 +486,10 @@ object VibeTunnel {
                     it.optString("rawIq").takeIf { s -> s.isNotEmpty() }?.let { s -> put("rawIq", s) }
                     if (it.has("rdsx")) put("rdsx", it.optBoolean("rdsx", false))
                     it.optJSONArray("modes")?.let { m -> put("modes", m) }
+                    // ★ The aerial's ranges and filters (2026-10-06) — the shim puts them on its own
+                    //   /vibeserver.json (vsLandingJson); same keys as the door branch above.
+                    for (k in arrayOf("antennaRanges", "antennaFilters"))
+                        it.optString(k).takeIf { s -> s.isNotEmpty() }?.let { s -> put(k, s) }
                 }
                 put("maxListeners", cap)
                 // ★ What this radio is actually allowed to tune, when the owner has narrowed it —
