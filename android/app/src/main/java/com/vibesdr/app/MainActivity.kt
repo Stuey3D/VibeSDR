@@ -48,7 +48,7 @@ open class MainActivity : ReactActivity() {
   private fun noteUsbLaunch(intent: Intent?) {
     if (intent?.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
     usbLaunchPending = true
-    resumeServerIfWanted()
+    resumeServerIfWanted(intent ?: return)
   }
 
   /**
@@ -75,13 +75,15 @@ open class MainActivity : ReactActivity() {
    * ★ Safe when the server is already up: the service's restore path refuses to double-open the
    *   radio (isShimServing), and this is the same EXTRA_RESTORE the sticky restart and the update
    *   receiver use — one restore path, not a fourth.
+   * ★★★ NOW SHARED WITH LITE, AND IT HANDS A RUNNING SERVER ITS RADIO BACK TOO (2026-10-06) — see
+   *     VibeServerRestore.onRadioAttached. This activity's attach is the one Android grants the radio with, so
+   *     a running server waiting for its re-enumerated radio is told here as well as by the broadcast.
    */
-  private fun resumeServerIfWanted() {
-    if (!VibeServerRestore.attachResumeWanted(this)) return
-    val svc = Intent(this, RtlTcpServerService::class.java)
-        .putExtra(RtlTcpServerService.EXTRA_RESTORE, true)
+  private fun resumeServerIfWanted(intent: Intent) {
+    @Suppress("DEPRECATION")
+    val dev = intent.getParcelableExtra<android.hardware.usb.UsbDevice>(UsbManager.EXTRA_DEVICE)
     try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc) else startService(svc)
+      VibeServerRestore.onRadioAttached(this, dev, "the app was opened for ${dev?.deviceName ?: "a radio"}")
     } catch (t: Throwable) {
       android.util.Log.w("MainActivity", "could not resume the server on attach: $t")
     }

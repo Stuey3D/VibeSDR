@@ -39,7 +39,8 @@ import {
   setServerLocationMode, getManualServerLocation, LOC_KEY, LOCMODE_KEY,
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation,
-  getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, type DabBlock, type DabScanResult, type VibeServerConfig,
+  getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive,
+  type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { loadActiveEibi } from '../services/eibi';
@@ -159,6 +160,7 @@ const K = {
   landingMsg: 'vs_landingmsg', landingUrl: 'vs_landingurl', landingLbl: 'vs_landinglbl',
   idleKick: 'vs_idlekick', limitSoft: 'vs_limitsoft',
   batteryPauseAt: 'vs_batpause',
+  keepAlive: 'vs_keepalive',
   rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanMaxHz: 'vs_rawiqlanmaxhz',
   decoderMax: 'vs_decodermax',
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
@@ -228,6 +230,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [idleKick, setIdleKick]     = useState(0);
   /** ★ Suspend the server at this battery % (0 = never); it resumes 20 points above (2026-09-17). */
   const [batteryPauseAt, setBatteryPauseAt] = useState(0);
+  /** ★★★ KEEP RADIO ALIVE (2026-10-06) — see VibeServerBoot.keepRadioAliveDefault. Starts ON on a TV or TV box (the
+   *  native constant, the one rule); a saved choice wins. */
+  const [keepAlive, setKeepAlive] = useState<boolean>((NativeModules as any).VibeLocalSDR?.keepRadioAliveDefault === true);
   /** ★ RAW IQ OUT: 0 off, 1 local network, 2 local and public; and the stream cap (0 = default). */
   const [rawIq, setRawIq]           = useState(0);
   const [rawIqMax, setRawIqMax]     = useState(0);
@@ -819,6 +824,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           setLimitSoft(s(K.limitSoft) === '1');
           setIdleKick(Number(s(K.idleKick)) || 0);
           setBatteryPauseAt(Number(s(K.batteryPauseAt)) || 0);
+          // ★ Absent = never chosen = this device's default (already the initial state), NOT off.
+          { const ka = g(K.keepAlive); if (ka === '1' || ka === '0') setKeepAlive(ka === '1'); }
           setRawIq(Number(s(K.rawIq)) || 0);
           setRawIqMax(Number(s(K.rawIqMax)) || 0);
           setRawIqLanMaxHz(Number(s(K.rawIqLanMaxHz)) || 0);
@@ -1457,6 +1464,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     sessionLimitSoft: live.current.limitSoft,
     idleKickMin: live.current.idleKick,
     batteryPauseAt, batteryResumeAt: batteryPauseAt > 0 ? batteryPauseAt + 20 : 40,
+    keepRadioAlive: keepAlive,
     // ★ Raw IQ out. Default OFF, like uncompressed audio. Sent as set; the SERVER refuses it
     //   on a shared dial, so the card stays visible everywhere (Stuart, 2026-09-09: "the card
     //   should be in the GUI on the app screen on the phone").
@@ -1540,6 +1548,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.advanced, advanced ? '1' : '0'], [K.maxUsers, String(maxUsers)],
       [K.landingMsg, live.current.landingMsg], [K.landingUrl, live.current.landingUrl], [K.landingLbl, live.current.landingLbl],
       [K.limitSoft, live.current.limitSoft ? '1' : '0'], [K.idleKick, String(live.current.idleKick)], [K.batteryPauseAt, String(batteryPauseAt)],
+      [K.keepAlive, keepAlive ? '1' : '0'],
       [K.rawIq, String(live.current.rawIq)], [K.rawIqMax, String(live.current.rawIqMax)], [K.rawIqLanMaxHz, String(live.current.rawIqLanMaxHz)],
       [K.decoderMax, String(live.current.decoderMax)],
       [K.lockedCentre, String(live.current.lockedCentre)],
@@ -1610,7 +1619,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       adminPw, uncomp, limitMin, advanced, maxUsers, allowRanges, blockRanges,
       blockedModes, dabRateBoost, dabScanLabels, isLite,
       gainLimits, gainLocks, gainSplits, gainCurves, ifBwLimits, isRtl, restGain, agcLock, proxies, rtlAgc, tunerBwAuto,
-      oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown]);
+      oneRadioPerIp, ppm, directSampling, autoDs, autoDsMhz, convOffsetMhz, convLoMhz, convHiMhz, convDown,
+      keepAlive]);
 
   const stopAndBack = useCallback(() => {
     stopAdvertiseRtlTcp();
@@ -3020,6 +3030,38 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               </Text>
             </View>
 
+            {/* ★★★ KEEP RADIO ALIVE (2026-10-06). Stuart's idea and his wording — "use if USB ports go into powersave
+                mode when no traffic detected" — after the Sony dropped its dongle in standby and the five-minute rule
+                stopped the server six seconds before the radio came back. Android only, like this whole screen.
+                ★ It does not contradict "Power down the radio" above: on Android parking never stops the stream
+                  (that card already says the radio stays powered), so both can be on — the processing rests, the
+                  USB stays busy. What this changes is what happens when the radio GOES: wait for ever and take it
+                  straight back, instead of stopping after five minutes. And the battery floor parks, not releases. */}
+            <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>IF THE RADIO DROPS OUT</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                  Keep radio alive
+                </Text>
+                <Switch value={keepAlive}
+                  onValueChange={(v) => {
+                    setKeepAlive(v); AsyncStorage.setItem(K.keepAlive, v ? '1' : '0');
+                    // ★ Applied to the running server too: a TV server runs for days (see setDabScanLabels).
+                    void setKeepRadioAlive(v);
+                  }}
+                  trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
+                {'Use if this ' + (isTv ? 'TV' : 'device') + "'s USB ports power down when idle (TVs, TV boxes, some phones). "}
+                {keepAlive
+                  ? 'The radio is never let go while the server runs. If the ' + (isTv ? 'TV' : 'device')
+                    + ' drops it anyway, the server waits for it — however long it takes — and takes it straight back '
+                    + 'when it reappears. Applies straight away.'
+                  : 'Off: if the radio disappears for more than five minutes the server stops, and you press Start '
+                    + 'when you want it again. Applies straight away.'}
+              </Text>
+            </View>
+
             {/* ★★ THE SPECTROGRAM AND THE POWER SAVER CANNOT BOTH BE ON, and the reason is
                 physical rather than a rule: a radio that stops capturing cannot picture a band it
                 is not listening to. Same on Linux. */}
@@ -3101,7 +3143,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                     Suspend the server when the device's battery falls to this level, to stop it
                     shutting down flat. Listeners are warned 10 and 5 points before, and told at
-                    the floor; every connection is then suspended and the radio released. The
+                    the floor; every connection is then suspended and the radio {keepAlive
+                      ? 'parked — Keep radio alive is on, so it goes on streaming'
+                      : 'released'}. The
                     server comes back on its own once the battery is {batteryPauseAt > 0 ? `${batteryPauseAt + 20}%` : '20 points higher'}.
                     The level is shown on the admin page and beside this server in the directory.
                   </Text>

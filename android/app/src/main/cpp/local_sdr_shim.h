@@ -70,6 +70,9 @@ public:
      *  solar/cellular where saving power outranks a listener's preference. Set BEFORE start(). */
     /** Hand the SDR to another program while nobody is listening. Off by default. */
     static void setVibeServerReleaseWhenIdle(bool on);
+    /** ★★★ Keep radio alive (Android, 2026-10-06): while serving the radio is never released — the low
+     *  battery state parks it instead, so its USB port never goes quiet. See g_vsKeepRadioAlive. */
+    static void setKeepRadioAlive(bool on);
     /** Tell the connected client the host is looking for it — the browser tab flashes and tries to
      *  focus itself. Uses the socket we already have, so no browser automation and no permission
      *  prompt. No-op when nobody is listening. */
@@ -193,6 +196,10 @@ public:
      *  own dup, so the caller keeps (and later closes) its UsbDeviceConnection as usual. Refused
      *  (false) when nothing asked for one — a live handle is never swapped underneath a stream. */
     bool adoptFreshUsbFd(int fd);
+    /** ★★ Android saw the radio ATTACH (a new device instance): any back-off left over from fresh fds
+     *  that failed on the OLD instance is spent, so the next request goes out at once. A TV that brings
+     *  the dongle back for ~10 s at a time cannot wait out a 60 s back-off (2026-10-06). */
+    void usbRadioAttached();
     /** ★★★ Reverse proxies whose X-Forwarded-For we believe, comma separated (addresses/CIDRs).
      *  EMPTY = trust nobody and read no headers, which is the default: the header is
      *  client-supplied, so believing it from any peer lets a stranger forge an address and walk

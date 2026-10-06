@@ -1440,6 +1440,12 @@ static std::atomic<bool>   g_vsZoomSpectrum{true};
  *  OpenWebRX or a decoder, where holding the device idle blocks the other program
  *  entirely (Stuart, 2026-08-07: "just dont enable it by default"). */
 std::atomic<bool> g_vsReleaseWhenIdle{false};
+/** ★★★ KEEP RADIO ALIVE — the owner's switch, Android (2026-10-06). Some hosts power a USB port down
+ *  when nothing is moving on it: the Sony in standby drops a quiet dongle and brings it back only on a
+ *  suspend attempt. While serving, a radio with this on is never RELEASED — the low battery state parks
+ *  it instead (the processing stops, the stream keeps the port busy). The give-up half of the switch is
+ *  Kotlin's (VibeServerRestore.keepRadioAlive). Off = exactly as before; the Linux server never sets it. */
+static std::atomic<bool> g_vsKeepRadioAlive{false};
 static std::atomic<double> g_vsIdleGraceSec{300.0};
 static std::mutex          g_vsTuneLimitMtx;
 static std::string         g_vsAllowCsv, g_vsBlockCsv;
@@ -24246,7 +24252,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //    guard, so an idle-parked dongle read as an unplugged one too.
                 // ★ `lsusb` in tgcfabian's log lists the device throughout, which is the tell: the
                 //   hardware was never going anywhere.
-                const bool expectingIq = !radioReleased.load() && !captureIdle.load();
+                /* ★★★ BUT A PARKED DONGLE IS STILL STREAMING (2026-10-06). pauseCaptureIdle does not stop an RTL —
+                 *     idleDiscard drops its buffers and asyncHandler stamps lastIqAt FIRST, "so an idle server
+                 *     never looks like a dead dongle". So silence from a parked dongle is a real fault, and this
+                 *     line declared it expected: a dongle that stalled or dropped off the bus while nobody was
+                 *     listening — the normal state of a TV in standby — was never noticed, its dead handle was
+                 *     never released, and Kotlin was never asked for a fresh one. The Sony's usbSamples sat
+                 *     STATIC at idle on 2026-10-05 with nothing in the log to say why. The other radios park
+                 *     at their source and have their own watchdog above; network sources really do stop. */
+                const bool dongle = !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf() && !useHackRf()
+                                    && !useAirspy();
+                const bool expectingIq = !radioReleased.load() && (!captureIdle.load() || dongle);
                 // ★★★ EVERY VISITOR LOOKS LIKE LOCALHOST? THEN SOMETHING IS PROXYING AND WE DO NOT KNOW.
         //     A tunnel or a reverse proxy connects from 127.0.0.1, and loopback is EXEMPT from the
         //     session limit — so putting a public receiver behind one silently turns the limit off
@@ -24336,9 +24352,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★★★ AND NOT A HACKRF EITHER. reopenDevice() is librtlsdr all the way down, as
                 //     the note above says — running a HackRF through it would reopen whatever
                 //     dongle happened to be at that index, or nothing at all.
-                if (back && !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf() && !useHackRf()
-                         && !useAirspy()
-                         && !radioReleased.load() && !captureIdle.load()) {
+                /* ★★★ AND REOPENED WHILE PARKED (2026-10-06). `!captureIdle` here meant a dongle that came back
+                 *     while nobody was listening was left closed — on Android with Kotlin's fresh fd sitting
+                 *     unadopted, usbHandleDead() still true, and the five-minute clock running out on a radio
+                 *     that was plugged in. Reopening a parked dongle is exactly what its idle state already is:
+                 *     launchCapture runs the stream and idleDiscard (still set) drops the buffers. That keeps
+                 *     USB traffic flowing, which is what stops a TV powering the port down again. */
+                if (back && dongle && !radioReleased.load()) {
                     // ★ Backed off, not hammered. A dongle that cannot hold a stream would
                     //   otherwise be reopened every two seconds for ever, and each attempt is USB
                     //   traffic that makes the contention it is recovering from slightly worse.
@@ -26516,6 +26536,9 @@ void LocalSdrShim::setVibeServerSharedChannels(bool shared) { g_vsSharedChannels
 void LocalSdrShim::setVibeServerZoomSpectrum(bool on) { g_vsZoomSpectrum.store(on); }
 void LocalSdrShim::setVibeServerIdleGrace(double sec) { g_vsIdleGraceSec.store(sec < 0 ? 0 : sec); }
 void LocalSdrShim::setVibeServerReleaseWhenIdle(bool on) { g_vsReleaseWhenIdle.store(on); }
+void LocalSdrShim::setKeepRadioAlive(bool on) {
+    if (g_vsKeepRadioAlive.exchange(on) != on) LOGI("keep radio alive: %s", on ? "on" : "off");
+}
 void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
 /* ★ Straight into the desired-DSP block, because that is what survives a rebuilt Impl — the same
  *   reason every other RSP control lives there. Auto then owns rfNotch/dabNotch from the retune
@@ -26993,7 +27016,14 @@ void LocalSdrShim::batteryTick() {
                       for (auto& a : p->audioExtra) if (a) all.push_back(a); }
                     for (auto& s : all) if (s && s->isOpen()) s->close();
                     std::this_thread::sleep_for(std::chrono::seconds(2));
-                    if (g_vsBatteryPaused.load()) { LOGI("battery: releasing the radio for the low power state"); releaseRadio(); }
+                    if (!g_vsBatteryPaused.load()) return;
+                    // ★★ KEEP RADIO ALIVE: park, never release — see g_vsKeepRadioAlive. Nearly all the saving is the
+                    //    processing, which parking stops too; a released radio on a port that powers down may not
+                    //    be there when the battery comes back.
+                    if (g_vsKeepRadioAlive.load() && p) {
+                        LOGI("battery: parking the radio for the low power state (keep radio alive — it keeps streaming)");
+                        p->pauseCaptureIdle();
+                    } else { LOGI("battery: releasing the radio for the low power state"); releaseRadio(); }
                 }).detach();
             }
         }
@@ -29009,6 +29039,16 @@ bool LocalSdrShim::usbHandleDead() const {
     return p && p->usbFdDead.load();
 #else
     return false;
+#endif
+}
+void LocalSdrShim::usbRadioAttached() {
+#ifdef __ANDROID__
+    if (!p || !p->usbFdDead.load()) return;
+    // ★ Both exchanged unconditionally — an `||` would skip the second whenever the first had failures.
+    const int fails = p->freshFdFails.exchange(0);
+    const double retryAt = p->freshFdRetryAt.exchange(0.0);
+    if (fails > 0 || retryAt > 0.0)
+        LOGI("USB: the radio attached again — the fresh-handle back-off is spent, asking at once");
 #endif
 }
 std::string LocalSdrShim::radioProblemText() const { return radioProblem(); }

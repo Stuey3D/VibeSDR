@@ -82,15 +82,76 @@ class RtlTcpServerService : Service() {
         override fun run() {
             updateNotification()
             pollUsbRecovery()
+            applyCpuHold()
             handler.postDelayed(this, 2000)
         }
+    }
+
+    /** ★★★ THE WAKE LOCK FOLLOWS THE RADIO (2026-10-06) — held while there is one to serve, let go once it has
+     *  been gone a while (VibeServerRestore.holdCpuAwake; the evidence is in vibe_usb_recovery.h). On the Sony
+     *  a held lock means Android never tries to suspend, and a suspend attempt is the only thing that re-powers
+     *  the port a dropped dongle sits on. The attach watch takes it back the moment the radio returns.
+     *  ★ Only a vibeserver: the rtl_tcp server keeps no departure stamp, so it always holds — as before. */
+    private var cpuLetGo = false
+    private fun applyCpuHold() {
+        val hold = try { VibeServerRestore.holdCpuAwake(applicationContext) } catch (_: Throwable) { true }
+        if (hold) {
+            if (cpuLetGo) { cpuLetGo = false; Log.i(TAG, "radio back — holding the CPU awake again") }
+            acquireWakeLock()
+        } else {
+            // ★ Released on EVERY tick that says so, not only on the transition: an attach takes the lock (the watch
+            //   below) before anyone knows whether the radio will be adopted, and if it is not, this must let go again.
+            releaseWakeLock()
+            if (!cpuLetGo) {
+                cpuLetGo = true
+                Log.i(TAG, "the radio has been gone a while — letting the device sleep so it can power the USB port " +
+                           "back up; the radio attaching wakes the server")
+            }
+        }
+    }
+
+    /** ★★★ TRY THE HAND-BACK NOW, AND KEEP TRYING FOR A FEW SECONDS — asked for by an attach
+     *  (VibeServerRestore.onRadioAttached). The 2 s tick alone can miss a radio that is only on the bus for ~10 s,
+     *  and the engine may not have noticed its old handle is dead the instant the new device appears — it needs
+     *  3 s of silence. So: every half second for 15 s, until the engine has the radio or there is nothing to do.
+     *  ★ On the watch thread, never the main one (openDevice is a binder call, and a USB attach launches the
+     *    activity, whose React start-up holds the main thread for seconds). recoverUsbIfNeeded is @Synchronized,
+     *    so this and the tick's poll never act at once. A second attach restarts the burst. */
+    private var burstLeft = 0
+    private val burst = object : Runnable {
+        override fun run() {
+            if (burstLeft-- <= 0) return
+            val st = try { VibeServerRestore.recoverUsbIfNeeded(applicationContext) } catch (t: Throwable) {
+                Log.w(TAG, "USB recovery failed: $t"); null
+            }
+            if (st != null && st != lastUsbState) Log.i(TAG, "USB recovery (attach): $st")
+            lastUsbState = st
+            if (st == VibeServerRestore.RADIO_GONE_TOO_LONG) { stopForRadioGone(); return }
+            if (st == "handed back") { burstLeft = 0; return }
+            watchHandler?.postDelayed(this, 500)
+        }
+    }
+    private fun kickRecovery() {
+        val h = watchHandler ?: return
+        h.post {
+            acquireWakeLock()   // ★ the radio is back: there is something to serve again
+            h.removeCallbacks(burst)
+            burstLeft = 30
+            h.post(burst)
+        }
+    }
+
+    /** ★ Gone longer than the owner allows — stop, as the owner's Stop button would. One place, both callers. */
+    private fun stopForRadioGone() {
+        VibeServerRestore.stopBecauseRadioGone(applicationContext)
+        handler.post { stopSelf() }
     }
 
     /** ★★★ A RE-ENUMERATED DONGLE NEEDS A FRESH FD, AND ONLY JAVA CAN GET ONE — see
      *  VibeServerRestore.recoverUsbIfNeeded. Polled on the 2 s tick while the service runs; off the main
      *  thread (openDevice is a binder call) and never two at once. */
     @Volatile private var usbPollBusy = false
-    private var lastUsbState: String? = null
+    @Volatile private var lastUsbState: String? = null
     private fun pollUsbRecovery() {
         if (usbPollBusy) return
         usbPollBusy = true
@@ -102,10 +163,7 @@ class RtlTcpServerService : Service() {
                 /* ★★★ GONE LONGER THAN A BLIP — STOP, as the owner's Stop button would (Stuart, 2026-09-29;
                  *  see VibeServerRestore.RADIO_BLIP_WINDOW_MS). The engine would otherwise wait for its
                  *  dongle for ever and serve again the moment it was replugged, however much later. */
-                if (st == VibeServerRestore.RADIO_GONE_TOO_LONG) {
-                    VibeServerRestore.stopBecauseRadioGone(applicationContext)
-                    handler.post { stopSelf() }
-                }
+                if (st == VibeServerRestore.RADIO_GONE_TOO_LONG) stopForRadioGone()
             } catch (t: Throwable) {
                 Log.w(TAG, "USB recovery failed: $t")
             } finally { usbPollBusy = false }
@@ -116,23 +174,47 @@ class RtlTcpServerService : Service() {
      *  VibeServerRestore.noteRadioGone. A runtime receiver, so it exists exactly while a server does;
      *  USB_DEVICE_DETACHED is a system broadcast, so no export flag is needed. The engine's own
      *  dead-handle report stamps it too (recoverUsbIfNeeded), for a departure this misses. */
+    /* ★★★ AND THE MOMENT IT COMES BACK (2026-10-06) — USB_DEVICE_ATTACHED, on the same receiver. Until now the
+     *  recovery heard of a returning radio only through its own 2 s poll; see VibeServerRestore.onRadioAttached.
+     * ★ On a thread of its own (watchHandler): the attach also launches the activity, and React's start-up holds
+     *   the main thread for seconds ("Skipped 113 frames" on the Sony at 21:17:34) — longer than the radio may stay. */
     private var detachReceiver: BroadcastReceiver? = null
+    private var watchThread: android.os.HandlerThread? = null
+    @Volatile private var watchHandler: Handler? = null
     private fun watchForDetach() {
         if (detachReceiver != null) return
+        val t = android.os.HandlerThread("vibe-usb-watch").apply { start() }
+        val h = Handler(t.looper)
         val r = object : BroadcastReceiver() {
             override fun onReceive(c: Context, i: Intent) {
-                if (i.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
                 @Suppress("DEPRECATION")
                 val dev = i.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE) ?: return
                 if (!VibeLocalSdrModule.isServableRadio(dev.vendorId, dev.productId)) return
-                if (!VibeServerRestore.isShimServing()) return
-                VibeServerRestore.noteRadioGone(applicationContext, "USB detach of ${dev.deviceName}")
+                when (i.action) {
+                    UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                        if (!VibeServerRestore.isShimServing()) return
+                        VibeServerRestore.noteRadioGone(applicationContext, "USB detach of ${dev.deviceName}")
+                    }
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                        acquireWakeLock()   // ★ first: the attach may be the only thing keeping the device up
+                        VibeServerRestore.onRadioAttached(applicationContext, dev, "USB attach of ${dev.deviceName}")
+                    }
+                }
             }
         }
         try {
-            registerReceiver(r, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED))
+            registerReceiver(r, IntentFilter().apply {
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            }, null, h)
             detachReceiver = r
-        } catch (t: Throwable) { Log.w(TAG, "cannot watch for the radio detaching: $t") }
+            watchThread = t
+            watchHandler = h
+            VibeServerRestore.attachKick = { kickRecovery() }
+        } catch (e: Throwable) {
+            Log.w(TAG, "cannot watch for the radio detaching or attaching: $e")
+            t.quitSafely()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -232,7 +314,8 @@ class RtlTcpServerService : Service() {
         }
     }
 
-    private fun acquireWakeLock() {
+    // ★ Synchronized: the tick (main thread) and the attach watch (its own thread) both move it now.
+    @Synchronized private fun acquireWakeLock() {
         if (wakeLock != null) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VibeSDR:RtlTcpServer").apply {
@@ -241,7 +324,7 @@ class RtlTcpServerService : Service() {
         }
     }
 
-    private fun releaseWakeLock() {
+    @Synchronized private fun releaseWakeLock() {
         try { wakeLock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) {}
         wakeLock = null
     }
@@ -359,6 +442,11 @@ class RtlTcpServerService : Service() {
             try { unregisterReceiver(r) } catch (t: Throwable) { Log.w(TAG, "unregistering the detach watch: $t") }
         }
         detachReceiver = null
+        VibeServerRestore.attachKick = null
+        watchHandler?.removeCallbacksAndMessages(null)
+        watchHandler = null
+        watchThread?.quitSafely()
+        watchThread = null
         releaseWakeLock()
         wifiLock.release()
         super.onDestroy()

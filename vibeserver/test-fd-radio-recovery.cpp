@@ -172,6 +172,64 @@ static void testRules() {
           "the advice must say what to do");
 }
 
+// ── A radio that has gone: give up, and hold the CPU? (2026-10-06, the Sony in standby) ─────────
+/* ★ The departure stamp's three moves, exactly as VibeServerRestore makes them: noteRadioGone stamps ONCE
+ *   (the first sign wins), noteRadioSeen restarts a stamp that exists (an attach that has not been adopted
+ *   yet), noteRadioBack clears it. The VERDICTS are the header's; this only drives them through time. */
+struct GoneStamp {
+    bool stamped = false; long long since = 0;
+    void left(long long t)  { if (!stamped) { stamped = true; since = t; } }
+    void seen(long long t)  { if (stamped) since = t; }
+    void back()             { stamped = false; }
+    long long goneMs(long long t) const { return stamped ? t - since : -1; }
+};
+
+static void testGoneRadio() {
+    std::printf("gone radio: give up / hold the CPU\n");
+    using namespace vibe::usbrecovery;
+    const long long S = 1000;
+    // ★ No stamp: never give up, always hold.
+    CHECK(!giveUpOnGoneRadio(false, -1, false), "nothing on record — nothing to give up on");
+    CHECK(holdCpuAwake(false, -1), "no departure — the CPU is held");
+    // ★ An earlier boot's stamp gives up, keep-alive or not: a reboot is never a blip.
+    CHECK(giveUpOnGoneRadio(true, -1, false), "a reboot is never a blip");
+    CHECK(giveUpOnGoneRadio(true, -1, true), "a reboot is never a blip, even with keep radio alive");
+    // ★ Stuart's five minutes, to the millisecond either side.
+    CHECK(!giveUpOnGoneRadio(true, kRadioBlipWindowMs, false), "exactly five minutes is still a blip");
+    CHECK(giveUpOnGoneRadio(true, kRadioBlipWindowMs + 1, false), "past five minutes the server stops");
+    CHECK(!giveUpOnGoneRadio(true, 24 * 3600 * S, true), "keep radio alive waits a day, and longer");
+
+    // ★★★ THE SONY, 2026-10-06, replayed: the dongle left at 21:12:14 and was not back for 307 s.
+    {
+        GoneStamp g; const long long t0 = 0;
+        g.left(t0);
+        CHECK(holdCpuAwake(g.stamped, g.goneMs(t0 + 2 * S)), "a 2 s re-enumeration keeps the CPU held");
+        CHECK(!holdCpuAwake(g.stamped, g.goneMs(t0 + kLetSleepAfterGoneMs)),
+              "gone %lld s — the CPU must be let go so the TV can re-power the port", kLetSleepAfterGoneMs / S);
+        CHECK(giveUpOnGoneRadio(g.stamped, g.goneMs(t0 + 301 * S), false),
+              "keep radio alive OFF: stopped at five minutes, as at 21:17:15");
+        CHECK(!giveUpOnGoneRadio(g.stamped, g.goneMs(t0 + 301 * S), true),
+              "keep radio alive ON: still waiting at five minutes");
+        // …and then back at 307 s, every 12 s, ~10 s at a time, for an hour. Each attach restarts the clock;
+        // none is adopted (the worst case). Not ONE tick of that hour may give up, even with keep-alive OFF.
+        bool gaveUp = false, heldAtAttach = true;
+        for (long long t = t0 + 307 * S; t < t0 + 3600 * S; t += 2 * S) {
+            if ((t - (t0 + 307 * S)) % (12 * S) == 0) { g.seen(t); heldAtAttach &= holdCpuAwake(g.stamped, g.goneMs(t)); }
+            gaveUp |= giveUpOnGoneRadio(g.stamped, g.goneMs(t), false);
+        }
+        CHECK(!gaveUp, "a radio that keeps coming back must never be given up on");
+        CHECK(heldAtAttach, "every attach must take the CPU back at once");
+        g.back();
+        CHECK(!giveUpOnGoneRadio(g.stamped, g.goneMs(t0 + 7200 * S), false), "adopted — the stamp is spent");
+        CHECK(holdCpuAwake(g.stamped, g.goneMs(t0 + 7200 * S)), "adopted — the CPU is held again");
+    }
+    // ★ A departure seen twice (the broadcast, then the engine) does not restart the clock.
+    {
+        GoneStamp g; g.left(0); g.left(200 * S);
+        CHECK(g.goneMs(301 * S) == 301 * S, "the first sign of a departure wins");
+    }
+}
+
 // ── HackRF ─────────────────────────────────────────────────────────────────────────────────────
 static void testHackRf() {
     std::printf("HackRfSource\n");
@@ -278,6 +336,7 @@ static void testAirspy() {
 
 int main() {
     testRules();
+    testGoneRadio();
     testHackRf();
     testAirspy();
     if (fails) { std::printf("%d FAILED\n", fails); return 1; }

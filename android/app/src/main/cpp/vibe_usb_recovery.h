@@ -40,6 +40,49 @@ inline double freshFdRetryDelaySecs(int failures) {
 constexpr int kReplugAfterFailures = 4;
 inline bool needsReplug(int failures) { return failures >= kReplugAfterFailures; }
 
+/** ★★★ HOW LONG A RUNNING SERVER WAITS FOR A RADIO THAT HAS GONE — five minutes, Stuart's figure
+ *  (2026-09-29: "if unplugged for a decent amount of time dont auto resume the server as there is a good
+ *  job the owner may have forgotten they were serving"). VibeServerRestore.RADIO_BLIP_WINDOW_MS is this. */
+constexpr long long kRadioBlipWindowMs = 5LL * 60 * 1000;
+
+/** ★★★ STOP WAITING FOR A GONE RADIO? (2026-10-06, the Sony in standby.)
+ *  `stamped`  — a departure is on record (the detach broadcast, or the engine finding its handle dead).
+ *  `goneMs`   — how long since the radio was last SEEN: since it left, or since it last re-appeared without
+ *               being adopted (an attach restarts the clock — see VibeServerRestore.noteRadioSeen); -1 when
+ *               the stamp was written in an earlier boot.
+ *  `keepAlive`— the owner's "Keep radio alive" switch.
+ *  ★★★ KEEP RADIO ALIVE NEVER GIVES UP. The Sony lost its dongle at 21:12:14 in standby, the five minutes
+ *      ran out at 21:17:15 and the server stopped AND DISARMED — and the dongle was back six seconds later,
+ *      then every twelve seconds after that for the rest of the night, to a server that would never take it
+ *      again. On a box whose USB ports come and go by themselves, "gone five minutes" says nothing about the
+ *      owner having forgotten: the owner has said so, by turning this on.
+ *  ★★ A REBOOT IS NEVER A BLIP, with or without it — an earlier boot's stamp (-1) always gives up. Coming
+ *     back after a power cut is the "start when power returns" switch's decision, not this one.
+ *  ★ No stamp, nothing to give up on. */
+inline bool giveUpOnGoneRadio(bool stamped, long long goneMs, bool keepAlive) {
+    if (!stamped) return false;
+    if (goneMs < 0) return true;
+    if (keepAlive) return false;
+    return goneMs > kRadioBlipWindowMs;
+}
+
+/** ★★★ HOLD THE CPU AWAKE ONLY WHILE THERE IS A RADIO TO SERVE (2026-10-06).
+ *  The Sony re-powers a USB port only when Android tries to SUSPEND, and Android never tries while an app
+ *  holds a wake lock. From boot to 21:17:15 the server held one and there was not a single suspend attempt
+ *  in the log; the dongle that dropped at 21:12:14 stayed off the bus for the whole five minutes. The server
+ *  stopped, the lock went, the first suspend attempt came at 21:17:20 — "libsuspend: error writing to
+ *  /sys/power/wakeup_count" — and the dongle re-attached at 21:17:21. Every later attach and detach in that
+ *  log sits on the same line as one of those attempts.
+ *  ★ So a wake lock held over a radio that has GONE is what keeps it gone. Once it has been away for
+ *    kLetSleepAfterGoneMs the lock is let go; the attach that brings the radio back takes it again at once
+ *    (RtlTcpServerService's attach watch). A quick re-enumeration (a nudge, ~2 s) never gets that far.
+ *  ★ Nothing is lost by letting go: with no radio there is nothing to stream, and the Wi-Fi lock stays. */
+constexpr long long kLetSleepAfterGoneMs = 20LL * 1000;
+inline bool holdCpuAwake(bool stamped, long long goneMs) {
+    if (!stamped || goneMs < 0) return true;
+    return goneMs < kLetSleepAfterGoneMs;
+}
+
 /** ★ The sentence, per radio — one place, so the log, the admin page, the app and every listener's
  *  banner say the same thing. Plain words: what is wrong, and the one thing that fixes it. */
 inline const char* replugAdvice() {
