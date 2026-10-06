@@ -7,6 +7,7 @@
  */
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
+import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
@@ -7969,6 +7970,10 @@ async function loadOwnerNotice() {
     if (!r.ok) return;
     const j = await r.json();
     if (typeof j?.notice === 'string' && j.notice) showOwnerNotice(j.notice);
+    // ★ The aerial's ranges and filters (2026-10-06) — the owner's text, per radio. See antennaNotice.ts.
+    //   It follows the dial itself (every tune path, not only the ones that call renderFreq).
+    setAntennaBands(j?.antennaRanges, j?.antennaFilters,
+                    () => Math.round(spec?.frequency ?? 0), (t) => showPill(t, 9000));
     // ★★★ THE LANDING FIELDS COME FROM HERE TOO, AND THIS IS THE ONLY SOURCE A SIMPLE SERVER HAS.
     //     A one-radio machine never draws a picker, so it never fetches /vibeserver/radios — a
     //     field that only travelled with the directory would be invisible on most servers in the
@@ -14987,6 +14992,7 @@ function initHrfControls() {
 
 function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   radioCaps = caps;
+  setAntennaPort(caps?.antenna);   // ★ which socket — an RSP's ranges/filters can belong to one
   // ★★★ A NEW RADIO IS A NEW CONNECTION, so the once-per-connection notices are armed again.
   //     The comment on gainMinShown said this already happened; it did not — the flag was set
   //     once and never cleared, so the notice was really once per PAGE LOAD and a listener who
