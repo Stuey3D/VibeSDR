@@ -170,7 +170,7 @@ public:
         scfChecked_ = 0; scfOk_[0] = scfOk_[1] = scfOk_[2] = scfOk_[3] = 0;
         lsfOrphans_ = 0; aacDecoded_ = 0; aacPcmPerAu_ = 0;
         sfFrames_ = sfBadLen_ = sfTried_ = sfOk_ = 0; ausOut_ = 0;
-        rsCorrected_ = rsUncorrected_ = 0; sfInvalid_ = 0; sfFireBad_ = 0;
+        rsCorrected_ = rsUncorrected_ = 0; sfInvalid_ = 0; sfFireBad_ = 0; auIn_ = auBad_ = 0;
         pcmFilled_ = 0; pcmPushed_ = 0;
     }
     void setService(uint32_t sid) {
@@ -802,10 +802,10 @@ public:
         j += b;
         const int nb2 = snprintf(b, sizeof b,
                  ",\"locked\":%s,\"nullDepthDb\":%.1f,\"offsetHz\":%.0f,\"offsetPpm\":%.2f"
-                 ",\"carrierShift\":%d,\"prs\":%.3f,\"prsRef\":%.3f,\"prsRatio\":%.3f,\"erased\":%d,\"rsFixed\":%u,\"rsLost\":%u,\"sfInvalid\":%u,\"sfFireBad\":%u,\"dls\":\"%s\",\"dlsChanges\":%u,\"dlsCrcOk\":%u,\"dlsCrcFail\":%u,\"padFrames\":%u,\"xNone\":%u,\"xShort\":%u,\"xVar\":%u,\"xApp2\":%u,\"xApp3\":%u,\"xApp1\":%u,\"xApp12\":%u,\"fibOk\":%d,\"fibTotal\":%d,\"fibRate\":%.3f"
+                 ",\"carrierShift\":%d,\"prs\":%.3f,\"prsRef\":%.3f,\"prsRatio\":%.3f,\"erased\":%d,\"rsFixed\":%u,\"rsLost\":%u,\"sfInvalid\":%u,\"sfFireBad\":%u,\"auIn\":%u,\"auBad\":%u,\"dls\":\"%s\",\"dlsChanges\":%u,\"dlsCrcOk\":%u,\"dlsCrcFail\":%u,\"padFrames\":%u,\"xNone\":%u,\"xShort\":%u,\"xVar\":%u,\"xApp2\":%u,\"xApp3\":%u,\"xApp1\":%u,\"xApp12\":%u,\"fibOk\":%d,\"fibTotal\":%d,\"fibRate\":%.3f"
                  ",\"frames\":%d,\"sid\":%u,\"bitrate\":%d,\"protection\":\"%s\"",
                  s.locked ? "true" : "false", s.nullDepthDb, s.freqOffsetHz, s.freqOffsetPpm,
-                 s.intOffsetCarriers, s.prsCorrelation, s.prsRef, s.prsRef > 0.0f ? s.prsCorrelation / s.prsRef : 0.0f, s.erasedFrames, rsCorrected_, rsUncorrected_, sfInvalid_, sfFireBad_, esc(pad_.dls().label().text).c_str(), pad_.dls().label().changes, pad_.dls().crcOk(), pad_.dls().crcFail(), pad_.framesSeen(), pad_.xIndCount(0), pad_.xIndCount(1), pad_.xIndCount(2), pad_.appSeen(2), pad_.appSeen(3), pad_.appSeen(1), pad_.appSeen(12), s.fibsOk, s.fibsTotal, s.fibRate,
+                 s.intOffsetCarriers, s.prsCorrelation, s.prsRef, s.prsRef > 0.0f ? s.prsCorrelation / s.prsRef : 0.0f, s.erasedFrames, rsCorrected_, rsUncorrected_, sfInvalid_, sfFireBad_, auIn_, auBad_, esc(pad_.dls().label().text).c_str(), pad_.dls().label().changes, pad_.dls().crcOk(), pad_.dls().crcFail(), pad_.framesSeen(), pad_.xIndCount(0), pad_.xIndCount(1), pad_.xIndCount(2), pad_.appSeen(2), pad_.appSeen(3), pad_.appSeen(1), pad_.appSeen(12), s.fibsOk, s.fibsTotal, s.fibRate,
                  s.framesSeen, unsigned(sid_), rx_.serviceBitrate(),
                  rx_.uepProf().valid ? "UEP" : (rx_.profile().valid ? "EEP" : ""));
         /* ★ snprintf returns the length it WANTED, so a truncation is knowable. Emit a valid
@@ -1973,6 +1973,9 @@ private:
         rsUncorrected_ += uint32_t(s.rsUncorrected < 0 ? 0 : s.rsUncorrected);
         if (!s.valid)       ++sfInvalid_;
         if (!s.firecodeOk)  ++sfFireBad_;
+        // ★★★ Per ACCESS UNIT, not per super frame — see SuperFrame::auBad. A header that passed its
+        //     firecode is a real super frame, so its AU count is the audio that was due.
+        if (s.firecodeOk) { auIn_ += uint32_t(s.auTotal); auBad_ += uint32_t(s.auBad); }
         if (!s.valid || !s.firecodeOk) { sf_.pop_front(); return; }
         sf_.clear();
         ++sfOk_;
@@ -2184,6 +2187,7 @@ private:
     uint64_t   pcmOwed_   = 0;     ///< 48 kHz frames the programme clock says we should have sent
     uint32_t   pcmFilled_ = 0;
     uint32_t   rsCorrected_ = 0, rsUncorrected_ = 0;  ///< Reed-Solomon: bytes fixed / codewords lost
+    uint32_t   auIn_ = 0, auBad_ = 0;                 ///< DAB+ access units due / failed their CRC (the audio heard)
     uint32_t   sfInvalid_ = 0, sfFireBad_ = 0;
     size_t     settleDrop_ = 0;      ///< IQ samples still to discard after a retune
     uint32_t   preTuneDropped_ = 0;  ///< how many were discarded, ever — published

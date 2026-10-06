@@ -1019,7 +1019,9 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
   const dab = React.useContext(DabMeterContext);
   /* ★★ IN DAB THE READING IS THE RECEPTION VERDICT ("Weak"), not the passband's S-reading — which said S9 for an
    *  hour on a multiplex that never played (2026-10-06) — and never SQL: squelch does not gate DAB. */
-  const text = dab ? dab.short
+  /* ★ The box shows the multiplex's MER (DAB's SNR) — the bar beside it already says "Weak"; repeating the
+   *  word wasted the box (Stuart, 2026-10-06). The word only while there is no MER yet. */
+  const text = dab ? (dab.merDb !== undefined ? formatReading('snr', dab.merDb) : dab.short)
     : m && (m.active || !snrText) ? meterText(meterMode ?? 'snr', m) : (snrText ?? '');
   const active = m ? m.active : !!signalActive;
   const sqlClosed = !dab && sqlClosedOf(m ? (m.sql ?? -1) : -1, m?.gate, m ? m.level : 0);
@@ -1033,7 +1035,7 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
     loop.start();
     return () => loop.stop();
   }, [sqlClosed, breathe]);
-  return { text, active, sqlClosed, breathe, unit: meterMode ?? 'snr' };
+  return { text, active, sqlClosed, breathe, unit: dab ? 'snr' : (meterMode ?? 'snr') };
 }
 
 /** The mode label (+ stereo rings) over the reading / breathing SQL — the mode box's contents. */

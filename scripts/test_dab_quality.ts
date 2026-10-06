@@ -48,8 +48,20 @@ eq('DAB+ Pi 2 wire: 95.7 % OK → moderate', lvl({ sfTried: 1111, sfOk: 1063 }),
 eq('DAB+ all OK → strong', lvl({ sfTried: 42, sfOk: 42 }), 3);
 eq('DAB+ 14 % lost detail', classifyDabWindow(W({ sfTried: 50, sfOk: 43 })).detail, '14 % frames lost');
 eq('DAB+ all OK, no detail', classifyDabWindow(W({ sfTried: 42, sfOk: 42 })).detail, undefined);
-eq('DAB+ clean audio beats a poor MER/BER prediction (bursty errors)',
-   lvl({ sfTried: 42, sfOk: 42, mer: 9, mscBer: 0.09 }), 3);
+eq('DAB+ clean ACCESS UNITS beat a poor MER/BER prediction (bursty errors)',
+   lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 0, mer: 9, mscBer: 0.09 }), 3);
+// ★★★ 2026-10-06 — the two "Strong on bubbling mud" reports
+eq('DAB+ every super frame "OK" but 30 % of access units lost → weak',
+   lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 50, mer: 9, mscBer: 0.09 }), 1);
+eq('DAB+ 3 % access units lost → moderate', lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 5 }), 2);
+eq('older server (no AU counter): all frames OK but BER 9 % → not strong',
+   lvl({ sfTried: 42, sfOk: 42, mer: 9, mscBer: 0.09 }), 2);
+eq('older server: Reed-Solomon failures inside OK frames → not strong',
+   lvl({ sfTried: 42, sfOk: 42, rsLost: 3, mer: 20 }), 2);
+eq('Layer II Coventry 12C: 2.8 % bad but ScF-CRC 0.71/frame → weak',
+   lvl({ mp2In: 6590, mp2Bad: 185, scfConcealed: 4675, mer: 8, mscBer: 0.129 }), 1);
+eq('Layer II clean: no ScF concealment → strong', lvl({ mp2In: 9980, mp2Bad: 15, scfConcealed: 40 }), 3);
+eq('Layer II ScF 0.05/frame → moderate', lvl({ mp2In: 1000, mp2Bad: 0, scfConcealed: 50 }), 2);
 eq('Layer II 9A: 19 % bad → weak', lvl({ mp2In: 1077, mp2Bad: 205 }), 1);
 eq('Layer II 12B V4L: 0.15 % bad → strong', lvl({ mp2In: 9980, mp2Bad: 15 }), 3);
 eq('Layer II 5 % bad → moderate', lvl({ mp2In: 200, mp2Bad: 10 }), 2);
@@ -105,6 +117,15 @@ eq('no FIC beats audio evidence', lvl({ fibNow: 0.01, sfTried: 40, sfOk: 40 }), 
 }
 
 eq('searching placeholder', [DAB_SEARCHING.level, DAB_SEARCHING.short], [0, 'No signal']);
+
+// ★ The second box: MER, not the verdict word again (2026-10-06)
+{
+  const m = new DabQualityMeter();
+  const q = m.push({ channel: '12C', locked: true, fibRate: 1, mer: 8.04, mp2In: 100, mp2Bad: 0, scfConcealed: 70 }, 1000);
+  eq('second box carries the MER', q.merDb !== undefined && Math.abs(q.merDb - 8.04) < 1e-9, true);
+  const n = new DabQualityMeter();
+  eq('no MER while unlocked', n.push({ channel: '12C', locked: false, mer: 9 }, 1000).merDb, undefined);
+}
 
 console.log(`dab quality: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

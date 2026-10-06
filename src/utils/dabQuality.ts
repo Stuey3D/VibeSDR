@@ -40,6 +40,10 @@ export interface DabQualityReport {
   mp2In?: number; mp2Bad?: number;
   sfTried?: number; sfOk?: number;
   rsFixed?: number; rsLost?: number;
+  /** Layer II sub-band groups whose ScF-CRC failed and were concealed — the MP2 "bubbling mud" counter. */
+  scfConcealed?: number;
+  /** DAB+ access units due / failed their CRC (servers from RC17; absent before). */
+  auIn?: number; auBad?: number;
 }
 
 export type DabLevel = 0 | 1 | 2 | 3;
@@ -54,6 +58,10 @@ export interface DabQuality {
   advice: string;
   /** The error figure behind the verdict, when there is one worth showing: "14 % frames lost", "BER 4.1 %". */
   detail?: string;
+  /** ★ The multiplex's MER (dB), averaged over the window — the SECOND box's reading (2026-10-06, Stuart: "the
+   *  2nd box can have a different metric in it rather than repeating the same thing"). MER is DAB's SNR: the
+   *  verdict sits in the bar, the measurement in the box where SNR/S-units sit for every other mode. */
+  merDb?: number;
 }
 
 const LABEL: Record<DabLevel, string> = {
@@ -102,7 +110,19 @@ export const FIB_STRONG = 0.99, FIB_WEAK = 0.90, FIB_NONE = 0.05;
  *  no audio counters are moving — once they are, the frames they lost already include these. */
 export const ERASED_MODERATE = 0.02, ERASED_WEAK = 0.10;
 /** Enough audio to judge on: ~0.5 s of DAB+ super frames (120 ms each), ~0.5 s of Layer II (24 ms each). */
-const MIN_SF = 4, MIN_MP2 = 20;
+const MIN_SF = 4, MIN_MP2 = 20, MIN_AU = 10;
+/* ★★★ THE MUD COUNTERS (2026-10-06). Stuart heard "pure bubbling mud" while the meter said STRONG (DAB+)
+ *  and MODERATE (Capital Coventry, MP2, Pi 500): both verdicts came from counters that cannot see mud.
+ *  • DAB+: a super frame counts OK if ONE of its 2–6 access units survives, so heavy AU loss read ~100 %.
+ *    The AU is the audio — judge on it (`auIn`/`auBad`). Thresholds: 1 % lost is a dropout every few
+ *    seconds; 8 % is continuous break-up.
+ *  • MP2: "bad frames" are header/allocation CRC failures only. The scale factors are unprotected, and
+ *    the residue that survives Viterbi lands there as mud — the ScF-CRC concealment counter is the
+ *    measure (vibe_dab_mp2.h). Coventry 12C: 4675 groups over 6590 frames (0.71 per frame) = deep mud,
+ *    at 2.8 % bad frames. 10D's mud was ~10 % of groups (≈0.2–0.4 per frame). Strong < 0.02 per frame. */
+export const AU_BAD_STRONG = 0.01, AU_BAD_WEAK = 0.08;
+export const SCF_STRONG = 0.02, SCF_WEAK = 0.15;
+
 /** ★ Hysteresis: a new level must be seen on this many consecutive reports before the bars move. Down is
  *  quicker than up — a multiplex that has started to break up should say so promptly, one that has
  *  recovered should prove it. At one report a second: 2 s down, 3 s up. */
@@ -117,6 +137,7 @@ const pct = (f: number) => {
 interface Sample {
   t: number;
   frames?: number; erased?: number; mp2In?: number; mp2Bad?: number; sfTried?: number; sfOk?: number;
+  scfConcealed?: number; auIn?: number; auBad?: number; rsLost?: number;
   fibRate?: number; mer?: number; mscBer?: number;
 }
 
@@ -127,6 +148,7 @@ export interface DabWindow {
   fibRate?: number; fibNow?: number;
   mer?: number; mscBer?: number;
   sfTried: number; sfOk: number; mp2In: number; mp2Bad: number; frames: number; erased: number;
+  scfConcealed?: number; auIn?: number; auBad?: number; rsLost?: number;
 }
 
 /** ★ The verdict for one window, with no memory — the pure core the meter wraps in hysteresis. */
@@ -136,15 +158,38 @@ export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: str
   if (w.fibNow !== undefined && w.fibNow < FIB_NONE) return { level: 0, detail: 'no station list' };
 
   // ── Audio evidence: what happened to the frames the listener would hear ──
-  if (w.sfTried >= MIN_SF) {
+  // The worst of the audio counters, then the BER/MER backstop below.
+  let audio: { level: DabLevel; detail?: string } | null = null;
+  const worseA = (l: DabLevel, d?: string) => { if (!audio || l < audio.level) audio = { level: l, detail: d }; };
+  if (w.auIn !== undefined && w.auIn >= MIN_AU) {
+    const lost = Math.min(w.auBad ?? 0, w.auIn) / w.auIn;
+    worseA(lost >= AU_BAD_WEAK ? 1 : lost >= AU_BAD_STRONG ? 2 : 3, lost > 0 ? `${pct(lost)} % audio lost` : undefined);
+  } else if (w.sfTried >= MIN_SF) {
     const lost = 1 - Math.min(w.sfOk, w.sfTried) / w.sfTried;
-    const level: DabLevel = 1 - lost <= SF_OK_WEAK ? 1 : 1 - lost <= SF_OK_STRONG ? 2 : 3;
-    return { level, detail: lost > 0 ? `${pct(lost)} % frames lost` : undefined };
+    worseA(1 - lost <= SF_OK_WEAK ? 1 : 1 - lost <= SF_OK_STRONG ? 2 : 3, lost > 0 ? `${pct(lost)} % frames lost` : undefined);
+    // ★ A server without the AU counter: Reed-Solomon giving up means AUs were lost inside "OK" frames.
+    if ((w.rsLost ?? 0) > 0) worseA(2, `${w.rsLost} RS failures`);
   }
   if (w.mp2In >= MIN_MP2) {
     const bad = Math.min(w.mp2Bad, w.mp2In) / w.mp2In;
-    const level: DabLevel = bad >= MP2_BAD_WEAK ? 1 : bad >= MP2_BAD_STRONG ? 2 : 3;
-    return { level, detail: bad > 0 ? `${pct(bad)} % frames bad` : undefined };
+    worseA(bad >= MP2_BAD_WEAK ? 1 : bad >= MP2_BAD_STRONG ? 2 : 3, bad > 0 ? `${pct(bad)} % frames bad` : undefined);
+    if (w.scfConcealed !== undefined) {
+      const mud = w.scfConcealed / w.mp2In;
+      worseA(mud >= SCF_WEAK ? 1 : mud >= SCF_STRONG ? 2 : 3, mud > 0 ? `${pct(Math.min(1, mud))} % mud` : undefined);
+    }
+  }
+  if (audio) {
+    let a: { level: DabLevel; detail?: string } = audio;
+    /* ★ The backstop applies only when the counter that SEES mud is missing — an older server's DAB+
+     *  (super frames only) or a Layer II report without ScF-CRC. With it, the audio counters are the
+     *  truth: 10D at BER ~9 % played clean on one radio and broke up on another (bursty errors), and the
+     *  AU / ScF counters tell those apart where BER cannot. Without it, a high BER cannot be Strong. */
+    const seesMud = (w.auIn !== undefined && w.auIn >= MIN_AU) || (w.mp2In >= MIN_MP2 && w.scfConcealed !== undefined);
+    if (!seesMud && a.level === 3) {
+      if (w.mscBer !== undefined && w.mscBer >= BER_WEAK) a = { level: 2, detail: `BER ${pct(w.mscBer)} %` };
+      else if (w.mer !== undefined && w.mer > 0 && w.mer < MER_WEAK) a = { level: 2, detail: `MER ${w.mer.toFixed(1)} dB` };
+    }
+    return a;
   }
 
   // ── Prediction: no audio decoding yet (no service, or one just picked) ──
@@ -200,6 +245,7 @@ export class DabQualityMeter {
       t: nowMs,
       frames: num(r.frames), erased: num(r.erased), mp2In: num(r.mp2In), mp2Bad: num(r.mp2Bad),
       sfTried: num(r.sfTried), sfOk: num(r.sfOk),
+      scfConcealed: num(r.scfConcealed), auIn: num(r.auIn), auBad: num(r.auBad), rsLost: num(r.rsLost),
       fibRate: num(r.fibRate), mer: num(r.mer),
       // ★ DabPanel shows the BER only with a service selected — the server's figure is the MSC's.
       mscBer: sid ? num(r.mscBer) : undefined,
@@ -207,7 +253,7 @@ export class DabQualityMeter {
     // ★ A counter that went BACKWARDS was reset by the server (a service change): the older samples
     //   describe another station, so the window starts again from this one.
     const prev = this.samples[this.samples.length - 1];
-    if (prev && (['frames', 'erased', 'mp2In', 'mp2Bad', 'sfTried', 'sfOk'] as const)
+    if (prev && (['frames', 'erased', 'mp2In', 'mp2Bad', 'sfTried', 'sfOk', 'scfConcealed', 'auIn', 'auBad', 'rsLost'] as const)
         .some(k => prev[k] !== undefined && s[k] !== undefined && (s[k] as number) < (prev[k] as number))) {
       this.samples = [];
     }
@@ -216,7 +262,8 @@ export class DabQualityMeter {
     while (this.samples.length > 2 && nowMs - this.samples[1].t >= DAB_WINDOW_MS) this.samples.shift();
 
     const a = this.samples[0], b = s;
-    const d = (k: 'frames' | 'erased' | 'mp2In' | 'mp2Bad' | 'sfTried' | 'sfOk') => {
+    type Counter = 'frames' | 'erased' | 'mp2In' | 'mp2Bad' | 'sfTried' | 'sfOk' | 'scfConcealed' | 'auIn' | 'auBad' | 'rsLost';
+    const d = (k: Counter) => {
       const x = a[k], y = b[k];
       if (y === undefined) return 0;
       // ★ A single sample (window just started): its own count is all there is — the server zeroed
@@ -233,6 +280,10 @@ export class DabQualityMeter {
       fibRate: mean('fibRate'), fibNow: s.fibRate,
       mer: mean('mer'), mscBer: mean('mscBer'),
       sfTried: d('sfTried'), sfOk: d('sfOk'), mp2In: d('mp2In'), mp2Bad: d('mp2Bad'),
+      // ★ Optional counters stay undefined when the server never sent them (older servers).
+      scfConcealed: s.scfConcealed !== undefined ? d('scfConcealed') : undefined,
+      auIn: s.auIn !== undefined ? d('auIn') : undefined, auBad: s.auBad !== undefined ? d('auBad') : undefined,
+      rsLost: s.rsLost !== undefined ? d('rsLost') : undefined,
       // ★ frames/erased are the multiplex's, never zeroed with a service — but a fresh window has no
       //   history for them, and a session total is exactly what this meter must not judge on.
       frames: this.samples.length > 1 ? d('frames') : 0, erased: this.samples.length > 1 ? d('erased') : 0,
@@ -255,6 +306,7 @@ export class DabQualityMeter {
     const detail = lvl === v.level ? v.detail : undefined;
     this.last = {
       level: lvl, label: LABEL[lvl], short: SHORT[lvl],
+      ...(r.locked && win.mer !== undefined && win.mer > 0 ? { merDb: win.mer } : {}),
       advice: lvl === 0 && v.level === 0 && v.detail === 'no station list' ? 'Locked, but nothing decodes' : ADVICE[lvl],
       ...(detail && lvl !== 0 ? { detail } : {}),
     };

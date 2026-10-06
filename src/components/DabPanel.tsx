@@ -765,6 +765,12 @@ export default function DabPanel(p: DabPanelProps) {
           )}
           {!!d.sfTried && (
             <>
+              {/* ★★★ THE AUDIO ITSELF (2026-10-06): a super frame is "OK" if ONE access unit survives, so
+                  the row above read ~100 % on bubbling mud. This one counts what the listener hears. */}
+              {!!d.auIn && (
+                <Row label="Audio units" value={`${d.auBad ?? 0} of ${d.auIn} lost`}
+                     tone={(d.auBad ?? 0) / d.auIn < 0.01 ? 'ok' : (d.auBad ?? 0) / d.auIn < 0.08 ? 'warn' : 'bad'} />
+              )}
               <Row label="DAB+ super frames" value={`${d.sfOk ?? 0} of ${d.sfTried}`}
                    tone={(d.sfOk ?? 0) / d.sfTried > 0.98 ? 'ok' : (d.sfOk ?? 0) / d.sfTried > 0.9 ? 'warn' : 'bad'} />
               <Row label="Reed-Solomon" value={`${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`}
