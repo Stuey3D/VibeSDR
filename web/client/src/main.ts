@@ -12790,6 +12790,7 @@ function recordingName(hz: number, mode: string, at: Date): string {
  *  "am I recording", which is how a STOP button ends up starting a second recording. */
 function showRecording(on: boolean) {
   $('mPanelRec').classList.toggle('rec', on);
+  $('mAudio').classList.toggle('rec', on);   // ★ the way back to STOP breathes too (app parity)
   setText($('mRecLbl'), on ? 'STOP' : 'REC');
   if (!on) setText($('mRecVal'), '');
   // The whole group (dot + digits) appears and disappears together.

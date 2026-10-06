@@ -1923,6 +1923,24 @@ function useHandbackFlash() {
   return value;
 }
 
+/** ★ The recording pulse on the AUDIO key (0↔1, 2.5 s each way, native driver) — ONE for the portrait and the
+ *  landscape bars, so the two can never drift apart again (2026-10-06: landscape had lost it to a static outline). */
+function useRecPulse(isRecording: boolean | undefined): Animated.Value {
+  const recPulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (isRecording) {
+      const a = Animated.loop(Animated.sequence([
+        Animated.timing(recPulse, { toValue: 1, duration: 2500, useNativeDriver: true }),
+        Animated.timing(recPulse, { toValue: 0, duration: 2500, useNativeDriver: true }),
+      ]));
+      a.start();
+      return () => { a.stop(); recPulse.setValue(0); };
+    }
+    recPulse.setValue(0);
+  }, [isRecording, recPulse]);
+  return recPulse;
+}
+
 function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   dspNr, dspNb, dspAn,
@@ -1947,19 +1965,8 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   // absolutely-positioned tick/label nodes) that pegged the JS thread and iOS
   // killed the app for exceeding its background-CPU limit. Native opacity costs
   // nothing on the JS thread.
-  const recPulse = useRef(new Animated.Value(0)).current;
+  const recPulse = useRecPulse(isRecording);
   const macMuted = useMacSilenced();   // ★ the Mac MUTE's legend — false on anything but a Mac
-  useEffect(() => {
-    if (isRecording) {
-      const a = Animated.loop(Animated.sequence([
-        Animated.timing(recPulse, { toValue: 1, duration: 2500, useNativeDriver: true }),
-        Animated.timing(recPulse, { toValue: 0, duration: 2500, useNativeDriver: true }),
-      ]));
-      a.start();
-      return () => { a.stop(); recPulse.setValue(0); };
-    }
-    recPulse.setValue(0);
-  }, [isRecording, recPulse]);
 
   const chatPulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -2312,6 +2319,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   sharedDial,
   vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, onDrumAnchors }: any) {
   const handbackFlash = useHandbackFlash();
+  const recPulse = useRecPulse(isRecording);   // ★ the AUDIO key breathes while recording, as in portrait
   const { theme: t } = useTheme();
   /* ★ The station strip anchors its text between the VFO drum's + and the zoom drum's − (DrumWheel draws them
    *  max(3, 5 % of the drum) in from its edges). Measured in WINDOW coordinates, like onControlRects. */
@@ -2531,9 +2539,11 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
         {/* ★ Recording / unread chat: the outline turns red / blue on the default key (today's
             signal); a cap has no outline, so there it is a ring round the slot. */}
         <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach} onPress={onAudio}
-          outline={isRecording ? ct.keyBorderRec : undefined}
-          overlay={isCap && isRecording ? <View pointerEvents="none" style={[StyleSheet.absoluteFill,
-            { borderRadius: 6, borderWidth: 1, borderColor: ct.keyBorderRec }]} /> : undefined}
+          /* ★★ BREATHES, as the portrait key does (Stuart, 2026-10-06: the breathing went missing when the control
+              customisation arrived — this key got a STATIC red outline). One pulse on every chassis: a ring that
+              fades in and out on the same recPulse as portrait. */
+          overlay={isRecording ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill,
+            { borderRadius: 6, borderWidth: 1, borderColor: ct.keyPulseRec, opacity: recPulse }]} /> : undefined}
           accessibilityLabel={`${audioAsRecord ? 'Record' : 'Audio'}${macMuted ? ', muted' : ''}`}>
           {p => <AudioKeyLegend size={ICON_SZ} progress={p} asRecord={audioAsRecord} muted={macMuted} />}
         </DomeKey>

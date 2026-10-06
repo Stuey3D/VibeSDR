@@ -668,6 +668,13 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 /* ★ Keyed on a CLASS, not on #mAudio, because the audio button and the mute button in the
    volume row show the same fact and must never disagree about it. */
 .mIcMute { display: none; }
+/* ★★ RECORDING BREATHES ON THE AUDIO KEY (Stuart, 2026-10-06: "the button missing its breathing"). REC lives
+   inside the audio panel, so this key is the way back to STOP it — the app's AUDIO key pulses a red ring for the
+   same reason. The breathing REC key on the desktop bar went with that bar (5cea36a2); this is its home now. */
+#mAudio.rec { position: relative; }
+#mAudio.rec::after { content: ''; position: absolute; inset: -1px; border-radius: inherit; pointer-events: none;
+  border: 1px solid #ff3b30; box-shadow: 0 0 10px rgba(255,59,48,0.55), inset 0 0 6px rgba(255,59,48,0.25);
+  animation: sqlBreathe 1.4s ease-in-out infinite; }
 .muted .mIcLive { display: none; }
 .muted .mIcMute { display: inline-flex; }
 
