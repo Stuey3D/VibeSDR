@@ -2237,10 +2237,21 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* ★★ ZOOM AND PAN (Stuart, 2026-10-04: "user has a zoom function which can then zoom in and then pan left and right and
    up and down"). At 1x the picture fits whole exactly as before (#decImage's max-height + object-fit: contain). Zoomed,
    it is drawn wider than the box at its own aspect and this wrapper scrolls both ways. */
-#decAdjRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px;
-             color: var(--btn-text); }
+#decAdjRow, #decAlignRow { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 6px 10px;
+             font-size: 12px; color: var(--btn-text); }
 #decAdjRow span { min-width: 84px; }
-#decImgWrap { overflow: auto; max-height: calc(100dvh - var(--decBoxBottom, 14px) - 150px); }
+/* ★ 2026-10-06: the adjust keys are 44 px touch targets, 12 px apart — the header-key size was why neighbours got hit.
+   touch-action/user-select: a held key must not scroll the page or start a text selection. */
+#decBox .adjKey { min-width: 48px; min-height: 44px; padding: 4px 10px; font-size: 14px;
+                  touch-action: none; user-select: none; -webkit-user-select: none; }
+#decImgWrap { overflow: auto; max-height: calc(100dvh - var(--decBoxBottom, 14px) - 150px); position: relative; }
+/* ★ ALIGN: the picture becomes a drag target. A dark pill so the hint reads on white paper and black alike. */
+#decImgWrap.aligning { min-height: 72px; }
+#decAlignCover { position: absolute; inset: 0; cursor: ew-resize; touch-action: none; display: flex;
+                 justify-content: center; align-items: flex-start; padding-top: 8px; }
+#decAlignHint { background: rgba(0,0,0,0.62); color: #fff; border: 1px solid rgba(255,255,255,0.35); border-radius: 14px;
+                padding: 4px 12px; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; pointer-events: none;
+                white-space: nowrap; max-width: 94%; overflow: hidden; font-variant-numeric: tabular-nums; }
 #decImgWrap.zoomed #decImage { max-height: none; object-fit: fill; height: auto; width: calc(var(--decZoom, 1) * 100%); }
 #spotList { display: none; }
 #spotList.on { display: block; }
@@ -3022,7 +3033,7 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="decSave" title="Save image" style="display:none">SAVE</button>
     <button class="btn" id="decZoomOut" title="Zoom out" aria-label="Zoom out" style="display:none">−</button>
     <button class="btn" id="decZoomIn" title="Zoom in" aria-label="Zoom in" style="display:none">+</button>
-    <button class="btn" id="decAdj" title="Shift and slant" style="display:none">ADJ</button>
+    <button class="btn" id="decAdj" title="Align the chart and set its slant" style="display:none">ADJ</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
     <!-- ★ DAB: CLR clears a text pane DAB does not have, so in DAB this stands in its place
          (Stuart, 2026-09-07): the stations this receiver has learnt, bookmarks filtered to DAB. -->
@@ -3048,15 +3059,22 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="decHide" title="Stop and close">&#10005;</button>
   </div>
   </div>
-  <!-- ★ WEFAX SHIFT / SLANT (ADJ) — see utils/wefaxAlign.ts. -->
+  <!-- ★ WEFAX ALIGN / SLANT (ADJ) — see utils/wefaxAlign.ts. ★★ 2026-10-06 (Stuart: the ◀ ▶ keys were "really hard
+       to press … cannot be held"): ALIGN makes the picture a drag target with 1 / 5 px keys and DONE in place of this
+       row; the slant keys are big and repeat while held. Same as the app's DecoderPanel. -->
   <div id="decAdjRow" style="display:none">
-    <span id="decAdjShift">SHIFT 0</span>
-    <button class="btn" id="decShiftL" title="Shift left">&#9664;</button>
-    <button class="btn" id="decShiftR" title="Shift right">&#9654;</button>
+    <button class="btn adjKey" id="decAlign" title="Drag the chart sideways to align it">ALIGN</button>
     <span id="decAdjSlant">SLANT 0.000</span>
-    <button class="btn" id="decSlantDn" title="Slant less">−</button>
-    <button class="btn" id="decSlantUp" title="Slant more">+</button>
-    <button class="btn" id="decAdjReset" title="Back to the station preset" style="display:none">RESET</button>
+    <button class="btn adjKey" id="decSlantDn" title="Slant less (hold to repeat)" aria-label="Slant less">−</button>
+    <button class="btn adjKey" id="decSlantUp" title="Slant more (hold to repeat)" aria-label="Slant more">+</button>
+    <button class="btn adjKey" id="decAdjReset" title="Back to automatic" style="display:none">RESET</button>
+  </div>
+  <div id="decAlignRow" style="display:none">
+    <button class="btn adjKey" id="decShiftL5" title="Move the chart left 5 px (hold to repeat)">&#9664; 5</button>
+    <button class="btn adjKey" id="decShiftL1" title="Move the chart left 1 px (hold to repeat)">&#9664; 1</button>
+    <button class="btn adjKey" id="decShiftR1" title="Move the chart right 1 px (hold to repeat)">1 &#9654;</button>
+    <button class="btn adjKey" id="decShiftR5" title="Move the chart right 5 px (hold to repeat)">5 &#9654;</button>
+    <button class="btn adjKey on" id="decAlignDone" title="Finish aligning">DONE</button>
   </div>
   <div id="decBody">
     <!-- ★ DAB: one pane at a time, each getting the WHOLE box. A split would have made both
@@ -3076,7 +3094,8 @@ select.btn { padding: 6px 8px; }
       <pre id="nvText"></pre>
       <div id="nvIdle">standing by — each message appears here as it arrives</div>
     </div>
-    <div id="decImgWrap"><canvas id="decImage"></canvas></div>
+    <div id="decImgWrap"><canvas id="decImage"></canvas><div id="decAlignCover" style="display:none"
+      title="Drag sideways to align the chart"><span id="decAlignHint">◀ ─── drag ───▶</span></div></div>
     <div id="spotList"></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
          health. The VTS bar hides while this is open — no point showing the same data

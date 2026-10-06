@@ -9854,11 +9854,23 @@ function initDecoders(host: string, auth: AuthState) {
   // ★ A lost NNNN ends its message after 75 s of silence (NAVTEX_END_LOST_MS); nothing else would redraw then.
   setInterval(() => { if (activeDec === 'navtex' && navtexAsm.tick(Date.now())) renderNavtex(); }, 5000);
   $('decZoomIn').onclick = () => setDecZoom(decZoomI + 1);
-  $('decAdj').onclick = () => { const r = $('decAdjRow'); const open = r.style.display === 'none'; r.style.display = open ? '' : 'none'; $('decAdj').classList.toggle('on', open); };
-  $('decShiftL').onclick = () => { decManualShift = (decManualShift ?? decAuto.al?.shift ?? 0) + SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
-  $('decShiftR').onclick = () => { decManualShift = (decManualShift ?? decAuto.al?.shift ?? 0) - SHIFT_STEP; updateDecAdjLabels(); redrawDecAlign(); };
-  $('decSlantDn').onclick = () => setDecAlign({ ...decAlign, slant: decEffAlign().slant - SLANT_STEP });
-  $('decSlantUp').onclick = () => setDecAlign({ ...decAlign, slant: decEffAlign().slant + SLANT_STEP });
+  $('decAdj').onclick = () => {
+    const open = !$('decAdj').classList.contains('on');
+    $('decAdj').classList.toggle('on', open);
+    setDecAligning(false);   // ADJ always opens on the ALIGN / SLANT row; closing it closes ALIGN too
+    if (!open) { $('decAdjRow').style.display = 'none'; $('decAlignRow').style.display = 'none'; }
+  };
+  $('decAlign').onclick = () => setDecAligning(true);
+  $('decAlignDone').onclick = () => setDecAligning(false);
+  const nudgeShift = (d: number) => { decManualShift = decEffAlign().shift + d; updateDecAdjLabels(); redrawDecAlign(); };
+  const nudgeSlant = (d: number) => setDecAlign({ ...decAlign, slant: Math.round((decEffAlign().slant + d) * 1000) / 1000 });
+  holdRepeat($('decShiftL5'), (m) => nudgeShift(SHIFT_STEP * m));
+  holdRepeat($('decShiftL1'), (m) => nudgeShift(m));
+  holdRepeat($('decShiftR1'), (m) => nudgeShift(-m));
+  holdRepeat($('decShiftR5'), (m) => nudgeShift(-SHIFT_STEP * m));
+  holdRepeat($('decSlantDn'), (m) => nudgeSlant(-SLANT_STEP * m));
+  holdRepeat($('decSlantUp'), (m) => nudgeSlant(SLANT_STEP * m));
+  initDecAlignDrag();
   $('decAdjReset').onclick = () => { decManualShift = null; setDecAlign(null); };
   $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
@@ -10200,7 +10212,8 @@ function showDecBox(what: string) {
   setDecZoom(0);   // ★ a new decoder opens at FIT
   wefaxPhaseKnown = false;
   $('decAdj').style.display = what === 'wefax' ? '' : 'none';
-  if (what !== 'wefax') $('decAdjRow').style.display = 'none';
+  if (what !== 'wefax') $('decAdj').classList.remove('on');
+  decAligning = false; setDecAligning(false);   // ★ a decoder opens with ALIGN closed (and the rows hidden unless ADJ is on)
   if (what === 'wefax') { decAlignKey = ''; loadDecAlign(); }
   const isNavtex = what === 'navtex';
   $('decText').classList.toggle('off', image || isSpots || isNavtex);
@@ -11684,7 +11697,7 @@ let decLiveAl: Uint8Array[] = [];    // …and after SHIFT / SLANT: what the cri
 let decLiveHist = newHist();         // every raw pixel of this chart — its own paper and ink levels
 let decAlign: WefaxAlign = { shift: 0, slant: 0 };   // ★ the SLANT is the station's (saved); shift below is per chart
 /* ★★ SHIFT IS PER CHART (Stuart, 2026-10-04, from FLDigi: the margin "had shifted again and needed setting every
- *  time"): found per chart by chartAlignStep (margin, else blank border; slant measured); ◀ ▶ nudge THIS chart only. */
+ *  time"): found per chart by chartAlignStep (margin, else blank border; slant measured); ALIGN moves THIS chart only. */
 let decAuto: ChartAlignState = {};   // ★ this chart's own alignment (wefaxAlign chartAlignStep: margin, else border)
 let decManualShift: number | null = null;
 function decEffAlign(): WefaxAlign {
@@ -11720,10 +11733,91 @@ function setDecAlign(a: WefaxAlign | null, save = true) {
   redrawDecAlign();
 }
 function updateDecAdjLabels() {
-  $('decAdjShift').textContent = decManualShift != null ? `SHIFT ${decManualShift}`
-    : decAuto.al ? `SHIFT auto ${decAuto.al.shift}` : 'SHIFT auto';
+  $('decAlign').classList.toggle('on', decManualShift != null);   // lit = this chart's shift was set by hand
   $('decAdjSlant').textContent = !decAlignSaved && decAuto.al ? `SLANT auto ${decEffAlign().slant.toFixed(3)}` : `SLANT ${decAlign.slant.toFixed(3)}`;
   $('decAdjReset').style.display = decAlignSaved || decManualShift != null ? '' : 'none';
+  setDecAlignHint(decEffAlign().shift);
+}
+/** The shift as the listener reads it over the picture: px, signed, the short way round. */
+function setDecAlignHint(shift: number) {
+  const W = decLiveCv?.width || decImgWidth || 1809;
+  const s = Math.round((((shift % W) + W + W / 2) % W) - W / 2);
+  $('decAlignHint').textContent = `◀ ─── drag ───▶   SHIFT ${s > 0 ? '+' : ''}${s}`;
+}
+/* ★★★ ALIGN BY DRAGGING (Stuart, 2026-10-06: the ◀ ▶ keys were "really hard to press and are finicky and cannot be
+ *  held … on the ALIGN button have an overlay pop up over the chart <-----------> drag for rough alignment then use
+ *  buttons to fine tune"). The app's DecoderPanel + DecoderImageCanvas do the same. While dragging, the picture
+ *  already on screen is SLID (two blits side by side, wrapping) — no re-align per move; the chart is re-aligned
+ *  once, on release. The shift stays THIS chart's only (decManualShift), exactly as the old keys set it. */
+let decAligning = false;
+let decDragging = false;
+function setDecAligning(on: boolean) {
+  decAligning = on && !decViewingPrev && activeDec === 'wefax';
+  const adjOpen = $('decAdj').classList.contains('on');
+  $('decAdjRow').style.display = adjOpen && !decAligning ? '' : 'none';
+  $('decAlignRow').style.display = adjOpen && decAligning ? '' : 'none';
+  $('decAlignCover').style.display = decAligning ? '' : 'none';
+  $('decImgWrap').classList.toggle('aligning', decAligning);
+  $('decAlign').style.display = decViewingPrev ? 'none' : '';
+  if (decAligning) updateDecAdjLabels();
+}
+function initDecAlignDrag() {
+  const cover = $('decAlignCover');
+  let x0 = 0, start = 0, shown = 0, scale = 1;
+  const preview = (s: number) => {
+    const src = decLiveCv, vis = $<HTMLCanvasElement>('decImage');
+    if (!src) return;
+    const W = src.width, o = ((((s - decEffAlign().shift) % W) + W) % W);
+    const ctx = vis.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, vis.width, vis.height);
+    ctx.drawImage(src, -o, 0);
+    if (o) ctx.drawImage(src, W - o, 0);
+    setDecAlignHint(s);
+  };
+  cover.addEventListener('pointerdown', (e) => {
+    if (!decAligning || !decLiveCv) return;
+    e.preventDefault();
+    cover.setPointerCapture(e.pointerId);
+    const vis = $<HTMLCanvasElement>('decImage');
+    scale = vis.getBoundingClientRect().width / Math.max(1, vis.width);
+    x0 = e.clientX; start = shown = decEffAlign().shift; decDragging = true;
+  });
+  cover.addEventListener('pointermove', (e) => {
+    if (!decDragging) return;
+    // finger right → picture right → the line starts further LEFT in the received line → shift DOWN
+    shown = Math.round(start - (e.clientX - x0) / Math.max(scale, 1e-3));
+    preview(shown);
+  });
+  const end = () => {
+    if (!decDragging) return;
+    decDragging = false;
+    decManualShift = shown;
+    updateDecAdjLabels();
+    redrawDecAlign();
+    if (!decViewingPrev) blitToVisible(decLiveCv);
+  };
+  cover.addEventListener('pointerup', end);
+  cover.addEventListener('pointercancel', end);
+}
+/**
+ * ★★ A KEY THAT REPEATS WHILE HELD (2026-10-06; the app's useHoldRepeat). fn(1) on press, then after 380 ms every
+ * 90 ms, with a ×5 step from the 8th repeat — a tap is the finest step, a long hold covers ground. A keyboard press
+ * (click with no pointer) steps once.
+ */
+function holdRepeat(el: HTMLElement, fn: (mult: number) => void) {
+  let timer = 0;
+  const stop = () => { clearTimeout(timer); timer = 0; };
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    stop(); fn(1);
+    let n = 0;
+    const tick = () => { n++; fn(n >= 8 ? 5 : 1); timer = window.setTimeout(tick, 90); };
+    timer = window.setTimeout(tick, 380);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) el.addEventListener(ev, stop);
+  el.addEventListener('click', (e) => { if ((e as MouseEvent).detail === 0) fn(1); });
 }
 /** Redraw the WHOLE live chart from its kept lines, so a correction lands on what is on screen. */
 function redrawDecAlign() {
@@ -11764,7 +11858,7 @@ function paintDecRows(y0: number, y1: number, w: number) {
     for (let x = 0; x < w; x++) { const v = out[x], o = o0 + (x << 2); img.data[o] = img.data[o + 1] = img.data[o + 2] = v; img.data[o + 3] = 255; }
   }
   decLiveCtx.putImageData(img, 0, ys);
-  if (!decViewingPrev) {
+  if (!decViewingPrev && !decDragging) {   // ★ mid-drag the visible canvas is ALIGN's slid preview — blitted on release
     const vis = $<HTMLCanvasElement>('decImage');
     if (vis.width !== decLiveCv.width || vis.height !== decLiveCv.height) blitToVisible(decLiveCv);
     else vis.getContext('2d')?.putImageData(img, 0, ys);
@@ -11849,6 +11943,8 @@ function markDecImageComplete() {
 function toggleDecPrev() {
   if (!decPrevCv && !decViewingPrev) return;
   decViewingPrev = !decViewingPrev;
+  if (decAligning || decViewingPrev) setDecAligning(false);   // ★ ALIGN moves the LIVE chart; PREV hides it
+  else $('decAlign').style.display = '';
   blitToVisible(decViewingPrev ? decPrevCv : decLiveCv);
   updateDecImageButtons();
 }
