@@ -18,7 +18,8 @@
  *
  * The fields (all FIXED width — nothing moves when the value or the mode changes):
  *
- *   THE MODE FIELD   DOT_MODE_CELLS (10) cells: the demod right-aligned in the first three, then a COLON COLUMN of
+ *   THE MODE FIELD   DOT_MODE_CELLS (10) cells. ★ 2026-10-06: a PLAIN mode is one tight word on the plain cell pitch
+ *                    ("AM", "MESHTASTIC" — no colon column); with a decoder: the demod right-aligned in three, a COLON COLUMN of
  *                    its own (two dots wide — Doto Black's colon is a heavy cluster, so 2 × 2 blocks, not single
  *                    dots), then seven cells: "USB:RTTY", "USB:WHISPER", "MESHTASTIC". In WFM the last three
  *                    cells' room is the STEREO RINGS — drawn in dots on the same pitch (DOT_RINGS); in every other

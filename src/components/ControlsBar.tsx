@@ -1143,7 +1143,7 @@ function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
   return (<>
     <View style={{ height: Math.round(modeFontSize * 1.15), justifyContent: 'center' }}>
       <SegField fs={fs} width={width} ghost={ghost} lit={lit}
-        colonAfter={lay.marquee ? null : SEG_DEMOD_CELLS - 1} colonLit={lay.colon}
+        colonAfter={lay.split ? SEG_DEMOD_CELLS - 1 : null} colonLit={lay.colon}
         extras={modeExtras} extrasKey={rings?.key ?? ''}
         color={dk.mode} glow={dk.modeGlow} ghostColor={ghostCol}
         accessibilityLabel={`${modeLabel}${lay.stereoSlot ? (fmStereo ? ', stereo' : ', mono') : ''}`} />
@@ -1159,6 +1159,8 @@ function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
 
 /** The DOT mode field's cells' first dot columns (the colon column sits after the demod's three). */
 const DOT_MODE_CELL_COLS: readonly number[] = Array.from({ length: DOT_MODE_CELLS }, (_, i) => dotModeCellCol(i));
+/** The DOT mode field's cells for a PLAIN mode (no decoder): one dead column apart, no colon column. */
+const DOT_PLAIN_CELL_COLS: readonly number[] = Array.from({ length: DOT_MODE_CELLS }, (_, i) => i * DOT_ADV);
 /** The DOT readout's cells' first dot columns. */
 const DOT_READ_CELL_COLS: readonly number[] = Array.from({ length: DOT_READ_CELLS }, (_, i) => i * DOT_ADV);
 
@@ -1183,8 +1185,11 @@ function DotModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
                       [modeLabel, fmStereo]);
   const offset = useSegMarquee(lay.cells.length, lay.textCells, `${modeLabel}|${lay.textCells}`);
   const lit = lay.marquee ? cellWindow(lay.cells, lay.textCells, offset, '') : lay.cells;
-  const cellCols = useMemo(() => DOT_MODE_CELL_COLS.slice(0, lay.textCells), [lay.textCells]);
-  const marks: DotMark[] = [{ col: DOT_COLON_COL, rows: DOT_COLON, lit: lay.colon }];
+  // ★ The colon column exists only while the field is SPLIT (a decoder running): a plain mode is one tight word on
+  //   the plain cell pitch — "MESHTASTIC" no longer has a dead colon column between its S and H (2026-10-06).
+  const cellCols = useMemo(() => (lay.split ? DOT_MODE_CELL_COLS : DOT_PLAIN_CELL_COLS).slice(0, lay.textCells),
+                           [lay.split, lay.textCells]);
+  const marks: DotMark[] = lay.split ? [{ col: DOT_COLON_COL, rows: DOT_COLON, lit: lay.colon }] : [];
   if (lay.stereoSlot) marks.push({ col: DOT_RINGS_COL, rows: DOT_RINGS, lit: fmStereo });
 
   // ── The readout ──

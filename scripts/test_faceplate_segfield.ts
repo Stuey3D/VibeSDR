@@ -59,18 +59,23 @@ console.log(`  longest mode legend: "${longest.label}" (${longest.n} cells); ste
 //   field like the VTS strip, whole. Everything the app composes itself fits without moving.
 eq('only CW Skimmer is too long for the field — and it steps, never cut', overflow.filter(l => !/CWSKIMMER$/.test(l)), []);
 eq('USB:RTTY — demod, lit colon in the gap, decoder', segModeCells('USB: RTTY', false, cells),
-   { cells: ['U', 'S', 'B', 'R', 'T', 'T', 'Y'], colon: true, stereoSlot: false, textCells: 10, marquee: false });
-eq('AM sits where it does beside a decoder', segModeCells('AM', false, cells).cells, ['', 'A', 'M']);
+   { cells: ['U', 'S', 'B', 'R', 'T', 'T', 'Y'], colon: true, split: true, stereoSlot: false, textCells: 10, marquee: false });
+// ★ 2026-10-06 ("WF M"): a plain mode is ONE TIGHT WORD — from the first cell, and not split, so SegModeReadout
+//   ghosts no colon electrode after it.
+eq('AM — a plain mode starts at the first cell', segModeCells('AM', false, cells).cells, ['A', 'M']);
+eq('plain modes are never split (no colon electrode)', ['AM', 'WFM', 'USB', 'MESHTASTIC', 'DAB'].map(l => segModeCells(l, /^WFM/.test(l), cells).split),
+   [false, false, false, false, false]);
+eq('a decoder splits the field', ['USB: RTTY', 'AM: FT8', 'WFM: WHISPER'].map(l => segModeCells(l, /^WFM/.test(l), cells).split), [true, true, true]);
 eq('AM: RTTY — the demod right-aligned before the colon', segModeCells('AM: RTTY', false, cells).cells.slice(0, 3), ['', 'A', 'M']);
 eq('MESHTASTIC — ten cells, no colon', segModeCells('MESHTASTIC', false, cells).cells.length, 10);
 eq('WFM — the rings keep their slot', segModeCells('WFM', true, cells),
-   { cells: ['W', 'F', 'M'], colon: false, stereoSlot: true, textCells: SEG_MODE_CELLS - SEG_STEREO_CELLS, marquee: false });
+   { cells: ['W', 'F', 'M'], colon: false, split: false, stereoSlot: true, textCells: SEG_MODE_CELLS - SEG_STEREO_CELLS, marquee: false });
 eq('WFM: WHISPER — the decoder takes the rings\' slot, shown whole', segModeCells('WFM: WHISPER', true, cells).marquee, false);
 eq('DAB', segModeCells('DAB', false, cells).cells, ['D', 'A', 'B']);
 {
   const L = segModeCells('USB: AVERYLONGDECODER', false, cells);
   ok('an unforeseen long name steps through the field, never cut', L.marquee && L.cells.join('').includes('AVERYLONGDECODER'));
-  ok('…its colon taking a cell of its own, so it moves with the text', L.cells.includes(':') && !L.colon);
+  ok('…its colon taking a cell of its own, so it moves with the text', L.cells.includes(':') && !L.colon && !L.split);
 }
 
 // ── The readout ──

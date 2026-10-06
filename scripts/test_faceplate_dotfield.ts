@@ -101,12 +101,20 @@ console.log(`  longest mode legend: "${longest.label}" (${longest.n} cells); ste
 eq('only CW Skimmer is too long for the field — and it steps, never cut', overflow.filter(l => !/CWSKIMMER$/.test(l)), []);
 eq('★ the field is ONE width whatever the label', widths.size, 1);
 eq('USB:RTTY — demod, lit colon column, decoder', segModeCells('USB: RTTY', false, toDotCells, DOT_MODE_CELLS),
-   { cells: ['U', 'S', 'B', 'R', 'T', 'T', 'Y'], colon: true, stereoSlot: false, textCells: 10, marquee: false });
+   { cells: ['U', 'S', 'B', 'R', 'T', 'T', 'Y'], colon: true, split: true, stereoSlot: false, textCells: 10, marquee: false });
 eq('USB:WHISPER — ten cells, whole', segModeCells('USB: WHISPER', false, toDotCells, DOT_MODE_CELLS).cells.length, 10);
-eq('AM sits where it does beside a decoder', segModeCells('AM', false, toDotCells, DOT_MODE_CELLS).cells, ['', 'A', 'M']);
-eq('MESHTASTIC / MESHCORE — no colon', ['MESHTASTIC', 'MESHCORE'].map(l => segModeCells(l, false, toDotCells, DOT_MODE_CELLS).colon), [false, false]);
+// ★ 2026-10-06: a plain mode is one tight word — no leading dark cell, no colon column (DotModeReadout puts the cells on
+//   the plain pitch unless `split`).
+eq('AM — a plain mode starts at the first cell', segModeCells('AM', false, toDotCells, DOT_MODE_CELLS).cells, ['A', 'M']);
+eq('AM: RTTY — split: the demod right-aligned before the colon column',
+   segModeCells('AM: RTTY', false, toDotCells, DOT_MODE_CELLS).cells.slice(0, 3), ['', 'A', 'M']);
+eq('MESHTASTIC / MESHCORE — no colon, not split (no colon column inside the word)',
+   ['MESHTASTIC', 'MESHCORE'].map(l => { const L = segModeCells(l, false, toDotCells, DOT_MODE_CELLS); return [L.colon, L.split]; }),
+   [[false, false], [false, false]]);
 eq('WFM — the rings keep their slot', segModeCells('WFM', true, toDotCells, DOT_MODE_CELLS),
-   { cells: ['W', 'F', 'M'], colon: false, stereoSlot: true, textCells: 7, marquee: false });
+   { cells: ['W', 'F', 'M'], colon: false, split: false, stereoSlot: true, textCells: 7, marquee: false });
+ok('plain cells on the plain pitch (DOT_ADV) fit the field and clear the rings',
+   (DOT_MODE_CELLS - 1) * DOT_ADV + DOT_COLS <= DOT_MODE_COLS && (DOT_MODE_CELLS - DOT_STEREO_CELLS - 1) * DOT_ADV + DOT_COLS < DOT_RINGS_COL);
 eq('WFM: WHISPER — the decoder takes the rings\' slot, shown whole', segModeCells('WFM: WHISPER', true, toDotCells, DOT_MODE_CELLS).marquee, false);
 
 // ── The readout ──

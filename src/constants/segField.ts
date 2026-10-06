@@ -4,9 +4,10 @@
  *
  * Two FIXED fields, drawn by components/SegField.tsx in DSEG14 — the VTS strip's own segment face:
  *
- *   THE MODE FIELD   SEG_MODE_CELLS cells. The demod sits RIGHT-ALIGNED in the first three (" AM", "USB",
- *                    "WFM"); a running decoder follows a COLON ELECTRODE in the gap after cell 3 ("USB:RTTY").
- *                    A standalone digimode fills from the first cell ("MESHTASTIC"). ★★ In WFM the last three cells'
+ *   THE MODE FIELD   SEG_MODE_CELLS cells. A plain mode is ONE TIGHT WORD from the first cell ("AM", "WFM",
+ *                    "MESHTASTIC") with no colon electrode anywhere; a running decoder SPLITS the field: the demod
+ *                    right-aligned in the first three, a COLON ELECTRODE in the gap after cell 3, then the decoder
+ *                    ("USB:RTTY", " AM:RTTY"). ★★ In WFM the last three cells'
  *                    room is the STEREO RINGS' slot; in every other mode that room is more cells (Stuart:
  *                    "we should have room for the full USB:RTTY or MESHCORE if when not in FM mode we cheat a
  *                    little and replace the stereo rings with more digits"). The field's width never changes.
@@ -58,6 +59,11 @@ export interface SegModeCells {
   cells: string[];
   /** The colon electrode (between the demod and the decoder) is lit. */
   colon: boolean;
+  /** ★ The field is SPLIT demod | colon | decoder, so the colon electrode exists (ghosted) after the demod's three
+   *  cells, and on DOT the colon column sits there. False for a plain mode: one tight word, no colon anywhere — the
+   *  ghost colon after "WFM" and DOT's colon column inside "MESHTASTIC" read as a gap in the word (Stuart, 2026-10-06,
+   *  of "WF M"). Also false while marquee: the colon then rides in a cell of its own. */
+  split: boolean;
   /** The field's right-hand end is the stereo rings' slot (WFM with no decoder). */
   stereoSlot: boolean;
   /** How many cells the text has: SEG_MODE_CELLS, less the rings' slot. */
@@ -80,16 +86,17 @@ export function segModeCells(label: string, stereo: boolean, toCells: ToCells, t
       const lead = [...Array(SEG_DEMOD_CELLS - demod.length).fill(''), ...demod];
       const fits = SEG_DEMOD_CELLS + dec.length <= total;
       return fits
-        ? { cells: [...lead, ...dec], colon: true, stereoSlot: false, textCells: total, marquee: false }
-        : { cells: [...demod, ':', ...dec], colon: false, stereoSlot: false, textCells: total, marquee: true };
+        ? { cells: [...lead, ...dec], colon: true, split: true, stereoSlot: false, textCells: total, marquee: false }
+        : { cells: [...demod, ':', ...dec], colon: false, split: false, stereoSlot: false, textCells: total, marquee: true };
     }
   }
   const cells = toCells(label.trim());
   const textCells = stereo ? total - SEG_STEREO_CELLS : total;
-  // A bare demod sits where it does beside a decoder (right-aligned in the demod cells), so starting or
-  // stopping a decoder never moves "AM" sideways.
-  const placed = cells.length < SEG_DEMOD_CELLS ? [...Array(SEG_DEMOD_CELLS - cells.length).fill(''), ...cells] : cells;
-  return { cells: placed, colon: false, stereoSlot: stereo, textCells, marquee: placed.length > textCells };
+  /* ★★ A PLAIN MODE IS ONE TIGHT WORD (2026-10-06, Stuart's VCR screenshot read "WF M"). It used to sit right-aligned
+   *  in the demod's cells with the colon electrode ghosted after them, so that starting a decoder never moved "AM"
+   *  sideways — but " AM" then opened on a dark cell, and the split layout's furniture showed in a mode that has no
+   *  split. Now it starts at the first cell, and the split (and its colon) exist only while a decoder runs. */
+  return { cells, colon: false, split: false, stereoSlot: stereo, textCells, marquee: cells.length > textCells };
 }
 
 export interface SegReadingCells {
