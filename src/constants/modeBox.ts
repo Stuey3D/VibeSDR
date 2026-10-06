@@ -39,7 +39,23 @@ export const DOTO_EM = 0.6;
 
 /** ★ 'seg' (2026-10-06): the VCR Display draws the mode box as FIXED 14-segment fields (components/SegField,
  *  constants/segField) — the same width whatever the label, the stereo rings inside it. */
-export type ModeFace = 'hyper' | 'doto' | 'seg';
+export type ModeFace = 'hyper' | 'doto' | 'seg' | 'dot';
+/** ★ 'dot' (2026-10-06): the DOT Display's mode box as FIXED dot-matrix fields (components/DotField,
+ *  constants/dotField) — like 'seg', the same width whatever the label, the stereo rings inside it. ('doto' is the
+ *  Doto-font label it replaced, kept for the tests' comparison.) */
+export const isFixedFace = (face: ModeFace) => face === 'seg' || face === 'dot';
+
+// ── The DOT (dot-matrix) fields' geometry ────────────────────────────────────
+// ★ Copies of constants/dotField's DOT_MODE_COLS / DOT_READ_COLS (this file has no runtime imports, so the tests
+//   can run it under plain Node); test_faceplate_dotfield holds the copies equal.
+/** The mode field's width in dots: 3 cells, the two-dot colon column, 7 cells. */
+export const DOT_MODE_FIELD_COLS = 62;
+/** The readout's width in dots: ten cells. */
+export const DOT_READ_FIELD_COLS = 59;
+/** The fields sit on Doto's own dot pitch at the type size they replace — the font's 0.1 em. */
+export const dotFieldPitch = (fontSize: number) => fontSize * 0.1;
+export const dotModeFieldWidth = (modeFontSize: number) => DOT_MODE_FIELD_COLS * dotFieldPitch(modeFontSize);
+export const dotReadFieldWidth = (readingFont: number) => DOT_READ_FIELD_COLS * dotFieldPitch(readingFont);
 
 // ── The VCR (14-segment) fields' geometry ────────────────────────────────────
 
@@ -95,9 +111,10 @@ export function segReadingGeometry(readingFont: number): SegReadingGeometry {
 }
 
 /** The width (pt) RN lays `text` out at, letter-spacing included (RN adds it after every glyph).
- *  'seg': the fixed mode field, whatever the text. */
+ *  'seg' / 'dot': the fixed mode field, whatever the text. */
 export function modeTextWidth(text: string, size: number, letterSpacing: number, face: ModeFace): number {
   if (face === 'seg') return segModeFieldWidth(size);
+  if (face === 'dot') return dotModeFieldWidth(size);
   let em = 0;
   for (const ch of text) em += face === 'doto' ? DOTO_EM : (ATKINSON_EM[ch.toUpperCase()] ?? ATKINSON_EM_MAX);
   const k = face === 'doto' ? 1 : ATKINSON_BOLD_K;
@@ -205,11 +222,13 @@ export interface ModeBoxFit {
 export function modeBoxFit(o: { label: string; stereo: boolean; face: ModeFace; fontSize: number;
                                 letterSpacing: number; readingFont: number; minW: number; padH: number;
                                 windowW: number }): ModeBoxFit {
-  // ★ 'seg': the rings live INSIDE the fixed field (their slot is cells in every other mode), and the reading is
+  // ★ 'seg' / 'dot': the rings live INSIDE the fixed field (their slot is cells in every other mode), and the reading is
   //   the fixed "-88+88 dB F S" readout — so neither depends on the label.
   const need = (fs: number, ls: number) => Math.max(
-    modeTextWidth(o.label, fs, ls, o.face) + (o.stereo && o.face !== 'seg' ? stereoWidth(fs) : 0),
-    o.face === 'seg' ? segReadingGeometry(o.readingFont).width : modeTextWidth(READING_LONGEST, o.readingFont, 0, o.face),
+    modeTextWidth(o.label, fs, ls, o.face) + (o.stereo && !isFixedFace(o.face) ? stereoWidth(fs) : 0),
+    o.face === 'seg' ? segReadingGeometry(o.readingFont).width
+      : o.face === 'dot' ? dotReadFieldWidth(o.readingFont)
+      : modeTextWidth(READING_LONGEST, o.readingFont, 0, o.face),
   ) + 2 * o.padH;
   const maxW = o.windowW > 0 ? Math.max(o.minW, Math.floor(o.windowW * MODE_BOX_MAX_SHARE)) : Infinity;
   const fs0 = o.fontSize, ls0 = o.letterSpacing;
