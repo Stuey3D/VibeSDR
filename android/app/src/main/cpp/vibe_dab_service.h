@@ -795,9 +795,13 @@ public:
         /* ★ `rfCentreHz` is what the RADIO is actually on, not what we asked for. They diverged on
          *  the live Pi — DAB reported 12B while the dongle sat on 96.6 MHz — and without both
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
+        /* ★ pcm_ belongs to pm_, not m_ (see takePcm): the audio thread pops it while this runs.
+         *  ThreadSanitizer, replaying the bench multiplex (2026-10-06). m_ then pm_ is the allowed order. */
+        size_t pcmAvailNow = 0;
+        { std::lock_guard<std::mutex> plk(pm_); pcmAvailNow = pcm_.size() / 2; }
         const int nb = snprintf(b, sizeof b,
                  ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"mp2BerGated\":%u,\"scfConcealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2BerGated_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)(pcm_.size()/2), pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_.load(std::memory_order_relaxed), rfRate_.load(std::memory_order_relaxed),
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2BerGated_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)pcmAvailNow, pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_.load(std::memory_order_relaxed), rfRate_.load(std::memory_order_relaxed),
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         const int nb2 = snprintf(b, sizeof b,
@@ -1816,7 +1820,12 @@ private:
             //   and hands the frame over, with its error rate and the service generation it belongs to.
             enqueueMp2_(f, frameBer);
         }
-        while (pcm_.size() > size_t(kAudioRateHz) * 2 * 2) pcm_.pop_front();   // ~2 s of slack
+        /* ★ Under pm_ (2026-10-06): this line predates pcm_ getting its own lock, and takePcm() pops the
+         *  same deque holding ONLY pm_. Every producer already trims to this cap under pm_, so the pop
+         *  should never run — but the unlocked size() read raced takePcm (ThreadSanitizer, bench
+         *  multiplex), and an unlocked pop_front racing a locked one is a double free. m_ then pm_. */
+        { std::lock_guard<std::mutex> plk(pm_);
+          while (pcm_.size() > size_t(kAudioRateHz) * 2 * 2) pcm_.pop_front(); }   // ~2 s of slack
     }
 
     /** ★★★ THE ONE PLACE ANYTHING BECOMES 48 kHz STEREO. MP2 and DAB+ both arrive at their own

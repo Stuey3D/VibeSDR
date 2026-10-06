@@ -335,7 +335,13 @@ public:
         if (!ciFlag) {
             /* One sub-field, same application and length as before (7.4.2.2). If we have not seen
              * a list yet there is nothing to attach it to — wait for the next one. */
-            if (lastApp_ != kXpadEnd && lastFieldLen_ > 0) append(contApp(lastApp_), L.data(), lastFieldLen_);
+            /* ★★ L.size(), NOT lastFieldLen_ (2026-10-06). The two are the same for MP2 (fieldLen IS
+             *  lastFieldLen_ above), but a DAB+ access unit says exactly how long ITS field is, and
+             *  `exact` sized L from that — so a short field after a long one read lastFieldLen_ bytes
+             *  out of a shorter vector: past its end, into whatever the heap held, and on into the
+             *  label or the slide being assembled. Found by AddressSanitizer replaying the bench
+             *  multiplex through DabService (container-overflow, PadReader::append from feed). */
+            if (lastApp_ != kXpadEnd && lastFieldLen_ > 0) append(contApp(lastApp_), L.data(), L.size());
             return;
         }
         struct Ci { uint8_t app; int len; };
