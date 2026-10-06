@@ -63,6 +63,7 @@ import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
 import { DabBlockStepper, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
+import { DabQualityMeter, type DabQuality } from '../utils/dabQuality';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
@@ -2188,6 +2189,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabState, setDabState] = useState<DabState | null>(null);
   const [dabError, setDabError] = useState<string | undefined>(undefined);
   const [dabOn, setDabOn] = useState(false);            // we have ASKED for DAB (see dabBoxOpen)
+  /* ★★★ THE DAB RECEPTION METER (Stuart, 2026-10-06) — what the signal bar shows in DAB: can this multiplex be
+   *  HEARD, judged on ~5 s of the report's own counters (utils/dabQuality.ts, shared with the web client). A US
+   *  listener sat on a multiplex that listed its stations and never played, under a bar reading S9. Fed from
+   *  `dabState` below; reset the moment DAB is left, so no verdict outlives the mode (the RC15 Exit DAB lesson). */
+  const dabMeterRef = useRef<DabQualityMeter | null>(null);
+  const [dabQuality, setDabQuality] = useState<DabQuality | null>(null);
   /** ★★★ THE BOX AND THE MODE ARE TWO DIFFERENT THINGS. Stuart, 2026-09-08: "the X button on the
    *  decoder box closes the decoder but leaves DAB active but when you press DAB again from the
    *  demodulator menu it deactivates DAB fully rather than restore the box." Closing a window is
@@ -2397,6 +2404,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   useEffect(() => { onDabBlockRef.current = onDabBlock; }, [onDabBlock]);
+
+  /* ★ One push per report. Out of DAB the meter is RESET, not merely hidden — its window and hysteresis
+   *  describe the last multiplex, and re-entering must start from "searching", not from that. A report
+   *  that changes nothing on screen keeps the old object, so the controls do not re-render for it. */
+  useEffect(() => {
+    if (!dabOn) { dabMeterRef.current?.reset(); setDabQuality(null); return; }
+    if (!dabState) { setDabQuality(null); return; }   // between multiplexes: the bar says searching
+    const m = dabMeterRef.current ?? (dabMeterRef.current = new DabQualityMeter());
+    const q = m.push(dabState, Date.now());
+    setDabQuality(p => (p && p.level === q.level && p.label === q.label && p.advice === q.advice
+                        && p.detail === q.detail ? p : q));
+  }, [dabOn, dabState]);
 
   /** ★★★ WHAT THE RECEIVER IS ACTUALLY DOING, WHICH IN DAB IS NOT ITS DEMODULATOR.
    *
@@ -10669,6 +10688,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           tubeLayout={isLocal ? 'wide' : 'hf'}
           storms={storms}
           dabOn={dabOn}
+          dabMeter={dabQuality}
           frequency={status.frequency}
           mode={status.mode}
           step={step}

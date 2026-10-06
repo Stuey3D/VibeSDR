@@ -50,6 +50,8 @@ import { useMacSilenced } from '../services/macAudio';
 import NixieTubes, { nixieNaturalWidth } from './NixieTubes';
 import LedVu from './LedVu';
 import EdgeMeter from './EdgeMeter';
+import DabMeter from './DabMeter';
+import { DAB_SEARCHING, type DabQuality } from '../utils/dabQuality';
 import { GhostGrid, SegDigits, VfdFilaments } from './VfdParts';
 import { TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, type NixieLayout } from '../constants/nixie';
 import { composeModeLabel, modeBoxFit, MODE_BOX } from '../constants/modeBox';
@@ -104,6 +106,15 @@ function GainArrow({ dir, color, size }: { dir: 'up' | 'down'; color: string; si
  *   one of them has already been fatal twice (see the note on `readOnly` in ControlsBar).
  */
 interface FreqReadout { hz: number; unit: FreqUnit; layout: NixieLayout }
+
+/**
+ * ★★★ THE DAB RECEPTION METER (Stuart, 2026-10-06) — null outside DAB. A context, like FreqReadout, for the
+ *   same reason: the meter slots it replaces are in PortraitBar, LandscapeBar, CompactDisplay, MeterHousing and
+ *   the mode box, and each of those keeps a hand-written prop list where a missing name is dead or fatal.
+ *   Set ⇒ the signal bar's slot draws DabMeter and the mode box's reading is the verdict's one word: in DAB
+ *   the ordinary reading is passband power ("S9" on a multiplex that never played a sound).
+ */
+const DabMeterContext = React.createContext<DabQuality | null>(null);
 const FreqReadoutContext = React.createContext<FreqReadout>({ hz: 0, unit: 'khz', layout: 'hf' });
 
 /** Guard for the keys' handler — never expected to run. */
@@ -515,6 +526,9 @@ export interface ControlsBarProps {
   storms?: { rate: number; ago: number } | null;
   /** ★ In DAB the pill says DAB — the server's demodulator is idle and its name is a lie there. */
   dabOn?: boolean;
+  /** ★★★ The DAB reception verdict (utils/dabQuality.ts) — drawn in the signal bar's place while `dabOn`.
+   *  Null before the first report of a multiplex: the meter then says it is searching. */
+  dabMeter?: DabQuality | null;
   /** ★★ THE AIRBAND CHANNEL, when tuned on one (118–137 MHz, AM) — computed by the parent from
    *  utils/airband.ts, null everywhere else. Like an aviation radio the readout then shows the
    *  channel NAME ("118.010"), with the spacing and the true frequency ("8.33 · 118.0083") small
@@ -967,9 +981,13 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
   /* ★★★ The LIVE reading comes off the bus through the meters' own chain (meterText), so the needle and
    *  the LEDs stand under the label this text names. The screen's static label (FM-DX "28 dBf", from
    *  its 5 Hz state) only shows while the bus has nothing live — paused, or before the first frame. */
-  const text = m && (m.active || !snrText) ? meterText(meterMode ?? 'snr', m) : (snrText ?? '');
+  const dab = React.useContext(DabMeterContext);
+  /* ★★ IN DAB THE READING IS THE RECEPTION VERDICT ("Weak"), not the passband's S-reading — which said S9 for an
+   *  hour on a multiplex that never played (2026-10-06) — and never SQL: squelch does not gate DAB. */
+  const text = dab ? dab.short
+    : m && (m.active || !snrText) ? meterText(meterMode ?? 'snr', m) : (snrText ?? '');
   const active = m ? m.active : !!signalActive;
-  const sqlClosed = sqlClosedOf(m ? (m.sql ?? -1) : -1, m?.gate, m ? m.level : 0);
+  const sqlClosed = !dab && sqlClosedOf(m ? (m.sql ?? -1) : -1, m?.gate, m ? m.level : 0);
   const breathe = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     if (!sqlClosed) { breathe.setValue(1); return; }
@@ -1365,6 +1383,17 @@ function MeterHousing({ kind, height, shared, lip, bus, land, unit }: {
     : { padTop: s.r(shared ? 3 : 6), padX: s.r(7), ledH: s.r(13), labelH: s.r(DECK.ledLabel), labelGap: s.r(DECK.ledLabelGap) };
   const ledGeom = useMemo(() => ({ padTop: g.padTop, padX: g.padX, ledH: g.ledH, labelH: 0, labelGap: g.labelGap }),
     [g.padTop, g.padX, g.ledH, g.labelGap]);
+  const dab = React.useContext(DabMeterContext);
+  if (dab) {
+    // ★ DAB: the reception meter in the same housing, at the same height — the deck does not move.
+    return (
+      <View style={[cd.housing, { height, justifyContent: 'center' }]}>
+        <View pointerEvents="none" style={cd.housingShade} />
+        <View pointerEvents="none" style={[cd.lip, { backgroundColor: kind === 'vu' ? 'rgba(255,255,255,0.22)' : lip }]} />
+        <DabMeter q={dab} height={height} variant="housing" padH={land ? land.ledPadX : s.r(8)} />
+      </View>
+    );
+  }
   return (
     <View style={[cd.housing, { height }]}>
       <View pointerEvents="none" style={cd.housingShade} />
@@ -1733,7 +1762,14 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   const P_GAP      = Math.max(2, s.r(3));
   const P_BANNER_H = Math.round(sharedBannerFont(FREQ_FONT) * 1.25) + 9;   // SharedBanner's box + its 3 pt margin
   const bannerIn   = pStack && !!sharedDial && dl.displayH - P_THIN - P_GAP - P_BANNER_H >= 26;
-  const P_PILL     = dl.displayH - P_THIN - P_GAP - (bannerIn ? P_BANNER_H : 0);
+  /* ★★ DAB (2026-10-06): the thin line becomes the reception meter — bars and a line of text — so it takes a
+   *  text line's height out of the pill, never below the 26 pt the banner rule already calls usable. The deck's
+   *  height is unchanged; only the digits step down a little, and only while DAB is on. */
+  const dab        = React.useContext(DabMeterContext);
+  const P_LINE     = dab ? Math.max(P_THIN, Math.min(s.r(13), dl.displayH - P_GAP - 26 - (bannerIn ? P_BANNER_H : 0)))
+                         : P_THIN;
+  const P_PILL     = dl.displayH - P_LINE - P_GAP - (bannerIn ? P_BANNER_H : 0);
+  const FRAME_DAB_H = s.r(14);
   const bannerOut  = !dl.compact && !!sharedDial && !bannerIn
                      && (pStack || !barFitsBanner(dl.displayH, FREQ_FONT, PILL_PAD_V));
 
@@ -1767,14 +1803,23 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
           tight={tight} sharedTuner={null}
         />
+        {dab ? <DabMeter q={dab} height={P_LINE} variant="line" /> : (
         <View style={[por.sigFrame, { height: P_THIN, borderRadius: P_THIN / 2 }]}>
           <SignalCanvas width={sigW} height={P_THIN} signal={signal} peak={peak} bus={bus} />
         </View>
+        )}
       </View>
       ) : (
-      <View style={[por.sigFrame, { height: dl.displayH }]}
+      <View style={[por.sigFrame, { height: dl.displayH }, dab ? { paddingBottom: FRAME_DAB_H } : null]}
             onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
-        <SignalCanvas width={sigW} height={dl.displayH} signal={signal} peak={peak} bus={bus} />
+        {/* ★ DAB on a tablet / Mac: the frame keeps its height and its track; the reception meter runs along
+            its foot and the pill centres in what is above it (the padding). */}
+        {dab ? (<>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: ct.meterTrack }]} />
+          <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}>
+            <DabMeter q={dab} height={FRAME_DAB_H} variant="frame" padH={s.r(10)} />
+          </View>
+        </>) : <SignalCanvas width={sigW} height={dl.displayH} signal={signal} peak={peak} bus={bus} />}
         <FreqModePill
           freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
           connected={connected} signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
@@ -2070,7 +2115,12 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   const stack     = !compact && !s.isTablet;
   const THIN_H    = Math.max(4, s.r(7));
   const THIN_GAP  = Math.max(2, s.r(3));
-  const PILL_H    = BAND_H - THIN_H - THIN_GAP;
+  /* ★★ DAB (2026-10-06): the thin line becomes the reception meter and takes a text line's height out of the
+   *  pill (never below 26 pt) — as in PortraitBar. The band does not change height. */
+  const dab       = React.useContext(DabMeterContext);
+  const LINE_H    = dab ? Math.max(THIN_H, Math.min(s.r(13), BAND_H - THIN_GAP - 26)) : THIN_H;
+  const PILL_H    = BAND_H - LINE_H - THIN_GAP;
+  const FRAME_DAB_H = s.r(14);
   const dispH     = compact || stack ? BAND_H : SIG_H;
 
   return (
@@ -2158,13 +2208,21 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
             modePadH={MODE_PAD_H} modePadV={MODE_PAD_V} gap={PILL_GAP}
             sharedTuner={null}
           />
+          {dab ? <DabMeter q={dab} height={LINE_H} variant="line" /> : (
           <View style={[lnd.sigFrame, { height: THIN_H, borderRadius: THIN_H / 2 }]}>
             <SignalCanvas width={sigW} height={THIN_H} signal={signal} peak={peak} bus={bus} />
           </View>
+          )}
         </View>
         ) : (
-        <View style={[lnd.sigFrame, { height: SIG_H }]}>
-          <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />
+        <View style={[lnd.sigFrame, { height: SIG_H }, dab ? { paddingBottom: FRAME_DAB_H } : null]}>
+          {/* ★ DAB: the reception meter along the frame's foot, the pill centred above it — as PortraitBar. */}
+          {dab ? (<>
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: ct.meterTrack }]} />
+            <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}>
+              <DabMeter q={dab} height={FRAME_DAB_H} variant="frame" padH={s.r(10)} />
+            </View>
+          </>) : <SignalCanvas width={sigW} height={SIG_H} signal={signal} peak={peak} bus={bus} />}
           {/* ★ No banner in the pill: in landscape the SHARED TUNER banner lives in the status row
               (§9, Deck.mockup `sharedInBar: false`), so the frequency keeps its size on a shared dial. */}
           <FreqModePill
@@ -2526,7 +2584,7 @@ function ControlsBar({
   srvTzOffsetMin = null, srvTzAbbr = '',
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
-  fmStereo = false, activeDecoder = null, dabOn = false,
+  fmStereo = false, activeDecoder = null, dabOn = false, dabMeter = null,
   onVfoDelta, onBwDelta, onMode, onStep,
   onMenu, onChat, onAudio, audioAsRecord = false, onFreqTap, onModeTap,
   // ★ The audio chain's standing state — drawn only when ON, see DspBadges.
@@ -2756,10 +2814,13 @@ function ControlsBar({
           row DELETION (see PortraitBar) rather than a hand-built hybrid of the two layouts.
           See briefs/BRIEF-tvos-app.md §2. */}
       <FreqReadoutContext.Provider value={readout}>
+      {/* ★ Only while DAB is on: a verdict that outlived the mode would describe a multiplex nobody is on. */}
+      <DabMeterContext.Provider value={dabOn ? (dabMeter ?? DAB_SEARCHING) : null}>
       {s.isLandscape && !IS_TV
         ? <LandscapeBar {...shared} />
         : <PortraitBar  {...shared} />
       }
+      </DabMeterContext.Provider>
       </FreqReadoutContext.Provider>
     </View>
   );
