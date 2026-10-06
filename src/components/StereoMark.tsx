@@ -10,16 +10,14 @@
  *   lit      the text colour with a 2 pt glow, while the pilot is locked;
  *   mesh     the 60° grid, at DabMark's fixed fine pitch: these strokes are ~1.5 pt, the DAB mark's size class.
  *
- * Only on the VFD Displays (dot / seg). Hyper and Nixie keep ControlsBar's plain StereoIcon. On VCR the rings
- * are drawn INSIDE the mode field's canvas (SegField extras) from stereoRingsPath — this component is the dot
- * Display's, beside its Doto label.
+ * VCR only: the rings are drawn INSIDE the mode field's canvas (SegField extras) from stereoRingsPath. Hyper and Nixie
+ * keep ControlsBar's plain StereoIcon.
+ * ★ 2026-10-06: the DOT Display's rings are DOTS now (constants/dotField DOT_RINGS, on the mode field's own grid), so
+ *   the standalone StereoMark component this file was named for — DOT's, beside its Doto label — is gone.
  */
 
-import React, { useMemo } from 'react';
-import { View } from 'react-native';
-import { Canvas, Image as SkImageNode, Path, PathOp, Skia, type SkPath } from '@shopify/react-native-skia';
-import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
-import { MESH_FINE_BAR, MESH_FINE_PITCH, MESH_SHADES_FINE, vfdCut, vfdMesh } from './vfdMesh';
+import { PathOp, Skia, type SkPath } from '@shopify/react-native-skia';
+import { vfdCut } from './vfdMesh';
 
 /** StereoIcon's geometry: rings `size` across, the second 0.62 × size to the right, 1.62 × size wide in all. */
 export const STEREO_W = 1.62;
@@ -27,7 +25,7 @@ export const stereoMarkWidth = (size: number) => size * STEREO_W;
 
 /**
  * The rings at `size`, top-left at (ox, oy), in points — filled outlines, cut into their electrodes.
- * ★ Shared by StereoMark and the VCR mode field (SegField extras), so the two Displays draw ONE shape.
+ * The VCR mode field draws it (SegField extras), ghost, lit and meshed.
  */
 export function stereoRingsPath(size: number, ox = 0, oy = 0): SkPath {
   const bw = Math.max(1.2, size * 0.13);
@@ -46,39 +44,4 @@ export function stereoRingsPath(size: number, ox = 0, oy = 0): SkPath {
     [u(-0.1), v(0.5), u(1.72), v(0.5), w],
     [u(0.78), v(-0.1), u(0.84), v(1.1), w],
   ]);
-}
-
-const MARGIN = 6;
-
-export default function StereoMark({ size, color, glow, ghost, lit }: {
-  size: number;
-  color: string;
-  glow: string | null;
-  /** The unlit electrode colour (text colour α .10). */
-  ghost: string;
-  /** The pilot is locked. */
-  lit: boolean;
-}) {
-  const w = stereoMarkWidth(size);
-  const W = w + 2 * MARGIN, H = size + 2 * MARGIN;
-  const statics = useMemo(() => {
-    const p = stereoRingsPath(size, MARGIN, MARGIN);
-    return { p, mesh: vfdMesh(p, MESH_FINE_PITCH, MESH_FINE_BAR, { count: 60, extent: 80 }) };
-  }, [size]);
-  // ★ Shared across instances and freed when unused — see useSharedSprite.
-  const sprite = useSharedSprite(size > 0 ? `stereo|${size}|${color}|${glow}` : null, () => imageBuild(makeSprite(W, H, (c) => {
-    if (glow) c.drawPath(statics.p, glowPaint(glow, 2));
-    c.drawPath(statics.p, glowPaint(color));
-  })));
-  return (
-    <View style={{ width: w, height: size, marginLeft: 5 }} pointerEvents="none" accessibilityRole="image"
-          accessibilityLabel={lit ? 'Stereo' : 'Mono'}>
-      <Canvas style={{ position: 'absolute', left: -MARGIN, top: -MARGIN, width: W, height: H }}>
-        <Path path={statics.p} color={ghost} />
-        {lit && sprite && <SkImageNode image={sprite} x={0} y={0} width={W} height={H} />}
-        <Path path={statics.mesh[0]} color={MESH_SHADES_FINE[0]} />
-        <Path path={statics.mesh[1]} color={MESH_SHADES_FINE[1]} />
-      </Canvas>
-    </View>
-  );
 }

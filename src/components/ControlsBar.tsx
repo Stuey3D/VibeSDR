@@ -57,7 +57,11 @@ import { TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, type NixieLayout } from '../consta
 import { composeModeLabel, modeBoxFit, MODE_BOX, segModeFont, segModeFieldWidth, segReadingGeometry, segUnitFont } from '../constants/modeBox';
 import { segModeCells, segReadingCells, segUnitCells, SEG_ALL, SEG_DEMOD_CELLS, SEG_READ_GHOST, SEG_UNIT_CELLS } from '../constants/segField';
 import { SegField, segCellX, segFieldCellsWidth, type SegExtra } from './SegField';
-import StereoMark, { stereoRingsPath, stereoMarkWidth } from './StereoMark';
+import { stereoRingsPath, stereoMarkWidth } from './StereoMark';
+import { DotField, type DotMark } from './DotField';
+import { dotModeCellCol, dotPitch, dotReadingCells, dotUnitCells, dotUnitPitch, toDotCells, DOT_ADV, DOT_COLON, DOT_COLON_COL,
+  DOT_MODE_CELLS, DOT_MODE_COLS, DOT_READ_CELLS, DOT_READ_COLS, DOT_READ_SQL, DOT_RINGS, DOT_RINGS_COL, DOT_UNIT_CELLS,
+  DOT_UNIT_COLS } from '../constants/dotField';
 import { legendPath, LEGEND_CELL_H } from './AnnunciatorLegend';
 import { placePath } from './vfdMesh';
 import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
@@ -861,6 +865,27 @@ const SegUnit = React.memo(function SegUnit({ unit, unitFontSize, columnW }: {
   );
 });
 
+/** The DOT unit field's cells: three, one dead column apart. */
+const DOT_UNIT_CELL_COLS: readonly number[] = Array.from({ length: DOT_UNIT_CELLS }, (_, i) => i * DOT_ADV);
+
+/**
+ * ★★ The DOT window's frequency unit as a FIXED three-cell dot-matrix field (2026-10-06): "kHz" / "MHz" / " Hz" —
+ * spelled properly, a dot matrix has lower case — lit over every cell's 35 ghost dots, in the digits' own colour and
+ * glow. Its pitch is HALF the Doto digits' beside it (constants/dotField dotUnitPitch), so its dots fall on their
+ * grid; never wider than the label column it replaces, so the digits do not move.
+ */
+const DotUnit = React.memo(function DotUnit({ unit, freqDotFont, columnW }: {
+  unit: string; freqDotFont: number; columnW: number;
+}) {
+  const dk = useFaceplate().deck;
+  const pitch = dotUnitPitch(freqDotFont, columnW);
+  const lit = useMemo(() => dotUnitCells(unit), [unit]);
+  return (
+    <DotField pitch={pitch} cols={DOT_UNIT_COLS} cellCols={DOT_UNIT_CELL_COLS} lit={lit}
+      color={dk.core} glow={dk.glow} ghostColor={rgba(dk.rgb, 0.10)} accessibilityLabel={unit} />
+  );
+});
+
 /**
  * The frequency window for the tube / dot-matrix / segment displays (§7). ★ Exactly the pill's
  * height under Hyperlegible (the text's line height + its vertical padding), so switching Display
@@ -893,6 +918,9 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   //    sit in, and the CENTRED digits never move (B11, Stuart: centred, there is room for the details).
   const tagW = chanTag ? Math.round(Math.max(unitFontSize * 0.72 * 0.62 * Math.max(chanTag.length, 15), unitW)) : 0;
   const labelW = Math.max(unitW, tagW);
+  // The Doto digits' size (dot): the unit field's dots are set on their pitch.
+  const dotSize = fill ? H : compact ? s.r(land ? 22 : shared ? 23 : 27) : s.r(shared ? 24 : 28);
+  const dotFont = Math.min(dotSize, Math.floor((H - 2) / 1.1));
   const label = (
     // ★ flexShrink 0 + one line: in a narrow Mac window the column was squeezed and "MHz" broke as "MH" / "z"
     //   (Stuart, 2026-10-03). The digits beside it shrink to fit; the unit never does.
@@ -908,6 +936,9 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
         // ★★ VCR: the unit through the window's OWN segments, in capitals — "KHZ" / "MHZ" (Stuart, 2026-10-06;
         //    memory vfd_units_in_segments: no font on a VFD). A fixed three cells, so KHZ ⇄ MHZ moves nothing.
         <SegUnit unit={unit} unitFontSize={unitFontSize} columnW={unitW - 3} />
+      ) : dk.style === 'dot' ? (
+        // ★★ DOT: the unit in the window's own dots, case kept — "kHz" / "MHz" (2026-10-06). A fixed three cells.
+        <DotUnit unit={unit} freqDotFont={dotFont} columnW={unitW - 3} />
       ) : (
         <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.unitFont, fontSize: unitFontSize, paddingBottom: 0 }]} numberOfLines={1}>
           {unit}
@@ -947,7 +978,6 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   //   centred in the full-width window; the bar pill keeps its own sizes.
   const cellBox: ViewStyle = compact ? { flex: 1, minWidth: 0, alignItems: 'center' }
                                      : { width: winW, flexShrink: 1, minWidth: 0 };
-  const dotSize = fill ? H : compact ? s.r(land ? 22 : shared ? 23 : 27) : s.r(shared ? 24 : 28);
   const segH = fill ? H - 6 : compact ? Math.min(s.r(land ? 23 : shared ? 25 : 29), H - 4) : s.r(shared ? 27 : 30);
   return (
     <View style={[{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
@@ -959,7 +989,7 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
           <Text style={[pm.freq, {
             color: dk.freq, fontFamily: dk.freqFont, letterSpacing: dk.freqSpacing,
             textShadowColor: dk.freqGlow, textShadowRadius: 5,
-            fontSize: Math.min(dotSize, Math.floor((H - 2) / 1.1)),
+            fontSize: dotFont,
             lineHeight: H, includeFontPadding: false,
           }]} numberOfLines={1} adjustsFontSizeToFit>
             {freqStr}
@@ -1125,6 +1155,56 @@ function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
   </>);
 }
 
+/** The DOT mode field's cells' first dot columns (the colon column sits after the demod's three). */
+const DOT_MODE_CELL_COLS: readonly number[] = Array.from({ length: DOT_MODE_CELLS }, (_, i) => dotModeCellCol(i));
+/** The DOT readout's cells' first dot columns. */
+const DOT_READ_CELL_COLS: readonly number[] = Array.from({ length: DOT_READ_CELLS }, (_, i) => i * DOT_ADV);
+
+/**
+ * ★★★ THE DOT MODE BOX (Stuart, 2026-10-06: "Dot matrix needs to also have the same treatment, except being dot matrix
+ * means a lot more flexibility"). VCR's four fixed fields as true DOT-MATRIX fields (constants/dotField,
+ * components/DotField), on Doto's own dots at the type size the Doto label had:
+ *   mode     ten 5 × 7 cells, " AM" / "USB:RTTY" / "MESHTASTIC" — the demod right-aligned in three, a two-dot colon
+ *            column of its own, seven more; in WFM the last three cells' room is the stereo rings IN DOTS on the same
+ *            grid, in every other mode it is cells. One width in every mode.
+ *   reading  "S9+27 dBFS" in ten cells, every dot a ghost: a real S, a real plus and minus, dB for any dB value, F S for
+ *            dBFS only and a lower-case f for dBf.
+ * The cell layout is segModeCells' — one rule for both Displays.
+ */
+function DotModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFontSize }: {
+  reading: ModeReading; modeLabel: string; fmStereo: boolean; modeFontSize: number; readingFontSize?: number;
+}) {
+  const dk = useFaceplate().deck;
+  const pitch = dotPitch(modeFontSize);
+  const ghostCol = rgba(dk.rgb, 0.10);
+  const lay = useMemo(() => segModeCells(modeLabel, stereoSlot(modeLabel, fmStereo), toDotCells, DOT_MODE_CELLS),
+                      [modeLabel, fmStereo]);
+  const offset = useSegMarquee(lay.cells.length, lay.textCells, `${modeLabel}|${lay.textCells}`);
+  const lit = lay.marquee ? cellWindow(lay.cells, lay.textCells, offset, '') : lay.cells;
+  const cellCols = useMemo(() => DOT_MODE_CELL_COLS.slice(0, lay.textCells), [lay.textCells]);
+  const marks: DotMark[] = [{ col: DOT_COLON_COL, rows: DOT_COLON, lit: lay.colon }];
+  if (lay.stereoSlot) marks.push({ col: DOT_RINGS_COL, rows: DOT_RINGS, lit: fmStereo });
+
+  // ── The readout ──
+  const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
+  const rl = readingFontSize ? Math.round(readingFontSize * 1.15) : Math.round(Math.max(9, modeFontSize * 0.75) * 1.15);
+  const sql = reading.sqlClosed;
+  const rd = useMemo(() => dotReadingCells(reading.text, reading.unit), [reading.text, reading.unit]);
+  return (<>
+    <View style={{ height: Math.round(modeFontSize * 1.15), justifyContent: 'center' }}>
+      <DotField pitch={pitch} cols={DOT_MODE_COLS} cellCols={cellCols} lit={lit} marks={marks}
+        color={dk.mode} glow={dk.modeGlow} ghostColor={ghostCol}
+        accessibilityLabel={`${modeLabel}${lay.stereoSlot ? (fmStereo ? ', stereo' : ', mono') : ''}`} />
+    </View>
+    {/* ★ SQL in the readout's own cells, in the squelch colour, breathing — the other Displays' rule. */}
+    <Animated.View style={{ height: rl, justifyContent: 'center', opacity: sql ? reading.breathe : 1 }}>
+      <DotField pitch={dotPitch(rf)} cols={DOT_READ_COLS} cellCols={DOT_READ_CELL_COLS} lit={sql ? DOT_READ_SQL : rd.cells}
+        color={sql ? dk.sqlClosed : dk.reading} glow={sql ? dk.sqlGlow : dk.modeGlow} ghostColor={ghostCol}
+        accessibilityLabel={sql ? 'Squelch closed' : reading.text} />
+    </Animated.View>
+  </>);
+}
+
 function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWidth, readingFontSize, oneLine = false }: {
   reading: ModeReading; modeLabel: string; fmStereo: boolean; modeFontSize: number; modeLs: number;
   snrWidth?: number;
@@ -1139,6 +1219,10 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
   const dk = useFaceplate().deck;
   if (dk.style === 'seg') {
     return <SegModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
+             modeFontSize={modeFontSize} readingFontSize={readingFontSize} />;
+  }
+  if (dk.style === 'dot') {
+    return <DotModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
              modeFontSize={modeFontSize} readingFontSize={readingFontSize} />;
   }
   const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
@@ -1162,17 +1246,13 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
       {/* ★★ THE RINGS' ROOM IS ALWAYS KEPT IN WFM — they go INVISIBLE, never away. On a weak station
           the pilot locks and unlocks several times a second, and a box that grew and shrank with the
           rings made the frequency beside it wobble (Stuart, 2026-10-02). Same width with or without. */}
-      {/* ★ 2026-10-06: on the dot-matrix VFD the rings are an ANNUNCIATOR (StereoMark — the RDS mark's breaks and
-          grid): always there as a ghost electrode, lit while the pilot is locked. */}
-      {stereoSlot(modeLabel, fmStereo) && (dk.style === 'dot' ? (
-        <StereoMark size={Math.round(modeFontSize * 0.95)} color={dk.mode} glow={dk.modeGlow}
-          ghost={rgba(dk.rgb, 0.10)} lit={fmStereo} />
-      ) : (
+      {/* (The VFD Displays draw their rings inside their fixed fields — SegModeReadout, DotModeReadout.) */}
+      {stereoSlot(modeLabel, fmStereo) && (
         <View style={{ opacity: fmStereo ? 1 : 0 }} accessibilityElementsHidden={!fmStereo}
               importantForAccessibility={fmStereo ? 'auto' : 'no-hide-descendants'}>
           <StereoIcon size={Math.round(modeFontSize * 0.95)} color={dk.mode} />
         </View>
-      ))}
+      )}
     </View>
     {reading.sqlClosed ? (
       <Animated.Text style={[pm.snr, {
@@ -1374,7 +1454,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
   const readingFont = L ? L.readingFont : s.r(11);
   const mb = useMemo(() => modeBoxFit({
     label: modeLabel, stereo: stereoSlot(modeLabel, fmStereo),
-    face: dk.style === 'seg' ? 'seg' : dk.modeFont === FONT_DOTO ? 'doto' : 'hyper',
+    face: dk.style === 'seg' ? 'seg' : dk.style === 'dot' ? 'dot' : dk.modeFont === FONT_DOTO ? 'doto' : 'hyper',
     fontSize: modeFont0, letterSpacing: L ? 1.5 : 2, readingFont,
     minW: s.r(MODE_BOX.minW), padH: s.r(MODE_BOX.padH), windowW: winW,
   }), [modeLabel, fmStereo, dk.modeFont, dk.style, modeFont0, L, readingFont, s, winW]);
