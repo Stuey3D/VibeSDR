@@ -397,6 +397,13 @@ export default function DecoderPanel({
    *  automatically, and ALIGN (drag + 1 / 5 px keys) moves THIS chart only — cleared when the next chart's margin is found. */
   const [manualShift, setManualShift] = useState<number | null>(null);
   const onChartAlign = useCallback((a: WefaxAlign | null) => { setAutoAl(a); setManualShift(null); }, []);
+  /* ★★ RAW (Stuart, 2026-10-06: "another button to remove all correction to just show the raw image as received.
+   *  Reset defaults back to the auto settings we chose, and a No Correct or RAW button shows the image without any
+   *  correction at all"). A toggle, PER CHART like the shift: the next chart comes in automatic. Nothing is
+   *  discarded — auto-align, the manual shift and the saved slant all stay underneath and return when it goes off.
+   *  Geometry only (utils/wefaxAlign drawnAlign); SAVE writes the picture shown, so RAW saves raw. */
+  const [rawChart, setRawChart] = useState(false);
+  const onNewChart = useCallback(() => { setRawChart(false); setManualShift(null); }, []);
   /* ★★ The slant drawn: the listener's own if saved for this frequency, else THIS chart's measured one (utils/wefaxAlign
    *  findMarginSlant — MadPsy/Stuart 2026-10-05: never tied to one radio's clock), else the station's. */
   const drawSlant = !alignSaved && autoAl ? autoAl.slant : align.slant;
@@ -425,10 +432,10 @@ export default function DecoderPanel({
    * ★★★ …AND ONLY THE KEYS IN USE (Stuart, same day, on the first cut: "the align buttons also need to be bigger too,
    *  same size as the slant ones, show only the ones in use. So when opening the adjust it shows the auto margin and
    *  auto slant figures and then you press to adjust them and then the arrows show"). ADJ opens a SUMMARY — the two
-   *  figures actually applied (this chart's shift, the slant drawn), each a key, and RESET. MARGIN opens the drag
+   *  figures actually applied (this chart's shift, the slant drawn), each a key, then AUTO and RAW (a mode pair). MARGIN opens the drag
    *  cover over the chart (DecoderImageCanvas alignPreview) with ◀ ▶ DONE; SLANT opens − + DONE; DONE goes back.
    *  Every arrow is the same 44 pt key and repeats while held, speeding up (useHoldRepeat). The shift is still THIS
-   *  chart's only; the slant is still saved per frequency; RESET still returns both to automatic. */
+   *  chart's only; the slant is still saved per frequency; AUTO (was RESET) returns both to automatic. */
   /* ★ The shift as the listener reads it: px, signed, the short way round on this chart's width (from "1809x…"). */
   const chartW = parseInt(imageInfo, 10) || 1809;
   const signedPx = (s: number) => { const v = Math.round((((s % chartW) + chartW + chartW / 2) % chartW) - chartW / 2);
@@ -1255,22 +1262,28 @@ export default function DecoderPanel({
               {/* ★ The figures APPLIED: this chart's shift (auto-align's, or the listener's) and the slant drawn. */}
               {!viewingPrev && (
                 <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the margin: drag the chart sideways"
-                  onPress={() => setAdjMode('align')}>
-                  <DecoderKeyLabel active={manualShift != null} style={dp.bigKeyTxt}>
-                    {`MARGIN ${manualShift != null ? 'MANUAL' : 'AUTO'} ${signedPx(curShift)} px`}
+                  onPress={() => { setRawChart(false); setAdjMode('align'); }}>
+                  <DecoderKeyLabel active={!rawChart && manualShift != null} style={dp.bigKeyTxt}>
+                    {rawChart ? 'MARGIN RAW' : `MARGIN ${manualShift != null ? 'MANUAL' : 'AUTO'} ${signedPx(curShift)} px`}
                   </DecoderKeyLabel>
                 </HBtn>
               )}
               <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the slant"
-                onPress={() => setAdjMode('slant')}>
-                <DecoderKeyLabel active={alignSaved} style={dp.bigKeyTxt}>
-                  {`SLANT ${alignSaved ? 'MANUAL' : 'AUTO'} ${signedSlant(drawSlant)}`}
+                onPress={() => { setRawChart(false); setAdjMode('slant'); }}>
+                <DecoderKeyLabel active={!rawChart && alignSaved} style={dp.bigKeyTxt}>
+                  {rawChart ? 'SLANT RAW' : `SLANT ${alignSaved ? 'MANUAL' : 'AUTO'} ${signedSlant(drawSlant)}`}
                 </DecoderKeyLabel>
               </HBtn>
-              {(alignSaved || manualShift != null) && (
-                <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Back to automatic"
-                  onPress={() => { changeAlign(null); setManualShift(null); }}><DecoderKeyLabel style={dp.bigKeyTxt}>RESET</DecoderKeyLabel></HBtn>
-              )}
+              {/* ★ AUTO and RAW are a MODE PAIR (Stuart, 2026-10-06 — AUTO replaces RESET): AUTO is lit while nothing
+                  manual and no RAW is in effect, and pressing it goes back to automatic from either. */}
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Automatic margin and slant"
+                accessibilityState={{ selected: !rawChart && !alignSaved && manualShift == null }}
+                onPress={() => { changeAlign(null); setManualShift(null); setRawChart(false); }}>
+                <DecoderKeyLabel active={!rawChart && !alignSaved && manualShift == null} style={dp.bigKeyTxt}>AUTO</DecoderKeyLabel>
+              </HBtn>
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Show the chart exactly as received, no correction"
+                accessibilityState={{ selected: rawChart }}
+                onPress={() => setRawChart((r) => !r)}><DecoderKeyLabel active={rawChart} style={dp.bigKeyTxt}>RAW</DecoderKeyLabel></HBtn>
             </>)}
           </View>
         )}
@@ -1281,6 +1294,8 @@ export default function DecoderPanel({
               autoMargin={isWefax && manualShift == null}
               onAutoAlign={onChartAlign}
               autoSlant={!alignSaved}
+              raw={isWefax && rawChart}
+              onNewChart={onNewChart}
               alignPreview={isWefax && adjOpen && aligning && !viewingPrev ? curShift : undefined}
               onAlignDrag={onAlignDrag}
               ref={imageRef}

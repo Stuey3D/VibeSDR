@@ -40,6 +40,11 @@ export function wefaxOffset(a: WefaxAlign, y: number, width: number): number {
   const o = Math.round(a.shift + a.slant * y);
   return ((o % width) + width) % width;
 }
+/** ★★ RAW (Stuart, 2026-10-06: "a No Correct or RAW button shows the image without any correction at all"): the
+ *  geometry a chart is DRAWN with — `a` (auto-align / manual shift, measured / saved / station slant), or with RAW on,
+ *  none at all: every line exactly as received. Geometry only — the paper/ink levels (wefaxCrisp) are rendering,
+ *  not correction, and stay. Both clients draw through this, so RAW means the same thing in each. */
+export function drawnAlign(a: WefaxAlign, raw: boolean): WefaxAlign { return raw ? WEFAX_ALIGN_ZERO : a; }
 /** Copy `src` (one line) into `dst` moved left by `off` pixels, wrapping. */
 export function rotateLine(src: ArrayLike<number>, dst: Uint8Array | number[], width: number, off: number): void {
   for (let x = 0; x < width; x++) dst[x] = src[(x + off) % width] ?? 0;

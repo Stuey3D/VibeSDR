@@ -1,7 +1,7 @@
 // test_wefax_align.ts — WEFAX SHIFT / SLANT and the per-chart margin finder (src/utils/wefaxAlign.ts).
 // Synthetic charts: a speckled page with a few curved "isobars", plus (or not) a black margin line that drifts with
 // the station's slant — the shape measured on Northwood 4610, 2026-10-04 (margin 40 px in on one chart, ~370 on another).
-import { findMargin, findMarginSlant, findGutter, findChartAlign, chartAlignStep, wefaxOffset, wefaxPreset, MARGIN_AFTER_LINES,
+import { findMargin, findMarginSlant, findGutter, findChartAlign, chartAlignStep, wefaxOffset, drawnAlign, rotateLine, wefaxPreset, MARGIN_AFTER_LINES,
          type ChartAlignState } from '../src/utils/wefaxAlign.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
@@ -118,6 +118,19 @@ for (const k of [0.011, -0.03]) {
     for (let x = 100; x <= 1700; x++) if (rnd() < 0.05) { r[x] = 30; r[x + 1] = 30; } return r; });
   const a = findChartAlign(rows, W, 0, 400);
   ok(a === null || a.slant === 0, `a text page: no slant invented (${a?.slant})`); }
+
+// ★ RAW (Stuart, 2026-10-06): drawn through drawnAlign, every line comes out exactly as received — whatever the
+//   correction underneath — and RAW off gives that correction back untouched.
+{ const corr = { shift: 1775, slant: 0.011 };
+  const rows = ddk1006(50, 300, 0);
+  let same = true;
+  for (let y = 0; y < rows.length; y++) {
+    const o = new Uint8Array(W); rotateLine(rows[y], o, W, wefaxOffset(drawnAlign(corr, true), y, W));
+    for (let x = 0; x < W; x++) if (o[x] !== rows[y][x]) { same = false; break; }
+  }
+  ok(same, 'RAW: every line drawn byte-for-byte as received (shift 0, slant 0)');
+  ok(drawnAlign(corr, false) === corr && wefaxOffset(drawnAlign(corr, false), 1000, W) === wefaxOffset(corr, 1000, W),
+     'RAW off: the correction underneath is drawn unchanged'); }
 
 // The arithmetic the canvases use
 ok(wefaxOffset({ shift: 40, slant: -0.06 }, 0, W) === 40 && wefaxOffset({ shift: 40, slant: -0.06 }, 1000, W) === W - 20, 'offset wraps');
