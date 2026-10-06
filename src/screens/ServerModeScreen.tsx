@@ -21,6 +21,7 @@ const BLOCKABLE: { id: string; label: string }[] = [
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
+  unstable_batchedUpdates,
 } from 'react-native';
 // ★ On a TV the remote must be able to move PAST a text field — see TvTextInput (Kiko, Android 6 box).
 import TextInput from '../components/TvTextInput';
@@ -29,12 +30,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { themeFor } from '../constants/theme';
-import { getServerName, saveServerName, PUBLIC_NAME_KEY } from '../services/rtlTcpServer';
+import { saveServerName, PUBLIC_NAME_KEY, NAME_KEY } from '../services/rtlTcpServer';
+import { readPrefs } from '../services/serverPrefs';
 import {
   startVibeServer, stopVibeServer, getVibeServerStatus, setVibeServerCompressAudio, getConnectedRadio,
   setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
-  getServerLocationMode, setServerLocationMode, getManualServerLocation,
+  setServerLocationMode, getManualServerLocation, LOC_KEY, LOCMODE_KEY,
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation,
   getDabBlocks, dabQuickScan, dabScanPhase, type DabBlock, type VibeServerConfig,
@@ -754,149 +756,130 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     const load = async (attempt: number): Promise<void> => {
       if (!cancelled) { setPrefsLoading(true); setPrefsError(null); }
       try {
-        const n = await patient(getServerName(route.params?.name ?? 'VibeSDR'));
+        /* ★★★ ONE READ, ONE RENDER (2026-10-06) — see src/services/serverPrefs.ts for the measurement.
+         *  This was ~70 getItem calls, most awaited one after another, each followed by its own
+         *  setState. On Lite (React Native 0.73, old architecture) a setState after an await is NOT
+         *  batched: each one re-rendered this whole screen on the spot — 77 renders to show the
+         *  settings, measured on the emulator harness; at the Sony's seconds a render, a minute or more
+         *  (Stuart, 2026-10-06: "the settings issue on VibeServer Lite ... an eternity to load").
+         *  ★ Now: every key in ONE multiGet (one bridge round trip, one SQLite query), then every
+         *    setter inside ONE unstable_batchedUpdates, so the fields arrive in a single render.
+         *  ★★ The reading of each value is UNCHANGED — absent stays "never set" and keeps its own
+         *     default (several are deliberately ON). Only the delivery changed.
+         *  ★ Not storage, so not part of this read and never waited on: the band list and the DAB
+         *    block table (engine), the radio and the benchmark (other effects). */
+        const t0 = Date.now();
+        const v = await patient(readPrefs(AsyncStorage, [NAME_KEY, LOC_KEY, LOCMODE_KEY, ...Object.values(K)]));
         if (cancelled) return;
-        setName(n);
-        /* ★★ POSITIONAL, so a name added here must land in the SAME place as its getItem below.
-         *   glk/gsp sit immediately after gl because that is where their reads were inserted —
-         *   put them anywhere else and every variable after them silently takes its neighbour's
-         *   value, which type-checks perfectly and is wrong at run time. */
-        const [p, a, pm, sp, r, fp, cp, ws, apw, unc, lim, fm,
-               mu, alw, blk, gl, bmd, dbb, glk, gsp, rg, agl, ragc, px, ru, lhz, lmd, bt] = await patient(Promise.all([
-          AsyncStorage.getItem(K.proto), AsyncStorage.getItem(K.advertise),
-          AsyncStorage.getItem(K.pinMode), AsyncStorage.getItem(K.pin),
-          AsyncStorage.getItem(K.rate), AsyncStorage.getItem(K.fps),
-          AsyncStorage.getItem(K.compress), AsyncStorage.getItem(K.webServer),
-          AsyncStorage.getItem(K.adminPw), AsyncStorage.getItem(K.uncomp),
-          AsyncStorage.getItem(K.limitMin), AsyncStorage.getItem(K.advanced),
-          AsyncStorage.getItem(K.maxUsers), AsyncStorage.getItem(K.allowRanges),
-          AsyncStorage.getItem(K.blockRanges), AsyncStorage.getItem(K.gainLimits),
-          AsyncStorage.getItem(K.blockedModes), AsyncStorage.getItem(K.dabRateBoost),
-          AsyncStorage.getItem(K.gainLocks), AsyncStorage.getItem(K.gainSplits),
-          AsyncStorage.getItem(K.restGain), AsyncStorage.getItem(K.agcLock),
-          AsyncStorage.getItem(K.rtlAgc),
-          AsyncStorage.getItem(K.proxies), AsyncStorage.getItem(K.radioUse),
-          AsyncStorage.getItem(K.landingHz), AsyncStorage.getItem(K.landingMode),
-          AsyncStorage.getItem(K.biasT),
-        ]));
-        if (!vibeServerOnly && (p === 'rtltcp' || p === 'vibeserver')) setProto(p);
-        if (a != null) setAdvertise(a !== '0');
-        if (ws != null) setWebServer(ws !== '0');
-        if (apw != null) setAdminPw(apw);
-        if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2);
-        // ★ Absent = AGC OFF. An existing server must not come back with the AGC quietly enabled
-        //   by an upgrade — it may raise the gain above what the owner set.
-        if (ragc != null) setRtlAgc(ragc === '1');
-        if (glk != null) setGainLocks(glk);
-        if (gsp != null) setGainSplits(gsp);
-        if (lim != null) setLimitMin(Number(lim) || 0);
-        if (fm != null) setAdvanced(fm === '1');
-        // ★ Loaded separately from the tuple above: adding thirteen more entries to a positional
-        //   destructure of twenty-three is how the wrong value ends up in the wrong setting.
+        const g = (k: string) => v[k] ?? null;     // null = never set
+        const s = (k: string) => v[k] ?? '';       // '' where the old reader used `?? ''`
+        let city = '';
+        try { const raw = g(LOC_KEY); city = raw ? (JSON.parse(raw)?.label ?? '') : ''; } catch { city = ''; }
+        unstable_batchedUpdates(() => {
+          setName(g(NAME_KEY) || (route.params?.name ?? 'VibeSDR'));
+          const p = g(K.proto);
+          if (!vibeServerOnly && (p === 'rtltcp' || p === 'vibeserver')) setProto(p);
+          { const a = g(K.advertise); if (a != null) setAdvertise(a !== '0'); }
+          { const ws = g(K.webServer); if (ws != null) setWebServer(ws !== '0'); }
+          { const apw = g(K.adminPw); if (apw != null) setAdminPw(apw); }
+          { const unc = g(K.uncomp); if (unc === '1' || unc === '2') setUncomp(unc === '1' ? 1 : 2); }
+          // ★ Absent = AGC OFF. An existing server must not come back with the AGC quietly enabled
+          //   by an upgrade — it may raise the gain above what the owner set.
+          { const ragc = g(K.rtlAgc); if (ragc != null) setRtlAgc(ragc === '1'); }
+          { const glk = g(K.gainLocks); if (glk != null) setGainLocks(glk); }
+          { const gsp = g(K.gainSplits); if (gsp != null) setGainSplits(gsp); }
+          { const lim = g(K.limitMin); if (lim != null) setLimitMin(Number(lim) || 0); }
+          { const fm = g(K.advanced); if (fm != null) setAdvanced(fm === '1'); }
+          // — the radio's front end —
+          { const tb = g(K.tunerBwAuto); if (tb != null) setTunerBwAuto(tb === '1'); }
+          setGainCurves(s(K.gainCurves));
+          setIfBwLimits(s(K.ifBwLimits));
+          setPpm(s(K.ppm));
+          { const d = s(K.directSampling); if (d === 'i' || d === 'q') setDirectSampling(d); }
+          setAutoDs(s(K.autoDs) === '1');
+          { const m = s(K.autoDsMhz); if (m) setAutoDsMhz(m); }
+          setConvOffsetMhz(s(K.convOffsetMhz));
+          setConvLoMhz(s(K.convLoMhz));
+          setConvHiMhz(s(K.convHiMhz));
+          setConvDown(s(K.convDown) === '1');
+          // — the server —
+          setLandingMsg(s(K.landingMsg));
+          setLandingUrl(s(K.landingUrl));
+          setLandingLbl(s(K.landingLbl));
+          setLimitSoft(s(K.limitSoft) === '1');
+          setIdleKick(Number(s(K.idleKick)) || 0);
+          setBatteryPauseAt(Number(s(K.batteryPauseAt)) || 0);
+          setRawIq(Number(s(K.rawIq)) || 0);
+          setRawIqMax(Number(s(K.rawIqMax)) || 0);
+          setRawIqLanMaxHz(Number(s(K.rawIqLanMaxHz)) || 0);
+          setDecoderMax(Number(s(K.decoderMax)) || 0);
+          setLockedCentre(Number(s(K.lockedCentre)) || 0);
+          // ★ Absent means "never chosen", which must read as the DEFAULT (on) and not as off —
+          //   the same trap as any stored boolean whose default is true.
+          { const z = s(K.zoomSpectrum); if (z) setZoomSpec(z === '1'); }
+          // ★ Absent = refuse, the server's own default — an older install must not read as "allow".
+          { const o = s(K.oneRadioPerIp); if (o) setOneRadioPerIp(o === '1'); }
+          setSpectrogram(s(K.spectrogram) === '1');
+          // ★ Default ON at 300 s — an absent value means "never set", not "off".
+          { const ig = s(K.idleGrace); setIdleGrace(ig === '' ? 300 : (Number(ig) || 0)); }
+          setAntenna(s(K.antenna));
+          setAntennaIcon(s(K.antennaIcon));
+          setRadioLabel(s(K.radioLabel));
+          { const ch = s(K.landingDabCh);
+            if (ch !== '' && Number.isFinite(Number(ch))) setLandingDabCh(Number(ch)); }
+          setLandingDabSid(Number(s(K.landingDabSid)) || 0);
+          setLandingDabSvc(s(K.landingDabSvc));
+          { const ru = g(K.radioUse); if (ru === 'locked' || ru === 'single') setRadioUse(ru); }
+          { const lhz = g(K.landingHz); if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz)); }
+          { const lmd = g(K.landingMode); if (lmd) setLandingMode(lmd); }
+          { const bt = g(K.biasT); if (bt != null) setBiasT(bt === '1'); }
+          { const mu = g(K.maxUsers);
+            if (mu != null) {
+              const n = Math.max(1, Number(mu) || 1);
+              // ★ The box's text follows the stored value — otherwise a saved 10 came back showing "1".
+              setMaxUsers(n); setUsersText(String(n));
+            } }
+          { const alw = g(K.allowRanges); if (alw != null) setAllowRanges(alw); }
+          { const blk = g(K.blockRanges); if (blk != null) setBlockRanges(blk); }
+          { const bmd = g(K.blockedModes); if (bmd != null) setBlockedModes(bmd); }
+          { const dbb = g(K.dabRateBoost); if (dbb != null) setDabRateBoost(dbb === '1'); }
+          { const gl = g(K.gainLimits); if (gl != null) setGainLimits(gl); }
+          // ★ -1 is "leave it alone" and is a REAL value, so no `|| default` here.
+          { const rg = g(K.restGain); if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg)); }
+          { const agl = g(K.agcLock); if (agl != null) setAgcLock(agl === '1'); }
+          { const px = g(K.proxies); if (px != null) setProxies(px); }
+          { const lm = g(LOCMODE_KEY); setLocMode(lm === 'device' || lm === 'manual' ? lm : 'off'); }
+          setLocCity(city);
+          { const pm = g(K.pinMode); if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm); }
+          // Restore the saved PIN for BOTH modes so re-opening the server keeps the
+          // same code — it only changes when the user taps refresh (↻) or edits it.
+          { const sp = g(K.pin); if (sp) setPin(sp); }
+          // NB: 0 is a REAL value here (client-controlled), so no `if (r)` / `|| default`
+          // — both would silently turn "client-controlled" back into a pinned 2.4 MHz.
+          { const r = g(K.rate); if (r != null && Number.isFinite(Number(r))) setRate(Number(r)); }
+          { const fp = g(K.fps); if (fp === 'full' || fp === 'half' || fp === 'quarter') setFps(fp); }
+          { const cp = g(K.compress); if (cp != null) setCompress(cp !== '0'); }
+          // ★★★ prefsRead in the SAME batch as the values: start() can never see it true with a
+          //     setting still at its default — the loss prefsRead exists to prevent.
+          setPrefsRead(true);
+          setPrefsLoading(false);
+          setPrefsSlow(false);
+        });
+        console.log(`[server] settings read in ${Date.now() - t0} ms`);
+        if (!g(K.pin)) AsyncStorage.setItem(K.pin, pin);   // first run: persist the generated default
         // ★ Asked for once, from the shim that enforces them. Failure is silent and harmless —
-        //   see the note by `bands`.
+        //   see the note by `bands`. Engine, not storage: never part of the read above.
         void (async () => {
           try {
             const raw = await (NativeModules as any).VibeLocalSDR?.getBands?.();
             if (raw) { const b = JSON.parse(raw); if (Array.isArray(b)) setBands(b); }
           } catch { /* the band chips simply do not appear */ }
         })();
-        /* ★★★ LOADED SEPARATELY, NOT ADDED TO THE POSITIONAL TUPLE ABOVE — see the note there.
-         *     Inserting one more getItem() into a destructure of twenty-odd shifts EVERY value
-         *     after it into the wrong setting, silently. I did exactly that while adding this and
-         *     caught it only on re-reading; the comment warning against it is three lines away. */
-        /* ★★★ AWAITED BEFORE prefsRead, NOT FIRED AND FORGOTTEN (2026-09-30). These two blocks were
-         *  `void (async () => …)()`, so prefsRead went true while they were still queued on the storage
-         *  executor — and on slow eMMC that is seconds. A Start in that gap persisted (multiSet) the
-         *  DEFAULTS of every setting below — IF filter auto, ppm, direct sampling, the converter, the
-         *  landing message, raw IQ, the DAB landing — over the owner's stored values: the exact loss
-         *  prefsRead exists to prevent, through a side door. They still run in parallel with the rest. */
-        const radioReads = (async () => {
-          const v = await AsyncStorage.getItem(K.tunerBwAuto);
-          if (v != null) setTunerBwAuto(v === '1');
-          const g2 = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
-          setGainCurves(await g2(K.gainCurves));
-          setIfBwLimits(await g2(K.ifBwLimits));
-          setPpm(await g2(K.ppm));
-          { const d = await g2(K.directSampling); if (d === 'i' || d === 'q') setDirectSampling(d); }
-          setAutoDs((await g2(K.autoDs)) === '1');
-          { const m = await g2(K.autoDsMhz); if (m) setAutoDsMhz(m); }
-          setConvOffsetMhz(await g2(K.convOffsetMhz));
-          setConvLoMhz(await g2(K.convLoMhz));
-          setConvHiMhz(await g2(K.convHiMhz));
-          setConvDown((await g2(K.convDown)) === '1');
-        })();
-        const serverReads = (async () => {
-          const g = async (k: string) => (await AsyncStorage.getItem(k)) ?? '';
-          setLandingMsg(await g(K.landingMsg));
-          setLandingUrl(await g(K.landingUrl));
-          setLandingLbl(await g(K.landingLbl));
-          setLimitSoft((await g(K.limitSoft)) === '1');
-          setIdleKick(Number(await g(K.idleKick)) || 0);
-          setBatteryPauseAt(Number(await g(K.batteryPauseAt)) || 0);
-          setRawIq(Number(await g(K.rawIq)) || 0);
-          setRawIqMax(Number(await g(K.rawIqMax)) || 0);
-          setRawIqLanMaxHz(Number(await g(K.rawIqLanMaxHz)) || 0);
-          setDecoderMax(Number(await g(K.decoderMax)) || 0);
-          setLockedCentre(Number(await g(K.lockedCentre)) || 0);
-          // ★ Absent means "never chosen", which must read as the DEFAULT (on) and not as off —
-          //   the same trap as any stored boolean whose default is true.
-          { const v = await g(K.zoomSpectrum); if (v) setZoomSpec(v === '1'); }
-          // ★ Absent = refuse, the server's own default — an older install must not read as "allow".
-          { const v = await g(K.oneRadioPerIp); if (v) setOneRadioPerIp(v === '1'); }
-          setSpectrogram((await g(K.spectrogram)) === '1');
-          const ig = await g(K.idleGrace);
-          // ★ Default ON at 300 s — an absent value means "never set", not "off".
-          setIdleGrace(ig === '' ? 300 : (Number(ig) || 0));
-          setAntenna(await g(K.antenna));
-          setAntennaIcon(await g(K.antennaIcon));
-          setRadioLabel(await g(K.radioLabel));
-          { const ch = await g(K.landingDabCh);
-            if (ch !== '' && Number.isFinite(Number(ch))) setLandingDabCh(Number(ch)); }
-          setLandingDabSid(Number(await g(K.landingDabSid)) || 0);
-          setLandingDabSvc(await g(K.landingDabSvc));
-        })();
-        // ★ The block list comes from the ENGINE's table — the stored value is an index into it. Not
-        //   storage, so not part of the read the screen waits on.
+        // ★ The block list comes from the ENGINE's table — the stored value is an index into it.
         void (async () => {
           try { setDabBlocks(await getDabBlocks()); }
           catch (e: any) { setDabScanMsg('Could not read the DAB block list: ' + (e?.message ?? e)); }
         })();
-        if (ru === 'locked' || ru === 'single') setRadioUse(ru);
-        if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz));
-        if (lmd) setLandingMode(lmd);
-        if (bt != null) setBiasT(bt === '1');
-        if (mu != null) {
-          const n = Math.max(1, Number(mu) || 1);
-          // ★ The box's text follows the stored value — otherwise a saved 10 came back showing "1".
-          setMaxUsers(n); setUsersText(String(n));
-        }
-        if (alw != null) setAllowRanges(alw);
-        if (blk != null) setBlockRanges(blk);
-        if (bmd != null) setBlockedModes(bmd);
-        if (dbb != null) setDabRateBoost(dbb === '1');
-        if (gl != null) setGainLimits(gl);
-        // ★ -1 is "leave it alone" and is a REAL value, so no `|| default` here.
-        if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg));
-        if (agl != null) setAgcLock(agl === '1');
-        if (px != null) setProxies(px);
-        setLocMode(await patient(getServerLocationMode()));
-        setLocCity((await patient(getManualServerLocation()))?.label ?? '');
-        if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm);
-        // Restore the saved PIN for BOTH modes so re-opening the server keeps the
-        // same code — it only changes when the user taps refresh (↻) or edits it.
-        if (sp) setPin(sp);
-        else AsyncStorage.setItem(K.pin, pin);   // first run: persist the generated default
-        // NB: 0 is a REAL value here (client-controlled), so no `if (r)` / `|| default`
-        // — both would silently turn "client-controlled" back into a pinned 2.4 MHz.
-        if (r != null && Number.isFinite(Number(r))) setRate(Number(r));
-        if (fp === 'full' || fp === 'half' || fp === 'quarter') setFps(fp);
-        if (cp != null) setCompress(cp !== '0');
-        await patient(Promise.all([radioReads, serverReads]));
-        if (cancelled) return;
-        setPrefsRead(true);
-        setPrefsLoading(false);
-        setPrefsSlow(false);
       } catch (e: any) {
         if (cancelled) return;
         /* ★★★ A READ THAT FAILS MUST NOT LOOK LIKE A SERVER WITH NO SETTINGS (Stuart's Sony, 2026-09-20: "for
@@ -981,8 +964,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     const look = async () => {
       const s = await getVibeServerStatus();
       if (cancelled || !s?.running) return;
-      setRunning({ ip: s.ip || '', port: s.port || 0, name });
-      setStatus(s);
+      unstable_batchedUpdates(() => {   // ★ one render — see ONE READ, ONE RENDER on the settings load
+        setRunning({ ip: s.ip || '', port: s.port || 0, name });
+        setStatus(s);
+      });
     };
     void look();
     const t = setInterval(look, 2000);
@@ -1013,7 +998,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           + 'restarted on its own — plug it in and press Start to serve again.');
         return;
       }
-      if (s) setStatus(s);
+      /* ★★ ONLY A CHANGED STATUS RE-RENDERS (2026-10-06). getVibeServerStatus answers a NEW object
+       *  every time, so this re-rendered the whole screen every 1.5 s even when nothing had moved — and
+       *  on Lite (old architecture, unbatched) a render costs the Sony seconds, which kept its JS thread
+       *  busy for as long as the server ran. An identical reading keeps the previous object. */
+      if (s) setStatus((prev) => (prev && JSON.stringify(prev) === JSON.stringify(s) ? prev : s));
       // ★★★ THE LISTING CAN COME BACK WITHOUT THE SCREEN ASKING IT TO. Turning the server on
       //     re-establishes a listing that was left on, and that happens on its own, seconds later,
       //     down in the service — so the switch showed ON with NO ADDRESS under it, which reads as
@@ -1026,16 +1015,19 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         const st = await (NativeModules as any).VibeLocalSDR?.tunnelStatus?.();
         if (st) {
           const j = JSON.parse(st);
-          setPublicOn(!!j.running);
-          setPublicAddr(j.address || '');
-          // ★ The share's real end (see publicUntil). Only while listed: an unlisted server has none.
-          const until = j.running ? Number(j.until) || 0 : 0;
-          const live = until > Date.now() / 1000;
-          setPublicUntil(live ? until : 0);
-          if (j.running && live !== publicTempRef.current && Date.now() - tempTouchedAt.current > 8000) { tempFromStatus.current = true; setPublicTemp(live); }
-          // ★ CLEARED as well as set — this only ever set it, so one transient failure stuck to
-          //   the switch permanently. The status is the whole truth each time it is read.
-          setPublicErr(j.error || '');
+          // ★ One render for the lot — see the ONE READ, ONE RENDER note on the settings load.
+          unstable_batchedUpdates(() => {
+            setPublicOn(!!j.running);
+            setPublicAddr(j.address || '');
+            // ★ The share's real end (see publicUntil). Only while listed: an unlisted server has none.
+            const until = j.running ? Number(j.until) || 0 : 0;
+            const live = until > Date.now() / 1000;
+            setPublicUntil(live ? until : 0);
+            if (j.running && live !== publicTempRef.current && Date.now() - tempTouchedAt.current > 8000) { tempFromStatus.current = true; setPublicTemp(live); }
+            // ★ CLEARED as well as set — this only ever set it, so one transient failure stuck to
+            //   the switch permanently. The status is the whole truth each time it is read.
+            setPublicErr(j.error || '');
+          });
         }
       } catch { /* the switch simply keeps whatever it last knew */ }
     }, 1500);
@@ -1177,7 +1169,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         const st = await Local?.tunnelStatus?.();
         if (!cancelled && st) {
           const j = JSON.parse(st);
-          setPublicOn(!!j.running); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
+          // ★ One render, not three — see the ONE READ, ONE RENDER note on the settings load.
+          unstable_batchedUpdates(() => {
+            setPublicOn(!!j.running); setPublicAddr(j.address || ''); setPublicErr(j.error || '');
+          });
         }
       } catch { /* status is a nicety — never let it break the screen */ }
     })();

@@ -40,7 +40,8 @@ export const BANDWIDTH_OPTIONS: { label: string; value: number }[] = [
   { label: '0.25 MHz',          value: 250_000 },
 ];
 
-const NAME_KEY = 'vsdr_rtltcp_server_name';
+/** ★ Exported so the server screen can read it in its ONE batched read (serverPrefs.ts). */
+export const NAME_KEY = 'vsdr_rtltcp_server_name';
 const PERSIST_KEY = 'vsdr_rtltcp_server_persist';
 
 /**

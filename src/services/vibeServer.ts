@@ -498,7 +498,8 @@ export async function getLearnedBookmarksNow(): Promise<ServerBookmark[]> {
 
 
 /** Where the host has manually said the receiver is (city picker fallback). */
-const LOC_KEY = 'lsv_server_location';
+// ★ Exported, with LOCMODE_KEY, so the server screen reads them in its ONE batched read (serverPrefs.ts).
+export const LOC_KEY = 'lsv_server_location';
 
 export type ServerLocation = { lat: number; lon: number; label?: string };
 
@@ -640,7 +641,7 @@ export async function getManualServerLocation(): Promise<ServerLocation | null> 
  * the default is to publish nothing.
  */
 export type LocationMode = 'off' | 'device' | 'manual';
-const LOCMODE_KEY = 'vs_locmode';
+export const LOCMODE_KEY = 'vs_locmode';
 
 export async function getServerLocationMode(): Promise<LocationMode> {
   try {

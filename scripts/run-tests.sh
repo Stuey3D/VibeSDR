@@ -244,6 +244,8 @@ if node --no-warnings scripts/test_safe_text.ts; then pass=$((pass+1)); else fai
 if node --no-warnings scripts/test_safe_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ The web client's `host` is an authority (+ /r/<id>) and nothing else (CodeQL #97-#99, 2026-10-05).
 if node --no-warnings scripts/test_server_host.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ The server screen's settings are read in ONE store call (Lite's "eternity" to load, 2026-10-06).
+if node --no-warnings scripts/test_server_prefs.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ A gzipped spectrum-socket frame cannot inflate past its ceiling (gzip bomb).
 if node --no-warnings scripts/test_bounded_inflate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ The map WebView page parses, for all three kinds (a template-literal page tsc cannot check).
