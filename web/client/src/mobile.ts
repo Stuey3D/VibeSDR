@@ -448,7 +448,8 @@ export function initMobileControls(deps: MobileDeps) {
     const sql = $('mSqlLine'); if (!sql.hidden) sql.hidden = true;
     const snrEl = $('mSnr');
     if (snrEl.classList.contains('sql')) snrEl.classList.remove('sql');
-    put(snrEl, q.short);
+    // ★ MER in the box (DAB's SNR); the verdict is already in the bar beside it (Stuart, 2026-10-06).
+    put(snrEl, q.merDb !== undefined ? `MER ${Math.round(q.merDb)} dB` : q.short);
     // ★ Write on change: this runs on every spectrum frame, the verdict changes about once a second at most.
     const key = `${q.level}|${q.label}|${q.advice}|${q.detail ?? ''}`;
     if (key !== dabShown) {

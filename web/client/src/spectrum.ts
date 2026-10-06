@@ -331,6 +331,7 @@ export interface DabState {
   rfCentreHz?: number; rfRateHz?: number;
   prsRef?: number; prsRatio?: number; erased?: number; reacquires?: number; syncJumps?: number;
   rsFixed?: number; rsLost?: number; sfOk?: number; sfTried?: number; sfFireBad?: number;
+  auIn?: number; auBad?: number;   // ★ DAB+ access units due / failed CRC (RC17+)
   /** ★ The decoder's PCM output counter (cumulative frames pushed, DAB+ and MP2 alike) — the
    *  digital flow: audio exists at the server when this is climbing, whatever the player does. */
   pcmPushed?: number;

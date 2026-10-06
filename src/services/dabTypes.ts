@@ -48,6 +48,8 @@ export interface DabState {
   rfCentreHz?: number; rfRateHz?: number;
   prsRef?: number; prsRatio?: number; erased?: number; reacquires?: number; syncJumps?: number;
   rsFixed?: number; rsLost?: number; sfOk?: number; sfTried?: number; sfFireBad?: number;
+  /** DAB+ access units due / failed their CRC — the audio heard (servers from RC17). */
+  auIn?: number; auBad?: number; scfConcealed?: number;
   /** ★ The decoder's PCM output counter (cumulative, DAB+ and MP2 alike) — the digital flow. */
   pcmPushed?: number;
   mp2In?: number; mp2Bad?: number; mp2Concealed?: number; mp2NoSync?: number;

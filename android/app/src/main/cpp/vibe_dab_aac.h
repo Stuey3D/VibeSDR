@@ -22,6 +22,12 @@ struct SuperFrame {
     int  rsUncorrected = 0;                  ///< codewords beyond the code's power
     bool firecodeOk    = false;
     bool valid         = false;
+    /* ★★★ HOW MANY ACCESS UNITS THE HEADER PROMISED, AND HOW MANY FAILED THEIR CRC (2026-10-06).
+     *  `valid` is true if even ONE AU survives, so a super frame that dropped three of its four AUs
+     *  still counted as OK — and the DAB meter called "bubbling mud" STRONG. The AU is what the
+     *  listener hears; count it. Meaningful only when firecodeOk (otherwise nau is noise). */
+    int  auTotal       = 0;
+    int  auBad         = 0;
     /* ★★ THE CHANNEL MODE AND PS FLAG, which were parsed and thrown away. ADTS needs the CORE
      *  channel count — 1 for mono AND for HE-AAC v2, where parametric stereo reconstructs the
      *  second channel from a mono core and is signalled implicitly. Writing 2 there for a PS
@@ -159,6 +165,8 @@ inline SuperFrame decodeSuperFrame(const uint8_t* wire, size_t n, int index) {
         if (want != uint16_t(~dabCrc16(&data[a], len))) continue;
         sf.aus.emplace_back(data.begin() + long(a), data.begin() + long(a + len));
     }
+    sf.auTotal = nau;
+    sf.auBad   = nau - int(sf.aus.size());
     sf.valid = !sf.aus.empty();
     return sf;
 }
