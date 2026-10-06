@@ -30,8 +30,8 @@ import {
   Modal,
   BackHandler,
   ActivityIndicator,
-  Dimensions,
   NativeEventEmitter,
+  useWindowDimensions,
   NativeModules,
   Platform,
   Pressable,
@@ -1837,7 +1837,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
   const insets = useSafeAreaInsets();
-  const { width: screenW, height: screenH } = Dimensions.get('window');
+  /* ★★★ THE WINDOW'S SIZE IS A SUBSCRIPTION, NOT A READ (2026-10-06). This was
+   *  `Dimensions.get('window')` — a snapshot taken whenever this screen happened to render. A Mac
+   *  (or iPad, or split-screen) window that changes size sends `didUpdateDimensions`, but nothing
+   *  here listened, so the spectrum, waterfall and band strip kept the OLD window's width and
+   *  height until some unrelated state change re-rendered the screen. Stuart, RC22 Mac app: out of
+   *  the digital spots map, the waterfall was drawn at the size the window had before, black to the
+   *  right and below, and "snapped back when I pressed a button on the controls" — the press was
+   *  the first re-render after the dimensions event. useWindowDimensions re-renders on the event
+   *  itself, so the picture follows the window whatever is open over it (a Modal, a sheet, a map).
+   *  Layout follows the WINDOW, never the device. */
+  const { width: screenW, height: screenH } = useWindowDimensions();
   const isLandscape = screenW > screenH;
   // Tablets (iPad) have room for the decoder panel in landscape; phones don't.
   const isTablet = Math.min(screenW, screenH) >= 768;
@@ -4195,14 +4205,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   useEffect(() => () => { if (decFlushTimer.current) { clearTimeout(decFlushTimer.current); decFlushTimer.current = null; } }, []);
   const [decoding,       setDecoding]       = useState(false);
-  const [pillBottom,     setPillBottom]     = useState(200); // updated by pill layout
   const [rootH,          setRootH]          = useState(0);   // measured root height
-  const pillYRef = useRef<number | null>(null);
-  // Re-derive pillBottom once the root measures (or rotates) — the pill's
-  // own onLayout may have fired first with a stale height
-  useEffect(() => {
-    if (rootH > 0 && pillYRef.current != null) setPillBottom(rootH - pillYRef.current);
-  }, [rootH]);
+  /* ★★ pillBottom is DERIVED, never stored (2026-10-06). It was state written from the pill's
+   *  onLayout as `rootH - y`, with `rootH` read from the closure of whichever render last set the
+   *  callback. When the window grows, the root and the pill re-lay out in the same pass and the
+   *  pill's handler could subtract its NEW top from the OLD root height — a pillBottom far too low,
+   *  and the VTS bar (anchored at pillBottom + 8) drawn behind the controls: "missing". Keep the
+   *  two measurements separate and combine them here, so whichever lands last, the sum is right. */
+  const [pillY,          setPillY]          = useState<number | null>(null); // pill's top, root coords
+  const pillBottom = pillY == null ? 200 : (rootH > 0 ? rootH : screenH) - pillY;
 
   // Real decoders — UberSDR server audio extensions over /ws/dxcluster,
   // exactly as the confirmed-working skin wires them (see DecoderClient.ts).
@@ -10694,9 +10705,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         style={[styles.pillWrap, { bottom: bottomInset + 8 }]}
         onLayout={(e: any) => {
           // Track pill top so bottom-anchored overlays can sit above it
-          const { y } = e.nativeEvent.layout;
-          pillYRef.current = y;
-          setPillBottom((rootH > 0 ? rootH : screenH) - y);
+          setPillY(e.nativeEvent.layout.y);
         }}
       >
         <PanelBoundary name="Controls" autoRetry noticeTop={0}>
