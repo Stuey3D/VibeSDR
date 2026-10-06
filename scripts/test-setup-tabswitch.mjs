@@ -28,7 +28,7 @@ const ok = (cond, what, extra = '') => {
 const els = new Map();
 const mkEl = (id) => {
   const e = {
-    id, value: '', checked: false, textContent: '', innerHTML: '', disabled: false, hidden: false,
+    id, value: '', checked: false, textContent: '', innerHTML: '', disabled: false, hidden: false, options: [], dataset: {}, children: [],
     style: {}, _cls: new Set(['hide']),
     classList: {
       add: (c) => e._cls.add(c), remove: (c) => e._cls.delete(c),
@@ -36,7 +36,8 @@ const mkEl = (id) => {
                                            : (on ? e._cls.add(c) : e._cls.delete(c))),
       contains: (c) => e._cls.has(c),
     },
-    addEventListener() {}, removeEventListener() {}, appendChild() {}, remove() {},
+    addEventListener() {}, removeEventListener() {}, appendChild() {}, remove() {}, insertBefore() {},
+    querySelector: () => null, closest: () => null, contains: () => false,
     querySelectorAll: () => [], getAttribute: () => null, setAttribute() {}, focus() {},
   };
   return e;
@@ -87,7 +88,12 @@ const page = new Function(`${js}
            radioList: (typeof radioList === "function") ? radioList : null,
            sdrRender: (typeof sdrRender === "function") ? sdrRender : null,
            set SDR(v){ SDR = v }, get SDR_ALARM(){ return SDR_ALARM },
-           refreshHw: (typeof refreshHw === "function") ? refreshHw : null };`)();
+           refreshHw: (typeof refreshHw === "function") ? refreshHw : null,
+           stashServer: (typeof stashServer === "function") ? stashServer : null,
+           collect: (typeof collect === "function") ? collect : null,
+           antBandAdd: (typeof antBandAdd === "function") ? antBandAdd : null,
+           antBandEdit: (typeof antBandEdit === "function") ? antBandEdit : null,
+           antRowsFor: (typeof antRowsFor === "function") ? antRowsFor : null };`)();
 
 console.log('\nSwitching tabs must not carry a rate between radios');
 {
@@ -222,6 +228,64 @@ console.log('\nThe notices: the server decides, the page draws it in Stuart\'s w
      '★ a colliding serial points at the rename control and offers no button');
   const alarm = [...page.SDR_ALARM].sort().join();
   ok(alarm === '00000003,00000004', '★★ only the ALARM highlights a tab — not the soft or in-use ones', alarm);
+}
+
+// ★★★ THE AERIAL'S RANGES AND FILTERS (2026-10-06) — type, switch tabs, save, and nothing is lost.
+//     The antenna card has bitten twice already: the SERVER tab's fields reverted on a tab switch
+//     (stashServer) and a radio's form was copied into another (formRadio). The rows here are edited
+//     straight onto the radio object, so this drives the page's own functions the way the inputs do
+//     and asserts on what collect() would POST.
+console.log('\nAerial ranges and filters survive typing, a tab switch and a save');
+{
+  page.cfg = { name: 't', radios: [
+    { serial: 'P2',  driver: 'rtlsdr',  label: 'V4',  mode: 'single', configured: true, antenna: 'Loop' },
+    { serial: 'RSP', driver: 'sdrplay', label: 'RSP', mode: 'single', configured: true, antennas: ['A', 'B'],
+      antennaFilters: 'bandstop 87.5-108MHz FM band-stop' },
+  ] };
+  const settle = async () => { if (page.refreshHw) { resetHwGate(); const p = page.refreshHw(); hwGateResolve(); await p; } };
+  const tabTo = async (i) => {   // ★ exactly what the tab button's onclick does
+    page.stashRadio(); if (page.stashServer) page.stashServer();
+    page.curRadio = i; page.fill(); await settle();
+  };
+  page.curRadio = 0; page.fill(); await settle();
+  const [r0, r1] = page.radioList();
+  ok(!!page.antBandAdd && !!page.antBandEdit, 'the page has the row editors');
+  ok(!r0.antennaRanges && !r0.antennaFilters, '★ an aerial nobody described starts with no ranges and no filters');
+
+  // Radio 0: one finished range, one half-typed, and a filter from a preset.
+  page.antBandAdd(r0, 'ranges');
+  page.antBandEdit(r0, 'ranges', 0, 'from', '144');
+  page.antBandEdit(r0, 'ranges', 0, 'to', '146');
+  page.antBandEdit(r0, 'ranges', 0, 'name', '2 m');
+  page.antBandAdd(r0, 'ranges');
+  page.antBandEdit(r0, 'ranges', 1, 'from', '430');          // no "to" yet
+  page.antBandAdd(r0, 'filters', { kind: 'highpass', from: '1.7', to: '', unit: 'MHz', name: 'MW high-pass', port: '' });
+  ok(r0.antennaRanges === '144-146MHz 2 m', '★ the finished row is on the radio as text', r0.antennaRanges);
+
+  await tabTo(1);
+  ok(page.antRowsFor(r1).filters.length === 1, 'radio 1 shows the filter it already had');
+  page.antBandAdd(r1, 'ranges', { from: '0', to: '30', unit: 'MHz', name: 'HF wire', port: 'A' });
+  ok(r0.antennaRanges === '144-146MHz 2 m', '★★★ switching tabs did not touch radio 0', r0.antennaRanges);
+
+  await tabTo(0);
+  ok(page.antRowsFor(r0).ranges.length === 2 && page.antRowsFor(r0).ranges[1].from === '430',
+     '★★ the half-typed row is still there when you come back');
+  page.antBandEdit(r0, 'ranges', 1, 'to', '440');
+
+  const body = page.collect ? page.collect() : { radios: page.cfg.radios };
+  const posted = JSON.parse(JSON.stringify(body)).radios;
+  ok(posted[0].antennaRanges === '144-146MHz 2 m; 430-440MHz', '★★★ radio 0 saves both ranges', posted[0].antennaRanges);
+  ok(posted[0].antennaFilters === 'highpass 1.7MHz MW high-pass', '★★★ ...and its filter', posted[0].antennaFilters);
+  ok(posted[1].antennaRanges === '[A] 0-30MHz HF wire', '★★★ radio 1 saves its socket-A range', posted[1].antennaRanges);
+  ok(posted[1].antennaFilters === 'bandstop 87.5-108MHz FM band-stop', '★ ...and keeps the filter it loaded with', posted[1].antennaFilters);
+  ok(posted[0].antenna === 'Loop', 'and the aerial description is untouched', posted[0].antenna);
+
+  // A freshly loaded config (after the save) shows exactly what the server stored.
+  page.cfg = JSON.parse(JSON.stringify(body));
+  page.curRadio = 0; page.fill(); await settle();
+  const fresh = page.antRowsFor(page.radioList()[0]);
+  ok(fresh.ranges.length === 2 && fresh.ranges[1].to === '440' && fresh.filters[0].kind === 'highpass',
+     '★ reloaded, the rows come back from the saved text');
 }
 
 console.log(fail ? `\n${fail} FAILED\n` : '\nall good\n');
