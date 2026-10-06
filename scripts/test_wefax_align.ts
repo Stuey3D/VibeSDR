@@ -72,6 +72,53 @@ const feed = (st: ChartAlignState, rows: Uint8Array[], slant: number, upto: numb
   const st2: ChartAlignState = {}; let moved = 0;
   for (let y = 0; y < rows.length && st2.al === undefined; y++) if (chartAlignStep(st2, () => rows.slice(0, y + 1), W, 0, rows[y])) moved++;
   ok(moved === 1 && !!st2.al && Math.abs(st2.al.shift - 900) <= 6, `after the tone, the border is still found: cut at ${st2.al?.shift} (≈900)`); }
+// ★★★ 2026-10-06 — Stuart's DDK 7880 charts on his RSP1A, phased, then cut by auto-align. The geometry of the UberSDR
+//     copy of the 12:56 UTC chart (20261006_130727_f8c5ee8e.png, measured): ONE frame line, on the left, at 55–57; the
+//     map stops at ~1695 with no right frame; blank paper 1696…1809 and 0…54 (wraps); a header of dashes on the first
+//     15 lines from 45 to 1765, INTO the right border; and a near-vertical front (~180 ink) — the line the margin search
+//     took at 1042 on the 13:08 chart (58 % across: the border landed 42 % across, Stuart's screenshot). Then grey
+//     noise σ 45, which on the RX888 set's own charts hid the border from the old 2 %-of-lines test on 146 of 149.
+const gauss = () => { let s = 0; for (let i = 0; i < 6; i++) s += rnd(); return (s - 3) / Math.sqrt(0.5); };
+function ddk1006(lines: number, roll: number, sigma: number, slant = 0): Uint8Array[] {
+  const rows: Uint8Array[] = [];
+  for (let y = 0; y < lines; y++) {
+    const r = new Uint8Array(W).fill(250);
+    if (y < 15) { for (let x = 45; x <= 1765; x++) if ((x >> 3) & 1) r[x] = 30; }        // header dashes
+    else {
+      for (let x = 58; x <= 1695; x++) if (rnd() < 0.04) { r[x] = 40; r[x + 1] = 40; }  // text / coast, 2 px
+      for (const c of [300, 700, 1300]) { const cx = Math.round(c + 80 * Math.sin((y + c) / 90)); r[cx] = r[cx + 1] = r[cx + 2] = 20; }
+      if (y % 120 < 2) for (let x = 58; x <= 1695; x++) r[x] = 30;                       // a parallel
+      const f = Math.round(1044 - 0.035 * y); for (let k = -2; k <= 3; k++) r[f + k] = 60;  // the front
+    }
+    r[55] = r[56] = r[57] = 10;                                                         // the ONE frame line
+    if (y > 15 && y < 26) for (let x = 0; x < W; x++) if (rnd() < 0.15) r[x] = 60;       // speckle rows, full width
+    const o = new Uint8Array(W), off = Math.round(roll + slant * y);
+    for (let x = 0; x < W; x++) o[x] = Math.max(0, Math.min(255, Math.round(r[(((x - off) % W) + W) % W] + (sigma ? gauss() * sigma : 0))));
+    rows.push(o);
+  }
+  return rows;
+}
+const signed = (s: number) => ((((s % W) + W + W / 2) % W) - W / 2);
+for (const sigma of [0, 45]) {
+  const st: ChartAlignState = {}; feed(st, ddk1006(700, 0, sigma), 0, 700);
+  const s = st.al ? signed(st.al.shift) : 0;
+  // band 1696…54 → centre 1784 = −25: content moves RIGHT ~25, so 55 px of white on the left becomes ~80, 114 → ~89
+  ok(st.via === 'border' && Math.abs(s + 25) <= 8, `13:15 DDK, phased, σ${sigma}: centred on its border (shift ${s} ≈ −25), never cut`);
+}
+{ const st: ChartAlignState = {}; feed(st, ddk1006(700, 900, 45), 0, 700);
+  ok(!!st.al && Math.abs(signed(st.al.shift - 900) + 25) <= 8, `the same chart joined 900 px late, σ45: cut in its border (${st.al?.shift} ≈ 875)`); }
+// ★ The slant from the frame line (Stuart: DDK on his RSP1A has "a very slight lean backwards"; the RX888 set measures
+//   +0.010…0.012 from the frame's drift, 1 px per 100 lines, on every clean DDK chart).
+for (const k of [0.011, -0.03]) {
+  const st: ChartAlignState = {}; feed(st, ddk1006(700, 0, 30, k), 0, 700);
+  ok(!!st.al && Math.abs(st.al.slant - k) <= 0.002, `bordered chart leaning ${k}: slant measured from its frame as ${st.al?.slant}`);
+}
+// ★ No straight line beside the border (DDK's schedule / text pages): the slant stays the station's.
+{ const rows = Array.from({ length: 400 }, () => { const r = new Uint8Array(W).fill(250);
+    for (let x = 100; x <= 1700; x++) if (rnd() < 0.05) { r[x] = 30; r[x + 1] = 30; } return r; });
+  const a = findChartAlign(rows, W, 0, 400);
+  ok(a === null || a.slant === 0, `a text page: no slant invented (${a?.slant})`); }
+
 // The arithmetic the canvases use
 ok(wefaxOffset({ shift: 40, slant: -0.06 }, 0, W) === 40 && wefaxOffset({ shift: 40, slant: -0.06 }, 1000, W) === W - 20, 'offset wraps');
 ok(wefaxPreset(4608100).slant === -0.06 && wefaxPreset(4608100).shift === 0, 'Northwood preset = slant only');
