@@ -379,6 +379,19 @@ export async function dabScanPhase(): Promise<string> {
   if (!Local?.dabScanPhase) return '';
   return String(await Local.dabScanPhase());
 }
+/** ★★★ The last scan's outcome as the native side kept it — null while one runs (2026-10-06). The second
+ *  road back: the Sony's scan finished in 4.7 s and its promise never reached the screen, which counted on
+ *  past the limit it had promised. See VibeLocalSdrModule.dabScanOutcome. */
+export type DabScanOutcome = { seq: number } & ({ ok: true; result: DabScanResult } | { ok: false; why: string });
+export async function dabScanOutcome(): Promise<DabScanOutcome | null> {
+  if (!Local?.dabScanOutcome) return null;
+  const raw = await Local.dabScanOutcome();
+  if (!raw) return null;
+  const o = JSON.parse(String(raw));
+  const seq = Number(o?.seq) || 0;
+  return o?.ok ? { seq, ok: true, result: JSON.parse(String(o.body)) as DabScanResult }
+               : { seq, ok: false, why: String(o?.why || 'the scan failed') };
+}
 /** ★★ `cfg` is the config the Start button would send — the scan runs the owner's radio exactly as a
  *  server would when it has to start its own private engine (see nativeServerConfig). */
 export async function dabQuickScan(block: string, known: boolean, cfg: VibeServerConfig): Promise<DabScanResult> {

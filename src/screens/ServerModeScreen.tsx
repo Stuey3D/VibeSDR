@@ -39,7 +39,7 @@ import {
   setServerLocationMode, getManualServerLocation, LOC_KEY, LOCMODE_KEY,
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation,
-  getDabBlocks, dabQuickScan, dabScanPhase, type DabBlock, type VibeServerConfig,
+  getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
 import { loadActiveEibi } from '../services/eibi';
@@ -181,6 +181,13 @@ const K = {
   landingDabCh: 'vs_landingdabch', landingDabSid: 'vs_landingdabsid', landingDabSvc: 'vs_landingdabsvc',
   radioLabel: 'vs_radiolabel',
 };
+
+/** ★★★ HOW LONG THE SETTINGS SCREEN WAITS FOR A DAB QUICK SCAN, and the number its hint QUOTES — one
+ *  constant, so the two cannot disagree again (2026-10-06: "SCANNING 11A… 38 s" under "stops at 15 s").
+ *  The engine's own scan is capped at 15 s; around it the radio is opened, a private receiver started
+ *  and stopped, and the loopback request has 3 s to connect and 25 s to answer (dabScanHttp). 45 s
+ *  covers all of that on a slow box with room to spare, and nothing ever counts past it. */
+const DAB_SCAN_LIMIT_S = 45;
 
 /** Is DAB in the owner's blocked-modes list? Same reading as the engine's (any case, , ; or space). */
 const dabBlockedNow = (csv: string) =>
@@ -698,6 +705,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const runningRef = useRef(false);
   /** ★ Consecutive status reads saying the server is not running — see the live-status poll. */
   const stoppedReads = useRef(0);
+  /** ★★ A DAB quick scan is running — its PRIVATE engine is up on loopback, and the adoption poll must
+   *  not mistake it for a server somebody started (it reads the same native status). 2026-10-06. */
+  const scanningRef = useRef(false);
   /* ★★ Set by keepServingAndBrowse(), and PRE-SET when the picker's "Currently serving" row
    *  opened this screen to LOOK at a running server. Read only by the unmount teardown below. */
   const keepServingRef = useRef(!!(route.params as any)?.keepOnExit);
@@ -962,8 +972,10 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     //    is in the reading, not the state. The server was never wrong here.
     // ★ Stops the moment it adopts — setRunning re-runs this effect, which returns at the guard.
     const look = async () => {
+      // ★★ Not while a quick scan holds the radio: its private loopback engine reports running too.
+      if (scanningRef.current) return;
       const s = await getVibeServerStatus();
-      if (cancelled || !s?.running) return;
+      if (cancelled || !s?.running || scanningRef.current) return;
       unstable_batchedUpdates(() => {   // ★ one render — see ONE READ, ONE RENDER on the settings load
         setRunning({ ip: s.ip || '', port: s.port || 0, name });
         setStatus(s);
@@ -1319,34 +1331,73 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     const b = dabBlocks[ch];
     if (!b || dabScanBusy) return;
     setDabScanBusy(true); setDabScanSecs(0); setDabScanMsg(''); setDabScanStage('');
+    scanningRef.current = true;
     const t0 = Date.now();
-    // ★ Progress, because it takes a while: the radio is opened and a receiver started around the
-    //   scan itself, then locking a multiplex is 3-6 s and the names follow it. The PHASE is shown
-    //   with the seconds, so a slow step is named rather than looking like a hang.
-    const tick = setInterval(() => {
-      setDabScanSecs(Math.round((Date.now() - t0) / 1000));
-      dabScanPhase().then(setDabScanStage).catch((e) => console.warn('[server] scan phase:', e));
-    }, 500);
-    try {
-      // ★ known=false: the settings are only on screen while the server is stopped, when there is no
-      //   running engine holding a memory of heard stations — so it is always a real scan here.
-      // ★★ The owner's full config, so a scan with the server stopped runs the radio as the server would.
-      const j = await dabQuickScan(b.name, false, serverConfigRef.current(name.trim() || 'VibeSDR'));
+    /* ★★★ ONE ENDING, THREE WAYS TO REACH IT, AND A CEILING (2026-10-06). Stuart's Sony: the scan
+     *  finished natively in 4.7 s ("11A — 30 station(s) (complete)", "+4744 ms — done") while this
+     *  screen counted "SCANNING 11A… 38 s" under a line promising 15 s, and went on to 86 s — "well we
+     *  are telling a blatant lie". The promise was the only road back and nothing bounded the wait.
+     *  ★ Now it ends at the FIRST of: the promise; the outcome the native side keeps (read on the
+     *    progress poll, so a lost promise cannot hold the screen); or DAB_SCAN_LIMIT_S, after which it
+     *    says plainly that no answer came, and offers the button again.
+     *  ★ A real answer that arrives after the ceiling is still shown — the stations are worth having. */
+    let ended = false;
+    let timedOut = false;
+    const show = (j: DabScanResult) => {
       if (!j.ok) { setDabScanMsg('Scan not done: ' + (j.why || 'the radio refused')); return; }
       const list = Array.isArray(j.services) ? j.services : [];
       setDabStations((prev) => ({ ...prev, [ch]: list }));
       const n = list.length;
       setDabScanMsg(j.cancelled
         ? 'A listener arrived, so the scan stopped and handed them the radio. Try again when it is free.'
-        : !j.locked ? `Nothing found on ${b.name} \u2014 no multiplex locked in ${j.secs} s. Try another block.`
+        : !j.locked ? `Nothing found on ${b.name} — no multiplex locked in ${j.secs} s. Try another block.`
         : n ? `${n} station${n === 1 ? '' : 's'} on ${b.name}${j.ensemble ? ` (${j.ensemble})` : ''}`
-              + (j.complete ? '.' : ' \u2014 the ensemble had not listed everything yet; scan again for the rest.')
+              + (j.complete ? '.' : ' — the ensemble had not listed everything yet; scan again for the rest.')
         : `${b.name} locked but named no stations in ${j.secs} s. Scan again, or check the aerial.`);
-    } catch (e: any) {
-      setDabScanMsg('Scan failed: ' + (e?.message ?? String(e)));
-    } finally {
+    };
+    const end = (apply: () => void, isTimeout = false) => {
+      if (ended) {
+        // ★ Late, after the ceiling: a real answer still lands; a second timeout or failure does not.
+        if (timedOut && !isTimeout) { scanningRef.current = false; unstable_batchedUpdates(apply); }
+        return;
+      }
+      ended = true; timedOut = isTimeout;
       clearInterval(tick);
-      setDabScanBusy(false);
+      // ★ After the ceiling the private engine may still be winding down — keep the adoption poll off it
+      //   a little longer (a late answer clears this at once).
+      if (isTimeout) setTimeout(() => { scanningRef.current = false; }, 30_000);
+      else scanningRef.current = false;
+      unstable_batchedUpdates(() => { apply(); setDabScanBusy(false); setDabScanStage(''); });
+    };
+    // ★ Progress, because it takes a while: the radio is opened and a receiver started around the
+    //   scan itself, then locking a multiplex is 3-6 s and the names follow it. The PHASE is shown
+    //   with the seconds, so a slow step is named rather than looking like a hang.
+    const tick = setInterval(() => {
+      const secs = Math.round((Date.now() - t0) / 1000);
+      if (secs >= DAB_SCAN_LIMIT_S) {
+        end(() => setDabScanMsg(`No answer from the scan after ${DAB_SCAN_LIMIT_S} s, so this screen stopped `
+          + 'waiting. The radio may still be busy for a moment — press the button to scan again.'), true);
+        return;
+      }
+      setDabScanSecs(secs);
+      dabScanPhase().then(setDabScanStage).catch((e) => console.warn('[server] scan phase:', e));
+      // ★ Only an outcome NEWER than the one standing before this scan began — never the last scan's.
+      if (before !== undefined) dabScanOutcome().then((o) => {
+        if (!o || o.seq === before) return;
+        end(() => (o.ok ? show(o.result) : setDabScanMsg('Scan failed: ' + o.why)));
+      }).catch(() => { /* the promise and the ceiling still end it */ });
+    }, 500);
+    // ★ Read AFTER the ticker is running, so even this read hanging cannot take the ceiling away.
+    let before: number | undefined;
+    try { before = (await dabScanOutcome())?.seq ?? 0; } catch { before = undefined; }
+    try {
+      // ★ known=false: the settings are only on screen while the server is stopped, when there is no
+      //   running engine holding a memory of heard stations — so it is always a real scan here.
+      // ★★ The owner's full config, so a scan with the server stopped runs the radio as the server would.
+      const j = await dabQuickScan(b.name, false, serverConfigRef.current(name.trim() || 'VibeSDR'));
+      end(() => show(j));
+    } catch (e: any) {
+      end(() => setDabScanMsg('Scan failed: ' + (e?.message ?? String(e))));
     }
   };
 
@@ -2562,7 +2613,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     {dabScanBusy
                       ? (dabScanStage ? `${dabScanStage.charAt(0).toUpperCase()}${dabScanStage.slice(1)}\u2026 ` : '')
                         + 'The radio is started for the scan, locks onto the multiplex in a few seconds, then '
-                        + 'the station names arrive. The scan itself stops at 15 s.'
+                        // ★★ The number shown is the number ENFORCED — see DAB_SCAN_LIMIT_S (2026-10-06).
+                        + `the station names arrive. Gives up after ${DAB_SCAN_LIMIT_S} s.`
                       : dabScanMsg || 'Tunes the radio to this block for a few seconds and lists its stations.'}
                   </Text>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 10 }]}>Station</Text>
