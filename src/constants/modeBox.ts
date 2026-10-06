@@ -61,6 +61,13 @@ export const SEG_READ_FONT_K = 0.8;
 export const SEG_MODE_FIELD_CELLS = 10;
 export const segModeFont = (modeFontSize: number) => Math.max(6, modeFontSize * SEG_MODE_FONT_K);
 export const segModeFieldWidth = (modeFontSize: number) => segCellsWidth(SEG_MODE_FIELD_CELLS, segModeFont(modeFontSize));
+/** ★ The frequency's unit legend on the VCR window (2026-10-06, Stuart: "KHZ" / "MHZ" through the segments, in
+ *  capitals, never a font overlay). Three cells (constants/segField SEG_UNIT_CELLS) at the mode field's cap-height
+ *  rule — 0.66 × the type size the plain-text unit had — and never wider than `columnW`, the label column it
+ *  replaces, so the digits beside it sit exactly where they did. */
+export const SEG_UNIT_FIELD_CELLS = 3;
+export const segUnitFont = (unitFontSize: number, columnW: number) =>
+  Math.min(Math.max(5, unitFontSize * SEG_MODE_FONT_K), columnW / segCellsWidth(SEG_UNIT_FIELD_CELLS, 1));
 /** ★ AnnunciatorLegend's letter cell (CELL_W, CELL_H, GAP) — the readout's dB / F / S legends are its strokes.
  *  test_faceplate_segfield holds the two copies equal. */
 export const SEG_LEGEND = { cellW: 10, cellH: 14, gap: 2.2 } as const;

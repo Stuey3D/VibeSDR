@@ -8,11 +8,11 @@
  * Run: node --no-warnings scripts/test_faceplate_segfield.ts
  */
 import { readFileSync } from 'node:fs';
-import { segModeCells, segReadingCells, SEG_MODE_CELLS, SEG_READ_GHOST, SEG_STEREO_CELLS } from '../src/constants/segField.ts';
+import { segModeCells, segReadingCells, segUnitCells, SEG_MODE_CELLS, SEG_READ_GHOST, SEG_STEREO_CELLS, SEG_UNIT_CELLS } from '../src/constants/segField.ts';
 import { toSegCells, segCellList } from '../src/constants/displayText.ts';
 import {
   composeModeLabel, modeLabelCandidates, modeBoxFit, segReadingGeometry, segModeFieldWidth, SEG_MODE_FIELD_CELLS,
-  SEG_LEGEND, MODE_BOX,
+  SEG_LEGEND, MODE_BOX, segUnitFont, segCellsWidth, SEG_UNIT_FIELD_CELLS,
 } from '../src/constants/modeBox.ts';
 import { formatReading, sMeterText } from '../src/constants/meters.ts';
 import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
@@ -113,6 +113,24 @@ for (const W of [320, 375, 390, 430, 768, 1024]) {
                          minW: r(MODE_BOX.minW), padH: r(MODE_BOX.padH), windowW: winW });
   const need = Math.max(segModeFieldWidth(f.fontSize), segReadingGeometry(r(11)).width) + 2 * r(MODE_BOX.padH);
   ok(`${W} pt: the box (${f.width}) holds the mode field and the readout (${need.toFixed(1)})`, need <= f.width + 1e-9);
+}
+
+// ── The frequency unit (VCR window): capitals in a fixed three cells, right-aligned ──
+eq('unit cells agree in both copies', SEG_UNIT_CELLS, SEG_UNIT_FIELD_CELLS);
+eq('kHz → KHZ', segUnitCells('kHz'), ['K', 'H', 'Z']);
+eq('MHz → MHZ', segUnitCells('MHz'), ['M', 'H', 'Z']);
+eq('Hz → right-aligned HZ', segUnitCells('Hz'), ['', 'H', 'Z']);
+for (const u of ['Hz', 'kHz', 'MHz']) {
+  ok(`${u}: every lit cell is a 14-segment glyph`, segUnitCells(u).every(c => c === '' || cells(c).join('') === c));
+  eq(`${u}: three cells`, segUnitCells(u).length, SEG_UNIT_CELLS);
+}
+// The field fits the label column the plain-text unit had (DisplayFreq: round(2.6 × size), 3 pt right padding),
+// at every unit size the bar, the LED / analogue window and landscape use — so the digits never move.
+for (let size = 6; size <= 22; size += 0.5) {
+  const colW = Math.round(size * 2.6) - 3;
+  const fs = segUnitFont(size, colW);
+  ok(`unit ${size} pt: three cells (${segCellsWidth(SEG_UNIT_CELLS, fs).toFixed(2)}) fit the column (${colW})`,
+     segCellsWidth(SEG_UNIT_CELLS, fs) <= colW + 1e-9);
 }
 
 console.log(fails ? `FAIL faceplate segfield: ${passes} passed, ${fails} failed` : `ok  faceplate segfield: ${passes} passed, 0 failed`);

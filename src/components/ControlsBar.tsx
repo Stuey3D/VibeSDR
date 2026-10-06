@@ -54,9 +54,9 @@ import DabMeter from './DabMeter';
 import { DAB_SEARCHING, type DabQuality } from '../utils/dabQuality';
 import { GhostGrid, SegDigits, VfdFilaments } from './VfdParts';
 import { TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, type NixieLayout } from '../constants/nixie';
-import { composeModeLabel, modeBoxFit, MODE_BOX, segModeFont, segModeFieldWidth, segReadingGeometry } from '../constants/modeBox';
-import { segModeCells, segReadingCells, SEG_ALL, SEG_DEMOD_CELLS, SEG_READ_GHOST } from '../constants/segField';
-import { SegField, segCellX, type SegExtra } from './SegField';
+import { composeModeLabel, modeBoxFit, MODE_BOX, segModeFont, segModeFieldWidth, segReadingGeometry, segUnitFont } from '../constants/modeBox';
+import { segModeCells, segReadingCells, segUnitCells, SEG_ALL, SEG_DEMOD_CELLS, SEG_READ_GHOST, SEG_UNIT_CELLS } from '../constants/segField';
+import { SegField, segCellX, segFieldCellsWidth, type SegExtra } from './SegField';
 import StereoMark, { stereoRingsPath, stereoMarkWidth } from './StereoMark';
 import { legendPath, LEGEND_CELL_H } from './AnnunciatorLegend';
 import { placePath } from './vfdMesh';
@@ -840,6 +840,27 @@ function StereoIcon({ size, color }: { size: number; color: string }) {
   );
 }
 
+/** The unit field's ghost: every electrode of its three cells. */
+const SEG_UNIT_GHOST: readonly string[] = Array<string>(SEG_UNIT_CELLS).fill(SEG_ALL);
+
+/**
+ * ★★ The VCR window's frequency unit as a FIXED three-cell 14-segment field (2026-10-06): "KHZ" / "MHZ" / " HZ"
+ * lit over all-on ghosts, meshed — the mode box's SegField, in the digits' own colour and glow, so it reads as
+ * the same glass as the 7-segment frequency beside it rather than a printed label laid over it.
+ */
+const SegUnit = React.memo(function SegUnit({ unit, unitFontSize, columnW }: {
+  unit: string; unitFontSize: number; columnW: number;
+}) {
+  const dk = useFaceplate().deck;
+  const fs = segUnitFont(unitFontSize, columnW);
+  const lit = useMemo(() => segUnitCells(unit), [unit]);
+  return (
+    <SegField fs={fs} width={segFieldCellsWidth(SEG_UNIT_CELLS, fs)}
+      ghost={SEG_UNIT_GHOST} lit={lit} color={dk.core} glow={dk.glow} ghostColor={rgba(dk.rgb, 0.10)}
+      accessibilityLabel={unit} />
+  );
+});
+
 /**
  * The frequency window for the tube / dot-matrix / segment displays (§7). ★ Exactly the pill's
  * height under Hyperlegible (the text's line height + its vertical padding), so switching Display
@@ -883,9 +904,15 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
           {chanTag}
         </Text>
       ) : null}
-      <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.unitFont, fontSize: unitFontSize, paddingBottom: 0 }]} numberOfLines={1}>
-        {unit}
-      </Text>
+      {dk.style === 'seg' ? (
+        // ★★ VCR: the unit through the window's OWN segments, in capitals — "KHZ" / "MHZ" (Stuart, 2026-10-06;
+        //    memory vfd_units_in_segments: no font on a VFD). A fixed three cells, so KHZ ⇄ MHZ moves nothing.
+        <SegUnit unit={unit} unitFontSize={unitFontSize} columnW={unitW - 3} />
+      ) : (
+        <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.unitFont, fontSize: unitFontSize, paddingBottom: 0 }]} numberOfLines={1}>
+          {unit}
+        </Text>
+      )}
     </View>
   );
   if (dk.style === 'nixie' && compact) {
