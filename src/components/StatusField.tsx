@@ -18,7 +18,7 @@ import { View } from 'react-native';
 import { SegField, segCellX, type SegExtra } from './SegField';
 import { DotField, type DotMark } from './DotField';
 import { framePad, rect, segLogo, segLogoLit } from './statusLogos';
-import { segCellList, toSegCells } from '../constants/displayText';
+import { segFieldCells } from '../constants/displayText';
 import { dotChar } from '../constants/dotField';
 import {
   statusDotCols, statusDotMarks, statusDotPitch, statusDotSlots, statusLineH, statusSegFs, statusSegSlots, statusSegWidth,
@@ -28,7 +28,7 @@ import {
 /** True inside the status row's MEASURING twin: runs draw nothing but their box. */
 export const StatusGhostContext = React.createContext(false);
 
-const segRunCells = (t: string) => segCellList(toSegCells(t)).map(c => c.replace(/^!/, ''));
+const segRunCells = segFieldCells;
 
 export interface StatusRunProps {
   parts: readonly StatusPart[];

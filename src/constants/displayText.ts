@@ -176,23 +176,85 @@ const SEG_MAP: Record<string, string> = {
  *    14-segment displays did it, one DP per cell); a `.` with no cell before it, or after a cell
  *    that already has its point, gets a blank cell of its own;
  *  - `:` → `-` in its own cell;  `# ; [ ]` → `H , ( )`;
- *  - anything left after folding and mapping → a blank cell, never a tofu box.
+ *  - anything left after folding and mapping → a blank cell, never a tofu box;
+ *  - ★ the d of a dB unit stays a LOWER-CASE `d` (SEG_D_MARK, 2026-10-06) — see below.
  * The ghost layer is `segGhost(cells)`.
  */
 export function toSegCells(text: string): string {
-  const t = foldForSeg(text);
+  // ★ Folded with its case KEPT and upper-cased a character at a time (foldForSeg's result, the same for ASCII), so
+  //   the dB rule can still see the unit's case.
+  const chars = [...foldToAscii(text)];
   const cells: string[] = [];
-  for (const ch of t) {
-    if (ch === '.') {
-      const last = cells.length - 1;
-      if (last >= 0 && !cells[last].endsWith('.')) cells[last] += '.';
-      else cells.push(SEG_BLANK + '.');
-      continue;
+  for (let i = 0; i < chars.length; i++) {
+    if (isDbUnitDAt(chars, i)) { cells.push(SEG_D_MARK); continue; }
+    for (const ch of chars[i].toUpperCase()) {
+      if (ch === '.') {
+        const last = cells.length - 1;
+        if (last >= 0 && !cells[last].endsWith('.')) cells[last] += '.';
+        else cells.push(SEG_BLANK + '.');
+        continue;
+      }
+      const m = SEG_MAP[ch] ?? ch;
+      cells.push(m === SEG_BLANK || SEG_OK.test(m) ? m : SEG_BLANK);
     }
-    const m = SEG_MAP[ch] ?? ch;
-    cells.push(m === SEG_BLANK || SEG_OK.test(m) ? m : SEG_BLANK);
   }
   return cells.join('');
+}
+
+/* ── ★★★ THE LOWER-CASE d OF dB (2026-10-06) ─────────────────────────────────────────────────────────────────────
+ * Stuart: "make sure that in the next build any dB icons on the VCR VFD display are correctly set with the lower
+ * case d … it's one thing where nitpickers will have us for it." The 14-segment capital D also read as a 3
+ * ("GAIN 25.4dB" read "25433").
+ *   ★ DSEG14 has NO lower case — its 'd' IS its 'D' (measured from the TTF). A modified font was weighed and not
+ *     taken: DSEG's OFL declares the Reserved Font Name "DSEG", so an edited file must be renamed everywhere it is
+ *     named (App.tsx, faceplate FONT_SEG14, SegField's Skia typeface, popupTokens, VTSBar), and every renderer would
+ *     still need the d marked. Instead the d's cell lights TWO of DSEG14's own glyphs at once: 'J' (segments
+ *     b c d e) and '-' (the centre bar, g1 g2) — the classic VFD d, b c d e g. The status row does it in its own
+ *     cells (statusField SEG_LOWER_D 'J-' through SegField's overlay); every PLAIN DSEG14 Text — the VTS strip, the
+ *     DAB meter, the notices through DisplayFontText — draws the string twice, the second copy transparent but for
+ *     the d's '-' (components/SegLowerDText). The same characters in the same font and style lay out to the same
+ *     pens, so the bar lands in the d's cell whatever the letter-spacing, the points, the wrap or the shrink-to-fit.
+ *   ★ toSegCells() marks the d as a lower-case 'd' (nothing else in its output is lower case). A renderer that has
+ *     not learnt the overlay draws DSEG's 'd' — the capital D, exactly what it drew before. Never worse.
+ *   ★★ The UNIT only, case-sensitive: "dB", "dBFS", "dBm", "dBf", "dBu", "dBuV" (dBµV folds to it), not glued to a
+ *     letter in front or behind. DAB, BBC, AUDIO, MODE, DX, SDR, ID and every other D stay the 14-seg alphabet
+ *     (memory vfd_seg14_glyphs_are_fine). The B stays B. The ghost under the d is the all-on '~', like every cell.
+ *   ★ statusField.ts keeps its own copy of this rule (it has no runtime imports); test_faceplate_vcr_db holds the
+ *     two equal over a corpus. */
+/** toSegCells()' mark for the lower-case d of a dB unit — DSEG14 alone draws it as D. */
+export const SEG_D_MARK = 'd';
+/** The two DSEG14 glyphs the d's cell lights: the lit layer's 'J', and the overlay's centre bar. */
+export const SEG_D_LIT = 'J';
+export const SEG_D_BAR = '-';
+const DB_UNIT_AT = /^dB(?:FS|m|f|uV|u)?(?![A-Za-z])/;
+/** Is the character at `i` (a code-point index into `chars`) the d of a dB unit? Case-sensitive; not glued to a
+ *  letter on either side. */
+export function isDbUnitDAt(chars: readonly string[], i: number): boolean {
+  return chars[i] === 'd' && !isLetter(chars[i - 1]) && DB_UNIT_AT.test(chars.slice(i, i + 6).join(''));
+}
+/** Does a toSegCells() / screenString('seg') string hold the d of a dB unit? */
+export function segHasLowerD(cells: string): boolean {
+  return cells.includes(SEG_D_MARK);
+}
+/** The lit layer: every d mark → 'J' (b c d e). Same length, same pens. */
+export function segLitText(cells: string): string {
+  return cells.split(SEG_D_MARK).join(SEG_D_LIT);
+}
+/** Text → SegField cells, one string per cell ('' = dark): toSegCells' rules with the d of a dB unit as its two
+ *  glyphs, 'J-' (statusField SEG_LOWER_D) — SegField has no 'd' to light. The status row's and the mode box's cells. */
+export function segFieldCells(text: string): string[] {
+  return segCellList(toSegCells(text)).map(c => c.replace(/^!/, '').replace(SEG_D_MARK, SEG_D_LIT + SEG_D_BAR));
+}
+/** The overlay layer, as runs: a `bar` run is the d's centre bar ('-'), drawn lit; every other run is drawn
+ *  TRANSPARENT, there only so the bar lands on the d's pen. Joined, the runs are the input with '-' for each d. */
+export function segBarRuns(cells: string): { text: string; bar: boolean }[] {
+  const out: { text: string; bar: boolean }[] = [];
+  const parts = cells.split(SEG_D_MARK);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i]) out.push({ text: parts[i], bar: false });
+    if (i < parts.length - 1) out.push({ text: SEG_D_BAR, bar: true });
+  }
+  return out;
 }
 
 /** How many cells a toSegCells() string occupies (its points ride on their cells). */
@@ -517,7 +579,8 @@ export function toSegRun(text: string): SegRun {
      *  meshed printed legend; both were a different thing sitting on the display, and both broke the VFD.
      *  A real 14-segment display has no lower case and shows MHZ in its own segments, so this does too.
      *  `units` stays in the type (always empty here) so a caller that still reads it draws nothing. */
-    cells.push(...segCellList(toSegCells(p.toUpperCase())));
+    // ★ 2026-10-06: toSegCells upper-cases it — all but a dB unit's d, which stays lower case (SEG_D_MARK).
+    cells.push(...segCellList(toSegCells(p)));
   }
   if (carry) cells.push(...segCellList(toSegCells(carry)));
   return { cells, units };

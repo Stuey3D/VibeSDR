@@ -21,10 +21,11 @@
  *    with dim unlit segments on a VFD — one colour, as a VFD is.
  */
 import React, { useState } from 'react';
-import { Text, View, type LayoutChangeEvent } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { LED, NEON_TEXT, rgba, screenOneWeight } from '../constants/faceplate';
 import { screenString } from '../constants/displayText';
+import SegLowerDText from './SegLowerDText';
 import type { DabQuality } from '../utils/dabQuality';
 
 export type DabMeterVariant = 'line' | 'housing' | 'frame';
@@ -114,15 +115,14 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
         ))}
       </View>
       <View style={{ flex: 1, minWidth: 0, justifyContent: 'center' }} importantForAccessibility="no-hide-descendants">
-        <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
-              style={[txt, { fontSize: font1 * k, lineHeight: Math.round(font1 * 1.2) }]}>
-          {screenString(screen.style, parts[0])}
-        </Text>
+        {/* ★ SegLowerDText (2026-10-06): on VCR "MER 12.3 dB" keeps a lower-case d (J + the centre bar). */}
+        <SegLowerDText seg={screen.style === 'seg'} cells={screenString(screen.style, parts[0])}
+              numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
+              style={[txt, { fontSize: font1 * k, lineHeight: Math.round(font1 * 1.2) }]} />
         {twoLines && !!line2 && (
-          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
-                style={[txt, { fontSize: font2 * k, lineHeight: Math.round(font2 * 1.2), color: dim, fontWeight: oneWeight ? 'normal' : '600' }]}>
-            {screenString(screen.style, line2)}
-          </Text>
+          <SegLowerDText seg={screen.style === 'seg'} cells={screenString(screen.style, line2)}
+                numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
+                style={[txt, { fontSize: font2 * k, lineHeight: Math.round(font2 * 1.2), color: dim, fontWeight: oneWeight ? 'normal' : '600' }]} />
         )}
       </View>
     </View>

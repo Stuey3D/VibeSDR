@@ -216,6 +216,9 @@ if node --no-warnings scripts/test_faceplate_text.ts; then pass=$((pass+1)); els
 # ★★ THE VCR MODE BOX (2026-10-06): every label the app composes fits the ten-cell field whole (WFM keeps the
 #    rings' slot, every other mode gets those cells), and the "-88+88 dB F S" readout lights only electrodes it has.
 if node --no-warnings scripts/test_faceplate_segfield.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ EVERY dB ON THE VCR HAS A LOWER-CASE d (2026-10-06, Stuart: "nitpickers will have us for it"): the VTS strip,
+#    the DAB meter, the notices, the status row and its chips, the mode box — and no D in a word (DAB, BBC, AUDIO…) moves.
+if node --no-warnings scripts/test_faceplate_vcr_db.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ EVERY BIG ON-SCREEN ELEMENT FOLLOWS THE MAIN DISPLAY'S FONT (2026-10-06): one source (faceplate.ts ScreenText),
 #    every listed element reading it, Nixie One's glyphs and widths from its TTF, and the status row fitting in it.
 if node --no-warnings scripts/test_faceplate_screenfont.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi

@@ -17,9 +17,10 @@ import RdsMark from './RdsMark';
 import DabMark from './DabMark';
 import SectionIcon from './SectionIcon';
 import { GhostGrid, VfdFilaments } from './VfdParts';
+import { SegBarSpans, SEG_CLEAR } from './SegLowerDText';
 import { rgba, FONT_HYPER, FONT_DOTO, FONT_SEG14 } from '../constants/faceplate';
 import {
-  cellWindow, cellWindowLeft, flagToIso, segGhost, steppedOffset, toSegCells, toSegRun, toUpperDisplay,
+  cellWindow, cellWindowLeft, flagToIso, segGhost, segHasLowerD, segLitText, steppedOffset, toSegCells, toSegRun, toUpperDisplay,
   vfdStripText, VFD_PAUSE_MS, VFD_STEP_MS,
 } from '../constants/displayText';
 import { vtsIdText, vtsJoin, vtsLineSegments, vtsStationText, type VtsIdLabel } from '../services/vtsLine';
@@ -546,6 +547,7 @@ function VfdStrip({ style, rgb, core, glow, text, cellW, loop, restartKey, onPas
     return () => clearInterval(id);
   }, [restartKey, count, n, loop]);
   const win = cellWindow(run.cells, n, offset, seg ? '!' : ' ');
+  const winText = win.join('');
   const left = cellWindowLeft(count, n);
   const shift = count <= n ? -left : Math.max(0, Math.min(offset, count - n));
   const common = vfdFont(seg);
@@ -564,7 +566,15 @@ function VfdStrip({ style, rgb, core, glow, text, cellW, loop, restartKey, onPas
           {seg
             ? <Text style={[common, { color: rgba(rgb, 0.10), width: (n + TEXT_SLACK) * cellW }]} numberOfLines={1}>{segGhost(n)}</Text>
             : <GhostGrid rgb={rgb} pitch={3} dot={0.7} />}
-          <Text style={[common, lit, seg ? styles.overlay : null, { width: (n + TEXT_SLACK) * cellW }]} numberOfLines={1}>{win.join('')}</Text>
+          <Text style={[common, lit, seg ? styles.overlay : null, { width: (n + TEXT_SLACK) * cellW }]} numberOfLines={1}>{seg ? segLitText(winText) : winText}</Text>
+          {/* ★ 2026-10-06: a dB unit's LOWER-CASE d — its cell is 'J' above, and here the same window again, every
+              cell transparent but the d's centre bar (SegLowerDText; displayText "THE LOWER-CASE d OF dB"). */}
+          {seg && segHasLowerD(winText) && (
+            <Text style={[common, styles.overlay, SEG_CLEAR, { width: (n + TEXT_SLACK) * cellW }]} numberOfLines={1}
+                  accessible={false} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+              <SegBarSpans cells={winText} style={[common, lit]} />
+            </Text>
+          )}
         </View>
       )}
     </View>
