@@ -55,7 +55,8 @@ export const segColonX = (i: number, fs: number) => segCellX(i, fs) + ((0.754 + 
 type Placed = { ch: string; x: number; up?: number };
 
 /** A cell's glyphs as pens: each overlay char at the cell's pen, a '.' after the glyph, a ':' centred, a '·' the
- *  point raised to the centre line. */
+ *  point raised to the centre line. ★ Overlays are how a cell shows what DSEG14 has no glyph for: the readout's "-1"
+ *  half-digit, and (2026-10-06) the unit dB's lower-case d, 'J-' (statusField SEG_LOWER_D). */
 function placeCell(cell: string, i: number, fs: number): Placed[] {
   const x0 = segCellX(i, fs);
   const out: Placed[] = [];

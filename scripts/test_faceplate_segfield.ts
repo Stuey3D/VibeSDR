@@ -16,7 +16,7 @@ import {
 } from '../src/constants/modeBox.ts';
 import { formatReading, sMeterText } from '../src/constants/meters.ts';
 import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
-import { statusParts, statusSegSlots, statusSegWidth, STATUS_SEG_ADV, STATUS_SEG_PITCH } from '../src/constants/statusField.ts';
+import { statusParts, statusSegSlots, statusSegWidth, SEG_LOWER_D, STATUS_SEG_ADV, STATUS_SEG_PITCH } from '../src/constants/statusField.ts';
 import * as SR from './lib_status_row.ts';
 
 let fails = 0, passes = 0;
@@ -152,8 +152,17 @@ for (let size = 6; size <= 22; size += 0.5) {
   eq('17:03 UTC — four digits, the colon in the GAP after "7", a blank, UTC', S('17:03 UTC'),
      { cells: ['1', '7', '0', '3', '', 'U', 'T', 'C'], ghost: Array(8).fill('~'), colons: [1], logos: [] });
   eq('0:12:34 — two gap colons', S('0:12:34').colons, [0, 2]);
-  eq('44.5dB — the point on its cell, capitals (no lower case on 14 segments)', S('44.5dB').cells, ['4', '4.', '5', 'D', 'B']);
-  eq('…its ghost carries that point', S('44.5dB').ghost, ['~', '~.', '~', '~', '~']);
+  // ★ 2026-10-06: the unit's d is the classic VFD lower-case d — 'J' (b c d e) + '-' (g) in one cell; the B stays B.
+  eq('44.5dB — the point on its cell, the unit\'s d lower case (J + centre bar), B the 14-seg B', S('44.5dB').cells,
+     ['4', '4.', '5', 'J-', 'B']);
+  eq('SEG_LOWER_D is J + the centre bar', SEG_LOWER_D, 'J-');
+  eq('GAIN 25.4dB — no longer "25433"', S('GAIN 25.4dB').cells.join('|'), 'G|A|I|N||2|5.|4|J-|B');
+  eq('dBFS / dBm / dBf keep the lower-case d', ['-73 dBFS', '-60dBm', '28 dBf'].map(t => S(t).cells.find(c => c.startsWith('J'))),
+     ['J-', 'J-', 'J-']);
+  eq('DAB is unchanged (capital D)', S('DAB').cells, ['D', 'A', 'B']);
+  eq('BBC / D in a word / "d" glued to letters / a lone "db" — the 14-seg alphabet', ['BBC', 'DAB+ 12D', 'odB', 'AdB', 'db', 'dBx']
+     .map(t => S(t).cells.includes('J-')), [false, false, false, false, false, false]);
+  eq('44.5dB\'s ghost carries the point, and the d\'s cell keeps every segment', S('44.5dB').ghost, ['~', '~.', '~', '~', '~']);
   eq('23k/s 10fps → 23K/S 10FPS, "/" is DSEG14\'s own', S('23k/s 10fps').cells, ['2', '3', 'K', '/', 'S', '', '1', '0', 'F', 'P', 'S']);
   eq('IF 1400k auto → AUTO', S('· IF 1400k auto').cells.join('|'), '·|I|F||1|4|0|0|K||A|U|T|O');
   eq('"·" swallows its spaces and is the raised point, alone in its cell', S('TUNER · FREE'),

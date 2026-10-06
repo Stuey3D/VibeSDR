@@ -13,7 +13,8 @@
  *   ★ ONE PITCH. Every character, space and symbol takes one cell (the server mark two), so a run is `n` cells wide
  *     and a reading that changes never moves a cell sideways. A run's cell COUNT can change ("9K/S" → "10K/S"); the
  *     row aligns each run left / centre / right exactly as it did, so it grows away from its anchor.
- *   ★ VCR: CAPITALS (a 14-segment display has no lower case — the KHZ compromise, memory vfd_units_in_segments). A
+ *   ★ VCR: CAPITALS (a 14-segment display has no lower case — the KHZ compromise, memory vfd_units_in_segments) —
+ *     except the d of the unit dB, the classic VFD lower-case d (SEG_LOWER_D, 2026-10-06: a capital D read as 3). A
  *     colon is the COLON ELECTRODE in the gap between two cells (a clock's, no cell of its own: `17:03` is four
  *     cells); a decimal point is the cell's own point. `/` is DSEG14's own `/` (the two diagonal segments, top-right
  *     to bottom-left). `·` has no segment, so it is a cell with no segments and ONE electrode: the point raised to
@@ -91,6 +92,19 @@ export interface StatusSlots {
 /** Text → cells, one string per cell ('' = blank) — the VCR caller passes displayText's toSegCells rules. */
 export type StatusToCells = (text: string) => string[];
 
+/** ★ The LOWER-CASE d of the unit "dB" (2026-10-06, Stuart: "the d in dB can be rendered in lowercase on a VFD
+ *  display" — the 14-segment capital D read as a 3, so `GAIN 25.4dB` read "25433"). DSEG14 has no lower case of its
+ *  own (its 'd' IS its 'D', measured from the TTF), so the cell lights two of its glyphs at once, the way the readout's
+ *  "-1" half-digit does: 'J' (segments b c d e) and '-' (the centre bar, g1 g2) — together the classic VFD d, b c d e g.
+ *  ★★ The unit ONLY: a case-sensitive "dB" token (dB, dBFS, dBm, dBf) not glued to a letter in front. "DAB", "BBC",
+ *  "D" in any word stay the 14-seg alphabet (memory vfd_seg14_glyphs_are_fine). The B stays the 14-seg B. */
+export const SEG_LOWER_D = 'J-';
+const DB_UNIT_AT = /^dB(?:FS|m|f)?(?![A-Za-z])/;
+const isLetterCh = (c: string | undefined) => !!c && c.toLowerCase() !== c.toUpperCase();
+/** Is the 'd' at `i` (a code-point index into `chars`) the d of a dB unit? */
+export const isDbUnitD = (chars: readonly string[], i: number) =>
+  !isLetterCh(chars[i - 1]) && DB_UNIT_AT.test(chars.slice(i, i + 5).join(''));
+
 /** A run in 14-segment cells (VCR). `toCells` folds and upper-cases (ControlsBar segCells). */
 export function statusSegSlots(parts: readonly StatusPart[], toCells: StatusToCells): StatusSlots {
   const s: StatusSlots = { cells: [], ghost: [], colons: [], logos: [] };
@@ -101,7 +115,11 @@ export function statusSegSlots(parts: readonly StatusPart[], toCells: StatusToCe
       for (let k = 0; k < STATUS_LOGO_CELLS[p.kind]; k++) { s.cells.push(''); s.ghost.push(''); }
       continue;
     }
-    for (const ch of p) {
+    // ★ By code point, indexed, so the dB rule can see its neighbours.
+    const chars = [...p];
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      if (ch === 'd' && isDbUnitD(chars, i)) { s.cells.push(SEG_LOWER_D); s.ghost.push('~'); continue; }
       if (ch === ':') {
         // The clock's colon: the electrode in the gap after the cell before it — no cell of its own.
         if (s.cells.length) { s.colons.push(s.cells.length - 1); continue; }
