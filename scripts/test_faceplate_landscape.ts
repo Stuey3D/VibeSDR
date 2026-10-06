@@ -13,7 +13,7 @@
 import { landscapeDeck, landscapeBand, LAND, type MeterKind } from '../src/constants/meters.ts';
 import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H, COLLAR_H } from '../src/constants/nixie.ts';
 import {
-  modeBoxFit, modeTextWidth, stereoWidth, modeLabelCandidates, MODE_BOX, MODE_BOX_MAX_SHARE, MODE_BOX_LAST_SHARE, MODE_MIN_FONT,
+  modeBoxFit, modeTextWidth, stereoWidth, modeLabelCandidates, isFixedFace, MODE_BOX, MODE_BOX_MAX_SHARE, MODE_BOX_LAST_SHARE, MODE_MIN_FONT,
   type ModeFace,
 } from '../src/constants/modeBox.ts';
 import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
@@ -21,7 +21,7 @@ import { WHOLE_PROFILE_MODES } from '../src/services/dataModes.ts';
 /** Every label the code can compose (constants/modeBox.ts), and the two mode-box typefaces: Atkinson
  *  under Hyperlegible / Nixie / 7-segment, Doto under the VFD. */
 const CANDIDATES = modeLabelCandidates(WHOLE_PROFILE_MODES);
-const FACES: ModeFace[] = ['hyper', 'doto', 'seg'];
+const FACES: ModeFace[] = ['hyper', 'doto', 'seg', 'dot'];  // ★ dot: the DOT fixed dot-matrix fields (2026-10-06)
 
 let fails = 0, passes = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -114,7 +114,7 @@ for (const [W, H, tablet] of DEVICES) {
           const f = modeBoxFit({ label: c.label, stereo: c.stereo, face, fontSize: d.modeFont, letterSpacing: 1.5,
                                  readingFont: d.readingFont, minW: r(MODE_BOX.minW), padH: r(MODE_BOX.padH), windowW: d.dispW });
           const t = `${tag} ${face} "${c.label}"${c.stereo ? '+rings' : ''}`;
-          const need = modeTextWidth(c.label, f.fontSize, f.letterSpacing, face) + (c.stereo && face !== 'seg' ? stereoWidth(f.fontSize) : 0)
+          const need = modeTextWidth(c.label, f.fontSize, f.letterSpacing, face) + (c.stereo && !isFixedFace(face) ? stereoWidth(f.fontSize) : 0)
                        + 2 * r(MODE_BOX.padH);
           ok(`${t}: ONE line (need ${need.toFixed(1)} ≤ box ${f.width})`, need <= f.width + 1e-9);
           ok(`${t}: legible (${f.fontSize})`, f.fontSize >= Math.min(d.modeFont, MODE_MIN_FONT));
