@@ -34,6 +34,7 @@
 #include "sdr_presence.h"   // ★ unplugged vs lent — the USB bus as witness
 #include "radiodns.h"
 #include "parent_watch.h"   // die-with-the-front-door; a no-op on Linux
+#include "crash_report.h"   // ★ a fatal signal names its thread and PC in the journal (2026-10-06)
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
 #include "airspy_source.h"
@@ -1279,6 +1280,13 @@ static bool g_isPrimaryRadio = true;
 
 int main(int argc, char** argv) {
     g_argv = argv;
+    /* ★★ FIRST, so nothing can die unrecorded (2026-10-06): the Pi 2 segfaulted four times in DAB in
+     *  one day and left only "status=11/SEGV" — no core could be written. See crash_report.h. */
+#ifdef VIBESERVER_VERSION_STR
+    vibecrash::install(VIBESERVER_VERSION_STR);
+#else
+    vibecrash::install("dev");
+#endif
 #if defined(__arm__) && !defined(__aarch64__)
     /* ★★★ VIBESERVER LITE: ON 32-BIT ARM, SPREAD THE RECEIVER OVER THE CORES (2026-09-19).
      *  A 32-bit ARM box is the Lite class — Stuart's floor is a 1 GHz quad core with 512 MB. On a
