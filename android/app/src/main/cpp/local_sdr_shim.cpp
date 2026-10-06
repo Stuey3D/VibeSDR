@@ -39,6 +39,7 @@
 #include "vibe_usb_recovery.h"   // ★ park-not-release, fresh-fd back-off, the re-plug advice (2026-10-05)
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_hwinfo.h"
+#include "vibe_rsp_init_gate.h" // ★ the AGC-initialising indicator's ending — it cannot wedge (2026-10-06)
 #include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
 #include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
 
@@ -5364,8 +5365,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *      Stuart: "the whole AGC cycle is perfect now, that does not change — just the
      *      indication." This exists only to be reported.
      *  ★ Cleared when the coarse placement is done AND the loop has had a few seconds after it,
-     *    which is the first moment the picture on screen stops rearranging itself. */
-    bool sdrpInitAgc = true;
+     *    which is the first moment the picture on screen stops rearranging itself.
+     *  ★★★ AND NOW ALSO WHEN NOTHING FURTHER IS COMING, OR AFTER 60 s WHATEVER HAPPENS (2026-10-06).
+     *      It used to have exactly one exit, behind the RF loop's coarse placement — and the RF loop
+     *      is OFF by default. Saber's RSP1 (RF AGC off, IF AGC on) showed "AGC initialising" in the
+     *      VTS for good, over an RDS decode that was perfect underneath. `sdrpInitGate` owns the
+     *      ending now (vibe_rsp_init_gate.h); this is its mirror for the readout.
+     *  ★ Starts FALSE: it goes up at kick step 1, so a manual-gain start (no kick) never shows it —
+     *    it used to start true and that path never cleared it either. */
+    bool sdrpInitAgc = false;
+    vibersp::InitGate sdrpInitGate;
     /** ★★ THE RF GAIN THE KICK STARTS FROM, expressed the way the UI expresses it: a slider
      *  POSITION out of (lnaStateCount-1), where higher = more RF gain. 7/9 on an RSP1B is the
      *  working point Stuart runs the demo at, and it maps to LNA STATE 2 (state counts the other
@@ -10482,10 +10491,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              *   that explains the bouncing noise floor to somebody who has never
                              *   seen it (Stuart, 2026-09-15: "a VTS notification too so users get a
                              *   prominent message and idea what is going on"). */
-                            { /* ★ Stuart's wording (2026-10-03: the old line was "too long winded" for the strip). */
+                            /* ★★ THE CYCLE BEGINS HERE, and the gate decides whether it is announced: a
+                             *    radio that timed out within the last five minutes re-kicks silently
+                             *    rather than raising the notice again (vibe_rsp_init_gate.h). */
+                            if (sdrpInitGate.begin(vibersp::monoNowSec(), (double)iqFloorDb.load(), sdrp->adcPeakDbfs())) {
+                              sdrpInitAgc = true;
+                              /* ★ Stuart's wording (2026-10-03: the old line was "too long winded" for the strip). */
                               const std::string body = "{\"type\":\"notice\",\"vts\":\"SDRplay AGC initialising: noise floor and "
                                   "signals will bounce until it settles (approx. 30 seconds)\"}";
-                              for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body); }
+                              for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body);
+                            } else {
+                              LOGI("AGC kick: not announcing this start-up — the last one timed out or "
+                                   "saw no gain response under %.0f s ago", vibersp::kRetryQuietSec);
+                            }
                             LOGI("AGC kick 1/6: LNA state -> %d (RF gain %d/%d)",
                                  sdrp->currentLnaState(),
                                  sdrp->lnaStateCount() - 1 - sdrp->currentLnaState(),
@@ -10546,6 +10564,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                             // ★ The handover moment: every RF-loop gate starts again from here.
                             g_rspKickHandover.store(true, std::memory_order_relaxed);
                             g_rspAgcClearEvidence.store(true, std::memory_order_relaxed);
+                            sdrpInitGate.handover(vibersp::monoNowSec());   // ★ the response verdict is due 6 s on
                             break; }
                 }
             }
@@ -10753,7 +10772,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★ `sdrpInitAgc` is raised in the SAME branch that resets the coarse state, so the
              *  original if/else chain below is left exactly as it was — a re-kick restarts the
              *  whole cycle and the listener watches the same rearrangement again. */
-            if (sdrpSettling) { coarseDone = false; coarseAt = {}; sdrpInitAgc = true; }
+            if (sdrpSettling) { coarseDone = false; coarseAt = {}; }   // ★ the indicator is raised at kick step 1 now — see sdrpInitGate
             else if (graceDone && ifAgcAlive && armedOnce && !coarseDone
                      && g_vibeAgcRspOn.load(std::memory_order_relaxed)) {
                 const auto nowC = std::chrono::steady_clock::now();
@@ -10835,11 +10854,67 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *      AGC cycle is perfect now that does not change just the indication."
              *  ★ Six seconds after the placement, not at it: clearing when the coarse step LANDS
              *    would put the indicator away at the exact instant the picture goes blank. */
-            if (sdrpInitAgc && !sdrpSettling && coarseDone
+            /* ★★★ AND THE GATE DECIDES, BECAUSE THE CONDITION BELOW WAS THE ONLY WAY OUT (2026-10-06).
+             *     `coarseDone` is only ever set with the RF loop ON, and the RF loop is OFF by
+             *     default — so on a default install, and on Saber's RSP1, the indicator went up at
+             *     kick step 1 and could never come down. The app shows it in the VTS, so his RDS
+             *     (perfect in the ADVANCED panel) and bookmark names were hidden behind it.
+             *     The gate ends it on the FIRST of: this original condition; the kick being over
+             *     with no RF placement to come (6 s margin); or 60 s from the start, whatever the
+             *     radio did. A frozen API readout or a dead gain stage cannot hold it up, because
+             *     nothing here waits on anything the API reports. The kick itself is untouched. */
+            const bool placementComplete = coarseDone
                 && coarseSettledAt.time_since_epoch().count() != 0
                 && std::chrono::duration_cast<std::chrono::seconds>(
-                       std::chrono::steady_clock::now() - coarseSettledAt).count() >= 6) {
-                sdrpInitAgc = false;
+                       std::chrono::steady_clock::now() - coarseSettledAt).count() >= 6;
+            const bool placementPending = sdrpAgcWanted
+                && g_vibeAgcRspOn.load(std::memory_order_relaxed);
+            sdrpInitGate.sample((double)iqFloorDb.load(), sdrp->adcPeakDbfs());
+            const bool wasNoResponse = sdrpInitGate.gainNoResponse;
+            const vibersp::InitEnd initEnd = sdrpInitGate.tick(vibersp::monoNowSec(), sdrpSettling,
+                                                               placementPending, placementComplete);
+            /* ★★★ THE GAIN MOVED AND NOTHING WE MEASURE DID — Saber's RSP1, and Stuart's words for
+             *     it: "the signals and noise floor never bounce about like they do on mine". Logged
+             *     whether or not the indicator was showing (a silent re-kick still gathers evidence),
+             *     and once when it becomes true (and once when it clears), not per tick. */
+            if (sdrpInitGate.judged && sdrpInitGate.gainNoResponse && !wasNoResponse) {
+                LOGI("RSP: GAIN STAGE NOT RESPONDING — the start-up kick moved the gain (LNA to %d/%d, "
+                     "IF reduction 59/55/59, then the IF AGC) and our own measurements barely moved: "
+                     "noise floor swung %.1f dB, ADC peak %.1f dB (a working RSP swings well past %.0f / "
+                     "%.0f). Gain changes have no effect — the radio's gain stage may be faulty, or the "
+                     "SDRplay API is ignoring gain writes. The initialising indicator is cleared.",
+                     std::max(0, sdrp->lnaStateCount() - 1 - sdrp->currentLnaState()),
+                     std::max(0, sdrp->lnaStateCount() - 1),
+                     sdrpInitGate.lastFloorSwing, sdrpInitGate.lastPeakSwing,
+                     vibersp::kMinFloorSwingDb, vibersp::kMinPeakSwingDb);
+            } else if (sdrpInitGate.judged && wasNoResponse && !sdrpInitGate.gainNoResponse) {
+                LOGI("RSP: the gain stage is responding again (floor swung %.1f dB, peak %.1f dB).",
+                     sdrpInitGate.lastFloorSwing, sdrpInitGate.lastPeakSwing);
+            }
+            sdrpInitAgc = sdrpInitGate.showing;
+            if (initEnd == vibersp::InitEnd::TimedOut) {
+                /* ★ HONEST, NOT "READY": the cycle did not finish, so the VTS is given back
+                 *   without claiming the radio is settled. The log says what was outstanding. */
+                LOGI("RSP: AGC start-up indicator TIMED OUT after %.0f s — kick %s, RF placement %s; "
+                     "LNA %d/%d, IF reduction %d dB (%s), ADC peak %.1f dBFS. Clearing it anyway. "
+                     "If gain changes never move the ADC peak, the radio's gain stage may be faulty.",
+                     vibersp::kInitMaxSec, sdrpSettling ? "STILL RUNNING" : "done",
+                     placementPending ? (coarseDone ? "done" : "NOT DONE") : "off",
+                     sdrp->currentLnaState(), std::max(0, sdrp->lnaStateCount() - 1),
+                     sdrp->currentIfGr(),
+                     sdrp->ifAgcReporting() ? "reported by the API" : "NOT reported by the API",
+                     sdrp->adcPeakDbfs());
+            }
+            if (initEnd == vibersp::InitEnd::NoPlacement) {
+                LOGI("RSP: AGC start-up cycle complete — the kick handed over to the radio's IF AGC "
+                     "and automatic RF gain is off, so there is no placement to wait for (LNA %d/%d, "
+                     "IF reduction %d dB).",
+                     sdrp->currentLnaState(), std::max(0, sdrp->lnaStateCount() - 1),
+                     sdrp->currentIfGr());
+                { const std::string body = "{\"type\":\"notice\",\"vts\":\"SDRplay AGC initialised: SDR now ready to use\"}";
+                  for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, body); }
+            }
+            if (initEnd == vibersp::InitEnd::Complete) {
                 LOGI("RSP: AGC start-up cycle complete — LNA %d/%d, IF reduction %d dB. The "
                      "initialising indicator goes NOW, not when the six-step kick ended.",
                      sdrp->currentLnaState(), std::max(0, sdrp->lnaStateCount() - 1),
