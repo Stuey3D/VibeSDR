@@ -121,6 +121,26 @@ int main() {
       for (double t = 0; t < 60; t += 0.05) g.tick(t, false, false, false);
       ok(!g.showing, "never raised"); }
 
+    /* ★★★ 2026-10-06, Stuart: "SDRPlay AGC initialising message not displaying at all now". The DSP loop
+     *     stops while a session is idle, so a cycle could be left showing; the reopen then saw it as a
+     *     60 s TIMEOUT, and the timeout's 5-minute quiet hid every announcement after it. */
+    printf("\nA radio reopened mid-cycle starts a fresh, ANNOUNCED cycle\n");
+    { InitGate g;
+      ok(g.begin(100.0, -80.0, -30.0), "first start-up is announced");
+      g.reopen();                                   // idle resume / re-Init / fresh open
+      ok(!g.showing, "reopen ends the old cycle quietly");
+      InitEnd e = g.tick(200.0, true, false, false);
+      ok(e == InitEnd::None, "no stale TIMEOUT for the dead cycle");
+      ok(g.begin(200.0, -80.0, -30.0), "the next start-up IS announced"); }
+
+    printf("\nA plain timeout never silences the next start-up (only a dead gain stage does)\n");
+    { InitGate g;
+      g.begin(0.0, -80.0, -30.0);
+      InitEnd e = InitEnd::None;
+      for (double t = 0; t <= kInitMaxSec + 1 && e == InitEnd::None; t += 0.5) e = g.tick(t, true, false, false);
+      ok(e == InitEnd::TimedOut, "a stuck kick times out");
+      ok(g.begin(kInitMaxSec + 5.0, -80.0, -30.0), "and the very next start-up is still announced"); }
+
     printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }

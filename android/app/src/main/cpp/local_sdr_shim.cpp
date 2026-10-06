@@ -24209,6 +24209,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                 /* ★ A re-Init resets the tuner's AGC loop, so the start-up kick
                                  *   runs whole again — the same reset a re-acquire performs. */
                                 sdrpAgcKick = 0; sdrpSettling = true;
+                                sdrpInitGate.reopen();   // ★ a fresh cycle, not the old one timing out
                                 g_rspAgcClearEvidence.store(true, std::memory_order_relaxed);
                                 vsSayVts("SDRplay API recovered successfully \xe2\x80\x94 resetting the AGC.");
                             }
@@ -30886,7 +30887,8 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
      *     default of state 0 (maximum RF gain) after step 1 had set it to position 1. Handover
      *     then happened at maximum gain with the IF pinned at 59. A fresh open is a fresh radio:
      *     the kick runs whole, or not at all. */
-    if (rsp) { impl->sdrpAgcKick = 0; impl->sdrpSettling = true; g_rspAgcClearEvidence.store(true, std::memory_order_relaxed); }
+    if (rsp) { impl->sdrpAgcKick = 0; impl->sdrpSettling = true; impl->sdrpInitGate.reopen();   // ★ see InitGate::reopen
+               g_rspAgcClearEvidence.store(true, std::memory_order_relaxed); }
     impl->startEngine();
     impl->buildAudio();
     impl->startDspThread();

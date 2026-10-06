@@ -59,7 +59,7 @@ namespace vibersp {
 
 constexpr double kInitMaxSec            = 60.0;   // hard ceiling on the indicator, from cycle start
 constexpr double kNoPlacementSec        = 6.0;    // kick done, nothing more coming: this long, then go
-constexpr double kRetryQuietSec         = 300.0;  // after a timeout / no response, cycles stay silent
+constexpr double kRetryQuietSec         = 300.0;  // after a NO-RESPONSE verdict only, cycles stay silent
 constexpr double kJudgeAfterHandoverSec = 6.0;    // the IF AGC's own pull-in, after step 6
 constexpr double kMinFloorSwingDb       = 2.0;    // half the kick's smallest deliberate step (4 dB)
 constexpr double kMinPeakSwingDb        = 6.0;    // the peak breathes with modulation: ask for more
@@ -86,7 +86,7 @@ struct InitGate {
     bool   showing      = false;
     double startedAt    = -1.0;
     double kickDoneAt   = -1.0;
-    double lastGiveUp   = -1e18;   // a timeout or a no-response verdict
+    double lastGiveUp   = -1e18;   // a no-response verdict (a dead gain stage) — never a plain timeout
     bool   suppressed   = false;   // the current cycle is running silently
 
     // ── the response test, per cycle ──
@@ -111,6 +111,16 @@ struct InitGate {
         suppressed = (now - lastGiveUp) < kRetryQuietSec;
         showing = !suppressed;
         return showing;
+    }
+
+    /** ★★ The radio was REOPENED (idle resume, re-Init, a fresh open): the kick will run whole again, so
+     *  any cycle still on screen belongs to a radio that no longer exists. End it QUIETLY — not as a
+     *  timeout, so the next start-up is announced (2026-10-06: Stuart's healthy RSP1A lost the
+     *  indicator entirely — the DSP loop stops while a session is idle, so a cycle left showing then
+     *  "timed out" on the reopen and the old 5-minute quiet hid every announcement after it). */
+    void reopen() {
+        showing = false; startedAt = -1.0; kickDoneAt = -1.0;
+        judgeAt = -1.0; judged = false; suppressed = false;
     }
 
     /** Kick step 6: the IF AGC has the gain. The verdict comes kJudgeAfterHandoverSec later. */
@@ -152,7 +162,9 @@ struct InitGate {
             showing = false; return InitEnd::NoPlacement;
         }
         if (now - startedAt >= kInitMaxSec) {
-            showing = false; lastGiveUp = now; return InitEnd::TimedOut;
+            // ★ A plain timeout does NOT quieten the next start-up — only a dead gain stage
+            //   (GainNoResponse, Saber's RSP1) does. A healthy radio must always be announced.
+            showing = false; return InitEnd::TimedOut;
         }
         return InitEnd::None;
     }
