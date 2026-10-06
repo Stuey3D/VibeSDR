@@ -71,9 +71,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .abList{display:flex;flex-direction:column;gap:8px}
   .abRow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px;border:1px solid var(--line);
          border-radius:8px;background:#0a0704}
-  .abRow input[type=number]{width:96px;flex:0 0 96px;padding:7px 8px}
+  /* ★ Three groups that wrap AS GROUPS: the type/socket, the numbers with their unit (never split —
+     a "108" on one line and its "MHz" on the next reads as two settings), then the name and ✕. */
+  .abRow .abNums{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  .abRow .abName{display:flex;align-items:center;gap:6px;flex:1 1 180px;min-width:0}
+  .abRow input[type=number]{width:84px;flex:0 0 84px;padding:7px 8px}
   .abRow select{width:auto;flex:0 0 auto;padding:7px 8px}
-  .abRow input[type=text]{flex:1 1 140px;width:auto;min-width:0;padding:7px 8px}
+  .abRow input[type=text]{flex:1 1 auto;width:auto;min-width:0;padding:7px 8px}
   .abRow .abDash{color:var(--dim)}
   .abRow button.abX{background:none;border:1px solid var(--line);color:var(--dim);border-radius:7px;
          width:34px;height:34px;padding:0;font-size:16px;line-height:1;flex:0 0 34px}
@@ -4084,7 +4088,7 @@ function renderAntBands() {
   const portSel = (row) => ports.length > 1
     ? `<select data-f="port" aria-label="Which aerial socket">`
       + `<option value="">Any socket</option>`
-      + ports.map(p => `<option value="${esc(p)}"${p === row.port ? " selected" : ""}>${esc(p)}</option>`).join("")
+      + ports.map(p => `<option value="${esc(p)}"${p === row.port ? " selected" : ""}>Socket ${esc(p)}</option>`).join("")
       + (row.port && ports.indexOf(row.port) < 0 ? `<option value="${esc(row.port)}" selected>${esc(row.port)}</option>` : "")
       + `</select>` : "";
   const unitSel = (row) => `<select data-f="unit" aria-label="Units">`
@@ -4096,8 +4100,10 @@ function renderAntBands() {
     + ` placeholder="${ph}" aria-label="Name (optional)">`;
   const x = `<button type="button" class="abX" data-x="1" aria-label="Remove" title="Remove">✕</button>`;
   hostR.innerHTML = m.ranges.map((row, i) => `<div class="abRow" data-l="ranges" data-i="${i}">`
-    + portSel(row) + num("from", row.from, "From") + `<span class="abDash">–</span>` + num("to", row.to, "To")
-    + unitSel(row) + nameIn(row.name, "Name, e.g. 2 m (optional)") + x + `</div>`).join("");
+    + portSel(row)
+    + `<span class="abNums">` + num("from", row.from, "From") + `<span class="abDash">–</span>` + num("to", row.to, "To")
+    + unitSel(row) + `</span>`
+    + `<span class="abName">` + nameIn(row.name, "Name, e.g. 2 m (optional)") + x + `</span></div>`).join("");
   hostF.innerHTML = m.filters.map((row, i) => {
     const band = row.kind === "bandstop" || row.kind === "bandpass";
     return `<div class="abRow" data-l="filters" data-i="${i}">`
@@ -4105,9 +4111,11 @@ function renderAntBands() {
       + `<select data-f="kind" aria-label="Filter type">`
       + AB_KINDS.map(k => `<option value="${k}"${k === row.kind ? " selected" : ""}>${AB_KIND_NAMES[k]}</option>`).join("")
       + `</select>`
+      + `<span class="abNums">`
       + (band ? num("from", row.from, "From") + `<span class="abDash">–</span>` + num("to", row.to, "To")
               : num("from", row.from, row.kind === "highpass" ? "Passes above" : "Passes below"))
-      + unitSel(row) + nameIn(row.name, "Name, e.g. FM band-stop (optional)") + x + `</div>`;
+      + unitSel(row) + `</span>`
+      + `<span class="abName">` + nameIn(row.name, "Name, e.g. FM band-stop (optional)") + x + `</span></div>`;
   }).join("");
   [hostR, hostF].forEach(host => {
     Array.from(host.querySelectorAll(".abRow")).forEach(rowEl => {
