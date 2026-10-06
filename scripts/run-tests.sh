@@ -250,6 +250,11 @@ if node --no-warnings scripts/test_server_prefs.ts; then pass=$((pass+1)); else 
 if node --no-warnings scripts/test_bounded_inflate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ The map WebView page parses, for all three kinds (a template-literal page tsc cannot check).
 if node scripts/check-map-overlay.mjs >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ node scripts/check-map-overlay.mjs"; fi
+# ★★ The DAB transmitter-site importers (2026-10-06): coordinates, the three regulators' file shapes,
+#    provenance in every generated header. Fixtures only — no network. (test-dab-txdb.cpp above is the matching.)
+if python3 scripts/dab-sites/test_dabsites.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ python3 scripts/dab-sites/test_dabsites.py"; fi
+# ★★ …and the panel says whose record each licensed site is (app + web share dabLicensedTail).
+if node --no-warnings scripts/test_dab_licensed.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 echo "── image metadata (EXIF / GPS / XMP) ──"
 if python3 scripts/strip-image-metadata.py --check; then pass=$((pass+1)); echo "  none"; else fail=$((fail+1)); echo "  ✗ run: python3 scripts/strip-image-metadata.py"; fi
 # ★★★ A FACEPLATE CANNOT LOCK YOU OUT (faceplate.ts CRASH SAFETY): the mark is armed before a risky

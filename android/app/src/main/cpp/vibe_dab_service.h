@@ -1137,14 +1137,24 @@ public:
             }
             j += "]";
             if (txdb_ && e.eid) {
-                const auto sites = txdb_->sitesFor(e.ecc, e.eid, rxLat_, rxLon_);
+                /* ★ The block too: a regulator that publishes no EIds (BAKOM) is matched on the
+                 *  country and the block we are on (vibe_dab_txdb.h, 2026-10-06). */
+                const auto sites = txdb_->sitesFor(e.ecc, e.eid, rxLat_, rxLon_, 4, channelName());
                 if (!sites.empty()) {
                     j += ",\"licensed\":[";
                     bool f1 = true;
                     for (const auto& st : sites) {
                         if (!f1) j += ','; f1 = false;
-                        char sb[64];
-                        snprintf(sb, sizeof sb, "\",\"code\":\"%02X/%02X\",\"km\":%.1f}", st.mainId, st.subId, st.km);
+                        /* ★ `code` is empty when the source has no TII; `src` names whose record it
+                         *  is — "Ofcom record", "BAKOM record", "your list" — so the panel never
+                         *  credits one regulator with another's data. */
+                        char sb[128];
+                        if (st.subId > 0)
+                            snprintf(sb, sizeof sb, "\",\"code\":\"%02X/%02X\",\"km\":%.1f,\"src\":\"%s\"}",
+                                     st.mainId, st.subId, st.km, dabTxSourceLabel(st.src));
+                        else
+                            snprintf(sb, sizeof sb, "\",\"code\":\"\",\"km\":%.1f,\"src\":\"%s\"}",
+                                     st.km, dabTxSourceLabel(st.src));
                         j += "{\"site\":\"" + esc(st.site) + "\",\"area\":\"" + esc(st.area) + sb;
                     }
                     j += "]";

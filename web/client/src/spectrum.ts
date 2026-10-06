@@ -359,8 +359,9 @@ export interface DabState {
   slideAlert?: number; slideClick?: string;
   /** The RDS equivalents the ensemble broadcasts: clock (FIG 0/10), local offset, other blocks (0/21). */
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
-  /** Ofcom's licensed sites for this ensemble (nearest first when the receiver's position is known), and why the TII test failed. */
-  licensed?: { site: string; area: string; code: string; km: number }[];
+  /** A regulator's licensed sites for this ensemble (nearest first when the receiver's position is known).
+   *  `code` is the TII ("" when the source has none); `src` whose record it is — absent = Ofcom (older servers). */
+  licensed?: { site: string; area: string; code: string; km: number; src?: string }[];
   /** The newest slideshow image off the air for the playing service; fetch /vibeserver/dabslide?seq=. */
   slide?: { seq: number; mime: string; bytes: number; name: string };
   motGroups?: number; motCrcFail?: number; motObjects?: number;

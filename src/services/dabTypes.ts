@@ -74,8 +74,9 @@ export interface DabState {
   slideAlert?: number; slideClick?: string;
   /** The RDS equivalents the ensemble broadcasts: clock (FIG 0/10), local offset, other blocks (0/21). */
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
-  /** Ofcom's licensed sites for this ensemble (nearest first when the receiver's position is known), and why the TII test failed. */
-  licensed?: { site: string; area: string; code: string; km: number }[];
+  /** A regulator's licensed sites for this ensemble (nearest first when the receiver's position is known).
+   *  `code` is the TII ("" when the source has none); `src` whose record it is — absent = Ofcom (older servers). */
+  licensed?: { site: string; area: string; code: string; km: number; src?: string }[];
   /** The newest slideshow image off the air for the playing service; fetch /vibeserver/dabslide?seq=. */
   slide?: { seq: number; mime: string; bytes: number; name: string };
   motGroups?: number; motCrcFail?: number; motObjects?: number;
@@ -143,6 +144,18 @@ export function dabSafeText(v: unknown, max = 128): string {
  * ★★ ONE RULE, ONE COPY: the web client imports THIS function (web/client/src/main.ts
  *   syncStereoLight), so the app's light and the web's cannot disagree. scripts/test_dab_stereo.ts.
  */
+/**
+ * ★★ WHOSE RECORD A LICENSED SITE IS (2026-10-06). The server now lists other regulators' sites as
+ * well as Ofcom's — BAKOM (Switzerland), ČTÚ (Czechia), RDI (Netherlands), or the owner's own TII
+ * list — and says which in `src`. Only Ofcom's carry a TII code; the others send `code: ""`.
+ * A server from before then sends no `src`, and everything it listed was Ofcom's.
+ * ★ ONE COPY: the app's panel and the web client both build the line's tail here.
+ *   scripts/test_dab_licensed.ts.
+ */
+export function dabLicensedTail(l: { code?: string; src?: string }): string {
+  return (l.code ? ` · ${l.code}` : '') + ` · ${l.src || 'Ofcom record'}`;
+}
+
 export function dabServiceStereo(d: Pick<DabState, 'stereo' | 'codecDetail'> | null | undefined): boolean {
   if (!d) return false;
   if (typeof d.stereo === 'boolean') return d.stereo;
@@ -227,6 +240,7 @@ export function parseDabMessage(m: Record<string, unknown>): DabState {
   if (Array.isArray(m.licensed)) {
     o.licensed = cap<NonNullable<DabState['licensed']>[number]>(m.licensed, 16).map(l => ({
       ...l, site: dabSafeText(l.site, 48), area: dabSafeText(l.area, 48), code: dabSafeText(l.code, 16),
+      src: l.src !== undefined ? dabSafeText(l.src, 24) : undefined,
     }));
   }
   if (Array.isArray(m.announce)) {

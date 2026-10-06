@@ -258,6 +258,9 @@ we ship.
 | **NGA World Port Index** | public domain | Sea ports |
 | **© OpenStreetMap contributors** | **ODbL** | Detailed coastline (built in, never fetched; the derived data is published with every release) and Nominatim geocoding of a server's location |
 | **Ofcom** | **OGL v3** — contains public sector information licensed under the Open Government Licence v3.0 | UK DAB transmitter identification |
+| **BAKOM** (Federal Office of Communications, Switzerland) | opendata.swiss **"Open use"** | Swiss DAB+ licensed sites ([survey](docs/DAB-SITES-SOURCES.md)) |
+| **ČTÚ** (Czech Telecommunication Office) | data.gov.cz terms — no copyright or database right (CC0) | Czech DAB licensed sites |
+| **RDI** (Rijksinspectie Digitale Infrastructuur, NL) | **CC0 1.0** | Dutch DAB licensed sites |
 | **EiBi** | — | Shortwave schedules: live bookmarks and the directory's station finder |
 | **RadioDNS** and **radio-browser.info** | — / community | Station logos |
 | **NOAA Space Weather Prediction Center** | public domain | Solar flux and K index for band conditions |
