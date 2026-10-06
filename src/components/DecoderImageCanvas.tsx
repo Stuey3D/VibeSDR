@@ -19,9 +19,9 @@
  */
 
 import React, {
-  forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState,
+  forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 } from 'react';
-import { ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { PanResponder, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 // ★★ A REAL FILE, NOT A data: URL — see save() below for why.
 import { File, Paths } from 'expo-file-system';
 import { WEFAX_ALIGN_ZERO, chartAlignStep, wefaxOffset, type ChartAlignState, type WefaxAlign } from '../utils/wefaxAlign';
@@ -108,6 +108,11 @@ export interface DecoderImageCanvasProps {
   autoSlant?: boolean;
   /** Reports the per-chart automatic alignment (null = nothing found) for the ADJ strip. */
   onAutoAlign?: (a: WefaxAlign | null) => void;
+  /** ★ ALIGN open (DecoderPanel): the SHIFT the listener is choosing. Drawn at once by sliding the picture already
+   *  on screen (wrapping) — the chart itself is re-aligned only when the panel commits it. undefined = closed. */
+  alignPreview?: number;
+  /** ★ ALIGN open: a sideways drag on the picture has ended — the SHIFT to commit (previewed here while dragging). */
+  onAlignDrag?: (shift: number, done: boolean) => void;
 }
 
 /** Row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping) — into `al`. */
@@ -163,7 +168,8 @@ function mkBuf(w: number, h: number): PixBuf {
 
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
-                               autoMargin = false, autoSlant = true, onAutoAlign }, ref) {
+                               autoMargin = false, autoSlant = true, onAutoAlign,
+                               alignPreview, onAlignDrag }, ref) {
     const alignRef = useRef<WefaxAlign>(align ?? WEFAX_ALIGN_ZERO);
     alignRef.current = align ?? WEFAX_ALIGN_ZERO;
     const autoRef = useRef(autoMargin);
@@ -193,6 +199,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     const [viewingPrev, setViewingPrev] = useState(false);
     const [img, setImg] = useState<SkImage | null>(null);
     const [dispDims, setDispDims] = useState({ w: 1, h: 1 });
+    const [imgShift, setImgShift] = useState<number | null>(null);
 
     const linesSince = useRef(0);
     const lastBuild  = useRef(0);
@@ -256,7 +263,11 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         data,
         buf.w * 4,
       );
-      if (sk) { swapImg({ img: sk, data }); setDispDims({ w: buf.w, h: visH }); }
+      if (sk) {
+        swapImg({ img: sk, data }); setDispDims({ w: buf.w, h: visH });
+        // ★ The SHIFT this picture was drawn with — ALIGN's preview slides it by the difference (see alignPreview).
+        setImgShift(buf.raw && buf === live.current ? effAlign(buf).shift : null);
+      }
       else data.dispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [swapImg]);
@@ -494,8 +505,51 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     // WEFAX keeps the full ceiling because it grows without limit and genuinely wants the room.
     const boxH = fitsWhole ? Math.min(maxHeight, drawH) : maxHeight;
 
+    /* ★★★ ALIGN BY DRAGGING (Stuart, 2026-10-06: the ◀ ▶ keys were "really hard to press and are finicky and cannot
+     *  be held … Simpler way of doing this is on the ALIGN button have an overlay pop up over the chart <----------->
+     *  drag for rough alignment then use buttons to fine tune"). While ALIGN is open the picture follows the finger
+     *  sideways, wrapping as the chart itself does. The preview SLIDES the picture already on screen (two copies,
+     *  side by side — a GPU move, no re-align per touch); the chart is re-aligned once, when the shift is committed,
+     *  and the slide is measured from the shift the shown picture was drawn with, so the committed picture lands
+     *  where the preview was without a jump back. */
+    const aligning = alignPreview !== undefined;
+    // ★ The drag lives HERE, not in the panel: a move re-renders this picture only, never the whole decoder box.
+    const [drag, setDrag] = useState<number | null>(null);
+    const shown = drag ?? alignPreview ?? 0;
+    const W0 = dispDims.w;
+    const slidePx = aligning && imgShift !== null && W0 > 1 ? (((shown - imgShift) % W0) + W0) % W0 : 0;
+    const dragStart = useRef(0);
+    const previewRef = useRef(alignPreview ?? 0);
+    previewRef.current = alignPreview ?? 0;
+    const scaleRef = useRef(scale);
+    scaleRef.current = scale;
+    const dragCb = useRef(onAlignDrag);
+    dragCb.current = onAlignDrag;
+    const pan = useMemo(() => {
+      // finger right → picture right → the line starts further LEFT in the received line → shift DOWN
+      const at = (dx: number) => Math.round(dragStart.current - dx / Math.max(scaleRef.current, 1e-3));
+      const end = (dx: number) => { const s = at(dx); setDrag(null); dragCb.current?.(s, true); };
+      return PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onStartShouldSetPanResponderCapture: () => true,
+        onMoveShouldSetPanResponderCapture: () => true,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderGrant: () => { dragStart.current = previewRef.current; },
+        onPanResponderMove: (_e, g) => setDrag(at(g.dx)),
+        onPanResponderRelease: (_e, g) => end(g.dx),
+        onPanResponderTerminate: (_e, g) => end(g.dx),
+      });
+    }, []);
+    // The shift as the listener reads it: px, signed, the short way round (−904…+904 on a 1809 px chart).
+    const hintShift = W0 > 1 ? ((((shown % W0) + W0 + W0 / 2) % W0) - W0 / 2) : shown;
+    const alignHint = `SHIFT ${hintShift > 0 ? '+' : ''}${Math.round(hintShift)}`;
+    // ★ Room for the hint on a chart only a few lines tall (it is fitted whole, so early on it is a sliver).
+    const ALIGN_MIN_H = 72;
+
     return (
-      <ScrollView style={{ height: boxH, maxHeight }} showsVerticalScrollIndicator
+      <View>
+      <ScrollView style={{ height: aligning ? Math.max(boxH, Math.min(maxHeight, ALIGN_MIN_H)) : boxH, maxHeight }}
+                  showsVerticalScrollIndicator
                   onLayout={(e) => { const w = Math.floor(e.nativeEvent.layout.width); setBoxW((p) => (p === w ? p : w)); }}
                   /* ★ scroll lane: a picture, centred, no controls in it */>
         {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would
@@ -506,18 +560,36 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
           <View style={[styles.canvasWrap, { width: drawW, height: drawH, alignSelf: 'center' }]}>
             {img && (
               <Canvas style={{ width: drawW, height: drawH }}>
-                <SkiaImage image={img} x={0} y={0} width={drawW} height={drawH} fit="fill" />
+                <SkiaImage image={img} x={-slidePx * scale} y={0} width={drawW} height={drawH} fit="fill" />
+                {slidePx > 0 && (
+                  <SkiaImage image={img} x={(W0 - slidePx) * scale} y={0} width={drawW} height={drawH} fit="fill" />
+                )}
               </Canvas>
             )}
           </View>
         </ScrollView>
       </ScrollView>
+      {aligning && (
+        <View style={styles.alignCover} {...pan.panHandlers}
+              accessibilityLabel="Drag sideways to align the chart" accessibilityRole="adjustable">
+          <View pointerEvents="none" style={styles.alignHint}>
+            <Text style={styles.alignHintTxt} numberOfLines={1}>{`◀ ─── drag ───▶   ${alignHint}`}</Text>
+          </View>
+        </View>
+      )}
+      </View>
     );
   },
 );
 
 const styles = StyleSheet.create({
   canvasWrap: { backgroundColor: '#000', borderRadius: 4, overflow: 'hidden' },
+  /* ★ ALIGN's cover: the whole picture is the drag target; the hint sits on the chart in a dark pill so it reads on
+   *  white paper and black alike, on every chassis (the picture is the same black-and-white whatever the skin). */
+  alignCover: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 8 },
+  alignHint: { backgroundColor: 'rgba(0,0,0,0.62)', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 5,
+               borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.35)', maxWidth: '94%' },
+  alignHintTxt: { color: '#fff', fontSize: 13, fontWeight: '600', letterSpacing: 0.5, fontVariant: ['tabular-nums'] },
 });
 
 export default DecoderImageCanvas;

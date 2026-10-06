@@ -394,7 +394,7 @@ export default function DecoderPanel({
   /* ★★ SHIFT IS PER CHART, SLANT PER STATION (Stuart, 2026-10-04, from FLDigi: "slant correction dialled in … you
    *  could move it across so the black line was at the edge, but then next decode happened and the position had
    *  shifted again and needed setting every time"). So only the slant is saved; each chart's margin is found
-   *  automatically, and ◀ ▶ nudge THIS chart only — cleared when the next chart's margin is found. */
+   *  automatically, and ALIGN (drag + 1 / 5 px keys) moves THIS chart only — cleared when the next chart's margin is found. */
   const [manualShift, setManualShift] = useState<number | null>(null);
   const onChartAlign = useCallback((a: WefaxAlign | null) => { setAutoAl(a); setManualShift(null); }, []);
   /* ★★ The slant drawn: the listener's own if saved for this frequency, else THIS chart's measured one (utils/wefaxAlign
@@ -418,6 +418,28 @@ export default function DecoderPanel({
     setAlign(r); setAlignSaved(true);
     AsyncStorage.setItem(alignKey, JSON.stringify(r)).catch(() => {});
   };
+  /* ★★★ ALIGN + HELD KEYS (Stuart, 2026-10-06: "those buttons are really hard to press and are finicky and cannot be
+   *  held requiring multiple taps which then meant hitting the buttons next to it … on the ALIGN button have an
+   *  overlay pop up over the chart <-----------> drag for rough alignment then use buttons to fine tune. Slant keeps
+   *  the buttons, but they need to be made bigger and also be able to be held for larger adjustments").
+   *  ALIGN turns the picture into a drag target (DecoderImageCanvas alignPreview) and swaps the strip for the fine
+   *  keys: 1 px and 5 px each way, DONE. Every adjust key repeats while held, speeding up (useHoldRepeat). The shift
+   *  is still THIS chart's only; the slant is still saved per frequency; RESET still returns both to automatic. */
+  const [aligning, setAligning] = useState(false);
+  const curShift = manualShift ?? autoShift ?? 0;
+  const shiftRef = useRef(curShift);
+  shiftRef.current = curShift;
+  const slantRef = useRef(drawSlant);
+  slantRef.current = drawSlant;
+  // ★ From refs, written through at once: a held key repeats faster than this box re-renders.
+  const nudgeShift = (d: number) => { const s = shiftRef.current + d; shiftRef.current = s; setManualShift(s); };
+  const nudgeSlant = (d: number) => {
+    const k = Math.round((slantRef.current + d) * 1000) / 1000;
+    slantRef.current = k; changeAlign({ shift: 0, slant: k });
+  };
+  const onAlignDrag = useCallback((s: number, done: boolean) => { if (done) setManualShift(s); }, []);
+  const hold = useHoldRepeat();
+  useEffect(() => { if (!adjOpen || !isWefax) setAligning(false); }, [adjOpen, isWefax]);
   const [minimised, setMinimised] = useState(false);
   const [dabSpeedOpen, setDabSpeedOpen] = useState(false);   // DAB speed-fix popup
   // ★★ The spots filters were CYCLERS: each tap advanced by one and you read the label to find
@@ -1133,7 +1155,7 @@ export default function DecoderPanel({
             </HBtn>
           )}
           {isImageMode && isWefax && (
-            <HBtn run hitSlop={6} accessibilityLabel="Adjust shift and slant"
+            <HBtn run hitSlop={6} accessibilityLabel="Align the chart and set its slant"
               onPress={(e: any) => { e?.stopPropagation(); setAdjOpen((o) => !o); }}>
               <DecoderKeyLabel active={adjOpen}>ADJ</DecoderKeyLabel>
             </HBtn>
@@ -1197,25 +1219,40 @@ export default function DecoderPanel({
             DecoderBody is nothing at all. Not drawn when minimised — an empty window is not "hidden". */}
         {!minimised && (<DecoderBody>
         {/* Body — hidden when minimised; image canvas for WEFAX/SSTV */}
-        {!minimised && isImageMode && isWefax && adjOpen && (
+        {!minimised && isImageMode && isWefax && adjOpen && aligning && !viewingPrev && (
+          /* ★ ALIGN open: drag the picture for the rough move, these for the last few px (1 / 5 each way), held to
+             repeat. ◀ moves the picture left. ≥ 44 pt keys, 12 pt apart, so a thumb lands on the one it aims at. */
           <View style={dp.adjRow}>
-            <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>
-              {manualShift != null ? `SHIFT ${manualShift}` : autoShift != null ? `SHIFT auto ${autoShift}` : 'SHIFT auto'}
-            </Text>
-            <HBtn run hitSlop={6} accessibilityLabel="Shift left"
-              onPress={() => setManualShift((manualShift ?? autoShift ?? 0) + SHIFT_STEP)}><DecoderKeyLabel>◀</DecoderKeyLabel></HBtn>
-            <HBtn run hitSlop={6} accessibilityLabel="Shift right"
-              onPress={() => setManualShift((manualShift ?? autoShift ?? 0) - SHIFT_STEP)}><DecoderKeyLabel>▶</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Move the chart left 5 pixels"
+              {...hold((m) => nudgeShift(SHIFT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>◀ 5</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Move the chart left 1 pixel"
+              {...hold((m) => nudgeShift(m))}><DecoderKeyLabel style={dp.bigKeyTxt}>◀ 1</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Move the chart right 1 pixel"
+              {...hold((m) => nudgeShift(-m))}><DecoderKeyLabel style={dp.bigKeyTxt}>1 ▶</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Move the chart right 5 pixels"
+              {...hold((m) => nudgeShift(-SHIFT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>5 ▶</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Finish aligning"
+              onPress={() => setAligning(false)}><DecoderKeyLabel active style={dp.bigKeyTxt}>DONE</DecoderKeyLabel></HBtn>
+          </View>
+        )}
+        {!minimised && isImageMode && isWefax && adjOpen && !(aligning && !viewingPrev) && (
+          <View style={dp.adjRow}>
+            {!viewingPrev && (
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Align the chart: drag it sideways"
+                onPress={() => setAligning(true)}>
+                <DecoderKeyLabel active={manualShift != null} style={dp.bigKeyTxt}>ALIGN</DecoderKeyLabel>
+              </HBtn>
+            )}
             <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>
               {!alignSaved && autoAl ? `SLANT auto ${drawSlant.toFixed(3)}` : `SLANT ${align.slant.toFixed(3)}`}
             </Text>
-            <HBtn run hitSlop={6} accessibilityLabel="Slant less"
-              onPress={() => changeAlign({ ...align, slant: drawSlant - SLANT_STEP })}><DecoderKeyLabel>−</DecoderKeyLabel></HBtn>
-            <HBtn run hitSlop={6} accessibilityLabel="Slant more"
-              onPress={() => changeAlign({ ...align, slant: drawSlant + SLANT_STEP })}><DecoderKeyLabel>+</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Slant less"
+              {...hold((m) => nudgeSlant(-SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>−</DecoderKeyLabel></HBtn>
+            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Slant more"
+              {...hold((m) => nudgeSlant(SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>+</DecoderKeyLabel></HBtn>
             {(alignSaved || manualShift != null) && (
-              <HBtn run hitSlop={6} accessibilityLabel="Back to automatic"
-                onPress={() => { changeAlign(null); setManualShift(null); }}><DecoderKeyLabel>RESET</DecoderKeyLabel></HBtn>
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Back to automatic"
+                onPress={() => { changeAlign(null); setManualShift(null); }}><DecoderKeyLabel style={dp.bigKeyTxt}>RESET</DecoderKeyLabel></HBtn>
             )}
           </View>
         )}
@@ -1226,6 +1263,8 @@ export default function DecoderPanel({
               autoMargin={isWefax && manualShift == null}
               onAutoAlign={onChartAlign}
               autoSlant={!alignSaved}
+              alignPreview={isWefax && adjOpen && aligning && !viewingPrev ? curShift : undefined}
+              onAlignDrag={onAlignDrag}
               ref={imageRef}
               maxHeight={bodyH}
               decoderName={activeDecoder ?? 'image'}
@@ -1393,13 +1432,41 @@ export default function DecoderPanel({
   );
 }
 
+/**
+ * ★★ A KEY THAT REPEATS WHILE HELD (Stuart, 2026-10-06: the WEFAX adjust keys "cannot be held requiring multiple
+ * taps"). `hold(fn)` gives a key's press handlers: fn(1) on touch-down, then after HOLD_DELAY_MS again every
+ * HOLD_EVERY_MS, and from the HOLD_FAST_AFTER-th repeat with a step of HOLD_FAST (so a long hold covers ground and
+ * a tap is still the finest step). A keyboard / screen-reader press (onPress with no touch-down) steps once.
+ */
+const HOLD_DELAY_MS = 380, HOLD_EVERY_MS = 90, HOLD_FAST_AFTER = 8, HOLD_FAST = 5;
+function useHoldRepeat() {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touched = useRef(false);
+  const stop = useCallback(() => { if (timer.current) clearTimeout(timer.current); timer.current = null; }, []);
+  useEffect(() => stop, [stop]);
+  return useCallback((fn: (mult: number) => void) => ({
+    onPressIn: () => {
+      stop(); touched.current = true; fn(1);
+      let n = 0;
+      const tick = () => { n++; fn(n >= HOLD_FAST_AFTER ? HOLD_FAST : 1); timer.current = setTimeout(tick, HOLD_EVERY_MS); };
+      timer.current = setTimeout(tick, HOLD_DELAY_MS);
+    },
+    onPressOut: stop,
+    onPress: () => { if (touched.current) { touched.current = false; return; } fn(1); },
+  }), [stop]);
+}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 /** ★ Built once per setting (useDecoderStyles) — never per render, never at load. */
 const makeDp = (T: DecoderTokens) => StyleSheet.create({
   /* ★ The WEFAX SHIFT / SLANT strip under the header (ADJ). Wraps on a narrow box rather than clipping. */
-  adjRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 4 },
-  adjLabel: { minWidth: 70 },
+  adjRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, paddingHorizontal: 8, paddingVertical: 6 },
+  adjLabel: { minWidth: 70, flexShrink: 1 },
+  /* ★ The adjust keys (2026-10-06): a 44 pt touch target each (Apple's minimum), 12 pt apart (adjRow gap) — the
+   *  header keys' size was what made "hitting the buttons next to it" so easy. Same DecoderKey, same chassis look. */
+  bigKey: { minWidth: 48, minHeight: 44, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  bigKeyTxt: { fontSize: 14 },
   // Sits over the whole box; only ever an opacity animation, so it stays on the native driver.
   flash: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
