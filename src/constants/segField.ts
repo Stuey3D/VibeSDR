@@ -17,6 +17,8 @@
  *                      dBf       "120"     dB F lit (FM-DX's unit; S stays dark)
  *                    The main number always lives in the "-88" group and only the S-meter's over-S9 dB uses
  *                    the "+88" group, so a reading never hops between groups as it changes.
+ *   THE UNIT         SEG_UNIT_CELLS cells beside the frequency digits: "KHZ" / "MHZ" / " HZ", right-aligned, every
+ *                    electrode a ghost — capitals, because a 14-segment display has no lower case.
  *
  * ★ Pure: no React, no runtime imports — scripts/test_faceplate_segfield.ts runs it under plain Node. The
  *   caller hands in the cell converter (displayText's toSegCells), so the folding rules stay in ONE place.
@@ -35,6 +37,16 @@ export const SEG_READ_CELLS = 6;
  *  the minus AND a "1", so −100 … −120 dBFS and 100+ dBf fit without a seventh cell (it reads "-88+88"
  *  with a "1" tucked in front, the way every 3½-digit meter's lead digit does). */
 export const SEG_READ_GHOST: readonly string[] = ['-1', '8', '8', '+', '8', '8'];
+/** The frequency unit's cells: "KHZ", "MHZ" — the longest unit the readout shows. */
+export const SEG_UNIT_CELLS = 3;
+
+/** The frequency unit ("kHz", "MHz", "Hz") → its cells, upper case and RIGHT-aligned in a fixed three, so swapping
+ *  units never moves a cell ('' = dark). */
+export function segUnitCells(unit: string): string[] {
+  const u = [...unit.trim().toUpperCase()].slice(-SEG_UNIT_CELLS);
+  return [...Array<string>(SEG_UNIT_CELLS - u.length).fill(''), ...u];
+}
+
 /** The 14-segment all-on glyph — the mode field's ghost (DSEG14's `~`, displayText SEG_GHOST). */
 export const SEG_ALL = '~';
 
