@@ -14,6 +14,7 @@ import { Animated, Easing, PanResponder, StyleSheet, Text, TouchableOpacity, Vie
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { EDGE_TAB_H, EDGE_TAB_W, edgeChipGeometry } from './edgeChipGeometry';
+import { useIslandSide } from '../hooks/useIslandSide';
 
 export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIcon, label,
                                    frameColour, children }: {
@@ -35,15 +36,22 @@ export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIc
   children: React.ReactNode;
 }) {
   const [w, setW] = useState(160);
+  const [h, setH] = useState(0);
   /* ★★★ ONE GEOMETRY, FROM THE WINDOW (Stuart, 2026-10-06, RC15 landscape: the chips sat ~43 pt inside the glass,
    *  and once an open card ran off the edge beside tabs that were still inset). The card and the tab were both
    *  placed at the caller's safe-area inset — the safe area's edge, not the screen's — and each worked out its
    *  own slide distance from it. Now both are at right 0 with their content padded in by the inset, and everything
    *  comes from edgeChipGeometry, read here from the live window + insets so a rotation, an iPad split or a Mac
    *  window resize re-places both at once. */
+  /* ★★★ AND ONLY THE ISLAND'S SIDE IS PADDED BY THE INSET (Stuart, 2026-10-06, RC16: "the health and timer pills are
+   *  huge when collapsed, bigger than when they are open"). iOS gives the landscape inset to BOTH sides; the
+   *  interface orientation says which one has the island, and the other is padded only for the rounded corner.
+   *  The side feeds `off` (via padRight → the card's re-measured width, and tabW), so the 180° flip between the two
+   *  landscapes — which moves neither the window nor the insets — re-places both through the effect below. */
   const insets = useSafeAreaInsets();
-  const { width: windowW } = useWindowDimensions();
-  const geo = edgeChipGeometry({ windowW, insets, cardW: w });
+  const { width: windowW, height: windowH } = useWindowDimensions();
+  const islandSide = useIslandSide();
+  const geo = edgeChipGeometry({ windowW, windowH, insets, cardW: w, cardH: h, top, islandSide });
   const off = geo.cardOff;                          // fully past the screen edge
   const x = useRef(new Animated.Value(tucked ? off : 0)).current;
   const first = useRef(true);
@@ -58,6 +66,8 @@ export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIc
    *  rotation to landscape"). `off` depends on `right` (the notch inset — 0 in portrait, ~45 pt in landscape) and
    *  the card's width, and the card was only ever placed when tucked/shown CHANGED. After a rotation a tucked card
    *  and its tab sat at the portrait distances. Re-place them, without animating, whenever `off` moves. */
+  // ★ 2026-10-06: the island side moves `off` too (padRight → the card's re-measured width); the tab's own slide
+  //   (geo.tabOff) is re-interpolated on every render, so it needs no effect of its own.
   const lastOff = useRef(off);
   useEffect(() => {
     if (lastOff.current === off) return;
@@ -96,7 +106,10 @@ export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIc
   return (
     <>
       <Animated.View {...pan.panHandlers} pointerEvents={tucked ? 'none' : 'auto'}
-        onLayout={(e) => { const v = Math.ceil(e.nativeEvent.layout.width); if (v > 0 && v !== w) setW(v); }}
+        onLayout={(e) => {
+          const v = Math.ceil(e.nativeEvent.layout.width); if (v > 0 && v !== w) setW(v);
+          const hv = Math.ceil(e.nativeEvent.layout.height); if (hv > 0 && hv !== h) setH(hv);
+        }}
         style={[ec.card, { top, right: geo.right, maxWidth: geo.maxCardW, transform: [{ translateX: x }] }]}>
         {/* ★ JOINED TO THE EDGE, with a › pointing at it (Stuart, 2026-10-03: "move them to join the edge of the
             screen and then put an arrow to the left of the content pointing to the edge of the screen to show the
@@ -116,7 +129,7 @@ export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIc
         style={[ec.tabWrap, { top, right: geo.right, transform: [{ translateX: tabX }] }]}>
         <TouchableOpacity onPress={onShow} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 10, right: 4 }}
           accessibilityRole="button" accessibilityLabel={`Show ${label}`}
-          style={[ec.tab, { borderColor: tabColour, width: geo.tabW, paddingRight: geo.padRight }]}>
+          style={[ec.tab, { borderColor: tabColour, width: geo.tabW, paddingRight: geo.tabW - EDGE_TAB_W }]}>
           {tabIcon}
           <Text style={[ec.chev, { color: tabColour }]}>‹</Text>
         </TouchableOpacity>
