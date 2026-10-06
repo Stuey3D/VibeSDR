@@ -169,6 +169,26 @@ const char* errStr(sdrplay_api_ErrT e) {
     return api().GetErrorString ? api().GetErrorString(e) : "sdrplay error";
 }
 
+/** ★★★ A GAIN WRITE THE API REFUSES IS SAID OUT LOUD (2026-10-06). Every gain/AGC Update used to
+ *  discard its return code, so a radio refusing them looked exactly like one obeying them — the
+ *  readouts echo what we COMMANDED, not what the radio took (rsp_gain_readout_froze_not_the_gain).
+ *  Saber's RSP1 sat flat through the whole kick, and nothing in the log could say whether the
+ *  writes had even been accepted. Now a refusal is one line, with the call and the API's reason.
+ *  ★ Rate-limited: the first 20, then one in 100, so a radio refusing everything cannot flood the
+ *    journal from the kick, the AGC re-asserts and the RF loop. */
+std::atomic<unsigned> g_gainRejects{0};
+sdrplay_api_ErrT gainUpdate(const char* what, HANDLE dev, sdrplay_api_TunerSelectT tuner,
+                            sdrplay_api_ReasonForUpdateT r, sdrplay_api_ReasonForUpdateExtension1T x) {
+    const sdrplay_api_ErrT e = api().Update(dev, tuner, r, x);
+    if (e != sdrplay_api_Success) {
+        const unsigned k = g_gainRejects.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (k <= 20 || k % 100 == 0)
+            std::fprintf(stderr, "sdrplay: gain write REJECTED — %s: Update(0x%x) returned %d (%s) "
+                         "[%u rejected so far]\n", what, (unsigned)r, (int)e, errStr(e), k);
+    }
+    return e;
+}
+
 std::mutex g_apiMtx;
 int        g_apiRefs = 0;
 
@@ -520,6 +540,27 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
     lost_ = false;
     curRate_ = sampleRateHz; curCentre_ = centreHz; curGain_ = gainTenthDb;
 
+    /* ★★ ONE LINE THAT SAYS WHICH RADIO THIS IS AND WHAT IT CLAIMS TO OFFER (2026-10-06). A report
+     *  from somebody else's receiver (Saber's RSP1) arrives as a screenshot; the log is the only
+     *  place the API's own answers can be read back, so the ones every gain decision rests on are
+     *  printed once at open: hwVer, API version, LNA states here and per band, the gRdB range we
+     *  use, and the starting gain. */
+    {
+        float apiVer = 0.0f;
+        using ApiVersionFn = sdrplay_api_ErrT (*)(float*);
+        if (api().h) {
+            if (auto fn = (ApiVersionFn)dlsym(api().h, "sdrplay_api_ApiVersion")) fn(&apiVer);
+        }
+        const auto& g = impl_->params->rxChannelA->tunerParams.gain;
+        std::fprintf(stderr, "sdrplay: opened %s (hwVer %d, serial %s) — API %.2f; LNA states %d at "
+                     "%.3f MHz (MW %d / VHF %d / L-band %d); IF gain reduction 20-59 dB; started at "
+                     "gRdB %d, LNA state %d, %.1f MS/s\n",
+                     model().c_str(), (int)impl_->dev.hwVer,
+                     impl_->dev.SerNo[0] ? impl_->dev.SerNo : "?", apiVer,
+                     lnaStateCount(), centreHz / 1e6, lnaStateCount(1.0e6), lnaStateCount(100.0e6),
+                     lnaStateCount(1.4e9), (int)g.gRdB, (int)g.LNAstate, sampleRateHz / 1e6);
+    }
+
     // ★★★ CYCLE THE AGC AFTER Init. Setting agc.enable in the params struct BEFORE Init does
     // not start the loop — only a transition does, applied through Update once the device is
     // running. So we perform exactly the sequence Stuart found by hand: off, then on.
@@ -534,10 +575,10 @@ bool SdrplaySource::open(int index, double sampleRateHz, double centreHz,
         const auto want = agc.enable;
         if (want != sdrplay_api_AGC_DISABLE) {
             agc.enable = sdrplay_api_AGC_DISABLE;
-            api().Update(impl_->dev.dev, impl_->dev.tuner,
+            gainUpdate("open: AGC off/on after Init", impl_->dev.dev, impl_->dev.tuner,
                          sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
             agc.enable = want;
-            api().Update(impl_->dev.dev, impl_->dev.tuner,
+            gainUpdate("open: AGC off/on after Init", impl_->dev.dev, impl_->dev.tuner,
                          sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
         }
     }
@@ -852,7 +893,7 @@ void SdrplaySource::setGainTenthDb(int tenthDb) {
     ch->tunerParams.gain.LNAstate = (unsigned char)st;
     setIfAgc(true);
     if (open_)
-        api().Update(impl_->dev.dev, impl_->dev.tuner,
+        gainUpdate("setGainTenthDb", impl_->dev.dev, impl_->dev.tuner,
                      sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
 }
 
@@ -1105,7 +1146,7 @@ void SdrplaySource::setLnaState(int state) {
     }
     liveStale_.store(true, std::memory_order_relaxed);
     if (open_) {
-        api().Update(impl_->dev.dev, impl_->dev.tuner,
+        gainUpdate("setLnaState", impl_->dev.dev, impl_->dev.tuner,
                      sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
         dcRecalibrate();          // ★ the DC offset is gain-dependent — see dcRecalibrate()
     }
@@ -1127,10 +1168,10 @@ void SdrplaySource::setLnaState(int state) {
         auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
         const auto want = agc.enable;
         agc.enable = sdrplay_api_AGC_DISABLE;
-        api().Update(impl_->dev.dev, impl_->dev.tuner,
+        gainUpdate("setLnaState", impl_->dev.dev, impl_->dev.tuner,
                      sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
         agc.enable = want;
-        api().Update(impl_->dev.dev, impl_->dev.tuner,
+        gainUpdate("setLnaState", impl_->dev.dev, impl_->dev.tuner,
                      sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
         noteAgcRestart();
     }
@@ -1152,7 +1193,7 @@ bool SdrplaySource::setIfGainReduction(int gRdB) {
     if (gRdB < 20) gRdB = 20;
     if (gRdB > 59) gRdB = 59;
     impl_->params->rxChannelA->tunerParams.gain.gRdB = gRdB;
-    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+    if (open_) gainUpdate("setIfGainReduction", impl_->dev.dev, impl_->dev.tuner,
                             sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
     return true;
 }
@@ -1181,7 +1222,7 @@ void SdrplaySource::setIfAgc(bool on) {
         // target rather than starting hot and clipping on the way down. Approaching from
         // the quiet side is always the safe direction for an automatic gain control.
         ch->tunerParams.gain.gRdB = 59;      // 59 dB of reduction = least gain
-        if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+        if (open_) gainUpdate("setIfAgc", impl_->dev.dev, impl_->dev.tuner,
                                 sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
         // ★★★ ENABLING IS ALWAYS A TRANSITION. The API starts the loop on a CHANGE, so
         // "enable" when it is already enabled does nothing at all — and that is precisely
@@ -1193,14 +1234,14 @@ void SdrplaySource::setIfAgc(bool on) {
         // matter what state it was in or who asked.
         if (open_ && agc.enable != sdrplay_api_AGC_DISABLE) {
             agc.enable = sdrplay_api_AGC_DISABLE;
-            api().Update(impl_->dev.dev, impl_->dev.tuner,
+            gainUpdate("setIfAgc", impl_->dev.dev, impl_->dev.tuner,
                          sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
         }
     }
     agc.enable = on ? sdrplay_api_AGC_50HZ : sdrplay_api_AGC_DISABLE;
     // ★ The setpoint is set separately (setIfAgcSetPoint) and NOT forced here — it is a
     // user-facing target, so toggling the AGC must not quietly discard their choice.
-    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+    if (open_) gainUpdate("setIfAgc", impl_->dev.dev, impl_->dev.tuner,
                             sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
 }
 
@@ -1209,7 +1250,7 @@ void SdrplaySource::setIfAgcSetPoint(int dBfs) {
     if (dBfs > -10) dBfs = -10;
     if (dBfs < -72) dBfs = -72;
     impl_->params->rxChannelA->ctrlParams.agc.setPoint_dBfs = dBfs;
-    if (open_) api().Update(impl_->dev.dev, impl_->dev.tuner,
+    if (open_) gainUpdate("setIfAgcSetPoint", impl_->dev.dev, impl_->dev.tuner,
                             sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
 }
 
@@ -1224,12 +1265,12 @@ void SdrplaySource::restartIfAgc(int gr) {
     auto& agc = impl_->params->rxChannelA->ctrlParams.agc;
     const auto want = agc.enable == sdrplay_api_AGC_DISABLE ? sdrplay_api_AGC_CTRL_EN : agc.enable;
     agc.enable = sdrplay_api_AGC_DISABLE;
-    api().Update(impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+    gainUpdate("restartIfAgc", impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
     if (gr < 20) gr = 20; if (gr > 59) gr = 59;
     impl_->params->rxChannelA->tunerParams.gain.gRdB = (float)gr;
-    api().Update(impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+    gainUpdate("restartIfAgc", impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
     agc.enable = want;
-    api().Update(impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
+    gainUpdate("restartIfAgc", impl_->dev.dev, impl_->dev.tuner, sdrplay_api_Update_Ctrl_Agc, sdrplay_api_Update_Ext1_None);
     liveStale_.store(true, std::memory_order_relaxed);
     noteAgcRestart();
 }

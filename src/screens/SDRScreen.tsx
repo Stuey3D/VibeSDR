@@ -8543,7 +8543,15 @@ export default function SDRScreen({ route, navigation }: Props) {
       agcInitNotifKey.current = showVtsNotice(
         // ★ Stuart's wording (2026-10-03) — the same line the server sends, so the two never disagree.
         'SDRplay AGC initialising: noise floor and signals will bounce until it settles (approx. 30 seconds)',
-        600000);
+        /* ★★★ 75 s, NOT 10 MINUTES (2026-10-06). The server's flag had one exit, behind the RF
+         *     loop, and the RF loop is off by default: on Saber's RSP1 it never cleared, and this
+         *     notice — then a 10-minute ceiling — sat in the VTS over a perfect RDS decode and the
+         *     bookmark name. The server now ends it within 60 s whatever the radio does
+         *     (vibe_rsp_init_gate.h); this is the client's own bound for any server that does not,
+         *     so a flag only the server can clear can never hold the bar by itself. The effect
+         *     fires on CHANGE only, so a flag still stuck at true does not bring it back. When it
+         *     goes, the station and bookmark effects re-run (vtsNoticeEnded) — no reconnect. */
+        75000);
       return;
     }
     withdrawVtsNotice(agcInitNotifKey.current);
