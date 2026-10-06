@@ -1831,7 +1831,13 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  one that removes all signals for a few seconds."
        *  ★ `agcInit` now spans all of it (see the note at its send site); `settling` keeps its
        *    narrower meaning for the sliders, which is what they want. */
-      $('initChip').classList.toggle('set', Number(m.agcInit) === 1 || settling);
+      /* ★★★ BOUNDED ON THIS SIDE TOO (2026-10-06). The flag had one exit on the server, behind
+       *  the RF loop, which is off by default — Saber's RSP1 showed INITIALISING AGC for good, and
+       *  it held the overload chip down with it. The server now ends it within 60 s; this bound
+       *  is for any server that does not, so a flag only the server can clear cannot hold a chip
+       *  up (or another chip down) for ever. */
+      const rspInit = rspInitBounded(Number(m.agcInit) === 1 || !!settling);
+      $('initChip').classList.toggle('set', rspInit);
       /* ★★★ THE TUNER IS SWITCHED OUT AND YOU MAY NOT BE THE ONE WHO DID IT (Stuart, 2026-09-20). Anyone on a
        *  shared dial may turn direct sampling on to reach HF; wander back up to FM, leave, and the next
        *  visitor meets a receiver that hears nothing and blames the SERVER. Shown only above the crossover,
@@ -1903,7 +1909,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  ★ Only the MAIN-SCREEN chip is suppressed. `rspOverload` in the gain panel below keeps
        *    showing it: an owner looking at the gain controls wants the unvarnished state, and that
        *    is the one place where acting on it makes sense. */
-      $('ovlChip').classList.toggle('set', overload && Number(m.agcInit) !== 1);
+      $('ovlChip').classList.toggle('set', overload && !rspInit);
       // ★ The RSP raises this itself when its ADC is clipping — no inference needed, unlike a
       // dongle where it has to be guessed from the spectrum.
       $<HTMLElement>('rspOverload').hidden = !overload;
@@ -3596,6 +3602,16 @@ function fmtBandFreq(hz: number): string {
  *    moment the gain moves) whether it is showing or still waiting its turn. A queue you cannot
  *    retract from shows stale news, which is the fault we deleted the chat replay for.
  */
+/** ★ The RSP's "initialising" state as the client will SHOW it: the server's flag, but never for
+ *  more than 75 s at a stretch (the server's own ceiling is 60 s — vibe_rsp_init_gate.h). Resets
+ *  the moment the flag drops, so the next real start-up shows in full. */
+let rspInitSince = 0;
+function rspInitBounded(raw: boolean): boolean {
+  if (!raw) { rspInitSince = 0; return false; }
+  if (!rspInitSince) rspInitSince = Date.now();
+  return Date.now() - rspInitSince < 75000;
+}
+
 type VtsNotice = { key: string; msg: string; sub: string; ms: number };
 let vtsQueue: VtsNotice[] = [];
 let vtsNoticeKey = '';
