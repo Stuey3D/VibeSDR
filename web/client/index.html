@@ -3092,11 +3092,13 @@ select.btn { padding: 6px 8px; }
        row; the slant keys are big and repeat while held. Same as the app's DecoderPanel.
        ★★ …and only the keys in use (Stuart, same day): ADJ opens on the SUMMARY — the margin and slant actually
        applied, each a key — and MARGIN / SLANT swap it for that one's keys + DONE. MARGIN has ◀ ▶ only: four arrows +
-       DONE at 44 px do not fit an SE-width row, and a held key goes ×5 anyway. -->
+       DONE at 44 px do not fit an SE-width row, and a held key goes ×5 anyway. Then AUTO · RAW, a mode pair: AUTO = automatic (it replaced RESET),
+       RAW = this chart exactly as received (per chart; the correction stays underneath). -->
   <div id="decAdjRow" style="display:none">
     <button class="btn adjKey" id="decAlign" title="Adjust the margin: drag the chart sideways">MARGIN AUTO 0 px</button>
     <button class="btn adjKey" id="decSlant" title="Adjust the slant">SLANT AUTO 0.000</button>
-    <button class="btn adjKey" id="decAdjReset" title="Back to automatic" style="display:none">RESET</button>
+    <button class="btn adjKey" id="decAdjReset" title="Automatic margin and slant">AUTO</button>
+    <button class="btn adjKey" id="decRaw" title="Show the chart exactly as received, no correction" aria-pressed="false">RAW</button>
   </div>
   <div id="decAlignRow" style="display:none">
     <button class="btn adjKey arrowKey" id="decShiftL" title="Move the chart left (hold to repeat)" aria-label="Move the chart left">&#9664;</button>
