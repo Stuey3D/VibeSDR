@@ -2373,6 +2373,12 @@ int main(int argc, char** argv) {
             //   this one simply draws its default.
             if (!r.antennaIcon.empty())
                 j += ",\"antennaIcon\":\"" + jsonEscape(r.antennaIcon) + "\"";
+            // ★ The aerial's ranges and filters, for the landing cards and the directory — the owner's
+            //   text, parsed by the clients. Omitted when unset (2026-10-06).
+            if (!r.antennaRanges.empty())
+                j += ",\"antennaRanges\":\"" + jsonEscape(r.antennaRanges) + "\"";
+            if (!r.antennaFilters.empty())
+                j += ",\"antennaFilters\":\"" + jsonEscape(r.antennaFilters) + "\"";
             j += ",\"port\":" + std::to_string(vsconfig::portForRadio(srv, i));
             // ★★★ WHAT THIS RADIO CAN HEAR, AND WHETHER THE OWNER HAS NARROWED IT. The directory
             //     published only the frequency it happens to be parked on, which makes three very
@@ -3562,6 +3568,10 @@ int main(int argc, char** argv) {
             if (pi >= 0 && pi < (int)g_serverConfig.radios.size()) mine = &g_serverConfig.radios[pi];
         }
         LocalSdrShim::instance().setAntennaIcon(mine ? mine->antennaIcon : std::string());
+        // ★ And what the aerial covers / what is filtered out (2026-10-06) — the listener's notice
+        //   when they tune into a band-stop or off the end of the aerial. Per radio, like the icon.
+        LocalSdrShim::instance().setAntennaBands(mine ? mine->antennaRanges : std::string(),
+                                                 mine ? mine->antennaFilters : std::string());
         // ★ Per radio, like the limit it modifies — a shared 30-listener receiver and a
         //   one-at-a-time dongle want different answers to "is the limit a deadline".
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);
