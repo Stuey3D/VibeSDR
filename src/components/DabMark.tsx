@@ -35,6 +35,7 @@ import { View } from 'react-native';
 import { Canvas, ClipOp, Image as SkImageNode, LinearGradient, Path, PathOp, Skia, vec, type SkPath } from '@shopify/react-native-skia';
 import { DAB_LOGO_PATH, DAB_VIEWBOX } from './dabLogoPaths';
 import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
+import { MESH_FINE_BAR, MESH_FINE_PITCH, MESH_SHADES_FINE, vfdMesh } from './vfdMesh';
 
 /** ★ See the header: false = WorldDAB's toolkit to the letter (official colours, DAB+ only, unaltered).
  *  ★★★ DECIDED: TRUE (Stuart, 2026-10-02) — "ship it as the VFD one to preserve the integrity, if we get a
@@ -61,16 +62,7 @@ const MAIN: SkPath = Skia.Path.MakeFromOp(FULL, rectPath(MAIN_CUT), PathOp.Diffe
  *  mark put bars nearly as thick as the strokes and the "dab" and "+" turned to mush (Stuart, 2026-10-02:
  *  "they are hard to make out" — and a bigger mark would spoil the bar). `k` = points per logo unit. */
 function meshOver(p: SkPath, k: number): [SkPath, SkPath] {
-  const pitch = 1.6 / k, bar = 0.25 / k;
-  const a = Skia.Path.Make(), b = Skia.Path.Make();
-  for (let i = -160; i <= 160; i++) {
-    a.addRect(Skia.XYWHRect(-200, pitch * i, 400, bar));
-    b.addRect(Skia.XYWHRect(pitch * i, -200, bar, 400));
-  }
-  const m = Skia.Matrix();
-  m.rotate((60 * Math.PI) / 180);
-  a.transform(m); b.transform(m);
-  return [Skia.Path.MakeFromOp(a, p, PathOp.Intersect) ?? a, Skia.Path.MakeFromOp(b, p, PathOp.Intersect) ?? b];
+  return vfdMesh(p, MESH_FINE_PITCH / k, MESH_FINE_BAR / k, { count: 160, extent: 200 });
 }
 
 /** Mark width for a height — the FULL mark's, whichever groups are drawn. */
@@ -146,10 +138,10 @@ export default function DabMark({ height = 15, kind, color, glow, ghost, plus }:
         {!plus && <Path path={statics.plusGhost} color={ghost} />}
         {sprite && <SkImageNode image={sprite} x={0} y={0} width={W} height={H} />}
         {/* ★ Lighter than RdsMark's (0.55/0.35): the grid should be SEEN on the phosphor, not cut the letters. */}
-        {statics.meshMain && <Path path={statics.meshMain[0]} color="rgba(0,0,0,0.38)" />}
-        {statics.meshMain && <Path path={statics.meshMain[1]} color="rgba(0,0,0,0.22)" />}
-        {statics.meshPlus && <Path path={statics.meshPlus[0]} color="rgba(0,0,0,0.38)" />}
-        {statics.meshPlus && <Path path={statics.meshPlus[1]} color="rgba(0,0,0,0.22)" />}
+        {statics.meshMain && <Path path={statics.meshMain[0]} color={MESH_SHADES_FINE[0]} />}
+        {statics.meshMain && <Path path={statics.meshMain[1]} color={MESH_SHADES_FINE[1]} />}
+        {statics.meshPlus && <Path path={statics.meshPlus[0]} color={MESH_SHADES_FINE[0]} />}
+        {statics.meshPlus && <Path path={statics.meshPlus[1]} color={MESH_SHADES_FINE[1]} />}
       </Canvas>
     </View>
   );

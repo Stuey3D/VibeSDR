@@ -15,8 +15,9 @@
  */
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
-import { Canvas, Image as SkImageNode, Path, PathOp, Skia, StrokeCap, StrokeJoin, type SkPath } from '@shopify/react-native-skia';
+import { Canvas, Image as SkImageNode, Path, Skia, StrokeCap, StrokeJoin, type SkPath } from '@shopify/react-native-skia';
 import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
+import { MESH_SHADES, vfdMesh } from './vfdMesh';
 
 export type AnnunciatorName = 'TP' | 'TA' | 'AF';
 
@@ -38,11 +39,54 @@ function letter(ch: string, ox: number): SkPath {
       break;
     case 'A': seg(h, CELL_H, CELL_W / 2, h); seg(CELL_W / 2, h, CELL_W - h, CELL_H); seg(2.6, 9.6, CELL_W - 2.6, 9.6); break;
     case 'F': seg(1 + h, 0, 1 + h, CELL_H); seg(1 + h, h, CELL_W, h); seg(1 + h, 7, CELL_W - 2, 7); break;
+    // ★ 2026-10-06: the VCR mode box's dB / F / S legends (ControlsBar SegReading) — the readout's units are
+    //   fixed legends lit per meter mode, like TP / TA / AF, so they come from the same strokes.
+    case 'd': {
+      // A real lower-case d (the panel legend reads "dB"): the stem on the RIGHT, full height; a bowl from x-height.
+      const st = CELL_W - 1 - h;
+      seg(st, 0, st, CELL_H);
+      p.moveTo(ox + st, 5 + h); p.lineTo(ox + 4.6, 5 + h);
+      p.quadTo(ox + h, 5 + h, ox + h, 9.5);
+      p.quadTo(ox + h, CELL_H - h, ox + 4.6, CELL_H - h);
+      p.lineTo(ox + st, CELL_H - h);
+      break;
+    }
+    case 'B':
+      seg(1 + h, 0, 1 + h, CELL_H);
+      p.moveTo(ox + 1 + h, h); p.lineTo(ox + 5.4, h);
+      p.quadTo(ox + CELL_W - 1 - h, h, ox + CELL_W - 1 - h, 3.8);
+      p.quadTo(ox + CELL_W - 1 - h, 6.8, ox + 5.4, 6.8);
+      p.lineTo(ox + 1 + h, 6.8);
+      p.moveTo(ox + 5.4, 6.8); p.lineTo(ox + 5.8, 6.8);
+      p.quadTo(ox + CELL_W - h, 6.8, ox + CELL_W - h, 10.3);
+      p.quadTo(ox + CELL_W - h, CELL_H - h, ox + 5.8, CELL_H - h);
+      p.lineTo(ox + 1 + h, CELL_H - h);
+      break;
+    case 'S':
+      p.moveTo(ox + CELL_W - h, 3);
+      p.quadTo(ox + CELL_W - h, h, ox + 5, h);
+      p.quadTo(ox + h, h, ox + h, 3.6);
+      p.quadTo(ox + h, 6.6, ox + 5, 6.9);
+      p.quadTo(ox + CELL_W - h, 7.2, ox + CELL_W - h, 10.3);
+      p.quadTo(ox + CELL_W - h, CELL_H - h, ox + 5, CELL_H - h);
+      p.quadTo(ox + h, CELL_H - h, ox + h, 11);
+      break;
   }
   return p.stroke({ width: STROKE, cap: StrokeCap.Butt, join: StrokeJoin.Miter }) ?? Skia.Path.Make();
 }
 
 const LEGEND_W = 2 * CELL_W + GAP;
+
+/** Any run of the letters above as one filled path, in cell units (0..legendUnits(n) × 0..CELL_H) — for a
+ *  caller that draws the legend into a canvas of its own (SegField: one canvas per readout, not one per legend). */
+export function legendPath(text: string): SkPath {
+  const p = Skia.Path.Make();
+  [...text].forEach((ch, i) => p.addPath(letter(ch, i * (CELL_W + GAP))));
+  return p;
+}
+/** A legend's width in cell units, and the cell's height in the same units. */
+export const legendUnits = (n: number) => n * CELL_W + Math.max(0, n - 1) * GAP;
+export const LEGEND_CELL_H = CELL_H;
 
 /** The two letters as one filled path, in cell units (0..LEGEND_W × 0..CELL_H). */
 const LEGENDS: Record<AnnunciatorName, SkPath> = (() => {
@@ -57,18 +101,8 @@ const LEGENDS: Record<AnnunciatorName, SkPath> = (() => {
 })();
 
 /** The VFD mesh at RdsMark's proportions (a 42-unit pitch on a 260-unit mark = 16 % of the height). */
-function meshFor(legend: SkPath): [SkPath, SkPath] {
-  const pitch = (42 / 260) * CELL_H, bar = (8 / 260) * CELL_H;
-  const a = Skia.Path.Make(), b = Skia.Path.Make();
-  for (let k = -60; k <= 60; k++) {
-    a.addRect(Skia.XYWHRect(-200, pitch * k, 400, bar));
-    b.addRect(Skia.XYWHRect(pitch * k, -200, bar, 400));
-  }
-  const m = Skia.Matrix();
-  m.rotate((60 * Math.PI) / 180);
-  a.transform(m); b.transform(m);
-  return [Skia.Path.MakeFromOp(a, legend, PathOp.Intersect) ?? a, Skia.Path.MakeFromOp(b, legend, PathOp.Intersect) ?? b];
-}
+const meshFor = (legend: SkPath): [SkPath, SkPath] =>
+  vfdMesh(legend, (42 / 260) * CELL_H, (8 / 260) * CELL_H, { count: 60, extent: 200 });
 const MESHES: Record<AnnunciatorName, [SkPath, SkPath]> = {
   TP: meshFor(LEGENDS.TP), TA: meshFor(LEGENDS.TA), AF: meshFor(LEGENDS.AF),
 };
@@ -118,8 +152,8 @@ export default function AnnunciatorLegend({ name, height = 10, kind, color, glow
       <Canvas style={{ position: 'absolute', left: -MARGIN, top: -MARGIN, width: W, height: H }}>
         {!lit && <Path path={statics.ghost} color={ghost} />}
         {lit && sprite && <SkImageNode image={sprite} x={0} y={0} width={W} height={H} />}
-        {statics.meshA && <Path path={statics.meshA} color="rgba(0,0,0,0.55)" />}
-        {statics.meshB && <Path path={statics.meshB} color="rgba(0,0,0,0.35)" />}
+        {statics.meshA && <Path path={statics.meshA} color={MESH_SHADES[0]} />}
+        {statics.meshB && <Path path={statics.meshB} color={MESH_SHADES[1]} />}
       </Canvas>
     </View>
   );

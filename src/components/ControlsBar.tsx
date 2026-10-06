@@ -54,12 +54,18 @@ import DabMeter from './DabMeter';
 import { DAB_SEARCHING, type DabQuality } from '../utils/dabQuality';
 import { GhostGrid, SegDigits, VfdFilaments } from './VfdParts';
 import { TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, type NixieLayout } from '../constants/nixie';
-import { composeModeLabel, modeBoxFit, MODE_BOX } from '../constants/modeBox';
+import { composeModeLabel, modeBoxFit, MODE_BOX, segModeFont, segModeFieldWidth, segReadingGeometry } from '../constants/modeBox';
+import { segModeCells, segReadingCells, SEG_ALL, SEG_DEMOD_CELLS, SEG_READ_GHOST } from '../constants/segField';
+import { SegField, segCellX, type SegExtra } from './SegField';
+import StereoMark, { stereoRingsPath, stereoMarkWidth } from './StereoMark';
+import { legendPath, LEGEND_CELL_H } from './AnnunciatorLegend';
+import { placePath } from './vfdMesh';
 import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
-import { statusGainParts, statusGainText, statusFit, statusFits, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec } from '../constants/displayText';
+import { statusGainParts, statusGainText, statusFit, statusFits, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec,
+         cellWindow, segCellList, steppedOffset, toSegCells, VFD_STEP_MS } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
 
 /**
@@ -966,7 +972,9 @@ function sharedBannerLabel(st: SharedTuner): string {
       : `Shared tuner. ${st.listeners}${st.max > 1 ? ` of ${st.max}` : ''} listening — ask before tuning.`;
 }
 
-interface ModeReading { text: string; active: boolean; sqlClosed: boolean; breathe: Animated.Value }
+interface ModeReading { text: string; active: boolean; sqlClosed: boolean; breathe: Animated.Value;
+  /** The readout's unit — the VCR readout lights its dB / F / S legends from it. */
+  unit: MeterUnit }
 
 /**
  * The mode box's live reading, shared by every meter (§4.6): the S-reading, or — while the squelch
@@ -998,13 +1006,96 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
     loop.start();
     return () => loop.stop();
   }, [sqlClosed, breathe]);
-  return { text, active, sqlClosed, breathe };
+  return { text, active, sqlClosed, breathe, unit: meterMode ?? 'snr' };
 }
 
 /** The mode label (+ stereo rings) over the reading / breathing SQL — the mode box's contents. */
 /** ★ Room for the stereo rings: whenever they are lit, and always in WFM (where they come and go). */
 function stereoSlot(modeLabel: string, fmStereo: boolean | undefined): boolean {
   return !!fmStereo || /^WFM\b/i.test(modeLabel);
+}
+
+/** Text → 14-segment cells, one string per cell ('' = dark): displayText's toSegCells, the VTS strip's own rules. */
+const segCells = (t: string) => segCellList(toSegCells(t)).map(c => c.replace(/^!/, ''));
+
+/** ★ A label too long for the field steps through it a WHOLE cell at a time (the VTS strip's rule), never cut. */
+function useSegMarquee(count: number, n: number, key: string): number {
+  const [offset, setOffset] = useState(0);
+  useEffect(() => {
+    setOffset(0);
+    if (count <= n || n <= 0) return;
+    const t0 = Date.now();
+    // ★ Not while backgrounded (VfdStrip's power rule): the offset is a function of the clock.
+    const id = setInterval(() => {
+      if (AppState.currentState === 'active') setOffset(steppedOffset(Date.now() - t0, count, n, true));
+    }, VFD_STEP_MS / 3);
+    return () => clearInterval(id);
+  }, [count, n, key]);
+  return offset;
+}
+
+/**
+ * ★★★ THE VCR MODE BOX (Stuart, 2026-10-06: "The demodulator button is the only one not in the correct font for
+ * the skin"). The label and the reading as FIXED 14-segment fields (constants/segField, components/SegField):
+ *   mode     ten cells, " AM" / "USB:RTTY" / "MESHTASTIC" — in WFM the last three cells' room is the stereo rings'
+ *            slot, cut and meshed like the RDS mark; in every other mode it is cells ("replace the stereo rings
+ *            with more digits"). The width is the same in every mode, so nothing beside it moves.
+ *   reading  "-88+88 dB F S", every electrode a ghost, the value lit; the legends light per meter mode.
+ * Both carry the RDS mark's grid mesh. The other Displays keep ModeReadout's text.
+ */
+function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFontSize }: {
+  reading: ModeReading; modeLabel: string; fmStereo: boolean; modeFontSize: number; readingFontSize?: number;
+}) {
+  const dk = useFaceplate().deck;
+  const fs = segModeFont(modeFontSize);
+  const width = segModeFieldWidth(modeFontSize);
+  const ghostCol = rgba(dk.rgb, 0.10);
+  const lay = useMemo(() => segModeCells(modeLabel, stereoSlot(modeLabel, fmStereo), segCells), [modeLabel, fmStereo]);
+  const offset = useSegMarquee(lay.cells.length, lay.textCells, `${modeLabel}|${lay.textCells}`);
+  const lit = lay.marquee ? cellWindow(lay.cells, lay.textCells, offset, '') : lay.cells;
+  const ghost = useMemo(() => Array<string>(lay.textCells).fill(SEG_ALL), [lay.textCells]);
+  // The rings, centred in their slot: the room after the text cells.
+  const rings = useMemo(() => {
+    if (!lay.stereoSlot) return null;
+    const x0 = segCellX(lay.textCells, fs);
+    const size = Math.round(fs * 2) / 2;
+    const x = Math.round((x0 + (width - x0 - stereoMarkWidth(size)) / 2) * 2) / 2;
+    return { path: stereoRingsPath(size, x, (fs - size) / 2), key: `rings|${size}|${x}` };
+  }, [lay.stereoSlot, lay.textCells, fs, width]);
+  const modeExtras: SegExtra[] = rings ? [{ path: rings.path, lit: fmStereo }] : [];
+
+  // ── The readout ──
+  const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
+  const rl = readingFontSize ? Math.round(readingFontSize * 1.15) : Math.round(Math.max(9, modeFontSize * 0.75) * 1.15);
+  const g = useMemo(() => segReadingGeometry(rf), [rf]);
+  const legends = useMemo(() => {
+    const k = g.lh / LEGEND_CELL_H, y = g.fs - g.lh;
+    return { dB: placePath(legendPath('dB'), k, g.dB.x, y), F: placePath(legendPath('F'), k, g.F.x, y),
+             S: placePath(legendPath('S'), k, g.S.x, y) };
+  }, [g]);
+  const sql = reading.sqlClosed;
+  const rd = useMemo(() => segReadingCells(reading.text, reading.unit), [reading.text, reading.unit]);
+  // ★ SQL in the readout's own cells, in the squelch colour, breathing — the other Displays' rule.
+  const readLit = sql ? ['', 'S', 'Q', 'L', '', ''] : rd.cells;
+  const readExtras: SegExtra[] = [
+    { path: legends.dB, lit: !sql && rd.dB }, { path: legends.F, lit: !sql && rd.F }, { path: legends.S, lit: !sql && rd.S },
+  ];
+  const readLabel = sql ? 'Squelch closed' : reading.text;
+  return (<>
+    <View style={{ height: Math.round(modeFontSize * 1.15), justifyContent: 'center' }}>
+      <SegField fs={fs} width={width} ghost={ghost} lit={lit}
+        colonAfter={lay.marquee ? null : SEG_DEMOD_CELLS - 1} colonLit={lay.colon}
+        extras={modeExtras} extrasKey={rings?.key ?? ''}
+        color={dk.mode} glow={dk.modeGlow} ghostColor={ghostCol}
+        accessibilityLabel={`${modeLabel}${lay.stereoSlot ? (fmStereo ? ', stereo' : ', mono') : ''}`} />
+    </View>
+    <Animated.View style={{ height: rl, justifyContent: 'center', opacity: sql ? reading.breathe : 1 }}>
+      <SegField fs={g.fs} width={g.width} ghost={SEG_READ_GHOST} lit={readLit}
+        extras={readExtras} extrasKey={`leg|${g.fs}`}
+        color={sql ? dk.sqlClosed : dk.reading} glow={sql ? dk.sqlGlow : dk.modeGlow} ghostColor={ghostCol}
+        accessibilityLabel={readLabel} />
+    </Animated.View>
+  </>);
 }
 
 function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWidth, readingFontSize, oneLine = false }: {
@@ -1019,6 +1110,10 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
   oneLine?: boolean;
 }) {
   const dk = useFaceplate().deck;
+  if (dk.style === 'seg') {
+    return <SegModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
+             modeFontSize={modeFontSize} readingFontSize={readingFontSize} />;
+  }
   const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
   const rl = readingFontSize ? Math.round(readingFontSize * 1.15) : Math.round(Math.max(9, modeFontSize * 0.75) * 1.15);
   const dot = dk.modeFont === FONT_DOTO;
@@ -1040,12 +1135,17 @@ function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWi
       {/* ★★ THE RINGS' ROOM IS ALWAYS KEPT IN WFM — they go INVISIBLE, never away. On a weak station
           the pilot locks and unlocks several times a second, and a box that grew and shrank with the
           rings made the frequency beside it wobble (Stuart, 2026-10-02). Same width with or without. */}
-      {stereoSlot(modeLabel, fmStereo) && (
+      {/* ★ 2026-10-06: on the dot-matrix VFD the rings are an ANNUNCIATOR (StereoMark — the RDS mark's breaks and
+          grid): always there as a ghost electrode, lit while the pilot is locked. */}
+      {stereoSlot(modeLabel, fmStereo) && (dk.style === 'dot' ? (
+        <StereoMark size={Math.round(modeFontSize * 0.95)} color={dk.mode} glow={dk.modeGlow}
+          ghost={rgba(dk.rgb, 0.10)} lit={fmStereo} />
+      ) : (
         <View style={{ opacity: fmStereo ? 1 : 0 }} accessibilityElementsHidden={!fmStereo}
               importantForAccessibility={fmStereo ? 'auto' : 'no-hide-descendants'}>
           <StereoIcon size={Math.round(modeFontSize * 0.95)} color={dk.mode} />
         </View>
-      )}
+      ))}
     </View>
     {reading.sqlClosed ? (
       <Animated.Text style={[pm.snr, {
@@ -1246,10 +1346,11 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
   const modeFont0 = L ? L.modeFont : s.r(15);
   const readingFont = L ? L.readingFont : s.r(11);
   const mb = useMemo(() => modeBoxFit({
-    label: modeLabel, stereo: stereoSlot(modeLabel, fmStereo), face: dk.modeFont === FONT_DOTO ? 'doto' : 'hyper',
+    label: modeLabel, stereo: stereoSlot(modeLabel, fmStereo),
+    face: dk.style === 'seg' ? 'seg' : dk.modeFont === FONT_DOTO ? 'doto' : 'hyper',
     fontSize: modeFont0, letterSpacing: L ? 1.5 : 2, readingFont,
     minW: s.r(MODE_BOX.minW), padH: s.r(MODE_BOX.padH), windowW: winW,
-  }), [modeLabel, fmStereo, dk.modeFont, modeFont0, L, readingFont, s, winW]);
+  }), [modeLabel, fmStereo, dk.modeFont, dk.style, modeFont0, L, readingFont, s, winW]);
   return (
     <View style={{ height: dl.displayH }}>
       {sharedTuner && (
