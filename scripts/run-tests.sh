@@ -292,6 +292,9 @@ if node --no-warnings scripts/test_mac_audio.ts; then pass=$((pass+1)); else fai
 #     worst lighting; the tune entry follows the Display (Nixie One only ever neon); and with
 #     Transparency OFF no popup dims the waterfall or blurs it.
 if node --no-warnings scripts/test_popup.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ EDGE CHIPS ON THE GLASS (edgeChipGeometry.ts, Stuart 2026-10-06): the health / time cards and their tabs sit at
+#     the PHYSICAL edge with content padded by the safe-area inset — portrait, both landscapes, iPad, a Mac resize.
+if node --no-warnings scripts/test_edge_chip.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_edge_chip.ts"; fi
 # ★★★ THE CANNED CHAT PAD (chatPad.ts, capSheen.ts): the phrase pad scrolls inside a cap that never
 #     overflows the drawer on any phone (the SE lost phrases 7–14 below its edge), and a dome key's
 #     sheen is flex shares, never percentage heights (Yoga drew ghost slabs over a multi-line wrap).

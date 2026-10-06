@@ -8367,8 +8367,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★ BIG reaches the status row, never past it — "make sure we respect the status row at the top of the screen
    *  so we can still use our buttons without fouling the OS". */
   const boxTopSafe = insets.top + 6;
-  /** ★ The edge the health / time cards join — flush, clear of a landscape notch (EdgeChip). */
-  const edgeRight = insets.right;
+  /* ★ (2026-10-06) No `edgeRight` here any more: it was `insets.right`, which put the health / time cards ~43 pt
+   *  inside the glass in landscape. EdgeChip now anchors at the physical edge and pads by the inset itself
+   *  (edgeChipGeometry) — one rule, read in one place. */
   const vtsKey            = useRef(0);
 
   /* ★★★ OUR OWN EXPLANATIONS GO THROUGH THE VTS, not through overlays of their own.
@@ -10807,7 +10808,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ pointerEvents none: it is a readout, and it sits over the frequency scale — a touch that
             lands on it must reach the scale, like every other pill anchored here. */}
       {!!health && (
-        <EdgeChip top={rightStackTop} right={edgeRight} tucked={!healthOut} label="Server health"
+        <EdgeChip top={rightStackTop} tucked={!healthOut} label="Server health"
           onTuck={() => setChipPref((p) => ({ ...p, health: 'tucked' }))}
           onShow={() => setChipPref((p) => ({ ...p, health: 'shown' }))}
           tabColour={hs!.colour} tabIcon={<HealthTabIcon colour={hs!.colour} />}>
@@ -10869,7 +10870,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       })()}
 
       {sessionEndsAt != null && !adminOk && (
-        <EdgeChip top={rightStackTop + healthStackShift} right={edgeRight} tucked={!timeOut} label="Time remaining"
+        <EdgeChip top={rightStackTop + healthStackShift} tucked={!timeOut} label="Time remaining"
           onTuck={() => setChipPref((p) => ({ ...p, time: 'tucked' }))}
           onShow={() => setChipPref((p) => ({ ...p, time: 'shown' }))}
           tabColour={TIME_TAB[timeStage]} tabIcon={<ClockTabIcon colour={TIME_TAB[timeStage]} />}

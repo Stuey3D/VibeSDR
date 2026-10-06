@@ -10,19 +10,19 @@
  *    animates between them and reports the user's flick / tap.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, PanResponder, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, PanResponder, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
+import { EDGE_TAB_H, EDGE_TAB_W, edgeChipGeometry } from './edgeChipGeometry';
 
-const TAB_W = 26;
-const TAB_H = 52;
-
-export default function EdgeChip({ top, right, tucked, onTuck, onShow, tabColour, tabIcon, label,
+export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIcon, label,
                                    frameColour, children }: {
   /** The card's frame (it draws ONE frame round the arrow and the content; the content is drawn bare).
    *  Default: the tab's colour. */
   frameColour?: string;
-  /** `right`: the screen edge the card joins — 0, or the safe-area inset where a notch sits there. */
-  top: number; right: number;
+  /** ★ No `right` any more (2026-10-06): the card and tab sit on the PHYSICAL edge and pad their content by the
+   *  safe-area inset themselves — edgeChipGeometry, the one rule both of them read. */
+  top: number;
   tucked: boolean;
   /** The user flicked the card away. */
   onTuck: () => void;
@@ -35,7 +35,16 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, tabColour
   children: React.ReactNode;
 }) {
   const [w, setW] = useState(160);
-  const off = w + right + 12;                       // fully past the screen edge
+  /* ★★★ ONE GEOMETRY, FROM THE WINDOW (Stuart, 2026-10-06, RC15 landscape: the chips sat ~43 pt inside the glass,
+   *  and once an open card ran off the edge beside tabs that were still inset). The card and the tab were both
+   *  placed at the caller's safe-area inset — the safe area's edge, not the screen's — and each worked out its
+   *  own slide distance from it. Now both are at right 0 with their content padded in by the inset, and everything
+   *  comes from edgeChipGeometry, read here from the live window + insets so a rotation, an iPad split or a Mac
+   *  window resize re-places both at once. */
+  const insets = useSafeAreaInsets();
+  const { width: windowW } = useWindowDimensions();
+  const geo = edgeChipGeometry({ windowW, insets, cardW: w });
+  const off = geo.cardOff;                          // fully past the screen edge
   const x = useRef(new Animated.Value(tucked ? off : 0)).current;
   const first = useRef(true);
   useEffect(() => {
@@ -76,7 +85,8 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, tabColour
   // The tab is the card's mirror: in when the card is out, out when it is in.
   // ★ "Out" is PAST THE SCREEN EDGE: the tab is anchored at `right` (the notch inset), so sliding it only its own
   //   width left it showing in the inset — beside the open card, in landscape (Stuart's screenshot, 2026-10-04).
-  const tabX = x.interpolate({ inputRange: [0, off], outputRange: [TAB_W + right + 4, 0], extrapolate: 'clamp' });
+  //   ★ 2026-10-06: the tab now reaches the glass itself (geo.tabW includes the inset), so `tabOff` is its whole width.
+  const tabX = x.interpolate({ inputRange: [0, off], outputRange: [geo.tabOff, 0], extrapolate: 'clamp' });
   const tabPan = useRef(PanResponder.create({
     onMoveShouldSetPanResponder: (_e, g) => g.dx < -6 && Math.abs(g.dx) > Math.abs(g.dy),
     onPanResponderRelease: (_e, g) => { if (g.dx < -20) onShowRef.current(); },
@@ -87,12 +97,12 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, tabColour
     <>
       <Animated.View {...pan.panHandlers} pointerEvents={tucked ? 'none' : 'auto'}
         onLayout={(e) => { const v = Math.ceil(e.nativeEvent.layout.width); if (v > 0 && v !== w) setW(v); }}
-        style={[ec.card, { top, right, transform: [{ translateX: x }] }]}>
+        style={[ec.card, { top, right: geo.right, maxWidth: geo.maxCardW, transform: [{ translateX: x }] }]}>
         {/* ★ JOINED TO THE EDGE, with a › pointing at it (Stuart, 2026-10-03: "move them to join the edge of the
             screen and then put an arrow to the left of the content pointing to the edge of the screen to show the
             card can be collapsed away"). The child squares its right side (see the callers); the arrow sits inside
             its frame, on the left, and tapping it tucks the card too. */}
-        <View style={[ec.row, { borderColor: frameColour ?? tabColour }]}>
+        <View style={[ec.row, { borderColor: frameColour ?? tabColour, paddingRight: geo.padRight }]}>
           <TouchableOpacity onPress={() => Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true })
                                           .start(() => onTuckRef.current())}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 2 }} accessibilityRole="button" accessibilityLabel={`Hide ${label}`}
@@ -103,10 +113,10 @@ export default function EdgeChip({ top, right, tucked, onTuck, onShow, tabColour
         </View>
       </Animated.View>
       <Animated.View {...tabPan.panHandlers} pointerEvents={tucked ? 'auto' : 'none'}
-        style={[ec.tabWrap, { top, right, transform: [{ translateX: tabX }] }]}>
+        style={[ec.tabWrap, { top, right: geo.right, transform: [{ translateX: tabX }] }]}>
         <TouchableOpacity onPress={onShow} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 10, right: 4 }}
           accessibilityRole="button" accessibilityLabel={`Show ${label}`}
-          style={[ec.tab, { borderColor: tabColour }]}>
+          style={[ec.tab, { borderColor: tabColour, width: geo.tabW, paddingRight: geo.padRight }]}>
           {tabIcon}
           <Text style={[ec.chev, { color: tabColour }]}>‹</Text>
         </TouchableOpacity>
@@ -123,7 +133,7 @@ const ec = StyleSheet.create({
   arrowHit: { justifyContent: 'center', paddingLeft: 7, paddingRight: 1 },
   arrow:    { fontSize: 20, fontWeight: '700', lineHeight: 22 },
   tabWrap:  { position: 'absolute', zIndex: 251 },
-  tab:      { width: TAB_W, height: TAB_H, borderTopLeftRadius: 12, borderBottomLeftRadius: 12,
+  tab:      { width: EDGE_TAB_W, height: EDGE_TAB_H, borderTopLeftRadius: 12, borderBottomLeftRadius: 12,
               borderWidth: 1.5, borderRightWidth: 0, backgroundColor: 'rgba(14,12,8,0.88)',
               alignItems: 'center', justifyContent: 'center', gap: 2 },
   chev:     { fontSize: 20, fontWeight: '700', lineHeight: 20, marginTop: -2 },
