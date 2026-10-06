@@ -13,6 +13,7 @@
 #include <vector>
 #include <rtl-sdr.h>
 #include "local_sdr_shim.h"
+#include "vibe_usb_recovery.h"   // ★ the gone-radio rules Kotlin reads — see nativeGiveUpOnGoneRadio
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark — see nativeRunBenchmark
 /* ★★ vibemap::setDir — where this server keeps its map pack. Android has no directory next to the
  *  executable and no /usr, which is what vibe_mapdata.h searches, so the path is set explicitly
@@ -1160,6 +1161,29 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeUsbNeedsFreshFd(JNIEnv*, jobject) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeAdoptFreshUsbFd(JNIEnv*, jobject, jint fd) {
     return vibe::LocalSdrShim::instance().adoptFreshUsbFd((int)fd) ? JNI_TRUE : JNI_FALSE;
+}
+/** ★★ The radio attached again — spend the fresh-fd back-off. See LocalSdrShim::usbRadioAttached. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeUsbRadioAttached(JNIEnv*, jobject) {
+    vibe::LocalSdrShim::instance().usbRadioAttached();
+}
+/** ★★★ Keep radio alive — see LocalSdrShim::setKeepRadioAlive. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetKeepRadioAlive(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setKeepRadioAlive(on == JNI_TRUE);
+}
+/** ★★★ THE GONE-RADIO RULES, ONE COPY (vibe_usb_recovery.h, tested by vibeserver/test-fd-radio-recovery.cpp).
+ *  VibeServerRestore keeps the departure stamp; the verdicts on it are read from here, never re-written
+ *  in Kotlin — a rule written twice is a rule that will disagree with itself. */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeGiveUpOnGoneRadio(JNIEnv*, jobject, jboolean stamped, jlong goneMs,
+                                                          jboolean keepAlive) {
+    return vibe::usbrecovery::giveUpOnGoneRadio(stamped == JNI_TRUE, (long long)goneMs, keepAlive == JNI_TRUE)
+        ? JNI_TRUE : JNI_FALSE;
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeHoldCpuAwake(JNIEnv*, jobject, jboolean stamped, jlong goneMs) {
+    return vibe::usbrecovery::holdCpuAwake(stamped == JNI_TRUE, (long long)goneMs) ? JNI_TRUE : JNI_FALSE;
 }
 /** ★★ Dead handle, whether or not a fresh fd is wanted right now — see LocalSdrShim::usbHandleDead. */
 extern "C" JNIEXPORT jboolean JNICALL
