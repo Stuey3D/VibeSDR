@@ -940,9 +940,6 @@ export interface ScreenText {
   color:    string;
   glow:     string;
   rgb:      string;
-  /** The status row's type at scale 1 (StatusWell): Doto's §8.1 12 pt; Nixie One's small x-height reads a
-   *  point smaller, so it gets 13. */
-  statusSize: number;
   /** Multiply a TEXT size by this for the display's font: DSEG14's cell is the whole em where Atkinson's capitals
    *  are ~0.66 of it (modeBox SEG_MODE_FONT_K), so a segment string at the same size would stand half again taller. */
   sizeK:    number;
@@ -957,13 +954,13 @@ export function screenTextFor(display: DisplayStyle, text: ResolvedTextColour): 
   const lit = { color: text.core, glow: text.glow, rgb: text.rgb };
   if (display === 'nixie') {
     return { style: 'nixie', font: FONT_NIXIE, face: null, oneWeight: true, allowOverride: false,
-             color: NEON_TEXT.core, glow: NEON_TEXT.glow, rgb: LED.neon.rgb, statusSize: 13, sizeK: 1, charEm: 0.6 };
+             color: NEON_TEXT.core, glow: NEON_TEXT.glow, rgb: LED.neon.rgb, sizeK: 1, charEm: 0.6 };
   }
-  if (display === 'dot') return { style: 'dot', font: FONT_DOTO, face: 'dot', oneWeight: true, allowOverride: false, ...lit, statusSize: 12, sizeK: 1,
+  if (display === 'dot') return { style: 'dot', font: FONT_DOTO, face: 'dot', oneWeight: true, allowOverride: false, ...lit, sizeK: 1,
                                   charEm: 0.66 };
-  if (display === 'seg') return { style: 'seg', font: FONT_SEG14, face: 'seg', oneWeight: true, allowOverride: false, ...lit, statusSize: 12, sizeK: 0.66,
+  if (display === 'seg') return { style: 'seg', font: FONT_SEG14, face: 'seg', oneWeight: true, allowOverride: false, ...lit, sizeK: 0.66,
                                   charEm: 0.82 };
-  return { style: 'hyper', font: FONT_HYPER, face: null, oneWeight: false, allowOverride: true, ...lit, statusSize: 12, sizeK: 1, charEm: 0.56 };
+  return { style: 'hyper', font: FONT_HYPER, face: null, oneWeight: false, allowOverride: true, ...lit, sizeK: 1, charEm: 0.56 };
 }
 
 /** A big element's own colour, unless the display is lit (Nixie neon, a one-colour VFD) — then the display's. Pass
@@ -995,10 +992,11 @@ export interface StatusDisplay { font: string; color: string; glow: string; rgb:
 export function statusDisplayFor(screen: ScreenText, metal: boolean, scaledSize: number,
                                  defaultSize: number): StatusDisplay | null {
   if (!metal && screen.style === 'hyper') return null;
-  // ★ Metal: §8.1's 12 pt (Nixie One 13 — its small x-height). The default deck: its own footer size, scaled the
-  //   same way, so the bar does not grow under a new font. The cells, and the metal window, keep §8.2's 10 pt floor
-  //   (dot matrix and segments fall apart below it; what does not fit is dropped, never squeezed).
-  const size = (metal ? scaledSize : defaultSize) * (screen.statusSize / 12);
+  // ★ Metal: §8.1's 12 pt on every Display. (Nixie One at 13 for its small x-height was tried and measured: row 4 then
+  //   overflows an SE in Display Zoom by 4 pt — test_faceplate_screenfont.) The default deck: its own footer size, so
+  //   the bar does not grow under a new font. The cells, and the metal window, keep §8.2's 10 pt floor (dot matrix and
+  //   segments fall apart below it; what does not fit is dropped, never squeezed).
+  const size = metal ? scaledSize : defaultSize;
   return { font: screen.font, color: screen.color, glow: screen.glow, rgb: screen.rgb,
            size: metal || screen.face ? Math.max(10, size) : size, face: screen.face };
 }
