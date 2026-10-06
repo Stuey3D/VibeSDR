@@ -422,10 +422,20 @@ export default function DecoderPanel({
    *  held requiring multiple taps which then meant hitting the buttons next to it … on the ALIGN button have an
    *  overlay pop up over the chart <-----------> drag for rough alignment then use buttons to fine tune. Slant keeps
    *  the buttons, but they need to be made bigger and also be able to be held for larger adjustments").
-   *  ALIGN turns the picture into a drag target (DecoderImageCanvas alignPreview) and swaps the strip for the fine
-   *  keys: 1 px and 5 px each way, DONE. Every adjust key repeats while held, speeding up (useHoldRepeat). The shift
-   *  is still THIS chart's only; the slant is still saved per frequency; RESET still returns both to automatic. */
-  const [aligning, setAligning] = useState(false);
+   * ★★★ …AND ONLY THE KEYS IN USE (Stuart, same day, on the first cut: "the align buttons also need to be bigger too,
+   *  same size as the slant ones, show only the ones in use. So when opening the adjust it shows the auto margin and
+   *  auto slant figures and then you press to adjust them and then the arrows show"). ADJ opens a SUMMARY — the two
+   *  figures actually applied (this chart's shift, the slant drawn), each a key, and RESET. MARGIN opens the drag
+   *  cover over the chart (DecoderImageCanvas alignPreview) with ◀ ▶ DONE; SLANT opens − + DONE; DONE goes back.
+   *  Every arrow is the same 44 pt key and repeats while held, speeding up (useHoldRepeat). The shift is still THIS
+   *  chart's only; the slant is still saved per frequency; RESET still returns both to automatic. */
+  /* ★ The shift as the listener reads it: px, signed, the short way round on this chart's width (from "1809x…"). */
+  const chartW = parseInt(imageInfo, 10) || 1809;
+  const signedPx = (s: number) => { const v = Math.round((((s % chartW) + chartW + chartW / 2) % chartW) - chartW / 2);
+                                    return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v)}`; };
+  const signedSlant = (k: number) => `${k > 0 ? '+' : k < 0 ? '−' : ''}${Math.abs(k).toFixed(3)}`;
+  const [adjMode, setAdjMode] = useState<'summary' | 'align' | 'slant'>('summary');
+  const aligning = adjMode === 'align';
   const curShift = manualShift ?? autoShift ?? 0;
   const shiftRef = useRef(curShift);
   shiftRef.current = curShift;
@@ -439,7 +449,7 @@ export default function DecoderPanel({
   };
   const onAlignDrag = useCallback((s: number, done: boolean) => { if (done) setManualShift(s); }, []);
   const hold = useHoldRepeat();
-  useEffect(() => { if (!adjOpen || !isWefax) setAligning(false); }, [adjOpen, isWefax]);
+  useEffect(() => { if (!adjOpen || !isWefax) setAdjMode('summary'); }, [adjOpen, isWefax]);
   const [minimised, setMinimised] = useState(false);
   const [dabSpeedOpen, setDabSpeedOpen] = useState(false);   // DAB speed-fix popup
   // ★★ The spots filters were CYCLERS: each tap advanced by one and you read the label to find
@@ -1219,41 +1229,49 @@ export default function DecoderPanel({
             DecoderBody is nothing at all. Not drawn when minimised — an empty window is not "hidden". */}
         {!minimised && (<DecoderBody>
         {/* Body — hidden when minimised; image canvas for WEFAX/SSTV */}
-        {!minimised && isImageMode && isWefax && adjOpen && aligning && !viewingPrev && (
-          /* ★ ALIGN open: drag the picture for the rough move, these for the last few px (1 / 5 each way), held to
-             repeat. ◀ moves the picture left. ≥ 44 pt keys, 12 pt apart, so a thumb lands on the one it aims at. */
+        {!minimised && isImageMode && isWefax && adjOpen && (
+          /* ★ One row at a time (see 'ONLY THE KEYS IN USE'): the summary, or MARGIN's keys, or SLANT's. Every key the
+             same 44 pt, 12 pt apart. ★ MARGIN has ◀ ▶ only, no 5 px pair: on the narrowest phone (SE, Display Zoom:
+             ~284 pt for the row) four arrows + DONE at this size do not fit on one line, and a held 1 px key goes
+             ×5 after eight repeats anyway — and the drag is the coarse move. */
           <View style={dp.adjRow}>
-            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Move the chart left 5 pixels"
-              {...hold((m) => nudgeShift(SHIFT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>◀ 5</DecoderKeyLabel></HBtn>
-            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Move the chart left 1 pixel"
-              {...hold((m) => nudgeShift(m))}><DecoderKeyLabel style={dp.bigKeyTxt}>◀ 1</DecoderKeyLabel></HBtn>
-            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Move the chart right 1 pixel"
-              {...hold((m) => nudgeShift(-m))}><DecoderKeyLabel style={dp.bigKeyTxt}>1 ▶</DecoderKeyLabel></HBtn>
-            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Move the chart right 5 pixels"
-              {...hold((m) => nudgeShift(-SHIFT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>5 ▶</DecoderKeyLabel></HBtn>
-            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Finish aligning"
-              onPress={() => setAligning(false)}><DecoderKeyLabel active style={dp.bigKeyTxt}>DONE</DecoderKeyLabel></HBtn>
-          </View>
-        )}
-        {!minimised && isImageMode && isWefax && adjOpen && !(aligning && !viewingPrev) && (
-          <View style={dp.adjRow}>
-            {!viewingPrev && (
-              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Align the chart: drag it sideways"
-                onPress={() => setAligning(true)}>
-                <DecoderKeyLabel active={manualShift != null} style={dp.bigKeyTxt}>ALIGN</DecoderKeyLabel>
+            {adjMode === 'align' && !viewingPrev ? (<>
+              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Move the chart left (hold to repeat)"
+                {...hold((m) => nudgeShift(m))}><DecoderKeyLabel style={dp.bigKeyTxt}>◀</DecoderKeyLabel></HBtn>
+              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Move the chart right (hold to repeat)"
+                {...hold((m) => nudgeShift(-m))}><DecoderKeyLabel style={dp.bigKeyTxt}>▶</DecoderKeyLabel></HBtn>
+              <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>{`${signedPx(curShift)} px`}</Text>
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Finish aligning"
+                onPress={() => setAdjMode('summary')}><DecoderKeyLabel active style={dp.bigKeyTxt}>DONE</DecoderKeyLabel></HBtn>
+            </>) : adjMode === 'slant' ? (<>
+              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Slant less (hold to repeat)"
+                {...hold((m) => nudgeSlant(-SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>−</DecoderKeyLabel></HBtn>
+              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Slant more (hold to repeat)"
+                {...hold((m) => nudgeSlant(SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>+</DecoderKeyLabel></HBtn>
+              <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>{signedSlant(drawSlant)}</Text>
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Finish setting the slant"
+                onPress={() => setAdjMode('summary')}><DecoderKeyLabel active style={dp.bigKeyTxt}>DONE</DecoderKeyLabel></HBtn>
+            </>) : (<>
+              {/* ★ The figures APPLIED: this chart's shift (auto-align's, or the listener's) and the slant drawn. */}
+              {!viewingPrev && (
+                <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the margin: drag the chart sideways"
+                  onPress={() => setAdjMode('align')}>
+                  <DecoderKeyLabel active={manualShift != null} style={dp.bigKeyTxt}>
+                    {`MARGIN ${manualShift != null ? 'MANUAL' : 'AUTO'} ${signedPx(curShift)} px`}
+                  </DecoderKeyLabel>
+                </HBtn>
+              )}
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the slant"
+                onPress={() => setAdjMode('slant')}>
+                <DecoderKeyLabel active={alignSaved} style={dp.bigKeyTxt}>
+                  {`SLANT ${alignSaved ? 'MANUAL' : 'AUTO'} ${signedSlant(drawSlant)}`}
+                </DecoderKeyLabel>
               </HBtn>
-            )}
-            <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>
-              {!alignSaved && autoAl ? `SLANT auto ${drawSlant.toFixed(3)}` : `SLANT ${align.slant.toFixed(3)}`}
-            </Text>
-            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Slant less"
-              {...hold((m) => nudgeSlant(-SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>−</DecoderKeyLabel></HBtn>
-            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Slant more"
-              {...hold((m) => nudgeSlant(SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>+</DecoderKeyLabel></HBtn>
-            {(alignSaved || manualShift != null) && (
-              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Back to automatic"
-                onPress={() => { changeAlign(null); setManualShift(null); }}><DecoderKeyLabel style={dp.bigKeyTxt}>RESET</DecoderKeyLabel></HBtn>
-            )}
+              {(alignSaved || manualShift != null) && (
+                <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Back to automatic"
+                  onPress={() => { changeAlign(null); setManualShift(null); }}><DecoderKeyLabel style={dp.bigKeyTxt}>RESET</DecoderKeyLabel></HBtn>
+              )}
+            </>)}
           </View>
         )}
         {!minimised && isImageMode && imageRef && (
@@ -1467,6 +1485,8 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
    *  header keys' size was what made "hitting the buttons next to it" so easy. Same DecoderKey, same chassis look. */
   bigKey: { minWidth: 48, minHeight: 44, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
   bigKeyTxt: { fontSize: 14 },
+  /* ★ An arrow key: the same 44 pt key, wider, so a thumb on ◀ cannot reach ▶. */
+  arrowKey: { minWidth: 64, minHeight: 44, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
   // Sits over the whole box; only ever an opacity animation, so it stays on the native driver.
   flash: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
