@@ -859,8 +859,11 @@ export function LinkIndicator({ bus, hide, noNode = false, readout, onUnit, oneL
           if (!g) return <StatusText>{`· ${r.agcText}`}</StatusText>;
           // ★ VCR / DOT: one run, the arrow its own cell — always there (dark when steady), so the value never
           //   shifts by a cell when the loop starts or stops stepping.
+          /* ★ VCR rounds the gain to whole dB (Stuart, 2026-10-06): the 14-segment decimal point is so small that
+           *  "40.2dB" read as "402dB". A tenth of a dB means nothing at a glance; DOT keeps it, its point is clear. */
+          const gv = sd.face === 'seg' ? `${Math.round(parseFloat(g.value))}dB` : g.value;
           if (sd.face) return <StatusCells sd={sd as VfdStatus} label={r.agcText}
-            parts={[...statusParts('· ' + g.label), { kind: 'arrow', dir: g.dir }, ...statusParts(g.value + g.tail)]} />;
+            parts={[...statusParts('· ' + g.label), { kind: 'arrow', dir: g.dir }, ...statusParts(gv + g.tail)]} />;
           return (
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <StatusText>{`· ${g.label}`}</StatusText>
