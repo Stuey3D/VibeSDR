@@ -13,6 +13,9 @@ the DAB CSV has EID, Site, Transmitter Area, Block, TII Main Id (Hex), TII Sub I
   goes through the same generator (map its columns below) and lands in vibe_dab_txdb_<ecc>.h —
   or, without a rebuild, in <data dir>/dab-tii-<ecc>.csv as `eid,main,sub,site,area,lat,lon`,
   which the server loads at start (see vibe_dab_txdb.h).
+★ 2026-10-06: the other countries' importers (Switzerland, Czechia, the Netherlands) live in
+  scripts/dab-sites/, with each source's licence and attribution; docs/DAB-SITES-SOURCES.md has the
+  survey. Rows from this generator take the DabTx defaults: src = Ofcom, matched by EId.
 """
 import csv, sys
 
