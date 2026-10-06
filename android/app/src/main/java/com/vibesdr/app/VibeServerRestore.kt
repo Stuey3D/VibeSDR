@@ -104,7 +104,7 @@ object VibeServerRestore {
      *   server is stopped and DISARMED, as though the owner had pressed Stop.
      * ★ A reboot is never a blip, however quick: see radioGoneForMs.
      */
-    const val RADIO_BLIP_WINDOW_MS = 5 * 60 * 1000L
+    const val RADIO_BLIP_WINDOW_MS = 5 * 60 * 1000L   // ★ = vibe_usb_recovery.h kRadioBlipWindowMs, which DECIDES; this words the logs
 
     // ★ The moment the served radio LEFT, on three clocks — see radioGoneForMs for why three.
     private const val K_GONE_ELAPSED  = "radioGoneElapsedMs"   // SystemClock.elapsedRealtime()
@@ -164,11 +164,103 @@ object VibeServerRestore {
         return el - el0
     }
 
-    /** ★ Has the gone radio outstayed its blip window? False while it is merely away, or never went. */
+    /** ★ Has the gone radio outstayed its blip window? False while it is merely away, or never went.
+     *  ★★★ AND NEVER, ON THIS BOOT, WITH KEEP RADIO ALIVE ON (2026-10-06) — the verdict is
+     *      vibe_usb_recovery.h's giveUpOnGoneRadio, one tested copy; this only supplies the facts. */
     fun radioGoneTooLong(ctx: Context): Boolean {
         if (!prefs(ctx).contains(K_GONE_ELAPSED)) return false
-        val gone = radioGoneForMs(ctx)
-        return gone < 0 || gone > RADIO_BLIP_WINDOW_MS
+        return VibeLocalSDR.giveUpOnGoneRadio(true, radioGoneForMs(ctx), keepRadioAlive(ctx))
+    }
+
+    /** ★ The config the server was started with, whole (K_CONFIG); empty when it has never run. */
+    private fun storedConfig(ctx: Context): org.json.JSONObject =
+        try { org.json.JSONObject(prefs(ctx).getString(K_CONFIG, "{}") ?: "{}") } catch (_: Throwable) { org.json.JSONObject() }
+
+    /** ★★★ THE OWNER'S "KEEP RADIO ALIVE", as the running server was given it (updateConfig keeps it current) —
+     *  or this device's default where the stored config predates the switch. See VibeServerBoot.keepRadioAliveDefault. */
+    fun keepRadioAlive(ctx: Context): Boolean = VibeServerBoot.keepRadioAlive(ctx, storedConfig(ctx))
+
+    /**
+     * ★★★ THE RADIO RE-APPEARED BUT IS NOT BACK YET — restart the gone clock (2026-10-06).
+     *
+     * The Sony, in standby with no server holding it awake, brought the dongle back every twelve seconds for
+     * ~10 s at a time, all night. Each of those is the radio coming BACK, not staying away — and judged on the
+     * clock of its FIRST departure, a radio that kept reappearing was "gone five minutes" and given up on for
+     * good. Stuart's five minutes are about a radio that stays away ("if unplugged for a decent amount of
+     * time"); one that keeps coming back is a flaky port, the case he wanted ridden through.
+     * ★ So an attach restarts the clock from now. It is NOT noteRadioBack: nothing has been adopted yet, and
+     *   the engine may still fail the fresh handle (a wedged HF+ fails every one — see recoverUsbIfNeeded), in
+     *   which case the radio goes on being gone, timed from its latest appearance.
+     * ★ Only an existing stamp is moved; a radio that was never seen to leave has nothing to restart.
+     */
+    fun noteRadioSeen(ctx: Context, why: String) {
+        val p = prefs(ctx)
+        if (!p.getBoolean(K_ARMED, false) || !p.contains(K_GONE_ELAPSED)) return
+        val el = android.os.SystemClock.elapsedRealtime()
+        p.edit()
+            .putLong(K_GONE_ELAPSED, el)
+            .putLong(K_GONE_BOOTWALL, System.currentTimeMillis() - el)
+            .putInt(K_GONE_BOOTNO, bootCount(ctx))
+            .commit()   // ★ commit, as noteRadioGone: an attach can be followed at once by another detach
+        Log.i(TAG, "the server's radio re-appeared ($why) — taking it back; the gone clock starts again from now")
+    }
+
+    /** ★★★ HOLD THE CPU AWAKE? Only while there is a radio to serve — vibe_usb_recovery.h holdCpuAwake, whose note
+     *  has the Sony's evidence: a wake lock held over a radio that has gone is what kept it gone. Read by
+     *  RtlTcpServerService on its tick; the attach that brings the radio back takes the lock again at once. */
+    fun holdCpuAwake(ctx: Context): Boolean {
+        if (!prefs(ctx).contains(K_GONE_ELAPSED)) return true
+        return VibeLocalSDR.holdCpuAwake(true, radioGoneForMs(ctx))
+    }
+
+    /** ★ Set by RtlTcpServerService while it runs: asks it to try the hand-back NOW, repeatedly, for the few
+     *  seconds a re-attached radio may be on the bus. Null when no service is running. */
+    @Volatile var attachKick: (() -> Unit)? = null
+
+    /**
+     * ★★★ A RADIO WAS ATTACHED — the one entry for all three places Android says so (2026-10-06): the service's
+     * attach watch, and the activity Android launches for the device in the main app AND in Lite.
+     *
+     * ★★ ADOPT IT WHILE IT IS THERE. The recovery used to learn of a returning radio only from its own 2 s poll,
+     *    and a fresh handle that failed on the way out could leave it backing off for 60 s — longer than the Sony
+     *    keeps a re-attached dongle on the bus in standby. Now the attach itself spends the back-off
+     *    (usbRadioAttached), restarts the gone clock (noteRadioSeen) and asks the service to try straight away.
+     * ★★ THE ACTIVITY'S ATTACH IS THE ONE WITH THE PERMISSION. Android launches the app for a radio the owner
+     *    ticked "use by default" for, and grants it in the same step; the broadcast can arrive a moment before
+     *    the grant. Both call this, so whichever comes second finds the permission there.
+     * ★ No server running in this process: the attach RESUME (attachResumeWanted — a blip, or keep radio alive).
+     *   Lite never had it; a Lite whose process died while its radio was away had no way back but a hand on the
+     *   remote. It is the same restore every other door uses.
+     */
+    fun onRadioAttached(ctx: Context, dev: UsbDevice?, why: String) {
+        if (dev != null && !isServable(dev)) return
+        // ★ Nothing armed, nothing to do: a running server is always armed (arm at start, disarm at stop), and this
+        //   keeps an ordinary plug-in from loading the engine at all.
+        if (!isArmed(ctx)) return
+        if (isShimServing()) {
+            // ★ Only a server whose radio has gone, or whose handle is dead, has anything to take back.
+            if (!prefs(ctx).contains(K_GONE_ELAPSED) && !VibeLocalSDR.usbHandleDead()) return
+            if (dev != null && !isServedRadio(dev)) return
+            VibeLocalSDR.usbRadioAttached()
+            noteRadioSeen(ctx, why)
+            attachKick?.invoke()
+            return
+        }
+        resumeServerIfWanted(ctx)
+    }
+
+    /** ★ Put a stopped-by-departure server back on an attach — the main app's MainActivity did this alone until
+     *  2026-10-06 (see its note for the history); now shared, so Lite does it too. attachResumeWanted decides. */
+    fun resumeServerIfWanted(ctx: Context) {
+        if (!attachResumeWanted(ctx)) return
+        val svc = android.content.Intent(ctx, RtlTcpServerService::class.java)
+            .putExtra(RtlTcpServerService.EXTRA_RESTORE, true)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) ctx.startForegroundService(svc)
+            else ctx.startService(svc)
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not resume the server on attach: $t")
+        }
     }
 
     /** ★★★ PUT THE SERVER BACK WHEN ITS RADIO IS ATTACHED? Only after a BLIP — see RADIO_BLIP_WINDOW_MS.
@@ -192,8 +284,11 @@ object VibeServerRestore {
         if (!isArmed(ctx)) return false
         if (isShimServing()) return false
         val gone = radioGoneForMs(ctx)
-        if (gone in 0..RADIO_BLIP_WINDOW_MS) {
-            Log.i(TAG, "radio back after ${gone / 1000} s — a blip, resuming the server")
+        // ★★ THE SAME VERDICT AS EVERY OTHER DOOR (radioGoneTooLong), so keep radio alive resumes after any absence
+        //    in this boot — where this used to write "0..five minutes" out a second time (2026-10-06).
+        if (gone >= 0 && !radioGoneTooLong(ctx)) {
+            Log.i(TAG, "radio back after ${gone / 1000} s — " +
+                       (if (gone > RADIO_BLIP_WINDOW_MS) "keep radio alive is on" else "a blip") + ", resuming the server")
             return true
         }
         // ★★ A REBOOT WITH "START WHEN POWER RETURNS" ON IS THE BOOT STARTER'S (VibeBootStart), not ours to disarm.
@@ -294,7 +389,8 @@ object VibeServerRestore {
         if (cfg.length() == 0) { conn.close(); return "no stored config" }
 
         VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))   // see VibeServerBoot
-        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir, serveOnLan = true)
+        val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId, ctx.filesDir, serveOnLan = true,
+                                                keepRadioAlive = VibeServerBoot.keepRadioAlive(ctx, cfg))
         VibeServerBoot.startBatteryMonitor(ctx)   // after start — see VibeLocalSdrModule
         // ★★★ AND PUT THE PUBLIC LISTING BACK. The tunnel dies with the process that spawned it, so
         //     an update, a low-memory kill or a reboot leaves the directory advertising an address

@@ -93,7 +93,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★ The legacy com.vibesdr.app build (BRIEF-android-package-migration): it shows the "new home" notice.
         "isLegacyPackage" to BuildConfig.IS_LEGACY_PACKAGE,
         // ★ "Start automatically when power returns" is offered only where Android may allow it — VibeBootStart.
-        "startOnPowerSupported" to VibeBootStart.supported())
+        "startOnPowerSupported" to VibeBootStart.supported(),
+        // ★ "Keep radio alive" starts ON on a TV or TV box — VibeServerBoot.keepRadioAliveDefault, the one rule.
+        "keepRadioAliveDefault" to VibeServerBoot.keepRadioAliveDefault(reactContext))
 
     /** ★ The owner's "Start automatically when power returns" switch, stored natively because the boot
      *  receiver reads it with no JS running. See VibeBootStart. */
@@ -448,7 +450,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                     VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
                     phase("starting the receiver with the server's own radio settings")
                     val port = VibeServerBoot.applyAndStart(cfg, conn.fileDescriptor, dev.vendorId, dev.productId,
-                                                            reactContext.filesDir, serveOnLan = false)
+                                                            reactContext.filesDir, serveOnLan = false,
+                                                            keepRadioAlive = VibeServerBoot.keepRadioAlive(reactContext, owner))
                     Log.i(TAG, "DAB quick scan: private engine on the owner's settings — bias-T " +
                                (if (cfg.optBoolean("biasT", false)) "ON" else "off") +
                                ", ppm ${cfg.optDouble("ppm", 0.0).toInt()}, AGC " +
@@ -507,6 +510,18 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             VibeServerRestore.updateConfig(reactContext, "dabScanLabels", mode)
             promise.resolve(true)
         } catch (t: Throwable) { promise.reject("dab_scan_failed", t.message ?: "$t") }
+    }
+
+    /** ★★★ KEEP RADIO ALIVE, APPLIED NOW (2026-10-06) — the same lesson as setDabScanLabels above: a TV server runs
+     *  for days, so a switch that waits for the next start looks broken. Both halves: the engine's (never release
+     *  while serving) and the restore config's, which is where VibeServerRestore reads the give-up half from. */
+    @ReactMethod
+    fun setKeepRadioAlive(on: Boolean, promise: Promise) {
+        try {
+            VibeLocalSDR.setKeepRadioAlive(on)
+            VibeServerRestore.updateConfig(reactContext, "keepRadioAlive", on)
+            promise.resolve(true)
+        } catch (t: Throwable) { promise.reject("keep_alive_failed", t.message ?: "$t") }
     }
 
     /**
@@ -813,7 +828,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         // ★ Before start: the engine cannot read the descriptor on an fd-open. See usbModelName().
         VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
         val port = VibeServerBoot.applyAndStart(cfg, fd, dev.vendorId, dev.productId,
-                                                reactContext.filesDir, serveOnLan = true)
+                                                reactContext.filesDir, serveOnLan = true,
+                                                keepRadioAlive = VibeServerBoot.keepRadioAlive(reactContext, cfg))
         // ★ AFTER the server is up: the monitor pushes the sticky state the moment it registers, and
         //   a push before the native library is loaded is dropped (473 showed no level, 2026-09-17).
         VibeServerBoot.startBatteryMonitor(reactContext)

@@ -236,6 +236,19 @@ object VibeLocalSDR {
     fun adoptFreshUsbFd(fd: Int): Boolean = loaded && nativeAdoptFreshUsbFd(fd)
     private external fun nativeUsbNeedsFreshFd(): Boolean
     private external fun nativeAdoptFreshUsbFd(fd: Int): Boolean
+    /** ★★ The radio attached again: the fresh-fd back-off left by the OLD device instance is spent. */
+    fun usbRadioAttached() { if (loaded) nativeUsbRadioAttached() }
+    private external fun nativeUsbRadioAttached()
+    /** ★★★ Keep radio alive — the engine's half (never release while serving). See VibeServerRestore.keepRadioAlive. */
+    fun setKeepRadioAlive(on: Boolean) { ensureLoaded(); nativeSetKeepRadioAlive(on) }
+    private external fun nativeSetKeepRadioAlive(on: Boolean)
+    /** ★★★ The gone-radio verdicts — vibe_usb_recovery.h, ONE copy, tested in C++. See VibeServerRestore. */
+    fun giveUpOnGoneRadio(stamped: Boolean, goneMs: Long, keepAlive: Boolean): Boolean {
+        ensureLoaded(); return nativeGiveUpOnGoneRadio(stamped, goneMs, keepAlive)
+    }
+    private external fun nativeGiveUpOnGoneRadio(stamped: Boolean, goneMs: Long, keepAlive: Boolean): Boolean
+    fun holdCpuAwake(stamped: Boolean, goneMs: Long): Boolean { ensureLoaded(); return nativeHoldCpuAwake(stamped, goneMs) }
+    private external fun nativeHoldCpuAwake(stamped: Boolean, goneMs: Long): Boolean
     private external fun nativeSetUsbModelName(name: String)
     private external fun nativeSetTrustedProxies(csv: String)
 

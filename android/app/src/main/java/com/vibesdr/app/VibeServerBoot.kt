@@ -137,6 +137,23 @@ object VibeServerBoot {
     fun autoRestore(cfg: JSONObject): Boolean = cfg.b("autoRestore", true)
 
     /**
+     * ★★★ KEEP RADIO ALIVE (2026-10-06) — "use if this device's USB ports power down when idle".
+     *
+     * The Sony in standby drops a dongle and brings it back by itself, sometimes minutes later, and the five-minute
+     * rule (VibeServerRestore.RADIO_BLIP_WINDOW_MS) then stopped and disarmed its server six seconds before the
+     * radio returned. With this on, a running server waits for its radio however long it takes and takes it back the
+     * moment it attaches, and the engine never RELEASES it while serving (the low battery state parks it instead) —
+     * so the port is never left quiet by us. See vibe_usb_recovery.h giveUpOnGoneRadio and g_vsKeepRadioAlive.
+     * ★ ON by default where nobody is likely to be standing over the box: a television or a TV box (remoteDriven —
+     *   the same rule the remote navigation uses, so a box that declares a touchscreen it does not have counts).
+     *   OFF on a phone or tablet, where Stuart's five minutes stand: an owner who unplugged the radio may well have
+     *   forgotten they were serving, and the battery floor's release is what saves a phone server's battery.
+     * ★ A saved choice always wins; absent (a config stored by an older build) means this default, on every path.
+     */
+    fun keepRadioAliveDefault(ctx: Context): Boolean = try { remoteDriven(ctx) } catch (_: Throwable) { false }
+    fun keepRadioAlive(ctx: Context, cfg: JSONObject): Boolean = cfg.b("keepRadioAlive", keepRadioAliveDefault(ctx))
+
+    /**
      * Apply EVERY setting in `cfg` and open the radio. Returns the listening port, or <= 0.
      *
      * ★ The caller owns the USB connection and must close it if this returns <= 0 — it is the only
@@ -192,8 +209,11 @@ object VibeServerBoot {
 
     /** ★ `serveOnLan` is REQUIRED, never defaulted: false only for the private DAB scan engine — see
      *  privateScanConfig. A default would let a new caller serve the LAN without deciding to. */
+    /** ★ `keepRadioAlive` is REQUIRED too, for the same reason: it needs a Context for its default, which this
+     *  function has never had, and a defaulted parameter is how a new start path ships without it. Callers pass
+     *  keepRadioAlive(ctx, cfg). */
     fun applyAndStart(cfg: JSONObject, fd: Int, vendorId: Int, productId: Int, filesDir: File,
-                      serveOnLan: Boolean): Int {
+                      serveOnLan: Boolean, keepRadioAlive: Boolean): Int {
         val centerFreq = cfg.n("centerFreq", 100_000_000.0)
         val sampleRate = cfg.n("sampleRate", 2_400_000.0)
         // ★★★ THE RESTING GAIN IS ALSO THE STARTING GAIN, and until now it was neither.
@@ -243,6 +263,7 @@ object VibeServerBoot {
         VibeLocalSDR.setVibeServerSpectrogram(cfg.b("spectrogram", false))
         // ★ 0 = never park. 300 s matches the desktop's own default.
         VibeLocalSDR.setVibeServerIdleGrace(cfg.n("idleGraceSec", 300.0))
+        VibeLocalSDR.setKeepRadioAlive(keepRadioAlive)   // ★ before the radio opens — see keepRadioAliveDefault
         VibeLocalSDR.setVibeServerLandingInfo(
             cfg.s("antenna"), cfg.s("antennaIcon"),
             cfg.s("landingMessage"), cfg.s("landingLinkUrl"), cfg.s("landingLinkLabel"))
