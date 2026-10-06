@@ -116,11 +116,12 @@ for (const display of DISPLAYS) for (const chassis of CHASSIS) for (const text o
      && /fontFamily: sc\.font/.test(dft) && /screenInk\(sc/.test(dft) && /screenOneWeight\(sc\)/.test(dft)
      && /screenString\(sc\.style/.test(dft));
   const sdr = src('src/screens/SDRScreen.tsx');
-  ok('SDRScreen: the idle-terms notice in the display font',
-     /<DisplayFontText wrap style=\{\[styles\.powersavePillText/.test(sdr));
-  eq('SDRScreen: both rotate hints in the display font',
-     (sdr.match(/<DisplayFontText style=\{styles\.rotateBannerText\}>/g) ?? []).length, 2);
-  ok('SDRScreen: no rotate hint left in a bare Text', !/<Text style=\{styles\.rotateBannerText\}>/.test(sdr));
+  // ★ Stuart 2026-10-06: "only the main controls and VTS need this, the rest of the menus etc can be standard" —
+  //   the idle-terms pill and the rotate hints are NOT controls, so they stay in the standard font.
+  ok('SDRScreen: the idle-terms notice stays standard',
+     /<Text style=\{\[styles\.powersavePillText/.test(sdr) && !/<DisplayFontText wrap style=\{\[styles\.powersavePillText/.test(sdr));
+  eq('SDRScreen: both rotate hints stay standard',
+     (sdr.match(/<Text style=\{styles\.rotateBannerText\}>/g) ?? []).length, 2);
   const vts = src('src/components/VTSBar.tsx');
   ok('VTSBar: the strip draws in its resolved font (COL.font = vts.font)', /fontFamily: COL\.font/.test(vts));
 

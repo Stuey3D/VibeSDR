@@ -107,7 +107,6 @@ import { DecoderClient, RTTY_PRESETS, timeStationFor,
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { registerIqCode } from '../services/iqPairing';
 import AntennaBandNotice from '../components/AntennaBandNotice';
-import DisplayFontText from '../components/DisplayFontText';
 import { parseAntennaBands, hasAntennaBands, type AntennaBands } from '../utils/antennaBands';
 import { MIN_HZ, MAX_HZ, STEPS, stepsForFreq, fetchOccupancy,
          isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
@@ -10281,12 +10280,12 @@ export default function SDRScreen({ route, navigation }: Props) {
                         // about losing the connection must outrank the content it is about.
                         zIndex: 240,
                         borderColor: 'rgba(255,160,0,0.55)' }]}>
-          {/* ★ In the main display's font (2026-10-06, Stuart: every big on-screen element follows it). */}
-          <DisplayFontText wrap style={[styles.powersavePillText, { color: 'rgba(255,190,110,0.95)' }]}>
+          {/* ★ Standard font, not the display's (Stuart 2026-10-06: "only the main controls and VTS need this"). */}
+          <Text style={[styles.powersavePillText, { color: 'rgba(255,190,110,0.95)' }]}>
             {`\u23F1  This receiver disconnects idle listeners after ${
               serverIdleSecs % 60 === 0 ? `${serverIdleSecs / 60} min` : `${serverIdleSecs}s`
             } \u2014 it will ask first`}
-          </DisplayFontText>
+          </Text>
         </View>
       ) : null}
 
@@ -10324,7 +10323,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <View style={[styles.rotateBanner,
                       { bottom: pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) }]}
               pointerEvents="none">
-          <DisplayFontText style={styles.rotateBannerText}>⟳ ROTATE TO PORTRAIT TO VIEW DECODER</DisplayFontText>
+          <Text style={styles.rotateBannerText}>⟳ ROTATE TO PORTRAIT TO VIEW DECODER</Text>
         </View>
       ) : (
         <PanelBoundary name="Decoder" onClose={dismissDecoderPanel}>
@@ -10390,7 +10389,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                   (isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? 42 : 0),
               }]}
               pointerEvents="none">
-          <DisplayFontText style={styles.rotateBannerText}>⟳ ROTATE TO PORTRAIT FOR CHAT</DisplayFontText>
+          <Text style={styles.rotateBannerText}>⟳ ROTATE TO PORTRAIT FOR CHAT</Text>
         </View>
       )}
 
