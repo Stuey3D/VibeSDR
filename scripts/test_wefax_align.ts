@@ -293,6 +293,45 @@ function stripped(lines: number, roll: number, slant: number, sigma: number): Ui
   feed(st, rows, 0, rows.length);
   ok(!st.al && st.slant === undefined, `a phased text page with its header bar: drawn exactly as received (${JSON.stringify(st.al)}, slant ${st.slant})`); }
 
+// ★★★ 2026-10-07 — Stuart's HF+, DDK 7880, 18:21 (wefax_2026-10-07T18-21-12.png, not committed: DWD's): a ROTATED
+//     surface analysis joined just after its start — no header bar. The geometry measured on it: the frame each side
+//     a pair of thin GREY lines (pixels ~100–190: dark by a pair under 320 on only 2–3 % of lines), the right pair at
+//     x ≈ 44–50 with the ICEBERG legend box just inside it at x 5–60, the white border x ≈ 52–167, the left pair at
+//     x ≈ 168–176, a slant of +0.010, and from line ~400 a dotted interference column in the border (x ≈ 100, 11 %).
+//     Truth (DDK's phased geometry, UberSDR copy 20261007_180537: left frame ≈ 55, right ≈ 1741–1746): a shift of
+//     ≈ 110. RC26 left it rolled.
+function rotated18(lines: number, roll: number, k: number, pairs: 'both' | 'left' = 'both'): Uint8Array[] {
+  const rows: Uint8Array[] = [];
+  const grey = (m: number, d: number) => Math.max(0, Math.min(255, m + Math.round((rnd() - 0.5) * 2 * d)));
+  for (let y = 0; y < lines; y++) {
+    const r = new Uint8Array(W);
+    for (let x = 0; x < W; x++) r[x] = 250 - (rnd() < 0.004 ? 120 : 0);                           // paper, a few specks
+    for (let x = 75; x <= 1660; x++) if (rnd() < 0.06) r[x] = r[x + 1] = 30;                       // the map
+    for (const c of [400, 900, 1400]) { const cx = Math.round(c + 90 * Math.sin((y + c) / 80)); r[cx] = r[cx + 1] = 20; }
+    if (y > lines / 2) for (let x = 1690; x <= 1730; x++) if (rnd() < 0.08) r[x] = r[x + 1] = 30;  // the legend's text
+    if (y > lines / 2) { r[1688] = r[1689] = r[1732] = r[1733] = 40; }                             // …and its box
+    // one-pixel grey lines: the left pair dark (by a pair under 320) on ~20 % of lines, the right pair on ~4 %
+    for (const c of [55, 61]) r[c] = grey(120, 100);
+    if (pairs === 'both') for (const c of [1740, 1746]) r[c] = grey(160, 100);
+    if (y > 400 && y % 9 < 2) r[1790] = r[1791] = 40;                                              // interference dots
+    const o = new Uint8Array(W), off = Math.round(roll + k * y);
+    for (let x = 0; x < W; x++) o[x] = r[(((x - off) % W) + W) % W];
+    rows.push(o);
+  }
+  return rows;
+}
+{ const rows = rotated18(1300, 110, 0.01), st: ChartAlignState = {};
+  feed(st, rows, 0, rows.length);
+  ok(!!st.al && Math.abs(st.al.shift - 110) <= 6 && st.via === 'border',
+     `DDK 18:21 (rotated, late join, grey frame pairs): cut in its border at ${st.al?.shift} (≈110), via ${st.via}`);
+  ok(st.slant !== undefined && Math.abs(st.slant - 0.01) <= 0.003, `…drawn at its own slant, +0.010 (${st.slant})`); }
+{ const rows = rotated18(1300, 110, 0.01, 'left'), st: ChartAlignState = {};
+  feed(st, rows, 0, rows.length);
+  ok(!st.al, `…but a grey frame on ONE side only is not enough: drawn as received (${JSON.stringify(st.al)})`); }
+{ const rows = rotated18(1300, 110, 0.01), st: ChartAlignState = {};
+  feed(st, rows, 0, rows.length, wefaxFormat(12748100));
+  ok(!st.al, `…and on a station that sends no white border (NMF 12750), drawn as received (${JSON.stringify(st.al)})`); }
+
 // ★ RAW (Stuart, 2026-10-06): drawn through drawnAlign, every line comes out exactly as received — whatever the
 //   correction underneath — and RAW off gives that correction back untouched.
 { const corr = { shift: 1775, slant: 0.011 };

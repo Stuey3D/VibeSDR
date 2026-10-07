@@ -477,26 +477,28 @@ export const SLANT_TRUST = 0.015;
 const LINE_SEGMENTS = 8;
 const LINE_COVER = 0.75;
 const LINE_SEG_DARK = 0.15;
+/** ★ A pair of pixels summing under this is dark to lineCover (avg < 128) — see 'INK IS TWO PIXELS'. */
+const LINE_PAIR_DARK = 256;
 /** The share of LINE_SEGMENTS stretches of rows in which column `col` (±2 px, at `slant` — the same columns as
  *  columnProfile) is dark on at least LINE_SEG_DARK of the rows more than the columns 7 px to either side of it:
  *  dark = a PAIR of pixels averaging under 128 (see 'INK IS TWO PIXELS'). A frame or margin at its true slant covers every stretch; a box edge, a legend or a slant that is
  *  wrong covers some. */
 export function lineCover(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, slant: number, col: number,
-                          fromRow = 0, count = rows.length): number {
-  const s = lineStretches(rows, width, slant, col, fromRow, count);
+                          fromRow = 0, count = rows.length, pair = LINE_PAIR_DARK): number {
+  const s = lineStretches(rows, width, slant, col, fromRow, count, pair);
   return s ? s.solid.filter(Boolean).length / LINE_SEGMENTS : 0;
 }
 function lineStretches(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, slant: number, col: number,
-                       fromRow: number, count: number): { solid: boolean[]; per: number } | null {
+                       fromRow: number, count: number, pair = LINE_PAIR_DARK): { solid: boolean[]; per: number } | null {
   const W = width, ys: number[] = [];
   for (let y = fromRow; y < fromRow + count && y < rows.length; y++) if (rows[y]) ys.push(y);
   const per = Math.floor(ys.length / LINE_SEGMENTS);
   if (!W || per < 4) return null;
-  // dark at `c` (±2 px) on line y: a pair of pixels averaging under 128
+  // dark at `c` (±2 px) on line y: a pair of pixels summing under `pair` (256: averaging under 128)
   const darkAt = (r: ArrayLike<number>, c: number, off: number) => {
     for (let k = -2; k <= 1; k++) {
       const x = (((c + k + off) % W) + W) % W;
-      if ((r[x] ?? 255) + (r[(x + 1) % W] ?? 255) < 256) return 1;
+      if ((r[x] ?? 255) + (r[(x + 1) % W] ?? 255) < pair) return 1;
     }
     return 0;
   };
@@ -629,7 +631,9 @@ export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined
     if (out && k !== stationSlant) out.measured = k;
     return { shift: bar, slant: k };
   }
-  const g = g0 && fmt.border && bandConfirmed(rows, width, g0, count) ? g0 : null;
+  // ★★ …else, on a late join, a band between two straight full-height lines, grey ones included (2026-10-07 — see
+  //    framedBand): Stuart's HF+ DDK chart of 18:21 was left rolled with a grey frame each side.
+  const g = g0 && fmt.border ? (bandConfirmed(rows, width, g0, count) ? g0 : framedBand(rows, width, g0, count)) : null;
   if (g) {
     if (out) out.via = 'border';
     // ★★★ A BORDERED CHART IS CENTRED ON ITS BORDER (Stuart, 2026-10-06: "if there is a clear white border either
@@ -695,6 +699,59 @@ function bandConfirmed(rows: ReadonlyArray<ArrayLike<number> | undefined>, width
   //   A chart joined so near its end that the frame is above the legend only is left as received.
   return g.sharp >= BORDER_LINE_INK && lineCover(rows, width, g.slant, g.line, 0, count) >= LINE_COVER;
 }
+
+/**
+ * ★★★ A BORDER BETWEEN TWO GREY FRAME LINES (Stuart's HF+, DDK 7880, 2026-10-07 18:21 — a rotated surface analysis
+ *     joined just after its start, no header bar). The chart was left rolled: its right-hand edge (the ICEBERG legend
+ *     and the frame beside it) at x 0–60, the white border at x ≈ 50–168, the left frame at x ≈ 170. Replayed through
+ *     chartAlignStep, the 300-line look found a 228 px band at +0.010 bounded by the left frame (91 ink) — but:
+ *     - the frame, received GREY through the HF+ (pixels ~100–190, never the black of the RX888's copies), was dark
+ *       by lineCover's test (a pair averaging under 128) in 5 of 8 stretches: under LINE_COVER, so not confirmed;
+ *     - the right-hand frame, as grey, inked its columns on 2–3 % of lines, so the band ran on past it into the
+ *       chart's paper (1752 → 170) and its centre (52) was 58 px off the border's (110);
+ *     - by line 600 a dotted interference column (x ≈ 100, dark on 11 % of lines) split the border into 46 + 64 px,
+ *       both under BORDER_MIN — so the second look and the retry found no band at all.
+ *     A grey line is still a frame when it runs straight down the WHOLE look, and here BOTH sides have one: averaging
+ *     under FAINT_PAIR/2 (192), each is dark in 6–8 of 8 stretches at the chart's slant. Two straight, full-height
+ *     lines bounding a blank band at the same slant is stronger evidence than the one solid line bandConfirmed asks
+ *     for, so only that is accepted: every column within FRAME_REACH px of the band is tested, the lines found are
+ *     grouped, and the widest span between two neighbouring lines, ≥ BORDER_MIN, is the border — centred between
+ *     them (Stuart's rule: equal white each side). A one-sided grey line, a NOAA open-sea band between curved
+ *     isobars, or a band with no straight line at all is still left as received.
+ *     ★ (Stuart: "not all DDK charts have the parallel lines" — this one's frame is a pair of thin lines each side;
+ *       the test is any full-height line, a pair or single, so it does not depend on the pairs.)
+ */
+function framedBand(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, g: BlankBand, count: number): BlankBand | null {
+  const W = width, start = g.col - Math.floor(g.len / 2);
+  const lines: number[] = [];   // band-relative columns (from start − FRAME_REACH) that are a full-height line
+  for (let i = -FRAME_REACH; i < g.len + FRAME_REACH; i++) {
+    const c = (((start + i) % W) + W) % W;
+    if (lineCover(rows, W, g.slant, c, 0, count, FAINT_PAIR) >= LINE_COVER) lines.push(i);
+  }
+  // group neighbouring columns into one line each: [first, last]
+  const groups: Array<[number, number]> = [];
+  for (const i of lines) {
+    const last = groups[groups.length - 1];
+    if (last && i - last[1] <= 3) last[1] = i; else groups.push([i, i]);
+  }
+  let best: { a: number; b: number } | null = null;
+  for (let j = 0; j + 1 < groups.length; j++) {
+    const a = groups[j][1], b = groups[j + 1][0];   // the blank between two neighbouring lines
+    if (b - a - 1 >= BORDER_MIN && (!best || b - a > best.b - best.a)) best = { a, b };
+  }
+  if (!best) return null;
+  const col = ((Math.round(start + (best.a + best.b) / 2) % W) + W) % W;
+  // ★ A CUT for a chart joined late, never a decision about a phased one: a band already centred on the line's ends
+  //   is left to the rules above, exactly as before. (Allowed to decide it, a phased RX888 chart leaning +0.021 had its
+  //   measured +0.02 replaced at the second look by "centred, at the station's slant": the grey-line test is tolerant
+  //   enough to pass at 0.01 off the true slant, so the slant it was found at is no measurement of a phased chart.)
+  if (Math.min(col, W - col) < CENTRE_DEADBAND) return null;
+  return { ...g, col, len: best.b - best.a - 1, line: (((start + best.b) % W) + W) % W };
+}
+/** ★ A pair of pixels summing under this is ink to framedBand (avg < 192): a grey frame line. */
+const FAINT_PAIR = 384;
+/** ★ How far beyond a blank band's ends (px) framedBand looks for its frame lines. */
+const FRAME_REACH = 12;
 
 /** ★ A black margin strip: its first column and width at line 0. */
 export interface Strip { at: number; len: number }
