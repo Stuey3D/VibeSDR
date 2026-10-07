@@ -417,6 +417,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         map.putString("model", "${Build.MANUFACTURER} ${Build.MODEL}")
         map.putString("os", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         map.putString("systemName", "Android")
+        /* ★ When this process last started (2026-10-07). A hosted VibeServer runs IN this process, so this
+         *  is the server's last restart too — the report's "up since" line. API 24+; absent below. */
+        if (Build.VERSION.SDK_INT >= 24) try {
+            map.putDouble("processStartMs", (System.currentTimeMillis() -
+                (android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())).toDouble())
+        } catch (_: Throwable) {}
         promise.resolve(map)
     }
 

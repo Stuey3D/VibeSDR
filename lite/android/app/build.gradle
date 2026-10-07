@@ -181,7 +181,11 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               //    sitting in outputs/, which is exactly how a stale build once shipped as a new one.
               'VibeBenchmark.kt',
               // ★★★ The GPU map: asset unpack + the JNI downloader for the High Detail pack.
-              'VibeMapGL.kt']
+              'VibeMapGL.kt',
+              // ★★★ CRASH CAPTURE (2026-10-07): the system's exit record + the decoded native tombstone, read by
+              //    LiteDiagModule for Diagnostics. Without these Lite reported "none recorded" for every native
+              //    crash — on the build that exists to host the C++ engine. React-free bar Arguments/WritableMap.
+              'VibeExitInfo.kt', 'TombstoneReader.kt']
 tasks.register('syncShared', Sync) {
     from("${MAIN}/java/com/vibesdr/app") { include SHARED }
     into "${buildDir}/shared-src/com/vibesdr/app"
