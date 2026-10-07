@@ -47,7 +47,7 @@ import { WellFace } from './DrumWell';
 import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { useUiScale } from '../hooks/useUiScale';
-import { ledA, type LedColour } from '../constants/faceplate';
+import { ledA, LAMP_OFF_INK, LAMP_OFF_LEGEND, type LedColour } from '../constants/faceplate';
 import { tunerKeysLayout, TK_SLOT_R } from '../constants/drumWell';
 import { DECK_MIN_GAP, ETCH_LIGHT, keyLightReach } from '../constants/keyLight';
 
@@ -228,6 +228,12 @@ interface Props {
    *  now the keys give up a little height for the row (tunerKeysLayout `label`), the well stays its
    *  size, and the etched glyph is back between them. */
   centreLabel?: string;
+  /** ★★ THE LAMP IS OFF (Stuart, 2026-10-07: zoom in DAB, where it does nothing). The keys still press, sink,
+   *  click and step exactly as ever — "users can fiddle, just like the real thing" — but nothing lights them:
+   *  no panel-gap light, the legends are the unlit engraving (LAMP_OFF_LEGEND), and the etched glyph between
+   *  them has no lamp behind it. The CHAT key's treatment on a server with no chat. ★ Not `disabled`: a
+   *  dimmed key reads as an absent one (memory: disabled_control_reads_as_absent). */
+  lampOff?: boolean;
 }
 
 /** The key legends, drawn in the mockup's 24-unit SVG space: ‹ › for tune, − + for zoom. */
@@ -245,7 +251,7 @@ function legendStrokes(type: TunerKeyType, dir: -1 | 1): IconStroke[] {
 
 export default function TunerKeys({
   type, height, onStep, sweepRate, onSweepStep, width: widthProp = 0, style, disabled = false,
-  landscape = false, centreLabel,
+  landscape = false, centreLabel, lampOff = false,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
@@ -272,9 +278,9 @@ export default function TunerKeys({
   const glyphPath = useMemo(
     () => buildGlyphPath(type === 'vfo', L.glyphCx, L.glyphCy, L.glyphSz),
     [type, L.glyphCx, L.glyphCy, L.glyphSz]);
-  const legend = useMemo(() => ({
+  const legend = useMemo(() => (lampOff ? LAMP_OFF_LEGEND : {
     color: fp.controls.core, hot: fp.controls.hot, glow: fp.controls.glow, shade: null,
-  }), [fp.controls]);
+  }), [fp.controls, lampOff]);
   const strokes = useMemo(() => ({
     lo: legendStrokes(type, -1), hi: legendStrokes(type, 1),
   }), [type]);
@@ -309,13 +315,14 @@ export default function TunerKeys({
             today's glow BEHIND a crisp stroke, as the drum's icon is drawn. Lit, the glow and the
             light bleeding out of the etching come from one sprite (useEtchGlow); unlit, today's
             drawing exactly. */}
-        {lit
+        {/* ★ lampOff (2026-10-07): no lamp behind the etching — no glow, and the cut reads as unlit engraving. */}
+        {lampOff ? null : lit
           ? <EtchGlow path={glyphPath} W={W} H={H} led={fp.controls} dim={dim} />
           : <Path path={glyphPath} color={G(0.55 * dim)} strokeWidth={2.6} style="stroke"
                   strokeCap="round" strokeJoin="round">
               <BlurMask blur={3} style="normal" respectCTM />
             </Path>}
-        <Path path={glyphPath} color={G(0.95 * dim)} strokeWidth={1.4} style="stroke"
+        <Path path={glyphPath} color={lampOff ? LAMP_OFF_INK : G(0.95 * dim)} strokeWidth={1.4} style="stroke"
               strokeCap="round" strokeJoin="round" />
       </Canvas>
 
@@ -351,7 +358,7 @@ export default function TunerKeys({
           {/* ★ The light is DomeKey's, as on every front-panel key. Default: the dark SLOT is the
               cut-out the light comes up round and in (lightSlot); metal: the key IS its slot. */}
           <DomeKey
-            lightReach={lightReach}
+            lightReach={lampOff ? 0 : lightReach}
             lightSlot={slot ? { x: capInset.x, top: capInset.top, bottom: capInset.bottom, r: TK_SLOT_R } : undefined}
             height={capH} radius={slot ? TK_SLOT_R - 1 : TK_SLOT_R}
             style={slot ? { borderRadius: TK_SLOT_R - 1 } : { width: L.keyW }}

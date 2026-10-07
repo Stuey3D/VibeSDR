@@ -46,7 +46,10 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
 
   // ── Sizes from the slot ──
   const font1 = Math.max(7, Math.min(twoLines ? 11 : 10, Math.floor((twoLines ? height * 0.40 : height - 2))));
-  const font2 = Math.max(7, Math.round(font1 * 0.82));
+  // ★ 2026-10-07 (Stuart, Nixie on silver: "Clear audio … that line in this colour is difficult to read"): the
+  //   advice line was 82 % of the verdict's size at 75 % brightness — 9 pt of dim neon. Now 90 % at 90 %: still
+  //   plainly the second line, but readable on every face. Two lines still fit the 26 pt housing (12 + 11).
+  const font2 = Math.max(7, Math.round(font1 * 0.9));
   const barsH = Math.max(5, Math.min(twoLines ? height - 10 : height - 2, Math.round(font1 * 1.3)));
   const barW = Math.max(2, Math.round(barsH * 0.24));
   const barGap = Math.max(1, Math.round(barW * 0.55));
@@ -92,7 +95,7 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
     fontWeight: '700' as const, ...screenOneWeight(screen), letterSpacing: oneWeight ? 0.4 : 0.2,
     ...glow,
   };
-  const dim = lit ? rgba(litRgb, 0.75) : 'rgba(255,255,255,0.70)';
+  const dim = lit ? rgba(litRgb, 0.9) : 'rgba(255,255,255,0.86)';   // ★ 2026-10-07: was .75 / .70 — see font2
   const sentence = [q.label, q.advice, q.detail].filter(Boolean).join('. ');
 
   return (
