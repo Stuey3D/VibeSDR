@@ -72,10 +72,12 @@ interface PixBuf {
 // from the current scanline. Keyed by decoder name; in-place pixel writes
 // persist automatically (the store holds the SAME PixBuf reference). This also
 // gives every image decoder the 1-image PREV buffer for free.
-interface ImgStore { live: PixBuf | null; prev: PixBuf | null }
+/** ★ `lineBase` / `rebase` (2026-10-07, CLR): the decoder numbers WEFAX lines from its last start tone, and CLR starts a
+ *  chart without one — so the canvas counts lines from the first one after CLR (see clear()). */
+interface ImgStore { live: PixBuf | null; prev: PixBuf | null; lineBase: number; rebase: boolean }
 const imgStores: Record<string, ImgStore> = {};
 function getImgStore(name: string): ImgStore {
-  return (imgStores[name] ??= { live: null, prev: null });
+  return (imgStores[name] ??= { live: null, prev: null, lineBase: 0, rebase: false });
 }
 
 export interface DecoderImageHandle {
@@ -83,6 +85,8 @@ export interface DecoderImageHandle {
   wefaxLine:  (ln: number, w: number, px: Uint8Array) => void;
   sstvLine:   (ln: number, w: number, px: Uint8Array) => void;
   imageDone:  () => void;
+  /** ★ CLR (2026-10-07): the picture so far goes to PREV, and the next line starts a fresh one — its own auto-align. */
+  clear:      () => void;
   reset:      () => void;
   showPrev:   () => void;
   showLive:   () => void;
@@ -356,6 +360,14 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       },
 
       wefaxLine(ln: number, w: number, px: Uint8Array) {
+        // ★★ CLR STARTS A CHART THE DECODER DOES NOT KNOW ABOUT (2026-10-07, Stuart: "we need a clear button like we
+        //    used to have and like we do for RTTY"). A retune keeps the decoder's line count running — JMH on 7795, JMH
+        //    on 3620.6 and Korea's HLL2 stacked into one 1201-line picture, and the auto-align's 300/600-line looks were
+        //    spent on the first station. So after CLR the canvas numbers lines from the first one it gets; a count going
+        //    below that base is the decoder's own new chart (a start tone), numbered from 0 again.
+        if (store.rebase) { store.rebase = false; store.lineBase = ln; }
+        if (ln < store.lineBase) store.lineBase = 0;
+        ln -= store.lineBase;
         // ★★ The FIRST chart on a fresh canvas is a new chart too (2026-10-07): only a line count going back said so,
         //    so the panel's per-chart state (a manual shift, RAW, the last chart's measured slant) carried over into it.
         if (!live.current) { live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current; onNewChart?.(); }  // lazy init
@@ -444,8 +456,25 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         onStatus('done — tap SAVE');
       },
 
+      clear() {
+        // ★ Never throws a picture away — a mis-press costs nothing: what was on screen is under PREV.
+        const had = !!live.current && live.current.maxLine > 0;
+        if (live.current && live.current.raw && !live.current.complete && had) {
+          try { redrawAll(live.current, effAlign(live.current)); } catch {}   // final levels, as a finished chart
+        }
+        rollToPrev();
+        live.current = null;  store.live = null;
+        store.rebase = true;                    // the next WEFAX line is line 0 of a new chart (lazy init → onNewChart)
+        setViewingPrev(false);
+        rebuild(null, true);
+        onPrevState(!!prev.current, false);
+        onInfo('');
+        onStatus(had ? 'cleared — the last picture is under PREV' : 'cleared');
+      },
+
       reset() {
         live.current = null;  store.live = null;
+        store.lineBase = 0;  store.rebase = false;
         prev.current = null;  store.prev = null;
         setViewingPrev(false);
         rebuild(null, true);   // clears any trailing rebuild and retires the shown image

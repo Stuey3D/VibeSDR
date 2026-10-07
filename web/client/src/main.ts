@@ -9715,7 +9715,12 @@ function initDecoders(host: string, auth: AuthState) {
     onNavtexFec: (fec) => { if (activeDec === 'navtex' && navtexAsm.setFec(fec)) queueNavtexRender(); },
     onImageStart: (w, h) => startDecImage(w, h),
     // ★ Once the server reports WEFAX phases, a line alone no longer lights the LED — noise draws lines too.
-    onImageLine: (y, w, px, rgb) => { drawDecLine(y, w, px, rgb); if (!wefaxPhaseKnown) setDecLive(true); },
+    onImageLine: (y, w, px, rgb) => {
+      // ★ After CLR, WEFAX lines count from the first one that arrives; a count below that base is the server's own
+      //   new chart (a start tone), numbered from 0 again (see clearDecImage).
+      if (!rgb) { if (decRebase) { decRebase = false; decLineBase = y; } if (y < decLineBase) decLineBase = 0; y -= decLineBase; }
+      drawDecLine(y, w, px, rgb); if (!wefaxPhaseKnown) setDecLive(true);
+    },
     /* ★★ WHAT PART OF THE TRANSMISSION IS ARRIVING (Stuart, 2026-10-04: "when nothing is received … standing by;
      *  when the signal is being received it then lights green and shows receiving, bonus points if you can show
      *  the part of the transmission … such as the phasing lines"). Server-side: wefax_decoder onPhase. */
@@ -9883,7 +9888,11 @@ function initDecoders(host: string, auth: AuthState) {
 
   // Output box chrome.
   initSpotFilters();
-  $('decClr').onclick = () => { $('decText').textContent = ''; if (activeDec === 'navtex') { resetNavtex(); renderNavtex(); } };
+  $('decClr').onclick = () => {
+    $('decText').textContent = '';
+    if (activeDec === 'navtex') { resetNavtex(); renderNavtex(); }
+    if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
+  };
   $('decPrev').onclick = () => (activeDec === 'navtex' ? toggleNavtexPrev() : toggleDecPrev());
   $('decSave').onclick = () => (activeDec === 'navtex' ? saveNavtex() : saveDecImage());
   // ★ A lost NNNN ends its message after 75 s of silence (NAVTEX_END_LOST_MS); nothing else would redraw then.
@@ -11703,6 +11712,24 @@ function updateDecImageButtons() {
   const zin = $<HTMLButtonElement>('decZoomIn');
   zin.style.display = pic && decZoomI < DEC_ZOOMS.length - 1 ? '' : 'none';
   zin.textContent = decZoomI > 0 ? `+ ${DEC_ZOOMS[decZoomI]}×` : '+';
+}
+
+/* ★★ CLR ON A PICTURE (2026-10-07, Stuart: "we need a clear button like we used to have and like we do for RTTY").
+ *  CLR cleared only the text pane, so on WEFAX/SSTV it did nothing at all. Now: the picture so far is banked as PREV
+ *  (never thrown away) and the next line starts a fresh one with its own auto-align. A retune keeps the server's
+ *  WEFAX line count running — JMH, JMH again and Korea's HLL2 stacked into one picture and the align's 300/600-line
+ *  looks were spent on the first — so after CLR lines are counted from the first one that arrives (decLineBase).
+ *  The app's DecoderImageCanvas clear() does the same. */
+let decLineBase = 0, decRebase = false;
+function clearDecImage() {
+  if (decLiveCv && decLiveMaxY > 0) {
+    decLiveComplete = true;
+    if (!decIsRgb) redrawDecAlign();      // its final levels, as a finished chart
+  }
+  decViewingPrev = false;
+  startDecImage(decImgWidth || 0, 0);     // banks the old picture as PREV, starts a clean one
+  if (activeDec === 'wefax') decRebase = true;
+  $('decStatus').textContent = 'cleared — the last picture is under PREV';
 }
 
 function startDecImage(w: number, h: number) {

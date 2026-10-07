@@ -1178,6 +1178,16 @@ export default function DecoderPanel({
               <DecoderKeyLabel tone="accent">SAVE</DecoderKeyLabel>
             </HBtn>
           )}
+          {/* ★★ CLR — image decoders too (2026-10-07, Stuart: "we need a clear button like we used to have and like we do
+              for RTTY"). The picture so far goes to PREV, never away, and the next line starts a fresh chart with its own
+              auto-align — after a retune, where no start tone tells the decoder a new chart began. Hidden on PREV,
+              where it would clear the live picture you are not looking at. */}
+          {isImageMode && !viewingPrev && (
+            <HBtn run hitSlop={6} accessibilityLabel="Clear — start a new picture (this one goes to PREV)"
+              onPress={(e: any) => { e?.stopPropagation(); imageRef?.current?.clear(); }}>
+              <DecoderKeyLabel>CLR</DecoderKeyLabel>
+            </HBtn>
+          )}
           {/* ★ Zoom out / in over the fitted picture. − only once zoomed (never a dead key); + stops at 4×. */}
           {isImageMode && imgZoomI > 0 && (
             <HBtn run hitSlop={6} accessibilityLabel="Zoom out"
