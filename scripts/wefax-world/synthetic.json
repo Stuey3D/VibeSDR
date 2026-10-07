@@ -1,0 +1,9 @@
+[
+  {"synth": "edge-map", "station": "any (edge-to-edge analysis)", "call": "SYN-edge", "dialHz": 0, "style": ["white", "edge-to-edge", "map"]},
+  {"synth": "edge-map", "station": "Northwood dial (slant -0.06 path)", "call": "SYN-edge@GYA", "dialHz": 4608100, "txSlant": -0.06, "style": ["white", "edge-to-edge", "map"]},
+  {"synth": "black-edge-map", "station": "any (inverted, edge-to-edge)", "call": "SYN-black-edge", "dialHz": 0, "style": ["black", "edge-to-edge", "map"]},
+  {"synth": "black-bordered", "station": "any (inverted, framed)", "call": "SYN-black-frame", "dialHz": 0, "style": ["black", "framed", "map"]},
+  {"synth": "satellite", "station": "any (satellite, full width)", "call": "SYN-sat", "dialHz": 0, "style": ["satellite", "edge-to-edge"]},
+  {"synth": "satellite-framed", "station": "any (satellite, white surround)", "call": "SYN-sat-framed", "dialHz": 0, "style": ["satellite", "framed"]},
+  {"synth": "text-page", "station": "any (schedule / notice)", "call": "SYN-text", "dialHz": 0, "style": ["white", "text"]}
+]
