@@ -228,6 +228,15 @@ on-air look, risk 1 above; the likeliest real geometry for most of the world).
    the native decoder accepts lpm 60/90/120/240 but detects only the 300 Hz IOC 576 start tone (no 675 Hz IOC 288;
    no current station uses 288).
 
+**After the conservative aligner (2026-10-07, a1708d76): 1 FAIL of 768** (was 254 on the same 64 charts, with the
+local DDK/GYA set and three of Stuart's phased HF+ DDK copies — two schedule pages and a surface chart). `findChartAlign`
+now moves a chart only when it is positively one of: a white border confirmed by DDK's header bar, or bounded by a
+frame solid down the whole look on a white-border station (`wefaxFormat`: DDK, SVJ4) — rule 1; a black margin strip,
+recognised by content and with its slant measured from its edges — rule 3 and CBV's 0.16; Northwood's margin, on
+Northwood only — rule 2. Presets match within 0.5 kHz — rule 4. Satellite "strips" must be black, not dark grey —
+rule 5. The one left: `SYN-edge@GYA` joined for its last 900 lines — a synthetic edge-to-edge map with no margin on
+Northwood's dial, where the margin search takes a vertical line; Northwood sends no chart without its margin.
+
 **Corpus.** Committed: `scripts/wefax-world/corpus/noaa/*.png` — 15 NOAA/NWS products (public domain, 17 U.S.C. §105),
 manifest `corpus/corpus.json`. Synthetic styles: `scripts/wefax-world/synthetic.json`. Local only (not committed,
 not licensed for redistribution): 3 GYA + 3 DDK charts from Stuart's UberSDR (Crown copyright / DWD), NOAA PIEA88
