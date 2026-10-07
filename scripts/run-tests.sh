@@ -296,6 +296,8 @@ if node --no-warnings scripts/test_sprite_cache.ts; then pass=$((pass+1)); else 
 # ★ The waterfall jitter buffer's pooled frame copies (framePool.ts): independent copies, reuse, bounded.
 if node --no-warnings scripts/test_frame_pool.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_platformCopy.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ The diagnostics header's RC label (version.ts RELEASE_LABEL) matches About's newest release (2026-10-07).
+if node --no-warnings scripts/test_release_label.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node --no-warnings scripts/test_grid.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 if node scripts/test_derived_values_pure.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ THE DECODER BOXES (faceplates §10.2): every text role ≥ 4.5:1 (WCAG luminance, composited over

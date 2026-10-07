@@ -37,18 +37,21 @@ class LiteDiagModule(private val ctx: ReactApplicationContext) : ReactContextBas
         try { VibeExitInfo.clear(ctx) } catch (_: Throwable) {}
     }
 
-    /** The model and OS (no name, no account, no serial), plus WHICH APP this is — Lite bundles the main
-     *  app's version.ts, so without `app` the report would name the main app's version, not Lite's. */
+    /** The model and OS (no name, no account, no serial), plus WHICH BUILD this is — Lite bundles the main
+     *  app's version.ts, so without these the report would name the main app's version, not Lite's.
+     *  Same three fields as the main app's getDeviceInfo (VibeStreamModule / VibePowerModule.swift). */
     @ReactMethod
     fun getDeviceInfo(promise: Promise) {
         val m = Arguments.createMap()
         m.putString("model", "${Build.MANUFACTURER} ${Build.MODEL}")
         m.putString("os", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         m.putString("systemName", "Android")
+        m.putString("packageId", ctx.packageName)
         try {
             val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
             val code = if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else @Suppress("DEPRECATION") pi.versionCode.toLong()
-            m.putString("app", "VibeServer Lite ${pi.versionName} ($code)")
+            m.putString("versionName", pi.versionName ?: "")
+            m.putString("versionCode", code.toString())
         } catch (_: Throwable) {}
         processStartMs()?.let { m.putDouble("processStartMs", it.toDouble()) }
         promise.resolve(m)

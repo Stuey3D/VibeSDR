@@ -417,6 +417,16 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         map.putString("model", "${Build.MANUFACTURER} ${Build.MODEL}")
         map.putString("os", "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         map.putString("systemName", "Android")
+        /* ★★ WHICH BUILD, EXACTLY (2026-10-07). The header said only "app : 11.0", so a report from a build
+         *  that predates crash capture could not be told from a current one — Nick's Pixel 6 report did just
+         *  that. The package id says which listing (net.vibesdr.app / the legacy com.vibesdr.app). */
+        map.putString("packageId", reactContext.packageName)
+        try {
+            val pi = reactContext.packageManager.getPackageInfo(reactContext.packageName, 0)
+            val code = if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else @Suppress("DEPRECATION") pi.versionCode.toLong()
+            map.putString("versionName", pi.versionName ?: "")
+            map.putString("versionCode", code.toString())
+        } catch (_: Throwable) {}
         /* ★ When this process last started (2026-10-07). A hosted VibeServer runs IN this process, so this
          *  is the server's last restart too — the report's "up since" line. API 24+; absent below. */
         if (Build.VERSION.SDK_INT >= 24) try {
