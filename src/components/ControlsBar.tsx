@@ -66,7 +66,7 @@ import { legendPath, LEGEND_CELL_H } from './AnnunciatorLegend';
 import { placePath } from './vfdMesh';
 import { StatusGhostContext, StatusRun } from './StatusField';
 import { statusParts, statusTags, type StatusPart } from '../constants/statusField';
-import { FONT_DOTO, FONT_HYPER, rgba, NO_DROP_SHADOW, screenOneWeight, statusDisplayFor, type StatusDisplay } from '../constants/faceplate';
+import { FONT_DOTO, FONT_HYPER, LAMP_OFF_LEGEND, rgba, NO_DROP_SHADOW, screenOneWeight, statusDisplayFor, type StatusDisplay } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
@@ -1824,14 +1824,8 @@ function ChatIcon({ size, progress, legend }: { size: number; progress?: SharedV
   return <DomeIcon size={size} k={size / 20} strokes={CHAT_STROKES} progress={progress} legend={legend} />;
 }
 
-/**
- * ★★ A KEY WHOSE LAMP IS OFF (B10, Stuart): on a server with no chat the CHAT key stays a real key — it
- *   presses, sinks and clicks like the rest — but nothing lights it: no gap light, no flood, and its legend
- *   is the unlit engraving. That reads as "this does nothing here" the way a real radio's dark button does,
- *   where the old 40 % grey-out read as a broken or absent control.
- */
-const LAMP_OFF_LEGEND = { color: 'rgba(128,120,110,0.55)', hot: 'rgba(128,120,110,0.55)',
-                          glow: 'rgba(0,0,0,0)', shade: 'rgba(0,0,0,0.35)' };
+// ★ LAMP_OFF_LEGEND — the unlit key (chat on a server with no chat; the zoom drum / keys in DAB) — lives in
+//   constants/faceplate.ts since 2026-10-07, so the drum and the tuner keys draw the same dark lamp.
 const NOOP = () => {};
 
 function AudioIcon({ size, progress, muted }: { size: number; progress?: SharedValue<number>; muted?: boolean }) {
@@ -2204,8 +2198,8 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         {!singleDrum && (
           <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ zoom: r })}>
             {zoomKeys
-              ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} />
-              : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} />}
+              ? <TunerKeys type="zoom" height={DRUM_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} lampOff={!!dab} />
+              : <DrumWheel type="zoom" height={DRUM_H} onDelta={onBwDelta} lampOff={!!dab} />}
           </ControlSlot>
         )}
       </View>}
@@ -2566,8 +2560,8 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       {!singleDrum && (
         <ControlSlot style={{ flex: 1, minWidth: s.r(80) }} report={onZoomRect}>
           {zoomKeys
-            ? <TunerKeys type="zoom" height={BAND_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} landscape />
-            : <DrumWheel type="zoom" height={BAND_H} onDelta={onBwDelta} />}
+            ? <TunerKeys type="zoom" height={BAND_H} onStep={onZoomStep ?? noStep} onSweepStep={onZoomSweep} landscape lampOff={!!dab} />
+            : <DrumWheel type="zoom" height={BAND_H} onDelta={onBwDelta} lampOff={!!dab} />}
         </ControlSlot>
       )}
 

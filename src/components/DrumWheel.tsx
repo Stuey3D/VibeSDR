@@ -52,7 +52,7 @@ import { useSharedValue, useAnimatedReaction } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import * as Haptics from 'expo-haptics';
 import { useFaceplate } from '../contexts/FaceplateContext';
-import { ledA } from '../constants/faceplate';
+import { ledA, LAMP_OFF_INK } from '../constants/faceplate';
 import { notchOrder } from '../constants/drumWell';
 import { WellFace, WellEdge, DrumPool } from './DrumWell';
 import { getControlHaptics } from './controlHaptics';
@@ -100,13 +100,20 @@ interface Props {
   /** Disable fling inertia — lift = stop. FM-DX shared tuner (coasting past your
    *  target retunes for everyone). Default false keeps the SDR coast. */
   noInertia?: boolean;
+  /** ★★ THE LAMP IS OFF (Stuart, 2026-10-07: zoom in DAB, where it does nothing). The drum still turns,
+   *  coasts and clicks exactly as ever — "users can fiddle, just like the real thing" — but nothing behind
+   *  it is lit: no backlight in the seams, no pool through the wheel, no glow in the window, and the
+   *  magnifier, the window's edges and the − / + are the unlit engraving (LAMP_OFF_INK), as the CHAT key is
+   *  on a server with no chat. ★ Unlit, never hidden or greyed: a dark control still reads as a control
+   *  (memory: disabled_control_reads_as_absent). The gesture, haptics and onDelta are untouched. */
+  lampOff?: boolean;
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function DrumWheel({
   type, width: widthProp = 0, height, onDelta, style,
-  fontFamily = 'Atkinson Hyperlegible', noInertia = false,
+  fontFamily = 'Atkinson Hyperlegible', noInertia = false, lampOff = false,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
@@ -114,6 +121,10 @@ export default function DrumWheel({
   const fp = useFaceplate();
   const ct = fp.chassis;
   const G  = (a: number) => ledA(fp.controls, a);
+  // ★ lampOff (2026-10-07): LIGHT is the lamp's — gone; INK is the engraving the lamp shone through — kept,
+  //   in the unlit colour, so the magnifier, the window and the − / + still say what the drum is.
+  const light = (a: number) => (lampOff ? 'rgba(0,0,0,0)' : G(a));
+  const ink   = (a: number) => (lampOff ? LAMP_OFF_INK : G(a));
 
   /** ★★★ THE DRUM'S POSITION IS A SHARED VALUE NOW, NOT REACT STATE.
    *  It was `useState`, written on every rAF tick of a coast and on every gesture event of a drag
@@ -424,11 +435,11 @@ export default function DrumWheel({
 
           {/* Backlight seeping through the panel/wheel gaps, in the controls colour */}
           <Line p1={vec(3, drumTop + 0.5)} p2={vec(W - 3, drumTop + 0.5)}
-                color={G(0.30)} strokeWidth={1.4}>
+                color={light(0.30)} strokeWidth={1.4}>
             <BlurMask blur={4} style="normal" respectCTM />
           </Line>
           <Line p1={vec(3, H - 1.5)} p2={vec(W - 3, H - 1.5)}
-                color={G(0.20)} strokeWidth={1.2}>
+                color={light(0.20)} strokeWidth={1.2}>
             <BlurMask blur={4} style="normal" respectCTM />
           </Line>
 
@@ -499,13 +510,13 @@ export default function DrumWheel({
 
             {/* ★★ §6.1: NO INDEX NEEDLE, on any chassis. The LED behind the drum glows through it
                 instead — a soft pool in the controls colour, high on the wheel. */}
-            <DrumPool x={1} y={drumTop} w={W - 2} h={drumH - 1} led={fp.controls} />
+            {!lampOff && <DrumPool x={1} y={drumTop} w={W - 2} h={drumH - 1} led={fp.controls} />}
 
             {/* ── Trapezoid window — darker inset, lit from within ── */}
             <Path path={trapPath} color={ct.trapFill} />
             <Path path={trapPath}>
               <RadialGradient c={vec(cx, drumTop * 0.55)} r={trapWT * 0.55}
-                colors={[G(0.16), G(0.05), 'rgba(0,0,0,0)']}
+                colors={[light(0.16), light(0.05), 'rgba(0,0,0,0)']}
                 positions={[0, 0.55, 1]} />
             </Path>
 
@@ -514,20 +525,20 @@ export default function DrumWheel({
               [tx0, 0, bx0, drumTop], [tx1, 0, bx1, drumTop], [bx0, drumTop, bx1, drumTop],
             ].map(([x0, y0, x1, y1], i) => (
               <Group key={`te${i}`}>
-                <Line p1={vec(x0, y0)} p2={vec(x1, y1)} color={G(0.30)} strokeWidth={3}>
+                <Line p1={vec(x0, y0)} p2={vec(x1, y1)} color={light(0.30)} strokeWidth={3}>
                   <BlurMask blur={3} style="normal" respectCTM />
                 </Line>
-                <Line p1={vec(x0, y0)} p2={vec(x1, y1)} color={G(0.60)} strokeWidth={0.9} />
+                <Line p1={vec(x0, y0)} p2={vec(x1, y1)} color={ink(0.60)} strokeWidth={0.9} />
               </Group>
             ))}
 
             {/* Icon — the controls-colour LED: glow BEHIND a crisp stroke (BlurMask on the
                 stroke itself smudged the icons — acrylic rule applies) */}
-            <Path path={iconPath} color={G(0.45)} strokeWidth={2.6} style="stroke"
+            <Path path={iconPath} color={light(0.45)} strokeWidth={2.6} style="stroke"
                   strokeCap="round" strokeJoin="round">
               <BlurMask blur={3} style="normal" respectCTM />
             </Path>
-            <Path path={iconPath} color={G(0.95)} strokeWidth={1.1} style="stroke"
+            <Path path={iconPath} color={ink(0.95)} strokeWidth={1.1} style="stroke"
                   strokeCap="round" strokeJoin="round" />
           </Group>
 
@@ -542,11 +553,11 @@ export default function DrumWheel({
                 paddingHorizontal: Math.max(3, W * 0.05),
               }]}>
           <Text style={{
-            color: G(0.70), fontSize: pmFontSz, fontFamily,
+            color: ink(0.70), fontSize: pmFontSz, fontFamily,
             lineHeight: drumTop, includeFontPadding: false,
           }}>−</Text>
           <Text style={{
-            color: G(0.70), fontSize: pmFontSz, fontFamily,
+            color: ink(0.70), fontSize: pmFontSz, fontFamily,
             lineHeight: drumTop, includeFontPadding: false,
           }}>+</Text>
         </View>

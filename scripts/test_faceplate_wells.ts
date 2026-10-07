@@ -319,10 +319,22 @@ function recorder() {
      && (cb.match(/onPress=\{chatOff \? NOOP : onChat\}/g) ?? []).length === 2
      && !/opacity: chatOff \? 0\.4/.test(cb) && !/disabled=\{chatOff\}/.test(cb));
   const tk = code('components/TunerKeys.tsx');
-  ok('TunerKeys: both keys lit through DomeKey (one implementation)', /<DomeKey\s+lightReach=\{lightReach\}/.test(tk));
+  ok('TunerKeys: both keys lit through DomeKey (one implementation)', /<DomeKey\s+lightReach=\{lampOff \? 0 : lightReach\}/.test(tk));
   ok('TunerKeys: unlit, the glyph is drawn exactly as today (α .55, 2.6, blur 3, under α .95 1.4)',
      /: <Path path=\{glyphPath\} color=\{G\(0\.55 \* dim\)\} strokeWidth=\{2\.6\}[\s\S]*?<BlurMask blur=\{3\} style="normal" respectCTM \/>/.test(tk)
-     && /color=\{G\(0\.95 \* dim\)\} strokeWidth=\{1\.4\}/.test(tk));
+     && /color=\{lampOff \? LAMP_OFF_INK : G\(0\.95 \* dim\)\} strokeWidth=\{1\.4\}/.test(tk));
+  // ★ 2026-10-07: ZOOM's lamp goes OFF in DAB (drum and keys, portrait and landscape) — unlit, never disabled:
+  //   it still turns / presses and clicks (disabled_control_reads_as_absent).
+  ok('ControlsBar: zoom lamp off in DAB — both drums and both key pairs',
+     (cb.match(/<DrumWheel type="zoom"[^>]*lampOff=\{!!dab\}/g) ?? []).length === 2
+     && (cb.match(/<TunerKeys type="zoom"[^>]*lampOff=\{!!dab\}/g) ?? []).length === 2
+     && !/<(?:DrumWheel|TunerKeys) type="zoom"[^>]*disabled/.test(cb));
+  ok('TunerKeys: lamp off = unlit legend + no glyph glow, keys never disabled by it',
+     /lampOff \? LAMP_OFF_LEGEND/.test(tk) && /lampOff \? null : lit/.test(tk) && !/disabled[^\n]*lampOff/.test(tk));
+  const dw = code('components/DrumWheel.tsx');
+  ok('DrumWheel: lamp off = no pool, light transparent, ink unlit, no colour left on the raw LED',
+     /\{!lampOff && <DrumPool/.test(dw) && /lampOff \? 'rgba\(0,0,0,0\)' : G\(a\)/.test(dw)
+     && /lampOff \? LAMP_OFF_INK : G\(a\)/.test(dw) && !/G\(0\.\d+\)[},]/.test(dw));
   for (const f of ['components/KeyLight.tsx', 'constants/keyLight.ts']) {
     const src = code(f);
     ok(`${f}: no frame callback, no derived value, no live blur`, !/useFrameCallback|useDerivedValue|BlurMask|withRepeat/.test(src));

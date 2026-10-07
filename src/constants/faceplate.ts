@@ -168,6 +168,17 @@ export function solidOver(color: string, base: [number, number, number] = [0, 0,
 /** rgba() from a triplet — the only way a token should be given an alpha. */
 export const rgba = (rgb: string, a: number) => `rgba(${rgb},${Math.min(1, Math.max(0, a))})`;
 
+/**
+ * ★★ A KEY WHOSE LAMP IS OFF (B10, Stuart): the key stays a real key — it presses, sinks and clicks like the
+ *   rest — but nothing lights it: no gap light, no flood, and its legend is the unlit engraving. That reads as
+ *   "this does nothing here" the way a real radio's dark button does, where a 40 % grey-out read as a broken or
+ *   absent control. First the CHAT key on a server with no chat; ★ 2026-10-07 also the ZOOM drum / keys in DAB
+ *   (DrumWheel / TunerKeys `lampOff`). One ink for every unlit legend, so they all read as the same dark lamp.
+ */
+export const LAMP_OFF_INK = 'rgba(128,120,110,0.55)';
+export const LAMP_OFF_LEGEND = { color: LAMP_OFF_INK, hot: LAMP_OFF_INK,
+                                 glow: 'rgba(0,0,0,0)', shade: 'rgba(0,0,0,0.35)' };
+
 /** The LED at alpha `a` — what every glow, well edge and icon in the controls colour is drawn with. */
 export function ledA(c: LedColour, a: number): string {
   const al = Math.min(1, Math.max(0, a));
