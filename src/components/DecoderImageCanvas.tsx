@@ -24,7 +24,7 @@ import React, {
 import { PanResponder, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 // ★★ A REAL FILE, NOT A data: URL — see save() below for why.
 import { File, Paths } from 'expo-file-system';
-import { WEFAX_ALIGN_ZERO, chartAlignStep, drawnAlign, wefaxOffset, type ChartAlignState, type WefaxAlign } from '../utils/wefaxAlign';
+import { WEFAX_ALIGN_ZERO, chartAlignStep, drawnAlign, wefaxOffset, type ChartAlignState, type WefaxAlign, type WefaxFormat } from '../utils/wefaxAlign';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../utils/wefaxCrisp';
 import {
   Canvas, Image as SkiaImage, Skia,
@@ -109,6 +109,9 @@ export interface DecoderImageCanvasProps {
   /** ★★ The STATION's slant (utils/wefaxAlign wefaxPreset) — the centre of each chart's slant search. Never the
    *  saved or drawn slant (2026-10-07: a stale one centred the search where the chart's real slant was out of reach). */
   stationSlant?: number;
+  /** ★★ The chart formats auto-align may act on for this station (utils/wefaxAlign wefaxFormat, 2026-10-07): a white
+   *  border only on DDK/SVJ4, Northwood's margin only on Northwood; a black strip and DDK's header bar anywhere. */
+  stationFormat?: WefaxFormat;
   /** Reports the per-chart automatic alignment (null = nothing found) and the slant measured on the chart
    *  (undefined = nothing on it could measure one) for the ADJ strip. */
   onAutoAlign?: (a: WefaxAlign | null, measuredSlant?: number) => void;
@@ -177,7 +180,7 @@ function mkBuf(w: number, h: number): PixBuf {
 
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
-                               autoMargin = false, autoSlant = true, stationSlant = 0, onAutoAlign,
+                               autoMargin = false, autoSlant = true, stationSlant = 0, stationFormat, onAutoAlign,
                                alignPreview, onAlignDrag, raw = false, onNewChart }, ref) {
     const rawRef = useRef(raw);
     rawRef.current = raw;
@@ -189,6 +192,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     autoSlantRef.current = autoSlant;
     const stationSlantRef = useRef(stationSlant);
     stationSlantRef.current = stationSlant;
+    const stationFormatRef = useRef(stationFormat);
+    stationFormatRef.current = stationFormat;
     /** The SHIFT / SLANT a buffer is drawn with: this chart's own shift when found (else the listener's), and the
      *  slant MEASURED on this chart when there is one (else the listener's saved one, else the station's).
      *  ★★ Measured beats saved (2026-10-07): a saved slant is one receiver's clock on one day — Stuart's DDK on the
@@ -391,7 +396,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         const raw = buf.raw;
         if (autoRef.current && chartAlignStep(st, () => Array.from({ length: ln + 1 },
               (_, y) => raw.subarray(y * buf.w, (y + 1) * buf.w)), buf.w, stationSlantRef.current,
-              raw.subarray(ln * buf.w, (ln + 1) * buf.w))) {
+              raw.subarray(ln * buf.w, (ln + 1) * buf.w), stationFormatRef.current)) {
           for (let y = 0; y < ln; y++) alignRow(buf, y, effAlign(buf));
           moved = true;
         }

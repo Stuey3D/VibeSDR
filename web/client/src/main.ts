@@ -34,7 +34,7 @@ import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../..
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle } from '../../../src/utils/navtex';
-import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
+import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
@@ -11981,7 +11981,9 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     if (decManualShift === null) {
       const before = decAuto.al, slantBefore = decAuto.slant;
       // ★★ Centred on the STATION's slant, never the saved one (2026-10-07 — see wefaxAlign chartAlignStep).
-      const moved = chartAlignStep(decAuto, () => decLiveRaw, w, wefaxPreset(spec?.frequency ?? 0).slant, raw);
+      // ★★ …and acting only on the station's own chart formats (2026-10-07 — wefaxAlign wefaxFormat).
+      const moved = chartAlignStep(decAuto, () => decLiveRaw, w, wefaxPreset(spec?.frequency ?? 0).slant, raw,
+                                   wefaxFormat(spec?.frequency ?? 0));
       if (decAuto.al !== before || decAuto.slant !== slantBefore) updateDecAdjLabels();
       // a slant measured where nothing moved (a phased chart) still redraws the chart at that slant
       if (moved || (decAuto.slant !== slantBefore && !decSlantTouched)) { redrawDecAlign(); return; }

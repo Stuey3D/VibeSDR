@@ -32,7 +32,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
 import { type NavtexAssembler, type NavtexMessage, navtexTitle, navtexLostPct, navtexBody, navtexFileName,
          navtexFileText } from '../utils/navtex';
-import { SLANT_STEP, parseAlign, wefaxAlignKey, wefaxPreset, type WefaxAlign } from '../utils/wefaxAlign';
+import { SLANT_STEP, parseAlign, wefaxAlignKey, wefaxFormat, wefaxPreset, type WefaxAlign } from '../utils/wefaxAlign';
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
@@ -1309,6 +1309,7 @@ export default function DecoderPanel({
               onAutoAlign={onChartAlign}
               autoSlant={!slantTouched}
               stationSlant={wefaxPreset(tunedHz).slant}
+              stationFormat={wefaxFormat(tunedHz)}
               raw={isWefax && rawChart}
               onNewChart={onNewChart}
               alignPreview={isWefax && adjOpen && aligning && !viewingPrev ? curShift : undefined}
