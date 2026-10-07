@@ -26,7 +26,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chartAlignStep, wefaxPreset, type ChartAlignState } from '../../src/utils/wefaxAlign.ts';
+import { chartAlignStep, wefaxFormat, wefaxPreset, type ChartAlignState } from '../../src/utils/wefaxAlign.ts';
 import { readPngGrey, toWidth, type Grey } from './png.ts';
 import { synthetic } from './synthetic.ts';
 
@@ -103,6 +103,11 @@ function safeColumns(rows: Uint8Array[]): Uint8Array {
   const dark = new Uint32Array(W);
   let n = 0;
   for (const r of rows) {
+    // ★ A line inked right across (DDK's closing bar, a stop tone drawn black) says nothing about columns: counted, it
+    //   inked every column on 5 % of a 400-line join and no column was paper any more (2026-10-07, Stuart's HF+ copies).
+    let across = 0;
+    for (let x = 0; x < W; x += 3) if (Math.abs(r[x] - paper) > 80) across++;
+    if (across > 0.9 * W / 3) continue;
     let prev = r[W - 1];
     for (let x = 0; x < W; x++) { const v = r[x]; if (Math.abs(v - paper) > 80 && Math.abs(prev - paper) > 80) { dark[x]++; dark[(x - 1 + W) % W]++; } prev = v; }
     n++;
@@ -152,7 +157,8 @@ function run(c: Chart, safe: Uint8Array, kind: 'phased' | 'late' | 'slant', join
   const k = (c.e.txSlant ?? 0) + extraK;                     // what the lines really carry
   const rx = receive(c.rows, from, roll, k, sigma);
   const st: ChartAlignState = {};
-  for (let y = 0; y < rx.length; y++) chartAlignStep(st, () => rx.slice(0, y + 1), W, station, rx[y]);
+  const fmt = wefaxFormat(c.e.dialHz);                     // the formats the code acts on for this dial
+  for (let y = 0; y < rx.length; y++) chartAlignStep(st, () => rx.slice(0, y + 1), W, station, rx[y], fmt);
   // what the clients draw (DecoderImageCanvas effAlign, auto on, nothing saved): the chart's shift, its measured slant
   // or else the station's
   const D = { shift: st.al?.shift ?? 0, slant: st.slant ?? station };

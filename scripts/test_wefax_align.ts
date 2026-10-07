@@ -1,8 +1,8 @@
 // test_wefax_align.ts — WEFAX SHIFT / SLANT and the per-chart margin finder (src/utils/wefaxAlign.ts).
 // Synthetic charts: a speckled page with a few curved "isobars", plus (or not) a black margin line that drifts with
 // the station's slant — the shape measured on Northwood 4610, 2026-10-04 (margin 40 px in on one chart, ~370 on another).
-import { findMargin, findMarginSlant, findGutter, findChartAlign, findHeaderBar, chartAlignStep, wefaxOffset, drawnAlign, rotateLine, wefaxPreset, MARGIN_AFTER_LINES,
-         type ChartAlignState } from '../src/utils/wefaxAlign.ts';
+import { findMargin, findMarginSlant, findGutter, findChartAlign, findHeaderBar, findStrip, chartAlignStep, wefaxFormat, wefaxOffset, drawnAlign, rotateLine, wefaxPreset, MARGIN_AFTER_LINES,
+         type ChartAlignState, type WefaxFormat } from '../src/utils/wefaxAlign.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 const W = 1809;
@@ -18,6 +18,10 @@ function chart(lines: number, margin: number | null, slant: number): Uint8Array[
   }
   return rows;
 }
+// ★ The format of the station a synthetic chart is drawn for (2026-10-07: auto-align acts only on a station's own
+//   format): slant 0 = DDK 7880 (white border), −0.06 = Northwood 4610 (margin).
+const DDK = wefaxFormat(7878100), GYA = wefaxFormat(4608100);
+const fmtOf = (slant: number): WefaxFormat => (slant ? GYA : DDK);
 const near = (a: number | null, b: number, tol = 3) => a !== null && Math.abs(((a - b + W * 1.5) % W) - W / 2) <= tol;
 ok(near(findMargin(chart(MARGIN_AFTER_LINES, 42, -0.06), W, -0.06), 42), 'margin 42 px in, Northwood slant → found at 42');
 ok(near(findMargin(chart(MARGIN_AFTER_LINES, 368, -0.06), W, -0.06), 368), 'margin dead centre-ish (368) → found');
@@ -44,17 +48,17 @@ function bordered(lines: number, roll: number): Uint8Array[] {
   }
   return rows;
 }
-ok(findChartAlign(bordered(300, 0), W, 0, 300) === null, 'DDK phased: frame is NOT a margin, border already at the edge → not moved');
-{ const a = findChartAlign(bordered(300, 900), W, 0, 300);
+ok(findChartAlign(bordered(300, 0), W, 0, 300, 150, undefined, DDK) === null, 'DDK phased: frame is NOT a margin, border already at the edge → not moved');
+{ const a = findChartAlign(bordered(300, 900), W, 0, 300, 150, undefined, DDK);
   // joined mid-way: line starts 900 px late, so the border (orig 1746…54) sits at 846…963 — centre ≈ 900 → moved to the edge
   ok(!!a && Math.abs(a.shift - 900) <= 6 && a.slant === 0, `DDK joined mid-chart: the white border is cut at ${a?.shift} (≈900)`); }
 ok(findGutter(chart(300, 42, -0.06), W, -0.06, 0, 300) === null, 'a Northwood-style chart has no blank band');
-{ const a = findChartAlign(chart(300, 42, -0.06), W, -0.06, 300);
+{ const a = findChartAlign(chart(300, 42, -0.06), W, -0.06, 300, 150, undefined, GYA);
   ok(!!a && near(a.shift, 40), 'Northwood: margin path still wins'); }
 // ★ chartAlignStep: decided at 300 lines WITH CONTENT, refines at 600 only a chart it moved; phased DDK untouched.
-const feed = (st: ChartAlignState, rows: Uint8Array[], slant: number, upto: number) => {
+const feed = (st: ChartAlignState, rows: Uint8Array[], slant: number, upto: number, fmt = fmtOf(slant)) => {
   let moved = 0;
-  for (let y = 0; y < upto; y++) if (chartAlignStep(st, () => rows.slice(0, y + 1), W, slant, rows[y])) moved++;
+  for (let y = 0; y < upto; y++) if (chartAlignStep(st, () => rows.slice(0, y + 1), W, slant, rows[y], fmt)) moved++;
   return moved;
 };
 { const rows = chart(700, 42, -0.06); const st: ChartAlignState = {};
@@ -70,7 +74,7 @@ const feed = (st: ChartAlignState, rows: Uint8Array[], slant: number, upto: numb
   const rows = [...tone, ...bordered(600, 900)]; const st: ChartAlignState = {};
   ok(feed(st, rows, 0, 300) === 0 && st.al === undefined && (st.n ?? 0) < 300, 'tone lines are not counted (no decision at line 300)');
   const st2: ChartAlignState = {}; let moved = 0;
-  for (let y = 0; y < rows.length && st2.al === undefined; y++) if (chartAlignStep(st2, () => rows.slice(0, y + 1), W, 0, rows[y])) moved++;
+  for (let y = 0; y < rows.length && st2.al === undefined; y++) if (chartAlignStep(st2, () => rows.slice(0, y + 1), W, 0, rows[y], DDK)) moved++;
   ok(moved === 1 && !!st2.al && Math.abs(st2.al.shift - 900) <= 6, `after the tone, the border is still found: cut at ${st2.al?.shift} (≈900)`); }
 // ★★★ 2026-10-06 — Stuart's DDK 7880 charts on his RSP1A, phased, then cut by auto-align. The geometry of the UberSDR
 //     copy of the 12:56 UTC chart (20261006_130727_f8c5ee8e.png, measured): ONE frame line, on the left, at 55–57; the
@@ -116,7 +120,7 @@ for (const k of [0.011, -0.03]) {
 // ★ No straight line beside the border (DDK's schedule / text pages): the slant stays the station's.
 { const rows = Array.from({ length: 400 }, () => { const r = new Uint8Array(W).fill(250);
     for (let x = 100; x <= 1700; x++) if (rnd() < 0.05) { r[x] = 30; r[x + 1] = 30; } return r; });
-  const a = findChartAlign(rows, W, 0, 400);
+  const a = findChartAlign(rows, W, 0, 400, 200, undefined, DDK);
   ok(a === null || a.slant === 0, `a text page: no slant invented (${a?.slant})`); }
 
 // ★★★ 2026-10-07 — Stuart's DDK 7880 on the Pi 500's Airspy HF+ (RC24 iPhone): the North Sea SST chart, joined ~670
@@ -157,26 +161,29 @@ for (const sigma of [0, 45]) {
 }
 // ★★ WHY THE CLIENTS CENTRE THE SEARCH ON THE STATION'S SLANT, never a saved one: centred on a stale −0.06 (a slant
 //    saved on another radio, or Northwood's), the search ends at +0.09 and stops there, short of the chart's +0.11.
-{ const st: ChartAlignState = {}; feed(st, sst(700, 1220, 0.11, 30), -0.06, 700);
+{ const st: ChartAlignState = {}; feed(st, sst(700, 1220, 0.11, 30), -0.06, 700, DDK);
   ok(st.slant !== undefined && st.slant < 0.1, `centred on −0.06 the search cannot reach +0.11 (stops at ${st.slant})`); }
 // ★★ A phased chart (band already at the ends) measures its slant too — reported in st.slant, nothing moved.
 { const st: ChartAlignState = {}; let moved = 0; const rows = sst(700, -8, 0.05, 30);
-  for (let y = 0; y < rows.length; y++) if (chartAlignStep(st, () => rows.slice(0, y + 1), W, 0, rows[y])) moved++;
+  for (let y = 0; y < rows.length; y++) if (chartAlignStep(st, () => rows.slice(0, y + 1), W, 0, rows[y], DDK)) moved++;
   ok(st.atEdge === true && (st.al === null || st.al.shift === 0) && st.slant !== undefined && Math.abs(st.slant - 0.05) <= 0.01,
      `phased SST leaning +0.05: left where it is, slant measured (${st.slant}), shift ${st.al?.shift ?? 0}`); }
 // ★★ Joined near the end: ~230 lines of map + legend, then white paper — never 300 lines with content. Looked at when
-//    the chart ends (CHART_END_FLAT featureless lines), and cut in its band.
+//    the chart ends (CHART_END_FLAT featureless lines). ★ 2026-10-07: and then cut in its band, or LEFT ALONE — the
+//    band beside the legend is bounded by latitude labels here, not by the frame, so nothing straight confirms it as
+//    a border (findChartAlign: conservative, worldwide); it is never cut anywhere else.
 { const rows = sst(500, 900, 0.01, 30, 100), st: ChartAlignState = {};
   feed(st, rows, 0, rows.length);
-  ok((st.n ?? 0) < 300 && !!st.al && cutIn(st.al.shift, 900), `joined at the end (${st.n} lines with content): cut at the chart's end (${st.al?.shift} ≈ 908)`); }
+  ok((st.n ?? 0) < 300 && st.al !== undefined && (st.al === null || cutIn(st.al.shift, 900)),
+     `joined at the end (${st.n} lines with content): looked at when it ended, cut in its band or left (${st.al?.shift ?? 'left'})`); }
 // ★★ A first look that found nothing is taken again at 600 — once.
 { const st: ChartAlignState = { al: null, n: 599 }; let calls = 0;
   const rows = sst(600, 1220, 0, 0);
-  const moved = chartAlignStep(st, () => { calls++; return rows; }, W, 0, rows[599]);
+  const moved = chartAlignStep(st, () => { calls++; return rows; }, W, 0, rows[599], DDK);
   ok(moved && calls === 1 && cutIn(st.al?.shift, 1220) && st.retried === true, `nothing at 300 → looked again at 600 and cut (${st.al?.shift})`);
-  ok(!chartAlignStep(st, () => { calls++; return rows; }, W, 0, rows[599]) && calls === 1, '…and only once'); }
+  ok(!chartAlignStep(st, () => { calls++; return rows; }, W, 0, rows[599], DDK) && calls === 1, '…and only once'); }
 { const st: ChartAlignState = { al: null, atEdge: true, n: 599 }; let calls = 0;
-  chartAlignStep(st, () => { calls++; return sst(600, 1220, 0, 0); }, W, 0, sst(1, 0, 0, 0)[0]);
+  chartAlignStep(st, () => { calls++; return sst(600, 1220, 0, 0); }, W, 0, sst(1, 0, 0, 0)[0], DDK);
   ok(calls === 0, 'a phased chart (border centred at the first look) is never looked at again'); }
 
 // ★★ No signal at all (Northwood 4610, 20261006_154718: 3000 lines of noise): nothing is ever moved — the second look
@@ -208,7 +215,7 @@ function lateJoin(lines: number, roll: number, sigma: number, boxSlant: number, 
 for (const sigma of [0, 45]) {
   const st: ChartAlignState = {}; feed(st, lateJoin(700, 1300, sigma, 0.06, false), 0, 700);
   const k = st.slant ?? 0;
-  ok(Math.abs(k - 0.01) <= 0.015 && !!st.al && Math.abs(st.al.slant - 0.01) <= 0.015,
+  ok(Math.abs(k - 0.01) <= 0.015 && (!st.al || Math.abs(st.al.slant - 0.01) <= 0.015),
      `late join, a box edge over 120 lines leaning +0.07, σ${sigma}: slant not taken from it (${st.slant}, drawn ${st.al?.slant})`);
 }
 for (const sigma of [0, 45]) {
@@ -245,6 +252,46 @@ function withBar(rows: Uint8Array[], gapCentre: number): Uint8Array[] {
   const rows = withBar(chart(700, 400, -0.06), 357), st: ChartAlignState = {};
   feed(st, rows, -0.06, rows.length);
   ok(st.via === 'margin' && !!st.al && near(st.al.shift, 398, 4), `Northwood with its bar: cut at the margin (${st.al?.shift} ≈ 398), not the gap`); }
+
+// ★★★ CONSERVATIVE, WORLDWIDE (2026-10-07, scripts/wefax-world): a chart is moved only in a format it positively is.
+const ANY = wefaxFormat(9108100);                                   // NMF Boston: neither a border nor a margin station
+ok(!ANY.border && !ANY.margin && DDK.border && !DDK.margin && GYA.margin && !GYA.border, 'formats: NMF none, DDK border, GYA margin');
+ok(wefaxPreset(11088100).slant === 0 && wefaxPreset(11084600).slant === -0.06,
+   'KVM70 11090 (dial 11088.1) no longer takes Northwood 11086.5\'s −0.06; Northwood\'s own dial does');
+// an open-sea band on an edge-to-edge chart from a station that sends no white border: never cut as one
+{ const rows = bordered(700, 900), st: ChartAlignState = {};
+  feed(st, rows, 0, rows.length, ANY);
+  ok(!st.al, `a blank band on a non-border station: left as received (${JSON.stringify(st.al)})`); }
+// the black margin strip (NWS/JMH/HLL2/XSG/JFX): an 81 px black strip right of a 1728 px picture
+function stripped(lines: number, roll: number, slant: number, sigma: number): Uint8Array[] {
+  const rows: Uint8Array[] = [];
+  for (let y = 0; y < lines; y++) {
+    const r = new Uint8Array(W).fill(245);
+    for (let x = 0; x < 1728; x++) if (rnd() < 0.05) r[x] = r[(x + 1) % W] = 30;
+    for (const c of [400, 1000]) { const cx = Math.round(c + 80 * Math.sin((y + c) / 90)); r[cx] = r[cx + 1] = 20; }
+    for (let x = 1728; x < W; x++) r[x] = 8;
+    const o = new Uint8Array(W), off = Math.round(roll + slant * y);
+    for (let x = 0; x < W; x++) o[x] = Math.max(0, Math.min(255, Math.round(r[(((x - off) % W) + W) % W] + (sigma ? gauss() * sigma : 0))));
+    rows.push(o);
+  }
+  return rows;
+}
+{ const st: ChartAlignState = {}; feed(st, stripped(700, 0, 0, 30), 0, 700, ANY);
+  ok(st.via === 'strip' && !st.al, `phased chart with a black strip at the line's end: left as received (${JSON.stringify(st.al)})`); }
+{ const st: ChartAlignState = {}; feed(st, stripped(700, 600, 0, 30), 0, 700, ANY);
+  const seam = st.al ? (((st.al.shift - 600) % W) + W) % W : -1;
+  ok(st.via === 'strip' && seam >= 1728 && seam < W, `rolled 600 px: the seam put inside the strip (${seam}, strip 1728…1808)`); }
+{ const st: ChartAlignState = {}; feed(st, stripped(700, 600, 0.16, 30), 0, 700, ANY);
+  ok(st.slant !== undefined && Math.abs(st.slant - 0.16) <= 0.01, `a strip chart leaning 0.16 (CBV): its slant measured from the strip (${st.slant})`); }
+{ const rows = stripped(300, 0, 0, 0).map((r) => r.map((v) => (v === 8 ? 90 : v)));   // a dark GREY band, not black
+  ok(findStrip(rows, W, 0, 0, 300) === null, 'a dark grey band (a satellite\'s sea) is not a strip'); }
+// a phased DDK text page (schedule, Stuart's HF+ 15:04): header bar at the ends, no frame — never moved, no slant
+{ const page = Array.from({ length: 700 }, (_, y) => { const r = new Uint8Array(W).fill(250);
+    if (y % 28 < 12) for (let x = 190; x < 190 + 400 + (y % 7) * 150; x++) if (rnd() < 0.35) r[x] = r[x + 1] = 20;
+    return r; });
+  const rows = withBar(page, 0), st: ChartAlignState = {};
+  feed(st, rows, 0, rows.length);
+  ok(!st.al && st.slant === undefined, `a phased text page with its header bar: drawn exactly as received (${JSON.stringify(st.al)}, slant ${st.slant})`); }
 
 // ★ RAW (Stuart, 2026-10-06): drawn through drawnAlign, every line comes out exactly as received — whatever the
 //   correction underneath — and RAW off gives that correction back untouched.
