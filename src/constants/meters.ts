@@ -156,6 +156,69 @@ export function compactKeyHitSlop(slot: number, rowGap: number, colGap: number) 
   return { top, bottom, left: colGap / 2, right: colGap / 2, reach: slot + top + bottom };
 }
 
+/**
+ * ★ 2026-10-08 — THE DAB METER'S TYPE, SIZED BY ITS SLOT (components/DabMeter.tsx; Stuart, Nixie on an iPhone 17:
+ *   "there is a slight bit of space in that bar to make the 2 lines of text slightly bigger and more readable
+ *   (especially in portrait)"). The two-line housing used min(11, 0.4 × height): 11 / 10 pt in the 33 pt portrait
+ *   housing, 10 / 9 in the 27 pt landscape one — 25 of 33 pt of line boxes, and the cap at 11 left the rest empty.
+ *   Now the largest pair whose two line boxes (round(size × 1.2) each, unchanged) fit the housing less DAB_TYPE.padV
+ *   top and bottom. That 1 pt is the BOX's padding: the INK keeps ~3 pt more on every face, because a 1.2 line box
+ *   puts the cap top a quarter-em below its top and the baseline a fifth-em above its bottom (the faces' own
+ *   ascent / cap / descent — test_faceplate_screenfont §6 measures every face at every housing).
+ *       portrait iPhone 17 (33 pt) 11 / 10 → 13 / 12 · SE Display Zoom (27) 10 / 9 → 11 / 10 · Pro Max (38) → 15 / 14
+ *       landscape iPhone 17 (27)   10 / 9  → 11 / 10 · a Mac window (41) → 15 / 14 (the cap)
+ *   The row's height is the slot's, as before — nothing else moves. The one-line slots (the phone's thin line, the
+ *   frame, a short housing) keep their sizes: their limit is the width, not the height.
+ */
+export const DAB_TYPE = {
+  /** A housing at least this tall takes two lines (verdict over advice). */
+  twoLinesMin: 26,
+  /** The line boxes' clearance from the housing's top and bottom (see above: the ink has more). */
+  padV:        1,
+  /** Line box = round(size × lineK) — DabMeter's lineHeight. */
+  lineK:       1.2,
+  /** The advice line is this share of the verdict's size (2026-10-07: 0.9). */
+  adviceK:     0.9,
+  /** Two lines: never larger than this (a Mac window's housing is 41 pt — the mode box's reading is 16 there). */
+  maxFont:     15,
+  /** One line: the old sizes (≤ 10 pt, height − 2). */
+  oneLineMax:  10,
+  minFont:     7,
+} as const;
+
+export interface DabMeterType {
+  twoLines: boolean;
+  /** The verdict ("Multiplex strong") — or, on one line, the whole sentence. */
+  font1: number;
+  /** The advice ("Clear audio"), two-line housings only. */
+  font2: number;
+  /** Line boxes (lineHeight). */
+  lh1: number;
+  lh2: number;
+  /** The three bars' height. */
+  barsH: number;
+}
+
+/** DabMeter's sizes for a slot `height` pt tall. Pure. ★ Sizes are BEFORE ScreenText.sizeK (DSEG14's cell). */
+export function dabMeterType(height: number, variant: 'line' | 'housing' | 'frame'): DabMeterType {
+  const T = DAB_TYPE;
+  const lh = (f: number) => Math.round(f * T.lineK);
+  const adv = (f: number) => Math.max(T.minFont, Math.round(f * T.adviceK));
+  const twoLines = variant === 'housing' && height >= T.twoLinesMin;
+  let font1: number;
+  if (twoLines) {
+    font1 = T.minFont;
+    for (let f = T.maxFont; f > T.minFont; f--) {
+      if (lh(f) + lh(adv(f)) <= height - 2 * T.padV) { font1 = f; break; }
+    }
+  } else {
+    font1 = Math.max(T.minFont, Math.min(T.oneLineMax, Math.floor(height - 2)));
+  }
+  const font2 = adv(font1);
+  const barsH = Math.max(5, Math.min(twoLines ? height - 10 : height - 2, Math.round(font1 * 1.3)));
+  return { twoLines, font1, font2, lh1: lh(font1), lh2: lh(font2), barsH };
+}
+
 
 /** Is the squelch muting? The gate's own verdict when the backend gives one, else bar geometry — the
  *  one rule the bar, the mode box's SQL and the LED / analogue meters all read (MeterValues.gate). */

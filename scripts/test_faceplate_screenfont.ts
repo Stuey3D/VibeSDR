@@ -13,6 +13,11 @@
  *   4. THE FONT FILES — Nixie One has every glyph those elements write; ScreenText.charEm is not an under-estimate.
  *   5. NIXIE FITS — the status row in Nixie One (and Atkinson) at every width, metal and default chassis, with the
  *      same drops VCR / DOT use (lib_status_row: statusFit / PortraitStats' order).
+ *   6. ★ 2026-10-08 — THE DAB METER'S TWO LINES FILL THEIR HOUSING (meters.ts dabMeterType): at every portrait and
+ *      landscape window, SE Display Zoom to a Mac, LED / analogue × shared, on every face — both line boxes fit with
+ *      the padding, the ink keeps ≥ 2.5 pt top and bottom, neither line is smaller than before, portrait phones gain,
+ *      and the verdict and the advice fit the housing's width unshrunk. Nixie's advice line is brighter than it was
+ *      and still dimmer than the verdict.
  *
  * Run: npx tsx scripts/test_faceplate_screenfont.ts
  */
@@ -23,7 +28,8 @@ import {
   type DisplayStyle, type FaceplateSettings,
 } from '../src/constants/faceplate.ts';
 import { foldForDot, screenString, toSegCells } from '../src/constants/displayText.ts';
-import { HYPER, NIXIE, DOTO } from './lib_font_metrics.ts';
+import { HYPER, NIXIE, DOTO, SEG14 } from './lib_font_metrics.ts';
+import { DAB_TYPE, dabMeterType, landscapeDeck, portraitDeck, type MeterKind } from '../src/constants/meters.ts';
 import * as SR from './lib_status_row.ts';
 
 let fails = 0, passes = 0;
@@ -205,6 +211,99 @@ for (const face of ['nixie', 'hyper'] as const) for (const chassis of ['metal', 
     ok(`portrait ${W} pt: Nixie's row 4 no wider than the RC18 Doto run`,
        SR.portraitClockRow('nixie', W).need <= SR.portraitClockRow('doto', W).need);
   }
+}
+
+// ── 6. The DAB meter's two lines fill their housing (★ 2026-10-08) ───────────────
+{
+  // What DabMeter drew before (2026-10-07): min(11, floor(0.4 × h)) over round(0.9 ×) of it.
+  const before = (h: number) => { const f1 = Math.max(7, Math.min(11, Math.floor(h * 0.40))); return { f1, f2: Math.max(7, Math.round(f1 * 0.9)) }; };
+  // The faces as DabMeter sets them: font, sizeK, letter-spacing (0.4 one-weight, 0.2 Atkinson drawn bold ~ +8 %).
+  type Face = { name: string; style: DisplayStyle; m: ReturnType<typeof NIXIE>; k: number; ls: number; boldK: number };
+  const FACES: Face[] = [
+    { name: 'Nixie', style: 'nixie', m: NIXIE(), k: 1, ls: 0.4, boldK: 1 },
+    { name: 'Hyper', style: 'hyper', m: HYPER(), k: 1, ls: 0.2, boldK: 1.08 },
+    { name: 'DOT',   style: 'dot',   m: DOTO(),  k: 1, ls: 0.4, boldK: 1 },
+    { name: 'VCR',   style: 'seg',   m: SEG14(), k: 0.66, ls: 0.4, boldK: 1 },
+  ];
+  // Ink inside a line box of `lh` holding a `fs` pt face (iOS centres the face's natural ascent + descent in it).
+  const inkTop = (f: Face, fs: number, lh: number) => (lh - (f.m.ascent + f.m.descent) * fs) / 2 + (f.m.ascent - f.m.capHeight) * fs;
+  const baseBelow = (f: Face, fs: number, lh: number) => (lh - (f.m.ascent + f.m.descent) * fs) / 2 + f.m.descent * fs;
+  // A line's width: the TTF's advances for the proportional faces; DSEG14 in its fixed cells (SegLowerDText).
+  const width = (f: Face, t: string, size: number) => f.style === 'seg'
+    ? [...t].length * (0.816 * size * f.k + f.ls)
+    : f.m.width(t, size * f.k, f.ls) * f.boldK;
+  const LABELS = ['Multiplex moderate', 'Multiplex strong', 'Multiplex weak', 'No signal'];
+  const ADVICE = ['Expect occasional audio break-ups', 'No or heavily broken audio', 'Searching for the multiplex',
+                  'Locked, but nothing decodes', 'Clear audio'];
+  const check = (where: string, h: number, housingW: number, padH: number) => {
+    const t = dabMeterType(h, 'housing');
+    if (!t.twoLines) return null;
+    const b = before(h);
+    ok(`${where}: both line boxes fit (${t.lh1} + ${t.lh2} ≤ ${h} − 2 × ${DAB_TYPE.padV})`, t.lh1 + t.lh2 <= h - 2 * DAB_TYPE.padV);
+    ok(`${where}: no line smaller than before (${b.f1}/${b.f2} → ${t.font1}/${t.font2})`, t.font1 >= b.f1 && t.font2 >= b.f2);
+    ok(`${where}: the advice a step under the verdict`, t.font2 < t.font1 || t.font1 === DAB_TYPE.minFont);
+    const pad = (h - t.lh1 - t.lh2) / 2;
+    const room = housingW - 2 * padH - (3 * Math.max(2, Math.round(t.barsH * 0.24)) + 2 * Math.max(1, Math.round(Math.max(2, Math.round(t.barsH * 0.24)) * 0.55))) - 6;
+    for (const f of FACES) {
+      const top = pad + inkTop(f, t.font1 * f.k, t.lh1), bottom = pad + baseBelow(f, t.font2 * f.k, t.lh2);
+      ok(`${where} ${f.name}: the ink keeps ≥ 2.5 pt top (${top.toFixed(1)}) and under the baseline (${bottom.toFixed(1)})`,
+         top >= 2.5 && bottom >= 2.5);
+      for (const l of LABELS) ok(`${where} ${f.name}: "${l}" fits unshrunk at ${t.font1} pt`, width(f, l, t.font1) <= room);
+      for (const a of ADVICE) ok(`${where} ${f.name}: "${a}" fits unshrunk at ${t.font2} pt`, width(f, a, t.font2) <= room);
+    }
+    return { b, t };
+  };
+  const seen: string[] = [];
+  // Portrait: portraitDeck's housing; the display spans the window less ~26 pt a side (screen 8 + the plate's
+  // padding, measured 22 on Stuart's iPhone 17 screenshot — erring narrow); DabMeter's padH s.r(8).
+  for (const [W, tablet] of [[320, false], [375, false], [390, false], [402, false], [430, false], [440, false],
+                             [768, true], [1024, true]] as [number, boolean][]) {
+    const scale = Math.max(0.75, Math.min(1.45, W / 390)), r = (n: number) => Math.round(n * scale);
+    for (const meter of ['vu', 'edge'] as MeterKind[]) for (const shared of [false, true]) for (const cap of [false, true]) {
+      const dl = portraitDeck({ cap, meter, shared, tablet, rowGap: r(6), r });
+      const res = check(`DAB portrait ${W} pt ${meter}${shared ? ' shared' : ''}${cap ? ' metal' : ''} (${dl.housingH} pt)`,
+                        dl.housingH, W - 2 * (8 + r(16) + 2), r(8));
+      if (!res) continue;
+      // ★ "especially in portrait": every phone from an iPhone up gains a size on both lines.
+      if (W >= 390 && !tablet) ok(`DAB portrait ${W} pt ${meter}${shared ? ' shared' : ''}: both lines bigger (${res.b.f1}/${res.b.f2} → ${res.t.font1}/${res.t.font2})`,
+                                  res.t.font1 > res.b.f1 && res.t.font2 > res.b.f2);
+      if (cap) seen.push(`portrait ${W} ${meter}${shared ? '+sh' : ''} h${dl.housingH}: ${res.b.f1}/${res.b.f2} → ${res.t.font1}/${res.t.font2}`);
+    }
+  }
+  // Landscape: landscapeDeck's housing, as wide as the display column (dispW), padH ledPadX; phones to a Mac window.
+  for (const [W, H, tablet] of [[568, 320, false], [667, 375, false], [740, 360, false], [844, 390, false], [852, 393, false],
+                                [874, 402, false], [932, 430, false], [956, 440, false], [1024, 768, true], [1366, 1024, true],
+                                [1920, 1080, true]] as [number, number, boolean][]) {
+    const scale = Math.max(0.58, Math.min(1.45, W / 926)), r = (n: number) => Math.round(n * scale);
+    for (const meter of ['vu', 'edge'] as MeterKind[]) for (const plate of [null, { screws: true, gloss: false }]) {
+      const lay = landscapeDeck({ plate, meter, tablet, W, H, scale, r, display: 'nixie' });
+      if (lay.meter !== meter) continue;
+      const res = check(`DAB landscape ${W}×${H} ${meter}${plate ? ' metal' : ''} (${lay.housingH} pt)`, lay.housingH, lay.dispW, lay.ledPadX);
+      if (res && plate) seen.push(`landscape ${W}×${H} ${meter} h${lay.housingH}: ${res.b.f1}/${res.b.f2} → ${res.t.font1}/${res.t.font2}`);
+    }
+  }
+  ok('DAB: the two-line housing was exercised in both orientations', seen.some(x => x.startsWith('portrait')) && seen.some(x => x.startsWith('landscape')));
+  for (const x of seen) console.log(`  DAB meter ${x}`);
+  // One-line slots are unchanged (their limit is the width).
+  for (const h of [8, 10, 12, 14, 21, 25]) for (const v of ['line', 'frame', 'housing'] as const) {
+    eq(`DAB one-line ${v} ${h} pt keeps its size`, dabMeterType(h, v).font1, Math.max(7, Math.min(10, Math.floor(h - 2))));
+  }
+  // ★ Nixie's advice line: brighter than the neon base it was, still a step under the verdict (relative luminance on black).
+  const lum = (c: string) => {
+    const m = c.startsWith('#') ? [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)).concat(1)
+      : (c.match(/[\d.]+/g) ?? []).map(Number);
+    const [R, G, B] = m.slice(0, 3).map(v => v * (m[3] ?? 1) / 255).map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+  };
+  const was = lum(`rgba(${LED.neon.rgb},0.9)`), now = lum(NEON_TEXT.advice), label = lum(NEON_TEXT.reading);
+  console.log(`  DAB Nixie advice luminance ${was.toFixed(3)} → ${now.toFixed(3)} (verdict ${label.toFixed(3)})`);
+  ok('DAB Nixie advice: brighter than before', now > was * 1.25);
+  ok('DAB Nixie advice: still dimmer than the verdict', now < label * 0.85);
+  const dab = src('src/components/DabMeter.tsx');
+  ok('DabMeter: Nixie\'s advice is NEON_TEXT.advice; the other faces keep theirs',
+     /const dim = nixie \? NEON_TEXT\.advice : lit \? rgba\(litRgb, 0\.9\) : 'rgba\(255,255,255,0\.86\)'/.test(dab));
+  ok('DabMeter: sizes and line boxes from dabMeterType', /dabMeterType\(height, variant\)/.test(dab)
+     && /lineHeight: lh1/.test(dab) && /lineHeight: lh2/.test(dab));
 }
 
 console.log(`${fails ? 'FAIL' : 'ok'}  faceplate screen font: ${passes} passed, ${fails} failed`);

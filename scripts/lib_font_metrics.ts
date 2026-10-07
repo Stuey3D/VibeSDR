@@ -20,6 +20,11 @@ export interface FontMetrics {
   width(text: string, size: number, letterSpacing?: number): number;
   /** The characters of `text` the font cannot draw (spaces aside). */
   missing(text: string): string[];
+  /** ★ 2026-10-08 — vertical metrics in em (hhea ascender / −descender; OS/2 sCapHeight): where the ink sits in a
+   *  line box (test_faceplate_screenfont §6, the DAB meter's two lines). */
+  ascent: number;
+  descent: number;
+  capHeight: number;
 }
 
 export function loadFont(file: string): FontMetrics {
@@ -66,8 +71,12 @@ export function loadFont(file: string): FontMetrics {
     const g = gidOf(ch.codePointAt(0) ?? 0);
     return g === 0 ? null : adv(g) / unitsPerEm;
   };
+  const os2 = tables['OS/2'];
+  const ascent = b.readInt16BE(tables.hhea + 4) / unitsPerEm;
+  const descent = -b.readInt16BE(tables.hhea + 6) / unitsPerEm;
+  const capHeight = u16(os2) >= 2 ? s16(os2 + 88) / unitsPerEm : ascent;
   return {
-    name: file, unitsPerEm, advance,
+    name: file, unitsPerEm, advance, ascent, descent, capHeight,
     width(text, size, ls = 0) {
       let w = 0;
       for (const ch of text) w += (advance(ch) ?? adv(0) / unitsPerEm) * size + ls;
@@ -86,3 +95,4 @@ const once = (file: string) => () => {
 export const NIXIE = once('NixieOne-Regular.ttf');
 export const HYPER = once('AtkinsonHyperlegible-Regular.ttf');
 export const DOTO  = once('Doto-Black.ttf');
+export const SEG14 = once('DSEG14Classic-BoldItalic.ttf');

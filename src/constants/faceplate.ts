@@ -225,6 +225,12 @@ export const NEON_TEXT = {
   mode:     '#ffb37a',
   reading:  '#ff9a55',
   readingGlow: 'rgba(255,90,10,0.8)',
+  /** ★ 2026-10-08 — a SECOND line under a `reading` (DabMeter's "Clear audio"; Stuart, Nixie: "can you brighten the
+   *  font slightly so it's easier to read in the Nixie font. VCR doesn't have this issue"). It was the neon BASE at
+   *  90 % (rgba(255,106,20,.9)) — a deeper, redder hue than the reading, relative luminance 0.25 against the
+   *  reading's 0.45, and thin Nixie One strokes in it blurred into the black. Now the reading's own hue at 88 %:
+   *  luminance 0.34 — plainly brighter, still a step under the line above it. */
+  advice:   'rgba(255,154,85,0.88)',
 };
 
 export interface ResolvedTextColour {

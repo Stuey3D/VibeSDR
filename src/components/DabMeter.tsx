@@ -24,6 +24,7 @@ import React, { useState } from 'react';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { LED, NEON_TEXT, rgba, screenOneWeight } from '../constants/faceplate';
+import { dabMeterType } from '../constants/meters';
 import { screenString } from '../constants/displayText';
 import SegLowerDText from './SegLowerDText';
 import type { DabQuality } from '../utils/dabQuality';
@@ -42,15 +43,10 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
   const oneWeight = screen.oneWeight;                    // one-weight face: never bold
   // ★ DSEG14's cell is the whole em — scaled so its capitals stand as tall as the other faces' (ScreenText.sizeK).
   const k = screen.sizeK;
-  const twoLines = variant === 'housing' && height >= 26;
-
-  // ── Sizes from the slot ──
-  const font1 = Math.max(7, Math.min(twoLines ? 11 : 10, Math.floor((twoLines ? height * 0.40 : height - 2))));
+  // ── Sizes from the slot (meters.ts dabMeterType — ★ 2026-10-08: the two-line housing's pair now fills its height) ──
   // ★ 2026-10-07 (Stuart, Nixie on silver: "Clear audio … that line in this colour is difficult to read"): the
-  //   advice line was 82 % of the verdict's size at 75 % brightness — 9 pt of dim neon. Now 90 % at 90 %: still
-  //   plainly the second line, but readable on every face. Two lines still fit the 26 pt housing (12 + 11).
-  const font2 = Math.max(7, Math.round(font1 * 0.9));
-  const barsH = Math.max(5, Math.min(twoLines ? height - 10 : height - 2, Math.round(font1 * 1.3)));
+  //   advice line went from 82 % of the verdict's size to 90 % (DAB_TYPE.adviceK), and brighter (`dim` below).
+  const { twoLines, font1, font2, lh1, lh2, barsH } = dabMeterType(height, variant);
   const barW = Math.max(2, Math.round(barsH * 0.24));
   const barGap = Math.max(1, Math.round(barW * 0.55));
   const barsW = 3 * barW + 2 * barGap;
@@ -95,7 +91,9 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
     fontWeight: '700' as const, ...screenOneWeight(screen), letterSpacing: oneWeight ? 0.4 : 0.2,
     ...glow,
   };
-  const dim = lit ? rgba(litRgb, 0.9) : 'rgba(255,255,255,0.86)';   // ★ 2026-10-07: was .75 / .70 — see font2
+  // ★ 2026-10-07: was .75 / .70. ★ 2026-10-08 — NIXIE: the reading's own hue a step down (NEON_TEXT.advice), not the
+  //   neon base, whose deeper red blurred thin Nixie One strokes; VCR / DOT / Hyperlegible are as they were.
+  const dim = nixie ? NEON_TEXT.advice : lit ? rgba(litRgb, 0.9) : 'rgba(255,255,255,0.86)';
   const sentence = [q.label, q.advice, q.detail].filter(Boolean).join('. ');
 
   return (
@@ -121,11 +119,11 @@ export default function DabMeter({ q, height, variant, padH = 6 }: {
         {/* ★ SegLowerDText (2026-10-06): on VCR "MER 12.3 dB" keeps a lower-case d (J + the centre bar). */}
         <SegLowerDText seg={screen.style === 'seg'} cells={screenString(screen.style, parts[0])}
               numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
-              style={[txt, { fontSize: font1 * k, lineHeight: Math.round(font1 * 1.2) }]} />
+              style={[txt, { fontSize: font1 * k, lineHeight: lh1 }]} />
         {twoLines && !!line2 && (
           <SegLowerDText seg={screen.style === 'seg'} cells={screenString(screen.style, line2)}
                 numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}
-                style={[txt, { fontSize: font2 * k, lineHeight: Math.round(font2 * 1.2), color: dim, fontWeight: oneWeight ? 'normal' : '600' }]} />
+                style={[txt, { fontSize: font2 * k, lineHeight: lh2, color: dim, fontWeight: oneWeight ? 'normal' : '600' }]} />
         )}
       </View>
     </View>
