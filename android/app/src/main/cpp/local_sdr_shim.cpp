@@ -4699,12 +4699,16 @@ static void vsNoteVisitor(const std::string& ip, const std::string& via = std::s
 static LocalSdrShim::RtlSerialFn g_vsRtlSerialFn;
 static LocalSdrShim::RtlSerialStatusFn g_vsRtlSerialStatusFn;
 
-static vibeproxy::TrustedProxies g_vsTrustedProxies;
+/* ★★ NEVER DESTROYED (2026-10-07): the front door's stopTunnel() runs as the process exits and re-applies
+ *  the trusted proxies AFTER static destruction has begun — the Pi 2's first crash report (rc24, at the rc25
+ *  update) symbolised to vsApplyTrustedProxies() locking a destroyed mutex. Heap-allocated and leaked on
+ *  purpose, so shutdown order cannot matter. */
+static vibeproxy::TrustedProxies& g_vsTrustedProxies = *new vibeproxy::TrustedProxies;
 /** ★ Whether the owner has named ANY proxy, and how many listeners have arrived from loopback.
  *  Together they answer "is this server behind something it has not been told about?" */
 static std::atomic<bool> g_vsHaveTrustedProxies{false};
 static std::atomic<int>  g_vsLoopbackSessions{0};
-static std::mutex                g_vsTrustedProxiesMtx;
+static std::mutex&               g_vsTrustedProxiesMtx = *new std::mutex;   // ★ never destroyed — see above
 
 static void vsPersist(const std::string& patch) {
     LocalSdrShim::ConfigPersistFn fn;
@@ -27217,8 +27221,8 @@ void LocalSdrShim::setDirectoryKey(const std::string& key) {
  *  can be combined without either clobbering the other — the owner may edit their list while the
  *  tunnel is up, and the tunnel may come and go while the owner's list stays. See
  *  setTunnelLoopbackTrust for why this exists at all. */
-static std::mutex       g_vsProxyOwnerMtx;
-static std::string      g_vsProxyOwnerCsv;
+static std::mutex&      g_vsProxyOwnerMtx = *new std::mutex;      // ★ never destroyed — see g_vsTrustedProxies
+static std::string&     g_vsProxyOwnerCsv = *new std::string;
 static std::atomic<bool> g_vsProxyTunnelLoopback{false};
 static void vsApplyTrustedProxies();
 static void vsSetTrustedProxiesCsv(const std::string& csv);
