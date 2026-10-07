@@ -247,10 +247,12 @@ connection logs it keeps are yours alone — so set a PIN if it is not meant to 
 public.
 
 ### Diagnostics
-If something breaks you can build a diagnostics report from the app and share it
-yourself, through the system share sheet. It is assembled on demand, shown to you
-first, and never sent by the app. It contains no PIN, password, callsign or precise
-location.
+If something breaks you can build a diagnostics report from the app (Export logs, in
+About, at the foot of the server list and on the server screen) and share it
+yourself, through the system share sheet, or copy it. It is assembled on demand,
+shown to you first, and never sent by the app. On a device hosting a VibeServer it
+also names the server's version, the radio model and how long it has been running.
+It contains no PIN, password, callsign or precise location.
 
 ## Permissions
 
