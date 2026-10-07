@@ -74,6 +74,7 @@ import {
 } from '../services/converter';
 import { wrapWithConverter, wrapConverterCallbacks } from '../services/ConverterBackend';
 import { KiwiAdapter } from '../services/KiwiAdapter';
+import { withKiwiProxyPort } from '../utils/kiwiProxy';
 import { localSessionGen } from '../services/localSession';
 import { startBookmarkAutosave, stopBookmarkAutosave,
          getLearnedBookmarksNow } from '../services/vibeServer';
@@ -2135,7 +2136,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   //       is a separate guard and does not depend on this timing.
   useEffect(() => {
     if (!route.params?.compatOnly) return;
-    let u = (route.params.baseUrl || '').trim().replace(/\/+$/, '')
+    let u = withKiwiProxyPort((route.params.baseUrl || '').trim()).replace(/\/+$/, '')   // ★★ proxy.kiwisdr.com = 8073 only
       .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
     if (!/^https?:\/\//.test(u)) u = 'http://' + u;
     setCompatUrl(u + '/');
@@ -10549,7 +10550,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                   //      multiple slots", FMDX.org Discord 2026-07-29) — the Kiwi path should
                   //      not quietly do the opposite.
                   client.current?.disconnectSocket?.();
-                  let u = (baseUrl || '').trim().replace(/\/+$/, '')
+                  let u = withKiwiProxyPort((baseUrl || '').trim()).replace(/\/+$/, '')   // ★★ proxy.kiwisdr.com = 8073 only
                     .replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
                   if (!/^https?:\/\//.test(u)) u = 'http://' + u;
                   setCompatUrl(u + '/');

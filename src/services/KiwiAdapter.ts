@@ -28,6 +28,7 @@ import type {
 import { NativeModules } from 'react-native';
 import { ImaAdpcmDecoder, decodeKiwiWaterfallFrame } from './imaAdpcm';
 import { getKiwiIdent, sanitizeIdent } from './kiwiIdent';
+import { withKiwiProxyPort } from '../utils/kiwiProxy';
 
 const Vibe = NativeModules.VibePowerModule as {
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
@@ -222,7 +223,8 @@ export class KiwiAdapter implements SDRBackend {
 
   /** http(s)/ws(s)://host:port[/…] → ws(s)://host:port (no trailing path). */
   static toWsBase(baseUrl: string): string {
-    let u = baseUrl.trim().replace(/\/+$/, '');
+    // ★★ proxy.kiwisdr.com listens on 8073 only — see utils/kiwiProxy.ts (47 % of public Kiwis).
+    let u = withKiwiProxyPort(baseUrl.trim()).replace(/\/+$/, '');
     if (u.startsWith('https://'))      u = 'wss://' + u.slice(8);
     else if (u.startsWith('http://'))  u = 'ws://'  + u.slice(7);
     else if (!/^wss?:\/\//.test(u))    u = 'ws://'  + u;
@@ -1160,8 +1162,15 @@ export class KiwiAdapter implements SDRBackend {
         // that we retry the other dialect first, reaching here really does mean the receiver hung
         // up on us — but it still has to say WHICH receiver.
         const what = this.label();
+        // ★★ NOT REACHED IS NOT REFUSED (2026-10-07). "Connection refused" / "timed out" / "could not
+        //    connect" are the PHONE's network errors, surfaced as the close reason: the receiver never
+        //    saw us, so "This KiwiSDR closed the connection" blamed it for something it did not do. The
+        //    commonest cause was ours — a portless proxy.kiwisdr.com address (utils/kiwiProxy.ts).
+        const unreachable = /connection refused|refused|timed out|could not connect|couldn.t connect|network is unreachable|host is down|no route to host|not connected to the internet|cannot find host|could not be found/i.test(reason);
         this.cb.onError(
-          handshakeBlock
+          unreachable
+            ? `Couldn’t reach this ${what} (${this.wsBase.replace(/^wss?:\/\//, '')}) — it may be offline, or its address has changed. Try again later or pick another receiver.`
+          : handshakeBlock
             ? `This ${what} wouldn’t open a data connection for the app — it sent us to its own web page instead. Many owners only allow their own web interface. Use “Open in compatibility mode” below to listen via the receiver’s web page, or try another receiver.`
           : reason
             ? `This ${what} closed the connection: “${reason}”. Try another receiver, or use UberSDR or OpenWebRX.`

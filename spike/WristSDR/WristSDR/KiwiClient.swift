@@ -349,7 +349,7 @@ final class KiwiClient: ObservableObject, SDRClient {
     self.wsPrefix = (variant == .web888) ? "kiwi" : "ws/kiwi"
     self.rxLabel  = (variant == .web888) ? "Web-888" : "KiwiSDR"
     // http(s)/ws(s)://host:port[/…] → ws(s)://host:port
-    var u = url
+    var u = url.withKiwiProxyPort   // ★★ proxy.kiwisdr.com = 8073 only (SDRDirectory.swift)
     for p in ["https://", "http://", "wss://", "ws://"] { if u.hasPrefix(p) { u.removeFirst(p.count) } }
     if let slash = u.firstIndex(of: "/") { u = String(u[..<slash]) }
     let wantSecure = url.hasPrefix("https") || url.hasPrefix("wss")

@@ -14,6 +14,7 @@ import { isoForCallsign } from './callsignIso';       // final resort: map the c
 import type { VibeRadio } from './vibeserverRadios';
 import { cleanText } from '../utils/safeText';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
+import { withKiwiProxyPort } from '../utils/kiwiProxy';
 
 export type DirectoryId = 'vibeserver' | 'ubersdr' | 'receiverbook' | 'kiwisdr' | 'fmdx' | 'spyserver';
 
@@ -301,8 +302,10 @@ async function fetchReceiverbook(lat?: number, lon?: number): Promise<SDRInstanc
       const kind: SDRInstance['serverType'] | null =
         t === 'openwebrx' ? 'owrx' : t === 'kiwisdr' ? 'kiwi' : null;
       if (!kind) continue;                                   // drop WebSDR etc.
-      const url = safeUrl(ro?.url ?? site?.url, HTTP_SCHEMES);
-      if (!url) continue;
+      const raw = safeUrl(ro?.url ?? site?.url, HTTP_SCHEMES);
+      if (!raw) continue;
+      // ★★ proxy.kiwisdr.com is listed portless but listens on 8073 only (utils/kiwiProxy.ts).
+      const url = kind === 'kiwi' ? withKiwiProxyPort(raw) : raw;
       out.push(blank({
         name: stripMarkup(ro?.label ?? site?.label ?? 'Unknown') || 'Unknown',
         url,
@@ -337,7 +340,8 @@ async function fetchKiwiList(lat?: number, lon?: number): Promise<SDRInstance[]>
       const snr = String(r.snr ?? '').split(',').map(Number).filter((n) => Number.isFinite(n));
       return blank({
         name: stripMarkup(r.name ?? 'KiwiSDR') || 'KiwiSDR',
-        url: safeUrl(r.url, HTTP_SCHEMES),
+        // ★★ 404 of 866 are `http://x.proxy.kiwisdr.com` — portless, but 8073 only (utils/kiwiProxy.ts).
+        url: withKiwiProxyPort(safeUrl(r.url, HTTP_SCHEMES)),
         location: stripMarkup(r.loc, 80),
         users: Number(r.users) || 0,
         maxUsers: Number(r.users_max) || 0,

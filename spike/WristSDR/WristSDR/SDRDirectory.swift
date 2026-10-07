@@ -418,7 +418,7 @@ enum Directories {
     guard let arr = extractJsArray(js, marker: "var kiwisdr_com") else { return [] }
     return arr.compactMap { r in
       guard let u0 = r["url"] as? String, !u0.isEmpty else { return nil }
-      let u = u0.trimmedTrailingSlash
+      let u = u0.trimmedTrailingSlash.withKiwiProxyPort
       let snr = (r["snr"] as? String)?.split(separator: ",").compactMap { num(String($0), snrR) }.max()
       let kiwiUsers = count(r["users"]) ?? 0
       let kiwiMax   = count(r["users_max"]) ?? 0
@@ -461,7 +461,7 @@ enum Directories {
         let kind: ServerType? = t == "openwebrx" ? .owrx : t == "kiwisdr" ? .kiwi : nil
         guard let kind else { continue }
         guard let u0 = (ro["url"] as? String) ?? (site["url"] as? String), !u0.isEmpty else { continue }
-        let u = u0.trimmedTrailingSlash
+        let u = kind == .kiwi ? u0.trimmedTrailingSlash.withKiwiProxyPort : u0.trimmedTrailingSlash
         let label = ((ro["label"] as? String) ?? (site["label"] as? String) ?? "Unknown")
           .replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression)
         out.append(SDRServer(
@@ -738,6 +738,17 @@ extension String {
     var s = self
     while s.hasSuffix("/") { s.removeLast() }
     return s
+  }
+}
+
+/// ★★★ proxy.kiwisdr.com LISTENS ON 8073 ONLY — and the public Kiwi list names 404 of 866 receivers (47 %)
+/// as `http://<name>.proxy.kiwisdr.com` with NO port, i.e. port 80, which the proxy REFUSES. Measured
+/// 2026-10-07; same rule as src/utils/kiwiProxy.ts. An explicit port is always kept.
+extension String {
+  var withKiwiProxyPort: String {
+    guard let r = self.range(of: #"^([a-z][a-z0-9+.-]*://)?[^/:?#\s]+\.proxy\.kiwisdr\.com(?=[/?#]|$)"#,
+                             options: [.regularExpression, .caseInsensitive]) else { return self }
+    return self.replacingCharacters(in: r, with: self[r] + ":8073")
   }
 }
 
