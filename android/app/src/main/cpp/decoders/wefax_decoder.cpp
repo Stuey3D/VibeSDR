@@ -117,9 +117,13 @@ double WefaxDecoder::fourierTransformSub(const uint8_t* buf, int len, int freq) 
 }
 
 WefaxDecoder::HeaderType WefaxDecoder::detectLineType(const uint8_t* buf, int len) {
-    const double threshold = 5.0;
+    // ★ 3.5 on the whole line (2026-10-07) — see TONE_HITS: a tone is judged by how many recent lines carry it.
+    const double threshold = TONE_LEVEL;
     double startDet = fourierTransformSub(buf, len, startIOC576Frequency) / (double)len;
     double stopDet  = fourierTransformSub(buf, len, stopFrequency) / (double)len;
+#ifdef WEFAX_DIAG_TONES
+    if (onDiag) { char m[96]; std::snprintf(m, sizeof m, "tone? start %.2f stop %.2f", startDet, stopDet); onDiag(m); }
+#endif
     if (startDet > threshold) return HeaderStart;
     if (stopDet  > threshold) return HeaderStop;
     return HeaderImage;
@@ -152,48 +156,57 @@ void WefaxDecoder::decodeFaxLine() {
     if (skipHeaderDetection) {
         lineType = HeaderImage;
     } else {
-        int bufferLen = std::min(samplesPerLine, 3000);
+        /* ★★★ THE WHOLE LINE, NOT ITS FIRST 62 ms (2026-10-07, NMF Boston off K3FEF: 50 minutes, four charts, ONE start
+         *  tone caught). The tone was measured over the first 3000 samples of each line. On a 1000 km HF path the start
+         *  tone FADES — its 300 Hz content swung 7…200 within single half-second lines — so a 62 ms look caught a fade
+         *  on one line and a peak on the next: 7.4, 4.1, 8.4, 4.4, 7.8 … across a threshold of 5, the run counted up,
+         *  down, up and never reached six. Measured over the whole line the same tone reads high on every line.
+         *  (A whole-cycle 66.7 ms window was tried first and changed nothing — it was never the window's edges.) */
+        int bufferLen = samplesPerLine;
         lineType = detectLineType(demodData.data(), bufferLen);
     }
 
-    if (lineType == lastType && lineType != HeaderImage) typeCount++;
-    else { typeCount--; if (typeCount < 0) typeCount = 0; }
-    lastType = lineType;
-
-    /* ★★ ONCE PER TONE, NOT "EXACTLY AT THE COUNT" (2026-10-07). This fired on `typeCount == threshold`: a tone whose run
-     *  count wobbled around the threshold (one misread line: 6 → 5 → 6) fired START twice — the second time mid-tone
-     *  or into the phasing, re-opening the phasing window part-way through it. Now it fires when the run reaches the
-     *  threshold and is latched until the run has died away (typeCount back to 0). */
-    if (typeCount == 0) headerLatched = false;
-    if (lineType != HeaderImage) {
-        int leewayLines = 4;
-        int threshold = startStopLength * lpm / 60 - leewayLines;
-        if (typeCount >= threshold && !headerLatched) {
-            headerLatched = true;
-            if (lineType == HeaderStart) {
-                if (!includeHeaders) { imageLine = 0; imgPos = 0; lineIncrAcc = 0; }
-                phasingLinesLeft = phasingLines;
-                phasingSkipData = 0;
-                havePhasing = false;
-                autoStopped = false;
-                if (autoStart && !autoStarted) autoStarted = true;
-                if (onDiag) onDiag("start tone held " + std::to_string(typeCount) + " lines — new chart, phasing window open ("
-                                   + std::to_string(phasingLines) + " lines)");
-                if (onStart) onStart();
-            } else if (lineType == HeaderStop) {
-                if (autoStop) autoStopped = true;
-                if (autoStart && autoStarted) autoStarted = false;
-                if (onStop) onStop();
-            }
-        }
+    /* ★★★ HOW MANY OF THE LAST TONE_WINDOW LINES CARRY THE TONE — NOT AN UNBROKEN RUN (2026-10-07). A START needed six
+     *  tone lines IN A ROW (one miss counted the run back down), so a fading tone never got there: NMF Boston off K3FEF
+     *  caught 1 of 3 start tones in 50 minutes, JMH off WESSEX and NMC off WT8P 0. Per-line tone readings on real air
+     *  run 1.8…10 through a tone and up to ~7 on single lines of a chart or noise, so no per-line threshold can tell
+     *  them apart — persistence can. Measured on 25 recordings (~3 h: NMF, NMG-less nights, JMH, NMC, VMW, test cards,
+     *  other modes): ≥ TONE_HITS of the last TONE_WINDOW at ≥ TONE_LEVEL found NMF 3/3, JMH-WESSEX and NMC 2013 (both
+     *  missed before), every tone found before, and no false start anywhere. Each fires ONCE, latched until the tone has
+     *  died away (≤ TONE_CLEAR of the window) — the run counter's `==` fired twice on a wobbling tone. */
+    toneRing[toneRingPos] = (uint8_t)lineType;
+    toneRingPos = (toneRingPos + 1) % TONE_WINDOW;
+    int startHits = 0, stopHits = 0;
+    for (int i = 0; i < TONE_WINDOW; i++) { startHits += toneRing[i] == HeaderStart; stopHits += toneRing[i] == HeaderStop; }
+    if (startHits <= TONE_CLEAR) startLatched = false;
+    if (stopHits <= TONE_CLEAR) stopLatched = false;
+    if (!skipHeaderDetection && startHits >= TONE_HITS && !startLatched) {
+        startLatched = true;
+        if (!includeHeaders) { imageLine = 0; imgPos = 0; lineIncrAcc = 0; }
+        phasingLinesLeft = phasingLines;
+        phasingSkipData = 0;
+        havePhasing = false;
+        autoStopped = false;
+        if (autoStart && !autoStarted) autoStarted = true;
+        if (onDiag) onDiag("start tone on " + std::to_string(startHits) + " of the last " + std::to_string(TONE_WINDOW)
+                           + " lines — new chart, phasing window open (" + std::to_string(phasingLines) + " lines)");
+        if (onStart) onStart();
+    }
+    if (!skipHeaderDetection && stopHits >= TONE_HITS && !stopLatched) {
+        stopLatched = true;
+        if (autoStop) autoStopped = true;
+        if (autoStart && autoStarted) autoStarted = false;
+        if (onDiag) onDiag("stop tone on " + std::to_string(stopHits) + " of the last " + std::to_string(TONE_WINDOW) + " lines");
+        if (onStop) onStop();
     }
 
     {
         // ★ The phase this line belongs to, reported on change only (see onPhase in the header).
-        // ★ A TONE ONLY COUNTS WHEN IT HOLDS — one noisy line reads as start or stop on its own, which is why
-        //   the start/stop events above wait for a run (typeCount). Three in a row here.
-        const bool tone = lineType != HeaderImage && lineType == lastType && typeCount >= 3;
-        int phase = tone ? (lineType == HeaderStart ? 1 : 4)
+        // ★ A TONE ONLY COUNTS WHEN IT HOLDS — one noisy line reads as start or stop on its own, which is why the
+        //   start/stop events above count the window. Here: the tone on at least TONE_SHOW of the last TONE_WINDOW.
+        const bool startTone = startHits >= TONE_SHOW && lineType == HeaderStart;
+        const bool stopTone = stopHits >= TONE_SHOW && lineType == HeaderStop;
+        int phase = startTone ? 1 : stopTone ? 4
                   : (usePhasing && phasingLinesLeft > 0) ? 2 : 3;
         // ★ A start tone or phasing IS a transmission: assume a chart follows (the measure below only sees
         //   image lines, so it would otherwise still be remembering the noise from before the start tone).

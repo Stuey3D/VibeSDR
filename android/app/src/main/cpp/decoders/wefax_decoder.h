@@ -100,10 +100,13 @@ private:
     double lineIncrFrac = 0, lineIncrAcc = 0, lineBlend = 0;
 
     // Header detection
-    int startIOC576Frequency = 300, stopFrequency = 450, startStopLength = 5;
-    HeaderType lastType = HeaderImage;
-    int typeCount = 0;
-    bool headerLatched = false;   // a START/STOP has fired for the tone now running (decodeFaxLine)
+    int startIOC576Frequency = 300, stopFrequency = 450;
+    /** ★ The tone judged by persistence, not an unbroken run — see decodeFaxLine (measured 2026-10-07). */
+    static constexpr int TONE_WINDOW = 10, TONE_HITS = 7, TONE_CLEAR = 2, TONE_SHOW = 4;
+    static constexpr double TONE_LEVEL = 3.5;
+    uint8_t toneRing[TONE_WINDOW] = {};   // the last TONE_WINDOW lines' HeaderType
+    int toneRingPos = 0;
+    bool startLatched = false, stopLatched = false;   // fired for the tone now running
 
     // Phasing
     int phasingLines = 40;

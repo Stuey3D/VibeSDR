@@ -123,6 +123,12 @@ int main() {
     check(g.starts == 1, "★ a start tone with a garbled line fires ONE new chart, not two (the == trigger fired twice)");
     check(g.phased && colErr(g.barCol) <= 20, "…and that chart is still phased");
     check(a.starts == 1, "a clean start tone fires exactly one new chart");
+    // ★★ A FADING start tone — every other line lost (NMF off K3FEF read 7.4, 4.1, 8.4, 4.4 …): the old rule wanted six
+    //    tone lines IN A ROW and never fired; 7 of the last 10 does, once.
+    auto h = run(0.40, SPL * 3 + SPL / 10, 0, 7, {1, 3, 5, 7, 9, 11, 13}, 20);
+    std::printf("   .. 10 s start tone, every other line faded out: %d start(s), %s\n", h.starts, h.diag.c_str());
+    check(h.starts == 1, "★ a start tone fading in and out on alternate lines still starts ONE new chart");
+    check(h.phased && colErr(h.barCol) <= 20, "…and phases it");
     // no phasing at all — a start tone, then 30 s of noise: refused
     auto f = run(0.40, SPL * 3 + SPL / 10, 60, 5);
     std::printf("   .. phasing entirely noise: %s\n", f.diag.c_str());
