@@ -186,7 +186,9 @@ const CENTRE_DEADBAND = 8;
 /** A blank band: its centre column and width, how much of it touches the line's two ends (`edge`; 0 = the line's
  *  first and last pixels both carry ink), the slant it was measured at, and how sharp the lines bounding it are
  *  (`sharp`: the average ink, of 255, of the darkest column within 12 px beyond either end — the sharper side). */
-export interface BlankBand { col: number; len: number; edge: number; slant: number; sharp: number }
+export interface BlankBand { col: number; len: number; edge: number; slant: number; sharp: number;
+  /** ★ The column (at line 0, like `col`) of that sharpest line beside the band (2026-10-07 — see lineCover). */
+  line: number }
 
 /** Per column at one slant: lines on which it is dark (see 'INK IS TWO PIXELS'), and its total ink. */
 function columnProfile(rows: ReadonlyArray<ArrayLike<number> | undefined>, W: number, slant: number,
@@ -290,12 +292,14 @@ function bandOf(p: { dark: Uint32Array; ink: Float64Array; n: number }, W: numbe
   let edge = 0;
   for (let x = 0; x < W && !inked[x]; x++) edge++;
   for (let x = W - 1; x >= 0 && !inked[x]; x--) edge++;
-  let pl = 0, pr = 0;
+  let pl = 0, pr = 0, cl = 0, cr = 0;
   for (let k = 1; k <= 12; k++) {
-    pl = Math.max(pl, ink[((bestAt - k) % W + W) % W]);
-    pr = Math.max(pr, ink[(bestAt + bestLen - 1 + k) % W]);
+    const xl = ((bestAt - k) % W + W) % W, xr = (bestAt + bestLen - 1 + k) % W;
+    if (ink[xl] > pl) { pl = ink[xl]; cl = xl; }
+    if (ink[xr] > pr) { pr = ink[xr]; cr = xr; }
   }
-  return { col: (bestAt + Math.floor(bestLen / 2)) % W, len: bestLen, edge, slant, sharp: Math.max(pl, pr) / n };
+  return { col: (bestAt + Math.floor(bestLen / 2)) % W, len: bestLen, edge, slant, sharp: Math.max(pl, pr) / n,
+           line: pl >= pr ? cl : cr };
 }
 
 /**
@@ -363,11 +367,36 @@ export function findBorder(rows: ReadonlyArray<ArrayLike<number> | undefined>, w
   //    beside the border, nothing sharpens at any slant and the "best" one was noise — ±0.05 on 30 of 171 charts.
   //    A measured slant counts only when a line beside the border is solid (BORDER_LINE_INK); else the station's.
   const b = best as BlankBand | null;
-  if (b && b.sharp >= BORDER_LINE_INK) return b;
-  // ★ …and then the band is the one AT the station's slant, or none: a band that only appears at another slant, with no
-  //   straight line to say that slant is real, was a Northwood sea patch lined up into a 114 px "border" (1 of 60).
+  // ★★★ …and a slant away from the station's only from a line that runs the WHOLE way down (2026-10-07) — see
+  //     SLANT_TRUST. Short of that, the band is taken at the station's slant below.
+  //     ★ …and it must be clearly SHARPER (NEAR_WIN) than the sharpest band within ±SLANT_TRUST, looked at on every
+  //       line. The coarse pass looks at every 2nd line, and on a noisy chart the band comes and goes from one slant
+  //       to the next (σ 60: none at +0.005, the frame 155 ink at +0.010) — it picked −0.036 at 86 ink where the
+  //       station's 0 read 124. And a THICK dark edge (the Norwegian ice chart's frame + panel border + logo box,
+  //       ~12 px, 20260930_155456) stays dark in some column at a slant 0.04 off: +0.053 at 149 ink against 85 at the
+  //       station's 0 — but 0.015 reads as sharp.
+  //     ★ …and its band must not have shrunk to a fraction (BAND_KEEP) of that one. Northwood joined for its last 400
+  //       lines (20261005_161119, _181119) has a 262–270 px white band at its −0.06 and a diagonal meridian beside a
+  //       97–103 px one at −0.184/−0.198 — solid on 6–7 of 8 stretches, 133–151 ink against 23–25. A real frame's band
+  //       at its true slant kept ≥ 0.68 of the near band's width on all 143 leaning (+0.11) DDK late joins.
+  let close: BlankBand | null = null;
+  for (let i = -3; i <= 3; i++) {
+    const g = findGutter(rows, width, Math.round((centre + i * SLANT_TRUST / 3) * 1000) / 1000, fromRow, count, minRows);
+    if (g && (!close || g.sharp > close.sharp + 0.5)) close = g;
+  }
+  if (b && b.sharp >= BORDER_LINE_INK
+      && (Math.abs(b.slant - centre) <= SLANT_TRUST + 1e-9
+          || ((!close || (b.sharp > NEAR_WIN * close.sharp && b.len >= BAND_KEEP * close.len)) && slantJustified(rows, width, b.slant, centre, b.line, fromRow, count)))) return b;
+  // ★ Else the sharpest band within ±SLANT_TRUST when a solid line bounds it, else the band AT the station's slant, or
+  //   none: a band that only appears at another slant, with no straight line to say that slant is real, was a
+  //   Northwood sea patch lined up into a 114 px "border" (1 of 60).
+  if (close && close.sharp >= BORDER_LINE_INK) return close;
   return findGutter(rows, width, centre, fromRow, count, minRows);
 }
+/** ★ How much sharper a border must be beyond ±SLANT_TRUST than the sharpest within it — see findBorder. */
+const NEAR_WIN = 1.15;
+/** ★ The least share of the near-station band's width a band beyond ±SLANT_TRUST must keep — see findBorder. */
+const BAND_KEEP = 0.6;
 /** ★★ How far from the station's slant a BORDERED chart's slant is searched, px per line (2026-10-07). Stuart's DDK
  *  7880 on the Pi 500's Airspy HF+ came out leaning +0.11 px/line (frame line measured on the finished chart,
  *  11:10 BST) against +0.010 for the same chart on the UberSDR's RX888 — and ±SLANT_SEARCH (±0.05) could not reach
@@ -382,6 +411,133 @@ const WIDE_SLANT_WIN = 1.2;
 /** ★ How dark (average ink of 255) the darkest column beside a border must be to measure a slant from it. DDK's
  *  frame line reads ~145 at its true slant; text and ragged map edges beside a border 7–40. */
 const BORDER_LINE_INK = 80;
+
+/**
+ * ★★★ A SLANT AWAY FROM THE STATION'S NEEDS A LINE THAT RUNS THE WHOLE WAY DOWN (Stuart, 2026-10-07 14:59 BST, DDK
+ *     7880 on the Pi 500's HF+, RC25 Mac: "previous caught the end of a chart and still slanted; this time it looks
+ *     like Northwood uncorrected"). The chart, joined late without phasing, was drawn leaning FORWARD ~0.04 px/line
+ *     (the "icon_tkb" box edge walked 18 px left over 445 lines of the screenshot) — so ~+0.05 applied to a chart
+ *     whose true slant is +0.01 (the UberSDR's copy of the same transmission, 20261007_135527_b3ad8373.png, and
+ *     Stuart's own phased copy at 15:03: "no slant, or a very slight backwards lean"). Its white border was left
+ *     ~220 px right of the cut, so the looks had not cut it in its band either. Replayed through chartAlignStep (the RX888 copy's last 720–950 lines, rolled, σ 50–65 of noise,
+ *     180 joins) the border look measured +0.031/+0.032 (5) and −0.021/−0.036 (2); the last 400–900 lines of 30
+ *     archive charts gave Northwood −0.184, −0.198, −0.091 (true −0.064) and DDK +0.031 (true +0.010); a box edge
+ *     solid over 120 lines beside the band gives +0.05 (test_wefax_align). Each was a line dark enough on average
+ *     (BORDER_LINE_INK) over the stretch it covers — a box edge, the legend, a coastline — but not the whole look,
+ *     or a frame lined up at a slant where the coarse pass (every 2nd line) happened to see the band and the true
+ *     slant did not. A frame line at its true slant is dark the whole way down; 0.03 off, it has drifted 9 px over
+ *     300 lines and covers the middle only.
+ *     So beyond ±SLANT_TRUST of the station's slant: the line's column (±2 px) must be dark in LINE_COVER of
+ *     LINE_SEGMENTS equal stretches of the lines looked at, and (findBorder) the band must be sharper there than at
+ *     the station's own slant; else the station's slant is used.
+ *     The +0.11 HF+ chart of this morning is still measured: its frame runs the whole height at +0.11.
+ */
+function slantJustified(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, slant: number, centre: number,
+                        col: number, fromRow: number, count: number): boolean {
+  if (Math.abs(slant - centre) <= SLANT_TRUST + 1e-9) return true;
+  return lineCover(rows, width, slant, col, fromRow, count) >= LINE_COVER;
+}
+/** ★ How far from the station's slant a measured slant is believed on its sharpness alone, px per line. DDK on the
+ *  RX888 measures +0.007…+0.013 and on the HF+ ≈ +0.01; Northwood −0.062…−0.067 against its −0.06. */
+export const SLANT_TRUST = 0.015;
+/** ★ The stretches a line is checked over, the share of them it must be dark in, and the share of a stretch's lines
+ *  it must be dark on to count — see slantJustified. ★ 0.15, not ½: DDK's frame reads ~145 ink, dark on ~55 % of
+ *  lines and patchily, so ½ failed real frames at their true slant on 24 of 146 leaning (+0.11) late-join looks;
+ *  at 0.15, 5 — and none of the 7 wrong wide slants the RC25 search proposed on the late-join set got through on
+ *  it that the other tests did not stop (a wrong slant's stretches away from the crossing read ~0). */
+const LINE_SEGMENTS = 8;
+const LINE_COVER = 0.75;
+const LINE_SEG_DARK = 0.15;
+/** The share of LINE_SEGMENTS stretches of rows in which column `col` (±2 px, at `slant` — the same columns as
+ *  columnProfile) is dark on at least LINE_SEG_DARK of the rows, and on twice as many as the columns 7 px to one side of
+ *  it: dark = a PAIR of pixels averaging under 128 (see 'INK IS TWO PIXELS'). A frame or margin at its true slant covers every stretch; a box edge, a legend or a slant that is
+ *  wrong covers some. */
+export function lineCover(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, slant: number, col: number,
+                          fromRow = 0, count = rows.length): number {
+  const W = width, ys: number[] = [];
+  for (let y = fromRow; y < fromRow + count && y < rows.length; y++) if (rows[y]) ys.push(y);
+  const per = Math.floor(ys.length / LINE_SEGMENTS);
+  if (!W || per < 4) return 0;
+  // dark at `c` (±2 px) on line y: a pair of pixels averaging under 128
+  const darkAt = (r: ArrayLike<number>, c: number, off: number) => {
+    for (let k = -2; k <= 1; k++) {
+      const x = (((c + k + off) % W) + W) % W;
+      if ((r[x] ?? 255) + (r[(x + 1) % W] ?? 255) < 256) return 1;
+    }
+    return 0;
+  };
+  let solid = 0;
+  for (let s = 0; s < LINE_SEGMENTS; s++) {
+    let dark = 0, left = 0, right = 0;
+    for (let i = s * per; i < (s + 1) * per; i++) {
+      const y = ys[i], r = rows[y] as ArrayLike<number>;
+      const off = ((Math.round(slant * y) % W) + W) % W;
+      dark += darkAt(r, col, off); left += darkAt(r, col - 7, off); right += darkAt(r, col + 7, off);
+    }
+    // ★ …and darker than the paper on at least one side of it: a line bounding a blank band has blank paper on that
+    //   side, while a slant that has drifted the column into a map's stipple or text finds as much ink either side.
+    if (dark >= per * LINE_SEG_DARK && dark >= 2 * Math.min(left, right) + per * 0.05) solid++;
+  }
+  return solid / LINE_SEGMENTS;
+}
+
+/**
+ * ★★ DWD/DDK'S HEADER BAR (Stuart, 2026-10-07: "notice the black bar at the top with the white cutouts, that is how
+ *    it is aligned"). Every DDK chart opens with ~15 lines of black across the whole line but for ONE white gap,
+ *    split across the line's two ends when the chart is phased. Measured on the UberSDR archive (RX888, 161 DDK charts
+ *    with a clean bar): the gap is 83–98 px wide and centred −12…+11 px from the line's ends (median 0); Stuart's
+ *    phased HF+ copy of 14:08 UTC, 90 px centred at −2. So when the bar is received its gap IS the line start:
+ *    - centred within BAR_EDGE px of the ends → the chart is phased: it is never moved (Stuart: "I did actually get
+ *      that bar yesterday and it looked exactly like it did today until our 'fix'" — 2026-10-06 14:15, a phased chart
+ *      the border search then cut);
+ *    - anywhere else → a chart whose phasing was missed but whose start was caught: cut exactly at the gap.
+ *    ★ Only at the TOP: DDK's closing bar (14:08 copy, lines 1315–1335) is black edge to edge, no gap, and the
+ *      UberSDR archive stops before it — a late join has no bar to go by.
+ * Returns the gap's centre at line 0 (columnProfile's columns at `slant`), or null when no bar was received.
+ */
+export function findHeaderBar(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, slant: number,
+                              upto = BAR_LOOK_LINES): number | null {
+  const W = width;
+  if (W < 200) return null;
+  const centres: number[] = [];
+  const m = new Float64Array(W);
+  for (let y = 0; y < rows.length && y < upto; y++) {
+    const r = rows[y];
+    if (!r) continue;
+    // 5-px means: single noise specks neither break the bar nor fill the gap
+    let a = 0;
+    for (let k = -2; k <= 2; k++) a += r[(k + W) % W] ?? 255;
+    for (let x = 0; x < W; x++) { m[x] = a / 5; a += (r[(x + 3) % W] ?? 255) - (r[(x - 2 + W) % W] ?? 255); }
+    let dark = 0;
+    for (let x = 0; x < W; x++) if (m[x] < 128) dark++;
+    if (dark < BAR_DARK * W) { if (centres.length >= BAR_MIN_ROWS) break; centres.length = 0; continue; }
+    // the longest circular run of light columns — the gap — and nothing else light of any size
+    let start = -1;
+    for (let x = 0; x < W; x++) if (m[x] < 128) { start = x; break; }
+    if (start < 0) continue;
+    let bLen = 0, bAt = 0, len = 0, light = 0;
+    for (let i = 1; i <= W; i++) {
+      const x = (start + i) % W;
+      if (m[x] >= 128) { len++; light++; if (len > bLen) { bLen = len; bAt = (x - len + 1 + W) % W; } } else len = 0;
+    }
+    if (bLen < BAR_GAP[0] || bLen > BAR_GAP[1] || light > bLen + 20) continue;
+    const off = Math.round(slant * y);
+    centres.push((((bAt + bLen / 2 - off) % W) + W) % W);
+  }
+  if (centres.length < BAR_MIN_ROWS) return null;
+  // the rows must agree on where the gap is (circularly)
+  const ref = centres[0];
+  const d = centres.map((c) => ((c - ref + W * 1.5) % W) - W / 2).sort((p, q) => p - q);
+  if (d[d.length - 1] - d[0] > 8) return null;
+  return Math.round(((ref + d[d.length >> 1]) % W + W) % W);
+}
+/** ★ The header bar: lines looked through for it, how many it must span, how much of a line is black, the gap's
+ *  width (px), and how close to the line's ends its centre sits on a phased chart (px) — see findHeaderBar. */
+const BAR_LOOK_LINES = 400;
+const BAR_MIN_ROWS = 6;
+const BAR_DARK = 0.85;
+const BAR_GAP: [number, number] = [60, 130];
+const BAR_EDGE = 16;
 
 /** ★ When a chart's shift is decided, and when it is checked once more (redrawn only if the answer changed).
  *  Measured on 120 RX888 charts: 150 lines agreed with the whole chart on 42/60 Northwood, 300 on 58/60. */
@@ -402,12 +558,26 @@ export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined
   //    frame and meridians are as straight as a margin (5 of 60 DDK charts were mis-moved by the margin search
   //    when it ran first). The margin search runs only when there is no blank band at all.
   // ★ out.fixedSlant: look at the station's slant only, measure none (an early look — see chartAlignStep).
-  const fixed = !!out?.fixedSlant;
-  const g = out?.via === 'margin' ? null
+  const fixed = !!out?.fixedSlant, marginOnly = out?.via === 'margin';
+  const g = marginOnly ? null
           : fixed ? findGutter(rows, width, stationSlant, 0, count, minRows) : findBorder(rows, width, stationSlant, 0, count, minRows);
   if (out) out.via = g ? 'border' : 'margin';
   // ★★ The slant MEASURED on this chart (2026-10-07), whatever is returned — see AlignLookOut.measured.
   if (g && out && !fixed && g.sharp >= BORDER_LINE_INK) out.measured = g.slant;
+  // ★★ The header bar, when received, says where the line starts — before the band does (see findHeaderBar). The
+  //    slant is still the border look's (measured, else the station's).
+  //    ★ Only when its gap lies IN the blank band: Northwood sends a bar too, but its gap sits 43 px left of the
+  //      margin, mid-chart (42–44 px on all 22 Northwood charts with a bar, UberSDR archive) — not the line start.
+  //      DDK's line start is inside its white border, so on a bordered chart the two agree.
+  const bar = marginOnly || !g ? null : findHeaderBar(rows, width, stationSlant);
+  if (g && bar !== null && Math.abs(((bar - g.col + width * 1.5) % width) - width / 2) <= g.len / 2 + 10) {
+    const k = g.slant;
+    if (Math.min(bar, width - bar) < BAR_EDGE) {
+      if (out) out.atEdge = true;
+      return Math.abs(k - stationSlant) < 0.002 ? null : { shift: 0, slant: k };
+    }
+    return { shift: bar, slant: k };
+  }
   if (g) {
     // ★★★ A BORDERED CHART IS CENTRED ON ITS BORDER (Stuart, 2026-10-06: "if there is a clear white border either
     //     side, our auto align just needs to centre the image on it — 55 left 110 right then we just do 82 left 83
@@ -428,6 +598,12 @@ export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined
     return col === null ? null : { shift: col - 2, slant: stationSlant };
   }
   const m = findMarginSlant(rows, width, stationSlant, 0, count, minRows);
+  // ★★ The margin's slant, too, is believed away from the station's only when the margin runs the whole way down
+  //    (2026-10-07 — see slantJustified); else the margin is looked for at the station's slant.
+  if (m && !slantJustified(rows, width, m.slant, stationSlant, m.col, 0, count)) {
+    const col = findMargin(rows, width, stationSlant, 0, count);
+    return col === null ? null : { shift: col - 2, slant: stationSlant };
+  }
   if (m && out) out.measured = m.slant;
   return m ? { shift: m.col - 2, slant: m.slant } : null;
 }
@@ -549,13 +725,19 @@ export function chartAlignStep(st: ChartAlignState, getRows: () => ReadonlyArray
   //    chart was re-cut ~50 px off its margin; a DDK border, gone noisy, would fall to the margin search. A margin
   //    chart is looked at by margin only; a border chart's look is used only if it found the border again.
   const lk = look(st.via === 'margin' ? 'margin' : undefined), r = lk.a;
-  if (!r || lk.via !== st.via) return false;
   // ★★ A chart left where it was at the first look (its border already centred) is never MOVED by the second:
-  //    only its slant may be refined, and only by a look that again finds the border centred.
-  if (st.atEdge && (!lk.atEdge || r.shift !== 0)) return false;
-  if (lk.measured !== undefined) st.slant = lk.measured;
-  const d = (((r.shift - cur.shift) % width) + width) % width;
-  if (Math.min(d, width - d) <= 2 && Math.abs(r.slant - cur.slant) < 0.002) return false;
-  st.al = r;
+  //    only its slant may be refined, and only by a look that again finds the border centred — null from that look
+  //    is "centred, and at the station's slant".
+  const again = lk.via === st.via && (st.atEdge ? lk.atEdge && (!r || r.shift === 0) : !!r);
+  if (!again) return false;
+  // ★★ …and the longer look's slant REPLACES the first's (2026-10-07), measured or not: twice the lines, and a slant
+  //    the first look took from a line that does not hold up (the ice chart's thick frame edge, +0.053 at 300
+  //    lines) went on being drawn when the second look found nothing to measure.
+  const slantMoved = st.slant !== lk.measured;
+  st.slant = lk.measured;
+  const next = r ?? { shift: 0, slant: stationSlant };
+  const d = (((next.shift - cur.shift) % width) + width) % width;
+  if (Math.min(d, width - d) <= 2 && Math.abs(next.slant - cur.slant) < 0.002) return slantMoved;
+  st.al = r ? next : (st.atEdge ? null : next);
   return true;
 }
