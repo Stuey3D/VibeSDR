@@ -17,6 +17,20 @@ import React, { useMemo, useState } from 'react';
 import { AppRegistry, BackHandler, StatusBar } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ServerModeScreen from '../../src/screens/ServerModeScreen';
+import { recordCrash } from '../../src/services/crashGuard';
+
+/* ★★ LITE RECORDS ITS OWN JS ERRORS TOO (2026-10-07). The main app's crashGuard is installed from App.tsx,
+ *  which Lite never runs, so Export logs' "last JS error" was always "none recorded" here. Lite has no
+ *  picker to recover to, so this only RECORDS and then hands the error to React Native's own handler —
+ *  behaviour is unchanged; the report gains the message and stack. */
+{
+  const EU = global.ErrorUtils;
+  const prev = EU?.getGlobalHandler?.();
+  EU?.setGlobalHandler?.((error, isFatal) => {
+    try { recordCrash(error, 'ServerMode (Lite)'); } catch {}
+    if (prev) prev(error, isFatal);
+  });
+}
 
 function Lite() {
   const [mount, setMount] = useState(0);

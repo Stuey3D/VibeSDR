@@ -25,6 +25,7 @@ import {
 } from 'react-native';
 // ★ On a TV the remote must be able to move PAST a text field — see TvTextInput (Kiko, Android 6 box).
 import TextInput from '../components/TvTextInput';
+import ExportLogsLink from '../components/ExportLogs';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -1962,6 +1963,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             <Text style={{ color: C.green, fontFamily: F, fontSize: 16 }}>▶ Return to browse — server remains active</Text>
           </TouchableOpacity>
           </>)}
+          {/* ★★ EXPORT LOGS ON THE SERVER SCREEN (2026-10-07) — here and on the setup view below, in the main
+              app AND Lite (which renders this screen). The phone that crashed is the one that HOSTS the
+              server; NickB's report came from his listener phone because About was the only door.
+              `server` adds the server section (version, radio, uptime) even when it is stopped. */}
+          <ExportLogsLink server color={C.textDim} fontFamily={F} style={{ marginTop: 14 }} />
         </ScrollView>
       </SafeAreaView>
     );
@@ -3596,6 +3602,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           onPress={() => { if (isLite) BackHandler.exitApp(); else navigation.goBack(); }}>
           <Text style={{ color: C.gold, fontFamily: F, fontSize: 15 }}>{isLite ? '✕ Close app' : '‹ Cancel'}</Text>
         </TouchableOpacity>
+        {/* ★ The setup view is where an owner lands after a crash took the server down — see the note above. */}
+        <ExportLogsLink server color={C.textDim} fontFamily={F} style={{ marginTop: 14 }} />
       </ScrollView>
     </SafeAreaView>
   );

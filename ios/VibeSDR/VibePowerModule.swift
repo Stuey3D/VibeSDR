@@ -1566,6 +1566,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       "model": VibeCrashLog.hardwareModel(),
       "os": UIDevice.current.systemVersion,
       "systemName": UIDevice.current.systemName,
+      // ★★ Which build, exactly (2026-10-07) — the report's header named only "11.0", so builds without
+      //    newer report sections could not be told apart. CFBundleVersion is the build number.
+      "versionName": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
+      "versionCode": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
+      "packageId": Bundle.main.bundleIdentifier ?? "",
     ])
   }
 

@@ -122,6 +122,7 @@ import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
 import { favFromDiscovered, repairFromDiscovery, needsVibeProbe, tcpFavHttpBase } from '../services/discoveredFavs';
 import { resolveVibeAuth } from '../services/vibeAuth';
 import { crumb } from '../services/crumbs';
+import { exportLogs, EXPORT_LOGS_LABEL } from '../components/ExportLogs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
@@ -2775,6 +2776,18 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     </ChooserRow>
                   );
                 })()}
+                {/* ★★ EXPORT LOGS, AT THE FOOT OF THE HOME SCREEN (2026-10-07). It lived only in About — the
+                    LISTENING half — so NickB sent a crash report from his listener phone, not the Pixel
+                    hosting the server that crashed. Small and last, so the list stays the list; a
+                    ChooserRow so a TV remote can reach it like every other footer row. See ExportLogs.tsx. */}
+                <ChooserRow zone="footer" accessibilityRole="button" accessibilityLabel="Export logs for a crash report"
+                  style={{ alignSelf: 'center', marginTop: 10, marginBottom: 4, paddingVertical: 8, paddingHorizontal: 14,
+                           borderRadius: 6, borderWidth: 0, borderColor: 'transparent' }}
+                  onPress={() => { void exportLogs(); }}>
+                  <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim, textDecorationLine: 'underline' }}>
+                    {EXPORT_LOGS_LABEL}
+                  </Text>
+                </ChooserRow>
               </View>
             }
           />

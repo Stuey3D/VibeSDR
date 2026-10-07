@@ -18,7 +18,8 @@ import com.th3rdwave.safeareacontext.SafeAreaContextPackage
 /** The two bridge modules ServerModeScreen talks to — the main app's own classes, synced at build. */
 class LitePackage : ReactPackage {
     override fun createNativeModules(ctx: ReactApplicationContext): List<NativeModule> =
-        listOf(VibeLocalSdrModule(ctx), VibeMdnsModule(ctx))
+        listOf(VibeLocalSdrModule(ctx), VibeMdnsModule(ctx),
+               LiteDiagModule(ctx))   // ★ Diagnostics: crash record + device + Lite's own version (2026-10-07)
     override fun createViewManagers(ctx: ReactApplicationContext): List<ViewManager<*, *>> =
         listOf(TvTextInputManager())   // ★ replaces RN's text field so a TV remote can reach it (TvTextInput.kt)
 }
@@ -38,6 +39,9 @@ class MainApplication : Application(), ReactApplication {
 
     override fun onCreate() {
         super.onCreate()
+        // ★ 2026-10-07: names the build on this process's exit record, as the main app does, so Diagnostics
+        //   says which Lite crashed — the morning after an update that matters. See VibeExitInfo.
+        VibeExitInfo.stampProcess(this)
         /* ★★★ LITE SPREADS THE RECEIVER OVER THE CORES (2026-09-18). A 2017 Fire 7 has four
          *  Cortex-A7s, and WFM stereo pinned ONE of them — vibe-dsp at ~99 % — while two sat idle
          *  and the audio surged. VIBE_DSP_THREADS=1 moves the spectrum FFT and the whole

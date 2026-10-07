@@ -40,6 +40,15 @@
 export const APP_VERSION = '11.0';
 
 /**
+ * ★★ THE PRE-RELEASE LABEL, for the diagnostics header ONLY (2026-10-07). "app : 11.0" could not tell an
+ *  RC9 (no crash capture) from an RC26 — Nick's Pixel 6 report did exactly that. Never shown in the UI
+ *  (no "Beta" in a shipping build — see above) and never in USER_AGENT. '' for a final release.
+ * ★ MUST MATCH the newest VERSION_HISTORY entry in AboutOverlay ('V11 RC26' ⇒ 'RC26');
+ *  scripts/test_release_label.ts fails when it does not, so the two cannot drift silently.
+ */
+export const RELEASE_LABEL = 'RC26';
+
+/**
  * How we introduce ourselves to SOMEBODY ELSE'S receiver.
  *
  * ★★★ Sent on every connection to a third-party server — FM-DX, OpenWebRX,
