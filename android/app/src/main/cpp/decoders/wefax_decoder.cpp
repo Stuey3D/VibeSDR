@@ -1,5 +1,6 @@
 // VibeSDR V4 — WEFAX decoder (C++ port of ka9q audio_extensions/wefax/decoder.go).
 #include "wefax_decoder.h"
+#include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -30,13 +31,6 @@ static int medianOf(std::vector<int> v) {
     if (v.empty()) return 0;
     std::sort(v.begin(), v.end());
     return v[v.size() / 2];
-}
-static int percentileOf(std::vector<int> v, int pct) {
-    if (v.empty()) return 0;
-    std::sort(v.begin(), v.end());
-    int idx = (int)v.size() * pct / 100;
-    if (idx >= (int)v.size()) idx = (int)v.size() - 1;
-    return v[idx];
 }
 
 // ── Decoder ─────────────────────────────────────────────────────────────────
@@ -166,10 +160,16 @@ void WefaxDecoder::decodeFaxLine() {
     else { typeCount--; if (typeCount < 0) typeCount = 0; }
     lastType = lineType;
 
+    /* ★★ ONCE PER TONE, NOT "EXACTLY AT THE COUNT" (2026-10-07). This fired on `typeCount == threshold`: a tone whose run
+     *  count wobbled around the threshold (one misread line: 6 → 5 → 6) fired START twice — the second time mid-tone
+     *  or into the phasing, re-opening the phasing window part-way through it. Now it fires when the run reaches the
+     *  threshold and is latched until the run has died away (typeCount back to 0). */
+    if (typeCount == 0) headerLatched = false;
     if (lineType != HeaderImage) {
         int leewayLines = 4;
         int threshold = startStopLength * lpm / 60 - leewayLines;
-        if (typeCount == threshold) {
+        if (typeCount >= threshold && !headerLatched) {
+            headerLatched = true;
             if (lineType == HeaderStart) {
                 if (!includeHeaders) { imageLine = 0; imgPos = 0; lineIncrAcc = 0; }
                 phasingLinesLeft = phasingLines;
@@ -177,6 +177,8 @@ void WefaxDecoder::decodeFaxLine() {
                 havePhasing = false;
                 autoStopped = false;
                 if (autoStart && !autoStarted) autoStarted = true;
+                if (onDiag) onDiag("start tone held " + std::to_string(typeCount) + " lines — new chart, phasing window open ("
+                                   + std::to_string(phasingLines) + " lines)");
                 if (onStart) onStart();
             } else if (lineType == HeaderStop) {
                 if (autoStop) autoStopped = true;
@@ -212,10 +214,43 @@ void WefaxDecoder::decodeFaxLine() {
         phasingLinesLeft--;
         if (phasingLinesLeft == 0) {
             std::vector<int> slice(phasingPos.begin(), phasingPos.begin() + (phasingLines - phasingSkipLines));
-            phasingSkipData = medianOf(slice);
-            int tenPct = percentileOf(slice, 10);
-            int ninetyPct = percentileOf(slice, 90);
-            if ((ninetyPct - tenPct) > samplesPerLine / 6) phasingSkipData = 0;
+            /* ★★★ A LINE IS A CIRCLE, AND A FEW BAD LINES ARE NOT A BAD PHASING (2026-10-07, Stuart's JMH off the Saitama
+             *  Kiwi: start tone caught, phasing ignored — intermittently, chart to chart).
+             *  1. The pulse position WRAPS at the line's end: a pulse at 98 % reads 97–99 % on some lines and 0–2 % on
+             *     others, and the plain median and 10–90 % spread read that as 1 % → 99 %.
+             *  2. On real air some lines fade or catch noise. JMH's 21:00 UTC chart: 27 of 38 phasing lines within ±1 %
+             *     of each other, 11 scattered anywhere — and the 10–90 % spread (33 %) counted the 11 and threw away the 27.
+             *  So: the ±PHASE_TOL window ON THE CIRCLE that holds the most pulses; phased if at least a third of the lines
+             *  agree (see below), at the median of the ones that do. Pure noise never gets there (a scattered recording: 5). */
+            const int n = (int)slice.size();
+            const int tol = std::max(1, (int)std::lround(samplesPerLine * PHASE_TOL));
+            auto cdist = [&](int a, int b) { int d = std::abs(a - b) % samplesPerLine; return std::min(d, samplesPerLine - d); };
+            int bestCount = 0, centre = 0;
+            for (int i = 0; i < n; i++) {
+                int c = 0;
+                for (int j = 0; j < n; j++) if (cdist(slice[i], slice[j]) <= tol) c++;
+                if (c > bestCount) { bestCount = c; centre = slice[i]; }
+            }
+            std::vector<int> agree;
+            const int half = samplesPerLine / 2;
+            for (int p : slice) if (cdist(p, centre) <= tol)
+                agree.push_back(((p - centre + half) % samplesPerLine + samplesPerLine) % samplesPerLine - half);
+            phasingSkipData = ((centre + (agree.empty() ? 0 : medianOf(agree))) % samplesPerLine + samplesPerLine) % samplesPerLine;
+            /* ★ A THIRD, NOT HALF (measured, test-wefax-phasing): the decoder itself misreads ~1 phasing line in 7 even on
+             *  perfect audio, so a quarter of the lines faded on top left 17 of 38 — a real phasing thrown away. Chance
+             *  agreement is tiny: 38 random positions put ~5–6 in any 4 %-wide window (70 % noise managed 9). */
+            const bool rejected = bestCount * 3 < n || bestCount < 8;
+#ifdef WEFAX_DIAG_POSITIONS
+            { std::string s = "positions %:"; for (int i = n - 1; i >= 0; i--) { char b[16]; std::snprintf(b, sizeof b, " %.1f", 100.0 * slice[i] / samplesPerLine); s += b; } if (onDiag) onDiag(s); }
+#endif
+            if (onDiag) {
+                char m[200];
+                std::snprintf(m, sizeof m, "phasing: pulse at %.1f%% of the line, %d of %d lines agree within ±%.0f%% — %s",
+                              100.0 * phasingSkipData / samplesPerLine, bestCount, n, 100.0 * PHASE_TOL,
+                              rejected ? "REJECTED (fewer than a third agree), chart left unphased" : "used");
+                onDiag(m);
+            }
+            if (rejected) phasingSkipData = 0;
         }
     }
 

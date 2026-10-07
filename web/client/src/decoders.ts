@@ -276,6 +276,9 @@ export class DecoderClient {
           this.cb.onImageDone?.();
         } else if (op === 0x04 && buf.byteLength >= 2) {
           this.cb.onWefaxPhase?.(dv.getUint8(1));
+        } else if (op === 0x08) {
+          // ★ The decoder's own account of a phasing decision (2026-10-07) — for whoever opens the console.
+          console.info('[wefax]', new TextDecoder().decode(new Uint8Array(buf, 1)));
         }
         return;
 

@@ -44,6 +44,7 @@
  *                [{ completed, text }, …] — append completed segment text
  */
 
+import { noteDecision } from './protocolLog';
 import { USER_AGENT } from '../constants/version';
 import { rttyFraming } from '../utils/rttySpec';
 import { guard, guardJson } from './faultLog';
@@ -699,6 +700,10 @@ export class DecoderClient {
         const p = u8[1];
         this.cb.onStatus(['standing by', 'start tone', 'phasing', 'receiving chart', 'stop tone'][p] ?? 'receiving');
         this.cb.onDot(p >= 1 && p <= 3 ? 'rx' : 'idle');
+      } else if (t === 0x08) {
+        /* ★★ WHY A CHART WAS OR WAS NOT PHASED (2026-10-07) — the decoder's own words, filed with the client's decisions
+         *  so Export logs answers "the start tone was caught but the chart is not phased" after the fact. */
+        noteDecision('wefax', utf8(u8.subarray(1)));
       } else if (t === 0x02) { this.cb.onStatus('START received'); this.cb.onDot('sync'); }
       else if (t === 0x03) {
         this.cb.onStatus('transmission complete');

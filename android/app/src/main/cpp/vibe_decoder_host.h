@@ -555,6 +555,15 @@ private:
             wefax_->onStop  = [this]() { uint8_t b = 0x03; broadcast(&b, 1); };
             // ★ 0x04 <phase> — start tone / phasing / image / stop tone, on change (older clients ignore it).
             wefax_->onPhase = [this](int ph) { uint8_t b[2] = { 0x04, (uint8_t)ph }; broadcast(b, 2); };
+            // ★★ WHY a chart was or was not phased (2026-10-07) — into the log, so Export logs answers it after a miss.
+            /* ★★ …and to the CLIENT as 0x08 <utf-8 text>: on the app's Kiwi path this host runs on the phone, where the
+             *  native log is not in Export logs — the client files it with its decisions, which are. Rare (a few lines a
+             *  chart). Older clients ignore an opcode they do not know. */
+            wefax_->onDiag = [this](const std::string& m) {
+                log("wefax: " + m);
+                std::vector<uint8_t> b(1 + m.size()); b[0] = 0x08; std::memcpy(b.data() + 1, m.data(), m.size());
+                broadcast(b.data(), b.size());
+            };
             log("decoder attached: wefax lpm=" + std::to_string(cfg.lpm) + " width=" + std::to_string(cfg.imageWidth));
         } else if (ext == "sstv") {
             // ★ autoSync ON — see the long note that lived in the shim's startSstv (redrawFromLuminance

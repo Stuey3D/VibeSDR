@@ -8,6 +8,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace vibe {
@@ -51,6 +52,10 @@ public:
      *  ONLY when it changes (Stuart, 2026-10-04: "show the part of the transmission it is receiving such as the
      *  phasing lines"). The clients draw it as the status; the image lines themselves say "receiving". */
     std::function<void(int phase)> onPhase;
+    /** ★★ WHY A CHART WAS (OR WAS NOT) PHASED, in words, for the log (2026-10-07, Stuart's JMH off a Japanese Kiwi: start tone
+     *  caught, phasing ignored, and nothing said why). Each START with the tone run that fired it, and each phasing
+     *  verdict — pulse position, how tightly the lines agreed, used or rejected. Rare (a few per chart), never per line. */
+    std::function<void(const std::string& msg)> onDiag;
 
 private:
     void decodeFaxLine();
@@ -98,11 +103,14 @@ private:
     int startIOC576Frequency = 300, stopFrequency = 450, startStopLength = 5;
     HeaderType lastType = HeaderImage;
     int typeCount = 0;
+    bool headerLatched = false;   // a START/STOP has fired for the tone now running (decodeFaxLine)
 
     // Phasing
     int phasingLines = 40;
     std::vector<int> phasingPos;
     int phasingLinesLeft = 0, phasingSkipData = 0;
+    /** ★ Phasing pulses this close (fraction of a line, either way, on the circle) agree — see decodeFaxLine. */
+    static constexpr double PHASE_TOL = 0.02;
     bool havePhasing = false;
 
     // Control
