@@ -9718,6 +9718,13 @@ function initDecoders(host: string, auth: AuthState) {
     onImageLine: (y, w, px, rgb) => {
       // ★ After CLR, WEFAX lines count from the first one that arrives; a count below that base is the server's own
       //   new chart (a start tone), numbered from 0 again (see clearDecImage).
+      // ★★ A RETUNE STARTS A NEW CHART (2026-10-07 — the app's DecoderPanel does the same): a move of 3 kHz or more is a
+      //    different transmission, joined mid-chart with no start tone to say so. Fine-tuning does not count.
+      if (!rgb) {
+        const f = spec?.frequency ?? 0;
+        if (decChartHz && f && Math.abs(f - decChartHz) >= 3000 && decLiveMaxY > 0) clearDecImage('new frequency — the last chart is under PREV');
+        if (f) decChartHz = f;
+      }
       if (!rgb) { if (decRebase) { decRebase = false; decLineBase = y; } if (y < decLineBase) decLineBase = 0; y -= decLineBase; }
       drawDecLine(y, w, px, rgb); if (!wefaxPhaseKnown) setDecLive(true);
     },
@@ -11721,7 +11728,8 @@ function updateDecImageButtons() {
  *  looks were spent on the first — so after CLR lines are counted from the first one that arrives (decLineBase).
  *  The app's DecoderImageCanvas clear() does the same. */
 let decLineBase = 0, decRebase = false;
-function clearDecImage() {
+let decChartHz = 0;   // the dial the live WEFAX chart is being received on — see onImageLine
+function clearDecImage(why?: string) {
   if (decLiveCv && decLiveMaxY > 0) {
     decLiveComplete = true;
     if (!decIsRgb) redrawDecAlign();      // its final levels, as a finished chart
@@ -11729,7 +11737,7 @@ function clearDecImage() {
   decViewingPrev = false;
   startDecImage(decImgWidth || 0, 0);     // banks the old picture as PREV, starts a clean one
   if (activeDec === 'wefax') decRebase = true;
-  $('decStatus').textContent = 'cleared — the last picture is under PREV';
+  $('decStatus').textContent = why ?? 'cleared — the last picture is under PREV';
 }
 
 function startDecImage(w: number, h: number) {

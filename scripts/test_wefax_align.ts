@@ -276,11 +276,14 @@ function stripped(lines: number, roll: number, slant: number, sigma: number): Ui
   }
   return rows;
 }
+// ★★ the seam goes down the strip's MIDDLE (Stuart, 2026-10-07: "I split the strip like we do the white on DDK")
+{ const st: ChartAlignState = {}; feed(st, stripped(700, 40, 0, 30), 0, 700, ANY);
+  ok(st.via === 'strip' && !st.al, `a strip already ACROSS the line's end (most right, some left — how the phased JMH and HLL2 arrived): left as received (${JSON.stringify(st.al)})`); }
 { const st: ChartAlignState = {}; feed(st, stripped(700, 0, 0, 30), 0, 700, ANY);
   ok(st.via === 'strip' && !st.al, `phased chart with a black strip at the line's end: left as received (${JSON.stringify(st.al)})`); }
 { const st: ChartAlignState = {}; feed(st, stripped(700, 600, 0, 30), 0, 700, ANY);
   const seam = st.al ? (((st.al.shift - 600) % W) + W) % W : -1;
-  ok(st.via === 'strip' && seam >= 1728 && seam < W, `rolled 600 px: the seam put inside the strip (${seam}, strip 1728…1808)`); }
+  ok(st.via === 'strip' && Math.abs(seam - 1768) <= 3, `rolled 600 px: the seam down the strip's middle (${seam}, strip 1728…1808, middle 1768)`); }
 { const st: ChartAlignState = {}; feed(st, stripped(700, 600, 0.16, 30), 0, 700, ANY);
   ok(st.slant !== undefined && Math.abs(st.slant - 0.16) <= 0.01, `a strip chart leaning 0.16 (CBV): its slant measured from the strip (${st.slant})`); }
 { const rows = stripped(300, 0, 0, 0).map((r) => r.map((v) => (v === 8 ? 90 : v)));   // a dark GREY band, not black

@@ -96,6 +96,34 @@ static Result run(double pulseStart, int lead, int badPhasingLines, unsigned see
     return r;
 }
 
+// ★★ THE STATUS DOES NOT FLICKER (2026-10-07): "standing by" / "receiving" switched 80× through 50 min of NMF off K3FEF
+// and 149× through a noisy JMH chart — one correlation threshold, a weak chart hovering on it. Now two (CORR_ON/OFF).
+// A chart of random strokes (lines that look like the line above, as a real chart's do) under heavy noise, and pure
+// noise: counts how often the status changes between 0 standing by and 3 receiving.
+static int flips(bool chart, double noiseAmp, int lines, unsigned seed, int* lastPhase) {
+    Synth s; s.rng.seed(seed); std::normal_distribution<double> g(0, 1); std::mt19937 r2(seed + 3);
+    std::vector<double> row(SPL, 1.0);
+    for (int l = 0; l < lines; l++) {
+        if (chart && l % 6 == 0) {   // a new pattern of dark strokes every few lines, held between (coasts, isobars)
+            std::fill(row.begin(), row.end(), 1.0);
+            std::uniform_int_distribution<int> at(0, SPL - 400);
+            for (int k = 0; k < 30; k++) { int a = at(r2); for (int i = 0; i < 300; i++) row[a + i] = 0.0; }
+        }
+        for (int i = 0; i < SPL; i++) {
+            double v = chart ? row[i] : 0.5;
+            v += noiseAmp * g(s.rng); v = v < 0 ? 0 : (v > 1 ? 1 : v);
+            s.tone(v);
+        }
+    }
+    WefaxDecoder::Config cfg; cfg.lpm = 120; cfg.usePhasing = true; cfg.autoStart = false; cfg.autoStop = false;
+    WefaxDecoder dec(FS, cfg);
+    int n = 0, prev = -1;
+    dec.onPhase = [&](int p) { if ((p == 0 || p == 3) && prev >= 0 && p != prev) n++; if (p == 0 || p == 3) prev = p; };
+    for (size_t i = 0; i < s.out.size(); i += 4096) dec.process(&s.out[i], (int)std::min<size_t>(4096, s.out.size() - i));
+    *lastPhase = prev;
+    return n;
+}
+
 int main() {
     const int W = 1809, wantBar = (int)std::lround(BAR_AT * W);
     auto colErr = [&](int c) { int d = std::abs(c - wantBar) % W; return std::min(d, W - d); };
@@ -141,6 +169,12 @@ int main() {
         else std::printf("   .. sweep %d/20 failed: %s | bar %d\n", k, e.diag.c_str(), e.barCol);
     }
     check(ok == total, "★ a clean phasing is used wherever the decoder's line happens to start (" + std::to_string(ok) + "/" + std::to_string(total) + ")");
+    { int last = -1; int f1 = flips(true, 2.1, 600, 21, &last);   // 2.1: the previous decoder flickered 16 times here
+      std::printf("   .. weak chart under heavy noise, 600 lines: %d status changes, ends %s\n", f1, last == 3 ? "receiving" : "standing by");
+      check(f1 <= 4 && last == 3, "★ a weak chart under noise reads 'receiving' and stays there (≤ 4 changes in 5 minutes)");
+      int f2 = flips(false, 2.1, 400, 22, &last);
+      std::printf("   .. pure noise, 400 lines: %d status changes, ends %s\n", f2, last == 3 ? "receiving" : "standing by");
+      check(last != 3 && f2 == 0, "pure noise never reads 'receiving'"); }
     std::printf(fails ? "\n%d FAILED\n" : "\nall good\n", fails);
     return fails ? 1 : 0;
 }

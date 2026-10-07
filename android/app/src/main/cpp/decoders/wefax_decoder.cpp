@@ -214,7 +214,14 @@ void WefaxDecoder::decodeFaxLine() {
         //   …and a stop tone ENDS it: what follows is noise until it proves to be another chart.
         if (phase == 4) corrAvg = 0.0;
         // ★ "Image" lines that do not look like a chart are noise: 0, standing by.
-        if (phase == 3 && corrAvg < 0.25) phase = 0;
+        /* ★★ TWO THRESHOLDS, NOT ONE (2026-10-07 — the "standing by / receiving" status flickered 80 times through 50
+         *  minutes of NMF off K3FEF and 149 times through a noisy JMH chart). A weak chart's smoothed line-to-line
+         *  correlation hovers round a single threshold and crosses it every few lines. Now: a chart is noticed at
+         *  CORR_ON and only given up below CORR_OFF. */
+        if (phase == 3) {
+            const bool chart = lastPhase == 3 ? corrAvg >= CORR_OFF : corrAvg >= CORR_ON;
+            if (!chart) phase = 0;
+        }
         // ★ And a change must hold for two lines before it is reported, so the status cannot flicker.
         if (phase == pendingPhase) pendingCount++; else { pendingPhase = phase; pendingCount = 1; }
         if (pendingCount >= 2 && phase != lastPhase) { lastPhase = phase; if (onPhase) onPhase(phase); }

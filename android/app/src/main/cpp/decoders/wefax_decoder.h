@@ -120,6 +120,7 @@ private:
     bool autoStopped = false, autoStarted = false;
     int lastPhase = -1, pendingPhase = -1, pendingCount = 0;
     double corrAvg = 0.0;   // smoothed line-to-line correlation — chart vs noise (decodeImageLine)
+    static constexpr double CORR_ON = 0.25, CORR_OFF = 0.12;   // chart noticed / given up — see decodeFaxLine
 };
 
 } // namespace vibe

@@ -1,7 +1,11 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    // ★ A module Node runs directly (src/utils/wefaxAlign.ts — scripts/test_wefax_align.ts and the WEFAX world harness
+    //   load it with no resolver) must name its imports WITH the extension. Metro and esbuild resolve that unchanged;
+    //   this only lets the type-check agree (noEmit is set by expo/tsconfig.base). 2026-10-07.
+    "allowImportingTsExtensions": true
   },
   // ★★★ THE BUILD DIRECTORIES MUST BE EXCLUDED, OR NOTHING IS TYPE-CHECKED AT ALL (2026-09-20).
   //     CMake writes `compiler_depend.ts` — a MAKEFILE — into android/**/build*/CMakeFiles, and TypeScript

@@ -86,7 +86,7 @@ export interface DecoderImageHandle {
   sstvLine:   (ln: number, w: number, px: Uint8Array) => void;
   imageDone:  () => void;
   /** ★ CLR (2026-10-07): the picture so far goes to PREV, and the next line starts a fresh one — its own auto-align. */
-  clear:      () => void;
+  clear:      (why?: string) => void;
   reset:      () => void;
   showPrev:   () => void;
   showLive:   () => void;
@@ -456,7 +456,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         onStatus('done — tap SAVE');
       },
 
-      clear() {
+      clear(why?: string) {
         // ★ Never throws a picture away — a mis-press costs nothing: what was on screen is under PREV.
         const had = !!live.current && live.current.maxLine > 0;
         if (live.current && live.current.raw && !live.current.complete && had) {
@@ -469,7 +469,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         rebuild(null, true);
         onPrevState(!!prev.current, false);
         onInfo('');
-        onStatus(had ? 'cleared — the last picture is under PREV' : 'cleared');
+        // ★ `why` (a retune): said only when a picture actually went to PREV — an empty canvas has nothing to report.
+        if (why) { if (had) onStatus(why); } else onStatus(had ? 'cleared — the last picture is under PREV' : 'cleared');
       },
 
       reset() {

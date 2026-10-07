@@ -1,3 +1,4 @@
+import { addToHist, crispLevels, crispLine, newHist } from './wefaxCrisp.ts';   // ★ .ts: Node runs this file directly (scripts/test_wefax_align.ts, the world harness) with no resolver
 /**
  * wefaxAlign — SHIFT and SLANT for a WEFAX chart, applied as each line is DRAWN (app + web; no server cost).
  *
@@ -19,6 +20,14 @@ const NORTHWOOD_KHZ = [2618.5, 4610, 8040, 11086.5];
  *  some, dead centre on others), so the SHIFT is found per chart by findMargin, never preset. */
 export const NORTHWOOD_ALIGN: WefaxAlign = { shift: 0, slant: -0.06 };
 
+/** HLL2 Seoul (Korea Meteorological Administration) assigned frequencies, kHz. */
+const HLL2_KHZ = [3585, 5857.5, 7433.5, 9165, 13570];
+/** ★ Measured 2026-10-07 on real air, not taken from a table: Stuart's HLL2 3585 chart off the JP1ODJ Kiwi (Saitama), its
+ *  black strip's edge and the map frame both drift +0.031…+0.0325 px/line; drawn at +0.032 the strip edge moves 1 px
+ *  over 720 lines (22 px uncorrected; −0.032 doubles it). Agrees with the published ~18 ppm of KMA's transmitter.
+ *  SLANT only, as Northwood's. */
+export const HLL2_ALIGN: WefaxAlign = { shift: 0, slant: 0.032 };
+
 /** The station preset for a dial frequency, or zero. The dial in USB sits 1.9 kHz below the carrier (the published
  *  "assigned" frequency); a dial showing the carrier itself matches too.
  *  ★★ Within PRESET_KHZ of either, not 5 kHz of the carrier (2026-10-07, scripts/wefax-world): KVM70 Honolulu's
@@ -26,7 +35,9 @@ export const NORTHWOOD_ALIGN: WefaxAlign = { shift: 0, slant: -0.06 };
  *  Northwood's −0.06 slant — and, with the margin search Northwood's alone, searched for a margin it does not send. */
 export function wefaxPreset(dialHz: number): WefaxAlign {
   const khz = dialHz / 1000;
-  return nearStation(khz * 1000, NORTHWOOD_KHZ) ? { ...NORTHWOOD_ALIGN } : { ...WEFAX_ALIGN_ZERO };
+  if (nearStation(khz * 1000, NORTHWOOD_KHZ)) return { ...NORTHWOOD_ALIGN };
+  if (nearStation(khz * 1000, HLL2_KHZ)) return { ...HLL2_ALIGN };
+  return { ...WEFAX_ALIGN_ZERO };
 }
 /** ★ How close (kHz) a dial must be to a station's to take its preset — see wefaxPreset. */
 const PRESET_KHZ = 0.5;
@@ -590,7 +601,8 @@ export const ALIGN_CHECK_LINES = [300, 600];
  */
 export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, stationSlant: number,
                                count: number, minRows = count / 2,
-                               out?: AlignLookOut, fmt: WefaxFormat = defaultFormat(stationSlant)): WefaxAlign | null {
+                               out?: AlignLookOut, fmt: WefaxFormat = defaultFormat(stationSlant),
+                               stripRows: ReadonlyArray<ArrayLike<number> | undefined> = rows): WefaxAlign | null {
   // ★★★ CONSERVATIVE, WORLDWIDE (Stuart, 2026-10-07: "this is a worldwide app"). A chart is moved only when it is
   //     positively one of the formats below, on strong evidence; anything else is drawn exactly as received — a wrong
   //     cut through the map is far worse than none. scripts/wefax-world/harness.ts runs every format we know of.
@@ -650,14 +662,17 @@ export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined
   }
   // 2. a black strip
   if (kind !== 'margin') {
-    const f = findStripSlant(rows, width, stationSlant, fixed, 0, count, minRows);
+    const f = findStripSlant(stripRows, width, stationSlant, fixed, 0, count, minRows);   // ★ the rendered rows — see renderedRows
     if (f) {
       const sp = f.strip, k = f.slant;
       if (out) out.via = 'strip';
-      // the seam goes STRIP_SEAM px inside the strip's far edge — where a phased chart has it: the picture starts at
-      // the line's left end, the strip fills its right end. A strip already over the line's ends, or whose far edge
-      // is within STRIP_EDGE of them, is left where it is (only a real lean is drawn — see `phased`).
-      const seam = (sp.at + sp.len - STRIP_SEAM) % width;
+      /* ★★ THE SEAM GOES DOWN THE STRIP'S MIDDLE (Stuart, 2026-10-07, live JMH off the Saitama Kiwi: "I split the strip
+       *  like we do the white on DDK"). One rule for both formats — DDK's white border and a black strip are both cut in
+       *  their middle, a thin even bar each side. It went STRIP_SEAM px inside the far edge (all the black on the right),
+       *  but no station sends it that way: Stuart's phased HLL2 and the phased JMH both had the strip across the line's
+       *  end, most on the right and a little on the left. A strip already across the line's end, or whose middle is
+       *  within STRIP_EDGE of it, is left where it is — a phased chart is not touched (only a real lean is drawn). */
+      const seam = (sp.at + Math.floor(sp.len / 2)) % width;
       if (Math.min(seam, width - seam) <= STRIP_EDGE || (((width - sp.at) % width) < sp.len)) return phased(k);
       if (out && k !== stationSlant) out.measured = k;
       return { shift: seam, slant: k };
@@ -831,7 +846,6 @@ const STRIP_MIN = 40;
 const STRIP_MAX = 200;
 const STRIP_SOLID = 0.9;
 const STRIP_SIDE_INK = 128;
-const STRIP_SEAM = 4;
 const STRIP_EDGE = 24;
 const STRIP_GAIN = 8;
 /** ★ The least average ink (of 255) across a strip — black, not a dark grey: see findStrip. */
@@ -909,6 +923,38 @@ export function rowIsFlat(r: ArrayLike<number>, width: number): boolean {
  * had collected enough noise specks by line 600 to hide it, and the frame then passed for a margin — so a chart
  * left alone at the first look stays alone.
  */
+/* ★★★ THE STRIP IS JUDGED ON THE PICTURE THE LISTENER SEES (2026-10-07, Stuart's JMH off the Saitama Kiwi). It was fed the
+ *  decoder's RAW lines, and on real air those are speckled grey: JMH's paper had a median of 129, two thirds of its pairs
+ *  "dark", so the strip neither stood out from the picture beside it nor reached STRIP_INK (217 of 225). Replayed on the
+ *  raw lines of two JMH recordings as 16 late joins: the strip was found 0 times — exactly the live result — while every
+ *  SAVED picture of the same charts (the crisp rendering) was cut correctly. The screen draws each line levelled to the
+ *  chart's own paper and ink and lightly smoothed (utils/wefaxCrisp); the STRIP search now looks at that same rendering,
+ *  so it judges what you would judge. Only the strip: rendering every look blurred the two-pixel features the margin and
+ *  border rules were measured on (Northwood's bar, DDK's grey frame pairs — 3 of test_wefax_align failed). */
+export const ALIGN_ON_RENDERED = !(typeof process !== 'undefined' && (process as any).env?.WEFAX_ALIGN_RAW === '1');
+/** ★★ …BUT ONLY A TWO-TONE CHART (2026-10-07, the world harness: a satellite picture's dark sea, levelled, became a
+ *  "strip" and drew a 0.036 slant). Rendered, a chart is paper and ink; a satellite picture keeps its greys. Measured
+ *  (share of rendered pixels between 40 and 215): every chart 1.6–12.0 % (the 15 NOAA charts incl. a grey-shaded ice
+ *  chart, NMF and JMH as decoded off air), real GOES satellite images 54–58 %, synthetic ones 26–31 %. Above
+ *  RENDER_MAX_GREY the strip is searched on the received rows exactly as before — never on a satellite picture's levels
+ *  (JMH sends four Himawari images a day). */
+const RENDER_MAX_GREY = 0.18;
+function renderedRows(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number): (ArrayLike<number> | undefined)[] | null {
+  const h = newHist();
+  for (const r of rows) if (r) addToHist(h, r);
+  const lv = crispLevels(h);
+  if (!lv) return null;
+  let grey = 0, n = 0;
+  const out = rows.map((r, y) => {
+    if (!r) return undefined;
+    const o = new Uint8Array(width);
+    crispLine((j) => rows[j], y, width, lv, o);
+    for (let x = 0; x < width; x += 3) { n++; if (o[x] > 40 && o[x] < 215) grey++; }
+    return o;
+  });
+  return n && grey / n <= RENDER_MAX_GREY ? out : null;
+}
+
 export function chartAlignStep(st: ChartAlignState, getRows: () => ReadonlyArray<ArrayLike<number> | undefined>,
                                width: number, stationSlant: number, row: ArrayLike<number>,
                                fmt: WefaxFormat = defaultFormat(stationSlant)): boolean {
@@ -919,8 +965,11 @@ export function chartAlignStep(st: ChartAlignState, getRows: () => ReadonlyArray
     const rows = getRows();
     const out: AlignLookOut = { via, fixedSlant };
     // every row so far, featureless ones blanked (their y still sets the slant offset); half must have content
-    const a = findChartAlign(rows.map((r) => (r && !rowIsFlat(r, width) ? r : undefined)), width, stationSlant,
-                             rows.length, n / 2, out, fmt);
+    const content = rows.map((r) => (r && !rowIsFlat(r, width) ? r : undefined));
+    // ★ The strip — a wide band — is judged on the RENDERED rows; a margin or a frame line (two pixels) on the rows as
+    //   received, which is what their rules were measured on (rendering blurred Northwood's bar and DDK's grey frame pairs).
+    const a = findChartAlign(content, width, stationSlant, rows.length, n / 2, out, fmt,
+                             (ALIGN_ON_RENDERED && renderedRows(content, width)) || content);
     return { a, atEdge: !!out.atEdge, via: out.via, measured: out.measured };
   };
   if (st.al === undefined) {

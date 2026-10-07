@@ -42,6 +42,9 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel,
 import StationLogo from './StationLogo';
 import { scrollLane } from '../constants/popupTokens';
 import type { Aircraft } from '../services/SDRBackend';
+/** ★ A tuning move this large (Hz) while WEFAX is open is a different transmission — see the retune effect. */
+const RETUNE_NEW_CHART_HZ = 3000;
+
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -386,6 +389,16 @@ export default function DecoderPanel({
    *  station preset (Northwood), else none. ADJ opens the strip; every change is saved at once. */
   const isWefax = activeDecoder === 'wefax';
   const alignKey = wefaxAlignKey(tunedHz);
+  /* ★★ A RETUNE STARTS A NEW CHART (2026-10-07, Stuart live on a Japanese Kiwi: JMH 7795, JMH 3620.6 and Korea's HLL2
+   *  stacked into one 1201-line picture, and the auto-align's looks spent on the first). The decoder only starts a chart
+   *  on a start tone, and a retune joins mid-chart with none — so a move of RETUNE_NEW_CHART_HZ or more does what CLR
+   *  does: the picture so far to PREV, a fresh chart with its own auto-align. Fine-tuning (3620.1 → 3620.6) does not. */
+  const lastChartHz = useRef(tunedHz);
+  useEffect(() => {
+    if (!isWefax || !tunedHz) { lastChartHz.current = tunedHz; return; }
+    if (lastChartHz.current && Math.abs(tunedHz - lastChartHz.current) >= RETUNE_NEW_CHART_HZ) imageRef?.current?.clear('new frequency — the last chart is under PREV');
+    lastChartHz.current = tunedHz;
+  }, [isWefax, tunedHz, imageRef]);
   const [align, setAlign] = useState<WefaxAlign>(() => wefaxPreset(tunedHz));
   const [alignSaved, setAlignSaved] = useState(false);
   const [adjOpen, setAdjOpen] = useState(false);
