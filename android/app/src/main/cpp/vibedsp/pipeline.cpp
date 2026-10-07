@@ -690,8 +690,8 @@ void RxPipeline::rebuildAudio() {
             lmrHiCutHz_ = 15000.0f; lmrHiCutY_ = 0.0f; blendSnrDb_ = 99.0f;
             imsBlendHz_ = 0.0f; imsWhy_ = 1;
             audioHiCutHz_ = 15000.0f; hiCutYL_ = hiCutYR_ = hiCutYM_ = 0.0f;
-            const int rch = (int)std::llround(audFs_);
-            resampR_ = std::make_unique<RationalResampler>(rch, outRate_);
+            // ★ The SAME exact rate as the left/mono resampler below, or L and R drift apart.
+            resampR_ = std::make_unique<RationalResampler>(audFs_, outRate_, RationalResampler::ExactRate{});
             // ★ VIBE_WFM_MONO=1 takes the plain mono path (discriminator, low-pass, de-emphasis — no
             //   pilot PLL, no L-R, no noise meter): the cost figure for a Pi Zero W class box (2026-09-16).
             stereo_ = !std::getenv("VIBE_WFM_MONO"); lastStereo_ = false;
@@ -721,7 +721,13 @@ void RxPipeline::rebuildAudio() {
             break;
         }
     }
-    resamp_ = std::make_unique<RationalResampler>((int)std::llround(audFs_), outRate_);
+    /* ★★★ THE EXACT AUDIO RATE, NOT IT ROUNDED (2026-10-07). audFs_ is sampleRate / decimation and is
+     *  rarely a whole number — 3 MS/s / 296 = 10135.135 Hz (the Lenovo RSP1A in LSB), a per-listener
+     *  31.25 kHz channel / 3 = 10416.667 Hz (the Pi 500 RSP1B in USB). llround() then the L ≤ 256
+     *  approximation made those −31.9 and −33.9 ppm: every listener's stream ran SHORT, the playout
+     *  buffer drained, and the audio stepped. Measured on the Lenovo, −31.7 ppm, to the predicted
+     *  figure. See RationalResampler::ExactRate; test_resampler_rate pins every mode at every rate. */
+    resamp_ = std::make_unique<RationalResampler>(audFs_, outRate_, RationalResampler::ExactRate{});
 
     baseBuf_.clear(); chBuf_.clear(); demodBuf_.clear(); audioBuf_.clear();
     dirty_ = false;

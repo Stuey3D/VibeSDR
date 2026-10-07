@@ -369,17 +369,48 @@ private:
 // exact 48 kHz so playback pitch is correct regardless of channel rate.
 class RationalResampler {
 public:
+    /** ★ Integer rates. Beyond kMaxL branches the RATIO is approximated (parts per million) — kept
+     *  for the raw-IQ tap, whose caller already rounds its rate to an integer. Audio uses ExactRate. */
     RationalResampler(int inRate, int outRate);
+    /** ★★★ AN EXACT LONG-TERM RATE FROM A NON-INTEGER INPUT RATE (2026-10-07).
+     *  The demod chain's audio rate is `sampleRate / decimation` — 3 MS/s / 296 = 10135.135… Hz on
+     *  the Lenovo RSP1A in LSB. Rounding that to 10135 and then capping L at 256 picked 251/53, an
+     *  output rate 31.9 ppm SLOW; the audio fed every listener ~1.5 ms a minute short, and the
+     *  client's playout buffer ran dry and stepped. Measured −31.7 ppm on the live radio against
+     *  this prediction of −31.87. "Parts per million is inaudible" was true of the PITCH and false
+     *  of the STREAM: a buffer that never refills is not inaudible.
+     *  ★★ Here the input rate is recovered as an exact fraction (a continued fraction of the
+     *     double, so 3e6/296 comes back as 375000/37), the step between outputs is carried in exact
+     *     integer arithmetic, and only the FILTER PHASE is quantised to at most kMaxL branches
+     *     (nearest of 512, ≤ 1/1024 of an input sample) when the exact L is larger. The rate can
+     *     no longer drift; the cost of a coprime ratio is a sub-sample timing quantisation (better
+     *     than −55 dB at the top of a 3 kHz passband from a 10 kHz channel), never a lost sample.
+     *  ★ When the exact L fits in kMaxL the result is bit-identical to an integer-rate resampler
+     *    of that L/M: same table, same branches. */
+    struct ExactRate {};
+    RationalResampler(double inRateHz, int outRate, ExactRate);
     int process(const float* in, int n, float* out);   // returns #outputs
-    int maxOut(int n) const { return (int)((long long)n * L_ / M_) + 2; }
-    int L() const { return L_; }
-    int M() const { return M_; }
+    int maxOut(int n) const { return (int)((double)n * (double)L_ / (double)M_) + 3; }
+    /** The exact ratio out/in = L/M (reduced). May exceed the branch count — see branches(). */
+    long long L() const { return L_; }
+    long long M() const { return M_; }
+    /** Polyphase branches actually built: == L() when the ratio is exact in the table. */
+    int branches() const { return Lt_; }
     void reset();
+    static constexpr int kMaxL = 256;          ///< integer-rate constructor: ratio approximated beyond
+    static constexpr int kMaxBranches = 512;   ///< ExactRate: filter phase quantised beyond
 private:
-    int L_, M_, phaseLen_;
+    void build_();                             // design the table for Lt_ branches at ratio L_/M_
+    long long L_ = 1, M_ = 1;
+    int Lt_ = 1, phaseLen_ = 1;
     long long inCount_ = 0, outCount_ = 0;
     long long outBase_ = 0;   // newest input index the next output uses (carried, not divided)
-    int       outBranch_ = 0; // its polyphase branch
+    // ★ The output's EXACT phase between inputs is ph/L_ (ph in [0, L_)); the branch used is
+    //   round(ph·Lt_/L_), carried as quotient bq_ and remainder br_ so no output divides (see the
+    //   32-bit ARM note in process()). bq_ == Lt_ means "branch 0 of the next input".
+    long long ph_ = 0, bq_ = 0, br_ = 0;
+    long long qStep_ = 0, rStep_ = 0;          // M_ = qStep_·L_ + rStep_
+    long long sQ_ = 0, sR_ = 0;                // rStep_·Lt_ = sQ_·L_ + sR_
     // Polyphase branches stored CONTIGUOUSLY and reversed (rBranch_[b*phaseLen+m]),
     // so each output is a forward NEON dot over a contiguous window of buf_ =
     // [phaseLen history][block]. (Was a strided prototype + circular history.)

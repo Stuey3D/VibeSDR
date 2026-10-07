@@ -38,6 +38,9 @@ flags_for() {
     # ★ Every mode's DSP cost vs passband, both directions and past the ceiling — the audit that
     #   followed the WFM cliff (2026-09-29). Optimised for the same reason.
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
+    #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
+    test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
     # ★ The real decoders on real signals (RTTY, WEFAX, an encoded FT8 slot) — optimised so FT8's
     #   slot decode finishes in a second rather than ten.
     test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
@@ -81,6 +84,9 @@ deps_for() {
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-passband-cost)   echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-resampler-rate)  echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     # ★★ proc.cpp goes with anything that SHELLS OUT (curl, mostly): geoip, asndb and radiodns all

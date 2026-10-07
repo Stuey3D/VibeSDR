@@ -31,7 +31,7 @@ static void testResampler() {
     std::vector<float> in(Ni), out(rs.maxOut(Ni));
     for (int i = 0; i < Ni; ++i) in[i] = std::sin(2.0 * M_PI * fTone * i / inFs);
     const int no = rs.process(in.data(), Ni, out.data());
-    std::printf("  L/M = %d/%d, in %d -> out %d (expected ~%d)\n",
+    std::printf("  L/M = %lld/%lld, in %d -> out %d (expected ~%d)\n",
                 rs.L(), rs.M(), Ni, no, Ni * outFs / inFs);
     check(std::abs(no - Ni * outFs / inFs) < 50, "output length matches ratio");
 
