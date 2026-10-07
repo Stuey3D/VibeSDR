@@ -396,17 +396,31 @@ export default function DecoderPanel({
    *  shifted again and needed setting every time"). So only the slant is saved; each chart's margin is found
    *  automatically, and ALIGN (drag + 1 / 5 px keys) moves THIS chart only — cleared when the next chart's margin is found. */
   const [manualShift, setManualShift] = useState<number | null>(null);
-  const onChartAlign = useCallback((a: WefaxAlign | null) => { setAutoAl(a); setManualShift(null); }, []);
+  /* ★★ The slant MEASURED on this chart (utils/wefaxAlign ChartAlignState.slant), undefined until one is; and whether
+   *  the listener has set the slant by hand on THIS chart (2026-10-07). */
+  const [measuredSlant, setMeasuredSlant] = useState<number | undefined>(undefined);
+  const [slantTouched, setSlantTouched] = useState(false);
+  const onChartAlign = useCallback((a: WefaxAlign | null, k?: number) => { setAutoAl(a); setMeasuredSlant(k); setManualShift(null); }, []);
   /* ★★ RAW (Stuart, 2026-10-06: "another button to remove all correction to just show the raw image as received.
    *  Reset defaults back to the auto settings we chose, and a No Correct or RAW button shows the image without any
    *  correction at all"). A toggle, PER CHART like the shift: the next chart comes in automatic. Nothing is
    *  discarded — auto-align, the manual shift and the saved slant all stay underneath and return when it goes off.
    *  Geometry only (utils/wefaxAlign drawnAlign); SAVE writes the picture shown, so RAW saves raw. */
   const [rawChart, setRawChart] = useState(false);
-  const onNewChart = useCallback(() => { setRawChart(false); setManualShift(null); }, []);
-  /* ★★ The slant drawn: the listener's own if saved for this frequency, else THIS chart's measured one (utils/wefaxAlign
-   *  findMarginSlant — MadPsy/Stuart 2026-10-05: never tied to one radio's clock), else the station's. */
-  const drawSlant = !alignSaved && autoAl ? autoAl.slant : align.slant;
+  /* ★★ …and the last chart's alignment and measured slant go with it (2026-10-07): they were drawn on the next chart
+   *  until that chart's own first look, 300 lines in. */
+  const onNewChart = useCallback(() => {
+    setRawChart(false); setManualShift(null); setAutoAl(null); setMeasuredSlant(undefined); setSlantTouched(false);
+  }, []);
+  /* ★★★ The slant drawn (2026-10-07, Stuart, DDK on the Pi 500's HF+: "we also applied Northwood's slant correction to
+   *  DDK, as it is leaning backwards"): THIS chart's MEASURED slant whenever something on it could measure one —
+   *  margin or frame line — unless the listener has set the slant by hand on this chart; else the listener's saved
+   *  slant for this frequency; else the station's. It was the saved slant whenever there was one: a slant is the
+   *  transmitter's line rate PLUS the receiver's clock (MadPsy, 2026-10-05), so one saved at 7878 kHz on one radio
+   *  bent every later chart on another, and auto-measurement was never even drawn. */
+  const drawSlant = !slantTouched && measuredSlant !== undefined ? measuredSlant : align.slant;
+  /** The slant in effect is the listener's (MANUAL): set by hand on this chart, or saved and nothing measured. */
+  const slantManual = slantTouched || (alignSaved && measuredSlant === undefined);
   useEffect(() => {
     if (!isWefax || !tunedHz) return;
     let dead = false;
@@ -452,7 +466,7 @@ export default function DecoderPanel({
   const nudgeShift = (d: number) => { const s = shiftRef.current + d; shiftRef.current = s; setManualShift(s); };
   const nudgeSlant = (d: number) => {
     const k = Math.round((slantRef.current + d) * 1000) / 1000;
-    slantRef.current = k; changeAlign({ shift: 0, slant: k });
+    slantRef.current = k; setSlantTouched(true); changeAlign({ shift: 0, slant: k });
   };
   const onAlignDrag = useCallback((s: number, done: boolean) => { if (done) setManualShift(s); }, []);
   const hold = useHoldRepeat();
@@ -1270,16 +1284,16 @@ export default function DecoderPanel({
               )}
               <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the slant"
                 onPress={() => { setRawChart(false); setAdjMode('slant'); }}>
-                <DecoderKeyLabel active={!rawChart && alignSaved} style={dp.bigKeyTxt}>
-                  {rawChart ? 'SLANT RAW' : `SLANT ${alignSaved ? 'MANUAL' : 'AUTO'} ${signedSlant(drawSlant)}`}
+                <DecoderKeyLabel active={!rawChart && slantManual} style={dp.bigKeyTxt}>
+                  {rawChart ? 'SLANT RAW' : `SLANT ${slantManual ? 'MANUAL' : 'AUTO'} ${signedSlant(drawSlant)}`}
                 </DecoderKeyLabel>
               </HBtn>
               {/* ★ AUTO and RAW are a MODE PAIR (Stuart, 2026-10-06 — AUTO replaces RESET): AUTO is lit while nothing
                   manual and no RAW is in effect, and pressing it goes back to automatic from either. */}
               <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Automatic margin and slant"
-                accessibilityState={{ selected: !rawChart && !alignSaved && manualShift == null }}
-                onPress={() => { changeAlign(null); setManualShift(null); setRawChart(false); }}>
-                <DecoderKeyLabel active={!rawChart && !alignSaved && manualShift == null} style={dp.bigKeyTxt}>AUTO</DecoderKeyLabel>
+                accessibilityState={{ selected: !rawChart && !slantManual && manualShift == null }}
+                onPress={() => { changeAlign(null); setSlantTouched(false); setManualShift(null); setRawChart(false); }}>
+                <DecoderKeyLabel active={!rawChart && !slantManual && manualShift == null} style={dp.bigKeyTxt}>AUTO</DecoderKeyLabel>
               </HBtn>
               <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Show the chart exactly as received, no correction"
                 accessibilityState={{ selected: rawChart }}
@@ -1293,7 +1307,8 @@ export default function DecoderPanel({
               align={isWefax ? { shift: manualShift ?? 0, slant: drawSlant } : undefined}
               autoMargin={isWefax && manualShift == null}
               onAutoAlign={onChartAlign}
-              autoSlant={!alignSaved}
+              autoSlant={!slantTouched}
+              stationSlant={wefaxPreset(tunedHz).slant}
               raw={isWefax && rawChart}
               onNewChart={onNewChart}
               alignPreview={isWefax && adjOpen && aligning && !viewingPrev ? curShift : undefined}

@@ -9902,13 +9902,17 @@ function initDecoders(host: string, auth: AuthState) {
   $('decAlignDone').onclick = () => setDecAdjMode('summary');
   $('decSlantDone').onclick = () => setDecAdjMode('summary');
   const nudgeShift = (d: number) => { decManualShift = decCorrAlign().shift + d; updateDecAdjLabels(); redrawDecAlign(); };
-  const nudgeSlant = (d: number) => setDecAlign({ ...decAlign, slant: Math.round((decCorrAlign().slant + d) * 1000) / 1000 });
+  const nudgeSlant = (d: number) => {
+    const k = Math.round((decCorrAlign().slant + d) * 1000) / 1000;
+    decSlantTouched = true;
+    setDecAlign({ ...decAlign, slant: k });
+  };
   holdRepeat($('decShiftL'), (m) => nudgeShift(m));
   holdRepeat($('decShiftR'), (m) => nudgeShift(-m));
   holdRepeat($('decSlantDn'), (m) => nudgeSlant(-SLANT_STEP * m));
   holdRepeat($('decSlantUp'), (m) => nudgeSlant(SLANT_STEP * m));
   initDecAlignDrag();
-  $('decAdjReset').onclick = () => { decManualShift = null; decRaw = false; setDecAlign(null); };
+  $('decAdjReset').onclick = () => { decManualShift = null; decRaw = false; decSlantTouched = false; setDecAlign(null); };
   $('decZoomOut').onclick = () => setDecZoom(decZoomI - 1);
   $('decMin').onclick = () => $('decBox').classList.toggle('min');
   $('decHide').onclick = () => { stopDecoder(); decoders!.setSpots(false);
@@ -11721,6 +11725,7 @@ function startDecImage(w: number, h: number) {
   decLiveMaxY = -1;
   decLiveRaw = []; decLiveAl = []; decLiveHist = newHist();
   decAuto = {}; decManualShift = null; decRaw = false;   // ★ a new chart finds its own margin / border, unRAW
+  decSlantTouched = false;                                // …and measures its own slant (2026-10-07)
   if (activeDec === 'wefax') updateDecAdjLabels();
   if (!decViewingPrev) blitToVisible(decLiveCv);
   updateDecImageButtons();
@@ -11747,11 +11752,18 @@ function decEffAlign(): WefaxAlign { return drawnAlign(decCorrAlign(), decRaw); 
 /** The correction in effect, RAW or not: this chart's shift (auto or manual) and the slant. */
 function decCorrAlign(): WefaxAlign {
   const shift = decManualShift ?? decAuto.al?.shift ?? 0;
-  // ★★ The slant: the listener's own if saved for this frequency, else THIS chart's measured one (findMarginSlant —
-  //    MadPsy/Stuart 2026-10-05: never tied to one radio's clock), else the station's.
-  const slant = !decAlignSaved && decAuto.al ? decAuto.al.slant : decAlign.slant;
+  // ★★★ The slant (2026-10-07, Stuart's DDK on the Pi 500's HF+ leaning backwards): THIS chart's MEASURED one whenever
+  //     something on it could measure it (margin or frame line), unless the listener set it by hand on this chart;
+  //     else the listener's saved one for this frequency; else the station's. The saved one used to win outright —
+  //     but a slant is the transmitter's line rate PLUS the receiver's clock (MadPsy, 2026-10-05), so one saved on
+  //     one radio bent every later chart on another. Same rule as the app (DecoderPanel drawSlant).
+  const slant = !decSlantTouched && decAuto.slant !== undefined ? decAuto.slant : decAlign.slant;
   return { shift, slant };
 }
+/** ★ The listener set the slant by hand on THIS chart (cleared when the next chart starts, and by AUTO). */
+let decSlantTouched = false;
+/** The slant in effect is the listener's: set by hand on this chart, or saved and nothing measured on it. */
+function decSlantManual(): boolean { return decSlantTouched || (decAlignSaved && decAuto.slant === undefined); }
 let decAlignSaved = false;
 let decAlignKey = '';
 /** Load this frequency's SHIFT / SLANT (the listener's own, else the station preset) and redraw if it changed. */
@@ -11784,14 +11796,14 @@ function updateDecAdjLabels() {
   const manual = decManualShift != null;
   $('decAlign').classList.toggle('on', !decRaw && manual);   // lit = this chart's shift was set by hand
   $('decAlign').textContent = decRaw ? 'MARGIN RAW' : `MARGIN ${manual ? 'MANUAL' : 'AUTO'} ${decSignedPx(a.shift)} px`;
-  $('decSlant').classList.toggle('on', !decRaw && decAlignSaved);
-  $('decSlant').textContent = decRaw ? 'SLANT RAW' : `SLANT ${decAlignSaved ? 'MANUAL' : 'AUTO'} ${decSignedSlant(a.slant)}`;
+  $('decSlant').classList.toggle('on', !decRaw && decSlantManual());
+  $('decSlant').textContent = decRaw ? 'SLANT RAW' : `SLANT ${decSlantManual() ? 'MANUAL' : 'AUTO'} ${decSignedSlant(a.slant)}`;
   $('decAlignVal').textContent = `${decSignedPx(a.shift)} px`;
   $('decSlantVal').textContent = decSignedSlant(a.slant);
   $('decRaw').classList.toggle('on', decRaw);
   $('decRaw').setAttribute('aria-pressed', String(decRaw));
   // ★ AUTO and RAW are a mode pair (AUTO replaced RESET, 2026-10-06): AUTO lit while nothing manual and no RAW.
-  $('decAdjReset').classList.toggle('on', !decRaw && !decAlignSaved && !manual);
+  $('decAdjReset').classList.toggle('on', !decRaw && !decSlantManual() && !manual);
   setDecAlignHint(a.shift);
 }
 /** The shift as the listener reads it: px, signed, the short way round. */
@@ -11967,10 +11979,12 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
     // ★ Once the chart is long enough, find its margin / border and redraw around it — and once more later if a
     //   longer look disagrees (chartAlignStep).
     if (decManualShift === null) {
-      const before = decAuto.al;
-      const moved = chartAlignStep(decAuto, () => decLiveRaw, w, decAlign.slant, raw);
-      if (decAuto.al !== before) updateDecAdjLabels();
-      if (moved) { redrawDecAlign(); return; }
+      const before = decAuto.al, slantBefore = decAuto.slant;
+      // ★★ Centred on the STATION's slant, never the saved one (2026-10-07 — see wefaxAlign chartAlignStep).
+      const moved = chartAlignStep(decAuto, () => decLiveRaw, w, wefaxPreset(spec?.frequency ?? 0).slant, raw);
+      if (decAuto.al !== before || decAuto.slant !== slantBefore) updateDecAdjLabels();
+      // a slant measured where nothing moved (a phased chart) still redraws the chart at that slant
+      if (moved || (decAuto.slant !== slantBefore && !decSlantTouched)) { redrawDecAlign(); return; }
     }
     decLiveAl[y] = decAlignRow(raw, y, w, decEffAlign());
     // ★ Lost lines: a jump in the line number leaves rows that never came; a late line (≤ 2 back) re-seeds those under it.

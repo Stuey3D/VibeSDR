@@ -104,10 +104,14 @@ export interface DecoderImageCanvasProps {
   /** ★ Find each chart's margin (or DDK-style blank border) and move it to the left edge (utils/wefaxAlign
    *  chartAlignStep) — off while the listener is nudging the shift by hand. */
   autoMargin?: boolean;
-  /** ★ Use the slant MEASURED on each chart (off when the listener has saved their own slant — theirs wins). */
+  /** ★ Use the slant MEASURED on each chart (off when the listener has set the slant by hand on THIS chart). */
   autoSlant?: boolean;
-  /** Reports the per-chart automatic alignment (null = nothing found) for the ADJ strip. */
-  onAutoAlign?: (a: WefaxAlign | null) => void;
+  /** ★★ The STATION's slant (utils/wefaxAlign wefaxPreset) — the centre of each chart's slant search. Never the
+   *  saved or drawn slant (2026-10-07: a stale one centred the search where the chart's real slant was out of reach). */
+  stationSlant?: number;
+  /** Reports the per-chart automatic alignment (null = nothing found) and the slant measured on the chart
+   *  (undefined = nothing on it could measure one) for the ADJ strip. */
+  onAutoAlign?: (a: WefaxAlign | null, measuredSlant?: number) => void;
   /** ★ ALIGN open (DecoderPanel): the SHIFT the listener is choosing. Drawn at once by sliding the picture already
    *  on screen (wrapping) — the chart itself is re-aligned only when the panel commits it. undefined = closed. */
   alignPreview?: number;
@@ -173,7 +177,7 @@ function mkBuf(w: number, h: number): PixBuf {
 
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
-                               autoMargin = false, autoSlant = true, onAutoAlign,
+                               autoMargin = false, autoSlant = true, stationSlant = 0, onAutoAlign,
                                alignPreview, onAlignDrag, raw = false, onNewChart }, ref) {
     const rawRef = useRef(raw);
     rawRef.current = raw;
@@ -183,12 +187,18 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     autoRef.current = autoMargin;
     const autoSlantRef = useRef(autoSlant);
     autoSlantRef.current = autoSlant;
-    /** The SHIFT / SLANT a buffer is drawn with: this chart's own when found (its measured slant unless the listener
-     *  saved one), else the frequency's. */
+    const stationSlantRef = useRef(stationSlant);
+    stationSlantRef.current = stationSlant;
+    /** The SHIFT / SLANT a buffer is drawn with: this chart's own shift when found (else the listener's), and the
+     *  slant MEASURED on this chart when there is one (else the listener's saved one, else the station's).
+     *  ★★ Measured beats saved (2026-10-07): a saved slant is one receiver's clock on one day — Stuart's DDK on the
+     *  Pi 500's HF+ leaned +0.11 px/line where the RX888 leans +0.01. Setting the slant by hand on THIS chart turns
+     *  autoSlant off, and then the listener's wins. */
     const effAlign = (buf: PixBuf): WefaxAlign => {
-      const a = buf.auto?.al;
-      if (!autoRef.current || !a) return drawnAlign(alignRef.current, rawRef.current);
-      return drawnAlign({ shift: a.shift, slant: autoSlantRef.current ? a.slant : alignRef.current.slant }, rawRef.current);
+      const st = buf.auto, a = st?.al;
+      const slant = autoSlantRef.current && st?.slant !== undefined ? st.slant : alignRef.current.slant;
+      const shift = autoRef.current && a ? a.shift : alignRef.current.shift;
+      return drawnAlign({ shift, slant }, rawRef.current);
     };
     const { width: winW } = useWindowDimensions();
     /* ★★★ THE WIDTH THIS CANVAS ACTUALLY HAS — MEASURED, not the window's. It was `winW - 16 - 24`, true
@@ -285,7 +295,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
      *  partial SSTV frame (signal faded, late join) was simply thrown away by the next image's start. */
     /* ★ A SHIFT / SLANT change redraws the WHOLE live chart from its kept lines — not only the lines to come —
      *  so the listener sees the correction land on the picture they are looking at. */
-    const alignKey = `${align?.shift ?? 0}|${align?.slant ?? 0}|${autoMargin ? 1 : 0}|${raw ? 1 : 0}`;
+    const alignKey = `${align?.shift ?? 0}|${align?.slant ?? 0}|${autoMargin ? 1 : 0}|${autoSlant ? 1 : 0}|${raw ? 1 : 0}`;
     const firstAlign = useRef(true);
     useEffect(() => {
       if (firstAlign.current) { firstAlign.current = false; return; }
@@ -341,7 +351,9 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       },
 
       wefaxLine(ln: number, w: number, px: Uint8Array) {
-        if (!live.current) { live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current; }  // lazy init
+        // ★★ The FIRST chart on a fresh canvas is a new chart too (2026-10-07): only a line count going back said so,
+        //    so the panel's per-chart state (a manual shift, RAW, the last chart's measured slant) carried over into it.
+        if (!live.current) { live.current = mkBuf(w, WEFAX_INIT_H); store.live = live.current; onNewChart?.(); }  // lazy init
         /* ★★★ THE LINE COUNT GOING BACK IS A NEW CHART — complete or not. This waited for `complete`, which only
          *  the STOP tone sets; the app does not ask for auto-stop (so it can draw from mid-chart), so a chart
          *  joined part-way never completed and the NEXT chart, numbered from 0 again, was painted OVER it
@@ -375,15 +387,20 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         //   more later if a longer look disagrees (chartAlignStep).
         let moved = false;
         const st = buf.auto ??= {};
-        const before = st.al;
+        const before = st.al, slantBefore = st.slant;
         const raw = buf.raw;
         if (autoRef.current && chartAlignStep(st, () => Array.from({ length: ln + 1 },
-              (_, y) => raw.subarray(y * buf.w, (y + 1) * buf.w)), buf.w, alignRef.current.slant,
+              (_, y) => raw.subarray(y * buf.w, (y + 1) * buf.w)), buf.w, stationSlantRef.current,
               raw.subarray(ln * buf.w, (ln + 1) * buf.w))) {
           for (let y = 0; y < ln; y++) alignRow(buf, y, effAlign(buf));
           moved = true;
         }
-        if (st.al !== before && st.al !== undefined) onAutoAlign?.(st.al);
+        if ((st.al !== before || st.slant !== slantBefore) && st.al !== undefined) onAutoAlign?.(st.al, st.slant);
+        // a slant measured where nothing moved (a phased chart) still redraws the chart at that slant
+        if (!moved && st.slant !== slantBefore && autoSlantRef.current) {
+          for (let y = 0; y < ln; y++) alignRow(buf, y, effAlign(buf));
+          moved = true;
+        }
         alignRow(buf, ln, effAlign(buf));
         if (ln > buf.maxLine) buf.maxLine = ln;
         // ★ Lost lines (2026-10-05): a jump in the line number leaves rows that never came — draw them as the line
