@@ -119,6 +119,66 @@ for (const k of [0.011, -0.03]) {
   const a = findChartAlign(rows, W, 0, 400);
   ok(a === null || a.slant === 0, `a text page: no slant invented (${a?.slant})`); }
 
+// ★★★ 2026-10-07 — Stuart's DDK 7880 on the Pi 500's Airspy HF+ (RC24 iPhone): the North Sea SST chart, joined ~670
+//     lines in, ROLLED with its wide white margins joined in the middle of the picture, and leaning BACKWARDS
+//     +0.11 px/line (its frame line, measured on the finished 11:10 screenshot; the same chart on the UberSDR's RX888,
+//     20261007_100515_90f67e54.png, leans +0.010). Its geometry, from that RX888 copy: a 4 px frame at 257 and 1563;
+//     blank paper 0…139 and 1691…1808; "60°N"/"56°N"/"52°N" labels in the margins beside the frame every ~440 lines;
+//     meridians inside leaning −0.06…+0.14; land stipple; under the map a legend in big text from 245 to 1580.
+function sst(lines: number, roll: number, slant: number, sigma: number, mapLines = lines): Uint8Array[] {
+  const rows: Uint8Array[] = [];
+  for (let y = 0; y < lines; y++) {
+    const r = new Uint8Array(W).fill(250);
+    if (y < mapLines) {
+      for (let x = 261; x < 1563; x++) if (rnd() < 0.05) r[x] = r[x + 1] = 30;                     // stipple, coasts
+      for (const [c, k] of [[400, -0.06], [700, 0.0], [1000, 0.07], [1300, 0.14]] as const) {      // meridians
+        const cx = Math.round(c + k * y); if (cx > 262 && cx < 1560) r[cx] = r[cx + 1] = r[cx + 2] = 15;
+      }
+      if (y % 220 < 3) for (let x = 257; x <= 1566; x++) r[x] = 20;                              // parallels
+      if (y % 440 < 30) for (const x0 of [140, 1580]) for (let x = x0; x < x0 + 110; x++) if (rnd() < 0.3) r[x] = 20; // labels
+      for (const f of [257, 1563]) for (let k = 0; k < 4; k++) r[f + k] = 0;                      // the frame
+    } else if ((y - mapLines) % 70 < 30 && y - mapLines < 300) {
+      for (let x = 245; x < 1580; x++) if (rnd() < 0.25) r[x] = r[x + 1] = 25;                    // the legend
+    }
+    const o = new Uint8Array(W), off = Math.round(roll + slant * y);
+    for (let x = 0; x < W; x++) o[x] = Math.max(0, Math.min(255, Math.round(r[(((x - off) % W) + W) % W] + (sigma ? gauss() * sigma : 0))));
+    rows.push(o);
+  }
+  return rows;
+}
+const cutIn = (shift: number | undefined, roll: number) => shift !== undefined && Math.abs(signed(shift - roll - 8)) <= 25;
+for (const sigma of [0, 45]) {
+  const roll = 1220, st: ChartAlignState = {};
+  feed(st, sst(700, roll, 0.11, sigma), 0, 700);
+  ok(!!st.al && st.via === 'border' && cutIn(st.al.shift, roll),
+     `SST rolled, wide margins + labels, σ${sigma}: cut in its white band (shift ${st.al?.shift} ≈ ${roll + 8})`);
+  ok(st.slant !== undefined && Math.abs(st.slant - 0.11) <= 0.01,
+     `SST leaning +0.11 (beyond the old ±0.05 search), σ${sigma}: slant measured from the frame as ${st.slant}`);
+}
+// ★★ WHY THE CLIENTS CENTRE THE SEARCH ON THE STATION'S SLANT, never a saved one: centred on a stale −0.06 (a slant
+//    saved on another radio, or Northwood's), the search ends at +0.09 and stops there, short of the chart's +0.11.
+{ const st: ChartAlignState = {}; feed(st, sst(700, 1220, 0.11, 30), -0.06, 700);
+  ok(st.slant !== undefined && st.slant < 0.1, `centred on −0.06 the search cannot reach +0.11 (stops at ${st.slant})`); }
+// ★★ A phased chart (band already at the ends) measures its slant too — reported in st.slant, nothing moved.
+{ const st: ChartAlignState = {}; let moved = 0; const rows = sst(700, -8, 0.05, 30);
+  for (let y = 0; y < rows.length; y++) if (chartAlignStep(st, () => rows.slice(0, y + 1), W, 0, rows[y])) moved++;
+  ok(st.atEdge === true && (st.al === null || st.al.shift === 0) && st.slant !== undefined && Math.abs(st.slant - 0.05) <= 0.01,
+     `phased SST leaning +0.05: left where it is, slant measured (${st.slant}), shift ${st.al?.shift ?? 0}`); }
+// ★★ Joined near the end: ~230 lines of map + legend, then white paper — never 300 lines with content. Looked at when
+//    the chart ends (CHART_END_FLAT featureless lines), and cut in its band.
+{ const rows = sst(500, 900, 0.01, 30, 100), st: ChartAlignState = {};
+  feed(st, rows, 0, rows.length);
+  ok((st.n ?? 0) < 300 && !!st.al && cutIn(st.al.shift, 900), `joined at the end (${st.n} lines with content): cut at the chart's end (${st.al?.shift} ≈ 908)`); }
+// ★★ A first look that found nothing is taken again at 600 — once.
+{ const st: ChartAlignState = { al: null, n: 599 }; let calls = 0;
+  const rows = sst(600, 1220, 0, 0);
+  const moved = chartAlignStep(st, () => { calls++; return rows; }, W, 0, rows[599]);
+  ok(moved && calls === 1 && cutIn(st.al?.shift, 1220) && st.retried === true, `nothing at 300 → looked again at 600 and cut (${st.al?.shift})`);
+  ok(!chartAlignStep(st, () => { calls++; return rows; }, W, 0, rows[599]) && calls === 1, '…and only once'); }
+{ const st: ChartAlignState = { al: null, atEdge: true, n: 599 }; let calls = 0;
+  chartAlignStep(st, () => { calls++; return sst(600, 1220, 0, 0); }, W, 0, sst(1, 0, 0, 0)[0]);
+  ok(calls === 0, 'a phased chart (border centred at the first look) is never looked at again'); }
+
 // ★ RAW (Stuart, 2026-10-06): drawn through drawnAlign, every line comes out exactly as received — whatever the
 //   correction underneath — and RAW off gives that correction back untouched.
 { const corr = { shift: 1775, slant: 0.011 };

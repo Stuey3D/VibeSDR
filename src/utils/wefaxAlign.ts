@@ -313,8 +313,9 @@ export function findGutter(rows: ReadonlyArray<ArrayLike<number> | undefined>, w
  *     chart's true slant; at any other they smear across columns and their darkest column fades (frame line 145
  *     ink at the true slant, 102 at 0.01 off, 54 at 0.025 off on an RX888 chart). The band's WIDTH is no guide:
  *     the header's dashes and the map's ragged edge set it, and it stayed 88 px from −0.05 to +0.03.
- *     So: the slant whose border is bounded most SHARPLY. Searched as findMarginSlant: ±SLANT_SEARCH around the
- *     station's own in steps of 0.005 on every 2nd line, then 0.001 around the best on every line.
+ *     So: the slant whose border is bounded most SHARPLY. Searched ±BORDER_SLANT_SEARCH (2026-10-07; was
+ *     ±SLANT_SEARCH) around the station's own in steps of 0.005 (0.01 beyond ±SLANT_SEARCH) on every 2nd line, then
+ *     0.001 around the best on every line.
  */
 export function findBorder(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, centre: number,
                            fromRow = 0, count = MARGIN_AFTER_LINES, minRows = count / 2): BlankBand | null {
@@ -325,7 +326,10 @@ export function findBorder(rows: ReadonlyArray<ArrayLike<number> | undefined>, w
     if (g && (!best || g.sharp > best.sharp + 0.5
               || (g.sharp > best.sharp - 0.5 && Math.abs(g.slant - centre) < Math.abs(best.slant - centre)))) best = g;
   };
+  // ★★ ±BORDER_SLANT_SEARCH, not ±SLANT_SEARCH (2026-10-07) — see BORDER_SLANT_SEARCH.
+  //    Steps of 0.005 within ±SLANT_SEARCH as before, 0.01 beyond (the fine pass below covers ±0.006).
   for (let i = -10; i <= 10; i++) tryAt(centre + i * SLANT_SEARCH / 10, 2);
+  for (let k = SLANT_SEARCH + 0.01; k <= BORDER_SLANT_SEARCH + 1e-9; k += 0.01) { tryAt(centre + k, 2); tryAt(centre - k, 2); }
   if (!best) return null;
   const c = (best as BlankBand).slant;
   // ★ Fine: a frame line 2–3 px wide reads equally sharp over a few thousandths of slant (a PLATEAU), so the middle of
@@ -350,6 +354,15 @@ export function findBorder(rows: ReadonlyArray<ArrayLike<number> | undefined>, w
   //   straight line to say that slant is real, was a Northwood sea patch lined up into a 114 px "border" (1 of 60).
   return findGutter(rows, width, centre, fromRow, count, minRows);
 }
+/** ★★ How far from the station's slant a BORDERED chart's slant is searched, px per line (2026-10-07). Stuart's DDK
+ *  7880 on the Pi 500's Airspy HF+ came out leaning +0.11 px/line (frame line measured on the finished chart,
+ *  11:10 BST) against +0.010 for the same chart on the UberSDR's RX888 — and ±SLANT_SEARCH (±0.05) could not reach
+ *  it: the "best" slant was the search's own end (0.056), which leaves the chart leaning half as much. A border's
+ *  slant is only believed from a SOLID line right beside the band (BORDER_LINE_INK), and the frame line is the
+ *  sharpest such line at its true slant by a wide margin (254 ink at 0.11–0.13 against ≤ 82 anywhere in ±0.05 on
+ *  the rebuilt chart), so the wider search does not line up the meridians inside the map the way the margin search
+ *  would. ±0.15 is ±83 ppm at 1809 px. */
+export const BORDER_SLANT_SEARCH = 0.15;
 /** ★ How dark (average ink of 255) the darkest column beside a border must be to measure a slant from it. DDK's
  *  frame line reads ~145 at its true slant; text and ragged map edges beside a border 7–40. */
 const BORDER_LINE_INK = 80;
@@ -368,12 +381,14 @@ export const ALIGN_CHECK_LINES = [300, 600];
  */
 export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined>, width: number, stationSlant: number,
                                count: number, minRows = count / 2,
-                               out?: { atEdge?: boolean; via?: 'border' | 'margin' }): WefaxAlign | null {
+                               out?: AlignLookOut): WefaxAlign | null {
   // ★★ A BORDERED CHART NEVER HAS ITS FRAME TAKEN FOR A MARGIN: a blank band means a DDK-style chart, and its
   //    frame and meridians are as straight as a margin (5 of 60 DDK charts were mis-moved by the margin search
   //    when it ran first). The margin search runs only when there is no blank band at all.
   const g = out?.via === 'margin' ? null : findBorder(rows, width, stationSlant, 0, count, minRows);
   if (out) out.via = g ? 'border' : 'margin';
+  // ★★ The slant MEASURED on this chart (2026-10-07), whatever is returned — see AlignLookOut.measured.
+  if (g && out && g.sharp >= BORDER_LINE_INK) out.measured = g.slant;
   if (g) {
     // ★★★ A BORDERED CHART IS CENTRED ON ITS BORDER (Stuart, 2026-10-06: "if there is a clear white border either
     //     side, our auto align just needs to centre the image on it — 55 left 110 right then we just do 82 left 83
@@ -390,7 +405,20 @@ export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined
     return { shift: g.col, slant: g.slant };
   }
   const m = findMarginSlant(rows, width, stationSlant, 0, count, minRows);
+  if (m && out) out.measured = m.slant;
   return m ? { shift: m.col - 2, slant: m.slant } : null;
+}
+/** What findChartAlign found besides its answer. */
+export interface AlignLookOut {
+  /** The border was already centred on the line's ends — the chart was left where it was. */
+  atEdge?: boolean;
+  /** Which way the answer was found; passed in as 'margin', the border search is skipped. */
+  via?: 'border' | 'margin';
+  /** ★★ The chart's slant as MEASURED from a solid line — the margin, or the frame beside the border — or undefined
+   *  when nothing on the chart could measure it (2026-10-07). Set even when nothing is moved: a phased chart left
+   *  where it was still has a slant of its own, and the clients draw THAT, not a slant saved on some other day on
+   *  some other radio (see ChartAlignState.slant). */
+  measured?: number;
 }
 
 /** Per-station slant (px per line); the shift comes from findMargin per chart. Northwood −0.06, everything else 0. */
@@ -402,7 +430,20 @@ export interface ChartAlignState { al?: WefaxAlign | null; refined?: boolean; n?
   /** ★ The first look found the blank border already centred on the line's ends: its shift stays 0 for good. */
   atEdge?: boolean;
   /** ★ How the first look decided — by the blank border or by the margin; the second look keeps to it. */
-  via?: 'border' | 'margin' }
+  via?: 'border' | 'margin';
+  /** ★★ THIS chart's slant as measured from a solid line (AlignLookOut.measured), undefined until one is. The
+   *  clients draw it in preference to a SAVED slant (2026-10-07): a slant is the transmitter's line rate plus the
+   *  RECEIVER's clock, so one saved at 7878 kHz on the RSP1A yesterday is wrong on the HF+ today. */
+  slant?: number;
+  /** ★ Consecutive featureless lines just received — the chart has ended (see CHART_END_FLAT). */
+  flat?: number;
+  /** ★ A first look that found nothing has been taken again (see chartAlignStep). */
+  retried?: boolean }
+/** ★★ A CHART JOINED NEAR ITS END NEVER REACHED THE FIRST LOOK (2026-10-07): ALIGN_CHECK_LINES[0] lines with
+ *  content, and the bottom ~600 lines of DDK's North Sea SST chart (the map's last ~200, then the legend and white
+ *  paper) have ~230. When this many featureless lines follow at least MARGIN_AFTER_LINES with content, the chart has
+ *  ended (DDK's white tail, a stop) and it is looked at with what it has. 40 lines = 20 s at 120 lpm. */
+export const CHART_END_FLAT = 40;
 
 /** ★★ A FEATURELESS LINE TELLS THE ALIGNMENT NOTHING (DDK 7880 off air, Stuart's RX888, 2026-10-05). DDK sends a
  *  steady tone for ~2 minutes before the chart; a listener who tunes in during it gets ~270 lines of flat grey at the
@@ -428,33 +469,53 @@ export function rowIsFlat(r: ArrayLike<number>, width: number): boolean {
  * ★ The per-chart alignment as each line arrives, for both clients: decided once the chart has ALIGN_CHECK_LINES[0]
  * lines WITH CONTENT, checked once more at [1]. `row` is the line just received (it is counted here, so a dropped row
  * cannot skip either point). Updates `st` and returns true when the chart must be redrawn. `getRows` is called only
- * at those two points.
+ * at those points.
+ * `stationSlant` is the STATION's slant (wefaxPreset) — the centre of every slant search. ★★ Never a saved or a
+ * previous chart's slant (2026-10-07): centred on a stale −0.06, a DDK chart leaning +0.05 was measured at −0.005,
+ * the end of a search that could not reach it.
  * The second look only REFINES a chart the first one moved: on two phased DDK charts (RX888 set) the white border
  * had collected enough noise specks by line 600 to hide it, and the frame then passed for a margin — so a chart
  * left alone at the first look stays alone.
  */
 export function chartAlignStep(st: ChartAlignState, getRows: () => ReadonlyArray<ArrayLike<number> | undefined>,
                                width: number, stationSlant: number, row: ArrayLike<number>): boolean {
-  if (!rowIsFlat(row, width)) st.n = (st.n ?? 0) + 1;
+  if (!rowIsFlat(row, width)) { st.n = (st.n ?? 0) + 1; st.flat = 0; }
+  else st.flat = (st.flat ?? 0) + 1;
   const n = st.n ?? 0;
   const look = (via?: 'border' | 'margin') => {
     const rows = getRows();
-    const out: { atEdge?: boolean; via?: 'border' | 'margin' } = { via };
+    const out: AlignLookOut = { via };
     // every row so far, featureless ones blanked (their y still sets the slant offset); half must have content
     const a = findChartAlign(rows.map((r) => (r && !rowIsFlat(r, width) ? r : undefined)), width, stationSlant,
                              rows.length, n / 2, out);
-    return { a, atEdge: !!out.atEdge, via: out.via };
+    return { a, atEdge: !!out.atEdge, via: out.via, measured: out.measured };
   };
   if (st.al === undefined) {
-    if (n !== ALIGN_CHECK_LINES[0]) return false;
+    // ★★ `>=`, not `===` (2026-10-07): an exact count is one chance — a line the client handled without calling here
+    //    (ALIGN dragging, a re-render) and the chart was never looked at. Ended early: look with what there is.
+    const ended = n >= MARGIN_AFTER_LINES && (st.flat ?? 0) === CHART_END_FLAT;
+    if (n < ALIGN_CHECK_LINES[0] && !ended) return false;
     const lk = look();
-    st.al = lk.a; st.atEdge = lk.atEdge; st.via = lk.via;
+    st.al = lk.a; st.atEdge = lk.atEdge; st.via = lk.via; st.slant = lk.measured;
+    if (n < ALIGN_CHECK_LINES[1]) st.refined = ended || undefined;   // a chart that has ended gets no second look
     return st.al !== null;
   }
-  if (st.refined || n !== ALIGN_CHECK_LINES[1]) return false;
+  if (st.refined || n < ALIGN_CHECK_LINES[1]) return false;
   st.refined = true;
   const cur = st.al;
-  if (!cur) return false;
+  if (!cur) {
+    // ★★ A FIRST LOOK THAT FOUND NOTHING IS TAKEN AGAIN, ONCE (2026-10-07). It was final: one look at 300 lines,
+    //    and a chart it missed stayed rolled to the end (Stuart's DDK on the HF+, its 25 %-wide white band left in
+    //    the middle of the picture for 2300 lines). A chart whose border was found already centred (atEdge) is not
+    //    looked at again — that is the phased chart the second look must never cut.
+    if (st.atEdge || st.retried) return false;
+    st.retried = true;
+    const lk = look();
+    if (lk.measured !== undefined) st.slant = lk.measured;
+    if (!lk.a) return false;
+    st.al = lk.a; st.atEdge = lk.atEdge; st.via = lk.via;
+    return true;
+  }
   // ★★ THE SECOND LOOK REFINES THE FIRST, IT NEVER CHANGES ITS MIND ABOUT WHAT KIND OF CHART THIS IS (2026-10-06):
   //    by line 600 a Northwood chart's light patches had grown into a 59–64 px "border" on 11 of 60 charts and the
   //    chart was re-cut ~50 px off its margin; a DDK border, gone noisy, would fall to the margin search. A margin
@@ -464,6 +525,7 @@ export function chartAlignStep(st: ChartAlignState, getRows: () => ReadonlyArray
   // ★★ A chart left where it was at the first look (its border already centred) is never MOVED by the second:
   //    only its slant may be refined, and only by a look that again finds the border centred.
   if (st.atEdge && (!lk.atEdge || r.shift !== 0)) return false;
+  if (lk.measured !== undefined) st.slant = lk.measured;
   const d = (((r.shift - cur.shift) % width) + width) % width;
   if (Math.min(d, width - d) <= 2 && Math.abs(r.slant - cur.slant) < 0.002) return false;
   st.al = r;
