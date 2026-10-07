@@ -116,6 +116,7 @@
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
+#include "vibe_listener_queue.h"     // ★ a per-VFO listener's block queue, sized in time (2026-10-07)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
 #include "vibe_rtl_tuner_restore.h"   // ★ the ONE "put the tuner back after its re-init" (both direct-sampling routes)
 #include <dlfcn.h>                    // ★ rtlsdr_get_r82xx_state, looked up where librtlsdr is not ours (checkTunerChip)
@@ -18033,7 +18034,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                               *  present (0 on a radio that cannot report them), so a poller can
                               *  diff two readings without special cases. chanDrops is the other
                               *  place load makes holes: a listener's own DSP thread falling behind
-                              *  its 4-block hand-off (the admin session list has it per listener). */
+                              *  its ~40 ms hand-off (vibe_listener_queue.h; the admin session list has it per listener). */
                              + ",\"usbDrops\":" + std::to_string(g_usbDropEvents.load(std::memory_order_relaxed))
                              + ",\"usbDropSamples\":" + std::to_string(g_usbDropSamples.load(std::memory_order_relaxed))
                              + ",\"usbDropAgo\":" + std::to_string((int)llround(
@@ -21851,14 +21852,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         blk->bins.assign(bins, bins + nbins);
         blk->index = chan_->blockIndex();     // ★ the phase reference travels WITH the samples
         blk->gap = gap;                       // ★ …and so does a hole upstream of it
+        /* ★★★ THE SLACK IS ~40 ms AT EVERY RATE, NOT FOUR BLOCKS (2026-10-07) — see
+         *  vibe_listener_queue.h. Four blocks was 41 ms on an RTL and 12 ms on an RSP at 8 MS/s, where
+         *  the FFT cap makes each block three times shorter; the Pi 500's RSP1B dropped 10 of them and
+         *  its listener's audio stepped 3-6 ms each time. */
+        const size_t cap = vibe::listenerQueueBlocks(
+            sampleRate, nbins - nbins / vibedsp::Channelizer::OVERLAP_DIV);
         for (auto& c : cs) {
             std::lock_guard<std::mutex> lk(c->qm);
-            // ★★ A LISTENER THAT CANNOT KEEP UP DROPS ITS OWN BLOCKS. Four blocks is ~12 ms of
-            //    slack at 8 MSPS — enough to ride out a scheduling hiccup, short enough that a
-            //    genuinely stuck listener does not accumulate latency it can never pay back.
-            //    Its audio glitches; the radio and everyone else carry on.
-            if (c->q.size() >= 4) { c->q.pop_front(); c->dropped.fetch_add(1);
-                                    g_chanDrops.fetch_add(1, std::memory_order_relaxed); }
+            // ★★ A LISTENER THAT CANNOT KEEP UP DROPS ITS OWN BLOCKS — enough slack to ride out a
+            //    scheduling hiccup, short enough that a genuinely stuck listener does not
+            //    accumulate latency it can never pay back. Its audio glitches; the radio and
+            //    everyone else carry on.
+            if (c->q.size() >= cap) { c->q.pop_front(); c->dropped.fetch_add(1);
+                                      g_chanDrops.fetch_add(1, std::memory_order_relaxed); }
             c->q.push_back(blk);
             c->qcv.notify_one();
         }
