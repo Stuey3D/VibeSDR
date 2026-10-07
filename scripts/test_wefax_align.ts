@@ -179,6 +179,11 @@ for (const sigma of [0, 45]) {
   chartAlignStep(st, () => { calls++; return sst(600, 1220, 0, 0); }, W, 0, sst(1, 0, 0, 0)[0]);
   ok(calls === 0, 'a phased chart (border centred at the first look) is never looked at again'); }
 
+// ★★ No signal at all (Northwood 4610, 20261006_154718: 3000 lines of noise): nothing is ever moved — the second look
+//    used to find a "border" in it at −0.153 once the border search was widened.
+{ const rows = Array.from({ length: 700 }, () => { const r = new Uint8Array(W); for (let x = 0; x < W; x++) r[x] = Math.floor(rnd() * 256); return r; });
+  const st: ChartAlignState = {}; ok(feed(st, rows, -0.06, 700) === 0 && !st.al, `pure noise: never moved (${JSON.stringify(st.al)})`); }
+
 // ★ RAW (Stuart, 2026-10-06): drawn through drawnAlign, every line comes out exactly as received — whatever the
 //   correction underneath — and RAW off gives that correction back untouched.
 { const corr = { shift: 1775, slant: 0.011 };

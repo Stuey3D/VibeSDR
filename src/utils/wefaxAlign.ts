@@ -167,6 +167,8 @@ export function findMarginSlant(rows: ReadonlyArray<ArrayLike<number> | undefine
   return { col: b.col, slant: Math.round(b.slant * 1000) / 1000 };
 }
 
+/** ★ How much more often (share of lines) the median column is dark than a noisy chart's lightest — see bandOf. */
+const NOISY_CONTRAST = 0.05;
 /** ★ The narrowest blank border findGutter accepts, px. DDK's is ~90 on the RX888 set (left + right border, joined). */
 const GUTTER_MIN = 24;
 /** ★ The share of lines a column may be dark on and still be blank paper (noise specks) — see findGutter. */
@@ -255,6 +257,13 @@ function bandOf(p: { dark: Uint32Array; ink: Float64Array; n: number }, W: numbe
       floor = Math.min(floor, a / 15);
     }
     if (floor <= GUTTER_SPECKS * n / 2) return null;
+    // ★★ …and only when the chart HAS paper lighter than its picture (2026-10-07). On no signal at all (Northwood
+    //    4610, 20261006_154718: 3028 lines of pure noise) every column is equally dark, a "band" turns up somewhere at
+    //    most slants by chance, and the wider border-slant search found one at −0.153 by line 600. The median column
+    //    must be inked on clearly more lines than the lightest: by 0.008–0.030 of lines on that noise, ≥ 0.068 on every
+    //    RX888 DDK chart (σ 45 added) whose border the noisy-paper path decides.
+    const sorted = Array.from(dark).sort((a, b) => a - b);
+    if (sorted[W >> 1] - floor < NOISY_CONTRAST * n) return null;
     run = longest(floor + GUTTER_SPECKS * n);
     if (!run || run.len < GUTTER_NOISY_MIN) return null;
     growTol = Math.max(GUTTER_EDGE, floor / n + 0.05);
@@ -329,7 +338,12 @@ export function findBorder(rows: ReadonlyArray<ArrayLike<number> | undefined>, w
   // ★★ ±BORDER_SLANT_SEARCH, not ±SLANT_SEARCH (2026-10-07) — see BORDER_SLANT_SEARCH.
   //    Steps of 0.005 within ±SLANT_SEARCH as before, 0.01 beyond (the fine pass below covers ±0.006).
   for (let i = -10; i <= 10; i++) tryAt(centre + i * SLANT_SEARCH / 10, 2);
+  const near = best as BlankBand | null;
   for (let k = SLANT_SEARCH + 0.01; k <= BORDER_SLANT_SEARCH + 1e-9; k += 0.01) { tryAt(centre + k, 2); tryAt(centre - k, 2); }
+  // ★★ …but a slant beyond ±SLANT_SEARCH must WIN CLEARLY: WIDE_SLANT_WIN × the sharpest within it. A frame line at
+  //    its true slant does (254 against ≤ 82 on the HF+ chart); the legend under a map does not — on a join that
+  //    saw only the map's last 100 lines and the legend, letters lined up at −0.11 for a chart leaning +0.02.
+  if (near && best && (best as BlankBand).sharp < WIDE_SLANT_WIN * near.sharp) best = near;
   if (!best) return null;
   const c = (best as BlankBand).slant;
   // ★ Fine: a frame line 2–3 px wide reads equally sharp over a few thousandths of slant (a PLATEAU), so the middle of
@@ -363,6 +377,8 @@ export function findBorder(rows: ReadonlyArray<ArrayLike<number> | undefined>, w
  *  the rebuilt chart), so the wider search does not line up the meridians inside the map the way the margin search
  *  would. ±0.15 is ±83 ppm at 1809 px. */
 export const BORDER_SLANT_SEARCH = 0.15;
+/** ★ How much sharper a border must be beyond ±SLANT_SEARCH than within it to be believed there — see findBorder. */
+const WIDE_SLANT_WIN = 1.2;
 /** ★ How dark (average ink of 255) the darkest column beside a border must be to measure a slant from it. DDK's
  *  frame line reads ~145 at its true slant; text and ragged map edges beside a border 7–40. */
 const BORDER_LINE_INK = 80;
@@ -385,10 +401,13 @@ export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined
   // ★★ A BORDERED CHART NEVER HAS ITS FRAME TAKEN FOR A MARGIN: a blank band means a DDK-style chart, and its
   //    frame and meridians are as straight as a margin (5 of 60 DDK charts were mis-moved by the margin search
   //    when it ran first). The margin search runs only when there is no blank band at all.
-  const g = out?.via === 'margin' ? null : findBorder(rows, width, stationSlant, 0, count, minRows);
+  // ★ out.fixedSlant: look at the station's slant only, measure none (an early look — see chartAlignStep).
+  const fixed = !!out?.fixedSlant;
+  const g = out?.via === 'margin' ? null
+          : fixed ? findGutter(rows, width, stationSlant, 0, count, minRows) : findBorder(rows, width, stationSlant, 0, count, minRows);
   if (out) out.via = g ? 'border' : 'margin';
   // ★★ The slant MEASURED on this chart (2026-10-07), whatever is returned — see AlignLookOut.measured.
-  if (g && out && g.sharp >= BORDER_LINE_INK) out.measured = g.slant;
+  if (g && out && !fixed && g.sharp >= BORDER_LINE_INK) out.measured = g.slant;
   if (g) {
     // ★★★ A BORDERED CHART IS CENTRED ON ITS BORDER (Stuart, 2026-10-06: "if there is a clear white border either
     //     side, our auto align just needs to centre the image on it — 55 left 110 right then we just do 82 left 83
@@ -403,6 +422,10 @@ export function findChartAlign(rows: ReadonlyArray<ArrayLike<number> | undefined
       return Math.abs(g.slant - stationSlant) < 0.002 ? null : { shift: 0, slant: g.slant };
     }
     return { shift: g.col, slant: g.slant };
+  }
+  if (fixed) {
+    const col = findMargin(rows, width, stationSlant, 0, count);
+    return col === null ? null : { shift: col - 2, slant: stationSlant };
   }
   const m = findMarginSlant(rows, width, stationSlant, 0, count, minRows);
   if (m && out) out.measured = m.slant;
@@ -419,6 +442,8 @@ export interface AlignLookOut {
    *  where it was still has a slant of its own, and the clients draw THAT, not a slant saved on some other day on
    *  some other radio (see ChartAlignState.slant). */
   measured?: number;
+  /** In: look at the station's slant only and measure none. */
+  fixedSlant?: boolean;
 }
 
 /** Per-station slant (px per line); the shift comes from findMargin per chart. Northwood −0.06, everything else 0. */
@@ -482,9 +507,9 @@ export function chartAlignStep(st: ChartAlignState, getRows: () => ReadonlyArray
   if (!rowIsFlat(row, width)) { st.n = (st.n ?? 0) + 1; st.flat = 0; }
   else st.flat = (st.flat ?? 0) + 1;
   const n = st.n ?? 0;
-  const look = (via?: 'border' | 'margin') => {
+  const look = (via?: 'border' | 'margin', fixedSlant = false) => {
     const rows = getRows();
-    const out: AlignLookOut = { via };
+    const out: AlignLookOut = { via, fixedSlant };
     // every row so far, featureless ones blanked (their y still sets the slant offset); half must have content
     const a = findChartAlign(rows.map((r) => (r && !rowIsFlat(r, width) ? r : undefined)), width, stationSlant,
                              rows.length, n / 2, out);
@@ -495,9 +520,12 @@ export function chartAlignStep(st: ChartAlignState, getRows: () => ReadonlyArray
     //    (ALIGN dragging, a re-render) and the chart was never looked at. Ended early: look with what there is.
     const ended = n >= MARGIN_AFTER_LINES && (st.flat ?? 0) === CHART_END_FLAT;
     if (n < ALIGN_CHECK_LINES[0] && !ended) return false;
-    const lk = look();
+    // ★★ An EARLY look (fewer than ALIGN_CHECK_LINES[0] lines) finds the band at the station's slant and measures
+    //    none: on the SST chart's last ~230 lines the legend's letters, not the frame, decided the slant search
+    //    (−0.08 and +0.13 for a chart leaning +0.02). The chart is cut; the slant waits for a look with more lines.
+    //    "Ended" may also be a blank strip between a map and its legend, so the looks at [1] still come.
+    const lk = look(undefined, n < ALIGN_CHECK_LINES[0]);
     st.al = lk.a; st.atEdge = lk.atEdge; st.via = lk.via; st.slant = lk.measured;
-    if (n < ALIGN_CHECK_LINES[1]) st.refined = ended || undefined;   // a chart that has ended gets no second look
     return st.al !== null;
   }
   if (st.refined || n < ALIGN_CHECK_LINES[1]) return false;
