@@ -1,7 +1,7 @@
 // test_wefax_align.ts — WEFAX SHIFT / SLANT and the per-chart margin finder (src/utils/wefaxAlign.ts).
 // Synthetic charts: a speckled page with a few curved "isobars", plus (or not) a black margin line that drifts with
 // the station's slant — the shape measured on Northwood 4610, 2026-10-04 (margin 40 px in on one chart, ~370 on another).
-import { findMargin, findMarginSlant, findGutter, findChartAlign, chartAlignStep, wefaxOffset, drawnAlign, rotateLine, wefaxPreset, MARGIN_AFTER_LINES,
+import { findMargin, findMarginSlant, findGutter, findChartAlign, findHeaderBar, chartAlignStep, wefaxOffset, drawnAlign, rotateLine, wefaxPreset, MARGIN_AFTER_LINES,
          type ChartAlignState } from '../src/utils/wefaxAlign.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
@@ -183,6 +183,68 @@ for (const sigma of [0, 45]) {
 //    used to find a "border" in it at −0.153 once the border search was widened.
 { const rows = Array.from({ length: 700 }, () => { const r = new Uint8Array(W); for (let x = 0; x < W; x++) r[x] = Math.floor(rnd() * 256); return r; });
   const st: ChartAlignState = {}; ok(feed(st, rows, -0.06, 700) === 0 && !st.al, `pure noise: never moved (${JSON.stringify(st.al)})`); }
+
+// ★★★ 2026-10-07 14:59 BST — Stuart's DDK 7880 on the HF+ (RC25 Mac), joined near the END of a chart, no phasing: drawn
+//     leaning forward (~+0.05 applied to a chart whose true slant is +0.01). On a late join the lines beside the white
+//     band are a legend box, a text box, a coastline: dark enough on average over the stretch they cover, but they
+//     cover only part of the look. A slant away from the station's is believed only from a line that runs the whole way
+//     down AND beats the band at the station's own slant.
+function lateJoin(lines: number, roll: number, sigma: number, boxSlant: number, frame: boolean): Uint8Array[] {
+  const rows: Uint8Array[] = [];
+  for (let y = 0; y < lines; y++) {
+    const r = new Uint8Array(W).fill(250);
+    for (let x = 175; x < 1690; x++) if (rnd() < 0.05) r[x] = r[x + 1] = 30;                         // map
+    for (const c of [500, 1100]) { const cx = Math.round(c + 80 * Math.sin((y + c) / 90)); r[cx] = r[cx + 1] = 20; }
+    if (frame) r[170] = r[171] = r[172] = 10;                                                         // a whole frame
+    // the "icon_tkb" box beside the band: its edge leans boxSlant, solid, over the first 120 lines only (40 % of the
+    // first look, 20 % of the second)
+    if (y < 120) { const bx = Math.round(165 + boxSlant * y); for (let k = 0; k < 4; k++) r[bx + k] = 0; }
+    const o = new Uint8Array(W), off = Math.round(roll + 0.01 * y);
+    for (let x = 0; x < W; x++) o[x] = Math.max(0, Math.min(255, Math.round(r[(((x - off) % W) + W) % W] + (sigma ? gauss() * sigma : 0))));
+    rows.push(o);
+  }
+  return rows;
+}
+for (const sigma of [0, 45]) {
+  const st: ChartAlignState = {}; feed(st, lateJoin(700, 1300, sigma, 0.06, false), 0, 700);
+  const k = st.slant ?? 0;
+  ok(Math.abs(k - 0.01) <= 0.015 && !!st.al && Math.abs(st.al.slant - 0.01) <= 0.015,
+     `late join, a box edge over 120 lines leaning +0.07, σ${sigma}: slant not taken from it (${st.slant}, drawn ${st.al?.slant})`);
+}
+for (const sigma of [0, 45]) {
+  const st: ChartAlignState = {}; feed(st, lateJoin(700, 1300, sigma, 0.06, true), 0, 700);
+  ok(st.slant !== undefined && Math.abs(st.slant - 0.01) <= 0.004, `…with a frame the whole way down, σ${sigma}: its slant measured (${st.slant})`);
+}
+// ★★ …and the same for a leaning chart: the +0.11 SST chart's frame runs the whole height, so it is still measured
+//    (the two SST cases above); a chart that leans +0.11 with NO whole line beside its band keeps the station's.
+{ const st: ChartAlignState = {}; feed(st, sst(700, 1220, 0.11, 30).map((r) => r), 0, 700);
+  ok(st.slant !== undefined && Math.abs(st.slant - 0.11) <= 0.01, `SST +0.11 still measured with the whole-line rule (${st.slant})`); }
+// ★★ Never a sign-flipped slant: Northwood (station −0.06) joined late, nothing straight but a short box edge at +0.06.
+{ const st: ChartAlignState = {}; feed(st, lateJoin(700, 1300, 30, 0.13, false).map((r, y) => {
+    const o = new Uint8Array(W), off = Math.round(-0.07 * y); for (let x = 0; x < W; x++) o[x] = r[(((x - off) % W) + W) % W]; return o; }), -0.06, 700);
+  ok(st.slant === undefined || Math.abs(st.slant + 0.06) <= 0.015, `Northwood late join: no +0.06 from a short edge (${st.slant})`); }
+
+// ★★ THE HEADER BAR (Stuart, 2026-10-07: "notice the black bar at the top with the white cutouts, that is how it is
+//    aligned"): ~15 lines of black with ONE ~90 px white gap — split across the ends on a phased chart.
+function withBar(rows: Uint8Array[], gapCentre: number): Uint8Array[] {
+  const bar = Array.from({ length: 15 }, () => { const r = new Uint8Array(W).fill(8);
+    for (let k = -45; k < 45; k++) r[((gapCentre + k) % W + W) % W] = 250; return r; });
+  return [...bar, ...rows];
+}
+{ // phased: the gap at the ends, the map NOT centred in its border (55 px left, 114 right) — never moved
+  const rows = withBar(ddk1006(700, 0, 30), 0), st: ChartAlignState = {};
+  feed(st, rows, 0, rows.length);
+  ok(st.atEdge === true && (!st.al || st.al.shift === 0),
+     `phased DDK with its header bar: never moved (shift ${st.al?.shift ?? 0}, atEdge ${st.atEdge})`);
+  ok(findHeaderBar(rows, W, 0) === 0, `…the bar's gap found at the line's ends (${findHeaderBar(rows, W, 0)})`); }
+{ // phasing missed, the start caught: everything rolled 700 px — cut exactly at the gap, not the band's centre (−25)
+  const rows = withBar(ddk1006(700, 0, 30), 0).map((r) => { const o = new Uint8Array(W); for (let x = 0; x < W; x++) o[x] = r[(((x - 700) % W) + W) % W]; return o; });
+  const st: ChartAlignState = {}; feed(st, rows, 0, rows.length);
+  ok(!!st.al && Math.abs(st.al.shift - 700) <= 2, `rolled DDK joined before its bar: cut at the gap (${st.al?.shift} ≈ 700)`); }
+{ // Northwood sends a bar too, its gap 43 px left of the margin — not the line start: the margin still decides
+  const rows = withBar(chart(700, 400, -0.06), 357), st: ChartAlignState = {};
+  feed(st, rows, -0.06, rows.length);
+  ok(st.via === 'margin' && !!st.al && near(st.al.shift, 398, 4), `Northwood with its bar: cut at the margin (${st.al?.shift} ≈ 398), not the gap`); }
 
 // ★ RAW (Stuart, 2026-10-06): drawn through drawnAlign, every line comes out exactly as received — whatever the
 //   correction underneath — and RAW off gives that correction back untouched.
