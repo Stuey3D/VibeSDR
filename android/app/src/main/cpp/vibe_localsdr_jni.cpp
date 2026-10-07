@@ -679,7 +679,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeStartDecoderService(JNIEnv* env, jobject
 }
 // PCM is base64-encoded int16 LE (same form JS already builds for pushExternalPcm).
 extern "C" JNIEXPORT void JNICALL
-Java_com_vibesdr_app_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jstring b64, jint rate) {
+Java_com_vibesdr_app_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jstring b64, jdouble rate) {
     if (!b64) return;
     const char* s = env->GetStringUTFChars(b64, nullptr);
     if (!s) return;
@@ -704,7 +704,7 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeFeedDecoderPcm(JNIEnv* env, jobject, jst
     env->ReleaseStringUTFChars(b64, s);
     int n = (int)(bytes.size() / 2);
     if (n < 2) return;
-    vibe::LocalSdrShim::instance().feedDecoderPcm((const int16_t*)bytes.data(), n, (int)rate);
+    vibe::LocalSdrShim::instance().feedDecoderPcm((const int16_t*)bytes.data(), n, (double)rate);
 }
 
 extern "C" JNIEXPORT void JNICALL

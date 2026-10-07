@@ -853,7 +853,9 @@ export class KiwiAdapter implements SDRBackend {
     }
     // Also feed the native decoder sidecar (RTTY/WEFAX/SSTV/FT8 on Kiwi audio).
     // No-op natively unless the decoder service is running.
-    VibeLocal?.feedDecoderPcm?.(b64, rate);
+    // ★★ The EXACT rate (sample_rate ≈ 12001.1), not the rounded one the player takes — the decoders
+    //    time lines and symbols off it (local_sdr_shim.cpp feedDecoderPcm).
+    VibeLocal?.feedDecoderPcm?.(b64, this.trueAudioRate);
   }
 
   // ── waterfall (W/F binary) ─────────────────────────────────────────────────

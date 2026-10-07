@@ -105,8 +105,8 @@ RCT_EXPORT_METHOD(feedDecoderPcm:(NSString *)b64 rate:(nonnull NSNumber *)rate) 
   NSData *data = [[NSData alloc] initWithBase64EncodedString:b64 options:0];
   if (!data) return;
   int n = (int)(data.length / 2);
-  if (n < 2) return;
-  vibe::LocalSdrShim::instance().feedDecoderPcm((const int16_t *)data.bytes, n, rate.intValue);
+  if (n < 1) return;
+  vibe::LocalSdrShim::instance().feedDecoderPcm((const int16_t *)data.bytes, n, rate.doubleValue);   // ★ exact rate
 }
 RCT_EXPORT_METHOD(setDecoderFreq:(double)hz) { vibe::LocalSdrShim::instance().setDecoderFreq(hz); }
 

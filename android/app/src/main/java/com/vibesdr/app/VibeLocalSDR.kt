@@ -102,7 +102,7 @@ object VibeLocalSDR {
     // never loaded by a local-hardware session, so without this the decoder sidecar
     // returned -1 and feedDecoderPcm no-op'd → decoders/spots produced no output.
     fun startDecoderService(): Int { ensureLoaded(); return if (loaded) nativeStartDecoderService() else -1 }
-    fun feedDecoderPcm(b64: String, rate: Int) { if (loaded) nativeFeedDecoderPcm(b64, rate) }
+    fun feedDecoderPcm(b64: String, rate: Double) { if (loaded) nativeFeedDecoderPcm(b64, rate) }
     fun setDecoderFreq(hz: Double) { if (loaded) nativeSetDecoderFreq(hz) }
     fun getTunerGains(): IntArray { return if (loaded) nativeGetTunerGains() ?: IntArray(0) else IntArray(0) }
 
@@ -451,7 +451,7 @@ object VibeLocalSDR {
     private external fun nativeSetNrStrength(s: Float)
     private external fun nativeGetNrCpu(): Float
     private external fun nativeStartDecoderService(): Int
-    private external fun nativeFeedDecoderPcm(b64: String, rate: Int)
+    private external fun nativeFeedDecoderPcm(b64: String, rate: Double)   // ★ exact Kiwi rate (≈12001.1), never rounded
     private external fun nativeSetDecoderFreq(hz: Double)
     private external fun nativeGetTunerGains(): IntArray?
     private external fun nativeStartServer(

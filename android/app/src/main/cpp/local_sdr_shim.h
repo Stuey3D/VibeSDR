@@ -846,7 +846,7 @@ public:
     // works unchanged. Returns the TCP port (>0) or -1 with `err` set.
     int startDecoderService(std::string& err);
     // Feed mono int16 PCM at `rate` Hz (upsampled to the decoders' 48 kHz).
-    void feedDecoderPcm(const int16_t* pcm, int n, int rate);
+    void feedDecoderPcm(const int16_t* pcm, int n, double rate);   // ★ exact (fractional) rate
     // Tell the sidecar the backend's dial frequency (Hz) so FT8 spot RF freq +
     // band are correct (otherwise they're computed against a 100 MHz default →
     // empty band / wrong tune freq). Network backends (Kiwi) call this on tune.

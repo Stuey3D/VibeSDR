@@ -62,6 +62,7 @@
 #endif
 #include <cerrno>
 #include <cmath>
+#include "vibe_decfeed_resampler.h"
 #include <climits>
 #include <condition_variable>
 #include <cstdint>
@@ -5282,6 +5283,7 @@ static bool dabSeedGain(ImplT* p, int wantSteps, double now, const char* what = 
 }
 struct LocalSdrShim::Impl {
     bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
+    vibe::DecFeedResampler decFeed;       // feedDecoderPcm — ONE continuous resampler (vibe_decfeed_resampler.h)
     std::vector<float> pcmResid;          // upsample carry (fractional sample pos)
     double pcmAcc = 0.0;
     // device / params
@@ -28635,20 +28637,19 @@ int LocalSdrShim::startDecoderService(std::string& err) {
     return chosen;
 }
 
-void LocalSdrShim::feedDecoderPcm(const int16_t* pcm, int n, int rate) {
-    if (!p || !p->decoderOnly || n < 2 || rate <= 0) return;
+void LocalSdrShim::feedDecoderPcm(const int16_t* pcm, int n, double rate) {
+    if (!p || !p->decoderOnly || n < 1 || !(rate > 0)) return;
     // Upsample to the decoders' 48 kHz (linear interp), build a mono stereo_t
     // buffer (l=r) and feed the decoder + digital-spots paths.
-    double ratio = 48000.0 / (double)rate;
-    double srcStep = 1.0 / ratio;
-    std::vector<stereo_t> buf;
-    buf.reserve((size_t)(n * ratio) + 2);
-    for (double s = 0; s < n - 1; s += srcStep) {
-        int i = (int)s; double f = s - i;
-        float v = (float)(((1.0 - f) * pcm[i] + f * pcm[i + 1]) / 32768.0);
-        buf.push_back({ v, v });
-    }
-    if (buf.empty()) return;
+    //
+    // ★★★ ONE CONTINUOUS RESAMPLER, EXACT RATE (2026-10-07) — the per-packet loop lost one sample a
+    //     packet: a Kiwi WEFAX chart leaned ~2 px a line. See vibe_decfeed_resampler.h.
+    thread_local std::vector<float> mono;
+    mono.clear();
+    p->decFeed.push(pcm, n, rate, mono);
+    if (mono.empty()) return;
+    std::vector<stereo_t> buf(mono.size());
+    for (size_t k = 0; k < mono.size(); k++) buf[k] = { mono[k], mono[k] };
     p->decoders_.feedShared(&buf[0].l, (int)buf.size(), 2);   // ★ never inline — the host queues it
 }
 
