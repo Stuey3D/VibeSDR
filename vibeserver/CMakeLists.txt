@@ -28,7 +28,7 @@ project(vibeserver VERSION 11.0.0 LANGUAGES CXX C)
 #     reader of the line above (android CMake, lite gradle, mac/build-app.sh): the package becomes
 #     11.0.0~b1, which dpkg sorts ABOVE 5.6.x and BELOW 11.0.0, so both upgrades are clean.
 #     ★ Empty it for the release. Never publish a ~ version AFTER its release — it would sort below it.
-set(VIBESERVER_PRERELEASE "rc26")
+set(VIBESERVER_PRERELEASE "rc27")
 
 # ── ★★★ SANITISER BUILDS FOR THE TESTS AND THE OFFLINE REPLAY ────────────────────────────────
 #
