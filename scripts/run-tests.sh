@@ -395,6 +395,14 @@ printf '\n\033[1m── server decoders (end to end) ──\033[0m\n'
 node scripts/test-server-decoders.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★★ A RUNNING DECODER KEEPS THE AUDIO CHAIN (2026-10-07, Pi 500 Airspy: the listener's sockets blipped, the
+#     chain idled, and the WEFAX socket got nothing for 8 s). Decoder socket alone on a shared dial with
+#     --idle-grace 0: lines keep coming, no idle and no park, presence unchanged, and it idles once the
+#     decoder stops. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── a decoder alone keeps the audio chain (end to end) ──\033[0m\n'
+node scripts/test-server-decoder-alone.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 # ★★★ A POCKETED APP KEEPS ITS CHANNEL (Stuart, 2026-10-05: "why did the full socket drop when minimised
 #     though, especially as I had audio and a decoder running"): on a per-VFO radio, closing ONLY the
 #     spectrum socket keeps audio and the decoder running; the returning socket adopts the same channel

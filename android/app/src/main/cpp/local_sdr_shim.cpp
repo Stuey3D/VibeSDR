@@ -6817,6 +6817,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★ Is anything actually DECODING on this radio? (Not "is a decoder socket open": the web client
      *  opens one on every visit, so that answered yes for anybody who had merely loaded the page.) */
     bool decodingNow() { return decoders_.anyRunning(); }
+    /** ★★★ A RUNNING DECODER IS AN AUDIO CONSUMER (2026-10-07). On a one-pipeline radio (a shared dial,
+     *  or one listener) the decoders are fed from onAudio() — the very chain the idle gate switches off
+     *  and the park stops feeding. Both decisions counted only spectrum and audio SOCKETS, so the moment
+     *  a listener's two sockets dropped the decoder they left running was starved: 2026-10-07
+     *  11:06:19-27 on the Pi 500's Airspy, Stuart's audio and waterfall sockets blipped, the server
+     *  logged "no listeners — idling the audio chain", and the WEFAX socket — still connected — got
+     *  nothing for 8 s, which slid the chart sideways. A decoder left running on purpose (the app
+     *  closed, the chart still drawing on the server) was starved for good.
+     *  ★★ ONLY THE IDLE/PARK DECISION. Presence — the listener count, the turn, "busy", the session
+     *     limit — is unchanged: enforceSharedDialLimit already counts a running decoder by its own rule
+     *     (decoder_socket_not_presence), and a decoder socket that is merely OPEN (the web client opens
+     *     one on every visit) still counts for nothing here either: only one that is DECODING.
+     *  ★ Not on a per-VFO radio: there a decoder is fed from its listener's own channel, which lives
+     *    and dies with that listener's sockets, and keeping the shared capture up would feed it nothing.
+     *  ★ Lock-safe anywhere: the router's mutex is a leaf and the host's flags are atomics. */
+    bool sharedDecoderNeedsAudio() const { return !perClientDsp() && decoders_.sharedWantsAudio(); }
 
     // server
     std::shared_ptr<net::Listener> listener;
@@ -21064,6 +21080,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★★★ AND WHO STARTED IT, for the admin table — on the one-pipeline host only; a
                 //     listener's own host is theirs by construction.
                 if (!perVfo && !session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
+                // ★★ A decoder is a consumer of the radio's audio (sharedDecoderNeedsAudio), so one
+                //    started on a parked or released radio — its listener's sockets came back after
+                //    the grace ran out, decoder socket first — takes the radio back exactly as an
+                //    arriving listener does. A no-op when the capture is running (2026-10-07).
+                if (!perVfo) resumeCaptureIdle();
                 sendText(sock, "{\"type\":\"audio_extension_attached\"}");
             } else if (type == "audio_extension_detach") {
                 if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
@@ -21080,8 +21101,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else if (host->startSpots() == DecoderHost::Start::Refused) {
                     LOGI("digital spots refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
                     sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
-                } else if (!perVfo && !session.empty()) {
-                    std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session;
+                } else if (!perVfo) {
+                    if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
+                    resumeCaptureIdle();       // ★ the spotter is a consumer too — see the decoder start above
                 }
             } else if (type == "unsubscribe_digital_spots") {
                 if (host) host->stopSpots();
@@ -21994,7 +22016,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     VFO for this chain to demodulate). Leave its setting alone.
              *  ★★★ AND IT CANNOT CUT AUDIO SOMEBODY COULD HEAR — BY CONSTRUCTION, NOT BY BELIEF.
              *      onAudio() delivers to allAudioSocks() and returns early when that is empty; the
-             *      only consumers of demodulated audio anywhere in this server are open sockets.
+             *      only consumers of demodulated audio anywhere in this server are open sockets —
+             *      ✗ AND THE DECODERS, fed by onAudio() before it looks for a socket. Missed here
+             *      until 2026-10-07 (a WEFAX chart starved for 8 s); they are counted below now.
              *      specListenerCountLocked() counts exactly those sockets (spectrum and audio,
              *      including the pocketed-app case where only the audio one is open). So a count of
              *      zero means there is nowhere for the audio to go, and everything skipped here was
@@ -22009,14 +22033,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    stale-hypothesis fault requestReset() exists for. So the return to full is a
              *    reset, not a resume. */
             if (!perClientDsp() && !g_dabMode.load(std::memory_order_relaxed)) {
-                const bool idle = s_listenersCached.load(std::memory_order_relaxed) <= 0;
+                /* ★★★ A RUNNING DECODER KEEPS THE CHAIN (2026-10-07). The "by construction" note
+                 *  above was wrong in one place: onAudio() feeds the decoders BEFORE it looks for
+                 *  sockets, so they are consumers too, and this gate starved them — see
+                 *  sharedDecoderNeedsAudio. Read lock-free (the router's leaf mutex), so the DSP
+                 *  thread still never takes clientMtx. */
+                const bool decoding = sharedDecoderNeedsAudio();
+                const bool idle = s_listenersCached.load(std::memory_order_relaxed) <= 0 && !decoding;
                 if (idle != rxIdleSpectrumOnly_) {
                     rxIdleSpectrumOnly_ = idle;
                     if (!idle) rx.requestReset();       // a gap invalidates every recursive state
                     rx.setSpectrumOnly(idle);
                     LOGI("%s — %s the audio chain (spectrum, AGC and the "
                          "spectrogram keep running either way)",
-                         idle ? "no listeners" : "a listener arrived",
+                         idle ? "no listeners and no decoder running"
+                              : (decoding && s_listenersCached.load(std::memory_order_relaxed) <= 0
+                                     ? "a decoder is running" : "a listener arrived"),
                          idle ? "idling" : "restarting");
                 }
             }
@@ -22580,6 +22612,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (specClient  && specClient->isOpen())  return false;
         if (audioClient && audioClient->isOpen()) return false;
         for (const auto& e : specExtra) if (e && e->isOpen()) return false;
+        // ★★★ AND NOBODY DECODING — a decoder left running is consuming this radio's audio as surely
+        //     as a listener is (2026-10-07, see sharedDecoderNeedsAudio). This is the question every
+        //     park, release and keepalive site asks, so it is answered once, here.
+        if (sharedDecoderNeedsAudio()) return false;
         return true;
     }
 

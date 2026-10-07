@@ -997,6 +997,14 @@ public:
         for (auto& kv : bySession_) v.push_back(kv);
         return v;
     }
+    /** ★★★ Is the ONE-PIPELINE host decoding — i.e. does a decoder need the shared audio chain to
+     *  keep running? (2026-10-07) The shim's idle gate and its park decision count this as a
+     *  consumer, so a decoder whose listener's audio and waterfall sockets have gone is not starved.
+     *  Leaf lock, atomic reads: safe under the shim's clientMtx and on its DSP thread. */
+    bool sharedWantsAudio() const {
+        std::lock_guard<std::mutex> lk(m_);
+        return shared_ && shared_->wantsAudio();
+    }
     /** Is anything decoding anywhere on this radio? */
     bool anyRunning() {
         for (auto& kv : all()) if (kv.second->wantsAudio()) return true;
@@ -1013,7 +1021,7 @@ public:
     }
 private:
     EnvFor envFor_;
-    std::mutex m_;
+    mutable std::mutex m_;
     std::shared_ptr<DecoderHost> shared_;
     std::map<std::string, std::shared_ptr<DecoderHost>> bySession_;
     std::map<std::string, double> orphanSince_;
