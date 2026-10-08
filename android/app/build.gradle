@@ -282,7 +282,7 @@ apply from: file('mapgl-assets.gradle')
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-    implementation("androidx.media:media:1.7.0")
+    implementation("androidx.media:media:1.8.0")
     // ★ 2026-10-05: media3-exoplayer / media3-session 1.4.1 removed. Nothing in this app imports
     //   androidx.media3 — VibeStreamService's lock-screen session is androidx.media (above) — and
     //   expo-audio brings its own media3 at the version IT was built against. A second, older pin
