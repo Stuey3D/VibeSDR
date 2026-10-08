@@ -93,7 +93,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // ★ RC4 (530) is above every com.vibesdr.app APK ever released on GitHub (the last was RC3, 529), so the
         //   legacy build installs over a sideload; net.vibesdr.app starts its own sequence at the same number.
-        versionCode 558
+        versionCode 559
         versionName "11.0"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
