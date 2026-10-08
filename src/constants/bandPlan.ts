@@ -71,7 +71,10 @@ export const BAND_PLAN: Band[] = [
   { lo: 30000000,  hi: 50000000,   name: 'VHF Low / Public Service',   type: 'utility', mode: 'nfm', step: 12500 },
   { lo: 50000000,  hi: 54000000,   name: '6m Ham Band',                type: 'ham',  bandLabel: '6m',  mode: 'usb', step: 1000 },
   { lo: 70000000,  hi: 70500000,   name: '4m Ham Band',                type: 'ham',  bandLabel: '4m',  regions: [1], mode: 'usb', step: 1000 },
-  { lo: 87500000,  hi: 108000000,  name: 'FM Broadcast Band',          type: 'broadcast', step: 100000 },
+  // ★ Region 2 lands on the 200 kHz odd-tenths grid (STEP_FM_ODD = 200000, utils/airband.ts); R1/R3 first so an
+  //   unknown region (no filtering, first wins) keeps 100 kHz, which reaches every channel everywhere.
+  { lo: 87500000,  hi: 108000000,  name: 'FM Broadcast Band',          type: 'broadcast', regions: [1, 3], step: 100000 },
+  { lo: 87500000,  hi: 108000000,  name: 'FM Broadcast Band',          type: 'broadcast', regions: [2], step: 200000 },
   /* ★★ THE COM HALF IS SPLIT BY REGION FOR ITS STEP (NickB, 2026-09-29). Europe (ITU R1) channels
    *    on 8.33 kHz — mandatory in EU airspace (Reg. 1079/2012) — and the 8.33 step reaches every
    *    25 kHz channel too, so it is the superset there. The Americas and Asia-Pacific are still 25

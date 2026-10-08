@@ -2265,7 +2265,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ `name` is the STABILISED name (see psStab); `psRaw` is the PS exactly as it arrived, for the
   //   Advanced RDS instrument, which must show what is on air rather than what we display.
   const [liveStation, setLiveStation] = useState<{ name?: string; psRaw?: string; text?: string; badge?: string; countryIso?: string; pi?: string; ecc?: number; sid?: string;
-    rdsFlags?: { tp: boolean; ta: boolean; af: boolean }; dabPlus?: boolean | null }>({});
+    rdsFlags?: { tp: boolean; ta: boolean; af: boolean }; dabPlus?: boolean | null; call?: string }>({});
   const liveBadgeRef = useRef<string | undefined>(undefined);
   const liveStationRef = useRef<string>('');
   /* ★★★ THE RDS NAME GOES THROUGH A STABILISER BEFORE ANYTHING SEES IT (Stuart, 2026-09-29: "the
@@ -2278,6 +2278,17 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★ Keyed on the PI when there is one (the identity), else the tuned frequency. */
   const psStab = useRef(new PsStabiliser());
   const psTickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* ★★ US CALL LETTERS AS THE STATION (Stuart, 2026-10-08: US stations put the song through the station name, "its a
+   *  mess"). The server sends `call` (the letters the PI encodes) on a US receiver only. A ROTATING or absent name is
+   *  replaced by them — the marquee is song text, and the call letters are what the station is. A STEADY name is left
+   *  exactly as sent: the logo lookup and bookmark matching read this name, and "ROCK 102 · WAQY" would stop them
+   *  matching (the call letters are always in Advanced RDS). Applied on both paths the name takes (frame, held tick). */
+  const liveCallRef = useRef<string | undefined>(undefined);
+  const withCall = (name: string | undefined): string | undefined => {
+    const call = liveCallRef.current;
+    if (!call) return name;
+    return !name || psStab.current.rotating ? call : name;
+  };
   const psStationKey = (pi: string | undefined) =>
     pi ? `pi:${pi}` : `f:${Math.round((tuneRef.current.frequency || 0) / 100000)}`;
   /** A held change (see PsStabiliser.nextDueIn) lands on its own timer, with no RDS frame needed. */
@@ -2288,7 +2299,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     psTickTimer.current = setTimeout(() => {
       psTickTimer.current = null;
       if (destroyed.current) return;
-      const name = psStab.current.tick(Date.now());
+      const name = withCall(psStab.current.tick(Date.now()));
       if (name && name !== liveStationRef.current) {
         liveStationRef.current = name;
         setLiveStation((cur) => (cur.badge === 'RDS' && cur.name ? { ...cur, name } : cur));
@@ -5765,10 +5776,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         //   DAB service label or a DMR caller is not a PS and must show every change.
         let stationName = meta.stationName;
         if (meta.badge === 'RDS' && !meta.programmes) {
-          stationName = psStab.current.feed(psStationKey(meta.pi), meta.stationName, Date.now()) || undefined;
+          liveCallRef.current = (meta as any).call;
+          stationName = withCall(psStab.current.feed(psStationKey(meta.pi), meta.stationName, Date.now()) || undefined);
           armPsTick();
         } else {
           psStab.current.reset();
+          liveCallRef.current = undefined;
           if (psTickTimer.current) { clearTimeout(psTickTimer.current); psTickTimer.current = null; }
         }
         liveStationRef.current = stationName ?? '';
@@ -5777,7 +5790,7 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  BER or signal-level move as a change, and neither is drawn here — so a steady station
          *  rebuilt this object every second and re-rendered the whole screen with it, for the
          *  entire time anyone listened to FM (power audit, 2026-10-01). */
-        const nextLive = { name: stationName, psRaw: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc,
+        const nextLive = { name: stationName, psRaw: meta.stationName, text: meta.text, badge: meta.badge, countryIso: meta.countryIso, pi: meta.pi, ecc: (meta as any).ecc, call: (meta as any).call as string | undefined,
                            rdsFlags: meta.rdsFlags };
         setLiveStation((cur) => keepIfSameStation(cur, nextLive));
         if (typeof meta.stereo === 'boolean') setFmStereo(meta.stereo);
@@ -11005,6 +11018,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           bus={advRdsBus}
           ps={liveStation.psRaw ?? liveStation.name} rt={liveStation.text} pi={liveStation.pi}
           countryIso={liveStation.countryIso}
+          call={liveStation.call}
           // ★ The ECC was already sitting in liveStation and simply never handed over, so the
           //   COUNTRY row could only ever say "from PI". Written and never read, again.
           ecc={liveStation.ecc}
@@ -11359,7 +11373,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       <StepPicker
         visible={stepOpen}
         currentStep={step}
-        steps={stepsForFreq(status.frequency)}
+        steps={stepsForFreq(status.frequency, ituRegion)}
         onSelect={hz => { airStepSeq.current++; setStep(hz); }}
         onClose={() => setStepOpen(false)}
       />

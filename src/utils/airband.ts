@@ -53,6 +53,12 @@
 /** The 8.33 kHz step's integer stand-in. See the header: arithmetic uses 25000/3 exactly. */
 export const STEP_833 = 8333;
 const EXACT_833 = 25000 / 3;
+/** ★★ THE AMERICAS' FM RASTER (RC30 — a Discord report via Stuart): 200 kHz channels on the ODD tenths, 87.9 … 107.9
+ *  (47 CFR 73.201; Canada, Mexico and Brazil use the same grid). A plain 200 kHz grid from zero would land on 88.0, 88.2
+ *  — between every station — so this step's grid is offset by half a step: point i = i·200 kHz + 100 kHz. Offered only
+ *  in ITU Region 2's FM band (stepsForFreq); Europe's 100 kHz grid is untouched. */
+export const STEP_FM_ODD = 200_000;
+const stepOffsetHz = (step: number) => (step === STEP_FM_ODD ? 100_000 : 0);
 
 export const AIR_COM_LO = 118_000_000;
 /** Exclusive. The last channels are 136.975 (25 kHz) and 136.990 → 136.99167 MHz (8.33 kHz). */
@@ -104,6 +110,7 @@ export function stepExactHz(step: number): number {
  *  (it sits a third of a hertz under the exact value). */
 export function stepIndex(hz: number, step: number, how: 'round' | 'floor' | 'ceil' = 'round'): number {
   const s = stepExactHz(step);
+  hz -= stepOffsetHz(step);
   const near = Math.round(hz / s);
   if (Math.abs(near * s - hz) <= ON_CHANNEL_TOL_HZ) return near;
   const x = hz / s;
@@ -112,7 +119,7 @@ export function stepIndex(hz: number, step: number, how: 'round' | 'floor' | 'ce
 
 /** Grid point `idx` in integer Hz, computed from the index — never accumulated. */
 export function stepHz(idx: number, step: number): number {
-  return Math.round(idx * stepExactHz(step));
+  return Math.round(idx * stepExactHz(step)) + stepOffsetHz(step);
 }
 
 export function snapToStep(hz: number, step: number): number {

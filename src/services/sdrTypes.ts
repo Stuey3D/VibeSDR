@@ -1,5 +1,5 @@
 // Shared SDR types used across clients and UI
-import { STEP_833, isAirbandCom } from '../utils/airband';
+import { STEP_833, STEP_FM_ODD, isAirbandCom } from '../utils/airband';
 import { cleanText } from '../utils/safeText';
 import { cleanLines } from '../utils/cleanLines';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
@@ -38,10 +38,14 @@ export const STEPS_VHF = [100, 500, 1000, 5000, 6250, 12500, 25000, 50000, 10000
  *    that moves a frequency goes through src/utils/airband.ts, which uses the exact 25000/3 — so
  *    stepping lands on 118.00833 / 118.01667 / 118.025 with no drift. 5 kHz was already a rung. */
 export const STEPS_AIRBAND = [100, 500, 1000, 5000, 6250, STEP_833, 12500, 25000, 50000, 100000];
-export function stepsForFreq(hz: number): number[] {
+/** ★ `region` = the RECEIVER's ITU region (0 = unknown). In Region 2's FM band the ladder gains the 200 kHz
+ *  odd-tenths step (STEP_FM_ODD, utils/airband.ts) — the Americas' channel grid. */
+export function stepsForFreq(hz: number, region = 0): number[] {
   if (isAirbandCom(hz)) return STEPS_AIRBAND;
+  if (region === 2 && hz >= 87_500_000 && hz <= 108_000_000) return STEPS_VHF_FM_R2;
   return hz >= 30_000_000 ? STEPS_VHF : STEPS;
 }
+const STEPS_VHF_FM_R2 = [...STEPS_VHF, STEP_FM_ODD];
 export const STEP_LABELS: Record<number, string> = {
   10: '10Hz', 100: '100Hz', 500: '500Hz',
   1000: '1kHz', 5000: '5kHz', 9000: '9kHz', 10000: '10kHz', [STEP_833]: '8.33kHz',

@@ -13127,12 +13127,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★★ tp / ta / af — the station strip's TP · TA · AF annunciators (2026-10-02). -1 = not yet known;
          *  af is the COUNT of alternative frequencies the station lists. A client that sees the keys knows
          *  this server can light them; an older server simply does not send them, and the strip shows none. */
-        char buf[640];
+        /* ★★ "call": the call letters the PI encodes — a US receiver only (vibe_bm_names.h rbdsCallsign; Stuart,
+         *  2026-10-08: US stations rotate the song through the station name, "its a mess"). The client shows them as
+         *  the station when the PS is not a name. Letters only, from a number: nothing a transmitter can inject. */
+        std::string callField;
+        if (g_rxInUs.load(std::memory_order_relaxed)) {
+            const std::string call = vibe::rbdsCallsign(pi);
+            if (!call.empty()) callField = ",\"call\":\"" + call + "\"";
+        }
+        char buf[1024];   // RT 64 + PS 8, each escaped up to 6×, + the call field
         const int wrote = snprintf(buf, sizeof buf,
             "{\"type\":\"rds\",\"stereo\":%s,\"ps\":\"%s\",\"radiotext\":\"%s\",\"pi\":%d,\"ecc\":%d,\"ber\":%d,\"sig\":%.1f,"
-            "\"tp\":%d,\"ta\":%d,\"af\":%d}",
+            "\"tp\":%d,\"ta\":%d,\"af\":%d%s}",
             st ? "true" : "false",
-            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber, sig, tp, ta, afN);
+            jsonEscape(ps).c_str(), jsonEscape(rt).c_str(), pi, ecc, ber, sig, tp, ta, afN, callField.c_str());
         // ★ snprintf returns what it WANTED — a truncated JSON is a message the client silently drops.
         if (wrote < 0 || wrote >= (int)sizeof buf) return false;
         sendText(sock, buf);

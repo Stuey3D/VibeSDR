@@ -103,6 +103,8 @@ export interface RdsMeta {
   sig: number;
   /** ★ TP · TA · AF for the station bar (servers from B17). Absent = this server cannot say. */
   flags?: { tp: boolean; ta: boolean; af: boolean };
+  /** ★ US call letters the PI encodes — sent only by a server that knows it is in the US (RC30). */
+  call?: string;
 }
 
 /** The fields the normal RDS path discards, plus the constellation. */
@@ -1222,6 +1224,7 @@ export class SpectrumClient {
           sig: typeof msg.sig === 'number' ? msg.sig : -99,
           flags: typeof msg.tp === 'number' && typeof msg.ta === 'number' && typeof msg.af === 'number'
             ? { tp: msg.tp === 1, ta: msg.ta === 1, af: msg.af > 0 } : undefined,
+          call: typeof msg.call === 'string' && /^[KW][A-Z]{3}$/.test(msg.call) ? msg.call : undefined,
         });
         break;
       case 'dial':

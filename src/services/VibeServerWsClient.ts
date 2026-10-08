@@ -2157,8 +2157,11 @@ export abstract class VibeServerWsClient {
       //   them; -1 = not decoded yet, drawn dark. An older server sends none → no cluster.
       const rdsFlags = typeof msg.tp === 'number' && typeof msg.ta === 'number' && typeof msg.af === 'number'
         ? { tp: msg.tp === 1, ta: msg.ta === 1, af: msg.af > 0 } : undefined;
+      // ★★ US call letters the server derived from the PI (a US receiver only; vibe_bm_names.h). Shape-checked.
+      const call = typeof msg.call === 'string' && /^[KW][A-Z]{3}$/.test(msg.call) ? msg.call : undefined;
       (this.callbacks as any).onMetadata?.({
         rdsFlags,
+        call,
         stationName: ps || undefined,
         text: rt || undefined,
         // ★ Badge on ANY decoded RDS, not just a name — a text-only frame is still RDS, and

@@ -2149,8 +2149,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // ★ Through the stabiliser — see psStab. Keyed on the PI (the identity) when there is one,
       //   else the tuned frequency, exactly as the app keys it.
       rdsPsRaw = ps;
-      rdsName = psStab.feed(m.pi > 0 ? `pi:${m.pi.toString(16)}` : `f:${Math.round((spec?.frequency || 0) / 100000)}`,
-                            ps, Date.now());
+      rdsCall = m.call || '';
+      rdsName = withCall(psStab.feed(m.pi > 0 ? `pi:${m.pi.toString(16)}` : `f:${Math.round((spec?.frequency || 0) / 100000)}`,
+                                     ps, Date.now()));
       armPsTick();
       rdsText = rt;
       if (!rdsName && rt) rdsName = rt;   // some stations send only RadioText
@@ -3268,11 +3269,19 @@ let rdsName = '';   // the name to DISPLAY — the PS after psStab (see below)
  *  ★ ADV RDS still shows the PS exactly as it is on air — rdsPsRaw — because it is an instrument. */
 const psStab = new PsStabiliser();
 let rdsPsRaw = '';
+/* ★★ US CALL LETTERS (RC30) — the server sends them (from the PI, NRSC-4-B) only when it knows it is in the US.
+ *  A ROTATING or absent PS shows the call letters instead of a marquee; a STEADY name is left alone — the logo and
+ *  bookmark lookups match on it. Same rule as the app's withCall (SDRScreen). ADV RDS shows them in its own row. */
+let rdsCall = '';
+function withCall(name: string): string {
+  return rdsCall && (!name || psStab.rotating) ? rdsCall : name;
+}
 let psTickTimer: ReturnType<typeof setTimeout> | null = null;
 /** Forget the stabiliser's station — live RDS has ended (retune, mode change). */
 function resetPsStab() {
   psStab.reset();
   rdsPsRaw = '';
+  rdsCall = '';
   if (psTickTimer) { clearTimeout(psTickTimer); psTickTimer = null; }
 }
 /** A change the dwell held back lands on its own timer, with no new RDS message needed. */
@@ -3282,7 +3291,7 @@ function armPsTick() {
   if (due == null) return;
   psTickTimer = setTimeout(() => {
     psTickTimer = null;
-    const name = psStab.tick(Date.now());
+    const name = withCall(psStab.tick(Date.now()));
     if (name && name !== rdsName) {
       rdsName = name;
       if (rdsPanelOpen()) renderRds();
@@ -10918,6 +10927,11 @@ function renderRds() {
     : rdsEcc
       ? `ECC ${rdsEcc.toString(16).toUpperCase()} · unmatched`
       : (rdsExt?.gtot ?? 0) > 0 ? 'waiting for ECC (1A)' : dash;
+  // ★ A FLAG FROM ANOTHER COUNTRY IS NOT A DECODER FAULT (RC30). The Ukrainian server showed Moroccan flags: those
+  //   stations really send Morocco's ECC. Say so beside the country rather than leave it looking wrong.
+  if (rdsIso && serverIso && rdsIso.toLowerCase() !== serverIso.toLowerCase())
+    $('rxCountry').textContent += ` — not this receiver's country (${serverIso.toUpperCase()}): a long-distance catch, or a station sending the wrong code`;
+  $('rxCall').textContent = rdsCall ? `${rdsCall} · from the PI (US)` : dash;
 
   // DI — four flags, assembled across the four name segments.
   // ★★ THE FIELD THIS WHOLE RAW/CONFIRMED SPLIT CAME FROM. Each flag is ONE BIT in one group,
@@ -14131,7 +14145,7 @@ function buildVfo() {
  *  gesture because there is nothing to point at. */
 function cycleStep() {
   if (!spec) return;
-  const steps = stepsForFreq(spec.frequency);
+  const steps = stepsForFreq(spec.frequency, ituRegion());
   const i = steps.indexOf(step);
   setStep(steps[(i + 1) % steps.length]);
 }
@@ -14158,7 +14172,7 @@ function setStep(v: number) {
 function openStepMenu(anchor?: HTMLElement) {
   if (!spec) return;
   document.getElementById('stepMenu')?.remove();
-  const steps = stepsForFreq(spec.frequency);
+  const steps = stepsForFreq(spec.frequency, ituRegion());
   const btn = anchor ?? $('mStep');
   const r = btn.getBoundingClientRect();
 
@@ -14205,7 +14219,7 @@ function openStepMenu(anchor?: HTMLElement) {
  *  so a step carried across 30 MHz can land off-ladder. */
 function syncStep() {
   if (!spec) return;
-  const steps = stepsForFreq(spec.frequency);
+  const steps = stepsForFreq(spec.frequency, ituRegion());
   if (!steps.includes(step)) {
     // Nearest step on the new ladder, so crossing the boundary doesn't jolt.
     step = steps.reduce((a, s) => Math.abs(s - step) < Math.abs(a - step) ? s : a, steps[0]);

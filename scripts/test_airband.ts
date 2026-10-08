@@ -8,6 +8,7 @@
  *
  * Run: npx tsx scripts/test_airband.ts
  */
+import { STEP_FM_ODD } from '../src/utils/airband';
 import {
   STEP_833, stepFrom, stepIndex, stepHz, snapToStep, channelAt, airbandChannel, channelNameToHz,
   airbandEntry, airbandStepFrom, airbandPassband, AIR_PB_25, AIR_PB_833,
@@ -178,6 +179,23 @@ eq('FM → airband R1: AM + 8.33', bandJumpDefaults(96_600_000, 121_500_000, 'wf
 eq('FM → airband R2: AM + 25k', bandJumpDefaults(96_600_000, 121_500_000, 'wfm', 2), { mode: 'am', step: 25000 });
 eq('within airband: NFM kept, step follows', bandJumpDefaults(121_500_000, 125_000_000, 'nfm', 1), { step: STEP_833 });
 eq('in no band: nothing', bandJumpDefaults(96_600_000, 3_000_000_000, 'wfm', 1), {});
+
+// ★★ THE AMERICAS' 200 kHz FM RASTER (RC30): odd tenths, offered in Region 2's FM band only.
+eq('R2 FM ladder has 200k', stepsForFreq(98_100_000, 2).includes(STEP_FM_ODD), true);
+eq('R1 FM ladder has no 200k', stepsForFreq(98_100_000, 1).includes(STEP_FM_ODD), false);
+eq('unknown region: no 200k', stepsForFreq(98_100_000).includes(STEP_FM_ODD), false);
+eq('R2 airband is not the FM ladder', stepsForFreq(125_000_000, 2).includes(STEP_FM_ODD), false);
+eq('snap 98.0 → 98.1 (ties go up)', snapToStep(98_000_000, STEP_FM_ODD), 98_100_000);
+eq('snap 98.05 → 98.1', snapToStep(98_050_000, STEP_FM_ODD), 98_100_000);
+eq('snap 98.25 → 98.3', snapToStep(98_250_000, STEP_FM_ODD), 98_300_000);
+eq('step up from 98.1 → 98.3', stepFrom(98_100_000, STEP_FM_ODD, 1), 98_300_000);
+eq('step down from 98.1 → 97.9', stepFrom(98_100_000, STEP_FM_ODD, -1), 97_900_000);
+eq('step up from 98.0 (off grid) → 98.1', stepFrom(98_000_000, STEP_FM_ODD, 1), 98_100_000);
+eq('step down from 98.2 (off grid) → 98.1', stepFrom(98_200_000, STEP_FM_ODD, -1), 98_100_000);
+eq('R2 FM landing step = 200k', bandTuneDefaults(98_100_000, 2).step, STEP_FM_ODD);
+eq('R1 FM landing step = 100k', bandTuneDefaults(98_100_000, 1).step, 100000);
+eq('unknown region FM = 100k', bandTuneDefaults(98_100_000, 0).step, 100000);
+eq('other steps unoffset', snapToStep(98_049_000, 100000), 98_000_000);
 
 console.log(`${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

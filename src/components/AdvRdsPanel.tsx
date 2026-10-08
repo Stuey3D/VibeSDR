@@ -19,6 +19,7 @@
  * spend the extra CPU and bytes. Closing it must turn that back off.
  */
 
+import { receiverIso } from '../services/rdsCountry';
 import React, { useMemo, useRef } from 'react';
 import { useBusValue, type ValueBus } from '../services/valueBus';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
@@ -98,6 +99,8 @@ export interface AdvRdsPanelProps {
   bus?: ValueBus<RdsExt | null>;
   /** Basic RDS, which arrives on its own message and is shown by the VTS bar too. */
   ps?: string; rt?: string; pi?: string; ber?: number; countryIso?: string;
+  /** ★ US call letters the server derived from the PI (a US receiver only) — shown as their own row. */
+  call?: string;
   /** ★ The Extended Country Code, so the COUNTRY row can say how it knows. Without it the row
    *  hardcoded "· from PI", which is a claim about PROVENANCE and was false whenever the ECC had
    *  actually arrived — the web client has shown "GB · ECC E1" all along. ONE RULE, TWO READERS. */
@@ -973,6 +976,13 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     // ★ Still gated on groups actually RECEIVED — "waiting for ECC" before a single group has
     //   arrived would blame a missing 1A for what is really a missing signal.
     : (x?.gtot ?? 0) > 0 ? 'waiting for ECC (1A)' : DASH;
+  /* ★★ A COUNTRY THAT IS NOT THIS RECEIVER'S IS SAID SO — never "corrected" (Stuart, 2026-10-08, a Ukrainian server
+   *  whose local stations send MOROCCO's ECC E2 / PI 1xxx). The flag shows what is transmitted; on a DX catch the far
+   *  country is the truth, so it is not guessed away. One neutral note, true either way. */
+  const rxIso = receiverIso();
+  const countryNote = p.countryIso && rxIso && p.countryIso.toUpperCase() !== rxIso.toUpperCase()
+    ? `not this receiver's country (${rxIso.toUpperCase()}) — a long-distance catch, or a station sending the wrong code`
+    : '';
 
   // ── Group share + rate ──────────────────────────────────────────────────────
   const grp = x?.grp ?? [];
@@ -1214,7 +1224,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               sits steady across hundreds of groups, corruption does not. */}
           <Row raw={raw} label="DI"          value={diTxt} conf={(x?.di ?? -1) >= 0} />
           <Row raw={raw} label="Clock"       value={ctTxt} />
-          <Row raw={raw} label="Country"     value={countryTxt} />
+          <Row raw={raw} label="Country"     value={countryNote ? `${countryTxt} · ${countryNote}` : countryTxt} />
+          {!!p.call && <Row raw={raw} label="Call" value={`${p.call} · from the PI (US)`} />}
           <Row raw={raw} label="PI detail"   value={piNum > 0
             ? `${COV[(piNum >> 8) & 0xF]} · ref ${piNum & 0xFF} · cc ${(piNum >> 12) & 0xF}`
             : DASH} />
