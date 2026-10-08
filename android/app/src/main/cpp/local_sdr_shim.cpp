@@ -8948,6 +8948,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     it said earlier still reads as its own. A 3-listener radio shows Users 1–3. */
     std::map<std::string, int> dialHandles;
     std::map<std::string, double> dialHandleGone;   // session -> when its last socket went (not connected now)
+    /** ★ When each session was GIVEN its number (unix s) — sent with every line it says, so a client can tell the
+     *  number passed to somebody new ("— User 1 joined 17:40 —", Stuart's option B) from the same person back. */
+    std::map<std::string, long long> dialHandleSince;
     /** ★ 120 s; VIBESERVER_HANDLE_HOLD_SEC shortens it for scripts/test-chat-phrases.mjs only (a reuse is otherwise a
      *  two-minute wait in every suite run). Read once. */
     static double handleHoldSec() {
@@ -8970,7 +8973,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (live.count(h->first) || h->first == session) { dialHandleGone.erase(h->first); ++h; continue; }
             auto g = dialHandleGone.find(h->first);
             if (g == dialHandleGone.end()) { dialHandleGone[h->first] = now; ++h; continue; }
-            if (now - g->second >= handleHoldSec()) { dialHandleGone.erase(g); h = dialHandles.erase(h); continue; }
+            if (now - g->second >= handleHoldSec()) { dialHandleGone.erase(g); dialHandleSince.erase(h->first); h = dialHandles.erase(h); continue; }
             ++h;
         }
         auto it = dialHandles.find(session);
@@ -8979,6 +8982,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto& [s, n] : dialHandles) taken.insert(n);
         int n = 1;
         while (taken.count(n)) ++n;
+        dialHandleSince[session] = (long long)time(nullptr);
         return dialHandles[session] = n;
     }
 
@@ -14948,6 +14952,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *   in the middle. Nothing about the answer changes in the microsecond between. */
             const bool isAdmin = adminNow(sock);
             int from = 0;
+            long long since = 0;   // when `from` was given to this session — see dialHandleSince
             {
                 std::lock_guard<std::mutex> lk(clientMtx);
                 auto it = sockSession.find(sock.get());
@@ -14962,6 +14967,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 last = now;
                 if (chatLast.size() > 512) chatLast.clear();
                 from = handleForLocked(me);
+                { auto si = dialHandleSince.find(me); if (si != dialHandleSince.end()) since = si->second; }
             }
             // ★ Nothing is stored. See the note where chatLog used to live: a canned phrase
             //   is only ever meaningful to somebody present to answer it.
@@ -15022,6 +15028,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      + (isAdmin ? ",\"admin\":true" : "")
                      + ",\"id\":\"" + id + "\"}";
             }
+            // ★ "since": when this number was given to this person — a client draws "— User 1 joined 17:40 —" when it changes.
+            if (since > 0 && !line.empty() && line.back() == '}') line.insert(line.size() - 1, ",\"since\":" + std::to_string(since));
             for (auto& c : allSpecClients()) if (c && c->isOpen()) sendText(c, line);
             return;
         }

@@ -1414,6 +1414,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    be asked to stop tuning, so it should be distinguishable at a glance — and no louder than that,
    because it is still a handle rather than a banner. */
 .chatWho.chatAdmin { color: var(--phosphor); font-weight: 600; }
+/* ★ "— User 1 joined 17:40 UTC —": a user number passed to somebody new (2026-10-08). Quiet, centred. */
+.chatJoin { text-align: center; font-size: 11px; letter-spacing: 0.06em; color: var(--unit); opacity: 0.8; margin: 4px 0; }
 /* ★★ THE STRIP IS NOT A CHAT LINE. It is the state of the room — who is tuning, how many are
    here, whether somebody is mid-decode — and it stays put at the top while the log scrolls. */
 #dialStrip {

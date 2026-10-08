@@ -3840,6 +3840,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ Read at CALLBACK time, not captured: the client's callbacks are registered once, so a
   //   captured `dialState` would be for ever the value it had on the first connect.
   const dialStateRef = useRef<DialState | null>(null);
+  /** ★ Each user number's `since` stamp as last heard — a change means the number has passed to somebody new. */
+  const dialSinceRef = useRef<Map<number, number>>(new Map());
   useEffect(() => { dialStateRef.current = dialState; }, [dialState]);
   /// ★ Read inside the watch command handlers, which are registered once — a captured boolean
   ///   would be whatever it was when the screen mounted, i.e. always false.
@@ -5698,7 +5700,20 @@ export default function SDRScreen({ route, navigation }: Props) {
           ts: new Date().toISOString().slice(11, 16).replace(':', '') + 'z',
           ...(share ? { share } : {}),
         };
-        setChatMessages((prev: ChatMessage[]) => [...prev, line].slice(-60));
+        /* ★★ "— User 1 joined 17:40 —" (Stuart's option B, 2026-10-08). A number is reused once its holder has been gone
+         *  two minutes; the server stamps every line with WHEN its number was given (`since`). A different stamp on a
+         *  number already heard = somebody new has it, so one quiet divider goes in first — the lines above were the
+         *  last holder's. The same person back within the hold keeps number AND stamp: no divider. */
+        const since = typeof msg?.since === 'number' ? (msg.since as number) : 0;
+        const seen = dialSinceRef.current.get(from);
+        const newHolder = !!since && seen !== undefined && seen !== since;
+        if (since) dialSinceRef.current.set(from, since);
+        const joined: ChatMessage[] = newHolder ? [{
+          id: `dial-join-${from}-${since}`, type: 'system',
+          text: `— ${speakerName(from, you)} joined ${new Date(since * 1000).toISOString().slice(11, 16)} UTC —`,
+          ts: new Date().toISOString().slice(11, 16).replace(':', '') + 'z',
+        }] : [];
+        setChatMessages((prev: ChatMessage[]) => [...prev, ...joined, line].slice(-60));
         // ★ The wrist gets the phrase too — on a watch the canned chat is not a lesser version of
         //   the feature, it is the ONLY version that can work there (no keyboard).
         //   ★ Not a share: the watch draws phrase ids, and an id it cannot draw is dropped there anyway.

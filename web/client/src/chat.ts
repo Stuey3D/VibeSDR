@@ -287,6 +287,8 @@ export function chatOpened(open: boolean) {
 }
 
 /** A line arrived. */
+/** ★ Each user number's `since` stamp as last heard — see onSaid. */
+const sinceByUser = new Map<number, number>();
 export function onSaid(from: number, id: string, admin = false, msg?: Record<string, unknown>) {
   /* ★★ A share is drawn from the SERVER's line (chatShare.parseShared): the station as THE RECEIVER named it.
    *  The sender's label never travelled and there is no client name field to trust. One with nothing usable is
@@ -295,6 +297,19 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
   const text = id === 'check_out' ? (share ? sharedLineText(share) : '') : TEXT[id];
   if (!text) return;                       // an id this build cannot draw — see the header note
   const log = $('chatLog');
+  /* ★★ "— User 1 joined 17:40 —" (Stuart's option B, 2026-10-08; the app's SDRScreen onSaid does the same). The server
+   *  stamps every line with WHEN its number was given (`since`); a different stamp on a number already heard means the
+   *  number has passed to somebody new — one quiet divider first. The same person back within the hold: no divider. */
+  const since = typeof msg?.since === 'number' ? (msg.since as number) : 0;
+  const seen = sinceByUser.get(from);
+  if (since) sinceByUser.set(from, since);
+  if (log && since && seen !== undefined && seen !== since) {
+    const j = document.createElement('div');
+    j.className = 'chatJoin';
+    const who = (dial && from === dial.you) ? 'You' : `User ${from}`;
+    j.textContent = `— ${who} joined ${new Date(since * 1000).toISOString().slice(11, 16)} UTC —`;
+    log.appendChild(j);
+  }
   if (log) {
     const row = document.createElement('div');
     row.className = 'chatLine';

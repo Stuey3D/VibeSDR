@@ -149,6 +149,17 @@ try {
   const n4 = you(c4);
   console.log(`   .. after the hold ran out, a newcomer gets ${n4}`);
   ok(n4 <= 3, `★ a number whose holder has been gone longer than the hold is given out again (${n4}, not a running count)`);
+  // ★★ and the line it says carries a NEW `since` — what lets a client draw "— User N joined HH:MM —" (option B)
+  const firstSince = JSON.parse(b.txt.filter((x) => x.includes('"type":"said"'))[0]).since;
+  const saidBy = (st) => st.txt.filter((x) => x.includes('"type":"said"')).map((x) => JSON.parse(x));
+  c4.send({ type: 'say', id: 'hello' }); await sleep(800);
+  const fromC4 = saidBy(c1).filter((x) => x.from === n4).pop();
+  ok(!!fromC4 && typeof fromC4.since === 'number' && (n4 !== 1 || fromC4.since !== firstSince),
+     `★ a reused number's lines carry a NEW since (${fromC4 && fromC4.since}, the first holder's ${firstSince}) — the joined divider`);
+  await sleep(3200);
+  c2b.send({ type: 'say', id: 'thanks' }); await sleep(800);
+  const backLines = saidBy(c1).filter((x) => x.from === n2b);
+  ok(backLines.length >= 1 && backLines.every((x) => x.since === backLines[0].since), '…and the same person back within the hold keeps their since: no divider');
   c1.close(); c2b.close(); c4.close();
 } catch (e) {
   fail++; console.log(`   FAIL threw: ${e && e.stack || e}`);
