@@ -98,7 +98,7 @@ for (const f of ['src/components/PopupShell.tsx', 'src/components/DecoderShell.t
   ok('ChatDrawer: the phrases sit in a ScrollView capped at padMaxH',
      /<ScrollView[^>]*maxHeight:\s*padMaxH[\s\S]*?canned!\.map[\s\S]*?<\/ScrollView>/.test(src));
   ok('ChatDrawer: padMaxH comes from phrasePadMaxHeight', /padMaxH\s*=\s*phrasePadMaxHeight\(/.test(src));
-  ok('ChatDrawer: phrase dome keys have no hit slop', /<PopupKey key=\{ph\.id\}[^>]*hitSlop=\{0\}/.test(src));
+  ok('ChatDrawer: phrase dome keys have no hit slop', /<PopupKey key=\{q\.id\}[^>]*hitSlop=\{0\}/.test(src));
   ok('ChatDrawer: the drawer steps in from the side insets', /paddingLeft:\s*insets\.left/.test(src) && /paddingRight:\s*insets\.right/.test(src));
 }
 
