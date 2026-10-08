@@ -63,6 +63,7 @@
 #include <cerrno>
 #include <cmath>
 #include "vibe_decfeed_resampler.h"
+#include "vibe_bm_names.h"
 #include <climits>
 #include <condition_variable>
 #include <cstdint>
@@ -1566,6 +1567,8 @@ struct PendingBm {
     unsigned short votes[8][128] = {};
     std::string lastBest;        // last reconstruction, to spot when it settles
     long long   settledSince = 0;
+    /** ★ Each PS segment heard, for a station that ROTATES its name — see vibe_bm_names.h. */
+    vibe::RotationNamer rot;
 };
 static std::mutex g_bmMtx;
 static std::map<long long, LearnedBm> g_bookmarks;    // key: Hz (rounded)
@@ -1750,6 +1753,17 @@ static double bmSnapFm(double hz) {
 /** ★ Defined after the handler globals below; see the call in bmLearn. */
 static void bmTryRadioDnsName(long long key, int pi, int ecc, double hz);
 
+/* ★★★ THE TWO NAMES FOR A STATION WHOSE OWN TEXT NEVER SETTLES (2026-10-08). Stuart: "the US stations also rotate
+ *  their names too, but on these servers we only bookmark the pi code ... I noticed it on Kiko's and now on Chicopee and
+ *  the Ukrainian one too". Read off the servers' own lists: Chicopee 7 of 8 stuck at "PI: XXXX", Kiko's TV box 3 of 4.
+ *  The only fallback was RadioDNS, which needs an ECC (US stations send none; the Ukrainian ones send MOROCCO's) and a
+ *  network transport (none on a phone — Kiko's Lite). kNameGuess ("unverified") existed for exactly this and NOTHING
+ *  ever produced it. Two producers, both below a name heard and settled, which still wins whenever one comes. */
+
+/** ★ Is this receiver in the US? From the location the owner set (`iso`, or failing that lat/lon) — computed once,
+ *  in setLocationJson, so the RDS path reads an atomic. RBDS PI codes encode CALL LETTERS only in the US. */
+static std::atomic<bool> g_rxInUs{false};
+
 static void bmLearn(double hzRaw, int pi, const std::string& psRaw, int ecc) {
     const std::string ps = bmClean(psRaw, 64);   // ★ off the air: anything a transmitter sends
     const double hz = bmSnapFm(hzRaw);
@@ -1845,6 +1859,22 @@ static void bmLearn(double hzRaw, int pi, const std::string& psRaw, int ecc) {
             s_rdnsTried[key] = now;
             bmTryRadioDnsName(key, pi, ecc, hz);
         }
+    }
+
+    /* ★★ THE TWO GUESSES (see rbdsCallsign / bmRotationName) — only for a label still PROVISIONAL, and both stay
+     *  below kNameHeard, so a station whose text later settles is named by what it says. */
+    if (it != g_bookmarks.end() && it->second.nameSrc < kNameGuess && now - p.piSince >= kProvisionalDwellSecs) {
+        std::string guess, why;
+        if (g_rxInUs.load(std::memory_order_relaxed)) { guess = vibe::rbdsCallsign(pi); why = "its PI's call letters"; }
+        if (guess.empty()) { guess = p.rot.feed(bmTrim(ps), now); why = "the name its rotating text keeps coming back to"; }
+        if (!guess.empty()) {
+            it->second.name = bmClean(guess, 64);
+            it->second.nameSrc = kNameGuess;
+            bmSaveLocked();
+            LOGI("bookmark %.3f MHz named \"%s\" from %s (unverified)", hz / 1e6, it->second.name.c_str(), why.c_str());
+        }
+    } else if (it != g_bookmarks.end() && it->second.nameSrc == kNameGuess) {
+        p.rot.feed(bmTrim(ps), now);               // keep its history (cheap)
     }
 
     if (ps.empty()) return;                      // locked on, but no text yet
@@ -27398,8 +27428,14 @@ void LocalSdrShim::setLocationJson(const std::string& json) {
      *  transmitter (Stuart, 2026-09-07: "the xcover gives its location yet for some reason we
      *  cannot use that to determine transmitter ranges?"). One fact, one reader. */
     double lat = 0, lon = 0;
-    if (jsonNum(json, "lat", lat) && jsonNum(json, "lon", lon) && (lat != 0.0 || lon != 0.0))
-        setReceiverPosition(lat, lon);
+    const bool haveLL = jsonNum(json, "lat", lat) && jsonNum(json, "lon", lon) && (lat != 0.0 || lon != 0.0);
+    if (haveLL) setReceiverPosition(lat, lon);
+    /* ★ US or not, for rbdsCallsign: the owner's country when they gave one, else a position inside the lower 48,
+     *  Alaska or Hawaii. Wrong either way costs only an "(unverified)" label a settled name replaces. */
+    const std::string iso = jsonStr(json, "iso");
+    const bool usBox = haveLL && ((lat > 24 && lat < 50 && lon > -125 && lon < -66) || (lat > 51 && lat < 72 && lon > -170 && lon < -129)
+                                  || (lat > 18 && lat < 23 && lon > -161 && lon < -154));
+    g_rxInUs.store(iso.empty() ? usBox : (iso == "US" || iso == "us"), std::memory_order_relaxed);
 }
 
 /* ★ Out-of-line definition for the cached listener count — see specListenerCountLocked(). */

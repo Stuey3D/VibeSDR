@@ -45,6 +45,7 @@ flags_for() {
     #   slot decode finishes in a second rather than ten.
     test-decoder-hosts)    echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
+    test-bm-names) echo "-O2 -I android/app/src/main/cpp" ;;
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
     test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ Hostile attach messages through the real decoders (audit 2026-10-03) — same deps as the hosts.
