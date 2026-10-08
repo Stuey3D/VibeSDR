@@ -85,7 +85,7 @@ jobs:
           java-version: 17
       - name: Set up Gradle
         if: matrix.language == 'java-kotlin'
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Set up Go
         if: matrix.language == 'go'
