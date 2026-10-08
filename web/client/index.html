@@ -1436,6 +1436,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   /* ★ …but a SHORT phrase takes half (2026-10-08): with the nine social phrases, 24 full-width rows of "Thanks!" and
      "Nice catch!" pushed the log off a phone screen. Sentences still get the whole row. */
   #chatPhrases .btn.chatShort { flex: 1 1 calc(50% - 6px); }
+  #chatPhrases .chatGroup .btn, #chatPhrases .chatGroup .btn.chatShort { flex: 0 1 auto; }   /* group keys stay compact */
   #chatLog { max-height: 30vh; }
 }
 /* ★★★ CHECK OUT [BOOKMARK] [MANUAL] (Stuart, 2026-10-01) — one row first in SAY; the draft and the manual
@@ -1446,6 +1447,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 .chatManual[hidden], .chatShareDraft[hidden] { display: none; }
 .chatCheckLead { color: var(--amber); font-weight: 600; }
 #chatPhrases .chatShareBtn { font-weight: 600; flex: 1 1 auto; }
+/* ★ A phrase group ("This sounds" Awesome · Weird …) — one row: its label, then short keys, wrapping (2026-10-08). */
+#chatPhrases .chatGroup { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 100%; }
+#chatPhrases .chatGroupLbl { font-size: 12px; letter-spacing: 0.06em; color: var(--unit); margin-right: 2px; }
+#chatPhrases .chatGroup .btn { flex: 0 1 auto; }
 /* ★ The phone rule above makes every phrase full width; the share keys sit side by side instead. */
 #chatPhrases .chatShare .btn { flex: 1 1 auto; text-align: center; }
 #chatPhrases .chatShareDraft .btn, #chatPhrases .chatManual .btn { flex: 0 0 auto; }

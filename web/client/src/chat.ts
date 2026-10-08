@@ -31,7 +31,7 @@ import {
  *     One vocabulary across the watch, the phone and the browser, so a conversation reads the same
  *     wherever it is held. Change a wording freely; change or remove an ID and the two ends stop
  *     understanding each other. */
-export const PHRASES: Array<{ id: string; text: string }> = [
+export const PHRASES: Array<{ id: string; text: string; group?: string; key?: string }> = [
   { id: 'ask_tune',       text: 'Can I tune?' },
   { id: 'anyone_using',   text: 'Anyone using this?' },
   { id: 'tuning_now',     text: 'Tuning now' },
@@ -51,7 +51,13 @@ export const PHRASES: Array<{ id: string; text: string }> = [
   { id: 'hello', text: 'Hello everyone!' },
   { id: 'just_scanning', text: "Just scanning to see what's about" },
   { id: 'what_is_this', text: 'Anyone know what this is?' },
-  { id: 'sounds_awesome', text: 'This sounds awesome!' },
+  // ★ "THIS SOUNDS …" IS ONE ROW (Stuart, 2026-10-08: "This sounds awesome could be a selection") — each choice its own id, drawn as a 'This sounds' label and a key per word (group/key below); a message reads in full.
+  { id: 'sounds_awesome', text: 'This sounds awesome!', group: 'sounds', key: 'Awesome' },
+  { id: 'sounds_great', text: 'This sounds great', group: 'sounds', key: 'Great' },
+  { id: 'sounds_interesting', text: 'This sounds interesting', group: 'sounds', key: 'Interesting' },
+  { id: 'sounds_weird', text: 'This sounds weird', group: 'sounds', key: 'Weird' },
+  { id: 'sounds_distorted', text: 'This sounds distorted', group: 'sounds', key: 'Distorted' },
+  { id: 'sounds_bad', text: 'This sounds bad', group: 'sounds', key: 'Bad' },
   { id: 'nice_catch', text: 'Nice catch!' },
   { id: 'not_my_music', text: 'Not my kind of music' },
   { id: 'good_conditions', text: 'Conditions are great today' },
@@ -60,6 +66,8 @@ export const PHRASES: Array<{ id: string; text: string }> = [
 ];
 
 const TEXT: Record<string, string> = Object.fromEntries(PHRASES.map(p => [p.id, p.text]));
+/** The label a phrase group's row starts with (the app: dialChat.ts PHRASE_GROUP_LABEL). */
+const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds' };
 
 /* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced RDS". A shared
  *  receiver is a room of people finding things, and the canned vocabulary let them agree who tunes but never
@@ -130,11 +138,11 @@ export function initChat(d: Deps) {
   const list = $('chatPhrases');
   if (list) {
     list.innerHTML = '';
-    for (const p of PHRASES) {
+    const mkKey = (p: { id: string; text: string }, label: string) => {
       const b = document.createElement('button');
       // ★ A SHORT phrase ("Thanks!", "Nice catch!") pairs up on a phone — see #chatPhrases .chatShort (2026-10-08).
-      b.className = p.text.length <= 22 ? 'btn chatShort' : 'btn';
-      b.textContent = p.text;
+      b.className = label.length <= 22 ? 'btn chatShort' : 'btn';
+      b.textContent = label;
       b.onclick = () => {
         deps?.say(p.id);
         // ★ NO LOCAL ECHO. The server is what everybody else sees, so waiting for it to come back
@@ -143,7 +151,23 @@ export function initChat(d: Deps) {
         b.disabled = true;
         setTimeout(() => { b.disabled = false; }, 3000);   // mirrors the server's own 3s gap
       };
-      list.appendChild(b);
+      return b;
+    };
+    /* ★ A phrase GROUP ("This sounds" Awesome · Weird …) is one row — its label, then a short key per member — where
+     *  its first member stands (Stuart, 2026-10-08). The app's ChatDrawer does the same. */
+    const done = new Set<string>();
+    for (const p of PHRASES) {
+      if (!p.group) { list.appendChild(mkKey(p, p.text)); continue; }
+      if (done.has(p.group)) continue;
+      done.add(p.group);
+      const row = document.createElement('div');
+      row.className = 'chatGroup';
+      const lbl = document.createElement('span');
+      lbl.className = 'chatGroupLbl';
+      lbl.textContent = PHRASE_GROUP_LABEL[p.group] ?? '';
+      row.appendChild(lbl);
+      for (const q of PHRASES.filter((x) => x.group === p.group)) row.appendChild(mkKey(q, q.key ?? q.text));
+      list.appendChild(row);
     }
     /* ★★★ "CHECK OUT [BOOKMARK] [MANUAL]" — ONE ROW, FIRST, because it is the one key that says WHAT you found
      *  (Stuart, 2026-10-01: the station sharing "is a bit of a rubbish UI"). It replaced two things: a

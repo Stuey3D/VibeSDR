@@ -91,7 +91,7 @@ for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
 const rtlPort = await freePort(), port = await freePort();
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2048000'], { stdio: 'ignore' });
 await sleep(300);
-const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
+const env = { ...process.env, VIBESERVER_HANDLE_HOLD_SEC: '6', VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
               VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const logPath = path.join(dir, 'server.log');
 const log = fs.openSync(logPath, 'w');
@@ -124,6 +124,32 @@ try {
   await sleep(1200);
   ok(heard().length === before, 'an id the server does not know is dropped, never passed on');
   a.close(); b.close();
+
+  // ★★ USER NUMBERS: the lowest not in use, held 2 minutes for a reconnect (Stuart: "user 10 on a 3 user server").
+  console.log('── user numbers: the lowest free one, kept across a reconnect ──');
+  await sleep(500);
+  const you = (st) => { const d = st.txt.filter((x) => x.includes('"type":"dial"')).map((x) => JSON.parse(x).you); return d[d.length - 1]; };
+  const join = async (sid) => { const s = ws(port, `/ws/user-spectrum?user_session_id=${sid}&bins=256`); await sleep(700); return s; };
+  const c1 = await join('cccc0001'), c2 = await join('cccc0002');
+  const n1 = you(c1), n2 = you(c2);
+  c2.close(); await sleep(600);
+  const c3 = await join('cccc0003');
+  const n3 = you(c3);
+  const c2b = await join('cccc0002');
+  const n2b = you(c2b);
+  console.log(`   .. numbers: first ${n1}, second ${n2}, a newcomer while the second is away ${n3}, the second back ${n2b}`);
+  ok(n3 !== n2 && n2b === n2, '★ a listener who drops and comes back within 2 minutes gets THEIR number back; a newcomer meanwhile does not take it');
+  // ★ The two listeners of the half above left moments ago and are HELD (1, 2) — so the lowest free numbers now are
+  //   3, 4, 5. Under the old running count this run's sessions would be numbered 3, 4, 5, 6 (the reconnect a NEW one).
+  ok(n1 === 3 && n2 === 4 && n3 === 5, `★ the lowest numbers nobody holds (1 and 2 are held for the two who just left): ${n1}, ${n2}, ${n3}`);
+  // ★★ and once a hold runs out the number is REUSED — the running count would hand out 6 here (hold shortened to 6 s
+  //    for this test by VIBESERVER_HANDLE_HOLD_SEC; it is 2 minutes in service).
+  c3.close(); await sleep(7500);
+  const c4 = await join('cccc0004');
+  const n4 = you(c4);
+  console.log(`   .. after the hold ran out, a newcomer gets ${n4}`);
+  ok(n4 <= 3, `★ a number whose holder has been gone longer than the hold is given out again (${n4}, not a running count)`);
+  c1.close(); c2b.close(); c4.close();
 } catch (e) {
   fail++; console.log(`   FAIL threw: ${e && e.stack || e}`);
 } finally {

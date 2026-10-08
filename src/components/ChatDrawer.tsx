@@ -9,6 +9,7 @@
  * Chat button pulses blue in ControlsBar when chatUnread=true.
  */
 
+import { PHRASE_GROUP_LABEL } from '../services/dialChat';
 import React, {
   useCallback, useEffect, useRef, useState,
 } from 'react';
@@ -85,7 +86,7 @@ export interface ChatDrawerProps {
    *  asleep. It also makes the chat usable on a WATCH, where a keyboard cannot be.
    *  ★ The drawer chrome is deliberately unchanged: same open/close, same unread pulse, same
    *    transcript. Only the way you SPEAK differs, so there is one chat in this app, not two. */
-  canned?:           { id: string; text: string }[];
+  canned?:           { id: string; text: string; group?: string; key?: string }[];
   /** Send a canned phrase id (canned mode only). */
   onSay?:            (id: string) => void;
   /** One line about the room — who is tuning, how many are here, why it is not moving. */
@@ -657,23 +658,39 @@ function ChatDrawerBody({
                   </View>
                 </View>
               )}
-              {canned!.map(ph => pt.metal ? (
-                // ★★ hitSlop 0: the chips sit 6 pt apart and a dome key's default 4 pt slop on BOTH
-                //    neighbours overlapped in the gap — a tap there could say either phrase.
-                <PopupKey key={ph.id} label={ph.text} numberOfLines={3} height={32} fontSize={12} hitSlop={0}
-                  style={{ alignSelf: 'flex-start', maxWidth: '100%' }} onPress={() => onSay?.(ph.id)} />
-              ) : (
-                <TouchableOpacity
-                  key={ph.id}
-                  style={[cd.cannedBtn, { borderColor: cc.btnBdr }]}
-                  activeOpacity={0.75}
-                  onPress={() => onSay?.(ph.id)}
-                >
-                  <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]}>
-                    {ph.text}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {/* ★ A phrase GROUP ("This sounds" Awesome · Weird …) is one row — its label, then a short key per member —
+                   drawn where its first member stands (Stuart, 2026-10-08). Each key still sends its own id. */}
+              {canned!.map((ph, i) => {
+                if (ph.group && canned!.findIndex(q => q.group === ph.group) !== i) return null;
+                const members = ph.group ? canned!.filter(q => q.group === ph.group) : [ph];
+                const keyOf = (q: { id: string; text: string; key?: string }) => (ph.group ? q.key ?? q.text : q.text);
+                const one = (q: { id: string; text: string; key?: string }) => pt.metal ? (
+                  // ★★ hitSlop 0: the chips sit 6 pt apart and a dome key's default 4 pt slop on BOTH
+                  //    neighbours overlapped in the gap — a tap there could say either phrase.
+                  <PopupKey key={q.id} label={keyOf(q)} numberOfLines={3} height={32} fontSize={12} hitSlop={0}
+                    style={{ alignSelf: 'flex-start', maxWidth: '100%' }} onPress={() => onSay?.(q.id)} />
+                ) : (
+                  <TouchableOpacity
+                    key={q.id}
+                    style={[cd.cannedBtn, { borderColor: cc.btnBdr }]}
+                    activeOpacity={0.75}
+                    onPress={() => onSay?.(q.id)}
+                  >
+                    <Text style={[cd.cannedTxt, { color: cc.btnText, fontFamily: t.font }]}>
+                      {keyOf(q)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+                if (!ph.group) return one(ph);
+                return (
+                  <React.Fragment key={`__g_${ph.group}`}>
+                    <Text style={[cd.cannedLine, cd.checkLbl, { color: pt.metal ? pt.note : cc.title, fontFamily: ff }, cd.engrave]}>
+                      {PHRASE_GROUP_LABEL[ph.group] ?? ''}
+                    </Text>
+                    {members.map(one)}
+                  </React.Fragment>
+                );
+              })}
               </ScrollView>
             </View>
           )}

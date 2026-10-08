@@ -22,7 +22,10 @@
  *   not, and `decode_done` on screen would be worse than nothing.
  */
 
-export type Phrase = { id: string; text: string };
+/** ★ `group`/`key`: phrases drawn as ONE row — a label and a short key each ("This sounds" Awesome · Weird …). */
+export type Phrase = { id: string; text: string; group?: string; key?: string };
+/** The label a phrase group's row starts with. */
+export const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds' };
 
 /** In the order a conversation actually runs: ask, act, answer, thank. */
 export const DIAL_PHRASES: Phrase[] = [
@@ -49,7 +52,13 @@ export const DIAL_PHRASES: Phrase[] = [
   { id: 'hello', text: 'Hello everyone!' },
   { id: 'just_scanning', text: "Just scanning to see what's about" },
   { id: 'what_is_this', text: 'Anyone know what this is?' },
-  { id: 'sounds_awesome', text: 'This sounds awesome!' },
+  // ★ "THIS SOUNDS …" IS ONE ROW (Stuart, 2026-10-08: "This sounds awesome could be a selection") — each choice its own id, drawn as a 'This sounds' label and a key per word (group/key below); a message reads in full.
+  { id: 'sounds_awesome', text: 'This sounds awesome!', group: 'sounds', key: 'Awesome' },
+  { id: 'sounds_great', text: 'This sounds great', group: 'sounds', key: 'Great' },
+  { id: 'sounds_interesting', text: 'This sounds interesting', group: 'sounds', key: 'Interesting' },
+  { id: 'sounds_weird', text: 'This sounds weird', group: 'sounds', key: 'Weird' },
+  { id: 'sounds_distorted', text: 'This sounds distorted', group: 'sounds', key: 'Distorted' },
+  { id: 'sounds_bad', text: 'This sounds bad', group: 'sounds', key: 'Bad' },
   { id: 'nice_catch', text: 'Nice catch!' },
   { id: 'not_my_music', text: 'Not my kind of music' },
   { id: 'good_conditions', text: 'Conditions are great today' },

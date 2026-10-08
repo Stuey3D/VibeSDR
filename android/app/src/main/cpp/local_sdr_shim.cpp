@@ -8939,10 +8939,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★★ A HANDLE PER SESSION, BECAUSE THE ALTERNATIVE IS AN IDENTITY. Everyone in the room has
      *  to be able to say "listener 3 has the dial" without the server publishing an address, a
      *  country or a user agent to strangers — the brief is explicit that nobody signs up for
-     *  anything, and that has to include being identifiable. Ordinals are assigned in arrival
-     *  order and never reused within a run. */
+     *  anything, and that has to include being identifiable.
+     *  ★★ THE LOWEST NUMBER NOT IN USE, NOT A RUNNING COUNT (2026-10-08, Stuart: "not sure what the server uses for
+     *     user number as I've seen user 10 on a 3 user server"). Ordinals WERE assigned in arrival order and never
+     *     reused within a run, so the tenth visit since start-up was "User 10" however few were present — and a
+     *     network blip came back as a new number. Now a session gets the lowest number nobody connected holds, and
+     *     keeps it for handleHoldSec() (2 minutes) after its last socket closes, so a reconnect gets its own number back and what
+     *     it said earlier still reads as its own. A 3-listener radio shows Users 1–3. */
     std::map<std::string, int> dialHandles;
-    int dialNextHandle = 1;
+    std::map<std::string, double> dialHandleGone;   // session -> when its last socket went (not connected now)
+    /** ★ 120 s; VIBESERVER_HANDLE_HOLD_SEC shortens it for scripts/test-chat-phrases.mjs only (a reuse is otherwise a
+     *  two-minute wait in every suite run). Read once. */
+    static double handleHoldSec() {
+        static const double v = [] { const char* e = std::getenv("VIBESERVER_HANDLE_HOLD_SEC"); const double d = e ? std::atof(e) : 0;
+                                     return d > 0 && d < 3600 ? d : 120.0; }();
+        return v;
+    }
     /** ★★★ WHICH SESSION PROVED THE ADMIN PASSWORD. `adminOk` is radio-wide and `adminNow(sock)`
      *  falls back to it whenever there is no per-client DSP — which is exactly the shape open
      *  tuning runs in. Without this, ONE owner signing in would make every listener on the radio
@@ -8950,10 +8962,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::string adminSession;
     int handleForLocked(const std::string& session) {
         if (session.empty()) return 0;
+        // ★ Who is here now: every open socket's session. A handle whose session has been gone kHandleHoldSec is freed.
+        const double now = Impl::nowSecs();
+        std::set<std::string> live;
+        for (auto& [s, id] : sockSession) if (!id.empty()) live.insert(id);
+        for (auto h = dialHandles.begin(); h != dialHandles.end(); ) {
+            if (live.count(h->first) || h->first == session) { dialHandleGone.erase(h->first); ++h; continue; }
+            auto g = dialHandleGone.find(h->first);
+            if (g == dialHandleGone.end()) { dialHandleGone[h->first] = now; ++h; continue; }
+            if (now - g->second >= handleHoldSec()) { dialHandleGone.erase(g); h = dialHandles.erase(h); continue; }
+            ++h;
+        }
         auto it = dialHandles.find(session);
         if (it != dialHandles.end()) return it->second;
-        if (dialHandles.size() > 512) dialHandles.clear();   // bounded; a run does not last for ever
-        return dialHandles[session] = dialNextHandle++;
+        std::set<int> taken;
+        for (auto& [s, n] : dialHandles) taken.insert(n);
+        int n = 1;
+        while (taken.count(n)) ++n;
+        return dialHandles[session] = n;
     }
 
     /** Open tuning in force? ★ Deliberately NOT conditioned on maxUsers: an owner who has said
@@ -9057,7 +9083,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "hello",           // Hello everyone!
             "just_scanning",   // Just scanning to see what's about
             "what_is_this",    // Anyone know what this is?
-            "sounds_awesome",  // This sounds awesome!
+            // ★ "THIS SOUNDS …" IS ONE ROW (Stuart, 2026-10-08: "This sounds awesome could be a selection") — each choice its own id, drawn as a 'This sounds' label and a key per word (group/key below); a message reads in full.
+            "sounds_awesome",    // This sounds awesome!
+            "sounds_great",      // This sounds great
+            "sounds_interesting", // This sounds interesting
+            "sounds_weird",      // This sounds weird
+            "sounds_distorted",  // This sounds distorted
+            "sounds_bad",        // This sounds bad
             "nice_catch",      // Nice catch!
             "not_my_music",    // Not my kind of music
             "good_conditions", // Conditions are great today
