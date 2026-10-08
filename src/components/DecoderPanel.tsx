@@ -434,6 +434,8 @@ export default function DecoderPanel({
   const drawSlant = !slantTouched && measuredSlant !== undefined ? measuredSlant : align.slant;
   /** The slant in effect is the listener's (MANUAL): set by hand on this chart, or saved and nothing measured. */
   const slantManual = slantTouched || (alignSaved && measuredSlant === undefined);
+  /** ★ A slant SAVED for this frequency (not set on this chart, not measured) is what is being drawn — see the ADJ key. */
+  const savedSlantShown = !rawChart && !slantTouched && alignSaved && measuredSlant === undefined && Math.abs(drawSlant) >= 0.0005;
   useEffect(() => {
     if (!isWefax || !tunedHz) return;
     let dead = false;
@@ -1211,7 +1213,13 @@ export default function DecoderPanel({
           {isImageMode && isWefax && (
             <HBtn run hitSlop={6} accessibilityLabel="Align the chart and set its slant"
               onPress={(e: any) => { e?.stopPropagation(); setAdjOpen((o) => !o); }}>
-              <DecoderKeyLabel active={adjOpen}>ADJ</DecoderKeyLabel>
+              {/* ★★ A SAVED SLANT SAYS SO WHERE YOU CAN SEE IT (2026-10-08, Stuart: "I didn't realise it had saved a slant").
+                  A slant set with SLANT's keys is kept for the frequency, and wherever the chart measures none it is drawn on
+                  every chart — DDK's leaned +0.114 for days while the server's own decode was straight (+0.008), and it
+                  read as the decoder going wrong. Only ADJ's own panel ever said MANUAL. Now the key does, highlighted. */}
+              <DecoderKeyLabel active={adjOpen || savedSlantShown}>
+                {savedSlantShown ? `ADJ · SLANT ${signedSlant(drawSlant)} SAVED` : 'ADJ'}
+              </DecoderKeyLabel>
             </HBtn>
           )}
           {isImageMode && imgZoomI < IMG_ZOOMS.length - 1 && (

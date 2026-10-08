@@ -17867,7 +17867,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // Deliberately OUTSIDE the g_vsWebEnabled gate: identity is not part
             // of the web client, and gating it would reintroduce the same bug.
             bool pinOn;
-            { std::lock_guard<std::mutex> lk(g_vsMtx); pinOn = !g_vsSecret.empty(); }
+            // ★★ EITHER PIN (2026-10-08, the Pi 500's Airspy HF+: its own PIN, /vibeserver/auth answered required:true and
+            //    every socket 401s without it — but this said "pin":false). ONE RULE, TWO READERS: /vibeserver/auth was
+            //    taught the radio's own secret and this, its twin, was not; a client reading it offers no PIN prompt.
+            { std::lock_guard<std::mutex> lk(g_vsMtx); pinOn = !g_vsSecret.empty() || !g_vsRadioSecret.empty(); }
             // ★ `uncompressed` is the OPERATOR's policy and `local` is this requester's
             // own situation; the client needs both to decide what to ask for and what to
             // offer in its menu. Sent from here rather than over the audio socket because
@@ -31818,7 +31821,7 @@ LocalSdrShim::NetStatus LocalSdrShim::getNetStatus() {
 LocalSdrShim::VibeServerStatus LocalSdrShim::getVibeServerStatus() {
     VibeServerStatus s;
     s.compressed = g_vsCompressAudio.load();
-    { std::lock_guard<std::mutex> lk(g_vsMtx); s.pinEnabled = !g_vsSecret.empty(); }
+    { std::lock_guard<std::mutex> lk(g_vsMtx); s.pinEnabled = !g_vsSecret.empty() || !g_vsRadioSecret.empty(); }   // ★ either PIN — see vibeserver.json's "pin"
     if (!p) return s;
     s.running   = g_serveOnLan.load();
     s.deviceLost = p->deviceLost.load();

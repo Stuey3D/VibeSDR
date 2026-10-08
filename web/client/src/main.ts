@@ -11840,6 +11840,12 @@ function updateDecAdjLabels() {
   // ★ AUTO and RAW are a mode pair (AUTO replaced RESET, 2026-10-06): AUTO lit while nothing manual and no RAW.
   $('decAdjReset').classList.toggle('on', !decRaw && !decSlantManual() && !manual);
   setDecAlignHint(a.shift);
+  // ★★ A SAVED SLANT SAYS SO ON THE ADJ KEY (2026-10-08 — the app's DecoderPanel does the same; Stuart: "I didn't realise
+  //    it had saved a slant"). Kept for the frequency and drawn on every chart that measures none, it was visible only
+  //    inside ADJ — DDK leaned +0.114 for days on a straight decode.
+  const saved = !decRaw && !decSlantTouched && decAlignSaved && decAuto.slant === undefined && Math.abs(a.slant) >= 0.0005;
+  const adj = document.getElementById('decAdj');
+  if (adj) { adj.textContent = saved ? `ADJ · SLANT ${decSignedSlant(a.slant)} SAVED` : 'ADJ'; adj.classList.toggle('saved', saved); }
 }
 /** The shift as the listener reads it: px, signed, the short way round. */
 function decSignedPx(shift: number): string {
