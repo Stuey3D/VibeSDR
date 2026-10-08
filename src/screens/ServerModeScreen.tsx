@@ -391,7 +391,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     const netUsers = (j.network && j.network.users) || 0;
     const cap = Math.min(cpuUsers || 99, netUsers || 99);
     if (cap > 0 && cap < 99 && Number(usersText || '1') > cap) {
-      setUsersText(String(cap));
+      // ★ The VALUE too, not only the box (2026-10-08): this set the text alone, so the box showed the ceiling while
+      //   the receiver was still configured from the old number.
+      setUsersText(String(cap)); setMaxUsers(cap);
       notes.push(`Listener limit set to ${cap} — what this device and its link measured.`);
     }
     /* ★★★ DECODERS AT ONCE — the benchmark times every decoder here and says how many fit beside a
@@ -3270,7 +3272,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     arbitury 2/4/6/8 selection").
                     ★ Held as TEXT while editing so the field can be empty mid-type — parsing on
                       every keystroke would turn a cleared box into "1" under the user's fingers. */}
-                <TextInput value={usersText}
+{/* ★★ − / + BESIDE THE BOX (2026-10-08, Kiko: on a Chinese Android TV box, Lite, clean install, Advanced mode, "the
+                    listener count stays locked" while every other field edits — and the same box works on his Moto G). The
+                    box asks for a NUMBER-PAD keyboard, which cheap TV-box keyboards often cannot give a remote. Two keys a
+                    remote, a mouse or a finger can press need no keyboard at all; the box stays for typing. */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <TouchableOpacity accessibilityLabel="One listener fewer"
+                    onPress={() => { const n = Math.max(1, maxUsers - 1); setMaxUsers(n); setUsersText(String(n)); }}
+                    style={[styles.card, { borderColor: C.border, paddingHorizontal: 16, paddingVertical: 8, marginBottom: 0 }]}>
+                    <Text style={{ color: C.gold, fontFamily: F, fontSize: 16 }}>−</Text>
+                  </TouchableOpacity>
+                                <TextInput value={usersText}
                   onChangeText={(v) => {
                     const digits = v.replace(/[^0-9]/g, '').slice(0, 3);
                     setUsersText(digits);
@@ -3284,7 +3296,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                     setMaxUsers(n); setUsersText(String(n));
                   }}
                   keyboardType="number-pad" placeholder="1" placeholderTextColor={C.goldDim}
-                  style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]} />
+                  style={[styles.input, { flex: 1, textAlign: 'center', color: C.amber, borderColor: C.border, fontFamily: F }]} />
+                  <TouchableOpacity accessibilityLabel="One listener more"
+                    onPress={() => { const n = Math.min(64, maxUsers + 1); setMaxUsers(n); setUsersText(String(n)); }}
+                    style={[styles.card, { borderColor: C.border, paddingHorizontal: 16, paddingVertical: 8, marginBottom: 0 }]}>
+                    <Text style={{ color: C.gold, fontFamily: F, fontSize: 16 }}>+</Text>
+                  </TouchableOpacity>
+                </View>
                 {/* ★★ WHAT IT COSTS, in the units that actually run out. The DSP is nearly free —
                     listeners share one FFT — and it is the UPLINK that decides how many a phone
                     can really serve. Same arithmetic as the browser's bwNote(). */}
