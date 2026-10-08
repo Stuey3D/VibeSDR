@@ -405,6 +405,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     chain idled, and the WEFAX socket got nothing for 8 s). Decoder socket alone on a shared dial with
 #     --idle-grace 0: lines keep coming, no idle and no park, presence unchanged, and it idles once the
 #     decoder stops. Same VIBESERVER_BIN rule.
+# ★★★ ONE CANNED VOCABULARY IN FIVE PLACES (2026-10-08, nine social phrases): server, app, web and both watches list
+#     the same ids, and a live shared dial carries every one and drops an unknown one. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── shared-dial chat phrases (end to end) ──\033[0m\n'
+node scripts/test-chat-phrases.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 printf '\n\033[1m── a decoder alone keeps the audio chain (end to end) ──\033[0m\n'
 node scripts/test-server-decoder-alone.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi

@@ -9023,6 +9023,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "sorry",           // Sorry, didn't realise!
             // ★ The other side of "sorry" (Stuart, 2026-10-05): somebody moved the dial off what you were hearing.
             "tune_back",       // Tuning back — I was listening to that
+            // ★★ THE SOCIAL ONES (Stuart, 2026-10-08): "make it a little more social without opening it up to full text chat". Still ids only — a fixed, friendly vocabulary nobody can be abused with; "Not my kind of music" is the diplomatic way to move the dial on.
+            "hello",           // Hello everyone!
+            "just_scanning",   // Just scanning to see what's about
+            "what_is_this",    // Anyone know what this is?
+            "sounds_awesome",  // This sounds awesome!
+            "nice_catch",      // Nice catch!
+            "not_my_music",    // Not my kind of music
+            "good_conditions", // Conditions are great today
+            "poor_conditions", // Conditions are poor today
+            "off_73",          // Off now — 73!
             /* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced
              *  RDS". A shared receiver is a room of people finding things, and until now they could agree who
              *  tunes but never say WHAT they found — the one thing worth saying on a radio.

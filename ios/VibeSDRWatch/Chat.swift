@@ -57,6 +57,16 @@ enum CannedDial {
     ("thanks",         "Thanks!"),
     ("sorry",          "Sorry, didn't realise!"),
     ("tune_back",      "Tuning back — I was listening to that"),
+    // ★★ THE SOCIAL ONES (Stuart, 2026-10-08): "make it a little more social without opening it up to full text chat". Still ids only — a fixed, friendly vocabulary nobody can be abused with; "Not my kind of music" is the diplomatic way to move the dial on.
+    ("hello", "Hello everyone!"),
+    ("just_scanning", "Just scanning"),
+    ("what_is_this", "Anyone know what this is?"),
+    ("sounds_awesome", "This sounds awesome!"),
+    ("nice_catch", "Nice catch!"),
+    ("not_my_music", "Not my kind of music"),
+    ("good_conditions", "Great conditions today"),
+    ("poor_conditions", "Poor conditions today"),
+    ("off_73", "Off now — 73!"),
   ]
   private static let map: [String: String] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0.text) })
   /// nil when this build cannot draw the id — the caller DROPS it rather than showing it raw.

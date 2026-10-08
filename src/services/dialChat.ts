@@ -45,6 +45,16 @@ export const DIAL_PHRASES: Phrase[] = [
   { id: 'sorry',          text: "Sorry, didn't realise!" },
   // ★ The other side of "sorry" (Stuart, 2026-10-05): somebody moved the shared dial off what you were hearing.
   { id: 'tune_back',      text: 'Tuning back — I was listening to that' },
+  // ★★ THE SOCIAL ONES (Stuart, 2026-10-08): "make it a little more social without opening it up to full text chat". Still ids only — a fixed, friendly vocabulary nobody can be abused with; "Not my kind of music" is the diplomatic way to move the dial on.
+  { id: 'hello', text: 'Hello everyone!' },
+  { id: 'just_scanning', text: "Just scanning to see what's about" },
+  { id: 'what_is_this', text: 'Anyone know what this is?' },
+  { id: 'sounds_awesome', text: 'This sounds awesome!' },
+  { id: 'nice_catch', text: 'Nice catch!' },
+  { id: 'not_my_music', text: 'Not my kind of music' },
+  { id: 'good_conditions', text: 'Conditions are great today' },
+  { id: 'poor_conditions', text: 'Conditions are poor today' },
+  { id: 'off_73', text: 'Off now — 73!' },
 ];
 
 const TEXT: Record<string, string> = Object.fromEntries(DIAL_PHRASES.map(p => [p.id, p.text]));

@@ -1433,6 +1433,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 @media (max-width: 520px) {
   #chatPhrases .btn { flex: 1 1 100%; }
+  /* ★ …but a SHORT phrase takes half (2026-10-08): with the nine social phrases, 24 full-width rows of "Thanks!" and
+     "Nice catch!" pushed the log off a phone screen. Sentences still get the whole row. */
+  #chatPhrases .btn.chatShort { flex: 1 1 calc(50% - 6px); }
   #chatLog { max-height: 30vh; }
 }
 /* ★★★ CHECK OUT [BOOKMARK] [MANUAL] (Stuart, 2026-10-01) — one row first in SAY; the draft and the manual
