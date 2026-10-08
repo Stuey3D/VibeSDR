@@ -2279,15 +2279,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   const psStab = useRef(new PsStabiliser());
   const psTickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /* ★★ US CALL LETTERS AS THE STATION (Stuart, 2026-10-08: US stations put the song through the station name, "its a
-   *  mess"). The server sends `call` (the letters the PI encodes) on a US receiver only. A ROTATING or absent name is
-   *  replaced by them — the marquee is song text, and the call letters are what the station is. A STEADY name is left
+   *  mess"). The server sends `call` (the letters the PI encodes) on a US receiver only. An absent name is replaced by
+   *  them; a ROTATING one is led by them (its song text stays — RC31). A STEADY name is left
    *  exactly as sent: the logo lookup and bookmark matching read this name, and "ROCK 102 · WAQY" would stop them
    *  matching (the call letters are always in Advanced RDS). Applied on both paths the name takes (frame, held tick). */
   const liveCallRef = useRef<string | undefined>(undefined);
   const withCall = (name: string | undefined): string | undefined => {
     const call = liveCallRef.current;
-    if (!call) return name;
-    return !name || psStab.current.rotating ? call : name;
+    if (!call || (name && !psStab.current.rotating)) return name;
+    if (!name) return call;
+    // ★ A rotation is KEPT (Stuart, 2026-10-08: "it should say Lazer 99.3 Playing Nirvana - In Bloom") — the call
+    //   letters lead it unless it already carries them ("WLZX-FM").
+    return name.includes(call) ? name : `${call} ${name}`;
   };
   const psStationKey = (pi: string | undefined) =>
     pi ? `pi:${pi}` : `f:${Math.round((tuneRef.current.frequency || 0) / 100000)}`;

@@ -1035,6 +1035,33 @@ void RdsDecoder::reset() {
     eccCand_ = 0; eccSeen_ = false;
     for (int i = 0; i < 4; ++i)  { psCand_[i] = 0; psSeen_[i] = false; }
     for (int i = 0; i < 16; ++i) { rtCand_[i] = 0; rtSeen_[i] = false; }
+    std::memset(psPend_, 0, sizeof psPend_); psStable_ = 0; psCommitted_ = false; psPassNext_ = -1; psPassAllNew_ = false;
+}
+
+/* One confirmed PS segment (0A/0B block D, or 15B). See psPend_ in vibedsp.h: a segment that CHANGES starts a new
+ * frame; the frame is committed to ps_ once all four segments have arrived unchanged since — a clean pass, whatever
+ * order the station sends them in. A word-by-word marquee therefore shows each WORD, never "INRVANA". */
+void RdsDecoder::psSegment(int addr, uint16_t v, uint16_t pi) {
+    const char hi = (char)((v >> 8) & 0xFF), lo = (char)(v & 0xFF);
+    const bool changed = psPend_[addr * 2] != hi || psPend_[addr * 2 + 1] != lo;
+    psPend_[addr * 2] = hi; psPend_[addr * 2 + 1] = lo;
+    psStable_ = changed ? (uint8_t)(1u << addr) : (uint8_t)(psStable_ | (1u << addr));
+    // ★ A FAST SCROLLER rewrites every segment on every pass, so it is never "unchanged for a pass" and would freeze.
+    //   An IN-ORDER pass 0,1,2,3 in which EVERY segment changed is a whole new frame — commit it too. A pass where only
+    //   some changed is exactly the half-old, half-new mixture this exists to stop; it waits for a clean pass.
+    if (addr == 0)                    { psPassNext_ = 1; psPassAllNew_ = changed; }
+    else if (addr == psPassNext_)     { psPassNext_ = (int8_t)(addr + 1); psPassAllNew_ = psPassAllNew_ && changed; }
+    else                              { psPassNext_ = -1; }
+    const bool wholeNewPass = addr == 3 && psPassNext_ == 4 && psPassAllNew_;
+    if (psStable_ == 0xF || wholeNewPass) {
+        std::memcpy(ps_, psPend_, 8);
+        psCommitted_ = true;
+    } else if (!psCommitted_) {
+        ps_[addr * 2] = hi; ps_[addr * 2 + 1] = lo;   // first acquisition: the name fills in as heard
+    } else {
+        return;                                       // a frame in transit: ps_ keeps the last whole one
+    }
+    if (cb_.ps) { psU8_ = rdsToUtf8(ps_, 8); cb_.ps(cb_.ctx, pi, psU8_.c_str()); }
 }
 
 void RdsDecoder::pushBit(int bit) {
@@ -1270,9 +1297,7 @@ void RdsDecoder::parseGroup() {
         }
         if (blkOk_[3]) {
             if (trusted || (psSeen_[addr] && psCand_[addr] == blk_[3])) {
-                ps_[addr * 2]     = (char)((blk_[3] >> 8) & 0xFF);
-                ps_[addr * 2 + 1] = (char)(blk_[3] & 0xFF);
-                if (cb_.ps) { psU8_ = rdsToUtf8(ps_, 8); cb_.ps(cb_.ctx, pi, psU8_.c_str()); }
+                psSegment(addr, blk_[3], pi);
             } else {
                 psCand_[addr] = blk_[3]; psSeen_[addr] = true;
             }
@@ -1347,11 +1372,7 @@ void RdsDecoder::parseGroup() {
         // it through the same path means a station that leans on 15B is not slower for us.
         const int addr = blk_[1] & 0x3;
         acceptBlockBFlags(addr);
-        if (blkOk_[3]) {
-            ps_[addr * 2]     = (char)((blk_[3] >> 8) & 0xFF);
-            ps_[addr * 2 + 1] = (char)(blk_[3] & 0xFF);
-            if (cb_.ps) { psU8_ = rdsToUtf8(ps_, 8); cb_.ps(cb_.ctx, pi, psU8_.c_str()); }
-        }
+        if (blkOk_[3]) psSegment(addr, blk_[3], pi);
     } else if (gtype == 15 && ver == 0) {              // 15A — Long PS (32 UTF-8 bytes)
         const int seg = blk_[1] & 0x7;
         if (blkOk_[2] && blkOk_[3]) {

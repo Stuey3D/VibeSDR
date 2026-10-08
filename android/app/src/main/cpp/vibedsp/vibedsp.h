@@ -1510,6 +1510,19 @@ private:
     uint16_t blk_[4] = {0, 0, 0, 0};
     bool blkOk_[4] = {false, false, false, false};
     char ps_[9] = {0};
+    /* ★★★ A PS IS COMMITTED WHOLE (2026-10-08, Stuart: a US station's display read "LAZER WLZX-FM NIR FM NNIRV M
+     *  NIRVANA IIN IN BBLOO FMM …"). PS arrives two characters per group, and stations that flip it word by word
+     *  ("LAZER", "NIRVANA", "IN", "BLOOM") leave the 8-character buffer HALF OLD, HALF NEW for most of a cycle — and the
+     *  server samples the buffer once a second, so those mixtures reached every client and every bookmark. The
+     *  segments go into psPend_; ps_ takes it only once all four have arrived UNCHANGED since the last change (one
+     *  clean pass). Before the first commit on a station, ps_ still fills segment by segment (the name appears
+     *  as it is heard, as before). */
+    char psPend_[8] = {0};
+    uint8_t psStable_ = 0;      // segments received unchanged since psPend_ last changed
+    bool psCommitted_ = false;  // a whole PS has been committed on this station
+    int8_t psPassNext_ = -1;    // the next segment of an in-order pass 0,1,2,3 (-1 = none running)
+    bool psPassAllNew_ = false; // …and every segment so far in it CHANGED (a whole new frame, e.g. a fast scroller)
+    void psSegment(int addr, uint16_t v, uint16_t pi);
     char rt_[65] = {0};
     uint8_t ecc_ = 0;                 // last decoded Extended Country Code (0 = none)
     int pty_ = -1, tp_ = -1, ta_ = -1, ms_ = -1;

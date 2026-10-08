@@ -3270,11 +3270,13 @@ let rdsName = '';   // the name to DISPLAY — the PS after psStab (see below)
 const psStab = new PsStabiliser();
 let rdsPsRaw = '';
 /* ★★ US CALL LETTERS (RC30) — the server sends them (from the PI, NRSC-4-B) only when it knows it is in the US.
- *  A ROTATING or absent PS shows the call letters instead of a marquee; a STEADY name is left alone — the logo and
+ *  An absent PS shows the call letters; a ROTATING one is led by them (its words kept); a STEADY name is left alone — the logo and
  *  bookmark lookups match on it. Same rule as the app's withCall (SDRScreen). ADV RDS shows them in its own row. */
 let rdsCall = '';
 function withCall(name: string): string {
-  return rdsCall && (!name || psStab.rotating) ? rdsCall : name;
+  if (!rdsCall || (name && !psStab.rotating)) return name;
+  if (!name) return rdsCall;
+  return name.includes(rdsCall) ? name : `${rdsCall} ${name}`;   // a rotation is kept, led by the call letters (RC31)
 }
 let psTickTimer: ReturnType<typeof setTimeout> | null = null;
 /** Forget the stabiliser's station — live RDS has ended (retune, mode change). */
