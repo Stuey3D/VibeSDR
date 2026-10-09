@@ -143,7 +143,7 @@ import { PERF_OVERLAY_THIS_BUILD } from '../constants/perfOverlay';
 import ChatDrawer,
   { type ChatMessage, type ShareItem, useHiddenChatUsers } from '../components/ChatDrawer';
 import { openWebPage } from '../utils/openWebPage';
-import { padPhrases, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
+import { padPhrases, bannerLine, BannerGate, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
          type DialState } from '../services/dialChat';
 import { shareFromBookmark, shareSummary, parseShared, sharedLineText, shareTuneStep,
          type ShareOut, type SharedStation } from '../services/chatShare';
@@ -3454,6 +3454,20 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [chatOpen,     setChatOpen]     = useState(false);
   const [chatUnread,   setChatUnread]   = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  /* ★★ A CHAT LINE ON THE SHARED-TUNER BANNER (Stuart, 2026-10-09). Somebody else's line, while the drawer is shut,
+   *  — a TUNING line only (isTuningPhrase) — takes over the banner for BANNER_SAID_MS: three flashes (the text alternating with the usual banner), then held.
+   *  The CHAT key keeps its unread mark until the drawer is opened. */
+  const BANNER_SAID_MS = 8000;
+  const bannerGate = useRef(new BannerGate());   // ★ no strobing — see BannerGate
+  const [bannerSaid, setBannerSaid] = useState<{ text: string; at: number } | null>(null);
+  const [bannerSaidShown, setBannerSaidShown] = useState('');
+  useEffect(() => {
+    if (!bannerSaid) { setBannerSaidShown(''); return; }
+    const timers = [0, 450, 900, 1350, 1800].map((ms, i) =>
+      setTimeout(() => setBannerSaidShown(i % 2 === 0 ? bannerSaid.text : ''), ms));
+    timers.push(setTimeout(() => setBannerSaid(null), BANNER_SAID_MS));
+    return () => timers.forEach(clearTimeout);
+  }, [bannerSaid]);
   /** ★ When the open "Anyone know what this is?" stops offering its answer row (0 = none open). See onSaid. */
   const [questionOpenUntil, setQuestionOpenUntil] = useState(0);
   useEffect(() => {
@@ -5753,7 +5767,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (ds && !share) watchProvider.sendDial({ ...ds, said: { from, id } });
         // ★ Unread only for OTHER people, and only while the drawer is shut — your own phrase
         //   echoing back as an unread badge would be absurd.
-        if (!mine && !chatOpenRef.current) setChatUnread(true);
+        if (!mine && !chatOpenRef.current) {
+          setChatUnread(true);
+          const b = bannerLine(from, id);
+          if (b && bannerGate.current.allow(from, id, Date.now())) setBannerSaid({ text: b, at: Date.now() });
+        }
       },
       onAdminState: (st) => {
         if (destroyed.current) return;
@@ -9539,7 +9557,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     tuning: (dialState.tuner && !dialState.mine)
       ? (dialState.decoding ? `User ${dialState.tuner} decoding` : `User ${dialState.tuner} tuning`)
       : '',
-  } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding]);
+    ...(bannerSaidShown ? { said: bannerSaidShown } : {}),
+  } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
   const onModeOpen  = useCallback(() => setModeSelOpen(true), []);
   const onAudioOpen = useCallback(() => setAudioSheetOpen(true), []);
@@ -10027,10 +10046,11 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  ★★ NOT `r.locked` — that is the owner having pinned the tuning CENTRE, an entirely
              *     different fact that this row already describes in its detail line. See the note
              *     on `pinLocked` in vibeserverRadios.ts.
-             *  ★ Locked for the admin too: the admin password is CONTROL and the PIN is ACCESS, and
-             *    they are independent on purpose — the server would refuse the socket, so offering
-             *    the row would only offer a refusal. The box below takes their PIN like anyone's. */
-            const gated = r.pinLocked === true && !unlockedRadios[r.id];
+             *  ★★★ NOT FOR THE ADMIN (Stuart, 2026-10-09: "admin mode is King — when in admin mode everything
+             *      unlocks"). The server already lets the admin password into every radio, PIN or not
+             *      (vsAuthOk: "Admin is simply above both"), and both sockets carry it (adminAuthWire) —
+             *      this card was the last thing still saying no. */
+            const gated = r.pinLocked === true && !unlockedRadios[r.id] && !adminAuthQ;
             /* ★★★ ANOTHER APP ON THAT SERVER HAS IT — the door's list says so even when the radio's own
              *  process cannot answer (an app that grabbed the dongle at boot), and the radio says so
              *  when it lent the device out and could not take it back. Only when the server KNOWS.
@@ -10136,7 +10156,7 @@ export default function SDRScreen({ route, navigation }: Props) {
               they are different doors — the PIN is ACCESS, the password is CONTROL.
               ★ The same controls as the admin row beneath it, deliberately: one layout, one set
                 of styles, and nothing new to learn at the bottom of this screen. */}
-          {door.radios.some((r) => r.pinLocked === true && !unlockedRadios[r.id]) && (
+          {!adminAuthQ && door.radios.some((r) => r.pinLocked === true && !unlockedRadios[r.id]) && (
             <View style={styles.radioPickAdmin}>
               <TextInput
                 style={styles.radioPickAdminInput}

@@ -572,7 +572,12 @@ export interface ControlsBarProps {
   sharedDial?: { listeners: number; max: number; alone: boolean; tuning: string;
                  /** ★ FM-DX: one tuner fanned out, no session cap — say "You+N" rather than a
                   *  total over a denominator it does not have (Stuart's wording, 2026-09-22). */
-                 youPlus?: boolean } | null;
+                 youPlus?: boolean;
+                 /** ★★ A CHAT LINE JUST ARRIVED (Stuart, 2026-10-09: "I was asking if I could tune and getting no
+                  *  answer — not sure if our chat notification is too subtle"). Set by SDRScreen for ~8 s, flashed on
+                  *  and off at first; while set the banner SAYS it ("User 2: Can I tune?") — the one line everyone
+                  *  on a shared dial is already looking at. */
+                 said?: string } | null;
   /** ★ STORMS — sferics about, decided by the SERVER on the wide FFT (rate per minute, seconds
    *  since the last flash). Answers "what are those lines across the waterfall?" before it is
    *  asked; the number rides in the accessibility label, as the web's tooltip. */
@@ -1082,6 +1087,7 @@ type SharedTuner = NonNullable<ControlsBarProps['sharedDial']>;
 
 /** The SHARED TUNER banner's words — one copy for the bar's banner and the LED / analogue one (§4.1). */
 function sharedBannerText(st: SharedTuner, tight: boolean): string {
+  if (st.said) return st.said;
   return st.alone ? 'SHARED TUNER · FREE TO TUNE'
     : st.youPlus
       /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out
@@ -1092,6 +1098,7 @@ function sharedBannerText(st: SharedTuner, tight: boolean): string {
       : `SHARED TUNER · ASK TO TUNE · ${st.listeners}${st.max > 1 ? `/${st.max}` : ''} 👤`;
 }
 function sharedBannerLabel(st: SharedTuner): string {
+  if (st.said) return `Chat: ${st.said}`;
   return st.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
     : st.youPlus
       ? `Shared tuner. You and ${Math.max(1, st.listeners - 1)} other${st.listeners - 1 === 1 ? '' : 's'} listening — ask before tuning.`

@@ -25,7 +25,7 @@ import {
   shareSummary, parseShared, sharedLineText, shareTuneStep, shareFromManual, manualFieldFrom,
   MANUAL_SHARE_MODES, SHARE_MODE_LABEL, type ShareOut, type SharedStation,
 } from '../../../src/services/chatShare';
-import { answerBand, isAnswer, isQuestion, phraseDecoder, phraseWiki, ANSWER_WINDOW_MS, DIAL_PHRASES } from '../../../src/services/dialChat';
+import { answerBand, isAnswer, isQuestion, bannerLine, BannerGate, phraseDecoder, phraseWiki, ANSWER_WINDOW_MS, DIAL_PHRASES } from '../../../src/services/dialChat';
 
 /** The vocabulary, in the order a conversation actually runs: ask, act, answer, thank.
  *  ★★ TAKEN FROM JR, NOT INVENTED HERE — `Canned.fmdx` in Chat.swift, plus the long-decode lines.
@@ -138,6 +138,8 @@ type Deps = {
   freqHz?: () => number;
   /** Raise the unread count on whatever button opens this. */
   onUnread: (n: number) => void;
+  /** ★★ Somebody else's TUNING line arrived while the chat is shut — the host shows it on the shared-tuner banner. */
+  onTuningLine?: (text: string) => void;
   /** ★ Open the decoder an answer names — the decoders panel's own button. Only offered when canDecode says so. */
   openDecoder?: (d: string) => void;
   /** ★ Does this receiver run that decoder? DECODE is drawn only when it does (never a dead key). */
@@ -331,6 +333,7 @@ export function chatOpened(open: boolean) {
 /* ★★ THE ANSWER ROW (Stuart, 2026-10-09). "Anyone know what this is?" from somebody ELSE opens it for ANSWER_WINDOW_MS;
  *  the first answer closes it; only the answers for the band the dial is on are shown (dialChat answerBand — the app
  *  draws the same row from the same rule). */
+const bannerGate = new BannerGate();   // ★ the shared-tuner banner cannot be spammed — see dialChat BannerGate
 let questionOpenUntil = 0;
 let questionTimer: ReturnType<typeof setTimeout> | null = null;
 const BAND_OF: Record<string, string | undefined> = Object.fromEntries(DIAL_PHRASES.map((p) => [p.id, p.band]));
@@ -434,7 +437,11 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
     while (log.children.length > 40) log.removeChild(log.firstChild!);
     if (atBottom) log.scrollTop = log.scrollHeight;
   }
-  if (!isOpen && !(dial && from === dial.you)) { unread++; deps?.onUnread(unread); syncTitle(); }
+  if (!isOpen && !(dial && from === dial.you)) {
+    unread++; deps?.onUnread(unread); syncTitle();
+    const b = bannerLine(from, id);
+    if (b && bannerGate.allow(from, id, Date.now())) deps?.onTuningLine?.(b);
+  }
 }
 
 /** TUNE on a shared line: go, ask first, or say why not (chatShare.shareTuneStep — the same rule as the app). */

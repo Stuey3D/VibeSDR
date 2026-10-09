@@ -783,7 +783,10 @@ link.setAutoContrast(wfAutoContrast)
               //     who knows the PIN would conclude the radio had been removed, and the owner
               //     would be debugging a server that is working perfectly. It is shown, it says
               //     what it wants, and the tap asks for it instead of connecting.
-              let needsRadioPin = r.pinLocked && !link.unlockedRadios.contains(r.id)
+              // ★★★ …EXCEPT TO THE ADMIN (Stuart, 2026-10-09: "admin mode is King — when in admin mode everything
+              //     unlocks"). The server lets the admin into every radio, PIN or not (vsAuthOk), and the admin
+              //     ticket rides on every URL this connection makes (UberClient.adminSuffix).
+              let needsRadioPin = r.pinLocked && !link.unlockedRadios.contains(r.id) && !link.adminArmed
               let blocked = (busy && !link.adminArmed) || r.unsupported
               Button {
                 // ★★ TRY THE CREDENTIAL WE ALREADY HOLD FIRST, silently. A MASTER PIN — the front

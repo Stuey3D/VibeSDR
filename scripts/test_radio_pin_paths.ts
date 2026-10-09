@@ -24,5 +24,16 @@ ok(/var pin: Bool\?/.test(dir), 'Buddy reads it — optional, so an older phone 
 const row = read('ios/VibeSDRWatch/InstancePickerView.swift');
 ok(/if r\.pin == true \{[\s\S]{0,120}lock\.fill/.test(row) && /PIN required/.test(row), 'Buddy shows the lock and "PIN required"');
 
+// ★★★ …AND ADMIN MODE OPENS EVERYTHING (Stuart, 2026-10-09: "admin mode is King"). The server already did (vsAuthOk:
+//     admin above both PINs); the three pickers still drew a PIN radio locked for the admin.
+ok(/const gated = r\.pinLocked === true && !unlockedRadios\[r\.id\] && !adminAuthQ;/.test(sdr), 'app: a PIN radio is open to the admin');
+ok(/\{!adminAuthQ && door\.radios\.some\(\(r\) => r\.pinLocked === true/.test(sdr), 'app: no PIN box for the admin');
+const web = read('web/client/src/main.ts');
+ok(/return radioPinLocked\(r\) && !unlockedRadios\.has\(radioKey\(r\)\) && !inAdminMode\(\);/.test(web), 'web: a PIN radio is open in admin mode');
+const jr = read('spike/WristSDR/WristSDR/ContentView.swift');
+ok(/let needsRadioPin = r\.pinLocked && !link\.unlockedRadios\.contains\(r\.id\) && !link\.adminArmed/.test(jr), 'Jr: a PIN radio is open to the admin');
+const shim = read('android/app/src/main/cpp/local_sdr_shim.cpp');
+ok(/bool vsAuthOk[\s\S]{0,2500}if \(adminOkFor\(reqLine, sock\)\) return true;/.test(shim), 'server: the socket gate lets the admin in before any PIN');
+
 console.log(`test_radio_pin_paths: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

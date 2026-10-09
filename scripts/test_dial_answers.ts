@@ -4,7 +4,7 @@
 //   2. every link is a Signal Identification Wiki page; every decoder is one this app runs;
 //   3. both watches mark the same answers with the same bands as the app.
 import fs from 'node:fs';
-import { DIAL_PHRASES, padPhrases, isQuestion, isAnswer, phraseWiki, phraseDecoder, answerBand, SIGID_HOME } from '../src/services/dialChat.ts';
+import { DIAL_PHRASES, padPhrases, isQuestion, isAnswer, phraseWiki, phraseDecoder, answerBand, SIGID_HOME, bannerLine, isTuningPhrase, BannerGate } from '../src/services/dialChat.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -40,6 +40,23 @@ for (const f of ['ios/VibeSDRWatch/Chat.swift', 'spike/WristSDR/WristSDR/Chat.sw
   const table = Object.fromEntries([...(m?.[1] ?? '').matchAll(/"([a-z0-9_]+)": "(hf|vhf|)"/g)].map((x) => [x[1], x[2]]));
   const want = Object.fromEntries(answers.map((p) => [p.id, p.band ?? '']));
   ok(JSON.stringify(table) === JSON.stringify(want), `${f.split('/')[0] === 'ios' ? 'Buddy' : 'Jr'} marks the same answers with the same bands`);
+}
+
+// ── 4. the shared-tuner banner (Stuart, 2026-10-09) ──
+const longest = DIAL_PHRASES.filter((p) => isTuningPhrase(p.id)).map((p) => bannerLine(9, p.id)!).sort((a, b) => b.length - a.length)[0];
+ok(longest.length <= 28, `every banner line fits — longest "${longest}" (${longest.length})`);
+ok(bannerLine(2, 'ask_tune') === 'U2: Can I tune?', 'the banner names the asker: "U2: Can I tune?"');
+ok(bannerLine(2, 'is_wefax') === null && bannerLine(2, 'hello') === null && bannerLine(2, 'sounds_awesome') === null,
+   'answers, greetings and "This sounds" never take the banner');
+{
+  const g = new BannerGate();
+  ok(g.allow(2, 'ask_tune', 0), 'a first tuning line takes the banner');
+  ok(!g.allow(3, 'ask_tune', 5_000), 'somebody else 5 s later does not (10 s between any two)');
+  ok(g.allow(3, 'ask_tune', 11_000), '…but does after 10 s');
+  ok(!g.allow(2, 'yes_hold', 21_000), 'the same person within 30 s does not');
+  ok(g.allow(2, 'yes_hold', 31_000), '…but does after 30 s');
+  ok(!g.allow(2, 'yes_hold', 62_000), 'the same person repeating the same line within 2 min does not');
+  ok(!g.allow(4, 'hello', 100_000), 'a non-tuning phrase never does');
 }
 
 console.log(`test_dial_answers: ${pass} passed, ${fail} failed`);

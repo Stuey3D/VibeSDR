@@ -236,9 +236,13 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
       anim.start();
       return () => anim.stop();
     }
+    /* ★★ AT READING SPEED, NOT STRETCHED TO THE NOTICE'S LIFE (Stuart, 2026-10-09: "the SDRplay AGC message got
+     *  slowed down big time"). This filled the WHOLE time on screen — fine for a 7 s notice, but the AGC notice's
+     *  time became a 75 s ceiling (2026-10-06) and its one pass crawled across for 72 s. Now the held notifs' speed
+     *  (16 ms a pixel); only a short notice that must finish in its time goes faster. */
     Animated.timing(slide, {
       toValue: -dist,
-      duration: Math.max(1500, (shown.ms ?? NOTIF_MS) - 2500),
+      duration: Math.max(1500, Math.min(dist * 16, (shown.ms ?? NOTIF_MS) - 2500)),
       delay: 900,
       easing: Easing.linear,
       useNativeDriver: true,

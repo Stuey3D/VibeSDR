@@ -729,6 +729,20 @@ async function loadAudioPolicy(httpBase: string) {
   } catch { /* leave the safe defaults */ }
 }
 
+/* ★★ A TUNING LINE ON THE SHARED-TUNER BANNER (Stuart, 2026-10-09: "I was asking if I could tune and getting no
+ *  answer — not sure if our chat notification is too subtle"). Somebody else's tuning line (dialChat isTuningPhrase),
+ *  while the chat is shut, takes over the banner for 8 s: three flashes, then held. The app does the same. */
+let bannerSaidText = '';
+let bannerSaidTimers: ReturnType<typeof setTimeout>[] = [];
+function flashSharedBanner(text: string) {
+  bannerSaidTimers.forEach(clearTimeout);
+  bannerSaidTimers = [0, 450, 900, 1350, 1800].map((ms, i) => setTimeout(() => {
+    bannerSaidText = i % 2 === 0 ? text : '';
+    updateSharedBanner();
+  }, ms));
+  bannerSaidTimers.push(setTimeout(() => { bannerSaidText = ''; updateSharedBanner(); }, 8000));
+}
+
 /** ★★ THE SHARED-TUNER BANNER SAYS WHAT TO DO NOW (noobish via Stuart, 2026-09-19). Alone: free to tune. With
  *  company: ask — and how many are here, where the question is asked, instead of in the corner badge.
  *  listenerCount includes you. */
@@ -738,6 +752,8 @@ function updateSharedBanner() {
   ms.hidden = !srvSharedDial;
   syncMediaSkip();   // ★ the lock-screen ⏮⏭ follow the same count the banner does
   if (!srvSharedDial) return;
+  // ★★ A tuning line just arrived — the banner says it (flashSharedBanner; the app's SDRScreen bannerSaid).
+  if (bannerSaidText) { ms.textContent = bannerSaidText; ms.title = 'Chat: ' + bannerSaidText; return; }
   // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
   if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = 'SHARED TUNER · ASK BEFORE TUNING'; return; }
   const alone = listenerCount <= 1;
@@ -5177,7 +5193,9 @@ function radioPinLocked(r: any): boolean { return r?.pinLocked === true; }
 
 /** Locked, and this visit has not opened it. */
 function radioGated(r: any): boolean {
-  return radioPinLocked(r) && !unlockedRadios.has(radioKey(r));
+  // ★★★ Admin mode opens everything (Stuart, 2026-10-09: "admin mode is King") — the server's vsAuthOk lets the admin
+  //     into every radio, PIN or not, and the radio page carries the admin ticket. A PIN radio is gated for everyone else.
+  return radioPinLocked(r) && !unlockedRadios.has(radioKey(r)) && !inAdminMode();
 }
 
 /** ★★ THE PIN TRAVELS TO THE RECEIVER PAGE IN sessionStorage, NEVER IN THE LINK. A card is an
@@ -5292,9 +5310,7 @@ function radioCardState(r: any, st: any): { state: string; blocked: boolean } {
    *  cannot walk into it, and "FREE" over a card that refuses them is the worst answer available.
    *  ★★ NOT down, though — a locked radio that is not answering is DOWN first. Saying it needs a
    *     PIN would send somebody hunting for a code that would not have helped.
-   *  ★ Blocked for the admin too. The admin password is CONTROL, the PIN is ACCESS, and they are
-   *    independent on purpose (see vsAuthOk) — the server would refuse the socket, so offering the
-   *    link would only be a link to a refusal. The box below takes their PIN like anyone else's. */
+   *  ★ NOT for the admin — see radioGated: admin mode opens every radio (vsAuthOk puts the admin above both PINs). */
   if (!down && radioGated(r)) return { state: 'PIN REQUIRED', blocked: true };
   const full = !down && max > 0 && listeners >= max && !claimable;
   const admin = inAdminMode();
@@ -5454,6 +5470,9 @@ function drawDoorPin(radios: any[]): void {
     box.id = 'splashRadioPin';
     box.style.cssText = 'margin:10px auto 0;max-width:420px;padding:8px 12px;'
       + 'border:1px solid rgba(255,176,0,.35);border-radius:8px;'
+      /* ★ A BACKING, like the radio cards (Stuart's screenshot, 2026-10-09): with none, the door spectrogram's
+       *   frequency scale ("6.800 MHz") showed straight through "Some receivers here are private". */
+      + 'background:rgba(12,9,2,.92);'
       + 'font:12px/1.5 ui-monospace,monospace;text-align:center';
     /* ★★ EVERY DIMENSION IS STATED HERE, INLINE. Left to the page's own `#splash input` rule this
      *    came out as a box the height of a card with the button underneath it — a PIN entry that
@@ -9793,6 +9812,7 @@ function initDecoders(host: string, auth: AuthState) {
   $('chatClose').onclick = () => { closePanels(); chatOpened(false); };
   initChat({
     say: (id) => spec?.send({ type: 'say', id }),
+    onTuningLine: (text) => flashSharedBanner(text),
     /* ★ DECODE on an answer: the decoders panel's own button for it, so it opens exactly as a press there does —
      *  and only when that button is there to press (the owner's block list, this receiver's decoders). */
     canDecode: (d) => {

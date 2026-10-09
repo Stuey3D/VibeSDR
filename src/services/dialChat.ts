@@ -121,6 +121,46 @@ export function padPhrases(questionOpen: boolean, hz: number): Phrase[] {
   const band = answerBand(hz);
   return DIAL_PHRASES.filter(p => p.group !== 'answer' || (questionOpen && (!p.band || p.band === band)));
 }
+/** ★★ THE TUNING CONVERSATION — the lines that go on the SHARED TUNER banner when they arrive (Stuart, 2026-10-09:
+ *  "keep it to asking for tuning messages not the full signal ID messages"). Who may move the dial, and when; not
+ *  the social lines, the "This sounds …" row, the answers or a shared station. */
+/* ★ Each with its BANNER wording — short enough for the narrowest banner (Stuart chose this over scrolling, 2026-10-09:
+ *  the longest full line, "I'm running a decoder — can you wait please?", is 44 characters and the banner ~34). The
+ *  chat keeps the full sentence. "U2: " + these stays within 28. */
+const TUNING_BANNER: Record<string, string> = {
+  ask_tune: 'Can I tune?', anyone_using: 'Anyone using this?', tuning_now: 'Tuning now',
+  go_ahead: 'Go ahead, tune', please_hold: 'Please hold — DX', yes_go_ahead: 'On it — go ahead',
+  yes_hold: 'On it — please hold', mid_decode: 'Decoding — please wait', decoding_10min: 'Decoding ~10 min',
+  decode_done: 'Decode done — all yours', wont_tune: "OK, won't tune yet", all_yours: 'Done — all yours',
+  tune_back: 'Tuning back',
+};
+export const isTuningPhrase = (id: string) => id in TUNING_BANNER;
+/** The banner's line for somebody's tuning phrase ("U2: Can I tune?"), or null for any other phrase. */
+export function bannerLine(from: number, id: string): string | null {
+  const t = TUNING_BANNER[id];
+  return t ? `U${from}: ${t}` : null;
+}
+
+/** ★★ THE BANNER CANNOT BE SPAMMED (Stuart, 2026-10-09: "the issue becomes if users are spamming it"). The server
+ *  already allows one phrase per listener every 3 s; on top, a line takes the banner only if nobody's has in the last
+ *  ANY_GAP_MS, this person's has not in PERSON_GAP_MS, and it is not the same phrase they last had there. Anything held
+ *  back still arrives in the chat and its unread count — it just cannot strobe the display. */
+export class BannerGate {
+  static ANY_GAP_MS = 10_000;
+  static PERSON_GAP_MS = 30_000;
+  private lastAny = -Infinity;
+  private byPerson = new Map<number, { at: number; id: string }>();
+  allow(from: number, id: string, now: number): boolean {
+    if (!isTuningPhrase(id)) return false;
+    if (now - this.lastAny < BannerGate.ANY_GAP_MS) return false;
+    const p = this.byPerson.get(from);
+    if (p && (now - p.at < BannerGate.PERSON_GAP_MS || p.id === id && now - p.at < 120_000)) return false;
+    this.lastAny = now;
+    this.byPerson.set(from, { at: now, id });
+    return true;
+  }
+}
+
 /** True for the question that opens the answer row, and for any answer (which closes it). */
 export const isQuestion = (id: string) => id === 'what_is_this';
 export const isAnswer = (id: string) => BY_ID[id]?.group === 'answer';
