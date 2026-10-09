@@ -6814,11 +6814,30 @@ function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
 }
 document.addEventListener('error', (ev) => {
   const t = ev.target;
-  if (!(t instanceof HTMLImageElement) || !t.classList.contains('dabLogo') || t.dataset.k == null) return;
+  if (!(t instanceof HTMLImageElement)) return;
+  forgetDeadLogo(t.src);
+  if (!t.classList.contains('dabLogo') || t.dataset.k == null) return;
   const k = t.dataset.k;
   t.remove();
   (window as any).dabLogoFailed?.(k);
 }, true);
+/* ★★★ A DEAD LOGO IS FORGOTTEN EVERYWHERE, ONCE (Stuart, 2026-10-10: Safari's console "as long as my arm" — the same
+ *  two logos, bfbs.com and aiircdn.com, 404ing every few seconds on BBC National DAB). Only the station list's <img>
+ *  told anyone it had failed; the signal pane's header (rebuilt with every radio-text change) and the VTS read the same
+ *  URL from dabLogos and asked again, for ever. Now ANY image on the page that fails — from a third-party host —
+ *  clears that URL out of every map that holds it (and the saved cache), so no reader can request it again this
+ *  session. Our own /vibeserver/ paths are exempt: a slide or SPI logo can be briefly missing and then arrive. */
+function forgetDeadLogo(src: string) {
+  if (!src) return;
+  let u: URL;
+  try { u = new URL(src, location.href); } catch { return; }
+  if (u.origin === location.origin || !/^https?:$/.test(u.protocol)) return;
+  const dead = u.href;
+  const same = (v: string | null | undefined) => { if (!v) return false; try { return new URL(v, location.href).href === dead; } catch { return false; } };
+  for (const [k, v] of dabLogos) if (same(v)) (window as any).dabLogoFailed?.(k);
+  for (const [k, v] of bmLogos) if (same(v)) bmLogos.set(k, '');
+  if (same(rdsLogoUrl)) rdsLogoUrl = '';
+}
 
 /** ★★★ THE PICTURE THE STATION ITSELF TRANSMITS, AS THE LAST RESORT.
  *
@@ -7576,6 +7595,9 @@ function buildControls() {
   // at boot meant a freshly learned bookmark never appeared until you reloaded — it
   // looked like the learning was broken when it had actually worked. The native app has
   // polled for this all along (SDRScreen.tsx); the web client never did.
+  // ★★ Every 2 MINUTES, not 30 s (Stuart, 2026-10-10: "every 30 seconds is a bit much" — the XCover, 1,623 bookmarks,
+  //    307 KB a poll). And an unchanged list is now a 304 (ETag, see loadServerBookmarks). The cost: a station LEARNED
+  //    from RDS can take up to two minutes to appear; anything saved or imported here shows at once.
   setInterval(() => {
     const before = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
     void loadServerBookmarks(currentHost, authState?.query ?? '').then(() => {
@@ -7584,7 +7606,7 @@ function buildControls() {
       // reset the list's scroll position under the user's finger.
       if (after !== before) renderBookmarks();
     });
-  }, 30_000);
+  }, 120_000);
   initWaterfallInput();
   initKeyboard();
 }

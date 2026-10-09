@@ -8741,7 +8741,9 @@ export default function SDRScreen({ route, navigation }: Props) {
          .catch(() => {});
       };
       load();
-      const iv = setInterval(load, 30_000);
+      // ★★ 2 MINUTES, not 30 s (Stuart, 2026-10-10: "every 30 seconds is a bit much"), and an unchanged list is a 304
+      //    (fetchBookmarks sends the ETag back). A station learned from RDS can take up to two minutes to appear.
+      const iv = setInterval(load, 120_000);
       loadUserBookmarks().then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); }).catch(() => {});
       return () => { cancelled = true; clearInterval(iv); };
     }

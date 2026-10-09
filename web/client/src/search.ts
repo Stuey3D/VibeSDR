@@ -91,7 +91,11 @@ export async function loadServerBookmarks(host: string, authSuffix = ''): Promis
   bmHost = host;
   bmAuth = authSuffix;
   try {
-    const r = await fetch(readAuthUrl(`${httpBase(host)}/bookmarks`), { cache: 'no-store' });   // ★ PIN-gated when set (audit 2026-10-03)
+    // ★ PIN-gated when set (audit 2026-10-03). ★★ `no-cache`, NOT no-store (2026-10-10): the browser keeps the body and
+    //   revalidates with the server's ETag on its own, so an unchanged list is a 304 of a few hundred bytes instead of the
+    //   whole list (307 KB on a receiver holding the UK ATC import). Its own revalidation — a header we added ourselves
+    //   would make this cross-origin request (page on vibesdr.net, socket on the tunnel host) pre-flight.
+    const r = await fetch(readAuthUrl(`${httpBase(host)}/bookmarks`), { cache: 'no-cache' });
     if (!r.ok) return 0;
     const arr = await r.json();
     serverBookmarks = Array.isArray(arr)

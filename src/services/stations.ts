@@ -72,20 +72,33 @@ export interface ServerBand {
  * ★ Merged and de-duplicated by frequency and name, because a server could one day serve both and
  *   a list with everything twice is worse than either half.
  */
+/** The last /bookmarks answer per server, with its ETag — returned as-is on a 304. */
+const bmEtags = new Map<string, { etag: string; list: ServerBookmark[] }>();
+
 export async function fetchBookmarks(baseUrl: string, readAuth = ''): Promise<ServerBookmark[]> {
   const base = baseUrl.replace(/\/+$/, '');
   const one = async (path: string): Promise<ServerBookmark[]> => {
     // ★ The PIN proof on VibeServer's /bookmarks, which a PIN-locked server now requires
     //   (withReadAuth, audit 2026-10-03). Not on UberSDR's /api/bookmarks — that is not ours.
-    const res = await fetch(path === '/bookmarks' ? withReadAuth(`${base}${path}`, readAuth) : `${base}${path}`);
+    /* ★★ THE ETag GOES BACK (2026-10-10). VibeServer tags /bookmarks with a fingerprint of the list and answers 304 when
+     *  it is unchanged — the whole list was 307 KB on the XCover after the UK ATC import, every poll. The app asks
+     *  natively (no CORS), so it sends If-None-Match itself rather than trusting each platform's HTTP cache to. */
+    const key = `${base}${path}`;
+    const prior = path === '/bookmarks' ? bmEtags.get(key) : undefined;
+    const res = await fetch(path === '/bookmarks' ? withReadAuth(`${base}${path}`, readAuth) : `${base}${path}`,
+                            prior ? { headers: { 'If-None-Match': prior.etag } } : undefined);
+    if (res.status === 304 && prior) return prior.list;
     if (!res.ok) throw new Error(`bookmarks HTTP ${res.status}`);
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data?.bookmarks ?? []);
     // ★ Every name and mode cleaned on the way in (utils/safeText) — a server's text is untrusted.
-    return (list as ServerBookmark[])
+    const clean = (list as ServerBookmark[])
       .filter((b) => b && typeof b.frequency === 'number' && Number.isFinite(b.frequency) && b.frequency > 0)
       .map((b) => ({ ...b, name: cleanText(b.name), ...(b.mode !== undefined ? { mode: cleanMode(b.mode) || undefined } : {}) }))
       .filter((b) => !!b.name);
+    const etag = path === '/bookmarks' ? res.headers.get('etag') : null;
+    if (etag) bmEtags.set(key, { etag, list: clean }); else bmEtags.delete(key);
+    return clean;
   };
   const results = await Promise.allSettled([one('/api/bookmarks'), one('/bookmarks')]);
   const ok = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<ServerBookmark[]>[];

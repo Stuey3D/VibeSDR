@@ -97,6 +97,18 @@ try {
   const after = await fetch(`${base}/bookmarks`).then((r) => r.json());
   ok(again.json?.imported === 1 && after.length === 1478, `re-importing a row replaces it, adds nothing (${after.length})`);
 
+  // ★★ 304 WHEN UNCHANGED (2026-10-10): every client polls GET /bookmarks — 307 KB on the XCover after this import.
+  const g1 = await fetch(`${base}/bookmarks`);
+  const tag = g1.headers.get('etag'); const g1len = (await g1.text()).length;
+  ok(!!tag && /^"[0-9a-f]{16}"$/.test(tag), `GET /bookmarks carries an ETag (${tag}, ${g1len} bytes)`);
+  const g2 = await fetch(`${base}/bookmarks`, { headers: { 'If-None-Match': tag } });
+  const g2body = await g2.text();
+  ok(g2.status === 304 && g2body === '', `…sent back unchanged: 304, no body (${g2.status}, ${g2body.length} bytes)`);
+  await post(JSON.stringify([{ name: 'NEW ROW', frequency: 133_725_000, mode: 'am' }]), await auth());
+  const g3 = await fetch(`${base}/bookmarks`, { headers: { 'If-None-Match': tag } });
+  ok(g3.status === 200 && g3.headers.get('etag') !== tag, `…after a change: the full list again, with a new ETag (${g3.status})`);
+  await g3.text();
+
   const bad = await post('{"not":"an array"}', await auth());
   ok(bad.status === 400 && bad.text.length > 0 && bad.json?.error, `a non-array body: 400 WITH a JSON body (${bad.text})`);
   const big = await post('[' + ' '.repeat(70_000) + ']', await auth());

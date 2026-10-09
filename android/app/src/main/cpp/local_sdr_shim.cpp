@@ -16676,6 +16676,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
         std::string cfWorkerHeader, vibeViaHeader;   // ★ see vsViaOf
         std::string originHeader, hostHeader;        // ★ see the cross-site check after the proxy resolution
+        std::string ifNoneMatch;                     // ★ GET /bookmarks answers 304 when the list is unchanged
         long long contentLength = 0;      // ★ needed by POST /vibeserver/config; 0 for everything else
         bool acceptsGzip = false;         // ★ /mapdata/ and the web client — see the header capture below
         bool acceptsBr = false;           // ★ the web client only: brotli, pre-compressed at build time
@@ -16855,6 +16856,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                               return a2 == std::string::npos ? std::string() : line.substr(a2, b2 - a2 + 1); };
                 if (line.size() > 7 && strncasecmp(line.c_str(), "origin:", 7) == 0) originHeader = hv(7);
                 else if (line.size() > 5 && strncasecmp(line.c_str(), "host:", 5) == 0) hostHeader = hv(5);
+                else if (line.size() > 14 && strncasecmp(line.c_str(), "if-none-match:", 14) == 0) ifNoneMatch = hv(14);   // ★ GET /bookmarks
             }
             if (line.size() > 15) {
                 std::string cl = line.substr(0, 15);
@@ -18777,10 +18779,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // Stations this receiver has actually HEARD, learned from RDS, plus any
             // saved by hand. Expired entries are pruned on the way out (see bmPrune).
             std::string body = bmJson();
-            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                          "Access-Control-Allow-Origin: *\r\n"
-                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
-                          + std::to_string(body.size()) + "\r\n\r\n" + body);
+            /* ★★★ 304 WHEN NOTHING CHANGED (Stuart, 2026-10-10, the XCover after the 1,478-row UK ATC import: "now its
+             *  having to load 1500 bookmarks"). Every web page and every app polls this every 30 s so a station learned
+             *  from RDS shows up — and the answer is the WHOLE list: 307 KB, ~600 KB a minute per listener, through the
+             *  tunnel and up the phone's uplink beside the audio, almost always unchanged. An ETag (FNV-1a of the body)
+             *  lets a client that already holds this version get a 304 with no body. No bookkeeping to drift: the tag
+             *  IS the content. `no-cache` (not no-store) so a browser keeps the body and revalidates on its own. */
+            uint64_t h = 1469598103934665603ULL;
+            for (unsigned char c : body) { h ^= c; h *= 1099511628211ULL; }
+            char etag[24]; snprintf(etag, sizeof etag, "\"%016llx\"", (unsigned long long)h);
+            const std::string hdrs = std::string("Content-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
+                                                 "Access-Control-Expose-Headers: ETag\r\nCache-Control: no-cache\r\nETag: ") + etag
+                                   + "\r\nConnection: close\r\n";
+            if (!ifNoneMatch.empty() && ifNoneMatch.find(etag) != std::string::npos) {
+                sock->sendstr("HTTP/1.1 304 Not Modified\r\n" + hdrs + "\r\n");
+            } else {
+                sock->sendstr("HTTP/1.1 200 OK\r\n" + hdrs + "Content-Length: " + std::to_string(body.size())
+                              + "\r\n\r\n" + body);
+            }
             sock->close();
         // ── ★★ POST /bookmarks/import — many rows, one save (see bmImportJson). Admin-gated like the one-row write.
         //    ★ MUST come before "POST /bookmarks": that prefix matches this path too. An OLDER server does exactly
@@ -21271,7 +21287,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool rdsHere = false;
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
-            int op = recvWs(sock, payload);
+            /* ★★★ PINGED WHEN QUIET (Stuart, 2026-10-10: Safari's console "as long as my arm" with
+             *  `wss://…trycloudflare.com/ws/dxcluster … failed: The network connection was lost`, over and over).
+             *  With no decoder attached this socket carries NOTHING, and Cloudflare drops a WebSocket idle for
+             *  ~100 s — so every listener behind a tunnel reconnected it every couple of minutes for the life of
+             *  the page. This loop waited with no timeout and never pinged; the spectrum and audio loops always
+             *  have. 25 s of quiet → a ping (the client's pong is ignored below like any control frame). */
+            int op = recvWs(sock, payload, 25000);
+            if (op == -2) { sendWs(sock, 0x9, nullptr, 0); continue; }
             if (op < 0 || op == 0x8) break;
             if (op == 0x9) { sendWs(sock, 0xA, (const uint8_t*)payload.data(), payload.size()); continue; }
             if (op != 0x1) continue;
