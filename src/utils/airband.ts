@@ -89,6 +89,15 @@ export interface AirChannel {
   trueText: string;
 }
 
+/** ★★ THE UHF MILITARY AIRBAND, 225–400 MHz (2026-10-09): AM voice on 25 kHz channels. No 8.33 scheme and no channel
+ *  NAMES there — a military set displays the frequency — so it takes only the passband default: ±8.5 kHz, the 25 kHz
+ *  rule. Same band as bandPlan's "UHF Military Airband". */
+export const AIR_MIL_LO = 225_000_000;
+export const AIR_MIL_HI = 400_000_000;
+export function isAirbandMil(hz: number): boolean {
+  return hz >= AIR_MIL_LO && hz < AIR_MIL_HI;
+}
+
 export function isAirbandCom(hz: number): boolean {
   return hz >= AIR_COM_LO - ON_CHANNEL_TOL_HZ && hz < AIR_COM_HI;
 }
@@ -263,7 +272,8 @@ export function airbandStepFrom(hz: number, step: number, n: number, snap: 'dir'
  *    default for the channel's spacing.
  *  - In the COM band but between channels (a VOLMET on a 100 Hz boundary, a fine step): unchanged —
  *    the filter must not flap while somebody walks past the raster.
- *  - Outside the COM band in AM, if the passband is still one of the two AIRBAND defaults: the
+ *  - In the UHF military airband (225–400 MHz) in AM, with the passband at a default: ±8.5 kHz (25 kHz channels).
+ *  - Outside both bands in AM, if the passband is still one of the two AIRBAND defaults: the
  *    ordinary AM default back, so leaving the airband changes nothing outside it.
  *  - A passband anybody chose (a bookmark's ±3 kHz, a dragged edge) is never touched.
  */
@@ -278,5 +288,10 @@ export function airbandPassband(hz: number, mode: string | null | undefined, ch:
     return want === sym ? null : [-want, want];
   }
   if (isAirbandCom(hz)) return null;
+  if (isAirbandMil(hz)) {
+    // Military UHF: one spacing (25 kHz), so every default — AM's ±5 or a leftover ±2.8 — becomes ±8.5.
+    if (!(isAirDefault || sym === AM_DEFAULT_HALF)) return null;
+    return sym === AIR_PB_25 ? null : [-AIR_PB_25, AIR_PB_25];
+  }
   return isAirDefault ? [-AM_DEFAULT_HALF, AM_DEFAULT_HALF] : null;
 }

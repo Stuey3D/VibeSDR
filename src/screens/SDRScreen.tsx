@@ -8944,8 +8944,17 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  with the ticket; the server answers with its whole list, which becomes ours. */
   /** ★ `bw` = the passband, sent in UberSDR's own field names so the receiver's list keeps it (the
    *  shim stores bandwidth_low/high since 2026-09-29; an older one ignores them). */
+  // ★ `quiet`: a bulk import posts hundreds of these, and each reply is the server's WHOLE list — re-rendering the search
+  //   list from every one was O(n²) work on top of the network (1,478 UK ATC rows, Stuart 2026-10-09). The import applies
+  //   only the LAST reply, which already holds everything.
+  const lastServerList = useRef<any[] | null>(null);
+  const applyServerList = useCallback((arr: any[]) => {
+    const fresh: ServerBookmark[] = arr.filter((b: any) => b && b.name && b.frequency)
+      .map((b: any) => ({ ...b, source: 'server' as const }));
+    setSearchBookmarks(prev => [...fresh, ...prev.filter(b => b.source !== 'server')]);
+  }, []);
   const postServerBookmark = useCallback(async (hz: number, name: string, mode?: string,
-                                                bw?: [number, number] | null): Promise<boolean> => {
+                                                bw?: [number, number] | null, quiet = false): Promise<boolean> => {
     const q = adminAuthQRef.current;
     if (!q) return false;
     try {
@@ -8956,14 +8965,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                             { method: 'POST' });
       if (!r.ok) return false;
       const arr = await r.json();
-      if (Array.isArray(arr)) {
-        const fresh: ServerBookmark[] = arr.filter((b: any) => b && b.name && b.frequency)
-          .map((b: any) => ({ ...b, source: 'server' as const }));
-        setSearchBookmarks(prev => [...fresh, ...prev.filter(b => b.source !== 'server')]);
-      }
+      if (Array.isArray(arr)) { if (quiet) lastServerList.current = arr; else applyServerList(arr); }
       return true;
     } catch { return false; }
-  }, [connectBase]);
+  }, [connectBase, applyServerList]);
   const onAddServerBookmark = useCallback(async (name: string): Promise<string> => {
     const clean = name.trim();
     if (!clean) return '';
@@ -8971,21 +8976,34 @@ export default function SDRScreen({ route, navigation }: Props) {
       bookmarkPassband({ bandwidth_low: status.bandwidthLow, bandwidth_high: status.bandwidthHigh }));
     return ok ? `Saved "${clean}" on the receiver.` : 'Could not save on the receiver (is the password still good?).';
   }, [postServerBookmark, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
-  const onImportToServer = useCallback(async (text: string): Promise<string> => {
+  /** ★ `onProgress(done, total)` drives the import's working indicator (Stuart, 2026-10-09: "it is taking a while to
+   *  import them to the server so we need to see a little working icon to show its not frozen"). One POST per row is
+   *  the only write every server version understands, so a big file takes a while — the indicator says how far. */
+  const onImportToServer = useCallback(async (text: string,
+                                              onProgress?: (done: number, total: number) => void): Promise<string> => {
     let incoming: UserBookmark[];
     try { incoming = parseBookmarksAny(text, ''); } catch { return 'Could not parse that file (need JSON or YAML).'; }
     if (!incoming.length) return 'No bookmarks found (JSON or YAML).';
     let n = 0;
-    for (const b of incoming) if (await postServerBookmark(b.frequency, b.name, b.mode, bookmarkPassband(b))) n++;
+    lastServerList.current = null;
+    onProgress?.(0, incoming.length);
+    for (let i = 0; i < incoming.length; i++) {
+      const b = incoming[i];
+      if (await postServerBookmark(b.frequency, b.name, b.mode, bookmarkPassband(b), true)) n++;
+      onProgress?.(i + 1, incoming.length);
+    }
+    if (lastServerList.current) applyServerList(lastServerList.current);
+    lastServerList.current = null;
     return n ? `Imported ${n} of ${incoming.length} to the receiver.` : 'Could not save on the receiver (is the password still good?).';
-  }, [postServerBookmark]);
-  const onPickImportFileToServer = useCallback(async (): Promise<string> => {
+  }, [postServerBookmark, applyServerList]);
+  const onPickImportFileToServer = useCallback(async (onProgress?: (done: number, total: number) => void): Promise<string> => {
+    let text: string;
     try {
       const res = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
       if (res.canceled || !res.assets?.length) return '';
-      const text = await FileSystem.readAsStringAsync(res.assets[0].uri);
-      return onImportToServer(text);
+      text = await FileSystem.readAsStringAsync(res.assets[0].uri);
     } catch { return 'Could not read that file.'; }
+    return onImportToServer(text, onProgress);
   }, [onImportToServer]);
 
   const onImportBookmarks = useCallback((text: string, allInstances: boolean): string => {

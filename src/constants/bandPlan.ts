@@ -117,10 +117,18 @@ export const BAND_PLAN: Band[] = [
   { lo: 137000000,  hi: 138000000,  name: 'Weather Satellites (APT / LRPT)', type: 'utility' },
   /* ★★ THE ONE MOST PEOPLE MEAN BY "MILSATCOM". The UHF SATCOM downlink is where the
    *   well-documented unauthorised traffic on the old FLTSATCOM/UFO birds turns up, on a 25 kHz
-   *   raster in narrow FM — a convention solid enough to set the mode from. The uplink is listed
-   *   too so the band is not a mystery when a dial lands in it. */
-  { lo: 240000000,  hi: 270000000,  name: 'UHF Military Satcom (downlink)', type: 'utility', mode: 'nfm', step: 25000 },
-  { lo: 292000000,  hi: 318000000,  name: 'UHF Military Satcom (uplink)',   type: 'utility', mode: 'nfm', step: 25000 },
+   *   raster in narrow FM. The uplink is listed too so the band is not a mystery when a dial lands in it.
+   *   ★ No mode of their own since 2026-10-09: they sit inside the UHF military AIRBAND, whose AM wins (above). */
+  /* ★★★ THE UHF MILITARY AIRBAND (Stuart, 2026-10-09, importing the UK ATC list: "the military ones are especially
+   *   interesting … our app will need to be modified to accommodate that too"). 225–400 MHz is NATO aeronautical
+   *   voice — AM on a 25 kHz raster, exactly like the civil VHF band (243.000 is the military guard). 361 of the 902
+   *   UK military air frequencies fall INSIDE the two satcom segments below, so this entry is written FIRST and the
+   *   satcom ones no longer carry a mode: bandTuneDefaults takes the first band of the same type, and a jump to an
+   *   ATC frequency in 240–270 must land in AM, not narrow FM. The satcom entries stay as LABELS — a satcom listener
+   *   picks NFM once and, within the band, that choice stands. Passband: airbandPassband (±8.5 kHz, 25 kHz rule). */
+  { lo: 225000000,  hi: 400000000,  name: 'UHF Military Airband',           type: 'utility', mode: 'am', step: 25000 },
+  { lo: 240000000,  hi: 270000000,  name: 'UHF Military Satcom (downlink)', type: 'utility' },
+  { lo: 292000000,  hi: 318000000,  name: 'UHF Military Satcom (uplink)',   type: 'utility' },
   { lo: 400150000,  hi: 406000000,  name: 'Radiosondes / Met Satellites',   type: 'utility', mode: 'nfm', step: 12500 },
   { lo: 406000000,  hi: 406100000,  name: 'Distress Beacons (COSPAS-SARSAT)', type: 'utility' },
   { lo: 977000000,  hi: 979000000,  name: 'ADS-B UAT',                      type: 'utility', regions: [2] },

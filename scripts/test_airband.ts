@@ -159,6 +159,13 @@ eq('stepHz integer', Number.isInteger(stepHz(14161, STEP_833)), true);
   eq('leaving the airband restores AM', airbandPassband(648_000, 'am', null, -2800, 2800), [-5000, 5000]);
   eq('elsewhere untouched', airbandPassband(648_000, 'am', null, -3000, 3000), null);
   eq('not AM: nothing', airbandPassband(118_000_000, 'usb', ch25, -5000, 5000), null);
+  eq('mil UHF: AM default → 25', airbandPassband(243_000_000, 'am', null, -5000, 5000), [-AIR_PB_25, AIR_PB_25]);
+  eq('mil UHF: 8.33 leftover → 25', airbandPassband(300_025_000, 'am', null, -2800, 2800), [-AIR_PB_25, AIR_PB_25]);
+  eq('mil UHF: already right', airbandPassband(243_000_000, 'am', null, -8500, 8500), null);
+  eq('mil UHF: bookmark ±3k untouched', airbandPassband(243_000_000, 'am', null, -3000, 3000), null);
+  eq('mil UHF: NFM untouched', airbandPassband(243_000_000, 'nfm', null, -5000, 5000), null);
+  eq('above 400: restores AM', airbandPassband(406_025_000, 'am', null, -8500, 8500), [-5000, 5000]);
+  eq('mil UHF: no channel name', airbandChannel(243_000_000, 'am', 25000, null), null);
 }
 
 // ── Ladder + band plan ────────────────────────────────────────────────────────────────────────
@@ -168,6 +175,9 @@ eq('no 8.33 on VOR/ILS', stepsForFreq(113_000_000).includes(STEP_833), false);
 eq('no 8.33 on HF', stepsForFreq(7_000_000).includes(STEP_833), false);
 eq('R1 airband default step', bandTuneDefaults(125_000_000, 1), { mode: 'am', step: STEP_833 });
 eq('R2 airband default step', bandTuneDefaults(125_000_000, 2), { mode: 'am', step: 25000 });
+eq('mil UHF in a satcom segment lands AM', bandTuneDefaults(243_000_000, 1), { mode: 'am', step: 25000 });
+eq('mil UHF outside satcom lands AM', bandTuneDefaults(275_000_000, 2), { mode: 'am', step: 25000 });
+eq('1.25m ham still wins in R2', bandTuneDefaults(223_500_000, 2), { mode: 'nfm', step: 12500 });
 eq('unknown region airband', bandTuneDefaults(125_000_000, 0).step, 25000);
 eq('VOR/ILS unchanged', bandTuneDefaults(113_000_000, 1), { mode: 'am', step: 25000 });
 

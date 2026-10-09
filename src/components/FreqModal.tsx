@@ -3,7 +3,7 @@ import {
   Keyboard, KeyboardAvoidingView, Modal, NativeEventEmitter, NativeModules, Platform,
   Pressable, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
-import { ScrollView } from 'react-native';
+import { ActivityIndicator, ScrollView } from 'react-native';
 import { isMacHost } from '../services/macAudio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MAX_FREQ_HZ, MIN_FREQ_HZ } from '../services/sdrTypes';
@@ -120,8 +120,8 @@ interface FreqModalProps {
   onPickImportFile?:  (allInstances: boolean) => Promise<string>;
   /** ★ Owner-only (present when the admin password is held): save on the RECEIVER, for everyone. */
   onAddServerBookmark?:     (name: string) => Promise<string>;
-  onImportToServer?:        (text: string) => Promise<string>;
-  onPickImportFileToServer?: () => Promise<string>;
+  onImportToServer?:        (text: string, onProgress?: (done: number, total: number) => void) => Promise<string>;
+  onPickImportFileToServer?: (onProgress?: (done: number, total: number) => void) => Promise<string>;
   /** ★★★ PICK MODE — the chat's "Check out [Bookmark]" (Stuart, 2026-10-01). Present = the card opens
    *  on BOOKMARKS and a row is CHOSEN, not tuned: search (yours, the receiver's, EiBi) and ON THIS
    *  SERVER work exactly as always, and the pick goes back to the chat as a draft to send. No TUNE tab,
@@ -278,6 +278,23 @@ export default function FreqModal({
   const [bmImportOpen, setBmImportOpen] = useState(false);
   const [bmImportText, setBmImportText] = useState('');
   const [bmImportMsg, setBmImportMsg]   = useState('');
+  /** ★ THE WORKING INDICATOR for an import to the receiver (Stuart, 2026-10-09: "we need to see a little working icon
+   *  to show its not frozen"). A file is written one bookmark per request — 1,478 UK ATC rows take minutes on a Pi —
+   *  so it shows a spinner and how far it has got, and the import keys stand down until it finishes (a second press
+   *  would post the whole file again alongside the first). */
+  const [bmBusy, setBmBusy] = useState<{ done: number; total: number } | null>(null);
+  const bmBusyRef = useRef(false);
+  const runServerImport = async (go: (p: (done: number, total: number) => void) => Promise<string>, clearText: boolean) => {
+    if (bmBusyRef.current) return;
+    bmBusyRef.current = true;
+    setBmImportMsg('');
+    try {
+      const msg = await go((done, total) => setBmBusy({ done, total }));
+      if (msg) { setBmImportMsg(msg); if (!clearText) setBmImportOpen(false); else if (msg.startsWith('Imported')) setBmImportText(''); }
+    } finally { bmBusyRef.current = false; setBmBusy(null); }
+  };
+  const importFileToServer = () => onPickImportFileToServer && runServerImport((p) => onPickImportFileToServer(p), false);
+  const importTextToServer = () => onImportToServer && runServerImport((p) => onImportToServer(bmImportText, p), true);
   /** ★ One tune path for every server row: a DAB service goes through onDabTune when the
    *  receiver can do DAB, everything else through onSearchTune. */
   const tuneBm = (b: ServerBookmark) => {
@@ -1167,14 +1184,22 @@ export default function FreqModal({
               )}
               {!!onPickImportFileToServer && (
                 pt.metal ? (
-                  <PopupKey label="⚿ IMPORT FILE TO THE RECEIVER" height={32} fontSize={11} style={{ marginBottom: 8 }} onPress={async () => { const msg = await onPickImportFileToServer(); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }} />
+                  <PopupKey label="⚿ IMPORT FILE TO THE RECEIVER" height={32} fontSize={11} style={{ marginBottom: 8 }} disabled={!!bmBusy} onPress={importFileToServer} />
                 ) : (
-                <TouchableOpacity style={[st.bmBtn, { borderColor: bdrDim }]} onPress={async () => { const msg = await onPickImportFileToServer(); if (msg) { setBmImportMsg(msg); setBmImportOpen(false); } }}>
+                <TouchableOpacity style={[st.bmBtn, { borderColor: bdrDim }]} disabled={!!bmBusy} onPress={importFileToServer}>
                   <Text style={[st.bmBtnText, { color: dimText }]}>⚿ IMPORT FILE TO THE RECEIVER</Text>
                 </TouchableOpacity>
                 )
               )}
-              {!!bmImportMsg && <Text style={[st.bmMsg, { color: plateDim }]}>{bmImportMsg}</Text>}
+              {!!bmBusy && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }} accessibilityLiveRegion="polite">
+                  <ActivityIndicator size="small" color={plateDim} />
+                  <Text style={[st.bmMsg, { color: plateDim, flex: 1 }]}>
+                    {bmBusy.total ? `Importing to the receiver… ${bmBusy.done.toLocaleString()} of ${bmBusy.total.toLocaleString()}` : 'Importing to the receiver…'}
+                  </Text>
+                </View>
+              )}
+              {!!bmImportMsg && !bmBusy && <Text style={[st.bmMsg, { color: plateDim }]}>{bmImportMsg}</Text>}
               {bmImportOpen && (<>
                 <TextInput style={[st.searchInput, st.bmImportBox, { color: winC, fontFamily: ff, borderColor: pt.metal ? pt.window.border : bdrDim }, st.inputMetal]}
                   value={bmImportText} onChangeText={setBmImportText} placeholder="Paste UberSDR bookmarks (JSON or YAML) here…" placeholderTextColor={winDim} autoCorrect={false} autoCapitalize="none" multiline />
@@ -1187,9 +1212,9 @@ export default function FreqModal({
                 )}
                 {!!onImportToServer && (
                   pt.metal ? (
-                  <PopupKey label="⚿ CONFIRM IMPORT TO THE RECEIVER" primary height={32} fontSize={11} style={{ marginBottom: 8 }} onPress={async () => { const msg = await onImportToServer(bmImportText); setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }} />
+                  <PopupKey label="⚿ CONFIRM IMPORT TO THE RECEIVER" primary height={32} fontSize={11} style={{ marginBottom: 8 }} disabled={!!bmBusy} onPress={importTextToServer} />
                 ) : (
-                <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} onPress={async () => { const msg = await onImportToServer(bmImportText); setBmImportMsg(msg); if (msg.startsWith('Imported')) setBmImportText(''); }}>
+                <TouchableOpacity style={[st.bmBtn, { borderColor: bdrBrt }]} disabled={!!bmBusy} onPress={importTextToServer}>
                     <Text style={[st.bmBtnText, { color: t.freqColor }]}>⚿ CONFIRM IMPORT TO THE RECEIVER</Text>
                   </TouchableOpacity>
                 )
