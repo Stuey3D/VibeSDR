@@ -429,6 +429,13 @@ printf '\n\033[1m── the external antenna switch (end to end) ──\033[0m\n
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-antenna-switch.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
+# ★★ BULK BOOKMARK IMPORT (2026-10-09, the 1,478-row UK ATC list took minutes one POST at a time): POST /bookmarks/import
+#    lands a batch with ONE save, keeps mode + passband, is admin-only from the LAN, and an older server's EMPTY 400 is
+#    the app's fall-back signal. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── bulk bookmark import (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bookmark-import.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 printf '\n\033[1m── a dead tunnel address is replaced (end to end) ──\033[0m\n'
 node scripts/test-tunnel-selfcheck.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi

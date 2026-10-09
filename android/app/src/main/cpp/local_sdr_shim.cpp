@@ -1974,14 +1974,14 @@ static void bmLearnDab(double hz, int eid, int ecc, uint32_t sid, const std::str
     bmSaveLocked();
 }
 
-static void bmAddManual(double hz, const std::string& name, const std::string& mode,
-                        bool hasBw = false, int bwLo = 0, int bwHi = 0) {
+/** One manual row into the map. The caller holds g_bmMtx and saves. False when the row is unusable. */
+static bool bmPutManualLocked(double hz, const std::string& name, const std::string& mode,
+                              bool hasBw, int bwLo, int bwHi) {
     const std::string n = bmClean(name, 64);
-    if (n.empty() || hz <= 0) return;
+    if (n.empty() || !(hz > 0) || hz > 1e12) return false;
     // ★ A mode is a demodulator name (am, usb, wfm, dab…): lower-case letters and digits, a few of them.
     std::string md;
     for (char c : mode) if (md.size() < 12 && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))) md += c;
-    std::lock_guard<std::mutex> lk(g_bmMtx);
     LearnedBm b;
     b.name = n;
     b.pi = -1;
@@ -1992,7 +1992,36 @@ static void bmAddManual(double hz, const std::string& name, const std::string& m
     b.lastHeard = (long long)time(nullptr);
     b.manual = true;
     g_bookmarks[bmKey(hz)] = b;
-    bmSaveLocked();
+    return true;
+}
+
+static void bmAddManual(double hz, const std::string& name, const std::string& mode,
+                        bool hasBw = false, int bwLo = 0, int bwHi = 0) {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    if (bmPutManualLocked(hz, name, mode, hasBw, bwLo, bwHi)) bmSaveLocked();
+}
+
+/** ★★ BULK IMPORT — a JSON array of {frequency, name, mode?, bandwidth_low?, bandwidth_high?}, written with ONE save
+ *  (Stuart, 2026-10-09, importing 1,478 UK ATC rows: "it is taking a while"). The one-row POST rewrites the whole file
+ *  per bookmark — on a Pi's SD card that is minutes and thousands of writes for one file. Returns rows taken, or -1
+ *  when the body is not a JSON array. */
+static int bmImportJson(const std::string& body) {
+    vibe::antswitch::Json j;
+    if (!vibe::antswitch::parseJson(body, j) || j.kind != vibe::antswitch::Json::Arr) return -1;
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    int n = 0;
+    for (const auto& r : j.a) {
+        if (r.kind != vibe::antswitch::Json::Obj) continue;
+        const auto* f = r.get("frequency");
+        const auto* lo = r.get("bandwidth_low");
+        const auto* hi = r.get("bandwidth_high");
+        const bool hasBw = lo && hi && lo->kind == vibe::antswitch::Json::Num && hi->kind == vibe::antswitch::Json::Num;
+        if (f && f->kind == vibe::antswitch::Json::Num
+            && bmPutManualLocked(f->n, r.str("name"), r.str("mode"), hasBw,
+                                 hasBw ? (int)lo->n : 0, hasBw ? (int)hi->n : 0)) n++;
+    }
+    if (n) bmSaveLocked();
+    return n;
 }
 
 /** Wipe the lot. An auto-learning list needs a way to be emptied — a wrong or unwanted
@@ -18753,6 +18782,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close();
+        // ── ★★ POST /bookmarks/import — many rows, one save (see bmImportJson). Admin-gated like the one-row write.
+        //    ★ MUST come before "POST /bookmarks": that prefix matches this path too. An OLDER server does exactly
+        //      that, finds no frequency, and answers an EMPTY 400 — which is how the app knows to fall back to one
+        //      POST per row. This route's own refusals always carry a JSON body.
+        //    ★ 60 KB a request (the JSON parser's ceiling is 64 KB): the app sends a large file in batches, which is
+        //      also what moves its progress indicator.
+        } else if (reqLine.rfind("POST /bookmarks/import", 0) == 0) {
+            if (!vsAdminHttpOk(sock, reqLine)) return;   // it already sent 401
+            auto reply = [&](const char* status, const std::string& body) {
+                sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: application/json\r\n"
+                              "Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n"
+                              "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            const long long clen = contentLength;
+            if (clen <= 0 || clen > 60 * 1024) { reply("413 Payload Too Large", "{\"error\":\"body must be 1 byte to 60 KB\"}"); return; }
+            std::string body((size_t)clen, '\0');
+            size_t got = 0;
+            while (got < body.size()) {
+                const int n = sock->recv((uint8_t*)&body[got], body.size() - got, false, 5000);
+                if (n <= 0) break;
+                got += (size_t)n;
+            }
+            if (got != body.size()) { reply("400 Bad Request", "{\"error\":\"short body\"}"); return; }
+            const int n = bmImportJson(body);
+            if (n < 0) { reply("400 Bad Request", "{\"error\":\"expected a JSON array of bookmarks\"}"); return; }
+            reply("200 OK", "{\"imported\":" + std::to_string(n) + ",\"bookmarks\":" + bmJson() + "}");
         } else if (reqLine.rfind("POST /bookmarks", 0) == 0 ||
                    reqLine.rfind("DELETE /bookmarks", 0) == 0) {
             // WRITE path — "save to server" / "remove from server".

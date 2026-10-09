@@ -8977,8 +8977,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     return ok ? `Saved "${clean}" on the receiver.` : 'Could not save on the receiver (is the password still good?).';
   }, [postServerBookmark, status.frequency, status.mode, status.bandwidthLow, status.bandwidthHigh]);
   /** ★ `onProgress(done, total)` drives the import's working indicator (Stuart, 2026-10-09: "it is taking a while to
-   *  import them to the server so we need to see a little working icon to show its not frozen"). One POST per row is
-   *  the only write every server version understands, so a big file takes a while — the indicator says how far. */
+   *  import them to the server so we need to see a little working icon to show its not frozen"). Batches on a current
+   *  server, one POST per row on an older one — either way a big file takes a moment and the indicator says how far. */
   const onImportToServer = useCallback(async (text: string,
                                               onProgress?: (done: number, total: number) => void): Promise<string> => {
     let incoming: UserBookmark[];
@@ -8987,15 +8987,57 @@ export default function SDRScreen({ route, navigation }: Props) {
     let n = 0;
     lastServerList.current = null;
     onProgress?.(0, incoming.length);
-    for (let i = 0; i < incoming.length; i++) {
-      const b = incoming[i];
-      if (await postServerBookmark(b.frequency, b.name, b.mode, bookmarkPassband(b), true)) n++;
-      onProgress?.(i + 1, incoming.length);
+    // ★★ BULK FIRST (POST /bookmarks/import, 2026-10-09): ≤60 KB batches, one save on the server per batch — the
+    //    1,478-row UK ATC list is three requests instead of 1,478 file rewrites. A server older than that route answers
+    //    an EMPTY 400 (it takes the path for a one-row POST with no frequency); then, and only then, one POST per row.
+    const rowOf = (b: UserBookmark) => {
+      const bw = bookmarkPassband(b);
+      return { name: b.name, frequency: Math.round(b.frequency), mode: b.mode,
+               ...(bw ? { bandwidth_low: Math.round(bw[0]), bandwidth_high: Math.round(bw[1]) } : {}) };
+    };
+    let done = 0, legacy = false;
+    const base = connectBase.replace(/\/+$/, '');
+    while (done < incoming.length && !legacy) {
+      const batch: ReturnType<typeof rowOf>[] = [];
+      let size = 2;
+      while (done + batch.length < incoming.length) {
+        const r = rowOf(incoming[done + batch.length]);
+        // ★ UTF-8 BYTES, not string length — the server's 60 KB is bytes, and a Cyrillic or Greek name is two a letter.
+        const js = JSON.stringify(r);
+        let len = 1;
+        for (let k = 0; k < js.length; k++) { const c = js.charCodeAt(k); len += c < 0x80 ? 1 : c < 0x800 ? 2 : 3; }
+        if (batch.length && size + len > 60_000) break;
+        batch.push(r); size += len;
+      }
+      const q = adminAuthQRef.current;
+      if (!q) break;
+      let res: Response;
+      try {
+        res = await fetch(`${base}/bookmarks/import?${q}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                              body: JSON.stringify(batch) });
+      } catch { break; }
+      const text = await res.text().catch(() => '');
+      if (res.status === 400 && !text && done === 0) { legacy = true; break; }
+      if (!res.ok) break;
+      try {
+        const j = JSON.parse(text);
+        n += Number(j?.imported) || 0;
+        if (Array.isArray(j?.bookmarks)) lastServerList.current = j.bookmarks;
+      } catch { break; }
+      done += batch.length;
+      onProgress?.(done, incoming.length);
+    }
+    if (legacy) {
+      for (let i = 0; i < incoming.length; i++) {
+        const b = incoming[i];
+        if (await postServerBookmark(b.frequency, b.name, b.mode, bookmarkPassband(b), true)) n++;
+        onProgress?.(i + 1, incoming.length);
+      }
     }
     if (lastServerList.current) applyServerList(lastServerList.current);
     lastServerList.current = null;
     return n ? `Imported ${n} of ${incoming.length} to the receiver.` : 'Could not save on the receiver (is the password still good?).';
-  }, [postServerBookmark, applyServerList]);
+  }, [postServerBookmark, applyServerList, connectBase]);
   const onPickImportFileToServer = useCallback(async (onProgress?: (done: number, total: number) => void): Promise<string> => {
     let text: string;
     try {

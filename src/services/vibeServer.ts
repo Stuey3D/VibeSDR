@@ -4,7 +4,7 @@ import { getUserLocation } from './instancesApi';
 import { getServerName, PUBLIC_NAME_KEY } from './rtlTcpServer';
 import { latLonToGrid, gridToLatLon } from './grid';
 import type { ServerBookmark } from './stations';
-import { parseBookmarksAny } from './userBookmarks';
+import { bookmarkPassband, parseBookmarksAny } from './userBookmarks';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
@@ -502,7 +502,11 @@ export async function importServerBookmarks(text: string): Promise<number> {
   const now = Math.floor(Date.now() / 1000);
   for (const b of rows) {
     if (!b?.name || !b?.frequency) continue;
+    // ★ The passband too (2026-10-09): the shim's loader reads bandwidth_low/high, and an airband list is ±8.5 kHz on
+    //   purpose — dropping it put every imported row back on the mode default.
+    const bw = bookmarkPassband(b);
     byFreq.set(Math.round(b.frequency / 1000), {
+      ...(bw ? { bandwidth_low: Math.round(bw[0]), bandwidth_high: Math.round(bw[1]) } : {}),
       frequency: Math.round(b.frequency),
       name: String(b.name),
       pi: -1,
