@@ -15253,6 +15253,7 @@ function initHrfControls() {
 
 function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   radioCaps = caps;
+  renderAntenna(caps);   // ★ every driver — before the per-driver branches below return
   setAntennaPort(caps?.antenna);   // ★ which socket — an RSP's ranges/filters can belong to one
   // ★★★ A NEW RADIO IS A NEW CONNECTION, so the once-per-connection notices are armed again.
   //     The comment on gainMinShown said this already happened; it did not — the flag was set
@@ -15433,11 +15434,44 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
  *     receiver has no aerial switch, and asks for one that is already there.
  *  ★ Rebuilt on every caps message, because the port the radio is ON can change under us — another
  *    listener on a shared receiver, or the per-band map following the dial. */
+/** ★★ THE ANTENNA SECTION (2026-10-09) — the owner's aerial names, from an external switch or an RSP's sockets, for
+ *  EVERY driver. Sends {type:"antenna"} (the server routes it to the switch or the sockets). Same lock rule as the RSP row:
+ *  greyed for a listener when the owner has locked it, unless this session is the admin. The RSP's own row stands down
+ *  so the choice is never offered twice. */
+function renderAntenna(caps: import('./spectrum').RadioCaps | null) {
+  const names = Array.isArray(caps?.antennas) ? caps!.antennas! : [];
+  const show = names.length >= 2;
+  $<HTMLElement>('antHead').hidden = !show;
+  $<HTMLElement>('rowAntenna').hidden = !show;
+  const note = $<HTMLElement>('antNote');
+  const seg = $<HTMLElement>('antSeg');
+  seg.innerHTML = '';
+  if (!show) { note.hidden = true; return; }
+  const locked = !!caps?.antennaLocked && !(srvAdminProtected ? adminUnlocked : true);
+  $<HTMLElement>('antLocked').hidden = !caps?.antennaLocked;
+  for (const name of names) {
+    const b = document.createElement('button');
+    b.className = 'btn' + (name === caps?.antenna ? ' on' : '');
+    b.textContent = name;
+    b.disabled = locked;
+    b.title = locked ? 'The owner has fixed the aerial for this receiver' : `Switch to ${name}`;
+    b.onclick = () => { if (!locked) spec?.send({ type: 'antenna', antenna: name }); };
+    seg.appendChild(b);
+  }
+  const sw = caps?.antennaSwitch;
+  const say = !sw ? '' : !sw.connected ? `The antenna switch is not answering${sw.error ? ` (${sw.error})` : ''}.`
+            : sw.state === 'several' ? 'The switch reports more than one antenna connected.'
+            : sw.state === 'unknown' ? 'Waiting for the switch to say which antenna is connected.' : '';
+  note.textContent = say;
+  note.hidden = !say;
+}
+
 function renderRspAntenna(caps: import('./spectrum').RadioCaps | null) {
   const row = $<HTMLElement>('rowRspAntenna');
   const seg = $<HTMLElement>('rspAntSeg');
   const ports = Array.isArray(caps?.antennas) ? caps!.antennas! : [];
-  row.hidden = ports.length < 2;
+  // ★ Stands down: the ANTENNA section (renderAntenna) now offers the same choice for every driver.
+  row.hidden = true;
   $<HTMLElement>('rspAntLocked').hidden = !caps?.antennaLocked;
   if (row.hidden) { seg.innerHTML = ''; return; }
   // ★ Same admin test the rest of this panel uses — see rspRestricted: the password only matters

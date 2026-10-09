@@ -246,6 +246,13 @@ export interface MenuSheetProps {
   radioModel?: string;
   /** V4 local hardware: opens the radio's controls submenu (Android only). */
   onLocalHardware?: () => void;
+  /** ★★ THE ANTENNA SECTION (2026-10-09) — the owner's aerial names (an external switch, or an SDRplay's own sockets),
+   *  the one the radio reports in use, whether the owner locked it, and the choice. Absent (<2 names) = no section. */
+  antennas?: string[];
+  antennaInUse?: string;
+  antennaLocked?: boolean;
+  antennaNote?: string;
+  onAntenna?: (name: string) => void;
   /** RTL-TCP session — footer shows the RTL-TCP icon + label (vs USB for direct). */
   isTcp?:          boolean;
   onAdminLink?:     (path: string, title: string) => void;
@@ -1174,6 +1181,7 @@ function MenuSheetBody({
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink,
+  antennas, antennaInUse, antennaLocked, antennaNote, onAntenna,
   adminSet = false, adminOk = false, adminRefused = false, adminFailReason = null, onAdminUnlock,
   onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, isVibeServer = false, onAbout, onRecordings,
@@ -1469,6 +1477,24 @@ function MenuSheetBody({
                   header was fixed and this was not, so the menu still announced an RTL-SDR
                   while the panel behind it said Airspy (Stuart, 2026-07-27). */}
               <Btn label={`${radioModel || 'Local SDR'} Controls  \u203a`} full onPress={onLocalHardware} />
+            </>)}
+
+            {/* ── ANTENNA — its own section just under the SDR controls (Stuart, 2026-10-09) ──
+                ★ The names the owner gave each aerial; the lit one is what the switch READS BACK. Greyed when the
+                  owner has locked it and this session is not the admin — the per-band choices still switch it. */}
+            {!!antennas && antennas.length >= 2 && !!onAntenna && (<>
+              <SectionLabel label="ANTENNA" icon="hardware" />
+              <BtnRow>
+                {antennas.map((a) => (
+                  <Btn key={a} label={a} active={a === antennaInUse} onPress={antennaLocked ? () => {} : () => onAntenna(a)}
+                       a11y={antennaLocked ? `${a} — the owner has fixed the aerial` : `Switch to ${a}`} />
+                ))}
+              </BtnRow>
+              {(antennaLocked || !!antennaNote) && (
+                <Text style={{ color: '#d9a441', fontSize: 11, marginTop: 4, marginHorizontal: 4 }}>
+                  {antennaLocked ? 'The owner has fixed the aerial for this receiver.' : antennaNote}
+                </Text>
+              )}
             </>)}
 
             {/* PROFILE moved to the FREQUENCY popup: on OWRX a profile IS a frequency

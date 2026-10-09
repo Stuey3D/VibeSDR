@@ -365,6 +365,13 @@ object VibeLocalSDR {
                                  linkUrl: String, linkLabel: String) {
         ensureLoaded(); nativeSetVibeServerLandingInfo(antenna, icon, message, linkUrl, linkLabel)
     }
+    /** ★ The external antenna switch (2026-10-09): the switch JSON (empty = none), the per-band aerial list (antenna names)
+     *  and the owner's lock. See LocalSdrShim::setAntennaSwitch. */
+    fun setAntennaSwitch(json: String, map: String, locked: Boolean) { ensureLoaded(); nativeSetAntennaSwitch(json, map, locked) }
+    /** ★ "Search for switch…" — BLOCKING for a few seconds; call it off the main thread. Returns the shim's JSON. */
+    fun antSwitchSearch(host: String, port: Int): String { ensureLoaded(); return nativeAntSwitchSearch(host, port) }
+    /** ★ What the aerial covers / filters fitted — the shared text format (utils/antennaBands.ts). */
+    fun setAntennaBands(ranges: String, filters: String) { ensureLoaded(); nativeSetAntennaBands(ranges, filters) }
     /** Pin the CENTRE (Hz) — the captured window everyone shares. 0 = follows the listener. */
     fun setVibeServerLockedCentre(hz: Double) { ensureLoaded(); nativeSetVibeServerLockedCentre(hz) }
     /** Real bins at deep zoom instead of interpolation. Without it a shared radio goes blocky. */
@@ -410,6 +417,9 @@ object VibeLocalSDR {
     private external fun nativeSetVibeServerSessionLimit(minutes: Int)
     private external fun nativeSetVibeServerSessionLimitSoft(soft: Boolean)
     private external fun nativeSetVibeServerIdleKick(minutes: Int)
+    private external fun nativeSetAntennaSwitch(json: String, map: String, locked: Boolean)
+    private external fun nativeAntSwitchSearch(host: String, port: Int): String
+    private external fun nativeSetAntennaBands(ranges: String, filters: String)
     private external fun nativeSetVibeServerLandingInfo(antenna: String, icon: String, message: String,
                                                         linkUrl: String, linkLabel: String)
     private external fun nativeSetVibeServerLockedCentre(hz: Double)

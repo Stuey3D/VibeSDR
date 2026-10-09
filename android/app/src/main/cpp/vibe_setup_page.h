@@ -661,6 +661,40 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            Say what is actually connected and a visitor knows what to expect &mdash; an unlocked
            dongle will honestly tune to 1.7&nbsp;GHz whether or not the antenna follows it up
            there. It is also where a good aerial becomes a reason to visit.</p>
+        <!-- ★★★ AN EXTERNAL ANTENNA SWITCH (Stuart's design, 2026-10-09 — docs/v12/ANTENNA-SWITCH-ROTATOR.md §3a):
+             "Set up an antenna switch? Yes → Search for switch… → Switch found on … → How many antennas connected? →
+             Antenna 1 (Name)(Details)". MQTT first (Tasmota / Home-Assistant discovery). Lite's server screen has the same
+             flow (AntennaSwitchSetup.tsx); both save `antennaSwitch` + the per-band `antennaMap` + `antennaPortLocked`. -->
+        <div id="swBox" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:6px 0 14px">
+          <span class="lbl" style="display:block">Set up an antenna switch?</span>
+          <label style="display:inline-block;margin-right:14px"><input type="radio" name="swOn" id="swYes"> Yes</label>
+          <label style="display:inline-block"><input type="radio" name="swOn" id="swNo" checked> No</label>
+          <p class="why" id="swWhy0" style="margin:4px 0 0">For a relay box that switches between aerials over your network
+             (MQTT &mdash; Tasmota, ESP32 and Home-Assistant-style switches). Listeners then get an Antenna choice.</p>
+          <div id="swBody" style="display:none;margin-top:8px">
+            <button type="button" class="convPreset" id="swSearch">Search for switch&hellip;</button>
+            <span id="swBusy" style="color:var(--dim);margin-left:8px"></span>
+            <label><span class="lbl">Broker <span style="color:var(--dim)">(blank = search this network)</span></span>
+              <input type="text" id="swBroker" maxlength="260" placeholder="e.g. 192.168.86.77:1883"></label>
+            <div style="display:flex;gap:8px">
+              <label style="flex:1"><span class="lbl">Username <span style="color:var(--dim)">(if any)</span></span><input type="text" id="swUser" maxlength="100"></label>
+              <label style="flex:1"><span class="lbl">Password</span><input type="password" id="swPass" maxlength="100"></label>
+            </div>
+            <p class="why" id="swMsg" style="display:none"></p>
+            <div id="swFound"></div>
+            <div id="swCountRow" style="display:none;margin-top:12px">
+              <span class="lbl" id="swCountLbl" style="display:block">How many antennas are connected?</span>
+              <button type="button" class="convPreset" id="swMinus">&minus;</button>
+              <span id="swCount" style="display:inline-block;min-width:28px;text-align:center">2</span>
+              <button type="button" class="convPreset" id="swPlus">+</button>
+            </div>
+            <div id="swAntennas"></div>
+            <label id="swLockRow" style="display:none;margin-top:10px"><input type="checkbox" id="swLocked">
+              Lock antenna controls behind the admin password</label>
+            <p class="why" style="margin:4px 0 0">&ldquo;Chosen automatically on&rdquo; switches to that antenna when somebody
+               tunes into those frequencies &mdash; e.g. <code>0-30MHz</code> or <code>30MHz+</code>.</p>
+          </div>
+        </div>
         <label><span class="lbl">What is connected to this radio</span>
           <input type="text" id="antenna" maxlength="120" list="antennaList"
                  placeholder="e.g. Discone in the loft, good to 300 MHz"></label>
@@ -3675,6 +3709,110 @@ function radioList() {
 }
 function radio()     { return radioList()[curRadio] || {}; }
 
+/* ★★★ THE ANTENNA SWITCH (2026-10-09) — the same rules as src/services/antennaSwitch.ts (one rule, two readers):
+ *  `sw` is what the owner sees; swServerFields() is what the radio is sent. The saved antennaSwitch JSON also carries the
+ *  relay list and each antenna's relay/bands, so the page can show the setup again; the server ignores those keys. */
+let sw = { enabled: false, broker: "", user: "", pass: "", deviceName: "", relays: [], antennas: [], locked: false };
+function swEsc(t) { return String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+function swFromRadio(r) {
+  sw = { enabled: false, broker: "", user: "", pass: "", deviceName: "", relays: [], antennas: [], locked: !!r.antennaPortLocked };
+  try {
+    const j = r.antennaSwitch ? JSON.parse(r.antennaSwitch) : null;
+    if (j) {
+      sw.enabled = j.enabled === true;
+      sw.broker = (j.host || "") + (j.host ? ":" + (j.port || 1883) : "");
+      sw.user = j.user || ""; sw.pass = j.pass || ""; sw.deviceName = j.deviceName || "";
+      sw.relays = Array.isArray(j.relays) && j.relays.length ? j.relays
+                : (j.antennas || []).map((a) => ({ label: a.name, cmd: a.cmd, state: a.state, on: a.on || "ON", off: a.off || "OFF" }));
+      sw.antennas = (j.antennas || []).map((a, i) => ({ name: a.name || "", relay: Number.isInteger(a.relay) ? a.relay : i, bands: a.bands || "" }));
+    }
+  } catch (e) { /* a bad blob is "no switch" */ }
+}
+function swSetCount(n) {
+  const max = Math.max(2, sw.relays.length);
+  const want = Math.max(2, Math.min(max, Math.round(n)));
+  sw.antennas = sw.antennas.slice(0, want);
+  while (sw.antennas.length < want) {
+    const i = sw.antennas.length, lab = (sw.relays[i] || {}).label || "";
+    sw.antennas.push({ name: lab && !/^Relay \d+$/.test(lab) ? lab : "Antenna " + (i + 1), relay: Math.min(i, Math.max(0, sw.relays.length - 1)), bands: "" });
+  }
+}
+function swServerFields() {
+  const named = sw.antennas.filter((a) => a.name.trim() && sw.relays[a.relay]);
+  if (!sw.enabled || !sw.broker.trim() || named.length < 2) return { antennaSwitch: "", antennaMap: null };
+  const b = sw.broker.trim(), i = b.lastIndexOf(":");
+  const host = i > 0 && /^\d+$/.test(b.slice(i + 1)) ? b.slice(0, i) : b;
+  const port = i > 0 && /^\d+$/.test(b.slice(i + 1)) ? Number(b.slice(i + 1)) : 1883;
+  const antennas = named.map((a) => { const r = sw.relays[a.relay];
+    return { name: a.name.trim(), cmd: r.cmd, state: r.state, on: r.on || "ON", off: r.off || "OFF", relay: a.relay, bands: a.bands }; });
+  const map = named.flatMap((a) => a.bands.split(",").map((x) => x.trim()).filter(Boolean).map((x) => x + " " + a.name.trim())).join(", ");
+  return { antennaSwitch: JSON.stringify({ enabled: true, host, port, user: sw.user, pass: sw.pass, deviceName: sw.deviceName,
+                                           relays: sw.relays, antennas }), antennaMap: map };
+}
+function swRender() {
+  $("swYes").checked = sw.enabled; $("swNo").checked = !sw.enabled;
+  $("swBody").style.display = sw.enabled ? "" : "none";
+  $("swWhy0").style.display = sw.enabled ? "none" : "";
+  $("swBroker").value = sw.broker; $("swUser").value = sw.user; $("swPass").value = sw.pass;
+  const have = sw.relays.length > 0;
+  $("swCountRow").style.display = have ? "" : "none";
+  $("swLockRow").style.display = have ? "" : "none";
+  $("swLocked").checked = sw.locked;
+  $("swCountLbl").textContent = (sw.deviceName ? sw.deviceName + " — " : "") + "How many antennas are connected?";
+  $("swCount").textContent = String(sw.antennas.length);
+  const box = $("swAntennas"); box.innerHTML = "";
+  sw.antennas.forEach((a, i) => {
+    const d = document.createElement("div");
+    d.style.cssText = "border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px";
+    d.innerHTML = '<span class="lbl" style="display:block">Antenna ' + (i + 1) + '</span>'
+      + '<input type="text" maxlength="40" data-k="name" placeholder="Name, e.g. VHF Vertical" value="' + swEsc(a.name) + '">'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">' + sw.relays.map((r, k) =>
+          '<button type="button" class="convPreset" data-relay="' + k + '"' + (a.relay === k ? ' style="border-color:var(--ok);color:var(--ok)"' : '')
+          + '>' + swEsc(r.label || "Relay " + (k + 1)) + '</button>').join("") + '</div>'
+      + '<input type="text" maxlength="120" data-k="bands" placeholder="Chosen automatically on (optional), e.g. 0-30MHz" value="' + swEsc(a.bands) + '">';
+    d.querySelectorAll("input[data-k]").forEach((inp) => inp.addEventListener("input", () => { a[inp.dataset.k] = inp.value; }));
+    d.querySelectorAll("button[data-relay]").forEach((btn) => btn.addEventListener("click", () => { a.relay = Number(btn.dataset.relay); swRender(); }));
+    box.appendChild(d);
+  });
+}
+async function swSearch() {
+  const b = sw.broker.trim(), i = b.lastIndexOf(":");
+  const host = b ? (i > 0 && /^\d+$/.test(b.slice(i + 1)) ? b.slice(0, i) : b) : "";
+  const port = b && i > 0 && /^\d+$/.test(b.slice(i + 1)) ? Number(b.slice(i + 1)) : 1883;
+  $("swBusy").textContent = "Searching…"; $("swMsg").style.display = "none"; $("swFound").innerHTML = "";
+  try {
+    const q = await authQuery();
+    const j = await (await fetch(`/vibeserver/antswitch/search?host=${encodeURIComponent(host)}&port=${port}&${q}`, { cache: "no-store" })).json();
+    const devs = Array.isArray(j.devices) ? j.devices : [];
+    if (!devs.length) {
+      $("swMsg").textContent = (j.brokers || []).length
+        ? "A broker answered (" + j.brokers.join(", ") + ") but no switch announced itself on it. Tasmota needs its own discovery on (SetOption19 0); Home-Assistant style switches need discovery on."
+        : "No MQTT broker answered on this network (port 1883). If yours is elsewhere, type its address above.";
+      $("swMsg").style.display = "";
+    }
+    devs.forEach((d) => {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "convPreset"; btn.style.cssText = "display:block;margin-top:8px;text-align:left";
+      btn.textContent = "Switch found on " + d.broker + " — " + d.name + " (" + d.relays.length + " relay" + (d.relays.length === 1 ? "" : "s") + ")";
+      btn.addEventListener("click", () => { sw.broker = d.broker; sw.deviceName = d.name; sw.relays = d.relays; sw.antennas = []; swSetCount(2); swRender(); });
+      $("swFound").appendChild(btn);
+    });
+  } catch (e) { $("swMsg").textContent = "The search failed: " + e; $("swMsg").style.display = ""; }
+  $("swBusy").textContent = "";
+}
+function swWire() {
+  if (swWire.done) return; swWire.done = true;
+  $("swYes").addEventListener("change", () => { sw.enabled = true; swRender(); });
+  $("swNo").addEventListener("change", () => { sw.enabled = false; swRender(); });
+  $("swBroker").addEventListener("input", () => { sw.broker = $("swBroker").value; });
+  $("swUser").addEventListener("input", () => { sw.user = $("swUser").value; });
+  $("swPass").addEventListener("input", () => { sw.pass = $("swPass").value; });
+  $("swLocked").addEventListener("change", () => { sw.locked = $("swLocked").checked; });
+  $("swMinus").addEventListener("click", () => { swSetCount(sw.antennas.length - 1); swRender(); });
+  $("swPlus").addEventListener("click", () => { swSetCount(sw.antennas.length + 1); swRender(); });
+  $("swSearch").addEventListener("click", () => { void swSearch(); });
+}
+
 function renderTabs() {
   const list = radioList();
   const tabs = $("radioTabs"), hint = $("radioTabHint"), wrap = $("radioTabsWrap");
@@ -4212,6 +4350,7 @@ function fill() {
   const r = radio();
   $("radioName").value = r.label || "";
   $("antenna").value = r.antenna || "";
+  swWire(); swFromRadio(r); swRender();   // ★ the antenna switch — see swServerFields
   /* ★★★ THE PIN ITSELF NEVER GOES BACK ON SCREEN. The config the page fetched does carry it —
    *   the whole file comes down behind the admin password — but putting it in an input would put
    *   a live secret in the DOM, in the browser's autofill store and in any screenshot of this
@@ -4627,8 +4766,11 @@ function collectRadio() {
       if ($("radioPinClear") && $("radioPinClear").checked) return {pin: ""};
       return {};
     })(),
-    antennaMap: $("antennaMap") ? ($("antennaMap").value || "").trim() : "",
-    antennaPortLocked: $("antennaPortLocked") ? !!$("antennaPortLocked").checked : false,
+    // ★ With a switch, the per-band list is BUILT from each antenna's bands (swServerFields); without, the RSP card's text.
+    antennaMap: swServerFields().antennaMap !== null ? swServerFields().antennaMap
+              : ($("antennaMap") ? ($("antennaMap").value || "").trim() : ""),
+    antennaSwitch: swServerFields().antennaSwitch,
+    antennaPortLocked: sw.enabled ? !!sw.locked : ($("antennaPortLocked") ? !!$("antennaPortLocked").checked : false),
     demodMode: $("demodMode").value,
     // ★★★ THE DAB LANDING STATION — edited straight onto the radio object, carried through here.
     //     Never sent alongside a DAB block (the server clears that pair anyway: dropBlockedDabLanding).

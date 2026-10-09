@@ -11188,6 +11188,16 @@ export default function SDRScreen({ route, navigation }: Props) {
         serverUrl={baseUrl}
         onClose={() => setMenuOpen(false)}
         onLocalHardware={isLocal ? () => { setMenuOpen(false); setHwOpen(true); } : undefined}
+        /* ★ The ANTENNA section — from the radio's own report (hwinfo). Locked = greyed unless this session is admin. */
+        antennas={radioCaps?.antennas}
+        antennaInUse={radioCaps?.antenna}
+        antennaLocked={!!radioCaps?.antennaLocked && !adminOk}
+        antennaNote={radioCaps?.antennaSwitch
+          ? (!radioCaps.antennaSwitch.connected ? `The antenna switch is not answering${radioCaps.antennaSwitch.error ? ` (${radioCaps.antennaSwitch.error})` : ''}.`
+             : radioCaps.antennaSwitch.state === 'several' ? 'The switch reports more than one antenna connected.'
+             : radioCaps.antennaSwitch.state === 'unknown' ? 'Waiting for the switch to say which antenna is connected.' : undefined)
+          : undefined}
+        onAntenna={(name: string) => (client.current as any)?.selectAntenna?.(name)}
         radioModel={radioCaps?.model}
         isTcp={!!route.params.isTcp}
         onColormap={setColormap}

@@ -128,6 +128,28 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun setStartOnPower(on: Boolean) { VibeBootStart.setEnabled(reactContext, on) }
 
+    /** ★ "Search for switch…" (2026-10-09) — a few seconds of LAN scan and broker listening, so it runs on its own thread
+     *  and resolves with the shim's JSON: {"brokers":[…],"devices":[{"broker","id","name","kind","relays":[…]}]}. */
+    @ReactMethod
+    fun antSwitchSearch(host: String, port: Int, promise: com.facebook.react.bridge.Promise) {
+        Thread {
+            try { promise.resolve(VibeLocalSDR.antSwitchSearch(host, port)) }
+            catch (t: Throwable) { promise.reject("ANTSWITCH", t.message ?: "search failed") }
+        }.start()
+    }
+
+    /** ★ What the aerial covers / filters fitted, applied NOW on a running server. */
+    @ReactMethod
+    fun setAntennaBands(ranges: String, filters: String) {
+        try { VibeLocalSDR.setAntennaBands(ranges, filters) } catch (t: Throwable) { Log.w("VibeLocalSDR", "setAntennaBands: ${t.message}") }
+    }
+
+    /** ★ Apply the switch, the per-band aerial list and the lock NOW, on a running server (a save on the server screen). */
+    @ReactMethod
+    fun setAntennaSwitch(json: String, map: String, locked: Boolean) {
+        try { VibeLocalSDR.setAntennaSwitch(json, map, locked) } catch (t: Throwable) { Log.w("VibeLocalSDR", "setAntennaSwitch: ${t.message}") }
+    }
+
     private fun isRtlSdr(dev: UsbDevice): Boolean {
         val key = (dev.vendorId shl 16) or dev.productId
         return RTL_SDR_VIDPIDS.contains(key)

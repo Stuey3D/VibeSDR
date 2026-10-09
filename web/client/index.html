@@ -4635,6 +4635,16 @@ select.btn { padding: 6px 8px; }
     <div class="mnote" id="dsAutoNote" hidden style="margin:6px 0 0;opacity:.85"></div>
   </div>
 
+  <!-- ★★ ANTENNA — its own section just under the radio's settings (Stuart, 2026-10-09): the owner's names for each aerial,
+       whatever chooses it (an external switch or an SDRplay's own sockets). Drawn from hwinfo's caps.antennas; hidden when
+       there is nothing to choose. The selected one is what the switch READS BACK, never what was asked. -->
+  <h2 id="antHead" hidden>ANTENNA</h2>
+  <div class="mrow" id="rowAntenna" hidden>
+    <label>IN USE<span id="antLocked" hidden style="color:var(--amber);font-size:0.8em"> · OWNER</span></label>
+    <div class="seg" id="antSeg" style="flex-wrap:wrap"></div>
+  </div>
+  <div class="mnote" id="antNote" hidden style="margin:6px 0 0;opacity:.85"></div>
+
   <h2>DISPLAY</h2>
   <div class="mrow">
     <label for="palette">COLOUR MAP</label>

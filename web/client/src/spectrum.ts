@@ -253,6 +253,9 @@ export interface RadioCaps {
   antennas?: string[];      // the ports this model actually has; <2 = nothing to choose
   antenna?: string;         // the one selected now
   antennaLocked?: boolean;  // the owner pinned it — admin only
+  /** ★ Present when the aerials come from an external switch (2026-10-09): connected to its broker, and whether the
+   *  read-back is clear ("ok"), unknown, or shows several on at once. */
+  antennaSwitch?: { connected: boolean; state: 'ok' | 'unknown' | 'several'; error?: string };
   hdr?: boolean;            // has the dx family's high-dynamic-range path
   hdrOn?: boolean;
   amNotch?: boolean;        // has the MW notch (separate from the broadcast RF notch)

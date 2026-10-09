@@ -974,6 +974,8 @@ export abstract class VibeServerWsClient {
    *  gated like the gain controls — see rsp_agc_restart. Never automatic: the freeze is often
    *  inaudible and the reset costs everyone a moment of audio. */
   rspAgcRestart() { this.sendSpectrum({ type: 'rsp_agc_restart' }); }
+  /** ★ Choose an aerial by its NAME — an external switch or an SDRplay socket; the server routes it (2026-10-09). */
+  selectAntenna(name: string) { this.sendSpectrum({ type: 'antenna', antenna: name }); }
 
   rspControl(o: { lna?: number; ifgr?: number; ifagc?: boolean; agcset?: number;
                   /** ★ OUR RF loop (the LNA), distinct from the radio's own IF AGC. Wire key is

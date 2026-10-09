@@ -267,6 +267,9 @@ object VibeServerBoot {
         VibeLocalSDR.setVibeServerLandingInfo(
             cfg.s("antenna"), cfg.s("antennaIcon"),
             cfg.s("landingMessage"), cfg.s("landingLinkUrl"), cfg.s("landingLinkLabel"))
+        // ★ The external antenna switch, the per-band aerial list and the lock (2026-10-09) — see setAntennaSwitch.
+        VibeLocalSDR.setAntennaSwitch(cfg.s("antennaSwitch"), cfg.s("antennaMap"), cfg.b("antennaLocked", false))
+        VibeLocalSDR.setAntennaBands(cfg.s("antennaRanges"), cfg.s("antennaFilters"))
 
         // ★★★ WHERE A NEW LISTENER STARTS — told to the engine, not only used as the start frequency.
         //     The daemon has always done this (main.cpp → setVibeServerLanding); this boot never did,

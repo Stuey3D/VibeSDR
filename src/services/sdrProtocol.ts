@@ -261,6 +261,8 @@ export interface RadioCaps {
    *  ★ `antennas` is the radio's OWN list of port names, and the UI draws from it and nothing
    *    else — so a single-socket RSP1 publishes an empty list and no selector appears at all. */
   antennas?: string[]; antenna?: string; antennaLocked?: boolean;
+  /** ★ When the aerials come from an external switch (2026-10-09): broker connected, read-back state, last error. */
+  antennaSwitch?: { connected: boolean; state: 'ok' | 'unknown' | 'several'; error?: string };
   hdr?: boolean;     hdrOn?: boolean;        // RSPdx: high dynamic range below 2 MHz
   amNotch?: boolean; amNotchOn?: boolean;    // RSPduo: AM broadcast notch on the Hi-Z port
   extRef?: boolean;  extRefOn?: boolean;     // RSP2 / Duo: 24 MHz reference output

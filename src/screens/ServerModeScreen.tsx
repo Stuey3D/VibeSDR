@@ -1,4 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
+import AntennaBandsEditor from '../components/AntennaBandsEditor';
+import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } from '../services/antennaSwitch';
+/** ★★ THE GATE (Stuart, 2026-10-09: "pushed to [Chicopee] as a test — if it works it ships as V11, if not gated off for
+ *  V12"). false hides the whole antenna-switch setup; a server already configured keeps working either way. */
+const ANT_SWITCH_SETUP = true;
 import GainSlider from '../components/GainSlider';
 import BandLimitEditor, { Band } from '../components/BandLimitEditor';
 
@@ -165,7 +171,7 @@ const K = {
   rawIq: 'vs_rawiq', rawIqMax: 'vs_rawiqmax', rawIqLanMaxHz: 'vs_rawiqlanmaxhz',
   decoderMax: 'vs_decodermax',
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
-  idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon',
+  idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon', antSwitch: 'vs_antswitch', antRanges: 'vs_antranges', antFilters: 'vs_antfilters',
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
@@ -256,6 +262,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [idleGrace, setIdleGrace]   = useState((NativeModules as any).VibeLocalSDR?.isTv ? 0 : 300);
   const [antenna, setAntenna]       = useState('');
   const [antennaIcon, setAntennaIcon] = useState('');
+  /** ★ The external antenna switch (2026-10-09) — services/antennaSwitch.ts, components/AntennaSwitchSetup.tsx. */
+  const [antSwitch, setAntSwitch] = useState<AntennaSwitchCfg>(EMPTY_SWITCH);
+  /** ★ What the aerial covers / which filters are fitted (2026-10-09) — the shared text format (utils/antennaBands.ts). */
+  const [antRanges, setAntRanges] = useState('');
+  const [antFilters, setAntFilters] = useState('');
   /**
    * ★★★ HOW WILL THIS RADIO BE USED — and it is asked FIRST in Advanced, because it decides which
    *     of the questions below even apply. A shared radio has a locked range and a listener count;
@@ -703,6 +714,17 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   /** ★ The read is past its first few seconds — said plainly, never as an error. */
   const [prefsSlow, setPrefsSlow] = useState(false);
   const [running, setRunning] = useState<VibeServerInfo | null>(null);
+  /* ★ The antenna switch applies LIVE on a running server — a change of antenna names or bands must not need a restart
+   *  (and a restart would bounce every listener). Debounced so typing a name is one apply, not one per letter. */
+  useEffect(() => {
+    if (!running) return;
+    const t = setTimeout(() => {
+      const f = serverFields(antSwitch);
+      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaSwitch?.(f.antennaSwitch, f.antennaMap, f.antennaLocked); } catch {}
+      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaBands?.(antRanges, antFilters); } catch {}
+    }, 800);
+    return () => clearTimeout(t);
+  }, [antSwitch, antRanges, antFilters, running]);
   const [status, setStatus]   = useState<VibeServerStatus | null>(null);
   /** The mDNS hostname the responder actually TOOK — "vibesdr-moto-g35", or with a "-2"
    *  suffix if another phone on the LAN already had the name. Asked for after the server
@@ -844,6 +866,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           { const ig = s(K.idleGrace); setIdleGrace(ig === '' ? 300 : (Number(ig) || 0)); }
           setAntenna(s(K.antenna));
           setAntennaIcon(s(K.antennaIcon));
+          setAntSwitch(parseSwitchCfg(s(K.antSwitch)));
+          setAntRanges(s(K.antRanges)); setAntFilters(s(K.antFilters));
           setRadioLabel(s(K.radioLabel));
           { const ch = s(K.landingDabCh);
             if (ch !== '' && Number.isFinite(Number(ch))) setLandingDabCh(Number(ch)); }
@@ -1415,7 +1439,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   live.current = {
     limitSoft, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
-    landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax,
+    landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters,
   };
 
   /* ★★★ THE CONFIG THE SERVER STARTS WITH, BUILT IN ONE PLACE (2026-09-29). Start sends it, and so does
@@ -1479,6 +1503,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
     decoderMax: live.current.decoderMax,
     idleGraceSec: live.current.idleGrace,
     antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
+    // ★ The external antenna switch: antennaSwitch / antennaMap / antennaLocked — VibeServerBoot applies them.
+    ...serverFields(live.current.antSwitch),
+    antennaRanges: live.current.antRanges, antennaFilters: live.current.antFilters,
     landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
     // ★★ Locked mode only. In single-user mode the centre follows the listener, which is what
     //    the phone has always done and is right for one person retuning the radio themselves.
@@ -1556,7 +1583,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
       [K.decoderMax, String(live.current.decoderMax)],
       [K.lockedCentre, String(live.current.lockedCentre)],
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
-      [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon],
+      [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon], [K.antSwitch, JSON.stringify(live.current.antSwitch)], [K.antRanges, live.current.antRanges], [K.antFilters, live.current.antFilters],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'],
       [K.gainLimits, gainLimits], [K.gainLocks, gainLocks], [K.gainSplits, gainSplits],
@@ -2959,6 +2986,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 somebody who has never seen your receiver. */}
             {advanced && (<>
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ANTENNA</Text>
+            {/* ★★ An external antenna switch, above the aerial's own details (Stuart's design, 2026-10-09). */}
+            {ANT_SWITCH_SETUP && <AntennaSwitchSetup value={antSwitch} onChange={setAntSwitch} C={C} F={F} />}
             <TextInput value={antenna} onChangeText={setAntenna}
               placeholder="e.g. Discone in the loft, good to 300 MHz"
               placeholderTextColor={C.textDim} maxLength={120}
@@ -2980,6 +3009,9 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               live. Tap a picture again to choose none; a radio without one simply shows the
               description.
             </Text>
+            {/* ★★ What it covers and which filters are fitted (Stuart, 2026-10-09: "no option to say it has an FM filter"). */}
+            <AntennaBandsEditor ranges={antRanges} filters={antFilters} C={C} F={F}
+              onChange={(r, f) => { setAntRanges(r); setAntFilters(f); }} />
             </>)}
 
             {/* ★★★ POWER DOWN WHEN NOBODY IS LISTENING — ON by default, and it never lets the

@@ -335,3 +335,33 @@ export function antennaBandsCard(b: AntennaBands | null | undefined, max = 4):
     : `Filters fitted: ${cap(fs.map((f) => withPort(fname(f), f)))}`;
   return { covers: rs.length ? `Covers ${cap(rs)}` : '', filters };
 }
+
+/** ★★ QUICK-FILL, NEVER LOCKED IN (2026-10-09, for Lite's and the app's server screen). The SAME lists as the Linux setup
+ *  page's AB_RANGE_PRESETS / AB_FILTER_PRESETS in vibe_setup_page.h — scripts/test_antenna_bands_presets.ts keeps the two
+ *  identical. Amateur band edges are REGIONAL, so both regions are offered; a preset only fills a row the owner can edit.
+ *  [label, from, to, unit] / [label, kind, from, to, unit, name]. */
+export const ANTENNA_RANGE_PRESETS: [string, [string, string, string, BandUnit][]][] = [
+  ['Amateur bands — UK / IARU Region 1', [
+    ['160 m', '1.81', '2', 'MHz'], ['80 m', '3.5', '3.8', 'MHz'], ['40 m', '7', '7.2', 'MHz'],
+    ['20 m', '14', '14.35', 'MHz'], ['15 m', '21', '21.45', 'MHz'], ['10 m', '28', '29.7', 'MHz'],
+    ['6 m', '50', '52', 'MHz'], ['4 m', '70', '70.5', 'MHz'], ['2 m', '144', '146', 'MHz'],
+    ['70 cm', '430', '440', 'MHz'], ['23 cm', '1240', '1325', 'MHz']]],
+  ['Amateur bands — US / Region 2', [
+    ['160 m', '1.8', '2', 'MHz'], ['80 m', '3.5', '4', 'MHz'], ['40 m', '7', '7.3', 'MHz'],
+    ['20 m', '14', '14.35', 'MHz'], ['15 m', '21', '21.45', 'MHz'], ['10 m', '28', '29.7', 'MHz'],
+    ['6 m', '50', '54', 'MHz'], ['2 m', '144', '148', 'MHz'], ['1.25 m', '222', '225', 'MHz'],
+    ['70 cm', '420', '450', 'MHz'], ['23 cm', '1240', '1300', 'MHz']]],
+  ['Whole aerials', [
+    ['Wideband loop', '0', '300', 'MHz'], ['HF', '0', '30', 'MHz'], ['VHF/UHF discone', '25', '1300', 'MHz'],
+    ['Airband', '118', '137', 'MHz'], ['FM broadcast', '87.5', '108', 'MHz']]],
+];
+export const ANTENNA_FILTER_PRESETS: [string, FilterKind, string, string, BandUnit, string][] = [
+  ['FM broadcast band-stop 87.5–108 MHz', 'bandstop', '87.5', '108', 'MHz', 'FM band-stop'],
+  ['FM broadcast band-stop 88–108 MHz (US)', 'bandstop', '88', '108', 'MHz', 'FM band-stop'],
+  ['DAB band-stop 174–240 MHz', 'bandstop', '174', '240', 'MHz', 'DAB band-stop'],
+  ['Medium-wave high-pass 1.7 MHz', 'highpass', '1.7', '', 'MHz', 'Medium-wave high-pass'],
+  ['HF low-pass 30 MHz', 'lowpass', '30', '', 'MHz', 'HF low-pass'],
+  ['Airband band-pass 118–137 MHz', 'bandpass', '118', '137', 'MHz', 'Airband band-pass'],
+  ['ADS-B band-pass 1090 MHz', 'bandpass', '1085', '1095', 'MHz', 'ADS-B band-pass'],
+  ['2 m band-pass 144–146 MHz', 'bandpass', '144', '146', 'MHz', '2 m band-pass'],
+];

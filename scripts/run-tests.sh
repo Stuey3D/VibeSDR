@@ -295,6 +295,9 @@ if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else f
 # ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09): none on the everyday pad, only the dial's band while a
 #     question is open, every link a Signal Identification Wiki page, every DECODE a decoder we run, the watches agree.
 if node --no-warnings scripts/test_dial_answers.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ THE ANTENNA SWITCH SETUP RULES (2026-10-09): what Lite's screen / the setup page send the server.
+if node --no-warnings scripts/test_antenna_switch_cfg.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+if node --no-warnings scripts/test_antenna_bands_presets.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ A RADIO WITH ITS OWN PIN IS NEVER OPENED WITHOUT IT (2026-10-09, Buddy → the Pi 500's Airspy, blank screen).
 if node --no-warnings scripts/test_radio_pin_paths.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ TUNE PACING ON THE CLIENT (tunePace.ts, Stuart 2026-10-05: "if the server's CPU is reporting that it is

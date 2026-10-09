@@ -110,6 +110,13 @@ export type VibeServerConfig = {
   /** What is bolted to this radio, and which of the eleven icons to draw beside it. */
   antenna?: string;
   antennaIcon?: string;
+  /** ★ What the aerial covers / filters fitted — the shared text format (utils/antennaBands.ts), 2026-10-09. */
+  antennaRanges?: string;
+  antennaFilters?: string;
+  /** ★ The external antenna switch (JSON), the per-band aerial list (names) and the owner's lock — services/antennaSwitch.ts. */
+  antennaSwitch?: string;
+  antennaMap?: string;
+  antennaLocked?: boolean;
   /** The owner's standing message on the landing screen, and an optional link.
    *  ★ NOT the transient maintenance notice: this one stays up. http/https only — the server
    *    drops anything else. */
@@ -289,6 +296,11 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     idleGraceSec: cfg.idleGraceSec ?? 300,
     antenna: cfg.antenna ?? '',
     antennaIcon: cfg.antennaIcon ?? '',
+    antennaRanges: cfg.antennaRanges ?? '',
+    antennaFilters: cfg.antennaFilters ?? '',
+    antennaSwitch: cfg.antennaSwitch ?? '',
+    antennaMap: cfg.antennaMap ?? '',
+    antennaLocked: cfg.antennaLocked ?? false,
     landingMessage: cfg.landingMessage ?? '',
     landingLinkUrl: cfg.landingLinkUrl ?? '',
     landingLinkLabel: cfg.landingLinkLabel ?? '',

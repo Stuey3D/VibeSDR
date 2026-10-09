@@ -420,6 +420,33 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerIdleKick(JNIEnv*, jobject, 
 // What is bolted to this radio, and the owner's standing message for the landing screen.
 // ★ One call for all four: they are set together at start-up and a half-applied set (an aerial
 //   with no message, a link with no label) is a state nothing wants to reason about.
+/* ★★★ THE EXTERNAL ANTENNA SWITCH (2026-10-09) — Lite and the app's server mode reach the same shim code the Linux daemon
+ *  uses: the switch (JSON), the per-band aerial list (names) and the owner's lock; and the LAN search for the screen. */
+static std::string jstr(JNIEnv* env, jstring j) {
+    if (!j) return std::string();
+    const char* c = env->GetStringUTFChars(j, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(j, c);
+    return out;
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAntennaSwitch(JNIEnv* env, jobject, jstring json, jstring map, jboolean locked) {
+    vibe::LocalSdrShim::instance().setRspAntennaMap(jstr(env, map));
+    vibe::LocalSdrShim::instance().setAntennaLocked(locked == JNI_TRUE);
+    vibe::LocalSdrShim::instance().setAntennaSwitch(jstr(env, json));
+}
+/* ★ What the aerial covers and which filters are fitted (2026-10-09) — Android never called setAntennaBands, so Lite and
+ *  the app's server mode could not tell a listener "FM band-stop filter fitted". */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAntennaBands(JNIEnv* env, jobject, jstring ranges, jstring filters) {
+    vibe::LocalSdrShim::instance().setAntennaBands(jstr(env, ranges), jstr(env, filters));
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeAntSwitchSearch(JNIEnv* env, jobject, jstring host, jint port) {
+    const std::string j = vibe::LocalSdrShim::antSwitchSearch(jstr(env, host), int(port), 3000);
+    return env->NewStringUTF(j.c_str());
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLandingInfo(JNIEnv* env, jobject,
         jstring antenna, jstring icon, jstring message, jstring linkUrl, jstring linkLabel) {
