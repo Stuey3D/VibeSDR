@@ -447,6 +447,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     // ★ The aerial's ranges and filters (2026-10-06) — read here AND written in radioToJson. Clamped
     //   rather than refused: an over-long list keeps its first entries instead of vanishing.
     S("antennaRanges", r.antennaRanges); S("antennaFilters", r.antennaFilters);
+    S("antennaSwitch", r.antennaSwitch);                         // ★ the external switch — written in radioToJson too
+    if (r.antennaSwitch.size() > 4000) r.antennaSwitch.clear();  // a corrupt or hostile blob is dropped, never half-applied
     //   Cut at the last whole entry (`;`), so a clamp never leaves half a name or half a UTF-8 glyph.
     for (std::string* t : { &r.antennaRanges, &r.antennaFilters }) {
         if (t->size() <= 800) continue;
@@ -520,6 +522,7 @@ std::string radioToJson(const RadioConfig& r) {
     //   the note further down records what a field in only one of them costs.
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     S("antennaRanges", r.antennaRanges); S("antennaFilters", r.antennaFilters);   // ★ see the reader
+    S("antennaSwitch", r.antennaSwitch);                                             // ★ see the reader
     B("enabled", r.enabled); B("configured", r.configured);
     N("order", r.order);
     N("port", r.port);

@@ -530,6 +530,10 @@ struct RadioConfig {
     std::string antennaPort;                      // ★ port NAME — see the note in Config
     bool   antennaPortLocked = false;
     std::string antennaMap;                       // ★ per-band aerial list — see the note in Config
+    /** ★ The external antenna switch (2026-10-09) — the setup page's JSON, verbatim: {"enabled","host","port","user",
+     *  "pass","antennas":[{"name","cmd","state","on","off"}]}. Empty = none. Applied by LocalSdrShim::setAntennaSwitch;
+     *  the per-band preset is antennaMap (names) and the lock antennaPortLocked, shared with the RSP's sockets. */
+    std::string antennaSwitch;
     bool   rspHdr = false, rspAmNotch = false, rspExtRef = false;
     bool   dabAgcOverride = true;
     int    dabAgcTarget = -40;

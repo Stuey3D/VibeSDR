@@ -420,6 +420,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★★ A TUNNEL WHOSE PROCESS LIVES BUT WHOSE ADDRESS IS DEAD IS REPLACED (2026-10-09, the Sony "online but not
 #     responding all day"): a stand-in cloudflared prints a hostname that does not exist and stays alive; the server
 #     must fetch its own address, see it dead, replace the tunnel and tell a loopback stand-in directory the new one.
+# ★★★ THE EXTERNAL ANTENNA SWITCH (2026-10-09): the real server against a fake MQTT broker playing a Tasmota board —
+#     antennas in hwinfo, read-back, break before make, per-band preset, the owner's lock, the admin-only search.
+printf '\n\033[1m── the external antenna switch (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-antenna-switch.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 printf '\n\033[1m── a dead tunnel address is replaced (end to end) ──\033[0m\n'
 node scripts/test-tunnel-selfcheck.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi

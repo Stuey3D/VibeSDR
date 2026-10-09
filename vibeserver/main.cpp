@@ -1278,6 +1278,15 @@ static int setRtlSerial(int index, const std::string& newSerial) {
  *  the setup page for every radio, not just its own. */
 static bool g_isPrimaryRadio = true;
 
+/** ★ The external antenna switch (2026-10-09): connect only when the owner's setup CHANGED — a save of an unrelated
+ *  tab must not drop and re-make the broker connection (and re-query every relay) for nothing. */
+static void applyAntennaSwitch(const std::string& sw) {
+    static std::string last = "\x01";
+    if (sw == last) return;
+    last = sw;
+    vibe::LocalSdrShim::instance().setAntennaSwitch(sw);
+}
+
 int main(int argc, char** argv) {
     g_argv = argv;
     /* ★★ FIRST, so nothing can die unrecorded (2026-10-06): the Pi 2 segfaulted four times in DAB in
@@ -1983,6 +1992,10 @@ int main(int argc, char** argv) {
                     // ★ Everything else here still needs a restart, and the page still says so —
                     //   sample rate and ports cannot change under a running capture.
                     LocalSdrShim::setGainLimits(g_runtimeConfig.gainLimits);
+                    // ★ The aerials, live (2026-10-09): the external switch, the per-band aerial list and the lock.
+                    applyAntennaSwitch(r.antennaSwitch);
+                    LocalSdrShim::instance().setRspAntennaMap(g_runtimeConfig.antennaMap);
+                    LocalSdrShim::instance().setAntennaLocked(g_runtimeConfig.antennaPortLocked);
                     // ★ In the same breath as the gain ceilings, for the same reason: both are
                     //   the owner's per-band rules and a path that applies one without the
                     //   other enforces half of what the setup screen shows.
@@ -2717,6 +2730,7 @@ int main(int argc, char** argv) {
             r.directSampling = next.directSampling; r.dabRateBoost = next.dabRateBoost;
             r.rawIq = next.rawIq; r.rawIqMax = next.rawIqMax; r.rawIqLanMaxHz = next.rawIqLanMaxHz; r.nbWide = next.nbWide;
             r.blockedModes = next.blockedModes;
+            r.antennaPort = next.antennaPort;   // ★ a listener's/admin's socket choice — was never folded (found 2026-10-09)
             // ★ The converter travels with the rest of the per-radio set — it describes what is
             //   bolted to THIS radio's aerial, so it is saved exactly where the gain and the ppm
             //   are. Left out, the setup page would appear to accept it and lose it on save.
@@ -3580,6 +3594,8 @@ int main(int argc, char** argv) {
         //   when they tune into a band-stop or off the end of the aerial. Per radio, like the icon.
         LocalSdrShim::instance().setAntennaBands(mine ? mine->antennaRanges : std::string(),
                                                  mine ? mine->antennaFilters : std::string());
+        // ★ The external antenna switch (2026-10-09) — per radio; also applied live on a save (applyAntennaSwitch).
+        applyAntennaSwitch(mine ? mine->antennaSwitch : std::string());
         // ★ Per radio, like the limit it modifies — a shared 30-listener receiver and a
         //   one-at-a-time dongle want different answers to "is the limit a deadline".
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);

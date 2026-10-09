@@ -39,6 +39,8 @@
 #include "vibe_usb_recovery.h"   // ★ park-not-release, fresh-fd back-off, the re-plug advice (2026-10-05)
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_hwinfo.h"
+#include "vibe_mqtt.h"        // ★ the external antenna switch (2026-10-09) — see g_ext below
+#include "vibe_antswitch.h"
 #include "vibe_rsp_init_gate.h" // ★ the AGC-initialising indicator's ending — it cannot wedge (2026-10-06)
 #include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
 #include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
@@ -182,6 +184,10 @@ namespace vibe { bool vibeLogVerbose(); void vibeSetLogVerbose(bool on); }
 #define LOGV(...) do { if (::vibe::vibeLogVerbose()) LOGI(__VA_ARGS__); } while (0)
 
 namespace vibe {
+// ★ Defined with g_ext (the external antenna switch) further down; used earlier by the retune path and the hwinfo caps.
+static void vsApplyAutoExtAntenna(double hz);
+static std::string vsExtAntennaFields();
+static bool vsExtSwitchOn();
 
 /** ★ Read ONCE, not per line: this sits in the DSP's per-block path and a getenv() per log call is
  *  a syscall-shaped cost on a Pi. std::atomic because --verbose may flip it from the main thread
@@ -14120,6 +14126,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             LOGI("RSP: a listener asked to reset the frozen gain API — queued for the radio thread");
             return;
         }
+        /* ★★★ {type:"antenna", antenna:"VHF Vertical"} — CHOOSE THE AERIAL, whatever provides it (2026-10-09): the owner's
+         *  external switch (g_ext) when one is set up, else an SDRplay's own sockets. Same gates as the RSP branch below:
+         *  shared hardware (sharedGate), and the owner's antenna lock (admin only when set). Counted as moving the radio
+         *  on a shared dial (movesTheRadio) — it changes what everyone hears. */
+        if (type == "antenna") {
+            if (!sharedGate("the antenna")) return;
+            const std::string ant = jsonStr(msg, "antenna");
+            if (ant.empty() || ant.size() > 64) return;
+            if (vsAntennaLocked() && !adminGate("the antenna")) {
+                sendText(sock, "{\"type\":\"notice\",\"why\":\"the server owner has fixed the aerial for this receiver\"}");
+                return;
+            }
+            if (vsExtSwitchOn()) {
+                if (!LocalSdrShim::instance().selectExtAntenna(ant))
+                    sendText(sock, "{\"type\":\"notice\",\"why\":\"the antenna switch is not answering just now\"}");
+                // ★ No broadcast here: the switch's READ-BACK (stat topic) broadcasts the real state when it changes.
+            } else {
+                LocalSdrShim::instance().setRspAntenna(ant);
+                vsPersist(std::string("{\"antennaPort\":\"") + dabEscape(ant) + "\"}");
+                LocalSdrShim::instance().broadcastHwInfo();
+            }
+            return;
+        }
         if (type == "rsp_control") {
             // ★★★ GAIN IS SHARED HARDWARE ON A SHARED RECEIVER. One listener moving the LNA or the
             //     IF reduction moves it for EVERYONE — it is the front end, not a per-listener
@@ -14313,7 +14342,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                          *  name the radio does not have, so nothing hostile reaches the hardware —
                          *  but it reaches the CONFIG FILE on its way, and a quote there would
                          *  break every later read of it. */
-                        vsPersist(std::string("{\"antenna\":\"") + dabEscape(ant) + "\"}");
+                        // ★ "antennaPort", the key the config READS (vibeserver_config.cpp) — this wrote "antenna", the
+                        //   free-text aerial description, so a chosen socket was never remembered (found 2026-10-09).
+                        vsPersist(std::string("{\"antennaPort\":\"") + dabEscape(ant) + "\"}");
                         LocalSdrShim::instance().broadcastHwInfo();
                     }
                 }
@@ -14955,7 +14986,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool movesTheRadio =
                    type == "tune" || type == "mode" || type == "bandwidth"
                 || type == "gain" || type == "rsp_control" || type == "ahf_control"
-                || type == "hackrf_control";
+                || type == "hackrf_control" || type == "antenna";
             if (movesTheRadio && vsSharedDial()) {
                 bool changed = false;
                 {
@@ -18447,6 +18478,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close(); return;
 
+        } else if (reqLine.rfind("GET /vibeserver/antswitch/search", 0) == 0) {
+            /* ★★ "Search for switch…" (2026-10-09). Admin only: it scans the owner's LAN and talks to their broker, which is
+             *  not a visitor's business. ?host=&port= narrows it to one broker; without them it scans this machine's /24 for
+             *  port 1883. A few seconds — the setup page shows it searching. */
+            if (!adminOkFor(reqLine, sock)) {
+                sock->sendstr("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                sock->close(); return;
+            }
+            const std::string host = queryParam(reqLine, "host");
+            const int port = std::atoi(queryParam(reqLine, "port").c_str());
+            // ★ An address, not a URL or a command: letters, digits, dots, hyphens and colons only.
+            const bool hostOk = host.size() <= 253 && host.find_first_not_of(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:") == std::string::npos;
+            const std::string j = hostOk ? LocalSdrShim::antSwitchSearch(host, port > 0 ? port : 1883, 3000)
+                                         : std::string("{\"brokers\":[],\"devices\":[]}");
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
+                          "Connection: close\r\nContent-Length: " + std::to_string(j.size()) + "\r\n\r\n" + j);
+            sock->close(); return;
         } else if (reqLine.rfind("GET /vibeserver/rtl-serial", 0) == 0) {
             // ★ Admin-gated like the write: it names the hardware on this machine, which is not a
             //   visitor's business, and the page that asks is already signed in.
@@ -22436,6 +22485,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<int> lastSentAspLimit{-2};   ///< the Airspy R2/Mini rule last announced — see below
 
     void applyGainCapForFreq(double hz) {
+        /* ★★ The external switch's per-band preset, on EVERY retune and every driver — before anything below can return.
+         *  (The RSP's own socket rule further down sits after `if (cap < 0) return;`, so it only switched at once on
+         *  bands that also had a gain ceiling; it is called here too now, for the same reason.) */
+        vsApplyAutoExtAntenna(hz);
+        if (useSdrplay() && sdrp) vsApplyAutoAntenna(sdrp.get(), hz);
         const int cap = LocalSdrShim::gainCapAt(hz);
         // ★★★ TELL THE CLIENTS WHEN THE CEILING CHANGES — including when it goes AWAY. hwinfo is
         //     otherwise sent once, on connect, so a listener who tunes from HF into FM would keep
@@ -25141,6 +25195,34 @@ static std::atomic<int> g_antennaLocked{0};
  *  150MHz+ B". Parsed at every evaluation rather than at load: it is a handful of rules, and
  *  keeping the TEXT means what the owner wrote is what the setup page shows back. */
 static std::string g_antennaMap;
+
+/* ★★★ THE EXTERNAL ANTENNA SWITCH (2026-10-09, docs/v12/ANTENNA-SWITCH-ROTATOR.md). Stuart: "Set up an antenna switch?
+ *  Yes → Search for switch… → How many antennas connected? → Antenna 1 (Name)(Details)…", an Antenna selector in the
+ *  clients, a per-band preset and an admin lock. It REUSES the RSP aerial path (GitHub #29) rather than run beside it:
+ *  hwinfo's `antennas`/`antenna`/`antennaLocked` (now from here when a switch is set up, for EVERY driver), the per-band
+ *  list `g_antennaMap` (antenna NAMES instead of socket letters) and the lock `g_antennaLocked`.
+ *  ★ First backend: MQTT (vibe_mqtt.h) — Chicopee runs Lite on Android, so it has to be network-only.
+ *  ★ The relay state is READ BACK (vibe_antswitch.h StateTracker): the selector shows what the switch says is connected,
+ *    never what we last asked for. */
+struct ExtAntSwitch {
+    std::mutex m;
+    bool enabled = false;
+    std::string host; int port = 1883;
+    std::vector<std::string> names;                    // in antenna order, as the owner named them
+    std::vector<vibe::antswitch::Relay> relays;        // one per antenna, same order
+    vibe::antswitch::StateTracker tracker;
+    int current = -1;                                  // read back: index, -1 unknown, -2 several on
+    bool connected = false;
+    std::string error;
+};
+static ExtAntSwitch g_ext;
+static vibe::mqtt::Client g_extClient;
+static bool vsExtSwitchOn() { std::lock_guard<std::mutex> lk(g_ext.m); return g_ext.enabled && !g_ext.names.empty(); }
+/** Tasmota relays (cmnd/<t>/POWERn) also report on stat/<t>/RESULT — subscribe to that too. */
+static std::string vsTasmotaResultTopic(const std::string& stateTopic) {
+    const size_t at = stateTopic.rfind("/POWER");
+    return at == std::string::npos ? std::string() : stateTopic.substr(0, at) + "/RESULT";
+}
 
 // ★ Forward-declared up by the hwinfo builder, which reports this state to the client.
 static int   vsDesiredRfNotch()    { return g_dsp.rspRfNotch.load(); }
@@ -32040,7 +32122,26 @@ int LocalSdrShim::rfGainPositions() const {
     return p->sdrp->lnaStateCount();
 }
 
+/* ★★ THE EXTERNAL SWITCH'S ANTENNAS, FOR EVERY DRIVER. The core below answers per driver and only the SDRplay branch
+ *  ever published `antennas` (its own sockets); a switch set up by the owner applies to any radio, so its fields are
+ *  added here, after whichever branch answered — and replace the RSP's socket list when both exist (the switch is what
+ *  the owner set up to choose aerials with). */
 std::string LocalSdrShim::radioCapsJson() const {
+    std::string j = radioCapsJsonCore();
+    const std::string ext = vsExtAntennaFields();
+    if (ext.empty() || j.empty() || j.back() != '}') return j;
+    const size_t a = j.find(",\"antennas\":[");
+    if (a != std::string::npos) {
+        const size_t lk = j.find(",\"antennaLocked\":", a);
+        if (lk != std::string::npos) {
+            const size_t e = j.find_first_of(",}", lk + 1);
+            if (e != std::string::npos) j.erase(a, e - a);
+        }
+    }
+    j.insert(j.size() - 1, ext);
+    return j;
+}
+std::string LocalSdrShim::radioCapsJsonCore() const {
     if (!p) return "";
     // ★ AIRSPY FIRST. The RTL branch below is an `if (!useSdrplay())` early return, so ANY
     // third driver falls into it and is reported as a dongle — which is exactly what happened:
@@ -32417,6 +32518,213 @@ void LocalSdrShim::setRspAntennaMap(const std::string& csv) {
     LOGI("per-band aerial list: %s", csv.empty() ? "(none — manual)" : csv.c_str());
 }
 void LocalSdrShim::setAntennaLocked(bool on) { g_antennaLocked.store(on ? 1 : 0); }
+
+/* ── THE EXTERNAL ANTENNA SWITCH — see g_ext ─────────────────────────────────────────────────────────────────── */
+
+/** The owner's switch, as the setup page / Lite's server screen saved it:
+ *  {"enabled":true,"host":"192.168.86.77","port":1883,"user":"","pass":"",
+ *   "antennas":[{"name":"VHF Vertical","cmd":"cmnd/antsw/POWER1","state":"stat/antsw/POWER1","on":"ON","off":"OFF"},…]}
+ *  Empty or "enabled":false = no switch: the client draws no selector and the broker is let go. */
+void LocalSdrShim::setAntennaSwitch(const std::string& json) {
+    using namespace vibe::antswitch;
+    g_extClient.stop();
+    Json j;
+    const bool parsed = !json.empty() && parseJson(json, j) && j.kind == Json::Obj;
+    std::vector<std::string> names; std::vector<Relay> relays;
+    bool enabled = false; std::string host, user, pass; int port = 1883;
+    if (parsed) {
+        enabled = j.get("enabled") && j.get("enabled")->kind == Json::Bool && j.get("enabled")->b;
+        host = j.str("host"); user = j.str("user"); pass = j.str("pass");
+        if (const Json* pn = j.get("port"); pn && pn->kind == Json::Num && pn->n > 0 && pn->n < 65536) port = int(pn->n);
+        if (const Json* a = j.get("antennas"); a && a->kind == Json::Arr)
+            for (const auto& e : a->a) {
+                if (e.kind != Json::Obj || names.size() >= 16) continue;
+                Relay r; r.label = e.str("name"); r.cmdTopic = e.str("cmd"); r.stateTopic = e.str("state");
+                r.on = e.str("on", "ON"); r.off = e.str("off", "OFF");
+                if (r.label.empty() || r.cmdTopic.empty()) continue;
+                names.push_back(r.label.substr(0, 40)); relays.push_back(r);
+            }
+    }
+    const bool on = enabled && !host.empty() && names.size() >= 2;
+    {
+        std::lock_guard<std::mutex> lk(g_ext.m);
+        g_ext.enabled = on; g_ext.host = host; g_ext.port = port;
+        g_ext.names = names; g_ext.relays = relays;
+        g_ext.tracker.setRelays(relays);
+        g_ext.current = -1; g_ext.connected = false; g_ext.error = on ? "connecting to the switch" : "";
+    }
+    LOGI("antenna switch: %s", on ? (std::to_string(names.size()) + " antennas via MQTT " + host + ":" + std::to_string(port)).c_str()
+                                  : "none");
+    broadcastHwInfo();
+    if (!on) return;
+    std::vector<std::string> filters;
+    for (const auto& r : relays) {
+        if (!r.stateTopic.empty()) filters.push_back(r.stateTopic);
+        const std::string res = vsTasmotaResultTopic(r.stateTopic);
+        if (!res.empty() && std::find(filters.begin(), filters.end(), res) == filters.end()) filters.push_back(res);
+    }
+    g_extClient.start(host, port, "vibeserver-" + vsRandomCode(6, "abcdefghijkmnpqrstuvwxyz23456789"), user, pass, filters,
+        [](const std::string& topic, const std::string& payload) {
+            bool changed = false;
+            {
+                std::lock_guard<std::mutex> lk(g_ext.m);
+                if (g_ext.tracker.feed(topic, payload)) {
+                    const int now = g_ext.tracker.connected();
+                    if (now != g_ext.current) { g_ext.current = now; changed = true; }
+                }
+            }
+            if (changed) LocalSdrShim::instance().broadcastHwInfo();
+        },
+        [](bool connected, const std::string& why) {
+            std::vector<Relay> rs;
+            {
+                std::lock_guard<std::mutex> lk(g_ext.m);
+                g_ext.connected = connected;
+                g_ext.error = connected ? "" : why;
+                rs = g_ext.relays;
+            }
+            LOGI("antenna switch: %s", connected ? "connected to the broker" : why.c_str());
+            /* ★ ASK, DO NOT ASSUME. A Tasmota relay answers an EMPTY command on its cmnd topic with its state; that is
+             *  how the selector learns what is connected before anyone has switched anything. Other switches report
+             *  on change or keep a retained state topic, which the subscription has already brought. */
+            if (connected)
+                for (const auto& r : rs)
+                    if (r.cmdTopic.rfind("cmnd/", 0) == 0 && r.cmdTopic.find("/POWER") != std::string::npos)
+                        g_extClient.publish(r.cmdTopic, "");
+            LocalSdrShim::instance().broadcastHwInfo();
+        });
+}
+
+/** Connect antenna `name` (case-insensitive). False = no switch, no such antenna, or the broker is not connected — a
+ *  command is never queued for later (vibe_mqtt.h Client::publish). */
+bool LocalSdrShim::selectExtAntenna(const std::string& name) {
+    std::vector<vibe::antswitch::Relay> relays; int idx = -1;
+    {
+        std::lock_guard<std::mutex> lk(g_ext.m);
+        if (!g_ext.enabled) return false;
+        for (size_t i = 0; i < g_ext.names.size(); ++i)
+            if (strcasecmp(g_ext.names[i].c_str(), name.c_str()) == 0) idx = int(i);
+        relays = g_ext.relays;
+    }
+    if (idx < 0) return false;
+    bool ok = true;
+    for (const auto& pub : vibe::antswitch::selectCommands(relays, idx)) ok = g_extClient.publish(pub.topic, pub.payload) && ok;
+    LOGI("antenna switch: %s %s", ok ? "selected" : "could not select", name.c_str());
+    return ok;
+}
+
+/** The hwinfo antenna fields while a switch is set up — the same keys the RSP's sockets use, so every client's existing
+ *  selector draws it — plus `antennaSwitch` so a client knows to send {type:"antenna"} and can say why it is greyed. */
+static std::string vsExtAntennaFields() {
+    std::lock_guard<std::mutex> lk(g_ext.m);
+    if (!g_ext.enabled || g_ext.names.empty()) return "";
+    std::string j = ",\"antennas\":[";
+    for (size_t i = 0; i < g_ext.names.size(); ++i) { if (i) j += ","; j += "\"" + dabEscape(g_ext.names[i]) + "\""; }
+    j += "]";
+    if (g_ext.current >= 0 && size_t(g_ext.current) < g_ext.names.size())
+        j += ",\"antenna\":\"" + dabEscape(g_ext.names[size_t(g_ext.current)]) + "\"";
+    j += std::string(",\"antennaLocked\":") + (vsAntennaLocked() ? "true" : "false");
+    j += std::string(",\"antennaSwitch\":{\"connected\":") + (g_ext.connected ? "true" : "false")
+       + ",\"state\":\"" + (g_ext.current == -2 ? "several" : g_ext.current < 0 ? "unknown" : "ok") + "\""
+       + (g_ext.error.empty() ? std::string() : ",\"error\":\"" + dabEscape(g_ext.error) + "\"") + "}";
+    return j;
+}
+
+/** The per-band preset for the external switch — the same owner list (g_antennaMap) the RSP sockets use, with antenna
+ *  NAMES ("0-30MHz WideBand Loop, 30MHz+ VHF Vertical"). Run on every retune (applyGainCapForFreq). Only on a CHANGE
+ *  of what the band wants, so a listener's own choice stands until they tune into a band that says otherwise. */
+static std::string g_extAutoLast;
+static void vsApplyAutoExtAntenna(double hz) {
+    if (hz <= 0 || !vsExtSwitchOn()) return;
+    std::string map;
+    { std::lock_guard<std::mutex> lk(g_rspAntMtx); map = g_antennaMap; }
+    if (map.empty()) return;
+    const std::string want = vibebands::antennaAt(vibebands::parseAntennaList(map), hz);
+    if (want.empty() || strcasecmp(want.c_str(), g_extAutoLast.c_str()) == 0) return;
+    g_extAutoLast = want;
+    LOGI("auto antenna (switch): %s at %.3f MHz", want.c_str(), hz / 1e6);
+    LocalSdrShim::instance().selectExtAntenna(want);
+}
+
+/** ★★ "Search for switch…" — find MQTT brokers (the one given, else this machine and every address on its /24, port
+ *  1883), then listen on each for Tasmota / Home-Assistant discovery for `waitMs`. Returns
+ *  {"brokers":["192.168.86.77:1883"],"devices":[{"broker":"…","id":"…","name":"…","kind":"tasmota",
+ *   "relays":[{"label":"…","cmd":"…","state":"…","on":"ON","off":"OFF"}]}]}. Blocking (a few seconds): call it off any
+ *  thread that matters. */
+std::string LocalSdrShim::antSwitchSearch(const std::string& host, int port, int waitMs) {
+    using namespace vibe;
+    if (port <= 0 || port > 65535) port = 1883;
+    if (waitMs < 500 || waitMs > 10000) waitMs = 3000;
+    std::vector<std::string> brokers;
+    if (!host.empty()) {
+        const int fd = mqtt::tcpConnect(host, port, 1500);
+        if (fd >= 0) { ::close(fd); brokers.push_back(host); }
+    } else {
+        std::vector<std::string> cands = { "127.0.0.1" };
+        const std::string me = primaryIpv4();
+        const size_t dot = me.rfind('.');
+        if (dot != std::string::npos)
+            for (int i = 1; i < 255; ++i) { const std::string a = me.substr(0, dot + 1) + std::to_string(i); if (a != me) cands.push_back(a); }
+        // ★ All at once, non-blocking, one poll: a sequential scan of 254 addresses would take minutes.
+        std::vector<std::pair<int, std::string>> pend;
+        for (const auto& a : cands) {
+            const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (fd < 0) continue;
+            fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+            sockaddr_in sa{}; sa.sin_family = AF_INET; sa.sin_port = htons(uint16_t(port));
+            if (inet_pton(AF_INET, a.c_str(), &sa.sin_addr) != 1) { ::close(fd); continue; }
+            const int rc = ::connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof sa);
+            if (rc == 0) { brokers.push_back(a); ::close(fd); continue; }
+            if (errno != EINPROGRESS) { ::close(fd); continue; }
+            pend.push_back({fd, a});
+        }
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
+        while (!pend.empty() && std::chrono::steady_clock::now() < end) {
+            std::vector<pollfd> pf; for (auto& p2 : pend) pf.push_back({p2.first, POLLOUT, 0});
+            if (::poll(pf.data(), pf.size(), 100) <= 0) continue;
+            std::vector<std::pair<int, std::string>> still;
+            for (size_t i = 0; i < pf.size(); ++i) {
+                if (!(pf[i].revents & (POLLOUT | POLLERR | POLLHUP))) { still.push_back(pend[i]); continue; }
+                int err = 0; socklen_t el = sizeof err; getsockopt(pend[i].first, SOL_SOCKET, SO_ERROR, &err, &el);
+                if (!err) brokers.push_back(pend[i].second);
+                ::close(pend[i].first);
+            }
+            pend.swap(still);
+        }
+        for (auto& p2 : pend) ::close(p2.first);
+    }
+    if (brokers.size() > 4) brokers.resize(4);
+    std::string j = "{\"brokers\":[";
+    for (size_t i = 0; i < brokers.size(); ++i) { if (i) j += ","; j += "\"" + dabEscape(brokers[i]) + ":" + std::to_string(port) + "\""; }
+    j += "],\"devices\":[";
+    bool first = true;
+    for (const auto& b : brokers) {
+        std::mutex fm; std::vector<antswitch::Device> found;
+        mqtt::Client c;
+        c.start(b, port, "vibeserver-search-" + vsRandomCode(6, "abcdefghijkmnpqrstuvwxyz23456789"), "", "",
+                antswitch::discoveryFilters(),
+                [&](const std::string& t, const std::string& pl) { std::lock_guard<std::mutex> lk(fm); antswitch::noteDiscovery(found, t, pl); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
+        c.stop();
+        std::lock_guard<std::mutex> lk(fm);
+        for (const auto& d : found) {
+            if (!first) j += ",";
+            first = false;
+            j += "{\"broker\":\"" + dabEscape(b) + ":" + std::to_string(port) + "\",\"id\":\"" + dabEscape(d.id)
+               + "\",\"name\":\"" + dabEscape(d.name) + "\",\"kind\":\"" + d.kind + "\",\"relays\":[";
+            for (size_t i = 0; i < d.relays.size(); ++i) {
+                const auto& r = d.relays[i];
+                if (i) j += ",";
+                j += "{\"label\":\"" + dabEscape(r.label) + "\",\"cmd\":\"" + dabEscape(r.cmdTopic) + "\",\"state\":\""
+                   + dabEscape(r.stateTopic) + "\",\"on\":\"" + dabEscape(r.on) + "\",\"off\":\"" + dabEscape(r.off) + "\"}";
+            }
+            j += "]}";
+        }
+    }
+    j += "]}";
+    LOGI("antenna switch search: %zu broker(s)", brokers.size());
+    return j;
+}
 void LocalSdrShim::setRspHdr(bool v)        { g_dsp.rspHdr.store(v ? 1 : 0);
                                               if (!p || !p->useSdrplay()) return;
                                               VIBE_HW_LOCK(); p->sdrp->setHdr(v); }

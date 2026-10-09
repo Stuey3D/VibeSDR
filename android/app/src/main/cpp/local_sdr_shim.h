@@ -736,6 +736,11 @@ public:
     int rfGainPositions() const;
     /** `,"radio":{…}` describing the running receiver's real controls, for hwinfo. */
     std::string radioCapsJson() const;
+    std::string radioCapsJsonCore() const;   // ★ per driver; radioCapsJson adds the external switch's antennas
+    /** ★ The external antenna switch (2026-10-09) — see g_ext in the .cpp. */
+    void setAntennaSwitch(const std::string& json);
+    bool selectExtAntenna(const std::string& name);
+    static std::string antSwitchSearch(const std::string& host, int port, int waitMs);
     /** RSP-only controls. No-ops on any other source. */
     void setLnaState(int state);
     void setIfGainReduction(int gRdB);

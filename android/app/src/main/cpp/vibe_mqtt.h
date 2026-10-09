@@ -259,9 +259,13 @@ private:
                             ok = false; break;
                         }
                         acked = true;
-                        std::lock_guard<std::mutex> lk(m_);
-                        for (const auto& f : filters_) { sendAll(fd, subscribePacket(pid++, f)); if (!pid) pid = 1; }
-                        connected_ = true;
+                        {
+                            std::lock_guard<std::mutex> lk(m_);
+                            for (const auto& f : filters_) { sendAll(fd, subscribePacket(pid++, f)); if (!pid) pid = 1; }
+                            connected_ = true;
+                        }
+                        // ★ OUTSIDE the lock: the callback may publish (ask the relays for their state), and
+                        //   publish() takes this same mutex.
                         if (onState_) onState_(true, "");
                     } else if (pk.type == 3) {
                         if (onMsg_) onMsg_(pk.topic, pk.payload);
