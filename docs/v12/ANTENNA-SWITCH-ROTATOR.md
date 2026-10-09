@@ -71,6 +71,37 @@ RTL, Airspy and SDRplay radios have no antenna outputs (SDRplay's internal A/B/C
 Precedent worth reading before designing the backends: KiwiSDR's `ant_switch` extension (GPIO and several web/serial
 switches) — what owners already expect.
 
+## 3a. Stuart's design (2026-10-09) — the shape to build
+
+Chicopee runs **VibeServer Lite on Android**: no GPIO, so **MQTT (and HTTP) first** — network-only, and the C++ shim that
+would hold the client runs in Lite and on Linux alike. Setup lives in BOTH Lite's server screen and the Linux web setup page.
+
+**Setup (owner) — above the existing antenna details**
+1. "Set up an antenna switch?" — **Yes / No**. No = today's single antenna, untouched.
+2. **"Search for switch…"** → the result says what and where, e.g. *"Switch found on 192.168.86.77:12345 — Generic Antenna
+   Switch Example"* (mDNS `_mqtt._tcp` → the broker → Tasmota / Home-Assistant discovery topics; HTTP switches by their own
+   discovery where they have one; or typed in). Pick from the list — a TV remote cannot comfortably type topics.
+3. **"How many antennas are connected?"** — a number.
+4. That many **antenna blocks**, each the existing antenna + filter block repeated: *Antenna 1 (Name) (Details — coverage,
+   filters)*, *Antenna 2 (Name) (Details)*… plus which relay/output it is. A **Test** key switches each in turn and reads the
+   state back.
+
+**Client (app, web, Jr) — its own menu entry, just UNDER the SDR settings**
+- An **Antenna** selector listing the owner's names, e.g. *VHF Vertical* / *WideBand Loop*, the selected one marked, the
+  state read back from the switch (never assumed from what we asked).
+- Absent entirely when the radio has no switch (AGENTS.md: no inert controls). Greyed with the reason when locked (below).
+
+**Per-band limits — a new antenna column**
+- In the existing per-band limits, **choose an antenna per band** and optionally **lock** it there: tuning into 40 m selects
+  *WideBand Loop*, into 2 m *VHF Vertical*.
+- ★ Band defaults apply ONLY on a person's tune (`userTuneSeq` — [[band_defaults_user_only]]), never on reconnect/restore —
+  the same rule as mode/step defaults, or a reconnect would flip someone else's antenna.
+
+**Admin lock**
+- **"Lock antenna controls behind the admin password"**: listeners get no selector (or a read-only name of what is in use),
+  and the per-band presets drive the switch. The admin, signed in, can still switch by hand.
+- On a SHARED dial an antenna change is a tune: the shared-dial contract and "ask before tuning" apply.
+
 ## 4. Testing without the hardware
 
 - **Rotator:** Hamlib's dummy rotator `rotctld -m 1` accepts bearings and reports position with nothing attached. Point a
