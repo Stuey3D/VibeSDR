@@ -299,12 +299,18 @@ struct InstancePickerView: View {
         Rectangle().fill(Self.dim.opacity(0.5)).frame(width: 2, height: 26).padding(.leading, 6)
         VStack(alignment: .leading, spacing: 1) {
           HStack(spacing: 4) {
+            if r.pin == true {
+              Image(systemName: "lock.fill").font(.system(size: 9)).foregroundColor(.orange)
+            }
             Text(r.name).font(.system(size: 12)).foregroundColor(full ? Self.dim : Self.cream)
               .lineLimit(1)
             Text(r.occupancy).font(.system(size: 9))
               .foregroundColor(full ? .orange : Self.dim).lineLimit(1)
           }
           Text(r.limits).font(.system(size: 9)).foregroundColor(Self.dim).lineLimit(1)
+          if r.pin == true {
+            Text("PIN required").font(.system(size: 9, weight: .semibold)).foregroundColor(.orange)
+          }
         }
         Spacer()
       }.opacity(full ? 0.5 : 1)

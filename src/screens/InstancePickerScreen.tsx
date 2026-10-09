@@ -1148,10 +1148,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
    *   the saved-PIN store and resolveVibeAuth all live on this screen. Before this it went through
    *   the generic goTo → SDR with serverType 'vibeserver', a screen that does not speak the
    *   protocol: the phone never connected and the wrist waited for rows that were never coming.
-   * ★★ THE PIN BELONGS TO THE SERVER, NOT THE RADIO — so the auth probe goes to the DOOR while the
-   *   connection goes to the radio. `/vibeserver/auth` does not exist under `/r/<id>`, so probing
-   *   the address we are connecting to would throw and report "could not reach" about a server that
-   *   is plainly up. (host:port already keys the saved PIN by the door, which is the same rule.)
+   * ★★ THE PIN IS ASKED OF WHAT WE CONNECT TO — the radio, when the address names one (a radio may have a PIN of its
+   *   own; see the probe below, 2026-10-09). The DOOR is the fallback for an older server whose /r/<id> cannot
+   *   answer. host:port still keys the saved PIN by the door.
    * ★ Same one-shot shape as autoSpy — fire once, clear the param, so a failed connect leaves the
    *   user on the picker rather than in a retry loop. */
   const autoVibeFired = useRef(false);
@@ -1195,7 +1194,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       if (!host) { crumb('autoVibe: NO HOST parsed, giving up'); return; }
       let needsPin = true;
       crumb(`autoVibe: probing PIN at ${door}`);
-      try { needsPin = await vibeServerNeedsPin(door); }
+      /* ★★★ ASK THE RADIO, NOT THE DOOR (Stuart, 2026-10-09: Buddy opened the Pi 500's Airspy — which has a PIN of
+       *  its own — without asking, and the phone showed an SDR screen with no waterfall and no audio). This asked the
+       *  front door only; a door with no master PIN says "not required", so the radio's own PIN was never asked
+       *  for and every socket was refused. /r/<id>/vibeserver/auth DOES answer (measured: required:true on the
+       *  Airspy while the door said false). The door is asked only when the radio cannot answer (an older server). */
+      const target = autoVibe.url.replace(/\/+$/, '');
+      try {
+        needsPin = target !== door ? await vibeServerNeedsPin(target).catch(() => vibeServerNeedsPin(door))
+                                   : await vibeServerNeedsPin(door);
+      }
       catch {
         /* ★★★ AND TELL THE WATCH, or it waits for ever. applyInstance set the phone to "starting"
          *   before handing over, and Buddy draws "Starting VibeSDR…" for exactly as long as that

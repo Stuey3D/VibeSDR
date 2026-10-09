@@ -48,6 +48,7 @@ RCT_EXTERN_METHOD(setVolume:(double)volume)
 //   setMacOutputGain in VibePowerModule.swift and src/services/macAudio.ts. Exported here or JS
 //   cannot see it: the Swift @objc alone is invisible.
 RCT_EXTERN_METHOD(setMacOutputGain:(nonnull NSNumber *)gain)
+RCT_EXTERN_METHOD(setPageOpen:(BOOL)open)
 RCT_EXTERN_METHOD(startRecording:(nonnull NSNumber *)frequency mode:(NSString *)mode resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(stopRecording:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(shareRecording:(NSString *)path)

@@ -320,6 +320,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
     private var audioFocusRequest: AudioFocusRequest? = null
     private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        // ★ A page we opened took the audio (setPageOpen): a duck, never a stop or a mute — and its return fades us in.
+        if (pageOpen || pageDucked) {
+            when (change) {
+                AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
+                    mainHandler.post { if (running) { pageDucked = true; fadePage(0f, 250) } }
+                AudioManager.AUDIOFOCUS_GAIN ->
+                    mainHandler.post { if (pageDucked) { pageDucked = false; fadePage(1f, 800) } }
+            }
+            return@OnAudioFocusChangeListener
+        }
         when (change) {
             // Permanent loss = another media app took over for good. Relinquish
             // fully like iOS does — stop the engine and tear down the foreground
@@ -1518,7 +1529,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             .setBufferSizeInBytes(maxOf(minBuf * 4, rate / 2 * 2 * channels))  // ≥500ms — absorb New-Arch scheduling jitter
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
-        t.setVolume(volume)
+        t.setVolume(volume * pageGain)
         t.play()
         extRate = rate
         extChannels = channels
@@ -1528,8 +1539,52 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     fun setVolumeNative(v: Float) {
         volume = v.coerceIn(0f, 1f)
-        track?.setVolume(volume)
-        extTrack?.setVolume(volume)
+        applyVolume()
+    }
+
+    /** The listener's volume times the page duck (below). Every track's level comes from here. */
+    private fun applyVolume() {
+        val v = volume * pageGain
+        track?.setVolume(v)
+        extTrack?.setVolume(v)
+    }
+
+    /* ★★ A PAGE WE OPENED PLAYS ITS OWN AUDIO (the Signal Identification Wiki, 2026-10-09 — Stuart: "temporarily mute the
+     *  SDR audio so the user doesnt end up with 2 audio sources mixed in together, then when the media element has
+     *  finished playing we fade our audio back in"). The wiki opens in a Chrome Custom Tab (src/utils/openWebPage.ts);
+     *  its media takes AUDIO FOCUS — usually a PERMANENT loss, which the listener above treats as another media app
+     *  taking over for good and STOPS THE SERVICE. While such a page is open any loss is a duck instead: fade to silence
+     *  with the stream still running (a shared receiver keeps our place), and fade back when focus returns or the page
+     *  closes. pageGain multiplies the listener's own volume; nothing here touches `muted`. */
+    @Volatile private var pageOpen = false
+    @Volatile private var pageDucked = false
+    @Volatile private var pageGain = 1f
+    private var pageFadeGen = 0
+
+    fun setPageOpen(open: Boolean) {
+        mainHandler.post {
+            pageOpen = open
+            if (!open && pageDucked) {
+                pageDucked = false
+                requestAudioFocus()          // ★ we may have lost it for good to the tab; take it back
+                fadePage(1f, 800)
+            }
+        }
+    }
+
+    /** Ramp pageGain to `to` over `ms` on the main thread; a newer fade supersedes an older one. */
+    private fun fadePage(to: Float, ms: Long) {
+        val gen = ++pageFadeGen
+        val from = pageGain
+        val steps = maxOf(1, (ms / 40).toInt())
+        for (i in 1..steps) {
+            mainHandler.postDelayed({
+                if (gen != pageFadeGen) return@postDelayed
+                val f = i.toFloat() / steps
+                pageGain = from + (to - from) * f * f
+                applyVolume()
+            }, i * 40L)
+        }
     }
 
     fun sendRawCommand(json: String) {
@@ -2488,7 +2543,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             .setBufferSizeInBytes(maxOf(minBuf * 2, 9_600 * ch)) // ≥100ms
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
-        t.setVolume(volume)
+        t.setVolume(volume * pageGain)
         t.play()
         track = t
         trackRate = rate

@@ -58,6 +58,7 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  { v: 'V11 RC32', detail: 'Ask \u201cAnyone know what this is?\u201d on a shared receiver and everyone else gets an \u201cIt\u2019s \u2026\u201d row to answer with \u2014 WEFAX, RTTY, DMR, CODAR, ADS-B and two dozen more, only those for the band you are on. An answer links to that signal\u2019s page on the Signal Identification Wiki, and where VibeSDR has the decoder a DECODE key opens it. A SIGNAL ID WIKI key sits under the demodulators. The wiki opens as if you had tapped a link \u2014 in Safari or your own browser, exactly as published \u2014 and the radio fades out while a clip from it plays, then back in. A radio with a PIN of its own now always asks for it: the watch showed one as open and the phone connected without it, to a blank screen. A server whose public address stops answering gets a new one by itself, instead of sitting listed but unreachable.' },
   { v: 'V11 RC31', detail: 'Station names that change word by word no longer come out scrambled. A US station flipping its name \u201cLAZER\u201d, \u201cNIRVANA\u201d, \u201cIN\u201d, \u201cBLOOM\u201d showed half-changed words such as \u201cNIRV\u201d and \u201cBLOOR\u201d, because the name arrives two letters at a time and the server passed it on mid-change. A name is now passed on only once it has arrived whole. On a US receiver a scrolling name keeps its words, led by the station\u2019s call letters unless it already carries them. Needs the server updated to RC31.' },
   { v: 'V11 RC30', detail: 'More to say on a shared receiver, still without any typing: \u201cHello everyone!\u201d, \u201cJust scanning to see what\u2019s about\u201d, \u201cAnyone know what this is?\u201d, \u201cNice catch!\u201d, \u201cNot my kind of music\u201d, \u201cConditions are great today\u201d, \u201cConditions are poor today\u201d and \u201cOff now \u2014 73!\u201d. A \u201cThis sounds \u2026\u201d row picks a word: awesome, great, interesting, weird, distorted or bad. The same phrases on the phone, in the browser and on the watch. Listeners are numbered from User 1 upwards again, with no gaps, and a number only passes to someone new after two minutes, so a dropped connection gets its own back; when one does pass on, the chat shows \u201c\u2014 User 1 joined 17:40 UTC \u2014\u201d. Stations that rotate their name (common in the US, Brazil and Ukraine) no longer sit on the server\u2019s bookmark list as \u201cPI: 87A6\u201d: an American station is named by the call letters its code carries (WTIC), and elsewhere by the name its rotating text keeps coming back to. Both are marked unverified until the station\u2019s own name settles. On a US receiver, a station whose name scrolls shows its call letters instead, and Advanced RDS lists them. In the Americas the FM band gets a 200 kHz step that lands on the odd tenths (88.1, 88.3 \u2026) where the stations are. Advanced RDS also notes when a station\u2019s country is not the receiver\u2019s: a long-distance catch, or a station sending the wrong code (several Ukrainian stations send Morocco\u2019s).' },
   { v: 'V11 RC29', detail: 'A WEFAX slant you saved for a frequency now shows on the ADJ key (\u201cADJ \u00b7 SLANT +0.114 SAVED\u201d) whenever it is being applied, so a chart that leans because of an old saved setting says so; AUTO clears it. Server owners can set the listener limit with \u2212 and + keys as well as typing, which helps on TV boxes driven by a remote. A receiver protected by its own PIN now reports that it needs one.' },
@@ -237,7 +238,7 @@ const HIGHLIGHT_MAJOR = HIGHLIGHTS[APP_VERSION.split('.')[0]] ? APP_VERSION.spli
  *     (its library source is BSD-3), librtlsdr as the RTL-SDR Blog fork (we build osmocom 2.0.3), and
  *     MapLibre, PMTiles, PFFFT, cloudflared and the runtime data sources were missing entirely.
  *  Order: the people, then projects we speak to or learned from, then code we ship, then data. */
-const CREDITS: { name: string; detail: string }[] = [
+const CREDITS: { name: string; detail: string; url?: string }[] = [
   // ── THE PEOPLE ───────────────────────────────────────────────────────────────────────────────
   { name: 'M9PSY (madpsy) — UberSDR',
     detail: 'The biggest thank-you of all. M9PSY got me into AI-assisted coding and encouraged this whole project into existence — without him there is no VibeSDR. UberSDR is the server this client was first built for, and VibeServer speaks its protocol. The on-device RTTY / NAVTEX, WEFAX and SSTV decoders are C++ ports of his UberSDR decoders; the NR2, noise-blanker and WebSDR-NR audio processing are ports of his web client’s; and the decoder wiring, the maps for HFDL, digital and CW spots, the colour palettes, band plans, bookmark format and the waterfall smoothing pipeline all started from his work. Cheers, mate.' },
@@ -335,6 +336,11 @@ const CREDITS: { name: string; detail: string }[] = [
     detail: 'Station logos for FM and DAB, looked up by the station’s own identity (PI code or service ID) so you get the broadcaster’s artwork rather than a guess.' },
   { name: 'radio-browser.info',
     detail: 'The community radio-station directory used to look up and match station logos, by name and country — on every backend, and on AM and shortwave stations as well as FM. Community data, freely licensed.' },
+  /* ★★ THE SIGNAL IDENTIFICATION WIKI (2026-10-09) — "make sure fully credited" (Stuart). LINKED, never copied: its
+   *  pages are its contributors' and its ads pay its hosting, so the app opens them whole (WikiScreen). */
+  { name: 'Signal Identification Wiki (sigidwiki.com)',
+    detail: 'The reference behind “what is this signal?”. Every chat answer and the SIGNAL ID WIKI key under the demodulators open its pages — shown whole and unmodified, with the site’s own address and advertising, which is how this public-benefit project pays for its hosting. The content belongs to its contributors; VibeSDR copies none of it.',
+    url: 'https://www.sigidwiki.com/' },
   { name: 'EiBi',
     detail: 'Shortwave broadcast schedules used for live station bookmarks and the directory’s station finder.' },
   { name: 'Ofcom',
@@ -526,6 +532,11 @@ function AboutBody({ onClose }: AboutOverlayProps) {
             <View key={c.name} style={styles.creditBlock}>
               <Text style={styles.creditName}>{c.name}</Text>
               <Text style={styles.creditDetail}>{pc(c.detail)}</Text>
+              {!!c.url && (
+                <TouchableOpacity onPress={() => Linking.openURL(c.url!)} accessibilityRole="link">
+                  <Text style={[styles.creditDetail, styles.link]}>{c.url.replace(/^https:\/\//, '').replace(/\/$/, '')}</Text>
+                </TouchableOpacity>
+              )}
             </View>
           ))}
 

@@ -106,7 +106,10 @@ ok('external PCM and Opus both feed playExternalBuffer',
    /playExternalBuffer\(/.test(fnBody('feedExternalPcm')) && /playExternalBuffer\(/.test(fnBody('feedExternalOpus')));
 const se = fnBody('startEngine');
 ok('startEngine wires the player to the MAIN MIXER', /engine\.connect\(player, to: engine\.mainMixerNode/.test(se));
-ok('every new engine starts at the Mac gain', /engine\.mainMixerNode\.outputVolume = macOutputGain/.test(se));
+// ★ …unless a page we opened is playing (the Signal Identification Wiki, 2026-10-09): then a rebuilt engine stays silent
+//   until that clip ends and pageUnduck fades it back to the Mac gain.
+ok('every new engine starts at the Mac gain (silent only while a page we opened plays)',
+   /engine\.mainMixerNode\.outputVolume = pageDucked \? 0 : macOutputGain/.test(se));
 eq('AVAudioEngine() is created only in startEngine (and the silent keep-alive, which is not ours)',
    (sw.match(/AVAudioEngine\(\)/g) || []).length, 1);
 const sg = fnBody('setMacOutputGain');

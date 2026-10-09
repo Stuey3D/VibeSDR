@@ -107,6 +107,9 @@ struct DirRadio: Identifiable, Codable, Hashable {
    *   versa. Every key added to this struct from now on must be optional for that reason.
    * ★ nil reads as "not full" — unknown occupancy must never lock somebody out of a radio. */
   var full: Bool?
+  /// ★ This radio has a PIN of its own (2026-10-09). OPTIONAL for the same version-skew reason as `full`; nil = no
+  ///   lock shown. The tap is NOT disabled: the phone asks the radio and brings the PIN pad to the wrist.
+  var pin: Bool?
 }
 
 // ── Directory metadata ───────────────────────────────────────────────────────────

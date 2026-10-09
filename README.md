@@ -262,6 +262,7 @@ we ship.
 | **ČTÚ** (Czech Telecommunication Office) | data.gov.cz terms — no copyright or database right (CC0) | Czech DAB licensed sites |
 | **RDI** (Rijksinspectie Digitale Infrastructuur, NL) | **CC0 1.0** | Dutch DAB licensed sites |
 | **EiBi** | — | Shortwave schedules: live bookmarks and the directory's station finder |
+| **[Signal Identification Wiki](https://www.sigidwiki.com/)** (sigidwiki.com, a public-benefit project funded by its own advertising) | linked, never copied — contributors' content stays theirs | "What is this signal?": every chat answer and the SIGNAL ID WIKI key open its pages, unmodified, with the site's own address and ads |
 | **RadioDNS** and **radio-browser.info** | — / community | Station logos |
 | **NOAA Space Weather Prediction Center** | public domain | Solar flux and K index for band conditions |
 | **AFRINIC, APNIC, ARIN, LACNIC, RIPE NCC** delegation stats and **iptoasn.com** | free / PDDL | Listener country and network on the server's admin page |

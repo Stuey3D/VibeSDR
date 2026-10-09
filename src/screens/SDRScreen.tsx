@@ -639,7 +639,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    A single-radio V3 still needs the prefix, so it is resolved silently in the usual case
       //    and the user sees no difference from today.
       const worthReading = !!d.landingMessage || d.radios.some((r) => !!r.antenna);
-      if (d.radios.length === 1 && !worthReading) {
+      /* ★★ …AND NOT WHEN THAT ONE RADIO HAS A PIN OF ITS OWN (2026-10-09). Adopting it here connected without the
+       *  radio's PIN — the door has none, so nothing asked — and every socket was refused: a blank SDR screen. Left
+       *  unadopted, the card shows it locked with the PIN box, exactly as for a door of several. */
+      if (d.radios.length === 1 && !worthReading && d.radios[0].pinLocked !== true) {
         setRadioBase(radioBaseUrl(baseUrl, d.radios[0].id));
       }
       setDoorPending(false);
@@ -914,7 +917,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    are the reason the screen exists in that case, and connecting past them would show them to
    *    nobody. See the resolver above. */
   const awaitingRadio = !!door && !radioBase
-    && (door.radios.length > 1 || !!door.landingMessage || door.radios.some((r) => !!r.antenna));
+    && (door.radios.length > 1 || !!door.landingMessage || door.radios.some((r) => !!r.antenna)
+        || door.radios.some((r) => r.pinLocked === true));   // ★ a lone PIN radio waits for its PIN (see above)
 
   /**
    * ★★★ WHICH OF THESE RADIOS IS ACTUALLY IN USE. The door's radio list is a DIRECTORY, not a

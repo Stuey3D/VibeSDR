@@ -213,6 +213,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     fun setMuted(muted: Boolean) { VibeStreamService.instance?.setMutedNative(muted) }
 
     @ReactMethod
+    fun setPageOpen(open: Boolean) {
+        // ★ A page we opened (the Signal Identification Wiki) may take the audio — see VibeStreamService.setPageOpen.
+        VibeStreamService.instance?.setPageOpen(open)
+    }
+
+    @ReactMethod
     fun setVolume(volume: Double) {
         VibeStreamService.instance?.setVolumeNative(volume.toFloat())
     }

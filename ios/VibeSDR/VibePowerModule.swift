@@ -245,6 +245,50 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   /// The current mute was imposed by an AVAudioSession interruption, not chosen by the listener —
   /// so an interruption that ENDS with .shouldResume may lift it. Main thread; cleared by setMuted.
   private var interruptMuted = false
+
+  // MARK: - A page we opened plays its own audio (the Signal Identification Wiki, 2026-10-09)
+  //
+  // ★★ Stuart: "when a user interacts with a media element in the sigid wiki itself … temporarily mute the SDR audio so
+  //    the user doesnt end up with 2 audio sources mixed in together, then when the media element has finished playing
+  //    we fade our audio back in". The wiki opens in SFSafariViewController (src/utils/openWebPage.ts) — Safari's own
+  //    process, so we cannot see the page, but its media takes the audio session and iOS INTERRUPTS us. While such a
+  //    page is open an interruption is not a pause: nothing is disconnected (a shared receiver keeps our place), we go
+  //    quiet, and when it ends — or the page closes, whichever comes first — the engine restarts and FADES back in.
+  // ★ Out is a cut, not a fade: iOS has already stopped our engine when the interruption arrives.
+  private var pageOpen = false
+  private var pageDucked = false
+  private var pageFade: Timer?
+
+  @objc func setPageOpen(_ open: Bool) {
+    onMain {
+      self.pageOpen = open
+      if !open && self.pageDucked { self.pageUnduck() }
+    }
+  }
+
+  /// The page's audio has finished (interruption ended) or the page closed: restart and fade in over ~0.8 s.
+  private func pageUnduck() {
+    pageDucked = false
+    pageFade?.invalidate(); pageFade = nil
+    do { try AVAudioSession.sharedInstance().setActive(true) } catch {
+      // ★ Safari may still hold the session for a moment after its clip; try once more shortly.
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { try? AVAudioSession.sharedInstance().setActive(true) }
+    }
+    guard let engine = audioEngine else { return }
+    let target = macOutputGain
+    engine.mainMixerNode.outputVolume = 0
+    playerNode?.stop()                 // ★ drop what queued while silent — the radio is LIVE, not a recording
+    if !engine.isRunning { try? engine.start() }
+    playerNode?.play()
+    var step = 0
+    pageFade = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] t in
+      guard let self else { t.invalidate(); return }
+      step += 1
+      let f = min(1, Float(step) / 20)
+      self.audioEngine?.mainMixerNode.outputVolume = target * f * f   // ★ squared: a fade the ear hears as even
+      if f >= 1 { t.invalidate(); self.pageFade = nil }
+    }
+  }
   private var lastSignalEmit: TimeInterval = 0   // throttle the SNR (VibeSignal) event
   private var currentFreq:  Int    = 14_074_000
   private var currentMode:  String = "usb"
@@ -1735,7 +1779,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     let g = VibePowerModule.runsOnMac ? Float(max(0, min(1, gain.doubleValue))) : 1
     onMain {
       self.macOutputGain = g
-      self.audioEngine?.mainMixerNode.outputVolume = g
+      if !self.pageDucked && self.pageFade == nil { self.audioEngine?.mainMixerNode.outputVolume = g }
     }
   }
 
@@ -2816,7 +2860,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     ) { [weak self] note in
       guard let self else { return }
       let type = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-      if type == AVAudioSession.InterruptionType.began.rawValue {
+      if type == AVAudioSession.InterruptionType.began.rawValue, self.pageOpen {
+        // ★ A page we opened is playing (see setPageOpen): go quiet, disconnect nothing.
+        DispatchQueue.main.async {
+          self.pageDucked = true
+          self.pageFade?.invalidate(); self.pageFade = nil
+          self.audioEngine?.mainMixerNode.outputVolume = 0
+        }
+      } else if type == AVAudioSession.InterruptionType.began.rawValue {
         // Something grabbed the audio session — could be transient (Siri in the
         // car, a phone call) or persistent (a Mac took the shared AirPods). iOS
         // pauses us; sync our state so the UI shows muted. NB this calls
@@ -2825,6 +2876,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         DispatchQueue.main.async {
           if !self.isMuted { self.setMuted(true); self.interruptMuted = true }
         }
+      } else if type == AVAudioSession.InterruptionType.ended.rawValue, self.pageDucked {
+        // ★ The page's clip has finished — whatever .shouldResume says, this mute was ours to lift.
+        DispatchQueue.main.async { if self.pageDucked { self.pageUnduck() } }
       } else if type == AVAudioSession.InterruptionType.ended.rawValue {
         // Only auto-resume when iOS says the interruption was transient
         // (.shouldResume) — e.g. Siri voice tuning in CarPlay. Without this the
@@ -2897,7 +2951,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     engine.connect(player, to: engine.mainMixerNode, format: fmt)
     // ★ The Mac VOLUME / MUTE (setMacOutputGain) — every new engine starts at it, or a route change
     //   or a self-heal would put a muted Mac back at full volume. Unity everywhere but a Mac.
-    engine.mainMixerNode.outputVolume = macOutputGain
+    engine.mainMixerNode.outputVolume = pageDucked ? 0 : macOutputGain   // ★ a rebuild mid-clip stays quiet
     do {
       try engine.start()
       player.play()
