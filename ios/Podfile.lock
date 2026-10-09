@@ -82,6 +82,8 @@ PODS:
     - ExpoModulesJSI
     - ExpoModulesWorklets
     - RNWorklets
+  - ExpoWebBrowser (57.0.3):
+    - ExpoModulesCore
   - FBLazyVector (0.86.0)
   - hermes-engine (250829098.0.14):
     - hermes-engine/Pre-built (= 250829098.0.14)
@@ -2397,6 +2399,7 @@ DEPENDENCIES:
   - ExpoModulesJSI (from `../node_modules/expo-modules-jsi/apple`)
   - ExpoModulesWorklets (from `../node_modules/expo-modules-core/ExpoModulesWorklets.podspec`)
   - ExpoModulesWorkletsAdapter (from `../node_modules/expo-modules-core`)
+  - ExpoWebBrowser (from `../node_modules/expo-web-browser/ios`)
   - FBLazyVector (from `../node_modules/react-native/Libraries/FBLazyVector`)
   - hermes-engine (from `../node_modules/react-native/sdks/hermes-engine/hermes-engine.podspec`)
   - RCTDeprecation (from `../node_modules/react-native/ReactApple/Libraries/RCTFoundation/RCTDeprecation`)
@@ -2520,6 +2523,8 @@ EXTERNAL SOURCES:
     :podspec: "../node_modules/expo-modules-core/ExpoModulesWorklets.podspec"
   ExpoModulesWorkletsAdapter:
     :path: "../node_modules/expo-modules-core"
+  ExpoWebBrowser:
+    :path: "../node_modules/expo-web-browser/ios"
   FBLazyVector:
     :path: "../node_modules/react-native/Libraries/FBLazyVector"
   hermes-engine:
@@ -2715,6 +2720,7 @@ SPEC CHECKSUMS:
   ExpoModulesJSI: ef7f197a8e7eeb245557f560ade794bfc1abdc79
   ExpoModulesWorklets: 0340ed9a30017f8597b90a1ef9aa210c43e44c4b
   ExpoModulesWorkletsAdapter: 7f3e892ebc321917cbea2612efdcce8ecb6b0a3b
+  ExpoWebBrowser: a4d7c382116fbe33c1ec7f60293f02b7e97042e4
   FBLazyVector: b3e7ad108f0d882e30445c5527d774e3fd432f3d
   hermes-engine: e778009e83715b612635bac9893dd85fce6de31d
   RCTDeprecation: 2a74a2c57675e64419bd89078efde81f7c1de90b

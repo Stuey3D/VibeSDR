@@ -53,6 +53,10 @@ export interface ChatMessage {
   ts:     string; // "HHMMz"
   /** ★ A station somebody shared (canned chat) — the SERVER's line, drawn with a TUNE key. */
   share?: SharedStation;
+  /** ★ An answer to "Anyone know what this is?" — its Signal Identification Wiki page and, when this receiver runs
+   *  one, the decoder that reads it: drawn as WIKI / DECODE keys (dialChat ANSWERS). */
+  wiki?: string;
+  decoder?: string;
 }
 
 /** One row of the share picker. `title` may be the user's OWN bookmark label — shown on their own
@@ -89,6 +93,12 @@ export interface ChatDrawerProps {
   canned?:           { id: string; text: string; group?: string; key?: string }[];
   /** Send a canned phrase id (canned mode only). */
   onSay?:            (id: string) => void;
+  /** ★ Open an answer's wiki page (utils/openWebPage — the in-app browser, the page unmodified). */
+  onOpenWiki?:       (url: string) => void;
+  /** ★ Start the decoder an answer names. Only passed a decoder this receiver runs — never a dead key. */
+  onDecode?:         (decoder: string) => void;
+  /** ★ Whether this receiver runs that decoder (the mode sheet's own rule) — DECODE is drawn only when it does. */
+  canDecode?:        (decoder: string) => boolean;
   /** One line about the room — who is tuning, how many are here, why it is not moving. */
   dialLine?:         string;
   /** ★★★ "CHECK OUT [Bookmark] [Manual]" (canned mode — Stuart, 2026-10-01: the old picker was "a bit
@@ -175,7 +185,7 @@ function ChatDrawerBody({
   onJoin, onSend, onClose, onChangeName,
   onMute, muted = false,
   users = [], syncedUser = null, zoomSync = false,
-  onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, dialLine,
+  onToggleSync, onToggleZoomSync, onUserTap, textOnly = false, canned, onSay, onOpenWiki, onDecode, canDecode, dialLine,
   shareEnabled = false, onPickShare, shareDraft, onClearShareDraft, manualStartHz = 0, manualStartMode,
   onShare, onShareTune,
   hiddenUsers = NO_HIDDEN, onHideUser, onShowHidden,
@@ -552,6 +562,18 @@ function ChatDrawerBody({
                       <Text style={[cd.tuneTxt, { color: cc.btnText, fontFamily: t.font }]}>TUNE</Text>
                     </TouchableOpacity>
                   ))}
+                  {/* ★ An answer's WIKI and DECODE keys — the same two shapes as TUNE. */}
+                  {([['WIKI', m.wiki && onOpenWiki ? () => onOpenWiki(m.wiki!) : null, 'Read about this signal on the Signal Identification Wiki'],
+                     ['DECODE', m.decoder && onDecode && canDecode?.(m.decoder) ? () => onDecode(m.decoder!) : null, 'Open the decoder for this signal']] as const)
+                    .map(([label, press, a11y]) => !press ? null : pt.metal ? (
+                      <PopupKey key={label} label={label} height={24} fontSize={10} style={cd.tuneKey} hitSlop={6}
+                        accessibilityLabel={a11y} onPress={press} />
+                    ) : (
+                      <TouchableOpacity key={label} style={[cd.tuneBtn, { borderColor: cc.btnBdr }]} hitSlop={6} activeOpacity={0.75}
+                        accessibilityLabel={a11y} onPress={press}>
+                        <Text style={[cd.tuneTxt, { color: cc.btnText, fontFamily: t.font }]}>{label}</Text>
+                      </TouchableOpacity>
+                    ))}
                 </View>
                 );
                 if (!hideable) return row;

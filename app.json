@@ -70,7 +70,8 @@
           "isTV": true,
           "tvosDeploymentTarget": "17.0"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {

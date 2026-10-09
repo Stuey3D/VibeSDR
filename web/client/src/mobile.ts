@@ -14,6 +14,7 @@
 // weighted drums with real inertia. Spin them, flick them, let them coast. It feels like
 // tuning a radio, because that's what it's modelled on."
 
+import { SIGID_HOME } from '../../../src/services/dialChat';
 import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
 
 export type MobileDeps = {
@@ -316,6 +317,18 @@ export function initMobileControls(deps: MobileDeps) {
     //    2026-08-05: "I went into it to adjust the bandwidth and clicked the waterfall to exit
     //    which retuned me"). The button is the fix he asked for; `away` swallowing the click below
     //    is the other half, because people will keep clicking away out of habit.
+    /* ★★ THE SIGNAL IDENTIFICATION WIKI (Stuart, 2026-10-09: "at the bottom of the demodulators a link to the main signal
+     *  identification wiki page where a user can then search for the signal they want to identify"). A plain link to
+     *  the real site in a new tab — nothing framed or changed. The app's ModeSelector carries the same one. */
+    const wiki = document.createElement('a');
+    wiki.className = 'mModeClose mModeWiki';
+    wiki.href = SIGID_HOME;
+    wiki.target = '_blank';
+    wiki.rel = 'noopener noreferrer';
+    wiki.textContent = 'SIGNAL ID WIKI ↗';
+    wiki.title = 'Not sure what a signal is? Search the Signal Identification Wiki';
+    menu.appendChild(wiki);
+
     const closeRow = document.createElement('button');
     closeRow.className = 'mModeClose';
     closeRow.textContent = 'CLOSE';

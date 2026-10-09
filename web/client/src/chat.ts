@@ -25,6 +25,7 @@ import {
   shareSummary, parseShared, sharedLineText, shareTuneStep, shareFromManual, manualFieldFrom,
   MANUAL_SHARE_MODES, SHARE_MODE_LABEL, type ShareOut, type SharedStation,
 } from '../../../src/services/chatShare';
+import { answerBand, isAnswer, isQuestion, phraseDecoder, phraseWiki, ANSWER_WINDOW_MS, DIAL_PHRASES } from '../../../src/services/dialChat';
 
 /** The vocabulary, in the order a conversation actually runs: ask, act, answer, thank.
  *  ★★ TAKEN FROM JR, NOT INVENTED HERE — `Canned.fmdx` in Chat.swift, plus the long-decode lines.
@@ -63,11 +64,41 @@ export const PHRASES: Array<{ id: string; text: string; group?: string; key?: st
   { id: 'good_conditions', text: 'Conditions are great today' },
   { id: 'poor_conditions', text: 'Conditions are poor today' },
   { id: 'off_73', text: 'Off now — 73!' },
+  // ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09) — one "It's …" row, drawn only while somebody
+  //   else's question is open and only the half for the band the dial is on. Band, wiki page and decoder come from the
+  //   app's dialChat.ts (one rule, two readers); the ids and wording are listed here like every other phrase.
+  { id: 'not_sure', text: 'Not sure, sorry', group: 'answer', key: 'Not sure' },
+  { id: 'is_wefax',  text: "It's WEFAX (weather fax)", group: 'answer', key: 'WEFAX' },
+  { id: 'is_rtty',   text: "It's RTTY", group: 'answer', key: 'RTTY' },
+  { id: 'is_navtex', text: "It's NAVTEX", group: 'answer', key: 'NAVTEX' },
+  { id: 'is_sstv',   text: "It's SSTV (slow-scan TV)", group: 'answer', key: 'SSTV' },
+  { id: 'is_ft8',    text: "It's FT8", group: 'answer', key: 'FT8' },
+  { id: 'is_cw',     text: "It's Morse (CW)", group: 'answer', key: 'Morse' },
+  { id: 'is_ssb',    text: "It's SSB voice", group: 'answer', key: 'SSB voice' },
+  { id: 'is_drm',    text: "It's DRM (digital radio)", group: 'answer', key: 'DRM' },
+  { id: 'is_stanag', text: "It's STANAG (military data)", group: 'answer', key: 'STANAG' },
+  { id: 'is_ale',    text: "It's ALE", group: 'answer', key: 'ALE' },
+  { id: 'is_hfdl',   text: "It's HFDL (aircraft data)", group: 'answer', key: 'HFDL' },
+  { id: 'is_codar',  text: "It's CODAR (ocean radar)", group: 'answer', key: 'CODAR' },
+  { id: 'is_oth',    text: "It's over-the-horizon radar", group: 'answer', key: 'OTH radar' },
+  { id: 'is_time',   text: "It's a time signal", group: 'answer', key: 'Time signal' },
+  { id: 'is_dmr',    text: "It's DMR", group: 'answer', key: 'DMR' },
+  { id: 'is_dstar',  text: "It's D-STAR", group: 'answer', key: 'D-STAR' },
+  { id: 'is_p25',    text: "It's P25", group: 'answer', key: 'P25' },
+  { id: 'is_nxdn',   text: "It's NXDN", group: 'answer', key: 'NXDN' },
+  { id: 'is_dpmr',   text: "It's dPMR", group: 'answer', key: 'dPMR' },
+  { id: 'is_pocsag', text: "It's POCSAG (pager)", group: 'answer', key: 'POCSAG' },
+  { id: 'is_aprs',   text: "It's APRS", group: 'answer', key: 'APRS' },
+  { id: 'is_adsb',   text: "It's ADS-B (aircraft)", group: 'answer', key: 'ADS-B' },
+  { id: 'is_acars',  text: "It's ACARS (aircraft data)", group: 'answer', key: 'ACARS' },
+  { id: 'is_ais',    text: "It's AIS (ships)", group: 'answer', key: 'AIS' },
+  { id: 'is_apt',    text: "It's a weather satellite (APT)", group: 'answer', key: 'Weather sat' },
+  { id: 'is_fm_bc',  text: "It's an FM broadcast station", group: 'answer', key: 'FM broadcast' },
 ];
 
 const TEXT: Record<string, string> = Object.fromEntries(PHRASES.map(p => [p.id, p.text]));
 /** The label a phrase group's row starts with (the app: dialChat.ts PHRASE_GROUP_LABEL). */
-const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds' };
+const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds', answer: "It's" };
 
 /* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced RDS". A shared
  *  receiver is a room of people finding things, and the canned vocabulary let them agree who tunes but never
@@ -107,6 +138,10 @@ type Deps = {
   freqHz?: () => number;
   /** Raise the unread count on whatever button opens this. */
   onUnread: (n: number) => void;
+  /** ★ Open the decoder an answer names — the decoders panel's own button. Only offered when canDecode says so. */
+  openDecoder?: (d: string) => void;
+  /** ★ Does this receiver run that decoder? DECODE is drawn only when it does (never a dead key). */
+  canDecode?: (d: string) => boolean;
 };
 
 let deps: Deps | null = null;
@@ -162,11 +197,16 @@ export function initChat(d: Deps) {
       done.add(p.group);
       const row = document.createElement('div');
       row.className = 'chatGroup';
+      if (p.group === 'answer') { row.id = 'chatAnswerRow'; row.hidden = true; }
       const lbl = document.createElement('span');
       lbl.className = 'chatGroupLbl';
       lbl.textContent = PHRASE_GROUP_LABEL[p.group] ?? '';
       row.appendChild(lbl);
-      for (const q of PHRASES.filter((x) => x.group === p.group)) row.appendChild(mkKey(q, q.key ?? q.text));
+      for (const q of PHRASES.filter((x) => x.group === p.group)) {
+        const k = mkKey(q, q.key ?? q.text);
+        k.dataset.id = q.id;
+        row.appendChild(k);
+      }
       list.appendChild(row);
     }
     /* ★★★ "CHECK OUT [BOOKMARK] [MANUAL]" — ONE ROW, FIRST, because it is the one key that says WHAT you found
@@ -283,11 +323,36 @@ function sendShare(out: ShareOut | null, btn?: HTMLButtonElement) {
 /** Called when the panel opens or closes, so the unread count can be cleared and stop counting. */
 export function chatOpened(open: boolean) {
   isOpen = open;
-  if (open) { unread = 0; deps?.onUnread(0); syncTitle(); }
+  if (open) { unread = 0; deps?.onUnread(0); syncTitle(); refreshAnswerRow(); }   // ★ the dial may have changed band
 }
 
 /** A line arrived. */
 /** ★ Each user number's `since` stamp as last heard — see onSaid. */
+/* ★★ THE ANSWER ROW (Stuart, 2026-10-09). "Anyone know what this is?" from somebody ELSE opens it for ANSWER_WINDOW_MS;
+ *  the first answer closes it; only the answers for the band the dial is on are shown (dialChat answerBand — the app
+ *  draws the same row from the same rule). */
+let questionOpenUntil = 0;
+let questionTimer: ReturnType<typeof setTimeout> | null = null;
+const BAND_OF: Record<string, string | undefined> = Object.fromEntries(DIAL_PHRASES.map((p) => [p.id, p.band]));
+function refreshAnswerRow() {
+  const row = $('chatAnswerRow');
+  if (!row) return;
+  const open = questionOpenUntil > Date.now();
+  row.hidden = !open;
+  if (!open) return;
+  const band = answerBand(deps?.freqHz?.() ?? 0);
+  for (const k of Array.from(row.querySelectorAll('button[data-id]')) as HTMLButtonElement[]) {
+    const b = BAND_OF[k.dataset.id ?? ''];
+    k.hidden = !!b && b !== band;
+  }
+}
+function setQuestionOpen(until: number) {
+  questionOpenUntil = until;
+  if (questionTimer) { clearTimeout(questionTimer); questionTimer = null; }
+  if (until) questionTimer = setTimeout(() => { questionOpenUntil = 0; refreshAnswerRow(); }, Math.max(0, until - Date.now()));
+  refreshAnswerRow();
+}
+
 const sinceByUser = new Map<number, number>();
 export function onSaid(from: number, id: string, admin = false, msg?: Record<string, unknown>) {
   /* ★★ A share is drawn from the SERVER's line (chatShare.parseShared): the station as THE RECEIVER named it.
@@ -296,6 +361,9 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
   const share = id === 'check_out' ? parseShared(msg) : null;
   const text = id === 'check_out' ? (share ? sharedLineText(share) : '') : TEXT[id];
   if (!text) return;                       // an id this build cannot draw — see the header note
+  const mine = !!dial && from === dial.you;
+  if (isQuestion(id) && !mine) setQuestionOpen(Date.now() + ANSWER_WINDOW_MS);
+  else if (isAnswer(id)) setQuestionOpen(0);
   const log = $('chatLog');
   /* ★★ "— User 1 joined 17:40 —" (Stuart's option B, 2026-10-08; the app's SDRScreen onSaid does the same). The server
    *  stamps every line with WHEN its number was given (`since`); a different stamp on a number already heard means the
@@ -339,6 +407,26 @@ export function onSaid(from: number, id: string, admin = false, msg?: Record<str
       go.title = 'Tune this receiver there';
       go.onclick = () => onShareTune(share, row);
       row.append(go);
+    }
+    /* ★ An answer: WIKI opens its Signal Identification Wiki page (a real link, new tab, the page unmodified);
+     *  DECODE starts the decoder that reads it, when this receiver runs one. */
+    const wikiUrl = phraseWiki(id);
+    if (wikiUrl) {
+      const a = document.createElement('a');
+      a.className = 'btn chatTune';
+      a.textContent = 'WIKI';
+      a.href = wikiUrl; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.title = 'Read about this signal on the Signal Identification Wiki';
+      row.append(a);
+    }
+    const dec = phraseDecoder(id);
+    if (dec && deps?.openDecoder && deps.canDecode?.(dec)) {
+      const d = document.createElement('button');
+      d.className = 'btn chatTune';
+      d.textContent = 'DECODE';
+      d.title = 'Open the decoder for this signal';
+      d.onclick = () => deps?.openDecoder?.(dec);
+      row.append(d);
     }
     // ★ Same rule as the decoder box: only follow a reader who is at the bottom (B11).
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;

@@ -79,7 +79,59 @@ enum CannedDial {
     ("good_conditions", "Great conditions today"),
     ("poor_conditions", "Poor conditions today"),
     ("off_73", "Off now — 73!"),
+    // ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09) — offered only while somebody ELSE's question
+    //   is open and unanswered, and only those for the dial's band (pad / questionOpen below). Same ids as the server.
+    ("not_sure", "Not sure, sorry"),
+    ("is_wefax", "It's WEFAX (weather fax)"),
+    ("is_rtty", "It's RTTY"),
+    ("is_navtex", "It's NAVTEX"),
+    ("is_sstv", "It's SSTV (slow-scan TV)"),
+    ("is_ft8", "It's FT8"),
+    ("is_cw", "It's Morse (CW)"),
+    ("is_ssb", "It's SSB voice"),
+    ("is_drm", "It's DRM (digital radio)"),
+    ("is_stanag", "It's STANAG (military data)"),
+    ("is_ale", "It's ALE"),
+    ("is_hfdl", "It's HFDL (aircraft data)"),
+    ("is_codar", "It's CODAR (ocean radar)"),
+    ("is_oth", "It's over-the-horizon radar"),
+    ("is_time", "It's a time signal"),
+    ("is_dmr", "It's DMR"),
+    ("is_dstar", "It's D-STAR"),
+    ("is_p25", "It's P25"),
+    ("is_nxdn", "It's NXDN"),
+    ("is_dpmr", "It's dPMR"),
+    ("is_pocsag", "It's POCSAG (pager)"),
+    ("is_aprs", "It's APRS"),
+    ("is_adsb", "It's ADS-B (aircraft)"),
+    ("is_acars", "It's ACARS (aircraft data)"),
+    ("is_ais", "It's AIS (ships)"),
+    ("is_apt", "It's a weather satellite (APT)"),
+    ("is_fm_bc", "It's an FM broadcast station"),
   ]
+  /// ★ The answers and their band ("" = either). Everything else in `all` is always offered.
+  static let answerBand: [String: String] = [
+    "not_sure": "", "is_wefax": "hf", "is_rtty": "hf", "is_navtex": "hf", "is_sstv": "hf", "is_ft8": "hf", "is_cw": "hf", "is_ssb": "hf", "is_drm": "hf", "is_stanag": "hf", "is_ale": "hf", "is_hfdl": "hf", "is_codar": "hf", "is_oth": "hf", "is_time": "hf", "is_dmr": "vhf", "is_dstar": "vhf", "is_p25": "vhf", "is_nxdn": "vhf", "is_dpmr": "vhf", "is_pocsag": "vhf", "is_aprs": "vhf", "is_adsb": "vhf", "is_acars": "vhf", "is_ais": "vhf", "is_apt": "vhf", "is_fm_bc": "vhf"
+  ]
+  /// How long a question keeps its answers on offer unless somebody answers first (the phone: ANSWER_WINDOW_MS).
+  static let answerWindow: TimeInterval = 5 * 60
+  /// The phrases to draw: all but the answers — plus, while a question is open, the answers for the dial's band.
+  static func pad(questionOpen: Bool, hz: Double) -> [(id: String, text: String)] {
+    let band = hz > 0 && hz < 30_000_000 ? "hf" : "vhf"
+    return all.filter { p in
+      guard let b = answerBand[p.id] else { return true }
+      return questionOpen && (b.isEmpty || b == band)
+    }
+  }
+  /// True while the newest "Anyone know what this is?" came from somebody else, is under answerWindow old, and has
+  /// had no answer since — the phone's and the browser's rule.
+  static func questionOpen(_ lines: [(from: Int, phrase: String, at: Date)], you: Int) -> Bool {
+    for l in lines.reversed() {
+      if answerBand[l.phrase] != nil { return false }
+      if l.phrase == "what_is_this" { return l.from != you && Date().timeIntervalSince(l.at) < answerWindow }
+    }
+    return false
+  }
   private static let map: [String: String] = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0.text) })
   /// nil when this build cannot draw the id — the caller DROPS it rather than showing it raw.
   static func text(_ id: String) -> String? { map[id] }

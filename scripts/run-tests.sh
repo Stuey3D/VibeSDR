@@ -292,6 +292,9 @@ if node --no-warnings scripts/test_dab_share_services.ts; then pass=$((pass+1));
 # ★★ DAB tuning keys: a burst of presses is ONE block change on the server (the one stopped on), and
 #    leaving DAB drops the DAB station from the VTS (Stuart, 2026-10-05 — both).
 if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09): none on the everyday pad, only the dial's band while a
+#     question is open, every link a Signal Identification Wiki page, every DECODE a decoder we run, the watches agree.
+if node --no-warnings scripts/test_dial_answers.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ TUNE PACING ON THE CLIENT (tunePace.ts, Stuart 2026-10-05: "if the server's CPU is reporting that it is
 #     struggling we need to slow down the amount of tune commands"): the health rung, the snail and the ping
 #     set the gap; latest wins, the first tune goes at once, the last one always lands.

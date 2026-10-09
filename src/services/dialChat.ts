@@ -22,10 +22,20 @@
  *   not, and `decode_done` on screen would be worse than nothing.
  */
 
-/** ★ `group`/`key`: phrases drawn as ONE row — a label and a short key each ("This sounds" Awesome · Weird …). */
-export type Phrase = { id: string; text: string; group?: string; key?: string };
+/** ★ `group`/`key`: phrases drawn as ONE row — a label and a short key each ("This sounds" Awesome · Weird …).
+ *  ★ An ANSWER (group 'answer') also says which band it belongs to, its Signal Identification Wiki page and — when this
+ *    app has one — the decoder that reads it. See ANSWERS below. */
+export type Phrase = { id: string; text: string; group?: string; key?: string;
+                       band?: 'hf' | 'vhf'; wiki?: string; decoder?: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'time' };
 /** The label a phrase group's row starts with. */
-export const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds' };
+export const PHRASE_GROUP_LABEL: Record<string, string> = { sounds: 'This sounds', answer: "It's" };
+
+/** ★★ THE SIGNAL IDENTIFICATION WIKI (Stuart, 2026-10-09: "Anyone know what this is with no way of someone telling
+ *  them"). Linked, never copied or framed: opened in the system's in-app browser (SFSafariViewController / Chrome
+ *  Custom Tabs) — the real site, its address bar, its own attribution, exactly as published. Every page below was
+ *  checked to exist (HTTP 200) on 2026-10-09; one without a page (time signals) simply has no link. */
+export const SIGID_HOME = 'https://www.sigidwiki.com/wiki/Signal_Identification_Guide';
+const SIGID_PAGE = 'https://www.sigidwiki.com/wiki/';
 
 /** In the order a conversation actually runs: ask, act, answer, thank. */
 export const DIAL_PHRASES: Phrase[] = [
@@ -64,9 +74,60 @@ export const DIAL_PHRASES: Phrase[] = [
   { id: 'good_conditions', text: 'Conditions are great today' },
   { id: 'poor_conditions', text: 'Conditions are poor today' },
   { id: 'off_73', text: 'Off now — 73!' },
+  /* ★★★ THE ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09). Still ids, never typed — free text would need
+   *  the stores' user-generated-content machinery (filtering, reporting, a moderator) and lose the watches, the TV
+   *  remotes and translation. Drawn as one "It's …" row ONLY while somebody else's question is open (answerRowOpen),
+   *  and only the half for the band the dial is on, so the everyday pad does not grow. A message reads in full and
+   *  carries a WIKI key (and DECODE, where this receiver runs that decoder). */
+  { id: 'not_sure', text: 'Not sure, sorry', group: 'answer', key: 'Not sure' },
+  { id: 'is_wefax',  text: "It's WEFAX (weather fax)", group: 'answer', key: 'WEFAX', band: 'hf', wiki: 'WEFAX', decoder: 'wefax' },
+  { id: 'is_rtty',   text: "It's RTTY", group: 'answer', key: 'RTTY', band: 'hf', wiki: 'RTTY', decoder: 'rtty' },
+  { id: 'is_navtex', text: "It's NAVTEX", group: 'answer', key: 'NAVTEX', band: 'hf', wiki: 'NAVTEX', decoder: 'navtex' },
+  { id: 'is_sstv',   text: "It's SSTV (slow-scan TV)", group: 'answer', key: 'SSTV', band: 'hf', wiki: 'SSTV', decoder: 'sstv' },
+  { id: 'is_ft8',    text: "It's FT8", group: 'answer', key: 'FT8', band: 'hf', wiki: 'FT8' },
+  { id: 'is_cw',     text: "It's Morse (CW)", group: 'answer', key: 'Morse', band: 'hf', wiki: 'Morse_Code_(CW)' },
+  { id: 'is_ssb',    text: "It's SSB voice", group: 'answer', key: 'SSB voice', band: 'hf', wiki: 'Single_Sideband_Voice' },
+  { id: 'is_drm',    text: "It's DRM (digital radio)", group: 'answer', key: 'DRM', band: 'hf', wiki: 'DRM' },
+  { id: 'is_stanag', text: "It's STANAG (military data)", group: 'answer', key: 'STANAG', band: 'hf', wiki: 'STANAG_4285' },
+  { id: 'is_ale',    text: "It's ALE", group: 'answer', key: 'ALE', band: 'hf', wiki: 'ALE' },
+  { id: 'is_hfdl',   text: "It's HFDL (aircraft data)", group: 'answer', key: 'HFDL', band: 'hf', wiki: 'HFDL' },
+  { id: 'is_codar',  text: "It's CODAR (ocean radar)", group: 'answer', key: 'CODAR', band: 'hf', wiki: 'CODAR' },
+  { id: 'is_oth',    text: "It's over-the-horizon radar", group: 'answer', key: 'OTH radar', band: 'hf', wiki: 'Over_the_Horizon_Radar' },
+  { id: 'is_time',   text: "It's a time signal", group: 'answer', key: 'Time signal', band: 'hf', decoder: 'time' },
+  { id: 'is_dmr',    text: "It's DMR", group: 'answer', key: 'DMR', band: 'vhf', wiki: 'DMR' },
+  { id: 'is_dstar',  text: "It's D-STAR", group: 'answer', key: 'D-STAR', band: 'vhf', wiki: 'D-STAR' },
+  { id: 'is_p25',    text: "It's P25", group: 'answer', key: 'P25', band: 'vhf', wiki: 'P25' },
+  { id: 'is_nxdn',   text: "It's NXDN", group: 'answer', key: 'NXDN', band: 'vhf', wiki: 'NXDN' },
+  { id: 'is_dpmr',   text: "It's dPMR", group: 'answer', key: 'dPMR', band: 'vhf', wiki: 'DPMR' },
+  { id: 'is_pocsag', text: "It's POCSAG (pager)", group: 'answer', key: 'POCSAG', band: 'vhf', wiki: 'POCSAG' },
+  { id: 'is_aprs',   text: "It's APRS", group: 'answer', key: 'APRS', band: 'vhf', wiki: 'APRS' },
+  { id: 'is_adsb',   text: "It's ADS-B (aircraft)", group: 'answer', key: 'ADS-B', band: 'vhf', wiki: 'ADS-B' },
+  { id: 'is_acars',  text: "It's ACARS (aircraft data)", group: 'answer', key: 'ACARS', band: 'vhf', wiki: 'ACARS' },
+  { id: 'is_ais',    text: "It's AIS (ships)", group: 'answer', key: 'AIS', band: 'vhf', wiki: 'AIS' },
+  { id: 'is_apt',    text: "It's a weather satellite (APT)", group: 'answer', key: 'Weather sat', band: 'vhf', wiki: 'Automatic_Picture_Transmission_(APT)' },
+  { id: 'is_fm_bc',  text: "It's an FM broadcast station", group: 'answer', key: 'FM broadcast', band: 'vhf', wiki: 'FM_Broadcast_Radio' },
 ];
 
 const TEXT: Record<string, string> = Object.fromEntries(DIAL_PHRASES.map(p => [p.id, p.text]));
+const BY_ID: Record<string, Phrase> = Object.fromEntries(DIAL_PHRASES.map(p => [p.id, p]));
+
+/** How long "Anyone know what this is?" keeps the answer row open, unless somebody answers first. */
+export const ANSWER_WINDOW_MS = 5 * 60_000;
+/** HF below 30 MHz, VHF/UHF above — the half of the answers that can be on the dial. */
+export function answerBand(hz: number): 'hf' | 'vhf' { return hz > 0 && hz < 30_000_000 ? 'hf' : 'vhf'; }
+
+/** The pad to draw: everything but the answers, plus — while a question is open — the answers for this band. */
+export function padPhrases(questionOpen: boolean, hz: number): Phrase[] {
+  const band = answerBand(hz);
+  return DIAL_PHRASES.filter(p => p.group !== 'answer' || (questionOpen && (!p.band || p.band === band)));
+}
+/** True for the question that opens the answer row, and for any answer (which closes it). */
+export const isQuestion = (id: string) => id === 'what_is_this';
+export const isAnswer = (id: string) => BY_ID[id]?.group === 'answer';
+/** The answer's Signal Identification Wiki page, or null. */
+export function phraseWiki(id: string): string | null { const w = BY_ID[id]?.wiki; return w ? SIGID_PAGE + w : null; }
+/** The decoder this app runs for the answer, or null. */
+export function phraseDecoder(id: string): Phrase['decoder'] | null { return BY_ID[id]?.decoder ?? null; }
 
 /** The text for a phrase id, or null if this build cannot draw it (drop it — see the header). */
 export function phraseText(id: string): string | null {

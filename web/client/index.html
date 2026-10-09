@@ -807,6 +807,8 @@ html[data-frontdoor] #splashListeners { display: none !important; }
   min-height: max(2.2em, 38px); touch-action: manipulation;
 }
 .mModeClose:active { background: rgba(255, 160, 0, 0.15); }
+/* ★ The Signal Identification Wiki link — the close button's shape, as a real link (it opens a new tab). */
+.mModeWiki { display: flex; align-items: center; justify-content: center; text-decoration: none; box-sizing: border-box; }
 #mModeMenu .bwRow { display: flex; align-items: center; gap: 0.4em; }
 #mModeMenu .bwRow input[type=range] { flex: 1 1 auto; min-width: 3em; height: 40px; }
 .mModeOpt {
@@ -1477,6 +1479,10 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #bookmarksPanel.picking #bmList .sres > button { display: none !important; }
 /* TUNE sits after a shared line, no wider than its word, and the ask row under it says why it is asking. */
 .chatLine .chatTune { margin-left: 0.6em; padding: 1px 8px; font-size: 11px; letter-spacing: 0.08em; vertical-align: baseline; }
+/* ★ WIKI is a real link drawn as a key; the answer row and its off-band keys are hidden with [hidden], which a .btn's
+   own display would otherwise override. */
+.chatLine a.chatTune { text-decoration: none; display: inline-block; }
+#chatPhrases [hidden] { display: none !important; }
 .chatAsk { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--amber);
            border: 1px solid rgba(255, 176, 0, 0.4); border-radius: 6px; padding: 5px 7px; }
 .chatAsk .btn { padding: 2px 8px; font-size: 12px; }

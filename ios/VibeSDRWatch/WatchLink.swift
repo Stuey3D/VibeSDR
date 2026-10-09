@@ -253,7 +253,8 @@ final class WatchLink: NSObject, ObservableObject, WCSessionDelegate {
     return dialArmed && Date().timeIntervalSince(armedAt) < Self.armMinutes * 60
   }
 
-  struct DialLine: Identifiable, Equatable { let id = UUID(); let from: Int; let phrase: String }
+  struct DialLine: Identifiable, Equatable { let id = UUID(); let from: Int; let phrase: String
+    let at = Date() }   // ★ when it was said — an open question's answers expire (CannedDial.questionOpen)
   @Published var chatLines: [DialLine] = []
   @Published var chatUnread = 0
 

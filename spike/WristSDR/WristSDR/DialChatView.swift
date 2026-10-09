@@ -102,7 +102,11 @@ struct DialChatView: View {
         Divider().background(Color.white.opacity(0.15))
 
         // ── The phrases ─────────────────────────────────────────────────────────
-        ForEach(CannedDial.all, id: \.id) { phrase in
+        // ★★ The answers to "Anyone know what this is?" appear only while somebody else's question is open, and only
+        //    those for the dial's band — on a watch above all, the list must not grow by twenty-seven (2026-10-09).
+        ForEach(CannedDial.pad(questionOpen: CannedDial.questionOpen(radio.chatLines.map { ($0.from, $0.phrase, $0.at) },
+                                                                    you: radio.dialYou),
+                               hz: radio.frequency), id: \.id) { phrase in
           Button {
             radio.say(phrase.id)
             WKInterfaceDevice.current().play(.click)

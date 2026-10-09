@@ -9099,6 +9099,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             "good_conditions", // Conditions are great today
             "poor_conditions", // Conditions are poor today
             "off_73",          // Off now — 73!
+            /* ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09). Still ids — the clients draw them as an
+             *  "It's …" row only while a question is open, link each to its Signal Identification Wiki page and offer
+             *  the decoder where one exists (src/services/dialChat.ts). */
+            "not_sure",         // Not sure, sorry
+            "is_wefax",         // It's WEFAX (weather fax)
+            "is_rtty",          // It's RTTY
+            "is_navtex",        // It's NAVTEX
+            "is_sstv",          // It's SSTV (slow-scan TV)
+            "is_ft8",           // It's FT8
+            "is_cw",            // It's Morse (CW)
+            "is_ssb",           // It's SSB voice
+            "is_drm",           // It's DRM (digital radio)
+            "is_stanag",        // It's STANAG (military data)
+            "is_ale",           // It's ALE
+            "is_hfdl",          // It's HFDL (aircraft data)
+            "is_codar",         // It's CODAR (ocean radar)
+            "is_oth",           // It's over-the-horizon radar
+            "is_time",          // It's a time signal
+            "is_dmr",           // It's DMR
+            "is_dstar",         // It's D-STAR
+            "is_p25",           // It's P25
+            "is_nxdn",          // It's NXDN
+            "is_dpmr",          // It's dPMR
+            "is_pocsag",        // It's POCSAG (pager)
+            "is_aprs",          // It's APRS
+            "is_adsb",          // It's ADS-B (aircraft)
+            "is_acars",         // It's ACARS (aircraft data)
+            "is_ais",           // It's AIS (ships)
+            "is_apt",           // It's a weather satellite (APT)
+            "is_fm_bc",         // It's an FM broadcast station
             /* ★★★ THE ONE PHRASE THAT CARRIES FACTS (Stuart, 2026-09-20): "Hey, check out 96.1 MHz Advanced
              *  RDS". A shared receiver is a room of people finding things, and until now they could agree who
              *  tunes but never say WHAT they found — the one thing worth saying on a radio.

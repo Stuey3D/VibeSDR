@@ -9793,6 +9793,16 @@ function initDecoders(host: string, auth: AuthState) {
   $('chatClose').onclick = () => { closePanels(); chatOpened(false); };
   initChat({
     say: (id) => spec?.send({ type: 'say', id }),
+    /* ★ DECODE on an answer: the decoders panel's own button for it, so it opens exactly as a press there does —
+     *  and only when that button is there to press (the owner's block list, this receiver's decoders). */
+    canDecode: (d) => {
+      const b = document.querySelector(`#decodersPanel [data-dec="${d}"]`) as HTMLButtonElement | null;
+      return !!b && !b.hidden && !blockedModes.has(d);
+    },
+    openDecoder: (d) => {
+      if (activeDec === d) return;
+      (document.querySelector(`#decodersPanel [data-dec="${d}"]`) as HTMLButtonElement | null)?.click();
+    },
     /* ★★★ SHARE A STATION — the frame src/services/chatShare.ts built: numbers and closed-list ids, NEVER a
      *  bookmark's label. The server validates it and names it from what THIS receiver knows. */
     share: (out) => spec?.send({ ...out }),

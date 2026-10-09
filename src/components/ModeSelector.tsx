@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,
+  Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
+import { openWebPage } from '../utils/openWebPage';
+import { SIGID_HOME } from '../services/dialChat';
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
 import { useTheme } from '../contexts/ThemeContext';
@@ -804,6 +806,28 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>{label}</Text>
                 </TouchableOpacity>)}</NavItem>
               ))}
+            </View></NavRow>
+          </View>
+        )}
+
+        {/* ★★ THE SIGNAL IDENTIFICATION WIKI (Stuart, 2026-10-09: "at the bottom of the demodulators a link to the main
+            signal identification wiki page where a user can then search for the signal they want to identify"). Opened
+            unmodified in the in-app browser (utils/openWebPage). ★ Not on a TV: most have no browser to open it in, and
+            a key that does nothing is the one thing not allowed (AGENTS.md). */}
+        {!Platform.isTV && (
+          <View>
+            <Text style={[st.sheetLabel, secLbl]}>NOT SURE WHAT A SIGNAL IS?</Text>
+            <NavRow><View style={st.grid}>
+              <NavItem key="sigid" onPress={() => openWebPage(SIGID_HOME)}>{(nf, nr) => pt.metal ? (
+                <MetalKey navRef={nr} focused={nf} label="SIGNAL ID WIKI ↗" onPress={() => openWebPage(SIGID_HOME)} />
+              ) : (
+              <TouchableOpacity ref={nr as any}
+                style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                        nf && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                onPress={() => openWebPage(SIGID_HOME)} activeOpacity={0.8}
+                accessibilityLabel="Open the Signal Identification Wiki">
+                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>SIGNAL ID WIKI ↗</Text>
+              </TouchableOpacity>)}</NavItem>
             </View></NavRow>
           </View>
         )}

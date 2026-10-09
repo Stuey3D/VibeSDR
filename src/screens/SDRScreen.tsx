@@ -142,7 +142,8 @@ import PerfOverlay from '../components/PerfOverlay';
 import { PERF_OVERLAY_THIS_BUILD } from '../constants/perfOverlay';
 import ChatDrawer,
   { type ChatMessage, type ShareItem, useHiddenChatUsers } from '../components/ChatDrawer';
-import { DIAL_PHRASES, phraseText, dialSummary, speakerName,
+import { openWebPage } from '../utils/openWebPage';
+import { padPhrases, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
          type DialState } from '../services/dialChat';
 import { shareFromBookmark, shareSummary, parseShared, sharedLineText, shareTuneStep,
          type ShareOut, type SharedStation } from '../services/chatShare';
@@ -3449,6 +3450,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [chatOpen,     setChatOpen]     = useState(false);
   const [chatUnread,   setChatUnread]   = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  /** ★ When the open "Anyone know what this is?" stops offering its answer row (0 = none open). See onSaid. */
+  const [questionOpenUntil, setQuestionOpenUntil] = useState(0);
+  useEffect(() => {
+    if (!questionOpenUntil) return;
+    const t = setTimeout(() => setQuestionOpenUntil(0), Math.max(0, questionOpenUntil - Date.now()));
+    return () => clearTimeout(t);
+  }, [questionOpenUntil]);
   const [myCallsign,   setMyCallsign]   = useState<string | null>(null);
   const [chatMuted,    setChatMuted]    = useState(false);
   const [chatUsers,    setChatUsers]    = useState<ChatUserRow[]>([]);
@@ -5713,7 +5721,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           text,
           ts: new Date().toISOString().slice(11, 16).replace(':', '') + 'z',
           ...(share ? { share } : {}),
+          ...(phraseWiki(id) ? { wiki: phraseWiki(id)! } : {}),
+          ...(phraseDecoder(id) ? { decoder: phraseDecoder(id)! } : {}),
         };
+        /* ★★ "Anyone know what this is?" OPENS the answer row for everybody else, for ANSWER_WINDOW_MS; the first answer
+         *  closes it (Stuart, 2026-10-09). The asker gets no answer row — the question is theirs. */
+        if (isQuestion(id) && !mine) setQuestionOpenUntil(Date.now() + ANSWER_WINDOW_MS);
+        else if (isAnswer(id)) setQuestionOpenUntil(0);
         /* ★★ "— User 1 joined 17:40 —" (Stuart's option B, 2026-10-08). A number is reused once its holder has been gone
          *  two minutes; the server stamps every line with WHEN its number was given (`since`). A different stamp on a
          *  number already heard = somebody new has it, so one quiet divider goes in first — the lines above were the
@@ -11825,8 +11839,21 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★★ ONE DRAWER, TWO WAYS OF SPEAKING. A shared-dial VibeServer has no names and no text
         //    box; everything else about the chat — the transcript, the unread pulse, the open and
         //    close — is the same component it has always been.
-        canned={sharedDial ? DIAL_PHRASES : undefined}
+        canned={sharedDial ? padPhrases(questionOpenUntil > Date.now(), status.frequency) : undefined}
         onSay={(id: string) => client.current?.say?.(id)}
+        onOpenWiki={(url: string) => { openWebPage(url); }}
+        /* ★ The mode sheet's own rule for which decoders this receiver runs (ModeSelector clientDecs), so DECODE is
+         *  never a dead key. Opening goes through onDecToggle exactly as the sheet does; already open = nothing. */
+        canDecode={(d: string) => {
+          if (blockedModes.has(d)) return false;
+          const ext = srvExtensions;
+          if (!ext || !ext.length) return true;
+          return ext.includes(d === 'rtty' ? 'fsk' : d === 'time' ? 'clock' : d);
+        }}
+        onDecode={(d: string) => {
+          if (activeDecRef.current === d) return;
+          onDecToggle(d as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'time');
+        }}
         dialLine={dialState ? dialSummary(dialState) : undefined}
         shareEnabled={sharedDial}
         onPickShare={onPickShare}

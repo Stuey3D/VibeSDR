@@ -677,6 +677,7 @@ final class UberClient: ObservableObject {
   /// it does not change when the lock changes hands mid-conversation.
   struct ChatLine: Identifiable, Equatable {
     let id = UUID(); let from: Int; let phrase: String; var admin = false
+    let at = Date()   // ★ when it was said — an open question's answers expire (CannedDial.questionOpen)
   }
   @Published var chatLines: [ChatLine] = []
   /// Unread count for the menu badge. Cleared by the chat view when it appears.
