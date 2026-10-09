@@ -9,6 +9,8 @@
 // ★ SILENT: no audio. Loopback only. usage: VIBESERVER_BIN=… node scripts/test-bookmark-import.mjs
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
+import zlib from 'node:zlib';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -101,6 +103,19 @@ try {
   const g1 = await fetch(`${base}/bookmarks`);
   const tag = g1.headers.get('etag'); const g1len = (await g1.text()).length;
   ok(!!tag && /^"[0-9a-f]{16}"$/.test(tag), `GET /bookmarks carries an ETag (${tag}, ${g1len} bytes)`);
+  // ★★ COMPRESSED (2026-10-10, "a list of names and frequencies" ballooning the page): asked for gzip, it comes back
+  //    gzip'd — Node's fetch decodes it, so the decoded list must be the same list.
+  {
+    const raw = await new Promise((res) => {
+      const rq = http.get(`${base}/bookmarks`, { headers: { 'Accept-Encoding': 'gzip' } }, (r) => {
+        const parts = []; r.on('data', (c) => parts.push(c)); r.on('end', () => res({ enc: r.headers['content-encoding'], body: Buffer.concat(parts) }));
+      });
+      rq.on('error', () => res(null));
+    });
+    const plain = raw?.enc === 'gzip' ? zlib.gunzipSync(raw.body).toString() : '';
+    ok(raw?.enc === 'gzip' && raw.body.length < g1len / 5, `gzip'd on the wire: ${g1len} → ${raw?.body.length} bytes`);
+    ok(plain.length === g1len && JSON.parse(plain).length === list.length, `…and decodes to the same list (${plain.length} bytes)`);
+  }
   const g2 = await fetch(`${base}/bookmarks`, { headers: { 'If-None-Match': tag } });
   const g2body = await g2.text();
   ok(g2.status === 304 && g2body === '', `…sent back unchanged: 304, no body (${g2.status}, ${g2body.length} bytes)`);

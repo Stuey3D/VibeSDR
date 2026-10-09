@@ -2996,6 +2996,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  0 when no server has sent health — nothing moves on an older receiver. */
   const healthStackShift = healthPillH > 0 ? healthPillH + 8 : 0;
   const [freqModalOpen, setFreqModalOpen] = useState(false);
+  /** ★ Re-reads the receiver's learned bookmarks — set by the bookmark-load effect, called when the frequency card
+   *  (search + bookmarks) opens. No timer: see that effect (Stuart, 2026-10-10). */
+  const reloadServerBmRef = useRef<(() => void) | null>(null);
+  useEffect(() => { if (freqModalOpen) reloadServerBmRef.current?.(); }, [freqModalOpen]);
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
@@ -8741,11 +8745,13 @@ export default function SDRScreen({ route, navigation }: Props) {
          .catch(() => {});
       };
       load();
-      // ★★ 2 MINUTES, not 30 s (Stuart, 2026-10-10: "every 30 seconds is a bit much"), and an unchanged list is a 304
-      //    (fetchBookmarks sends the ETag back). A station learned from RDS can take up to two minutes to appear.
-      const iv = setInterval(load, 120_000);
+      /* ★★★ NO TIMER (Stuart, 2026-10-10: "They should only fetch on first load and then when the search bar is used or
+       *  bookmarks menu opened"). This polled every 30 s — 307 KB a time from the XCover after the UK ATC import. A
+       *  learned station is only SEEN on the frequency card (search + bookmarks), so the card's opening re-asks
+       *  (reloadServerBmRef, below) — a 304 if nothing changed (fetchBookmarks sends the ETag), gzip'd if it did. */
+      reloadServerBmRef.current = load;
       loadUserBookmarks().then((b: UserBookmark[]) => { if (!cancelled) setUserBookmarks(b); }).catch(() => {});
-      return () => { cancelled = true; clearInterval(iv); };
+      return () => { cancelled = true; reloadServerBmRef.current = null; };
     }
 
     // Server bookmarks: UberSDR via REST; OWRX/Kiwi arrive over the WS

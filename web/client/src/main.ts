@@ -7590,23 +7590,12 @@ function buildControls() {
   void loadServerBookmarks(currentHost, authState?.query ?? '').then((n) => {
     if (n) console.info(`server bookmarks: ${n} heard by this receiver`);
   });
-  // ...and keep asking. RDS learning takes ~20 s of held PS to commit, so the station
-  // you are sitting on RIGHT NOW is learned long after this page loaded. Fetching once
-  // at boot meant a freshly learned bookmark never appeared until you reloaded — it
-  // looked like the learning was broken when it had actually worked. The native app has
-  // polled for this all along (SDRScreen.tsx); the web client never did.
-  // ★★ Every 2 MINUTES, not 30 s (Stuart, 2026-10-10: "every 30 seconds is a bit much" — the XCover, 1,623 bookmarks,
-  //    307 KB a poll). And an unchanged list is now a 304 (ETag, see loadServerBookmarks). The cost: a station LEARNED
-  //    from RDS can take up to two minutes to appear; anything saved or imported here shows at once.
-  setInterval(() => {
-    const before = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
-    void loadServerBookmarks(currentHost, authState?.query ?? '').then(() => {
-      const after = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
-      // Only repaint on a real change — an unconditional re-render every 30 s would
-      // reset the list's scroll position under the user's finger.
-      if (after !== before) renderBookmarks();
-    });
-  }, 120_000);
+  /* ★★★ NO TIMER — FETCHED WHEN SOMEBODY LOOKS (Stuart, 2026-10-10: "They should only fetch on first load and then
+   *  when the search bar is used or bookmarks menu opened"). This polled every 30 s so a station learned from RDS
+   *  would appear, and on the XCover that was 307 KB per listener per poll after the UK ATC import. A learned station
+   *  is only ever SEEN in the list or in a search, so that is when to ask (refreshServerBookmarks) — and the answer is
+   *  a 304 if nothing changed, gzip'd if it did. */
+  $('search').addEventListener('focus', () => refreshServerBookmarks());
   initWaterfallInput();
   initKeyboard();
 }
@@ -8860,11 +8849,26 @@ function tuneTo(r: SearchResult) {
   applyBandStep(r.frequency);
 }
 
+/** ★ Re-read the receiver's bookmarks when the listener is about to LOOK at them (see the note at the first load).
+ *  At most once every 10 s, so re-opening the panel repeatedly does not re-ask; repaints only on a real change. */
+let bmRefreshedAt = 0;
+function refreshServerBookmarks() {
+  const now = Date.now();
+  if (now - bmRefreshedAt < 10_000) return;
+  bmRefreshedAt = now;
+  const before = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
+  void loadServerBookmarks(currentHost, authState?.query ?? '').then(() => {
+    const after = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
+    if (after !== before && isPanelOpen('bookmarksPanel')) renderBookmarks();
+  });
+}
+
 function initBookmarks() {
   $('dabBm').onclick = () => {
     bmFilter = 'dab';
     togglePanel('bookmarksPanel');
     renderBookmarks();
+    if (isPanelOpen('bookmarksPanel')) refreshServerBookmarks();
   };
   $('mBookmarks').onclick = () => {
     bmFilter = 'all';
@@ -8872,6 +8876,7 @@ function initBookmarks() {
     keepSharePick = true;
     try { togglePanel('bookmarksPanel'); } finally { keepSharePick = false; }
     renderBookmarks();
+    if (isPanelOpen('bookmarksPanel')) refreshServerBookmarks();
   };
   // ★ CLOSE leaves a pick too — it skips closePanels, so it must say so itself or the next tap would share.
   $('bmClose').onclick = () => { $('bookmarksPanel').classList.remove('open'); endSharePick(); };

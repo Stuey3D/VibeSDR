@@ -41,6 +41,7 @@
 #include "vibe_hwinfo.h"
 #include "vibe_mqtt.h"        // ★ the external antenna switch (2026-10-09) — see g_ext below
 #include "vibe_antswitch.h"
+#include "vibe_gzip.h"
 #include "vibe_rsp_init_gate.h" // ★ the AGC-initialising indicator's ending — it cannot wedge (2026-10-06)
 #include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
 #include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
@@ -18792,9 +18793,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                  "Access-Control-Expose-Headers: ETag\r\nCache-Control: no-cache\r\nETag: ") + etag
                                    + "\r\nConnection: close\r\n";
             if (!ifNoneMatch.empty() && ifNoneMatch.find(etag) != std::string::npos) {
-                sock->sendstr("HTTP/1.1 304 Not Modified\r\n" + hdrs + "\r\n");
+                sock->sendstr("HTTP/1.1 304 Not Modified\r\n" + hdrs + "Vary: Accept-Encoding\r\n\r\n");
+            } else if (acceptsGzip && body.size() > 1024) {
+                /* ★★★ AND COMPRESSED (Stuart, 2026-10-10: "we spent all that effort to get the page tiny only to
+                 *  balloon it again with bookmarks — a list of names and frequencies"). 278 KB of JSON → ~25 KB
+                 *  (vibe_gzip.h). Kept per ETag, so a list that has not changed is compressed once, not per listener. */
+                static std::mutex gzM; static std::string gzTag, gzBody;
+                std::string gz;
+                {
+                    std::lock_guard<std::mutex> gl(gzM);
+                    if (gzTag != etag) { gzBody = vibegz::gzip(body); gzTag = etag; }
+                    gz = gzBody;
+                }
+                sock->sendstr("HTTP/1.1 200 OK\r\n" + hdrs + "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\nContent-Length: "
+                              + std::to_string(gz.size()) + "\r\n\r\n" + gz);
             } else {
-                sock->sendstr("HTTP/1.1 200 OK\r\n" + hdrs + "Content-Length: " + std::to_string(body.size())
+                sock->sendstr("HTTP/1.1 200 OK\r\n" + hdrs + "Vary: Accept-Encoding\r\nContent-Length: " + std::to_string(body.size())
                               + "\r\n\r\n" + body);
             }
             sock->close();
