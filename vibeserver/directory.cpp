@@ -27,6 +27,22 @@ namespace vibedir {
 namespace {
 
 const char* kBase = "https://vibeserver.vibesdr.net";
+/** ★ The directory to talk to. VIBESERVER_DIRECTORY_URL redirects it for scripts/test-tunnel-selfcheck.mjs ONLY, and
+ *  only to a loopback address — so a stray environment variable can never send a listing (and its key) elsewhere. */
+std::string dirBase() {
+    static const std::string v = [] {
+        const char* e = std::getenv("VIBESERVER_DIRECTORY_URL");
+        const std::string u = e ? e : "";
+        return u.rfind("http://127.0.0.1:", 0) == 0 ? u : std::string(kBase);
+    }();
+    return v;
+}
+/** ★ The self-check interval (120 s); VIBESERVER_PROBE_SEC shortens it for the same test only. Read once. */
+long long probeSecSetting() {
+    static const long long v = [] { const char* e = std::getenv("VIBESERVER_PROBE_SEC"); const long long d = e ? std::atoll(e) : 0;
+                                    return d > 0 && d < 3600 ? d : 120LL; }();
+    return v;
+}
 
 std::mutex          g_mtx;
 std::string         g_stateDir = "/var/lib/vibeserver";
@@ -128,7 +144,7 @@ std::string httpPost(const std::string& path, const std::string& json, int* outS
     const std::string cmd =
         "curl -sS --max-time 20 -X POST -H 'Content-Type: application/json' --data-binary "
         + shellQuote("@" + bodyFile) + " -w '\\n%{http_code}' "
-        + shellQuote(std::string(kBase) + path) + " 2>/dev/null";
+        + shellQuote(dirBase() + path) + " 2>/dev/null";
     const std::string out = run(cmd);
     ::unlink(bodyFile.c_str());
     // ★ curl writes the -w line even when the transfer failed (as 000), so a missing one means
@@ -148,6 +164,20 @@ std::string httpGetLocal(int port, const std::string& path) {
     //    would show up on the owner's own admin screen as somebody choosing a radio.
     return run("curl -fsS --max-time 10 -A 'VibeServer-directory' " + shellQuote(url)
                + " 2>/dev/null");
+}
+
+/** ★★★ OUR OWN PUBLIC ADDRESS, USED THE WAY A VISITOR USES IT — see the self-check in worker(). Returns the
+ *  HTTP status, 0 for no answer at all (no such host, refused, timed out). The Sony (2026-10-09) sat for 19 h on a
+ *  quick-tunnel hostname that was NXDOMAIN while its cloudflared lived and the directory, which re-proves an address
+ *  only when it CHANGES, kept calling it verified. Same rule as VibeTunnel.kt probeOwnAddress (one rule, two readers). */
+int httpStatusPublic(const std::string& url) {
+    const std::string code = trim(run("curl -sS -o /dev/null --max-time 10 -A 'VibeServer-selfcheck' -w '%{http_code}' "
+                                      + shellQuote(url) + " 2>/dev/null"));
+    return atoi(code.c_str());
+}
+/** Cloudflare's answers for a tunnel with nothing behind it (502/504, 52x incl. 530 / error 1033), or no answer. */
+bool tunnelAnswerIsDead(int status) {
+    return status == 0 || status == 502 || status == 504 || (status >= 520 && status <= 530);
 }
 
 // ── the smallest JSON reading that will do ───────────────────────────────────────────────────
@@ -854,6 +884,17 @@ void stopTunnel() {
 void worker() {
     g_thread = true;
     int tunnelFails = 0;      // ★ consecutive failures to bring a tunnel up, for the backoff below
+    /* ★★★ THE SELF-CHECK (2026-10-09). A tunnel whose PROCESS lives can carry a DEAD hostname; the drain thread sees
+     *  no EOF and the directory (reached over our own network, not through the tunnel) answers "verified" for an
+     *  address it does not re-prove until it changes. So every kProbeSec we fetch our own /vibeserver.json through the
+     *  public address; kProbeFails dead answers in a row and the tunnel is replaced, which is a MOVE the directory does
+     *  re-prove. A new hostname is unroutable for ~90 s, so each gets a grace period, doubled after every replacement
+     *  that did not come good (2 … 32 min) — Cloudflare rate-limits quick-tunnel creation. One live answer resets it. */
+    const long long kProbeSec = probeSecSetting();
+    constexpr int kProbeFails = 3;
+    int probeFails = 0, deadRecycles = 0;
+    auto tunnelBorn = std::chrono::steady_clock::now();
+    auto lastProbe  = std::chrono::steady_clock::now();
     while (g_running) {
         Settings want;
         { std::lock_guard<std::mutex> lk(g_mtx); want = g_want; }
@@ -912,7 +953,7 @@ void worker() {
             if (!g_tunnelAlive || g_tunnelUrl.empty()) {
                 g_tunnelUrl = startTunnel(want.port);
                 if (g_tunnelUrl.empty()) tunnelFails++;
-                else                     tunnelFails = 0;
+                else                   { tunnelFails = 0; tunnelBorn = lastProbe = std::chrono::steady_clock::now(); probeFails = 0; }
                 /* ★★★ AND TELL THE SERVER THE TUNNEL IS OURS. cloudflared reaches us over
                  *  127.0.0.1, so without this every visitor through it arrives as loopback — which
                  *  this codebase treats as "the person at the machine": PIN waived, bans and limits
@@ -985,6 +1026,29 @@ void worker() {
             //     The whole point is that a receiver on a flaky link restores itself unattended;
             //     sleeping out a 900 s ping interval with a dead tunnel is most of an outage.
             if (usingTunnel && !g_tunnelAlive && !g_tunnelUrl.empty()) break;
+            const auto now = std::chrono::steady_clock::now();
+            const long long graceSec = kProbeSec << (deadRecycles < 4 ? deadRecycles : 4);
+            if (usingTunnel && g_tunnelAlive && !g_tunnelUrl.empty()
+                && std::chrono::duration_cast<std::chrono::seconds>(now - lastProbe).count() >= kProbeSec
+                && std::chrono::duration_cast<std::chrono::seconds>(now - tunnelBorn).count() >= graceSec) {
+                lastProbe = now;
+                const int st = httpStatusPublic(g_tunnelUrl + "/vibeserver.json");
+                if (!tunnelAnswerIsDead(st)) { probeFails = 0; deadRecycles = 0; }
+                else {
+                    ++probeFails;
+                    std::fprintf(stderr, "[directory] own public address did not answer (%d of %d): %s — HTTP %d\n",
+                                 probeFails, kProbeFails, g_tunnelUrl.c_str(), st);
+                    if (probeFails >= kProbeFails) {
+                        probeFails = 0; ++deadRecycles;
+                        std::fprintf(stderr, "[directory] tunnel lives but its address is dead — replacing it "
+                                     "(replacement %d)\n", deadRecycles);
+                        { std::lock_guard<std::mutex> lk(g_mtx); g_error = "the public address stopped answering — reconnecting"; }
+                        stopTunnel();
+                        g_tunnelUrl.clear();
+                        break;   // the next lap starts a new tunnel and publishes its hostname
+                    }
+                }
+            }
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }

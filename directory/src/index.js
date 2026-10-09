@@ -694,10 +694,16 @@ async function ping(request, env) {
     if (p2) gridPos = { grid: g, lat: p2.lat, lon: p2.lon };
   }
 
-  const moved = url !== row.url;
-  let verified = Number(row.verified) === 1 && !moved;
+  // ★★★ AND AGAIN ON EVERY PING — AN ADDRESS CAN DIE WITHOUT CHANGING (Stuart, 2026-10-09: the Sony "online but
+  //     not responding all day according to the directory"). This re-proved only when the url CHANGED, so a quick
+  //     tunnel whose hostname Cloudflare had dropped (NXDOMAIN; its cloudflared still alive, the server still pinging
+  //     over its own network) stayed verified — and listed — for 19 hours. One challenge per server per PING_SEC is
+  //     cheap; a listing nobody can open is the directory's worst answer. A server told verified:false retries within a
+  //     minute (every client since 2026-08-22), so a slow moment costs a listing seconds, not the interval. ★ The
+  //     server now also checks its own address and replaces a dead tunnel (VibeTunnel.kt / directory.cpp) — this half
+  //     covers every server already out there that cannot.
   const why = {};
-  if (!verified) verified = await verifyAddress(url, String(body.key || ''), why);
+  const verified = await verifyAddress(url, String(body.key || ''), why);
 
   await env.DB.prepare(
     `UPDATE servers SET url = ?, name = ?, status_json = ?, updated_at = ?, expires_at = ?,

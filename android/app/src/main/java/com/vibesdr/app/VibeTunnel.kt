@@ -130,6 +130,39 @@ object VibeTunnel {
     @Volatile private var tunnelFails = 0
     /** Consecutive failed publishes — the only honest liveness test for a tunnel. */
     @Volatile private var publishFails = 0
+
+    /**
+     * ★★★ THE ADDRESS CAN DIE WHILE EVERYTHING ELSE SAYS IT IS FINE (Stuart, 2026-10-09: the Sony
+     *     "online but not responding all day according to the directory").
+     *
+     *  Measured on the Sony: cloudflared alive for 19 h, its *.trycloudflare.com NXDOMAIN even at
+     *  1.1.1.1. Every check we had passed: the PROCESS lived (so the reader saw no EOF), and the
+     *  directory PING succeeded — the phone reaches the directory over its own network, not
+     *  through the tunnel, and the directory only re-proves an address when it CHANGES, so it
+     *  answered "verified" to a dead one every quarter of an hour and kept it listed.
+     *
+     *  ★★ The only honest test of a public address is to USE it. So: fetch our own
+     *     /vibeserver.json through it every PROBE_SEC; PROBE_FAILS dead answers in a row (no such
+     *     host, no connection, or Cloudflare's own 502/504/52x for a tunnel with nothing behind it)
+     *     and the tunnel is recycled by the same destroy() → EOF → reconnect → re-publish path a
+     *     crash takes. The new hostname is a MOVE, which the directory does re-prove.
+     *  ★ A new hostname is unroutable for ~90 s (Cloudflare 530), so each one gets a grace period
+     *    before it is judged — doubled after every recycle that did not come good (2, 4, 8 … 32
+     *    min), because Cloudflare rate-limits quick-tunnel creation (429 / 1015) and a link that is
+     *    simply down must not burn a tunnel every few minutes. One live answer resets all of it.
+     */
+    private const val PROBE_SEC = 120L
+    private const val PROBE_FAILS = 3
+    @Volatile private var urlBornAt = 0L
+    @Volatile private var probeFails = 0
+    @Volatile private var deadRecycles = 0
+    private var probeTask: ScheduledFuture<*>? = null
+    private val probeHttp = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .sslSocketFactory(VibeTls.socketFactory, VibeTls.trustManager)
+        .build()
     /** ★ The application context and port, remembered so a reconnect needs nothing from the UI —
      *  which is very likely gone: the server keeps running with the screen off. */
     @Volatile private var appCtx: Context? = null
@@ -230,6 +263,8 @@ object VibeTunnel {
                             if (m != null && !announced) {
                                 announced = true
                                 tunnelUrl = m.value
+                                urlBornAt = System.currentTimeMillis()
+                                probeFails = 0
                                 Log.i(TAG, "quick tunnel up: $tunnelUrl")
                                 onReady(tunnelUrl)
                             }
@@ -708,8 +743,41 @@ object VibeTunnel {
 
     /** ★ Renew on the advertised interval, and never let one failure end the schedule: a phone that
      *  loses signal for a minute must come back to a live listing, not a dead one. */
+    /** One self-check of the public address — see PROBE_SEC. Runs on the pinger thread. */
+    private fun probeOwnAddress() {
+        val u = tunnelUrl
+        if (!wantTunnel || !running.get() || u.isEmpty()) { probeFails = 0; return }
+        val graceMs = 120_000L shl deadRecycles.coerceAtMost(4)
+        if (System.currentTimeMillis() - urlBornAt < graceMs) return
+        var why = ""
+        val dead = try {
+            val req = Request.Builder().url("$u/vibeserver.json")
+                .header("User-Agent", "VibeServer-selfcheck").build()
+            probeHttp.newCall(req).execute().use { res ->
+                why = "HTTP ${res.code}"
+                res.code == 502 || res.code == 504 || res.code in 520..530
+            }
+        } catch (t: Throwable) { why = t.javaClass.simpleName + ": " + (t.message ?: ""); true }
+        if (!dead) { probeFails = 0; deadRecycles = 0; return }
+        probeFails++
+        Log.w(TAG, "own public address did not answer ($probeFails of $PROBE_FAILS): $u — $why")
+        if (probeFails >= PROBE_FAILS) {
+            probeFails = 0
+            deadRecycles++
+            lastError = "the public address stopped answering — reconnecting"
+            Log.w(TAG, "tunnel process lives but its address is dead — recycling it (recycle $deadRecycles)")
+            try { proc?.destroy() } catch (_: Throwable) {}
+            // ★ As notePublishFailed: wantTunnel and the generation are untouched, so the reader's
+            //   finally reconnects with backoff and re-publishes the new hostname.
+        }
+    }
+
     @Synchronized
     private fun startPinging() {
+        probeTask?.cancel(false)
+        probeTask = pinger.scheduleWithFixedDelay({
+            try { probeOwnAddress() } catch (t: Throwable) { Log.w(TAG, "self-check failed: ${t.message}") }
+        }, PROBE_SEC, PROBE_SEC, TimeUnit.SECONDS)
         pingTask?.cancel(false)
         pingTask = pinger.scheduleWithFixedDelay({
             try { if (running.get()) lastPublish?.invoke() } catch (t: Throwable) {
@@ -817,6 +885,7 @@ object VibeTunnel {
 
     @Synchronized
     private fun stopPinging() {
+        probeTask?.cancel(false); probeTask = null
         pingTask?.cancel(false); pingTask = null; lastPublish = null
     }
 
