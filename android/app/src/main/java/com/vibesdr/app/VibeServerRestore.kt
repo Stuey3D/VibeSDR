@@ -210,6 +210,13 @@ object VibeServerRestore {
      *  RtlTcpServerService on its tick; the attach that brings the radio back takes the lock again at once. */
     fun holdCpuAwake(ctx: Context): Boolean {
         if (!prefs(ctx).contains(K_GONE_ELAPSED)) return true
+        /* ★★ NOT WHILE THE RADIO IS ON THE BUS (2026-10-09, the Sony after the RC32/RC33 installs). The stamp survives
+         *  the process; the only thing that clears a stale one (recoverUsbIfNeeded) needs a server already RUNNING, and a
+         *  process just restarted by an update has none yet — so it let go of the CPU within a second, on a departure
+         *  the radio might have long since come back from, and the TV slept before the restore could open it. A radio
+         *  that is listed IS back: forget the stamp and hold. Letting go stays for a radio genuinely off the bus. */
+        val mgr = ctx.getSystemService(Context.USB_SERVICE) as? UsbManager
+        if (mgr != null && mgr.deviceList.values.any { isServable(it) }) { noteRadioBack(ctx); return true }
         return VibeLocalSDR.holdCpuAwake(true, radioGoneForMs(ctx))
     }
 
