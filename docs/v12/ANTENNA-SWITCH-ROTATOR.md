@@ -56,12 +56,17 @@ RTL, Airspy and SDRplay radios have no antenna outputs (SDRplay's internal A/B/C
   |---|---|---|
   | Pi GPIO pins (one-hot or binary) | most DIY coax-relay boxes, switches with a control-voltage input | `/dev/gpiochip*` (libgpiod) — not sysfs |
   | HTTP request per antenna | Tasmota/ESP8266 relays, KMTronic, web switches | URL template; GET or POST |
+  | MQTT publish per antenna | Tasmota and most ESP32 DIY switches (they already speak it) | broker host, topic, payload per antenna; read the state topic back |
+  | N1KDO AntennaSwitchControl | an open-source IoT switch (github.com/n1kdo/AntennaSwitchControl) | read its API from the source — a named target after generic HTTP |
   | USB serial relay (CH340 "LCUS") | the cheap relay boards | documented byte protocol (A0 nn ss sum) |
   | Owner command per antenna | Antenna Genius, homebrew, anything else | run as the server user, no shell interpolation of listener input |
 - **Who may switch:** listeners / admin only / nobody. On a SHARED dial a switch counts as a tune — the shared-dial contract
   applies (client transmits only on a user action; the banner/"ask before tuning" rules).
 - **Rotator:** point at a `rotctld` (Hamlib) host:port — the standard every rotator controller speaks. Same who-may rule.
 - **Ground / thunderstorm:** an owner "ground all" state, as UberSDR has, honoured by every client.
+- **Busy / interlock (hot-switch protection):** an owner who shares an antenna with their own TRANSMITTER relies on the switch
+  controller's interlock (PTT/RF sensing). Never switch while the backend reports busy/locked; show why. Contest controllers
+  (MOAS 2 by K1XM, the "Remote Switch Controller") and proprietary IP wrappers (Remoterig) are later backends, on request.
 
 Precedent worth reading before designing the backends: KiwiSDR's `ant_switch` extension (GPIO and several web/serial
 switches) — what owners already expect.
