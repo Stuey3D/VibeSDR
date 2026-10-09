@@ -27,6 +27,7 @@ import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
+import { cuPct, dabCuSegments } from '../../../src/utils/dabCapacity';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { limiter } from '../../../src/utils/limit';
@@ -6555,7 +6556,8 @@ function dabRender() {
     + row('Codec', escapeHtml(String(d.codecDetail ?? (d.services.find(x => x.sid === d.sid)?.codec ?? '—'))))
     + row('Bit rate', d.bitrate ? d.bitrate + ' kbit/s' : '—')
     + row('Protection', escapeHtml(String(cur?.prot ?? (d.protection || '—'))))
-    + (cur ? row('Capacity units', `${cur.cuStart}–${(cur.cuStart ?? 0) + (cur.cuSize ?? 0) - 1} (${cur.cuSize} CU, sub-channel ${cur.subch})`) : '')
+    + (cur ? row('Capacity units', `${cur.cuStart}–${(cur.cuStart ?? 0) + (cur.cuSize ?? 0) - 1} (${cur.cuSize} CU, sub-channel ${cur.subch})`
+                 + dabCuBarHtml(d.services, cur.subch)) : '')
     /* ★ The S/D flag of FIG 0/17 (EN 300 401 8.1.5): "dynamic" means the code follows the ITEMS
      *  within a programme, so it is live; static is the programme's overall genre and does not
      *  change within it. Saying which is the difference between a live readout and a label. */
@@ -6958,6 +6960,17 @@ function dabDrawScopes(d: DabState) {
 
 let dabLastListHtml = '';
 let dabLastHeadHtml = '';
+/** ★ The multiplex's 864 capacity units as a little bar under the readout (Stuart, 2026-10-09) — every sub-channel
+ *  faint, the playing one lit (src/utils/dabCapacity.ts, the app's DabPanel draws the same segments). <i>/<b>, not
+ *  spans: dabPatchRows finds a row's value by its closing </span></div>. */
+function dabCuBarHtml(services: DabState['services'], curSubch: number): string {
+  const segs = dabCuSegments(services, curSubch);
+  if (!segs.length) return '';
+  return '<i class="cuBar" aria-hidden="true">' + segs.map((g) => {
+    const p = cuPct(g);
+    return `<b${g.current ? ' class="on"' : ''} style="left:${p.left.toFixed(2)}%;width:${p.width.toFixed(2)}%"></b>`;
+  }).join('') + '</i>';
+}
 /** Traffic light on a value with a nominal range — the RDS box's scheme. */
 const tl = (v: string, level: 'ok' | 'warn' | 'bad') => `<span class="tl ${level}">${v}</span>`;
 const rowsKeys: string[] = [];

@@ -30,6 +30,7 @@ import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
 import { withReadAuth } from '../services/vibeAuth';
 import { limiter } from '../utils/limit';
+import { cuPct, dabCuSegments } from '../utils/dabCapacity';
 
 /** ★ Three RadioDNS lookups at a time — under the server's cap of four (src/utils/limit.ts). */
 const dabLogoQueue = limiter(3);
@@ -66,6 +67,27 @@ const Row = React.memo(function Row({ label, value, tone }: {
     <View style={s.row}>
       <Text style={s.lbl} numberOfLines={2}>{label}</Text>
       <Marquee text={value} style={[s.val, { color: toneColour(C, tone) }]} />
+    </View>
+  );
+});
+
+/** ★ The multiplex's 864 capacity units as a little bar under the readout (Stuart, 2026-10-09: "keep the readout but
+ *  add a little bar too") — every sub-channel faint, the playing one lit. Same segments as the web client
+ *  (src/utils/dabCapacity.ts). Sits under the VALUE column, so it lines up with the figures it illustrates. */
+const CuBar = React.memo(function CuBar({ services, subch }: { services: DabState['services']; subch: number }) {
+  const { s, C } = useDecoderStyles(makeStyles);
+  const segs = useMemo(() => dabCuSegments(services, subch), [services, subch]);
+  if (!segs.length) return null;
+  return (
+    <View style={[s.cuBar, { borderColor: C.axis }]} accessible={false} importantForAccessibility="no-hide-descendants">
+      {segs.map((g) => {
+        const p = cuPct(g);
+        return (
+          <View key={g.start}
+                style={[s.cuSeg, { left: `${p.left}%`, width: `${p.width}%`,
+                                   backgroundColor: g.current ? C.gold : C.bar, opacity: g.current ? 1 : 0.45 }]} />
+        );
+      })}
     </View>
   );
 });
@@ -588,8 +610,11 @@ export default function DabPanel(p: DabPanelProps) {
           <Row label="Bit rate" value={d.bitrate ? `${d.bitrate} kbit/s` : DASH} />
           <Row label="Protection" value={cur?.prot ?? (d.protection || DASH)} />
           {!!cur && cur.cuSize !== undefined && (
-            <Row label="Capacity units"
-                 value={`${cur.cuStart}–${(cur.cuStart ?? 0) + (cur.cuSize ?? 0) - 1} (${cur.cuSize} CU, sub-channel ${cur.subch})`} />
+            <>
+              <Row label="Capacity units"
+                   value={`${cur.cuStart}–${(cur.cuStart ?? 0) + (cur.cuSize ?? 0) - 1} (${cur.cuSize} CU, sub-channel ${cur.subch})`} />
+              <CuBar services={d.services} subch={cur.subch} />
+            </>
           )}
           {/* ★ FIG 0/17's S/D flag (EN 300 401 8.1.5): "dynamic" follows the ITEMS within a
               programme, so it is live; static is the programme's overall genre. Saying which is
@@ -896,6 +921,10 @@ const makeStyles = (T: DecoderTokens) => {
   row:    { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   lbl:    { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: T.rowLabel, width: 124 },
   val:    { fontFamily: FONT, fontSize: 14, color: C.value, fontVariant: ['tabular-nums'] },
+  // ★ The capacity-unit bar: under the value column (lbl 124 + gap 8), thin, the empty track is unused capacity.
+  cuBar:  { marginLeft: 132, height: 6, marginTop: 1, marginBottom: 3, borderRadius: 2, borderWidth: StyleSheet.hairlineWidth,
+            overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.06)' },
+  cuSeg:  { position: 'absolute', top: 0, bottom: 0, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: 'rgba(0,0,0,0.55)' },
   section:{ fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
             marginTop: 10, marginBottom: 2 },
   /* ★ The web's .dabHead: 56 px picture, green name, codec line, scrolling radio text. */

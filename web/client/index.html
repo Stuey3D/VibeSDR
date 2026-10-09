@@ -1148,6 +1148,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #dabSignal .row > span:last-child:has(.lvl) { display:flex; justify-content:flex-end; gap:6px; align-items:baseline; }
 #dabSignal .row > span:last-child:has(.lvl) .dls { flex:1 1 auto; min-width:0; }
 #dabSignal .row .lvl { flex:0 0 auto; white-space:nowrap; }
+/* ★ The capacity-unit bar (dabCuBarHtml): the multiplex's 864 CU, each sub-channel faint, the playing one lit. */
+#dabSignal .cuBar { display:block; position:relative; height:6px; margin:4px 0 2px; border-radius:2px; overflow:hidden;
+                    background:rgba(255,255,255,0.08); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+#dabSignal .cuBar b { position:absolute; top:0; bottom:0; background:rgba(230,230,230,0.32);
+                      box-shadow: inset -1px 0 0 rgba(0,0,0,0.55); }
+#dabSignal .cuBar b.on { background: var(--freq); }
 .dabScopes { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin:6px 0 2px; }
 .dabScopes > div { display:flex; flex-direction:column; gap:3px; }
 .dabScopes span { font-size:9px; letter-spacing:1.5px; color:var(--unit); }
