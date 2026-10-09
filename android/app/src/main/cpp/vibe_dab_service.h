@@ -831,9 +831,9 @@ public:
          *  the symptom was indistinguishable from a dead decoder. A separate, short append cannot
          *  drift out of step with its own arguments. */
         {
-            char rb[64];
-            snprintf(rb, sizeof rb, ",\"reacquires\":%d,\"preTuneDropped\":%u",
-                     s.reacquires, preTuneDropped_);
+            char rb[96];
+            snprintf(rb, sizeof rb, ",\"reacquires\":%d,\"preTuneDropped\":%u,\"aacRestarts\":%d,\"aacRebuilds\":%u",
+                     s.reacquires, preTuneDropped_, aac_.restarts(), aacRebuilds_);
             j += rb;
         }
         {

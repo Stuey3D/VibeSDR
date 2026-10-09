@@ -110,6 +110,7 @@ public:
         const size_t   plen    = n - hdr;
 
         ssize_t ib = AMediaCodec_dequeueInputBuffer(codec_, 10000);
+        if (ib < 0 && ib != AMEDIACODEC_INFO_TRY_AGAIN_LATER) { restart("dequeueInputBuffer", ib); return true; }
         if (ib >= 0) {
             size_t cap = 0;
             uint8_t* buf = AMediaCodec_getInputBuffer(codec_, size_t(ib), &cap);
@@ -124,6 +125,10 @@ public:
         drain(out);
         return true;
     }
+
+    /** How many times an ERROR CODE has restarted the codec (the `dab` report's aacRestarts). A codec that goes quiet
+     *  WITHOUT one is the service's watchdog (vibe_dab_service.h kAacDryMax, reported as aacRebuilds). */
+    int restarts() const { return restarts_; }
 
     /** ★ Pull whatever is ready without feeding anything — used to flush the decoder's own lag. */
     void drain(AacPcm& out) {
@@ -164,7 +169,12 @@ public:
                 }
                 continue;
             }
-            break;      // TRY_AGAIN_LATER or buffers changed — nothing waiting
+            if (ob == AMEDIACODEC_INFO_TRY_AGAIN_LATER || ob == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) break;
+            /* ★★★ ANYTHING ELSE NEGATIVE IS AN ERROR, AND A MediaCodec IN ITS ERROR STATE STAYS THERE until it is
+             *  stopped and started again. This used to `break` like "nothing waiting", so one corrupt access unit
+             *  could leave the codec dead for the rest of the programme while decode() kept answering true. */
+            restart("dequeueOutputBuffer", ob);
+            return;
         }
     }
 
@@ -249,7 +259,18 @@ private:
         return true;
     }
 
+    /** ★ An error code (2026-10-09, Stuart: "I wonder if a bad dab packet causes a decoder crash on the AAC side"):
+     *  drop the codec; the next unit's header reopens it (decode → open) — at once, rather than after the service's
+     *  2–3 s dry watchdog. Not `failed_`: a decoder that errored
+     *  once is not unusable, and marking it so would turn a sub-second hiccup into ADTS for the rest of the service. */
+    void restart(const char* why, ssize_t code) {
+        ++restarts_;
+        fprintf(stderr, "[DAB] AAC decoder error (%s, %zd) — restarting it (%d so far)\n", why, code, restarts_);
+        close();
+    }
+
     AMediaCodec* codec_ = nullptr;
+    int      restarts_ = 0;
     int      openedProfile_ = 0, openedSf_ = -1, openedCh_ = -1;   ///< what the codec was opened for
     int      rate_ = 0, ch_ = 0;
     int64_t  pts_  = 0;
@@ -275,6 +296,7 @@ public:
     AacDecoderApple& operator=(const AacDecoderApple&) = delete;
     bool available() const { return !failed_; }
     const char* backend() const { return "AudioToolbox"; }
+    int restarts() const { return 0; }   ///< error-code restarts: the AMediaCodec decoder's only
 
     bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
         if (failed_ || !adts || n < 7) return false;
@@ -395,6 +417,7 @@ public:
     AacDecoderFfmpeg(const AacDecoderFfmpeg&) = delete;
     AacDecoderFfmpeg& operator=(const AacDecoderFfmpeg&) = delete;
     const char* backend() const { return "ffmpeg"; }
+    int restarts() const { return 0; }   ///< error-code restarts: the AMediaCodec decoder's only
 
     /** ★ Probed ONCE: the binary must exist AND report an AAC decoder. A server with ffmpeg built
      *  without AAC would otherwise look capable and deliver silence. The BINARY does not come and
@@ -573,6 +596,7 @@ public:
     AacDecoder() : useFf_(ff_.available() && !getenv("VIBE_AAC_APPLE")) {}
     bool available() const { return useFf_ ? ff_.available() : at_.available(); }
     const char* backend() const { return useFf_ ? ff_.backend() : at_.backend(); }
+    int restarts() const { return 0; }
     bool decode(const uint8_t* adts, size_t n, AacPcm& out) { return useFf_ ? ff_.decode(adts, n, out) : at_.decode(adts, n, out); }
     void drain(AacPcm& out) { if (useFf_) ff_.drain(out); else at_.drain(out); }
     void close() { ff_.close(); at_.close(); }
@@ -599,6 +623,7 @@ public:
     static constexpr bool kExactFrames = true;
     bool available() const { return false; }
     const char* backend() const { return "none"; }
+    int restarts() const { return 0; }   ///< error-code restarts: the AMediaCodec decoder's only
     bool decode(const uint8_t*, size_t, AacPcm&) { return false; }
     void drain(AacPcm&) {}
     void close() {}
