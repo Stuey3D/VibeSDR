@@ -3727,6 +3727,7 @@ function swFromRadio(r) {
       sw.antennas = (j.antennas || []).map((a, i) => ({ name: a.name || "", relay: Number.isInteger(a.relay) ? a.relay : i, bands: a.bands || "" }));
     }
   } catch (e) { /* a bad blob is "no switch" */ }
+  swSaved = sw.enabled;
 }
 function swSetCount(n) {
   const max = Math.max(2, sw.relays.length);
@@ -3749,7 +3750,12 @@ function swServerFields() {
   return { antennaSwitch: JSON.stringify({ enabled: true, host, port, user: sw.user, pass: sw.pass, deviceName: sw.deviceName,
                                            relays: sw.relays, antennas }), antennaMap: map };
 }
+/* ★★ THE GATE — Lite's ANT_SWITCH_SETUP (ServerModeScreen.tsx), same rule: OFF FOR V11 (Stuart, 2026-10-10, no tester has
+ *  a switch); a server already set up keeps the section so its owner can change or switch it off. true for V12. */
+const SW_SETUP = false;
+let swSaved = false;   // ★ the SAVED state decides, so an owner who clicks "No" does not watch the section vanish
 function swRender() {
+  $("swBox").style.display = (SW_SETUP || swSaved) ? "" : "none";
   $("swYes").checked = sw.enabled; $("swNo").checked = !sw.enabled;
   $("swBody").style.display = sw.enabled ? "" : "none";
   $("swWhy0").style.display = sw.enabled ? "none" : "";

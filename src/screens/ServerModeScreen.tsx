@@ -3,8 +3,11 @@ import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
 import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } from '../services/antennaSwitch';
 /** ★★ THE GATE (Stuart, 2026-10-09: "pushed to [Chicopee] as a test — if it works it ships as V11, if not gated off for
- *  V12"). false hides the whole antenna-switch setup; a server already configured keeps working either way. */
-const ANT_SWITCH_SETUP = true;
+ *  V12"). false hides the antenna-switch setup; a server already configured keeps working AND keeps the section, so its
+ *  owner can still change or switch it off.
+ *  ★ OFF FOR V11 (Stuart, 2026-10-10): Chicopee has no switch to test with — "it is being left out of V11 for now".
+ *    The test build (lite-v11.0.0-rc34test1-antenna-switch) stays up for anyone who has one. Flip to true for V12. */
+const ANT_SWITCH_SETUP = false;
 import GainSlider from '../components/GainSlider';
 import BandLimitEditor, { Band } from '../components/BandLimitEditor';
 
@@ -264,6 +267,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [antennaIcon, setAntennaIcon] = useState('');
   /** ★ The external antenna switch (2026-10-09) — services/antennaSwitch.ts, components/AntennaSwitchSetup.tsx. */
   const [antSwitch, setAntSwitch] = useState<AntennaSwitchCfg>(EMPTY_SWITCH);
+  /** ★ Whether a switch was SAVED as on when this screen loaded — what the V11 gate (ANT_SWITCH_SETUP) shows the section for. */
+  const antSwitchSaved = useRef(false);
   /** ★ What the aerial covers / which filters are fitted (2026-10-09) — the shared text format (utils/antennaBands.ts). */
   const [antRanges, setAntRanges] = useState('');
   const [antFilters, setAntFilters] = useState('');
@@ -866,7 +871,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           { const ig = s(K.idleGrace); setIdleGrace(ig === '' ? 300 : (Number(ig) || 0)); }
           setAntenna(s(K.antenna));
           setAntennaIcon(s(K.antennaIcon));
-          setAntSwitch(parseSwitchCfg(s(K.antSwitch)));
+          { const sw = parseSwitchCfg(s(K.antSwitch)); antSwitchSaved.current = sw.enabled; setAntSwitch(sw); }
           setAntRanges(s(K.antRanges)); setAntFilters(s(K.antFilters));
           setRadioLabel(s(K.radioLabel));
           { const ch = s(K.landingDabCh);
@@ -2987,7 +2992,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             {advanced && (<>
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>ANTENNA</Text>
             {/* ★★ An external antenna switch, above the aerial's own details (Stuart's design, 2026-10-09). */}
-            {ANT_SWITCH_SETUP && <AntennaSwitchSetup value={antSwitch} onChange={setAntSwitch} C={C} F={F} />}
+            {(ANT_SWITCH_SETUP || antSwitchSaved.current) && <AntennaSwitchSetup value={antSwitch} onChange={setAntSwitch} C={C} F={F} />}
             <TextInput value={antenna} onChangeText={setAntenna}
               placeholder="e.g. Discone in the loft, good to 300 MHz"
               placeholderTextColor={C.textDim} maxLength={120}
