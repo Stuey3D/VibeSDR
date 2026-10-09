@@ -46,25 +46,32 @@ const dc = new mod.DecoderClient('127.0.0.1:48111', { query: '' }, {
   onRefused: (m, what) => seen.push({ m, what }),
 }, 'sess-1234abcd');
 dc.connect();
-const ws = sockets[0];
-ok(/\/ws\/dxcluster\?user_session_id=sess-1234abcd/.test(ws.url), `the decoder socket carries the session id (${ws.url})`);
-ws.open();
+// ★★ 2026-10-10: the socket opens only while something needs it (test_decoder_socket_idle.ts) — not at connect().
+ok(sockets.length === 0, 'connected with no decoder: no socket yet');
 dc.attach('wefax', { lpm: 120 });
+const ws = sockets[0];
+ok(!!ws && /\/ws\/dxcluster\?user_session_id=sess-1234abcd/.test(ws.url), `a decoder opens the socket, carrying the session id (${ws?.url})`);
+ws.open();
 dc.setSpots(true);
-ok(ws.sent.some((m) => m.type === 'audio_extension_attach' && m.extension_name === 'wefax'), 'WEFAX asked for');
+ok(ws.sent.some((m) => m.type === 'audio_extension_attach' && m.extension_name === 'wefax' && m.lpm === 120), 'WEFAX asked for, with its LPM');
+ok(ws.sent.some((m) => m.type === 'subscribe_digital_spots'), 'spots asked for');
 const words = 'All 4 decoder slots on this server are in use — try again shortly.';
 ws.deliver({ type: 'decoder_refused', what: 'decoder', ext: 'wefax', reason: 'limit', max: 4, message: words });
 ws.deliver({ type: 'decoder_refused', what: 'spots', ext: 'ft8', reason: 'limit', max: 4, message: words });
 ok(seen.length === 2 && seen[0].m === words && seen[0].what === 'decoder' && seen[1].what === 'spots',
    'the listener is shown the server\'s own words, for the decoder and for spots');
 ok(dc.attached === null && dc.spotsEnabled === false, 'what was refused is forgotten');
-// The socket drops and reconnects (the 3 s timer): it must NOT ask again on its own.
+// The socket drops: with everything refused nothing is wanted, so there is no reconnect at all — no refusal loop.
 ws.close();
-timers.shift()?.();
+for (const f of timers.splice(0)) f();
+ok(sockets.length === 1, 'nothing left running: the drop is NOT reconnected (no refusal loop, no idle socket)');
+// The listener asks for something else: a new socket, asking only for THAT.
+dc.attach('rtty', { shift: 170 });
 const ws2 = sockets[1];
-ws2.open();
-ok(ws2 && !ws2.sent.some((m) => m.type === 'audio_extension_attach' || m.type === 'subscribe_digital_spots'),
-   'a reconnect does not re-ask for a refused decoder (no refusal loop)');
-ok(/user_session_id=sess-1234abcd/.test(ws2.url), '...and the reconnect still says who it is');
+ws2?.open();
+ok(!!ws2 && ws2.sent.some((m) => m.type === 'audio_extension_attach' && m.extension_name === 'fsk')
+   && !ws2.sent.some((m) => m.extension_name === 'wefax' || m.type === 'subscribe_digital_spots'),
+   'a new decoder opens a new socket and asks only for that — the refused ones are not re-asked');
+ok(/user_session_id=sess-1234abcd/.test(ws2?.url ?? ''), '...and it still says who it is');
 console.log(`\n   ${checks - failures} of ${checks} passed`);
 process.exit(failures ? 1 : 0);

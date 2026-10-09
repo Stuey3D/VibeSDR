@@ -123,6 +123,10 @@ export class DecoderClient {
   /** What's attached — REQUIRED to parse frames (0x01 is ambiguous). */
   private mode: DecoderMode = null;
   private spotsOn = false;
+  /** connect() has been called (the page is live) — the socket itself opens only when wanted, see _sync. */
+  private enabled = false;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(host: string, auth: AuthState, cb: DecoderCallbacks, sessionId = '') {
     // ★ Same rule as every other URL: an https page cannot open a ws:// socket. See origin.ts.
@@ -135,7 +139,42 @@ export class DecoderClient {
     this.cb = guardCallbacks('web-ui', cb);   // ★ a decoder panel that throws stays its own problem
   }
 
+  /* ★★★ OPENED ONLY WHILE SOMETHING IS RUNNING (Stuart, 2026-10-10: "make the connection as efficient as possible,
+   *  minimal data rate"; "light everywhere — light on CPU on client and server and light on data"). This socket was
+   *  opened at page load and held for the life of the page, whether or not a decoder was ever started:
+   *   • behind the Cloudflare tunnel it carried nothing, was cut at ~100 s idle and reconnected for ever — the
+   *     console "as long as my arm";
+   *   • on a shared dial the server MIRRORS a running decoder to every decoder socket, and this client throws
+   *     frames away unless a decoder of its OWN is attached (_handleBinary) — data and server work for nothing;
+   *   • one more socket, thread and peer per listener on the server, for most listeners who never decode.
+   *  Now: connect() only enables. The socket opens when a decoder is attached or spots switched on, and closes
+   *  IDLE_CLOSE_MS after the last one stops (a grace, so switching RTTY → NAVTEX does not reconnect). Callers are
+   *  unchanged — attach/detach/setSpots drive it. */
   connect() {
+    this.enabled = true;
+    this._sync();
+  }
+
+  private static readonly IDLE_CLOSE_MS = 8000;
+  private _wanted() { return this.enabled && (this.mode !== null || this.spotsOn); }
+  private _sync() {
+    if (this._wanted()) {
+      if (this.idleTimer !== null) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+      if (!this.ws && this.retryTimer === null) this._open();
+    } else if (this.ws && this.idleTimer === null) {
+      this.idleTimer = setTimeout(() => {
+        this.idleTimer = null;
+        if (!this._wanted()) this._drop();
+      }, DecoderClient.IDLE_CLOSE_MS);
+    }
+  }
+  private _drop() {
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) { ws.onclose = null; ws.onmessage = null; ws.onerror = null; try { ws.close(); } catch { /* gone */ } }
+  }
+
+  private _open() {
     this.closedByUs = false;
     const ws = new WebSocket(this.url);
     ws.binaryType = 'arraybuffer';
@@ -162,16 +201,23 @@ export class DecoderClient {
       }
     };
     ws.onclose = () => {
+      if (this.ws !== ws) return;          // superseded or dropped on purpose
+      this.ws = null;
       this.cb.onClose?.();
-      if (!this.closedByUs) setTimeout(() => this.connect(), 3000);
+      // ★ Reconnect only while something still needs it — an idle page leaves it closed.
+      if (!this.closedByUs && this._wanted() && this.retryTimer === null) {
+        this.retryTimer = setTimeout(() => { this.retryTimer = null; if (this._wanted() && !this.ws) this._open(); }, 3000);
+      }
     };
     ws.onerror = () => {};
   }
 
   close() {
     this.closedByUs = true;
-    this.ws?.close();
-    this.ws = null;
+    this.enabled = false;
+    if (this.idleTimer !== null) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+    if (this.retryTimer !== null) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+    this._drop();
   }
 
   private _send(o: Record<string, unknown>) {
@@ -188,7 +234,8 @@ export class DecoderClient {
     this.mode = mode;
     // ★ Remembered so a reconnect can re-assert the SAME decoder, not the default one.
     this.params = params;
-    this._sendAttach(mode, params);
+    if (this.ws?.readyState === WebSocket.OPEN) this._sendAttach(mode, params);
+    else this._sync();                     // opening: onopen re-asserts mode + params
   }
 
   detach() {
@@ -196,13 +243,15 @@ export class DecoderClient {
     this.mode = null;
     this.params = {};
     this._send({ type: 'audio_extension_detach' });
+    this._sync();
   }
 
   /** FT8/FT4 spots run independently of the text/image decoders. */
   setSpots(on: boolean) {
     if (this.spotsOn === on) return;
     this.spotsOn = on;
-    this._send({ type: on ? 'subscribe_digital_spots' : 'unsubscribe_digital_spots' });
+    if (this.ws?.readyState === WebSocket.OPEN) this._send({ type: on ? 'subscribe_digital_spots' : 'unsubscribe_digital_spots' });
+    this._sync();                          // opening: onopen subscribes
   }
 
   get attached(): DecoderMode { return this.mode; }
@@ -221,6 +270,7 @@ export class DecoderClient {
       //    exactly wrong for one the server said no to. The listener asks again when they choose to.
       const what = msg.what === 'spots' ? 'spots' : 'decoder';
       if (what === 'spots') this.spotsOn = false; else { this.mode = null; this.params = {}; }
+      this._sync();
       this.cb.onRefused?.(String(msg.message || 'The server could not start that decoder.'), what);
       return;
     }

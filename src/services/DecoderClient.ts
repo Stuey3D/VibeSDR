@@ -278,6 +278,7 @@ export class DecoderClient {
   /** Start a decoder. Replaces any running one (server enforces one/session). */
   start(name: DecoderName) {
     this.active = name;
+    this._idleCheck();                     // ★ wanted again: cancels a pending idle close
     if (this.ws?.readyState === WebSocket.OPEN) {
       this._attach();
     } else {
@@ -285,12 +286,35 @@ export class DecoderClient {
     }
   }
 
-  /** Stop decoding; keeps the WS warm for quick decoder switches. */
+  /** Stop decoding. The socket stays warm for IDLE_CLOSE_MS (a quick switch to another decoder reuses it), then closes
+   *  if nothing — decoder, spots, chat — still needs it. */
   stop() {
     this.active = null;
     if (this.ws?.readyState === WebSocket.OPEN) {
       try { this.ws.send(JSON.stringify({ type: 'audio_extension_detach' })); } catch {}
     }
+    this._idleCheck();
+  }
+
+  /* ★★★ CLOSED WHEN NOTHING NEEDS IT (Stuart, 2026-10-10: "light everywhere — light on CPU on client and server and
+   *  light on data"). The socket opened on demand but was then kept "warm" for the rest of the session — and on a
+   *  shared dial the server MIRRORS a running decoder to every decoder socket, so a phone that had once tried RTTY
+   *  went on receiving somebody else's decoder output; behind a Cloudflare tunnel an idle one is cut at ~100 s and
+   *  retried. Same rule as the web client (web/client/src/decoders.ts). */
+  private static readonly IDLE_CLOSE_MS = 8000;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private _needed() { return !!(this.active || this.spotsKind || this.chatSubscribed); }
+  private _idleCheck() {
+    if (this.destroyed) return;
+    if (this._needed()) { if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; } return; }
+    if (!this.ws || this.idleTimer) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this._needed() || this.destroyed) return;
+      const ws = this.ws;
+      this.ws = null;
+      if (ws) { ws.onopen = null; ws.onmessage = null; ws.onclose = null; ws.onerror = null; try { ws.close(); } catch { /* gone */ } }
+    }, DecoderClient.IDLE_CLOSE_MS);
   }
 
   // ── Spots feed (shares this WS — brief follow-up #3) ───────────────────────
@@ -298,6 +322,7 @@ export class DecoderClient {
 
   startSpots(kind: SpotsKind) {
     this.spotsKind = kind;
+    this._idleCheck();
     if (this.ws?.readyState === WebSocket.OPEN) this._subscribeSpots();
     else this._open();
   }
@@ -312,6 +337,7 @@ export class DecoderClient {
         }));
       } catch {}
     }
+    this._idleCheck();
   }
 
   private _subscribeSpots() {
@@ -338,6 +364,7 @@ export class DecoderClient {
   /** Open the chat stream (history replay arrives immediately). */
   subscribeChat() {
     this.chatSubscribed = true;
+    this._idleCheck();
     if (this.ws?.readyState === WebSocket.OPEN) this._chatSubscribe();
     else this._open();
   }
@@ -433,6 +460,7 @@ export class DecoderClient {
 
   destroy() {
     this.destroyed = true;
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
     this.stop();
     this.stopSpots();
     this.leaveChat();
@@ -445,6 +473,7 @@ export class DecoderClient {
 
   private _open() {
     if (this.destroyed) return;
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }   // wanted again: keep it
     // ★ One socket at a time. A retry timer from an earlier close (or a start() while CONNECTING)
     //   would otherwise open a second one and orphan the first; the live one's onopen already
     //   restates the decoder, spots and chat.

@@ -401,6 +401,10 @@ if node --no-warnings scripts/test_vtsLine.ts; then pass=$((pass+1)); else fail=
 #     web/dist (node scripts/build-web.mjs).
 if node --no-warnings scripts/test_chunk_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
+# ★★★ THE DECODER SOCKET ONLY WHILE SOMETHING NEEDS IT (2026-10-10, "light everywhere — light on CPU on client and server
+#     and light on data"): web and app open /ws/dxcluster on a decoder / spots / chat and close it 8 s after the last.
+if npx tsx scripts/test_decoder_socket_idle.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
 #     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.
