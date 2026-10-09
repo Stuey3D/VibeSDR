@@ -26,7 +26,7 @@ import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAu
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
-import { DabQualityMeter, type DabQuality } from '../../../src/utils/dabQuality';
+import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
 import { limiter } from '../../../src/utils/limit';
@@ -1493,7 +1493,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         d.held = true;
       }
       dabState = d; dabRender(); updateVts(); syncStereoLight();
-      dabQuality = dabQualityMeter.push(d, Date.now());
+      {
+        // ★ And whether audio is REACHING this page (dabWithPlayback) — the player's own output stamp. Muted, or held
+        //   for a tap: cannot judge (those have their own notices).
+        const h = audio?.health;
+        const out = audio?.lastOutputAtMs ?? 0;
+        dabQuality = dabWithPlayback(dabQualityMeter.push(d, Date.now()), d.sid,
+          !audio || h === 'muted' || h === 'suspended' ? undefined : out ? performance.now() - out : Infinity);
+      }
     },
     onAdmin: (ok, refused) => {
       if (refused) {

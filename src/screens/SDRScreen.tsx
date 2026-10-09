@@ -63,7 +63,7 @@ import { createValueBus } from '../services/valueBus';
 import DabPlusBadge from '../components/DabPlusBadge';
 import { dabServiceStereo, type DabState } from '../services/dabTypes';
 import { DabBlockStepper, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
-import { DabQualityMeter, type DabQuality } from '../utils/dabQuality';
+import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../utils/dabQuality';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
@@ -2454,7 +2454,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!dabOn) { dabMeterRef.current?.reset(); setDabQuality(null); return; }
     if (!dabState) { setDabQuality(null); return; }   // between multiplexes: the bar says searching
     const m = dabMeterRef.current ?? (dabMeterRef.current = new DabQualityMeter());
-    const q = m.push(dabState, Date.now());
+    // ★ And whether audio is REACHING this phone (dabWithPlayback): bytes arriving, from onBytes. Muted: cannot judge.
+    const q = dabWithPlayback(m.push(dabState, Date.now()), dabState.sid,
+      isMutedRef.current ? undefined : lastAudioAtRef.current ? Date.now() - lastAudioAtRef.current : Infinity);
     setDabQuality(p => (p && p.level === q.level && p.label === q.label && p.advice === q.advice
                         && p.detail === q.detail ? p : q));
   }, [dabOn, dabState]);

@@ -10,6 +10,7 @@
  */
 import {
   classifyDabWindow, DabQualityMeter, dabQualityLine, DAB_SEARCHING, type DabWindow,
+  dabWithPlayback, DAB_NO_AUDIO_ADVICE, type DabQuality,
 } from '../src/utils/dabQuality.ts';
 
 let fails = 0, passes = 0;
@@ -36,6 +37,7 @@ eq('10C FIB 23-55 % → weak', lvl({ fibRate: 0.4, fibNow: 0.4, mer: 0 }), 1);
 eq('FIB 95 % → moderate', lvl({ fibRate: 0.95, fibNow: 0.95, mer: 20 }), 2);
 eq('raw BER 9 % (10D) → weak', lvl({ mer: 9.1, mscBer: 0.09 }), 1);
 eq('raw BER 4.1 % detail', classifyDabWindow(W({ mer: 20, mscBer: 0.041 })).detail, 'BER 4.1 %');
+eq('raw BER 4.1 %, nothing decoding yet → moderate (weak is 8.5 %+)', lvl({ mer: 20, mscBer: 0.041 }), 2);
 eq('raw BER 0.5 % (12B, 0 bad frames in 8 min) → strong, not moderate', lvl({ mer: 20, mscBer: 0.005 }), 3);
 eq('raw BER 0.8 % (11D, clean) → strong', lvl({ mer: 18, mscBer: 0.008 }), 3);
 eq('raw BER 2 % → moderate', lvl({ mer: 18, mscBer: 0.02 }), 2);
@@ -48,14 +50,23 @@ eq('DAB+ Pi 2 wire: 95.7 % OK → moderate', lvl({ sfTried: 1111, sfOk: 1063 }),
 eq('DAB+ all OK → strong', lvl({ sfTried: 42, sfOk: 42 }), 3);
 eq('DAB+ 14 % lost detail', classifyDabWindow(W({ sfTried: 50, sfOk: 43 })).detail, '14 % frames lost');
 eq('DAB+ all OK, no detail', classifyDabWindow(W({ sfTried: 42, sfOk: 42 })).detail, undefined);
-eq('DAB+ clean ACCESS UNITS beat a poor MER/BER prediction (bursty errors)',
-   lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 0, mer: 9, mscBer: 0.09 }), 3);
+// ★★★ 2026-10-09 (Stuart): the raw BER is a CEILING — clean units at 9 % BER are still a weak multiplex.
+eq('DAB+ clean ACCESS UNITS do NOT beat a raw BER of 9 % — weak (Stuart, Coventry 12D)',
+   lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 0, mer: 9, mscBer: 0.09 }), 1);
+eq('Coventry 12D as seen: clean units, MER 9.5, BER 6.7 % → MODERATE, not weak (Stuart: issues start ~9 %)',
+   lvl({ sfTried: 42, sfOk: 42, auIn: 84, auBad: 0, mer: 9.5, mscBer: 0.067 }), 2);
+eq('…with the BER as the reason',
+   classifyDabWindow(W({ sfTried: 42, sfOk: 42, auIn: 84, auBad: 0, mer: 9.5, mscBer: 0.067 })).detail, 'BER 6.7 %');
+eq('8.7 % (the lowest measured break-up) → weak', lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 0, mer: 9, mscBer: 0.087 }), 1);
+eq('clean units at BER 2 % → moderate', lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 0, mer: 18, mscBer: 0.02 }), 2);
+eq('clean units at BER 0.8 % → still strong', lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 0, mer: 18, mscBer: 0.008 }), 3);
+eq('MER alone does not cap clean units (the BER is the margin)', lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 0, mer: 9, mscBer: 0.005 }), 3);
 // ★★★ 2026-10-06 — the two "Strong on bubbling mud" reports
 eq('DAB+ every super frame "OK" but 30 % of access units lost → weak',
    lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 50, mer: 9, mscBer: 0.09 }), 1);
 eq('DAB+ 3 % access units lost → moderate', lvl({ sfTried: 42, sfOk: 42, auIn: 168, auBad: 5 }), 2);
-eq('older server (no AU counter): all frames OK but BER 9 % → not strong',
-   lvl({ sfTried: 42, sfOk: 42, mer: 9, mscBer: 0.09 }), 2);
+eq('older server (no AU counter): all frames OK but BER 9 % → weak',
+   lvl({ sfTried: 42, sfOk: 42, mer: 9, mscBer: 0.09 }), 1);
 eq('older server: Reed-Solomon failures inside OK frames → not strong',
    lvl({ sfTried: 42, sfOk: 42, rsLost: 3, mer: 20 }), 2);
 eq('Layer II Coventry 12C: 2.8 % bad but ScF-CRC 0.71/frame → weak',
@@ -125,6 +136,20 @@ eq('searching placeholder', [DAB_SEARCHING.level, DAB_SEARCHING.short], [0, 'No 
   eq('second box carries the MER', q.merDb !== undefined && Math.abs(q.merDb - 8.04) < 1e-9, true);
   const n = new DabQualityMeter();
   eq('no MER while unlocked', n.push({ channel: '12C', locked: false, mer: 9 }, 1000).merDb, undefined);
+}
+
+// ★★★ "Clear audio" only while audio is actually reaching this listener (Stuart, 2026-10-09: the meter said clear
+//     audio "when the audio was not starting").
+{
+  const strong: DabQuality = { level: 3, label: 'Multiplex strong', short: 'Strong', advice: 'Clear audio' };
+  eq('playing: unchanged', dabWithPlayback(strong, 50279, 400), strong);
+  eq('a 3 s pause in the programme: unchanged', dabWithPlayback(strong, 50279, 3000), strong);
+  eq('a service, nothing for 5 s: says so', dabWithPlayback(strong, 50279, 5000).advice, DAB_NO_AUDIO_ADVICE);
+  eq('…never heard at all: says so', dabWithPlayback(strong, 50279, Infinity).advice, DAB_NO_AUDIO_ADVICE);
+  eq('…and the bars are left alone', dabWithPlayback(strong, 50279, 5000).level, 3);
+  eq('no service picked: unchanged', dabWithPlayback(strong, 0, 9000), strong);
+  eq('muted / tap-to-start (cannot judge): unchanged', dabWithPlayback(strong, 50279, undefined), strong);
+  eq('searching: unchanged', dabWithPlayback(DAB_SEARCHING, 50279, 9000), DAB_SEARCHING);
 }
 
 console.log(`dab quality: ${passes} passed, ${fails} failed`);

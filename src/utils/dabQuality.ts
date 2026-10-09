@@ -94,10 +94,13 @@ export const SF_OK_STRONG = 0.98, SF_OK_WEAK = 0.90;
 /** Layer II frames bad: DabPanel ok < 1 %, bad ≥ 10 %. ✓ 9A at MER 8.5: 19 % bad, "bubbling mud" → weak;
  *  12B on the Pi V4L: 15–30 bad in ~10 000 (0.15–0.3 %) → strong. */
 export const MP2_BAD_STRONG = 0.01, MP2_BAD_WEAK = 0.10;
-/** Raw MSC BER before Viterbi. DabPanel bad ≥ 3 % — ✓ every on-air case at 8.7–9.6 % (MER 8.5–9.6) broke up.
+/** Raw MSC BER before Viterbi. ✓ every on-air case at 8.7–9.6 % (MER 8.5–9.6) broke up.
+ *  ★★ The WEAK line is 8.5 %, NOT DabPanel's 3 % (Stuart, 2026-10-09: "6.7 weak would be an injustice as I've seen
+ *     that be around 9% before the issues start happening") — just under the lowest break-up measured. Coventry 12D
+ *     from his loft at 6.7 % is MODERATE: it plays, with the occasional break-up.
  *  ★ The MODERATE line is 1.5 %, NOT DabPanel's 0.5 %: 12B at 0.5 % and 11D at 0.8 % played 0 bad frames in
  *    eight minutes (2026-09-16), so 0.5 % would have called a perfect multiplex "moderate". */
-export const BER_MODERATE = 0.015, BER_WEAK = 0.03;
+export const BER_MODERATE = 0.015, BER_WEAK = 0.085;
 /** MER (dB): DabPanel ok ≥ 16, bad < 10. ✓ MER 8.5–9.6 broke up every time; 12B at 16.1 played clean. */
 export const MER_STRONG = 16, MER_WEAK = 10;
 /** FIC pass rate: DabPanel ok ≥ 99 %, bad < 90 %. ✓ 10C at 23–55 % never decoded; FIB dipped to 88–95 %
@@ -180,14 +183,24 @@ export function classifyDabWindow(w: DabWindow): { level: DabLevel; detail?: str
   }
   if (audio) {
     let a: { level: DabLevel; detail?: string } = audio;
+    /* ★★★ THE RAW BER IS A CEILING, WHATEVER THE AUDIO SAYS (Stuart, 2026-10-09, Coventry 12D from the loft at 6.7 %
+     *  before Viterbi: "its a weak multiplex so expected but the signal meter said strong and clear audio when the
+     *  audio was not starting"; "we need to monitor the errors before viterbi as that seems like a good metric").
+     *  Clean access units say the last five seconds survived; the error rate before Viterbi says how much margin
+     *  the next five have — at 6.7 % one fade is the difference, and "strong" is the wrong word for a signal living
+     *  on its error correction. This overrules the 10D reasoning below for BER (one radio played clean at 9 %).
+     *  Same lines as the prediction (BER_WEAK 8.5 %, BER_MODERATE 1.5 %). */
+    if (w.mscBer !== undefined) {
+      if (w.mscBer >= BER_WEAK && a.level > 1) a = { level: 1, detail: `BER ${pct(w.mscBer)} %` };
+      else if (w.mscBer >= BER_MODERATE && a.level > 2) a = { level: 2, detail: `BER ${pct(w.mscBer)} %` };
+    }
     /* ★ The backstop applies only when the counter that SEES mud is missing — an older server's DAB+
      *  (super frames only) or a Layer II report without ScF-CRC. With it, the audio counters are the
      *  truth: 10D at BER ~9 % played clean on one radio and broke up on another (bursty errors), and the
      *  AU / ScF counters tell those apart where BER cannot. Without it, a high BER cannot be Strong. */
     const seesMud = (w.auIn !== undefined && w.auIn >= MIN_AU) || (w.mp2In >= MIN_MP2 && w.scfConcealed !== undefined);
-    if (!seesMud && a.level === 3) {
-      if (w.mscBer !== undefined && w.mscBer >= BER_WEAK) a = { level: 2, detail: `BER ${pct(w.mscBer)} %` };
-      else if (w.mer !== undefined && w.mer > 0 && w.mer < MER_WEAK) a = { level: 2, detail: `MER ${w.mer.toFixed(1)} dB` };
+    if (!seesMud && a.level === 3 && w.mer !== undefined && w.mer > 0 && w.mer < MER_WEAK) {
+      a = { level: 2, detail: `MER ${w.mer.toFixed(1)} dB` };
     }
     return a;
   }
@@ -312,6 +325,22 @@ export class DabQualityMeter {
     };
     return this.last;
   }
+}
+
+/** ★★★ WHAT THIS LISTENER IS ACTUALLY GETTING (Stuart, 2026-10-09: the meter said "Clear audio" while "the audio was
+ *  not starting"). Everything above judges the SERVER's decode; a station can decode perfectly and still not reach
+ *  this player — the stream, the tunnel, the browser. So once a service is playing and no audio has reached the
+ *  client for DAB_NO_AUDIO_MS, the advice says so, whatever the bars say about the multiplex.
+ *  `audioAgeMs`: ms since audio last reached this client (Infinity if never), or undefined when the client cannot
+ *  judge — muted by the listener, or waiting for a tap to start (those have their own notices). The bars and the
+ *  detail are left alone: the multiplex is as good as the counters say; it is the listening that is not happening. */
+/** ★ 4 s, not less: the web client's stamp is LEVEL-based (audio.ts, peak above −54 dBFS), so a pause in the programme
+ *  must not read as "no audio" — dead air of four seconds is rare; a dropped stream is not. */
+export const DAB_NO_AUDIO_MS = 4000;
+export const DAB_NO_AUDIO_ADVICE = 'No audio reaching you';
+export function dabWithPlayback(q: DabQuality, sid: number | undefined, audioAgeMs: number | undefined): DabQuality {
+  if (!sid || audioAgeMs === undefined || q.level === 0 || audioAgeMs < DAB_NO_AUDIO_MS) return q;
+  return { ...q, advice: DAB_NO_AUDIO_ADVICE };
 }
 
 /** The one-line text the bar shows: "Multiplex weak · No or heavily broken audio · 14 % frames lost". */
