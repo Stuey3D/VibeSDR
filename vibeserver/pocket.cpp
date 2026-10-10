@@ -356,6 +356,7 @@ State readState() {
     st.present = true;
     st.mode = j.str("mode");
     if (const JV* ap = j.get("ap")) st.apSet = ap->flag("set");
+    st.internet = j.str("internet") == "full";
     st.json = body;
     while (!st.json.empty() && (st.json.back() == '\n' || st.json.back() == ' ')) st.json.pop_back();
     return st;

@@ -1528,6 +1528,53 @@ int main(int argc, char** argv) {
             //     came up and nothing said why (2026-08-08).
             // ★ Every other reader — the supervisor, the router, portForRadio — takes it from the
             //   file, so the file is where the truth has to live.
+            /* ★★★ A POCKET BOX WAKES UP PERSONAL UNLESS ITS OWNER SAID "RESUME" (Stuart, 2026-10-10).
+             *  Powered on, it is reachable on its own hotspot or the owner's Wi-Fi and nowhere else: the
+             *  tunnel is stopped (its ~30 MB per cloudflared comes back to a 512 MB board) and nothing is
+             *  listed. "Enable the tunnel" is the same "Advertise on VibeSDR.net" switch every server has
+             *  — it starts cloudflared live and stops it when switched off. Its sub-toggle, "Resume the
+             *  tunnel after a restart" (dirResume), keeps it across a power cycle; even then the tunnel
+             *  waits for real internet (vibedir::setInternet, fed by the pocket service).
+             *  ★★ ON A NEW BOOT, NOT A NEW PROCESS. Every settings save restarts this service; keying
+             *     on process start would un-share the box each time the owner saved anything. The
+             *     kernel's boot id changes only when the machine itself restarts.
+             *  ★ Front door only (the radios read the file after us), pocket image only, and written
+             *    to the FILE — one rule, two readers: the page must show the switch off, too. */
+            if (wantSerial.empty() && vibepocket::enabled() && srv.dirList && !srv.dirResume) {
+                std::string bootId;
+                if (FILE* bf = std::fopen("/proc/sys/kernel/random/boot_id", "r")) {
+                    char b[64] = {0};
+                    if (std::fgets(b, sizeof b, bf)) bootId = b;
+                    std::fclose(bf);
+                }
+                const std::string mark = vibepocket::paths().portFile + ".boot";
+                std::string seen;
+                if (FILE* mf = std::fopen(mark.c_str(), "r")) {
+                    char b[64] = {0};
+                    if (std::fgets(b, sizeof b, mf)) seen = b;
+                    std::fclose(mf);
+                }
+                if (!bootId.empty() && bootId != seen) {
+                    srv.dirList = false;
+                    std::string werr;
+                    if (vsconfig::saveServer(g_configPath, srv, werr))
+                        std::printf("VibeServer: pocket box — powered on PERSONAL: not listed, tunnel stopped "
+                                    "(share it from the setup page)\n");
+                    else
+                        std::fprintf(stderr, "VibeServer: pocket — could not record Personal (%s)\n", werr.c_str());
+                }
+            }
+            if (wantSerial.empty() && vibepocket::enabled()) {
+                // ★ Remember this boot, so a restart within it keeps whatever the owner chose.
+                if (FILE* bf = std::fopen("/proc/sys/kernel/random/boot_id", "r")) {
+                    char b[64] = {0};
+                    if (std::fgets(b, sizeof b, bf)) {
+                        std::string perr;
+                        vibepocket::writePrivate(vibepocket::paths().portFile + ".boot", b, perr);
+                    }
+                    std::fclose(bf);
+                }
+            }
             g_serverConfig = srv;
             hadConfigFile = true;
         } else if (!err.empty()) {
@@ -1723,6 +1770,10 @@ int main(int argc, char** argv) {
     //    sends -1 so it can never nudge a temporary share into the future one ping at a time.
     g_applyDirectory = [](const vsconfig::ServerConfig& srv, bool ownerChanged) {
         if (!g_amFrontDoor.load() && srv.radios.size() > 1) return;
+        // ★★ POCKET: ONE TUNNEL, THE DOOR'S. A one-radio machine lists from the radio process as
+        //    well, which is a second cloudflared (~30 MB — Stuart's Pi 2 runs two). On a 512 MB box
+        //    the door's listing is the one that matters, and only the door hears the internet gate.
+        if (vibepocket::enabled() && !g_amFrontDoor.load()) return;
         vibedir::Settings d;
         d.listed  = srv.configured && srv.dirList;
         d.name    = srv.dirName.empty() ? srv.name : srv.dirName;
@@ -2343,6 +2394,9 @@ int main(int argc, char** argv) {
             return true;
         });
         std::printf("VibeServer: pocket image — hotspot and captive portal routes enabled\n");
+        // ★★ NO TUNNEL UNTIL THE POCKET SERVICE SAYS THERE IS INTERNET. A box that boots into its own
+        //    hotspot must not spend its first minutes spawning cloudflared at a network with no way out.
+        vibedir::setInternet(false);
     }
 
     // ── Which radios this machine offers ────────────────────────────────────────────────────
@@ -3948,9 +4002,13 @@ int main(int argc, char** argv) {
             static int pocketTick = 0;
             if (++pocketTick >= 3) {
                 pocketTick = 0;
-                const bool ap = vibepocket::apMode(vibepocket::readState());
+                const auto ps = vibepocket::readState();
+                const bool ap = vibepocket::apMode(ps);
                 vibepocket::setApActive(ap);
                 LocalSdrShim::setCaptiveActive(ap);
+                // ★★ The tunnel follows NetworkManager's own verdict ("full" connectivity), as the root
+                //    service reports it — never on a hotspot, and paused the moment the internet goes.
+                vibedir::setInternet(!ap && ps.internet);
             }
         }
 

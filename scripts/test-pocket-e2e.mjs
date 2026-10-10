@@ -43,8 +43,8 @@ const state = (o) => fs.writeFileSync(path.join(PD, "state.json"), JSON.stringif
   scan: [{ ssid: "Home", signal: 72, secure: true }, { ssid: "Neighbour", signal: 40, secure: true }],
   scanAt: Math.floor(Date.now() / 1000), apAddress: "10.42.0.1", lastError: "" }, o)) + "\n");
 state({});
-// ★ The image's first-boot config (image/pocket/files/config.json), with this test's port.
-const seed = JSON.parse(fs.readFileSync(new URL("../image/pocket/files/config.json", import.meta.url)));
+// ★ The image's first-boot config (image/pocket/stage-pocket/00-pocket/files/config.json), with this test's port.
+const seed = JSON.parse(fs.readFileSync(new URL("../image/pocket/stage-pocket/00-pocket/files/config.json", import.meta.url)));
 seed.port = PORT;
 fs.writeFileSync(path.join(T, "config.json"), JSON.stringify(seed));
 
@@ -165,6 +165,28 @@ try {
   ok(/Screenshot this/.test(done) && /Home/.test(done) && /Stuart's iPhone/.test(done), "the next steps name network 1, then 2 — BEFORE anything switches");
   ok(/\.local:48991\//.test(done) && /10\.42\.0\.1:48991/.test(done), "…and every address to reach the box afterwards (.local and the hotspot IP)");
   ok(!fs.existsSync(path.join(PD, "pocket-kick.request")), "nothing has been switched yet");
+
+  // ── The tunnel: Enable + Resume, while the box is still its own hotspot ──
+  ok(await until(visible("shareCard")), "the 'Share with the world' card is drawn on a pocket box");
+  ok(await js(`!document.getElementById("tunnelOn").checked && document.getElementById("tunnelResumeRow").offsetParent === null`),
+     "fresh box: the tunnel is OFF and 'Resume after a restart' is hidden");
+  await js(`cfg.name = "Pocket SDR"; document.getElementById("tunnelOn").click(); 1`);
+  ok(await until(`document.getElementById("shareMsg").textContent.includes("Tunnel waiting for an internet connection")`),
+     "enabled on the hotspot: 'Tunnel waiting for an internet connection' — not an error");
+  ok(/"dirList": true/.test(fs.readFileSync(path.join(T, "config.json"), "utf8")), "…and the switch is saved in the server config");
+  ok(await js(`document.getElementById("tunnelResumeRow").offsetParent !== null && !document.getElementById("tunnelResume").checked`),
+     "'Resume the tunnel after a restart' appears, OFF by default");
+  await js(`document.getElementById("tunnelResume").click(); 1`);
+  let resumed = false;
+  for (let i = 0; i < 30 && !resumed; i++) {
+    resumed = /"dirResume": true/.test(fs.readFileSync(path.join(T, "config.json"), "utf8"));
+    if (!resumed) await sleep(200);
+  }
+  ok(resumed, "Resume is persisted in the server config");
+  const slog = fs.readFileSync(path.join(T, "server.log"), "utf8") + fs.readFileSync(path.join(T, "server.err"), "utf8");
+  ok(!/startTunnel|trycloudflare|NO TUNNEL/.test(slog), "no tunnel was attempted while there is no internet (no spawn, no retry spam)");
+  await js(`document.getElementById("tunnelOn").click(); 1`);
+  ok(await until(`document.getElementById("shareMsg").textContent.startsWith("Personal")`), "switched off: Personal again");
   await js(`document.getElementById("wifiGoNow").click(); 1`);
   ok(await until(`document.getElementById("wifiGoNow").textContent.includes("Switching")`), "Leave the hotspot now → the box is asked to switch");
   ok(fs.existsSync(path.join(PD, "pocket-kick.request")) && fs.readFileSync(path.join(PD, "pocket-kick.request"), "utf8") === "switch\n",

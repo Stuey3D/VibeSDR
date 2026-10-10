@@ -252,6 +252,7 @@ class Box:
         self.failed_until = {}        # name -> monotonic time: an upgrade that failed is not retried for a while
         self._names, self._names_at, self._fields = [], -1e9, {}
         self._ip = ("", "")
+        self.internet = "unknown"     # NetworkManager's connectivity verdict, from NetWatch (events)
 
     def ci(self, k):
         try:
@@ -669,8 +670,63 @@ class Box:
             "scan": self.scan_cache, "scanAt": self.scan_at, "clients": self.clients,
             "rescanSec": self.ci("RESCAN_SEC"), "idleSec": self.ci("IDLE_SEC"),
             "apAddress": AP_ADDR, "lastError": self.last_error,
+            # ★★ "full" = NM proved real internet. The server starts the tunnel ONLY on "full" — never
+            #    on a hotspot, which has no upstream by definition.
+            "internet": self.internet if self.mode == "client" else "none",
         }
         write_state_file(self.state_path, doc)
+
+
+class NetWatch:
+    """★★★ NETWORKMANAGER'S CONNECTIVITY, BY EVENT — not by polling the internet ourselves.
+    NM already checks (its [connectivity] section — the image sets the URI) whenever a connection
+    comes up and every few minutes after; `nmcli monitor` prints "Connectivity is now 'full'" each
+    time that verdict changes. One long-lived nmcli, read without blocking; the server's tunnel
+    follows it (vibedir::setInternet), so a box on its own hotspot never spawns cloudflared."""
+    def __init__(self, sh):
+        self.sh = sh
+        self.proc = None
+        self.buf = b""
+        self.state = "unknown"
+        self.retry_at = 0
+
+    def query(self):
+        rc, out = self.sh.run(["nmcli", "networking", "connectivity"], timeout=15)
+        v = out.strip().lower()
+        if rc == 0 and v:
+            self.state = v
+
+    def start(self):
+        try:
+            self.proc = subprocess.Popen(["nmcli", "monitor"], stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+            os.set_blocking(self.proc.stdout.fileno(), False)
+        except OSError:
+            self.proc = None
+        self.query()
+
+    def poll(self):
+        if self.proc is None or self.proc.poll() is not None:
+            # ★ The monitor died (NM restarted): start it again, at most every 30 s.
+            if self.sh.now() >= self.retry_at:
+                self.retry_at = self.sh.now() + 30
+                self.start()
+            return self.state
+        try:
+            chunk = self.proc.stdout.read()
+        except (BlockingIOError, OSError):
+            chunk = None
+        if chunk:
+            self.buf += chunk
+            *lines, self.buf = self.buf.split(b"\n")
+            for line in lines:
+                m = re.search(rb"[Cc]onnectivity is now '([a-z-]+)'", line)
+                if m:
+                    new = m.group(1).decode()
+                    if new != self.state:
+                        log("internet: %s" % new)
+                    self.state = new
+        return self.state
 
 
 def read_plain(path, limit):
@@ -794,6 +850,9 @@ def main_loop():
     log("managing %s" % box.dev)
     setup_once(box)
     uid = vibeserver_uid()
+    net = NetWatch(sh)
+    net.start()
+    was_mode = None
     last_tick = 0
     while True:
         data = read_request_file(INBOX, uid)
@@ -831,8 +890,15 @@ def main_loop():
                 box.scan()
                 box.raise_hotspot("back after a scan the owner asked for")
             last_tick = 0
+        box.internet = net.poll()
         if sh.now() - last_tick >= 5:
             last_tick = sh.now()
+            if box.mode != was_mode:
+                # ★ A new connection: ask once now — the change event may have come before we looked.
+                was_mode = box.mode
+                if box.mode == "client":
+                    net.query()
+                    box.internet = net.state
             try:
                 box.tick()
             except Exception as e:            # ★ never die on one bad turn; systemd would only restart us

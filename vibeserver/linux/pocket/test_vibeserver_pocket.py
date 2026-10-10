@@ -329,6 +329,25 @@ def main():
         f.write("x" * 20000)
     ok(vp.read_request_file(p, me) is None, "an oversized request is refused")
 
+    # ── the tunnel's gate: NetworkManager's connectivity, by event ──
+    class FakeOut:
+        def __init__(self, chunks): self.chunks = list(chunks)
+        def read(self): return self.chunks.pop(0) if self.chunks else None
+        def fileno(self): return 0
+
+    class FakeProc:
+        def __init__(self, chunks): self.stdout = FakeOut(chunks)
+        def poll(self): return None
+    nmw = FakeNM()
+    with redirect_stdout(io.StringIO()):
+        w = vp.NetWatch(nmw)
+        w.proc = FakeProc([b"wlan0: connected\nConnectivity is now 'lim", b"ited'\nConnectivity is now 'full'\n"])
+        first = w.poll()
+        st = w.poll()
+    ok(first == "unknown" and st == "full", "a 'Connectivity is now' line split across reads waits for the whole line, then → full")
+    st_doc = json.load(open(os.path.join(tmp, "state.json")))
+    ok(st_doc.get("internet") == "none", "on a hotspot the state says internet: none — the tunnel never starts there")
+
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")
 

@@ -666,6 +666,7 @@ std::string toJson(const ServerConfig& c) {
     B("mdnsAdvertise", c.mdnsAdvertise); S("mdnsName", c.mdnsName);
     B("dirList", c.dirList); S("dirName", c.dirName);
     N("dirShareSec", (double)c.dirShareSec); S("dirPublicUrl", c.dirPublicUrl);
+    B("dirResume", c.dirResume);
     N("batteryPauseAt", c.batteryPauseAt); N("batteryResumeAt", c.batteryResumeAt);
     S("pin", c.pin); S("adminPass", c.adminPass);
     N("sessionLimitMin", c.sessionLimitMin);
@@ -721,6 +722,7 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     B("mdnsAdvertise", c.mdnsAdvertise); S("mdnsName", c.mdnsName);
     B("dirList", c.dirList); S("dirName", c.dirName); S("dirPublicUrl", c.dirPublicUrl);
     { double d2; if (getNum(j, "dirShareSec", d2)) c.dirShareSec = (long long)d2; }
+    B("dirResume", c.dirResume);
     S("pin", c.pin); S("adminPass", c.adminPass);
     I("sessionLimitMin", c.sessionLimitMin);
     I("batteryPauseAt", c.batteryPauseAt); I("batteryResumeAt", c.batteryResumeAt);

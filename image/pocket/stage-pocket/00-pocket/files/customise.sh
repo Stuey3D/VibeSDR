@@ -73,6 +73,19 @@ if [ ! -s /etc/vibeserver/config.json ]; then
   chown vibeserver:vibeserver /etc/vibeserver/config.json /etc/vibeserver
 fi
 
+# ★★ NETWORKMANAGER'S CONNECTIVITY CHECK — the tunnel's gate. NM decides "full" (real internet) by
+#    fetching this when a connection comes up and every 5 minutes after; vibeserver-pocket follows
+#    the verdict by event (nmcli monitor), and the server starts its tunnel only on "full". A box on
+#    its own hotspot is never "full", so it never spawns cloudflared there.
+install -d -m 0755 /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/50-vibeserver-connectivity.conf <<'EOF'
+# Written by the VibeServer pocket image: lets NetworkManager tell "joined Wi-Fi" from "has internet".
+[connectivity]
+uri=http://nmcheck.gnome.org/check_network_status.txt
+response=NetworkManager is online
+interval=300
+EOF
+
 # ── 6. Services: ours on, the ones a pocket radio never uses off ─────────────────────────────────
 # ★★ postinst enables ours only when systemd is RUNNING ([ -d /run/systemd/system ]), which in a
 #    chroot it is not — so an image would boot with VibeServer installed and never started. Enabled
@@ -87,6 +100,13 @@ for u in bluetooth.service hciuart.service ModemManager.service triggerhappy.ser
          rpi-display-backlight.service keyboard-setup.service; do
   systemctl disable "$u" 2>/dev/null || true
 done
+# ★★ NO CONSOLE LOGINS (Stuart's Pi 2 list, 2026-10-10). A pocket box has no screen and no keyboard,
+#    and its only account is LOCKED (section 8) — so a getty on HDMI or on the UART could not log
+#    anyone in anyway. With Bluetooth off, serial0 is the GPIO UART: no getty there either.
+#  ★ If an owner sets a password with Imager and wants the HDMI console: systemctl enable getty@tty1.
+systemctl mask serial-getty@ttyAMA0.service serial-getty@serial0.service serial-getty@ttyS0.service 2>/dev/null || true
+systemctl disable getty@tty1.service 2>/dev/null || true
+systemctl mask getty@tty1.service 2>/dev/null || true
 # ★ udisks2 is D-Bus activated, so "disable" does not stop it: mask it. It automounts USB disks —
 #   nothing to automount on a radio box, and it costs ~8 MB resident once anything wakes it.
 systemctl mask udisks2.service 2>/dev/null || true

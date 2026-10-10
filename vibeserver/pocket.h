@@ -95,6 +95,7 @@ struct State {
     bool present = false;        // the file exists and parsed
     std::string mode;            // setup-ap | fallback-ap | client | connecting | off
     bool apSet = false;          // a secured fallback hotspot is configured
+    bool internet = false;       // NetworkManager says connectivity is FULL (the tunnel may run)
     std::string json;            // the whole document (no passwords in it, by construction)
 };
 State readState();

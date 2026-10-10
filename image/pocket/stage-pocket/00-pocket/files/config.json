@@ -3,5 +3,6 @@
   "fullMode": true,
   "sharing": "public",
   "mdnsAdvertise": true,
+  "dirList": false,
   "radios": []
 }

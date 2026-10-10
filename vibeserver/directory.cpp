@@ -70,6 +70,8 @@ std::atomic<unsigned> g_tunnelGen{0};
  *     `--url http://127.0.0.1` pattern matched EVERY quick tunnel on the machine, so one radio
  *     process shutting its tunnel down would have taken every other radio's tunnel with it. */
 std::atomic<int>      g_tunnelPort{0};
+/** ★ See setInternet() in directory.h. True everywhere but a pocket box without an upstream. */
+std::atomic<bool>     g_netUp{true};
 
 std::string trim(std::string s) {
     while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
@@ -932,6 +934,27 @@ void worker() {
             break;
         }
 
+        /* ★★★ NO INTERNET, NO TUNNEL — AND NO RETRY LOOP (pocket image). Stop a running tunnel
+         *  (its process goes, so its RAM comes back), say so ONCE, and sleep on an atomic until the
+         *  pocket service reports real connectivity. No cloudflared spawns, no publish attempts, no
+         *  log lines while waiting: a box in a pocket can sit like this all day. */
+        if (!g_netUp.load()) {
+            stopTunnel();
+            g_tunnelUrl.clear();
+            {
+                std::lock_guard<std::mutex> lk(g_mtx);
+                g_listed = false;
+                g_error = "waiting for an internet connection";
+            }
+            std::fprintf(stderr, "[directory] no internet — tunnel paused until the box has a connection\n");
+            while (g_running && !g_netUp.load()) std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (!g_running) break;
+            std::fprintf(stderr, "[directory] internet is back — starting the tunnel\n");
+            { std::lock_guard<std::mutex> lk(g_mtx); g_error.clear(); }
+            tunnelFails = 0;
+            continue;
+        }
+
         std::string url = want.publicUrl;
         const bool usingTunnel = url.empty();
         if (usingTunnel) {
@@ -1026,6 +1049,8 @@ void worker() {
             //     The whole point is that a receiver on a flaky link restores itself unattended;
             //     sleeping out a 900 s ping interval with a dead tunnel is most of an outage.
             if (usingTunnel && !g_tunnelAlive && !g_tunnelUrl.empty()) break;
+            // ★ The internet went (the box fell back to its own hotspot): pause now, at the top of the lap.
+            if (!g_netUp.load()) break;
             const auto now = std::chrono::steady_clock::now();
             const long long graceSec = kProbeSec << (deadRecycles < 4 ? deadRecycles : 4);
             if (usingTunnel && g_tunnelAlive && !g_tunnelUrl.empty()
@@ -1063,6 +1088,8 @@ void worker() {
 }
 
 }  // namespace
+
+void setInternet(bool up) { g_netUp.store(up); }
 
 void setStateDir(const std::string& dir) {
     std::lock_guard<std::mutex> lk(g_mtx);
@@ -1127,7 +1154,8 @@ std::string statusJson() {
          + ",\"listed\":" + (g_listed ? "true" : "false")
          + ",\"address\":\"" + esc(g_address) + "\""
          + ",\"tunnelUrl\":\"" + esc(g_tunnelUrl) + "\""
-         + ",\"error\":\"" + esc(g_error) + "\"}";
+         + ",\"error\":\"" + esc(g_error) + "\""
+         + ",\"internet\":" + (g_netUp.load() ? "true" : "false") + "}";
 }
 
 }  // namespace vibedir
