@@ -196,6 +196,9 @@ endif()
 add_executable(vibeserver
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/rtl_eeprom.cpp"
+    # ★ The pocket image's Wi-Fi + captive portal (daemon side). Inert unless the image's marker
+    #   file exists, so every other install carries it and never runs a line of it.
+    "${CMAKE_CURRENT_SOURCE_DIR}/pocket.cpp"
     $<$<BOOL:${CURSES_FOUND}>:${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp>)
 if(CURSES_FOUND)
   target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_TUI)

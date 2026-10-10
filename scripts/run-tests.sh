@@ -103,6 +103,8 @@ deps_for() {
     # ★★ The same recovery for the HackRF and the R2/Mini — dup ownership, deadline release, fresh-fd replay.
     test-fd-radio-recovery) echo "android/app/src/main/cpp/hackrf_source.cpp android/app/src/main/cpp/airspy_source.cpp" ;;
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
+    # ★★ The pocket image's daemon side: captive answers, the first-run claim, the Wi-Fi request.
+    test-pocket)        echo "$SRC/pocket.cpp" ;;
     test-connlog)       echo "" ;;
     # ★★★ An admin read must never hold the connection log's lock while it works (Pi 2 IQ overruns
     #     with the admin page open, 2026-10-01). Header-only; slow resolvers make it CPU-independent.
