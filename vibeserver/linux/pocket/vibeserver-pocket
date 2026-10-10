@@ -537,13 +537,22 @@ class Box:
         for rank, name, ssid, hidden in self.saved():
             if rank <= 3:
                 old[ssid] = self.get(name, "802-11-wireless-security.psk", secrets=True)
-        for n, t in list(self.connection_names()):
-            if n.startswith(NET_PREFIX):
-                self.delete(n)
+        # ★★★ A POWER CUT MID-SAVE MUST LEAVE A WAY IN (Stuart, 2026-10-10). This used to delete every
+        #     saved network and then add the new list — a cut between the two left NONE. Now each rank's
+        #     connection is MODIFIED IN PLACE (NetworkManager rewrites that one keyfile atomically), new
+        #     ranks are added, and only ranks beyond the new list are deleted, last. At any instant
+        #     every network is the old one or the new one; the box is never left with nothing to join.
+        existing = {n for n, t in self.connection_names() if n.startswith(NET_PREFIX)}
         for rank, net in enumerate(req["networks"], 1):
             psk = old.get(net["ssid"], "") if net["keep"] else net["psk"]
-            args = ["nmcli", "connection", "add", "type", "wifi", "ifname", self.dev,
-                    "con-name", NET_PREFIX + str(rank), "ssid", net["ssid"],
+            name = NET_PREFIX + str(rank)
+            modify = name in existing and bool(psk) == bool(self.get(name, "802-11-wireless-security.key-mgmt"))
+            head = (["nmcli", "connection", "modify", name, "802-11-wireless.ssid", net["ssid"]] if modify else
+                    ["nmcli", "connection", "add", "type", "wifi", "ifname", self.dev,
+                     "con-name", name, "ssid", net["ssid"]])
+            if not modify and name in existing:
+                self.delete(name)               # open ⇄ secured: the security section changes shape
+            args = head + [
                     "connection.autoconnect", "yes",
                     # ★★★ THE ORDER, AS NM SEES IT: 30 / 20 / 10. NM picks the highest-priority
                     #     VISIBLE connection when it autoconnects; this service enforces the rest.
@@ -554,13 +563,19 @@ class Box:
                 args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
             if self.nm_change(args, secret=True) != 0:
                 self.last_error = "network %d could not be saved" % rank
+        for n in sorted(existing):
+            r = n[len(NET_PREFIX):]
+            if r.isdigit() and int(r) > len(req["networks"]):
+                self.delete(n)
         self.failed_until = {}
         ap = req["ap"]
         if ap["keep"] and self.have(AP_NAME):
             self.nm_change(["nmcli", "connection", "modify", AP_NAME, "802-11-wireless.ssid", ap["ssid"]])
+        elif self.have(AP_NAME):
+            # ★ In place, for the same reason as the networks: never a moment with no hotspot saved.
+            self.nm_change(["nmcli", "connection", "modify", AP_NAME, "802-11-wireless.ssid", ap["ssid"],
+                            "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", ap["psk"]], secret=True)
         else:
-            if self.have(AP_NAME):
-                self.delete(AP_NAME)
             # ★★★ WPA2 (RSN/CCMP) only, PMF off: brcmfmac's AP mode and several phones do not
             #     agree on PMF, and a hotspot a phone cannot join is no fallback at all.
             self.nm_change(["nmcli", "connection", "add", "type", "wifi", "ifname", self.dev,

@@ -52,6 +52,8 @@ class FakeNM:
         self.ap_force = False
         self.calls = []
         self.nft = []
+        self.modified = []
+        self.deleted = []
 
     # Shell interface
     def now(self):
@@ -117,6 +119,7 @@ class FakeNM:
                 self.active = ""
             return 0, ""
         if a[:3] == ["nmcli", "connection", "delete"]:
+            self.deleted.append(a[3])
             self.conns.pop(a[3], None)
             if self.active == a[3]:
                 self.active = ""
@@ -131,7 +134,13 @@ class FakeNM:
                                 "mode": kv.get("802-11-wireless.mode", "infrastructure")}
             return 0, ""
         if a[:3] == ["nmcli", "connection", "modify"]:
-            self.conns[a[3]]["ssid"] = a[5]
+            c = self.conns[a[3]]
+            kv = dict(zip(a[4::2], a[5::2]))
+            self.modified.append(a[3])
+            if "802-11-wireless.ssid" in kv: c["ssid"] = kv["802-11-wireless.ssid"]
+            if "wifi-sec.psk" in kv: c["psk"] = kv["wifi-sec.psk"]
+            if "connection.autoconnect-priority" in kv: c["prio"] = int(kv["connection.autoconnect-priority"])
+            if "802-11-wireless.hidden" in kv: c["hidden"] = kv["802-11-wireless.hidden"] == "yes"
             return 0, ""
         return 0, ""
 
@@ -281,6 +290,12 @@ def main():
            "reorder with keep: the phone is now 1, its password carried over")
         ok(nm.conns["vibe-net-2"]["psk"] == "homepass1" and "vibe-net-3" not in nm.conns, "home is 2, Work removed")
         ok(nm.conns[vp.AP_NAME]["psk"] == "pocketpass", "hotspot password kept")
+        ok("vibe-net-1" in nm.modified and "vibe-net-2" in nm.modified and "vibe-net-1" not in nm.deleted
+           and "vibe-net-2" not in nm.deleted and "vibe-net-3" in nm.deleted,
+           "a re-save MODIFIES networks in place (a cut never leaves none); only the dropped rank 3 is deleted")
+        i_del = max(i for i, c in enumerate(nm.calls) if c[:4] == ["nmcli", "connection", "delete", "vibe-net-3"])
+        i_mod = max(i for i, c in enumerate(nm.calls) if c[:3] == ["nmcli", "connection", "modify"] and c[3].startswith("vibe-net-"))
+        ok(i_del > i_mod, "…and that deletion comes after every network has been rewritten")
 
         # ── reset ──
         box.reset_wifi()
