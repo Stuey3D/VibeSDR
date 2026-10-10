@@ -668,8 +668,11 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                   The rate DAB borrows is the receiver's decision — 2.048 natively, 2.4 with a
                   resampler if this dongle refuses 2.048 — so a label that promised one figure
                   would be wrong on the other dongle. The hint gives both. */}
-              <OptRow C={C} F={F} active={dabRateBoost}
+              {/* ★★ GREYED ON THE AIRSPY HF+ (Stuart, 2026-10-10): it tops out at 912 kS/s and cannot
+                  receive DAB at all, so the switch is shown off and does nothing, with the reason. */}
+              <OptRow C={C} F={F} active={!isAhf && dabRateBoost} disabled={isAhf}
                 label="Let DAB raise the sample rate while it runs"
+                hint={isAhf ? 'Not possible on the Airspy HF+ — it cannot reach 2.048 MS/s, so it cannot receive DAB.' : undefined}
                 onPress={() => {
                   const v = !dabRateBoost;
                   setDabRateBoost(v); AsyncStorage.setItem(K.dabRateBoost, v ? '1' : '0');
@@ -3698,9 +3701,11 @@ function Pill({ C, F, active, label, onPress }: any) {
   );
 }
 
-function OptRow({ C, F, active, label, hint, onPress }: any) {
+function OptRow({ C, F, active, label, hint, onPress, disabled }: any) {
   return (
-    <TouchableOpacity style={[styles.optRow, { borderColor: active ? C.amber : C.border }]} onPress={onPress}>
+    <TouchableOpacity style={[styles.optRow, { borderColor: active ? C.amber : C.border },
+                              disabled && { opacity: 0.45 }]}
+                      onPress={disabled ? undefined : onPress} disabled={!!disabled}>
       {/* ★ The label column must FLEX and the tick stay fixed — a three-way policy choice
           needs a sentence to be choosable at all, and without the flex a long hint pushes
           the tick off the row. */}

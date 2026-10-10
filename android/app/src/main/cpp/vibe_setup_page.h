@@ -1455,10 +1455,12 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            dabRateBoost per radio for weeks and the phone app's server screen has the switch; this
            page did not, so a Linux receiver pinned below 2.048 MS/s — exactly what a slow box is
            told to do — could not offer DAB at all. -->
-      <label class="row" style="gap:8px;margin-top:10px">
+      <label class="row" id="dabRateBoostRow" style="gap:8px;margin-top:10px">
         <input type="checkbox" id="dabRateBoost" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Let DAB borrow 2.048 MS/s while it plays</span></label>
-      <div class="note">DAB needs a 2.048 MHz span. Ticked, a listener who chooses DAB gets it even
+      <div class="note" id="dabRateBoostNo" style="display:none">Not possible on this radio &mdash; it cannot
+         reach 2.048 MS/s, so it cannot receive DAB at all.</div>
+      <div class="note" id="dabRateBoostNote">DAB needs a 2.048 MHz span. Ticked, a listener who chooses DAB gets it even
          when the span above is narrower or locked; the radio goes back to this span when DAB ends.
          Worth it on a small machine run at 1.024 MS/s to keep FM light.</div>
       <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
@@ -3046,7 +3048,15 @@ function renderGain() {
   //    listener still chooses their own split, which is today's behaviour and stays.
   $("gainSplitRow").classList.toggle("hide", !(isHrf && $("gainLock").checked));
   $("rateLock").checked = !!r.rateLock;
-  $("dabRateBoost").checked = !!r.dabRateBoost;
+  // ★★ GREYED WHERE IT CANNOT HAPPEN (Stuart, 2026-10-10): the Airspy HF+ tops out at 912 kS/s, so
+  //    "let DAB borrow 2.048 MS/s" is a promise it cannot keep. Same test as the DAB landing choice:
+  //    the running radio's own answer, else its driver.
+  { const can = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
+    $("dabRateBoost").disabled = !can;
+    $("dabRateBoost").checked = can && !!r.dabRateBoost;
+    $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
+    $("dabRateBoostNote").style.display = can ? "" : "none";
+    $("dabRateBoostNo").style.display = can ? "none" : ""; }
   $("dabScanLabels").value = String(r.dabScanLabels === 0 || r.dabScanLabels === 1 ? r.dabScanLabels : -1);
   $("gainRest").value = gainFromRaw(r.restGain);
   // ★ Absent = AGC off. An older config must not read as though the owner had asked for it.
