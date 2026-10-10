@@ -21,7 +21,7 @@
 import { Platform, NativeModules } from 'react-native';
 import { APP_VERSION, RELEASE_LABEL } from '../constants/version';
 import { getLastCrash } from './crashGuard';
-import { audioPathDump } from './audioPathLog';
+import { audioPathDump, localListenPort } from './audioPathLog';
 import { unhandledLog } from './protocolLog';
 import { readCrumbs } from './crumbs';
 import { faultSummary, faultTotal } from './faultLog';
@@ -65,6 +65,35 @@ function dur(ms: number): string {
  *    PIN, no admin password, no location, no owner's radio name. Version comes from the server's own
  *    /vibeserver.json on loopback — the same identity every client reads — and only its version fields.
  *  ★ Android only: iOS has no server mode, and vibeServer's status call shouts when its bridge is absent. */
+/** ★★ THE RADIO'S HEALTH, from the server's own counters in /vibeserver.json: IQ the DSP never got, IQ the radio
+ *  library lost before we saw it (USB), and listener threads that fell behind. One line, and only what the server
+ *  says — a stalling radio (an Airspy HF+ on a tablet's USB, 2026-10-10) shows here as drops with a recent "last". */
+export function radioHealthLine(j: any): string | null {
+  if (!j || typeof j !== 'object' || j.iqDrops == null) return null;
+  const ago = (s: any) => (typeof s === 'number' && s >= 0 ? `, last ${s < 120 ? `${s}s` : `${Math.round(s / 60)}m`} ago` : '');
+  const parts = [`IQ drops ${j.iqDrops}${ago(j.iqDropAgo)}`];
+  if (j.usbDrops != null) parts.push(`USB drops ${j.usbDrops}${j.usbDropSamples ? ` (${j.usbDropSamples} samples)` : ''}${ago(j.usbDropAgo)}`);
+  if (j.chanDrops != null) parts.push(`listener drops ${j.chanDrops}`);
+  if (typeof j.dspCpu === 'number') parts.push(`DSP ${Math.round(j.dspCpu)}%`);
+  return `radio     : ${parts.join(' · ')}`;
+}
+
+/** ★★ LOCAL LISTEN RUNS THE SAME SERVER, on loopback, without "serving" — so the section above was skipped and a
+ *  local-listen report said nothing about the radio at all (the HF+ report, 2026-10-10: five audio drops, no way to
+ *  see why). Asked of the loopback server the app itself is listening to. */
+async function localListenSection(port: number): Promise<string[]> {
+  if (Platform.OS !== 'android' || !(port > 0)) return [];
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 2000);
+    const j = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: ac.signal }).then((x) => x.json());
+    clearTimeout(t);
+    const health = radioHealthLine(j);
+    return ['', '--- this device\'s own receiver (local listen) ---',
+            `version   : ${j?.version ?? 'unknown'}`, ...(health ? [health] : [])];
+  } catch { return []; }
+}
+
 async function serverSection(always: boolean): Promise<{ lines: string[]; version: string | null }> {
   const lines: string[] = [];
   let version: string | null = null;
@@ -88,6 +117,8 @@ async function serverSection(always: boolean): Promise<{ lines: string[]; versio
       if (j?.version) version = String(j.version);
       lines.push(`version   : ${j?.version ?? 'unknown'}${j?.host ? ` — hosted by ${j.host}` : ''}`
                + `${j?.proto != null ? ` · proto ${j.proto}` : ''}`);
+      const health = radioHealthLine(j);
+      if (health) lines.push(health);
     } catch { lines.push('version   : unavailable (the server did not answer on loopback)'); }
     lines.push(`listeners : ${st.listeners} of ${st.maxUsers}`);
     if (st.sampleRate) lines.push(`rate      : ${(st.sampleRate / 1e6).toFixed(3)} MS/s`);
@@ -112,6 +143,12 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
   try { d = await Vibe?.getDeviceInfo?.(); } catch {}
   let srv: { lines: string[]; version: string | null } = { lines: [], version: null };
   try { srv = await serverSection(!!opts?.server); } catch {}
+  // ★ Not serving, but listening to this device's own radio: the same server, on the port the audio path used.
+  let local: string[] = [];
+  if (!srv.lines.length) {
+    const lp = localListenPort();
+    try { local = await localListenSection(lp); } catch {}
+  }
 
   /* ★★★ THE FULL IDENTITY (2026-10-07). "app : 11.0" could not tell a pre-RC14 build (no crash capture)
    *  from RC26 — Nick's Pixel 6 report did exactly that. Now: name, version, RC, build number and package,
@@ -139,6 +176,7 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
   if (extra) for (const [k, v] of Object.entries(extra)) lines.push(`${k.padEnd(10)}: ${String(v)}`);
 
   lines.push(...srv.lines);
+  lines.push(...local);
 
   // ── The audio path ───────────────────────────────────────────────────────
   // ★★ In this app the audio socket carries the TUNE and every control message — the spectrum

@@ -49,6 +49,11 @@ export function noteAudioPath(component: string, gates: AudioPathState['gates'])
 }
 
 /** A socket transition worth remembering: opening, open, closed, refused, error. */
+/** The loopback port of this device's own server while listening locally (the gates record it), or 0. */
+export function localListenPort(): number {
+  return state.gates.isLocal ? Number(state.gates.localPort) || 0 : 0;
+}
+
 export function noteAudioEvent(what: string): void {
   state.events.push(`${stamp()} ${what}`);
   while (state.events.length > kMaxEvents) state.events.shift();
