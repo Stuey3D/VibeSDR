@@ -328,7 +328,7 @@ reboot.
 | — | **the rest of the card, UNALLOCATED** | kept for a future gallery |
 
 - **The `.img`** is cut right after partition 3, so it stays small. Raw size and the `.xz` size are
-  printed by the build (about 3.7 GB raw; see the report).
+  printed by the build (4.4 GB raw arm64, 4.2 GB armhf; 1.18 / 1.03 GB as .img.xz).
 - **Minimum card: 8 GB. Typical: 32 GB**, which is the cheap, common size now.
 - **Why the spare stays unallocated** (Stuart's decision):
   - the settings are kilobytes;

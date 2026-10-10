@@ -20,7 +20,7 @@ Both architectures come from **one** customisation script,
   `vibeserver-build:bookworm-arm64` and `vibeserver-cross:bookworm-armhf`.
 - `tools/cloudflared-desktop/bin/` in this checkout, or in the main checkout if this is a worktree.
 - About **5 GB free on the Mac** while one image builds. The work files live in `out/`, not in the
-  Docker VM. Each finished `.img.xz` is about 0.7–1 GB.
+  Docker VM. Each finished `.img.xz` is about 1.0–1.2 GB (the baked maps are already compressed).
 - **One build at a time.** Every container runs with `--cpus 2` and `nice`, and `xz` uses 2
   threads. Never run two of these at once.
 
@@ -84,6 +84,29 @@ gets a random password that is not kept. SSH is off.
   It turns the KMS display driver off and sets `gpu_mem=16`: the box is headless.
 - **Sets** the hostname to `vibepocket` and the Wi-Fi country. It creates a locked login so first
   boot never asks for a user.
+- **Power-cut hardening.**
+  - Installs `overlayroot` and builds its initramfs for every kernel on the image.
+  - Removes ` resize` from `cmdline.txt`, so Pi OS will not grow root into the settings partition.
+  - Mounts the boot partition read-only.
+  - Puts journald in RAM (16 MB cap) and uses zram swap only.
+  - Enables `vibeserver-pocket-data` (the settings partition) and `vibeserver-pocket-seal`. The seal
+    makes root read-only on the first boot.
+- **The High Detail Maps.** `build-image.sh` reads `DETAIL_URL` / `DETAIL_BYTES` from `vibe_mapgl.h`
+  and fetches the file once into `out/cache/`. It verifies the file as the server's installer does
+  (exact size + `PMTiles` magic) and installs it to
+  `/usr/lib/vibeserver/mapgl-detail/` on the read-only root.
+
+## Card layout (made by `build-image.sh`)
+
+| Partition | Size | |
+|---|---|---|
+| 1 boot | 512 MB | read-only |
+| 2 root | used + 1 GB (arm64 3.6 GB, armhf 3.4 GB on 2026-10-10) | read-only after the first boot |
+| 3 `vibedata` | 256 MB, never grown | the settings (`data=journal`) |
+| rest of the card | unallocated | kept for a future gallery partition |
+
+The `.img` is cut after partition 3, at **4.4 GB raw (arm64) / 4.2 GB (armhf)**. **Minimum card:
+8 GB. Typical: 32 GB.**
 
 ## Flashing
 
@@ -93,5 +116,13 @@ directly and setup is at `http://vibepocket.local:48000/` on that network.
 
 ## Status (2026-10-10)
 
-See the final report of the session that wrote this, and the Status table in the doc. The scripts
-are complete. Whether each image was actually **built** on the Mac is recorded there.
+Both images were **built on the Mac** by the default route, one after the other:
+
+| Image | .xz | Raw | Base |
+|---|---|---|---|
+| `vibeserver-pocket-arm64-20261010.img.xz` | 1.18 GB | 4.4 GB | `2026-10-06-raspios-trixie-arm64-lite` (sha256 checked) |
+| `vibeserver-pocket-armhf-20261010.img.xz` | 1.03 GB | 4.2 GB | `2026-10-06-raspios-trixie-armhf-lite` (sha256 checked) |
+
+Neither has been **booted** yet. The `--pigen` route is written but was not run, because the Docker
+VM had no disk to spare. Flash with **"leave it powered for the first 3 minutes"**: it seals its
+root and reboots once.
