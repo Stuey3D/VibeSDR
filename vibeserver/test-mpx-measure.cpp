@@ -252,7 +252,7 @@ struct Gen {
 
 struct Reading {
     float pilot = 0, rdsAvg = 0, rdsPk = 0, rdsRaw = 0, mpxHold = 0, phase = -1, phaseSigned = -999, coh = 0, drift = 0;
-    float lDev = -1, rDev = -1;
+    float lDev = -1, rDev = -1, lrSig = 0;
     float snr = 0, mp = 0; int snrOk = 0, mpOk = 0, measured = 0;
     int groups = 0; int calls = 0; bool eye = false; unsigned dropped = 0;
     float mpxPow = 0, mpxPowS = 0;       // BS.412 MPX power, dB, and the seconds it covers
@@ -267,7 +267,7 @@ struct Cap {
         p->r.rdsRaw = x.rdsDevRawKHz; p->r.mpxHold = x.mpxDevHoldKHz;
         p->r.mpxPow = x.mpxPowerDb; p->r.mpxPowS = x.mpxPowerSecs;
         p->r.phase = x.pilotPhaseDeg; p->r.phaseSigned = x.pilotPhaseSignedDeg; p->r.coh = x.pilotPhaseCoherence;
-        p->r.lDev = x.lDevKHz; p->r.rDev = x.rDevKHz; p->r.drift = x.pilotPhaseDriftDegPerSec;
+        p->r.lDev = x.lDevKHz; p->r.rDev = x.rDevKHz; p->r.lrSig = x.lrNoiseKHz; p->r.drift = x.pilotPhaseDriftDegPerSec;
         p->r.groups = x.groupTotal; p->r.calls++;
         p->r.eye = x.eyeBand[0] != nullptr && x.eyeW > 0;
 #ifdef VIBEDSP_HAS_MPXMEASURE
@@ -685,6 +685,45 @@ int main(int argc, char** argv) {
             char w[200];
             std::snprintf(w, sizeof w, "L/R meters on a CLIPPED programme: left %.2f (true %.1f), right %.2f (true %.1f) — within 3 %%, no filter overshoot", r.lDev, wl, r.rDev, wr);
             ok(std::fabs(r.lDev - wl) <= 0.03 * wl && std::fabs(r.rDev - wr) <= 0.03 * wr, w);
+        }
+        /* ★★★ A WEAKER STATION (Stuart, Flex 96.1, 2026-10-10: L 96 / R 90 under an 84 kHz total). The same clipped
+         *  programme under rising noise: the noise must come off (see lrNoiseKL_), so a channel never reads above the
+         *  truth by more than the bench tolerance — and never above the total it is part of. */
+        {
+            auto peakOf = [](double f) { double mx = 0; for (int k = 0; k < 200000; ++k) { const double t = k / 2.0e6; double v = 0;
+                for (int h = 1; h * f <= 15000.0; h += 2) v += std::sin(2 * M_PI * h * f * t) / h; mx = std::max(mx, std::fabs(v * 4.0 / M_PI)); } return mx; };
+            const double wl = 0.9 * 0.6 * 75.0 * peakOf(700.0), wr = 0.9 * 0.6 * 75.0 * peakOf(1100.0);
+            // ★ A reflection is not noise and must not be taken for it: the meters stay on the truth.
+            for (double ea : { 0.2, 0.5 }) {
+                Sig s; s.leftAmp = 0.6; s.rightAmp = 0.6; s.processed = true; s.echoAmp = ea; s.echoDelayUs = 5.0;
+                const Reading r = run(2400000.0, 200000.0, 0.0, s, 8.0);
+                std::printf("   ECHO %.2f: left %.2f, right %.2f (true %.2f), sigma_L %.2f, total %.2f\n", ea, r.lDev, r.rDev, wl, r.lrSig, r.mpxHold);
+                char w[200];
+                std::snprintf(w, sizeof w, "L/R under a %.0f %% echo: left %.2f / right %.2f (true %.1f / %.1f) — within 3 %%", 100 * ea, r.lDev, r.rDev, wl, wr);
+                ok(std::fabs(r.lDev - wl) <= 0.03 * wl && std::fabs(r.rDev - wr) <= 0.03 * wr, w);
+            }
+            // ★ A SINE programme under noise — fewer flat tops than a clipped one, so the fitted removal must not take it
+            //   far under the truth (it errs low here, by design never high).
+            for (double nz : { 0.20, 0.35 }) {
+                Sig s; s.leftAmp = 0.6; s.rightAmp = 0.3; s.noise = nz;
+                const Reading r = run(2400000.0, 200000.0, 0.0, s, 8.0);
+                const double tl = 0.9 * 0.6 * 75.0, tr = 0.9 * 0.3 * 75.0;
+                std::printf("   SINE NOISE %.2f: left %.2f (true %.2f), right %.2f (true %.2f), sigma_L %.2f, total %.2f\n", nz, r.lDev, tl, r.rDev, tr, r.lrSig, r.mpxHold);
+                char w[200];
+                std::snprintf(w, sizeof w, "L/R sine programme under noise %.2f: left %.2f / right %.2f (true %.1f / %.1f) — within 2 kHz", nz, r.lDev, r.rDev, tl, tr);
+                ok(std::fabs(r.lDev - tl) <= 2.0 && std::fabs(r.rDev - tr) <= 2.0, w);
+            }
+            for (double nz : { 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40 }) {
+                Sig s; s.leftAmp = 0.6; s.rightAmp = 0.6; s.processed = true; s.noise = nz;
+                const Reading r = run(2400000.0, 200000.0, 0.0, s, 8.0);
+                std::printf("   NOISE %.2f (S/N %.1f dB): left %.2f (true %.2f), right %.2f (true %.2f), sigma_L %.2f kHz, total %.2f\n",
+                            nz, r.snr, r.lDev, wl, r.rDev, wr, r.lrSig, r.mpxHold);
+                char w[220];
+                std::snprintf(w, sizeof w, "L/R under noise %.2f: left %.2f / right %.2f (true %.1f / %.1f) — within 2 kHz or shown as no reading, never above the total %.1f",
+                              nz, r.lDev, r.rDev, wl, wr, r.mpxHold);
+                auto fine = [](double got, double want) { return got < 0.0 || std::fabs(got - want) <= 2.0; };   // ★ ±2 kHz: the measured spread between programme shapes (kLrNoiseA)
+                ok(fine(r.lDev, wl) && fine(r.rDev, wr) && r.lDev <= r.mpxHold + 0.5 && r.rDev <= r.mpxHold + 0.5, w);
+            }
         }
     }
 

@@ -21,6 +21,17 @@ namespace {
 constexpr double kPllWide = 0.01;            // ~190 Hz: acquisition, and the listener's own loop
 constexpr double kPllNarrow = 0.002;         // ~38 Hz: measurement (programme no longer pulls the phase)
 constexpr double kPllNarrowAfterSec = 1.5;   // of steady tracking before narrowing
+/* ★★ THE L/R NOISE REMOVAL — bias = kLrNoiseA·σ_L + kLrNoiseB·σ_L² (kHz), taken off the published L/R figure (see
+ *  lrNoiseKM_ in the header for how σ_L is measured). How far noise lifts a 99.5th percentile depends on how long the
+ *  programme DWELLS near its peak, so it is not one number — measured on test-mpx-measure's bench:
+ *    · a clipped, band-limited programme (Gibbs ripple on its tops): 0.846σ + 0.157σ² (least squares over σ 0.7–5.8 kHz);
+ *    · a sine programme (a long dwell at the crest): ≈ 2.0σ.
+ *  A quadrature fit like the deviation's does not fit either (its constant drifted from 12 to 6 across the sweep). Real
+ *  stations sit between the two, so the curve is the MIDPOINT: every bench case lands within ±2 kHz (the two shapes err
+ *  in opposite directions — that spread is the honest accuracy under heavy noise), and Flex (96.1, recorded
+ *  2026-10-10, σ_L 6.1 kHz) comes down from L 92 / R 91 to ~81 under its 86 kHz total — where the pilot's share says it
+ *  must be. */
+constexpr double kLrNoiseA = 1.423, kLrNoiseB = 0.0785;
 }
 
 namespace vibedsp {
@@ -576,7 +587,8 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
 
     // ── pilot PLL, its 57 kHz references and the bit clock ──
     lmr_.resize((size_t)nm); ref57_.resize((size_t)nm); ref57q_.resize((size_t)nm); bitClk_.resize((size_t)nm);
-    pll_.processBlock(x, nm, lmr_.data(), ref57_.data(), ref57q_.data(), bitClk_.data());
+    lmrQ_.resize((size_t)nm);
+    pll_.processBlock(x, nm, lmr_.data(), ref57_.data(), ref57q_.data(), bitClk_.data(), lmrQ_.data());
     // ★ The gear shift (see reset_): narrow once it has tracked steadily, wide again the moment it has not.
     if (pll_.trackable() && !hold) {
         pllTrackedSec_ += nm / kMpxRate;
@@ -587,7 +599,7 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
     }
 
     eyeAndDeviation_(x, nm, hold);
-    if (pll_.trackable()) lrMeter_(x, lmr_.data(), nm, hold);
+    if (pll_.trackable()) lrMeter_(x, lmr_.data(), lmrQ_.data(), nm, hold);
     else { lrPub_[0] = lrPub_[1] = -1.0f; lrWinFill_ = 0; lrWinCnt_ = 0; }
 
     // ── RDS: amplitude, phase, coherence, drift — MEASURED, never decoded for the listener ──
@@ -615,7 +627,7 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
  *  50 ms window's 99.5th percentile, so a click cannot make a figure; the last second's highest window is published.
  *  Proved against a known left-only / right-only broadcast in test-mpx-measure. Runs only while Advanced RDS is open,
  *  like everything in MpxMeasure. */
-void MpxMeasure::lrMeter_(const float* x, const float* lmr, int n, bool hold) {
+void MpxMeasure::lrMeter_(const float* x, const float* lmr, const float* lmrQ, int n, bool hold) {
     constexpr int kBins = 300;                  // 0–150 kHz in 0.5 kHz bins
     constexpr double kBinKHz = 0.5;
     constexpr int kWins = 20;                   // 20 × 50 ms = 1 s
@@ -638,8 +650,24 @@ void MpxMeasure::lrMeter_(const float* x, const float* lmr, int n, bool hold) {
             lrTaps_[(size_t)k] = (float)(sinc * w); dc += sinc * w;
         }
         for (auto& t : lrTaps_) t = (float)(t / dc);           // unity gain in the passband
+        /* ★ K_M / K_S — the main channel's noise as a share of the subcarrier's through this FIR, from the f² law: the
+         *  main channel sees f², the detector folds (38k+f)² and (38k−f)² down (see lrNoiseKM_). About 2.5 %. */
+        {
+            double km = 0.0, ks = 0.0;
+            const int nGrid = 2048;
+            for (int g = 1; g < nGrid; ++g) {
+                const double f = 0.5 * kMpxRate * g / nGrid, w = 2.0 * M_PI * f / kMpxRate;
+                double re = 0.0, im = 0.0;
+                for (int k = 0; k < N; ++k) { re += lrTaps_[(size_t)k] * std::cos(w * k); im -= lrTaps_[(size_t)k] * std::sin(w * k); }
+                const double h2 = re * re + im * im;
+                const double fu = 38000.0 + f, fl = 38000.0 - f;
+                km += h2 * f * f; ks += h2 * (fu * fu + fl * fl);
+            }
+            lrNoiseKM_ = ks > 0.0 ? km / ks : 0.0;
+        }
         lrHistM_.assign((size_t)N * 2, 0.0f); lrHistS_.assign((size_t)N * 2, 0.0f);   // doubled: a contiguous window
-        lrPos_ = 0; lrPhase_ = 0;
+        lrHistQ_.assign((size_t)N * 2, 0.0f);
+        lrPos_ = 0; lrPhase_ = 0; lrQPhase_ = 0; lrQQ_ = lrQI_ = lrII_ = 0.0; lrQN_ = 0; lrSigS2_ = -1.0;
         lrWinN_ = (int)(kMpxRate * 0.05 / kDec);   // 50 ms of evaluated samples
         for (int c = 0; c < 2; ++c) { lrHist_[c].assign(kBins, 0u); lrWinPk_[c].assign(kWins, 0.0f); }
         lrWinCnt_ = 0; lrWinHead_ = 0; lrWinFill_ = 0; lrPub_[0] = lrPub_[1] = -1.0f;
@@ -650,8 +678,10 @@ void MpxMeasure::lrMeter_(const float* x, const float* lmr, int n, bool hold) {
     for (int i = 0; i < n; ++i) {
         // Delay lines written twice (pos and pos+N) so the last N samples are always one contiguous run.
         const float xm = std::isfinite(x[i]) ? x[i] : 0.0f, xs = std::isfinite(lmr[i]) ? lmr[i] : 0.0f;
+        const float xq = std::isfinite(lmrQ[i]) ? lmrQ[i] : 0.0f;
         lrHistM_[(size_t)lrPos_] = lrHistM_[(size_t)(lrPos_ + N)] = xm;
         lrHistS_[(size_t)lrPos_] = lrHistS_[(size_t)(lrPos_ + N)] = xs;
+        lrHistQ_[(size_t)lrPos_] = lrHistQ_[(size_t)(lrPos_ + N)] = xq;
         lrPos_ = (lrPos_ + 1) % N;
         if (++lrPhase_ < kDec) continue;
         lrPhase_ = 0;
@@ -660,6 +690,13 @@ void MpxMeasure::lrMeter_(const float* x, const float* lmr, int n, bool hold) {
         const float* ws = &lrHistS_[(size_t)lrPos_];
         float m = 0.0f, sd = 0.0f;
         for (int k = 0; k < N; ++k) { m += h[k] * wm[k]; sd += h[k] * ws[k]; }
+        if (++lrQPhase_ >= 4) {                  // ★ every 8th sample (4th evaluated): a power needs no more
+            lrQPhase_ = 0;
+            const float* wq = &lrHistQ_[(size_t)lrPos_];
+            float q = 0.0f;
+            for (int k = 0; k < N; ++k) q += h[k] * wq[k];
+            lrQQ_ += (double)q * q; lrQI_ += (double)q * sd; lrII_ += (double)sd * sd; ++lrQN_;
+        }
         const float v[2] = { std::fabs(m + sd) * 75.0f, std::fabs(m - sd) * 75.0f };
         for (int c = 0; c < 2; ++c) ++lrHist_[c][(size_t)std::min(kBins - 1, (int)(v[c] / kBinKHz))];
         if (++lrWinCnt_ >= lrWinN_) {
@@ -671,9 +708,24 @@ void MpxMeasure::lrMeter_(const float* x, const float* lmr, int n, bool hold) {
                 std::fill(lrHist_[c].begin(), lrHist_[c].end(), 0u);
             }
             lrWinHead_ = (lrWinHead_ + 1) % kWins; lrWinFill_ = std::min(kWins, lrWinFill_ + 1); lrWinCnt_ = 0;
+            // ★ σ²_S for this window: the quadrature's power less whatever of it follows the in-phase output (programme
+            //   leaking in through a small carrier phase error), then smoothed over ~1 s.
+            if (lrQN_ > 0) {
+                const double w2 = std::max(0.0, (lrQQ_ - (lrII_ > 0.0 ? lrQI_ * lrQI_ / lrII_ : 0.0)) / lrQN_);
+                lrSigS2_ = lrSigS2_ < 0.0 ? w2 : lrSigS2_ + 0.05 * (w2 - lrSigS2_);
+                lrQQ_ = lrQI_ = lrII_ = 0.0; lrQN_ = 0;
+            }
             if (lrWinFill_ >= 4) for (int c = 0; c < 2; ++c) {      // ★ 200 ms before the first figure
                 float pk = 0.0f;
                 for (int w = 0; w < lrWinFill_; ++w) pk = std::max(pk, lrWinPk_[c][(size_t)w]);
+                /* ★★★ THE NOISE COMES OFF (see lrNoiseKM_ and kLrNoiseA/B). A figure the noise accounts for entirely is
+                 *  not a figure: "—" (sticky in the panel), never a made-up zero. */
+                if (lrSigS2_ >= 0.0) {
+                    const double sig = 75.0 * std::sqrt(lrSigS2_ * (1.0 + lrNoiseKM_));
+                    const double bias = kLrNoiseA * sig + kLrNoiseB * sig * sig;
+                    lrSigKHz_ = (float)sig;
+                    pk = (pk - bias > 0.5) ? (float)(pk - bias) : -1.0f;
+                }
                 lrPub_[c] = pk;
             }
         }
@@ -1331,7 +1383,7 @@ void MpxMeasure::publish_(bool grids) {
     out_.rdsRawKHz = extRdsDevRaw_;
     out_.phaseDeg = rds_.pilotPhaseDeg();
     out_.phaseSignedDeg = rds_.pilotPhaseSignedDeg();
-    out_.lDevKHz = lrPub_[0]; out_.rDevKHz = lrPub_[1];
+    out_.lDevKHz = lrPub_[0]; out_.rDevKHz = lrPub_[1]; out_.lrNoiseKHz = lrSigKHz_;
     out_.coherence = extCoh_;
     out_.driftDegPerSec = extDrift_;
     // ★ Full scale is the pilot's peak over 0.75 — the shared axis the plot is drawn on.

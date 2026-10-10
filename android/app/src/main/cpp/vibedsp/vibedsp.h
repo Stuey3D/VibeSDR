@@ -1137,7 +1137,7 @@ public:
     // carrier and the station's subcarrier scales the recovered data by cos(theta) — and
     // kills it outright at 90 degrees. All four may be null to skip that work.
     void processBlock(const float* mpx, int n, float* lmr,
-                      float* ref57, float* ref57q, float* bitClk);
+                      float* ref57, float* ref57q, float* bitClk, float* lmrQ = nullptr);
     /** ★★★ A KNOWN HOLE IN THE INPUT: the pilot's phase has jumped by whatever the hole cost, and
      *  the loop re-acquires it in a few milliseconds. What does NOT recover quickly is lockAmp_ —
      *  the 110 ms average of mpx x cos that IS the pilot deviation reading and gates stereo and RDS:
@@ -1148,7 +1148,7 @@ public:
     void noteGap(double holdSec = 0.04) { lockHold_ = (rate_ > 0.0) ? (long)(holdSec * rate_) : 0; }
 private:
     void processBlock_(const float* mpx, int n, float* lmr,
-                       float* ref57, float* ref57q, float* bitClk);
+                       float* ref57, float* ref57q, float* bitClk, float* lmrQ);
     double rate_ = 0.0;
     long   lockHold_ = 0;                    // samples left in the hold — see noteGap()
     inline void advance(float mpx);          // one loop iteration (no trig)
@@ -2164,6 +2164,7 @@ public:
          *  the last second (2026-10-10, Stuart: L/R meters, "especially useful on distorted stations"). −1 = none
          *  (not tracking a pilot: no stereo to split). See MpxMeasure::lrMeter_. */
         float lDevKHz = -1.0f, rDevKHz = -1.0f;
+        float lrNoiseKHz = 0.0f;   // σ_L the L/R figures had removed (bench only)
         float eyeDevKHz = 0.0f, eyeBandKHz[3] = { 0, 0, 0 };
         float mpxDevKHz = 0.0f, mpxDevAvgKHz = 0.0f, mpxDevHoldKHz = 0.0f, mpxDevNoiseKHz = 0.0f;
         float mpxPowerDb = 0.0f, mpxPowerSecs = 0.0f;   // BS.412 — see devWinP_
@@ -2243,7 +2244,7 @@ private:
     std::vector<float> dec2Taps_, rsProto_;          // kept for channelGain()/mpxGain()
     std::vector<std::pair<std::vector<float>, double>> stageTaps_;   // each integer stage + its input rate
     std::vector<float> sincDbCorr_;                  // per MPX-FFT bin, the same correction in dB
-    std::vector<float> mpx384_, mpx_, lmr_, ref57_, ref57q_, bitClk_;
+    std::vector<float> mpx384_, mpx_, lmr_, ref57_, ref57q_, bitClk_, lmrQ_;
     StereoPLL pll_;
     /** ★ The gear shift (see reset_ / process_): seconds tracked on the wide loop, and whether it has narrowed. */
     double pllTrackedSec_ = 0.0;
@@ -2275,13 +2276,13 @@ private:
     /* ★ L/R meters (lrMeter_): mono and L-R through steep 15 kHz low-passes (8th-order Butterworth — the pilot 33 dB
      *  down), L = M + S, R = M − S in composite units ×75 = kHz. Each 50 ms window's 99.5th percentile (a histogram,
      *  0–150 kHz in 0.5 kHz bins), the last second's highest window published. */
-    void lrMeter_(const float* x, const float* lmr, int n, bool hold);
+    void lrMeter_(const float* x, const float* lmr, const float* lmrQ, int n, bool hold);
     /* ★★ A LINEAR-PHASE FIR, NOT AN IIR (2026-10-10). The 8th-order Butterworth (+ a 19 kHz trap) read sine tones to 0.6 %
      *  but a hard-clipped, 15 kHz band-limited programme +11.5 % HIGH: its phase near the corner re-shapes an already
      *  band-limited waveform and adds overshoot that was never transmitted — Heart read L = R = 74 kHz under a 74 kHz
      *  total (Stuart's screenshot). A symmetric FIR adds none: flat to 15 kHz, ≥ 60 dB down by 18.5 kHz (the pilot gone
      *  with no trap), evaluated on every 2nd sample (96 kHz). */
-    std::vector<float> lrTaps_, lrHistM_, lrHistS_;
+    std::vector<float> lrTaps_, lrHistM_, lrHistS_, lrHistQ_;
     int lrPos_ = 0, lrPhase_ = 0;
     double lrFs_ = 0.0;
     int lrWinN_ = 0, lrWinCnt_ = 0;
@@ -2289,6 +2290,24 @@ private:
     std::vector<float> lrWinPk_[2];      // the last 20 windows (1 s), per channel
     int lrWinHead_ = 0, lrWinFill_ = 0;
     float lrPub_[2] = { -1.0f, -1.0f };
+    /** ★★★ THE L/R NOISE, MEASURED, NOT GUESSED (2026-10-10). Stuart: on a weaker station (Flex, 96.1) L 96 / R 90 under an
+     *  84 kHz total — impossible, since each channel's share of the carrier is part of the total. The deviation figure takes
+     *  its noise out ("4 kHz noise removed"); these took none, and they carry MORE: L = M + S, and S is the 38 kHz
+     *  subcarrier brought down to audio, so it holds FM's triangular (∝ f²) noise from 23–53 kHz.
+     *  ★★ WHY NOT THE DEVIATION'S 80 kHz GUARD BAND. Scaled by the f² law it predicted σ_L 3.1 kHz on a recording of Flex;
+     *     the excess needed ~6. The real channel is not flat out at 80 kHz, so that band under-reads what sits at 38.
+     *  ★★★ SO IT IS MEASURED WHERE IT LIVES: THE QUADRATURE OF THE 38 kHz SUBCARRIER. A broadcast's L−R is all in phase with
+     *     the pilot; the detector at 90° (StereoPLL lmrQ) therefore carries only noise and distortion, folded from both sides
+     *     of 38 kHz exactly as they fold into L−R. Through the SAME FIR (the pilot lands at 19 kHz there and only the FIR's
+     *     60 dB keeps it out), evaluated on every 8th output — a power needs no more — and any programme leaking in through a
+     *     small carrier phase error regressed out against the in-phase output, so a clean wide-stereo station is not
+     *     mistaken for a noisy one. σ²_L = σ²_S (1 + K_M/K_S), the main channel's small share from the f² law (lrNoiseKM_).
+     *  ★ The removal is fitted on the bench for THIS statistic (see kLrNoiseA/B in mpxmeasure.cpp). */
+    double lrNoiseKM_ = 0.0;             // K_M / K_S for this FIR — the main channel's noise as a share of the subcarrier's
+    int lrQPhase_ = 0;                   // every 8th evaluated sample feeds the quadrature power
+    double lrQQ_ = 0.0, lrQI_ = 0.0, lrII_ = 0.0; int lrQN_ = 0;   // this window's sums
+    double lrSigS2_ = -1.0;              // σ²_S, smoothed over ~1 s (−1 = none yet)
+    float lrSigKHz_ = 0.0f;              // σ_L last used, kHz — for the bench (Out::lrNoiseKHz), not the wire
     /** ★★★ CHUNKS LEFT IN THE HOLD AFTER A HOLE. A dropped block splices two stretches of signal
      *  that were never adjacent: the carrier phase jumps, the discriminator emits a spike up to half
      *  the sample rate, and every filter rings with it. Measured through, that spike was a WRONG
@@ -2652,6 +2671,7 @@ public:
             float pilotPhaseDeg;
             float pilotPhaseSignedDeg;        // ★ (−90, +90], −999 = none — pilotPhaseDeg with its sign
             float lDevKHz, rDevKHz;           // ★ LEFT / RIGHT peak deviation, kHz (−1 = none) — MpxMeasure::lrMeter_
+            float lrNoiseKHz;                 // σ the L/R figures had removed, kHz — the bench reads it; not on the wire
             float pilotPhaseCoherence;
             float pilotPhaseDriftDegPerSec;   // >0 = the phase is turning; see the note on it
             float pilotDevKHz;      // pilot injection, kHz deviation

@@ -167,7 +167,7 @@ void StereoPLL::step(float mpx, float* ref38, float* ref57, float* bitClk) {
 }
 
 void StereoPLL::processBlock(const float* mpx, int n, float* lmr,
-                             float* ref57, float* ref57q, float* bitClk) {
+                             float* ref57, float* ref57q, float* bitClk, float* lmrQ) {
     // ★★ The hold after a known hole (noteGap): run the loop over the held stretch, then put the
     //    metric and the lock/track states back. One branch per BLOCK; the sample loop is untouched.
     if (lockHold_ > 0 && n > 0) {
@@ -175,18 +175,19 @@ void StereoPLL::processBlock(const float* mpx, int n, float* lmr,
         const float amp = lockAmp_;
         const bool ls = lockState_, ts = trackState_;
         const int br = belowRelease_;
-        processBlock_(mpx, h, lmr, ref57, ref57q, bitClk);
+        processBlock_(mpx, h, lmr, ref57, ref57q, bitClk, lmrQ);
         lockAmp_ = amp; lockState_ = ls; trackState_ = ts; belowRelease_ = br;
         lockHold_ -= h;
         if (h < n) processBlock_(mpx + h, n - h, lmr + h, ref57 ? ref57 + h : nullptr,
-                                 ref57q ? ref57q + h : nullptr, bitClk ? bitClk + h : nullptr);
+                                 ref57q ? ref57q + h : nullptr, bitClk ? bitClk + h : nullptr,
+                                 lmrQ ? lmrQ + h : nullptr);
         return;
     }
-    processBlock_(mpx, n, lmr, ref57, ref57q, bitClk);
+    processBlock_(mpx, n, lmr, ref57, ref57q, bitClk, lmrQ);
 }
 
 void StereoPLL::processBlock_(const float* mpx, int n, float* lmr,
-                              float* ref57, float* ref57q, float* bitClk) {
+                              float* ref57, float* ref57q, float* bitClk, float* lmrQ) {
     // The loop filter is a feedback path, so this cannot be vectorised across
     // samples — but it no longer has to be: with the trig gone each iteration is
     // a handful of multiplies. The vectorised work either side of it (the FM
@@ -203,6 +204,10 @@ void StereoPLL::processBlock_(const float* mpx, int n, float* lmr,
             ref57[i]  = c * (4.0f * c * c - 3.0f);        // cos(3*phase)
             ref57q[i] = s * (3.0f - 4.0f * s * s);        // sin(3*phase)
             bitClk[i] = (float)((cycle_ * 2.0 * M_PI + phase_) / 16.0);
+            /* ★ The L−R detector's QUADRATURE twin — cos(2θ) at the same gain. A broadcast's stereo subcarrier is all in
+             *  phase with the pilot, so this carries only what is NOT programme: noise and distortion, folded from both
+             *  sides of 38 kHz exactly as they fold into L−R. MpxMeasure's L/R meters measure their noise here. */
+            if (lmrQ) lmrQ[i] = mpx[i] * (c * c - s * s) * 2.0f;
         }
     } else {
         for (int i = 0; i < n; ++i) {
