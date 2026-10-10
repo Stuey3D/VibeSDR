@@ -6760,6 +6760,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string rdsRtpTitle, rdsRtpArtist, rdsLongPs, rdsPtyn;
         int rdsLang = 0, rdsPinDay = 0, rdsPinHour = -1, rdsPinMin = 0;
         float rdsPhase = -1.0f;                  // RDS-to-pilot phase, degrees (-1 = no lock)
+        float rdsPhaseSigned = -999.0f;          // ...signed, (−90, +90] (−999 = none) — `phaseSigned` on the wire
         float rdsPhaseCoh = 0.0f;                // ...and how much to believe it, 0..1
         // ★ How fast that phase is TURNING, deg/s. Coherence only catches FAST rotation; a slow
         // one keeps coherence high while the angle walks all the way round. See vibedsp.h.
@@ -11245,7 +11246,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     re-settles and is held again. The RF loop stays out while the IF is held. */
             {
                 static bool dabIfHeld = false;
-                static int  dabHeldBlock = -2, dabArmedBlock = -2;
+                static int  dabHeldBlock = -2, dabArmedBlock = -2, dabSaidBlock = -2;
                 static auto dabDriftSince = std::chrono::steady_clock::time_point{};
                 static auto dabHoldArmedAt = std::chrono::steady_clock::time_point{};
                 const bool dabOn = g_dabMode.load(std::memory_order_relaxed);
@@ -11256,6 +11257,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *   to zero and the reporting flag had not: 23:36 held 55 dB 30 ms after every
                  *   block change and re-held 200 ms after every release, five times a minute. */
                 if (dabOn && blkNow != dabArmedBlock) { dabArmedBlock = blkNow; dabHoldArmedAt = nowH; }
+                if (!dabOn) dabSaidBlock = -2;   // ★ a new DAB session announces its hold again
                 if (dabIfHeld && (!dabOn || blkNow != dabHeldBlock)) {
                     sdrp->setIfAgc(true); sfericForget(10.0);   // ★ the loop ramps the band on re-enable — not a strike
                     dabIfHeld = false; dabDriftSince = {}; dabHoldArmedAt = nowH; g_dabIfHeld.store(false, std::memory_order_relaxed);
@@ -11286,13 +11288,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                            && (std::chrono::duration_cast<std::chrono::seconds>(nowH.time_since_epoch()).count() - g_dabRfStepAt.load(std::memory_order_relaxed)) >= 8   // ★ and the RF rule quiet for 8 s
                            && std::chrono::duration_cast<std::chrono::seconds>(nowH - dabHoldArmedAt).count() >= 8) {
                     const int gr = sdrp->currentIfGr();
-                    if (gr >= 24 && gr <= 55) {
+                    /* ★★ NEVER HOLD A LEVEL THE RELEASE RULE WOULD REJECT (Stuart, 2026-10-10: "this says IF AGC held at
+                     *  xx dB but that number moves so is contradicting itself"). The Lenovo's log: held at 53 → released IN
+                     *  THE SAME MILLISECOND (overload) → held at 49 → 46 → 40 → 37, a fresh "held at N dB" each time. The
+                     *  hold was taken with the converter already overloaded, so the check below released it at once. Hold
+                     *  only inside the band the release keeps (−35…−3 dBFS) and with no overload flag. */
+                    const double pkH = sdrp->adcPeakDbfs();
+                    const bool holdable = !sdrp->overloaded() && std::isfinite(pkH) && pkH > -35.0 && pkH < -3.0;
+                    if (gr >= 24 && gr <= 55 && holdable) {
                         sdrp->setIfAgc(false);
                         sdrp->setIfGainReduction(gr);
                         sfericForget(6.0);   // ★ Stuart, 00:20: "getting a storm warning on the RSP" — our toggles, not lightning
                         dabIfHeld = true; g_dabIfHeld.store(true, std::memory_order_relaxed); dabHeldBlock = blkNow; dabDriftSince = {};
-                        LOGI("RSP IF AGC: held at %d dB for DAB (peak %.1f dBFS) — no gain steps inside the symbols", gr, sdrp->adcPeakDbfs());
-                        vsSayVts(std::string("IF gain held at ") + std::to_string(gr) + " dB for DAB.");
+                        LOGI("RSP IF AGC: held at %d dB for DAB (peak %.1f dBFS) — no gain steps inside the symbols", gr, pkH);
+                        /* ★ SAID ONCE PER BLOCK. A re-settle (a fade, an overload) re-holds at another figure; announcing
+                         *  each one is the readout contradicting itself. The log keeps every hold for diagnosis. */
+                        if (dabSaidBlock != blkNow) {
+                            dabSaidBlock = blkNow;
+                            vsSayVts(std::string("IF gain held at ") + std::to_string(gr) + " dB for DAB.");
+                        }
                     }
                 }
                 if (!sdrpSettling && graceDone && ifAgcAlive && ifHasMoved && coarseDone)
@@ -11907,6 +11921,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsEon.assign(x.eon, x.eon + x.nEon);
         st.rdsOda.assign(x.oda, x.oda + x.nOda);
         st.rdsPhase = x.pilotPhaseDeg;
+        st.rdsPhaseSigned = x.pilotPhaseSignedDeg;
         st.rdsPhaseCoh = x.pilotPhaseCoherence;
         st.rdsPhaseDrift = x.pilotPhaseDriftDegPerSec;
         st.rdsPilotDev = x.pilotDevKHz;
@@ -20481,6 +20496,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               if (!sibling) sessionLastAppMs.erase(session);
           } }
         bool bothGone = false;
+        bool stopDirectIq = false;        // ★ this socket owned the direct/full-rate IQ stream — stopped OUTSIDE clientMtx
         bool rdsxGone = false;            // ★ an Advanced RDS subscriber left — recompute OUTSIDE clientMtx
         /* ★★★ THE CONNECTION LOG IS WRITTEN AFTER clientMtx IS RELEASED, NEVER UNDER IT.
          *  clientMtx is the DSP thread's lock (feedClientChannels, allAudioSocks — every block), and
@@ -20720,9 +20736,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           if (keptDsp)
               LOGI("listener %s: spectrum socket closed, audio still open — their channel keeps running at %.3f kHz",
                    keptDsp->session.empty() ? "(anon)" : keptDsp->session.c_str(), keptDsp->vfoHz / 1e3);
-          { bool mine = false;
-            { std::lock_guard<std::mutex> dl(iqDirectMtx); mine = iqDirect && iqDirectSock == sock; }
-            if (mine) iqStopDirect(); }                          // ★ and so does the direct-mode one
+          /* ★★★ AND SO DOES THE DIRECT-MODE ONE — BUT STOPPED AFTER clientMtx IS RELEASED (2026-10-10). This called
+           *  iqStopDirect() right here, under clientMtx; a FULL-RATE stream's stop calls applyAutoIf(), which takes
+           *  clientMtx again (allSpecPeers) — a std::mutex locked twice by one thread: a permanent self-deadlock. The
+           *  Pi 500's V4L wedged exactly so at 03:17 when a raw-IQ consumer's spectrum socket closed with its stream
+           *  still on: DSP, housekeeping, hotplug and every new connection queued behind the lock ("IQ overrun — the
+           *  DSP thread was blocked" every 2 s, no HTTP at all). gdb's stacks are in the commit message. Any client
+           *  dropped mid-stream (app killed, network gone) did the same. Decided here; done below, unlocked. */
+          { std::lock_guard<std::mutex> dl(iqDirectMtx); stopDirectIq = iqDirect && iqDirectSock == sock; }
           {   // ★ and its squelch, once no socket of that session remains
               auto it = sockSession.find(sock.get());
               const std::string ses = it != sockSession.end() ? it->second : std::string();
@@ -20781,6 +20802,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           // ★ The occupant left of their own accord. Any soft-limit handover dies with them —
           //   leaving it set would start the next listener already 60 seconds into a notice.
           if (specGone && audioGone) { occupantSession.clear(); g_vsHandoverAt = 0; bothGone = true; } }
+        if (stopDirectIq) iqStopDirect();   // ★ clientMtx is released — see the note where it was decided
         // ★★★ clientMtx is released: NOW the connection log (see LogClose).
         if (logClose.due)
             LocalSdrShim::noteConnectionClosed(logClose.ip, logClose.sess, "closed", logClose.total,
@@ -23126,7 +23148,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                 : rx.pilotLocked();
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
-        int lang, pinD, pinH, pinM; float phase, phaseCoh, pilotDev, rdsDev_, rdsDevPk_, phaseDrift;
+        int lang, pinD, pinH, pinM; float phase, phaseSigned, phaseCoh, pilotDev, rdsDev_, rdsDevPk_, phaseDrift;
         /* ★ Initialised, unlike its neighbours on the line above: every one of those is written
          *  only inside the locked block below, so a path that skips it reads an indeterminate
          *  float. Pre-existing and untouched here, but not worth copying into a new field. */
@@ -23148,7 +23170,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev; for (int b = 0; b < 3; ++b) eyeAmp[b] = R.rdsEyeAmp[b]; mpxDev = R.rdsMpxDev; mpxAvg = R.rdsMpxDevAvg; mpxHold = R.rdsMpxDevHold; mpxNoise = R.rdsMpxDevNoise; mpxPow = R.rdsMpxPowDb; mpxPowS = R.rdsMpxPowSecs;
           rtpT = R.rdsRtpTitle; rtpA = R.rdsRtpArtist; lps = R.rdsLongPs; ptyn = R.rdsPtyn;
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
-          eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseCoh = R.rdsPhaseCoh;
+          eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseSigned = R.rdsPhaseSigned; phaseCoh = R.rdsPhaseCoh;
           phaseDrift = R.rdsPhaseDrift;
           pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; rdsDevPk_ = R.rdsDevPeak;
           rdsDevRaw_ = R.rdsDevRaw; berNow = R.rdsBer;
@@ -23184,6 +23206,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       + ",\"pinHour\":" + std::to_string(pinH)
                       + ",\"pinMin\":" + std::to_string(pinM)
                       + ",\"phase\":" + std::to_string(phase)
+                      // ★ The same angle, signed (−90, +90] — only while there is one (2026-10-10, see rds.cpp).
+                      + (phase >= 0.0f && phaseSigned > -900.0f ? ",\"phaseSigned\":" + std::to_string(phaseSigned) : std::string())
                       + ",\"phaseDrift\":" + std::to_string(phaseDrift)
                       + ",\"phaseCoh\":" + std::to_string(phaseCoh)
                       + ",\"pilotDev\":" + std::to_string(pilotDev)
