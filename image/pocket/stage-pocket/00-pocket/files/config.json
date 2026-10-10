@@ -1,5 +1,6 @@
 {
   "configured": false,
+  "name": "VibeServer Portable",
   "fullMode": true,
   "sharing": "public",
   "mdnsAdvertise": true,

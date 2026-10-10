@@ -69,11 +69,51 @@ export function startMdnsDiscovery(
 
   try { nativeModule.startDiscovery(); } catch {}
 
+  // ★★★ THE PHONE'S OWN HOTSPOT (Stuart, 2026-10-10: a VibeServer Portable on his iPhone's hotspot — "I also have no way
+  //     of knowing the ip address of the connected pi from the phone", and the app did not list it). An iPhone's
+  //     Personal Hotspot always hands out 172.20.10.2–14 — thirteen addresses — and shows nobody their numbers. So,
+  //     alongside Bonjour (which may not cross from a hotspot's clients to the phone hosting it), ask those thirteen
+  //     "are you a VibeServer?" — /vibeserver.json, 1.5 s each, all at once, every 20 s while the list is open.
+  //     Nothing there costs thirteen refused connections. iOS only: that range is Apple's.
+  const swept = new Map<string, DiscoveredServer>();
+  let sweepDead = false;
+  const sweep = async () => {
+    if (Platform.OS !== 'ios') return;
+    const found = await Promise.all(Array.from({ length: 13 }, (_, i) => `172.20.10.${i + 2}`).map(hotspotProbe));
+    if (sweepDead) return;
+    let changed = false;
+    for (let i = 0; i < 13; i++) {
+      const host = `172.20.10.${i + 2}`, k = key(host, 48000), s = found[i];
+      if (s && !byKey.has(k)) { byKey.set(k, s); swept.set(k, s); changed = true; }
+      if (!s && swept.has(k)) { swept.delete(k); byKey.delete(k); changed = true; }
+    }
+    if (changed) push();
+  };
+  void sweep();
+  const sweepTimer = setInterval(() => { void sweep(); }, 20000);
+
   return () => {
+    sweepDead = true;
+    clearInterval(sweepTimer);
     try { nativeModule.stopDiscovery?.(); } catch {}
     foundSub.remove();
     lostSub.remove();
   };
+}
+
+/** One address on the phone's hotspot: a VibeServer there, or null. Named from the pocket box's own hello if it is one. */
+async function hotspotProbe(host: string): Promise<DiscoveredServer | null> {
+  const get = async (path: string) => {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 1500);
+    try { const r = await fetch(`http://${host}:48000${path}`, { signal: ac.signal }); return r.ok ? await r.json() : null; }
+    catch { return null; } finally { clearTimeout(t); }
+  };
+  const j: any = await get('/vibeserver.json');
+  if (!j || j.server !== 'vibeserver') return null;
+  const hello: any = await get('/vibeserver/pocket/hello');
+  const name = hello?.pocket ? `VibeServer Portable (${host})` : `VibeServer at ${host}`;
+  return { name, host, port: 48000, proto: 'vibeserver', pin: !!j.pin };
 }
 
 // ── Advertise (Android only): publish this device's RTL-TCP server ────────────
