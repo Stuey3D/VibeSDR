@@ -147,8 +147,15 @@ try {
   ok(await js(`document.querySelectorAll('#wifiNets .wifiRow [data-f="psk"]')[0].placeholder.includes("saved")`),
      "saved networks come back as 'saved — leave blank to keep it' (passwords never leave the box)");
   ok(await until(visible("wifiFinish")), "on the setup hotspot, the Finish step is shown");
-  ok(await js(`document.getElementById("wifiGo").disabled && document.getElementById("wifiFinishWhy").textContent.includes("Save and start")`),
+  ok(await js(`document.getElementById("wifiFinishWhy").textContent.includes("Save and start")`),
      "…but it waits for 'Save and start' first");
+  // ★ Never a dead button (Stuart's first Pi 3 A+ test stopped at a greyed-out one): pressed early it
+  //   answers by pointing at the missing step, and nothing switches.
+  ok(await js(`!document.getElementById("wifiGo").disabled`), "the Finish button is never disabled");
+  await js(`document.getElementById("wifiGo").click(); 1`);
+  ok(await js(`document.getElementById("saveBtn").classList.contains("needsYou")
+               && document.getElementById("wifiDone").classList.contains("hide")`),
+     "pressed too early, it lights up 'Save and start' and shows no next steps");
 
   // Finish setup: the server restarts itself (no service manager on a Mac) and comes back configured.
   await js(`document.getElementById("saveBtn").click(); 1`);
@@ -159,7 +166,7 @@ try {
                          + "\n     config: " + (fs.readFileSync(path.join(T, "config.json"), "utf8").match(/"(port|configured)": [a-z0-9]+/g) || []).join(", ")
                          + "\n     server: " + (fs.readFileSync(path.join(T, "server.log"), "utf8")
                                                + fs.readFileSync(path.join(T, "server.err"), "utf8")).split("\n").slice(-12).join("\n     "));
-  ok(await until(`!document.getElementById("wifiGo").disabled`), "the Finish step is now available");
+  ok(await until(`document.getElementById("wifiFinishWhy").textContent.includes("Everything is saved")`), "the Finish step is now available");
   await js(`document.getElementById("wifiGo").click(); 1`);
   const done = await js(`document.getElementById("wifiDone").innerText`);
   ok(/Screenshot this/.test(done) && /Home/.test(done) && /Stuart's iPhone/.test(done), "the next steps name network 1, then 2 — BEFORE anything switches");

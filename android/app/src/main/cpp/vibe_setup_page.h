@@ -169,6 +169,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .wifiDone{border:1px solid var(--amber);border-radius:10px;padding:14px;margin-top:12px}
   .wifiDone ol{margin:8px 0 0 1.2em;padding:0}.wifiDone li{margin:6px 0}
   .wifiDone code{color:var(--amber);font-size:15px;word-break:break-all}
+/* ★ The finish panel points at the step still missing: a short glow, then back to normal. */
+@keyframes needsYou { 0%,100% { box-shadow: 0 0 0 0 rgba(245,185,66,0); } 30%,70% { box-shadow: 0 0 0 4px rgba(245,185,66,.75); } }
+.needsYou { animation: needsYou 1.4s ease-in-out 2; }
 </style>
 <div class="wrap">
   <h1>VibeServer</h1>
@@ -5781,17 +5784,38 @@ function wifiFinishRender() {
   if (!onHotspot) return;
   const saved = (w.saved || []).length > 0, apSet = !!(w.ap && w.ap.set);
   const configured = !!(cfg && cfg.configured);
-  const missing = [];
-  if (!saved) missing.push("save at least one network above");
-  if (!apSet) missing.push("save the box’s own hotspot above");
-  if (!configured) missing.push("finish setup with “Save and start” at the bottom");
+  const missing = wifiFinishMissing();
   $("wifiFinishWhy").textContent = missing.length
-    ? "Before the box leaves this hotspot: " + missing.join(", then ") + "."
+    ? "Before the box leaves this hotspot: " + missing.map(m => m.say).join(", then ") + "."
     : "Everything is saved. When you are ready, the box leaves this hotspot and joins your network.";
-  $("wifiGo").disabled = missing.length > 0;
 }
 
+/** What still stands between the box and leaving its hotspot, each with where to go to do it. */
+function wifiFinishMissing() {
+  const w = WIFI || {};
+  const out = [];
+  if (!(w.saved || []).length) out.push({say: "save at least one network above", go: "wifiCard"});
+  if (!(w.ap && w.ap.set)) out.push({say: "save the box’s own hotspot above", go: "wifiCard"});
+  if (!(cfg && cfg.configured)) out.push({say: "finish setup with “Save and start” at the bottom", go: "saveBtn"});
+  return out;
+}
+
+// ★★★ NEVER A DEAD BUTTON. This was disabled until every step was done, and greyed out on a dark
+//     page it read as broken: Stuart's first test of the Pi 3 A+ stopped here (2026-10-10, "that
+//     button doesnt allow me to click it") with the reason written in the line above it. It now
+//     always answers — with the panel when everything is saved, otherwise by taking you to the
+//     first step still missing and lighting it up.
 $("wifiGo").onclick = () => {
+  const missing = wifiFinishMissing();
+  if (missing.length) {
+    const el = $(missing[0].go) || $("wifiCard");
+    $("wifiFinishWhy").textContent = "First, " + missing.map(m => m.say).join(", then ") + ".";
+    if (el) {
+      el.scrollIntoView({behavior: "smooth", block: "center"});
+      el.classList.remove("needsYou"); void el.offsetWidth; el.classList.add("needsYou");
+    }
+    return;
+  }
   const w = WIFI || {};
   const nets = (w.saved || []).map(n => n.ssid);
   const {out, suffix} = wifiAddresses();
@@ -6004,6 +6028,8 @@ $("saveBtn").onclick = async () => {
         + 'it may still be starting.'
         + '<a id="gotoRx" href="/" class="gotoBtn" style="margin-left:14px">Open the receiver &rarr;</a>';
       $("saveBtn").disabled = false;
+      // ★ Saved is saved — a slow restart must not leave a pocket box's finish panel locked.
+      if (POCKET && cfg) { cfg.configured = true; wifiFinishRender(); }
     };
     waitBack();
   } catch (e) {
