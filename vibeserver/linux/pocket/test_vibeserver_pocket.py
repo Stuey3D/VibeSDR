@@ -407,6 +407,27 @@ def main():
         box.sync_hostname(True)
         ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "configured → the setup name is retired (vibepocket)")
 
+    # ── REORDER WHILE CONNECTED (Stuart's Pi 3 A+, 2026-10-10): phone hotspot moved to 1 while on Home, phone in range ──
+    with tempfile.TemporaryDirectory() as tmp:
+        nm, box = make(tmp)
+        nm.air = {"Home": (70, "homepass1"), "Stuart iPhone": (70, "phonepass")}
+        box.apply(req([("Home", "homepass1", {}), ("Stuart iPhone", "phonepass", {"hidden": True})]))
+        box.leave_hotspot_and_try("test: setup finished")
+        run_for(nm, box, 20)
+        ok(nm.active == "vibe-net-1" and nm.conns["vibe-net-1"]["ssid"] == "Home", "on Home, which is network 1")
+        nm.calls.clear()
+        box.apply(vp.validate_request({"networks": [{"ssid": "Stuart iPhone", "keep": True}, {"ssid": "Home", "keep": True}],
+                                       "ap": {"ssid": "Pocket-SDR", "keep": True}, "country": "GB"})[0])
+        run_for(nm, box, 20)
+        ok([nm.conns["vibe-net-%d" % i]["ssid"] for i in (1, 2)] == ["Stuart iPhone", "Home"], "the new order is saved: phone 1, Home 2")
+        rejoined = any(c[:4] == ["nmcli", "connection", "down", "vibe-net-1"] for c in nm.calls) and \
+                   any(c[3:6] == ["connection", "up", "vibe-net-1"] for c in nm.calls)
+        ok(rejoined, "…and the box REJOINS in the new order (it was left physically on Home under the phone's slot)")
+        ok(nm.conns["vibe-net-1"]["psk"] == "phonepass" and nm.conns["vibe-net-2"]["psk"] == "homepass1",
+           "…each network keeps its own password through the swap")
+        st = json.load(open(os.path.join(tmp, "state.json")))
+        ok([x["ssid"] for x in st["saved"]] == ["Stuart iPhone", "Home"], "the state reports the new order")
+
     # ── OWN WI-FI BY HAND (Stuart, 2026-10-10): held while the radio is in use, released after 30 quiet minutes ──
     with tempfile.TemporaryDirectory() as tmp:
         nm, box = make(tmp)

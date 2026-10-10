@@ -5805,13 +5805,33 @@ $("wifiSave").onclick = async () => {
   $("wifiSave").disabled = true;
   try {
     await wifiPost("/vibeserver/pocket/wifi", body);
-    $("wifiMsg").innerHTML = '<span class="ok">Saved.</span>'
-      + (WIFI && WIFI.mode === "client" ? " The box may drop off this network for a moment while it rejoins in your order." : "");
+  } catch (e) { $("wifiErr").textContent = String(e); $("wifiSave").disabled = false; return; }
+  const wasClient = WIFI && WIFI.mode === "client";
+  $("wifiMsg").textContent = "Saving…";
+  /* ★★★ READ BACK ONLY WHAT THE BOX HAS APPLIED (Stuart's Pi 3 A+, 2026-10-10: the phone hotspot moved to 1 "went back"
+   *  to Home first). This re-read the list 2.5 s after Save — before the box had rewritten its connections — so the
+   *  page drew the OLD order, and the next Save sent that old order back. Now: ask until the box reports the order
+   *  just sent, Save held off meanwhile. A box rejoining in the new order drops off for a moment — keep asking. */
+  const want = body.networks.map(n => n.ssid).join("\n");
+  let applied = false;
+  for (let i = 0; i < 16 && !applied; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    try {
+      const r = await fetch("/vibeserver/pocket/wifi?" + await authQuery(), {cache: "no-store"});
+      const j = r.ok ? await r.json() : null;
+      applied = !!j && (j.saved || []).map(n => n.ssid).join("\n") === want;
+    } catch (e) { /* rejoining — still applying */ }
+  }
+  if (applied) {
     WIFI_EDITING = false;
+    await wifiLoad();                                  // ★ the list first, so "Saved." never sits over the old one
+    $("wifiMsg").innerHTML = '<span class="ok">Saved.</span>'
+      + (wasClient ? " The box is rejoining in your order — it may drop off this network for a moment." : "");
     $("wifiSummaryMsg").innerHTML = $("wifiMsg").innerHTML;
-    // ★ The box applies it within a second or two; read back what it now holds.
-    setTimeout(wifiLoad, 2500);
-  } catch (e) { $("wifiErr").textContent = String(e); }
+  } else {
+    $("wifiMsg").textContent = "Sent — the box has not confirmed it yet. If it moved to another of your networks, "
+      + "join that one to reach it; otherwise reload this page in a moment.";
+  }
   $("wifiSave").disabled = false;
 };
 $("wifiScan").onclick = async () => {

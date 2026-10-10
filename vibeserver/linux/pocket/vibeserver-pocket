@@ -641,6 +641,9 @@ class Box:
     # ── the request inbox ──
     def apply(self, req):
         """Write the owner's networks and hotspot into NetworkManager, in order."""
+        # ★ Which Wi-Fi we are PHYSICALLY on, before the slots are rewritten (see the rejoin at the end).
+        was_cur = self.cur if self.mode == "client" else ""
+        was_ssid = self.get(was_cur, "802-11-wireless.ssid") if was_cur else ""
         # Passwords we were told to KEEP: read back from NM before anything is deleted.
         old = {}
         for rank, name, ssid, hidden in self.saved():
@@ -695,11 +698,19 @@ class Box:
         if req["country"] and req["country"] != self.conf.get("COUNTRY"):
             self.set_country(req["country"])
         log("saved %d network(s) and the hotspot \"%s\"" % (len(req["networks"]), ap["ssid"]))
-        # ★ Deleting the network we were joined to drops it — so as a client, rejoin in order now.
-        was = self.mode
+        # ★★★ REJOIN IN THE NEW ORDER (Stuart's Pi 3 A+, 2026-10-10: the phone hotspot moved to 1 while on Home, the box
+        #     stayed on Home). A slot's profile is rewritten IN PLACE, and NetworkManager keeps the live link on what it
+        #     joined — so after a reorder the box sat physically on Home under the slot that now says "phone", and only
+        #     a DROP ever made it look again. If the slot we are on now names a different network, or the link went
+        #     with a deleted slot, leave it and join in the saved order (the page warns of the moment's drop).
         self.read_active()
-        if was == "client" and not self.cur:
-            self.leave_hotspot_and_try("the saved networks changed")
+        if was_cur:
+            now_ssid = self.get(was_cur, "802-11-wireless.ssid") if self.have(was_cur) else ""
+            if not self.cur or now_ssid != was_ssid:
+                if self.cur:
+                    self.down(self.cur)
+                    self.read_active()
+                self.leave_hotspot_and_try("the saved networks changed — rejoining in the new order")
 
     def set_country(self, cc):
         if os.path.exists("/usr/bin/raspi-config"):

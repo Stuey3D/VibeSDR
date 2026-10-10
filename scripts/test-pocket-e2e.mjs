@@ -182,6 +182,23 @@ try {
   await js(`document.getElementById("wifiCard").scrollIntoView(); 1`); await shot("3-collapsed");
   await js(`document.getElementById("wifiChange").click(); 1`);
   ok(await until(visible("wifiEdit")) && !(await js(visible("wifiSummary"))), "'Change Wi-Fi' opens the full card");
+  // ★★★ REORDER, AND THE BOX IS SLOW TO APPLY IT (Stuart's Pi 3 A+, 2026-10-10: the phone moved to 1 "went back" to
+  //     Home first — the page re-read the list before the box had applied it, then sent the old order back).
+  await js(`document.querySelectorAll('#wifiNets .wifiRow')[1].querySelector('[data-mv="-1"]').click(); 1`);
+  await js(`document.getElementById("wifiSave").click(); 1`);
+  for (let i = 0; i < 40 && !fs.existsSync(path.join(PD, "pocket-wifi.request")); i++) await sleep(150);
+  const reorder = JSON.parse(fs.readFileSync(path.join(PD, "pocket-wifi.request"), "utf8"));
+  ok(reorder.networks.map(n => n.ssid).join("|") === "Stuart's iPhone|Home" && reorder.networks.every(n => n.keep),
+     "reordered: the phone first, Home second, passwords kept, not retyped");
+  fs.unlinkSync(path.join(PD, "pocket-wifi.request"));
+  await sleep(3000);                                  // ★ the box is still applying: the state still says Home first
+  ok(await js(`document.getElementById("wifiSave").disabled && document.getElementById("wifiMsg").textContent === "Saving…"`),
+     "while the box applies it, the page waits ('Saving…', Save held off) — it does not redraw the old order");
+  state({ mode: "fallback-ap", ap: { set: true, ssid: "Pocket-SDR" }, saved: [{ rank: 1, ssid: "Stuart's iPhone", hidden: true }, { rank: 2, ssid: "Home", hidden: false }] });
+  ok(await until(`document.getElementById("wifiMsg").textContent.startsWith("Saved")`, 8000), "once applied: Saved.");
+  ok(/1 Stuart's iPhone, 2 Home/.test(await js(`document.getElementById("wifiSummaryText").textContent`)),
+     "…and the list reads the NEW order: 1 the phone, 2 Home");
+  await js(`document.getElementById("wifiChange").click(); 1`);
   ok(await until(visible("wifiFinish")), "on a hotspot, the 'put the box on your Wi-Fi' step is shown");
   // ★ Never a dead button (Stuart's first Pi 3 A+ test stopped at a greyed-out one).
   ok(await js(`!document.getElementById("wifiGo").disabled`), "the Finish button is never disabled");
