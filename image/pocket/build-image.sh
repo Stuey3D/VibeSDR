@@ -28,6 +28,12 @@ OUT="$HERE/out"; mkdir -p "$OUT/cache" "$OUT/work"
 STAMP="$(date +%Y%m%d)"
 NAME="vibeserver-pocket-$A-$STAMP"
 COUNTRY="${POCKET_COUNTRY:-GB}"
+# ★★ THE HIGH DETAIL MAPS, BAKED IN (Stuart, 2026-10-10) — their URL and exact size are read from the
+#    server's own source, so the image and the server's installer can never disagree about them.
+MAPGL_H="$HERE/../../android/app/src/main/cpp/vibe_mapgl.h"
+MAPGL_URL=$(sed -n '/DETAIL_URL =/{n;s/.*"\(https[^"]*\)".*/\1/p;}' "$MAPGL_H")
+MAPGL_BYTES=$(sed -n 's/.*DETAIL_BYTES = \([0-9]*\);.*/\1/p' "$MAPGL_H")
+[ -n "$MAPGL_URL" ] && [ -n "$MAPGL_BYTES" ] || { echo "!! could not read DETAIL_URL / DETAIL_BYTES from vibe_mapgl.h"; exit 1; }
 ls "$OUT"/debs/vibeserver_*_"$A".deb >/dev/null 2>&1 || {
   echo "!! no $A package in $OUT/debs — run: image/pocket/build-deb.sh $A"; exit 1; }
 
@@ -40,6 +46,8 @@ if [ "$MODE" = "--pigen" ]; then
   cp -R "$HERE/stage-pocket" "$PG/stage-pocket"
   mkdir -p "$PG/stage-pocket/00-pocket/files/debs"
   cp "$OUT"/debs/vibeserver_*_"$A".deb "$PG/stage-pocket/00-pocket/files/debs/"
+  cp "$("$HERE/stage-pocket/00-pocket/files/fetch-mapgl-detail.sh" "$OUT/cache" "$MAPGL_URL" "$MAPGL_BYTES")" \
+     "$PG/stage-pocket/00-pocket/files/vibemap-detail.pmtiles"
   touch "$PG/stage2/SKIP_IMAGES"        # ★ only OUR stage exports an image
   # ★ The login exists so first boot never stops to ask for one; its password is random and not
   #   kept — the owner sets their own with Raspberry Pi Imager (or never needs one: SSH is off).
@@ -71,6 +79,7 @@ URL="https://downloads.raspberrypi.com/raspios_lite_${A}_latest"
 docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   -v "$OUT":/out -v "$HERE/stage-pocket/00-pocket/files":/pocket-files:ro \
   -e A="$A" -e URL="$URL" -e NAME="$NAME" -e COUNTRY="$COUNTRY" \
+  -e MAPGL_URL="$MAPGL_URL" -e MAPGL_BYTES="$MAPGL_BYTES" \
   debian:trixie-slim /bin/bash -euo pipefail -c '
   apt-get update -qq
   apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils fdisk e2fsprogs dosfstools \
@@ -123,6 +132,10 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   mkdir -p /mnt/r/tmp/pocket-files /mnt/r/tmp/pocket-debs
   cp /pocket-files/customise.sh /pocket-files/config.json /pocket-files/pocket.conf /mnt/r/tmp/pocket-files/
   cp /out/debs/vibeserver_*_"$A".deb /mnt/r/tmp/pocket-debs/
+  MAPS=$(bash /pocket-files/fetch-mapgl-detail.sh /out/cache "$MAPGL_URL" "$MAPGL_BYTES")
+  install -d -m 0755 /mnt/r/usr/lib/vibeserver/mapgl-detail
+  install -m 0644 "$MAPS" /mnt/r/usr/lib/vibeserver/mapgl-detail/vibemap-detail.pmtiles
+  echo "==> High Detail Maps baked in: $(du -h /mnt/r/usr/lib/vibeserver/mapgl-detail/vibemap-detail.pmtiles | cut -f1) (verified: $MAPGL_BYTES bytes, PMTiles)"
   nice -n 15 chroot /mnt/r /usr/bin/env POCKET_COUNTRY="$COUNTRY" POCKET_HOSTNAME=vibepocket \
       bash /tmp/pocket-files/customise.sh
   rm -f /mnt/r/etc/resolv.conf
@@ -133,7 +146,29 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   du -sh /mnt/r/usr/lib/vibeserver 2>/dev/null | sed "s/^/==> vibeserver on the card: /"
   df -h /mnt/r | tail -1 | awk "{print \"==> root partition: \" \$3 \" used of \" \$2}"
   cleanup; trap - EXIT
+  # ── 5. Shrink root to what it holds + 1 GB (room for an update in the read-only root), then add the
+  #       small settings partition (LABEL=vibedata) after it, and cut the file there — the .img stays
+  #       small; vibeserver-pocket-data grows the settings partition on the card at first boot.
+  ROOTDEV=$(losetup -f --show -o "$S2" --sizelimit "$Z2" "$IMG")
   e2fsck -fy "$ROOTDEV" >/dev/null 2>&1 || true
+  resize2fs -M "$ROOTDEV" >/dev/null 2>&1
+  BS=$(dumpe2fs -h "$ROOTDEV" 2>/dev/null | awk -F: "/^Block size/{gsub(/ /,\"\",\$2);print \$2}")
+  BC=$(dumpe2fs -h "$ROOTDEV" 2>/dev/null | awk -F: "/^Block count/{gsub(/ /,\"\",\$2);print \$2}")
+  ALIGN=$((4*1024*1024))
+  NEWROOT=$(( ( (BC*BS + 1024*1024*1024) + ALIGN - 1) / ALIGN * ALIGN ))
+  resize2fs "$ROOTDEV" "$((NEWROOT/1024))K" >/dev/null
+  e2fsck -fy "$ROOTDEV" >/dev/null 2>&1 || true
+  losetup -d "$ROOTDEV"
+  S2S=$((S2/512)); N2S=$((NEWROOT/512))
+  echo "$S2S,$N2S" | sfdisk -q --no-reread -N 2 "$IMG"
+  S3S=$(( (S2S + N2S + 8191) / 8192 * 8192 )); Z3S=$((128*1024*1024/512))
+  echo "$S3S,$Z3S,83" | sfdisk -q --no-reread --append "$IMG"
+  truncate -s $(( (S3S + Z3S) * 512 )) "$IMG"
+  DATADEV=$(losetup -f --show -o $((S3S*512)) --sizelimit $((Z3S*512)) "$IMG")
+  mkfs.ext4 -q -F -L vibedata "$DATADEV"
+  losetup -d "$DATADEV"
+  sfdisk -l "$IMG" | sed "s/^/==> /" | tail -4
+  echo "==> image: $(( (S3S + Z3S) * 512 / 1024 / 1024 )) MB raw (root $((NEWROOT/1024/1024)) MB, settings 128 MB)"
   # ── 5. Compress ──
   nice -n 15 xz -T2 -6 -f "$IMG"
   sha256sum "$(basename "$IMG").xz" > "$(basename "$IMG").xz.sha256"

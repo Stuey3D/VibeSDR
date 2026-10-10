@@ -141,6 +141,55 @@ EOF
   break
 done
 
+# ── 7b. POWER-CUT HARDENING (Stuart, 2026-10-10: "the box WILL have its power pulled at any moment") ──
+# ★★★ READ-ONLY ROOT. overlayroot (raspi-config's own "Overlay File System") is installed and its
+#     initramfs built HERE, for every kernel on the image; the switch itself (overlayroot=tmpfs on the
+#     command line) is thrown on the first boot by vibeserver-pocket-seal, once Pi OS has written its
+#     one-time identity. Settings live on the small data=journal partition (vibeserver-pocket-data).
+apt-get install -y --no-install-recommends overlayroot initramfs-tools
+for BOOTCFG in /boot/firmware/config.txt /boot/config.txt; do
+  [ -f "$BOOTCFG" ] || continue
+  grep -q '^auto_initramfs=1' "$BOOTCFG" || echo "auto_initramfs=1" >> "$BOOTCFG"
+  break
+done
+update-initramfs -u -k all || update-initramfs -c -k all
+ls -la /boot/firmware/initramfs* 2>/dev/null | sed 's/^/pocket-image: initramfs: /' || say "!! no initramfs in /boot/firmware"
+for CMDF in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
+  [ -f "$CMDF" ] || continue
+  # ★★ NO ROOT RESIZE. Pi OS grows partition 2 to the end of the card on first boot; here partition 3
+  #    (the settings) follows it, and the root is read-only anyway. vibeserver-pocket-data grows the
+  #    settings partition instead — see the doc for why most of the card is left unallocated.
+  sed -i 's/ resize\b//; s/^resize //' "$CMDF"
+  say "cmdline: $(cat "$CMDF")"
+  break
+done
+# ★ The boot partition read-only too (raspi-config's "boot partition read-only"): the seal and an update
+#   remount it for the moment they need it.
+sed -i -E 's#^([^#].*[[:space:]]/boot/firmware[[:space:]]+vfat[[:space:]]+)defaults([[:space:]])#\1defaults,ro\2#' /etc/fstab
+grep -E '/boot/firmware' /etc/fstab | sed 's/^/pocket-image: fstab: /'
+# ★★ VOLATILE BY DEFAULT. The journal lives in RAM (16 MB cap) — a pocket box's logs are for the session
+#    in front of you, and a journal on the SD card is a write every few seconds.
+install -d /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/60-vibeserver-pocket.conf <<'EOF'
+# VibeServer pocket image: logs in RAM only — no SD writes, gone at power-off.
+[Journal]
+Storage=volatile
+RuntimeMaxUse=16M
+EOF
+# ★ Swap: compressed RAM (zram) only, never a file on the card. rpi-swap is Trixie's swap manager.
+install -d /etc/rpi/swap.conf.d
+cat > /etc/rpi/swap.conf.d/60-vibeserver-pocket.conf <<'EOF'
+# VibeServer pocket image: no swap file on the SD card — zram only.
+[Main]
+Mechanism=zram
+EOF
+systemctl disable dphys-swapfile.service 2>/dev/null || true
+# ★ fake-hwclock (if present) would save the time to the root every hour; the settings partition keeps
+#   systemd-timesyncd's clock file instead (written on each sync, not on a timer).
+systemctl disable fake-hwclock.service 2>/dev/null || true
+install -d -m 0755 /data /var/lib/vibeserver-pocket
+systemctl enable vibeserver-pocket-data.service vibeserver-pocket-seal.service
+
 # ── 8. A login nobody needs, so first boot never stops to ask for one ───────────────────────────
 # ★ Raspberry Pi OS asks for a user on the first boot unless Raspberry Pi Imager's settings set
 #   one. A pocket box has no screen to answer on. So: one account, password LOCKED (no login at

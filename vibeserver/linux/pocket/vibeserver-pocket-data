@@ -91,5 +91,31 @@ bindone vibeserver/lib /var/lib/vibeserver                     vibeserver:vibese
 bindone nm             /etc/NetworkManager/system-connections  root:root             0700
 bindone pocket         /var/lib/vibeserver-pocket              root:root             0755
 bindone timesync       /var/lib/systemd/timesync               systemd-timesync:systemd-timesync 0755
+
+# ── 4. Caches in RAM, not on the card ───────────────────────────────────────────────────────────
+# ★★ The DAB slideshow, MOT carousel and station-logo caches are written as images arrive — every new
+#    slide of the playing service. They are refetched from the air or RadioDNS at will, so on a pocket
+#    box they live in RAM (/run, tmpfs) for the session. (The 2026-10-10 write audit.)
+for c in dab-slides dab-carousel dab-logos; do
+  mkdir -p "/run/vibeserver-cache/$c" "/var/lib/vibeserver/$c"
+  chown vibeserver:vibeserver "/run/vibeserver-cache/$c" 2>/dev/null; chmod 0750 "/run/vibeserver-cache/$c"
+  mountpoint -q "/var/lib/vibeserver/$c" || mount --bind "/run/vibeserver-cache/$c" "/var/lib/vibeserver/$c"
+done
+
+# ── 5. The High Detail Maps, baked into the read-only root ──────────────────────────────────────
+# ★★ The image ships them at /usr/lib/vibeserver/mapgl-detail (fetched and verified at build time,
+#    exactly as the server's own installer checks them). The server looks for an INSTALLED copy at
+#    /var/lib/vibeserver/mapgl/vibemap-detail.pmtiles (vibe_mapgl.h: a regular file, size > 0, via
+#    stat — which follows this link), so it reports them installed, offers no download and never
+#    fetches 177 MB over a phone's data. A downloaded newer set (the admin page's install) replaces
+#    the link with a real file on this partition, and this leaves a real file alone.
+BAKED=/usr/lib/vibeserver/mapgl-detail/vibemap-detail.pmtiles
+if [ -s "$BAKED" ]; then
+  install -d -o vibeserver -g vibeserver -m 0750 /var/lib/vibeserver/mapgl
+  L=/var/lib/vibeserver/mapgl/vibemap-detail.pmtiles
+  if [ ! -e "$L" ] || { [ -L "$L" ] && [ "$(readlink "$L")" != "$BAKED" ]; }; then
+    ln -sfn "$BAKED" "$L"
+  fi
+fi
 say "settings partition ready ($(df -h "$DATA" | awk 'NR==2{print $3" used of "$2}'))"
 exit 0

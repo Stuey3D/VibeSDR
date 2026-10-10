@@ -10,6 +10,7 @@
 #include <cctype>
 #include <ctime>
 #include <fstream>
+#include <iterator>   // ★ istreambuf_iterator — saveState compares before it writes
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -116,7 +117,10 @@ std::string run(const std::string& cmd) {
  *  `--data-binary @file` (exact bytes; `-d @` would strip newlines), and unlinked straight after.
  *  ★ Only the temp file's PATH is on the command line, and it is still shellQuote()d. */
 static std::string writeBodyFile(const std::string& json) {
-    std::string tmpl = g_stateDir + "/.dirpost.XXXXXX";
+    // ★ In RAM where there is one: /run/vibeserver (tmpfs, the service's own RuntimeDirectory) — a POST
+    //   body that lives for one curl call has no business on an SD card (2026-10-10 write audit).
+    std::string tmpl = (::access("/run/vibeserver", W_OK) == 0 ? std::string("/run/vibeserver")
+                                                               : g_stateDir) + "/.dirpost.XXXXXX";
     std::vector<char> buf(tmpl.begin(), tmpl.end()); buf.push_back('\0');
     int fd = ::mkstemp(buf.data());
     if (fd < 0) {
@@ -240,12 +244,22 @@ void saveState(const std::string& id, const std::string& key, const std::string&
                long long until) {
     const std::string path = statePath();
     const std::string tmp  = path + ".tmp";
+    const std::string body = "{\"id\":\"" + id + "\",\"key\":\"" + key + "\",\"slug\":\"" + slug
+                           + "\",\"until\":" + std::to_string(until) + "}\n";
+    /* ★★ ONLY ON A REAL CHANGE (2026-10-10, the pocket box's write audit). Every successful ping
+     *  rewrote this file with the same bytes — a card write every quarter of an hour for nothing. The
+     *  identity (id, key, slug) changes on registration and delist; `until` only on a share change. */
+    {
+        std::ifstream cur(path, std::ios::binary);
+        if (cur) {
+            std::string old((std::istreambuf_iterator<char>(cur)), std::istreambuf_iterator<char>());
+            if (old == body) return;
+        }
+    }
     ::unlink(tmp.c_str());
     const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) return;
     ::fchmod(fd, 0600);
-    const std::string body = "{\"id\":\"" + id + "\",\"key\":\"" + key + "\",\"slug\":\"" + slug
-                           + "\",\"until\":" + std::to_string(until) + "}\n";
     size_t off = 0;
     bool ok = true;
     while (off < body.size()) {
@@ -253,8 +267,13 @@ void saveState(const std::string& id, const std::string& key, const std::string&
         if (w <= 0) { ok = false; break; }
         off += (size_t)w;
     }
+    // ★★★ DURABLE, NOT JUST ATOMIC: "the key is unrecoverable if lost", so the bytes are synced before
+    //     the rename and the directory after it — a power cut leaves the old key or the new one.
+    if (ok && ::fsync(fd) != 0) ok = false;
     if (::close(fd) != 0) ok = false;
-    if (!ok || ::rename(tmp.c_str(), path.c_str()) != 0) ::unlink(tmp.c_str());
+    if (!ok || ::rename(tmp.c_str(), path.c_str()) != 0) { ::unlink(tmp.c_str()); return; }
+    const int dfd = ::open(g_stateDir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dfd >= 0) { ::fsync(dfd); ::close(dfd); }
 }
 
 std::string loadState() {
@@ -704,8 +723,8 @@ bool publishOnce(const Settings& want, const std::string& url) {
         }
         // ★ Same as stop(): the row is gone, the address the owner gave out is not.
         const std::string keep = jsonStr(state, "slug");
-        clearState();
-        if (!keep.empty()) saveState("", "", keep, 0);
+        // ★ One atomic replace, not remove-then-write: a cut between the two lost the friendly name.
+        if (!keep.empty()) saveState("", "", keep, 0); else clearState();
     }
 
     /* ★ Offer the remembered address back (see stop()). A name the directory now refuses as
@@ -1141,8 +1160,8 @@ void stop() {
      *     registration; the directory grants it if nobody has taken it meanwhile. */
     std::string slug;
     { std::lock_guard<std::mutex> lk(g_mtx); slug = jsonStr(loadState(), "slug"); }
-    clearState();
-    if (!slug.empty()) saveState("", "", slug, 0);
+    // ★ One atomic replace, not remove-then-write: a cut between the two lost the friendly name.
+    if (!slug.empty()) saveState("", "", slug, 0); else clearState();
     stopTunnel();
     std::lock_guard<std::mutex> lk(g_mtx);
     g_listed = false; g_address.clear(); g_tunnelUrl.clear(); g_error.clear();

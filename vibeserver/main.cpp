@@ -994,6 +994,11 @@ static void pendingSerialClear() { ::unlink(pendingSerialPath().c_str()); }
 // ★ Cleared by the radio the moment it opens its device, and by the front door when the owner
 //   removes, pauses or replaces it — never on a timer.
 static std::string radioStatusPath(const std::string& serial) {
+    // ★★ POCKET: IN RAM. A missing radio's process rewrites this on every 5 s restart, and it describes
+    //    only THIS boot — a card write every five seconds for a fact a reboot makes stale anyway.
+    //    /run/vibeserver is shared by the door and every radio (RuntimeDirectoryPreserve).
+    if (vibepocket::enabled() && ::access("/run/vibeserver", W_OK) == 0)
+        return "/run/vibeserver/radio-status-" + serial + ".json";
     return vsDataDir() + "/radio-status-" + serial + ".json";
 }
 
@@ -3703,7 +3708,13 @@ int main(int argc, char** argv) {
     // status view will show (BRIEF §3), so the GUI is a renderer of this, not its own accounting.
     // ★ Set AFTER start(), because loading needs the window (centre and span) to know whether the
     //   stored history belongs to this profile at all.
-    LocalSdrShim::instance().setSpectrogramPath(vsDataDir() + "/spectrogram.bin");
+    // ★★ POCKET: THE SPECTROGRAM LIVES IN RAM. It is ~3 MB rewritten every quarter of an hour — the
+    //    biggest SD write the server makes — for a 24 h picture that a box powered on for an afternoon
+    //    barely fills. Lost at power-off, which is what a pocket box's history is anyway.
+    LocalSdrShim::instance().setSpectrogramPath(
+        (vibepocket::enabled() && ::access("/run/vibeserver", W_OK) == 0 ? std::string("/run/vibeserver")
+                                                                          : vsDataDir())
+        + "/spectrogram.bin");
     // ★ Beside the spectrogram, and for the same reason: this is state the SERVER writes and must
     //   keep across a restart. A ban that evaporates on reboot is not a ban — and this Pi reboots.
     LocalSdrShim::instance().setBanListPath(vsDataDir() + "/bans.jsonl");
