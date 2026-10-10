@@ -710,6 +710,10 @@ struct ServerConfig {
      *  when on, the tunnel starts only once the box has real internet (vibedir::setInternet). Read
      *  only on the pocket image; every other server always resumes, exactly as before. */
     bool        dirResume = false;
+    /** ★★ "Update this server's location as I move about" (Stuart, 2026-10-11). Off by default. On: the
+     *  front door looks up the NEAREST LARGE POPULATION CENTRE (or a general region) as the machine moves
+     *  and every listener, map and listing sees that instead of the home location — see moveloc.h. */
+    bool        locFollow = false;
     /** ★★ An address the owner already has — DDNS, a port forward, a reverse proxy. Empty means
      *  "make one for me", which is the Cloudflare Quick Tunnel path and needs cloudflared on the
      *  machine. Offering both matters: a tunnel is the only option that works behind CGNAT, and a

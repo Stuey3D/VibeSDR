@@ -73,7 +73,8 @@
 #include "geoip.h"
 #include "asndb.h"
 #include "proc.h"         // vibeproc::run — the High Detail Maps download (curl, no shell)
-#include "pocket.h"       // ★ the pocket image's hotspot + captive portal — inert without its marker
+#include "pocket.h"        // ★ the pocket image's hotspot + captive portal — inert without its marker
+#include "moveloc.h"       // ★ the nearest town as the server moves (owner's tick) — inert when off
 #include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
 #include "mapgl_curl.h"   // the High Detail Maps downloader (shared with Mac Simple mode)
 
@@ -897,6 +898,7 @@ static std::string vsBenchLoad() {
             /** ★ The port the directory should publish — set once it is genuinely known. */
             int g_dirPort = 0;
             std::function<void(const vsconfig::ServerConfig&, bool)> g_applyDirectory;
+            std::atomic<bool> g_locFollow{false};   // ★ see vsconfig::ServerConfig::locFollow
             bool        g_mdnsPendingPin = false;
             /** ★ The front door's real port, for the pocket image's captive redirect and :80 rule. */
             std::atomic<int> g_pocketPort{0}; }
@@ -1293,6 +1295,77 @@ static void applyAntennaSwitch(const std::string& sw) {
     if (sw == last) return;
     last = sw;
     vibe::LocalSdrShim::instance().setAntennaSwitch(sw);
+}
+
+// ── The receiver's published location ─────────────────────────────────────────────────────
+static Opts g_locOpts;
+/** The home location from the options — or, with `mv`, the nearest town / region while moving. Re-run
+ *  whenever moveloc.json changes (every process polls it), so listeners, maps and the listing follow. */
+static void publishLocation(const Opts& o, const vsmoveloc::Place* mv) {
+    {
+        // ★★★ DERIVE lat/lon FROM THE LOCATOR. The first version passed the grid straight through
+        // and computed no coordinates, so a receiver with only a locator set showed no place under
+        // its name and did not appear on any map (Stuart, 2026-08-01). The Mac has always done this
+        // (VibeServerApp.swift gridCentre) and only emits "grid" INSIDE the lat/lon block — so
+        // without coordinates the grid never reaches a client either.
+        // ★★ THE CENTRE OF THE SQUARE, NOT THE CORNER. A corner biases every distance by half a
+        // square in a fixed direction, which is a systematic error rather than the honest rounding
+        // the operator asked for by giving a locator in the first place. Same comment as the Mac's,
+        // and the same arithmetic, so the two agree to the metre.
+        auto gridCentre = [](const std::string& g, double& lat, double& lon) -> bool {
+            std::string u; for (char c : g) u += (char)toupper((unsigned char)c);
+            if (u.size() != 4 && u.size() != 6) return false;
+            if (!isalpha((unsigned char)u[0]) || !isalpha((unsigned char)u[1])
+                || !isdigit((unsigned char)u[2]) || !isdigit((unsigned char)u[3])) return false;
+            int f1 = u[0] - 'A', f2 = u[1] - 'A';
+            if (f1 < 0 || f1 >= 18 || f2 < 0 || f2 >= 18) return false;
+            int s1 = u[2] - '0',  s2 = u[3] - '0';
+            lon = f1 * 20.0 + s1 * 2.0 - 180.0;
+            lat = f2 * 10.0 + s2 * 1.0 - 90.0;
+            if (u.size() == 6) {
+                if (!isalpha((unsigned char)u[4]) || !isalpha((unsigned char)u[5])) return false;
+                int t1 = u[4] - 'A', t2 = u[5] - 'A';
+                if (t1 < 0 || t1 >= 24 || t2 < 0 || t2 >= 24) return false;
+                lon += t1 * (2.0 / 24.0) + (1.0 / 24.0);      // + half a sub-square
+                lat += t2 * (1.0 / 24.0) + (0.5 / 24.0);
+            } else { lon += 1.0; lat += 0.5; }                // + half a square
+            return true;
+        };
+        double la = 0, lo = 0; bool haveLL = false;
+        std::string place = o.rxPlace, grid = o.rxGrid, iso = o.rxIso;
+        if (mv && mv->valid) {
+            // ★★★ MOVING: the nearest large town (or a region) and ITS centre — never the home location's
+            //     precision, never the machine's own position. The home location returns with the tick off.
+            la = mv->lat; lo = mv->lon; haveLL = true;
+            place = mv->region ? mv->label + " (region)" : mv->label;
+            grid = mv->grid;
+            if (!mv->iso.empty()) iso = mv->iso;
+        } else if (!o.rxLat.empty() && !o.rxLon.empty()) {
+            la = atof(o.rxLat.c_str()); lo = atof(o.rxLon.c_str()); haveLL = true;
+        } else if (!o.rxGrid.empty()) {
+            haveLL = gridCentre(o.rxGrid, la, lo);            // exact coordinates win; this is the fallback
+            if (!haveLL) std::fprintf(stderr, "VibeServer: --locator \"%s\" is not a Maidenhead square "
+                                              "(expected 4 or 6 characters, e.g. IO81jm)\n", o.rxGrid.c_str());
+        }
+        std::string j; auto add = [&](const std::string& k, const std::string& v, bool quote) {
+            if (v.empty()) return;
+            if (!j.empty()) j += ",";
+            j += "\"" + k + "\":" + (quote ? "\"" + v + "\"" : v);
+        };
+        add("name",  o.rxName,  true);
+        add("iso",   iso,       true);
+        add("label", place,     true);
+        if (haveLL && la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
+            char b[64];
+            std::snprintf(b, sizeof b, "%.6f", la); add("lat", b, false);
+            std::snprintf(b, sizeof b, "%.6f", lo); add("lon", b, false);
+            // ★ Echo the operator's OWN locator when they gave one — recomputing it from the
+            // square's centre returns the same square, but showing back exactly what was typed is
+            // less confusing than showing a value they did not enter. (The Mac's words.)
+            add("grid", grid, true);
+        }
+        if (!j.empty()) LocalSdrShim::setLocationJson("{" + j + "}");
+    }
 }
 
 int main(int argc, char** argv) {
@@ -1804,6 +1877,7 @@ int main(int argc, char** argv) {
     //  ★ The share length is sent as a CHANGE only when the owner has just made one; a renewal
     //    sends -1 so it can never nudge a temporary share into the future one ping at a time.
     g_applyDirectory = [](const vsconfig::ServerConfig& srv, bool ownerChanged) {
+        g_locFollow.store(srv.locFollow);     // ★ the owner's "update as I move about" tick, live on save
         if (!g_amFrontDoor.load() && srv.radios.size() > 1) return;
         // ★★ POCKET: ONE TUNNEL, THE DOOR'S. A one-radio machine lists from the radio process as
         //    well, which is a second cloudflared (~30 MB — Stuart's Pi 2 runs two). On a 512 MB box
@@ -1813,6 +1887,8 @@ int main(int argc, char** argv) {
         d.listed  = srv.configured && srv.dirList;
         d.name    = srv.dirName.empty() ? srv.name : srv.dirName;
         d.locator = srv.locator;
+        // ★★ MOVING: the listing's pin is the nearest town's square (or a region's), never home's or ours.
+        if (srv.locFollow) { bool ch; const auto mv = vsmoveloc::current(ch); if (mv.valid) d.locator = mv.grid; }
         // ★ The port the DOOR bound, not the one the radio-selection left in `o.port`.
         d.port    = g_dirPort;
         d.publicUrl = srv.dirPublicUrl;
@@ -1820,6 +1896,7 @@ int main(int argc, char** argv) {
         vibedir::apply(d);
     };
     vibedir::setStateDir(vsDataDir());
+    vsmoveloc::setDir(vsDataDir());
     // ★★★ NOT CALLED HERE. `o.port` is not the door's port at this point in main() — the door
     //     binds later and startFrontDoor() RETURNS what it got — and advertising the wrong port
     //     is a mistake this file has already made once, loudly, with mDNS: it advertised a RADIO's
@@ -3083,64 +3160,9 @@ int main(int argc, char** argv) {
     LocalSdrShim::setBatteryPolicy(g_serverConfig.batteryPauseAt, g_serverConfig.batteryResumeAt);
     LocalSdrShim::setVibeServerUncompressedAudio(o.uncompressed);
     // ★ Identity, published to every listener — and what makes a directory entry worth anything.
-    // Built here in exactly the shape the Mac app produces (VibeServerApp.swift locationJson), so
-    // the same receiver looks the same however it is hosted.
-    {
-        // ★★★ DERIVE lat/lon FROM THE LOCATOR. The first version passed the grid straight through
-        // and computed no coordinates, so a receiver with only a locator set showed no place under
-        // its name and did not appear on any map (Stuart, 2026-08-01). The Mac has always done this
-        // (VibeServerApp.swift gridCentre) and only emits "grid" INSIDE the lat/lon block — so
-        // without coordinates the grid never reaches a client either.
-        // ★★ THE CENTRE OF THE SQUARE, NOT THE CORNER. A corner biases every distance by half a
-        // square in a fixed direction, which is a systematic error rather than the honest rounding
-        // the operator asked for by giving a locator in the first place. Same comment as the Mac's,
-        // and the same arithmetic, so the two agree to the metre.
-        auto gridCentre = [](const std::string& g, double& lat, double& lon) -> bool {
-            std::string u; for (char c : g) u += (char)toupper((unsigned char)c);
-            if (u.size() != 4 && u.size() != 6) return false;
-            if (!isalpha((unsigned char)u[0]) || !isalpha((unsigned char)u[1])
-                || !isdigit((unsigned char)u[2]) || !isdigit((unsigned char)u[3])) return false;
-            int f1 = u[0] - 'A', f2 = u[1] - 'A';
-            if (f1 < 0 || f1 >= 18 || f2 < 0 || f2 >= 18) return false;
-            int s1 = u[2] - '0',  s2 = u[3] - '0';
-            lon = f1 * 20.0 + s1 * 2.0 - 180.0;
-            lat = f2 * 10.0 + s2 * 1.0 - 90.0;
-            if (u.size() == 6) {
-                if (!isalpha((unsigned char)u[4]) || !isalpha((unsigned char)u[5])) return false;
-                int t1 = u[4] - 'A', t2 = u[5] - 'A';
-                if (t1 < 0 || t1 >= 24 || t2 < 0 || t2 >= 24) return false;
-                lon += t1 * (2.0 / 24.0) + (1.0 / 24.0);      // + half a sub-square
-                lat += t2 * (1.0 / 24.0) + (0.5 / 24.0);
-            } else { lon += 1.0; lat += 0.5; }                // + half a square
-            return true;
-        };
-        double la = 0, lo = 0; bool haveLL = false;
-        if (!o.rxLat.empty() && !o.rxLon.empty()) {
-            la = atof(o.rxLat.c_str()); lo = atof(o.rxLon.c_str()); haveLL = true;
-        } else if (!o.rxGrid.empty()) {
-            haveLL = gridCentre(o.rxGrid, la, lo);            // exact coordinates win; this is the fallback
-            if (!haveLL) std::fprintf(stderr, "VibeServer: --locator \"%s\" is not a Maidenhead square "
-                                              "(expected 4 or 6 characters, e.g. IO81jm)\n", o.rxGrid.c_str());
-        }
-        std::string j; auto add = [&](const std::string& k, const std::string& v, bool quote) {
-            if (v.empty()) return;
-            if (!j.empty()) j += ",";
-            j += "\"" + k + "\":" + (quote ? "\"" + v + "\"" : v);
-        };
-        add("name",  o.rxName,  true);
-        add("iso",   o.rxIso,   true);
-        add("label", o.rxPlace, true);
-        if (haveLL && la >= -90 && la <= 90 && lo >= -180 && lo <= 180) {
-            char b[64];
-            std::snprintf(b, sizeof b, "%.6f", la); add("lat", b, false);
-            std::snprintf(b, sizeof b, "%.6f", lo); add("lon", b, false);
-            // ★ Echo the operator's OWN locator when they gave one — recomputing it from the
-            // square's centre returns the same square, but showing back exactly what was typed is
-            // less confusing than showing a value they did not enter. (The Mac's words.)
-            add("grid", o.rxGrid, true);
-        }
-        if (!j.empty()) LocalSdrShim::setLocationJson("{" + j + "}");
-    }
+    //   See publishLocation(): the home location, or the nearest town while moving (moveloc.h).
+    g_locOpts = o;
+    { bool ch; const auto mv = vsmoveloc::current(ch); publishLocation(o, mv.valid ? &mv : nullptr); }
     // ★★ SAY SO WHEN IT IS WIDE OPEN. Someone putting a receiver on the internet should be told at
     // the moment they start it, not discover it from a stranger changing their bias-T.
     if (o.adminPass.empty())
@@ -3277,6 +3299,9 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "VibeServer: pocket — %s\n", perr.c_str());
         }
         if (g_applyDirectory) g_applyDirectory(g_serverConfig, false);
+        // ★★ The moving-location worker: the DOOR alone looks the town up; every process republishes it.
+        g_locFollow.store(g_serverConfig.locFollow);
+        vsmoveloc::start([] { return g_locFollow.load(); });
         // ★★★ THE FRONT DOOR IS NOBODY'S RADIO. The config loader falls back to "the first radio
         //     that is ready" when none was named — which is right for a single-radio server and
         //     exactly wrong here: this process then wore the RSP's identity, so the router saw a
@@ -4089,6 +4114,24 @@ int main(int argc, char** argv) {
         // ★ The heartbeat that makes a crashed radio give its slot back — see refreshOccupancy.
         LocalSdrShim::instance().refreshOccupancy();
         // ★ The pocket hotspot's state is read by its own thread, started with the front door (see there).
+        // ★★ THE MOVING LOCATION, every 10 s, in every process (the door writes it; radios serve it too).
+        {
+            static int locTick = 0;
+            static std::string lastKey = "?";
+            if (++locTick >= 10) {
+                locTick = 0;
+                bool ch; const auto mv = vsmoveloc::current(ch);
+                const std::string key = mv.valid ? (mv.region ? "r:" : "t:") + mv.label : std::string();
+                if (key != lastKey) {
+                    const bool first = lastKey == "?";
+                    lastKey = key;
+                    if (!first) {
+                        publishLocation(g_locOpts, mv.valid ? &mv : nullptr);
+                        if (g_amFrontDoor.load() && g_applyDirectory) g_applyDirectory(g_serverConfig, false);
+                    }
+                }
+            }
+        }
 
         // ── ★★★ SCHEDULED UPDATES ────────────────────────────────────────────────────────
         // ★★ Two independent schedules. They ask the SAME helper the admin page's buttons ask,

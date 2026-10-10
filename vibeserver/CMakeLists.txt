@@ -155,6 +155,8 @@ add_library(vibeserver_core STATIC
     # ★ Listing this machine in the public directory at vibeserver.vibesdr.net. In the CORE, not
     #   the CLI, for the same reason radios.cpp is: the .app needs it too.
     "${CMAKE_CURRENT_SOURCE_DIR}/directory.cpp"
+    # ★ The nearest town as the server moves (the owner's tick) — BeaconDB + Nominatim, town only.
+    "${CMAKE_CURRENT_SOURCE_DIR}/moveloc.cpp"
     "${CPP_DIR}/local_sdr_shim.cpp"
     "${CPP_DIR}/net_shim.cpp"
     # ★ Hands a live connection to another process, so several radios can share one
@@ -533,6 +535,11 @@ target_link_libraries(test-radio-api PRIVATE vibeserver_core)
 # ★ Header-only and dependency-free on purpose: the rule it guards (never emit a byte a browser
 #   will hang up over) belongs to the wire, not to any one radio, so its test must be runnable
 #   without a device, a socket or the rest of the core.
+# ★ The moving location: the Wi-Fi list it sends, town-or-region from OpenStreetMap, the grid. No network.
+add_executable(test-moveloc "${CMAKE_CURRENT_SOURCE_DIR}/test-moveloc.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/moveloc.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/proc.cpp")
+vibe_sanitize(test-moveloc)
+
 add_executable(test-utf8 "${CMAKE_CURRENT_SOURCE_DIR}/test-utf8.cpp")
 vibe_sanitize(test-utf8)
 target_include_directories(test-utf8 PRIVATE "${CPP_DIR}")

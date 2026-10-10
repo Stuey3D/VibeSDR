@@ -433,7 +433,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
 
       <div class="card">
       <h2>Where this receiver is</h2>
-      <p class="why">Published to listeners. It sets the flag and the ITU band plan, centres the
+      <p class="why">This is its <b>home location</b>. Published to listeners. It sets the flag and the ITU band plan, centres the
          map, and is what lets RDS name a station's country — with no location set, every station
          shows a blank country.</p>
       <div class="row">
@@ -471,6 +471,21 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       </div>
       <div class="hint">Exact coordinates win over the locator. Leave them blank to publish only
         the square.</div>
+      <!-- ★★★ ON THE MOVE (Stuart, 2026-10-11, for RC39 — wording his: it MUST say it is only ever the nearest
+           large population centre, a general region where there is none, and WHY — privacy if the server is
+           public while moving). The box looks the town up itself: see vibeserver/moveloc.h. -->
+      <label class="row" style="gap:8px;margin-top:14px">
+        <input type="checkbox" id="locFollow" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Update this server&rsquo;s location as I move about</span></label>
+      <div class="note">It will only ever be tagged with the <b>nearest large population centre</b> &mdash;
+         a large village, town or city &mdash; to maintain your privacy, never where you actually are.
+         Where there isn&rsquo;t one nearby (the middle of the outback, say) it shows a <b>general
+         region</b> instead. This protects your privacy in case you make the server publicly accessible
+         while you are on the move. With this off, the server always shows its home location above.
+         <br>How: every 15 minutes and whenever it joins a network, the server looks up the Wi-Fi networks
+         it can see (BeaconDB) and names the place from OpenStreetMap, so it needs Wi-Fi and an internet
+         connection; without them it keeps the last place it found, or shows the home location. Only the
+         place is kept.</div>
     </div>
 
       <div class="card">
@@ -4489,6 +4504,7 @@ function fill() {
   // ★ The MACHINE — the same on every tab.
   $("name").value = cfg.name || "";
   $("place").value = cfg.place || "";
+  $("locFollow").checked = !!cfg.locFollow;
   $("country").value = cfg.country || "";
   $("locator").value = cfg.locator || "";
   $("lat").value = cfg.lat || "";
@@ -5072,6 +5088,7 @@ function stashServer() {
   if (!cfg) return;
   cfg.name = $("name").value.trim();
   cfg.place = $("place").value.trim();
+  cfg.locFollow = $("locFollow").checked;
   cfg.country = $("country").value.trim().toUpperCase();
   cfg.locator = $("locator").value.trim();
   cfg.lat = $("lat").value.trim();
@@ -5103,6 +5120,7 @@ function collect() {
   return {
     name: $("name").value.trim(),
     place: $("place").value.trim(),
+    locFollow: $("locFollow").checked,
     country: $("country").value.trim().toUpperCase(),
     locator: $("locator").value.trim(),
     lat: $("lat").value.trim(),
