@@ -45,7 +45,7 @@ import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src
  *  never unlabelled. */
 const RTL_SAFE_RATE = 2_400_000;
 import {
-  BAND_PLAN, getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, type Band,
+  BAND_PLAN, BAND_PLAN_DRAW_ORDER, getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, type Band,
 } from '../../../src/constants/bandPlan';
 import { deriveItuRegion } from '../../../src/services/stations';
 import { resolveStationIso, isoToFlag, ituToIso } from '../../../src/services/rdsCountry';
@@ -3227,7 +3227,7 @@ function drawBands() {
 
   const region = ituRegion();
 
-  for (const b of BAND_PLAN) {
+  for (const b of BAND_PLAN_DRAW_ORDER) {                        // ★ widest first — see BAND_PLAN_DRAW_ORDER
     if (b.hi < lo || b.lo > hi) continue;                       // not in view
     // Region-scoped: an 80m edge or an AM band-top from the wrong ITU region is
     // simply the wrong information.
@@ -10554,6 +10554,12 @@ function syncDecIdentity() {
   }
 }
 
+/** "+32°", "−32°", "0°" — a true minus sign, as the panel's other figures use. */
+function fmtSignedDeg(d: number): string {
+  const r = Math.round(d);
+  return `${r > 0 ? '+' : r < 0 ? '\u2212' : ''}${Math.abs(r)}°`;
+}
+
 function renderRds() {
   const dash = '—';
   syncDecIdentity();
@@ -10982,7 +10988,9 @@ function renderRds() {
                     : near <= 40 ? 'off nominal'
                     : coh > 0.7  ? 'FAULT'
                     : 'off nominal';
-      phEl.textContent = `${rdsPhase.toFixed(0)}° · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
+      // ★ Signed when the server sends it (2026-10-10): + = RDS leads 3 × pilot. The verdict stays on the distance.
+      const shown = rdsExt?.phaseSigned !== undefined ? fmtSignedDeg(rdsExt.phaseSigned) : `${rdsPhase.toFixed(0)}°`;
+      phEl.textContent = `${shown} · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
       phEl.style.color = near <= 12 ? '#7dff9a' : near <= 40 ? '#ffd479' : '#ff8a7d';
     }
   }

@@ -88,7 +88,10 @@ export const BAND_PLAN: Band[] = [
   { lo: 144000000, hi: 148000000,  name: '2m Ham Band',                type: 'ham',  bandLabel: '2m',  regions: [2, 3], mode: 'nfm', step: 12500 },
   { lo: 156000000, hi: 162050000,  name: 'Marine VHF',                 type: 'utility', mode: 'nfm', step: 25000 },
   { lo: 162400000, hi: 162550000,  name: 'NOAA Weather Radio',         type: 'utility', regions: [2], mode: 'nfm', step: 25000 },
-  { lo: 174000000, hi: 240000000,  name: 'DAB / DAB+ (Band III)',      type: 'broadcast', step: 1000 },
+  /* ★ 230 MHz, NOT 240 (2026-10-10). Band III DAB is blocks 5A–12D (12D ends 229.84); 230–240 is the UHF military
+   *  airband in the UK (29 of the UK's military air frequencies are there, none in 225–230). Ending the label at 240
+   *  put "DAB" over a military ATC channel. The DAB block list (dabBlocks) is separate and unchanged. */
+  { lo: 174000000, hi: 230000000,  name: 'DAB / DAB+ (Band III)',      type: 'broadcast', step: 1000 },
   { lo: 222000000, hi: 225000000,  name: '1.25m Ham Band',             type: 'ham',  bandLabel: '1.25m', regions: [2], mode: 'nfm', step: 12500 },
   { lo: 420000000, hi: 450000000,  name: '70cm Ham Band',              type: 'ham',  bandLabel: '70cm', regions: [2], mode: 'nfm', step: 25000 },
   { lo: 430000000, hi: 440000000,  name: '70cm Ham Band',              type: 'ham',  bandLabel: '70cm', regions: [1, 3], mode: 'nfm', step: 25000 },
@@ -229,10 +232,20 @@ export function bandTuneDefaults(
   const order: Record<BandType, number> = { ham: 0, broadcast: 1, utility: 2 };
   const bands = getBandsAtRegion(hz, region)
     .sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9));
-  const primary = bands[0];
+  /* ★★ THE FIRST BAND THAT SAYS SOMETHING (2026-10-10). Where bands overlap, the highest-priority one that DEFINES a
+   *  mode decides — a band that names a stretch of spectrum but sets no mode (DAB's Band III label) must not silence
+   *  a more specific one beneath it: 225–230 MHz is DAB AND the UHF military airband, and a jump to an ATC frequency
+   *  there is AM. With no band defining a mode, the first band still gives its step, exactly as before. */
+  const primary = bands.find((b) => b.mode !== undefined) ?? bands[0];
   if (!primary) return {};
   return { mode: primary.mode, step: primary.step };
 }
+
+/** ★ THE ORDER TO DRAW THE BAND PLAN IN: widest first, so a narrower (more specific) band is drawn ON TOP of a wider
+ *  one it sits inside (2026-10-10, Stuart's screenshot: "UHF Military Airband" painted over BBC National DAB at
+ *  225.648 MHz, because it came later in the list). QO-100 over 3cm, a satcom segment over the military airband.
+ *  Stable for equal widths. Used by every band-bar renderer (web main.ts, the app's WaterfallView). */
+export const BAND_PLAN_DRAW_ORDER: ReadonlyArray<Band> = [...BAND_PLAN].sort((a, b) => (b.hi - b.lo) - (a.hi - a.lo));
 
 /** ★★★ WHAT A JUMP TAKES FROM THE BAND IT LANDS IN — ONE RULE FOR THE APP AND THE WEB CLIENT (Stuart, 2026-10-03:
  *  "gone to FM from HF and wondered why the tuning wasnt doing much only to find it was still on 500Hz"). A JUMP is

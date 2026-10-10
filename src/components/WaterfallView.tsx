@@ -77,7 +77,7 @@ const JB_MAX_QUEUE_SLOTS = 5;
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { useScreenCovered } from '../hooks/useScreenCovered';
 import { watchProvider } from '../services/watchProvider';
-import { BAND_PLAN, BAND_HEX, type Band } from '../constants/bandPlan';
+import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -1651,7 +1651,7 @@ function WaterfallView({
     if (!(bwHz > 0)) return [];
     const visEnd = visStart + bwHz;
     const segs: Array<{ x0: number; x1: number; color: string; label: string; key: string }> = [];
-    for (const b of BAND_PLAN) {
+    for (const b of BAND_PLAN_DRAW_ORDER) {   // ★ widest first, so a specific band is drawn on top — see bandPlan.ts
       if (b.regions && !b.regions.includes(ituRegion)) continue;
       if (b.hi < visStart || b.lo > visEnd) continue;
       const x0 = Math.max(0, hzToX(b.lo));

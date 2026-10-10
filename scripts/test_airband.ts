@@ -178,6 +178,11 @@ eq('R2 airband default step', bandTuneDefaults(125_000_000, 2), { mode: 'am', st
 eq('mil UHF in a satcom segment lands AM', bandTuneDefaults(243_000_000, 1), { mode: 'am', step: 25000 });
 eq('mil UHF outside satcom lands AM', bandTuneDefaults(275_000_000, 2), { mode: 'am', step: 25000 });
 eq('1.25m ham still wins in R2', bandTuneDefaults(223_500_000, 2), { mode: 'nfm', step: 12500 });
+// ★ 2026-10-10: Band III DAB ends at 230; where a band without a mode overlaps one with, the one with decides.
+eq('225–230 is DAB AND military airband: a jump there is AM (DAB sets no mode)', bandTuneDefaults(228_000_000, 1), { mode: 'am', step: 25000 });
+eq('233.8 MHz (UK military, 230–240) is AM, not DAB', bandTuneDefaults(233_800_000, 1), { mode: 'am', step: 25000 });
+eq('a DAB block below 225 keeps DAB\'s step and no mode', bandTuneDefaults(222_064_000, 1), { mode: undefined, step: 1000 });
+eq('FM broadcast unchanged (no mode, 100 kHz)', bandTuneDefaults(96_600_000, 1), { mode: undefined, step: 100000 });
 eq('unknown region airband', bandTuneDefaults(125_000_000, 0).step, 25000);
 eq('VOR/ILS unchanged', bandTuneDefaults(113_000_000, 1), { mode: 'am', step: 25000 });
 
