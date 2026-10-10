@@ -6761,6 +6761,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         int rdsLang = 0, rdsPinDay = 0, rdsPinHour = -1, rdsPinMin = 0;
         float rdsPhase = -1.0f;                  // RDS-to-pilot phase, degrees (-1 = no lock)
         float rdsPhaseSigned = -999.0f;          // ...signed, (−90, +90] (−999 = none) — `phaseSigned` on the wire
+        float rdsLDev = -1.0f, rdsRDev = -1.0f;  // ★ LEFT / RIGHT peak deviation, kHz (−1 = none) — `lDev`/`rDev`
         float rdsPhaseCoh = 0.0f;                // ...and how much to believe it, 0..1
         // ★ How fast that phase is TURNING, deg/s. Coherence only catches FAST rotation; a slow
         // one keeps coherence high while the angle walks all the way round. See vibedsp.h.
@@ -11922,6 +11923,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         st.rdsOda.assign(x.oda, x.oda + x.nOda);
         st.rdsPhase = x.pilotPhaseDeg;
         st.rdsPhaseSigned = x.pilotPhaseSignedDeg;
+        st.rdsLDev = x.lDevKHz; st.rdsRDev = x.rDevKHz;
         st.rdsPhaseCoh = x.pilotPhaseCoherence;
         st.rdsPhaseDrift = x.pilotPhaseDriftDegPerSec;
         st.rdsPilotDev = x.pilotDevKHz;
@@ -23148,7 +23150,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                 : rx.pilotLocked();
         int pty, tp, ta, ms, di, ctMin, ctOff, gTot, afSeen;
         int ptyR, tpR, taR, msR, diR;
-        int lang, pinD, pinH, pinM; float phase, phaseSigned, phaseCoh, pilotDev, rdsDev_, rdsDevPk_, phaseDrift;
+        int lang, pinD, pinH, pinM; float phase, phaseSigned, lDev, rDev, phaseCoh, pilotDev, rdsDev_, rdsDevPk_, phaseDrift;
         /* ★ Initialised, unlike its neighbours on the line above: every one of those is written
          *  only inside the locked block below, so a path that skips it reads an indeterminate
          *  float. Pre-existing and untouched here, but not worth copying into a new field. */
@@ -23170,7 +23172,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           eyeW = R.rdsEyeW; eyeH = R.rdsEyeH; eyeDev = R.rdsEyeDev; for (int b = 0; b < 3; ++b) eyeAmp[b] = R.rdsEyeAmp[b]; mpxDev = R.rdsMpxDev; mpxAvg = R.rdsMpxDevAvg; mpxHold = R.rdsMpxDevHold; mpxNoise = R.rdsMpxDevNoise; mpxPow = R.rdsMpxPowDb; mpxPowS = R.rdsMpxPowSecs;
           rtpT = R.rdsRtpTitle; rtpA = R.rdsRtpArtist; lps = R.rdsLongPs; ptyn = R.rdsPtyn;
           lang = R.rdsLang; pinD = R.rdsPinDay; pinH = R.rdsPinHour; pinM = R.rdsPinMin;
-          eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseSigned = R.rdsPhaseSigned; phaseCoh = R.rdsPhaseCoh;
+          eon = R.rdsEon; oda = R.rdsOda; phase = R.rdsPhase; phaseSigned = R.rdsPhaseSigned; lDev = R.rdsLDev; rDev = R.rdsRDev; phaseCoh = R.rdsPhaseCoh;
           phaseDrift = R.rdsPhaseDrift;
           pilotDev = R.rdsPilotDev; rdsDev_ = R.rdsDev; rdsDevPk_ = R.rdsDevPeak;
           rdsDevRaw_ = R.rdsDevRaw; berNow = R.rdsBer;
@@ -23208,6 +23210,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       + ",\"phase\":" + std::to_string(phase)
                       // ★ The same angle, signed (−90, +90] — only while there is one (2026-10-10, see rds.cpp).
                       + (phase >= 0.0f && phaseSigned > -900.0f ? ",\"phaseSigned\":" + std::to_string(phaseSigned) : std::string())
+                      // ★ L/R peak deviation, kHz — only while measured (2026-10-10, MpxMeasure::lrMeter_).
+                      + (lDev >= 0.0f && rDev >= 0.0f ? ",\"lDev\":" + std::to_string(lDev) + ",\"rDev\":" + std::to_string(rDev) : std::string())
                       + ",\"phaseDrift\":" + std::to_string(phaseDrift)
                       + ",\"phaseCoh\":" + std::to_string(phaseCoh)
                       + ",\"pilotDev\":" + std::to_string(pilotDev)

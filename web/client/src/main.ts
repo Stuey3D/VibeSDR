@@ -27,6 +27,7 @@ import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
+import { lrParts } from '../../../src/services/lrMeter';
 import { cuPct, dabCuSegments } from '../../../src/utils/dabCapacity';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
@@ -11569,6 +11570,21 @@ function drawMpxEye() {
           pwEl.textContent = '—'; pwEl.title = '';
           const stEl = document.getElementById('rdsMpxPowSettle');
           if (stEl) stEl.textContent = '';
+        }
+      }
+    }
+    /* ★ LEFT / RIGHT (2026-10-10) — src/services/lrMeter.ts, shared with the app. Hidden without a measurement. */
+    {
+      const box = document.getElementById('rdsLR');
+      const lr = lrParts(rdsExt?.lDev, rdsExt?.rDev);
+      if (box) {
+        box.hidden = !lr;
+        if (lr) for (const k of ['l', 'r'] as const) {
+          const fill = document.getElementById(k === 'l' ? 'rdsLFill' : 'rdsRFill');
+          const val = document.getElementById(k === 'l' ? 'rdsLV' : 'rdsRV');
+          if (fill) { fill.style.width = `${lr[k].pct}%`; fill.className = lr[k].tone === 'ok' ? '' : lr[k].tone; }
+          if (val && val.textContent !== lr[k].text) val.textContent = lr[k].text;
+          if (val) val.className = `lrVal${lr[k].tone === 'ok' ? '' : ' ' + lr[k].tone}`;
         }
       }
     }

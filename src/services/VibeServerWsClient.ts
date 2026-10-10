@@ -2309,6 +2309,8 @@ export abstract class VibeServerWsClient {
         lang: num(msg.lang), pinDay: num(msg.pinDay), pinHour: num(msg.pinHour), pinMin: num(msg.pinMin),
         phase: num(msg.phase), phaseDrift: num(msg.phaseDrift), phaseCoh: num(msg.phaseCoh, 0),
         ...(typeof msg.phaseSigned === 'number' && Number.isFinite(msg.phaseSigned) ? { phaseSigned: msg.phaseSigned as number } : {}),
+        ...(typeof msg.lDev === 'number' && typeof msg.rDev === 'number' && Number.isFinite(msg.lDev) && Number.isFinite(msg.rDev)
+            ? { lDev: msg.lDev as number, rDev: msg.rDev as number } : {}),
         pilotDev: num(msg.pilotDev), rdsDev: num(msg.rdsDev),
         // ★ 0 on a server older than the measured peak — the panel draws a dash, not a zero.
         rdsDevPeak: num(msg.rdsDevPeak, 0), rdsDevRaw: num(msg.rdsDevRaw, 0), ber: num(msg.ber),

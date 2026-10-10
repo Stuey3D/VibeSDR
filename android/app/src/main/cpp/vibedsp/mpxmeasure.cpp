@@ -457,6 +457,7 @@ void MpxMeasure::reset_() {
      *     or a lost track. See process_. */
     pll_.configure(19000.0, kMpxRate, kPllWide); pll_.reset();
     pllTrackedSec_ = 0.0; pllNarrow_ = false;
+    lrFs_ = 0.0;   // ★ the L/R meter re-designs and starts empty (lrMeter_)
     rds_.reset();
     rds_.setNoiseCorrection(noiseCorr_.load(std::memory_order_relaxed));
     noise_.reset(); multipath_.reset();
@@ -586,6 +587,8 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
     }
 
     eyeAndDeviation_(x, nm, hold);
+    if (pll_.trackable()) lrMeter_(x, lmr_.data(), nm, hold);
+    else { lrPub_[0] = lrPub_[1] = -1.0f; lrWinFill_ = 0; lrWinCnt_ = 0; }
 
     // ── RDS: amplitude, phase, coherence, drift — MEASURED, never decoded for the listener ──
     const bool nc = noiseCorr_.load(std::memory_order_relaxed);
@@ -602,6 +605,54 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
     panelAverage_((double)nm / kMpxRate);
     publish_(gridsReady_);
     gridsReady_ = false;
+}
+
+/* ★★ L/R METERS (2026-10-10, Stuart: "is it worth including especially useful on distorted stations"). Deviation, not
+ *  audio dBFS: what each channel alone puts on the carrier, in the same kHz as every other figure here, so an over-driven
+ *  or lop-sided station shows as one channel sitting at (or past) the limit. The PLL's L-R detector output is (L−R)/2
+ *  once low-passed and the composite is (L+R)/2 below 15 kHz, so L = M + S and R = M − S. Robust, not a raw peak: each
+ *  50 ms window's 99.5th percentile, so a click cannot make a figure; the last second's highest window is published.
+ *  Proved against a known left-only / right-only broadcast in test-mpx-measure. Runs only while Advanced RDS is open,
+ *  like everything in MpxMeasure. */
+void MpxMeasure::lrMeter_(const float* x, const float* lmr, int n, bool hold) {
+    constexpr int kBins = 300;                  // 0–150 kHz in 0.5 kHz bins
+    constexpr double kBinKHz = 0.5;
+    constexpr int kWins = 20;                   // 20 × 50 ms = 1 s
+    if (lrFs_ != kMpxRate) {
+        static const double kQ8[4] = { 0.50979558, 0.60134489, 0.89997622, 2.56291545 };
+        for (int k = 0; k < 4; ++k) { lrMonoLp_[k].designLp(kMpxRate, 15000.0, kQ8[k]); lrSideLp_[k].designLp(kMpxRate, 15000.0, kQ8[k]); }
+        lrMonoNotch_.designNotch(kMpxRate, 19000.0, 8.0); lrSideNotch_.designNotch(kMpxRate, 19000.0, 8.0);
+        lrWinN_ = (int)(kMpxRate * 0.05);
+        for (int c = 0; c < 2; ++c) { lrHist_[c].assign(kBins, 0u); lrWinPk_[c].assign(kWins, 0.0f); }
+        lrWinCnt_ = 0; lrWinHead_ = 0; lrWinFill_ = 0; lrPub_[0] = lrPub_[1] = -1.0f;
+        lrFs_ = kMpxRate;
+    }
+    for (int i = 0; i < n; ++i) {
+        float m = lrMonoNotch_.step(x[i]), sd = lrSideNotch_.step(lmr[i]);
+        for (int k = 0; k < 4; ++k) { m = lrMonoLp_[k].step(m); sd = lrSideLp_[k].step(sd); }
+        if (hold) continue;                      // ★ step the filters through a hole, measure nothing
+        if (!std::isfinite(m) || !std::isfinite(sd)) { lrMonoNotch_.x1 = lrMonoNotch_.x2 = lrMonoNotch_.y1 = lrMonoNotch_.y2 = 0.0f;
+                                                       lrSideNotch_.x1 = lrSideNotch_.x2 = lrSideNotch_.y1 = lrSideNotch_.y2 = 0.0f;
+                                                       for (int k = 0; k < 4; ++k) { lrMonoLp_[k].x1 = lrMonoLp_[k].x2 = lrMonoLp_[k].y1 = lrMonoLp_[k].y2 = 0.0f;
+                                                                                    lrSideLp_[k].x1 = lrSideLp_[k].x2 = lrSideLp_[k].y1 = lrSideLp_[k].y2 = 0.0f; } continue; }
+        const float v[2] = { std::fabs(m + sd) * 75.0f, std::fabs(m - sd) * 75.0f };
+        for (int c = 0; c < 2; ++c) ++lrHist_[c][(size_t)std::min(kBins - 1, (int)(v[c] / kBinKHz))];
+        if (++lrWinCnt_ >= lrWinN_) {
+            const uint32_t keep = (uint32_t)std::max(1, (int)std::lround(lrWinN_ * 0.005));   // the top 0.5 %
+            for (int c = 0; c < 2; ++c) {
+                uint32_t above = 0; int b = kBins - 1;
+                for (; b > 0; --b) { above += lrHist_[c][(size_t)b]; if (above >= keep) break; }
+                lrWinPk_[c][(size_t)lrWinHead_] = (float)((b + 0.5) * kBinKHz);
+                std::fill(lrHist_[c].begin(), lrHist_[c].end(), 0u);
+            }
+            lrWinHead_ = (lrWinHead_ + 1) % kWins; lrWinFill_ = std::min(kWins, lrWinFill_ + 1); lrWinCnt_ = 0;
+            if (lrWinFill_ >= 4) for (int c = 0; c < 2; ++c) {      // ★ 200 ms before the first figure
+                float pk = 0.0f;
+                for (int w = 0; w < lrWinFill_; ++w) pk = std::max(pk, lrWinPk_[c][(size_t)w]);
+                lrPub_[c] = pk;
+            }
+        }
+    }
 }
 
 void MpxMeasure::eyeAndDeviation_(const float* mpxIn, int n, bool hold) {
@@ -1255,6 +1306,7 @@ void MpxMeasure::publish_(bool grids) {
     out_.rdsRawKHz = extRdsDevRaw_;
     out_.phaseDeg = rds_.pilotPhaseDeg();
     out_.phaseSignedDeg = rds_.pilotPhaseSignedDeg();
+    out_.lDevKHz = lrPub_[0]; out_.rDevKHz = lrPub_[1];
     out_.coherence = extCoh_;
     out_.driftDegPerSec = extDrift_;
     // ★ Full scale is the pilot's peak over 0.75 — the shared axis the plot is drawn on.

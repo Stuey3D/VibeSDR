@@ -19,6 +19,7 @@
  * spend the extra CPU and bytes. Closing it must turn that back off.
  */
 
+import { LR_FULL_KHZ, lrParts } from '../services/lrMeter';
 import { receiverIso } from '../services/rdsCountry';
 import React, { useMemo, useRef } from 'react';
 import { useBusValue, type ValueBus } from '../services/valueBus';
@@ -635,6 +636,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
              avgPct: Math.max(0, Math.min(100, av)),
              hold: Math.max(0, Math.min(100, hd)) };
   }, [x?.mpxDev, x?.mpxAvg, x?.mpxHold, x?.mpxSnr, x?.mpxNoise]);
+  /** ★ L / R peak deviation as drawn — src/services/lrMeter.ts (shared with the web panel). */
+  const lr = useMemo(() => lrParts(x?.lDev, x?.rDev), [x?.lDev, x?.rDev]);
   /** MPX power (BS.412) as drawn — see the row and services/mpxPower.ts ("settling 44 s" until the minute is in). */
   const mpxPowTxt = useMemo(() => {
     return mpxPowerParts(x?.mpxPow ?? 0, x?.mpxPowS ?? 0);   // ★ shared with the web panel
@@ -1310,6 +1313,22 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               <Text style={[s.verdict, s.devVerdict, { color: mpxDevInfo.c, minHeight: 15 }]}>
                 {mpxDevInfo.verdict}
               </Text>
+              {/* ★ LEFT / RIGHT — what each channel alone puts on the carrier (2026-10-10, src/services/lrMeter.ts).
+                  Same scale and track as the deviation bar above; the line is full modulation for one channel
+                  (67.5 kHz). Not drawn at all without a measurement — never a false zero. */}
+              {!!lr && (['l', 'r'] as const).map((k) => (
+                <View key={k} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: k === 'l' ? 4 : 2 }}>
+                  <Text style={[s.devKey, { color: C.rowLabel, minWidth: 10 }]}>{k === 'l' ? 'L' : 'R'}</Text>
+                  <View style={{ width: 150, height: 6, borderRadius: 2, backgroundColor: C.devBarBg,
+                                 borderWidth: 1, borderColor: C.devBarBorder, overflow: 'hidden' }}>
+                    <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${lr[k].pct}%`,
+                                   backgroundColor: lr[k].tone === 'bad' ? C.bad : lr[k].tone === 'warn' ? C.warn : C.good }} />
+                    <View style={{ position: 'absolute', top: 0, bottom: 0, width: 1, left: `${LR_FULL_KHZ}%`,
+                                   backgroundColor: 'rgba(255,255,255,0.55)' }} />
+                  </View>
+                  <Text style={[s.devVal, { color: lr[k].tone === 'bad' ? C.bad : lr[k].tone === 'warn' ? C.warn : C.good }]}>{lr[k].text}</Text>
+                </View>
+              ))}
               {/* ★★ MPX POWER (ITU-R BS.412) — the 60 s mean power of the whole multiplex against a
                   ±19 kHz sine, the figure MPXtool shows as "Power" (2026-10-02). Neutral colour: above
                   0 dB is over the BS.412 limit, a fact about the STATION, never a receiver fault. The

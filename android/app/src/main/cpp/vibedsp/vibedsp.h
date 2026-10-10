@@ -1993,6 +1993,16 @@ struct EyeBiquad {
         a2 = (float)((1.0 - alpha) / a0);
         x1 = x2 = y1 = y2 = 0.0f;
     }
+    /** Notch (RBJ), unity gain away from f0 — the L/R meter's pilot trap. */
+    void designNotch(double fs, double f0, double q) {
+        if (!(fs > 0.0) || !(f0 > 0.0) || f0 >= fs * 0.5) { b0 = 1; b1 = b2 = a1 = a2 = 0; return; }
+        const double w0 = 2.0 * M_PI * f0 / fs;
+        const double c = std::cos(w0), alpha = std::sin(w0) / (2.0 * q);
+        const double a0 = 1.0 + alpha;
+        b0 = (float)(1.0 / a0); b1 = (float)(-2.0 * c / a0); b2 = b0;
+        a1 = (float)(-2.0 * c / a0); a2 = (float)((1.0 - alpha) / a0);
+        x1 = x2 = y1 = y2 = 0.0f;
+    }
     /** Low-pass section (RBJ), for the deviation cascade. Q per section from the Butterworth
      *  table; three sections at 0.5176, 0.7071 and 1.9319 make a 6th-order response. */
     void designLp(double fs, double f0, double q) {
@@ -2150,6 +2160,10 @@ public:
         float rdsAvgKHz = -1.0f, rdsPeakKHz = -1.0f, rdsRawKHz = -1.0f;
         float phaseDeg = -1.0f, coherence = 0.0f, driftDegPerSec = 0.0f;
         float phaseSignedDeg = -999.0f;  // ★ the same, signed (−90, +90]; −999 = none
+        /** ★ LEFT and RIGHT peak deviation, kHz — what each channel alone puts on the carrier, the robust peak of
+         *  the last second (2026-10-10, Stuart: L/R meters, "especially useful on distorted stations"). −1 = none
+         *  (not tracking a pilot: no stereo to split). See MpxMeasure::lrMeter_. */
+        float lDevKHz = -1.0f, rDevKHz = -1.0f;
         float eyeDevKHz = 0.0f, eyeBandKHz[3] = { 0, 0, 0 };
         float mpxDevKHz = 0.0f, mpxDevAvgKHz = 0.0f, mpxDevHoldKHz = 0.0f, mpxDevNoiseKHz = 0.0f;
         float mpxPowerDb = 0.0f, mpxPowerSecs = 0.0f;   // BS.412 — see devWinP_
@@ -2258,6 +2272,18 @@ private:
     void reset_();
     void chunk_(const cf32* ch, int n);
     void eyeAndDeviation_(const float* x, int n, bool hold);
+    /* ★ L/R meters (lrMeter_): mono and L-R through steep 15 kHz low-passes (8th-order Butterworth — the pilot 33 dB
+     *  down), L = M + S, R = M − S in composite units ×75 = kHz. Each 50 ms window's 99.5th percentile (a histogram,
+     *  0–150 kHz in 0.5 kHz bins), the last second's highest window published. */
+    void lrMeter_(const float* x, const float* lmr, int n, bool hold);
+    EyeBiquad lrMonoLp_[4], lrSideLp_[4], lrMonoNotch_, lrSideNotch_;   // ★ + a 19 kHz trap: the low-pass alone left
+                                                                           //   the pilot only ~16 dB down (+1.25 kHz on every reading)
+    double lrFs_ = 0.0;
+    int lrWinN_ = 0, lrWinCnt_ = 0;
+    std::vector<uint32_t> lrHist_[2];
+    std::vector<float> lrWinPk_[2];      // the last 20 windows (1 s), per channel
+    int lrWinHead_ = 0, lrWinFill_ = 0;
+    float lrPub_[2] = { -1.0f, -1.0f };
     /** ★★★ CHUNKS LEFT IN THE HOLD AFTER A HOLE. A dropped block splices two stretches of signal
      *  that were never adjacent: the carrier phase jumps, the discriminator emits a spike up to half
      *  the sample rate, and every filter rings with it. Measured through, that spike was a WRONG
@@ -2620,6 +2646,7 @@ public:
             const float* constXY; int nPts;
             float pilotPhaseDeg;
             float pilotPhaseSignedDeg;        // ★ (−90, +90], −999 = none — pilotPhaseDeg with its sign
+            float lDevKHz, rDevKHz;           // ★ LEFT / RIGHT peak deviation, kHz (−1 = none) — MpxMeasure::lrMeter_
             float pilotPhaseCoherence;
             float pilotPhaseDriftDegPerSec;   // >0 = the phase is turning; see the note on it
             float pilotDevKHz;      // pilot injection, kHz deviation

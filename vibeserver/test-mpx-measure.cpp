@@ -163,6 +163,11 @@ struct Sig {
     bool   trebleLmr = true;     // L-R energy at 49 kHz
     bool   shaped = true;        // IEC 62106 shaping (false = rectangular biphase)
     double programme = 1.0;      // scale on the audio (0 = pilot and RDS only)
+    /* ★ L/R METER cases: ≥ 0 replaces the programme with a 1 kHz LEFT and 1.7 kHz RIGHT tone at these amplitudes, on a
+     *  BROADCAST-STANDARD subcarrier. The pilot here is cos(wp) = sin(wp + 90°), so the standard L−R carrier — sin of twice
+     *  the pilot's sine phase — is sin(2wp + 180°) = −sin(2wp). (The programme above uses cos(2wp), 90° from the standard,
+     *  which is why it is not used for this.) */
+    double leftAmp = -1.0, rightAmp = -1.0;
     double noise = 0.0;          // white noise on I and Q, against a carrier of amplitude 0.5
     double echoAmp = 0.0;        // a reflection: this fraction of the signal, echoDelayUs later
     double echoDelayUs = 3.0;    // ~900 m of extra path
@@ -207,7 +212,12 @@ struct Gen {
                            + (sig.trebleLmr ? 0.30 * std::sin(2 * M_PI * 11000.0 * t) : 0.0);
             const double R = sig.programme * 0.50 * std::sin(2 * M_PI * 1300.0 * t);
             const double wp = 2 * M_PI * kPilotHz * t;
-            const double mpx = 0.9 * (0.5 * (L + R) + 0.5 * (L - R) * std::cos(2 * wp))
+            const bool lr = sig.leftAmp >= 0.0;
+            const double Ls = lr ? sig.leftAmp * std::sin(2 * M_PI * 1000.0 * t) : 0.0;
+            const double Rs = lr ? sig.rightAmp * std::sin(2 * M_PI * 1700.0 * t) : 0.0;
+            const double audio = lr ? 0.9 * (0.5 * (Ls + Rs) - 0.5 * (Ls - Rs) * std::sin(2 * wp))
+                                    : 0.9 * (0.5 * (L + R) + 0.5 * (L - R) * std::cos(2 * wp));
+            const double mpx = audio
                              + aP * std::cos(wp)
                              + aR * W.at(t * kFb * clk) * std::cos(3 * wp * clk + sig.rdsPhaseDeg * M_PI / 180.0);
             if (t > 0.01) {
@@ -237,6 +247,7 @@ struct Gen {
 
 struct Reading {
     float pilot = 0, rdsAvg = 0, rdsPk = 0, rdsRaw = 0, mpxHold = 0, phase = -1, phaseSigned = -999, coh = 0, drift = 0;
+    float lDev = -1, rDev = -1;
     float snr = 0, mp = 0; int snrOk = 0, mpOk = 0, measured = 0;
     int groups = 0; int calls = 0; bool eye = false; unsigned dropped = 0;
     float mpxPow = 0, mpxPowS = 0;       // BS.412 MPX power, dB, and the seconds it covers
@@ -250,7 +261,8 @@ struct Cap {
         p->r.pilot = x.pilotDevKHz; p->r.rdsAvg = x.rdsDevKHz; p->r.rdsPk = x.rdsDevPeakKHz;
         p->r.rdsRaw = x.rdsDevRawKHz; p->r.mpxHold = x.mpxDevHoldKHz;
         p->r.mpxPow = x.mpxPowerDb; p->r.mpxPowS = x.mpxPowerSecs;
-        p->r.phase = x.pilotPhaseDeg; p->r.phaseSigned = x.pilotPhaseSignedDeg; p->r.coh = x.pilotPhaseCoherence; p->r.drift = x.pilotPhaseDriftDegPerSec;
+        p->r.phase = x.pilotPhaseDeg; p->r.phaseSigned = x.pilotPhaseSignedDeg; p->r.coh = x.pilotPhaseCoherence;
+        p->r.lDev = x.lDevKHz; p->r.rDev = x.rDevKHz; p->r.drift = x.pilotPhaseDriftDegPerSec;
         p->r.groups = x.groupTotal; p->r.calls++;
         p->r.eye = x.eyeBand[0] != nullptr && x.eyeW > 0;
 #ifdef VIBEDSP_HAS_MPXMEASURE
@@ -638,6 +650,24 @@ int main(int argc, char** argv) {
             std::snprintf(w, sizeof w, "phase %+.0f deg: signed reads %+.1f (within 1 deg, right sign), unsigned %.1f", want, r.phaseSigned, r.phase);
             // ★ 1° (it was 3): the instrument's narrow PLL removed the programme-driven +1.5° (see mpxmeasure.cpp).
             ok(std::fabs(r.phaseSigned - want) <= 1.0 && std::fabs(r.phase - std::fabs(want)) <= 1.0, w);
+        }
+    }
+
+    /* ★★ L/R METERS against a known broadcast (2026-10-10): what each channel alone puts on the carrier is
+     *  0.9 × amplitude × 75 kHz here (the generator's audio scale). Left-only must read on the left and ~nothing on the
+     *  right — a swapped or mis-scaled matrix fails at once. */
+    {
+        std::printf("\n── L/R peak deviation (known left/right tones, standard subcarrier) ──\n");
+        struct LR { double l, r; };
+        for (LR c : { LR{0.8, 0.0}, LR{0.0, 0.8}, LR{0.6, 0.3} }) {
+            Sig s; s.leftAmp = c.l; s.rightAmp = c.r;
+            const Reading r = run(2400000.0, 200000.0, 0.0, s, 6.0);
+            const double wl = 0.9 * c.l * 75.0, wr = 0.9 * c.r * 75.0;
+            std::printf("   L %.2f R %.2f -> left %.2f kHz (want %.2f), right %.2f kHz (want %.2f)\n", c.l, c.r, r.lDev, wl, r.rDev, wr);
+            char w[180];
+            std::snprintf(w, sizeof w, "L/R meters: left %.2f (want %.1f), right %.2f (want %.1f) — within 3 %% or 1 kHz", r.lDev, wl, r.rDev, wr);
+            auto close = [](double got, double want) { return std::fabs(got - want) <= std::max(1.0, 0.03 * want); };
+            ok(close(r.lDev, wl) && close(r.rDev, wr), w);
         }
     }
 
