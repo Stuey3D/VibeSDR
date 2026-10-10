@@ -142,6 +142,8 @@ export interface RdsExt {
   eon: { pi: string; ps: string; af: number; ta: number }[];
   oda: { aid: string; grp: number }[];
   phase: number;         // RDS-to-pilot phase, degrees (-1 = no lock)
+  /** ★ Signed, (−90, +90], + = RDS leads 3 × pilot (2026-10-10) — absent from older servers. See sdrProtocol.ts. */
+  phaseSigned?: number;
   phaseCoh: number;
   /** deg/s the RDS-to-pilot phase is turning. >0 means the station's encoder is not locked
    *  to its own pilot — a transmitter fault, not a reception one. */
@@ -1326,6 +1328,7 @@ export class SpectrumClient {
           eon: Array.isArray(msg.eon) ? msg.eon : [],
           oda: Array.isArray(msg.oda) ? msg.oda : [],
           phase: Number(msg.phase ?? -1),
+          ...(typeof msg.phaseSigned === 'number' && Number.isFinite(msg.phaseSigned) ? { phaseSigned: Number(msg.phaseSigned) } : {}),
           phaseCoh: Number(msg.phaseCoh ?? 0),
           phaseDrift: Number(msg.phaseDrift ?? 0),
           pilotDev: Number(msg.pilotDev ?? 0),

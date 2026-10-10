@@ -514,6 +514,20 @@ float RdsDemod::pilotPhaseDeg() const {
     return deg;
 }
 
+/* ★★ THE SAME ANGLE WITH ITS SIGN (2026-10-10, Stuart: "add the sign"). pilotPhaseDeg() above folds to [0,90] — an
+ *  unsigned distance, as the Pira shows it. This is the doubled angle halved and NOT folded: (−90, +90], so +32 and −32
+ *  are told apart (RDS leading or lagging the pilot's third harmonic). Compared with mrwish7's sdrpp-mpx-analyzer on the
+ *  same recordings — see the investigation in docs/. −999 = no lock. ★ Still free of the old 172° fault: −8 stays −8. */
+float RdsDemod::pilotPhaseSignedDeg() const {
+    const float m = std::sqrt(phCos2_ * phCos2_ + phSin2_ * phSin2_);
+    if (m < 1e-9f) return -999.0f;
+    /* ★★ NEGATED — MEASURED. The demodulator's (aI, aQ) angle runs the opposite way to "RDS minus 3 × pilot": a carrier
+     *  set +30° AHEAD of the pilot's third harmonic read −31.5°, one set −30° read +28.5° (test-mpx-measure, the
+     *  signed-phase block). The standard sense — and mrwish7's analyser's, which read −32.2° / −69.5° where this read
+     *  +27.8° / +68.9° on the same two Pi 500 recordings — is positive = RDS leads. The unsigned figure never cared. */
+    return -0.5f * std::atan2(phSin2_, phCos2_) * 180.0f / (float)M_PI;
+}
+
 float RdsDemod::subcarrierRelDb() const {
     if (rdsRms_ <= 1e-9f || pilotRef_ <= 1e-9f) return -99.0f;
     return 20.0f * std::log10(rdsRms_ / pilotRef_);
@@ -818,8 +832,9 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
                     dec_[p].pushBit(dot < 0.0f ? 1 : 0);
                 }
                 if (p == constBest_ && !hold) {
-                    // Accumulate the doubled angle, magnitude-weighted so strong symbols
-                    // define the estimate and noise near the origin barely counts.
+                    // Accumulate the doubled angle as a UNIT vector — every symbol counts equally (this
+                    // comment once said "magnitude-weighted"; the code never was). A slow EMA (~500
+                    // symbols, ~0.4 s) — see the 2026-10-10 comparison with sdrpp-mpx-analyzer.
                     const float mag2 = aI * aI + aQ * aQ;
                     if (mag2 > 1e-12f) {
                         const float c = (aI * aI - aQ * aQ) / mag2;   // cos(2*theta)

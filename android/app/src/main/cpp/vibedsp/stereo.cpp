@@ -5,7 +5,14 @@
 
 namespace vibedsp {
 
-void StereoPLL::configure(double pilotHz, double rate) {
+void StereoPLL::setLoopFrac(double loopFrac) {
+    const double bw = w0_ * loopFrac;
+    const double zeta = 0.707;
+    alpha_ = 2.0 * zeta * bw;
+    beta_  = bw * bw;
+}
+
+void StereoPLL::configure(double pilotHz, double rate, double loopFrac) {
     rate_ = rate;
     lockHold_ = 0;
     w0_ = 2.0 * M_PI * pilotHz / rate;
@@ -13,7 +20,7 @@ void StereoPLL::configure(double pilotHz, double rate) {
     phase_ = 0.0;
     // Second-order loop. Modest bandwidth (~one-thousandth of rate) for a clean
     // lock on the narrow pilot without excessive jitter.
-    const double bw = w0_ * 0.01;            // loop bandwidth (rad/sample)
+    const double bw = w0_ * loopFrac;        // loop bandwidth (rad/sample) — 0.01 of the pilot unless asked otherwise
     const double zeta = 0.707;
     alpha_ = 2.0 * zeta * bw;
     beta_  = bw * bw;

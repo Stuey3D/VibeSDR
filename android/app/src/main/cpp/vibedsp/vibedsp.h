@@ -1116,7 +1116,14 @@ private:
 // lock via a smoothed in-phase pilot amplitude.
 class StereoPLL {
 public:
-    void configure(double pilotHz, double rate);
+    /** `loopFrac`: the loop bandwidth as a fraction of the pilot frequency. 0.01 (~190 Hz) is the LISTENER's loop —
+     *  quick to acquire, and what stereo decoding has always used. ★ The measurement path (MpxMeasure) asks for a much
+     *  narrower one: a wide loop is pulled by programme audio, which biased the RDS-to-pilot phase in proportion to
+     *  programme POWER (+1.2° at full mono level, +2.2° at 1.4×; ≈0 with pilot + RDS alone — 2026-10-10). */
+    void configure(double pilotHz, double rate, double loopFrac = 0.01);
+    /** ★ Change the loop bandwidth WITHOUT disturbing the lock (phase, frequency and lock state kept) — the
+     *  measurement path's gear shift: acquire wide, then narrow (MpxMeasure). */
+    void setLoopFrac(double loopFrac);
     // Advance one MPX sample; outputs coherent references (any may be null):
     // ref38 (L-R detection), ref57 (RDS carrier), bitClk (RDS 1187.5 Hz data
     // clock = pilot/16, phase in [0,2*pi)).
@@ -1715,6 +1722,8 @@ public:
      *  Heavily smoothed: it is a transmitter characteristic, not something that should
      *  flicker. -1 = no lock. */
     float pilotPhaseDeg() const;
+    /** ★ The same, SIGNED: (−90, +90], −999 = no lock. See pilotPhaseSignedDeg() in rds.cpp. */
+    float pilotPhaseSignedDeg() const;
     /** ★ Degrees per second the RDS-to-pilot phase is turning. Our 57 kHz reference IS the
      *  station's own pilot tripled, so a locked encoder sits still no matter how weak the
      *  signal — a steady march means the station's subcarrier is genuinely not 3x its pilot,
@@ -2140,6 +2149,7 @@ public:
         float pilotKHz = 0.0f;
         float rdsAvgKHz = -1.0f, rdsPeakKHz = -1.0f, rdsRawKHz = -1.0f;
         float phaseDeg = -1.0f, coherence = 0.0f, driftDegPerSec = 0.0f;
+        float phaseSignedDeg = -999.0f;  // ★ the same, signed (−90, +90]; −999 = none
         float eyeDevKHz = 0.0f, eyeBandKHz[3] = { 0, 0, 0 };
         float mpxDevKHz = 0.0f, mpxDevAvgKHz = 0.0f, mpxDevHoldKHz = 0.0f, mpxDevNoiseKHz = 0.0f;
         float mpxPowerDb = 0.0f, mpxPowerSecs = 0.0f;   // BS.412 — see devWinP_
@@ -2221,6 +2231,9 @@ private:
     std::vector<float> sincDbCorr_;                  // per MPX-FFT bin, the same correction in dB
     std::vector<float> mpx384_, mpx_, lmr_, ref57_, ref57q_, bitClk_;
     StereoPLL pll_;
+    /** ★ The gear shift (see reset_ / process_): seconds tracked on the wide loop, and whether it has narrowed. */
+    double pllTrackedSec_ = 0.0;
+    bool   pllNarrow_ = false;
     RdsDemod rds_;
     MpxNoiseMeter noise_;
     MultipathMeter multipath_;
@@ -2606,6 +2619,7 @@ public:
             const RdsDecoder::Oda* oda; int nOda;
             const float* constXY; int nPts;
             float pilotPhaseDeg;
+            float pilotPhaseSignedDeg;        // ★ (−90, +90], −999 = none — pilotPhaseDeg with its sign
             float pilotPhaseCoherence;
             float pilotPhaseDriftDegPerSec;   // >0 = the phase is turning; see the note on it
             float pilotDevKHz;      // pilot injection, kHz deviation

@@ -105,6 +105,9 @@ export interface RdsExt {
   rtpTitle: string; rtpArtist: string; longPs: string; ptyn: string;
   lang: number; pinDay: number; pinHour: number; pinMin: number;
   phase: number;         // RDS-to-pilot phase, degrees, folded to [0,90]
+  /** ★ The same angle SIGNED, (−90, +90] — RDS relative to 3 × pilot, + = RDS leads (2026-10-10). Absent from older
+   *  servers; shown instead of `phase` when present. The verdict (in phase / quadrature) still uses `phase`. */
+  phaseSigned?: number;
   phaseDrift: number; phaseCoh: number;
   pilotDev: number; rdsDev: number;   // kHz; rdsDev < 0 = not measurable (rdsDev is AVERAGED)
   /** ★★ MEASURED PEAK RDS deviation, no assumed crest factor — see RdsExt::rdsDevPeakKHz.

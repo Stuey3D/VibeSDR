@@ -16,6 +16,13 @@
 #include <numeric>
 #include "simd_internal.h"
 
+namespace {
+// ★ The instrument's pilot-PLL gear shift — see MpxMeasure::reset_. Fractions of the 19 kHz pilot.
+constexpr double kPllWide = 0.01;            // ~190 Hz: acquisition, and the listener's own loop
+constexpr double kPllNarrow = 0.002;         // ~38 Hz: measurement (programme no longer pulls the phase)
+constexpr double kPllNarrowAfterSec = 1.5;   // of steady tracking before narrowing
+}
+
 namespace vibedsp {
 
 namespace {
@@ -437,7 +444,19 @@ void MpxMeasure::reset_() {
     chanQ_.clear();
     fm_.reset(); dc_.reset();
     if (dec2_) dec2_->reset();
-    pll_.configure(19000.0, kMpxRate); pll_.reset();
+    /* ★★ A NARROW LOOP FOR THE INSTRUMENT — ~38 Hz once tracking, the listener's ~190 only to acquire (2026-10-10). The wide loop is pulled by
+     *  programme audio (its phase detector sees the whole composite), which biased the RDS-to-pilot phase by +1.5° at a
+     *  normal level and +2.7° at 1.4× — in proportion to programme POWER, ≈0 with pilot + RDS alone — and read the pilot
+     *  low (6.716 / 6.690 kHz against a true 6.75). Measured on the test generator (shaped RDS, stereo programme):
+     *    ~190 Hz +1.5° / +2.7°  · ~38 Hz +0.3° / +0.5°, pilot 6.739, drift exact · ~9.5 Hz +0.1° but drift 7 % high
+     *  and slower to settle. A broadcast pilot is crystal-stable; the instrument only has to follow it. Found comparing
+     *  with mrwish7's sdrpp-mpx-analyzer (exact on the same signals). The listener's stereo PLL is untouched.
+     *  ★★ GEAR-SHIFTED, because narrow from the start re-acquired too slowly: a steady station read a phantom drift of
+     *     1.1–1.3°/s while it settled, and every hole in the input cost a slow re-lock (test-mpx-measure). So: acquire
+     *     on the wide loop exactly as before, narrow after kPllNarrowAfterSec of tracking, and go wide again on a hole
+     *     or a lost track. See process_. */
+    pll_.configure(19000.0, kMpxRate, kPllWide); pll_.reset();
+    pllTrackedSec_ = 0.0; pllNarrow_ = false;
     rds_.reset();
     rds_.setNoiseCorrection(noiseCorr_.load(std::memory_order_relaxed));
     noise_.reset(); multipath_.reset();
@@ -557,6 +576,14 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
     // ── pilot PLL, its 57 kHz references and the bit clock ──
     lmr_.resize((size_t)nm); ref57_.resize((size_t)nm); ref57q_.resize((size_t)nm); bitClk_.resize((size_t)nm);
     pll_.processBlock(x, nm, lmr_.data(), ref57_.data(), ref57q_.data(), bitClk_.data());
+    // ★ The gear shift (see reset_): narrow once it has tracked steadily, wide again the moment it has not.
+    if (pll_.trackable() && !hold) {
+        pllTrackedSec_ += nm / kMpxRate;
+        if (!pllNarrow_ && pllTrackedSec_ >= kPllNarrowAfterSec) { pll_.setLoopFrac(kPllNarrow); pllNarrow_ = true; }
+    } else {
+        pllTrackedSec_ = 0.0;
+        if (pllNarrow_) { pll_.setLoopFrac(kPllWide); pllNarrow_ = false; }
+    }
 
     eyeAndDeviation_(x, nm, hold);
 
@@ -1227,6 +1254,7 @@ void MpxMeasure::publish_(bool grids) {
     out_.rdsPeakKHz = rds_.rdsDeviationPeakKHz();
     out_.rdsRawKHz = extRdsDevRaw_;
     out_.phaseDeg = rds_.pilotPhaseDeg();
+    out_.phaseSignedDeg = rds_.pilotPhaseSignedDeg();
     out_.coherence = extCoh_;
     out_.driftDegPerSec = extDrift_;
     // ★ Full scale is the pilot's peak over 0.75 — the shared axis the plot is drawn on.

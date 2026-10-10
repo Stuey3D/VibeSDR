@@ -1454,6 +1454,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                 const MpxMeasure::Out& m = measOut_;
                 x.measured = m.valid ? 1 : 0;
                 x.pilotPhaseDeg = m.valid ? m.phaseDeg : -1.0f;
+                x.pilotPhaseSignedDeg = m.valid ? m.phaseSignedDeg : -999.0f;
                 x.pilotPhaseCoherence = m.coherence;
                 x.pilotPhaseDriftDegPerSec = m.driftDegPerSec;
                 x.pilotDevKHz = m.pilotKHz;

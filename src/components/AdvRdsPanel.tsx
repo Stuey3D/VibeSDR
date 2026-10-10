@@ -921,7 +921,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                     : near <= 40 ? 'off nominal'
                     : coh > 0.7  ? 'FAULT'
                     : 'off nominal';
-      phaseTxt = `${ph.toFixed(0)}° · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
+      // ★ Signed when the server sends it (2026-10-10): + = RDS leads 3 × pilot. The verdict stays on the distance.
+      const sg = x?.phaseSigned;
+      const shown = sg !== undefined ? `${Math.round(sg) > 0 ? '+' : Math.round(sg) < 0 ? '\u2212' : ''}${Math.abs(Math.round(sg))}°` : `${ph.toFixed(0)}°`;
+      phaseTxt = `${shown} · ${verdict} · ${(coh * 100).toFixed(0)}% steady`;
       phaseCol = near <= 12 ? C.good : near <= 40 ? C.warn : C.bad;
     }
   }

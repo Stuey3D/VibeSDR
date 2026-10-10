@@ -236,7 +236,7 @@ struct Gen {
 };
 
 struct Reading {
-    float pilot = 0, rdsAvg = 0, rdsPk = 0, rdsRaw = 0, mpxHold = 0, phase = -1, coh = 0, drift = 0;
+    float pilot = 0, rdsAvg = 0, rdsPk = 0, rdsRaw = 0, mpxHold = 0, phase = -1, phaseSigned = -999, coh = 0, drift = 0;
     float snr = 0, mp = 0; int snrOk = 0, mpOk = 0, measured = 0;
     int groups = 0; int calls = 0; bool eye = false; unsigned dropped = 0;
     float mpxPow = 0, mpxPowS = 0;       // BS.412 MPX power, dB, and the seconds it covers
@@ -250,7 +250,7 @@ struct Cap {
         p->r.pilot = x.pilotDevKHz; p->r.rdsAvg = x.rdsDevKHz; p->r.rdsPk = x.rdsDevPeakKHz;
         p->r.rdsRaw = x.rdsDevRawKHz; p->r.mpxHold = x.mpxDevHoldKHz;
         p->r.mpxPow = x.mpxPowerDb; p->r.mpxPowS = x.mpxPowerSecs;
-        p->r.phase = x.pilotPhaseDeg; p->r.coh = x.pilotPhaseCoherence; p->r.drift = x.pilotPhaseDriftDegPerSec;
+        p->r.phase = x.pilotPhaseDeg; p->r.phaseSigned = x.pilotPhaseSignedDeg; p->r.coh = x.pilotPhaseCoherence; p->r.drift = x.pilotPhaseDriftDegPerSec;
         p->r.groups = x.groupTotal; p->r.calls++;
         p->r.eye = x.eyeBand[0] != nullptr && x.eyeW > 0;
 #ifdef VIBEDSP_HAS_MPXMEASURE
@@ -621,6 +621,23 @@ int main(int argc, char** argv) {
             std::snprintf(w, sizeof w, "MPX power, %s composite: within %.1f dB of the true power and published (%.0f s)",
                           k ? "noisy" : "clean", k ? 0.5 : 0.3, r.mpxPowS);
             ok(r.mpxPowS >= 5.0f && std::fabs(r.mpxPow - truth) <= (k ? 0.5 : 0.3), w);
+        }
+    }
+
+    /* ★★ THE SIGN (2026-10-10, Stuart: "add the sign"). The generator's rdsPhaseDeg puts the RDS carrier at
+     *  cos(3·pilot + φ), so +φ means the RDS LEADS the pilot's third harmonic — the convention of mrwish7's
+     *  sdrpp-mpx-analyzer ("RDS carrier phase relative to the 3rd pilot harmonic", −90..90). The unsigned figure must
+     *  read |φ| as before; the signed one must read φ, sign included. */
+    {
+        std::printf("\n── RDS-to-pilot phase, signed (RDS relative to 3 x pilot) ──\n");
+        for (double want : { +30.0, -30.0, +70.0, -70.0 }) {
+            Sig s = locked; s.rdsPhaseDeg = want;
+            const Reading r = run(2400000.0, 200000.0, 0.0, s, 10.0);
+            std::printf("   set %+5.1f deg   unsigned %5.1f   signed %+6.1f   coherence %.2f\n", want, r.phase, r.phaseSigned, r.coh);
+            char w[160];
+            std::snprintf(w, sizeof w, "phase %+.0f deg: signed reads %+.1f (within 1 deg, right sign), unsigned %.1f", want, r.phaseSigned, r.phase);
+            // ★ 1° (it was 3): the instrument's narrow PLL removed the programme-driven +1.5° (see mpxmeasure.cpp).
+            ok(std::fabs(r.phaseSigned - want) <= 1.0 && std::fabs(r.phase - std::fabs(want)) <= 1.0, w);
         }
     }
 
