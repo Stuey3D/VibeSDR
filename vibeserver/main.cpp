@@ -2698,12 +2698,21 @@ int main(int argc, char** argv) {
      *  the box's radios are separate processes. So every process touches one file while anyone is listening on it,
      *  every 30 s. /run is RAM: no SD-card write. Pocket image only; nothing elsewhere. */
     if (vibepocket::enabled() && ::access("/run/vibeserver", W_OK) == 0) {
+        // ★ Looked at every 2 s, written AT ONCE when the first listener arrives (the idle CPU governor waits on it —
+        //   vibeserver-pocket), then every 30 s while anyone stays.
         std::thread([]{
+            int since = 30;
+            bool was = false;
             for (;;) {
-                std::this_thread::sleep_for(std::chrono::seconds(30));
-                if (LocalSdrShim::instance().listenerCount() <= 0) continue;
-                const int fd = ::open("/run/vibeserver/pocket-active", O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0644);
-                if (fd >= 0) { ::futimens(fd, nullptr); ::close(fd); }
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                const bool on = LocalSdrShim::instance().listenerCount() > 0;
+                since += 2;
+                if (on && (!was || since >= 30)) {
+                    const int fd = ::open("/run/vibeserver/pocket-active", O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0644);
+                    if (fd >= 0) { ::futimens(fd, nullptr); ::close(fd); }
+                    since = 0;
+                }
+                was = on;
             }
         }).detach();
     }

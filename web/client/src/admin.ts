@@ -258,7 +258,12 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
   if (sys.tempStatus !== 'unknown') out.push(card('CPU TEMP', `${sys.tempC.toFixed(1)}°C`,
            // ★ Say what the number MEANS, and never blame cooling for something else. A warm chip
            //   is not a fault: the machine throttles at 80 °C and that is where the advice starts.
-           sys.tempStatus === 'ok' ? 'normal — throttles at 80°C'
+           // ★★ A Pi 3A+/3B+ also eases its clock at a SOFT limit (60 °C by default) — say so, or this tile reads
+           //    "normal" beside a clock tile saying it is held down for temperature (Stuart's pocket box, 2026-10-10).
+           sys.tempStatus === 'ok'
+             ? (sys.softLimitC && sys.tempC >= sys.softLimitC
+                 ? `above ${sys.softLimitC}°C — clock eased to 1200 MHz to stay cool; full throttle at 80°C`
+                 : sys.softLimitC ? `normal — clock eases at ${sys.softLimitC}°C, throttles at 80°C` : 'normal — throttles at 80°C')
              : sys.tempStatus === 'warning' ? 'warm — approaching the 80°C throttle'
              : 'throttling at 80°C — check cooling and airflow', sys.tempStatus));
 

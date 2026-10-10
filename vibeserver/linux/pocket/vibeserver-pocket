@@ -66,6 +66,14 @@ NFT_TABLE    = "vibeserver_captive"
 # ★★ "The radio is in use" — every vibeserver process on the box touches this (RAM, /run) every 30 s while anyone is
 #    listening. The Own Wi-Fi hold ends once it has been quiet for RELEASE_SEC. Written by the server, read here.
 ACTIVE_FILE  = "/run/vibeserver/pocket-active"
+CPUFREQ_DIR  = "/sys/devices/system/cpu"
+# ★★ THE CPU GOVERNOR FOLLOWS THE RADIO (Stuart, 2026-10-10 — the pocket box runs ~8 h on a power bank). VibeServer
+#    asks for `performance` (vibeserver-governor: ondemand under-clocks a busy DSP and the audio breaks). On a battery
+#    box that is right WHILE someone listens and a waste otherwise — so: performance within GOV_IDLE_SEC of the last
+#    listener, the first idle governor the kernel offers after that. Only when the owner left the choice at the
+#    default; a governor they picked in setup is never touched.
+GOV_IDLE_SEC = 60
+IDLE_GOVERNORS = ("ondemand", "schedutil", "conservative")
 SERVER_CONF  = "/etc/vibeserver/config.json"                # the server's settings (bound from /data)
 # ★★★ THE SETUP NAME (Stuart, 2026-10-10). Until the box is configured it answers as
 #     VibeServerSetup.local (mDNS is case-blind) on EVERY network — the setup hotspot, the owner's
@@ -897,6 +905,62 @@ class NetWatch:
         return self.state
 
 
+def owner_governor(path=None):
+    """The governor the owner chose in setup ("" = the default, performance)."""
+    try:
+        with open(path or SERVER_CONF, "rb") as f:
+            v = json.loads(f.read(256 * 1024).decode("utf-8")).get("cpuGovernor", "")
+            return v if isinstance(v, str) else ""
+    except (OSError, ValueError, UnicodeDecodeError, AttributeError):
+        return ""
+
+
+class GovernorFollower:
+    """performance while the radio is in use, an idle governor after GOV_IDLE_SEC without a listener."""
+    def __init__(self):
+        self.applied = None
+
+    def files(self):
+        try:
+            return sorted(os.path.join(CPUFREQ_DIR, d, "cpufreq", "scaling_governor")
+                          for d in os.listdir(CPUFREQ_DIR) if re.match(r"cpu\d+$", d))
+        except OSError:
+            return []
+
+    def tick(self):
+        if owner_governor() not in ("", "performance"):
+            return                                   # ★ the owner chose: leave it alone
+        try:
+            quiet = time.time() - os.stat(ACTIVE_FILE).st_mtime
+        except OSError:
+            quiet = 1e9
+        files = [f for f in self.files() if os.path.exists(f)]
+        if not files:
+            return
+        if quiet < GOV_IDLE_SEC:
+            want = "performance"
+        else:
+            try:
+                with open(os.path.join(os.path.dirname(files[0]), "scaling_available_governors")) as f:
+                    avail = f.read().split()
+            except OSError:
+                avail = []
+            want = next((g for g in IDLE_GOVERNORS if g in avail), None)
+            if not want:
+                return
+        if want == self.applied:
+            return
+        for p in files:
+            try:
+                with open(p, "w") as f:
+                    f.write(want)
+            except OSError:
+                pass
+        if self.applied is not None or want != "performance":
+            log("CPU governor: %s (%s)" % (want, "a listener" if want == "performance" else "nobody listening for a minute"))
+        self.applied = want
+
+
 def server_configured(path=SERVER_CONF):
     """True once "Save and start" has configured the server. Unreadable = not yet (the setup name)."""
     try:
@@ -1047,6 +1111,7 @@ def main_loop():
     uid = vibeserver_uid()
     net = NetWatch(sh)
     net.start()
+    gov = GovernorFollower()
     was_mode = None
     last_tick = 0
     while True:
@@ -1099,6 +1164,7 @@ def main_loop():
                     net.query()
                     box.internet = net.state
             box.sync_hostname(server_configured())
+            gov.tick()
             try:
                 box.tick()
             except Exception as e:            # ★ never die on one bad turn; systemd would only restart us

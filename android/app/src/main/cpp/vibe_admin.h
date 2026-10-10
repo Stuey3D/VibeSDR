@@ -1452,6 +1452,7 @@ struct SysStats {
     int    cores = 0;
     bool   haveTemp = false;
     double tempC = 0;
+    int    softLimitC = 0;   // ★ the firmware's SOFT limit, where it eases the clock (Pi 3A+/3B+: 60 °C), or 0
     bool   haveMem = false;
     long long memTotalKB = 0, memAvailKB = 0;
     bool   haveUptime = false;
@@ -1497,8 +1498,40 @@ inline void applyFirmwareClock(SysStats& s, const vibevcio::Reading& r) {
     s.fwThrottled = r.throttled;
 }
 
+/** ★★★ THE PI 3A+/3B+ SOFT LIMIT (Stuart's pocket box, 2026-10-10: the clock tile said "held below 1400 MHz —
+ *  temperature" at 62 °C while the temperature tile said "normal — throttles at 80 °C"). These two boards, alone among
+ *  Pis, ease the ARM from 1400 to 1200 MHz at temp_soft_limit (60 °C by default; config.txt may raise it to 70). The
+ *  page must say so, or the two tiles contradict each other. 0 = no soft limit (every other machine). Read once. */
+inline int readSoftTempLimitC() {
+    static const int v = [] {
+        FILE* f = std::fopen("/proc/device-tree/model", "rb");
+        if (!f) return 0;
+        char model[160] = {0};
+        const size_t n = std::fread(model, 1, sizeof model - 1, f);
+        std::fclose(f);
+        model[n] = 0;
+        if (!std::strstr(model, "Raspberry Pi 3 Model B Plus") && !std::strstr(model, "Raspberry Pi 3 Model A Plus")) return 0;
+        int lim = 60;
+        for (const char* cfg : {"/boot/firmware/config.txt", "/boot/config.txt"}) {
+            FILE* c = std::fopen(cfg, "rb");
+            if (!c) continue;
+            char line[256];
+            while (std::fgets(line, sizeof line, c)) {
+                int x = 0;
+                if (std::sscanf(line, " temp_soft_limit = %d", &x) == 1 || std::sscanf(line, " temp_soft_limit=%d", &x) == 1)
+                    if (x >= 60 && x <= 70) lim = x;
+            }
+            std::fclose(c);
+            break;
+        }
+        return lim;
+    }();
+    return v;
+}
+
 inline SysStats readSys() {
     SysStats s;
+    s.softLimitC = readSoftTempLimitC();
 #if defined(__APPLE__)
     // ★★ macOS HAS NO /proc AT ALL, so everything here comes from sysctl and mach. Verified on a
     //    real machine rather than assumed (2026-08-07).
@@ -1713,6 +1746,7 @@ inline std::string sysJson(const SysStats& s) {
     }
     j += std::string(",\"loadStatus\":\"") + loadStatus(s) + "\"";
     if (s.haveTemp) { char b[64]; snprintf(b, sizeof b, ",\"tempC\":%.1f", s.tempC); j += b; }
+    if (s.haveTemp && s.softLimitC > 0) j += ",\"softLimitC\":" + std::to_string(s.softLimitC);
     if (s.haveVolt) {
         j += ",\"underVoltage\":";     j += s.underVoltageNow  ? "true" : "false";
         j += ",\"underVoltageEver\":"; j += s.underVoltageEver ? "true" : "false";

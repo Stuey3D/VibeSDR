@@ -500,6 +500,37 @@ def main():
         ok(nm3.active == "vibe-net-1" and not box3.hold_own and "hotspot" in box3.last_error,
            "with no hotspot of its own set up, Own Wi-Fi is refused and says why")
 
+    # ── THE CPU GOVERNOR FOLLOWS THE RADIO (battery box, Stuart 2026-10-10) ──
+    with tempfile.TemporaryDirectory() as tmp:
+        vp.CPUFREQ_DIR = os.path.join(tmp, "cpu")
+        for c in range(4):
+            d = os.path.join(vp.CPUFREQ_DIR, "cpu%d" % c, "cpufreq"); os.makedirs(d)
+            open(os.path.join(d, "scaling_governor"), "w").write("performance")
+            open(os.path.join(d, "scaling_available_governors"), "w").write("conservative ondemand userspace powersave performance schedutil\n")
+        os.makedirs(os.path.join(vp.CPUFREQ_DIR, "cpufreq"))      # not a cpuN — ignored
+        vp.ACTIVE_FILE = os.path.join(tmp, "pocket-active")
+        vp.SERVER_CONF = os.path.join(tmp, "config.json")
+        open(vp.SERVER_CONF, "w").write('{"configured": true}')
+        gov_of = lambda: {open(os.path.join(vp.CPUFREQ_DIR, "cpu%d" % c, "cpufreq", "scaling_governor")).read() for c in range(4)}
+        g = vp.GovernorFollower()
+        open(vp.ACTIVE_FILE, "w").close()
+        g.tick()
+        ok(gov_of() == {"performance"}, "a listener just now: performance on every core")
+        os.utime(vp.ACTIVE_FILE, (time.time() - 90, time.time() - 90))
+        g.tick()
+        ok(gov_of() == {"ondemand"}, "nobody for a minute and a half: ondemand (the CPU may idle down)")
+        os.utime(vp.ACTIVE_FILE, None)
+        g.tick()
+        ok(gov_of() == {"performance"}, "a listener again: straight back to performance")
+        os.remove(vp.ACTIVE_FILE)
+        g.tick()
+        ok(gov_of() == {"ondemand"}, "never used since boot: idles")
+        open(vp.SERVER_CONF, "w").write('{"configured": true, "cpuGovernor": "schedutil"}')
+        for c in range(4): open(os.path.join(vp.CPUFREQ_DIR, "cpu%d" % c, "cpufreq", "scaling_governor"), "w").write("schedutil")
+        open(vp.ACTIVE_FILE, "w").close()
+        g.tick()
+        ok(gov_of() == {"schedutil"}, "a governor the OWNER chose in setup is never touched")
+
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")
 
