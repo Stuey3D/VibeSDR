@@ -633,22 +633,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            can carry, and there is one uplink however many radios are plugged in — asking per radio
            invited three answers to a question that has one, and three ways to get it wrong
            (Stuart, 2026-08-08: "only one selection Opus applies to all radios"). -->
-<div class="card">
-      <h2>Waterfall rate</h2>
-      <p class="why">Applies to every radio on this machine.</p>
-      <!-- ★ THE ONE SETTING SIMPLE MODE HAD AND FULL DID NOT. The Mac's Simple pane has offered
-           this since it shipped; moving everything else to the browser left it behind, so a Full
-           mode owner had no way to cap the rate at all (Stuart, 2026-08-11). -->
-      <label><span class="lbl">Waterfall rate</span>
-        <select id="maxFps">
-          <option value="20">Full &middot; 20 fps</option>
-          <option value="10">Half &middot; 10 fps</option>
-          <option value="5">Quarter &middot; 5 fps</option>
-        </select>
-        <div class="hint">The rate this machine runs at, and the fastest a listener may ask for —
-          they can still choose a slower waterfall. Halving it roughly halves what this machine
-          sends: worth doing on a metered connection, or where several people share one uplink.</div></label>
-    </div>
+<!-- ★ The waterfall rate moved to each radio's own tab (Stuart, 2026-10-11) — see "Waterfall rate" there. -->
 
     <!-- ★★★ THE "Power saving" CARD IS GONE WITH THE FEATURE IT GOVERNED. It forced the client's
          30-second idle slowdown on, and that slowdown has been removed: it inferred "nobody is
@@ -1450,6 +1435,19 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            still choose a narrower one for themselves. Ticked, everybody gets this span and the
            choice disappears from their screen &mdash; which is what you want on a shared dial,
            where one person narrowing the window narrows it for the room.</div></label>
+      <!-- ★★★ PER RADIO (Stuart, 2026-10-11): "an 8 MS/s SDRplay at 20 may be too much but at 5 it may work
+           well, whereas a 2.4 MS/s RTL at 20 may be fine". It sat on the master tab as one rate for the
+           machine, and on a Full-mode server that save was silently dropped (5 fps stayed 20). -->
+      <label><span class="lbl">Waterfall rate</span>
+        <select id="maxFps">
+          <option value="20">Full &middot; 20 fps</option>
+          <option value="10">Half &middot; 10 fps</option>
+          <option value="5">Quarter &middot; 5 fps</option>
+        </select>
+        <div class="hint">For this radio: the rate it runs at, and the fastest a listener may ask for &mdash;
+          they can still choose a slower waterfall. Halving it roughly halves what this radio sends:
+          worth doing for a wide, fast radio, on a metered connection, or where several people share
+          one uplink.</div></label>
       <!-- ★★★ THE DAB OVERRIDE, WHICH THIS PAGE NEVER OFFERED (Stuart, 2026-09-19, setting up the first
            VibeServer Lite: "I didnt see the override option for DAB"). The config has carried
            dabRateBoost per radio for weeks and the phone app's server screen has the switch; this
@@ -3054,6 +3052,9 @@ function renderGain() {
   { const can = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
     $("dabRateBoost").disabled = !can;
     $("dabRateBoost").checked = can && !!r.dabRateBoost;
+    // ★ 0 or the orphan 15 read as Full, and saving writes a real 20 (see the note on the old master load).
+    { const f = Number(r.fftRate) || Number(r.maxFps) || 0;
+      $("maxFps").value = (f === 5 || f === 10) ? String(f) : "20"; }
     $("dabRateBoostRow").style.opacity = can ? "" : "0.45";
     $("dabRateBoostNote").style.display = can ? "" : "none";
     $("dabRateBoostNo").style.display = can ? "none" : ""; }
@@ -4526,8 +4527,6 @@ function fill() {
    *  fftRate, which defaulted to 15 — a rate this control never offered and no owner could pick,
    *  so a server set to "Full · 20 fps" ran at 15 and the label was a promise it could not keep.
    *  An existing config holding 0 (or the orphan 15) reads as Full, and saving writes a real 20. */
-  { const f = Number(cfg.maxFps) || 0;
-    $("maxFps").value = (f === 5 || f === 10) ? String(f) : "20"; }
   renderPortHint();
 
   // ★★ THIS RADIO. Read from the open tab, never from cfg — reading a radio setting off the
@@ -4769,6 +4768,9 @@ function fill() {
   });
   $("rateLock").addEventListener("change", () => { radio().rateLock = $("rateLock").checked; });
   $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; });
+  // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
+  $("maxFps").addEventListener("change", () => {
+    const v = parseFloat($("maxFps").value) || 20; radio().maxFps = v; radio().fftRate = v; });
   $("dabScanLabels").addEventListener("change", () => { radio().dabScanLabels = parseInt($("dabScanLabels").value, 10); });
   $("gainSplitSlider").addEventListener("input", () => {
     const v = parseInt($("gainSplitSlider").value, 10);
@@ -5091,13 +5093,7 @@ function stashServer() {
   cfg.landingLinkUrl = $("landingLinkUrl").value.trim();
   cfg.landingLinkLabel = $("landingLinkLabel").value.trim();
   cfg.port = parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0;
-  /* ★★★ ONE CONTROL, BOTH NUMBERS. The ceiling and the rate the engine runs at are separate
-   *  fields (maxFps and fftRate), and only the ceiling had a UI — so they drifted apart and the
-   *  page described a rate the server never used. Whatever the owner picks is now both.
-   *  ★ 20/10/5 divide 60 exactly (3, 6 and 12 repeats), so the client's interpolation gets whole
-   *    frame repeats against a 60 Hz display — Stuart, 2026-09-24. */
-  cfg.maxFps  = parseFloat($("maxFps").value) || 20;
-  cfg.fftRate = cfg.maxFps;
+  // ★ The waterfall rate is per radio now (radio().maxFps / fftRate, set by its own control).
 }
 
 /** The machine: stated once, the same on every tab. */
@@ -5134,8 +5130,6 @@ function collect() {
     // ★ 0 means "no preference", which is what an empty box means. Sending NaN would be written
     //   out as a port and the server would fail to bind with nothing to point at.
     port: parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0,
-    maxFps: parseFloat($("maxFps").value) || 20,
-    fftRate: parseFloat($("maxFps").value) || 20,
     radios: Array.isArray(cfg.radios) ? cfg.radios : []
   };
 }

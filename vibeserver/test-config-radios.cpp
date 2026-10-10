@@ -676,6 +676,21 @@ int main() {
         }
     }
 
+    std::printf("\nThe waterfall rate is per radio (Stuart, 2026-10-11: 5 fps stayed 20)\n");
+    {
+        ServerConfig s; std::string err;
+        ok(fromJson(R"({"radios":[{"serial":"A","maxFps":20,"fftRate":20},{"serial":"B","maxFps":20,"fftRate":20}]})", s, err),
+           "a two-radio machine at 20 fps", err);
+        // The page posts each radio with its own rate — the SDRplay slowed, the RTL left at 20.
+        ok(fromJson(R"({"radios":[{"serial":"A","maxFps":5,"fftRate":5},{"serial":"B","maxFps":20,"fftRate":20}]})", s, err),
+           "the setup page saves radio A at 5, radio B at 20", err);
+        ok(s.radios.size() == 2 && s.radios[0].fftRate == 5 && s.radios[0].maxFps == 5
+           && s.radios[1].fftRate == 20, "★ A runs at 5 and B stays at 20");
+        ServerConfig back; ok(fromJson(toJson(s), back, err) && back.radios.size() == 2
+           && back.radios[0].fftRate == 5 && back.radios[1].fftRate == 20, "★ and both survive a save and reload");
+        ok(fromJson(R"({"gain":123})", s, err) && s.radios[0].fftRate == 5, "a patch without a rate leaves it alone");
+    }
+
     std::printf("\n%s%d checks\n", failures ? "FAILURES — " : "", checks);
     if (failures) std::printf("%d FAILED\n", failures);
     return failures ? 1 : 0;
