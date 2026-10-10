@@ -84,6 +84,7 @@ SERVER_CONF  = "/etc/vibeserver/config.json"                # the server's setti
 #       from 10.42.0.1 to the home network's address by itself; a record would go stale on the switch.
 SETUP_HOST   = "vibeserversetup"
 RUN_HOST     = "vibepocket"
+RETIRE_SEC   = 180           # ★ how long the setup name outlives a setup finished in this run (see sync_hostname)
 HOSTNAME_FILE = "/etc/hostname"
 HOSTS_FILE    = "/etc/hosts"
 
@@ -280,6 +281,8 @@ class Box:
         self.clients = 0
         self.captive_port = None
         self.host_synced = False
+        self.saw_unconfigured = False
+        self.configured_at = None
         self.since = int(time.time())
         self.failed_until = {}        # name -> monotonic time: an upgrade that failed is not retried for a while
         self.hold_own = False         # ★ the owner chose Own Wi-Fi (memory only — a power cycle clears it)
@@ -546,8 +549,19 @@ class Box:
                 "sheet will not open by itself; http://%s:%d/ still works" % (AP_ADDR, port))
 
     def sync_hostname(self, configured):
-        """The setup name while unconfigured, the run name after. Cheap when nothing changes."""
-        want = RUN_HOST if configured else SETUP_HOST
+        """The setup name while unconfigured, the run name after. Cheap when nothing changes.
+        ★★★ NOT THE MOMENT SETUP FINISHES (Stuart's pocket box, 2026-10-10: "Save and Restart" hung). The page that
+        pressed it is still talking to VibeServerSetup.local, waiting for the server to come back — retiring the name
+        within seconds left it waiting on a name that no longer answered. So a box that was set up DURING this run
+        keeps the setup name for RETIRE_SEC (the page shows the new address meanwhile); one that boots already set up
+        switches at once."""
+        now = self.sh.now()
+        if not configured:
+            self.saw_unconfigured, self.configured_at = True, None
+        elif self.configured_at is None:
+            self.configured_at = now
+        retire = configured and (not self.saw_unconfigured or now - self.configured_at >= RETIRE_SEC)
+        want = RUN_HOST if retire else SETUP_HOST
         try:
             with open(HOSTNAME_FILE) as f:
                 have = f.read().strip()

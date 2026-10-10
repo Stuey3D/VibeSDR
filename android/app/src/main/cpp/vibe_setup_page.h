@@ -3317,7 +3317,7 @@ async function renderHw() {
   } catch (e) { /* single-radio server: it is always ours */ }
 
   if (mine) {
-    try { hw = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json(); } catch (e) {}
+    try { hw = await (await fetchSoon("/vibeserver/hardware")).json(); } catch (e) {}
     // ★ Same fallback as the other branch. A control with no options is not "unknown", it is
     //   BROKEN-looking, and the driver's own list is always better than an empty box.
     if (!hw || !hw.rates || !hw.rates.length) {
@@ -3329,8 +3329,7 @@ async function renderHw() {
     // ★ Ask that radio's own process through the front door, if it is running. If it is not — the
     //   usual case while setting one up — fall back to what its driver can do.
     try {
-      hw = await (await fetch(`/r/${encodeURIComponent(r.serial)}/vibeserver/hardware`,
-                              {cache:"no-store"})).json();
+      hw = await (await fetchSoon(`/r/${encodeURIComponent(r.serial)}/vibeserver/hardware`)).json();
     } catch (e) { hw = null; }
     if (!hw || !hw.rates || !hw.rates.length) {
       const d = DRIVER_HW[r.driver] || DRIVER_HW.rtl;
@@ -3428,7 +3427,11 @@ async function renderHw() {
   //       save it back. Marked so it is obvious.
   const rateSel = $("rate");
   if (rateSel && hw && hw.rates && hw.rates.length) {
-    const want = String(radio().rate || hw.rates[0]);
+    // ★★ A radio that has never been set up carries the RTL default (2.4 MS/s) from when it was added. Keeping an
+    //    impossible stored rate is right for a rate the OWNER chose (they must see it); for one nobody chose, the
+    //    radio's own first rate is the answer (Stuart's HF+, 2026-10-10: offered 2.4 MS/s, "not offered", selected).
+    let want = String(radio().rate || hw.rates[0]);
+    if (!radio().configured && !hw.rates.some(x => String(x) === want)) { want = String(hw.rates[0]); radio().rate = hw.rates[0]; }
     /* ★★★ SAY WHAT THE RATE COSTS IN BITS. An RSP's ADC is not 14-bit at every rate — it trades
      *     resolution for bandwidth in hardware (RSP1A specs):
      *         14-bit  2 - 6.048 MS/s      12-bit  6.048 - 8.064
@@ -3830,6 +3833,16 @@ let curRadio = 0;
 //   an edit, and refreshHw() below is awaited on the save path so even that cannot happen.
 let formRadio = -2;
 let hwPending  = Promise.resolve();
+
+/** ★★★ A QUESTION THAT CANNOT HANG THE PAGE (Stuart's pocket box, 2026-10-10). The radio tab asks the radio's own
+ *  process what it can do, through the front door — and SAVE waits for that answer (hwPending). A radio process still
+ *  starting (just added, opening its hardware) never answered, the fetch had no deadline, and "Saving…" sat there for
+ *  ever with nothing saved. Now it gives up after 4 s and the driver's own table answers instead. */
+function fetchSoon(url, ms = 4000) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  return fetch(url, {cache: "no-store", signal: ac.signal}).finally(() => clearTimeout(t));
+}
 
 /** Re-render the hardware pane for the CURRENT tab, and only then let the form be read back.
  *  ★ The index is captured so a slow render for a tab the owner has already left cannot mark the
@@ -6236,9 +6249,22 @@ function backUp() {
   $("saveBtn").disabled = false;
   // ★ A pocket box can now leave its hotspot — the finish panel was waiting on exactly this.
   if (POCKET && cfg) { cfg.configured = true; wifiFinishRender(); }
+  const next = pocketNewHome();
   $("barMsg").innerHTML =
     '<span class="ok">Receiver is back up with your settings.</span>' +
-    '<a id="gotoRx" href="/" class="gotoBtn" style="margin-left:14px">Open the receiver &rarr;</a>';
+    `<a id="gotoRx" href="${esc(next ? next : "/")}" class="gotoBtn" style="margin-left:14px">Open the receiver &rarr;</a>` +
+    (next ? `<br><span class="note" style="border:0;padding:0">From now on this box is at <b>${esc(next.replace(/^http:\/\//, "").replace(/\/$/, ""))}</b> — VibeServerSetup.local retires in a few minutes.</span>` : "");
+}
+
+/** ★★★ WHERE A POCKET BOX LIVES ONCE SET UP — when this page is still on the temporary setup name. The box keeps
+ *  VibeServerSetup.local for a few minutes after setup (vibeserver-pocket sync_hostname) so this page can come back
+ *  at all; "Open the receiver" then goes to the name chosen in setup, not to a name about to stop answering. */
+function pocketNewHome() {
+  if (!POCKET || !/^vibeserversetup\.local$/i.test(location.hostname)) return "";
+  const {out, suffix} = wifiAddresses();
+  // The name chosen in setup if there is one; never the setup name itself; else the box's own permanent name.
+  const chosen = out.find(x => !/\/\/vibeserversetup\./i.test(x) && !/\/\/vibepocket\./i.test(x));
+  return chosen || ("http://vibepocket.local" + suffix + "/");
 }
 </script>
 )HTML";

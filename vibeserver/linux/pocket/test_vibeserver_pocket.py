@@ -407,7 +407,16 @@ def main():
         calls.clear(); box.sync_hostname(False)
         ok(not calls, "nothing to do → nothing run (it is called every few seconds)")
         box.sync_hostname(True)
-        ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "configured → the setup name is retired (vibepocket)")
+        ok(["hostnamectl", "set-hostname", "vibepocket"] not in calls,
+           "set up JUST NOW: the setup name stays (the page that pressed Save is still talking to it)")
+        nm.t += 200
+        box.sync_hostname(True)
+        ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "…retired 3 minutes later (vibepocket)")
+        nm2, box2 = make(tmp)
+        calls.clear(); box2.sh.run = spy
+        with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibeserversetup\n")
+        box2.sync_hostname(True)
+        ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "a box that BOOTS already set up switches at once")
 
     # ── REORDER WHILE CONNECTED (Stuart's Pi 3 A+, 2026-10-10): phone hotspot moved to 1 while on Home, phone in range ──
     with tempfile.TemporaryDirectory() as tmp:

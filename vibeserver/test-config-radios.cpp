@@ -547,6 +547,11 @@ int main() {
         ok(s.radios.size() == 4 && s.radios[3].serial == "00000009" && s.radios[3].enabled && !s.radios[3].configured,
            "★ appended, enabled, NOT configured — on air once its tab is saved");
         ok(!applySdrChange(s, "add", "00000009", "", "rtlsdr", "", err), "adding it twice is refused");
+        ok(s.radios[3].rate == 2'400'000, "an added RTL keeps the RTL rate (2.4 MS/s)");
+        ServerConfig h;
+        ok(applySdrChange(h, "add", "DD52B980BE4946DA", "", "airspyhf", "Airspy HF+", err), "add an HF+", err);
+        ok(h.radios[0].rate == 912'000,
+           "★ an added HF+ gets ITS OWN rate (912 kS/s), not the RTL default (Stuart's pocket box, 2026-10-10)");
     }
 
     std::printf("\nDISPLAY ORDER moves the cards and NOTHING ELSE\n");

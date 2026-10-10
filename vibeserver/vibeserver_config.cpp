@@ -856,6 +856,10 @@ bool applySdrChange(ServerConfig& cfg, const std::string& action, const std::str
         if (newDriver.empty()) { err = "no driver for the new radio"; return false; }
         RadioConfig nr;
         nr.serial = serial; nr.driver = newDriver;
+        // ★★ ITS OWN RATE, not the RTL default (Stuart's HF+, 2026-10-10: added at 2.4 MS/s, which an HF+ cannot do;
+        //    the setup page then offered that first). The first rate each driver's own list offers.
+        nr.rate = newDriver == "airspyhf" ? 912000 : newDriver == "sdrplay" ? 2000000 : newDriver == "hackrf" ? 2000000
+                : newDriver == "airspy" ? 2500000 : nr.rate;
         nr.label = newLabel.empty() ? newDriver : newLabel;
         nr.enabled = true;       // ★ they plugged it in and pressed ADD: that is "serve it"
         nr.configured = false;   // ★ …but it goes on air only once its tab is saved, as everywhere
