@@ -81,7 +81,9 @@ gets a random password that is not kept. SSH is off.
   and `NetworkManager`. `postinst` cannot enable them in a chroot.
 - **Disables** Bluetooth (`hciuart`, `bluetooth`, `dtoverlay=disable-bt`), ModemManager,
   triggerhappy, the apt daily timers, `man-db.timer` and `e2scrub_all.timer`, and masks udisks2.
-  It turns the KMS display driver off and sets `gpu_mem=16`: the box is headless.
+  It turns the KMS display driver, onboard audio (`dtparam=audio=off`) and the boot splash off, and sets
+  `gpu_mem=16`: the box is headless. `vibeserver-pocket` powers the display output down at every boot
+  (`vcgencmd display_power 0`) and blocks Bluetooth, so a box updated over apt gets that too (power + EMI).
 - **Sets** the hostname to `vibepocket` and the Wi-Fi country. It creates a locked login so first
   boot never asks for a user.
 - **Power-cut hardening.**

@@ -37,6 +37,7 @@
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -1072,8 +1073,24 @@ def vibeserver_uid():
         return None
 
 
+def quiet_hardware(sh, which=shutil.which):
+    """★★ EVERYTHING A POCKET RADIO DOES NOT USE, OFF (Stuart + Kiko, 2026-10-10: power AND EMI — a running
+    display output or Bluetooth radio is one more thing radiating next to the antenna).
+      · the DISPLAY output: with the KMS driver off (the image), the firmware drives HDMI — or, with no HDMI
+        plugged in, composite video on the AV jack of a Pi 3. display_power 0 powers that output down.
+        Nobody can log in on a screen anyway (no getty, locked account).
+      · Bluetooth: the image's dtoverlay=disable-bt removes it; this blocks it as well, for a box whose
+        config.txt predates that line.
+    Done here as well as in the image so a box that updates over apt gets it too."""
+    if which("vcgencmd"):
+        sh.run(["vcgencmd", "display_power", "0"], timeout=10)
+    if which("rfkill"):
+        sh.run(["rfkill", "block", "bluetooth"], timeout=10)
+
+
 def setup_once(box):
     sh = box.sh
+    quiet_hardware(sh)
     # ★ The Pi's Wi-Fi is soft-blocked until a country is set; the image sets one, this makes sure.
     sh.run(["rfkill", "unblock", "wifi"], timeout=10)
     sh.run(["nmcli", "radio", "wifi", "on"], timeout=10)

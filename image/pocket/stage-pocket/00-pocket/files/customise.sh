@@ -140,15 +140,22 @@ for BOOTCFG in /boot/firmware/config.txt /boot/config.txt; do
     #    Wi-Fi chip's antenna and UART on the Pi 3 — off, it can never step on the hotspot.
     sed -i 's/^\(dtoverlay=vc4-kms-v3d.*\)/#\1  # off: headless pocket box/' "$BOOTCFG"
     sed -i 's/^\(camera_auto_detect=1\)/#\1/; s/^\(display_auto_detect=1\)/#\1/' "$BOOTCFG"
+    # ★★ ONBOARD AUDIO OFF (Stuart + Kiko, 2026-10-10: power AND EMI). The 3.5 mm jack is PWM audio — a
+    #    switching output beside the antenna that nobody listens to (the audio goes out over Wi-Fi).
+    #    The display output is powered down at every boot by vibeserver-pocket (vcgencmd display_power 0).
+    sed -i 's/^\(dtparam=audio=on\)/#\1  # off: pocket box audio goes over Wi-Fi/' "$BOOTCFG"
     cat >> "$BOOTCFG" <<'EOF'
 
-# VibeServer pocket — headless radio box
+# VibeServer pocket — headless radio box: no display, no Bluetooth, no onboard audio, no camera
 gpu_mem=16
 dtoverlay=disable-bt
+dtparam=audio=off
+disable_splash=1
 EOF
   fi
   break
 done
+command -v vcgencmd >/dev/null || say "!! no vcgencmd — the display output will stay powered"
 
 # ── 7b. POWER-CUT HARDENING (Stuart, 2026-10-10: "the box WILL have its power pulled at any moment") ──
 # ★★★ READ-ONLY ROOT. overlayroot (raspi-config's own "Overlay File System") is installed and its

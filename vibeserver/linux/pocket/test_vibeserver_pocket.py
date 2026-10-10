@@ -540,6 +540,15 @@ def main():
         g.tick()
         ok(gov_of() == {"schedutil"}, "a governor the OWNER chose in setup is never touched")
 
+    # ── unused hardware off (power + EMI) ──
+    nm = FakeNM()
+    vp.quiet_hardware(nm, which=lambda _: "/usr/bin/x")
+    ok(["vcgencmd", "display_power", "0"] in nm.calls, "the display output is powered down (HDMI / composite)")
+    ok(["rfkill", "block", "bluetooth"] in nm.calls, "Bluetooth is blocked")
+    nm = FakeNM()
+    vp.quiet_hardware(nm, which=lambda _: None)
+    ok(nm.calls == [], "…and nothing is run where the tools are missing (not a Pi)")
+
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")
 
