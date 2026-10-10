@@ -158,6 +158,7 @@ import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
+import { usePocketWifi } from '../hooks/usePocketWifi';
 import { IS_TV } from '../utils/tv';
 import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig } from '../utils/airband';
@@ -1018,6 +1019,10 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    machine, and is absent for a genuine loopback session. No new route param, so no chance of
    *    the two disagreeing. */
   const isVibeServer = isLocal && !!route.params.localHost && !route.params.isTcp;
+  /* ★★ PORTABLE WI-FI (2026-10-10): only a pocket VibeServer on its own network answers — everything else draws nothing.
+   *  After a switch the box leaves this network, so "OK" leaves the session (back to the server list) to start again. */
+  const leaveForSwitch = useCallback(() => { try { navigation.goBack(); } catch {} }, [navigation]);
+  const pocketWifi = usePocketWifi(isVibeServer ? connectBase : null, leaveForSwitch).menu;
   // rtl_tcp network health, polled from the shim's jitter buffer. 3 = good (also the
   // resting value on the USB path, where it never clamps anything).
   const netLinkRef = useRef<0|1|2|3>(3);
@@ -11412,6 +11417,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         owrxDspDefaults={owrxDspDefaults}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
         onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
+        pocketWifi={pocketWifi ? { ...pocketWifi, onChoose: (to: 'own' | 'network') => { setMenuOpen(false); pocketWifi.onChoose(to); } } : null}
       />
       )} />
       </PanelBoundary>

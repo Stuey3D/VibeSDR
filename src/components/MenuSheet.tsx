@@ -281,6 +281,9 @@ export interface MenuSheetProps {
   onAbout?:         () => void;
   /** Opens the saved-recordings browser. */
   onRecordings?:    () => void;
+  /** ★★ PORTABLE WI-FI (2026-10-10): present only on a pocket VibeServer reached on its own network (the server says
+   *  so — never through the tunnel). `line` is the link (services/pocketConnection.ts), `weak` the server's verdict. */
+  pocketWifi?: { onOwn: boolean; canOwn: boolean; line: string; weak: boolean; onChoose: (to: 'own' | 'network') => void } | null;
 
   // Display settings panel props
   vfoNeedle?:         string;
@@ -1184,7 +1187,7 @@ function MenuSheetBody({
   antennas, antennaInUse, antennaLocked, antennaNote, onAntenna,
   adminSet = false, adminOk = false, adminRefused = false, adminFailReason = null, onAdminUnlock,
   onResetSettings, onReplayTour, onDisplaySettings,
-  serverVersion = null, isVibeServer = false, onAbout, onRecordings,
+  serverVersion = null, isVibeServer = false, onAbout, onRecordings, pocketWifi = null,
   onZoomIn, onZoomOut, onZoomMin, onZoomMax, onSetDefault, isDefaultInstance = false,
   isFavourite = false, onToggleFavourite,
   decMode = null, decOn = false, onDecToggle,
@@ -1493,6 +1496,28 @@ function MenuSheetBody({
               {(antennaLocked || !!antennaNote) && (
                 <Text style={{ color: '#d9a441', fontSize: 11, marginTop: 4, marginHorizontal: 4 }}>
                   {antennaLocked ? 'The owner has fixed the aerial for this receiver.' : antennaNote}
+                </Text>
+              )}
+            </>)}
+
+            {/* ── PORTABLE WI-FI (Stuart, 2026-10-10) — a pocket VibeServer, on its own network only ──
+                ★ Network | Own Wi-Fi, the link under it, and the recommendation when the server calls the link weak.
+                  With no hotspot of its own set up there is nothing to switch to: the line says so (no dead key). */}
+            {!!pocketWifi && (<>
+              <SectionLabel label="PORTABLE WI-FI" icon="hardware" />
+              <BtnRow>
+                <Btn label="NETWORK" active={!pocketWifi.onOwn} onPress={() => pocketWifi.onChoose('network')} />
+                {pocketWifi.canOwn && (
+                  <Btn label="OWN WI-FI" active={pocketWifi.onOwn} onPress={() => pocketWifi.onChoose('own')} />
+                )}
+              </BtnRow>
+              {!!pocketWifi.line && (
+                <Text style={{ color: '#d9a441', fontSize: 11, marginTop: 4, marginHorizontal: 4 }}>{pocketWifi.line}</Text>
+              )}
+              {(pocketWifi.weak || !pocketWifi.canOwn) && (
+                <Text style={{ color: '#d9a441', fontSize: 11, marginTop: 2, marginHorizontal: 4, opacity: 0.8 }}>
+                  {!pocketWifi.canOwn ? "Set up this box's own hotspot (setup → Wi-Fi) to be able to switch to it."
+                                      : 'Weak link — switching to Own Wi-Fi is recommended.'}
                 </Text>
               )}
             </>)}
