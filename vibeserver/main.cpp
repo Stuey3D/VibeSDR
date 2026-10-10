@@ -1830,7 +1830,12 @@ int main(int argc, char** argv) {
     if (g_runtimeConfig.configured && g_runtimeConfig.mdnsAdvertise && !wantName.empty()) {
         const std::string label = vsconfig::mdnsLabel(wantName);
         const std::string ip = primaryIpv4();
-        if (!label.empty() && !ip.empty()) {
+        // ★★ NO ADDRESS YET IS STARTED ANYWAY (the pocket box boots before its Wi-Fi joins): the responder waits for
+        //    one and announces then (mdns_responder.cpp loop). Refusing here left the box unlisted for good.
+        if (ip.empty() && !label.empty())
+            std::printf("VibeServer: no network address yet — %s.local will be announced as soon as there is one\n",
+                        label.c_str());
+        if (!label.empty()) {
             // ★★★ PUBLISH THE SERVICE, NOT JUST THE NAME. This called startMdns(), which answers
             //     HOSTNAME queries only — so `vibeserver.local` resolved while the Pi never
             //     appeared in the app's, the watch's or any client's Discovered list. Every Linux
@@ -1881,8 +1886,7 @@ int main(int argc, char** argv) {
                             label.c_str(), ip.c_str(), advPort, isDoor ? " (front door)" : "");
             }
         } else {
-            std::fprintf(stderr, "VibeServer: cannot advertise on mDNS — %s\n",
-                         ip.empty() ? "no IPv4 address found" : "no name set");
+            std::fprintf(stderr, "VibeServer: cannot advertise on mDNS — no name set\n");
         }
     }
     /* ★★★ THE BENCHMARK, WIRED (Stuart, 2026-09-19). What this box can actually carry, measured on the box —

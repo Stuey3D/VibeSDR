@@ -48,6 +48,7 @@
 #endif
 
 #include <atomic>
+#include <chrono>
 #include <string>
 #include <thread>
 #include <vector>
@@ -375,6 +376,19 @@ uint32_t currentIpv4() {
 #endif
 
 void loop(std::string base, uint32_t addr) {
+#ifdef VIBE_MDNS_FOLLOW_IP
+    // ★★★ NO ADDRESS YET IS NOT "NEVER" (Stuart's pocket box, 2026-10-10: its name resolved by hand but the apps never
+    //     listed it). VibeServer starts at boot before the Wi-Fi has joined anything, so there was no address, the
+    //     responder was never started, and nothing ever started it later. Now it waits here — one look every 2 s —
+    //     and announces the moment the machine has an address; the follow below keeps it right after that.
+    while (addr == 0 && g_run.load()) {
+        addr = currentIpv4();
+        if (!addr) std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+    if (!g_run.load()) return;
+    g_addr = addr;
+    LOGI("mDNS: announcing %s.local at %s", base.c_str(), inet_ntoa(*(in_addr*)&addr));
+#endif
     int fd = openSocket();
     if (fd < 0) return;
 
@@ -602,8 +616,14 @@ void loop(std::string base, uint32_t addr) {
 void mdnsStart(const std::string& host, const std::string& ipv4,
                uint16_t servicePort, bool pinRequired) {
     if (g_run.load()) return;
-    if (host.empty() || ipv4.empty()) return;
+    if (host.empty()) return;
+#ifdef VIBE_MDNS_FOLLOW_IP
+    // ★ No address yet (booting before the network): start anyway — loop() waits for one.
+    uint32_t addr = ipv4.empty() ? 0 : inet_addr(ipv4.c_str());
+#else
+    if (ipv4.empty()) return;
     uint32_t addr = inet_addr(ipv4.c_str());
+#endif
     if (addr == INADDR_NONE) return;
     g_addr = addr;
     g_svcPort = servicePort;
