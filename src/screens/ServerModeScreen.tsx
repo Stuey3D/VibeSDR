@@ -2002,7 +2002,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
               app AND Lite (which renders this screen). The phone that crashed is the one that HOSTS the
               server; NickB's report came from his listener phone because About was the only door.
               `server` adds the server section (version, radio, uptime) even when it is stopped. */}
-          <ExportLogsLink server color={C.textDim} fontFamily={F} style={{ marginTop: 14 }} />
+          <ExportLogsLink color={C.textDim} fontFamily={F} style={{ marginTop: 14 }} />
           <LiteUpdate C={C} F={F} />
         </ScrollView>
       </SafeAreaView>
@@ -3660,7 +3660,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           <Text style={{ color: C.gold, fontFamily: F, fontSize: 15 }}>{isLite ? '✕ Close app' : '‹ Cancel'}</Text>
         </TouchableOpacity>
         {/* ★ The setup view is where an owner lands after a crash took the server down — see the note above. */}
-        <ExportLogsLink server color={C.textDim} fontFamily={F} style={{ marginTop: 14 }} />
+        <ExportLogsLink color={C.textDim} fontFamily={F} style={{ marginTop: 14 }} />
         <LiteUpdate C={C} F={F} />
       </ScrollView>
     </SafeAreaView>

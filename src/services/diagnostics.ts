@@ -94,14 +94,12 @@ async function localListenSection(port: number): Promise<string[]> {
   } catch { return []; }
 }
 
-async function serverSection(always: boolean): Promise<{ lines: string[]; version: string | null }> {
+async function serverSection(): Promise<{ lines: string[]; version: string | null }> {
   const lines: string[] = [];
   let version: string | null = null;
   if (Platform.OS !== 'android' || !(NativeModules as any).VibeLocalSDR) return { lines, version };
   let st = null as Awaited<ReturnType<typeof getVibeServerStatus>>;
   try { st = await getVibeServerStatus(); } catch {}
-  // From About / the home screen: only when this device IS serving.
-  if (!always && !st?.running) return { lines, version };
   lines.push('', '--- this device as a VibeServer ---');
   lines.push(`running   : ${st ? (st.running ? 'yes' : 'no') : 'unknown (no status)'}`);
   try {
@@ -129,11 +127,12 @@ async function serverSection(always: boolean): Promise<{ lines: string[]; versio
 }
 
 /** The whole report as plain text — deliberately readable, because the user is shown it. */
-/** ★ `server`: the report is being exported FROM the server screen, so the server section is printed
- *  even when the server is stopped (it has just crashed, most likely). Elsewhere it appears only while
- *  this device is serving. */
-export async function buildDiagnostics(extra?: Record<string, string | number | boolean>,
-                                       opts?: { server?: boolean }): Promise<string> {
+/** ★★★ ALWAYS THE WHOLE REPORT (Stuart, 2026-10-10: "all the log exports should be the full amount … I'd rather
+ *  have too much than too little"). There was a short form — the server section only from the server screen or
+ *  while serving — and the HF+ report came from About on local listen with nothing about the radio in it. Every
+ *  export button now produces this one report: the server section whether running or not, the local-listen
+ *  receiver if there is one, the audio path, the protocol log, crashes, breadcrumbs. */
+export async function buildDiagnostics(extra?: Record<string, string | number | boolean>): Promise<string> {
   const lines: string[] = [];
   lines.push('VibeSDR diagnostics');
   lines.push('===================');
@@ -142,13 +141,10 @@ export async function buildDiagnostics(extra?: Record<string, string | number | 
   let d: Awaited<ReturnType<NonNullable<NonNullable<typeof Vibe>['getDeviceInfo']>>> | undefined;
   try { d = await Vibe?.getDeviceInfo?.(); } catch {}
   let srv: { lines: string[]; version: string | null } = { lines: [], version: null };
-  try { srv = await serverSection(!!opts?.server); } catch {}
-  // ★ Not serving, but listening to this device's own radio: the same server, on the port the audio path used.
+  try { srv = await serverSection(); } catch {}
+  // ★ Listening to this device's own radio (local listen): the same server, on the port the audio path used.
   let local: string[] = [];
-  if (!srv.lines.length) {
-    const lp = localListenPort();
-    try { local = await localListenSection(lp); } catch {}
-  }
+  try { local = await localListenSection(localListenPort()); } catch {}
 
   /* ★★★ THE FULL IDENTITY (2026-10-07). "app : 11.0" could not tell a pre-RC14 build (no crash capture)
    *  from RC26 — Nick's Pixel 6 report did exactly that. Now: name, version, RC, build number and package,

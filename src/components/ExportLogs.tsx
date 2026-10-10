@@ -35,10 +35,10 @@ function copyText(text: string): boolean {
   } catch { return false; }
 }
 
-/** Build the report and offer Share… / Copy. `server`: called from the server screen (see buildDiagnostics). */
-export async function exportLogs(opts?: { server?: boolean }): Promise<void> {
+/** Build the report — always the whole of it, from every button (see buildDiagnostics) — and offer Share… / Copy. */
+export async function exportLogs(): Promise<void> {
   let report: string;
-  try { report = await buildDiagnostics(undefined, { server: !!opts?.server }); }
+  try { report = await buildDiagnostics(); }
   catch (e: any) { Alert.alert('Export logs', `The report could not be put together: ${String(e?.message ?? e)}`); return; }
   const n = report.length;
   const size = n > DISCORD_LIMIT
@@ -47,7 +47,10 @@ export async function exportLogs(opts?: { server?: boolean }): Promise<void> {
   Alert.alert(
     'Export logs',
     `${size} No PINs, passwords or location are included.\n\n`
-      + (n > 900 ? report.slice(0, 900) + '\n…' : report),
+      // ★ The WHOLE report, never a preview (Stuart, 2026-10-10: "I'd rather have too much than too little").
+      //   It was cut at 900 characters, and people PHOTOGRAPH this dialog — Chicopee's photo stopped mid-report.
+      //   Both platforms' alerts scroll a long message.
+      + report,
     [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -65,12 +68,12 @@ export async function exportLogs(opts?: { server?: boolean }): Promise<void> {
 }
 
 /** ★ The small link itself — deliberately quiet (dim text, no box), the same words everywhere. */
-export default function ExportLogsLink({ color, fontFamily, fontSize = 13, server, style, textStyle }: {
-  color: string; fontFamily?: string; fontSize?: number; server?: boolean;
+export default function ExportLogsLink({ color, fontFamily, fontSize = 13, style, textStyle }: {
+  color: string; fontFamily?: string; fontSize?: number;
   style?: StyleProp<ViewStyle>; textStyle?: StyleProp<TextStyle>;
 }) {
   return (
-    <TouchableOpacity onPress={() => { void exportLogs({ server }); }} accessibilityRole="button"
+    <TouchableOpacity onPress={() => { void exportLogs(); }} accessibilityRole="button"
                       accessibilityLabel="Export logs for a crash report"
                       hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
                       style={[{ alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 12 }, style]}>
