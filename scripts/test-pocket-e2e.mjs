@@ -88,6 +88,12 @@ try {
   };
   const until = async (expr, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await js(expr)) return true; await sleep(150); } return false; };
   // ★ getClientRects, not offsetParent: the save bar is position:fixed, whose offsetParent is ALWAYS null.
+  // ★ POCKET_SHOTS=<dir> saves phone-width screenshots of the first-run screens, for looking at.
+  const shot = async (name) => {
+    if (!process.env.POCKET_SHOTS) return;
+    const r = await cdp("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
+    fs.writeFileSync(path.join(process.env.POCKET_SHOTS, name + ".png"), Buffer.from(r.result.data, "base64"));
+  };
   const visible = id => `(() => { const e = document.getElementById(${JSON.stringify(id)}); return !!e && e.getClientRects().length > 0; })()`;
   await cdp("Runtime.enable");
   await cdp("Page.enable");
@@ -137,9 +143,11 @@ try {
      "…no radios, no tunnel, no 'Save and start' until the box is on the owner's network");
   ok(!(await js(visible("wifiFinish"))), "…and no separate 'what happens next' step");
   ok(await js(`document.getElementById("wifiSave").textContent === "Save Wi-Fi and join it"`), "Save says what it does: 'Save Wi-Fi and join it'");
+  await shot("1-wifi-first");
   await js(`document.getElementById("apPsk").value = "pocketpass"; document.getElementById("wifiSave").click(); 1`);
   ok(await until(visible("wifiJoining")), "Save → the 'Joining your Wi-Fi' screen, over the whole page");
   const joining = await js(`document.getElementById("wifiJoining").innerText`);
+  await shot("2-joining");
   ok(/Home/.test(joining) && /Stuart's iPhone/.test(joining) && /screenshot/i.test(joining), "…naming network 1, then 2, and saying to screenshot it");
   ok(/VibeServerSetup\.local:48991/.test(joining), "…'enter VibeServerSetup.local:<port> to continue setting up this device'");
   ok(/Pocket-SDR/.test(joining) && /hotspot you have set up/.test(joining), "…or, on the box's own hotspot only, reconnect to it and carry on");

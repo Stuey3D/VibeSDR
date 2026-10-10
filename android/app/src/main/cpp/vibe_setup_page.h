@@ -115,6 +115,9 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
           margin-top:12px}
   .checks label{display:flex;align-items:center;gap:8px;margin:0;font-size:14px}
   .checks input{accent-color:var(--amber);width:16px;height:16px}
+  /* ★ An empty note drew its amber bar on its own — a stray line beside "Save Wi-Fi" until a message
+     arrived (Stuart's first pocket test, 2026-10-10). Nothing to say, nothing drawn. */
+  .note:empty{display:none}
   .note{border-left:3px solid var(--amber);padding:8px 0 8px 12px;margin:14px 0;
         color:var(--dim);font-size:13px}
   .err{color:var(--bad);margin-top:10px;min-height:20px}
