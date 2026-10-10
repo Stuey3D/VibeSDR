@@ -47,11 +47,51 @@ if [ -z "$DEV" ]; then
       break
     fi
   done
+  # ★★★ NO PARTITION 3 AT ALL (Stuart's v6 card, 2026-10-10): the card's table held boot + root only,
+  #     so every setting lived in the RAM overlay — setup looked perfect, and the first reboot (an
+  #     'Update all packages') brought the box back as new. A box that cannot save must never look
+  #     as if it can. So the box makes the partition itself, in the FREE space straight after root:
+  #     partition 3, 256 MB, 4 MiB-aligned, LABEL=vibedata — exactly the image's layout. Only ever
+  #     an APPEND into unallocated space: root and boot are never touched, and a card with any third
+  #     partition (or a different shape) is left alone. It stays the LAST partition with the rest of
+  #     the card free after it, so it can be grown in place for the future gallery (Stuart 10-10).
+  #     The marker on it records that the box made it, so the next card that does this is known.
+  if [ -z "$DEV" ] && [ -n "$RDISK" ] && [ -b "/dev/$RDISK" ] && command -v sfdisk >/dev/null; then
+    PFX=""; case "$RDISK" in *[0-9]) PFX=p ;; esac
+    P3="/dev/${RDISK}${PFX}3"
+    NPARTS=$(sfdisk -d "/dev/$RDISK" 2>/dev/null | grep -c "^/dev/" || true)
+    ROOTNUM=$(cat "/sys/class/block/$(basename "$ROOTSRC")/partition" 2>/dev/null || echo 0)
+    if [ ! -b "$P3" ] && [ "$NPARTS" = 2 ] && [ "$ROOTNUM" = 2 ]; then
+      read -r S2S N2S <<< "$(sfdisk -d "/dev/$RDISK" | sed -n "s#^/dev/${RDISK}${PFX}2 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*#\1 \2#p")"
+      DISKS=$(cat "/sys/block/$RDISK/size" 2>/dev/null || echo 0)
+      S3S=$(( (S2S + N2S + 8191) / 8192 * 8192 )); Z3S=$((256*1024*1024/512))
+      if [ -n "$S2S" ] && [ "$((S3S + Z3S))" -le "$DISKS" ]; then
+        say "!! the card has no settings partition (boot + root only) — making partition 3 at sector $S3S, 256 MB, in the free space after root"
+        # ★ --no-tell-kernel: root is in use, so the kernel is told about the ONE new partition by
+        #   partx (BLKPG add), which works on a busy disk where a whole-table re-read would not.
+        echo "$S3S,$Z3S,83" | sfdisk -q --no-reread --no-tell-kernel --append "/dev/$RDISK" >/dev/null 2>&1 \
+          || say "!! sfdisk could not append partition 3"
+        partx -a -n 3 "/dev/$RDISK" 2>/dev/null || partprobe "/dev/$RDISK" 2>/dev/null || true
+        udevadm settle --timeout=10 2>/dev/null || sleep 2
+        if [ -b "$P3" ] && mkfs.ext4 -q -F -L "$LABEL" "$P3" >/dev/null 2>&1; then
+          DEV="$P3"; MADE_BY_BOX=1
+        else
+          say "!! could not make partition 3 — settings will NOT survive a restart"
+        fi
+      fi
+    fi
+  fi
 fi
+# ★★ WHEN NOTHING CAN BE SAVED, SAY SO. /run/vibeserver-pocket/settings-volatile tells the server, and
+#    the owner sees it before they spend ten minutes on a setup that a restart would throw away.
+VOLATILE=/run/vibeserver-pocket/settings-volatile
+mkdir -p /run/vibeserver-pocket; chmod 0755 /run/vibeserver-pocket
 if [ -z "$DEV" ]; then
-  say "no partition labelled $LABEL — running on the read-only root's defaults (setup hotspot)"
+  say "!! no partition labelled $LABEL — settings are held in RAM only and will be lost at the next restart"
+  echo "no-partition" > "$VOLATILE"; chmod 0644 "$VOLATILE"
   exit 0
 fi
+rm -f "$VOLATILE"
 
 # ── 1. Check, mount, or make afresh ──────────────────────────────────────────────────────────────
 mkdir -p "$DATA"
@@ -62,7 +102,7 @@ if ! mountpoint -q "$DATA"; then
     say "!! $LABEL would not mount even after fsck — making it afresh; the box comes up in setup mode"
     mkfs.ext4 -q -F -L "$LABEL" "$DEV" >/dev/null 2>&1
     mount -t ext4 -o noatime,data=journal,commit=5 "$DEV" "$DATA" 2>/dev/null \
-      || { say "!! still cannot mount $DEV — running on the read-only root's defaults"; exit 0; }
+      || { say "!! still cannot mount $DEV — settings are held in RAM only"; echo "no-mount" > "$VOLATILE"; chmod 0644 "$VOLATILE"; exit 0; }
   fi
 fi
 
@@ -112,5 +152,6 @@ if [ -s "$BAKED" ]; then
     ln -sfn "$BAKED" "$L"
   fi
 fi
+[ "${MADE_BY_BOX:-0}" = 1 ] && date -u +"made by the box at boot %Y-%m-%dT%H:%M:%SZ: the card had no partition 3" > "$DATA/.made-by-box"
 say "settings partition ready ($(df -h "$DATA" | awk 'NR==2{print $3" used of "$2}'))"
 exit 0

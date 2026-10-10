@@ -49,6 +49,7 @@ CONF         = "/etc/vibeserver-pocket/pocket.conf"       # the image's defaults
 #    pocket box (vibeserver-pocket-data binds /data/pocket here). Read after CONF, so it wins.
 STATE_CONF   = "/var/lib/vibeserver-pocket/pocket.conf"
 STATE_DIR    = "/run/vibeserver-pocket"
+VOLATILE_FILE = STATE_DIR + "/settings-volatile"         # written by vibeserver-pocket-data
 INBOX        = "/var/lib/vibeserver/pocket-wifi.request"
 KICK         = "/var/lib/vibeserver/pocket-kick.request"
 PORT_FILE    = "/var/lib/vibeserver/pocket-port"
@@ -864,6 +865,9 @@ class Box:
             # ★★ "full" = NM proved real internet. The server starts the tunnel ONLY on "full" — never
             #    on a hotspot, which has no upstream by definition.
             "internet": self.internet if self.mode == "client" else "none",
+            # ★★★ False when the settings partition is not in use (vibeserver-pocket-data could neither find
+            #     nor make it): setup would be held in RAM and lost at the next restart. The page says so.
+            "settingsSaved": not os.path.exists(VOLATILE_FILE),
         }
         write_state_file(self.state_path, doc)
 

@@ -283,6 +283,12 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <button type="button" class="ghost" id="wifiChange">Change Wi-Fi</button>
         <span class="note" id="wifiSummaryMsg" style="margin-left:10px"></span>
       </div>
+      <!-- ★★★ A BOX THAT CANNOT SAVE SAYS SO, FIRST (Stuart's v6 card, 2026-10-10: no settings partition, so
+           setup went perfectly and the first restart brought it back as new). From the state's settingsSaved. -->
+      <div class="note hide" id="wifiVolatile" style="border-color:#c0392b">
+        This box cannot save its settings &mdash; its settings partition is missing or unreadable.
+        Anything set up now will be lost at the next restart. Re-flash the card with the latest image.
+      </div>
       <div id="wifiEdit">
       <!-- ★★ UNSAVED, SAID AT THE TOP (Stuart, 2026-10-10: "I never noticed that button as I had to scroll to get it").
            Appears the moment anything in the card differs from what the box holds. -->
@@ -5614,6 +5620,7 @@ async function wifiLoad() {
   $("apPsk").value = "";
   $("apPsk").placeholder = WIFI.ap && WIFI.ap.set ? "saved — leave blank to keep it" : "";
   $("wifiCountry").value = WIFI.country || "";
+  $("wifiVolatile").classList.toggle("hide", WIFI.settingsSaved !== false);
   wifiRender();
   shareRender();
   try { WIFI_BASELINE = JSON.stringify(wifiCollect()); } catch (e) { WIFI_BASELINE = ""; }

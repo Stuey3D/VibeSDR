@@ -167,6 +167,16 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   DATADEV=$(losetup -f --show -o $((S3S*512)) --sizelimit $((Z3S*512)) "$IMG")
   mkfs.ext4 -q -F -L vibedata "$DATADEV"
   losetup -d "$DATADEV"
+  # ★★★ PROVE THE LAYOUT ON THE FINISHED FILE (the v6 card of 2026-10-10 had boot + root only:
+  #     every setting sat in RAM until the first restart). Three partitions; partition 3 at S3S, 256 MB;
+  #     and LABEL=vibedata read back AT THE OFFSET THE TABLE GIVES, not the one we meant to write.
+  T3=$(sfdisk -d "$IMG" | sed -n "s/.*[^0-9]3 *: *start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p")
+  [ "$(sfdisk -d "$IMG" | grep -c "start=")" = 3 ] || { echo "!! LAYOUT: the image does not have 3 partitions"; sfdisk -d "$IMG"; exit 1; }
+  [ "$T3" = "$S3S $Z3S" ] || { echo "!! LAYOUT: partition 3 is \"$T3\", expected \"$S3S $Z3S\""; exit 1; }
+  CHK=$(losetup -f --show -r -o $((S3S*512)) --sizelimit $((Z3S*512)) "$IMG")
+  LBL=$(blkid -p -o value -s LABEL "$CHK" 2>/dev/null || true); losetup -d "$CHK"
+  [ "$LBL" = vibedata ] || { echo "!! LAYOUT: no vibedata filesystem at partition 3 (found \"$LBL\")"; exit 1; }
+  echo "==> layout verified: partition 3 at sector $S3S, 256 MB, LABEL=vibedata"
   sfdisk -l "$IMG" | sed "s/^/==> /" | tail -4
   echo "==> image: $(( (S3S + Z3S) * 512 / 1024 / 1024 )) MB raw (root $((NEWROOT/1024/1024)) MB, settings 256 MB)"
   # ── 5. Compress ──
