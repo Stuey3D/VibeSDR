@@ -1,0 +1,16 @@
+[Unit]
+# ★★ THE POCKET IMAGE ONLY: on the first boot, once Pi OS has written its one-time identity (machine-id,
+# SSH host keys), switch on the read-only root (overlayroot) and reboot. A no-op once sealed.
+# See /usr/lib/vibeserver/vibeserver-pocket-seal.
+Description=VibeServer — pocket box: make the root filesystem read-only (first boot only)
+ConditionPathExists=/etc/vibeserver-pocket/enabled
+ConditionKernelCommandLine=!overlayroot=tmpfs
+After=systemd-machine-id-commit.service regenerate_ssh_host_keys.service local-fs.target
+Before=NetworkManager.service vibeserver-pocket.service vibeserver.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/vibeserver/vibeserver-pocket-seal
+
+[Install]
+WantedBy=multi-user.target

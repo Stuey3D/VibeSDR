@@ -674,8 +674,12 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #    apt like anything else, but NOT enabled by postinst, and its unit will not start without the
   #    image's marker (/etc/vibeserver-pocket/enabled). Needs python3, which Raspberry Pi OS Lite has;
   #    no Depends is added because no other install ever runs it.
-  install(PROGRAMS linux/pocket/vibeserver-pocket DESTINATION lib/vibeserver)
-  install(FILES linux/pocket/vibeserver-pocket.service DESTINATION lib/systemd/system)
+  # ★★ …and its power-cut hardening: the settings partition (vibeserver-pocket-data) and the one-time
+  #    read-only-root seal. Same rule: dormant without the marker, enabled only by the image.
+  install(PROGRAMS linux/pocket/vibeserver-pocket linux/pocket/vibeserver-pocket-data
+                   linux/pocket/vibeserver-pocket-seal DESTINATION lib/vibeserver)
+  install(FILES linux/pocket/vibeserver-pocket.service linux/pocket/vibeserver-pocket-data.service
+                linux/pocket/vibeserver-pocket-seal.service DESTINATION lib/systemd/system)
 
   # ★★★ SHIP cloudflared, DO NOT ASK FOR IT. The public listing offers to make an address for an
   #     owner who has no port forward — the only route that works behind CGNAT — and that offer is
