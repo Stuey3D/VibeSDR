@@ -20,6 +20,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
 import { initPocketConn } from './pocketConn';
+import { initGamepad } from './gamepad';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
@@ -16014,6 +16015,17 @@ function initWaterfallInput() {
 }
 
 function initKeyboard() {
+  /* ★★ GAME CONTROLLERS (Stuart's mapping, 2026-10-10 — gamepad.ts): tune and zoom are the arrow keys' own actions,
+   *  and back is Escape's, so a pad and a keyboard can never disagree. */
+  initGamepad({
+    tune: (d) => { if (spec) nudge(d * step); },
+    zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
+    back: () => {
+      const anyOpen = !!document.querySelector('.open');
+      if (anyOpen) closePanels();
+      return anyOpen;
+    },
+  });
   window.addEventListener('keydown', (e) => {
     if (!spec) return;
     const tgt = e.target as HTMLElement;

@@ -2943,6 +2943,10 @@ select.btn { padding: 6px 8px; }
                    color: #ffb833; background: rgba(255,184,51,0.16);
                    border: 1px solid rgba(255,184,51,0.55); border-radius: 4px;
                    padding: 2px 4px; }
+/* ★★ The gamepad's highlight (gamepad.ts) — the same green the app's TV focus uses; amber while a slider or list is
+   being adjusted. */
+.gpFocus { outline: 3px solid #7cff9b !important; outline-offset: 2px; border-radius: 6px; }
+.gpFocus.gpAdjust { outline-color: #ffb833 !important; }
 </style>
 
 <!-- Lock-screen / Now Playing artwork — the VibeServer mark (see buildArtwork in main.ts).
