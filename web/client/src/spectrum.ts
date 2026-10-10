@@ -18,6 +18,7 @@
  */
 
 import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services/faultLog';
+import { DabAssembler } from '../../../src/services/dabAssemble';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
@@ -830,12 +831,29 @@ export class SpectrumClient {
 
   private _handleMessage(msg: any) {
     switch (msg.type) {
-      case 'dab':
-        // ★★★ A report after our own exit is a ghost — see dabQuietUntil.
-        if (Date.now() < this.dabQuietUntil) return;
-        this.cb.onDab?.(msg as unknown as DabState);
+      /* ★★★ THE REPORT IN PIECES (dab=2 — src/services/dabAssemble.ts, shared with the app). `dab_list` / `dab_dls`
+       *  are only stored; a `dab` comes back whole, in the legacy shape — and an older server's full report passes
+       *  straight through. */
+      case 'dab_list':
+      case 'dab_dls':
+        this.dabAsm.ingest(msg, Date.now());
         return;
+      case 'dab': {
+        // ★★★ A report after our own exit is a ghost — see dabQuietUntil.
+        const now = Date.now();
+        if (now < this.dabQuietUntil) return;
+        const r = this.dabAsm.ingest(msg, now);
+        if (r.resync) this._send({ type: 'dab_resync' });
+        // ★ Self-healing scopes: a new socket (a reconnect) starts with them off; restate while the pane is open.
+        if (this.dabScopesOn && msg.v === 2 && !('iq' in msg) && now - this.dabScopesSaidAt > 3000) {
+          this.dabScopesSaidAt = now;
+          this._send({ type: 'dab_scopes', on: 1 });
+        }
+        this.cb.onDab?.((r.report ?? msg) as unknown as DabState);
+        return;
+      }
       case 'dab_off': {
+        this.dabAsm.reset();
         const now = Date.now();
         if (this.dabQuietUntil > now) this.dabQuietUntil = Math.min(this.dabQuietUntil, now + 1500);
         this.cb.onDab?.(null as unknown as DabState);
@@ -1610,6 +1628,17 @@ export class SpectrumClient {
     this._send(m);
   }
   dabService(sid: number) { this._send({ type: 'dab_service', sid }); }
+  private dabAsm = new DabAssembler();
+  private dabScopesOn = false;
+  private dabScopesSaidAt = 0;
+  /** ★ The DAB Signal pane is showing (dab=2): the constellation + impulse response come with each report only then.
+   *  Sent only on a change; restated by the self-healing check above after a reconnect. */
+  dabScopes(on: boolean) {
+    if (on === this.dabScopesOn) return;
+    this.dabScopesOn = on;
+    this.dabScopesSaidAt = Date.now();
+    this._send({ type: 'dab_scopes', on: on ? 1 : 0 });
+  }
   /** ★ Advanced RDS: ask for the eye diagrams in every 2nd message (~2/s at the ~3.9/s rdsx rate) — they are ~8 of each ~9 kB and
    *  build slowly; the last picture is kept in between (see 'rdsx'). The server only does this for a socket
    *  that asks, so installed apps keep the full stream. Off when the panel closes. */

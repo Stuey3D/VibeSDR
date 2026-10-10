@@ -2999,6 +2999,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ Re-reads the receiver's learned bookmarks — set by the bookmark-load effect, called when the frequency card
    *  (search + bookmarks) opens. No timer: see that effect (Stuart, 2026-10-10). */
   const reloadServerBmRef = useRef<(() => void) | null>(null);
+  /** ★ The DAB Signal pane: the scopes are sent only while it is open (dab=2). Stable, so the panel's effect is not re-run. */
+  const onDabSignalPane = useCallback((open: boolean) => { client.current?.dabScopes?.(open); }, []);
   useEffect(() => { if (freqModalOpen) reloadServerBmRef.current?.(); }, [freqModalOpen]);
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
@@ -11157,6 +11159,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           error={dabError}
           blockIndex={dabBlock}
           onService={(sid) => client.current?.dabService?.(sid)}
+          onSignalPane={onDabSignalPane}
           onActiveLogo={setDabActiveLogo}
           lastAudioAt={() => lastAudioAtRef.current}
           audioRunStartAt={() => audioRunStartRef.current}

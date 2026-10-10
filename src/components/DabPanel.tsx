@@ -417,6 +417,9 @@ export interface DabPanelProps {
    *  demodulator menu it deactivates DAB fully rather than restore the box." Closing a window and
    *  leaving a mode are different intentions and now have different controls. */
   onExit: () => void;
+  /** ★ The Signal pane opened / closed — the server sends the constellation + impulse response only while it is
+   *  open (dab=2, src/services/dabAssemble.ts). Optional: a host that does not pass it changes nothing. */
+  onSignalPane?: (open: boolean) => void;
   bottomOffset: number;
   /** BIG/SMALL — the same control the browser's window and the RDS analyser have, and equally
    *  just a height. Stuart: "the big/small button is missing". */
@@ -557,6 +560,10 @@ export default function DabPanel(p: DabPanelProps) {
    *  numbers is how a stale reading gets believed. */
   const eid = d?.eid ?? -1;
   React.useEffect(() => { setPane('stations'); }, [eid]);
+  // ★ Tell the host when the scopes are on screen, and that they are not once this panel goes.
+  const onSignalPane = p.onSignalPane;
+  React.useEffect(() => { onSignalPane?.(pane === 'signal'); }, [pane, onSignalPane]);
+  React.useEffect(() => () => { onSignalPane?.(false); }, [onSignalPane]);
   // ★ The playing service's artwork, for the lock-screen card — same three sources as its row.
   const activeSv = d ? d.services.find(x => x.sid === d.sid) : undefined;
   const activeLogo = useServiceLogo(p.base, d, activeSv, p.readAuth ?? '');

@@ -1041,7 +1041,8 @@ async function connect(host: string, pin: string) {
   //    per frame on someone else's uplink plus the FFT work on the serving device. The app is
   //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
   //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
-  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1', auth)}`;
+  // ★ `dab=2`: the DAB report in pieces (src/services/dabAssemble.ts) — a server that predates it ignores the flag.
+  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2', auth)}`;
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
@@ -6309,6 +6310,7 @@ function annLamp(d: DabState): string {
 let dabSigStale = false;
 function dabSetPane(p: 'stations' | 'signal') {
   dabPane = p;
+  spec?.dabScopes(dabOn && p === 'signal');   // ★ the scopes travel only while they are on screen (dab=2)
   const st = document.getElementById('dabStations');
   const sg = document.getElementById('dabSignal');
   const bt = document.getElementById('dabPane');
@@ -7304,6 +7306,7 @@ function dabSetMode(on: boolean) {
   dabRender();
 }
 function dabUiOff() {
+  spec?.dabScopes(false);
   dabQualityMeter.reset(); dabQuality = null;
   dabLockControls(false);
   if (spec) spec.dabHeld = false;

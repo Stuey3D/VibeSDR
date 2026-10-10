@@ -758,6 +758,40 @@ public:
         std::lock_guard<std::mutex> lk(m_);
         return jsonLocked_();
     }
+    /* ★★★ THE REPORT IN PIECES, FOR A CLIENT THAT ASKS FOR THEM (`dab=2` on its spectrum socket, 2026-10-10).
+     *  Stuart: "make the connection as efficient as possible … light on CPU on client and server and light on data".
+     *  Measured on the XCover, one silent listener in DAB: the `dab` report was 74 % of everything sent — 32 KB/s,
+     *  16 KB twice a second — three times the waterfall. 12 KB of each was the station list, which changes only while
+     *  the multiplex is being read; 1.8 KB was the constellation + impulse response, drawn only while the Signal pane
+     *  is open. So, built ONCE from the same pass as the legacy report (one builder — nothing to drift):
+     *    live    — the legacy report minus the list, the scopes, the data services and the licensed sites;
+     *    scopes  — the ",ir":[…],"iq":[…] fragment, added for a socket whose Signal pane is open;
+     *    list    — every service's FIXED fields + dataSvcs + licensed: sent when it CHANGES;
+     *    dls     — every service's radio text (+ DL Plus for the tuned one) with its age: sent when a TEXT changes.
+     *  ★ `dlsAge` is why the list could not simply be "sent on change": an AGE changes every second, so the list
+     *    differed in 55 of 58 consecutive reports (measured, 11D). Ages ride in `dls`, whose revision counts texts.
+     *  ★ legacy is byte-for-byte the old report — older clients (Jr, the app before this) are untouched. */
+    struct ReportParts {
+        std::string legacy, live, scopes, list, dls;
+        uint64_t listRev = 0, dlsRev = 0;   ///< FNV-1a of the content that matters (never of an age)
+    };
+    bool partsTry(ReportParts& out) {
+        std::unique_lock<std::mutex> lk(m_, std::try_to_lock);
+        if (!lk.owns_lock()) return false;
+        out = ReportParts{};
+        out.legacy = jsonLocked_(&out);
+        return true;
+    }
+    ReportParts parts() {
+        std::lock_guard<std::mutex> lk(m_);
+        ReportParts out;
+        out.legacy = jsonLocked_(&out);
+        return out;
+    }
+    static uint64_t fnv1a(const std::string& t, uint64_t h = 1469598103934665603ULL) {
+        for (unsigned char c : t) { h ^= c; h *= 1099511628211ULL; }
+        return h;
+    }
     /** ★ The same, but never WAITS for the decoder: false if the worker holds m_ right now. For
      *  vibe-dsp, which must not sit behind a frame's decode — the caller simply tries again on its
      *  next block, a few ms later (the worker lets go of m_ between frames). */
@@ -767,7 +801,10 @@ public:
         out = jsonLocked_();
         return true;
     }
-    std::string jsonLocked_() {
+    std::string jsonLocked_(ReportParts* parts = nullptr) {
+        // ★ Byte ranges of the sections that leave the LIVE report (see ReportParts), in the legacy string.
+        size_t dsA = 0, dsB = 0, scA = 0, scB = 0, licA = 0, licB = 0, svA = 0;
+        std::string listSvcs, dlsMap, dlsKey;   // the list's service rows; the radio-text map; what dlsRev hashes
         const Ensemble& e = rx_.ensemble();
         const DabStats& s = rx_.stats();
         std::string j = "{\"type\":\"dab\"";
@@ -937,6 +974,7 @@ public:
             {   /* ★ The DATA services and every user application signalled (FIG 0/13), so a DXer
                  *  can see what else the multiplex carries — and whether an SPI/EPG data service
                  *  (0x007) exists to take logos from when the audio carries no slideshow. */
+                dsA = j.size();
                 std::string ds = ",\"dataSvcs\":[";
                 bool f1 = true;
                 for (const auto& kv : e.services) {
@@ -948,6 +986,7 @@ public:
                     ds += "{\"sid\":" + std::to_string(kv.first) + ",\"label\":\"" + esc(sv.label) + "\",\"data\":" + (sv.isData ? "true" : "false") + ",\"apps\":[" + apps + "]}";
                 }
                 j += ds + "]";
+                dsB = j.size();
             }
             {   // ★ How much linking/frequency signalling this ensemble carries at all — the DXer's
                 //   answer to "why is the FM row empty": the mux sends none, or we missed it.
@@ -1099,6 +1138,7 @@ public:
                      s.merDb, s.mscBer, s.irPeakSamples, aac_.backend());   // ★ which decoder DAB+ goes through — never guessed from the sound
             j += ab;
             const auto& ir = rx_.impulseResponse();
+            scA = j.size();
             if (!ir.empty()) {
                 j += ",\"ir\":[";
                 for (size_t i = 0; i < ir.size(); ++i) { if (i) j += ','; j += std::to_string(int(ir[i])); }
@@ -1110,6 +1150,7 @@ public:
                 for (size_t i = 0; i < cs.size(); ++i) { if (i) j += ','; j += std::to_string(int(cs[i])); }
                 j += "]";
             }
+            scB = j.size();
         }
         {
             /* ★ TII: which transmitter(s) of the SFN we are hearing — main id, sub id, dB over
@@ -1141,6 +1182,7 @@ public:
                  *  country and the block we are on (vibe_dab_txdb.h, 2026-10-06). */
                 const auto sites = txdb_->sitesFor(e.ecc, e.eid, rxLat_, rxLon_, 4, channelName());
                 if (!sites.empty()) {
+                    licA = j.size();
                     j += ",\"licensed\":[";
                     bool f1 = true;
                     for (const auto& st : sites) {
@@ -1158,9 +1200,11 @@ public:
                         j += "{\"site\":\"" + esc(st.site) + "\",\"area\":\"" + esc(st.area) + sb;
                     }
                     j += "]";
+                    licB = j.size();
                 }
             }
         }
+        svA = j.size();
         j += ",\"services\":[";
         bool first = true;
         for (const auto& kv : e.services) {
@@ -1175,6 +1219,7 @@ public:
             if (!pc || pc->tmid != 0 || pc->subChId < 0 || pc->ca) continue;
             if (!first) j += ',';
             first = false;
+            const size_t entryA = j.size();   // ★ ReportParts: this row's fixed fields start here
             /* ★ Stuart, 2026-09-07: "codec info needs to be more than DAB+ 32Kb/s" — the FIC knows
              *  the capacity and protection of every service before any of them is played, so the
              *  list carries bit rate, protection set/level/code rate and the CU range per row. */
@@ -1249,6 +1294,7 @@ public:
                     j += std::string("],\"linkHard\":") + (hard ? "true" : "false") + ",\"linkActive\":" + (active ? "true" : "false");
                 }
             }
+            const size_t entryFixedB = j.size();   // ★ ReportParts: fixed fields end; the radio text follows
             /* ★ Every row's "now playing": the playing service's live label, the others' from the
              *  scanner, with how old it is. */
             if (kv.first == sid_ && pad_.dls().label().valid && !pad_.dls().label().text.empty()) {
@@ -1287,9 +1333,46 @@ public:
                     j += ",\"dls\":\"" + esc(dr->second.text) + ab;
                 }
             }
+            if (parts) {
+                if (!listSvcs.empty()) listSvcs += ',';
+                listSvcs += j.substr(entryA, entryFixedB - entryA) + "}";
+                if (j.size() > entryFixedB) {
+                    // ★ This row's radio text, keyed by SId: `"<sid>":{"dls":…,"dlsAge":…(,"dlpRunning",…,"dlp":{…})}`.
+                    //   The revision hashes the row WITHOUT its age — an age moves every second; a text does not.
+                    const std::string tail = j.substr(entryFixedB + 1);   // skip the leading ','
+                    if (!dlsMap.empty()) dlsMap += ',';
+                    dlsMap += "\"" + std::to_string(kv.first) + "\":{" + tail + "}";
+                    std::string noAge = tail;
+                    const size_t ag = noAge.find("\"dlsAge\":");
+                    if (ag != std::string::npos) { size_t ae = noAge.find_first_of(",}", ag + 9); noAge.erase(ag, (ae == std::string::npos ? noAge.size() : ae) - ag); }
+                    dlsKey += std::to_string(kv.first) + ':' + noAge + '\n';
+                }
+            }
             j += "}";
         }
         j += "]}";
+        if (parts) {
+            const std::string ch = channel_ >= 0 ? kBandIII[channel_].name : "";
+            // live: the legacy report without the sections that moved out (ranges ascending, never overlapping).
+            std::string live;
+            size_t at = 0;
+            const std::pair<size_t, size_t> cut[] = { {dsA, dsB}, {scA, scB}, {licA, licB}, {svA, j.size() - 1} };
+            for (const auto& c : cut) {
+                if (c.second <= c.first || c.first < at) continue;
+                live.append(j, at, c.first - at);
+                at = c.second;
+            }
+            live.append(j, at, std::string::npos);
+            parts->live = std::move(live);
+            parts->scopes = scB > scA ? j.substr(scA, scB - scA) : std::string();
+            std::string list = "{\"type\":\"dab_list\",\"channel\":\"" + ch + "\",\"eid\":" + std::to_string(e.eid);
+            if (dsB > dsA) list.append(j, dsA, dsB - dsA);
+            if (licB > licA) list.append(j, licA, licB - licA);
+            list += ",\"services\":[" + listSvcs + "]}";
+            parts->list = std::move(list);
+            parts->dls = "{\"type\":\"dab_dls\",\"channel\":\"" + ch + "\",\"dls\":{" + dlsMap + "}}";
+            parts->dlsRev = fnv1a(ch + '\n' + dlsKey);
+        }
         return j;
     }
 

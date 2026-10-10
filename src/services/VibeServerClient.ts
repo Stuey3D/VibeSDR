@@ -19,6 +19,7 @@ import { VibeServerWsClient, LADDERS_FOR } from './VibeServerWsClient';
 import { parseDabMessage, dabSafeText, type DabState } from './dabTypes';
 import { holdNativeHealing } from '../components/AudioPlayer';
 import { DabExitGuard } from './dabStepper';
+import { DabAssembler } from './dabAssemble';
 
 export {
   MODE_BANDWIDTHS,
@@ -100,6 +101,17 @@ export class VibeServerClient extends VibeServerWsClient {
     this.sendSpectrum(m);
   }
 
+  private dabAsm = new DabAssembler();
+  /** ★ The Signal pane is open (dab=2): the constellation + impulse response come with each report only while it is.
+   *  Remembered, so a reconnect restates it. */
+  private dabScopesOn = false;
+  private dabScopesSaidAt = 0;
+  dabScopes(on: boolean) {
+    this.dabScopesOn = on;
+    this.dabScopesSaidAt = Date.now();
+    this.sendSpectrum({ type: 'dab_scopes', on: on ? 1 : 0 });
+  }
+
   /** Switch service WITHIN the tuned multiplex — no retune, no re-acquire. */
   dabService(sid: number) {
     holdNativeHealing(VibeServerClient.DAB_SERVICE_HOLD_MS, `DAB service ${sid}`);
@@ -113,6 +125,22 @@ export class VibeServerClient extends VibeServerWsClient {
    *  `dab_error` is a refusal (the receiver has no DAB, or the owner switched it off) and is an
    *  EXPLANATION, not a protocol fault — the panel says why rather than showing a dead button. */
   protected handleServerMessage(msg: Record<string, unknown>): boolean {
+    /* ★★★ THE REPORT IN PIECES (dab=2 — src/services/dabAssemble.ts). `dab_list` / `dab_dls` are only stored; a `dab`
+     *  comes back whole, in the legacy shape, so everything below is unchanged — and an older server's full report
+     *  passes straight through. */
+    if (msg.type === 'dab_list' || msg.type === 'dab_dls') { this.dabAsm.ingest(msg, Date.now()); return true; }
+    if (msg.type === 'dab') {
+      const now = Date.now();
+      const r = this.dabAsm.ingest(msg, now);
+      if (r.resync) this.sendSpectrum({ type: 'dab_resync' });
+      // ★ Self-healing scopes: a new socket (a reconnect) starts with them off; restate while the pane is open.
+      if (this.dabScopesOn && msg.v === 2 && !('iq' in msg) && now - this.dabScopesSaidAt > 3000) {
+        this.dabScopesSaidAt = now;
+        this.sendSpectrum({ type: 'dab_scopes', on: 1 });
+      }
+      if (r.report) msg = r.report as Record<string, unknown>;
+    }
+    if (msg.type === 'dab_off') this.dabAsm.reset();
     switch (msg.type) {
       case 'dab': {
         /* ★★★ NOT A REPORT WE ASKED TO STOP. Dropped before it touches anything — dabHeld above all,

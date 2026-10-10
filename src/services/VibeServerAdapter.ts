@@ -331,6 +331,7 @@ export class VibeServerAdapter implements SDRBackend {
 
   dab(on: boolean, channel?: number, sid?: number): void { this.vibe.dab(on, channel, sid); }
   dabService(sid: number): void { this.vibe.dabService(sid); }
+  dabScopes(on: boolean): void { this.vibe.dabScopes(on); }
   iqOut(on: boolean, rate = 48000): void { this.vibe.iqOut(on, rate); }
   get inDab(): boolean { return this.vibe.inDab; }
 }

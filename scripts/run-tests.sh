@@ -405,6 +405,10 @@ if node --no-warnings scripts/test_chunk_cache.ts; then pass=$((pass+1)); else f
 #     and light on data"): web and app open /ws/dxcluster on a decoder / spots / chat and close it 8 s after the last.
 if npx tsx scripts/test_decoder_socket_idle.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
+# ★★★ THE DAB REPORT IN PIECES (2026-10-10): 74 % of a DAB listener's traffic was the report — the station list resent
+#     twice a second. The reassembler's rules (ageing, the tuned row at 0, legacy pass-through, never another mux's list).
+if npx tsx scripts/test_dab_assemble.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
 #     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.
@@ -442,6 +446,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 
 # ★★ AN IDLE DECODER SOCKET IS PINGED (2026-10-10): behind Cloudflare's ~100 s idle cut-off the /ws/dxcluster socket
 #    reconnected for ever ("an error log as long as my arm"). ~30 s. Same VIBESERVER_BIN rule.
+# ★★★ …and end to end on the real server and the bench multiplex: a legacy socket unchanged, a dab=2 socket's
+#     reassembled report EQUAL to it, a fraction of the bytes, scopes on/off, resync, a new session. Needs the bench clip
+#     (make-clip.sh) as well as VIBESERVER_BIN — NOT RUN without either.
+printf '\n\033[1m── the DAB report in pieces (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dab-report-pieces.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
 printf '\n\033[1m── idle decoder socket keep-alive (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dx-keepalive.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi

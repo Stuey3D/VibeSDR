@@ -77,7 +77,8 @@ import { USER_AGENT, APP_PROTO } from '../constants/version';
  *    that can send one. It is the client's own word about itself either way — exactly what a
  *    User-Agent has always been — and it grants nothing.
  */
-const CLIENT_Q = `&client=${encodeURIComponent(USER_AGENT)}&proto=${APP_PROTO}`;
+// ★ `dab=2`: the DAB report in pieces (src/services/dabAssemble.ts) — a server that predates it ignores the flag.
+const CLIENT_Q = `&client=${encodeURIComponent(USER_AGENT)}&proto=${APP_PROTO}&dab=2`;
 
 /** Powersave target, in frames/sec — an absolute floor, not a divisor. */
 const POWERSAVE_FPS = 5;

@@ -1217,6 +1217,36 @@ static bool dabStatusJsonTry(std::string& j) {
     dabStatusJsonFinish_(j);
     return true;
 }
+/* ★★★ THE REPORT IN PIECES (vibedab::DabService::ReportParts — why, with the measurement). The per-block memory goes
+ *  in the LIST (it is fixed per multiplex), each piece is stamped with its revision, and the live report says which
+ *  list and radio-text revisions it belongs to, so a client can tell it is missing one and ask (dab_resync). */
+using DabParts = vibedab::DabService::ReportParts;
+static void dabPartsFinish_(DabParts& p) {
+    dabStatusJsonFinish_(p.legacy);
+    if (p.live.empty() || p.list.empty()) { p.live.clear(); return; }   // the truncation guard fired: legacy only
+    const std::string blocks = dabBlocksJson();
+    if (!blocks.empty() && p.list.back() == '}') p.list.insert(p.list.size() - 1, blocks);
+    p.listRev = vibedab::DabService::fnv1a(p.list);
+    char r[64];
+    snprintf(r, sizeof r, ",\"rev\":\"%016llx\"", (unsigned long long)p.listRev);
+    p.list.insert(std::string("{\"type\":\"dab_list\"").size(), r);
+    snprintf(r, sizeof r, ",\"rev\":\"%016llx\"", (unsigned long long)p.dlsRev);
+    p.dls.insert(std::string("{\"type\":\"dab_dls\"").size(), r);
+    char lv[96];
+    snprintf(lv, sizeof lv, ",\"v\":2,\"listRev\":\"%016llx\",\"dlsRev\":\"%016llx\"",
+             (unsigned long long)p.listRev, (unsigned long long)p.dlsRev);
+    if (p.live.back() == '}') p.live.insert(p.live.size() - 1, lv);
+}
+static bool dabPartsTry(DabParts& p) {
+    if (!g_dab.partsTry(p)) return false;
+    dabPartsFinish_(p);
+    return true;
+}
+static DabParts dabParts() {
+    DabParts p = g_dab.parts();
+    dabPartsFinish_(p);
+    return p;
+}
 static std::string dabStatusJson() {
     std::string j = g_dab.json();
     const std::string blocks = dabBlocksJson();
@@ -9224,6 +9254,50 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  Everything a client must ADOPT: config (frequency, mode, zoom, IF, gain), hwinfo, the DAB
      *  box when DAB is the mode (the box IS the viewer there), and the dial. Two readers of the
      *  same fact must be one function, or one of them drifts. */
+    /* ★★★ WHO WANTS THE REPORT IN PIECES, AND WHAT EACH ALREADY HAS (see DabParts). A spectrum socket opened with
+     *  `dab=2` gets the live report, plus the list / radio text only when its copy is out of date, plus the scopes only
+     *  while it says its Signal pane is open (`dab_scopes`). Every other socket gets the legacy report, unchanged.
+     *  ★ Its own mutex: the DAB tick sends under g_dabReportMtx and must not take clientMtx in the middle. */
+    /** ★ adc / lx per socket: what was last sent and when — sent again only on a change or after 2 s (see the frame
+     *  loop). Erased with the socket. */
+    struct TeleLast { std::string msg[2]; double at[2] = { 0, 0 }; };
+    std::mutex teleMtx;
+    std::map<net::Socket*, TeleLast> teleLast;
+    bool teleDue(net::Socket* s, int k, const char* m) {
+        const double now = Impl::nowSecs();
+        std::lock_guard<std::mutex> lk(teleMtx);
+        TeleLast& t = teleLast[s];
+        if (t.msg[k] == m && now - t.at[k] < 2.0) return false;
+        t.msg[k] = m; t.at[k] = now;
+        return true;
+    }
+    struct DabPeer { bool v2 = false, scopes = false; uint64_t listRev = 0, dlsRev = 0; };
+    std::mutex dabPeerMtx;
+    std::map<net::Socket*, DabPeer> dabPeers;
+    void sendDab(const std::shared_ptr<net::Socket>& sk, const DabParts& p) {
+        if (p.live.empty()) { sendText(sk, p.legacy); return; }
+        bool v2 = false, scopes = false, needList = false, needDls = false;
+        {
+            std::lock_guard<std::mutex> lk(dabPeerMtx);
+            auto it = dabPeers.find(sk.get());
+            if (it != dabPeers.end() && it->second.v2) {
+                v2 = true; scopes = it->second.scopes;
+                needList = it->second.listRev != p.listRev; needDls = it->second.dlsRev != p.dlsRev;
+                it->second.listRev = p.listRev; it->second.dlsRev = p.dlsRev;
+            }
+        }
+        if (!v2) { sendText(sk, p.legacy); return; }
+        if (needList) sendText(sk, p.list);
+        if (needDls) sendText(sk, p.dls);
+        if (scopes && !p.scopes.empty()) { std::string l = p.live; l.insert(l.size() - 1, p.scopes); sendText(sk, l); }
+        else sendText(sk, p.live);
+    }
+    /** Forget what every socket holds — a DAB session ended, so the next one starts from a full list. */
+    void dabPeersForget() {
+        std::lock_guard<std::mutex> lk(dabPeerMtx);
+        for (auto& kv : dabPeers) { kv.second.listRev = 0; kv.second.dlsRev = 0; }
+    }
+
     void sendFullState(const std::shared_ptr<net::Socket>& sock) {
         sendConfig(sock); sendHwInfo(sock);
         /* ★ The health levels too, because they are sent ON CHANGE: a listener arriving during a
@@ -9234,7 +9308,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
          *  the second listener on a shared radio got audio and no box). */
         { std::lock_guard<std::mutex> rl(g_dabReportMtx);   // ★ never after a dab_off — see dabModeEnd
-          if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, dabStatusJson()); }
+          if (g_dabMode.load(std::memory_order_relaxed)) {
+              { std::lock_guard<std::mutex> pl(dabPeerMtx); auto it = dabPeers.find(sock.get()); if (it != dabPeers.end()) { it->second.listRev = 0; it->second.dlsRev = 0; } }
+              sendDab(sock, dabParts());
+          } }
         if (vsSharedDial()) {
             std::lock_guard<std::mutex> lk(clientMtx);
             auto it = sockSession.find(sock.get());
@@ -11543,7 +11620,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              "{\"type\":\"adc\",\"peak\":%.1f,\"clip\":%.4f}",
                              g_adcPeakDbfs.load(std::memory_order_relaxed),
                              g_adcClipPct.load(std::memory_order_relaxed));
-                    sendText(p.sock, sb, Out::Adc);   // ★ NOT Out::Sig — see the enum's note
+                    /* ★★ ON CHANGE, OR EVERY 2 s (2026-10-10, Stuart: "light everywhere — light on CPU on client and
+                     *  server and light on data"). Measured on the XCover: adc and lx went out on every frame — 10 a
+                     *  second each — for figures that change once a second (the ADC window) and almost never (the
+                     *  lightning rate, usually 0). The 2 s heartbeat is not decoration: the web client hides the ADC
+                     *  readout after 5 s without one (adcStatAt), and a lightning "last 12 s ago" moves every second
+                     *  only while there IS lightning — then it changes, so it is sent. */
+                    if (teleDue(p.sock.get(), 0, sb)) sendText(p.sock, sb, Out::Adc);   // ★ NOT Out::Sig — see the enum's note
 
                     /* ★★★ LIGHTNING, PER LISTENER — because the badge exists to explain what is
                      *     ON THIS PERSON'S SCREEN. Stuart: "it was more to show what those lines
@@ -11583,7 +11666,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                              lxRate, lxBand ? g_sferic.agoSecs(lxT) : -1.0);
                     // ★★★ Out::Lx, NOT Out::Adc — see the enum. Sharing the class made this frame
                     //     delete the converter telemetry every tick.
-                    sendText(p.sock, sb, Out::Lx);
+                    if (teleDue(p.sock.get(), 1, sb)) sendText(p.sock, sb, Out::Lx);   // ★ on change / 2 s — see adc
                 }
                 // ★ The pocketed channels (see `specless`): the same measurement, nobody to send it
                 //   to — it is only the squelch gate in onClientAudio that reads it.
@@ -12402,16 +12485,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const double hz = double(g_dab.centreHz());
                 for (const auto& r : learnRows) bmLearnDab(hz, r.eid, r.ecc, r.sid, r.label);
             }
-            std::string j;
+            DabParts dp;
             // ★ Never WAIT for the decoder here: this is vibe-dsp. A busy decoder means "next block".
-            if (tnow - lastDabJson_ >= 0.5 && dabStatusJsonTry(j)) {
+            if (tnow - lastDabJson_ >= 0.5 && dabPartsTry(dp)) {
                 lastDabJson_ = tnow;
                 std::vector<std::shared_ptr<net::Socket>> socks;
                 { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
                 // ★★★ Checked and sent under one lock, so it can never land after dab_off — see dabModeEnd.
                 std::lock_guard<std::mutex> rl(g_dabReportMtx);
                 if (g_dabMode.load(std::memory_order_relaxed))
-                    for (auto& sk : socks) sendText(sk, j);
+                    for (auto& sk : socks) sendDab(sk, dp);   // ★ each socket its own format — see sendDab
             }
             if (dabClockRun_.load(std::memory_order_relaxed)) return;
         }
@@ -14492,6 +14575,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★ And tell EVERY client where the radio actually IS — the sender is not the only
                  *  one holding the multiplex centre, and a client still holding it computes every
                  *  subsequent tune from a dial in the wrong band. */
+                dabPeersForget();   // ★ the next DAB session starts every dab=2 socket from a full list
                 for (auto& sk : socks) { sendText(sk, "{\"type\":\"dab_off\"}"); sendConfig(sk); }
                 if (socks.empty()) { sendText(sock, "{\"type\":\"dab_off\"}"); sendConfig(sock); }
                 return;
@@ -14836,7 +14920,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  vibedab::kBandIII[idx].name, centre / 1e6, double(vibedab::DabService::kRateHz));
             double sid = 0; jsonNum(msg, "sid", sid);
             if (sid > 0) g_dab.setService(uint32_t(sid));
-            sendText(sock, dabStatusJson());
+            sendDab(sock, dabParts());
             return;
         }
         if (type == "rawIq") {
@@ -14905,7 +14989,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             g_dab.setService(uint32_t(sid));
             /* ★ Only while DAB is on. Out of DAB this reply is a `dab` report about a multiplex the
              *  radio is not on, and a client reads that as "the receiver is in DAB" (see dabModeEnd). */
-            if (g_dabMode.load(std::memory_order_relaxed)) sendText(sock, dabStatusJson());
+            if (g_dabMode.load(std::memory_order_relaxed)) sendDab(sock, dabParts());
+            return;
+        }
+        /* ★ The Signal pane opened or closed (a `dab=2` client): the constellation + impulse response only while it
+         *  is open. And `dab_resync`: the client's list / radio text does not match the revisions the live report
+         *  names — send both again on the next report. */
+        if (type == "dab_scopes") {
+            double on = 0; jsonNum(msg, "on", on);
+            {
+                std::lock_guard<std::mutex> lk(dabPeerMtx);
+                auto it = dabPeers.find(sock.get());
+                if (it != dabPeers.end()) it->second.scopes = on != 0;
+            }
+            /* ★★ AND AT ONCE (Stuart, 2026-10-10: "I dont want to compromise on look and feel"). Opening the pane must
+             *  not show an empty constellation box until the next half-second tick — this socket gets a report with the
+             *  scopes now. Under g_dabReportMtx like every report, so it can never land after a dab_off. */
+            if (on != 0 && g_dabMode.load(std::memory_order_relaxed)) {
+                const DabParts dp = dabParts();   // ★ built BEFORE the report lock — the decoder may be mid-frame
+                std::lock_guard<std::mutex> rl(g_dabReportMtx);
+                if (g_dabMode.load(std::memory_order_relaxed)) sendDab(sock, dp);
+            }
+            return;
+        }
+        if (type == "dab_resync") {
+            std::lock_guard<std::mutex> lk(dabPeerMtx);
+            auto it = dabPeers.find(sock.get());
+            if (it != dabPeers.end()) { it->second.listRev = 0; it->second.dlsRev = 0; }
             return;
         }
 
@@ -17202,6 +17312,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // client streams. Real multi-client has to make this per-connection.
             int wantBins = 0;
             if (wsSpec) {
+                // ★ The DAB report in pieces (sendDab) — the client's own word, like proto; it grants nothing.
+                const bool dabV2 = queryParam(reqLine, "dab") == "2";
+                { std::lock_guard<std::mutex> pl(dabPeerMtx); dabPeers[sock.get()] = DabPeer{ dabV2 }; }
                 const std::string bq = queryParam(reqLine, "bins");
                 wantBins = bq.empty() ? WIRE_BINS_DEFAULT : atoi(bq.c_str());
                 if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
@@ -20354,6 +20467,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ The last tune is never lost: one still held when the socket goes is applied, exactly as it
         //   would have been without the hold.
         if (tuneHold.holding()) applyHeldTune();
+        { std::lock_guard<std::mutex> pl(dabPeerMtx); dabPeers.erase(sock.get()); }
+        { std::lock_guard<std::mutex> tl(teleMtx); teleLast.erase(sock.get()); }
         { std::lock_guard<std::mutex> lk(clientMtx); sockProto.erase(sock.get());
           /* ★★ AND THE SESSION'S LIVENESS STAMP, WHEN THIS WAS ITS LAST SOCKET (audit 2026-10-03).
            *  It was written on every text frame and never erased, so every session that ever spoke
