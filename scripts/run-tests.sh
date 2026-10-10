@@ -200,6 +200,9 @@ if node scripts/test-nr-roundtrip.mjs; then pass=$((pass+1)); else fail=$((fail+
 # ★ The two ends of the advanced-RDS message must agree on field NAMES. A stray "R." prefix meant
 #   the deviation readout never populated at all, and neither half looked wrong on its own.
 if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ The pocket box's Wi-Fi state machine against a fake NetworkManager: strict 1/2/3 order, moving
+#    up when network 1 returns, never pulling a hotspot from under a phone, no password in any log.
+if python3 vibeserver/linux/pocket/test_vibeserver_pocket.py; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★ The web playout (worklet AND the main-thread fallback) must come back clean by itself after the
 #   server has delivered audio in bursts — the Sony's narrow-WFM overload, 2026-09-29. Silent.
 if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi

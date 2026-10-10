@@ -670,6 +670,12 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   # ★ Run as root from the unit's ExecStartPre — the daemon is unprivileged and cannot write
   #   sysfs. See linux/vibeserver-governor for why a wrong governor costs 25% of the machine.
   install(PROGRAMS linux/vibeserver-governor linux/vibeserver-radios DESTINATION lib/vibeserver)
+  # ★★ THE POCKET IMAGE'S WI-FI (2026-10-10). Shipped to every install so a pocket box is fixed by
+  #    apt like anything else, but NOT enabled by postinst, and its unit will not start without the
+  #    image's marker (/etc/vibeserver-pocket/enabled). Needs python3, which Raspberry Pi OS Lite has;
+  #    no Depends is added because no other install ever runs it.
+  install(PROGRAMS linux/pocket/vibeserver-pocket DESTINATION lib/vibeserver)
+  install(FILES linux/pocket/vibeserver-pocket.service DESTINATION lib/systemd/system)
 
   # ★★★ SHIP cloudflared, DO NOT ASK FOR IT. The public listing offers to make an address for an
   #     owner who has no port forward — the only route that works behind CGNAT — and that offer is
