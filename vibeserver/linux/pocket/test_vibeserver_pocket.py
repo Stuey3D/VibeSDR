@@ -56,6 +56,7 @@ class FakeNM:
         self.modified = []
         self.deleted = []
         self.link_sig, self.tx_rate = -60, 65.0     # the joined link as `iw … link` reports it
+        self.assoc = ""                             # ★ the network the radio is REALLY on (set when a join succeeds)
         self.txpk, self.txrt = 1000, 10             # station dump counters (packets, retries)
 
     # Shell interface
@@ -106,8 +107,8 @@ class FakeNM:
         if a[:2] == ["iw", "dev"] and a[3:] == ["link"]:
             if not self.active or self.is_ap():
                 return 0, "Not connected.\n"
-            return 0, ("Connected to e4:5e:1b:00:00:01 (on wlan0)\n\tSSID: x\n\tsignal: %d dBm\n"
-                       "\trx bitrate: 72.2 MBit/s MCS 7 short GI\n\ttx bitrate: %.1f MBit/s MCS 5\n") % (self.link_sig, self.tx_rate)
+            return 0, ("Connected to e4:5e:1b:00:00:01 (on wlan0)\n\tSSID: %s\n\tsignal: %d dBm\n"
+                       "\trx bitrate: 72.2 MBit/s MCS 7 short GI\n\ttx bitrate: %.1f MBit/s MCS 5\n") % (self.assoc, self.link_sig, self.tx_rate)
         if a[:3] == ["nmcli", "--wait", a[2]] and a[3:5] == ["connection", "up"]:
             name = a[5]
             c = self.conns.get(name)
@@ -120,6 +121,7 @@ class FakeNM:
             real = self.air.get(c["ssid"])
             if real and real[1] == c["psk"]:
                 self.active = name
+                self.assoc = c["ssid"]
                 return 0, ""
             self.active = ""
             self.t += int(a[2])
@@ -427,6 +429,24 @@ def main():
            "…each network keeps its own password through the swap")
         st = json.load(open(os.path.join(tmp, "state.json")))
         ok([x["ssid"] for x in st["saved"]] == ["Stuart iPhone", "Home"], "the state reports the new order")
+
+    # ── THE STATUS TELLS THE TRUTH, AND A MISMATCH IS CORRECTED (Stuart: "its a lie, that IP address is home network") ──
+    with tempfile.TemporaryDirectory() as tmp:
+        nm, box = make(tmp)
+        nm.air = {"Home": (70, "homepass1"), "Stuart iPhone": (70, "phonepass")}
+        box.apply(req([("Home", "homepass1", {}), ("Stuart iPhone", "phonepass", {"hidden": True})]))
+        box.leave_hotspot_and_try("test: setup finished")
+        run_for(nm, box, 10)
+        # What the OLD image left behind: slot 1 rewritten to the phone, the radio still on Home.
+        nm.conns["vibe-net-1"], nm.conns["vibe-net-2"] = nm.conns["vibe-net-2"], nm.conns["vibe-net-1"]
+        box.invalidate()
+        box.link_info()
+        box.mode = "client"; box.write_state()
+        ok(json.load(open(os.path.join(tmp, "state.json")))["ssid"] == "Home",
+           "the status names the network the RADIO is on (Home), not the slot's new name")
+        run_for(nm, box, 30)
+        ok(nm.assoc == "Stuart iPhone" and nm.active == "vibe-net-1", "…and the mismatch is corrected: it rejoins in order — the phone")
+        ok(json.load(open(os.path.join(tmp, "state.json")))["ssid"] == "Stuart iPhone", "…and then says so")
 
     # ── OWN WI-FI BY HAND (Stuart, 2026-10-10): held while the radio is in use, released after 30 quiet minutes ──
     with tempfile.TemporaryDirectory() as tmp:

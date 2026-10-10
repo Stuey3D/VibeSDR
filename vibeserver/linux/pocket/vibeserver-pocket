@@ -277,6 +277,7 @@ class Box:
         self.hold_own = False         # ★ the owner chose Own Wi-Fi (memory only — a power cycle clears it)
         self.hold_at = 0.0            # wall clock, when it was chosen
         self.link = None              # the joined link: {signal, tx, rx, retry} — shown beside the choice
+        self.link_ssid = ""           # ★ the network the RADIO is on (iw), not the name in the slot
         self._link_prev = None        # (tx packets, tx retries) at the last reading, for the retry %
         self._names, self._names_at, self._fields = [], -1e9, {}
         self._ip = ("", "")
@@ -430,6 +431,8 @@ class Box:
         def num(pat, text):
             m = re.search(pat, text or "")
             return float(m.group(1)) if m else None
+        m = re.search(r"^\s*SSID:\s?(.*)$", out or "", re.M)
+        self.link_ssid = iw_unescape(m.group(1)) if m else ""
         sig = num(r"signal:\s*(-?\d+)", out)
         tx = num(r"tx bitrate:\s*([\d.]+)", out)
         rx = num(r"rx bitrate:\s*([\d.]+)", out)
@@ -781,6 +784,15 @@ class Box:
         if cur and st >= 100:
             self.connecting_since = None
             self.link = self.link_info()
+            # ★★ THE SAFETY NET: the radio on a different network from the one its slot names (a reorder, or anything
+            #    else that rewrote a live profile) → rejoin in the saved order, whatever caused it.
+            prof = self.get(cur, "802-11-wireless.ssid")
+            if self.link_ssid and prof and self.link_ssid != prof:
+                log("the radio is on \"%s\" but slot %s now names \"%s\" — rejoining in order" % (self.link_ssid, cur, prof))
+                self.down(cur)
+                self.read_active()
+                self.leave_hotspot_and_try("the saved networks changed under a live link")
+                return
             if self.mode != "client":
                 self.mode, self.since = "client", int(time.time())
                 self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
@@ -811,7 +823,10 @@ class Box:
         doc = {
             "v": 1, "mode": self.mode, "since": self.since,
             "connection": self.cur,
-            "ssid": self.get(self.cur, "802-11-wireless.ssid") if self.cur else "",
+            # ★★★ THE NETWORK THE RADIO IS ON, not the name in the slot (Stuart, 2026-10-10: "its a lie, that IP address is
+            #     home network range" — after a reorder the slot said the phone while the radio was still on Home).
+            "ssid": (self.link_ssid if self.mode == "client" and self.link_ssid
+                     else (self.get(self.cur, "802-11-wireless.ssid") if self.cur else "")),
             "ip": self.ip4() if self.cur else "",
             "saved": [{"rank": r, "ssid": s, "hidden": h} for r, n, s, h in saved if r <= 3],
             "others": [{"name": n, "ssid": s} for r, n, s, h in saved if r > 3],
