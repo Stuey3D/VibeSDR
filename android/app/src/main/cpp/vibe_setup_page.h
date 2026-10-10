@@ -5597,11 +5597,7 @@ function wifiNowText() {
   const seen = w.scanAt ? " Network list from " + new Date(w.scanAt * 1000).toLocaleTimeString() + "." : "";
   if (m === "setup-ap") return "Right now the box is its own open setup hotspot, “" + (w.setupSsid || "VibeServer") + "”." + seen;
   if (m === "fallback-ap") return "Right now the box is its own hotspot “" + ((w.ap && w.ap.ssid) || "") + "” — none of your networks is in range." + seen;
-  if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "")
-    // ★ The link's signal, and how close it is to the level where the box moves on (the weak-link handover).
-    + (typeof w.signal === "number" ? ", signal " + w.signal + " dBm"
-       + (typeof w.weakDbm === "number" && w.signal <= w.weakDbm + 5 ? " — weak; below " + w.weakDbm + " dBm the box moves on" : "") : "")
-    + ".";
+  if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + ".";
   if (m === "connecting") return "Joining a network…";
   return "";
 }
