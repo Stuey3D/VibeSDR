@@ -42,5 +42,7 @@ try {
   ok(cfgAfter.configured === true && cfgAfter.radios[0].rate === 912000, "…and the HF+ is saved at 912 kS/s, configured");
 } catch (e) { console.error(e); fails++; }
 for (const p of [br, srv]) try { p.kill(); } catch {}
+// ★ Every run leaves its server and browser folders behind otherwise — 9.7 GB of them filled the Mac (2026-10-10).
+await sleep(500); fs.rmSync(T, { recursive: true, force: true });
 console.log(fails ? `\n\x1b[31m${fails} failed\x1b[0m` : "\n\x1b[32mall passed\x1b[0m");
 process.exit(fails ? 1 : 0);
