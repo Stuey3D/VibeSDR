@@ -175,6 +175,13 @@ try {
   ok(await until(`document.querySelectorAll('#wifiNets .wifiRow [data-f="psk"]').length > 0
                   && document.querySelectorAll('#wifiNets .wifiRow [data-f="psk"]')[0].placeholder.includes("saved")`),
      "saved networks come back as 'saved — leave blank to keep it' (passwords never leave the box)");
+  // ★ Once set up the card is ONE LINE (Stuart: "collapses into the button so its not a large block").
+  ok(await until(visible("wifiSummary")) && !(await js(visible("wifiEdit"))), "set up: the Wi-Fi card is collapsed to a summary");
+  const summary = await js(`document.getElementById("wifiSummaryText").textContent`);
+  ok(/1 Home, 2 Stuart's iPhone/.test(summary) && /Pocket-SDR/.test(summary), "…naming the networks in order and the box's own hotspot");
+  await js(`document.getElementById("wifiCard").scrollIntoView(); 1`); await shot("3-collapsed");
+  await js(`document.getElementById("wifiChange").click(); 1`);
+  ok(await until(visible("wifiEdit")) && !(await js(visible("wifiSummary"))), "'Change Wi-Fi' opens the full card");
   ok(await until(visible("wifiFinish")), "on a hotspot, the 'put the box on your Wi-Fi' step is shown");
   // ★ Never a dead button (Stuart's first Pi 3 A+ test stopped at a greyed-out one).
   ok(await js(`!document.getElementById("wifiGo").disabled`), "the Finish button is never disabled");

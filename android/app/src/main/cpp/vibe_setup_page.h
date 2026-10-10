@@ -273,6 +273,15 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <p class="note wifiFirstOnly" style="margin:0 0 10px">Part 1 of 2: your Wi-Fi. The radios and everything
          else are set up in part 2, once the box is on your network.</p>
       <h2>Wi-Fi</h2>
+      <!-- ★★ ONCE SET UP, ONE LINE (Stuart, 2026-10-10: "collapses into the button so its not a large block
+           that has to be scrolled every time"). Open in full only on the first-boot setup hotspot, while
+           nothing is saved yet, or when the owner asks to change it. -->
+      <div id="wifiSummary" class="hide">
+        <p class="why" id="wifiSummaryText" style="margin-bottom:10px;white-space:pre-line"></p>
+        <button type="button" class="ghost" id="wifiChange">Change Wi-Fi</button>
+        <span class="note" id="wifiSummaryMsg" style="margin-left:10px"></span>
+      </div>
+      <div id="wifiEdit">
       <p class="why">This box joins the first of these networks it can find &mdash; always 1 before 2 before 3.
          If none is in range it starts its own hotspot, below, so your phone can still reach it.</p>
       <div class="note" id="wifiNow"></div>
@@ -301,6 +310,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <div class="err" id="wifiErr"></div>
       <p style="margin-top:12px"><button type="button" id="wifiSave">Save Wi-Fi</button>
         <span class="note" id="wifiMsg" style="margin-left:10px"></span></p>
+      </div>
 
       <!-- ★★★ LEAVING THE HOTSPOT — THE STEP THAT TAKES THIS PAGE AWAY. The phone's captive sheet
            closes the moment the box stops being a hotspot, so EVERYTHING the owner needs next is
@@ -5505,7 +5515,8 @@ async function orderSave() {
 //    a dialog, and the "what happens next" panel is shown BEFORE the switch, never after.
 let POCKET = null;      // the hello answer
 let WIFI = null;        // the root service's state (/vibeserver/pocket/wifi)
-let WIFI_ROWS = [];     // [{ssid, psk, keep, hidden, other}] — in order
+let WIFI_ROWS = [];
+let WIFI_EDITING = false;   // ★ the owner pressed "Change Wi-Fi" — stays open until a save     // [{ssid, psk, keep, hidden, other}] — in order
 
 (async () => {
   try {
@@ -5591,7 +5602,28 @@ function wifiNowText() {
   return "";
 }
 
+/** Collapsed to one line once there is something saved, except on the first-boot setup hotspot. */
+function wifiCollapseRender() {
+  const w = WIFI || {};
+  const saved = w.saved || [];
+  const done = w.mode !== "setup-ap" && saved.length > 0 && !!(w.ap && w.ap.set);
+  const collapsed = done && !WIFI_EDITING;
+  $("wifiSummary").classList.toggle("hide", !collapsed);
+  $("wifiEdit").classList.toggle("hide", collapsed);
+  if (!collapsed) return;
+  $("wifiSummaryText").textContent = wifiNowText()
+    + "\nNetworks, in order: " + saved.map((n, i) => (i + 1) + " " + n.ssid).join(", ")
+    + "\nOwn hotspot: " + w.ap.ssid
+    + (w.lastError ? "\nLast problem: " + w.lastError + "." : "");
+}
+$("wifiChange").onclick = () => {
+  WIFI_EDITING = true; $("wifiSummaryMsg").textContent = "";
+  wifiCollapseRender();
+  $("wifiCard").scrollIntoView({behavior: "smooth", block: "start"});
+};
+
 function wifiRender() {
+  wifiCollapseRender();
   $("wifiNow").textContent = wifiNowText() + (WIFI && WIFI.lastError ? "  Last problem: " + WIFI.lastError + "." : "");
   const scan = (WIFI && WIFI.scan) || [];
   const host = $("wifiNets");
@@ -5775,6 +5807,8 @@ $("wifiSave").onclick = async () => {
     await wifiPost("/vibeserver/pocket/wifi", body);
     $("wifiMsg").innerHTML = '<span class="ok">Saved.</span>'
       + (WIFI && WIFI.mode === "client" ? " The box may drop off this network for a moment while it rejoins in your order." : "");
+    WIFI_EDITING = false;
+    $("wifiSummaryMsg").innerHTML = $("wifiMsg").innerHTML;
     // ★ The box applies it within a second or two; read back what it now holds.
     setTimeout(wifiLoad, 2500);
   } catch (e) { $("wifiErr").textContent = String(e); }
