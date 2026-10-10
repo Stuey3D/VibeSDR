@@ -4067,10 +4067,11 @@ int main(int argc, char** argv) {
         LocalSdrShim::instance().refreshOccupancy();
         // ★★ THE POCKET HOTSPOT'S STATE, every few seconds, from the root service's file. Hotspot up
         //    ⇒ captive portal on; anything else ⇒ off. Front door only, pocket image only.
+        //  ★★ EVERY SECOND (was every 3): a phone checks within a second or two of joining, once. The root
+        //     service now announces the hotspot before it exists and waits for this front door, so a 1 s read
+        //     of a ~1 KB file in /run is all that stands between a join and the captive sheet (2026-10-10).
         if (willBeFrontDoor && vibepocket::enabled()) {
-            static int pocketTick = 0;
-            if (++pocketTick >= 3) {
-                pocketTick = 0;
+            {
                 const auto ps = vibepocket::readState();
                 const bool ap = vibepocket::apMode(ps);
                 vibepocket::setApActive(ap);

@@ -94,6 +94,8 @@ DEFAULTS = {
     "SETUP_SSID": "VibeServer",     # Stuart: the first-boot hotspot is called "VibeServer"
     "COUNTRY": "GB",
     "AP_CHANNEL": "6",              # 2.4 GHz: every phone sees it; 1/6/11 are legal everywhere
+    "DOOR_WAIT_SEC": "120",         # ★ hotspot waits this long for the front door before opening anyway
+    "STATE_LEAD_SEC": "2",          # the state says "hotspot" this long before the hotspot exists
     "BOOT_GRACE_SEC": "35",         # NM's own autoconnect gets this long before we step in (brief: ~30 s)
     "RESCAN_SEC": "120",            # on a hotspot: how often to look for a saved network
     "IDLE_SEC": "120",              # …and only once nobody has been connected for this long
@@ -255,6 +257,15 @@ class Shell:
     def sleep(self, s):
         time.sleep(s)
 
+    def port_open(self, port):
+        """True when something accepts a TCP connection on 127.0.0.1:port (the server's front door)."""
+        import socket
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
+        except OSError:
+            return False
+
 
 class Box:
     """The state machine. One instance, one Wi-Fi device, one turn of the wheel per tick().
@@ -278,6 +289,7 @@ class Box:
         self.next_rescan = 0
         self.next_upgrade = 0
         self.next_try = 0
+        self.door_wait_since = None   # ★ when the hotspot started waiting for the front door
         self.connecting_since = None
         self.last_client = sh.now()
         self.clients = 0
@@ -602,20 +614,44 @@ class Box:
     # ── transitions ──
     def raise_hotspot(self, why):
         name = self.ap_name()
+        now = self.sh.now()
+        # ★★★ NOTHING ON THE AIR UNTIL THE CAPTIVE SHEET CAN OPEN (Stuart's v7 card, 2026-10-10: joined the open
+        #     hotspot, no sheet — iOS showed "connected", fell back to 5G, and never asked again). A phone checks
+        #     within a second or two of joining, ONCE; if nothing answers it settles on "no internet" and the
+        #     owner is left with a hotspot that does nothing. This service starts BEFORE vibeserver, so on a fresh
+        #     box the hotspot used to beat the front door. Now, in order: the front door is LISTENING, the :80
+        #     redirect is loaded, and the state already says hotspot (the server turns its captive answers on
+        #     from it) — and only then does the hotspot come up. After DOOR_WAIT_SEC it opens anyway: a box with
+        #     a dead server must still be reachable to be fixed.
+        port = self.front_door_port()
+        if not self.sh.port_open(port):
+            if self.door_wait_since is None:
+                self.door_wait_since = now
+                log("waiting for VibeServer on :%d before opening the hotspot" % port)
+            if now - self.door_wait_since < self.ci("DOOR_WAIT_SEC"):
+                self.next_try = now + 2
+                return False
+            log("VibeServer still not answering on :%d after %s s — opening the hotspot anyway"
+                % (port, self.ci("DOOR_WAIT_SEC")))
+        self.door_wait_since = None
         if name == SETUP_NAME:
             self.ensure_setup_ap()
         log("raising the %s hotspot — %s" % ("OPEN setup" if name == SETUP_NAME else "secured", why))
-        now = self.sh.now()
+        prev_mode = self.mode
+        self.captive_port = None                 # ★ reload the redirect for this hotspot, before it exists
+        self.captive_on()
+        self.mode = "setup-ap" if name == SETUP_NAME else "fallback-ap"
+        self.write_state()
+        self.sh.sleep(self.ci("STATE_LEAD_SEC"))  # ★ the server reads the state every second
         if self.up(name, wait=20):
-            self.mode = "setup-ap" if name == SETUP_NAME else "fallback-ap"
             self.since = int(time.time())
-            self.last_client = now
-            self.next_rescan = now + self.ci("RESCAN_SEC")
-            self.captive_on()
+            self.last_client = self.sh.now()
+            self.next_rescan = self.last_client + self.ci("RESCAN_SEC")
             return True
         # ★ Do not hammer a radio that will not start a hotspot: try again in half a minute.
         self.last_error = "the hotspot would not start"
-        self.mode = "off"
+        self.mode = "off" if prev_mode in ("setup-ap", "fallback-ap") else prev_mode
+        self.write_state()
         self.next_try = now + 30
         return False
 

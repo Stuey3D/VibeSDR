@@ -58,8 +58,14 @@ class FakeNM:
         self.link_sig, self.tx_rate = -60, 65.0     # the joined link as `iw … link` reports it
         self.assoc = ""                             # ★ the network the radio is REALLY on (set when a join succeeds)
         self.txpk, self.txrt = 1000, 10             # station dump counters (packets, retries)
+        self.door = True                            # the server's front door accepts connections
+        self.ap_up_seen = []                        # (redirect loaded, state mode, door open) at each hotspot up
+        self.state_path = None
 
     # Shell interface
+    def port_open(self, port):
+        return self.door
+
     def now(self):
         return self.t
 
@@ -116,6 +122,14 @@ class FakeNM:
             if not c:
                 return 10, ""
             if c["mode"] == "ap":
+                # ★ What a phone joining at THIS instant would find: the redirect loaded, the state saying hotspot.
+                st = {}
+                try:
+                    with open(self.state_path) as f:
+                        st = json.load(f)
+                except (OSError, ValueError, AttributeError, TypeError):
+                    pass
+                self.ap_up_seen.append((bool(self.nft), st.get("mode"), self.door))
                 self.active = name
                 return 0, ""
             real = self.air.get(c["ssid"])
@@ -164,6 +178,7 @@ def make(tmp):
     nm = FakeNM()
     box = vp.Box(nm, dict(vp.DEFAULTS), state_path=os.path.join(tmp, "state.json"))
     box.dev = "wlan0"
+    nm.state_path = box.state_path
     return nm, box
 
 
@@ -197,6 +212,26 @@ def main():
            "it is called VibeServer and has no password")
         ok({x["ssid"] for x in box.scan_cache} == {"Home", "Neighbour"}, "networks were scanned BEFORE the hotspot (setup page's list)")
         ok(nm.nft and "redirect to :48000" in nm.nft[-1], "port 80 is redirected to the front door")
+        ok(nm.ap_up_seen and nm.ap_up_seen[0] == (True, "setup-ap", True),
+           "the redirect is loaded and the state says setup-ap BEFORE the hotspot exists (a phone's one check is answered)")
+
+        # ── ★★★ the hotspot waits for the front door (v7 card, 2026-10-10: joined, no captive sheet) ──
+        tmpw = tempfile.mkdtemp()
+        nmw, boxw = make(tmpw)
+        nmw.door = False
+        boxw.tick()
+        ok(nmw.active == "" and not nmw.ap_up_seen, "server not listening yet: NO hotspot on the air")
+        run_for(nmw, boxw, 30)
+        ok(nmw.active == "", "…still none 30 s on, while the server is not answering")
+        nmw.door = True
+        run_for(nmw, boxw, 10)
+        ok(nmw.active == vp.SETUP_NAME and nmw.ap_up_seen[-1] == (True, "setup-ap", True),
+           "server answers: the setup hotspot comes up, with the redirect and state already in place")
+        tmpd = tempfile.mkdtemp()
+        nmd, boxd = make(tmpd)
+        nmd.door = False
+        run_for(nmd, boxd, int(vp.DEFAULTS["DOOR_WAIT_SEC"]) + 20)
+        ok(nmd.active == vp.SETUP_NAME, "a server that never answers: the hotspot opens anyway after DOOR_WAIT_SEC (box stays reachable)")
 
         # ── setup saves 3 networks + the hotspot, without switching ──
         nm.stations = 1
