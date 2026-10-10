@@ -423,6 +423,9 @@ if npx tsx scripts/test_lr_meter.ts; then pass=$((pass+1)); else fail=$((fail+1)
 #    never a downgrade.
 if npx tsx scripts/test_lite_update.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
+# ★★ RECORDINGS BY SERVER, THEN NEWEST FIRST (2026-10-10): the receiver you are on first, others A–Z, no-server last.
+if npx tsx scripts/test_recording_groups.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
 #     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.

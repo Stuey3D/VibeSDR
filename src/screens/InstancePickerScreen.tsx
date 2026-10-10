@@ -124,6 +124,7 @@ import { resolveVibeAuth } from '../services/vibeAuth';
 import { crumb } from '../services/crumbs';
 import { exportLogs, EXPORT_LOGS_LABEL } from '../components/ExportLogs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
+import RecordingsOverlay from '../components/RecordingsOverlay';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
 // mixes OWRX + Kiwi, so the row icon tells them apart at a glance).
@@ -354,6 +355,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // null = directory CHOOSER (favourites + directory cards); set = that
   // directory's instance list.
   const [selectedDir, setSelectedDir]   = useState<DirectoryId | null>(null);
+
+  const [recordingsOpen, setRecordingsOpen] = useState(false);   // ★ the Recordings button in the header
 
   // First-run tour on the instance list — welcome + the custom-server box.
   const pickerTour = useCoachmarkTour([
@@ -2300,6 +2303,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 and it costs no list rows. Scoped to THIS screen's actions; the full
                 scrollable shortcut reference lives in the main menu. */}
           </View>
+          {/* ★★ RECORDINGS, WITHOUT OPENING A RECEIVER (NickB / Stuart, 2026-10-10: "Top of the directory page can we
+              have a recordings button … lists it by server name and then chronologically"). The same list as the
+              audio menu's, all servers equal here. */}
+          <TouchableOpacity onPress={() => setRecordingsOpen(true)} hitSlop={8} accessibilityRole="button"
+                            accessibilityLabel="Recordings"
+                            style={{ paddingVertical: 6, paddingHorizontal: 10, marginRight: 4, borderWidth: 1,
+                                     borderColor: C.border, borderRadius: 6 }}>
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: C.amber, letterSpacing: 1 }}>⏺ RECORDINGS</Text>
+          </TouchableOpacity>
           {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
           <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>
             <Text style={{ fontSize: fs(22), color: C.textDim }}>⚙</Text>
@@ -2804,6 +2816,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
       {/* First-run guided tour (dismissable) */}
       {pickerTour.overlay}
+      <RecordingsOverlay visible={recordingsOpen} onClose={() => setRecordingsOpen(false)} />
     </SafeAreaView>
   );
 }

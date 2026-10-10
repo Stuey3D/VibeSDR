@@ -25,6 +25,8 @@ import { useCoversScreen } from '../hooks/useScreenCovered';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import { useMacAudio } from '../services/macAudio';
+import { groupRecordings, NO_SERVER } from '../services/recordingGroups';
+import { loadRecordingIndex, pruneRecordingIndex } from '../services/recordingsIndex';
 
 const REC = NativeModules.VibePowerModule as { shareRecording?: (path: string) => void };
 
@@ -66,20 +68,28 @@ function fmtTime(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
+/** A row of the list: a server heading, or a recording. */
+type Row = { kind: 'h'; server: string; count: number } | { kind: 'r'; rec: Rec; i: number };
+
 export interface RecordingsOverlayProps {
   visible: boolean;
+  /** ★ Inside a receiver: its name, so its own recordings head the list. Absent on the server list (all equal). */
+  currentServer?: string;
   onClose: () => void;
   /** Fired true on open / false on close so the parent can pause+mute the live
    *  SDR while a recording plays, then resume. */
   onActiveChange?: (active: boolean) => void;
 }
 
-export default function RecordingsOverlay({ visible, onClose, onActiveChange }: RecordingsOverlayProps) {
+export default function RecordingsOverlay({ visible, onClose, onActiveChange, currentServer }: RecordingsOverlayProps) {
   // ★ An opaque full-screen modal: the receiver's clocks under it stop drawing (useScreenCovered).
   useCoversScreen(visible);
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
+  /* ★★ BY SERVER, THEN NEWEST FIRST (Stuart, 2026-10-10). `recs` is the play order the keyboard walks (group by
+   *  group); `rows` is the same with a heading before each server. */
   const [recs, setRecs] = useState<Rec[] | null>(null);
+  const [rows, setRows] = useState<Row[]>([]);
   const [sel, setSel] = useState<string | null>(null);    // uri of the selected/playing rec
   const [trackW, setTrackW] = useState(0);                // seek-bar width of the open row
   const player = useAudioPlayer();
@@ -110,12 +120,22 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
         if (!info.exists) continue;
         list.push(parseRec(n, uri, (info as any).size ?? 0, (info as any).modificationTime ?? 0));
       }
-      list.sort((a, b) => b.mtime - a.mtime);   // newest first
-      setRecs(list);
+      const ix = await loadRecordingIndex();
+      const groups = groupRecordings(list, (n) => ix[n]?.server, currentServer);
+      const ordered: Rec[] = [];
+      const out: Row[] = [];
+      for (const g of groups) {
+        out.push({ kind: 'h', server: g.server, count: g.recs.length });
+        for (const rec of g.recs) { out.push({ kind: 'r', rec, i: ordered.length }); ordered.push(rec); }
+      }
+      setRows(out);
+      setRecs(ordered);
+      void pruneRecordingIndex(list.map((x) => x.name));
     } catch {
+      setRows([]);
       setRecs([]);
     }
-  }, []);
+  }, [currentServer]);
 
   // Open/close lifecycle: tell the parent to pause the SDR, (re)load the list.
   useEffect(() => {
@@ -179,9 +199,9 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
   // to drive — the same reason share is left off the keyboard path in the frequency card.
   const kbInUse = useKeyboardMode();
   const [navIdx, setNavIdx] = useState(0);
-  const listRef = useRef<FlatList<Rec> | null>(null);
-  const kb = useRef({ recs, navIdx, togglePlay: (_r: Rec) => {}, remove: (_r: Rec) => {}, onClose });
-  kb.current = { recs, navIdx, togglePlay, remove, onClose };
+  const listRef = useRef<FlatList<Row> | null>(null);
+  const kb = useRef({ recs, rows, navIdx, togglePlay: (_r: Rec) => {}, remove: (_r: Rec) => {}, onClose });
+  kb.current = { recs, rows, navIdx, togglePlay, remove, onClose };
 
   useEffect(() => { if (visible) setNavIdx(0); }, [visible]);
 
@@ -193,14 +213,16 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
     if (k === 'ArrowUp' || k === 'ArrowDown') {
       const next = Math.max(0, Math.min(rs.length - 1, i + (k === 'ArrowDown' ? 1 : -1)));
       setNavIdx(next);
-      try { listRef.current?.scrollToIndex({ index: next, viewPosition: 0.5, animated: true }); } catch {}
+      // ★ The list has headings between the recordings: scroll to the ROW that holds recording `next`.
+      const at = kb.current.rows.findIndex((x) => x.kind === 'r' && x.i === next);
+      try { if (at >= 0) listRef.current?.scrollToIndex({ index: at, viewPosition: 0.5, animated: true }); } catch {}
       return;
     }
     if (k === 'Space' || k === 'Enter') { const r = rs[i]; if (r) kb.current.togglePlay(r); return; }
     if (k === 'Backspace' || k === 'Delete') { const r = rs[i]; if (r) kb.current.remove(r); }
   }, NAV_REPEAT_KEYS);
 
-  const renderItem = useCallback(({ item, index }: { item: Rec; index: number }) => {
+  const renderRec = useCallback(({ item, index }: { item: Rec; index: number }) => {
     const navOn = index === navIdx;
     const isSel = sel === item.uri;
     const playing = isSel && status.playing;
@@ -259,6 +281,13 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
     );
   }, [sel, status.playing, status.duration, status.currentTime, trackW, togglePlay, share, remove, player, pt, styles]);
 
+  const renderItem = useCallback(({ item }: { item: Row }) => item.kind === 'h' ? (
+    <Text style={styles.group} numberOfLines={1} accessibilityRole="header">
+      {item.server === NO_SERVER ? 'SERVER NOT RECORDED' : item.server.toUpperCase()}
+      <Text style={styles.groupN}>{'  '}{item.count}</Text>
+    </Text>
+  ) : renderRec({ item: item.rec, index: item.i }), [renderRec, styles]);
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} transparent={false}>
       {/* Modals render outside the app's SafeAreaProvider, so SafeAreaView reads
@@ -295,9 +324,9 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange }: 
         ) : (
           <FlatList
             ref={listRef}
-            data={recs}
-            extraData={navIdx}
-            keyExtractor={(r) => r.uri}
+            data={rows}
+            extraData={[navIdx, renderRec]}
+            keyExtractor={(r) => (r.kind === 'h' ? 'h:' + r.server : r.rec.uri)}
             renderItem={renderItem}
             /* ★ scroll lane: each row's own 12 pt side margin keeps its keys clear */
             contentContainerStyle={{ paddingVertical: 8 }}
@@ -326,6 +355,10 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   kbHint: { color: pt.metal ? pt.note : '#8fa', fontSize: 10, letterSpacing: 0.5, opacity: pt.metal ? 1 : 0.85,
             paddingHorizontal: 16, paddingBottom: 8 },
   emptySub: { color: '#888', fontSize: 13, marginTop: 8, textAlign: 'center' },
+  // ★ A server heading: the same small spaced capitals as the section labels elsewhere.
+  group: onMetal(pt, { color: '#3ddc84', fontSize: 11, fontWeight: '800', letterSpacing: 2,
+                       marginHorizontal: 16, marginTop: 14, marginBottom: 4 }, { ...engraveText(pt), fontWeight: '700' }),
+  groupN: { color: pt.metal ? pt.note : '#8fa', fontWeight: '400', letterSpacing: 0 },
   row: {
     marginHorizontal: 12, marginVertical: 4, padding: 10,
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 10,

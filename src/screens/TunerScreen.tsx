@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { AppState, View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import { noteRecordingServer } from '../services/recordingsIndex';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import AudioSheet from '../components/AudioSheet';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -104,6 +105,8 @@ let fmdxNoticeShownThisSession = false;
 
 export default function TunerScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName } = route.params;
+  /** ★ How a recording made here is filed in Recordings: the server's name, else its host. */
+  const recServerName = instanceName || String(baseUrl ?? '').replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
   const { theme: baseTheme } = useTheme();
   const insets = useSafeAreaInsets();
   /* ★★★ THE FM-DX SCREEN FOLLOWS THE COLOUR SCHEME (Stuart, 2026-10-02, a blue VCR deck under a green and
@@ -982,6 +985,8 @@ export default function TunerScreen({ route, navigation }: Props) {
           // (else it presents over the modal and wedges touch handling) — iOS
           // defers to the sheet's onDismiss; Android has no such conflict.
           if (!path) { setAudioSheetOpen(false); return; }
+          // ★ Which server this was made on — the Recordings list groups by it (services/recordingsIndex.ts).
+          void noteRecordingServer(path, recServerName);
           if (Platform.OS === 'android') {
             try {
               const cu = await FileSystem.getContentUriAsync(path.startsWith('file://') ? path : 'file://' + path);
@@ -1334,7 +1339,8 @@ export default function TunerScreen({ route, navigation }: Props) {
         onSelect={setStep}
         onClose={() => setStepOpen(false)}
       />
-      <RecordingsOverlay visible={recordingsOpen} onClose={() => setRecordingsOpen(false)} onActiveChange={onRecordingsActive} />
+      <RecordingsOverlay visible={recordingsOpen} onClose={() => setRecordingsOpen(false)} onActiveChange={onRecordingsActive}
+                         currentServer={recServerName} />
 
       {/* Audio sheet — FM-DX has only REC + Recordings (no client DSP / squelch) */}
       <AudioSheet

@@ -199,6 +199,7 @@ import { markServerPrefsReset, setActiveSyncServer } from '../services/perServer
 import * as DocumentPicker from 'expo-document-picker';
 // SDK 56 moved readAsStringAsync to the legacy entry (new File API otherwise).
 import * as FileSystem from 'expo-file-system/legacy';
+import { noteRecordingServer } from '../services/recordingsIndex';
 import { crumb } from '../services/crumbs';
 import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
@@ -530,6 +531,8 @@ function appendDecoderText(prev: string, add: string): string {
 
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
+  /** ★ How a recording made here is filed in Recordings: the server's name, else its host. */
+  const recServerName = instanceName || String(baseUrl ?? '').replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
   useKeepAwake();
 
   // ── A MULTI-RADIO SERVER: WHICH RADIO? ────────────────────────────────────────────────────
@@ -3422,6 +3425,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           // (iOS Documents / Android filesDir) and is reachable via the
           // Recordings browser. Android needs an Expo content URI to share.
           if (!path) { setAudioSheetOpen(false); return; }
+          // ★ Which server this was made on — the Recordings list groups by it (services/recordingsIndex.ts).
+          void noteRecordingServer(path, recServerName);
           if (Platform.OS === 'android') {
             try {
               const cu = await FileSystem.getContentUriAsync(
@@ -11486,6 +11491,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         visible={recordingsOpen}
         onClose={() => setRecordingsOpen(false)}
         onActiveChange={onRecordingsActive}
+        currentServer={recServerName}
       />
       </PanelBoundary>
 
