@@ -302,6 +302,10 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <div class="hint">An iPhone&rsquo;s Personal Hotspot is usually not visible while you are setting this
          up &mdash; choose <b>Type a name</b>, enter it exactly as the iPhone shows it under
          Settings &rsaquo; General &rsaquo; About &rsaquo; Name, and tick <b>not visible</b>.</div>
+      <!-- ★★ Stuart's Pi 3 A+ (2026-10-10) would not join his iPhone's hotspot until Maximise Compatibility was on: newer
+           iPhones run the hotspot on 5 GHz with newer security, which the Pi's Wi-Fi may not see or join. -->
+      <div class="hint"><b>On the iPhone, turn on Maximise Compatibility</b> (Settings &rsaquo; Personal Hotspot) &mdash;
+         without it this box may not be able to join. On an Android phone, set the hotspot to <b>2.4 GHz</b>.</div>
 
       <h2 style="margin-top:22px">This box&rsquo;s own hotspot</h2>
       <p class="why">Used when none of your networks is in range. It is secured (WPA2): join it with this
