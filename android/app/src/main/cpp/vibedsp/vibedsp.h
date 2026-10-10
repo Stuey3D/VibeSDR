@@ -2276,8 +2276,13 @@ private:
      *  down), L = M + S, R = M − S in composite units ×75 = kHz. Each 50 ms window's 99.5th percentile (a histogram,
      *  0–150 kHz in 0.5 kHz bins), the last second's highest window published. */
     void lrMeter_(const float* x, const float* lmr, int n, bool hold);
-    EyeBiquad lrMonoLp_[4], lrSideLp_[4], lrMonoNotch_, lrSideNotch_;   // ★ + a 19 kHz trap: the low-pass alone left
-                                                                           //   the pilot only ~16 dB down (+1.25 kHz on every reading)
+    /* ★★ A LINEAR-PHASE FIR, NOT AN IIR (2026-10-10). The 8th-order Butterworth (+ a 19 kHz trap) read sine tones to 0.6 %
+     *  but a hard-clipped, 15 kHz band-limited programme +11.5 % HIGH: its phase near the corner re-shapes an already
+     *  band-limited waveform and adds overshoot that was never transmitted — Heart read L = R = 74 kHz under a 74 kHz
+     *  total (Stuart's screenshot). A symmetric FIR adds none: flat to 15 kHz, ≥ 60 dB down by 18.5 kHz (the pilot gone
+     *  with no trap), evaluated on every 2nd sample (96 kHz). */
+    std::vector<float> lrTaps_, lrHistM_, lrHistS_;
+    int lrPos_ = 0, lrPhase_ = 0;
     double lrFs_ = 0.0;
     int lrWinN_ = 0, lrWinCnt_ = 0;
     std::vector<uint32_t> lrHist_[2];

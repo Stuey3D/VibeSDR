@@ -168,6 +168,10 @@ struct Sig {
      *  the pilot's sine phase — is sin(2wp + 180°) = −sin(2wp). (The programme above uses cos(2wp), 90° from the standard,
      *  which is why it is not used for this.) */
     double leftAmp = -1.0, rightAmp = -1.0;
+    /* ★ PROCESSED programme for the L/R meters: band-limited SQUARE waves (odd harmonics to 15 kHz — a hard-clipped
+     *  programme as a stereo encoder transmits it, Gibbs overshoot included). An IIR measuring filter read this 11.5 %
+     *  high while reading sines to 0.6 % (Heart, 2026-10-10). */
+    bool processed = false;
     double noise = 0.0;          // white noise on I and Q, against a carrier of amplitude 0.5
     double echoAmp = 0.0;        // a reflection: this fraction of the signal, echoDelayUs later
     double echoDelayUs = 3.0;    // ~900 m of extra path
@@ -213,8 +217,9 @@ struct Gen {
             const double R = sig.programme * 0.50 * std::sin(2 * M_PI * 1300.0 * t);
             const double wp = 2 * M_PI * kPilotHz * t;
             const bool lr = sig.leftAmp >= 0.0;
-            const double Ls = lr ? sig.leftAmp * std::sin(2 * M_PI * 1000.0 * t) : 0.0;
-            const double Rs = lr ? sig.rightAmp * std::sin(2 * M_PI * 1700.0 * t) : 0.0;
+            auto sq = [&](double f) { double v = 0; for (int h = 1; h * f <= 15000.0; h += 2) v += std::sin(2 * M_PI * h * f * t) / h; return v * 4.0 / M_PI; };
+            const double Ls = lr ? sig.leftAmp * (sig.processed ? sq(700.0) : std::sin(2 * M_PI * 1000.0 * t)) : 0.0;
+            const double Rs = lr ? sig.rightAmp * (sig.processed ? sq(1100.0) : std::sin(2 * M_PI * 1700.0 * t)) : 0.0;
             const double audio = lr ? 0.9 * (0.5 * (Ls + Rs) - 0.5 * (Ls - Rs) * std::sin(2 * wp))
                                     : 0.9 * (0.5 * (L + R) + 0.5 * (L - R) * std::cos(2 * wp));
             const double mpx = audio
@@ -668,6 +673,18 @@ int main(int argc, char** argv) {
             std::snprintf(w, sizeof w, "L/R meters: left %.2f (want %.1f), right %.2f (want %.1f) — within 3 %% or 1 kHz", r.lDev, wl, r.rDev, wr);
             auto close = [](double got, double want) { return std::fabs(got - want) <= std::max(1.0, 0.03 * want); };
             ok(close(r.lDev, wl) && close(r.rDev, wr), w);
+        }
+        // ★ The processed case: the TRUE peak is the band-limited square's own maximum (what was transmitted).
+        {
+            Sig s; s.leftAmp = 0.6; s.rightAmp = 0.6; s.processed = true;
+            auto peakOf = [](double f) { double mx = 0; for (int k = 0; k < 200000; ++k) { const double t = k / 2.0e6; double v = 0;
+                for (int h = 1; h * f <= 15000.0; h += 2) v += std::sin(2 * M_PI * h * f * t) / h; mx = std::max(mx, std::fabs(v * 4.0 / M_PI)); } return mx; };
+            const double wl = 0.9 * 0.6 * 75.0 * peakOf(700.0), wr = 0.9 * 0.6 * 75.0 * peakOf(1100.0);
+            const Reading r = run(2400000.0, 200000.0, 0.0, s, 6.0);
+            std::printf("   PROCESSED (clipped, 15 kHz) -> left %.2f kHz (true %.2f), right %.2f kHz (true %.2f)\n", r.lDev, wl, r.rDev, wr);
+            char w[200];
+            std::snprintf(w, sizeof w, "L/R meters on a CLIPPED programme: left %.2f (true %.1f), right %.2f (true %.1f) — within 3 %%, no filter overshoot", r.lDev, wl, r.rDev, wr);
+            ok(std::fabs(r.lDev - wl) <= 0.03 * wl && std::fabs(r.rDev - wr) <= 0.03 * wr, w);
         }
     }
 

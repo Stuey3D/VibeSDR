@@ -19,7 +19,7 @@
  * spend the extra CPU and bytes. Closing it must turn that back off.
  */
 
-import { LR_LIMIT_KHZ, lrParts } from '../services/lrMeter';
+import { LR_LIMIT_KHZ, lrDisplay } from '../services/lrMeter';
 import { receiverIso } from '../services/rdsCountry';
 import React, { useMemo, useRef } from 'react';
 import { useBusValue, type ValueBus } from '../services/valueBus';
@@ -61,6 +61,8 @@ import { scrollLane } from '../constants/popupTokens';
 const C = DECODER_MEANING;
 const FONT = DECODER_FONT;
 const DASH = '—';
+/** ★ The longest verdict the deviation readout can print (mpxDevInfo) — drawn invisibly to fix the block's height. */
+const DEV_VERDICT_LONGEST = 'low S/N, unreliable · neighbour in the guard band, noise not removed';
 
 const PTY_EU = [
   'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
@@ -637,7 +639,10 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
              hold: Math.max(0, Math.min(100, hd)) };
   }, [x?.mpxDev, x?.mpxAvg, x?.mpxHold, x?.mpxSnr, x?.mpxNoise]);
   /** ★ L / R peak deviation as drawn — src/services/lrMeter.ts (shared with the web panel). */
-  const lr = useMemo(() => lrParts(x?.lDev, x?.rDev), [x?.lDev, x?.rDev]);
+  // ★ Sticky once seen, so a weak station's gaps show an empty meter instead of the rows vanishing (lrDisplay).
+  const lrSeen = useRef(false);
+  if (typeof x?.lDev === 'number' && x.lDev >= 0) lrSeen.current = true;
+  const lr = useMemo(() => lrDisplay(x?.lDev, x?.rDev, lrSeen.current), [x?.lDev, x?.rDev]);
   /** MPX power (BS.412) as drawn — see the row and services/mpxPower.ts ("settling 44 s" until the minute is in). */
   const mpxPowTxt = useMemo(() => {
     return mpxPowerParts(x?.mpxPow ?? 0, x?.mpxPowS ?? 0);   // ★ shared with the web panel
@@ -1310,16 +1315,25 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                 <Text style={[s.devKey, { color: mpxDevInfo.c }]}>Peak:</Text>
                 <Text style={[s.devVal, { color: mpxDevInfo.c }]}>{mpxDevInfo.peak}</Text>
               </View>
-              <Text style={[s.verdict, s.devVerdict, { color: mpxDevInfo.c, minHeight: 15 }]}>
-                {mpxDevInfo.verdict}
-              </Text>
+              {/* ★★ FULL SIZE, ALWAYS. A station near the 1 kHz noise threshold flipped the verdict between one line
+                  ("nominal") and three ("… neighbour in the guard band, noise not removed") several times a second, and
+                  every flip bounced the L/R meters and the plots below (Stuart, 2026-10-10). The invisible ghost is the
+                  LONGEST verdict this panel can print; the live text lies over it, so the block keeps that height. */}
+              <View style={s.devVerdict}>
+                <Text style={[s.verdict, s.devVerdictText, { opacity: 0 }]} aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                  {DEV_VERDICT_LONGEST}
+                </Text>
+                <Text style={[s.verdict, s.devVerdictText, s.devVerdictLive, { color: mpxDevInfo.c }]}>
+                  {mpxDevInfo.verdict}
+                </Text>
+              </View>
               {/* ★ LEFT / RIGHT — what each channel alone puts on the carrier (2026-10-10, src/services/lrMeter.ts).
                   ★ INSIDE THE FIGURES' 200 pt BLOCK (key 12 + bar 120 + value 56, centred like the verdict). The first
                   version borrowed the 132 pt devKey and ran ~356 pt wide: bars off the panel edge, values off-screen
                   (Stuart's screenshot). Same track and limit line (75 kHz) as the deviation bar; not drawn at all
                   without a measurement — never a false zero. */}
               {!!lr && (['l', 'r'] as const).map((k) => {
-                const col = lr[k].tone === 'bad' ? C.bad : lr[k].tone === 'warn' ? C.warn : C.good;
+                const col = lr[k].tone === 'bad' ? C.bad : lr[k].tone === 'warn' ? C.warn : lr[k].tone === 'none' ? C.rowLabel : C.good;
                 return (
                   <View key={k} style={{ width: 200, flexDirection: 'row', alignItems: 'center', marginTop: k === 'l' ? 5 : 2 }}>
                     <Text style={{ fontFamily: FONT, fontSize: 12, width: 12, textAlign: 'right', opacity: 0.8, color: C.rowLabel }}>
@@ -1345,7 +1359,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
               </View>
               {/* ★ The countdown to a full 60 s mean, on its own line — services/mpxPower.ts. */}
               {!!mpxPowTxt.settling && (
-                <Text style={[s.verdict, s.devVerdict, { color: C.rowLabel, opacity: 0.75, marginTop: 1 }]}>
+                <Text style={[s.verdict, s.devVerdict, s.devVerdictText, { color: C.rowLabel, opacity: 0.75, marginTop: 1 }]}>
                   {mpxPowTxt.settling}
                 </Text>
               )}
@@ -1444,7 +1458,9 @@ const makeStyles = (T: DecoderTokens) => { const C: Palette = palette(T); const 
   /* ★ The verdict is CENTRED across the figures' block (key 132 + gap 6 + value 62), as the web panel's
    *  #rdsMpxVerdict is — left-aligned it sat at the panel edge, out of line with every figure around it
    *  (Stuart, 2026-10-02: "it's the nominal above it that isn't"). A long verdict wraps inside the block. */
-  devVerdict: { width: 200, textAlign: 'center' as const },
+  devVerdict: { width: 200 },
+  devVerdictText: { textAlign: 'center' as const },
+  devVerdictLive: { position: 'absolute' as const, left: 0, right: 0, top: 0 },
   devKey:  { fontFamily: FONT, fontSize: 12, width: 132, textAlign: 'right' as const, opacity: 0.8 },
   devVal:  { fontFamily: FONT, fontSize: 12, width: 62, textAlign: 'right' as const,
              marginLeft: 6, fontVariant: ['tabular-nums'] as const },

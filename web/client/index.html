@@ -2240,19 +2240,26 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #rdsLR { margin-top: 3px; font-family: var(--mono, monospace); font-size: 11px; color: var(--text-dim); }
 #rdsLR .lrRow { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 2px; }
 #rdsLR .lrKey { width: 1em; text-align: right; opacity: 0.75; }
-#rdsLR .lrVal { width: 4.5em; text-align: left; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
-#rdsLR .lrBar { position: relative; width: 150px; height: 6px; background: rgba(255,160,0,0.10);
+#rdsLR .lrVal { width: 5.5em; white-space: nowrap; text-align: left; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }   /* ★ nowrap: "74 kHz" broke onto two lines in the narrow column */
+#rdsLR .lrBar { position: relative; width: 120px; height: 6px; background: rgba(255,160,0,0.10);
                 border: 1px solid var(--btn-border); border-radius: 2px; overflow: hidden; }
 #rdsLR .lrBar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #7dff9a; transition: width 0.12s linear; }
 #rdsLR .lrBar i.warn { background: #ffd479; }
 #rdsLR .lrBar i.bad  { background: #ff8a7d; }
 #rdsLR .lrBar u { position: absolute; top: -1px; bottom: -1px; left: 75%; width: 1px; background: rgba(255,255,255,0.55); }
+#rdsLR .lrVal.good { color: #7dff9a; }   /* ★ the deviation block's own text colours: a dim value under a green one read as a warning */
 #rdsLR .lrVal.warn { color: #ffd479; }
 #rdsLR .lrVal.bad  { color: #ff8a7d; }
 #rdsMpxPowSettle:empty { display: none; }
 /* ★ The verdict keeps its own line, so a long one ("neighbour in the guard band, noise not
    removed") wraps under the numbers instead of pushing them sideways. */
-#rdsMpxVerdict { margin-top: 2px; text-align: center; }
+/* ★★ FULL SIZE, ALWAYS. "nominal" is one line and "nominal · neighbour in the guard band, noise not removed" is two, and
+   a station near the 1 kHz threshold flips between them several times a second — every flip moved the L/R meters and
+   the plots below up and down (Stuart, 2026-10-10). The ghost (the longest wording) and the live text share one grid
+   cell, so the box keeps the longest one's height at whatever width the column has. */
+#rdsMpxVerdictBox { display: grid; margin-top: 2px; text-align: center; }
+#rdsMpxVerdictBox > * { grid-area: 1 / 1; }
+#rdsMpxVerdictBox .ghost { visibility: hidden; }
 #rdsMpxDev.good { color: #7dff9a; }
 #rdsMpxDev.ok   { color: #ffd479; }
 #rdsMpxDev.bad  { color: #ff8a7d; }
@@ -3330,7 +3337,9 @@ select.btn { padding: 6px 8px; }
             <!-- ★ The countdown to a full 60 s mean — its own line, so the figures column never widens. -->
             <span id="rdsMpxPowSettle"></span>
           </div>
-          <div id="rdsMpxVerdict">—</div>
+          <!-- ★ The hidden ghost is the LONGEST verdict the panel can print; the live text sits in the same grid cell, so the
+               box is always the ghost's height at this width and nothing below moves when the wording changes. -->
+          <div id="rdsMpxVerdictBox"><span class="ghost" aria-hidden="true">close to the limit · neighbour in the guard band, noise not removed</span><div id="rdsMpxVerdict">—</div></div>
         </div>
         <!-- ★ LEFT / RIGHT — what each channel alone puts on the carrier (2026-10-10, src/services/lrMeter.ts). Same scale,
              limit line (75 kHz) and colours as the deviation bar. Hidden without a measurement. -->

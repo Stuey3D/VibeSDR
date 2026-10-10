@@ -610,7 +610,8 @@ void MpxMeasure::chunk_(const cf32* ch, int n) {
 /* ★★ L/R METERS (2026-10-10, Stuart: "is it worth including especially useful on distorted stations"). Deviation, not
  *  audio dBFS: what each channel alone puts on the carrier, in the same kHz as every other figure here, so an over-driven
  *  or lop-sided station shows as one channel sitting at (or past) the limit. The PLL's L-R detector output is (L−R)/2
- *  once low-passed and the composite is (L+R)/2 below 15 kHz, so L = M + S and R = M − S. Robust, not a raw peak: each
+ *  once low-passed and the composite is (L+R)/2 below 15 kHz, so L = M + S and R = M − S — through a LINEAR-PHASE FIR (see
+ *  lrTaps_: an IIR read clipped programme 11.5 % high). Robust, not a raw peak: each
  *  50 ms window's 99.5th percentile, so a click cannot make a figure; the last second's highest window is published.
  *  Proved against a known left-only / right-only broadcast in test-mpx-measure. Runs only while Advanced RDS is open,
  *  like everything in MpxMeasure. */
@@ -618,23 +619,47 @@ void MpxMeasure::lrMeter_(const float* x, const float* lmr, int n, bool hold) {
     constexpr int kBins = 300;                  // 0–150 kHz in 0.5 kHz bins
     constexpr double kBinKHz = 0.5;
     constexpr int kWins = 20;                   // 20 × 50 ms = 1 s
+    constexpr int kDec = 2;                     // evaluate the FIR on every 2nd sample (96 kHz)
     if (lrFs_ != kMpxRate) {
-        static const double kQ8[4] = { 0.50979558, 0.60134489, 0.89997622, 2.56291545 };
-        for (int k = 0; k < 4; ++k) { lrMonoLp_[k].designLp(kMpxRate, 15000.0, kQ8[k]); lrSideLp_[k].designLp(kMpxRate, 15000.0, kQ8[k]); }
-        lrMonoNotch_.designNotch(kMpxRate, 19000.0, 8.0); lrSideNotch_.designNotch(kMpxRate, 19000.0, 8.0);
-        lrWinN_ = (int)(kMpxRate * 0.05);
+        // Kaiser-windowed sinc: cutoff midway 15 → 18.5 kHz, β 5.65 (≈ 60 dB), length from Kaiser's formula.
+        const double fPass = 15000.0, fStop = 18500.0, A = 60.0, beta = 5.653;
+        const double dw = 2.0 * M_PI * (fStop - fPass) / kMpxRate;
+        int N = (int)std::ceil((A - 8.0) / (2.285 * dw)) + 1;
+        if (N % 2 == 0) ++N;                    // odd: a whole-sample centre, linear phase
+        const double fc = 0.5 * (fPass + fStop) / kMpxRate;
+        auto i0 = [](double v) { double sum = 1.0, term = 1.0; for (int k = 1; k < 40; ++k) { term *= (v / (2.0 * k)) * (v / (2.0 * k)); sum += term; } return sum; };
+        lrTaps_.assign((size_t)N, 0.0f);
+        double dc = 0.0;
+        for (int k = 0; k < N; ++k) {
+            const double m = k - (N - 1) / 2.0;
+            const double sinc = m == 0.0 ? 2.0 * fc : std::sin(2.0 * M_PI * fc * m) / (M_PI * m);
+            const double r = 2.0 * k / (N - 1) - 1.0;
+            const double w = i0(beta * std::sqrt(std::max(0.0, 1.0 - r * r))) / i0(beta);
+            lrTaps_[(size_t)k] = (float)(sinc * w); dc += sinc * w;
+        }
+        for (auto& t : lrTaps_) t = (float)(t / dc);           // unity gain in the passband
+        lrHistM_.assign((size_t)N * 2, 0.0f); lrHistS_.assign((size_t)N * 2, 0.0f);   // doubled: a contiguous window
+        lrPos_ = 0; lrPhase_ = 0;
+        lrWinN_ = (int)(kMpxRate * 0.05 / kDec);   // 50 ms of evaluated samples
         for (int c = 0; c < 2; ++c) { lrHist_[c].assign(kBins, 0u); lrWinPk_[c].assign(kWins, 0.0f); }
         lrWinCnt_ = 0; lrWinHead_ = 0; lrWinFill_ = 0; lrPub_[0] = lrPub_[1] = -1.0f;
         lrFs_ = kMpxRate;
     }
+    const int N = (int)lrTaps_.size();
+    const float* h = lrTaps_.data();
     for (int i = 0; i < n; ++i) {
-        float m = lrMonoNotch_.step(x[i]), sd = lrSideNotch_.step(lmr[i]);
-        for (int k = 0; k < 4; ++k) { m = lrMonoLp_[k].step(m); sd = lrSideLp_[k].step(sd); }
-        if (hold) continue;                      // ★ step the filters through a hole, measure nothing
-        if (!std::isfinite(m) || !std::isfinite(sd)) { lrMonoNotch_.x1 = lrMonoNotch_.x2 = lrMonoNotch_.y1 = lrMonoNotch_.y2 = 0.0f;
-                                                       lrSideNotch_.x1 = lrSideNotch_.x2 = lrSideNotch_.y1 = lrSideNotch_.y2 = 0.0f;
-                                                       for (int k = 0; k < 4; ++k) { lrMonoLp_[k].x1 = lrMonoLp_[k].x2 = lrMonoLp_[k].y1 = lrMonoLp_[k].y2 = 0.0f;
-                                                                                    lrSideLp_[k].x1 = lrSideLp_[k].x2 = lrSideLp_[k].y1 = lrSideLp_[k].y2 = 0.0f; } continue; }
+        // Delay lines written twice (pos and pos+N) so the last N samples are always one contiguous run.
+        const float xm = std::isfinite(x[i]) ? x[i] : 0.0f, xs = std::isfinite(lmr[i]) ? lmr[i] : 0.0f;
+        lrHistM_[(size_t)lrPos_] = lrHistM_[(size_t)(lrPos_ + N)] = xm;
+        lrHistS_[(size_t)lrPos_] = lrHistS_[(size_t)(lrPos_ + N)] = xs;
+        lrPos_ = (lrPos_ + 1) % N;
+        if (++lrPhase_ < kDec) continue;
+        lrPhase_ = 0;
+        if (hold) continue;                      // ★ keep the delay lines running through a hole, measure nothing
+        const float* wm = &lrHistM_[(size_t)lrPos_];
+        const float* ws = &lrHistS_[(size_t)lrPos_];
+        float m = 0.0f, sd = 0.0f;
+        for (int k = 0; k < N; ++k) { m += h[k] * wm[k]; sd += h[k] * ws[k]; }
         const float v[2] = { std::fabs(m + sd) * 75.0f, std::fabs(m - sd) * 75.0f };
         for (int c = 0; c < 2; ++c) ++lrHist_[c][(size_t)std::min(kBins - 1, (int)(v[c] / kBinKHz))];
         if (++lrWinCnt_ >= lrWinN_) {

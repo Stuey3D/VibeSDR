@@ -27,7 +27,9 @@ import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
-import { lrParts } from '../../../src/services/lrMeter';
+import { lrDisplay } from '../../../src/services/lrMeter';
+/** ★ Set once an L/R reading has arrived — see lrDisplay (no flashing on a weak station). */
+let lrSeen = false;
 import { cuPct, dabCuSegments } from '../../../src/utils/dabCapacity';
 import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig, type AirChannel } from '../../../src/utils/airband';
@@ -11576,15 +11578,17 @@ function drawMpxEye() {
     /* ★ LEFT / RIGHT (2026-10-10) — src/services/lrMeter.ts, shared with the app. Hidden without a measurement. */
     {
       const box = document.getElementById('rdsLR');
-      const lr = lrParts(rdsExt?.lDev, rdsExt?.rDev);
+      // ★ Sticky once seen, so a weak station's gaps show an empty meter instead of the rows vanishing (lrDisplay).
+      if (typeof rdsExt?.lDev === 'number' && rdsExt.lDev >= 0) lrSeen = true;
+      const lr = lrDisplay(rdsExt?.lDev, rdsExt?.rDev, lrSeen);
       if (box) {
         box.hidden = !lr;
         if (lr) for (const k of ['l', 'r'] as const) {
           const fill = document.getElementById(k === 'l' ? 'rdsLFill' : 'rdsRFill');
           const val = document.getElementById(k === 'l' ? 'rdsLV' : 'rdsRV');
-          if (fill) { fill.style.width = `${lr[k].pct}%`; fill.className = lr[k].tone === 'ok' ? '' : lr[k].tone; }
+          if (fill) { fill.style.width = `${lr[k].pct}%`; fill.className = lr[k].tone === 'ok' || lr[k].tone === 'none' ? '' : lr[k].tone; }
           if (val && val.textContent !== lr[k].text) val.textContent = lr[k].text;
-          if (val) val.className = `lrVal${lr[k].tone === 'ok' ? '' : ' ' + lr[k].tone}`;
+          if (val) val.className = `lrVal${lr[k].tone === 'none' ? '' : lr[k].tone === 'ok' ? ' good' : ' ' + lr[k].tone}`;   // ★ green like the deviation figures above
         }
       }
     }
