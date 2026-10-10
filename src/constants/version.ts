@@ -46,7 +46,7 @@ export const APP_VERSION = '11.0';
  * ★ MUST MATCH the newest VERSION_HISTORY entry in AboutOverlay ('V11 RC26' ⇒ 'RC26');
  *  scripts/test_release_label.ts fails when it does not, so the two cannot drift silently.
  */
-export const RELEASE_LABEL = 'RC33';
+export const RELEASE_LABEL = 'RC34';
 
 /**
  * How we introduce ourselves to SOMEBODY ELSE'S receiver.
