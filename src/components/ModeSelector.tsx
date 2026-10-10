@@ -815,8 +815,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             unmodified in the in-app browser (utils/openWebPage). ★ Not on a TV: most have no browser to open it in, and
             a key that does nothing is the one thing not allowed (AGENTS.md). */}
         {!Platform.isTV && (
-          <View>
-            <Text style={[st.sheetLabel, secLbl]}>NOT SURE WHAT A SIGNAL IS?</Text>
+          // ★ The same section wrapper as every heading above (gap + hairline rule) — it had none, so its label sat
+          //   squashed against the keys above it (Stuart, 2026-10-10).
+          <View style={[st.mapsWrap, rule]}>
+            <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>NOT SURE WHAT A SIGNAL IS?</Text>
             <NavRow><View style={st.grid}>
               <NavItem key="sigid" onPress={() => openWebPage(SIGID_HOME)}>{(nf, nr) => pt.metal ? (
                 <MetalKey navRef={nr} focused={nf} label="SIGNAL ID WIKI ↗" onPress={() => openWebPage(SIGID_HOME)} />
