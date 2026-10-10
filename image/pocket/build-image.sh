@@ -147,8 +147,8 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   df -h /mnt/r | tail -1 | awk "{print \"==> root partition: \" \$3 \" used of \" \$2}"
   cleanup; trap - EXIT
   # ── 5. Shrink root to what it holds + 1 GB (room for an update in the read-only root), then add the
-  #       small settings partition (LABEL=vibedata) after it, and cut the file there — the .img stays
-  #       small; vibeserver-pocket-data grows the settings partition on the card at first boot.
+  #       small settings partition (LABEL=vibedata, 256 MB — never grown) after it, and cut the file
+  #       there. Everything after it on the card stays UNALLOCATED, kept for a future gallery partition.
   ROOTDEV=$(losetup -f --show -o "$S2" --sizelimit "$Z2" "$IMG")
   e2fsck -fy "$ROOTDEV" >/dev/null 2>&1 || true
   resize2fs -M "$ROOTDEV" >/dev/null 2>&1
@@ -161,14 +161,14 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   losetup -d "$ROOTDEV"
   S2S=$((S2/512)); N2S=$((NEWROOT/512))
   echo "$S2S,$N2S" | sfdisk -q --no-reread -N 2 "$IMG"
-  S3S=$(( (S2S + N2S + 8191) / 8192 * 8192 )); Z3S=$((128*1024*1024/512))
+  S3S=$(( (S2S + N2S + 8191) / 8192 * 8192 )); Z3S=$((256*1024*1024/512))
   echo "$S3S,$Z3S,83" | sfdisk -q --no-reread --append "$IMG"
   truncate -s $(( (S3S + Z3S) * 512 )) "$IMG"
   DATADEV=$(losetup -f --show -o $((S3S*512)) --sizelimit $((Z3S*512)) "$IMG")
   mkfs.ext4 -q -F -L vibedata "$DATADEV"
   losetup -d "$DATADEV"
   sfdisk -l "$IMG" | sed "s/^/==> /" | tail -4
-  echo "==> image: $(( (S3S + Z3S) * 512 / 1024 / 1024 )) MB raw (root $((NEWROOT/1024/1024)) MB, settings 128 MB)"
+  echo "==> image: $(( (S3S + Z3S) * 512 / 1024 / 1024 )) MB raw (root $((NEWROOT/1024/1024)) MB, settings 256 MB)"
   # ── 5. Compress ──
   nice -n 15 xz -T2 -6 -f "$IMG"
   sha256sum "$(basename "$IMG").xz" > "$(basename "$IMG").xz.sha256"
