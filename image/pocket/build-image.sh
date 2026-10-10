@@ -68,7 +68,7 @@ fi
 
 # ── Official Raspberry Pi OS Lite, customised ───────────────────────────────────────────────────
 URL="https://downloads.raspberrypi.com/raspios_lite_${A}_latest"
-docker run --rm --privileged --cpus 2 --platform linux/arm64 \
+docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   -v "$OUT":/out -v "$HERE/stage-pocket/00-pocket/files":/pocket-files:ro \
   -e A="$A" -e URL="$URL" -e NAME="$NAME" -e COUNTRY="$COUNTRY" \
   debian:trixie-slim /bin/bash -euo pipefail -c '
