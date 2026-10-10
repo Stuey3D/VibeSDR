@@ -130,8 +130,10 @@ export async function getUserLocation(): Promise<{ lat: number; lon: number } | 
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
         {
-          title: 'Location for nearest servers',
-          message: 'VibeSDR uses your approximate location to sort the server list by distance and to align the map for local SDR decodes. It is coarsened and only used on-device for sorting.',
+          // ★ Also the MOVING VibeServer's source (vibeServer.ts resolveMovingLocation), so the reason says so.
+          title: 'Approximate location',
+          message: 'VibeSDR uses your approximate location to sort the server list by distance and to align the map for local SDR decodes; that stays on this device. '
+            + "If you serve with \u201cUpdate this server's location as I move about\u201d turned on, it is also used to find the nearest large village, town or city, and only that place is published \u2014 never where you actually are.",
           buttonPositive: 'OK',
         },
       );

@@ -785,7 +785,7 @@ function gridCentre(lat: number, lon: number): { lat: number; lon: number } {
   return c ? { lat: Math.round(c.lat * 10000) / 10000, lon: Math.round(c.lon * 10000) / 10000 } : { lat, lon };
 }
 
-/** What a moving server publishes: a PLACE, never the phone. `region` = no large village, town or city
+/** What a moving server publishes: a PLACE, never the phone. `region` = no town, city or village of 1,000+
  *  answered, so this is a county / state / province and its centre. */
 type MovingLocation = {
   lat: number; lon: number; label: string; grid: string;
@@ -802,15 +802,78 @@ const movingCache = new Map<string, MovingLocation>();
 /**
  * ★★★ WHERE A MOVING SERVER SAYS IT IS — THE NEAREST LARGE POPULATION CENTRE, NEVER THE OWNER (Stuart,
  *     2026-10-11, RC39). A server carried about and made public would otherwise publish "the phone is in
- *     this 5 km square, now" to anyone who connects. So the fix only ever chooses a PLACE: Nominatim's
- *     reverse look-up at zoom 10 (city level) names the large village, town or city, and the place's OWN
- *     centre is what is published — the town, not the owner. Where no such place answers (the outback, the
- *     Sahara) the county / state / province is named instead, with its centre and only a 4-character square.
+ *     this 5 km square, now" to anyone who connects. So the fix only ever chooses a PLACE, and the place's
+ *     OWN centre is what is published — the town, not the owner.
+ *  ★★★ THE TOWN RULE — IDENTICAL TO THE LINUX SERVER (vibeserver/moveloc.cpp placeFromNominatim /
+ *      regionFromNominatim, measured on real look-ups the same night). Zoom 10 was WRONG: for Moulton it
+ *      answers with the COUNTY. So ask at VILLAGE level (zoom 13):
+ *        1. a city or town in the address (the spot is IN it) → that name. Corby centre comes back as the
+ *           suburb "Corby Village" with town=Corby → "Corby".
+ *        2. a VILLAGE only when OSM records 1,000+ people. Almost no UK village has a population tag
+ *           (Moulton, Holcot), and a small village beside a cabin would give the cabin away — so an unknown
+ *           size is NOT large.
+ *        3. otherwise ask at county level (zoom 8): the GENERAL REGION — county, else state district, state,
+ *           region, country, else the result's name — with that result's centre and a 4-character square.
  *  ★★ NEVER THE FIX, NEVER THE 6-CHARACTER SQUARE OF THE FIX — not as a fallback either. A failed look-up
  *     keeps the last place published this session, else returns null and the caller uses the HOME location.
- *  ★ Village only when zoom 10 itself answered with one — that is the settlement-level answer there, not a
- *    hamlet picked out of a finer search.
  */
+type NomReverse = {
+  error?: string; lat?: string; lon?: string; name?: string; addresstype?: string;
+  address?: Record<string, string>; extratags?: Record<string, string>;
+};
+
+async function nominatimReverse(fix: { lat: number; lon: number }, zoom: number, extratags: boolean)
+    : Promise<NomReverse | null> {
+  const r = await fetch(
+    `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${fix.lat}&lon=${fix.lon}&zoom=${zoom}`
+      + `&addressdetails=1${extratags ? '&extratags=1' : ''}`,
+    { headers: { 'User-Agent': 'VibeSDR/8 (https://github.com/stuey3d/VibeSDR)', 'Accept-Language': 'en' } },
+  );
+  if (!r.ok) return null;
+  const j = await r.json() as NomReverse;
+  return j && !j.error ? j : null;
+}
+
+/** ★ No quotes, backslashes or control characters in a published name — the same scrub as moveloc.cpp. */
+function cleanPlaceName(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/["\\\u0000-\u001f\u007f]/g, '').trim();
+}
+
+/** The RESULT's own lat/lon — the centre of the place it returned, never the fix. */
+function resultCentre(j: NomReverse): { lat: number; lon: number } | null {
+  const lat = parseFloat(j.lat ?? ''), lon = parseFloat(j.lon ?? '');
+  if (!(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180)) return null;
+  return { lat: Math.round(lat * 10000) / 10000, lon: Math.round(lon * 10000) / 10000 };
+}
+
+function placeFrom(j: NomReverse | null): MovingLocation | null {
+  if (!j?.address) return null;
+  const c = resultCentre(j);
+  if (!c) return null;
+  const a = j.address;
+  let town = a.city || a.town || '';
+  if (!town && j.addresstype === 'village') {
+    const pop = Number(String(j.extratags?.population ?? '').replace(/[\s,]/g, ''));
+    if (Number.isFinite(pop) && pop >= 1000) town = j.name || '';
+  }
+  const label = cleanPlaceName(town);
+  if (!label) return null;
+  return { ...c, label, region: false, grid: latLonToGrid(c.lat, c.lon),
+           country: a.country || undefined, iso: (a.country_code || '').toUpperCase() || undefined };
+}
+
+function regionFrom(j: NomReverse | null): MovingLocation | null {
+  if (!j) return null;
+  const c = resultCentre(j);
+  if (!c) return null;
+  const a = j.address ?? {};
+  const label = cleanPlaceName(a.county || a.state_district || a.state || a.region || a.country || j.name || '');
+  if (!label) return null;
+  return { ...c, label, region: true, grid: latLonToGrid(c.lat, c.lon).slice(0, 4),
+           country: a.country || undefined, iso: (a.country_code || '').toUpperCase() || undefined };
+}
+
 async function resolveMovingLocation(): Promise<MovingLocation | null> {
   const fix = await getUserLocation();
   if (!fix) return lastMoving;
@@ -818,32 +881,9 @@ async function resolveMovingLocation(): Promise<MovingLocation | null> {
   const hit = movingCache.get(key);
   if (hit) return (lastMoving = hit);
   try {
-    const r = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${fix.lat}&lon=${fix.lon}&zoom=10&addressdetails=1`,
-      { headers: { 'User-Agent': 'VibeSDR/8 (https://github.com/stuey3d/VibeSDR)' } },
-    );
-    if (!r.ok) return lastMoving;
-    const j = await r.json() as { lat?: string; lon?: string; place_rank?: number; address?: Record<string, string> };
-    const lat = parseFloat(j?.lat ?? ''), lon = parseFloat(j?.lon ?? '');
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return lastMoving;
-    // ★ Defensive: zoom 10 answers at city level or coarser. Anything finer (a suburb, a street) is not the
-    //   answer we asked for, and its position would say too much — treat it as a failed look-up.
-    if (typeof j.place_rank === 'number' && j.place_rank > 19) return lastMoving;
-    const a = j.address ?? {};
-    const town = a.city || a.town || a.village || '';
-    const area = a.county || a.state_district || a.state || a.region || '';
-    if (!town && !area) return lastMoving;
-    const pLat = Math.round(lat * 10000) / 10000, pLon = Math.round(lon * 10000) / 10000;
-    const g6 = latLonToGrid(pLat, pLon);
-    const out: MovingLocation = {
-      lat: pLat, lon: pLon,
-      label: town || area,
-      // ★ A town's 6-character square is the TOWN's; a region gets the 4-character square only.
-      grid: town ? g6 : g6.slice(0, 4),
-      region: !town,
-      country: a.country || undefined,
-      iso: (a.country_code || '').toUpperCase() || undefined,
-    };
+    const out = placeFrom(await nominatimReverse(fix, 13, true))
+             ?? regionFrom(await nominatimReverse(fix, 8, false));
+    if (!out) return lastMoving;
     if (movingCache.size > 64) movingCache.clear();
     movingCache.set(key, out);
     return (lastMoving = out);
