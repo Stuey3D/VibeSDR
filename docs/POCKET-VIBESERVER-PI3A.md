@@ -506,25 +506,30 @@ inside the ±7 % noise. Then the lighter build wins on 512 MB. Record the result
 - **"Use this phone's location"** (step 4). It cannot work in the captive sheet anyway, and Safari
   gives no location to a plain-http page (http://10.42.0.1). ★ DECIDED PLAN below.
 
-## ★★ Location on the move — the NEAREST TOWN OR CITY, from the phone (Stuart, 2026-10-10)
+## ★★ Location on the move — the NEAREST TOWN OR CITY, kept up to date by the box (Stuart, 2026-10-10)
 
-A portable box stuck at its setup location is wrong the moment it leaves home. Decided:
+A portable box stuck at its setup location is wrong the moment it leaves home. Stuart's spec:
 
-- **Precision: the nearest town or city, and nothing finer.** A 4-character grid square is too coarse
-  (in the UK it spans counties); a 6-character one can dox someone in a cabin in the woods. The box
-  stores and shows the TOWN CENTRE — the directory pin, day/night line, distances and the grid square
-  shown are all the town's, never the owner's spot.
-- **Source: the phone, through the VibeSDR app** ("Update this box's location from my phone", offered
-  when the app is connected to a pocket box on its own network). Native location works offline (GPS),
-  even on the box's own hotspot. The app snaps to the nearest town BEFORE sending — the precise
-  position never leaves the phone.
-- **Town names offline:** from the place layer of the High Detail Maps already baked into the image
-  (the box), or the app's own map data — no geocoding service, no internet needed.
-- **Fallback:** no phone update → the setup location stays. Nothing moves by itself.
-- **Not used:** IP geolocation (a phone hotspot's IP is the carrier's gateway, often a region away —
-  confidently wrong). GeoClue + BeaconDB (Wi-Fi BSSID lookup, Mozilla's service closed 2024): possible
-  LATER as an opt-in second fallback only — needs internet and sends nearby BSSIDs to a third party.
-- **When:** after RC39 (needs an app release).
+- **Home location** (setup): a grid square or a town — e.g. IO92nh, Moulton, Northampton. Always the fallback.
+- **☐ "Allow this server to update its location during use"** — resolves ONLY to the nearest town. Off by
+  default; the wording says plainly that nearby Wi-Fi is looked up to do it.
+- **Then the box keeps itself current**: fired up on a lunch break at work it says Corby, or Huntingdon.
+- **Precision: the nearest town or city, nothing finer.** 4-character grid too coarse (spans counties);
+  6-character can dox someone in a cabin in the woods. The box stores and shows the TOWN CENTRE — directory
+  pin, day/night line, distances and the grid shown all derive from it.
+
+Sources, with the tick on:
+1. **The box itself, on every network join and every 15 min while online:** a Wi-Fi scan → **BeaconDB**
+   (community, MLS-compatible; Mozilla's service closed 2024). Works on work Wi-Fi or a phone hotspot with
+   no app open. Sends nearby BSSIDs to BeaconDB — that is what the tick consents to.
+2. **The VibeSDR app, when connected to the box:** the phone's native location (GPS, works offline) —
+   preferred when present. Snapped to the town ON THE PHONE before sending.
+3. Either way snapped to the nearest town **offline** from the place layer of the baked High Detail Maps;
+   only the town is stored (settings partition, written only when the town CHANGES).
+4. No internet, no app → the last town found, else Home.
+
+✗ IP geolocation: a phone hotspot's IP is the carrier's gateway, often a region away — confidently wrong.
+- **When:** after RC39 (the app half needs an app release; the box half can ship with the server).
 - **Offline audit** of EiBi, logos and listing in hotspot mode. These mostly fail quietly today;
   not re-audited.
 - **AP + client together** (one radio). A second USB Wi-Fi adapter would allow it.
