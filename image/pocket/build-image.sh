@@ -95,8 +95,13 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   echo "==> base: $(basename "$BASE") (sha256 ok)"
   IMG=/out/work/$NAME.img
   nice -n 15 xz -dc "$BASE" > "$IMG"
-  # ── 2. Room for VibeServer and its maps: +1.5 GB on the root partition ──
-  truncate -s +1536M "$IMG"
+  # ── 2. WORKING room for VibeServer, ffmpeg and the maps: +4 GB on the root partition ──
+  # ★★★ WORKING ROOM ONLY — step 5 shrinks root to what it holds + 1 GB, so the image is no bigger.
+  #     It was +1.5 GB until 2026-10-10: once ffmpeg (~400 MB of libraries) was added, used + 1 GB no
+  #     longer fitted, sfdisk could not place partitions 2 and 3 yet RETURNED SUCCESS, and the v6 image
+  #     shipped with boot + root only and its settings filesystem outside any partition. Every setting
+  #     then lived in RAM until the first restart. The layout check in step 5 now fails such a build.
+  truncate -s +4G "$IMG"
   echo ", +" | sfdisk -q -N 2 "$IMG"
   # ★ Partition 1 = boot (FAT), 2 = root (ext4), in 512-byte sectors from sfdisk'"'"'s dump.
   PARTS=$(sfdisk -d "$IMG" | sed -n "s/.*start= *\([0-9]*\), *size= *\([0-9]*\).*/\1 \2/p")
@@ -160,7 +165,11 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   e2fsck -fy "$ROOTDEV" >/dev/null 2>&1 || true
   losetup -d "$ROOTDEV"
   S2S=$((S2/512)); N2S=$((NEWROOT/512))
+  [ "$((S2S + N2S))" -le "$(( $(stat -c %s "$IMG") / 512 ))" ] \
+    || { echo "!! LAYOUT: root needs $((NEWROOT/1024/1024)) MB, more than the working room in step 2 — raise it"; exit 1; }
   echo "$S2S,$N2S" | sfdisk -q --no-reread -N 2 "$IMG"
+  [ "$(sfdisk -d "$IMG" | sed -n "s/.*[^0-9]2 *: *start= *[0-9]*, *size= *\([0-9]*\).*/\1/p")" = "$N2S" ] \
+    || { echo "!! LAYOUT: partition 2 was not resized to $N2S sectors"; exit 1; }
   S3S=$(( (S2S + N2S + 8191) / 8192 * 8192 )); Z3S=$((256*1024*1024/512))
   echo "$S3S,$Z3S,83" | sfdisk -q --no-reread --append "$IMG"
   truncate -s $(( (S3S + Z3S) * 512 )) "$IMG"
