@@ -378,6 +378,7 @@ export async function startVibeServer(cfg: VibeServerConfig): Promise<VibeServer
   // already up and useful without it, and this can involve a network fetch.
   void publishStations();
   void publishLocation();
+  startLocationWatch();
   startBookmarkAutosave();
   return info;
 }
@@ -674,26 +675,69 @@ export async function getManualServerLocation(): Promise<ServerLocation | null> 
 }
 
 /**
- * How the server decides what position to publish. Defaults to 'off'.
+ * How the server decides what HOME position to publish. Defaults to 'off'.
  *
  * This is a SEPARATE consent from the app's own location permission, on purpose.
  * Granting location so the instance list can be sorted by distance is NOT consent
  * to BROADCAST that position to every client that connects — and once VibeServer
  * can be public, "every client" could mean anyone. So publishing is opt-in, and
  * the default is to publish nothing.
+ *
+ * ★★★ 'device' IS RETIRED (2026-10-11, RC39, Stuart). It published the 6-character square the PHONE was
+ *     in — on a server carried about, that is "where the owner is right now", to anyone who connects.
+ *     Its job is now the MOVING tick (see MOVING_KEY): the nearest large village, town or city, never
+ *     the phone's own square. A stored 'device' is migrated by getServerLocationMode() — tick ON, home
+ *     = the entered city if there is one, else 'off' — and the type no longer admits it, so nothing can
+ *     publish the phone's own square again.
  */
-export type LocationMode = 'off' | 'device' | 'manual';
+export type LocationMode = 'off' | 'manual';
 export const LOCMODE_KEY = 'vs_locmode';
+
+/** ★★ "Update this server's location as I move about" — '1' = on. Default OFF (absent). Exported for the
+ *  server screen's ONE batched read (serverPrefs.ts), like LOCMODE_KEY. */
+export const LOC_MOVING_KEY = 'vs_loc_moving';
 
 export async function getServerLocationMode(): Promise<LocationMode> {
   try {
     const v = await AsyncStorage.getItem(LOCMODE_KEY);
-    return v === 'device' || v === 'manual' ? v : 'off';
+    if (v === 'device') return await migrateDeviceMode();
+    return v === 'manual' ? v : 'off';
   } catch { return 'off'; }
+}
+
+/**
+ * ★★★ THE ONE-TIME MIGRATION from the retired 'device' mode. An owner who chose "use the phone's location"
+ *     wanted the server to follow the phone — that is the moving tick now, so it comes on. Home becomes the
+ *     city they once typed, if any ('manual' kept its LOC_KEY when they switched to 'device'), else 'off'.
+ *  ★ Idempotent: it rewrites LOCMODE_KEY, so it runs at most once per install — the server screen calls it
+ *    too when it reads a stale 'device', whichever gets there first.
+ */
+export async function migrateDeviceMode(): Promise<LocationMode> {
+  const home: LocationMode = (await getManualServerLocation()) ? 'manual' : 'off';
+  try {
+    await AsyncStorage.setItem(LOC_MOVING_KEY, '1');
+    await AsyncStorage.setItem(LOCMODE_KEY, home);
+  } catch { /* read again next time — still never 'device' to the caller */ }
+  return home;
 }
 
 export async function setServerLocationMode(m: LocationMode): Promise<void> {
   await AsyncStorage.setItem(LOCMODE_KEY, m);
+  await publishLocation();
+}
+
+export async function getServerLocationMoving(): Promise<boolean> {
+  try {
+    // ★ A 'device' not yet migrated means ON — the migration would say so a moment later anyway.
+    if ((await AsyncStorage.getItem(LOCMODE_KEY)) === 'device') return true;
+    return (await AsyncStorage.getItem(LOC_MOVING_KEY)) === '1';
+  } catch { return false; }
+}
+
+/** Applies to a RUNNING server straight away (a fresh publish), and is remembered for the next start. */
+export async function setServerLocationMoving(on: boolean): Promise<void> {
+  await AsyncStorage.setItem(LOC_MOVING_KEY, on ? '1' : '0');
+  if (!on) lastMoving = null;
   await publishLocation();
 }
 
@@ -733,31 +777,107 @@ export async function setServerLocationMode(m: LocationMode): Promise<void> {
  *     it said more than the policy did. Snapping to the 6-character square's centre (about 5.6 × 4.6 km in the UK)
  *     makes the promise true for the directory, the server's listeners and the reverse-geocode alike; spot
  *     distances move by at most ~3 km.
+ *  ★ Now used for the HOME location only — the entered city or locator. A moving server never publishes a square
+ *    derived from the phone (see resolveMovingLocation).
  */
 function gridCentre(lat: number, lon: number): { lat: number; lon: number } {
   const c = gridToLatLon(latLonToGrid(lat, lon));
   return c ? { lat: Math.round(c.lat * 10000) / 10000, lon: Math.round(c.lon * 10000) / 10000 } : { lat, lon };
 }
 
+/** What a moving server publishes: a PLACE, never the phone. `region` = no large village, town or city
+ *  answered, so this is a county / state / province and its centre. */
+type MovingLocation = {
+  lat: number; lon: number; label: string; grid: string;
+  region: boolean; country?: string; iso?: string;
+};
+
+/** ★ The last moving location published THIS SESSION — the answer when a later look-up fails (no internet,
+ *  Nominatim down). Memory only, on purpose: a stale town from last week is not where the server is. */
+let lastMoving: MovingLocation | null = null;
+/** ★ Look-ups by coarse fix, so the screen's resolve and the publish (and an unmoved 15-minute check) ask
+ *  Nominatim once, not three times. Memory only; bounded. */
+const movingCache = new Map<string, MovingLocation>();
+
+/**
+ * ★★★ WHERE A MOVING SERVER SAYS IT IS — THE NEAREST LARGE POPULATION CENTRE, NEVER THE OWNER (Stuart,
+ *     2026-10-11, RC39). A server carried about and made public would otherwise publish "the phone is in
+ *     this 5 km square, now" to anyone who connects. So the fix only ever chooses a PLACE: Nominatim's
+ *     reverse look-up at zoom 10 (city level) names the large village, town or city, and the place's OWN
+ *     centre is what is published — the town, not the owner. Where no such place answers (the outback, the
+ *     Sahara) the county / state / province is named instead, with its centre and only a 4-character square.
+ *  ★★ NEVER THE FIX, NEVER THE 6-CHARACTER SQUARE OF THE FIX — not as a fallback either. A failed look-up
+ *     keeps the last place published this session, else returns null and the caller uses the HOME location.
+ *  ★ Village only when zoom 10 itself answered with one — that is the settlement-level answer there, not a
+ *    hamlet picked out of a finer search.
+ */
+async function resolveMovingLocation(): Promise<MovingLocation | null> {
+  const fix = await getUserLocation();
+  if (!fix) return lastMoving;
+  const key = `${fix.lat.toFixed(2)},${fix.lon.toFixed(2)}`;
+  const hit = movingCache.get(key);
+  if (hit) return (lastMoving = hit);
+  try {
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${fix.lat}&lon=${fix.lon}&zoom=10&addressdetails=1`,
+      { headers: { 'User-Agent': 'VibeSDR/8 (https://github.com/stuey3d/VibeSDR)' } },
+    );
+    if (!r.ok) return lastMoving;
+    const j = await r.json() as { lat?: string; lon?: string; place_rank?: number; address?: Record<string, string> };
+    const lat = parseFloat(j?.lat ?? ''), lon = parseFloat(j?.lon ?? '');
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return lastMoving;
+    // ★ Defensive: zoom 10 answers at city level or coarser. Anything finer (a suburb, a street) is not the
+    //   answer we asked for, and its position would say too much — treat it as a failed look-up.
+    if (typeof j.place_rank === 'number' && j.place_rank > 19) return lastMoving;
+    const a = j.address ?? {};
+    const town = a.city || a.town || a.village || '';
+    const area = a.county || a.state_district || a.state || a.region || '';
+    if (!town && !area) return lastMoving;
+    const pLat = Math.round(lat * 10000) / 10000, pLon = Math.round(lon * 10000) / 10000;
+    const g6 = latLonToGrid(pLat, pLon);
+    const out: MovingLocation = {
+      lat: pLat, lon: pLon,
+      label: town || area,
+      // ★ A town's 6-character square is the TOWN's; a region gets the 4-character square only.
+      grid: town ? g6 : g6.slice(0, 4),
+      region: !town,
+      country: a.country || undefined,
+      iso: (a.country_code || '').toUpperCase() || undefined,
+    };
+    if (movingCache.size > 64) movingCache.clear();
+    movingCache.set(key, out);
+    return (lastMoving = out);
+  } catch {
+    return lastMoving;   // offline — the last place, else home
+  }
+}
+
 export async function getResolvedServerLocation():
     Promise<{ lat: number; lon: number; grid: string; label?: string; country?: string } | null> {
   try {
+    // ★★ The moving place first, exactly as publishLocation decides — see resolveMovingLocation.
+    if (await getServerLocationMoving()) {
+      const m = await resolveMovingLocation();
+      if (m) return { lat: m.lat, lon: m.lon, grid: m.grid, label: m.label, country: m.iso };
+    }
     const mode = await getServerLocationMode();
     if (mode === 'off') return null;
     const manual = await getManualServerLocation();
-    const loc = mode === 'manual' ? manual : await getUserLocation();
-    if (!loc) return null;
+    if (!manual) return null;
     // ★ Snapped to its GRID SQUARE'S CENTRE, exactly as publishLocation does — see gridCentre.
-    const { lat, lon } = gridCentre(loc.lat, loc.lon);
+    const { lat, lon } = gridCentre(manual.lat, manual.lon);
     const rev = await reverseGeocode(lat, lon);
     return {
       lat, lon,
       grid: latLonToGrid(lat, lon),
-      label: (mode === 'manual' ? manual?.label : undefined) ?? rev?.name ?? undefined,
+      label: manual.label ?? rev?.name ?? undefined,
       country: rev?.iso ?? undefined,
     };
   } catch { return null; }
 }
+
+/** ★ The label last handed to the server — the 15-minute check publishes only when this would change. */
+let lastPublishedLabel: string | undefined | null = null;
 
 export async function publishLocation(): Promise<void> {
   if (!Local?.setLocationJson) return;
@@ -779,26 +899,39 @@ export async function publishLocation(): Promise<void> {
     const pub = (await AsyncStorage.getItem(PUBLIC_NAME_KEY))?.trim();
     if (pub) name = pub;
   } catch {}
-  const emit = (extra: object = {}) => {
-    try { Local.setLocationJson(JSON.stringify({ name, ...extra })); } catch {}
+  const emit = (extra: { label?: string; [k: string]: unknown } = {}) => {
+    try {
+      Local.setLocationJson(JSON.stringify({ name, ...extra }));
+      lastPublishedLabel = extra.label;
+    } catch {}
   };
   try {
+    // ★★★ MOVING FIRST — the nearest large population centre, never the phone (resolveMovingLocation). No fix,
+    //     no internet and nothing published yet this session → fall through to HOME, never to the fix.
+    if (await getServerLocationMoving()) {
+      const m = await resolveMovingLocation();
+      if (m) {
+        emit({ lat: m.lat, lon: m.lon, label: m.label, country: m.country, iso: m.iso, grid: m.grid,
+               ...(m.region ? { region: true } : {}) });
+        return;
+      }
+    }
+
     const mode = await getServerLocationMode();
     if (mode === 'off') { emit(); return; }
 
+    // ★ HOME = what the owner entered (a town or a locator), published as before.
     const manual = await getManualServerLocation();
-    const loc = mode === 'manual' ? manual : await getUserLocation();
-    if (!loc) { emit(); return; }
+    if (!manual) { emit(); return; }
 
     // ★ Snapped to its GRID SQUARE'S CENTRE (see gridCentre) — enough for distances, rings and
     //   the ITU region, and nowhere near enough to point at a house. It is served to every client.
-    const { lat, lon } = gridCentre(loc.lat, loc.lon);
+    const { lat, lon } = gridCentre(manual.lat, manual.lon);
 
-    // A bare "52.29, -0.85" means nothing to a human. On the DEVICE path there's no
-    // label to show, so name the place — once, here, and cached — rather than make
-    // every client reverse-geocode the same point for itself.
+    // The entered label is shown as typed; the reverse look-up supplies the country (and a name
+    // for a bare locator), once, here, and cached — rather than every client asking for itself.
     const rev = await reverseGeocode(lat, lon);
-    let label = mode === 'manual' ? manual?.label ?? undefined : undefined;
+    let label = manual.label ?? undefined;
     if (!label) label = rev?.name ?? undefined;
 
     emit({
@@ -818,8 +951,54 @@ export async function publishLocation(): Promise<void> {
   }
 }
 
+/**
+ * ★★★ THE MOVING SERVER LOOKS AGAIN DURING USE — every 15 minutes while it runs (Stuart, 2026-10-11). It used to
+ *     read its position at start and on a settings change only, so a server carried from Northampton to
+ *     Bristol went on calling itself Northampton all day.
+ *  ★★ PUBLISHES ONLY WHEN THE PLACE NAME CHANGES — a server sitting in one town asks (cached) and says nothing,
+ *     so listeners see no churn. Going home (tick off, or no fix and nothing this session) is a change too.
+ *  ★ No network-change trigger: @react-native-community/netinfo is not a dependency, and the timer alone
+ *    catches a move within 15 minutes. Runs only while the tick is on (read each time, so flipping it applies
+ *    without a restart); stopped with the server.
+ */
+const LOC_RECHECK_MS = 15 * 60 * 1000;
+let locTimer: ReturnType<typeof setInterval> | null = null;
+
+async function recheckMovingLocation(): Promise<void> {
+  try {
+    // ★ A server that stopped on its own (radio gone > 5 min) is not stopped through stopVibeServer.
+    const st = await getVibeServerStatus();
+    if (st && st.running === false) { stopLocationWatch(); return; }
+    if (!(await getServerLocationMoving())) return;
+    const m = await resolveMovingLocation();
+    if (m && m.label === lastPublishedLabel) return;
+    await publishLocation();   // a new place — or home, if there is no place to give
+  } catch { /* the next check tries again */ }
+}
+
+function startLocationWatch(): void {
+  stopLocationWatch();
+  locTimer = setInterval(() => { void recheckMovingLocation(); }, LOC_RECHECK_MS);
+}
+
+function stopLocationWatch(): void {
+  if (locTimer) { clearInterval(locTimer); locTimer = null; }
+}
+
+/**
+ * ★★ FOR A SERVER THIS APP DID NOT START IN THIS SESSION — the crash restore / boot start brings it back
+ *    natively with the location JSON CACHED from last time (VibeServerRestore.K_LOCJSON) and no watch. When the
+ *    server screen adopts it, publish afresh (which also replaces a cache written by the retired 'device' mode)
+ *    and keep looking every 15 minutes, as a server started from the screen does.
+ */
+export function watchLocationWhileServing(): void {
+  void publishLocation();
+  startLocationWatch();
+}
+
 export async function stopVibeServer(): Promise<void> {
   stopBookmarkAutosave();
+  stopLocationWatch();
   try { await Local?.stopVibeServer?.(); } catch {}
 }
 

@@ -81,7 +81,12 @@ because the directory exists to sort receivers by distance. With the default
 option — the tunnel and a listing on vibesdr.net — VibeSDR and VibeServer will
 not start the server without one. It can come from the device's coarse location
 (not on Linux, where there is none), reduced to a Maidenhead grid reference, or
-you can enter a city or grid reference yourself. Serving on your local network
+you can enter a city or grid reference yourself. On an Android phone serving
+while it is carried about, the *Update this server's location as I move about*
+option (off by default) tags the server only with the nearest large village, town
+or city — or a general region where there is none — and never with where the phone
+actually is; with it off, the server shows the home location its owner entered.
+Serving on your local network
 only, or through your own port forwarding, needs no location at all; listeners on
 such a server simply see spots and transmitters without a distance, as described
 above, unless you set a city or grid reference.

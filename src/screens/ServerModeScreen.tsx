@@ -48,6 +48,7 @@ import {
   setVibeServerAdminSecret, setVibeServerUncompressedAudio, setVibeServerSessionLimit,
   vibeServerSupported, randomPin, fmtRate, FPS_TIERS, fpsForTier,
   setServerLocationMode, getManualServerLocation, LOC_KEY, LOCMODE_KEY,
+  LOC_MOVING_KEY, setServerLocationMoving, migrateDeviceMode, watchLocationWhileServing,
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation,
   getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive,
@@ -709,6 +710,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
   const [webServer, setWebServer] = useState(true);
   const [locMode, setLocMode]     = useState<LocationMode>('off');
   const [locCity, setLocCity]     = useState('');
+  /** ★★ "Update this server's location as I move about" — vibeServer.ts resolveMovingLocation. Default OFF. */
+  const [locMoving, setLocMoving] = useState(false);
 
   /** ★ Did the saved settings actually load? False after a storage failure — the controls below are then
    *  DEFAULTS, not the owner's choices, and must not be written back over what is still on disk. */
@@ -818,7 +821,7 @@ export default function ServerModeScreen({ navigation, route }: Props) {
          *  ★ Not storage, so not part of this read and never waited on: the band list and the DAB
          *    block table (engine), the radio and the benchmark (other effects). */
         const t0 = Date.now();
-        const v = await patient(readPrefs(AsyncStorage, [NAME_KEY, LOC_KEY, LOCMODE_KEY, ...Object.values(K)]));
+        const v = await patient(readPrefs(AsyncStorage, [NAME_KEY, LOC_KEY, LOCMODE_KEY, LOC_MOVING_KEY, ...Object.values(K)]));
         if (cancelled) return;
         const g = (k: string) => v[k] ?? null;     // null = never set
         const s = (k: string) => v[k] ?? '';       // '' where the old reader used `?? ''`
@@ -901,7 +904,15 @@ export default function ServerModeScreen({ navigation, route }: Props) {
           { const rg = g(K.restGain); if (rg != null && Number.isFinite(Number(rg))) setRestGain(Number(rg)); }
           { const agl = g(K.agcLock); if (agl != null) setAgcLock(agl === '1'); }
           { const px = g(K.proxies); if (px != null) setProxies(px); }
-          { const lm = g(LOCMODE_KEY); setLocMode(lm === 'device' || lm === 'manual' ? lm : 'off'); }
+          // ★★★ The retired 'device' mode becomes the MOVING tick, home = the city once typed, if any — the
+          //     same answer vibeServer.migrateDeviceMode() writes back (called below, once, idempotent).
+          { const lm = g(LOCMODE_KEY);
+            if (lm === 'device') {
+              setLocMode(city ? 'manual' : 'off'); setLocMoving(true);
+              void migrateDeviceMode();
+            } else {
+              setLocMode(lm === 'manual' ? 'manual' : 'off'); setLocMoving(g(LOC_MOVING_KEY) === '1');
+            } }
           setLocCity(city);
           { const pm = g(K.pinMode); if (pm === 'random' || pm === 'custom' || pm === 'off') setPinMode(pm); }
           // Restore the saved PIN for BOTH modes so re-opening the server keeps the
@@ -1023,6 +1034,8 @@ export default function ServerModeScreen({ navigation, route }: Props) {
         setRunning({ ip: s.ip || '', port: s.port || 0, name });
         setStatus(s);
       });
+      // ★★ An adopted server was restored natively with LAST time's location and no 15-minute check.
+      watchLocationWhileServing();
     };
     void look();
     const t = setInterval(look, 2000);
@@ -2283,10 +2296,13 @@ export default function ServerModeScreen({ navigation, route }: Props) {
                 not consent to BROADCAST that position to every client. So this is
                 opt-in, and 'off' is the default. */}
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>RECEIVER LOCATION</Text>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>
+              HOME — where the receiver normally lives.
+            </Text>
             <View style={styles.pillRow}>
-              {(['off', 'device', 'manual'] as LocationMode[]).map(m => (
+              {(['off', 'manual'] as LocationMode[]).map(m => (
                 <Pill key={m} C={C} F={F} active={locMode === m}
-                  label={m === 'off' ? 'Not set' : m === 'device' ? 'Use device' : 'Enter city'}
+                  label={m === 'off' ? 'Not set' : 'Enter city'}
                   onPress={() => setLocMode(m)} />
               ))}
             </View>
@@ -2297,10 +2313,31 @@ export default function ServerModeScreen({ navigation, route }: Props) {
             )}
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
               {locMode === 'off'
-                ? 'No location is published. Clients show "receiver location not set" and go without spot distances, map centring and the regional band plan.'
-                : locMode === 'device'
-                ? "This device's coarse position (~1 km) is published to every client that connects."
+                ? (locMoving
+                  ? 'No home location. While a nearby place can be found (see below) that is published; otherwise nothing is, and clients show "receiver location not set".'
+                  : 'No location is published. Clients show "receiver location not set" and go without spot distances, map centring and the regional band plan.')
                 : 'A town or city needs an internet connection when you press Start (looked up once, then stored). A Maidenhead locator works OFFLINE — use it if this server has no internet. Published to every client; set it if the receiver lives somewhere other than where you are.'}
+            </Text>
+            {/* ★★★ ON THE MOVE — the nearest large population centre, NEVER the phone's position (Stuart,
+                2026-10-11, RC39). Replaces the old "Use device" pill, which published the phone's own
+                6-character square. The wording is Stuart's brief, point for point: what is published,
+                the region fallback, WHY, what "off" means, and where the name comes from. Applies at once
+                (a running server republishes) and is remembered. */}
+            <View style={[styles.rowBetween, { marginTop: 12 }]}>
+              <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                Update this server's location as I move about
+              </Text>
+              <Switch value={locMoving}
+                onValueChange={(v) => { setLocMoving(v); void setServerLocationMoving(v); }}
+                trackColor={{ false: C.border, true: C.green }} thumbColor={C.amber} />
+            </View>
+            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+              {'It will only ever be tagged with the nearest large population centre — a large village, town or city — to maintain your privacy, never where you actually are. '
+                + "Where there isn't one nearby (the middle of the outback, say) it shows a general region instead. "
+                + 'This protects your privacy in case you make the server publicly accessible while you are on the move. '
+                + 'With this off, the server always shows its home location. '
+                + "It uses this phone's location, and the place name is looked up from OpenStreetMap, so it needs an internet connection — without one it keeps the last place it found, or shows the home location. "
+                + 'It is checked again every 15 minutes while the server runs.'}
             </Text>
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
               Distances and band edges are properties of the ANTENNA, not the listener —
