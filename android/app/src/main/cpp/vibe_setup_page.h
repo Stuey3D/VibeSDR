@@ -175,6 +175,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 /* ★ The finish panel points at the step still missing: a short glow, then back to normal. */
 @keyframes needsYou { 0%,100% { box-shadow: 0 0 0 0 rgba(245,185,66,0); } 30%,70% { box-shadow: 0 0 0 4px rgba(245,185,66,.75); } }
 .needsYou { animation: needsYou 1.4s ease-in-out 2; }
+#wifiDirtyNote { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#wifiDirtyNote.hide { display: none; }
 /* ★★★ WI-FI FIRST (Stuart, 2026-10-10: "get it on wifi first then configure"). On the open setup
    hotspot the page is ONLY the Wi-Fi card: radios, the server tab and "Save and start" wait until the
    box is on the owner's network. Not on the owner's own fallback hotspot — out in the field that is
@@ -282,6 +284,12 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <span class="note" id="wifiSummaryMsg" style="margin-left:10px"></span>
       </div>
       <div id="wifiEdit">
+      <!-- ★★ UNSAVED, SAID AT THE TOP (Stuart, 2026-10-10: "I never noticed that button as I had to scroll to get it").
+           Appears the moment anything in the card differs from what the box holds. -->
+      <div class="note hide" id="wifiDirtyNote">
+        <span>Unsaved Wi-Fi changes.</span>
+        <button type="button" id="wifiDirtySave" style="padding:6px 12px;font-size:13px">Save Wi-Fi now</button>
+      </div>
       <p class="why">This box joins the first of these networks it can find &mdash; always 1 before 2 before 3.
          If none is in range it starts its own hotspot, below, so your phone can still reach it.</p>
       <div class="note" id="wifiNow"></div>
@@ -5516,7 +5524,8 @@ async function orderSave() {
 let POCKET = null;      // the hello answer
 let WIFI = null;        // the root service's state (/vibeserver/pocket/wifi)
 let WIFI_ROWS = [];
-let WIFI_EDITING = false;   // ★ the owner pressed "Change Wi-Fi" — stays open until a save     // [{ssid, psk, keep, hidden, other}] — in order
+let WIFI_EDITING = false;
+let WIFI_BASELINE = "";     // ★ the Wi-Fi card as last loaded — anything different is an unsaved change   // ★ the owner pressed "Change Wi-Fi" — stays open until a save     // [{ssid, psk, keep, hidden, other}] — in order
 
 (async () => {
   try {
@@ -5590,6 +5599,24 @@ async function wifiLoad() {
   $("wifiCountry").value = WIFI.country || "";
   wifiRender();
   shareRender();
+  try { WIFI_BASELINE = JSON.stringify(wifiCollect()); } catch (e) { WIFI_BASELINE = ""; }
+  wifiDirtyRender();
+}
+
+/** Show or hide the "Unsaved Wi-Fi changes" line (top of the card) and say so in the bottom bar too. */
+function wifiDirtyRender() {
+  const d = wifiDirty() && WIFI && WIFI.mode !== "setup-ap";
+  $("wifiDirtyNote").classList.toggle("hide", !d);
+  if (d && !$("barMsg").textContent) $("barMsg").textContent = "Unsaved Wi-Fi changes are saved with this too.";
+  if (!d && $("barMsg").textContent === "Unsaved Wi-Fi changes are saved with this too.") $("barMsg").textContent = "";
+}
+["input", "change", "click"].forEach(ev => $("wifiCard").addEventListener(ev, () => setTimeout(wifiDirtyRender, 0)));
+$("wifiDirtySave").onclick = () => $("wifiSave").click();
+
+/** ★ Has the owner changed the Wi-Fi card since it was loaded (order, a password, the hotspot, the country)? */
+function wifiDirty() {
+  if (!POCKET || !WIFI || $("wifiCard").classList.contains("hide")) return false;
+  try { return JSON.stringify(wifiCollect()) !== WIFI_BASELINE; } catch (e) { return true; }
 }
 
 function wifiNowText() {
@@ -6058,6 +6085,22 @@ $("saveBtn").onclick = async () => {
   //     silently discard an edit made in that window. Saving a tab you have only just opened is
   //     exactly what an owner setting up two radios does, so the save waits instead.
   await hwPending;
+  /* ★★★ THE WI-FI CARD IS SAVED BY "APPLY AND RESTART" TOO (Stuart's Pi 3 A+, 2026-10-10: the phone hotspot moved to 1,
+   *  then "Apply Changes and Restart VibeServer" — the order was never sent: the Wi-Fi card had its own Save button and
+   *  this one silently left it behind). An unsaved Wi-Fi change goes first; if it cannot be saved, nothing restarts
+   *  and the reason is shown, rather than restarting without it. */
+  if (wifiDirty() && WIFI.mode !== "setup-ap") {
+    let wbody;
+    try { wbody = wifiCollect(); }
+    catch (e) {
+      $("saveErr").textContent = "Wi-Fi not saved — " + e; $("barMsg").textContent = "";
+      $("saveBtn").disabled = false; $("wifiCard").scrollIntoView({behavior: "smooth", block: "start"});
+      return;
+    }
+    try { await wifiPost("/vibeserver/pocket/wifi", wbody); }
+    catch (e) { $("saveErr").textContent = "Wi-Fi not saved — " + e; $("barMsg").textContent = ""; $("saveBtn").disabled = false; return; }
+    WIFI_BASELINE = JSON.stringify(wbody);
+  }
   try {
     // ★ restart:true is what separates this from the per-radio save above — see the server's
     //   config handler, which only bounces the receiver when it is asked to.

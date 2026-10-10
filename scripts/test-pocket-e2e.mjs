@@ -204,7 +204,18 @@ try {
   ok(await js(`!document.getElementById("wifiGo").disabled`), "the Finish button is never disabled");
 
   // Finish setup: the server restarts itself (no service manager on a Mac) and comes back configured.
+  // ★★★ "APPLY AND RESTART" CARRIES AN UNSAVED WI-FI CHANGE (Stuart's Pi 3 A+, 2026-10-10: reorder, then the bottom
+  //     button — the order was never sent). Home back to 1 by the arrows, NOT Save Wi-Fi, then the bottom button.
+  if (fs.existsSync(path.join(PD, "pocket-wifi.request"))) fs.unlinkSync(path.join(PD, "pocket-wifi.request"));
+  ok(!(await js(visible("wifiDirtyNote"))), "nothing changed: no 'Unsaved Wi-Fi changes' line");
+  await js(`document.querySelectorAll('#wifiNets .wifiRow')[1].querySelector('[data-mv="-1"]').click(); 1`);
+  ok(await until(visible("wifiDirtyNote")), "a reorder shows 'Unsaved Wi-Fi changes' at the TOP of the card (no scrolling to find Save)");
+  await js(`document.getElementById("wifiCard").scrollIntoView(); 1`); await shot("4-unsaved");
   await js(`document.getElementById("saveBtn").click(); 1`);
+  for (let i = 0; i < 40 && !fs.existsSync(path.join(PD, "pocket-wifi.request")); i++) await sleep(150);
+  ok(fs.existsSync(path.join(PD, "pocket-wifi.request"))
+     && JSON.parse(fs.readFileSync(path.join(PD, "pocket-wifi.request"), "utf8")).networks.map(n => n.ssid).join("|") === "Home|Stuart's iPhone",
+     "the bottom button saves the unsaved Wi-Fi order too (Home back to 1), before it restarts");
   const back = await until(`document.getElementById("barMsg").textContent.includes("back up")`, 60000);
   ok(back, "Save and start: the box restarts and comes back configured");
   if (!back) console.log("     bar: " + await js(`document.getElementById("barMsg").textContent`)
