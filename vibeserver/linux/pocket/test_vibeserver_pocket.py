@@ -428,11 +428,13 @@ def main():
         real_run = nm.run
         def spy(args, timeout=40, secret=False):
             calls.append(list(args))
+            # ★★ (rc, out) — the REAL Shell.run contract. This fake returned a bare 0, which hid the v8 bug that
+            #    compared the pair with 0 and skipped the avahi restart (vibeserversetup.local never retired).
             if args[:2] == ["hostnamectl", "set-hostname"]:
                 with open(vp.HOSTNAME_FILE, "w") as f: f.write(args[2] + "\n")
-                return 0
+                return 0, ""
             if args[:2] == ["systemctl", "try-restart"]:
-                return 0
+                return 0, ""
             return real_run(args, timeout, secret)
         box.sh.run = spy
         box.sync_hostname(False)
@@ -447,6 +449,8 @@ def main():
         nm.t += 200
         box.sync_hostname(True)
         ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "…retired 3 minutes later (vibepocket)")
+        ok(calls[-1] == ["systemctl", "try-restart", "avahi-daemon.service"],
+           "…and avahi is restarted so vibepocket.local answers and vibeserversetup.local goes")
         nm2, box2 = make(tmp)
         calls.clear(); box2.sh.run = spy
         with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibeserversetup\n")

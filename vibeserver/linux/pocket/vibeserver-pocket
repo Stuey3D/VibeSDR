@@ -586,7 +586,11 @@ class Box:
         self.host_synced = True
         if have == want:
             return
-        if self.sh.run(["hostnamectl", "set-hostname", want], timeout=15) != 0:
+        # ★★ sh.run returns (rc, out). This compared the PAIR with 0 — never equal — so hostnamectl renamed the
+        #    box and then everything after it (/etc/hosts, the avahi restart) was skipped as a "failure": avahi
+        #    went on announcing vibeserversetup.local and vibepocket.local never answered (v8, 2026-10-10).
+        rc, _ = self.sh.run(["hostnamectl", "set-hostname", want], timeout=15)
+        if rc != 0:
             log("could not set the hostname to %s" % want)
             return
         try:
