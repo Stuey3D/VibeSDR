@@ -419,6 +419,10 @@ if npx tsx scripts/test_dab_assemble.ts; then pass=$((pass+1)); else fail=$((fai
 # ★★ THE L/R DEVIATION METERS' display rules (2026-10-10): thresholds, never a false zero — app and web share them.
 if npx tsx scripts/test_lr_meter.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
+# ★★ LITE'S "CHECK FOR UPDATES" (2026-10-10): which release is newer — rc order, final above rc, never a test build,
+#    never a downgrade.
+if npx tsx scripts/test_lite_update.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
 #     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.

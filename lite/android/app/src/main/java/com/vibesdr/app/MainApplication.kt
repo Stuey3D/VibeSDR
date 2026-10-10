@@ -19,7 +19,8 @@ import com.th3rdwave.safeareacontext.SafeAreaContextPackage
 class LitePackage : ReactPackage {
     override fun createNativeModules(ctx: ReactApplicationContext): List<NativeModule> =
         listOf(VibeLocalSdrModule(ctx), VibeMdnsModule(ctx),
-               LiteDiagModule(ctx))   // ★ Diagnostics: crash record + device + Lite's own version (2026-10-07)
+               LiteDiagModule(ctx),    // ★ Diagnostics: crash record + device + Lite's own version (2026-10-07)
+               LiteUpdateModule(ctx))  // ★ "Check for updates" — Lite only (Play forbids self-update in the main app)
     override fun createViewManagers(ctx: ReactApplicationContext): List<ViewManager<*, *>> =
         listOf(TvTextInputManager())   // ★ replaces RN's text field so a TV remote can reach it (TvTextInput.kt)
 }

@@ -9,6 +9,9 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <!-- ★ "Start automatically when power returns" — Android 5.0–7.0 only (VibeBootStart.MAX_SDK). -->
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+  <!-- ★★ LITE UPDATES ITSELF, WITH THE OWNER'S TAP (2026-10-10) — LiteUpdateModule hands a checked APK to Android's
+       installer, which always asks. Lite only: Play forbids it, so the main app never carries this permission. -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
   <uses-feature android:name="android.hardware.usb.host" android:required="true"/>
   <!-- ★ Android TV (Stuart 2026-09-19: retired TV boxes are the Lite audience). A TV has no touchscreen
        and runs the leanback launcher; neither may be REQUIRED or the phone/tablet install breaks. -->
