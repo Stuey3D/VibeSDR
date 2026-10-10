@@ -30,6 +30,9 @@ int main() {
     Place big = placeFromNominatim(R"({"lat":"52.35","lon":"-0.90","addresstype":"village","name":"Bigvillage",
         "address":{"village":"Bigvillage","country_code":"gb"},"extratags":{"population":"4200"}})");
     ok(big.valid && big.label == "Bigvillage", "a village OSM records at 1,000+ people: named");
+    Place cm = placeFromNominatim(R"({"lat":"52.35","lon":"-0.90","addresstype":"village","name":"Commaville",
+        "address":{"village":"Commaville","country_code":"gb"},"extratags":{"population":"1,234"}})");
+    ok(cm.valid, "a population written '1,234' reads as 1234 (as the app reads it)");
     Place sm = placeFromNominatim(R"({"lat":"52.35","lon":"-0.90","addresstype":"village","name":"Tiny",
         "address":{"village":"Tiny","country_code":"gb"},"extratags":{"population":"120"}})");
     ok(!sm.valid, "a village of 120 is never named (a cabin beside it would be found)");

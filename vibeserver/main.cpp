@@ -1364,7 +1364,7 @@ static void publishLocation(const Opts& o, const vsmoveloc::Place* mv) {
             // less confusing than showing a value they did not enter. (The Mac's words.)
             add("grid", grid, true);
         }
-        if (!j.empty()) LocalSdrShim::setLocationJson("{" + j + "}");
+        if (!j.empty()) vibe::LocalSdrShim::setLocationJson("{" + j + "}");
     }
 }
 

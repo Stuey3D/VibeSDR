@@ -253,9 +253,13 @@ Place placeFromNominatim(const std::string& js) {
     for (const char* k : {"city", "town"}) { town = strAfter(js, k, a); if (!town.empty()) break; }
     const std::string type = strAfter(js, "addresstype");
     if (town.empty() && type == "village") {
-        double pop = 0;
+        // ★ OSM writes populations as people type them — "4200", "4,200", "4 200". Same reading as the app's.
         const size_t x = js.find("\"extratags\"");
-        if (x != std::string::npos && numAfter(js, "population", pop, x) && pop >= 1000) town = strAfter(js, "name");
+        std::string raw = x != std::string::npos ? strAfter(js, "population", x) : std::string(), digits;
+        for (char c : raw) if (c != ',' && c != ' ') digits += c;
+        char* end = nullptr;
+        const double pop = digits.empty() ? 0 : std::strtod(digits.c_str(), &end);
+        if (end && *end == '\0' && pop >= 1000) town = strAfter(js, "name");
     }
     p.label = cleanName(town);
     if (p.label.empty()) return Place{};
