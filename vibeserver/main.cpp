@@ -1504,6 +1504,15 @@ int main(int argc, char** argv) {
                 const int keepPort = o.port;
                 applyConfig(vsconfig::effectiveFor(srv, vsconfig::RadioConfig{}), o);
                 o.port = keepPort;
+                /* ★★★ A POCKET BOX IS "SET UP" WHEN ITS OWNER SAYS SO, RADIO OR NOT (2026-10-10).
+                 *  effectiveFor() ANDs the machine's flag with the RADIO's, and the stand-in radio
+                 *  above is never configured — so a pocket box finished from the phone before its
+                 *  dongle was plugged in stayed "not set up" for ever: no <name>.local advert (the
+                 *  ONE way its owner finds it again on the home Wi-Fi), the setup page as its front
+                 *  page, and the page's "back up" wait never ending. The radio is added later from
+                 *  the same page (sdr-change), which is the whole point of a box with no terminal.
+                 *  ★ Pocket image only: elsewhere a zero-radio machine keeps today's behaviour. */
+                if (vibepocket::enabled()) cfg.configured = srv.configured;
             }
             // ★★★ A HEADLESS SERVER IS ALWAYS FULL. Simple mode is a GUI idea — plug a radio into
             //     a Mac or a phone, press start, share it on the network — and this build has no

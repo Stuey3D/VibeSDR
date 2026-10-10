@@ -161,6 +161,14 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .ordItem:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
   .ordGrip{color:var(--dim);font-size:18px;line-height:1}
   .ordMv{padding:4px 10px;font-size:13px;line-height:1}
+  /* ★ Pocket Wi-Fi rows: one network each, numbered, in the order the box tries them. */
+  .wifiRow{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0;background:#0a0704}
+  .wifiRow .wifiHead{display:flex;align-items:center;gap:8px}
+  .wifiRow .wifiNum{font-weight:700;color:var(--amber);min-width:1.4em}
+  .wifiRow .wifiHead .spacer{flex:1}
+  .wifiDone{border:1px solid var(--amber);border-radius:10px;padding:14px;margin-top:12px}
+  .wifiDone ol{margin:8px 0 0 1.2em;padding:0}.wifiDone li{margin:6px 0}
+  .wifiDone code{color:var(--amber);font-size:15px;word-break:break-all}
 </style>
 <div class="wrap">
   <h1>VibeServer</h1>
@@ -168,9 +176,30 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   <!-- ── 1. SIGN IN ──────────────────────────────────────────────────────── -->
   <div id="signin">
     <p class="sub" id="signinSub">Sign in to set up this server.</p>
-    <div class="card">
+    <!-- ★★★ A NEW POCKET BOX HAS NO PASSWORD YET, AND NO TERMINAL TO SET ONE (2026-10-10). Everywhere
+         else the TUI asks for it over SSH; an iPhone owner has no SSH. So the first person on the
+         box's own network chooses it here, ONCE — the server refuses a second claim, and refuses
+         any claim through the tunnel (vibeserver/pocket.cpp). Shown only when the box says so. -->
+    <div class="card hide" id="claimCard">
+      <h2>Choose an admin password</h2>
+      <p class="why">This VibeServer is new. The admin password protects its settings &mdash; and the
+         things that can damage a radio: bias-T, direct sampling and calibration. You will need it
+         whenever you change a setting, so keep it somewhere safe.</p>
+      <label><span class="lbl">Admin password</span>
+        <input type="password" id="claimPass" autocomplete="new-password" maxlength="128"></label>
+      <div class="hint">At least 6 characters.</div>
+      <label><span class="lbl">Type it again</span>
+        <input type="password" id="claimPass2" autocomplete="new-password" maxlength="128"></label>
+      <label><span class="lbl">PIN for listening (optional, digits only)</span>
+        <input type="password" id="claimPin" autocomplete="off" maxlength="16" inputmode="numeric" pattern="[0-9]*"></label>
+      <div class="hint">Leave it blank and anyone who can reach this box may listen &mdash; usually what you
+         want on your own Wi-Fi. A PIN here covers every radio on the box.</div>
+      <div class="err" id="claimErr"></div>
+      <p style="margin-top:16px"><button id="claimBtn">Continue</button></p>
+    </div>
+    <div class="card" id="signinCard">
       <h2>Sign in</h2>
-      <p class="why">Use the admin password you set when you ran <code>vibeserver</code> on the
+      <p class="why" id="signinWhy">Use the admin password you set when you ran <code>vibeserver</code> on the
          machine itself.</p>
       <label><span class="lbl">Admin password</span>
         <input type="password" id="pass" autocomplete="current-password" autofocus></label>
@@ -214,6 +243,53 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
          which does all things server related ... anything not specifically radio hardware related").
          ★ The shortwave schedule lives here too: it is ONE download shared by every radio. -->
     <div id="serverPane">
+      <!-- ★★★ THE POCKET BOX'S WI-FI (2026-10-10) — drawn ONLY on the pocket image (the server says so
+           at /vibeserver/pocket/hello); every other install never sees it. FIRST on the Server tab,
+           because on a pocket box it is the one question that decides whether the owner can find the
+           box again afterwards. Stuart's spec: up to three networks, tried in STRICT ORDER (1 before 2
+           before 3 whatever the signal), then the box's own secured hotspot. -->
+      <div class="card hide" id="wifiCard">
+      <h2>Wi-Fi</h2>
+      <p class="why">This box joins the first of these networks it can find &mdash; always 1 before 2 before 3.
+         If none is in range it starts its own hotspot, below, so your phone can still reach it.</p>
+      <div class="note" id="wifiNow"></div>
+      <div id="wifiNets"></div>
+      <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:6px">
+        <button type="button" class="ghost" id="wifiAdd">Add a network</button>
+        <button type="button" class="ghost" id="wifiScan">Look for networks again</button>
+      </div>
+      <div class="hint" id="wifiScanMsg"></div>
+      <div class="hint">An iPhone&rsquo;s Personal Hotspot is usually not visible while you are setting this
+         up &mdash; choose <b>Type a name</b>, enter it exactly as the iPhone shows it under
+         Settings &rsaquo; General &rsaquo; About &rsaquo; Name, and tick <b>not visible</b>.</div>
+
+      <h2 style="margin-top:22px">This box&rsquo;s own hotspot</h2>
+      <p class="why">Used when none of your networks is in range. It is secured (WPA2): join it with this
+         password, then open the address shown below.</p>
+      <label><span class="lbl">Hotspot name</span>
+        <input type="text" id="apSsid" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false"
+               placeholder="e.g. Pocket-SDR"></label>
+      <label><span class="lbl">Hotspot password</span>
+        <input type="password" id="apPsk" maxlength="63" autocomplete="new-password"></label>
+      <div class="hint" id="apPskHint">At least 8 characters.</div>
+      <label><span class="lbl">Country (two letters &mdash; sets the legal Wi-Fi channels)</span>
+        <input type="text" id="wifiCountry" maxlength="2" autocapitalize="characters" autocomplete="off"
+               style="max-width:5em;text-transform:uppercase" placeholder="GB"></label>
+      <div class="err" id="wifiErr"></div>
+      <p style="margin-top:12px"><button type="button" id="wifiSave">Save Wi-Fi</button>
+        <span class="note" id="wifiMsg" style="margin-left:10px"></span></p>
+
+      <!-- ★★★ LEAVING THE HOTSPOT — THE STEP THAT TAKES THIS PAGE AWAY. The phone's captive sheet
+           closes the moment the box stops being a hotspot, so EVERYTHING the owner needs next is
+           said here FIRST, in a panel they can screenshot, and only then does the box switch. -->
+      <div id="wifiFinish" class="hide">
+        <h2 style="margin-top:22px">Finish: put the box on your Wi-Fi</h2>
+        <p class="why" id="wifiFinishWhy"></p>
+        <button type="button" id="wifiGo">Show me what happens next</button>
+        <div class="wifiDone hide" id="wifiDone"></div>
+      </div>
+      </div>
+
       <!-- ★★★ WHAT THIS BOX CAN CARRY, AT THE TOP (Stuart, 2026-09-19). Every setting below is a promise about
            work this machine will have to do, and until it has been measured nobody — owner or us — knows which
            of those promises it can keep. On VibeServer Lite this runs ITSELF at first setup and switches red
@@ -785,7 +861,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
       <div class="card" id="radioPinCard">
         <h2>PIN for this radio</h2>
         <p class="why">A PIN here opens <b>this radio only</b>. The server PIN &mdash; the one set
-           when <code>vibeserver</code> was first run at the terminal &mdash; opens <b>every</b>
+           at first setup (at the terminal, or on a pocket box when its admin password was chosen) &mdash; opens <b>every</b>
            radio on this machine, and still does: either key works here. Leave this empty and the
            radio simply follows the server setting.</p>
         <label><span class="lbl">PIN for this radio</span>
@@ -5045,6 +5121,8 @@ async function signIn(fromTicket) {
     fill();
     // ★ Missing and newly attached radios — asked once now, and again only on "Check again".
     sdrChangesLoad();
+    // ★ The pocket box's Wi-Fi card (only on the pocket image — see POCKET).
+    wifiLoad();
     // ★ Also picks up a change written BEFORE a reboot that has since happened — the page can
     //   then confirm it took, which is the whole point of keeping the marker on disk.
     serialStatus();
@@ -5366,6 +5444,294 @@ async function orderSave() {
   renderTabs();
 }
 
+// ── ★★★ THE POCKET VIBESERVER (2026-10-10) ─────────────────────────────────────────────────────
+// A Pi with its own Wi-Fi hotspot, set up from a phone. Everything here is drawn only when the box
+// answers /vibeserver/pocket/hello with pocket:true; on every other server the request simply fails
+// and this page is the page it has always been.
+// ★★ This page may be running in the iPhone's CAPTIVE SHEET — a limited web view: no confirm(), no
+//    storage that lasts, and it CLOSES when the box stops being a hotspot. So nothing here relies on
+//    a dialog, and the "what happens next" panel is shown BEFORE the switch, never after.
+let POCKET = null;      // the hello answer
+let WIFI = null;        // the root service's state (/vibeserver/pocket/wifi)
+let WIFI_ROWS = [];     // [{ssid, psk, keep, hidden, other}] — in order
+
+(async () => {
+  try {
+    const r = await fetch("/vibeserver/pocket/hello", {cache: "no-store"});
+    const j = await r.json();
+    if (!j || j.pocket !== true) return;
+    POCKET = j;
+    if (j.claimable) {
+      $("claimCard").classList.remove("hide");
+      $("signinCard").classList.add("hide");
+      $("signinSub").textContent = "Welcome — let’s set up this VibeServer.";
+      setTimeout(() => $("claimPass").focus(), 50);
+    } else {
+      $("signinWhy").textContent = "Use the admin password you chose when this box was first set up.";
+    }
+  } catch (e) { /* not a pocket box */ }
+})();
+
+$("claimBtn").onclick = async () => {
+  const a = $("claimPass").value, b = $("claimPass2").value;
+  const pin = $("claimPin").value.replace(/\D/g, "");
+  $("claimErr").textContent = "";
+  if (a.length < 6) { $("claimErr").textContent = "At least 6 characters."; return; }
+  if (a !== b) { $("claimErr").textContent = "Those did not match. Try again."; return; }
+  $("claimBtn").disabled = true;
+  try {
+    const r = await fetch("/vibeserver/pocket/claim", {method: "POST", cache: "no-store",
+                          body: JSON.stringify({pass: a, pin: pin})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      $("claimErr").textContent = j.error || ("Refused (" + r.status + ").");
+      // ★ Someone else got there first, or it was set another way: sign in instead.
+      if (r.status === 409) { $("claimCard").classList.add("hide"); $("signinCard").classList.remove("hide"); }
+      $("claimBtn").disabled = false;
+      return;
+    }
+    PASS = a;
+    $("claimCard").classList.add("hide");
+    await signIn(true);
+  } catch (e) {
+    $("claimErr").textContent = "Could not reach the box — " + ((e && e.message) || e);
+    $("claimBtn").disabled = false;
+  }
+};
+$("claimPass2").addEventListener("keydown", e => { if (e.key === "Enter") $("claimBtn").click(); });
+
+function wifiPskOk(p) {
+  return (p.length >= 8 && p.length <= 63 && /^[\x20-\x7e]*$/.test(p)) || /^[0-9a-fA-F]{64}$/.test(p);
+}
+
+async function wifiLoad() {
+  if (!POCKET) return;
+  $("wifiCard").classList.remove("hide");
+  try {
+    const r = await fetch("/vibeserver/pocket/wifi?" + await authQuery(), {cache: "no-store"});
+    WIFI = r.ok ? await r.json() : null;
+  } catch (e) { WIFI = null; }
+  if (!WIFI || WIFI.present === false) {
+    $("wifiNow").textContent = "The box has not reported its Wi-Fi yet — wait a few seconds and reload.";
+    WIFI = {saved: [], scan: [], ap: {set: false, ssid: ""}};
+  }
+  // ★ Saved networks come back WITHOUT their passwords (they never leave the box): each row keeps
+  //   its saved one unless a new one is typed.
+  WIFI_ROWS = (WIFI.saved || []).map(n => ({ssid: n.ssid, psk: "", keep: true, hidden: !!n.hidden, other: false}));
+  if (!WIFI_ROWS.length) WIFI_ROWS.push({ssid: "", psk: "", keep: false, hidden: false, other: false});
+  $("apSsid").value = (WIFI.ap && WIFI.ap.ssid) || "";
+  $("apPsk").value = "";
+  $("apPsk").placeholder = WIFI.ap && WIFI.ap.set ? "saved — leave blank to keep it" : "";
+  $("wifiCountry").value = WIFI.country || "";
+  wifiRender();
+}
+
+function wifiNowText() {
+  const w = WIFI || {}, m = w.mode;
+  const seen = w.scanAt ? " Network list from " + new Date(w.scanAt * 1000).toLocaleTimeString() + "." : "";
+  if (m === "setup-ap") return "Right now the box is its own open setup hotspot, “" + (w.setupSsid || "VibeServer") + "”." + seen;
+  if (m === "fallback-ap") return "Right now the box is its own hotspot “" + ((w.ap && w.ap.ssid) || "") + "” — none of your networks is in range." + seen;
+  if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + ".";
+  if (m === "connecting") return "Joining a network…";
+  return "";
+}
+
+function wifiRender() {
+  $("wifiNow").textContent = wifiNowText() + (WIFI && WIFI.lastError ? "  Last problem: " + WIFI.lastError + "." : "");
+  const scan = (WIFI && WIFI.scan) || [];
+  const host = $("wifiNets");
+  host.innerHTML = "";
+  WIFI_ROWS.forEach((row, i) => {
+    const d = document.createElement("div");
+    d.className = "wifiRow";
+    const names = scan.map(x => x.ssid);
+    const inScan = row.ssid && names.includes(row.ssid);
+    const useOther = row.other || (row.ssid && !inScan);
+    const opts = ['<option value="">Choose a network…</option>']
+      .concat(scan.map(x => `<option value="${esc(x.ssid)}"${x.ssid === row.ssid && !useOther ? " selected" : ""}>${esc(x.ssid)}${x.secure ? "" : " (open)"}</option>`))
+      .concat([`<option value="" data-other="1"${useOther ? " selected" : ""}>Type a name…</option>`]);
+    d.innerHTML =
+      `<div class="wifiHead"><span class="wifiNum">${i + 1}</span>`
+      + `<span class="note">${i === 0 ? "tried first" : i === 1 ? "tried if 1 is not in range" : "tried if 1 and 2 are not"}</span>`
+      + `<span class="spacer"></span>`
+      + `<button type="button" class="ghost ordMv" data-mv="-1" ${i === 0 ? "disabled" : ""} aria-label="Move up">&uarr;</button>`
+      + `<button type="button" class="ghost ordMv" data-mv="1" ${i === WIFI_ROWS.length - 1 ? "disabled" : ""} aria-label="Move down">&darr;</button>`
+      + `<button type="button" class="ghost ordMv" data-rm="1" aria-label="Remove">&times;</button></div>`
+      + `<label><span class="lbl">Network</span><select data-f="pick">${opts.join("")}</select></label>`
+      + `<label class="${useOther ? "" : "hide"}" data-otherwrap="1"><span class="lbl">Network name, exactly</span>`
+      + `<input type="text" data-f="ssid" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(useOther ? row.ssid : "")}"></label>`
+      + `<label><span class="lbl">Password</span><input type="password" data-f="psk" maxlength="63" autocomplete="off" `
+      + `placeholder="${row.keep ? "saved — leave blank to keep it" : "blank only for an open network"}" value="${esc(row.psk)}"></label>`
+      + `<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" data-f="hidden" ${row.hidden ? "checked" : ""} `
+      + `style="width:16px;height:16px;accent-color:var(--amber)"><span>Not visible (a phone hotspot, or a hidden network) &mdash; try it by name</span></label>`;
+    d.querySelector('[data-f="pick"]').onchange = e => {
+      const v = e.target.value;
+      row.other = !!(e.target.selectedOptions[0] && e.target.selectedOptions[0].dataset.other);
+      if (!row.other) { if (v !== row.ssid) row.keep = false; row.ssid = v; }
+      wifiRender();
+    };
+    d.querySelector('[data-f="ssid"]').oninput = e => { if (e.target.value !== row.ssid) row.keep = false; row.ssid = e.target.value; };
+    d.querySelector('[data-f="psk"]').oninput = e => { row.psk = e.target.value; row.keep = row.keep && !row.psk; };
+    d.querySelector('[data-f="hidden"]').onchange = e => { row.hidden = e.target.checked; };
+    d.querySelectorAll("[data-mv]").forEach(b => b.onclick = () => {
+      const j = i + Number(b.dataset.mv);
+      if (j < 0 || j >= WIFI_ROWS.length) return;
+      [WIFI_ROWS[i], WIFI_ROWS[j]] = [WIFI_ROWS[j], WIFI_ROWS[i]];
+      wifiRender();
+    });
+    d.querySelector("[data-rm]").onclick = () => { WIFI_ROWS.splice(i, 1); wifiRender(); };
+    host.appendChild(d);
+  });
+  $("wifiAdd").disabled = WIFI_ROWS.length >= 3;
+  wifiFinishRender();
+}
+
+/** The request, validated here for a quick answer — the box checks every rule again. */
+function wifiCollect() {
+  const nets = [];
+  const seen = new Set();
+  for (let i = 0; i < WIFI_ROWS.length; i++) {
+    const r = WIFI_ROWS[i];
+    const ssid = (r.ssid || "").trim() === "" ? "" : r.ssid;
+    if (!ssid) {
+      // ★ An untouched empty row is not an error — it is a row the owner did not fill.
+      if (!r.psk) continue;
+      throw "Network " + (i + 1) + ": choose or type a network name.";
+    }
+    if (new TextEncoder().encode(ssid).length > 32) throw "Network " + (i + 1) + ": a network name is at most 32 characters.";
+    if (seen.has(ssid)) throw "“" + ssid + "” is listed twice.";
+    seen.add(ssid);
+    if (r.psk && !wifiPskOk(r.psk)) throw "Network " + (i + 1) + ": a Wi-Fi password is 8 to 63 characters.";
+    nets.push(r.keep && !r.psk ? {ssid, keep: true, hidden: r.hidden} : {ssid, psk: r.psk, hidden: r.hidden});
+  }
+  const apSsid = $("apSsid").value, apPsk = $("apPsk").value;
+  const apSaved = !!(WIFI && WIFI.ap && WIFI.ap.set);
+  if (!apSsid.trim()) throw "Give this box’s own hotspot a name.";
+  if (apSsid.trim().toLowerCase() === "vibeserver") throw "Choose a hotspot name other than “VibeServer” — that is the open setup hotspot.";
+  if (seen.has(apSsid)) throw "The hotspot cannot have the same name as one of your networks.";
+  if (!apPsk && !apSaved) throw "Choose a hotspot password — at least 8 characters.";
+  if (apPsk && !wifiPskOk(apPsk)) throw "The hotspot password must be 8 to 63 characters.";
+  const country = $("wifiCountry").value.trim().toUpperCase();
+  if (country && !/^[A-Z]{2}$/.test(country)) throw "The country is two letters, e.g. GB.";
+  return {networks: nets, ap: apPsk ? {ssid: apSsid, psk: apPsk} : {ssid: apSsid, keep: true}, country};
+}
+
+async function wifiPost(path, body) {
+  const r = await fetch(path + "?" + await authQuery(), {method: "POST", cache: "no-store", body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw (j.error || ("Refused (" + r.status + ")."));
+  return j;
+}
+
+$("wifiAdd").onclick = () => {
+  if (WIFI_ROWS.length < 3) WIFI_ROWS.push({ssid: "", psk: "", keep: false, hidden: false, other: false});
+  wifiRender();
+};
+$("apPsk").addEventListener("input", () => {
+  const p = $("apPsk").value;
+  $("apPskHint").textContent = !p ? "At least 8 characters." : wifiPskOk(p) ? "Good." : "At least 8 characters (63 at most).";
+});
+$("wifiSave").onclick = async () => {
+  $("wifiErr").textContent = ""; $("wifiMsg").textContent = "";
+  let body;
+  try { body = wifiCollect(); } catch (e) { $("wifiErr").textContent = String(e); return; }
+  $("wifiSave").disabled = true;
+  try {
+    await wifiPost("/vibeserver/pocket/wifi", body);
+    $("wifiMsg").innerHTML = '<span class="ok">Saved.</span>'
+      + (WIFI && WIFI.mode === "client" ? " The box may drop off this network for a moment while it rejoins in your order." : "");
+    // ★ The box applies it within a second or two; read back what it now holds.
+    setTimeout(wifiLoad, 2500);
+  } catch (e) { $("wifiErr").textContent = String(e); }
+  $("wifiSave").disabled = false;
+};
+$("wifiScan").onclick = async () => {
+  const onHotspot = WIFI && (WIFI.mode === "setup-ap" || WIFI.mode === "fallback-ap");
+  // ★★ ON A HOTSPOT, A FRESH LIST COSTS THE HOTSPOT ~10 s (the one radio cannot scan while it is an
+  //    access point on most firmware). So the first press tries the gentle way; a second press — after
+  //    it has said what it costs — does the real one.
+  const force = onHotspot && $("wifiScan").dataset.armed === "1";
+  if (onHotspot && !force) {
+    $("wifiScanMsg").textContent = "Looking without dropping the hotspot…";
+  } else if (force) {
+    $("wifiScanMsg").textContent = "The hotspot is dropping for about ten seconds. Your phone should rejoin “"
+      + (WIFI.mode === "setup-ap" ? (WIFI.setupSsid || "VibeServer") : WIFI.ap.ssid) + "” by itself — then reload this page.";
+  }
+  try { await wifiPost("/vibeserver/pocket/scan", {force}); } catch (e) { $("wifiScanMsg").textContent = String(e); return; }
+  setTimeout(async () => {
+    const before = WIFI ? WIFI.scanAt : 0;
+    await wifiLoad();
+    if (onHotspot && !force) {
+      const fresh = WIFI && WIFI.scanAt && WIFI.scanAt !== before;
+      $("wifiScan").dataset.armed = "1";
+      $("wifiScanMsg").textContent = (fresh ? "Updated. " : "This box cannot look while it is a hotspot. ")
+        + "Press again to drop the hotspot for about ten seconds and take a full list.";
+    } else if (!force) {
+      $("wifiScanMsg").textContent = "Updated.";
+    }
+  }, force ? 15000 : 4000);
+};
+
+/** ★ How the owner finds the box again — every address that will work, most memorable first. */
+function wifiAddresses() {
+  const port = POCKET && POCKET.port ? POCKET.port : (location.port || 80);
+  const suffix = String(port) === "80" ? "" : ":" + port;
+  const out = [];
+  const label = mdnsLabel(($("name") && $("name").value) || (cfg && cfg.name) || "");
+  if ($("mdns").checked) out.push("http://" + label + ".local" + suffix + "/");
+  const host = POCKET && POCKET.hostname ? String(POCKET.hostname).split(".")[0] : "";
+  if (host && host !== label) out.push("http://" + host + ".local" + suffix + "/");
+  return {out, suffix};
+}
+
+function wifiFinishRender() {
+  const w = WIFI || {};
+  const onHotspot = w.mode === "setup-ap" || w.mode === "fallback-ap";
+  $("wifiFinish").classList.toggle("hide", !onHotspot);
+  if (!onHotspot) return;
+  const saved = (w.saved || []).length > 0, apSet = !!(w.ap && w.ap.set);
+  const configured = !!(cfg && cfg.configured);
+  const missing = [];
+  if (!saved) missing.push("save at least one network above");
+  if (!apSet) missing.push("save the box’s own hotspot above");
+  if (!configured) missing.push("finish setup with “Save and start” at the bottom");
+  $("wifiFinishWhy").textContent = missing.length
+    ? "Before the box leaves this hotspot: " + missing.join(", then ") + "."
+    : "Everything is saved. When you are ready, the box leaves this hotspot and joins your network.";
+  $("wifiGo").disabled = missing.length > 0;
+}
+
+$("wifiGo").onclick = () => {
+  const w = WIFI || {};
+  const nets = (w.saved || []).map(n => n.ssid);
+  const {out, suffix} = wifiAddresses();
+  const apName = (w.ap && w.ap.ssid) || "";
+  const box = $("wifiDone");
+  box.innerHTML =
+    `<b>Screenshot this</b> &mdash; this page will close when the box leaves the hotspot.`
+    + `<ol>`
+    + `<li>The box joins <b>${esc(nets[0] || "")}</b>`
+    + (nets.length > 1 ? ` (or, if that is not in range, ${nets.slice(1).map(n => "<b>" + esc(n) + "</b>").join(" then ")})` : "")
+    + `. It takes up to a minute.</li>`
+    + `<li>On your phone, join that same network in <b>Settings &rsaquo; Wi-Fi</b>.</li>`
+    + `<li>Open the <b>VibeSDR app</b> &mdash; it finds the box by itself &mdash; or open Safari at `
+    + out.map(a => `<code>${esc(a)}</code>`).join(" or ") + `</li>`
+    + `<li>If none of your networks is in range, the box starts its own hotspot <b>${esc(apName)}</b> instead. `
+    + `Join it with your hotspot password and open <code>http://${esc((POCKET && POCKET.apAddress) || "10.42.0.1")}${esc(suffix)}/</code></li>`
+    + `</ol>`
+    + `<p style="margin-top:12px"><button type="button" id="wifiGoNow">Leave the hotspot now</button></p>`
+    + `<div class="err" id="wifiGoErr"></div>`;
+  box.classList.remove("hide");
+  $("wifiGo").classList.add("hide");
+  $("wifiGoNow").onclick = async () => {
+    $("wifiGoNow").disabled = true;
+    try {
+      await wifiPost("/vibeserver/pocket/switch", {});
+      $("wifiGoNow").textContent = "Switching — join your network now";
+    } catch (e) { $("wifiGoErr").textContent = String(e); $("wifiGoNow").disabled = false; }
+  };
+};
+
 $("sdrCheckAgain").addEventListener("click", () => sdrChangesLoad());
 $("benchRun").addEventListener("click", () => benchRun(false));
 $("signinBtn").onclick = () => signIn(false);
@@ -5576,6 +5942,8 @@ $("saveBtn").onclick = async () => {
  *    be done at all. */
 function backUp() {
   $("saveBtn").disabled = false;
+  // ★ A pocket box can now leave its hotspot — the finish panel was waiting on exactly this.
+  if (POCKET && cfg) { cfg.configured = true; wifiFinishRender(); }
   $("barMsg").innerHTML =
     '<span class="ok">Receiver is back up with your settings.</span>' +
     '<a id="gotoRx" href="/" class="gotoBtn" style="margin-left:14px">Open the receiver &rarr;</a>';
