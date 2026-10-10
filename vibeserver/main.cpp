@@ -73,6 +73,7 @@
 #include "geoip.h"
 #include "asndb.h"
 #include "proc.h"         // vibeproc::run — the High Detail Maps download (curl, no shell)
+#include "pocket.h"       // ★ the pocket image's hotspot + captive portal — inert without its marker
 #include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
 #include "mapgl_curl.h"   // the High Detail Maps downloader (shared with Mac Simple mode)
 
@@ -896,7 +897,9 @@ static std::string vsBenchLoad() {
             /** ★ The port the directory should publish — set once it is genuinely known. */
             int g_dirPort = 0;
             std::function<void(const vsconfig::ServerConfig&, bool)> g_applyDirectory;
-            bool        g_mdnsPendingPin = false; }
+            bool        g_mdnsPendingPin = false;
+            /** ★ The front door's real port, for the pocket image's captive redirect and :80 rule. */
+            std::atomic<int> g_pocketPort{0}; }
 
 
 /** ★★★ RENAME A DONGLE, THE ONE DESTRUCTIVE THING THIS PROGRAM DOES.
@@ -1966,6 +1969,21 @@ int main(int argc, char** argv) {
             bool wantRestart = json.find("\"restart\":true") != std::string::npos
                             || json.find("\"restart\": true") != std::string::npos;
             if (wantRestart) next.configured = true;
+            /* ★★★ THE POCKET BOX MAY NOT FINISH SETUP WITHOUT ITS OWN SECURED HOTSPOT. Setup is what
+             *  ends the OPEN "VibeServer" hotspot's reason to exist — and with no fallback hotspot
+             *  saved, a box out of range of every network would have nowhere to go but back to an
+             *  open one, now serving a configured receiver to anyone nearby. Refused HERE, not only
+             *  in the page, because the rule belongs to the box (the same "enforce at the save"
+             *  rule as the PIN collision). Only when the root service has SAID there is none: a
+             *  missing state file must never block a save. */
+            if (wantRestart && vibepocket::enabled()) {
+                const auto ps = vibepocket::readState();
+                if (ps.present && !ps.apSet) {
+                    err = "set this box's own hotspot name and password first (the Wi-Fi card) — "
+                          "it is where the box goes when none of your networks is in range";
+                    return false;
+                }
+            }
 
             if (!vsconfig::saveServer(g_configPath, next, err)) return false;
             g_serverConfig = next;
@@ -2267,6 +2285,56 @@ int main(int argc, char** argv) {
             }
             return std::string("{\"ok\":true,\"restart\":") + (restart ? "true" : "false") + "}";
         });
+
+    // ── ★★★ THE POCKET VIBESERVER (2026-10-10) ──────────────────────────────────────────────────
+    // A Pi with its own hotspot, set up from an iPhone — no terminal, so no TUI. Registered only on
+    // the FRONT DOOR of a box carrying the image's marker; on every other install this is skipped and
+    // the shim has no handler, so none of /vibeserver/pocket/* or the captive portal exists.
+    // See pocket.h and docs/POCKET-VIBESERVER-PI3A.md.
+    if (!o.radioGiven && vibepocket::enabled()) {
+        LocalSdrShim::setPocketHttpHandler([](const LocalSdrShim::PocketHttpRequest& in,
+                                              LocalSdrShim::PocketHttpReply& out) -> bool {
+            vibepocket::Req rq;
+            rq.method = in.method; rq.path = in.path; rq.host = in.host; rq.peer = in.peer;
+            rq.body = in.body; rq.viaTunnel = in.viaTunnel; rq.adminOk = in.adminOk;
+            vibepocket::Hooks h;
+            // ★ FROM THE FILE, each time: the TUI, the setup page and the claim all write it, and a
+            //   copy held here would answer "not set up" to a box that has just been set up.
+            h.configured = [] { vsconfig::ServerConfig c; std::string e;
+                                return vsconfig::loadServer(g_configPath, c, e) && c.configured; };
+            h.adminSet   = [] { vsconfig::ServerConfig c; std::string e;
+                                return vsconfig::loadServer(g_configPath, c, e) && !c.adminPass.empty(); };
+            h.port       = [] { return g_pocketPort.load(); };
+            h.hostname   = [] { char b[256] = {0}; ::gethostname(b, sizeof b - 1); return std::string(b); };
+            h.serverName = [] { return g_serverConfig.name; };
+            /* ★★★ THE FIRST-RUN PASSWORD — what the TUI's step 2 (and optional step 3) does, from the
+             *  browser. Read-modify-write like every other writer of this file; `configured` stays
+             *  false, because — exactly as after the TUI — the BROWSER finishes setup. Applied live, so
+             *  the page signs in with it on the very next request, with no restart. */
+            h.claim = [](const std::string& pass, const std::string& pin, std::string& err) {
+                vsconfig::ServerConfig next; std::string ignored;
+                if (!vsconfig::loadServer(g_configPath, next, ignored)) next = g_serverConfig;
+                if (!next.adminPass.empty()) { err = "an admin password is already set"; return false; }
+                next.adminPass = pass;
+                next.pin = pin;
+                next.fullMode = true;                              // ★ a headless box is always Full
+                next.sharing = vsconfig::Sharing::Public;
+                if (!vsconfig::saveServer(g_configPath, next, err)) return false;
+                g_serverConfig = next;
+                LocalSdrShim::setVibeServerAdminSecret(pass);
+                LocalSdrShim::setVibeServerAuth(pin);
+                std::printf("VibeServer: pocket first run — admin password set from the browser%s\n",
+                            pin.empty() ? "" : ", with a server PIN");
+                return true;
+            };
+            vibepocket::Reply rp;
+            if (!vibepocket::handle(rq, rp, h)) return false;
+            out.code = rp.code; out.status = rp.status; out.contentType = rp.contentType;
+            out.location = rp.location; out.body = rp.body;
+            return true;
+        });
+        std::printf("VibeServer: pocket image — hotspot and captive portal routes enabled\n");
+    }
 
     // ── Which radios this machine offers ────────────────────────────────────────────────────
     // ★★ ANSWERED FROM THE FILE, re-read each time, because the OTHER radios are separate
@@ -3050,6 +3118,15 @@ int main(int argc, char** argv) {
         g_amFrontDoor.store(true);
         // ★ NOW the port is real — same deferral as the mDNS advert above.
         g_dirPort = port;
+        g_pocketPort.store(port);
+        /* ★ THE ROOT SERVICE'S :80 RULE NEEDS THIS PORT — the captive check arrives on 80 and is
+         *  redirected here. Written into OUR directory (the only place we can write); the root side
+         *  reads digits only. Pocket boxes only. */
+        if (vibepocket::enabled()) {
+            std::string perr;
+            if (!vibepocket::writePrivate(vibepocket::paths().portFile, std::to_string(port) + "\n", perr))
+                std::fprintf(stderr, "VibeServer: pocket — %s\n", perr.c_str());
+        }
         if (g_applyDirectory) g_applyDirectory(g_serverConfig, false);
         // ★★★ THE FRONT DOOR IS NOBODY'S RADIO. The config loader falls back to "the first radio
         //     that is ready" when none was named — which is right for a single-radio server and
@@ -3856,6 +3933,17 @@ int main(int argc, char** argv) {
         LocalSdrShim::instance().saveConnLogIfDue();
         // ★ The heartbeat that makes a crashed radio give its slot back — see refreshOccupancy.
         LocalSdrShim::instance().refreshOccupancy();
+        // ★★ THE POCKET HOTSPOT'S STATE, every few seconds, from the root service's file. Hotspot up
+        //    ⇒ captive portal on; anything else ⇒ off. Front door only, pocket image only.
+        if (willBeFrontDoor && vibepocket::enabled()) {
+            static int pocketTick = 0;
+            if (++pocketTick >= 3) {
+                pocketTick = 0;
+                const bool ap = vibepocket::apMode(vibepocket::readState());
+                vibepocket::setApActive(ap);
+                LocalSdrShim::setCaptiveActive(ap);
+            }
+        }
 
         // ── ★★★ SCHEDULED UPDATES ────────────────────────────────────────────────────────
         // ★★ Two independent schedules. They ask the SAME helper the admin page's buttons ask,

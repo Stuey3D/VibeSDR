@@ -4560,6 +4560,8 @@ static std::mutex                    g_vsBenchMtx;
 static LocalSdrShim::ConfigGetFn     g_vsConfigGet;
 static LocalSdrShim::SdrChangesGetFn g_vsSdrChangesGet;   // ★ guarded by g_vsConfigMtx
 static LocalSdrShim::SdrChangeSetFn  g_vsSdrChangeSet;
+static LocalSdrShim::PocketHttpFn    g_vsPocketHttp;      // ★ guarded by g_vsConfigMtx — see setPocketHttpHandler
+static std::atomic<bool>             g_vsCaptiveActive{false};
 static LocalSdrShim::ConfigSetFn     g_vsConfigSet;
 static LocalSdrShim::ConfigPersistFn g_vsConfigPersist;
 static LocalSdrShim::EibiFn        g_vsEibiFn;
@@ -16834,6 +16836,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    device it does not have. Everything a listener needs BEFORE choosing a radio — the
         //    landing page, the radio list, setup, admin — is served; anything that needs IQ is a
         //    503 with a reason, which is what an honest "ask a radio, not me" looks like.
+        bool deferFrontDoorRefusal = false;   // ★ see the pocket hook after the headers
         if (frontDoorOnly) {
             const size_t sp0 = reqLine.find(' ');
             const std::string path0 = sp0 == std::string::npos ? "/" :
@@ -16853,6 +16856,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/config", 0) == 0
                 // ★ The setup page's missing/new radio banner — the machine's USB bus, not a radio's.
                 || path0.rfind("/vibeserver/sdr-change", 0) == 0
+                // ★ The pocket image's Wi-Fi + first-run routes — the MACHINE's network, not a radio's.
+                || path0.rfind("/vibeserver/pocket/", 0) == 0
                 || path0.rfind("/vibeserver/benchmark", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
                 || path0.rfind("/vibeserver/conditions", 0) == 0
@@ -16890,7 +16895,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★★ The web client's scripts (vibe_web_page.h). The page the door serves loads
                 //    them from /vs/ — a radio's page from /r/<id>/vs/, which the radio answers.
                 || path0.rfind("/vs/", 0) == 0;
-            if (!ok) {
+            /* ★★ WHILE THE POCKET HOTSPOT IS UP, A PATH WE DO NOT SERVE MAY STILL BE A PHONE'S
+             *  CONNECTIVITY CHECK — /hotspot-detect.html for captive.apple.com, reaching us through
+             *  the DNS hijack. Which one it is depends on the Host header, which has not been read
+             *  yet. So the refusal waits until it has: the pocket hook below answers a foreign host,
+             *  and anything still unanswered then gets the same refusal as now. */
+            if (!ok && g_vsCaptiveActive.load()) deferFrontDoorRefusal = true;
+            else if (!ok) {
                 // ★★★ A DEAD END IS NOT AN ANSWER. This used to reply with a bare JSON error, so a
                 //     listener who simply refreshed their tab — the first thing anyone tries when
                 //     something looks stuck — got a wall of text with no way back and no idea what
@@ -17156,6 +17167,61 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (q != std::string::npos) p.resize(q);
             return p;
         }();
+        /* ★★★ THE POCKET VIBESERVER'S ROUTES AND ITS CAPTIVE PORTAL — before anything else answers.
+         *  Only when the daemon registered a handler (the pocket image's front door), and only for its
+         *  own namespace or while its hotspot is up. Everywhere else this is one atomic load. */
+        if (g_vsCaptiveActive.load() || reqPath.rfind("/vibeserver/pocket/", 0) == 0) {
+            LocalSdrShim::PocketHttpFn fn;
+            { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsPocketHttp; }
+            if (fn) {
+                LocalSdrShim::PocketHttpRequest prq;
+                prq.method = reqLine.substr(0, reqLine.find(' '));
+                prq.path = reqPath; prq.host = hostHeader; prq.peer = sock->peerAddress();
+                prq.viaTunnel = viaTunnel(*sock);
+                if (reqPath.rfind("/vibeserver/pocket/", 0) == 0) {
+                    // ★ The admin proof, exactly as /vibeserver/config does it — lockout and all.
+                    std::string secret;
+                    { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+                    const std::string ip = sock->peerAddress();
+                    const VsAdminProof pr = vsAdminProof(secret, reqLine);
+                    prq.adminOk = pr.ok && !g_vsAuthState.blocked(ip);
+                    if (pr.present && !prq.adminOk && !secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
+                    else if (prq.adminOk) g_vsAuthState.recordOk(ip);
+                    // ★ A body only for our own POSTs, and small: the largest is three networks.
+                    if (prq.method == "POST" && contentLength > 0 && contentLength <= 16 * 1024) {
+                        prq.body.assign((size_t)contentLength, '\0');
+                        size_t got = 0;
+                        while (got < prq.body.size()) {
+                            const int n = sock->recv((uint8_t*)&prq.body[got], prq.body.size() - got, false, 5000);
+                            if (n <= 0) break;
+                            got += (size_t)n;
+                        }
+                        prq.body.resize(got);
+                    }
+                }
+                LocalSdrShim::PocketHttpReply prp;
+                if (fn(prq, prp)) {
+                    sock->sendstr("HTTP/1.1 " + std::to_string(prp.code) + " " + prp.status
+                                  + "\r\nContent-Type: " + prp.contentType
+                                  + (prp.location.empty() ? std::string() : "\r\nLocation: " + prp.location)
+                                  + "\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                                  + std::to_string(prp.body.size()) + "\r\n\r\n" + prp.body);
+                    sock->close(); return;
+                }
+            }
+        }
+        if (deferFrontDoorRefusal) {
+            // ★ The deferred refusal (see the front-door gate): not a probe, not ours — say so plainly.
+            static const std::string kBody =
+                "<!doctype html><meta charset=utf-8><title>VibeServer</title>"
+                "<body style=\"background:#0b0b0b;color:#ffb000;font:14px/1.6 ui-monospace,monospace;padding:2em\">"
+                "<p>This is the front door. It lists the radios on this machine; the receivers are behind it.</p>"
+                "<p><a style=\"color:#ffb000\" href=\"/\">See the radios on this machine</a></p>";
+            sock->sendstr("HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html; charset=utf-8\r\n"
+                          "Retry-After: 5\r\nConnection: close\r\nContent-Length: "
+                          + std::to_string(kBody.size()) + "\r\n\r\n" + kBody);
+            sock->close(); return;
+        }
         bool wsSpec  = reqPath == "/ws/user-spectrum";
         bool wsAudio = reqPath == "/ws/audio";
         bool wsDx    = reqPath == "/ws/dxcluster";
@@ -27347,6 +27413,12 @@ void LocalSdrShim::setRadioDisplayName(const std::string& name) {
     std::lock_guard<std::mutex> lk(g_radioBusyMtx);
     g_radioDisplayName = name.substr(0, 80);
 }
+
+void LocalSdrShim::setPocketHttpHandler(PocketHttpFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
+    g_vsPocketHttp = std::move(fn);
+}
+void LocalSdrShim::setCaptiveActive(bool on) { g_vsCaptiveActive.store(on); }
 
 void LocalSdrShim::setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);

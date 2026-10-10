@@ -643,6 +643,29 @@ public:
     using SdrChangeSetFn  = std::function<std::string(const std::string& body, int& status)>;
     static void setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set);
 
+    /** ★★★ THE POCKET VIBESERVER — the /vibeserver/pocket/ routes and the CAPTIVE PORTAL (2026-10-10).
+     *  The pocket image (a Pi with its own Wi-Fi hotspot, set up from an iPhone) needs the front
+     *  door to answer the OS connectivity checks that arrive through its DNS hijack, and a handful of
+     *  routes for the Wi-Fi settings and the first-run password. Like the config API, the DAEMON owns
+     *  the work (vibeserver/pocket.cpp) and the shim only carries the request: on a phone, a Mac or
+     *  an ordinary Linux install nothing is registered and none of it exists.
+     *  ★ The shim checks the admin proof (the same handshake as /vibeserver/config) and says so in
+     *    `adminOk`; the handler decides which routes need it. Returns true when it answered. */
+    struct PocketHttpRequest {
+        std::string method, path, host, peer, body;
+        bool viaTunnel = false, adminOk = false;
+    };
+    struct PocketHttpReply {
+        int code = 200;
+        std::string status = "OK", contentType = "application/json", location, body;
+    };
+    using PocketHttpFn = std::function<bool(const PocketHttpRequest&, PocketHttpReply&)>;
+    static void setPocketHttpHandler(PocketHttpFn fn);
+    /** ★ The box's own hotspot is up: requests for a FOREIGN host reach the pocket handler (it
+     *  redirects them), and the front door stops refusing paths it does not know before it has
+     *  seen the Host header. False everywhere but a pocket box in hotspot mode. */
+    static void setCaptiveActive(bool on);
+
     /** ★★★ "IN USE BY ANOTHER APP" — ONLY WHEN WE KNOW (Stuart, 2026-10-04). The shim learns the
      *  radio is not ours only by failing to take it back (radioBusyReason); whether that failure
      *  PROVES another program has it is the daemon's call, because the daemon can read the USB bus

@@ -16,7 +16,21 @@
 
 namespace vibepocket {
 
-Paths& paths() { static Paths p; return p; }
+Paths& paths() {
+    // ★ VIBESERVER_POCKET_DIR moves EVERY path under one directory — for driving the real binary in
+    //   a test without /etc or /run. The daemon's environment comes from its root-owned unit, so
+    //   this hands nothing to anyone who could not already edit that unit.
+    static Paths p = [] {
+        Paths q;
+        if (const char* d = std::getenv("VIBESERVER_POCKET_DIR"); d && *d) {
+            const std::string b = d;
+            q.marker = b + "/enabled"; q.state = b + "/state.json"; q.inbox = b + "/pocket-wifi.request";
+            q.kick = b + "/pocket-kick.request"; q.portFile = b + "/pocket-port";
+        }
+        return q;
+    }();
+    return p;
+}
 
 bool enabled() {
     struct stat st{};
