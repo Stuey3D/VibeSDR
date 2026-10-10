@@ -80,6 +80,31 @@ trap finish EXIT
 
 log() { echo "$*"; }
 
+# ★★★ A READ-ONLY ROOT (the pocket image, 2026-10-10). With overlayroot=tmpfs every write to / lands in
+#     RAM and is gone at the next boot — so apt run normally would "install" an update that vanishes,
+#     using RAM the radio wants. Package work goes to the REAL root instead, through overlayroot's own
+#     overlayroot-chroot (it remounts the lower filesystem read-write for the duration), with the boot
+#     partition writable for a kernel or config.txt change — and the box REBOOTS afterwards, because an
+#     overlay whose lower layer changed underneath it is not a state to keep running in.
+#  ★ This is the one window in which the pocket box writes its root, so the doc says to leave it
+#    powered until it is back. Everywhere else (no overlay) this is exactly the old behaviour.
+OVERLAY=0
+grep -qw "overlayroot=tmpfs" /proc/cmdline 2>/dev/null && command -v overlayroot-chroot >/dev/null && OVERLAY=1
+apt_do() {
+  if [ "$OVERLAY" = 1 ]; then
+    for B in /boot/firmware /boot; do mountpoint -q "$B" && mount -o remount,rw "$B" 2>/dev/null && break; done
+    local rc=0
+    overlayroot-chroot env DEBIAN_FRONTEND=noninteractive "$@" || rc=$?
+    sync
+    for B in /boot/firmware /boot; do mountpoint -q "$B" && mount -o remount,ro "$B" 2>/dev/null && break; done
+    return $rc
+  fi
+  DEBIAN_FRONTEND=noninteractive "$@"
+}
+after_install() {
+  if [ "$OVERLAY" = 1 ]; then log "read-only root updated — rebooting so it takes effect"; sync; systemctl reboot; fi
+}
+
 case "$action" in
   restart)      log "restarting vibeserver";     systemctl restart vibeserver ;;
   # ★ Asked for by the server's own stall watchdog, not by a button: sdrplay_apiService stopped
@@ -95,7 +120,7 @@ case "$action" in
   reboot)       log "rebooting";                 systemctl reboot ;;
   shutdown)     log "powering off";              systemctl poweroff ;;
   update-check) log "checking for updates"
-                apt-get update
+                apt_do apt-get update
                 # ★★ THEN SAY WHAT IS ACTUALLY AVAILABLE. Refreshing the index and printing
                 #    nothing about the result is not "checking for updates" — the owner learns
                 #    only that something happened. This is the line they actually want.
@@ -112,21 +137,23 @@ case "$action" in
                   echo "Everything is up to date."
                 fi ;;
   update-all)   log "installing ALL available system updates"
-                apt-get update
+                apt_do apt-get update
                 # ★★ THE WHOLE SYSTEM, not just us. Offered because an owner who never logs in
                 #    otherwise never gets security updates — but it is genuinely riskier than
                 #    upgrading one package, so it is opt-in and the page says so.
                 #    ★ -o Dpkg::Options 'confold': keep the admin's existing config files on a
                 #      conflict rather than stopping to ask a question nobody is there to answer.
                 #      An unattended upgrade that blocks on a prompt is an upgrade that never ends.
-                DEBIAN_FRONTEND=noninteractive apt-get -y \
+                apt_do apt-get -y \
                   -o Dpkg::Options::=--force-confdef \
-                  -o Dpkg::Options::=--force-confold upgrade ;;
+                  -o Dpkg::Options::=--force-confold upgrade
+                after_install ;;
   update)       log "installing updates"
-                apt-get update
+                apt_do apt-get update
                 # ★ ONLY this package, and never a fresh install of anything else. `--only-upgrade`
                 #   means a request for `update` cannot pull in a new package by name.
-                DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade vibeserver ;;
+                apt_do apt-get install -y --only-upgrade vibeserver
+                after_install ;;
   maps-install) log "installing the detail map pack"
                 # ★★★ THE FULL MAP PACK, ON REQUEST. The server ships the basic pack; the detail
                 #   pack is ~82 MB compressed and is its own package precisely so it is a choice
@@ -136,11 +163,13 @@ case "$action" in
                 # ★ A named package and nothing else, the same discipline as `update` above: this
                 #   path runs as root, so it asks for ONE thing by name and can never be talked
                 #   into installing something else.
-                apt-get update
-                DEBIAN_FRONTEND=noninteractive apt-get install -y vibeserver-mapdata-detail ;;
+                apt_do apt-get update
+                apt_do apt-get install -y vibeserver-mapdata-detail
+                after_install ;;
   maps-remove)  log "removing the detail map pack"
                 # ★ The way back. 82 MB on a Pi's SD card is worth being able to reclaim, and an
                 #   install with no uninstall is a decision an owner cannot revisit.
-                DEBIAN_FRONTEND=noninteractive apt-get remove -y vibeserver-mapdata-detail ;;
+                apt_do apt-get remove -y vibeserver-mapdata-detail
+                after_install ;;
   *)            log "ignoring unknown action '$action'"; exit 0 ;;
 esac

@@ -1,0 +1,116 @@
+#!/bin/bash
+# vibeserver-pocket-data — the pocket box's ONE writable place, made ready before anything uses it.
+#
+# ★★★ WHY (Stuart, 2026-10-10): "the pocket box WILL have its power pulled at any moment". So the root
+#     filesystem is READ-ONLY (overlayroot=tmpfs: every write to / lands in RAM and is gone at the next
+#     boot), and what must survive lives on a small partition of its own, LABEL=vibedata, ext4 with
+#     data=journal — a cut mid-write leaves the old file or the new one, never half of either.
+#     What lives there, bound into place:
+#       /data/vibeserver/etc   → /etc/vibeserver                          (config.json: admin, radios, tunnel switches)
+#       /data/vibeserver/lib   → /var/lib/vibeserver                      (directory id/key, bans, bench, tunnel state)
+#       /data/nm               → /etc/NetworkManager/system-connections   (the saved Wi-Fi + the hotspot, root 0600)
+#       /data/pocket           → /var/lib/vibeserver-pocket               (the Wi-Fi country, set in setup)
+#       /data/timesync         → /var/lib/systemd/timesync                (the last known time — no RTC on a Pi)
+#
+# ★★★ THE FAILSAFE: A BOX THAT CANNOT READ ITS SETTINGS MUST STILL BE REACHABLE FROM A PHONE.
+#     fsck first; if the partition still will not mount it is made afresh (it holds only settings, and
+#     settings that cannot be read are already lost) — the box then has no saved Wi-Fi, so
+#     vibeserver-pocket raises the OPEN setup hotspot and the owner sets it up again from the phone.
+#     If even that fails, nothing is bound: the read-only root's own copies (no Wi-Fi saved, a fresh
+#     config) are what the services see — the same open setup hotspot, settings kept in RAM only.
+#
+# ★★ NOTHING IS GROWN (Stuart, 2026-10-10). The settings are kilobytes; the partition ships at 256 MB
+#    and stays that size. The rest of the card is left UNALLOCATED on purpose — kept free for a future
+#    GALLERY partition (decoder images, recordings — docs/v12/), which can then be added at the end of
+#    the card without touching root or settings. See docs/POCKET-VIBESERVER-PI3A.md.
+#
+# ★ Runs as root before NetworkManager and vibeserver (vibeserver-pocket-data.service). Off unless
+#   the image's marker exists. Every step is safe to repeat.
+set -u
+MARK=/etc/vibeserver-pocket/enabled
+[ -f "$MARK" ] || exit 0
+DATA=/data
+LABEL=vibedata
+say() { echo "vibeserver-pocket-data: $*"; }
+
+DEV=$(blkid -L "$LABEL" 2>/dev/null || true)
+if [ -z "$DEV" ]; then
+  # ★★ A damaged superblock loses its label too. The pocket image's layout is ours: partition 3 of
+  #    the disk the root came from. It is made afresh ONLY if it holds no recognisable filesystem at
+  #    all — never a partition with something else on it.
+  ROOTSRC=$(findmnt -no SOURCE /media/root-ro 2>/dev/null || findmnt -no SOURCE / 2>/dev/null)
+  RDISK=$(lsblk -no PKNAME "$ROOTSRC" 2>/dev/null | head -1)
+  for P3 in "/dev/${RDISK}p3" "/dev/${RDISK}3"; do
+    if [ -n "$RDISK" ] && [ -b "$P3" ] && [ -z "$(blkid -p -o value -s TYPE "$P3" 2>/dev/null)" ]; then
+      say "!! partition 3 ($P3) has no filesystem left — making the settings partition afresh (setup mode)"
+      mkfs.ext4 -q -F -L "$LABEL" "$P3" >/dev/null 2>&1 && DEV="$P3"
+      break
+    fi
+  done
+fi
+if [ -z "$DEV" ]; then
+  say "no partition labelled $LABEL — running on the read-only root's defaults (setup hotspot)"
+  exit 0
+fi
+
+# ── 1. Check, mount, or make afresh ──────────────────────────────────────────────────────────────
+mkdir -p "$DATA"
+if ! mountpoint -q "$DATA"; then
+  fsck.ext4 -p "$DEV" >/dev/null 2>&1; rc=$?
+  [ $rc -ge 4 ] && fsck.ext4 -fy "$DEV" >/dev/null 2>&1
+  if ! mount -t ext4 -o noatime,data=journal,commit=5 "$DEV" "$DATA" 2>/dev/null; then
+    say "!! $LABEL would not mount even after fsck — making it afresh; the box comes up in setup mode"
+    mkfs.ext4 -q -F -L "$LABEL" "$DEV" >/dev/null 2>&1
+    mount -t ext4 -o noatime,data=journal,commit=5 "$DEV" "$DATA" 2>/dev/null \
+      || { say "!! still cannot mount $DEV — running on the read-only root's defaults"; exit 0; }
+  fi
+fi
+
+# ── 2. Bind each persistent directory, seeding it from the read-only root the first time ────────
+# ★ The seed is copied BEFORE the bind (the lower copy is hidden afterwards), and the ".seeded" stamp
+#   is written LAST — a cut mid-copy just copies again next boot (cp -n never overwrites a real file).
+bindone() {   # <data subdir> <target> <owner> <mode>
+  local src="$DATA/$1" dst="$2" own="$3" mode="$4"
+  mountpoint -q "$dst" && return 0
+  mkdir -p "$src" "$dst"
+  if [ ! -e "$src/.seeded" ]; then
+    cp -an "$dst/." "$src/" 2>/dev/null || true
+    sync -f "$src" 2>/dev/null || sync
+    : > "$src/.seeded"
+  fi
+  chown "$own" "$src"; chmod "$mode" "$src"
+  mount --bind "$src" "$dst" || say "!! could not bind $src on $dst"
+}
+bindone vibeserver/etc /etc/vibeserver                         vibeserver:vibeserver 0755
+bindone vibeserver/lib /var/lib/vibeserver                     vibeserver:vibeserver 0750
+bindone nm             /etc/NetworkManager/system-connections  root:root             0700
+bindone pocket         /var/lib/vibeserver-pocket              root:root             0755
+bindone timesync       /var/lib/systemd/timesync               systemd-timesync:systemd-timesync 0755
+
+# ── 3. Caches in RAM, not on the card ───────────────────────────────────────────────────────────
+# ★★ The DAB slideshow, MOT carousel and station-logo caches are written as images arrive — every new
+#    slide of the playing service. They are refetched from the air or RadioDNS at will, so on a pocket
+#    box they live in RAM (/run, tmpfs) for the session. (The 2026-10-10 write audit.)
+for c in dab-slides dab-carousel dab-logos; do
+  mkdir -p "/run/vibeserver-cache/$c" "/var/lib/vibeserver/$c"
+  chown vibeserver:vibeserver "/run/vibeserver-cache/$c" 2>/dev/null; chmod 0750 "/run/vibeserver-cache/$c"
+  mountpoint -q "/var/lib/vibeserver/$c" || mount --bind "/run/vibeserver-cache/$c" "/var/lib/vibeserver/$c"
+done
+
+# ── 4. The High Detail Maps, baked into the read-only root ──────────────────────────────────────
+# ★★ The image ships them at /usr/lib/vibeserver/mapgl-detail (fetched and verified at build time,
+#    exactly as the server's own installer checks them). The server looks for an INSTALLED copy at
+#    /var/lib/vibeserver/mapgl/vibemap-detail.pmtiles (vibe_mapgl.h: a regular file, size > 0, via
+#    stat — which follows this link), so it reports them installed, offers no download and never
+#    fetches 177 MB over a phone's data. A downloaded newer set (the admin page's install) replaces
+#    the link with a real file on this partition, and this leaves a real file alone.
+BAKED=/usr/lib/vibeserver/mapgl-detail/vibemap-detail.pmtiles
+if [ -s "$BAKED" ]; then
+  install -d -o vibeserver -g vibeserver -m 0750 /var/lib/vibeserver/mapgl
+  L=/var/lib/vibeserver/mapgl/vibemap-detail.pmtiles
+  if [ ! -e "$L" ] || { [ -L "$L" ] && [ "$(readlink "$L")" != "$BAKED" ]; }; then
+    ln -sfn "$BAKED" "$L"
+  fi
+fi
+say "settings partition ready ($(df -h "$DATA" | awk 'NR==2{print $3" used of "$2}'))"
+exit 0

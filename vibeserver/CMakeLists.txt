@@ -196,6 +196,9 @@ endif()
 add_executable(vibeserver
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/rtl_eeprom.cpp"
+    # ★ The pocket image's Wi-Fi + captive portal (daemon side). Inert unless the image's marker
+    #   file exists, so every other install carries it and never runs a line of it.
+    "${CMAKE_CURRENT_SOURCE_DIR}/pocket.cpp"
     $<$<BOOL:${CURSES_FOUND}>:${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp>)
 if(CURSES_FOUND)
   target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_TUI)
@@ -667,6 +670,16 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   # ★ Run as root from the unit's ExecStartPre — the daemon is unprivileged and cannot write
   #   sysfs. See linux/vibeserver-governor for why a wrong governor costs 25% of the machine.
   install(PROGRAMS linux/vibeserver-governor linux/vibeserver-radios DESTINATION lib/vibeserver)
+  # ★★ THE POCKET IMAGE'S WI-FI (2026-10-10). Shipped to every install so a pocket box is fixed by
+  #    apt like anything else, but NOT enabled by postinst, and its unit will not start without the
+  #    image's marker (/etc/vibeserver-pocket/enabled). Needs python3, which Raspberry Pi OS Lite has;
+  #    no Depends is added because no other install ever runs it.
+  # ★★ …and its power-cut hardening: the settings partition (vibeserver-pocket-data) and the one-time
+  #    read-only-root seal. Same rule: dormant without the marker, enabled only by the image.
+  install(PROGRAMS linux/pocket/vibeserver-pocket linux/pocket/vibeserver-pocket-data
+                   linux/pocket/vibeserver-pocket-seal DESTINATION lib/vibeserver)
+  install(FILES linux/pocket/vibeserver-pocket.service linux/pocket/vibeserver-pocket-data.service
+                linux/pocket/vibeserver-pocket-seal.service DESTINATION lib/systemd/system)
 
   # ★★★ SHIP cloudflared, DO NOT ASK FOR IT. The public listing offers to make an address for an
   #     owner who has no port forward — the only route that works behind CGNAT — and that offer is

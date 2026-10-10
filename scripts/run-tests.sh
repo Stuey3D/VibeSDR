@@ -103,6 +103,10 @@ deps_for() {
     # ★★ The same recovery for the HackRF and the R2/Mini — dup ownership, deadline release, fresh-fd replay.
     test-fd-radio-recovery) echo "android/app/src/main/cpp/hackrf_source.cpp android/app/src/main/cpp/airspy_source.cpp" ;;
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
+    # ★★ The pocket image's daemon side: captive answers, the first-run claim, the Wi-Fi request.
+    test-pocket)        echo "$SRC/pocket.cpp" ;;
+    # ★★ The config survives a pulled plug: atomic save, last-good .bak, refusal of a truncated file.
+    test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
     # ★★★ An admin read must never hold the connection log's lock while it works (Pi 2 IQ overruns
     #     with the admin page open, 2026-10-01). Header-only; slow resolvers make it CPU-independent.
@@ -198,6 +202,9 @@ if node scripts/test-nr-roundtrip.mjs; then pass=$((pass+1)); else fail=$((fail+
 # ★ The two ends of the advanced-RDS message must agree on field NAMES. A stray "R." prefix meant
 #   the deviation readout never populated at all, and neither half looked wrong on its own.
 if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ The pocket box's Wi-Fi state machine against a fake NetworkManager: strict 1/2/3 order, moving
+#    up when network 1 returns, never pulling a hotspot from under a phone, no password in any log.
+if python3 vibeserver/linux/pocket/test_vibeserver_pocket.py; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★ The web playout (worklet AND the main-thread fallback) must come back clean by itself after the
 #   server has delivered audio in bursts — the Sony's narrow-WFM overload, 2026-09-29. Silent.
 if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((fail+1)); fi

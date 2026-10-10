@@ -705,6 +705,11 @@ struct ServerConfig {
      *  asked for; the absolute end lives in the directory, which is the only clock both sides
      *  can agree on. */
     long long   dirShareSec = 0;
+    /** ★★ POCKET IMAGE: bring the tunnel (the listing) back after the box restarts. Off by default —
+     *  a portable box powers on Personal unless its owner asked otherwise (Stuart, 2026-10-10). Even
+     *  when on, the tunnel starts only once the box has real internet (vibedir::setInternet). Read
+     *  only on the pocket image; every other server always resumes, exactly as before. */
+    bool        dirResume = false;
     /** ★★ An address the owner already has — DDNS, a port forward, a reverse proxy. Empty means
      *  "make one for me", which is the Cloudflare Quick Tunnel path and needs cloudflared on the
      *  machine. Offering both matters: a tunnel is the only option that works behind CGNAT, and a
@@ -811,6 +816,9 @@ bool loadServer(const std::string& path, ServerConfig& cfg, std::string& err);
  *  is a trap rather than a tidiness rule. Exposed so the setup page can say so BEFORE the save. */
 bool pinCollidesWithMaster(const ServerConfig& cfg, const std::string& radioPin);
 bool saveServer(const std::string& path, const ServerConfig& cfg, std::string& err);
+/** ★★ Load the config, or — if it is missing, empty or unreadable — the last good copy that saveServer
+ *  kept beside it (config.json.bak). `usedBackup` says which. False when neither can be read. */
+bool loadServerOrBackup(const std::string& path, ServerConfig& cfg, std::string& err, bool& usedBackup);
 std::string toJson(const ServerConfig& cfg);
 bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);
 

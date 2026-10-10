@@ -36,6 +36,16 @@ void apply(const Settings& s);
 /** Leave the directory now, rather than at the next expiry. */
 void stop();
 
+/** ★★★ IS THERE AN INTERNET TO TUNNEL TO? (pocket image, 2026-10-10). A pocket box spends hours as its
+ *  own hotspot with no upstream at all, and a tunnel that keeps trying there burns CPU, spawns
+ *  cloudflared every few minutes and fills the journal with failures nobody can act on. With this
+ *  false the worker starts NO tunnel and retries nothing: it says "waiting for an internet
+ *  connection" once and sleeps until it is told otherwise; a running tunnel is stopped (paused) the
+ *  same way. Driven by NetworkManager's own connectivity state, via the pocket service.
+ *  ★ Defaults to TRUE, and nothing but the pocket image ever calls it — every other install is
+ *    exactly as before. */
+void setInternet(bool up);
+
 /** What the setup page shows: listed, the address to share, and why not if not. */
 std::string statusJson();
 

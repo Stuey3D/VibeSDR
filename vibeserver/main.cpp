@@ -73,6 +73,7 @@
 #include "geoip.h"
 #include "asndb.h"
 #include "proc.h"         // vibeproc::run — the High Detail Maps download (curl, no shell)
+#include "pocket.h"       // ★ the pocket image's hotspot + captive portal — inert without its marker
 #include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
 #include "mapgl_curl.h"   // the High Detail Maps downloader (shared with Mac Simple mode)
 
@@ -896,7 +897,9 @@ static std::string vsBenchLoad() {
             /** ★ The port the directory should publish — set once it is genuinely known. */
             int g_dirPort = 0;
             std::function<void(const vsconfig::ServerConfig&, bool)> g_applyDirectory;
-            bool        g_mdnsPendingPin = false; }
+            bool        g_mdnsPendingPin = false;
+            /** ★ The front door's real port, for the pocket image's captive redirect and :80 rule. */
+            std::atomic<int> g_pocketPort{0}; }
 
 
 /** ★★★ RENAME A DONGLE, THE ONE DESTRUCTIVE THING THIS PROGRAM DOES.
@@ -991,6 +994,11 @@ static void pendingSerialClear() { ::unlink(pendingSerialPath().c_str()); }
 // ★ Cleared by the radio the moment it opens its device, and by the front door when the owner
 //   removes, pauses or replaces it — never on a timer.
 static std::string radioStatusPath(const std::string& serial) {
+    // ★★ POCKET: IN RAM. A missing radio's process rewrites this on every 5 s restart, and it describes
+    //    only THIS boot — a card write every five seconds for a fact a reboot makes stale anyway.
+    //    /run/vibeserver is shared by the door and every radio (RuntimeDirectoryPreserve).
+    if (vibepocket::enabled() && ::access("/run/vibeserver", W_OK) == 0)
+        return "/run/vibeserver/radio-status-" + serial + ".json";
     return vsDataDir() + "/radio-status-" + serial + ".json";
 }
 
@@ -1432,7 +1440,37 @@ int main(int argc, char** argv) {
         }
 
         vsconfig::ServerConfig srv;
-        if (vsconfig::loadServer(g_configPath, srv, err)) {
+        /* ★★★ A CONFIG THAT CANNOT BE READ MUST NOT LOCK THE OWNER OUT (2026-10-10, the pocket box).
+         *  First the file; if it is missing, empty or unreadable, the last good copy saveServer kept
+         *  (config.json.bak) — and that copy is written back as the config so the next start is normal.
+         *  ★★ ON THE POCKET IMAGE, IF NEITHER CAN BE READ, START AS A NEW BOX: Full mode, no radio, no
+         *     password — so the setup page offers "Choose an admin password" again and the phone can
+         *     recover it. A box with no screen and no terminal that refuses to start is a brick. Every
+         *     other install keeps today's behaviour (ignore the file, run from the command line). */
+        bool usedBackup = false;
+        bool haveCfg = vsconfig::loadServerOrBackup(g_configPath, srv, err, usedBackup);
+        if (haveCfg && usedBackup) {
+            std::fprintf(stderr, "VibeServer: %s could not be read — restored the last good copy (%s.bak)\n",
+                         g_configPath.c_str(), g_configPath.c_str());
+            std::string werr;
+            vsconfig::saveServer(g_configPath, srv, werr);
+        }
+        if (!haveCfg && vibepocket::enabled() && wantSerial.empty()) {
+            struct stat cst{};
+            const bool existed = ::stat(g_configPath.c_str(), &cst) == 0;
+            srv = vsconfig::ServerConfig{};
+            srv.fullMode = true;
+            srv.sharing  = vsconfig::Sharing::Public;
+            srv.configured = false;
+            std::string werr;
+            if (vsconfig::saveServer(g_configPath, srv, werr)) {
+                haveCfg = true; err.clear();
+                std::fprintf(stderr, "VibeServer: pocket — %s; starting as a NEW box so it can be set up "
+                                     "again from a phone\n",
+                             existed ? "the settings could not be read (nor their backup)" : "no settings yet");
+            }
+        }
+        if (haveCfg) {
             // ★★★ AND A HEADLESS SERVER IS A SERVER FOR OTHER PEOPLE. `sharing` decides whether
             //     the admin page offers the tools for managing strangers — who is connected and
             //     from where, the ban list, the connection history. It defaulted to Local, which
@@ -1501,6 +1539,15 @@ int main(int argc, char** argv) {
                 const int keepPort = o.port;
                 applyConfig(vsconfig::effectiveFor(srv, vsconfig::RadioConfig{}), o);
                 o.port = keepPort;
+                /* ★★★ A POCKET BOX IS "SET UP" WHEN ITS OWNER SAYS SO, RADIO OR NOT (2026-10-10).
+                 *  effectiveFor() ANDs the machine's flag with the RADIO's, and the stand-in radio
+                 *  above is never configured — so a pocket box finished from the phone before its
+                 *  dongle was plugged in stayed "not set up" for ever: no <name>.local advert (the
+                 *  ONE way its owner finds it again on the home Wi-Fi), the setup page as its front
+                 *  page, and the page's "back up" wait never ending. The radio is added later from
+                 *  the same page (sdr-change), which is the whole point of a box with no terminal.
+                 *  ★ Pocket image only: elsewhere a zero-radio machine keeps today's behaviour. */
+                if (vibepocket::enabled()) cfg.configured = srv.configured;
             }
             // ★★★ A HEADLESS SERVER IS ALWAYS FULL. Simple mode is a GUI idea — plug a radio into
             //     a Mac or a phone, press start, share it on the network — and this build has no
@@ -1516,6 +1563,53 @@ int main(int argc, char** argv) {
             //     came up and nothing said why (2026-08-08).
             // ★ Every other reader — the supervisor, the router, portForRadio — takes it from the
             //   file, so the file is where the truth has to live.
+            /* ★★★ A POCKET BOX WAKES UP PERSONAL UNLESS ITS OWNER SAID "RESUME" (Stuart, 2026-10-10).
+             *  Powered on, it is reachable on its own hotspot or the owner's Wi-Fi and nowhere else: the
+             *  tunnel is stopped (its ~30 MB per cloudflared comes back to a 512 MB board) and nothing is
+             *  listed. "Enable the tunnel" is the same "Advertise on VibeSDR.net" switch every server has
+             *  — it starts cloudflared live and stops it when switched off. Its sub-toggle, "Resume the
+             *  tunnel after a restart" (dirResume), keeps it across a power cycle; even then the tunnel
+             *  waits for real internet (vibedir::setInternet, fed by the pocket service).
+             *  ★★ ON A NEW BOOT, NOT A NEW PROCESS. Every settings save restarts this service; keying
+             *     on process start would un-share the box each time the owner saved anything. The
+             *     kernel's boot id changes only when the machine itself restarts.
+             *  ★ Front door only (the radios read the file after us), pocket image only, and written
+             *    to the FILE — one rule, two readers: the page must show the switch off, too. */
+            if (wantSerial.empty() && vibepocket::enabled() && srv.dirList && !srv.dirResume) {
+                std::string bootId;
+                if (FILE* bf = std::fopen("/proc/sys/kernel/random/boot_id", "r")) {
+                    char b[64] = {0};
+                    if (std::fgets(b, sizeof b, bf)) bootId = b;
+                    std::fclose(bf);
+                }
+                const std::string mark = vibepocket::paths().portFile + ".boot";
+                std::string seen;
+                if (FILE* mf = std::fopen(mark.c_str(), "r")) {
+                    char b[64] = {0};
+                    if (std::fgets(b, sizeof b, mf)) seen = b;
+                    std::fclose(mf);
+                }
+                if (!bootId.empty() && bootId != seen) {
+                    srv.dirList = false;
+                    std::string werr;
+                    if (vsconfig::saveServer(g_configPath, srv, werr))
+                        std::printf("VibeServer: pocket box — powered on PERSONAL: not listed, tunnel stopped "
+                                    "(share it from the setup page)\n");
+                    else
+                        std::fprintf(stderr, "VibeServer: pocket — could not record Personal (%s)\n", werr.c_str());
+                }
+            }
+            if (wantSerial.empty() && vibepocket::enabled()) {
+                // ★ Remember this boot, so a restart within it keeps whatever the owner chose.
+                if (FILE* bf = std::fopen("/proc/sys/kernel/random/boot_id", "r")) {
+                    char b[64] = {0};
+                    if (std::fgets(b, sizeof b, bf)) {
+                        std::string perr;
+                        vibepocket::writePrivate(vibepocket::paths().portFile + ".boot", b, perr);
+                    }
+                    std::fclose(bf);
+                }
+            }
             g_serverConfig = srv;
             hadConfigFile = true;
         } else if (!err.empty()) {
@@ -1711,6 +1805,10 @@ int main(int argc, char** argv) {
     //    sends -1 so it can never nudge a temporary share into the future one ping at a time.
     g_applyDirectory = [](const vsconfig::ServerConfig& srv, bool ownerChanged) {
         if (!g_amFrontDoor.load() && srv.radios.size() > 1) return;
+        // ★★ POCKET: ONE TUNNEL, THE DOOR'S. A one-radio machine lists from the radio process as
+        //    well, which is a second cloudflared (~30 MB — Stuart's Pi 2 runs two). On a 512 MB box
+        //    the door's listing is the one that matters, and only the door hears the internet gate.
+        if (vibepocket::enabled() && !g_amFrontDoor.load()) return;
         vibedir::Settings d;
         d.listed  = srv.configured && srv.dirList;
         d.name    = srv.dirName.empty() ? srv.name : srv.dirName;
@@ -1966,6 +2064,21 @@ int main(int argc, char** argv) {
             bool wantRestart = json.find("\"restart\":true") != std::string::npos
                             || json.find("\"restart\": true") != std::string::npos;
             if (wantRestart) next.configured = true;
+            /* ★★★ THE POCKET BOX MAY NOT FINISH SETUP WITHOUT ITS OWN SECURED HOTSPOT. Setup is what
+             *  ends the OPEN "VibeServer" hotspot's reason to exist — and with no fallback hotspot
+             *  saved, a box out of range of every network would have nowhere to go but back to an
+             *  open one, now serving a configured receiver to anyone nearby. Refused HERE, not only
+             *  in the page, because the rule belongs to the box (the same "enforce at the save"
+             *  rule as the PIN collision). Only when the root service has SAID there is none: a
+             *  missing state file must never block a save. */
+            if (wantRestart && vibepocket::enabled()) {
+                const auto ps = vibepocket::readState();
+                if (ps.present && !ps.apSet) {
+                    err = "set this box's own hotspot name and password first (the Wi-Fi card) — "
+                          "it is where the box goes when none of your networks is in range";
+                    return false;
+                }
+            }
 
             if (!vsconfig::saveServer(g_configPath, next, err)) return false;
             g_serverConfig = next;
@@ -2267,6 +2380,59 @@ int main(int argc, char** argv) {
             }
             return std::string("{\"ok\":true,\"restart\":") + (restart ? "true" : "false") + "}";
         });
+
+    // ── ★★★ THE POCKET VIBESERVER (2026-10-10) ──────────────────────────────────────────────────
+    // A Pi with its own hotspot, set up from an iPhone — no terminal, so no TUI. Registered only on
+    // the FRONT DOOR of a box carrying the image's marker; on every other install this is skipped and
+    // the shim has no handler, so none of /vibeserver/pocket/* or the captive portal exists.
+    // See pocket.h and docs/POCKET-VIBESERVER-PI3A.md.
+    if (!o.radioGiven && vibepocket::enabled()) {
+        LocalSdrShim::setPocketHttpHandler([](const LocalSdrShim::PocketHttpRequest& in,
+                                              LocalSdrShim::PocketHttpReply& out) -> bool {
+            vibepocket::Req rq;
+            rq.method = in.method; rq.path = in.path; rq.host = in.host; rq.peer = in.peer;
+            rq.body = in.body; rq.viaTunnel = in.viaTunnel; rq.adminOk = in.adminOk;
+            vibepocket::Hooks h;
+            // ★ FROM THE FILE, each time: the TUI, the setup page and the claim all write it, and a
+            //   copy held here would answer "not set up" to a box that has just been set up.
+            h.configured = [] { vsconfig::ServerConfig c; std::string e;
+                                return vsconfig::loadServer(g_configPath, c, e) && c.configured; };
+            h.adminSet   = [] { vsconfig::ServerConfig c; std::string e;
+                                return vsconfig::loadServer(g_configPath, c, e) && !c.adminPass.empty(); };
+            h.port       = [] { return g_pocketPort.load(); };
+            h.hostname   = [] { char b[256] = {0}; ::gethostname(b, sizeof b - 1); return std::string(b); };
+            h.serverName = [] { return g_serverConfig.name; };
+            /* ★★★ THE FIRST-RUN PASSWORD — what the TUI's step 2 (and optional step 3) does, from the
+             *  browser. Read-modify-write like every other writer of this file; `configured` stays
+             *  false, because — exactly as after the TUI — the BROWSER finishes setup. Applied live, so
+             *  the page signs in with it on the very next request, with no restart. */
+            h.claim = [](const std::string& pass, const std::string& pin, std::string& err) {
+                vsconfig::ServerConfig next; std::string ignored;
+                if (!vsconfig::loadServer(g_configPath, next, ignored)) next = g_serverConfig;
+                if (!next.adminPass.empty()) { err = "an admin password is already set"; return false; }
+                next.adminPass = pass;
+                next.pin = pin;
+                next.fullMode = true;                              // ★ a headless box is always Full
+                next.sharing = vsconfig::Sharing::Public;
+                if (!vsconfig::saveServer(g_configPath, next, err)) return false;
+                g_serverConfig = next;
+                LocalSdrShim::setVibeServerAdminSecret(pass);
+                LocalSdrShim::setVibeServerAuth(pin);
+                std::printf("VibeServer: pocket first run — admin password set from the browser%s\n",
+                            pin.empty() ? "" : ", with a server PIN");
+                return true;
+            };
+            vibepocket::Reply rp;
+            if (!vibepocket::handle(rq, rp, h)) return false;
+            out.code = rp.code; out.status = rp.status; out.contentType = rp.contentType;
+            out.location = rp.location; out.body = rp.body;
+            return true;
+        });
+        std::printf("VibeServer: pocket image — hotspot and captive portal routes enabled\n");
+        // ★★ NO TUNNEL UNTIL THE POCKET SERVICE SAYS THERE IS INTERNET. A box that boots into its own
+        //    hotspot must not spend its first minutes spawning cloudflared at a network with no way out.
+        vibedir::setInternet(false);
+    }
 
     // ── Which radios this machine offers ────────────────────────────────────────────────────
     // ★★ ANSWERED FROM THE FILE, re-read each time, because the OTHER radios are separate
@@ -3050,6 +3216,15 @@ int main(int argc, char** argv) {
         g_amFrontDoor.store(true);
         // ★ NOW the port is real — same deferral as the mDNS advert above.
         g_dirPort = port;
+        g_pocketPort.store(port);
+        /* ★ THE ROOT SERVICE'S :80 RULE NEEDS THIS PORT — the captive check arrives on 80 and is
+         *  redirected here. Written into OUR directory (the only place we can write); the root side
+         *  reads digits only. Pocket boxes only. */
+        if (vibepocket::enabled()) {
+            std::string perr;
+            if (!vibepocket::writePrivate(vibepocket::paths().portFile, std::to_string(port) + "\n", perr))
+                std::fprintf(stderr, "VibeServer: pocket — %s\n", perr.c_str());
+        }
         if (g_applyDirectory) g_applyDirectory(g_serverConfig, false);
         // ★★★ THE FRONT DOOR IS NOBODY'S RADIO. The config loader falls back to "the first radio
         //     that is ready" when none was named — which is right for a single-radio server and
@@ -3533,7 +3708,13 @@ int main(int argc, char** argv) {
     // status view will show (BRIEF §3), so the GUI is a renderer of this, not its own accounting.
     // ★ Set AFTER start(), because loading needs the window (centre and span) to know whether the
     //   stored history belongs to this profile at all.
-    LocalSdrShim::instance().setSpectrogramPath(vsDataDir() + "/spectrogram.bin");
+    // ★★ POCKET: THE SPECTROGRAM LIVES IN RAM. It is ~3 MB rewritten every quarter of an hour — the
+    //    biggest SD write the server makes — for a 24 h picture that a box powered on for an afternoon
+    //    barely fills. Lost at power-off, which is what a pocket box's history is anyway.
+    LocalSdrShim::instance().setSpectrogramPath(
+        (vibepocket::enabled() && ::access("/run/vibeserver", W_OK) == 0 ? std::string("/run/vibeserver")
+                                                                          : vsDataDir())
+        + "/spectrogram.bin");
     // ★ Beside the spectrogram, and for the same reason: this is state the SERVER writes and must
     //   keep across a restart. A ban that evaporates on reboot is not a ban — and this Pi reboots.
     LocalSdrShim::instance().setBanListPath(vsDataDir() + "/bans.jsonl");
@@ -3856,6 +4037,21 @@ int main(int argc, char** argv) {
         LocalSdrShim::instance().saveConnLogIfDue();
         // ★ The heartbeat that makes a crashed radio give its slot back — see refreshOccupancy.
         LocalSdrShim::instance().refreshOccupancy();
+        // ★★ THE POCKET HOTSPOT'S STATE, every few seconds, from the root service's file. Hotspot up
+        //    ⇒ captive portal on; anything else ⇒ off. Front door only, pocket image only.
+        if (willBeFrontDoor && vibepocket::enabled()) {
+            static int pocketTick = 0;
+            if (++pocketTick >= 3) {
+                pocketTick = 0;
+                const auto ps = vibepocket::readState();
+                const bool ap = vibepocket::apMode(ps);
+                vibepocket::setApActive(ap);
+                LocalSdrShim::setCaptiveActive(ap);
+                // ★★ The tunnel follows NetworkManager's own verdict ("full" connectivity), as the root
+                //    service reports it — never on a hotspot, and paused the moment the internet goes.
+                vibedir::setInternet(!ap && ps.internet);
+            }
+        }
 
         // ── ★★★ SCHEDULED UPDATES ────────────────────────────────────────────────────────
         // ★★ Two independent schedules. They ask the SAME helper the admin page's buttons ask,

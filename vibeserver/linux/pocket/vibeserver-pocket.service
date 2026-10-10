@@ -1,0 +1,33 @@
+[Unit]
+# ★★★ THE POCKET IMAGE ONLY. Shipped in every vibeserver package so a pocket box gets fixes through
+# apt like everything else — but it is NOT enabled by the package, and even if it were, the
+# condition below keeps it from starting anywhere the image's marker is missing. A desktop or an
+# ordinary Pi never has its Wi-Fi touched. See docs/POCKET-VIBESERVER-PI3A.md.
+Description=VibeServer — pocket Wi-Fi (saved networks in order, else the box's own hotspot)
+Documentation=https://vibesdr.net
+ConditionPathExists=/etc/vibeserver-pocket/enabled
+After=NetworkManager.service
+Wants=NetworkManager.service
+# ★ Before the server, so the first state file exists by the time the front door polls it.
+Before=vibeserver.service
+
+[Service]
+Type=simple
+# ★★ ROOT, DELIBERATELY AND ONLY HERE — it drives NetworkManager and loads one nft table. The
+#    server stays unprivileged and NoNewPrivileges; it can only ASK, by writing a request into its
+#    own state directory, which this service re-validates (see the header of the script).
+ExecStart=/usr/lib/vibeserver/vibeserver-pocket run
+Restart=always
+RestartSec=5
+RuntimeDirectory=vibeserver-pocket
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# ★ Below the radio's threads: a Wi-Fi decision can wait a few milliseconds, audio cannot.
+Nice=5
+# Hardening that does not get in the way of nmcli / iw / nft / raspi-config.
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

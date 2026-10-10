@@ -1,0 +1,39 @@
+#!/bin/bash
+# vibeserver-pocket-seal — make the pocket box's root filesystem READ-ONLY, once, on its first boot.
+#
+# ★★★ WHY A SEAL AND NOT A READ-ONLY IMAGE. The very first boot of Raspberry Pi OS writes things that
+#     must be written ONCE and kept: the machine-id (DHCP client identity — two boxes with the same one
+#     fight over an address), the SSH host keys, the first-boot housekeeping. A root that was read-only
+#     from the start would invent them afresh on every boot. So the first boot runs read-write as Pi OS
+#     expects, then this turns on raspi-config's own "Overlay File System" (overlayroot=tmpfs: every
+#     later write to / goes to RAM and is gone at the next boot) and reboots.
+# ★★ RESUMABLE (Stuart: "whatever happens at first boot must survive a power cut mid-way"). cmdline.txt
+#    is replaced by temp file + fsync + rename + sync — a cut leaves the old line (no overlay: this runs
+#    again next boot) or the new one (sealed). Nothing else changes.
+# ★ Runs before NetworkManager and the setup hotspot, so nobody is mid-setup when it reboots.
+set -u
+MARK=/etc/vibeserver-pocket/enabled
+[ -f "$MARK" ] || exit 0
+grep -qw "overlayroot=tmpfs" /proc/cmdline && exit 0         # already sealed: nothing to do
+[ -f /etc/vibeserver-pocket/no-seal ] && { echo "vibeserver-pocket-seal: no-seal file present — root left writable"; exit 0; }
+command -v overlayroot-chroot >/dev/null || { echo "vibeserver-pocket-seal: overlayroot not installed — cannot seal"; exit 0; }
+
+BOOT=/boot/firmware; [ -f "$BOOT/cmdline.txt" ] || BOOT=/boot
+CMD="$BOOT/cmdline.txt"
+[ -f "$CMD" ] || { echo "vibeserver-pocket-seal: no cmdline.txt"; exit 0; }
+# ★ The initramfs carries overlayroot; without one the kernel would boot straight past it.
+ls "$BOOT"/initramfs* >/dev/null 2>&1 || { echo "vibeserver-pocket-seal: no initramfs on $BOOT — not sealing"; exit 0; }
+
+sync
+mount -o remount,rw "$BOOT" 2>/dev/null || true
+if ! grep -qw "overlayroot=tmpfs" "$CMD"; then
+  NEW="$CMD.vibe-new"
+  { printf 'overlayroot=tmpfs '; tr -d '\n' < "$CMD"; printf '\n'; } > "$NEW"
+  sync "$NEW" 2>/dev/null || sync
+  mv -f "$NEW" "$CMD"
+  sync
+fi
+mount -o remount,ro "$BOOT" 2>/dev/null || true
+echo "vibeserver-pocket-seal: root will be read-only from the next boot — rebooting now"
+systemctl --no-block reboot
+exit 0

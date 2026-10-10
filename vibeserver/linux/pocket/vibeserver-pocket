@@ -1,0 +1,1019 @@
+#!/usr/bin/python3
+# vibeserver-pocket — the POCKET VIBESERVER's Wi-Fi, as root (2026-10-10).
+#
+# ★★★ WHAT THIS DOES. A pocket box (a Pi 3 A+ and friends, flashed with image/pocket) has ONE Wi-Fi
+# radio and no screen. This service decides, all the time, what that radio is doing:
+#
+#     no saved network ............................ OPEN setup hotspot "VibeServer"  (first boot only)
+#     saved networks, one in range ................ join it — network 1 before 2 before 3, ALWAYS
+#     saved networks, none in range ............... the owner's SECURED fallback hotspot (WPA2)
+#     on the fallback hotspot, nobody connected ... look again every RESCAN_SEC, rejoin when one returns
+#     joined network 2 or 3, network 1 comes back . move up to network 1 (UPGRADE_SEC)
+#
+# The full design, the boot state machine and the on-device checklist: docs/POCKET-VIBESERVER-PI3A.md.
+#
+# ★★★ STRICT ORDER, NOT "STRONGEST" OR "LAST USED" (Stuart, 2026-10-10). NetworkManager is given
+#     autoconnect-priority 30/20/10 so its OWN choice at boot already prefers 1, then 2, then 3 —
+#     but NM never moves off a working connection to a better one, and this box must. So this
+#     service does the joining itself, in order, and treats NM's autoconnect as the fast path only.
+#
+# ★★★ WHY ROOT, AND WHY A SEPARATE SERVICE. vibeserver (the daemon) runs unprivileged with
+#     NoNewPrivileges, exactly as on every install. It WRITES A REQUEST into its own state directory
+#     (/var/lib/vibeserver/pocket-wifi.request, pocket-kick.request) and this service reads it —
+#     the same boundary as vibeserver-maintenance, one layer over. Not the maintenance helper
+#     itself: that is a one-shot with a log the admin page tails, and this is a long-running state
+#     machine that must own the radio between requests.
+#  ★★ EVERY FIELD IS RE-VALIDATED HERE. The daemon validated too, but this is the side that runs as
+#     root, so it trusts nothing it reads: a regular file, not a link, owned by the vibeserver user,
+#     at most 16 KB, every SSID and password re-checked. nmcli is called with ARGUMENT LISTS, never
+#     a shell, so an SSID like `"; reboot` is just an odd name.
+#  ★★★ PASSWORDS ARE NEVER LOGGED. They exist in the request (0600, deleted the moment it is read),
+#     in nmcli's argv for the instant it runs, and in NetworkManager's keyfiles
+#     (/etc/NetworkManager/system-connections, root 0600). Nothing here prints an argument list.
+#
+# ★ OFF unless /etc/vibeserver-pocket/enabled exists (the unit's ConditionPathExists, and checked
+#   again here): the package ships this file to every install and it does nothing on any of them.
+
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import time
+
+MARKER       = "/etc/vibeserver-pocket/enabled"
+CONF         = "/etc/vibeserver-pocket/pocket.conf"       # the image's defaults (read-only root)
+# ★★ What setup CHANGES (the country) lives on the settings partition — the root is read-only on a
+#    pocket box (vibeserver-pocket-data binds /data/pocket here). Read after CONF, so it wins.
+STATE_CONF   = "/var/lib/vibeserver-pocket/pocket.conf"
+STATE_DIR    = "/run/vibeserver-pocket"
+INBOX        = "/var/lib/vibeserver/pocket-wifi.request"
+KICK         = "/var/lib/vibeserver/pocket-kick.request"
+PORT_FILE    = "/var/lib/vibeserver/pocket-port"
+DNSMASQ_CONF = "/etc/NetworkManager/dnsmasq-shared.d/vibeserver-captive.conf"
+# ★ A file on the BOOT partition — the one place an owner can reach with a card reader and no
+#   terminal. Its presence at boot forgets every saved network and the fallback hotspot, so the
+#   OPEN setup hotspot comes back. The admin password is NOT reset by it (see the doc's questions).
+RESET_FILES  = ("/boot/firmware/vibeserver-reset-wifi", "/boot/vibeserver-reset-wifi")
+
+NET_PREFIX   = "vibe-net-"          # vibe-net-1 … vibe-net-3, in order
+AP_NAME      = "vibe-ap"            # the owner's secured fallback hotspot
+SETUP_NAME   = "vibe-setup-ap"      # the OPEN first-boot hotspot
+PRIORITY     = {1: 30, 2: 20, 3: 10}
+AP_ADDR      = "10.42.0.1"          # ★ pinned: vibeserver/pocket.h's kApAddress says the same
+NFT_TABLE    = "vibeserver_captive"
+SERVER_CONF  = "/etc/vibeserver/config.json"                # the server's settings (bound from /data)
+# ★★★ THE SETUP NAME (Stuart, 2026-10-10). Until the box is configured it answers as
+#     VibeServerSetup.local (mDNS is case-blind) on EVERY network — the setup hotspot, the owner's
+#     Wi-Fi, their own hotspot — so "reconnect to your network and open VibeServerSetup.local:48000"
+#     works with no router page and no IP address. Once "Save and start" has configured it, the name
+#     is RETIRED: the hostname becomes RUN_HOST and the server publishes the name chosen in setup.
+#     ★ The HOSTNAME, published by avahi, not a record the server publishes: avahi follows the box
+#       from 10.42.0.1 to the home network's address by itself; a record would go stale on the switch.
+SETUP_HOST   = "vibeserversetup"
+RUN_HOST     = "vibepocket"
+HOSTNAME_FILE = "/etc/hostname"
+HOSTS_FILE    = "/etc/hosts"
+
+DEFAULTS = {
+    "SETUP_SSID": "VibeServer",     # Stuart: the first-boot hotspot is called "VibeServer"
+    "COUNTRY": "GB",
+    "AP_CHANNEL": "6",              # 2.4 GHz: every phone sees it; 1/6/11 are legal everywhere
+    "BOOT_GRACE_SEC": "35",         # NM's own autoconnect gets this long before we step in (brief: ~30 s)
+    "RESCAN_SEC": "120",            # on a hotspot: how often to look for a saved network
+    "IDLE_SEC": "120",              # …and only once nobody has been connected for this long
+    "UPGRADE_SEC": "120",           # on network 2/3: how often to look for a higher one
+    "JOIN_WAIT_SEC": "30",          # nmcli --wait for one join attempt
+}
+
+
+def log(msg):
+    print("vibeserver-pocket: " + msg, flush=True)
+
+
+# ── Validation (the daemon's rules, again, because this side is root) ──────────────────────────
+def valid_ssid(s):
+    if not isinstance(s, str) or not s:
+        return False
+    b = s.encode("utf-8", "surrogatepass")
+    return 1 <= len(b) <= 32 and not any(c < 0x20 or c == 0x7F for c in b)
+
+
+def valid_psk(p):
+    if not isinstance(p, str):
+        return False
+    if len(p) == 64 and re.fullmatch(r"[0-9A-Fa-f]{64}", p):
+        return True
+    return 8 <= len(p) <= 63 and all(0x20 <= ord(c) <= 0x7E for c in p)
+
+
+def valid_country(c):
+    return isinstance(c, str) and re.fullmatch(r"[A-Z]{2}", c) is not None
+
+
+def validate_request(req):
+    """Returns (clean_request, error). Mirrors vibepocket::parseWifiRequest."""
+    if not isinstance(req, dict):
+        return None, "not an object"
+    nets = req.get("networks", [])
+    if not isinstance(nets, list) or len(nets) > 3:
+        return None, "networks must be a list of at most three"
+    out, seen = [], set()
+    for k, n in enumerate(nets, 1):
+        if not isinstance(n, dict):
+            return None, "network %d is not valid" % k
+        ssid, psk = n.get("ssid"), n.get("psk", "")
+        keep, hidden = n.get("keep") is True, n.get("hidden") is True
+        if not valid_ssid(ssid) or ssid in seen:
+            return None, "network %d has a bad or repeated name" % k
+        seen.add(ssid)
+        if not keep and psk and not valid_psk(psk):
+            return None, "network %d has a bad password" % k
+        out.append({"ssid": ssid, "psk": "" if keep else (psk or ""), "keep": keep, "hidden": hidden})
+    ap = req.get("ap")
+    if not isinstance(ap, dict):
+        return None, "no hotspot given"
+    ap_ssid, ap_psk, ap_keep = ap.get("ssid"), ap.get("psk", ""), ap.get("keep") is True
+    if not valid_ssid(ap_ssid) or ap_ssid.lower() == "vibeserver" or ap_ssid in seen:
+        return None, "bad hotspot name"
+    if not ap_keep and not valid_psk(ap_psk):
+        return None, "the hotspot needs a WPA2 password of 8 to 63 characters"
+    country = req.get("country", "")
+    if country and not valid_country(country):
+        return None, "bad country"
+    return {"networks": out, "ap": {"ssid": ap_ssid, "psk": "" if ap_keep else ap_psk, "keep": ap_keep},
+            "country": country, "switch": req.get("switch") is True}, ""
+
+
+def read_request_file(path, owner_uid, limit=16 * 1024):
+    """★★★ Root reading a file the unprivileged daemon wrote. A link is removed and ignored; only a
+    regular file owned by the daemon's user is read, without following a link, without blocking on
+    a FIFO, and at most `limit` bytes. The file is DELETED before it is acted on, so a request that
+    breaks something can never be read twice. Returns the bytes or None."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    try:
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or \
+                (owner_uid is not None and st.st_uid != owner_uid) or st.st_size > limit:
+            log("ignoring %s — not a plain file from the vibeserver user" % os.path.basename(path))
+            return None
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            data = os.read(fd, limit + 1)
+        finally:
+            os.close(fd)
+        return data if len(data) <= limit else None
+    except OSError as e:
+        log("could not read %s (%s)" % (os.path.basename(path), e.strerror))
+        return None
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+# ── nmcli ──────────────────────────────────────────────────────────────────────────────────────
+def terse_split(line):
+    """nmcli -t escapes ':' and '\\' inside values. Split on the unescaped colons only."""
+    out, cur, i = [], [], 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            cur.append(line[i + 1]); i += 2; continue
+        if c == ":":
+            out.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(c); i += 1
+    out.append("".join(cur))
+    return out
+
+
+def iw_unescape(s):
+    """iw prints non-printable SSID bytes as \\xNN."""
+    b = bytearray()
+    i = 0
+    while i < len(s):
+        if s[i] == "\\" and i + 4 <= len(s) and s[i + 1] == "x":
+            try:
+                b.append(int(s[i + 2:i + 4], 16)); i += 4; continue
+            except ValueError:
+                pass
+        b.extend(s[i].encode("utf-8")); i += 1
+    return b.decode("utf-8", "replace")
+
+
+class Shell:
+    """The only thing that runs programs. Swapped for a fake in the tests."""
+    def run(self, args, timeout=40, secret=False):
+        try:
+            p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               timeout=timeout, text=True, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            # ★ The VERB only — the arguments can hold a password.
+            log("%s %s failed (%s)" % (args[0], args[1] if len(args) > 1 else "", type(e).__name__))
+            return 1, ""
+        if p.returncode != 0 and not secret:
+            err = (p.stderr or "").strip().splitlines()
+            log("%s: %s" % (" ".join(args[:3]), err[-1] if err else "exit %d" % p.returncode))
+        elif p.returncode != 0:
+            log("%s %s failed (exit %d)" % (args[0], args[1], p.returncode))
+        return p.returncode, p.stdout
+
+    def run_input(self, args, data, timeout=20):
+        try:
+            p = subprocess.run(args, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               timeout=timeout, text=True)
+            return p.returncode
+        except (OSError, subprocess.TimeoutExpired):
+            return 1
+
+    def now(self):
+        return time.monotonic()
+
+    def sleep(self, s):
+        time.sleep(s)
+
+
+class Box:
+    """The state machine. One instance, one Wi-Fi device, one turn of the wheel per tick().
+
+    ★★ CHEAP ON PURPOSE. Every nmcli call is a process start plus a D-Bus round trip — tens of
+       milliseconds of an A53 — and this runs for ever beside a radio. So the connection list and
+       each connection's fields are CACHED, refreshed when we change them ourselves and once a minute
+       otherwise; a quiet tick is one nmcli call (the device's state), plus `iw` on a hotspot."""
+
+    def __init__(self, sh, conf, state_path=None):
+        self.sh = sh
+        self.conf = conf
+        self.state_path = state_path or os.path.join(STATE_DIR, "state.json")
+        self.dev = None
+        self.mode = "off"
+        self.cur, self.st = "", 0     # the active connection and NM's device state, this tick
+        self.scan_cache = []          # [{"ssid","signal","secure"}] — the setup page's list
+        self.scan_at = 0
+        self.last_error = ""
+        self.boot_at = sh.now()
+        self.next_rescan = 0
+        self.next_upgrade = 0
+        self.next_try = 0
+        self.connecting_since = None
+        self.last_client = sh.now()
+        self.clients = 0
+        self.captive_port = None
+        self.host_synced = False
+        self.since = int(time.time())
+        self.failed_until = {}        # name -> monotonic time: an upgrade that failed is not retried for a while
+        self._names, self._names_at, self._fields = [], -1e9, {}
+        self._ip = ("", "")
+        self.internet = "unknown"     # NetworkManager's connectivity verdict, from NetWatch (events)
+
+    def ci(self, k):
+        try:
+            return int(self.conf.get(k, DEFAULTS[k]))
+        except ValueError:
+            return int(DEFAULTS[k])
+
+    # ── the cache ──
+    def invalidate(self):
+        self._names_at, self._fields = -1e9, {}
+
+    def nm_change(self, args, secret=False, timeout=40):
+        """Every add/modify/delete goes through here, so the cache can never be stale after one."""
+        rc, out = self.sh.run(args, timeout=timeout, secret=secret)
+        self.invalidate()
+        return rc
+
+    # ── NetworkManager reads ──
+    def wifi_device(self):
+        rc, out = self.sh.run(["nmcli", "-t", "-f", "DEVICE,TYPE", "device"])
+        for line in out.splitlines():
+            f = terse_split(line)
+            if len(f) >= 2 and f[1] == "wifi":
+                return f[0]
+        return None
+
+    def connection_names(self):
+        if self.sh.now() - self._names_at > 60:
+            rc, out = self.sh.run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"])
+            names = []
+            for line in out.splitlines():
+                f = terse_split(line)
+                if len(f) >= 2:
+                    names.append((f[0], f[1]))
+            if rc == 0:
+                if names != self._names:
+                    self._fields = {}
+                self._names, self._names_at = names, self.sh.now()
+        return self._names
+
+    def get(self, name, field, secrets=False):
+        if not secrets and (name, field) in self._fields:
+            return self._fields[(name, field)]
+        args = ["nmcli", "-g", field] + (["-s"] if secrets else []) + ["connection", "show", name]
+        rc, out = self.sh.run(args, secret=secrets)
+        v = out.rstrip("\n") if rc == 0 else ""
+        if "\\" in v:
+            v = "".join(terse_split(v))
+        if not secrets and rc == 0:
+            self._fields[(name, field)] = v
+        return v
+
+    def saved(self):
+        """Ours, IN ORDER: [(rank, name, ssid, hidden)]. Then any other client Wi-Fi connection
+        (e.g. one Raspberry Pi Imager wrote) as rank 9 — tried after ours, never before."""
+        names = self.connection_names()
+        ours, others = [], []
+        for n, t in names:
+            if t != "802-11-wireless" or n in (AP_NAME, SETUP_NAME):
+                continue
+            if n.startswith(NET_PREFIX) and n[len(NET_PREFIX):].isdigit():
+                rank = int(n[len(NET_PREFIX):])
+                if 1 <= rank <= 3:
+                    ours.append((rank, n, self.get(n, "802-11-wireless.ssid"),
+                                 self.get(n, "802-11-wireless.hidden") == "yes"))
+                continue
+            if self.get(n, "802-11-wireless.mode") in ("ap", "adhoc", "mesh"):
+                continue
+            others.append((9, n, self.get(n, "802-11-wireless.ssid"), False))
+        ours.sort()
+        return ours + others
+
+    def have(self, name):
+        return any(n == name for n, _ in self.connection_names())
+
+    def read_active(self):
+        """Sets self.cur / self.st from NM: the active connection's name and the device state
+        (100 = connected, 40-90 = on its way, 30 = disconnected, 20 = unavailable)."""
+        rc, out = self.sh.run(["nmcli", "-t", "-f", "GENERAL.STATE,GENERAL.CONNECTION", "device", "show", self.dev])
+        st, conn = 0, ""
+        for line in out.splitlines():
+            f = terse_split(line)
+            if len(f) >= 2 and f[0] == "GENERAL.STATE":
+                m = re.match(r"(\d+)", f[1]); st = int(m.group(1)) if m else 0
+            elif len(f) >= 2 and f[0] == "GENERAL.CONNECTION":
+                conn = f[1] if f[1] != "--" else ""
+        self.cur, self.st = conn, st
+        return conn, st
+
+    def ip4(self):
+        # ★ Asked only when the connection changes — it is shown, not decided on.
+        if self._ip[0] == self.cur:
+            return self._ip[1]
+        rc, out = self.sh.run(["nmcli", "-g", "IP4.ADDRESS", "device", "show", self.dev])
+        first = out.strip().split("|")[0].strip() if out.strip() else ""
+        ip = first.split("/")[0]
+        if ip:
+            self._ip = (self.cur, ip)
+        return ip
+
+    def scan(self):
+        """A full scan (station mode only — NM refuses one while the radio is a hotspot).
+        Returns the set of SSIDs seen, or None if the scan failed."""
+        rc, out = self.sh.run(["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list",
+                               "ifname", self.dev, "--rescan", "yes"], timeout=30)
+        if rc != 0:
+            return None
+        best = {}
+        for line in out.splitlines():
+            f = terse_split(line)
+            if len(f) < 3 or not f[0]:
+                continue
+            try:
+                sig = int(f[1])
+            except ValueError:
+                sig = 0
+            if f[0] not in best or sig > best[f[0]]["signal"]:
+                best[f[0]] = {"ssid": f[0], "signal": sig, "secure": f[2] not in ("", "--")}
+        self.scan_cache = sorted(best.values(), key=lambda x: -x["signal"])[:40]
+        self.scan_at = int(time.time())
+        return set(best)
+
+    def scan_while_ap(self):
+        """★ A scan WITHOUT taking the hotspot down, where the driver allows it (iw's ap-force).
+        brcmfmac support varies by firmware — None means "cannot", and the caller then falls back to
+        a short, disruptive scan, only when nobody is connected. To be measured on the Pi 3 A+."""
+        rc, out = self.sh.run(["iw", "dev", self.dev, "scan", "ap-force"], timeout=20)
+        if rc != 0:
+            return None
+        seen = set()
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("SSID: "):
+                s = iw_unescape(line[6:])
+                if s:
+                    seen.add(s)
+        return seen
+
+    def station_count(self):
+        rc, out = self.sh.run(["iw", "dev", self.dev, "station", "dump"], timeout=10)
+        return sum(1 for l in out.splitlines() if l.startswith("Station "))
+
+    # ── NetworkManager writes ──
+    def up(self, name, wait=None):
+        wait = wait or self.ci("JOIN_WAIT_SEC")
+        rc, _ = self.sh.run(["nmcli", "--wait", str(wait), "connection", "up", name, "ifname", self.dev],
+                            timeout=wait + 15)
+        self.read_active()
+        return rc == 0
+
+    def down(self, name):
+        self.sh.run(["nmcli", "connection", "down", name], timeout=20)
+
+    def delete(self, name):
+        self.nm_change(["nmcli", "connection", "delete", name], timeout=20)
+
+    def ap_args(self):
+        return ["802-11-wireless.mode", "ap", "802-11-wireless.band", "bg",
+                "802-11-wireless.channel", str(self.ci("AP_CHANNEL")),
+                "802-11-wireless.powersave", "2",
+                "ipv4.method", "shared", "ipv4.addresses", AP_ADDR + "/24",
+                "ipv6.method", "disabled", "connection.autoconnect", "no"]
+
+    def ensure_setup_ap(self):
+        ssid = self.conf.get("SETUP_SSID", DEFAULTS["SETUP_SSID"])
+        if self.have(SETUP_NAME) and self.get(SETUP_NAME, "802-11-wireless.ssid") == ssid:
+            return
+        if self.have(SETUP_NAME):
+            self.delete(SETUP_NAME)
+        # ★★ OPEN, deliberately and only here — the first-boot door. It is never raised once a
+        #    secured fallback hotspot exists (see ap_name()).
+        self.nm_change(["nmcli", "connection", "add", "type", "wifi", "ifname", self.dev,
+                        "con-name", SETUP_NAME, "ssid", ssid] + self.ap_args())
+
+    def ap_name(self):
+        """★★★ THE OPEN HOTSPOT EXISTS ONLY UNTIL A SECURED ONE DOES."""
+        return AP_NAME if self.have(AP_NAME) else SETUP_NAME
+
+    # ── captive portal plumbing (only while a hotspot is up) ──
+    def front_door_port(self):
+        data = read_plain(PORT_FILE, 16) or ""
+        digits = re.sub(r"[^0-9]", "", data)[:5]
+        p = int(digits) if digits else 0
+        return p if 0 < p < 65536 else 48000
+
+    def captive_on(self):
+        port = self.front_door_port()
+        if self.captive_port == port:
+            return
+        # ★★ OUR OWN TABLE — NM's shared mode has its own NAT rules and this never touches them.
+        #    The "add, delete, add" opening makes the load idempotent on any nft version.
+        rules = ("table ip %s\ndelete table ip %s\ntable ip %s {\n"
+                 "  chain pre {\n    type nat hook prerouting priority dstnat; policy accept;\n"
+                 "    iifname \"%s\" tcp dport 80 redirect to :%d\n  }\n}\n") % (
+                     NFT_TABLE, NFT_TABLE, NFT_TABLE, self.dev, port)
+        if self.sh.run_input(["nft", "-f", "-"], rules) == 0:
+            self.captive_port = port
+        else:
+            log("could not load the :80 redirect (is nftables installed?) — the phone's captive "
+                "sheet will not open by itself; http://%s:%d/ still works" % (AP_ADDR, port))
+
+    def sync_hostname(self, configured):
+        """The setup name while unconfigured, the run name after. Cheap when nothing changes."""
+        want = RUN_HOST if configured else SETUP_HOST
+        try:
+            with open(HOSTNAME_FILE) as f:
+                have = f.read().strip()
+        except OSError:
+            have = ""
+        if have == want and self.host_synced:
+            return
+        self.host_synced = True
+        if have == want:
+            return
+        if self.sh.run(["hostnamectl", "set-hostname", want], timeout=15) != 0:
+            log("could not set the hostname to %s" % want)
+            return
+        try:
+            with open(HOSTS_FILE) as f:
+                hosts = f.read()
+            hosts = re.sub(r"(?m)^127\.0\.1\.1\s.*$", "127.0.1.1\t" + want, hosts)
+            if "127.0.1.1" not in hosts:
+                hosts += "127.0.1.1\t%s\n" % want
+            write_atomic(HOSTS_FILE, hosts)
+        except OSError:
+            pass
+        # ★ avahi does not follow a hostname change by itself — a restart republishes at once.
+        self.sh.run(["systemctl", "try-restart", "avahi-daemon.service"], timeout=20)
+        log("answering as %s.local%s" % (want, "" if configured else " until setup is finished"))
+
+    def captive_off(self):
+        # ★★★ THE :80 REDIRECT STAYS, ON EVERY NETWORK (Stuart, 2026-10-10: the owner must reach the
+        #     box straight away by its .local name "without having to work out the IP address"). It
+        #     was removed on leaving the hotspot, which made the address http://vibepocket.local:48000/
+        #     on the home network — a port nobody remembers. Kept, it is http://vibepocket.local/
+        #     everywhere. Harmless as a client: nothing else on this box listens on :80, and the
+        #     captive DNS answers (the part that hijacks lookups) belong to NM's hotspot only.
+        self.captive_on()
+
+    # ── transitions ──
+    def raise_hotspot(self, why):
+        name = self.ap_name()
+        if name == SETUP_NAME:
+            self.ensure_setup_ap()
+        log("raising the %s hotspot — %s" % ("OPEN setup" if name == SETUP_NAME else "secured", why))
+        now = self.sh.now()
+        if self.up(name, wait=20):
+            self.mode = "setup-ap" if name == SETUP_NAME else "fallback-ap"
+            self.since = int(time.time())
+            self.last_client = now
+            self.next_rescan = now + self.ci("RESCAN_SEC")
+            self.captive_on()
+            return True
+        # ★ Do not hammer a radio that will not start a hotspot: try again in half a minute.
+        self.last_error = "the hotspot would not start"
+        self.mode = "off"
+        self.next_try = now + 30
+        return False
+
+    def try_networks(self, visible=None, below_rank=None):
+        """Join the saved networks STRICTLY IN ORDER — 1, then 2, then 3, then any other. With
+        `below_rank`, only those ranked above the current one (an upgrade). True once joined."""
+        saved = self.saved()
+        if visible is None:
+            visible = self.scan() or set()
+        now = self.sh.now()
+        for rank, name, ssid, hidden in saved:
+            if below_rank is not None and rank >= below_rank:
+                break
+            if self.cur == name and self.st >= 100:
+                return True                     # already on the best one there is
+            # ★ A phone hotspot may not be ADVERTISING (the phone is busy) — the owner ticks
+            #   "not visible" and NM probes for it by name; everything else must be SEEN first, or
+            #   each absent network costs JOIN_WAIT_SEC of nothing.
+            if ssid not in visible and not hidden:
+                continue
+            if below_rank is not None and self.failed_until.get(name, 0) > now:
+                continue
+            log("joining network %s (%s)" % (rank if rank < 9 else "other", ssid))
+            if self.up(name):
+                self.captive_off()
+                self.mode = "client"
+                self.since = int(time.time())
+                self.last_error = ""
+                self.next_upgrade = self.sh.now() + self.ci("UPGRADE_SEC")
+                return True
+            # ★★ A NETWORK THAT IS THERE BUT WILL NOT TAKE US (wrong password, MAC filter) must not
+            #    cost an outage every UPGRADE_SEC for ever: it rests for 15 minutes.
+            self.failed_until[name] = self.sh.now() + 900
+            self.last_error = "could not join \"%s\" — check its password" % ssid
+        return False
+
+    def leave_hotspot_and_try(self, why):
+        log("looking for a saved network — " + why)
+        if self.cur in (AP_NAME, SETUP_NAME):
+            self.down(self.cur)
+            self.captive_off()
+            self.sh.sleep(2)              # ★ let the driver come back to station mode before scanning
+            self.read_active()
+        if self.try_networks():
+            return True
+        if not self.last_error:
+            self.last_error = "none of the saved networks is in range"
+        return self.raise_hotspot("no saved network in range")
+
+    # ── the request inbox ──
+    def apply(self, req):
+        """Write the owner's networks and hotspot into NetworkManager, in order."""
+        # Passwords we were told to KEEP: read back from NM before anything is deleted.
+        old = {}
+        for rank, name, ssid, hidden in self.saved():
+            if rank <= 3:
+                old[ssid] = self.get(name, "802-11-wireless-security.psk", secrets=True)
+        # ★★★ A POWER CUT MID-SAVE MUST LEAVE A WAY IN (Stuart, 2026-10-10). This used to delete every
+        #     saved network and then add the new list — a cut between the two left NONE. Now each rank's
+        #     connection is MODIFIED IN PLACE (NetworkManager rewrites that one keyfile atomically), new
+        #     ranks are added, and only ranks beyond the new list are deleted, last. At any instant
+        #     every network is the old one or the new one; the box is never left with nothing to join.
+        existing = {n for n, t in self.connection_names() if n.startswith(NET_PREFIX)}
+        for rank, net in enumerate(req["networks"], 1):
+            psk = old.get(net["ssid"], "") if net["keep"] else net["psk"]
+            name = NET_PREFIX + str(rank)
+            modify = name in existing and bool(psk) == bool(self.get(name, "802-11-wireless-security.key-mgmt"))
+            head = (["nmcli", "connection", "modify", name, "802-11-wireless.ssid", net["ssid"]] if modify else
+                    ["nmcli", "connection", "add", "type", "wifi", "ifname", self.dev,
+                     "con-name", name, "ssid", net["ssid"]])
+            if not modify and name in existing:
+                self.delete(name)               # open ⇄ secured: the security section changes shape
+            args = head + [
+                    "connection.autoconnect", "yes",
+                    # ★★★ THE ORDER, AS NM SEES IT: 30 / 20 / 10. NM picks the highest-priority
+                    #     VISIBLE connection when it autoconnects; this service enforces the rest.
+                    "connection.autoconnect-priority", str(PRIORITY[rank]),
+                    "802-11-wireless.powersave", "2",
+                    "802-11-wireless.hidden", "yes" if net["hidden"] else "no"]
+            if psk:
+                args += ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", psk]
+            if self.nm_change(args, secret=True) != 0:
+                self.last_error = "network %d could not be saved" % rank
+        for n in sorted(existing):
+            r = n[len(NET_PREFIX):]
+            if r.isdigit() and int(r) > len(req["networks"]):
+                self.delete(n)
+        self.failed_until = {}
+        ap = req["ap"]
+        if ap["keep"] and self.have(AP_NAME):
+            self.nm_change(["nmcli", "connection", "modify", AP_NAME, "802-11-wireless.ssid", ap["ssid"]])
+        elif self.have(AP_NAME):
+            # ★ In place, for the same reason as the networks: never a moment with no hotspot saved.
+            self.nm_change(["nmcli", "connection", "modify", AP_NAME, "802-11-wireless.ssid", ap["ssid"],
+                            "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", ap["psk"]], secret=True)
+        else:
+            # ★★★ WPA2 (RSN/CCMP) only, PMF off: brcmfmac's AP mode and several phones do not
+            #     agree on PMF, and a hotspot a phone cannot join is no fallback at all.
+            self.nm_change(["nmcli", "connection", "add", "type", "wifi", "ifname", self.dev,
+                            "con-name", AP_NAME, "ssid", ap["ssid"]] + self.ap_args() +
+                           ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.proto", "rsn",
+                            "wifi-sec.pairwise", "ccmp", "wifi-sec.group", "ccmp",
+                            "wifi-sec.pmf", "disable", "wifi-sec.psk", ap["psk"]], secret=True)
+        if req["country"] and req["country"] != self.conf.get("COUNTRY"):
+            self.set_country(req["country"])
+        log("saved %d network(s) and the hotspot \"%s\"" % (len(req["networks"]), ap["ssid"]))
+        # ★ Deleting the network we were joined to drops it — so as a client, rejoin in order now.
+        was = self.mode
+        self.read_active()
+        if was == "client" and not self.cur:
+            self.leave_hotspot_and_try("the saved networks changed")
+
+    def set_country(self, cc):
+        if os.path.exists("/usr/bin/raspi-config"):
+            self.sh.run(["raspi-config", "nonint", "do_wifi_country", cc], timeout=60)
+        else:
+            self.sh.run(["iw", "reg", "set", cc])
+        self.conf["COUNTRY"] = cc
+        try:
+            write_conf_value("COUNTRY", cc)
+        except OSError:
+            pass
+
+    def reset_wifi(self):
+        for n, t in list(self.connection_names()):
+            if n.startswith(NET_PREFIX) or n == AP_NAME:
+                self.delete(n)
+        log("Wi-Fi reset: every saved network and the fallback hotspot forgotten")
+
+    # ── one turn of the wheel ──
+    def tick(self):
+        now = self.sh.now()
+        saved = self.saved()
+        self.read_active()
+        cur, st = self.cur, self.st
+        if cur in (AP_NAME, SETUP_NAME):
+            self.mode = "setup-ap" if cur == SETUP_NAME else "fallback-ap"
+            self.captive_on()
+            self.clients = self.station_count()
+            if self.clients:
+                self.last_client = now
+            idle = now - self.last_client >= self.ci("IDLE_SEC")
+            # ★ The OPEN setup hotspot gives way as soon as setup has saved a secured one and nobody
+            #   is on it — networks first, the secured hotspot if none is in range.
+            if cur == SETUP_NAME and self.have(AP_NAME) and idle:
+                self.leave_hotspot_and_try("setup is finished; the open hotspot closes")
+                return
+            # ★★ A HOTSPOT WITH SOMEONE ON IT IS NEVER PULLED FROM UNDER THEM. Look for a saved
+            #    network every RESCAN_SEC, and leave only once nobody has been on it for IDLE_SEC.
+            if saved and now >= self.next_rescan:
+                self.next_rescan = now + self.ci("RESCAN_SEC")
+                seen = self.scan_while_ap()
+                names = {s for _, _, s, _ in saved}
+                maybe = seen is None or bool(seen & names) or any(h for _, _, _, h in saved)
+                if maybe and idle:
+                    self.leave_hotspot_and_try("hotspot idle for %d s" % self.ci("IDLE_SEC"))
+            return
+        self.clients = 0
+        if now < self.next_try:
+            return
+        if not saved:
+            # First boot (or after a reset): scan while the radio is still a station, then open the door.
+            if not self.scan_cache:
+                self.scan()
+            self.raise_hotspot("no Wi-Fi network saved yet")
+            return
+        if cur and st >= 100:
+            self.connecting_since = None
+            if self.mode != "client":
+                self.mode, self.since = "client", int(time.time())
+                self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
+            rank = next((r for r, n, s, h in saved if n == cur), 10)
+            if rank > 1 and now >= self.next_upgrade:
+                self.next_upgrade = now + self.ci("UPGRADE_SEC")
+                vis = self.scan() or set()
+                before = cur
+                if self.try_networks(vis, below_rank=rank) and self.cur != before:
+                    log("moved up to a higher-priority network")
+                elif not self.cur:
+                    # ★ The upgrade attempt dropped us and failed — straight back to where we were.
+                    self.up(before)
+            return
+        # On its way somewhere (NM's own autoconnect), or nowhere.
+        if cur or now - self.boot_at < self.ci("BOOT_GRACE_SEC"):
+            if self.connecting_since is None:
+                self.connecting_since = now
+            self.mode = "connecting"
+            if now - self.connecting_since < max(60, self.ci("BOOT_GRACE_SEC")):
+                return
+        self.connecting_since = None
+        self.leave_hotspot_and_try("not connected to anything")
+
+    def write_state(self):
+        saved = self.saved() if self.dev else []
+        ap_set = self.have(AP_NAME) if self.dev else False
+        doc = {
+            "v": 1, "mode": self.mode, "since": self.since,
+            "connection": self.cur,
+            "ssid": self.get(self.cur, "802-11-wireless.ssid") if self.cur else "",
+            "ip": self.ip4() if self.cur else "",
+            "saved": [{"rank": r, "ssid": s, "hidden": h} for r, n, s, h in saved if r <= 3],
+            "others": [{"name": n, "ssid": s} for r, n, s, h in saved if r > 3],
+            "ap": {"set": ap_set, "ssid": self.get(AP_NAME, "802-11-wireless.ssid") if ap_set else ""},
+            "setupSsid": self.conf.get("SETUP_SSID", DEFAULTS["SETUP_SSID"]),
+            "country": self.conf.get("COUNTRY", DEFAULTS["COUNTRY"]),
+            "scan": self.scan_cache, "scanAt": self.scan_at, "clients": self.clients,
+            "rescanSec": self.ci("RESCAN_SEC"), "idleSec": self.ci("IDLE_SEC"),
+            "apAddress": AP_ADDR, "lastError": self.last_error,
+            # ★★ "full" = NM proved real internet. The server starts the tunnel ONLY on "full" — never
+            #    on a hotspot, which has no upstream by definition.
+            "internet": self.internet if self.mode == "client" else "none",
+        }
+        write_state_file(self.state_path, doc)
+
+
+class NetWatch:
+    """★★★ NETWORKMANAGER'S CONNECTIVITY, BY EVENT — not by polling the internet ourselves.
+    NM already checks (its [connectivity] section — the image sets the URI) whenever a connection
+    comes up and every few minutes after; `nmcli monitor` prints "Connectivity is now 'full'" each
+    time that verdict changes. One long-lived nmcli, read without blocking; the server's tunnel
+    follows it (vibedir::setInternet), so a box on its own hotspot never spawns cloudflared."""
+    def __init__(self, sh):
+        self.sh = sh
+        self.proc = None
+        self.buf = b""
+        self.state = "unknown"
+        self.retry_at = 0
+
+    def query(self):
+        rc, out = self.sh.run(["nmcli", "networking", "connectivity"], timeout=15)
+        v = out.strip().lower()
+        if rc == 0 and v:
+            self.state = v
+
+    def start(self):
+        try:
+            self.proc = subprocess.Popen(["nmcli", "monitor"], stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+            os.set_blocking(self.proc.stdout.fileno(), False)
+        except OSError:
+            self.proc = None
+        self.query()
+
+    def poll(self):
+        if self.proc is None or self.proc.poll() is not None:
+            # ★ The monitor died (NM restarted): start it again, at most every 30 s.
+            if self.sh.now() >= self.retry_at:
+                self.retry_at = self.sh.now() + 30
+                self.start()
+            return self.state
+        try:
+            chunk = self.proc.stdout.read()
+        except (BlockingIOError, OSError):
+            chunk = None
+        if chunk:
+            self.buf += chunk
+            *lines, self.buf = self.buf.split(b"\n")
+            for line in lines:
+                m = re.search(rb"[Cc]onnectivity is now '([a-z-]+)'", line)
+                if m:
+                    new = m.group(1).decode()
+                    if new != self.state:
+                        log("internet: %s" % new)
+                    self.state = new
+        return self.state
+
+
+def server_configured(path=SERVER_CONF):
+    """True once "Save and start" has configured the server. Unreadable = not yet (the setup name)."""
+    try:
+        with open(path, "rb") as f:
+            return json.loads(f.read(256 * 1024).decode("utf-8")).get("configured") is True
+    except (OSError, ValueError, UnicodeDecodeError, AttributeError):
+        return False
+
+
+def read_plain(path, limit):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        return os.read(fd, limit).decode("ascii", "replace")
+    finally:
+        os.close(fd)
+
+
+def write_state_file(path, doc):
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o755, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(doc, f)
+        f.write("\n")
+    # ★ 0640 root:vibeserver — the SSIDs are the owner's business, not every local user's.
+    try:
+        import grp
+        os.chown(tmp, 0, grp.getgrnam("vibeserver").gr_gid)
+        os.chmod(tmp, 0o640)
+    except (KeyError, PermissionError, ImportError):
+        os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def load_conf(paths=(CONF, STATE_CONF)):
+    conf = dict(DEFAULTS)
+    for path in paths:
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip().strip('"')
+        except OSError:
+            pass
+    return conf
+
+
+def write_atomic(path, text, mode=0o644):
+    """★★★ A POWER CUT LEAVES THE OLD FILE OR THE NEW ONE, NEVER HALF OF EITHER: temp file, fsync,
+    rename, fsync the directory (the rename itself is only durable once its directory is)."""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+    try:
+        os.write(fd, text.encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+    dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def write_conf_value(key, value, path=STATE_CONF):
+    lines, found = [], False
+    try:
+        with open(path) as f:
+            for line in f:
+                if line.split("=", 1)[0].strip() == key:
+                    lines.append("%s=%s\n" % (key, value)); found = True
+                else:
+                    lines.append(line)
+    except OSError:
+        pass
+    if not found:
+        lines.append("%s=%s\n" % (key, value))
+    write_atomic(path, "".join(lines))
+
+
+def vibeserver_uid():
+    try:
+        import pwd
+        return pwd.getpwnam("vibeserver").pw_uid
+    except (KeyError, ImportError):
+        return None
+
+
+def setup_once(box):
+    sh = box.sh
+    # ★ The Pi's Wi-Fi is soft-blocked until a country is set; the image sets one, this makes sure.
+    sh.run(["rfkill", "unblock", "wifi"], timeout=10)
+    sh.run(["nmcli", "radio", "wifi", "on"], timeout=10)
+    # ★★ THE DNS HIJACK — every name resolves to the box, but ONLY on NM's shared (hotspot)
+    #    connections: this directory is read by the dnsmasq NM starts for a hotspot and by nothing
+    #    else, so the box's own lookups as a client are untouched.
+    try:
+        os.makedirs(os.path.dirname(DNSMASQ_CONF), exist_ok=True)
+        want = "# Written by vibeserver-pocket: on the box's own hotspot, every name is this box.\n" \
+               "address=/#/%s\n" % AP_ADDR
+        cur = None
+        try:
+            with open(DNSMASQ_CONF) as f:
+                cur = f.read()
+        except OSError:
+            pass
+        if cur != want:
+            with open(DNSMASQ_CONF, "w") as f:
+                f.write(want)
+    except OSError as e:
+        log("could not write the captive DNS rule (%s)" % e.strerror)
+    for rf in RESET_FILES:
+        if os.path.exists(rf):
+            box.reset_wifi()
+            try:
+                os.unlink(rf)
+            except OSError:
+                pass
+
+
+def main_loop():
+    if not os.path.exists(MARKER):
+        log("not a pocket image (%s missing) — nothing to do" % MARKER)
+        return 0
+    sh = Shell()
+    box = Box(sh, load_conf())
+    for _ in range(60):                       # NM can take a while to list the radio at boot
+        box.dev = box.wifi_device()
+        if box.dev:
+            break
+        sh.sleep(2)
+    if not box.dev:
+        log("no Wi-Fi device found — nothing to manage")
+        box.mode = "off"
+        write_state_file(box.state_path, {"v": 1, "mode": "off", "lastError": "no Wi-Fi device"})
+        return 1
+    log("managing %s" % box.dev)
+    setup_once(box)
+    uid = vibeserver_uid()
+    net = NetWatch(sh)
+    net.start()
+    was_mode = None
+    last_tick = 0
+    while True:
+        data = read_request_file(INBOX, uid)
+        if data is not None:
+            try:
+                req, err = validate_request(json.loads(data.decode("utf-8")))
+            except (ValueError, UnicodeDecodeError):
+                req, err = None, "not valid JSON"
+            del data
+            if req is None:
+                box.last_error = "settings refused: " + err
+                log(box.last_error)
+            else:
+                box.apply(req)
+                if req["switch"]:
+                    box.leave_hotspot_and_try("the owner asked to switch now")
+            last_tick = 0
+        kick = read_request_file(KICK, uid, limit=32)
+        if kick is not None:
+            word = re.sub(r"[^a-z-]", "", kick.decode("ascii", "replace"))
+            cur, _ = box.read_active()
+            if word == "switch":
+                box.leave_hotspot_and_try("the owner asked to switch now")
+            elif word == "scan":
+                if cur in (AP_NAME, SETUP_NAME):
+                    seen = box.scan_while_ap()
+                    if seen is not None:
+                        box.scan_cache = [{"ssid": s, "signal": 0, "secure": True} for s in sorted(seen)]
+                        box.scan_at = int(time.time())
+                else:
+                    box.scan()
+            elif word == "scan-force" and cur in (AP_NAME, SETUP_NAME):
+                # ★ The owner asked, knowing the hotspot drops for a few seconds (the page says so).
+                box.down(cur); box.captive_off(); sh.sleep(2)
+                box.scan()
+                box.raise_hotspot("back after a scan the owner asked for")
+            last_tick = 0
+        box.internet = net.poll()
+        if sh.now() - last_tick >= 5:
+            last_tick = sh.now()
+            if box.mode != was_mode:
+                # ★ A new connection: ask once now — the change event may have come before we looked.
+                was_mode = box.mode
+                if box.mode == "client":
+                    net.query()
+                    box.internet = net.state
+            box.sync_hostname(server_configured())
+            try:
+                box.tick()
+            except Exception as e:            # ★ never die on one bad turn; systemd would only restart us
+                box.last_error = "internal: %s" % type(e).__name__
+                log(box.last_error)
+            box.write_state()
+        sh.sleep(1)
+
+
+if __name__ == "__main__":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
+    if cmd == "run":
+        sys.exit(main_loop() or 0)
+    if cmd == "status":
+        try:
+            with open(os.path.join(STATE_DIR, "state.json")) as f:
+                print(f.read(), end="")
+        except OSError:
+            print("no state yet")
+        sys.exit(0)
+    if cmd == "reset-wifi":
+        b = Box(Shell(), load_conf())
+        b.dev = b.wifi_device()
+        b.reset_wifi()
+        sys.exit(0)
+    print("usage: vibeserver-pocket [run|status|reset-wifi]", file=sys.stderr)
+    sys.exit(2)
