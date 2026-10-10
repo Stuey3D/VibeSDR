@@ -53,6 +53,12 @@ else
   apt-get install -y --no-install-recommends vibeserver
 fi
 [ -x /usr/lib/vibeserver/vibeserver-pocket ] || { say "!! this vibeserver package has no pocket support (vibeserver-pocket missing) — build it from the pocket branch: image/pocket/build-deb.sh"; exit 1; }
+# ★★★ ffmpeg — HOW DAB+ IS DECODED ON LINUX (Stuart, 2026-10-10: "does it contain FFMPEG ready for DAB+?" — it did not).
+#     The package only RECOMMENDS it, and everything here installs --no-install-recommends, so the first images had no
+#     DAB+ audio at all with an RTL-SDR plugged in. Named here explicitly, still without ITS recommends (no X, no extras).
+say "installing ffmpeg (DAB+ audio)"
+apt-get install -y --no-install-recommends ffmpeg
+command -v ffmpeg >/dev/null || { say "!! ffmpeg did not install — DAB+ would have no audio"; exit 1; }
 
 # ── 4. The pocket marker + defaults (root's directory: the daemon cannot create the marker) ──────
 install -d -o root -g root -m 0755 /etc/vibeserver-pocket
