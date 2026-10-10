@@ -3249,6 +3249,29 @@ int main(int argc, char** argv) {
          *  redirected here. Written into OUR directory (the only place we can write); the root side
          *  reads digits only. Pocket boxes only. */
         if (vibepocket::enabled()) {
+            /* ★★★ THE CAPTIVE STATE IS LIVE FROM THE MOMENT THE DOOR OPENS (Stuart's v8 card, 2026-10-10: the
+             *  sheet opened on the SECOND join, never the first). It used to be read only by the main loop,
+             *  ~850 lines of start-up after the door began answering — and the root service raises the hotspot
+             *  as soon as this door accepts a connection. A phone joining in that gap got the 503 page instead
+             *  of the redirect, concluded there was nothing to sign in to, and never asked again. So a thread of
+             *  its own: one read NOW, before the port file tells the root side where we are, then every second.
+             *  Readers of the flags are atomics; setInternet is an atomic store. */
+            auto pocketPoll = [] {
+                const auto ps = vibepocket::readState();
+                const bool ap = vibepocket::apMode(ps);
+                vibepocket::setApActive(ap);
+                LocalSdrShim::setCaptiveActive(ap);
+                // ★★ The tunnel follows NetworkManager's own verdict ("full" connectivity), as the root
+                //    service reports it — never on a hotspot, and paused the moment the internet goes.
+                vibedir::setInternet(!ap && ps.internet);
+            };
+            pocketPoll();
+            std::thread([pocketPoll] {
+                while (!g_stop) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    pocketPoll();
+                }
+            }).detach();
             std::string perr;
             if (!vibepocket::writePrivate(vibepocket::paths().portFile, std::to_string(port) + "\n", perr))
                 std::fprintf(stderr, "VibeServer: pocket — %s\n", perr.c_str());
@@ -4065,22 +4088,7 @@ int main(int argc, char** argv) {
         LocalSdrShim::instance().saveConnLogIfDue();
         // ★ The heartbeat that makes a crashed radio give its slot back — see refreshOccupancy.
         LocalSdrShim::instance().refreshOccupancy();
-        // ★★ THE POCKET HOTSPOT'S STATE, every few seconds, from the root service's file. Hotspot up
-        //    ⇒ captive portal on; anything else ⇒ off. Front door only, pocket image only.
-        //  ★★ EVERY SECOND (was every 3): a phone checks within a second or two of joining, once. The root
-        //     service now announces the hotspot before it exists and waits for this front door, so a 1 s read
-        //     of a ~1 KB file in /run is all that stands between a join and the captive sheet (2026-10-10).
-        if (willBeFrontDoor && vibepocket::enabled()) {
-            {
-                const auto ps = vibepocket::readState();
-                const bool ap = vibepocket::apMode(ps);
-                vibepocket::setApActive(ap);
-                LocalSdrShim::setCaptiveActive(ap);
-                // ★★ The tunnel follows NetworkManager's own verdict ("full" connectivity), as the root
-                //    service reports it — never on a hotspot, and paused the moment the internet goes.
-                vibedir::setInternet(!ap && ps.internet);
-            }
-        }
+        // ★ The pocket hotspot's state is read by its own thread, started with the front door (see there).
 
         // ── ★★★ SCHEDULED UPDATES ────────────────────────────────────────────────────────
         // ★★ Two independent schedules. They ask the SAME helper the admin page's buttons ask,
