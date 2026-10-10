@@ -87,7 +87,8 @@ try {
     return r.result?.result?.value;
   };
   const until = async (expr, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await js(expr)) return true; await sleep(150); } return false; };
-  const visible = id => `(() => { const e = document.getElementById(${JSON.stringify(id)}); return !!e && e.offsetParent !== null; })()`;
+  // ★ getClientRects, not offsetParent: the save bar is position:fixed, whose offsetParent is ALWAYS null.
+  const visible = id => `(() => { const e = document.getElementById(${JSON.stringify(id)}); return !!e && e.getClientRects().length > 0; })()`;
   await cdp("Runtime.enable");
   await cdp("Page.enable");
   await cdp("Page.navigate", { url: `${BASE}/` });
@@ -129,33 +130,46 @@ try {
   ok(await js(`document.querySelectorAll('#wifiNets .wifiRow')[0].querySelector('[data-f="ssid"]').value === "Stuart's iPhone"`),
      "the ↑ arrow reorders (the iPhone is now 1)");
   await js(`document.querySelectorAll('#wifiNets .wifiRow')[1].querySelector('[data-mv="-1"]').click(); 1`);
+  // ★★★ WI-FI FIRST (Stuart, 2026-10-10): on the open setup hotspot the page is the Wi-Fi card and
+  //     nothing else — no radios, no "Save and start" — and Save is the last step.
+  ok(await js(`document.body.classList.contains("wifiFirst")`), "on the setup hotspot the page is Wi-Fi first");
+  ok(!(await js(visible("bar"))) && !(await js(visible("radioPane"))) && !(await js(visible("shareCard"))),
+     "…no radios, no tunnel, no 'Save and start' until the box is on the owner's network");
+  ok(!(await js(visible("wifiFinish"))), "…and no separate 'what happens next' step");
+  ok(await js(`document.getElementById("wifiSave").textContent === "Save Wi-Fi and join it"`), "Save says what it does: 'Save Wi-Fi and join it'");
   await js(`document.getElementById("apPsk").value = "pocketpass"; document.getElementById("wifiSave").click(); 1`);
-  ok(await until(`document.getElementById("wifiMsg").textContent.includes("Saved")`), "Save Wi-Fi is accepted");
+  ok(await until(visible("wifiJoining")), "Save → the 'Joining your Wi-Fi' screen, over the whole page");
+  const joining = await js(`document.getElementById("wifiJoining").innerText`);
+  ok(/Home/.test(joining) && /Stuart's iPhone/.test(joining) && /screenshot/i.test(joining), "…naming network 1, then 2, and saying to screenshot it");
+  ok(/VibeServerSetup\.local:48991/.test(joining), "…'enter VibeServerSetup.local:<port> to continue setting up this device'");
+  ok(/Pocket-SDR/.test(joining) && /hotspot you have set up/.test(joining), "…or, on the box's own hotspot only, reconnect to it and carry on");
+  for (let i = 0; i < 40 && !fs.existsSync(path.join(PD, "pocket-wifi.request")); i++) await sleep(150);
   const inbox = fs.readFileSync(path.join(PD, "pocket-wifi.request"), "utf8");
   const req = JSON.parse(inbox);
   ok(req.networks.map(n => n.ssid).join("|") === "Home|Stuart's iPhone", "the box received the networks IN ORDER: Home, then the iPhone");
   ok(req.networks[1].hidden === true && req.networks[1].psk === "phonepass", "the iPhone is marked not-visible, password intact");
   ok(req.ap.ssid === "Pocket-SDR" && req.ap.psk === "pocketpass", "the fallback hotspot and its password reached the box");
   ok((fs.statSync(path.join(PD, "pocket-wifi.request")).mode & 0o777) === 0o600, "…in a 0600 file");
+  ok(req.switch === true, "…with switch: the box saves AND joins from the one request");
   const log = fs.readFileSync(path.join(T, "server.log"), "utf8") + fs.readFileSync(path.join(T, "server.err"), "utf8");
   ok(!/homepass1|phonepass|pocketpass|pocket123/.test(log), "no password (Wi-Fi or admin) appears in the server's log");
 
-  // The root service applies it (played here) — the page reads back saved rows without passwords.
+  // The root service applies it (played here). Now OUT IN THE FIELD: no network in range, the box is on
+  // the owner's OWN secured hotspot — there the whole page is drawn, since it is the only way in.
   fs.unlinkSync(path.join(PD, "pocket-wifi.request"));
-  state({ ap: { set: true, ssid: "Pocket-SDR" }, saved: [{ rank: 1, ssid: "Home", hidden: false }, { rank: 2, ssid: "Stuart's iPhone", hidden: true }] });
-  await js(`wifiLoad().then(() => 1)`);
-  ok(await js(`document.querySelectorAll('#wifiNets .wifiRow [data-f="psk"]')[0].placeholder.includes("saved")`),
+  state({ mode: "fallback-ap", ap: { set: true, ssid: "Pocket-SDR" }, saved: [{ rank: 1, ssid: "Home", hidden: false }, { rank: 2, ssid: "Stuart's iPhone", hidden: true }] });
+  await cdp("Page.navigate", { url: `${BASE}/` });
+  ok(await until(visible("signinCard"), 10000), "back on the box: an admin password now exists, so it asks to sign in");
+  await js(`document.getElementById("pass").value = "pocket123"; document.getElementById("signinBtn").click(); 1`);
+  ok(await until(visible("setup"), 10000), "signed in with the password chosen at the start");
+  ok(await until(`!document.body.classList.contains("wifiFirst")`) && await until(visible("bar")),
+     "on the owner's own hotspot the whole page is there (radios, Save and start)");
+  ok(await until(`document.querySelectorAll('#wifiNets .wifiRow [data-f="psk"]').length > 0
+                  && document.querySelectorAll('#wifiNets .wifiRow [data-f="psk"]')[0].placeholder.includes("saved")`),
      "saved networks come back as 'saved — leave blank to keep it' (passwords never leave the box)");
-  ok(await until(visible("wifiFinish")), "on the setup hotspot, the Finish step is shown");
-  ok(await js(`document.getElementById("wifiFinishWhy").textContent.includes("Save and start")`),
-     "…but it waits for 'Save and start' first");
-  // ★ Never a dead button (Stuart's first Pi 3 A+ test stopped at a greyed-out one): pressed early it
-  //   answers by pointing at the missing step, and nothing switches.
+  ok(await until(visible("wifiFinish")), "on a hotspot, the 'put the box on your Wi-Fi' step is shown");
+  // ★ Never a dead button (Stuart's first Pi 3 A+ test stopped at a greyed-out one).
   ok(await js(`!document.getElementById("wifiGo").disabled`), "the Finish button is never disabled");
-  await js(`document.getElementById("wifiGo").click(); 1`);
-  ok(await js(`document.getElementById("saveBtn").classList.contains("needsYou")
-               && document.getElementById("wifiDone").classList.contains("hide")`),
-     "pressed too early, it lights up 'Save and start' and shows no next steps");
 
   // Finish setup: the server restarts itself (no service manager on a Mac) and comes back configured.
   await js(`document.getElementById("saveBtn").click(); 1`);
@@ -170,7 +184,7 @@ try {
   await js(`document.getElementById("wifiGo").click(); 1`);
   const done = await js(`document.getElementById("wifiDone").innerText`);
   ok(/Screenshot this/.test(done) && /Home/.test(done) && /Stuart's iPhone/.test(done), "the next steps name network 1, then 2 — BEFORE anything switches");
-  ok(/\.local:48991\//.test(done) && /10\.42\.0\.1:48991/.test(done), "…and every address to reach the box afterwards (.local and the hotspot IP)");
+  ok(/\.local\//.test(done) && /10\.42\.0\.1:48991/.test(done), "…and every address to reach the box afterwards (.local and the hotspot IP)");
   ok(!fs.existsSync(path.join(PD, "pocket-kick.request")), "nothing has been switched yet");
 
   // ── The tunnel: Enable + Resume, while the box is still its own hotspot ──

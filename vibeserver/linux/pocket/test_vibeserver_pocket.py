@@ -205,7 +205,7 @@ def main():
         run_for(nm, box, 200)
         ok(nm.active == "vibe-net-1" and box.mode == "client",
            "idle setup hotspot closes; network 1 (Home) wins over a STRONGER network 3")
-        ok(not any("redirect" in x for x in nm.nft[-1:]) or box.captive_port is None, "captive redirect removed as a client")
+        ok(box.captive_port is not None, ":80 redirect KEPT as a client — http://vibepocket.local/ works on the home network")
 
         # ── strict order on a later boot ──
         nm2, box2 = make(tmp)
@@ -362,6 +362,40 @@ def main():
     ok(first == "unknown" and st == "full", "a 'Connectivity is now' line split across reads waits for the whole line, then → full")
     st_doc = json.load(open(os.path.join(tmp, "state.json")))
     ok(st_doc.get("internet") == "none", "on a hotspot the state says internet: none — the tunnel never starts there")
+
+    # ── The setup name: VibeServerSetup.local until configured, then retired (Stuart, 2026-10-10) ──
+    with tempfile.TemporaryDirectory() as tmp:
+        cfgp = os.path.join(tmp, "config.json")
+        ok(vp.server_configured(cfgp) is False, "no server config yet → not configured (the setup name)")
+        with open(cfgp, "w") as f: f.write('{"configured": false}')
+        ok(vp.server_configured(cfgp) is False, "configured: false → the setup name")
+        with open(cfgp, "w") as f: f.write('{"configured": true, "name": "x"}')
+        ok(vp.server_configured(cfgp) is True, "configured: true → the run name")
+        with open(cfgp, "w") as f: f.write('{"configured": tr')
+        ok(vp.server_configured(cfgp) is False, "a torn config reads as not configured — never a crash")
+        vp.HOSTNAME_FILE = os.path.join(tmp, "hostname"); vp.HOSTS_FILE = os.path.join(tmp, "hosts")
+        with open(vp.HOSTNAME_FILE, "w") as f: f.write("vibepocket\n")
+        with open(vp.HOSTS_FILE, "w") as f: f.write("127.0.0.1\tlocalhost\n127.0.1.1\tvibepocket\n")
+        nm, box = make(tmp)
+        calls = []
+        real_run = nm.run
+        def spy(args, timeout=40, secret=False):
+            calls.append(list(args))
+            if args[:2] == ["hostnamectl", "set-hostname"]:
+                with open(vp.HOSTNAME_FILE, "w") as f: f.write(args[2] + "\n")
+                return 0
+            if args[:2] == ["systemctl", "try-restart"]:
+                return 0
+            return real_run(args, timeout, secret)
+        box.sh.run = spy
+        box.sync_hostname(False)
+        ok(["hostnamectl", "set-hostname", "vibeserversetup"] in calls, "unconfigured → hostname vibeserversetup")
+        ok(["systemctl", "try-restart", "avahi-daemon.service"] in calls, "…and avahi republishes it at once")
+        ok("127.0.1.1\tvibeserversetup" in open(vp.HOSTS_FILE).read(), "…/etc/hosts follows (no 'unable to resolve host')")
+        calls.clear(); box.sync_hostname(False)
+        ok(not calls, "nothing to do → nothing run (it is called every few seconds)")
+        box.sync_hostname(True)
+        ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "configured → the setup name is retired (vibepocket)")
 
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")

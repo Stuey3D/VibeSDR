@@ -63,6 +63,18 @@ SETUP_NAME   = "vibe-setup-ap"      # the OPEN first-boot hotspot
 PRIORITY     = {1: 30, 2: 20, 3: 10}
 AP_ADDR      = "10.42.0.1"          # ★ pinned: vibeserver/pocket.h's kApAddress says the same
 NFT_TABLE    = "vibeserver_captive"
+SERVER_CONF  = "/etc/vibeserver/config.json"                # the server's settings (bound from /data)
+# ★★★ THE SETUP NAME (Stuart, 2026-10-10). Until the box is configured it answers as
+#     VibeServerSetup.local (mDNS is case-blind) on EVERY network — the setup hotspot, the owner's
+#     Wi-Fi, their own hotspot — so "reconnect to your network and open VibeServerSetup.local:48000"
+#     works with no router page and no IP address. Once "Save and start" has configured it, the name
+#     is RETIRED: the hostname becomes RUN_HOST and the server publishes the name chosen in setup.
+#     ★ The HOSTNAME, published by avahi, not a record the server publishes: avahi follows the box
+#       from 10.42.0.1 to the home network's address by itself; a record would go stale on the switch.
+SETUP_HOST   = "vibeserversetup"
+RUN_HOST     = "vibepocket"
+HOSTNAME_FILE = "/etc/hostname"
+HOSTS_FILE    = "/etc/hosts"
 
 DEFAULTS = {
     "SETUP_SSID": "VibeServer",     # Stuart: the first-boot hotspot is called "VibeServer"
@@ -251,6 +263,7 @@ class Box:
         self.last_client = sh.now()
         self.clients = 0
         self.captive_port = None
+        self.host_synced = False
         self.since = int(time.time())
         self.failed_until = {}        # name -> monotonic time: an upgrade that failed is not retried for a while
         self._names, self._names_at, self._fields = [], -1e9, {}
@@ -457,11 +470,43 @@ class Box:
             log("could not load the :80 redirect (is nftables installed?) — the phone's captive "
                 "sheet will not open by itself; http://%s:%d/ still works" % (AP_ADDR, port))
 
-    def captive_off(self):
-        if self.captive_port is None:
+    def sync_hostname(self, configured):
+        """The setup name while unconfigured, the run name after. Cheap when nothing changes."""
+        want = RUN_HOST if configured else SETUP_HOST
+        try:
+            with open(HOSTNAME_FILE) as f:
+                have = f.read().strip()
+        except OSError:
+            have = ""
+        if have == want and self.host_synced:
             return
-        self.sh.run(["nft", "delete", "table", "ip", NFT_TABLE], timeout=10)
-        self.captive_port = None
+        self.host_synced = True
+        if have == want:
+            return
+        if self.sh.run(["hostnamectl", "set-hostname", want], timeout=15) != 0:
+            log("could not set the hostname to %s" % want)
+            return
+        try:
+            with open(HOSTS_FILE) as f:
+                hosts = f.read()
+            hosts = re.sub(r"(?m)^127\.0\.1\.1\s.*$", "127.0.1.1\t" + want, hosts)
+            if "127.0.1.1" not in hosts:
+                hosts += "127.0.1.1\t%s\n" % want
+            write_atomic(HOSTS_FILE, hosts)
+        except OSError:
+            pass
+        # ★ avahi does not follow a hostname change by itself — a restart republishes at once.
+        self.sh.run(["systemctl", "try-restart", "avahi-daemon.service"], timeout=20)
+        log("answering as %s.local%s" % (want, "" if configured else " until setup is finished"))
+
+    def captive_off(self):
+        # ★★★ THE :80 REDIRECT STAYS, ON EVERY NETWORK (Stuart, 2026-10-10: the owner must reach the
+        #     box straight away by its .local name "without having to work out the IP address"). It
+        #     was removed on leaving the hotspot, which made the address http://vibepocket.local:48000/
+        #     on the home network — a port nobody remembers. Kept, it is http://vibepocket.local/
+        #     everywhere. Harmless as a client: nothing else on this box listens on :80, and the
+        #     captive DNS answers (the part that hijacks lookups) belong to NM's hotspot only.
+        self.captive_on()
 
     # ── transitions ──
     def raise_hotspot(self, why):
@@ -650,7 +695,7 @@ class Box:
             self.connecting_since = None
             if self.mode != "client":
                 self.mode, self.since = "client", int(time.time())
-                self.captive_off()
+                self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
             rank = next((r for r, n, s, h in saved if n == cur), 10)
             if rank > 1 and now >= self.next_upgrade:
                 self.next_upgrade = now + self.ci("UPGRADE_SEC")
@@ -745,6 +790,15 @@ class NetWatch:
                         log("internet: %s" % new)
                     self.state = new
         return self.state
+
+
+def server_configured(path=SERVER_CONF):
+    """True once "Save and start" has configured the server. Unreadable = not yet (the setup name)."""
+    try:
+        with open(path, "rb") as f:
+            return json.loads(f.read(256 * 1024).decode("utf-8")).get("configured") is True
+    except (OSError, ValueError, UnicodeDecodeError, AttributeError):
+        return False
 
 
 def read_plain(path, limit):
@@ -935,6 +989,7 @@ def main_loop():
                 if box.mode == "client":
                     net.query()
                     box.internet = net.state
+            box.sync_hostname(server_configured())
             try:
                 box.tick()
             except Exception as e:            # ★ never die on one bad turn; systemd would only restart us

@@ -172,6 +172,21 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 /* ★ The finish panel points at the step still missing: a short glow, then back to normal. */
 @keyframes needsYou { 0%,100% { box-shadow: 0 0 0 0 rgba(245,185,66,0); } 30%,70% { box-shadow: 0 0 0 4px rgba(245,185,66,.75); } }
 .needsYou { animation: needsYou 1.4s ease-in-out 2; }
+/* ★★★ WI-FI FIRST (Stuart, 2026-10-10: "get it on wifi first then configure"). On the open setup
+   hotspot the page is ONLY the Wi-Fi card: radios, the server tab and "Save and start" wait until the
+   box is on the owner's network. Not on the owner's own fallback hotspot — out in the field that is
+   the only way in, so the whole page is there. */
+body.wifiFirst #setup > *:not(#serverPane) { display: none !important; }
+body.wifiFirst #serverPane > *:not(#wifiCard) { display: none !important; }
+body.wifiFirst #bar { display: none !important; }
+.wifiFirstOnly { display: none; }
+body.joining > *:not(#wifiJoining):not(script):not(style) { display: none !important; }
+#wifiJoining { max-width: 560px; margin: 48px auto; padding: 0 16px; line-height: 1.5; }
+#wifiJoining .addr { font-size: 1.15em; letter-spacing: .02em; color: var(--amber); white-space: nowrap; }
+#wifiJoining .spin { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(245,185,66,.25);
+  border-top-color: rgba(245,185,66,1); animation: wjspin 1s linear infinite; margin-bottom: 14px; }
+@keyframes wjspin { to { transform: rotate(360deg); } }
+body.wifiFirst .wifiFirstOnly { display: block; }
 </style>
 <div class="wrap">
   <h1>VibeServer</h1>
@@ -252,6 +267,8 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
            box again afterwards. Stuart's spec: up to three networks, tried in STRICT ORDER (1 before 2
            before 3 whatever the signal), then the box's own secured hotspot. -->
       <div class="card hide" id="wifiCard">
+      <p class="note wifiFirstOnly" style="margin:0 0 10px">Part 1 of 2: your Wi-Fi. The radios and everything
+         else are set up in part 2, once the box is on your network.</p>
       <h2>Wi-Fi</h2>
       <p class="why">This box joins the first of these networks it can find &mdash; always 1 before 2 before 3.
          If none is in range it starts its own hotspot, below, so your phone can still reach it.</p>
@@ -1636,6 +1653,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
      and drops every listener on every radio — so it is its own control, in its own row, and it
      says what it does. Stuart, 2026-08-07: "at the bottom of each tab is a save radio settings
      button. Underneath that in its own distinct footer section a save and reboot server button". -->
+<div class="hide" id="wifiJoining"></div>
 <div class="bar hide" id="bar" style="flex-wrap:wrap;row-gap:8px">
   <span class="spacer" id="barMsg"></span>
   <button id="saveRadioBtn" class="hide" style="background:transparent;border:1px solid var(--amber);color:var(--amber)">Save radio settings</button>
@@ -5492,6 +5510,7 @@ let WIFI_ROWS = [];     // [{ssid, psk, keep, hidden, other}] — in order
     const j = await r.json();
     if (!j || j.pocket !== true) return;
     POCKET = j;
+    document.body.classList.toggle("wifiFirst", j.mode === "setup-ap");
     if (j.claimable) {
       $("claimCard").classList.remove("hide");
       $("signinCard").classList.add("hide");
@@ -5728,6 +5747,26 @@ $("wifiSave").onclick = async () => {
   $("wifiErr").textContent = ""; $("wifiMsg").textContent = "";
   let body;
   try { body = wifiCollect(); } catch (e) { $("wifiErr").textContent = String(e); return; }
+  // ★★★ ON THE SETUP HOTSPOT, SAVE IS THE LAST STEP (Stuart, 2026-10-10: "Admin password, wifi
+  //     connections, then save the wifi settings then show a restarting screen then it should appear on
+  //     the local network"). One press saves AND sends the box to the owner's network — the root service
+  //     applies the networks first, then switches, in that order, from the one request.
+  if (WIFI && WIFI.mode === "setup-ap") {
+    // ★ No network is allowed: "if only using the captive hotspot" (Stuart) — the box goes straight to its own.
+    body.switch = true;
+    $("wifiSave").disabled = true;
+    // ★ Drawn BEFORE the request: the captive sheet can vanish the moment the box switches.
+    wifiShowJoining(body.networks.map(n => n.ssid), body.ap.ssid);
+    try { await wifiPost("/vibeserver/pocket/wifi", body); }
+    catch (e) {
+      // ★ A request that never answers is the box already switching; only a REFUSAL is an error.
+      if (typeof e === "string") {
+        $("wifiJoining").classList.add("hide"); document.body.classList.remove("joining");
+        $("wifiErr").textContent = e; $("wifiSave").disabled = false;
+      }
+    }
+    return;
+  }
   $("wifiSave").disabled = true;
   try {
     await wifiPost("/vibeserver/pocket/wifi", body);
@@ -5765,22 +5804,53 @@ $("wifiScan").onclick = async () => {
   }, force ? 15000 : 4000);
 };
 
+/** ★★ THE "JOINING YOUR WI-FI" SCREEN — the whole page, so it reads as the box restarting rather than
+ *  a message in a card, and screenshot-able: this page closes when the box leaves the hotspot. */
+function wifiShowJoining(nets, apName) {
+  // ★★★ STUART'S WORDS (2026-10-10). The setup name is the HOSTNAME until "Save and start" — so it is
+  //     the same on the home network and on the box's own hotspot, and it needs no router page.
+  const port = (POCKET && POCKET.port) || 48000;
+  const addr = "VibeServerSetup.local:" + port;
+  const box = $("wifiJoining");
+  box.innerHTML =
+    `<div class="spin"></div>`
+    + `<h2>Restarting the Wi-Fi</h2>`
+    + `<p>This page will close in a moment &mdash; <b>take a screenshot of it first</b>.</p>`
+    + (nets.length
+        ? `<p>Please reconnect to your network <b>${esc(nets[0])}</b>`
+          + (nets.length > 1 ? ` (or ${nets.slice(1).map(n => "<b>" + esc(n) + "</b>").join(" or ")})` : "")
+          + ` and enter <b class="addr">${esc(addr)}</b> in Safari to continue setting up this device.</p>`
+          + `<p>Or, if you are only using the box&rsquo;s own hotspot:</p>`
+        : ``)
+    + `<p>Please reconnect to the hotspot you have set up, <b>${esc(apName)}</b>, and continue setup when the `
+    + `setup page appears. If it does not appear, enter <b class="addr">${esc(addr)}</b> in Safari.</p>`;
+  box.classList.remove("hide");
+  document.body.classList.add("joining");
+  window.scrollTo(0, 0);
+}
+
 /** ★ How the owner finds the box again — every address that will work, most memorable first. */
 function wifiAddresses() {
   const port = POCKET && POCKET.port ? POCKET.port : (location.port || 80);
   const suffix = String(port) === "80" ? "" : ":" + port;
   const out = [];
+  // ★★★ ONE NAME FIRST, NO PORT (Stuart, 2026-10-10). The box's own hostname is published by avahi
+  //     from the moment it boots — configured or not — and the root service keeps :80 pointed at the
+  //     front door on every network, so http://vibepocket.local/ is the address to remember.
+  // ★ Once configured, the name chosen in setup comes first (Stuart: it "then applies").
   const label = mdnsLabel(($("name") && $("name").value) || (cfg && cfg.name) || "");
-  if ($("mdns").checked) out.push("http://" + label + ".local" + suffix + "/");
   const host = POCKET && POCKET.hostname ? String(POCKET.hostname).split(".")[0] : "";
-  if (host && host !== label) out.push("http://" + host + ".local" + suffix + "/");
+  if ($("mdns").checked && cfg && cfg.configured && label && label !== host) out.push("http://" + label + ".local" + suffix + "/");
+  if (host) out.push("http://" + host + ".local/");
   return {out, suffix};
 }
 
 function wifiFinishRender() {
   const w = WIFI || {};
   const onHotspot = w.mode === "setup-ap" || w.mode === "fallback-ap";
-  $("wifiFinish").classList.toggle("hide", !onHotspot);
+  document.body.classList.toggle("wifiFirst", w.mode === "setup-ap");
+  $("wifiFinish").classList.toggle("hide", !onHotspot || w.mode === "setup-ap");
+  $("wifiSave").textContent = w.mode === "setup-ap" ? "Save Wi-Fi and join it" : "Save Wi-Fi";
   if (!onHotspot) return;
   const saved = (w.saved || []).length > 0, apSet = !!(w.ap && w.ap.set);
   const configured = !!(cfg && cfg.configured);
@@ -5796,7 +5866,6 @@ function wifiFinishMissing() {
   const out = [];
   if (!(w.saved || []).length) out.push({say: "save at least one network above", go: "wifiCard"});
   if (!(w.ap && w.ap.set)) out.push({say: "save the box’s own hotspot above", go: "wifiCard"});
-  if (!(cfg && cfg.configured)) out.push({say: "finish setup with “Save and start” at the bottom", go: "saveBtn"});
   return out;
 }
 
@@ -5828,8 +5897,11 @@ $("wifiGo").onclick = () => {
     + (nets.length > 1 ? ` (or, if that is not in range, ${nets.slice(1).map(n => "<b>" + esc(n) + "</b>").join(" then ")})` : "")
     + `. It takes up to a minute.</li>`
     + `<li>On your phone, join that same network in <b>Settings &rsaquo; Wi-Fi</b>.</li>`
-    + `<li>Open the <b>VibeSDR app</b> &mdash; it finds the box by itself &mdash; or open Safari at `
-    + out.map(a => `<code>${esc(a)}</code>`).join(" or ") + `</li>`
+    + (cfg && cfg.configured
+        ? `<li>Open the <b>VibeSDR app</b> &mdash; it finds the box by itself &mdash; or open Safari at `
+        : `<li>Step 2: open Safari at `)
+    + out.map(a => `<code>${esc(a)}</code>`).join(" or ")
+    + (cfg && cfg.configured ? `` : ` and sign in with your admin password to set up the radios.`) + `</li>`
     + `<li>If none of your networks is in range, the box starts its own hotspot <b>${esc(apName)}</b> instead. `
     + `Join it with your hotspot password and open <code>http://${esc((POCKET && POCKET.apAddress) || "10.42.0.1")}${esc(suffix)}/</code></li>`
     + `</ol>`

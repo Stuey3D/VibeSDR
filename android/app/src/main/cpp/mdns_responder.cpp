@@ -42,6 +42,10 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#if !defined(__ANDROID__) || (defined(__ANDROID_API__) && __ANDROID_API__ >= 24)
+#include <ifaddrs.h>
+#define VIBE_MDNS_FOLLOW_IP 1
+#endif
 
 #include <atomic>
 #include <string>
@@ -350,6 +354,26 @@ void sendTo(int fd, const std::string& pkt, const sockaddr_in& dst) {
     sendto(fd, pkt.data(), pkt.size(), 0, (const sockaddr*)&dst, sizeof dst);
 }
 
+#ifdef VIBE_MDNS_FOLLOW_IP
+/** The machine's address NOW, by the same preference as the server's primaryIpv4() (a private LAN
+ *  address over anything else). 0 when there is none — between networks. */
+uint32_t currentIpv4() {
+    struct ifaddrs* ifa = nullptr;
+    if (getifaddrs(&ifa) != 0) return 0;
+    uint32_t out = 0;
+    for (auto* p = ifa; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+        const uint32_t a = reinterpret_cast<const sockaddr_in*>(p->ifa_addr)->sin_addr.s_addr;
+        const uint32_t h = ntohl(a);
+        if ((h >> 24) == 127) continue;
+        const bool lan = (h >> 16) == 0xC0A8 || (h >> 24) == 10;
+        if (!out || lan) out = a;
+    }
+    freeifaddrs(ifa);
+    return out;
+}
+#endif
+
 void loop(std::string base, uint32_t addr) {
     int fd = openSocket();
     if (fd < 0) return;
@@ -444,7 +468,36 @@ void loop(std::string base, uint32_t addr) {
     //  ★ 20 s: fast enough that a listener who reaches for the name after a power-save blip finds
     //    it, slow enough to be invisible — this is two setsockopt calls a minute.
     time_t lastJoin = time(nullptr);
+    time_t lastIp = lastJoin;
     while (g_run.load()) {
+#ifdef VIBE_MDNS_FOLLOW_IP
+        // ★★★ FOLLOW THE ADDRESS (2026-10-10, the pocket box). The address was taken once, at start —
+        //     right for a Pi that never moves, wrong for a box that goes from its own hotspot (10.42.0.1)
+        //     to the owner's Wi-Fi to their phone's hotspot without restarting: the name kept answering
+        //     with an address on a network the box had left. Looked at every 5 s (one getifaddrs);
+        //     on a change the new address is announced at once, as a fresh start would.
+        {
+            const time_t nowT = time(nullptr);
+            if (nowT - lastIp >= 5 || nowT < lastIp) {
+                lastIp = nowT;
+                const uint32_t now = currentIpv4();
+                if (now && now != addr) {
+                    addr = now;
+                    g_addr = now;
+                    LOGI("mDNS: the address changed to %s — announcing it", inet_ntoa(*(in_addr*)&addr));
+                    ip_mreq re{};
+                    re.imr_multiaddr.s_addr = inet_addr(kGroup);
+                    re.imr_interface.s_addr = htonl(INADDR_ANY);
+                    setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &re, sizeof re);   // EADDRINUSE = still held
+                    sendTo(fd, buildAnswer(host, addr, 0), group);
+                    if (g_svcPort) {
+                        const std::string svc = buildService(host, addr, 0, true);
+                        if (!svc.empty()) sendTo(fd, svc, group);
+                    }
+                }
+            }
+        }
+#endif
         {
             const time_t nowT = time(nullptr);
             if (nowT - lastJoin >= 20 || nowT < lastJoin) {

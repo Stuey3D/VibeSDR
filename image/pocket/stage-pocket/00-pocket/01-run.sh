@@ -16,5 +16,5 @@ if [ -f files/vibemap-detail.pmtiles ]; then
 	install -m 0644 files/vibemap-detail.pmtiles "${ROOTFS_DIR}/usr/lib/vibeserver/mapgl-detail/"
 fi
 on_chroot << EOF
-POCKET_COUNTRY="${WPA_COUNTRY:-GB}" POCKET_HOSTNAME="${TARGET_HOSTNAME:-vibepocket}" bash /tmp/pocket-files/customise.sh
+POCKET_COUNTRY="${WPA_COUNTRY:-GB}" POCKET_HOSTNAME="${TARGET_HOSTNAME:-vibeserversetup}" bash /tmp/pocket-files/customise.sh
 EOF

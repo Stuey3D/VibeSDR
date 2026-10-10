@@ -61,7 +61,7 @@ LOCALE_DEFAULT=en_GB.UTF-8
 KEYBOARD_KEYMAP=gb
 KEYBOARD_LAYOUT="English (UK)"
 TIMEZONE_DEFAULT=Europe/London
-TARGET_HOSTNAME=vibepocket
+TARGET_HOSTNAME=vibeserversetup
 FIRST_USER_NAME=vibe
 FIRST_USER_PASS=$PASS
 DISABLE_FIRST_BOOT_USER_RENAME=1
@@ -136,7 +136,7 @@ docker run --rm --privileged --cpus 2 --platform linux/arm64 -v /dev:/dev \
   install -d -m 0755 /mnt/r/usr/lib/vibeserver/mapgl-detail
   install -m 0644 "$MAPS" /mnt/r/usr/lib/vibeserver/mapgl-detail/vibemap-detail.pmtiles
   echo "==> High Detail Maps baked in: $(du -h /mnt/r/usr/lib/vibeserver/mapgl-detail/vibemap-detail.pmtiles | cut -f1) (verified: $MAPGL_BYTES bytes, PMTiles)"
-  nice -n 15 chroot /mnt/r /usr/bin/env POCKET_COUNTRY="$COUNTRY" POCKET_HOSTNAME=vibepocket \
+  nice -n 15 chroot /mnt/r /usr/bin/env POCKET_COUNTRY="$COUNTRY" POCKET_HOSTNAME=vibeserversetup \
       bash /tmp/pocket-files/customise.sh
   rm -f /mnt/r/etc/resolv.conf
   [ -f /tmp/resolv.keep ] && cp /tmp/resolv.keep /mnt/r/etc/resolv.conf || true

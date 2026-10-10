@@ -15,7 +15,7 @@ export DEBIAN_FRONTEND=noninteractive
 POCKET_DEBS=${POCKET_DEBS:-/tmp/pocket-debs}
 POCKET_FILES=${POCKET_FILES:-/tmp/pocket-files}
 COUNTRY=${POCKET_COUNTRY:-GB}
-HOSTNAME_NEW=${POCKET_HOSTNAME:-vibepocket}
+HOSTNAME_NEW=${POCKET_HOSTNAME:-vibeserversetup}
 say() { echo "pocket-image: $*"; }
 
 ARCH=$(dpkg --print-architecture)
@@ -114,8 +114,11 @@ systemctl mask udisks2.service 2>/dev/null || true
 #   no internet, and VibeServer's own update schedule (admin page) is the one an owner sets.
 
 # ── 7. Name, Wi-Fi country, boot config ──────────────────────────────────────────────────────────
-# ★ "vibepocket", not "vibeserver": avahi publishes <hostname>.local and the server publishes
-#   <its name>.local — the same label from two responders is a conflict avahi "solves" by renaming.
+# ★★★ "vibeserversetup" FIRST (Stuart, 2026-10-10): a new box answers as VibeServerSetup.local on
+#     any network, with no router page. The root service retires it (→ "vibepocket") once setup is
+#     finished, and the server then publishes the name chosen in setup.
+# ★ Never "vibeserver": avahi publishes <hostname>.local and the server publishes <its name>.local —
+#   the same label from two responders is a conflict avahi "solves" by renaming.
 echo "$HOSTNAME_NEW" > /etc/hostname
 sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$HOSTNAME_NEW/" /etc/hosts
 grep -q "^127\.0\.1\.1" /etc/hosts || echo -e "127.0.1.1\t$HOSTNAME_NEW" >> /etc/hosts
