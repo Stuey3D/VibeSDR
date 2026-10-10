@@ -19,7 +19,7 @@
  * spend the extra CPU and bytes. Closing it must turn that back off.
  */
 
-import { LR_FULL_KHZ, lrParts } from '../services/lrMeter';
+import { LR_LIMIT_KHZ, lrParts } from '../services/lrMeter';
 import { receiverIso } from '../services/rdsCountry';
 import React, { useMemo, useRef } from 'react';
 import { useBusValue, type ValueBus } from '../services/valueBus';
@@ -1314,21 +1314,27 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                 {mpxDevInfo.verdict}
               </Text>
               {/* ★ LEFT / RIGHT — what each channel alone puts on the carrier (2026-10-10, src/services/lrMeter.ts).
-                  Same scale and track as the deviation bar above; the line is full modulation for one channel
-                  (67.5 kHz). Not drawn at all without a measurement — never a false zero. */}
-              {!!lr && (['l', 'r'] as const).map((k) => (
-                <View key={k} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: k === 'l' ? 4 : 2 }}>
-                  <Text style={[s.devKey, { color: C.rowLabel, minWidth: 10 }]}>{k === 'l' ? 'L' : 'R'}</Text>
-                  <View style={{ width: 150, height: 6, borderRadius: 2, backgroundColor: C.devBarBg,
-                                 borderWidth: 1, borderColor: C.devBarBorder, overflow: 'hidden' }}>
-                    <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${lr[k].pct}%`,
-                                   backgroundColor: lr[k].tone === 'bad' ? C.bad : lr[k].tone === 'warn' ? C.warn : C.good }} />
-                    <View style={{ position: 'absolute', top: 0, bottom: 0, width: 1, left: `${LR_FULL_KHZ}%`,
-                                   backgroundColor: 'rgba(255,255,255,0.55)' }} />
+                  ★ INSIDE THE FIGURES' 200 pt BLOCK (key 12 + bar 120 + value 56, centred like the verdict). The first
+                  version borrowed the 132 pt devKey and ran ~356 pt wide: bars off the panel edge, values off-screen
+                  (Stuart's screenshot). Same track and limit line (75 kHz) as the deviation bar; not drawn at all
+                  without a measurement — never a false zero. */}
+              {!!lr && (['l', 'r'] as const).map((k) => {
+                const col = lr[k].tone === 'bad' ? C.bad : lr[k].tone === 'warn' ? C.warn : C.good;
+                return (
+                  <View key={k} style={{ width: 200, flexDirection: 'row', alignItems: 'center', marginTop: k === 'l' ? 5 : 2 }}>
+                    <Text style={{ fontFamily: FONT, fontSize: 12, width: 12, textAlign: 'right', opacity: 0.8, color: C.rowLabel }}>
+                      {k === 'l' ? 'L' : 'R'}
+                    </Text>
+                    <View style={{ width: 120, height: 6, marginLeft: 6, borderRadius: 2, backgroundColor: C.devBarBg,
+                                   borderWidth: 1, borderColor: C.devBarBorder, overflow: 'hidden' }}>
+                      <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${lr[k].pct}%`, backgroundColor: col }} />
+                      <View style={{ position: 'absolute', top: 0, bottom: 0, width: 1, left: `${LR_LIMIT_KHZ}%`,
+                                     backgroundColor: 'rgba(255,255,255,0.55)' }} />
+                    </View>
+                    <Text style={[s.devVal, { width: 56, color: col }]}>{lr[k].text}</Text>
                   </View>
-                  <Text style={[s.devVal, { color: lr[k].tone === 'bad' ? C.bad : lr[k].tone === 'warn' ? C.warn : C.good }]}>{lr[k].text}</Text>
-                </View>
-              ))}
+                );
+              })}
               {/* ★★ MPX POWER (ITU-R BS.412) — the 60 s mean power of the whole multiplex against a
                   ±19 kHz sine, the figure MPXtool shows as "Power" (2026-10-02). Neutral colour: above
                   0 dB is over the BS.412 limit, a fact about the STATION, never a receiver fault. The

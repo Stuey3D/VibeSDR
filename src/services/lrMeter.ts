@@ -3,22 +3,25 @@
  * "is it worth including especially useful on distorted stations"). The server measures what each channel ALONE puts
  * on the carrier (MpxMeasure::lrMeter_, `lDev`/`rDev` in kHz, a robust 1 s peak); this turns them into bars and words.
  *
- * ★ 0–100 kHz like the deviation bar beside it (1 kHz = 1 %). One channel at 67.5 kHz is FULL modulation — the pilot
- *   and RDS take the rest of the 75 — so: green up to 67.5, amber to 75 (at the limit), red past 75 (that channel alone
- *   is over). The line on each bar is at 67.5.
+ * ★ 0–100 kHz like the deviation bar beside it (1 kHz = 1 %), and the SAME verdict lines: green to 75, amber 75–82 (the
+ *   bar's hedge band — two radios disagree by ~7 %), red past 82; the line on each bar at 75. ✗ It first went amber at
+ *   67.5 kHz (full modulation for one channel alone) and Heart lit both channels amber directly under a deviation bar
+ *   reading "nominal · 74 kHz" (Stuart's screenshot, 2026-10-10) — one panel contradicting itself. A processed station
+ *   legitimately runs each channel up there; the meters say which channel is driving the peak, the bar judges it.
  * ★ ONE COPY, BOTH CLIENTS (AdvRdsPanel.tsx, web main.ts). Absent from an older server, or with no stereo to split —
  *   then `null`, and neither client draws the meters at all (never a false zero).
  */
 export type LrTone = 'ok' | 'warn' | 'bad';
 export interface LrSide { pct: number; text: string; tone: LrTone }
-export const LR_FULL_KHZ = 67.5;
+/** Where the limit line sits on each bar — the deviation bar's own 75 kHz. */
+export const LR_LIMIT_KHZ = 75;
 
 export function lrParts(lDev: number | undefined, rDev: number | undefined): { l: LrSide; r: LrSide } | null {
   if (typeof lDev !== 'number' || typeof rDev !== 'number' || !(lDev >= 0) || !(rDev >= 0)) return null;
   const side = (k: number): LrSide => ({
     pct: Math.max(0, Math.min(100, k)),
     text: `${k.toFixed(0)} kHz`,
-    tone: k > 75 ? 'bad' : k > LR_FULL_KHZ ? 'warn' : 'ok',
+    tone: k > 82 ? 'bad' : k > LR_LIMIT_KHZ ? 'warn' : 'ok',
   });
   return { l: side(lDev), r: side(rDev) };
 }

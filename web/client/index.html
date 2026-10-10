@@ -2246,7 +2246,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #rdsLR .lrBar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #7dff9a; transition: width 0.12s linear; }
 #rdsLR .lrBar i.warn { background: #ffd479; }
 #rdsLR .lrBar i.bad  { background: #ff8a7d; }
-#rdsLR .lrBar u { position: absolute; top: -1px; bottom: -1px; left: 67.5%; width: 1px; background: rgba(255,255,255,0.55); }
+#rdsLR .lrBar u { position: absolute; top: -1px; bottom: -1px; left: 75%; width: 1px; background: rgba(255,255,255,0.55); }
 #rdsLR .lrVal.warn { color: #ffd479; }
 #rdsLR .lrVal.bad  { color: #ff8a7d; }
 #rdsMpxPowSettle:empty { display: none; }
@@ -3332,9 +3332,9 @@ select.btn { padding: 6px 8px; }
           </div>
           <div id="rdsMpxVerdict">—</div>
         </div>
-        <!-- ★ LEFT / RIGHT — what each channel alone puts on the carrier (2026-10-10, src/services/lrMeter.ts). Same scale
-             as the deviation bar; the line is full modulation for one channel (67.5 kHz). Hidden without a measurement. -->
-        <div id="rdsLR" hidden title="Left and right peak deviation: what each channel alone puts on the carrier, the robust peak of the last second. 67.5 kHz is full modulation for one channel (the pilot and RDS take the rest of the 75 kHz); amber is at the limit, red is that channel alone over it — useful on a distorted or lop-sided station.">
+        <!-- ★ LEFT / RIGHT — what each channel alone puts on the carrier (2026-10-10, src/services/lrMeter.ts). Same scale,
+             limit line (75 kHz) and colours as the deviation bar. Hidden without a measurement. -->
+        <div id="rdsLR" hidden title="Left and right peak deviation: what each channel alone puts on the carrier, the robust peak of the last second. The line is the 75 kHz limit, and the colours follow the deviation bar's: amber in the 75–82 kHz hedge band, red past it. They show which channel is driving the peak — useful on a distorted or lop-sided station.">
           <div class="lrRow"><span class="lrKey">L</span><div class="lrBar"><i id="rdsLFill"></i><u></u></div><span class="lrVal" id="rdsLV">—</span></div>
           <div class="lrRow"><span class="lrKey">R</span><div class="lrBar"><i id="rdsRFill"></i><u></u></div><span class="lrVal" id="rdsRV">—</span></div>
         </div>
