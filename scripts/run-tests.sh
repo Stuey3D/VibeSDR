@@ -426,6 +426,9 @@ if npx tsx scripts/test_lite_update.ts; then pass=$((pass+1)); else fail=$((fail
 # ★★ RECORDINGS BY SERVER, THEN NEWEST FIRST (2026-10-10): the receiver you are on first, others A–Z, no-server last.
 if npx tsx scripts/test_recording_groups.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 
+# ★★ PORTABLE WI-FI wording shared by the app and the web page (never through the tunnel; "leave this session…").
+if npx tsx scripts/test_pocket_connection.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+
 # ★★★ THE REAL SERVER, END TO END (B6): per-listener decoders on a locked range, the decoder limit's
 #     refusal, Advanced RDS only to whoever asked on a shared dial, and an audio socket that opens
 #     first keeping its codec — through the same WebSockets the clients use, against fake-rtl-tcp.
@@ -474,6 +477,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     stopped the full-rate stream under clientMtx, and its applyAutoIf() took clientMtx again). Same VIBESERVER_BIN rule.
 printf '\n\033[1m── raw IQ: a vanished client does not wedge the radio (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-iq-close-deadlock.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
+
+# ★★★ PORTABLE WI-FI (2026-10-10): on a pocket box, on its own network, the menu offers Network | Own Wi-Fi with the
+#     link's figures, the weak-Wi-Fi notice appears, Switch asks first and writes the kick; through loopback, nothing.
+printf '\n\033[1m── portable Wi-Fi on the served page (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-pocket-connection-web.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); fi
 
 printf '\n\033[1m── idle decoder socket keep-alive (end to end) ──\033[0m\n'

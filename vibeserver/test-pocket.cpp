@@ -234,6 +234,49 @@ int main() {
         ok(handle(k, rk, h) && rk.code == 200 && slurp(paths().kick) == "scan-force\n", "forced scan writes the kick word");
     }
 
+    // ── PORTABLE CONNECTION: Network | Own Wi-Fi (Stuart, 2026-10-10) ──
+    {
+        ok(linkAdvice(-76, 65, 2) == "weak", "advice: signal -76 dBm is weak");
+        ok(linkAdvice(-60, 6.5, 0) == "weak", "advice: a 6.5 Mbit/s link is weak");
+        ok(linkAdvice(-60, 65, 12) == "weak", "advice: 12 % retries is weak");
+        ok(linkAdvice(-60, 65, 2).empty(), "advice: -60 dBm, 65 Mbit/s, 2 % retries is fine");
+        ok(linkAdvice(-1, -1, -1).empty(), "advice: figures not reported never count as weak");
+
+        put(paths().state, "{\"mode\":\"client\",\"ssid\":\"Home\",\"hold\":false,\"ap\":{\"set\":true,\"ssid\":\"Pocket\"},"
+                           "\"saved\":[{\"ssid\":\"Home\"}],\"link\":{\"signal\":-78,\"tx\":13.0,\"rx\":72.2,\"retry\":9}}\n");
+        Req g; g.method = "GET"; g.path = "/vibeserver/pocket/connection"; g.peer = "192.168.86.61";
+        Reply rg;
+        ok(handle(g, rg, h) && rg.body.find("\"local\":true") != std::string::npos
+           && rg.body.find("\"signal\":-78") != std::string::npos && rg.body.find("\"tx\":13") != std::string::npos
+           && rg.body.find("\"advice\":\"weak\"") != std::string::npos && rg.body.find("\"ssid\":\"Home\"") != std::string::npos,
+           "GET connection on the local network: the link's figures and the advice (weak at -78 dBm)");
+        Req gt = g; gt.viaTunnel = true;
+        Reply rgt;
+        ok(handle(gt, rgt, h) && rgt.body == "{\"pocket\":true,\"local\":false}", "…through the tunnel: local:false and nothing else");
+        Req gp = g; gp.peer = "81.2.69.160";
+        Reply rgp;
+        ok(handle(gp, rgp, h) && rgp.body.find("\"local\":false") != std::string::npos, "…from a public address: local:false");
+
+        Req p; p.method = "POST"; p.path = "/vibeserver/pocket/connection"; p.peer = "192.168.86.61"; p.body = "{\"to\":\"own\"}";
+        Reply rp;
+        ok(handle(p, rp, h) && rp.code == 200 && slurp(paths().kick) == "own\n", "Own Wi-Fi from the local network writes the kick word");
+        Req pt = p; pt.viaTunnel = true;
+        Reply rpt;
+        ok(handle(pt, rpt, h) && rpt.code == 403, "…and is REFUSED through the tunnel");
+        Req pp = p; pp.peer = "81.2.69.160";
+        Reply rpp;
+        ok(handle(pp, rpp, h) && rpp.code == 403, "…and from a public address");
+        Req pn = p; pn.body = "{\"to\":\"network\"}";
+        Reply rpn;
+        ok(handle(pn, rpn, h) && rpn.code == 200 && slurp(paths().kick) == "network\n", "Network writes its kick word");
+        Req px = p; px.body = "{\"to\":\"reboot\"}";
+        Reply rpx;
+        ok(handle(px, rpx, h) && rpx.code == 400, "anything else is refused");
+        put(paths().state, "{\"mode\":\"client\",\"ap\":{\"set\":false,\"ssid\":\"\"},\"saved\":[{\"ssid\":\"Home\"}]}\n");
+        Reply rno;
+        ok(handle(p, rno, h) && rno.code == 409, "Own Wi-Fi with no hotspot of its own set up: refused (409)");
+    }
+
     std::string cleanup = "rm -rf '" + dir + "'";
     (void)!std::system(cleanup.c_str());
     if (failures) { std::printf("\n\033[31m%d failed\033[0m\n", failures); return 1; }

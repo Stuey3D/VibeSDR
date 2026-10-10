@@ -2689,6 +2689,21 @@ int main(int argc, char** argv) {
         }).detach();
     }
 
+    /* ★★ POCKET: "THE RADIO IS IN USE" (2026-10-10). The Own Wi-Fi hold (vibeserver-pocket) lasts while the radio is
+     *  used and ends after 30 quiet minutes — but the Wi-Fi service runs as root and knows nothing of listeners, and
+     *  the box's radios are separate processes. So every process touches one file while anyone is listening on it,
+     *  every 30 s. /run is RAM: no SD-card write. Pocket image only; nothing elsewhere. */
+    if (vibepocket::enabled() && ::access("/run/vibeserver", W_OK) == 0) {
+        std::thread([]{
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(30));
+                if (LocalSdrShim::instance().listenerCount() <= 0) continue;
+                const int fd = ::open("/run/vibeserver/pocket-active", O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0644);
+                if (fd >= 0) { ::futimens(fd, nullptr); ::close(fd); }
+            }
+        }).detach();
+    }
+
     // ── EiBi ────────────────────────────────────────────────────────────────────────────────
     // ★ Published from the cache at start-up so search works immediately, then refreshed in the
     //   BACKGROUND: a receiver must not wait on eibispace.de to start serving listeners.

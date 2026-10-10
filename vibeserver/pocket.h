@@ -56,6 +56,10 @@ Probe probeFor(const std::string& path);
 /** ★ A peer on a private network — RFC 1918, link-local, IPv6 ULA/link-local — and NOT loopback
  *  (the tunnel arrives as loopback). The first-run password may only be claimed from here. */
 bool isPrivatePeer(const std::string& ip);
+/** ★★ "weak" when the joined link is poor enough that Own Wi-Fi is worth recommending — signal −75 dBm or worse, a
+ *  transmit rate of 11 Mbit/s or less, or 10 % or more of transmissions retried; "" otherwise. ONE rule, decided here,
+ *  so the app and the web page cannot disagree (Stuart, 2026-10-10). A figure of −1 is "not reported" and never counts. */
+std::string linkAdvice(double signal, double tx, double retry);
 
 /** Clients that have pressed "stay connected" — their probes are answered as online, so iOS
  *  shows "Done" instead of "Cancel" (which would drop the network). Cleared when the mode changes. */
@@ -96,6 +100,10 @@ struct State {
     std::string mode;            // setup-ap | fallback-ap | client | connecting | off
     bool apSet = false;          // a secured fallback hotspot is configured
     bool internet = false;       // NetworkManager says connectivity is FULL (the tunnel may run)
+    bool hold = false;           // ★ the owner chose Own Wi-Fi (the root service holds it while the radio is used)
+    bool hasLink = false;        // joined to a network, with the link's figures below (-1 = not reported)
+    double signal = -1, tx = -1, rx = -1, retry = -1;
+    std::string ssid, apSsid;
     std::string json;            // the whole document (no passwords in it, by construction)
 };
 State readState();

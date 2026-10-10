@@ -19,6 +19,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
 (window as unknown as { __vibeFaults: () => unknown }).__vibeFaults =
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
+import { initPocketConn } from './pocketConn';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
@@ -2583,6 +2584,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   else initDecoders(host, auth);
   initIdleThrottle();
   initAdminUnlock();
+  void initPocketConn();   // ★ Portable Wi-Fi — draws nothing unless this is a pocket box, on its own network
   initAdmin(() => currentHost, () => adminPassword);
   // ★ Also honoured here, for the case where the page was ALREADY connected when the fragment
   //   arrived. The early opener below covers the normal arrival.

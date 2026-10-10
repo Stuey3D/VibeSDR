@@ -1,5 +1,6 @@
 // pocket.cpp — see pocket.h. The pocket image's Wi-Fi, from the unprivileged daemon's side.
 #include "pocket.h"
+#include <cmath>
 
 #include <atomic>
 #include <cctype>
@@ -211,6 +212,11 @@ Probe probeFor(const std::string& path) {
     return Probe::None;
 }
 
+std::string linkAdvice(double signal, double tx, double retry) {
+    const bool weak = (signal != -1 && signal <= -75) || (tx >= 0 && tx <= 11) || (retry >= 10);
+    return weak ? "weak" : "";
+}
+
 bool isPrivatePeer(const std::string& ipIn) {
     std::string ip = lower(ipIn);
     if (ip.rfind("::ffff:", 0) == 0) ip = ip.substr(7);
@@ -357,6 +363,14 @@ State readState() {
     st.mode = j.str("mode");
     if (const JV* ap = j.get("ap")) st.apSet = ap->flag("set");
     st.internet = j.str("internet") == "full";
+    st.hold = j.flag("hold");
+    st.ssid = j.str("ssid");
+    if (const JV* ap = j.get("ap")) st.apSsid = ap->str("ssid");
+    if (const JV* l = j.get("link"); l && l->t == JV::Obj) {
+        auto num = [&](const char* k) { const JV* v = l->get(k); return v && v->t == JV::Num ? v->n : -1.0; };
+        st.hasLink = true;
+        st.signal = num("signal"); st.tx = num("tx"); st.rx = num("rx"); st.retry = num("retry");
+    }
     st.json = body;
     while (!st.json.empty() && (st.json.back() == '\n' || st.json.back() == ' ')) st.json.pop_back();
     return st;
@@ -485,6 +499,42 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
         if (what == "welcome" && !isPost) {
             rp.code = 200; rp.status = "OK"; rp.contentType = "text/html; charset=utf-8";
             rp.body = welcomePage(h.serverName ? h.serverName() : std::string(), base);
+            return true;
+        }
+        /* ★★★ PORTABLE CONNECTION — Network | Own Wi-Fi (Stuart, 2026-10-10). Read by the clients' menu to draw the
+         *  choice and the link's figures; set by a listener ON THE BOX'S OWN NETWORK. Never through the tunnel and never
+         *  from a public address: the GET answers local:false there (the menu stays hidden) and the POST refuses — a
+         *  stranger online must not be able to take the box off its network. No admin password: it is the person
+         *  standing with the box, and the choice undoes itself (30 quiet minutes, or a power cycle). */
+        if (what == "connection") {
+            const bool local = !rq.viaTunnel && isPrivatePeer(rq.peer);
+            if (!isPost) {
+                if (!local) { json(rp, 200, "OK", "{\"pocket\":true,\"local\":false}"); return true; }
+                std::string link = "null";
+                if (st.hasLink) {
+                    char b[160];
+                    std::snprintf(b, sizeof b, "{\"signal\":%s,\"tx\":%s,\"rx\":%s,\"retry\":%s}",
+                                  st.signal == -1 ? "null" : std::to_string((int)st.signal).c_str(),
+                                  st.tx < 0 ? "null" : std::to_string((int)llround(st.tx)).c_str(),
+                                  st.rx < 0 ? "null" : std::to_string((int)llround(st.rx)).c_str(),
+                                  st.retry < 0 ? "null" : std::to_string((int)st.retry).c_str());
+                    link = b;
+                }
+                json(rp, 200, "OK", std::string("{\"pocket\":true,\"local\":true,\"mode\":\"") + jesc(st.mode)
+                     + "\",\"hold\":" + (st.hold ? "true" : "false") + ",\"apSet\":" + (st.apSet ? "true" : "false")
+                     + ",\"ssid\":\"" + jesc(st.ssid) + "\",\"apSsid\":\"" + jesc(st.apSsid) + "\",\"link\":" + link
+                     + ",\"advice\":\"" + (st.hasLink ? linkAdvice(st.signal, st.tx, st.retry) : std::string()) + "\"}");
+                return true;
+            }
+            if (!local) { fail(rp, 403, "Forbidden", "the box's connection can only be changed from its own network"); return true; }
+            JV j;
+            const std::string to = parseJson(rq.body, j) ? j.str("to") : std::string();
+            if (to != "own" && to != "network") { fail(rp, 400, "Bad Request", "to must be \"own\" or \"network\""); return true; }
+            if (to == "own" && !st.apSet) { fail(rp, 409, "Conflict", "set the box's own hotspot first (the Wi-Fi card in setup)"); return true; }
+            std::string err;
+            if (!writePrivate(paths().kick, to + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
+            std::printf("VibeServer: pocket — a listener on the box's network chose %s\n", to == "own" ? "Own Wi-Fi" : "Network");
+            json(rp, 200, "OK", "{\"ok\":true}");
             return true;
         }
         // ── Everything below is the owner's: the admin proof, checked by the shim. ──

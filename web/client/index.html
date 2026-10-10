@@ -4243,6 +4243,15 @@ select.btn { padding: 6px 8px; }
     <label>RECEIVER</label>
     <span class="val" id="radioName" style="flex:1">—</span>
   </div>
+  <!-- ★★★ PORTABLE WI-FI (Stuart, 2026-10-10) — only on a pocket VibeServer, only on its own network (never through
+       the tunnel). Network | Own Wi-Fi, with the link's signal / rate / retries beside it. pocketConn.ts. -->
+  <div id="pocketConn" hidden>
+    <div class="mrow">
+      <label>PORTABLE WI-FI<span class="sub" id="pcLine">—</span></label>
+      <div class="seg"><button class="btn" id="pcNet">NETWORK</button><button class="btn" id="pcOwn">OWN WI-FI</button></div>
+    </div>
+    <div class="lbl wrap" id="pcNote" hidden></div>
+  </div>
   <div class="mrow" id="rowGain">
     <label for="gain">GAIN</label>
     <input type="range" id="gain" min="0" max="0" value="0">

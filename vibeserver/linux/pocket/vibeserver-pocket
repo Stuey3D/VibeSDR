@@ -63,6 +63,9 @@ SETUP_NAME   = "vibe-setup-ap"      # the OPEN first-boot hotspot
 PRIORITY     = {1: 30, 2: 20, 3: 10}
 AP_ADDR      = "10.42.0.1"          # ★ pinned: vibeserver/pocket.h's kApAddress says the same
 NFT_TABLE    = "vibeserver_captive"
+# ★★ "The radio is in use" — every vibeserver process on the box touches this (RAM, /run) every 30 s while anyone is
+#    listening. The Own Wi-Fi hold ends once it has been quiet for RELEASE_SEC. Written by the server, read here.
+ACTIVE_FILE  = "/run/vibeserver/pocket-active"
 SERVER_CONF  = "/etc/vibeserver/config.json"                # the server's settings (bound from /data)
 # ★★★ THE SETUP NAME (Stuart, 2026-10-10). Until the box is configured it answers as
 #     VibeServerSetup.local (mDNS is case-blind) on EVERY network — the setup hotspot, the owner's
@@ -85,6 +88,11 @@ DEFAULTS = {
     "IDLE_SEC": "120",              # …and only once nobody has been connected for this long
     "UPGRADE_SEC": "120",           # on network 2/3: how often to look for a higher one
     "JOIN_WAIT_SEC": "30",          # nmcli --wait for one join attempt
+    # ★★★ OWN WI-FI, BY HAND (Stuart, 2026-10-10). A listener on the box's local network can send it to its own hotspot
+    #     when the house's Wi-Fi is weak where they are standing. Held while the radio is in use; once nobody has
+    #     listened for this long it goes back to a saved network in range. Held in MEMORY only — a power cycle always
+    #     comes back on the main Wi-Fi.
+    "RELEASE_SEC": "1800",
 }
 
 
@@ -266,6 +274,10 @@ class Box:
         self.host_synced = False
         self.since = int(time.time())
         self.failed_until = {}        # name -> monotonic time: an upgrade that failed is not retried for a while
+        self.hold_own = False         # ★ the owner chose Own Wi-Fi (memory only — a power cycle clears it)
+        self.hold_at = 0.0            # wall clock, when it was chosen
+        self.link = None              # the joined link: {signal, tx, rx, retry} — shown beside the choice
+        self._link_prev = None        # (tx packets, tx retries) at the last reading, for the retry %
         self._names, self._names_at, self._fields = [], -1e9, {}
         self._ip = ("", "")
         self.internet = "unknown"     # NetworkManager's connectivity verdict, from NetWatch (events)
@@ -406,6 +418,58 @@ class Box:
                 if s:
                     seen.add(s)
         return seen
+
+    def link_info(self):
+        """★ The joined link as Linux reports it: signal (dBm), tx/rx bitrate (Mbit/s) from `iw … link`, and the share
+        of transmissions retried since the last reading from `iw … station dump` — retries climb before the signal
+        figure looks bad, and they are what a listener hears as drop-outs. None when not joined."""
+        rc, out = self.sh.run(["iw", "dev", self.dev, "link"], timeout=10)
+        if rc != 0 or "Not connected" in (out or ""):
+            self._link_prev = None
+            return None
+        def num(pat, text):
+            m = re.search(pat, text or "")
+            return float(m.group(1)) if m else None
+        sig = num(r"signal:\s*(-?\d+)", out)
+        tx = num(r"tx bitrate:\s*([\d.]+)", out)
+        rx = num(r"rx bitrate:\s*([\d.]+)", out)
+        retry = None
+        rc2, dump = self.sh.run(["iw", "dev", self.dev, "station", "dump"], timeout=10)
+        pk, rt = num(r"tx packets:\s*(\d+)", dump), num(r"tx retries:\s*(\d+)", dump)
+        if rc2 == 0 and pk is not None and rt is not None:
+            if self._link_prev and pk > self._link_prev[0]:
+                dp, dr = pk - self._link_prev[0], max(0.0, rt - self._link_prev[1])
+                retry = int(round(100.0 * dr / (dp + dr))) if dp + dr > 0 else 0
+            self._link_prev = (pk, rt)
+        return {"signal": int(sig) if sig is not None else None,
+                "tx": tx, "rx": rx, "retry": retry}
+
+    def own_wifi(self):
+        """The owner's choice: leave the network for the box's own (secured) hotspot, and hold it there."""
+        if not self.have(AP_NAME):
+            self.last_error = "Own Wi-Fi needs the box's own hotspot set up first"
+            return
+        self.hold_own, self.hold_at = True, time.time()
+        log("the owner chose Own Wi-Fi — leaving the network for the box's own hotspot")
+        if self.cur not in (AP_NAME, SETUP_NAME):
+            if self.cur:
+                self.down(self.cur)
+            self.read_active()
+            self.raise_hotspot("the owner chose Own Wi-Fi")
+
+    def network_again(self, why):
+        """Back to the saved networks, in order (the owner's choice, or the hold expiring)."""
+        self.hold_own = False
+        if self.cur in (AP_NAME, SETUP_NAME):
+            self.leave_hotspot_and_try(why)
+
+    def hold_quiet_for(self):
+        """Seconds since the radio was last in use (or since Own Wi-Fi was chosen, if later)."""
+        try:
+            last = os.stat(ACTIVE_FILE).st_mtime
+        except OSError:
+            last = 0.0
+        return time.time() - max(self.hold_at, last)
 
     def station_count(self):
         rc, out = self.sh.run(["iw", "dev", self.dev, "station", "dump"], timeout=10)
@@ -667,6 +731,18 @@ class Box:
             if self.clients:
                 self.last_client = now
             idle = now - self.last_client >= self.ci("IDLE_SEC")
+            # ★★★ OWN WI-FI IS HELD while the radio is in use — none of the "a network is back" logic below runs. Once
+            #     nobody has listened for RELEASE_SEC: back to a saved network if one is in range, else stay.
+            if self.hold_own and cur == AP_NAME:
+                if self.hold_quiet_for() >= self.ci("RELEASE_SEC"):
+                    seen = self.scan_while_ap()
+                    names = {s for _, _, s, _ in saved}
+                    if seen is None or (seen & names) or any(h for _, _, _, h in saved):
+                        self.network_again("Own Wi-Fi released: the radio has not been used for %d min"
+                                           % (self.ci("RELEASE_SEC") // 60))
+                    else:
+                        self.hold_own = False      # nothing to go back to: the ordinary rescans take over
+                return
             # ★ The OPEN setup hotspot gives way as soon as setup has saved a secured one and nobody
             #   is on it — networks first, the secured hotspot if none is in range.
             if cur == SETUP_NAME and self.have(AP_NAME) and idle:
@@ -693,6 +769,7 @@ class Box:
             return
         if cur and st >= 100:
             self.connecting_since = None
+            self.link = self.link_info()
             if self.mode != "client":
                 self.mode, self.since = "client", int(time.time())
                 self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
@@ -733,6 +810,8 @@ class Box:
             "scan": self.scan_cache, "scanAt": self.scan_at, "clients": self.clients,
             "rescanSec": self.ci("RESCAN_SEC"), "idleSec": self.ci("IDLE_SEC"),
             "apAddress": AP_ADDR, "lastError": self.last_error,
+            "hold": self.hold_own,                                        # Own Wi-Fi chosen by hand
+            "link": self.link if self.mode == "client" else None,        # signal / rates / retries
             # ★★ "full" = NM proved real internet. The server starts the tunnel ONLY on "full" — never
             #    on a hotspot, which has no upstream by definition.
             "internet": self.internet if self.mode == "client" else "none",
@@ -966,6 +1045,10 @@ def main_loop():
             cur, _ = box.read_active()
             if word == "switch":
                 box.leave_hotspot_and_try("the owner asked to switch now")
+            elif word == "own":
+                box.own_wifi()
+            elif word == "network":
+                box.network_again("the owner chose Network")
             elif word == "scan":
                 if cur in (AP_NAME, SETUP_NAME):
                     seen = box.scan_while_ap()

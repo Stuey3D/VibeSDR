@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from contextlib import redirect_stdout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -54,6 +55,8 @@ class FakeNM:
         self.nft = []
         self.modified = []
         self.deleted = []
+        self.link_sig, self.tx_rate = -60, 65.0     # the joined link as `iw … link` reports it
+        self.txpk, self.txrt = 1000, 10             # station dump counters (packets, retries)
 
     # Shell interface
     def now(self):
@@ -97,7 +100,14 @@ class FakeNM:
                 return 1, ""
             return 0, "".join("BSS x\n\tSSID: %s\n" % s for s in self.air)
         if a[:2] == ["iw", "dev"] and a[3:] == ["station", "dump"]:
+            if self.active and not self.is_ap():     # as a client: the one station is the router, with counters
+                return 0, "Station e4:5e:1b:00:00:01 (on wlan0)\n\ttx packets:\t%d\n\ttx retries:\t%d\n" % (self.txpk, self.txrt)
             return 0, "".join("Station aa:bb:cc:00:00:%02d (on wlan0)\n" % i for i in range(self.stations))
+        if a[:2] == ["iw", "dev"] and a[3:] == ["link"]:
+            if not self.active or self.is_ap():
+                return 0, "Not connected.\n"
+            return 0, ("Connected to e4:5e:1b:00:00:01 (on wlan0)\n\tSSID: x\n\tsignal: %d dBm\n"
+                       "\trx bitrate: 72.2 MBit/s MCS 7 short GI\n\ttx bitrate: %.1f MBit/s MCS 5\n") % (self.link_sig, self.tx_rate)
         if a[:3] == ["nmcli", "--wait", a[2]] and a[3:5] == ["connection", "up"]:
             name = a[5]
             c = self.conns.get(name)
@@ -396,6 +406,58 @@ def main():
         ok(not calls, "nothing to do → nothing run (it is called every few seconds)")
         box.sync_hostname(True)
         ok(["hostnamectl", "set-hostname", "vibepocket"] in calls, "configured → the setup name is retired (vibepocket)")
+
+    # ── OWN WI-FI BY HAND (Stuart, 2026-10-10): held while the radio is in use, released after 30 quiet minutes ──
+    with tempfile.TemporaryDirectory() as tmp:
+        nm, box = make(tmp)
+        vp.ACTIVE_FILE = os.path.join(tmp, "pocket-active")
+        nm.air = {"Home": (70, "homepass1")}
+        box.apply(req([("Home", "homepass1", {})]))
+        box.leave_hotspot_and_try("test: setup finished")
+        run_for(nm, box, 30)
+        ok(nm.active == "vibe-net-1" and box.mode == "client", "on the home network")
+        ok(box.link and box.link["signal"] == -60 and box.link["tx"] == 65.0, "the link's signal and tx rate are read (iw link)")
+        nm.txpk, nm.txrt = 1100, 30            # 100 sent, 20 more retries
+        run_for(nm, box, 5)
+        ok(box.link["retry"] == 17, "…and the share of retried transmissions since the last reading (20 of 120 = 17 %)")
+        st = json.load(open(os.path.join(tmp, "state.json")))
+        ok(st.get("link", {}).get("signal") == -60 and st.get("hold") is False, "the state carries the link and hold: false")
+
+        box.own_wifi()
+        ok(nm.active == vp.AP_NAME and box.hold_own, "Own Wi-Fi: the box leaves Home for its own secured hotspot, held")
+        nm.stations = 0
+        open(vp.ACTIVE_FILE, "w").close()                     # the radio is in use
+        run_for(nm, box, 900)
+        ok(nm.active == vp.AP_NAME, "…and stays there with Home in range and nobody on it — it is held, not idle-closed")
+        st = json.load(open(os.path.join(tmp, "state.json")))
+        ok(st.get("hold") is True and st.get("link") is None, "the state says hold: true (no link while a hotspot)")
+
+        box.hold_at = time.time() - 2000
+        os.utime(vp.ACTIVE_FILE, (time.time() - 60, time.time() - 60))
+        run_for(nm, box, 10)
+        ok(nm.active == vp.AP_NAME, "used a minute ago: still held, however long ago it was chosen")
+        os.utime(vp.ACTIVE_FILE, (time.time() - 1900, time.time() - 1900))
+        nm.ap_force = True
+        run_for(nm, box, 30)
+        ok(nm.active == "vibe-net-1" and not box.hold_own, "30 min unused, Home in range: back to Home, hold released")
+
+        box.own_wifi(); run_for(nm, box, 10)
+        box.network_again("the owner chose Network")
+        ok(nm.active == "vibe-net-1" and not box.hold_own, "Network: straight back to the saved network")
+
+        box.own_wifi()
+        nm2, box2 = make(tmp)                                  # ★ the power is pulled: a new service, nothing held
+        nm2.conns = json.loads(json.dumps(nm.conns)); nm2.air = dict(nm.air)
+        run_for(nm2, box2, 120)
+        ok(nm2.active == "vibe-net-1" and not box2.hold_own, "after a power cycle it comes back on the main Wi-Fi")
+
+        nm3, box3 = make(tmp)
+        nm3.air = {"Home": (70, "homepass1")}
+        nm3.conns = {k: v for k, v in json.loads(json.dumps(nm.conns)).items() if k != vp.AP_NAME}
+        run_for(nm3, box3, 60)
+        box3.own_wifi()
+        ok(nm3.active == "vibe-net-1" and not box3.hold_own and "hotspot" in box3.last_error,
+           "with no hotspot of its own set up, Own Wi-Fi is refused and says why")
 
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")
