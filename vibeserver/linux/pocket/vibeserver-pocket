@@ -85,6 +85,14 @@ DEFAULTS = {
     "IDLE_SEC": "120",              # …and only once nobody has been connected for this long
     "UPGRADE_SEC": "120",           # on network 2/3: how often to look for a higher one
     "JOIN_WAIT_SEC": "30",          # nmcli --wait for one join attempt
+    # ★★★ A WEAK LINK IS LEFT, NOT ENDURED (Stuart, 2026-10-10: the Pi 3 A+ dropped out with its back to the house
+    #     and worked facing it — "switch to captive wifi when we detect a weaker wifi connection"). Hysteresis: a link
+    #     is LEFT at WEAK_DBM, and a network is only JOINED (or moved up to) at JOIN_DBM, 7 dB stronger, so the box
+    #     does not flap between the two at the edge of the house's coverage.
+    "WEAK_DBM": "-75",              # the joined network's signal at or below this counts as weak…
+    "WEAK_SEC": "20",               # …and held this long (median of the last three readings) → leave it
+    "JOIN_DBM": "-68",              # a network must scan at least this strong to be joined or moved up to
+    "WEAK_REST_SEC": "300",         # a network left for weakness is not tried again for this long
 }
 
 
@@ -191,6 +199,18 @@ def terse_split(line):
     return out
 
 
+def pct_to_dbm(p):
+    """NetworkManager's signal percentage back to dBm (NM reports clamp(2 × (dBm + 100), 0, 100))."""
+    try:
+        return int(round(int(p) / 2.0 - 100))
+    except (TypeError, ValueError):
+        return -100
+
+
+def dbm_to_pct(d):
+    return max(0, min(100, int(round(2 * (int(d) + 100))))) if d is not None else 0
+
+
 def iw_unescape(s):
     """iw prints non-printable SSID bytes as \\xNN."""
     b = bytearray()
@@ -266,6 +286,10 @@ class Box:
         self.host_synced = False
         self.since = int(time.time())
         self.failed_until = {}        # name -> monotonic time: an upgrade that failed is not retried for a while
+        self.weak_until = {}          # name -> monotonic time: left for a weak signal, rested until then
+        self.sig_hist = []            # the joined link's last three signal readings (dBm)
+        self.weak_since = None
+        self.link_sig = None          # the joined link's signal now (dBm), shown on the page
         self._names, self._names_at, self._fields = [], -1e9, {}
         self._ip = ("", "")
         self.internet = "unknown"     # NetworkManager's connectivity verdict, from NetWatch (events)
@@ -398,14 +422,33 @@ class Box:
         rc, out = self.sh.run(["iw", "dev", self.dev, "scan", "ap-force"], timeout=20)
         if rc != 0:
             return None
-        seen = set()
+        # ★ {ssid: dBm} — the strongest BSS of each name (iw prints "signal: -67.00 dBm" before "SSID: …").
+        seen, sig = {}, None
         for line in out.splitlines():
             line = line.strip()
-            if line.startswith("SSID: "):
+            if line.startswith("BSS "):
+                sig = None
+            elif line.startswith("signal:"):
+                m = re.match(r"signal:\s*(-?\d+)", line)
+                sig = int(m.group(1)) if m else None
+            elif line.startswith("SSID: "):
                 s = iw_unescape(line[6:])
-                if s:
-                    seen.add(s)
+                if s and (s not in seen or (sig is not None and (seen[s] is None or sig > seen[s]))):
+                    seen[s] = sig
         return seen
+
+    def link_dbm(self):
+        """The joined network's signal, in dBm (iw's own reading of the link), or None."""
+        rc, out = self.sh.run(["iw", "dev", self.dev, "link"], timeout=10)
+        m = re.search(r"signal:\s*(-?\d+)", out or "") if rc == 0 else None
+        return int(m.group(1)) if m else None
+
+    def scan_dbm(self, ssid):
+        """A network's signal in the last full scan, in dBm (NM gives a percentage), or None if not seen."""
+        for x in self.scan_cache:
+            if x["ssid"] == ssid:
+                return pct_to_dbm(x["signal"])
+        return None
 
     def station_count(self):
         rc, out = self.sh.run(["iw", "dev", self.dev, "station", "dump"], timeout=10)
@@ -538,8 +581,17 @@ class Box:
         for rank, name, ssid, hidden in saved:
             if below_rank is not None and rank >= below_rank:
                 break
+            # ★ Left for a weak signal: rested, even if we are (still) on it — this is how the box moves off it.
+            if self.weak_until.get(name, 0) > now:
+                continue
             if self.cur == name and self.st >= 100:
                 return True                     # already on the best one there is
+            # ★★ Strong enough to JOIN — 7 dB above where a link is left, so the edge of coverage cannot flap.
+            #    A not-visible network (a phone hotspot) has no reading and is tried by name, as before.
+            d = self.scan_dbm(ssid) if ssid in visible else None
+            if d is not None and d < self.ci("JOIN_DBM"):
+                log("network %s (%s) is too weak to join (%d dBm)" % (rank if rank < 9 else "other", ssid, d))
+                continue
             # ★ A phone hotspot may not be ADVERTISING (the phone is busy) — the owner ticks
             #   "not visible" and NM probes for it by name; everything else must be SEEN first, or
             #   each absent network costs JOIN_WAIT_SEC of nothing.
@@ -677,8 +729,12 @@ class Box:
             if saved and now >= self.next_rescan:
                 self.next_rescan = now + self.ci("RESCAN_SEC")
                 seen = self.scan_while_ap()
-                names = {s for _, _, s, _ in saved}
-                maybe = seen is None or bool(seen & names) or any(h for _, _, _, h in saved)
+                # ★ A saved network counts as "back" only if it is strong enough to JOIN (or iw gave no reading) and
+                #   is not resting after a weak spell — else the box would drop its hotspot for a link it would leave.
+                rested = {n for n, t in self.weak_until.items() if t > now}
+                names = {s for _, n, s, _ in saved if n not in rested}
+                strong = None if seen is None else {s for s, d in seen.items() if d is None or d >= self.ci("JOIN_DBM")}
+                maybe = seen is None or bool(strong & names) or any(h for _, n, _, h in saved if n not in rested)
                 if maybe and idle:
                     self.leave_hotspot_and_try("hotspot idle for %d s" % self.ci("IDLE_SEC"))
             return
@@ -696,6 +752,8 @@ class Box:
             if self.mode != "client":
                 self.mode, self.since = "client", int(time.time())
                 self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
+            if self.watch_link(now, cur):
+                return
             rank = next((r for r, n, s, h in saved if n == cur), 10)
             if rank > 1 and now >= self.next_upgrade:
                 self.next_upgrade = now + self.ci("UPGRADE_SEC")
@@ -717,6 +775,38 @@ class Box:
         self.connecting_since = None
         self.leave_hotspot_and_try("not connected to anything")
 
+    def watch_link(self, now, cur):
+        """★★★ THE WEAK-LINK HANDOVER. Reads the joined link's signal every tick; three readings whose median sits at
+        or below WEAK_DBM for WEAK_SEC → that network is rested and the box moves on: the next network in order that
+        scans strong enough, else its own hotspot. True if it moved."""
+        d = self.link_dbm()
+        if d is None:
+            return False
+        self.link_sig = d
+        self.sig_hist = (self.sig_hist + [d])[-3:]
+        med = sorted(self.sig_hist)[len(self.sig_hist) // 2]
+        if len(self.sig_hist) < 3 or med > self.ci("WEAK_DBM"):
+            self.weak_since = None
+            return False
+        if self.weak_since is None:
+            self.weak_since = now
+        if now - self.weak_since < self.ci("WEAK_SEC"):
+            return False
+        ssid = next((s for r, n, s, h in self.saved() if n == cur), cur)
+        log("network \"%s\" is weak (%d dBm for %d s) — moving on" % (ssid, med, int(now - self.weak_since)))
+        self.weak_until[cur] = now + self.ci("WEAK_REST_SEC")
+        self.sig_hist, self.weak_since, self.link_sig = [], None, None
+        vis = self.scan() or set()
+        if self.try_networks(vis) and self.cur and self.cur != cur:
+            self.last_error = "left \"%s\": its signal was too weak (%d dBm)" % (ssid, med)
+            return True
+        self.down(cur)
+        self.captive_off()
+        self.read_active()
+        self.raise_hotspot("\"%s\" too weak (%d dBm) and no stronger network in range" % (ssid, med))
+        self.last_error = "left \"%s\": its signal was too weak (%d dBm)" % (ssid, med)
+        return True
+
     def write_state(self):
         saved = self.saved() if self.dev else []
         ap_set = self.have(AP_NAME) if self.dev else False
@@ -733,6 +823,8 @@ class Box:
             "scan": self.scan_cache, "scanAt": self.scan_at, "clients": self.clients,
             "rescanSec": self.ci("RESCAN_SEC"), "idleSec": self.ci("IDLE_SEC"),
             "apAddress": AP_ADDR, "lastError": self.last_error,
+            "signal": self.link_sig if self.mode == "client" else None,   # dBm of the joined link
+            "weakDbm": self.ci("WEAK_DBM"),
             # ★★ "full" = NM proved real internet. The server starts the tunnel ONLY on "full" — never
             #    on a hotspot, which has no upstream by definition.
             "internet": self.internet if self.mode == "client" else "none",
@@ -970,7 +1062,8 @@ def main_loop():
                 if cur in (AP_NAME, SETUP_NAME):
                     seen = box.scan_while_ap()
                     if seen is not None:
-                        box.scan_cache = [{"ssid": s, "signal": 0, "secure": True} for s in sorted(seen)]
+                        box.scan_cache = sorted(({"ssid": s, "signal": dbm_to_pct(d), "secure": True}
+                                                 for s, d in seen.items()), key=lambda x: -x["signal"])
                         box.scan_at = int(time.time())
                 else:
                     box.scan()
