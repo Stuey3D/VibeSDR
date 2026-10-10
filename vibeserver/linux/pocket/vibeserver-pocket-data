@@ -1,0 +1,95 @@
+#!/bin/bash
+# vibeserver-pocket-data — the pocket box's ONE writable place, made ready before anything uses it.
+#
+# ★★★ WHY (Stuart, 2026-10-10): "the pocket box WILL have its power pulled at any moment". So the root
+#     filesystem is READ-ONLY (overlayroot=tmpfs: every write to / lands in RAM and is gone at the next
+#     boot), and what must survive lives on a small partition of its own, LABEL=vibedata, ext4 with
+#     data=journal — a cut mid-write leaves the old file or the new one, never half of either.
+#     What lives there, bound into place:
+#       /data/vibeserver/etc   → /etc/vibeserver                          (config.json: admin, radios, tunnel switches)
+#       /data/vibeserver/lib   → /var/lib/vibeserver                      (directory id/key, bans, bench, tunnel state)
+#       /data/nm               → /etc/NetworkManager/system-connections   (the saved Wi-Fi + the hotspot, root 0600)
+#       /data/pocket           → /var/lib/vibeserver-pocket               (the Wi-Fi country, set in setup)
+#       /data/timesync         → /var/lib/systemd/timesync                (the last known time — no RTC on a Pi)
+#
+# ★★★ THE FAILSAFE: A BOX THAT CANNOT READ ITS SETTINGS MUST STILL BE REACHABLE FROM A PHONE.
+#     fsck first; if the partition still will not mount it is made afresh (it holds only settings, and
+#     settings that cannot be read are already lost) — the box then has no saved Wi-Fi, so
+#     vibeserver-pocket raises the OPEN setup hotspot and the owner sets it up again from the phone.
+#     If even that fails, nothing is bound: the read-only root's own copies (no Wi-Fi saved, a fresh
+#     config) are what the services see — the same open setup hotspot, settings kept in RAM only.
+#
+# ★★ FIRST BOOT: the image ships the partition small (it keeps the .img small); it is grown here to
+#    DATA_MB once, IDEMPOTENTLY — a cut mid-way leaves either the old size or the new one (one sector
+#    of partition table, then an online, journalled resize2fs), and the next boot simply tries again.
+#    The rest of the card is left UNALLOCATED on purpose: see docs/POCKET-VIBESERVER-PI3A.md.
+#
+# ★ Runs as root before NetworkManager and vibeserver (vibeserver-pocket-data.service). Off unless
+#   the image's marker exists. Every step is safe to repeat.
+set -u
+MARK=/etc/vibeserver-pocket/enabled
+[ -f "$MARK" ] || exit 0
+DATA=/data
+LABEL=vibedata
+DATA_MB=${POCKET_DATA_MB:-1024}
+say() { echo "vibeserver-pocket-data: $*"; }
+
+DEV=$(blkid -L "$LABEL" 2>/dev/null || true)
+if [ -z "$DEV" ]; then
+  say "no partition labelled $LABEL — running on the read-only root's defaults (setup hotspot)"
+  exit 0
+fi
+
+# ── 1. Grow it once, to DATA_MB (first boot) ─────────────────────────────────────────────────────
+DISK="/dev/$(lsblk -no PKNAME "$DEV")"
+PARTN=$(cat "/sys/class/block/$(basename "$DEV")/partition" 2>/dev/null || echo "")
+if [ -n "$PARTN" ] && [ -b "$DISK" ]; then
+  SECT=$(cat "/sys/class/block/$(basename "$DEV")/size")
+  WANT=$((DATA_MB * 2048))
+  START=$(cat "/sys/class/block/$(basename "$DEV")/start")
+  DISKSECT=$(cat "/sys/class/block/$(basename "$DISK")/size")
+  if [ "$SECT" -lt "$WANT" ] && [ $((START + WANT)) -le "$DISKSECT" ]; then
+    say "growing $DEV to $DATA_MB MB (first boot)"
+    # ★ One partition-table write (sfdisk writes the whole table in one go and syncs it).
+    echo ",$WANT" | sfdisk -q --no-reread -N "$PARTN" "$DISK" >/dev/null 2>&1 \
+      && partx -u "$DISK" 2>/dev/null
+  fi
+fi
+
+# ── 2. Check, mount, or make afresh ──────────────────────────────────────────────────────────────
+mkdir -p "$DATA"
+if ! mountpoint -q "$DATA"; then
+  fsck.ext4 -p "$DEV" >/dev/null 2>&1; rc=$?
+  [ $rc -ge 4 ] && fsck.ext4 -fy "$DEV" >/dev/null 2>&1
+  if ! mount -t ext4 -o noatime,data=journal,commit=5 "$DEV" "$DATA" 2>/dev/null; then
+    say "!! $LABEL would not mount even after fsck — making it afresh; the box comes up in setup mode"
+    mkfs.ext4 -q -F -L "$LABEL" "$DEV" >/dev/null 2>&1
+    mount -t ext4 -o noatime,data=journal,commit=5 "$DEV" "$DATA" 2>/dev/null \
+      || { say "!! still cannot mount $DEV — running on the read-only root's defaults"; exit 0; }
+  fi
+fi
+# ★ Online, journalled grow to the partition's (possibly new) size. A no-op once done.
+resize2fs "$DEV" >/dev/null 2>&1 || true
+
+# ── 3. Bind each persistent directory, seeding it from the read-only root the first time ────────
+# ★ The seed is copied BEFORE the bind (the lower copy is hidden afterwards), and the ".seeded" stamp
+#   is written LAST — a cut mid-copy just copies again next boot (cp -n never overwrites a real file).
+bindone() {   # <data subdir> <target> <owner> <mode>
+  local src="$DATA/$1" dst="$2" own="$3" mode="$4"
+  mountpoint -q "$dst" && return 0
+  mkdir -p "$src" "$dst"
+  if [ ! -e "$src/.seeded" ]; then
+    cp -an "$dst/." "$src/" 2>/dev/null || true
+    sync -f "$src" 2>/dev/null || sync
+    : > "$src/.seeded"
+  fi
+  chown "$own" "$src"; chmod "$mode" "$src"
+  mount --bind "$src" "$dst" || say "!! could not bind $src on $dst"
+}
+bindone vibeserver/etc /etc/vibeserver                         vibeserver:vibeserver 0755
+bindone vibeserver/lib /var/lib/vibeserver                     vibeserver:vibeserver 0750
+bindone nm             /etc/NetworkManager/system-connections  root:root             0700
+bindone pocket         /var/lib/vibeserver-pocket              root:root             0755
+bindone timesync       /var/lib/systemd/timesync               systemd-timesync:systemd-timesync 0755
+say "settings partition ready ($(df -h "$DATA" | awk 'NR==2{print $3" used of "$2}'))"
+exit 0

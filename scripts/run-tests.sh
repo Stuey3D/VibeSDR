@@ -105,6 +105,8 @@ deps_for() {
     test-parent-watch)  echo "$SRC/parent_watch.cpp" ;;
     # ★★ The pocket image's daemon side: captive answers, the first-run claim, the Wi-Fi request.
     test-pocket)        echo "$SRC/pocket.cpp" ;;
+    # ★★ The config survives a pulled plug: atomic save, last-good .bak, refusal of a truncated file.
+    test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
     # ★★★ An admin read must never hold the connection log's lock while it works (Pi 2 IQ overruns
     #     with the admin page open, 2026-10-01). Header-only; slow resolvers make it CPU-independent.

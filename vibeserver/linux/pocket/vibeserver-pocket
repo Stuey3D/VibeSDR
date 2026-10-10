@@ -43,7 +43,10 @@ import sys
 import time
 
 MARKER       = "/etc/vibeserver-pocket/enabled"
-CONF         = "/etc/vibeserver-pocket/pocket.conf"
+CONF         = "/etc/vibeserver-pocket/pocket.conf"       # the image's defaults (read-only root)
+# ★★ What setup CHANGES (the country) lives on the settings partition — the root is read-only on a
+#    pocket box (vibeserver-pocket-data binds /data/pocket here). Read after CONF, so it wins.
+STATE_CONF   = "/var/lib/vibeserver-pocket/pocket.conf"
 STATE_DIR    = "/run/vibeserver-pocket"
 INBOX        = "/var/lib/vibeserver/pocket-wifi.request"
 KICK         = "/var/lib/vibeserver/pocket-kick.request"
@@ -757,22 +760,43 @@ def write_state_file(path, doc):
     os.replace(tmp, path)
 
 
-def load_conf(path=CONF):
+def load_conf(paths=(CONF, STATE_CONF)):
     conf = dict(DEFAULTS)
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                conf[k.strip()] = v.strip().strip('"')
-    except OSError:
-        pass
+    for path in paths:
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    conf[k.strip()] = v.strip().strip('"')
+        except OSError:
+            pass
     return conf
 
 
-def write_conf_value(key, value, path=CONF):
+def write_atomic(path, text, mode=0o644):
+    """★★★ A POWER CUT LEAVES THE OLD FILE OR THE NEW ONE, NEVER HALF OF EITHER: temp file, fsync,
+    rename, fsync the directory (the rename itself is only durable once its directory is)."""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, mode)
+    try:
+        os.write(fd, text.encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+    dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def write_conf_value(key, value, path=STATE_CONF):
     lines, found = [], False
     try:
         with open(path) as f:
@@ -785,10 +809,7 @@ def write_conf_value(key, value, path=CONF):
         pass
     if not found:
         lines.append("%s=%s\n" % (key, value))
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.writelines(lines)
-    os.replace(tmp, path)
+    write_atomic(path, "".join(lines))
 
 
 def vibeserver_uid():

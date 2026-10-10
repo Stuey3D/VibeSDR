@@ -816,6 +816,9 @@ bool loadServer(const std::string& path, ServerConfig& cfg, std::string& err);
  *  is a trap rather than a tidiness rule. Exposed so the setup page can say so BEFORE the save. */
 bool pinCollidesWithMaster(const ServerConfig& cfg, const std::string& radioPin);
 bool saveServer(const std::string& path, const ServerConfig& cfg, std::string& err);
+/** ★★ Load the config, or — if it is missing, empty or unreadable — the last good copy that saveServer
+ *  kept beside it (config.json.bak). `usedBackup` says which. False when neither can be read. */
+bool loadServerOrBackup(const std::string& path, ServerConfig& cfg, std::string& err, bool& usedBackup);
 std::string toJson(const ServerConfig& cfg);
 bool fromJson(const std::string& json, ServerConfig& cfg, std::string& err);
 

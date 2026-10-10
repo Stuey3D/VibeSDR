@@ -1435,7 +1435,37 @@ int main(int argc, char** argv) {
         }
 
         vsconfig::ServerConfig srv;
-        if (vsconfig::loadServer(g_configPath, srv, err)) {
+        /* ★★★ A CONFIG THAT CANNOT BE READ MUST NOT LOCK THE OWNER OUT (2026-10-10, the pocket box).
+         *  First the file; if it is missing, empty or unreadable, the last good copy saveServer kept
+         *  (config.json.bak) — and that copy is written back as the config so the next start is normal.
+         *  ★★ ON THE POCKET IMAGE, IF NEITHER CAN BE READ, START AS A NEW BOX: Full mode, no radio, no
+         *     password — so the setup page offers "Choose an admin password" again and the phone can
+         *     recover it. A box with no screen and no terminal that refuses to start is a brick. Every
+         *     other install keeps today's behaviour (ignore the file, run from the command line). */
+        bool usedBackup = false;
+        bool haveCfg = vsconfig::loadServerOrBackup(g_configPath, srv, err, usedBackup);
+        if (haveCfg && usedBackup) {
+            std::fprintf(stderr, "VibeServer: %s could not be read — restored the last good copy (%s.bak)\n",
+                         g_configPath.c_str(), g_configPath.c_str());
+            std::string werr;
+            vsconfig::saveServer(g_configPath, srv, werr);
+        }
+        if (!haveCfg && vibepocket::enabled() && wantSerial.empty()) {
+            struct stat cst{};
+            const bool existed = ::stat(g_configPath.c_str(), &cst) == 0;
+            srv = vsconfig::ServerConfig{};
+            srv.fullMode = true;
+            srv.sharing  = vsconfig::Sharing::Public;
+            srv.configured = false;
+            std::string werr;
+            if (vsconfig::saveServer(g_configPath, srv, werr)) {
+                haveCfg = true; err.clear();
+                std::fprintf(stderr, "VibeServer: pocket — %s; starting as a NEW box so it can be set up "
+                                     "again from a phone\n",
+                             existed ? "the settings could not be read (nor their backup)" : "no settings yet");
+            }
+        }
+        if (haveCfg) {
             // ★★★ AND A HEADLESS SERVER IS A SERVER FOR OTHER PEOPLE. `sharing` decides whether
             //     the admin page offers the tools for managing strangers — who is connected and
             //     from where, the ban list, the connection history. It defaulted to Local, which

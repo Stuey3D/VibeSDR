@@ -1155,11 +1155,64 @@ bool saveServer(const std::string& path, const ServerConfig& cfg, std::string& e
     if (fsync(fileno(f)) != 0) { err = "fsync failed"; fclose(f); unlink(tmp.c_str()); return false; }
     fchmod(fileno(f), 0600);       // ★ before the rename — it holds the admin password in clear
     fclose(f);
+    /* ★★★ KEEP THE LAST GOOD COPY (2026-10-10, the pocket box — "its power WILL be pulled"). The file
+     *  being replaced was read and written whole by this same code, so it is a known-good config; it
+     *  becomes config.json.bak by a HARD LINK (no copy, no second write of the password) before the new
+     *  one is renamed over it. loadServerOrBackup() falls back to it. Every install benefits: a config
+     *  that cannot be read is the one failure that locks an owner out of their own receiver. */
+    {
+        const std::string bak = path + ".bak";
+        struct stat cur{};
+        if (::lstat(path.c_str(), &cur) == 0 && S_ISREG(cur.st_mode) && cur.st_size > 0) {
+            ::unlink(bak.c_str());
+            if (::link(path.c_str(), bak.c_str()) != 0) { /* a FS without hard links: no backup, not an error */ }
+        }
+    }
     if (rename(tmp.c_str(), path.c_str()) != 0) {
         err = std::string("rename failed: ") + strerror(errno);
         unlink(tmp.c_str()); return false;
     }
+    /* ★★ AND MAKE THE RENAME ITSELF DURABLE. fsync of the file makes its BYTES safe; the rename lives
+     *  in the directory, and until the directory is synced a power cut can bring back the OLD name —
+     *  or, on some filesystems, neither. One fsync of the directory closes that. */
+    {
+        std::string dir = path;
+        const size_t slash = dir.rfind('/');
+        dir = slash == std::string::npos ? "." : (slash == 0 ? "/" : dir.substr(0, slash));
+        const int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (dfd >= 0) { ::fsync(dfd); ::close(dfd); }
+    }
     return true;
+}
+
+bool loadServerOrBackup(const std::string& path, ServerConfig& cfg, std::string& err, bool& usedBackup) {
+    usedBackup = false;
+    // ★ "Readable" means it opened, parsed, and is not EMPTY — a zero-length file (a cut on a filesystem
+    //   without data journalling) parses as "nothing recognised" or not at all.
+    auto good = [](const std::string& p, ServerConfig& out, std::string& e) {
+        struct stat st{};
+        if (::stat(p.c_str(), &st) != 0 || st.st_size == 0) return false;
+        /* ★★ A WHOLE OBJECT, OR NOT AT ALL. fromJson is deliberately lenient — a file with no radios
+         *  array is read as the old single-radio shape and ANYTHING parses that way — so garbage, or a
+         *  file cut off half way, would be "read" as defaults with no admin password. Every file this
+         *  code writes starts with '{' and ends with "}\n"; a truncated one has no closing brace. */
+        {
+            FILE* f = std::fopen(p.c_str(), "rb");
+            if (!f) return false;
+            std::string body; char buf[4096]; size_t n;
+            while ((n = std::fread(buf, 1, sizeof buf, f)) > 0 && body.size() < (1u << 20)) body.append(buf, n);
+            std::fclose(f);
+            const size_t a = body.find_first_not_of(" \t\r\n"), z = body.find_last_not_of(" \t\r\n");
+            if (a == std::string::npos || body[a] != '{' || body[z] != '}') return false;
+        }
+        ServerConfig tmp; e.clear();
+        if (!loadServer(p, tmp, e) || !e.empty()) return false;
+        out = tmp; return true;
+    };
+    if (good(path, cfg, err)) return true;
+    std::string e2;
+    if (good(path + ".bak", cfg, e2)) { usedBackup = true; err.clear(); return true; }
+    return false;
 }
 
 } // namespace vsconfig

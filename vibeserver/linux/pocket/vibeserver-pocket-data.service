@@ -1,0 +1,22 @@
+[Unit]
+# ★★★ THE POCKET IMAGE ONLY: mount the small writable settings partition and bind it into place, on a
+# box whose root filesystem is read-only so that pulling the power can never damage it. Must finish
+# BEFORE NetworkManager reads its saved connections and before vibeserver reads its config.
+# See /usr/lib/vibeserver/vibeserver-pocket-data and docs/POCKET-VIBESERVER-PI3A.md.
+Description=VibeServer — pocket settings partition (the only writable place on a read-only box)
+ConditionPathExists=/etc/vibeserver-pocket/enabled
+DefaultDependencies=no
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=NetworkManager.service vibeserver.service vibeserver-pocket.service systemd-timesyncd.service network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/vibeserver/vibeserver-pocket-data
+# ★ A fsck of a damaged partition can take a while; never let systemd give up half way.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
