@@ -86,6 +86,18 @@ try {
           busy = false;
         }, 5000);
       }, 45000);
+      // ★ A second window at 75 s for 6 s — a test drives something (drum drags) into it.
+      setTimeout(() => {
+        if (busy) return;
+        busy = true;
+        const e1 = PM.diagProfStart();
+        if (e1) { console.log('[VibeDiag] profiler start failed ' + e1); busy = false; return; }
+        setTimeout(() => {
+          const e2 = PM.diagProfDump(`${dir}/later.cpuprofile`);
+          console.log(e2 ? '[VibeDiag] profile failed ' + e2 : `[VibeDiag] profile written ${dir}/later.cpuprofile`);
+          busy = false;
+        }, 6000);
+      }, 75000);
       Dimensions.addEventListener('change', () => {
         if (busy) return;
         busy = true; const k = ++n;
