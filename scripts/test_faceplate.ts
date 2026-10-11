@@ -111,8 +111,10 @@ const def = resolveFaceplate(DEFAULT_SETTINGS);
 eq('default freq/unit/mode/reading are today\'s white-theme values',
    [def.deck.freq, def.deck.freqGlow, def.deck.unit, def.deck.mode, def.deck.reading, def.deck.sqlClosed, def.deck.freqFont],
    ['#ffffff', 'rgba(255,255,255,0.50)', '#b0b8c8', '#ffffff', '#b0b8c8', '#ff4040', 'Atkinson Hyperlegible']);
-eq('default key legend is today\'s white Atkinson, no glow', def.keyLegend,
-   { color: '#ffffff', font: 'Atkinson Hyperlegible', glow: null, hot: '#ffffff', shade: null });
+// ★ 2026-10-11 (Stuart): the default deck's legends follow the CONTROLS colour, unlit — as the web page's keys follow
+//   its font colour. They were white.
+eq('default key legend is the Controls colour, Atkinson, no glow', def.keyLegend,
+   { color: def.controls.core, font: 'Atkinson Hyperlegible', glow: null, hot: def.controls.hot, shade: null });
 // DrumWheel/TunerKeys drew hsl(120,100%,45%) (and 78% for the lit symbol) — the default green must
 // produce the identical strings.
 const g = resolveControlsColour('default', 'green');
