@@ -620,7 +620,9 @@ export default function AudioSheet({
 
   // Live signal reading — this sheet covers the signal bar, so show the CURRENT level next to the
   // squelch control (set the gate just above where speech sits / just below where noise shows).
-  const liveM = useMeters(meterBus);
+  // ★ Only while the sheet is OPEN (the diet, G35): the sheet stays mounted, and subscribed it re-rendered all of
+  //   itself on every meter sample (~40 a second) behind a closed Modal.
+  const liveM = useMeters(visible ? meterBus : undefined);
   const liveSig = liveM ? meterText(signalMode, liveM) : '';
 
   // Squelch readout in the DISPLAYED meter unit (S-units when the meter shows S-meter), while the

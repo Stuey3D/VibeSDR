@@ -167,7 +167,7 @@ export interface LedVuProps {
   onFault?: (message: string) => void;
 }
 
-export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps) {
+function LedVu({ bus, height, shared, geom, onFault }: LedVuProps) {
   const s = useUiScale();
   const [{ w }, onLayout] = useBoxSize();
   const padX = geom?.padX ?? s.r(7), padTop = geom?.padTop ?? s.r(shared ? 3 : 6), gap = s.r(4);
@@ -321,3 +321,6 @@ export default function LedVu({ bus, height, shared, geom, onFault }: LedVuProps
     </View>
   );
 }
+
+// ★ Memo (the diet, G35): a re-render re-records this Skia canvas from scratch; it moves on the bus, not on props.
+export default React.memo(LedVu);

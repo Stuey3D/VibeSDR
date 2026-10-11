@@ -16,7 +16,7 @@
  */
 
 import React, {
-  useCallback, useEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useMemo, useReducer, useRef, useState,
 } from 'react';
 import {
   Animated,
@@ -304,6 +304,28 @@ export function useMeters(bus?: MeterBus): MeterValues | null {
     return () => { bus.subs.delete(f); };
   }, [bus]);
   return bus ? v : null;
+}
+/**
+ * ★★★ A VALUE DERIVED FROM THE METER, re-rendering its owner only when THAT changes (the diet, Moto G35, 2026-10-11).
+ * useMeters re-renders on EVERY sample — about 40 a second. In the mode box that was the whole frequency display:
+ * the digits, the tubes, and the analogue meter's Skia canvas re-recorded from scratch 41 times a second (counted on
+ * the G35 — the largest single cost on the JS thread while just listening). The reading's TEXT changes a few times
+ * a second; the display renders then.
+ * ★ The selector runs at render against the bus's latest sample, so its other inputs (the unit, DAB) apply at once.
+ */
+export function useMeterSelect<T>(bus: MeterBus | undefined, select: (m: MeterValues | null) => T,
+                                  same: (a: T, b: T) => boolean = Object.is): T {
+  const [, bump] = useReducer((x: number) => x + 1, 0);
+  const cur = select(bus ? bus.value : null);
+  const ref = useRef({ select, same, cur });
+  ref.current = { select, same, cur };
+  useEffect(() => {
+    if (!bus) return;
+    const f = (nv: MeterValues) => { const r = ref.current; if (!r.same(r.select(nv), r.cur)) bump(); };
+    bus.subs.add(f);
+    return () => { bus.subs.delete(f); };
+  }, [bus]);
+  return cur;
 }
 
 /** Exported so the WATCH can mirror the phone's meter verbatim rather than picking
@@ -1118,7 +1140,6 @@ interface ModeReading { text: string; active: boolean; sqlClosed: boolean; breat
 function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, meterMode: MeterUnit | undefined,
                         signalActive: boolean | undefined): ModeReading {
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
-  const m = useMeters(bus);
   /* ★★★ The LIVE reading comes off the bus through the meters' own chain (meterText), so the needle and
    *  the LEDs stand under the label this text names. The screen's static label (FM-DX "28 dBf", from
    *  its 5 Hz state) only shows while the bus has nothing live — paused, or before the first frame. */
@@ -1127,10 +1148,13 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
    *  hour on a multiplex that never played (2026-10-06) — and never SQL: squelch does not gate DAB. */
   /* ★ The box shows the multiplex's MER (DAB's SNR) — the bar beside it already says "Weak"; repeating the
    *  word wasted the box (Stuart, 2026-10-06). The word only while there is no MER yet. */
-  const text = dab ? (dab.merDb !== undefined ? formatReading('snr', dab.merDb) : dab.short)
-    : m && (m.active || !snrText) ? meterText(meterMode ?? 'snr', m) : (snrText ?? '');
-  const active = m ? m.active : !!signalActive;
-  const sqlClosed = !dab && sqlClosedOf(m ? (m.sql ?? -1) : -1, m?.gate, m ? m.level : 0);
+  // ★ Selected, not subscribed (useMeterSelect): the box re-renders when the text / lamp / SQL changes, not per sample.
+  const { text, active, sqlClosed } = useMeterSelect(bus, m => ({
+    text: dab ? (dab.merDb !== undefined ? formatReading('snr', dab.merDb) : dab.short)
+      : m && (m.active || !snrText) ? meterText(meterMode ?? 'snr', m) : (snrText ?? ''),
+    active: m ? m.active : !!signalActive,
+    sqlClosed: !dab && sqlClosedOf(m ? (m.sql ?? -1) : -1, m?.gate, m ? m.level : 0),
+  }), (a, b) => a.text === b.text && a.active === b.active && a.sqlClosed === b.sqlClosed);
   const breathe = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     if (!sqlClosed) { breathe.setValue(1); return; }
@@ -1656,7 +1680,9 @@ function VuScaleLabels({ unit, padX, top, labelH }: { unit: MeterUnit; padX: num
 
 /** The LED strip's / edgewise meter's black housing (§4.3 / §4.5): `#030303 → #0b0b0b`, inset shadow,
  *  the chassis lip below, and the meter in it. */
-function MeterHousing({ kind, height, shared, lip, bus, land, unit }: {
+// ★ Memo (the diet, G35): the mode box above re-renders when its reading's text changes; the meters below do not
+//   need to — a re-render re-records a Skia canvas from scratch. They take the bus, not the reading.
+const MeterHousing = React.memo(function MeterHousing({ kind, height, shared, lip, bus, land, unit }: {
   kind: MeterKind; height: number; shared: boolean; lip: string; bus?: MeterBus;
   /** Landscape (§9): the strip's / card's own geometry from landscapeDeck. */
   land?: LandscapeLayout;
@@ -1711,7 +1737,7 @@ function MeterHousing({ kind, height, shared, lip, bus, land, unit }: {
       ))}
     </View>
   );
-}
+});
 
 const cd = StyleSheet.create({
   banner:    { borderRadius: 6, backgroundColor: '#070605', alignItems: 'center', justifyContent: 'center',

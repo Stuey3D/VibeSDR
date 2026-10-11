@@ -156,7 +156,7 @@ function shadowSprite(w: number, h: number, blur: number, colour: string): SkIma
   return makeSprite(w + 2 * pad, h + 2 * pad, c => c.drawRect(Skia.XYWHRect(pad, pad, w, h), glowPaint(colour, blur)));
 }
 
-export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault }: {
+function EdgeMeter({ bus, unit, height, printH, printTop, onFault }: {
   /** ★ A bus on the CALIBRATED scale (ControlsBar useScaledMeterBus): level / raw / sql = position / 10. */
   bus?: MeterBus;
   /** The readout's unit — which scale is printed (S-meter when absent). */
@@ -299,3 +299,6 @@ export default function EdgeMeter({ bus, unit, height, printH, printTop, onFault
     </View>
   );
 }
+
+// ★ Memo (the diet, G35): a re-render re-records this Skia canvas from scratch; it moves on the bus, not on props.
+export default React.memo(EdgeMeter);
