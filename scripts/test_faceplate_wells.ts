@@ -303,8 +303,8 @@ function recorder() {
 // ── ★★★ UNLIT = NONE, and the perf rules (source checks: the components need a device to run) ─────────
 {
   const dk = code('components/DomeKey.tsx');
-  ok('DomeKey: lit only with a reach AND Transparency effects on',
-     /const lit = lightReach > 0 && fp\.settings\.transparency === 'on'/.test(dk));
+  ok('DomeKey: lit only with a reach AND Transparency effects on AND a cap key (never the default outline key)',
+     /const lit = lightReach > 0 && fp\.settings\.transparency === 'on' && dome\.look !== 'outline'/.test(dk));
   ok('DomeKey: unlit, the outline key clips as it always did', /overflow: lit \? 'visible' : 'hidden'/.test(dk));
   ok('DomeKey: no reach given = no light (popup and decoder keys)', /lightReach = 0/.test(dk));
   ok('DomeKey: the press fades the ready-made images in on its own `dim` style',

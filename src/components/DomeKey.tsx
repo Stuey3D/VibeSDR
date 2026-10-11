@@ -381,7 +381,11 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   //   Measured ALWAYS, lit or not: no layout event follows turning Transparency on, so a key that only
   //   measured while lit would stay dark until something else moved it. Half-point steps, so a
   //   sub-pixel relayout never rebuilds the sprite.
-  const lit = lightReach > 0 && fp.settings.transparency === 'on';
+  /* ★★★ NOT ON THE DEFAULT DECK (Stuart, 2026-10-11: "look in default skin the buttons dont need illumination … so bin
+   *  it"). The default's see-through outline keys showed their panel-gap light OFFSET from the key after any rotation
+   *  or Mac window resize, never recovering (iPhone and Mac, builds 445–448). The light is the metal decks' — a lit
+   *  gap round a solid cap; the outline key never needed it. */
+  const lit = lightReach > 0 && fp.settings.transparency === 'on' && dome.look !== 'outline';
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
   const measureBox = (w: number, h: number) => {
     const bw = Math.round(w * 2) / 2, bh = Math.round(h * 2) / 2;
