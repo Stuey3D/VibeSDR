@@ -758,6 +758,12 @@ function WaterfallView({
     if (t && t.isActive !== on) t.setActive(on);   // checked so a 20/s data frame cannot thrash it
   }, []);
   const stopSpecTween = useCallback(() => { setSpecTweenActive(false); }, [setSpecTweenActive]);
+  // ★★ A ROTATION REDRAWS THE TRACE AT ONCE (the Android diet, 2026-10-11, frame-by-frame on the G35: the spectrum
+  //    sat blank or squashed for ~0.5 s after every rotation, on every skin). The tween rebuilds the path on the UI
+  //    thread from the last bins and parks itself when they settle — and a new width woke nothing, so the trace waited
+  //    for the next DATA frame, which the JS thread delivers late while it is busy laying the screen out again. Waking
+  //    the tween on a layout change redraws the bins it already has at the new size, with no JS frame needed.
+  useEffect(() => { setSpecTweenActive(true); }, [width, wfTop, specH, setSpecTweenActive]);
 
   const specTween = useFrameCallback((fi) => {
     'worklet';
