@@ -2989,42 +2989,6 @@ const lnd = StyleSheet.create({
   recTime:  { letterSpacing: 1 },
 });
 
-/**
- * ★★ HIDE THE TURN UNTIL IT HAS SETTLED, AS iOS DOES (Stuart, 2026-10-11, the Moto: "in this case the iOS style hiding
- * the rotate would work"). The iPhone holds a snapshot while the app rebuilds and rotates into the finished screen;
- * Android rotates at once and shows the rebuild — the bar arriving in a half-built arrangement (the station strip in
- * the wrong place, empty wells) then drawing in, ~0.3 s on the G35's default deck. Here the bar is invisible from the
- * render that swaps its layout until it has laid out and had BUILD_MS to draw, then fades in (FADE_MS, native driver).
- * ★ A CAP (MAX_MS from the turn): a slow phone never waits longer than it does today with nothing drawn — it shows
- *   whatever it has. Never on the first mount (nothing to hide).
- */
-const SETTLE_BUILD_MS = 200, SETTLE_MAX_MS = 450, SETTLE_FADE_MS = 90;
-function useSettleReveal(key: boolean) {
-  const [shown, setShown] = useState(key);
-  const fade = useRef(new Animated.Value(1)).current;
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const keyRef = useRef(key); keyRef.current = key;
-  const hidden = shown !== key;
-  const show = useCallback(() => {
-    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
-    fade.setValue(0);
-    setShown(keyRef.current);
-    Animated.timing(fade, { toValue: 1, duration: SETTLE_FADE_MS, useNativeDriver: true }).start();
-  }, [fade]);
-  useEffect(() => {
-    if (shown === key) return;
-    const cap = setTimeout(show, SETTLE_MAX_MS);
-    return () => clearTimeout(cap);
-  }, [key, shown, show]);
-  const onLayout = useCallback(() => {
-    if (shown === keyRef.current) return;
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(show, SETTLE_BUILD_MS);
-  }, [shown, show]);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  return { hidden, fade, onLayout };
-}
-
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function ControlsBar({
@@ -3087,7 +3051,6 @@ function ControlsBar({
    *  layer. Silver / black are already an opaque plate; OFF only takes their drop shadow (below). */
   const solidDeck = fpTheme.opaque && !ct.plate;
   const s = useUiScale();
-  const reveal = useSettleReveal(s.isLandscape && !IS_TV);
 
   /* ★★ THE CHANNEL NAME IS THE READOUT ON THE RASTER (airband only — airChannel is null elsewhere). An
    *  8.33 kHz channel's name is not its frequency (118.010 tunes 118.0083 MHz), and the name is what a
@@ -3264,14 +3227,10 @@ function ControlsBar({
       <FreqReadoutContext.Provider value={readout}>
       {/* ★ Only while DAB is on: a verdict that outlived the mode would describe a multiplex nobody is on. */}
       <DabMeterContext.Provider value={dabOn ? (dabMeter ?? DAB_SEARCHING) : null}>
-      {/* ★★ HIDDEN UNTIL SETTLED (useSettleReveal): the two bars still swap on a turn, so the new one is invisible
-          until it has laid out and drawn, then fades in complete — never the half-built frames. */}
-      <Animated.View style={{ opacity: reveal.hidden ? 0 : reveal.fade }} onLayout={reveal.onLayout}>
       {s.isLandscape && !IS_TV
         ? <LandscapeBar {...shared} />
         : <PortraitBar  {...shared} />
       }
-      </Animated.View>
       </DabMeterContext.Provider>
       </FreqReadoutContext.Provider>
     </View>
