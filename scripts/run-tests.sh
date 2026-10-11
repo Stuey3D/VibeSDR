@@ -120,6 +120,7 @@ deps_for() {
     test-radiodns-name) echo "$SRC/radiodns.cpp $SRC/proc.cpp" ;;
     test-geoip)         echo "$SRC/geoip.cpp $SRC/proc.cpp" ;;
     test-asndb)         echo "$SRC/asndb.cpp $SRC/proc.cpp" ;;
+    test-moveloc)       echo "$SRC/moveloc.cpp $SRC/proc.cpp" ;;
     test-admin-banlist) echo "" ;;
     test-decoder-hardening) echo "android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
