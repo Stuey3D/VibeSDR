@@ -31,7 +31,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import {
   BlurMask, BlurStyle, Canvas, FilterMode, Group, ImageShader, Line, LinearGradient, MipmapMode, PaintStyle, Path,
-  RoundedRect, Skia, StrokeCap, StrokeJoin, vec, type SkCanvas, type SkImage, type SkPath,
+  RoundedRect, Skia, StrokeCap, StrokeJoin, TileMode, vec, type SkCanvas, type SkImage, type SkPath,
 } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import { useFaceplate } from '../contexts/FaceplateContext';
@@ -153,7 +153,58 @@ export function useTexture(which: 'silver' | 'black' | null): SkImage | null {
 
 // ── The cap face (silver / black) — static, so it is drawn once ──────────────
 
-const CapFace = React.memo(function CapFace({ w, h, r, dome, texture }: {
+/* ★★ ANDROID: ONE PICTURE, NOT A CANVAS (2026-10-11, the Moto and the Galaxy Tab: metal keys still drew in after every
+ *  rotation where the default deck's did not). Every Skia <Canvas> on Android is a TextureView — a GPU surface created
+ *  from nothing whenever its key is rebuilt, four on every turn. The cap face is static, so it is drawn ONCE per size
+ *  into an image (makeSprite, shared cache) and shown as a plain Image, as the key lights already are (SpriteView).
+ *  iOS keeps the canvas, unchanged. Same drawing either way (drawCapFace). */
+function drawCapFace(c: SkCanvas, w: number, h: number, r: number, dome: ChassisTokens['dome'], img: SkImage | null) {
+  const rr = Skia.RRectXY(Skia.XYWHRect(0, 0, w, h), r, r);
+  const fill = (col: string) => { const p = Skia.Paint(); p.setAntiAlias(true); p.setColor(Skia.Color(col)); return p; };
+  c.drawRRect(rr, fill(dome.capBase));
+  if (img) {
+    const k = 360 / 1200;
+    const m = Skia.Matrix(); m.translate(w / 2 - 600 * k, h / 2 - 450 * k); m.scale(k, k);
+    const p = Skia.Paint(); p.setAntiAlias(true);
+    p.setShader(img.makeShaderOptions(TileMode.Mirror, TileMode.Mirror, FilterMode.Linear, MipmapMode.None, m));
+    c.drawRRect(rr, p);
+  }
+  if (dome.textureDim > 0) c.drawRRect(rr, fill(`rgba(0,0,0,${dome.textureDim})`));
+  const sheen = Skia.Paint(); sheen.setAntiAlias(true);
+  sheen.setShader(Skia.Shader.MakeLinearGradient(vec(0, 0), vec(0, h), dome.capSheen.map(x => Skia.Color(x)), [0, 0.42, 1], TileMode.Clamp));
+  c.drawRRect(rr, sheen);
+  const line = (x1: number, y1: number, x2: number, y2: number, col: string) => {
+    const p = fill(col); p.setStyle(PaintStyle.Stroke); p.setStrokeWidth(1); c.drawLine(x1, y1, x2, y2, p);
+  };
+  line(r * 0.6, 1.5, w - r * 0.6, 1.5, dome.chamfer);
+  line(r * 0.6, h - 1.5, w - r * 0.6, h - 1.5, dome.bottomEdge);
+  const ring = (inset: number, rad: number, col: string) => {
+    const p = fill(col); p.setStyle(PaintStyle.Stroke); p.setStrokeWidth(1);
+    c.drawRRect(Skia.RRectXY(Skia.XYWHRect(inset, inset, w - 2 * inset, h - 2 * inset), rad, rad), p);
+  };
+  ring(1.5, Math.max(0, r - 1), dome.rim);
+  ring(0.5, r, dome.capBorder);
+}
+
+const CapFace = React.memo(function CapFace(props: {
+  w: number; h: number; r: number; dome: ChassisTokens['dome']; texture: 'silver' | 'black';
+}) {
+  return Platform.OS === 'android' ? <CapFaceImage {...props} /> : <CapFaceCanvas {...props} />;
+});
+
+function CapFaceImage({ w, h, r, dome, texture }: {
+  w: number; h: number; r: number; dome: ChassisTokens['dome']; texture: 'silver' | 'black';
+}) {
+  const img = useTexture(texture);
+  const q = (n: number) => Math.round(n * 2) / 2;
+  const face = useSharedSprite(img && w > 0 && h > 0 ? `capface|${texture}|${q(w)}x${q(h)}|${r}|${dome.capBase}|${dome.rim}` : null,
+    () => imageBuild(makeSprite(w, h, (c) => drawCapFace(c, w, h, r, dome, img))));
+  // Until the picture exists (the texture is still decoding): the cap's base colour, never a hole.
+  if (!face) return <View style={{ width: w, height: h, borderRadius: r, backgroundColor: dome.capBase }} />;
+  return <SpriteView image={face} width={w} height={h} />;
+}
+
+const CapFaceCanvas = function CapFaceCanvas({ w, h, r, dome, texture }: {
   w: number; h: number; r: number; dome: ChassisTokens['dome']; texture: 'silver' | 'black';
 }) {
   const img = useTexture(texture);
@@ -181,7 +232,7 @@ const CapFace = React.memo(function CapFace({ w, h, r, dome, texture }: {
         color={dome.capBorder} style="stroke" strokeWidth={1} />
     </Canvas>
   );
-});
+};
 
 // ── Legends ───────────────────────────────────────────────────────────────────
 
