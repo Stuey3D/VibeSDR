@@ -30,8 +30,8 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 import {
-  BlurMask, Canvas, FilterMode, Group, ImageShader, Line, LinearGradient, MipmapMode, Path,
-  RoundedRect, Skia, vec, type SkImage, type SkPath,
+  BlurMask, BlurStyle, Canvas, FilterMode, Group, ImageShader, Line, LinearGradient, MipmapMode, PaintStyle, Path,
+  RoundedRect, Skia, StrokeCap, StrokeJoin, vec, type SkCanvas, type SkImage, type SkPath,
 } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import { useFaceplate } from '../contexts/FaceplateContext';
@@ -42,6 +42,8 @@ import {
 import { LEGEND_GLOW_REST, LEGEND_GLOW_DOWN, type ChassisTokens, type KeyLegend } from '../constants/faceplate';
 import { domeCap } from '../constants/keyLight';
 import { KeyLight, KeyWash } from './KeyLight';
+import { SpriteView } from './SpriteView';
+import { imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 
 // ── Haptics ───────────────────────────────────────────────────────────────────
 
@@ -224,10 +226,78 @@ export interface IconStroke { path: SkPath; fill?: boolean; width?: number; colo
 /** A Skia icon legend with the same flare. `k` scales the paths' authoring space to `size`.
  *  `legend` overrides the main keys' legend colours — the tuner keys (§6.2) light theirs in the
  *  CONTROLS colour on every chassis, where the main keys are white on the default deck. */
-export function DomeIcon({ size, k, strokes, progress, legend }: {
+type IconProps = {
   size: number; k: number; strokes: IconStroke[]; progress?: SharedValue<number>;
   legend?: Pick<KeyLegend, 'color' | 'hot' | 'glow' | 'shade'>;
-}) {
+};
+export function DomeIcon(props: IconProps) {
+  return Platform.OS === 'android' ? <DomeIconSprites {...props} /> : <DomeIconCanvas {...props} />;
+}
+
+/* ★★★ ON ANDROID, TWO PICTURES, NOT A CANVAS (the diet, Moto G35, 2026-10-11). Every Skia <Canvas> there is a
+ *   TextureView — its own GPU surface, re-made and re-recorded on every rotation, and the key legends were three of
+ *   them per bar. The legend has only two looks: at REST and fully DOWN (colour → hot, glow 4 → 7 pt). Both are drawn
+ *   once into the shared sprite cache and shown as plain images; the press fades the DOWN one in on the UI thread.
+ *   ★ Mid-press it is a cross-fade of the two ends rather than an interpolated colour — the ends are exact, and a
+ *     press lasts a tenth of a second. iOS keeps the canvas (Metal layers are cheap there). */
+const strokeIds = new WeakMap<IconStroke[], number>();
+let nextStrokeId = 1;
+function strokesId(st: IconStroke[]): number {
+  let id = strokeIds.get(st);
+  if (!id) { id = nextStrokeId++; strokeIds.set(st, id); }
+  return id;
+}
+type Legend = Pick<KeyLegend, 'color' | 'hot' | 'glow' | 'shade'>;
+/** The legend at rest (t 0) or down (t 1), as DomeIconCanvas draws it at those two ends. */
+function drawIcon(c: SkCanvas, k: number, strokes: IconStroke[], kl: Legend, t: 0 | 1) {
+  const pass = (col: string, blur: number, dy: number) => {
+    for (const st of strokes) {
+      const paint = Skia.Paint();
+      paint.setAntiAlias(true);
+      paint.setColor(Skia.Color(st.color ?? col));
+      if (st.fill) paint.setStyle(PaintStyle.Fill);
+      else {
+        paint.setStyle(PaintStyle.Stroke); paint.setStrokeWidth((st.width ?? 1.6) / k);
+        paint.setStrokeCap(StrokeCap.Round); paint.setStrokeJoin(StrokeJoin.Round);
+      }
+      // respectCTM false, as BlurMask's: the sigma is in pixels, whatever the scale.
+      if (blur > 0) paint.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, blur, false));
+      c.save(); if (dy) c.translate(0, dy); c.drawPath(st.path, paint); c.restore();
+    }
+  };
+  c.save();
+  c.scale(k, k);
+  if (kl.shade) pass(kl.shade, 0, -0.5 / k);
+  if (kl.glow) pass(kl.glow, (LEGEND_GLOW_REST + (LEGEND_GLOW_DOWN - LEGEND_GLOW_REST) * t) / 2, 0);
+  pass(t ? kl.hot : kl.color, 0, 0);
+  c.restore();
+}
+function DomeIconSprites({ size, k, strokes, progress, legend }: IconProps) {
+  const fpLegend = useFaceplate().keyLegend;
+  const kl = legend ?? fpLegend;
+  const base = `domeicon|${size}|${k}|${strokesId(strokes)}|${kl.color}|${kl.hot}|${kl.glow ?? ''}|${kl.shade ?? ''}`;
+  const rest = useSharedSprite(size > 0 ? `${base}|rest` : null,
+    () => imageBuild(makeSprite(size, size, c => drawIcon(c, k, strokes, kl, 0))));
+  const flares = !!progress && (kl.hot !== kl.color || !!kl.glow);
+  const down = useSharedSprite(flares && size > 0 ? `${base}|down` : null,
+    () => imageBuild(makeSprite(size, size, c => drawIcon(c, k, strokes, kl, 1))));
+  const zero = useSharedValue(0);
+  const p = progress ?? zero;
+  const fade = useAnimatedStyle(() => ({ opacity: Math.max(0, Math.min(1, p.value)) }));
+  if (!rest) return <View pointerEvents="none" style={{ width: size, height: size }} />;
+  return (
+    <View pointerEvents="none" style={{ width: size, height: size }}>
+      <SpriteView image={rest} width={size} height={size} />
+      {down && (
+        <Animated.View pointerEvents="none" style={[{ position: 'absolute', left: 0, top: 0 }, fade]}>
+          <SpriteView image={down} width={size} height={size} />
+        </Animated.View>
+      )}
+    </View>
+  );
+}
+
+function DomeIconCanvas({ size, k, strokes, progress, legend }: IconProps) {
   const fpLegend = useFaceplate().keyLegend;
   const kl = legend ?? fpLegend;
   const zero = useSharedValue(0);
