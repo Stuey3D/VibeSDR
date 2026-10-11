@@ -685,8 +685,12 @@ function WaterfallView({
   // way. What sat on the JS thread was building the geometry: interpolating every bin and
   // constructing the SkPath. That is what moves here.
   // ★★ These are shared values, not refs: a worklet cannot reach a React ref.
-  const specToSv   = useSharedValue<number[]>([]);
-  const specDispSv = useSharedValue<number[]>([]);
+  // ★★ FLOAT32ARRAYS, NOT number[] (the Android diet, 2026-10-11 — a Hermes profile on the Moto G35). A plain array is
+  //    copied to the UI thread ELEMENT BY ELEMENT (createSerializableNumber per value, cloneObjectProperties): a few
+  //    hundred host objects per data frame, 20 frames a second — steady garbage behind the ~100 GCs/s measured.
+  //    A typed array crosses as ONE native block copy (worklets' createSerializableArrayBufferView). Same indexing.
+  const specToSv   = useSharedValue<Float32Array>(new Float32Array(0));
+  const specDispSv = useSharedValue<Float32Array>(new Float32Array(0));
   // Layout the worklet needs, mirrored where it can read them.
   const uSpecW    = useSharedValue(0);   // float width (the sampling ratio uses it)
   const uSpecTop  = useSharedValue(0);   // baseline = wfTop
@@ -1512,16 +1516,16 @@ function WaterfallView({
          *  full frame. */
         const fs = frame.spec, fn = fs.length;
         const wDraw = Math.floor(cfg.width);
-        let next: number[];
+        let next: Float32Array;
         if (wDraw > 0 && fn > Math.ceil(cfg.width / SPEC_PX_STEP)) {
           const m = Math.ceil(cfg.width / SPEC_PX_STEP);   // ★ unfloored: keeps the worklet's floor(px/w·m) == k
-          next = new Array(m);
+          next = new Float32Array(m);
           for (let k = 0; k < m; k++) next[k] = fs[Math.floor(((k * SPEC_PX_STEP) / cfg.width) * fn)];
         } else {
-          next = Array.from(fs);
+          next = Float32Array.from(fs);
         }
         specToSv.value = next;
-        if (specDispSv.value.length !== next.length) specDispSv.value = Array.from(next);
+        if (specDispSv.value.length !== next.length) specDispSv.value = Float32Array.from(next);
         setSpecTweenActive(true);   // idle → running; a no-op while it already is
       }
 
