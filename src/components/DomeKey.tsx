@@ -445,9 +445,14 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
             domeCap), so its 1 pt border is the -1 inset. */}
         {light && <View pointerEvents="none" style={{ position: 'absolute', left: -1, top: -1 }}>{light}</View>}
         {overlay}
+        {/* ★★ CLICKED, THE WHOLE KEY LIGHTS UP (Stuart, 2026-10-11, the Moto: "you have it so the legends brighten on key
+            press, make it so the whole key does the same"). The legend already flares to the Controls colour's hot
+            centre; now the outline goes to the full colour and the face takes a soft wash of it, on the press's own
+            `dim` (0 at rest → 1 clicked, UI thread). Drawn over the 1 pt border (inset −1) so the rim itself
+            brightens. It replaces the old darkening of the face. */}
         <Animated.View pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { backgroundColor: `rgba(0,0,0,${1 - dome.pressDim})` },
-                  lit ? { borderRadius: Math.max(0, outlineR - 1) } : null, dim]} />
+          style={[{ position: 'absolute', left: -1, top: -1, right: -1, bottom: -1, borderWidth: 1,
+                    borderRadius: outlineR, borderColor: ledA(fp.controls, 1), backgroundColor: ledA(fp.controls, 0.16) }, dim]} />
         {wash}
         <Animated.View pointerEvents="none" style={[styles.legend, travel]}>{children(progress)}</Animated.View>
       </Pressable>
