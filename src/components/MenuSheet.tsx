@@ -62,7 +62,7 @@ import {
 import { AUTO_REASON_NOTE } from '../constants/transparency';
 import {
   usePopupStyles, usePopupTheme, usePopupFrame, onMetal, engraveText, windowStyle,
-  PopupKey, PopupFader, PopupPlate, PopupHandle, type PopupTokens, SHEET_MAX_W, POPUP_FONT,
+  PopupKey, PopupFader, FADER_H, PopupPlate, PopupHandle, type PopupTokens, SHEET_MAX_W, POPUP_FONT,
 } from './PopupShell';
 import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
@@ -593,7 +593,7 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
       <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
         step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
         active={props.minimumTrackTintColor !== C.muted} focused={focused}
-        style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
+        style={[StyleSheet.flatten(props.style) as any, { height: FADER_H }]} />
     );
   }
   return (

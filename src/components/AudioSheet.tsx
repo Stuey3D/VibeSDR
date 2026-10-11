@@ -12,7 +12,7 @@ import { meterText, useMeters, type MeterBus } from './ControlsBar';
 import { isKiwiProtocol } from '../services/sdrTypes';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
-  PopupKey, PopupFader, PopupPlate, PopupHandle, sheetCap, PopupScrim, PopupWindow, type PopupTokens,
+  PopupKey, PopupFader, FADER_H, PopupPlate, PopupHandle, sheetCap, PopupScrim, PopupWindow, type PopupTokens,
   scrollLane, scrollLaneOutset,
 } from './PopupShell';
 import { sMeterText, sqlClosedOf } from '../constants/meters';
@@ -76,7 +76,7 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
       <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
         step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
         active={props.minimumTrackTintColor !== C.muted} focused={focused}
-        style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
+        style={[StyleSheet.flatten(props.style) as any, { height: FADER_H }]} />
     );
   }
   return (

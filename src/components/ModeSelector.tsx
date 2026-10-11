@@ -10,7 +10,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction, useKeyboardMode } from './PanelNav';
 import {
   usePopupSurface, usePopupTheme, usePopupFrame, engraveText, windowStyle,
-  PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader, sheetCap,
+  PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader, FADER_H, sheetCap,
 } from './PopupShell';
 
 /** Today's dim and sheet glass — Transparency OFF drops the first and makes the second opaque.
@@ -65,7 +65,7 @@ function NavSlider({ mirror = false, ...props }: React.ComponentProps<typeof Sli
       <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
         step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
         fillFrom={mirror ? 'right' : 'left'} focused={focused}
-        style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
+        style={[StyleSheet.flatten(props.style) as any, { height: FADER_H }]} />
     );
   }
   return (

@@ -353,6 +353,10 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
   );
 });
 
+/** The metal slide fader's height and cap width (pt) — callers that set a height use FADER_H. */
+export const FADER_H = 32;
+const FADER_CAP_W = 28;
+
 // ── Fader ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -396,8 +400,8 @@ export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, on
   const at = (pageX: number) => {
     const { x, w: ww } = geo.current;
     const { minimumValue: mn, range: rg, step: st } = cb.current;
-    // The cap's centre travels 10 pt in from each end of the slot.
-    const t = Math.max(0, Math.min(1, (pageX - x - 10) / Math.max(1, ww - 20)));
+    // The cap's centre travels half a cap in from each end of the slot.
+    const t = Math.max(0, Math.min(1, (pageX - x - FADER_CAP_W / 2) / Math.max(1, ww - FADER_CAP_W)));
     let v = mn + t * rg;
     if (st && st > 0) v = mn + Math.round((v - mn) / st) * st;
     return Math.max(mn, Math.min(mn + rg, v));
@@ -422,7 +426,7 @@ export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, on
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [disabled, measure]);
 
-  const capX = 10 + frac * Math.max(0, w - 20);
+  const capX = FADER_CAP_W / 2 + frac * Math.max(0, w - FADER_CAP_W);
   const lvl = level == null ? null : Math.max(0, Math.min(1, level));
   return (
     <View ref={(r: any) => { box.current = r; if (typeof innerRef === 'function') innerRef(r); else if (innerRef) (innerRef as any).current = r; }}
@@ -442,7 +446,7 @@ export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, on
           : { width: Math.max(0, capX - 1) }, { backgroundColor: f.fill,
                shadowColor: f.fillGlow, shadowOpacity: 1, shadowRadius: 3, shadowOffset: { width: 0, height: 0 } }]} />
       )}
-      <View pointerEvents="none" style={[ps.faderCap, { left: capX - 10, borderColor: f.capBorder, backgroundColor: f.capColors[1] }]}>
+      <View pointerEvents="none" style={[ps.faderCap, { left: capX - FADER_CAP_W / 2, borderColor: f.capBorder, backgroundColor: f.capColors[1] }]}>
         <View style={[ps.faderCapTop, { backgroundColor: f.capColors[0] }]} />
         <View style={[ps.faderCapBot, { backgroundColor: f.capColors[2] }]} />
         <View style={[ps.faderCapHi, { backgroundColor: f.capHi }]} />
@@ -469,15 +473,17 @@ const ps = StyleSheet.create({
   shade:   { position: 'absolute', left: 0, right: 0, top: -0.5 },
   iconRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
 
-  fader:      { height: 24, justifyContent: 'center' },
+  /* ★ A third bigger than §10.3's 20 × 18 cap on a 24 pt fader (Stuart, 2026-10-11, the Moto: "the sliders could be a
+   *  little bigger in the metallic skin"): 28 × 24 on a 32 pt fader — an easier thumb, the same look. */
+  fader:      { height: FADER_H, justifyContent: 'center' },
   faderFocus: { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 6, margin: -2 },
-  slot:       { position: 'absolute', left: 0, right: 0, top: 9, height: 6, borderRadius: 3 },
-  slotLip:    { position: 'absolute', left: 3, right: 3, top: 15, height: 1 },
-  fill:       { position: 'absolute', left: 1, top: 10, height: 4, borderRadius: 2 },
-  faderCap:   { position: 'absolute', top: 3, width: 20, height: 18, borderRadius: 4, borderWidth: 1, overflow: 'hidden',
+  slot:       { position: 'absolute', left: 0, right: 0, top: 12, height: 8, borderRadius: 4 },
+  slotLip:    { position: 'absolute', left: 3, right: 3, top: 20, height: 1 },
+  fill:       { position: 'absolute', left: 1, top: 13, height: 6, borderRadius: 3 },
+  faderCap:   { position: 'absolute', top: 4, width: FADER_CAP_W, height: 24, borderRadius: 5, borderWidth: 1, overflow: 'hidden',
                 shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 1, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   faderCapTop: { position: 'absolute', left: 0, right: 0, top: 0, height: '45%' },
   faderCapBot: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '30%' },
   faderCapHi:  { position: 'absolute', left: 1, right: 1, top: 0, height: 1 },
-  faderLine:   { position: 'absolute', left: 8, top: 3, bottom: 3, width: 2 },
+  faderLine:   { position: 'absolute', left: FADER_CAP_W / 2 - 2, top: 4, bottom: 4, width: 2 },
 });
