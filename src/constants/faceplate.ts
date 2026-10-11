@@ -1160,7 +1160,10 @@ export function resolveFaceplate(s: FaceplateSettings): FaceplateTheme {
     : neonKeys
     ? { color: NEON_TEXT.core, font: nixie ? FONT_NIXIE : FONT_HYPER, glow: NEON_TEXT.glow,
         hot: NEON_TEXT.core, shade: null }
-    : { color: chassis.keyLegend, font: FONT_HYPER, glow: null, hot: chassis.keyLegend, shade: null };
+    /* ★★ The default deck's legends are in the CONTROLS colour, unlit (no glow), as the web page's keys are in its
+     *  font colour (Stuart, 2026-10-11: "the buttons and the icons" — tinted like the web browser, with the outline;
+     *  DomeKey outlineTint). They were today's white. */
+    : { color: controls.core, font: FONT_HYPER, glow: null, hot: controls.hot, shade: null };
 
   // ★ The VTS strip (§7, §7.1). The default deck with GREEN text keeps today's strip exactly — its
   //   on-tune green / off-tune amber / band yellow palette (§13.1), the way TODAY_GREEN keeps the

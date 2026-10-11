@@ -39,7 +39,7 @@ import { getControlHaptics } from './controlHaptics';
 import {
   createDomeClick, DOME_PRESS_MS, DOME_RELEASE_MS, DOME_PRESS_BEZIER, DOME_RELEASE_BEZIER,
 } from './domeClick';
-import { LEGEND_GLOW_REST, LEGEND_GLOW_DOWN, type ChassisTokens, type KeyLegend } from '../constants/faceplate';
+import { LEGEND_GLOW_REST, LEGEND_GLOW_DOWN, ledA, type ChassisTokens, type KeyLegend } from '../constants/faceplate';
 import { domeCap } from '../constants/keyLight';
 import { KeyLight, KeyWash } from './KeyLight';
 import { SpriteView } from './SpriteView';
@@ -401,6 +401,11 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   //   the gap the snap opens floods (KeyLight's `open` image, round the SUNK cap) and the lamp washes over
   //   the key's edges (KeyWash). Both fade in on `dim` — the press's own 0 → 1, which settles and stops.
   const isOutline = dome.look === 'outline';
+  /* ★★ THE DEFAULT KEY'S OUTLINE IS TINTED, AS THE WEB PAGE'S IS (Stuart, 2026-10-11: "on the default skin just make the
+   *  outlines of the buttons have a tint to them like the web browser does"). The web client draws --btn-border as the
+   *  controls / font colour at 0.35 (controlColours.ts); the app's default key now does the same with the Controls
+   *  colour, in place of the panel-gap light it no longer has. A caller's own `outline` (recording, chat) still wins. */
+  const outlineTint = ledA(fp.controls, 0.35);
   // The outline key's corner: 4, or what its caller's style sets (TunerKeys' slot keys are rounder).
   const outlineR = isOutline ? (StyleSheet.flatten(style)?.borderRadius as number | undefined) ?? 4 : 4;
   const capRect = lit && box && box.w > 0 && box.h > 0
@@ -433,7 +438,7 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
       <Pressable ref={ref} onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut}
         disabled={disabled} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint}
         onLayout={e => measureBox(e.nativeEvent.layout.width, e.nativeEvent.layout.height)}
-        style={[{ ...(minHeight ? { minHeight: height } : { height }), borderWidth: 1, borderRadius: 4, borderColor: outline ?? ct.keyBorder,
+        style={[{ ...(minHeight ? { minHeight: height } : { height }), borderWidth: 1, borderRadius: 4, borderColor: outline ?? outlineTint,
                   backgroundColor: ct.keyBg, alignItems: 'center', justifyContent: 'center',
                   overflow: lit ? 'visible' : 'hidden' }, style]}>
         {/* The light sits round the OUTSIDE of the border box: the key is the cut-out (constants/keyLight.ts
