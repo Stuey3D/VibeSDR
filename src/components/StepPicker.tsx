@@ -17,7 +17,6 @@ import {
 } from './PopupShell';
 
 /** Today's dim and sheet glass — Transparency OFF drops the first and makes the second opaque. */
-const BACKDROP = 'rgba(0,0,0,0.52)';
 const SHEET_BG = 'rgba(8,6,1,0.97)';
 
 function stepLabel(hz: number): string {
@@ -58,12 +57,16 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
   );
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
+    /* ★ SLIDES UP like every other sheet (AudioSheet, ModeSelector — Stuart, 2026-10-11: "every other menu pops up from
+       the bottom except the step rate one which does this weird pop in and drop"). It had been "none" since June. */
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
           {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (§10.2). */}
-          <View style={[st.backdrop, !surf.opaque && { backgroundColor: BACKDROP }]} />
+          {/* ★★ NO DIM behind a bottom sheet, as AudioSheet and ModeSelector (Stuart, 2026-10-04). With the sheet now
+              sliding up, a dark backdrop slid up with it and flickered (2026-10-11). The tap-to-close view stays. */}
+          <View style={st.backdrop} />
         </TouchableWithoutFeedback>
         <View style={[st.sheet, { borderTopColor: t.barBorder },
                       surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },

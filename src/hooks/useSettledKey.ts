@@ -7,11 +7,18 @@ import { useEffect, useState } from 'react';
  *  paused the waterfall and spectrum (2026-10-03). So: follow the size live, rebuild ONCE, 250 ms after it stops. */
 export function useSettledKey(w: number, h: number): string {
   const [key, setKey] = useState(`${w}x${h}`);
+  /* ★★ THE FIRST REAL SIZE IS ADOPTED AT ONCE (Stuart, 2026-10-11, the Moto: every popup "flicker[s] when it hits its
+   *  topmost extension, almost like the lighting is rendering in late"). A sheet's plate mounts unmeasured (0 × 0),
+   *  is measured, draws — and 250 ms later the key changed from "0x0" to its size and the canvas was rebuilt, just as
+   *  the sheet's slide finished. Only a CHANGE from one real size to another waits to settle. */
+  const unmeasured = key.startsWith('0x') || key.endsWith('x0');
+  const live = `${w}x${h}`;
+  if (unmeasured && w > 0 && h > 0) setKey(live);   // ★ no early return — the hooks below must always run
   useEffect(() => {
     const t = setTimeout(() => setKey(`${w}x${h}`), 250);
     return () => clearTimeout(t);
   }, [w, h]);
-  return key;
+  return unmeasured && w > 0 && h > 0 ? live : key;
 }
 
 /** ★ The VALUE as it was when `key` last stopped changing for 250 ms (the first value at once). A drawing that is

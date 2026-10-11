@@ -10862,10 +10862,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★ CLEAR OF THE BACK-GESTURE EDGES (Stuart, 2026-10-11, the Moto in landscape: "the tuning controls land …
            slightly too close to the edge of the screen and cause the back command to be triggered when swiping on
            them"). Android's back swipe starts in the outer ~24 dp of each side; the drums sat at 8. Android phones in
-           landscape keep the bar 28 pt in from each edge (plus the cut-out). Everything else: 8, as before. */
+           landscape keep the bar 28 pt in from each edge (plus the cut-out) — the SAME on both sides, so the bar stays
+           centred under the strip ("lopsided", the Moto's camera cut-out is on one side). Everything else: 8, as before. */
         style={[styles.pillWrap, { bottom: bottomInset + 8 },
                 Platform.OS === 'android' && isLandscape && !isTablet
-                  ? { left: Math.max(28, insets.left + 8), right: Math.max(28, insets.right + 8) } : null]}
+                  ? { left: Math.max(28, insets.left + 8, insets.right + 8), right: Math.max(28, insets.left + 8, insets.right + 8) } : null]}
         onLayout={(e: any) => {
           // Track pill top so bottom-anchored overlays can sit above it
           setPillY(e.nativeEvent.layout.y);

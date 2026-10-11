@@ -9,7 +9,8 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, AppState, Easing, Image, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { rotSlide, useRotateAway } from '../services/rotateReveal';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
@@ -107,7 +108,13 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const shownRef = useRef<VtsNotifData | null>(null);
   const fade    = useRef(new Animated.Value(0)).current;
   const insets  = useSafeAreaInsets();
-  const side    = Math.max(14, insets.left, insets.right);
+  const { width: winW0, height: winH0 } = useWindowDimensions();
+  /* ★ Lined up with the control bar, 6 pt inside its edges (the bar sits at 8, this at 14). On an Android phone in
+   *  landscape the bar is 28 in from each side (SDRScreen pillWrap — clear of the back-gesture strip), so this is 34. */
+  const androidPhoneLand = Platform.OS === 'android' && winW0 > winH0 && Math.min(winW0, winH0) < TABLET_MIN_SIDE;
+  const side    = androidPhoneLand
+    ? Math.max(34, insets.left + 14, insets.right + 14)
+    : Math.max(14, insets.left, insets.right);
   const slide   = useRef(new Animated.Value(0)).current;
   const hideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [areaW, setAreaW] = useState(0);
