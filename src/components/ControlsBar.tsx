@@ -1992,6 +1992,33 @@ function useRecPulse(isRecording: boolean | undefined): Animated.Value {
   return recPulse;
 }
 
+/**
+ * ★★★ UNREAD CHAT, SEEN AT A GLANCE (Stuart, 2026-10-11, the G35: "there is an unread chat but the button illumination
+ * is so subtle you wouldnt be able to tell"). It was a 1 pt edge — steady in landscape — and in a blue Controls colour
+ * the panel-gap light round EVERY key is that same blue edge. Now, on the chat key in both orientations: a 2 pt ring
+ * and a message-waiting LAMP in its corner (a lit dot with a hot centre), breathing together on the record key's
+ * 2.5 s pulse, native driver. The lamp is a point of light, not an edge, so it reads in any Controls colour.
+ */
+function UnreadChatMark({ pulse, radius, colour, size }: {
+  pulse: Animated.Value; radius: number; colour: string; size: number;
+}) {
+  const lamp = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 1] });
+  const d = Math.max(5, Math.round(size));
+  return (
+    <>
+      <Animated.View pointerEvents="none"
+        style={[StyleSheet.absoluteFill, { borderRadius: radius, borderWidth: 2, borderColor: colour, opacity: pulse }]} />
+      <Animated.View pointerEvents="none"
+        style={{ position: 'absolute', top: Math.round(d * 0.7), right: Math.round(d * 0.7), width: d, height: d,
+                 borderRadius: d / 2, backgroundColor: colour, opacity: lamp,
+                 shadowColor: colour, shadowOpacity: 1, shadowRadius: d, shadowOffset: { width: 0, height: 0 } }}>
+        <View style={{ position: 'absolute', left: d * 0.3, top: d * 0.3, width: d * 0.4, height: d * 0.4,
+                       borderRadius: d * 0.2, backgroundColor: 'rgba(255,255,255,0.85)' }} />
+      </Animated.View>
+    </>
+  );
+}
+
 function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   dspNr, dspNb, dspAn,
@@ -2213,8 +2240,9 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         <DomeKey style={por.key} {...keyProps} lightReach={chatOff ? 0 : keyProps.lightReach}
           onPress={chatOff ? NOOP : onChat} accessibilityLabel="Chat"
           accessibilityHint={chatOff ? 'Chat is not available on this server' : undefined}
-          overlay={<Animated.View pointerEvents="none"
-            style={[StyleSheet.absoluteFill, { borderRadius: pulseR, borderWidth: 1, borderColor: ct.keyPulseChat, opacity: chatPulse }]} />}>
+          overlay={chatUnread
+            ? <UnreadChatMark pulse={chatPulse} radius={pulseR} colour={ct.keyPulseChat} size={ICON_SZ * 0.3} />
+            : undefined}>
           {p => <ChatIcon size={ICON_SZ} progress={p} legend={chatOff ? LAMP_OFF_LEGEND : undefined} />}
         </DomeKey>
 
@@ -2371,6 +2399,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
   vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, onDrumAnchors }: any) {
   const handbackFlash = useHandbackFlash();
   const recPulse = useRecPulse(isRecording);   // ★ the AUDIO key breathes while recording, as in portrait
+  const chatPulse = useRecPulse(chatUnread);   // ★ …and the CHAT key while a message is unread (UnreadChatMark)
   const { theme: t } = useTheme();
   /* ★ The station strip anchors its text between the VFO drum's + and the zoom drum's − (DrumWheel draws them
    *  max(3, 5 % of the drum) in from its edges). Measured in WINDOW coordinates, like onControlRects. */
@@ -2601,9 +2630,9 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
         <DomeKey style={lnd.lsKey} height={KEY_H} radius={6} lightReach={chatOff ? 0 : lightReach}
           onPress={chatOff ? NOOP : onChat}
           accessibilityHint={chatOff ? 'Chat is not available on this server' : undefined}
-          outline={chatUnread ? ct.keyBorderChat : undefined}
-          overlay={isCap && chatUnread ? <View pointerEvents="none" style={[StyleSheet.absoluteFill,
-            { borderRadius: 6, borderWidth: 1, borderColor: ct.keyBorderChat }]} /> : undefined}
+          overlay={chatUnread
+            ? <UnreadChatMark pulse={chatPulse} radius={6} colour={ct.keyPulseChat} size={ICON_SZ * 0.3} />
+            : undefined}
           accessibilityLabel="Chat">
           {p => <ChatIcon size={ICON_SZ} progress={p} legend={chatOff ? LAMP_OFF_LEGEND : undefined} />}
         </DomeKey>
