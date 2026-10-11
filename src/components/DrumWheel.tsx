@@ -37,7 +37,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ViewStyle, Platform, PixelRatio } from 'react-native';
+import { View, Text, StyleSheet, ViewStyle, Platform, PixelRatio, Dimensions } from 'react-native';
 import {
   Canvas,
   Rect,
@@ -117,13 +117,33 @@ interface Props {
   lampOff?: boolean;
 }
 
+// ── Remembered across mounts (the diet, Moto G35, 2026-10-11) ──────────────────
+/* ★★ A ROTATION REMOUNTS THE BAR, and a drum used to arrive LAST — about 1.2 s after the turn on the G35, frames
+ *   pulled from a screen recording: an empty view waiting for onLayout, then the three live canvases, then (Android)
+ *   the async rasterise and a third render on the image. Both answers are the same each time the window comes back
+ *   to a size it has been before, so they are remembered here:
+ *   · the drum's measured WIDTH, per type, height and window width — the first render draws at it; onLayout
+ *     still corrects it if the column has changed;
+ *   · the last few Android RASTERS by rasterKey — a remount shows the one image at once. Never disposed (an
+ *     evicted one may still be on screen): eviction just lets Hermes have it, as every raster before this did. */
+const drumWidths = new Map<string, number>();
+const widthKey = (type: string, h: number) => `${type}|${h}|${Math.round(Dimensions.get('window').width)}`;
+const drumRasters = new Map<string, { below: SkImage; above: SkImage }>();
+const RASTERS_KEPT = 8;
+function keepRaster(key: string, r: { below: SkImage; above: SkImage }) {
+  drumRasters.delete(key);
+  drumRasters.set(key, r);
+  while (drumRasters.size > RASTERS_KEPT) drumRasters.delete(drumRasters.keys().next().value as string);
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function DrumWheel({
   type, width: widthProp = 0, height, onDelta, style,
   fontFamily = 'Atkinson Hyperlegible', noInertia = false, lampOff = false,
 }: Props) {
-  const [measuredW, setMeasuredW] = useState(widthProp);
+  const [measuredW, setMeasuredWState] = useState(() => widthProp || drumWidths.get(widthKey(type, height)) || 0);
+  const setMeasuredW = (w: number) => { drumWidths.set(widthKey(type, height), w); setMeasuredWState(w); };
   const W = widthProp > 0 ? widthProp : measuredW;
   const H = height;
   const fp = useFaceplate();
@@ -409,14 +429,18 @@ export default function DrumWheel({
   // ★ Filled in below, once the elements exist (after the W <= 0 early return); read only by the effect.
   const latestEls = useRef<{ belowEl: React.ReactElement; aboveEl: React.ReactElement } | null>(null);
   useEffect(() => {
-    if (!rasterKey || !latestEls.current) return;
+    if (!rasterKey || !latestEls.current || drumRasters.has(rasterKey)) return;
     let live = true;
     const pr = PixelRatio.get();
     const size = { width: Math.max(1, Math.ceil(W * pr)), height: Math.max(1, Math.ceil(H * pr)) };
     const scaled = (el: React.ReactElement) => <Group transform={[{ scale: pr }]}>{el}</Group>;
     Promise.all([drawAsImage(scaled(latestEls.current.belowEl), size),
                  drawAsImage(scaled(latestEls.current.aboveEl), size)])
-      .then(([below, above]) => { if (live && below && above) setDrumImgs({ key: rasterKey, below, above }); })
+      .then(([below, above]) => {
+        if (!below || !above) return;
+        keepRaster(rasterKey, { below, above });
+        if (live) setDrumImgs({ key: rasterKey, below, above });
+      })
       .catch(() => { /* keep the three-canvas drum */ });
     return () => { live = false; };
   }, [rasterKey]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -568,7 +592,9 @@ export default function DrumWheel({
         </Group>);
 
   latestEls.current = { belowEl, aboveEl };
-  const androidOne = !!rasterKey && drumImgs?.key === rasterKey;
+  const kept = rasterKey ? drumRasters.get(rasterKey) : undefined;
+  const imgs = drumImgs?.key === rasterKey ? drumImgs : kept;
+  const androidOne = !!rasterKey && !!imgs;
 
   return (
     <GestureDetector gesture={gesture}>
@@ -577,9 +603,9 @@ export default function DrumWheel({
         {androidOne ? (
           /* ★ Android: ONE surface per drum — see the header. */
           <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
-            <SkImageNode image={drumImgs!.below} x={0} y={0} width={W} height={H} fit="fill" />
+            <SkImageNode image={imgs!.below} x={0} y={0} width={W} height={H} fit="fill" />
             {notchesEl}
-            <SkImageNode image={drumImgs!.above} x={0} y={0} width={W} height={H} fit="fill" />
+            <SkImageNode image={imgs!.above} x={0} y={0} width={W} height={H} fit="fill" />
           </Canvas>
         ) : (<>
         {/* ════ 1. BELOW THE NOTCHES — static ════ */}

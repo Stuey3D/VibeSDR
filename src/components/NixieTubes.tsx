@@ -24,7 +24,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { Dimensions, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import {
   Canvas, Group, Image as SkImageNode, LinearGradient, Path, RadialGradient, Rect, Skia, Text as SkText,
   useTypeface, vec, BlurMask, TileMode, type SkFont, type SkImage, type SkPath,
@@ -404,11 +404,27 @@ export function nixieNaturalWidth(layout: NixieLayout, design: TubeDesign, bar: 
   return nixieGeometry(1e6, 100, nixieSpec(layout), design, { bar, scale }).naturalW;
 }
 
+/* ★★ THE WINDOW'S SIZE, REMEMBERED (the diet, Moto G35, 2026-10-11): a rotation remounts the bar, and the tubes
+ *   drew nothing until onLayout came back — on the G35 they were among the last things in, ~1.2 s after the turn.
+ *   The size for a window shape this display has had before is kept, so the first render draws the tubes; onLayout
+ *   still corrects it. Keyed by everything the call sites size the window from, and the screen's own size. */
+const sizes = new Map<string, { w: number; h: number }>();
+const designIds = new WeakMap<object, number>();
+let nextDesign = 1;
+function sizeKey(layout: string, design: object, bar: boolean, scale: number, reserveRight: number): string {
+  let id = designIds.get(design);
+  if (!id) { id = nextDesign++; designIds.set(design, id); }
+  const win = Dimensions.get('window');
+  return `${layout}|${id}|${bar ? 1 : 0}|${scale}|${reserveRight}|${Math.round(win.width)}x${Math.round(win.height)}`;
+}
+
 export default function NixieTubes({ hz, unit, layout, design, bar, scale = 1, radius = 5, reserveRight = 0,
   style, children }: NixieTubesProps) {
-  const [sz, setSz] = useState({ w: 0, h: 0 });
+  const sk = sizeKey(layout, design, bar, scale, reserveRight);
+  const [sz, setSz] = useState(() => sizes.get(sk) ?? { w: 0, h: 0 });
   const onLayout = (e: LayoutChangeEvent) => {
     const w = Math.round(e.nativeEvent.layout.width), h = Math.round(e.nativeEvent.layout.height);
+    sizes.set(sk, { w, h });
     setSz(p => (p.w === w && p.h === h ? p : { w, h }));
   };
   /* ★ The MHz-tube count belongs to the RADIO, not the frequency — but a server that tunes above
