@@ -312,11 +312,12 @@ function recorder() {
   const cb = code('components/ControlsBar.tsx');
   eq('ControlsBar: all four portrait keys take keyProps (which carries lightReach)', (cb.match(/\{\.\.\.keyProps\}/g) ?? []).length, 4);
   ok('ControlsBar: keyProps carries the light', /height: KEY_SLOT, radius: s\.r\(8\), lightReach/.test(cb) && /minHeight: true, lightReach/.test(cb));
-  eq('ControlsBar: all four landscape keys are lit', (cb.match(/radius=\{6\} lightReach=\{(?:chatOff \? 0 : )?lightReach\}/g) ?? []).length, 4);
+  // ★ ONE TREE (DeckBar, 2026-10-11): the same four keys in both shapes — landscape's props are keyProps too.
+  ok('ControlsBar: all four landscape keys are lit', /land \? \{ height: KEY_H, radius: 6, lightReach: reachL \} : keyPropsP/.test(cb));
   // ★ B10: CHAT's lamp goes OFF (no light, unlit legend) on a server without chat — never a grey-out or a dead key.
   ok('ControlsBar: chat with no chat = lamp off, still pressable (portrait + landscape)',
-     (cb.match(/lightReach=\{chatOff \? 0 : (?:keyProps\.)?lightReach\}/g) ?? []).length === 2
-     && (cb.match(/onPress=\{chatOff \? NOOP : onChat\}/g) ?? []).length === 2
+     (cb.match(/lightReach=\{chatOff \? 0 : (?:keyProps\.)?lightReach\}/g) ?? []).length === 1   // one key, both shapes
+     && (cb.match(/onPress=\{chatOff \? NOOP : onChat\}/g) ?? []).length === 1
      && !/opacity: chatOff \? 0\.4/.test(cb) && !/disabled=\{chatOff\}/.test(cb));
   const tk = code('components/TunerKeys.tsx');
   ok('TunerKeys: both keys lit through DomeKey (one implementation)', /<DomeKey\s+lightReach=\{lampOff \? 0 : lightReach\}/.test(tk));
@@ -326,8 +327,8 @@ function recorder() {
   // ★ 2026-10-07: ZOOM's lamp goes OFF in DAB (drum and keys, portrait and landscape) — unlit, never disabled:
   //   it still turns / presses and clicks (disabled_control_reads_as_absent).
   ok('ControlsBar: zoom lamp off in DAB — both drums and both key pairs',
-     (cb.match(/<DrumWheel type="zoom"[^>]*lampOff=\{!!dab\}/g) ?? []).length === 2
-     && (cb.match(/<TunerKeys type="zoom"[^>]*lampOff=\{!!dab\}/g) ?? []).length === 2
+     (cb.match(/<DrumWheel type="zoom"[^>]*lampOff=\{!!dab\}/g) ?? []).length === 1   // one drum, both shapes
+     && (cb.match(/<TunerKeys type="zoom"[^>]*lampOff=\{!!dab\}/g) ?? []).length === 1
      && !/<(?:DrumWheel|TunerKeys) type="zoom"[^>]*disabled/.test(cb));
   ok('TunerKeys: lamp off = unlit legend + no glyph glow, keys never disabled by it',
      /lampOff \? LAMP_OFF_LEGEND/.test(tk) && /lampOff \? null : lit/.test(tk) && !/disabled[^\n]*lampOff/.test(tk));

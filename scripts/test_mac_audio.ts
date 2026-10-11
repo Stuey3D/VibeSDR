@@ -135,11 +135,12 @@ ok('the muted legend is ring + slash + the speaker', /MUTE_RING/.test(mutedStrok
    && /MUTE_BODY/.test(mutedStrokes) && /MUTE_W1/.test(mutedStrokes) && /MUTE_W2/.test(mutedStrokes));
 ok('…in the LEGEND colour — no stroke carries a colour of its own (never red)', !/color\s*:/.test(mutedStrokes));
 ok('the slash runs top-left to bottom-right', /MakeFromSVGString\('M3\.707 3\.707L16\.293 16\.293'\)/.test(bar));
-eq('both deck speaker keys draw AudioKeyLegend with the Mac mute',
-   (bar.match(/<AudioKeyLegend size=\{ICON_SZ\} progress=\{p\} asRecord=\{audioAsRecord\} muted=\{macMuted\} \/>/g) || []).length, 2);
-eq('both bars read the Mac mute', (bar.match(/const macMuted = useMacSilenced\(\);/g) || []).length, 2);
+// ★ ONE TREE (DeckBar, 2026-10-11): one speaker key serves portrait and landscape.
+eq('the deck speaker key draws AudioKeyLegend with the Mac mute',
+   (bar.match(/<AudioKeyLegend size=\{ICON\} progress=\{p\} asRecord=\{audioAsRecord\} muted=\{macMuted\} \/>/g) || []).length, 1);
+eq('the deck reads the Mac mute', (bar.match(/const macMuted = useMacSilenced\(\);/g) || []).length, 1);
 ok('the recording pulse overlay on the speaker key is untouched',
-   /borderColor: ct\.keyPulseRec, opacity: recPulse \}\]\} \/>\}>\s*\{p => <AudioKeyLegend/.test(bar));
+   /borderColor: ct\.keyPulseRec, opacity: recPulse \}\]\} \/>\s*: undefined\}>\s*\{p => <AudioKeyLegend/.test(bar));
 ok('the recording pulse still breathes on isRecording alone', /if \(isRecording\) \{\s*const a = Animated\.loop/.test(bar));
 
 const app = readFileSync('App.tsx', 'utf8');
