@@ -13,6 +13,7 @@ import React, { useMemo } from 'react';
 import { Image, Platform, type StyleProp, type ViewStyle } from 'react-native';
 import { Canvas, Image as SkImageNode, type SkImage } from '@shopify/react-native-skia';
 import { useSettledKey } from '../hooks/useSettledKey';
+import { isMacHost } from '../services/macAudio';
 
 const uris = new WeakMap<SkImage, string>();
 function dataUri(img: SkImage): string | null {
@@ -30,7 +31,13 @@ function dataUri(img: SkImage): string | null {
 export function SpriteView({ image, width, height, style }: {
   image: SkImage; width: number; height: number; style?: StyleProp<ViewStyle>;
 }) {
-  const uri = useMemo(() => (Platform.OS === 'android' ? dataUri(image) : null), [image]);
+  /* ★★★ THE MAC TOO (Stuart, 2026-10-11, builds 445–447, default deck): a key's light stayed where the key USED to be
+   *  after a window resize — a ghost outline the key's own size, beside it or under it, that never corrected. Most
+   *  keys MOVE on a resize without changing size, and on the Mac a Skia canvas that moves can keep drawing at its old
+   *  place (rebuilding it on a size change, 447, did not touch them). A plain Image is an ordinary view: it goes where
+   *  its parent goes. The iPhone keeps the canvas. */
+  const asImage = Platform.OS === 'android' || isMacHost();
+  const uri = useMemo(() => (asImage ? dataUri(image) : null), [image, asImage]);
   // ★★ iOS / Mac: a canvas that changes size can keep its OLD surface — a key's light left at the key's previous size,
   //   a ghost outline beside it after a window resize (Stuart, 2026-10-11). Rebuilt once the size has settled.
   const settled = useSettledKey(Math.round(width), Math.round(height));
