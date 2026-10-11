@@ -40,7 +40,9 @@ const METERS: MeterKind[] = ['bar', 'vu', 'edge'];
 // 844 × 390 (iPhone 14), 874 × 402 (iPhone 17), 932 × 430 (Pro Max), 956 × 440 (17 Pro Max); tablets
 // 1024 × 768, 1366 × 1024.
 const DEVICES: [number, number, boolean][] = [[568, 320, false], [667, 375, false], [740, 360, false], [844, 390, false],
-  [874, 402, false], [932, 430, false], [956, 440, false], [1024, 768, true], [1366, 1024, true]];
+  [874, 402, false], [932, 430, false], [956, 440, false], [1024, 768, true], [1366, 1024, true],
+  // ★ Taller Android phones in landscape (dp): a 470 dp phone, and the Moto G35 (1129 × 508).
+  [1040, 470, false], [1129, 508, false]];
 
 for (const [W, H, tablet] of DEVICES) {
   const scale = Math.max(0.58, Math.min(1.45, W / 926));      // useUiScale, landscape
@@ -55,7 +57,9 @@ for (const [W, H, tablet] of DEVICES) {
   // ★★★ And no phone band below LAND.phoneFloor (40 pt absolute — Stuart, 2026-10-03, the SE in Display Zoom:
   //     "the icons on the buttons are blurry blobs"), the untouched default bar included.
   const floor = tablet ? 0 : LAND.phoneFloor;
-  const grown = Math.max(todayBand, lifted, floor, Math.round(todayBand + (62 - todayBand) * t));
+  // ★★ …and past 440 (no iPhone is taller) a phone grows on to LAND.tallBand at LAND.tallToH (the Moto G35, 2026-10-11).
+  const tall = tablet || H <= LAND.tallFromH ? 0 : Math.round(62 + (LAND.tallBand - 62) * Math.max(0, Math.min(1, (H - LAND.tallFromH) / (LAND.tallToH - LAND.tallFromH))));
+  const grown = Math.max(todayBand, lifted, floor, tall, Math.round(todayBand + (62 - todayBand) * t));
   for (const [cname, plate] of CHASSIS) {
     const heights = new Set<number>();
     for (const meter of METERS) for (const shared of [false, true]) for (const singleDrum of [false, true]) {
@@ -66,7 +70,8 @@ for (const [W, H, tablet] of DEVICES) {
       const tag = `${W}×${H} ${cname} ${meter}${shared ? '+shared' : ''}${singleDrum ? ' 1-drum' : ''}`;
       const defaultBar = !plate && meter === 'bar';
       if (!defaultBar) heights.add(d.bandH);
-      ok(`${tag}: never taller than the mockup's 62 or today's (${d.bandH})`, d.bandH <= Math.max(todayBand, 62));
+      ok(`${tag}: never taller than the mockup's 62 or today's — or, past 440, the tall band (${d.bandH})`,
+         d.bandH <= Math.max(todayBand, H > LAND.tallFromH && !tablet ? LAND.tallBand : 62));
       ok(`${tag}: never shorter than today's (${d.bandH} ≥ ${todayBand})`, d.bandH >= todayBand);
       eq(`${tag}: the band`, d.bandH, defaultBar ? Math.max(todayBand, floor) : grown);
       // ★ B8 (Stuart, SE in Display Zoom): "landscape has a little room to spare height wise" — the SE
@@ -195,6 +200,15 @@ for (const [W, H, tablet] of DEVICES) {
     return landscapeDeck({ plate, meter, tablet: false, W, H, scale, r: (n: number) => Math.round(n * scale) });
   };
   eq('17 Pro Max (956 × 440): the mockup\'s 62 pt band', dev(956, 440, 'vu').bandH, 62);
+  // ★★ The Moto G35 in landscape (1129 × 508 dp, Stuart 2026-10-11: the Nixies "difficult to read"): a 74 pt band,
+  //    and the extra 12 goes to the frequency window, not the meter card.
+  {
+    const g = dev(1129, 508, 'edge'), p = dev(1129, 440, 'edge');   // the same width, held to 62 (before)
+    eq('Moto G35 (1129 × 508): the tall band', g.bandH, 74);
+    // ★ 9 of the 12 to the window; the other 3 give the meter gap back its 6 pt (squeezed to 3 at 62).
+    ok(`…its frequency window gets nearly all of it (${p.freqH} held to 62 → ${g.freqH}), the meter card does not grow`,
+       g.freqH - p.freqH >= 9 && g.housingH <= p.housingH);
+  }
   eq('Pro Max (932 × 430): the mockup\'s numbers — band 62, keys 28, LED window 33.5, labels back',
      [dev(932, 430, 'vu').bandH, dev(932, 430, 'vu').keyH, +dev(932, 430, 'vu').freqH.toFixed(1), dev(932, 430, 'vu').labelH > 0],
      [62, 28, 33.5, true]);

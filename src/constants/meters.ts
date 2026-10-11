@@ -656,6 +656,14 @@ export const LAND = {
    *  bar: r(56) at 0.565 = 32 pt, and SET read "SE", 100k read "100"). The drums give the width back. */
   phoneKeyMinW:  40,
   growToH:       430,
+  /** ★★★ …and on past the mockup on a TALLER PHONE (Stuart, 2026-10-11, the Moto G35 — 1129 × 508 dp in landscape:
+   *  "make the landscape controls slightly taller to make the nixies a bit larger as they are difficult to read").
+   *  The 62 pt band was drawn for the tallest iPhone (440 pt in landscape); an Android phone at 508 dp held to it
+   *  gave the analogue deck a 22 dp frequency window. From tallFromH the band grows again, to tallBand at tallToH.
+   *  From 440 so no iPhone moves; phones only (a tablet's band is already its own). */
+  tallFromH:     440,
+  tallToH:       500,
+  tallBand:      74,
   /** SDRScreen `pillWrap`: 8 pt each side of the bar. */
   screenMargin:  8,
   /** ControlsBar's drum columns: `minWidth: s.r(80)`. */
@@ -744,7 +752,9 @@ export function landscapeBand(o: { plate: unknown; meter: MeterKind; tablet: boo
   if (untouched) return Math.max(today, floor);
   const t = Math.max(0, Math.min(1, (o.H - LAND.growFromH) / (LAND.growToH - LAND.growFromH)));
   const lifted = o.tablet ? today : Math.min(LAND.band, today + LAND.phoneLift);
-  return Math.max(today, lifted, floor, Math.round(today + (LAND.band - today) * t));
+  const tall = o.tablet || o.H <= LAND.tallFromH ? 0 : Math.round(LAND.band + (LAND.tallBand - LAND.band)
+    * Math.max(0, Math.min(1, (o.H - LAND.tallFromH) / (LAND.tallToH - LAND.tallFromH))));
+  return Math.max(today, lifted, floor, tall, Math.round(today + (LAND.band - today) * t));
 }
 
 /**
