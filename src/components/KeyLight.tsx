@@ -25,6 +25,7 @@ import { SpriteView } from './SpriteView';
 import { imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 import { hotA, ledA, type LedColour } from '../constants/faceplate';
 import { drawKeyLight, drawKeyWash, keyLightSprite, type RR } from '../constants/keyLight';
+import { useSettled } from '../hooks/useSettledKey';
 
 const q = (n: number) => Math.round(n * 2) / 2;
 const rrKey = (b: RR) => `${q(b.x)},${q(b.y)},${q(b.w)},${q(b.h)},${q(b.r)}`;
@@ -61,7 +62,7 @@ type PressStyle = React.ComponentProps<typeof Animated.View>['style'];
  * The light as a view: an absolutely placed, untouchable canvas reaching `reach` past `cut` on every
  * side, in the parent's coordinates (the key's). Put it UNDER the cap and OVER the slot's own fill.
  */
-export const KeyLight = React.memo(function KeyLight({ cut, cap, reach, led, chassis, pressStyle, travel = 0 }: {
+export const KeyLight = React.memo(function KeyLight({ cut: liveCut, cap: liveCap, reach, led, chassis, pressStyle, travel = 0 }: {
   cut: RR; cap: RR; reach: number; led: LedColour; chassis: string;
   /** How far the cap sinks when clicked (DomeKey's DOME_TRAVEL; 0 for the outline key). */
   travel?: number;
@@ -69,13 +70,20 @@ export const KeyLight = React.memo(function KeyLight({ cut, cap, reach, led, cha
    *  no press light (a key whose press the caller does not hand over). */
   pressStyle?: PressStyle;
 }) {
+  /* ★★★ BUILT AT THE SETTLED SIZE, STRETCHED WHILE A RESIZE MOVES (Stuart, 2026-10-11: "default controls handle resizing
+   *  much better when transparency is disabled which gets rid of the backlit controls"). Every half-point step of a Mac
+   *  window drag re-measured every key, drew new light images at the new size and handed them to new canvases — and on
+   *  the Mac a canvas that changes size can keep its OLD picture, the ghost outlines beside the keys. Now the images
+   *  are built from the geometry as it was when it last stopped changing (useSettled, 250 ms), and in between the
+   *  settled picture is scaled onto the live box: a soft glow stretched for a quarter of a second, then redrawn once. */
+  const { cut, cap } = useSettled({ cut: liveCut, cap: liveCap }, `${rrKey(liveCut)}|${rrKey(liveCap)}`);
   const img = useSharedSprite(keyLightKey(cut, cap, reach, led, chassis, false, 0),
     () => keyLightBuild(cut, cap, reach, led, false, 0));
   const open = useSharedSprite(pressStyle ? keyLightKey(cut, cap, reach, led, chassis, true, travel) : null,
     () => keyLightBuild(cut, cap, reach, led, true, travel));
   if (!img) return null;
   const sp = keyLightSprite(cut, reach);
-  const box = { position: 'absolute' as const, left: sp.x, top: sp.y, width: sp.w, height: sp.h };
+  const box = stretchOnto(sp, keyLightSprite(liveCut, reach));
   return (
     <>
       {/* ★ SpriteView: a canvas on iOS, a plain Image on Android (no TextureView — see SpriteView.tsx). */}
@@ -89,20 +97,33 @@ export const KeyLight = React.memo(function KeyLight({ cut, cap, reach, led, cha
   );
 });
 
+/** A `from`-sized box placed and scaled so it covers `to` (both in the key's coordinates). RN scales about the
+ *  centre, so the box is centred on `to` first. Equal sizes ⇒ no transform at all. */
+function stretchOnto(from: { w: number; h: number }, to: { x: number; y: number; w: number; h: number }) {
+  const sx = from.w > 0 ? to.w / from.w : 1, sy = from.h > 0 ? to.h / from.h : 1;
+  return {
+    position: 'absolute' as const, width: from.w, height: from.h,
+    left: to.x + (to.w - from.w) / 2, top: to.y + (to.h - from.h) / 2,
+    ...(sx !== 1 || sy !== 1 ? { transform: [{ scaleX: sx }, { scaleY: sy }] } : null),
+  };
+}
+
 /**
  * The pressed wash over the cap, as a view filling its parent (the cap, or an outline key's face): put
  * it OVER the face and UNDER the legend. Faded in by `pressStyle`; invisible — and drawn once — at rest.
  */
-export const KeyWash = React.memo(function KeyWash({ cap, led, chassis, pressStyle, radius }: {
+export const KeyWash = React.memo(function KeyWash({ cap: liveCap, led, chassis, pressStyle, radius }: {
   cap: RR; led: LedColour; chassis: string; pressStyle: PressStyle; radius: number;
 }) {
+  // ★ As KeyLight: built at the settled size, stretched onto the live cap while a resize moves.
+  const cap = useSettled(liveCap, rrKey(liveCap));
   const img = useSharedSprite(
     cap.w > 1 && cap.h > 1 ? `keywash|${chassis}|${colourKey(led)}|${rrKey({ ...cap, x: 0, y: 0 })}` : null,
     () => imageBuild(makeSprite(cap.w, cap.h, (c) => drawKeyWash(Skia, c, cap, a => ledA(led, a)))));
   if (!img) return null;
   return (
     <Animated.View pointerEvents="none"
-      style={[{ position: 'absolute', left: 0, top: 0, width: cap.w, height: cap.h, borderRadius: radius }, pressStyle]}>
+      style={[{ ...stretchOnto(cap, { x: 0, y: 0, w: liveCap.w, h: liveCap.h }), borderRadius: radius }, pressStyle]}>
       <SpriteView image={img} width={cap.w} height={cap.h} />
     </Animated.View>
   );

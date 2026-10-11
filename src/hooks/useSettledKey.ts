@@ -13,3 +13,16 @@ export function useSettledKey(w: number, h: number): string {
   }, [w, h]);
   return key;
 }
+
+/** ★ The VALUE as it was when `key` last stopped changing for 250 ms (the first value at once). A drawing that is
+ *  expensive to rebuild — a key's light, its pressed wash — is built from this, and while a resize is still moving
+ *  the caller STRETCHES the settled picture to the live box instead of rebuilding it on every step. */
+export function useSettled<T>(value: T, key: string): T {
+  const [s, setS] = useState({ key, value });
+  useEffect(() => {
+    if (key === s.key) return;
+    const t = setTimeout(() => setS({ key, value }), 250);
+    return () => clearTimeout(t);
+  }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps
+  return s.value;
+}
