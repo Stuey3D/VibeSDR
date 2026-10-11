@@ -29,6 +29,7 @@ import { useTexture, TEXTURE_SAMPLING } from './DomeKey';
 import type { PlateTokens } from '../constants/faceplate';
 import { cssAnglePts, glossAngle, hotspotX, HOTSPOT_Y, screwHighlight } from '../constants/plateLight';
 import { useLight } from '../contexts/FaceplateContext';
+import { useSettledKey } from '../hooks/useSettledKey';
 
 /** CSS `linear-gradient(<deg>, …)` → Skia start/end points over a w × h box. */
 export function cssAngle(deg: number, w: number, h: number) {
@@ -37,19 +38,7 @@ export function cssAngle(deg: number, w: number, h: number) {
   return { start: vec(p.sx, p.sy), end: vec(p.ex, p.ey) };
 }
 
-/* ★★ A REMOUNT KEY THAT ONLY CHANGES ONCE A RESIZE HAS SETTLED. Keying the canvas by its live size fixed the stale
- *  surface (half a plate after a Mac window grew), but a window DRAG changes the size every frame, so the plate
- *  was torn down and rebuilt every frame — and the waterfall and spectrum paused while it happened (Stuart,
- *  2026-10-03: "resizing now slightly pauses the waterfall and spectrum"). The canvas now follows the size live
- *  without remounting, and is rebuilt ONCE, 250 ms after the size stops changing. */
-function useSettledKey(w: number, h: number): string {
-  const [key, setKey] = useState(`${w}x${h}`);
-  useEffect(() => {
-    const t = setTimeout(() => setKey(`${w}x${h}`), 250);
-    return () => clearTimeout(t);
-  }, [w, h]);
-  return key;
-}
+// ★★ useSettledKey (hooks/useSettledKey.ts): the canvas is rebuilt ONCE a resize has settled — see there.
 
 function useSize() {
   const [sz, setSz] = useState({ w: 0, h: 0 });

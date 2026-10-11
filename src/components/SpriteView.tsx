@@ -12,6 +12,7 @@
 import React, { useMemo } from 'react';
 import { Image, Platform, type StyleProp, type ViewStyle } from 'react-native';
 import { Canvas, Image as SkImageNode, type SkImage } from '@shopify/react-native-skia';
+import { useSettledKey } from '../hooks/useSettledKey';
 
 const uris = new WeakMap<SkImage, string>();
 function dataUri(img: SkImage): string | null {
@@ -30,6 +31,9 @@ export function SpriteView({ image, width, height, style }: {
   image: SkImage; width: number; height: number; style?: StyleProp<ViewStyle>;
 }) {
   const uri = useMemo(() => (Platform.OS === 'android' ? dataUri(image) : null), [image]);
+  // ★★ iOS / Mac: a canvas that changes size can keep its OLD surface — a key's light left at the key's previous size,
+  //   a ghost outline beside it after a window resize (Stuart, 2026-10-11). Rebuilt once the size has settled.
+  const settled = useSettledKey(Math.round(width), Math.round(height));
   if (uri) {
     return (
       <Image source={{ uri }} fadeDuration={0} resizeMode="stretch"
@@ -37,7 +41,7 @@ export function SpriteView({ image, width, height, style }: {
     );
   }
   return (
-    <Canvas pointerEvents="none" style={[{ width, height }, style]}>
+    <Canvas key={settled} pointerEvents="none" style={[{ width, height }, style]}>
       <SkImageNode image={image} x={0} y={0} width={width} height={height} />
     </Canvas>
   );
