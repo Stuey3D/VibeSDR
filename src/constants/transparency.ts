@@ -71,9 +71,10 @@ export interface AutoTransparency {
   reason:       AutoReason | null;
 }
 
-/** ≤ ~3 GB. Marketing "3 GB" phones report a little under 3 GiB (the kernel keeps some), so the
- *  line sits at 3.5 GiB: every 3 GB device is under it, every 4 GB device is over it. */
-export const LOW_MEMORY_BYTES = 3.5 * 1024 ** 3;
+/** ≤ ~3 GB. Marketing "3 GB" phones report about 2.7–2.9 GiB (the kernel keeps some). ★ The line was 3.5 GiB, which
+ *  put a 4 GB Moto G35 on the wrong side: Unisoc reserves so much that it reports 3.30 GiB (measured 2026-10-11), so a
+ *  4 GB phone was treated as 3 GB and lost Transparency. 3.1 GiB sits between the two. */
+export const LOW_MEMORY_BYTES = 3.1 * 1024 ** 3;
 /** Android 10. Below it: 2019-and-older phones, most with 2–3 GB and a weak GPU. */
 export const MIN_ANDROID_API = 29;
 /**

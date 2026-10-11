@@ -286,3 +286,8 @@ for (const f of blurFiles) {
 
 console.log(`transparency: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
+// ★ 2026-10-11: a 4 GB Moto G35 reports 3.30 GiB (Unisoc reserves a lot) — it must count as MORE than 3 GB; a 3 GB phone
+//   (~2.8 GiB) as 3 GB or less.
+if (!(3.30 * 1024 ** 3 > LOW_MEMORY_BYTES) || !(2.9 * 1024 ** 3 < LOW_MEMORY_BYTES)) {
+  console.error('FAIL LOW_MEMORY_BYTES: 4 GB Moto (3.30 GiB) over, 3 GB phone (2.9 GiB) under'); process.exitCode = 1;
+}
