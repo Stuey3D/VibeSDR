@@ -16,10 +16,11 @@
  */
 
 import React, {
-  useCallback, useEffect, useMemo, useReducer, useRef, useState,
+  useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState,
 } from 'react';
 import {
   Animated,
+  Easing,
   AppState,
   NativeModules,
   Platform,
@@ -2976,6 +2977,56 @@ const lnd = StyleSheet.create({
   recTime:  { letterSpacing: 1 },
 });
 
+/**
+ * ★★ ROTATION ONLY: THE CONTROLS DROP OFF THE SCREEN AND SLIDE BACK UP COMPLETE (Stuart, 2026-10-11: "for rotation only
+ * not resizing the controls drop off the screen and pop up when moved"). Android turns at once and shows the bar being
+ * rebuilt in its new shape; here, the moment the window's width and height SWAP (a rotation — a resize, a Mac window, a
+ * fold opening never swaps them), the bar is moved below the screen, rebuilds there, and once it has laid out and had
+ * SLIDE_BUILD_MS to draw it slides up (SLIDE_UP_MS, native driver). Capped: it is never away longer than SLIDE_MAX_MS.
+ * Anything else — every resize — is untouched.
+ */
+const SLIDE_OFF = 600, SLIDE_BUILD_MS = 150, SLIDE_MAX_MS = 700, SLIDE_UP_MS = 220;
+function useRotateSlide(W: number, H: number) {
+  const slide = useRef(new Animated.Value(0)).current;
+  /* ★★ DECIDED IN THE RENDER, NOT AFTER IT (the tab, 20:02: "dropping off the screen is the issue"): moving the bar
+   *  away in an effect let the first half-built frame of the new shape reach the screen before it went. The render that
+   *  carries the swapped size already knows — it draws the bar invisible (a plain opacity, beside the native-driven
+   *  slide), so no frame of the rebuild is ever seen. */
+  const prev = useRef({ W, H });
+  const away = useRef(false);
+  const p = prev.current;
+  if (p.W !== W || p.H !== H) {
+    if (Math.abs(W - p.H) < 2 && Math.abs(H - p.W) < 2 && Math.abs(W - p.W) >= 2) away.current = true;
+    prev.current = { W, H };
+  }
+  const [, show] = useReducer((n: number) => n + 1, 0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cap = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reveal = useCallback(() => {
+    if (!away.current) return;
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    if (cap.current) { clearTimeout(cap.current); cap.current = null; }
+    slide.setValue(SLIDE_OFF);
+    away.current = false;
+    show();
+    Animated.timing(slide, { toValue: 0, duration: SLIDE_UP_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [slide]);
+  const awayNow = away.current;
+  useLayoutEffect(() => {
+    if (!awayNow) return;
+    slide.setValue(SLIDE_OFF);
+    if (cap.current) clearTimeout(cap.current);
+    cap.current = setTimeout(reveal, SLIDE_MAX_MS);
+  }, [awayNow, W, H, slide, reveal]);
+  const onLayout = useCallback(() => {
+    if (!away.current) return;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(reveal, SLIDE_BUILD_MS);
+  }, [reveal]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); if (cap.current) clearTimeout(cap.current); }, []);
+  return { slide, onLayout, hidden: awayNow };
+}
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function ControlsBar({
@@ -3038,6 +3089,7 @@ function ControlsBar({
    *  layer. Silver / black are already an opaque plate; OFF only takes their drop shadow (below). */
   const solidDeck = fpTheme.opaque && !ct.plate;
   const s = useUiScale();
+  const rot = useRotateSlide(s.W, s.H);
 
   /* ★★ THE CHANNEL NAME IS THE READOUT ON THE RASTER (airband only — airChannel is null elsewhere). An
    *  8.33 kHz channel's name is not its frequency (118.010 tunes 118.0083 MHz), and the name is what a
@@ -3156,7 +3208,8 @@ function ControlsBar({
   };
 
   return (
-    <View style={[
+    <Animated.View onLayout={rot.onLayout} style={[
+      { transform: [{ translateY: rot.slide }], opacity: rot.hidden ? 0 : 1 },
       root.bar,
       {
         paddingTop: PAD_TOP,
@@ -3220,7 +3273,7 @@ function ControlsBar({
       }
       </DabMeterContext.Provider>
       </FreqReadoutContext.Provider>
-    </View>
+    </Animated.View>
   );
 }
 
