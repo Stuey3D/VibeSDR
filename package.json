@@ -56,6 +56,9 @@
     "xcode": {
       "uuid": "^11.1.1"
     },
-    "image-size": "^2.0.4"
+    "image-size": "^2.0.4",
+    "shell-quote": "^1.11.0",
+    "compression": "^1.8.2",
+    "source-map-js": "^1.2.2"
   }
 }

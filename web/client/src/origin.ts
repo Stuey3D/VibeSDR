@@ -81,13 +81,19 @@ export function pageIsSecure(): boolean {
   return typeof location !== 'undefined' && location.protocol === 'https:';
 }
 
-/** `https://host` or `http://host`, matching the page. */
+/** `https://host` or `http://host`, matching the page.
+ *  ★★ EVERY URL TO A RECEIVER IS BUILT HERE, SO THE SHAPE CHECK LIVES HERE (CodeQL js/request-forgery #98, #99,
+ *     #101, 2026-10-11). The check above existed but the fetches did not pass through it: bookmarks, stations and
+ *     /location each pasted `host` straight into a URL — with the PIN or admin proof appended. A host that is not
+ *     a bare authority (plus the front door's /r/<id>) is refused outright, so no proof can be aimed elsewhere. */
 export function httpBase(host: string): string {
+  if (!isValidServerHost(host)) throw new Error('not a server address');
   return `${pageIsSecure() ? 'https' : 'http'}://${host}`;
 }
 
 /** `wss://host` or `ws://host`, matching the page — but pointed at the RECEIVER, not the page's
- *  own origin, when the two differ. See socketHost(). */
+ *  own origin, when the two differ. See socketHost(). Same shape check as httpBase. */
 export function wsBase(host: string): string {
+  if (!isValidServerHost(host)) throw new Error('not a server address');
   return `${pageIsSecure() ? 'wss' : 'ws'}://${socketHost(host)}`;
 }

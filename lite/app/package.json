@@ -24,6 +24,7 @@
   },
   "overrides": {
     "fast-xml-parser": "^5.7.0",
-    "image-size": "^2.0.4"
+    "image-size": "^2.0.4",
+    "shell-quote": "^1.11.0"
   }
 }

@@ -1,6 +1,6 @@
 // What may stand where `host` stands in the web client's URLs (web/client/src/origin.ts)
 // run: node --no-warnings scripts/test_server_host.ts
-import { isValidServerHost } from '../web/client/src/origin.ts';
+import { isValidServerHost, httpBase, wsBase } from '../web/client/src/origin.ts';
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
   if (got === want) passes++; else { fails++; console.log(`✗ ${what}: got ${JSON.stringify(got)} want ${JSON.stringify(want)}`); }
@@ -29,6 +29,12 @@ eq('empty', isValidServerHost(''), false);
 eq('non-string', isValidServerHost(42), false);
 eq('undefined', isValidServerHost(undefined), false);
 eq('too long', isValidServerHost('a'.repeat(400)), false);
+
+// --- ★★ the URL builders REFUSE a bad host (CodeQL js/request-forgery, 2026-10-11): every fetch goes through them
+const throws = (f: () => unknown) => { try { f(); return false; } catch { return true; } };
+eq('httpBase refuses a host carrying a path and query', throws(() => httpBase('evil.example/x?')), true);
+eq('wsBase refuses a userinfo host', throws(() => wsBase('user@evil.example')), true);
+eq('httpBase builds a LAN host unchanged', httpBase('192.168.86.88:48000'), 'http://192.168.86.88:48000');
 
 console.log(`server host: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
