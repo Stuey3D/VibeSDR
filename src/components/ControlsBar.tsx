@@ -43,7 +43,7 @@ import {
 import DrumWheel from './DrumWheel';
 import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
 import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
-import type { SharedValue } from 'react-native-reanimated';
+import { useDerivedValue, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import TunerKeys from './TunerKeys';
 import { keyLightReach } from '../constants/keyLight';
 import { useMacSilenced } from '../services/macAudio';
@@ -186,7 +186,7 @@ function ControlSlot({ report, style, children }: {
 import { useTheme } from '../contexts/ThemeContext';
 import { useFaceplate, useFaceplateOnTrial, useFaceplateSettings } from '../contexts/FaceplateContext';
 import { explainMeterFault } from '../services/faceplateGuard';
-import type { ChassisTokens, PlateTokens } from '../constants/faceplate';
+import type { PlateTokens } from '../constants/faceplate';
 import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { STEP_833, type AirChannel } from '../utils/airband';
@@ -217,18 +217,8 @@ function formatStep(s: number): string {
 }
 
 // ── Signal gradient — port of sigGradient() ──────────────────────────────────
-// ★ The stops are the faceplate's chassis tokens (meterGrad*); the positions stay here with the
-//   geometry that needs them.
-function sigGradColors(sig: number, ct: ChassisTokens): string[] {
-  if (sig < 0.20) return ct.meterGradLow;
-  if (sig < 0.58) return ct.meterGradMid;
-  return ct.meterGradHigh;
-}
-function sigGradPos(sig: number): number[] {
-  if (sig < 0.20) return [0, 1];
-  if (sig < 0.58) return [0, 0.20 / sig, 1];
-  return [0, 0.15, 0.45, 1];
-}
+// ★ The stops are the faceplate's chassis tokens (meterGrad*); the bands (< 0.20 low, < 0.58 mid, else high) and the
+//   positions live in SignalCanvas, which moves them on the UI thread.
 
 // ── SNR text — port of snrToDisplay() ────────────────────────────────────────
 // ── Meter bus ─────────────────────────────────────────────────────────────────
@@ -650,43 +640,73 @@ export interface ControlsBarProps {
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
 
+const LOW_POS = [0, 1];
+const HIGH_POS = [0, 0.15, 0.45, 1];
 function SignalCanvas({ width, height, signal: sigProp = 0, peak: peakProp = 0, bus }:
   { width: number; height: number; signal?: number; peak?: number; bus?: MeterBus }) {
-  const m = useMeters(bus);
   const ct = useFaceplate().chassis;
-  const signal = m ? m.level : sigProp;
-  const peak   = m ? m.peak  : peakProp;
+  /* ★★ THE MOVING PARTS ARE SHARED VALUES (the diet, Moto G35, 2026-10-11). This canvas re-rendered on every meter
+   *   sample (~40 a second), and every re-render re-records a Skia canvas from scratch on the JS thread. Now only
+   *   what can CHANGE THE PICTURE'S STRUCTURE is React state — the colour band (low / mid / high), squelch on, the
+   *   gate's verdict — and the fill's width, the peak tick, the squelch line and the mid band's gradient stop
+   *   move on the UI thread. Same drawing, same numbers as before. */
+  const sel = (m: MeterValues | null) => {
+    const signal = m ? m.level : sigProp;
+    const sql = m ? (m.sql ?? -1) : -1;
+    const sqlOn = sql >= 0;
+    return {
+      band: signal > 0.001 ? (signal < 0.20 ? 0 : signal < 0.58 ? 1 : 2) : -1,
+      sqlOn,
+      // Prefer the gate's OWN verdict; bar geometry is only a fallback (see MeterValues.gate).
+      closed: sqlOn && (m?.gate ?? (signal < sql)),
+    };
+  };
+  const { band, sqlOn, closed } = useMeterSelect(bus, sel,
+    (a, b) => a.band === b.band && a.sqlOn === b.sqlOn && a.closed === b.closed);
+  const sig = useSharedValue(0), pk = useSharedValue(0), sq = useSharedValue(-1);
+  useEffect(() => {
+    const put = (m: MeterValues | null) => {
+      sig.value = m ? m.level : sigProp;
+      pk.value  = m ? m.peak : peakProp;
+      sq.value  = m ? (m.sql ?? -1) : -1;
+    };
+    put(bus ? bus.value : null);
+    if (!bus) return;
+    bus.subs.add(put);
+    return () => { bus.subs.delete(put); };
+  }, [bus, sigProp, peakProp, sig, pk, sq]);
 
-  // Direct rendering at the real data rate (~10Hz) — interpolation removed by
-  // request; updates cost only this small canvas re-render via the meter bus.
+  const fillW   = useDerivedValue(() => width * Math.min(1, Math.max(0, sig.value)), [width]);
+  // Squelch: while the signal is BELOW the line the gate is closed (muting) and the fill dims a touch.
+  const fillOp  = useDerivedValue(() => (fillW.value > 1 ? (closed ? 0.55 : 1) : 0), [closed]);
+  const gradEnd = useDerivedValue(() => vec(Math.max(1, fillW.value), 0));
+  // ★★★ The mid band's moving stop ALWAYS has three entries. It was one derived value per band, and on a band change
+  //   React handed Skia the new colours at once while the stops caught up a frame later: 3 colours, 2 stops,
+  //   "Positions array must have the same size as colors array" — a native abort on the UI thread (b16, G35).
+  //   The low and high bands' stops are constants, passed with their colours in the same render.
+  const midPos  = useDerivedValue(() => [0, 0.20 / Math.max(0.20, sig.value), 1]);
+  const peakX   = useDerivedValue(() => width * Math.min(1, Math.max(0, pk.value)) - 1, [width]);
+  const peakOp  = useDerivedValue(() => (peakX.value + 1 > 2 ? 1 : 0));
+  const sqlHalo = useDerivedValue(() => width * Math.min(1, Math.max(0, sq.value)) - 2, [width]);
+  const sqlLine = useDerivedValue(() => sqlHalo.value + 1);
+
   if (width < 4) return null;
-  const fillW  = width * Math.min(1, Math.max(0, signal));
-  const peakX  = width * Math.min(1, Math.max(0, peak));
-  const colors = signal > 0.001 ? sigGradColors(signal, ct) : [];
-  const pos    = signal > 0.001 ? sigGradPos(signal) : [];
-  // Squelch: red threshold line at its bar position; while the signal is BELOW it the gate is closed
-  // (muting) and the fill dims a touch — noticeable but still readable. Above it, full brightness.
-  const sql      = m ? (m.sql ?? -1) : -1;
-  const sqlOn    = sql >= 0;
-  const sqlX     = width * Math.min(1, Math.max(0, sql));
-  // Prefer the gate's OWN verdict; bar geometry is only a fallback (see MeterValues.gate).
-  const sqlClosed = sqlOn && (m?.gate ?? (signal < sql));
+  const colors = band === 0 ? ct.meterGradLow : band === 1 ? ct.meterGradMid : ct.meterGradHigh;
   return (
     <Canvas style={StyleSheet.absoluteFill}>
       <Rect x={0} y={0} width={width} height={height} color={ct.meterTrack} />
-      {fillW > 1 && colors.length > 0 && (
-        <Rect x={0} y={0} width={fillW} height={height} opacity={sqlClosed ? 0.55 : 1}>
-          <LinearGradient start={vec(0,0)} end={vec(fillW,0)} colors={colors} positions={pos} />
+      {band >= 0 && (
+        <Rect x={0} y={0} width={fillW} height={height} opacity={fillOp}>
+          <LinearGradient start={vec(0,0)} end={gradEnd} colors={colors}
+            positions={band === 1 ? midPos : band === 0 ? LOW_POS : HIGH_POS} />
         </Rect>
       )}
-      {peakX > 2 && (
-        <Rect x={peakX - 1} y={0} width={2} height={height} color={ct.peakLine} />
-      )}
+      <Rect x={peakX} y={0} width={2} height={height} color={ct.peakLine} opacity={peakOp} />
       {sqlOn && (
         <>
           {/* White halo so the red squelch line stays visible over any fill colour. */}
-          <Rect x={sqlX - 2} y={0} width={4} height={height} color={ct.sqlHalo} />
-          <Rect x={sqlX - 1} y={0} width={2} height={height} color={ct.sqlLine} />
+          <Rect x={sqlHalo} y={0} width={4} height={height} color={ct.sqlHalo} />
+          <Rect x={sqlLine} y={0} width={2} height={height} color={ct.sqlLine} />
         </>
       )}
     </Canvas>
