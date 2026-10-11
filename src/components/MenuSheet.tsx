@@ -1428,7 +1428,15 @@ function MenuSheetBody({
           <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOp }]} />
         </TouchableWithoutFeedback>
 
-        <Animated.View style={[styles.sheet, sheetGeom, { transform: [{ translateY }] },
+        {/* ★★★ ANDROID: A FRESH SHEET WHEN THE CHASSIS CROSSES METAL ↔ GLASS (G35, 2026-10-11). Picking DEFAULT
+            from Silver or Black in CONTROL CUSTOMISATION left this Modal's window drawing solid black — the views
+            were all there (uiautomator listed every key), JS was running, scrolling did not wake it, and it
+            stayed black until CLOSE: Stuart's "nothing is loading … settled about a minute after". Only that
+            direction: the brushed plate (a Skia TextureView) and the metal frame's clip leave together. Metal →
+            metal and glass → metal were fine. Remounting the sheet's body on that change draws it clean; the
+            pane state (custOpen) lives above it, so the user stays where they were. iOS untouched. */}
+        <Animated.View key={Platform.OS === 'android' ? (pt.metal ? 'metal' : 'glass') : undefined}
+          style={[styles.sheet, sheetGeom, { transform: [{ translateY }] },
                                opaque && !pt.metal && { backgroundColor: SHEET_SOLID }, metalFrame]}>
           {/* ★★★ Transparency OFF: the sheet's own background, alpha 1.0 (its tint over black) — no
               BlurView. ★★ Silver / black (§10.3): the brushed plate, opaque in BOTH settings — both
