@@ -19,9 +19,9 @@
  */
 
 import React from 'react';
-import { StyleSheet } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { Canvas, Image as SkImageNode, Skia } from '@shopify/react-native-skia';
+import { Skia } from '@shopify/react-native-skia';
+import { SpriteView } from './SpriteView';
 import { imageBuild, makeSprite, useSharedSprite } from './glowSprite';
 import { hotA, ledA, type LedColour } from '../constants/faceplate';
 import { drawKeyLight, drawKeyWash, keyLightSprite, type RR } from '../constants/keyLight';
@@ -78,14 +78,11 @@ export const KeyLight = React.memo(function KeyLight({ cut, cap, reach, led, cha
   const box = { position: 'absolute' as const, left: sp.x, top: sp.y, width: sp.w, height: sp.h };
   return (
     <>
-      <Canvas pointerEvents="none" style={box}>
-        <SkImageNode image={img} x={0} y={0} width={sp.w} height={sp.h} />
-      </Canvas>
+      {/* ★ SpriteView: a canvas on iOS, a plain Image on Android (no TextureView — see SpriteView.tsx). */}
+      <SpriteView image={img} width={sp.w} height={sp.h} style={box} />
       {open && (
         <Animated.View pointerEvents="none" style={[box, pressStyle]}>
-          <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>
-            <SkImageNode image={open} x={0} y={0} width={sp.w} height={sp.h} />
-          </Canvas>
+          <SpriteView image={open} width={sp.w} height={sp.h} />
         </Animated.View>
       )}
     </>
@@ -106,9 +103,7 @@ export const KeyWash = React.memo(function KeyWash({ cap, led, chassis, pressSty
   return (
     <Animated.View pointerEvents="none"
       style={[{ position: 'absolute', left: 0, top: 0, width: cap.w, height: cap.h, borderRadius: radius }, pressStyle]}>
-      <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>
-        <SkImageNode image={img} x={0} y={0} width={cap.w} height={cap.h} />
-      </Canvas>
+      <SpriteView image={img} width={cap.w} height={cap.h} />
     </Animated.View>
   );
 });

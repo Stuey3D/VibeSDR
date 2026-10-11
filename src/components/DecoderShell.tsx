@@ -170,7 +170,14 @@ export function DecoderShell({ bottom, maxWidth, maxHeight, tall = false, border
             <BlurView intensity={blur} tint="dark" style={StyleSheet.absoluteFill} />
           )}
           <View style={[StyleSheet.absoluteFill,
-                        { backgroundColor: `rgba(${tk.tintRgb},${tall ? tk.tintTall : tk.tint})` }]}
+                        { backgroundColor: `rgba(${tk.tintRgb},${
+                          // ★★ ANDROID HAS NO BLUR BEHIND THESE (iOS: BlurView 35 in SMALL *and* BIG), so the same tints
+                          //    read as clear glass on the Moto G35 (Stuart, 2026-10-11, with an iPhone screenshot of BIG
+                          //    beside it: darker, frosted, spectrum just visible). Raised on Android only to that look —
+                          //    BIG stays the lighter of the two, still a window to TUNE by (AdvRdsPanel header).
+                          Platform.OS === 'android'
+                            ? (tall ? Math.max(tk.tintTall, 0.80) : Math.max(tk.tint, 0.88))
+                            : (tall ? tk.tintTall : tk.tint)})` }]}
                 pointerEvents="none" />
         </>)}
         {children}

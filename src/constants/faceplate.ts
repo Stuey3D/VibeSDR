@@ -1301,3 +1301,16 @@ export function makeFaceplateGuard(io: GuardIO, windowMs = ARMED_WINDOW_MS): Fac
     },
   };
 }
+
+/** ★★★ ANDROID GLASS NEEDS MORE TINT THAN iOS (Stuart, 2026-10-11, the Moto G35: "android is also far too transparent").
+ *  iOS frosts the waterfall behind a panel with a real UIVisualEffect blur, so its 0.55–0.60 tint reads as a solid,
+ *  softly lit panel; expo-blur on Android does NOT blur (no experimental method — live blur is GPU and memory the G35
+ *  does not have), so the same tint showed the waterfall through crisp and the menu text sat on top of it. Raise the
+ *  alpha to at least `minAlpha` on Android only — a colour, no drawing cost. (Reverses 2026-07-28's "iOS to Android
+ *  level", which predates the menu sheet being glass.) */
+export function androidGlass(rgba: string, minAlpha: number): string {
+  const m = /^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/.exec(rgba);
+  if (!m) return rgba;
+  const a = Math.max(parseFloat(m[4]), minAlpha);
+  return `rgba(${m[1]},${m[2]},${m[3]},${a})`;
+}

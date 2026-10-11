@@ -53,7 +53,7 @@ import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { isKiwiProtocol, kiwiFamilyLabel } from '../services/sdrTypes';
 import { useFaceplateSettings, useSurfaceOpaque } from '../contexts/FaceplateContext';
 import {
-  CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
+  androidGlass, CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
   MOTION_CHOICES, MOTION_NOTE, LIGHT_ANGLE_CHOICES, lightAngleRowShown, ICON_COLOURS, ICON_NOTE, ICON_NOTE_ANDROID, ART_ONLY_NOTE,
   COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver, frameRateChoices,
   FRAME_RATE_NOTE,
@@ -1435,7 +1435,7 @@ function MenuSheetBody({
               BlurViews go (the same performance win as the deck, §3.4). */}
           {!opaque && !pt.metal && <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />}
           {/* a11y panel is near-opaque (reference bg rgba(6,4,2,0.99)) */}
-          {!opaque && !pt.metal && <View style={[StyleSheet.absoluteFill, { backgroundColor: SHEET_TINT }]} />}
+          {!opaque && !pt.metal && <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'android' ? androidGlass(SHEET_TINT, 0.88) : SHEET_TINT }]} />}
           <PopupPlate />
           <PopupHandle><View style={styles.handle} /></PopupHandle>
 

@@ -1989,8 +1989,13 @@ function WaterfallView({
   // Static overlay (band plan/ticks/dB lines) memoised as ELEMENTS — when the
   // component re-renders for unrelated reasons React reuses the subtree and
   // skips reconciling dozens of Skia nodes.
+  // ★★★ ONLY AS TALL AS WHAT IT DRAWS (the Android diet, 2026-10-11). Everything below ends at the top of the
+  //     waterfall — the band strip, the ticks, and the lowest dB line at y = wfTop — yet this canvas was the full
+  //     display height. On Android every Skia Canvas is its own TextureView with 2–3 buffers (~10 MB per buffer at
+  //     1080 × 2292) and its own composite pass every frame: the Moto G35 showed TWO full-screen surfaces and its
+  //     RenderThread at 44 %. Sized to wfTop + 1, like the spectrum canvas beside it; nothing drawn changes.
   const staticOverlayCanvas = useMemo(() => (
-    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height: Math.min(height, wfTop + 1) }}>
       {/* Opaque backing for the band/tick strips only — the spectrum graph
           area stays transparent so the instance backdrop image (an RN Image
           UNDER this canvas) can show through; without an image the root's
@@ -2017,7 +2022,7 @@ function WaterfallView({
               color="rgba(255,180,0,0.12)" />
       ))}
     </Canvas>
-  ), [width, height, specTop, tickTop, bandSegs, ticks, dbLabels, specShow]);
+  ), [width, height, wfTop, specTop, tickTop, bandSegs, ticks, dbLabels, specShow]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   // Canvas 1 (bottom): waterfall texture only — the ONLY thing the 120Hz

@@ -66,7 +66,7 @@ import { legendPath, LEGEND_CELL_H } from './AnnunciatorLegend';
 import { placePath } from './vfdMesh';
 import { StatusGhostContext, StatusRun } from './StatusField';
 import { statusParts, statusTags, type StatusPart } from '../constants/statusField';
-import { FONT_DOTO, FONT_HYPER, LAMP_OFF_LEGEND, rgba, NO_DROP_SHADOW, screenOneWeight, statusDisplayFor, type StatusDisplay } from '../constants/faceplate';
+import { androidGlass, FONT_DOTO, FONT_HYPER, LAMP_OFF_LEGEND, rgba, NO_DROP_SHADOW, screenOneWeight, statusDisplayFor, type StatusDisplay } from '../constants/faceplate';
 import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
@@ -3122,7 +3122,7 @@ function ControlsBar({
       ) : (<>
         <BlurView intensity={Platform.OS === 'ios' ? 35 : 80} tint="dark" style={StyleSheet.absoluteFill} />
         {/* Tinted overlay — semi-transparent so blur shows; NOT fully opaque */}
-        <View style={[StyleSheet.absoluteFill, root.tint, { backgroundColor: ct.deckTint, borderRadius: RADIUS }]}
+        <View style={[StyleSheet.absoluteFill, root.tint, { backgroundColor: Platform.OS === 'android' ? androidGlass(ct.deckTint, 0.82) : ct.deckTint, borderRadius: RADIUS }]}
               pointerEvents="none" />
         {/* Border ring */}
         <View style={[root.border, { borderRadius: RADIUS, borderColor: ct.barBorder }]}

@@ -22,6 +22,11 @@
  *   middle one repaints while the drum turns; the blurs (seams, trapezoid edges, icon, border glow)
  *   used to be re-run on every frame of every drag because they shared its canvas. Stacked canvases
  *   composite exactly as the layers did in one, so the picture is unchanged.
+ * ★★★ ON ANDROID, ONE CANVAS (the diet, 2026-10-11, Moto G35): there every Skia Canvas is its own TextureView,
+ *   composited every frame and REBUILT on rotation — the two drums were six of the default skin's fifteen surfaces.
+ *   The two static layers are rasterised ONCE (drawAsImage, at device pixels) and the drum draws as one canvas:
+ *   below-image → rolling notches → above-image. The blurs are baked into the images, so they still never re-run
+ *   during a drag. Until the images exist (first frame, after a resize) the three canvases draw as before.
  *
  * NOTE: the final slider-locked parameters from the preview widget were not
  * recoverable from the session transcript — the TUNABLES block below carries
@@ -32,7 +37,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ViewStyle } from 'react-native';
+import { View, Text, StyleSheet, ViewStyle, Platform, PixelRatio } from 'react-native';
 import {
   Canvas,
   Rect,
@@ -47,6 +52,9 @@ import {
   Group,
   Mask,
   type SkPath,
+  Image as SkImageNode,
+  drawAsImage,
+  type SkImage,
 } from '@shopify/react-native-skia';
 import { useSharedValue, useAnimatedReaction } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -391,6 +399,27 @@ export default function DrumWheel({
 
   const pmFontSz = Math.max(10, Math.round(drumTop * 0.51));
 
+  // ★★★ ABOVE the W <= 0 early return — hooks must run on EVERY render (build 5 had them below it and the
+  //     drum crashed the controls: "Rendered more hooks than during the previous render").
+  // ★★ What the static layers depend on — the size, the chassis colours, the LED, the lamp and the icon. A change to
+  //    any of them re-rasterises; a drag (notches only) never does.
+  const rasterKey = Platform.OS === 'android' && W > 0 && H > 0
+    ? `${W}x${H}|${JSON.stringify(ct)}|${fp.controls}|${lampOff ? 1 : 0}|${String(iconPath?.toSVGString?.() ?? '')}` : '';
+  const [drumImgs, setDrumImgs] = useState<{ key: string; below: SkImage; above: SkImage } | null>(null);
+  // ★ Filled in below, once the elements exist (after the W <= 0 early return); read only by the effect.
+  const latestEls = useRef<{ belowEl: React.ReactElement; aboveEl: React.ReactElement } | null>(null);
+  useEffect(() => {
+    if (!rasterKey || !latestEls.current) return;
+    let live = true;
+    const pr = PixelRatio.get();
+    const size = { width: Math.max(1, Math.ceil(W * pr)), height: Math.max(1, Math.ceil(H * pr)) };
+    const scaled = (el: React.ReactElement) => <Group transform={[{ scale: pr }]}>{el}</Group>;
+    Promise.all([drawAsImage(scaled(latestEls.current.belowEl), size),
+                 drawAsImage(scaled(latestEls.current.aboveEl), size)])
+      .then(([below, above]) => { if (live && below && above) setDrumImgs({ key: rasterKey, below, above }); })
+      .catch(() => { /* keep the three-canvas drum */ });
+    return () => { live = false; };
+  }, [rasterKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   if (W <= 0) {
     return (
       <View style={[{ height }, style]}
@@ -405,12 +434,9 @@ export default function DrumWheel({
     major: <Path key="major" path={pathMajor}  style="stroke" strokeWidth={1.5} color={ct.notchMajor} />,
   };
 
-  return (
-    <GestureDetector gesture={gesture}>
-      <View style={[{ height }, style]}
-            onLayout={widthProp <= 0 ? e => setMeasuredW(e.nativeEvent.layout.width) : undefined}>
-        {/* ════ 1. BELOW THE NOTCHES — static ════ */}
-        <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
+  // ★ The three layers as elements — drawn as three canvases (iOS, and Android until rasterised) or, on Android,
+  //   the static two baked into images (see the header).
+  const belowEl = (<Group>
 
           {/* ── Panel face — today's machined dark metal, or the chassis's brushed grain ── */}
           <WellFace W={W} H={H} ct={ct} />
@@ -456,10 +482,8 @@ export default function DrumWheel({
                     color={ct.ridgeHighlight} strokeWidth={0.8} />
             </Group>
           ))}
-        </Canvas>
-
-        {/* ════ 2. THE ROLLING NOTCHES — the only canvas that repaints while the drum turns ════ */}
-        <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
+        </Group>);
+  const notchesEl = (<Group>
           {/* Engraved notches — cosine-faded with the curvature; each line
               carries a pair so the cuts read as depth, not paint */}
           <Group clip={Skia.XYWHRect(1, drumTop + RIM_H, W - 2, drumH - RIM_H - 1)}>
@@ -483,11 +507,8 @@ export default function DrumWheel({
               {notchOrder(ct).map(k => notchPaths[k])}
             </Mask>
           </Group>
-        </Canvas>
-
-        {/* ════ 3. ABOVE THE NOTCHES — static. ★ The well's own size again: with the ring gone
-            (constants/drumWell.ts) nothing draws outside it. ════ */}
-        <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>
+        </Group>);
+  const aboveEl = (<Group>
           <Group>
             {/* Specular sheen — studio light caught across the curvature */}
             <Rect x={1} y={drumTop + drumH * 0.16} width={W - 2} height={drumH * 0.26}>
@@ -544,7 +565,32 @@ export default function DrumWheel({
 
           {/* ── The drum's edge — the metal's dark cut and lip; no ring (constants/drumWell.ts) ── */}
           <WellEdge W={W} H={H} ct={ct} />
-        </Canvas>
+        </Group>);
+
+  latestEls.current = { belowEl, aboveEl };
+  const androidOne = !!rasterKey && drumImgs?.key === rasterKey;
+
+  return (
+    <GestureDetector gesture={gesture}>
+      <View style={[{ height }, style]}
+            onLayout={widthProp <= 0 ? e => setMeasuredW(e.nativeEvent.layout.width) : undefined}>
+        {androidOne ? (
+          /* ★ Android: ONE surface per drum — see the header. */
+          <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
+            <SkImageNode image={drumImgs!.below} x={0} y={0} width={W} height={H} fit="fill" />
+            {notchesEl}
+            <SkImageNode image={drumImgs!.above} x={0} y={0} width={W} height={H} fit="fill" />
+          </Canvas>
+        ) : (<>
+        {/* ════ 1. BELOW THE NOTCHES — static ════ */}
+        <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">{belowEl}</Canvas>
+
+        {/* ════ 2. THE ROLLING NOTCHES — the only canvas that repaints while the drum turns ════ */}
+        <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">{notchesEl}</Canvas>
+
+        {/* ════ 3. ABOVE THE NOTCHES — static ════ */}
+        <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>{aboveEl}</Canvas>
+        </>)}
 
         {/* ── +/− in the dead corner triangles flanking the V ── */}
         <View pointerEvents="none"
