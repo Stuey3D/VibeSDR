@@ -423,8 +423,11 @@ export default function DrumWheel({
   //     drum crashed the controls: "Rendered more hooks than during the previous render").
   // ★★ What the static layers depend on — the size, the chassis colours, the LED, the lamp and the icon. A change to
   //    any of them re-rasterises; a drag (notches only) never does.
+  // ★★★ The LED as its COLOUR STRING, never `${fp.controls}`: that is an object, so it read "[object Object]" for every
+  //     colour — CONTROLS changed, the key did not, and the drum kept its old lamp (Stuart, 2026-10-11, the G35: "the
+  //     +/- icons are blue but the illumination of the drums is orange" — the − / + are live, the light is the raster).
   const rasterKey = Platform.OS === 'android' && W > 0 && H > 0
-    ? `${W}x${H}|${JSON.stringify(ct)}|${fp.controls}|${lampOff ? 1 : 0}|${String(iconPath?.toSVGString?.() ?? '')}` : '';
+    ? `${W}x${H}|${JSON.stringify(ct)}|${ledA(fp.controls, 1)}|${lampOff ? 1 : 0}|${String(iconPath?.toSVGString?.() ?? '')}` : '';
   const [drumImgs, setDrumImgs] = useState<{ key: string; below: SkImage; above: SkImage } | null>(null);
   // ★ Filled in below, once the elements exist (after the W <= 0 early return); read only by the effect.
   const latestEls = useRef<{ belowEl: React.ReactElement; aboveEl: React.ReactElement } | null>(null);
