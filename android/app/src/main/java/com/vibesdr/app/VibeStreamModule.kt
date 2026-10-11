@@ -27,6 +27,24 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun isDiagBuild(): Boolean = BuildConfig.VIBE_DIAG
 
+    /** ★ Diagnostics build only: the app's external files folder (adb can pull from it) — for the rotation profiles. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun diagDir(): String =
+        if (!BuildConfig.VIBE_DIAG) "" else (reactApplicationContext.getExternalFilesDir(null)?.absolutePath ?: "")
+
+    /** ★ Diagnostics build only: Hermes's sampling profiler (RN's HermesSamplingProfiler — the JSI one is not on
+     *  HermesInternal in a release build). "" on success, else why it failed. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun diagProfStart(): String = if (!BuildConfig.VIBE_DIAG) "off" else try {
+        com.facebook.hermes.instrumentation.HermesSamplingProfiler.enable(); ""
+    } catch (t: Throwable) { t.toString() }
+
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun diagProfDump(path: String): String = if (!BuildConfig.VIBE_DIAG) "off" else try {
+        com.facebook.hermes.instrumentation.HermesSamplingProfiler.disable()
+        com.facebook.hermes.instrumentation.HermesSamplingProfiler.dumpSampledTraceToFile(path); ""
+    } catch (t: Throwable) { t.toString() }
+
     /** The owner's admin credential for the audio socket. Set before starting (or before a
      *  reconnect) — see VibeStreamService.adminSuffix. Empty clears it. */
     @ReactMethod

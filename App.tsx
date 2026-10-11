@@ -3,7 +3,7 @@ import { detailAsked, detailInstalled, downloadDetail, markDetailAsked } from '.
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { Alert, Animated, ActivityIndicator, AppState, LogBox, NativeModules, Text, View } from 'react-native';
+import { Alert, Animated, ActivityIndicator, AppState, Dimensions, LogBox, NativeModules, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -57,7 +57,47 @@ try {
       if (h) console.log('[VibeDiag] js ' + JSON.stringify({
         heapKB: Math.round((h.js_heapSize ?? 0) / 1024), allocKB: Math.round((h.js_allocatedBytes ?? 0) / 1024),
         gcs: h.js_numGCs, gcMs: Math.round(h.js_gcCPUTime ?? h.js_gcTime ?? 0) }));
+      // Which Skia canvases re-record (RN Skia's container redraw, counted by a diag-only patch in node_modules).
+      const rd = (globalThis as any).__skiaRedraws;
+      if (rd) {
+        const top = Object.entries(rd as Record<string, number>).sort((a, b) => b[1] - a[1]).slice(0, 12);
+        console.log('[VibeDiag] redraws/10s ' + top.map(([k, v]) => `${v} ${k}`).join(' | '));
+        (globalThis as any).__skiaRedraws = {};
+      }
     }, 10000);
+    (globalThis as any).__skiaRedraws = {};
+    // ★★ THE ROTATION PROFILE (the G35's Perfetto trace: the JS thread pegged for ~0.6 s on every rotation while the
+    //    drawing threads idled). Each window-size change runs Hermes's sampling profiler for 2.5 s and writes
+    //    <externalFiles>/rot-<n>.cpuprofile, which adb pulls and the bundle's source map names.
+    const PM = (NativeModules as any).VibePowerModule;
+    const dir = PM?.diagDir?.() ?? '';
+    console.log('[VibeDiag] profiler dir=' + dir);
+    let n = 0, busy = false;
+    if (dir && PM?.diagProfStart && PM?.diagProfDump) {
+      // ★ One STEADY-STATE profile as well: 5 s of plain listening, 45 s after start (the constant GC hunt).
+      setTimeout(() => {
+        if (busy) return;
+        busy = true;
+        const e1 = PM.diagProfStart();
+        if (e1) { console.log('[VibeDiag] profiler start failed ' + e1); busy = false; return; }
+        setTimeout(() => {
+          const e2 = PM.diagProfDump(`${dir}/steady.cpuprofile`);
+          console.log(e2 ? '[VibeDiag] profile failed ' + e2 : `[VibeDiag] profile written ${dir}/steady.cpuprofile`);
+          busy = false;
+        }, 5000);
+      }, 45000);
+      Dimensions.addEventListener('change', () => {
+        if (busy) return;
+        busy = true; const k = ++n;
+        const e1 = PM.diagProfStart();
+        if (e1) { console.log('[VibeDiag] profiler start failed ' + e1); busy = false; return; }
+        setTimeout(() => {
+          const e2 = PM.diagProfDump(`${dir}/rot-${k}.cpuprofile`);
+          console.log(e2 ? '[VibeDiag] profile failed ' + e2 : `[VibeDiag] profile written ${dir}/rot-${k}.cpuprofile`);
+          busy = false;
+        }, 2500);
+      });
+    }
   }
 } catch { /* never let diagnostics break the app */ }
 
