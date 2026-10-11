@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ★★★ THREE HAND-WRITTEN COPIES OF ONE PROP LIST, AND NOTHING CHECKS THEM (2026-09-20).
 //
-// ControlsBar receives props, builds a `shared` object, and spreads it into DeckBar (one tree for both shapes since 2026-10-11; it was PortraitBar and LandscapeBar).
+// ControlsBar receives props, builds a `shared` object, and spreads it into PortraitBar and LandscapeBar.
 // Each of those three keeps its own hand-written list of names, and the parameter lists are typed `: any`, so
 // a name missing from any one of them fails in a different way:
 //
@@ -70,9 +70,7 @@ for (const { key, value } of entries) {
 }
 
 // ── 2. each bar: used-but-not-declared (throws), and declared-but-not-passed (dead) ──────────
-// ★ `land` is passed beside the spread (<DeckBar land={…} {...shared} />), not through it.
-const BESIDE = new Set(['land']);
-for (const bar of ['DeckBar']) {
+for (const bar of ['PortraitBar', 'LandscapeBar']) {
   const i = src.indexOf('function ' + bar + '(');
   if (i < 0) { fail(`no component ${bar} — has it been renamed?`); continue; }
   const he = src.indexOf('}: any)', i);
@@ -82,9 +80,9 @@ for (const bar of ['DeckBar']) {
   for (const k of spreadKeys) if (!declared.has(k) && usedIn(body, k)) fail(`${bar} uses \`${k}\` without destructuring it — this THROWS when it renders`);
   for (const d of declared) {
     if (!/^[a-z]/.test(d) || /^(any|false|true|null|undefined)$/.test(d)) continue;
-    if (!spreadKeys.includes(d) && !BESIDE.has(d) && usedIn(body, d)) fail(`${bar} uses \`${d}\`, which \`shared\` never passes — a dead feature, silently`);
+    if (!spreadKeys.includes(d) && usedIn(body, d)) fail(`${bar} uses \`${d}\`, which \`shared\` never passes — a dead feature, silently`);
   }
 }
 
-console.log(bad ? `${FILE}: prop lists disagree — see above` : `${FILE}: prop lists agree across ControlsBar and DeckBar`);
+console.log(bad ? `${FILE}: prop lists disagree — see above` : `${FILE}: prop lists agree across ControlsBar, PortraitBar and LandscapeBar`);
 process.exit(bad);
