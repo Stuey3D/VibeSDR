@@ -1920,8 +1920,13 @@ function WaterfallView({
 
   // Needle + acrylics memoised likewise — only rebuilds when the needle
   // geometry or colour actually changes.
-  const needleCanvas = useMemo(() => (
-    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>
+  // ★★ ANDROID: NO FULL-SCREEN CANVAS FOR THE NEEDLE (the diet, Moto G35, 2026-10-11). It was a 1080 × 2292
+  //    TextureView — two or three full-screen buffers of graphics memory, composited over everything on every frame —
+  //    for a few rects and two cached strips. On Android the same elements draw LAST inside the two canvases they sit
+  //    over: the spectrum canvas (0 … wfTop) and the waterfall canvas (shifted up by wfTop); each clips to its own
+  //    band, so together they draw exactly what the one canvas did. Only while the first rows load does the
+  //    INITIALIZING label now sit over the needle rather than under it. iOS keeps its own canvas (cheap Metal layers).
+  const needleEls = useMemo(() => (<>
 
       {/* ── Frosted backing (under the acrylics): smoked-glass band dims the
              waterfall across the passband so the needle keeps contrast on
@@ -1988,10 +1993,13 @@ function WaterfallView({
         <SkiaImage image={needleStrip.img} x={needle.nX - needleStrip.halfW} y={0}
                    width={needleStrip.w} height={height} fit="fill" />
       )}
-
-    </Canvas>
-  ), [width, height, needle, needleStrip, edgeStrip, needleColor, needleFrost,
+  </>), [width, height, needle, needleStrip, edgeStrip, needleColor, needleFrost,
       wallOverlay, centerMarker, centerMarkerColor]);
+  const needleCanvas = useMemo(() => (Platform.OS === 'android' ? null : (
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height }}>{needleEls}</Canvas>
+  )), [width, height, needleEls]);
+  const needleInWaterfall = useMemo(() => (Platform.OS === 'android'
+    ? <Group transform={[{ translateY: -wfTop }]}>{needleEls}</Group> : null), [needleEls, wfTop]);
 
   // Static overlay (band plan/ticks/dB lines) memoised as ELEMENTS — when the
   // component re-renders for unrelated reasons React reuses the subtree and
@@ -2074,6 +2082,7 @@ function WaterfallView({
               </Shader>
             </Fill>
           )}
+          {needleInWaterfall}
         </Canvas>
         )}
 
@@ -2105,6 +2114,9 @@ function WaterfallView({
           {specShow && peakHold && (
             <Path path={peakPath} paint={peakPaint} />
           )}
+          {/* clipped at wfTop: this canvas overlaps the waterfall's by 1 pt, and the translucent panels must not
+              draw twice on that row */}
+          {Platform.OS === 'android' && <Group clip={Skia.XYWHRect(0, 0, width, wfTop)}>{needleEls}</Group>}
         </Canvas>
         )}
 
