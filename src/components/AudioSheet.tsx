@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions,
 } from 'react-native';
+import { RotateSheet, SheetRise } from './RotateFade';
 import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
@@ -663,9 +664,10 @@ export default function AudioSheet({
   const mac = useMacAudio();   // ★ the Mac-only VOLUME / MUTE — onMac false everywhere else
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            onDismiss={onDismiss}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
+      <RotateSheet><SheetRise>
       {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (PopupScrim). */}
       {/* ★★ NO DIM behind a bottom sheet (Stuart, 2026-10-04): the scrim filled only the space ABOVE the sheet, so on a
           wide window — sheets are capped at 640 pt — the top half went dark and the strips beside the sheet stayed
@@ -1062,6 +1064,7 @@ export default function AudioSheet({
         </TouchableOpacity>
         )}
       </View>
+      </SheetRise></RotateSheet>
     </Modal>
   );
 }

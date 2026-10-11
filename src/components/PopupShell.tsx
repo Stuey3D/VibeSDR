@@ -177,13 +177,19 @@ export function PopupPlate({ radius = 16 }: { radius?: number }) {
 
 /** The container style a metal popup needs: its plate colour (seen for a frame before the texture
  *  decodes), the 1 pt chassis-edge border, and no drop shadow with Transparency OFF. */
+const BLACK_PLATE_SEEN = '#2c2d2f';
+
 export function usePopupFrame(radius = 16, sheet = true): ViewStyle | null {
   const pt = usePopupTheme();
   const plate = useFaceplate().chassis.plate;
   const surface = useSurface();
   if (!pt.metal || !plate) return null;
   return {
-    backgroundColor: plate.base, borderColor: pt.shell.border, borderWidth: 1,
+    /* ★ What shows for the frame or two before the plate's canvas has drawn (Android: a TextureView's first frame).
+     *  Black's base #161719 is far darker than the LIT plate (~#2c2d2f measured on the Moto, 2026-10-11), so every
+     *  sheet flashed dark at the top as it landed — "a slight flicker but only on the top part of the menu". The
+     *  lit plate's average instead; the canvas covers it entirely once drawn. */
+    backgroundColor: plate.texture === 'black' ? BLACK_PLATE_SEEN : plate.base, borderColor: pt.shell.border, borderWidth: 1,
     ...(sheet ? { borderBottomWidth: 0, borderTopLeftRadius: radius, borderTopRightRadius: radius }
               : { borderRadius: radius }),
     overflow: 'hidden',

@@ -8,6 +8,7 @@ import {
   Modal, StyleSheet, Text, TouchableOpacity,
   TouchableWithoutFeedback, View,
 } from 'react-native';
+import { RotateSheet, SheetRise } from './RotateFade';
 import { STEPS_HZ } from '../services/sdrTypes';
 import { STEP_833 } from '../utils/airband';
 import { useTheme } from '../contexts/ThemeContext';
@@ -59,8 +60,9 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
   return (
     /* ★ SLIDES UP like every other sheet (AudioSheet, ModeSelector — Stuart, 2026-10-11: "every other menu pops up from
        the bottom except the step rate one which does this weird pop in and drop"). It had been "none" since June. */
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
+      <RotateSheet><SheetRise>
       <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
           {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (§10.2). */}
@@ -125,6 +127,7 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
           )}
         </View>
       </View>
+      </SheetRise></RotateSheet>
     </Modal>
   );
 }

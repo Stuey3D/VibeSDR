@@ -178,7 +178,8 @@ for (const chassis of ['silver', 'black'] as const) {
     ['components/KeyboardShortcuts.tsx', /<PopupScrim /],
     ['components/ModeSelector.tsx',     /<PopupScrim /],
     ['components/ChatDrawer.tsx',       /!surf\.opaque && cd\.backdrop/],
-    ['components/StepPicker.tsx',       /!surf\.opaque && \{ backgroundColor: BACKDROP \}/],
+    // ★ 2026-10-11: no dim at all now (a bottom sheet, as Audio/Mode) — the tap-to-close view only.
+    ['components/StepPicker.tsx',       /<View style=\{st\.backdrop\} \/>/],
     ['components/CityPickerModal.tsx',  /dim && s\.backdropDim/],
     ['components/PasswordModal.tsx',    /dim && styles\.overlayDim/],
     ['components/IdentModal.tsx',       /dim && styles\.overlayDim/],

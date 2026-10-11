@@ -29,6 +29,7 @@ import {
   NativeEventEmitter,
   NativeModules,
   Platform,} from 'react-native';
+import { RotateSheet } from './RotateFade';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import Slider from '@react-native-community/slider';
@@ -1423,6 +1424,7 @@ function MenuSheetBody({
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
+      <RotateSheet>
       <View style={StyleSheet.absoluteFill} onTouchStart={noteTouchInteraction}>
         <TouchableWithoutFeedback onPress={onClose}>
           {/* ★★★ Transparency OFF: no dim — a full-screen blend over the live waterfall. The view
@@ -2087,6 +2089,7 @@ function MenuSheetBody({
           )}
         </Animated.View>
       </View>
+      </RotateSheet>
     </Modal>
   );
 }

@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+const SETTLE_GRACE_MS = 900;
 
 /* ★★ A REMOUNT KEY THAT ONLY CHANGES ONCE A RESIZE HAS SETTLED (moved out of ChassisPlate, 2026-10-11, so SpriteView
  *  can share it). On the Mac a Skia <Canvas> whose size changes can keep showing its OLD surface — half a plate after a
@@ -11,8 +13,13 @@ export function useSettledKey(w: number, h: number): string {
    *  topmost extension, almost like the lighting is rendering in late"). A sheet's plate mounts unmeasured (0 × 0),
    *  is measured, draws — and 250 ms later the key changed from "0x0" to its size and the canvas was rebuilt, just as
    *  the sheet's slide finished. Only a CHANGE from one real size to another waits to settle. */
-  const unmeasured = key.startsWith('0x') || key.endsWith('x0');
+  const born = useRef(Date.now());
   const live = `${w}x${h}`;
+  /* ★ …and while the thing is still ARRIVING (its first SETTLE_GRACE_MS) every size is adopted at once: the audio sheet
+   *  grows once its contents load, a moment after it opens, and that second size was being rebuilt 250 ms later — the
+   *  one menu that still flickered as it landed. After that, a change waits to settle as before. */
+  const unmeasured = (key.startsWith('0x') || key.endsWith('x0') || Date.now() - born.current < SETTLE_GRACE_MS)
+    && key !== live;
   if (unmeasured && w > 0 && h > 0) setKey(live);   // ★ no early return — the hooks below must always run
   useEffect(() => {
     const t = setTimeout(() => setKey(`${w}x${h}`), 250);

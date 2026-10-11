@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
+import { RotateSheet, SheetRise } from './RotateFade';
 import { openWebPage } from '../utils/openWebPage';
 import { SIGID_HOME } from '../services/dialChat';
 import Slider from '@react-native-community/slider';
@@ -394,8 +395,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   });
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
+      <RotateSheet><SheetRise>
       {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes (§10.2). */}
       {/* ★★ NO DIM behind a bottom sheet (Stuart, 2026-10-04): the scrim filled only the space ABOVE the sheet, so on a
           wide window — sheets are capped at 640 pt — the top half went dark and the strips beside the sheet stayed
@@ -848,6 +850,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </NavCtx.Provider>
         </ScrollView>
       </View>
+      </SheetRise></RotateSheet>
     </Modal>
   );
 }
