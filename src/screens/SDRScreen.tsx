@@ -119,6 +119,7 @@ import { getFavourites, toggleFavourite }              from '../services/favouri
 import { useTheme }                                     from '../contexts/ThemeContext';
 
 import WaterfallView   from '../components/WaterfallView';
+import RotateFade from '../components/RotateFade';
 import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
@@ -204,6 +205,7 @@ import { noteRecordingServer } from '../services/recordingsIndex';
 import { crumb } from '../services/crumbs';
 import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
+import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -1864,7 +1866,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const { width: screenW, height: screenH } = useWindowDimensions();
   const isLandscape = screenW > screenH;
   // Tablets (iPad) have room for the decoder panel in landscape; phones don't.
-  const isTablet = Math.min(screenW, screenH) >= 768;
+  const isTablet = Math.min(screenW, screenH) >= TABLET_MIN_SIDE;
   /* ★★ ANDROID PHONES GO FULL SCREEN IN LANDSCAPE (2026-10-03). The 3-button navigation bar sits down the right
    *  edge in landscape and the zoom drum and the right-hand cards were drawn under it (emulator at 320 × 568 dp —
    *  a 480p Android phone). iOS hides its own status bar in landscape; this matches it: system bars hidden, a
@@ -10476,6 +10478,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         </View>
       ) : null}
 
+      {/* ★ The decoder box leaves on a rotation and fades back in after it (RotateFade). */}
+      <RotateFade>
       {isLandscape && !isTablet && (activeDecoder !== null || spotsKind !== null || dabProgrammes.length > 0 || advRdsOpen) ? (
         // ★★ CLEAR THE VTS BAR — the third time this exact collision has been fixed. VTSBar also
         // sits at `pillBottom + 8` (see its render below), so this banner was drawn straight ON TOP
@@ -10541,6 +10545,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
         </PanelBoundary>
       )}
+      </RotateFade>
 
       {/* Chat rotate hint — chat is portrait-only, button stays for unread */}
       {chatRotateHint && (
@@ -10854,7 +10859,13 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Controls pill — absolute overlay, margin 8px each side */}
       {!controlsHidden && <View
-        style={[styles.pillWrap, { bottom: bottomInset + 8 }]}
+        /* ★★ CLEAR OF THE BACK-GESTURE EDGES (Stuart, 2026-10-11, the Moto in landscape: "the tuning controls land …
+           slightly too close to the edge of the screen and cause the back command to be triggered when swiping on
+           them"). Android's back swipe starts in the outer ~24 dp of each side; the drums sat at 8. Android phones in
+           landscape keep the bar 28 pt in from each edge (plus the cut-out). Everything else: 8, as before. */
+        style={[styles.pillWrap, { bottom: bottomInset + 8 },
+                Platform.OS === 'android' && isLandscape && !isTablet
+                  ? { left: Math.max(28, insets.left + 8), right: Math.max(28, insets.right + 8) } : null]}
         onLayout={(e: any) => {
           // Track pill top so bottom-anchored overlays can sit above it
           setPillY(e.nativeEvent.layout.y);
@@ -11135,6 +11146,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★ PORTRAIT ONLY on a phone, like the decoder box: 24 fields and three plots need
           vertical space landscape does not have, and the rotate banner below says where it
           went. A tablet has the room. */}
+      <RotateFade>
       {advRdsOpen && status.mode === 'wfm' && (!isLandscape || isTablet) && (
         <PanelBoundary name="Advanced RDS" onClose={() => setAdvRdsOpen(false)}>
         <AdvRdsPanel
@@ -11157,11 +11169,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
         </PanelBoundary>
       )}
+      </RotateFade>
       {/* ★★★ THE DAB WINDOW. Portrait-only on a phone for the same reason as the analyser above:
           a service list plus forty measured rows needs vertical space landscape has not got.
           ★★ `dabBoxOpen`, NOT `dabOn` — the window and the mode are two different things and the
           panel carries both doors. Closing the box leaves DAB decoding and the audio playing;
           EXIT DAB (and the DAB button in the demodulator sheet) leaves the mode. */}
+      <RotateFade>
       {dabBoxOpen && (!isLandscape || isTablet) && (
         <PanelBoundary name="DAB" onClose={() => setDabBoxOpen(false)}>
         <DabPanel
@@ -11186,6 +11200,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
         </PanelBoundary>
       )}
+      </RotateFade>
       {/* ★ NB the panel itself still clears the NOTICE pills — it takes noticeStackH in its
           bottomOffset. Hiding the VTS bar removes one thing under it, not all of them: a
           POWER SAVE or idle-terms pill still has to be readable with the analyser open

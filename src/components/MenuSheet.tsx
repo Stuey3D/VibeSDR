@@ -66,6 +66,7 @@ import {
 } from './PopupShell';
 import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
+import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1234,7 +1235,7 @@ function MenuSheetBody({
   const isLandscape = winW > winH;
   // Tablets (iPad) have the vertical room for the decoder panel + menu section
   // in landscape; phones don't, so client decoders stay portrait-only there.
-  const isTablet = Math.min(winW, winH) >= 768;
+  const isTablet = Math.min(winW, winH) >= TABLET_MIN_SIDE;
   const sheetH = Math.min(winH * 0.88, 700);
   // Inner dropdown scroll lists (search results, profile/DAB/colormap) carry a
   // fixed maxHeight that fits portrait but overflows the much shorter landscape

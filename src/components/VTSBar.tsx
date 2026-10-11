@@ -11,6 +11,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Easing, Image, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { rotSlide, useRotateAway } from '../services/rotateReveal';
 import { useFaceplate, useFaceplateOnTrial } from '../contexts/FaceplateContext';
 import AnnunciatorLegend from './AnnunciatorLegend';
 import RdsMark from './RdsMark';
@@ -119,6 +120,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
   const [cellPx, setCellPx] = useState<{ style: string; px: number } | null>(null);
   const [textOnly, setTextOnly] = useState(false);
   const { width: winW, height: winH } = useWindowDimensions();
+  const rotAway = useRotateAway(winW, winH);
   const [textW, setTextW] = useState(0);
   /** The two side blocks' natural widths — each reserves the wider, so the text window is centred. */
   const [leftW, setLeftW] = useState(0);
@@ -331,6 +333,10 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
     // ★ Clear the Dynamic Island / notch in landscape (B8, 17 Pro Max: the bar's left end ran under the
     //   island). ★★ SYMMETRICAL (Stuart): whatever is cut on the island's side is cut on the other side
     //   too, so the bar stays centred over the deck. The side insets are 0 in portrait: portrait keeps 14.
+    /* ★ ON A ROTATION it leaves with the control bar and comes back with it (services/rotateReveal): invisible from the
+       turn's own render, then up on the bar's shared slide. */
+    <Animated.View pointerEvents="none"
+                   style={[StyleSheet.absoluteFill, { opacity: rotAway ? 0 : 1, transform: [{ translateY: rotSlide }] }]}>
     <Animated.View style={[styles.wrap, { bottom, opacity: fade, left: side, right: side }]}
                    pointerEvents="none">
     <View ref={barRef} collapsable={false} style={[styles.bar, { backgroundColor: fp.chassis.vtsBg, borderColor: fp.chassis.vtsBorder }]}
@@ -468,6 +474,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           11 = the bar's 12 pt corner less its 1 pt border, which is where an absolute child's box starts. */}
       {vfd && <VfdFilaments radius={11} />}
     </View>
+    </Animated.View>
     </Animated.View>
   );
 }

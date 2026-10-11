@@ -192,6 +192,7 @@ import { useUiScale } from '../hooks/useUiScale';
 import { STEPS, stepsForFreq, type SDRMode } from '../services/sdrTypes';
 import { STEP_833, type AirChannel } from '../utils/airband';
 import { tourRef, mergeRefs } from './Coachmark';
+import { isRotation, notifyRevealed, rotSlide } from '../services/rotateReveal';
 import { IS_TV } from '../utils/tv';
 import { minuteKey } from '../services/renderChurn';
 
@@ -2987,9 +2988,15 @@ const lnd = StyleSheet.create({
  */
 /* ★ SLIDE_MIN_MS (Stuart, the Moto: "the iOS style rotation hiding works best just extend the time"): never back before
  *  the REST of the screen — the band plan, the waterfall — has found its new size, ~0.6 s on the G35. */
-const SLIDE_OFF = 600, SLIDE_BUILD_MS = 150, SLIDE_MIN_MS = 600, SLIDE_MAX_MS = 900, SLIDE_UP_MS = 220;
+/* ★★ …AND NOT UNTIL THE JS THREAD IS FREE (Stuart, the Moto: "the drums work when rotated but the buttons for settings
+ *  etc dont … they take a while to start working after rotation"). The drums are gestures on the UI thread; the keys
+ *  are Pressables on the JS thread, which is still rebuilding the screen after a turn — a press waits in its queue.
+ *  So the bar comes back only when a SLIDE_PROBE_MS timer fires on time (late by < SLIDE_LAG_MS = the thread is idle),
+ *  capped at SLIDE_MAX_MS. When the keys can be seen, they can be pressed. */
+const SLIDE_OFF = 600, SLIDE_BUILD_MS = 150, SLIDE_MIN_MS = 600, SLIDE_MAX_MS = 1500, SLIDE_UP_MS = 220;
+const SLIDE_PROBE_MS = 40, SLIDE_LAG_MS = 25;
 function useRotateSlide(W: number, H: number) {
-  const slide = useRef(new Animated.Value(0)).current;
+  const slide = rotSlide;   // ★ shared with the station strip (services/rotateReveal), so the two move together
   /* ★★ DECIDED IN THE RENDER, NOT AFTER IT (the tab, 20:02: "dropping off the screen is the issue"): moving the bar
    *  away in an effect let the first half-built frame of the new shape reach the screen before it went. The render that
    *  carries the swapped size already knows — it draws the bar invisible (a plain opacity, beside the native-driven
@@ -2999,21 +3006,31 @@ function useRotateSlide(W: number, H: number) {
   const awayAt = useRef(0);
   const p = prev.current;
   if (p.W !== W || p.H !== H) {
-    if (Math.abs(W - p.H) < 2 && Math.abs(H - p.W) < 2 && Math.abs(W - p.W) >= 2) { away.current = true; awayAt.current = Date.now(); }
+    if (isRotation(p, W, H)) { away.current = true; awayAt.current = Date.now(); }
     prev.current = { W, H };
   }
   const [, show] = useReducer((n: number) => n + 1, 0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cap = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reveal = useCallback(() => {
+  const reveal = useCallback((force?: boolean) => {
     if (!away.current) return;
     const wait = SLIDE_MIN_MS - (Date.now() - awayAt.current);
-    if (wait > 0) { if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(reveal, wait); return; }
+    if (wait > 0 && !force) { if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(reveal, wait); return; }
+    if (!force) {
+      // Is the JS thread free? A short timer that fires on time says so; a late one means the rebuild is still running.
+      const t0 = Date.now();
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => {
+        if (Date.now() - t0 - SLIDE_PROBE_MS < SLIDE_LAG_MS) reveal(true); else reveal();
+      }, SLIDE_PROBE_MS);
+      return;
+    }
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     if (cap.current) { clearTimeout(cap.current); cap.current = null; }
     slide.setValue(SLIDE_OFF);
     away.current = false;
     show();
+    notifyRevealed();
     Animated.timing(slide, { toValue: 0, duration: SLIDE_UP_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
   }, [slide]);
   const awayNow = away.current;
@@ -3021,12 +3038,12 @@ function useRotateSlide(W: number, H: number) {
     if (!awayNow) return;
     slide.setValue(SLIDE_OFF);
     if (cap.current) clearTimeout(cap.current);
-    cap.current = setTimeout(reveal, SLIDE_MAX_MS);
+    cap.current = setTimeout(() => reveal(true), SLIDE_MAX_MS);
   }, [awayNow, W, H, slide, reveal]);
   const onLayout = useCallback(() => {
     if (!away.current) return;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(reveal, SLIDE_BUILD_MS);
+    timer.current = setTimeout(() => reveal(), SLIDE_BUILD_MS);
   }, [reveal]);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); if (cap.current) clearTimeout(cap.current); }, []);
   return { slide, onLayout, hidden: awayNow };
@@ -3148,8 +3165,9 @@ function ControlsBar({
   //   portrait; landscape 10 top and bottom, 24 at the sides on silver so the screws clear the drums
   //   (§9), 12 on black. The default island keeps today's numbers.
   const plate   = ct.plate;
-  const PAD_H   = !plate ? s.r(12) : s.isLandscape && !IS_TV ? s.r(plate.screws ? 24 : 12) : s.r(14);
-  const PAD_TOP = !plate ? s.r(8)  : s.isLandscape && !IS_TV ? s.r(10) : s.r(14);
+  const band = !IS_TV && s.isLandscape;
+  const PAD_H   = !plate ? s.r(12) : band ? s.r(plate.screws ? 24 : 12) : s.r(14);
+  const PAD_TOP = !plate ? s.r(8)  : band ? s.r(10) : s.r(14);
   const RADIUS  = !plate ? s.r(18) : s.r(plate.radius);
 
   // ★★ MAX-WIDTH CAP — the Mac app IS the iPad app, so on a Mac window (and
@@ -3272,7 +3290,7 @@ function ControlsBar({
       <FreqReadoutContext.Provider value={readout}>
       {/* ★ Only while DAB is on: a verdict that outlived the mode would describe a multiplex nobody is on. */}
       <DabMeterContext.Provider value={dabOn ? (dabMeter ?? DAB_SEARCHING) : null}>
-      {s.isLandscape && !IS_TV
+      {band
         ? <LandscapeBar {...shared} />
         : <PortraitBar  {...shared} />
       }
