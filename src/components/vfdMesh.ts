@@ -34,6 +34,14 @@ export const MESH_FINE_BAR = 0.25;
  */
 export function vfdMesh(shape: SkPath, pitch: number, bar: number,
                         opts: { count?: number; extent?: number; dx?: number; dy?: number } = {}): [SkPath, SkPath] {
+  const [a, b] = vfdBars(pitch, bar, opts);
+  return [Skia.Path.MakeFromOp(a, shape, PathOp.Intersect) ?? a, Skia.Path.MakeFromOp(b, shape, PathOp.Intersect) ?? b];
+}
+
+/** The mesh's two bar families on their own, NOT intersected with any shape — for a caller that draws them
+ *  CLIPPED to its shape instead (SegField). Same bars, same phase, as vfdMesh. */
+export function vfdBars(pitch: number, bar: number,
+                        opts: { count?: number; extent?: number; dx?: number; dy?: number } = {}): [SkPath, SkPath] {
   const count = opts.count ?? Math.ceil(400 / pitch);
   const extent = opts.extent ?? 200;
   const a = Skia.Path.Make(), b = Skia.Path.Make();
@@ -45,7 +53,7 @@ export function vfdMesh(shape: SkPath, pitch: number, bar: number,
   if (opts.dx || opts.dy) m.translate(opts.dx ?? 0, opts.dy ?? 0);
   m.rotate((60 * Math.PI) / 180);
   a.transform(m); b.transform(m);
-  return [Skia.Path.MakeFromOp(a, shape, PathOp.Intersect) ?? a, Skia.Path.MakeFromOp(b, shape, PathOp.Intersect) ?? b];
+  return [a, b];
 }
 
 /** A cut: a straight line from (x1, y1) to (x2, y2), `w` wide, in the shape's units. */

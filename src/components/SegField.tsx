@@ -19,7 +19,7 @@ import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { Canvas, Group, Image as SkImageNode, Path, Skia, useTypeface, type SkFont, type SkPath } from '@shopify/react-native-skia';
 import { glowPaint, imageBuild, makeSprite, spriteBuild, useSharedSprite } from './glowSprite';
-import { MESH_FINE_BAR, MESH_FINE_PITCH, MESH_SHADES_FINE, vfdMesh } from './vfdMesh';
+import { MESH_FINE_BAR, MESH_FINE_PITCH, MESH_SHADES_FINE, vfdBars } from './vfdMesh';
 import { SEG14_ADV, SEG14_PITCH, segCellsWidth } from '../constants/modeBox';
 
 const DSEG14_TTF = require('../../assets/fonts/DSEG14Classic-BoldItalic.ttf');
@@ -106,6 +106,20 @@ export interface SegFieldProps {
 }
 
 const M = GLOW_M;
+/** The mesh is built in the glyphs' own units; the glyphs are drawn M in from the canvas edge. */
+const MESH_SHIFT = [{ translateX: M }, { translateY: M }];
+/** The bare mesh bars per reach, rounded UP to 128 pt so a field that grows a little reuses the same bars. Built
+ *  once, kept for the app's life (a handful of buckets: a mode box, a status run, a wide Mac window). */
+const meshBars = new Map<number, [SkPath, SkPath]>();
+function meshBarsFor(reach: number): [SkPath, SkPath] {
+  const r = Math.ceil(reach / 128) * 128;
+  let b = meshBars.get(r);
+  if (!b) {
+    b = vfdBars(MESH_FINE_PITCH, MESH_FINE_BAR, { count: Math.ceil(r / MESH_FINE_PITCH), extent: r });
+    meshBars.set(r, b);
+  }
+  return b;
+}
 
 const NO_COLONS: readonly number[] = [];
 
@@ -160,10 +174,15 @@ export const SegField = React.memo(function SegField({ fs, width, ghost, lit, co
     // ★ The grid must reach the far end of the field: ±320 pt covered every mode-box field, but a status run on a
     //   wide Mac window is longer (2026-10-06). The same 200 bars / 320 pt for anything that fits in it.
     const reach = Math.max(320, width + fs + 2 * M);
-    const mesh = vfdMesh(g, MESH_FINE_PITCH, MESH_FINE_BAR, { count: Math.ceil(reach / MESH_FINE_PITCH), extent: reach });
+    /* ★★★ CLIPPED, NOT INTERSECTED (2026-10-11, profiled on build 447 during a Mac window drag): the mesh used to be
+     *  vfdMesh — several hundred bars per family, Path.MakeFromOp-INTERSECTED with every glyph — rebuilt whenever
+     *  this field's width or text changed. That was 57 % of the JavaScript thread while dragging (every step is a
+     *  new width) and 13 % at rest (a status run changes length every second). The bars do not depend on the text:
+     *  they are built once per reach bucket (meshBarsFor) and drawn CLIPPED to the glyphs on the GPU — the same
+     *  pixels, the same phase, no boolean operation. */
     const t = Skia.Matrix(); t.translate(M, M);
-    g.transform(t); mesh[0].transform(t); mesh[1].transform(t);
-    return { ghost: g, mesh };
+    g.transform(t);
+    return { ghost: g, bars: meshBarsFor(reach) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [font, fs, ghostKey, width]);
 
@@ -193,8 +212,12 @@ export const SegField = React.memo(function SegField({ fs, width, ghost, lit, co
               </Group>
             );
           })}
-          <Path path={statics.mesh[0]} color={MESH_SHADES_FINE[0]} />
-          <Path path={statics.mesh[1]} color={MESH_SHADES_FINE[1]} />
+          <Group clip={statics.ghost}>
+            <Group transform={MESH_SHIFT}>
+              <Path path={statics.bars[0]} color={MESH_SHADES_FINE[0]} />
+              <Path path={statics.bars[1]} color={MESH_SHADES_FINE[1]} />
+            </Group>
+          </Group>
         </Canvas>
       )}
     </View>
