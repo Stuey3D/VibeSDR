@@ -148,8 +148,11 @@ nothing on an ordinary install.
                 │                                         ▼
                 └ yes ─▶ NM's own autoconnect gets BOOT_GRACE_SEC (35 s); priorities 30/20/10
                           │
-                          ├ connected ─▶ [client]  on 2 or 3: every UPGRADE_SEC scan; a HIGHER one in range → move up.
-                          │                         A network that refuses us rests 15 minutes.
+                          ├ connected ─▶ [client]  on 2 or 3: every UPGRADE_SEC scan (BUSY_UPGRADE_SEC = 10 min while
+                          │                         the radio is in use); a HIGHER one in range → move up.
+                          │                         A network that refuses us rests 15 min, 30, 1 h … 6 h, and is never
+                          │                         retried while the radio is in use (a flat 15 min was a ~25 s outage
+                          │                         every 16½ min, for ever — the portable box, 2026-10-11).
                           └ not ─▶ try 1, then 2, then 3, then any other (seen in a scan, or marked "not visible")
                                     │ none
                                     ▼

@@ -100,6 +100,7 @@ DEFAULTS = {
     "RESCAN_SEC": "120",            # on a hotspot: how often to look for a saved network
     "IDLE_SEC": "120",              # …and only once nobody has been connected for this long
     "UPGRADE_SEC": "120",           # on network 2/3: how often to look for a higher one
+    "BUSY_UPGRADE_SEC": "600",      # …while the radio is IN USE: a scan takes the radio off-channel for seconds
     "JOIN_WAIT_SEC": "30",          # nmcli --wait for one join attempt
     # ★★★ OWN WI-FI, BY HAND (Stuart, 2026-10-10). A listener on the box's local network can send it to its own hotspot
     #     when the house's Wi-Fi is weak where they are standing. Held while the radio is in use; once nobody has
@@ -299,6 +300,7 @@ class Box:
         self.configured_at = None
         self.since = int(time.time())
         self.failed_until = {}        # name -> monotonic time: an upgrade that failed is not retried for a while
+        self.fail_count = {}          # name -> refusals in a row (the back-off doubles with each)
         self.hold_own = False         # ★ the owner chose Own Wi-Fi (memory only — a power cycle clears it)
         self.hold_at = 0.0            # wall clock, when it was chosen
         self.link = None              # the joined link: {signal, tx, rx, retry} — shown beside the choice
@@ -659,9 +661,17 @@ class Box:
         self.next_try = now + 30
         return False
 
-    def try_networks(self, visible=None, below_rank=None):
+    def radio_quiet_for(self):
+        """Seconds since anyone last used the radio (the server touches ACTIVE_FILE every 30 s while they do)."""
+        try:
+            return time.time() - os.stat(ACTIVE_FILE).st_mtime
+        except OSError:
+            return 1e9
+
+    def try_networks(self, visible=None, below_rank=None, busy=False):
         """Join the saved networks STRICTLY IN ORDER — 1, then 2, then 3, then any other. With
-        `below_rank`, only those ranked above the current one (an upgrade). True once joined."""
+        `below_rank`, only those ranked above the current one (an upgrade). True once joined.
+        `busy` (an upgrade while the radio is in use): a network that has refused us before is not tried."""
         saved = self.saved()
         if visible is None:
             visible = self.scan() or set()
@@ -678,6 +688,8 @@ class Box:
                 continue
             if below_rank is not None and self.failed_until.get(name, 0) > now:
                 continue
+            if below_rank is not None and busy and self.fail_count.get(name):
+                continue
             log("joining network %s (%s)" % (rank if rank < 9 else "other", ssid))
             if self.up(name):
                 self.captive_off()
@@ -685,10 +697,16 @@ class Box:
                 self.since = int(time.time())
                 self.last_error = ""
                 self.next_upgrade = self.sh.now() + self.ci("UPGRADE_SEC")
+                self.fail_count.pop(name, None)
                 return True
             # ★★ A NETWORK THAT IS THERE BUT WILL NOT TAKE US (wrong password, MAC filter) must not
-            #    cost an outage every UPGRADE_SEC for ever: it rests for 15 minutes.
-            self.failed_until[name] = self.sh.now() + 900
+            #    cost an outage every UPGRADE_SEC for ever. It used to rest a flat 15 minutes — which is
+            #    an outage every 16½ minutes for ever: the portable box dropped every listener on exactly
+            #    that beat all night (2026-10-11, ping lost ~25 s each time). Now 15 min, 30, 1 h … 6 h, and
+            #    never retried while the radio is in use (see tick).
+            n = self.fail_count.get(name, 0) + 1
+            self.fail_count[name] = n
+            self.failed_until[name] = self.sh.now() + min(900 * 2 ** (n - 1), 6 * 3600)
             self.last_error = "could not join \"%s\" — check its password" % ssid
         return False
 
@@ -747,6 +765,7 @@ class Box:
             if r.isdigit() and int(r) > len(req["networks"]):
                 self.delete(n)
         self.failed_until = {}
+        self.fail_count = {}
         ap = req["ap"]
         if ap["keep"] and self.have(AP_NAME):
             self.nm_change(["nmcli", "connection", "modify", AP_NAME, "802-11-wireless.ssid", ap["ssid"]])
@@ -862,10 +881,15 @@ class Box:
                 self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
             rank = next((r for r, n, s, h in saved if n == cur), 10)
             if rank > 1 and now >= self.next_upgrade:
-                self.next_upgrade = now + self.ci("UPGRADE_SEC")
+                # ★★ WHILE SOMEONE IS LISTENING (2026-10-11): look up less often — a scan takes the radio
+                #    off-channel for seconds, every time — and never retry a network that has refused us.
+                #    A first try at a network that has come back (home again) still happens: it is a
+                #    few seconds' gap to a better link, once.
+                busy = self.radio_quiet_for() < self.ci("IDLE_SEC")
+                self.next_upgrade = now + self.ci("BUSY_UPGRADE_SEC" if busy else "UPGRADE_SEC")
                 vis = self.scan() or set()
                 before = cur
-                if self.try_networks(vis, below_rank=rank) and self.cur != before:
+                if self.try_networks(vis, below_rank=rank, busy=busy) and self.cur != before:
                     log("moved up to a higher-priority network")
                 elif not self.cur:
                     # ★ The upgrade attempt dropped us and failed — straight back to where we were.

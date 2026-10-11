@@ -282,6 +282,46 @@ def main():
         again = sum(1 for c in nm4.calls if c[3:6] == ["connection", "up", "vibe-net-1"])
         ok(again == upgrades and nm4.active == "vibe-net-2", "…and it rests 15 min instead of an outage every 2 min")
 
+        # ── …but not a 25 s outage every 16½ min FOR EVER (the portable box, 2026-10-11: every listener dropped
+        #    on exactly that beat all night). The rest doubles, and a listener is never dropped for a retry. ──
+        def tries(n):
+            return sum(1 for c in n.calls if c[3:6] == ["connection", "up", "vibe-net-1"])
+
+        def scans(n):
+            return sum(1 for c in n.calls if "--rescan" in c)
+        refusing = {"Stuart iPhone": (70, "phonepass"), "Home": (40, "CHANGED-by-router")}
+        nm6, box6 = make(tmp)
+        nm6.conns = json.loads(json.dumps(nm.conns))
+        nm6.air = dict(refusing)
+        run_for(nm6, box6, 3 * 3600)
+        ok(tries(nm6) <= 4 and nm6.active == "vibe-net-2",
+           "nobody listening, 3 h with network 1 refusing: %d tries (a flat 15-min rest made 12) — 15 min, 30, 1 h …"
+           % tries(nm6))
+
+        saved_active = vp.ACTIVE_FILE
+        vp.ACTIVE_FILE = os.path.join(tmp, "pocket-active-upgrade")
+        open(vp.ACTIVE_FILE, "w").close()                     # someone is listening (fresh for the whole run)
+        nm7, box7 = make(tmp)
+        nm7.conns = json.loads(json.dumps(nm.conns))
+        nm7.air = dict(refusing)
+        run_for(nm7, box7, 200)
+        first = tries(nm7)
+        s0 = scans(nm7)
+        run_for(nm7, box7, 3 * 3600)
+        ok(first == 1 and tries(nm7) == 1 and nm7.active == "vibe-net-2",
+           "radio IN USE: the refusing network is tried once, never again under a listener")
+        ok(scans(nm7) - s0 <= 3 * 3600 // 600 + 1,
+           "…and it scans every 10 min while in use, not every 2 (%d scans in 3 h)" % (scans(nm7) - s0))
+
+        nm8, box8 = make(tmp)
+        nm8.conns = json.loads(json.dumps(nm.conns))
+        nm8.air = {"Stuart iPhone": (70, "phonepass")}
+        run_for(nm8, box8, 120)
+        nm8.air["Home"] = (40, "homepass1")
+        run_for(nm8, box8, 700)
+        ok(nm8.active == "vibe-net-1", "radio IN USE and home again: still moves up to network 1 (within 10 min)")
+        vp.ACTIVE_FILE = saved_active
+
         # ── the phone hotspot not advertising ──
         nm5, box5 = make(tmp)
         nm5.conns = json.loads(json.dumps(nm.conns))
