@@ -16,6 +16,8 @@ import { useSettledKey } from '../hooks/useSettledKey';
 import { isMacHost } from '../services/macAudio';
 
 const uris = new WeakMap<SkImage, string>();
+/** The image as a PNG data URI, made once per image (KeyLight's sliced pieces show it in plain Images). */
+export function spriteUri(img: SkImage): string | null { return dataUri(img); }
 function dataUri(img: SkImage): string | null {
   const have = uris.get(img);
   if (have) return have;

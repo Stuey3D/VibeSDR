@@ -1939,19 +1939,32 @@ function StatusWell({ plate, gap, size, style, children }: {
 // Android: exclude the drum band from the system back-edge swipe so a horizontal
 // drag on the VFO/zoom drum doesn't trigger (and animate, blocking the drum) the
 // in-app-handled back gesture. Returns a ref + onLayout for the drum container.
+let swipeOwner = 0, swipeSeq = 0;
 function useDrumSwipeGuard() {
   const ref = useRef<View>(null);
+  const id = useRef(0); if (!id.current) id.current = ++swipeSeq;
   const setExcl = (NativeModules.VibePowerModule as { setSwipeExclusion?: (t: number, h: number) => void } | undefined)?.setSwipeExclusion;
-  const onLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
+  /* ★★ LANDSCAPE TOO (Stuart, 2026-10-11, the G35: "in landscape when spinning the tuning drum the system default back
+   *  button kept triggering … the icon popped up and got in the way of the control"). The band went to y = 0 at once
+   *  and only moved to the drums if measureInWindow answered — in portrait the drums sit high, so 0 was near enough;
+   *  in landscape they are at the BOTTOM and the band guarded the spectrum instead. Now it is measured after the frame
+   *  that laid it out and again once a turn has finished, and nothing is set until a real position is known.
+   *  ★ The OWNER clears it: on a turn the old bar unmounts after the new one has set its band, and its cleanup used to
+   *    wipe the new band. Only the instance that set it last may clear it. */
+  const place = useCallback(() => {
     if (Platform.OS !== 'android' || !setExcl) return;
-    const lh = e.nativeEvent.layout.height;
-    // Set the exclusion immediately (the drum sits high in the portrait controls,
-    // so top=0 covers it) — measureInWindow's callback proved unreliable here and
-    // often never fires. Still try to refine the absolute Y when measure works.
-    setExcl(0, lh);
-    ref.current?.measureInWindow((_x, y, _w, h) => { if (h > 0) setExcl(y, h); });
+    ref.current?.measureInWindow((_x, y, _w, h) => {
+      if (h > 0) { swipeOwner = id.current; setExcl(y, h); }
+    });
   }, [setExcl]);
-  useEffect(() => () => { if (Platform.OS === 'android') setExcl?.(0, 0); }, [setExcl]);
+  const onLayout = useCallback(() => {
+    if (Platform.OS !== 'android' || !setExcl) return;
+    requestAnimationFrame(place);
+    setTimeout(place, 400);
+  }, [setExcl, place]);
+  useEffect(() => () => {
+    if (Platform.OS === 'android' && swipeOwner === id.current) { swipeOwner = 0; setExcl?.(0, 0); }
+  }, [setExcl]);
   return { ref, onLayout };
 }
 

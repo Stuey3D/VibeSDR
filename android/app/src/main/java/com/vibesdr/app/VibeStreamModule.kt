@@ -136,8 +136,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
                 } else {
                     val top = (topDp * dm.density).toInt()
                     val h = (heightDp * dm.density).toInt()
+                    // ★★ The WINDOW's width, not displayMetrics' (Stuart, 2026-10-11, the G35 in landscape: spinning a
+                    //   drum kept popping the back arrow). After a rotation the resources' displayMetrics can still hold
+                    //   the PORTRAIT width (1080 of 2400), so the band stopped short of the right-hand (zoom) drum.
+                    val w = if (root.width > 0) root.width else maxOf(dm.widthPixels, dm.heightPixels)
                     root.systemGestureExclusionRects =
-                        listOf(android.graphics.Rect(0, top, dm.widthPixels, top + h))
+                        listOf(android.graphics.Rect(0, top, w, top + h))
                 }
             } catch (_: Throwable) {}
         }

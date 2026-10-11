@@ -247,3 +247,72 @@ export function drawKeyWash(Sk: Sk, c: SkCanvas, cap: RR, led: (a: number) => st
   c.drawRRect(rr, p);
   c.restore();
 }
+
+// ── The FIXED BACKLIGHT: one picture per light, sliced and stretched to any key (2026-10-11) ───────────────
+/* ★★★ WHAT REAL HARDWARE HAS (Stuart, 2026-10-11: "so basically on the metal skins have a fixed backlight? … that is
+ *  what real hardware would have anyway"). A key's light was drawn to that key's exact size, so every rotation and
+ *  every Mac window step threw it away and drew it again (and on Android encoded it to PNG and decoded it): the
+ *  default deck's rotation went from ~1 s of drawing-in to near-instant once its keys went unlit. The light is the
+ *  same all the way along each edge — only its corners have shape — so it is drawn ONCE at a small CANONICAL size and
+ *  cut into pieces: four corners kept as they are, edge strips stretched along their length. Nothing depends on the
+ *  key's size, so a turn or a resize re-places the pieces and draws nothing.
+ *  ★ The rest light's extra at the bottom starts exactly HALF-WAY down (drawKeyLight's lower-half clip), so the sides
+ *    are cut into an upper and a lower strip that meet at the key's own middle — the step lands where it always did.
+ *  ★ The PRESSED flood (the gap opening round the SUNK cap) slices the same way; its corners allow for the sink.
+ *  ★ The centre is the cap — clipped out, empty — and is never drawn.
+ *  ★ A key too small for the corners to fit keeps the exact, per-size light (lightNine → null). */
+
+/** Strip length in the canonical picture (pt): stretched, so its length does not show — 2 pt is plenty. */
+export const NINE_STRIP = 2;
+
+/** One piece: `src` in the canonical sprite (its own pt), `dst` in the live sprite (pt). */
+export interface NinePiece { src: { x: number; y: number; w: number; h: number }; dst: { x: number; y: number; w: number; h: number } }
+export interface LightNine {
+  /** The canonical cut and cap (key coordinates, same x, y as the live ones) to draw the one picture at. */
+  cut: RR; cap: RR;
+  /** Corner sizes in sprite pt: across (cx) and down (cy). */
+  cx: number; cy: number;
+}
+
+/** The canonical geometry for the light round `cut` with `cap` dark, or null when the key is too small to slice. */
+export function lightNine(cut: RR, cap: RR, reach: number, travel = 0): LightNine | null {
+  if (!(reach > 0) || !(cut.w > 0) || !(cut.h > 0)) return null;
+  // Everything with SHAPE lies within this of the sprite's edge: the reach, the rounder of the two corners (the cap's
+  // measured from the cut's edge), a point of anti-aliasing; down, the press's sink too.
+  const inX = Math.max(cut.r, cap.x - cut.x + cap.r), inY = Math.max(cut.r, cap.y - cut.y + cap.r);
+  const cx = Math.ceil(reach + inX + 1), cy = Math.ceil(reach + inY + 1 + Math.max(0, travel));
+  const W = cut.w + 2 * reach, H = cut.h + 2 * reach;
+  if (W < 2 * cx + 1 || H < 2 * cy + 2) return null;
+  const W0 = 2 * cx + NINE_STRIP, H0 = 2 * cy + 2 * NINE_STRIP;
+  const cw = W0 - 2 * reach, ch = H0 - 2 * reach;
+  return {
+    cut: { ...cut, w: cw, h: ch },
+    cap: { ...cap, w: cap.w - (cut.w - cw), h: cap.h - (cut.h - ch) },
+    cx, cy,
+  };
+}
+
+/** Where each piece of the canonical picture goes on a live sprite W × H (pt). The centre (the cap) is left out. */
+export function ninePieces(n: LightNine, reach: number, W: number, H: number): NinePiece[] {
+  const W0 = 2 * n.cx + NINE_STRIP, H0 = 2 * n.cy + 2 * NINE_STRIP;
+  const S = NINE_STRIP;
+  const cols = [
+    { s: 0, sw: n.cx, d: 0, dw: n.cx },
+    { s: n.cx, sw: S, d: n.cx, dw: W - 2 * n.cx },
+    { s: W0 - n.cx, sw: n.cx, d: W - n.cx, dw: n.cx },
+  ];
+  const rows = [
+    { s: 0, sh: n.cy, d: 0, dh: n.cy },
+    { s: n.cy, sh: S, d: n.cy, dh: H / 2 - n.cy },          // upper side strip → down to the key's middle
+    { s: n.cy + S, sh: S, d: H / 2, dh: H / 2 - n.cy },     // lower side strip ← from the key's middle
+    { s: H0 - n.cy, sh: n.cy, d: H - n.cy, dh: n.cy },
+  ];
+  const out: NinePiece[] = [];
+  rows.forEach((r, ri) => cols.forEach((c, ci) => {
+    if (ci === 1 && (ri === 1 || ri === 2)) return;          // the cap
+    if (!(c.dw > 0) || !(r.dh > 0)) return;
+    out.push({ src: { x: c.s, y: r.s, w: c.sw, h: r.sh }, dst: { x: c.d, y: r.d, w: c.dw, h: r.dh } });
+  }));
+  void reach;
+  return out;
+}
