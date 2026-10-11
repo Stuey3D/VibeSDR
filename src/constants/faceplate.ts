@@ -21,6 +21,7 @@
  */
 
 import type { Transparency } from './transparency';
+import type { Textures } from './assetDensity';
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
@@ -74,6 +75,8 @@ export interface FaceplateSettings {
    *  faceplate: it is about the panel in your hand, so it is never per server and never synced.
    *  Applied natively by src/services/frameRate.ts (FaceplateContext pushes it). */
   frameRate: FrameRate;
+  /** ★ HIGH-RESOLUTION TEXTURES (constants/assetDensity): 'auto' until the user picks. */
+  textures: Textures;
   /** ★ The user's text colour, remembered PER DISPLAY (§1: "Remember the user's choice per display
    *  if cheap to do" — it is). Leaving Hyperlegible-white for dot matrix falls back to teal; coming
    *  back restores white rather than leaving them on teal. */
@@ -98,6 +101,7 @@ export const TEXTS:       TextColour[]     = ['green', 'red', 'amber', 'blue', '
 export const METERS:      SignalMeter[]    = ['bar', 'vu', 'edge'];
 export const TRANSPARENCIES: Transparency[] = ['on', 'off'];
 export const FRAME_RATES: FrameRate[] = ['full', '60'];
+export const TEXTURES: Textures[] = ['auto', 'high', 'standard'];
 export const MOTIONS: MotionEffects[] = ['on', 'off'];
 export const LIGHT_ANGLES: LightAngle[] = ['left', 'topLeft', 'top', 'topRight', 'right'];
 /** The CSS gradient angle for each (0 = upward, 90 = rightward). 104 = LEFT = today exactly; RIGHT mirrors it. */
@@ -117,7 +121,7 @@ export const TEXT_ALLOWED: Record<DisplayStyle, TextColour[]> = {
 /** §1 defaults. `display` is overwritten by the font migration on first load (see migrate…). */
 export const DEFAULT_SETTINGS: FaceplateSettings = {
   chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
-  meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, frameRate: 'full',
+  meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, frameRate: 'full', textures: 'auto',
   textByDisplay: {}, motionEffects: 'on', motionExplicit: false, lightAngle: 'left',
   iconColour: 'green',
 };
@@ -353,6 +357,7 @@ export function parseSettings(json: string | null, legacyThemeName?: string | nu
     ...parseTransparency(raw),
     steadyLeds: raw.steadyLeds === true,
     frameRate: pick(raw.frameRate, FRAME_RATES, 'full'),
+    textures: pick(raw.textures, TEXTURES, 'auto'),
     textByDisplay,
     ...parseMotion(raw),
     lightAngle: pick(raw.lightAngle, LIGHT_ANGLES, 'left'),
@@ -515,6 +520,11 @@ export function frameRateCapHz(s: Pick<FaceplateSettings, 'frameRate'>): number 
 }
 
 /** The FRAME RATE row's subtitle (UK English): what 60 Hz buys and costs. Live — no restart. */
+/** ★ HIGH-RESOLUTION TEXTURES — the metal faceplates' glows, key lights and drum artwork. */
+export const TEXTURE_CHOICES: PaneChoice<Textures>[] = [
+  { value: 'auto', label: 'AUTO' }, { value: 'high', label: 'HIGH' }, { value: 'standard', label: 'STANDARD' },
+];
+export const TEXTURES_NOTE = 'High · the glows and key lights at full screen resolution\nStandard · half resolution, scaled up — smoother and lighter on memory, barely visible';
 export const FRAME_RATE_NOTE = '60 Hz · easier on the battery; scrolling and animation a touch less smooth';
 
 // ── Chassis tokens ────────────────────────────────────────────────────────────

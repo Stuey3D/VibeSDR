@@ -12,12 +12,13 @@
 import { useEffect, useMemo } from 'react';
 import { PixelRatio } from 'react-native';
 import { spritePixels } from '../constants/spriteSizing';
+import { assetPixelRatio } from '../constants/assetDensity';
 import { SpriteCache, type Built } from '../constants/spriteCache';
 import { BlurStyle, Skia, type SkCanvas, type SkImage, type SkPaint } from '@shopify/react-native-skia';
 
 /** Rasterise `draw` into a w × h (pt) image at the screen's pixel ratio. null if no surface. */
 export function makeSprite(w: number, h: number, draw: (c: SkCanvas) => void): SkImage | null {
-  const pr = PixelRatio.get();
+  const pr = assetPixelRatio();   // ★ generated artwork's density (constants/assetDensity)
   const px = spritePixels(w, h, pr);
   if (!px) { console.warn(`[sprite] refused ${w} x ${h} pt at ${pr}x`); return null; }
   const { pw, ph } = px;
@@ -66,7 +67,7 @@ export const imageBuild = (img: SkImage | null): Built<SkImage> | null => sprite
  * (glyph, size, colours, style) — the pixel ratio is added here. null key = nothing to draw.
  */
 export function useSharedSprite<T>(key: string | null, make: () => Built<T> | null): T | null {
-  const full = key == null ? null : `${PixelRatio.get()}|${key}`;
+  const full = key == null ? null : `${assetPixelRatio()}|${key}`;   // ★ the texture density is part of the key
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const value = useMemo(() => (full == null ? null : (shared.get(full, make as () => Built<unknown> | null) as T | null)), [full]);
   useEffect(() => {

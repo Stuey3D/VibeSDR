@@ -56,7 +56,7 @@ import { useFaceplateSettings, useSurfaceOpaque } from '../contexts/FaceplateCon
 import {
   androidGlass, CHASSIS_CHOICES, DISPLAY_CHOICES, METER_CHOICES, TRANSPARENCY_CHOICES, TRANSPARENCY_NOTE, CONTROLS, LED,
   MOTION_CHOICES, MOTION_NOTE, LIGHT_ANGLE_CHOICES, lightAngleRowShown, ICON_COLOURS, ICON_NOTE, ICON_NOTE_ANDROID, ART_ONLY_NOTE,
-  COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver, frameRateChoices,
+  COLOUR_NAMES, TEXT_LOCKED_NOTE, textChoices, controlsDot, feelRows, solidOver, frameRateChoices, TEXTURE_CHOICES, TEXTURES_NOTE,
   FRAME_RATE_NOTE,
   type PaneChoice, type Chassis, type SignalMeter, type FrameRate, type MotionEffects, type LightAngle,
 } from '../constants/faceplate';
@@ -68,6 +68,7 @@ import {
 import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
+import type { Textures } from '../constants/assetDensity';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -865,7 +866,7 @@ function ControlCustomisationPane({
   const styles = usePopupStyles(makeStyles);
   // ★ App-wide, not per server (FaceplateContext) — the faceplate is the hardware in your hand.
   const { settings: fp, setDisplay, setText, set, setTransparency, autoTransparency: auto,
-          maxRefreshHz, setMotion, tiltDriving } = useFaceplateSettings();
+          maxRefreshHz, setMotion, tiltDriving, texturesAuto } = useFaceplateSettings();
   // ★ While the DEVICE chose OFF (never once the user has picked), say so — otherwise a new user on
   //   an old phone sees solid panels, the ON key unlit, and no reason why.
   const autoNote = !fp.transparencyExplicit && auto.reason ? AUTO_REASON_NOTE[auto.reason] : null;
@@ -936,6 +937,13 @@ function ControlCustomisationPane({
       <SelectorRow label="TRANSPARENCY EFFECTS" choices={TRANSPARENCY_CHOICES} value={fp.transparency}
         onPick={setTransparency}
         note={autoNote ? `${TRANSPARENCY_NOTE}\n${autoNote}` : TRANSPARENCY_NOTE} />
+      {/* ★★ HIGH-RESOLUTION TEXTURES (Stuart, 2026-10-11): the metal faceplates' glows, key lights and drum artwork at
+          full or half resolution. Shown with silver / black (where they are). AUTO says what it chose. */}
+      {fp.chassis !== 'default' && (
+        <SelectorRow label="HIGH-RESOLUTION TEXTURES" choices={TEXTURE_CHOICES} value={fp.textures}
+          onPick={(v: Textures) => set({ textures: v })}
+          note={`${TEXTURES_NOTE}\nAuto · ${texturesAuto === 'high' ? 'High' : 'Standard'} on this device`} />
+      )}
       {/* ★★ FRAME RATE (power audit, 2026-10-01): the panel's full rate or 60 Hz, live. Shown ONLY
           on a panel faster than 60 Hz (ProMotion, 90 / 120 Hz Android) — on a 60 Hz one a 60 Hz
           cap is a key that does nothing (AGENTS.md). faceplate.ts frameRateChoices decides. */}

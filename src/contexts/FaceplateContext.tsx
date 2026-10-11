@@ -18,7 +18,8 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode } from 'react';
-import { AccessibilityInfo, AppState, Platform } from 'react-native';
+import { AccessibilityInfo, AppState, PixelRatio, Platform } from 'react-native';
+import { autoTextures, setAssetScale, TEXTURE_SCALE } from '../constants/assetDensity';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { makeMutable, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { LIGHT_DEFAULT_DEG } from '../constants/plateLight';
@@ -53,6 +54,8 @@ interface FaceplateContextValue {
   /** ★ The panel's top refresh rate (Hz), or null until known / when the binary cannot say — the
    *  FRAME RATE row is shown only above 60 (faceplate.ts `frameRateChoices`). */
   maxRefreshHz: number | null;
+  /** ★ What HIGH-RESOLUTION TEXTURES' AUTO chose on this device (constants/assetDensity autoTextures). */
+  texturesAuto: 'high' | 'standard';
   /** A pick from the pane: ON / OFF, stored as the user's choice from then on. */
   setTransparency: (t: Transparency) => void;
   /** ★★ MOTION EFFECTS (lighting brief §3): a pick from the pane, stored as the user's from then on. The
@@ -63,7 +66,7 @@ interface FaceplateContextValue {
   setDisplay: (d: DisplayStyle) => void;
   setText:    (t: TextColour) => void;
   /** The rest have no side effects. */
-  set:        (patch: Partial<Pick<FaceplateSettings, 'chassis' | 'controls' | 'meter' | 'steadyLeds' | 'frameRate'
+  set:        (patch: Partial<Pick<FaceplateSettings, 'chassis' | 'controls' | 'meter' | 'steadyLeds' | 'frameRate' | 'textures'
                                        | 'lightAngle' | 'iconColour'>>) => void;
   /** ★★ THE LIGHT (lighting brief §2): `lightDeg` is the SETTLED angle (CSS convention, 104 = LEFT = today) —
    *  React state, read by the small surfaces that follow once the light settles (screws). `lightSv` is the
@@ -81,7 +84,7 @@ const DEFAULT_THEME = resolveFaceplate(DEFAULT_SETTINGS);
 const AUTO_ON: AutoTransparency = { transparency: 'on', reason: null };
 
 const FaceplateContext = createContext<FaceplateContextValue>({
-  theme: DEFAULT_THEME, settings: DEFAULT_SETTINGS, autoTransparency: AUTO_ON, maxRefreshHz: null,
+  theme: DEFAULT_THEME, settings: DEFAULT_SETTINGS, autoTransparency: AUTO_ON, maxRefreshHz: null, texturesAuto: 'high',
   setTransparency: () => {}, setDisplay: () => {}, setText: () => {}, set: () => {}, setMotion: () => {},
   // ★ Outside a provider (tests, a stray tree) the light is today's, fixed.
   lightDeg: LIGHT_DEFAULT_DEG, lightSv: makeMutable(LIGHT_DEFAULT_DEG), tiltDriving: false,
@@ -220,6 +223,12 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   // ★ The effective settings: what the theme is resolved from and what the pane shows lit. The
   //   STORED object (`settings`) keeps the user's own `transparency` / `transparencyExplicit`.
   const transparency = effectiveTransparency(settings, auto);
+  /* ★★ HIGH-RESOLUTION TEXTURES (constants/assetDensity): resolved and applied HERE, in render, before anything below
+   *  draws a sprite — the density is part of every sprite's cache key, so a change redraws them at the new one. */
+  const texturesAuto = useMemo(() => autoTextures({ os: Platform.OS, pixelRatio: PixelRatio.get(),
+    totalMemoryBytes: parseDeviceClass(readNativeDeviceClass()).totalMemoryBytes }), []);
+  const texturesOnScreen = settings.textures === 'auto' ? texturesAuto : settings.textures;
+  setAssetScale(TEXTURE_SCALE[texturesOnScreen]);
   const motionEffects = effectiveMotion(settings, osReduceMotion);
   const onScreen = useMemo(() => settings.transparency === transparency && settings.motionEffects === motionEffects
                              ? settings : { ...settings, transparency, motionEffects },
@@ -233,9 +242,9 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const tiltDriving = false;
   const lightSv = useSharedValue(lightDeg);
   useEffect(() => { lightSv.value = lightDeg; }, [lightDeg, lightSv]);
-  const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz,
+  const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz, texturesAuto,
                                  setTransparency, setDisplay, setText, set, setMotion, lightDeg, lightSv, tiltDriving }),
-                        [theme, onScreen, auto, maxRefreshHz, setTransparency, setDisplay, setText, set, setMotion,
+                        [theme, onScreen, auto, maxRefreshHz, texturesAuto, setTransparency, setDisplay, setText, set, setMotion,
                          lightDeg, lightSv, tiltDriving]);
   return <FaceplateContext.Provider value={value}>{children}</FaceplateContext.Provider>;
 }

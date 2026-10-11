@@ -36,6 +36,7 @@
  * Fixes the previous dp/physical-pixel mismatch — all coordinates are dp.
  */
 
+import { assetPixelRatio } from '../constants/assetDensity';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ViewStyle, Platform, PixelRatio, Dimensions } from 'react-native';
 import {
@@ -427,14 +428,14 @@ export default function DrumWheel({
   //     colour — CONTROLS changed, the key did not, and the drum kept its old lamp (Stuart, 2026-10-11, the G35: "the
   //     +/- icons are blue but the illumination of the drums is orange" — the − / + are live, the light is the raster).
   const rasterKey = Platform.OS === 'android' && W > 0 && H > 0
-    ? `${W}x${H}|${JSON.stringify(ct)}|${ledA(fp.controls, 1)}|${lampOff ? 1 : 0}|${String(iconPath?.toSVGString?.() ?? '')}` : '';
+    ? `${assetPixelRatio()}|${W}x${H}|${JSON.stringify(ct)}|${ledA(fp.controls, 1)}|${lampOff ? 1 : 0}|${String(iconPath?.toSVGString?.() ?? '')}` : '';
   const [drumImgs, setDrumImgs] = useState<{ key: string; below: SkImage; above: SkImage } | null>(null);
   // ★ Filled in below, once the elements exist (after the W <= 0 early return); read only by the effect.
   const latestEls = useRef<{ belowEl: React.ReactElement; aboveEl: React.ReactElement } | null>(null);
   useEffect(() => {
     if (!rasterKey || !latestEls.current || drumRasters.has(rasterKey)) return;
     let live = true;
-    const pr = PixelRatio.get();
+    const pr = assetPixelRatio();   // ★ generated artwork's density (constants/assetDensity)
     const size = { width: Math.max(1, Math.ceil(W * pr)), height: Math.max(1, Math.ceil(H * pr)) };
     const scaled = (el: React.ReactElement) => <Group transform={[{ scale: pr }]}>{el}</Group>;
     Promise.all([drawAsImage(scaled(latestEls.current.belowEl), size),
