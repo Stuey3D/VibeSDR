@@ -1516,7 +1516,7 @@ function MenuSheetBody({
                   server calls the link weak.
                   With no hotspot of its own set up there is nothing to switch to: the line says so (no dead key). */}
             {!!pocketWifi && (<>
-              <SectionLabel label="PORTABLE WI-FI" icon="hardware" />
+              <SectionLabel label="PORTABLE SERVER WI-FI" icon="hardware" />
               <BtnRow>
                 {pocketWifi.nets.length
                   ? pocketWifi.nets.map(n => (
