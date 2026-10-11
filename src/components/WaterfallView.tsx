@@ -41,7 +41,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Image as RNImage, PixelRatio, StyleSheet, Text, View } from 'react-native';
+import { AppState, Image as RNImage, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
   Canvas,
   Fill,
@@ -59,6 +59,7 @@ import {
   type SkData,
   type SkImage,
   type SkPath,
+  Group,
 } from '@shopify/react-native-skia';
 import {
   useSharedValue,
@@ -1994,8 +1995,8 @@ function WaterfallView({
   //     display height. On Android every Skia Canvas is its own TextureView with 2–3 buffers (~10 MB per buffer at
   //     1080 × 2292) and its own composite pass every frame: the Moto G35 showed TWO full-screen surfaces and its
   //     RenderThread at 44 %. Sized to wfTop + 1, like the spectrum canvas beside it; nothing drawn changes.
-  const staticOverlayCanvas = useMemo(() => (
-    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height: Math.min(height, wfTop + 1) }}>
+  const staticOverlayEls = useMemo(() => (
+    <Group>
       {/* Opaque backing for the band/tick strips only — the spectrum graph
           area stays transparent so the instance backdrop image (an RN Image
           UNDER this canvas) can show through; without an image the root's
@@ -2021,8 +2022,17 @@ function WaterfallView({
         <Rect key={i} x={0} y={d.y} width={width} height={0.5}
               color="rgba(255,180,0,0.12)" />
       ))}
-    </Canvas>
+    </Group>
   ), [width, height, wfTop, specTop, tickTop, bandSegs, ticks, dbLabels, specShow]);
+  // ★★ ANDROID: NO CANVAS OF ITS OWN (the diet, 2026-10-11). Now that it is the spectrum canvas's exact size and place,
+  //    its elements draw FIRST inside that canvas instead — one 1080×863 surface fewer to composite every frame and
+  //    rebuild on rotation. The cost: its few dozen rects re-draw with the ~30 Hz trace tween, trivial for the GPU next
+  //    to a whole extra TextureView. iOS keeps the separate canvas (cheap Metal layers; the trace repaints alone).
+  const staticOverlayCanvas = useMemo(() => (
+    <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height: Math.min(height, wfTop + 1) }}>
+      {staticOverlayEls}
+    </Canvas>
+  ), [width, height, wfTop, staticOverlayEls]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   // Canvas 1 (bottom): waterfall texture only — the ONLY thing the 120Hz
@@ -2061,7 +2071,7 @@ function WaterfallView({
         </Canvas>
         )}
 
-        {active && staticOverlayCanvas}
+        {active && Platform.OS !== 'android' && staticOverlayCanvas}
 
         {/* Init splash — the spectrum WS takes 1-2s to deliver its first
             frame; show intent instead of a black void. texReady flips on the
@@ -2079,6 +2089,7 @@ function WaterfallView({
             (sharing one canvas redrew the whole overlay per tween tick). */}
         {active && (
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height: wfTop + 1 }}>
+          {Platform.OS === 'android' && staticOverlayEls}
           {specShow && (
             <Path path={specPath} style="fill">
               <LinearGradient start={vec(0, specTop)} end={vec(0, wfTop)}
