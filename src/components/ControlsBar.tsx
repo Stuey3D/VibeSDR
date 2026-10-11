@@ -29,6 +29,7 @@ import {
   TouchableOpacity,
   View, ViewStyle, type LayoutChangeEvent,} from 'react-native';
 import { useRegionHandback, NAV_FOCUS } from './PanelNav';
+import { Freeze } from 'react-freeze';
 import { BlurView } from 'expo-blur';
 import SectionIcon from './SectionIcon';
 import {
@@ -3080,6 +3081,11 @@ function ControlsBar({
     plateInset: { top: PAD_TOP, h: PAD_H, radius: RADIUS },
   };
 
+  // DEAD END (measured on the G35, reverted next): keep both bars, freeze the hidden one — see the commit message.
+  const landNow = s.isLandscape && !IS_TV;
+  const keptBars = useRef({ land: false, port: false });
+  if (landNow) keptBars.current.land = true; else keptBars.current.port = true;
+
   return (
     <View style={[
       root.bar,
@@ -3139,7 +3145,10 @@ function ControlsBar({
       <FreqReadoutContext.Provider value={readout}>
       {/* ★ Only while DAB is on: a verdict that outlived the mode would describe a multiplex nobody is on. */}
       <DabMeterContext.Provider value={dabOn ? (dabMeter ?? DAB_SEARCHING) : null}>
-      {s.isLandscape && !IS_TV
+      {Platform.OS === 'android' && !IS_TV ? (<>
+        {keptBars.current.land && <Freeze freeze={!landNow}><LandscapeBar {...shared} /></Freeze>}
+        {keptBars.current.port && <Freeze freeze={landNow}><PortraitBar {...shared} /></Freeze>}
+      </>) : landNow
         ? <LandscapeBar {...shared} />
         : <PortraitBar  {...shared} />
       }
