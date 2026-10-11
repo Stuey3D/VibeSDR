@@ -48,6 +48,19 @@ import { useDeepLinks }     from './src/linking/useDeepLinks';
 import { crumb }            from './src/services/crumbs';
 import { initMacAudio }     from './src/services/macAudio';
 
+// ★★ MEMORY DIAGNOSTICS BUILD ONLY (android/.../VibeDiag.kt, -PvibeDiag=true): the Hermes heap every 10 s, beside the
+//    native line, so a leak can be placed on the JS side or the native side. Never runs in a normal build.
+try {
+  if ((NativeModules as any).VibePowerModule?.isDiagBuild?.()) {
+    setInterval(() => {
+      const h = (globalThis as any).HermesInternal?.getInstrumentedStats?.();
+      if (h) console.log('[VibeDiag] js ' + JSON.stringify({
+        heapKB: Math.round((h.js_heapSize ?? 0) / 1024), allocKB: Math.round((h.js_allocatedBytes ?? 0) / 1024),
+        gcs: h.js_numGCs, gcMs: Math.round(h.js_gcCPUTime ?? h.js_gcTime ?? 0) }));
+    }, 10000);
+  }
+} catch { /* never let diagnostics break the app */ }
+
 /* ★★★ THE VERY FIRST JS CRUMB, at module scope — BEFORE any component mounts. Paired with the
  *   native launch crumb it brackets the whole of React's startup, which is the half of the black
  *   screen we have never once measured: if this line is absent from a session, the bundle never

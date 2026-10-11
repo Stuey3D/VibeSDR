@@ -23,6 +23,10 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName() = "VibePowerModule"
 
+    /** ★ True only in the memory diagnostics build (VibeDiag.kt) — App.tsx then logs the JS heap every 10 s. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun isDiagBuild(): Boolean = BuildConfig.VIBE_DIAG
+
     /** The owner's admin credential for the audio socket. Set before starting (or before a
      *  reconnect) — see VibeStreamService.adminSuffix. Empty clears it. */
     @ReactMethod

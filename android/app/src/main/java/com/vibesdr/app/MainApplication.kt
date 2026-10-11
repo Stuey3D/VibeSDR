@@ -27,6 +27,7 @@ class MainApplication : Application(), ReactApplication {
   }
 
   override fun onCreate() {
+    VibeDiag.start(this)   // ★ memory diagnostics — runs only in a -PvibeDiag=true build
     super.onCreate()
     // ★ 2026-10-05: names the build on this process's exit record, so Diagnostics can say which version
     //   crashed (Nick's overnight VibeServer crash had no version, no log, nothing). See VibeExitInfo.

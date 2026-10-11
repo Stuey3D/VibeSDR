@@ -159,7 +159,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         fun setArtColour(colour: String) {
             if (artColour == colour) return
             artColour = colour
-            instance?.let { s -> s.mainHandler.post { s.updateMetadataSession(); s.updateNotification() } }
+            instance?.scheduleNowPlaying()
         }
 
         // IMA-ADPCM tables (VibeServer compressed-audio decode).
@@ -612,8 +612,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 tuneFlush = r
                 mainHandler.postDelayed(r, 80 - since)
             }
-            updateMetadataSession()
-            updateNotification()
+            scheduleNowPlaying()   // ★ was a direct push on EVERY tune step (34 per 10 s on the G35 after the first fix)
         }
     }
 
@@ -639,7 +638,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
 
     fun setInstanceNameNative(name: String) {
         instanceName = name
-        mainHandler.post { updateMetadataSession(); updateNotification() }
+        scheduleNowPlaying()
     }
 
     fun setMutedNative(m: Boolean) {
@@ -1244,7 +1243,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             if (f > 0) currentFreq = f
             if (m.isNotEmpty()) currentMode = m
             npTitle = null; npArtist = null   // fall back to "freq · mode" until JS catches up
-            mainHandler.post { updateMetadataSession(); updateNotification() }
+            scheduleNowPlaying()
         } catch (_: Exception) { }
     }
 
@@ -1676,7 +1675,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             it.putDouble("frequency", newFreq.toDouble())
             it.putString("mode", currentMode)
         }
-        mainHandler.post { updateMetadataSession(); updateNotification() }
+        scheduleNowPlaying()
     }
 
     /** Snap a media-control skip to the step grid, matching the VFO drum: an
@@ -1882,7 +1881,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         if (!changed) return
         // Stale VTS strings belong to the old dial — let JS refill them.
         npTitle = null; npArtist = null
-        mainHandler.post { updateMetadataSession(); updateNotification() }
+        scheduleNowPlaying()
     }
 
     private fun sendWsJson(obj: JSONObject) {
@@ -2714,7 +2713,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     fun setNowPlayingNative(title: String, artist: String) {
         npTitle = title.ifEmpty { null }
         npArtist = artist.ifEmpty { null }
-        mainHandler.post { updateMetadataSession(); updateNotification() }
+        scheduleNowPlaying()
     }
 
     /** Album art: VibeSDR icon with the server-type logo inset bottom-right
@@ -2722,7 +2721,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     fun setArtworkNative(serverType: String) {
         if (serverType == npArtworkType) return
         npArtworkType = serverType
-        mainHandler.post { refreshArtwork(); updateMetadataSession(); updateNotification() }
+        scheduleNowPlaying()
     }
 
     // State-aware album art: server logo inset while playing, a muted-speaker
@@ -2852,6 +2851,33 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         canvas.drawText(glyph, dst.right - dst.width() * 0.16f, dst.bottom - dst.height() * 0.04f, tp)
     }
 
+    /* ★★★ ONE NOW-PLAYING PUSH A SECOND AT MOST, AND ONLY WHEN IT CHANGED (the diagnostics build on the Moto G35,
+     *  2026-10-11: ~11 media-session + notification rebuilds a SECOND while tuning — every tune step (noteServerFreq) and
+     *  every RDS text change pushed metadata, the album-art bitmap and the notification across to Android, and SystemUI
+     *  sat at 89 % with system_server at 71 %). Everything that is not a tap (play/pause stay instant) now comes here:
+     *  coalesced to one push per second on the TRAILING edge — so the last frequency or station name always lands —
+     *  and skipped altogether when the title, artist and artwork would be identical to what Android already shows. */
+    private var npScheduled = false
+    private var npLastPush = 0L
+    private var npLastSig = ""
+    private fun scheduleNowPlaying() {
+        if (npScheduled) return
+        npScheduled = true
+        val wait = (1000L - (android.os.SystemClock.uptimeMillis() - npLastPush)).coerceAtLeast(0L)
+        mainHandler.postDelayed({
+            npScheduled = false
+            npLastPush = android.os.SystemClock.uptimeMillis()
+            refreshArtwork()
+            val art = npArtwork
+            val sig = nowPlayingTitle() + "\u0001" + nowPlayingArtist() + "\u0001" +
+                (if (art == null) "-" else "${System.identityHashCode(art)}:${art.generationId}")
+            if (sig == npLastSig) return@postDelayed
+            npLastSig = sig
+            updateMetadataSession()
+            updateNotification()
+        }, wait)
+    }
+
     private fun updateMetadataSession() {
         refreshArtwork()  // keep the inset glyph/countdown in step with the state
         val b = MediaMetadataCompat.Builder()
@@ -2860,6 +2886,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, "VibeSDR")
         npArtwork?.let { b.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
         mediaSession?.setMetadata(b.build())
+        VibeDiag.metaUpdates.incrementAndGet()
     }
 
     private fun updatePlaybackState(state: Int) {
@@ -2878,6 +2905,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
                 PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
         }
+        VibeDiag.stateUpdates.incrementAndGet()
         mediaSession?.setPlaybackState(
             PlaybackStateCompat.Builder()
                 .setState(state, 0L, 1f, SystemClock.elapsedRealtime())
@@ -2890,6 +2918,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         if (!running) return
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIF_ID, buildNotification())
+        VibeDiag.notifyUpdates.incrementAndGet()
     }
 
     private fun setupMediaSession() {

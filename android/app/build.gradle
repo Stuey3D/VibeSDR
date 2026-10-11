@@ -96,6 +96,9 @@ android {
         versionCode 567
         versionName "11.0"
 
+        // ★ The memory diagnostics build (VibeDiag.kt): `./gradlew -PvibeDiag=true :app:assembleCurrentRelease`.
+        buildConfigField "boolean", "VIBE_DIAG", "${findProperty('vibeDiag') == 'true'}"
+        if (findProperty('vibeDiag') == 'true') versionNameSuffix "-diag"
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
     /* ★★★ TWO APPLICATION IDs FROM ONE CODEBASE (BRIEF-android-package-migration, 2026-10-04). The Play listing moves
