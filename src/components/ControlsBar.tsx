@@ -2985,7 +2985,9 @@ const lnd = StyleSheet.create({
  * SLIDE_BUILD_MS to draw it slides up (SLIDE_UP_MS, native driver). Capped: it is never away longer than SLIDE_MAX_MS.
  * Anything else — every resize — is untouched.
  */
-const SLIDE_OFF = 600, SLIDE_BUILD_MS = 150, SLIDE_MAX_MS = 700, SLIDE_UP_MS = 220;
+/* ★ SLIDE_MIN_MS (Stuart, the Moto: "the iOS style rotation hiding works best just extend the time"): never back before
+ *  the REST of the screen — the band plan, the waterfall — has found its new size, ~0.6 s on the G35. */
+const SLIDE_OFF = 600, SLIDE_BUILD_MS = 150, SLIDE_MIN_MS = 600, SLIDE_MAX_MS = 900, SLIDE_UP_MS = 220;
 function useRotateSlide(W: number, H: number) {
   const slide = useRef(new Animated.Value(0)).current;
   /* ★★ DECIDED IN THE RENDER, NOT AFTER IT (the tab, 20:02: "dropping off the screen is the issue"): moving the bar
@@ -2994,9 +2996,10 @@ function useRotateSlide(W: number, H: number) {
    *  slide), so no frame of the rebuild is ever seen. */
   const prev = useRef({ W, H });
   const away = useRef(false);
+  const awayAt = useRef(0);
   const p = prev.current;
   if (p.W !== W || p.H !== H) {
-    if (Math.abs(W - p.H) < 2 && Math.abs(H - p.W) < 2 && Math.abs(W - p.W) >= 2) away.current = true;
+    if (Math.abs(W - p.H) < 2 && Math.abs(H - p.W) < 2 && Math.abs(W - p.W) >= 2) { away.current = true; awayAt.current = Date.now(); }
     prev.current = { W, H };
   }
   const [, show] = useReducer((n: number) => n + 1, 0);
@@ -3004,6 +3007,8 @@ function useRotateSlide(W: number, H: number) {
   const cap = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reveal = useCallback(() => {
     if (!away.current) return;
+    const wait = SLIDE_MIN_MS - (Date.now() - awayAt.current);
+    if (wait > 0) { if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(reveal, wait); return; }
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     if (cap.current) { clearTimeout(cap.current); cap.current = null; }
     slide.setValue(SLIDE_OFF);
