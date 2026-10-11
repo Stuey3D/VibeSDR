@@ -283,7 +283,9 @@ export interface MenuSheetProps {
   onRecordings?:    () => void;
   /** ★★ PORTABLE WI-FI (2026-10-10): present only on a pocket VibeServer reached on its own network (the server says
    *  so — never through the tunnel). `line` is the link (services/pocketConnection.ts), `weak` the server's verdict. */
-  pocketWifi?: { onOwn: boolean; canOwn: boolean; line: string; weak: boolean; onChoose: (to: 'own' | 'network') => void } | null;
+  pocketWifi?: { onOwn: boolean; canOwn: boolean; line: string; weak: boolean;
+                 nets: { rank: number; ssid: string; on: boolean }[];
+                 onChoose: (to: 'own' | 'network' | { rank: number; ssid: string }) => void } | null;
 
   // Display settings panel props
   vfoNeedle?:         string;
@@ -1509,12 +1511,18 @@ function MenuSheetBody({
             </>)}
 
             {/* ── PORTABLE WI-FI (Stuart, 2026-10-10) — a pocket VibeServer, on its own network only ──
-                ★ Network | Own Wi-Fi, the link under it, and the recommendation when the server calls the link weak.
+                ★ Each saved network BY NAME | Own Wi-Fi (2026-10-11: "Stuey3D's iPhone | Meow! | Own WiFi") — an older
+                  server sends no names, and gets NETWORK | OWN WI-FI. The link under it, and the recommendation when the
+                  server calls the link weak.
                   With no hotspot of its own set up there is nothing to switch to: the line says so (no dead key). */}
             {!!pocketWifi && (<>
               <SectionLabel label="PORTABLE WI-FI" icon="hardware" />
               <BtnRow>
-                <Btn label="NETWORK" active={!pocketWifi.onOwn} onPress={() => pocketWifi.onChoose('network')} />
+                {pocketWifi.nets.length
+                  ? pocketWifi.nets.map(n => (
+                      <Btn key={n.rank} label={n.ssid.toUpperCase()} active={n.on} a11y={n.ssid}
+                           onPress={() => pocketWifi.onChoose({ rank: n.rank, ssid: n.ssid })} />))
+                  : <Btn label="NETWORK" active={!pocketWifi.onOwn} onPress={() => pocketWifi.onChoose('network')} />}
                 {pocketWifi.canOwn && (
                   <Btn label="OWN WI-FI" active={pocketWifi.onOwn} onPress={() => pocketWifi.onChoose('own')} />
                 )}

@@ -300,26 +300,124 @@ def main():
 
         saved_active = vp.ACTIVE_FILE
         vp.ACTIVE_FILE = os.path.join(tmp, "pocket-active-upgrade")
-        open(vp.ACTIVE_FILE, "w").close()                     # someone is listening (fresh for the whole run)
+
+        def listening(on):
+            if on:
+                open(vp.ACTIVE_FILE, "w").close()
+                os.utime(vp.ACTIVE_FILE, None)
+            elif os.path.exists(vp.ACTIVE_FILE):
+                os.utime(vp.ACTIVE_FILE, (time.time() - 99999, time.time() - 99999))
+
+        def run_listening(n, b, seconds):
+            end = n.t + seconds
+            while n.t < end:
+                listening(True)                       # the server touches it every 30 s; fresh is enough here
+                b.tick(); b.write_state(); n.t += 5
+
+        # ── ★★★ IN USE = STAY PUT (Stuart, 2026-10-11): no move up, no retry, NOT EVEN A SCAN, until the radio is quiet ──
         nm7, box7 = make(tmp)
         nm7.conns = json.loads(json.dumps(nm.conns))
-        nm7.air = dict(refusing)
-        run_for(nm7, box7, 200)
-        first = tries(nm7)
+        nm7.air = {"Stuart iPhone": (70, "phonepass")}
+        run_for(nm7, box7, 120)
+        ok(nm7.active == "vibe-net-2", "away from home: on network 2")
+        nm7.air["Home"] = (40, "homepass1")
         s0 = scans(nm7)
-        run_for(nm7, box7, 3 * 3600)
-        ok(first == 1 and tries(nm7) == 1 and nm7.active == "vibe-net-2",
-           "radio IN USE: the refusing network is tried once, never again under a listener")
-        ok(scans(nm7) - s0 <= 3 * 3600 // 600 + 1,
-           "…and it scans every 10 min while in use, not every 2 (%d scans in 3 h)" % (scans(nm7) - s0))
+        run_listening(nm7, box7, 3 * 3600)
+        ok(nm7.active == "vibe-net-2" and scans(nm7) == s0 and tries(nm7) == 0,
+           "radio IN USE for 3 h with network 1 back: stays on 2, %d scans, %d tries (the link is never touched)"
+           % (scans(nm7) - s0, tries(nm7)))
+        listening(False)
+        run_for(nm7, box7, 200)
+        ok(nm7.active == "vibe-net-1", "…the radio goes quiet: moves up to network 1 within a few minutes")
 
-        nm8, box8 = make(tmp)
-        nm8.conns = json.loads(json.dumps(nm.conns))
-        nm8.air = {"Stuart iPhone": (70, "phonepass")}
-        run_for(nm8, box8, 120)
-        nm8.air["Home"] = (40, "homepass1")
-        run_for(nm8, box8, 700)
-        ok(nm8.active == "vibe-net-1", "radio IN USE and home again: still moves up to network 1 (within 10 min)")
+        # ── ★★★ THE 16½-MINUTE DROP (portable box, all night 2026-10-11): network 1 is the owner's phone, saved "not
+        #    visible", and the phone is not hosting. The box sat on Home (2) and probed the phone blind — 30 s off the
+        #    air — every time the 15-minute rest ran out. From a working link a hidden network is only tried if SEEN. ──
+        nm9, box9 = make(tmp)
+        nm9.conns = json.loads(json.dumps(nm.conns))
+        nm9.conns["vibe-net-1"], nm9.conns["vibe-net-2"] = nm9.conns["vibe-net-2"], nm9.conns["vibe-net-1"]
+        nm9.conns["vibe-net-1"]["prio"], nm9.conns["vibe-net-2"]["prio"] = 30, 20
+        ok(nm9.conns["vibe-net-1"]["hidden"] and nm9.conns["vibe-net-1"]["ssid"] == "Stuart iPhone",
+           "(the portable box's order: 1 = the phone, not visible; 2 = home)")
+        nm9.air = {"Home": (50, "homepass1")}
+        listening(False)
+        run_for(nm9, box9, 120)
+        ok(nm9.active == "vibe-net-2", "boot with the phone's hotspot off: the phone is tried blind once, then home")
+        downs = lambda n: sum(1 for c in n.calls if c[3:6] == ["connection", "up", "vibe-net-1"])
+        d0 = downs(nm9)
+        run_for(nm9, box9, 8 * 3600)
+        ok(downs(nm9) == d0 and nm9.active == "vibe-net-2",
+           "…8 h on home, nobody listening: the hidden phone is never probed from the working link (was every 16½ min)")
+        nm9.air["Stuart iPhone"] = (70, "phonepass")          # the phone starts hosting (advertising)
+        run_for(nm9, box9, 200)
+        ok(nm9.active == "vibe-net-1", "…the phone starts hosting where the box can see it: idle, so it moves up to it")
+
+        # ── ★★★ THE MENU CHOICE (Stuart, 2026-10-11: "Stuey3D's iPhone | Meow! | Own WiFi") ──
+        nmc, boxc = make(tmp)
+        nmc.conns = json.loads(json.dumps(nm9.conns))
+        nmc.conns["vibe-net-1"]["hidden"] = False
+        nmc.air = {"Home": (50, "homepass1")}
+        run_for(nmc, boxc, 120)
+        ok(nmc.active == "vibe-net-2", "(on home, the phone's hotspot off)")
+        boxc.choose_net(1)
+        run_listening(nmc, boxc, 30)
+        ok(nmc.active == "vibe-net-2" and boxc.want and json.load(open(boxc.state_path))["trying"] == "Stuart iPhone",
+           "picked the phone: home is KEPT while the box looks, and the state says what it is looking for")
+        nmc.air["Stuart iPhone"] = (70, "phonepass")          # the owner switches Personal Hotspot on
+        run_listening(nmc, boxc, 20)
+        ok(nmc.active == "vibe-net-1" and not boxc.want, "the hotspot comes on: joined within a tick or two")
+        nmc.air["Home"] = (50, "homepass1")
+        run_listening(nmc, boxc, 3600)
+        ok(nmc.active == "vibe-net-1", "…held while the radio is in use")
+        boxc.choose_net(2)
+        run_listening(nmc, boxc, 30)
+        ok(nmc.active == "vibe-net-2" and boxc.hold_net == "vibe-net-2", "picked home (ranked BELOW the phone): joined…")
+        run_listening(nmc, boxc, 3600)
+        ok(nmc.active == "vibe-net-2", "…and NOT moved back up to the phone while in use")
+        listening(False)
+        run_for(nmc, boxc, 300)
+        ok(nmc.active == "vibe-net-2", "…nobody listening for 5 min: still held")
+        boxc.hold_at = time.time() - int(vp.DEFAULTS["RELEASE_SEC"]) - 1   # the hold is on the wall clock (as Own Wi-Fi's)
+        run_for(nmc, boxc, 300)
+        ok(nmc.active == "vibe-net-1" and not boxc.hold_net, "…30 quiet minutes later: the usual order again")
+
+        nmn, boxn = make(tmp)
+        nmn.conns = json.loads(json.dumps(nmc.conns))
+        nmn.air = {"Home": (50, "homepass1")}
+        run_for(nmn, boxn, 120)
+        boxn.choose_net(1)
+        run_listening(nmn, boxn, int(vp.DEFAULTS["TRY_SEC"]) + 30)
+        ok(nmn.active == "vibe-net-2" and not boxn.want and "not found" in boxn.last_error,
+           "picked the phone and it never came on: still on home after %s s, never dropped, and says why"
+           % vp.DEFAULTS["TRY_SEC"])
+        ok(tries(nmn) == 0, "…the phone was never tried blind (it was not hidden, and never seen)")
+
+        nmh, boxh = make(tmp)
+        nmh.conns = json.loads(json.dumps(nm9.conns))           # the phone saved "not visible"
+        nmh.air = {"Home": (50, "homepass1")}
+        run_for(nmh, boxh, 120)
+        boxh.choose_net(1)
+        run_listening(nmh, boxh, int(vp.DEFAULTS["TRY_SEC"]) + 60)
+        ok(nmh.active == "vibe-net-2" and not boxh.want,
+           "a NOT-VISIBLE phone chosen and never switched on: tried by name, then back on home")
+
+        nmo, boxo = make(tmp)
+        nmo.conns = json.loads(json.dumps(nmc.conns))
+        nmo.air = {}
+        run_for(nmo, boxo, 200)
+        ok(nmo.active == vp.AP_NAME, "(out and about: on its own Wi-Fi)")
+        boxo.choose_net(1)
+        run_listening(nmo, boxo, 10)
+        nmo.air["Stuart iPhone"] = (70, "phonepass")
+        run_listening(nmo, boxo, 60)
+        ok(nmo.active == "vibe-net-1", "on its own Wi-Fi, picked the phone, switched it on: joined")
+        nmo2, boxo2 = make(tmp)
+        nmo2.conns = json.loads(json.dumps(nmc.conns))
+        nmo2.air = {}
+        run_for(nmo2, boxo2, 200)
+        boxo2.choose_net(1)
+        run_listening(nmo2, boxo2, int(vp.DEFAULTS["TRY_SEC"]) + 60)
+        ok(nmo2.active == vp.AP_NAME, "on its own Wi-Fi, picked the phone, never switched on: its own Wi-Fi comes back")
         vp.ACTIVE_FILE = saved_active
 
         # ── the phone hotspot not advertising ──

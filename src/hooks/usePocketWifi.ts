@@ -10,8 +10,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState } from 'react-native';
 import {
-  pocketHere, pocketOnOwn, pocketLinkLine, pocketSwitchText,
-  POCKET_WEAK_TITLE, POCKET_WEAK_BODY, POCKET_WEAK_SNOOZE_MS, type PocketConn,
+  pocketHere, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText,
+  POCKET_WEAK_TITLE, POCKET_WEAK_BODY, POCKET_WEAK_SNOOZE_MS, POCKET_TRY_SEC,
+  type PocketConn, type PocketChoice, type PocketNet,
 } from '../services/pocketConnection';
 
 const originOf = (base: string) => (String(base || '').match(/^(https?:\/\/[^/]+)/) ?? [])[1] ?? '';
@@ -55,22 +56,28 @@ export function usePocketWifi(base: string | null, onSwitched: () => void) {
     return () => { dead = true; if (timer) clearInterval(timer); };
   }, [origin]);
 
-  const choose = useCallback((to: 'own' | 'network') => {
-    if (!conn || (to === 'own') === pocketOnOwn(conn)) return;
+  const choose = useCallback((to: PocketChoice) => {
+    if (!conn) return;
+    const net = typeof to === 'object' ? to : null;
+    if (net ? pocketOnNet(conn, net) : (to === 'own') === pocketOnOwn(conn)) return;   // already there
     const t = pocketSwitchText(conn, to);
     Alert.alert(t.title, t.body, [
       { text: 'Cancel', style: 'cancel' },
-      { text: to === 'own' ? 'Switch to own Wi-Fi' : 'Switch back', onPress: async () => {
+      { text: net ? 'Look for it' : to === 'own' ? 'Switch to own Wi-Fi' : 'Switch back', onPress: async () => {
         try {
           const r = await fetch(`${origin}/vibeserver/pocket/connection`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to }) });
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(net ? { to: 'net', rank: net.rank } : { to }) });
           if (!r.ok) {
             const j: any = await r.json().catch(() => ({}));
             Alert.alert('Not switched', j?.error || `The box refused (${r.status}).`);
             return;
           }
           switching.current = true;
-          Alert.alert('Switching', to === 'own'
+          Alert.alert('Switching', net
+            ? `Turn on “${net.ssid}” now if it is a hotspot — the box looks for it for ${POCKET_TRY_SEC} seconds. `
+              + 'Then start again from the server list on a device connected to it.'
+            : to === 'own'
             ? `Join “${conn.apSsid || 'its own Wi-Fi'}” in Settings › Wi-Fi, then start again from the server list.`
             : 'Join your network in Settings › Wi-Fi, then start again from the server list.',
             [{ text: 'OK', onPress: onSwitched }]);
@@ -98,6 +105,8 @@ export function usePocketWifi(base: string | null, onSwitched: () => void) {
   const menu = conn ? {
     onOwn: pocketOnOwn(conn), canOwn: !!conn.apSet, line: pocketLinkLine(conn),
     weak: conn.advice === 'weak' && !pocketOnOwn(conn), onChoose: choose,
+    // ★ The saved networks by name (Stuart, 2026-10-11); [] from an older server = the NETWORK key instead.
+    nets: (conn.nets ?? []).map((n: PocketNet) => ({ ...n, on: pocketOnNet(conn, n) || conn.trying === n.ssid })),
   } : null;
   return { menu };
 }

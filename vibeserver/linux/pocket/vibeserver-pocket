@@ -8,7 +8,10 @@
 #     saved networks, one in range ................ join it — network 1 before 2 before 3, ALWAYS
 #     saved networks, none in range ............... the owner's SECURED fallback hotspot (WPA2)
 #     on the fallback hotspot, nobody connected ... look again every RESCAN_SEC, rejoin when one returns
-#     joined network 2 or 3, network 1 comes back . move up to network 1 (UPGRADE_SEC)
+#     joined network 2 or 3, network 1 comes back . move up to network 1 (UPGRADE_SEC) — ONLY while nobody is
+#                                                   using the radio, and never blind to a network it cannot see
+#     a listener picks a network in the menu ...... look for it for TRY_SEC (a phone's hotspot being switched on),
+#                                                   join it the moment it appears, else stay / go back where it was
 #
 # The full design, the boot state machine and the on-device checklist: docs/POCKET-VIBESERVER-PI3A.md.
 #
@@ -99,8 +102,10 @@ DEFAULTS = {
     "BOOT_GRACE_SEC": "35",         # NM's own autoconnect gets this long before we step in (brief: ~30 s)
     "RESCAN_SEC": "120",            # on a hotspot: how often to look for a saved network
     "IDLE_SEC": "120",              # …and only once nobody has been connected for this long
-    "UPGRADE_SEC": "120",           # on network 2/3: how often to look for a higher one
-    "BUSY_UPGRADE_SEC": "600",      # …while the radio is IN USE: a scan takes the radio off-channel for seconds
+    "UPGRADE_SEC": "120",           # on network 2/3: how often to look for a higher one (never while the radio is in use)
+    # ★★★ A NETWORK CHOSEN IN THE MENU (Stuart, 2026-10-11: "Stuey3D's iPhone | Meow! | Own WiFi"). Long enough to
+    #     leave the app, open Settings and switch Personal Hotspot on; the box keeps its current link while it looks.
+    "TRY_SEC": "90",
     "JOIN_WAIT_SEC": "30",          # nmcli --wait for one join attempt
     # ★★★ OWN WI-FI, BY HAND (Stuart, 2026-10-10). A listener on the box's local network can send it to its own hotspot
     #     when the house's Wi-Fi is weak where they are standing. Held while the radio is in use; once nobody has
@@ -303,6 +308,8 @@ class Box:
         self.fail_count = {}          # name -> refusals in a row (the back-off doubles with each)
         self.hold_own = False         # ★ the owner chose Own Wi-Fi (memory only — a power cycle clears it)
         self.hold_at = 0.0            # wall clock, when it was chosen
+        self.hold_net = ""            # ★ a NETWORK chosen in the menu, held the same way (memory only)
+        self.want = None              # ★ the network being looked for after a menu choice: dict(name, ssid, hidden, until, back)
         self.link = None              # the joined link: {signal, tx, rx, retry} — shown beside the choice
         self.link_ssid = ""           # ★ the network the RADIO is on (iw), not the name in the slot
         self._link_prev = None        # (tx packets, tx retries) at the last reading, for the retry %
@@ -480,6 +487,7 @@ class Box:
             self.last_error = "Own Wi-Fi needs the box's own hotspot set up first"
             return
         self.hold_own, self.hold_at = True, time.time()
+        self.hold_net, self.want = "", None
         log("the owner chose Own Wi-Fi — leaving the network for the box's own hotspot")
         if self.cur not in (AP_NAME, SETUP_NAME):
             if self.cur:
@@ -490,6 +498,8 @@ class Box:
     def network_again(self, why):
         """Back to the saved networks, in order (the owner's choice, or the hold expiring)."""
         self.hold_own = False
+        self.hold_net = ""
+        self.want = None
         if self.cur in (AP_NAME, SETUP_NAME):
             self.leave_hotspot_and_try(why)
 
@@ -668,10 +678,10 @@ class Box:
         except OSError:
             return 1e9
 
-    def try_networks(self, visible=None, below_rank=None, busy=False):
+    def try_networks(self, visible=None, below_rank=None, blind=True):
         """Join the saved networks STRICTLY IN ORDER — 1, then 2, then 3, then any other. With
         `below_rank`, only those ranked above the current one (an upgrade). True once joined.
-        `busy` (an upgrade while the radio is in use): a network that has refused us before is not tried."""
+        `blind=False` (an upgrade, off a WORKING link): a "not visible" network is tried only if the scan saw it."""
         saved = self.saved()
         if visible is None:
             visible = self.scan() or set()
@@ -684,11 +694,9 @@ class Box:
             # ★ A phone hotspot may not be ADVERTISING (the phone is busy) — the owner ticks
             #   "not visible" and NM probes for it by name; everything else must be SEEN first, or
             #   each absent network costs JOIN_WAIT_SEC of nothing.
-            if ssid not in visible and not hidden:
+            if ssid not in visible and not (hidden and blind):
                 continue
             if below_rank is not None and self.failed_until.get(name, 0) > now:
-                continue
-            if below_rank is not None and busy and self.fail_count.get(name):
                 continue
             log("joining network %s (%s)" % (rank if rank < 9 else "other", ssid))
             if self.up(name):
@@ -701,14 +709,85 @@ class Box:
                 return True
             # ★★ A NETWORK THAT IS THERE BUT WILL NOT TAKE US (wrong password, MAC filter) must not
             #    cost an outage every UPGRADE_SEC for ever. It used to rest a flat 15 minutes — which is
-            #    an outage every 16½ minutes for ever: the portable box dropped every listener on exactly
-            #    that beat all night (2026-10-11, ping lost ~25 s each time). Now 15 min, 30, 1 h … 6 h, and
-            #    never retried while the radio is in use (see tick).
+            #    an outage every 16½ minutes for ever (the portable box, all night 2026-10-11, ~25 s each
+            #    time). Now 15 min, 30, 1 h … 6 h — and no upgrade at all while the radio is in use (tick).
             n = self.fail_count.get(name, 0) + 1
             self.fail_count[name] = n
             self.failed_until[name] = self.sh.now() + min(900 * 2 ** (n - 1), 6 * 3600)
             self.last_error = "could not join \"%s\" — check its password" % ssid
         return False
+
+    def choose_net(self, rank):
+        """★★★ A NETWORK CHOSEN IN THE MENU (Stuart, 2026-10-11) — e.g. the owner's phone hotspot, switched on after
+        pressing. Look for it for TRY_SEC, KEEPING the current link while looking where the radio allows; join it the
+        moment it appears; if it never does, stay (or go back) where we were. Once joined it is held like Own Wi-Fi."""
+        hit = [(r, n, s, h) for r, n, s, h in self.saved() if r == rank and r <= 3]
+        if not hit:
+            self.last_error = "there is no network %d saved" % rank
+            return
+        r, name, ssid, hidden = hit[0]
+        self.read_active()
+        if self.cur == name and self.st >= 100:
+            self.want = None
+            self.hold_net, self.hold_at, self.hold_own = name, time.time(), False
+            return
+        self.want = {"name": name, "ssid": ssid, "hidden": hidden,
+                     "until": self.sh.now() + self.ci("TRY_SEC"), "back": self.cur}
+        self.last_error = ""
+        log("the owner chose network %d (%s) — looking for it for %d s" % (rank, ssid, self.ci("TRY_SEC")))
+
+    def pursue(self):
+        """One turn of looking for the chosen network (tick calls this instead of everything else while it runs)."""
+        w = self.want
+        now = self.sh.now()
+        if self.cur == w["name"] and self.st >= 100:
+            self.want = None
+            return
+        if now >= w["until"]:
+            self.want = None
+            log("network \"%s\" did not appear in %d s — back to where it was" % (w["ssid"], self.ci("TRY_SEC")))
+            if not self.last_error:
+                self.last_error = "\"%s\" was not found — is its hotspot on?" % w["ssid"]
+            back = w["back"]
+            if self.cur and self.st >= 100:
+                return                                  # never left: nothing to undo
+            if back in (AP_NAME, SETUP_NAME):
+                self.raise_hotspot("back after looking for \"%s\"" % w["ssid"])
+            elif not (back and self.up(back)):
+                self.leave_hotspot_and_try("back after looking for \"%s\"" % w["ssid"])
+            return
+        if self.cur in (AP_NAME, SETUP_NAME):
+            # ★ On a hotspot: look without dropping it where the driver can (ap-force); otherwise leave it now —
+            #   whoever pressed is leaving it anyway, and a station-mode scan is the only way to look.
+            seen = self.scan_while_ap()
+            if seen is not None and w["ssid"] not in seen and not w["hidden"]:
+                return
+            self.down(self.cur)
+            self.captive_off()
+            self.sh.sleep(2)
+            self.read_active()
+            self.mode = "connecting"
+        if self.cur and self.st >= 100:
+            vis = self.scan() or set()                  # ★ a scan keeps the link: nobody is dropped until it is there
+            if w["ssid"] not in vis and not w["hidden"]:
+                return
+        elif not w["hidden"]:
+            vis = self.scan() or set()
+            if w["ssid"] not in vis:
+                return
+        log("joining the chosen network (%s)" % w["ssid"])
+        if self.up(w["name"]):
+            self.captive_off()
+            self.mode = "client"
+            self.since = int(time.time())
+            self.last_error = ""
+            self.hold_net, self.hold_at, self.hold_own = w["name"], time.time(), False
+            self.fail_count.pop(w["name"], None)
+            self.failed_until.pop(w["name"], None)
+            self.next_upgrade = self.sh.now() + self.ci("UPGRADE_SEC")
+            self.want = None
+            return
+        self.last_error = "could not join \"%s\" — check its password" % w["ssid"]
 
     def leave_hotspot_and_try(self, why):
         log("looking for a saved network — " + why)
@@ -820,6 +899,9 @@ class Box:
         now = self.sh.now()
         saved = self.saved()
         self.read_active()
+        if self.want:
+            self.pursue()
+            return
         cur, st = self.cur, self.st
         if cur in (AP_NAME, SETUP_NAME):
             self.mode = "setup-ap" if cur == SETUP_NAME else "fallback-ap"
@@ -880,16 +962,28 @@ class Box:
                 self.mode, self.since = "client", int(time.time())
                 self.captive_off()          # ★ keeps (or, on a boot straight into a network, loads) :80
             rank = next((r for r, n, s, h in saved if n == cur), 10)
+            if self.hold_net and self.hold_net != cur:
+                self.hold_net = ""                  # the chosen network went (out of range): the usual order again
             if rank > 1 and now >= self.next_upgrade:
-                # ★★ WHILE SOMEONE IS LISTENING (2026-10-11): look up less often — a scan takes the radio
-                #    off-channel for seconds, every time — and never retry a network that has refused us.
-                #    A first try at a network that has come back (home again) still happens: it is a
-                #    few seconds' gap to a better link, once.
-                busy = self.radio_quiet_for() < self.ci("IDLE_SEC")
-                self.next_upgrade = now + self.ci("BUSY_UPGRADE_SEC" if busy else "UPGRADE_SEC")
+                self.next_upgrade = now + self.ci("UPGRADE_SEC")
+                # ★★★ WHILE THE RADIO IS IN USE, STAY PUT (Stuart, 2026-10-11): "when in use wifi stays connected to
+                #     whatever it was connected to when the session started until stopped then it can scan again, or
+                #     if you move out of the wifi network range". Not even a scan — each one takes the radio
+                #     off-channel for seconds. Losing the link is NetworkManager's to notice, and the paths below
+                #     take over from there.
+                if self.radio_quiet_for() < self.ci("IDLE_SEC"):
+                    return
+                # ★ A network picked in the menu is held like Own Wi-Fi: until RELEASE_SEC without a listener.
+                if self.hold_net == cur and self.hold_quiet_for() < self.ci("RELEASE_SEC"):
+                    return
+                self.hold_net = ""
                 vis = self.scan() or set()
                 before = cur
-                if self.try_networks(vis, below_rank=rank, busy=busy) and self.cur != before:
+                # ★★ blind=False: a "not visible" network (a phone's hotspot) is never probed FROM A WORKING LINK. A
+                #    probe is a 30 s outage whenever the phone is not hosting — the portable box's drop every 16½ min
+                #    all night (2026-10-11). It is still tried blind when there is nothing else (boot, link lost),
+                #    and the menu's network choice is how to send the box to it on purpose.
+                if self.try_networks(vis, below_rank=rank, blind=False) and self.cur != before:
                     log("moved up to a higher-priority network")
                 elif not self.cur:
                     # ★ The upgrade attempt dropped us and failed — straight back to where we were.
@@ -925,6 +1019,10 @@ class Box:
             "rescanSec": self.ci("RESCAN_SEC"), "idleSec": self.ci("IDLE_SEC"),
             "apAddress": AP_ADDR, "lastError": self.last_error,
             "hold": self.hold_own,                                        # Own Wi-Fi chosen by hand
+            "holdNet": self.hold_net and (self.get(self.hold_net, "802-11-wireless.ssid") or ""),
+            # ★ The network chosen in the menu, while the box is still looking for it, and for how much longer.
+            "trying": self.want["ssid"] if self.want else "",
+            "tryLeft": max(0, int(self.want["until"] - self.sh.now())) if self.want else 0,
             "link": self.link if self.mode == "client" else None,        # signal / rates / retries
             # ★★ "full" = NM proved real internet. The server starts the tunnel ONLY on "full" — never
             #    on a hotspot, which has no upstream by definition.
@@ -1231,7 +1329,7 @@ def main_loop():
             last_tick = 0
         kick = read_request_file(KICK, uid, limit=32)
         if kick is not None:
-            word = re.sub(r"[^a-z-]", "", kick.decode("ascii", "replace"))
+            word = re.sub(r"[^a-z0-9-]", "", kick.decode("ascii", "replace"))
             cur, _ = box.read_active()
             if word == "switch":
                 box.leave_hotspot_and_try("the owner asked to switch now")
@@ -1239,6 +1337,8 @@ def main_loop():
                 box.own_wifi()
             elif word == "network":
                 box.network_again("the owner chose Network")
+            elif word in ("net-1", "net-2", "net-3"):
+                box.choose_net(int(word[-1]))
             elif word == "scan":
                 if cur in (AP_NAME, SETUP_NAME):
                     seen = box.scan_while_ap()

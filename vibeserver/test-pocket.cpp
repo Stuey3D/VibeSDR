@@ -269,6 +269,27 @@ int main() {
         Req pn = p; pn.body = "{\"to\":\"network\"}";
         Reply rpn;
         ok(handle(pn, rpn, h) && rpn.code == 200 && slurp(paths().kick) == "network\n", "Network writes its kick word");
+        put(paths().state, "{\"mode\":\"client\",\"ssid\":\"Meow!\",\"ap\":{\"set\":true,\"ssid\":\"Pocket\"},"
+                           "\"saved\":[{\"rank\":1,\"ssid\":\"Stuey3D's iPhone\"},{\"rank\":2,\"ssid\":\"Meow!\"}],"
+                           "\"trying\":\"Stuey3D's iPhone\",\"tryLeft\":71,\"holdNet\":\"\"}\n");
+        Reply rgn;
+        ok(handle(g, rgn, h) && rgn.body.find("\"nets\":[{\"rank\":1,\"ssid\":\"Stuey3D's iPhone\"},{\"rank\":2,\"ssid\":\"Meow!\"}]") != std::string::npos
+           && rgn.body.find("\"trying\":\"Stuey3D's iPhone\",\"tryLeft\":71") != std::string::npos,
+           "GET connection lists the saved networks by name, in order, and the one being looked for");
+        Reply rgnt;
+        ok(handle(gt, rgnt, h) && rgnt.body.find("iPhone") == std::string::npos, "…never their names through the tunnel");
+        Req pk = p; pk.body = "{\"to\":\"net\",\"rank\":1}";
+        Reply rpk;
+        ok(handle(pk, rpk, h) && rpk.code == 200 && slurp(paths().kick) == "net-1\n", "a saved network chosen by rank writes net-1");
+        for (const char* b : {"{\"to\":\"net\",\"rank\":3}", "{\"to\":\"net\",\"rank\":0}", "{\"to\":\"net\",\"rank\":1.5}",
+                              "{\"to\":\"net\"}", "{\"to\":\"net\",\"rank\":\"1\"}"}) {
+            Req pb = p; pb.body = b;
+            Reply rpb;
+            ok(handle(pb, rpb, h) && rpb.code == 400, (std::string("…refused: ") + b).c_str());
+        }
+        Req pkt = pk; pkt.viaTunnel = true;
+        Reply rpkt;
+        ok(handle(pkt, rpkt, h) && rpkt.code == 403, "…and refused through the tunnel");
         Req px = p; px.body = "{\"to\":\"reboot\"}";
         Reply rpx;
         ok(handle(px, rpx, h) && rpx.code == 400, "anything else is refused");

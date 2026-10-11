@@ -11417,7 +11417,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         owrxDspDefaults={owrxDspDefaults}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
         onRecordings={() => { setMenuOpen(false); setRecordingsOpen(true); }}
-        pocketWifi={pocketWifi ? { ...pocketWifi, onChoose: (to: 'own' | 'network') => { setMenuOpen(false); pocketWifi.onChoose(to); } } : null}
+        pocketWifi={pocketWifi ? { ...pocketWifi, onChoose: (to: Parameters<typeof pocketWifi.onChoose>[0]) => { setMenuOpen(false); pocketWifi.onChoose(to); } } : null}
       />
       )} />
       </PanelBoundary>

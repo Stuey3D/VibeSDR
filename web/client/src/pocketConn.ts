@@ -7,8 +7,9 @@
  *   network", nothing is drawn and nothing is polled. On a pocket box: one small GET every 30 s while the page is visible.
  */
 import {
-  pocketHere, pocketOnOwn, pocketLinkLine, pocketSwitchText,
-  POCKET_WEAK_TITLE, POCKET_WEAK_BODY, POCKET_WEAK_SNOOZE_MS, type PocketConn,
+  pocketHere, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText,
+  POCKET_WEAK_TITLE, POCKET_WEAK_BODY, POCKET_WEAK_SNOOZE_MS, POCKET_TRY_SEC,
+  type PocketConn, type PocketChoice,
 } from '../../../src/services/pocketConnection';
 
 const URL_ = '/vibeserver/pocket/connection';
@@ -31,6 +32,31 @@ function render(): void {
   if (!row || !conn) return;
   row.hidden = false;
   const own = pocketOnOwn(conn);
+  // ★ The saved networks BY NAME (Stuart, 2026-10-11: "Stuey3D's iPhone | Meow! | Own WiFi"); an older server sends
+  //   none, and keeps the NETWORK key.
+  const nets = conn.nets ?? [];
+  const holder = $('pcNets');
+  if (holder) {
+    const key = JSON.stringify(nets);
+    if (holder.dataset.key !== key) {
+      holder.dataset.key = key;
+      holder.innerHTML = '';
+      for (const n of nets) {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = n.ssid.toUpperCase();
+        b.dataset.ssid = n.ssid;
+        b.onclick = () => { void choose(n); };
+        holder.appendChild(b);
+      }
+    }
+    holder.querySelectorAll('button').forEach((b) => {
+      const n = nets.find((x) => x.ssid === (b as HTMLElement).dataset.ssid);
+      b.classList.toggle('on', !!n && (pocketOnNet(conn!, n) || conn!.trying === n.ssid));
+    });
+  }
+  const netBtn = $('pcNet') as HTMLButtonElement | null;
+  if (netBtn) netBtn.hidden = nets.length > 0;
   $('pcNet')?.classList.toggle('on', !own);
   $('pcOwn')?.classList.toggle('on', own);
   const ownBtn = $('pcOwn') as HTMLButtonElement | null;
@@ -70,14 +96,15 @@ function weakNotice(): void {
   $('pocketWeakLater')!.onclick = () => { snoozedUntil = Date.now() + POCKET_WEAK_SNOOZE_MS; b.remove(); };
 }
 
-async function choose(to: 'own' | 'network'): Promise<void> {
+async function choose(to: PocketChoice): Promise<void> {
   if (!conn) return;
-  if ((to === 'own') === pocketOnOwn(conn)) return;          // already there
+  const net = typeof to === 'object' ? to : null;
+  if (net ? pocketOnNet(conn, net) : (to === 'own') === pocketOnOwn(conn)) return;   // already there
   const t = pocketSwitchText(conn, to);
   if (!window.confirm(`${t.title}\n\n${t.body}`)) return;
   const note = $('pcNote');
   try {
-    const r = await fetch(URL_, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to }) });
+    const r = await fetch(URL_, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(net ? { to: 'net', rank: net.rank } : { to }) });
     if (!r.ok) {
       const j = await r.json().catch(() => ({} as any));
       if (note) { note.hidden = false; note.textContent = `Not switched — ${j.error || 'the box refused (' + r.status + ')'}.`; }
@@ -87,7 +114,10 @@ async function choose(to: 'own' | 'network'): Promise<void> {
     $('pocketWeak')?.remove();
     if (note) {
       note.hidden = false;
-      note.textContent = to === 'own'
+      note.textContent = net
+        ? `Looking for “${net.ssid}” for ${POCKET_TRY_SEC} s — turn it on now if it is a hotspot, then open this page `
+          + 'again on a device connected to it.'
+        : to === 'own'
         ? `Switching… join “${conn.apSsid || 'its own Wi-Fi'}” on this device, then open this page again.`
         : 'Switching… join your network on this device, then open this page again.';
     }

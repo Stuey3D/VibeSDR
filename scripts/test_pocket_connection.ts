@@ -1,5 +1,5 @@
 // Portable Wi-Fi wording shared by the app and the web page (src/services/pocketConnection.ts).
-import { pocketHere, pocketOnOwn, pocketLinkLine, pocketSwitchText } from '../src/services/pocketConnection';
+import { pocketHere, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText } from '../src/services/pocketConnection';
 
 let fails = 0;
 const ok = (c: boolean, what: string) => { console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fails++; };
@@ -24,6 +24,20 @@ ok(/leave this session, join “Pocket-SDR” on this device, and start again/.t
 ok(/leave “Meow!”/.test(own.body) && /30 minutes unused/.test(own.body), '…names the network it leaves, and when it goes back');
 ok(/leave this session, join that network on this device, and start again/.test(pocketSwitchText(home, 'network').body),
    'switching back says the same the other way');
+
+// ── a saved network chosen by name (Stuart, 2026-10-11: "Stuey3D's iPhone | Meow! | Own WiFi") ──
+const phone = { rank: 1, ssid: "Stuey3D's iPhone" }, meow = { rank: 2, ssid: 'Meow!' };
+const onMeow = { ...home, ssid: 'Meow!', nets: [phone, meow] };
+ok(pocketOnNet(onMeow, meow) && !pocketOnNet(onMeow, phone) && !pocketOnNet({ mode: 'fallback-ap', ssid: 'Meow!' }, meow),
+   'the lit network is the one the box is on, and none while it is on its own Wi-Fi');
+const pick = pocketSwitchText(onMeow, phone);
+ok(pick.title === 'Switch to “Stuey3D\'s iPhone”?', 'the title names the network');
+ok(/look for “Stuey3D's iPhone” for the next 90 seconds/.test(pick.body) && /Personal Hotspot/.test(pick.body),
+   'it says how long the box looks, and to turn the hotspot on now');
+ok(/it stays on “Meow!”/.test(pick.body), '…and where it stays if it is not found');
+ok(pocketLinkLine({ ...onMeow, trying: "Stuey3D's iPhone", tryLeft: 64 }) === 'Looking for “Stuey3D\'s iPhone” — 64 s left · turn its hotspot on now',
+   'while looking, the line says so');
+ok(/held while the radio is in use$/.test(pocketLinkLine({ ...onMeow, holdNet: 'Meow!' })), 'a chosen network is shown as held');
 
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exit(fails ? 1 : 0);

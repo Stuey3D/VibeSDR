@@ -364,6 +364,9 @@ State readState() {
     if (const JV* ap = j.get("ap")) st.apSet = ap->flag("set");
     st.internet = j.str("internet") == "full";
     st.hold = j.flag("hold");
+    st.holdNet = j.str("holdNet");
+    st.trying = j.str("trying");
+    if (const JV* v = j.get("tryLeft"); v && v->t == JV::Num) st.tryLeft = (int)v->n;
     st.ssid = j.str("ssid");
     if (const JV* ap = j.get("ap")) st.apSsid = ap->str("ssid");
     if (const JV* l = j.get("link"); l && l->t == JV::Obj) {
@@ -501,7 +504,7 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
             rp.body = welcomePage(h.serverName ? h.serverName() : std::string(), base);
             return true;
         }
-        /* ★★★ PORTABLE CONNECTION — Network | Own Wi-Fi (Stuart, 2026-10-10). Read by the clients' menu to draw the
+        /* ★★★ PORTABLE CONNECTION — each saved network | Own Wi-Fi (Stuart, 2026-10-10; the networks by name 2026-10-11). Read by the clients' menu to draw the
          *  choice and the link's figures; set by a listener ON THE BOX'S OWN NETWORK. Never through the tunnel and never
          *  from a public address: the GET answers local:false there (the menu stays hidden) and the POST refuses — a
          *  stranger online must not be able to take the box off its network. No admin password: it is the person
@@ -520,20 +523,43 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
                                   st.retry < 0 ? "null" : std::to_string((int)st.retry).c_str());
                     link = b;
                 }
+                // ★ The saved networks BY NAME, in order — the menu's buttons ("Stuey3D's iPhone | Meow! | Own WiFi").
+                //   Only to a peer on the box's own network, as everything here: never through the tunnel.
+                std::string nets = "[";
+                const std::vector<std::string> saved = savedSsids(st);
+                for (size_t i = 0; i < saved.size() && i < 3; i++)
+                    nets += std::string(i ? "," : "") + "{\"rank\":" + std::to_string(i + 1) + ",\"ssid\":\"" + jesc(saved[i]) + "\"}";
+                nets += "]";
                 json(rp, 200, "OK", std::string("{\"pocket\":true,\"local\":true,\"mode\":\"") + jesc(st.mode)
                      + "\",\"hold\":" + (st.hold ? "true" : "false") + ",\"apSet\":" + (st.apSet ? "true" : "false")
+                     + ",\"nets\":" + nets + ",\"holdNet\":\"" + jesc(st.holdNet) + "\",\"trying\":\"" + jesc(st.trying)
+                     + "\",\"tryLeft\":" + std::to_string(st.tryLeft)
                      + ",\"ssid\":\"" + jesc(st.ssid) + "\",\"apSsid\":\"" + jesc(st.apSsid) + "\",\"link\":" + link
                      + ",\"advice\":\"" + (st.hasLink ? linkAdvice(st.signal, st.tx, st.retry) : std::string()) + "\"}");
                 return true;
             }
             if (!local) { fail(rp, 403, "Forbidden", "the box's connection can only be changed from its own network"); return true; }
             JV j;
-            const std::string to = parseJson(rq.body, j) ? j.str("to") : std::string();
-            if (to != "own" && to != "network") { fail(rp, 400, "Bad Request", "to must be \"own\" or \"network\""); return true; }
+            const bool parsed = parseJson(rq.body, j);
+            const std::string to = parsed ? j.str("to") : std::string();
+            std::string word = to, what = to == "own" ? "Own Wi-Fi" : "Network";
+            if (to == "net") {
+                // ★ One of the saved networks, by its place in the order (1–3). The root service re-checks it.
+                const JV* r = j.get("rank");
+                const int rank = r && r->t == JV::Num ? (int)r->n : 0;
+                const std::vector<std::string> saved = savedSsids(st);
+                if (rank < 1 || rank > 3 || (double)rank != r->n || (size_t)rank > saved.size()) {
+                    fail(rp, 400, "Bad Request", "no such saved network"); return true;
+                }
+                word = "net-" + std::to_string(rank);
+                what = "network " + std::to_string(rank) + " (" + saved[(size_t)rank - 1] + ")";
+            } else if (to != "own" && to != "network") {
+                fail(rp, 400, "Bad Request", "to must be \"own\", \"network\" or \"net\""); return true;
+            }
             if (to == "own" && !st.apSet) { fail(rp, 409, "Conflict", "set the box's own hotspot first (the Wi-Fi card in setup)"); return true; }
             std::string err;
-            if (!writePrivate(paths().kick, to + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
-            std::printf("VibeServer: pocket — a listener on the box's network chose %s\n", to == "own" ? "Own Wi-Fi" : "Network");
+            if (!writePrivate(paths().kick, word + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
+            std::printf("VibeServer: pocket — a listener on the box's network chose %s\n", what.c_str());
             json(rp, 200, "OK", "{\"ok\":true}");
             return true;
         }

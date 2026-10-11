@@ -101,6 +101,9 @@ struct State {
     bool apSet = false;          // a secured fallback hotspot is configured
     bool internet = false;       // NetworkManager says connectivity is FULL (the tunnel may run)
     bool hold = false;           // ★ the owner chose Own Wi-Fi (the root service holds it while the radio is used)
+    std::string holdNet;         // ★ the SSID of a network chosen in the menu and held the same way ("" = none)
+    std::string trying;          // ★ the network chosen in the menu that the box is still LOOKING for ("" = none)
+    int tryLeft = 0;             //   …and for how many more seconds
     bool hasLink = false;        // joined to a network, with the link's figures below (-1 = not reported)
     double signal = -1, tx = -1, rx = -1, retry = -1;
     std::string ssid, apSsid;

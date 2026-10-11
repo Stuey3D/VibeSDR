@@ -148,11 +148,19 @@ nothing on an ordinary install.
                 │                                         ▼
                 └ yes ─▶ NM's own autoconnect gets BOOT_GRACE_SEC (35 s); priorities 30/20/10
                           │
-                          ├ connected ─▶ [client]  on 2 or 3: every UPGRADE_SEC scan (BUSY_UPGRADE_SEC = 10 min while
-                          │                         the radio is in use); a HIGHER one in range → move up.
-                          │                         A network that refuses us rests 15 min, 30, 1 h … 6 h, and is never
-                          │                         retried while the radio is in use (a flat 15 min was a ~25 s outage
-                          │                         every 16½ min, for ever — the portable box, 2026-10-11).
+                          ├ connected ─▶ [client]  WHILE THE RADIO IS IN USE: stays put — no move up, not even a scan
+                          │                         (Stuart, 2026-10-11). Losing the link is the only way off it.
+                          │                         Idle, on 2 or 3: every UPGRADE_SEC scan; a HIGHER one SEEN in range
+                          │                         → move up. A "not visible" network is never probed blind from a
+                          │                         working link (that was the portable box's ~25 s drop every 16½ min
+                          │                         all night, 2026-10-11: the phone ranked 1, not hosting). A network
+                          │                         that refuses us rests 15 min, 30, 1 h … 6 h.
+                          │
+                          ├ chosen in the menu ─▶  (each saved network by name | Own Wi-Fi, on the box's own network
+                          │                         only) look for it for TRY_SEC (90 s) KEEPING the current link;
+                          │                         join it the moment it appears (a phone's hotspot being switched
+                          │                         on); not found → stay / go back where it was. Held like Own Wi-Fi:
+                          │                         until RELEASE_SEC (30 min) without a listener, or a power cycle.
                           └ not ─▶ try 1, then 2, then 3, then any other (seen in a scan, or marked "not visible")
                                     │ none
                                     ▼

@@ -34,7 +34,7 @@ for (const d of ["data", "run"]) fs.mkdirSync(path.join(T, d));
 fs.writeFileSync(path.join(PD, "enabled"), "1\n");
 const state = (o) => fs.writeFileSync(path.join(PD, "state.json"), JSON.stringify(Object.assign({
   v: 1, mode: "client", ssid: "Meow!", hold: false, ap: { set: true, ssid: "Pocket-SDR" },
-  saved: [{ rank: 1, ssid: "Meow!", hidden: false }], link: { signal: -78, tx: 13.0, rx: 72.2, retry: 9 } }, o)) + "\n");
+  saved: [{ rank: 1, ssid: "Stuey3D's iPhone", hidden: true }, { rank: 2, ssid: "Meow!", hidden: false }], link: { signal: -78, tx: 13.0, rx: 72.2, retry: 9 } }, o)) + "\n");
 state({});
 fs.writeFileSync(path.join(T, "config.json"), JSON.stringify({ configured: true, name: "Pocket test", locator: "IO92nh",
   adminPass: "pocket-admin-pass", radios: [{ serial: "pk", label: "T", enabled: true, configured: true, users: 3 }] }));
@@ -97,8 +97,11 @@ try {
   ok(await p.until(`!document.getElementById("pocketConn").hidden`), "on the box's own network: the PORTABLE WI-FI row is drawn");
   ok(await p.js(`document.getElementById("pcLine").textContent`) === "On “Meow!” · −78 dBm · 13 Mbit/s · 9 % retries",
      "…with the link: network, signal, rate, retries");
-  ok(await p.js(`document.getElementById("pcNet").classList.contains("on") && !document.getElementById("pcOwn").classList.contains("on")`),
-     "…NETWORK lit");
+  // ★ The saved networks BY NAME (Stuart, 2026-10-11: "Stuey3D's iPhone | Meow! | Own WiFi").
+  ok(await p.js(`[...document.querySelectorAll("#pcNets button")].map(b => b.textContent + (b.classList.contains("on") ? "*" : "")).join("|")`)
+     === "STUEY3D'S IPHONE|MEOW!*", "…a key per saved network, in order, the one it is on lit");
+  ok(await p.js(`document.getElementById("pcNet").hidden && !document.getElementById("pcOwn").classList.contains("on")`),
+     "…the old NETWORK key hidden, OWN WI-FI not lit");
   ok(await p.until(`!!document.getElementById("pocketWeak")`), "the server calls the link weak → the notice appears");
   ok(/Weak Wi-Fi on this VibeServer Portable/.test(await p.js(`document.getElementById("pocketWeak").textContent`)), "…in Stuart's words");
   await p.js(`document.getElementById("menu").classList.add("open"); document.getElementById("pocketConn").scrollIntoView(); 1`);
@@ -108,7 +111,17 @@ try {
   await p.js(`document.getElementById("pocketWeakLater").click(); 1`);
   ok(!(await p.js(`!!document.getElementById("pocketWeak")`)), "NOT NOW puts it away");
   await sleep(300); await p.shot("pc-menu");
-  await p.js(`window.confirm = (m) => { window.__asked = m; return true; }; document.getElementById("pcOwn").click(); 1`);
+  await p.js(`window.confirm = (m) => { window.__asked = m; return true; }; document.querySelector("#pcNets button").click(); 1`);
+  ok(await p.until(`!!window.__asked`), "the phone's key asks first");
+  ok(/look for “Stuey3D's iPhone” for the next 90 seconds/.test(await p.js(`window.__asked`)) && /Personal Hotspot/.test(await p.js(`window.__asked`)),
+     "…saying the box looks for it for 90 s, and to turn the hotspot on now");
+  let netKick = "";
+  for (let i = 0; i < 30 && !netKick; i++) { try { netKick = fs.readFileSync(path.join(PD, "pocket-kick.request"), "utf8"); } catch { await sleep(200); } }
+  ok(netKick === "net-1\n", "…then the box is asked to look for network 1 (kick: net-1)");
+  ok(/Looking for “Stuey3D's iPhone” for 90 s/.test(await p.js(`document.getElementById("pcNote").textContent`)), "…and the menu says so");
+  fs.rmSync(path.join(PD, "pocket-kick.request"), { force: true });
+  await p.js(`window.__asked = ""; 1`);
+  await p.js(`document.getElementById("pcOwn").click(); 1`);
   ok(await p.until(`!!window.__asked`), "OWN WI-FI asks first");
   ok(/leave this session, join “Pocket-SDR” on this device, and start again/.test(await p.js(`window.__asked`)),
      "…saying you will need to leave this session, join the box's hotspot and start again");
