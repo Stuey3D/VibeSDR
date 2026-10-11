@@ -1168,6 +1168,18 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         mainHandler.post { checkLocalAudioAlive("app returned to the foreground") }
     }
 
+    /** ★★ A session that is playing must be a FOREGROUND service — if Android demoted it (a "Restricted" phone), the next
+     *  step is "Stopping service due to app idle" and silence (the G35, 2026-10-11). Asked only as the app returns to the
+     *  front, when a foreground start is allowed; caught anyway, as a refused start must never take the app down. */
+    fun reassertForeground() {
+        mainHandler.post {
+            if (!running || !laWanted) return@post
+            try { startForegroundMedia() } catch (e: Exception) {
+                Log.w(TAG, "could not put the audio service back in the foreground: ${e.javaClass.simpleName}")
+            }
+        }
+    }
+
     /** Main thread. */
     private fun checkLocalAudioAlive(why: String) {
         if (!laWanted || laTerminal) return

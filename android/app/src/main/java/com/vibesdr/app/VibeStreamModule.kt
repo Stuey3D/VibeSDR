@@ -165,18 +165,44 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(intent)
         else reactContext.startService(intent)
+        // ★ Kept for reviveLocalAudio — WITHOUT the hello tune (see there).
+        localRestart = Intent(intent).putExtra(VibeStreamService.EXTRA_TUNE, "")
     }
+
+    /** The last local-audio start, to bring the service back if Android destroys it mid-session. Null once JS stops. */
+    private var localRestart: Intent? = null
 
     @ReactMethod
     fun sendLocalTune(json: String) { VibeStreamService.instance?.sendLocalTune(json) }
 
     @ReactMethod
-    fun stopLocalAudio() { VibeStreamService.instance?.stopLocalAudio() }
+    fun stopLocalAudio() { localRestart = null; VibeStreamService.instance?.stopLocalAudio() }
 
     /** ★★ Is the local pump's socket still delivering? Reopens it if not — see
      *  VibeStreamService.reviveLocalAudio. @ReactMethod or JS cannot see it (a quiet no-op). */
+    /* ★★★ …AND IF THE SERVICE ITSELF IS GONE, START IT AGAIN (Stuart, 2026-10-11, the G35: the waterfall ran, "No audio
+     *  reaching you", no media player in the shade — until a manual reconnect). The phone had VibeSDR on "Restricted"; the
+     *  service was not in the foreground, and Android stopped it: "Stopping service due to app idle … VibeStreamService".
+     *  This asked `instance?` — null once the service is destroyed — so coming back to the app did nothing and the session
+     *  stayed silent for good. Called by JS when the app returns to the FRONT, which is exactly when Android allows a
+     *  foreground-service start. A live service is also put back in the foreground (reassertForeground) in case it was
+     *  demoted without being stopped.
+     *  ★★ RESTARTED WITH NO HELLO TUNE: recovery is not a user action (the shared-dial contract) — the reopened socket
+     *     must say nothing and adopt the server's dial. */
     @ReactMethod
-    fun reviveLocalAudio() { VibeStreamService.instance?.reviveLocalAudio() }
+    fun reviveLocalAudio() {
+        val s = VibeStreamService.instance
+        if (s != null) { s.reassertForeground(); s.reviveLocalAudio(); return }
+        val again = localRestart ?: return
+        android.util.Log.i("VibeStream", "local audio service was destroyed mid-session — starting it again")
+        VibeStreamService.reactContext = reactContext
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) reactContext.startForegroundService(Intent(again))
+            else reactContext.startService(Intent(again))
+        } catch (e: Exception) {
+            android.util.Log.w("VibeStream", "could not restart the local audio service: ${e.javaClass.simpleName}")
+        }
+    }
 
     // FM-DX Webserver (v7): the shared tuner's MP3-over-WS audio, consumed +
     // decoded natively (background-safe). JS owns only the /text + /chat sockets.
