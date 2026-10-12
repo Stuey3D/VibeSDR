@@ -121,6 +121,19 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopExternalAudio() { VibeStreamService.instance?.stopExternalAudio() }
 
+    /** Arm or disarm the thread sweep (VibeAffinity). Resolves the plan, for the log. */
+    @ReactMethod
+    fun armThreads(on: Boolean, promise: com.facebook.react.bridge.Promise) {
+        try {
+            promise.resolve(VibeAffinity.arm(on))
+        } catch (t: Throwable) { promise.resolve("failed: $t") }
+    }
+
+    @ReactMethod
+    fun lastThreadSweep(promise: com.facebook.react.bridge.Promise) {
+        try { promise.resolve(VibeAffinity.lastSweep()) } catch (t: Throwable) { promise.resolve("failed: $t") }
+    }
+
     /** The SDR screen arms the rotation hold while mounted (MainActivity.onConfigurationChanged). */
     @ReactMethod
     fun armRotationHold(on: Boolean) {

@@ -1878,6 +1878,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     VibePowerModule?.armRotationHold?.(true);
     return () => VibePowerModule?.armRotationHold?.(false);
   }, []);
+  /* ★★★ ANDROID: THE APP'S THREADS ON THE RIGHT CORES (VibeAffinity — cpp/vibe_affinity.cpp has the measurements).
+   *  UI thread + RenderThread on the frame cores, everything they start handed back, network up, image decoding down;
+   *  a sweep every 2 s while this screen is up and in front (a background/foreground move resets every mask). */
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const arm = (on: boolean) => VibePowerModule?.armThreads?.(on)
+      ?.then((r: string) => { if (on) console.log(`[threads] ${r}`); });
+    arm(AppState.currentState === 'active');
+    const sub = AppState.addEventListener('change', (st) => arm(st === 'active'));
+    return () => { sub.remove(); arm(false); };
+  }, []);
   const rotMounted = useRef(false);
   React.useLayoutEffect(() => {
     if (!rotMounted.current) { rotMounted.current = true; return; }

@@ -22,6 +22,9 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       /** Android: hold the window's drawing through a rotation until the SDR screen has re-rendered (MainActivity). */
       armRotationHold?:     (on: boolean) => void;
       releaseRotationHold?: () => void;
+      /** Android: arm/disarm the thread sweep (VibeAffinity); resolves the plan. */
+      armThreads?:          (on: boolean) => Promise<string>;
+      lastThreadSweep?:     () => Promise<string>;
       sendTuneCommand:   (frequency: number, mode: string) => void;
       /** ★ Adopt the server's dial into native's cache. NEVER transmits — see SdrWsClient's config
        *  handler and VibeStreamService.noteServerFreq. Optional: older native builds lack it. */

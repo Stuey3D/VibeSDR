@@ -1,0 +1,353 @@
+diff --git a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkAndroidPlatformContext.h b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkAndroidPlatformContext.h
+index f9f8a15..22ac9af 100644
+--- a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkAndroidPlatformContext.h
++++ b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkAndroidPlatformContext.h
+@@ -18,6 +18,7 @@
+ #include "JniPlatformContext.h"
+ #include "RNSkAndroidVideo.h"
+ #include "RNSkPlatformContext.h"
++#include "RNSkRenderThread.h"
+ 
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wdocumentation"
+@@ -226,6 +227,24 @@ public:
+     _jniPlatformContext->runTaskOnMainThread(std::move(task));
+   }
+ 
++#if !defined(SK_GRAPHITE)
++  // VIBESDR PATCH: every canvas draws on the SkiaRender thread (RNSkRenderThread.h).
++  void runOnRenderThread(std::function<void()> task) override {
++    if (RNSkRenderThread::enabled()) {
++      RNSkRenderThread::instance().post(std::move(task));
++    } else {
++      runOnMainThread(std::move(task));
++    }
++  }
++  void runOnRenderThreadSync(const std::function<void()> &task) override {
++    if (RNSkRenderThread::enabled()) {
++      RNSkRenderThread::instance().runSync(task);
++    } else {
++      task();
++    }
++  }
++#endif
++
+   sk_sp<SkImage> takeScreenshotFromViewTag(size_t tag) override {
+     return _jniPlatformContext->takeScreenshotFromViewTag(tag);
+   }
+diff --git a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp
+index e8e4c03..72f0e93 100644
+--- a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp
++++ b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp
+@@ -29,9 +29,18 @@ RNSkOpenGLCanvasProvider::RNSkOpenGLCanvasProvider(
+     : RNSkCanvasProvider(std::move(requestRedraw)),
+       _platformContext(std::move(platformContext)) {}
+ 
+-RNSkOpenGLCanvasProvider::~RNSkOpenGLCanvasProvider() = default;
++RNSkOpenGLCanvasProvider::~RNSkOpenGLCanvasProvider() {
++  // VIBESDR PATCH: the EGL surface goes on the thread whose context made it.
++  if (_surfaceHolder) {
++    _platformContext->runOnRenderThreadSync([this]() {
++      std::lock_guard<std::mutex> lock(_holderMx);
++      _surfaceHolder = nullptr;
++    });
++  }
++}
+ 
+ int RNSkOpenGLCanvasProvider::getWidth() {
++  std::lock_guard<std::mutex> lock(_holderMx);
+   if (_surfaceHolder) {
+     return _surfaceHolder->getWidth();
+   }
+@@ -39,6 +48,7 @@ int RNSkOpenGLCanvasProvider::getWidth() {
+ }
+ 
+ int RNSkOpenGLCanvasProvider::getHeight() {
++  std::lock_guard<std::mutex> lock(_holderMx);
+   if (_surfaceHolder) {
+     return _surfaceHolder->getHeight();
+   }
+@@ -80,7 +90,11 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
+                                                 int width, int height,
+                                                 bool opaque) {
+   // Release the old surface
+-  _surfaceHolder = nullptr;
++  // VIBESDR PATCH: on the render thread (its context made it), and only after any draw in flight.
++  _platformContext->runOnRenderThreadSync([this]() {
++    std::lock_guard<std::mutex> lock(_holderMx);
++    _surfaceHolder = nullptr;
++  });
+ 
+   // Create renderer!
+   ANativeWindow *window = nullptr;
+@@ -110,7 +124,12 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
+ #if defined(SK_GRAPHITE)
+   _surfaceHolder = DawnContext::getInstance().MakeWindow(window, width, height);
+ #else
+-  _surfaceHolder = OpenGLContext::getInstance().MakeWindow(window);
++  // VIBESDR PATCH: made on the render thread, with ITS GL context.
++  _platformContext->runOnRenderThreadSync([this, window]() {
++    auto holder = OpenGLContext::getInstance().MakeWindow(window);
++    std::lock_guard<std::mutex> lock(_holderMx);
++    _surfaceHolder = std::move(holder);
++  });
+ #endif
+ 
+   // Post redraw request to ensure we paint in the next draw cycle.
+@@ -119,7 +138,11 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
+ void RNSkOpenGLCanvasProvider::surfaceDestroyed() {
+   // destroy the renderer (a unique pointer so the dtor will be called
+   // immediately.)
+-  _surfaceHolder = nullptr;
++  // VIBESDR PATCH: on the render thread, and WAIT — Android frees the surface when this returns.
++  _platformContext->runOnRenderThreadSync([this]() {
++    std::lock_guard<std::mutex> lock(_holderMx);
++    _surfaceHolder = nullptr;
++  });
+   if (_jSurfaceTexture) {
+     JNIEnv *env = facebook::jni::Environment::current();
+     env->DeleteGlobalRef(_jSurfaceTexture);
+@@ -135,11 +158,17 @@ void RNSkOpenGLCanvasProvider::surfaceSizeChanged(jobject jSurface, int width,
+     return;
+   }
+ 
+-  if (_surfaceHolder == nullptr) {
+-    _surfaceHolder = nullptr;
++  bool have;
++  {
++    std::lock_guard<std::mutex> lock(_holderMx);
++    have = _surfaceHolder != nullptr;
++  }
++  if (!have) {
+     surfaceAvailable(jSurface, width, height, opaque);
+   } else {
+-    _surfaceHolder->resize(width, height);
++    // VIBESDR PATCH: resized on the render thread.
++    _platformContext->runOnRenderThreadSync(
++        [this, width, height]() { _surfaceHolder->resize(width, height); });
+   }
+ 
+   // Redraw after size change
+diff --git a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.h b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.h
+index ca5768d..263bdd4 100644
+--- a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.h
++++ b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.h
+@@ -3,6 +3,7 @@
+ #include <fbjni/fbjni.h>
+ 
+ #include <memory>
++#include <mutex>
+ 
+ #include "RNSkView.h"
+ #include "RNWindowContext.h"
+@@ -35,6 +36,9 @@ public:
+ 
+ private:
+   std::unique_ptr<WindowContext> _surfaceHolder = nullptr;
++  // VIBESDR PATCH: _surfaceHolder is created, resized, drawn and destroyed on the render thread; this guards
++  // the size readers on other threads against the swap.
++  std::mutex _holderMx;
+   std::shared_ptr<RNSkPlatformContext> _platformContext;
+   jobject _jSurfaceTexture = nullptr;
+   jmethodID _updateTexImageMethod = nullptr;
+diff --git a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h
+new file mode 100644
+index 0000000..75425af
+--- /dev/null
++++ b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h
+@@ -0,0 +1,114 @@
++#pragma once
++
++// VIBESDR PATCH — ONE SKIA RENDER THREAD FOR EVERY CANVAS (Android, OpenGL).
++//
++// Stock react-native-skia draws each canvas SYNCHRONOUSLY ON THE UI THREAD: setting a new picture calls
++// requestRedraw → runOnMainThread, and from the UI thread that runs at once — make the GL context current,
++// replay the picture, swap. Measured on a Galaxy XCover 4s (2026-10-12, VibeSDR, per-canvas timers in
++// Container.native.ts): the waterfall canvas 2.7 ms × 58/s, the spectrum 3.7 ms × 31/s — ~300 ms of every
++// second of the UI thread, half of all it did, and the UI thread was the frame limit.
++// Here every canvas draws on ONE dedicated thread with its own GL context (OpenGLContext is thread_local, so
++// that comes for free); the UI thread only records the picture (~0.15 ms) and hands it over. Surface create /
++// resize / destroy run on the same thread (an EGL window surface belongs to the context that draws it) and
++// the UI thread WAITS for them, so a surface can never be torn down mid-draw.
++// Kill switch: `adb shell setprop debug.rnskia.renderthread 0` (read once, at the first canvas).
++
++#include <sys/prctl.h>
++#include <sys/resource.h>
++#include <sys/system_properties.h>
++
++#include <condition_variable>
++#include <functional>
++#include <future>
++#include <mutex>
++#include <queue>
++#include <thread>
++
++#include <fbjni/fbjni.h>
++
++#include "RNSkLog.h"
++
++namespace RNSkia {
++
++class RNSkRenderThread {
++public:
++  static bool enabled() {
++    static const bool on = [] {
++      char v[PROP_VALUE_MAX] = {0};
++      __system_property_get("debug.rnskia.renderthread", v);
++      return v[0] != '0';
++    }();
++    return on;
++  }
++
++  static RNSkRenderThread &instance() {
++    static RNSkRenderThread t;
++    return t;
++  }
++
++  bool isCurrent() const { return std::this_thread::get_id() == _id; }
++
++  void post(std::function<void()> task) {
++    {
++      std::lock_guard<std::mutex> lock(_mx);
++      _queue.push(std::move(task));
++    }
++    _cv.notify_one();
++  }
++
++  // Runs `task` on the render thread and waits for it. Never called FROM the render thread's own tasks in a
++  // way that waits on another thread, so this cannot deadlock.
++  void runSync(const std::function<void()> &task) {
++    if (isCurrent()) {
++      task();
++      return;
++    }
++    std::promise<void> done;
++    auto f = done.get_future();
++    post([&task, &done] {
++      task();
++      done.set_value();
++    });
++    f.wait();
++  }
++
++private:
++  RNSkRenderThread() {
++    std::promise<std::thread::id> started;
++    auto f = started.get_future();
++    std::thread([this, &started] {
++      prctl(PR_SET_NAME, "SkiaRender");
++      setpriority(PRIO_PROCESS, 0, -10); // = THREAD_PRIORITY_URGENT_DISPLAY, the RenderThread's own class
++      started.set_value(std::this_thread::get_id());
++      facebook::jni::ThreadScope scope; // attached for its whole life (updateTexImage is a JNI call)
++      loop();
++    }).detach();
++    _id = f.get();
++  }
++
++  void loop() {
++    for (;;) {
++      std::function<void()> task;
++      {
++        std::unique_lock<std::mutex> lock(_mx);
++        _cv.wait(lock, [this] { return !_queue.empty(); });
++        task = std::move(_queue.front());
++        _queue.pop();
++      }
++      try {
++        if (task) task();
++      } catch (const std::exception &e) {
++        RNSkLogger::logToConsole("SkiaRender task threw: %s", e.what());
++      } catch (...) {
++        RNSkLogger::logToConsole("SkiaRender task threw");
++      }
++    }
++  }
++
++  std::thread::id _id;
++  std::mutex _mx;
++  std::condition_variable _cv;
++  std::queue<std::function<void()>> _queue;
++};
++
++} // namespace RNSkia
+diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h
+index 0059ea1..08216db 100644
+--- a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h
++++ b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h
+@@ -52,17 +52,23 @@ public:
+   }
+ 
+   void setPicture(sk_sp<SkPicture> picture) {
+-    _picture = picture;
++    {
++      std::lock_guard<std::mutex> lock(_pictureMx); // VIBESDR PATCH: set on UI, read on SkiaRender
++      _picture = picture;
++    }
+     _requestRedraw();
+   }
+ 
+-  sk_sp<SkPicture> getPicture() const { return _picture; }
++  sk_sp<SkPicture> getPicture() const {
++    std::lock_guard<std::mutex> lock(_pictureMx);
++    return _picture;
++  }
+ 
+ private:
+   bool performDraw(std::shared_ptr<RNSkCanvasProvider> canvasProvider) {
+     // Capture picture pointer to ensure thread safety - _picture can be
+     // modified from the JS thread while we're drawing on the render thread
+-    sk_sp<SkPicture> picture = _picture;
++    sk_sp<SkPicture> picture = getPicture();
+     auto pd = _platformContext->getPixelDensity();
+     return canvasProvider->renderToCanvas([=](SkCanvas *canvas) {
+       canvas->clear(SK_ColorTRANSPARENT);
+@@ -77,6 +83,7 @@ private:
+ 
+   std::shared_ptr<RNSkPlatformContext> _platformContext;
+   sk_sp<SkPicture> _picture;
++  mutable std::mutex _pictureMx;
+ };
+ 
+ class RNSkPictureView : public RNSkView {
+diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPlatformContext.h b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPlatformContext.h
+index 596bb93..4f1d95e 100644
+--- a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPlatformContext.h
++++ b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPlatformContext.h
+@@ -63,6 +63,13 @@ public:
+    */
+   virtual void runOnMainThread(std::function<void()> func) = 0;
+ 
++  // VIBESDR PATCH: where a canvas DRAWS. Default = the main thread, as before (iOS); Android overrides with
++  // its SkiaRender thread (RNSkRenderThread.h).
++  virtual void runOnRenderThread(std::function<void()> func) {
++    runOnMainThread(std::move(func));
++  }
++  virtual void runOnRenderThreadSync(const std::function<void()> &func) { func(); }
++
+   /**
+    * Takes a screenshot of a given view represented by the view tag
+    * @param tag React view tag
+diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkView.h b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkView.h
+index 5181c71..5f9ad5c 100644
+--- a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkView.h
++++ b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkView.h
+@@ -154,7 +154,7 @@ public:
+       // Capture a weak pointer to this
+       auto weakThis = std::weak_ptr<RNSkView>(shared_from_this());
+ 
+-      _platformContext->runOnMainThread([weakThis]() {
++      _platformContext->runOnRenderThread([weakThis]() { // VIBESDR PATCH (was runOnMainThread)
+         // Try to lock the weak pointer
+         if (auto strongThis = weakThis.lock()) {
+           // Only proceed if the object still exists
+@@ -168,7 +168,9 @@ public:
+   }
+ 
+   void redraw() {
+-    _renderer->renderImmediate(_canvasProvider);
++    // VIBESDR PATCH: on the render thread (the surface's GL context lives there); waits.
++    _platformContext->runOnRenderThreadSync(
++        [this]() { _renderer->renderImmediate(_canvasProvider); });
+     _redrawRequested = false;
+   }
+ 
