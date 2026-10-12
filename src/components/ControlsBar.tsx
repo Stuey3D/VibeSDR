@@ -306,17 +306,30 @@ export function useMeters(bus?: MeterBus): MeterValues | null {
  * ★ The selector runs at render against the bus's latest sample, so its other inputs (the unit, DAB) apply at once.
  */
 export function useMeterSelect<T>(bus: MeterBus | undefined, select: (m: MeterValues | null) => T,
-                                  same: (a: T, b: T) => boolean = Object.is): T {
+                                  same: (a: T, b: T) => boolean = Object.is,
+                                  /** ★ At most one re-render per this many ms (0 = every change). A change inside the
+                                   *  interval is not lost: one trailing render shows the latest value when it ends. */
+                                  minIntervalMs = 0): T {
   const [, bump] = useReducer((x: number) => x + 1, 0);
   const cur = select(bus ? bus.value : null);
   const ref = useRef({ select, same, cur });
   ref.current = { select, same, cur };
   useEffect(() => {
     if (!bus) return;
-    const f = (nv: MeterValues) => { const r = ref.current; if (!r.same(r.select(nv), r.cur)) bump(); };
+    let last = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const f = (nv: MeterValues) => {
+      const r = ref.current;
+      if (r.same(r.select(nv), r.cur)) return;
+      if (minIntervalMs <= 0) { bump(); return; }
+      if (timer) return;                                  // a trailing render is already due
+      const wait = last + minIntervalMs - Date.now();
+      if (wait <= 0) { last = Date.now(); bump(); return; }
+      timer = setTimeout(() => { timer = null; last = Date.now(); bump(); }, wait);
+    };
     bus.subs.add(f);
-    return () => { bus.subs.delete(f); };
-  }, [bus]);
+    return () => { bus.subs.delete(f); if (timer) clearTimeout(timer); };
+  }, [bus, minIntervalMs]);
   return cur;
 }
 
@@ -1162,6 +1175,9 @@ interface ModeReading { text: string; active: boolean; sqlClosed: boolean; breat
  * ★ Squelch: when the live signal is BELOW the threshold the gate is closed (muting NOW) — the
  *   readout flips to "SQL" (no extra screen space), and the meter dims.
  */
+/** The mode box's reading text: at most one change per this many ms (10 a second) — see useModeReading. */
+const READING_TEXT_MIN_MS = 100;
+
 function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, meterMode: MeterUnit | undefined,
                         signalActive: boolean | undefined): ModeReading {
   // Skin parity (lsvSnrDisp): plain "NNdb", not a synthetic S-meter reading.
@@ -1174,12 +1190,19 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
   /* ★ The box shows the multiplex's MER (DAB's SNR) — the bar beside it already says "Weak"; repeating the
    *  word wasted the box (Stuart, 2026-10-06). The word only while there is no MER yet. */
   // ★ Selected, not subscribed (useMeterSelect): the box re-renders when the text / lamp / SQL changes, not per sample.
-  const { text, active, sqlClosed } = useMeterSelect(bus, m => ({
-    text: dab ? (dab.merDb !== undefined ? formatReading('snr', dab.merDb) : dab.short)
+  /* ★★ THE READING'S TEXT AT ≤ 10 A SECOND (Stuart, 2026-10-12: "that text can be slowed down as it sometimes acts
+   *  like a stopwatch … 10 times a second would be enough for the S9+ reading as long as the bar still responds
+   *  correctly"). It changed with every meter sample — ≈30 a second on a fading AM signal — unreadable as digits, and
+   *  on the dot / VCR faces each change re-recorded a Skia canvas (XCover 4s: the reading field 31 redraws/s). The bar,
+   *  the needle and the LEDs read the bus themselves and are untouched; the lamp and SQL below stay immediate. */
+  const text = useMeterSelect(bus, m =>
+    dab ? (dab.merDb !== undefined ? formatReading('snr', dab.merDb) : dab.short)
       : m && (m.active || !snrText) ? meterText(meterMode ?? 'snr', m) : (snrText ?? ''),
+    Object.is, READING_TEXT_MIN_MS);
+  const { active, sqlClosed } = useMeterSelect(bus, m => ({
     active: m ? m.active : !!signalActive,
     sqlClosed: !dab && sqlClosedOf(m ? (m.sql ?? -1) : -1, m?.gate, m ? m.level : 0),
-  }), (a, b) => a.text === b.text && a.active === b.active && a.sqlClosed === b.sqlClosed);
+  }), (a, b) => a.active === b.active && a.sqlClosed === b.sqlClosed);
   const breathe = useRef(new Animated.Value(1)).current;
   useEffect(() => {
     if (!sqlClosed) { breathe.setValue(1); return; }
@@ -1228,6 +1251,9 @@ function useSegMarquee(count: number, n: number, key: string): number {
  *   reading  "-88+88 dB F S", every electrode a ghost, the value lit; the legends light per meter mode.
  * Both carry the RDS mark's grid mesh. The other Displays keep ModeReadout's text.
  */
+/** The 14-segment readout while the squelch is shut (one array, so the memoised field sees no change). */
+const SEG_READ_SQL: readonly string[] = ['', 'S', 'Q', 'L', '', ''];
+
 function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFontSize }: {
   reading: ModeReading; modeLabel: string; fmStereo: boolean; modeFontSize: number; readingFontSize?: number;
 }) {
@@ -1237,7 +1263,12 @@ function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
   const ghostCol = rgba(dk.rgb, 0.10);
   const lay = useMemo(() => segModeCells(modeLabel, stereoSlot(modeLabel, fmStereo), segCells), [modeLabel, fmStereo]);
   const offset = useSegMarquee(lay.cells.length, lay.textCells, `${modeLabel}|${lay.textCells}`);
-  const lit = lay.marquee ? cellWindow(lay.cells, lay.textCells, offset, '') : lay.cells;
+  /* ★★ STABLE ARRAYS FOR THE MEMOISED FIELD (2026-10-12, XCover 4s, dot face on AM): built fresh on every render,
+   *  the mode field's `lit` / marks / extras broke its React.memo — so every change of the READING below (≈30 a second
+   *  on a fading AM signal) re-recorded the MODE field's canvas too, for a mode that had not changed. Counted: the two
+   *  fields ≈30 redraws/s each; the JS thread 65 % + its GC 42 % on the dot face against 34 % on the default one. */
+  const lit = useMemo(() => (lay.marquee ? cellWindow(lay.cells, lay.textCells, offset, '') : lay.cells),
+                      [lay, offset]);
   const ghost = useMemo(() => Array<string>(lay.textCells).fill(SEG_ALL), [lay.textCells]);
   // The rings, centred in their slot: the room after the text cells.
   const rings = useMemo(() => {
@@ -1247,7 +1278,7 @@ function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
     const x = Math.round((x0 + (width - x0 - stereoMarkWidth(size)) / 2) * 2) / 2;
     return { path: stereoRingsPath(size, x, (fs - size) / 2), key: `rings|${size}|${x}` };
   }, [lay.stereoSlot, lay.textCells, fs, width]);
-  const modeExtras: SegExtra[] = rings ? [{ path: rings.path, lit: fmStereo }] : [];
+  const modeExtras = useMemo((): SegExtra[] => (rings ? [{ path: rings.path, lit: fmStereo }] : []), [rings, fmStereo]);
 
   // ── The readout ──
   const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
@@ -1261,10 +1292,10 @@ function SegModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
   const sql = reading.sqlClosed;
   const rd = useMemo(() => segReadingCells(reading.text, reading.unit), [reading.text, reading.unit]);
   // ★ SQL in the readout's own cells, in the squelch colour, breathing — the other Displays' rule.
-  const readLit = sql ? ['', 'S', 'Q', 'L', '', ''] : rd.cells;
-  const readExtras: SegExtra[] = [
+  const readLit = sql ? SEG_READ_SQL : rd.cells;
+  const readExtras = useMemo((): SegExtra[] => [
     { path: legends.dB, lit: !sql && rd.dB }, { path: legends.F, lit: !sql && rd.F }, { path: legends.S, lit: !sql && rd.S },
-  ];
+  ], [legends, sql, rd]);
   const readLabel = sql ? 'Squelch closed' : reading.text;
   return (<>
     <View style={{ height: Math.round(modeFontSize * 1.15), justifyContent: 'center' }}>
@@ -1310,13 +1341,21 @@ function DotModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
   const lay = useMemo(() => segModeCells(modeLabel, stereoSlot(modeLabel, fmStereo), toDotCells, DOT_MODE_CELLS),
                       [modeLabel, fmStereo]);
   const offset = useSegMarquee(lay.cells.length, lay.textCells, `${modeLabel}|${lay.textCells}`);
-  const lit = lay.marquee ? cellWindow(lay.cells, lay.textCells, offset, '') : lay.cells;
+  /* ★★ STABLE ARRAYS FOR THE MEMOISED FIELD (2026-10-12, XCover 4s, dot face on AM): built fresh on every render,
+   *  the mode field's `lit` / marks / extras broke its React.memo — so every change of the READING below (≈30 a second
+   *  on a fading AM signal) re-recorded the MODE field's canvas too, for a mode that had not changed. Counted: the two
+   *  fields ≈30 redraws/s each; the JS thread 65 % + its GC 42 % on the dot face against 34 % on the default one. */
+  const lit = useMemo(() => (lay.marquee ? cellWindow(lay.cells, lay.textCells, offset, '') : lay.cells),
+                      [lay, offset]);
   // ★ The colon column exists only while the field is SPLIT (a decoder running): a plain mode is one tight word on
   //   the plain cell pitch — "MESHTASTIC" no longer has a dead colon column between its S and H (2026-10-06).
   const cellCols = useMemo(() => (lay.split ? DOT_MODE_CELL_COLS : DOT_PLAIN_CELL_COLS).slice(0, lay.textCells),
                            [lay.split, lay.textCells]);
-  const marks: DotMark[] = lay.split ? [{ col: DOT_COLON_COL, rows: DOT_COLON, lit: lay.colon }] : [];
-  if (lay.stereoSlot) marks.push({ col: DOT_RINGS_COL, rows: DOT_RINGS, lit: fmStereo });
+  const marks = useMemo(() => {
+    const m: DotMark[] = lay.split ? [{ col: DOT_COLON_COL, rows: DOT_COLON, lit: lay.colon }] : [];
+    if (lay.stereoSlot) m.push({ col: DOT_RINGS_COL, rows: DOT_RINGS, lit: fmStereo });
+    return m;
+  }, [lay, fmStereo]);
 
   // ── The readout ──
   const rf = readingFontSize ?? Math.max(9, Math.round(modeFontSize * 0.75));
