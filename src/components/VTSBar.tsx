@@ -424,13 +424,21 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           measures at its TRUE size (a plain View clamps Text to the parent
           width and the overflow slide never triggers). scrollEnabled off —
           the slide is driven by the Animated translateX. */}
+      {/* ★★★ CENTRED BY SIZING THE WINDOW, NOT BY GROWING THE CONTENT (Stuart, 2026-10-12, Galaxy Tab A9
+          landscape, DAB: "SId: C0A7 / FLEX FM: …" sat left of centre). Short text used to be centred by a
+          `flexGrow: 1` content container — so onContentSizeChange reported the GROWN width, not the text's,
+          and the centring depended on Android re-growing that container whenever the strip changed width.
+          After a turn it kept the portrait width and the line sat centred in a window ~500 wide at the strip's
+          left. Now the content is never grown: textW is the text's own width, the outer view (flex 1) is the
+          window and gives areaW, and the ScrollView is min(textW, areaW) wide, centred in it — every render,
+          from the current sizes. Overflow still fills the window and slides as before. */}
+      <View style={[styles.nameArea, styles.nameWindow]}
+        onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setAreaW(e.nativeEvent.layout.width)}>
       <ScrollView
         horizontal
         scrollEnabled={false}
         showsHorizontalScrollIndicator={false}
-        style={styles.nameArea}
-        contentContainerStyle={!overflow ? styles.nameCentre : undefined}
-        onLayout={(e: { nativeEvent: { layout: { width: number } } }) => setAreaW(e.nativeEvent.layout.width)}
+        style={textW > 0 && areaW > 0 ? { width: Math.min(Math.ceil(textW) + 1, areaW), flexGrow: 0 } : styles.nameFill}
         onContentSizeChange={(w: number) => setTextW(w)}
       >
         <Animated.View style={overflow ? { transform: [{ translateX: slide }] } : undefined}>
@@ -444,6 +452,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           </Text>
         </Animated.View>
       </ScrollView>
+      </View>
       </>)}
       {!!shown.offset && shown.tuneDir === 'right' && <Text style={[styles.offset, { color: COL.offset, fontFamily: offsetFont }]}>{offsetText}</Text>}
       {/* ★★ TP · TA · AF — fixed legends in the glass, drawn like the RDS mark (AnnunciatorLegend), on the
@@ -720,10 +729,10 @@ const styles = StyleSheet.create({
     flex: 1,
     marginHorizontal: 6,
   },
-  nameCentre: {
-    flexGrow: 1,
-    justifyContent: 'center',
-  },
+  // ★ The plain text's window: the line's ScrollView is sized to the text and centred here (see the render).
+  nameWindow: { alignItems: 'center', justifyContent: 'center' },
+  /** Before the text is measured: the ScrollView fills the window (and the text measures at its true width). */
+  nameFill: { alignSelf: 'stretch' },
   // Wide enough that 40 cells never wrap; opacity 0 so it is never seen.
   cellProbe: { position: 'absolute', left: 0, top: 0, width: 2000, flexDirection: 'row', opacity: 0 },
   overlay: {
