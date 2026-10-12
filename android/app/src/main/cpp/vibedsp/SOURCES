@@ -34,3 +34,4 @@ rds.cpp
 pipeline.cpp
 mpxmeasure.cpp
 iqclean.cpp
+spectrum_processor.cpp

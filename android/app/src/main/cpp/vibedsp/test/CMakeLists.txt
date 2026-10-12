@@ -124,3 +124,10 @@ target_compile_options(vibedsp_iq_probe PRIVATE -O2 -Wall)
 add_executable(vibedsp_iqclean_tests test_iqclean.cpp ${DSP_SRC})
 target_include_directories(vibedsp_iqclean_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_iqclean_tests PRIVATE -O2 -Wall)
+
+# ★★★ The native spectrum engine's display mapping must draw EXACTLY what src/assets/signalProcessor.ts draws
+# (docs/NATIVE-SPECTRUM-ENGINE.md). The vectors come from running the real TS: generate them first —
+#   node gen_spectrum_vectors.mjs build && ./build/vibedsp_spectrum_processor_tests build
+add_executable(vibedsp_spectrum_processor_tests test_spectrum_processor.cpp ${DSP}/spectrum_processor.cpp)
+target_include_directories(vibedsp_spectrum_processor_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_spectrum_processor_tests PRIVATE -O2 -Wall)
