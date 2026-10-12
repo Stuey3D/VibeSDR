@@ -21,6 +21,39 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
 
     init {
         VibeStreamService.reactContext = reactContext
+        if (BuildConfig.VIBE_DIAG) registerProfTrigger()
+    }
+
+    /** ★ Diagnostics build only: start / dump the Hermes sampling profiler from adb, so a steady screen can be
+     *  profiled without anyone touching it (a JS-timed window keeps catching menus being opened):
+     *    adb shell am broadcast -a net.vibesdr.app.PROF --es op start
+     *    adb shell am broadcast -a net.vibesdr.app.PROF --es op dump --es name dot   → <diagDir>/dot.cpuprofile
+     *  Logged as VibeProf. Exported so the adb shell can send it — and only ever registered in a diagnostics build.
+     *  ★ App.tsx also profiles at 45 s and 75 s after launch; trigger after ~80 s, or those take the samples. */
+    private fun registerProfTrigger() {
+        val r = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, i: Intent?) {
+                val op = i?.getStringExtra("op") ?: return
+                val name0 = i.getStringExtra("name")
+                // ★ ON THE JS THREAD: started from the main thread the profiler wrote an empty trace; every working
+                //   profile so far was started from JS (the sync methods run there).
+                reactContext.runOnJSQueueThread { runProf(op, name0) }
+            }
+        }
+        val f = android.content.IntentFilter("net.vibesdr.app.PROF")
+        try {
+            if (Build.VERSION.SDK_INT >= 33) reactContext.registerReceiver(r, f, android.content.Context.RECEIVER_EXPORTED)
+            else reactContext.registerReceiver(r, f)
+        } catch (t: Throwable) { android.util.Log.w("VibeProf", "trigger not registered: ${t.message}") }
+    }
+
+    private fun runProf(op: String, name0: String?) {
+        val res = when (op) {
+            "start" -> diagProfStart()
+            "dump" -> diagProfDump("${diagDir()}/${(name0 ?: "prof").replace(Regex("[^A-Za-z0-9_-]"), "")}.cpuprofile")
+            else -> "unknown op"
+        }
+        android.util.Log.i("VibeProf", "$op -> ${if (res.isEmpty()) "ok" else res}")
     }
 
     override fun getName() = "VibePowerModule"

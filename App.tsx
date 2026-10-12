@@ -73,7 +73,11 @@ try {
     const dir = PM?.diagDir?.() ?? '';
     console.log('[VibeDiag] profiler dir=' + dir);
     let n = 0, busy = false;
-    if (dir && PM?.diagProfStart && PM?.diagProfDump) {
+    // ★ The timed windows below are OFF by default (2026-10-12): Hermes's sampling profiler yields usable traces only for
+    //   the first couple of uses in a run, and they used them up before the adb trigger (VibeStreamModule
+    //   registerProfTrigger: `am broadcast -a net.vibesdr.app.PROF --es op start|dump`) could profile a chosen moment.
+    const TIMED_PROFILES = false;
+    if (dir && PM?.diagProfStart && PM?.diagProfDump && TIMED_PROFILES) {
       // ★ One STEADY-STATE profile as well: 5 s of plain listening, 45 s after start (the constant GC hunt).
       setTimeout(() => {
         if (busy) return;
