@@ -179,6 +179,7 @@ std::unordered_set<pid_t> g_niced;   // threads already given their priority (sw
 std::string sweep(const Plan& p) {
     const int n = (int)p.frame.size();
     const pid_t pid = getpid();
+    const int frameCores = (int)std::count(p.frame.begin(), p.frame.end(), true);
     int frame = 0, freed = 0, net = 0, bulk = 0, fail = 0;
     std::vector<bool> cur;
     DIR* d = opendir("/proc/self/task");
@@ -195,7 +196,13 @@ std::string sweep(const Plan& p) {
         //   each, thermally throttled phone, so ±15 points a run): SkiaRender ON the A73s 84 % janky (it crowded the
         //   RenderThread: 142 % of 200 % on two cores); free, it settles on the A53s and the average was ~73 %
         //   against ~93 % with pinning alone.
-        const bool frameThread = tid == pid || comm == "RenderThread";
+        //   ★★ …UNLESS THERE ARE AT LEAST THREE FRAME CORES (2026-10-12, Moto G35, 4 × A76 + 4 × A55, Stuart: the analogue
+        //   needle "night and day" against the iPhone, "looks like it is skipping frames", even at 120 Hz). Free on the
+        //   Moto, the scheduler parked SkiaRender on the A55s — 34 % of its time there against 6 % on the A76s — at 160
+        //   draws a second for a 90 Hz panel, so the needle's canvas missed its refresh. With three or more frame cores
+        //   there is room for it beside the UI thread and RenderThread; on two (the XCover's A73 pair) the measured
+        //   crowding above still holds, so there it stays free.
+        const bool frameThread = tid == pid || comm == "RenderThread" || (comm == "SkiaRender" && frameCores >= 3);
         const std::vector<bool>& want = frameThread ? p.frame : p.other;
         if (frameThread) {
             if (cur != want) { if (pin(tid, want)) frame++; else fail++; }
