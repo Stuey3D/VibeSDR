@@ -96,7 +96,7 @@ const menu = read('src/components/MenuSheet.tsx');
 ok('the pane decides the row with frameRateChoices', /frameRateChoices\(maxRefreshHz\)/.test(menu));
 ok('the pane labels it FRAME RATE', /label="FRAME RATE"/.test(menu));
 const ctx = read('src/contexts/FaceplateContext.tsx');
-ok('the provider pushes the cap', /applyFrameRateCap\(capHz\)/.test(ctx) && /frameRateCapHz\(settings, autoHz\)/.test(ctx));
+ok('the provider pushes the cap — a 30 as 60 to the display', /applyFrameRateCap\(capHz === 30 \? 60 : capHz\)/.test(ctx) && /frameRateCapHz\(settings, autoHz\)/.test(ctx));
 ok('the provider sets the app-side pacing', /uiFrameCapHz\.value = capHz/.test(ctx));
 for (const f of ['src/components/WaterfallView.tsx', 'src/components/LedVu.tsx', 'src/components/EdgeMeter.tsx'])
   ok(`${f} honours the cap`, /uiCadence/.test(read(f)));

@@ -223,8 +223,13 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const capKnown = storedKnown || touched.current;
   useEffect(() => {
     if (!capKnown) return;
-    applyFrameRateCap(capHz);
-    uiFrameCapHz.value = capHz;   // ★ the app's own pacing (services/uiCadence) — what a 30 cap is on Android
+    /* ★★ 30 IS THE APP'S OWN PACING, NOT THE DISPLAY'S — ON BOTH PLATFORMS (Stuart, 2026-10-13: on the iPhone "30 feels
+     *  like arse especially as the menu's slow down unlike on android"). iOS's native cap clamps EVERY display link —
+     *  sheets, menus, Reanimated springs — so a 30 there slowed the whole UI; Android's window keeps its 60 Hz mode and
+     *  only our frame callbacks are paced. So a 30 asks the display for 60 and paces the waterfall, spectrum and meters
+     *  to 30 itself (services/uiCadence): the UI moves at 60, the drawing at an even 30. */
+    applyFrameRateCap(capHz === 30 ? 60 : capHz);
+    uiFrameCapHz.value = capHz;   // ★ the app's own pacing (services/uiCadence)
   }, [capKnown, capHz]);
   // ★ ICON & ART: the Now Playing art follows the pick, live (services/appIcon.ts). The ICON is changed only by
   //   the pick itself (MenuSheet) — never at launch, because iOS shows an alert on every change
