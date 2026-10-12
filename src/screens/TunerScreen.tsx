@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { AppState, View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform } from 'react-native';
+import { LOGO_DECODE } from '../constants/logoDecode';
 import * as FileSystem from 'expo-file-system/legacy';
 import { noteRecordingServer } from '../services/recordingsIndex';
 import RecordingsOverlay from '../components/RecordingsOverlay';
@@ -1151,7 +1152,7 @@ export default function TunerScreen({ route, navigation }: Props) {
           {/* ★ The logo box follows the window: 68 on a phone, up to 240 on a big iPad / Mac window (fmdxLayout). */}
           <View style={[styles.idLogo, big && { width: lay.logoBox, height: lay.logoBox, borderRadius: Math.round(lay.logoBox * 0.15) }]}>
             {logo
-              ? <Image source={{ uri: logo }} style={[styles.idLogoImg, big && { width: lay.logoBox - 4, height: lay.logoBox - 4 }]} resizeMode="contain" />
+              ? <Image source={{ uri: logo }} style={[styles.idLogoImg, big && { width: lay.logoBox - 4, height: lay.logoBox - 4 }]} resizeMode="contain" {...LOGO_DECODE} />
               : <Text style={[styles.monogram, big && { fontSize: Math.round(22 * lay.logoBox / LOGO_BOX_COMPACT) }]} numberOfLines={1} adjustsFontSizeToFit>{(st?.ps?.trim() || '··').slice(0, 3).toUpperCase()}</Text>}
           </View>
           <View style={[styles.idSide, styles.idSideRight]}>

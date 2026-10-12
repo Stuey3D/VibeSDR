@@ -20,6 +20,7 @@
  */
 import React, { useMemo, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { LOGO_DECODE } from '../constants/logoDecode';
 import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { DecoderShell, decoderBodyInset, useDecoderTokens, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, engraveStyle,
          useDecoderStyles, type DecoderTokens } from './DecoderShell';
@@ -248,7 +249,7 @@ const SignalHead = React.memo(function SignalHead({ d, cur, base, readAuth }: {
   return (
     <View style={s.head}>
       {pick
-        ? <Image key={pick} source={{ uri: pick }} style={s.headLogo} resizeMode="contain"
+        ? <Image key={pick} source={{ uri: pick }} style={s.headLogo} resizeMode="contain" {...LOGO_DECODE}
                  onError={() => setDead(pick)} />
         : <View style={s.headLogo} />}
       <View style={{ flex: 1, minWidth: 0 }}>
@@ -322,7 +323,7 @@ const SvcLogo = React.memo(function SvcLogo({ uri }: { uri: string | null }) {
   React.useEffect(() => { setDead(false); }, [uri]);
   if (!uri || dead) return <View style={s.logoBox} />;
   return (
-    <Image source={{ uri }} style={s.logoBox} resizeMode="contain"
+    <Image source={{ uri }} style={s.logoBox} resizeMode="contain" {...LOGO_DECODE}
            /* ★ A URL that resolves is not a picture that loads — the RDS panel learned this first.
             *  A logo that fails is dropped rather than left as a broken tile. */
            onError={() => setDead(true)} />

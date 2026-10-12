@@ -10,6 +10,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Easing, Image, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { LOGO_DECODE } from '../constants/logoDecode';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { rotSlide, useRotateAway } from '../services/rotateReveal';
@@ -391,7 +392,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
           <View style={styles.rdsMark}><DabMark kind="plain" height={DAB_MARK_H} color={COL.mark} glow={COL.markGlow} ghost={rgba(COL.rgb, 0.16)} plus={shown.dab.plus} /></View>
         )}
         {!vfd && shown.logoUrl
-          ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" />
+          ? <Image source={{ uri: shown.logoUrl }} style={styles.staLogo} resizeMode="contain" {...LOGO_DECODE} />
           : !vfd && shown.badge === 'RDS'
           ? null
           : !!shown.badge && shown.badge !== 'RDS' && !shown.dab

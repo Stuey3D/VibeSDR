@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Image, StyleSheet } from 'react-native';
+import { LOGO_DECODE } from '../constants/logoDecode';
 import { resolveStationLogo } from '../services/stationLogoCache';
 import { ituToIso, validIso } from '../services/rdsCountry';
 
@@ -64,6 +65,7 @@ export default function StationLogo({ name, itu, size = 18, uri }: {
       style={[styles.logo, { width: size, height: size },
               loaded ? styles.plate : styles.bare]}
       resizeMode="contain"
+      {...LOGO_DECODE}
       onLoad={() => setLoaded(true)}
       // ★ An image that fails stays transparent rather than becoming a white square.
       onError={() => setLoaded(false)}
