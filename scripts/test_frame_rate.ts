@@ -79,8 +79,8 @@ eq('Android AUTO with the panel unknown: no cap, then 30', autoFrameRungs(null, 
 eq('iOS ProMotion keeps its maximum', autoFrameRungs(120, 'ios'), [0, 60, 30]);
 ok('a still screen teaches nothing', !autoWindowLate(20, 20));
 ok('a fast phone (1 % late) stays', !autoWindowLate(300, 3));
-ok('5 % exactly is not over it', !autoWindowLate(300, 15));
-ok('the XCover at 60 (≈ 7 % late) steps down — Stuart keeps it on 30', autoWindowLate(300, 21));
+ok('the Tab at 60 (≈ 5 % late) stays', !autoWindowLate(300, 15));
+ok('a struggling phone (> 10 % late) steps down', autoWindowLate(300, 36));
 ok('the XCover before the engine (59 % janky) steps down', autoWindowLate(250, 148));
 
 // ── Crash safety leaves it alone ─────────────────────────────────────────────

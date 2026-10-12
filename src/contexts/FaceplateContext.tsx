@@ -203,7 +203,12 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
     const diagLog = !!(NativeModules as any).VibePowerModule?.isDiagBuild?.();   // diagnostics builds: log each window
     startFrameWatch();
     takeFrameWatch();   // start the first window clean
+    // ★★ A WARM-UP: no verdict in the first 20 s (2026-10-13, Tab A9 measured in-app: AUTO stepped to 30 within seconds
+    //   of every launch). Opening the app and joining a server is the heaviest moment it has — those windows said "this
+    //   phone cannot keep up" about a phone that can, once settled.
+    const startedAt = Date.now();
     const t = setInterval(() => {
+      if (Date.now() - startedAt < 20000) { takeFrameWatch(); lateRun = 0; return; }
       if (AppState.currentState !== 'active') { takeFrameWatch(); lateRun = 0; return; }   // a background window says nothing
       const w = takeFrameWatch();
       if (!w) return;

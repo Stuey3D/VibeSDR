@@ -543,7 +543,9 @@ export function autoFrameRungs(maxHz: number | null | undefined, os: string = 'i
 // ★★ 5 %, STRICT (Stuart, 2026-10-12, after keeping the XCover 4s on 30: "I dont see any downsides to it so far" →
 //   "make auto stricter"). At 60 the XCover misses ~3–10 % of frames depending on the display; a fast phone ~0–1 %.
 //   At 25 % AUTO left the XCover at 60, where a paced 30 is the better experience; at 5 % it lands on 30 by itself.
-export const AUTO_LATE_SHARE = 0.05;
+// ★ 10 % (2026-10-13 night): 5 % existed to push the XCover to 30, superseded by Android AUTO = 60. Measured on the Tab
+//   A9 at 60 after the warm-up: 1–5 % late, now and then just over 5 % — it stepped to 30, where it feels worse.
+export const AUTO_LATE_SHARE = 0.10;
 export const AUTO_MIN_FRAMES = 60;
 export function autoWindowLate(frames: number, late: number): boolean {
   return frames >= AUTO_MIN_FRAMES && late / frames > AUTO_LATE_SHARE;

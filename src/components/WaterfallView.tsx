@@ -1331,8 +1331,15 @@ function WaterfallView({
          *  At 30 drawn, Default is ONE row a frame — but the measured rate wanders a hair either side of 30/s, so the
          *  fractional counter below now and then came up just short (no row) and caught up next frame (two): a stick,
          *  then a jump. When the expected count is within 0.15 of a whole number, release exactly that many (one more
-         *  if 3+ are waiting); a frame that finds none simply waits, and the one-row lag that leaves keeps it fed. */
-        shown = Math.min(avail, shown + whole + (backlog >= 3 ? 1 : 0));
+         *  when two steps' worth are waiting); a frame that finds less waits, and the lag that leaves keeps it fed. */
+        // ★ NEVER A PARTIAL STEP (2026-10-13, Tab A9 at 30 with Smooth = 2 rows a frame: "a semi regular stutter",
+        //   measured 2.7 2.7 … 1.2 … 4.0 px). A frame that finds fewer than `whole` new rows WAITS rather than showing
+        //   what there is — that one wait leaves a step in reserve, so a row that lands a little late no longer shows.
+        // ★ NEVER A PARTIAL STEP: a frame that finds fewer than `whole` new rows waits (one more when two steps' worth
+        //   are waiting). Measured in-app on the Tab at 60 with Smooth: ~1–2 % of frames show no row (a late row) — the
+        //   best of four variants tried 10-13 night (reserve rules oscillated 0/4 at 30). The proper fix is a playout
+        //   clock (each row its own display time) — see memory night_2026_10_13_state.
+        if (backlog >= whole) shown += whole + (backlog >= 2 * whole + 1 ? 1 : 0);
         accSv.value = 0;
       } else {
         let acc = accSv.value + expect * (0.75 + 0.25 * backlog);
@@ -1371,6 +1378,13 @@ function WaterfallView({
     if (uHead.value !== shown) uHead.value = shown;
   }, engine == null);
 
+  // DIAG (diagnostics builds only): a histogram of rows shown per drawn frame, so pacing is measured, not eyeballed.
+  const paceDiag = useMemo(() => !!(NativeModules as any).VibePowerModule?.isDiagBuild?.(), []);
+  const paceHist = useSharedValue<number[]>([0, 0, 0, 0, 0, 0]);
+  const paceT0 = useSharedValue(0);
+  const paceLog = useCallback((h: string, gap: number, rate: number) => {
+    console.log(`[VibeDiag] wf pace rows/frame 0..5: ${h} | gap ${gap} ms | rate ${rate} rows/s`);
+  }, []);
   const engAvail = useSharedValue(0);    // the newest row in the image
   const engShown = useSharedValue(0);    // the newest row on screen (uHead while settled)
   const engAcc   = useSharedValue(0);
@@ -1452,8 +1466,17 @@ function WaterfallView({
     }
     // ── Which rows are shown (see engAvail) ──
     {
+      const before = uHead.value;
       const shown = rowPace(engAvail.value, engShown, engAcc, engRate.value, gap, !engGlideOn.value && uQuantSv.value >= 0.5);
       if (uHead.value !== shown) uHead.value = shown;
+      if (paceDiag) {   // DIAG (diagnostics builds): rows shown per drawn frame, logged every 5 s
+        const h = paceHist.value; const d = Math.max(0, Math.min(5, shown - before)); h[d]++; paceHist.value = h;
+        if (fi.timestamp - paceT0.value > 5000) {
+          paceT0.value = fi.timestamp;
+          runOnJS(paceLog)(h.join(','), Math.round(gap), Math.round(engRate.value * 1000 * 10) / 10);
+          paceHist.value = [0, 0, 0, 0, 0, 0];
+        }
+      }
     }
     if (engGlideOn.value && glideTick(fi.timestamp)) engGlideOn.value = false;
     if (engSpecOn.value && specTweenTick(gap)) engSpecOn.value = false;
