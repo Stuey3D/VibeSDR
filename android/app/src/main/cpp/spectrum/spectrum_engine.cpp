@@ -56,8 +56,25 @@ double SpectrumEngine::now() const { return clock_ ? clock_() : wallMs(); }
 
 // ── From JS ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
+void SpectrumEngine::pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
+    if (!bins || n <= 0) return;
+    {
+        std::lock_guard<std::mutex> lk(mx_);
+        nativeFedUntil_ = now() + NATIVE_FED_MS;
+    }
+    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz);
+}
+
 void SpectrumEngine::pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
     if (!bins || n <= 0) return;
+    {
+        std::lock_guard<std::mutex> lk(mx_);
+        if (now() < nativeFedUntil_) return;   // the native socket already gave us this frame, on time
+    }
+    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz);
+}
+
+void SpectrumEngine::pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
     std::lock_guard<std::mutex> lk(mx_);
     Frame f;
     if (!framePool_.empty()) { f = std::move(framePool_.back()); framePool_.pop_back(); }

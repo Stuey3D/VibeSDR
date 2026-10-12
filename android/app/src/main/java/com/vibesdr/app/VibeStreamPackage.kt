@@ -7,7 +7,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class VibeStreamPackage : ReactPackage {
     override fun createNativeModules(ctx: ReactApplicationContext): List<NativeModule> =
-        listOf(VibeStreamModule(ctx), VibeLocalSdrModule(ctx), VibeMdnsModule(ctx))
+        listOf(VibeStreamModule(ctx), VibeLocalSdrModule(ctx), VibeMdnsModule(ctx), VibeSpecSocketModule(ctx))
     override fun createViewManagers(ctx: ReactApplicationContext): List<ViewManager<*, *>> =
         emptyList()
 }

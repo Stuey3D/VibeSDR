@@ -236,7 +236,7 @@ target_link_libraries(vibelocalsdr PRIVATE
 #   (the vibe_rnskia exports our patch adds: Skia's own symbols are hidden inside librnskia).
 find_package(ReactAndroid REQUIRED CONFIG)
 find_package(shopify_react-native-skia REQUIRED CONFIG)
-add_library(vibespectrum SHARED spectrum/spectrum_jsi.cpp spectrum/spectrum_engine.cpp)
+add_library(vibespectrum SHARED spectrum/spectrum_jsi.cpp spectrum/spectrum_engine.cpp spectrum/spec_decoder.cpp spectrum/spec_socket.cpp)
 target_include_directories(vibespectrum PRIVATE vibedsp spectrum)
 set_target_properties(vibespectrum PROPERTIES CXX_STANDARD 20)
-target_link_libraries(vibespectrum PRIVATE vibedsp ReactAndroid::jsi shopify_react-native-skia::rnskia log)
+target_link_libraries(vibespectrum PRIVATE vibedsp ReactAndroid::jsi shopify_react-native-skia::rnskia z log)

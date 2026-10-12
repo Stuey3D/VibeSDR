@@ -76,6 +76,10 @@ public:
     // ── From JS ──
     /** One decoded frame (raw dB, display order). Copied; returns at once. trueCenterHz NaN = absent. */
     void pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    /** The same, from the native spectrum socket (spec_socket.cpp) on ITS thread, at arrival. While the socket has fed
+     *  a frame in the last NATIVE_FED_MS, pushFrame (JS's copy of the same frame, delivered later) is ignored — so a
+     *  server on the native socket and one on the JS path (OWRX, Kiwi) need no switch. */
+    void pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
     void setView(double centerHz, double bwHz);              // the props view (viewRef) — in-flight alignment
     void setConfig(const EngineConfig& c);
     void setSettings(const vibedsp::SpectrumProcessorSettings& s);
@@ -94,6 +98,7 @@ public:
     static SpectrumEngine* makeForTest(MakeImage, MakePath, Release, Release, Clock);
 
 private:
+    void pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
     struct Frame { std::vector<float> bins; double centerHz = 0, bwHz = 0, trueCenterHz = NAN; double arrivedMs = 0; };
 
     void loop();
@@ -124,6 +129,8 @@ private:
     double lastInteractAt_ = 0;
     bool bg_ = false, covered_ = false;
     bool settingsDirty_ = false;
+    double nativeFedUntil_ = 0;
+    static constexpr double NATIVE_FED_MS = 2000;
     vibedsp::SpectrumProcessorSettings pendingSettings_;
     std::vector<Frame> framePool_;        // recycled frame buffers
 

@@ -7,8 +7,12 @@
 //   wrapped here on the UI runtime WITHOUT external memory pressure (cheap dispose — the worklet disposes the
 //   previous one itself).
 #include "spectrum_engine.h"
+#include "spec_socket.h"
+#include <map>
+#include <mutex>
 #include <jsi/jsi.h>
 #include <react-native-skia/VibeExport.h>
+#include <cstring>
 #include <memory>
 #include <string>
 #if defined(__ANDROID__)
@@ -34,9 +38,31 @@ bool flag(jsi::Runtime& rt, const jsi::Object& o, const char* k, bool dflt) {
     return v.isBool() ? v.getBool() : dflt;
 }
 
+// ── The native spectrum sockets (spec_socket.h), by the id VibeSpecSocket.kt gives each ──────────────────────
+std::mutex gSinkMx;
+std::map<int, std::shared_ptr<vibespec::SpecSocketSink>> gSinks;
+std::shared_ptr<vibespec::SpecSocketSink> sinkFor(int id) {
+    std::lock_guard<std::mutex> lk(gSinkMx);
+    auto it = gSinks.find(id);
+    return it == gSinks.end() ? nullptr : it->second;
+}
+
+/** A JS ArrayBuffer that owns its bytes (no copy back to JS land beyond this one). */
+class VecBuffer : public jsi::MutableBuffer {
+public:
+    explicit VecBuffer(std::vector<uint8_t>&& v) : v_(std::move(v)) {}
+    size_t size() const override { return v_.size(); }
+    uint8_t* data() override { return v_.data(); }
+private:
+    std::vector<uint8_t> v_;
+};
+
 class SpectrumHost : public jsi::HostObject {
 public:
-    SpectrumHost() : engine_(std::make_shared<SpectrumEngine>(mkImage, mkPath, rlImage, rlPath)) {}
+    SpectrumHost() : engine_(std::make_shared<SpectrumEngine>(mkImage, mkPath, rlImage, rlPath)) {
+        vibespec::setCurrentEngine(engine_);   // the native spectrum socket feeds the SDR screen's engine
+    }
+    ~SpectrumHost() override { vibespec::clearCurrentEngine(engine_.get()); }
 
     jsi::Value get(jsi::Runtime& rt, const jsi::PropNameID& nameId) override {
         const std::string name = nameId.utf8(rt);
@@ -142,8 +168,47 @@ private:
 
 }  // namespace
 
-/** Installs global.__vibeSpectrumCreate() on the JS runtime. Call on the JS thread. */
+/** Installs global.__vibeSpectrumCreate(), __vibeSpecSockDrain(id) and __vibeSpecSockMirror(...). JS thread. */
 void vibeSpectrumInstall(jsi::Runtime& rt) {
+    // Drain everything the native socket received, IN ORDER: [{k:0,text}|{k:1,data:ArrayBuffer}|{k:2,bins:Float32Array,freq,bytes}]
+    rt.global().setProperty(rt, "__vibeSpecSockDrain", jsi::Function::createFromHostFunction(
+        rt, jsi::PropNameID::forAscii(rt, "__vibeSpecSockDrain"), 1,
+        [](jsi::Runtime& r, const jsi::Value&, const jsi::Value* a, size_t c) -> jsi::Value {
+            auto sink = c >= 1 && a[0].isNumber() ? sinkFor((int)a[0].asNumber()) : nullptr;
+            if (!sink) return jsi::Array(r, 0);
+            auto items = sink->drain();
+            jsi::Array out(r, items.size());
+            jsi::Function f32 = r.global().getPropertyAsFunction(r, "Float32Array");
+            size_t i = 0;
+            for (auto& it : items) {
+                jsi::Object o(r);
+                o.setProperty(r, "k", (int)it.kind);
+                if (it.kind == vibespec::SockItem::kText) {
+                    o.setProperty(r, "text", jsi::String::createFromUtf8(r, it.text));
+                } else if (it.kind == vibespec::SockItem::kBinary) {
+                    o.setProperty(r, "data", jsi::ArrayBuffer(r, std::make_shared<VecBuffer>(std::move(it.bytes))));
+                } else {
+                    std::vector<uint8_t> raw(it.bins.size() * sizeof(float));
+                    std::memcpy(raw.data(), it.bins.data(), raw.size());
+                    jsi::ArrayBuffer ab(r, std::make_shared<VecBuffer>(std::move(raw)));
+                    o.setProperty(r, "bins", f32.callAsConstructor(r, ab));
+                    o.setProperty(r, "freq", it.frequency);
+                    o.setProperty(r, "bytes", (double)it.wireBytes);
+                }
+                out.setValueAtIndex(r, i++, o);
+            }
+            return out;
+        }));
+    // __vibeSpecSockMirror(id, inFlight, viewCenterHz, viewBinBw, sharedDial) — the client's view state
+    rt.global().setProperty(rt, "__vibeSpecSockMirror", jsi::Function::createFromHostFunction(
+        rt, jsi::PropNameID::forAscii(rt, "__vibeSpecSockMirror"), 5,
+        [](jsi::Runtime&, const jsi::Value&, const jsi::Value* a, size_t c) -> jsi::Value {
+            if (c < 5 || !a[0].isNumber()) return jsi::Value::undefined();
+            auto sink = sinkFor((int)a[0].asNumber());
+            if (sink) sink->setViewMirror(a[1].isBool() && a[1].getBool(), a[2].isNumber() ? a[2].asNumber() : 0,
+                                          a[3].isNumber() ? a[3].asNumber() : 0, a[4].isBool() && a[4].getBool());
+            return jsi::Value::undefined();
+        }));
     rt.global().setProperty(rt, "__vibeSpectrumCreate", jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forAscii(rt, "__vibeSpectrumCreate"), 0,
         [](jsi::Runtime& r, const jsi::Value&, const jsi::Value*, size_t) -> jsi::Value {
@@ -152,6 +217,40 @@ void vibeSpectrumInstall(jsi::Runtime& rt) {
 }
 
 #if defined(__ANDROID__)
+// ── VibeSpecSocket.kt → the sinks (OkHttp's reader thread). Each returns TRUE when JS should be told to drain. ──
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeSpectrum_nativeSinkCreate(JNIEnv*, jclass, jint id, jboolean vibeServer) {
+    std::lock_guard<std::mutex> lk(gSinkMx);
+    gSinks[id] = std::make_shared<vibespec::SpecSocketSink>(vibeServer == JNI_TRUE);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeSpectrum_nativeSinkDestroy(JNIEnv*, jclass, jint id) {
+    std::lock_guard<std::mutex> lk(gSinkMx);
+    gSinks.erase(id);
+}
+// ★ Text arrives as real UTF-8 BYTES (Kotlin's toByteArray): GetStringUTFChars hands back Java's MODIFIED UTF-8,
+//   which encodes emoji and other 4-byte characters differently — a station name or chat line would arrive garbled.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeSpectrum_nativeSinkText(JNIEnv* env, jclass, jint id, jbyteArray utf8) {
+    auto sink = sinkFor(id);
+    if (!sink || !utf8) return JNI_FALSE;
+    const jsize n = env->GetArrayLength(utf8);
+    jbyte* p = env->GetByteArrayElements(utf8, nullptr);
+    const bool notify = sink->onText(reinterpret_cast<const char*>(p), (size_t)n);
+    env->ReleaseByteArrayElements(utf8, p, JNI_ABORT);
+    return notify ? JNI_TRUE : JNI_FALSE;
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vibesdr_app_VibeSpectrum_nativeSinkBinary(JNIEnv* env, jclass, jint id, jbyteArray data) {
+    auto sink = sinkFor(id);
+    if (!sink || !data) return JNI_FALSE;
+    const jsize n = env->GetArrayLength(data);
+    jbyte* p = env->GetByteArrayElements(data, nullptr);
+    const bool notify = sink->onBinary(reinterpret_cast<const uint8_t*>(p), (size_t)n);
+    env->ReleaseByteArrayElements(data, p, JNI_ABORT);
+    return notify ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_vibesdr_app_VibeSpectrum_nativeInstall(JNIEnv*, jclass, jlong runtimePtr) {
     auto* rt = reinterpret_cast<jsi::Runtime*>(runtimePtr);

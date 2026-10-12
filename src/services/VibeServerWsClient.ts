@@ -66,6 +66,7 @@ import { LinkManager, LADDERS, type LinkMode } from './vibeLinkManager';
 /** ★ Re-exported so each subclass names its own ladder without reaching past this file. */
 export const LADDERS_FOR = LADDERS;
 import { USER_AGENT, APP_PROTO } from '../constants/version';
+import { NativeSpecSocket, nativeSpecSocketAvailable } from './nativeSpecSocket';
 
 /**
  * ★★★ NAME OURSELVES IN THE QUERY, because the header is not ours to set. React Native's WebSocket
@@ -883,6 +884,7 @@ export abstract class VibeServerWsClient {
 
   private _sendView(frequency: number, binBandwidth: number) {
     this.pendingView = { frequency, binBandwidth };
+    this._mirrorView();
     const wait = this.lastSendAt + VIEW_SEND_MS - Date.now();
     if (wait <= 0) { this._flushView(); return; }
     if (!this.sendTimer) {
@@ -1029,11 +1031,30 @@ export abstract class VibeServerWsClient {
     this.spectrumWs.send(JSON.stringify(msg));
     this.lastResubAt = Date.now();   // frames pause across this — not a bad link
     this._armSettle();
+    this._mirrorView();
   }
 
   /** In flight = a send happened < VIEW_SETTLE_MS ago, or one is queued. */
   private _inFlight(): boolean {
     return this.settleTimer !== null || this.pendingView !== null;
+  }
+
+  /** ★ Native socket only: tell the native side the view state _emitSpectrum substitutes geometry from, so the
+   *  waterfall gets the same geometry at arrival that this client gives the frame when it processes it. */
+  private _mirrorView() {
+    const ws = this.spectrumWs as unknown as { mirror?: (a: boolean, b: number, c: number, d: boolean) => void } | null;
+    ws?.mirror?.(this._inFlight(), this.view.centerHz, this.view.binBandwidth, this.sharedDial);
+  }
+
+  /** ★ Native socket only: a frame the native side already decoded (bins in server order) — what _applyFull/_applyFullU8
+   *  or a delta would have left in this.bins — then the unchanged _emitSpectrum. */
+  private _applyNativeSpec(bins: Float32Array, frequency: number) {
+    if (bins.length !== this.bins.length) {
+      this.bins = new Float32Array(bins.length);
+      this.status.binCount = bins.length;
+    }
+    this.bins.set(bins);
+    this._emitSpectrum(frequency);
   }
 
   private _armSettle() {
@@ -1046,6 +1067,7 @@ export abstract class VibeServerWsClient {
         this.view.centerHz     = this.status.centerHz;
         this.view.binBandwidth = this.status.binBandwidth;
       }
+      this._mirrorView();   // ★ AFTER the adopt: the native side must see the settled view, not the one before it
       this.callbacks.onStatus({ ...this.status });
     }, VIEW_SETTLE_MS);
   }
@@ -1413,9 +1435,15 @@ export abstract class VibeServerWsClient {
     //    this header — the sockets, which are what the log actually records, never did.
     // ★ Cast: React Native's WebSocket takes a third `options` argument (headers, per-socket),
     //   which the DOM lib's type does not describe. The runtime honours it on both platforms.
-    const ws  = new (WebSocket as unknown as {
-      new (u: string, p: undefined, o: { headers: Record<string, string> }): WebSocket;
-    })(url, undefined, { headers: { 'User-Agent': USER_AGENT } });
+    // ★★★ ANDROID: THE SPECTRUM SOCKET IS RECEIVED NATIVELY (services/nativeSpecSocket.ts, docs/NATIVE-SPECTRUM-ENGINE.md).
+    //     Same URL, same User-Agent, same handshake (VibeSpecSocketModule.kt mirrors RN's); frames reach the waterfall
+    //     engine at arrival instead of when the JS thread is free, and every message still comes here, in order.
+    const nativeSock = nativeSpecSocketAvailable();
+    const ws  = nativeSock
+      ? (new NativeSpecSocket(url, undefined, { headers: { 'User-Agent': USER_AGENT } }, true) as unknown as WebSocket)
+      : new (WebSocket as unknown as {
+          new (u: string, p: undefined, o: { headers: Record<string, string> }): WebSocket;
+        })(url, undefined, { headers: { 'User-Agent': USER_AGENT } });
     ws.binaryType = 'arraybuffer';
     this.spectrumWs = ws;
 
@@ -1483,6 +1511,18 @@ export abstract class VibeServerWsClient {
         noteFault('vibe-spec', 'unknown-frame', new Error('neither text nor ArrayBuffer'), typeof e.data);
       }
     };
+
+    if (nativeSock) {
+      const nws = ws as unknown as NativeSpecSocket;
+      // A spectrum frame, decoded natively (the waterfall already has it). Counted and applied exactly as
+      // _parseBinaryFrame → _apply* would have, then the unchanged _emitSpectrum: meters, squelch, link, settle.
+      nws.onspec = (bins, freq, wireBytes) => {
+        specMsgCount++;
+        this.specBytes += wireBytes;
+        guard('vibe-spec', 'binary', () => this._applyNativeSpec(bins, freq), `len=${wireBytes}`);
+      };
+      nws.ondrained = () => this._mirrorView();
+    }
 
     // Ping doubles as the RTT probe for link quality (server excludes pings
     // from rate limiting, so 5s cadence is safe). One outstanding ping at a
