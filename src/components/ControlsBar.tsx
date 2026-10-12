@@ -638,6 +638,9 @@ export interface ControlsBarProps {
   /** ★ Landscape only: the window x of the VFO drum's + and the zoom drum's −, the station strip's text anchors
    *  (Stuart, 2026-10-03). null when there is no landscape pair (portrait, a single drum). */
   onDrumAnchors?: (a: { left: number; right: number } | null) => void;
+  /** ★★ The deck's frame in WINDOW coordinates + corner radius while it is OPAQUE and settled (Transparency off, or a
+   *  metal plate), else null — the waterfall skips shading what it hides (WaterfallView deckOcclusion). */
+  onDeckFrame?: (f: (Rect & { r: number }) | null) => void;
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -2995,7 +2998,7 @@ const lnd = StyleSheet.create({
  *  capped at SLIDE_MAX_MS. When the keys can be seen, they can be pressed. */
 const SLIDE_OFF = 600, SLIDE_BUILD_MS = 150, SLIDE_MIN_MS = 600, SLIDE_MAX_MS = 1500, SLIDE_UP_MS = 220;
 const SLIDE_PROBE_MS = 40, SLIDE_LAG_MS = 25;
-function useRotateSlide(W: number, H: number) {
+function useRotateSlide(W: number, H: number, onSettled?: React.MutableRefObject<(() => void) | undefined>) {
   const slide = rotSlide;   // ★ shared with the station strip (services/rotateReveal), so the two move together
   /* ★★ DECIDED IN THE RENDER, NOT AFTER IT (the tab, 20:02: "dropping off the screen is the issue"): moving the bar
    *  away in an effect let the first half-built frame of the new shape reach the screen before it went. The render that
@@ -3003,6 +3006,7 @@ function useRotateSlide(W: number, H: number) {
    *  slide), so no frame of the rebuild is ever seen. */
   const prev = useRef({ W, H });
   const away = useRef(false);
+  const sliding = useRef(false);   // between the reveal and the slide landing — the deck is not where it will be
   const awayAt = useRef(0);
   const p = prev.current;
   if (p.W !== W || p.H !== H) {
@@ -3029,10 +3033,12 @@ function useRotateSlide(W: number, H: number) {
     if (cap.current) { clearTimeout(cap.current); cap.current = null; }
     slide.setValue(SLIDE_OFF);
     away.current = false;
+    sliding.current = true;
     show();
     notifyRevealed();
-    Animated.timing(slide, { toValue: 0, duration: SLIDE_UP_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
-  }, [slide]);
+    Animated.timing(slide, { toValue: 0, duration: SLIDE_UP_MS, easing: Easing.out(Easing.cubic), useNativeDriver: true })
+      .start(() => { sliding.current = false; onSettled?.current?.(); });
+  }, [slide, onSettled]);
   const awayNow = away.current;
   useLayoutEffect(() => {
     if (!awayNow) return;
@@ -3046,7 +3052,7 @@ function useRotateSlide(W: number, H: number) {
     timer.current = setTimeout(() => reveal(), SLIDE_BUILD_MS);
   }, [reveal]);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); if (cap.current) clearTimeout(cap.current); }, []);
-  return { slide, onLayout, hidden: awayNow };
+  return { slide, onLayout, hidden: awayNow, sliding };
 }
 
 // ── Root ──────────────────────────────────────────────────────────────────────
@@ -3079,7 +3085,7 @@ function ControlsBar({
   onZoomSweep,
   vfoSweepRate,
   vfoMuxLabel,
-  onControlRects, onDrumAnchors,
+  onControlRects, onDrumAnchors, onDeckFrame,
   /* ★★★ AND THE FIVE THE BARS NEED. They are declared in ControlsBarProps and were arriving from SDRScreen,
    *  but this destructure never took them — so `shared` could not pass them on, and my first attempt at that
    *  fix referenced names that were not in scope, which threw "Property 'readOnly' doesn't exist" and bounced
@@ -3111,7 +3117,8 @@ function ControlsBar({
    *  layer. Silver / black are already an opaque plate; OFF only takes their drop shadow (below). */
   const solidDeck = fpTheme.opaque && !ct.plate;
   const s = useUiScale();
-  const rot = useRotateSlide(s.W, s.H);
+  const deckSettled = useRef<(() => void) | undefined>(undefined);
+  const rot = useRotateSlide(s.W, s.H, deckSettled);
 
   /* ★★ THE CHANNEL NAME IS THE READOUT ON THE RASTER (airband only — airChannel is null elsewhere). An
    *  8.33 kHz channel's name is not its frequency (118.010 tunes 118.0083 MHz), and the name is what a
@@ -3169,6 +3176,23 @@ function ControlsBar({
   const PAD_H   = !plate ? s.r(12) : band ? s.r(plate.screws ? 24 : 12) : s.r(14);
   const PAD_TOP = !plate ? s.r(8)  : band ? s.r(10) : s.r(14);
   const RADIUS  = !plate ? s.r(18) : s.r(plate.radius);
+
+  /* ★★ THE OPAQUE DECK'S FRAME, for the waterfall (onDeckFrame). Measured after every layout and when the rotation
+   *  slide lands; null while it is see-through, away, or sliding — the waterfall then draws everywhere, as before. */
+  const deckRef = useRef<View | null>(null);
+  const deckOpaque = !!plate || solidDeck;
+  const deckAway = rot.hidden;
+  const measureDeck = useCallback(() => {
+    if (!onDeckFrame) return;
+    if (!deckOpaque || deckAway || rot.sliding.current) { onDeckFrame(null); return; }
+    deckRef.current?.measureInWindow((x, y, w, h) => {
+      onDeckFrame(w > 0 && h > 0 ? { x, y, w, h, r: RADIUS } : null);
+    });
+  }, [onDeckFrame, deckOpaque, deckAway, RADIUS]);
+  deckSettled.current = measureDeck;
+  useEffect(() => { measureDeck(); }, [measureDeck]);
+  useEffect(() => () => onDeckFrame?.(null), [onDeckFrame]);
+  const onDeckLayout = useCallback(() => { rot.onLayout(); measureDeck(); }, [rot.onLayout, measureDeck]);
 
   // ★★ MAX-WIDTH CAP — the Mac app IS the iPad app, so on a Mac window (and
   // especially an ultrawide) the landscape bar's edge-to-edge thumb-reach
@@ -3231,7 +3255,7 @@ function ControlsBar({
   };
 
   return (
-    <Animated.View onLayout={rot.onLayout} style={[
+    <Animated.View ref={deckRef as any} onLayout={onDeckLayout} collapsable={false} style={[
       { transform: [{ translateY: rot.slide }], opacity: rot.hidden ? 0 : 1 },
       root.bar,
       {

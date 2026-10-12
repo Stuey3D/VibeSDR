@@ -9711,6 +9711,20 @@ export default function SDRScreen({ route, navigation }: Props) {
                              zoom?: { x: number; y: number; w: number; h: number } }>({});
   /** ★ Landscape: the window x of the VFO drum's + and the zoom drum's − — the station strip's text anchors. */
   const [drumAnchors, setDrumAnchors] = useState<{ left: number; right: number } | null>(null);
+  /* ★★ THE OPAQUE DECK, for the waterfall to skip (WaterfallView deckOcclusion). Kept with the window size it was
+   *  measured at: on the render that carries a rotation it no longer matches, so the waterfall draws everywhere
+   *  until the deck has landed and measured again — never a stale hole over a bare patch of screen. */
+  const [deckFrame, setDeckFrame] = useState<{ x: number; y: number; w: number; h: number; r: number; W: number; H: number } | null>(null);
+  const onDeckFrame = useCallback((f: { x: number; y: number; w: number; h: number; r: number } | null) => {
+    setDeckFrame(p => {
+      if (!f) return p ? null : p;
+      if (p && p.x === f.x && p.y === f.y && p.w === f.w && p.h === f.h && p.r === f.r && p.W === screenW && p.H === screenH) return p;
+      return { ...f, W: screenW, H: screenH };
+    });
+  }, [screenW, screenH]);
+  const deckOcclusion = useMemo(() => (
+    !controlsHidden && deckFrame && deckFrame.W === screenW && deckFrame.H === screenH ? deckFrame : null
+  ), [controlsHidden, deckFrame, screenW, screenH]);
   const onControlRects = useCallback((r: { vfo?: any; zoom?: any }) => {
     if (r.vfo)  ctrlRects.current.vfo  = r.vfo;
     if (r.zoom) ctrlRects.current.zoom = r.zoom;
@@ -10418,6 +10432,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Sits at the display centre until the dongle locks; then the view pans
         // on across the captured band and the marker slides off to the side.
         centerMarkerHz={localRf?.rf ?? status.centerHz}
+        deckOcclusion={deckOcclusion}
         showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
       />
       </PanelBoundary>
@@ -10950,6 +10965,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onZoomSweep={onZoomSweep}
           vfoSweepRate={vfoSweepRate}
           onControlRects={onControlRects}
+          onDeckFrame={onDeckFrame}
           onDrumAnchors={setDrumAnchors}
           onMode={onMode}
           onStep={onStepOpen}

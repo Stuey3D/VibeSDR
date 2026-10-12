@@ -258,6 +258,14 @@ export interface WaterfallViewProps {
   centerMarkerHz?:    number;
   showCenterMarker?:  boolean;
   centerMarkerColor?: string;     // default desaturated cyan
+  /**
+   * ★★ THE OPAQUE CONTROL DECK, in WINDOW coordinates (x, y, w, h, corner radius) — or null when nothing opaque
+   * covers the waterfall (Transparency on, the deck hidden, mid-rotation). The waterfall shader is then drawn only
+   * where it can be SEEN: the rows above the deck, the strips beside it, the gap below it. On the XCover 4s the GPU
+   * was the limit (busy 70–96 %, one 720×814 waterfall draw ≈ 11.7 ms of a 16.7 ms frame) and in portrait the deck
+   * hides about half the canvas — shading pixels nobody sees was half the cost. See docs/NATIVE-SPECTRUM-ENGINE.md.
+   */
+  deckOcclusion?: { x: number; y: number; w: number; h: number; r: number } | null;
 }
 
 // ── GPU waterfall shader (the v1 WebGL design, ported to SkSL) ───────────────
@@ -316,13 +324,28 @@ half4 main(float2 xy) {
   float r1 = mod(fI, uRows) + 0.5;
   float r2 = mod(fI + 1.0, uRows) + 0.5;
   float tx = clamp(xy.x / uDrawW * uTexW, 0.5, uTexW - 0.5);
-  float c  = mix(wf.eval(float2(tx, r1)).r, wf.eval(float2(tx, r2)).r, t);
-  if (uSharp > 0.0) {
-    float xl = max(tx - 1.0, 0.5);
-    float xr = min(tx + 1.0, uTexW - 0.5);
-    float l = mix(wf.eval(float2(xl, r1)).r, wf.eval(float2(xl, r2)).r, t);
-    float r = mix(wf.eval(float2(xr, r1)).r, wf.eval(float2(xr, r2)).r, t);
-    c = c + uSharp * (c - (l + r) * 0.5);
+  float c, l, r;
+  float xl = max(tx - 1.0, 0.5);
+  float xr = min(tx + 1.0, uTexW - 0.5);
+  if (t == 0.0 || t == 1.0) {
+    // ★★ ONE ROW, NOT TWO (2026-10-12, XCover 4s: GPU 78-96 % busy at 343 MHz and the waterfall updating far less
+    //    often than the UI). Settled, the blend is snapped, so a pixel shows ONE frame — but both frames were still
+    //    fetched (3 each for the unsharp) and mixed with a weight of 0 or 1. Fetch only the one shown: 7 texture reads
+    //    a pixel become 4, the picture identical. The tuning glide (t between 0 and 1) still blends, as before.
+    float rr = t == 0.0 ? r1 : r2;
+    c = wf.eval(float2(tx, rr)).r;
+    if (uSharp > 0.0) {
+      l = wf.eval(float2(xl, rr)).r;
+      r = wf.eval(float2(xr, rr)).r;
+      c = c + uSharp * (c - (l + r) * 0.5);
+    }
+  } else {
+    c = mix(wf.eval(float2(tx, r1)).r, wf.eval(float2(tx, r2)).r, t);
+    if (uSharp > 0.0) {
+      l = mix(wf.eval(float2(xl, r1)).r, wf.eval(float2(xl, r2)).r, t);
+      r = mix(wf.eval(float2(xr, r1)).r, wf.eval(float2(xr, r2)).r, t);
+      c = c + uSharp * (c - (l + r) * 0.5);
+    }
   }
   float raw = clamp(c, 0.0, 1.0);
   float s   = raw * raw * (3.0 - 2.0 * raw);
@@ -370,6 +393,7 @@ function WaterfallView({
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
   centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0',
+  deckOcclusion = null,
 }: WaterfallViewProps) {
 
   // ── Vertical layout ─────────────────────────────────────────────────────────
@@ -1900,6 +1924,34 @@ function WaterfallView({
     return { x, dashes };
   }, [showCenterMarker, centerMarkerHz, hzToX, width, height, bwHz]);
 
+  // ── Visible tiles (deckOcclusion) ───────────────────────────────────────────
+  // The deck arrives in WINDOW coordinates; this view's own window origin turns it into canvas coordinates.
+  const rootRef = useRef<View | null>(null);
+  const [rootWin, setRootWin] = useState<{ x: number; y: number } | null>(null);
+  const onRootLayout = useCallback(() => {
+    rootRef.current?.measureInWindow((x, y) => {
+      setRootWin(p => (p && p.x === x && p.y === y ? p : { x, y }));
+    });
+  }, []);
+  /** [x, y, w, h] in canvas coordinates, or null → one full-canvas Fill (as before). */
+  const wfTiles = useMemo((): [number, number, number, number][] | null => {
+    const d = deckOcclusion;
+    if (!d || !rootWin || !(width > 0) || !(wfH > 0)) return null;
+    // The hole: the deck's straight-sided middle band (the rounded corners stay drawn), pulled 1 pt further in so
+    // the deck's own edge pixels always have waterfall behind them.
+    const lx = d.x - rootWin.x, ly = d.y - rootWin.y - wfTop;
+    const x0 = Math.max(0, Math.ceil(lx + 1)), x1 = Math.min(width, Math.floor(lx + d.w - 1));
+    const y0 = Math.max(0, Math.ceil(ly + d.r + 1)), y1 = Math.min(wfH, Math.floor(ly + d.h - d.r - 1));
+    // Not worth a second draw for a sliver (a squat landscape deck, a deck mostly off the canvas).
+    if (x1 - x0 < 40 || y1 - y0 < 40) return null;
+    const t: [number, number, number, number][] = [];
+    if (y0 > 0)     t.push([0, 0, width, y0]);
+    if (x0 > 0)     t.push([0, y0, x0, y1 - y0]);
+    if (x1 < width) t.push([x1, y0, width - x1, y1 - y0]);
+    if (y1 < wfH)   t.push([0, y1, width, wfH - y1]);
+    return t;
+  }, [deckOcclusion, rootWin, width, wfH, wfTop]);
+
   // ── Skia paints ─────────────────────────────────────────────────────────────
   const peakPaint = useMemo(() => {
     const p = Skia.Paint();
@@ -2211,7 +2263,7 @@ function WaterfallView({
   // the 10Hz data rate. The canvas bounds clip the over-tall scrolling image.
   return (
     <GestureDetector gesture={gesture}>
-      <View style={[styles.root, { width, height }]}>
+      <View ref={rootRef} onLayout={onRootLayout} collapsable={false} style={[styles.root, { width, height }]}>
 
         {/* Instance spectrum backdrop — behind the line graph only (web
             parity); the canvases above are transparent in that region */}
@@ -2231,14 +2283,25 @@ function WaterfallView({
           {/* GPU waterfall: intensity ring + LUT sampled by the runtime
               shader; scroll/slide/sharpness/contrast are uniforms (UI-thread,
               zero React). Child order maps to `uniform shader wf, lut`. */}
-          {texReady && lutImage && WF_EFFECT && (
+          {texReady && lutImage && WF_EFFECT && (wfTiles ? (
+            /* ★★ Only where the waterfall can be seen — see deckOcclusion. One paint (the shader), up to four rects.
+               ★ antiAlias OFF: the tiles share edges, and an anti-aliased edge on a fractional device pixel would
+                 leave a faint seam where two of them meet. Off, the fill rule gives each pixel to exactly one. */
+            <Group antiAlias={false}>
+              <Shader source={WF_EFFECT} uniforms={wfUniforms}>
+                <ImageShader image={wfImage} fit="none" />
+                <ImageShader image={lutImage} fit="none" />
+              </Shader>
+              {wfTiles.map((t, i) => <Rect key={i} x={t[0]} y={t[1]} width={t[2]} height={t[3]} />)}
+            </Group>
+          ) : (
             <Fill>
               <Shader source={WF_EFFECT} uniforms={wfUniforms}>
                 <ImageShader image={wfImage} fit="none" />
                 <ImageShader image={lutImage} fit="none" />
               </Shader>
             </Fill>
-          )}
+          ))}
           {needleInWaterfall}
         </Canvas>
         )}
