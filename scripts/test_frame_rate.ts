@@ -74,8 +74,9 @@ eq('a pick ignores the auto rung', frameRateCapHz({ frameRate: '60' }, 30), 60);
 eq('rungs on 120 Hz: none → 60 → 30', autoFrameRungs(120), [0, 60, 30]);
 eq('rungs on 60 Hz: none → 30', autoFrameRungs(60), [0, 30]);
 ok('a still screen teaches nothing', !autoWindowLate(20, 20));
-ok('a quarter late is not enough', !autoWindowLate(300, 75));
-ok('the XCover tonight (4 % janky) stays', !autoWindowLate(300, 12));
+ok('a fast phone (1 % late) stays', !autoWindowLate(300, 3));
+ok('5 % exactly is not over it', !autoWindowLate(300, 15));
+ok('the XCover at 60 (≈ 7 % late) steps down — Stuart keeps it on 30', autoWindowLate(300, 21));
 ok('the XCover before the engine (59 % janky) steps down', autoWindowLate(250, 148));
 
 // ── Crash safety leaves it alone ─────────────────────────────────────────────

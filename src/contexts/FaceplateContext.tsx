@@ -18,7 +18,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode } from 'react';
-import { AccessibilityInfo, AppState, PixelRatio, Platform } from 'react-native';
+import { AccessibilityInfo, AppState, NativeModules, PixelRatio, Platform } from 'react-native';
 import { autoTextures, setAssetScale, TEXTURE_SCALE } from '../constants/assetDensity';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { makeMutable, useSharedValue, type SharedValue } from 'react-native-reanimated';
@@ -198,12 +198,14 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
     if (!autoOn || maxRefreshHz == null || !frameWatchAvailable()) return;
     const rungs = autoFrameRungs(maxRefreshHz);
     let lateRun = 0;
+    const diagLog = !!(NativeModules as any).VibePowerModule?.isDiagBuild?.();   // diagnostics builds: log each window
     startFrameWatch();
     takeFrameWatch();   // start the first window clean
     const t = setInterval(() => {
       if (AppState.currentState !== 'active') { takeFrameWatch(); lateRun = 0; return; }   // a background window says nothing
       const w = takeFrameWatch();
       if (!w) return;
+      if (diagLog) console.log(`[VibeDiag] frame-rate auto window: ${w.late}/${w.frames} late, run ${lateRun}`);
       if (!autoWindowLate(w.frames, w.late)) { lateRun = 0; return; }
       if (++lateRun < 2) return;
       lateRun = 0;

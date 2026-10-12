@@ -195,10 +195,10 @@ function runFrames(what, fc, shared, extra = {}) {
   // ★ The FRAME RATE pacing (src/services/uiCadence.ts), uncapped as the app runs by default — the same rule, in JS.
   const uiFrameCapHz = sv(0);
   extra = { ...extra,
-    uiFrameCapHz,
+    uiFrameCapHz, CADENCE_RUN_SHARE: 0.75,
     cadenceGap: (last, ts) => {
       const prev = last.value, cap = uiFrameCapHz.value;
-      if (cap > 0 && prev > 0 && ts - prev < 1000 / cap - 4) return -1;
+      if (cap > 0 && prev > 0 && ts - prev < 0.75 * (1000 / cap)) return -1;
       last.value = ts;
       return prev > 0 ? ts - prev : 16;
     },

@@ -29,7 +29,7 @@ import {
   LED_SPEC, RING_CLOSED, RING_OPEN, VU_LABELS, VU_SEGMENTS, VU_THRESHOLDS, eyeStep, ledColourOf, makeWindow,
   meterTick, pushSample, ringSegment, segmentTarget, sqlClosedOf, vuPos, type LedColourName,
 } from '../constants/meters';
-import { uiFrameCapHz } from '../services/uiCadence';
+import { CADENCE_RUN_SHARE, uiFrameCapHz } from '../services/uiCadence';
 import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite } from './glowSprite';
 import { useBoxSize } from './VfdParts';
@@ -249,7 +249,7 @@ function LedVu({ bus, height, shared, geom, onFault }: LedVuProps) {
       // ★ FRAME RATE cap (services/uiCadence): the cap's frame time is the minimum step — on vsync multiples, so a
       //   30 cap runs on every other vsync; the accumulator carries the skipped time, as for the 60 Hz rule above.
       const capHz = uiFrameCapHz.value;
-      const dt = meterTick(cad, f.timeSincePreviousFrame ?? 16, capHz > 0 ? 1000 / capHz - 4 : undefined);
+      const dt = meterTick(cad, f.timeSincePreviousFrame ?? 16, capHz > 0 ? CADENCE_RUN_SHARE * (1000 / capHz) : undefined);
       cadAcc.value = cad.acc;
       if (dt <= 0) return;
       const mu = muPos.value, sg = sigma.value;

@@ -522,12 +522,15 @@ export function autoFrameRungs(maxHz: number | null | undefined): number[] {
 }
 
 /** ★★ AUTO's rule — "Auto monitors system performance and chooses the appropriate frame rate" (Stuart). One
- *  measurement window (~5 s of frames) → is it a LATE window? More than a quarter of frames missing their slot,
+ *  measurement window (~5 s of frames) → is it a LATE window? More than 5 % of frames missing their slot,
  *  out of enough frames to judge (a still screen draws almost nothing, and nothing is learnt from it). Two late
  *  windows IN A ROW step down one rung — a rotation or a sheet opening is one late window, not two — and AUTO
  *  never steps back up within a session: up/down hunting is worse to look at than either rate (the meter-hunting
  *  lesson). A new launch measures afresh. */
-export const AUTO_LATE_SHARE = 0.25;
+// ★★ 5 %, STRICT (Stuart, 2026-10-12, after keeping the XCover 4s on 30: "I dont see any downsides to it so far" →
+//   "make auto stricter"). At 60 the XCover misses ~3–10 % of frames depending on the display; a fast phone ~0–1 %.
+//   At 25 % AUTO left the XCover at 60, where a paced 30 is the better experience; at 5 % it lands on 30 by itself.
+export const AUTO_LATE_SHARE = 0.05;
 export const AUTO_MIN_FRAMES = 60;
 export function autoWindowLate(frames: number, late: number): boolean {
   return frames >= AUTO_MIN_FRAMES && late / frames > AUTO_LATE_SHARE;
