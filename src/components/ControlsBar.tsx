@@ -1338,6 +1338,19 @@ function DotModeReadout({ reading, modeLabel, fmStereo, modeFontSize, readingFon
   </>);
 }
 
+/* ★★★ THE READING IS SUBSCRIBED HERE, IN THE MODE BOX — NOT IN THE WINDOW AROUND IT. The pill and the LED /
+ *  analogue window both called useModeReading themselves, so every change of the reading's text ("S9+19 dB", ~5 a
+ *  second on a live signal) re-rendered the WHOLE window — the frequency digits too, and on a dot / VCR face that is
+ *  a Skia canvas re-recorded from scratch for a frequency that had not moved. Counted on the XCover 4s (2026-10-12,
+ *  black metal, FT8): CompactDisplay 5 renders/s, DotField 11/s. Only the box shows the reading, so only the box
+ *  re-renders for it. */
+function LiveModeReadout({ bus, snrText, meterMode, signalActive, ...rest }: {
+  bus: MeterBus | undefined; snrText: string | undefined; meterMode: MeterUnit | undefined; signalActive: boolean | undefined;
+} & Omit<React.ComponentProps<typeof ModeReadout>, 'reading'>) {
+  const reading = useModeReading(bus, snrText, meterMode, signalActive);
+  return <ModeReadout reading={reading} {...rest} />;
+}
+
 function ModeReadout({ reading, modeLabel, fmStereo, modeFontSize, modeLs, snrWidth, readingFontSize, oneLine = false }: {
   reading: ModeReading; modeLabel: string; fmStereo: boolean; modeFontSize: number; modeLs: number;
   snrWidth?: number;
@@ -1470,7 +1483,6 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
     unitFontSize = Math.round(unitFontSize * 0.85); pillPadV = Math.max(1, Math.round(pillPadV * 0.6));
     modePadV = Math.max(1, Math.round(modePadV * 0.6));
   }
-  const reading = useModeReading(bus, snrText, meterMode, signalActive);
   return (
     // maxWidth cap: the pill must NEVER swallow the signal bar — on narrow
     // screens (SE / Moto G35) and with Android font metrics the fixed dp
@@ -1548,7 +1560,8 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
             now copies. Under any faceplate but the untouched default it is also held to ONE line, so a
             pill squeezed by the meter frame shrinks the label rather than wrap it; the default deck
             keeps today's exactly (§13.1). */}
-        <ModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo}
+        <LiveModeReadout bus={bus} snrText={snrText} meterMode={meterMode} signalActive={signalActive}
+          modeLabel={modeLabel} fmStereo={fmStereo}
           modeFontSize={modeFontSize} modeLs={modeLs} snrWidth={snrWidth} oneLine={!!ct.plate || dk.style !== 'hyper'} />
       </TouchableOpacity>
     </View>
@@ -1572,7 +1585,6 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
   const fp = useFaceplate();
   const dk = fp.deck;
   const s = useUiScale();
-  const reading = useModeReading(bus, snrText, meterMode, signalActive);
   const shared = !!sharedTuner;
   const lip = fp.chassis.plate?.windowLip ?? 'rgba(255,255,255,0.06)';
   const winBg = dk.style === 'nixie' ? '#060403' : dk.style === 'hyper' ? '#0a0807' : '#050505';
@@ -1644,7 +1656,8 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
         <TouchableOpacity ref={tourRef('modeBtn')} onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
           style={[cd.modeBox, { width: mb.width, paddingHorizontal: s.r(MODE_BOX.padH),
                                 borderLeftColor: 'rgba(255,255,255,0.10)' }]}>
-          <ModeReadout reading={reading} modeLabel={modeLabel} fmStereo={fmStereo} oneLine
+          <LiveModeReadout bus={bus} snrText={snrText} meterMode={meterMode} signalActive={signalActive}
+            modeLabel={modeLabel} fmStereo={fmStereo} oneLine
             modeFontSize={mb.fontSize} modeLs={mb.letterSpacing} readingFontSize={readingFont} />
         </TouchableOpacity>
         {/* The glass's inner shadow at the top and the lip below (`inset 0 2px 7px`, `0 1px 0 .25`). */}
