@@ -297,12 +297,20 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
    *    unmounted); +8 is the legends' own margins, which onLayout of the inner row does not include. */
   {
     const portrait = winH > winW;
-    const sidesW = leftW + (shown.annunciators ? rightW + 8 : 0);
+    /* ★★★ THE ROOM THE SIDES REALLY TAKE (2026-10-13, Galaxy Tab A9 upright: the station logo FLASHED, and the strip's
+     *  re-layouts many times a second brought the whole screen down — "the VTS is bringing it down"). Not anchored (any
+     *  portrait window), both side blocks are MIRRORED to the wider one's width (centreSides, minWidth sideW) so the
+     *  text sits on the strip's centre. This summed them as they are — less room than the mirror takes — so with the
+     *  sides hidden the line "would fit", they came back, the real window was narrower, it no longer fitted, they went…
+     *  Now the reserve is computed as laid out, and they come back only with 24 pt to spare (hysteresis): a
+     *  measurement a few points out can never start the loop again. */
+    const sidesW = shown.annunciators ? 2 * Math.max(leftW, rightW) + 8 : leftW;
     const withSides = textOnly ? areaW - sidesW : areaW;
+    const slack = textOnly ? 24 : 4;
     // ★ A phone in portrait never has the room (Stuart, 03:10: "in portrait drop the icons, centre justify and then
     //   expand and scroll"), so there it is always the text alone — no sides popping in and out between messages.
     //   A wider portrait window (iPad) keeps them while the line fits.
-    const want = portrait && (winW < 600 || (needW > 0 && withSides > 0 && needW > withSides - 4));
+    const want = portrait && (winW < 600 || (needW > 0 && withSides > 0 && needW > withSides - slack));
     if (want !== textOnly) setTextOnly(want);
   }
   /* ★★★ LANDSCAPE: THE TEXT RUNS FROM THE TUNE DRUM'S + TO THE ZOOM DRUM'S − (Stuart, 2026-10-03: "use the + of the
