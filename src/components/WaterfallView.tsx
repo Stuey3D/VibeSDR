@@ -1028,7 +1028,8 @@ function WaterfallView({
     );
     if (img) {
       swapWfImage(img, data); // UI-thread swap + retire old pair (1 MiB: 1024x1024 Gray_8)
-      uHead.value = frameCount.current;
+      // ★ The newest row in the IMAGE — which rows are SHOWN is the display-clock pacer's call (rowPace, below).
+      jsAvail.value = frameCount.current;
       if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
     } else {
       data.dispose();
@@ -1310,6 +1311,51 @@ function WaterfallView({
    *  at the measured row rate, whole rows, on this frame callback: an even beat, about one row (≈33 ms) behind. The
    *  lag is held near one row by nudging the rate (a backlog speeds it, none slows it); more than 3 behind (a stall,
    *  a resume) snaps to the newest. Glides (Sharp's slow feeds, every gesture) are untouched: they show the newest. */
+  /** One frame of the row pacer (see the note above): returns the row to SHOW. Shared by both paths — the native engine
+   *  (Android) and the JS path (iOS, and Android's fallback). `settled` false (a glide, a gesture) shows the newest. */
+  const rowPace = (avail: number, shownSv: { value: number }, accSv: { value: number }, rate: number,
+                   gap: number, settled: boolean): number => {
+    'worklet';
+    let shown = shownSv.value;
+    if (!settled || shown <= 0 || shown > avail || avail - shown > 3) {
+      shown = avail; accSv.value = 0;
+    } else {
+      const backlog = avail - shown;
+      let acc = accSv.value + rate * gap * (0.75 + 0.25 * backlog);
+      while (acc >= 1 && shown < avail) { shown++; acc -= 1; }
+      accSv.value = Math.min(acc, shown === avail ? 1 : 2);
+    }
+    shownSv.value = shown;
+    return shown;
+  };
+  // ── The JS path's pacer (iOS; Android without the engine). ★★ 2026-10-13: a bunched pair of frames (network jitter —
+  //   the status reading 21 fps for a second) stepped the iPhone's waterfall twice in quick succession; Android's engine
+  //   path already paced rows to the display. Same rule here: publishRing sets jsAvail, this shows rows on the clock.
+  const jsAvail  = useSharedValue(0);
+  const jsShown  = useSharedValue(0);
+  const jsAcc    = useSharedValue(0);
+  const jsRate   = useSharedValue(0.03);
+  const jsRateT  = useSharedValue(0);
+  const jsSeen   = useSharedValue(0);
+  const jsLast   = useSharedValue(0);
+  useFrameCallback((fi) => {
+    'worklet';
+    if (specDead.value) return;
+    const gap = cadenceGap(jsLast, fi.timestamp);
+    if (gap < 0) return;
+    const avail = jsAvail.value;
+    if (avail <= 0) return;
+    if (avail !== jsSeen.value) {   // rows arrived: the row rate, as the engine path measures it
+      const k = avail - jsSeen.value, dtA = fi.timestamp - jsRateT.value;
+      if (jsSeen.value > 0 && k > 0 && jsRateT.value > 0 && dtA > 0 && dtA < 1000) jsRate.value = jsRate.value * 0.9 + (k / dtA) * 0.1;
+      jsRateT.value = fi.timestamp;
+      jsSeen.value = avail;
+    }
+    const settled = uQuantSv.value >= 0.5 && scrollFrac.value >= 1;
+    const shown = rowPace(avail, jsShown, jsAcc, jsRate.value, gap, settled);
+    if (uHead.value !== shown) uHead.value = shown;
+  }, engine == null);
+
   const engAvail = useSharedValue(0);    // the newest row in the image
   const engShown = useSharedValue(0);    // the newest row on screen (uHead while settled)
   const engAcc   = useSharedValue(0);
@@ -1391,19 +1437,7 @@ function WaterfallView({
     }
     // ── Which rows are shown (see engAvail) ──
     {
-      const avail = engAvail.value;
-      let shown = engShown.value;
-      if (engGlideOn.value || uQuantSv.value < 0.5) {
-        shown = avail; engAcc.value = 0;
-      } else if (shown <= 0 || shown > avail || avail - shown > 3) {
-        shown = avail; engAcc.value = 0;
-      } else {
-        const backlog = avail - shown;
-        let acc = engAcc.value + engRate.value * gap * (0.75 + 0.25 * backlog);
-        while (acc >= 1 && shown < avail) { shown++; acc -= 1; }
-        engAcc.value = Math.min(acc, shown === avail ? 1 : 2);
-      }
-      engShown.value = shown;
+      const shown = rowPace(engAvail.value, engShown, engAcc, engRate.value, gap, !engGlideOn.value && uQuantSv.value >= 0.5);
       if (uHead.value !== shown) uHead.value = shown;
     }
     if (engGlideOn.value && glideTick(fi.timestamp)) engGlideOn.value = false;

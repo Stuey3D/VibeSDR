@@ -121,7 +121,7 @@ import { useTheme }                                     from '../contexts/ThemeC
 
 import WaterfallView   from '../components/WaterfallView';
 import RotateFade from '../components/RotateFade';
-import ControlsBar, { createMeterBus, meterText } from '../components/ControlsBar';
+import ControlsBar, { createMeterBus, meterText, type MeterValues } from '../components/ControlsBar';
 import { setDrumHaptics } from '../components/DrumWheel';
 import { sweepTargetRate, createHoldSweep } from '../components/TunerKeys';
 import KeyboardShortcuts from '../components/KeyboardShortcuts';
@@ -3292,6 +3292,41 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    quality, the network quality and the rung, so an undecided rung simply does not pull it
    *    down. There was nothing to hide. */
   const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
+  /* ★★ THE SIGNAL READING PACED TO THE FEED (2026-10-13, Stuart: Moto and iPhone "a little burst of juddery frames" at
+   *  the same moment, when the status read 21 fps for a second — network jitter: one frame late, the next early, both
+   *  arriving together). Each reading went to the bus the moment it arrived, so a bunched pair moved the needle twice in
+   *  a few ms — it leapt. Now a reading that comes sooner than ¾ of the feed's usual interval after the last one is held
+   *  until then (one held at a time; the newest wins). Normal frames pass straight through — no added latency. The
+   *  per-frame smoothing (meterSmooth, squelch) still runs on arrival; only the HAND-OFF to the meters is paced. */
+  const meterPace = useRef<{ lastArrive: number; lastEmit: number; avg: number;
+                             timer: ReturnType<typeof setTimeout> | null; pending: Partial<MeterValues> | null }>(
+    { lastArrive: 0, lastEmit: 0, avg: 50, timer: null, pending: null });
+  const pacedSignalEmit = useCallback((sig: Partial<MeterValues>) => {
+    const P = meterPace.current;
+    const now = performance.now();
+    const gapA = now - P.lastArrive;
+    if (P.lastArrive > 0 && gapA > 0 && gapA < 1000) P.avg = P.avg * 0.9 + gapA * 0.1;
+    P.lastArrive = now;
+    // ★ Spread the current value FIRST so this per-frame signal emit doesn't wipe kbps/fps — they're set ~1/sec by
+    //   the rate emit, and rebuilding the object without them made the KB/FPS readout flash on then vanish on the next
+    //   frame (Stuart 2026-07-24). Merged at EMIT time, so a held reading carries the bus's latest link and rate.
+    const send = (v: Partial<MeterValues>) => {
+      if (destroyed.current) return;
+      const b = meterBus.current;
+      b.emit({ ...b.value, ...v, link: b.value.link });
+      P.lastEmit = performance.now();
+    };
+    if (P.timer) { P.pending = sig; return; }
+    const due = P.lastEmit + 0.75 * P.avg;
+    if (now >= due) { send(sig); return; }
+    P.pending = sig;
+    P.timer = setTimeout(() => {
+      P.timer = null;
+      const v = P.pending; P.pending = null;
+      if (v) send(v);
+    }, due - now);
+  }, []);
+  useEffect(() => () => { const t = meterPace.current.timer; if (t) clearTimeout(t); }, []);
   // SNR from radiod's channel status (basebandPower − noiseDensity), pushed by
   // native per audio packet. This is the demodulator's own measurement (zoom-
   // independent, unlike the spectrum). −30 corrects radiod's known +30 dB
@@ -6199,16 +6234,11 @@ export default function SDRScreen({ route, navigation }: Props) {
           // background are exactly what starved the audio DSP in v6. Nobody can
           // see the phone's meter anyway — the watch gets its level above.
           if (appActiveRef.current) {
-            meterBus.current.emit({
-              // ★ Spread the current value FIRST so this per-frame signal emit doesn't wipe kbps/fps —
-              // they're set ~1/sec by the rate emit, and rebuilding the object without them made the
-              // KB/FPS readout flash on then vanish on the next frame (Stuart 2026-07-24).
-              ...meterBus.current.value,
+            pacedSignalEmit({
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
               // ★ The unsmoothed level, for the faceplate meters (the needle springs from it).
               raw: norm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
-              link: meterBus.current.value.link,
               sql: sqlN, sqlVal, gate,
             });
           }
