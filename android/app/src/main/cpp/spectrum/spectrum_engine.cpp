@@ -243,7 +243,15 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     if (lastFrameTs_ > 0 && !boost) avgFrameMs_ = avgFrameMs_ * 0.8 + (now - lastFrameTs_) * 0.2;
     lastFrameTs_ = now;
     const bool lowFps = avgFrameMs_ > 66;
-    const bool wfBoost = boost || (cfg.smoothTune && lowFps);
+    // ★★★ NO GLIDE WHILE REPEAT ROWS CARRY THE SCROLL (Stuart, XCover 4s on an 8 fps server, 2026-10-12: "about 5
+    //   seconds of beautiful smooth scroll then juddering mess again"). Those 5 s were the frame-time average still
+    //   below 66 ms: whole-row steps only, evenly spaced. Once it settled at 125 ms the glide switched on as well, and
+    //   a glide over the frame interval with whole rows landing on top of it is two motions fighting. When the setting
+    //   asks for more rows than the feed sends (Default 30, Smooth 40 from 8 fps), the repeat rows ARE the motion —
+    //   even one-row steps, as the Mac shows on the same server. Sharp (no repeat rows) keeps its glide; a gesture
+    //   always glides.
+    const bool repeatsCarry = cfg.targetRows > 0 && avgFrameMs_ > 0 && 1000.0 / avgFrameMs_ < cfg.targetRows;
+    const bool wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
     if (lastWfPushAt_ > 0) {
         const double wfDt = now - lastWfPushAt_;
@@ -252,7 +260,12 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     lastWfPushAt_ = now;
     const double rowCentre = std::isnan(f.trueCenterHz) ? f.centerHz : f.trueCenterHz;
     const double rowHzBin = (f.bwHz > 0 && n > 0) ? f.bwHz / n : 0;
-    pushRow(fr.row, n, rowCentre, rowHzBin);
+    // ★★ The row is published TOGETHER with the scroll state below (one lock, one version): the UI must never see
+    //   the new head without the glide restart that goes with it. Apart, a poll between the two showed the head
+    //   one row on with the old glide still at 1 — the whole waterfall a row forward for one frame, then back —
+    //   at every real frame: the judder on an 8 fps feed (XCover 4s, 2026-10-12). The JS path does both in one
+    //   synchronous call, so it never could.
+    pushRow(fr.row, n, rowCentre, rowHzBin, false);
     lastRow_.assign(fr.row, fr.row + n);
     lastRowCenterHz_ = rowCentre; lastRowHzPerBin_ = rowHzBin;
 
@@ -272,8 +285,10 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     extraSpacing_ = dur / (extras + 1);
     extraDueAt_ = (extras > 0 && extraSpacing_ > 0) ? now + extraSpacing_ : -1;
 
+    void* img = covNow_ ? nullptr : makeRingImage();
     {
         std::lock_guard<std::mutex> lk(mx_);
+        if (img) storeRingImageLocked(img);
         outQuant_ = wfBoost ? 0 : 1;
         outAvgMs_ = avgFrameMs_;
         scrollGen_++; glide_ = wfBoost; glideDur_ = std::max(1.0, dur);
@@ -283,7 +298,7 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
 }
 
 // pushRow (851-941)
-void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, double rowHzPerBin) {
+void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, double rowHzPerBin, bool publish) {
     const uint8_t* row = src;
     int n = srcN;
     if (srcN != RING_W) {
@@ -325,22 +340,28 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
         else       std::memcpy(dst, row - o, n + o);
     }
     frameCount_ += 1;
-    if (covNow_) { ringDirty_ = true; return; }
+    if (covNow_ || !publish) { ringDirty_ = true; return; }
     publishRing();
 }
 
 // publishRing (944-962): the image is made HERE, on the engine thread — never on JS or the UI
 void SpectrumEngine::publishRing() {
-    if (ring_.empty()) return;
-    ringDirty_ = false;
-    void* img = makeImage_(ring_.data(), RING_W, RING_ROWS, RING_W);
+    void* img = makeRingImage();
     if (!img) return;
     std::lock_guard<std::mutex> lk(mx_);
+    storeRingImageLocked(img);
+    outVer_++;
+}
+void* SpectrumEngine::makeRingImage() {
+    if (ring_.empty()) return nullptr;
+    ringDirty_ = false;
+    return makeImage_(ring_.data(), RING_W, RING_ROWS, RING_W);
+}
+void SpectrumEngine::storeRingImageLocked(void* img) {
     if (outImage_) releaseImage_(outImage_);   // superseded before the UI took it: never wrapped
     outImage_ = img;
     outHead_ = frameCount_;
     texReady_ = true;
-    outVer_++;
 }
 
 // emitRepeatRows(1) (1003-1008): the last row again, aligned against the view as it is NOW

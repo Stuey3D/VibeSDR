@@ -106,8 +106,10 @@ private:
     void enqueue(Frame&& f, double now);     // enqueueFrame
     void drain(double now);                  // drainFrame
     void handleFrame(const Frame& f, double now);
-    void pushRow(const uint8_t* src, int srcN, double rowCenterHz, double rowHzPerBin);
+    void pushRow(const uint8_t* src, int srcN, double rowCenterHz, double rowHzPerBin, bool publish = true);
     void publishRing();
+    void* makeRingImage();   // a new image of the ring as it stands (no lock), or nullptr
+    void storeRingImageLocked(void* img);   // with mx_ held
     void emitRepeatRow();
     void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost);
     double now() const;
