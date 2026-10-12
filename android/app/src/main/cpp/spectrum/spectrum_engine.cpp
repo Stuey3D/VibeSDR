@@ -167,6 +167,17 @@ void SpectrumEngine::runDue(double now) {
     }
     if (!covNow_ && wasCov && ringDirty_) publishRing();        // uncover: ONE texture from the ring as it stands
 
+    // ★★ A WALL CLOCK PUT BACK strands every deadline in the future: the next drain would wait the whole
+    //    step (minutes) with frames queued behind it — a frozen waterfall. No deadline is ever legitimately
+    //    more than a second ahead (drain caps dur at 1000 ms), so one that is was set by the old clock.
+    //  ★ The clock stays wall time because lastInteractAt arrives from JS as Date.now(); moving both to a
+    //    monotonic clock is the proper follow-up.
+    if (jbDueAt_ > now + 1000) jbDueAt_ = now;
+    if (extraDueAt_ > now + 1000) extraDueAt_ = now;
+    {
+        std::lock_guard<std::mutex> lk(mx_);
+        if (nativeFedUntil_ > now + NATIVE_FED_MS) nativeFedUntil_ = 0;
+    }
     for (auto& f : arrived) enqueue(std::move(f), f.arrivedMs);
     if (jbDueAt_ >= 0 && now >= jbDueAt_) { jbDueAt_ = -1; drain(now); }
     if (extraDueAt_ >= 0 && now >= extraDueAt_) {

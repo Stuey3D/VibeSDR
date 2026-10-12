@@ -16,6 +16,7 @@ const gauss = () => { let s = 0; for (let i = 0; i < 6; i++) s += rnd(); return 
 
 let clock = 1_700_000_000_000;
 Date.now = () => clock;
+performance.now = () => clock;   // ★ signalProcessor.ts reads the monotonic clock now (monoNow)
 
 const inBuf = [], outBuf = [];
 const push = (arr, b) => arr.push(Buffer.from(b));

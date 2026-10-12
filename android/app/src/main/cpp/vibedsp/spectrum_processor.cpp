@@ -57,7 +57,9 @@ double SpectrumProcessor::slewFloor(double want, double now) {
     if (!lastMinAt_ || !std::isfinite(actualMinDb_) || adoptRange_) {
         lastMinAt_ = now; return want;
     }
-    const double dt = jmin(0.25, (now - lastMinAt_) / 1000);
+    // ★ >= 0 as well as <= 0.25: the engine's clock is the WALL clock, and a clock put back makes dt
+    //   negative — a negative step throws the floor AWAY from its target (signalProcessor.ts monoNow).
+    const double dt = jmax(0.0, jmin(0.25, (now - lastMinAt_) / 1000));
     lastMinAt_ = now;
     const double step = MAX_SLEW_DB_PER_SEC * dt;
     const double d = want - actualMinDb_;
@@ -177,14 +179,15 @@ SpectrumFrameOut SpectrumProcessor::process(const float* bins, int n, double cen
             const double targetMax = std::ceil(peakDb + RANGE_MARGIN);
 
             maxHistory_.push_back({targetMax, now});
-            while (!maxHistory_.empty() && now - maxHistory_.front().ts > MAX_HISTORY_MS) maxHistory_.pop_front();
+            // ★ A sample stamped in the future (clock put back) would never age out — drop it too.
+            while (!maxHistory_.empty() && (now - maxHistory_.front().ts > MAX_HISTORY_MS || maxHistory_.front().ts > now)) maxHistory_.pop_front();
             double sumMax = 0; for (const auto& e : maxHistory_) sumMax += e.value;
             const double wantMaxDb = sumMax / (double)maxHistory_.size() - s.autoContrast;
 
             if (!lastMaxAt_ || !std::isfinite(actualMaxDb_) || adoptRange_) {
                 actualMaxDb_ = wantMaxDb;
             } else {
-                const double dt = lastMaxAt_ ? jmin(0.25, (now - lastMaxAt_) / 1000) : 0.05;
+                const double dt = lastMaxAt_ ? jmax(0.0, jmin(0.25, (now - lastMaxAt_) / 1000)) : 0.05;   // ★ >= 0: see slewFloor
                 const double maxStep = MAX_SLEW_DB_PER_SEC * dt;
                 const double delta = wantMaxDb - actualMaxDb_;
                 actualMaxDb_ += std::fabs(delta) <= maxStep ? delta : jsign(delta) * maxStep;
@@ -194,7 +197,7 @@ SpectrumFrameOut SpectrumProcessor::process(const float* bins, int n, double cen
             const bool floorTrust = !(bwHz > 0 && bwHz < FLOOR_FREEZE_SPAN_HZ);
             if (floorTrust || !haveFrozenFloor_) {
                 minHistory_.push_back({targetMin, now});
-                while (!minHistory_.empty() && now - minHistory_.front().ts > MIN_HISTORY_MS) minHistory_.pop_front();
+                while (!minHistory_.empty() && (now - minHistory_.front().ts > MIN_HISTORY_MS || minHistory_.front().ts > now)) minHistory_.pop_front();
                 double sumMin = 0; for (const auto& e : minHistory_) sumMin += e.value;
                 const double avgMin = sumMin / (double)minHistory_.size();
                 actualMinDb_ = slewFloor(avgMin + s.autoContrast, now);

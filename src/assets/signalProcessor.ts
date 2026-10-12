@@ -168,6 +168,19 @@ export interface ProcessedFrame {
  *  rolling window turns over is a ramp rather than a flash. */
 const MAX_SLEW_DB_PER_SEC = 40;
 
+/** ★★★ A MONOTONIC CLOCK, NEVER THE WALL CLOCK. Every interval below (the slew limit, the history
+ *  windows, the EMA's dt) was measured with Date.now(), and a wall clock can go BACKWARDS — a user
+ *  correcting the time, or a time sync stepping it (a summer-time change does NOT: epoch time never
+ *  jumps). Five minutes back made the slew dt = -300 s: the "limit" became -12 000 dB,
+ *  |delta| <= -12 000 is never true, so the range was thrown 12 000 dB the WRONG way in one frame and then crawled home at 40 dB/s — for exactly
+ *  the five minutes the clock had been moved. The spectrum axis read -7740 dB and the display was
+ *  a solid gradient while the S-meter read normally (NickB, 2026-10-12, HF+ on the web client).
+ *  ★ performance.now() is monotonic in browsers and in Hermes; Date.now() only where it is absent. */
+const monoNow: () => number =
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? () => performance.now()
+    : () => Date.now();
+
 export class SignalProcessor {
   private settings: SignalProcessorSettings = { ...DEFAULT_PROCESSOR_SETTINGS };
 
@@ -232,7 +245,9 @@ export class SignalProcessor {
     if (!this.lastMinAt || !Number.isFinite(this.actualMinDb) || this.adoptRange) {
       this.lastMinAt = now; return want;
     }
-    const dt = Math.min(0.25, (now - this.lastMinAt) / 1000);
+    // ★ Clamped at 0 as well as 0.25: a negative dt makes the step negative, and a negative step
+    //   moves the floor AWAY from its target (see monoNow).
+    const dt = Math.max(0, Math.min(0.25, (now - this.lastMinAt) / 1000));
     this.lastMinAt = now;
     const step = MAX_SLEW_DB_PER_SEC * dt;
     const d = want - this.actualMinDb;
@@ -243,7 +258,7 @@ export class SignalProcessor {
   process(bins: Float32Array, centerHz: number, bwHz: number, interacting = false): ProcessedFrame {
     const n = bins.length;
     const s = this.settings;
-    const now = Date.now();
+    const now = monoNow();
     const dtSec = this.lastFrameMs
       ? Math.min(0.5, Math.max(0.01, (now - this.lastFrameMs) / 1000))
       : 0.1;
@@ -414,7 +429,9 @@ export class SignalProcessor {
         // frame); entries are time-ordered so expired ones sit at the front.
         const maxs = this.maxHistory;
         maxs.push({ value: targetMax, ts: now });
-        while (maxs.length && now - maxs[0].ts > MAX_HISTORY_MS) maxs.shift();
+        // ★ A sample stamped in the FUTURE (a clock that went backwards) would never age out —
+        //   it would pin the average until the clock caught up. Drop it with the expired ones.
+        while (maxs.length && (now - maxs[0].ts > MAX_HISTORY_MS || maxs[0].ts > now)) maxs.shift();
         let sumMax = 0; for (let i = 0; i < maxs.length; i++) sumMax += maxs[i].value;
         const wantMaxDb = sumMax / maxs.length - s.autoContrast;
 
@@ -433,7 +450,7 @@ export class SignalProcessor {
           // value would make the waterfall fade in on every connect.
           this.actualMaxDb = wantMaxDb;
         } else {
-          const dt = this.lastMaxAt ? Math.min(0.25, (now - this.lastMaxAt) / 1000) : 0.05;
+          const dt = this.lastMaxAt ? Math.max(0, Math.min(0.25, (now - this.lastMaxAt) / 1000)) : 0.05;   // ★ >= 0: see monoNow
           const maxStep = MAX_SLEW_DB_PER_SEC * dt;        // dB this frame may move
           const delta = wantMaxDb - this.actualMaxDb;
           this.actualMaxDb += Math.abs(delta) <= maxStep ? delta : Math.sign(delta) * maxStep;
@@ -452,7 +469,7 @@ export class SignalProcessor {
         if (floorTrust || this.frozenFloorDb === null) {
           const mins = this.minHistory;
           mins.push({ value: targetMin, ts: now });
-          while (mins.length && now - mins[0].ts > MIN_HISTORY_MS) mins.shift();
+          while (mins.length && (now - mins[0].ts > MIN_HISTORY_MS || mins[0].ts > now)) mins.shift();
           let sumMin = 0; for (let i = 0; i < mins.length; i++) sumMin += mins[i].value;
           const avgMin = sumMin / mins.length;
           this.actualMinDb = this.slewFloor(avgMin + s.autoContrast, now);

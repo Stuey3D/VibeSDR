@@ -653,8 +653,8 @@ export class SpectrumClient {
   private pendingView: { frequency: number; binBandwidth: number } | null = null;
   private sendTimer: number | null = null;
   /** When this client last tuned itself — see the dial-follow in the config handler. */
-  private lastLocalTuneAt = 0;
-  private lastSendAt = 0;
+  private lastLocalTuneAt = -Infinity;   // ★ -Infinity, not 0: performance.now() starts at 0 with the page
+  private lastSendAt = -Infinity;
   private pingTimer: number | null = null;
   private lastPingAt = 0;
   /* ★★★ TUNES ON THE WIRE ARE PACED BY THE SERVER'S LOAD (src/services/tunePace.ts — the app's rule, one
@@ -677,7 +677,7 @@ export class SpectrumClient {
   }
   private pendingGain: { tenthDb: number; auto: boolean } | null = null;
   private gainTimer: number | null = null;
-  private lastGainAt = 0;
+  private lastGainAt = -Infinity;
   private reconnectTimer: number | null = null;
   /** Set when the server told us it is busy — suppresses the auto-reconnect. */
   private refused = false;
@@ -931,7 +931,7 @@ export class SpectrumClient {
         //    station and moving the readout would just make it jitter.
         {
           const bw = Math.abs(this.bandwidthHigh - this.bandwidthLow) || 3000;
-          const settled = Date.now() - this.lastLocalTuneAt > 1500;
+          const settled = performance.now() - this.lastLocalTuneAt > 1500;
           // ★★★ THE READOUT FOLLOWS EVERY MOVE; only the EXPENSIVE half waits for a real jump.
           //     Gating the adopt on the demodulator's bandwidth meant 100 kHz steps on WFM (~200
           //     kHz wide) never registered, so a mirror lagged and then settled on the wrong
@@ -1472,7 +1472,7 @@ export class SpectrumClient {
     //    buffered audio is still substantially the signal you are listening to, so it is kept.
     if (this.dabHeld) return;            // ★ see dabHeld — the multiplex is the tuning
     const prev = this.frequency;
-    this.lastLocalTuneAt = Date.now();   // ★ so a config echo is not mistaken for somebody else
+    this.lastLocalTuneAt = performance.now();   // ★ so a config echo is not mistaken for somebody else
     if (frequency) this.frequency = Math.round(frequency);
     {
       const bw = Math.abs(this.bandwidthHigh - this.bandwidthLow) || 3000;
@@ -1687,7 +1687,7 @@ export class SpectrumClient {
    */
   setHwGain(tenthDb: number, auto: boolean) {
     this.pendingGain = { tenthDb, auto };
-    const wait = this.lastGainAt + GAIN_SEND_MS - Date.now();
+    const wait = this.lastGainAt + GAIN_SEND_MS - performance.now();
     if (wait <= 0) { this._flushGain(); return; }
     if (!this.gainTimer) {
       this.gainTimer = window.setTimeout(() => {
@@ -1701,7 +1701,7 @@ export class SpectrumClient {
     const p = this.pendingGain;
     if (!p) return;
     this.pendingGain = null;
-    this.lastGainAt = Date.now();
+    this.lastGainAt = performance.now();
     this._send(p.auto ? { type: 'gain', auto: true } : { type: 'gain', value: Math.round(p.tenthDb) });
   }
   setHwBiasT(on: boolean)  { this._send({ type: 'biasT', on }); }
@@ -1744,15 +1744,18 @@ export class SpectrumClient {
 
   // ── Coalesced view sender ──────────────────────────────────────────────────
 
+  // ★ performance.now(), not Date.now(), for every INTERVAL in this file: a clock put back five minutes
+  //   made each of these "wait" five minutes — a zoom or gain change sent late, a tune echo mistaken
+  //   for somebody else's (NickB, 2026-10-12; see signalProcessor.ts monoNow).
   private _viewInFlight(): boolean {
-    return Date.now() - this.lastSendAt < VIEW_SETTLE_MS;
+    return performance.now() - this.lastSendAt < VIEW_SETTLE_MS;
   }
 
   /** Keep only the latest target; send ≤1 per VIEW_SEND_MS, trailing edge always
    *  delivered so the final position of a gesture lands. */
   private _sendView(frequency: number, binBandwidth: number) {
     this.pendingView = { frequency, binBandwidth };
-    const wait = this.lastSendAt + VIEW_SEND_MS - Date.now();
+    const wait = this.lastSendAt + VIEW_SEND_MS - performance.now();
     if (wait <= 0) { this._flushView(); return; }
     if (!this.sendTimer) {
       this.sendTimer = window.setTimeout(() => {
@@ -1768,7 +1771,7 @@ export class SpectrumClient {
     };
     if (!p.frequency || !p.binBandwidth) return;
     this.pendingView = null;
-    this.lastSendAt = Date.now();
+    this.lastSendAt = performance.now();
     this._send({ type: 'zoom', frequency: p.frequency, binBandwidth: p.binBandwidth });
   }
 }
