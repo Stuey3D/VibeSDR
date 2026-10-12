@@ -515,10 +515,16 @@ export function frameRateChoices(maxHz: number | null | undefined): PaneChoice<F
 }
 
 /** The rungs AUTO may step down through, fastest first, in cap Hz (0 = no cap): [0, 60, 30] on a panel above
- *  60 Hz, [0, 30] on a 60 Hz one (its "no cap" already IS 60). */
-export function autoFrameRungs(maxHz: number | null | undefined): number[] {
+ *  60 Hz, [0, 30] on a 60 Hz one (its "no cap" already IS 60).
+ *  ★★★ ON ANDROID AUTO STARTS AT 60 on a panel above 60 Hz: [60, 30] (Stuart, 2026-10-12, Moto G35). At the panel's
+ *    own rate (an OEM's adaptive 90 / 120) the analogue needle juddered across the dial — "night and day" against
+ *    the iPhone — while a FIXED 60 was "silky", and 30 as well. Above 60 an Android phone redraws every canvas at a rate
+ *    its display policy keeps moving, for no visible gain; 120 stays a manual pick. iOS keeps the panel's maximum:
+ *    ProMotion drives every frame from the display link and was never the problem. */
+export function autoFrameRungs(maxHz: number | null | undefined, os: string = 'ios'): number[] {
   const hz = normaliseHz(maxHz);
-  return hz != null && hz > 60 ? [0, 60, 30] : [0, 30];
+  if (hz != null && hz > 60) return os === 'android' ? [60, 30] : [0, 60, 30];
+  return [0, 30];
 }
 
 /** ★★ AUTO's rule — "Auto monitors system performance and chooses the appropriate frame rate" (Stuart). One

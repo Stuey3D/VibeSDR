@@ -196,7 +196,8 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const autoOn = settings.frameRate === 'auto';
   useEffect(() => {
     if (!autoOn || maxRefreshHz == null || !frameWatchAvailable()) return;
-    const rungs = autoFrameRungs(maxRefreshHz);
+    const rungs = autoFrameRungs(maxRefreshHz, Platform.OS);
+    setAutoHz((cur: number) => (rungs.includes(cur) ? cur : rungs[0]));   // ★ Android above 60 Hz starts at 60
     let lateRun = 0;
     const diagLog = !!(NativeModules as any).VibePowerModule?.isDiagBuild?.();   // diagnostics builds: log each window
     startFrameWatch();
