@@ -41,7 +41,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Image as RNImage, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
+import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
   Canvas,
   Fill,
@@ -333,6 +333,25 @@ half4 main(float2 xy) {
 }`;
 const WF_EFFECT = Skia.RuntimeEffect.Make(WF_SKSL);
 
+/** The native spectrum engine's host object (cpp/spectrum/spectrum_jsi.cpp). JS calls the setters and push; the UI
+ *  thread calls poll. */
+interface SpectrumEngineHost {
+  push(bins: Float32Array, centerHz: number, bwHz: number, trueCenterHz: number | undefined, lastInteractAt: number): void;
+  setView(centerHz: number, bwHz: number): void;
+  setConfig(c: { width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
+                 smoothTune: boolean; targetRows: number }): void;
+  setSettings(s: Record<string, number | boolean>): void;
+  setBackground(bg: boolean): void;
+  setCovered(c: boolean): void;
+  liveRange(): [number, number] | null;
+  poll(): {
+    image?: SkImage; head: number; texReady: boolean; quant: number; avgMs: number;
+    scrollGen: number; glide: boolean; glideDur: number;
+    specGen: number; specHidden: boolean; spec?: number[];
+    peakGen: number; peak?: SkPath;
+  } | null;
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 function WaterfallView({
@@ -448,6 +467,21 @@ function WaterfallView({
   /** Scratch for the resample — reused, never per-frame allocated. */
   const rowBuf = useRef(new Uint8Array(RING_W));
   const proc = useRef(new SignalProcessor());
+  /* ★★★ THE NATIVE SPECTRUM ENGINE (Android; docs/NATIVE-SPECTRUM-ENGINE.md, cpp/spectrum). On the Galaxy XCover 4s the
+   *  waterfall "renders smoothly then crawls for a bit" (Stuart, 2026-10-12): every row came through the JS thread —
+   *  jitter buffer, SignalProcessor, ring, a 1 MiB image per row, repeat rows on setTimeout — so whenever JS was busy
+   *  (React, GC, DAB updates) rows arrived late and then in a burst. With the engine, all of that runs on its own
+   *  native thread: JS hands each frame over in ONE call and forwards the state it owns, and one UI-thread callback
+   *  picks up the finished image, trace and peak (enginePoll below). The JS path is untouched and remains for iOS and
+   *  as the fallback when the engine cannot load. */
+  const engine = useMemo<SpectrumEngineHost | null>(() => {
+    if (Platform.OS !== 'android') return null;
+    try {
+      const g = globalThis as unknown as { __vibeSpectrumCreate?: () => SpectrumEngineHost };
+      if (!g.__vibeSpectrumCreate) (NativeModules.VibePowerModule as { installSpectrumEngine?: () => boolean } | undefined)?.installSpectrumEngine?.();
+      return g.__vibeSpectrumCreate ? g.__vibeSpectrumCreate() : null;
+    } catch { return null; }
+  }, []);
   useEffect(() => {
     // v1 webgl parity: interpolation blur grows with the display rate, so the
     // unsharp base scales with the selected fps and the slider is a multiplier
@@ -485,6 +519,12 @@ function WaterfallView({
       minRangeDb,
     };
     proc.current.applySettings(patch);
+    engine?.setSettings({
+      autoContrast, minRangeDb,
+      manual: wfCoarse === 'manual', manualMinDb: dbMin, manualMaxDb: dbMax,
+      specFloor, specPeakScale, smoothingFrames: specSmoothing, avgFrames, spatialSmooth, peakHold,
+      wfBrightness, wfContrast, wfSharpness: Math.min(12, sharpBase * sharpMul * 2),
+    });
   }, [autoContrast, wfCoarse, dbMin, dbMax, specFloor, specPeakScale,
       specSmoothing, avgFrames, spatialSmooth, peakHold, wfBrightness, wfContrast,
       wfSharpness, minRangeDb, frameRate, wfScroll, feedFloorFps]);
@@ -765,9 +805,10 @@ function WaterfallView({
   //    the tween on a layout change redraws the bins it already has at the new size, with no JS frame needed.
   useEffect(() => { setSpecTweenActive(true); }, [width, wfTop, specH, setSpecTweenActive]);
 
-  const specTween = useFrameCallback((fi) => {
+  /** One tween tick (33 ms cadence). Returns TRUE when the trace has converged (caller stops ticking). Shared by the
+   *  JS path's specTween callback and the native engine's enginePoll — the same motion either way. */
+  const specTweenTick = (fi: { timeSincePreviousFrame: number | null }): boolean => {
     'worklet';
-    if (specDead.value) return;   // component is gone — see specDead
     // No busy flag needed: the callback is DEACTIVATED when settled (see below), so it is not
     // running at all rather than running and returning.
     // ★★★ HOLD THE OLD 33 ms CADENCE, do not run at the display rate. useFrameCallback fires on
@@ -776,14 +817,14 @@ function WaterfallView({
     // which is the version of this bug that would be much harder to see coming. The interpolation
     // is time-based, so ticking at the same rate reproduces the previous motion exactly.
     specAccSv.value += fi.timeSincePreviousFrame ?? SPEC_TWEEN_MS;
-    if (specAccSv.value < SPEC_TWEEN_MS) return;
+    if (specAccSv.value < SPEC_TWEEN_MS) return false;
     const dtAcc = specAccSv.value;
     specAccSv.value = 0;
     const to = specToSv.value, disp = specDispSv.value;
     const n = to.length;
-    if (!n || disp.length !== n) return;
+    if (!n || disp.length !== n) return false;
     const w = uSpecW.value, baseline = uSpecTop.value, sh = uSpecHt.value;
-    if (w <= 0 || sh <= 0) return;
+    if (w <= 0 || sh <= 0) return false;
 
     // Same control law as the interval version, but against the REAL elapsed time rather than a
     // nominal 33 ms: a dropped frame then eases by the right amount instead of falling behind,
@@ -836,12 +877,18 @@ function WaterfallView({
     // Stuart: "if we can maintain the VRR on promotion screens that is a big win for battery
     // life." So the whole callback goes inactive and the display is free to idle down again.
     // ★ runOnJS is fine here: it fires ONCE per convergence, not per frame.
-    if (maxDelta < 0.002) { specAccSv.value = 0; runOnJS(setSpecTweenActive)(false); }
+    if (maxDelta < 0.002) { specAccSv.value = 0; return true; }
+    return false;
+  };
+  const specTween = useFrameCallback((fi) => {
+    'worklet';
+    if (specDead.value) return;   // component is gone — see specDead
+    if (specTweenTick(fi)) runOnJS(setSpecTweenActive)(false);
   }, false);   // autostart OFF — started on the first data frame
   specTweenRef.current = specTween;
 
   // pushRow reads the view from a ref, so keep it current.
-  useEffect(() => { viewRef.current = { centerHz, bwHz }; }, [centerHz, bwHz]);
+  useEffect(() => { viewRef.current = { centerHz, bwHz }; engine?.setView(centerHz, bwHz); }, [centerHz, bwHz, engine]);
 
   // ── Row push + line ticker (whole-pixel waterfall advance) ─────────────────
   // pushRow advances the waterfall by exactly one pixel row: ring write,
@@ -1183,24 +1230,114 @@ function WaterfallView({
     setGlideActive(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setGlideActive]);
-  const glideCb = useFrameCallback((fi) => {
+  /** One glide tick. Returns TRUE once the glide has ended and ~250 ms passed with no new one (time to sleep).
+   *  Shared by the JS path's glideCb and the native engine's enginePoll. */
+  const glideTick = (ts: number): boolean => {
     'worklet';
-    if (specDead.value) return;   // component is gone — see specDead
-    const ts = fi.timestamp;
-    if (glideStart.value < 0) { glideStart.value = ts; glideLast.value = ts; return; }
+    if (glideStart.value < 0) { glideStart.value = ts; glideLast.value = ts; return false; }
     const elapsed = ts - glideStart.value;
     const p = Math.min(1, elapsed / glideDur.value);
     if (scrollFrac.value < 1) {
       // ≤ 60 Hz: skip a frame that comes < 12 ms after the last write — except the one that lands on 1.
-      if (p < 1 && ts - glideLast.value < 12) return;
+      if (p < 1 && ts - glideLast.value < 12) return false;
       glideLast.value = ts;
       scrollFrac.value = p;
     } else if (elapsed > glideDur.value + 250 && !glideAsked.value) {
       glideAsked.value = 1;
-      runOnJS(glideSleep)(glideGen.value);
+      return true;
     }
+    return false;
+  };
+  const glideCb = useFrameCallback((fi) => {
+    'worklet';
+    if (specDead.value) return;   // component is gone — see specDead
+    if (glideTick(fi.timestamp)) runOnJS(glideSleep)(glideGen.value);
   }, false);
   glideRef.current = glideCb;
+
+  // ── Native spectrum engine: the UI-thread side (see `engine`) ───────────────────────────────────────────
+  // ONE frame callback: take whatever the engine finished since the last display frame, then run the glide and
+  // the trace tween it would otherwise have needed JS to switch on. No runOnJS per frame — nothing here waits on JS.
+  // ★ Replaced images and paths are disposed RETIRE_FRAMES later: the canvas records them on this thread and draws
+  //   them on SkiaRender, but the recorded picture holds its own reference, so a few frames is ample. They were made
+  //   without Hermes memory pressure, so dispose is cheap — and it must happen, or native memory waits for a GC.
+  const engRetire  = useSharedValue<{ o: { dispose: () => void }; f: number }[]>([]);
+  const engFrame   = useSharedValue(0);
+  const engImg     = useSharedValue<SkImage | null>(null);
+  const engPeak    = useSharedValue<SkPath | null>(null);
+  const engScroll  = useSharedValue(-1);
+  const engSpec    = useSharedValue(-1);
+  const engPeakGen = useSharedValue(-1);
+  const engGlideOn = useSharedValue(false);
+  const engSpecOn  = useSharedValue(false);
+  const engTexSent = useSharedValue(false);
+  const enginePoll = useFrameCallback((fi) => {
+    'worklet';
+    if (specDead.value || !engine) return;
+    const RETIRE_FRAMES = 3;
+    const f = engFrame.value + 1;
+    engFrame.value = f;
+    const q = engRetire.value;
+    if (q.length) {
+      const keep: { o: { dispose: () => void }; f: number }[] = [];
+      for (let i = 0; i < q.length; i++) {
+        if (f - q[i].f >= RETIRE_FRAMES) { try { q[i].o.dispose(); } catch { /* already gone */ } }
+        else keep.push(q[i]);
+      }
+      engRetire.value = keep;
+    }
+    const p = engine.poll();
+    if (p) {
+      const retire = engRetire.value;
+      if (p.image) {
+        const old = engImg.value;
+        wfImage.value = p.image;
+        engImg.value = p.image;
+        uHead.value = p.head;
+        if (old) retire.push({ o: old, f });
+        if (!engTexSent.value) { engTexSent.value = true; runOnJS(setTexReady)(true); }   // once, ever
+      }
+      uQuantSv.value = p.quant;
+      uAvgMs.value = p.avgMs;
+      uNSv.value = 1;
+      if (p.scrollGen !== engScroll.value) {
+        engScroll.value = p.scrollGen;
+        if (p.glide) {   // startGlide(dur)
+          glideDur.value = Math.max(1, p.glideDur);
+          glideStart.value = -1;
+          glideAsked.value = 0;
+          scrollFrac.value = 0;
+          engGlideOn.value = true;
+        } else {         // stopGlide + settle
+          engGlideOn.value = false;
+          scrollFrac.value = 1;
+        }
+      }
+      if (p.specGen !== engSpec.value) {
+        engSpec.value = p.specGen;
+        if (p.specHidden) {
+          engSpecOn.value = false;
+          specPathA.reset(); specPathB.reset();
+          specPath.value = specPathA;
+        } else if (p.spec) {
+          specToSv.value = p.spec;
+          if (specDispSv.value.length !== p.spec.length) specDispSv.value = p.spec.slice();
+          engSpecOn.value = true;
+        }
+      }
+      if (p.peakGen !== engPeakGen.value) {
+        engPeakGen.value = p.peakGen;
+        const old = engPeak.value;
+        const np = p.peak ?? null;
+        peakPath.value = np ?? peakEmpty;
+        engPeak.value = np;
+        if (old) retire.push({ o: old, f });
+      }
+      engRetire.value = retire;
+    }
+    if (engGlideOn.value && glideTick(fi.timestamp)) engGlideOn.value = false;
+    if (engSpecOn.value && specTweenTick(fi)) engSpecOn.value = false;
+  }, engine != null);
 
   // ── Covered by an opaque full-screen overlay (useScreenCovered) ─────────────────────────────
   // ★ Cover: stop every display-rate driver (they restart on the first data frame after uncover).
@@ -1242,6 +1379,7 @@ function WaterfallView({
       const bg = s !== 'active';
       bgRef.current = bg;
       setActive(!bg);
+      engine?.setBackground(bg);
       if (bg) {
         stopGlide();
         stopRevealStepper();
@@ -1640,9 +1778,28 @@ function WaterfallView({
 
   useEffect(() => {
     if (!frameSink) return;
-    frameSink.current = enqueueFrame;    // frames flow through the jitter buffer, not straight to render
+    // ★ With the native engine, a frame is ONE call: the engine copies it and does everything else on its own thread
+    //   (its own jitter buffer, processor, ring, repeat rows). lastInteractAt rides along — read at arrival, as
+    //   enqueueFrame read it.
+    frameSink.current = engine
+      ? (bins: Float32Array, st: SDRStatus) => {
+          engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, lastInteractAt?.current ?? 0);
+        }
+      : enqueueFrame;    // frames flow through the jitter buffer, not straight to render
     return () => { frameSink.current = null; };
-  }, [frameSink, enqueueFrame]);
+  }, [frameSink, enqueueFrame, engine, lastInteractAt]);
+
+  // ── Native engine: the state JS owns, forwarded when it changes ──────────────────────────────────────────
+  useEffect(() => {
+    engine?.setConfig({ width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS });
+  }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS]);
+  useEffect(() => { engine?.setCovered(covered); }, [engine, covered]);
+  useEffect(() => {
+    if (!engine) return;
+    // The dB axis labels: liveRange() answers only when the 2 dB-hysteresis window moved.
+    const t = setInterval(() => { const r = engine.liveRange(); if (r) setLiveRange({ dbMin: r[0], dbMax: r[1] }); }, 200);
+    return () => { clearInterval(t); engine.setBackground(true); };   // unmount: the engine stops; GC frees it
+  }, [engine]);
 
   // (Palette switches need no rebuild anymore — the lutImage memo swaps the
   // 256×1 LUT texture and the shader recolours the whole history next draw.)

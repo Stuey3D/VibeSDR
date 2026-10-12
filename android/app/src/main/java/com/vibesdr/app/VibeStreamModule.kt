@@ -125,6 +125,12 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
      *  thread (a synchronous method), which is the only place the runtime may be touched. False = use the JS path. */
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun installSpectrumEngine(): Boolean = try {
+        // Kill switch, like react-native-skia's render thread: `adb shell setprop debug.vibesdr.spectrumengine 0`
+        // (read at install) puts the waterfall back on the JS path — for A/B measurement and as a field fallback.
+        val off = try {
+            Runtime.getRuntime().exec(arrayOf("getprop", "debug.vibesdr.spectrumengine")).inputStream.bufferedReader().readText().trim() == "0"
+        } catch (_: Throwable) { false }
+        if (off) throw IllegalStateException("disabled by debug.vibesdr.spectrumengine=0")
         val ptr = reactContext.javaScriptContextHolder?.get() ?: 0L
         ptr != 0L && VibeSpectrum.nativeInstall(ptr)
     } catch (t: Throwable) {
