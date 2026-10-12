@@ -1516,10 +1516,12 @@ export abstract class VibeServerWsClient {
       const nws = ws as unknown as NativeSpecSocket;
       // A spectrum frame, decoded natively (the waterfall already has it). Counted and applied exactly as
       // _parseBinaryFrame → _apply* would have, then the unchanged _emitSpectrum: meters, squelch, link, settle.
-      nws.onspec = (bins, freq, wireBytes) => {
+      nws.onspec = (bins, freq, wireBytes, arrivedAt) => {
         specMsgCount++;
         this.specBytes += wireBytes;
+        this.nativeFrameAt = arrivedAt;   // the gap history times ARRIVALS, not when JS got round to it
         guard('vibe-spec', 'binary', () => this._applyNativeSpec(bins, freq), `len=${wireBytes}`);
+        this.nativeFrameAt = 0;
       };
       nws.ondrained = () => this._mirrorView();
     }
@@ -1759,6 +1761,8 @@ export abstract class VibeServerWsClient {
    *  not showing it (the lesson from the keyboard hints). */
   private link: LinkManager | null = null;
   private specFrames = 0;              // frames counted in the current 1s window
+  /** The native socket's ARRIVAL time of the frame being emitted (epoch ms), else 0. */
+  private nativeFrameAt = 0;
   private specBytes  = 0;              // spectrum bytes in the current 1s window (audio is native)
   private linkTimer: ReturnType<typeof setInterval> | null = null;
   private serverMaxFps = 0;            // the owner's ceiling, once hwinfo tells us
@@ -1798,10 +1802,20 @@ export abstract class VibeServerWsClient {
     });
     if (this.serverMaxFps > 0) this.link.applyServerCeiling(this.serverMaxFps);
     this.linkTimer = setInterval(() => {
-      const fps = this.specFrames;
+      let fps = this.specFrames;
       this.specFrames = 0;
-      const kbps = this.specBytes / 1024;   // spectrum only — the phone's audio bytes are native
+      let kbps = this.specBytes / 1024;   // spectrum only — the phone's audio bytes are native
       this.specBytes = 0;
+      /* ★★★ ON THE NATIVE SOCKET, COUNT WHERE THE FRAMES ARRIVE, over the time actually covered. Counted here they
+       *  measured the JS THREAD: a rotation froze it for 1-2 s on the XCover 4s, this tick saw a "starved" second, the
+       *  controller stepped a rung down (and needs 20 s of health to climb back), and the bars sat at 2 of 3 on a
+       *  perfectly healthy network — "if i do too many rotations the connection meter drops" (Stuart, 2026-10-12). */
+      const nc = (this.spectrumWs as unknown as { takeCounts?: () => { frames: number; bytes: number; ms: number } | undefined } | null)
+        ?.takeCounts?.();
+      if (nc && nc.ms > 0) {
+        fps = Math.round(nc.frames * 1000 / nc.ms);
+        kbps = nc.bytes / 1024 * 1000 / nc.ms;
+      }
       const live = this.spectrumWs?.readyState === WebSocket.OPEN;
       // `settled` guards a tune/zoom re-subscription, where frames legitimately pause — reading
       // that as a bad link would throttle every time the user moved the dial.
@@ -2087,8 +2101,8 @@ export abstract class VibeServerWsClient {
   }
 
   private _emitSpectrum(frequency: number) {
-    // Frame inter-arrival tracking for link quality
-    const fNow = Date.now();
+    // Frame inter-arrival tracking for link quality — on the native socket, by ARRIVAL time (see nativeFrameAt)
+    const fNow = this.nativeFrameAt > 0 ? this.nativeFrameAt : Date.now();
     if (this.lastFrameAt > 0) {
       this.gapHist.push(fNow - this.lastFrameAt);
       if (this.gapHist.length > 40) this.gapHist.shift();

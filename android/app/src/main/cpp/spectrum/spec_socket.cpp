@@ -75,6 +75,14 @@ std::deque<SockItem> SpecSocketSink::drain() {
     return out;
 }
 
+void SpecSocketSink::takeCounts(uint32_t& frames, uint64_t& bytes, double& ms) {
+    const auto t = std::chrono::steady_clock::now();
+    frames = nFrames_.exchange(0, std::memory_order_relaxed);
+    bytes = nBytes_.exchange(0, std::memory_order_relaxed);
+    ms = std::chrono::duration<double, std::milli>(t - countFrom_).count();
+    countFrom_ = t;
+}
+
 void SpecSocketSink::setViewMirror(bool inFlight, double c, double bb, bool shared) {
     std::lock_guard<std::mutex> lk(mx_);
     inFlight_ = inFlight; viewCenter_ = c; viewBinBw_ = bb; sharedDial_ = shared;
@@ -97,6 +105,7 @@ bool SpecSocketSink::onText(const char* utf8, size_t len) {
 }
 
 bool SpecSocketSink::onBinary(const uint8_t* p, size_t len) {
+    nBytes_.fetch_add(len, std::memory_order_relaxed);
     if (SpecDecoder::isGzip(p, len)) {
         readConfig(gunzip(p, len));
         SockItem it; it.kind = SockItem::kBinary; it.bytes.assign(p, p + len);   // the JS still parses and handles it
@@ -106,7 +115,10 @@ bool SpecSocketSink::onBinary(const uint8_t* p, size_t len) {
     const SpecDecoder::Result r = dec_.feed(p, len, freq);
     if (r == SpecDecoder::kSpectrum) {
         feedEngine(dec_.bins(), freq);
+        nFrames_.fetch_add(1, std::memory_order_relaxed);
         SockItem it; it.kind = SockItem::kSpec; it.bins = dec_.bins(); it.frequency = freq; it.wireBytes = len;
+        it.atMs = (double)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
         return push(std::move(it));
     }
     // A fault or an ignored frame: give the JS the raw bytes so it counts (or ignores) it exactly as before.

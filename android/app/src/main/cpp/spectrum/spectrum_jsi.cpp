@@ -194,6 +194,7 @@ void vibeSpectrumInstall(jsi::Runtime& rt) {
                     o.setProperty(r, "bins", f32.callAsConstructor(r, ab));
                     o.setProperty(r, "freq", it.frequency);
                     o.setProperty(r, "bytes", (double)it.wireBytes);
+                    o.setProperty(r, "at", it.atMs);
                 }
                 out.setValueAtIndex(r, i++, o);
             }
@@ -208,6 +209,20 @@ void vibeSpectrumInstall(jsi::Runtime& rt) {
             if (sink) sink->setViewMirror(a[1].isBool() && a[1].getBool(), a[2].isNumber() ? a[2].asNumber() : 0,
                                           a[3].isNumber() ? a[3].asNumber() : 0, a[4].isBool() && a[4].getBool());
             return jsi::Value::undefined();
+        }));
+    // __vibeSpecSockCounts(id) → {frames, bytes, ms}: the link meter's counts since the last call (SpecSocketSink::takeCounts)
+    rt.global().setProperty(rt, "__vibeSpecSockCounts", jsi::Function::createFromHostFunction(
+        rt, jsi::PropNameID::forAscii(rt, "__vibeSpecSockCounts"), 1,
+        [](jsi::Runtime& r, const jsi::Value&, const jsi::Value* a, size_t c) -> jsi::Value {
+            auto sink = c >= 1 && a[0].isNumber() ? sinkFor((int)a[0].asNumber()) : nullptr;
+            if (!sink) return jsi::Value::undefined();
+            uint32_t frames; uint64_t bytes; double ms;
+            sink->takeCounts(frames, bytes, ms);
+            jsi::Object o(r);
+            o.setProperty(r, "frames", (double)frames);
+            o.setProperty(r, "bytes", (double)bytes);
+            o.setProperty(r, "ms", ms);
+            return o;
         }));
     rt.global().setProperty(rt, "__vibeSpectrumCreate", jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forAscii(rt, "__vibeSpectrumCreate"), 0,

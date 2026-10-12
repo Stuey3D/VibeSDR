@@ -16,6 +16,8 @@
 //   updates when it zooms, pans, settles or adopts (setViewMirror).
 #pragma once
 #include "spec_decoder.h"
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -34,6 +36,7 @@ struct SockItem {
     std::vector<float> bins;         // kSpec: decoded bins in SERVER order (the client half-swaps, as before)
     double frequency = 0;            // kSpec
     size_t wireBytes = 0;            // kSpec: the frame's size on the wire (specBytes)
+    double atMs = 0;                 // kSpec: when it ARRIVED (epoch ms, Date.now()'s clock) — see takeCounts
 };
 
 class SpecSocketSink {
@@ -48,6 +51,11 @@ public:
     std::deque<SockItem> drain();
     /** The client's view state, mirrored whenever it changes (WsClient._mirrorView). */
     void setViewMirror(bool inFlight, double viewCenterHz, double viewBinBw, bool sharedDial);
+    /** ★★ The link meter's per-second counts, taken WHERE THE FRAMES ARRIVE: spectrum frames and binary bytes since
+     *  the last call, and the time that covers (steady clock). Counted in JS they measured the JS thread: a rotation
+     *  froze it for 1-2 s on the XCover 4s, the 1 s tick saw a "starved" second, the controller stepped a rung down
+     *  and the bars fell to 2 of 3 with the network perfectly healthy (Stuart, 2026-10-12). */
+    void takeCounts(uint32_t& frames, uint64_t& bytes, double& ms);
 
 private:
     bool push(SockItem&& it);
@@ -62,6 +70,9 @@ private:
     bool inFlight_ = false, sharedDial_ = false;
     double viewCenter_ = 0, viewBinBw_ = 0;
     std::vector<float> display_;             // half-swapped scratch for the engine
+    std::atomic<uint32_t> nFrames_{0};
+    std::atomic<uint64_t> nBytes_{0};
+    std::chrono::steady_clock::time_point countFrom_ = std::chrono::steady_clock::now();   // JS thread only
 };
 
 /** The engine the native socket feeds: the SDR screen's current WaterfallView (set by its host object). */

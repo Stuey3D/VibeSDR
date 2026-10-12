@@ -20,7 +20,7 @@ import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 type Drained =
   | { k: 0; text: string }
   | { k: 1; data: ArrayBuffer }
-  | { k: 2; bins: Float32Array; freq: number; bytes: number };
+  | { k: 2; bins: Float32Array; freq: number; bytes: number; at: number };
 
 type Mod = {
   connect(id: number, url: string, headers: Record<string, string> | null, vibeServer: boolean): void;
@@ -33,6 +33,7 @@ const mod = NativeModules.VibeSpecSocket as Mod | undefined;
 const g = globalThis as unknown as {
   __vibeSpecSockDrain?: (id: number) => Drained[];
   __vibeSpecSockMirror?: (id: number, inFlight: boolean, centerHz: number, binBw: number, shared: boolean) => void;
+  __vibeSpecSockCounts?: (id: number) => { frames: number; bytes: number; ms: number } | undefined;
   __vibeSpectrumCreate?: unknown;
 };
 
@@ -61,8 +62,8 @@ export class NativeSpecSocket {
   onmessage: Handler<{ data: string | ArrayBuffer }> = null;
   onclose: Handler<{ code: number; reason: string }> = null;
   onerror: Handler<{ message: string }> = null;
-  /** A decoded spectrum frame (bins in SERVER order, frequency Hz, its size on the wire). */
-  onspec: ((bins: Float32Array, freq: number, wireBytes: number) => void) | null = null;
+  /** A decoded spectrum frame (bins in SERVER order, frequency Hz, its size on the wire, when it ARRIVED — epoch ms). */
+  onspec: ((bins: Float32Array, freq: number, wireBytes: number, arrivedAt: number) => void) | null = null;
   /** After each drained batch — the client re-mirrors its view state then. */
   ondrained: (() => void) | null = null;
 
@@ -103,7 +104,7 @@ export class NativeSpecSocket {
     const items = g.__vibeSpecSockDrain?.(this.id) ?? [];
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
-      if (it.k === 2) this.onspec?.(it.bins, it.freq, it.bytes);
+      if (it.k === 2) this.onspec?.(it.bins, it.freq, it.bytes, it.at);
       else if (it.k === 1) this.onmessage?.({ data: it.data });
       else this.onmessage?.({ data: it.text });
     }
@@ -113,6 +114,13 @@ export class NativeSpecSocket {
   /** The client's view state, for the native side's frame geometry (see _emitSpectrum). */
   mirror(inFlight: boolean, centerHz: number, binBw: number, shared: boolean) {
     if (!this.done) g.__vibeSpecSockMirror?.(this.id, inFlight, centerHz, binBw, shared);
+  }
+
+  /** ★★ The link meter's counts since the last call, taken natively as frames ARRIVE — spectrum frames, binary
+   *  bytes, and the milliseconds that covers. A JS count measures the JS thread (a rotation's 1-2 s freeze read as a
+   *  starved link: SpecSocketSink::takeCounts). Undefined once closed. */
+  takeCounts(): { frames: number; bytes: number; ms: number } | undefined {
+    return this.done ? undefined : g.__vibeSpecSockCounts?.(this.id);
   }
 
   send(data: string) {
