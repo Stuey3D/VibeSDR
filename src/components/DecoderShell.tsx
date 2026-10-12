@@ -33,8 +33,9 @@
  *     > 0.999 alpha — RCTViewComponentView "Stage 1. Shadow Path" — so the glass box's shadow was
  *     drawn per pixel, offscreen, every frame the waterfall moved.) The border stays.
  *
- * ★ MEANING COLOURS ARE NOT TOKENS OF THE LOOK. good / warn / bad (and MER pink, SNR green) never
- *   follow a colour setting: a red-controls user must still see good from bad (§10.2 TRAP).
+ * ★ MEANING COLOURS ARE NOT TOKENS OF THE LOOK. good / warn / bad (and MER pink, SNR green, the
+ *   selected station) never follow a colour setting: a red-text user must still see good from bad
+ *   (§10.2 TRAP). Text takes the TEXT colour and keys the CONTROLS colour (Stuart, 2026-10-12).
  * ★ PERFORMANCE: tokens and every style sheet built from them are memoised per setting (below), so
  *   a spectrum frame re-renders nothing here; the metal plate is ChassisPlate's cached canvas,
  *   redrawn only when the box changes size; there is no BlurView at all on silver / black, and none
@@ -80,13 +81,14 @@ export function DecoderSurface({ transparency, children }: { transparency: Trans
   return <TransparencyOverride.Provider value={transparency}>{children}</TransparencyOverride.Provider>;
 }
 
-/** The tokens every decoder body reads — live: they follow the chassis, the controls colour and
- *  TRANSPARENCY EFFECTS (the effective value: the user's choice, or the device's default until they
- *  make one). Components never hold their own palette. */
+/** The tokens every decoder body reads — live: they follow the chassis, the controls colour (keys,
+ *  frame), the TEXT colour (every piece of text; resolved, so neon under Nixie) and TRANSPARENCY
+ *  EFFECTS (the effective value: the user's choice, or the device's default until they make one).
+ *  Components never hold their own palette. ★ Stuart, 2026-10-12 — see decoderTokens.ts. */
 export function useDecoderTokens(): DecoderTokens {
   const fp = useFaceplate();
   const override = useContext(TransparencyOverride);
-  return decoderTokensFor(fp.settings.chassis, fp.controls.rgb, override ?? fp.settings.transparency);
+  return decoderTokensFor(fp.settings.chassis, fp.controls.rgb, override ?? fp.settings.transparency, fp.text.rgb);
 }
 
 const styleCache = new WeakMap<(tk: DecoderTokens) => unknown, WeakMap<DecoderTokens, unknown>>();
@@ -291,7 +293,7 @@ export type DecoderKeyProps = Omit<PressableProps, 'style' | 'children'> & {
 /**
  * A header key — a DOME KEY on every chassis (§5, §10: "the decoder header keys, on every chassis,
  * including default, where they keep today's look but still use useDomeKey()").
- *   • default — today's outline key at rest; the press snaps the legend down 2 pt and dims the face.
+ *   • default — an outline key in the controls colour at rest; the press snaps the legend down 2 pt and dims the face.
  *   • silver / black — the mockup's cap (silver #c4c1ba / black #1c1d20 → #0c0c0e, a 1 pt top
  *     highlight, a cast shadow that goes on the click), legend lit in the controls colour.
  * ★ Snap, click and dim on press-IN (useDomeKey: 45 ms curve on the UI thread, haptic at its end,

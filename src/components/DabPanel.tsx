@@ -86,7 +86,7 @@ const CuBar = React.memo(function CuBar({ services, subch }: { services: DabStat
         return (
           <View key={g.start}
                 style={[s.cuSeg, { left: `${p.left}%`, width: `${p.width}%`,
-                                   backgroundColor: g.current ? C.gold : C.bar, opacity: g.current ? 1 : 0.45 }]} />
+                                   backgroundColor: g.current ? C.sel : C.bar, opacity: g.current ? 1 : 0.45 }]} />
         );
       })}
     </View>
@@ -360,12 +360,13 @@ const ServiceRow = React.memo(function ServiceRow({ sv, d, base, readAuth, onPre
       <SvcLogo uri={logo} />
       <View style={{ flex: 1 }}>
         {/* ★ GREEN for the station that is playing — the browser's `.dabSvc.on` — because gold on
-            gold did not stand out (Stuart: "the highlighted station being green to stand out"). */}
-        <Text style={[s.svcName, active && { color: C.good }]} numberOfLines={1}>
+            gold did not stand out (Stuart: "the highlighted station being green to stand out").
+            ★★ A MEANING, not the look (2026-10-12): WHITE when the text colour is green (selectedFor). */}
+        <Text style={[s.svcName, active && { color: C.sel }]} numberOfLines={1}>
           {sv.label || sv.sid.toString(16).toUpperCase()}
           {ann.length ? (alarm ? '  ⚠ ALARM' : '  ● ANN') : ''}
         </Text>
-        {!!text && <Marquee text={text} style={[s.svcDls, active && { color: 'rgba(125,255,154,0.80)' }]} />}
+        {!!text && <Marquee text={text} style={[s.svcDls, active && { color: C.selLive }]} />}
       </View>
       <Text style={s.svcCodec}>{sv.codec}{sv.kbps ? ` ${sv.kbps}k` : ''}</Text>
     </TouchableOpacity>
@@ -903,12 +904,15 @@ type Palette = ReturnType<typeof palette>;
 const palette = (T: DecoderTokens) => ({
   gold:    T.accent,
   goldDim: T.label,
+  /** ★ The playing station — green, or white on green text (decoderTokens `selectedFor`). */
+  sel:     T.selected,
+  selLive: T.selectedLive,
+  selBg:   T.selectedBg,
   muted:   T.muted,
   good:    T.good,
   warn:    T.warn,
   bad:     T.bad,
   value:   T.value,
-  rowAct:  T.rowActive,
   plot:    T.plot,
   axis:    T.axis,
   dot:     T.dot,
@@ -935,15 +939,15 @@ const makeStyles = (T: DecoderTokens) => {
   cuSeg:  { position: 'absolute', top: 0, bottom: 0, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: 'rgba(0,0,0,0.55)' },
   section:{ fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
             marginTop: 10, marginBottom: 2 },
-  /* ★ The web's .dabHead: 56 px picture, green name, codec line, scrolling radio text. */
+  /* ★ The web's .dabHead: 56 px picture, green name (the playing station's colour), codec line, scrolling radio text. */
   head:     { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6, marginBottom: 4 },
   headLogo: { width: 56, height: 56, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' },
-  headName: { fontFamily: FONT, fontSize: 16, letterSpacing: 1, color: C.good },
+  headName: { fontFamily: FONT, fontSize: 16, letterSpacing: 1, color: C.sel },
   headSub:  { fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 1 },
   headDls:  { fontFamily: FONT, fontSize: 13, color: C.value, marginTop: 2 },
   svc:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6,
               paddingHorizontal: 6, borderRadius: 6 },
-  svcActive:{ backgroundColor: C.rowAct },
+  svcActive:{ backgroundColor: C.selBg },
   /* ★ A FIXED BOX WHETHER OR NOT THERE IS A PICTURE. Logos arrive one at a time over a second or
    *  two; if the box appeared with them, every name in the list would shuffle sideways as they
    *  landed. 34 px — up from the browser's 24: on a phone the picture is the fastest way to find a

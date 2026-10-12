@@ -168,7 +168,7 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
           {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
         </Text>
         <Text style={[dp.spotCell, dp.spotSnr,
-          { color: (s.snr ?? -99) >= 0 ? '#55d98d' : 'rgba(255,160,0,0.65)', fontFamily: font }]}>
+          (s.snr ?? -99) >= 0 ? dp.snrOk : dp.snrLow, { fontFamily: font }]}>
           {s.snr !== undefined ? s.snr : ''}
         </Text>
         <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
@@ -560,8 +560,8 @@ export default function DecoderPanel({
   };
 
   // ★ One palette for every box (DecoderShell). The white-theme branch that lived here is gone:
-  //   the boxes follow the faceplate now, whose default chassis is today's gold chrome
-  //   (Decoder.mockup `isDef`) — the look DAB and RDS already had.
+  //   the boxes follow the faceplate — text in the TEXT colour, keys and chips in the CONTROLS colour,
+  //   meanings fixed, on every chassis (Stuart, 2026-10-12; decoderTokens.ts).
   const dc = {
     hdrBdr:  tk.hdrBdr ?? tk.divider,
     status:  tk.muted,
@@ -1472,7 +1472,7 @@ export default function DecoderPanel({
                           navOn && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
                   onPress={() => onSelectDab?.(p.id)} activeOpacity={0.7}>
                   <StationLogo name={p.name} />
-                  <Text style={[dp.dabName, { color: active ? dc.btnActT : dc.output, fontFamily: FONT }]}
+                  <Text style={[dp.dabName, { color: active ? tk.selected : dc.output, fontFamily: FONT }]}
                         numberOfLines={1}>
                     {active ? '✓ ' : ''}{p.name}
                   </Text>
@@ -1573,7 +1573,7 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   },
   /* ★ Wrap, frame, header, title and the header keys' boxes are DecoderShell's. */
   dot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: T.dotIdle, flexShrink: 0 },
-  dotOn:     { backgroundColor: T.dotOn, shadowColor: '#55d98d', shadowOpacity: 0.60, shadowRadius: 4, shadowOffset: { width:0, height:0 } },
+  dotOn:     { backgroundColor: T.dotOn, shadowColor: T.dotOn, shadowOpacity: 0.60, shadowRadius: 4, shadowOffset: { width:0, height:0 } },
   // flexShrink with an auto basis is what makes the priority come out right: the status text is
   // flex:1 (basis 0) so it only ever takes SPARE room, while the run keeps its natural width and
   // gives ground only when there is none. On a wide panel the status fills the gap; on the SE it
@@ -1610,7 +1610,7 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   // as a row of its own, and dimmer so a collapsed-style scan still skims past it.
   // Line 2 is prose to READ, not a column to scan, so it gets a readable size rather than a
   // decorative one. Still stepped back from line 1, but by opacity alone now.
-  spotDetail:  { fontSize: 11, letterSpacing: 0.2, color: 'rgba(255,255,255,0.62)',
+  spotDetail:  { fontSize: 11, letterSpacing: 0.2, color: T.muted,
                  marginLeft: 44, marginTop: 3 },
   spotEmpty:   { padding: 12, textAlign: 'center' },
   /* ★ NAVTEX's title line: what the message is on the left, how it arrived on the right; wraps rather than
@@ -1624,9 +1624,14 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   // ★ Data WHITE, callsign AMBER — the reverse of the original. Dim amber on black at 10pt was
   // unreadable on a 17 Pro Max even at arm's length: the colour was doing the work of a hierarchy
   // that weight and size should do. Now the data reads plainly and the amber marks the one field
-  // you scan for.
+  // you scan for. (2026-10-12: both are the TEXT colour now; weight and size carry the callsign.)
   // ★ tabular-nums: time, SNR and distance are columns and must line up down the table (§10.2).
-  spotCell:    { fontSize: 11, letterSpacing: 0.3, color: 'rgba(255,255,255,0.88)', fontVariant: ['tabular-nums'] },
+  // ★★ 2026-10-12: the data is the TEXT colour now (was white .88) — Stuart: "white text set in the controls would
+  //   show white text in the decoder". The callsign stays the one to scan for by weight and size (13 pt bold).
+  spotCell:    { fontSize: 11, letterSpacing: 0.3, color: T.value, fontVariant: ['tabular-nums'] },
+  // SNR is a MEANING (fixed on every colour): green at or above 0 dB, dim amber below — weak but decoded.
+  snrOk:       { color: T.dotOn },
+  snrLow:      { color: T.snrLow },
   // Widened with the font step from 10pt to 11pt — the old widths were cut for 10pt and clip
   // "20:14"/"FT8" at the larger size. Check on the SE in Display Zoom before trimming these.
   spotTime:    { width: 42 },

@@ -18,8 +18,10 @@
  *   • metal header (OFF silver / black) — engraved text on the plate at its darkest (silver) /
  *     lightest (black) point of the lighting layer.
  *
- * Also proves: the meaning colours never move, the text colour never reaches a decoder box, the
- * default chassis keeps today's chrome, no blur is ever asked for on silver / black or with OFF, and
+ * Also proves (★★ Stuart's rule, 2026-10-12 — it INVERTS the old "the text colour never reaches a decoder
+ * box" and "the default chassis keeps today's gold"): text follows the TEXT colour on every chassis, the
+ * keys and frame follow the CONTROLS colour, the meaning colours never move, the selected station is
+ * green — WHITE when the text is green — no blur is ever asked for on silver / black or with OFF, and
  * OFF is alpha 1.0 EXACTLY (never the old Solid's 0.95).
  *
  * ★ Header KEY legends on the SILVER cap are reported, not asserted: they are lit LED legends on a
@@ -29,12 +31,16 @@
  * Run: node --no-warnings scripts/test_decoder_contrast.ts   (run-tests.sh does)
  *      node --no-warnings scripts/test_decoder_contrast.ts --find   (prints the smallest lift per colour)
  */
-import { CHASSIS, CONTROLS, TEXTS, TRANSPARENCIES, LED, SILVER_CHASSIS, BLACK_CHASSIS } from '../src/constants/faceplate.ts';
+import { CHASSIS, CONTROLS, TEXTS, TRANSPARENCIES, LED, SILVER_CHASSIS, BLACK_CHASSIS,
+  resolveControlsColour } from '../src/constants/faceplate.ts';
 import {
   decoderTokensFor, buildDecoderTokens, DECODER_MEANING, METAL_VALUE, CONTRAST_LIFT, lighten, parseRgb,
-  DEFAULT_SOLID_BG,
+  DEFAULT_SOLID_BG, GREEN_TEXT_RGB, controlsText,
   type DecoderTokens, type RGB,
 } from '../src/constants/decoderTokens.ts';
+
+/** Every text colour a decoder box can be handed: the six TEXTS, plus neon (the Nixie lock). */
+const TEXT_RGBS: [string, string][] = [...TEXTS.map(t => [t, LED[t].rgb] as [string, string]), ['neon', LED.neon.rgb]];
 
 let fails = 0, passes = 0;
 function ok(what: string, cond: boolean, detail = '') {
@@ -129,7 +135,7 @@ function checksFor(tk: DecoderTokens): Check[] {
   }
   // Meaning colours on the body surface they share with the values.
   const body = tk.surface === 'glass' ? glassOver(tk, tk.tintTall, WF_BUSY) : WINDOW;
-  for (const k of ['good', 'warn', 'bad', 'mer', 'dotOn'] as const) {
+  for (const k of ['good', 'warn', 'bad', 'mer', 'dotOn', 'selected', 'selectedLive'] as const) {
     out.push({ what: `${tag} meaning ${k}`, text: tk[k], bg: body, min: 4.5 });
   }
   // Chart marks are graphics (WCAG 1.4.11): 3:1 against the plot they sit in.
@@ -142,15 +148,18 @@ function checksFor(tk: DecoderTokens): Check[] {
 // ── --find: the smallest lift per controls colour (how CONTRAST_LIFT was set) ─
 
 if (process.argv.includes('--find')) {
-  for (const c of CONTROLS) {
-    const rgb = LED[c].rgb;
+  // ★ A colour lights decoder text as a key legend (controls) AND as body text (text), so each is
+  //   swept in both roles, on every chassis, with the other role at white.
+  const all = new Map<string, string>([...CONTROLS.map(c => [c, LED[c].rgb] as [string, string]), ...TEXT_RGBS,
+                                       ['today-green', resolveControlsColour('default', 'green').rgb]]);
+  for (const [c, rgb] of all) {
     let found = -1;
     for (let step = 0; step <= 20 && found < 0; step++) {
       const t = step * 0.05;
       CONTRAST_LIFT[rgb] = t;
       let worst = Infinity;
-      for (const ch of ['silver', 'black'] as const) for (const bg of TRANSPARENCIES) {
-        const tk = buildDecoderTokens(ch, rgb, bg);   // unmemoised: the lift just changed
+      for (const ch of CHASSIS) for (const bg of TRANSPARENCIES) for (const tk of [
+        buildDecoderTokens(ch, rgb, bg, LED.white.rgb), buildDecoderTokens(ch, LED.white.rgb, bg, rgb)]) {   // unmemoised
         for (const k of checksFor(tk)) if (!k.what.includes('meaning') && k.min === 4.5 && !k.what.includes('plate')) {
           worst = Math.min(worst, contrast(k.text, k.bg));
         }
@@ -164,73 +173,98 @@ if (process.argv.includes('--find')) {
 
 // ── The sweep ────────────────────────────────────────────────────────────────
 
-const seen = new Map<string, DecoderTokens>();
 let hotWorst = { r: Infinity, what: '' };
-for (const ch of CHASSIS) for (const c of CONTROLS) for (const bg of TRANSPARENCIES) {
-  const tk = decoderTokensFor(ch, LED[c].rgb, bg);
-  // ★ The text colour never reaches a decoder box: the resolver does not take it, so every text
-  //   colour yields the very same object — asserted per text colour, as the brief sweeps it.
-  for (const t of TEXTS) {
-    const key = `${ch}|${c}|${bg}`;
-    if (seen.has(key)) ok(`text ${t} does not change ${key}`, seen.get(key) === tk);
-    else seen.set(key, tk);
-  }
+for (const ch of CHASSIS) for (const c of CONTROLS) for (const [tn, trgb] of TEXT_RGBS) for (const bg of TRANSPARENCIES) {
+  // ★ The RESOLVED controls LED, as FaceplateContext hands it over (TODAY_GREEN on the default chassis).
+  const crgb = resolveControlsColour(ch, c).rgb;
+  const tk = decoderTokensFor(ch, crgb, bg, trgb);
+  const tag = `${ch}/${c} keys/${tn} text/${bg}`;
   for (const k of checksFor(tk)) {
     const r = contrast(k.text, k.bg);
-    ok(`${k.what} [${c}] ≥ ${k.min}:1`, r >= k.min, `${r.toFixed(2)}:1 — ${k.text}`);
+    ok(`${k.what} [${c} keys, ${tn} text] ≥ ${k.min}:1`, r >= k.min, `${r.toFixed(2)}:1 — ${k.text}`);
   }
   if (tk.surface === 'glass' && !tk.solidBg) {
     const hot = glassOver(tk, tk.tint, WF_HOT);
     for (const r of BODY_ROLES) {
       const x = contrast(tk[r], hot);
-      if (x < hotWorst.r) hotWorst = { r: x, what: `${ch}/${bg} ${r} [${c}]` };
+      if (x < hotWorst.r) hotWorst = { r: x, what: `${ch}/${bg} ${r} [${tn} text]` };
     }
   }
-  // Meaning colours are the same objects on every chassis and colour.
-  for (const k of Object.keys(DECODER_MEANING) as (keyof typeof DECODER_MEANING)[]) {
-    ok(`${ch}/${c}/${bg}: meaning ${k} fixed`, tk[k] === DECODER_MEANING[k]);
+  // ★★ TEXT FOLLOWS THE TEXT COLOUR — body text, the chart read-outs, and the header unless engraved on metal.
+  const Tt = `rgba(${controlsText(trgb)},`;
+  for (const r of ['muted', 'label', 'rowLabel', 'value', 'accent', 'chartText', 'dot', 'bar', 'trace'] as const) {
+    ok(`${tag}: ${r} in the text colour`, tk[r].startsWith(Tt), tk[r]);
   }
+  for (const r of HEADER_ROLES) {
+    ok(`${tag}: header ${r} ${tk.surface === 'metal' ? 'engraved' : 'in the text colour'}`,
+       tk.surface === 'metal' ? !!tk.engrave && !tk[r].startsWith('rgba(' + trgb) : tk[r].startsWith(Tt), tk[r]);
+  }
+  // ★★ KEYS (and the frame that goes with them) FOLLOW THE CONTROLS COLOUR.
+  const isK = (v: string) => v.startsWith(`rgba(${crgb},`) || v.startsWith(`rgba(${controlsText(crgb)},`);
+  for (const r of ['keyText', 'keyTextAct', 'close', 'chipBorder', 'chipBorderAct', 'chipBgAct', 'dotIdle'] as const) {
+    ok(`${tag}: ${r} in the controls colour`, isK(tk[r]), tk[r]);
+  }
+  if (tk.surface === 'glass') ok(`${tag}: border in the controls colour`, isK(tk.border), tk.border);
+  if (tk.hdrBdr) ok(`${tag}: header hairline in the controls colour`, isK(tk.hdrBdr), tk.hdrBdr);
+  // Meaning colours are the same on every chassis, controls and text colour.
+  for (const k of Object.keys(DECODER_MEANING) as (keyof typeof DECODER_MEANING)[]) {
+    ok(`${tag}: meaning ${k} fixed`, tk[k] === DECODER_MEANING[k]);
+  }
+  // ★★ The selected station: green, WHITE on green text (Stuart's clash rule).
+  ok(`${tag}: selected station`, tn === 'green'
+    ? tk.selected === 'rgb(242,239,232)' && tk.selectedLive.startsWith('rgba(242,239,232,')
+    : tk.selected === 'rgb(125,255,154)' && tk.selectedLive.startsWith('rgba(125,255,154,'), tk.selected);
   // No blur over the spectrum on silver / black (§10.2, §3.4); and none with Transparency OFF anywhere.
-  if (ch !== 'default' || bg === 'off') ok(`${ch}/${c}/${bg}: no blur`, tk.blur === 0);
+  if (ch !== 'default' || bg === 'off') ok(`${tag}: no blur`, tk.blur === 0);
   // ★★★ OFF is alpha 1.0 EXACTLY — an opaque rgb() on default (never rgba, never 0.95); metal is its plate.
-  if (bg === 'off') ok(`${ch}/${c}/off: opaque`, ch === 'default'
+  if (bg === 'off') ok(`${tag}: opaque`, ch === 'default'
     ? tk.solidBg != null && parse(tk.solidBg)[3] === 1 && tk.tint === 1 && tk.tintTall === 1
     : tk.surface === 'metal' && tk.solidBg == null);
-  else ok(`${ch}/${c}/on: see-through`, tk.solidBg == null && tk.surface === 'glass');
-  // Values: near-white on metal, today's yellow on default (§10.2).
-  ok(`${ch}/${c}/${bg}: value colour`, tk.value === (ch === 'default' ? '#ffe566' : METAL_VALUE));
+  else ok(`${tag}: see-through`, tk.solidBg == null && tk.surface === 'glass');
   // Silver / black: OFF is the metal plate + recessed window; ON stays glass.
-  ok(`${ch}/${bg}: surface`, tk.surface === (ch !== 'default' && bg === 'off' ? 'metal' : 'glass'));
-  // Header keys are caps on metal chassis, today's outline on default — but dome keys on all.
-  ok(`${ch}: key look`, tk.keyLook === (ch === 'default' ? 'outline' : 'cap'));
+  ok(`${tag}: surface`, tk.surface === (ch !== 'default' && bg === 'off' ? 'metal' : 'glass'));
+  // Header keys are caps on metal chassis, outline keys on default — but dome keys on all.
+  ok(`${tag}: key look`, tk.keyLook === (ch === 'default' ? 'outline' : 'cap'));
 }
 
-// Default chassis: today's chrome, independent of the controls colour; ON = RDS glass.
+// The text colour CHANGES the box now, and the controls colour changes it on the default chassis too.
 {
-  const t = decoderTokensFor('default', LED.red.rgb, 'on');
-  ok('default ignores the controls colour', t === decoderTokensFor('default', LED.blue.rgb, 'on'));
+  const blueWhite = decoderTokensFor('default', LED.blue.rgb, 'on', LED.white.rgb);
+  ok('text white ≠ text green', blueWhite !== decoderTokensFor('default', LED.blue.rgb, 'on', LED.green.rgb));
+  ok('default follows the controls colour', blueWhite.border !== decoderTokensFor('default', LED.red.rgb, 'on', LED.white.rgb).border);
+  // ★ Stuart's own example: "blue buttons and white text … white text in the decoder with the header buttons being blue".
+  ok('blue keys + white text: value white', blueWhite.value.startsWith(`rgba(${LED.white.rgb},`));
+  ok('blue keys + white text: keys blue', blueWhite.keyText.startsWith(`rgba(${LED.blue.rgb},`));
+  ok('blue keys + white text: selected station green', blueWhite.selected === 'rgb(125,255,154)');
+  ok('green text is the brief\'s green', GREEN_TEXT_RGB === LED.green.rgb);
+  ok('the white selected station is the near-white value #f2efe8', METAL_VALUE === '#f2efe8');
+}
+// Default chassis: the glass, ON and OFF.
+{
+  const t = decoderTokensFor('default', LED.red.rgb, 'on', LED.blue.rgb);
   ok('default ON = today\'s glass 0.72 / BIG 0.62, iOS blur 35', t.tint === 0.72 && t.tintTall === 0.62 && t.blur === 35);
-  const s = decoderTokensFor('default', LED.red.rgb, 'off');
+  const s = decoderTokensFor('default', LED.red.rgb, 'off', LED.blue.rgb);
   // ★★★ Today's SMALL glass over black at 1.0: rgb(10,8,4) × 0.72 = 7.2, 5.76, 2.88 → 7,6,3.
   ok('default OFF = today\'s glass over black, alpha 1.0', s.solidBg === 'rgb(7,6,3)' && s.solidBg === DEFAULT_SOLID_BG);
   ok('default OFF keeps every text token of ON (only the surface changes)',
      (['title', 'muted', 'label', 'rowLabel', 'value', 'accent', 'keyText', 'border'] as const).every(k => s[k] === t[k]));
-  ok('default border stays gold', t.border === 'rgba(255,160,0,0.28)');
 }
-// Silver / black ON: controls colour on border, title, labels, charts (§10.2).
+// Silver / black: OFF engraved header + window; ON glass in the controls colour's frame.
 {
-  const t = decoderTokensFor('silver', LED.blue.rgb, 'on');
+  const t = decoderTokensFor('silver', LED.blue.rgb, 'on', LED.white.rgb);
   ok('silver ON border in the controls colour', t.border.startsWith(`rgba(${LED.blue.rgb},`));
-  ok('silver ON chart dots in the controls colour', t.dot.startsWith(`rgba(${LED.blue.rgb},`));
+  ok('silver ON chart dots in the TEXT colour', t.dot.startsWith(`rgba(${controlsText(LED.white.rgb)},`));
   ok('silver ON glass is today\'s 0.72', t.tint === 0.72 && t.tintTall === 0.62);
-  const s = decoderTokensFor('silver', LED.blue.rgb, 'off');
+  const s = decoderTokensFor('silver', LED.blue.rgb, 'off', LED.white.rgb);
   ok('silver OFF header engraved dark', s.title === '#2a2824' && s.engrave?.dy === 1);
-  const b = decoderTokensFor('black', LED.blue.rgb, 'off');
+  const b = decoderTokensFor('black', LED.blue.rgb, 'off', LED.white.rgb);
   ok('black OFF header engraved light grey', b.title === '#c9ccd2' && b.engrave?.dy === -1);
   ok('OFF metal has the recessed window', !!s.window && !!b.window && s.window.bg === '#070605');
 }
 // Every controls colour has a lift entry (an unlisted colour would silently get none).
 for (const c of CONTROLS) ok(`CONTRAST_LIFT covers ${c}`, CONTRAST_LIFT[LED[c].rgb] !== undefined);
+for (const [t, rgb] of TEXT_RGBS) ok(`CONTRAST_LIFT covers ${t} text`, CONTRAST_LIFT[rgb] !== undefined);
+ok('CONTRAST_LIFT covers the default chassis\'s green', CONTRAST_LIFT[resolveControlsColour('default', 'green').rgb] !== undefined);
 // lighten() keeps the hue: the channel ORDER never changes.
 for (const c of CONTROLS) {
   const a = parseRgb(LED[c].rgb), b = lighten(a, 0.3);
@@ -240,7 +274,7 @@ for (const c of CONTROLS) {
 
 // Reported: silver cap legends, and the hot-carrier worst case.
 const capBg = parse('#c4c1ba').slice(0, 3) as RGB;
-const capRows = CONTROLS.map(c => `${c} ${contrast(decoderTokensFor('silver', LED[c].rgb, 'off').keyText, capBg).toFixed(1)}`);
+const capRows = CONTROLS.map(c => `${c} ${contrast(decoderTokensFor('silver', LED[c].rgb, 'off', LED.white.rgb).keyText, capBg).toFixed(1)}`);
 console.log(`  note: silver cap legends (lit, not asserted): ${capRows.join(' · ')}`);
 console.log(`  note: glass over a hot carrier (95th pct, not asserted): worst ${hotWorst.r.toFixed(2)}:1 (${hotWorst.what})`);
 console.log(`decoder contrast: ${passes} passed, ${fails} failed`);

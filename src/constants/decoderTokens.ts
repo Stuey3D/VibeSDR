@@ -19,13 +19,27 @@
  *   SNR green and the sync dot are the same on every chassis and every colour. A red-controls user
  *   must still see good from bad.
  *
- * ★★ THE TEXT COLOUR NEVER REACHES A DECODER BOX. The mockup lights labels, titles, keys and charts
- *   in the CONTROLS colour (`L()`); the text colour is the deck's readouts (§1: "Controls colour
- *   lights … decoder accents"). The resolver does not even take it, and the contrast test proves
- *   the result is identical under every text colour.
+ * ★★★ TEXT IN THE TEXT COLOUR, KEYS IN THE CONTROLS COLOUR, MEANINGS FIXED — on EVERY chassis
+ *   (Stuart, 2026-10-12, after a blue-text default deck sat under an amber DAB box: "Follow the text
+ *   colour except for when the colours have a meaning. So blue buttons and white text set in the
+ *   controls would show white text in the decoder with the header buttons being blue. Green for the
+ *   selected station, amber and red for other status updates."). This REPLACES two older rules: the
+ *   default chassis's fixed gold (§10.2 / §13.1 "today's look"), and "decoder accents = the controls
+ *   colour" (§1). Now:
+ *   • TEXT — titles, header read-outs, labels, values, decoded output, row text, codec labels, the
+ *     chart marks (they are read-outs too): the user's TEXT colour (`textRgb`, the RESOLVED one —
+ *     neon under Nixie).
+ *   • KEYS — the header keys and the chips in the body, and with them the frame (border, header
+ *     hairline, glow, the idle status dot), so the box reads as one with its keys: the CONTROLS colour.
+ *   • MEANINGS — good / warn / bad, MER pink, SNR green, the sync dot, and the SELECTED / PLAYING
+ *     station (`selected`): fixed. ★ The one exception is the clash Stuart named: "if someone has set
+ *     green text … maybe use amber or white as the selected station" — WHITE, because amber is
+ *     already `warn` (see `selectedFor`).
+ *   ★ On metal with Transparency OFF the HEADER text stays engraved (dark on silver, light grey on
+ *     black): it is cut into the plate, not lit, and no lit colour reads on a silver plate.
  *
  * ★ CONTRAST (§10.2: ≥ 4.5:1 in every chassis × colour; "if one fails, lighten the same hue"):
- *   `controlsText()` lightens a controls colour toward white — same hue — only as far as each
+ *   `controlsText()` lightens a controls OR text colour toward white — same hue — only as far as each
  *   surface needs. Measured in scripts/test_decoder_contrast.ts; the lifts it forced are listed at
  *   CONTRAST_LIFT below.
  *
@@ -74,13 +88,18 @@ export interface DecoderTokens {
   muted:      string;
   /** Section heads. */
   label:      string;
-  /** Field labels in label/value rows. ★ Today's default is the MUTED gold (the panels drew their
-   *  row labels with `muted`); the mockup's silver / black rows are `L(.86)`. */
+  /** Field labels in label/value rows: the text colour a step under the values (.85). */
   rowLabel:   string;
   value:      string;
   /** Emphasis (a spots callsign, DAB's block). */
   accent:     string;
+  /** A faint text-colour fill (a meter's track). */
   rowActive:  string;
+  /** ★★ The SELECTED / PLAYING station (a meaning, not the look): green, or white when the text is
+   *  green (`selectedFor`). `selectedLive` its live text under it, `selectedBg` its row's fill. */
+  selected:     string;
+  selectedLive: string;
+  selectedBg:   string;
   /** DecoderPanel's teleprinter output glow (a soft shadow, not a font effect). */
   outputGlow: string;
   /** Hairlines between list rows. */
@@ -126,6 +145,8 @@ export interface DecoderTokens {
   bad:        string;
   dotOn:      string;
   mer:        string;
+  /** A spot's SNR below 0 dB — weak but decoded (DecoderPanel's spots table). */
+  snrLow:     string;
 }
 
 /** The meaning colours, fixed (§10.2 TRAP). Exported so the test can prove no chassis moves them. */
@@ -135,12 +156,27 @@ export const DECODER_MEANING = {
   bad:   '#ff8a7d',
   dotOn: '#55d98d',
   mer:   '#ff8fa3',
+  snrLow: 'rgba(255,160,0,0.65)',
 } as const;
 
-/** The value colour on silver / black (§10.2 "values stay near-white"). Default keeps `#ffe566`. */
+/** Near-white: the old silver / black value colour, and now the selected station when the text is green. */
 export const METAL_VALUE = '#f2efe8';
 
-const GOLD = (a: number) => `rgba(255,160,0,${a})`;
+/** The brief's green TEXT colour (faceplate.ts LED.green.rgb — not imported: this file stays pure;
+ *  scripts/test_decoder_contrast.ts proves they agree). */
+export const GREEN_TEXT_RGB = '61,255,114';
+const SELECTED_GREEN = '125,255,154';   // = DECODER_MEANING.good — the browser's `.dabSvc.on`
+const SELECTED_WHITE = '242,239,232';   // = METAL_VALUE
+
+/**
+ * ★★ The selected / playing station's colour, as a triplet. GREEN — the meaning Stuart gave it ("Green for the
+ * selected station") — except when the TEXT is green, where a green station among green rows would not stand
+ * out. ★ Then WHITE, not amber (Stuart offered "amber or white"): amber is already `warn`, and a selected
+ * station that looks like a warning would be the clash all over again.
+ */
+export function selectedFor(textRgb: string): string {
+  return textRgb === GREEN_TEXT_RGB ? SELECTED_WHITE : SELECTED_GREEN;
+}
 
 // ── Colour maths (shared with the contrast test) ─────────────────────────────
 
@@ -174,9 +210,11 @@ export const CONTRAST_LIFT: Record<string, number> = {
   '61,155,255':  0,      // blue
   '215,228,255': 0,      // white
   '255,106,20':  0.05,   // neon
+  '70,255,215':  0,      // teal (a text colour only)
+  '0,230,0':     0,      // TODAY_GREEN — the default chassis's green controls (faceplate.ts)
 };
 
-/** The controls colour as it lights decoder TEXT (lifted as far as contrast needs), as a triplet. */
+/** A controls or text colour as it lights decoder TEXT (lifted as far as contrast needs), as a triplet. */
 export function controlsText(controlsRgb: string): string {
   const lift = CONTRAST_LIFT[controlsRgb] ?? 0;
   return lighten(parseRgb(controlsRgb), lift).join(',');
@@ -197,98 +235,97 @@ const DEFAULT_TINT = 0.72;
  */
 export const DEFAULT_SOLID_BG = `rgb(${parseRgb(DEFAULT_TINT_RGB).map(v => Math.round(v * DEFAULT_TINT)).join(',')})`;
 
-/** Today's gold chrome — the mockup's `isDef` branch, with the literals the panels drew. */
-function defaultTokens(transparency: Transparency): DecoderTokens {
-  const solid = transparency === 'off';
-  return {
-    chassis: 'default', transparency, surface: 'glass',
-    // ★★ ON = the RDS panel's glass, which the brief calls "today's glass" (0.72, BIG 0.62, iOS
-    //   blur under SMALL). OFF = that glass made opaque (solidBg) — same colour on a dark
-    //   waterfall, nothing behind it drawn through it. See DecoderShell.
-    tint: solid ? 1 : DEFAULT_TINT, tintTall: solid ? 1 : 0.62, blur: solid ? 0 : 35,
-    tintRgb: DEFAULT_TINT_RGB, solidBg: solid ? DEFAULT_SOLID_BG : null,
-    border: GOLD(0.28), glow: null, hdrBdr: GOLD(0.12), window: null,
-    title: GOLD(0.86), titleMin: GOLD(0.40),
-    hdrMuted: GOLD(0.72), hdrValue: '#ffe566', hdrAccent: '#ffb833', engrave: null,
-    // ★★ .60 → .72 for the dim gold (status, row labels, key legends): the ONLY default values the
-    //   contrast rule moved. At .60 they measured 4.0:1 on the SMALL glass and 3.5:1 on BIG's 0.62
-    //   over a busy band; .72 clears 4.5:1 on both and still sits well below the .86 titles, so
-    //   the hierarchy AdvRdsPanel's note defends ("still clearly SUBORDINATE") is kept.
-    muted: GOLD(0.72), label: GOLD(0.86), rowLabel: GOLD(0.72),
-    value: '#ffe566', accent: '#ffb833', rowActive: GOLD(0.14),
-    outputGlow: 'rgba(255,220,100,0.35)', divider: GOLD(0.08),
-    keyLook: 'outline',
-    keyBorder: GOLD(0.28), keyBorderAct: GOLD(0.55), keyBgAct: GOLD(0.12),
-    keyText: GOLD(0.72), keyTextAct: '#ffb833', keyGlow: null, keyShade: null,
-    close: 'rgba(255,100,100,0.70)', cap: null,
-    chipBorder: GOLD(0.28), chipBorderAct: GOLD(0.55), chipBgAct: GOLD(0.12),
-    dotIdle: GOLD(0.35),
-    plot: GOLD(0.05), axis: GOLD(0.18), axisStrong: 'rgba(255,160,60,0.35)',
-    axisFaint: 'rgba(255,170,60,0.07)', chartText: 'rgba(255,190,110,0.85)',
-    dot: 'rgba(125,255,154,0.75)', bar: 'rgba(255,190,90,0.85)', trace: 'rgba(125,255,154,0.85)',
-    ...DECODER_MEANING,
-  };
+/** Engraved header text on the metal plate (Transparency OFF, silver / black) — cut in, not lit. */
+function engraved(silver: boolean) {
+  return silver
+    ? { title: '#2a2824', titleMin: 'rgba(42,40,36,0.60)', hdrMuted: '#35332e',
+        engrave: { color: 'rgba(255,255,255,0.60)', dy: 1 } }
+    : { title: '#c9ccd2', titleMin: 'rgba(201,204,210,0.60)', hdrMuted: '#a3a6ac',
+        engrave: { color: 'rgba(0,0,0,0.90)', dy: -1 } };
 }
 
-/** Silver / black. `controlsRgb` is the controls colour's triplet (LED[controls].rgb). */
-function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, transparency: Transparency): DecoderTokens {
-  const solid = transparency === 'off';
-  const L  = (a: number) => `rgba(${controlsRgb},${a})`;
-  const Lt = (a: number) => `rgba(${controlsText(controlsRgb)},${a})`;
+/**
+ * The tokens. `controlsRgb` is the RESOLVED controls LED's triplet (TODAY_GREEN on default), `textRgb`
+ * the RESOLVED text colour's (neon under Nixie). See the header for which role takes which.
+ */
+function tokens(chassis: Chassis, controlsRgb: string, transparency: Transparency, textRgb: string): DecoderTokens {
+  const off    = transparency === 'off';
+  const def    = chassis === 'default';
+  const metal  = !def && off;
   const silver = chassis === 'silver';
+  const K  = (a: number) => `rgba(${controlsRgb},${a})`;                 // controls, graphics + borders
+  const Kt = (a: number) => `rgba(${controlsText(controlsRgb)},${a})`;   // controls, as a legend
+  const Tr = (a: number) => `rgba(${textRgb},${a})`;                     // text colour, chart graphics
+  const Tt = (a: number) => `rgba(${controlsText(textRgb)},${a})`;       // text colour, as text
+  const sel = selectedFor(textRgb);
 
-  // Header text: engraved on the metal when OFF; the lit controls colour over the glass otherwise.
-  const hdr = solid
-    ? (silver
-      ? { title: '#2a2824', titleMin: 'rgba(42,40,36,0.60)', hdrMuted: '#35332e',
-          engrave: { color: 'rgba(255,255,255,0.60)', dy: 1 } }
-      : { title: '#c9ccd2', titleMin: 'rgba(201,204,210,0.60)', hdrMuted: '#a3a6ac',
-          engrave: { color: 'rgba(0,0,0,0.90)', dy: -1 } })
-    : { title: Lt(0.92), titleMin: Lt(0.50), hdrMuted: Lt(0.85), engrave: null };
+  // Header text: engraved on the metal (OFF, silver / black); the lit TEXT colour everywhere else.
+  const e = metal ? engraved(silver) : null;
+  const hdr = e
+    ? { ...e, hdrValue: e.title, hdrAccent: e.title }
+    : { title: Tt(0.92), titleMin: Tt(0.50), hdrMuted: Tt(0.85), hdrValue: Tt(1), hdrAccent: Tt(1), engrave: null };
 
   return {
-    chassis, transparency, surface: solid ? 'metal' : 'glass', solidBg: null,
-    // ★★ No blur on silver / black in either mode (§10.2, §3.4) — a metal deck over a blurred
-    //   spectrum would pay the one cost the opaque plate exists to avoid.
-    tint: 0.72, tintTall: 0.62, blur: 0, tintRgb: '10,8,4',
-    border:  solid ? (silver ? '#8b8983' : '#3a3c40') : L(0.40),
-    glow:    solid ? null : L(0.18),
-    hdrBdr:  solid ? null : L(0.18),
-    window:  solid ? { bg: '#070605', lip: silver ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.14)',
+    chassis, transparency, surface: metal ? 'metal' : 'glass',
+    // ★★ Default ON = the RDS panel's glass, which the brief calls "today's glass" (0.72, BIG 0.62, iOS
+    //   blur under SMALL); default OFF = that glass made opaque (solidBg). Silver / black ON: the same
+    //   glass, never blurred (§10.2, §3.4 — a metal deck over a blurred spectrum would pay the one cost
+    //   the opaque plate exists to avoid); OFF: the plate + recessed window.
+    solidBg:  def && off ? DEFAULT_SOLID_BG : null,
+    tint:     def && off ? 1 : DEFAULT_TINT,
+    tintTall: def && off ? 1 : 0.62,
+    blur:     def && !off ? 35 : 0,
+    tintRgb:  DEFAULT_TINT_RGB,
+    // ── Frame: the KEYS' colour, so the box reads as one with its keys. Metal OFF: the chassis edge.
+    border:  metal ? (silver ? '#8b8983' : '#3a3c40') : K(0.40),
+    glow:    def || metal ? null : K(0.18),   // the silver / black glass glow (mockup `0 0 8px L(.18)`)
+    hdrBdr:  metal ? null : K(0.18),
+    window:  metal ? { bg: '#070605', lip: silver ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.14)',
                        inset: 8, radius: 6 } : null,
     ...hdr,
-    hdrValue:  solid ? hdr.title : METAL_VALUE,
-    hdrAccent: solid ? hdr.title : Lt(1),
-    muted: Lt(0.85), label: Lt(0.92), rowLabel: Lt(0.92),
-    value: METAL_VALUE, accent: Lt(1), rowActive: L(0.14),
-    outputGlow: 'rgba(0,0,0,0)', divider: L(0.10),
-    keyLook: 'cap',
-    keyBorder: silver ? '#8d8a83' : '#050505', keyBorderAct: silver ? '#8d8a83' : '#050505',
-    keyBgAct: 'transparent',
-    // ★ Silver caps are LIGHT: lifting toward white would only fade the legend, so they take the
-    //   pure colour (the mockup's `L(.9)` / `L(1)`) with the deck keys' dark shade under it (§5,
-    //   FaceplateTheme keyLegend.shade). Black caps are dark, so they take the lifted text colour.
-    keyText:    silver ? L(0.90) : Lt(0.92),
-    keyTextAct: silver ? L(1) : Lt(1),
-    keyGlow:    L(0.55),
-    keyShade:   silver ? 'rgba(0,0,0,0.6)' : null,
-    close:      silver ? L(0.90) : Lt(0.90),
-    chipBorder: L(0.35), chipBorderAct: L(0.70), chipBgAct: L(0.14),
-    cap: silver
-      ? { base: '#c4c1ba', hi: 'rgba(255,255,255,0.40)', lo: 'rgba(0,0,0,0.10)', border: '#8d8a83',
-          topLine: 'rgba(255,255,255,0.80)', cast: '#000000', castOpacity: 0.6, pressDim: 0.84 }
-      : { base: '#111214', hi: 'rgba(255,255,255,0.05)', lo: 'rgba(0,0,0,0.25)', border: '#050505',
-          topLine: 'rgba(255,255,255,0.22)', cast: '#000000', castOpacity: 0.85, pressDim: 0.82 },
-    dotIdle: L(0.35),
-    plot: L(0.05), axis: L(0.25), axisStrong: L(0.35), axisFaint: L(0.07), chartText: Lt(0.85),
-    dot: Lt(0.85), bar: Lt(0.70), trace: Lt(0.85),
+    // ── Body: the TEXT colour. Hierarchy by alpha and size — labels a step under the values.
+    muted: Tt(0.85), label: Tt(0.92), rowLabel: Tt(0.85),
+    value: Tt(1), accent: Tt(1), rowActive: Tt(0.12),
+    selected: `rgb(${sel})`, selectedLive: `rgba(${sel},0.80)`, selectedBg: `rgba(${sel},0.14)`,
+    // The teleprinter glow is the default glass's; the metal chassis never had it.
+    outputGlow: def ? Tr(0.35) : 'rgba(0,0,0,0)',
+    divider: Tr(0.10),
+    // ── Keys: the CONTROLS colour. Default: today's outline key; silver / black: the cap (§5).
+    ...(def
+      ? { keyLook: 'outline' as const,
+          keyBorder: K(0.35), keyBorderAct: K(0.65), keyBgAct: K(0.14),
+          keyText: Kt(0.85), keyTextAct: Kt(1), keyGlow: null, keyShade: null,
+          close: Kt(0.85), cap: null }
+      : { keyLook: 'cap' as const,
+          keyBorder: silver ? '#8d8a83' : '#050505', keyBorderAct: silver ? '#8d8a83' : '#050505',
+          keyBgAct: 'transparent',
+          // ★ Silver caps are LIGHT: lifting toward white would only fade the legend, so they take the
+          //   pure colour (the mockup's `L(.9)` / `L(1)`) with the deck keys' dark shade under it (§5,
+          //   FaceplateTheme keyLegend.shade). Black caps are dark, so they take the lifted colour.
+          keyText:    silver ? K(0.90) : Kt(0.92),
+          keyTextAct: silver ? K(1) : Kt(1),
+          keyGlow:    K(0.55),
+          keyShade:   silver ? 'rgba(0,0,0,0.6)' : null,
+          close:      silver ? K(0.90) : Kt(0.90),
+          cap: silver
+            ? { base: '#c4c1ba', hi: 'rgba(255,255,255,0.40)', lo: 'rgba(0,0,0,0.10)', border: '#8d8a83',
+                topLine: 'rgba(255,255,255,0.80)', cast: '#000000', castOpacity: 0.6, pressDim: 0.84 }
+            : { base: '#111214', hi: 'rgba(255,255,255,0.05)', lo: 'rgba(0,0,0,0.25)', border: '#050505',
+                topLine: 'rgba(255,255,255,0.22)', cast: '#000000', castOpacity: 0.85, pressDim: 0.82 } }),
+    // Buttons inside the body are keys too.
+    chipBorder: K(0.35), chipBorderAct: K(0.70), chipBgAct: K(0.14),
+    dotIdle: K(0.35),
+    // ── Charts: read-outs, so the TEXT colour.
+    plot: Tr(0.05), axis: Tr(0.25), axisStrong: Tr(0.35), axisFaint: Tr(0.07), chartText: Tt(0.85),
+    dot: Tt(0.85), bar: Tt(0.70), trace: Tt(0.85),
     ...DECODER_MEANING,
   };
 }
 
 /** Unmemoised — the contrast test's `--find` sweep changes CONTRAST_LIFT under it. */
-export function buildDecoderTokens(chassis: Chassis, controlsRgb: string, transparency: Transparency): DecoderTokens {
-  return chassis === 'default' ? defaultTokens(transparency) : metalTokens(chassis, controlsRgb, transparency);
+export function buildDecoderTokens(chassis: Chassis, controlsRgb: string, transparency: Transparency,
+                                   textRgb: string = GREEN_TEXT_RGB): DecoderTokens {
+  return tokens(chassis, controlsRgb, transparency, textRgb);
 }
 
 const cache = new Map<string, DecoderTokens>();
@@ -299,11 +336,11 @@ const cache = new Map<string, DecoderTokens>();
  * render — a spectrum frame never touches it.
  */
 export function decoderTokensFor(chassis: Chassis = 'default', controlsRgb = '61,255,114',
-                                 transparency: Transparency = 'on'): DecoderTokens {
-  const key = chassis === 'default' ? `default|${transparency}` : `${chassis}|${controlsRgb}|${transparency}`;
+                                 transparency: Transparency = 'on', textRgb: string = GREEN_TEXT_RGB): DecoderTokens {
+  const key = `${chassis}|${controlsRgb}|${transparency}|${textRgb}`;
   let t = cache.get(key);
   if (!t) {
-    t = buildDecoderTokens(chassis, controlsRgb, transparency);
+    t = buildDecoderTokens(chassis, controlsRgb, transparency, textRgb);
     cache.set(key, t);
   }
   return t;

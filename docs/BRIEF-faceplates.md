@@ -90,8 +90,14 @@ Control Customisation column). Today's **CONTROLS** section in `MenuSheet` becom
 
 ★★★ **Two colours, not one.**
 - **Controls colour** lights the key legends, the drum wells (window edges, seam glow, icon, ±,
-  outer glow), tuner keys, and decoder accents.
-- **Text colour** lights the frequency, mode box, VTS strip, SHARED TUNER banner and status display.
+  outer glow), tuner keys, and the decoder boxes' header keys, chips and frame (border, hairline, glow).
+- **Text colour** lights the frequency, mode box, VTS strip, SHARED TUNER banner and status display,
+  and every piece of text in the decoder boxes (§10.2).
+- ★★★ **2026-10-12 (Stuart), replacing "decoder accents = controls colour":** *"Follow the text colour
+  except for when the colours have a meaning. So blue buttons and white text set in the controls would
+  show white text in the decoder with the header buttons being blue. Green for the selected station,
+  amber and red for other status updates. The only thing this will cause an issue with is if someone
+  has set green text so at that point maybe use amber or white as the selected station."*
 
 ★★★ **Text colours are limited to what the real display technology came in.**
 
@@ -618,6 +624,21 @@ pin **`Fonts.decoder = 'Atkinson Hyperlegible'`**, and justify or drop DAB's 560
 
 ### 10.2 Decoder background: `Transparent` (default) or `Solid`
 
+> ★★★ **COLOURS — SUPERSEDED 2026-10-12 (Stuart, quoted in §1).** On **every** chassis, default included
+> (the default chassis's fixed gold is gone):
+> - **Text** (titles, header read-outs, labels, values, decoded output, row text, codec labels, chart marks)
+>   = the **text colour** (neon under Nixie). On silver / black with Transparency OFF the *header* text stays
+>   engraved into the plate — cut in, not lit.
+> - **Header keys, chips in the body, and the frame** (border, header hairline, glow, idle status dot)
+>   = the **controls colour**, so the box reads as one with its keys.
+> - **Meanings stay fixed:** good / warn (amber) / bad (red), MER pink, SNR green, the sync dot, and the
+>   **selected / playing station = green** — except on **green text**, where it is **white** (Stuart offered
+>   "amber or white"; amber is already *warn*).
+> - Tokens: `src/constants/decoderTokens.ts`; proof: `scripts/test_decoder_contrast.ts` (every chassis ×
+>   controls × text × transparency, ≥ 4.5:1).
+> Read the colour lines below ("default … unchanged", "labels use the controls/text colour", "charts take
+> the controls colour") as history.
+
 > ★★★ **SUPERSEDED 2026-09-30 by ONE app-wide setting, TRANSPARENCY EFFECTS On / Off** (Stuart: "That
 > solid/transparency toggle we added to the decoder box, apply that to the default controls too, then when app
 > opened we detect low end hardware we default to transparency off … then user can customise afterwards", and
@@ -666,7 +687,7 @@ share the look: `RecordingsOverlay`, `KeyboardShortcuts`, `PasswordModal`, `Iden
 
 | Chassis | Popups |
 |---|---|
-| `default` | **Unchanged.** Today's dark glass and gold selection, pixel for pixel. |
+| `default` | **Unchanged.** Today's dark glass and gold selection, pixel for pixel. (★ 2026-10-12: the DECODER boxes no longer match this gold — they follow the text / controls colours on every chassis, §10.2. Popups were not changed with them; whether they follow is an open question for Stuart.) |
 | `silver` / `black` | A solid brushed plate matching the deck, laid out as below |
 
 - **Plate:** the same texture and lighting layer as the deck (§3), opaque.
