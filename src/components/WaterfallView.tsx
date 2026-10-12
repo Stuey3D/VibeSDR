@@ -2327,9 +2327,10 @@ function WaterfallView({
           {Platform.OS === 'android' && staticOverlayEls}
           {specShow && (
             <Path path={specPath} style="fill"
-                  /* ★ antiAlias OFF: the fill's edge coverage was 3.5 of its 9.5 ms GPU draw on the XCover 4s; the
-                     line drawn over it carries the edge, and Stuart could not see the difference (2026-10-12). */
-                  antiAlias={false}>
+                  /* ★ antiAlias OFF ON ANDROID: the fill's edge coverage was 3.5 of its 9.5 ms GPU draw on the XCover 4s;
+                     the line drawn over it carries the edge, and Stuart could not see the difference (2026-10-12).
+                     iOS keeps it — its GPUs never needed the saving, and its look is the reference. */
+                  antiAlias={Platform.OS !== 'android'}>
               <LinearGradient start={vec(0, specTop)} end={vec(0, wfTop)}
                               colors={specGradColors} />
             </Path>
