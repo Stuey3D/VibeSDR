@@ -173,7 +173,7 @@ const GOLD_RE = /#ffe566|#ffb833|#ffb84d|255,\s*160,\s*0|255,\s*184,\s*51|255,\s
 for (const f of ['components/Coachmark.tsx', 'components/StepPicker.tsx', 'components/KeyboardShortcuts.tsx',
                  'components/PasswordModal.tsx', 'components/IdentModal.tsx', 'components/CityPickerModal.tsx',
                  'components/RecordingsOverlay.tsx', 'components/DoorConditions.tsx', 'components/ServersChip.tsx',
-                 'components/LegacyPackageNotice.tsx', 'components/TvTextInput.tsx', 'components/FreqModal.tsx']) {
+                 'components/LegacyPackageNotice.tsx', 'components/FreqModal.tsx']) {   // ★ TvTextInput left out: its Lite default IS the old gold (TV_LITE)
   const code = src(f).split('\n').filter(l => !/^\s*(\*|\/\/|\/\*)/.test(l));
   const hits = code.filter(l => GOLD_RE.test(l));
   ok(`${f}: no gold left (${hits.length})`, hits.length === 0, hits.join('\n'));
@@ -182,6 +182,38 @@ for (const f of ['components/Coachmark.tsx', 'components/StepPicker.tsx', 'compo
 //   so the field must take its colours from a pure module / its own context, never from PopupShell or the faceplate.
 ok('TvTextInput is Lite-safe (no PopupShell / FaceplateContext / Reanimated / Skia)',
    !/^import[^\n]*from '[^']*(PopupShell|FaceplateContext|react-native-reanimated|react-native-skia)'/m.test(src('components/TvTextInput.tsx')));
+// ★★★ GainSlider (Stuart, 2026-10-13: "fix it"): colours by PROP. With none it must draw EXACTLY the old gold (Lite);
+//   with the user's colours, controls colour for keys / slider, text colour for words. It imports react-native, so
+//   these are source checks: the default object's literals, and the role mapping.
+{
+  const gs = src('components/GainSlider.tsx');
+  ok('GainSlider is Lite-safe (type-only popupTokens; no PopupShell / FaceplateContext / Reanimated / Skia)',
+     !/^import[^\n]*from '[^']*(PopupShell|FaceplateContext|react-native-reanimated|react-native-skia)'/m.test(gs)
+     && /^import type \{ PopupTokens \} from '\.\.\/constants\/popupTokens';/m.test(gs));
+  const gold = gs.match(/export const GAIN_SLIDER_GOLD: GainSliderInk = \{([\s\S]*?)\};/)?.[1] ?? '';
+  const lit = Object.fromEntries([...gold.matchAll(/(\w+): '([^']+)'/g)].map(m => [m[1], m[2]]));
+  // The literals the slider drew before 2026-10-13 (C.gold / muted / dim / btnBg / active / border, the white .25 track).
+  eq('GainSlider default = the old gold, value for value', lit, {
+    fill: '#ffe566', thumb: '#ffe566', selText: '#ffe566', selBorder: 'rgba(255,229,102,0.55)', selBg: 'rgba(255,200,0,0.16)',
+    key: 'rgba(255,255,255,0.92)', keyBorder: 'rgba(255,255,255,0.25)', keyBg: 'rgba(20,18,14,0.85)',
+    track: 'rgba(255,255,255,0.25)', dim: 'rgba(200,210,225,0.90)', value: 'rgba(255,255,255,0.92)',
+  });
+  ok('GainSlider: no ink → the gold', /ink = GAIN_SLIDER_GOLD \}: GainSliderProps/.test(gs));
+  ok('GainSlider: no colour literal outside the default ink (and the dark key fill)',
+     (gs.replace(/export const GAIN_SLIDER_GOLD[\s\S]*?\};/, '').match(/'#[0-9a-f]{3,8}'|'rgba\([^']*\)'/gi) ?? [])
+       .every(c => c === "'rgba(20,18,14,0.85)'"));
+  const map = gs.match(/function buildInk\(pt: PopupTokens\): GainSliderInk \{([\s\S]*?)\n\}/)?.[1] ?? '';
+  for (const [role, tok] of [['fill', 'pt.gold.fill'], ['thumb', 'pt.gold.thumb'], ['selText', 'pt.gold.sel'],
+                             ['selBorder', 'pt.gold.selBorder'], ['selBg', 'pt.ink.keyBgAct'], ['key', 'pt.ink.key'],
+                             ['keyBorder', 'pt.ink.keyBorder'], ['track', 'pt.ink.keyBorder'], ['dim', 'pt.ink.textDim'],
+                             ['value', 'pt.ink.text']] as const)
+    ok(`GainSlider ${role} ← ${tok}`, new RegExp(`${role}: ${tok.replace(/\./g, '\\.')}\\b`).test(map));
+  ok('LocalHardwarePanel passes the user\'s colours to GainSlider', /<GainSlider[\s\S]*?ink=\{gainSliderInk\(gt\)\}/.test(src('components/LocalHardwarePanel.tsx')));
+  // And the passed colours really are the user's: blue keys / white text through the default-chassis tokens.
+  const d = popupTokensFor('default', LED.blue.rgb, LED.white.rgb, 'hyper');
+  ok('gainSliderInk sources: fill is the controls colour, value the text colour',
+     d.gold.fill.startsWith(`rgba(${LED.blue.rgb},`) && d.ink.text.startsWith(`rgba(${LED.white.rgb},`));
+}
 ok('the directory reads useGlassTheme', /useGlassTheme\(\)/.test(src('screens/InstancePickerScreen.tsx')));
 ok('the tour card reads useGlassTheme', /useGlassTheme\(\)/.test(src('components/Coachmark.tsx')));
 

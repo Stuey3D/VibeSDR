@@ -13,7 +13,7 @@ import { usePopupTheme, useGlassTheme, usePopupFrame, engraveText, PopupPlate, P
          type PopupTokens } from './PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode, useNavFocus } from './PanelNav';
-import GainSlider from './GainSlider';
+import GainSlider, { gainSliderInk } from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
 import {
@@ -1291,7 +1291,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                *  dongle with rtl_tcp gain commands exactly as it does over USB. The dongle's own AGC
                *  is broken everywhere and is never used. */}
               <GainSlider gains={cappedGains} gainTenthDb={p.gainTenthDb} auto={p.autoGain}
-                          onAuto={p.onAuto} onGain={p.onGain} vibeAgc />
+                          onAuto={p.onAuto} onGain={p.onGain} vibeAgc ink={gainSliderInk(gt)} />
             </>
           ))}
           {p.isSpy && <Text style={styles.note}>

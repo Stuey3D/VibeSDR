@@ -33,13 +33,13 @@ export default function AntennaSwitchSetup({ value, onChange, C, F }: {
   const key = (label: string, on: boolean, onPress: () => void, extra?: object) => (
     <TouchableOpacity key={label} onPress={onPress} accessibilityRole="button"
       style={[{ borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8,
-                borderColor: on ? C.keyBorderAct : C.border, backgroundColor: on ? C.keyBgAct : 'transparent' }, extra]}>
-      <Text style={{ color: on ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>{label}</Text>
+                borderColor: on ? C.keySelBorder : C.border, backgroundColor: on ? C.keySelBg : 'transparent' }, extra]}>
+      <Text style={{ color: on ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>{label}</Text>
     </TouchableOpacity>
   );
   const hint = (t: string) => <Text style={{ color: C.textDim, fontFamily: F, fontSize: 11, marginTop: 6, lineHeight: 15 }}>{t}</Text>;
   const input = (v: string, set: (s: string) => void, ph: string, extra?: object) => (
-    <TextInput value={v} onChangeText={set} placeholder={ph} placeholderTextColor={C.placeholder}
+    <TextInput value={v} onChangeText={set} placeholder={ph} placeholderTextColor={C.placeholderDim}
       autoCapitalize="none" autoCorrect={false}
       style={[{ borderWidth: 1, borderRadius: 8, borderColor: C.border, color: C.text, fontFamily: F,
                 paddingHorizontal: 10, paddingVertical: 8, marginTop: 6 }, extra]} />
@@ -88,7 +88,7 @@ export default function AntennaSwitchSetup({ value, onChange, C, F }: {
         {found?.map((d) => (
           <TouchableOpacity key={d.id + d.broker} onPress={() => choose(d)} accessibilityRole="button"
             style={{ borderWidth: 1, borderRadius: 8, padding: 10, marginTop: 8,
-                     borderColor: value.deviceName === d.name && value.broker === d.broker ? C.keyBorderAct : C.border }}>
+                     borderColor: value.deviceName === d.name && value.broker === d.broker ? C.keySelBorder : C.border }}>
             <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>Switch found on {d.broker} — {d.name}</Text>
             <Text style={{ color: C.textDim, fontFamily: F, fontSize: 11, marginTop: 2 }}>
               {d.relays.length} relay{d.relays.length === 1 ? '' : 's'} · {d.kind === 'tasmota' ? 'Tasmota' : 'Home-Assistant discovery'}

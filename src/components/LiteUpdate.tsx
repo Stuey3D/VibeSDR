@@ -81,7 +81,7 @@ export default function LiteUpdate({ C, F }: { C: ServerPalette; F?: string }) {
   const link = (label: string, onPress: () => void) => (
     <TouchableOpacity onPress={onPress} accessibilityRole="button" hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
                       style={{ alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 12 }}>
-      <Text style={[dim, { color: C.key, textDecorationLine: 'underline' }]}>{label}</Text>
+      <Text style={[dim, { color: C.keyQuiet, textDecorationLine: 'underline' }]}>{label}</Text>
     </TouchableOpacity>
   );
   const button = (label: string, onPress: () => void) => (

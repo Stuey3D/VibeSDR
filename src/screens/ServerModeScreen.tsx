@@ -8,7 +8,7 @@ import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } fro
  *  ★ OFF FOR V11 (Stuart, 2026-10-10): Chicopee has no switch to test with — "it is being left out of V11 for now".
  *    The test build (lite-v11.0.0-rc34test1-antenna-switch) stays up for anyone who has one. Flip to true for V12. */
 const ANT_SWITCH_SETUP = false;
-import GainSlider from '../components/GainSlider';
+import GainSlider, { gainSliderInk } from '../components/GainSlider';
 import BandLimitEditor, { Band } from '../components/BandLimitEditor';
 
 /* ★★★ EVERYTHING A LISTENER CAN CHOOSE, so an owner can switch off what this receiver cannot
@@ -627,7 +627,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   value={lockedCentre ? String(Math.round(lockedCentre / 1000)) : ''}
                   onChangeText={(t) => setLockedCentre(Math.round((Number(t) || 0) * 1000))}
                   placeholder="kHz — the window everyone shares"
-                  placeholderTextColor={C.placeholder} keyboardType="numeric"
+                  placeholderTextColor={C.placeholderDim} keyboardType="numeric"
                   style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border }]} />
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                   Listeners tune freely INSIDE this window but cannot move the radio for everybody.
@@ -1815,7 +1815,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
               </View>
               {publicTemp && publicUntil > 0 ? (
-                <Text style={[styles.value, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                <Text style={[styles.value, { color: C.textMuted, fontFamily: F, marginTop: 6 }]}>
                   {`Ends ${new Date(publicUntil * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} \u2014 switch off to keep it listed`}
                 </Text>
               ) : null}
@@ -1940,7 +1940,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 </Text>
               )}
               {publicErr ? (
-                <Text style={[styles.hint, { ...meaningText(C.m, C.bad), fontFamily: F, marginTop: 8 }]}>
+                <Text style={[styles.hint, { ...meaningText(C.m, C.badPublish), fontFamily: F, marginTop: 8 }]}>
                   {publicErr}
                 </Text>
               ) : null}
@@ -1957,25 +1957,25 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                         ? `${listeners} listening${maxUsers > 1 ? ` of ${maxUsers}` : ''}`
                         : (status?.clientAddr ? `Connected: ${status.clientAddr}` : 'Client connected'))
                    : 'Waiting for a client…'}
-              vc={client ? C.ok : C.textDim} />
-            <Row C={C} F={F} k="WATERFALL" v={`${fmtRate(spec)}`} vc={client ? C.keyAct : C.keyDim} />
-            <Row C={C} F={F} k="AUDIO" v={`${fmtRate(aud)}${status?.compressed ? '' : ' (raw)'}`} vc={client ? C.keyAct : C.keyDim} />
+              vc={client ? C.ok : C.textMuted} />
+            <Row C={C} F={F} k="WATERFALL" v={`${fmtRate(spec)}`} vc={client ? C.text : C.textMuted} />
+            <Row C={C} F={F} k="AUDIO" v={`${fmtRate(aud)}${status?.compressed ? '' : ' (raw)'}`} vc={client ? C.text : C.textMuted} />
             {/* The client drives the capture rate (and the frame rate) live. Showing
                 them here is how the HOST sees the server answering the client —
                 otherwise a remote change is invisible from this end. */}
             <Row C={C} F={F} k="SAMPLE RATE"
               v={status?.sampleRate ? `${(status.sampleRate / 1e6).toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} MS/s` : '—'}
-              vc={client ? C.keyAct : C.keyDim} />
+              vc={client ? C.text : C.textMuted} />
             <Row C={C} F={F} k="FRAME RATE"
               v={status?.fftRate ? `${Math.round(status.fftRate)} fps` : '—'}
-              vc={client ? C.keyAct : C.keyDim} />
+              vc={client ? C.text : C.textMuted} />
             {/* CPU — a phone serving on a shelf for hours invites "what is this costing me",
                 and the honest answer beats guessing from how warm it feels. Percent of ONE
                 core, so it stays comparable with the DSP benchmark figures; the core count is
                 shown alongside so 120% reads as "1.2 of 8" rather than as an error. */}
             <Row C={C} F={F} k="CPU"
               v={status?.cpu ? `${status.cpu.toFixed(0)}% of 1 core${status?.cores ? ` (of ${status.cores})` : ''}` : '—'}
-              vc={client ? C.keyAct : C.keyDim} />
+              vc={client ? C.text : C.textMuted} />
           </View>
 
           <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
@@ -2027,7 +2027,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               app AND Lite (which renders this screen). The phone that crashed is the one that HOSTS the
               server; NickB's report came from his listener phone because About was the only door.
               `server` adds the server section (version, radio, uptime) even when it is stopped. */}
-          <ExportLogsLink color={C.key} fontFamily={F} style={{ marginTop: 14 }} />
+          <ExportLogsLink color={C.keyQuiet} fontFamily={F} style={{ marginTop: 14 }} />
           <LiteUpdate C={C} F={F} />
         </ScrollView>
       </SafeAreaView>
@@ -2070,8 +2070,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           </Text>
         )}
         {!prefsRead && !prefsLoading && (
-          <View style={{ borderLeftWidth: 3, borderLeftColor: C.bad, paddingLeft: 10, marginBottom: 12 }}>
-            <Text style={[styles.hint, { ...meaningText(C.m, C.bad), fontFamily: F, marginBottom: 0 }]}>
+          <View style={{ borderLeftWidth: 3, borderLeftColor: C.badSoft, paddingLeft: 10, marginBottom: 12 }}>
+            <Text style={[styles.hint, { ...meaningText(C.m, C.badSoft), fontFamily: F, marginBottom: 0 }]}>
               {`Your saved settings could not be read${prefsError ? ` (${prefsError})` : ''}. What you see `
                + `below are DEFAULTS — your settings are still stored on this device and have not been `
                + `touched, so do not start the server until this is fixed, or they will be overwritten.`}
@@ -2081,9 +2081,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 holding the database and has since let go. */}
             <TouchableOpacity onPress={() => setPrefsTry((n) => n + 1)}
                               style={{ marginTop: 8, alignSelf: 'flex-start', paddingVertical: 6,
-                                       paddingHorizontal: 14, borderWidth: 1, borderColor: C.bad,
+                                       paddingHorizontal: 14, borderWidth: 1, borderColor: C.badSoft,
                                        borderRadius: 6 }}>
-              <Text style={{ ...meaningText(C.m, C.bad), fontFamily: F, fontSize: 14 }}>↻ Try reading them again</Text>
+              <Text style={{ ...meaningText(C.m, C.badSoft), fontFamily: F, fontSize: 14 }}>↻ Try reading them again</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -2111,8 +2111,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, flex: 1, marginBottom: 0 }]}
                       numberOfLines={1}>{r.label || r.id}</Text>
                 <Text style={[styles.hint, { fontFamily: F, marginBottom: 0,
-                              ...meaningText(C.m, r.grade === 'red' ? C.bad : r.grade === 'amber' ? C.warn
-                                   : r.grade === 'none' ? C.textDim : C.good) }]}>
+                              ...meaningText(C.m, r.grade === 'red' ? C.badSoft : r.grade === 'amber' ? C.gradeWarn
+                                   : r.grade === 'none' ? C.textDim : C.gradeGood) }]}>
                   {r.grade === 'none' ? 'not measured' : `${Math.round(r.pct)}% of a core`}
                 </Text>
               </View>
@@ -2261,7 +2261,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 style={[styles.input, { color: C.text, borderColor: C.border, fontFamily: F, flex: 1 }]} />
               <TouchableOpacity onPress={() => setShowAdminPw(v => !v)}
                 style={[styles.card, { borderColor: C.border, paddingVertical: 10, paddingHorizontal: 12 }]}>
-                <Text style={{ color: C.key, fontFamily: F, fontSize: 12 }}>
+                <Text style={{ color: C.keyQuiet, fontFamily: F, fontSize: 12 }}>
                   {showAdminPw ? 'HIDE' : 'SHOW'}
                 </Text>
               </TouchableOpacity>
@@ -2317,7 +2317,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             </View>
             {locMode === 'manual' && (
               <TextInput value={locCity} onChangeText={setLocCity}
-                placeholder="Town, or grid locator (Northampton / IO92nh)" placeholderTextColor={C.placeholder}
+                placeholder="Town, or grid locator (Northampton / IO92nh)" placeholderTextColor={C.placeholderDim}
                 style={[styles.input, { color: C.text, borderColor: C.border, fontFamily: F }]} />
             )}
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
@@ -2536,17 +2536,17 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             <View style={[styles.card, { borderColor: C.border }]}>
               <TextInput value={landingMsg} onChangeText={setLandingMsg}
                 placeholder="e.g. Shared receiver — please retune before you leave" multiline
-                placeholderTextColor={C.placeholder} maxLength={500}
+                placeholderTextColor={C.placeholderDim} maxLength={500}
                 style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border,
                                         minHeight: 74, textAlignVertical: 'top' }]} />
               <View style={[styles.rowBetween, { marginTop: 8, gap: 8 }]}>
                 <TextInput value={landingUrl} onChangeText={setLandingUrl}
-                  placeholder="https://… (optional link)" placeholderTextColor={C.placeholder}
+                  placeholder="https://… (optional link)" placeholderTextColor={C.placeholderDim}
                   autoCapitalize="none" keyboardType="url"
                   style={[styles.input, { flex: 1, color: C.text, fontFamily: F, borderColor: C.border }]} />
               </View>
               <TextInput value={landingLbl} onChangeText={setLandingLbl}
-                placeholder="Link text — e.g. Support this server" placeholderTextColor={C.placeholder}
+                placeholder="Link text — e.g. Support this server" placeholderTextColor={C.placeholderDim}
                 maxLength={60}
                 style={[styles.input, { marginTop: 8, color: C.text, fontFamily: F, borderColor: C.border }]} />
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
@@ -2597,12 +2597,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 <TouchableOpacity key={String(v)} disabled={v && !webServer}
                   onPress={() => { setAdvanced(v);
                                    AsyncStorage.setItem(K.advanced, v ? '1' : '0'); }}
-                  style={[styles.card, { flex: 1, borderColor: advanced === v ? C.keyBorderAct : C.border,
-                                         backgroundColor: advanced === v ? C.keyBgAct : 'transparent',
+                  style={[styles.card, { flex: 1, borderColor: advanced === v ? C.keySelBorder : C.border,
+                                         backgroundColor: advanced === v ? C.keySelBg : 'transparent',
                                          // ★ Greyed, not hidden: an option that vanishes leaves the
                                          //   owner wondering whether it ever existed.
                                          opacity: (v && !webServer) ? 0.4 : 1 }]}>
-                  <Text style={{ color: advanced === v ? C.keyAct : C.key, fontFamily: F, fontSize: 14 }}>
+                  <Text style={{ color: advanced === v ? C.keySel : C.key, fontFamily: F, fontSize: 14 }}>
                     {v ? 'Advanced' : 'Simple'}
                   </Text>
                   <Text style={[styles.hint, { color: advanced === v ? C.textOnSel : C.textDim, fontFamily: F, marginTop: 4 }]}>
@@ -2653,9 +2653,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   .map(([v, title, sub]) => (
                   <TouchableOpacity key={v}
                     onPress={() => { setRadioUse(v); AsyncStorage.setItem(K.radioUse, v); }}
-                    style={[styles.card, { flex: 1, borderColor: radioUse === v ? C.keyBorderAct : C.border,
-                                           backgroundColor: radioUse === v ? C.keyBgAct : 'transparent' }]}>
-                    <Text style={{ color: radioUse === v ? C.keyAct : C.key, fontFamily: F, fontSize: 13 }}>
+                    style={[styles.card, { flex: 1, borderColor: radioUse === v ? C.keySelBorder : C.border,
+                                           backgroundColor: radioUse === v ? C.keySelBg : 'transparent' }]}>
+                    <Text style={{ color: radioUse === v ? C.keySel : C.key, fontFamily: F, fontSize: 13 }}>
                       {title}
                     </Text>
                     <Text style={[styles.hint, { color: radioUse === v ? C.textOnSel : C.textDim, fontFamily: F, marginTop: 4 }]}>{sub}</Text>
@@ -2674,7 +2674,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 a block selector pops up and you choose a block … then next to that a quick station
                 scan and then a selection box for the station". Only on a radio that can do DAB. */}
             {dabLandOffered && (
-              <View style={[styles.card, { borderColor: dabLandOn ? C.keyBorderAct : C.border, marginBottom: 8 }]}>
+              <View style={[styles.card, { borderColor: dabLandOn ? C.keySelBorder : C.border, marginBottom: 8 }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>
                     Use a DAB station as the landing station?
@@ -2694,9 +2694,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       <TouchableOpacity key={b.name}
                         onPress={() => { if (i !== landingDabCh) { setDabLanding(i, 0, ''); setDabScanMsg(''); } }}
                         style={{ paddingVertical: 6, paddingHorizontal: 9, borderRadius: 6, borderWidth: 1,
-                                 borderColor: i === landingDabCh ? C.keyBorderAct : C.border,
-                                 backgroundColor: i === landingDabCh ? C.keyBgAct : 'transparent' }}>
-                        <Text style={{ color: i === landingDabCh ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>
+                                 borderColor: i === landingDabCh ? C.keySelBorder : C.border,
+                                 backgroundColor: i === landingDabCh ? C.keySelBg : 'transparent' }}>
+                        <Text style={{ color: i === landingDabCh ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 12 }}>
                           {b.name}
                         </Text>
                       </TouchableOpacity>
@@ -2730,7 +2730,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                         style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, borderWidth: 1,
                                  borderColor: st.sid === landingDabSid ? C.selected : C.border,
                                  backgroundColor: st.sid === landingDabSid ? C.selectedBg : 'transparent' }}>
-                        <Text style={{ color: st.sid === landingDabSid ? C.selected : C.key, fontFamily: F, fontSize: 12 }}>
+                        <Text style={{ color: st.sid === landingDabSid ? C.selected : C.keyQuiet, fontFamily: F, fontSize: 12 }}>
                           {st.label}
                         </Text>
                       </TouchableOpacity>
@@ -2770,10 +2770,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               {(['wfm', 'nfm', 'am', 'usb', 'lsb'] as const).map(m => (
                 <TouchableOpacity key={m}
                   onPress={() => { setLandingMode(m); AsyncStorage.setItem(K.landingMode, m); }}
-                  style={[styles.card, { borderColor: landingMode === m ? C.keyBorderAct : C.border,
-                                         backgroundColor: landingMode === m ? C.keyBgAct : 'transparent',
+                  style={[styles.card, { borderColor: landingMode === m ? C.keySelBorder : C.border,
+                                         backgroundColor: landingMode === m ? C.keySelBg : 'transparent',
                                          paddingVertical: 8, paddingHorizontal: 12 }]}>
-                  <Text style={{ color: landingMode === m ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>
+                  <Text style={{ color: landingMode === m ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 12 }}>
                     {m.toUpperCase()}
                   </Text>
                 </TouchableOpacity>
@@ -2801,7 +2801,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                    supported list, shows the value, and owns the AUTO position — so the server
                    screen and the listener's panel behave identically rather than being two
                    different ideas of the same setting. */}
-            <GainSlider
+            <GainSlider ink={tokens ? gainSliderInk(tokens) : undefined}
               gains={RTL_GAINS}
               gainTenthDb={restGain < 0 ? 157 : restGain}
               auto={restGain < 0}
@@ -2891,7 +2891,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               </View>
               {autoDs && (
                 <TextInput value={autoDsMhz} onChangeText={(t) => { setAutoDsMhz(t); AsyncStorage.setItem(K.autoDsMhz, t); }}
-                  placeholder="Switch below (MHz) — 24" placeholderTextColor={C.placeholder} keyboardType="numeric"
+                  placeholder="Switch below (MHz) — 24" placeholderTextColor={C.placeholderDim} keyboardType="numeric"
                   style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border, marginTop: 8 }]} />
               )}
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
@@ -2903,7 +2903,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 {(['off', 'i', 'q'] as const).map((m) => (
                   <TouchableOpacity key={m} onPress={() => { setDirectSampling(m); AsyncStorage.setItem(K.directSampling, m); }}
                     style={[styles.chip, { borderColor: directSampling === m ? C.keyBorderAct : C.border }]}>
-                    <Text style={{ color: directSampling === m ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>
+                    <Text style={{ color: directSampling === m ? C.keyAct : C.keyQuiet, fontFamily: F, fontSize: 12 }}>
                       {m === 'off' ? 'Leave alone' : m === 'i' ? 'I branch' : 'Q branch'}
                     </Text>
                   </TouchableOpacity>
@@ -2911,20 +2911,20 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               </View>
               <Text style={[styles.section, { color: C.section, fontFamily: F, marginTop: 16 }]}>FREQUENCY CORRECTION</Text>
               <TextInput value={ppm} onChangeText={(t) => { setPpm(t); AsyncStorage.setItem(K.ppm, t); }}
-                placeholder="ppm — 0 for a TCXO dongle" placeholderTextColor={C.placeholder} keyboardType="numbers-and-punctuation"
+                placeholder="ppm — 0 for a TCXO dongle" placeholderTextColor={C.placeholderDim} keyboardType="numbers-and-punctuation"
                 style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border, marginTop: 8 }]} />
             </>)}
             {hasHwSetup && (<>
               <Text style={[styles.section, { color: C.section, fontFamily: F, marginTop: 16 }]}>CONVERTER IN FRONT OF THE RADIO</Text>
               <TextInput value={convOffsetMhz} onChangeText={(t) => { setConvOffsetMhz(t); AsyncStorage.setItem(K.convOffsetMhz, t); }}
-                placeholder="Offset (MHz) — e.g. 125 for an HF up-converter; blank = none" placeholderTextColor={C.placeholder} keyboardType="numbers-and-punctuation"
+                placeholder="Offset (MHz) — e.g. 125 for an HF up-converter; blank = none" placeholderTextColor={C.placeholderDim} keyboardType="numbers-and-punctuation"
                 style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border, marginTop: 8 }]} />
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TextInput value={convLoMhz} onChangeText={(t) => { setConvLoMhz(t); AsyncStorage.setItem(K.convLoMhz, t); }}
-                  placeholder="Passes from (MHz)" placeholderTextColor={C.placeholder} keyboardType="numeric"
+                  placeholder="Passes from (MHz)" placeholderTextColor={C.placeholderDim} keyboardType="numeric"
                   style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border, marginTop: 8, flex: 1 }]} />
                 <TextInput value={convHiMhz} onChangeText={(t) => { setConvHiMhz(t); AsyncStorage.setItem(K.convHiMhz, t); }}
-                  placeholder="to (MHz)" placeholderTextColor={C.placeholder} keyboardType="numeric"
+                  placeholder="to (MHz)" placeholderTextColor={C.placeholderDim} keyboardType="numeric"
                   style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border, marginTop: 8, flex: 1 }]} />
               </View>
               <View style={[styles.rowBetween, { marginTop: 8 }]}>
@@ -2976,9 +2976,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               <Text style={[styles.section, { color: C.section, fontFamily: F }]}>BIAS-T</Text>
               <TouchableOpacity onPress={() => { const v = !biasT; setBiasT(v);
                                                  AsyncStorage.setItem(K.biasT, v ? '1' : '0'); }}
-                style={[styles.card, { borderColor: biasT ? C.keyBorderAct : C.border,
-                                       backgroundColor: biasT ? C.keyBgAct : 'transparent' }]}>
-                <Text style={{ color: biasT ? C.keyAct : C.key, fontFamily: F, fontSize: 14 }}>
+                style={[styles.card, { borderColor: biasT ? C.keySelBorder : C.border,
+                                       backgroundColor: biasT ? C.keySelBg : 'transparent' }]}>
+                <Text style={{ color: biasT ? C.keySel : C.key, fontFamily: F, fontSize: 14 }}>
                   {biasT ? 'ON — DC on the feedline' : 'OFF'}
                 </Text>
               </TouchableOpacity>
@@ -3021,9 +3021,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
                 {([false, true] as const).map(v => (
                   <TouchableOpacity key={String(v)} onPress={() => setLimitSoft(v)}
-                    style={[styles.card, { flex: 1, borderColor: limitSoft === v ? C.keyBorderAct : C.border,
-                                           backgroundColor: limitSoft === v ? C.keyBgAct : 'transparent' }]}>
-                    <Text style={{ color: limitSoft === v ? C.keyAct : C.key, fontFamily: F, fontSize: 13 }}>
+                    style={[styles.card, { flex: 1, borderColor: limitSoft === v ? C.keySelBorder : C.border,
+                                           backgroundColor: limitSoft === v ? C.keySelBg : 'transparent' }]}>
+                    <Text style={{ color: limitSoft === v ? C.keySel : C.key, fontFamily: F, fontSize: 13 }}>
                       {v ? 'Soft limit' : 'Hard limit'}
                     </Text>
                     <Text style={[styles.hint, { color: limitSoft === v ? C.textOnSel : C.textDim, fontFamily: F, marginTop: 4 }]}>
@@ -3046,15 +3046,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {(ANT_SWITCH_SETUP || antSwitchSaved.current) && <AntennaSwitchSetup value={antSwitch} onChange={setAntSwitch} C={C} F={F} />}
             <TextInput value={antenna} onChangeText={setAntenna}
               placeholder="e.g. Discone in the loft, good to 300 MHz"
-              placeholderTextColor={C.placeholder} maxLength={120}
+              placeholderTextColor={C.placeholderDim} maxLength={120}
               style={[styles.input, { color: C.text, fontFamily: F, borderColor: C.border }]} />
             <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
               {ANT_ICONS.map(a => (
                 <TouchableOpacity key={a.key} onPress={() => setAntennaIcon(antennaIcon === a.key ? '' : a.key)}
-                  style={[styles.card, { borderColor: antennaIcon === a.key ? C.keyBorderAct : C.border,
-                                         backgroundColor: antennaIcon === a.key ? C.keyBgAct : 'transparent',
+                  style={[styles.card, { borderColor: antennaIcon === a.key ? C.keySelBorder : C.border,
+                                         backgroundColor: antennaIcon === a.key ? C.keySelBg : 'transparent',
                                          paddingHorizontal: 12, paddingVertical: 8 }]}>
-                  <Text style={{ color: antennaIcon === a.key ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>
+                  <Text style={{ color: antennaIcon === a.key ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>
                     {a.label}
                   </Text>
                 </TouchableOpacity>
@@ -3195,10 +3195,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
                     {[0, 15, 30, 60].map(n => (
                       <TouchableOpacity key={n} onPress={() => setIdleKick(n)}
-                        style={[styles.card, { borderColor: idleKick === n ? C.keyBorderAct : C.border,
-                                               backgroundColor: idleKick === n ? C.keyBgAct : 'transparent',
+                        style={[styles.card, { borderColor: idleKick === n ? C.keySelBorder : C.border,
+                                               backgroundColor: idleKick === n ? C.keySelBg : 'transparent',
                                                paddingHorizontal: 14 }]}>
-                        <Text style={{ color: idleKick === n ? C.keyAct : C.key, fontFamily: F, fontSize: 14 }}>
+                        <Text style={{ color: idleKick === n ? C.keySel : C.key, fontFamily: F, fontSize: 14 }}>
                           {n === 0 ? 'Off' : `${n} min`}
                         </Text>
                       </TouchableOpacity>
@@ -3227,10 +3227,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
                     {[0, 10, 15, 20, 25, 30].map(n => (
                       <TouchableOpacity key={n} onPress={() => setBatteryPauseAt(n)}
-                        style={[styles.card, { borderColor: batteryPauseAt === n ? C.keyBorderAct : C.border,
-                                               backgroundColor: batteryPauseAt === n ? C.keyBgAct : 'transparent',
+                        style={[styles.card, { borderColor: batteryPauseAt === n ? C.keySelBorder : C.border,
+                                               backgroundColor: batteryPauseAt === n ? C.keySelBg : 'transparent',
                                                paddingHorizontal: 14 }]}>
-                        <Text style={{ color: batteryPauseAt === n ? C.keyAct : C.key, fontFamily: F, fontSize: 14 }}>
+                        <Text style={{ color: batteryPauseAt === n ? C.keySel : C.key, fontFamily: F, fontSize: 14 }}>
                           {n === 0 ? 'Never' : `${n}%`}
                         </Text>
                       </TouchableOpacity>
@@ -3260,7 +3260,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     <TextInput
                       value={decoderMax > 0 ? String(decoderMax) : ''}
                       onChangeText={(t) => setDecoderMax(Math.max(0, Math.min(64, parseInt(t.replace(/[^0-9]/g, ''), 10) || 0)))}
-                      keyboardType="number-pad" placeholder="auto" placeholderTextColor={C.placeholder}
+                      keyboardType="number-pad" placeholder="auto" placeholderTextColor={C.placeholderDim}
                       style={[styles.input, { width: 64, textAlign: 'center', color: C.text, borderColor: C.border, fontFamily: F }]} />
                     <TouchableOpacity onPress={() => setDecoderMax(0)}
                       style={[styles.card, { borderColor: C.border, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
@@ -3295,10 +3295,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       const sel = (shared ? 0 : rawIq) === n;
                       return (
                       <TouchableOpacity key={n} disabled={shared} onPress={() => setRawIq(n)}
-                        style={[styles.card, { borderColor: sel ? C.keyBorderAct : C.border,
-                                               backgroundColor: sel ? C.keyBgAct : 'transparent',
+                        style={[styles.card, { borderColor: sel ? C.keySelBorder : C.border,
+                                               backgroundColor: sel ? C.keySelBg : 'transparent',
                                                paddingHorizontal: 14, opacity: shared && !sel ? 0.4 : 1 }]}>
-                        <Text style={{ color: sel ? C.keyAct : C.key, fontFamily: F, fontSize: 14 }}>
+                        <Text style={{ color: sel ? C.keySel : C.key, fontFamily: F, fontSize: 14 }}>
                           {lbl}
                         </Text>
                       </TouchableOpacity>);
@@ -3312,10 +3312,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                         const sel = (rawIqLanMaxHz || rateOptions[rateOptions.length - 1]?.value) === o.value;
                         return (
                         <TouchableOpacity key={o.value} onPress={() => setRawIqLanMaxHz(o.value)}
-                          style={[styles.card, { borderColor: sel ? C.keyBorderAct : C.border,
-                                                 backgroundColor: sel ? C.keyBgAct : 'transparent',
+                          style={[styles.card, { borderColor: sel ? C.keySelBorder : C.border,
+                                                 backgroundColor: sel ? C.keySelBg : 'transparent',
                                                  paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
-                          <Text style={{ color: sel ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>{o.label}</Text>
+                          <Text style={{ color: sel ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>{o.label}</Text>
                         </TouchableOpacity>); })}
                     </View>
                   )}
@@ -3325,7 +3325,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       <TextInput
                         value={rawIqMax > 0 ? String(rawIqMax) : ''}
                         onChangeText={(t) => setRawIqMax(Math.max(0, Math.min(16, parseInt(t.replace(/[^0-9]/g, ''), 10) || 0)))}
-                        keyboardType="number-pad" placeholder="1" placeholderTextColor={C.placeholder}
+                        keyboardType="number-pad" placeholder="1" placeholderTextColor={C.placeholderDim}
                         style={[styles.input, { width: 64, textAlign: 'center', color: C.text, borderColor: C.border, fontFamily: F }]} />
                       <TouchableOpacity onPress={() => setRawIqMax(0)}
                         style={[styles.card, { borderColor: C.border, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 0 }]}>
@@ -3524,7 +3524,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                           borderColor: off ? C.keyBorder : C.keyBorderAct,
                           opacity: off ? 0.45 : 1,
                         }}>
-                        <Text style={{ color: off ? C.key : C.keyAct, fontFamily: F, fontSize: 12 }}>
+                        <Text style={{ color: off ? C.keyQuiet : C.keyAct, fontFamily: F, fontSize: 12 }}>
                           {m.label}
                         </Text>
                       </TouchableOpacity>
@@ -3617,7 +3617,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 ★ Advice, not an error: it is a perfectly reasonable way to run a radio on your own
                   network, and the colour says "read this", not "you did something wrong". */}
             {running && !adminPw.trim() && (
-              <View style={[styles.card, { borderColor: C.warn, marginTop: 14 }]}>
+              <View style={[styles.card, { borderColor: C.warnBorder, marginTop: 14 }]}>
                 <Text style={{ color: C.warn, fontFamily: F, fontSize: 13 }}>
                   No admin password set
                 </Text>
@@ -3687,7 +3687,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             </TouchableOpacity>
           </>
         ) : (
-          <TouchableOpacity style={[styles.startBtn, { borderColor: C.keyBorderAct, backgroundColor: C.keyBgAct }]}
+          <TouchableOpacity style={[styles.startBtn, { borderColor: C.keyBorderAct, backgroundColor: C.keyBgStart }]}
             onPress={() => navigation.replace('RtlTcpServer', { name: name.trim() || 'VibeSDR RTL-SDR', advertise })}>
             <Text style={{ color: C.keyAct, fontFamily: F, fontSize: 16 }}>▶ Start RTL-TCP server</Text>
           </TouchableOpacity>
@@ -3709,7 +3709,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           <Text style={{ color: C.key, fontFamily: F, fontSize: 15 }}>{isLite ? '✕ Close app' : '‹ Cancel'}</Text>
         </TouchableOpacity>
         {/* ★ The setup view is where an owner lands after a crash took the server down — see the note above. */}
-        <ExportLogsLink color={C.key} fontFamily={F} style={{ marginTop: 14 }} />
+        <ExportLogsLink color={C.keyQuiet} fontFamily={F} style={{ marginTop: 14 }} />
         <LiteUpdate C={C} F={F} />
       </ScrollView>
     </SafeAreaView>
@@ -3728,7 +3728,7 @@ function Row({ C, F, k, v, vc }: any) {
 function ProtoCard({ C, F, active, onPress, title, tag, desc }: any) {
   return (
     <TouchableOpacity onPress={onPress}
-      style={[styles.protoCard, { borderColor: active ? C.keyBorderAct : C.border, backgroundColor: active ? C.keyBgAct : 'transparent' }]}>
+      style={[styles.protoCard, { borderColor: active ? C.keyBorderAct : C.border, backgroundColor: active ? C.keyBgCard : 'transparent' }]}>
       <View style={styles.rowBetween}>
         <Text style={{ color: active ? C.keyAct : C.key, fontFamily: F, fontSize: 17 }}>{title}</Text>
         <Text style={{ color: active ? C.keyAct : C.keyDim, fontFamily: F, fontSize: 11 }}>{tag}</Text>

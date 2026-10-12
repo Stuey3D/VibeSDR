@@ -59,12 +59,12 @@ export default function AntennaBandsEditor({ ranges, filters, onChange, C, F }: 
   const chip = (label: string, on: boolean, onPress: () => void) => (
     <TouchableOpacity key={label} onPress={onPress} accessibilityRole="button"
       style={{ borderWidth: 1, borderRadius: 7, paddingHorizontal: 9, paddingVertical: 6,
-               borderColor: on ? C.keyBorderAct : C.border, backgroundColor: on ? C.keyBgAct : 'transparent' }}>
-      <Text style={{ color: on ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>{label}</Text>
+               borderColor: on ? C.keySelBorder : C.border, backgroundColor: on ? C.keySelBg : 'transparent' }}>
+      <Text style={{ color: on ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>{label}</Text>
     </TouchableOpacity>
   );
   const field = (v: string, set: (t: string) => void, ph: string, w?: number, num = false) => (
-    <TextInput value={v} onChangeText={set} placeholder={ph} placeholderTextColor={C.placeholder}
+    <TextInput value={v} onChangeText={set} placeholder={ph} placeholderTextColor={C.placeholderDim}
       keyboardType={num ? 'decimal-pad' : 'default'} autoCorrect={false}
       style={{ borderWidth: 1, borderRadius: 7, borderColor: C.border, color: C.text, fontFamily: F,
                paddingHorizontal: 8, paddingVertical: 6, ...(w ? { width: w } : { flex: 1, minWidth: 110 }) }} />

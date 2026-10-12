@@ -1,19 +1,52 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
+import type { PopupTokens } from '../constants/popupTokens';
 
 // VibeSDR V4 — RTL-SDR tuner gain control. Used in both the RTL-SDR controls
 // submenu and (a second copy) the demodulators popup for quick access. The
 // `gains` list is the device's supported tuner gains in tenths of a dB.
 
-const C = {
-  gold:   '#ffe566',
-  muted:  'rgba(255,255,255,0.92)',
-  dim:    'rgba(200,210,225,0.90)',
-  btnBg:  'rgba(20,18,14,0.85)',
-  active: 'rgba(255,200,0,0.16)',
-  border: 'rgba(255,229,102,0.55)',
+/* ★★★ THE COLOURS COME IN AS A PROP (Stuart, 2026-10-13: "fix it" — the gain slider still drew its own gold in the
+ *   main app). Main app: track / fill / thumb and the VibeAGC / MANUAL keys in the CONTROLS colour, the label, value and
+ *   note in the TEXT colour (`gainSliderInk(tokens)`). There are no meaning colours here — AUTO vs MANUAL is a key's
+ *   state, not a status.
+ * ★★★ LITE-SAFE: VibeServer Lite bundles this (via ServerModeScreen) on RN 0.73 with no Reanimated / Skia, so this file
+ *   imports NOTHING from PopupShell / FaceplateContext — only a TYPE from popupTokens. With no `ink` it draws EXACTLY
+ *   the old gold (GAIN_SLIDER_GOLD), which is what Lite shows; scripts/test_popup.ts holds both to it. */
+export interface GainSliderInk {
+  /** Fill and thumb (manual). */   fill: string;   thumb: string;
+  /** A latched key's legend, border and fill. */   selText: string; selBorder: string; selBg: string;
+  /** An unlatched key's legend, border and fill. */ key: string; keyBorder: string; keyBg: string;
+  /** The unfilled track. */         track: string;
+  /** Label, note, and the parked track / thumb while VibeAGC drives. */ dim: string;
+  /** The value read-out. */         value: string;
+}
+
+/** Today's gold — the literals this slider always drew. Lite, and any caller passing no `ink`, gets exactly this. */
+export const GAIN_SLIDER_GOLD: GainSliderInk = {
+  fill: '#ffe566', thumb: '#ffe566',
+  selText: '#ffe566', selBorder: 'rgba(255,229,102,0.55)', selBg: 'rgba(255,200,0,0.16)',
+  key: 'rgba(255,255,255,0.92)', keyBorder: 'rgba(255,255,255,0.25)', keyBg: 'rgba(20,18,14,0.85)',
+  track: 'rgba(255,255,255,0.25)', dim: 'rgba(200,210,225,0.90)', value: 'rgba(255,255,255,0.92)',
 };
+
+/** The user's colours as the slider's ink — controls colour for the keys and slider, text colour for the words. */
+const inkCache = new WeakMap<PopupTokens, GainSliderInk>();
+/** ★ Memoised per token object (tokens are memoised per setting), so a re-render reuses the same ink and sheet. */
+export function gainSliderInk(pt: PopupTokens): GainSliderInk {
+  let ink = inkCache.get(pt);
+  if (!ink) { ink = buildInk(pt); inkCache.set(pt, ink); }
+  return ink;
+}
+function buildInk(pt: PopupTokens): GainSliderInk {
+  return {
+    fill: pt.gold.fill, thumb: pt.gold.thumb,
+    selText: pt.gold.sel, selBorder: pt.gold.selBorder, selBg: pt.ink.keyBgAct,
+    key: pt.ink.key, keyBorder: pt.ink.keyBorder, keyBg: 'rgba(20,18,14,0.85)',
+    track: pt.ink.keyBorder, dim: pt.ink.textDim, value: pt.ink.text,
+  };
+}
 
 export interface GainSliderProps {
   gains: number[];        // supported tuner gains, tenths of dB, ascending
@@ -45,6 +78,8 @@ export interface GainSliderProps {
    *  ★ Still true in the CLIENT, where this pair is the only way to engage the AGC.
    */
   modeButtons?: boolean;
+  /** The colours (see GAIN_SLIDER_GOLD / gainSliderInk). Omitted = today's gold, as Lite needs. */
+  ink?: GainSliderInk;
 }
 
 function nearestIndex(gains: number[], tenthDb: number): number {
@@ -57,7 +92,9 @@ function nearestIndex(gains: number[], tenthDb: number): number {
 }
 
 export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, label = 'RF GAIN',
-                                    vibeAgc = true, modeButtons = true }: GainSliderProps) {
+                                    vibeAgc = true, modeButtons = true, ink = GAIN_SLIDER_GOLD }: GainSliderProps) {
+  const styles = gainStyles(ink);
+  const C = ink;
   const haveGains = gains.length > 0;
   const idx = haveGains ? nearestIndex(gains, gainTenthDb) : 0;
 
@@ -92,9 +129,9 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
           value={idx}
           disabled={(auto && modeButtons) || !haveGains}
           onValueChange={(v: number) => { if (haveGains) onGain(gains[Math.round(v)]); }}
-          minimumTrackTintColor={auto && modeButtons ? C.dim : C.gold}
-          maximumTrackTintColor="rgba(255,255,255,0.25)"
-          thumbTintColor={auto && modeButtons ? C.dim : C.gold}
+          minimumTrackTintColor={auto && modeButtons ? C.dim : C.fill}
+          maximumTrackTintColor={C.track}
+          thumbTintColor={auto && modeButtons ? C.dim : C.thumb}
         />
         <Text style={styles.val}>
           {auto && modeButtons ? 'VibeAGC' : haveGains ? `${(gains[idx] / 10).toFixed(1)} dB` : '—'}
@@ -121,16 +158,23 @@ export default function GainSlider({ gains, gainTenthDb, auto, onAuto, onGain, l
   );
 }
 
-const styles = StyleSheet.create({
+/** One sheet per ink object (callers pass a memoised token-derived object, or the shared default). */
+const styleCache = new WeakMap<GainSliderInk, ReturnType<typeof makeStyles>>();
+function gainStyles(ink: GainSliderInk) {
+  let st = styleCache.get(ink);
+  if (!st) { st = makeStyles(ink); styleCache.set(ink, st); }
+  return st;
+}
+const makeStyles = (C: GainSliderInk) => StyleSheet.create({
   note: { color: C.dim, fontSize: 11, lineHeight: 15, marginTop: 6 },
   wrap: { paddingVertical: 6 },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   label: { fontSize: 12, letterSpacing: 1.5, color: C.dim, fontWeight: '600' },
   btnRow: { flexDirection: 'row', gap: 6 },
-  btn: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg },
-  btnActive: { borderColor: C.border, backgroundColor: C.active },
-  btnTxt: { fontSize: 11, color: C.muted },
-  btnTxtActive: { color: C.gold },
+  btn: { paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: C.keyBorder, backgroundColor: C.keyBg },
+  btnActive: { borderColor: C.selBorder, backgroundColor: C.selBg },
+  btnTxt: { fontSize: 11, color: C.key },
+  btnTxtActive: { color: C.selText },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
-  val: { width: 64, textAlign: 'right', fontSize: 13, color: C.muted },
+  val: { width: 64, textAlign: 'right', fontSize: 13, color: C.value },
 });

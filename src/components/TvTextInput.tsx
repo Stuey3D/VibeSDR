@@ -14,16 +14,15 @@
  */
 import React, { createContext, useContext, useState } from 'react';
 import { Modal, NativeModules, Platform, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
-import { popupTokensFor, type PopupTokens } from '../constants/popupTokens';
+import type { PopupTokens } from '../constants/popupTokens';
 
 /* ★★★ LITE-SAFE: NO PopupShell / FaceplateContext / Reanimated / Skia HERE. ServerModeScreen imports this field,
  *   and VibeServer Lite bundles ServerModeScreen on RN 0.73 with neither library (its metro config cannot even
  *   see the main app's node_modules). So the colours come IN: the main app wraps the screen in
  *   <TvTextInputTokens value={tokens}> (or passes `tokens` on a field); Lite, with no colour settings, gets the
- *   default — amber keys and amber text, the field's old look by the rule. popupTokens.ts is pure (type imports
- *   and decoderTokens.ts only). */
-const LITE_DEFAULT: PopupTokens = popupTokensFor('default', '255,174,26', '255,174,26', 'hyper');
-const TvTokens = createContext<PopupTokens>(LITE_DEFAULT);
+ *   field's PRE-2026-10-12 literals exactly (LITE_STYLES — Stuart: Lite has no colour UI and must look exactly as
+ *   before). popupTokens.ts is pure (type imports and decoderTokens.ts only). */
+const TvTokens = createContext<PopupTokens | null>(null);
 /** Hands the user's colours (the main app's glass tokens) to every TV text field below it. */
 export const TvTextInputTokens = TvTokens.Provider;
 
@@ -95,19 +94,29 @@ function TvField({ tokens, ...props }: TextInputProps & { tokens?: PopupTokens }
  *   the field's label in the TEXT colour, DONE and the sheet's edge in the CONTROLS colour; the D-pad focus ring is
  *   the app's focus MEANING (green on every colour, PopupTokens ink.focus) — it was amber here alone. */
 const tvCache = new WeakMap<PopupTokens, ReturnType<typeof makeTvStyles>>();
-function tvStyles(pt: PopupTokens) {
+function tvStyles(pt: PopupTokens | null) {
+  if (!pt) return LITE_STYLES;
   let s = tvCache.get(pt);
   if (!s) { s = makeTvStyles(pt); tvCache.set(pt, s); }
   return s;
 }
-const makeTvStyles = (pt: PopupTokens) => StyleSheet.create({
-  focused:  { borderColor: pt.ink.focus, borderWidth: 2 },
+/** The field's colours by role: the user's (main app) or the pre-2026-10-12 literals (Lite — TV_LITE below). */
+export interface TvFieldColours { focus: string; border: string; label: string; doneBorder: string; done: string }
+/** ★★ VibeServer Lite: EXACTLY the old literals (git 034143e6^ TvTextInput.tsx styles: focused #ffb833, sheet and
+ *  DONE edge #5a4520, label #c9922e, DONE #ffb833) — scripts/test_server_colours.ts holds them. */
+export const TV_LITE: TvFieldColours = { focus: '#ffb833', border: '#5a4520', label: '#c9922e', doneBorder: '#5a4520', done: '#ffb833' };
+export const tvColoursFor = (pt: PopupTokens): TvFieldColours =>
+  ({ focus: pt.ink.focus, border: pt.ink.border, label: pt.ink.textDim, doneBorder: pt.ink.keyBorder, done: pt.gold.sel });
+const makeTvStyles = (pt: PopupTokens) => buildTvStyles(tvColoursFor(pt));
+const buildTvStyles = (c: TvFieldColours) => StyleSheet.create({
+  focused:  { borderColor: c.focus, borderWidth: 2 },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', padding: 40 },
-  sheet:    { backgroundColor: '#14110a', borderRadius: 14, borderWidth: 1, borderColor: pt.ink.border, padding: 20,
+  sheet:    { backgroundColor: '#14110a', borderRadius: 14, borderWidth: 1, borderColor: c.border, padding: 20,
               maxWidth: 720, width: '100%', alignSelf: 'center' },
-  label:    { color: pt.ink.textDim, fontSize: 14, marginBottom: 10 },
+  label:    { color: c.label, fontSize: 14, marginBottom: 10 },
   field:    { marginBottom: 14 },
   done:     { alignSelf: 'flex-end', paddingVertical: 10, paddingHorizontal: 22, borderRadius: 10,
-              borderWidth: 1, borderColor: pt.ink.keyBorder },
-  doneText: { color: pt.gold.sel, fontSize: 16, fontWeight: 'bold', letterSpacing: 2 },
+              borderWidth: 1, borderColor: c.doneBorder },
+  doneText: { color: c.done, fontSize: 16, fontWeight: 'bold', letterSpacing: 2 },
 });
+const LITE_STYLES = buildTvStyles(TV_LITE);
