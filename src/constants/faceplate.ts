@@ -523,12 +523,13 @@ export function frameRateChoices(maxHz: number | null | undefined): PaneChoice<F
  *    its display policy keeps moving, for no visible gain; 120 stays a manual pick. iOS keeps the panel's maximum:
  *    ProMotion drives every frame from the display link and was never the problem. */
 export function autoFrameRungs(maxHz: number | null | undefined, os: string = 'ios'): number[] {
-  // ★★★ ANDROID AUTO IS 30, on every panel (Stuart, 2026-10-13, after the XCover 4s, Moto G35 and Tab A9: "30fps on the
-  //   moto feels great, I cannot tell the difference from 60, even the tuning feels fluid still"). A paced 30 halves the
-  //   drawing and was the one rate with no intermittent needle judder on any of the three; 60 / the panel's maximum
-  //   stay manual picks. iOS keeps the panel's maximum (ProMotion is genuinely smooth there).
-  if (os === 'android') return [30];
+  // ★★★ ANDROID AUTO: 60, stepping down to 30 when frames run late (Stuart, 2026-10-13: "make android default 60 now
+  //   we've fixed the needle"). The needle's judder was draw timing against the TextureView latch, fixed by vsync-tied
+  //   Skia draws + a performance hint (8fda78df) — after which the Moto was smooth at 30, 60 and 120. Above 60 Hz it
+  //   still starts at 60: 120 doubles the drawing for no visible gain; it stays a manual pick. (For one night it was
+  //   30 — b832b7c6 — while the judder was unexplained.) iOS keeps the panel's maximum.
   const hz = normaliseHz(maxHz);
+  if (os === 'android') return hz != null && hz > 60 ? [60, 30] : [0, 30];
   if (hz != null && hz > 60) return [0, 60, 30];
   return [0, 30];
 }
