@@ -439,9 +439,24 @@ static inline bool ckCode(Ita2* i, uint16_t code) { return i && i->checkBits(cod
 
 void FskDecoder::processBit(bool bit) {
     uint16_t bitVal = bit ? 1 : 0;
+    bitsSeen_++;
     if (syncSetup) {
         bitCount = 0; codeBits = 0; errorCount = 0; validCount = 0; lockRequired_ = 2;
-        if (ita2) ita2->reset();
+        /* ★★ FIGURES SURVIVE A SHORT LOSS (NickB, 2026-10-12: "the German weather is a good test when it's sending synop
+         *  groups, I've seen other decoders … drop back to letters when it should be figs"). DWD sends a whole line of
+         *  synop groups under ONE figures shift; a fade that cost the lock put the decoder back in letters, and every
+         *  group after it printed as letters ("RQXOY IWTPI") until the next shift. The sender's shift has not changed in
+         *  a fade, so it is kept across a loss under 5 s — NAVTEX's rule (NavtexRx::pushBit): five seconds or more is a
+         *  new transmission, and that starts in letters as before. Measured on synth_rtty.py's DWD synop (10 dB, 20 dB
+         *  selective fading, four seeds): digit groups printed as letters 41 → 13, whole 5-digit groups 37 → 66, letter
+         *  words 123 → 122. The cost is the other way round: a LTRS lost in the same fade now leaves a word in figures
+         *  (the real DWD recording: "DDH7" → "$#7", one KHZ → '"'). AUTO picks on frames (goodFrames / framingErrors),
+         *  never on the text: its choice, timing, searches and states measured identical before and after. */
+        if (ita2) {
+            const bool shortLoss = lastGoodBit_ >= 0
+                && (double)(bitsSeen_ - lastGoodBit_) * bitSampleCount < 5.0 * sampleRate;
+            if (shortLoss) ita2->resync(); else ita2->reset();
+        }
         syncChars.clear(); setState(Sync1); syncSetup = false;
     }
     switch (state) {
@@ -470,6 +485,7 @@ void FskDecoder::processBit(bool bit) {
                     //   was enough to lock on noise or mid-character. After a framing slip (lockRequired_ = 1) the
                     //   decoder was already in step a moment ago, so one is enough to resume.
                     if (validCount >= lockRequired_) {
+                        lastGoodBit_ = bitsSeen_;
                         for (uint16_t c : syncChars) processCharacter(c);
                         setState(ReadData);
                     }
@@ -496,6 +512,7 @@ void FskDecoder::processBit(bool bit) {
                     break;
                 }
                 goodFrames_++;
+                lastGoodBit_ = bitsSeen_;
                 processCharacter(codeBits);
                 if (errorCount > 0) errorCount--;   // every frame that reached here is good
                 codeBits = 0; bitCount = 0; waiting = true;

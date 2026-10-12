@@ -32,6 +32,9 @@ class Ita2 {
 public:
     explicit Ita2(const std::string& framing);
     void reset() { shift = false; lastCode = 0; firstChar = true; }
+    /** ★ A re-sync after a SHORT loss: the framing starts again, the sender's letters/figures shift is kept — see
+     *  FskDecoder::processBit. */
+    void resync() { lastCode = 0; firstChar = true; }
     /** ★ UNSHIFT ON SPACE (2026-10-04): back to letters after every space, as many amateur machines send. OFF by
      *  default — DWD sends whole groups of figures under ONE FIGS shift, which this would turn into letters. */
     bool usos = false;
@@ -245,6 +248,8 @@ private:
     double markEnv = 0, spaceEnv = 0, noiseFloor = 0, symLen = 0;
     // ★ Framing errors in ReadData (ITA2) — each one re-hunts the start bit instead of printing garbage on.
     unsigned long framingErrors_ = 0, goodFrames_ = 0;
+    // ★ Bits clocked (every bit period, signal or not) and the bit of the last good frame — how long the signal was lost.
+    long long bitsSeen_ = 0, lastGoodBit_ = -1;
     int lockRequired_ = 2;
 
     State state = NoSignal;
