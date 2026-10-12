@@ -96,7 +96,9 @@ const menu = read('src/components/MenuSheet.tsx');
 ok('the pane decides the row with frameRateChoices', /frameRateChoices\(maxRefreshHz\)/.test(menu));
 ok('the pane labels it FRAME RATE', /label="FRAME RATE"/.test(menu));
 const ctx = read('src/contexts/FaceplateContext.tsx');
-ok('the provider pushes the cap — a 30 as 60 to the display', /applyFrameRateCap\(capHz === 30 \? 60 : capHz\)/.test(ctx) && /frameRateCapHz\(settings, autoHz\)/.test(ctx));
+ok('the provider pushes the cap — a 30 as 60 to the display', /applyFrameRateCap\(capHz === 30 \? 60 : capHz\)/.test(ctx) && /frameRateCapHz\(settings, saver \? 30 : autoHz\)/.test(ctx));
+ok('battery saver puts AUTO on 30 (Android)', /powerSaveOn\(\)/.test(ctx) && /saver \? 30 : autoHz/.test(ctx));
+ok('Android exports isPowerSaveMode', /fun isPowerSaveMode\(/.test(read('android/app/src/main/java/com/vibesdr/app/VibeLocalSdrModule.kt')));
 ok('the provider sets the app-side pacing', /uiFrameCapHz\.value = capHz/.test(ctx));
 for (const f of ['src/components/WaterfallView.tsx', 'src/components/LedVu.tsx', 'src/components/EdgeMeter.tsx'])
   ok(`${f} honours the cap`, /uiCadence/.test(read(f)));

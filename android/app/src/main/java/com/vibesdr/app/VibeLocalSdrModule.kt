@@ -327,6 +327,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         applyFrameRateCap()
     }
 
+    /** ★ Battery saver on? FRAME RATE → AUTO then runs at 30 (Stuart, 2026-10-13: "would be useful for low power mode").
+     *  Read every few seconds by the AUTO loop; false when the system cannot say. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun isPowerSaveMode(): Boolean = try {
+        (reactContext.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager)?.isPowerSaveMode == true
+    } catch (_: Throwable) { false }
+
     // ── FRAME WATCH — FRAME RATE → AUTO (constants/faceplate.ts autoWindowLate) ──
     // ★★ What AUTO judges by: the system's own per-frame timings (Window.OnFrameMetricsAvailableListener, API 24) — the
     //   numbers `dumpsys gfxinfo` counts as janky, not a guess from the model or a JS timer. A frame is LATE when its

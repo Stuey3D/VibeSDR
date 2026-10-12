@@ -37,7 +37,7 @@ import { installNativeTransliterator } from '../services/transliterator';
 import { explainFaceplateReset, faceplateGuard, LAST_CRASHED_KEY, launchMarkOnce } from '../services/faceplateGuard';
 import { readNativeDeviceClass } from '../services/deviceClass';
 import {
-  applyFrameRateCap, frameWatchAvailable, readMaxRefreshRate, startFrameWatch, stopFrameWatch, takeFrameWatch,
+  applyFrameRateCap, frameWatchAvailable, powerSaveOn, readMaxRefreshRate, startFrameWatch, stopFrameWatch, takeFrameWatch,
 } from '../services/frameRate';
 import { uiFrameCapHz } from '../services/uiCadence';
 import { setArtColour } from '../services/appIcon';
@@ -219,7 +219,18 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
     return () => { clearInterval(t); stopFrameWatch(); };
   }, [autoOn, maxRefreshHz]);
 
-  const capHz = frameRateCapHz(settings, autoHz);
+  /* ★ BATTERY SAVER → 30 (Android; Stuart, 2026-10-13: "monitor how the UI is working and soon as we detect crap then
+   *  slow it down, would be useful for low power mode"). Checked every 5 s while AUTO is lit; off again → AUTO's own
+   *  rung. A manual pick is never overridden. */
+  const [saver, setSaver] = useState(false);
+  useEffect(() => {
+    if (!autoOn || Platform.OS !== 'android') { setSaver(false); return; }
+    const check = () => setSaver(AppState.currentState === 'active' ? powerSaveOn() : false);
+    check();
+    const t = setInterval(check, 5000);
+    return () => clearInterval(t);
+  }, [autoOn]);
+  const capHz = frameRateCapHz(settings, saver ? 30 : autoHz);
   const capKnown = storedKnown || touched.current;
   useEffect(() => {
     if (!capKnown) return;
@@ -286,9 +297,9 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const tiltDriving = false;
   const lightSv = useSharedValue(lightDeg);
   useEffect(() => { lightSv.value = lightDeg; }, [lightDeg, lightSv]);
-  const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz, frameRateAutoHz: autoHz, texturesAuto,
+  const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz, frameRateAutoHz: saver ? 30 : autoHz, texturesAuto,
                                  setTransparency, setDisplay, setText, set, setMotion, lightDeg, lightSv, tiltDriving }),
-                        [theme, onScreen, auto, maxRefreshHz, autoHz, texturesAuto, setTransparency, setDisplay, setText, set, setMotion,
+                        [theme, onScreen, auto, maxRefreshHz, autoHz, saver, texturesAuto, setTransparency, setDisplay, setText, set, setMotion,
                          lightDeg, lightSv, tiltDriving]);
   return <FaceplateContext.Provider value={value}>{children}</FaceplateContext.Provider>;
 }

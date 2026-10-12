@@ -28,6 +28,7 @@ type Native = {
   startFrameWatch?: () => void;
   stopFrameWatch?: () => void;
   takeFrameWatch?: () => unknown;
+  isPowerSaveMode?: () => unknown;
 };
 
 function native(): Native | undefined {
@@ -70,4 +71,10 @@ export function takeFrameWatch(): { frames: number; late: number } | null {
     if (!r || typeof r.frames !== 'number' || typeof r.late !== 'number') return null;
     return { frames: r.frames, late: r.late };
   } catch { return null; }
+}
+
+/** ★ Android battery saver (VibeLocalSdrModule.isPowerSaveMode): AUTO runs at 30 while it is on. False on iOS (Low Power
+ *  Mode already caps ProMotion at 60 for every app) and on an old binary. */
+export function powerSaveOn(): boolean {
+  try { return native()?.isPowerSaveMode?.() === true; } catch { return false; }
 }
