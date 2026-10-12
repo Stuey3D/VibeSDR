@@ -42,7 +42,8 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel,
 import StationLogo from './StationLogo';
 import { scrollLane } from '../constants/popupTokens';
 import type { Aircraft } from '../services/SDRBackend';
-/** ★ A tuning move this large (Hz) while WEFAX is open is a different transmission — see the retune effect. */
+/** ★ A tuning move this large (Hz) while WEFAX or NAVTEX is open is a different transmission — see the retune effects.
+ *  It is wider than a USB passband, so the tones have left it; fine-tuning a station onto its tones stays under it. */
 const RETUNE_NEW_CHART_HZ = 3000;
 
 
@@ -360,8 +361,24 @@ export default function DecoderPanel({
   const nvViewingPrev = nvViewPrev && !!nvPrevMsg;
   const nvShown: NavtexMessage | null = nvViewingPrev ? nvPrevMsg : nvLiveMsg;
   const nvReceiving = isNavtex && navtex!.receiving;
-  // ★ Cleared (CLR) or reopened: back to LIVE — there is no previous any more.
+  // ★ Cleared (CLR, retune) or reopened: back to LIVE — standing by, the last finished message under PREV after a CLR.
   useEffect(() => { if (!decoderText) setNvViewPrev(false); }, [decoderText]);
+  /* ★★ A RETUNE CLEARS NAVTEX (NickB, 2026-10-12: "changing from 518 to 490 when it's mid way through a message so it
+   *  gets assigned to the previous message id from 518"; Stuart: "navtex needs to clear on retune"). The text after the
+   *  move is another station's, with no ZCZC of its own yet — so a move of RETUNE_NEW_CHART_HZ or more does exactly what
+   *  CLR does (SDRScreen's onClear → NavtexAssembler.clearLive): the message arriving is dropped, the finished ones stay
+   *  under PREV, and LIVE stands by for the next ZCZC. The dial is the shared one, so another listener's retune counts. */
+  const lastNavtexHz = useRef(tunedHz);
+  useEffect(() => {
+    if (!isNavtex || !tunedHz) { lastNavtexHz.current = tunedHz; return; }
+    // ★ Measured from where the message was being received, not from the last step — a drag across the band arrives
+    //   as many small steps, none of them 3 kHz on its own.
+    if (!lastNavtexHz.current) { lastNavtexHz.current = tunedHz; return; }
+    if (Math.abs(tunedHz - lastNavtexHz.current) < RETUNE_NEW_CHART_HZ) return;
+    onClear?.();
+    lastNavtexHz.current = tunedHz;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNavtex, tunedHz]);
   const onNavtexSave = async () => {
     const m = nvShown;
     if (!m) return;

@@ -4291,6 +4291,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!v) navtexAsmRef.current?.reset();
     setDecoderTextNow(v);
   }, []);
+  /** ★★ CLR — and, for NAVTEX, a RETUNE (DecoderPanel; NickB 2026-10-12, Stuart: "navtex needs to clear on retune").
+   *  NAVTEX drops only the message arriving (clearLive): the finished ones stay, the last under PREV, as WEFAX's CLR
+   *  keeps its picture. The redraw is forced — the text may already be '' and setting it again would not draw. */
+  const clearDecoderOutput = useCallback(() => {
+    if (activeDecRef.current !== 'navtex') { setDecoderText(''); return; }
+    decTextPending.current = ''; decTextReplace.current = null;
+    navtexAsmRef.current?.clearLive();
+    setDecoderTextNow('');
+    setNavtexFecSeq((n) => n + 1);
+  }, [setDecoderText]);
   const setDecoderStatus = useCallback((v: string) => {
     decStatusPending.current = null;
     setDecoderStatusNow(v);
@@ -4365,6 +4375,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         queueDecoderStatus(tuneHintText.current || decStateText.current);
       },
       onNavtexFec: (fec) => { if (navtexAsmRef.current?.setFec(fec)) setNavtexFecSeq((n) => n + 1); },
+      // ★ The lock lost mid-message ends it [end lost] — a co-channel station took over, or it faded (utils/navtex).
+      onNavtexState: (st) => {
+        if (activeDecRef.current === 'navtex' && navtexAsmRef.current?.lockState(st, Date.now())) setNavtexFecSeq((n) => n + 1);
+      },
       onDot:    (d)          => setDecoding(d === 'active' || d === 'rx'),
       // WEFAX/SSTV — drive the panel's image canvas (skin canvas parity).
       // WEFAX lines are greyscale, SSTV lines are RGB; route by active decoder.
@@ -10555,7 +10569,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // SHRINKS the box rather than pushing it off the top — which is what "in BIG mode on a
           // smaller screen, the box itself gets smaller" asks for, with no separate logic.
           bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
-          onClear={() => setDecoderText('')}
+          onClear={clearDecoderOutput}
           navtex={navtexAsmRef.current}
           onClose={dismissDecoderPanel}
           onShownChange={setDecoderShown}

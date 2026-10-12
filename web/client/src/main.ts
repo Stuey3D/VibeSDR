@@ -3843,6 +3843,7 @@ window.addEventListener('resize', () => { vtsFitSig = ''; });
 
 function updateVts() {
   expireRdsIfRetuned();
+  clearNavtexIfRetuned();   // ★ every tune lands here — NAVTEX clears at once, not only when the next character arrives
   syncDecIdentity();   // ★ the decoder header follows the CURRENT station — see syncDecIdentity
   if (!spec) return;
   // ★ A move of the dial is a NEW announcement, so the static clock restarts rather than the old
@@ -9594,6 +9595,10 @@ let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | null = nu
  *  alternate between live receive or previous message like WEFAX." The text arrives as RTTY's does; the blocks
  *  (ZCZC…NNNN, damaged ones too) are found by src/utils/navtex — the app's file — and PREV / SAVE are WEFAX's keys. */
 const navtexAsm = new NavtexAssembler();
+/** Where the NAVTEX text is being received from — a move of NAVTEX_RETUNE_HZ or more is another transmission. Measured
+ *  from here, not from the last step: a drag across the band arrives as many small steps, none 3 kHz on its own. */
+let nvHz = 0;
+const NAVTEX_RETUNE_HZ = 3000;
 let nvViewPrev = false;
 let nvRenderQueued = false;
 /** Redraw the NAVTEX view — at most once a frame, since RTTY-style text arrives a character or two at a time. */
@@ -9654,7 +9659,19 @@ function saveNavtex() {
   a.href = url; a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function resetNavtex() { navtexAsm.reset(); nvViewPrev = false; }
+function resetNavtex() { navtexAsm.reset(); nvViewPrev = false; nvHz = spec?.frequency ?? 0; }
+/** ★★ CLR, and a RETUNE (NickB, 2026-10-12: "changing from 518 to 490 when it's mid way through a message so it gets
+ *  assigned to the previous message id from 518"; Stuart: "navtex needs to clear on retune"). Drops the message arriving
+ *  (NavtexAssembler.clearLive) — the finished ones stay, the last under PREV — and LIVE stands by for the next ZCZC.
+ *  The app does the same (DecoderPanel's retune effect → SDRScreen's onClear). */
+function clearNavtexLive() { navtexAsm.clearLive(); nvViewPrev = false; nvHz = spec?.frequency ?? 0; }
+function clearNavtexIfRetuned() {
+  if (activeDec !== 'navtex' || !spec?.frequency) return;
+  if (!nvHz) { nvHz = spec.frequency; return; }
+  if (Math.abs(spec.frequency - nvHz) < NAVTEX_RETUNE_HZ) return;
+  clearNavtexLive();
+  renderNavtex();
+}
 
 /** True while the last thing written to the decoder panel was a replace-in-place progress line,
  *  which carries no trailing newline. See onText. */
@@ -9716,7 +9733,7 @@ function initDecoders(host: string, auth: AuthState) {
   decoders = new DecoderClient(host, auth, {
     onText: (t: string) => {
       // ★ NAVTEX: into the message assembler, drawn by renderNavtex — #decText is hidden while it has the box.
-      if (activeDec === 'navtex') { navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
+      if (activeDec === 'navtex') { clearNavtexIfRetuned(); navtexAsm.push(t, Date.now()); queueNavtexRender(); return; }
       const el = $('decText');
       // ★★ A LEADING \r MEANS "REPLACE THE LAST LINE", as a terminal would. The time decoders send
       //    a progress line once a SECOND — the fields filling in as they arrive — and appending
@@ -9785,7 +9802,9 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(true);
     },
     onState: (st) => {
-      if (activeDec === 'navtex') { renderNavtex(); return; }   // ★ its status is the broadcast's — see renderNavtex
+      // ★ Its status is the broadcast's — see renderNavtex. A lock lost mid-message ends it [end lost] (NickB 2026-10-12:
+      //   a co-channel station on 490 took over and its text kept E's continuation) — NavtexAssembler.lockState.
+      if (activeDec === 'navtex') { navtexAsm.lockState(st, Date.now()); renderNavtex(); return; }
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
       decStateText = st >= 3 ? 'decoding…' : st ? 'syncing…' : 'listening…';
@@ -9994,7 +10013,7 @@ function initDecoders(host: string, auth: AuthState) {
   initSpotFilters();
   $('decClr').onclick = () => {
     $('decText').textContent = '';
-    if (activeDec === 'navtex') { resetNavtex(); renderNavtex(); }
+    if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
   };
   $('decPrev').onclick = () => (activeDec === 'navtex' ? toggleNavtexPrev() : toggleDecPrev());

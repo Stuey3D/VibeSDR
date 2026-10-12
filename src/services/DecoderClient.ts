@@ -185,6 +185,9 @@ export interface DecoderCallbacks {
   onTuneHint?:  (audioHz: number) => void;
   /** ★ NAVTEX: the message just closed by NNNN, as the server's FEC counted it (0x07, VibeServer 2026-10-05). */
   onNavtexFec?: (fec: { clean: number; repaired: number; lost: number }) => void;
+  /** ★ NAVTEX: the server decoder's state (0x03: 0 no signal, 1 hunting, 3 reading) — a lock lost ends the open
+   *  message (NavtexAssembler.lockState; NickB 2026-10-12, a co-channel station taking over 490). */
+  onNavtexState?: (state: number) => void;
   /** Digital/CW spots stream (after startSpots). */
   onSpot?:      (spot: SpotRow) => void;
   /** Chat (rides this WS — chat_websocket.go via the dxcluster handler).
@@ -707,6 +710,7 @@ export class DecoderClient {
           : ['no signal', 'sync 1', 'sync 2', 'decoding'];
         this.cb.onStatus(words[s] ?? 'state ' + s);
         this.cb.onDot(s === 3 ? 'active' : s >= 1 ? 'sync' : 'idle');
+        if (name === 'navtex') this.cb.onNavtexState?.(s);
       } else if (name === 'rtty' && t === 0x06 && u8.length >= 3) {
         this.cb.onTuneHint?.(v.getInt16(1, false));
       } else if (name === 'navtex' && t === 0x07 && u8.length >= 13) {

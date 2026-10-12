@@ -16,8 +16,8 @@
  *    • ZCZC is found with ≥ 3 of its 4 letters in place (the miss must be '_' or a letter, never a space or a line
  *      break), followed by the 4-character id. An id is accepted with up to two lost characters.
  *    • NNNN is found with ≥ 3 N's, the 4th lost ('_') — never another letter, so a word cannot end a message.
- *    • No NNNN at all: the message is closed "[end lost]" when the NEXT header arrives, or after END_LOST_MS of
- *      silence (tick()).
+ *    • No NNNN at all: the message is closed "[end lost]" when the NEXT header arrives, when the server's decoder
+ *      LOSES ITS LOCK (lockState() — VibeServer only), or after END_LOST_MS of silence (tick()).
  *    • Text before any header (the box was opened mid-message) is a message of its own, "[start lost]" — but only
  *      once it holds real text (ORPHAN_MIN_ALNUM letters/digits), so a few characters of noise between broadcasts
  *      are not dressed up as a message.
@@ -244,12 +244,27 @@ export class NavtexAssembler {
   /** Where the next boundary search starts in `seg` (each push only re-reads its own tail). */
   private scanFrom = 0;
   private finished: NavtexMessage[] = [];
+  /** The server decoder's lock (op 0x03 state 3 = reading characters), as last reported; null = never reported. */
+  private locked: boolean | null = null;
+  /** ★ clearLive() ran and no message has finished since: LIVE is empty and the last finished message is PREV's. */
+  private liveCleared = false;
   /** Bumped on every visible change, so a UI can tell cheaply whether to redraw. */
   version = 0;
 
   reset(): void {
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = 0; this.lastTextAt = 0;
-    this.scanFrom = 0; this.finished = []; this.version++;
+    this.scanFrom = 0; this.finished = []; this.liveCleared = false; this.locked = null; this.version++;
+  }
+
+  /** ★★ CLR, and a RETUNE (NickB, 2026-10-12: "changing from 518 to 490 when it's mid way through a message so it gets
+   *  assigned to the previous message id from 518"; Stuart: "navtex needs to clear on retune"). The text after a
+   *  retune is another transmission, so the message arriving is DROPPED — not closed under its id, which would put
+   *  490's text under 518's ZCZC — and the stream starts again: "[start lost]" until the next ZCZC. LIVE is left
+   *  empty (standing by); the messages already FINISHED are untouched, the last of them under PREV, as WEFAX's CLR
+   *  sends the picture to PREV. reset() is the other thing — a fresh box (open / close / switch), nothing kept. */
+  clearLive(): void {
+    this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = 0; this.lastTextAt = 0;
+    this.scanFrom = 0; this.liveCleared = this.finished.length > 0; this.locked = null; this.version++;
   }
 
   /** Feed decoded characters as they arrive. */
@@ -273,18 +288,41 @@ export class NavtexAssembler {
     return true;
   }
 
+  /** ★★ THE SERVER DECODER'S LOCK (VibeServer op 0x03: 0 no signal, 1 hunting, 3 reading — NavtexRx::State). A lock LOST
+   *  while a message is open ends that message "[end lost]" under its own id, and what follows is "[start lost]"
+   *  until a ZCZC (NickB, 2026-10-12, on 490: "Station E transmitting … then C come up on the top with a short message
+   *  and drops, then it picks up decoding E again … the remainder of E got assigned to C until the next E message").
+   *  Two transmitters on one channel do not share a character clock, so a takeover — and the fade back — costs the
+   *  lock; one transmission does not lose it: 0 resyncs in 250 s of real 518 kHz (six messages, weak Baltic) and on
+   *  every bench (−3 dB, 20 dB selective fading, 20 impulse bursts a minute), against 2–3 per co-channel takeover
+   *  (synthetic, measured 2026-10-12). A takeover that happens to land in step with the first station's clock keeps
+   *  the lock — that one is still ended by C's own ZCZC. Only a 3 → below-3 change counts: NoSignal ↔ hunting while
+   *  unlocked is the level gate, not an event. Returns true when a message was closed (the caller redraws). */
+  lockState(state: number, nowMs: number): boolean {
+    const was = this.locked;
+    this.locked = state >= 3;
+    if (!was || this.locked) return false;
+    // The text so far is one transmission's: a message closes [end lost], an orphan of real text becomes its own
+    // "[start lost] … [end lost]" fragment, and a few characters of noise are dropped rather than glued to the next.
+    let closed = false;
+    if (this.inMsg || alnum(this.seg) >= ORPHAN_MIN_ALNUM) { this.finish(this.build(this.seg, true, true)); closed = true; }
+    this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = nowMs; this.scanFrom = 0;
+    this.version++;
+    return closed;
+  }
+
   /** True while a message is arriving (header seen or real orphan text, no end yet). */
   get receiving(): boolean { return !!this.current(); }
 
   /** What LIVE shows: the message arriving, else the last one finished. */
   get live(): NavtexMessage | null {
-    return this.current() ?? this.finished[this.finished.length - 1] ?? null;
+    return this.current() ?? (this.liveCleared ? null : this.finished[this.finished.length - 1] ?? null);
   }
 
   /** What PREV shows: the message before LIVE's — one only, as WEFAX keeps one picture. */
   get prev(): NavtexMessage | null {
     const f = this.finished;
-    return this.current() ? (f[f.length - 1] ?? null) : (f[f.length - 2] ?? null);
+    return this.current() || this.liveCleared ? (f[f.length - 1] ?? null) : (f[f.length - 2] ?? null);
   }
 
   /** ★ The server's per-message FEC count (VibeServer op 0x07, 2026-10-05). It is sent BEHIND the text carrying its
@@ -302,6 +340,7 @@ export class NavtexAssembler {
 
   private finish(m: NavtexMessage): void {
     this.finished.push(m);
+    this.liveCleared = false;
     if (this.finished.length > 2) this.finished.splice(0, this.finished.length - 2);
   }
 

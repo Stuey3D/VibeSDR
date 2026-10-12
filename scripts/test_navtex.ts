@@ -166,7 +166,103 @@ for (const bad of ['Z__C GB98', 'ZC C GB98', 'ZCZC ____', 'ZCZC _ _9', 'ZCZE GB9
   ok(!new NavtexAssembler().setFec({ clean: 1, repaired: 0, lost: 0 }), 'nothing to attach to: ignored');
 }
 
-// 10. reset() clears everything (CLR / reopen).
+// 11. ★ A RETUNE MID-MESSAGE (NickB, 2026-10-12: 518 → 490 part way through, and 490's text joined 518's message
+//     under its id). clearLive() — what a retune and CLR do — drops the message arriving; what follows is a new
+//     "[start lost]" fragment, never a continuation; finished messages stay, the last under PREV.
+{
+  const a = new NavtexAssembler();
+  let t = feed(a, GALE, 4);                                         // finished: GB98
+  t = feed(a, 'ZCZC GA01\r\r\nNAV WARNING 537 SEATRIALS WITH UNMA', 4, t + 60_000);
+  ok(a.receiving && a.live?.id === 'GA01', 'GA01 arriving on 518');
+  const v = a.version;
+  a.clearLive();                                                    // the dial moves to 490
+  ok(a.version > v && !a.receiving && a.live === null, 'retune: LIVE is empty, standing by');
+  ok(a.prev?.id === 'GB98' && a.prev.done && !a.prev.endLost, 'retune: the finished GB98 is untouched, under PREV');
+  feed(a, 'SECURITE ROUTE IROISE ZONE DE TIR ACTIVE\r\r\n', 4, t + 1000);
+  const m = a.live!;
+  ok(m.startLost && m.id === null, '490 text is a [start lost] fragment, not GA01: ' + JSON.stringify(m.id));
+  ok(!m.text.includes('SEATRIALS') && m.text.startsWith('SECURITE'), "518's partial text is gone: " + JSON.stringify(m.text));
+  ok(a.prev?.id === 'GB98', 'PREV still GB98 while the fragment arrives');
+  feed(a, 'ZCZC NA12\r\r\nAVURNAV\r\r\nNNNN\r\r\n', 4, t + 120_000);
+  ok(a.live?.id === 'NA12' && a.live.done && a.live.text === 'AVURNAV', "490's own header starts its own message");
+  ok(a.prev?.startLost === true && a.prev.endLost && !a.prev.text.includes('SEATRIALS'), 'the fragment closed [end lost], under PREV');
+  ok(a.setFec({ clean: 9, repaired: 0, lost: 0 }) && !!a.live.fec && !a.prev.fec, "a count lands on 490's message only");
+}
+{
+  // Cleared with nothing finished yet: still nothing to show; a header split across the retune is not completed.
+  const a = new NavtexAssembler();
+  feed(a, 'ZCZC GA0', 4);
+  a.clearLive();
+  ok(a.live === null && a.prev === null, 'clear with no finished message: empty');
+  feed(a, '1 HELLO\r\r\nNNNN\r\r\n', 4, T0 + 5000);
+  ok(a.live === null && a.prev === null, 'the header\'s tail after a retune does not make a message');
+  // And a CLR right after a message finished: LIVE empty, the message is PREV.
+  const b = new NavtexAssembler();
+  feed(b, GALE, 4);
+  b.clearLive();
+  ok(b.live === null && b.prev?.id === 'GB98', 'CLR after NNNN: the message moves to PREV');
+  ok(b.tick(T0 + 10 * NAVTEX_END_LOST_MS) === false, 'no [end lost] tick after a clear');
+}
+
+// 12. ★★ CO-CHANNEL TAKEOVER on one frequency (NickB, 2026-10-12, 490 kHz: E transmitting, C comes up on top with a
+//     short message and drops, E is decoded again — "the remainder of E got assigned to C until the next E message").
+const E1 = 'ZCZC EA12\r\r\nFRENCH NAV WARNING 412 ROUTE IROISE\r\r\nBUOY UNLIT IN POSITI';
+const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
+{
+  // (a) C complete (its NNNN received), the lock kept throughout — what the assembler sees with no server state at all.
+  const a = new NavtexAssembler();
+  let t = feed(a, E1, 4);
+  t = feed(a, 'ZCZC CB01\r\r\nGALE WARNING SOLE\r\r\nNNNN\r\r\n', 4, t);
+  ok(a.prev?.id === 'EA12' && a.prev.endLost && a.prev.done, 'C\'s ZCZC ends E [end lost] under E\'s id');
+  ok(!!a.prev && !a.prev.text.includes('GALE'), 'none of C is in E');
+  ok(a.live?.id === 'CB01' && a.live.done && !a.live.endLost && a.live.text === 'GALE WARNING SOLE', 'C complete on its own');
+  feed(a, E2, 4, t);
+  const m = a.live!;
+  ok(m.startLost && m.id === null && m.text.startsWith('ON 48-20N'), 'E\'s remainder is a [start lost] fragment: ' + JSON.stringify(m.id));
+  ok(a.prev?.id === 'CB01' && a.prev.text === 'GALE WARNING SOLE', 'C keeps only its own text');
+}
+{
+  // (b) C fades with no NNNN: the server's decoder loses its lock at the takeover and again at the fade (op 0x03).
+  const a = new NavtexAssembler();
+  a.lockState(3, T0);
+  let t = feed(a, E1, 4);
+  ok(a.lockState(1, t), 'takeover: the lock lost closes E');
+  ok(a.live?.id === 'EA12' && a.live.endLost && a.live.done && a.live.text.endsWith('POSITI'), 'E [end lost], its text as far as it came');
+  t = feed(a, 'X_Q', 1, t);                                   // a few characters of garbage while it hunts
+  a.lockState(3, t);
+  t = feed(a, 'ZCZC CB01\r\r\nGALE WARNING SOLE SEVERE GALE 9 IMMINENT\r\r\nFITZRO', 4, t);
+  ok(a.live?.id === 'CB01' && !a.live.done && a.prev?.id === 'EA12', 'C arriving, E under PREV, the garbage dropped');
+  ok(a.lockState(0, t), 'fade: the lock lost closes C');
+  ok(a.live?.id === 'CB01' && a.live.endLost && a.live.text.endsWith('FITZRO'), 'C [end lost], only its own text');
+  a.lockState(3, t + 2000);
+  feed(a, E2, 4, t + 2000);
+  const m = a.live!;
+  ok(m.startLost && m.id === null && m.text.startsWith('ON 48-20N'), "E's remainder is [start lost], not C: " + JSON.stringify(m.text.slice(0, 20)));
+  ok(a.prev?.id === 'CB01' && !a.prev.text.includes('48-20N'), 'nothing of E joined C');
+  // E's own NNNN closes the fragment — it is not attached to C (or to E) by guesswork, and takes no FEC count.
+  feed(a, 'NNNN\r\r\n', 4, t + 60_000);
+  ok(a.live?.startLost === true && a.live.done && !a.setFec({ clean: 1, repaired: 0, lost: 0 }), 'its NNNN ends the fragment; no count');
+}
+{
+  // Only a 3 → below-3 change is an event: NoSignal ↔ hunting while unlocked, a first report, a lock regained.
+  const a = new NavtexAssembler();
+  feed(a, 'ZCZC GA01\r\r\nTEXT', 4);
+  ok(!a.lockState(1, T0) && a.receiving, 'a first report (unlocked) closes nothing');
+  ok(!a.lockState(0, T0) && !a.lockState(1, T0) && !a.lockState(3, T0) && a.receiving, 'level-gate flips and a relock close nothing');
+  // A lock lost with only noise open: dropped, not glued to the next transmission's text.
+  const b = new NavtexAssembler();
+  b.lockState(3, T0); feed(b, 'E_T', 1); b.lockState(1, T0 + 5000);
+  feed(b, 'ZCZC GA01\r\r\nNO MESSAGES\r\r\nNNNN\r\r\n', 4, T0 + 6000);
+  ok(b.live?.id === 'GA01' && b.prev === null, 'noise before a lost lock makes no message');
+  // Station letters are per message, never per station: the same B1 on two frequencies (or another letter for the same
+  // transmitter on 490 than on 518) is just two messages — nothing is keyed or merged by id.
+  const c = new NavtexAssembler();
+  let t = feed(c, 'ZCZC EA12\r\r\nONE\r\r\nNNNN\r\r\n', 4);
+  feed(c, 'ZCZC EA12\r\r\nTWO\r\r\nNNNN\r\r\n', 4, t + 1000);
+  ok(c.prev?.text === 'ONE' && c.live?.text === 'TWO', 'two messages with one id stay two messages');
+}
+
+// 10. reset() clears everything (open / close / switch).
 {
   const a = new NavtexAssembler();
   feed(a, GALE + 'ZCZC GA01\r\r\nX', 4);
