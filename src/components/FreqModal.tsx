@@ -260,6 +260,8 @@ export default function FreqModal({
   const [unitState, setUnitState] = useState<Unit>('khz');
   const unit = unitProp ?? unitState;
   const [value, setValue] = useState('');
+  const valueRef = useRef(value);   // the field's text as focus lands (Android's select-on-focus, below)
+  valueRef.current = value;
   // Live VTS while typing (see vtsLookup). null → show the tuned station instead.
   const [draftVts, setDraftVts] = useState<{ name: string; freq: number } | null>(null);
   const inputRef          = useRef<TextInput>(null);
@@ -770,8 +772,19 @@ export default function FreqModal({
               //   eating the first click (Stuart: "a popup with Look Up etc in it"). Nothing in that menu
               //   is useful on a frequency; the select-all stays.
               contextMenuHidden
-              selectTextOnFocus={!onMac}
-              onFocus={() => { if (onMac) replaceOnType.current = true; }}
+              /* ★★ NOT ON ANDROID: there React Native's selectTextOnFocus re-selects on a LATER LAYOUT. Its flag is
+               *  only cleared by the first layout that happens while focused — and the field is not focused when the
+               *  popup first lays out, so the flag survived; typing "4" changed the text, the field laid out again and
+               *  selected everything, and "582" then replaced the 4 (Stuart, XCover 4s, 2026-10-12: typing 4582 gave
+               *  582). Android selects the old frequency itself, once, as the field takes focus. */
+              selectTextOnFocus={!onMac && Platform.OS !== 'android'}
+              onFocus={() => {
+                if (onMac) replaceOnType.current = true;
+                else if (Platform.OS === 'android') {
+                  const len = valueRef.current.length;
+                  requestAnimationFrame(() => inputRef.current?.setSelection(0, len));
+                }
+              }}
               onSubmitEditing={confirm}
               // ★ A hardware Enter is handled by the VibeKeyDown listener above, NOT here.
               // onKeyPress was tried and never fired: VibeKeyWindow was swallowing Enter
