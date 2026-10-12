@@ -45,6 +45,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useOrientationInset } from '../hooks/useOrientationInset';
 import { useKeepAwake }       from 'expo-keep-awake';
 import { keepIfSameStation, sameFlatList, sameStorms } from '../services/renderChurn';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -1865,6 +1866,23 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  Layout follows the WINDOW, never the device. */
   const { width: screenW, height: screenH } = useWindowDimensions();
   const isLandscape = screenW > screenH;
+  /** The waterfall's top inset: the new orientation's settled value from a rotation's first render (useOrientationInset). */
+  const wfInsetTop = useOrientationInset(insets.top, isLandscape);
+  /* ★★★ ANDROID: THE WINDOW DOES NOT DRAW THROUGH A ROTATION UNTIL THIS SCREEN HAS RE-RENDERED AT THE NEW SIZE
+   *  (MainActivity.onConfigurationChanged). The waterfall's size is this render's — 270–380 ms after the turn on the Moto
+   *  — and drawing in between showed the old-size picture in a corner of the turned screen, then a jump. Armed while
+   *  mounted; released from the layout effect that follows the render carrying the new window (native waits eight
+   *  vsyncs more for the Skia canvases, and never holds longer than 700 ms). */
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    VibePowerModule?.armRotationHold?.(true);
+    return () => VibePowerModule?.armRotationHold?.(false);
+  }, []);
+  const rotMounted = useRef(false);
+  React.useLayoutEffect(() => {
+    if (!rotMounted.current) { rotMounted.current = true; return; }
+    if (Platform.OS === 'android') VibePowerModule?.releaseRotationHold?.();
+  }, [screenW, screenH]);
   // Tablets (iPad) have room for the decoder panel in landscape; phones don't.
   const isTablet = Math.min(screenW, screenH) >= TABLET_MIN_SIDE;
   /* ★★ ANDROID PHONES GO FULL SCREEN IN LANDSCAPE (2026-10-03). The 3-button navigation bar sits down the right
@@ -10316,7 +10334,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Waterfall — fills screen below the status bar / Dynamic Island so the
           band plan strip is never hidden under the notch */}
-      <View style={{ marginTop: insets.top }}>
+      <View style={{ marginTop: wfInsetTop }}>
       <PanelBoundary name="Spectrum" autoRetry>
       <WaterfallView
         frameSink={wfFrameSink}
@@ -10340,7 +10358,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfCoarse={wfCoarse}
         colormap={colormap}
         width={screenW}
-        height={screenH - insets.top}
+        height={screenH - wfInsetTop}
         // Block waterfall tune/pan/pinch in the bottom gap (home-indicator
         // zone): the whole strip below the pill when controls show, else just
         // the home bar. Preserves swipe-up-to-minimise + menu Modals.

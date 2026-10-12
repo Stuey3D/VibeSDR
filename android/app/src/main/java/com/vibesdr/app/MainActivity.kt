@@ -32,6 +32,49 @@ open class MainActivity : ReactActivity() {
     super.onCreate(null)
   }
 
+  // ── Rotation: hold the last frame until the new layout is drawn ──────────────
+  /* ★★★ THE WATERFALL SAT AT ITS OLD SIZE FOR 270–380 ms ON EVERY ROTATION (Stuart, 2026-10-12, Moto G35: "the
+   *  waterfall having to shift about and it is clunky"). Its size comes from React, and the render that carries a new
+   *  window is the whole SDR screen. Android shows its rotation snapshot until the app's window DRAWS — and we drew at
+   *  once, with the stale layout. The iPhone never showed it: iOS animates the turn over a snapshot.
+   *  Same move as the splash screen's keep-on-screen condition: from the configuration change, every draw is cancelled
+   *  (layout still runs) until the SDR screen has committed at the new size and calls releaseRotationHold(), or
+   *  ROTATION_HOLD_MAX_MS passes — so the app can never be left frozen. Armed only while the SDR screen is mounted. */
+  @Volatile var rotationHoldArmed = false
+  private var rotationHold: android.view.ViewTreeObserver.OnPreDrawListener? = null
+  private var heldOrientation = android.content.res.Configuration.ORIENTATION_UNDEFINED
+  private val rotationHoldTimeout = Runnable { releaseRotationHold() }
+  private val ROTATION_HOLD_MAX_MS = 700L
+
+  override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+    val turned = heldOrientation != android.content.res.Configuration.ORIENTATION_UNDEFINED &&
+      newConfig.orientation != heldOrientation
+    heldOrientation = newConfig.orientation
+    if (turned && rotationHoldArmed && rotationHold == null) {
+      val v = window.decorView
+      val l = android.view.ViewTreeObserver.OnPreDrawListener { false }
+      v.viewTreeObserver.addOnPreDrawListener(l)
+      rotationHold = l
+      v.postDelayed(rotationHoldTimeout, ROTATION_HOLD_MAX_MS)
+    }
+    super.onConfigurationChanged(newConfig)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    heldOrientation = resources.configuration.orientation   // a turn while paused is not one we can hold
+  }
+
+  /** From JS (VibePowerModule.releaseRotationHold) once the SDR screen has committed at the new size; UI thread. */
+  fun releaseRotationHold() {
+    val l = rotationHold ?: return
+    rotationHold = null
+    val v = window.decorView
+    v.removeCallbacks(rotationHoldTimeout)
+    v.viewTreeObserver.removeOnPreDrawListener(l)
+    v.invalidate()
+  }
+
   override fun onNewIntent(intent: Intent?) {
     super.onNewIntent(intent)
     setIntent(intent)

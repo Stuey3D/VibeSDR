@@ -14,6 +14,8 @@ import com.facebook.react.bridge.ReactMethod
  * background); startAudioEngine goes via startForegroundService, everything
  * else through the running service instance.
  */
+private const val ROTATION_SETTLE_FRAMES = 8
+
 class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
@@ -118,6 +120,25 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun stopExternalAudio() { VibeStreamService.instance?.stopExternalAudio() }
+
+    /** The SDR screen arms the rotation hold while mounted (MainActivity.onConfigurationChanged). */
+    @ReactMethod
+    fun armRotationHold(on: Boolean) {
+        (reactContext.currentActivity as? MainActivity)?.rotationHoldArmed = on
+    }
+
+    /** The SDR screen has committed at the new window size: let the window draw again ROTATION_SETTLE_FRAMES vsyncs
+     *  on, so the Skia canvases (their own surfaces) have redrawn at the new size first. Two was too few on the Moto
+     *  (2026-10-12, screenrecord at ~40 fps): two frames of the old-size waterfall in the corner, one with no trace. */
+    @ReactMethod
+    fun releaseRotationHold() {
+        val act = reactContext.currentActivity as? MainActivity ?: return
+        act.runOnUiThread {
+            val v = act.window.decorView
+            fun after(n: Int) { if (n <= 0) act.releaseRotationHold() else v.postOnAnimation { after(n - 1) } }
+            after(ROTATION_SETTLE_FRAMES)
+        }
+    }
 
     // Exclude a full-width horizontal band (the VFO/zoom drums) from the system
     // back-edge swipe so a horizontal drag on a drum doesn't trigger the (useless,

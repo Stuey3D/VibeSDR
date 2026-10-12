@@ -19,6 +19,9 @@ export const VibePowerModule = NativeModules.VibePowerModule as
       // v7 FM-DX Webserver spike: native MP3-over-WS audio. baseUrl = server root.
       startFmdxAudio?:   (baseUrl: string) => void;
       stopFmdxAudio?:    () => void;
+      /** Android: hold the window's drawing through a rotation until the SDR screen has re-rendered (MainActivity). */
+      armRotationHold?:     (on: boolean) => void;
+      releaseRotationHold?: () => void;
       sendTuneCommand:   (frequency: number, mode: string) => void;
       /** ★ Adopt the server's dial into native's cache. NEVER transmits — see SdrWsClient's config
        *  handler and VibeStreamService.noteServerFreq. Optional: older native builds lack it. */
