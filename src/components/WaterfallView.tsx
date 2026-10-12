@@ -1302,6 +1302,19 @@ function WaterfallView({
   const engSpecOn  = useSharedValue(false);
   const engTexSent = useSharedValue(false);
   const engLast = useSharedValue(0);
+  /* ★★ ROWS SHOWN ON THE DISPLAY'S CLOCK (2026-10-12, Galaxy Tab A9, 60 Hz: "very slight waterfall judder … almost
+   *  like vsync isnt working"). The engine makes rows on its own timer (~33 ms on Default) and the screen draws every
+   *  16.7 ms; when the two run nearly in phase, jitter flips which frame a row lands on — measured as a row every other
+   *  frame with, about one move in eight, a frame late and then two at once (1.1 0 0 0 2.9 0 1.1). So while settled
+   *  (not gliding), every row is still in the IMAGE the moment it is made, but uHead — which rows are SHOWN — advances
+   *  at the measured row rate, whole rows, on this frame callback: an even beat, about one row (≈33 ms) behind. The
+   *  lag is held near one row by nudging the rate (a backlog speeds it, none slows it); more than 3 behind (a stall,
+   *  a resume) snaps to the newest. Glides (Sharp's slow feeds, every gesture) are untouched: they show the newest. */
+  const engAvail = useSharedValue(0);    // the newest row in the image
+  const engShown = useSharedValue(0);    // the newest row on screen (uHead while settled)
+  const engAcc   = useSharedValue(0);
+  const engRate  = useSharedValue(0.03); // rows per ms, measured (starts at Default's 30/s)
+  const engRateT = useSharedValue(0);
   const enginePoll = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value || !engine) return;
@@ -1328,7 +1341,13 @@ function WaterfallView({
         const old = engImg.value;
         wfImage.value = p.image;
         engImg.value = p.image;
-        uHead.value = p.head;
+        // The row rate, from arrivals: an EMA of rows per ms (a gap over a second is a pause, not a rate).
+        const k = p.head - engAvail.value, dtA = fi.timestamp - engRateT.value;
+        if (engAvail.value > 0 && k > 0 && engRateT.value > 0 && dtA > 0 && dtA < 1000) {
+          engRate.value = engRate.value * 0.9 + (k / dtA) * 0.1;
+        }
+        engRateT.value = fi.timestamp;
+        engAvail.value = p.head;
         if (old) retire.push({ o: old, f });
         if (!engTexSent.value) { engTexSent.value = true; runOnJS(setTexReady)(true); }   // once, ever
       }
@@ -1369,6 +1388,23 @@ function WaterfallView({
         if (old) retire.push({ o: old, f });
       }
       engRetire.value = retire;
+    }
+    // ── Which rows are shown (see engAvail) ──
+    {
+      const avail = engAvail.value;
+      let shown = engShown.value;
+      if (engGlideOn.value || uQuantSv.value < 0.5) {
+        shown = avail; engAcc.value = 0;
+      } else if (shown <= 0 || shown > avail || avail - shown > 3) {
+        shown = avail; engAcc.value = 0;
+      } else {
+        const backlog = avail - shown;
+        let acc = engAcc.value + engRate.value * gap * (0.75 + 0.25 * backlog);
+        while (acc >= 1 && shown < avail) { shown++; acc -= 1; }
+        engAcc.value = Math.min(acc, shown === avail ? 1 : 2);
+      }
+      engShown.value = shown;
+      if (uHead.value !== shown) uHead.value = shown;
     }
     if (engGlideOn.value && glideTick(fi.timestamp)) engGlideOn.value = false;
     if (engSpecOn.value && specTweenTick(gap)) engSpecOn.value = false;
