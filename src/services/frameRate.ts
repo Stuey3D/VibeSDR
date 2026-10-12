@@ -25,6 +25,9 @@ import { NativeModules, Platform } from 'react-native';
 type Native = {
   maxRefreshRate?: () => Promise<unknown>;
   setFrameRateCap?: (hz: number) => void;
+  startFrameWatch?: () => void;
+  stopFrameWatch?: () => void;
+  takeFrameWatch?: () => unknown;
 };
 
 function native(): Native | undefined {
@@ -44,9 +47,27 @@ export function readMaxRefreshRate(): Promise<number | null> {
   return maxHz;
 }
 
-/** Tell the native side the cap: 60, or 0 for the display's own maximum. */
+/** Tell the native side the cap: 60 or 30, or 0 for the display's own maximum. */
 export function applyFrameRateCap(hz: number): void {
   const fn = native()?.setFrameRateCap;
   if (typeof fn !== 'function') return;
   try { fn(hz); } catch { /* an old binary's bridge refusing is the same as no method */ }
+}
+
+// ── FRAME WATCH — what FRAME RATE → AUTO judges by (Android only; VibeLocalSdrModule.kt) ──────────────
+/** True when this binary can count late frames (Android with the native half). iOS AUTO stays at the panel's maximum:
+ *  every supported iPhone keeps up, and ProMotion already steps a quiet screen down by itself. */
+export function frameWatchAvailable(): boolean {
+  const n = native();
+  return Platform.OS === 'android' && typeof n?.startFrameWatch === 'function' && typeof n?.takeFrameWatch === 'function';
+}
+export function startFrameWatch(): void { try { native()?.startFrameWatch?.(); } catch { /* old binary */ } }
+export function stopFrameWatch(): void { try { native()?.stopFrameWatch?.(); } catch { /* old binary */ } }
+/** Frames drawn and frames late since the last call, or null when there is no watch. */
+export function takeFrameWatch(): { frames: number; late: number } | null {
+  try {
+    const r = native()?.takeFrameWatch?.() as { frames?: unknown; late?: unknown } | undefined;
+    if (!r || typeof r.frames !== 'number' || typeof r.late !== 'number') return null;
+    return { frames: r.frames, late: r.late };
+  } catch { return null; }
 }

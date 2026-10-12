@@ -866,7 +866,7 @@ function ControlCustomisationPane({
   const styles = usePopupStyles(makeStyles);
   // ★ App-wide, not per server (FaceplateContext) — the faceplate is the hardware in your hand.
   const { settings: fp, setDisplay, setText, set, setTransparency, autoTransparency: auto,
-          maxRefreshHz, setMotion, tiltDriving, texturesAuto } = useFaceplateSettings();
+          maxRefreshHz, frameRateAutoHz, setMotion, tiltDriving, texturesAuto } = useFaceplateSettings();
   // ★ While the DEVICE chose OFF (never once the user has picked), say so — otherwise a new user on
   //   an old phone sees solid panels, the ON key unlit, and no reason why.
   const autoNote = !fp.transparencyExplicit && auto.reason ? AUTO_REASON_NOTE[auto.reason] : null;
@@ -944,14 +944,18 @@ function ControlCustomisationPane({
           onPick={(v: Textures) => set({ textures: v })}
           note={`${TEXTURES_NOTE}\nAuto · ${texturesAuto === 'high' ? 'High' : 'Standard'} on this device`} />
       )}
-      {/* ★★ FRAME RATE (power audit, 2026-10-01): the panel's full rate or 60 Hz, live. Shown ONLY
-          on a panel faster than 60 Hz (ProMotion, 90 / 120 Hz Android) — on a 60 Hz one a 60 Hz
-          cap is a key that does nothing (AGENTS.md). faceplate.ts frameRateChoices decides. */}
+      {/* ★★ FRAME RATE (power audit 2026-10-01; AUTO / 30 Hz 2026-10-12): AUTO / <panel max> / 60 / 30, live, on
+          every panel that reports its rate (faceplate.ts frameRateChoices). While AUTO is lit the note says what it
+          is running at now, as HIGH-RESOLUTION TEXTURES' AUTO does. */}
       {(() => {
         const rates = frameRateChoices(maxRefreshHz);
+        const top = Math.round(maxRefreshHz ?? 60);
         return rates ? (
           <SelectorRow label="FRAME RATE" choices={rates} value={fp.frameRate}
-            onPick={(v: FrameRate) => set({ frameRate: v })} note={FRAME_RATE_NOTE} />
+            onPick={(v: FrameRate) => set({ frameRate: v })}
+            note={fp.frameRate === 'auto'
+              ? `${FRAME_RATE_NOTE}\nAuto · ${frameRateAutoHz > 0 ? frameRateAutoHz : top} Hz on this device now`
+              : FRAME_RATE_NOTE} />
         ) : null;
       })()}
 

@@ -77,6 +77,7 @@ import { FramePool, type FrameSlot } from '../services/framePool';
 const JB_MAX_QUEUE_SLOTS = 5;
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { useScreenCovered } from '../hooks/useScreenCovered';
+import { cadenceGap } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 
@@ -831,7 +832,7 @@ function WaterfallView({
 
   /** One tween tick (33 ms cadence). Returns TRUE when the trace has converged (caller stops ticking). Shared by the
    *  JS path's specTween callback and the native engine's enginePoll — the same motion either way. */
-  const specTweenTick = (fi: { timeSincePreviousFrame: number | null }): boolean => {
+  const specTweenTick = (gapMs: number): boolean => {
     'worklet';
     // No busy flag needed: the callback is DEACTIVATED when settled (see below), so it is not
     // running at all rather than running and returning.
@@ -840,7 +841,7 @@ function WaterfallView({
     // Rebuilding the path four times as often would swap a JS-thread problem for a UI-thread one,
     // which is the version of this bug that would be much harder to see coming. The interpolation
     // is time-based, so ticking at the same rate reproduces the previous motion exactly.
-    specAccSv.value += fi.timeSincePreviousFrame ?? SPEC_TWEEN_MS;
+    specAccSv.value += gapMs;   // ★ since this tick last RAN (uiCadence), so a FRAME RATE cap skips nothing
     if (specAccSv.value < SPEC_TWEEN_MS) return false;
     const dtAcc = specAccSv.value;
     specAccSv.value = 0;
@@ -904,10 +905,13 @@ function WaterfallView({
     if (maxDelta < 0.002) { specAccSv.value = 0; return true; }
     return false;
   };
+  const specTweenLast = useSharedValue(0);
   const specTween = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value) return;   // component is gone — see specDead
-    if (specTweenTick(fi)) runOnJS(setSpecTweenActive)(false);
+    const gap = cadenceGap(specTweenLast, fi.timestamp);   // ★ FRAME RATE cap (services/uiCadence)
+    if (gap < 0) return;
+    if (specTweenTick(gap)) runOnJS(setSpecTweenActive)(false);
   }, false);   // autostart OFF — started on the first data frame
   specTweenRef.current = specTween;
 
@@ -1272,9 +1276,11 @@ function WaterfallView({
     }
     return false;
   };
+  const glideCbLast = useSharedValue(0);
   const glideCb = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value) return;   // component is gone — see specDead
+    if (cadenceGap(glideCbLast, fi.timestamp) < 0) return;   // ★ FRAME RATE cap (services/uiCadence)
     if (glideTick(fi.timestamp)) runOnJS(glideSleep)(glideGen.value);
   }, false);
   glideRef.current = glideCb;
@@ -1295,9 +1301,14 @@ function WaterfallView({
   const engGlideOn = useSharedValue(false);
   const engSpecOn  = useSharedValue(false);
   const engTexSent = useSharedValue(false);
+  const engLast = useSharedValue(0);
   const enginePoll = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value || !engine) return;
+    // ★ FRAME RATE cap (services/uiCadence): under a 30 cap this — every image, uniform and path the canvases redraw
+    //   for — runs on every other vsync. Rows the engine made meanwhile are taken together on the next run.
+    const gap = cadenceGap(engLast, fi.timestamp);
+    if (gap < 0) return;
     const RETIRE_FRAMES = 3;
     const f = engFrame.value + 1;
     engFrame.value = f;
@@ -1360,7 +1371,7 @@ function WaterfallView({
       engRetire.value = retire;
     }
     if (engGlideOn.value && glideTick(fi.timestamp)) engGlideOn.value = false;
-    if (engSpecOn.value && specTweenTick(fi)) engSpecOn.value = false;
+    if (engSpecOn.value && specTweenTick(gap)) engSpecOn.value = false;
   }, engine != null);
 
   // ── Covered by an opaque full-screen overlay (useScreenCovered) ─────────────────────────────

@@ -24,7 +24,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { makeMutable, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { LIGHT_DEFAULT_DEG } from '../constants/plateLight';
 import {
-  decideLaunch, DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, frameRateCapHz, parseSettings, resolveFaceplate, withDisplay, withText,
+  autoFrameRungs, autoWindowLate, decideLaunch, DEFAULT_SETTINGS, FACEPLATE_STORAGE_KEY, frameRateCapHz, parseSettings, resolveFaceplate, withDisplay, withText,
   withTransparency, withMotion, effectiveMotion,
   type FaceplateSettings, type MotionEffects, LIGHT_ANGLE_DEG, type FaceplateTheme, type DisplayStyle, type TextColour, type Transparency,
   type SurfaceTokens,
@@ -36,7 +36,10 @@ import {
 import { installNativeTransliterator } from '../services/transliterator';
 import { explainFaceplateReset, faceplateGuard, LAST_CRASHED_KEY, launchMarkOnce } from '../services/faceplateGuard';
 import { readNativeDeviceClass } from '../services/deviceClass';
-import { applyFrameRateCap, readMaxRefreshRate } from '../services/frameRate';
+import {
+  applyFrameRateCap, frameWatchAvailable, readMaxRefreshRate, startFrameWatch, stopFrameWatch, takeFrameWatch,
+} from '../services/frameRate';
+import { uiFrameCapHz } from '../services/uiCadence';
 import { setArtColour } from '../services/appIcon';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 
@@ -52,8 +55,10 @@ interface FaceplateContextValue {
   /** The device's own default and why — the pane says so under the row until the user picks. */
   autoTransparency: AutoTransparency;
   /** ★ The panel's top refresh rate (Hz), or null until known / when the binary cannot say — the
-   *  FRAME RATE row is shown only above 60 (faceplate.ts `frameRateChoices`). */
+   *  FRAME RATE row is hidden then (faceplate.ts `frameRateChoices`). */
   maxRefreshHz: number | null;
+  /** ★ What FRAME RATE → AUTO is running at this session: the cap in Hz, 0 = the panel's maximum. */
+  frameRateAutoHz: number;
   /** ★ What HIGH-RESOLUTION TEXTURES' AUTO chose on this device (constants/assetDensity autoTextures). */
   texturesAuto: 'high' | 'standard';
   /** A pick from the pane: ON / OFF, stored as the user's choice from then on. */
@@ -84,7 +89,7 @@ const DEFAULT_THEME = resolveFaceplate(DEFAULT_SETTINGS);
 const AUTO_ON: AutoTransparency = { transparency: 'on', reason: null };
 
 const FaceplateContext = createContext<FaceplateContextValue>({
-  theme: DEFAULT_THEME, settings: DEFAULT_SETTINGS, autoTransparency: AUTO_ON, maxRefreshHz: null, texturesAuto: 'high',
+  theme: DEFAULT_THEME, settings: DEFAULT_SETTINGS, autoTransparency: AUTO_ON, maxRefreshHz: null, frameRateAutoHz: 0, texturesAuto: 'high',
   setTransparency: () => {}, setDisplay: () => {}, setText: () => {}, set: () => {}, setMotion: () => {},
   // ★ Outside a provider (tests, a stray tree) the light is today's, fixed.
   lightDeg: LIGHT_DEFAULT_DEG, lightSv: makeMutable(LIGHT_DEFAULT_DEG), tiltDriving: false,
@@ -183,14 +188,44 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   }, []);
 
   // ★★ FRAME RATE: live, no restart (services/frameRate.ts). Re-sent whenever it changes.
-  const capHz = frameRateCapHz(settings);
+  // ★★ AUTO (Stuart's spec, 2026-10-11/12): count late frames in ~5 s windows; two late windows in a row step one rung
+  //   down (constants/faceplate.ts autoWindowLate / autoFrameRungs), never back up within the session. Android only —
+  //   frameWatchAvailable says why. The rung is NOT stored: every launch measures afresh.
+  const [autoHz, setAutoHz] = useState(0);
+  const [maxRefreshHz, setMaxRefreshHz] = useState<number | null>(null);
+  const autoOn = settings.frameRate === 'auto';
+  useEffect(() => {
+    if (!autoOn || maxRefreshHz == null || !frameWatchAvailable()) return;
+    const rungs = autoFrameRungs(maxRefreshHz);
+    let lateRun = 0;
+    startFrameWatch();
+    takeFrameWatch();   // start the first window clean
+    const t = setInterval(() => {
+      if (AppState.currentState !== 'active') { takeFrameWatch(); lateRun = 0; return; }   // a background window says nothing
+      const w = takeFrameWatch();
+      if (!w) return;
+      if (!autoWindowLate(w.frames, w.late)) { lateRun = 0; return; }
+      if (++lateRun < 2) return;
+      lateRun = 0;
+      setAutoHz((cur: number) => {
+        const i = rungs.indexOf(cur);
+        return i >= 0 && i < rungs.length - 1 ? rungs[i + 1] : cur;
+      });
+    }, 5000);
+    return () => { clearInterval(t); stopFrameWatch(); };
+  }, [autoOn, maxRefreshHz]);
+
+  const capHz = frameRateCapHz(settings, autoHz);
   const capKnown = storedKnown || touched.current;
-  useEffect(() => { if (capKnown) applyFrameRateCap(capHz); }, [capKnown, capHz]);
+  useEffect(() => {
+    if (!capKnown) return;
+    applyFrameRateCap(capHz);
+    uiFrameCapHz.value = capHz;   // ★ the app's own pacing (services/uiCadence) — what a 30 cap is on Android
+  }, [capKnown, capHz]);
   // ★ ICON & ART: the Now Playing art follows the pick, live (services/appIcon.ts). The ICON is changed only by
   //   the pick itself (MenuSheet) — never at launch, because iOS shows an alert on every change
   //   (and Android's launcher-alias switch can move the home-screen icon).
   useEffect(() => { if (capKnown) setArtColour(settings.iconColour); }, [capKnown, settings.iconColour]);
-  const [maxRefreshHz, setMaxRefreshHz] = useState<number | null>(null);
   useEffect(() => {
     let live = true;
     readMaxRefreshRate().then((hz: number | null) => { if (live) setMaxRefreshHz(hz); });
@@ -242,9 +277,9 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   const tiltDriving = false;
   const lightSv = useSharedValue(lightDeg);
   useEffect(() => { lightSv.value = lightDeg; }, [lightDeg, lightSv]);
-  const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz, texturesAuto,
+  const value = useMemo(() => ({ theme, settings: onScreen, autoTransparency: auto, maxRefreshHz, frameRateAutoHz: autoHz, texturesAuto,
                                  setTransparency, setDisplay, setText, set, setMotion, lightDeg, lightSv, tiltDriving }),
-                        [theme, onScreen, auto, maxRefreshHz, texturesAuto, setTransparency, setDisplay, setText, set, setMotion,
+                        [theme, onScreen, auto, maxRefreshHz, autoHz, texturesAuto, setTransparency, setDisplay, setText, set, setMotion,
                          lightDeg, lightSv, tiltDriving]);
   return <FaceplateContext.Provider value={value}>{children}</FaceplateContext.Provider>;
 }

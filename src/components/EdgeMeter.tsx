@@ -44,6 +44,7 @@ import {
 import {
   METER_SCALES, VU_SEGMENTS, needleSpring, needleX, peakNeedleStep, scalePointX, sqlClosedOf, vuPos, type MeterUnit,
 } from '../constants/meters';
+import { cadenceGap } from '../services/uiCadence';
 import { FONT_HYPER } from '../constants/faceplate';
 import { glowPaint, makeSprite, spriteBuild, useSharedSprite } from './glowSprite';
 import { useBoxSize } from './VfdParts';
@@ -227,13 +228,18 @@ function EdgeMeter({ bus, unit, height, printH, printTop, onFault }: {
   //   120 a second on ProMotion — for as long as the meter was on screen, holding the display at 120 Hz.
   //   ★ The signal needle's own motion is a withSpring and is NOT touched: it is a moving object, and
   //     on ProMotion it should glide at the panel's full rate.
+  const peakLast = useSharedValue(0);
   const frame = useFrameCallback((f) => {
     'worklet';
     if (faulted.value) return;
     try {
+      // ★ FRAME RATE cap (services/uiCadence) — the PEAK needle only. The signal needle's spring is left at the
+      //   panel's rate on Android ("analogue needle stays full-rate", Stuart 2026-10-11); iOS caps every display link.
+      const gap = cadenceGap(peakLast, f.timestamp);
+      if (gap < 0) return;
       const n = needle.value;
       const st = { pos: peak.value, heldMs: held.value };
-      const p = peakNeedleStep(st, n, f.timeSincePreviousFrame ?? 16);
+      const p = peakNeedleStep(st, n, gap);
       if (p !== peak.value) peak.value = p;
       held.value = st.heldMs;
       const still = n === lastNeedle.value;

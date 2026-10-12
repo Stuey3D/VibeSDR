@@ -21,7 +21,7 @@
  */
 import { readFileSync } from 'node:fs';
 import {
-  DEFAULT_SETTINGS, frameRateCapHz, frameRateChoices, isRiskyFaceplate, normaliseHz, parseSettings,
+  autoFrameRungs, autoWindowLate, DEFAULT_SETTINGS, frameRateCapHz, frameRateChoices, isRiskyFaceplate, normaliseHz, parseSettings,
   safeFaceplate, FRAME_RATE_NOTE, type FaceplateSettings,
 } from '../src/constants/faceplate.ts';
 
@@ -34,40 +34,56 @@ function eq(what: string, got: unknown, want: unknown) {
 }
 const ok = (what: string, cond: boolean) => eq(what, cond, true);
 
-// ── When the row shows ────────────────────────────────────────────────────────
+// ── When the row shows, and what it offers ─────────────────────────────────────
 eq('unknown (old binary / web / Expo Go) → hidden', frameRateChoices(null), null);
 eq('undefined → hidden', frameRateChoices(undefined), null);
 eq('NaN → hidden', frameRateChoices(NaN), null);
 eq('0 → hidden', frameRateChoices(0), null);
-eq('60 Hz iPhone → hidden', frameRateChoices(60), null);
-eq('Android 60.000004 → hidden', frameRateChoices(60.000004), null);
-eq('Android 59.94 → hidden', frameRateChoices(59.94), null);
-eq('ProMotion 120 → 120 Hz / 60 Hz', frameRateChoices(120),
-   [{ value: 'full', label: '120 Hz' }, { value: '60', label: '60 Hz' }]);
-eq('Android 119.99 → labelled 120 Hz', frameRateChoices(119.99)?.[0].label, '120 Hz');
-eq('90 Hz phone → labelled 90 Hz, never 120', frameRateChoices(90.0)?.[0].label, '90 Hz');
-eq('144 Hz phone → 144 Hz', frameRateChoices(144)?.[0].label, '144 Hz');
+const keys = (hz: number) => frameRateChoices(hz)?.map(c => c.label);
+eq('60 Hz panel → AUTO / 60 / 30 (no key twice)', keys(60), ['AUTO', '60 Hz', '30 Hz']);
+eq('Android 60.000004 → AUTO / 60 / 30', keys(60.000004), ['AUTO', '60 Hz', '30 Hz']);
+eq('Android 59.94 → AUTO / 60 / 30', keys(59.94), ['AUTO', '60 Hz', '30 Hz']);
+eq('ProMotion 120 → AUTO / 120 / 60 / 30', frameRateChoices(120),
+   [{ value: 'auto', label: 'AUTO' }, { value: 'max', label: '120 Hz' }, { value: '60', label: '60 Hz' }, { value: '30', label: '30 Hz' }]);
+eq('Android 119.99 → labelled 120 Hz', frameRateChoices(119.99)?.[1].label, '120 Hz');
+eq('90 Hz phone → labelled 90 Hz, never 120', frameRateChoices(90.0)?.[1].label, '90 Hz');
+eq('144 Hz phone → 144 Hz', frameRateChoices(144)?.[1].label, '144 Hz');
 eq('normaliseHz rounds', normaliseHz(89.6), 90);
 eq('normaliseHz refuses a string', normaliseHz('120' as unknown as number), null);
 
 // ── Stored value and default ─────────────────────────────────────────────────
-eq('default is today: no cap', DEFAULT_SETTINGS.frameRate, 'full');
-eq('nothing stored → full', parseSettings(null, 'white').frameRate, 'full');
-eq('an old store without the field → full', parseSettings(JSON.stringify({ chassis: 'silver' })).frameRate, 'full');
+eq('default is AUTO', DEFAULT_SETTINGS.frameRate, 'auto');
+eq('nothing stored → auto', parseSettings(null, 'white').frameRate, 'auto');
+eq('an old store without the field → auto', parseSettings(JSON.stringify({ chassis: 'silver' })).frameRate, 'auto');
+eq("the OLD default 'full' (saved for everyone) → auto", parseSettings(JSON.stringify({ frameRate: 'full' })).frameRate, 'auto');
 eq('stored 60 survives', parseSettings(JSON.stringify({ frameRate: '60' })).frameRate, '60');
-eq('stored garbage → full', parseSettings(JSON.stringify({ frameRate: 30 })).frameRate, 'full');
-eq('round trip', parseSettings(JSON.stringify({ ...DEFAULT_SETTINGS, frameRate: '60' })).frameRate, '60');
+eq('stored 30 survives', parseSettings(JSON.stringify({ frameRate: '30' })).frameRate, '30');
+eq('a deliberate max survives', parseSettings(JSON.stringify({ frameRate: 'max' })).frameRate, 'max');
+eq('stored garbage → auto', parseSettings(JSON.stringify({ frameRate: 30 })).frameRate, 'auto');
+eq('round trip', parseSettings(JSON.stringify({ ...DEFAULT_SETTINGS, frameRate: '30' })).frameRate, '30');
 
 // ── What native is told ──────────────────────────────────────────────────────
 eq('60 → cap 60', frameRateCapHz({ frameRate: '60' }), 60);
-eq('full → 0 (no cap)', frameRateCapHz({ frameRate: 'full' }), 0);
+eq('30 → cap 30', frameRateCapHz({ frameRate: '30' }), 30);
+eq('max → 0 (no cap)', frameRateCapHz({ frameRate: 'max' }), 0);
+eq('auto, nothing learnt → 0', frameRateCapHz({ frameRate: 'auto' }), 0);
+eq('auto follows its rung', frameRateCapHz({ frameRate: 'auto' }, 30), 30);
+eq('a pick ignores the auto rung', frameRateCapHz({ frameRate: '60' }, 30), 60);
+
+// ── AUTO's rule ──────────────────────────────────────────────────────────────
+eq('rungs on 120 Hz: none → 60 → 30', autoFrameRungs(120), [0, 60, 30]);
+eq('rungs on 60 Hz: none → 30', autoFrameRungs(60), [0, 30]);
+ok('a still screen teaches nothing', !autoWindowLate(20, 20));
+ok('a quarter late is not enough', !autoWindowLate(300, 75));
+ok('the XCover tonight (4 % janky) stays', !autoWindowLate(300, 12));
+ok('the XCover before the engine (59 % janky) steps down', autoWindowLate(250, 148));
 
 // ── Crash safety leaves it alone ─────────────────────────────────────────────
-const capped: FaceplateSettings = { ...DEFAULT_SETTINGS, frameRate: '60' };
+const capped: FaceplateSettings = { ...DEFAULT_SETTINGS, frameRate: '30' };
 ok('a frame-rate cap alone is not a risky faceplate', !isRiskyFaceplate(capped));
-eq('the safe faceplate keeps the cap', safeFaceplate({ ...capped, chassis: 'black', display: 'nixie' }).frameRate, '60');
+eq('the safe faceplate keeps the cap', safeFaceplate({ ...capped, chassis: 'black', display: 'nixie' }).frameRate, '30');
 
-ok('the note is UK English and says what it costs', /battery/.test(FRAME_RATE_NOTE) && /Hz/.test(FRAME_RATE_NOTE));
+ok("the note is Stuart's wording", /Auto monitors system performance/.test(FRAME_RATE_NOTE) && /battery/.test(FRAME_RATE_NOTE));
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
 const read = (p: string) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -75,11 +91,16 @@ const menu = read('src/components/MenuSheet.tsx');
 ok('the pane decides the row with frameRateChoices', /frameRateChoices\(maxRefreshHz\)/.test(menu));
 ok('the pane labels it FRAME RATE', /label="FRAME RATE"/.test(menu));
 const ctx = read('src/contexts/FaceplateContext.tsx');
-ok('the provider pushes the cap', /applyFrameRateCap\(capHz\)/.test(ctx) && /frameRateCapHz\(settings\)/.test(ctx));
+ok('the provider pushes the cap', /applyFrameRateCap\(capHz\)/.test(ctx) && /frameRateCapHz\(settings, autoHz\)/.test(ctx));
+ok('the provider sets the app-side pacing', /uiFrameCapHz\.value = capHz/.test(ctx));
+for (const f of ['src/components/WaterfallView.tsx', 'src/components/LedVu.tsx', 'src/components/EdgeMeter.tsx'])
+  ok(`${f} honours the cap`, /uiCadence/.test(read(f)));
 ok('the provider waits for the stored copy before pushing', /capKnown/.test(ctx));
 const svc = read('src/services/frameRate.ts');
 const ios = read('modules/vibe-local-sdr/VibeLocalSDR.mm');
 const android = read('android/app/src/main/java/com/vibesdr/app/VibeLocalSdrModule.kt');
+for (const m of ['startFrameWatch', 'stopFrameWatch', 'takeFrameWatch'])
+  ok(`Android exports ${m}`, new RegExp(`@ReactMethod(\\([^)]*\\))?\\s+fun ${m}\\(`).test(android));
 for (const m of ['setFrameRateCap', 'maxRefreshRate']) {
   ok(`JS calls ${m}`, svc.includes(`${m}?.`) || svc.includes(`${m}?:`) || svc.includes(`.${m}`));
   ok(`iOS exports ${m}`, new RegExp(`RCT_EXPORT_METHOD\\(${m}:`).test(ios));

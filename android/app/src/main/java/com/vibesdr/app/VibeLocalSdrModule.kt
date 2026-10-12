@@ -266,7 +266,7 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     init {
         reactContext.addLifecycleEventListener(object : LifecycleEventListener {
-            override fun onHostResume() { applyFrameRateCap() }
+            override fun onHostResume() { applyFrameRateCap(); frameWatchAttach() }
             override fun onHostPause() {}
             override fun onHostDestroy() {}
         })
@@ -297,11 +297,13 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
                 var rate = 0f
                 if (cap > 0) {
                     val modes = sameSizeModes(d)
-                    // ★ Only when the panel can go faster than the cap, and only to a mode AT the cap
-                    //   (±1 Hz): never down to a 30 / 24 Hz mode an LTPO panel may also list.
-                    if (modes.any { it.refreshRate > cap + 1f }) {
-                        val pick = modes.filter { it.refreshRate in (cap - 1f)..(cap + 1f) }.maxByOrNull { it.refreshRate }
-                        if (pick != null) { modeId = pick.modeId; rate = pick.refreshRate }
+                    // ★ The SLOWEST mode at or above the cap — but never below 60 Hz: a 30 / 24 Hz mode an LTPO panel
+                    //   may list would slow touch and scrolling too. A 30 cap is paced by the app on top of the
+                    //   60 Hz mode (src/services/uiCadence.ts: the frame callbacks run on every other vsync).
+                    val floorHz = maxOf(cap, 60) - 1f
+                    val pick = modes.filter { it.refreshRate >= floorHz }.minByOrNull { it.refreshRate }
+                    if (pick != null && modes.any { it.refreshRate > pick.refreshRate + 1f }) {
+                        modeId = pick.modeId; rate = pick.refreshRate
                     }
                 }
                 val lp = w.attributes
@@ -316,13 +318,74 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    /** 0 = no cap; otherwise the cap in Hz (the app only ever sends 60). */
+    /** 0 = no cap; otherwise the cap in Hz (60 or 30). */
     @ReactMethod
     fun setFrameRateCap(hz: Double) {
         val cap = if (hz.isFinite() && hz > 0) Math.round(hz).toInt() else 0
         fpsCapHz = cap
         try { fpsPrefs.edit().putInt("capHz", cap).apply() } catch (_: Throwable) {}
         applyFrameRateCap()
+    }
+
+    // ── FRAME WATCH — FRAME RATE → AUTO (constants/faceplate.ts autoWindowLate) ──
+    // ★★ What AUTO judges by: the system's own per-frame timings (Window.OnFrameMetricsAvailableListener, API 24) — the
+    //   numbers `dumpsys gfxinfo` counts as janky, not a guess from the model or a JS timer. A frame is LATE when its
+    //   total time from the intended vsync is over 1.5 refresh intervals (it missed its slot). JS takes the counts
+    //   every few seconds and decides; this only counts. Re-attached on resume (a recreated Activity has a new window);
+    //   the listener runs on its own small thread so counting never touches the UI thread.
+    @Volatile private var fwFrames = 0
+    @Volatile private var fwLate = 0
+    @Volatile private var fwOn = false
+    private var fwWindow: android.view.Window? = null
+    private var fwListener: android.view.Window.OnFrameMetricsAvailableListener? = null
+    private val fwThread by lazy { android.os.HandlerThread("vibe-frame-watch").also { it.start() } }
+
+    private fun frameWatchAttach() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !fwOn) return
+        val act = reactContext.currentActivity ?: return
+        act.runOnUiThread {
+            try {
+                val w = act.window ?: return@runOnUiThread
+                if (fwWindow === w && fwListener != null) return@runOnUiThread
+                frameWatchDetachNow()
+                val hz = (displayOf(act)?.refreshRate ?: 60f).coerceAtLeast(30f)
+                val lateNs = (1.5e9 / hz).toLong()
+                val l = android.view.Window.OnFrameMetricsAvailableListener { _, m, _ ->
+                    fwFrames++
+                    if (m.getMetric(android.view.FrameMetrics.TOTAL_DURATION) > lateNs) fwLate++
+                }
+                w.addOnFrameMetricsAvailableListener(l, android.os.Handler(fwThread.looper))
+                fwWindow = w; fwListener = l
+            } catch (t: Throwable) {
+                Log.w(TAG, "frame watch failed: ${t.message}")
+            }
+        }
+    }
+
+    private fun frameWatchDetachNow() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val w = fwWindow; val l = fwListener
+        fwWindow = null; fwListener = null
+        if (w != null && l != null) try { w.removeOnFrameMetricsAvailableListener(l) } catch (_: Throwable) {}
+    }
+
+    @ReactMethod
+    fun startFrameWatch() { fwOn = true; fwFrames = 0; fwLate = 0; frameWatchAttach() }
+
+    @ReactMethod
+    fun stopFrameWatch() {
+        fwOn = false
+        reactContext.currentActivity?.runOnUiThread { frameWatchDetachNow() }
+    }
+
+    /** {frames, late} since the last call (and resets them); frames = 0 below API 24. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun takeFrameWatch(): com.facebook.react.bridge.WritableMap {
+        val out = com.facebook.react.bridge.Arguments.createMap()
+        val f = fwFrames; val l = fwLate
+        fwFrames = 0; fwLate = 0
+        out.putInt("frames", f); out.putInt("late", l)
+        return out
     }
 
     /** The panel's top refresh rate at its current resolution (60 on a 60 Hz phone, and always the

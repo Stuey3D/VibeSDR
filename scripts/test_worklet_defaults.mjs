@@ -192,7 +192,17 @@ const sv = (value) => ({ value });
 function runFrames(what, fc, shared, extra = {}) {
   if (!fc) return;
   shared.faulted ??= sv(0);
+  // ★ The FRAME RATE pacing (src/services/uiCadence.ts), uncapped as the app runs by default — the same rule, in JS.
+  const uiFrameCapHz = sv(0);
   extra = { ...extra,
+    uiFrameCapHz,
+    cadenceGap: (last, ts) => {
+      const prev = last.value, cap = uiFrameCapHz.value;
+      if (cap > 0 && prev > 0 && ts - prev < 1000 / cap - 4) return -1;
+      last.value = ts;
+      return prev > 0 ? ts - prev : 16;
+    },
+    peakLast: sv(0),
     onFault: (m) => fail(`${what} reported a fault (the app would fall back to the bar): ${m}`),
     scheduleOnRN: (fn, ...a) => fn(...a) };
   const closure = {};
@@ -298,7 +308,10 @@ function runFrames(what, fc, shared, extra = {}) {
       else if (k === 'runOnJS') closure[k] = (fn) => fn;
       else { fail(`glideCb captures '${k}', which this harness does not know — teach it`); }
     }
-    const cb = onUi({ __initData: { code: fc.code }, __closure: closure });
+    // ★ The glide is glideTick(ts) now — one worklet shared by the JS path's glideCb and the native engine's poll
+    //   (2026-10-12) — returning TRUE when it is time to sleep; the callback then asks with the glide's gen.
+    const tick = onUi({ __initData: { code: fc.code }, __closure: closure });
+    const cb = (fi) => { if (tick(fi.timestamp)) sleeps.push(S.glideGen.value); };
     const glide = (dt, frames, t0) => { let t = t0; for (let n = 0; n < frames; n++) { t += dt; cb({ timestamp: t, timeSincePreviousFrame: dt }); } return t; };
     // 120 Hz: a 125 ms glide (an 8 fps feed) is 15 display frames — it must be drawn on ≤ 8 of them,
     // and land EXACTLY on 1.

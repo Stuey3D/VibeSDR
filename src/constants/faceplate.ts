@@ -30,10 +30,13 @@ export type DisplayStyle     = 'hyper' | 'nixie' | 'dot' | 'seg';
 export type ControlsColour   = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'neon';
 export type TextColour       = 'green' | 'red' | 'amber' | 'blue' | 'white' | 'teal';
 export type SignalMeter      = 'bar' | 'vu' | 'edge';
-/** ★ FRAME RATE (power audit, 2026-10-01): `full` = whatever the display can do (120 Hz on a
- *  ProMotion iPhone, 90 / 120 / 144 on a fast Android) — today's behaviour; `60` = capped at 60 Hz,
- *  for battery. See `frameRateChoices` for when the row is offered at all. */
-export type FrameRate        = 'full' | '60';
+/** ★ FRAME RATE (power audit 2026-10-01; AUTO / 30 added 2026-10-12, Stuart: "a 30fps lock for older devices than
+ *  the xcover at least makes the app usable on them"). `auto` = the app watches how many frames arrive late and steps
+ *  down (max → 60 → 30) for the session when they mostly do; `max` = whatever the panel can do (120 on ProMotion,
+ *  90 / 120 / 144 on a fast Android); `60` / `30` = capped, for battery and for phones that cannot keep up.
+ *  ★ `max` is a NEW stored value: the old default `full` was saved for everyone who never chose it, so a stored
+ *    `full` reads as `auto` (parseSettings) and only a deliberate pick of the panel's top rate is kept. */
+export type FrameRate        = 'auto' | 'max' | '60' | '30';
 /** ★★★ TRANSPARENCY EFFECTS (Stuart, 2026-09-30) — ONE switch for every see-through surface: the
  *  default deck, every decoder box, and (row 10, PopupShell) the menus, sheets and chat. It replaced
  *  the decoder boxes' own Transparent / Solid row. `off` = alpha 1.0 EXACTLY and no BlurView anywhere
@@ -100,7 +103,7 @@ export const ICON_COLOURS: IconColour[]   = ['green', 'red', 'amber', 'blue', 'w
 export const TEXTS:       TextColour[]     = ['green', 'red', 'amber', 'blue', 'white', 'teal'];
 export const METERS:      SignalMeter[]    = ['bar', 'vu', 'edge'];
 export const TRANSPARENCIES: Transparency[] = ['on', 'off'];
-export const FRAME_RATES: FrameRate[] = ['full', '60'];
+export const FRAME_RATES: FrameRate[] = ['auto', 'max', '60', '30'];
 export const TEXTURES: Textures[] = ['auto', 'high', 'standard'];
 export const MOTIONS: MotionEffects[] = ['on', 'off'];
 export const LIGHT_ANGLES: LightAngle[] = ['left', 'topLeft', 'top', 'topRight', 'right'];
@@ -121,7 +124,7 @@ export const TEXT_ALLOWED: Record<DisplayStyle, TextColour[]> = {
 /** §1 defaults. `display` is overwritten by the font migration on first load (see migrate…). */
 export const DEFAULT_SETTINGS: FaceplateSettings = {
   chassis: 'default', display: 'hyper', controls: 'green', text: 'green',
-  meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, frameRate: 'full', textures: 'auto',
+  meter: 'bar', transparency: 'on', transparencyExplicit: false, steadyLeds: false, frameRate: 'auto', textures: 'auto',
   textByDisplay: {}, motionEffects: 'on', motionExplicit: false, lightAngle: 'left',
   iconColour: 'green',
 };
@@ -356,7 +359,7 @@ export function parseSettings(json: string | null, legacyThemeName?: string | nu
     meter:     pick(raw.meter, METERS, 'bar'),
     ...parseTransparency(raw),
     steadyLeds: raw.steadyLeds === true,
-    frameRate: pick(raw.frameRate, FRAME_RATES, 'full'),
+    frameRate: pick(raw.frameRate, FRAME_RATES, 'auto'),   // ★ an old stored 'full' → 'auto' (see FrameRate)
     textures: pick(raw.textures, TEXTURES, 'auto'),
     textByDisplay,
     ...parseMotion(raw),
@@ -493,18 +496,41 @@ export function feelRows(hapticsHardware: boolean): Array<'haptics' | 'steadyLed
 }
 
 /**
- * ★★★ FRAME RATE row: the keys to offer, or null when the row must be HIDDEN. `maxHz` is the
- * display's top refresh rate as the native side reports it (iOS `UIScreen.maximumFramesPerSecond`;
- * Android the fastest mode at the CURRENT resolution) — null / not a number = unknown (old binary,
- * web, Expo Go). ★ AGENTS.md: never offer a control whose every use is a no-op — on a 60 Hz panel
- * (every non-ProMotion iPhone, most Android phones, all Android before 6) a 60 Hz cap changes
- * nothing, so there is no row. The top key is labelled with the panel's REAL rate (a 90 Hz phone
- * reads "90 Hz", never "120 Hz"), rounded: Android reports 119.99 / 60.000004.
+ * ★★★ FRAME RATE row: the keys to offer, or null when the row must be HIDDEN. `maxHz` is the display's top
+ * refresh rate as the native side reports it (iOS `UIScreen.maximumFramesPerSecond`; Android the fastest mode at
+ * the CURRENT resolution) — null / not a number = unknown (old binary, web, Expo Go): no row, because nothing
+ * there could honour it. Shown on EVERY panel that reports a rate (Stuart, 2026-10-11): AUTO / <max> / 60 / 30 —
+ * on a 60 Hz panel the max IS 60, so it reads AUTO / 60 Hz / 30 Hz (no key twice). The top key is labelled with
+ * the panel's REAL rate, rounded (a 90 Hz phone reads "90 Hz"; Android reports 119.99 / 60.000004).
  */
 export function frameRateChoices(maxHz: number | null | undefined): PaneChoice<FrameRate>[] | null {
   const hz = normaliseHz(maxHz);
-  if (hz == null || hz <= 60) return null;
-  return [{ value: 'full', label: `${hz} Hz` }, { value: '60', label: '60 Hz' }];
+  if (hz == null) return null;
+  return [
+    { value: 'auto', label: 'AUTO' },
+    ...(hz > 60 ? [{ value: 'max' as FrameRate, label: `${hz} Hz` }] : []),
+    { value: '60', label: '60 Hz' },
+    { value: '30', label: '30 Hz' },
+  ];
+}
+
+/** The rungs AUTO may step down through, fastest first, in cap Hz (0 = no cap): [0, 60, 30] on a panel above
+ *  60 Hz, [0, 30] on a 60 Hz one (its "no cap" already IS 60). */
+export function autoFrameRungs(maxHz: number | null | undefined): number[] {
+  const hz = normaliseHz(maxHz);
+  return hz != null && hz > 60 ? [0, 60, 30] : [0, 30];
+}
+
+/** ★★ AUTO's rule — "Auto monitors system performance and chooses the appropriate frame rate" (Stuart). One
+ *  measurement window (~5 s of frames) → is it a LATE window? More than a quarter of frames missing their slot,
+ *  out of enough frames to judge (a still screen draws almost nothing, and nothing is learnt from it). Two late
+ *  windows IN A ROW step down one rung — a rotation or a sheet opening is one late window, not two — and AUTO
+ *  never steps back up within a session: up/down hunting is worse to look at than either rate (the meter-hunting
+ *  lesson). A new launch measures afresh. */
+export const AUTO_LATE_SHARE = 0.25;
+export const AUTO_MIN_FRAMES = 60;
+export function autoWindowLate(frames: number, late: number): boolean {
+  return frames >= AUTO_MIN_FRAMES && late / frames > AUTO_LATE_SHARE;
 }
 
 /** A reported refresh rate as a whole number of Hz, or null when it says nothing usable. */
@@ -515,8 +541,13 @@ export function normaliseHz(maxHz: number | null | undefined): number | null {
 
 /** What the native side is told: the cap in Hz, or 0 = no cap (the display's own maximum).
  *  ★ Sent whatever the panel — on a 60 Hz panel a 60 Hz cap is simply a no-op natively. */
-export function frameRateCapHz(s: Pick<FaceplateSettings, 'frameRate'>): number {
-  return s.frameRate === '60' ? 60 : 0;
+export function frameRateCapHz(s: Pick<FaceplateSettings, 'frameRate'>, autoCapHz = 0): number {
+  switch (s.frameRate) {
+    case '60': return 60;
+    case '30': return 30;
+    case 'max': return 0;
+    default: return autoCapHz;   // auto: the rung AUTO has settled on (0 until it has seen a reason to step down)
+  }
 }
 
 /** The FRAME RATE row's subtitle (UK English): what 60 Hz buys and costs. Live — no restart. */
@@ -525,7 +556,8 @@ export const TEXTURE_CHOICES: PaneChoice<Textures>[] = [
   { value: 'auto', label: 'AUTO' }, { value: 'high', label: 'HIGH' }, { value: 'standard', label: 'STANDARD' },
 ];
 export const TEXTURES_NOTE = 'High · the glows and key lights at full screen resolution\nStandard · half resolution, scaled up — smoother and lighter on memory, barely visible';
-export const FRAME_RATE_NOTE = '60 Hz · easier on the battery; scrolling and animation a touch less smooth';
+export const FRAME_RATE_NOTE = 'Auto monitors system performance and chooses the appropriate frame rate.\n'
+  + 'A lower frame rate should give better battery life, especially on VRR displays or devices with slower processors.';
 
 // ── Chassis tokens ────────────────────────────────────────────────────────────
 
