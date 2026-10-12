@@ -9,7 +9,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import StepPicker from '../components/StepPicker';
 import { useIsFocused } from '@react-navigation/native';
-import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS } from '../components/PanelNav';
+import { shortcutsSuppressed, useKeyboardMode, useRepeatingKeys, NAV_REPEAT_KEYS, useNavFocus } from '../components/PanelNav';
 import { v4 as uuidv4 } from 'uuid';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -105,6 +105,7 @@ const zulu = () => { const d = new Date(); return `${pad2(d.getUTCHours())}${pad
 let fmdxNoticeShownThisSession = false;
 
 export default function TunerScreen({ route, navigation }: Props) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const { baseUrl, instanceName } = route.params;
   /** ★ How a recording made here is filed in Recordings: the server's name, else its host. */
   const recServerName = instanceName || String(baseUrl ?? '').replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
@@ -1285,7 +1286,7 @@ export default function TunerScreen({ route, navigation }: Props) {
             {/* ★ Ringed while a keyboard is in use, so it is visibly the thing a key will
                 press — the notice is modal, so this is the only target on screen. */}
             <TouchableOpacity
-              style={[styles.noticeBtn, kbInUse && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+              style={[styles.noticeBtn, kbInUse && { borderColor: focusC.ring, borderWidth: 2 }]}
               onPress={dismissNotice}>
               <Text style={styles.noticeBtnTxt}>
                 {kbInUse ? 'GOT IT  ·  press enter' : 'GOT IT'}
@@ -1313,7 +1314,7 @@ export default function TunerScreen({ route, navigation }: Props) {
                   {serverInfo!.antennas.map((a, i) => (
                     <TouchableOpacity key={`ant${i}`}
                       style={[styles.antBtn, st?.ant === a.id && styles.antBtnOn,
-                              kbInUse && demodIdx === 3 + i && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                              kbInUse && demodIdx === 3 + i && { borderColor: focusC.ring, borderWidth: 2 }]}
                       onPress={() => (backendRef.current as any)?.setAntenna?.(a.id)}>
                       <Text style={[styles.antBtnTxt, st?.ant === a.id && styles.antBtnTxtOn]} numberOfLines={1}>{a.name}</Text>
                     </TouchableOpacity>
@@ -1323,7 +1324,7 @@ export default function TunerScreen({ route, navigation }: Props) {
             )}
             <TouchableOpacity
               style={[styles.sheetClose,
-                      kbInUse && demodIdx === demodActions.length - 1 && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                      kbInUse && demodIdx === demodActions.length - 1 && { borderColor: focusC.ring, borderWidth: 2 }]}
               onPress={() => setDemodOpen(false)}>
               <Text style={styles.sheetCloseTxt}>CLOSE</Text>
             </TouchableOpacity>
@@ -1389,8 +1390,9 @@ export default function TunerScreen({ route, navigation }: Props) {
 }
 
 function OptToggle({ label, on, onPress, styles, navOn }: { label: string; on: boolean; onPress: () => void; styles: any; navOn?: boolean }) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   return (
-    <TouchableOpacity style={[styles.optRow, navOn && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+    <TouchableOpacity style={[styles.optRow, navOn && { borderColor: focusC.ring, borderWidth: 2 }]}
                       onPress={onPress} activeOpacity={0.7}>
       <Text style={styles.optLabel}>{label}</Text>
       <View style={[styles.optSwitch, on && styles.optSwitchOn]}>

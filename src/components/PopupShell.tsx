@@ -43,7 +43,6 @@ import { popupTokensFor, type PopupTokens } from '../constants/popupTokens';
 import { NO_DROP_SHADOW, type PlateTokens } from '../constants/faceplate';
 import ChassisPlate from './ChassisPlate';
 import { useDomeKey, DOME_TRAVEL } from './DomeKey';
-import { NAV_FOCUS } from './PanelNav';
 import { CAP_SHEEN } from '../constants/capSheen';
 
 export type { PopupTokens } from '../constants/popupTokens';
@@ -59,6 +58,17 @@ export const POPUP_FONT = 'Atkinson Hyperlegible';
 export function usePopupTheme(): PopupTokens {
   const fp = useFaceplate();
   return popupTokensFor(fp.settings.chassis, fp.controls.rgb, fp.text.rgb, fp.settings.display);
+}
+
+/**
+ * ★★ THE GLASS SKIN IN THE USER'S COLOURS, WHATEVER THE CHASSIS (2026-10-12) — for full screens that are
+ * never plated (the server directory and its sub-screens): the default chassis's tokens — text in the TEXT
+ * colour, keys in the CONTROLS colour, meanings by the clash rule — so silver / black users get their
+ * colours there too, without engraved-on-metal values that would vanish on a dark screen.
+ */
+export function useGlassTheme(): PopupTokens {
+  const fp = useFaceplate();
+  return popupTokensFor('default', fp.controls.rgb, fp.text.rgb, fp.settings.display);
 }
 
 const styleCache = new WeakMap<(pt: PopupTokens) => unknown, WeakMap<PopupTokens, unknown>>();
@@ -320,7 +330,7 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
       onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut} hitSlop={hitSlop}
       style={[ps.cap, { minHeight: height, backgroundColor: silver ? '#c4c1ba' : '#111214',
                         borderColor: silver ? '#8d8a83' : '#050505' },
-              layoutOnly(style), focused && { borderColor: NAV_FOCUS, borderWidth: 2 },
+              layoutOnly(style), focused && { borderColor: pt.ink.focus, borderWidth: 2 },
               disabled && { opacity: 0.45 }, motion]}>
       {/* The cap's sheen: light over the top 45 %, a shade at the foot, a 1 pt highlight on the edge.
           ★★★ The 45 / 35 % are FLEX SHARES of a layer pinned to the cap (CAP_SHEEN), never `height:
@@ -432,7 +442,7 @@ export function PopupFader({ value, minimumValue = 0, maximumValue = 1, step, on
   const lvl = level == null ? null : Math.max(0, Math.min(1, level));
   return (
     <View ref={(r: any) => { box.current = r; if (typeof innerRef === 'function') innerRef(r); else if (innerRef) (innerRef as any).current = r; }}
-      style={[ps.fader, style, focused && ps.faderFocus, disabled && { opacity: 0.45 }]}
+      style={[ps.fader, style, focused && [ps.faderFocus, { borderColor: pt.ink.focus }], disabled && { opacity: 0.45 }]}
       onLayout={(e) => { setW(e.nativeEvent.layout.width); measure(); }}
       hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
       accessibilityRole="adjustable" accessibilityValue={{ min: minimumValue, max: maximumValue, now: value }}
@@ -476,7 +486,7 @@ const ps = StyleSheet.create({
   iconRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
 
   fader:      { height: 24, justifyContent: 'center' },
-  faderFocus: { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 6, margin: -2 },
+  faderFocus: { borderWidth: 2, borderRadius: 6, margin: -2 },   // colour inline: useNavFocus
   slot:       { position: 'absolute', left: 0, right: 0, top: 9, height: 6, borderRadius: 3 },
   slotLip:    { position: 'absolute', left: 3, right: 3, top: 15, height: 1 },
   fill:       { position: 'absolute', left: 1, top: 10, height: 4, borderRadius: 2 },

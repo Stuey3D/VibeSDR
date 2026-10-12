@@ -16,7 +16,8 @@ import {
   fmtInUnit, formatAntennaFilters, formatAntennaRanges, parseAntennaFilters, parseAntennaRanges,
 } from '../utils/antennaBands';
 
-type Colours = { textDim: string; amber: string; border: string; green: string; gold: string };
+/** ★ The server screen's palette by role (constants/serverPalette.ts): text = TEXT colour, keys = CONTROLS colour. */
+import type { ServerPalette as Colours } from '../constants/serverPalette';
 type RangeRow = { name: string; lo: string; hi: string; unit: BandUnit };
 type FilterRow = { kind: FilterKind; lo: string; hi: string; unit: BandUnit; name: string };
 const KINDS: FilterKind[] = ['bandstop', 'bandpass', 'highpass', 'lowpass'];
@@ -58,14 +59,14 @@ export default function AntennaBandsEditor({ ranges, filters, onChange, C, F }: 
   const chip = (label: string, on: boolean, onPress: () => void) => (
     <TouchableOpacity key={label} onPress={onPress} accessibilityRole="button"
       style={{ borderWidth: 1, borderRadius: 7, paddingHorizontal: 9, paddingVertical: 6,
-               borderColor: on ? C.green : C.border, backgroundColor: on ? C.green + '18' : 'transparent' }}>
-      <Text style={{ color: on ? C.green : C.gold, fontFamily: F, fontSize: 12 }}>{label}</Text>
+               borderColor: on ? C.keyBorderAct : C.border, backgroundColor: on ? C.keyBgAct : 'transparent' }}>
+      <Text style={{ color: on ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>{label}</Text>
     </TouchableOpacity>
   );
   const field = (v: string, set: (t: string) => void, ph: string, w?: number, num = false) => (
-    <TextInput value={v} onChangeText={set} placeholder={ph} placeholderTextColor={C.textDim}
+    <TextInput value={v} onChangeText={set} placeholder={ph} placeholderTextColor={C.placeholder}
       keyboardType={num ? 'decimal-pad' : 'default'} autoCorrect={false}
-      style={{ borderWidth: 1, borderRadius: 7, borderColor: C.border, color: C.amber, fontFamily: F,
+      style={{ borderWidth: 1, borderRadius: 7, borderColor: C.border, color: C.text, fontFamily: F,
                paddingHorizontal: 8, paddingVertical: 6, ...(w ? { width: w } : { flex: 1, minWidth: 110 }) }} />
   );
   const hint = (t: string) => <Text style={{ color: C.textDim, fontFamily: F, fontSize: 11, marginTop: 4, lineHeight: 15 }}>{t}</Text>;

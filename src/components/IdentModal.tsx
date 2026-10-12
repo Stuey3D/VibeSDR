@@ -65,7 +65,7 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
           <TextInput
             style={styles.input}
             placeholder="e.g. M0ABC or Stu"
-            placeholderTextColor={pt.metal ? pt.winDim : "rgba(200,137,58,0.45)"}
+            placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
             value={name}
             onChangeText={(t) => setName(sanitizeIdent(t))}
             maxLength={16}
@@ -95,17 +95,19 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
   );
 }
 
+/* ★★ The default skin follows the user's colours (Stuart, 2026-10-12: "yes colours apply everywhere including
+ *  directory if possible"): text in the TEXT colour, keys and borders in the CONTROLS colour — was amber. */
 const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   overlay:     { flex: 1, justifyContent: 'center', padding: 24 },
   overlayDim:  { backgroundColor: 'rgba(0,0,0,0.75)' },
-  box:         { backgroundColor: '#0A0804', borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,160,0,0.40)', padding: 20, gap: 14 },
-  title:       onMetal(pt, { fontFamily: 'Courier', fontSize: 16, fontWeight: 'bold', color: '#FFB833', letterSpacing: 1 }, { ...engraveText(pt), letterSpacing: 1.5 }),
-  sub:         onMetal(pt, { fontFamily: 'Courier', fontSize: 11, color: 'rgba(200,137,58,0.70)', lineHeight: 16 }, engraveText(pt, pt.note)),
-  input:       onMetal(pt, { height: 44, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 6, paddingHorizontal: 12, fontFamily: 'Courier', fontSize: 14, color: '#FFB833' },
+  box:         { backgroundColor: '#0A0804', borderRadius: 10, borderWidth: 1, borderColor: pt.ink.border, padding: 20, gap: 14 },
+  title:       onMetal(pt, { fontFamily: 'Courier', fontSize: 16, fontWeight: 'bold', color: pt.ink.text, letterSpacing: 1 }, { ...engraveText(pt), letterSpacing: 1.5 }),
+  sub:         onMetal(pt, { fontFamily: 'Courier', fontSize: 11, color: pt.ink.textDim, lineHeight: 16 }, engraveText(pt, pt.note)),
+  input:       onMetal(pt, { height: 44, backgroundColor: 'rgba(20,10,0,0.80)', borderWidth: 1, borderColor: pt.ink.keyBorder, borderRadius: 6, paddingHorizontal: 12, fontFamily: 'Courier', fontSize: 14, color: pt.ink.text },
                         { ...windowStyle(pt), fontFamily: 'Atkinson Hyperlegible', color: pt.readout }),
   row:         { flexDirection: 'row', gap: 10, justifyContent: 'flex-end' },
-  btn:         { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,160,0,0.30)' },
-  btnPrimary:  { borderColor: 'rgba(255,160,0,0.60)', backgroundColor: 'rgba(255,160,0,0.12)' },
-  btnTxtCancel:  { fontFamily: 'Courier', fontSize: 13, color: 'rgba(200,137,58,0.70)' },
-  btnTxtPrimary: { fontFamily: 'Courier', fontSize: 13, color: '#FFB833', fontWeight: 'bold' },
+  btn:         { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 6, borderWidth: 1, borderColor: pt.ink.keyBorder },
+  btnPrimary:  { borderColor: pt.gold.selBorder, backgroundColor: pt.ink.keyBgAct },
+  btnTxtCancel:  { fontFamily: 'Courier', fontSize: 13, color: pt.ink.key },
+  btnTxtPrimary: { fontFamily: 'Courier', fontSize: 13, color: pt.gold.sel, fontWeight: 'bold' },
 });

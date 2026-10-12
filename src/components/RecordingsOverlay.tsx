@@ -231,7 +231,7 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange, cu
     const frac = isSel && dur > 0 ? Math.min(1, cur / dur) : 0;
     return (
       <View style={[styles.row, isSel && styles.rowSel,
-                    navOn && { borderColor: '#7CFF9B', borderWidth: 2 }]}>
+                    navOn && { borderColor: pt.ink.focus, borderWidth: 2 }]}>
         <View style={styles.rowTop}>
           {pt.metal ? (
             // ★ §10.3: dome keys — play lit while it plays, share plain, delete in the danger red.
@@ -339,52 +339,56 @@ export default function RecordingsOverlay({ visible, onClose, onActiveChange, cu
   );
 }
 
-const makeStyles = (pt: PopupTokens) => StyleSheet.create({
+/* ★★ The default skin follows the user's colours (Stuart, 2026-10-12: "yes colours apply everywhere including
+ *  directory if possible") — it was green whatever they were. Text in the TEXT colour; play key, progress fill
+ *  and close in the CONTROLS colour; the selected recording in the selected-item meaning (green, white on green
+ *  or teal text); delete stays red (a meaning). `d(metal, def)` keeps silver / black exactly as they were. */
+const makeStyles = (pt: PopupTokens) => { const d = (metal: string, def: string) => (pt.metal ? metal : def); return StyleSheet.create({
   root: onMetal(pt, { flex: 1, backgroundColor: '#0a0d0b' }, { backgroundColor: pt.silver ? '#c9c6bf' : '#161719' }),
   listWrap: { flex: 1 },
   listWin:  { marginHorizontal: 10, marginBottom: 10 },
   bar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 12,
-    ...(pt.metal ? null : { borderBottomWidth: 1, borderBottomColor: 'rgba(61,220,132,0.25)' }),
+    ...(pt.metal ? null : { borderBottomWidth: 1, borderBottomColor: pt.ink.border }),
   },
-  title: onMetal(pt, { color: '#3ddc84', fontSize: 16, fontWeight: '800', letterSpacing: 2 }, { ...engraveText(pt), fontWeight: '700' }),
-  close: { color: '#ddd', fontSize: 20, fontWeight: '700' },
+  title: onMetal(pt, { color: pt.ink.text, fontSize: 16, fontWeight: '800', letterSpacing: 2 }, { ...engraveText(pt), fontWeight: '700' }),
+  close: { color: d('#ddd', pt.gold.close), fontSize: 20, fontWeight: '700' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  empty: { color: '#ccc', fontSize: 16, fontWeight: '700' },
-  kbHint: { color: pt.metal ? pt.note : '#8fa', fontSize: 10, letterSpacing: 0.5, opacity: pt.metal ? 1 : 0.85,
+  empty: { color: d('#ccc', pt.ink.textSoft), fontSize: 16, fontWeight: '700' },
+  kbHint: { color: pt.metal ? pt.note : pt.ink.textDim, fontSize: 10, letterSpacing: 0.5, opacity: pt.metal ? 1 : 0.85,
             paddingHorizontal: 16, paddingBottom: 8 },
-  emptySub: { color: '#888', fontSize: 13, marginTop: 8, textAlign: 'center' },
+  emptySub: { color: d('#888', pt.ink.textDim), fontSize: 13, marginTop: 8, textAlign: 'center' },
   // ★ A server heading: the same small spaced capitals as the section labels elsewhere.
-  group: onMetal(pt, { color: '#3ddc84', fontSize: 11, fontWeight: '800', letterSpacing: 2,
+  group: onMetal(pt, { color: pt.ink.section, fontSize: 11, fontWeight: '800', letterSpacing: 2,
                        marginHorizontal: 16, marginTop: 14, marginBottom: 4 }, { ...engraveText(pt), fontWeight: '700' }),
-  groupN: { color: pt.metal ? pt.note : '#8fa', fontWeight: '400', letterSpacing: 0 },
+  groupN: { color: pt.metal ? pt.note : pt.ink.textDim, fontWeight: '400', letterSpacing: 0 },
   row: {
     marginHorizontal: 12, marginVertical: 4, padding: 10,
     backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 10,
     borderWidth: 1, borderColor: 'transparent',
   },
-  rowSel: { borderColor: 'rgba(61,220,132,0.6)', backgroundColor: 'rgba(61,220,132,0.07)' },
+  rowSel: { borderColor: d('rgba(61,220,132,0.6)', pt.ink.selected), backgroundColor: d('rgba(61,220,132,0.07)', pt.ink.selectedBg) },
   rowTop: { flexDirection: 'row', alignItems: 'center' },
   playBtn: {
     width: 38, height: 38, borderRadius: 19, marginRight: 10,
     alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(61,220,132,0.15)', borderWidth: 1, borderColor: '#3ddc84',
+    backgroundColor: pt.ink.keyBgAct, borderWidth: 1, borderColor: pt.gold.selBorder,
   },
-  playIcon: { color: '#3ddc84', fontSize: 14, fontWeight: '800' },
+  playIcon: { color: pt.gold.sel, fontSize: 14, fontWeight: '800' },
   meta: { flex: 1, minWidth: 0 },
-  freq: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  freq: { color: d('#fff', pt.ink.text), fontSize: 15, fontWeight: '700' },
   // ★ In the window on metal: the text colour (a readout), not the plate's engraved amber role.
   mode: { color: pt.metal ? pt.readout : pt.gold.amber, fontSize: 13, fontWeight: '700' },
-  sub: { color: '#9aa', fontSize: 12, marginTop: 2 },
+  sub: { color: d('#9aa', pt.ink.textDim), fontSize: 12, marginTop: 2 },
   actBtn: { paddingHorizontal: 8, paddingVertical: 6, marginLeft: 2 },
-  actIcon: { color: '#bcd', fontSize: 18 },
-  del: { color: '#ff7676' },
+  actIcon: { color: d('#bcd', pt.ink.key), fontSize: 18 },
+  del: { color: '#ff7676' },   // destructive: a meaning, red on every colour
   progWrap: { marginTop: 10, flexDirection: 'row', alignItems: 'center' },
   progTrack: {
     flex: 1, height: 6, borderRadius: 3, marginRight: 10,
     backgroundColor: 'rgba(255,255,255,0.12)', overflow: 'hidden',
   },
-  progFill: { height: 6, backgroundColor: '#3ddc84' },
-  time: { color: '#9aa', fontSize: 11, width: 78, textAlign: 'right' },
-});
+  progFill: { height: 6, backgroundColor: d('#3ddc84', pt.gold.fill) },
+  time: { color: d('#9aa', pt.ink.textDim), fontSize: 11, width: 78, textAlign: 'right' },
+}); };

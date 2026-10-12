@@ -598,15 +598,19 @@ const pc = (t: string): string => platformCopy(t, Platform.OS);
 
 const F = 'Atkinson Hyperlegible';
 
-const makeStyles = (pt: PopupTokens) => StyleSheet.create({
+/* ★★ The default skin follows the user's colours (Stuart, 2026-10-12: "yes colours apply everywhere including
+ *  directory if possible"): text in the TEXT colour, the BACK key in the CONTROLS colour. `d(metal, def)` keeps
+ *  silver / black exactly as they were (they already follow the rule through onMetal / the window) and gives
+ *  the default chassis the token. The link blue stays: it says "this is a link", a meaning. */
+const makeStyles = (pt: PopupTokens) => { const d = (metal: string, def: string) => (pt.metal ? metal : def); return StyleSheet.create({
   root:  onMetal(pt, { flex: 1, backgroundColor: '#000' }, { backgroundColor: pt.silver ? '#c9c6bf' : '#161719' }),
   bar:   {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8,
-    ...(pt.metal ? null : { backgroundColor: '#0a0a0a', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.18)' }),
+    ...(pt.metal ? null : { backgroundColor: '#0a0a0a', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: pt.ink.border }),
   },
-  back:  { color: '#ffe566', fontFamily: F, fontSize: 16 },
-  title: onMetal(pt, { color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 15 }, { ...engraveText(pt), fontWeight: '700' }),
+  back:  { color: d('#ffe566', pt.gold.sel), fontFamily: F, fontSize: 16 },
+  title: onMetal(pt, { color: pt.ink.text, fontFamily: F, fontSize: 15 }, { ...engraveText(pt), fontWeight: '700' }),
   scrollWin: { marginHorizontal: 8, marginBottom: 8 },
 
   scroll:  { flex: 1 },
@@ -614,31 +618,31 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
 
   heroRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 6 },
   icon:    { width: 64, height: 64, borderRadius: 14 },
-  appName: { color: '#fff', fontFamily: F, fontSize: 22, fontWeight: 'bold', letterSpacing: 1 },
-  appVer:  { color: pt.metal ? pt.readout : '#ffe566', fontFamily: F, fontSize: 13, marginTop: 2 },
-  appSub:  { color: 'rgba(255,255,255,0.70)', fontFamily: F, fontSize: 12, marginTop: 2 },
+  appName: { color: d('#fff', pt.ink.text), fontFamily: F, fontSize: 22, fontWeight: 'bold', letterSpacing: 1 },
+  appVer:  { color: pt.metal ? pt.readout : pt.gold.readout, fontFamily: F, fontSize: 13, marginTop: 2 },
+  appSub:  { color: d('rgba(255,255,255,0.70)', pt.ink.textDim), fontFamily: F, fontSize: 12, marginTop: 2 },
 
   section: {
-    color: 'rgba(180,190,210,0.80)', fontFamily: F, fontSize: 12, fontWeight: 'bold',
+    color: d('rgba(180,190,210,0.80)', pt.ink.section), fontFamily: F, fontSize: 12, fontWeight: 'bold',
     letterSpacing: 2, marginTop: 22, marginBottom: 8,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.12)',
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: d('rgba(255,255,255,0.12)', pt.ink.divider),
     paddingTop: 14,
   },
-  body: { color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 13, lineHeight: 19, marginBottom: 8 },
+  body: { color: d('rgba(255,255,255,0.85)', pt.ink.textSoft), fontFamily: F, fontSize: 13, lineHeight: 19, marginBottom: 8 },
   /** The question, in the Limitations section. Brighter than the answer, so the section
    *  can be SKIMMED — people arrive here with one specific question, not to read an essay. */
   limQ: {
-    color: pt.metal ? pt.readout : '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19,
+    color: pt.metal ? pt.readout : pt.gold.readout, fontFamily: F, fontSize: 13, lineHeight: 19,
     marginTop: 4, marginBottom: 4,
   },
 
   bulletRow:  { flexDirection: 'row', gap: 8, marginBottom: 5, paddingRight: 4 },
-  bulletDot:  { color: pt.metal ? pt.readout : '#ffe566', fontFamily: F, fontSize: 13, lineHeight: 19 },
-  bulletText: { flex: 1, color: 'rgba(255,255,255,0.85)', fontFamily: F, fontSize: 13, lineHeight: 19 },
+  bulletDot:  { color: pt.metal ? pt.readout : pt.gold.readout, fontFamily: F, fontSize: 13, lineHeight: 19 },
+  bulletText: { flex: 1, color: d('rgba(255,255,255,0.85)', pt.ink.textSoft), fontFamily: F, fontSize: 13, lineHeight: 19 },
 
   creditBlock:  { marginBottom: 12 },
-  creditName:   { color: '#fff', fontFamily: F, fontSize: 13, fontWeight: 'bold' },
-  creditDetail: { color: 'rgba(255,255,255,0.70)', fontFamily: F, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  creditName:   { color: d('#fff', pt.ink.text), fontFamily: F, fontSize: 13, fontWeight: 'bold' },
+  creditDetail: { color: d('rgba(255,255,255,0.70)', pt.ink.textDim), fontFamily: F, fontSize: 12, lineHeight: 17, marginTop: 2 },
 
   link: { color: '#6ec8ff', fontFamily: F, fontSize: 13, marginTop: 2 },
-});
+}); };

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet, Alert,
   PermissionsAndroid, Platform, Switch,
@@ -6,7 +6,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
-import { themeFor } from '../constants/theme';
+import { themeFor, Colors } from '../constants/theme';
+import { useGlassTheme } from '../components/PopupShell';
+import { meaningText } from '../constants/decoderTokens';
 import {
   startRtlTcpServer, stopRtlTcpServer, setServerSampleRate, getServerStatus,
   getServerName, saveServerName, formatBytes, BANDWIDTH_OPTIONS,
@@ -27,7 +29,19 @@ type Props = NativeStackScreenProps<RootStackParamList, 'RtlTcpServer'>;
 // it is, and never stops it on unmount — only the explicit STOP button does.
 // This is what a set-and-forget node needs (phone + dongle at an antenna base).
 export default function RtlTcpServerScreen({ navigation, route }: Props) {
-  const { colors: C, font: F } = themeFor();
+  const { font: F } = themeFor();
+  /* ★★ THE USER'S COLOURS HERE TOO (Stuart, 2026-10-12: "yes colours apply everywhere including directory if
+   *  possible") — a screen of the directory's. Text in the TEXT colour, keys / selectors / borders in the
+   *  CONTROLS colour (useGlassTheme: the glass skin whatever the chassis — this screen is never plated), meanings
+   *  by the clash rule (meaningsFor); the link's green, the STOP key's red and the dark background stay fixed. */
+  const pt = useGlassTheme();
+  const C = useMemo(() => ({
+    bg: Colors.bg, green: Colors.green, red: Colors.red,
+    text: pt.ink.text, value: pt.gold.value, textDim: pt.ink.textDim, textFaint: pt.ink.textFaint,
+    key: pt.gold.sel, keyIdle: pt.ink.key, keyFill: pt.gold.fill,
+    border: pt.ink.border, borderBright: pt.gold.selBorder,
+    bad: pt.ink.m.bad, warn: pt.ink.m.warn, m: pt.ink.m,
+  }), [pt]);
   // The Server-mode picker owns the shared "auto-discovery" toggle; honour it
   // here (default on for a direct entry / legacy callers).
   const doAdvertise = route.params?.advertise !== false;
@@ -157,15 +171,15 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
   const linkLine = !status?.client ? '—'
     : dropped === 0 ? 'Good'
     : `${formatBytes(dropped)} dropped`;
-  const linkColor = !status?.client ? C.goldDim
-    : dropping ? C.red
-    : dropped > 0 ? C.amber
+  const linkColor = !status?.client ? C.textDim
+    : dropping ? C.bad
+    : dropped > 0 ? C.warn
     : C.green;
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
-        <Text style={[styles.h1, { color: C.amber, fontFamily: F }]}>RTL-TCP Server</Text>
+        <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>RTL-TCP Server</Text>
         <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
           {persist
             ? "Sharing this phone's RTL-SDR over your network. Sharing continues in the background until you press STOP."
@@ -174,14 +188,14 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
 
         {starting && (
           <View style={styles.center}>
-            <ActivityIndicator color={C.amber} />
+            <ActivityIndicator color={C.key} />
             <Text style={{ color: C.textDim, fontFamily: F, marginTop: 10 }}>Starting server…</Text>
           </View>
         )}
 
         {error && (
-          <View style={[styles.card, { borderColor: C.red }]}>
-            <Text style={{ color: C.red, fontFamily: F, fontSize: 14 }}>{error}</Text>
+          <View style={[styles.card, { borderColor: C.bad }]}>
+            <Text style={{ ...meaningText(C.m, C.bad), fontFamily: F, fontSize: 14 }}>{error}</Text>
           </View>
         )}
 
@@ -191,17 +205,17 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
             <View style={[styles.card, { borderColor: C.borderBright }]}>
               <View style={styles.rowBetween}>
                 <Text style={[styles.label, { color: C.textDim, fontFamily: F }]}>ADDRESS</Text>
-                <Text style={[styles.value, { color: C.amber, fontFamily: F }]}>{info.ip}:{info.port}</Text>
+                <Text style={[styles.value, { color: C.value, fontFamily: F }]}>{info.ip}:{info.port}</Text>
               </View>
               <View style={styles.rowBetween}>
                 <Text style={[styles.label, { color: C.textDim, fontFamily: F }]}>BANDWIDTH</Text>
-                <Text style={[styles.value, { color: C.amber, fontFamily: F }]}>
+                <Text style={[styles.value, { color: C.value, fontFamily: F }]}>
                   {bwActual}{override > 0 ? ' (capped)' : ''}
                 </Text>
               </View>
               <View style={styles.rowBetween}>
                 <Text style={[styles.label, { color: C.textDim, fontFamily: F }]}>STATUS</Text>
-                <Text style={[styles.value, { color: status?.client ? C.green : C.goldDim, fontFamily: F }]}>
+                <Text style={[styles.value, { color: status?.client ? C.green : C.textDim, fontFamily: F }]}>
                   {clientLine}
                 </Text>
               </View>
@@ -210,7 +224,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
                 <Text style={[styles.value, { color: linkColor, fontFamily: F }]}>{linkLine}</Text>
               </View>
               {dropping && (
-                <Text style={[styles.hint, { color: C.red, fontFamily: F, marginTop: 6 }]}>
+                <Text style={[styles.hint, { ...meaningText(C.m, C.bad), fontFamily: F, marginTop: 6 }]}>
                   ⚠ The network can't keep up — try a lower bandwidth setting, or move
                   closer to the router.
                 </Text>
@@ -227,8 +241,8 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
               onBlur={commitName}
               onSubmitEditing={commitName}
               placeholder="VibeSDR RTL-SDR"
-              placeholderTextColor={C.goldDim}
-              style={[styles.input, { color: C.amber, borderColor: C.border, fontFamily: F }]}
+              placeholderTextColor={C.textFaint}
+              style={[styles.input, { color: C.value, borderColor: C.border, fontFamily: F }]}
             />
             <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
               Shown to clients discovering this server on the network.
@@ -238,14 +252,14 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
             <Text style={[styles.section, { color: C.textDim, fontFamily: F }]}>KEEP SHARING</Text>
             <View style={[styles.card, { borderColor: C.border }]}>
               <View style={styles.rowBetween}>
-                <Text style={[styles.value, { color: C.amber, fontFamily: F, flex: 1, paddingRight: 12 }]}>
+                <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12 }]}>
                   Keep the server running
                 </Text>
                 <Switch
                   value={persist}
                   onValueChange={applyPersist}
-                  trackColor={{ false: C.border, true: C.green }}
-                  thumbColor={C.amber}
+                  trackColor={{ false: C.border, true: C.keyFill }}
+                  thumbColor={C.key}
                 />
               </View>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
@@ -264,12 +278,12 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
               const active = override === opt.value;
               return (
                 <TouchableOpacity key={opt.value}
-                  style={[styles.optRow, { borderColor: active ? C.amber : C.border }]}
+                  style={[styles.optRow, { borderColor: active ? C.borderBright : C.border }]}
                   onPress={() => applyOverride(opt.value)}>
-                  <Text style={{ color: active ? C.amber : C.gold, fontFamily: F, fontSize: 15 }}>
+                  <Text style={{ color: active ? C.key : C.keyIdle, fontFamily: F, fontSize: 15 }}>
                     {opt.label}
                   </Text>
-                  {active && <Text style={{ color: C.amber, fontFamily: F }}>✓</Text>}
+                  {active && <Text style={{ color: C.key, fontFamily: F }}>✓</Text>}
                 </TouchableOpacity>
               );
             })}

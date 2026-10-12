@@ -57,6 +57,8 @@ import { VIBEMAP_JS } from '../generated/vibemapSource';
  *     Regenerate with: node scripts/gen-mapdata-source.mjs */
 import { MAPDATA_FILES } from '../generated/mapdataBundle';
 import { noteFault } from '../services/faultLog';
+import { useFaceplate } from '../contexts/FaceplateContext';
+import { controlsText } from '../constants/decoderTokens';
 
 export type MapKind = 'hfdl' | 'digi' | 'cw';
 
@@ -91,6 +93,10 @@ interface MapOverlayProps {
 function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
   opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean },
+  /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
+   *  a legend. The page is rebuilt when they change — and they can only change from the menus, after leaving this
+   *  screen (Stuart: "to change the colour of the map means youd have to exit its screen anyway"). */
+  ink: { x: string; k: string; kt: string } = { x: '255,180,60', k: '255,160,0', kt: '255,200,80' },
 ): string {
   const local = !!opts?.local;
   /* ★★★ THE GPU MAP (vibemapgl.js, route B): MapLibre GL JS in this same WebView, drawing our own
@@ -120,15 +126,18 @@ function buildHtml(
     "form-action 'none'",
   ].join('; ');
   const isHfdl = kind === 'hfdl';
-  // Theme: HFDL amber (255,160,0), spots maps green (80,200,80) — skin parity.
-  const T = isHfdl
-    ? { bg: '#090602', a: '255,160,0', hi: '255,200,80', txt: '255,180,60' }
-    : { bg: '#060906', a: '80,200,80', hi: '120,240,120', txt: '120,240,120' };
+  /* ★★★ THE MAP'S MENUS FOLLOW THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere"; the map:
+   *  "to change the colour of the map means youd have to exit its screen anyway"). They were HFDL amber and spots
+   *  green. Now TEXT (titles, counts, labels, popups, stats) = the text colour (`T.x`); KEYS, selectors, borders,
+   *  scrollbars = the controls colour (`T.k`, legends `T.kt`). ★ KEPT, because they MEAN something: the spot-age and
+   *  signal-strength dots, the band colours, the aircraft's yellow selection ring and its signal meter. The
+   *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
+  const T = { bg: isHfdl ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
   const CNT_ICON = isHfdl
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
     : kind === 'cw'
-    ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.hi},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
+    ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.x},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
     : '&#128225;';
 
   return `<!DOCTYPE html>
@@ -155,28 +164,28 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   #topbar{display:flex;align-items:center;gap:8px;padding:6px 10px;
     padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
     padding-top:max(8px,env(safe-area-inset-top));
-    background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.97);border-bottom:1px solid rgba(${T.a},0.18);flex-shrink:0;z-index:2;}
-  #back{background:rgba(${T.a},0.08);border:1px solid rgba(${T.a},0.30);border-radius:8px;
-    color:rgba(${T.a},0.85);font-family:inherit;font-size:14px;letter-spacing:1px;padding:5px 10px;
+    background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.97);border-bottom:1px solid rgba(${T.k},0.18);flex-shrink:0;z-index:2;}
+  #back{background:rgba(${T.k},0.08);border:1px solid rgba(${T.k},0.30);border-radius:8px;
+    color:rgba(${T.kt},0.85);font-family:inherit;font-size:14px;letter-spacing:1px;padding:5px 10px;
     cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
-  #back:active{background:rgba(${T.a},0.18);}
-  #title{font-size:15px;letter-spacing:2px;color:rgba(${T.a},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  #cntwrap{display:flex;align-items:center;gap:5px;font-size:13px;letter-spacing:1px;color:rgba(${T.a},0.60);flex-shrink:0;}
-  #cnt{color:rgba(${T.hi},0.90);font-size:16px;}
-  #snap{background:rgba(255,160,0,0.08);border:1px solid rgba(255,160,0,0.20);border-radius:8px;
-    color:rgba(255,160,0,0.45);font-size:12px;letter-spacing:0.5px;padding:5px 7px;cursor:pointer;
+  #back:active{background:rgba(${T.k},0.18);}
+  #title{font-size:15px;letter-spacing:2px;color:rgba(${T.x},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #cntwrap{display:flex;align-items:center;gap:5px;font-size:13px;letter-spacing:1px;color:rgba(${T.x},0.60);flex-shrink:0;}
+  #cnt{color:rgba(${T.x},0.90);font-size:16px;}
+  #snap{background:rgba(${T.k},0.08);border:1px solid rgba(${T.k},0.30);border-radius:8px;
+    color:rgba(${T.kt},0.60);font-size:12px;letter-spacing:0.5px;padding:5px 7px;cursor:pointer;
     font-family:inherit;-webkit-tap-highlight-color:transparent;touch-action:manipulation;line-height:1.2;text-align:center;flex-shrink:0;}
-  #snap.on{border-color:rgba(255,160,0,0.50);color:rgba(255,190,60,0.90);background:rgba(255,160,0,0.10);}
+  #snap.on{border-color:rgba(${T.k},0.60);color:rgba(${T.kt},1);background:rgba(${T.k},0.14);}
   /* ── filters row (digi/cw) — skin lsv-smap-filters ── */
   #filters{display:flex;align-items:center;gap:6px;padding:4px 10px;
     padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
-    background:rgba(6,9,6,0.97);border-bottom:1px solid rgba(${T.a},0.10);flex-shrink:0;flex-wrap:wrap;}
-  select{background:rgba(${T.a},0.06);border:1px solid rgba(${T.a},0.25);border-radius:6px;
-    color:rgba(${T.a},0.85);font-family:inherit;font-size:12px;letter-spacing:0.5px;padding:4px 20px 4px 7px;cursor:pointer;
+    background:rgba(6,9,6,0.97);border-bottom:1px solid rgba(${T.k},0.10);flex-shrink:0;flex-wrap:wrap;}
+  select{background:rgba(${T.k},0.06);border:1px solid rgba(${T.k},0.25);border-radius:6px;
+    color:rgba(${T.kt},0.85);font-family:inherit;font-size:12px;letter-spacing:0.5px;padding:4px 20px 4px 7px;cursor:pointer;
     appearance:none;-webkit-appearance:none;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='rgba(${T.a},0.6)' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='rgba(${T.k},0.6)' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
     background-repeat:no-repeat;background-position:right 6px center;}
-  .flabel{font-size:11px;letter-spacing:1px;color:rgba(${T.a},0.35);}
+  .flabel{font-size:11px;letter-spacing:1px;color:rgba(${T.x},0.35);}
   #map{flex:1;position:relative;overflow:hidden;background:${T.bg};}
   /* ★★★ THE MAP'S BACKDROP IS THE BASEMAP'S COLOUR, NOT THE APP'S. This was ${T.bg} — near
      black — behind a LIGHT basemap, so every tile that had not arrived yet showed as a black
@@ -208,26 +217,26 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   .leaflet-fade-anim .leaflet-tile{will-change:opacity;}
   /* skin map theming */
   .leaflet-tile{filter:brightness(0.65) saturate(0.7);}
-  .leaflet-popup-content-wrapper{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.a},0.30);color:rgba(${T.txt},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;}
+  .leaflet-popup-content-wrapper{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.k},0.30);color:rgba(${T.x},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;}
   .leaflet-popup-tip{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
-  .leaflet-popup-close-button{color:rgba(${T.a},0.50)!important;}
+  .leaflet-popup-close-button{color:rgba(${T.kt},0.50)!important;}
   .leaflet-popup-content{margin:10px 12px;font-family:'Courier New',monospace;}
-  .leaflet-control-zoom a{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);color:rgba(${T.a},0.70);border-color:rgba(${T.a},0.20);}
+  .leaflet-control-zoom a{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);color:rgba(${T.kt},0.70);border-color:rgba(${T.k},0.20);}
   .leaflet-bottom{padding-bottom:max(8px,env(safe-area-inset-bottom));}
-  .leaflet-control-attribution{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.25);font-size:10px;}
+  .leaflet-control-attribution{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.x},0.25);font-size:10px;}
   /* ★ THE GPU MAP'S CONTROLS WEAR THE SAME CLOTHES as the Leaflet ones above — same colours, font and
    *  sizes — so switching renderer does not restyle the page. */
-  .maplibregl-popup-content{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.a},0.30);color:rgba(${T.txt},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;padding:10px 12px;}
+  .maplibregl-popup-content{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);border:1px solid rgba(${T.k},0.30);color:rgba(${T.x},0.90);font-family:'Courier New',monospace;font-size:13px;border-radius:8px;padding:10px 12px;}
   .maplibregl-popup-anchor-bottom .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,.maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip{border-top-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
   .maplibregl-popup-anchor-top .maplibregl-popup-tip,.maplibregl-popup-anchor-top-left .maplibregl-popup-tip,.maplibregl-popup-anchor-top-right .maplibregl-popup-tip{border-bottom-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
   .maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
   .maplibregl-popup-anchor-right .maplibregl-popup-tip{border-left-color:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.96);}
-  .maplibregl-popup-close-button{color:rgba(${T.a},0.50);font-size:16px;}
-  .maplibregl-ctrl-group{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);border:1px solid rgba(${T.a},0.20);}
-  .maplibregl-ctrl-group button+button{border-top:1px solid rgba(${T.a},0.20);}
+  .maplibregl-popup-close-button{color:rgba(${T.kt},0.50);font-size:16px;}
+  .maplibregl-ctrl-group{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.90);border:1px solid rgba(${T.k},0.20);}
+  .maplibregl-ctrl-group button+button{border-top:1px solid rgba(${T.k},0.20);}
   .maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.7;}
-  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.a},0.45);font-size:10px;}
-  .maplibregl-ctrl-attrib a{color:rgba(${T.a},0.55);}
+  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.70);color:rgba(${T.x},0.45);font-size:10px;}
+  .maplibregl-ctrl-attrib a{color:rgba(${T.x},0.55);}
   .maplibregl-ctrl-attrib-button{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:0.55;}
   /* skin lsv-hfdl pulse + rings (verbatim keyframes) */
   /* ★★★ THE PULSE WEARS THE MARKER'S OWN COLOUR. It was a fixed yellow (and a cyan ring), and the
@@ -256,38 +265,38 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
     left:max(10px,env(safe-area-inset-left));right:calc(52px + env(safe-area-inset-right));
     width:fit-content;max-width:calc(100% - 62px - env(safe-area-inset-left) - env(safe-area-inset-right));
     margin:0 auto;box-sizing:border-box;display:flex;align-items:baseline;gap:0.6em;
-    z-index:1000;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.93);border:1px solid rgba(${T.a},0.30);border-radius:20px;
+    z-index:1000;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.93);border:1px solid rgba(${T.k},0.30);border-radius:20px;
     padding:6px 14px;font-size:13px;letter-spacing:1px;
-    color:rgba(${T.hi},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;
+    color:rgba(${T.x},0.90);white-space:nowrap;opacity:0;transition:opacity 0.4s;
     overflow:hidden;cursor:pointer;pointer-events:none;}
   /* ★ An invisible pill no longer swallows taps meant for the map beneath it. */
   #toast.on{opacity:1;pointer-events:auto;}
   .tf,.ta{flex:none;}
   .tg,.tx{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
-  .tf{color:#ffe566;font-size:14px;}
-  .tg{color:rgba(255,160,0,0.55);}
-  .ta{color:rgba(255,160,0,0.40);font-size:12px;}
+  .tf{color:rgba(${T.x},1);font-size:14px;}
+  .tg{color:rgba(${T.x},0.70);}
+  .ta{color:rgba(${T.x},0.60);font-size:12px;}
   /* ★ iPhone SE with Display Zoom (320 pt) is the narrowest layout the app has to survive. */
   @media (max-width:400px){#toast{padding:5px 11px;letter-spacing:0.4px;gap:0.5em;}}
   /* ── legend — skin lsv-smap-legend / lsv-hfdl-legend ── */
   #legend{position:absolute;bottom:max(44px,calc(env(safe-area-inset-bottom) + 34px));left:max(10px,env(safe-area-inset-left));
-    z-index:1000;font-size:12px;letter-spacing:0.8px;color:rgba(${T.hi},0.80);pointer-events:auto;}
+    z-index:1000;font-size:12px;letter-spacing:0.8px;color:rgba(${T.x},0.80);pointer-events:auto;}
   #legbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
-    background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.88);border:1px solid rgba(${T.a},0.30);border-radius:8px;cursor:pointer;
-    font-size:16px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.hi},0.80);}
-  #legbtn:active{background:rgba(${T.a},0.15);}
+    background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.88);border:1px solid rgba(${T.k},0.30);border-radius:8px;cursor:pointer;
+    font-size:16px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.kt},0.80);}
+  #legbtn:active{background:rgba(${T.k},0.15);}
   #legbody{display:none;position:absolute;bottom:0;left:34px;background:rgba(${isHfdl ? '9,6,2' : '6,9,6'},0.92);
-    border:1px solid rgba(${T.a},0.18);border-radius:8px;padding:7px 9px;white-space:nowrap;
+    border:1px solid rgba(${T.k},0.18);border-radius:8px;padding:7px 9px;white-space:nowrap;
     max-height:min(320px,calc(100vh - 200px));overflow-y:scroll;overflow-x:hidden;
     -webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;}
   #legend.open #legbody{display:block;}
   #legbody::-webkit-scrollbar{width:4px;}
   #legbody::-webkit-scrollbar-track{background:transparent;}
-  #legbody::-webkit-scrollbar-thumb{background:rgba(${T.a},0.40);border-radius:2px;}
+  #legbody::-webkit-scrollbar-thumb{background:rgba(${T.k},0.40);border-radius:2px;}
   .lg-row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px;}
   .lg-dot{display:inline-block;width:12px;height:12px;border-radius:50%;flex-shrink:0;}
-  .lg-sec{font-size:11px;letter-spacing:1.5px;color:rgba(${T.a},0.40);margin:6px 0 3px;}
-  .scroll-arrow{display:none;position:sticky;left:0;right:0;text-align:center;font-size:13px;line-height:1;padding:2px 0;pointer-events:none;color:rgba(${T.hi},0.90);}
+  .lg-sec{font-size:11px;letter-spacing:1.5px;color:rgba(${T.x},0.40);margin:6px 0 3px;}
+  .scroll-arrow{display:none;position:sticky;left:0;right:0;text-align:center;font-size:13px;line-height:1;padding:2px 0;pointer-events:none;color:rgba(${T.x},0.90);}
   .scroll-arrow-up{top:0;}
   .scroll-arrow-dn{bottom:0;}
   .scroll-arrow.arr-on{display:block;}
@@ -297,32 +306,32 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
   #statsbtnwrap{position:absolute;bottom:max(146px,calc(env(safe-area-inset-bottom) + 136px));right:max(10px,env(safe-area-inset-right));
     z-index:1000;pointer-events:auto;}
   #statsbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
-    background:rgba(6,9,6,0.88);border:1px solid rgba(${T.a},0.30);border-radius:8px;cursor:pointer;
-    font-size:15px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.hi},0.80);}
-  #statsbtn:active{background:rgba(${T.a},0.15);}
+    background:rgba(6,9,6,0.88);border:1px solid rgba(${T.k},0.30);border-radius:8px;cursor:pointer;
+    font-size:15px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.kt},0.80);}
+  #statsbtn:active{background:rgba(${T.k},0.15);}
   #stsheet{display:none;position:absolute;inset:0;z-index:1500;background:rgba(4,12,4,0.82);
-    color:rgba(${T.hi},0.80);font-size:12px;letter-spacing:0.8px;
+    color:rgba(${T.x},0.80);font-size:12px;letter-spacing:0.8px;
     backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
     overflow-y:scroll;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;
     padding:16px max(16px,env(safe-area-inset-right)) max(16px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
-    scrollbar-width:thin;scrollbar-color:rgba(${T.a},0.50) rgba(${T.a},0.10);}
+    scrollbar-width:thin;scrollbar-color:rgba(${T.k},0.50) rgba(${T.k},0.10);}
   #stsheet::-webkit-scrollbar{width:5px;}
-  #stsheet::-webkit-scrollbar-track{background:rgba(${T.a},0.08);border-radius:3px;}
-  #stsheet::-webkit-scrollbar-thumb{background:rgba(${T.a},0.50);border-radius:3px;min-height:40px;}
+  #stsheet::-webkit-scrollbar-track{background:rgba(${T.k},0.08);border-radius:3px;}
+  #stsheet::-webkit-scrollbar-thumb{background:rgba(${T.k},0.50);border-radius:3px;min-height:40px;}
   #stsheet.open{display:block;}
-  .st-close{position:sticky;top:0;float:right;background:rgba(${T.a},0.12);border:1px solid rgba(${T.a},0.35);
-    border-radius:8px;color:rgba(${T.hi},0.85);font-family:inherit;font-size:13px;letter-spacing:1px;padding:5px 10px;
+  .st-close{position:sticky;top:0;float:right;background:rgba(${T.k},0.12);border:1px solid rgba(${T.k},0.35);
+    border-radius:8px;color:rgba(${T.kt},0.85);font-family:inherit;font-size:13px;letter-spacing:1px;padding:5px 10px;
     cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;margin-bottom:8px;z-index:10;}
-  .st-title{font-size:15px;letter-spacing:2px;color:rgba(${T.a},0.70);margin-bottom:12px;padding-top:2px;}
+  .st-title{font-size:15px;letter-spacing:2px;color:rgba(${T.x},0.70);margin-bottom:12px;padding-top:2px;}
   .st-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:700px;margin:0 auto;}
   @media(max-width:480px){.st-grid{grid-template-columns:1fr;}}
-  .st-card{background:rgba(6,9,6,0.60);border:1px solid rgba(${T.a},0.12);border-radius:8px;padding:10px 12px;}
-  .st-sect{font-size:11px;letter-spacing:1.5px;color:rgba(${T.a},0.45);margin:0 0 6px;}
+  .st-card{background:rgba(6,9,6,0.60);border:1px solid rgba(${T.k},0.12);border-radius:8px;padding:10px 12px;}
+  .st-sect{font-size:11px;letter-spacing:1.5px;color:rgba(${T.x},0.45);margin:0 0 6px;}
   .st-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin:4px 0;font-size:13px;}
-  .st-val{color:rgba(${T.hi},0.95);font-size:14px;font-weight:bold;}
-  .st-sub{font-size:11px;color:rgba(${T.a},0.45);letter-spacing:0.5px;margin:-2px 0 6px;}
-  .st-bar{height:3px;background:rgba(${T.a},0.12);border-radius:2px;margin:2px 0 6px;}
-  .st-bf{height:3px;background:rgba(${T.a},0.65);border-radius:2px;transition:width 0.4s;}
+  .st-val{color:rgba(${T.x},0.95);font-size:14px;font-weight:bold;}
+  .st-sub{font-size:11px;color:rgba(${T.x},0.45);letter-spacing:0.5px;margin:-2px 0 6px;}
+  .st-bar{height:3px;background:rgba(${T.x},0.12);border-radius:2px;margin:2px 0 6px;}
+  .st-bf{height:3px;background:rgba(${T.x},0.65);border-radius:2px;transition:width 0.4s;}
 </style>
 </head><body>
 <div id="topbar">
@@ -750,7 +759,7 @@ function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({ht
 function showSetLoc(){
   var b=document.createElement('button');
   b.textContent='\\uD83D\\uDCCD SET LOCATION';
-  b.style.cssText='position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:900;background:rgba(6,9,6,0.92);color:rgba('+'${T.hi}'+',0.95);border:1px solid rgba('+'${T.a}'+',0.5);border-radius:8px;padding:9px 16px;font-family:inherit;font-size:14px;letter-spacing:1px;';
+  b.style.cssText='position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:900;background:rgba(6,9,6,0.92);color:rgba('+'${T.x}'+',0.95);border:1px solid rgba('+'${T.k}'+',0.5);border-radius:8px;padding:9px 16px;font-family:inherit;font-size:14px;letter-spacing:1px;';
   b.addEventListener('click',function(){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('pickCity');});
   document.getElementById('map').appendChild(b);
 }
@@ -1007,9 +1016,9 @@ if(KIND==='hfdl'){
     var sig=sl?sigMeterHTML(sl)+' <span style="margin-left:4px;">'+sl.toFixed(1)+' dBFS</span>':'';
     var tk=numOr(a.tracked_km,0);
     var tracked=tk?Math.round(tk).toLocaleString()+' km'+(spd?' &bull; '+spd:''):spd;
-    var row=function(label,val){return val?'<tr><td style="color:rgba(255,160,0,0.5);padding-right:8px;white-space:nowrap;">'+label+'</td><td style="color:rgba(255,210,80,0.9);">'+val+'</td></tr>':'';};
+    var row=function(label,val){return val?'<tr><td style="color:rgba(${T.x},0.65);padding-right:8px;white-space:nowrap;">'+label+'</td><td style="color:rgba(${T.x},0.95);">'+val+'</td></tr>':'';};
     return '<div style="font-size:13px;letter-spacing:0.8px;">'
-      +'<div style="font-size:15px;font-weight:600;color:rgba(255,210,60,1);margin-bottom:6px;">'+esc(fl)+(a.icao&&a.icao!==fl?' <span style="font-size:12px;color:rgba(255,180,60,0.55);">'+esc(a.icao)+'</span>':'')+'</div>'
+      +'<div style="font-size:15px;font-weight:600;color:rgba(${T.x},1);margin-bottom:6px;">'+esc(fl)+(a.icao&&a.icao!==fl?' <span style="font-size:12px;color:rgba(${T.x},0.65);">'+esc(a.icao)+'</span>':'')+'</div>'
       +'<table style="border-collapse:collapse;">'
       +row('Freq',freq)
       +row('Via',gsN)
@@ -1035,7 +1044,7 @@ if(KIND==='hfdl'){
         var lastHeard=numOr(s.last_heard,0);
         var sigLine;
         if(sig){
-          sigLine=sigMeterHTML(sig)+'<span style="font-size:11px;color:rgba(255,160,0,0.40);margin-left:3px;">'+sig.toFixed(1)+' dBFS</span>';
+          sigLine=sigMeterHTML(sig)+'<span style="font-size:11px;color:rgba(${T.x},0.60);margin-left:3px;">'+sig.toFixed(1)+' dBFS</span>';
         }else if(lastHeard>0){
           var el=Math.floor(Date.now()/1000-lastHeard),elStr;
           if(el<60)elStr=el+'s ago';else if(el<3600)elStr=Math.floor(el/60)+'m ago';
@@ -1045,23 +1054,23 @@ if(KIND==='hfdl'){
         }else{
           sigLine='<span style="font-size:11px;color:rgba(180,80,60,0.55);">&#10005; Never heard</span>';
         }
-        var ph='<div style="font-size:14px;letter-spacing:1px;color:rgba(255,200,80,0.9)">'+esc(name)+'</div>'
+        var ph='<div style="font-size:14px;letter-spacing:1px;color:rgba(${T.x},0.95)">'+esc(name)+'</div>'
           +'<div style="margin-top:4px;display:flex;align-items:center;gap:6px;">'
-          +'<span style="font-size:12px;color:rgba(255,160,0,0.55);">Signal:</span>'+sigLine+'</div>';
+          +'<span style="font-size:12px;color:rgba(${T.x},0.70);">Signal:</span>'+sigLine+'</div>';
         var d=distKm(s.lat,s.lon);
-        if(d)ph+='<div style="margin-top:3px;font-size:12px;color:rgba(255,160,0,0.5);">'+d+' km from receiver</div>';
+        if(d)ph+='<div style="margin-top:3px;font-size:12px;color:rgba(${T.x},0.65);">'+d+' km from receiver</div>';
         if(freqs.length){
           ph+='<div style="margin-top:6px;">';
           freqs.forEach(function(f){
             var k=numOr(f&&f.freq_khz,0),en=!f||f.enabled!==false;
             ph+='<div style="margin:3px 0;display:flex;align-items:center;gap:5px;">'
-            +'<span style="color:'+(en?'rgba(255,180,60,0.9)':'rgba(180,120,30,0.45)')+';min-width:66px;font-size:13px;">'+(k?(k/1000).toFixed(3)+' MHz':'?')+'</span>'
+            +'<span style="color:'+(en?'rgba(${T.x},0.9)':'rgba(${T.x},0.40)')+';min-width:66px;font-size:13px;">'+(k?(k/1000).toFixed(3)+' MHz':'?')+'</span>'
             +(en?'<span style="color:rgba(80,220,80,0.7);font-size:11px;">&#9679; ON</span>':'<span style="color:rgba(255,80,80,0.35);font-size:11px;">&#9675; off</span>')
             +'</div>';
           });
           ph+='</div>';
         }else{
-          ph+='<div style="color:rgba(255,160,0,0.35);font-size:12px;margin-top:4px;">No frequencies listed</div>';
+          ph+='<div style="color:rgba(${T.x},0.55);font-size:12px;margin-top:4px;">No frequencies listed</div>';
         }
         if(gsM[id]){
           gsM[id].setPopupContent(ph);
@@ -1428,10 +1437,17 @@ export default function MapOverlay(
       .catch((e) => { console.warn('GPU map files unavailable, using Leaflet:', e); if (!dead) setGlOk(false); });
     return () => { dead = true; };
   }, [visible, glOk]);
+  // ★★ The user's colours go INTO the page (2026-10-12): text colour (neon reading under Nixie, lifted for contrast as
+  //   every surface lifts it), controls colour for keys. A change rebuilds the page — which only happens after leaving
+  //   this screen for the menus (Stuart: "to change the colour of the map means youd have to exit its screen anyway").
+  const fp = useFaceplate();
+  const textRgb = fp.settings.display === 'nixie' ? '255,154,85' : fp.text.rgb;
+  const ink = useMemo(() => ({ x: controlsText(textRgb), k: fp.controls.rgb, kt: controlsText(fp.controls.rgb) }),
+                      [textRgb, fp.controls.rgb]);
   const html = useMemo(
     () => (kind && glOk !== null ? buildHtml(kind, baseUrl, sessionUuid,
-      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled() }) : ''),
-    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk],
+      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled() }, ink) : ''),
+    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, ink],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *

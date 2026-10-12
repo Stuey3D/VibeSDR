@@ -343,6 +343,10 @@ if node --no-warnings scripts/test_mac_audio.ts; then pass=$((pass+1)); else fai
 #     worst lighting; the tune entry follows the Display (Nixie One only ever neon); and with
 #     Transparency OFF no popup dims the waterfall or blurs it.
 if node --no-warnings scripts/test_popup.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★★ "USE AS SERVER" IN THE USER'S COLOURS (Stuart 2026-10-12): text = text colour, keys = controls colour, meanings
+#     by the clash rule; every role ≥ 4.5:1 across controls × text × display and for Lite; and ServerModeScreen never
+#     imports PopupShell / FaceplateContext (VibeServer Lite bundles it on RN 0.73 with no Reanimated).
+if node --no-warnings scripts/test_server_colours.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_server_colours.ts"; fi
 # ★★★ EDGE CHIPS ON THE GLASS (edgeChipGeometry.ts, Stuart 2026-10-06): the health / time cards and their tabs sit at
 #     the PHYSICAL edge with content padded by the safe-area inset — portrait, both landscapes, iPad, a Mac resize.
 if node --no-warnings scripts/test_edge_chip.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_edge_chip.ts"; fi

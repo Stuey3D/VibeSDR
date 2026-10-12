@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
+import type { ServerPalette } from '../constants/serverPalette';
 
 /**
  * ★★★ THE BAND LISTS, AS A TABLE — the same shape the browser's setup page has always had.
@@ -27,7 +28,8 @@ import Slider from '@react-native-community/slider';
 export type Band = { id: string; label: string; lo?: number; hi?: number };
 
 type Props = {
-  C: Record<string, string>;
+  /** ★ The server screen's palette by role (constants/serverPalette.ts): text = TEXT colour, keys = CONTROLS colour. */
+  C: ServerPalette;
   F: string;
   bands: Band[];
   /** The server string being edited. */
@@ -271,8 +273,8 @@ export default function BandLimitEditor(p: Props) {
 
   const chip = (active: boolean) => ({
     borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12,
-    borderColor: active ? p.C.green : p.C.border,
-    backgroundColor: active ? `${p.C.green}18` : 'transparent',
+    borderColor: active ? p.C.keyBorderAct : p.C.border,
+    backgroundColor: active ? p.C.keyBgAct : 'transparent',
   });
 
   return (
@@ -292,7 +294,7 @@ export default function BandLimitEditor(p: Props) {
         {p.allowAll && (
           <TouchableOpacity onPress={() => setBand(band === 'all' ? '' : 'all')}
                             style={chip(band === 'all')}>
-            <Text style={{ color: band === 'all' ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+            <Text style={{ color: band === 'all' ? p.C.keyAct : p.C.key, fontFamily: p.F, fontSize: 12 }}>
               All bands
             </Text>
           </TouchableOpacity>
@@ -300,7 +302,7 @@ export default function BandLimitEditor(p: Props) {
         {bands.map(b => (
           <TouchableOpacity key={b.id} onPress={() => setBand(band === b.id ? '' : b.id)}
                             style={chip(band === b.id)}>
-            <Text style={{ color: band === b.id ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+            <Text style={{ color: band === b.id ? p.C.keyAct : p.C.key, fontFamily: p.F, fontSize: 12 }}>
               {b.label}
             </Text>
           </TouchableOpacity>
@@ -316,7 +318,7 @@ export default function BandLimitEditor(p: Props) {
           <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>Gain mode</Text>
           {CURVE_NAMES.map((nm, i) => (
             <TouchableOpacity key={nm} onPress={() => setCurveNext(i)} style={chip(curveNext === i)}>
-              <Text style={{ color: curveNext === i ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+              <Text style={{ color: curveNext === i ? p.C.keyAct : p.C.key, fontFamily: p.F, fontSize: 12 }}>
                 {nm}
               </Text>
             </TouchableOpacity>
@@ -332,7 +334,7 @@ export default function BandLimitEditor(p: Props) {
           <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>Gain</Text>
           {([['Set a ceiling', false], ['Leave alone', true]] as const).map(([nm, on]) => (
             <TouchableOpacity key={nm} onPress={() => setGainNone(on)} style={chip(gainNone === on)}>
-              <Text style={{ color: gainNone === on ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+              <Text style={{ color: gainNone === on ? p.C.keyAct : p.C.key, fontFamily: p.F, fontSize: 12 }}>
                 {nm}
               </Text>
             </TouchableOpacity>
@@ -351,9 +353,9 @@ export default function BandLimitEditor(p: Props) {
           <>
             <Slider style={{ flex: 1 }} minimumValue={0} maximumValue={steps.length - 1} step={1}
               value={gainIdx} onValueChange={(v: number) => setGainIdx(Math.round(v))}
-              minimumTrackTintColor={p.C.gold} maximumTrackTintColor="rgba(255,255,255,0.25)"
-              thumbTintColor={p.C.gold} />
-            <Text style={{ color: p.C.amber, fontFamily: p.F, fontSize: 13, minWidth: 62,
+              minimumTrackTintColor={p.C.fill} maximumTrackTintColor={p.C.trackOff}
+              thumbTintColor={p.C.thumb} />
+            <Text style={{ color: p.C.text, fontFamily: p.F, fontSize: 13, minWidth: 62,
                            textAlign: 'right' }}>
               {p.curveable ? `${CURVE_NAMES[curveNext]} ${Math.round(steps[gainIdx] / 10)}`
                            : `${(steps[gainIdx] / 10).toFixed(1)} dB`}
@@ -369,26 +371,26 @@ export default function BandLimitEditor(p: Props) {
                 the server has always parsed. */
           <>
             <TextInput value={loText} onChangeText={setLoText}
-              placeholder="from, e.g. 87.5M" placeholderTextColor={p.C.goldDim}
+              placeholder="from, e.g. 87.5M" placeholderTextColor={p.C.placeholder}
               autoCapitalize="none" autoCorrect={false}
-              style={[styles.input, { flex: 1, color: p.C.amber, borderColor: p.C.border,
+              style={[styles.input, { flex: 1, color: p.C.text, borderColor: p.C.border,
                                       fontFamily: p.F }]} />
             <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>to</Text>
             <TextInput value={hiText} onChangeText={setHiText}
-              placeholder="to, e.g. 108M" placeholderTextColor={p.C.goldDim}
+              placeholder="to, e.g. 108M" placeholderTextColor={p.C.placeholder}
               autoCapitalize="none" autoCorrect={false}
-              style={[styles.input, { flex: 1, color: p.C.amber, borderColor: p.C.border,
+              style={[styles.input, { flex: 1, color: p.C.text, borderColor: p.C.border,
                                       fontFamily: p.F }]} />
           </>
         ) : (
         <TextInput value={text} onChangeText={setText}
-          placeholder={p.placeholder} placeholderTextColor={p.C.goldDim}
+          placeholder={p.placeholder} placeholderTextColor={p.C.placeholder}
           autoCapitalize="none" autoCorrect={false}
           keyboardType="numbers-and-punctuation"
-          style={[styles.input, { flex: 1, color: p.C.amber, borderColor: p.C.border, fontFamily: p.F }]} />
+          style={[styles.input, { flex: 1, color: p.C.text, borderColor: p.C.border, fontFamily: p.F }]} />
         )}
         <TouchableOpacity onPress={add} style={chip(false)}>
-          <Text style={{ color: p.C.gold, fontFamily: p.F, fontSize: 13 }}>Add</Text>
+          <Text style={{ color: p.C.key, fontFamily: p.F, fontSize: 13 }}>Add</Text>
         </TouchableOpacity>
       </View>
 
@@ -401,7 +403,7 @@ export default function BandLimitEditor(p: Props) {
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
             {IF_WIDTHS.map(w => (
               <TouchableOpacity key={w.khz} onPress={() => setIfNext(w.khz)} style={chip(ifNext === w.khz)}>
-                <Text style={{ color: ifNext === w.khz ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+                <Text style={{ color: ifNext === w.khz ? p.C.keyAct : p.C.key, fontFamily: p.F, fontSize: 12 }}>
                   {w.label}
                 </Text>
               </TouchableOpacity>
@@ -418,7 +420,7 @@ export default function BandLimitEditor(p: Props) {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
           {([['Limit', false], ['Lock', true]] as const).map(([nm, on]) => (
             <TouchableOpacity key={nm} onPress={() => setLockNext(on)} style={chip(lockNext === on)}>
-              <Text style={{ color: lockNext === on ? p.C.green : p.C.gold, fontFamily: p.F, fontSize: 12 }}>
+              <Text style={{ color: lockNext === on ? p.C.keyAct : p.C.key, fontFamily: p.F, fontSize: 12 }}>
                 {nm}
               </Text>
             </TouchableOpacity>
@@ -433,9 +435,9 @@ export default function BandLimitEditor(p: Props) {
         <TouchableOpacity onPress={() => setLockNext(v => !v)}
           style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 }}>
           <View style={{ width: 18, height: 18, borderRadius: 4, borderWidth: 1,
-                         borderColor: lockNext ? p.C.green : p.C.border,
-                         backgroundColor: lockNext ? `${p.C.green}55` : 'transparent' }} />
-          <Text style={{ color: p.C.gold, fontFamily: p.F, fontSize: 12, flex: 1 }}>
+                         borderColor: lockNext ? p.C.keyBorderAct : p.C.border,
+                         backgroundColor: lockNext ? p.C.fill : 'transparent' }} />
+          <Text style={{ color: p.C.text, fontFamily: p.F, fontSize: 12, flex: 1 }}>
             Lock this band — the ceiling is the SETTING, not a limit
           </Text>
         </TouchableOpacity>
@@ -445,9 +447,9 @@ export default function BandLimitEditor(p: Props) {
           <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>Split</Text>
           <Slider style={{ flex: 1 }} minimumValue={0} maximumValue={100} step={5}
             value={splitNext} onValueChange={(v: number) => setSplitNext(Math.round(v))}
-            minimumTrackTintColor={p.C.gold} maximumTrackTintColor="rgba(255,255,255,0.25)"
-            thumbTintColor={p.C.gold} />
-          <Text style={{ color: p.C.amber, fontFamily: p.F, fontSize: 12, minWidth: 96,
+            minimumTrackTintColor={p.C.fill} maximumTrackTintColor={p.C.trackOff}
+            thumbTintColor={p.C.thumb} />
+          <Text style={{ color: p.C.text, fontFamily: p.F, fontSize: 12, minWidth: 96,
                          textAlign: 'right' }}>
             {splitNext}% LNA / {100 - splitNext}% VGA
           </Text>
@@ -464,12 +466,12 @@ export default function BandLimitEditor(p: Props) {
           {rows.map(e => (
             <TouchableOpacity key={e} onPress={() => remove(e)}
               style={{ borderWidth: 1, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12,
-                       borderColor: p.C.green, backgroundColor: `${p.C.green}18`,
+                       borderColor: p.C.keyBorderAct, backgroundColor: p.C.keyBgAct,
                        flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Text style={{ color: p.C.green, fontFamily: p.F, fontSize: 12 }}>{label(e)}</Text>
+              <Text style={{ color: p.C.keyAct, fontFamily: p.F, fontSize: 12 }}>{label(e)}</Text>
               {/* ★ The × is the whole hit target's job — see se_display_zoom_narrowest_layout:
                     a clipped × is a trap, so the row itself removes rather than a tiny glyph. */}
-              <Text style={{ color: p.C.textDim, fontFamily: p.F, fontSize: 12 }}>×</Text>
+              <Text style={{ color: p.C.keyDim, fontFamily: p.F, fontSize: 12 }}>×</Text>
             </TouchableOpacity>
           ))}
         </View>

@@ -28,7 +28,7 @@
 import React, { useRef } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '../contexts/ThemeContext';
-import { useRepeatingKeys, noteTouchInteraction, NAV_FOCUS } from './PanelNav';
+import { useRepeatingKeys, noteTouchInteraction } from './PanelNav';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
   PopupKey, PopupPlate, PopupScrim, PopupWindow, POPUP_FONT, type PopupTokens,
@@ -147,7 +147,7 @@ export default function KeyboardShortcuts({ visible, onClose }: {
            supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
       {/* ★★★ Transparency OFF: the tap-to-close view stays, the dim goes. */}
       <PopupScrim style={s.backdrop} color="rgba(0,0,0,0.6)" onPress={onClose} onTouchStart={noteTouchInteraction} />
-      <View style={[s.card, { borderColor: t.barBorder }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(CARD_BG) },
+      <View style={[s.card, { borderColor: pt.ink.border }, surf.opaque && !pt.metal && { backgroundColor: surf.fill(CARD_BG) },
                     metalFrame]} onTouchStart={noteTouchInteraction}>
         <PopupPlate radius={16} />
         <View style={s.head}>
@@ -204,21 +204,23 @@ const makeS = (pt: PopupTokens) => StyleSheet.create({
   head: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingVertical: 10,
-    ...(pt.metal ? { borderBottomWidth: 0 } : { borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.12)' }),
+    ...(pt.metal ? { borderBottomWidth: 0 } : { borderBottomWidth: 1, borderBottomColor: pt.ink.divider }),
   },
-  title: onMetal(pt, { color: NAV_FOCUS, fontSize: 13, letterSpacing: 3, fontWeight: '700' }, engraveText(pt)),
-  hint:  onMetal(pt, { color: 'rgba(255,255,255,0.55)', fontSize: 10, letterSpacing: 0.5 }, engraveText(pt, pt.note)),
+  /* ★★ Default chassis in the user's colours (Stuart, 2026-10-12: "yes colours apply everywhere"): the title,
+   *  headings and reading matter in the TEXT colour (they were focus green / white), CLOSE in the CONTROLS colour. */
+  title: onMetal(pt, { color: pt.ink.text, fontSize: 13, letterSpacing: 3, fontWeight: '700' }, engraveText(pt)),
+  hint:  onMetal(pt, { color: pt.ink.textDim, fontSize: 10, letterSpacing: 0.5 }, engraveText(pt, pt.note)),
   bodyWrap: { flex: 1 },
   bodyWin:  { marginHorizontal: 10 },
   body:  { flex: 1, paddingHorizontal: 14 },
   sec:   { marginTop: 16 },
   // Sections are titled and spaced rather than ruled: this is read straight through, and a
   // divider every few lines makes a reference feel like a form.
-  secTitle: onMetal(pt, { color: NAV_FOCUS, fontSize: 11, letterSpacing: 2, marginBottom: 6 }, { color: pt.readout }),
-  para:  { color: 'rgba(255,255,255,0.88)', fontSize: 13, lineHeight: 20, marginBottom: 8 },
+  secTitle: onMetal(pt, { color: pt.ink.section, fontSize: 11, letterSpacing: 2, marginBottom: 6 }, { color: pt.readout }),
+  para:  { color: pt.metal ? 'rgba(255,255,255,0.88)' : pt.ink.textSoft, fontSize: 13, lineHeight: 20, marginBottom: 8 },
   closeBtn: {
-    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.12)',
+    borderTopWidth: 1, borderTopColor: pt.ink.divider,
     paddingVertical: 14, alignItems: 'center',
   },
-  closeTxt: { color: NAV_FOCUS, fontSize: 12, letterSpacing: 2, fontWeight: '700' },
+  closeTxt: { color: pt.gold.close, fontSize: 12, letterSpacing: 2, fontWeight: '700' },
 });

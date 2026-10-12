@@ -207,6 +207,8 @@ import { crumb } from '../services/crumbs';
 import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
+import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
+import { meaningText } from '../constants/decoderTokens';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -538,6 +540,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ How a recording made here is filed in Recordings: the server's name, else its host. */
   const recServerName = instanceName || String(baseUrl ?? '').replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
   useKeepAwake();
+  /* ★★ THE CARDS AND PAGES THIS SCREEN DRAWS ITSELF TAKE THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours
+   *   apply everywhere including directory if possible"): the radio picker, the refusal / admin cards, the
+   *   connection-lost cards, the listen-only notice and the tour's mock menus. Text in the TEXT colour, keys and
+   *   borders in the CONTROLS colour, waits and warnings in the fixed busy amber (white on amber / neon text).
+   *   useGlassTheme: these are dark glass on every chassis, never plated. Built once per setting (sdrMenuStyles). */
+  const gt = useGlassTheme();
+  const sdrMs = sdrMenuStyles(gt);
 
   // ── A MULTI-RADIO SERVER: WHICH RADIO? ────────────────────────────────────────────────────
   //
@@ -9940,21 +9949,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   // expanding the real chip (keeps the coachmark self-contained). This is the
   // control that fixes the "I can't find the exit" feedback, so it gets the
   // illustration the menu step used to have.
+  // ★ The tour's mock menus are drawn in the user's colours, as the real menus they stand for are (2026-10-12).
   const chipMock = (
-    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)', backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 5, minWidth: 200 }}>
+    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: gt.ink.border, backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 5, minWidth: 200 }}>
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
-        <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>‹  Back to server list</Text>
+        <Text style={{ color: gt.ink.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>‹  Back to server list</Text>
       </View>
-      <View style={{ height: 1, backgroundColor: 'rgba(255,160,0,0.5)', marginHorizontal: 8 }} />
+      <View style={{ height: 1, backgroundColor: gt.ink.divider, marginHorizontal: 8 }} />
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
-        <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>♡  Favourite this server</Text>
+        <Text style={{ color: gt.ink.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>♡  Favourite this server</Text>
       </View>
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
-        <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>☆  Set as default</Text>
+        <Text style={{ color: gt.ink.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>☆  Set as default</Text>
       </View>
-      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,160,0,0.22)', marginHorizontal: 8 }} />
+      <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: gt.ink.divider, marginHorizontal: 8 }} />
       <View style={{ paddingVertical: 8, paddingHorizontal: 11 }}>
-        <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>↻  Connection Refresh</Text>
+        <Text style={{ color: gt.ink.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>↻  Connection Refresh</Text>
       </View>
     </View>
   );
@@ -9965,33 +9975,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   //   one (see Coachmark.tsx). So they are illustrated, like the servers chip.
   const rowMock = (label: string, a: string, b: string, aActive: boolean) => (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
-      <Text style={{ color: 'rgba(255,184,51,0.65)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
+      <Text style={{ color: gt.ink.section, fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
                      letterSpacing: 0.6, width: 46 }}>{label}</Text>
       {[a, b].map((t, i) => (
         <View key={t} style={{
           paddingVertical: 4, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1,
-          borderColor: (i === 0) === aActive ? 'rgba(255,160,0,0.9)' : 'rgba(255,160,0,0.28)',
-          backgroundColor: (i === 0) === aActive ? 'rgba(255,160,0,0.18)' : 'transparent' }}>
-          <Text style={{ color: (i === 0) === aActive ? '#ffb833' : 'rgba(255,184,51,0.5)',
+          borderColor: (i === 0) === aActive ? gt.gold.selBorder : gt.ink.keyBorder,
+          backgroundColor: (i === 0) === aActive ? gt.ink.keyBgAct : 'transparent' }}>
+          <Text style={{ color: (i === 0) === aActive ? gt.gold.sel : gt.ink.key,
                          fontFamily: 'Atkinson Hyperlegible', fontSize: 12 }}>{t}</Text>
         </View>
       ))}
     </View>
   );
   const schemeMock = (
-    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)',
+    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: gt.ink.border,
                    backgroundColor: 'rgba(14,10,4,0.94)', padding: 10, minWidth: 200 }}>
-      <Text style={{ color: 'rgba(255,184,51,0.75)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
+      <Text style={{ color: gt.ink.section, fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
                      letterSpacing: 1 }}>CONTROL CUSTOMISATION</Text>
       {rowMock('TUNE', 'DRUM', 'KEYS', true)}
       {rowMock('ZOOM', 'DRUM', 'KEYS', true)}
     </View>
   );
   const keysMock = (
-    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: 'rgba(255,160,0,0.85)',
+    <View style={{ borderRadius: 10, borderWidth: 1.2, borderColor: gt.ink.border,
                    backgroundColor: 'rgba(14,10,4,0.94)', paddingVertical: 9, paddingHorizontal: 12,
                    minWidth: 200 }}>
-      <Text style={{ color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>
+      <Text style={{ color: gt.ink.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, letterSpacing: 0.3 }}>
         ⌨  KEYBOARD SHORTCUTS
       </Text>
     </View>
@@ -10131,23 +10141,23 @@ export default function SDRScreen({ route, navigation }: Props) {
             accessibilityLabel="Back to the server list"
             style={[styles.radioPickBack, { top: insets.top + 10, left: Math.max(14, insets.left + 10) }]}
           >
-            <Text style={styles.radioPickBackTxt}>‹ SERVERS</Text>
+            <Text style={sdrMs.radioPickBackTxt}>‹ SERVERS</Text>
           </TouchableOpacity>
-          <Text style={styles.radioPickTitle}>{door.name}</Text>
-          <Text style={styles.radioPickSub}>Choose a receiver</Text>
+          <Text style={sdrMs.radioPickTitle}>{door.name}</Text>
+          <Text style={sdrMs.radioPickSub}>Choose a receiver</Text>
           {/* ★★★ THE OWNER'S STANDING MESSAGE. Donation link, house rules, "5 fps idle is
               normal" — the things that stop a correct-but-unexplained receiver reading as a
               broken one. The browser's landing page has carried it since 2026-08-19 and the app
               showed nothing, so an operator writing it reached only half their visitors.
               ★ NOT the transient notice: this one never expires and is not dismissed. */}
           {!!door.landingMessage && (
-            <Text style={styles.radioPickMsg}>{door.landingMessage}</Text>
+            <Text style={sdrMs.radioPickMsg}>{door.landingMessage}</Text>
           )}
           {/* ★★ http(s) ONLY (security, 2026-10-03): this is opened by the OS, and a server must not be able
               to hand us tel:, sms: or another app's scheme. Checked where it arrives AND here. */}
           {!!door.landingLinkUrl && !!safeUrl(door.landingLinkUrl, HTTP_SCHEMES) && (
             <Text
-              style={styles.radioPickLink}
+              style={sdrMs.radioPickLink}
               onPress={() => Linking.openURL(safeUrl(door.landingLinkUrl, HTTP_SCHEMES)).catch(() => {})}
             >
               {door.landingLinkLabel || door.landingLinkUrl}
@@ -10202,7 +10212,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             return (
               <Pressable
                 key={r.id}
-                style={[styles.radioPickRow, blocked && { opacity: 0.45 }]}
+                style={[sdrMs.radioPickRow, blocked && { opacity: 0.45 }]}
                 disabled={blocked}
                 onPress={() => {
                   // ★★ Choosing a radio the picker has just labelled IN USE, with the password
@@ -10226,9 +10236,9 @@ export default function SDRScreen({ route, navigation }: Props) {
                 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Text style={[styles.radioPickName, { flexShrink: 1 }]}>{r.label}</Text>
+                  <Text style={[sdrMs.radioPickName, { flexShrink: 1 }]}>{r.label}</Text>
                   {unsupported && (
-                    <Text style={styles.radioPickBusy}>UNSUPPORTED SDR — UPDATE VIBESDR</Text>
+                    <Text style={sdrMs.radioPickBusy}>UNSUPPORTED SDR — UPDATE VIBESDR</Text>
                   )}
                   {/* ★ The official DAB+ logo, only beside a receiver whose own status says it can decode DAB.
                       See assets/branding/dabplus/README.md — unaltered, and never under 32 px. */}
@@ -10240,19 +10250,19 @@ export default function SDRScreen({ route, navigation }: Props) {
                       invites the tap it is there to prevent, and whether anyone is listening is
                       not the listener's problem on a radio they cannot enter at all. */}
                   {inUseApp && (
-                    <Text style={styles.radioPickBusy}>IN USE BY ANOTHER APP</Text>
+                    <Text style={sdrMs.radioPickBusy}>IN USE BY ANOTHER APP</Text>
                   )}
                   {!inUseApp && gated && (
-                    <Text style={styles.radioPickBusy}>PIN REQUIRED</Text>
+                    <Text style={sdrMs.radioPickBusy}>PIN REQUIRED</Text>
                   )}
                   {!inUseApp && !gated && radioBusy[r.id]?.busy === true && (
-                    <Text style={styles.radioPickBusy}>IN USE</Text>
+                    <Text style={sdrMs.radioPickBusy}>IN USE</Text>
                   )}
                   {!inUseApp && !gated && radioBusy[r.id]?.busy === false && (
-                    <Text style={styles.radioPickFree}>FREE</Text>
+                    <Text style={sdrMs.radioPickFree}>FREE</Text>
                   )}
                 </View>
-                <Text style={styles.radioPickDetail}>
+                <Text style={sdrMs.radioPickDetail}>
                   {describeRadio(r)}
                   {radioBusy[r.id]?.busy && radioBusy[r.id]!.freeInSec > 0
                     ? ` · free in ${Math.ceil(radioBusy[r.id]!.freeInSec / 60)} min`
@@ -10274,7 +10284,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                     1.7 GHz above "YouLoop, 10 kHz – 300 MHz" tells a listener something neither
                     line says alone. */}
                 {!!r.antenna && (
-                  <Text style={styles.radioPickAnt} numberOfLines={2}>{`\u2191 ${r.antenna}`}</Text>
+                  <Text style={sdrMs.radioPickAnt} numberOfLines={2}>{`\u2191 ${r.antenna}`}</Text>
                 )}
               </Pressable>
             ); })}
@@ -10300,7 +10310,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           {!adminAuthQ && door.radios.some((r) => r.pinLocked === true && !unlockedRadios[r.id]) && (
             <View style={styles.radioPickAdmin}>
               <TextInput
-                style={styles.radioPickAdminInput}
+                style={sdrMs.radioPickAdminInput}
                 value={radioPin}
                 /* ★★★ DIGITS ONLY, FILTERED AS THEY TYPE. A PIN is numbers — the setup page and
                  *  the wizard both store digits only now — so a keypad is the right keyboard and
@@ -10308,7 +10318,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                  *  dropped rather than sent to be rejected. */
                 onChangeText={(t) => { setRadioPin(t.replace(/[^0-9]/g, '')); setRadioPinBad(false); }}
                 placeholder="PIN for a locked receiver"
-                placeholderTextColor="#7a7a7a"
+                placeholderTextColor={gt.ink.textFaint}
                 secureTextEntry
                 keyboardType="number-pad"
                 autoCapitalize="none"
@@ -10319,11 +10329,11 @@ export default function SDRScreen({ route, navigation }: Props) {
                 onSubmitEditing={() => { void doRadioPinUnlock(); }}
               />
               <TouchableOpacity
-                style={styles.radioPickAdminBtn}
+                style={sdrMs.radioPickAdminBtn}
                 disabled={!radioPin || radioPinBusy}
                 onPress={() => { void doRadioPinUnlock(); }}
               >
-                <Text style={styles.radioPickAdminBtnText}>
+                <Text style={sdrMs.radioPickAdminBtnText}>
                   {radioPinBusy ? '…' : 'UNLOCK'}
                 </Text>
               </TouchableOpacity>
@@ -10334,17 +10344,17 @@ export default function SDRScreen({ route, navigation }: Props) {
                 this one, try another": a box that narrows the answer tells a stranger how many
                 PINs this machine has and which card each one fits. A wrong code, a code for
                 somebody else's machine and a door that did not answer all read the same. */
-            <Text style={styles.radioPickAdminBad}>
+            <Text style={sdrMs.radioPickAdminBad}>
               That PIN does not open anything here.
             </Text>
           )}
           <View style={styles.radioPickAdmin}>
             <TextInput
-              style={styles.radioPickAdminInput}
+              style={sdrMs.radioPickAdminInput}
               value={adminPickPw}
               onChangeText={(t) => { setAdminPickPw(t); setAdminPickBad(false); }}
               placeholder="Admin password (optional)"
-              placeholderTextColor="#7a7a7a"
+              placeholderTextColor={gt.ink.textFaint}
               secureTextEntry
               autoCapitalize="none"
               autoCorrect={false}
@@ -10354,17 +10364,17 @@ export default function SDRScreen({ route, navigation }: Props) {
               onSubmitEditing={() => { void doPickerUnlock(); }}
             />
             <TouchableOpacity
-              style={styles.radioPickAdminBtn}
+              style={sdrMs.radioPickAdminBtn}
               disabled={!adminPickPw || adminPickBusy}
               onPress={() => { void doPickerUnlock(); }}
             >
-              <Text style={styles.radioPickAdminBtnText}>
+              <Text style={sdrMs.radioPickAdminBtnText}>
                 {adminAuthQ ? 'ADMIN ✓' : adminPickBusy ? '…' : 'UNLOCK'}
               </Text>
             </TouchableOpacity>
           </View>
           {adminPickBad && (
-            <Text style={styles.radioPickAdminBad}>
+            <Text style={sdrMs.radioPickAdminBad}>
               That did not unlock — wrong password, or the server did not answer.
             </Text>
           )}
@@ -10502,9 +10512,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                         // WEFAX up, and got booted with no notice at all (2026-07-31). A message
                         // about losing the connection must outrank the content it is about.
                         zIndex: 240,
-                        borderColor: 'rgba(255,160,0,0.55)' }]}>
+                        // ★ A status update — the fixed busy amber (white on amber / neon text), 2026-10-12.
+                        borderColor: gt.ink.busy }]}>
           {/* ★ Standard font, not the display's (Stuart 2026-10-06: "only the main controls and VTS need this"). */}
-          <Text style={[styles.powersavePillText, { color: 'rgba(255,190,110,0.95)' }]}>
+          <Text style={[styles.powersavePillText, { color: gt.ink.busy }]}>
             {`\u23F1  This receiver disconnects idle listeners after ${
               serverIdleSecs % 60 === 0 ? `${serverIdleSecs / 60} min` : `${serverIdleSecs}s`
             } \u2014 it will ask first`}
@@ -10524,13 +10535,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       {idleWarnLeftMs !== null ? (
         <View pointerEvents="box-none"
               style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', zIndex: 240 }]}>
-          <View style={styles.stillHereCard}>
-            <Text style={styles.stillHereTitle}>STILL LISTENING?</Text>
-            <Text style={styles.stillHereBody}>
+          {/* ★★ 2026-10-12 colour rule: the card's edge and title are the busy amber (a warning — white on amber /
+              neon text), the sentence is the TEXT colour, the answer is a KEY in the CONTROLS colour. */}
+          <View style={[styles.stillHereCard, { borderColor: gt.ink.busy }]}>
+            <Text style={[styles.stillHereTitle, { color: gt.ink.busy }]}>STILL LISTENING?</Text>
+            <Text style={[styles.stillHereBody, { color: gt.ink.text }]}>
               {`This receiver disconnects idle listeners so others can have a turn.\nYou will be disconnected in ${Math.ceil(idleWarnLeftMs / 1000)}s.`}
             </Text>
-            <TouchableOpacity activeOpacity={0.8} onPress={markInteract} style={styles.stillHereBtn}>
-              <Text style={styles.stillHereBtnTxt}>YES, I'M HERE</Text>
+            <TouchableOpacity activeOpacity={0.8} onPress={markInteract}
+                              style={[styles.stillHereBtn, { borderColor: gt.gold.selBorder, backgroundColor: gt.ink.keyBgAct }]}>
+              <Text style={[styles.stillHereBtnTxt, { color: gt.gold.sel }]}>YES, I'M HERE</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -10636,27 +10650,27 @@ export default function SDRScreen({ route, navigation }: Props) {
                         : 'SDR';
         return (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>{lostLabel} server stopped responding</Text>
-            <Text style={styles.serverLostBody}>{isKiwiProtocol(route.params.serverType)
+          <View style={sdrMs.serverLostCard}>
+            <Text style={sdrMs.serverLostTitle}>{lostLabel} server stopped responding</Text>
+            <Text style={sdrMs.serverLostBody}>{isKiwiProtocol(route.params.serverType)
               ? `The receiver dropped the connection. ${lostLabel} owners with few slots often restrict access: some allow only their own web page, so apps like VibeSDR are refused the moment they connect; some block broadcast / commercial bands and disconnect you when you tune there. If reconnecting drops the same way it's likely an owner restriction — try another receiver. Otherwise it may just be busy or restarting: wait a minute and reconnect.`
               : `The receiver dropped the connection — ${lostLabel} servers restart from time to time. Please wait a minute, then reconnect — or pick another from the list.`}</Text>
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
+                <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
+              <TouchableOpacity style={sdrMs.serverLostBtn}
                 onPress={() => { setServerLost(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
+                <Text style={sdrMs.serverLostBtnText}>RECONNECT</Text>
               </TouchableOpacity>
             </View>
             {/* A Kiwi that keeps kicking a connected user still lets them reach compatibility mode —
                 otherwise unreachable, since the initial-refusal card never shows once it connects. */}
             {isKiwiProtocol(route.params.serverType) && (
-              <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
                 onPress={() => { setServerLost(false); setCompatWarn(true); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
+                <Text style={sdrMs.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -10674,9 +10688,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}>
           <View style={{
             marginTop: 6, paddingHorizontal: 12, paddingVertical: 5, borderRadius: 6,
-            backgroundColor: 'rgba(0,0,0,0.75)', borderWidth: 1, borderColor: '#ffb84d',
+            backgroundColor: 'rgba(0,0,0,0.75)', borderWidth: 1, borderColor: gt.ink.busy,
           }}>
-            <Text style={{ color: '#ffb84d', fontSize: 12, textAlign: 'center' }}>
+            {/* ★ Busy amber is a MEANING (someone else has the dial) — white on amber / neon text. */}
+            <Text style={{ color: gt.ink.busy, fontSize: 12, textAlign: 'center' }}>
               Listen-only — another user is controlling this receiver
             </Text>
           </View>
@@ -10685,22 +10700,22 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {!kiwiRefused && serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Receiver unavailable</Text>
-            <Text style={styles.serverLostBody}>This {rxLabel} has no free channel for you right now — it may be full, or its channels may be password-protected or limited to local users (the directory's user count can be out of date). Pick another receiver, or try again shortly.</Text>
+          <View style={sdrMs.serverLostCard}>
+            <Text style={sdrMs.serverLostTitle}>Receiver unavailable</Text>
+            <Text style={sdrMs.serverLostBody}>This {rxLabel} has no free channel for you right now — it may be full, or its channels may be password-protected or limited to local users (the directory's user count can be out of date). Pick another receiver, or try again shortly.</Text>
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
+                <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
+              <TouchableOpacity style={sdrMs.serverLostBtn}
                 onPress={() => { setServerBusy(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RETRY</Text>
+                <Text style={sdrMs.serverLostBtnText}>RETRY</Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
+            <TouchableOpacity style={[sdrMs.serverLostBtn, { alignSelf: 'stretch', marginTop: 8 }]}
               onPress={() => { setServerBusy(false); setCompatWarn(true); }} activeOpacity={0.85}>
-              <Text style={styles.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
+              <Text style={sdrMs.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -10709,21 +10724,21 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* KiwiSDR refused the connection — our own card, three choices. */}
       {kiwiRefused && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
-            <Text style={styles.serverLostBody}>{kiwiRefused}</Text>
+          <View style={sdrMs.serverLostCard}>
+            <Text style={sdrMs.serverLostTitle}>Couldn’t connect</Text>
+            <Text style={sdrMs.serverLostBody}>{kiwiRefused}</Text>
             <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt, { alignSelf: 'stretch' }]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt, { alignSelf: 'stretch' }]}
                 onPress={() => { clearKiwiRefused(); navigation.goBack(); }} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>BACK TO SERVER LIST</Text>
+                <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>BACK TO SERVER LIST</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, { alignSelf: 'stretch' }]}
                 onPress={() => { clearKiwiRefused(); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>TRY AGAIN</Text>
+                <Text style={sdrMs.serverLostBtnText}>TRY AGAIN</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.serverLostBtn, { alignSelf: 'stretch' }]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, { alignSelf: 'stretch' }]}
                 onPress={() => { clearKiwiRefused(); setCompatWarn(true); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
+                <Text style={sdrMs.serverLostBtnText}>OPEN IN COMPATIBILITY MODE</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -10733,13 +10748,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Warning before opening the receiver's own web UI in compatibility mode. */}
       {compatWarn && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Open in compatibility mode?</Text>
-            <Text style={styles.serverLostBody}>This opens the {rxLabel}’s OWN web interface inside VibeSDR — you’ll use the receiver’s native controls and layout, not VibeSDR’s. The advanced VibeSDR features won’t apply here: no background audio, no recording, no lock-screen or Apple Watch playback, and none of VibeSDR’s waterfall or audio controls. Tap “← VibeSDR” at the top to come back.</Text>
+          <View style={sdrMs.serverLostCard}>
+            <Text style={sdrMs.serverLostTitle}>Open in compatibility mode?</Text>
+            <Text style={sdrMs.serverLostBody}>This opens the {rxLabel}’s OWN web interface inside VibeSDR — you’ll use the receiver’s native controls and layout, not VibeSDR’s. The advanced VibeSDR features won’t apply here: no background audio, no recording, no lock-screen or Apple Watch playback, and none of VibeSDR’s waterfall or audio controls. Tap “← VibeSDR” at the top to come back.</Text>
             <View style={{ gap: 8, marginTop: 4, alignSelf: 'stretch' }}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt, { alignSelf: 'stretch' }]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt, { alignSelf: 'stretch' }]}
                 onPress={() => { setCompatWarn(false); navigation.goBack(); }} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>CANCEL</Text>
+                <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>CANCEL</Text>
               </TouchableOpacity>
               {/* ★★ GREYED WHILE A KEYBOARD IS IN USE (Stuart). Compatibility mode is the
                   receiver's OWN web page, where none of our shortcuts apply and we cannot know
@@ -10750,7 +10765,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                   to find, no mode to leave — the gesture that would use it is the gesture that
                   unlocks it. */}
               <TouchableOpacity
-                style={[styles.serverLostBtn, { alignSelf: 'stretch' }, kbInUse && { opacity: 0.4 }]}
+                style={[sdrMs.serverLostBtn, { alignSelf: 'stretch' }, kbInUse && { opacity: 0.4 }]}
                 onPress={() => {
                   if (kbInUse) { noteTouchInteraction(); return; }   // first tap: back to touch
                   setCompatWarn(false);
@@ -10769,10 +10784,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                   if (!/^https?:\/\//.test(u)) u = 'http://' + u;
                   setCompatUrl(u + '/');
                 }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>CONTINUE</Text>
+                <Text style={sdrMs.serverLostBtnText}>CONTINUE</Text>
               </TouchableOpacity>
               {kbInUse && (
-                <Text style={[styles.serverLostBody, { fontSize: 11, textAlign: 'center' }]}>
+                <Text style={[sdrMs.serverLostBody, { fontSize: 11, textAlign: 'center' }]}>
                   Blocked while you are using a keyboard: this is the receiver's own page, and we
                   cannot guarantee whether or how a keyboard will work on it. Tap CONTINUE to
                   switch back to touch.
@@ -10806,12 +10821,12 @@ export default function SDRScreen({ route, navigation }: Props) {
           clears itself on the first frame, or escalates to "Connection lost"). */}
       {!kiwiRefused && reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Reinitialising</Text>
-            <Text style={styles.serverLostBody}>
+          <View style={sdrMs.serverLostCard}>
+            <Text style={sdrMs.serverLostTitle}>Reinitialising</Text>
+            <Text style={sdrMs.serverLostBody}>
               Resuming the waterfall and spectrum — this takes a second or two…
             </Text>
-            <ActivityIndicator color="#ffb84d" style={{ marginBottom: 4 }} />
+            <ActivityIndicator color={gt.ink.busy} style={{ marginBottom: 4 }} />
           </View>
         </View>
       )}
@@ -10820,19 +10835,19 @@ export default function SDRScreen({ route, navigation }: Props) {
           a background — give the user an escape (the rest of the app is alive). */}
       {!kiwiRefused && specFailed && !reinit && !connLost && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Waterfall didn’t resume</Text>
-            <Text style={styles.serverLostBody}>
+          <View style={sdrMs.serverLostCard}>
+            <Text style={sdrMs.serverLostTitle}>Waterfall didn’t resume</Text>
+            <Text style={sdrMs.serverLostBody}>
               Audio is still running, but the waterfall and spectrum didn’t restart. Reconnect to restore them, or pick another server.
             </Text>
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
+                <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
+              <TouchableOpacity style={sdrMs.serverLostBtn}
                 onPress={() => { setSpecFailed(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
+                <Text style={sdrMs.serverLostBtnText}>RECONNECT</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -10841,20 +10856,20 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {!kiwiRefused && connLost && !reinit && !specFailed && !dataSaverOff && !serverLost && !serverBusy && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Connection lost</Text>
-            <Text style={styles.serverLostBody}>
+          <View style={sdrMs.serverLostCard}>
+            <Text style={sdrMs.serverLostTitle}>Connection lost</Text>
+            <Text style={sdrMs.serverLostBody}>
               Lost connection to {instanceName || 'the server'} — trying to reconnect…
             </Text>
-            <ActivityIndicator color="#ffb84d" style={{ marginBottom: 14 }} />
+            <ActivityIndicator color={gt.ink.busy} style={{ marginBottom: 14 }} />
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
+                <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
+              <TouchableOpacity style={sdrMs.serverLostBtn}
                 onPress={() => { setConnLost(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RECONNECT</Text>
+                <Text style={sdrMs.serverLostBtnText}>RECONNECT</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -10865,9 +10880,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           the app can never be permanently stuck on the connecting spinner. */}
       {!kiwiRefused && connTimedOut && !connected && !serverLost && !serverBusy && !connLost && !dataSaverOff && (
         <View style={styles.serverLostWrap} pointerEvents="box-none">
-          <View style={styles.serverLostCard}>
-            <Text style={styles.serverLostTitle}>Couldn’t connect</Text>
-            <Text style={styles.serverLostBody}>
+          <View style={sdrMs.serverLostCard}>
+            <Text style={sdrMs.serverLostTitle}>Couldn’t connect</Text>
+            <Text style={sdrMs.serverLostBody}>
               No response from {instanceName || 'the receiver'}. {route.params.isLocal
                 ? 'Check the SDR is plugged in and try again, or pick another server.'
                 : isKiwi
@@ -10875,13 +10890,13 @@ export default function SDRScreen({ route, navigation }: Props) {
                   : 'It may be offline or unreachable — try again or pick another server.'}
             </Text>
             <View style={styles.serverLostBtnRow}>
-              <TouchableOpacity style={[styles.serverLostBtn, styles.serverLostBtnAlt]}
+              <TouchableOpacity style={[sdrMs.serverLostBtn, sdrMs.serverLostBtnAlt]}
                 onPress={() => navigation.goBack()} activeOpacity={0.85}>
-                <Text style={[styles.serverLostBtnText, styles.serverLostBtnAltText]}>SERVER LIST</Text>
+                <Text style={[sdrMs.serverLostBtnText, sdrMs.serverLostBtnAltText]}>SERVER LIST</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.serverLostBtn}
+              <TouchableOpacity style={sdrMs.serverLostBtn}
                 onPress={() => { setConnTimedOut(false); fullReconnect(); }} activeOpacity={0.85}>
-                <Text style={styles.serverLostBtnText}>RETRY</Text>
+                <Text style={sdrMs.serverLostBtnText}>RETRY</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -11131,6 +11146,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (n == null || n <= 1 || sharedDialProp || boxHidesVts) return null;
         return (
           <View pointerEvents="none" style={[styles.rxListeners, {
+            // ★ Information, not a key or a warning: TEXT colour (.92 — .80 measured 4.4:1 in blue / red), the edge in the CONTROLS colour (2026-10-12).
+            borderColor: gt.ink.border,
             top: rightStackTop + healthStackShift
                  + (sessionEndsAt != null && !adminOk ? 52 : 0),
             right: rightInset,
@@ -11140,7 +11157,7 @@ export default function SDRScreen({ route, navigation }: Props) {
                    the web client has always shown. maxUsers was already being parsed here and
                    thrown away. Only when the receiver takes more than one: on an exclusive radio
                    "1 listening of 1" is noise. */}
-            <Text style={styles.rxListenersTxt}>
+            <Text style={[styles.rxListenersTxt, { color: gt.ink.textSoft }]}>
               {occMaxUsers > 1 ? `${n} listening of ${occMaxUsers}`
                                : (n === 1 ? '1 listening' : `${n} listening`)}
             </Text>
@@ -11163,12 +11180,12 @@ export default function SDRScreen({ route, navigation }: Props) {
            night to the VTS too so we arent inventing new popups." It still lands at the bottom by
            the tuning controls, because that is where the VTS bar already is. */}
       {!!adminNote && !boxHidesVts && (
-        <View pointerEvents="none" style={[styles.adminNote, {
+        <View pointerEvents="none" style={[sdrMs.adminNote, {
           top: rightStackTop + healthStackShift,
           left: Math.max(12, insets.left + 8),
           right: rightInset,
         }]}>
-          <Text style={styles.adminNoteTxt}>{adminNote}</Text>
+          <Text style={sdrMs.adminNoteTxt}>{adminNote}</Text>
         </View>
       )}
 
@@ -11504,10 +11521,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       <Modal visible={!!refusal} transparent animationType="fade"
              onRequestClose={() => { setRefusal(null); navigation.goBack(); }}>
         <View style={styles.noticeBackdrop}>
-          <View style={styles.noticeCard}>
-            <Text style={styles.noticeTitle}>{refusal?.title ?? ''}</Text>
-            <Text style={styles.noticeBody}>{refusal?.body ?? ''}</Text>
-            <Text style={styles.noticeItem}>{refusal?.note ?? ''}</Text>
+          <View style={sdrMs.noticeCard}>
+            <Text style={sdrMs.noticeTitle}>{refusal?.title ?? ''}</Text>
+            <Text style={sdrMs.noticeBody}>{refusal?.body ?? ''}</Text>
+            <Text style={sdrMs.noticeItem}>{refusal?.note ?? ''}</Text>
             {/* ★★★ ADMIN TAKEOVER — and it MUST ride the CONNECT URL, not a socket message.
                 The phone's only admin box was LocalHardwarePanel's, which sends `admin_unlock`
                 over an OPEN socket: that unlocks protected settings on a session you already
@@ -11518,29 +11535,29 @@ export default function SDRScreen({ route, navigation }: Props) {
                 ★ The password itself never crosses the link: HMAC over a server-issued nonce. */}
             {refusal?.title === 'IN USE' && (
               <>
-                <Text style={styles.noticeItem}>
+                <Text style={sdrMs.noticeItem}>
                   If this is your receiver, enter its admin password to take it back.
                 </Text>
                 <TextInput
                   value={takeoverPwState} onChangeText={setTakeoverPw}
-                  placeholder="Admin password" placeholderTextColor="rgba(255,160,0,0.35)"
+                  placeholder="Admin password" placeholderTextColor={gt.ink.textFaint}
                   secureTextEntry autoCapitalize="none" autoCorrect={false}
-                  style={styles.noticeInput}
+                  style={sdrMs.noticeInput}
                   // ★★ RETURN TAKES OVER — the same fix as the picker's box, for the same reason:
                   //    an unhandled Return leaves the field and reaches the global shortcut layer.
                   returnKeyType="go"
                   onSubmitEditing={() => { void doTakeover(); }}
                 />
-                <TouchableOpacity style={styles.noticeBtn} disabled={!takeoverPwState}
+                <TouchableOpacity style={sdrMs.noticeBtn} disabled={!takeoverPwState}
                   onPress={() => { void doTakeover(); }}>
-                  <Text style={[styles.noticeBtnTxt, !takeoverPwState && { opacity: 0.4 }]}>
+                  <Text style={[sdrMs.noticeBtnTxt, !takeoverPwState && { opacity: 0.4 }]}>
                     TAKE OVER
                   </Text>
                 </TouchableOpacity>
-                {!!takeoverErr && <Text style={styles.noticeItem}>{takeoverErr}</Text>}
+                {!!takeoverErr && <Text style={sdrMs.noticeItem}>{takeoverErr}</Text>}
               </>
             )}
-            <TouchableOpacity style={styles.noticeBtn}
+            <TouchableOpacity style={sdrMs.noticeBtn}
               onPress={() => {
                 // ★ TRY AGAIN is the user acting, so the refusal stops being terminal. The replace
                 //   remounts and would reset the ref anyway — clearing it here as well means this
@@ -11549,11 +11566,11 @@ export default function SDRScreen({ route, navigation }: Props) {
                 setRefusal(null);
                 navigation.replace('SDR', route.params);
               }}>
-              <Text style={styles.noticeBtnTxt}>TRY AGAIN</Text>
+              <Text style={sdrMs.noticeBtnTxt}>TRY AGAIN</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.noticeBtn}
+            <TouchableOpacity style={sdrMs.noticeBtn}
               onPress={() => { setRefusal(null); navigation.goBack(); }}>
-              <Text style={styles.noticeBtnTxt}>BACK TO SERVERS</Text>
+              <Text style={sdrMs.noticeBtnTxt}>BACK TO SERVERS</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -12337,19 +12354,16 @@ const styles = StyleSheet.create({
   rxHealth:    { position: 'absolute', zIndex: 210, alignItems: 'flex-end' },
   // ★ Quieter than the countdown beneath it: the clock is about YOU, this is about the room.
   rxListeners: { position: 'absolute', paddingHorizontal: 8, paddingVertical: 3,
-                 borderWidth: 1, borderColor: 'rgba(255,160,0,0.30)', borderRadius: 4 },
-  rxListenersTxt: { color: 'rgba(255,190,90,0.85)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
+                 borderWidth: 1, borderRadius: 4,   // edge + text colours from the glass tokens, in the render
+                 // ★ The clock's own fill beneath it (2026-10-12): the chip's text follows the TEXT colour now, and a red
+                 //   or blue text colour on a bare busy waterfall measured 2.6:1 — the old pale amber got away with it.
+                 backgroundColor: 'rgba(8,6,2,0.72)' },
+  rxListenersTxt: { fontFamily: 'Atkinson Hyperlegible', fontSize: 11,
                     letterSpacing: 1 },
   /* ★ NO gainMinNote/Txt/Sub HERE ANY MORE — the warning became a VTS notice. Left-behind styles
    *  for a deleted element are how a dead reference keeps looking alive: they cost nothing and
    *  read as evidence the thing still exists. (#sqlChip in the web client sat like that for
    *  rounds and got itself written into new code before it was spotted.) */
-  adminNote: {
-    position: 'absolute', zIndex: 40, alignItems: 'center',
-    paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8,
-    backgroundColor: 'rgba(20,14,0,0.92)', borderWidth: 1, borderColor: 'rgba(255,160,0,0.45)',
-  },
-  adminNoteTxt: { color: '#ffb833', fontSize: 12, textAlign: 'center' },
   // ── The multi-radio landing page ────────────────────────────────────────────────────────
   radioPickBackdrop: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 50,
@@ -12358,90 +12372,32 @@ const styles = StyleSheet.create({
   // ★ Absolutely positioned so the title stays optically centred on the screen rather than being
   //   pushed off-centre by a button that only exists on one side.
   radioPickBack:    { position: 'absolute', zIndex: 2, paddingVertical: 6, paddingHorizontal: 4 },
-  radioPickBackTxt: { color: '#ffb833', fontSize: 13, letterSpacing: 1.2, fontWeight: '600' },
-  radioPickTitle: { color: '#ffe566', fontSize: 18, fontWeight: '600', textAlign: 'center' },
-  radioPickSub:   { color: '#9a9a9a', fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16 },
   // ★ flex: 1 is what makes the ScrollView bounded and therefore scrollable at all — an
   //   unbounded one lays out to its content height and silently stops scrolling.
   radioPickList:  { flex: 1 },
-  radioPickRow: {
-    borderWidth: 1, borderColor: 'rgba(255,229,102,0.35)', borderRadius: 10,
-    paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10,
-    // ★ A dark fill: the cards sit over the band-activity spectrogram now, and amber on green was
-    //   hard to read (Stuart, 2026-09-09: "make the radio lines darker against the background").
-    backgroundColor: 'rgba(0,0,0,0.72)',
-  },
-  radioPickName:   { color: '#ffe566', fontSize: 16 },
-  // ★ The owner's standing message and its link, above the radio list. Left-aligned and allowed
-  //   to run to several lines: it is prose, not a label, and centring prose makes it harder to read.
-  /* ★★ THE ONE PARAGRAPH ON THIS PAGE ANYONE HAS TO READ, so it is sized to be read. It sat at
-   *    13px in Nixie One — a CONDENSED face, so 13 here is nearer 11 in a normal one — and the
-   *    owner's standing message and their link were the hardest things on the page to make out.
-   *    Stuart: "the landing screen message text and link is a little small and hard to read."
-   *  ★ Line height moved with it (1.45x). Raising the size alone crowds the lines and reads worse
-   *    than the small text did — the usual way this "fix" makes things marginally worse. */
-  /* ★★★ ATKINSON, NOT NIXIE — AND THE REASON IS THE JOB, NOT THE TASTE. Nixie One is a display
-   *     face: it belongs on numerals, labels and the furniture of an instrument, which is
-   *     everything else on this screen. This is the one place a stranger writes PROSE — an owner's
-   *     standing message, several lines of it, that a visitor must actually read — and a condensed
-   *     display face set as a paragraph reads as decoration and is genuinely harder to take in.
-   *     Stuart: "the font in this server message needs to be atkinson not nixie one as it looks
-   *     out of place." Atkinson Hyperlegible is the app's own accessibility face and is drawn for
-   *     exactly this.
-   *  ★★ WHITE FOR THE PROSE, AMBER FOR THE LINK. The colour then carries one meaning only —
-   *     amber is the thing you can press — instead of the whole block glowing and the link having
-   *     to shout over it. */
-  radioPickMsg:  { color: 'rgba(255,255,255,0.94)', fontFamily: 'Atkinson Hyperlegible',
-                   fontSize: 15, lineHeight: 23, marginTop: 10, marginBottom: 4,
-                   paddingHorizontal: 18 },
-  radioPickLink: { color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 15,
-                   lineHeight: 23, textDecorationLine: 'underline', marginBottom: 8,
-                   paddingHorizontal: 18 },
-  // ★ Dimmer than the description above it: the aerial qualifies the range, it does not compete
-  //   with it.
-  radioPickAnt:  { color: 'rgba(255,200,120,0.6)', fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
-                   marginTop: 2 },
+  /* ★ The landing page's COLOURED entries (title, rows, the owner's message and link, IN USE / FREE …) live in
+   *  makeSdrMenuStyles at the end of the file — they follow the user's colours now (2026-10-12). */
   radioPickAdmin: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 6 },
-  radioPickAdminInput: {
-    flex: 1, color: '#eee', fontSize: 14, paddingVertical: 10, paddingHorizontal: 12,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', borderRadius: 8,
-  },
-  radioPickAdminBtn: {
-    paddingVertical: 11, paddingHorizontal: 14, borderRadius: 8,
-    borderWidth: 1, borderColor: 'rgba(255,229,102,0.5)',
-  },
-  radioPickAdminBtnText: { color: '#ffe566', fontSize: 13, fontWeight: '600' },
-  radioPickAdminBad: { color: '#ff9a8a', fontSize: 12, marginBottom: 8 },
-  radioPickDetail: { color: '#b9b9b9', fontSize: 12, marginTop: 4 },
-  // ★ IN USE is amber (a wait, not a fault); FREE is green and deliberately quieter — the useful
-  //   signal is which ones you cannot have.
-  radioPickBusy: { color: '#ffb833', fontSize: 10, letterSpacing: 1, borderWidth: 1,
-                   borderColor: 'rgba(255,160,0,0.55)', borderRadius: 4,
-                   paddingHorizontal: 5, paddingVertical: 1 },
-  radioPickFree: { color: 'rgba(124,255,155,0.75)', fontSize: 10, letterSpacing: 1 },
 
   // ★ The receiver's "are you still there?" card — see the render for why it is not a Modal.
   stillHereCard: {
     maxWidth: 420, paddingHorizontal: 22, paddingVertical: 18, borderRadius: 16,
-    backgroundColor: 'rgba(10,8,4,0.96)', borderWidth: 1, borderColor: 'rgba(255,150,60,0.85)',
+    backgroundColor: 'rgba(10,8,4,0.96)', borderWidth: 1,   // edge colour: the busy amber, set in the render
     alignItems: 'center',
     shadowColor: '#000', shadowOpacity: 0.6, shadowRadius: 18, shadowOffset: { width: 0, height: 6 },
   },
   stillHereTitle: {
-    fontFamily: 'Atkinson Hyperlegible', fontSize: 18, letterSpacing: 2,
-    color: 'rgba(255,185,100,0.98)', marginBottom: 8,
+    fontFamily: 'Atkinson Hyperlegible', fontSize: 18, letterSpacing: 2, marginBottom: 8,
   },
   stillHereBody: {
-    fontFamily: 'Atkinson Hyperlegible', fontSize: 13.5, lineHeight: 19, textAlign: 'center',
-    color: 'rgba(255,255,255,0.88)', marginBottom: 16,
+    fontFamily: 'Atkinson Hyperlegible', fontSize: 13.5, lineHeight: 19, textAlign: 'center', marginBottom: 16,
   },
   stillHereBtn: {
     paddingHorizontal: 26, paddingVertical: 11, borderRadius: 10,
-    borderWidth: 1, borderColor: 'rgba(255,170,70,0.9)', backgroundColor: 'rgba(255,150,60,0.16)',
+    borderWidth: 1,   // the key's colours (CONTROLS) are set in the render
   },
   stillHereBtnTxt: {
     fontFamily: 'Atkinson Hyperlegible', fontSize: 14, fontWeight: 'bold', letterSpacing: 0.6,
-    color: 'rgba(255,200,140,0.98)',
   },
 
   // ★ The server-refusal card (TIME UP / PLEASE WAIT). Deliberately plain and
@@ -12450,24 +12406,6 @@ const styles = StyleSheet.create({
     flex: 1, backgroundColor: 'rgba(0,0,0,0.86)',
     alignItems: 'center', justifyContent: 'center', padding: 28,
   },
-  noticeCard: {
-    backgroundColor: '#0d0d0d', borderColor: '#ffa000', borderWidth: 1,
-    borderRadius: 12, padding: 20, gap: 10, maxWidth: 420, width: '100%',
-  },
-  noticeTitle: {
-    color: '#ffa000', fontSize: 20, fontWeight: 'bold',
-    letterSpacing: 3, textAlign: 'center',
-  },
-  noticeBody: { color: '#e8e8e8', fontSize: 14, textAlign: 'center', lineHeight: 20 },
-  noticeItem: { color: '#bdbdbd', fontSize: 13, textAlign: 'center' },
-  noticeInput: { alignSelf: 'stretch', marginTop: 10, paddingHorizontal: 12, paddingVertical: 9,
-                 borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 8,
-                 color: '#ffe566', fontSize: 15, textAlign: 'center' },
-  noticeBtn: {
-    borderColor: '#ffa000', borderWidth: 1, borderRadius: 8,
-    paddingVertical: 10, alignItems: 'center', marginTop: 2,
-  },
-  noticeBtnTxt: { color: '#ffa000', fontSize: 13, fontWeight: 'bold', letterSpacing: 1.5 },
   rotateBanner: {
     position: 'absolute', alignSelf: 'center', zIndex: 55,
     backgroundColor: 'rgba(8,12,6,0.92)', borderWidth: 1,
@@ -12503,33 +12441,9 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
-  serverLostCard: {
-    maxWidth: 360, marginHorizontal: 28, padding: 20, borderRadius: 14,
-    backgroundColor: 'rgba(16,12,8,0.98)', borderWidth: 1, borderColor: 'rgba(255,184,77,0.55)',
-    alignItems: 'center',
-  },
-  serverLostTitle: {
-    color: '#ffb84d', fontFamily: 'Atkinson Hyperlegible', fontSize: 16,
-    fontWeight: '700', textAlign: 'center', marginBottom: 8,
-  },
-  serverLostBody: {
-    color: 'rgba(255,235,210,0.9)', fontFamily: 'Atkinson Hyperlegible',
-    fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 16,
-  },
   serverLostBtnRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
   },
-  serverLostBtn: {
-    backgroundColor: '#ffb84d', borderRadius: 8, paddingHorizontal: 22, paddingVertical: 10,
-  },
-  serverLostBtnText: {
-    color: '#1a1206', fontFamily: 'Atkinson Hyperlegible', fontSize: 14,
-    fontWeight: '700', letterSpacing: 0.5,
-  },
-  serverLostBtnAlt: {
-    backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,184,77,0.6)',
-  },
-  serverLostBtnAltText: { color: '#ffb84d' },
   restoreBtn: {
     position: 'absolute', alignSelf: 'center', zIndex: 60,
     backgroundColor: 'rgba(10,10,10,0.55)', borderWidth: 1,
@@ -12546,4 +12460,133 @@ const styles = StyleSheet.create({
     left:  8,
     right: 8,
   },
+});
+
+/**
+ * ★★ The cards and pages SDRScreen draws itself, in the user's colours (Stuart, 2026-10-12: "yes colours apply
+ * everywhere including directory if possible"). Moved out of the module sheet because they now depend on the
+ * faceplate: built ONCE per token object (PopupTokens are memoised per setting), never per render.
+ *   • text (titles, prose, names, details) — the TEXT colour (ink.*);
+ *   • keys, links, inputs and card borders you press — the CONTROLS colour (gold.sel / selBorder / thumb, ink.key…);
+ *   • waits and warnings (IN USE, TIME UP, connection lost) — the fixed busy amber, white on amber / neon text;
+ *     a wrong password — `bad` (white bold on red text); FREE — `good` green, kept quiet.
+ */
+const sdrMenuCache = new WeakMap<PopupTokens, ReturnType<typeof makeSdrMenuStyles>>();
+function sdrMenuStyles(pt: PopupTokens) {
+  let s = sdrMenuCache.get(pt);
+  if (!s) { s = makeSdrMenuStyles(pt); sdrMenuCache.set(pt, s); }
+  return s;
+}
+const makeSdrMenuStyles = (pt: PopupTokens) => StyleSheet.create({
+  adminNote: {
+    position: 'absolute', zIndex: 40, alignItems: 'center',
+    paddingVertical: 7, paddingHorizontal: 12, borderRadius: 8,
+    backgroundColor: 'rgba(20,14,0,0.92)', borderWidth: 1, borderColor: pt.ink.border,
+  },
+  adminNoteTxt: { color: pt.ink.textSoft, fontSize: 12, textAlign: 'center' },
+  // ── The multi-radio landing page (layout notes in the module sheet's history; colours here) ──
+  radioPickBackTxt: { color: pt.ink.key, fontSize: 13, letterSpacing: 1.2, fontWeight: '600' },
+  radioPickTitle: { color: pt.ink.text, fontSize: 18, fontWeight: '600', textAlign: 'center' },
+  radioPickSub:   { color: pt.ink.textDim, fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16 },
+  radioPickRow: {
+    borderWidth: 1, borderColor: pt.ink.border, borderRadius: 10,
+    paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10,
+    // ★ A dark fill: the cards sit over the band-activity spectrogram now, and amber on green was
+    //   hard to read (Stuart, 2026-09-09: "make the radio lines darker against the background").
+    backgroundColor: 'rgba(0,0,0,0.72)',
+  },
+  radioPickName:   { color: pt.ink.text, fontSize: 16 },
+  // ★ The owner's standing message and its link, above the radio list. Left-aligned and allowed
+  //   to run to several lines: it is prose, not a label, and centring prose makes it harder to read.
+  /* ★★ THE ONE PARAGRAPH ON THIS PAGE ANYONE HAS TO READ, so it is sized to be read. It sat at
+   *    13px in Nixie One — a CONDENSED face, so 13 here is nearer 11 in a normal one — and the
+   *    owner's standing message and their link were the hardest things on the page to make out.
+   *    Stuart: "the landing screen message text and link is a little small and hard to read."
+   *  ★ Line height moved with it (1.45x). Raising the size alone crowds the lines and reads worse
+   *    than the small text did — the usual way this "fix" makes things marginally worse. */
+  /* ★★★ ATKINSON, NOT NIXIE — AND THE REASON IS THE JOB, NOT THE TASTE. Nixie One is a display
+   *     face: it belongs on numerals, labels and the furniture of an instrument, which is
+   *     everything else on this screen. This is the one place a stranger writes PROSE — an owner's
+   *     standing message, several lines of it, that a visitor must actually read — and a condensed
+   *     display face set as a paragraph reads as decoration and is genuinely harder to take in.
+   *     Stuart: "the font in this server message needs to be atkinson not nixie one as it looks
+   *     out of place." Atkinson Hyperlegible is the app's own accessibility face and is drawn for
+   *     exactly this.
+   *  ★★ WHITE FOR THE PROSE, AMBER FOR THE LINK. The colour then carries one meaning only —
+   *     amber is the thing you can press — instead of the whole block glowing and the link having
+   *     to shout over it. (2026-10-12: the same split in the user's colours — prose in the TEXT
+   *     colour, the link in the CONTROLS colour.) */
+  radioPickMsg:  { color: pt.ink.textSoft, fontFamily: 'Atkinson Hyperlegible',
+                   fontSize: 15, lineHeight: 23, marginTop: 10, marginBottom: 4,
+                   paddingHorizontal: 18 },
+  radioPickLink: { color: pt.gold.sel, fontFamily: 'Atkinson Hyperlegible', fontSize: 15,
+                   lineHeight: 23, textDecorationLine: 'underline', marginBottom: 8,
+                   paddingHorizontal: 18 },
+  // ★ Dimmer than the description above it: the aerial qualifies the range, it does not compete with it.
+  radioPickAnt:  { color: pt.ink.textDim, fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
+                   marginTop: 2 },
+  radioPickAdminInput: {
+    flex: 1, color: pt.ink.text, fontSize: 14, paddingVertical: 10, paddingHorizontal: 12,
+    borderWidth: 1, borderColor: pt.ink.keyBorder, borderRadius: 8,
+  },
+  radioPickAdminBtn: {
+    paddingVertical: 11, paddingHorizontal: 14, borderRadius: 8,
+    borderWidth: 1, borderColor: pt.gold.selBorder,
+  },
+  radioPickAdminBtnText: { color: pt.gold.sel, fontSize: 13, fontWeight: '600' },
+  // A wrong password is `bad` — white BOLD on red text (meaningsFor).
+  radioPickAdminBad: { ...meaningText(pt.ink.m, pt.ink.m.bad), fontSize: 12, marginBottom: 8 },
+  radioPickDetail: { color: pt.ink.textDim, fontSize: 12, marginTop: 4 },
+  // ★ IN USE is the busy amber (a wait, not a fault); FREE is `good` green and deliberately quieter — the useful
+  //   signal is which ones you cannot have.
+  radioPickBusy: { color: pt.ink.busy, fontSize: 10, letterSpacing: 1, borderWidth: 1,
+                   borderColor: pt.ink.busy, borderRadius: 4,
+                   paddingHorizontal: 5, paddingVertical: 1 },
+  radioPickFree: { color: pt.ink.m.good, opacity: 0.75, fontSize: 10, letterSpacing: 1 },
+  // ★ The server-refusal card (TIME UP / IN USE / PLEASE WAIT). The card's edge and title are the busy amber —
+  //   a refusal is a wait, a meaning — and its key and password box are keys.
+  noticeCard: {
+    backgroundColor: '#0d0d0d', borderColor: pt.ink.busy, borderWidth: 1,
+    borderRadius: 12, padding: 20, gap: 10, maxWidth: 420, width: '100%',
+  },
+  noticeTitle: {
+    color: pt.ink.busy, fontSize: 20, fontWeight: 'bold',
+    letterSpacing: 3, textAlign: 'center',
+  },
+  noticeBody: { color: pt.ink.textSoft, fontSize: 14, textAlign: 'center', lineHeight: 20 },
+  noticeItem: { color: pt.ink.textDim, fontSize: 13, textAlign: 'center' },
+  noticeInput: { alignSelf: 'stretch', marginTop: 10, paddingHorizontal: 12, paddingVertical: 9,
+                 borderWidth: 1, borderColor: pt.ink.keyBorder, borderRadius: 8,
+                 color: pt.ink.text, fontSize: 15, textAlign: 'center' },
+  noticeBtn: {
+    borderColor: pt.gold.selBorder, borderWidth: 1, borderRadius: 8,
+    paddingVertical: 10, alignItems: 'center', marginTop: 2,
+  },
+  noticeBtnTxt: { color: pt.gold.sel, fontSize: 13, fontWeight: 'bold', letterSpacing: 1.5 },
+  // ★ Connection lost / reinitialising: a warning card (busy amber edge and title); its keys are keys.
+  serverLostCard: {
+    maxWidth: 360, marginHorizontal: 28, padding: 20, borderRadius: 14,
+    backgroundColor: 'rgba(16,12,8,0.98)', borderWidth: 1, borderColor: pt.ink.busy,
+    alignItems: 'center',
+  },
+  serverLostTitle: {
+    color: pt.ink.busy, fontFamily: 'Atkinson Hyperlegible', fontSize: 16,
+    fontWeight: '700', textAlign: 'center', marginBottom: 8,
+  },
+  serverLostBody: {
+    color: pt.ink.textSoft, fontFamily: 'Atkinson Hyperlegible',
+    fontSize: 13, lineHeight: 19, textAlign: 'center', marginBottom: 16,
+  },
+  // The primary key: filled in the controls colour, dark legend (every controls colour is light enough for it).
+  serverLostBtn: {
+    backgroundColor: pt.gold.thumb, borderRadius: 8, paddingHorizontal: 22, paddingVertical: 10,
+  },
+  serverLostBtnText: {
+    color: '#1a1206', fontFamily: 'Atkinson Hyperlegible', fontSize: 14,
+    fontWeight: '700', letterSpacing: 0.5,
+  },
+  serverLostBtnAlt: {
+    backgroundColor: 'transparent', borderWidth: 1, borderColor: pt.gold.selBorder,
+  },
+  serverLostBtnAltText: { color: pt.gold.sel },
 });

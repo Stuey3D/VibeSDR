@@ -6,12 +6,18 @@
  * PasswordModal, IdentModal, CityPickerModal, AboutOverlay, StepPicker) takes its colours from HERE,
  * through PopupShell's `usePopupTheme()`. No popup holds its own gold any more.
  *
- * ★★★ THE DEFAULT CHASSIS IS TODAY, VALUE FOR VALUE (§10.3: "Unchanged. Today's dark glass and gold
- *   selection, pixel for pixel"). The `gold` group below is the literals the files drew — 83 of them
- *   (AudioSheet 35, MenuSheet 38, ChatDrawer 9, RecordingsOverlay 1), mostly inline per button — named
- *   by the ROLE they play (a selected legend, a slider's fill, a value readout…), because on silver /
- *   black each role becomes something different: a lit legend in the controls colour, an engraved
- *   value, a readout in the text colour. scripts/test_popup.ts proves the default values are today's.
+ * ★★★ EVERY CHASSIS FOLLOWS THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere
+ *   including directory if possible" — after the decoder boxes took "Follow the text colour except for
+ *   when the colours have a meaning … blue buttons and white text"). This REPLACES §10.3's "default:
+ *   Unchanged … gold selection, pixel for pixel". On the default chassis now:
+ *     • TEXT (headings, values, readouts, list rows, the tune entry, chat text) = the TEXT colour;
+ *     • KEYS, selectors, slider fills, borders = the CONTROLS colour;
+ *     • MEANINGS fixed — good / warn / bad / danger / busy, chat's own-name blue and other-name amber,
+ *       keyboard focus green, the selected item green (white on green / teal text) — with the clash
+ *       rule of decoderTokens `meaningsFor`, the ONE helper every surface shares.
+ *   The `gold` group (the literals the files drew — 83 of them, named by ROLE) and the new `ink` group
+ *   (the default skin's whites, by role) carry it. Silver / black already worked this way (lit legends
+ *   in the controls colour, readouts in the text colour, engraving on the plate) and are unchanged.
  *
  * ★★ TWO GOLDS, NOT ONE. The accessibility-skin menus (MenuSheet, AudioSheet) drew `C.gold` =
  *   #ffe566 (a pale yellow); the chat drawer and the recordings list drew the older amber #ffb833.
@@ -29,6 +35,7 @@
  */
 
 import type { Chassis, DisplayStyle } from './faceplate';
+import { meaningsFor, controlsText, focusFor, focusTint, METAL_VALUE, type Meanings } from './decoderTokens.ts';
 
 export interface PopupEntryStyle {
   fontFamily: string;
@@ -77,7 +84,46 @@ export interface PopupTokens {
     amberA:     (a: number) => string;
   };
 
-  // ── Silver / black (unused on default, where every popup keeps its own look) ──
+  /**
+   * ★★ THE DEFAULT SKIN'S INK, BY ROLE (2026-10-12) — the whites, greys and golds the default popups drew
+   * as literals, now following the colours (see the header). On silver / black each is the literal it
+   * replaced (those popups draw through `onMetal` and the roles below, which already follow the rule).
+   */
+  ink: {
+    /** Main text: titles, names, list rows (was #ffffff). */
+    text:       string;
+    /** Body text a step down (was white .92). */
+    textSoft:   string;
+    /** Secondary text: hints, sub-lines (was white .55–.62). */
+    textDim:    string;
+    /** Faint text: placeholders, footnotes (was white .38–.45). */
+    textFaint:  string;
+    /** Section headings (was the a11y blue-grey 180,190,210 .80). */
+    section:    string;
+    /** An unselected key's / chip's legend (was white .92). */
+    key:        string;
+    /** A key's border at rest (was white .30). */
+    keyBorder:  string;
+    /** A selected key's fill (was rgba(255,200,0,.12)). */
+    keyBgAct:   string;
+    /** A panel or input border (was white .22–.30). */
+    border:     string;
+    /** A hairline between rows (was white .12). */
+    divider:    string;
+    /** Keyboard / D-pad focus — a MEANING ("you are here"): green, WHITE on green controls (decoderTokens focusFor). */
+    focus:      string;
+    /** The focused row's tint. */
+    focusBg:    string;
+    /** The selected / current item (a meaning: green, white on green or teal text) and its row fill. */
+    selected:   string;
+    selectedBg: string;
+    /** Busy / in use (was #ffb84d) — a warning-amber meaning, white on amber / neon text. */
+    busy:       string;
+    /** The clash-ruled meanings (good / warn / bad + badBold …), decoderTokens `meaningsFor`. */
+    m:          Meanings;
+  };
+
+  // ── Silver / black (on default: the same roles, following the colours) ──
   /** Engraved label / section header on the plate (§10.3). */
   label:      string;
   /** The engraving's lip as a hard 1 pt text shadow: dy +1 white (silver), -1 black (black). */
@@ -183,40 +229,90 @@ export const todayAmberA = (a: number) => `rgba(255,184,51,${a})`;
 
 const FONT = 'Atkinson Hyperlegible';
 
-/** The default chassis: every value is the literal the popup drew before row 10. */
-function defaultTokens(): PopupTokens {
+/**
+ * ★★ Chat's NAME colours — own BLUE, others AMBER (§10.3; the default skin matches silver / black since
+ * 2026-10-12, Stuart: "match"). They are meanings, so the clash rule applies (decoderTokens meaningsFor): a
+ * name the same colour as the user's text would not stand out, so it goes WHITE — own name on blue text,
+ * others on amber or Nixie-neon text.
+ */
+export function chatNamesFor(textRgb: string): { own: string; other: string } {
+  return {
+    own:   textRgb === '61,155,255' ? METAL_VALUE : '#7fd1ff',
+    other: textRgb === '255,174,26' || textRgb === '255,106,20' ? METAL_VALUE : '#ffd27f',
+  };
+}
+
+/** On silver / black: the ink roles keep the literals they replaced (see PopupTokens.ink). */
+function metalInk(textRgb: string, controlsRgb: string): PopupTokens['ink'] {
+  const m = meaningsFor(textRgb);
+  return {
+    text: '#ffffff', textSoft: 'rgba(255,255,255,0.92)', textDim: 'rgba(255,255,255,0.60)',
+    textFaint: 'rgba(255,255,255,0.45)', section: 'rgba(180,190,210,0.80)',
+    key: 'rgba(255,255,255,0.92)', keyBorder: 'rgba(255,255,255,0.30)', keyBgAct: 'rgba(255,255,255,0.08)',
+    border: 'rgba(255,255,255,0.30)', divider: 'rgba(255,255,255,0.12)',
+    focus: focusFor(controlsRgb), focusBg: focusTint(controlsRgb, 0.18), selected: `rgb(${m.selectedRgb})`, selectedBg: `rgba(${m.selectedRgb},0.14)`,
+    busy: busyFor(textRgb), m,
+  };
+}
+
+/** Busy / in use: today's #ffb84d, or white where the text itself is amber / neon (the warn rule). */
+function busyFor(textRgb: string): string {
+  return meaningsFor(textRgb).warn === METAL_VALUE ? METAL_VALUE : '#ffb84d';
+}
+
+/**
+ * ★★★ The default chassis (2026-10-12): today's dark glass and layout, in the user's colours. Text in the
+ * TEXT colour (lifted toward white only as far as contrast needs — decoderTokens `controlsText`), keys and
+ * selectors in the CONTROLS colour, meanings fixed. Under Nixie the readouts take the neon READING colour
+ * (255,154,85), as on silver / black. `controlsRgb` is the RESOLVED controls LED (TODAY_GREEN on default).
+ */
+function defaultTokens(controlsRgb: string, textRgb: string, display: DisplayStyle): PopupTokens {
+  const txRgb = display === 'nixie' ? '255,154,85' : textRgb;
+  const K  = (a: number) => `rgba(${controlsRgb},${a})`;
+  const Kt = (a: number) => `rgba(${controlsText(controlsRgb)},${a})`;
+  const T  = (a: number) => `rgba(${controlsText(txRgb)},${a})`;
+  const m = meaningsFor(textRgb);
   return {
     chassis: 'default', metal: false, silver: false,
     gold: {
-      sel: TODAY_ACCENT, selBorder: TODAY_ACCENT_DIM, fill: TODAY_ACCENT, thumb: TODAY_ACCENT,
-      value: TODAY_ACCENT, readout: TODAY_ACCENT, glyph: TODAY_ACCENT,
-      notice: TODAY_ACCENT, noticeBorder: TODAY_ACCENT_DIM, close: TODAY_ACCENT_DIM,
-      amber: TODAY_AMBER, amberA: todayAmberA,
+      sel: Kt(1), selBorder: K(0.70), fill: K(0.90), thumb: Kt(1),
+      value: T(1), readout: T(1), glyph: Kt(1),
+      notice: T(1), noticeBorder: T(0.70), close: Kt(0.80),
+      amber: T(1), amberA: T,
     },
-    // Not drawn on default (each popup keeps today's own look); the mockup's `isDef` values, so a
-    // stray reader gets something sensible rather than undefined.
-    label: 'rgba(255,255,255,0.62)', engrave: null, engraveName: null, note: 'rgba(255,255,255,0.45)',
-    value: TODAY_ACCENT,
-    legend: 'rgba(255,255,255,0.88)', legendShadow: null,
-    legendLit: TODAY_ACCENT, legendLitGlow: 'rgba(0,0,0,0)', legendLitShade: null,
-    pipOn: TODAY_ACCENT, pipGlow: 'rgba(0,0,0,0)', pipOff: 'transparent', pipOffInset: 'transparent',
-    window: { bg: 'rgba(255,255,255,0.03)', lip: 'transparent', border: 'rgba(255,255,255,0.12)',
+    ink: {
+      // ★ Dim roles at .80 / .85, not the old whites' .55–.62: a blue or red text colour at .62 measured 3.2:1
+      //   on the menu panel (test_popup 1b) — the hierarchy is carried by size and weight, as in the decoder boxes.
+      text: T(1), textSoft: T(0.92), textDim: T(0.80), textFaint: T(0.50), section: T(0.85),
+      key: Kt(0.92), keyBorder: K(0.35), keyBgAct: K(0.14),
+      border: K(0.30), divider: T(0.12),
+      focus: focusFor(controlsRgb), focusBg: focusTint(controlsRgb, 0.18), selected: `rgb(${m.selectedRgb})`, selectedBg: `rgba(${m.selectedRgb},0.14)`,
+      busy: busyFor(textRgb), m,
+    },
+    label: T(0.85), engrave: null, engraveName: null, note: T(0.80),
+    value: T(1),
+    legend: Kt(0.92), legendShadow: null,
+    legendLit: Kt(1), legendLitGlow: 'rgba(0,0,0,0)', legendLitShade: null,
+    pipOn: K(1), pipGlow: 'rgba(0,0,0,0)', pipOff: 'transparent', pipOffInset: 'transparent',
+    window: { bg: 'rgba(255,255,255,0.03)', lip: 'transparent', border: K(0.25),
               shade: 'transparent', radius: 6 },
-    winText: '#ffffff', winDim: 'rgba(255,255,255,0.5)', winRule: 'rgba(255,255,255,0.10)',
-    readout: TODAY_ACCENT, readoutGlow: 'rgba(0,0,0,0)',
-    chatOwn: '#7fd1ff', chatOther: '#ffd27f', chatText: 'rgba(255,240,210,0.92)', chatSys: 'rgba(200,200,200,0.55)',
-    chatOwnPlate: '#7fd1ff', chatOtherPlate: '#ffd27f',
+    winText: T(1), winDim: T(0.80), winRule: T(0.10),
+    readout: T(1), readoutGlow: 'rgba(0,0,0,0)',
+    // Chat: own-name blue and other-name amber are MEANINGS (§10.3); the message text is text.
+    chatOwn: chatNamesFor(textRgb).own, chatOther: chatNamesFor(textRgb).other, chatText: T(0.92), chatSys: 'rgba(200,200,200,0.55)',
+    chatOwnPlate: chatNamesFor(textRgb).own, chatOtherPlate: chatNamesFor(textRgb).other,
     fader: {
-      slot: 'rgba(255,255,255,0.14)', slotLip: 'transparent', fill: 'rgba(255,224,102,0.9)',
+      slot: 'rgba(255,255,255,0.14)', slotLip: 'transparent', fill: K(0.90),
       fillGlow: 'rgba(0,0,0,0)', level: 'rgba(255,255,255,0.85)',
-      capColors: ['#ffe066', '#ffe066', '#ffe066'], capBorder: '#ffe066', capHi: 'transparent',
+      capColors: [Kt(1), Kt(1), Kt(1)], capBorder: Kt(1), capHi: 'transparent',
       lineColor: 'transparent', lineGlow: 'transparent',
     },
-    shell: { border: 'rgba(255,255,255,0.10)', topHi: 'transparent', handle: 'rgba(255,255,255,0.22)', handleLip: 'transparent' },
+    shell: { border: K(0.30), topHi: 'transparent', handle: 'rgba(255,255,255,0.22)', handleLip: 'transparent' },
     sheetShadow: 'rgba(0,0,0,0.8)',
-    rule: 'rgba(255,255,255,0.12)', danger: '#ff6666',
+    // ★ danger (RESET, delete) is a MEANING: red on every colour.
+    rule: T(0.12), danger: '#ff6666',
     entry: { fontFamily: FONT, fontSize: 32, fontWeight: '400', fontStyle: 'normal', letterSpacing: 3,
-             color: '#ffffff', glow: null, seg: false },
+             color: T(1), glow: null, seg: false },
   };
 }
 
@@ -268,7 +364,7 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, textRgb: 
     : { ...E[display], color: T(1), glow: T(0.6) };
 
   return {
-    chassis, metal: true, silver,
+    chassis, metal: true, silver, ink: metalInk(textRgb, controlsRgb),
     gold: {
       sel: L(1), selBorder: 'transparent', fill: L(0.85), thumb: L(0.95),
       value: valueC, readout: T(1), glyph: legend,
@@ -292,7 +388,7 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, textRgb: 
     // ★ winDim .45 → .50: the mockup's .45 measured 4.47:1 on the #070605 window (test_popup).
     winText: T(1), winDim: 'rgba(255,255,255,0.50)', winRule: 'rgba(255,255,255,0.08)',
     readout: T(1), readoutGlow: T(0.6),
-    chatOwn: '#7fd1ff', chatOther: '#ffd27f', chatText: '#eeeae2', chatSys: 'rgba(200,200,200,0.55)',
+    chatOwn: chatNamesFor(textRgb).own, chatOther: chatNamesFor(textRgb).other, chatText: '#eeeae2', chatSys: 'rgba(200,200,200,0.55)',
     chatOwnPlate: silver ? CONTRAST_FIX.silverOwn : '#8fc8ff',
     chatOtherPlate: silver ? CONTRAST_FIX.silverOther : '#e6c27a',
     fader: {
@@ -316,7 +412,7 @@ function metalTokens(chassis: 'silver' | 'black', controlsRgb: string, textRgb: 
 /** Unmemoised — the test sweeps it. */
 export function buildPopupTokens(chassis: Chassis, controlsRgb: string, textRgb: string,
                                  display: DisplayStyle): PopupTokens {
-  return chassis === 'default' ? defaultTokens() : metalTokens(chassis, controlsRgb, textRgb, display);
+  return chassis === 'default' ? defaultTokens(controlsRgb, textRgb, display) : metalTokens(chassis, controlsRgb, textRgb, display);
 }
 
 const cache = new Map<string, PopupTokens>();
@@ -324,12 +420,11 @@ const cache = new Map<string, PopupTokens>();
 /**
  * ★ The resolver, memoised on its inputs, so every popup on screen shares ONE object per setting and
  * a style sheet built from it (PopupShell `usePopupStyles`) is built once, not per render — a meter
- * update never touches it. The default chassis is one object whatever the colours: it does not
- * read them.
+ * update never touches it. ★ Every chassis reads the colours now (2026-10-12), the default included.
  */
 export function popupTokensFor(chassis: Chassis = 'default', controlsRgb = '61,255,114',
                                textRgb = '61,255,114', display: DisplayStyle = 'hyper'): PopupTokens {
-  const key = chassis === 'default' ? 'default' : `${chassis}|${controlsRgb}|${textRgb}|${display}`;
+  const key = `${chassis}|${controlsRgb}|${textRgb}|${display}`;
   let t = cache.get(key);
   if (!t) { t = buildPopupTokens(chassis, controlsRgb, textRgb, display); cache.set(key, t); }
   return t;

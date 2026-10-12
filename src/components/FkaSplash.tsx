@@ -20,7 +20,7 @@ import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../contexts/ThemeContext';
-import { useFullKeyboardAccessSuspected, useRepeatingKeys, useSuppressShortcuts, noteTouchInteraction, NAV_FOCUS } from './PanelNav';
+import { useFullKeyboardAccessSuspected, useRepeatingKeys, useSuppressShortcuts, noteTouchInteraction, useNavFocus } from './PanelNav';
 
 const SEEN_KEY = 'lsv_fka_splash_seen_v2';
 
@@ -37,6 +37,7 @@ const KEYS: { k: string; what: string }[] = [
 ];
 
 export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
+  const s = fkaStyles(useNavFocus().ring);
   const { theme: t } = useTheme();
   const suspected = useFullKeyboardAccessSuspected();
   const [seen, setSeen] = useState<boolean | null>(null);
@@ -103,25 +104,29 @@ export default function FkaSplash({ onOpenHelp }: { onOpenHelp: () => void }) {
   );
 }
 
-const s = StyleSheet.create({
+/** ★ The splash's colour is the FOCUS colour (it teaches keyboard focus): white on green controls, green
+ *  otherwise (useNavFocus, Stuart 2026-10-12). One sheet per ring colour. */
+const fkaCache = new Map<string, ReturnType<typeof makeFka>>();
+const fkaStyles = (ring: string) => { let x = fkaCache.get(ring); if (!x) { x = makeFka(ring); fkaCache.set(ring, x); } return x; };
+const makeFka = (ring: string) => StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.72)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   card: {
     maxWidth: 460, width: '100%', backgroundColor: 'rgba(8,10,9,0.99)',
     borderWidth: 1, borderRadius: 12, padding: 18,
   },
-  title: { color: NAV_FOCUS, fontSize: 13, letterSpacing: 2, fontWeight: '700', marginBottom: 10 },
+  title: { color: ring, fontSize: 13, letterSpacing: 2, fontWeight: '700', marginBottom: 10 },
   body:  { color: 'rgba(255,255,255,0.85)', fontSize: 13, lineHeight: 19 },
-  inline: { color: NAV_FOCUS, fontWeight: '700' },
+  inline: { color: ring, fontWeight: '700' },
   table: { marginVertical: 14 },
   row:   { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   // Key caps are VIEWS, not nested Text — a nested <Text> cannot carry a border on iOS.
   cap: {
     minWidth: 138, paddingHorizontal: 8, paddingVertical: 5, marginRight: 12,
-    borderWidth: 1, borderColor: NAV_FOCUS, borderRadius: 5, alignItems: 'center',
+    borderWidth: 1, borderColor: ring, borderRadius: 5, alignItems: 'center',
   },
-  capTxt: { color: NAV_FOCUS, textAlign: 'center', fontSize: 11, fontWeight: '700', letterSpacing: 1 },
+  capTxt: { color: ring, textAlign: 'center', fontSize: 11, fontWeight: '700', letterSpacing: 1 },
   what:   { color: 'rgba(255,255,255,0.85)', fontSize: 13, flexShrink: 1 },
   btns: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
-  btn:  { paddingHorizontal: 18, paddingVertical: 10, marginLeft: 10, borderWidth: 1, borderColor: NAV_FOCUS, borderRadius: 6 },
-  btnTxt: { color: NAV_FOCUS, fontSize: 12, letterSpacing: 1.5, fontWeight: '700' },
+  btn:  { paddingHorizontal: 18, paddingVertical: 10, marginLeft: 10, borderWidth: 1, borderColor: ring, borderRadius: 6 },
+  btnTxt: { color: ring, fontSize: 12, letterSpacing: 1.5, fontWeight: '700' },
 });

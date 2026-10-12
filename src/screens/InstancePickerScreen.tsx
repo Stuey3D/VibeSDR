@@ -3,7 +3,7 @@ import { useDetailMaps, mb } from '../services/useDetailMaps';
 import { downloadDetail, removeDetail, DETAIL_BYTES } from '../services/mapglDetail';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
-import { useListNav, NAV_FOCUS, noteTouchInteraction } from '../components/PanelNav';
+import { useListNav, noteTouchInteraction, useNavFocus } from '../components/PanelNav';
 import {
   ActivityIndicator,
   Alert,
@@ -32,7 +32,9 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
 import { newLocalSession } from '../services/localSession';
 import UsbSdrIcon from '../components/UsbSdrIcon';
-import { themeFor } from '../constants/theme';
+import { themeFor, Colors } from '../constants/theme';
+import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
+import { meaningText } from '../constants/decoderTokens';
 import {
   SDRInstance,
   fetchInstances,
@@ -258,6 +260,7 @@ type ListItem =
   | { kind: 'header';   groupKey: string; label: string; count: number; collapsible: boolean; collapsed: boolean };
 
 export default function InstancePickerScreen({ navigation, route }: Props) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   /* ★★ MOUNT, not render — this tells "the screen never appeared" apart from "it appeared and did
    *  nothing", which is the difference between a broken navigation reset and a broken connect.
    *  It also records whether autoVibe arrived WITH the mount, which is the watch-boot ordering. */
@@ -533,7 +536,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     return () => { stop(); setDiscovered([]); };
   }, []));
 
-  const { colors: C, font: F, scale } = themeFor(viewMode);
+  const { font: F, scale } = themeFor(viewMode);
+  // ★★ THE DIRECTORY TAKES THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including
+  //   directory if possible"). It used theme.ts's fixed amber; now `directoryPalette` — see there.
+  const glass = useGlassTheme();
+  const C = useMemo(() => directoryPalette(glass), [glass]);
   /* ★ ONE source for "am I serving?", shared with the loopback rewrite in connectVibeServer —
    *  see services/serving.ts. Two separate pollers could disagree, and the disagreement would be
    *  invisible: the row would say SERVING while the connect path dialled the LAN address. */
@@ -1923,7 +1930,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     return (
       <TouchableOpacity onPress={onPress}
         ref={foot ? ((r: any) => { ftrViews.current[myIndex] = r; }) : undefined}
-        style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
+        style={[style, on && { borderColor: focusC.ring, borderWidth: 2 }]} {...rest}>
         {children}
       </TouchableOpacity>
     );
@@ -1944,7 +1951,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       // ★ Headers are navigable (Enter collapses them) but had NO focus styling, so the
       // caret walked through them invisibly and the keys looked dead until it happened to
       // land on a server row. A header is often the FIRST row, so that was the usual case.
-      const hdrFocus = navOn ? { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 4 } : null;
+      const hdrFocus = navOn ? { borderWidth: 2, borderColor: focusC.ring, borderRadius: 4 } : null;
       // The FAVOURITES header carries a tappable sort chip (Most Used / A–Z / Nearest / SNR / Manual).
       if (item.groupKey === '__fav') {
         return (
@@ -1954,7 +1961,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 <SectionHeader label={item.count > 0 ? `${item.label}  (${item.count})` : item.label} fs={fs} F={F} C={C} />
               </View>
               <TouchableOpacity onPress={cycleFavSort} style={[styles.sortBtn, { borderColor: C.border }]} activeOpacity={0.7}>
-                <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.amber, letterSpacing: 1 }}>⇅ {FAV_SORT_LABEL[favSort]}</Text>
+                <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.key, letterSpacing: 1 }}>⇅ {FAV_SORT_LABEL[favSort]}</Text>
               </TouchableOpacity>
             </View>
             {favSort === 'manual' && (
@@ -1982,9 +1989,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       const canDrag = favSort === 'manual' && !!drag;
       const body = (
           <TouchableOpacity
-            style={[styles.row, { borderColor: navOn ? NAV_FOCUS : C.borderBright,
+            style={[styles.row, { borderColor: navOn ? focusC.ring : C.borderBright,
                                   borderWidth: navOn ? 2 : 1,
-                                  backgroundColor: isActive ? 'rgba(255,160,0,0.22)' : 'rgba(255,100,100,0.06)' }]}
+                                  backgroundColor: isActive ? C.keyBgAct : 'rgba(255,100,100,0.06)' }]}
             onPress={() => connectFav(fav)}
             onLongPress={canDrag ? drag : undefined}
             delayLongPress={180}
@@ -1995,9 +2002,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 <View style={fav.serverType === 'owrx' ? styles.logoChip : undefined}>
                   {TYPE_LOGOS[fav.serverType ?? 'ubersdr']
                     ? <Image source={TYPE_LOGOS[fav.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
-                    : <Text style={{ fontFamily: F, fontSize: fs(14), color: C.amber }}>📻</Text>}
+                    : <Text style={{ fontFamily: F, fontSize: fs(14), color: C.text }}>📻</Text>}
                 </View>
-                <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, flex: 1 }} numberOfLines={1}>
+                <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text, flex: 1 }} numberOfLines={1}>
                   {isDefault ? '★ ' : ''}{fav.name}
                 </Text>
               </View>
@@ -2014,7 +2021,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                           : left >= 0 ? 'IN USE · free shortly'
                           : 'IN USE';
                 return (
-                  <Text style={{ fontFamily: F, fontSize: fs(9.5), color: '#ffd479',
+                  <Text style={{ fontFamily: F, fontSize: fs(9.5), color: C.warn,
                                  letterSpacing: 0.5, marginTop: 2 }}>
                     {txt}{occ.admin ? '  ·  admin can override' : ''}
                   </Text>
@@ -2034,26 +2041,26 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 if (favSort !== 'snr' && favSort !== 'nearest' && (fav.visits ?? 0) > 0)
                   bits.push(`★ ${fav.visits} visit${fav.visits === 1 ? '' : 's'}`);
                 return bits.length ? (
-                  <Text style={{ fontFamily: F, fontSize: fs(9.5), color: C.goldDim, letterSpacing: 0.5 }}>{bits.join('   ')}</Text>
+                  <Text style={{ fontFamily: F, fontSize: fs(9.5), color: C.textDim, letterSpacing: 0.5 }}>{bits.join('   ')}</Text>
                 ) : null;
               })()}
             </View>
             <View style={styles.rowRight}>
               {favIsCustom(fav) && (
                 <TouchableOpacity style={{ padding: 4 }} onPress={() => openEditFav(fav)}>
-                  <Text style={{ fontSize: fs(16), color: C.goldDim }}>✎</Text>
+                  <Text style={{ fontSize: fs(16), color: C.keyDim }}>✎</Text>
                 </TouchableOpacity>
               )}
               <TouchableOpacity style={{ padding: 4 }}
                 onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: fav.name, url: fav.url })}>
-                <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
+                <Text style={{ fontSize: fs(18), color: isDefault ? C.key : C.keyDim }}>{isDefault ? '★' : '☆'}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={{ padding: 4 }} onPress={() => handleToggleFav(fav)}>
                 <Text style={{ fontSize: fs(18), color: C.red }}>♥</Text>
               </TouchableOpacity>
               {canDrag && (
                 <TouchableOpacity style={{ paddingLeft: 6, paddingVertical: 4 }} onPressIn={drag} delayLongPress={0}>
-                  <Text style={{ fontSize: fs(20), color: C.goldDim }}>≡</Text>
+                  <Text style={{ fontSize: fs(20), color: C.keyDim }}>≡</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -2079,12 +2086,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           style={[
             styles.row,
             { borderColor: C.border },
-            isDefault && { borderColor: C.borderBright, backgroundColor: 'rgba(255,160,0,0.08)' },
+            isDefault && { borderColor: C.borderBright, backgroundColor: C.keyBgAct },
             favoured && !isDefault && { borderColor: 'rgba(255,80,80,0.4)' },
             isFull && { opacity: 0.4 },
             // Focus LAST so it wins over default/favourite colouring — the caret must never
             // be hidden by the very rows you are most likely to be standing on.
-            navOn && { borderColor: NAV_FOCUS, borderWidth: 2 },
+            navOn && { borderColor: focusC.ring, borderWidth: 2 },
           ]}
           onPress={() => {
             // SpyServer isn't a web backend: its "url" is spyserver://host:port and
@@ -2104,9 +2111,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               <View style={(inst.serverType ?? 'ubersdr') === 'owrx' ? styles.logoChip : undefined}>
                 {TYPE_LOGOS[inst.serverType ?? 'ubersdr']
                   ? <Image source={TYPE_LOGOS[inst.serverType ?? 'ubersdr']} style={styles.typeLogo} resizeMode="contain" />
-                  : <Text style={{ fontFamily: F, fontSize: fs(14), color: C.amber }}>📻</Text>}
+                  : <Text style={{ fontFamily: F, fontSize: fs(14), color: C.text }}>📻</Text>}
               </View>
-              <Text style={{ fontFamily: F, fontSize: fs(16), color: blocksApps(inst) ? C.red : C.amber, flex: 1 }} numberOfLines={1}>
+              <Text style={{ fontFamily: F, fontSize: fs(16), ...meaningText(C.m, blocksApps(inst) ? C.bad : C.text), flex: 1 }} numberOfLines={1}>
                 {isDefault ? '★ ' : ''}{flagEmoji(inst.countryCode) ? flagEmoji(inst.countryCode) + ' ' : ''}{inst.name}
               </Text>
               {/* ★★★ A PADLOCK WHEN NOTHING HERE IS OPEN — a master PIN, or every radio holding its
@@ -2119,13 +2126,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 </Text>
               ) : null}
               {inst.version ? (
-                <Text style={{ fontFamily: F, fontSize: fs(11), color: versionOld ? C.red : C.textDim, marginLeft: 6 }}>
+                <Text style={{ fontFamily: F, fontSize: fs(11), ...meaningText(C.m, versionOld ? C.bad : C.textDim), marginLeft: 6 }}>
                   v{inst.version}
                 </Text>
               ) : null}
             </View>
             {versionOld && (
-              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.red, marginTop: 2 }}>
+              <Text style={{ fontFamily: F, fontSize: fs(11), ...meaningText(C.m, C.bad), marginTop: 2 }}>
                 ⚠ Older than v{MIN_RECOMMENDED_VERSION} — may have visual glitches
               </Text>
             )}
@@ -2135,7 +2142,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 fault — so name it plainly, do not offer a retry, and point at the one thing that
                 DOES work: the owner's own web page, which is public. */}
             {blocksApps(inst) && (
-              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.red, marginTop: 2 }}>
+              <Text style={{ fontFamily: F, fontSize: fs(11), ...meaningText(C.m, C.bad), marginTop: 2 }}>
                 ⚠ Owner does not allow third-party apps — opens in compatibility mode
               </Text>
             )}
@@ -2147,7 +2154,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             ) : null}
             <View style={styles.metaRow}>
               {inst.location ? (
-                <Text style={{ fontFamily: F, fontSize: fs(12.5), color: C.gold }} numberOfLines={1}>{inst.location}</Text>
+                <Text style={{ fontFamily: F, fontSize: fs(12.5), color: C.value }} numberOfLines={1}>{inst.location}</Text>
               ) : null}
               {inst.callsign ? (
                 <Text style={{ fontFamily: F, fontSize: fs(12.5), color: C.textDim }}>
@@ -2168,19 +2175,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           </View>
           <View style={styles.rowRight}>
             {(inst.users != null && inst.maxUsers) ? (
-              <Text style={{ fontFamily: F, fontSize: fs(12), color: isFull ? C.red : C.textDim, fontWeight: isFull ? 'bold' : 'normal' }}>
+              <Text style={{ fontFamily: F, fontSize: fs(12), color: isFull ? C.bad : C.textDim, fontWeight: isFull ? 'bold' : 'normal' }}>
                 {isFull ? 'FULL ' : ''}{inst.users}/{inst.maxUsers}
               </Text>
             ) : null}
             <TouchableOpacity style={{ padding: 4 }}
               onPress={() => isDefault ? handleClearDefault() : handleSetDefault({ name: inst.name, url: inst.url })}>
-              <Text style={{ fontSize: fs(18), color: isDefault ? C.amber : C.goldDim }}>{isDefault ? '★' : '☆'}</Text>
+              <Text style={{ fontSize: fs(18), color: isDefault ? C.key : C.keyDim }}>{isDefault ? '★' : '☆'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={{ padding: 4 }}
               onPress={() => handleToggleFav({ name: inst.name, url: inst.url, serverType: inst.serverType,
                 latitude: inst.latitude ?? undefined, longitude: inst.longitude ?? undefined, bestSnr: inst.bestSnr ?? undefined,
                 custom: false })}>
-              <Text style={{ fontSize: fs(18), color: favoured ? C.red : C.textDim }}>{favoured ? '♥' : '♡'}</Text>
+              <Text style={{ fontSize: fs(18), color: favoured ? C.red : C.keyDim }}>{favoured ? '♥' : '♡'}</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
@@ -2212,8 +2219,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       {/* Add RTL-TCP server: friendly name + host:port; Connect, or Save & Connect. */}
       <Modal visible={tcpModal} transparent animationType="fade" onRequestClose={() => setTcpModal(false)}>
         <View style={styles.tcpBackdrop}>
-          <View style={[styles.tcpCard, { borderColor: C.amber }]}>
-            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>CUSTOM SERVER</Text>
+          <View style={[styles.tcpCard, { borderColor: C.borderBright }]}>
+            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text, letterSpacing: 1, marginBottom: 10 }}>CUSTOM SERVER</Text>
             {/* AUTO is the default and handles almost everything — the probe reads the
                 server's own landing page. The explicit choices exist for rtl_tcp and
                 SpyServer on NON-STANDARD ports: they're raw TCP with no HTTP to sniff,
@@ -2225,9 +2232,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     if (id !== 'auto') setTcpPort(String(DEFAULT_PORT[id as BackendType]));
                   }}
                   style={[styles.tcpBtnAlt, { alignItems: 'center',
-                          borderColor: tcpProto === id ? C.amber : C.border,
-                          backgroundColor: tcpProto === id ? C.amber + '22' : 'transparent' }]}>
-                  <Text style={{ fontFamily: F, fontSize: fs(12), color: tcpProto === id ? C.amber : C.textDim }}>{label}</Text>
+                          borderColor: tcpProto === id ? C.borderBright : C.border,
+                          backgroundColor: tcpProto === id ? C.keyBgAct : 'transparent' }]}>
+                  <Text style={{ fontFamily: F, fontSize: fs(12), color: tcpProto === id ? C.key : C.keyIdle }}>{label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -2240,24 +2247,24 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                 ? 'Raw full-rate IQ — needs a fast local network. Works with virtually all SDR software.'
                 : `Connect as ${PROTO_LABEL[tcpProto as BackendType]}, without probing.`}
             </Text>
-            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
               placeholder="Name (e.g. Shack Pi)" placeholderTextColor={C.textDim}
               value={tcpName} onChangeText={setTcpName} autoCorrect={false} />
-            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
               placeholder="Host, IP or URL (e.g. stuey3d.freemyip.com)" placeholderTextColor={C.textDim}
               value={tcpHost} onChangeText={setTcpHost} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
-            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
               placeholder={tcpProto === 'auto' ? 'Port' : `Port (default ${DEFAULT_PORT[tcpProto as BackendType]})`}
               placeholderTextColor={C.textDim}
               value={tcpPort} onChangeText={setTcpPort} keyboardType="number-pad" />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
-              <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => setTcpModal(false)}>
-                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.textDim }}>Cancel</Text>
+              <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => setTcpModal(false)}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => tcpModalConnect(false)}>
-                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.gold }}>Connect</Text>
+              <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.borderBright }]} onPress={() => tcpModalConnect(false)}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.key }}>Connect</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.amber }]} onPress={() => tcpModalConnect(true)}>
+              <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.keyFill }]} onPress={() => tcpModalConnect(true)}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Save & Connect</Text>
               </TouchableOpacity>
             </View>
@@ -2269,19 +2276,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           the next connect if the address changed, so no type picker is needed here. */}
       <Modal visible={!!editFav} transparent animationType="fade" onRequestClose={() => setEditFav(null)}>
         <View style={styles.tcpBackdrop}>
-          <View style={[styles.tcpCard, { borderColor: C.amber }]}>
-            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber, letterSpacing: 1, marginBottom: 10 }}>EDIT SERVER</Text>
-            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+          <View style={[styles.tcpCard, { borderColor: C.borderBright }]}>
+            <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text, letterSpacing: 1, marginBottom: 10 }}>EDIT SERVER</Text>
+            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
               placeholder="Name" placeholderTextColor={C.textDim}
               value={editName} onChangeText={setEditName} autoCorrect={false} />
-            <TextInput style={[styles.tcpInput, { color: C.gold, borderColor: C.border, fontFamily: F }]}
+            <TextInput style={[styles.tcpInput, { color: C.value, borderColor: C.border, fontFamily: F }]}
               placeholder="Address (host, IP or URL)" placeholderTextColor={C.textDim}
               value={editUrl} onChangeText={setEditUrl} autoCapitalize="none" autoCorrect={false} keyboardType="url" />
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 8, flexWrap: 'wrap' }}>
-              <TouchableOpacity style={styles.tcpBtnAlt} onPress={() => setEditFav(null)}>
-                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.textDim }}>Cancel</Text>
+              <TouchableOpacity style={[styles.tcpBtnAlt, { borderColor: C.border }]} onPress={() => setEditFav(null)}>
+                <Text style={{ fontFamily: F, fontSize: fs(13), color: C.keyIdle }}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.amber }]} onPress={saveEditFav}>
+              <TouchableOpacity style={[styles.tcpBtn, { backgroundColor: C.keyFill }]} onPress={saveEditFav}>
                 <Text style={{ fontFamily: F, fontSize: fs(13), color: '#1a1205', fontWeight: '600' }}>Save changes</Text>
               </TouchableOpacity>
             </View>
@@ -2293,8 +2300,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         {/* Header */}
         <View style={[styles.header, { borderBottomColor: C.border }]}>
           <View style={styles.headerLeft}>
-            <Text style={{ fontFamily: F, fontSize: fs(24), fontWeight: 'bold', color: C.amber, letterSpacing: 3,
-              textShadowColor: C.amberGlow, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 }}>
+            <Text style={{ fontFamily: F, fontSize: fs(24), fontWeight: 'bold', color: C.brand, letterSpacing: 3,
+              textShadowColor: C.brandGlow, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 8 }}>
               VibeSDR
             </Text>
             <Text style={{ fontFamily: F, fontSize: fs(10), color: C.textDim, letterSpacing: 1 }}>v{APP_VERSION}</Text>
@@ -2310,11 +2317,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                             accessibilityLabel="Recordings"
                             style={{ paddingVertical: 6, paddingHorizontal: 10, marginRight: 4, borderWidth: 1,
                                      borderColor: C.border, borderRadius: 6 }}>
-            <Text style={{ fontFamily: F, fontSize: fs(11), color: C.amber, letterSpacing: 1 }}>⏺ RECORDINGS</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: C.key, letterSpacing: 1 }}>⏺ RECORDINGS</Text>
           </TouchableOpacity>
           {/* ⚙ = factory reset (the mode-change badge is gone — single skin now) */}
           <TouchableOpacity style={{ padding: 10 }} onPress={handleMasterReset} hitSlop={8}>
-            <Text style={{ fontSize: fs(22), color: C.textDim }}>⚙</Text>
+            <Text style={{ fontSize: fs(22), color: C.keyIdle }}>⚙</Text>
           </TouchableOpacity>
         </View>
 
@@ -2329,9 +2336,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
         {/* Default banner */}
         {defaultInst && (
-          <View style={[styles.defaultBanner, { borderBottomColor: C.borderBright }]}>
-            <Text style={{ fontFamily: F, fontSize: fs(9), color: C.amber, letterSpacing: 2, flexShrink: 0 }}>★ AUTO-CONNECT</Text>
-            <Text style={{ fontFamily: F, fontSize: fs(12), color: C.amber, flex: 1 }} numberOfLines={1}>{defaultInst.name}</Text>
+          <View style={[styles.defaultBanner, { borderBottomColor: C.borderBright, backgroundColor: C.keyBgAct }]}>
+            <Text style={{ fontFamily: F, fontSize: fs(9), color: C.text, letterSpacing: 2, flexShrink: 0 }}>★ AUTO-CONNECT</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(12), color: C.text, flex: 1 }} numberOfLines={1}>{defaultInst.name}</Text>
             <TouchableOpacity onPress={handleClearDefault} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
               <Text style={{ fontFamily: F, fontSize: fs(14), color: C.red }}>✕</Text>
             </TouchableOpacity>
@@ -2344,7 +2351,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             style={[styles.backRow, { borderBottomColor: C.border }]}
             onPress={() => { setSelectedDir(null); setInstances([]); setFilter(''); setError(null); setLoading(false); }}
           >
-            <Text style={{ fontFamily: F, fontSize: fs(13), color: C.amber }}>‹ Directories</Text>
+            <Text style={{ fontFamily: F, fontSize: fs(13), color: C.key }}>‹ Directories</Text>
             <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 1 }}>
               {DIRECTORIES.find(d => d.id === selectedDir)?.name ?? ''}
             </Text>
@@ -2363,7 +2370,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               then hit the port-dropped-from-the-URL bug in parseTcpEntry. */}
           <TextInput
             ref={customInputRef}
-            style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.amber, borderColor: urlFocused ? NAV_FOCUS : C.border },
+            style={[styles.urlInput, { fontFamily: F, fontSize: fs(12), color: C.value, borderColor: urlFocused ? focusC.ring : C.border },
                     urlFocused && { borderWidth: 2 }]}
             placeholder="Custom URL  e.g. sdr.example.com:8073"
             placeholderTextColor={C.textDim}
@@ -2385,7 +2392,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               {(() => {
                 const fav = tcpFavs.some(f => f.proto === 'spyserver'
                   && f.host === customSpyTarget.host && f.port === customSpyTarget.port);
-                return <Text style={{ fontSize: fs(18), color: fav ? C.red : C.textDim }}>{fav ? '♥' : '♡'}</Text>;
+                return <Text style={{ fontSize: fs(18), color: fav ? C.red : C.keyDim }}>{fav ? '♥' : '♡'}</Text>;
               })()}
             </TouchableOpacity>
           ) : normalisedCustomUrl ? (
@@ -2415,7 +2422,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   }
                 }}
               >
-                <Text style={{ fontSize: fs(18), color: isFav(normalisedCustomUrl) ? C.red : C.textDim }}>
+                <Text style={{ fontSize: fs(18), color: isFav(normalisedCustomUrl) ? C.red : C.keyDim }}>
                   {isFav(normalisedCustomUrl) ? '♥' : '♡'}
                 </Text>
               </TouchableOpacity>
@@ -2439,7 +2446,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   }
                 }}
               >
-                <Text style={{ fontSize: fs(18), color: defaultInst?.url === normalisedCustomUrl ? C.amber : C.goldDim }}>
+                <Text style={{ fontSize: fs(18), color: defaultInst?.url === normalisedCustomUrl ? C.key : C.keyDim }}>
                   {defaultInst?.url === normalisedCustomUrl ? '★' : '☆'}
                 </Text>
               </TouchableOpacity>
@@ -2450,7 +2457,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             onPress={connectCustom}
             disabled={connecting}
           >
-            <Text style={{ fontFamily: F, fontSize: fs(11), fontWeight: 'bold', color: C.amber, letterSpacing: 1 }}>
+            <Text style={{ fontFamily: F, fontSize: fs(11), fontWeight: 'bold', color: C.key, letterSpacing: 1 }}>
               {connecting ? '...' : 'CONNECT'}
             </Text>
           </TouchableOpacity>
@@ -2461,7 +2468,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         {selectedDir !== null && (
         <View style={styles.filterRow}>
           <TextInput
-            style={[styles.filterInput, { fontFamily: F, fontSize: fs(11), color: C.amber, borderColor: C.border, flex: 1 }]}
+            style={[styles.filterInput, { fontFamily: F, fontSize: fs(11), color: C.value, borderColor: C.border, flex: 1 }]}
             placeholder="Search name, location or callsign…"
             placeholderTextColor={C.textDim}
             value={filter}
@@ -2481,13 +2488,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
               AsyncStorage.setItem('vibe.picker.sort', next).catch(() => {});
             }}
           >
-            <Text style={{ fontFamily: F, fontSize: fs(11), color: effectiveSort !== 'nearest' ? C.amber : C.textDim, letterSpacing: 1 }}>
+            <Text style={{ fontFamily: F, fontSize: fs(11), color: effectiveSort !== 'nearest' ? C.key : C.keyIdle, letterSpacing: 1 }}>
               {effectiveSort === 'snr' ? '📶 SNR' : effectiveSort === 'country' ? '🌍 COUNTRY' : '📍 NEAR'}
             </Text>
           </TouchableOpacity>
           {collapsibleKeys.length > 0 && (
             <TouchableOpacity style={[styles.sortBtn, { borderColor: C.border }]} onPress={toggleAllGroups}>
-              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 1 }}>
+              <Text style={{ fontFamily: F, fontSize: fs(11), color: C.keyIdle, letterSpacing: 1 }}>
                 {allGroupsOpen ? '▾ ALL' : '▸ ALL'}
               </Text>
             </TouchableOpacity>
@@ -2503,9 +2510,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             </View>
           ) : error ? (
             <View style={styles.centred}>
-              <Text style={{ fontFamily: F, fontSize: fs(12), color: C.red, textAlign: 'center' }}>{error}</Text>
+              <Text style={{ fontFamily: F, fontSize: fs(12), ...meaningText(C.m, C.bad), textAlign: 'center' }}>{error}</Text>
               <TouchableOpacity onPress={() => openDirectory(selectedDir)}>
-                <Text style={{ fontFamily: F, fontSize: fs(12), color: C.amber, textDecorationLine: 'underline' }}>Retry</Text>
+                <Text style={{ fontFamily: F, fontSize: fs(12), color: C.key, textDecorationLine: 'underline' }}>Retry</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -2529,20 +2536,21 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                    (no compatibility mode without a WebView), so a banner offering to SHOW them
                    would be an offer we cannot honour. Nothing is lost — they are unusable there. */
                 restrictedCount > 0 && !IS_TV ? (
-                  <View style={{ borderWidth: 1, borderColor: C.red, borderRadius: 8,
+                  <View style={{ borderWidth: 1, borderColor: C.bad, borderRadius: 8,
                                  paddingHorizontal: 10, paddingVertical: 8, marginBottom: 8,
                                  flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.red, flex: 1, lineHeight: fs(16) }}>
-                      {restrictedCount} receiver{restrictedCount === 1 ? '' : 's'} shown in red do not allow
+                    <Text style={{ fontFamily: F, fontSize: fs(11.5), ...meaningText(C.m, C.bad), flex: 1, lineHeight: fs(16) }}>
+                      {/* ★ "in red" is only true while `bad` IS red — red text makes it white bold (meaningsFor). */}
+                      {restrictedCount} receiver{restrictedCount === 1 ? '' : 's'} shown {C.m.badBold ? 'in bold white' : 'in red'} do not allow
                       third-party apps like VibeSDR — their owner has turned that off. They need
                       compatibility mode, which opens the receiver's own web page.
                     </Text>
                     <TouchableOpacity
                       onPress={() => setShowRestricted(v => !v)}
-                      style={{ borderWidth: 1, borderColor: C.red, borderRadius: 6,
+                      style={{ borderWidth: 1, borderColor: C.bad, borderRadius: 6,
                                paddingHorizontal: 10, paddingVertical: 6 }}
                     >
-                      <Text style={{ fontFamily: F, fontSize: fs(11), color: C.red }}>
+                      <Text style={{ fontFamily: F, fontSize: fs(11), ...meaningText(C.m, C.bad) }}>
                         {showRestricted ? 'HIDE' : 'SHOW'}
                       </Text>
                     </TouchableOpacity>
@@ -2597,19 +2605,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                       way to hear it while serving is to be an ordinary listener on our own server,
                       over 127.0.0.1. See connectLoopback. */}
                   <ChooserRow
-                    style={[styles.row, { borderColor: serving.running ? C.green : C.amber }]}
+                    style={[styles.row, { borderColor: serving.running ? C.green : C.borderBright }]}
                     onPress={() => (serving.running ? connectLoopback() : connectLocal())}
                   >
                     <View style={styles.rowMain}>
-                      <Text style={{ fontFamily: F, fontSize: fs(16), color: serving.running ? C.green : C.amber }} numberOfLines={1}>Listen</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(16), color: serving.running ? C.green : C.text }} numberOfLines={1}>Listen</Text>
                       <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
                         {serving.running
                           ? `server via local loopback · ${serving.listeners}/${serving.maxUsers} connected`
                           : 'tune the dongle plugged into this phone (USB-C OTG)'}
                       </Text>
                     </View>
-                    <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={serving.running ? C.green : C.amber} strokeWidth={2.4} /></View>
-                    <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
+                    <View style={{ marginLeft: 4 }}><UsbSdrIcon size={26} color={serving.running ? C.green : C.key} strokeWidth={2.4} /></View>
+                    <Text style={{ fontFamily: F, fontSize: fs(20), color: C.keyDim, marginLeft: 8 }}>›</Text>
                   </ChooserRow>
                   {/* ★★★ THE SERVING INDICATOR IS THE SAFETY OF THE FEATURE, not decoration.
                         On 2026-09-02 this phone sat at 3x its normal CPU for an hour and the
@@ -2620,11 +2628,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         server screen must not silently stop the server. */}
                   {rtlTcpServerSupported && (
                     <ChooserRow
-                      style={[styles.row, { borderColor: serving.running ? C.green : C.amber }]}
+                      style={[styles.row, { borderColor: serving.running ? C.green : C.borderBright }]}
                       onPress={() => navigation.navigate('ServerMode', { keepOnExit: serving.running } as never)}
                     >
                       <View style={styles.rowMain}>
-                        <Text style={{ fontFamily: F, fontSize: fs(16), color: serving.running ? C.green : C.amber }} numberOfLines={1}>
+                        <Text style={{ fontFamily: F, fontSize: fs(16), color: serving.running ? C.green : C.text }} numberOfLines={1}>
                           {serving.running ? '● Currently serving' : '⇆ Use as server'}
                         </Text>
                         <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
@@ -2633,7 +2641,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                             : 'serve this dongle to other devices on your Wi-Fi'}
                         </Text>
                       </View>
-                      <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 8 }}>›</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(20), color: C.keyDim, marginLeft: 8 }}>›</Text>
                     </ChooserRow>
                   )}
                 </>)}
@@ -2645,7 +2653,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   <SectionHeader label="CUSTOM SERVER" fs={fs} F={F} C={C} />
                   {tcpFavs.map((f) => (
                     <ChooserRow key={`${f.host}:${f.port}`}
-                      style={[styles.row, { borderColor: C.amber }]}
+                      style={[styles.row, { borderColor: C.borderBright }]}
                       onPress={() => { void connectTcpFav(f); }}
                       onLongPress={() => Alert.alert(f.name, `${f.host}:${f.port}`, [
                         { text: 'Cancel', style: 'cancel' },
@@ -2653,9 +2661,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                       ])}
                     >
                       <Image source={require('../../assets/rtltcp.png')}
-                        style={{ width: 26, height: 26, tintColor: C.amber, marginRight: 8 }} resizeMode="contain" />
+                        style={{ width: 26, height: 26, tintColor: C.key, marginRight: 8 }} resizeMode="contain" />
                       <View style={styles.rowMain}>
-                        <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{f.name}</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text }} numberOfLines={1}>{f.name}</Text>
                         <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
                           {PROTO_LABEL[(f.proto ?? 'rtltcp') as BackendType] ?? 'auto'} · {f.host}:{f.port}
                         </Text>
@@ -2665,16 +2673,16 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                           { text: 'Cancel', style: 'cancel' },
                           { text: 'Delete', style: 'destructive', onPress: () => removeTcpFav(f) },
                         ])}>
-                        <Text style={{ fontFamily: F, fontSize: fs(18), color: C.goldDim, paddingHorizontal: 8 }}>✕</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(18), color: C.keyDim, paddingHorizontal: 8 }}>✕</Text>
                       </TouchableOpacity>
                     </ChooserRow>
                   ))}
                   <ChooserRow
-                    style={[styles.row, { borderColor: C.goldDim, borderStyle: 'dashed' }]}
+                    style={[styles.row, { borderColor: C.keyDim, borderStyle: 'dashed' }]}
                     onPress={() => setTcpModal(true)}
                   >
                     <View style={styles.rowMain}>
-                      <Text style={{ fontFamily: F, fontSize: fs(15), color: C.gold }} numberOfLines={1}>+ Add custom server</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(15), color: C.key }} numberOfLines={1}>+ Add custom server</Text>
                       <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
                         name + address of any SDR server — we work out the type
                       </Text>
@@ -2689,15 +2697,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     <SectionHeader label="DISCOVERED" fs={fs} F={F} C={C} />
                     {discoveredNew.map((s) => (
                       <ChooserRow key={`disc-${s.host}:${s.port}`}
-                        style={[styles.row, { borderColor: C.amber }]}
+                        style={[styles.row, { borderColor: C.borderBright }]}
                         onPress={() => s.proto === 'vibeserver'
                           ? openVibeServer(s.host, s.port, s.name, s.pin)
                           : connectTcp(s.host, s.port, s.name)}
                       >
                         <Image source={require('../../assets/rtltcp.png')}
-                          style={{ width: 26, height: 26, tintColor: C.amber, marginRight: 8 }} resizeMode="contain" />
+                          style={{ width: 26, height: 26, tintColor: C.key, marginRight: 8 }} resizeMode="contain" />
                         <View style={styles.rowMain}>
-                          <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{s.name}</Text>
+                          <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text }} numberOfLines={1}>{s.name}</Text>
                           <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>
                             {s.proto === 'vibeserver'
                               ? `VibeServer · ${s.host}:${s.port}${s.pin ? ' · 🔒' : ''}`
@@ -2706,7 +2714,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         </View>
                         <TouchableOpacity hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                           onPress={() => saveDiscovered(s)}>
-                          <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, paddingHorizontal: 8 }}>☆</Text>
+                          <Text style={{ fontFamily: F, fontSize: fs(20), color: C.keyDim, paddingHorizontal: 8 }}>☆</Text>
                         </TouchableOpacity>
                       </ChooserRow>
                     ))}
@@ -2723,13 +2731,13 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   onPress={() => { setIdentPrefill(kiwiIdentValue); setIdentModal({}); }}
                 >
                   <View style={styles.rowMain}>
-                    <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, letterSpacing: 1 }} numberOfLines={1}>PREFILL KIWISDR CALL SIGN</Text>
-                    <Text style={{ fontFamily: F, fontSize: fs(16), color: kiwiIdentValue ? C.amber : C.textDim, marginTop: 3 }} numberOfLines={1}>
+                    <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.section, letterSpacing: 1 }} numberOfLines={1}>PREFILL KIWISDR CALL SIGN</Text>
+                    <Text style={{ fontFamily: F, fontSize: fs(16), color: kiwiIdentValue ? C.value : C.textDim, marginTop: 3 }} numberOfLines={1}>
                       {kiwiIdentValue || 'Not set — tap to add'}
                     </Text>
                   </View>
                   <View style={styles.rowRight}>
-                    <Text style={{ fontFamily: F, fontSize: fs(18), color: C.goldDim }}>✎</Text>
+                    <Text style={{ fontFamily: F, fontSize: fs(18), color: C.keyDim }}>✎</Text>
                   </View>
                 </ChooserRow>
                 <SectionHeader label="DIRECTORIES" fs={fs} F={F} C={C} />
@@ -2740,7 +2748,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                     onPress={() => openDirectory(d.id)}
                   >
                     <View style={styles.rowMain}>
-                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.amber }} numberOfLines={1}>{d.name}</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(16), color: C.text }} numberOfLines={1}>{d.name}</Text>
                       <Text style={{ fontFamily: F, fontSize: fs(11.5), color: C.textDim, marginTop: 2 }} numberOfLines={1}>{d.desc}</Text>
                     </View>
                     <View style={styles.rowRight}>
@@ -2748,10 +2756,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                         <View key={k} style={k === 'owrx' ? styles.logoChip : undefined}>
                           {TYPE_LOGOS[k]
                             ? <Image source={TYPE_LOGOS[k]} style={styles.typeLogo} resizeMode="contain" />
-                            : <Text style={{ fontFamily: F, fontSize: fs(18), color: C.amber }}>📻</Text>}
+                            : <Text style={{ fontFamily: F, fontSize: fs(18), color: C.text }}>📻</Text>}
                         </View>
                       ))}
-                      <Text style={{ fontFamily: F, fontSize: fs(20), color: C.goldDim, marginLeft: 4 }}>›</Text>
+                      <Text style={{ fontFamily: F, fontSize: fs(20), color: C.keyDim, marginLeft: 4 }}>›</Text>
                     </View>
                   </ChooserRow>
                 ))}
@@ -2788,8 +2796,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   return (
                     <ChooserRow zone="footer" style={[styles.row, { borderColor: C.border, marginTop: 12, marginBottom: 6 }]} onPress={onPress}>
                       <View style={styles.rowMain}>
-                        <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.textDim, letterSpacing: 1 }} numberOfLines={1}>MAPS ON THIS DEVICE</Text>
-                        <Text style={{ fontFamily: F, fontSize: fs(13), color: st.kind === 'error' ? C.red ?? C.amber : C.amber, marginTop: 3, lineHeight: fs(18) }}>
+                        <Text style={{ fontFamily: F, fontSize: fs(10.5), color: C.section, letterSpacing: 1 }} numberOfLines={1}>MAPS ON THIS DEVICE</Text>
+                        <Text style={{ fontFamily: F, fontSize: fs(13), ...meaningText(C.m, st.kind === 'error' ? C.bad : C.text), marginTop: 3, lineHeight: fs(18) }}>
                           {line}
                         </Text>
                       </View>
@@ -2804,7 +2812,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   style={{ alignSelf: 'center', marginTop: 10, marginBottom: 4, paddingVertical: 8, paddingHorizontal: 14,
                            borderRadius: 6, borderWidth: 0, borderColor: 'transparent' }}
                   onPress={() => { void exportLogs(); }}>
-                  <Text style={{ fontFamily: F, fontSize: fs(12), color: C.textDim, textDecorationLine: 'underline' }}>
+                  <Text style={{ fontFamily: F, fontSize: fs(12), color: C.keyIdle, textDecorationLine: 'underline' }}>
                     {EXPORT_LOGS_LABEL}
                   </Text>
                 </ChooserRow>
@@ -2832,8 +2840,8 @@ function SectionHeader({ label, fs, F, C, collapsible, collapsed, onToggle }: {
       <TouchableOpacity onPress={onToggle} activeOpacity={0.6}
         style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, paddingVertical: 11,
                  borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border }}>
-        <Text style={{ fontFamily: F, fontSize: fs(15), color: '#ECE3D0', width: fs(20) }}>{collapsed ? '▸' : '▾'}</Text>
-        <Text style={{ fontFamily: F, fontSize: fs(15), color: '#ECE3D0', flex: 1, letterSpacing: 0.5 }} numberOfLines={2}>
+        <Text style={{ fontFamily: F, fontSize: fs(15), color: C.text, width: fs(20) }}>{collapsed ? '▸' : '▾'}</Text>
+        <Text style={{ fontFamily: F, fontSize: fs(15), color: C.text, flex: 1, letterSpacing: 0.5 }} numberOfLines={2}>
           {label}
         </Text>
       </TouchableOpacity>
@@ -2841,10 +2849,38 @@ function SectionHeader({ label, fs, F, C, collapsible, collapsed, onToggle }: {
   }
   return (
     <View style={{ paddingHorizontal: 4, paddingTop: 10, paddingBottom: 4 }}>
-      <Text style={{ fontFamily: F, fontSize: fs(11), color: C.textDim, letterSpacing: 2 }}>{label}</Text>
+      <Text style={{ fontFamily: F, fontSize: fs(11), color: C.section, letterSpacing: 2 }}>{label}</Text>
     </View>
   );
 }
+
+/**
+ * ★★★ THE DIRECTORY'S PALETTE, BY ROLE (Stuart, 2026-10-12: "yes colours apply everywhere including directory if
+ * possible"). The same rule as the decoder boxes and menus, from `useGlassTheme()` — the glass skin's tokens in the
+ * user's colours whatever the chassis, because this screen is never plated (an engraved-on-metal value would vanish
+ * on its dark background):
+ *   • TEXT — server and directory names, titles, the auto-connect line, inputs, meta lines, headings: the TEXT colour
+ *     (`text` / `value` / `section` / `textDim`);
+ *   • KEYS — every tappable legend (CONNECT, RECORDINGS, sort / filter chips, ★ ☆ ✎ ≡ › ✕, ‹ Directories, Retry,
+ *     the custom-server buttons), the row and input borders, the selected chip's fill: the CONTROLS colour;
+ *   • MEANINGS stay: `bad` / `warn` by the clash rule (meaningsFor — red text makes `bad` white bold, amber / neon
+ *     make `warn` white); serving / online GREEN and the favourite hearts' RED are fixed;
+ *   • KEPT: the "VibeSDR" title's amber and glow (the brand mark, like the app icon's), the network logos, flags and
+ *     the dark backgrounds.
+ * ★ theme.ts `Colors` is untouched — other screens still draw from it.
+ */
+function directoryPalette(pt: PopupTokens) {
+  return {
+    bg: Colors.bg,
+    brand: Colors.amber, brandGlow: Colors.amberGlow,
+    text: pt.ink.text, value: pt.gold.value, section: pt.ink.section, textDim: pt.ink.textDim,
+    key: pt.gold.sel, keyIdle: pt.ink.key, keyDim: pt.gold.close, keyFill: pt.gold.fill, keyBgAct: pt.ink.keyBgAct,
+    border: pt.ink.border, borderBright: pt.gold.selBorder,
+    green: Colors.green, red: Colors.red,
+    bad: pt.ink.m.bad, warn: pt.ink.m.warn, m: pt.ink.m,
+  };
+}
+type DirectoryPalette = ReturnType<typeof directoryPalette>;
 
 function snrLabel(snr: number): string {
   if (snr >= 30) return '▲ Excellent conditions';
@@ -2852,11 +2888,12 @@ function snrLabel(snr: number): string {
   if (snr >= 6)  return '△ Fair conditions';
   return '▽ Poor conditions';
 }
-function snrColor(snr: number, C: any): string {
+/** A 4-step conditions scale — a MEANING: green and lime fixed, the fair step `warn`, the poor step `bad`. */
+function snrColor(snr: number, C: DirectoryPalette): string {
   if (snr >= 30) return C.green;
   if (snr >= 20) return '#88cc44';
-  if (snr >= 6)  return C.amber;
-  return C.red;
+  if (snr >= 6)  return C.warn;
+  return C.bad;
 }
 
 const styles = StyleSheet.create({

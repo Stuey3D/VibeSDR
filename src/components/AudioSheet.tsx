@@ -7,7 +7,7 @@ import Slider from '@react-native-community/slider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import type { DspFilterDesc, DspParamDesc } from './MenuSheet';
-import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
+import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus } from './PanelNav';
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { meterText, useMeters, type MeterBus } from './ControlsBar';
 import { isKiwiProtocol } from '../services/sdrTypes';
@@ -28,16 +28,34 @@ const SHEET_BG = 'rgba(8,6,1,0.97)';
 /** The squelch fader's index line while the gate MUTES (§4.3's closed-ring red). */
 const SQL_MUTING = '#ff3a2e';
 
-const C = {
-  gold:        '#ffe566',
-  goldDim:     'rgba(255,229,102,0.70)',
+/** Silver / black keep the literals the sheet drew (those keys and labels draw through `onMetal` and PopupKey). */
+const C_METAL = {
   muted:       'rgba(255,255,255,0.92)',
+  track:       'rgba(255,255,255,0.92)',
   btnBg:       'rgba(20,18,14,0.85)',
   border:      'rgba(255,255,255,0.30)',
   active:      'rgba(255,200,0,0.12)',
   divider:     'rgba(255,255,255,0.12)',
   sectionC:    'rgba(180,190,210,0.80)',
 };
+const audioCache = new WeakMap<PopupTokens, typeof C_METAL>();
+/**
+ * ★★ The sheet's own palette, from the LIVE tokens (Stuart, 2026-10-12: "yes colours apply everywhere including
+ * directory if possible"). On the default chassis: key legends, key borders, the selected fill and a slider's empty
+ * track in the CONTROLS colour; section labels and rules in the TEXT colour (popupTokens ink). `track` is its own
+ * role: the fill is the controls colour too, so the empty track is the same hue held well back (the key border's
+ * .35), or a slider would read as full. Cached per token object, so every caller shares one (NavSlider compares it).
+ */
+function audioC(pt: PopupTokens): typeof C_METAL {
+  if (pt.metal) return C_METAL;
+  let c = audioCache.get(pt);
+  if (!c) {
+    c = { muted: pt.ink.key, track: pt.ink.keyBorder, btnBg: C_METAL.btnBg, border: pt.ink.keyBorder,
+          active: pt.ink.keyBgAct, divider: pt.ink.divider, sectionC: pt.ink.section };
+    audioCache.set(pt, c);
+  }
+  return c;
+}
 
 /**
  * The squelch control: the LIVE SIGNAL METER IS the control. Signal fills the bar, a needle with a
@@ -61,6 +79,7 @@ const C = {
  */
 // ── Keyboard-reachable slider (see PanelNav; same shape as MenuSheet's) ──────
 function NavSlider(props: React.ComponentProps<typeof Slider>) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const { minimumValue = 0, maximumValue = 1, step, value = 0, onValueChange } = props;
   const nudge = step && step > 0 ? step : (maximumValue - minimumValue) / 20;
   // ★ ATTACH THE REF. Without it reveal cannot measure the slider and falls back to the old
@@ -71,19 +90,20 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
     if (next !== value) onValueChange?.(next);
   });
   const pt = usePopupTheme();
+  const C = audioC(pt);
   if (pt.metal) {
     // ★ §10.3: a slide fader; unlit exactly where the slider's track went muted ("Off").
     return (
       <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
         step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
-        active={props.minimumTrackTintColor !== C.muted} focused={focused}
+        active={props.minimumTrackTintColor !== C.track} focused={focused}
         style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
     );
   }
   return (
     <Slider ref={viewRef as any} {...props}
-      minimumTrackTintColor={focused ? NAV_FOCUS : props.minimumTrackTintColor}
-      thumbTintColor={focused ? NAV_FOCUS : props.thumbTintColor} />
+      minimumTrackTintColor={focused ? focusC.ring : props.minimumTrackTintColor}
+      thumbTintColor={focused ? focusC.ring : props.thumbTintColor} />
   );
 }
 
@@ -283,6 +303,7 @@ function SquelchControl({
 }) {
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
+  const C = audioC(pt);
   return (
     <View style={{ flex: 1 }}>
       <SquelchBar level={level} raw={raw} pos={pos} gate={gate} auto={auto}
@@ -326,7 +347,7 @@ function SquelchControl({
               value={Math.max(4, Math.min(20, margin))}
               onValueChange={(v: number) => onMargin?.(v)}
               minimumTrackTintColor={pt.gold.fill}
-              maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+              maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
             <Text style={st.bwVal}>{`+${Math.round(margin)} dB`}</Text>
           </View>
         </NavRow>
@@ -356,6 +377,7 @@ function fmtDspVal(v: number, step: number) {
 function SectionLabel({ label, icon }: { label: string; icon?: SectionIconName }) {
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
+  const C = audioC(pt);
   return (
     <View style={st.sectionBar}>
       <View style={st.sectionRow}>
@@ -429,6 +451,7 @@ function Toggle({ label, on, onPress, padH = 16, marginLeft, a11y }: {
   padH?: number; marginLeft?: number; a11y?: string;
 }) {
   const pt = usePopupTheme();
+  const C = audioC(pt);
   if (pt.metal) {
     return (
       <PopupKey label={label} active={on} pip onPress={onPress} hitSlop={8} height={30} fontSize={10}
@@ -596,6 +619,7 @@ export default function AudioSheet({
 }: AudioSheetProps) {
   const st = usePopupStyles(makeSt);
   const pt = usePopupTheme();
+  const C = audioC(pt);
   const [iqRate, setIqRate] = useState(48000);   // ★ raw IQ out: the rate to ask for
   const { theme: t } = useTheme();
   const insets = useSafeAreaInsets();
@@ -674,7 +698,7 @@ export default function AudioSheet({
           clean. "I don't mind not having the transparency layer when the menu is up". The tap-to-close view stays. */}
       <PopupScrim style={st.backdrop} color="transparent" onPress={onClose} onTouchStart={noteTouchInteraction} />
       <View style={[st.sheet, {
-        borderTopColor: t.barBorder,
+        borderTopColor: pt.metal ? t.barBorder : pt.ink.border,
         // Landscape: keep clear of the Dynamic Island and don't sprawl the full
         // (very wide) width — cap it and centre it.
         paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,
@@ -685,8 +709,8 @@ export default function AudioSheet({
         <PopupPlate />
         <PopupHandle />
         <View style={st.titleRow}>
-          <SectionIcon name="audio" size={15} color={pt.metal ? pt.label : t.sectionColor} />
-          <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font, marginBottom: 0 }, st.sheetLabelMetal]}>
+          <SectionIcon name="audio" size={15} color={pt.metal ? pt.label : pt.ink.section} />
+          <Text style={[st.sheetLabel, { color: pt.ink.section, fontFamily: t.font, marginBottom: 0 }, st.sheetLabelMetal]}>
             AUDIO
           </Text>
           {/* ★ A way out at the TOP, in every orientation — CLOSE is at the end of a list that scrolls. */}
@@ -696,7 +720,7 @@ export default function AudioSheet({
                 accessibilityLabel="Close" style={{ width: 34, paddingHorizontal: 0 }} />
             ) : (
               <TouchableOpacity onPress={onClose} hitSlop={10} accessibilityRole="button" accessibilityLabel="Close">
-                <Text style={{ fontFamily: t.font, fontSize: 18, color: t.btnText }}>✕</Text>
+                <Text style={{ fontFamily: t.font, fontSize: 18, color: pt.metal ? t.btnText : pt.gold.close }}>✕</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -720,8 +744,8 @@ export default function AudioSheet({
                 minimumValue={0} maximumValue={1} step={0.01}
                 value={mac.state.volume}
                 onValueChange={(v: number) => setMacAudioVolume(v)}
-                minimumTrackTintColor={mac.state.muted ? C.muted : pt.gold.fill}
-                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                minimumTrackTintColor={mac.state.muted ? C.track : pt.gold.fill}
+                maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
               <Text style={[st.bwVal, { minWidth: 52 }]}>{macVolumeLabel(mac.state)}</Text>
               <Toggle label="MUTE" on={mac.state.muted} onPress={toggleMacAudioMute} padH={10}
                 a11y={mac.state.muted ? 'Unmute' : 'Mute'} />
@@ -781,8 +805,8 @@ export default function AudioSheet({
                 minimumValue={-130} maximumValue={-20} step={1}
                 value={owrxSql <= -130 ? -130 : Math.max(-129, Math.min(-20, owrxSql + visualGain))}
                 onValueChange={(v: number) => { const db = v <= -130 ? -150 : v - visualGain; setOwrxSql(db); onOwrxSquelch?.(db); }}
-                minimumTrackTintColor={owrxSql > -130 ? pt.gold.fill : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                minimumTrackTintColor={owrxSql > -130 ? pt.gold.fill : C.track}
+                maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
               <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : sqlDisp(owrxSql + visualGain)}</Text>
             </View>
             <View style={st.bwRow}>
@@ -791,8 +815,8 @@ export default function AudioSheet({
                 minimumValue={0} maximumValue={30} step={1}
                 value={owrxNr}
                 onValueChange={(v: number) => { setOwrxNr(v); onOwrxNr?.(v); }}
-                minimumTrackTintColor={owrxNr > 0 ? pt.gold.fill : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                minimumTrackTintColor={owrxNr > 0 ? pt.gold.fill : C.track}
+                maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
               <Text style={st.bwVal}>{owrxNr <= 0 ? 'Off' : `${owrxNr}dB`}</Text>
             </View>
           </>)}
@@ -817,8 +841,8 @@ export default function AudioSheet({
                 minimumValue={0} maximumValue={20} step={1}
                 value={localNR}
                 onValueChange={(v: number) => onLocalNR?.(v)}
-                minimumTrackTintColor={localNR > 0 ? pt.gold.fill : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                minimumTrackTintColor={localNR > 0 ? pt.gold.fill : C.track}
+                maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
               <Text style={st.bwVal}>{localNR <= 0 ? 'Off' : String(localNR)}</Text>
             </View>
           )}
@@ -990,8 +1014,8 @@ export default function AudioSheet({
                   const db = v === 0 ? -999 : -48 + (v - 1) * (68 / 99);
                   onFmSquelch?.(db);
                 }}
-                minimumTrackTintColor={fmSquelch > -999 ? pt.gold.fill : C.muted}
-                maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                minimumTrackTintColor={fmSquelch > -999 ? pt.gold.fill : C.track}
+                maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
               <Text style={st.bwVal}>{fmSquelch <= -999 ? 'Open' : `${fmSquelch.toFixed(1)}dB`}</Text>
             </View>
           )}
@@ -1043,7 +1067,7 @@ export default function AudioSheet({
                           minimumValue={min} maximumValue={max} step={step}
                           value={Math.max(min, Math.min(max, num))}
                           onValueChange={(v: number) => onServerDspParam?.(p.name, fmtDspVal(v, step))}
-                          minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted}
+                          minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track}
                           thumbTintColor={pt.gold.thumb} />
                         <Text style={st.bwVal}>{fmtDspVal(num, step)}</Text>
                       </View>
@@ -1059,8 +1083,8 @@ export default function AudioSheet({
         {pt.metal ? (
           <PopupKey label="CLOSE" onPress={onClose} height={32} style={{ alignSelf: 'center', width: 110, marginTop: 14 }} />
         ) : (
-        <TouchableOpacity style={[st.closeBtn, { borderColor: t.btnBorder }]} onPress={onClose}>
-          <Text style={[st.closeBtnText, { fontFamily: t.font, color: t.btnText }]}>CLOSE</Text>
+        <TouchableOpacity style={[st.closeBtn, { borderColor: pt.ink.keyBorder }]} onPress={onClose}>
+          <Text style={[st.closeBtnText, { fontFamily: t.font, color: pt.gold.close }]}>CLOSE</Text>
         </TouchableOpacity>
         )}
       </View>
@@ -1069,7 +1093,7 @@ export default function AudioSheet({
   );
 }
 
-const makeSt = (pt: PopupTokens) => StyleSheet.create({
+const makeSt = (pt: PopupTokens) => { const C = audioC(pt); return StyleSheet.create({
   backdrop:   { flex: 1 },
   sheet: {
     backgroundColor: SHEET_BG,
@@ -1092,11 +1116,11 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
     fontWeight: 'bold', letterSpacing: 2,
   }, { ...engraveText(pt), fontSize: 11, letterSpacing: 2.2 }),
 
-  btnFocused:    { borderColor: NAV_FOCUS, borderWidth: 2 },
+  btnFocused:    { borderColor: pt.ink.focus, borderWidth: 2 },
   // The bar has no border of its own, so focus is a ring drawn around it rather than a
   // thickened edge — and it must be visible, since without it you cannot tell the arrows
   // are about to move the squelch rather than the focus.
-  sqlBarFocused: { borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 6, margin: -2 },
+  sqlBarFocused: { borderWidth: 2, borderColor: pt.ink.focus, borderRadius: 6, margin: -2 },
   btnRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
   btnRowEnd: { justifyContent: 'flex-end' },
   btn: {
@@ -1127,7 +1151,7 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   sqlLabel:    { width: 62 },
   // Sets the expectation that a gate sitting ON the noise will chatter a little — otherwise that
   // reads as a bug rather than as physics.
-  sqlHint:     onMetal(pt, { color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+  sqlHint:     onMetal(pt, { color: pt.metal ? 'rgba(255,255,255,0.45)' : pt.ink.textFaint, fontFamily: 'Atkinson Hyperlegible',
                  fontSize: 10, lineHeight: 13, paddingTop: 4, paddingBottom: 2 }, engraveText(pt, pt.note)),
   sqlBarTrack: { height: 14, borderRadius: 7, backgroundColor: 'rgba(255,255,255,0.15)',
                  overflow: 'hidden' },
@@ -1147,12 +1171,12 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   sqlNeedleAuto: { top: 0, width: 2, backgroundColor: '#ff4b4b' },
   sqlAutoOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 14,
                     alignItems: 'center', justifyContent: 'center' },
-  sqlAutoOverlayTxt: onMetal(pt, { color: 'rgba(255,255,255,0.9)', fontFamily: 'Atkinson Hyperlegible',
+  sqlAutoOverlayTxt: onMetal(pt, { color: pt.ink.textSoft, fontFamily: 'Atkinson Hyperlegible',
                        fontSize: 9, letterSpacing: 1.2 }, { ...engraveText(pt, pt.note), position: 'absolute', top: 0, left: 0, right: 0, textAlign: 'center' }),
   sqlAutoRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 6 },
   // ★ The reason a disabled toggle is disabled, beside it — never a switch that silently does
   //   nothing. Wraps, because the sentence matters more than the row height.
-  sqlAutoWhy:  onMetal(pt, { color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+  sqlAutoWhy:  onMetal(pt, { color: pt.ink.textFaint, fontFamily: 'Atkinson Hyperlegible',
                  fontSize: 10, lineHeight: 13, flex: 1 }, engraveText(pt, pt.note)),
   sqlAutoMarginRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 2 },
   sqlAutoMarginCap: onMetal(pt, { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10,
@@ -1168,7 +1192,8 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
   recTime:  onMetal(pt, { color: pt.gold.readout, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 }, { fontWeight: '700' }),
-  dspError: onMetal(pt, { color: 'rgba(220,53,69,0.95)', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 }, { color: pt.danger }),
+  // ★ An error is the `bad` meaning: red, or white BOLD on red text (decoderTokens meaningsFor).
+  dspError: onMetal(pt, { color: pt.ink.m.bad, fontWeight: pt.ink.m.badBold ? '700' : '400', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 }, { color: pt.danger, fontWeight: '400' }),
 
   closeBtn: {
     marginTop: 14, alignSelf: 'center', borderWidth: 1,
@@ -1180,7 +1205,7 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   sigWin: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 10, paddingVertical: 6, marginVertical: 4 },
   sigWinLabel: { color: pt.winDim, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 1.4 },
   sigWinVal: { color: pt.readout, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, fontWeight: '700', textShadowColor: pt.readoutGlow, textShadowRadius: 5, textShadowOffset: { width: 0, height: 0 } },
-  iqNote: onMetal(pt, { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, lineHeight: 15, marginTop: 4 }, engraveText(pt, pt.note)),
+  iqNote: onMetal(pt, { color: pt.metal ? C.muted : pt.ink.textSoft, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, lineHeight: 15, marginTop: 4 }, engraveText(pt, pt.note)),
   fBox: { height: 24, justifyContent: 'center' },
   fSlot: { position: 'absolute', left: 0, right: 0, top: 9, height: 6, borderRadius: 3 },
   fSlotLip: { position: 'absolute', left: 3, right: 3, top: 15, height: 1 },
@@ -1191,4 +1216,4 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   fCapBot: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '30%' },
   fCapHi: { position: 'absolute', left: 1, right: 1, top: 0, height: 1 },
   fCapLine: { position: 'absolute', left: 8, top: 3, bottom: 3, width: 2, shadowOpacity: 1, shadowRadius: 2, shadowOffset: { width: 0, height: 0 } },
-});
+}); };

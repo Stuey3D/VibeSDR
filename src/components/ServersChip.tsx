@@ -29,6 +29,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Canvas, Rect, RadialGradient, vec } from '@shopify/react-native-skia';
 import { useTheme } from '../contexts/ThemeContext';
 import SectionIcon from './SectionIcon';
+import { useGlassTheme } from './PopupShell';
 
 type Props = {
   /** Bump to open the menu from outside (keyboard Esc). */
@@ -58,11 +59,8 @@ type Props = {
 };
 
 // Amber pill, shrunk ~12% from the first mockup (which read a touch chunky).
-const AMBER_BORDER = 'rgba(255,160,0,0.85)';
 const BACKING      = 'rgba(14,10,4,0.82)';   // legible over live green trace…
 const SCRIM        = 'rgba(4,3,1,0.9)';       // …softened by the watchOS-style scrim
-const SEP          = 'rgba(255,160,0,0.22)';
-const SEP_STRONG   = 'rgba(255,160,0,0.5)';   // divides the exit from the toggles
 
 export default function ServersChip({
   top, left, isFavourite, isDefault,
@@ -92,7 +90,14 @@ export default function ServersChip({
   }, [closeToken]);
   useEffect(() => { onExpandedChange?.(expanded); }, [expanded]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const amber = t.btnText;   // #ffb833
+  /* ★★ THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including directory if possible") —
+   *  was a fixed amber (#ffb833). The chip and every row in its menu are KEYS, so they take the CONTROLS colour,
+   *  as do the border and separators; the refresh hint under its row is TEXT. useGlassTheme: the glass skin
+   *  whatever the chassis — the chip floats over the waterfall, never on a plate. Hearts / stars are toggles here
+   *  (keys), not meanings, so they follow the keys too. */
+  const pt = useGlassTheme();
+  const amber = pt.gold.sel;
+  const border = pt.gold.selBorder, sep = pt.ink.border, sepStrong = pt.gold.selBorder;
   const font  = t.font;      // Atkinson (the UI face; Nixie One is only ever the faceplate's, in neon)
 
   const collapse = useCallback(() => setExpanded(false), []);
@@ -139,7 +144,7 @@ export default function ServersChip({
   // Idle-close: a stray key must not leave this sitting over the waterfall with the phone
   // face-down. Touch cancels it — see PanelNav.
   const navFocus = useListNav(expanded, rows.length, (i) => rows[i]?.(), undefined, collapse);
-  const rowFocus = (i: number) => (navFocus === i ? styles.rowFocused : null);
+  const rowFocus = (i: number) => (navFocus === i ? [styles.rowFocused, { backgroundColor: pt.ink.focusBg }] : null);
 
   return (
     // Full-screen, box-none so only the chip / dropdown / catch-layer take touches.
@@ -164,7 +169,7 @@ export default function ServersChip({
             accessibilityRole="button"
             accessibilityLabel="Servers — tap to switch receiver or return to the list"
             style={({ pressed }) => [styles.chip, {
-              borderColor: AMBER_BORDER, opacity: pressed ? 0.85 : 1,
+              borderColor: border, opacity: pressed ? 0.85 : 1,
             }]}
           >
             <MeasuredScrim render={scrim} />
@@ -174,7 +179,7 @@ export default function ServersChip({
           </Pressable>
         ) : (
           // ── Expanded dropdown ───────────────────────────────────────────────
-          <View style={[styles.menu, { borderColor: AMBER_BORDER }]}>
+          <View style={[styles.menu, { borderColor: border }]}>
             {/* Header = the exit, at the chip's x-anchor (tap-tap same spot) */}
             <Pressable onPress={onHeader} style={[styles.row, rowFocus(0)]}
               accessibilityRole="button" accessibilityLabel="Back to server list">
@@ -183,7 +188,7 @@ export default function ServersChip({
               <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Back to server list</Text>
             </Pressable>
 
-            <View style={[styles.sep, { backgroundColor: SEP_STRONG }]} />
+            <View style={[styles.sep, { backgroundColor: sepStrong }]} />
 
             {canFavourite && (
               <Pressable onPress={onToggleFavourite} style={[styles.row, rowFocus(at.fav)]}
@@ -206,14 +211,14 @@ export default function ServersChip({
                 rebuilds every socket should say when to reach for it. */}
             {onRefresh && (
               <>
-                <View style={[styles.sep, { backgroundColor: SEP }]} />
+                <View style={[styles.sep, { backgroundColor: sep }]} />
                 <Pressable onPress={onRefreshRow} style={[styles.row, styles.rowTop, rowFocus(at.refresh)]}
                   accessibilityRole="button" accessibilityLabel="Connection Refresh"
                   accessibilityHint={REFRESH_HINT}>
                   <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>↻</Text>
                   <View style={styles.rowCol}>
                     <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Connection Refresh</Text>
-                    <Text style={[styles.rowSub, { color: amber, fontFamily: font }]}>{REFRESH_HINT}</Text>
+                    <Text style={[styles.rowSub, { color: pt.ink.textDim, fontFamily: font }]}>{REFRESH_HINT}</Text>
                   </View>
                 </Pressable>
               </>
@@ -222,7 +227,7 @@ export default function ServersChip({
             {/* Collapse handle — the non-exit escape from an accidental open */}
             <Pressable onPress={collapse} style={[styles.collapse, rowFocus(at.collapse)]} hitSlop={8}
               accessibilityRole="button" accessibilityLabel="Close server menu">
-              <View style={[styles.grab, { backgroundColor: SEP }]} />
+              <View style={[styles.grab, { backgroundColor: sep }]} />
               <Text style={[styles.collapseChevron, { color: amber, fontFamily: font }]}>⌃</Text>
             </Pressable>
           </View>
@@ -278,7 +283,7 @@ const styles = StyleSheet.create({
   },
   // Focus is a tint, not a border: these rows sit flush in a small dropdown and a
   // border would shift the whole menu as focus moved.
-  rowFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },
+  rowFocused: {},   // ★ tint inline: pt.ink.focusBg (white on green controls, 2026-10-12)
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 9,
     paddingVertical: 11, paddingHorizontal: 13,

@@ -12,8 +12,20 @@
  *  ★ The value is committed through the field's own onChangeText, then its onEndEditing / onSubmitEditing /
  *    onBlur — so callers that save on change or on blur behave exactly as they do with a keyboard.
  */
-import React, { useState } from 'react';
+import React, { createContext, useContext, useState } from 'react';
 import { Modal, NativeModules, Platform, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { popupTokensFor, type PopupTokens } from '../constants/popupTokens';
+
+/* ★★★ LITE-SAFE: NO PopupShell / FaceplateContext / Reanimated / Skia HERE. ServerModeScreen imports this field,
+ *   and VibeServer Lite bundles ServerModeScreen on RN 0.73 with neither library (its metro config cannot even
+ *   see the main app's node_modules). So the colours come IN: the main app wraps the screen in
+ *   <TvTextInputTokens value={tokens}> (or passes `tokens` on a field); Lite, with no colour settings, gets the
+ *   default — amber keys and amber text, the field's old look by the rule. popupTokens.ts is pure (type imports
+ *   and decoderTokens.ts only). */
+const LITE_DEFAULT: PopupTokens = popupTokensFor('default', '255,174,26', '255,174,26', 'hyper');
+const TvTokens = createContext<PopupTokens>(LITE_DEFAULT);
+/** Hands the user's colours (the main app's glass tokens) to every TV text field below it. */
+export const TvTextInputTokens = TvTokens.Provider;
 
 /* ★★ WHO GETS THE TV FIELD. Platform.isTV is the system's television UI MODE, and Kiko's Android TV box
  *  (2026-10-03) could not tab between fields with a hardware keyboard either — a box may not report that
@@ -27,12 +39,14 @@ const useTvFields: boolean = Platform.isTV || (Platform.OS === 'android' && (() 
   return m?.isTv === true || m?.noTouchscreen === true;
 })());
 
-export default function TvTextInput(props: TextInputProps) {
-  if (!useTvFields) return <TextInput {...props} />;
+export default function TvTextInput(props: TextInputProps & { tokens?: PopupTokens }) {
+  if (!useTvFields) { const { tokens: _t, ...rest } = props; return <TextInput {...rest} />; }
   return <TvField {...props} />;
 }
 
-function TvField(props: TextInputProps) {
+function TvField({ tokens, ...props }: TextInputProps & { tokens?: PopupTokens }) {
+  const ctx = useContext(TvTokens);
+  const styles = tvStyles(tokens ?? ctx);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [focused, setFocused] = useState(false);
@@ -77,14 +91,23 @@ function TvField(props: TextInputProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  focused:  { borderColor: '#ffb833', borderWidth: 2 },
+/* ★★ IN THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including directory if possible"):
+ *   the field's label in the TEXT colour, DONE and the sheet's edge in the CONTROLS colour; the D-pad focus ring is
+ *   the app's focus MEANING (green on every colour, PopupTokens ink.focus) — it was amber here alone. */
+const tvCache = new WeakMap<PopupTokens, ReturnType<typeof makeTvStyles>>();
+function tvStyles(pt: PopupTokens) {
+  let s = tvCache.get(pt);
+  if (!s) { s = makeTvStyles(pt); tvCache.set(pt, s); }
+  return s;
+}
+const makeTvStyles = (pt: PopupTokens) => StyleSheet.create({
+  focused:  { borderColor: pt.ink.focus, borderWidth: 2 },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', padding: 40 },
-  sheet:    { backgroundColor: '#14110a', borderRadius: 14, borderWidth: 1, borderColor: '#5a4520', padding: 20,
+  sheet:    { backgroundColor: '#14110a', borderRadius: 14, borderWidth: 1, borderColor: pt.ink.border, padding: 20,
               maxWidth: 720, width: '100%', alignSelf: 'center' },
-  label:    { color: '#c9922e', fontSize: 14, marginBottom: 10 },
+  label:    { color: pt.ink.textDim, fontSize: 14, marginBottom: 10 },
   field:    { marginBottom: 14 },
   done:     { alignSelf: 'flex-end', paddingVertical: 10, paddingHorizontal: 22, borderRadius: 10,
-              borderWidth: 1, borderColor: '#5a4520' },
-  doneText: { color: '#ffb833', fontSize: 16, fontWeight: 'bold', letterSpacing: 2 },
+              borderWidth: 1, borderColor: pt.ink.keyBorder },
+  doneText: { color: pt.gold.sel, fontSize: 16, fontWeight: 'bold', letterSpacing: 2 },
 });

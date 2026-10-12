@@ -194,20 +194,26 @@ function ChatDrawerBody({
   const pt = usePopupTheme();
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
-  // White-aware colour overrides — backgrounds stay dark
+  // ★★ THE DEFAULT SKIN FOLLOWS THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including
+  //   directory if possible"): text (title, messages, inputs, times) in the TEXT colour, keys and their borders
+  //   in the CONTROLS colour — whatever the old white / amber theme said. Backgrounds stay dark.
+  //   ★★ The NAME colours are MEANINGS (own / other) — and they MATCH silver / black now (Stuart, 2026-10-12,
+  //   "match"): own name BLUE, others AMBER (§10.3), not the old default's gold-own / blue-others, which was
+  //   the reverse. Where the text colour is one of them, that name goes white (popupTokens chatNamesFor).
+  //   The system line's grey is a meaning too and keeps its value.
   const cc = {
-    border:  isWhite ? 'rgba(255,255,255,0.25)' : C.border,
-    title:   isWhite ? 'rgba(255,255,255,0.55)' : pt.gold.amberA(0.40),
-    btnBdr:  isWhite ? 'rgba(255,255,255,0.30)' : C.btnBdr,
-    btnText: isWhite ? '#ffffff' : pt.gold.amber,
-    inputBdr:isWhite ? 'rgba(255,255,255,0.22)' : C.inputBdr,
-    inputCl: isWhite ? '#ffffff' : pt.gold.amber,
-    userCl:  isWhite ? '#b0c8ff' : C.userCl,
-    ownCl:   isWhite ? '#ffe566' : C.ownCl,
-    textCl:  isWhite ? 'rgba(240,240,240,0.90)' : C.textCl,
-    timeCl:  isWhite ? 'rgba(180,190,210,0.50)' : C.timeCl,
+    border:  pt.ink.border,
+    title:   pt.ink.textDim,
+    btnBdr:  pt.ink.keyBorder,
+    btnText: pt.ink.key,
+    inputBdr:pt.ink.keyBorder,
+    inputCl: pt.ink.text,
+    userCl:  pt.chatOther,
+    ownCl:   pt.chatOwn,
+    textCl:  pt.chatText,
+    timeCl:  pt.ink.textFaint,
     sysCl:   isWhite ? 'rgba(180,190,210,0.55)' : C.sysCl,
-    handle:  isWhite ? 'rgba(255,255,255,0.25)' : C.handle,
+    handle:  pt.ink.keyBorder,
   };
   // ★★ SILVER / BLACK (§10.3): text ON the plate is engraved (title, the user list, the room line);
   //   the thread and every input sit in recessed windows, where chat's MEANING colours stay — own
@@ -423,7 +429,7 @@ function ChatDrawerBody({
               <Text style={[cd.hbtnTxt, { color: cc.btnText }, muted && cd.hbtnMuted]}>{muted ? '🔇' : '🔔'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={cd.hbtn} onPress={onClose} hitSlop={8}>
-              <Text style={[cd.hbtnTxt, { color: 'rgba(255,120,120,0.70)' }]}>✕</Text>
+              <Text style={[cd.hbtnTxt, { color: pt.gold.close }]}>✕</Text>
             </TouchableOpacity>
             </>)}
           </View>
@@ -441,7 +447,7 @@ function ChatDrawerBody({
                   value={nameInput}
                   onChangeText={(v: string) => setNameInput(v.replace(/\s+/g, ''))}
                   placeholder="Callsign / handle"
-                  placeholderTextColor={pt.metal ? pt.winDim : isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.28)'}
+                  placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
                   autoCapitalize="none"
                   autoCorrect={false}
                   maxLength={15}
@@ -657,11 +663,11 @@ function ChatDrawerBody({
                 <View style={cd.manualBox}>
                   <View style={cd.manualRow}>
                     <TextInput
-                      style={[cd.manualInp, { borderColor: manualBad ? '#ff6a5a' : cc.inputBdr, color: cc.inputCl, fontFamily: ff }, cd.inputMetal]}
+                      style={[cd.manualInp, { borderColor: manualBad ? (pt.metal ? '#ff6a5a' : pt.ink.m.bad) : cc.inputBdr, color: cc.inputCl, fontFamily: ff }, cd.inputMetal]}
                       value={manualVal}
                       onChangeText={(v: string) => { setManualVal(v.replace(/[^0-9.,]/g, '')); setManualBad(false); }}
                       placeholder="frequency"
-                      placeholderTextColor={pt.metal ? pt.winDim : isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.28)'}
+                      placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
                       keyboardType="decimal-pad" returnKeyType="send" onSubmitEditing={sendManual}
                       maxLength={12} autoCorrect={false}
                     />
@@ -729,7 +735,7 @@ function ChatDrawerBody({
                 value={msgInput}
                 onChangeText={setMsgInput}
                 placeholder="Message…"
-                placeholderTextColor={pt.metal ? pt.winDim : isWhite ? 'rgba(255,255,255,0.25)' : 'rgba(255,160,0,0.25)'}
+                placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
                 returnKeyType="send"
                 onSubmitEditing={handleSend}
                 maxLength={250}
@@ -759,24 +765,27 @@ function ChatDrawerBody({
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const makeCd = (pt: PopupTokens) => StyleSheet.create({
+/* ★★ `d(metal, def)`: silver / black keep exactly what they drew (they already follow the rule through onMetal and
+ *  PopupKey); the default chassis takes the token — keys in the CONTROLS colour, text in the TEXT colour
+ *  (Stuart, 2026-10-12). Most text colours here are set inline from `cc` above. */
+const makeCd = (pt: PopupTokens) => { const d = <T,>(metal: T, def: T): T => (pt.metal ? metal : def); return StyleSheet.create({
   layer:    { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 300, elevation: 40 },
   backdrop: { backgroundColor: 'rgba(0,0,0,0.55)' },
   kavWrap:  { position: 'absolute', left: 0, right: 0, bottom: 0, top: 0, justifyContent: 'flex-end', pointerEvents: 'box-none' },
   drawer: {
     backgroundColor: C.bg,
-    borderTopWidth: 1, borderTopColor: C.border,
+    borderTopWidth: 1, borderTopColor: d(C.border, pt.ink.border),
     borderTopLeftRadius: 14, borderTopRightRadius: 14,
     height: DRAWER_H,
     shadowColor: '#000', shadowOffset: { width: 0, height: -6 },
     shadowOpacity: 0.70, shadowRadius: 12, elevation: 20,
   },
   handle: { alignItems: 'center', justifyContent: 'center', height: HANDLE_H },
-  handleBar: { width: 36, height: 4, borderRadius: 2, backgroundColor: C.handle },
+  handleBar: { width: 36, height: 4, borderRadius: 2, backgroundColor: d(C.handle, pt.ink.keyBorder) },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 8, gap: 6 },
-  title:  onMetal(pt, { flex: 1, color: 'rgba(255,160,0,0.60)', fontFamily: FONT, fontSize: 11, letterSpacing: 2 }, { fontSize: 11, letterSpacing: 2.2, fontWeight: '700' }),
+  title:  onMetal(pt, { flex: 1, color: pt.ink.textDim, fontFamily: FONT, fontSize: 11, letterSpacing: 2 }, { fontSize: 11, letterSpacing: 2.2, fontWeight: '700' }),
   hbtn:   { padding: 4 },
-  hbtnTxt:    { color: 'rgba(255,160,0,0.55)', fontSize: 16 },
+  hbtnTxt:    { color: d('rgba(255,160,0,0.55)', pt.ink.key), fontSize: 16 },
   hbtnMuted:  { opacity: 0.35 },
   hbtnActive: { opacity: 1 },
   hbtnClose:  { color: '#e05050' },
@@ -784,33 +793,33 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
   userRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.msgBdr,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: d(C.msgBdr, pt.ink.divider),
   },
   userRowIdle: { opacity: 0.45 },
   userName: { flexShrink: 1, fontSize: 13, fontWeight: 'bold', letterSpacing: 0.5 },
   userFreq: { flex: 1, fontSize: 11, textAlign: 'right' },
   syncBtn: {
-    borderWidth: 1, borderColor: 'rgba(255,160,0,0.40)', borderRadius: 5,
+    borderWidth: 1, borderColor: d('rgba(255,160,0,0.40)', pt.ink.keyBorder), borderRadius: 5,
     paddingHorizontal: 8, paddingVertical: 4, flexShrink: 0,
   },
   syncBtnOn: {
-    borderColor: 'rgba(80,220,100,0.70)', backgroundColor: 'rgba(80,220,100,0.12)',
+    borderColor: d('rgba(80,220,100,0.70)', pt.gold.selBorder), backgroundColor: d('rgba(80,220,100,0.12)', pt.ink.keyBgAct),
   },
-  syncBtnTxt:   { fontSize: 10, letterSpacing: 1, color: pt.gold.amberA(0.80) },
-  syncBtnTxtOn: { color: 'rgba(120,235,140,0.95)' },
+  syncBtnTxt:   { fontSize: 10, letterSpacing: 1, color: d(pt.gold.amberA(0.80), pt.ink.key) },
+  syncBtnTxtOn: { color: d('rgba(120,235,140,0.95)', pt.gold.sel) },
 
   setupWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20, gap: 10 },
-  setupLbl:  { color: 'rgba(200,180,100,0.75)', fontFamily: FONT, fontSize: 11, letterSpacing: 1.5, textAlign: 'center' },
+  setupLbl:  { color: d('rgba(200,180,100,0.75)', pt.ink.textDim), fontFamily: FONT, fontSize: 11, letterSpacing: 1.5, textAlign: 'center' },
   setupRow:  { flexDirection: 'row', gap: 8, width: '100%', maxWidth: 380 },
   nameInp: {
     flex: 1, backgroundColor: 'rgba(20,12,0,0.90)',
-    borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
+    borderWidth: 1, borderColor: d('rgba(255,160,0,0.35)', pt.ink.keyBorder),
     borderRadius: 6, paddingHorizontal: 12, paddingVertical: 10,
     fontFamily: FONT, fontSize: 14, letterSpacing: 1, color: pt.gold.amber,
   },
   joinBtn: {
-    backgroundColor: 'rgba(255,160,0,0.12)',
-    borderWidth: 1, borderColor: 'rgba(255,160,0,0.45)',
+    backgroundColor: d('rgba(255,160,0,0.12)', pt.ink.keyBgAct),
+    borderWidth: 1, borderColor: d('rgba(255,160,0,0.45)', pt.ink.keyBorder),
     borderRadius: 6, paddingHorizontal: 18, paddingVertical: 10,
     justifyContent: 'center', alignItems: 'center',
   },
@@ -821,31 +830,31 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
   msg: {
     flexDirection: 'row', alignItems: 'baseline', gap: 6,
     paddingVertical: 3,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.msgBdr,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: d(C.msgBdr, pt.ink.divider),
   },
   msgSystem:     {},
-  msgTime:       { flexShrink: 0, fontSize: 9, color: C.timeCl, fontFamily: FONT, alignSelf: 'flex-start', paddingTop: 1 },
+  msgTime:       { flexShrink: 0, fontSize: 9, color: d(C.timeCl, pt.ink.textFaint), fontFamily: FONT, alignSelf: 'flex-start', paddingTop: 1 },
   msgUser:       { flexShrink: 0, fontSize: 11, fontWeight: 'bold', color: C.userCl, fontFamily: FONT, letterSpacing: 0.5 },
   msgUserOwn:    { color: C.ownCl },
-  msgText:       { color: C.textCl, fontFamily: FONT, fontSize: 12, flex: 1, lineHeight: 18 },
+  msgText:       { color: d(C.textCl, pt.chatText), fontFamily: FONT, fontSize: 12, flex: 1, lineHeight: 18 },
   msgTextSystem: onMetal(pt, { color: C.sysCl, fontStyle: 'italic', fontSize: 10 }, { color: pt.chatSys }),
 
   inputRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 14, paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,160,0,0.10)',
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: d('rgba(255,160,0,0.10)', pt.ink.divider),
   },
-  meLbl:  { flexShrink: 0, fontFamily: FONT, fontSize: 10, color: 'rgba(200,160,60,0.70)', maxWidth: 80 },
+  meLbl:  { flexShrink: 0, fontFamily: FONT, fontSize: 10, color: d('rgba(200,160,60,0.70)', pt.ink.textDim), maxWidth: 80 },
   msgInp: {
     flex: 1, backgroundColor: C.inputBg,
-    borderWidth: 1, borderColor: C.inputBdr,
+    borderWidth: 1, borderColor: d(C.inputBdr, pt.ink.keyBorder),
     borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8,
-    fontFamily: FONT, fontSize: 13, color: '#ffe0a0', minWidth: 0,
+    fontFamily: FONT, fontSize: 13, color: d('#ffe0a0', pt.ink.text), minWidth: 0,
   },
   sendBtn: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(255,160,0,0.15)',
-    borderWidth: 1, borderColor: 'rgba(255,160,0,0.40)',
+    backgroundColor: d('rgba(255,160,0,0.15)', pt.ink.keyBgAct),
+    borderWidth: 1, borderColor: d('rgba(255,160,0,0.40)', pt.ink.keyBorder),
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
   sendBtnTxt: { color: pt.gold.amber, fontSize: 16 },
@@ -858,10 +867,10 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
   cannedBtn: {
     alignSelf: 'flex-start',
     paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14,
-    backgroundColor: 'rgba(255,160,0,0.12)',
-    borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
+    backgroundColor: d('rgba(255,160,0,0.12)', pt.ink.keyBgAct),
+    borderWidth: 1, borderColor: d('rgba(255,160,0,0.35)', pt.ink.keyBorder),
   },
-  cannedTxt: { fontFamily: FONT, fontSize: 13, color: '#ffe0a0' },
+  cannedTxt: { fontFamily: FONT, fontSize: 13, color: d('#ffe0a0', pt.ink.text) },
   // ★ "Check out" sits on the key row as its lead-in word, not as a full-width line above it.
   checkLbl:  { width: undefined, alignSelf: 'center', marginBottom: 0 },
   // ★ The picked station / the manual field: a full-width block under the Check out row.
@@ -869,14 +878,15 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
   manualRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   manualInp: { minWidth: 110, flexGrow: 1, maxWidth: 180, height: 32, borderWidth: 1, borderRadius: 8,
                paddingHorizontal: 8, fontSize: 14 },
-  manualErr: { width: undefined, color: '#ff8a7a', marginBottom: 0 },
-  keyOn:     { backgroundColor: 'rgba(255,160,0,0.32)', borderColor: 'rgba(255,200,80,0.8)' },
+  // An error is a MEANING (bad): red, or white bold under red text (decoderTokens meaningsFor).
+  manualErr: { width: undefined, color: d('#ff8a7a', pt.ink.m.bad), fontWeight: d(undefined, pt.ink.m.badBold ? '700' : undefined), marginBottom: 0 },
+  keyOn:     { backgroundColor: d('rgba(255,160,0,0.32)', pt.ink.keyBgAct), borderColor: d('rgba(255,200,80,0.8)', pt.gold.selBorder) },
   // ★ TUNE beside a shared line: small, after the text, never wider than its word.
   tuneBtn: {
     flexShrink: 0, alignSelf: 'center', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10,
-    backgroundColor: 'rgba(255,160,0,0.12)', borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)',
+    backgroundColor: d('rgba(255,160,0,0.12)', pt.ink.keyBgAct), borderWidth: 1, borderColor: d('rgba(255,160,0,0.35)', pt.ink.keyBorder),
   },
-  tuneTxt: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: '#ffe0a0' },
+  tuneTxt: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: d('#ffe0a0', pt.ink.text) },
   tuneKey: { flexShrink: 0, alignSelf: 'center', paddingHorizontal: 8 },
   // ★★ The pad: the room line over a capped scroller of the same flowing wrap (constants/chatPad.ts).
   //    3 pt under the chips so the last row's cast shadow and its 2 pt of travel are not clipped by
@@ -898,7 +908,7 @@ const makeCd = (pt: PopupTokens) => StyleSheet.create({
   hideRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
   hiddenLine: { alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 2 },
   hiddenTxt:  { width: undefined, marginBottom: 0 },
-});
+}); };
 
 /** ★ Same rule as MenuSheet: no hooks run for a drawer that is shut. */
 export default function ChatDrawer(props: ChatDrawerProps) {

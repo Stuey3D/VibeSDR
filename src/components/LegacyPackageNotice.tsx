@@ -13,6 +13,7 @@ import { Alert, DeviceEventEmitter, Modal, NativeModules, Platform, Share, Style
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { exportBookmarksJSON, loadUserBookmarks } from '../services/userBookmarks';
 import { APP_VERSION } from '../constants/version';
+import { useGlassTheme, type PopupTokens } from './PopupShell';
 
 export const isLegacyPackage: boolean =
   Platform.OS === 'android' && (NativeModules as any).VibeLocalSDR?.isLegacyPackage === true;
@@ -24,6 +25,7 @@ const OPEN_EVENT = 'vibesdr.openLegacyNotice';
 export function openLegacyNotice(): void { DeviceEventEmitter.emit(OPEN_EVENT); }
 
 export default function LegacyPackageNotice() {
+  const st = legacyStyles(useGlassTheme());
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!isLegacyPackage) return;
@@ -66,15 +68,24 @@ export default function LegacyPackageNotice() {
   );
 }
 
-const st = StyleSheet.create({
+/* ★★ IN THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including directory if possible"):
+ *   title and prose in the TEXT colour, the keys and the card's edge in the CONTROLS colour (the primary key filled
+ *   with it, a dark legend). Dark glass on every chassis (useGlassTheme). Built once per setting. */
+const legacyCache = new WeakMap<PopupTokens, ReturnType<typeof makeLegacyStyles>>();
+function legacyStyles(pt: PopupTokens) {
+  let s = legacyCache.get(pt);
+  if (!s) { s = makeLegacyStyles(pt); legacyCache.set(pt, s); }
+  return s;
+}
+const makeLegacyStyles = (pt: PopupTokens) => StyleSheet.create({
   backdrop:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.78)', justifyContent: 'center', padding: 22 },
-  card:       { backgroundColor: '#14110a', borderRadius: 14, borderWidth: 1, borderColor: '#5a4520', padding: 20,
+  card:       { backgroundColor: '#14110a', borderRadius: 14, borderWidth: 1, borderColor: pt.ink.border, padding: 20,
                 maxWidth: 520, width: '100%', alignSelf: 'center', gap: 10 },
-  title:      { color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 19, fontWeight: '700' },
-  body:       { color: '#e8dcc0', fontFamily: 'Atkinson Hyperlegible', fontSize: 15, lineHeight: 21 },
-  small:      { color: '#b8a885', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, lineHeight: 18 },
-  btn:        { borderWidth: 1, borderColor: '#5a4520', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
-  btnTxt:     { color: '#ffb833', fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: '700', letterSpacing: 1.5 },
-  primary:    { backgroundColor: '#ffb833', borderColor: '#ffb833' },
+  title:      { color: pt.ink.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 19, fontWeight: '700' },
+  body:       { color: pt.ink.textSoft, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, lineHeight: 21 },
+  small:      { color: pt.ink.textDim, fontFamily: 'Atkinson Hyperlegible', fontSize: 13, lineHeight: 18 },
+  btn:        { borderWidth: 1, borderColor: pt.ink.keyBorder, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  btnTxt:     { color: pt.gold.sel, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: '700', letterSpacing: 1.5 },
+  primary:    { backgroundColor: pt.gold.thumb, borderColor: pt.gold.thumb },
   primaryTxt: { color: '#14110a' },
 });

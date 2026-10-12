@@ -23,6 +23,8 @@
 // the precedence honest.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, NativeEventEmitter, NativeModules, ScrollView, View } from 'react-native';
+import { useFaceplate } from '../contexts/FaceplateContext';
+import { focusFor, focusTint, FOCUS_GREEN } from '../constants/decoderTokens';
 
 export type NavEntry = {
   id: number;
@@ -43,8 +45,18 @@ export type NavEntry = {
   adjust?: (dir: -1 | 1) => void;
 };
 
-/** Keyboard / D-pad focus colour. One value so every panel agrees. */
-export const NAV_FOCUS = '#7CFF9B';
+/** Keyboard / D-pad focus green — the colour on every controls colour but green (see useNavFocus). */
+export const NAV_FOCUS = FOCUS_GREEN;
+
+/**
+ * ★★ THE FOCUS COLOUR, LIVE (Stuart, 2026-10-12: "yes make it white"): WHITE when the controls colour is green —
+ * green focus vanished among green keys once keys took the controls colour — and NAV_FOCUS green otherwise.
+ * One hook so every panel agrees. `tint(a)` is the focused row's fill.
+ */
+export function useNavFocus(): { ring: string; tint: (a: number) => string } {
+  const rgb = useFaceplate().controls.rgb;
+  return useMemo(() => ({ ring: focusFor(rgb), tint: (a: number) => focusTint(rgb, a) }), [rgb]);
+}
 
 // Ids are unique across ALL panels, so a panel closing and another opening can never
 // collide on a stale focus id.

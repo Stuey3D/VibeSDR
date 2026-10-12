@@ -12,7 +12,7 @@ import { RotateSheet, SheetRise } from './RotateFade';
 import { STEPS_HZ } from '../services/sdrTypes';
 import { STEP_833 } from '../utils/airband';
 import { useTheme } from '../contexts/ThemeContext';
-import { useListNav, NAV_FOCUS, noteTouchInteraction } from './PanelNav';
+import { useListNav, noteTouchInteraction, useNavFocus } from './PanelNav';
 import {
   usePopupTheme, usePopupSurface, usePopupFrame, engraveText, PopupKey, PopupPlate, PopupHandle, sheetCap,
 } from './PopupShell';
@@ -36,6 +36,7 @@ interface StepPickerProps {
 }
 
 export default function StepPicker({ visible, currentStep, steps, onSelect, onClose }: StepPickerProps) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const stepList = steps && steps.length ? steps : STEPS_HZ;
   const { theme: t } = useTheme();
   const isWhite = t.name === 'white';
@@ -70,12 +71,14 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
               sliding up, a dark backdrop slid up with it and flickered (2026-10-11). The tap-to-close view stays. */}
           <View style={st.backdrop} />
         </TouchableWithoutFeedback>
-        <View style={[st.sheet, { borderTopColor: t.barBorder },
+        {/* ★★ Default chassis in the user's colours (Stuart, 2026-10-12: "yes colours apply everywhere"): the sheet's
+            edge and the step keys in the CONTROLS colour, the heading in the TEXT colour (popupTokens ink). */}
+        <View style={[st.sheet, { borderTopColor: pt.ink.border },
                       surf.opaque && !pt.metal && { backgroundColor: surf.fill(SHEET_BG) },
                       metalFrame, metalFrame && { paddingTop: 0 }]}>
           <PopupPlate radius={14} />
           <PopupHandle />
-          <Text style={[st.sheetLabel, { color: t.sectionColor, fontFamily: t.font },
+          <Text style={[st.sheetLabel, { color: pt.ink.section, fontFamily: t.font },
                         pt.metal && { ...engraveText(pt), fontWeight: '700' }]}>
             TUNING STEP
           </Text>
@@ -90,12 +93,11 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
                 key={hz}
                 style={[
                   st.btn,
-                  { borderColor: isWhite ? 'rgba(255,255,255,0.20)' : 'rgba(80,50,0,0.40)',
-                    paddingVertical: isWhite ? 14 : 12 },
-                  hz === currentStep && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
+                  { borderColor: pt.ink.keyBorder, paddingVertical: isWhite ? 14 : 12 },
+                  hz === currentStep && { backgroundColor: pt.ink.keyBgAct, borderColor: pt.gold.selBorder },
                   // Focus outranks 'active' so the caret is never hidden on the
                   // step you are already using — the one you most need to see.
-                  navFocus === i && { borderColor: NAV_FOCUS, borderWidth: 2 },
+                  navFocus === i && { borderColor: focusC.ring, borderWidth: 2 },
                 ]}
                 onPress={() => { onSelect(hz); onClose(); }}
                 hitSlop={4} activeOpacity={0.75}
@@ -103,8 +105,8 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
                 <Text style={[
                   st.btnText,
                   { fontFamily: t.font, fontSize: isWhite ? 15 : 14,
-                    color: isWhite ? 'rgba(255,255,255,0.55)' : 'rgba(150,100,30,0.70)' },
-                  hz === currentStep && { color: t.btnActiveText },
+                    color: pt.ink.key },
+                  hz === currentStep && { color: pt.gold.sel },
                 ]}>
                   {stepLabel(hz)}
                 </Text>
@@ -116,11 +118,11 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
               style={{ alignSelf: 'center', width: 110, marginTop: 14 }} />
           ) : (
           <TouchableOpacity
-            style={[st.closeBtn, { borderColor: t.btnBorder },
-                    navFocus === stepList.length && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+            style={[st.closeBtn, { borderColor: pt.ink.keyBorder },
+                    navFocus === stepList.length && { borderColor: focusC.ring, borderWidth: 2 }]}
             onPress={onClose} activeOpacity={0.75}
           >
-            <Text style={[st.closeBtnText, { fontFamily: t.font, color: t.btnText }]}>
+            <Text style={[st.closeBtnText, { fontFamily: t.font, color: pt.gold.close }]}>
               CLOSE
             </Text>
           </TouchableOpacity>

@@ -17,6 +17,7 @@ import React, { useEffect, useState } from 'react';
 import { PixelRatio, StyleSheet, Text, View } from 'react-native';
 import { AlphaType, Canvas, ColorType, Image as SkImage, Skia, type SkData, type SkImage as SkImageT } from '@shopify/react-native-skia';
 import { withReadAuth } from '../services/vibeAuth';
+import { useGlassTheme } from './PopupShell';
 
 // ★ The real stops of the app's own 'Sonar Green' palette — see src/assets/colormaps.ts.
 const SONAR_GREEN: [number, number, number][] = [
@@ -94,6 +95,7 @@ async function fetchSpectrogram(base: string, bins: number, rows: number, readAu
 }
 
 export default function DoorSpectrogram({ base, width, height, readAuth = '' }: { base: string; width: number; height: number; readAuth?: string }) {
+  const capColour = useGlassTheme().ink.textFaint;
   const [pic, setPic] = useState<Pic | null>(null);
   useEffect(() => {
     let dead = false;
@@ -117,13 +119,14 @@ export default function DoorSpectrogram({ base, width, height, readAuth = '' }: 
       <Canvas style={StyleSheet.absoluteFill}>
         <SkImage image={pic.img} x={0} y={0} width={width} height={height} fit="fill" opacity={0.55} />
       </Canvas>
-      {/* ★ A dark veil so the amber list reads over the green — the web dims radially. */}
+      {/* ★ A dark veil so the list reads over the green — the web dims radially. */}
       <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)' }]} />
-      <Text style={s.cap}>BAND ACTIVITY{pic.hours >= 1 ? ` · ${Math.round(pic.hours)} H` : ''}</Text>
+      {/* ★ The caption is TEXT: the user's text colour (2026-10-12), faint; the spectrogram's own palette is kept. */}
+      <Text style={[s.cap, { color: capColour }]}>BAND ACTIVITY{pic.hours >= 1 ? ` · ${Math.round(pic.hours)} H` : ''}</Text>
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  cap: { position: 'absolute', right: 14, bottom: 10, color: 'rgba(255,184,51,0.45)', fontSize: 9, letterSpacing: 2 },
+  cap: { position: 'absolute', right: 14, bottom: 10, fontSize: 9, letterSpacing: 2 },
 });

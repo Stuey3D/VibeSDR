@@ -9,8 +9,10 @@ import { decoderTokensFor } from '../constants/decoderTokens';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { solidOver } from '../constants/faceplate';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { usePopupTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, PopupWindow, scrollLane, sheetCap } from './PopupShell';
-import { useRepeatingKeys, NAV_REPEAT_KEYS, NAV_FOCUS, useKeyboardMode } from './PanelNav';
+import { usePopupTheme, useGlassTheme, usePopupFrame, engraveText, PopupPlate, PopupHandle, PopupWindow, scrollLane, sheetCap,
+         type PopupTokens } from './PopupShell';
+import { meaningText } from '../constants/decoderTokens';
+import { useRepeatingKeys, NAV_REPEAT_KEYS, useKeyboardMode, useNavFocus } from './PanelNav';
 import GainSlider from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
@@ -29,24 +31,19 @@ import {
 const CONV_DIRS: ('up' | 'down')[] = ['up', 'down'];
 
 /* ★★ The frame, the title and the close key are DecoderShell's (brief §10.1): this sheet is one of
- *  the boxes over the waterfall and now shares their chrome and their pinned font. The body keeps
- *  its own white segment controls — those are settings, not read-outs, and row 10 (PopupShell)
- *  is where they take the chassis.
+ *  the boxes over the waterfall and now shares their chrome and their pinned font. The body's segment
+ *  controls are settings, not read-outs: since 2026-10-12 they take the CONTROLS colour, and the body's
+ *  labels and read-outs the TEXT colour (makeLhpStyles).
  * ★★ ALWAYS THE GLASS TOKENS (DecoderSurface transparency="on"), whatever TRANSPARENCY EFFECTS says: the
  *  sheet is an opaque dark settings sheet, never the brushed plate, so silver OFF's engraved
  *  DARK title would vanish on it. It follows the chassis and controls colour live (border, title,
  *  and the close key, a dome key like every decoder key). */
 const FONT = DECODER_FONT;
+/* ★ Only the dark surfaces stay fixed here; every text, key and switch colour comes from the user's colours
+ *  (makeLhpStyles / K in the panel, 2026-10-12). */
 const C = {
   bg:     'rgba(6,4,2,0.99)',
-  border: 'rgba(255,255,255,0.30)',
-  gold:   '#ffe566',
-  muted:  'rgba(255,255,255,0.92)',
-  dim:    'rgba(200,210,225,0.90)',
-  sectionC: 'rgba(180,190,210,0.80)',
   btnBg:  'rgba(20,18,14,0.85)',
-  active: 'rgba(255,200,0,0.16)',
-  abtn:   'rgba(255,229,102,0.55)',
 };
 
 // 3.2 MSPS is gone: the RTL2832U accepts the rate but cannot sustain it — the USB transfers fall
@@ -288,6 +285,7 @@ function Seg<T>({ options, value, onChange, fmt, sub, slot, disabled }: {
   /** Claims a place in the panel's focus order — see the note in LocalHardwarePanel. */
   slot?: (run: () => void) => boolean;
 }) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   // ★★★ THE FOCUS RING IS NOT A SELECTION. It was drawn whenever a slot held keyboard focus —
   //   including when nobody had touched a keyboard — so opening this panel put a green ring on the
   //   FIRST control (AGC threshold "Low") while the actually-selected option was highlighted too.
@@ -296,6 +294,7 @@ function Seg<T>({ options, value, onChange, fmt, sub, slot, disabled }: {
   //   SDRScreen calls noteTouchInteraction() on every touch to end it. This panel simply never
   //   asked. Gate the ring on it and the ambiguity disappears without changing the focus order.
   const kb = useKeyboardMode();
+  const styles = lhpStyles(useGlassTheme());
   return (
     <View style={styles.segRow}>
       {options.map((o, i) => {
@@ -305,7 +304,7 @@ function Seg<T>({ options, value, onChange, fmt, sub, slot, disabled }: {
         return (
           <TouchableOpacity key={i} disabled={off}
             style={[styles.seg, active && styles.segActive, off && { opacity: 0.35 },
-                    on && kb && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                    on && kb && { borderColor: focusC.ring, borderWidth: 2 }]}
             onPress={() => onChange(o)}>
             <Text style={[styles.segTxt, active && styles.segTxtActive]}>{fmt(o)}</Text>
             {!!sub?.(o) && (
@@ -319,6 +318,7 @@ function Seg<T>({ options, value, onChange, fmt, sub, slot, disabled }: {
 }
 
 export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const insets = useSafeAreaInsets();
   const fp = useFaceplate();
   const frameBorder = decoderTokensFor(fp.settings.chassis, fp.controls.rgb, 'on').border;
@@ -328,6 +328,13 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
   //   today's dark controls, unchanged — sits in ONE recessed window, so nothing light lands on the
   //   plate. (The body's own keys and switches keep their look inside the window for now.)
   const pt = usePopupTheme();
+  /* ★★ THE BODY IN THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including directory if
+   *   possible"). The body always sits on dark (the glass sheet, or the recessed window on silver / black), so it
+   *   takes the GLASS skin's tokens on every chassis: labels and read-outs in the TEXT colour, the segment keys,
+   *   switches, sliders and UNLOCK in the CONTROLS colour, a refusal / overload in `bad` (white bold on red text). */
+  const gt = useGlassTheme();
+  const styles = lhpStyles(gt);
+  const K = { gold: gt.gold.thumb, abtn: gt.gold.selBorder, fill: gt.gold.fill };
   const metalFrame = usePopupFrame(16, true);
   // ★ Same rule as Seg's ring: only show keyboard focus when a keyboard is actually driving.
   const kbNav = useKeyboardMode();
@@ -622,7 +629,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Animated.View style={[styles.adminRow, { transform: [{ translateX: shakeX }] }]}>
                   <TextInput
                     value={adminPw} onChangeText={setAdminPw}
-                    placeholder="Admin password" placeholderTextColor="rgba(200,210,225,0.45)"
+                    placeholder="Admin password" placeholderTextColor={gt.ink.textFaint}
                     secureTextEntry autoCapitalize="none" autoCorrect={false}
                     /* ★ When the password is the ONLY thing on the panel, put the cursor in it.
                        Stuart: "it should immediately ask for the admin password". Never focus it
@@ -640,7 +647,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 </Animated.View>
               )}
               {p.adminRefused && !p.adminOk && (
-                <Text style={[styles.note, { color: '#ff8a7d' }]}>
+                <Text style={[styles.note, styles.noteBad]}>
                   {p.adminFailReason === 'unreachable'
                     ? '\u26A0  Could not reach the receiver to check that password. Try again.'
                     : p.adminFailReason === 'wrong'
@@ -695,7 +702,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <View style={styles.toggleRow}>
                 <Text style={styles.toggleLabel}>Automatic gain (AGC)</Text>
                 <Switch value={!!p.ahfAgc} onValueChange={(v) => p.onAhfAgc?.(v)}
-                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfAgc ? C.gold : '#ccc'} />
+                  trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.ahfAgc ? K.gold : '#ccc'} />
               </View>
               <Text style={styles.note}>
                 The radio's own AGC, and the right answer for most listening. Turn it off to set
@@ -732,9 +739,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   step={1}
                   value={p.ahfAtt ?? 0}
                   onValueChange={(v) => p.onAhfAtt?.(Math.round(v))}
-                  minimumTrackTintColor={C.abtn}
+                  minimumTrackTintColor={K.fill}
                   maximumTrackTintColor="#444"
-                  thumbTintColor={C.gold}
+                  thumbTintColor={K.gold}
                 />
                 <Text style={styles.sliderEnd}>
                   {((p.radio?.attSteps ?? 9) - 1) * (p.radio?.attStepDb ?? 6)}
@@ -766,7 +773,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <View style={styles.toggleRow}>
                     <Text style={styles.toggleLabel}>Preamp</Text>
                     <Switch value={!!p.ahfLna} onValueChange={(v) => p.onAhfLna?.(v)}
-                      trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.ahfLna ? C.gold : '#ccc'} />
+                      trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.ahfLna ? K.gold : '#ccc'} />
                   </View>
                   <Text style={styles.note}>
                     Airspy call this one misleading: it acts on the ADC and DSP back end, not the
@@ -804,7 +811,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   to move — so a slider reading would be a lie while this is the truth. */}
               <View style={styles.toggleRow}>
                 <Text style={styles.toggleLabel}>System gain</Text>
-                <Text style={[styles.stepVal, p.rspOverload ? { color: '#ff8a7d' } : null]}>
+                <Text style={[styles.stepVal, p.rspOverload ? styles.valBad : null]}>
                   {/* ★★★ ZERO — AND NEGATIVE — IS A READING, NOT A MISSING READING. This tested
                       `> 0` and drew a dash otherwise. On an RSP at medium wave the LNA states are
                       ATTENUATORS, so a total system gain of 0.4 dB, or well below zero, is the
@@ -843,7 +850,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <View style={styles.toggleRow}>
                 <Text style={styles.toggleLabel}>IF AGC</Text>
                 <Switch value={p.rspIfAgc !== false} onValueChange={(v) => p.onRspIfAgc?.(v)}
-                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspIfAgc !== false ? C.gold : '#ccc'} />
+                  trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.rspIfAgc !== false ? K.gold : '#ccc'} />
               </View>
 
               {/* ★★★ AND THE RF AGC, WHICH THIS PANEL HAD NO IDEA EXISTED. It is our own loop: it
@@ -857,7 +864,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <View style={styles.toggleRow}>
                     <Text style={styles.toggleLabel}>RF AGC</Text>
                     <Switch value={p.rspRfAgc !== false} onValueChange={(v) => p.onRspRfAgc?.(v)}
-                      trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspRfAgc !== false ? C.gold : '#ccc'} />
+                      trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.rspRfAgc !== false ? K.gold : '#ccc'} />
                   </View>
                   <Text style={styles.note}>
                     Steps the LNA from where the radio's own IF AGC settles, so the front end sits
@@ -881,7 +888,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                             minimumValue={-72} maximumValue={-10} step={1}
                             value={Math.max(-72, Math.min(-10, p.rspAgcSet ?? -30))}
                             onSlidingComplete={(v: number) => p.onRspAgcSet?.(Math.round(v))}
-                            minimumTrackTintColor={C.gold} maximumTrackTintColor="#555" thumbTintColor={C.gold} />
+                            minimumTrackTintColor={K.fill} maximumTrackTintColor="#555" thumbTintColor={K.gold} />
                     <Text style={styles.stepVal}>{p.rspAgcSet ?? -30} dBfs</Text>
                   </View>
                   <Text style={styles.note}>
@@ -900,7 +907,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                             minimumValue={ifGrFloor} maximumValue={p.radio?.ifGrMax ?? 59}
                             step={1} value={Math.max(ifGrFloor, p.rspIfGr ?? 40)}
                             onSlidingComplete={(v: number) => p.onRspIfGr?.(Math.round(v))}
-                            minimumTrackTintColor={C.gold} maximumTrackTintColor="#555" thumbTintColor={C.gold} />
+                            minimumTrackTintColor={K.fill} maximumTrackTintColor="#555" thumbTintColor={K.gold} />
                     <Text style={styles.stepVal}>{p.rspIfGr ?? 40} dB</Text>
                   </View>
                   <Text style={styles.note}>
@@ -941,7 +948,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                       <Text style={styles.toggleLabel}>RF notch (MW/FM)</Text>
                       <Switch value={!!p.rspRfNotch} disabled={!notchesOurs}
                         onValueChange={(v) => p.onRspRfNotch?.(v)}
-                        trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspRfNotch ? C.gold : '#ccc'} />
+                        trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.rspRfNotch ? K.gold : '#ccc'} />
                     </View>
                   )}
                   {p.radio?.dabNotch && (
@@ -949,7 +956,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                       <Text style={styles.toggleLabel}>DAB notch</Text>
                       <Switch value={!!p.rspDabNotch} disabled={!notchesOurs}
                         onValueChange={(v) => p.onRspDabNotch?.(v)}
-                        trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.rspDabNotch ? C.gold : '#ccc'} />
+                        trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.rspDabNotch ? K.gold : '#ccc'} />
                     </View>
                   )}
                   <Text style={styles.note}>
@@ -963,7 +970,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                       <Text style={styles.toggleLabel}>AM notch (Hi-Z)</Text>
                       <Switch value={!!p.radio?.amNotchOn} disabled={!notchesOurs}
                         onValueChange={(v) => p.onRspAmNotch?.(v)}
-                        trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.radio?.amNotchOn ? C.gold : '#ccc'} />
+                        trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.amNotchOn ? K.gold : '#ccc'} />
                     </View>
                   )}
                 </>
@@ -1005,7 +1012,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <Text style={styles.toggleLabel}>HDR (below 2 MHz)</Text>
                   <Switch value={!!p.radio?.hdrOn}
                     onValueChange={(v) => p.onRspHdr?.(v)}
-                    trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.radio?.hdrOn ? C.gold : '#ccc'} />
+                    trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.hdrOn ? K.gold : '#ccc'} />
                 </View>
               )}
               {/* ★ 24 MHz reference out (RSP2 / Duo) — the one control a Duo's two tuners share. */}
@@ -1014,7 +1021,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <Text style={styles.toggleLabel}>24 MHz reference out</Text>
                   <Switch value={!!p.radio?.extRefOn}
                     onValueChange={(v) => p.onRspExtRef?.(v)}
-                    trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.radio?.extRefOn ? C.gold : '#ccc'} />
+                    trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.extRefOn ? K.gold : '#ccc'} />
                 </View>
               )}
             </>
@@ -1059,7 +1066,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                           maximumValue={Math.max(1, aspLim.max)} disabled={aspLim.max < 1}
                           value={Math.min(aspLim.max, Math.max(0, Math.round((p.gainTenthDb ?? 0) / 10)))}
                           onSlidingComplete={(v) => p.onGain(Math.min(aspLim.max, Math.round(v)) * 10)}
-                          minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                          minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
                         <Text style={styles.sliderEnd}>{aspLim.max}</Text>
                       </View>
                       <Text style={styles.note}>
@@ -1108,7 +1115,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                       maximumValue={p.gains.length > 1 ? p.gains.length - 1 : 21}
                       value={Math.max(0, Math.round((p.gainTenthDb ?? 0) / 10))}
                       onSlidingComplete={(v) => p.onGain(Math.round(v) * 10)}
-                      minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                      minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
                     <Text style={styles.sliderEnd}>{p.gains.length > 1 ? p.gains.length - 1 : 21}</Text>
                   </View>
                 </>
@@ -1118,12 +1125,12 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <View style={styles.toggleRow}>
                 <Text style={styles.toggleLabel}>LNA AGC</Text>
                 <Switch value={!!p.aspLnaAgc} onValueChange={(v) => p.onAspLnaAgc?.(v)}
-                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.aspLnaAgc ? C.gold : '#ccc'} />
+                  trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.aspLnaAgc ? K.gold : '#ccc'} />
               </View>
               <View style={styles.toggleRow}>
                 <Text style={styles.toggleLabel}>Mixer AGC</Text>
                 <Switch value={!!p.aspMixerAgc} onValueChange={(v) => p.onAspMixerAgc?.(v)}
-                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.aspMixerAgc ? C.gold : '#ccc'} />
+                  trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.aspMixerAgc ? K.gold : '#ccc'} />
               </View>
               <Text style={styles.note}>
                 The radio's own automatic gain for those two stages. With either on, its stage below
@@ -1137,7 +1144,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Slider style={{ flex: 1, height: 40 }} minimumValue={0} maximumValue={aspMax} step={1}
                   value={Math.max(0, p.aspLna ?? 0)} disabled={!!p.aspLnaAgc}
                   onSlidingComplete={(v) => p.onAspLna?.(Math.round(v))}
-                  minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                  minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
                 <Text style={styles.sliderEnd}>{aspMax}</Text>
               </View>
               <Text style={styles.section}>MIXER</Text>
@@ -1146,7 +1153,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Slider style={{ flex: 1, height: 40 }} minimumValue={0} maximumValue={aspMax} step={1}
                   value={Math.max(0, p.aspMixer ?? 0)} disabled={!!p.aspMixerAgc}
                   onSlidingComplete={(v) => p.onAspMixer?.(Math.round(v))}
-                  minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                  minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
                 <Text style={styles.sliderEnd}>{aspMax}</Text>
               </View>
               <Text style={styles.section}>VGA</Text>
@@ -1155,7 +1162,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Slider style={{ flex: 1, height: 40 }} minimumValue={0} maximumValue={aspMax} step={1}
                   value={Math.max(0, p.aspVga ?? 0)}
                   onSlidingComplete={(v) => p.onAspVga?.(Math.round(v))}
-                  minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                  minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
                 <Text style={styles.sliderEnd}>{aspMax}</Text>
               </View>
               <Text style={styles.note}>
@@ -1168,14 +1175,14 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Text style={styles.toggleLabel}>Bias-T (4.5V antenna power){locked ? ' — owner only' : ''}</Text>
                 <Switch value={!!p.aspBiasT} onValueChange={(v) => p.onAspBiasT?.(v)}
                   disabled={locked}
-                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.aspBiasT ? C.gold : '#ccc'} />
+                  trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.aspBiasT ? K.gold : '#ccc'} />
               </View>
               {p.radio?.hasPacking && (
                 <>
                   <View style={styles.toggleRow}>
                     <Text style={styles.toggleLabel}>Sample packing</Text>
                     <Switch value={!!p.aspPacking} onValueChange={(v) => p.onAspPacking?.(v)}
-                      trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.aspPacking ? C.gold : '#ccc'} />
+                      trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.aspPacking ? K.gold : '#ccc'} />
                   </View>
                   <Text style={styles.note}>
                     Sends 12-bit samples over USB instead of 16 — less to carry, a little more work
@@ -1204,7 +1211,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Text style={styles.toggleLabel}>RF amp (+14 dB){locked ? ' — owner only' : ''}</Text>
                 <Switch value={!!p.hrfAmp} onValueChange={(v) => p.onHrfAmp?.(v)}
                   disabled={locked}
-                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.hrfAmp ? C.gold : '#ccc'} />
+                  trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.hrfAmp ? K.gold : '#ccc'} />
               </View>
               <Text style={styles.note}>
                 A 0 or +14 dB amplifier ahead of everything, and the part of a HackRF that most
@@ -1222,7 +1229,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   minimumValue={0} maximumValue={Math.max(hrfLnaStep, hrfLnaMax)} step={hrfLnaStep}
                   value={Math.min(hrfLnaNow, hrfLnaMax)}
                   onValueChange={(v) => p.onHrfLna?.(Math.min(hrfLnaMax, Math.round(v)))}
-                  minimumTrackTintColor={C.abtn} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                  minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
                 <Text style={styles.sliderEnd}>{hrfLnaMax}</Text>
               </View>
               <Text style={styles.stepVal}>{Math.min(hrfLnaNow, hrfLnaMax)} dB</Text>
@@ -1239,7 +1246,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   minimumValue={0} maximumValue={Math.max(hrfVgaStep, hrfVgaMax)} step={hrfVgaStep}
                   value={Math.min(hrfVgaNow, hrfVgaMax)}
                   onValueChange={(v) => p.onHrfVga?.(Math.min(hrfVgaMax, Math.round(v)))}
-                  minimumTrackTintColor={C.abtn} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+                  minimumTrackTintColor={K.fill} maximumTrackTintColor="#444" thumbTintColor={K.gold} />
                 <Text style={styles.sliderEnd}>{hrfVgaMax}</Text>
               </View>
               <Text style={styles.stepVal}>{Math.min(hrfVgaNow, hrfVgaMax)} dB</Text>
@@ -1264,7 +1271,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 <Text style={styles.toggleLabel}>Bias-T (3.3 V){locked ? ' — owner only' : ''}</Text>
                 <Switch value={!!p.hrfBiasT} onValueChange={(v) => p.onHrfBiasT?.(v)}
                   disabled={locked}
-                  trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.hrfBiasT ? C.gold : '#ccc'} />
+                  trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.hrfBiasT ? K.gold : '#ccc'} />
               </View>
               <Text style={styles.note}>
                 Puts 3.3 V at 50 mA on the antenna port to power a mast-head amplifier. Off unless
@@ -1484,7 +1491,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   onSubmitEditing={() => commitConv()}
                   keyboardType="decimal-pad"
                   placeholder="125"
-                  placeholderTextColor="rgba(255,255,255,0.35)"
+                  placeholderTextColor={gt.ink.textFaint}
                 />
                 <Seg slot={slot}
                      options={CONV_DIRS}
@@ -1499,14 +1506,14 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     value={inLoTxt} onChangeText={setInLoTxt}
                     onEndEditing={() => commitConv()} onSubmitEditing={() => commitConv()}
                     keyboardType="decimal-pad" placeholder="0.1"
-                    placeholderTextColor="rgba(255,255,255,0.35)" />
+                    placeholderTextColor={gt.ink.textFaint} />
                   <Text style={styles.convDash}>to</Text>
                   <TextInput
                     style={[styles.convInput, styles.convHalf]}
                     value={inHiTxt} onChangeText={setInHiTxt}
                     onEndEditing={() => commitConv()} onSubmitEditing={() => commitConv()}
                     keyboardType="decimal-pad" placeholder="30"
-                    placeholderTextColor="rgba(255,255,255,0.35)" />
+                    placeholderTextColor={gt.ink.textFaint} />
                 </View>
                 <Text style={styles.note}>
                   {(() => {
@@ -1530,8 +1537,8 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   <Text style={styles.toggleLabel}>Converter fitted</Text>
                   <Switch value={conv.engaged}
                           onValueChange={(v) => setConv({ ...conv, engaged: v })}
-                          trackColor={{ true: C.abtn, false: '#444' }}
-                          thumbColor={conv.engaged ? C.gold : '#ccc'} />
+                          trackColor={{ true: K.abtn, false: '#444' }}
+                          thumbColor={conv.engaged ? K.gold : '#ccc'} />
                 </View>
                 <Text style={styles.note}>
                   {conv.engaged
@@ -1558,9 +1565,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             <Text style={styles.note}>Not reported by this server — it is set on the server itself.</Text>
           ) : (
           <View style={styles.stepperRow}>
-            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) - 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) - 1)) && kbNav && { borderColor: focusC.ring, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) - 1)}><Text style={styles.stepBtnTxt}>−</Text></TouchableOpacity>
             <Text style={styles.stepVal}>{p.ppm > 0 ? `+${p.ppm}` : p.ppm} ppm</Text>
-            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) + 1)) && kbNav && { borderColor: NAV_FOCUS, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.stepBtn, slot(() => p.onPpm((p.ppm ?? 0) + 1)) && kbNav && { borderColor: focusC.ring, borderWidth: 2 }]} onPress={() => p.onPpm((p.ppm ?? 0) + 1)}><Text style={styles.stepBtnTxt}>+</Text></TouchableOpacity>
           </View>
           )}
 
@@ -1568,13 +1575,13 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
             <Text style={styles.toggleLabel}>Bias-T (5V antenna power)</Text>
             {p.biasTee === undefined
               ? <Text style={styles.note}>not reported</Text>
-              : <Switch value={p.biasTee} onValueChange={p.onBiasTee} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.biasTee ? C.gold : '#ccc'} />}
+              : <Switch value={p.biasTee} onValueChange={p.onBiasTee} trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.biasTee ? K.gold : '#ccc'} />}
           </View>
           <View style={styles.toggleRow}>
             <Text style={styles.toggleLabel}>RTL2832 digital AGC</Text>
             {p.agc === undefined
               ? <Text style={styles.note}>not reported</Text>
-              : <Switch value={p.agc} onValueChange={p.onAgc} trackColor={{ true: C.abtn, false: '#444' }} thumbColor={p.agc ? C.gold : '#ccc'} />}
+              : <Switch value={p.agc} onValueChange={p.onAgc} trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.agc ? K.gold : '#ccc'} />}
           </View>
 
           <Text style={styles.section}>DIRECT SAMPLING</Text>
@@ -1631,7 +1638,15 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
 
 const SHEET_BG_SOLID = solidOver(C.bg);
 
-const styles = StyleSheet.create({
+/* ★★ Colour by ROLE in the user's colours (2026-10-12; see LocalHardwarePanel): text in the TEXT colour, keys and
+ *   switches in the CONTROLS colour, meanings fixed. Built once per token object (PopupTokens are memoised). */
+const lhpCache = new WeakMap<PopupTokens, ReturnType<typeof makeLhpStyles>>();
+function lhpStyles(pt: PopupTokens) {
+  let s = lhpCache.get(pt);
+  if (!s) { s = makeLhpStyles(pt); lhpCache.set(pt, s); }
+  return s;
+}
+const makeLhpStyles = (pt: PopupTokens) => StyleSheet.create({
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
   backdropNone: { backgroundColor: 'transparent' },
   /* ★ Fills the screen so KeyboardAvoidingView has something to shrink; the sheet inside stays
@@ -1646,45 +1661,48 @@ const styles = StyleSheet.create({
   titleMetal: { fontSize: 12, letterSpacing: 2, fontWeight: '700' },
   bodyWrap: { flexShrink: 1 },
   bodyWin: { paddingHorizontal: 10 },
-  section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.sectionC, marginTop: 16, marginBottom: 4 },
+  section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: pt.ink.section, marginTop: 16, marginBottom: 4 },
   segRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  seg: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center' },
-  segActive: { borderColor: C.abtn, backgroundColor: C.active },
-  segTxt: { fontFamily: FONT, fontSize: 12, color: C.muted },
-  segTxtActive: { color: C.gold },
+  seg: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: pt.ink.keyBorder, backgroundColor: C.btnBg, alignItems: 'center' },
+  segActive: { borderColor: pt.gold.selBorder, backgroundColor: pt.ink.keyBgAct },
+  segTxt: { fontFamily: FONT, fontSize: 12, color: pt.ink.key },
+  segTxtActive: { color: pt.gold.sel },
   /* ★ Dimmer and smaller than the title, because the LO is the fact and the product name is the
    *  hint — a newcomer finds their box by the name, and everyone else reads past it. Centred so a
    *  two-line button still reads as one control. */
-  segSub: { fontFamily: FONT, fontSize: 9, color: C.muted, opacity: 0.7, marginTop: 1, textAlign: 'center' },
-  segSubActive: { color: C.gold, opacity: 0.85 },
+  segSub: { fontFamily: FONT, fontSize: 9, color: pt.ink.key, opacity: 0.7, marginTop: 1, textAlign: 'center' },
+  segSubActive: { color: pt.gold.sel, opacity: 0.85 },
   stepperRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
-  stepBtnTxt: { fontFamily: FONT, fontSize: 20, color: C.gold },
+  stepBtn: { width: 44, height: 36, borderRadius: 6, borderWidth: 1, borderColor: pt.ink.keyBorder, backgroundColor: C.btnBg, alignItems: 'center', justifyContent: 'center' },
+  stepBtnTxt: { fontFamily: FONT, fontSize: 20, color: pt.gold.glyph },
   adminCard: { borderWidth: 1, borderColor: 'rgba(255,140,60,0.55)', borderRadius: 8,
                padding: 12, marginBottom: 14, backgroundColor: 'rgba(255,140,60,0.08)' },
   adminCardOk: { borderColor: 'rgba(120,220,140,0.5)', backgroundColor: 'rgba(120,220,140,0.08)' },
-  adminTitle: { color: C.gold, fontFamily: FONT, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
+  adminTitle: { color: pt.ink.text, fontFamily: FONT, fontSize: 11, letterSpacing: 2, marginBottom: 6 },
   adminRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
-  fieldLbl:  { fontFamily: FONT, fontSize: 12, color: C.dim, marginTop: 10, marginBottom: 4 },
-  convInput: { borderWidth: 1, borderColor: C.border, borderRadius: 6,
-               paddingHorizontal: 10, paddingVertical: 8, color: C.muted, fontFamily: FONT, fontSize: 15 },
+  fieldLbl:  { fontFamily: FONT, fontSize: 12, color: pt.ink.textDim, marginTop: 10, marginBottom: 4 },
+  convInput: { borderWidth: 1, borderColor: pt.ink.keyBorder, borderRadius: 6,
+               paddingHorizontal: 10, paddingVertical: 8, color: pt.ink.text, fontFamily: FONT, fontSize: 15 },
   convRow:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
   convHalf:  { flex: 1 },
-  convDash:  { fontFamily: FONT, fontSize: 13, color: C.dim },
+  convDash:  { fontFamily: FONT, fontSize: 13, color: pt.ink.textDim },
   /* ★ Red only while the refusal stands — it clears the moment a new attempt starts (see
    *  onAdminUnlockPw, which resets the flag before it asks), so the box is not permanently
    *  accusing somebody who has since corrected it. */
   adminInputBad: { borderColor: '#ff6b5e', borderWidth: 1.5 },
-  adminInput: { flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 6,
-                paddingHorizontal: 10, paddingVertical: 8, color: C.gold, fontFamily: FONT, fontSize: 14 },
-  adminBtn:  { borderWidth: 1, borderColor: C.abtn, borderRadius: 6,
+  adminInput: { flex: 1, borderWidth: 1, borderColor: pt.ink.keyBorder, borderRadius: 6,
+                paddingHorizontal: 10, paddingVertical: 8, color: pt.ink.text, fontFamily: FONT, fontSize: 14 },
+  adminBtn:  { borderWidth: 1, borderColor: pt.gold.selBorder, borderRadius: 6,
                paddingHorizontal: 14, paddingVertical: 9 },
-  adminBtnTxt: { color: C.gold, fontFamily: FONT, fontSize: 12, letterSpacing: 1 },
+  adminBtnTxt: { color: pt.gold.sel, fontFamily: FONT, fontSize: 12, letterSpacing: 1 },
   sliderRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  sliderEnd: { color: C.dim, fontFamily: FONT, fontSize: 12, minWidth: 26, textAlign: 'center' },
-  stepVal: { fontFamily: FONT, fontSize: 15, color: C.muted, minWidth: 80, textAlign: 'center' },
+  sliderEnd: { color: pt.ink.textDim, fontFamily: FONT, fontSize: 12, minWidth: 26, textAlign: 'center' },
+  stepVal: { fontFamily: FONT, fontSize: 15, color: pt.gold.value, minWidth: 80, textAlign: 'center' },
   toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
-  toggleLabel: { fontFamily: FONT, fontSize: 14, color: C.muted },
-  note: { fontFamily: FONT, fontSize: 11, color: C.dim, marginTop: 6, fontStyle: 'italic' },
-  noteStrong: { color: C.gold, fontWeight: '700' },
+  toggleLabel: { fontFamily: FONT, fontSize: 14, color: pt.ink.textSoft },
+  note: { fontFamily: FONT, fontSize: 11, color: pt.ink.textDim, marginTop: 6, fontStyle: 'italic' },
+  noteStrong: { color: pt.ink.text, fontWeight: '700' },
+  // ★ A refusal / an overload: `bad` — white BOLD on red text (meaningsFor).
+  noteBad: meaningText(pt.ink.m, pt.ink.m.bad),
+  valBad: meaningText(pt.ink.m, pt.ink.m.bad),
 });

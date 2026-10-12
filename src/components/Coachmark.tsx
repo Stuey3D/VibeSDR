@@ -19,6 +19,7 @@ import {
   Animated, Dimensions, Easing, Pressable, StyleSheet, Text, View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useGlassTheme, type PopupTokens } from './PopupShell';
 
 export interface TourStep {
   id: string;
@@ -50,7 +51,10 @@ export function mergeRefs(...refs: any[]) {
   });
 }
 
-const GOLD = '#ffe566';
+/* ★★ THE TOUR CARD TAKES THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including
+ *   directory if possible"). It was gold (#ffe566) on every faceplate. Now, via useGlassTheme (the dark glass
+ *   skin in the user's colours, whatever the chassis — the card is never plated): the title and body in the
+ *   TEXT colour, the spotlight ring, the card's edge and the NEXT key in the CONTROLS colour. */
 const DIM  = 'rgba(0,0,0,0.80)';
 const F    = 'Atkinson Hyperlegible';
 
@@ -146,6 +150,7 @@ function CoachmarkOverlay({
   step: TourStep; rect: Rect | null; index: number; count: number;
   onNext: () => void; onSkip: () => void;
 }) {
+  const styles = useCoachStyles();
   const win = Dimensions.get('window');
   const pad = step.padding ?? 8;
   const breathe = useRef(new Animated.Value(0)).current;
@@ -204,7 +209,7 @@ function CoachmarkOverlay({
           {/* Breathing highlight ring around the target. */}
           <Animated.View pointerEvents="none" style={{
             position: 'absolute', left: sx, top: sy, width: sw, height: sh,
-            borderRadius: 12, borderWidth: 2, borderColor: GOLD,
+            borderRadius: 12, borderWidth: 2, borderColor: styles.ring.borderColor,
             opacity: haloOpacity, transform: [{ scale: haloScale }],
           }} />
         </>
@@ -233,21 +238,30 @@ function CoachmarkOverlay({
   );
 }
 
-const styles = StyleSheet.create({
+/** Built once per token object (PopupTokens are memoised per setting). */
+const styleCache = new WeakMap<PopupTokens, ReturnType<typeof makeStyles>>();
+function useCoachStyles() {
+  const pt = useGlassTheme();
+  let s = styleCache.get(pt);
+  if (!s) { s = makeStyles(pt); styleCache.set(pt, s); }
+  return s;
+}
+const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   dim: { position: 'absolute', backgroundColor: DIM },
+  ring: { borderColor: pt.gold.thumb },
   bubble: {
     position: 'absolute', backgroundColor: 'rgba(14,12,10,0.98)', borderRadius: 14,
-    borderWidth: 1, borderColor: 'rgba(255,229,102,0.55)', padding: 14,
+    borderWidth: 1, borderColor: pt.gold.selBorder, padding: 14,
     shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
   },
-  title: { color: GOLD, fontFamily: F, fontSize: 14, fontWeight: 'bold', marginBottom: 5, letterSpacing: 0.5 },
-  body:  { color: 'rgba(255,255,255,0.92)', fontFamily: F, fontSize: 13.5, lineHeight: 19 },
+  title: { color: pt.ink.text, fontFamily: F, fontSize: 14, fontWeight: 'bold', marginBottom: 5, letterSpacing: 0.5 },
+  body:  { color: pt.ink.textSoft, fontFamily: F, fontSize: 13.5, lineHeight: 19 },
   illo:  { marginTop: 12 },
   row:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 },
-  count: { color: 'rgba(255,255,255,0.45)', fontFamily: F, fontSize: 11, letterSpacing: 1 },
+  count: { color: pt.ink.textDim, fontFamily: F, fontSize: 11, letterSpacing: 1 },
   btns:  { flexDirection: 'row', alignItems: 'center', gap: 10 },
   skip:  { paddingVertical: 6, paddingHorizontal: 10 },
-  skipText: { color: 'rgba(255,255,255,0.6)', fontFamily: F, fontSize: 13 },
-  next:  { backgroundColor: GOLD, borderRadius: 8, paddingVertical: 7, paddingHorizontal: 18 },
+  skipText: { color: pt.ink.key, fontFamily: F, fontSize: 13 },
+  next:  { backgroundColor: pt.gold.thumb, borderRadius: 8, paddingVertical: 7, paddingHorizontal: 18 },
   nextText: { color: '#0a0805', fontFamily: F, fontSize: 13, fontWeight: 'bold' },
 });

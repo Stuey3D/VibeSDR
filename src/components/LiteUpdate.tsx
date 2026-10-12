@@ -13,6 +13,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AppState, DeviceEventEmitter, NativeModules, Text, TouchableOpacity, View } from 'react-native';
 import { newerLiteRelease, liteVersionLabel, type LiteRelease } from '../services/liteUpdate';
+import type { ServerPalette } from '../constants/serverPalette';
 
 const LU: any = (NativeModules as any).LiteUpdate;
 const MB = (n: number) => (n / 1e6).toFixed(n >= 10e6 ? 0 : 1);
@@ -22,7 +23,7 @@ type St =
   | { k: 'available'; rel: LiteRelease; label: string } | { k: 'permission'; rel: LiteRelease; label: string }
   | { k: 'downloading'; got: number; total: number; label: string } | { k: 'installing'; label: string };
 
-export default function LiteUpdate({ C, F }: { C: any; F?: string }) {
+export default function LiteUpdate({ C, F }: { C: ServerPalette; F?: string }) {
   const [st, setSt] = useState<St>({ k: 'idle' });
   const stRef = useRef(st); stRef.current = st;
 
@@ -80,14 +81,14 @@ export default function LiteUpdate({ C, F }: { C: any; F?: string }) {
   const link = (label: string, onPress: () => void) => (
     <TouchableOpacity onPress={onPress} accessibilityRole="button" hitSlop={{ top: 10, bottom: 10, left: 12, right: 12 }}
                       style={{ alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 12 }}>
-      <Text style={[dim, { textDecorationLine: 'underline' }]}>{label}</Text>
+      <Text style={[dim, { color: C.key, textDecorationLine: 'underline' }]}>{label}</Text>
     </TouchableOpacity>
   );
   const button = (label: string, onPress: () => void) => (
     <TouchableOpacity onPress={onPress} accessibilityRole="button"
                       style={{ alignSelf: 'center', marginTop: 8, paddingVertical: 10, paddingHorizontal: 22,
-                               borderWidth: 1, borderColor: C.gold, borderRadius: 8 }}>
-      <Text style={{ color: C.gold, fontFamily: F, fontSize: 15 }}>{label}</Text>
+                               borderWidth: 1, borderColor: C.keyBorderAct, borderRadius: 8 }}>
+      <Text style={{ color: C.key, fontFamily: F, fontSize: 15 }}>{label}</Text>
     </TouchableOpacity>
   );
   const line = (text: string) => <Text style={[dim, { textAlign: 'center', marginTop: 4, paddingHorizontal: 16 }]}>{text}</Text>;

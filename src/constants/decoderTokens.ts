@@ -32,9 +32,10 @@
  *   • KEYS — the header keys and the chips in the body, and with them the frame (border, header
  *     hairline, glow, the idle status dot), so the box reads as one with its keys: the CONTROLS colour.
  *   • MEANINGS — good / warn / bad, MER pink, SNR green, the sync dot, and the SELECTED / PLAYING
- *     station (`selected`): fixed. ★ The one exception is the clash Stuart named: "if someone has set
- *     green text … maybe use amber or white as the selected station" — WHITE, because amber is
- *     already `warn` (see `selectedFor`).
+ *     station (`selected`): fixed, except where the TEXT colour is the meaning's own colour. Stuart named
+ *     the first: "if someone has set green text … maybe use amber or white as the selected station" —
+ *     WHITE, because amber is already `warn`. The rest (red text → bad white bold; amber / neon text →
+ *     warn white; teal → selected white) are `meaningsFor`, the ONE helper every surface uses.
  *   ★ On metal with Transparency OFF the HEADER text stays engraved (dark on silver, light grey on
  *     black): it is cut into the plate, not lit, and no lit colour reads on a silver plate.
  *
@@ -127,6 +128,8 @@ export interface DecoderTokens {
 
   // ── Charts ──
   dotIdle:    string;
+  /** Keyboard / D-pad focus ring (focusFor: white on green controls). */
+  focus:      string;
   plot:       string;
   axis:       string;
   axisStrong: string;
@@ -147,9 +150,12 @@ export interface DecoderTokens {
   mer:        string;
   /** A spot's SNR below 0 dB — weak but decoded (DecoderPanel's spots table). */
   snrLow:     string;
+  /** ★ `bad` is drawn BOLD as well (red text: white bold — see `meaningsFor`). Use `meaningWeight`. */
+  badBold:    boolean;
 }
 
-/** The meaning colours, fixed (§10.2 TRAP). Exported so the test can prove no chassis moves them. */
+/** The meaning colours (§10.2 TRAP) — fixed on every chassis and controls colour; only the TEXT colour can
+ *  swap one, and only where the two would read alike (`meaningsFor`). */
 export const DECODER_MEANING = {
   good:  '#7dff9a',
   warn:  '#ffd479',
@@ -175,7 +181,71 @@ const SELECTED_WHITE = '242,239,232';   // = METAL_VALUE
  * station that looks like a warning would be the clash all over again.
  */
 export function selectedFor(textRgb: string): string {
-  return textRgb === GREEN_TEXT_RGB ? SELECTED_WHITE : SELECTED_GREEN;
+  // ★ Teal too (2026-10-12): teal text (70,255,215) beside a green station read as one colour.
+  return textRgb === GREEN_TEXT_RGB || textRgb === TEAL_TEXT_RGB ? SELECTED_WHITE : SELECTED_GREEN;
+}
+
+/** The brief's text-colour triplets the clash rule tests for (faceplate.ts LED — the test proves they agree). */
+export const TEAL_TEXT_RGB  = '70,255,215';
+export const RED_TEXT_RGB   = '255,58,46';
+export const AMBER_TEXT_RGB = '255,174,26';
+export const NEON_TEXT_RGB  = '255,106,20';   // Nixie: the text is locked to neon
+
+export interface Meanings {
+  good: string; warn: string; bad: string; dotOn: string; mer: string; snrLow: string;
+  badBold: boolean;
+  /** The selected / playing station, as a triplet (selectedFor). */
+  selectedRgb: string;
+}
+
+/**
+ * ★★★ THE CLASH RULE — the meaning colours for a given TEXT colour, shared by every surface (decoder boxes,
+ * popups, the directory). Stuart, 2026-10-12: "Follow the text colour except for when the colours have a
+ * meaning" — and where the user's text colour IS a meaning's colour, the meaning moves, never the text:
+ *   • green / teal text → the selected station WHITE (selectedFor);
+ *   • red text          → `bad` WHITE BOLD: a red value among red values would say nothing, and bold keeps
+ *                          it from reading as an ordinary white figure;
+ *   • amber text, neon text (Nixie) → `warn` WHITE, and the weak-SNR amber with it.
+ *   ★ The green-text "good" tone is LEFT green (Stuart approved): good is the unremarkable case, and a value
+ *     that merely looks normal when all is well is no loss.
+ */
+export function meaningsFor(textRgb: string): Meanings {
+  const red   = textRgb === RED_TEXT_RGB;
+  const amber = textRgb === AMBER_TEXT_RGB || textRgb === NEON_TEXT_RGB;
+  return {
+    ...DECODER_MEANING,
+    warn:   amber ? METAL_VALUE : DECODER_MEANING.warn,
+    snrLow: amber ? `rgba(${SELECTED_WHITE},0.65)` : DECODER_MEANING.snrLow,
+    bad:    red ? METAL_VALUE : DECODER_MEANING.bad,
+    badBold: red,
+    selectedRgb: selectedFor(textRgb),
+  };
+}
+
+/** Keyboard / D-pad focus green (PanelNav's historic NAV_FOCUS). */
+export const FOCUS_GREEN = '#7CFF9B';
+/** The brief's green controls LED and the default chassis's TODAY_GREEN (faceplate.ts — the test proves it). */
+const GREEN_CONTROLS = new Set(['61,255,114', '0,230,0']);
+
+/**
+ * ★★ Keyboard / D-pad FOCUS for a controls colour (Stuart, 2026-10-12: "yes make it white"). Focus is a meaning
+ * ("you are here") and was always green #7CFF9B — which vanished among GREEN keys once the keys took the controls
+ * colour. WHITE on green controls; green everywhere else, where it still stands apart (★ not white on WHITE
+ * controls, where white would vanish in the same way).
+ */
+export function focusFor(controlsRgb: string): string {
+  return GREEN_CONTROLS.has(controlsRgb) ? '#ffffff' : FOCUS_GREEN;
+}
+/** The focus colour as a row's tint (was rgba(124,255,155,a)). */
+export function focusTint(controlsRgb: string, a: number): string {
+  return GREEN_CONTROLS.has(controlsRgb) ? `rgba(255,255,255,${a})` : `rgba(124,255,155,${a})`;
+}
+
+/** A meaning colour as a text style: the colour, and bold when it is `bad` under red text. */
+export function meaningText(m: { bad: string; badBold: boolean }, colour: string | undefined):
+    { color?: string; fontWeight?: '700' } {
+  if (!colour) return {};
+  return m.badBold && colour === m.bad ? { color: colour, fontWeight: '700' } : { color: colour };
 }
 
 // ── Colour maths (shared with the contrast test) ─────────────────────────────
@@ -257,7 +327,8 @@ function tokens(chassis: Chassis, controlsRgb: string, transparency: Transparenc
   const Kt = (a: number) => `rgba(${controlsText(controlsRgb)},${a})`;   // controls, as a legend
   const Tr = (a: number) => `rgba(${textRgb},${a})`;                     // text colour, chart graphics
   const Tt = (a: number) => `rgba(${controlsText(textRgb)},${a})`;       // text colour, as text
-  const sel = selectedFor(textRgb);
+  const m = meaningsFor(textRgb);
+  const sel = m.selectedRgb;
 
   // Header text: engraved on the metal (OFF, silver / black); the lit TEXT colour everywhere else.
   const e = metal ? engraved(silver) : null;
@@ -314,11 +385,11 @@ function tokens(chassis: Chassis, controlsRgb: string, transparency: Transparenc
                 topLine: 'rgba(255,255,255,0.22)', cast: '#000000', castOpacity: 0.85, pressDim: 0.82 } }),
     // Buttons inside the body are keys too.
     chipBorder: K(0.35), chipBorderAct: K(0.70), chipBgAct: K(0.14),
-    dotIdle: K(0.35),
+    dotIdle: K(0.35), focus: focusFor(controlsRgb),
     // ── Charts: read-outs, so the TEXT colour.
     plot: Tr(0.05), axis: Tr(0.25), axisStrong: Tr(0.35), axisFaint: Tr(0.07), chartText: Tt(0.85),
     dot: Tt(0.85), bar: Tt(0.70), trace: Tt(0.85),
-    ...DECODER_MEANING,
+    good: m.good, warn: m.warn, bad: m.bad, dotOn: m.dotOn, mer: m.mer, snrLow: m.snrLow, badBold: m.badBold,
   };
 }
 

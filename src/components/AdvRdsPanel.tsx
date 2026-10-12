@@ -27,7 +27,7 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, Vi
 import type { LayoutChangeEvent } from 'react-native';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT,
          useDecoderStyles, type DecoderTokens } from './DecoderShell';
-import { DECODER_MEANING } from '../constants/decoderTokens';
+import { DECODER_MEANING, meaningText } from '../constants/decoderTokens';
 import { AlphaType, Canvas, ColorType, Image as SkiaImage, Path, Points, Rect, Skia,
          Text as SkText, matchFont } from '@shopify/react-native-skia';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -58,7 +58,6 @@ import { scrollLane } from '../constants/popupTokens';
  *  ★★ LABELS LIFTED FROM 0.38 (2026-08-02: "with the waterfall behind they are a little hard to
  *    see"), and to .72 by the §10.2 contrast sweep — still clearly SUBORDINATE to the full-strength
  *    values, which is the hierarchy the dimming exists for. */
-const C = DECODER_MEANING;
 const FONT = DECODER_FONT;
 const DASH = '—';
 /** ★ The longest verdict the deviation readout can print (mpxDevInfo) — drawn invisibly to fix the block's height. */
@@ -222,7 +221,7 @@ const Row = React.memo(function Row({ label, value, colour, conf, raw, reserve }
   }, []);
   return (
     <View style={[s.row, minH ? { minHeight: minH } : null]} onLayout={onRowLayout}>
-      <Text style={[s.lbl, { color: lblCol }]} numberOfLines={1}>{label}</Text>
+      <Text style={[s.lbl, meaningText(C, lblCol)]} numberOfLines={1}>{label}</Text>
       {reserve ? (
         // ★★ RDS↔PILOT ALTERNATES BETWEEN A SHORT AND A VERY LONG VALUE — "27° ·
         // nominal · 98% steady" versus "rotating 2°/s — encoder not locked to pilot"
@@ -233,11 +232,11 @@ const Row = React.memo(function Row({ label, value, colour, conf, raw, reserve }
         <View style={[{ flex: 1 }, valH ? { minHeight: valH } : null]}>
           <Text style={[s.val, { opacity: 0 }]}>{reserve}</Text>
           <Text onLayout={onValLayout}
-                style={[s.val, colour ? { color: colour } : null,
+                style={[s.val, colour ? meaningText(C, colour) : null,
                         { position: 'absolute', left: 0, right: 0, top: 0 }]}>{value}</Text>
         </View>
       ) : (
-        <Text style={[s.val, colour ? { color: colour } : null]}>{value}</Text>
+        <Text style={[s.val, colour ? meaningText(C, colour) : null]}>{value}</Text>
       )}
     </View>
   );
@@ -282,7 +281,7 @@ function constellationAngle(xy: number[]): number {
  *  ★★ DE-ROTATE FIRST — computing this on the raw points while only the DRAWING was de-rotated
  *  counted the whole carrier phase offset as error, and a visibly clean constellation reported
  *  "299% EVM". Two consumers of one transform is exactly where that bug lives: share it. */
-function constellationVerdict(xy: number[], phaseCoh: number, ber: number):
+function constellationVerdict(xy: number[], phaseCoh: number, ber: number, C: { good: string; warn: string; bad: string } = DECODER_MEANING):
     { text: string; colour: string } {
   const rot = constellationAngle(xy);
   const cr = Math.cos(rot), sr = Math.sin(rot);
@@ -1045,7 +1044,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
     ? `${(x?.af.length ?? 0)}/${afSeen} · ${Math.round(((x?.af.length ?? 0) / afSeen) * 100)}%`
     : DASH;
 
-  const verdict = constellationVerdict(x?.xy ?? [], coh, ber);
+  const verdict = constellationVerdict(x?.xy ?? [], coh, ber, C);
   const odas = x?.oda ?? [];
   const eons = x?.eon ?? [];
   const afs  = x?.af ?? [];
@@ -1277,7 +1276,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                 <Text style={[s.verdict, { opacity: 0 }]} aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
                   {CONST_VERDICT_ROTATING}
                 </Text>
-                <Text style={[s.verdict, s.devVerdictLive, { color: verdict.colour }]}>{verdict.text}</Text>
+                <Text style={[s.verdict, s.devVerdictLive, meaningText(C, verdict.colour)]}>{verdict.text}</Text>
               </View>
             </View>
             {/* ★ 200 = the figures' block below (devGrid, L/R rows, devVerdict), so this column is never
@@ -1327,12 +1326,12 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                   verdict keeps its own line so a long one wraps under the numbers instead of
                   pushing them sideways. */}
               <View style={s.devGrid}>
-                <Text style={[s.devKey, { color: mpxDevInfo.c }]}>Deviation   Average:</Text>
-                <Text style={[s.devVal, { color: mpxDevInfo.c }]}>{mpxDevInfo.avg}</Text>
+                <Text style={[s.devKey, meaningText(C, mpxDevInfo.c)]}>Deviation   Average:</Text>
+                <Text style={[s.devVal, meaningText(C, mpxDevInfo.c)]}>{mpxDevInfo.avg}</Text>
               </View>
               <View style={s.devGrid}>
-                <Text style={[s.devKey, { color: mpxDevInfo.c }]}>Peak:</Text>
-                <Text style={[s.devVal, { color: mpxDevInfo.c }]}>{mpxDevInfo.peak}</Text>
+                <Text style={[s.devKey, meaningText(C, mpxDevInfo.c)]}>Peak:</Text>
+                <Text style={[s.devVal, meaningText(C, mpxDevInfo.c)]}>{mpxDevInfo.peak}</Text>
               </View>
               {/* ★★ FULL SIZE, ALWAYS. A station near the 1 kHz noise threshold flipped the verdict between one line
                   ("nominal") and three ("… neighbour in the guard band, noise not removed") several times a second, and
@@ -1342,7 +1341,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                 <Text style={[s.verdict, s.devVerdictText, { opacity: 0 }]} aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
                   {DEV_VERDICT_LONGEST}
                 </Text>
-                <Text style={[s.verdict, s.devVerdictText, s.devVerdictLive, { color: mpxDevInfo.c }]}>
+                <Text style={[s.verdict, s.devVerdictText, s.devVerdictLive, meaningText(C, mpxDevInfo.c)]}>
                   {mpxDevInfo.verdict}
                 </Text>
               </View>
@@ -1364,7 +1363,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                       <View style={{ position: 'absolute', top: 0, bottom: 0, width: 1, left: `${LR_LIMIT_KHZ}%`,
                                      backgroundColor: 'rgba(255,255,255,0.55)' }} />
                     </View>
-                    <Text style={[s.devVal, { width: 56, color: col }]}>{lr[k].text}</Text>
+                    <Text style={[s.devVal, { width: 56 }, meaningText(C, col)]}>{lr[k].text}</Text>
                   </View>
                 );
               })}
@@ -1414,7 +1413,9 @@ type Palette = ReturnType<typeof palette>;
  *  every chassis takes the shared tokens: text, charts and plot notes in the TEXT colour, meanings fixed
  *  (decoderTokens.ts). The eye's per-component colours (ScopeBox `colour`) are VERDICTS and stay as they are. */
 const palette = (T: DecoderTokens) => ({
-  ...DECODER_MEANING,
+  // ★ The meanings come from the TOKENS, not DECODER_MEANING: the clash rule (meaningsFor) can swap one
+  //   for the text colour — red text makes `bad` white bold, amber / neon make `warn` white.
+  good: T.good, warn: T.warn, bad: T.bad, dotOn: T.dotOn, mer: T.mer, snrLow: T.snrLow, badBold: T.badBold,
   goldDim:  T.label,
   muted:    T.muted,
   rowLabel: T.rowLabel,

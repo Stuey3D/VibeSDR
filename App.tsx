@@ -36,7 +36,7 @@ const watchServerCache = new Map<string, SDRInstance>();
 import InstancePickerScreen from './src/screens/InstancePickerScreen';
 import SDRScreen            from './src/screens/SDRScreen';
 import RtlTcpServerScreen   from './src/screens/RtlTcpServerScreen';
-import ServerModeScreen     from './src/screens/ServerModeScreen';
+import ServerModeScreen     from './src/screens/ServerModeThemed';   // ★ in the user's colours — see there
 import LegacyPackageNotice  from './src/components/LegacyPackageNotice';
 import TunerScreen          from './src/screens/TunerScreen';
 import CrashBoundary        from './src/components/CrashBoundary';

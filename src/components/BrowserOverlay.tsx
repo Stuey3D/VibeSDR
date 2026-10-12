@@ -11,6 +11,7 @@
 import React, { useRef, useState } from 'react';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { useSuppressShortcuts } from './PanelNav';
+import { useGlassTheme, type PopupTokens } from './PopupShell';
 import {
   ActivityIndicator, Alert, Linking, Modal, Share, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
@@ -73,6 +74,8 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
   // the moment the screen mounted. MOUNTED IS NOT THE SAME AS VISIBLE, and the failure mode
   // was silent and total: the keyboard simply stopped working everywhere. (2026-07-25.)
   useSuppressShortcuts(!!url);
+  const pt = useGlassTheme();
+  const styles = browserStyles(pt);
 
   // ★ Say so, rather than being silently dead. Shown only if a key is actually pressed:
   // someone driving by touch never sees it, and someone reaching for the keyboard gets an
@@ -185,7 +188,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
         />
         {loading && (
           <View style={styles.spinnerWrap} pointerEvents="none">
-            <ActivityIndicator size="large" color="#FFB833" />
+            <ActivityIndicator size="large" color={pt.gold.thumb} />
             <Text style={styles.spinnerText}>Loading…</Text>
           </View>
         )}
@@ -194,35 +197,45 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
   );
 }
 
-const styles = StyleSheet.create({
-  // Amber, matching the app's own notices, and full-width so it cannot be mistaken for
+/* ★★ THE BROWSER'S CHROME IN THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including
+ *   directory if possible"): the back / save / ‹ › keys and the progress bar in the CONTROLS colour, the title and the
+ *   shortcuts notice in the TEXT colour. The page itself is someone else's and is never touched. Dark glass on every
+ *   chassis (useGlassTheme); built once per setting. */
+const browserCache = new WeakMap<PopupTokens, ReturnType<typeof makeBrowserStyles>>();
+function browserStyles(pt: PopupTokens) {
+  let s = browserCache.get(pt);
+  if (!s) { s = makeBrowserStyles(pt); browserCache.set(pt, s); }
+  return s;
+}
+const makeBrowserStyles = (pt: PopupTokens) => StyleSheet.create({
+  // A notice (in the text colour since 2026-10-12, as the app's own notices are), and full-width so it cannot be mistaken for
   // part of the receiver's page underneath.
   keyNote: {
     backgroundColor: 'rgba(60,40,0,0.96)', paddingHorizontal: 12, paddingVertical: 8,
-    borderBottomWidth: 1, borderBottomColor: 'rgba(255,200,0,0.45)',
+    borderBottomWidth: 1, borderBottomColor: pt.gold.noticeBorder,
   },
-  keyNoteText: { color: '#ffe566', fontSize: 12, lineHeight: 17 },
+  keyNoteText: { color: pt.gold.notice, fontSize: 12, lineHeight: 17 },
   root:  { flex: 1, backgroundColor: '#000' },
-  progressTrack: { height: 3, backgroundColor: 'rgba(255,160,0,0.12)' },
-  progressFill:  { height: 3, backgroundColor: '#FFB833' },
+  progressTrack: { height: 3, backgroundColor: pt.ink.keyBgAct },
+  progressFill:  { height: 3, backgroundColor: pt.gold.fill },
   spinnerWrap:   { position: 'absolute', top: 60, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  spinnerText:   { fontFamily: 'Courier', fontSize: 13, color: 'rgba(255,184,51,0.9)', letterSpacing: 1 },
+  spinnerText:   { fontFamily: 'Courier', fontSize: 13, color: pt.ink.textDim, letterSpacing: 1 },
   bar:   {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingTop: 6, paddingBottom: 8, backgroundColor: '#0a0a0a',
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.18)',
     gap: 6,
   },
-  back:  { color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 16 },
-  save:  { color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 14, paddingHorizontal: 6 },
+  back:  { color: pt.gold.sel, fontFamily: 'Atkinson Hyperlegible', fontSize: 16 },
+  save:  { color: pt.gold.sel, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, paddingHorizontal: 6 },
   title: {
     flex: 1, textAlign: 'center', paddingHorizontal: 8,
-    color: 'rgba(255,255,255,0.85)', fontFamily: 'Atkinson Hyperlegible', fontSize: 15,
+    color: pt.ink.textSoft, fontFamily: 'Atkinson Hyperlegible', fontSize: 15,
   },
   navArrow: {
-    color: '#ffe566', fontSize: 26, lineHeight: 28,
+    color: pt.gold.sel, fontSize: 26, lineHeight: 28,
     paddingHorizontal: 8, fontFamily: 'Atkinson Hyperlegible',
   },
-  navArrowDim: { color: 'rgba(255,255,255,0.22)' },
+  navArrowDim: { color: pt.ink.textFaint, opacity: 0.5 },
   web:   { flex: 1, backgroundColor: '#000' },
 });

@@ -35,7 +35,8 @@ import { CHASSIS, CONTROLS, TEXTS, TRANSPARENCIES, LED, SILVER_CHASSIS, BLACK_CH
   resolveControlsColour } from '../src/constants/faceplate.ts';
 import {
   decoderTokensFor, buildDecoderTokens, DECODER_MEANING, METAL_VALUE, CONTRAST_LIFT, lighten, parseRgb,
-  DEFAULT_SOLID_BG, GREEN_TEXT_RGB, controlsText,
+  DEFAULT_SOLID_BG, GREEN_TEXT_RGB, controlsText, meaningsFor, meaningText,
+  TEAL_TEXT_RGB, RED_TEXT_RGB, AMBER_TEXT_RGB, NEON_TEXT_RGB,
   type DecoderTokens, type RGB,
 } from '../src/constants/decoderTokens.ts';
 
@@ -205,13 +206,27 @@ for (const ch of CHASSIS) for (const c of CONTROLS) for (const [tn, trgb] of TEX
     ok(`${tag}: ${r} in the controls colour`, isK(tk[r]), tk[r]);
   }
   if (tk.surface === 'glass') ok(`${tag}: border in the controls colour`, isK(tk.border), tk.border);
+  // ★★ Focus: WHITE on green controls (Stuart, 2026-10-12: "yes make it white"), green elsewhere.
+  ok(`${tag}: focus ring`, tk.focus === (c === 'green' ? '#ffffff' : '#7CFF9B'), tk.focus);
   if (tk.hdrBdr) ok(`${tag}: header hairline in the controls colour`, isK(tk.hdrBdr), tk.hdrBdr);
   // Meaning colours are the same on every chassis, controls and text colour.
   for (const k of Object.keys(DECODER_MEANING) as (keyof typeof DECODER_MEANING)[]) {
-    ok(`${tag}: meaning ${k} fixed`, tk[k] === DECODER_MEANING[k]);
+    ok(`${tag}: meaning ${k} = the clash rule's`, tk[k] === meaningsFor(trgb)[k]);
   }
-  // ★★ The selected station: green, WHITE on green text (Stuart's clash rule).
-  ok(`${tag}: selected station`, tn === 'green'
+  // ★★★ THE CLASH RULE (meaningsFor): a meaning moves only where the TEXT is its colour.
+  const W = METAL_VALUE;
+  ok(`${tag}: bad ${tn === 'red' ? 'white BOLD' : 'red'}`, tn === 'red'
+    ? tk.bad === W && tk.badBold && tk.bad !== DECODER_MEANING.bad
+    : tk.bad === DECODER_MEANING.bad && !tk.badBold, tk.bad);
+  const warnWhite = tn === 'amber' || tn === 'neon';
+  ok(`${tag}: warn ${warnWhite ? 'white' : 'amber'}`, warnWhite
+    ? tk.warn === W && tk.snrLow.startsWith('rgba(242,239,232,')
+    : tk.warn === DECODER_MEANING.warn && tk.snrLow === DECODER_MEANING.snrLow, tk.warn);
+  ok(`${tag}: good is never moved (green text keeps its green 'ok' tone)`, tk.good === DECODER_MEANING.good);
+  ok(`${tag}: meaningText bolds only bad`, (meaningText(tk, tk.bad).fontWeight === '700') === tk.badBold
+    && meaningText(tk, tk.warn).fontWeight === undefined);
+  // ★★ The selected station: green, WHITE on green or teal text (Stuart's clash rule).
+  ok(`${tag}: selected station`, tn === 'green' || tn === 'teal'
     ? tk.selected === 'rgb(242,239,232)' && tk.selectedLive.startsWith('rgba(242,239,232,')
     : tk.selected === 'rgb(125,255,154)' && tk.selectedLive.startsWith('rgba(125,255,154,'), tk.selected);
   // No blur over the spectrum on silver / black (§10.2, §3.4); and none with Transparency OFF anywhere.
@@ -237,6 +252,8 @@ for (const ch of CHASSIS) for (const c of CONTROLS) for (const [tn, trgb] of TEX
   ok('blue keys + white text: keys blue', blueWhite.keyText.startsWith(`rgba(${LED.blue.rgb},`));
   ok('blue keys + white text: selected station green', blueWhite.selected === 'rgb(125,255,154)');
   ok('green text is the brief\'s green', GREEN_TEXT_RGB === LED.green.rgb);
+  ok('the clash rule\'s triplets are the brief\'s', TEAL_TEXT_RGB === LED.teal.rgb && RED_TEXT_RGB === LED.red.rgb
+     && AMBER_TEXT_RGB === LED.amber.rgb && NEON_TEXT_RGB === LED.neon.rgb);
   ok('the white selected station is the near-white value #f2efe8', METAL_VALUE === '#f2efe8');
 }
 // Default chassis: the glass, ON and OFF.

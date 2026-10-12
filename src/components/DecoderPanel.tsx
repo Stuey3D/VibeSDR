@@ -26,7 +26,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeEventEmitter, NativeModules } from 'react-native';
-import { NAV_FOCUS, captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS } from './PanelNav';
+import { captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS, useNavFocus } from './PanelNav';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
@@ -233,6 +233,7 @@ export default function DecoderPanel({
   dabProgrammes = [], dabEnsemble = '', activeDabId, onSelectDab, dabSpeed = 1, onDabSpeed,
   onOpenFreq, onShownChange, topLimit, topSafe, tunedHz = 0,
 }: DecoderPanelProps) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   // ★★★ BIG / SMALL — the decoder box could not be made bigger, for ANY decoder.
   //
   // The image height was a hardcoded 200 pt on every device while DecoderImageCanvas scales the
@@ -1006,7 +1007,7 @@ export default function DecoderPanel({
           const { x, width } = e.nativeEvent.layout;
           hdrBtnX.current[i] = { x, width };
         } : undefined}
-        style={[style, on && { borderColor: NAV_FOCUS, borderWidth: 2 }]} {...rest}>
+        style={[style, on && { borderColor: focusC.ring, borderWidth: 2 }]} {...rest}>
         {children}
       </DecoderKey>
     );
@@ -1022,7 +1023,7 @@ export default function DecoderPanel({
 
   return (
     <DecoderShell bottom={bottomOffset} maxWidth={PANEL_MAX_W} tall={tall}
-                  borderColor={kbZone ? NAV_FOCUS : undefined}
+                  borderColor={kbZone ? focusC.ring : undefined}
                   wrapStyle={{ opacity, transform: [{ translateY: slideY }] }}
                   onTouchStart={noteTouchInteraction}>
 
@@ -1449,7 +1450,7 @@ export default function DecoderPanel({
                 <TouchableOpacity key={o.key}
                   style={[popup.wrap ? dp.popChip : dp.dabSpeedBtn,
                           { borderColor: o.on ? dc.btnBdrA : dc.btnBdr }, o.on && { backgroundColor: dc.btnAct },
-                          kbZone === 'popup' && speedIdx === oi && { borderColor: NAV_FOCUS, borderWidth: 2 }]}
+                          kbZone === 'popup' && speedIdx === oi && { borderColor: focusC.ring, borderWidth: 2 }]}
                   onPress={() => { o.apply(); popup.close(); }} activeOpacity={0.7}>
                   <Text style={[dp.dabSpeedBtnTxt, { color: o.on ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
                     {o.label}
@@ -1469,7 +1470,7 @@ export default function DecoderPanel({
                 <TouchableOpacity key={p.id}
                   onLayout={(e) => { dabY.current[p.id] = e.nativeEvent.layout.y; }}
                   style={[dp.dabRow, { borderBottomColor: dc.hdrBdr },
-                          navOn && { backgroundColor: 'rgba(124,255,155,0.16)' }]}
+                          navOn && { backgroundColor: focusC.tint(0.16) }]}
                   onPress={() => onSelectDab?.(p.id)} activeOpacity={0.7}>
                   <StationLogo name={p.name} />
                   <Text style={[dp.dabName, { color: active ? tk.selected : dc.output, fontFamily: FONT }]}
@@ -1569,7 +1570,7 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   // Sits over the whole box; only ever an opacity animation, so it stays on the native driver.
   flash: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
-    borderWidth: 2, borderColor: NAV_FOCUS, borderRadius: 8,
+    borderWidth: 2, borderColor: T.focus, borderRadius: 8,
   },
   /* ★ Wrap, frame, header, title and the header keys' boxes are DecoderShell's. */
   dot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: T.dotIdle, flexShrink: 0 },

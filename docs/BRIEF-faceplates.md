@@ -681,13 +681,24 @@ pin **`Fonts.decoder = 'Atkinson Hyperlegible'`**, and justify or drop DAB's 560
 > "Popup boxes can they be styled to the controls please same with menus too … be weird having a light control
 > scheme with black popups … and chat menu too."
 
+> ★★★ **COLOURS — 2026-10-12 (Stuart): "yes colours apply everywhere including directory if possible".** The
+> decoder-box rule (§10.2, quoted in §1) now covers every popup, menu, sheet, the tour card and the server
+> directory, on **every** chassis: **text = the text colour; keys, selectors, slider fills and borders = the
+> controls colour; meanings fixed** — the selected item green (white on green / teal text), warn amber, bad red,
+> busy amber, danger red, focus green, chat's own-name blue / other-name amber — with the clash rule
+> (`meaningsFor`, decoderTokens.ts: red text → bad white bold; amber / neon text → warn and busy white).
+> Tokens: `popupTokens.ts` (`ink` + `gold` roles); full screens that are never plated (the directory, the tour
+> card) read `useGlassTheme()` — the dark glass in the user's colours whatever the chassis. Silver / black
+> plates keep their engraving. Proof: `scripts/test_popup.ts` §1 / §1b. Read "Unchanged … pixel for pixel" and
+> "the default chassis returns today's values" below as history.
+
 **Scope:** `FreqModal` (Tune / Bookmarks), `AudioSheet`, `MenuSheet`, `ChatDrawer`, and the smaller modals that
 share the look: `RecordingsOverlay`, `KeyboardShortcuts`, `PasswordModal`, `IdentModal`, `CityPickerModal`,
 `AboutOverlay`. Build one `PopupShell` for all of them, the way `DecoderShell` works (§10.1).
 
 | Chassis | Popups |
 |---|---|
-| `default` | **Unchanged.** Today's dark glass and gold selection, pixel for pixel. (★ 2026-10-12: the DECODER boxes no longer match this gold — they follow the text / controls colours on every chassis, §10.2. Popups were not changed with them; whether they follow is an open question for Stuart.) |
+| `default` | Today's dark glass — ★★ **in the user's colours since 2026-10-12** (below); the gold is gone. |
 | `silver` / `black` | A solid brushed plate matching the deck, laid out as below |
 
 - **Plate:** the same texture and lighting layer as the deck (§3), opaque.

@@ -9,14 +9,17 @@
  *   span, so an FM-only receiver shows nothing and an HF one shows its bands, with nothing in this
  *   component knowing the centre or the span. Silent on any failure.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { withReadAuth } from '../services/vibeAuth';
+import { useGlassTheme, type PopupTokens } from './PopupShell';
 
 type Cond = { measured: { band: string; snrDb: number }[]; solar?: { sfi?: number; kp?: number; bands?: Record<string, string> } };
 const rate = (db: number) => db >= 15 ? 'Excellent' : db >= 9 ? 'Good' : db >= 4 ? 'Fair' : 'Poor';
 
 export default function DoorConditions({ base, readAuth = '' }: { base: string; readAuth?: string }) {
+  const pt = useGlassTheme();
+  const s = useMemo(() => makeStyles(pt), [pt]);
   const [c, setC] = useState<Cond | null>(null);
   const [loc, setLoc] = useState('');
   useEffect(() => {
@@ -66,15 +69,18 @@ export default function DoorConditions({ base, readAuth = '' }: { base: string; 
   );
 }
 
-const AMBER = '#ffb833';
-const s = StyleSheet.create({
+/* ★★ THE USER'S TEXT COLOUR (Stuart, 2026-10-12: "yes colours apply everywhere including directory if possible") —
+ *  was a fixed amber. Every line here is a read-out, so all of it is TEXT (useGlassTheme: the glass skin whatever the
+ *  chassis — the door is never plated); the four condition words carry no colour of their own, so nothing here is a
+ *  meaning to protect. Built once per token object (the tokens are memoised per setting). */
+const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   wrap:  { alignItems: 'center', marginTop: 18, marginBottom: 8 },
-  loc:   { color: 'rgba(255,184,51,0.6)', fontSize: 11, letterSpacing: 0.5, marginBottom: 10 },
-  title: { color: 'rgba(255,184,51,0.8)', fontSize: 10, letterSpacing: 2, marginBottom: 4 },
+  loc:   { color: pt.ink.textDim, fontSize: 11, letterSpacing: 0.5, marginBottom: 10 },
+  title: { color: pt.ink.section, fontSize: 10, letterSpacing: 2, marginBottom: 4 },
   row:   { flexDirection: 'row', alignItems: 'center' },
-  cell:  { color: 'rgba(255,220,160,0.92)', fontSize: 11, paddingVertical: 1, paddingHorizontal: 12, minWidth: 96 },
+  cell:  { color: pt.ink.textSoft, fontSize: 11, paddingVertical: 1, paddingHorizontal: 12, minWidth: 96 },
   head:  { opacity: 0.65 },
-  band:  { color: AMBER, textAlign: 'right', minWidth: 48, paddingLeft: 0 },
-  div:   { borderRightWidth: 1, borderRightColor: 'rgba(255,184,51,0.28)' },
+  band:  { color: pt.ink.text, textAlign: 'right', minWidth: 48, paddingLeft: 0 },
+  div:   { borderRightWidth: 1, borderRightColor: pt.ink.divider },
   dim:   { opacity: 0.6 },
 });

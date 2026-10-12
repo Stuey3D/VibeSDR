@@ -29,7 +29,7 @@ import {
   Text,
   TouchableOpacity,
   View, ViewStyle, type LayoutChangeEvent,} from 'react-native';
-import { useRegionHandback, NAV_FOCUS } from './PanelNav';
+import { useRegionHandback, useNavFocus } from './PanelNav';
 import { BlurView } from 'expo-blur';
 import SectionIcon from './SectionIcon';
 import {
@@ -2082,6 +2082,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
   vfoMuxLabel, onControlRects, plateInset }: any) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const handbackFlash = useHandbackFlash();
 
   const { theme: t } = useTheme();
@@ -2324,7 +2325,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         <Animated.View pointerEvents="none"
           style={{
             position: 'absolute', left: -4, right: -4, top: -4, bottom: -4,
-            borderRadius: 12, borderWidth: 2, borderColor: NAV_FOCUS,
+            borderRadius: 12, borderWidth: 2, borderColor: focusC.ring,
             backgroundColor: ct.handbackBg,
             opacity: handbackFlash, zIndex: 3,
           }} />
@@ -2454,6 +2455,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
    *  ★★ A destructured prop list is a hand-maintained copy of the props — anything the body uses must be in it. */
   sharedDial,
   vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, onDrumAnchors }: any) {
+  const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const handbackFlash = useHandbackFlash();
   const recPulse = useRecPulse(isRecording);   // ★ the AUDIO key breathes while recording, as in portrait
   const chatPulse = useRecPulse(chatUnread);   // ★ …and the CHAT key while a message is unread (UnreadChatMark)
@@ -2567,7 +2569,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       <Animated.View pointerEvents="none"
         style={{
           position: 'absolute', left: -4, right: -4, top: -4, bottom: -4,
-          borderRadius: 12, borderWidth: 2, borderColor: NAV_FOCUS,
+          borderRadius: 12, borderWidth: 2, borderColor: focusC.ring,
           backgroundColor: ct.handbackBg,
           opacity: handbackFlash, zIndex: 3,
         }} />

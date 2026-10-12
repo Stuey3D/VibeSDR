@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { useTheme } from '../contexts/ThemeContext';
+import { useGlassTheme } from './PopupShell';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -37,8 +38,6 @@ export interface SpecRatioOverlayProps {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const FONT  = 'Atkinson Hyperlegible';
-const GOLD  = '#ffb833';
-const GOLDD = 'rgba(255,160,0,0.40)';
 const MIN   = 0.05;
 const MAX   = 0.65;
 
@@ -51,13 +50,18 @@ export default function SpecRatioOverlay({
 }: SpecRatioOverlayProps) {
 
   const { theme: t } = useTheme();
-  const isWhite = t.name === 'white';
-  const gold  = isWhite ? '#ffffff'                    : GOLD;
-  const goldD = isWhite ? 'rgba(255,255,255,0.40)'     : GOLDD;
-  const bdr   = isWhite ? 'rgba(255,255,255,0.25)'     : 'rgba(255,160,0,0.22)';
-  const badgeBdr = isWhite ? 'rgba(255,255,255,0.18)'  : 'rgba(255,160,0,0.18)';
-  const badgeBg  = isWhite ? 'rgba(255,255,255,0.06)'  : 'rgba(255,160,0,0.08)';
-  const trackMax = isWhite ? 'rgba(255,255,255,0.15)'  : 'rgba(255,160,0,0.18)';
+  /* ★★ IN THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including directory if possible").
+   *   The old amber / white split followed the retired theme name (always 'white' since the faceplates). Now:
+   *   the read-out and labels in the TEXT colour, the ✓ key, the slider and the panel's edge in the CONTROLS
+   *   colour. Dark glass on every chassis (useGlassTheme). The split bar's yellow / blue stand for the spectrum
+   *   and the waterfall themselves and stay. */
+  const pt = useGlassTheme();
+  const value  = pt.gold.value;          // the read-out
+  const label  = pt.ink.textDim;         // title, badge, scale labels
+  const bdr    = pt.ink.border;          // the panel's edge
+  const badgeBdr = pt.ink.keyBorder;
+  const badgeBg  = 'rgba(255,255,255,0.06)';
+  const trackMax = 'rgba(255,255,255,0.15)';
 
   const translateY = useRef(new Animated.Value(20)).current;
   const opacity    = useRef(new Animated.Value(0)).current;
@@ -102,24 +106,24 @@ export default function SpecRatioOverlay({
     >
       {/* Header */}
       <View style={sro.header}>
-        <Text style={[sro.title, { color: goldD, fontFamily: t.font }]}>
+        <Text style={[sro.title, { color: label, fontFamily: t.font }]}>
           SPECTRUM / WATERFALL RATIO
         </Text>
         <View style={[sro.badge, { backgroundColor: badgeBg, borderColor: badgeBdr }]}>
-          <Text style={[sro.badgeTxt, { color: goldD, fontFamily: t.font }]}>
+          <Text style={[sro.badgeTxt, { color: label, fontFamily: t.font }]}>
             {isLandscape ? 'LANDSCAPE' : 'PORTRAIT'}
           </Text>
         </View>
         <TouchableOpacity
-          style={[sro.tick, { backgroundColor: isWhite ? 'rgba(255,255,255,0.10)' : 'rgba(255,160,0,0.12)', borderColor: bdr }]}
+          style={[sro.tick, { backgroundColor: pt.ink.keyBgAct, borderColor: pt.ink.keyBorder }]}
           onPress={onClose} hitSlop={8} activeOpacity={0.75}
         >
-          <Text style={[sro.tickTxt, { color: gold }]}>✓</Text>
+          <Text style={[sro.tickTxt, { color: pt.gold.sel }]}>✓</Text>
         </TouchableOpacity>
       </View>
 
       {/* Value readout */}
-      <Text style={[sro.val, { color: gold, fontFamily: t.font }]}>
+      <Text style={[sro.val, { color: value, fontFamily: t.font }]}>
         Spectrum {specPct}% · Waterfall {wfPct}%
       </Text>
 
@@ -131,16 +135,16 @@ export default function SpecRatioOverlay({
         step={0.01}
         value={sliderVal}
         onValueChange={handleChange}
-        minimumTrackTintColor={gold}
+        minimumTrackTintColor={pt.gold.fill}
         maximumTrackTintColor={trackMax}
-        thumbTintColor={gold}
+        thumbTintColor={pt.gold.thumb}
       />
 
       {/* Labels */}
       <View style={sro.labels}>
-        <Text style={[sro.labelTxt, { color: goldD, fontFamily: t.font }]}>◀ more waterfall</Text>
-        <Text style={[sro.labelTxt, { color: goldD, fontFamily: t.font }]}>50/50</Text>
-        <Text style={[sro.labelTxt, { color: goldD, fontFamily: t.font }]}>more spectrum ▶</Text>
+        <Text style={[sro.labelTxt, { color: label, fontFamily: t.font }]}>◀ more waterfall</Text>
+        <Text style={[sro.labelTxt, { color: label, fontFamily: t.font }]}>50/50</Text>
+        <Text style={[sro.labelTxt, { color: label, fontFamily: t.font }]}>more spectrum ▶</Text>
       </View>
 
       {/* Visual split bar */}
@@ -158,7 +162,7 @@ const sro = StyleSheet.create({
   wrap: {
     position: 'absolute', left: 8, right: 8,
     backgroundColor: 'rgba(10,8,4,0.84)',
-    borderWidth: 1, borderColor: 'rgba(255,160,0,0.22)',
+    borderWidth: 1,
     borderRadius: 18,
     paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14,
     gap: 10,
@@ -167,20 +171,19 @@ const sro = StyleSheet.create({
     zIndex: 200,
   },
   header:    { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  title:     { flex: 1, fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: 'rgba(255,160,0,0.50)' },
-  badge:     { backgroundColor: 'rgba(255,160,0,0.08)', borderWidth: 1, borderColor: 'rgba(255,160,0,0.18)', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
-  badgeTxt:  { fontFamily: FONT, fontSize: 9, letterSpacing: 1, color: 'rgba(255,160,0,0.40)' },
+  title:     { flex: 1, fontFamily: FONT, fontSize: 10, letterSpacing: 2 },
+  badge:     { borderWidth: 1, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  badgeTxt:  { fontFamily: FONT, fontSize: 9, letterSpacing: 1 },
   tick: {
     width: 32, height: 32, borderRadius: 16,
-    backgroundColor: 'rgba(255,160,0,0.12)',
-    borderWidth: 1, borderColor: 'rgba(255,160,0,0.45)',
+    borderWidth: 1,
     alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  tickTxt:   { color: GOLD, fontSize: 16 },
-  val:       { fontFamily: FONT, fontSize: 14, color: GOLD, textAlign: 'center', letterSpacing: 1 },
+  tickTxt:   { fontSize: 16 },
+  val:       { fontFamily: FONT, fontSize: 14, textAlign: 'center', letterSpacing: 1 },
   slider:    { width: '100%', height: 36 },
   labels:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  labelTxt:  { fontFamily: FONT, fontSize: 9, color: GOLDD, letterSpacing: 0.5 },
+  labelTxt:  { fontFamily: FONT, fontSize: 9, letterSpacing: 0.5 },
   splitBar:  { height: 8, borderRadius: 4, flexDirection: 'row', gap: 2, overflow: 'hidden' },
   splitSpec: { backgroundColor: 'rgba(255,200,50,0.35)', borderRadius: 4, minWidth: 2 },
   splitWf:   { backgroundColor: 'rgba(0,140,255,0.25)', borderRadius: 4, minWidth: 2 },

@@ -366,25 +366,82 @@ const SERVER_LOGOS: Record<string, any> = {
   vibeserver: require('../../assets/logo_vibeserver.png'),
 };
 
-// Accessibility skin (reference body.lsv-a11y) — the single style going
-// forward: white Atkinson Hyperlegible text, larger touch targets, neutral
-// white borders. Gold survives only as the ACTIVE-state accent.
-const C = {
-  bg:           'rgba(6,4,2,0.99)',        // a11y #lsv-menu-panel
-  border:       'rgba(255,255,255,0.30)',
-  divider:      'rgba(255,255,255,0.12)',  // a11y section rules
-  gold:         '#ffe566',                 // active text
-  goldDim:      'rgba(255,229,102,0.70)',  // active border
-  focus:        '#7CFF9B',                 // keyboard/D-pad focus — matches btnFocused
-  muted:        'rgba(255,255,255,0.92)',  // base button/value text — white
-  btnBg:        'rgba(20,18,14,0.85)',
-  active:       'rgba(255,200,0,0.12)',
-  danger:       'rgba(160,30,30,0.80)',
-  dangerBorder: 'rgba(220,60,60,0.60)',
-  text:         '#ffffff',
-  sectionC:     'rgba(180,190,210,0.80)',  // a11y .lsv-mp-section
-  sliderLabel:  'rgba(200,210,225,0.90)',
-};
+// Accessibility skin (reference body.lsv-a11y) — Atkinson Hyperlegible text, larger touch targets.
+/** A `#rrggbb` / `rgb()` colour at alpha `a` (the busy / in-use fills are tints of a meaning colour). */
+function withAlpha(c: string, a: number): string {
+  const h = /^#([0-9a-f]{6})$/i.exec(c);
+  if (h) { const n = parseInt(h[1], 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+  const m = /^rgba?\(([^)]+)\)$/.exec(c);
+  return m ? `rgba(${m[1].split(',').slice(0, 3).join(',')},${a})` : c;
+}
+
+/**
+ * ★★★ THE MENU'S PALETTE FOLLOWS THE USER'S COLOURS (Stuart, 2026-10-12: "yes colours apply everywhere including
+ * directory if possible"). It was a module constant — white text, white borders, gold only for ACTIVE — so the menu
+ * stayed white-and-gold whatever the deck was set to. Now, on the default chassis: TEXT (titles, rows, labels, notes)
+ * is the TEXT colour, KEYS and their borders / tracks are the CONTROLS colour, MEANINGS stay fixed (focus green,
+ * busy amber, the current item green — white on green / teal text — warn / bad / destructive red by the clash rule,
+ * decoderTokens `meaningsFor`). ★ On silver / black every role is the literal it was: those menus draw through
+ * `onMetal` / PopupKey / PopupFader, which already follow the rule, and the leftovers must not move.
+ * Built once per token object (memoised), so a render is a lookup.
+ */
+const menuCache = new WeakMap<PopupTokens, ReturnType<typeof buildMenuC>>();
+function buildMenuC(pt: PopupTokens) {
+  const ink = pt.ink;
+  const fixed = {
+    bg:           'rgba(6,4,2,0.99)',        // a11y #lsv-menu-panel
+    btnBg:        'rgba(20,18,14,0.85)',
+    // Destructive keys are a MEANING: red on every colour.
+    danger:       'rgba(160,30,30,0.80)',
+    dangerBorder: 'rgba(220,60,60,0.60)',
+    focus:        ink.focus,                 // keyboard/D-pad focus — matches btnFocused
+  };
+  if (pt.metal) return {
+    ...fixed,
+    border: 'rgba(255,255,255,0.30)', frame: 'rgba(255,255,255,0.30)', divider: 'rgba(255,255,255,0.12)',
+    key: 'rgba(255,255,255,0.92)', track: 'rgba(255,255,255,0.92)', textSoft: 'rgba(255,255,255,0.92)',
+    active: 'rgba(255,200,0,0.12)', chipAct: 'rgba(255,200,0,0.12)', text: '#ffffff',
+    sectionC: 'rgba(180,190,210,0.80)', sliderLabel: 'rgba(200,210,225,0.90)',
+    textDim: 'rgba(255,255,255,0.55)', textFaint: 'rgba(255,255,255,0.45)', note: 'rgba(200,210,225,0.55)',
+    // ★ Meanings follow the clash rule on metal too (meaningsFor): busy / warn / bad / current.
+    freq: '#ffe566', notice: pt.ink.m.warn, busy: pt.ink.busy, current: pt.ink.selected,
+    etiquetteText: 'rgba(255,225,180,0.92)', good: 'rgba(120,235,140,0.90)',
+    bad: pt.ink.m.badBold ? pt.ink.m.bad : 'rgba(220,53,69,0.95)', badBold: pt.ink.m.badBold, btnDangerText: '#ff6666',
+  };
+  return {
+    ...fixed,
+    border:      ink.keyBorder,     // a key's / chip's / dropdown's border — controls
+    frame:       ink.border,        // the sheet's edge, its handle, a search box — controls
+    divider:     ink.divider,       // hairlines between rows — text, faint
+    key:         ink.key,           // an unselected key's legend, chevron, icon — controls
+    // ★ A slider's unfilled track: the controls colour, dim. ALSO the "switched off" sentinel the callers pass as
+    //   the FILL (NavSlider compares against it), so caller and slider must read the same token.
+    track:       ink.keyBorder,
+    active:      ink.keyBgAct,      // a selected key's fill — controls
+    chipAct:     pt.gold.selBorder, // a selected chip's border — controls
+    text:        ink.text,
+    textSoft:    ink.textSoft,
+    sectionC:    ink.section,
+    sliderLabel: ink.textSoft,
+    textDim:     ink.textDim,
+    textFaint:   ink.textFaint,
+    note:        ink.textDim,
+    freq:        pt.gold.value,     // a bookmark's / search result's frequency — a readout, text colour
+    notice:      ink.m.warn,        // the aerial / Wi-Fi notes — a caution, the warn meaning (white on amber text)
+    busy:        ink.busy,          // in use by someone else — amber meaning (white on amber / neon text)
+    current:     ink.selected,      // the SDR you are on — the selected meaning (white on green / teal text)
+    etiquetteText: ink.textSoft,
+    good:        ink.m.good,        // "imported" — the good meaning
+    bad:         ink.m.bad,         // a DSP error — the bad meaning (white BOLD on red text)
+    badBold:     ink.m.badBold,
+    btnDangerText: pt.danger,
+  };
+}
+function menuC(pt: PopupTokens) {
+  let c = menuCache.get(pt);
+  if (!c) { c = buildMenuC(pt); menuCache.set(pt, c); }
+  return c;
+}
 
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_H = Math.min(SCREEN_H * 0.88, 700);
@@ -464,6 +521,7 @@ function StepSlider({
 function SectionLabel({ label, icon, first }: { label: string; icon?: SectionIconName; first?: boolean }) {
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
+  const C = menuC(pt);
   return (
     <View style={[styles.sectionBar, first && styles.sectionBarFirst]}>
       <View style={styles.sectionRow}>
@@ -510,6 +568,7 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip, 
 }) {
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
+  const C = menuC(pt);
   // ★ Scroll-into-view is now MEASURED against the ScrollView's content node
   // (revealIn, inside useNavButton) rather than estimated as `row * 46`, which
   // assumed a uniform row height and was wrong for anything nested or unevenly
@@ -533,7 +592,7 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip, 
       onPress={onPress} hitSlop={4} activeOpacity={0.7}
       accessibilityRole="button" accessibilityLabel={a11y ?? label}
     >
-      {icon && <SectionIcon name={icon} size={label ? 15 : 20} color={active ? pt.gold.sel : C.muted} />}
+      {icon && <SectionIcon name={icon} size={label ? 15 : 20} color={active ? pt.gold.sel : C.key} />}
       {!!label && <Text style={[styles.btnText, active && styles.btnTextActive, danger && styles.btnTextDanger]}>
         {label}
       </Text>}
@@ -543,6 +602,7 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip, 
 
 function SwatchBtn({ hex, active, onPress }: { hex: string; active: boolean; onPress: () => void }) {
   const styles = usePopupStyles(makeStyles);
+  const C = menuC(usePopupTheme());
   const { focused, viewRef } = useNavButton(onPress);
   return (
     <TouchableOpacity ref={viewRef as any} hitSlop={4}
@@ -589,13 +649,14 @@ function NavSlider(props: React.ComponentProps<typeof Slider>) {
     if (next !== value) onValueChange?.(next);
   });
   const pt = usePopupTheme();
+  const C = menuC(pt);
   if (pt.metal) {
     // ★ §10.3: a slide fader. Its fill is unlit exactly where the slider's track went muted
     //   (the callers' "Off" position), so a switched-off setting still reads as off.
     return (
       <PopupFader innerRef={viewRef as any} value={value} minimumValue={minimumValue} maximumValue={maximumValue}
         step={step} onValueChange={onValueChange} onSlidingComplete={props.onSlidingComplete}
-        active={props.minimumTrackTintColor !== C.muted} focused={focused}
+        active={props.minimumTrackTintColor !== C.track} focused={focused}
         style={[StyleSheet.flatten(props.style) as any, { height: 24 }]} />
     );
   }
@@ -643,7 +704,7 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
 // ── CONTROL CUSTOMISATION (faceplates brief §1; Popup mockup `kind: 'custom'`) ────────────────
 //
 // ★ Every row is an INPUT SELECTOR: a label and a group of keys, exactly one lit. On the default
-//   chassis they draw as today's menu keys (gold selection). On silver/black they are dome keys
+//   chassis they draw as the menu keys (selection lit in the controls colour, 2026-10-12). On silver/black they are dome keys
 //   with a 4 × 4 LED pip (§10.3, PopupShell's PopupKey) — and SelectorKey is the ONLY place this
 //   pane draws a key, so the swap lives there, not in the pane. The rows lay out through CtrlRow.
 
@@ -758,7 +819,7 @@ function KeyScrollRow<T extends string>({ choices, value, onPick }: {
       <TouchableOpacity hitSlop={8} onPress={() => nudge(side === 'l' ? -1 : 1)}
         accessibilityRole="button" accessibilityLabel={side === 'l' ? 'More choices to the left' : 'More choices to the right'}
         style={[ksr.arrow, side === 'l' ? { alignItems: 'flex-start' } : { alignItems: 'flex-end' }]}>
-        <Text style={[ksr.arrowTxt, { color: pt.metal ? pt.legend : '#c9922e' }]}>{side === 'l' ? '‹' : '›'}</Text>
+        <Text style={[ksr.arrowTxt, { color: pt.metal ? pt.legend : pt.gold.glyph }]}>{side === 'l' ? '‹' : '›'}</Text>
       </TouchableOpacity>
     </View>
   );
@@ -1232,6 +1293,7 @@ function MenuSheetBody({
 }: MenuSheetProps) {
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
+  const C = menuC(pt);
 
   const translateY = useRef(new Animated.Value(SHEET_H)).current;
   const [cmapOpen, setCmapOpen] = useState(false);
@@ -1519,7 +1581,7 @@ function MenuSheetBody({
                 ))}
               </BtnRow>
               {(antennaLocked || !!antennaNote) && (
-                <Text style={{ color: '#d9a441', fontSize: 11, marginTop: 4, marginHorizontal: 4 }}>
+                <Text style={{ color: C.notice, fontSize: 11, marginTop: 4, marginHorizontal: 4 }}>
                   {antennaLocked ? 'The owner has fixed the aerial for this receiver.' : antennaNote}
                 </Text>
               )}
@@ -1543,10 +1605,10 @@ function MenuSheetBody({
                 )}
               </BtnRow>
               {!!pocketWifi.line && (
-                <Text style={{ color: '#d9a441', fontSize: 11, marginTop: 4, marginHorizontal: 4 }}>{pocketWifi.line}</Text>
+                <Text style={{ color: C.notice, fontSize: 11, marginTop: 4, marginHorizontal: 4 }}>{pocketWifi.line}</Text>
               )}
               {(pocketWifi.weak || !pocketWifi.canOwn) && (
-                <Text style={{ color: '#d9a441', fontSize: 11, marginTop: 2, marginHorizontal: 4, opacity: 0.8 }}>
+                <Text style={{ color: C.notice, fontSize: 11, marginTop: 2, marginHorizontal: 4, opacity: 0.8 }}>
                   {!pocketWifi.canOwn ? "Set up this box's own hotspot (setup → Wi-Fi) to be able to switch to it."
                                       : 'Weak link — switching to Own Wi-Fi is recommended.'}
                 </Text>
@@ -1681,7 +1743,7 @@ function MenuSheetBody({
                     minimumValue={1} maximumValue={10} step={1}
                     value={vfoIntensity}
                     onValueChange={(v: number) => onVfoIntensity?.(v)}
-                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted}
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track}
                     thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.bwVal}>{vfoIntensity}</Text>
                 </View>
@@ -1694,8 +1756,8 @@ function MenuSheetBody({
                     minimumValue={0} maximumValue={10} step={1}
                     value={vfoFrost}
                     onValueChange={(v: number) => onVfoFrost?.(v)}
-                    minimumTrackTintColor={vfoFrost > 0 ? pt.gold.fill : C.muted}
-                    maximumTrackTintColor={C.muted}
+                    minimumTrackTintColor={vfoFrost > 0 ? pt.gold.fill : C.track}
+                    maximumTrackTintColor={C.track}
                     thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.bwVal}>{vfoFrost === 0 ? 'Off' : vfoFrost}</Text>
                 </View>
@@ -1709,8 +1771,8 @@ function MenuSheetBody({
                       minimumValue={0} maximumValue={10} step={1}
                       value={bgOpacity}
                       onValueChange={(v: number) => onBgOpacity?.(v)}
-                      minimumTrackTintColor={bgOpacity > 0 ? pt.gold.fill : C.muted}
-                      maximumTrackTintColor={C.muted}
+                      minimumTrackTintColor={bgOpacity > 0 ? pt.gold.fill : C.track}
+                      maximumTrackTintColor={C.track}
                       thumbTintColor={pt.gold.thumb} />
                     <Text style={styles.bwVal}>{bgOpacity === 0 ? 'Off' : bgOpacity}</Text>
                   </View>
@@ -1727,7 +1789,7 @@ function MenuSheetBody({
                     <Text style={styles.sliderLabel}>Auto Range</Text>
                     <NavSlider style={{flex:1}} minimumValue={0} maximumValue={20} step={1}
                       value={autoContrast} onValueChange={onAutoContrast ?? (() => {})}
-                      minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                      minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                     <Text style={styles.sliderVal}>{autoContrast}</Text>
                   </View>
                 )}
@@ -1739,7 +1801,7 @@ function MenuSheetBody({
                       <NavSlider style={{flex:1}} minimumValue={-160} maximumValue={-60} step={1}
                         value={Math.min(dbMin, dbMax - 5)}
                         onValueChange={(v: number) => onDbMin?.(Math.min(v, dbMax - 5))}
-                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                       <Text style={styles.sliderVal}>{dbMin} dB</Text>
                     </View>
                     <View style={styles.sliderWrap}>
@@ -1747,7 +1809,7 @@ function MenuSheetBody({
                       <NavSlider style={{flex:1}} minimumValue={-100} maximumValue={0} step={1}
                         value={Math.max(dbMax, dbMin + 5)}
                         onValueChange={(v: number) => onDbMax?.(Math.max(v, dbMin + 5))}
-                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                       <Text style={styles.sliderVal}>{dbMax} dB</Text>
                     </View>
                   </>
@@ -1759,21 +1821,21 @@ function MenuSheetBody({
                   <Text style={styles.sliderLabel}>Brightness</Text>
                   <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
                     value={wfBrightness} onValueChange={onWfBrightness ?? (() => {})}
-                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{(wfBrightness > 0 ? '+' : '') + wfBrightness} dB</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Contrast</Text>
                   <NavSlider style={{flex:1}} minimumValue={-10} maximumValue={10} step={1}
                     value={wfContrast} onValueChange={onWfContrast ?? (() => {})}
-                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{(wfContrast > 0 ? '+' : '') + wfContrast}</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Sharpness</Text>
                   <NavSlider style={{flex:1}} minimumValue={0} maximumValue={10} step={1}
                     value={wfSharpness} onValueChange={onWfSharpness ?? (() => {})}
-                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{wfSharpness}</Text>
                 </View>
                 <BtnRow>
@@ -1791,14 +1853,14 @@ function MenuSheetBody({
                   <Text style={styles.sliderLabel}>Smoothing</Text>
                   <NavSlider style={{flex:1}} minimumValue={1} maximumValue={10} step={1}
                     value={specSmoothing} onValueChange={onSpecSmoothing ?? (() => {})}
-                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{specSmoothing}</Text>
                 </View>
                 <View style={styles.sliderWrap}>
                   <Text style={styles.sliderLabel}>Floor</Text>
                   <NavSlider style={{flex:1}} minimumValue={-20} maximumValue={20} step={1}
                     value={specFloor} onValueChange={onSpecFloor ?? (() => {})}
-                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{(specFloor > 0 ? '+' : '') + specFloor} dB</Text>
                 </View>
                 {/* ★ Below Floor, because they are easily confused and this is the one that moves
@@ -1814,7 +1876,7 @@ function MenuSheetBody({
                       <Text style={styles.sliderLabel}>Visual Gain</Text>
                       <NavSlider style={{flex:1}} minimumValue={-40} maximumValue={40} step={1}
                         value={visualGain} onValueChange={onVisualGain}
-                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                        minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                       <Text style={styles.sliderVal}>{(visualGain > 0 ? '+' : '') + visualGain} dB</Text>
                     </View>
                     <Text style={styles.kbSkipNote}>
@@ -1828,7 +1890,7 @@ function MenuSheetBody({
                   <Text style={styles.sliderLabel}>Peak Scale</Text>
                   <NavSlider style={{flex:1}} minimumValue={1} maximumValue={30} step={1}
                     value={specPeakScale} onValueChange={onSpecPeakScale ?? (() => {})}
-                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.muted} thumbTintColor={pt.gold.thumb} />
+                    minimumTrackTintColor={pt.gold.fill} maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
                   <Text style={styles.sliderVal}>{(specPeakScale / 10).toFixed(1)}×</Text>
                 </View>
                 <BtnRow>
@@ -2112,22 +2174,23 @@ function MenuSheetBody({
 const SHEET_TINT  = 'rgba(6,4,2,0.60)';
 const SHEET_SOLID = solidOver(SHEET_TINT);
 
-const makeStyles = (pt: PopupTokens) => StyleSheet.create({
+const makeStyles = (pt: PopupTokens) => { const C = menuC(pt); return StyleSheet.create({
   adminUnlockRow:   { flexDirection: 'row', alignItems: 'center', gap: 8,
                       paddingHorizontal: 12, marginBottom: 6 },
-  adminUnlockInput: onMetal(pt, { flex: 1, borderWidth: 1, borderColor: 'rgba(255,160,0,0.35)', borderRadius: 6,
+  adminUnlockInput: onMetal(pt, { flex: 1, borderWidth: 1, borderColor: C.frame, borderRadius: 6,
                       paddingHorizontal: 10, paddingVertical: 8, color: pt.gold.amber, fontSize: 14 }, { ...windowStyle(pt), color: pt.readout }),
-  adminUnlockBtn:   { borderWidth: 1, borderColor: 'rgba(255,160,0,0.55)', borderRadius: 6,
+  // ★ A key: its border in the controls colour (it was the last gold left in this sheet, metal too).
+  adminUnlockBtn:   { borderWidth: 1, borderColor: C.border, borderRadius: 6,
                       paddingHorizontal: 12, paddingVertical: 9 },
-  adminUnlockBtnTxt:{ color: pt.gold.amber, fontSize: 12, letterSpacing: 0.5 },
+  adminUnlockBtnTxt:{ color: pt.metal ? pt.gold.amber : C.key, fontSize: 12, letterSpacing: 0.5 },
   sheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0, height: SHEET_H,
     borderTopLeftRadius: 16, borderTopRightRadius: 16,
-    overflow: 'hidden', borderTopWidth: 1, borderColor: C.border,
+    overflow: 'hidden', borderTopWidth: 1, borderColor: C.frame,
   },
   handle: {
     alignSelf: 'center', width: 40, height: 4, borderRadius: 2,
-    backgroundColor: C.border, marginTop: 10, marginBottom: 2,
+    backgroundColor: C.frame, marginTop: 10, marginBottom: 2,
   },
   scroll:        { flex: 1 },
   scrollContent: { paddingHorizontal: 14, paddingTop: 4 },
@@ -2186,14 +2249,14 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   fkaNote:      onMetal(pt, { borderWidth: 1, borderColor: pt.gold.noticeBorder, borderRadius: 6,
                   backgroundColor: 'rgba(60,40,0,0.5)', padding: 10, marginBottom: 10 }, windowStyle(pt)),
   fkaNoteTitle: { color: pt.gold.notice, fontSize: 11, letterSpacing: 1, marginBottom: 5 },
-  fkaNoteBody:  { color: C.muted, fontSize: 11, lineHeight: 16 },
+  fkaNoteBody:  { color: C.textSoft, fontSize: 11, lineHeight: 16 },
   fkaNoteKey:   { color: pt.gold.notice, fontWeight: '700' },
   // Dim and small: an explanation, not a warning — nothing has gone wrong.
   kbSkipNote:    onMetal(pt, { color: C.sectionC, fontSize: 10, lineHeight: 14, paddingHorizontal: 2, paddingBottom: 6, opacity: 0.85 }, { ...engraveText(pt, pt.note), opacity: 1 }),
   dropHeaderFocused: { borderWidth: 2, borderColor: C.focus, borderRadius: 5, margin: -2 },
   // Dropdown rows are a dense list with only a divider, so focus is a background tint —
   // a 2px border would shift every row as focus moved down it.
-  dropItemFocused: { backgroundColor: 'rgba(124,255,155,0.18)' },
+  dropItemFocused: { backgroundColor: pt.ink.focusBg },
   btnSelected:   { borderColor: pt.gold.selBorder }, // selected but not running (skin)
   btnDanger:     { backgroundColor: C.danger, borderColor: C.dangerBorder },
   btnFull:       { flex: 1, alignSelf: 'stretch' },
@@ -2204,22 +2267,22 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
     borderRadius: 4, paddingHorizontal: 12, paddingVertical: 9, marginVertical: 4,
   }, windowStyle(pt)),
   dropHeaderText: onMetal(pt, { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 }, { color: pt.winText }),
-  dropChevron:    onMetal(pt, { color: C.muted, fontSize: 10 }, { color: pt.winDim }),
+  dropChevron:    onMetal(pt, { color: C.key, fontSize: 10 }, { color: pt.winDim }),
   dropList: onMetal(pt, {
     borderWidth: 1, borderColor: C.border, borderRadius: 4, maxHeight: 240,
     marginBottom: 6, overflow: 'hidden', backgroundColor: 'rgba(0,0,0,0.25)',
   }, windowStyle(pt)),
   dropItem: onMetal(pt, {
     paddingHorizontal: 12, paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider,
   }, { borderBottomColor: pt.winRule }),
   dropItemActive:     onMetal(pt, { backgroundColor: C.active }, { backgroundColor: 'rgba(255,255,255,0.08)' }),
-  dropItemText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, letterSpacing: 0.5 },
+  dropItemText:       { color: C.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, letterSpacing: 0.5 },
   dropItemTextActive: { color: pt.gold.sel, fontWeight: 'bold' },
 
-  btnText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
+  btnText:       { color: C.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: 'bold', letterSpacing: 0.5 },
   btnTextActive: { color: pt.gold.sel },
-  btnTextDanger: { color: '#ff6666' },
+  btnTextDanger: { color: C.btnDangerText },
 
   profileDrop: { paddingVertical: 6 },
   profileDropHead: {
@@ -2228,7 +2291,7 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
     borderWidth: 1, borderColor: C.border, backgroundColor: C.btnBg,
   },
   profileDropHeadText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14, flex: 1 },
-  profileDropChevron: { color: C.muted, fontSize: 14, marginLeft: 8 },
+  profileDropChevron: { color: C.key, fontSize: 14, marginLeft: 8 },
   profileDropList: {
     marginTop: 4, borderRadius: 8, borderWidth: 1, borderColor: C.border, maxHeight: 300,
     backgroundColor: C.btnBg, overflow: 'hidden',
@@ -2237,24 +2300,25 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   profileDropItemSub: { paddingLeft: 22, paddingRight: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider },
   profileDropItemText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
   profileChipTextActive: { color: pt.gold.sel },
-  profileItemInUse: { backgroundColor: 'rgba(255,184,77,0.10)' },
-  profileTextInUse: { color: '#ffb84d' },
+  // ★ In use by someone else: the busy MEANING (amber; white on amber / neon text).
+  profileItemInUse: { backgroundColor: withAlpha(C.busy, 0.10) },
+  profileTextInUse: { color: C.busy },
   sdrHeadRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 11, paddingBottom: 6, backgroundColor: 'rgba(255,255,255,0.04)' },
   sdrHeadText: { flexShrink: 1, color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: '700', letterSpacing: 0.4 },
   sdrBadge: { fontFamily: 'Atkinson Hyperlegible', fontSize: 9, fontWeight: '700', letterSpacing: 0.5, overflow: 'hidden', borderRadius: 3, paddingHorizontal: 5, paddingVertical: 2, color: '#0a0a0a' },
-  sdrBadgeInUse: { backgroundColor: '#ffb84d' },     // amber — busy, switching may disturb
-  sdrBadgeCurrent: { backgroundColor: '#52dc64' },   // green — this is where you are
-  etiquette: { marginBottom: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(255,184,77,0.45)', backgroundColor: 'rgba(255,184,77,0.10)' },
-  etiquetteText: { color: 'rgba(255,225,180,0.92)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, lineHeight: 16 },
-  etiquetteLead: { color: '#ffb84d', fontWeight: '700' },
-  dabSpeedLabel: { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, marginTop: 8, marginBottom: 4 },
+  sdrBadgeInUse: { backgroundColor: C.busy },       // amber — busy, switching may disturb (a meaning)
+  sdrBadgeCurrent: { backgroundColor: C.current },  // green — this is where you are (white on green / teal text)
+  etiquette: { marginBottom: 8, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: withAlpha(C.busy, 0.45), backgroundColor: withAlpha(C.busy, 0.10) },
+  etiquetteText: { color: C.etiquetteText, fontFamily: 'Atkinson Hyperlegible', fontSize: 11.5, lineHeight: 16 },
+  etiquetteLead: { color: C.busy, fontWeight: '700' },
+  dabSpeedLabel: { color: C.textSoft, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, marginTop: 8, marginBottom: 4 },
   dabSpeedRow: { flexDirection: 'row', gap: 8 },
   dabSpeedChip: {
     flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8,
     borderWidth: 1, borderColor: C.border, backgroundColor: C.btnBg,
   },
-  dabSpeedChipActive: { borderColor: C.active },
-  dabSpeedChipText: { color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
+  dabSpeedChipActive: { borderColor: C.chipAct },
+  dabSpeedChipText: { color: C.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
   vtsRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   vtsArrow: {
     backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border,
@@ -2267,13 +2331,13 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   vtsFreq:  { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, letterSpacing: 1 },
   searchWrap: { paddingTop: 6, paddingBottom: 2 },
   bmEmpty: {
-    color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+    color: C.textFaint, fontFamily: 'Atkinson Hyperlegible',
     fontSize: 12, paddingVertical: 6,
   },
   bmRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.12)',
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.divider,
   },
   bmTune: { flex: 1, flexDirection: 'row', alignItems: 'baseline', gap: 8 },
   bmName: { flexShrink: 1, color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14 },
@@ -2283,46 +2347,46 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   },
   bmKeyDot: { width: 9, height: 9, borderRadius: 4.5, flexShrink: 0 },
   bmKeyTxt: {
-    color: 'rgba(255,255,255,0.55)', fontFamily: 'Atkinson Hyperlegible',
+    color: C.textDim, fontFamily: 'Atkinson Hyperlegible',
     fontSize: 11, marginRight: 10,
   },
-  bmFreq: { flexShrink: 0, color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 12 },
+  bmFreq: { flexShrink: 0, color: C.freq, fontFamily: 'Atkinson Hyperlegible', fontSize: 12 },
   bmDel:  { color: 'rgba(220,80,80,0.85)', fontSize: 16, paddingHorizontal: 6 },
   bmImportBox: { minHeight: 90, textAlignVertical: 'top', marginTop: 4 },
   bmImportMsg: {
-    color: 'rgba(120,235,140,0.90)', fontFamily: 'Atkinson Hyperlegible',
+    color: C.good, fontFamily: 'Atkinson Hyperlegible',
     fontSize: 12, paddingVertical: 4,
   },
   searchInput: {
     backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)', borderRadius: 8,
+    borderWidth: 1, borderColor: C.frame, borderRadius: 8,
     color: C.text, fontFamily: 'Atkinson Hyperlegible', fontSize: 14,
     paddingHorizontal: 12, paddingVertical: 9,
   },
   searchDrop: {
-    marginTop: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)',
+    marginTop: 4, borderWidth: 1, borderColor: C.frame,
     borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.45)', overflow: 'hidden',
   },
   searchScroll: { maxHeight: 240 },
   searchHint: {
-    color: 'rgba(255,255,255,0.45)', fontFamily: 'Atkinson Hyperlegible',
+    color: C.textFaint, fontFamily: 'Atkinson Hyperlegible',
     fontSize: 11, paddingHorizontal: 10, paddingVertical: 6,
   },
   searchMsg: {
-    color: 'rgba(255,255,255,0.55)', fontFamily: 'Atkinson Hyperlegible',
+    color: C.textDim, fontFamily: 'Atkinson Hyperlegible',
     fontSize: 13, paddingHorizontal: 10, paddingVertical: 10,
   },
   searchRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 10, paddingVertical: 9,
-    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.12)',
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.divider,
   },
   searchFreq: {
-    color: '#ffe566', fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
+    color: C.freq, fontFamily: 'Atkinson Hyperlegible', fontSize: 12,
     width: 92,
   },
   searchMode: {
-    color: 'rgba(255,255,255,0.50)', fontFamily: 'Atkinson Hyperlegible',
+    color: C.textDim, fontFamily: 'Atkinson Hyperlegible',
     fontSize: 11, width: 42,
   },
   searchName: {
@@ -2370,7 +2434,8 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   recTimer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
   recDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cc2222' },
   recTime:  { color: pt.gold.readout, fontFamily: 'Atkinson Hyperlegible', fontSize: 13 },
-  dspError: { color: 'rgba(220,53,69,0.95)', fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 },
+  // ★ An error is the BAD meaning — white BOLD on red text (meaningsFor), so it never reads as ordinary text.
+  dspError: { color: C.bad, ...(C.badBold ? { fontWeight: '700' as const } : null), fontFamily: 'Atkinson Hyperlegible', fontSize: 13, paddingBottom: 6 },
 
   ctrlRow:   { paddingVertical: 4, gap: 4 },
   ctrlLabel: onMetal(pt, { color: C.sectionC, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 1.5 }, { ...engraveText(pt), width: 96, lineHeight: 12, letterSpacing: 1.4 }),
@@ -2390,10 +2455,10 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   cmapStrip:          { gap: 6, flexDirection: 'row', paddingBottom: 4 },
   cmapPill:           { backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 },
   cmapPillActive:     { backgroundColor: C.active, borderColor: pt.gold.sel },
-  cmapPillText:       { color: C.muted, fontFamily: 'Atkinson Hyperlegible', fontSize: 11 },
+  cmapPillText:       { color: C.key, fontFamily: 'Atkinson Hyperlegible', fontSize: 11 },
   cmapPillTextActive: { color: pt.gold.sel },
 
-  instanceUrl: onMetal(pt, { color: 'rgba(255,255,255,0.40)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11, paddingBottom: 4 }, engraveText(pt, pt.note)),
+  instanceUrl: onMetal(pt, { color: C.textFaint, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, paddingBottom: 4 }, engraveText(pt, pt.note)),
 
   closeBtn: {
     margin: 12, alignSelf: 'center', backgroundColor: C.btnBg,
@@ -2404,8 +2469,8 @@ const makeStyles = (pt: PopupTokens) => StyleSheet.create({
   backRowMetal: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
   ctrlLine: onMetal(pt, { gap: 4 }, { flexDirection: 'row', alignItems: 'center', gap: 8 }),
   ctrlKeys: onMetal(pt, {}, { flex: 1 }),
-  wfNote: onMetal(pt, { color: 'rgba(200,210,225,0.55)', fontFamily: 'Atkinson Hyperlegible', fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }, engraveText(pt, pt.note)),
-});
+  wfNote: onMetal(pt, { color: C.note, fontFamily: 'Atkinson Hyperlegible', fontSize: 11, lineHeight: 15, paddingHorizontal: 4, marginTop: 4 }, engraveText(pt, pt.note)),
+}); };
 
 /** ★★ NOTHING RUNS WHILE THE SHEET IS SHUT. The body has 22 hooks and ~250 lines of setup that
  *  used to execute on EVERY parent render — five a second with the RDS analyser open — before

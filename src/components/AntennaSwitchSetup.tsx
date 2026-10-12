@@ -19,7 +19,8 @@ import {
   type AntennaSwitchCfg, type FoundSwitch, setAntennaCount, splitBroker,
 } from '../services/antennaSwitch';
 
-type Colours = { textDim: string; amber: string; border: string; green: string; gold: string };
+/** ★ The server screen's palette by role (constants/serverPalette.ts): text = TEXT colour, keys = CONTROLS colour. */
+import type { ServerPalette as Colours } from '../constants/serverPalette';
 
 export default function AntennaSwitchSetup({ value, onChange, C, F }: {
   value: AntennaSwitchCfg; onChange: (next: AntennaSwitchCfg) => void; C: Colours; F: string;
@@ -32,15 +33,15 @@ export default function AntennaSwitchSetup({ value, onChange, C, F }: {
   const key = (label: string, on: boolean, onPress: () => void, extra?: object) => (
     <TouchableOpacity key={label} onPress={onPress} accessibilityRole="button"
       style={[{ borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8,
-                borderColor: on ? C.green : C.border, backgroundColor: on ? C.green + '18' : 'transparent' }, extra]}>
-      <Text style={{ color: on ? C.green : C.gold, fontFamily: F, fontSize: 12 }}>{label}</Text>
+                borderColor: on ? C.keyBorderAct : C.border, backgroundColor: on ? C.keyBgAct : 'transparent' }, extra]}>
+      <Text style={{ color: on ? C.keyAct : C.key, fontFamily: F, fontSize: 12 }}>{label}</Text>
     </TouchableOpacity>
   );
   const hint = (t: string) => <Text style={{ color: C.textDim, fontFamily: F, fontSize: 11, marginTop: 6, lineHeight: 15 }}>{t}</Text>;
   const input = (v: string, set: (s: string) => void, ph: string, extra?: object) => (
-    <TextInput value={v} onChangeText={set} placeholder={ph} placeholderTextColor={C.textDim}
+    <TextInput value={v} onChangeText={set} placeholder={ph} placeholderTextColor={C.placeholder}
       autoCapitalize="none" autoCorrect={false}
-      style={[{ borderWidth: 1, borderRadius: 8, borderColor: C.border, color: C.amber, fontFamily: F,
+      style={[{ borderWidth: 1, borderRadius: 8, borderColor: C.border, color: C.text, fontFamily: F,
                 paddingHorizontal: 10, paddingVertical: 8, marginTop: 6 }, extra]} />
   );
 
@@ -76,7 +77,7 @@ export default function AntennaSwitchSetup({ value, onChange, C, F }: {
       {!value.enabled ? hint('For a relay box that switches between aerials over your network (MQTT — Tasmota, ESP32 and Home-Assistant-style switches). Listeners then get an Antenna choice.') : (<>
         <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, alignItems: 'center' }}>
           {key(busy ? 'Searching…' : 'Search for switch…', false, () => { if (!busy) { const b = typed.trim(); if (b) { const { host, port } = splitBroker(b); void search(host, port); } else void search('', 1883); } })}
-          {busy && <ActivityIndicator color={C.gold} />}
+          {busy && <ActivityIndicator color={C.key} />}
         </View>
         {input(typed, (t) => { setTyped(t); onChange({ ...value, broker: t }); }, 'Broker (blank = search this network), e.g. 192.168.86.77:1883')}
         <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -87,8 +88,8 @@ export default function AntennaSwitchSetup({ value, onChange, C, F }: {
         {found?.map((d) => (
           <TouchableOpacity key={d.id + d.broker} onPress={() => choose(d)} accessibilityRole="button"
             style={{ borderWidth: 1, borderRadius: 8, padding: 10, marginTop: 8,
-                     borderColor: value.deviceName === d.name && value.broker === d.broker ? C.green : C.border }}>
-            <Text style={{ color: C.amber, fontFamily: F, fontSize: 13 }}>Switch found on {d.broker} — {d.name}</Text>
+                     borderColor: value.deviceName === d.name && value.broker === d.broker ? C.keyBorderAct : C.border }}>
+            <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>Switch found on {d.broker} — {d.name}</Text>
             <Text style={{ color: C.textDim, fontFamily: F, fontSize: 11, marginTop: 2 }}>
               {d.relays.length} relay{d.relays.length === 1 ? '' : 's'} · {d.kind === 'tasmota' ? 'Tasmota' : 'Home-Assistant discovery'}
             </Text>
@@ -101,12 +102,12 @@ export default function AntennaSwitchSetup({ value, onChange, C, F }: {
           </Text>
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 6, alignItems: 'center' }}>
             {key('−', false, () => onChange(setAntennaCount(value, value.antennas.length - 1)))}
-            <Text style={{ color: C.amber, fontFamily: F, fontSize: 16, minWidth: 24, textAlign: 'center' }}>{value.antennas.length}</Text>
+            <Text style={{ color: C.text, fontFamily: F, fontSize: 16, minWidth: 24, textAlign: 'center' }}>{value.antennas.length}</Text>
             {key('+', false, () => onChange(setAntennaCount(value, value.antennas.length + 1)))}
           </View>
           {value.antennas.map((a, i) => (
             <View key={i} style={{ borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10, marginTop: 8 }}>
-              <Text style={{ color: C.gold, fontFamily: F, fontSize: 12 }}>Antenna {i + 1}</Text>
+              <Text style={{ color: C.text, fontFamily: F, fontSize: 12 }}>Antenna {i + 1}</Text>
               {input(a.name, (t) => { const an = value.antennas.slice(); an[i] = { ...a, name: t.slice(0, 40) }; onChange({ ...value, antennas: an }); },
                      'Name, e.g. VHF Vertical')}
               <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>

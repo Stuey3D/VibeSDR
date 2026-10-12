@@ -67,7 +67,7 @@ const Row = React.memo(function Row({ label, value, tone }: {
   return (
     <View style={s.row}>
       <Text style={s.lbl} numberOfLines={2}>{label}</Text>
-      <Marquee text={value} style={[s.val, { color: toneColour(C, tone) }]} />
+      <Marquee text={value} style={[s.val, { color: toneColour(C, tone) }, tone === 'bad' && C.badBold && s.valBad]} />
     </View>
   );
 });
@@ -912,6 +912,7 @@ const palette = (T: DecoderTokens) => ({
   good:    T.good,
   warn:    T.warn,
   bad:     T.bad,
+  badBold: T.badBold,   // ★ red text: `bad` is white BOLD (decoderTokens meaningsFor)
   value:   T.value,
   plot:    T.plot,
   axis:    T.axis,
@@ -933,6 +934,7 @@ const makeStyles = (T: DecoderTokens) => {
   row:    { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   lbl:    { fontFamily: FONT, fontSize: 12, letterSpacing: 1, color: T.rowLabel, width: 124 },
   val:    { fontFamily: FONT, fontSize: 14, color: C.value, fontVariant: ['tabular-nums'] },
+  valBad: { fontWeight: '700' },
   // ★ The capacity-unit bar: under the value column (lbl 124 + gap 8), thin, the empty track is unused capacity.
   cuBar:  { marginLeft: 132, height: 6, marginTop: 1, marginBottom: 3, borderRadius: 2, borderWidth: StyleSheet.hairlineWidth,
             overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.06)' },

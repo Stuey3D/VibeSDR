@@ -95,7 +95,7 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
           <TextInput
             style={s.search}
             placeholder="Search city or country…"
-            placeholderTextColor={pt.metal ? pt.winDim : 'rgba(120,240,120,0.4)'}
+            placeholderTextColor={pt.metal ? pt.winDim : pt.ink.textFaint}
             value={q}
             onChangeText={setQ}
             autoCorrect={false}
@@ -130,23 +130,26 @@ export default function CityPickerModal({ visible, onClose, onPick }: Props) {
   );
 }
 
+/* ★★ The default skin follows the user's colours (Stuart, 2026-10-12: "yes colours apply everywhere including
+ *  directory if possible"): text in the TEXT colour, the search box, rules and border in the CONTROLS colour —
+ *  this sheet was green whatever the colours were. */
 const makeS = (pt: PopupTokens) => StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'flex-end' },
   backdropDim: { backgroundColor: 'rgba(0,0,0,0.6)' },
-  sheet:    { backgroundColor: '#060906', borderTopWidth: 1, borderColor: 'rgba(80,200,80,0.4)',
+  sheet:    { backgroundColor: '#060906', borderTopWidth: 1, borderColor: pt.ink.border,
               borderTopLeftRadius: 14, borderTopRightRadius: 14, paddingHorizontal: 16, paddingTop: 14, maxHeight: '80%' },
-  title:    onMetal(pt, { color: 'rgba(120,240,120,0.95)', fontSize: 14, letterSpacing: 2, fontWeight: '600' }, engraveText(pt)),
-  sub:      onMetal(pt, { color: 'rgba(80,200,80,0.6)', fontSize: 11, marginTop: 4, marginBottom: 10 }, engraveText(pt, pt.note)),
-  search:   onMetal(pt, { backgroundColor: 'rgba(80,200,80,0.08)', borderWidth: 1, borderColor: 'rgba(80,200,80,0.3)',
-              borderRadius: 8, color: '#bfe', paddingHorizontal: 12, paddingVertical: 9, fontSize: 14 },
+  title:    onMetal(pt, { color: pt.ink.text, fontSize: 14, letterSpacing: 2, fontWeight: '600' }, engraveText(pt)),
+  sub:      onMetal(pt, { color: pt.ink.textDim, fontSize: 11, marginTop: 4, marginBottom: 10 }, engraveText(pt, pt.note)),
+  search:   onMetal(pt, { backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: pt.ink.keyBorder,
+              borderRadius: 8, color: pt.ink.text, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14 },
               { ...windowStyle(pt), color: pt.readout }),
   listWrap: { flexShrink: 1 },
   listWin:  { marginTop: 8, paddingHorizontal: 10 },
   list:     onMetal(pt, { marginTop: 8 }, { marginTop: 0 }),
   row:      { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 11,
-              borderBottomWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(80,200,80,0.15)' },
-  city:     onMetal(pt, { color: 'rgba(180,255,180,0.95)', fontSize: 15 }, { color: pt.winText }),
-  cc:       onMetal(pt, { color: 'rgba(80,200,80,0.55)', fontSize: 12, marginLeft: 8 }, { color: pt.winDim }),
+              borderBottomWidth: StyleSheet.hairlineWidth, borderColor: pt.ink.divider },
+  city:     onMetal(pt, { color: pt.ink.text, fontSize: 15 }, { color: pt.winText }),
+  cc:       onMetal(pt, { color: pt.ink.textDim, fontSize: 12, marginLeft: 8 }, { color: pt.winDim }),
   cancel:   { marginTop: 10, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 24 },
-  cancelTxt:{ color: 'rgba(80,200,80,0.7)', fontSize: 13, letterSpacing: 1 },
+  cancelTxt:{ color: pt.ink.key, fontSize: 13, letterSpacing: 1 },
 });
