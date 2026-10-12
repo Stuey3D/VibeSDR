@@ -449,7 +449,7 @@ function WaterfallView({
   //         waterfall row-set every 300 ms; the frames in between are skipped FOR THE WATERFALL.
   //     ★ The SPECTRUM TRACE is not gated and still follows every frame — the trade is time
   //       resolution in the waterfall, which is the thing being bought, not liveness elsewhere.
-  // ★★★ 20 / 30 / 40 ROWS PER SECOND. Raised from 20/30 because on a feed at or above the target
+  // ★★★ 20 / 30 / 40 ROWS PER SECOND (Smooth is 60 since 2026-10-13 — below). Raised from 20/30 because on a feed at or above the target
   //     the app cannot express a SLOWER setting: its rows are one POINT tall, so "one row per
   //     frame" already IS 20 rows/s, and SHARP and DEFAULT collapsed together. Making the other
   //     two FASTER is what users actually asked for ("the rate in the app is too slow", Stuart
@@ -457,7 +457,10 @@ function WaterfallView({
   //     ★ The web client gets three distinct speeds a different way — its rows are one DEVICE
   //       pixel tall and its rate is speed x dpr, so SHARP there is genuinely slower. Matching
   //       that means a device-resolution ring, which needs the full-ring upload fixed first.
-  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 40 : wfScroll === 'default' ? 30 : 0;
+  // ★★ SMOOTH IS 60, NOT 40 (Stuart, 2026-10-13: "smooth is at 60 and is working so keep it"). 40 rows/s divides evenly
+  //   into no drawing rate — ⅔ of a row per frame at 60, 1⅓ at 30: a regular judder (Galaxy Tab A9, measured 2·1·2·1).
+  //   60 is one row a frame at 60, two at 30, one every other at 120; Default's 30 is one at 30, one every other at 60.
+  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 30 : 0;
   // ★★ WF_ROWS (a lines-per-frame figure LATCHED from the measured feed rate) is GONE
   //     (2026-10-03). Since uN was pinned to 1 nothing read it — it only fed `cfg.rowsPerFrame`,
   //     which no code read either. Its latch never latched (handleFrame is a []-deps callback and
@@ -1321,9 +1324,21 @@ function WaterfallView({
       shown = avail; accSv.value = 0;
     } else {
       const backlog = avail - shown;
-      let acc = accSv.value + rate * gap * (0.75 + 0.25 * backlog);
-      while (acc >= 1 && shown < avail) { shown++; acc -= 1; }
-      accSv.value = Math.min(acc, shown === avail ? 1 : 2);
+      const expect = rate * gap;              // rows this frame at the measured rate
+      const whole = Math.round(expect);
+      if (whole >= 1 && Math.abs(expect - whole) < 0.15) {
+        /* ★★ LOCKED: A WHOLE NUMBER OF ROWS PER FRAME (Stuart, 2026-10-13: 30 fps + Default "juddery still", 60 fine).
+         *  At 30 drawn, Default is ONE row a frame — but the measured rate wanders a hair either side of 30/s, so the
+         *  fractional counter below now and then came up just short (no row) and caught up next frame (two): a stick,
+         *  then a jump. When the expected count is within 0.15 of a whole number, release exactly that many (one more
+         *  if 3+ are waiting); a frame that finds none simply waits, and the one-row lag that leaves keeps it fed. */
+        shown = Math.min(avail, shown + whole + (backlog >= 3 ? 1 : 0));
+        accSv.value = 0;
+      } else {
+        let acc = accSv.value + expect * (0.75 + 0.25 * backlog);
+        while (acc >= 1 && shown < avail) { shown++; acc -= 1; }
+        accSv.value = Math.min(acc, shown === avail ? 1 : 2);
+      }
     }
     shownSv.value = shown;
     return shown;

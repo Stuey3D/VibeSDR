@@ -33,7 +33,7 @@ struct EngineConfig {
     bool   specShow = true;
     bool   peakHold = true;
     bool   smoothTune = true;
-    int    targetRows = 0;     // WF_TARGET_ROWS: 40 smooth / 30 default / 0 sharp
+    int    targetRows = 0;     // WF_TARGET_ROWS: 60 smooth / 30 default / 0 sharp
 };
 
 /** What the UI thread picks up. Handles are OWNED by the receiver once taken (wrap them or release them). */
