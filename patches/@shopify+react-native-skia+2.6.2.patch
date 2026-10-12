@@ -1,3 +1,16 @@
+diff --git a/node_modules/@shopify/react-native-skia/android/CMakeLists.txt b/node_modules/@shopify/react-native-skia/android/CMakeLists.txt
+index 1b085e6..3280c2e 100644
+--- a/node_modules/@shopify/react-native-skia/android/CMakeLists.txt
++++ b/node_modules/@shopify/react-native-skia/android/CMakeLists.txt
+@@ -104,6 +104,8 @@ add_library(
+         "${PROJECT_SOURCE_DIR}/../cpp/jsi/JsiPromises.cpp"
+ 
+         "${PROJECT_SOURCE_DIR}/../cpp/rnskia/RNSkManager.cpp"
++        # VibeSDR: exported Skia image/path API for libvibelocalsdr
++        "${PROJECT_SOURCE_DIR}/../cpp/rnskia/VibeExport.cpp"
+ 
+         "${PROJECT_SOURCE_DIR}/../cpp/api/third_party/CSSColorParser.cpp"
+         "${PROJECT_SOURCE_DIR}/../cpp/api/third_party/base64.cpp"
 diff --git a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkAndroidPlatformContext.h b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkAndroidPlatformContext.h
 index f9f8a15..22ac9af 100644
 --- a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkAndroidPlatformContext.h
@@ -270,6 +283,90 @@ index 0000000..75425af
 +};
 +
 +} // namespace RNSkia
+diff --git a/node_modules/@shopify/react-native-skia/cpp/api/JsiSkHostObjects.h b/node_modules/@shopify/react-native-skia/cpp/api/JsiSkHostObjects.h
+index 756476f..7cf2b2d 100644
+--- a/node_modules/@shopify/react-native-skia/cpp/api/JsiSkHostObjects.h
++++ b/node_modules/@shopify/react-native-skia/cpp/api/JsiSkHostObjects.h
+@@ -42,6 +42,14 @@ public:
+    */
+   virtual std::string getObjectType() const = 0;
+ 
++  /**
++   * VibeSDR: public read of the platform context so the exported
++   * vibe_rnskia API (VibeExport.cpp) can take it from any Skia host object.
++   */
++  std::shared_ptr<RNSkPlatformContext> vibePlatformContext() const {
++    return _context;
++  }
++
+ protected:
+   /**
+    * @return A pointer to the platform context
+@@ -138,14 +146,24 @@ public:
+   /**
+    * Updates the inner object with a new version of the object.
+    */
+-  void setObject(T object) { _object = object; }
++  void setObject(T object) { _object = std::move(object); }
++
++  /**
++   * VibeSDR: mark this object as created without external memory pressure,
++   * so dispose() skips setExternalMemoryPressure. Set before handing to JS.
++   */
++  void setVibeNoMemoryPressure() { _vibeNoMemoryPressure = true; }
+ 
+   /**
+    * Dispose function that can be exposed to JS by using the JSI_API_TYPENAME
+    * macro.
+    */
+   JSI_HOST_FUNCTION(dispose) {
+-    if (!isDisposed()) {
++    // VibeSDR: objects made by vibe_rnskia::wrapImage/wrapPath were created
++    // with NO external memory pressure, so there is nothing to lower here -
++    // and setExternalMemoryPressure measured ~1 ms per dispose on a low-end
++    // phone at frame rate. Stock objects keep the stock path.
++    if (!_vibeNoMemoryPressure && !isDisposed()) {
+       thisValue.asObject(runtime).setExternalMemoryPressure(runtime,
+                                                             kMinMemoryPressure);
+     }
+@@ -202,6 +220,11 @@ private:
+    * Resource disposed flag.
+    */
+   std::atomic<bool> _isDisposed = {false};
++
++  /**
++   * VibeSDR: true = created without external memory pressure (see dispose).
++   */
++  bool _vibeNoMemoryPressure = false;
+ };
+ 
+ template <typename T>
+diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkManager.cpp b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkManager.cpp
+index 60ac527..71d869f 100644
+--- a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkManager.cpp
++++ b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkManager.cpp
+@@ -23,6 +23,12 @@
+ #include "rnwgpu/api/descriptors/GPUTextureUsage.h"
+ #endif
+ 
++// VibeSDR: VibeExport.cpp keeps the current platform context for the
++// exported vibe_rnskia::wrapImage/wrapPath.
++namespace vibe_rnskia {
++void vibeSetPlatformContext(std::shared_ptr<RNSkia::RNSkPlatformContext>);
++} // namespace vibe_rnskia
++
+ namespace RNSkia {
+ namespace jsi = facebook::jsi;
+ 
+@@ -34,6 +40,8 @@ RNSkManager::RNSkManager(
+       _jsCallInvoker(jsCallInvoker),
+       _viewApi(std::make_shared<RNSkJsiViewApi>(platformContext)) {
+ 
++  vibe_rnskia::vibeSetPlatformContext(_platformContext);
++
+   // Register main runtime (used by both Skia and WebGPU bindings)
+   RNJsi::BaseRuntimeAwareCache::setMainJsRuntime(_jsRuntime);
+ 
 diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h
 index 0059ea1..08216db 100644
 --- a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h
@@ -351,3 +448,228 @@ index 5181c71..5f9ad5c 100644
      _redrawRequested = false;
    }
  
+diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.cpp b/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.cpp
+new file mode 100644
+index 0000000..943c9e4
+--- /dev/null
++++ b/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.cpp
+@@ -0,0 +1,134 @@
++// VibeSDR: see VibeExport.h for why this exists (hidden Skia symbols; the
++// per-dispose memory-pressure cost).
++
++#include "VibeExport.h"
++
++#include <memory>
++#include <mutex>
++#include <utility>
++
++#include "JsiSkHostObjects.h"
++#include "JsiSkImage.h"
++#include "JsiSkPath.h"
++#include "RNSkPlatformContext.h"
++
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdocumentation"
++#include "include/core/SkData.h"
++#include "include/core/SkImage.h"
++#include "include/core/SkImageInfo.h"
++#include "include/core/SkPathBuilder.h"
++#pragma clang diagnostic pop
++
++namespace vibe_rnskia {
++
++namespace jsi = facebook::jsi;
++using RNSkia::RNSkPlatformContext;
++
++namespace {
++// Written on the JS thread (RNSkManager ctor) and read on the UI runtime's
++// thread, so guarded. Holds the context alive across a reload until the new
++// RNSkManager replaces it.
++std::mutex gContextMutex;
++std::shared_ptr<RNSkPlatformContext> gContext;
++
++std::shared_ptr<RNSkPlatformContext> currentContext() {
++  std::lock_guard<std::mutex> lock(gContextMutex);
++  return gContext;
++}
++} // namespace
++
++// Called from RNSkManager's constructor (not part of the exported header).
++void vibeSetPlatformContext(std::shared_ptr<RNSkPlatformContext> context) {
++  std::lock_guard<std::mutex> lock(gContextMutex);
++  gContext = std::move(context);
++}
++
++void *makeGray8Image(const uint8_t *pixels, int width, int height,
++                     size_t rowBytes) {
++  if (pixels == nullptr || width <= 0 || height <= 0 ||
++      rowBytes < static_cast<size_t>(width)) {
++    return nullptr;
++  }
++  auto info = SkImageInfo::Make(width, height, kGray_8_SkColorType,
++                                kOpaque_SkAlphaType);
++  auto data = SkData::MakeWithCopy(pixels, rowBytes * height);
++  sk_sp<SkImage> image =
++      SkImages::RasterFromData(info, std::move(data), rowBytes);
++  return image.release(); // one ref, owned by the handle
++}
++
++void *makePolyPath(const float *xy, int nPoints, bool close) {
++  if (xy == nullptr || nPoints < 1) {
++    return nullptr;
++  }
++  auto builder = std::make_shared<SkPathBuilder>();
++  builder->incReserve(nPoints);
++  builder->moveTo(xy[0], xy[1]);
++  for (int i = 1; i < nPoints; ++i) {
++    builder->lineTo(xy[2 * i], xy[2 * i + 1]);
++  }
++  if (close) {
++    builder->close();
++  }
++  return new std::shared_ptr<SkPathBuilder>(std::move(builder));
++}
++
++void releaseImage(void *imageHandle) {
++  if (imageHandle != nullptr) {
++    static_cast<SkImage *>(imageHandle)->unref();
++  }
++}
++
++void releasePath(void *pathHandle) {
++  delete static_cast<std::shared_ptr<SkPathBuilder> *>(pathHandle);
++}
++
++bool setPlatformContextFrom(jsi::Runtime &rt, const jsi::Value &anySkiaHostObject) {
++  if (!anySkiaHostObject.isObject()) {
++    return false;
++  }
++  auto obj = anySkiaHostObject.asObject(rt);
++  if (!obj.isHostObject(rt)) {
++    return false;
++  }
++  auto skObj =
++      std::dynamic_pointer_cast<RNSkia::JsiSkHostObject>(obj.getHostObject(rt));
++  if (!skObj || !skObj->vibePlatformContext()) {
++    return false;
++  }
++  vibeSetPlatformContext(skObj->vibePlatformContext());
++  return true;
++}
++
++bool hasPlatformContext() { return currentContext() != nullptr; }
++
++jsi::Value wrapImage(jsi::Runtime &rt, void *imageHandle) {
++  if (imageHandle == nullptr) {
++    return jsi::Value::undefined();
++  }
++  // Adopt the handle's ref first so it is released even if we throw.
++  sk_sp<SkImage> image(static_cast<SkImage *>(imageHandle));
++  auto hostObject =
++      std::make_shared<RNSkia::JsiSkImage>(currentContext(), std::move(image));
++  hostObject->setVibeNoMemoryPressure();
++  // Plain createFromHostObject: NOT JSI_CREATE_HOST_OBJECT_WITH_MEMORY_PRESSURE.
++  return jsi::Object::createFromHostObject(rt, std::move(hostObject));
++}
++
++jsi::Value wrapPath(jsi::Runtime &rt, void *pathHandle) {
++  if (pathHandle == nullptr) {
++    return jsi::Value::undefined();
++  }
++  std::unique_ptr<std::shared_ptr<SkPathBuilder>> handle(
++      static_cast<std::shared_ptr<SkPathBuilder> *>(pathHandle));
++  // JsiSkPath has no shared_ptr constructor; build it empty, then swap our
++  // builder in so the points are not copied.
++  auto hostObject =
++      std::make_shared<RNSkia::JsiSkPath>(currentContext(), SkPathBuilder());
++  hostObject->setObject(std::move(*handle));
++  hostObject->setVibeNoMemoryPressure();
++  return jsi::Object::createFromHostObject(rt, std::move(hostObject));
++}
++
++} // namespace vibe_rnskia
+diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.h b/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.h
+new file mode 100644
+index 0000000..8eba2be
+--- /dev/null
++++ b/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.h
+@@ -0,0 +1,79 @@
++#pragma once
++
++// VibeSDR: a tiny EXPORTED API compiled inside librnskia (Android) / the
++// react-native-skia pod (iOS) so our own native library can build Skia raster
++// images and paths on any thread and hand them to a worklet runtime as
++// ordinary SkImage / SkPath host objects.
++//
++// WHY: react-native-skia links Skia statically with hidden visibility, so
++// SkImages::RasterFromData, SkData, SkPathBuilder ... are NOT exported from
++// librnskia.so - an outside library cannot call Skia directly. This header
++// deliberately includes NO Skia headers: every Skia object crosses the
++// boundary as an opaque void* handle.
++//
++// HANDLE OWNERSHIP: a handle from make* is owned by the caller until it is
++// either ADOPTED by wrap* (the host object then owns it; do not release it) or
++// dropped with release*. Exactly one of the two, exactly once.
++
++#include <cstddef>
++#include <cstdint>
++
++#include <jsi/jsi.h>
++
++#define VIBE_RNSKIA_EXPORT __attribute__((visibility("default")))
++
++namespace vibe_rnskia {
++
++// --- Any thread, no GPU context needed --------------------------------------
++
++/**
++ * Copies width*height Gray_8 pixels (rowBytes stride, >= width) into a new
++ * SkData and returns a raster SkImage (kGray_8, opaque alpha) as an opaque
++ * handle (a ref'd SkImage* released from sk_sp), or nullptr on bad arguments.
++ */
++VIBE_RNSKIA_EXPORT void *makeGray8Image(const uint8_t *pixels, int width,
++                                        int height, size_t rowBytes);
++
++/**
++ * Builds a polyline path: moveTo(xy[0],xy[1]), lineTo for the remaining
++ * nPoints-1 points (xy is interleaved x,y floats, 2*nPoints of them),
++ * optional close(). The handle is a heap `std::shared_ptr<SkPathBuilder>*` -
++ * the type JsiSkPath (JsiSkWrappingSharedPtrHostObject<SkPathBuilder>) holds,
++ * so wrapPath adopts it without copying the points. nullptr if nPoints < 1.
++ */
++VIBE_RNSKIA_EXPORT void *makePolyPath(const float *xy, int nPoints,
++                                      bool close);
++
++/** Drop a handle that was never wrapped. nullptr is a no-op. */
++VIBE_RNSKIA_EXPORT void releaseImage(void *imageHandle);
++VIBE_RNSKIA_EXPORT void releasePath(void *pathHandle);
++
++// --- On the thread that owns rt ---------------------------------------------
++
++/**
++ * Remember the RNSkPlatformContext held by any react-native-skia host object
++ * (e.g. the `Skia` API object, an SkImage, an SkPaint ...). Optional: the
++ * context is also captured automatically when RNSkManager is created (every
++ * JS reload). Returns false if the value is not a Skia host object.
++ */
++VIBE_RNSKIA_EXPORT bool
++setPlatformContextFrom(facebook::jsi::Runtime &rt,
++                       const facebook::jsi::Value &anySkiaHostObject);
++
++/** True once a platform context is known (wrap* can run). */
++VIBE_RNSKIA_EXPORT bool hasPlatformContext();
++
++/**
++ * ADOPT the handle into a new JsiSkImage / JsiSkPath host object on rt
++ * (normally the Reanimated UI runtime). The object is created WITHOUT Hermes
++ * external memory pressure, and its dispose() is cheap (no
++ * setExternalMemoryPressure). Call dispose() on the previous frame's object
++ * when you replace it. A nullptr handle returns undefined. The handle is
++ * consumed even if this throws.
++ */
++VIBE_RNSKIA_EXPORT facebook::jsi::Value wrapImage(facebook::jsi::Runtime &rt,
++                                                  void *imageHandle);
++VIBE_RNSKIA_EXPORT facebook::jsi::Value wrapPath(facebook::jsi::Runtime &rt,
++                                                 void *pathHandle);
++
++} // namespace vibe_rnskia

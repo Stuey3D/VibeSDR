@@ -229,3 +229,14 @@ target_link_libraries(vibelocalsdr PRIVATE
     #     true: we call the OS's decoder exactly as we used to call the browser's.
     mediandk
     log)
+
+# --- vibespectrum: the native spectrum engine (docs/NATIVE-SPECTRUM-ENGINE.md) -------------------------------
+# ★ Its own small library, loaded by VibeSpectrum.kt when the SDR screen installs it — NOT part of vibelocalsdr,
+#   which loads only when a USB radio is used. Links JSI (it is a host object) and react-native-skia's prefab
+#   (the vibe_rnskia exports our patch adds: Skia's own symbols are hidden inside librnskia).
+find_package(ReactAndroid REQUIRED CONFIG)
+find_package(shopify_react-native-skia REQUIRED CONFIG)
+add_library(vibespectrum SHARED spectrum/spectrum_jsi.cpp spectrum/spectrum_engine.cpp)
+target_include_directories(vibespectrum PRIVATE vibedsp spectrum)
+set_target_properties(vibespectrum PROPERTIES CXX_STANDARD 20)
+target_link_libraries(vibespectrum PRIVATE vibedsp ReactAndroid::jsi shopify_react-native-skia::rnskia log)

@@ -121,6 +121,16 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopExternalAudio() { VibeStreamService.instance?.stopExternalAudio() }
 
+    /** Native spectrum engine: install global.__vibeSpectrumCreate() (cpp/spectrum/spectrum_jsi.cpp). Runs on the JS
+     *  thread (a synchronous method), which is the only place the runtime may be touched. False = use the JS path. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun installSpectrumEngine(): Boolean = try {
+        val ptr = reactContext.javaScriptContextHolder?.get() ?: 0L
+        ptr != 0L && VibeSpectrum.nativeInstall(ptr)
+    } catch (t: Throwable) {
+        android.util.Log.w("VibeSpectrum", "native spectrum engine unavailable: $t"); false
+    }
+
     /** Arm or disarm the thread sweep (VibeAffinity). Resolves the plan, for the log. */
     @ReactMethod
     fun armThreads(on: Boolean, promise: com.facebook.react.bridge.Promise) {
