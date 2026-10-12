@@ -73,9 +73,9 @@ eq('a pick ignores the auto rung', frameRateCapHz({ frameRate: '60' }, 30), 60);
 // ── AUTO's rule ──────────────────────────────────────────────────────────────
 eq('rungs on 120 Hz: none → 60 → 30', autoFrameRungs(120), [0, 60, 30]);
 eq('rungs on 60 Hz: none → 30', autoFrameRungs(60), [0, 30]);
-eq('Android above 60 Hz starts at 60 (the Moto needle)', autoFrameRungs(120, 'android'), [60, 30]);
-eq('Android 90 Hz starts at 60', autoFrameRungs(90, 'android'), [60, 30]);
-eq('Android 60 Hz panel unchanged', autoFrameRungs(60, 'android'), [0, 30]);
+eq('Android AUTO is 30 on a 120 Hz panel', autoFrameRungs(120, 'android'), [30]);
+eq('Android AUTO is 30 on a 60 Hz panel', autoFrameRungs(60, 'android'), [30]);
+eq('Android AUTO is 30 when the panel is unknown', autoFrameRungs(null, 'android'), [30]);
 eq('iOS ProMotion keeps its maximum', autoFrameRungs(120, 'ios'), [0, 60, 30]);
 ok('a still screen teaches nothing', !autoWindowLate(20, 20));
 ok('a fast phone (1 % late) stays', !autoWindowLate(300, 3));

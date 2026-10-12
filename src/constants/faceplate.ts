@@ -516,14 +516,20 @@ export function frameRateChoices(maxHz: number | null | undefined): PaneChoice<F
 
 /** The rungs AUTO may step down through, fastest first, in cap Hz (0 = no cap): [0, 60, 30] on a panel above
  *  60 Hz, [0, 30] on a 60 Hz one (its "no cap" already IS 60).
- *  ★★★ ON ANDROID AUTO STARTS AT 60 on a panel above 60 Hz: [60, 30] (Stuart, 2026-10-12, Moto G35). At the panel's
+ *  ★★★ (superseded the next morning: Android AUTO is 30 — see the function.) ON ANDROID AUTO STARTED AT 60 above 60 Hz
+ *    (Stuart, 2026-10-12, Moto G35). At the panel's
  *    own rate (an OEM's adaptive 90 / 120) the analogue needle juddered across the dial — "night and day" against
  *    the iPhone — while a FIXED 60 was "silky", and 30 as well. Above 60 an Android phone redraws every canvas at a rate
  *    its display policy keeps moving, for no visible gain; 120 stays a manual pick. iOS keeps the panel's maximum:
  *    ProMotion drives every frame from the display link and was never the problem. */
 export function autoFrameRungs(maxHz: number | null | undefined, os: string = 'ios'): number[] {
+  // ★★★ ANDROID AUTO IS 30, on every panel (Stuart, 2026-10-13, after the XCover 4s, Moto G35 and Tab A9: "30fps on the
+  //   moto feels great, I cannot tell the difference from 60, even the tuning feels fluid still"). A paced 30 halves the
+  //   drawing and was the one rate with no intermittent needle judder on any of the three; 60 / the panel's maximum
+  //   stay manual picks. iOS keeps the panel's maximum (ProMotion is genuinely smooth there).
+  if (os === 'android') return [30];
   const hz = normaliseHz(maxHz);
-  if (hz != null && hz > 60) return os === 'android' ? [60, 30] : [0, 60, 30];
+  if (hz != null && hz > 60) return [0, 60, 30];
   return [0, 30];
 }
 

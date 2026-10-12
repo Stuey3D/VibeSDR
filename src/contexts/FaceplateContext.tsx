@@ -191,13 +191,14 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   // ★★ AUTO (Stuart's spec, 2026-10-11/12): count late frames in ~5 s windows; two late windows in a row step one rung
   //   down (constants/faceplate.ts autoWindowLate / autoFrameRungs), never back up within the session. Android only —
   //   frameWatchAvailable says why. The rung is NOT stored: every launch measures afresh.
-  const [autoHz, setAutoHz] = useState(0);
+  const [autoHz, setAutoHz] = useState(Platform.OS === 'android' ? 30 : 0);   // ★ Android AUTO is 30 from the first frame (autoFrameRungs)
   const [maxRefreshHz, setMaxRefreshHz] = useState<number | null>(null);
   const autoOn = settings.frameRate === 'auto';
   useEffect(() => {
     if (!autoOn || maxRefreshHz == null || !frameWatchAvailable()) return;
     const rungs = autoFrameRungs(maxRefreshHz, Platform.OS);
-    setAutoHz((cur: number) => (rungs.includes(cur) ? cur : rungs[0]));   // ★ Android above 60 Hz starts at 60
+    setAutoHz((cur: number) => (rungs.includes(cur) ? cur : rungs[0]));
+    if (rungs.length < 2) return;   // one rung (Android: 30) — nothing left to decide, so nothing is watched
     let lateRun = 0;
     const diagLog = !!(NativeModules as any).VibePowerModule?.isDiagBuild?.();   // diagnostics builds: log each window
     startFrameWatch();
