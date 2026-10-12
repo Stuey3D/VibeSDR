@@ -63,6 +63,9 @@ const FONT = DECODER_FONT;
 const DASH = '—';
 /** ★ The longest verdict the deviation readout can print (mpxDevInfo) — drawn invisibly to fix the block's height. */
 const DEV_VERDICT_LONGEST = 'low S/N, unreliable · neighbour in the guard band, noise not removed';
+/** ★ The constellation's rotating verdict — also its LONGEST (constellationVerdict), so it doubles as the ghost
+ *  that fixes the constellation column's width. A longer verdict added there must be reflected here. */
+const CONST_VERDICT_ROTATING = 'rotating — unlocked encoder';
 
 const PTY_EU = [
   'None', 'News', 'Current Affairs', 'Information', 'Sport', 'Education', 'Drama',
@@ -301,7 +304,7 @@ function constellationVerdict(xy: number[], phaseCoh: number, ber: number):
   // ★ EVM assumes two lobes. A ROTATING constellation defeats that — the points are ordered,
   // not scattered — so it reports a huge figure for a signal decoding flawlessly.
   if (phaseCoh < 0.35 && ber >= 0 && ber < 20)
-    return { text: 'rotating — unlocked encoder', colour: C.warn };
+    return { text: CONST_VERDICT_ROTATING, colour: C.warn };
   // ★ "SCATTER", not "EVM": the correct term means nothing to someone new to this, and the
   // whole panel is written to explain itself rather than assume.
   if (evm < 45) return { text: `clean · ${evm.toFixed(0)}% scatter`,  colour: C.good };
@@ -1258,12 +1261,28 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <View style={wideCols ? s.colPlots : undefined}>
           <Text style={s.section}>PLOTS</Text>
           <View style={s.plots}>
-            <View>
+            {/* ★★ THE COLUMN'S WIDTH MUST NOT FOLLOW ITS VERDICT. It was content-sized, so it was ~120 pt for
+                "RDS no lock", wider for "clean · 12% scatter" and ~50 pt wider again for "rotating — unlocked
+                encoder" — and a station whose coherence sits near the 0.35 line flips that several times a
+                second, sliding the whole MPX / scope / deviation column left and right (Stuart, 2026-10-12,
+                Mac, double-width box: "wobbling left and right"). Same cure as the deviation verdict: an
+                invisible ghost of the LONGEST verdict sets the size, the live text lies over it. ★ It may
+                SHRINK (to the plot's 120) where the box is narrow, so on a phone the ghost — and a rotating
+                verdict — wraps instead of squeezing the figures beside it; the width is still fixed by the
+                layout, never by the text. */}
+            <View style={s.constCol}>
               <Text style={s.plotLbl}>CONSTELLATION</Text>
               <Constellation xy={plotXy} size={120} />
-              <Text style={[s.verdict, { color: verdict.colour }]}>{verdict.text}</Text>
+              <View>
+                <Text style={[s.verdict, { opacity: 0 }]} aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                  {CONST_VERDICT_ROTATING}
+                </Text>
+                <Text style={[s.verdict, s.devVerdictLive, { color: verdict.colour }]}>{verdict.text}</Text>
+              </View>
             </View>
-            <View style={{ flex: 1 }}>
+            {/* ★ 200 = the figures' block below (devGrid, L/R rows, devVerdict), so this column is never
+                narrower than what it draws; it takes any extra width, and the constellation gives way first. */}
+            <View style={s.mpxCol}>
               <Text style={s.plotLbl}>MPX</Text>
               <Mpx mpx={plotMpx} width={180} height={72} />
               <Text style={[s.plotLbl, { marginTop: 4 }]}>SCOPE VIEW · PILOT · STEREO · RDS</Text>
@@ -1391,32 +1410,29 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
 }
 
 type Palette = ReturnType<typeof palette>;
-/** The panel's colours. ★ On the default chassis the plots keep their exact literals (§13.1: today's
- *  look); on silver / black they take the controls colour (§10.2 "charts take the controls colour").
- *  The eye's per-component colours (ScopeBox `colour`) are VERDICTS and stay as they are. */
-const palette = (T: DecoderTokens) => {
-  const def = T.chassis === 'default';
-  return {
-    ...DECODER_MEANING,
-    goldDim:  T.label,
-    muted:    T.muted,
-    rowLabel: T.rowLabel,
-    value:    T.value,
-    plot:     T.plot,
-    axis:     T.axis,
-    axisStrong: T.axisStrong,
-    axisFaint:  T.axisFaint,
-    chartText:  T.chartText,
-    mark:       def ? 'rgba(255,170,60,0.30)' : T.axisStrong,
-    markFaint:  def ? 'rgba(255,160,60,0.18)' : T.axis,
-    dot:      T.dot,
-    trace:    T.trace,
-    mpxLine:  def ? DECODER_MEANING.good : T.trace,
-    note:     def ? 'rgba(255,190,90,0.80)' : T.label,
-    devBarBg:     def ? 'rgba(255,160,0,0.10)' : T.rowActive,
-    devBarBorder: def ? 'rgba(255,160,0,0.25)' : T.axis,
-  };
-};
+/** The panel's colours. ★★ 2026-10-12 (Stuart): the default chassis's literal golds and greens are gone —
+ *  every chassis takes the shared tokens: text, charts and plot notes in the TEXT colour, meanings fixed
+ *  (decoderTokens.ts). The eye's per-component colours (ScopeBox `colour`) are VERDICTS and stay as they are. */
+const palette = (T: DecoderTokens) => ({
+  ...DECODER_MEANING,
+  goldDim:  T.label,
+  muted:    T.muted,
+  rowLabel: T.rowLabel,
+  value:    T.value,
+  plot:     T.plot,
+  axis:     T.axis,
+  axisStrong: T.axisStrong,
+  axisFaint:  T.axisFaint,
+  chartText:  T.chartText,
+  mark:       T.axisStrong,
+  markFaint:  T.axis,
+  dot:      T.dot,
+  trace:    T.trace,
+  mpxLine:  T.trace,
+  note:     T.label,
+  devBarBg:     T.rowActive,
+  devBarBorder: T.axis,
+});
 
 /** ★ Built once per setting (useDecoderStyles), never per render. */
 const makeStyles = (T: DecoderTokens) => { const C: Palette = palette(T); const s = StyleSheet.create({
@@ -1449,6 +1465,8 @@ const makeStyles = (T: DecoderTokens) => { const C: Palette = palette(T); const 
   section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: C.goldDim,
              marginTop: 10, marginBottom: 2 },
   plots:   { flexDirection: 'row', gap: 10, marginTop: 4 },
+  constCol: { flexShrink: 1, minWidth: 120 },
+  mpxCol:   { flexGrow: 1, flexShrink: 0, flexBasis: 200 },
   plotLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
   scopeLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, marginTop: 1 },
   verdict: { fontFamily: FONT, fontSize: 12, marginTop: 3 },
