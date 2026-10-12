@@ -45,3 +45,46 @@ peak Path per frame.
 - Never more RAM than today (the store app runs on a 32-bit 1 GB phone and must keep doing so).
 - iOS gets the same C++; it must stay exactly as smooth as it is.
 - Look and feel unchanged — identical waterfall, trace, colours, scroll, glide.
+
+## Stage 1 design (decided 2026-10-12)
+- **react-native-skia patch adds `vibe_rnskia` (cpp/rnskia/VibeExport.h)**: makeGray8Image / makePolyPath on ANY
+  thread (raster, inside librnskia where Skia's symbols are visible — they are hidden from outside), and
+  wrapImage / wrapPath on the UI runtime WITHOUT Hermes external memory pressure and with a cheap dispose
+  (stock dispose's setExternalMemoryPressure measured ~1 ms a call). Platform context captured by RNSkManager.
+- **Engine thread** (`SpectrumEngine`, C++): the jitter buffer, handleFrame, pushRow (resample, in-flight
+  shift, ring), repeat rows, publishing the ring image, the spectrum target array and the peak path — every
+  timer on its own clock, nothing on the JS thread. JS pushes each decoded frame (one call) and the view /
+  settings / covered / background state; it gets the dB labels back only when they change.
+- **One UI-thread poll** (a frame callback) asks the engine "anything new?", wraps the new image/path, writes
+  the shared values the canvases already read, disposes the previous objects after a frame grace, and runs the
+  glide and spectrum tween it already ran — no runOnJS.
+- **Android first; iOS keeps the JS path** until the same C++ is built there. The JS path stays in the code
+  as the fallback (engine missing or failing) and for iOS.
+
+## WaterfallView per-frame behaviour — the reference the engine must match
+(Survey of HEAD 7906a9fe, WaterfallView.tsx line numbers.) Quirks found: startRevealStepper is never called
+(revealCb dead; extra rows come only from the setTimeout chain); uN is always 1; WF_MIN_GAP_MS = 0 so the gate
+never fires; TARGET_FPS / feedFloorFps / binCount unused; manualRange is a NEW object per settings-effect run, so
+in manual mode any dep change flushes (the engine compares values); extraTimer is never cleared on unmount /
+background / cover (up to 8 stray rows and undisposed images after unmount — the engine fixes this);
+proc.reset() and the ring are never reset.
+- Jitter buffer: enqueue drops in background; interacting (< 1 s since lastInteractAt, NOT gated by smoothTune)
+  bypasses — clear queue, prefill = true, handle synchronously. Else arrival EMA 0.8/0.2 (init 150), queue ≤ 3
+  (drop oldest), drain via timer: prefill gate, handle one, re-arm max(40, min(1000, q>1 ? 0.6·arr : arr)).
+- handleFrame: skip bg / empty / width < 4; interacting = smoothTune && < 1 s; process(bins, centerHz (predicted),
+  bwHz, interacting); liveRange = round(dbMin/dbMax) with 2 dB hysteresis; avgFrameMs EMA 0.8/0.2 unless boost
+  (→ uAvgMs); lowFps = avg > 66; wfBoost = boost || (smoothTune && lowFps); avgWfGapMs EMA (0 < dt < 2000);
+  rowCentre = trueCenterHz ?? centerHz; rowHzBin = bwHz / row.length; pushRow; lastRow (unresampled) + meta;
+  if covered stop here; uQuant = wfBoost ? 0 : 1; dur = max(50, min(1000, avgWfGapMs || avgFrameMs)); row carry
+  (targetRows 40/30/0 by wfScroll: carry += dur/(1000/target); extras = max(0, floor(carry) − 1); carry −=
+  floor(carry); extras ≤ 8) → extras repeat rows at dur/(extras+1) spacing; wfBoost ? startGlide(dur) :
+  (stopGlide; scrollFrac = 1).
+- pushRow: resample to 1024 (max-pool a = (i·step)|0, b = min(srcN, ((i+1)·step)|0) || a+1; nearest when smaller);
+  hzPerBin scaled by srcN/1024; slot = (frameCount % 1024)·1024; shift off = round((rowCentre − view.centerHz) /
+  hzPerBin) only if hzPerBin matches view.bwHz/1024 within 1e-6 and |off| < 1024; vacated edge zero; frameCount++;
+  covered → ringDirty, else publish (uHead = frameCount; texReady once).
+- Spectrum: if specShow && specH > 4: m = ceil(width/2) points, next[k] = spec[floor(((2k)/width)·fn)] when
+  fn > m, else the spec as is; tween every 33 ms: k = 1 − exp(−dt / max(40, 0.35·uAvgMs)); closed polygon
+  (0,base) → (px, base − v·specH) every 2 px → (floor(w), base); sleep when maxΔ < 0.002.
+- Peak: if peakHold && !boost: ceil(floor(w)/2) points (px = 2k, v = peak[floor((px/width)·sLen)]), OPEN poly;
+  boost → resetPeakHold + empty path; spectrum hidden → empty paths.
