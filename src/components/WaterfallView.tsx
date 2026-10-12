@@ -2326,7 +2326,10 @@ function WaterfallView({
         <Canvas style={{ position: 'absolute', left: 0, top: 0, width, height: wfTop + 1 }}>
           {Platform.OS === 'android' && staticOverlayEls}
           {specShow && (
-            <Path path={specPath} style="fill">
+            <Path path={specPath} style="fill"
+                  /* ★ antiAlias OFF: the fill's edge coverage was 3.5 of its 9.5 ms GPU draw on the XCover 4s; the
+                     line drawn over it carries the edge, and Stuart could not see the difference (2026-10-12). */
+                  antiAlias={false}>
               <LinearGradient start={vec(0, specTop)} end={vec(0, wfTop)}
                               colors={specGradColors} />
             </Path>
