@@ -49,10 +49,75 @@ index f9f8a15..22ac9af 100644
      return _jniPlatformContext->takeScreenshotFromViewTag(tag);
    }
 diff --git a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp
-index e8e4c03..72f0e93 100644
+index e8e4c03..5c85dc5 100644
 --- a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp
 +++ b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp
-@@ -29,9 +29,18 @@ RNSkOpenGLCanvasProvider::RNSkOpenGLCanvasProvider(
+@@ -6,6 +6,13 @@
+ #include <memory>
+ 
+ #include "RNSkLog.h"
++#include <GLES2/gl2.h>
++#include <EGL/egl.h>
++#include <EGL/eglext.h>
++#include <android/log.h>
++#include <sys/system_properties.h>
++#include <chrono>
++#include <map>
+ 
+ #if defined(SK_GRAPHITE)
+ #include "RNDawnContext.h"
+@@ -23,15 +30,69 @@
+ 
+ namespace RNSkia {
+ 
++// VIBESDR PATCH — ONE FRAME IN FLIGHT ON THE SKIA RENDER THREAD.
++// Every canvas draws on SkiaRender (RNSkRenderThread.h), and eglSwapBuffers returns before the GPU has done the
++// work. On a weak GPU (Galaxy XCover 4s, Mali-G71 MP2, 2026-10-12) the thread then queued frame after frame of the
++// full-screen waterfall shader, the GPU's queue filled, and the app's OWN composition (HWUI, every other view) waited
++// behind it: the waterfall stalled for 4-14 display frames at a time and then jumped — "slide show". A glFinish
++// after each draw (a timing diagnostic) hid it by accident. The real fix: before a draw, wait until the PREVIOUS
++// draw (any canvas) has finished on the GPU — a fence, so the CPU still records while the GPU works. Redraw
++// requests are already coalesced per view, so the frame drawn after the wait is always the newest.
++// Kill switch: `adb shell setprop debug.rnskia.pace 0` (read once).
++namespace {
++EGLSyncKHR gLastFence = EGL_NO_SYNC_KHR;
++EGLDisplay gFenceDisplay = EGL_NO_DISPLAY;
++PFNEGLCREATESYNCKHRPROC pCreateSync = nullptr;
++PFNEGLCLIENTWAITSYNCKHRPROC pClientWait = nullptr;
++PFNEGLDESTROYSYNCKHRPROC pDestroySync = nullptr;
++bool paceEnabled() {
++  static const bool on = [] {
++    char v[PROP_VALUE_MAX] = {0};
++    __system_property_get("debug.rnskia.pace", v);
++    if (v[0] == '0') return false;
++    pCreateSync = (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
++    pClientWait = (PFNEGLCLIENTWAITSYNCKHRPROC)eglGetProcAddress("eglClientWaitSyncKHR");
++    pDestroySync = (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
++    return pCreateSync && pClientWait && pDestroySync;   // no fence sync (EGL_KHR_fence_sync) → stock behaviour
++  }();
++  return on;
++}
++void waitPreviousFrame() {
++  if (gLastFence == EGL_NO_SYNC_KHR) return;
++  // Bounded: a lost fence must never hang the thread (100 ms ≫ any frame).
++  pClientWait(gFenceDisplay, gLastFence, 0, 100000000ull);
++  pDestroySync(gFenceDisplay, gLastFence);
++  gLastFence = EGL_NO_SYNC_KHR;
++}
++void fenceThisFrame() {
++  EGLDisplay d = eglGetCurrentDisplay();
++  if (d == EGL_NO_DISPLAY) return;
++  EGLSyncKHR f = pCreateSync(d, EGL_SYNC_FENCE_KHR, nullptr);
++  if (f == EGL_NO_SYNC_KHR) return;
++  glFlush();   // the fence must reach the GPU, or the wait could only time out
++  gLastFence = f;
++  gFenceDisplay = d;
++}
++} // namespace
++
+ RNSkOpenGLCanvasProvider::RNSkOpenGLCanvasProvider(
+     std::function<void()> requestRedraw,
+     std::shared_ptr<RNSkia::RNSkPlatformContext> platformContext)
      : RNSkCanvasProvider(std::move(requestRedraw)),
        _platformContext(std::move(platformContext)) {}
  
@@ -72,7 +137,7 @@ index e8e4c03..72f0e93 100644
    if (_surfaceHolder) {
      return _surfaceHolder->getWidth();
    }
-@@ -39,6 +48,7 @@ int RNSkOpenGLCanvasProvider::getWidth() {
+@@ -39,6 +100,7 @@ int RNSkOpenGLCanvasProvider::getWidth() {
  }
  
  int RNSkOpenGLCanvasProvider::getHeight() {
@@ -80,7 +145,55 @@ index e8e4c03..72f0e93 100644
    if (_surfaceHolder) {
      return _surfaceHolder->getHeight();
    }
-@@ -80,7 +90,11 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
+@@ -63,10 +125,47 @@ bool RNSkOpenGLCanvasProvider::renderToCanvas(
+       }
+     }
+     if (surface) {
++      // VIBESDR DIAGNOSTIC (off by default): `setprop debug.rnskia.gputime 1` — time each draw INCLUDING the GPU (glFinish
++      // after the swap), per canvas, logged every 5 s as VibeGpu. Serialises the render thread: measurement only.
++      static const bool diag = [] {
++        char v[PROP_VALUE_MAX] = {0};
++        __system_property_get("debug.rnskia.gputime", v);
++        return v[0] == '1';
++      }();
++      if (paceEnabled()) waitPreviousFrame();
++      const auto t0 = std::chrono::steady_clock::now();
+       // Draw into canvas using callback
+       cb(surface->getCanvas());
++      const auto t1 = std::chrono::steady_clock::now();
+       // Swap buffers and show on screen
+       _surfaceHolder->present();
++      if (paceEnabled()) fenceThisFrame();
++      if (diag) {
++        glFinish();
++        const auto t2 = std::chrono::steady_clock::now();
++        struct St { int n = 0; double cpu = 0, tot = 0, mx = 0; int w = 0, h = 0; };
++        static std::map<const void *, St> stats;
++        static auto lastLog = t2;
++        St &st = stats[this];
++        st.n++;
++        st.w = getWidth(); st.h = getHeight();
++        const double cpu = std::chrono::duration<double, std::milli>(t1 - t0).count();
++        const double tot = std::chrono::duration<double, std::milli>(t2 - t0).count();
++        st.cpu += cpu; st.tot += tot; if (tot > st.mx) st.mx = tot;
++        const double since = std::chrono::duration<double, std::milli>(t2 - lastLog).count();
++        if (since >= 5000) {
++          double busy = 0;
++          for (auto &kv : stats) {
++            const St &x = kv.second;
++            busy += x.tot;
++            __android_log_print(ANDROID_LOG_INFO, "VibeGpu", "%dx%d: %.1f draws/s record %.2f ms, draw+GPU %.2f ms avg, %.1f max",
++                                x.w, x.h, x.n * 1000.0 / since, x.cpu / x.n, x.tot / x.n, x.mx);
++          }
++          __android_log_print(ANDROID_LOG_INFO, "VibeGpu", "render thread busy %.0f %%", busy / since * 100);
++          stats.clear();
++          lastLog = t2;
++        }
++      }
+       return true;
+     } else {
+       // the render context did not provide a surface
+@@ -80,7 +179,11 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
                                                  int width, int height,
                                                  bool opaque) {
    // Release the old surface
@@ -93,7 +206,7 @@ index e8e4c03..72f0e93 100644
  
    // Create renderer!
    ANativeWindow *window = nullptr;
-@@ -110,7 +124,12 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
+@@ -110,7 +213,12 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
  #if defined(SK_GRAPHITE)
    _surfaceHolder = DawnContext::getInstance().MakeWindow(window, width, height);
  #else
@@ -107,7 +220,7 @@ index e8e4c03..72f0e93 100644
  #endif
  
    // Post redraw request to ensure we paint in the next draw cycle.
-@@ -119,7 +138,11 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
+@@ -119,7 +227,11 @@ void RNSkOpenGLCanvasProvider::surfaceAvailable(jobject jSurfaceTexture,
  void RNSkOpenGLCanvasProvider::surfaceDestroyed() {
    // destroy the renderer (a unique pointer so the dtor will be called
    // immediately.)
@@ -120,7 +233,7 @@ index e8e4c03..72f0e93 100644
    if (_jSurfaceTexture) {
      JNIEnv *env = facebook::jni::Environment::current();
      env->DeleteGlobalRef(_jSurfaceTexture);
-@@ -135,11 +158,17 @@ void RNSkOpenGLCanvasProvider::surfaceSizeChanged(jobject jSurface, int width,
+@@ -135,11 +247,17 @@ void RNSkOpenGLCanvasProvider::surfaceSizeChanged(jobject jSurface, int width,
      return;
    }
  
@@ -165,10 +278,10 @@ index ca5768d..263bdd4 100644
    jmethodID _updateTexImageMethod = nullptr;
 diff --git a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h
 new file mode 100644
-index 0000000..75425af
+index 0000000..b1d64a7
 --- /dev/null
 +++ b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,276 @@
 +#pragma once
 +
 +// VIBESDR PATCH — ONE SKIA RENDER THREAD FOR EVERY CANVAS (Android, OpenGL).
@@ -184,11 +297,20 @@ index 0000000..75425af
 +// the UI thread WAITS for them, so a surface can never be torn down mid-draw.
 +// Kill switch: `adb shell setprop debug.rnskia.renderthread 0` (read once, at the first canvas).
 +
++#include <android/api-level.h>
++#include <android/choreographer.h>
++#include <android/looper.h>
++#include <sys/eventfd.h>
++#include <dlfcn.h>
 +#include <sys/prctl.h>
++#include <unistd.h>
 +#include <sys/resource.h>
 +#include <sys/system_properties.h>
 +
++#include <chrono>
 +#include <condition_variable>
++#include <deque>
++#include <vector>
 +#include <functional>
 +#include <future>
 +#include <mutex>
@@ -219,12 +341,30 @@ index 0000000..75425af
 +
 +  bool isCurrent() const { return std::this_thread::get_id() == _id; }
 +
++  // ★★★ VSYNC-TIED DRAWS (2026-10-13, Moto G35): the analogue needle juddered in some PHASES and not others — the shade,
++  //   a rotation or an app switch flipped it ("a rotate to landscape and back restored it"). Draws ran the moment they
++  //   were asked for, so where they finished relative to RenderThread's latch of the TextureView drifted with whatever
++  //   last disturbed the timing; near the latch a frame was sometimes taken and sometimes missed — 0, 2, 1, 1, 0, 2.
++  //   Now redraw requests are collected and drawn on this thread's OWN Choreographer callback, and at each vsync only
++  //   requests made BEFORE that vsync are drawn — the UI thread's animation callbacks post theirs just after it, so
++  //   every frame takes exactly one vsync, never sometimes one and sometimes two. Surface create / resize / destroy
++  //   (runSync) still run at once. Kill switch: `adb shell setprop debug.rnskia.vsync 0` (draw at once, as before).
++  static bool vsyncOn() {
++    static const bool on = [] {
++      char v[PROP_VALUE_MAX] = {0};
++      __system_property_get("debug.rnskia.vsync", v);
++      return v[0] != '0';
++    }();
++    return on;
++  }
++
 +  void post(std::function<void()> task) {
 +    {
 +      std::lock_guard<std::mutex> lock(_mx);
-+      _queue.push(std::move(task));
++      if (vsyncOn()) _frameQ.push_back({nowNs(), std::move(task)});
++      else _queue.push(std::move(task));
 +    }
-+    _cv.notify_one();
++    wake();
 +  }
 +
 +  // Runs `task` on the render thread and waits for it. Never called FROM the render thread's own tasks in a
@@ -236,15 +376,20 @@ index 0000000..75425af
 +    }
 +    std::promise<void> done;
 +    auto f = done.get_future();
-+    post([&task, &done] {
-+      task();
-+      done.set_value();
-+    });
++    {
++      std::lock_guard<std::mutex> lock(_mx);
++      _queue.push([&task, &done] {
++        task();
++        done.set_value();
++      });
++    }
++    wake();
 +    f.wait();
 +  }
 +
 +private:
 +  RNSkRenderThread() {
++    _efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 +    std::promise<std::thread::id> started;
 +    auto f = started.get_future();
 +    std::thread([this, &started] {
@@ -257,29 +402,159 @@ index 0000000..75425af
 +    _id = f.get();
 +  }
 +
-+  void loop() {
++  static int64_t nowNs() {
++    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
++        .count();   // CLOCK_MONOTONIC — the clock Choreographer's frame times are on
++  }
++
++  void wake() {
++    uint64_t one = 1;
++    (void)write(_efd, &one, sizeof one);
++  }
++
++  // ★★★ PERFORMANCE HINT (ADPF, Android 13+): THIS THREAD'S DRAWS ARE FRAME WORK. Measured on a Moto G35, 2026-10-12:
++  //   the UI thread, RenderThread and SkiaRender all sat on one A76 clocked at 614 MHz of its 2210 — the governor
++  //   judges a core by how busy it looks, and bursty draws look idle. HWUI already puts the UI thread and RenderThread
++  //   in a hint session; SkiaRender, ours, was in none. Each frame's draws are reported against a target, and the
++  //   governor raises the clock to meet it — what iOS does for its render threads unasked. Target 8 ms (half a 60 Hz
++  //   frame). Below API 33, or with no vendor support, nothing happens. Kill switch: `setprop debug.rnskia.hint 0`.
++  struct Hint {
++    void *session = nullptr;
++    int (*report)(void *, int64_t) = nullptr;
++  };
++  static Hint makeHint() {
++    Hint h;
++    char v[PROP_VALUE_MAX] = {0};
++    __system_property_get("debug.rnskia.hint", v);
++    if (v[0] == '0' || android_get_device_api_level() < 33) return h;
++    void *lib = dlopen("libandroid.so", RTLD_NOW);
++    if (!lib) return h;
++    auto getManager = (void *(*)())dlsym(lib, "APerformanceHint_getManager");
++    auto create = (void *(*)(void *, const int32_t *, size_t, int64_t))dlsym(lib, "APerformanceHint_createSession");
++    h.report = (int (*)(void *, int64_t))dlsym(lib, "APerformanceHint_reportActualWorkDuration");
++    if (!getManager || !create || !h.report) { h.report = nullptr; return h; }
++    void *mgr = getManager();
++    if (!mgr) { h.report = nullptr; return h; }
++    const int32_t tid = (int32_t)gettid();
++    h.session = create(mgr, &tid, 1, 8000000LL);
++    if (!h.session) h.report = nullptr;
++    return h;
++  }
++
++  void runTask(std::function<void()> &task) {
++    try {
++      if (task) task();
++    } catch (const std::exception &e) {
++      RNSkLogger::logToConsole("SkiaRender task threw: %s", e.what());
++    } catch (...) {
++      RNSkLogger::logToConsole("SkiaRender task threw");
++    }
++  }
++
++  // Immediate work: runSync tasks, and (vsync off) every task. Reported to the hint as one burst.
++  void runImmediate() {
++    const int64_t t0 = nowNs();
++    bool any = false;
 +    for (;;) {
 +      std::function<void()> task;
 +      {
-+        std::unique_lock<std::mutex> lock(_mx);
-+        _cv.wait(lock, [this] { return !_queue.empty(); });
++        std::lock_guard<std::mutex> lock(_mx);
++        if (_queue.empty()) break;
 +        task = std::move(_queue.front());
 +        _queue.pop();
 +      }
-+      try {
-+        if (task) task();
-+      } catch (const std::exception &e) {
-+        RNSkLogger::logToConsole("SkiaRender task threw: %s", e.what());
-+      } catch (...) {
-+        RNSkLogger::logToConsole("SkiaRender task threw");
++      any = true;
++      runTask(task);
++    }
++    if (any && _hint.report) _hint.report(_hint.session, nowNs() - t0);
++  }
++
++  void maybePostFrame() {
++    if (_framePosted || !_choreo) return;
++    {
++      std::lock_guard<std::mutex> lock(_mx);
++      if (_frameQ.empty()) return;
++    }
++    _framePosted = true;
++    if (_post64) _post64(_choreo, &RNSkRenderThread::onFrame64, this);
++    else if (_post32) _post32(_choreo, &RNSkRenderThread::onFrame32, this);
++  }
++
++  static void onFrame64(int64_t frameTimeNanos, void *d) { static_cast<RNSkRenderThread *>(d)->frame(frameTimeNanos); }
++  static void onFrame32(long frameTimeNanos, void *d) { static_cast<RNSkRenderThread *>(d)->frame((int64_t)frameTimeNanos); }
++
++  void frame(int64_t vsyncNs) {
++    _framePosted = false;
++    std::vector<std::function<void()>> due;
++    {
++      std::lock_guard<std::mutex> lock(_mx);
++      auto it = _frameQ.begin();
++      while (it != _frameQ.end()) {
++        if (it->first < vsyncNs) { due.push_back(std::move(it->second)); it = _frameQ.erase(it); }
++        else ++it;
++      }
++    }
++    if (!due.empty()) {
++      const int64_t t0 = nowNs();
++      for (auto &t : due) runTask(t);
++      if (_hint.report) _hint.report(_hint.session, nowNs() - t0);
++    }
++    runImmediate();
++    maybePostFrame();   // requests made after this vsync: the next one
++  }
++
++  static int onFd(int fd, int, void *d) {
++    auto *self = static_cast<RNSkRenderThread *>(d);
++    uint64_t n;
++    while (read(fd, &n, sizeof n) > 0) {}
++    self->runImmediate();
++    self->maybePostFrame();
++    return 1;   // keep the fd registered
++  }
++
++  void loop() {
++    _hint = makeHint();
++    ALooper *looper = ALooper_prepare(0);
++    ALooper_addFd(looper, _efd, ALOOPER_POLL_CALLBACK, ALOOPER_EVENT_INPUT, &RNSkRenderThread::onFd, this);
++    _choreo = vsyncOn() ? AChoreographer_getInstance() : nullptr;
++    if (_choreo) {
++      void *lib = dlopen("libandroid.so", RTLD_NOW);
++      if (lib) {
++        _post64 = (void (*)(AChoreographer *, void (*)(int64_t, void *), void *))dlsym(lib, "AChoreographer_postFrameCallback64");
++        if (!_post64) _post32 = (void (*)(AChoreographer *, void (*)(long, void *), void *))dlsym(lib, "AChoreographer_postFrameCallback");
++      }
++      if (!_post64 && !_post32) _choreo = nullptr;
++    }
++    if (!_choreo && vsyncOn()) {
++      // No Choreographer here: draw at once, as before, so nothing is ever left undrawn.
++      std::lock_guard<std::mutex> lock(_mx);
++      _vsyncFallback = true;
++    }
++    for (;;) {
++      ALooper_pollOnce(-1, nullptr, nullptr, nullptr);
++      if (_vsyncFallback) {   // move any frame requests to the immediate queue
++        std::vector<std::function<void()>> due;
++        {
++          std::lock_guard<std::mutex> lock(_mx);
++          for (auto &e : _frameQ) _queue.push(std::move(e.second));
++          _frameQ.clear();
++        }
++        runImmediate();
 +      }
 +    }
 +  }
 +
 +  std::thread::id _id;
 +  std::mutex _mx;
-+  std::condition_variable _cv;
-+  std::queue<std::function<void()>> _queue;
++  std::queue<std::function<void()>> _queue;                          // immediate (runSync; all, with vsync off)
++  std::deque<std::pair<int64_t, std::function<void()>>> _frameQ;     // redraws, with the time they were asked for
++  int _efd = -1;
++  AChoreographer *_choreo = nullptr;
++  void (*_post64)(AChoreographer *, void (*)(int64_t, void *), void *) = nullptr;
++  void (*_post32)(AChoreographer *, void (*)(long, void *), void *) = nullptr;
++  bool _framePosted = false;
++  bool _vsyncFallback = false;
++  Hint _hint;
 +};
 +
 +} // namespace RNSkia
@@ -673,3 +948,23 @@ index 0000000..8eba2be
 +                                                 void *pathHandle);
 +
 +} // namespace vibe_rnskia
+diff --git a/node_modules/@shopify/react-native-skia/src/sksg/Container.native.ts b/node_modules/@shopify/react-native-skia/src/sksg/Container.native.ts
+index 08c16a9..9f07439 100644
+--- a/node_modules/@shopify/react-native-skia/src/sksg/Container.native.ts
++++ b/node_modules/@shopify/react-native-skia/src/sksg/Container.native.ts
+@@ -48,6 +48,15 @@ class NativeReanimatedContainer extends Container {
+     }
+     const recorder = new ReanimatedRecorder(this.Skia);
+     const { nativeId, picture } = this;
++    // VIBESDR DIAGNOSTIC: per-canvas redraw counts, only when App.tsx (diagnostics builds) sets __skiaRedraws; logged every 10 s
++    {
++      const g = globalThis as any;
++      if (g.__skiaRedraws) {
++        const sig = (n: any, d: number): string => d > 2 || !n ? "" : `${n.type}${n.children?.length ? "(" + n.children.slice(0, 4).map((c: any) => sig(c, d + 1)).join(",") + (n.children.length > 4 ? ",…" + n.children.length : "") + ")" : ""}`;
++        const key = `#${nativeId} ` + this.root.slice(0, 3).map((n: any) => sig(n, 0)).join(",") + (this.root.length > 3 ? ` +${this.root.length - 3}` : "");
++        g.__skiaRedraws[key] = (g.__skiaRedraws[key] || 0) + 1;
++      }
++    }
+     visit(recorder, this.root);
+     const sharedValues = recorder.getSharedValues();
+     const sharedRecorder = recorder.getRecorder();
