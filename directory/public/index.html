@@ -3513,15 +3513,30 @@ map.on('zoomend', drawServerMarkers);
  * ★ Best effort and per server: one that is asleep, restarting or slow just keeps the directory's
  *   own figure rather than blanking the row or holding up the page.
  */
+/** ★★ ONE RETRY BEFORE "NOT RESPONDING" (2026-10-13). A single refused or dropped status read — an owner's own rate limit
+ *  or firewall, a blip on a home connection — painted a receiver with people listening as NOT RESPONDING
+ *  (ListenamateurVLD). A server that is really gone fails both tries; one that hiccuped answers the second. */
+async function fetchStatus(url) {
+  for (let attempt = 0; ; attempt++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    try {
+      const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+      clearTimeout(t);
+      if (r.ok || attempt >= 1) return r;
+    } catch (e) {
+      clearTimeout(t);
+      if (attempt >= 1) throw e;
+    }
+    await new Promise((res) => setTimeout(res, 1200));
+  }
+}
+
 async function withLiveCounts(servers) {
   await Promise.all(servers.map(async (s) => {
     if (!s.address) return;
     try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 4000);
-      const r = await fetch(`https://${s.address}/vibeserver.json`,
-                            { signal: ctrl.signal, cache: 'no-store' });
-      clearTimeout(t);
+      const r = await fetchStatus(`https://${s.address}/vibeserver.json`);
       if (!r.ok) return;
       const j = await r.json();
       if (Number.isFinite(j.listeners)) s.listeners = Number(j.listeners);

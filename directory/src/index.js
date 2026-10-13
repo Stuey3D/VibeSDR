@@ -1460,6 +1460,21 @@ async function serveBySlug(host, request, env) {
   fwd.delete('cookie');
   fwd.delete('authorization');
   fwd.delete('proxy-authorization');
+  /* ★★★ THE STATUS READS GO OUT WITHOUT THE BROWSER'S ORIGIN (Stuart, 2026-10-13: ListenamateurVLD showed NOT RESPONDING
+   *     while three people were listening). The directory page reads each server's live status cross-origin, so the
+   *     browser stamps Origin: https://vibeserver.vibesdr.net on the request — and an owner who fronts VibeServer with
+   *     their OWN Cloudflare (vibesdr.tokyoradio.nl) can have a rule that refuses any foreign Origin: 403, measured with
+   *     that header and 200 without it, nothing else in the request mattering. We forwarded it faithfully, so the page
+   *     saw a failure and drew a working receiver as dead. VibeServer itself never needs it on these reads (they are
+   *     public, and answer `access-control-allow-origin: *`), so for a GET or HEAD of /vibeserver.json or
+   *     /r/<radio>/vibeserver.json it is dropped. ★★ ONLY those: every other path keeps the browser's Origin, because a
+   *     server may judge a request that CHANGES something by where it came from. */
+  const statusRead = (request.method === 'GET' || request.method === 'HEAD')
+      && /^\/(r\/[^/]+\/)?vibeserver\.json$/.test(upstream.pathname);
+  if (statusRead) {
+    fwd.delete('origin');
+    fwd.delete('referer');      // ★ the same kind of trigger for an owner's firewall, and a public read never needs it
+  }
 
   /* ★★★ A LISTED SERVER THAT DOES NOT ANSWER GETS OUR PAGE, NOT CLOUDFLARE'S. A fetch that threw
    *     used to escape the Worker entirely (Cloudflare's 1101 page), and a tunnel with nobody behind
@@ -1493,6 +1508,13 @@ async function serveBySlug(host, request, env) {
       body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : request.body,
       redirect: 'manual',
       ...(ctl ? { signal: ctl.signal } : {}),
+      /* ★★ A FEW SECONDS AT OUR EDGE FOR THE STATUS READS ONLY. Every open directory page asks every server for its
+       *  status; a busy evening turns that into a stream of identical reads at somebody's home connection — and an
+       *  owner's own rate limit is exactly what refuses some of them and paints a live receiver NOT RESPONDING. Five
+       *  seconds of a SUCCESSFUL answer is shared by everyone (the counts are live enough for a list); a failure is
+       *  never cached, so a server coming back shows at once. Only what the query string makes unique is ever
+       *  shared — the directory's verification challenge carries its own nonce. */
+      ...(statusRead ? { cf: { cacheTtlByStatus: { '200-299': 5, '300-599': 0 }, cacheEverything: true } } : {}),
     });
   } catch (e) {
     return down(ctl && ctl.signal.aborted ? 'timeout' : String((e && e.message) || e).slice(0, 120));
