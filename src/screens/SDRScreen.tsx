@@ -3629,30 +3629,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Seed from the profile preset, then track user changes via onOwrxSquelch. -150/-130 = off.
   const owrxSquelchRef = useRef(-150);
   useEffect(() => { if (owrxDspDefaults?.squelchDb !== undefined) owrxSquelchRef.current = owrxDspDefaults.squelchDb; }, [owrxDspDefaults]);
-  /* ★★★ OWRX GETS OUR AUTO SQUELCH (Stuart, 2026-10-13: "can we use our own auto squelch with OWRX … use that as its
-   *  superior"). OpenWebRX gates on its SERVER, and ours restates the threshold through the over and holds the gate open
-   *  through every hang — each of those would be a message to somebody else's server. So under AUTO the gate is OURS, on
-   *  the phone, judged on OWRX's calibrated S-meter exactly as the Kiwi's is (evalKiwiSquelch), and the server's squelch
-   *  is held OFF so the two never gate twice. A hand on the squelch takes auto off and gives the server its own back.
-   *  ★ Possible only since the S-meter is calibrated (owrxSmeterCal.ts): the tracker's margin is in dB above a noise
-   *    floor that now sits where an S-meter puts it, on every server alike. */
-  const owrxAutoThrRef  = useRef(NaN);    // calibrated dB; NaN = not gating (auto off, or the hang holding it open)
-  const owrxGateOpenRef = useRef(true);
-  const owrxManualRef   = useRef(-150);   // the server squelch to give back when auto goes off
-  const setOwrxGateOpen = useCallback((open: boolean) => {
-    if (open === owrxGateOpenRef.current) return;
-    owrxGateOpenRef.current = open;
-    (NativeModules.VibePowerModule as { setSquelchOpen?: (o: boolean) => void })?.setSquelchOpen?.(open);
-  }, []);
-  /** The server's own squelch — what a hand on the sheet's slider or the meter bar sets. */
-  const onOwrxSquelchSet = useCallback((db: number) => {
-    owrxSquelchRef.current = db;
-    client.current?.setSquelch?.(db);
-  }, []);
-  /** Show a server squelch on the sheet's slider (squelch only: the NR the sheet holds is left alone). */
-  const showOwrxSquelch = useCallback((db: number) => {
-    setOwrxDspDefaults((p) => ({ squelchDb: db, seq: p.seq + 1 }));
-  }, []);
   useEffect(() => {
     const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
     let s = -1;
@@ -5616,9 +5592,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
       },
       onStatus:     (s) => { if (!destroyed.current) setStatus(s); },
-      onSMeter:     (dbm) => { if (!destroyed.current) { owrxSmeterRef.current = dbm; if (isKiwi) evalKiwiSquelch(dbm);
-        // ★ OWRX under AUTO: our gate, on the phone (see owrxAutoThrRef). NaN = held open, nothing to judge.
-        else if (Number.isFinite(owrxAutoThrRef.current)) setOwrxGateOpen(dbm >= owrxAutoThrRef.current); } },
+      onSMeter:     (dbm) => { if (!destroyed.current) { owrxSmeterRef.current = dbm; if (isKiwi) evalKiwiSquelch(dbm); } },
       onProfiles:   (list) => { if (!destroyed.current) setProfiles(list); },
       onSdrUsage:   (m) => { if (!destroyed.current) setSdrUsage(m); },
       onClients:    (n) => { if (!destroyed.current) setClientCount(n); },
@@ -5646,14 +5620,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onServerDspDefaults: (d) => {
         // Adapter already applied these to the demod; bump seq so the menu re-syncs
         // its sliders even when the new profile presets the same value as before.
-        if (destroyed.current) return;
-        /* ★ Under our AUTO the server's squelch stays OFF — a profile's preset (or a recalibrated one) is remembered
-         *  as the manual value to give back, never applied, or the server and the phone would gate twice. */
-        if (isOwrx && sqlAutoRef.current && d.squelchDb !== undefined) {
-          if (d.squelchDb > -150) { owrxManualRef.current = d.squelchDb; onOwrxSquelchSet(-150); }
-          d = { ...d, squelchDb: -150 };
-        }
-        setOwrxDspDefaults((p) => ({ ...d, seq: p.seq + 1 }));
+        if (!destroyed.current) setOwrxDspDefaults((p) => ({ ...d, seq: p.seq + 1 }));
       },
       onBookmarks:  (list) => {
         // OWRX server bookmarks/dial markers (over the WS) → same path as
@@ -6130,7 +6097,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           const rawLevelDbm = levelDbm - vg;
           const gate = isKiwi  ? (kiwiSqDbmRef.current > -130 ? rawLevelDbm < kiwiSqDbmRef.current : false)
             : isLocal          ? (hwSquelchRef.current > -100 ? chDbfs   < hwSquelchRef.current : false)
-            : owrxDbm != null  ? (Number.isFinite(owrxAutoThrRef.current) ? rawLevelDbm < owrxAutoThrRef.current : undefined)
+            : owrxDbm != null  ? undefined
             : (snrSquelchRef.current > -999 ? snrDb < snrSquelchRef.current : false);
           /* ── AUTO SQUELCH ────────────────────────────────────────────────────────────────────
            * The brief's algorithm, once, here — where the channel figure, the noise floor, the trim
@@ -6144,10 +6111,11 @@ export default function SDRScreen({ route, navigation }: Props) {
            * ★★★ AND THE THRESHOLD GOES OUT THROUGH onSquelchDrag — the existing, single, per-backend
            *     inverse map (which also carries the visualGain correction). ✗ A second mapping here
            *     is exactly how the automatic line and the manual ball would come to disagree.
-           * ★ OWRX: its calibrated S-meter, gated on the phone like the Kiwi's (owrxAutoThrRef). */
+           * ★ True OWRX gates SERVER-side and has no bar to drive: no channel figure we may steer
+           *   from, so `autoChan` is NaN and the toggle is offered disabled with the reason. */
           const autoChan = isKiwi ? rawLevelDbm
             : isLocal            ? chDbfs
-            : owrxDbm != null    ? rawLevelDbm
+            : owrxDbm != null    ? NaN
             : snrDb;
           /* ★ THE dBFS-MODE BRANCH NEEDS A SETTLED FLOOR, because its position map is the one that
            *   goes through it (see onSquelchDrag). Until then there is no honest answer, so the
@@ -6213,8 +6181,7 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  ★★ `decide` judges presence and is never applied; judging on the APPLIED value
              *     latches permanently open, because during a hang everything is above it. */
             const posOf = (db: number) => Math.max(0, Math.min(1,
-              owrxDbm != null ? (db + vg + 110) / 100           // the OWRX bar's own map (above)
-              : isKiwi || isLocal ? (db + vg + 130) / 90
+              isKiwi || isLocal ? (db + vg + 130) / 90
               : signalModeRef.current === 'snr' ? sigNorm(db)
               // dBFS/S-meter mode: the threshold is an SNR figure, drawn against the tracked floor —
               // the exact forward map onSquelchDrag inverts.
@@ -7874,12 +7841,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   blank key makes the next frame reseed whatever we are actually tuned to.
       const t = sqlAutoTrk.current;
       t.base = NaN; t.key = ''; t.openAt = 0; t.shown = NaN; t.sentOpen = false; t.sentDb = NaN; t.near = NaN;
-      // ★ OWRX: the server's squelch goes OFF (remembered) — from here the gate is ours, on the phone.
-      if (isOwrx) { owrxManualRef.current = owrxSquelchRef.current; onOwrxSquelchSet(-150); showOwrxSquelch(-150); }
-    } else if (isOwrx) {
-      owrxAutoThrRef.current = NaN; setOwrxGateOpen(true);
-      const m = owrxManualRef.current;
-      onOwrxSquelchSet(m); showOwrxSquelch(m);
     } else {
       const m = sqlManualRef.current;
       // ★ The per-backend "off" sentinels, for a session where nothing manual was ever set.
@@ -7887,7 +7848,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       else if (isLocal) onLocalSquelch(Number.isFinite(m) ? m : -100);
       else              onSnrSquelch(Number.isFinite(m) ? m : -999);
     }
-  }, [isKiwi, isLocal, isOwrx, onKiwiSquelch, onLocalSquelch, onSnrSquelch, onOwrxSquelchSet, showOwrxSquelch, setOwrxGateOpen]);
+  }, [isKiwi, isLocal, onKiwiSquelch, onLocalSquelch, onSnrSquelch]);
 
   /** ABOVE NOISE, 4-20 dB. ★ Nothing to apply: the threshold is recomputed from scratch on every
    *  frame, so the bar, the red line and the audio all agree with the slider the moment it moves. */
@@ -7938,14 +7899,6 @@ export default function SDRScreen({ route, navigation }: Props) {
       sqlDraggingRef.current = true;
       if (sqlAutoRef.current) setSquelchAuto(false);
     }
-    /* ★ OWRX: the tracker drives OUR gate on the phone; a hand drives the server's squelch. Both on the OWRX bar's
-     *  map, (dB + trim + 110) / 100, inverted here with the trim taken back off. */
-    if (isOwrx) {
-      const db = x < 0 ? NaN : Math.max(0, Math.min(1, x)) * 100 - 110 - visualGainRef.current;
-      if (auto) { owrxAutoThrRef.current = db; if (!Number.isFinite(db)) setOwrxGateOpen(true); }
-      else { const v = Number.isFinite(db) ? Math.round(db) : -150; onOwrxSquelchSet(v); showOwrxSquelch(v); }
-      return;
-    }
     if (x < 0) {
       if (isKiwi) onKiwiSquelch(-130);
       else if (isLocal) onLocalSquelch(-100);
@@ -7976,7 +7929,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (floor <= -900) return;
       onSnrSquelch(c * 90 - 130 - vg - floor);
     }
-  }, [isKiwi, isLocal, isOwrx, signalMode, onKiwiSquelch, onLocalSquelch, onSnrSquelch, setSquelchAuto, onOwrxSquelchSet, showOwrxSquelch, setOwrxGateOpen]);
+  }, [isKiwi, isLocal, signalMode, onKiwiSquelch, onLocalSquelch, onSnrSquelch, setSquelchAuto]);
   /* ★★ THE AUTO TRACKER REACHES THE MAPPER THROUGH A REF, because it lives in the per-frame emit —
    *  inside socket callbacks that are built ONCE per connection. A captured `onSquelchDrag` would be
    *  the version from the first render, and this one is rebuilt whenever the meter mode changes, so
@@ -11581,7 +11534,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         adminFailReason={adminFailReason}
         onAdminUnlock={onAdminUnlockPw}
         serverLabel={serverLabel}
-        onOwrxSquelch={(db) => { if (sqlAutoRef.current) setSquelchAuto(false); onOwrxSquelchSet(db); }}
+        onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
         onAbout={() => { setMenuOpen(false); setAboutOpen(true); }}
@@ -11810,7 +11763,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         iq={iqState}
         iqLocal={/^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost)/i.test(connectBase)}
         onIqOut={rawIqMode && rawIqMode !== 'off' && !sharedDial ? (on, rate) => client.current?.iqOut?.(on, rate) : undefined}
-        onOwrxSquelch={(db) => { if (sqlAutoRef.current) setSquelchAuto(false); onOwrxSquelchSet(db); }}
+        onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
         visualGain={visualGain}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
