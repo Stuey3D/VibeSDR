@@ -92,7 +92,7 @@ interface MapOverlayProps {
 
 function buildHtml(
   kind: MapKind, baseUrl: string, uuid: string,
-  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean },
+  opts?: { local?: boolean; wsBase?: string | null; rxLat?: number | null; rxLon?: number | null; gl?: boolean; detail?: boolean; glBase?: string },
   /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
    *  a legend. The page is rebuilt when they change — and they can only change from the menus, after leaving this
    *  screen (Stuart: "to change the colour of the map means youd have to exit its screen anyway"). */
@@ -103,6 +103,9 @@ function buildHtml(
    *  tiles from <documents>/mapgl/. The page's HFDL / spots code is unchanged — vibemapgl-compat.js
    *  answers its Leaflet calls with the GPU map underneath. Off (gl false) = today's Leaflet page. */
   const gl = !!opts?.gl;
+  /* ★ Where the GPU map's files are, relative to this page: <documents>/mapgl/ on iOS, the APK's unpacked
+   *  bundle (mapgl-bundled/) on Android — see ensureMapglPack. Only ever our own fixed folder names. */
+  const glBase = /^[a-z-]+\/$/.test(opts?.glBase ?? '') ? opts!.glBase! : 'mapgl/';
   const base = baseUrl.replace(/\/+$/, '');
   const wsBase = local && opts?.wsBase ? opts.wsBase.replace(/\/+$/, '') : base.replace(/^http/, 'ws');
   const rxLat = Number.isFinite(opts?.rxLat as number) ? (opts!.rxLat as number) : 0;
@@ -148,7 +151,7 @@ function buildHtml(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>${VIBEMAP_JS}</script>
-${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="mapgl/vendor/maplibre-gl.js"></script><script src="mapgl/vendor/pmtiles.js"></script><script src="mapgl/vendor/vibemapgl.js"></script><script src="mapgl/vendor/vibemapgl-compat.js"></script>' : ''}
+${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script src="${glBase}vendor/maplibre-gl.js"></script><script src="${glBase}vendor/pmtiles.js"></script><script src="${glBase}vendor/vibemapgl.js"></script><script src="${glBase}vendor/vibemapgl-compat.js"></script>` : ''}
 <style>
   html,body{margin:0;padding:0;height:100%;background:${T.bg};overflow:hidden;}
   /* ★ Every size here went up 2 px on 2026-09-27 (Stuart: the legend was a strain, "all fonts could be
@@ -245,8 +248,19 @@ ${gl ? '<link rel="stylesheet" href="mapgl/vendor/maplibre-gl.css"><script src="
      answers "how well did I hear it?" was never seen (Stuart, 2026-09-29). --pc is set on the
      marker element to the SAME rgb the icon is drawn in (gsTone / acTone), so the pulse, the ring
      and the settled icon are one colour from the first frame. */
-  @keyframes pulsec{0%,100%{filter:drop-shadow(0 0 3px rgba(var(--pc,255,240,60),0.5));}50%{filter:drop-shadow(0 0 10px rgba(var(--pc,255,240,60),1)) drop-shadow(0 0 18px rgba(var(--pc,255,240,60),0.7));}}
-  .pulse-ac,.pulse-gs{animation:pulsec 1.2s ease-in-out infinite;}
+  /* ★★★ THE PULSE ONLY FADES — IT NEVER REPAINTS (2026-10-13, Moto G35 HFDL map). It used to animate
+     filter:drop-shadow on the marker itself: a filter cannot be composited, so every frame re-rasterised
+     the glow AND every aircraft sharing its layer. Two pulses (the newest flight and its station) halved
+     the whole map's frame rate — 27 fps idle with ~220 aircraft, 53 with the pulses off (measured in the
+     WebView). Now the full glow is drawn ONCE on a copy of the icon behind it (.pglow, added by setPulse)
+     and only that copy's OPACITY animates — the compositor's job, no repaint. Same colour, same 1.2 s
+     breathing: faint at the ends, full at the middle.
+     ✗ No filter on the marker element itself: a parent filter would flatten the fading child back into
+       a repaint every frame. */
+  @keyframes pglow{0%,100%{opacity:0.15;}50%{opacity:1;}}
+  .pglow{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:-1;
+    filter:drop-shadow(0 0 10px rgba(var(--pc,255,240,60),1)) drop-shadow(0 0 18px rgba(var(--pc,255,240,60),0.7));
+    animation:pglow 1.2s ease-in-out infinite;will-change:opacity;}
   @keyframes ring{0%{transform:translate(-50%,-50%) scale(1);opacity:0.8;}100%{transform:translate(-50%,-50%) scale(3);opacity:0;}}
   .ring{position:absolute;pointer-events:none;z-index:650;width:26px;height:26px;border-radius:50%;border:2px solid;transform:translate(-50%,-50%);animation:ring 1.4s ease-out 3;will-change:transform,opacity;}
   .ring-ac,.ring-gs{border-color:rgba(255,240,60,0.85);}
@@ -467,7 +481,7 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       var id='mg'+(++window.__mgSeq);window.__mgWait[id]=res;
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
-    GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'mapgl/',detailRange:detailRange,
+    GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
       profile:(KIND==='hfdl'?'aero':'spots'),center:[0,30],zoom:1});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
@@ -784,7 +798,7 @@ if(KIND==='hfdl'){
   updSnap();
   snapBtn.addEventListener('click',function(){snapOn=!snapOn;try{localStorage.setItem('lsv_hfdl_snap',snapOn?'1':'0');}catch(e){}updSnap();});
 
-  /* ★★ ONE COLOUR PER MARKER, glowing or not — the pulse no longer swaps in yellow (see pulsec).
+  /* ★★ ONE COLOUR PER MARKER, glowing or not — the pulse no longer swaps in yellow (see .pglow).
    *  Tones return the rgb triple separately so the pulse and ring can use it at their own alpha. */
   function acTone(lastSeen){var a=Math.floor(Date.now()/1000)-lastSeen;
     if(a<120)return{rgb:'80,255,120',a:0.92};if(a<300)return{rgb:'180,255,80',a:0.88};
@@ -801,7 +815,13 @@ if(KIND==='hfdl'){
   function setPulse(mk,cls,rgb){
     try{
       var el=mk.getElement();if(!el)return;
-      if(rgb){el.style.setProperty('--pc',rgb);el.classList.add(cls);}
+      var old=el.querySelector('.pglow');if(old)old.remove();
+      if(rgb){
+        el.style.setProperty('--pc',rgb);el.classList.add(cls);
+        // ★ The glow layer: a copy of the icon, glowing, behind it — see .pglow (only its opacity animates).
+        var svg=el.querySelector('svg');
+        if(svg){var g=document.createElement('div');g.className='pglow';g.appendChild(svg.cloneNode(true));el.insertBefore(g,el.firstChild);}
+      }
       else{el.classList.remove(cls);el.style.removeProperty('--pc');}
     }catch(e){console.error('HFDL: could not set the marker pulse',e);}
   }
@@ -913,7 +933,7 @@ if(KIND==='hfdl'){
     if(!acLL)return;
     removeRing(ringAC);ringAC=null;removeRing(ringGS);ringGS=null;
     map.once('moveend',function(){
-      // ★ Rings in the marker's own colour, like its pulse (see pulsec).
+      // ★ Rings in the marker's own colour, like its pulse (see .pglow).
       if(acKey&&acM[acKey])ringAC=placeRing(acM[acKey].getLatLng(),'ring-ac',acTone((acM[acKey]._d||{}).last_seen||0).rgb);
       if(gsid!=null&&gsM[gsid])ringGS=placeRing(gsM[gsid].getLatLng(),'ring-gs',gsTone(gsM[gsid]._sig).rgb);
     });
@@ -1430,10 +1450,11 @@ export default function MapOverlay(
   /* ★★ THE GPU MAP'S FILES FIRST: copied into <documents>/mapgl/ once (mapglPack.ts). Until that
    *  answers, no page is built; if it FAILS, the page is built for Leaflet — a map, never a hole. */
   const [glOk, setGlOk] = useState<boolean | null>(null);
+  const [glBase, setGlBase] = useState('mapgl/');
   useEffect(() => {
     if (!visible || glOk !== null) return;
     let dead = false;
-    ensureMapglPack().then(() => { if (!dead) setGlOk(true); })
+    ensureMapglPack().then((b) => { if (!dead) { setGlBase(b); setGlOk(true); } })
       .catch((e) => { console.warn('GPU map files unavailable, using Leaflet:', e); if (!dead) setGlOk(false); });
     return () => { dead = true; };
   }, [visible, glOk]);
@@ -1446,8 +1467,8 @@ export default function MapOverlay(
                       [textRgb, fp.controls.rgb]);
   const html = useMemo(
     () => (kind && glOk !== null ? buildHtml(kind, baseUrl, sessionUuid,
-      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled() }, ink) : ''),
-    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, ink],
+      { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase }, ink) : ''),
+    [kind, baseUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *

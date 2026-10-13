@@ -64,7 +64,7 @@ object VibeMapGL {
         if (!unpackStarted.compareAndSet(false, true)) return
         Thread({
             try {
-                val dir = unpack(app)
+                val dir = bundleDir(app)
                 bundleReady = dir.absolutePath
                 nativeSetBundleDir(dir.absolutePath)
             } catch (t: Throwable) {
@@ -77,6 +77,21 @@ object VibeMapGL {
     }
 
     private data class Entry(val asset: String, val dest: String, val bytes: Long)
+
+    /** ★ One unpack at a time: the app's own map and a server start can both ask at once, and unpack()
+     *  clears the directory before it copies — two of them interleaved would delete each other's files. */
+    private val unpackLock = Any()
+
+    /**
+     * ★★★ THE APP'S OWN GPU MAP READS THIS SAME BUNDLE (2026-10-13). The WebView map page (MapOverlay) used to
+     *  copy its files out of React Native's asset system (mapglPack.ts) — and on an Android RELEASE build an
+     *  embedded asset has no file path at all (expo-asset hands back a bare resource name; the copy threw
+     *  "URI is not absolute"), so every Android phone silently fell back to the Leaflet map: five full-screen
+     *  canvases, ~250 MB of GPU memory and ~20 fps on the Moto G35's HFDL map. The APK already carries the
+     *  identical files here for the server, so the app uses them: one copy on disk, not two.
+     *  Blocking (first run copies ~26 MB) — call off the UI thread. Returns the bundle directory.
+     */
+    fun bundleDir(ctx: Context): File = synchronized(unpackLock) { unpack(ctx.applicationContext) }
 
     private fun unpack(ctx: Context): File {
         val am = ctx.assets

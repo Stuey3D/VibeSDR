@@ -58,6 +58,16 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName() = "VibePowerModule"
 
+    /** The GPU map's files for the app's own map page, unpacked from the APK (VibeMapGL.bundleDir — the why lives
+     *  there). Resolves the directory's absolute path; the first call copies, later ones read one marker. */
+    @ReactMethod
+    fun mapglBundleDir(promise: Promise) {
+        Thread({
+            try { promise.resolve(VibeMapGL.bundleDir(reactApplicationContext).absolutePath) }
+            catch (t: Throwable) { promise.reject("mapgl_unpack", t.message, t) }
+        }, "vibe-mapgl-app").start()
+    }
+
     /** ★ True only in the memory diagnostics build (VibeDiag.kt) — App.tsx then logs the JS heap every 10 s. */
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun isDiagBuild(): Boolean = BuildConfig.VIBE_DIAG

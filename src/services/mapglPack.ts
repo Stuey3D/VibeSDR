@@ -16,6 +16,7 @@
  */
 import { Asset } from 'expo-asset';
 import { Directory, File, Paths } from 'expo-file-system';
+import { NativeModules, Platform } from 'react-native';
 import { MAPGL_BYTES, MAPGL_FILES } from '../generated/mapglAssets';
 
 const DIR = 'mapgl';
@@ -31,16 +32,32 @@ export function mapglDir(): Directory {
 }
 
 /**
- * Copies the bundled GPU-map files into <documents>/mapgl/ if they are not already there at this
- * version, and returns the directory URI (with a trailing slash). Throws if the copy cannot finish —
- * the caller falls back to the WebView map rather than drawing a map with holes in it.
+ * Puts the GPU-map files on disk and returns WHERE, as a path RELATIVE TO <documents>/ with a trailing slash
+ * — the map page (vibemap.html) lives in <documents>/ and loads them relative to itself. Throws if they
+ * cannot all be there; the caller then falls back to the Leaflet map rather than draw one with holes.
+ *
+ * ★★★ ANDROID READS THE APK'S OWN BUNDLE (2026-10-13). In a RELEASE build an embedded asset has no file
+ *  path — expo-asset's localUri is a bare resource name, and File.copy threw "URI is not absolute" — so
+ *  this copy never worked on Android and every phone drew the Leaflet fallback (five full-screen canvases,
+ *  ~250 MB of GPU memory, ~20 fps on the Moto G35's HFDL map). The APK already carries the same files as
+ *  plain assets for the phone-as-server map; VibeMapGL.bundleDir unpacks them (once, versioned) to
+ *  <documents>/mapgl-bundled/ and both use that one copy. iOS keeps the copy below — its localUri is a
+ *  real bundle path.
  */
 export async function ensureMapglPack(): Promise<string> {
+  if (Platform.OS === 'android') {
+    const mod = NativeModules.VibePowerModule as { mapglBundleDir?: () => Promise<string> } | undefined;
+    if (!mod?.mapglBundleDir) throw new Error('mapglPack: native bundle unavailable');
+    const abs = await mod.mapglBundleDir();
+    const name = abs.replace(/\/+$/, '').split('/').pop();
+    if (!name) throw new Error(`mapglPack: odd bundle path ${abs}`);
+    return name + '/';
+  }
   const dir = mapglDir();
   const marker = new File(dir, MARKER);
   const version = packVersion();
   try {
-    if (marker.exists && (await marker.text()).trim() === version) return dir.uri;
+    if (marker.exists && (await marker.text()).trim() === version) return DIR + '/';
   } catch {
     /* fall through and copy */
   }
@@ -59,5 +76,5 @@ export async function ensureMapglPack(): Promise<string> {
     await new File(asset.localUri).copy(new File(folder, name), { overwrite: true });
   }
   marker.write(version);
-  return dir.uri;
+  return DIR + '/';
 }
