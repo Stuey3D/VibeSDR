@@ -38,6 +38,9 @@ public:
     void resync() { lastCode = 0; firstChar = true; provisional_ = shift; }
     /** True while a figures shift kept across a re-sync has not yet been confirmed by a printing character. */
     bool provisional() const { return provisional_; }
+    /** ★ The character held back for the shift look-ahead (processChar prints each one a character late), printed NOW —
+     *  called just before a re-sync, which used to throw it away. 0 if nothing printable is held. See FskDecoder::processBit. */
+    char32_t flushHeld();
     bool inFigures() const { return shift; }
     /** ★ UNSHIFT ON SPACE (2026-10-04): back to letters after every space, as many amateur machines send. OFF by
      *  default — DWD sends whole groups of figures under ONE FIGS shift, which this would turn into letters. */

@@ -50,6 +50,19 @@ static std::string flush(Ita2& c) { return feed(c, { 4 }); }
 
 static void coder() {
     std::printf("── the coder: a kept figures shift after a re-sync ──\n");
+    {   // ★ the character held back for the shift look-ahead is PRINTED at a re-sync, not lost (Stuart's Pi 2, 2026-10-13)
+        Ita2 c("5N1"); bool fig = false;
+        const std::string out = feed(c, encode("CQ DE", fig));
+        ok(out == "CQ D", "the coder holds the last character back (\"" + out + "\")");
+        ok(c.flushHeld() == U'E', "flushHeld prints the held 'E' — a re-sync no longer drops it");
+        ok(c.flushHeld() == 0, "...once: nothing is held after it");
+        Ita2 f("5N1"); fig = false;
+        feed(f, encode("4583", fig));
+        ok(f.flushHeld() == U'3', "a held figure prints as a figure ('3')");
+        Ita2 s2("5N1"); fig = false;
+        feed(s2, encode("DE", fig)); feed(s2, { FIGS });
+        ok(s2.flushHeld() == 0, "a held shift code prints nothing");
+    }
     {   // the LTRS before "DDH7" lost in the fade
         Ita2 c("5N1"); bool fig = false;
         std::string out = feed(c, encode("DE DDK2 ", fig));

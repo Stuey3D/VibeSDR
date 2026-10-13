@@ -463,6 +463,14 @@ void FskDecoder::process(const int16_t* samples, int count) {
 // coder helper (ITA2 / ASCII — NAVTEX never reaches processBit)
 static inline bool ckCode(Ita2* i, uint16_t code) { return i && i->checkBits(code); }
 
+char32_t Ita2::flushHeld() {
+    if (ascii || firstChar) return 0;
+    char32_t out = 0;
+    if (lastCode != letters && lastCode != figures) out = codeToChar(lastCode, shift);
+    lastCode = 0; firstChar = true;
+    return out;
+}
+
 void FskDecoder::processBit(bool bit) {
     uint16_t bitVal = bit ? 1 : 0;
     bitsSeen_++;
@@ -480,6 +488,15 @@ void FskDecoder::processBit(bool bit) {
          *  the next printing character (Ita2::processChar, 2026-10-13). AUTO picks on frames (goodFrames / framingErrors),
          *  never on the text: its choice, timing, searches and states measured identical before and after. */
         if (ita2) {
+            /* ★★ PRINT THE HELD CHARACTER BEFORE THE RE-SYNC (Stuart, 2026-10-13, the Pi 2 on DDK2: "FREQUENCIES 453 KHZ 76 KHZ
+             *  0100.8 KHZ"). Ita2 prints each character one late — it holds it to see whether a shift follows — and a re-sync
+             *  cleared that held character unprinted, so EVERY fade cost one character that had been received GOOD (it
+             *  passed its frame check). Now it is printed first. Measured: synth DWD synop (10 dB, 20 dB fades, seeds 0-3)
+             *  whole 5-digit groups 66 → 70, letter words 123 → 126, digit groups printed as letters 13 → 14; Stuart's Pi 2
+             *  recording (2026-10-13 20:42) "CQ CQ CQE" → "CQ CQ CQ E", "10108" → "101008", "FQUENCIES" → "FRQUENCIES",
+             *  "DW" → "DDW"; the real DWD clip's RYRY lines cleaner, "FREIES" → "FREQIES". RTTY AUTO: decisions byte-identical
+             *  on the 10 signals (it judges frames, never the text). */
+            if (const char32_t held = ita2->flushHeld(); held && onChar) onChar(held);
             const bool shortLoss = lastGoodBit_ >= 0
                 && (double)(bitsSeen_ - lastGoodBit_) * bitSampleCount < 5.0 * sampleRate;
             if (shortLoss) ita2->resync(); else ita2->reset();
