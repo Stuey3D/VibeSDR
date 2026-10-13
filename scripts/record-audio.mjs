@@ -8,6 +8,7 @@
  *  only be on one frequency, so the honest version runs TWO receivers at once (the Pi on 105.4,
  *  the Sony on 104.2) and compares them. Sequential recordings cannot answer it: the programme
  *  moves on between them, so identical content would not look identical.
+ * ★ REC_MODE=usb (env) for anything not broadcast FM — e.g. RTTY off a weaker receiver (2026-10-13).
  * ★ Opus over the wire, decoded here — no server setting to change, so nobody's receiver is
  *   reconfigured to run a test on it.
  */
@@ -42,7 +43,7 @@ const STABLE_MS = 15000, MAX_WAIT_MS = 150000;
 let gainNow = null, gainSince = 0, settled = false, t0 = Date.now();
 spec.onopen = () => {
   spec.send(JSON.stringify({ type: 'zoom', frequency: FREQ, binBandwidth: 1200 }));
-  spec.send(JSON.stringify({ type: 'tune', frequency: FREQ, mode: 'wfm' }));
+  spec.send(JSON.stringify({ type: 'tune', frequency: FREQ, mode: process.env.REC_MODE || 'wfm' }));
   // ★ The IF filter under test — see the ghost investigation. Sent after the tune, because a
   //   bandwidth write re-applies librtlsdr's last centre (see applyAutoIf's note).
   if (bwTxt !== undefined) spec.send(JSON.stringify({ type: 'tunerbw', value: Number(bwTxt) }));
