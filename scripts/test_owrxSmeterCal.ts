@@ -7,7 +7,7 @@
  *   • a commented-out config, or one left at the defaults, is NOT a calibration (→ the S2 anchor);
  *   • nonsense figures are refused;
  *   • the floor tracker falls at once and rises only slowly, so a carrier cannot become the floor;
- *   • the noise floor lands on S2 (−115) and squelch converts both ways exactly.
+ *   • the noise floor lands on S3 (−109) and squelch converts both ways exactly.
  *
  * Run: node --no-warnings scripts/test_owrxSmeterCal.ts
  */
@@ -64,8 +64,8 @@ ok(ft.value! < -70, `a quieter floor is taken at once (${ft.value!.toFixed(1)})`
 
 // Maps.
 const a = anchorMap(-43);
-ok(a.toDisplay(-43) === OWRX_NOISE_ANCHOR_DBM && OWRX_NOISE_ANCHOR_DBM === -115, 'noise floor reads S2 (−115)');
-ok(a.toDisplay(-13) === -85, 'a signal 30 dB up reads 30 dB above S2');
+ok(a.toDisplay(-43) === OWRX_NOISE_ANCHOR_DBM && OWRX_NOISE_ANCHOR_DBM === -109, 'noise floor reads S3 (−109)');
+ok(a.toDisplay(-13) === -79, 'a signal 30 dB up reads 30 dB above S3');
 ok(a.toRaw(a.toDisplay(-50)) === -50, 'anchor squelch round-trips');
 const o = ownerMap({ cal: -34, lin: 1.2222222222222223 });
 ok(Math.abs(o.toRaw(o.toDisplay(-61.3)) + 61.3) < 1e-9, 'owner squelch round-trips');

@@ -15,8 +15,8 @@
  *      dBm = raw·linearity + offset, HF/VHF split at a 30 MHz centre frequency. 56 of 440 public servers
  *      load the plugin; ~30 carry real figures (HF typically −33…−55 dB, VHF −50…−82). Where the owner
  *      has measured, we show what their own page shows.
- *   2. OTHERWISE, ANCHOR THE NOISE AT S2 — the plugin's own "Auto S0" rule. The floor is learned from
- *      the quiet end of what arrives and placed at S2 (−115 dBm); a signal then reads its real height
+ *   2. OTHERWISE, ANCHOR THE NOISE AT S3 — the plugin's "Auto S0" rule (S2), one S-unit up. The floor is learned from
+ *      the quiet end of what arrives and placed at S3 (−109 dBm); a signal then reads its real height
  *      above the band's noise, which is all an S-reading can mean on an uncalibrated receiver.
  *
  * ✗ The plugin's IARU VHF scale (S9 = −93) is NOT followed: Stuart found it read too high on his own
@@ -25,8 +25,11 @@
  * Pure — no React Native — so scripts/test_owrxSmeterCal.ts runs it under plain node.
  */
 
-/** Where an uncalibrated noise floor is placed: S2 on the HF scale (S9 −73, 6 dB per S-unit). */
-export const OWRX_NOISE_ANCHOR_DBM = -73 - 7 * 6;
+/** Where an uncalibrated noise floor is placed: S3 on the HF scale (S9 −73, 6 dB per S-unit).
+ *  ★ S3, not the plugin's S2 (Stuart, 2026-10-13: "calibrate the S-Meter on OWRX a little higher as the auto squelch is
+ *    right at the bottom of the scale"). S3 is also what the calibrated Kiwis near him read on a quiet 40 m (Fordham:
+ *    S2–S3), so an OWRX server and a Kiwi now show the same band's noise alike. */
+export const OWRX_NOISE_ANCHOR_DBM = -73 - 6 * 6;
 
 export interface BandCal { cal: number; lin: number }
 export interface OwnerCal { hf: BandCal | null; vhf: BandCal | null }
@@ -54,7 +57,7 @@ function stripComments(js: string): string {
  * The owner's calibration from their init.js, or null when there is none worth using.
  * ★ Read as DATA, never evaluated: only numeric fields are taken, and only within sane limits — this is
  *   text off somebody else's server. A band left at the plugin defaults (offset 0, linearity 1) is
- *   "not calibrated" (null), so it falls through to the S2 anchor instead of reading raw as dBm.
+ *   "not calibrated" (null), so it falls through to the S3 anchor instead of reading raw as dBm.
  */
 export function parseOwnerCal(initJs: string): OwnerCal | null {
   const js = stripComments(initJs);
