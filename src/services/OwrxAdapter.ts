@@ -1464,7 +1464,7 @@ export class OwrxAdapter implements SDRBackend {
   // ── S-meter calibration (owrxSmeterCal.ts) ──────────────────────────────
   private floorKey(): string { return `${this.httpBase}|${this.sdrId}|${this.profileId}`; }
 
-  /** raw ↔ calibrated for the band in use: the owner's figures if they measured it, else the S2 anchor. */
+  /** raw ↔ calibrated for the band in use: the owner's figures if they measured it, else the S3 anchor. */
   private smeterMap(): SmeterMap {
     const vhf = (this.cfg?.centerFreq ?? this.freq) > 30e6;   // the plugin's own split
     const own = this.ownerCal ? (vhf ? this.ownerCal.vhf : this.ownerCal.hf) : null;
@@ -1507,7 +1507,7 @@ export class OwrxAdapter implements SDRBackend {
         this.dbg(`smeter: owner calibration hf=${JSON.stringify(this.ownerCal.hf)} vhf=${JSON.stringify(this.ownerCal.vhf)}`);
         this.reportSquelchIfMoved();
       }
-    } catch { /* no plugin, offline, or slow — the S2 anchor stands */ }
+    } catch { /* no plugin, offline, or slow — the S3 anchor stands */ }
   }
 
   /** Noise reduction. threshold ≤ 0 = off (slider fully open); higher = more NR.
