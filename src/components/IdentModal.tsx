@@ -15,6 +15,7 @@ import {
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
 import { sanitizeIdent } from '../services/kiwiIdent';
+import { useAndroidKeyboardHeight } from '../hooks/useAndroidKeyboardHeight';
 
 interface Props {
   visible:  boolean;
@@ -28,6 +29,8 @@ interface Props {
 /// remembered (see kiwiIdent), pre-filled here so re-opening it is confirm-or-edit, not retype.
 /// It is IDENTITY, not a chat name (KiwiSDR has no chat) — worded accordingly.
 export default function IdentModal({ visible, initial, onSubmit, onCancel }: Props) {
+  // ★ Android: pad above the keyboard ourselves — see useAndroidKeyboardHeight (the flicker).
+  const kbH = useAndroidKeyboardHeight();
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
   // ★★★ Transparency OFF: no full-screen dim (§10.2). ★ Silver / black: the brushed plate (§10.3).
@@ -52,8 +55,8 @@ export default function IdentModal({ visible, initial, onSubmit, onCancel }: Pro
       onRequestClose={onCancel}
     >
       <KeyboardAvoidingView
-        style={[styles.overlay, dim && styles.overlayDim]}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={[styles.overlay, dim && styles.overlayDim, kbH > 0 && { paddingBottom: 24 + kbH }]}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={[styles.box, metalFrame]}>
           <PopupPlate radius={16} />

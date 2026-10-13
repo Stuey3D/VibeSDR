@@ -14,6 +14,7 @@ import {
   PopupKey, PopupPlate, type PopupTokens,
 } from './PopupShell';
 import { useSurface } from '../contexts/FaceplateContext';
+import { useAndroidKeyboardHeight } from '../hooks/useAndroidKeyboardHeight';
 
 interface Props {
   visible:    boolean;
@@ -23,6 +24,8 @@ interface Props {
 }
 
 export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }: Props) {
+  // ★ Android: pad above the keyboard ourselves — see useAndroidKeyboardHeight (the flicker).
+  const kbH = useAndroidKeyboardHeight();
   const styles = usePopupStyles(makeStyles);
   const pt = usePopupTheme();
   // ★★★ Transparency OFF: no full-screen dim (§10.2). ★ Silver / black: the brushed plate (§10.3).
@@ -49,8 +52,8 @@ export default function PasswordModal({ visible, serverUrl, onSubmit, onCancel }
       onRequestClose={() => {/* intentionally not dismissible via system gesture */}}
     >
       <KeyboardAvoidingView
-        style={[styles.overlay, dim && styles.overlayDim]}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={[styles.overlay, dim && styles.overlayDim, kbH > 0 && { paddingBottom: 24 + kbH }]}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={[styles.box, metalFrame]}>
           <PopupPlate radius={16} />
