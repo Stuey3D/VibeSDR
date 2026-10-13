@@ -1,5 +1,5 @@
 // Portable Wi-Fi wording shared by the app and the web page (src/services/pocketConnection.ts).
-import { pocketHere, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText } from '../src/services/pocketConnection';
+import { pocketHere, pocketWifiShown, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText } from '../src/services/pocketConnection';
 
 let fails = 0;
 const ok = (c: boolean, what: string) => { console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fails++; };
@@ -8,6 +8,12 @@ console.log('test_pocket_connection');
 ok(!pocketHere(null) && !pocketHere({ pocket: true, local: false }) && !pocketHere({ pocket: false, local: true }),
    'hidden unless a pocket box AND on its own network (never through the tunnel)');
 ok(pocketHere({ pocket: true, local: true }), 'shown on a pocket box on its own network');
+// ── ★★★ the wired box (Stuart, 2026-10-13: "the ability to hide the wifi option when not in use") ──
+ok(pocketWifiShown({ pocket: true, local: true }), 'an older server (no hasWifi/wifiOff): the chooser is shown as before');
+ok(!pocketWifiShown({ pocket: true, local: true, hasWifi: false, wired: true }), 'no Wi-Fi on the box (a Pi 2): no chooser');
+ok(!pocketWifiShown({ pocket: true, local: true, hasWifi: true, wifiOff: true, wired: true }), 'Wi-Fi switched off: no chooser');
+ok(pocketWifiShown({ pocket: true, local: true, hasWifi: true, wifiOff: false, wired: true }), 'wired with Wi-Fi on: the chooser stays');
+ok(!pocketWifiShown({ pocket: true, local: false, hasWifi: true }), '…and never through the tunnel');
 
 const home = { pocket: true, local: true, mode: 'client', ssid: 'Meow!', apSsid: 'Pocket-SDR',
                link: { signal: -78, tx: 13, rx: 72, retry: 9 }, advice: 'weak' };

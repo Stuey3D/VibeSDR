@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState } from 'react-native';
 import {
-  pocketHere, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText,
+  pocketHere, pocketWifiShown, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText,
   POCKET_WEAK_TITLE, POCKET_WEAK_BODY, POCKET_WEAK_SNOOZE_MS, POCKET_TRY_SEC,
   type PocketConn, type PocketChoice, type PocketNet,
 } from '../services/pocketConnection';
@@ -90,7 +90,7 @@ export function usePocketWifi(base: string | null, onSwitched: () => void) {
 
   // ★ The pop-up while listening: once per weak spell; "Not now" quietens it for 30 minutes.
   useEffect(() => {
-    if (!conn) return;
+    if (!conn || !pocketWifiShown(conn)) return;
     const weak = conn.advice === 'weak' && !!conn.apSet && !pocketOnOwn(conn);
     if (!weak) { askedThisSpell.current = false; return; }
     if (askedThisSpell.current || switching.current || Date.now() < snoozedUntil.current) return;
@@ -101,8 +101,8 @@ export function usePocketWifi(base: string | null, onSwitched: () => void) {
     ]);
   }, [conn, choose]);
 
-  /** What the cog menu needs, or null to draw nothing. */
-  const menu = conn ? {
+  /** What the cog menu needs, or null to draw nothing — also with no Wi-Fi, or Wi-Fi switched off (a wired box). */
+  const menu = conn && pocketWifiShown(conn) ? {
     onOwn: pocketOnOwn(conn), canOwn: !!conn.apSet, line: pocketLinkLine(conn),
     weak: conn.advice === 'weak' && !pocketOnOwn(conn), onChoose: choose,
     // ★ The saved networks by name (Stuart, 2026-10-11); [] from an older server = the NETWORK key instead.

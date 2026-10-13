@@ -61,6 +61,9 @@ class FakeNM:
         self.door = True                            # the server's front door accepts connections
         self.ap_up_seen = []                        # (redirect loaded, state mode, door open) at each hotspot up
         self.state_path = None
+        self.wifi_dev = "wlan0"                     # None = no Wi-Fi chip (a Pi 2)
+        self.eth = None                             # None = no Ethernet port; else NM's state, e.g. "connected"
+        self.radio = True                           # nmcli radio wifi on/off
 
     # Shell interface
     def port_open(self, port):
@@ -80,7 +83,19 @@ class FakeNM:
         self.calls.append(list(args))
         a = args
         if a[:2] == ["nmcli", "-t"] and a[4:] == ["device"]:
-            return 0, "wlan0:wifi\nlo:loopback\n"
+            out = ""
+            if self.eth is not None:
+                out += "eth0:ethernet:%s\n" % self.eth
+            if self.wifi_dev:
+                out += "%s:wifi:%s\n" % (self.wifi_dev, ("connected" if self.active else "disconnected") if self.radio else "unavailable")
+            return 0, out + "lo:loopback:unmanaged\n"
+        if a[:3] == ["nmcli", "radio", "wifi"]:
+            self.radio = a[3] == "on"
+            if not self.radio:
+                self.active = ""
+            return 0, ""
+        if a[:2] == ["nmcli", "-g"] and a[2] == "IP4.ADDRESS" and a[-1] == "eth0":
+            return 0, "192.168.1.77/24\n"
         if a[:2] == ["nmcli", "-t"] and a[4:6] == ["connection", "show"]:
             return 0, "".join("%s:%s\n" % (esc(n), c["type"]) for n, c in self.conns.items())
         if a[:2] == ["nmcli", "-g"] and "connection" in a:
@@ -119,7 +134,7 @@ class FakeNM:
             name = a[5]
             c = self.conns.get(name)
             self.t += 5
-            if not c:
+            if not c or not self.radio:
                 return 10, ""
             if c["mode"] == "ap":
                 # ★ What a phone joining at THIS instant would find: the redirect loaded, the state saying hotspot.
@@ -685,6 +700,185 @@ def main():
         box3.own_wifi()
         ok(nm3.active == "vibe-net-1" and not box3.hold_own and "hotspot" in box3.last_error,
            "with no hotspot of its own set up, Own Wi-Fi is refused and says why")
+
+    # ── ★★★ ETHERNET AS A SECOND WAY IN (Stuart, 2026-10-13): "if a user installs it on a wired only pi such as the Pi2
+    #    the MDNS for vibeserversetup.local:48000 must be live the second it detects a network, and the user must have
+    #    the ability to hide the wifi option when not in use" — and "we are keeping the setup as it stands now". ──
+    with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+        vp.HOSTNAME_FILE = os.path.join(tmp, "hostname"); vp.HOSTS_FILE = os.path.join(tmp, "hosts")
+        vp.STATE_CONF = os.path.join(tmp, "pocket.conf")
+        vp.DNSMASQ_CONF = os.path.join(tmp, "dnsmasq", "captive.conf")
+        vp.AVAHI_CONF = os.path.join(tmp, "avahi-daemon.conf")
+        vp.ACTIVE_FILE = os.path.join(tmp, "pocket-active")
+        vp.RESET_FILES = ()
+
+        def hostfiles(name):
+            with open(vp.HOSTNAME_FILE, "w") as f: f.write(name + "\n")
+            with open(vp.HOSTS_FILE, "w") as f: f.write("127.0.0.1\tlocalhost\n127.0.1.1\t%s\n" % name)
+
+        def renamer(nm):
+            real = nm.run
+            def run(args, timeout=40, secret=False):
+                if args[:2] == ["hostnamectl", "set-hostname"]:
+                    nm.calls.append(list(args))
+                    with open(vp.HOSTNAME_FILE, "w") as f: f.write(args[2] + "\n")
+                    return 0, ""
+                return real(args, timeout, secret)
+            nm.run = run
+
+        def state_of(box):
+            box.write_state()
+            return json.load(open(box.state_path))
+
+        def fresh(wifi="wlan0", eth="connected", conf=None):
+            nm = FakeNM()
+            nm.wifi_dev, nm.eth = wifi, eth
+            c = dict(vp.DEFAULTS); c.update(conf or {})
+            box = vp.Box(nm, c, state_path=os.path.join(tmp, "state-%d.json" % id(nm)))
+            nm.state_path = box.state_path
+            renamer(nm)
+            return nm, box
+
+        def joins(nm):
+            return sum(1 for c in nm.calls if c[3:5] == ["connection", "up"])
+
+        # ── a Pi 2: no Wi-Fi chip at all ──
+        hostfiles("vibepocket")                    # (a box whose name is not the setup name yet)
+        nm, box = fresh(wifi=None, eth="connected")
+        vp.boot(box, configured=False)
+        ok(["hostnamectl", "set-hostname", "vibeserversetup"] in nm.calls and box.dev is None,
+           "Pi 2 (no Wi-Fi chip): the setup name is set at once — nothing waits for, or gives up on, a Wi-Fi device")
+        i_name = nm.calls.index(["hostnamectl", "set-hostname", "vibeserversetup"])
+        i_dev = next(i for i, c in enumerate(nm.calls) if c[:2] == ["nmcli", "-t"] and c[-1] == "device")
+        ok(i_name < i_dev, "…and the name comes BEFORE the device list is even read")
+        run_for(nm, box, 600)
+        st = state_of(box)
+        ok(box.mode == "wired" and st["mode"] == "wired" and st["hasWifi"] is False and st["wired"] is True
+           and st["wiredIp"] == "192.168.1.77",
+           "…keeps running as a WIRED box: mode wired, hasWifi false, wired true, its Ethernet address in the state")
+        ok(joins(nm) == 0 and not any(c[:3] == ["nmcli", "connection", "add"] for c in nm.calls),
+           "…and never tries to raise a hotspot or join anything")
+        box.internet = "full"
+        ok(state_of(box)["internet"] == "full", "…its internet (over Ethernet) reaches the server, so the tunnel can run")
+        nm.eth = "unavailable"                    # the cable pulled
+        run_for(nm, box, 10)
+        ok(state_of(box)["wired"] is False and box.mode == "wired", "cable pulled: wired false, still running")
+        nm.wifi_dev = "wlan1"                     # ★ a USB Wi-Fi dongle plugged in
+        nm.eth = "connected"
+        run_for(nm, box, int(vp.DEFAULTS["BOOT_GRACE_SEC"]) + 90)
+        ok(box.dev == "wlan1" and nm.active == vp.SETUP_NAME and box.mode == "setup-ap",
+           "a USB Wi-Fi dongle appears: managed from then on (nothing saved → the setup hotspot, as ever)")
+
+        # ── a Pi 3 wired in, its Wi-Fi chip present, nothing saved: SETUP STAYS AS IT IS (Stuart, 2026-10-13) ──
+        nm, box = fresh(eth="connected")
+        box.dev = "wlan0"
+        run_for(nm, box, 30)
+        st = state_of(box)
+        ok(nm.active == vp.SETUP_NAME and st["mode"] == "setup-ap" and st["wired"] is True and st["hasWifi"] is True,
+           "Pi 3 on Ethernet with nothing saved: the open setup hotspot still comes up (unchanged) — and the state says wired")
+
+        # ── Wi-Fi off, refused without a wired link ──
+        nm, box = fresh(eth=None)
+        box.dev = "wlan0"
+        run_for(nm, box, 30)
+        ok(box.wifi_switch(True) is False and "wired" in box.last_error and nm.radio and nm.active == vp.SETUP_NAME,
+           "Wi-Fi off with NO wired link: refused, says why, the hotspot stays")
+        nm.eth = "disconnected"
+        ok(box.wifi_switch(True) is False and nm.radio, "…an Ethernet port with no link is not a wired link either")
+        ok(not os.path.exists(vp.STATE_CONF) or "WIFI_OFF=1" not in open(vp.STATE_CONF).read(), "…and nothing is saved")
+
+        # ── Wi-Fi off with a wired link ──
+        nm.eth = "connected"
+        ok(box.wifi_switch(True) is True and ["nmcli", "radio", "wifi", "off"] in nm.calls and not nm.radio,
+           "Wi-Fi off on a wired box: the radio is switched off")
+        ok(nm.active == "" and box.mode == "wifi-off", "…the setup hotspot is gone; mode wifi-off")
+        ok("WIFI_OFF=1" in open(vp.STATE_CONF).read(), "…and the choice is saved (it survives a power cycle)")
+        ups = joins(nm)
+        run_for(nm, box, 3600)
+        st = state_of(box)
+        ok(joins(nm) == ups and nm.active == "" and not nm.radio,
+           "…an hour on, nothing saved: NO hotspot raised, nothing joined, the radio still off")
+        ok(st["mode"] == "wifi-off" and st["wifiOff"] is True and st["wired"] is True, "…and the state says so")
+        ok(box.wifi_switch(False) is True and nm.radio and "WIFI_OFF=0" in open(vp.STATE_CONF).read(),
+           "Wi-Fi on: the radio comes back and the setting is saved")
+        run_for(nm, box, int(vp.DEFAULTS["BOOT_GRACE_SEC"]) + 90)
+        ok(nm.active == vp.SETUP_NAME and box.mode == "setup-ap", "…and ordinary management resumes (nothing saved → setup hotspot)")
+
+        # ── Wi-Fi off with a saved network: a power cycle keeps it off; switching on rejoins in order ──
+        nm, box = fresh(eth="connected", conf={"WIFI_OFF": "1"})
+        box.dev = "wlan0"
+        nm.conns["vibe-net-1"] = {"type": "802-11-wireless", "ssid": "Home", "psk": "homepass1", "prio": 30,
+                                  "hidden": False, "mode": "infrastructure"}
+        nm.air = {"Home": (60, "homepass1")}
+        vp.setup_once(box)
+        ok(["nmcli", "radio", "wifi", "on"] not in nm.calls, "boot with Wi-Fi off: the start-up does not switch the radio on")
+        run_for(nm, box, 600)
+        ok(not nm.radio and nm.active == "" and box.mode == "wifi-off", "…10 min on, wired: the radio stays off, Home is not joined")
+        box.wifi_switch(False)
+        run_for(nm, box, int(vp.DEFAULTS["BOOT_GRACE_SEC"]) + 90)
+        ok(nm.active == "vibe-net-1" and box.mode == "client", "switched on: joins Home (network 1)")
+
+        # ── ★★★ OFF MEANS OFF (Stuart, 2026-10-13: "disable wifi fully with the warning that if ethernet ever disconnects
+        #    they will loose access until it is reconnected") — no automatic switch-back ──
+        ok("WIFI_OFF_SAFETY_SEC" not in vp.DEFAULTS, "there is no automatic switch-back timer any more")
+        nm, box = fresh(eth="connected", conf={"WIFI_OFF": "1"})
+        box.dev = "wlan0"
+        run_for(nm, box, 60)
+        nm.eth = "unavailable"                    # the cable is pulled
+        run_for(nm, box, 3600)
+        ok(not nm.radio and box.wifi_off and box.mode == "wifi-off" and nm.active == "" and joins(nm) == 0,
+           "Wi-Fi off and the cable pulled: an hour on, Wi-Fi is STILL off — no radio, no hotspot, nothing joined")
+        ok(box.conf.get("WIFI_OFF") == "1" and not any(c[:4] == ["nmcli", "radio", "wifi", "on"] for c in nm.calls),
+           "…the owner's choice is untouched by a lost cable, and the radio is never switched on")
+        st = state_of(box)
+        ok(st["wifiOff"] is True and st["wired"] is False, "…and the state says so: wifiOff true, wired false")
+        nm.eth = "connected"                      # the cable is back
+        run_for(nm, box, 30)
+        ok(not nm.radio and state_of(box)["wired"] is True, "cable back: reachable on it again, Wi-Fi still off")
+        nm, box = fresh(eth="disconnected", conf={"WIFI_OFF": "1"})
+        box.dev = "wlan0"
+        run_for(nm, box, 3600)
+        ok(not nm.radio and box.wifi_off, "booted with Wi-Fi off and no cable at all: Wi-Fi stays off (the owner was warned)")
+
+        # ── ★★★ NO HOME NETWORK REQUIRED (Stuart, 2026-10-13: "make sure that a captive hotspot is setup whenever wifi is
+        #    present, but dont force a connection to a home network") ──
+        nm, box = fresh(eth=None)
+        box.dev = "wlan0"
+        nm.air = {"Neighbour": (80, "zzzzzzzz")}
+        run_for(nm, box, 30)
+        ok(nm.active == vp.SETUP_NAME, "(first boot: the open setup hotspot)")
+        box.apply(req([], switch=True))
+        box.leave_hotspot_and_try("the owner asked to switch now")
+        run_for(nm, box, 30)
+        ok(nm.active == vp.AP_NAME and box.mode == "fallback-ap" and nm.conns[vp.AP_NAME]["psk"] == "pocketpass",
+           "set up with ZERO home networks and only its own hotspot: the box runs its SECURED hotspot")
+        ok(box.last_error == "", "…and reports no problem (nothing was asked of it that it could not do)")
+        downs0 = sum(1 for c in nm.calls if c[:3] == ["nmcli", "connection", "down"])
+        run_for(nm, box, 3 * 3600)
+        ok(nm.active == vp.AP_NAME and sum(1 for c in nm.calls if c[:3] == ["nmcli", "connection", "down"]) == downs0,
+           "…3 h on, nobody connected: still its own hotspot, never dropped to look for a home network")
+        nm2, box2 = fresh(eth=None)
+        box2.dev = "wlan0"
+        nm2.conns = json.loads(json.dumps(nm.conns))
+        run_for(nm2, box2, 120)
+        ok(nm2.active == vp.AP_NAME and "vibe-net-1" not in nm2.conns, "…and after a power cycle: its own secured hotspot again, never the open one")
+
+        # ── an Ethernet port NetworkManager does not manage still counts, if it has an address ──
+        nm, box = fresh(eth="unmanaged")
+        real = nm.run
+        nm.run = lambda a, timeout=40, secret=False: \
+            (0, "2: eth0    inet 192.168.1.88/24 brd 192.168.1.255 scope global eth0\n") if a[:2] == ["ip", "-4"] \
+            else real(a, timeout, secret)
+        box.refresh_links()
+        ok(box.wired and box.wired_ip == "192.168.1.88", "an unmanaged Ethernet port with an address is a wired link")
+
+        # ── avahi must answer on EVERY interface ──
+        with open(vp.AVAHI_CONF, "w") as f:
+            f.write("[server]\nuse-ipv4=yes\n#allow-interfaces=eth0\n[publish]\n")
+        ok(vp.avahi_limits() == [], "avahi's stock config (allow-interfaces commented out): no limit reported")
+        with open(vp.AVAHI_CONF, "w") as f:
+            f.write("[server]\nallow-interfaces=wlan0\n[reflector]\n")
+        ok(vp.avahi_limits() == ["allow-interfaces=wlan0"], "an allow-interfaces=wlan0 line is reported (Ethernet would be deaf)")
 
     # ── THE CPU GOVERNOR FOLLOWS THE RADIO (battery box, Stuart 2026-10-10) ──
     with tempfile.TemporaryDirectory() as tmp:

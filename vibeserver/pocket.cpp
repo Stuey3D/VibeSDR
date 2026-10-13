@@ -369,6 +369,9 @@ State readState() {
     if (const JV* v = j.get("tryLeft"); v && v->t == JV::Num) st.tryLeft = (int)v->n;
     st.ssid = j.str("ssid");
     if (const JV* ap = j.get("ap")) st.apSsid = ap->str("ssid");
+    if (const JV* v = j.get("hasWifi"); v && v->t == JV::Bool) st.hasWifi = v->b;   // absent = an older service: Wi-Fi
+    st.wifiOff = j.flag("wifiOff");
+    st.wired = j.flag("wired");
     if (const JV* l = j.get("link"); l && l->t == JV::Obj) {
         auto num = [&](const char* k) { const JV* v = l->get(k); return v && v->t == JV::Num ? v->n : -1.0; };
         st.hasLink = true;
@@ -377,6 +380,14 @@ State readState() {
     st.json = body;
     while (!st.json.empty() && (st.json.back() == '\n' || st.json.back() == ' ')) st.json.pop_back();
     return st;
+}
+
+bool viaHotspot(const std::string& peerIn) {
+    std::string ip = lower(peerIn);
+    if (ip.rfind("::ffff:", 0) == 0) ip = ip.substr(7);
+    unsigned a = 0, b = 0, c = 0, d = 0; char tail = 0;
+    if (std::sscanf(ip.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4) return false;
+    return a == 10 && b == 42 && c == 0 && d <= 255;                 // ★ kApAddress's /24, pinned by the root service
 }
 
 std::vector<std::string> savedSsids(const State& s) {
@@ -463,6 +474,11 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
                  + ",\"configured\":" + ((h.configured && h.configured()) ? "true" : "false")
                  + ",\"mode\":\"" + jesc(st.mode) + "\",\"apSet\":" + (st.apSet ? "true" : "false")
                  + ",\"apAddress\":\"" + kApAddress + "\",\"port\":" + std::to_string(port)
+                 // ★★★ WIRED AS A SECOND WAY IN (2026-10-13): the page stays Wi-Fi-first over the hotspot, as it always has;
+                 //     reached over a wired link it need not be. Booleans only — no address leaves through here.
+                 + ",\"hasWifi\":" + (st.hasWifi ? "true" : "false") + ",\"wifiOff\":" + (st.wifiOff ? "true" : "false")
+                 + ",\"wired\":" + (st.wired ? "true" : "false")
+                 + ",\"viaHotspot\":" + (!rq.viaTunnel && viaHotspot(rq.peer) ? "true" : "false")
                  + ",\"hostname\":\"" + jesc(h.hostname ? h.hostname() : std::string()) + "\"}");
             return true;
         }
@@ -530,8 +546,11 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
                 for (size_t i = 0; i < saved.size() && i < 3; i++)
                     nets += std::string(i ? "," : "") + "{\"rank\":" + std::to_string(i + 1) + ",\"ssid\":\"" + jesc(saved[i]) + "\"}";
                 nets += "]";
+                // ★ hasWifi / wifiOff: the menu's chooser is HIDDEN on a box with no radio or with it switched off.
                 json(rp, 200, "OK", std::string("{\"pocket\":true,\"local\":true,\"mode\":\"") + jesc(st.mode)
-                     + "\",\"hold\":" + (st.hold ? "true" : "false") + ",\"apSet\":" + (st.apSet ? "true" : "false")
+                     + "\",\"hasWifi\":" + (st.hasWifi ? "true" : "false") + ",\"wifiOff\":" + (st.wifiOff ? "true" : "false")
+                     + ",\"wired\":" + (st.wired ? "true" : "false")
+                     + ",\"hold\":" + (st.hold ? "true" : "false") + ",\"apSet\":" + (st.apSet ? "true" : "false")
                      + ",\"nets\":" + nets + ",\"holdNet\":\"" + jesc(st.holdNet) + "\",\"trying\":\"" + jesc(st.trying)
                      + "\",\"tryLeft\":" + std::to_string(st.tryLeft)
                      + ",\"ssid\":\"" + jesc(st.ssid) + "\",\"apSsid\":\"" + jesc(st.apSsid) + "\",\"link\":" + link
@@ -539,6 +558,7 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
                 return true;
             }
             if (!local) { fail(rp, 403, "Forbidden", "the box's connection can only be changed from its own network"); return true; }
+            if (!st.hasWifi || st.wifiOff) { fail(rp, 409, "Conflict", st.hasWifi ? "Wi-Fi is switched off on this box" : "this box has no Wi-Fi"); return true; }
             JV j;
             const bool parsed = parseJson(rq.body, j);
             const std::string to = parsed ? j.str("to") : std::string();
@@ -570,6 +590,7 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
             return true;
         }
         if (what == "wifi" && isPost) {
+            if (st.present && !st.hasWifi) { fail(rp, 409, "Conflict", "this box has no Wi-Fi to set up"); return true; }
             WifiRequest w; std::string err;
             if (!parseWifiRequest(rq.body, savedSsids(st), st.apSet, w, err)) { fail(rp, 400, "Bad Request", err); return true; }
             if (!writePrivate(paths().inbox, inboxJson(w), err)) { fail(rp, 500, "Internal Server Error", err); return true; }
@@ -577,6 +598,23 @@ bool handle(const Req& rq, Reply& rp, const Hooks& h) {
             std::printf("VibeServer: pocket Wi-Fi settings saved — %zu network(s), hotspot \"%s\"%s\n",
                         w.nets.size(), w.apSsid.c_str(), w.switchNow ? ", switching now" : "");
             json(rp, 200, "OK", std::string("{\"ok\":true,\"switching\":") + (w.switchNow ? "true" : "false") + "}");
+            return true;
+        }
+        /* ★★★ WI-FI OFF / ON (Stuart, 2026-10-13: "the user must have the ability to hide the wifi option when not in use").
+         *  Body {"off":true|false}. Off is refused here unless the root service reports a wired link — and refused AGAIN
+         *  there, on the link as it is at that instant (this state can be a few seconds old): a box with no cable and no
+         *  radio has no way in. ONCE OFF IT STAYS OFF, cable or no cable (Stuart: "disable wifi fully with the warning that if
+         *  ethernet ever disconnects they will loose access until it is reconnected") — the page says so before it asks. */
+        if (what == "radio" && isPost) {
+            JV j;
+            const JV* v = parseJson(rq.body, j) && j.t == JV::Obj ? j.get("off") : nullptr;
+            if (!v || v->t != JV::Bool) { fail(rp, 400, "Bad Request", "off must be true or false"); return true; }
+            if (!st.present || !st.hasWifi) { fail(rp, 409, "Conflict", "this box has no Wi-Fi"); return true; }
+            if (v->b && !st.wired) { fail(rp, 409, "Conflict", "Wi-Fi can only be switched off while this box is wired — plug in an Ethernet cable first"); return true; }
+            std::string err;
+            if (!writePrivate(paths().kick, std::string(v->b ? "wifi-off" : "wifi-on") + "\n", err)) { fail(rp, 500, "Internal Server Error", err); return true; }
+            std::printf("VibeServer: pocket — the owner switched Wi-Fi %s\n", v->b ? "off" : "on");
+            json(rp, 200, "OK", std::string("{\"ok\":true,\"off\":") + (v->b ? "true" : "false") + "}");
             return true;
         }
         if ((what == "switch" || what == "scan") && isPost) {

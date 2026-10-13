@@ -33,7 +33,7 @@ struct Paths {
     std::string marker   = "/etc/vibeserver-pocket/enabled";         // root's; written by the image
     std::string state    = "/run/vibeserver-pocket/state.json";      // root writes, we read (0640 :vibeserver)
     std::string inbox    = "/var/lib/vibeserver/pocket-wifi.request"; // we write (0600), root reads + deletes
-    std::string kick     = "/var/lib/vibeserver/pocket-kick.request"; // one word: switch | scan | scan-force
+    std::string kick     = "/var/lib/vibeserver/pocket-kick.request"; // one word: switch | scan | scan-force | wifi-off | wifi-on …
     std::string portFile = "/var/lib/vibeserver/pocket-port";         // our front door's port, for the :80 redirect
 };
 Paths& paths();
@@ -97,7 +97,7 @@ bool writePrivate(const std::string& path, const std::string& content, std::stri
 // ── State, as the root service last reported it ─────────────────────────────────────────────
 struct State {
     bool present = false;        // the file exists and parsed
-    std::string mode;            // setup-ap | fallback-ap | client | connecting | off
+    std::string mode;            // setup-ap | fallback-ap | client | connecting | off | wired | wifi-off
     bool apSet = false;          // a secured fallback hotspot is configured
     bool internet = false;       // NetworkManager says connectivity is FULL (the tunnel may run)
     bool hold = false;           // ★ the owner chose Own Wi-Fi (the root service holds it while the radio is used)
@@ -107,10 +107,18 @@ struct State {
     bool hasLink = false;        // joined to a network, with the link's figures below (-1 = not reported)
     double signal = -1, tx = -1, rx = -1, retry = -1;
     std::string ssid, apSsid;
+    // ★★★ THE WIRED SIDE (Stuart, 2026-10-13: Ethernet as a SECOND way in — a Pi 2 has no Wi-Fi chip; a Pi 3 on a cable
+    //     may have its Wi-Fi switched off). A state file from before these fields reads as the old world: Wi-Fi, on.
+    bool hasWifi = true;         // a Wi-Fi radio exists
+    bool wifiOff = false;        // the owner switched it off (radio down, no hotspot)
+    bool wired = false;          // an Ethernet link with an address is up — the box is reachable there
     std::string json;            // the whole document (no passwords in it, by construction)
 };
 State readState();
 inline bool apMode(const State& s) { return s.mode == "setup-ap" || s.mode == "fallback-ap"; }
+/** ★ The peer reached us THROUGH THE BOX'S OWN HOTSPOT (10.42.0.0/24, NM shared mode). The setup page stays Wi-Fi-first
+ *  there exactly as before; anywhere else on a wired box it may start with the receiver (the secondary, wired setup). */
+bool viaHotspot(const std::string& peer);
 /** The saved networks' SSIDs, in order, from the state document. */
 std::vector<std::string> savedSsids(const State& s);
 

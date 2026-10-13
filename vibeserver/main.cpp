@@ -2154,7 +2154,9 @@ int main(int argc, char** argv) {
              *  missing state file must never block a save. */
             if (wantRestart && vibepocket::enabled()) {
                 const auto ps = vibepocket::readState();
-                if (ps.present && !ps.apSet) {
+                // ★★ Not on a box with NO Wi-Fi (a Pi 2 on Ethernet, 2026-10-13): there is no hotspot to set, and
+                //    demanding one would leave it unable ever to finish setup.
+                if (ps.present && ps.hasWifi && !ps.apSet) {
                     err = "set this box's own hotspot name and password first (the Wi-Fi card) — "
                           "it is where the box goes when none of your networks is in range";
                     return false;
@@ -3285,7 +3287,9 @@ int main(int argc, char** argv) {
                 LocalSdrShim::setCaptiveActive(ap);
                 // ★★ The tunnel follows NetworkManager's own verdict ("full" connectivity), as the root
                 //    service reports it — never on a hotspot, and paused the moment the internet goes.
-                vibedir::setInternet(!ap && ps.internet);
+                //  ★★ …unless the box is ALSO wired (2026-10-13): then the hotspot is not its only link, and the
+                //     root service reports NM's verdict for the wired upstream (a Pi 3 on its hotspot, cable in).
+                vibedir::setInternet((!ap || ps.wired) && ps.internet);
             };
             pocketPoll();
             std::thread([pocketPoll] {

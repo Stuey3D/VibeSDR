@@ -15,6 +15,10 @@ export interface PocketConn {
   nets?: PocketNet[];          // the saved networks, in order (an older server sends none: NETWORK | OWN WI-FI)
   holdNet?: string;            // a network chosen in the menu, held while the radio is in use
   trying?: string; tryLeft?: number;   // the network chosen in the menu that the box is still looking for
+  // ★★★ THE WIRED BOX (Stuart, 2026-10-13). An older server sends none of these: Wi-Fi present and on.
+  hasWifi?: boolean;           // false = no Wi-Fi radio at all (a Pi 2 on Ethernet)
+  wifiOff?: boolean;           // the owner switched Wi-Fi off (the box is wired)
+  wired?: boolean;             // an Ethernet link is up
 }
 /** A choice in the menu: the box's own Wi-Fi, the saved order (older servers), or one saved network. */
 export type PocketChoice = 'own' | 'network' | PocketNet;
@@ -27,6 +31,12 @@ export const pocketOnNet = (c: PocketConn, n: PocketNet): boolean => c.mode === 
 
 /** Draw the choice at all? Only on a pocket box, on its own network. */
 export const pocketHere = (c: PocketConn | null | undefined): boolean => !!(c && c.pocket && c.local);
+
+/** ★★★ Draw the NETWORK CHOOSER? Not on a box with no Wi-Fi, nor one whose owner switched it off (Stuart, 2026-10-13:
+ *  "the user must have the ability to hide the wifi option when not in use") — a chooser whose every press is refused
+ *  is a dead control. Still polled, so it comes back the moment Wi-Fi is switched on again. */
+export const pocketWifiShown = (c: PocketConn | null | undefined): boolean =>
+  pocketHere(c) && c!.hasWifi !== false && c!.wifiOff !== true;
 
 /** Which side is lit. */
 export const pocketOnOwn = (c: PocketConn): boolean => c.mode === 'fallback-ap' || c.mode === 'setup-ap';

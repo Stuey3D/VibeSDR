@@ -199,6 +199,13 @@ int main() {
         ok(apKeep.code == 400, "keeping a hotspot password that was never set is refused");
         Reply ctry = post("{\"networks\":[],\"ap\":{\"ssid\":\"P\",\"psk\":\"12345678\"},\"country\":\"gb\"}");
         ok(ctry.code == 400, "country must be two capitals");
+        // ★★★ NO HOME NETWORK REQUIRED (Stuart, 2026-10-13: "dont force a connection to a home network") — only the box's
+        //     own secured hotspot. The inbox is written; the next request below overwrites it.
+        Reply ownOnly = post("{\"networks\":[],\"ap\":{\"ssid\":\"Pocket\",\"psk\":\"hotspot1\"},\"switch\":true}");
+        ok(ownOnly.code == 200 && slurp(paths().inbox).find("\"networks\":[]") != std::string::npos,
+           "ZERO home networks and only the box's own hotspot: accepted");
+        Reply noNetNoAp = post("{\"networks\":[]}");
+        ok(noNetNoAp.code == 400, "…but never without its own hotspot (whenever Wi-Fi is present, the hotspot is set up)");
         Reply junk = post("{\"networks\":[{\"ssid\":\"a\"]}");
         ok(junk.code == 400, "malformed JSON is refused");
 
@@ -296,6 +303,74 @@ int main() {
         put(paths().state, "{\"mode\":\"client\",\"ap\":{\"set\":false,\"ssid\":\"\"},\"saved\":[{\"ssid\":\"Home\"}]}\n");
         Reply rno;
         ok(handle(p, rno, h) && rno.code == 409, "Own Wi-Fi with no hotspot of its own set up: refused (409)");
+    }
+
+    // ── ★★★ ETHERNET AS A SECOND WAY IN (Stuart, 2026-10-13): Wi-Fi off on a wired box; a Pi 2 with no Wi-Fi at all ──
+    {
+        ok(viaHotspot("10.42.0.5") && viaHotspot("::ffff:10.42.0.17"), "a peer on 10.42.0.x came through the box's hotspot");
+        ok(!viaHotspot("192.168.1.20") && !viaHotspot("10.42.1.5") && !viaHotspot("fe80::1"), "…anything else did not");
+
+        // An OLDER root service (no hasWifi field) reads as Wi-Fi present and on.
+        put(paths().state, "{\"mode\":\"setup-ap\",\"ap\":{\"set\":false}}\n");
+        const State old = readState();
+        ok(old.hasWifi && !old.wifiOff && !old.wired, "a state file without the wired fields reads as Wi-Fi, on, not wired");
+
+        Req hello; hello.method = "GET"; hello.path = "/vibeserver/pocket/hello"; hello.peer = "10.42.0.5";
+        put(paths().state, "{\"mode\":\"setup-ap\",\"ap\":{\"set\":false},\"hasWifi\":true,\"wifiOff\":false,\"wired\":true}\n");
+        Reply rh;
+        ok(handle(hello, rh, h) && rh.body.find("\"wired\":true") != std::string::npos
+           && rh.body.find("\"viaHotspot\":true") != std::string::npos && rh.body.find("\"hasWifi\":true") != std::string::npos,
+           "hello over the hotspot on a wired Pi 3: wired true, viaHotspot TRUE (the page stays Wi-Fi-first there)");
+        Req helloEth = hello; helloEth.peer = "192.168.1.20";
+        Reply rhe;
+        ok(handle(helloEth, rhe, h) && rhe.body.find("\"viaHotspot\":false") != std::string::npos,
+           "…the same box reached over Ethernet: viaHotspot false (the wired, secondary setup)");
+        Req helloTun = helloEth; helloTun.peer = "10.42.0.5"; helloTun.viaTunnel = true;
+        Reply rht;
+        ok(handle(helloTun, rht, h) && rht.body.find("\"viaHotspot\":false") != std::string::npos, "…never 'via hotspot' through the tunnel");
+
+        Req r; r.method = "POST"; r.path = "/vibeserver/pocket/radio"; r.peer = "192.168.1.20"; r.body = "{\"off\":true}";
+        Reply r0;
+        ok(handle(r, r0, h) && r0.code == 401, "Wi-Fi off needs the admin proof");
+        r.adminOk = true;
+        auto radio = [&](const std::string& body) { Req x = r; x.body = body; Reply y; handle(x, y, h); return y; };
+        ::unlink(paths().kick.c_str());
+        Reply on = radio("{\"off\":true}");
+        ok(on.code == 200 && slurp(paths().kick) == "wifi-off\n", "wired: Wi-Fi off writes the kick word wifi-off");
+        ok(radio("{\"off\":false}").code == 200 && slurp(paths().kick) == "wifi-on\n", "…and on writes wifi-on");
+        for (const char* b : {"{}", "{\"off\":1}", "{\"off\":\"true\"}", "[true]", "nonsense"}) {
+            ok(radio(b).code == 400, (std::string("…refused: ") + b).c_str());
+        }
+        put(paths().state, "{\"mode\":\"setup-ap\",\"ap\":{\"set\":false},\"hasWifi\":true,\"wifiOff\":false,\"wired\":false}\n");
+        ::unlink(paths().kick.c_str());
+        Reply nowire = radio("{\"off\":true}");
+        ok(nowire.code == 409 && nowire.body.find("Ethernet") != std::string::npos && slurp(paths().kick).empty(),
+           "NOT wired: Wi-Fi off is refused (409, says to plug in Ethernet) and no kick is written — a box must not strand itself");
+        ok(radio("{\"off\":false}").code == 200, "…switching it ON is always allowed");
+
+        // Wi-Fi off: the listener's network chooser is hidden, and refused if asked anyway.
+        put(paths().state, "{\"mode\":\"wifi-off\",\"ap\":{\"set\":true,\"ssid\":\"Pocket\"},\"saved\":[{\"ssid\":\"Home\"}],"
+                           "\"hasWifi\":true,\"wifiOff\":true,\"wired\":true}\n");
+        Req g; g.method = "GET"; g.path = "/vibeserver/pocket/connection"; g.peer = "192.168.1.20";
+        Reply rg;
+        ok(handle(g, rg, h) && rg.body.find("\"wifiOff\":true") != std::string::npos && rg.body.find("\"mode\":\"wifi-off\"") != std::string::npos,
+           "GET connection with Wi-Fi off says wifiOff (the menu hides the chooser)");
+        Req pc; pc.method = "POST"; pc.path = "/vibeserver/pocket/connection"; pc.peer = "192.168.1.20"; pc.body = "{\"to\":\"own\"}";
+        Reply rpc;
+        ok(handle(pc, rpc, h) && rpc.code == 409, "…and a choice of network is refused (409) while it is off");
+
+        // A Pi 2: no Wi-Fi chip.
+        put(paths().state, "{\"mode\":\"wired\",\"ap\":{\"set\":false},\"saved\":[],\"hasWifi\":false,\"wifiOff\":false,\"wired\":true}\n");
+        Reply rh2;
+        ok(handle(helloEth, rh2, h) && rh2.body.find("\"hasWifi\":false") != std::string::npos
+           && rh2.body.find("\"mode\":\"wired\"") != std::string::npos, "Pi 2: hello says hasWifi false, mode wired");
+        Reply rg2;
+        ok(handle(g, rg2, h) && rg2.body.find("\"hasWifi\":false") != std::string::npos, "…GET connection says so (no chooser)");
+        ok(radio("{\"off\":true}").code == 409, "…Wi-Fi off: 409, there is none");
+        Req ws; ws.method = "POST"; ws.path = "/vibeserver/pocket/wifi"; ws.peer = "192.168.1.20"; ws.adminOk = true;
+        ws.body = "{\"networks\":[],\"ap\":{\"ssid\":\"Pocket\",\"psk\":\"hotspot1\"}}";
+        Reply rws;
+        ok(handle(ws, rws, h) && rws.code == 409, "…and Wi-Fi settings are refused (409): nothing to set up");
     }
 
     std::string cleanup = "rm -rf '" + dir + "'";

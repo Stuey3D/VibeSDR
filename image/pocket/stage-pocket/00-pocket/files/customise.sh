@@ -28,7 +28,8 @@ say "customising a $ARCH root ($(. /etc/os-release; echo "$PRETTY_NAME"))"
 #   iw: station count + the no-drop scan. python3: the root Wi-Fi service (Lite ships it).
 apt-get update
 dpkg -s network-manager >/dev/null 2>&1 || { say "!! NetworkManager is not on this image — refusing (Lite has had it since Bookworm)"; exit 1; }
-apt-get install -y --no-install-recommends dnsmasq-base nftables iw rfkill python3 ca-certificates curl gnupg
+#   avahi-daemon: VibeServerSetup.local / vibepocket.local (Lite ships it — named so an image without it fails here).
+apt-get install -y --no-install-recommends dnsmasq-base nftables iw rfkill python3 ca-certificates curl gnupg avahi-daemon
 
 # ── 2. The VibeSDR apt repository, so the box updates like every other VibeServer ─────────────
 install -d -m 0755 /usr/share/keyrings
@@ -128,6 +129,15 @@ systemctl mask udisks2.service 2>/dev/null || true
 echo "$HOSTNAME_NEW" > /etc/hostname
 sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$HOSTNAME_NEW/" /etc/hosts
 grep -q "^127\.0\.1\.1" /etc/hosts || echo -e "127.0.1.1\t$HOSTNAME_NEW" >> /etc/hosts
+# ★★★ THE NAME ON EVERY NETWORK (Stuart, 2026-10-13: "the mdns must be present whenever any network connection is
+#     present" — a Pi 2 has only Ethernet; a Pi 3 may be wired in with its Wi-Fi chip still there). avahi answers on
+#     every interface and announces a new address by itself the moment one appears — unless allow-interfaces /
+#     deny-interfaces says otherwise. Any such line is switched off here; vibeserver-pocket logs one that comes back.
+if [ -f /etc/avahi/avahi-daemon.conf ]; then
+  sed -i -E 's/^[[:space:]]*((allow|deny)-interfaces[[:space:]]*=.*)$/#\1  # off: VibeServer pocket answers on every interface/' \
+    /etc/avahi/avahi-daemon.conf
+fi
+systemctl enable avahi-daemon.service 2>/dev/null || true
 # ★ The Pi's Wi-Fi is soft-blocked until a country is set. raspi-config's non-interactive form does
 #   both halves (regulatory domain + unblock); the service also unblocks at start.
 if command -v raspi-config >/dev/null; then raspi-config nonint do_wifi_country "$COUNTRY" || true; fi

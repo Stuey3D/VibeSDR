@@ -7,7 +7,7 @@
  *   network", nothing is drawn and nothing is polled. On a pocket box: one small GET every 30 s while the page is visible.
  */
 import {
-  pocketHere, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText,
+  pocketHere, pocketWifiShown, pocketOnOwn, pocketOnNet, pocketLinkLine, pocketSwitchText,
   POCKET_WEAK_TITLE, POCKET_WEAK_BODY, POCKET_WEAK_SNOOZE_MS, POCKET_TRY_SEC,
   type PocketConn, type PocketChoice,
 } from '../../../src/services/pocketConnection';
@@ -30,6 +30,9 @@ async function fetchConn(): Promise<PocketConn | null> {
 function render(): void {
   const row = $('pocketConn');
   if (!row || !conn) return;
+  // ★★★ No Wi-Fi on the box, or the owner switched it off (a wired box, 2026-10-13): no chooser — every press would be
+  //     refused. Still polled, so the row comes back the moment Wi-Fi is switched on again.
+  if (!pocketWifiShown(conn)) { row.hidden = true; $('pocketWeak')?.remove(); return; }
   row.hidden = false;
   const own = pocketOnOwn(conn);
   // ★ The saved networks BY NAME (Stuart, 2026-10-11: "Stuey3D's iPhone | Meow! | Own WiFi"); an older server sends

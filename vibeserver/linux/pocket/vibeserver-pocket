@@ -5,6 +5,8 @@
 # radio and no screen. This service decides, all the time, what that radio is doing:
 #
 #     no saved network ............................ OPEN setup hotspot "VibeServer"  (first boot only)
+#     no saved network, own hotspot set up ........ the owner's SECURED hotspot, for ever — a home network is never
+#                                                   required (Stuart, 2026-10-13: "dont force a connection to a home network")
 #     saved networks, one in range ................ join it — network 1 before 2 before 3, ALWAYS
 #     saved networks, none in range ............... the owner's SECURED fallback hotspot (WPA2)
 #     on the fallback hotspot, nobody connected ... look again every RESCAN_SEC, rejoin when one returns
@@ -12,6 +14,18 @@
 #                                                   using the radio, and never blind to a network it cannot see
 #     a listener picks a network in the menu ...... look for it for TRY_SEC (a phone's hotspot being switched on),
 #                                                   join it the moment it appears, else stay / go back where it was
+#     no Wi-Fi chip at all (a Pi 2 on Ethernet) ... "wired": the name, the governor and the state, and a watch for a
+#                                                   Wi-Fi device appearing later (a USB dongle), managed from then on
+#     the owner switched Wi-Fi OFF (wired box) .... "wifi-off": radio off, no hotspot, and it STAYS off — refused unless
+#                                                   a wired link is up at that moment; never switched back on by itself
+#
+# ★★★ ETHERNET IS A SECOND WAY IN, NOT A REPLACEMENT (Stuart, 2026-10-13): "VibeServer Portable is very much wifi
+#     based however if a user installs it on a wired only pi such as the Pi2 the MDNS for vibeserversetup.local:48000
+#     must be live the second it detects a network, and the user must have the ability to hide the wifi option when not
+#     in use" · "the mdns must be present whenever any network connection is present" · "we are keeping the setup as it
+#     stands now as it works, but we are adding this as a secondary setup method". So the Wi-Fi state machine above is
+#     UNCHANGED — a Pi 3 with nothing saved still raises the open setup hotspot, wired or not — and the setup name is
+#     answered on EVERY interface (avahi's default; see avahi_limits()) from the first turn of the loop.
 #
 # The full design, the boot state machine and the on-device checklist: docs/POCKET-VIBESERVER-PI3A.md.
 #
@@ -92,6 +106,8 @@ RUN_HOST     = "vibepocket"
 RETIRE_SEC   = 180           # ★ how long the setup name outlives a setup finished in this run (see sync_hostname)
 HOSTNAME_FILE = "/etc/hostname"
 HOSTS_FILE    = "/etc/hosts"
+# ★★ avahi publishes <hostname>.local on every interface UNLESS its config says otherwise — checked at start (avahi_limits).
+AVAHI_CONF    = "/etc/avahi/avahi-daemon.conf"
 
 DEFAULTS = {
     "SETUP_SSID": "VibeServer",     # Stuart: the first-boot hotspot is called "VibeServer"
@@ -112,6 +128,13 @@ DEFAULTS = {
     #     listened for this long it goes back to a saved network in range. Held in MEMORY only — a power cycle always
     #     comes back on the main Wi-Fi.
     "RELEASE_SEC": "1800",
+    # ★★★ WI-FI OFF (Stuart, 2026-10-13: "the ability to hide the wifi option when not in use"). "1" = the owner switched
+    #     the radio off on a wired box. Written to STATE_CONF by the owner's choice, so it survives a power cycle.
+    #  ★★★ FULLY OFF AND IT STAYS OFF (Stuart, 2026-10-13: "The user can opt to disable wifi fully with the warning that if
+    #      ethernet ever disconnects they will loose access until it is reconnected"). There was a timer that switched it
+    #      back on after 2 minutes without a cable — removed on his word. The page warns before it is switched off; the
+    #      only refusal left is switching it off with no wired link AT THAT MOMENT.
+    "WIFI_OFF": "0",
 }
 
 
@@ -316,6 +339,13 @@ class Box:
         self._names, self._names_at, self._fields = [], -1e9, {}
         self._ip = ("", "")
         self.internet = "unknown"     # NetworkManager's connectivity verdict, from NetWatch (events)
+        # ★★ THE WIRED SIDE (2026-10-13). An Ethernet device NM reports connected (or one NM does not manage that has an
+        #    address) — the box is reachable there, by its .local name, whatever the Wi-Fi is doing.
+        self.wired = False
+        self.wired_dev, self.wired_ip = "", ""
+        self.wifi_off = str(conf.get("WIFI_OFF", "0")).strip() == "1"
+        self.radio_off_done = False   # `nmcli radio wifi off` already sent this run
+        self._was_wired_off = True    # (for one log line when the cable goes while Wi-Fi is off)
 
     def ci(self, k):
         try:
@@ -334,13 +364,72 @@ class Box:
         return rc
 
     # ── NetworkManager reads ──
-    def wifi_device(self):
-        rc, out = self.sh.run(["nmcli", "-t", "-f", "DEVICE,TYPE", "device"])
+    def devices(self):
+        """[(device, type, state)] as NM lists them — ONE call that answers both "is there a Wi-Fi radio" and "is there a
+        wired link". None when nmcli failed: a failed call is never read as "no devices" (that would drop the radio)."""
+        rc, out = self.sh.run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"])
+        if rc != 0:
+            return None
+        devs = []
         for line in out.splitlines():
             f = terse_split(line)
-            if len(f) >= 2 and f[1] == "wifi":
-                return f[0]
-        return None
+            if len(f) >= 2:
+                devs.append((f[0], f[1], f[2] if len(f) > 2 else ""))
+        return devs
+
+    def wifi_device(self):
+        return next((d for d, t, _ in (self.devices() or []) if t == "wifi"), None)
+
+    def dev_ip4(self, dev):
+        rc, out = self.sh.run(["nmcli", "-g", "IP4.ADDRESS", "device", "show", dev])
+        first = out.strip().split("|")[0].strip() if rc == 0 and out.strip() else ""
+        return first.split("/")[0]
+
+    def unmanaged_ip4(self, dev):
+        """★ An Ethernet port NM does not manage (an owner's own dhcpcd or static setup) is still a way in if it has an
+        address. `ip`, not nmcli — NM knows nothing about it."""
+        rc, out = self.sh.run(["ip", "-4", "-o", "addr", "show", "dev", dev, "scope", "global"], timeout=10)
+        m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", out or "") if rc == 0 else None
+        return m.group(1) if m else ""
+
+    def refresh_links(self):
+        """★★★ What this box can be reached on, each turn: the Wi-Fi radio (which may appear late — NM lists the onboard
+        chip a few seconds into boot, and a USB dongle whenever it is plugged in — or not at all, on a Pi 2) and a wired
+        link. Never a reason to stop: a box with no Wi-Fi is a wired box, not a broken one."""
+        devs = self.devices()
+        if devs is None:
+            return
+        wifi = next((d for d, t, _ in devs if t == "wifi"), None)
+        if wifi and not self.dev:
+            self.dev = wifi
+            # ★ NM's own autoconnect gets its BOOT_GRACE_SEC from the moment the radio exists, not from our start.
+            self.boot_at, self.connecting_since = self.sh.now(), None
+            self.radio_off_done = False
+            log("managing %s%s" % (wifi, " (Wi-Fi is switched off by the owner)" if self.wifi_off else ""))
+        elif self.dev and not wifi:
+            log("the Wi-Fi device %s went away — wired only until one appears" % self.dev)
+            self.dev, self.cur, self.st, self.link, self.want = None, "", 0, None, None
+        wired, ip = "", ""
+        for d, t, s in devs:
+            if t != "ethernet":
+                continue
+            if s.startswith("connected"):
+                wired = d
+                break
+            if s.startswith("unmanaged"):
+                ip = self.unmanaged_ip4(d)
+                if ip:
+                    wired = d
+                    break
+        if wired != self.wired_dev:
+            log("wired link %s" % (("up on %s" % wired) if wired else "down"))
+            self.wired_dev, self.wired_ip = wired, ip
+        if wired and not self.wired_ip:
+            # ★ Asked on the change (and until it answers), not every turn — shown, not decided on.
+            self.wired_ip = ip or self.dev_ip4(wired)
+        if not wired:
+            self.wired_ip = ""
+        self.wired = bool(wired)
 
     def connection_names(self):
         if self.sh.now() - self._names_at > 60:
@@ -394,6 +483,9 @@ class Box:
     def read_active(self):
         """Sets self.cur / self.st from NM: the active connection's name and the device state
         (100 = connected, 40-90 = on its way, 30 = disconnected, 20 = unavailable)."""
+        if not self.dev:
+            self.cur, self.st = "", 0             # ★ no radio (a Pi 2): nothing to ask, never None in an argv
+            return "", 0
         rc, out = self.sh.run(["nmcli", "-t", "-f", "GENERAL.STATE,GENERAL.CONNECTION", "device", "show", self.dev])
         st, conn = 0, ""
         for line in out.splitlines():
@@ -409,6 +501,8 @@ class Box:
         # ★ Asked only when the connection changes — it is shown, not decided on.
         if self._ip[0] == self.cur:
             return self._ip[1]
+        if not self.dev:
+            return ""
         rc, out = self.sh.run(["nmcli", "-g", "IP4.ADDRESS", "device", "show", self.dev])
         first = out.strip().split("|")[0].strip() if out.strip() else ""
         ip = first.split("/")[0]
@@ -494,6 +588,53 @@ class Box:
                 self.down(self.cur)
             self.read_active()
             self.raise_hotspot("the owner chose Own Wi-Fi")
+
+    def radio_off(self):
+        self.sh.run(["nmcli", "radio", "wifi", "off"], timeout=15)
+        self.radio_off_done = True
+        self.cur, self.st, self.link, self.clients = "", 0, None, 0
+
+    def wifi_switch(self, off, why=""):
+        """★★★ THE OWNER'S WI-FI OFF / ON (Stuart, 2026-10-13). Off: no hotspot, no network, the radio powered down, and
+        it STAYS down whatever happens to the cable — allowed only while a wired link is up at the moment it is asked
+        (switching off a box's only way in is never a choice to offer). On: back to the ordinary state machine, exactly
+        as at boot (NM gets its grace to autoconnect first). Returns True if done."""
+        if off:
+            self.refresh_links()                  # ★ decide on the link as it is NOW, not as it was 5 s ago
+            if not self.dev:
+                self.last_error = "this box has no Wi-Fi to switch off"
+                return False
+            if not self.wired:
+                self.last_error = "Wi-Fi can only be switched off while this box is wired — plug in an Ethernet cable first"
+                log("Wi-Fi off refused: no wired link (the box would have no way in)")
+                return False
+            self.persist_wifi_off(True)
+            self.want, self.hold_own, self.hold_net = None, False, ""
+            self.read_active()
+            if self.cur:
+                self.down(self.cur)
+            self.radio_off()
+            self.mode, self.since, self.last_error = "wifi-off", int(time.time()), ""
+            log("Wi-Fi switched off by the owner — the box is reachable on its wired link (%s)" % self.wired_dev)
+            return True
+        self.persist_wifi_off(False)
+        self.radio_off_done = False
+        self.sh.run(["rfkill", "unblock", "wifi"], timeout=10)
+        self.sh.run(["nmcli", "radio", "wifi", "on"], timeout=15)
+        # ★ As at boot: NM's own autoconnect first, then the saved networks in order, then a hotspot.
+        self.boot_at, self.connecting_since, self.next_try = self.sh.now(), None, 0
+        self.mode, self.since = ("connecting" if self.dev else "wired"), int(time.time())
+        log("Wi-Fi switched on — " + (why or "the owner turned it on"))
+        return True
+
+    def persist_wifi_off(self, off):
+        self.wifi_off = off
+        self.conf["WIFI_OFF"] = "1" if off else "0"
+        try:
+            write_conf_value("WIFI_OFF", "1" if off else "0", path=STATE_CONF)
+        except OSError:
+            # ★ The settings partition is missing (settingsSaved: false says so): held for this run only.
+            log("could not save the Wi-Fi %s setting — it lasts until the next restart" % ("off" if off else "on"))
 
     def network_again(self, why):
         """Back to the saved networks, in order (the owner's choice, or the hold expiring)."""
@@ -798,9 +939,11 @@ class Box:
             self.read_active()
         if self.try_networks():
             return True
-        if not self.last_error:
+        # ★★ NO HOME NETWORK IS REQUIRED (Stuart, 2026-10-13): with none saved the box is simply its own hotspot —
+        #    nothing went wrong, so nothing is reported as a problem.
+        if not self.last_error and self.saved():
             self.last_error = "none of the saved networks is in range"
-        return self.raise_hotspot("no saved network in range")
+        return self.raise_hotspot("no saved network in range" if self.saved() else "no home network saved — its own hotspot")
 
     # ── the request inbox ──
     def apply(self, req):
@@ -897,6 +1040,26 @@ class Box:
     # ── one turn of the wheel ──
     def tick(self):
         now = self.sh.now()
+        self.refresh_links()
+        if not self.dev:
+            # ★★★ A WIRED BOX (a Pi 2 has no Wi-Fi chip). Nothing to manage; the name, the governor and the state go on
+            #     in main_loop, and refresh_links() picks up a radio the moment one appears.
+            self.mode, self.cur, self.st, self.clients, self.link = "wired", "", 0, 0, None
+            return
+        if self.wifi_off:
+            # ★★★ OFF MEANS OFF (Stuart, 2026-10-13) — a lost cable is NOT a reason to switch it back on; the owner was
+            #     warned that the box is out of reach until the cable is back.
+            if self.wired != self._was_wired_off:
+                self._was_wired_off = self.wired
+                if not self.wired:
+                    log("Wi-Fi is off and the wired link is down — the box is out of reach until the cable is back")
+            if not self.radio_off_done:
+                self.read_active()
+                if self.cur:
+                    self.down(self.cur)
+                self.radio_off()
+            self.mode, self.clients, self.link = "wifi-off", 0, None
+            return
         saved = self.saved()
         self.read_active()
         if self.want:
@@ -1001,6 +1164,7 @@ class Box:
 
     def write_state(self):
         saved = self.saved() if self.dev else []
+        on_wifi_net = self.mode == "client"
         ap_set = self.have(AP_NAME) if self.dev else False
         doc = {
             "v": 1, "mode": self.mode, "since": self.since,
@@ -1026,7 +1190,14 @@ class Box:
             "link": self.link if self.mode == "client" else None,        # signal / rates / retries
             # ★★ "full" = NM proved real internet. The server starts the tunnel ONLY on "full" — never
             #    on a hotspot, which has no upstream by definition.
-            "internet": self.internet if self.mode == "client" else "none",
+            #  ★★ …or over a WIRED link, which has an upstream whatever the radio is doing (a Pi 2; a Pi 3 on its hotspot
+            #     with Ethernet in) — NM's verdict covers every device.
+            "internet": self.internet if on_wifi_net or self.wired else "none",
+            # ★★★ THE WIRED SIDE (2026-10-13): what the page and the app need to stop being Wi-Fi-first on a wired box.
+            "hasWifi": bool(self.dev),             # a Wi-Fi radio exists (a Pi 2 has none)
+            "wifiOff": self.wifi_off,              # the owner switched it off (the radio is down, no hotspot)
+            "wired": self.wired,                   # an Ethernet link with an address — the box is reachable there
+            "wiredIp": self.wired_ip,
             # ★★★ False when the settings partition is not in use (vibeserver-pocket-data could neither find
             #     nor make it): setup would be held in RAM and lost at the next restart. The page says so.
             "settingsSaved": not os.path.exists(VOLATILE_FILE),
@@ -1254,12 +1425,36 @@ def quiet_hardware(sh, which=shutil.which):
         sh.run(["rfkill", "block", "bluetooth"], timeout=10)
 
 
+def avahi_limits(path=None):
+    """★★★ THE SETUP NAME ON EVERY NETWORK (Stuart, 2026-10-13: "the mdns must be present whenever any network connection
+    is present"). avahi answers on every interface and announces a new address the moment one appears (it follows the
+    kernel's netlink events) — UNLESS its config restricts it. The image strips any allow-interfaces / deny-interfaces
+    line (customise.sh); this reports one that came back (an owner's edit, a package's new default), so a journal says
+    why vibeserversetup.local answers on Wi-Fi and not on Ethernet. Returns the active restricting lines."""
+    out, section = [], ""
+    try:
+        with open(path or AVAHI_CONF) as f:
+            for line in f:
+                t = line.strip()
+                if t.startswith("["):
+                    section = t.lower()
+                elif section == "[server]" and re.match(r"(allow|deny)-interfaces\s*=\s*\S", t):
+                    out.append(t)
+    except OSError:
+        pass
+    return out
+
+
 def setup_once(box):
     sh = box.sh
     quiet_hardware(sh)
-    # ★ The Pi's Wi-Fi is soft-blocked until a country is set; the image sets one, this makes sure.
-    sh.run(["rfkill", "unblock", "wifi"], timeout=10)
-    sh.run(["nmcli", "radio", "wifi", "on"], timeout=10)
+    for line in avahi_limits():
+        log("!! avahi is limited to some interfaces (%s) — the .local name will not answer on every network" % line)
+    # ★ The Pi's Wi-Fi is soft-blocked until a country is set; the image sets one, this makes sure. Not when the owner
+    #   switched it off — tick() keeps it off (and brings it back if the box has no other way in).
+    if not box.wifi_off:
+        sh.run(["rfkill", "unblock", "wifi"], timeout=10)
+        sh.run(["nmcli", "radio", "wifi", "on"], timeout=10)
     # ★★ THE DNS HIJACK — every name resolves to the box, but ONLY on NM's shared (hotspot)
     #    connections: this directory is read by the dnsmasq NM starts for a hotspot and by nothing
     #    else, so the box's own lookups as a client are untouched.
@@ -1287,30 +1482,35 @@ def setup_once(box):
                 pass
 
 
+def boot(box, configured=None):
+    """The first things a starting service does, IN THIS ORDER — the name, then the links, then the radio's set-up.
+    Never waits for a Wi-Fi device and never gives up for want of one (tested: test_vibeserver_pocket.py)."""
+    box.sync_hostname(server_configured() if configured is None else configured)
+    box.refresh_links()
+    if not box.dev:
+        log("no Wi-Fi device (yet) — answering on any wired link; a radio that appears later is managed then")
+    setup_once(box)
+
+
 def main_loop():
     if not os.path.exists(MARKER):
         log("not a pocket image (%s missing) — nothing to do" % MARKER)
         return 0
     sh = Shell()
     box = Box(sh, load_conf())
-    for _ in range(60):                       # NM can take a while to list the radio at boot
-        box.dev = box.wifi_device()
-        if box.dev:
-            break
-        sh.sleep(2)
-    if not box.dev:
-        log("no Wi-Fi device found — nothing to manage")
-        box.mode = "off"
-        write_state_file(box.state_path, {"v": 1, "mode": "off", "lastError": "no Wi-Fi device"})
-        return 1
-    log("managing %s" % box.dev)
-    setup_once(box)
+    # ★★★ THE NAME BEFORE ANYTHING ELSE (Stuart, 2026-10-13: "the MDNS for vibeserversetup.local:48000 must be live the
+    #     second it detects a network"). This used to wait up to 120 s for a Wi-Fi device and then EXIT without one — so
+    #     on a Pi 2 the hostname was never synced (vibepocket.local never answered after setup) and no state was ever
+    #     written. Now the name is set first, and a box without Wi-Fi runs on as a wired box (Box.tick: "wired").
+    boot(box)
     uid = vibeserver_uid()
     net = NetWatch(sh)
     net.start()
     gov = GovernorFollower()
     was_mode = None
     last_tick = 0
+    # ★ What the kick words below need: a radio, switched on.
+    radio_words = {"switch", "own", "network", "net-1", "net-2", "net-3", "scan", "scan-force"}
     while True:
         data = read_request_file(INBOX, uid)
         if data is not None:
@@ -1322,16 +1522,26 @@ def main_loop():
             if req is None:
                 box.last_error = "settings refused: " + err
                 log(box.last_error)
+            elif not box.dev:
+                box.last_error = "settings refused: this box has no Wi-Fi"
+                log(box.last_error)
             else:
                 box.apply(req)
-                if req["switch"]:
+                # ★ Saved while Wi-Fi is off: kept for when it is switched on, never a reason to switch it on.
+                if req["switch"] and not box.wifi_off:
                     box.leave_hotspot_and_try("the owner asked to switch now")
             last_tick = 0
         kick = read_request_file(KICK, uid, limit=32)
         if kick is not None:
             word = re.sub(r"[^a-z0-9-]", "", kick.decode("ascii", "replace"))
             cur, _ = box.read_active()
-            if word == "switch":
+            if word in radio_words and (not box.dev or box.wifi_off):
+                box.last_error = "Wi-Fi is off" if box.dev else "this box has no Wi-Fi"
+            elif word == "wifi-off":
+                box.wifi_switch(True)
+            elif word == "wifi-on":
+                box.wifi_switch(False)
+            elif word == "switch":
                 box.leave_hotspot_and_try("the owner asked to switch now")
             elif word == "own":
                 box.own_wifi()
@@ -1356,10 +1566,10 @@ def main_loop():
         box.internet = net.poll()
         if sh.now() - last_tick >= 5:
             last_tick = sh.now()
-            if box.mode != was_mode:
+            if (box.mode, box.wired) != was_mode:
                 # ★ A new connection: ask once now — the change event may have come before we looked.
-                was_mode = box.mode
-                if box.mode == "client":
+                was_mode = (box.mode, box.wired)
+                if box.mode == "client" or box.wired:
                     net.query()
                     box.internet = net.state
             box.sync_hostname(server_configured())

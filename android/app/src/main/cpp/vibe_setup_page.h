@@ -275,6 +275,25 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <p class="note wifiFirstOnly" style="margin:0 0 10px">Part 1 of 2: your Wi-Fi. The radios and everything
          else are set up in part 2, once the box is on your network.</p>
       <h2>Wi-Fi</h2>
+      <!-- ★★★ THE WIRED BOX (Stuart, 2026-10-13: "the user must have the ability to hide the wifi option when not in
+           use"). One line, drawn from the root service's state: a box with no Wi-Fi says so; a box with Wi-Fi switched
+           off is ONLY this line ("Wi-Fi is off — Turn on"); a wired box with Wi-Fi on offers to switch it off — never
+           to a page reached over the box's own hotspot, which switching off would take away mid-sentence.
+           ★★★ OFF IS FULLY OFF AND STAYS OFF (Stuart, 2026-10-13: "with the warning that if ethernet ever disconnects they
+           will loose access until it is reconnected"). So switching off is TWO presses: the first shows the warning and
+           the real button (no confirm() — this page may be in the iPhone's captive sheet, where it does nothing). -->
+      <div id="wifiRadio" class="hide">
+        <p class="why" id="wifiRadioText" style="margin-bottom:10px;white-space:pre-line"></p>
+        <button type="button" class="ghost" id="wifiRadioBtn"></button>
+        <span class="note" id="wifiRadioMsg" style="margin-left:10px"></span>
+        <div class="note hide" id="wifiOffConfirm" style="margin-top:10px;border-color:#c0392b">
+          <p style="margin:0 0 10px"><b>Before you turn Wi-Fi off:</b> this box will then only be reachable through its
+             Ethernet cable. If the cable is ever unplugged or the wired network goes down, you will lose access to this
+             box until it is reconnected. Wi-Fi does not come back on by itself.</p>
+          <button type="button" id="wifiOffYes">Turn Wi-Fi off</button>
+          <button type="button" class="ghost" id="wifiOffNo" style="margin-left:8px">Keep Wi-Fi on</button>
+        </div>
+      </div>
       <!-- ★★ ONCE SET UP, ONE LINE (Stuart, 2026-10-10: "collapses into the button so its not a large block
            that has to be scrolled every time"). Open in full only on the first-boot setup hotspot, while
            nothing is saved yet, or when the owner asks to change it. -->
@@ -297,7 +316,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <button type="button" id="wifiDirtySave" style="padding:6px 12px;font-size:13px">Save Wi-Fi now</button>
       </div>
       <p class="why">This box joins the first of these networks it can find &mdash; always 1 before 2 before 3.
-         If none is in range it starts its own hotspot, below, so your phone can still reach it.</p>
+         If none is in range it starts its own hotspot, below, so your phone can still reach it.
+         Your own networks are optional: with none, the box simply runs its own hotspot.</p>
       <div class="note" id="wifiNow"></div>
       <div id="wifiNets"></div>
       <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:6px">
@@ -5578,7 +5598,7 @@ let WIFI_BASELINE = "";     // ★ the Wi-Fi card as last loaded — anything di
     const j = await r.json();
     if (!j || j.pocket !== true) return;
     POCKET = j;
-    document.body.classList.toggle("wifiFirst", j.mode === "setup-ap");
+    document.body.classList.toggle("wifiFirst", pocketWifiFirst(j.mode, j.wired));
     if (j.claimable) {
       $("claimCard").classList.remove("hide");
       $("signinCard").classList.add("hide");
@@ -5618,6 +5638,15 @@ $("claimBtn").onclick = async () => {
 };
 $("claimPass2").addEventListener("keydown", e => { if (e.key === "Enter") $("claimBtn").click(); });
 
+/** ★★★ WI-FI FIRST ONLY WHERE IT ALWAYS WAS (Stuart, 2026-10-13: "we are keeping the setup as it stands now as it works,
+ *  but we are adding this as a secondary setup method"). On the open setup hotspot the page is Wi-Fi-only, exactly as
+ *  before. Reached over a WIRED link (hello's viaHotspot false, the box reporting wired) the owner is already on the
+ *  box's network, so the whole page is there: the Wi-Fi card is one card among the rest, not a gate. An older server
+ *  (no viaHotspot field) keeps the old rule. */
+function pocketWifiFirst(mode, wired) {
+  return mode === "setup-ap" && !(wired === true && POCKET && POCKET.viaHotspot === false);
+}
+
 function wifiPskOk(p) {
   return (p.length >= 8 && p.length <= 63 && /^[\x20-\x7e]*$/.test(p)) || /^[0-9a-fA-F]{64}$/.test(p);
 }
@@ -5651,7 +5680,7 @@ async function wifiLoad() {
 
 /** Show or hide the "Unsaved Wi-Fi changes" line (top of the card) and say so in the bottom bar too. */
 function wifiDirtyRender() {
-  const d = wifiDirty() && WIFI && WIFI.mode !== "setup-ap";
+  const d = wifiDirty() && WIFI && !pocketWifiFirst(WIFI.mode, WIFI.wired);
   $("wifiDirtyNote").classList.toggle("hide", !d);
   if (d && !$("barMsg").textContent) $("barMsg").textContent = "Unsaved Wi-Fi changes are saved with this too.";
   if (!d && $("barMsg").textContent === "Unsaved Wi-Fi changes are saved with this too.") $("barMsg").textContent = "";
@@ -5669,9 +5698,12 @@ function wifiNowText() {
   const w = WIFI || {}, m = w.mode;
   const seen = w.scanAt ? " Network list from " + new Date(w.scanAt * 1000).toLocaleTimeString() + "." : "";
   if (m === "setup-ap") return "Right now the box is its own open setup hotspot, “" + (w.setupSsid || "VibeServer") + "”." + seen;
-  if (m === "fallback-ap") return "Right now the box is its own hotspot “" + ((w.ap && w.ap.ssid) || "") + "” — none of your networks is in range." + seen;
+  if (m === "fallback-ap") return "Right now the box is its own hotspot “" + ((w.ap && w.ap.ssid) || "") + "”"
+    + ((w.saved || []).length ? " — none of your networks is in range." : ".") + seen;
   if (m === "client") return "Connected to “" + (w.ssid || "?") + "”" + (w.ip ? " at " + w.ip : "") + ".";
   if (m === "connecting") return "Joining a network…";
+  if (m === "wifi-off") return "Wi-Fi is off.";
+  if (m === "wired") return "This box has no Wi-Fi.";
   return "";
 }
 
@@ -5679,13 +5711,15 @@ function wifiNowText() {
 function wifiCollapseRender() {
   const w = WIFI || {};
   const saved = w.saved || [];
-  const done = w.mode !== "setup-ap" && saved.length > 0 && !!(w.ap && w.ap.set);
+  // ★★ A home network is never required (Stuart, 2026-10-13): set up = its own hotspot saved.
+  const done = w.mode !== "setup-ap" && !!(w.ap && w.ap.set);
   const collapsed = done && !WIFI_EDITING;
   $("wifiSummary").classList.toggle("hide", !collapsed);
   $("wifiEdit").classList.toggle("hide", collapsed);
   if (!collapsed) return;
   $("wifiSummaryText").textContent = wifiNowText()
-    + "\nNetworks, in order: " + saved.map((n, i) => (i + 1) + " " + n.ssid).join(", ")
+    + (saved.length ? "\nNetworks, in order: " + saved.map((n, i) => (i + 1) + " " + n.ssid).join(", ")
+                    : "\nNo home network saved — the box runs its own hotspot.")
     + "\nOwn hotspot: " + w.ap.ssid
     + (w.lastError ? "\nLast problem: " + w.lastError + "." : "");
 }
@@ -5744,6 +5778,57 @@ function wifiRender() {
   });
   $("wifiAdd").disabled = WIFI_ROWS.length >= 3;
   wifiFinishRender();
+  wifiRadioRender();
+}
+
+/** ★★★ THE WIRED BOX (2026-10-13) — drawn LAST, because with no Wi-Fi or Wi-Fi off it hides what the others drew. */
+function wifiRadioRender() {
+  const w = WIFI || {};
+  const none = w.hasWifi === false, off = !none && w.wifiOff === true;
+  const at = w.wired && w.wiredIp ? " at " + w.wiredIp : "";
+  const canOff = !none && !off && w.wired === true && !(POCKET && POCKET.viaHotspot);
+  $("wifiRadio").classList.toggle("hide", !(none || off || canOff));
+  if (none || off || !canOff) $("wifiOffConfirm").classList.add("hide");
+  // ★ While the warning is open, its own two buttons stand in for this one.
+  $("wifiRadioBtn").classList.toggle("hide", none || !$("wifiOffConfirm").classList.contains("hide"));
+  if (none || off) {
+    // ★ The card IS this one line: nothing to set, nothing to finish, nothing Wi-Fi-first.
+    ["wifiSummary", "wifiEdit", "wifiFinish"].forEach(id => $(id).classList.add("hide"));
+    document.body.classList.remove("wifiFirst");
+  }
+  $("wifiRadioText").textContent = none
+    ? "This box has no Wi-Fi — it is on its wired network (Ethernet)" + at + "."
+    : off
+      ? "Wi-Fi is off — this box is on its wired network (Ethernet)" + at + "."
+        + "\nIf the Ethernet cable is disconnected, you will lose access to this box until it is reconnected."
+        + (w.lastError ? "\nLast problem: " + w.lastError + "." : "")
+      : "This box is also wired (Ethernet" + at + "). If you do not use its Wi-Fi, you can switch it off.";
+  $("wifiRadioBtn").textContent = off ? "Turn on" : "Turn Wi-Fi off (this box is wired)";
+}
+/** ★ Off is asked twice (the warning first); on is one press. */
+$("wifiRadioBtn").onclick = () => {
+  if (WIFI && WIFI.wifiOff) { void wifiRadioSet(false); return; }
+  $("wifiRadioMsg").textContent = "";
+  $("wifiOffConfirm").classList.remove("hide");
+  $("wifiRadioBtn").classList.add("hide");
+};
+$("wifiOffNo").onclick = () => { $("wifiOffConfirm").classList.add("hide"); $("wifiRadioBtn").classList.remove("hide"); };
+$("wifiOffYes").onclick = () => { $("wifiOffConfirm").classList.add("hide"); $("wifiRadioBtn").classList.remove("hide"); void wifiRadioSet(true); };
+async function wifiRadioSet(off) {
+  $("wifiRadioBtn").disabled = true;
+  $("wifiRadioMsg").textContent = off ? "Switching Wi-Fi off…" : "Switching Wi-Fi on…";
+  try {
+    await wifiPost("/vibeserver/pocket/radio", {off});
+    // ★ The root service acts on its next turn (a few seconds): read its state back until it says so.
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      await wifiLoad();
+      if (WIFI && !!WIFI.wifiOff === off) break;
+    }
+    $("wifiRadioMsg").textContent = WIFI && !!WIFI.wifiOff === off ? ""
+      : (WIFI && WIFI.lastError ? WIFI.lastError + "." : "The box has not confirmed it yet — reload in a moment.");
+  } catch (e) { $("wifiRadioMsg").textContent = String(e); }
+  $("wifiRadioBtn").disabled = false;
 }
 
 /** The request, validated here for a quick answer — the box checks every rule again. */
@@ -5859,7 +5944,11 @@ $("wifiSave").onclick = async () => {
   //     connections, then save the wifi settings then show a restarting screen then it should appear on
   //     the local network"). One press saves AND sends the box to the owner's network — the root service
   //     applies the networks first, then switches, in that order, from the one request.
-  if (WIFI && WIFI.mode === "setup-ap") {
+  // ★★ OVER ETHERNET (the secondary, wired setup — 2026-10-13) the page does not go away when the box leaves its setup
+  //    hotspot, so it is the ordinary save below, told to switch now. Over the hotspot: exactly as it always was.
+  const wiredSetup = WIFI && WIFI.mode === "setup-ap" && !pocketWifiFirst(WIFI.mode, WIFI.wired);
+  if (wiredSetup) body.switch = true;
+  if (WIFI && WIFI.mode === "setup-ap" && !wiredSetup) {
     // ★ No network is allowed: "if only using the captive hotspot" (Stuart) — the box goes straight to its own.
     body.switch = true;
     $("wifiSave").disabled = true;
@@ -5978,8 +6067,9 @@ function wifiAddresses() {
 function wifiFinishRender() {
   const w = WIFI || {};
   const onHotspot = w.mode === "setup-ap" || w.mode === "fallback-ap";
-  document.body.classList.toggle("wifiFirst", w.mode === "setup-ap");
-  $("wifiFinish").classList.toggle("hide", !onHotspot || w.mode === "setup-ap");
+  document.body.classList.toggle("wifiFirst", pocketWifiFirst(w.mode, w.wired));
+  // ★ Nothing to join (no home network saved): the box is where it should be — no "finish" step to offer.
+  $("wifiFinish").classList.toggle("hide", !onHotspot || w.mode === "setup-ap" || !(w.saved || []).length);
   $("wifiSave").textContent = w.mode === "setup-ap" ? "Save Wi-Fi and join it" : "Save Wi-Fi";
   if (!onHotspot) return;
   const saved = (w.saved || []).length > 0, apSet = !!(w.ap && w.ap.set);
@@ -5994,7 +6084,6 @@ function wifiFinishRender() {
 function wifiFinishMissing() {
   const w = WIFI || {};
   const out = [];
-  if (!(w.saved || []).length) out.push({say: "save at least one network above", go: "wifiCard"});
   if (!(w.ap && w.ap.set)) out.push({say: "save the box’s own hotspot above", go: "wifiCard"});
   return out;
 }
@@ -6135,7 +6224,7 @@ $("saveBtn").onclick = async () => {
    *  then "Apply Changes and Restart VibeServer" — the order was never sent: the Wi-Fi card had its own Save button and
    *  this one silently left it behind). An unsaved Wi-Fi change goes first; if it cannot be saved, nothing restarts
    *  and the reason is shown, rather than restarting without it. */
-  if (wifiDirty() && WIFI.mode !== "setup-ap") {
+  if (wifiDirty() && !pocketWifiFirst(WIFI.mode, WIFI.wired)) {
     let wbody;
     try { wbody = wifiCollect(); }
     catch (e) {
