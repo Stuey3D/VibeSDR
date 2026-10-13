@@ -212,6 +212,7 @@ export class OwrxAdapter implements SDRBackend {
   private sdrId = '';
   private profileId = '';
   private floor = new FloorTracker();
+  private lastRawSmeter = NaN;                  // the newest raw `smeter` (dB) — what OWRX's own auto squelch reads
   private sqlShownDb: number | null = null;     // squelch as last reported to the app (calibrated)
   /** Learned noise floors (raw dB) per server + SDR + profile, for the life of the app — so coming back
    *  to a receiver starts from what was learned, not from whatever is on the dial at that moment. */
@@ -514,6 +515,7 @@ export class OwrxAdapter implements SDRBackend {
         // reaches the app.
         if (typeof json.value === 'number' && json.value > 0) {
           const raw = 10 * Math.log10(json.value);
+          this.lastRawSmeter = raw;
           const floor = this.floor.push(raw);
           OwrxAdapter.floors.set(this.floorKey(), floor);
           this.cb.onSMeter?.(this.smeterMap().toDisplay(raw));
@@ -1459,6 +1461,18 @@ export class OwrxAdapter implements SDRBackend {
     this.squelchLevel = level <= -150 ? -150 : this.smeterMap().toRaw(level);
     this.sqlShownDb = level <= -150 ? -150 : level;
     this.sendDemod();
+  }
+
+  /** ★ OPENWEBRX'S OWN AUTO SQUELCH, as its web client does it: the server's squelch to the CURRENT level + 10 dB,
+   *  once, on a press (openwebrx.js setSquelchToAuto: getLogSmeterValue(smeter_level) + 10). Our own tracking auto
+   *  squelch was tried on OWRX and would not settle there (Stuart, 2026-10-13: "use theirs"). Press it on the noise,
+   *  as on their page. Raw, because that is the scale their server gates on; the slider is told the calibrated value. */
+  autoSquelch(): void {
+    if (!Number.isFinite(this.lastRawSmeter)) return;
+    this.squelchLevel = Math.round(this.lastRawSmeter + 10);
+    this.sendDemod();
+    const shown = this.squelchShown();
+    if (shown !== null) { this.sqlShownDb = shown; this.cb.onServerDspDefaults?.({ squelchDb: shown }); }
   }
 
   // ── S-meter calibration (owrxSmeterCal.ts) ──────────────────────────────

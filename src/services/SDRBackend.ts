@@ -229,6 +229,8 @@ export interface SDRBackend {
   share?(out: ShareOut): void;
   /** OWRX: squelch level in dB (−150 = off/open). */
   setSquelch?(level: number): void;
+  /** OpenWebRX's own one-shot auto squelch: the server's squelch to the current level + 10 dB. */
+  autoSquelch?(): void;
   /** OWRX: noise reduction — threshold ≤ 0 = off, higher = more NR. */
   setNr?(threshold: number): void;
   /** Kiwi: server-side noise filter / blanker, modelled as DSP descriptors.

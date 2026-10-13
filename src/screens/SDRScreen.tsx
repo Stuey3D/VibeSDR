@@ -11764,6 +11764,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         iqLocal={/^https?:\/\/(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|localhost)/i.test(connectBase)}
         onIqOut={rawIqMode && rawIqMode !== 'off' && !sharedDial ? (on, rate) => client.current?.iqOut?.(on, rate) : undefined}
         onOwrxSquelch={(db) => { owrxSquelchRef.current = db; client.current?.setSquelch?.(db); }}
+        onOwrxSquelchAuto={isOwrx ? () => client.current?.autoSquelch?.() : undefined}
         visualGain={visualGain}
         onOwrxNr={(th) => client.current?.setNr?.(th)}
         owrxDspDefaults={owrxDspDefaults}
