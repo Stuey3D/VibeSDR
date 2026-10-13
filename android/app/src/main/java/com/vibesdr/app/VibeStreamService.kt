@@ -281,7 +281,11 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var recTrackIndex = -1
     private var recMuxerStarted = false
     private var recChannels = 1
-    private var recRate = 48_000     // encoder rate: 48k (UberSDR) or the external stream rate
+    // ★ Every recording is 48 kHz, whatever the source — as on iOS. The AAC encoder only takes the
+    //   standard rates; a Kiwi's 12001/20250 Hz was silently written as 44.1 kHz and played 2–4× fast.
+    //   RecResampler converts; see there.
+    private val recRate = 48_000
+    private val recResampler = RecResampler(48_000)
     private var recReqFreq = 0.0     // freq/mode from the UI for the recording filename
     private var recReqMode = ""
     private var recPtsUs = 0L
@@ -1504,7 +1508,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         val sh = item.third
                         val bytes = ByteArray(sh.size * 2)
                         ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(sh)
-                        encodePcm(bytes, item.second)
+                        encodePcm(bytes, item.second, item.first)
                     }
                 }
             } catch (e: InterruptedException) {
@@ -2291,10 +2295,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                 // MediaStore publish; now the in-app browser is the home for
                 // recordings on both platforms — share exports elsewhere.)
                 val f = java.io.File(filesDir, recDisplayName)
-                // External audio (local/Kiwi/OWRX) has its own rate/channels;
-                // the UberSDR path is always 48k. Match the encoder to the source
-                // so recordings play at the right speed.
-                recRate = if (externalAudio && extRate > 0) extRate else 48_000
+                // External audio (local/Kiwi/OWRX) has its own rate/channels; encodePcm converts
+                // whatever arrives to recRate, so the file plays at the right speed.
+                recResampler.reset()
                 recChannels = if (externalAudio) extChannels.coerceIn(1, 2)
                               else if (trackChannels == 2) 2 else 1
                 val fmt = MediaFormat.createAudioFormat(
@@ -2348,10 +2351,12 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         }
     }
 
-    private fun encodePcm(pcm: ByteArray, srcChannels: Int = trackChannels) {
+    private fun encodePcm(pcm: ByteArray, srcChannels: Int = trackChannels, srcRate: Int = trackRate) {
         val enc = recEncoder ?: return
-        // Source channels can flip mid-recording — adapt to the encoder's count
-        val data = matchChannels(pcm, srcChannels, recChannels)
+        // Source channels and rate can flip mid-recording — adapt to the encoder's
+        val data = recResampler.process(matchChannels(pcm, srcChannels, recChannels),
+                                        if (srcRate > 0) srcRate else recRate, recChannels)
+        if (data.isEmpty()) return
         var off = 0
         try {
             while (off < data.size) {
