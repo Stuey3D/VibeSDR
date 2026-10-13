@@ -285,7 +285,7 @@ uniform float uFrac;     // 0..1 progress through the current frame interval
 uniform float uN;        // lines per data frame (1/2/3 = native/20fps/30fps)
 uniform float uQuant;    // 1 = crisp whole-line steps (settled), 0 = continuous (boost)
 uniform float uRows;         // ring rows (FIXED history depth — never changes on resize)
-uniform float uVisibleRows;  // rows mapped across the view height (= pixel height ⇒ 1 row/point)
+uniform float uVisibleRows;  // rows mapped across the view height (each a whole number of device px — devRowPx)
 uniform float uTexW;     // bins
 uniform float uDrawW;    // draw width (screen px)
 uniform float uDrawH;    // draw height incl. overscan row (screen px)
@@ -300,7 +300,7 @@ uniform float uContrast; // -1..1 S-curve mix
 // line at display row L is A = (uHeadF-2)*uN + R - L; its source frames are
 // f = floor(A/uN) and f+1 blended by frac(A/uN).
 half4 main(float2 xy) {
-  float Lc = xy.y / uDrawH * uVisibleRows;     // display line (1 row per point) — decoupled from ring
+  float Lc = xy.y / uDrawH * uVisibleRows;     // display line (whole device px per row — devRowPx) — decoupled from ring
   float L  = uQuant > 0.5 ? floor(Lc) : Lc;    // whole-pixel rows when settled
   float R  = uFrac * uN;
   if (uQuant > 0.5) { R = floor(R + 0.0001); }
@@ -424,6 +424,17 @@ function WaterfallView({
   const rows      = Math.min(1024, Math.max(64, Math.round(wfH)));   // cap the ring memory/copy cost
   const wfRenderH = wfH + Math.ceil(wfH / rows) + 2; // hide bottom-edge judder
   const rowH      = wfRenderH / rows;
+  /* ★★ A ROW IS A WHOLE NUMBER OF DEVICE PIXELS (2026-10-13, Galaxy Tab A9: "a little shimmer on the waterfall … UberSDR
+   *  also has it in their webclient in GPU mode"). One row per POINT is 1.33 device px on the Tab (213 dpi), so rows came
+   *  out 1, 1, 2, 1, 1, 2 … px tall — and as the waterfall scrolls every row changes height as it crosses the pattern:
+   *  the shimmer. The Moto (2.125) has the same fault one row in eight, and 2→3 px is a softer change than 1→2; the
+   *  XCover (1.75) has it one in four. iOS and the Mac (2× / 3×) never did. So the shader maps a row to round(dpr) device
+   *  px (1 on the Tab, 2 on the XCover and Moto) — every row the same height for its whole trip down the screen.
+   *  ★ The trade, as rows are no longer exactly a point: the Tab scrolls ~25 % slower in points and shows ~⅓ more
+   *    history; the XCover ~14 % faster; the Moto ~6 % slower. More rows than the ring holds would wrap, so a row
+   *    grows a pixel before it ever maps past RING_ROWS. */
+  const devRowPx  = Math.max(1, Math.round(PixelRatio.get()), Math.ceil(wfRenderH * PixelRatio.get() / (RING_ROWS - 16)));
+  const shaderRows = wfRenderH * PixelRatio.get() / devRowPx;   // uVisibleRows: rows across uDrawH, each devRowPx tall
 
   // Waterfall line rate. Settled rows are drawn as WHOLE-PIXEL pushes (no
   // subpixel translate — razor-sharp lines, and no fractional-pixel shimmer,
@@ -730,13 +741,13 @@ function WaterfallView({
     uN:        uNSv.value,
     uQuant:    uQuantSv.value,
     uRows:        RING_ROWS,   // fixed ring depth (never changes on resize → no waterfall redraw)
-    uVisibleRows: rows,        // = point-height ⇒ 1 row per point (sharp, same scroll both orientations)
+    uVisibleRows: shaderRows,  // whole device px per row (see devRowPx) — same scroll both orientations
     uTexW:     uTexW.value,
     uDrawW:    width,
     uDrawH:    wfRenderH,
     uSharp:    uSharpSv.value,
     uContrast: uContrastSv.value,
-  }), [width, wfRenderH, rows]);
+  }), [width, wfRenderH, shaderRows]);
 
   // ── Spectrum tween (smooth tune, settled state) ────────────────────────────
   // Data frames arrive at ~10Hz (or ~3Hz under the idle divisor); setting the
@@ -1313,39 +1324,98 @@ function WaterfallView({
    *  (not gliding), every row is still in the IMAGE the moment it is made, but uHead — which rows are SHOWN — advances
    *  at the measured row rate, whole rows, on this frame callback: an even beat, about one row (≈33 ms) behind. The
    *  lag is held near one row by nudging the rate (a backlog speeds it, none slows it); more than 3 behind (a stall,
-   *  a resume) snaps to the newest. Glides (Sharp's slow feeds, every gesture) are untouched: they show the newest. */
+   *  a resume) snaps to the newest. Glides (Sharp's slow feeds, every gesture) are untouched: they show the newest.
+   *  ★ Superseded in part 2026-10-13: the lag is now a PLAYOUT BUFFER of ≈40 ms, held by slips — see rowPace. */
   /** One frame of the row pacer (see the note above): returns the row to SHOW. Shared by both paths — the native engine
    *  (Android) and the JS path (iOS, and Android's fallback). `settled` false (a glide, a gesture) shows the newest. */
-  const rowPace = (avail: number, shownSv: { value: number }, accSv: { value: number }, rate: number,
+  /* ★★★ A PLAYOUT BUFFER (2026-10-13, Tab A9 at 60 with Smooth: ~1–2 % of drawn frames showed NO row — measured in-app,
+   *  "a semi regular stutter"). The pacer before this held almost nothing in hand: after each release 0–1 rows were
+   *  left, so a row landing a few ms after the vsync left that frame empty and the next took two. Rows arrive at
+   *  59–68/s (network bursts, FFT batching) around a true 60 — the jitter is the problem, not the rate.
+   *  Now the pacer keeps PLAYOUT_MS of rows in hand (≈2.4 rows at 60/s, 1 row minimum) and releases them on the
+   *  frame beat, like the audio jitter buffer: a late row is still inside the buffer, so the beat never misses.
+   *  The buffer depth is a SMOOTHED lead (≈½ s), and it is corrected by SLIPS — one extra row, or one frame's wait —
+   *  no more than one per ½ s once settled. The feed and the display share no clock, so a slip now and then is the
+   *  honest cost of a whole-row display; at a real 60 against 60 Hz it is ppm-rare. (Instant-backlog reserve rules,
+   *  tried the night before, oscillated 0/4 at 30 — the smoothing and the cool-down are what stop that.)
+   *  Stuart: "30-50ms is imperceptible to most" / "you'd notice stutter over 30-50ms delay". */
+  /** The row rate (rows per ms) for the pacer, over ½ s windows. ★ The old per-arrival average swung ±15 % on jittery
+   *  arrivals — enough to flip the pacer's mode (one row every 2nd frame ↔ a free count) and lose the rhythm. A change
+   *  of more than 25 % (Default ↔ Smooth, a slower feed) is taken at once; anything less is smoothed. */
+  const rowRate = (avail: number, t: number, rateSv: { value: number }, nSv: { value: number }, tSv: { value: number }) => {
+    'worklet';
+    const dt = t - tSv.value;
+    if (tSv.value <= 0 || dt > 2000 || avail < nSv.value) { nSv.value = avail; tSv.value = t; return; }
+    if (dt < 500) return;
+    const inst = (avail - nSv.value) / dt;
+    if (inst > 0) rateSv.value = Math.abs(inst / rateSv.value - 1) > 0.25 ? inst : rateSv.value * 0.6 + inst * 0.4;
+    nSv.value = avail; tSv.value = t;
+  };
+  const PLAYOUT_MS = 40;
+  const rowPace = (avail: number, shownSv: { value: number }, accSv: { value: number },
+                   leadSv: { value: number }, coolSv: { value: number }, modeSv: { value: number }, rate: number,
                    gap: number, settled: boolean): number => {
     'worklet';
     let shown = shownSv.value;
-    if (!settled || shown <= 0 || shown > avail || avail - shown > 3) {
-      shown = avail; accSv.value = 0;
+    const target = Math.max(1, rate * PLAYOUT_MS);     // rows to hold in hand
+    if (!settled || shown <= 0 || shown > avail || avail - shown > target + 6) {
+      // A glide, a gesture, the first rows, a stall or a resume: show the newest; the buffer refills by waiting.
+      shown = avail; accSv.value = 0; leadSv.value = 0; coolSv.value = 0; modeSv.value = 0;
     } else {
-      const backlog = avail - shown;
+      const lead0 = avail - shown;            // rows in hand before this frame
+      let lead = leadSv.value;                // …smoothed
       const expect = rate * gap;              // rows this frame at the measured rate
       const whole = Math.round(expect);
-      if (whole >= 1 && Math.abs(expect - whole) < 0.15) {
+      const m = expect > 0 ? Math.round(1 / expect) : 0;
+      const cool = coolSv.value + 1;
+      /* ★ THE MODE, WITH HYSTERESIS: w (> 0) = w rows every frame, −m = one row every m frames, 0 = neither. The measured
+       *  rate is noisy enough (±10 %) to flip a bare test frame to frame — and a flip mid-count misread the counter as
+       *  rows (two at once, in simulation). Enter within 0.15 of the ratio, leave only past 0.3; a change zeroes it. */
+      const prevMode = modeSv.value;
+      let mode = 0;
+      // ★ 0.75, not `whole >= 1`: Math.round(0.5) is 1, so Default on 60 Hz (0.5 rows a frame) fell between the two tests
+      //   whenever the rate read a hair over 30/s — measured in simulation as the rhythm lost and a 5-row catch-up.
+      if (expect >= 0.75) { const e = Math.abs(expect - whole); if (e < 0.15 || (prevMode === whole && e < 0.3)) mode = whole; }
+      else if (m >= 2) { const e = Math.abs(expect * m - 1); if (e < 0.15 || (prevMode === -m && e < 0.3)) mode = -m; }
+      if (mode !== prevMode) { modeSv.value = mode; accSv.value = 0; }
+      // A slip may come every 6 frames while the buffer is well off target (filling after a gesture), else every 30.
+      const far = Math.abs(lead - target) > 1.5;
+      const slipOk = cool >= (far ? 6 : 30);
+      if (mode > 0) {
         /* ★★ LOCKED: A WHOLE NUMBER OF ROWS PER FRAME (Stuart, 2026-10-13: 30 fps + Default "juddery still", 60 fine).
-         *  At 30 drawn, Default is ONE row a frame — but the measured rate wanders a hair either side of 30/s, so the
-         *  fractional counter below now and then came up just short (no row) and caught up next frame (two): a stick,
-         *  then a jump. When the expected count is within 0.15 of a whole number, release exactly that many (one more
-         *  when two steps' worth are waiting); a frame that finds less waits, and the lag that leaves keeps it fed. */
-        // ★ NEVER A PARTIAL STEP (2026-10-13, Tab A9 at 30 with Smooth = 2 rows a frame: "a semi regular stutter",
-        //   measured 2.7 2.7 … 1.2 … 4.0 px). A frame that finds fewer than `whole` new rows WAITS rather than showing
-        //   what there is — that one wait leaves a step in reserve, so a row that lands a little late no longer shows.
-        // ★ NEVER A PARTIAL STEP: a frame that finds fewer than `whole` new rows waits (one more when two steps' worth
-        //   are waiting). Measured in-app on the Tab at 60 with Smooth: ~1–2 % of frames show no row (a late row) — the
-        //   best of four variants tried 10-13 night (reserve rules oscillated 0/4 at 30). The proper fix is a playout
-        //   clock (each row its own display time) — see memory night_2026_10_13_state.
-        if (backlog >= whole) shown += whole + (backlog >= 2 * whole + 1 ? 1 : 0);
+         *  At 30 drawn, Default is ONE row a frame; at 60, Smooth is one; at 30, Smooth is two. Each frame releases
+         *  exactly that step — never a partial one: a frame that finds less waits (an underrun, now rare). */
+        // ★ A slip's effect on the depth is known at once, so it is booked into the smoothed lead now — waiting for the
+        //   ½ s average to see it would let a filling buffer slip again and again and overshoot.
+        let step = mode;
+        if (slipOk && lead > target + 0.6 && lead0 >= mode + 1) { step = mode + 1; coolSv.value = 0; lead -= 1; } // ahead
+        else if (slipOk && lead < target - 0.6) { step = 0; coolSv.value = 0; lead += mode; }                     // short
+        else coolSv.value = cool;
+        if (lead0 >= step) shown += step;
         accSv.value = 0;
+      } else if (mode < 0) {
+        /* ★★ LOCKED THE OTHER WAY: ONE ROW EVERY m FRAMES (Default at 60 = every 2nd, at 120 = every 4th; Smooth at 120 =
+         *  every 2nd). The fractional counter below broke the 1-0-1-0 rhythm on ~4 % of frames in simulation (23 % before
+         *  the buffer); a frame count keeps it exact, and a slip is one frame early or late. accSv counts frames here. */
+        const m = -mode;
+        const n = accSv.value + 1;              // frames since the last row
+        let due = m, slip = 0;
+        if (slipOk && lead > target + 0.6 && lead0 >= 2) { due = m - 1; slip = -1; }   // ahead: one frame early
+        else if (slipOk && lead < target - 0.6) { due = m + 1; slip = 1; }            // short: one frame late
+        if (n >= due && lead0 >= 1) {
+          shown++; accSv.value = 0;
+          if (slip !== 0) { coolSv.value = 0; lead += slip / m; } else coolSv.value = cool;
+        } else { accSv.value = Math.min(n, 2 * m); coolSv.value = cool; }
       } else {
-        let acc = accSv.value + expect * (0.75 + 0.25 * backlog);
+        // Rows and frames at no whole ratio (40 rows on 60 Hz, a wandering rate): a fractional counter, nudged toward the target.
+        const k = Math.max(0.85, Math.min(1.25, 1 + 0.15 * (lead - target)));
+        let acc = accSv.value + expect * k;
         while (acc >= 1 && shown < avail) { shown++; acc -= 1; }
         accSv.value = Math.min(acc, shown === avail ? 1 : 2);
+        coolSv.value = cool;
       }
+      const a = Math.min(1, gap / 500);       // ≈½ s smoothing
+      leadSv.value = lead + (avail - shown - lead) * a;
     }
     shownSv.value = shown;
     return shown;
@@ -1356,6 +1426,9 @@ function WaterfallView({
   const jsAvail  = useSharedValue(0);
   const jsShown  = useSharedValue(0);
   const jsAcc    = useSharedValue(0);
+  const jsLead   = useSharedValue(0);
+  const jsCool   = useSharedValue(0);
+  const jsMode   = useSharedValue(0);
   const jsRate   = useSharedValue(0.03);
   const jsRateT  = useSharedValue(0);
   const jsSeen   = useSharedValue(0);
@@ -1367,14 +1440,9 @@ function WaterfallView({
     if (gap < 0) return;
     const avail = jsAvail.value;
     if (avail <= 0) return;
-    if (avail !== jsSeen.value) {   // rows arrived: the row rate, as the engine path measures it
-      const k = avail - jsSeen.value, dtA = fi.timestamp - jsRateT.value;
-      if (jsSeen.value > 0 && k > 0 && jsRateT.value > 0 && dtA > 0 && dtA < 1000) jsRate.value = jsRate.value * 0.9 + (k / dtA) * 0.1;
-      jsRateT.value = fi.timestamp;
-      jsSeen.value = avail;
-    }
+    rowRate(avail, fi.timestamp, jsRate, jsSeen, jsRateT);
     const settled = uQuantSv.value >= 0.5 && scrollFrac.value >= 1;
-    const shown = rowPace(avail, jsShown, jsAcc, jsRate.value, gap, settled);
+    const shown = rowPace(avail, jsShown, jsAcc, jsLead, jsCool, jsMode, jsRate.value, gap, settled);
     if (uHead.value !== shown) uHead.value = shown;
   }, engine == null);
 
@@ -1382,14 +1450,18 @@ function WaterfallView({
   const paceDiag = useMemo(() => !!(NativeModules as any).VibePowerModule?.isDiagBuild?.(), []);
   const paceHist = useSharedValue<number[]>([0, 0, 0, 0, 0, 0]);
   const paceT0 = useSharedValue(0);
-  const paceLog = useCallback((h: string, gap: number, rate: number) => {
-    console.log(`[VibeDiag] wf pace rows/frame 0..5: ${h} | gap ${gap} ms | rate ${rate} rows/s`);
+  const paceLog = useCallback((h: string, gap: number, rate: number, lead: number) => {
+    console.log(`[VibeDiag] wf pace rows/frame 0..5: ${h} | gap ${gap} ms | rate ${rate} rows/s | lead ${lead} rows`);
   }, []);
   const engAvail = useSharedValue(0);    // the newest row in the image
   const engShown = useSharedValue(0);    // the newest row on screen (uHead while settled)
   const engAcc   = useSharedValue(0);
+  const engLead  = useSharedValue(0);    // rows in hand, smoothed (the playout buffer — see rowPace)
+  const engCool  = useSharedValue(0);
+  const engMode  = useSharedValue(0);
   const engRate  = useSharedValue(0.03); // rows per ms, measured (starts at Default's 30/s)
   const engRateT = useSharedValue(0);
+  const engRateN = useSharedValue(0);
   const enginePoll = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value || !engine) return;
@@ -1416,12 +1488,6 @@ function WaterfallView({
         const old = engImg.value;
         wfImage.value = p.image;
         engImg.value = p.image;
-        // The row rate, from arrivals: an EMA of rows per ms (a gap over a second is a pause, not a rate).
-        const k = p.head - engAvail.value, dtA = fi.timestamp - engRateT.value;
-        if (engAvail.value > 0 && k > 0 && engRateT.value > 0 && dtA > 0 && dtA < 1000) {
-          engRate.value = engRate.value * 0.9 + (k / dtA) * 0.1;
-        }
-        engRateT.value = fi.timestamp;
         engAvail.value = p.head;
         if (old) retire.push({ o: old, f });
         if (!engTexSent.value) { engTexSent.value = true; runOnJS(setTexReady)(true); }   // once, ever
@@ -1466,14 +1532,15 @@ function WaterfallView({
     }
     // ── Which rows are shown (see engAvail) ──
     {
+      rowRate(engAvail.value, fi.timestamp, engRate, engRateN, engRateT);   // the row rate, over ½ s windows
       const before = uHead.value;
-      const shown = rowPace(engAvail.value, engShown, engAcc, engRate.value, gap, !engGlideOn.value && uQuantSv.value >= 0.5);
+      const shown = rowPace(engAvail.value, engShown, engAcc, engLead, engCool, engMode, engRate.value, gap, !engGlideOn.value && uQuantSv.value >= 0.5);
       if (uHead.value !== shown) uHead.value = shown;
       if (paceDiag) {   // DIAG (diagnostics builds): rows shown per drawn frame, logged every 5 s
         const h = paceHist.value; const d = Math.max(0, Math.min(5, shown - before)); h[d]++; paceHist.value = h;
         if (fi.timestamp - paceT0.value > 5000) {
           paceT0.value = fi.timestamp;
-          runOnJS(paceLog)(h.join(','), Math.round(gap), Math.round(engRate.value * 1000 * 10) / 10);
+          runOnJS(paceLog)(h.join(','), Math.round(gap), Math.round(engRate.value * 1000 * 10) / 10, Math.round(engLead.value * 10) / 10);
           paceHist.value = [0, 0, 0, 0, 0, 0];
         }
       }
