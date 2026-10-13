@@ -814,6 +814,7 @@ if(KIND==='hfdl'){
    *  same element as the class, because that is the element the animation runs on. */
   function setPulse(mk,cls,rgb){
     try{
+      if(mk.setPulse){mk.setPulse(rgb);return;}   // ★ a GPU marker draws its own (vibemapgl-compat.js)
       var el=mk.getElement();if(!el)return;
       var old=el.querySelector('.pglow');if(old)old.remove();
       if(rgb){
@@ -871,6 +872,21 @@ if(KIND==='hfdl'){
     return svg+'</svg>';
   }
   function icon(svg,w,h,ax,ay){return L.divIcon({html:svg,className:'glide',iconSize:[w,h],iconAnchor:[ax,ay],popupAnchor:[0,-ay]});}
+  /* ★★★ ON THE GPU MAP THE AIRCRAFT AND STATIONS ARE GPU SYMBOLS, NOT ELEMENTS (2026-10-13). As DOM markers MapLibre
+   *  moved every one of them on every frame of a pan or a fly — 9 fps flying over WESSEX's ~650 aircraft on a
+   *  Moto G35, 35 with them hidden. L.gpuMarker (vibemapgl-compat.js) draws them all in one GPU pass. Its icons are
+   *  drawn UN-rotated with the heading as a property (4 colours = 4 images, not one per 3°), and the glow is baked
+   *  into the image instead of a CSS filter. The Leaflet fallback keeps its DOM icons exactly as before. */
+  var GPU=!!(window.__GL&&L.gpuMarker);
+  function acIcon(glow,hdg,ls){
+    if(GPU)return{svg:acSVG(false,0,ls),w:26,h:26,ax:13,ay:13,rot:hdg||0,glow:glow?acTone(ls||0).rgb:null};
+    return icon(acSVG(glow,hdg,ls),26,26,13,13);
+  }
+  function gsIcon(glow,sig){
+    if(GPU)return{svg:gsSVG(false,sig),w:30,h:36,ax:15,ay:36,rot:0,glow:glow?gsTone(sig).rgb:null};
+    return icon(gsSVG(glow,sig),30,36,15,36);
+  }
+  function newMarker(ll,ic,o){return GPU?L.gpuMarker(ll,ic,o):L.marker(ll,Object.assign({icon:ic},o||{}));}
 
   // skin _sigMeterHTML: 3 signal bars
   function sigBars(dbfs){if(dbfs==null||dbfs===0)return 0;if(dbfs>-40)return 3;if(dbfs>-55)return 2;return 1;}
@@ -954,26 +970,26 @@ if(KIND==='hfdl'){
 
   function glowGSfn(gsid){
     if(glowGS!=null&&gsM[glowGS]){
-      gsM[glowGS].setIcon(icon(gsSVG(false,gsM[glowGS]._sig),30,36,15,36));
+      gsM[glowGS].setIcon(gsIcon(false,gsM[glowGS]._sig));
       setPulse(gsM[glowGS],'pulse-gs',null);
     }
     glowGS=gsid;
     if(gsid!=null&&gsM[gsid]){
-      gsM[gsid].setIcon(icon(gsSVG(true,gsM[gsid]._sig),30,36,15,36));
+      gsM[gsid].setIcon(gsIcon(true,gsM[gsid]._sig));
       setPulse(gsM[gsid],'pulse-gs',gsTone(gsM[gsid]._sig).rgb);
     }
   }
   function glowACfn(key){
     if(glowAC&&acM[glowAC]){
       var d=acM[glowAC]._d||{};
-      acM[glowAC].setIcon(icon(acSVG(false,d.bearing||0,d.last_seen||0),26,26,13,13));
+      acM[glowAC].setIcon(acIcon(false,d.bearing||0,d.last_seen||0));
       acM[glowAC]._sigr='';
       setPulse(acM[glowAC],'pulse-ac',null);
     }
     glowAC=key;
     if(key&&acM[key]){
       var d=acM[key]._d||{};
-      acM[key].setIcon(icon(acSVG(true,d.bearing||0,d.last_seen||0),26,26,13,13));
+      acM[key].setIcon(acIcon(true,d.bearing||0,d.last_seen||0));
       acM[key]._sigr='';
       setPulse(acM[key],'pulse-ac',acTone(d.last_seen||0).rgb);
     }
@@ -1096,11 +1112,11 @@ if(KIND==='hfdl'){
           gsM[id].setPopupContent(ph);
           if(gsM[id]._sig!==sig){
             gsM[id]._sig=sig;
-            gsM[id].setIcon(icon(gsSVG(glowGS===id,sig),30,36,15,36));
+            gsM[id].setIcon(gsIcon(glowGS===id,sig));
             if(glowGS===id)setPulse(gsM[id],'pulse-gs',gsTone(sig).rgb);
           }
         }else{
-          var mk=L.marker([s.lat,s.lon],{icon:icon(gsSVG(glowGS===id,sig),30,36,15,36),zIndexOffset:500});
+          var mk=newMarker([s.lat,s.lon],gsIcon(glowGS===id,sig),{zIndexOffset:500});
           mk._sig=sig;
           mk.addTo(map).bindPopup(ph,{maxWidth:240});
           /* ★ A station that is ALREADY the glowing one when its marker is first made (the first
@@ -1162,12 +1178,12 @@ if(KIND==='hfdl'){
           acM[a.key]._d={bearing:hdg,last_seen:a.last_seen};
           if(acM[a.key]._sigr!==sig){
             acM[a.key]._sigr=sig;
-            acM[a.key].setIcon(icon(acSVG(glowAC===a.key,hdg,a.last_seen),26,26,13,13));
+            acM[a.key].setIcon(acIcon(glowAC===a.key,hdg,a.last_seen));
             if(glowAC===a.key)setPulse(acM[a.key],'pulse-ac',acTone(a.last_seen).rgb);
           }
           if(acM[a.key].getPopup())acM[a.key].setPopupContent(pop);
         }else{
-          var mk=L.marker([a.lat,a.lon],{icon:icon(acSVG(glowAC===a.key,hdg,a.last_seen),26,26,13,13)});
+          var mk=newMarker([a.lat,a.lon],acIcon(glowAC===a.key,hdg,a.last_seen));
           mk._d={bearing:hdg,last_seen:a.last_seen};
           mk._sigr=sig;
           mk.addTo(map).bindPopup(pop,{maxWidth:220});

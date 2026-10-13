@@ -131,6 +131,173 @@
       return h;
     }
 
+    // ── GPU markers: icons on one symbol layer (the HFDL aircraft and ground stations) ──────────
+    /* ★★★ WHY (2026-10-13, Moto G35, the WESSEX HFDL map, ~650 aircraft). As DOM markers every aircraft was
+     *  an element MapLibre re-positions on EVERY frame of a pan, zoom or fly: 9 fps flying with them on
+     *  screen, 35 with them hidden. Here they are one GeoJSON source and a symbol layer — the GPU draws all
+     *  of them in one pass, whatever the count.
+     *  L.gpuMarker(latlng, spec, opts) answers the same calls the page makes of an L.marker (setLatLng,
+     *  setIcon, bindPopup / setPopupContent / getPopup / openPopup, getLatLng, remove, addTo) plus
+     *  setPulse(rgb). spec = { svg, w, h, ax, ay, rot, glow }:
+     *    svg      the icon UN-rotated — heading is icon-rotate, so 4 colours make 4 images, not 4 × 120;
+     *    ax, ay   Leaflet's iconAnchor; the image is padded so that point is its centre (icon-anchor centre);
+     *    glow     'r,g,b' bakes a drop-shadow into the image (as the DOM icon's CSS one did), null = none.
+     *  ★ GLIDES are in GEOGRAPHIC space: a moving aircraft goes to a small second source and is interpolated
+     *    there for 2.2 s, so — unlike the CSS glide — it can never trail the map during a pan. body.nogmany
+     *    (too many moving this poll, the page's own switch) still snaps.
+     *  ★ THE PULSE stays DOM, but only for the one or two pulsing markers: a copy of the icon with the glow,
+     *    whose OPACITY alone animates (.pglow in the page's CSS) — the compositor's job, no repaint. */
+    const syms = new Map(); let symSeq = 0, symDirty = false, symReady = false;
+    const imgs = new Map(); let imgSeq = 0;              // key → { id, ready, data }
+    const imgById = new Map();
+    /* ★★ THE IMAGES ARE KEPT AND HANDED BACK. A style reload (the basemap's profile / theme) empties MapLibre's image
+     *  store while our sources and layers live on — every aircraft then pointed at an image that was gone, and none
+     *  drew (first GPU test, 2026-10-13). MapLibre asks for each missing one by name; we answer from here. */
+    gl.on('styleimagemissing', (e) => {
+      const im = imgById.get(e.id);
+      if (im && im.data && !gl.hasImage(e.id)) { try { gl.addImage(e.id, im.data, { pixelRatio: DPR }); } catch (x) { console.error('vibemapgl-compat: icon not re-added', x); } }
+    });
+    const DPR = Math.min(4, Math.max(1, global.devicePixelRatio || 1));
+    const GLIDE_MS = 2200;
+    function symImage(spec) {
+      const key = spec.svg + '|' + spec.w + 'x' + spec.h + '|' + spec.ax + ',' + spec.ay + '|' + (spec.glow || '');
+      let im = imgs.get(key);
+      if (im) return im;
+      im = { id: 'lcs-' + (++imgSeq), ready: false, data: null };
+      imgs.set(key, im); imgById.set(im.id, im);
+      const pad = spec.glow ? 10 : 1;
+      // ★ Anchor at the centre: pad the side the anchor is nearer the edge of.
+      const halfW = Math.max(spec.ax, spec.w - spec.ax) + pad, halfH = Math.max(spec.ay, spec.h - spec.ay) + pad;
+      const cw = Math.ceil(2 * halfW * DPR), ch = Math.ceil(2 * halfH * DPR);
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+        const x = c.getContext('2d');
+        x.scale(DPR, DPR);
+        if (spec.glow) { x.shadowColor = 'rgba(' + spec.glow + ',0.85)'; x.shadowBlur = 5 * DPR; }
+        x.drawImage(img, halfW - spec.ax, halfH - spec.ay, spec.w, spec.h);
+        im.data = x.getImageData(0, 0, cw, ch);
+        try { if (!gl.hasImage(im.id)) gl.addImage(im.id, im.data, { pixelRatio: DPR }); im.ready = true; }
+        catch (e) { console.error('vibemapgl-compat: icon not added', e); }
+        queueSyms();
+      };
+      img.onerror = (e) => console.error('vibemapgl-compat: icon did not load', e);
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(spec.svg);
+      return im;
+    }
+    function symFeature(m) {
+      return { type: 'Feature', id: m.id, properties: { _id: m.id, img: m.im.id, rot: m.spec.rot || 0, z: m.z },
+               geometry: { type: 'Point', coordinates: [m.pos.lng, m.pos.lat] } };
+    }
+    function flushSyms() {
+      symDirty = false;
+      if (!symReady) return;
+      const still = [], moving = [];
+      for (const m of syms.values()) if (m.im.ready) (m.glide ? moving : still).push(symFeature(m));
+      gl.getSource('lc-sym').setData({ type: 'FeatureCollection', features: still });
+      gl.getSource('lc-sym-mv').setData({ type: 'FeatureCollection', features: moving });
+    }
+    function queueSyms() { if (!symDirty) { symDirty = true; requestAnimationFrame(flushSyms); } }
+    let glideOn = false;
+    function glideStep(t) {
+      const now = performance.now(); let any = false;
+      for (const m of syms.values()) {
+        if (!m.glide) continue;
+        const g = m.glide, k = Math.min(1, (now - g.t0) / GLIDE_MS);
+        m.pos = { lat: g.from.lat + (m.ll.lat - g.from.lat) * k, lng: g.from.lng + (m.ll.lng - g.from.lng) * k };
+        if (k >= 1) { m.glide = null; symDirty = true; } else any = true;
+        m._follow();
+      }
+      if (symReady) {
+        const src = gl.getSource('lc-sym-mv'), mv = [];
+        for (const m of syms.values()) if (m.glide && m.im.ready) mv.push(symFeature(m));
+        src.setData({ type: 'FeatureCollection', features: mv });
+        if (symDirty) flushSyms();
+      }
+      if (any) requestAnimationFrame(glideStep); else glideOn = false;
+    }
+    vm.ready.then(() => {
+      if (gl.getSource('lc-sym')) return;
+      const layout = { 'icon-image': ['get', 'img'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map',
+                       'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'] };
+      for (const id of ['lc-sym', 'lc-sym-mv']) {
+        gl.addSource(id, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        gl.addLayer({ id, type: 'symbol', source: id, layout });
+        gl.on('click', id, (e) => {
+          const f = e.features && e.features[0]; const m = f && syms.get(f.properties._id);
+          if (m) m.h.openPopup();
+        });
+        gl.on('mouseenter', id, () => { gl.getCanvas().style.cursor = 'pointer'; });
+        gl.on('mouseleave', id, () => { gl.getCanvas().style.cursor = ''; });
+      }
+      symReady = true;
+      flushSyms();
+    });
+    function GpuMarker(latlng, spec, o) {
+      o = o || {};
+      const m = { id: ++symSeq, ll: ll(latlng), pos: ll(latlng), spec, im: symImage(spec), z: o.zIndexOffset || 0,
+                  glide: null, popup: null, popupAnchor: [0, -spec.ay], pulse: null, shown: false };
+      m._follow = () => {
+        if (m.popup && m.popup.isOpen()) m.popup.setLngLat([m.pos.lng, m.pos.lat]);
+        if (m.pulse) m.pulse.mk.setLngLat([m.pos.lng, m.pos.lat]);
+      };
+      const h = {
+        _gpu: true,
+        addTo: (t) => { if (t && t._isGroup) t.addLayer(h); else h._show(); return h; },
+        _show: () => { m.shown = true; syms.set(m.id, m); queueSyms(); if (m.pulse) m.pulse.mk.addTo(gl); },
+        remove: () => { m.shown = false; syms.delete(m.id); queueSyms(); if (m.popup) m.popup.remove(); if (m.pulse) m.pulse.mk.remove(); return h; },
+        getLatLng: () => m.ll,
+        getElement: () => null,
+        setLatLng: (p) => {
+          const to = ll(p);
+          const moved = Math.abs(to.lat - m.ll.lat) > 1e-9 || Math.abs(to.lng - m.ll.lng) > 1e-9;
+          m.ll = to;
+          if (!moved) return h;
+          if (m.shown && !document.body.classList.contains('nogmany')) {
+            m.glide = { from: { lat: m.pos.lat, lng: m.pos.lng }, t0: performance.now() };
+            if (!glideOn) { glideOn = true; requestAnimationFrame(glideStep); }
+          } else { m.glide = null; m.pos = to; m._follow(); }
+          queueSyms();
+          return h;
+        },
+        setIcon: (sp) => {
+          m.spec = sp; m.im = symImage(sp); m.popupAnchor = [0, -sp.ay];
+          if (m.pulse) h.setPulse(m.pulse.rgb);
+          queueSyms(); return h;
+        },
+        setZIndexOffset: (z) => { m.z = z; queueSyms(); return h; },
+        bindPopup: (html, po) => {
+          m.popup = new ml.Popup({ maxWidth: ((po && po.maxWidth) || 240) + 'px', offset: m.popupAnchor, closeButton: true }).setHTML(html);
+          return h;
+        },
+        getPopup: () => m.popup,
+        setPopupContent: (html) => { if (m.popup) m.popup.setHTML(html); return h; },
+        openPopup: () => {
+          if (m.popup && !m.popup.isOpen()) m.popup.setOffset(m.popupAnchor).setLngLat([m.pos.lng, m.pos.lat]).addTo(gl);
+          return h;
+        },
+        /** Start (rgb 'r,g,b') or stop (null) the pulse — a DOM copy of the icon whose opacity breathes. */
+        setPulse: (rgb) => {
+          if (m.pulse) { m.pulse.mk.remove(); m.pulse = null; }
+          if (!rgb) return h;
+          const sp = m.spec, el = document.createElement('div');
+          el.style.width = sp.w + 'px'; el.style.height = sp.h + 'px'; el.style.pointerEvents = 'none';
+          el.style.setProperty('--pc', rgb);
+          const g = document.createElement('div'); g.className = 'pglow';
+          g.innerHTML = sp.svg;
+          if (sp.rot) g.firstElementChild && (g.firstElementChild.style.transform = 'rotate(' + sp.rot + 'deg)');
+          el.appendChild(g);
+          const mk = new ml.Marker({ element: el, anchor: 'center', offset: [sp.w / 2 - sp.ax, sp.h / 2 - sp.ay] })
+            .setLngLat([m.pos.lng, m.pos.lat]);
+          m.pulse = { mk, rgb };
+          if (m.shown) mk.addTo(gl);
+          return h;
+        },
+      };
+      m.h = h;
+      return h;
+    }
+
     // ── Polygons → one GPU fill + outline layer (the directory's country highlight, the greyline) ──
     const polys = new Map(); let polySeq = 0, polyDirty = false;
     function flushPolys() {
@@ -289,6 +456,7 @@
       polygon: Polygon,
       circle: Circle,
       marker: Marker,
+      gpuMarker: GpuMarker,
       circleMarker: CircleMarker,
       divIcon: (options) => ({ options }),
       latLngBounds: Bounds,
