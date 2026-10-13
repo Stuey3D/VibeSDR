@@ -35,6 +35,7 @@ const Vibe = NativeModules.VibePowerModule as {
 import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
 import { cleanText } from '../utils/safeText';
 import { receiverPlaceLine } from './grid';
+import { parseOwnerCal, FloorTracker, ownerMap, anchorMap, type OwnerCal, type SmeterMap } from './owrxSmeterCal';
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';   // for the decoder below
 
 /** Longest common leading substring across the strings (for deriving an SDR's
@@ -204,7 +205,17 @@ export class OwrxAdapter implements SDRBackend {
   // to 1000 — that's the standard RTTY/digimode audio centre, so tuning the VFO
   // to the carrier (e.g. 4582 kHz USB for DWD) decodes without a passband tuner.
   private secondaryOffset = 1000;
-  private squelchLevel = -150;   // dB; -150 = off (open). dspcontrol squelch_level.
+  private squelchLevel = -150;   // RAW server dB; -150 = off (open). dspcontrol squelch_level.
+  // ★ S-meter calibration (owrxSmeterCal.ts): the wire `smeter` is not dBm. Everything the app sees —
+  //   the level AND the squelch — is on the calibrated scale; only this adapter knows the raw one.
+  private ownerCal: OwnerCal | null = null;
+  private sdrId = '';
+  private profileId = '';
+  private floor = new FloorTracker();
+  private sqlShownDb: number | null = null;     // squelch as last reported to the app (calibrated)
+  /** Learned noise floors (raw dB) per server + SDR + profile, for the life of the app — so coming back
+   *  to a receiver starts from what was learned, not from whatever is on the dial at that moment. */
+  private static floors = new Map<string, number>();
   private bwLow = -4000;
   private bwHigh = 4000;
   private audioServiceId = 0;                 // DAB: selected programme within ensemble
@@ -433,6 +444,7 @@ export class OwrxAdapter implements SDRBackend {
       // The ack's `server` is "openwebrx" even on the + fork, so sniff the landing
       // page for the "OpenWebRX+" marker to label it correctly in the menu footer.
       this.detectServerName();
+      this.loadOwnerCal();
       // Negotiate, then start the DSP.
       this.send({ type: 'connectionproperties', params: { output_rate: 12000, hd_output_rate: 48000 } });
       this.send({ type: 'dspcontrol', action: 'start' });
@@ -498,9 +510,14 @@ export class OwrxAdapter implements SDRBackend {
       }
       case 'smeter':
         // The wire value is LINEAR power (from csdr squelch_and_smeter_cc); the
-        // OWRX UI shows 10·log10(value) dB. Convert here so onSMeter is in dB.
+        // OWRX UI shows 10·log10(value) dB — uncalibrated, so it is mapped (smeterMap) before it
+        // reaches the app.
         if (typeof json.value === 'number' && json.value > 0) {
-          this.cb.onSMeter?.(10 * Math.log10(json.value));
+          const raw = 10 * Math.log10(json.value);
+          const floor = this.floor.push(raw);
+          OwrxAdapter.floors.set(this.floorKey(), floor);
+          this.cb.onSMeter?.(this.smeterMap().toDisplay(raw));
+          this.reportSquelchIfMoved();
         }
         break;
       case 'metadata': this.onMetadata(json.value || {}); break;
@@ -557,6 +574,12 @@ export class OwrxAdapter implements SDRBackend {
 
   private onConfig(c: any): void {
     const profileSwitch = 'sdr_id' in c || 'profile_id' in c;
+    if (profileSwitch) {
+      // A different radio or profile has a different floor: start from what was learned for it.
+      if ('sdr_id' in c) this.sdrId = String(c.sdr_id ?? '');
+      if ('profile_id' in c) this.profileId = String(c.profile_id ?? '');
+      this.floor = new FloorTracker(OwrxAdapter.floors.get(this.floorKey()) ?? null);
+    }
     if ('allow_chat' in c) this.cb.onChatEnabled?.(!!c.allow_chat);
     if (!this.cfg) this.cfg = { centerFreq: 0, sampRate: 0, fftSize: 1024, fftCompression: 'none', audioCompression: 'none' };
     if ('center_freq' in c)       this.cfg.centerFreq = c.center_freq;
@@ -579,7 +602,11 @@ export class OwrxAdapter implements SDRBackend {
     if ('initial_squelch_level' in c) {
       // Integer = preset level (dB); anything else (e.g. null) = squelch off.
       this.squelchLevel = Number.isInteger(c.initial_squelch_level) ? c.initial_squelch_level : -150;
-      dspDefaults.squelchDb = this.squelchLevel;
+      // ★ The preset is RAW; the app gets it calibrated. With no reading yet to anchor on, it is
+      //   reported on the first `smeter` instead (reportSquelchIfMoved).
+      this.sqlShownDb = null;
+      const shown = this.squelchShown();
+      if (shown !== null) { dspDefaults.squelchDb = shown; this.sqlShownDb = shown; }
     }
     if ('initial_nr_level' in c) {
       const on = Number.isInteger(c.initial_nr_level);
@@ -1426,10 +1453,61 @@ export class OwrxAdapter implements SDRBackend {
     this.cb.onServerInfo?.({ name: plus ? 'OpenWebRX+' : 'OpenWebRX', version: this.serverVersion });
   }
 
-  /** Squelch level in dB (−150 = off/open). Re-sends the demod. */
+  /** Squelch level in CALIBRATED dB, as the app sees the meter (−150 = off/open). Re-sends the demod
+   *  with the server's raw equivalent. */
   setSquelch(level: number): void {
-    this.squelchLevel = level;
+    this.squelchLevel = level <= -150 ? -150 : this.smeterMap().toRaw(level);
+    this.sqlShownDb = level <= -150 ? -150 : level;
     this.sendDemod();
+  }
+
+  // ── S-meter calibration (owrxSmeterCal.ts) ──────────────────────────────
+  private floorKey(): string { return `${this.httpBase}|${this.sdrId}|${this.profileId}`; }
+
+  /** raw ↔ calibrated for the band in use: the owner's figures if they measured it, else the S2 anchor. */
+  private smeterMap(): SmeterMap {
+    const vhf = (this.cfg?.centerFreq ?? this.freq) > 30e6;   // the plugin's own split
+    const own = this.ownerCal ? (vhf ? this.ownerCal.vhf : this.ownerCal.hf) : null;
+    if (own) return ownerMap(own);
+    const f = this.floor.value;
+    return f === null ? { toDisplay: (r) => r, toRaw: (d) => d } : anchorMap(f);
+  }
+
+  /** The squelch as the app should show it, or null while there is nothing to anchor it on yet. */
+  private squelchShown(): number | null {
+    if (this.squelchLevel <= -150) return -150;
+    const vhf = (this.cfg?.centerFreq ?? this.freq) > 30e6;
+    const own = this.ownerCal ? (vhf ? this.ownerCal.vhf : this.ownerCal.hf) : null;
+    if (!own && this.floor.value === null) return null;
+    return Math.round(this.smeterMap().toDisplay(this.squelchLevel));
+  }
+
+  /** ★ The gate is the server's (raw); the line is drawn on the calibrated scale. When the mapping
+   *  moves (floor learned, owner figures arrived) the line is moved with it, so it stays level with
+   *  what it is actually gating. ±1 dB hysteresis: the floor's slow drift must not chatter the slider. */
+  private reportSquelchIfMoved(): void {
+    const shown = this.squelchShown();
+    if (shown === null || (this.sqlShownDb !== null && Math.abs(shown - this.sqlShownDb) < 1)) return;
+    this.sqlShownDb = shown;
+    this.cb.onServerDspDefaults?.({ squelchDb: shown });
+  }
+
+  /** The owner's S-meter plugin calibration, if their init.js carries one (see owrxSmeterCal.ts). */
+  private async loadOwnerCal(): Promise<void> {
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 6000);
+      const res = await fetch(this.httpBase + '/static/plugins/receiver/init.js', { signal: ctl.signal });
+      clearTimeout(t);
+      if (!res.ok) return;
+      const js = await res.text();
+      if (js.length > 512 * 1024) return;               // not an init.js
+      this.ownerCal = parseOwnerCal(js);
+      if (this.ownerCal) {
+        this.dbg(`smeter: owner calibration hf=${JSON.stringify(this.ownerCal.hf)} vhf=${JSON.stringify(this.ownerCal.vhf)}`);
+        this.reportSquelchIfMoved();
+      }
+    } catch { /* no plugin, offline, or slow — the S2 anchor stands */ }
   }
 
   /** Noise reduction. threshold ≤ 0 = off (slider fully open); higher = more NR.

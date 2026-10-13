@@ -228,6 +228,8 @@ if node scripts/test-web-no-desktop-bar.mjs; then pass=$((pass+1)); else fail=$(
 if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★★ proxy.kiwisdr.com IS 8073 ONLY (2026-10-07): 47 % of public Kiwis are listed portless (= port 80, refused).
 if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
+# ★★ OWRX S-METER CALIBRATION (owrxSmeterCal.ts): the wire level is not dBm — owner's plugin figures, else noise at S2.
+if node --no-warnings scripts/test_owrxSmeterCal.ts; then pass=$((pass+1)); else fail=$((fail+1)); fi
 # ★★ WHAT A VFD CAN SHOW (faceplates §7). Every printable ASCII character is exactly one DSEG14
 #    cell (its space is 200 wide and its ! is the BLANK cell), accents fold like a display ROM,
 #    units keep their case, and a string that folds to nothing shows the frequency, never tofu.
