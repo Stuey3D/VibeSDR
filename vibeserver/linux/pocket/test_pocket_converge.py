@@ -359,9 +359,20 @@ def maintenance_tests():
             os.makedirs(bin_)
             log = os.path.join(tmp, "calls.log")
             stub = "#!/bin/sh\necho \"$(basename \"$0\") $*\" >> %s\n" % log
-            for tool in ("apt-get", "systemctl", "mount", "sync", "mountpoint", "findmnt", "chgrp"):
+            # ★ the real root as overlayroot-chroot sees it (its lowerdir), with the empty dirs the binds land on
+            lower = os.path.join(tmp, "lower")
+            for d in ("dev", "boot/firmware"):
+                os.makedirs(os.path.join(lower, d))
+            mounts = os.path.join(tmp, "mounts")
+            open(mounts, "w").write("/dev/mmcblk0p2 %s ext4 ro 0 0\n/dev/mmcblk0p1 /boot/firmware vfat ro 0 0\n"
+                                    "overlayroot / overlay rw,lowerdir=%s,upperdir=/media/root-rw/overlay 0 0\n" % (lower, lower))
+            for tool in ("apt-get", "systemctl", "mount", "umount", "sync", "mountpoint", "findmnt", "chgrp"):
                 p = os.path.join(bin_, tool)
-                open(p, "w").write(stub + ("exit 1\n" if tool == "mountpoint" else ""))
+                # ★ mountpoint: the live boot partition and the lowerdir are mounts; the binds' targets are not yet
+                body = stub
+                if tool == "mountpoint":
+                    body += 'for a; do case "$a" in /boot/firmware|%s) exit 0;; -*) ;; *) exit 1;; esac; done\nexit 1\n' % lower
+                open(p, "w").write(body)
                 os.chmod(p, 0o755)
             # ★ overlayroot-chroot: log, then run the command (the "real root" here is the fake root)
             p = os.path.join(bin_, "overlayroot-chroot")
@@ -381,6 +392,7 @@ def maintenance_tests():
                   .replace("/var/lib/vibeserver-maint", os.path.join(tmp, "maint"))
                   .replace("/var/lib/vibeserver/maintenance.log", os.path.join(tmp, "old.log"))
                   .replace("/proc/cmdline", cmdline)
+                  .replace("/proc/mounts", mounts)
                   .replace("/etc/vibeserver-pocket/enabled", os.path.join(r, "etc/vibeserver-pocket/enabled"))
                   .replace("/usr/lib/vibeserver/vibeserver-pocket-converge", conv)
                   # ★ macOS dd has no iflag=nofollow,nonblock — the read itself is not what is under test here
@@ -407,8 +419,20 @@ def maintenance_tests():
                 if sealed:
                     ok(c.count("overlayroot-chroot") >= 4, "%s: all of it through overlayroot-chroot (the REAL root)" % tag)
                     ok("systemctl reboot" in c and c.index("systemctl reboot") > i_cv, "%s: and THEN the reboot" % tag)
+                    # ★★ Stuart's Portable, 2026-10-13: mounting the boot device INSIDE the chroot failed (no /dev there).
+                    #    /dev and the boot partition are bound onto the lowerdir from OUTSIDE, before every chroot, and
+                    #    unmounted after it.
+                    bd, bb = "mount --bind /dev %s/dev" % lower, "mount --bind /boot/firmware %s/boot/firmware" % lower
+                    i_ch = c.index("overlayroot-chroot")
+                    ok(bd in c and c.index(bd) < i_ch, "%s: /dev bound into the real root before the chroot" % tag)
+                    ok(bb in c and c.index(bb) < i_ch, "%s: the boot partition bound into the real root before the chroot" % tag)
+                    ok(c.count(bd) == c.count("overlayroot-chroot") and c.count("umount %s/dev" % lower) == c.count(bd),
+                       "%s: bound for EVERY chroot, and unmounted after each (%d)" % (tag, c.count(bd)))
+                    ok(c.count("umount %s/boot/firmware" % lower) == c.count(bb), "%s: the boot bind undone each time" % tag)
+                    ok("could not be" not in p.stdout, "%s: no 'could not be mounted' line" % tag)
                 else:
                     ok("overlayroot-chroot" not in c and "systemctl reboot" not in c, "%s: no chroot, no reboot" % tag)
+                    ok("--bind" not in c, "%s: nothing bound" % tag)
             else:
                 ok("--no-install-recommends" not in c and "converge" not in c and "overlayroot-chroot" not in c,
                    "%s: no manifest, no converge, no chroot — exactly as before" % tag)

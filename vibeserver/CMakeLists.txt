@@ -693,6 +693,9 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
                    linux/pocket/vibeserver-pocket-seal linux/pocket/vibeserver-pocket-converge
           DESTINATION lib/vibeserver)
   install(FILES linux/pocket/pocket-packages.txt DESTINATION lib/vibeserver)
+  # ★★ An Update's initramfs rebuild inside overlayroot-chroot (MODULES=dep cannot find / there) — see the file.
+  install(FILES linux/pocket/vibeserver-pocket-initramfs.conf
+          DESTINATION share/initramfs-tools/conf.d RENAME vibeserver-pocket)
   install(FILES linux/pocket/vibeserver-pocket.service linux/pocket/vibeserver-pocket-data.service
                 linux/pocket/vibeserver-pocket-seal.service DESTINATION lib/systemd/system)
 

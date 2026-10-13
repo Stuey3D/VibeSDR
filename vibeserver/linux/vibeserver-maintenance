@@ -90,31 +90,40 @@ log() { echo "$*"; }
 #    powered until it is back. Everywhere else (no overlay) this is exactly the old behaviour.
 OVERLAY=0
 grep -qw "overlayroot=tmpfs" /proc/cmdline 2>/dev/null && command -v overlayroot-chroot >/dev/null && OVERLAY=1
-# ★★★ AND THE BOOT PARTITION INSIDE THE CHROOT (2026-10-13). overlayroot-chroot binds /proc /run /sys /dev into the real
-#     root — not the boot partition, which on the real root is just an empty /boot/firmware directory. So a config.txt
-#     line (vibeserver-pocket-converge), a kernel, or an initramfs written in there landed on the ROOT partition, where
-#     the firmware never looks. The live mount is remounted rw (as it always was) and the same device is mounted at the
-#     same place INSIDE the chroot for the length of the command — the kernel hands back the one superblock, so both
-#     views are the same files — and unmounted before the chroot exits. Already mounted in there (an overlayroot that
-#     binds it) or no device to hand: left exactly as before.
+# ★★★ AND THE BOOT PARTITION — AND /dev — IN THE CHROOT (2026-10-13). overlayroot-chroot binds only /proc /run /sys into
+#     the real root (its lowerdir, /media/root-ro). The boot partition there is just an empty /boot/firmware directory,
+#     so a config.txt line (vibeserver-pocket-converge), a kernel or an initramfs written in there landed on the ROOT
+#     partition, where the firmware never looks.
+#  ★★ The first fix (88b3b75e) mounted the boot device from INSIDE the chroot — and on Stuart's Portable it printed
+#     "the boot partition could not be mounted inside the chroot": with no /dev bound in there, /dev/mmcblk0p1 does not
+#     exist to mount. So both are BOUND FROM OUTSIDE, onto the lowerdir, before overlayroot-chroot runs:
+#       · /dev — the chroot's apt, dpkg and initramfs hooks expect devices (a chroot without /dev is not a system);
+#       · the live boot partition, remounted rw — overlayroot-chroot itself then lists it among the lowerdir's /dev/
+#         mounts and keeps it writable for the duration; the kernel hands back the one superblock, so both views are
+#         the same files.
+#    Both are unmounted again afterwards, in reverse order, whatever the command returned. Already mounted there, or
+#    no boot partition: left exactly as before.
+#  ★ The initramfs half of the same night is in vibeserver-pocket-initramfs.conf (MODULES=dep cannot find / here).
 apt_do() {
   if [ "$OVERLAY" = 1 ]; then
-    local BOOTMP="" BOOTDEV=""
+    local LOWER="" BOOTMP="" BOUND="" rc=0 B
+    LOWER=$(awk '$1 == "overlayroot" && $2 == "/" { print $0 }' /proc/mounts)
+    LOWER=${LOWER##*lowerdir=}; LOWER=${LOWER%%,*}
     for B in /boot/firmware /boot; do
-      mountpoint -q "$B" && mount -o remount,rw "$B" 2>/dev/null && { BOOTMP=$B; BOOTDEV=$(findmnt -no SOURCE "$B" 2>/dev/null || true); break; }
+      mountpoint -q "$B" && mount -o remount,rw "$B" 2>/dev/null && { BOOTMP=$B; break; }
     done
-    local rc=0
-    # shellcheck disable=SC2016
-    overlayroot-chroot env DEBIAN_FRONTEND=noninteractive VIBE_BOOTMP="$BOOTMP" VIBE_BOOTDEV="$BOOTDEV" /bin/sh -c '
-      M=""
-      if [ -n "$VIBE_BOOTDEV" ] && [ -d "$VIBE_BOOTMP" ] && ! mountpoint -q "$VIBE_BOOTMP"; then
-        if mount -o rw "$VIBE_BOOTDEV" "$VIBE_BOOTMP" 2>/dev/null; then M=1
-        else echo "(the boot partition could not be mounted inside the chroot — config.txt and the kernel left as they are)"; fi
+    if [ -n "$LOWER" ] && mountpoint -q "$LOWER"; then
+      if [ -d "$LOWER/dev" ] && ! mountpoint -q "$LOWER/dev"; then
+        mount --bind /dev "$LOWER/dev" && BOUND="$LOWER/dev $BOUND"
       fi
-      rc=0; "$@" || rc=$?
-      if [ -n "$M" ]; then sync; umount "$VIBE_BOOTMP" 2>/dev/null || true; fi
-      exit $rc' vibe-apt "$@" || rc=$?
+      if [ -n "$BOOTMP" ] && [ -d "$LOWER$BOOTMP" ] && ! mountpoint -q "$LOWER$BOOTMP"; then
+        if mount --bind "$BOOTMP" "$LOWER$BOOTMP"; then BOUND="$LOWER$BOOTMP $BOUND"
+        else log "(the boot partition could not be bound into the real root — config.txt and the kernel left as they are)"; fi
+      fi
+    fi
+    overlayroot-chroot env DEBIAN_FRONTEND=noninteractive "$@" || rc=$?
     sync
+    for B in $BOUND; do umount "$B" 2>/dev/null || umount -l "$B" 2>/dev/null || true; done
     if [ -n "$BOOTMP" ]; then mount -o remount,ro "$BOOTMP" 2>/dev/null || true; fi
     return $rc
   fi
