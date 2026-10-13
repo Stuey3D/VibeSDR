@@ -31,10 +31,14 @@ private:
 class Ita2 {
 public:
     explicit Ita2(const std::string& framing);
-    void reset() { shift = false; lastCode = 0; firstChar = true; }
+    void reset() { shift = false; lastCode = 0; firstChar = true; provisional_ = false; }
     /** ★ A re-sync after a SHORT loss: the framing starts again, the sender's letters/figures shift is kept — see
-     *  FskDecoder::processBit. */
-    void resync() { lastCode = 0; firstChar = true; }
+     *  FskDecoder::processBit. A kept FIGURES shift is only PROVISIONAL: the LTRS that ended it may have been lost in
+     *  the same fade, and the next printing character decides (processChar). */
+    void resync() { lastCode = 0; firstChar = true; provisional_ = shift; }
+    /** True while a figures shift kept across a re-sync has not yet been confirmed by a printing character. */
+    bool provisional() const { return provisional_; }
+    bool inFigures() const { return shift; }
     /** ★ UNSHIFT ON SPACE (2026-10-04): back to letters after every space, as many amateur machines send. OFF by
      *  default — DWD sends whole groups of figures under ONE FIGS shift, which this would turn into letters. */
     bool usos = false;
@@ -49,7 +53,7 @@ private:
     char32_t codeToChar(uint8_t code, bool fig) const;
     char32_t ltrs[32], figs[32];
     std::map<uint8_t, char32_t> codeLtrs, codeFigs;
-    bool shift = false, firstChar = true;
+    bool shift = false, firstChar = true, provisional_ = false;
     uint8_t lastCode = 0;
     const uint8_t letters = 0x1f, figures = 0x1b;
     int dataBits = 5, nbits_ = 5;

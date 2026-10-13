@@ -100,9 +100,35 @@ char32_t Ita2::processChar(uint16_t code) {
     }
     if (firstChar) { lastCode = dataB; firstChar = false; return 0; }
     char32_t out = 0;
-    if (lastCode == letters)      shift = false;
-    else if (lastCode == figures) shift = true;
-    else                          out = codeToChar(lastCode, shift);
+    if (lastCode == letters)      { shift = false; provisional_ = false; }   // an explicit shift always wins
+    else if (lastCode == figures) { shift = true;  provisional_ = false; }
+    else {
+        /* ★★ A FIGURES SHIFT KEPT ACROSS A RE-SYNC IS PROVISIONAL (Stuart, 2026-10-13, iPhone on DDK2 4583 kHz: "RTTY
+         *  doesn't seem quite as robust as before" — "FREQUENCIES 4583((0"" for "4583 KHZ", "DDK" DHU"). Keeping the
+         *  shift across a short loss (FskDecoder::processBit) is right when the fade fell inside a synop line, and wrong
+         *  when it swallowed the LTRS: the next word then printed in figures. The FIRST printing character after the
+         *  re-sync decides. A digit, '.', '/' or '-' is what DWD's figures are (synop groups, "41/96", "8807/",
+         *  "10100.8") — figures stay. Anything else in figures — $ # " ( ) ' , : ; ! ? & BEL — is a letter seen through
+         *  the wrong shift: back to letters for it and onwards, as if the lost LTRS had arrived. Space / CR / LF / NUL
+         *  print the same in both and decide nothing. An explicit LTRS or FIGS settles it (above). ('+' and '=' are not
+         *  in this table: DWD's '=' would read ';' here, and a re-sync landing exactly on it prints 'V' — one character.)
+         *  ★ ONE character, not the whole first word: judging to the next space (measured) also turned a synop group
+         *  with one misread character into letters for the rest of its line ("88'10173 20065" → "88JQPQUE WPPYT"), the
+         *  very failure the kept shift fixed. Measured on synth_rtty.py's DWD synop (10 dB, 20 dB selective fading,
+         *  seeds 0-3), before → after: digit groups printed as letters 13 → 13, whole 5-digit groups 66 → 66, letter
+         *  words 122 → 123 (pre-10-12 decoder: 41 / 37 / 123). Real DWD clip (dwd-4582khz-2026-10-04): "$#7" → "DH7",
+         *  '"' → "Z" — text identical to the decoder before the kept shift. Seeds 4-11: figures punctuation 95 → 59
+         *  characters, letter words 236 → 238, whole groups 139 → 136 — ONE double fade (the LTRS AND the next FIGS both
+         *  lost) that the kept shift had printed right by luck now prints that synop line as letters, as the decoder
+         *  before 10-12 did. Only after a re-sync that KEPT figures — with no
+         *  re-sync, or after a reset to letters, nothing here runs. AUTO decides on frames: identical on 10 signals. */
+        if (provisional_ && shift) {
+            const char32_t f = codeToChar(lastCode, true);
+            if (f == U'.' || f == U'/' || f == U'-' || (f >= U'0' && f <= U'9')) provisional_ = false;   // still figures
+            else if (f != 0 && f != U' ' && f != U'\r' && f != U'\n') { shift = false; provisional_ = false; }  // a letter
+        }
+        out = codeToChar(lastCode, shift);
+    }
     if (usos && out == U' ') shift = false;   // ★ unshift on space (option, off by default)
     lastCode = dataB;
     return out;
@@ -449,8 +475,9 @@ void FskDecoder::processBit(bool bit) {
          *  a fade, so it is kept across a loss under 5 s — NAVTEX's rule (NavtexRx::pushBit): five seconds or more is a
          *  new transmission, and that starts in letters as before. Measured on synth_rtty.py's DWD synop (10 dB, 20 dB
          *  selective fading, four seeds): digit groups printed as letters 41 → 13, whole 5-digit groups 37 → 66, letter
-         *  words 123 → 122. The cost is the other way round: a LTRS lost in the same fade now leaves a word in figures
-         *  (the real DWD recording: "DDH7" → "$#7", one KHZ → '"'). AUTO picks on frames (goodFrames / framingErrors),
+         *  words 123 → 122. The cost was the other way round: a LTRS lost in the same fade left a word in figures
+         *  (the real DWD recording: "DDH7" → "$#7", one KHZ → '"') — so the kept figures shift is PROVISIONAL until
+         *  the next printing character (Ita2::processChar, 2026-10-13). AUTO picks on frames (goodFrames / framingErrors),
          *  never on the text: its choice, timing, searches and states measured identical before and after. */
         if (ita2) {
             const bool shortLoss = lastGoodBit_ >= 0
