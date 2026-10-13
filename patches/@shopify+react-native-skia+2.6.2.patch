@@ -968,3 +968,29 @@ index 08c16a9..9f07439 100644
      visit(recorder, this.root);
      const sharedValues = recorder.getSharedValues();
      const sharedRecorder = recorder.getRecorder();
+diff --git a/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java b/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
+--- a/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
++++ b/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
+@@ -47,6 +47,22 @@
+         return true;
+     }
+ 
++    /* VIBESDR PATCH — REPAINT WHEN THE WINDOW COMES BACK (2026-10-13, Moto G35). After saving a recording to Google
++     * Drive and returning, the tuning and zoom drums and part of the status row were BLANK until touched or rotated.
++     * Android may drop a hidden window's layers; canvases that draw every frame (waterfall, spectrum) refill on their
++     * own, but a still canvas only draws when its picture changes, so nothing asked it to paint again. A rotation fixed
++     * it because a size change always redraws — so returning to view takes that same path: the native size-change
++     * handler resizes the surface (a no-op at the same size) and redraws the current picture. One redraw per canvas on
++     * each return, nothing otherwise. */
++    @Override
++    protected void onWindowVisibilityChanged(int visibility) {
++        super.onWindowVisibilityChanged(visibility);
++        if (visibility == VISIBLE && isAvailable() && getWidth() > 0 && getHeight() > 0) {
++            SurfaceTexture st = getSurfaceTexture();
++            if (st != null) mApi.onSurfaceTextureChanged(st, getWidth(), getHeight());
++        }
++    }
++
+     private long _prevTimestamp = 0;
+     @Override
+     public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
