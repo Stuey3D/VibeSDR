@@ -683,8 +683,16 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #    no Depends is added because no other install ever runs it.
   # ★★ …and its power-cut hardening: the settings partition (vibeserver-pocket-data) and the one-time
   #    read-only-root seal. Same rule: dormant without the marker, enabled only by the image.
+  # ★★★ …and the Portable's OPERATING SYSTEM, so a box flashed once updates fully through Update (Stuart, 2026-10-13:
+  #     "after initial setup we need to make sure that VibeServer Portables can be fully updated without needing a full
+  #     ISO again"). vibeserver-pocket-converge applies what the image used to do only at flash time (customise.sh calls
+  #     it too — one source of truth); pocket-packages.txt is the system packages a Portable needs, which the admin
+  #     Update installs when missing. Same rule again: both do NOTHING without the marker, and the list is never a
+  #     Depends/Recommends — an ordinary install must not pull a hotspot stack or an initramfs builder.
   install(PROGRAMS linux/pocket/vibeserver-pocket linux/pocket/vibeserver-pocket-data
-                   linux/pocket/vibeserver-pocket-seal DESTINATION lib/vibeserver)
+                   linux/pocket/vibeserver-pocket-seal linux/pocket/vibeserver-pocket-converge
+          DESTINATION lib/vibeserver)
+  install(FILES linux/pocket/pocket-packages.txt DESTINATION lib/vibeserver)
   install(FILES linux/pocket/vibeserver-pocket.service linux/pocket/vibeserver-pocket-data.service
                 linux/pocket/vibeserver-pocket-seal.service DESTINATION lib/systemd/system)
 

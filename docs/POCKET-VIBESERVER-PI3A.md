@@ -51,6 +51,7 @@ Nothing here has run on a Pi 3 A+ yet. The checklist at the end is how to prove 
 | Settings partition, failsafe, binds, RAM caches, baked-map link | `vibeserver-pocket-data` | yes | **device only** |
 | Read-only root seal (first boot) | `vibeserver-pocket-seal` | yes | **device only** |
 | Updates under a read-only root | `vibeserver-maintenance` (`apt_do`) | yes | **device only** |
+| Full OS updates without a new card (packages + OS settings) | `vibeserver-pocket-converge`, `pocket-packages.txt`, `postinst`, `vibeserver-maintenance` | yes | `test_pocket_converge.py` (fake root + stubbed apt); **device: not yet** |
 | Image customisation (one script, both arches, both routes) | `image/pocket/stage-pocket/00-pocket/files/customise.sh` | yes | images built (see the report) |
 | Clock from DAB/RDS (brief step 5) | — | **no** | — |
 | "Use this phone's location" (brief step 4) | — | **no** | — |
@@ -276,10 +277,20 @@ A non-pocket server never calls the gate, so it is unchanged.
 
 **Updates under a read-only root.** The admin page's "Install updates" (and the scheduled update)
 runs apt **in the real root** through overlayroot's own `overlayroot-chroot`:
-1. The boot partition is remounted writable for a kernel or `config.txt` change.
-2. apt runs.
-3. The box **reboots**, because an overlay whose lower layer changed underneath it is not safe to
-   keep running.
+1. The boot partition is remounted writable. It is also mounted inside the chroot, because
+   `overlayroot-chroot` binds only `/proc`, `/run`, `/sys` and `/dev`. Without that, a kernel or
+   `config.txt` change would land on the root partition, where the firmware never looks.
+2. apt upgrades `vibeserver`.
+3. **A Portable updates fully, not just its package** (Stuart, 2026-10-13: "after initial setup we
+   need to make sure that VibeServer Portables can be fully updated without needing a full ISO
+   again"). Any system package in `pocket-packages.txt` that the box lacks is installed. Then
+   `vibeserver-pocket-converge` brings the OS to what this release expects: services, drop-ins,
+   avahi, journald, zram, `config.txt` and fstab. `postinst` has already run it once. Details are in
+   [`image/pocket/README.md`](../image/pocket/README.md#updating-a-portable-no-new-card-needed).
+   **A new image is only for a brand-new box.**
+4. The box **reboots**, because an overlay whose lower layer changed underneath it is not safe to
+   keep running. That reboot is also when the converge's changes take effect. Nothing is restarted
+   before it.
 
 That window is the one time the root is written. Do not pull the power during an update. An
 update-check also writes apt's lists to the real root. To change anything else in the OS by hand:

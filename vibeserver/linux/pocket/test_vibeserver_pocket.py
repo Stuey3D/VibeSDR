@@ -920,6 +920,28 @@ def main():
     vp.quiet_hardware(nm, which=lambda _: None)
     ok(nm.calls == [], "…and nothing is run where the tools are missing (not a Pi)")
 
+    # ── the start-time converge check: report only, never a crash ──
+    class R:
+        def __init__(self, rc, out):
+            self.returncode, self.stdout = rc, out
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = os.path.join(tmp, "converge")
+        open(fake, "w").close()
+        seen = []
+        with redirect_stdout(io.StringIO()):
+            got = vp.converge_report(run=lambda a, **k: (seen.append(a), R(1, b"vibeserver-pocket-converge: !! system packages missing (Update installs them): ffmpeg\n"))[1], path=fake)
+        ok(seen == [[fake, "--check"]], "converge check at start: --check only (never apply on the live overlay)")
+        ok(len(got) == 1 and "ffmpeg" in got[0], "…and what is not converged is logged")
+        with redirect_stdout(io.StringIO()):
+            got = vp.converge_report(run=lambda a, **k: R(0, b"vibeserver-pocket-converge: converged\n"), path=fake)
+        ok(got == [], "a converged box logs nothing")
+        def boom(a, **k):
+            raise OSError("no")
+        with redirect_stdout(io.StringIO()):
+            got = vp.converge_report(run=boom, path=fake)
+        ok(got == [], "a check that cannot run is a log line, not a crash")
+        ok(vp.converge_report(path=os.path.join(tmp, "absent")) == [], "no converge script (an older package): nothing")
+
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")
 

@@ -1,0 +1,492 @@
+#!/usr/bin/python3
+# vibeserver-pocket-converge — bring a VibeServer PORTABLE's operating system to what THIS release expects (2026-10-13).
+#
+# ★★★ WHY (Stuart, 2026-10-13: "after initial setup we need to make sure that VibeServer Portables can be fully updated
+#     without needing a full ISO again"). The package and its daemons always updated through apt. Everything ELSE the
+#     image does — the services switched off, the NetworkManager connectivity check, avahi on every interface, the
+#     journal in RAM, zram, the config.txt lines, the read-only /boot — happened ONLY when a card was flashed, in
+#     image/pocket/.../customise.sh. A fix to any of it reached new cards and never an owner's box. Now that list lives
+#     HERE, in the package, and runs:
+#       · in the image build (customise.sh calls it — one source of truth, nothing duplicated);
+#       · in the package's postinst on every upgrade (inside overlayroot-chroot during an Update, so it writes the
+#         REAL root, and the post-update reboot is when it takes effect);
+#       · again from vibeserver-maintenance after an Update has installed any new system packages (pocket-packages.txt),
+#         with the boot partition mounted where it can see it;
+#       · `--check` from vibeserver-pocket at start: reports, never changes (logged to the journal).
+#
+# ★★★ OFF unless /etc/vibeserver-pocket/enabled exists. The package ships this to EVERY install; on a desktop or an
+#     ordinary Pi it prints one line and does nothing at all.
+# ★★★ SAFE ON A LIVE BOX. It never starts, stops or restarts anything — no NetworkManager restart mid-run, no avahi
+#     restart: `systemctl enable/disable/mask` change what the NEXT boot does. A Portable reboots after every Update
+#     (maintenance's after_install), and that reboot is the moment it all takes effect.
+#  ★★ And it REFUSES to "apply" onto the live read-only overlay: a write there lands in RAM and is gone at the next
+#     boot — a converge that reports success and then evaporates. Through overlayroot-chroot (which Update uses) or
+#     on a box whose root is writable, it applies.
+# ★★★ IDEMPOTENT: a file is written only when its content differs; a unit is touched only when its state differs. Run
+#     it a hundred times — the second run reports "already converged" (test_pocket_converge.py proves it).
+#
+# ★★ TWO KINDS OF STEP:
+#     ENFORCED every run — the things that ARE the product: our own units enabled, our own drop-in files (an owner's
+#       override goes in a file of their own, which wins), avahi answering on every interface (Stuart, 2026-10-13: "the
+#       mdns must be present whenever any network connection is present").
+#     ONCE — switching off something of the OPERATING SYSTEM's (Bluetooth, a getty, udisks2…) and the config.txt and
+#       fstab lines. Each is done once and written in a ledger (/etc/vibeserver-pocket/converge.done); a later run
+#       never re-does it. So an owner who switches the HDMI console back on (the image's own advice: "systemctl
+#       unmask getty@tty1") keeps it through every Update, and a step a NEW release adds still reaches every box once.
+#
+# ★ IMAGE-ONLY, and why (kept in customise.sh): the marker itself (it is what makes a box a Portable); pocket.conf
+#   (the country chosen at build — the daemon has the same defaults in code, so a box without it is fine); the
+#   first-boot config.json (on the settings partition from the first boot on); the hostname (vibeserver-pocket owns
+#   it at runtime); the Wi-Fi country (setup owns it); the apt KEY (fetched over the network — a box that received
+#   this package already has a key that works); the explicit initramfs build (overlayroot's own package trigger and
+#   every kernel package rebuild it on an Update); removing ` resize` from cmdline.txt (Pi OS resizes on the FIRST
+#   boot only — a box past it can never resize again); the locked `vibe` login and userconfig (first boot only).
+#
+# Usage: vibeserver-pocket-converge            apply (as root)
+#        vibeserver-pocket-converge --check    report what is not converged; exit 1 if anything is pending
+#        vibeserver-pocket-converge --missing-packages
+#                                              print the pocket-packages.txt names dpkg does not have (one line)
+# Environment (tests): VIBE_POCKET_ROOT (default /) — every path is under it, and systemctl gets --root;
+#                      SYSTEMCTL (default systemctl); VIBE_POCKET_PROC_MOUNTS (default /proc/self/mounts).
+
+import os
+import re
+import subprocess
+import sys
+
+ROOT = os.environ.get("VIBE_POCKET_ROOT", "/") or "/"
+SYSTEMCTL = os.environ.get("SYSTEMCTL", "systemctl")
+PROC_MOUNTS = os.environ.get("VIBE_POCKET_PROC_MOUNTS", "/proc/self/mounts")
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+MARKER = "/etc/vibeserver-pocket/enabled"
+LEDGER = "/etc/vibeserver-pocket/converge.done"
+MANIFEST = "/usr/lib/vibeserver/pocket-packages.txt"
+DPKG_STATUS = "/var/lib/dpkg/status"
+
+# ── ENFORCED: our files ─────────────────────────────────────────────────────────────────────────────────────────────
+# ★★ NETWORKMANAGER'S CONNECTIVITY CHECK — the tunnel's gate. NM decides "full" (real internet) by fetching this when a
+#    connection comes up and every 5 minutes after; vibeserver-pocket follows the verdict by event (nmcli monitor), and
+#    the server starts its tunnel only on "full". A box on its own hotspot is never "full", so it never spawns
+#    cloudflared there. ★ Not restarted here — NM reads it at the post-update reboot.
+NM_CONNECTIVITY = ("/etc/NetworkManager/conf.d/50-vibeserver-connectivity.conf",
+                   "# Written by the VibeServer pocket image: lets NetworkManager tell \"joined Wi-Fi\" from \"has internet\".\n"
+                   "[connectivity]\n"
+                   "uri=http://nmcheck.gnome.org/check_network_status.txt\n"
+                   "response=NetworkManager is online\n"
+                   "interval=300\n")
+# ★★ VOLATILE BY DEFAULT. The journal lives in RAM (16 MB cap) — a pocket box's logs are for the session in front of
+#    you, and a journal on the SD card is a write every few seconds.
+JOURNALD = ("/etc/systemd/journald.conf.d/60-vibeserver-pocket.conf",
+            "# VibeServer pocket image: logs in RAM only — no SD writes, gone at power-off.\n"
+            "[Journal]\n"
+            "Storage=volatile\n"
+            "RuntimeMaxUse=16M\n")
+# ★ Swap: compressed RAM (zram) only, never a file on the card. rpi-swap is Trixie's swap manager.
+ZRAM = ("/etc/rpi/swap.conf.d/60-vibeserver-pocket.conf",
+        "# VibeServer pocket image: no swap file on the SD card — zram only.\n"
+        "[Main]\n"
+        "Mechanism=zram\n")
+OUR_FILES = (NM_CONNECTIVITY, JOURNALD, ZRAM)
+
+# ★ The VibeSDR apt repository — REPAIRED if missing, never rewritten if present (an owner or a tester may point it
+#   elsewhere). The KEY is image-only: fetching it needs the network, and a box this package reached already has one.
+APT_LIST = "/etc/apt/sources.list.d/vibesdr.list"
+APT_KEY = "/usr/share/keyrings/vibesdr.gpg"
+APT_LINE = ("deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] "
+            "https://apt.vibesdr.net stable main\n")
+
+# ★★★ THE NAME ON EVERY NETWORK (Stuart, 2026-10-13). avahi answers on every interface unless allow-interfaces /
+#     deny-interfaces says otherwise — any such line is switched off. vibeserver-pocket logs one that comes back.
+AVAHI_CONF = "/etc/avahi/avahi-daemon.conf"
+AVAHI_RE = re.compile(r"^[ \t]*((allow|deny)-interfaces[ \t]*=.*)$")
+AVAHI_SUFFIX = "  # off: VibeServer pocket answers on every interface"
+
+# ★★ postinst enables units only when systemd is RUNNING, which in a chroot it is not — so they are enabled here.
+#    vibeserver-pocket-data (the settings partition) and -seal (the one-time read-only seal; a no-op once sealed).
+ENABLE = ("NetworkManager.service", "vibeserver.service", "vibeserver-radios.service",
+          "vibeserver-maintenance.path", "vibeserver-pocket.service", "avahi-daemon.service",
+          "vibeserver-pocket-data.service", "vibeserver-pocket-seal.service")
+DIRS = ("/data", "/var/lib/vibeserver-pocket")
+
+# ── ONCE (ledger): the operating system's things a pocket radio never uses ─────────────────────────────────────────
+# ★ nftables.service would load /etc/nftables.conf at boot — vibeserver-pocket loads its own table only while a
+#   hotspot is up. apt's daily timers wake a 512 MB box to download indexes over a hotspot that has no internet;
+#   VibeServer's own update schedule is the one an owner sets. dphys-swapfile: zram only. fake-hwclock would write the
+#   root every hour; the settings partition keeps timesyncd's clock instead.
+DISABLE = ("nftables.service", "bluetooth.service", "hciuart.service", "ModemManager.service",
+           "triggerhappy.service", "triggerhappy.socket", "apt-daily.timer", "apt-daily-upgrade.timer",
+           "man-db.timer", "e2scrub_all.timer", "rpi-display-backlight.service", "keyboard-setup.service",
+           "getty@tty1.service", "dphys-swapfile.service", "fake-hwclock.service")
+# ★★ NO CONSOLE LOGINS (Stuart's Pi 2 list, 2026-10-10): no screen, no keyboard, a LOCKED account — a getty on HDMI
+#    or the UART could not log anyone in anyway. ★ udisks2 is D-Bus activated, so "disable" does not stop it: masked.
+MASK = ("serial-getty@ttyAMA0.service", "serial-getty@serial0.service", "serial-getty@ttyS0.service",
+        "getty@tty1.service", "udisks2.service")
+
+# ★★ config.txt — HEADLESS: no display stack, no Bluetooth, no onboard audio (Stuart + Kiko, 2026-10-10: power AND
+#    EMI — the 3.5 mm jack is a switching output beside the antenna), the initramfs that carries overlayroot.
+#    (line, "already set?" pattern). A KEY the owner set to something else counts as set: an update never overrules a
+#    deliberate value, it only adds a line that is missing.
+BOOT_MARK = "# VibeServer pocket"
+BOOT_LINES = (("gpu_mem=16", r"^[ \t]*gpu_mem[ \t]*="),
+              ("dtoverlay=disable-bt", r"^[ \t]*dtoverlay[ \t]*=[ \t]*disable-bt\b"),
+              ("dtparam=audio=off", r"^[ \t]*dtparam[ \t]*=[ \t]*audio[ \t]*="),
+              ("disable_splash=1", r"^[ \t]*disable_splash[ \t]*="),
+              ("auto_initramfs=1", r"^[ \t]*auto_initramfs[ \t]*="))
+# ★ Only when the pocket block is written for the FIRST time (as the image always did): the display driver, the
+#   camera/display probes and the onboard audio are commented out, never deleted.
+BOOT_COMMENT_OUTS = ((re.compile(r"^(dtoverlay=vc4-kms-v3d.*)$"), r"#\1  # off: headless pocket box"),
+                     (re.compile(r"^(camera_auto_detect=1)$"), r"#\1"),
+                     (re.compile(r"^(display_auto_detect=1)$"), r"#\1"),
+                     (re.compile(r"^(dtparam=audio=on)$"), r"#\1  # off: pocket box audio goes over Wi-Fi"))
+BOOT_FILES = ("/boot/firmware/config.txt", "/boot/config.txt")
+# ★ The boot partition read-only too (raspi-config's "boot partition read-only"): the seal and an Update remount it
+#   for the moment they need it.
+FSTAB = "/etc/fstab"
+FSTAB_RE = re.compile(r"^([^#].*[ \t]/boot/firmware[ \t]+vfat[ \t]+)defaults([ \t])")
+FSTAB_RO_RE = re.compile(r"^[^#].*[ \t]/boot/firmware[ \t]+vfat[ \t]+\S*\bro\b")
+
+
+def P(path):
+    """A path on the target root."""
+    return os.path.join(ROOT, path.lstrip("/")) if ROOT != "/" else path
+
+
+def say(msg):
+    print("vibeserver-pocket-converge: " + msg, flush=True)
+
+
+def read(path):
+    try:
+        with open(P(path), encoding="utf-8", errors="surrogateescape") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def write_atomic(path, text, mode=0o644):
+    """★★ A POWER CUT LEAVES THE OLD FILE OR THE NEW ONE: temp file, fsync, rename, fsync the directory — the same
+    discipline as the seal's cmdline.txt. The mode of an existing file is kept."""
+    full = P(path)
+    d = os.path.dirname(full)
+    os.makedirs(d, exist_ok=True)
+    try:
+        mode = os.stat(full).st_mode & 0o7777
+    except OSError:
+        pass
+    tmp = full + ".vibe-new"
+    with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    try:
+        os.chmod(tmp, mode)
+    except OSError:
+        pass                       # ★ vfat (config.txt) has no modes
+    os.replace(tmp, full)
+    try:
+        fd = os.open(d, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+# ── packages ─────────────────────────────────────────────────────────────────────────────────────────────────────
+def manifest():
+    """The pocket-packages.txt names, in order. Beside this script when the root has none (a source checkout)."""
+    text = read(MANIFEST)
+    if text is None:
+        try:
+            with open(os.path.join(HERE, "pocket-packages.txt"), encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            return []
+    out = []
+    for line in text.splitlines():
+        name = line.split("#", 1)[0].strip()
+        if name and re.match(r"^[a-z0-9][a-z0-9+.-]+$", name) and name not in out:
+            out.append(name)
+    return out
+
+
+def installed_packages():
+    """★ dpkg's status file read directly — no dpkg-query, so it works on a fake root and costs one file read."""
+    text = read(DPKG_STATUS) or ""
+    have = set()
+    for stanza in text.split("\n\n"):
+        pkg = status = None
+        for line in stanza.splitlines():
+            if line.startswith("Package:"):
+                pkg = line.split(":", 1)[1].strip()
+            elif line.startswith("Status:"):
+                status = line.split(":", 1)[1].split()
+        if pkg and status and status[-1] == "installed":
+            have.add(pkg)
+    return have
+
+
+def missing_packages():
+    have = installed_packages()
+    return [p for p in manifest() if p not in have]
+
+
+# ── units, read OFFLINE from the filesystem (cheap, and the same on a fake root, a chroot or a live box) ────────────
+UNIT_DIRS = ("/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system")
+
+
+def unit_exists(u):
+    names = [u]
+    m = re.match(r"^([^@]+@)[^.]+(\.\w+)$", u)
+    if m:
+        names.append(m.group(1) + m.group(2))          # an instance (getty@tty1) exists if its template does
+    return any(os.path.lexists(os.path.join(P(d), n)) for d in UNIT_DIRS for n in names)
+
+
+def unit_masked(u):
+    try:
+        return os.readlink(os.path.join(P("/etc/systemd/system"), u)) == "/dev/null"
+    except OSError:
+        return False
+
+
+def unit_enabled(u):
+    base = P("/etc/systemd/system")
+    try:
+        dirs = os.listdir(base)
+    except OSError:
+        return False
+    return any(d.endswith((".wants", ".requires")) and os.path.lexists(os.path.join(base, d, u)) for d in dirs)
+
+
+def systemctl(*args):
+    cmd = [SYSTEMCTL] + (["--root=" + ROOT] if ROOT != "/" else []) + list(args)
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+# ── the ledger ───────────────────────────────────────────────────────────────────────────────────────────────────
+def ledger_read():
+    return set(l.strip() for l in (read(LEDGER) or "").splitlines() if l.strip() and not l.startswith("#"))
+
+
+def ledger_write(done):
+    write_atomic(LEDGER, "# vibeserver-pocket-converge: one-time steps already done on this box (never re-done, so an\n"
+                         "# owner's own change to one of them survives every Update). Delete a line to have it done again.\n"
+                 + "".join(k + "\n" for k in sorted(done)))
+
+
+# ── the steps ────────────────────────────────────────────────────────────────────────────────────────────────────
+class Run:
+    def __init__(self, apply):
+        self.apply = apply
+        self.changes = []          # applied (apply) or pending (check)
+        self.problems = []         # cannot be fixed here
+        self.done = ledger_read()
+        self.done0 = set(self.done)
+
+    def change(self, what, fn=None):
+        """Apply (or, in --check, report) one step. False when applying it failed — a ONCE step is then NOT
+        ledgered, so the next run tries again."""
+        if self.apply and fn is not None:
+            try:
+                if fn() is False:
+                    self.problem("could not " + what)
+                    return False
+            except OSError as e:
+                self.problem("could not %s (%s)" % (what, e.strerror or e))
+                return False
+        self.changes.append(what)
+        say(("" if self.apply else "pending: ") + what)
+        return True
+
+    def problem(self, what):
+        self.problems.append(what)
+        say("!! " + what)
+
+    # ★ ENFORCED
+    def files(self):
+        for path, text in OUR_FILES:
+            if read(path) != text:
+                self.change("write " + path, lambda p=path, t=text: write_atomic(p, t))
+        for d in DIRS:
+            if not os.path.isdir(P(d)):
+                self.change("make " + d, lambda d=d: os.makedirs(P(d), mode=0o755, exist_ok=True))
+
+    def apt_source(self):
+        if read(APT_LIST) is not None:
+            return
+        if not os.path.exists(P(APT_KEY)):
+            self.problem("no %s and no %s — this box cannot fetch VibeServer updates" % (APT_LIST, APT_KEY))
+            return
+        self.change("restore " + APT_LIST, lambda: write_atomic(APT_LIST, APT_LINE))
+
+    def avahi(self):
+        text = read(AVAHI_CONF)
+        if text is None:
+            return                 # ★ no avahi yet: the package check says so
+        lines = text.split("\n")
+        new = [("#" + AVAHI_RE.match(l).group(1) + AVAHI_SUFFIX) if AVAHI_RE.match(l) else l for l in lines]
+        if new != lines:
+            self.change("avahi: answer on every interface (allow/deny-interfaces switched off)",
+                        lambda: write_atomic(AVAHI_CONF, "\n".join(new)))
+
+    def packages(self):
+        if "network-manager" not in installed_packages() and os.path.exists(P(DPKG_STATUS)):
+            self.problem("NetworkManager is not installed — the Portable's Wi-Fi cannot work (Lite has had it since Bookworm)")
+        miss = missing_packages()
+        if miss:
+            # ★ Not installable from here (this runs inside dpkg's postinst, which holds the lock). The admin Update
+            #   installs them (vibeserver-maintenance), the image build installs them all.
+            self.problem("system packages missing (Update installs them): " + " ".join(miss))
+
+    def units(self):
+        for u in ENABLE:
+            if unit_enabled(u):
+                continue
+            if not unit_exists(u):
+                self.problem("%s is not installed — cannot enable it" % u)
+                continue
+            self.change("enable " + u, lambda u=u: systemctl("enable", u))
+        for u in DISABLE:
+            key = "disable:" + u
+            if key in self.done:
+                continue
+            ok = not unit_enabled(u) or self.change("disable " + u, lambda u=u: systemctl("disable", u))
+            if self.apply and ok:
+                self.done.add(key)
+        for u in MASK:
+            key = "mask:" + u
+            if key in self.done:
+                continue
+            ok = unit_masked(u) or self.change("mask " + u, lambda u=u: systemctl("mask", u))
+            if self.apply and ok:
+                self.done.add(key)
+
+    def boot(self):
+        # ★★ /boot/firmware EXISTS ⇒ it is the only place. Bookworm and later leave a "DO NOT EDIT — moved to
+        #    /boot/firmware" stub at /boot/config.txt, and inside a chroot without the boot partition mounted that stub
+        #    is the only config.txt in view: writing (and LEDGERING) the pocket lines there would mean the real file
+        #    never got them. /boot/config.txt only on a Pi OS that predates the move (no /boot/firmware at all).
+        cands = BOOT_FILES[:1] if os.path.isdir(P("/boot/firmware")) else BOOT_FILES[1:]
+        path = next((b for b in cands if os.path.isfile(P(b))), None)
+        if path is None:
+            # ★ Inside overlayroot-chroot the boot partition is mounted only if maintenance put it there; postinst
+            #   may run without it. Not a fault: maintenance runs this again with it mounted.
+            say("no config.txt visible here — boot lines left for a run that can see the boot partition")
+            return
+        text = read(path)
+        lines = text.split("\n")
+        first = not any(l.startswith(BOOT_MARK) for l in lines)
+        if first:
+            new = []
+            for l in lines:
+                for rx, rep in BOOT_COMMENT_OUTS:
+                    if rx.match(l):
+                        l = rx.sub(rep, l)
+                        break
+                new.append(l)
+            lines = new           # ★ AFTER the comment-outs: Lite's dtparam=audio=on, once commented, must not count as "set"
+        todo = [line for line, pat in BOOT_LINES
+                if "boot:" + line not in self.done and not any(re.match(pat, l) for l in lines)]
+        if first:
+            body = "\n".join(lines).rstrip("\n")
+            body += ("\n\n" + BOOT_MARK + " — headless radio box: no display, no Bluetooth, no onboard audio, no camera\n"
+                     "[all]\n" + "".join(l + "\n" for l in todo))
+        elif todo:
+            body = text.rstrip("\n") + ("\n\n" + BOOT_MARK + " — added by an update\n[all]\n" + "".join(l + "\n" for l in todo))
+        else:
+            body = None
+        if body is not None:
+            def go():
+                bak = P(path) + ".bak-pocket"
+                if first and not os.path.exists(bak):
+                    with open(bak, "w", encoding="utf-8", errors="surrogateescape") as f:
+                        f.write(text)
+                write_atomic(path, body)
+            if not self.change("%s: %s" % (path, ", ".join(todo) if todo else "pocket block (display/audio off)"), go):
+                return
+        if self.apply:
+            # ★ Ledgered whether added now or found already set — from here on an owner's edit stands.
+            self.done.update("boot:" + line for line, _ in BOOT_LINES)
+
+    def fstab(self):
+        if "fstab:boot-ro" in self.done:
+            return
+        text = read(FSTAB)
+        if text is None:
+            return
+        lines = text.split("\n")
+        if any(FSTAB_RO_RE.match(l) for l in lines):
+            if self.apply:
+                self.done.add("fstab:boot-ro")
+            return
+        new = [FSTAB_RE.sub(r"\1defaults,ro\2", l) for l in lines]
+        ok = new == lines or self.change("/etc/fstab: the boot partition read-only",
+                                         lambda: write_atomic(FSTAB, "\n".join(new)))
+        if self.apply and ok:
+            self.done.add("fstab:boot-ro")
+
+    def finish(self):
+        if self.apply and self.done != self.done0:
+            ledger_write(self.done)
+
+
+def live_overlay_root():
+    """True when / is the read-only overlay itself (not overlayroot-chroot's view of the real root, not a chroot)."""
+    if ROOT != "/":
+        return False
+    fstype = None
+    try:
+        with open(PROC_MOUNTS) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3 and parts[1] == "/":
+                    fstype = parts[2]          # ★ the LAST mount on / is the one in effect
+    except OSError:
+        return False
+    return fstype == "overlay"
+
+
+def main(argv):
+    mode = argv[1] if len(argv) > 1 else "apply"
+    if mode not in ("apply", "--check", "--missing-packages"):
+        print("usage: vibeserver-pocket-converge [--check|--missing-packages]", file=sys.stderr)
+        return 2
+    if not os.path.exists(P(MARKER)):
+        if mode != "--missing-packages":
+            say("not a VibeServer Portable (%s missing) — nothing to do" % MARKER)
+        return 0
+    if mode == "--missing-packages":
+        print(" ".join(missing_packages()))
+        return 0
+    apply = mode == "apply"
+    if apply and live_overlay_root():
+        say("the root is the read-only overlay — a change here would vanish at the next boot. "
+            "Run it through overlayroot-chroot (the admin Update does).")
+        return 0
+    r = Run(apply)
+    r.packages()
+    r.files()
+    r.apt_source()
+    r.avahi()
+    r.units()
+    r.boot()
+    r.fstab()
+    r.finish()
+    if apply:
+        say("%d change(s) — they take effect at the next boot" % len(r.changes) if r.changes else "already converged")
+        return 0
+    if not r.changes and not r.problems:
+        say("converged")
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

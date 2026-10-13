@@ -1492,6 +1492,34 @@ def boot(box, configured=None):
     setup_once(box)
 
 
+CONVERGE = "/usr/lib/vibeserver/vibeserver-pocket-converge"
+
+
+def converge_report(run=subprocess.run, path=CONVERGE):
+    """★★ IS THIS BOX WHAT THIS RELEASE EXPECTS? (Stuart, 2026-10-13: Portables "fully updated without needing a full
+    ISO again".) The admin Update applies vibeserver-pocket-converge to the real root; this asks the same script
+    `--check` once at start and LOGS anything not converged — a package the Update could not install, a unit an owner
+    re-enabled by hand, a config.txt line missing because the boot partition was out of reach. Report only: the root is
+    the read-only overlay, so a change made here would vanish at the next boot (the converge refuses anyway), and
+    nothing heavy belongs in the first seconds of a box that is raising its hotspot. Run on a THREAD (daemon), so a
+    slow SD card never delays the Wi-Fi; any failure is a log line, never a crash. Returns the lines it logged."""
+    out = []
+    if not os.path.exists(path):
+        return out
+    try:
+        r = run([path, "--check"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120)
+        text = r.stdout.decode("utf-8", "replace") if isinstance(r.stdout, bytes) else (r.stdout or "")
+        if r.returncode != 0:
+            for line in text.splitlines():
+                if line.strip():
+                    out.append(line.strip())
+                    log("converge: " + line.strip())
+            log("converge: the next 'Install updates' brings this box up to date")
+    except Exception as e:                    # ★ never take the Wi-Fi service down over a report
+        log("converge check could not run (%s)" % type(e).__name__)
+    return out
+
+
 def main_loop():
     if not os.path.exists(MARKER):
         log("not a pocket image (%s missing) — nothing to do" % MARKER)
@@ -1503,6 +1531,8 @@ def main_loop():
     #     on a Pi 2 the hostname was never synced (vibepocket.local never answered after setup) and no state was ever
     #     written. Now the name is set first, and a box without Wi-Fi runs on as a wired box (Box.tick: "wired").
     boot(box)
+    import threading
+    threading.Thread(target=converge_report, name="converge-check", daemon=True).start()
     uid = vibeserver_uid()
     net = NetWatch(sh)
     net.start()

@@ -10,6 +10,13 @@
 #     success and low RAM use. Keep the footprint minimal"). It ADDS only what the hotspot and the
 #     captive portal need, and switches OFF what a headless radio in a pocket never uses.
 # ★ Idempotent: running it twice leaves the same box.
+# ★★★ ONLY WHAT A FLASH CAN DO LIVES HERE (Stuart, 2026-10-13: "after initial setup we need to make sure that VibeServer
+#     Portables can be fully updated without needing a full ISO again"). Everything that should track a RELEASE — the
+#     system packages (pocket-packages.txt), the services on/off/masked, NetworkManager's connectivity check, avahi on
+#     every interface, the journal in RAM, zram, the config.txt lines, /boot read-only — is in the PACKAGE:
+#     /usr/lib/vibeserver/vibeserver-pocket-converge, called below and again by every Update. What stays here is
+#     genuinely one-time: the marker, the first-boot defaults, the name, the apt key, the initramfs build, the resize
+#     removal and the locked login. See image/pocket/README.md.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 POCKET_DEBS=${POCKET_DEBS:-/tmp/pocket-debs}
@@ -21,15 +28,12 @@ say() { echo "pocket-image: $*"; }
 ARCH=$(dpkg --print-architecture)
 say "customising a $ARCH root ($(. /etc/os-release; echo "$PRETTY_NAME"))"
 
-# ── 1. Packages: only what the hotspot needs that Lite may not already have ──────────────────────
+# ── 1. What the next two steps need; the rest of the packages come from the package's own list (step 4b) ──
 # ★ NetworkManager is Lite's default since Bookworm — checked, never installed over the top.
-#   dnsmasq-base: NM's shared (hotspot) mode runs it for DHCP + the captive DNS rule — a binary, no
-#   service of its own. nftables: the :80 → front-door redirect (its own service stays disabled).
-#   iw: station count + the no-drop scan. python3: the root Wi-Fi service (Lite ships it).
+#   curl + gnupg + ca-certificates: the apt key below. python3: vibeserver-pocket-converge (Lite ships it).
 apt-get update
 dpkg -s network-manager >/dev/null 2>&1 || { say "!! NetworkManager is not on this image — refusing (Lite has had it since Bookworm)"; exit 1; }
-#   avahi-daemon: VibeServerSetup.local / vibepocket.local (Lite ships it — named so an image without it fails here).
-apt-get install -y --no-install-recommends dnsmasq-base nftables iw rfkill python3 ca-certificates curl gnupg avahi-daemon
+apt-get install -y --no-install-recommends ca-certificates curl gnupg python3
 
 # ── 2. The VibeSDR apt repository, so the box updates like every other VibeServer ─────────────
 install -d -m 0755 /usr/share/keyrings
@@ -54,12 +58,8 @@ else
   apt-get install -y --no-install-recommends vibeserver
 fi
 [ -x /usr/lib/vibeserver/vibeserver-pocket ] || { say "!! this vibeserver package has no pocket support (vibeserver-pocket missing) — build it from the pocket branch: image/pocket/build-deb.sh"; exit 1; }
-# ★★★ ffmpeg — HOW DAB+ IS DECODED ON LINUX (Stuart, 2026-10-10: "does it contain FFMPEG ready for DAB+?" — it did not).
-#     The package only RECOMMENDS it, and everything here installs --no-install-recommends, so the first images had no
-#     DAB+ audio at all with an RTL-SDR plugged in. Named here explicitly, still without ITS recommends (no X, no extras).
-say "installing ffmpeg (DAB+ audio)"
-apt-get install -y --no-install-recommends ffmpeg
-command -v ffmpeg >/dev/null || { say "!! ffmpeg did not install — DAB+ would have no audio"; exit 1; }
+CONVERGE=/usr/lib/vibeserver/vibeserver-pocket-converge
+[ -x "$CONVERGE" ] || { say "!! this vibeserver package has no $CONVERGE — it predates full updates; build it from this checkout: image/pocket/build-deb.sh"; exit 1; }
 
 # ── 4. The pocket marker + defaults (root's directory: the daemon cannot create the marker) ──────
 install -d -o root -g root -m 0755 /etc/vibeserver-pocket
@@ -69,6 +69,21 @@ if [ ! -f /etc/vibeserver-pocket/pocket.conf ]; then
   install -m 0644 "$POCKET_FILES/pocket.conf" /etc/vibeserver-pocket/pocket.conf
   sed -i "s/^COUNTRY=.*/COUNTRY=$COUNTRY/" /etc/vibeserver-pocket/pocket.conf
 fi
+
+# ── 4b. The system packages — THE PACKAGE'S LIST, the same one every Update reads ───────────────
+# ★★ dnsmasq-base (hotspot DHCP + captive DNS), nftables (the :80 redirect), iw, rfkill, avahi-daemon, overlayroot +
+#    initramfs-tools (the read-only root), ffmpeg (★★★ DAB+ audio — Stuart, 2026-10-10: "does it contain FFMPEG ready
+#    for DAB+?"; the package only RECOMMENDS it)… all in /usr/lib/vibeserver/pocket-packages.txt, which says why.
+#    Without THEIR recommends (no X, no extras). After the marker: the converge does nothing without it.
+MISSING=$("$CONVERGE" --missing-packages)
+if [ -n "$MISSING" ]; then
+  say "installing the Portable's system packages: $MISSING"
+  # shellcheck disable=SC2086
+  apt-get install -y --no-install-recommends $MISSING
+fi
+MISSING=$("$CONVERGE" --missing-packages)
+[ -z "$MISSING" ] || { say "!! still missing after install: $MISSING"; exit 1; }
+command -v ffmpeg >/dev/null || { say "!! ffmpeg did not install — DAB+ would have no audio"; exit 1; }
 
 # ── 5. First-boot server config: a Full-mode front door with no radio and no password yet ────────
 # ★★ Without it the daemon would start as a single-radio server and look for a dongle that is not
@@ -80,45 +95,15 @@ if [ ! -s /etc/vibeserver/config.json ]; then
   chown vibeserver:vibeserver /etc/vibeserver/config.json /etc/vibeserver
 fi
 
-# ★★ NETWORKMANAGER'S CONNECTIVITY CHECK — the tunnel's gate. NM decides "full" (real internet) by
-#    fetching this when a connection comes up and every 5 minutes after; vibeserver-pocket follows
-#    the verdict by event (nmcli monitor), and the server starts its tunnel only on "full". A box on
-#    its own hotspot is never "full", so it never spawns cloudflared there.
-install -d -m 0755 /etc/NetworkManager/conf.d
-cat > /etc/NetworkManager/conf.d/50-vibeserver-connectivity.conf <<'EOF'
-# Written by the VibeServer pocket image: lets NetworkManager tell "joined Wi-Fi" from "has internet".
-[connectivity]
-uri=http://nmcheck.gnome.org/check_network_status.txt
-response=NetworkManager is online
-interval=300
-EOF
-
-# ── 6. Services: ours on, the ones a pocket radio never uses off ─────────────────────────────────
-# ★★ postinst enables ours only when systemd is RUNNING ([ -d /run/systemd/system ]), which in a
-#    chroot it is not — so an image would boot with VibeServer installed and never started. Enabled
-#    here by hand, every one of them.
-systemctl enable NetworkManager.service vibeserver.service vibeserver-radios.service \
-                 vibeserver-maintenance.path vibeserver-pocket.service
-# nftables.service would load /etc/nftables.conf at boot — we load our own table only while a
-# hotspot is up, so the service itself stays off.
-systemctl disable nftables.service 2>/dev/null || true
-for u in bluetooth.service hciuart.service ModemManager.service triggerhappy.service triggerhappy.socket \
-         apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer \
-         rpi-display-backlight.service keyboard-setup.service; do
-  systemctl disable "$u" 2>/dev/null || true
-done
-# ★★ NO CONSOLE LOGINS (Stuart's Pi 2 list, 2026-10-10). A pocket box has no screen and no keyboard,
-#    and its only account is LOCKED (section 8) — so a getty on HDMI or on the UART could not log
-#    anyone in anyway. With Bluetooth off, serial0 is the GPIO UART: no getty there either.
-#  ★ If an owner sets a password with Imager and wants the HDMI console: systemctl enable getty@tty1.
-systemctl mask serial-getty@ttyAMA0.service serial-getty@serial0.service serial-getty@ttyS0.service 2>/dev/null || true
-systemctl disable getty@tty1.service 2>/dev/null || true
-systemctl mask getty@tty1.service 2>/dev/null || true
-# ★ udisks2 is D-Bus activated, so "disable" does not stop it: mask it. It automounts USB disks —
-#   nothing to automount on a radio box, and it costs ~8 MB resident once anything wakes it.
-systemctl mask udisks2.service 2>/dev/null || true
-# ★ apt's daily timers are off: they wake a 512 MB box to download indexes over a hotspot that has
-#   no internet, and VibeServer's own update schedule (admin page) is the one an owner sets.
+# ── 6. THE OPERATING SYSTEM — the same converge every Update runs ─────────────────────────────────
+# ★★★ Services on (ours, NetworkManager, avahi, the settings partition, the seal) and off (Bluetooth, ModemManager,
+#     triggerhappy, apt's daily timers, nftables.service, dphys-swapfile, fake-hwclock), console gettys + udisks2
+#     masked, NetworkManager's connectivity check (the tunnel's gate), avahi on every interface, journald in RAM, zram
+#     only, config.txt's headless block (gpu_mem, disable-bt, audio off, no splash, auto_initramfs), /boot read-only in
+#     fstab, /data. Each is explained where it is defined: vibeserver/linux/pocket/vibeserver-pocket-converge.
+#  ★ Before the initramfs build below, so auto_initramfs=1 is in config.txt when it runs.
+"$CONVERGE"
+"$CONVERGE" --check >/dev/null || { "$CONVERGE" --check || true; say "!! the OS did not converge — refusing to build this image"; exit 1; }
 
 # ── 7. Name, Wi-Fi country, boot config ──────────────────────────────────────────────────────────
 # ★★★ "vibeserversetup" FIRST (Stuart, 2026-10-10): a new box answers as VibeServerSetup.local on
@@ -129,42 +114,12 @@ systemctl mask udisks2.service 2>/dev/null || true
 echo "$HOSTNAME_NEW" > /etc/hostname
 sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$HOSTNAME_NEW/" /etc/hosts
 grep -q "^127\.0\.1\.1" /etc/hosts || echo -e "127.0.1.1\t$HOSTNAME_NEW" >> /etc/hosts
-# ★★★ THE NAME ON EVERY NETWORK (Stuart, 2026-10-13: "the mdns must be present whenever any network connection is
-#     present" — a Pi 2 has only Ethernet; a Pi 3 may be wired in with its Wi-Fi chip still there). avahi answers on
-#     every interface and announces a new address by itself the moment one appears — unless allow-interfaces /
-#     deny-interfaces says otherwise. Any such line is switched off here; vibeserver-pocket logs one that comes back.
-if [ -f /etc/avahi/avahi-daemon.conf ]; then
-  sed -i -E 's/^[[:space:]]*((allow|deny)-interfaces[[:space:]]*=.*)$/#\1  # off: VibeServer pocket answers on every interface/' \
-    /etc/avahi/avahi-daemon.conf
-fi
-systemctl enable avahi-daemon.service 2>/dev/null || true
+# ★★★ THE NAME ON EVERY NETWORK (Stuart, 2026-10-13): avahi's allow/deny-interfaces lines are switched off by the
+#     converge (step 6), and kept off by every Update.
 # ★ The Pi's Wi-Fi is soft-blocked until a country is set. raspi-config's non-interactive form does
 #   both halves (regulatory domain + unblock); the service also unblocks at start.
 if command -v raspi-config >/dev/null; then raspi-config nonint do_wifi_country "$COUNTRY" || true; fi
-for BOOTCFG in /boot/firmware/config.txt /boot/config.txt; do
-  [ -f "$BOOTCFG" ] || continue
-  if ! grep -q "^# VibeServer pocket" "$BOOTCFG"; then
-    cp -n "$BOOTCFG" "$BOOTCFG.bak-pocket" || true
-    # ★★ HEADLESS: no display stack, no Bluetooth. The KMS driver reserves CMA for a framebuffer
-    #    nobody looks at; on a 512 MB board that is RAM the radio wants. Bluetooth shares the
-    #    Wi-Fi chip's antenna and UART on the Pi 3 — off, it can never step on the hotspot.
-    sed -i 's/^\(dtoverlay=vc4-kms-v3d.*\)/#\1  # off: headless pocket box/' "$BOOTCFG"
-    sed -i 's/^\(camera_auto_detect=1\)/#\1/; s/^\(display_auto_detect=1\)/#\1/' "$BOOTCFG"
-    # ★★ ONBOARD AUDIO OFF (Stuart + Kiko, 2026-10-10: power AND EMI). The 3.5 mm jack is PWM audio — a
-    #    switching output beside the antenna that nobody listens to (the audio goes out over Wi-Fi).
-    #    The display output is powered down at every boot by vibeserver-pocket (vcgencmd display_power 0).
-    sed -i 's/^\(dtparam=audio=on\)/#\1  # off: pocket box audio goes over Wi-Fi/' "$BOOTCFG"
-    cat >> "$BOOTCFG" <<'EOF'
-
-# VibeServer pocket — headless radio box: no display, no Bluetooth, no onboard audio, no camera
-gpu_mem=16
-dtoverlay=disable-bt
-dtparam=audio=off
-disable_splash=1
-EOF
-  fi
-  break
-done
+# ★★ config.txt (headless: no display stack, no Bluetooth, no onboard audio) is the converge's too (step 6).
 command -v vcgencmd >/dev/null || say "!! no vcgencmd — the display output will stay powered"
 
 # ── 7b. POWER-CUT HARDENING (Stuart, 2026-10-10: "the box WILL have its power pulled at any moment") ──
@@ -172,12 +127,8 @@ command -v vcgencmd >/dev/null || say "!! no vcgencmd — the display output wil
 #     initramfs built HERE, for every kernel on the image; the switch itself (overlayroot=tmpfs on the
 #     command line) is thrown on the first boot by vibeserver-pocket-seal, once Pi OS has written its
 #     one-time identity. Settings live on the small data=journal partition (vibeserver-pocket-data).
-apt-get install -y --no-install-recommends overlayroot initramfs-tools
-for BOOTCFG in /boot/firmware/config.txt /boot/config.txt; do
-  [ -f "$BOOTCFG" ] || continue
-  grep -q '^auto_initramfs=1' "$BOOTCFG" || echo "auto_initramfs=1" >> "$BOOTCFG"
-  break
-done
+# ★ overlayroot + initramfs-tools came from the package list (4b), auto_initramfs=1 from the converge (6). The explicit
+#   build is IMAGE-ONLY: on a running box the overlayroot package's trigger and every kernel package rebuild it.
 update-initramfs -u -k all || update-initramfs -c -k all
 ls -la /boot/firmware/initramfs* 2>/dev/null | sed 's/^/pocket-image: initramfs: /' || say "!! no initramfs in /boot/firmware"
 for CMDF in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
@@ -189,32 +140,9 @@ for CMDF in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
   say "cmdline: $(cat "$CMDF")"
   break
 done
-# ★ The boot partition read-only too (raspi-config's "boot partition read-only"): the seal and an update
-#   remount it for the moment they need it.
-sed -i -E 's#^([^#].*[[:space:]]/boot/firmware[[:space:]]+vfat[[:space:]]+)defaults([[:space:]])#\1defaults,ro\2#' /etc/fstab
+# ★ The boot partition read-only in fstab, the journal in RAM, zram-only swap, dphys-swapfile + fake-hwclock off, and the
+#   settings partition's mount points: all the converge's (step 6). The settings partition itself is made by build-image.sh.
 grep -E '/boot/firmware' /etc/fstab | sed 's/^/pocket-image: fstab: /'
-# ★★ VOLATILE BY DEFAULT. The journal lives in RAM (16 MB cap) — a pocket box's logs are for the session
-#    in front of you, and a journal on the SD card is a write every few seconds.
-install -d /etc/systemd/journald.conf.d
-cat > /etc/systemd/journald.conf.d/60-vibeserver-pocket.conf <<'EOF'
-# VibeServer pocket image: logs in RAM only — no SD writes, gone at power-off.
-[Journal]
-Storage=volatile
-RuntimeMaxUse=16M
-EOF
-# ★ Swap: compressed RAM (zram) only, never a file on the card. rpi-swap is Trixie's swap manager.
-install -d /etc/rpi/swap.conf.d
-cat > /etc/rpi/swap.conf.d/60-vibeserver-pocket.conf <<'EOF'
-# VibeServer pocket image: no swap file on the SD card — zram only.
-[Main]
-Mechanism=zram
-EOF
-systemctl disable dphys-swapfile.service 2>/dev/null || true
-# ★ fake-hwclock (if present) would save the time to the root every hour; the settings partition keeps
-#   systemd-timesyncd's clock file instead (written on each sync, not on a timer).
-systemctl disable fake-hwclock.service 2>/dev/null || true
-install -d -m 0755 /data /var/lib/vibeserver-pocket
-systemctl enable vibeserver-pocket-data.service vibeserver-pocket-seal.service
 
 # ── 8. A login nobody needs, so first boot never stops to ask for one ───────────────────────────
 # ★ Raspberry Pi OS asks for a user on the first boot unless Raspberry Pi Imager's settings set

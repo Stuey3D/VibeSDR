@@ -90,19 +90,63 @@ log() { echo "$*"; }
 #    powered until it is back. Everywhere else (no overlay) this is exactly the old behaviour.
 OVERLAY=0
 grep -qw "overlayroot=tmpfs" /proc/cmdline 2>/dev/null && command -v overlayroot-chroot >/dev/null && OVERLAY=1
+# ★★★ AND THE BOOT PARTITION INSIDE THE CHROOT (2026-10-13). overlayroot-chroot binds /proc /run /sys /dev into the real
+#     root — not the boot partition, which on the real root is just an empty /boot/firmware directory. So a config.txt
+#     line (vibeserver-pocket-converge), a kernel, or an initramfs written in there landed on the ROOT partition, where
+#     the firmware never looks. The live mount is remounted rw (as it always was) and the same device is mounted at the
+#     same place INSIDE the chroot for the length of the command — the kernel hands back the one superblock, so both
+#     views are the same files — and unmounted before the chroot exits. Already mounted in there (an overlayroot that
+#     binds it) or no device to hand: left exactly as before.
 apt_do() {
   if [ "$OVERLAY" = 1 ]; then
-    for B in /boot/firmware /boot; do mountpoint -q "$B" && mount -o remount,rw "$B" 2>/dev/null && break; done
+    local BOOTMP="" BOOTDEV=""
+    for B in /boot/firmware /boot; do
+      mountpoint -q "$B" && mount -o remount,rw "$B" 2>/dev/null && { BOOTMP=$B; BOOTDEV=$(findmnt -no SOURCE "$B" 2>/dev/null || true); break; }
+    done
     local rc=0
-    overlayroot-chroot env DEBIAN_FRONTEND=noninteractive "$@" || rc=$?
+    # shellcheck disable=SC2016
+    overlayroot-chroot env DEBIAN_FRONTEND=noninteractive VIBE_BOOTMP="$BOOTMP" VIBE_BOOTDEV="$BOOTDEV" /bin/sh -c '
+      M=""
+      if [ -n "$VIBE_BOOTDEV" ] && [ -d "$VIBE_BOOTMP" ] && ! mountpoint -q "$VIBE_BOOTMP"; then
+        if mount -o rw "$VIBE_BOOTDEV" "$VIBE_BOOTMP" 2>/dev/null; then M=1
+        else echo "(the boot partition could not be mounted inside the chroot — config.txt and the kernel left as they are)"; fi
+      fi
+      rc=0; "$@" || rc=$?
+      if [ -n "$M" ]; then sync; umount "$VIBE_BOOTMP" 2>/dev/null || true; fi
+      exit $rc' vibe-apt "$@" || rc=$?
     sync
-    for B in /boot/firmware /boot; do mountpoint -q "$B" && mount -o remount,ro "$B" 2>/dev/null && break; done
+    if [ -n "$BOOTMP" ]; then mount -o remount,ro "$BOOTMP" 2>/dev/null || true; fi
     return $rc
   fi
   DEBIAN_FRONTEND=noninteractive "$@"
 }
 after_install() {
   if [ "$OVERLAY" = 1 ]; then log "read-only root updated — rebooting so it takes effect"; sync; systemctl reboot; fi
+}
+
+# ★★★ A PORTABLE UPDATES FULLY, NOT JUST ITS PACKAGE (Stuart, 2026-10-13: "after initial setup we need to make sure that
+#     VibeServer Portables can be fully updated without needing a full ISO again"). After the vibeserver upgrade, on a
+#     box carrying the pocket marker ONLY:
+#       1. any system package pocket-packages.txt names that the box lacks is installed — the list ships IN the package
+#          just installed and is read INSIDE the chroot, so it is this release's list, not the one the run started with;
+#       2. vibeserver-pocket-converge brings the OS to this release's state (services, drop-ins, config.txt, fstab).
+#          postinst ran it already; this run also sees the packages from step 1 and the boot partition.
+#  ★★ Still ONE THING BY NAME, never something the daemon chose: the list is a root-owned file from our signed
+#     package, and nothing the unprivileged daemon writes reaches this line. An ordinary install never gets here.
+#  ★ A failure in either step is logged and the update carries on to its reboot: the server itself is already new,
+#    and the next Update tries again (both steps are idempotent).
+pocket_converge() {
+  [ -f /etc/vibeserver-pocket/enabled ] || return 0
+  [ -x /usr/lib/vibeserver/vibeserver-pocket-converge ] || return 0
+  log "Portable: checking the system packages and settings this release expects"
+  # shellcheck disable=SC2016
+  apt_do /bin/sh -c 'M=$(/usr/lib/vibeserver/vibeserver-pocket-converge --missing-packages) || exit 0
+    [ -n "$M" ] || exit 0
+    echo "Portable: installing $M"
+    apt-get install -y --no-install-recommends $M' \
+    || log "!! Portable: some system packages did not install — the next Update tries again"
+  apt_do /usr/lib/vibeserver/vibeserver-pocket-converge \
+    || log "!! Portable: the settings check did not finish — the next Update runs it again"
 }
 
 case "$action" in
@@ -147,12 +191,15 @@ case "$action" in
                 apt_do apt-get -y \
                   -o Dpkg::Options::=--force-confdef \
                   -o Dpkg::Options::=--force-confold upgrade
+                pocket_converge
                 after_install ;;
   update)       log "installing updates"
                 apt_do apt-get update
                 # ★ ONLY this package, and never a fresh install of anything else. `--only-upgrade`
                 #   means a request for `update` cannot pull in a new package by name.
                 apt_do apt-get install -y --only-upgrade vibeserver
+                # ★ A Portable's system packages + OS settings (see pocket_converge). Nothing elsewhere.
+                pocket_converge
                 after_install ;;
   maps-install) log "installing the detail map pack"
                 # ★★★ THE FULL MAP PACK, ON REQUEST. The server ships the basic pack; the detail

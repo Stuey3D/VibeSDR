@@ -187,6 +187,23 @@ case "$1" in
       break
     done
 
+    # ── 2c. A VIBESERVER PORTABLE: THE OPERATING SYSTEM, NOT JUST THIS PACKAGE ──
+    # ★★★ Stuart, 2026-10-13: "after initial setup we need to make sure that VibeServer Portables can be fully updated
+    #     without needing a full ISO again". Everything the pocket image does to the OS beyond installing us (services
+    #     off, NetworkManager's connectivity check, avahi on every interface, the journal in RAM, config.txt, /boot
+    #     read-only) lives in vibeserver-pocket-converge, shipped in this package — so a fix to any of it reaches every
+    #     box on its next Update. During an Update this runs inside overlayroot-chroot, so it writes the REAL root;
+    #     nothing is restarted, and the reboot that follows every Portable update is when it takes effect.
+    #  ★★ ONLY with the pocket marker: on every other install this block is skipped entirely. And never fatal — a
+    #     converge that cannot finish must not leave the package half-configured (the next Update runs it again).
+    #  ★ New SYSTEM packages cannot be installed from here (dpkg holds the lock): vibeserver-maintenance installs any
+    #    pocket-packages.txt names straight after the upgrade.
+    if [ -f /etc/vibeserver-pocket/enabled ] && [ -x /usr/lib/vibeserver/vibeserver-pocket-converge ] \
+       && command -v python3 >/dev/null 2>&1; then
+      /usr/lib/vibeserver/vibeserver-pocket-converge \
+        || echo "VibeServer Portable: the OS settings check did not finish — the next Update runs it again." >&2
+    fi
+
     # ── 3. systemd ───────────────────────────────────────────────────────────
     # ★ Enabled but NOT started: the user has not chosen a radio, a name or a location yet, and
     #   an unconfigured server that starts itself and fails is a worse first impression than one

@@ -1,0 +1,26 @@
+# pocket-packages.txt — the system packages a VibeServer PORTABLE needs beyond Raspberry Pi OS Lite (2026-10-13).
+#
+# ★★★ ONE LIST, TWO READERS (Stuart, 2026-10-13: "after initial setup we need to make sure that VibeServer
+#     Portables can be fully updated without needing a full ISO again"):
+#       · the image build (customise.sh) installs every package named here;
+#       · the admin "Install updates" on a Portable (vibeserver-maintenance `update` / `update-all`) installs any
+#         named here that the box is MISSING — so a package a later release needs reaches a box flashed months ago.
+#     Both ask vibeserver-pocket-converge --missing-packages, which reads this file and dpkg's status.
+# ★★ NOT Recommends/Depends of the vibeserver package: an ordinary VibeServer (a desktop, a Pi in a loft) must never
+#    pull a hotspot stack, overlayroot or an initramfs builder. Only a box with /etc/vibeserver-pocket/enabled reads this.
+# ★ Installed with --no-install-recommends, like everything on the image (Stuart: "keep the footprint minimal").
+# ★ One package name per line; '#' starts a comment. Adding a line here is the whole job — the next Update installs it.
+#   Removing one does NOT uninstall it from boxes that have it (an update never removes what an owner may rely on).
+
+dnsmasq-base      # NM's shared (hotspot) mode runs it for DHCP + the captive DNS rule; no service of its own
+nftables          # the :80 -> front-door redirect while a hotspot is up (its own service stays disabled)
+iw                # station count + the no-drop scan
+rfkill            # Wi-Fi unblock at start, Bluetooth block (power + EMI)
+python3           # vibeserver-pocket and vibeserver-pocket-converge
+ca-certificates   # https to apt.vibesdr.net
+curl              # the apt key fetch at image time; the server's own downloads
+gnupg             # dearmoring the apt key
+avahi-daemon      # VibeServerSetup.local / vibepocket.local on every network
+ffmpeg            # ★★★ DAB+ audio on Linux — the package only RECOMMENDS it and the image installs without recommends
+overlayroot       # the read-only root (power-cut hardening)
+initramfs-tools   # overlayroot lives in the initramfs

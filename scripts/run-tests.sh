@@ -208,6 +208,10 @@ if node scripts/check-rdsx-wire.mjs; then pass=$((pass+1)); else fail=$((fail+1)
 # ★★ The pocket box's Wi-Fi state machine against a fake NetworkManager: strict 1/2/3 order, moving
 #    up when network 1 returns, never pulling a hotspot from under a phone, no password in any log.
 if python3 vibeserver/linux/pocket/test_vibeserver_pocket.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ A PORTABLE UPDATES FULLY WITHOUT A NEW CARD (Stuart, 2026-10-13). vibeserver-pocket-converge on a fake root: a no-op
+#     without the marker, idempotent, config.txt lines once, an owner's own change kept, the package list drives what
+#     Update installs — and vibeserver-maintenance's `update` with apt + overlayroot-chroot stubbed.
+if python3 vibeserver/linux/pocket/test_pocket_converge.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The web playout (worklet AND the main-thread fallback) must come back clean by itself after the
 #   server has delivered audio in bursts — the Sony's narrow-WFM overload, 2026-09-29. Silent.
 if node scripts/test-web-playout-burst.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

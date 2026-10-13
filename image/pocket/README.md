@@ -66,33 +66,103 @@ VM**, because pi-gen keeps a root filesystem per stage. The Mac's colima VM had 
 2026-10-10, so this route is for a Linux build host or a bigger VM. The login it creates (`vibe`)
 gets a random password that is not kept. SSH is off.
 
+## Updating a Portable: no new card needed
+
+**A Portable updates fully through the admin page's Install updates. A new image is only for a brand-new
+box (or a card that has died).** Stuart, 2026-10-13: "after initial setup we need to make sure that
+VibeServer Portables can be fully updated without needing a full ISO again".
+
+The vibeserver package carries the Portable's operating-system setup as well as the server:
+
+- `/usr/lib/vibeserver/vibeserver-pocket-converge` applies everything the image does to the OS that
+  should follow a release. It covers the services on, off and masked, NetworkManager's connectivity
+  check, avahi on every interface, journald in RAM, zram only, the `config.txt` lines, the read-only
+  `/boot` in fstab and the settings partition's mount points. It writes a file only when the content
+  differs and touches a unit only when its state differs, so a second run changes nothing. It does
+  **nothing** without `/etc/vibeserver-pocket/enabled`, so ordinary installs are untouched.
+- `/usr/lib/vibeserver/pocket-packages.txt` lists the system packages a Portable needs. They are
+  never Depends or Recommends, so an ordinary install does not pull them.
+
+**What one Update does on a Portable:**
+
+1. `vibeserver-maintenance update` runs `apt-get install --only-upgrade vibeserver` inside
+   `overlayroot-chroot`, so it writes the real root. The boot partition is mounted inside the chroot too.
+2. The package's `postinst` runs the converge.
+3. Any package in `pocket-packages.txt` that the box lacks is installed (`--no-install-recommends`).
+   The list is read inside the chroot, so it is the new release's list.
+4. The converge runs again. This time it sees the new packages and the boot partition.
+5. The box reboots, and every change takes effect. Nothing is restarted before then, so networking
+   never drops mid-update.
+
+"Update all packages" does the same after its system upgrade.
+
+**Two kinds of step:**
+
+- **Enforced every time.** These are the product: our own units enabled, our own drop-in files, and
+  avahi answering on every interface.
+- **Done once and recorded** in `/etc/vibeserver-pocket/converge.done`. These switch off one of the
+  OS's things (Bluetooth, a getty, udisks2…) or add a `config.txt` or fstab line. An owner who
+  changes one back (for example, unmasks `getty@tty1` for an HDMI console, or raises `gpu_mem`)
+  keeps that change through every update. A step that a new release adds still reaches every box,
+  once. Delete a line from the ledger to have that step done again.
+
+At start, `vibeserver-pocket` runs `vibeserver-pocket-converge --check` and logs anything that is
+not converged, such as a package an Update could not install. It only reports. The live root is the
+RAM overlay, so a change made there would vanish at the next boot.
+
+**Image-only: done once, by `customise.sh`, and why:**
+
+| Step | Why it is not repeated |
+|---|---|
+| The marker `/etc/vibeserver-pocket/enabled` | It is what makes a box a Portable |
+| `pocket.conf` | It records the country chosen at build time. The daemon has the same defaults in code, and setup's choices live on the settings partition |
+| First-boot `config.json` | From the first boot on it lives on the settings partition |
+| Hostname, Wi-Fi country | `vibeserver-pocket` and setup own them at runtime |
+| The apt key | Fetching it needs the network, and a box the update reached already has a working key. A missing `vibesdr.list` is restored by the converge |
+| The explicit `update-initramfs` | On a running box, the `overlayroot` package's trigger and every kernel package rebuild it |
+| Removing ` resize` from `cmdline.txt` | Pi OS resizes only on the first boot |
+| The locked `vibe` login, `userconfig` off | First boot only |
+| The settings partition | `build-image.sh` makes it, and `vibeserver-pocket-data` re-makes it if it is lost |
+
+**Lag of one release for the update helper itself.** The `update` that installs a new
+`vibeserver-maintenance` is run by the old copy. So a change to the helper (such as installing the
+package list) first acts on the update *after* it. This does not matter for boxes flashed from the
+11.0.0 image, because they already have every package and `config.txt` line that release has.
+
 ## What the customisation does
 
-`customise.sh` makes the following changes, and nothing else:
+`customise.sh` runs inside the image's root. In order:
 
-- **Adds** `dnsmasq-base` (hotspot DHCP and the captive DNS rule; it has no service of its own),
-  `nftables` (the `:80` redirect; its service stays off) and `iw`. NetworkManager is Lite's default
-  and is checked, not installed. `python3` is already on Lite.
-- **Installs** VibeServer from `out/debs/`, falling back to apt.vibesdr.net. It adds the apt
-  repository so the box updates like any other VibeServer.
+- **Checks** NetworkManager (Lite's default; never installed over the top). It installs
+  `ca-certificates`, `curl`, `gnupg` and `python3`, then adds the apt repository and its key.
+- **Installs** VibeServer from `out/debs/`, falling back to apt.vibesdr.net. It refuses a package
+  without `vibeserver-pocket` or `vibeserver-pocket-converge`.
 - **Writes** the pocket marker `/etc/vibeserver-pocket/enabled`, `pocket.conf`, and the first-boot
   `/etc/vibeserver/config.json`: a Full-mode front door with no radio and no password.
-- **Enables** `vibeserver`, `vibeserver-radios`, `vibeserver-maintenance.path`, `vibeserver-pocket`
-  and `NetworkManager`. `postinst` cannot enable them in a chroot.
-- **Disables** Bluetooth (`hciuart`, `bluetooth`, `dtoverlay=disable-bt`), ModemManager,
-  triggerhappy, the apt daily timers, `man-db.timer` and `e2scrub_all.timer`, and masks udisks2.
-  It turns the KMS display driver, onboard audio (`dtparam=audio=off`) and the boot splash off, and sets
-  `gpu_mem=16`: the box is headless. `vibeserver-pocket` powers the display output down at every boot
-  (`vcgencmd display_power 0`) and blocks Bluetooth, so a box updated over apt gets that too (power + EMI).
-- **Sets** the hostname to `vibepocket` and the Wi-Fi country. It creates a locked login so first
-  boot never asks for a user.
-- **Power-cut hardening.**
-  - Installs `overlayroot` and builds its initramfs for every kernel on the image.
-  - Removes ` resize` from `cmdline.txt`, so Pi OS will not grow root into the settings partition.
-  - Mounts the boot partition read-only.
-  - Puts journald in RAM (16 MB cap) and uses zram swap only.
-  - Enables `vibeserver-pocket-data` (the settings partition) and `vibeserver-pocket-seal`. The seal
-    makes root read-only on the first boot.
+- **Installs the package's list**, `pocket-packages.txt`: `dnsmasq-base` (hotspot DHCP and the
+  captive DNS rule), `nftables` (the `:80` redirect; its service stays off), `iw`, `rfkill`,
+  `avahi-daemon`, `ffmpeg` (DAB+ audio), `overlayroot` and `initramfs-tools`. These are the same
+  packages that every Update checks for.
+- **Runs `vibeserver-pocket-converge`**, which is the same step every Update runs, then
+  `--check`. The build stops if anything did not converge. The converge does the following:
+  - **Enables** `vibeserver`, `vibeserver-radios`, `vibeserver-maintenance.path`,
+    `vibeserver-pocket`, `vibeserver-pocket-data`, `vibeserver-pocket-seal`, `NetworkManager` and
+    `avahi-daemon`. `postinst` cannot enable them in a chroot.
+  - **Disables** Bluetooth (`hciuart`, `bluetooth`), ModemManager, triggerhappy, the apt daily
+    timers, `man-db.timer`, `e2scrub_all.timer`, `nftables.service`, `dphys-swapfile` and
+    `fake-hwclock`. It masks the console gettys and udisks2.
+  - In `config.txt`, it turns the KMS display driver, onboard audio (`dtparam=audio=off`), Bluetooth
+    (`dtoverlay=disable-bt`) and the boot splash off. It sets `gpu_mem=16` and `auto_initramfs=1`.
+    The box is headless. `vibeserver-pocket` also powers the display output down at every boot
+    (`vcgencmd display_power 0`) and blocks Bluetooth (power + EMI).
+  - Writes NetworkManager's connectivity check and switches avahi's interface limits off.
+  - Puts journald in RAM (16 MB cap), uses zram swap only and mounts the boot partition read-only.
+- **Sets** the hostname to `vibeserversetup` (`vibeserver-pocket` retires it to `vibepocket` once
+  setup is finished) and the Wi-Fi country. It creates a locked login so first boot never asks for a
+  user.
+- **Power-cut hardening.** It builds the `overlayroot` initramfs for every kernel on the image and
+  removes ` resize` from `cmdline.txt`, so Pi OS will not grow root into the settings partition.
+  The seal (`vibeserver-pocket-seal`) makes root read-only on the first boot.
 - **The High Detail Maps.** `build-image.sh` reads `DETAIL_URL` / `DETAIL_BYTES` from `vibe_mapgl.h`
   and fetches the file once into `out/cache/`. It verifies the file as the server's installer does
   (exact size + `PMTiles` magic) and installs it to

@@ -73,7 +73,13 @@ docker run --rm --platform linux/arm64 --cpus 2 \
   [ "${n1:-0}" -ge 1 ] || { echo "!! no vibeserver-pocket in $DEB"; exit 1; }
   [ "${n2:-0}" -ge 1 ] || { echo "!! no pocket unit in $DEB"; exit 1; }
   [ "${n3:-0}" -ge 1 ] || { echo "!! the binary has no pocket routes"; exit 1; }
-  echo "==> verified: pocket helper, pocket unit, pocket routes in the binary"
+  # ★★ AND THE OS CONVERGE + PACKAGE LIST — without them a Portable updates its package and nothing else (2026-10-13),
+  #    and customise.sh refuses to build an image from it.
+  n4=$(dpkg-deb -c "$DEB" | grep -c "usr/lib/vibeserver/vibeserver-pocket-converge$" || true)
+  n5=$(dpkg-deb -c "$DEB" | grep -c "usr/lib/vibeserver/pocket-packages.txt$" || true)
+  [ "${n4:-0}" -ge 1 ] || { echo "!! no vibeserver-pocket-converge in $DEB"; exit 1; }
+  [ "${n5:-0}" -ge 1 ] || { echo "!! no pocket-packages.txt in $DEB"; exit 1; }
+  echo "==> verified: pocket helper, pocket unit, pocket routes in the binary, OS converge + package list"
   echo "==> $(basename "$DEB") ($(dpkg-deb -f "$DEB" Architecture), $(du -h "$DEB" | cut -f1))"
 '
 ls -la "$OUT"
