@@ -118,7 +118,9 @@ const html2 = globalThis.DIALHTML || '';
 ok(api.ROWS.length === 2, 'two dials drawn (detail + whole network)');
 ok(api.ROWS.some((r) => r.kind === 'over'), 'the whole-network dial is present');
 ok(/class="dNum/.test(html2), 'the ticker has numerals');
-ok(/class="dNeedle b"/.test(html2), 'the VFO needle is drawn');
+// ★ TWO MARKERS SINCE 2026-09-16 (720b94c9), red and yellow, drawn FADED (… idle) until a visitor places one — this
+//   asserted the old single always-solid needle and had failed ever since. Both must be on the dial, placed or not.
+ok(/class="dNeedle b( idle)?"/.test(html2) && /class="dNeedle a( idle)?"/.test(html2), 'both VFO markers are drawn (red and yellow)');
 ok(api.planBandList().length > 20, `band plan loaded (${api.planBandList().length} bands)`);
 ok(/dDecade/.test(html2), 'the wavelength strip is drawn');
 
@@ -157,7 +159,7 @@ api.renderDial();
 const narrow = globalThis.DIALHTML || '';
 ok(/class="dNum/.test(narrow), 'narrow (360px): the ticker still has numerals');
 ok(api.ROWS.length === 2, 'narrow (360px): both dials still drawn');
-ok(/class="dNeedle b"/.test(narrow), 'narrow (360px): the needle is still drawn');
+ok(/class="dNeedle b( idle)?"/.test(narrow) && /class="dNeedle a( idle)?"/.test(narrow), 'narrow (360px): both markers still drawn');
 const nums = (narrow.match(/class="dNum[^"]*"/g) || []).length;
 ok(nums >= 4 && nums <= 40, `narrow (360px): a sensible number of figures (${nums})`);
 globalThis.CHECK_WIDTH = 1900;
