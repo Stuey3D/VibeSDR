@@ -807,8 +807,39 @@ export default function AudioSheet({
                 onValueChange={(v: number) => { const db = v <= -130 ? -150 : v - visualGain; setOwrxSql(db); onOwrxSquelch?.(db); }}
                 minimumTrackTintColor={owrxSql > -130 ? pt.gold.fill : C.track}
                 maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
-              <Text style={st.bwVal}>{owrxSql <= -130 ? 'Off' : sqlDisp(owrxSql + visualGain)}</Text>
+              <Text style={st.bwVal}>{sqlAuto ? 'Auto' : owrxSql <= -130 ? 'Off' : sqlDisp(owrxSql + visualGain)}</Text>
             </View>
+            {/* ★★ OUR AUTO SQUELCH ON OWRX (2026-10-13): the gate runs on the phone from OWRX's calibrated S-meter, the
+                   server's squelch held off meanwhile (SDRScreen owrxAutoThrRef). Moving the slider above takes over by hand. */}
+            {onSqlAuto && (
+              <NavRow>
+                <View style={st.sqlAutoRow}>
+                  <Btn label="AUTO SQUELCH" active={sqlAuto}
+                       onPress={sqlAutoOk ? () => onSqlAuto(!sqlAuto) : undefined}
+                       style={sqlAutoOk ? undefined : { opacity: 0.4 }} />
+                  {!sqlAutoOk && (
+                    <Text style={st.sqlAutoWhy}
+                          accessibilityHint="Auto squelch needs a channel signal reading this receiver does not send.">
+                      Needs a channel signal reading this receiver does not send.
+                    </Text>
+                  )}
+                </View>
+              </NavRow>
+            )}
+            {onSqlAuto && sqlAuto && (
+              <NavRow>
+                <View style={st.sqlAutoMarginRow}>
+                  <Text style={st.sqlAutoMarginCap}>ABOVE NOISE</Text>
+                  <NavSlider style={st.bwSlider}
+                    minimumValue={4} maximumValue={20} step={1}
+                    value={Math.max(4, Math.min(20, sqlAutoMargin))}
+                    onValueChange={(v: number) => onSqlAutoMargin?.(v)}
+                    minimumTrackTintColor={pt.gold.fill}
+                    maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
+                  <Text style={st.bwVal}>{`+${Math.round(sqlAutoMargin)} dB`}</Text>
+                </View>
+              </NavRow>
+            )}
             <View style={st.bwRow}>
               <Text style={st.bwLabel}>NR</Text>
               <NavSlider style={st.bwSlider}
