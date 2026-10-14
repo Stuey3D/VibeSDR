@@ -1,35 +1,40 @@
 # VibeSDR
 
-**Vibe-coded, but not slop.** A whole SDR ecosystem optimised for mobile that scales from a tiny
-Apple Watch to a large desktop. And with **VibeServer**, share your radio with the world from a
-spare Android phone or a Linux box in a drawer.
+![VibeSDR on three phones: a silver faceplate on FM, a blue display on FT8, a red display on DAB](website/assets/og-vibesdr.jpg)
+
+**Vibe-coded, but not slop.** A whole SDR ecosystem built for one hand: a receiver for iPhone, iPad,
+Mac, Android and Apple Watch with its own DSP, and **VibeServer**, which shares your radio with the
+world from a Raspberry Pi, a Mac, a Linux box, a spare Android phone or even a television.
+
+**[Try the live Buzzer on vibesdr.net](https://vibesdr.net)**: a real recording of UVB-76 on
+4625 kHz, drawn by the same waterfall code as the web client. Pick a palette and hear it.
 
 ---
 
 # 📻 [→ Browse live receivers](https://vibeserver.vibesdr.net)
 
-### Real radios, shared by real people. Nothing to install — open it and tune.
+### Real radios, shared by real people. Nothing to install: open it and tune.
 
 ## 🛜 [→ Share yours](#share-your-radio)
 
-**Every receiver on that list is somebody's spare dongle.** A Raspberry Pi, an old Android phone,
-a Linux box in a drawer — plug a radio in, run VibeServer, and anyone can listen from a browser.
-It takes about five minutes, and the more of us who do it, the better the map gets.
+**Every receiver on that list is somebody's spare radio.** A Raspberry Pi, an old Android phone, a
+Linux box in a drawer, a TV box: plug a dongle in, run VibeServer, and anyone can listen from a
+browser. It takes about five minutes, and the more of us who do it, the better the map gets.
 
 ---
 
-### Everything else
+### Get it
 
 | | |
 |---|---|
+| 📱 **[VibeSDR on the App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** | iPhone, iPad and Apple Silicon Macs, with the Apple Watch remote (Buddy) included. |
+| ⌚ **[VibeSDR Jr on the App Store](https://apps.apple.com/gb/app/vibesdr-jr/id6795507029)** | The standalone Apple Watch receiver: its own connection, its own audio, no phone. |
+| 🤖 **[Android APK](https://github.com/Stuey3D/VibeSDR/releases)** | VibeSDR for Android, straight from GitHub. No Google account needed. |
+| 🖥 **[VibeServer](#share-your-radio)** | `apt` for Linux, a notarised Mac app, Raspberry Pi card images, and VibeServer Lite for Android. |
 | 💬 **[Discord](https://discord.gg/pr9EjUUBCA)** | Where the testing, the bug reports and the DX chat happen. |
-| 📱 **[VibeSDR on the App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** | iPhone + iPad, with the Apple Watch remote included. |
-| ⌚ **[VibeSDR Jr on the App Store](https://apps.apple.com/gb/app/vibesdr-jr/id6795507029)** | The standalone Apple Watch receiver — no phone involved. |
-| 🤖 **[Android APK](https://github.com/Stuey3D/VibeSDR/releases)** | VibeSDR for Android, straight from GitHub — no Google account needed. |
-| 🖥 **[VibeServer downloads](https://github.com/Stuey3D/VibeSDR/releases/latest)** | macOS app, and `apt` for Linux. |
 | 🌐 **[vibesdr.net](https://vibesdr.net)** · **[demo receiver](https://demo.vibesdr.net)** | The site, and our own radio to try right now. |
 
-Building it yourself is free, forever — the App Store price is Apple's fee, not a paywall.
+Building it yourself is free, forever. The App Store price covers Apple's fees; it is not a paywall.
 
 ---
 
@@ -37,41 +42,71 @@ Building it yourself is free, forever — the App Store price is Apple's fee, no
 
 Four things that share one DSP engine and one design:
 
-- **The app** — iPhone, iPad and Android. Connect to a shared receiver, or plug an RTL-SDR
-  straight into an Android phone and run the whole radio on the handset.
-- **The watch** — the live spectrum drawn *on the watch*, tuned with the Digital Crown. Either as
-  a remote for your phone, or as **Jr**, a standalone receiver with its own connection and audio.
-- **VibeServer** — turns a Raspberry Pi, a Linux box, a Mac or a spare Android phone into a
-  receiver anyone can listen to in a browser. Roughly 25× lighter on the wire than raw `rtl_tcp`.
-- **The web client** — served by VibeServer itself. No install, works on any modern browser.
+- **The app.** iPhone, iPad, Mac and Android. Tune a shared receiver, or plug a radio straight into
+  an Android phone and run the whole receiver on the handset.
+- **The watch.** The live spectrum drawn *on the watch*, tuned with the Digital Crown: **Buddy**, a
+  remote for the phone, or **Jr**, a standalone receiver with its own connection and audio.
+- **VibeServer.** Turns a Raspberry Pi, a Linux box, a Mac, an Android phone or an Android TV into a
+  receiver anyone can listen to. Roughly 25× lighter on the wire than raw `rtl_tcp`.
+- **The web client.** Served by VibeServer itself. No install, any modern browser.
 
 It speaks **UberSDR**, **OpenWebRX / OpenWebRX+**, **KiwiSDR**, **FM-DX Webserver**, **SpyServer**,
 plain **rtl_tcp**, and its own VibeServer protocol.
 
 ## What actually sets it apart
 
-Most SDR clients are a socket and a picture — they ask the server for a waterfall image, put it on
-screen, and tune with a slider. If that's the category, VibeSDR isn't in it.
+Most SDR clients are a socket and a picture: they ask the server for a waterfall image, put it on
+screen, and tune with a slider. VibeSDR is not in that category.
 
-- **It renders its own waterfall**, from raw FFT bins in a GPU shader, synthesising the lines
-  between data frames and repainting your whole history the instant you change a palette.
-- **It demodulates on the device.** A clean-room ARM-NEON DSP engine written from scratch — no
-  SDR++, no FFTW, no VOLK — with true Weaver SSB, FM stereo with a 19 kHz pilot PLL, RDS, and MMSE
-  noise reduction.
-- **The tuning is a flywheel with mass**, detents and speed-adaptive haptics, not a slider. It's
-  modelled on an analogue dial because that's what it's meant to feel like.
-- **The waterfall runs on your wrist.** Not media buttons — the real spectrum, about a third of one
-  CPU core, phone locked in your pocket.
+- **It renders its own waterfall** from raw FFT bins in a GPU shader, synthesising the lines between
+  data frames and repainting your whole history the instant you change a palette.
+- **It demodulates on the device.** VibeDSP is a clean-room DSP engine written from scratch (no
+  SDR++, no FFTW, no VOLK): true Weaver SSB, FM stereo with a 19 kHz pilot PLL, RDS, MMSE noise
+  reduction, and its own DAB receiver.
+- **The tuning is a flywheel with mass**, with detents and speed-adaptive haptics, not a slider.
+  Prefer buttons? The keys scheme steps with a click and sweeps when held, like a nineties car tuner.
+- **The front panel is yours.** A chassis in the original style, brushed silver or black metal; a
+  frequency display as Nixie tubes, a VCR-style dot-matrix, 14-segment glass or the classic readout;
+  a signal meter as a bar, an LED VU strip or a lamp-lit analogue needle; and 26 waterfall palettes.
+- **The waterfall runs on your wrist.** Not media buttons: the real spectrum, about a third of one
+  CPU core, with the phone locked in your pocket.
+- **It goes low.** A 2015 Raspberry Pi 2 hosts a server, and a 1 GB Android Go handset runs the client.
 
 Judge it on the feel. That's the part a screenshot can't show, and the part we care most about.
 
+## Screenshots
+
+**On a phone**
+
+| ![Silver faceplate with a blue display on 96.6 MHz FM](website/assets/shots/shot01.jpg) | ![Red display on DAB multiplex 7D](website/assets/shots/shot02.jpg) | ![Amber Nixie tubes on DAB multiplex 10C](website/assets/shots/shot05.jpg) |
+|:---:|:---:|:---:|
+| *Silver faceplate, blue display, FM* | *Red display, DAB 7D with station logos* | *Nixie tubes, DAB 10C* |
+| ![Blue display with FT8 digital spots on 7.074 MHz](website/assets/shots/shot07.jpg) | ![The FM-DX tuner on 87.7 MHz](website/assets/shots/shot03.jpg) | ![The RTTY decoder on 7645 kHz](website/assets/shots/shot08.jpg) |
+| *FT8 spots on 40 m* | *FM-DX tuner with RDS* | *RTTY decoder* |
+| ![The ADS-B decoder on 1090 MHz](website/assets/shots/shot06.jpg) | ![The WEFAX decoder on 4608.1 kHz](website/assets/shots/shot09.jpg) | ![The servers list and directories](website/assets/shots/shot04.jpg) |
+| *ADS-B aircraft* | *WEFAX weather chart* | *Servers and directories* |
+
+**On a Mac**
+
+| ![Nixie tubes and an analogue meter on The Buzzer, 4625 kHz](website/assets/shots/mac-buzzer-nixie.webp) | ![Blue 14-segment display and LED VU strip decoding RTTY on 4582 kHz](website/assets/shots/mac-rtty-vfd.webp) |
+|:---:|:---:|
+| *Nixie tubes and a lamp-lit needle on The Buzzer* | *14-segment glass, LED VU strip, RTTY* |
+| ![Advanced RDS on 96.6 MHz](website/assets/shots/mac-advanced-rds-vfd.webp) | ![Red display and greyscale waterfall on FT8](website/assets/shots/mac-ft8-red.webp) |
+| *Advanced RDS: deviation, MPX S/N, constellation* | *Red on black, greyscale waterfall, FT8* |
+
+**On the Apple Watch**
+
+| ![40 m waterfall on the watch](screenshots/watch-40m-waterfall.png) | ![An FM station on the watch](screenshots/watch-fm-station.png) | ![DAB services on the watch](screenshots/watch-dab-services.png) | ![FM waterfall on the watch](screenshots/watch-fm-heart.png) | ![HFDL aircraft on the watch](screenshots/watch-hfdl-aircraft.png) |
+|:---:|:---:|:---:|:---:|:---:|
+| *40 m, tuned with the Crown* | *FM with RDS* | *DAB services* | *FM waterfall* | *HFDL aircraft* |
+
 ## Share your radio
 
-**VibeServer** shares one or more receivers to anyone with a browser, with server-side DSP,
-compressed audio, an optional PIN, per-band gain ceilings and session limits. It runs on a
-Raspberry Pi, any Linux box, a Mac, or an Android phone with the radio plugged into it.
+**VibeServer** shares one or more receivers with anyone who has a browser: server-side DSP, Opus
+audio, Advanced RDS, DAB and DAB+, the decoders, an optional PIN, per-band gain ceilings and session
+limits. Several radios can sit behind one address.
 
-**Linux** (arm64 and amd64):
+**Linux** (arm64, amd64 and armhf):
 
 ```bash
 curl -fsSL https://apt.vibesdr.net/KEY.gpg \
@@ -81,87 +116,87 @@ echo "deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] htt
 sudo apt update && sudo apt install vibeserver
 ```
 
-**macOS** — download from [the latest release](https://github.com/Stuey3D/VibeSDR/releases/latest),
-unzip, drag to Applications. Notarised, so it opens without a Gatekeeper warning.
+**Raspberry Pi, ready to boot.** VibeServer Portable is a card image from
+[the releases](https://github.com/Stuey3D/VibeSDR/releases): 64-bit for the Pi 3, 4, 5, Zero 2 W and
+500, 32-bit down to a Pi 2. Flash it, join the **VibeServer** hotspot it raises, and set it up from
+your phone, or plug in a cable and open `http://vibeserversetup.local:48000`. It updates itself from
+the admin page; a new card is only for a new box.
 
-**Android** — install the app, plug in the radio, tap **Use as server**.
+**macOS.** A notarised menu-bar app for Apple Silicon, from
+[the releases](https://github.com/Stuey3D/VibeSDR/releases). Unzip, drag to Applications.
+
+**Android.** In the app, plug in the radio and tap **Use as server**. For a box that does nothing
+else, **VibeServer Lite** is the server on its own for Android TV boxes, old phones and tablets
+(Android 5.0 and up, ARM), also in [the releases](https://github.com/Stuey3D/VibeSDR/releases).
 
 | ![VibeServer running on an Android phone](website/assets/shots/xcover-server-live.webp) |
 |:---:|
-| *A rugged Android phone and a £30 dongle, serving to the world — a listener connected, 8 KB/s of audio, and a public address that stays the same.* |
+| *A rugged 2019 Android phone and a £30 dongle, serving to the world: a listener connected, 8 KB/s of audio, and a public address that stays the same.* |
 
-Supported hardware — four radios, though not all of them on every host:
+**Radios:**
 
 | Radio | Linux · macOS | Android |
 |---|:---:|:---:|
-| **RTL-SDR** — all the usual dongles, including the Blog V4 | ✅ | ✅ |
-| **Airspy HF+** — Discovery and Dual Port | ✅ | ✅ |
-| **SDRplay RSP** — needs SDRplay's own API installed | ✅ | ✕ |
-| **HackRF One** — ⚠️ experimental, see below | ✅ | ✅ |
+| **RTL-SDR**: the usual dongles, including the Blog V4 and V4L | ✅ | ✅ |
+| **Airspy HF+**: Discovery and Dual Port | ✅ | ✅ |
+| **Airspy R2 / Mini** | ✅ | ✅ |
+| **HackRF One** | ✅ | ✅ |
+| **SDRplay RSP**: needs SDRplay's own API installed | ✅ | ✕ |
 
-**SDRplay is desktop-only** because the RSP API is SDRplay's own closed-source library and there is
-no Android build of it — nothing we can fix at this end. On a phone, use one of the other three.
-
-**The HackRF is experimental**: nobody on the VibeSDR side owns one, so the driver was written from
-the documentation and has been tested by a single listener. It works — FM stereo with RDS, the lot
-— it just has not had the miles the other three have. Reports very welcome.
+**SDRplay is desktop-only** because the RSP API is SDRplay's closed-source library and there is no
+Android build of it. On a phone, use one of the others. The **HackRF** and **Airspy R2 / Mini**
+drivers were proven with testers who own them (see [Credits](#credits)) rather than on hardware
+here, and reports are always welcome.
 
 Optionally publish your receiver to the [public directory](https://vibeserver.vibesdr.net) through
-a Cloudflare tunnel — your home address is never exposed.
+a Cloudflare tunnel. Your home address is never exposed.
 
 …and this is what the listener gets, in a browser, with nothing installed:
 
-| ![The VibeServer web client](website/assets/shots/web-client-2026-08.webp) |
+| ![The VibeServer web client](website/assets/shots/web-client-dab-xcover.webp) |
 |:---:|
-| *The web client on a Mac, on a Raspberry Pi's dongle: server-side DSP, the waterfall drawn from raw bins, and the Advanced RDS analyser reading a station's pilot deviation and constellation.* |
+| *The web client on DAB block 11A, served from that phone: 31 services with logos and live programme text.* |
 
 ## On AI, honestly
 
-**It's in the name.** VibeSDR is vibe-coded — one curious listener working with Claude — and it's
-called that on purpose, so nobody has to discover it, suspect it, or be told by someone in a
+**It's in the name.** VibeSDR is vibe-coded, by one curious listener working with Claude, and it's
+called that on purpose so nobody has to discover it, suspect it, or be told by someone in a
 comments section.
 
 The scepticism is earned, though. There's a pattern about: a closed-source app, an AI-generated
 feature list longer than one person could have tested, decoders that "work" with no antenna
 plugged in, someone else's GPL code quietly folded in without credit, and a price on the end.
-**That's not a tooling problem — it's an honesty problem**, and the AI made none of those choices.
+**That's not a tooling problem. It's an honesty problem**, and the AI made none of those choices.
 
 So the fix isn't to hide the tooling. It's to be checkable:
 
 - **The source is open.** GPLv3, all of it. The store binary is this tree.
-- **Everyone who contributed is credited** and the licences are honoured — see [Credits](#credits).
+- **Everyone who contributed is credited** and the licences are honoured. See [Credits](#credits).
 - **Nothing is claimed that isn't there.** Every feature here exists, on a device, used on the air.
-  Find one that doesn't work and that's a bug I want — [open an issue](https://github.com/Stuey3D/VibeSDR/issues).
-- **It leaves features on the table on purpose** — no DAB+, DRM, HD Radio or DMR, because those
-  codecs are patent-encumbered, and no WebSDR, because its author doesn't sanction third-party
-  clients. Both cost real features. Saying no is the expensive option, and the one nobody fakes.
+  Find one that doesn't work and that's a bug I want: [open an issue](https://github.com/Stuey3D/VibeSDR/issues).
+- **It leaves features on the table on purpose.** No DRM, HD Radio or DMR, because those codecs are
+  patent-encumbered, and no WebSDR, because its author doesn't sanction third-party clients. DAB+
+  plays only because its audio is decoded by the decoder your own device already has; no codec
+  ships. Saying no costs real features, and it's the one choice nobody fakes.
 
 ## Tested on
 
-Not a spec sheet — the devices every feature has actually been driven on, on the air:
+Not a spec sheet: the devices every feature has actually been driven on, on the air.
 
 | | |
 |---|---|
 | **iPhone 17 Pro Max** | the easy one, where everything works |
-| **iPhone SE (2nd gen)** | a 2020 A13 with a 4.7″ screen — the layout floor |
-| **Moto G35 · Galaxy XCover 4s** | budget Android — the thermal and DSP floor |
-| **Galaxy Tab A9 · iPad Air 13″** | tablet layouts, landscape decoders |
-| **Apple Watch Ultra** | the wrist waterfall |
-| **Raspberry Pi 500 · x86 Linux · macOS** | VibeServer hosts |
+| **iPhone SE (2nd gen)** | a 2020 A13 with a 4.7″ screen: the layout floor |
+| **Moto G35 · Galaxy XCover 4s** | budget Android: the thermal and DSP floor |
+| **Galaxy Tab A9 · iPad Air 13″ (M2)** | tablet layouts, landscape decoders |
+| **M4 MacBook Air** | the Mac app, where it is written |
+| **Apple Watch Ultra 3 · Series 6** | the wrist waterfall |
+| **Raspberry Pi 500 · Raspberry Pi 2 · Intel Core i5 on Ubuntu 24.04** | VibeServer hosts, from fast to the 2015 floor |
+| **Galaxy XCover 4s · Sony Bravia Android TV** | VibeServer on Android: the app's built-in server, and VibeServer Lite on a bedroom TV with Advanced RDS and DAB+ |
+| **SDRplay RSP1A and RSP1B · RTL-SDR V4 and V4L · Airspy HF+** | the radios |
 
-The ones that matter are the SE and the budget Androids. Anyone can test where everything already
-works.
-
-## Screenshots
-
-| ![Waterfall](screenshots/01-waterfall-am-landscape.png) | ![Band-aware 40m](screenshots/02-band-aware-40m.jpeg) | ![Controls](screenshots/04-menu-controls.jpeg) |
-|:---:|:---:|:---:|
-
-| ![Watch — AM](screenshots/21-watch-wrist-am.jpeg) | ![Watch — 40m](screenshots/22-watch-waterfall-40m.png) | ![Watch — FM-DX](screenshots/23-watch-fmdx.png) |
-|:---:|:---:|:---:|
-
-| ![Local RTL-SDR](screenshots/08-local-rtlsdr-usb.jpeg) | ![FM-DX tuner](screenshots/19-fmdx-tuner.png) | ![In the car](screenshots/07-in-car.jpeg) |
-|:---:|:---:|:---:|
+The ones that matter are the SE, the budget Androids and the Pi 2. Anyone can test where everything
+already works.
 
 ## Building
 
@@ -171,8 +206,8 @@ cd ios && pod install && cd ..     # iOS only
 npx expo run:ios                   # or: npx expo run:android
 ```
 
-VibeServer builds with CMake from `vibeserver/` (Linux and macOS) — see `vibeserver/linux/INSTALL.md`.
-Design notes and specifications for individual features live in [`briefs/`](briefs/).
+VibeServer builds with CMake from `vibeserver/` (Linux and macOS); see `vibeserver/linux/INSTALL.md`.
+Design notes and specifications for individual features live in [`briefs/`](briefs/) and [`docs/`](docs/).
 
 ## Credits
 
@@ -275,15 +310,20 @@ we ship.
 clients. VibeSDR only implements platforms that welcome independent clients. Out of respect for
 that, WebSDR support will not be added.
 
-**Why no native DAB+, DRM, HD Radio or DMR?** Patents, not difficulty. HD Radio is Xperi's; DAB+
-and DRM need HE-AAC / xHE-AAC licensing; DMR, D-STAR, System Fusion and NXDN need the AMBE/IMBE
-vocoders (DVSI). Shipping unlicensed implementations in store builds is a risk VibeSDR won't take.
-Where an OpenWebRX server decodes those modes *server-side*, VibeSDR simply plays the PCM it sends
-— no codec ships in, or runs inside, the app. Codec2-based FreeDV and M17 are unencumbered and
-remain candidates.
+**How does DAB+ work without a licensed codec?** VibeServer runs its own DAB receiver, written from
+the ETSI standards: the OFDM front end, the error correction and the MP2 audio of plain DAB are our
+own code. DAB+ audio is HE-AAC, and that part is decoded by the decoder the host already has,
+Android's MediaCodec, Apple's AudioToolbox or an installed ffmpeg, never by a codec we ship.
+Receivers that can do it carry the DAB+ mark in the directory.
+
+**Why no DRM, HD Radio or DMR?** Patents, not difficulty. HD Radio is Xperi's; DRM needs xHE-AAC
+licensing; DMR, D-STAR, System Fusion and NXDN need the AMBE/IMBE vocoders (DVSI). Shipping
+unlicensed implementations in store builds is a risk VibeSDR won't take. Where an OpenWebRX server
+decodes those modes *server-side*, VibeSDR simply plays the PCM it sends; no codec ships in, or runs
+inside, the app. Codec2-based FreeDV and M17 are unencumbered and remain candidates.
 
 **Why do the skip buttons vanish on FM-DX?** An FM-DX Webserver is one physical tuner shared by
-everyone connected — tuning it retunes it for all of them. Lock-screen and in-car skip buttons
+everyone connected, so tuning it retunes it for all of them. Lock-screen and in-car skip buttons
 would let you change the station for people you can't see, so they're disabled out of courtesy.
 On the watch, the Crown is disarmed until you deliberately arm it.
 
