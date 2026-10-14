@@ -83,8 +83,8 @@ Judge it on the feel. That's the part a screenshot can't show, and the part we c
 | *Silver faceplate, blue display, FM* | *Red display, DAB 7D with station logos* | *Nixie tubes, DAB 10C* |
 | ![Blue display with FT8 digital spots on 7.074 MHz](website/assets/shots/shot07.jpg) | ![The FM-DX tuner on 87.7 MHz](website/assets/shots/shot03.jpg) | ![The RTTY decoder on 7645 kHz](website/assets/shots/shot08.jpg) |
 | *FT8 spots on 40 m* | *FM-DX tuner with RDS* | *RTTY decoder* |
-| ![The ADS-B decoder on 1090 MHz](website/assets/shots/shot06.jpg) | ![The WEFAX decoder on 4608.1 kHz](website/assets/shots/shot09.jpg) | ![The servers list and directories](website/assets/shots/shot04.jpg) |
-| *ADS-B aircraft* | *WEFAX weather chart* | *Servers and directories* |
+| ![ADS-B aircraft on 1090 MHz from an OpenWebRX server](website/assets/shots/shot06.jpg) | ![The WEFAX decoder on 4608.1 kHz](website/assets/shots/shot09.jpg) | ![The servers list and directories](website/assets/shots/shot04.jpg) |
+| *ADS-B aircraft, decoded by an OpenWebRX server* | *WEFAX weather chart* | *Servers and directories* |
 
 **On a Mac**
 
