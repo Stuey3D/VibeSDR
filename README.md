@@ -2,7 +2,7 @@
 
 ![VibeSDR on three phones: a silver faceplate on FM, a blue display on FT8, a red display on DAB](website/assets/og-vibesdr.jpg)
 
-**Vibe-coded, but not slop.** A whole SDR ecosystem built for one hand: a receiver for iPhone, iPad,
+A whole SDR ecosystem built for one hand: a receiver for iPhone, iPad,
 Mac, Android and Apple Watch with its own DSP, and **VibeServer**, which shares your radio with the
 world from a Raspberry Pi, a Mac, a Linux box, a spare Android phone or even a television.
 
@@ -157,27 +157,22 @@ a Cloudflare tunnel. Your home address is never exposed.
 |:---:|
 | *The web client on DAB block 11A, served from that phone: 31 services with logos and live programme text.* |
 
-## On AI, honestly
+---
 
-**It's in the name.** VibeSDR is vibe-coded, by one curious listener working with Claude, and it's
-called that on purpose so nobody has to discover it, suspect it, or be told by someone in a
-comments section.
+VibeSDR and its ecosystem were thought up, designed, tested, broken, tested some more and tinkered with
+until they were just right by me, and coded by AI.
 
-The scepticism is earned, though. There's a pattern about: a closed-source app, an AI-generated
-feature list longer than one person could have tested, decoders that "work" with no antenna
-plugged in, someone else's GPL code quietly folded in without credit, and a price on the end.
-**That's not a tooling problem. It's an honesty problem**, and the AI made none of those choices.
+Almost everything has been tested by me, on my own hardware and on the air. What I can't test myself,
+I've tested closely with members of the SDR community who can (see [Credits](#credits)).
 
-So the fix isn't to hide the tooling. It's to be checkable:
+The project is GPLv3 and fully open source, and everything is committed: mistakes, failed experiments,
+dead ends and all. It's an open and honest project with nothing to hide.
 
-- **The source is open.** GPLv3, all of it. The store binary is this tree.
-- **Everyone who contributed is credited** and the licences are honoured. See [Credits](#credits).
-- **Nothing is claimed that isn't there.** Every feature here exists, on a device, used on the air.
-  Find one that doesn't work and that's a bug I want: [open an issue](https://github.com/Stuey3D/VibeSDR/issues).
-- **It leaves features on the table on purpose.** No DRM, HD Radio or DMR, because those codecs are
-  patent-encumbered, and no WebSDR, because its author doesn't sanction third-party clients. DAB+
-  plays only because its audio is decoded by the decoder your own device already has; no codec
-  ships. Saying no costs real features, and it's the one choice nobody fakes.
+Some features have been left out, and can't be included unless their patents expire or move to
+FRAND (fair, reasonable and non-discriminatory) licensing. These include HD Radio and the digital
+voice modes that use the AMBE codec. DAB could be included because it is an open standard published
+by ETSI, and its codecs are either out of patent and built into VibeSDR (MP2), or decoded by the
+host operating system's own decoder (HE-AAC), so no patented codec is in our code.
 
 ## Tested on
 
