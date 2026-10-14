@@ -127,9 +127,13 @@ ok(/dDecade/.test(html2), 'the wavelength strip is drawn');
 const all = dir.servers.filter(api.matches).length;
 ok(all === dir.servers.length, 'no filter → every server listed');
 api.bandsOn.add('40 m amateur'); api.bandsOn.add('20 m amateur');
-const both = dir.servers.filter(api.matches);
-ok(both.length < dir.servers.length || dir.servers.length === 1,
-   `two bands narrow the list (${both.length} of ${dir.servers.length})`);
+// ★ A receiver that CANNOT do 40 m + 20 m, added for this one assertion (2026-10-14). The live list decided it before,
+//   and the morning every listed server had an HF radio it failed with the page working perfectly ("9 of 9").
+const VHF_ONLY = { id: 'check-vhf-only', name: 'check: FM-locked', country: 'GB',
+  radios: [{ id: 'fm', locked: true, centreHz: 96100000, spanHz: 2048000, modes: ['wfm'] }] };
+const both = [...dir.servers, VHF_ONLY].filter(api.matches);
+ok(!both.includes(VHF_ONLY) && both.length <= dir.servers.length,
+   `two bands narrow the list: the FM-locked receiver is left out (${both.length} of ${dir.servers.length + 1})`);
 ok(both.every((s) => (s.radios || []).length > 0), 'matches only servers with radios');
 api.bandsOn.clear();
 

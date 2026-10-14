@@ -15,6 +15,7 @@
 #   · vibeserver-maintenance, with apt and overlayroot-chroot stubbed: an Update on a Portable installs the missing
 #     manifest packages and runs the converge; on an ordinary install it does neither.
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -209,9 +210,13 @@ def main():
         ok(rc == 0 and "change(s)" in out, "apply: reports its changes")
         ok("Storage=volatile" in (F(r, "etc/systemd/journald.conf.d/60-vibeserver-pocket.conf") or ""), "journald in RAM")
         ok("Mechanism=zram" in (F(r, "etc/rpi/swap.conf.d/60-vibeserver-pocket.conf") or ""), "zram swap only")
-        ok("nmcheck.gnome.org" in (F(r, "etc/NetworkManager/conf.d/50-vibeserver-connectivity.conf") or ""),
+        # ★ Whole lines, not substrings (CodeQL py/incomplete-url-substring-sanitization, 2026-10-14): the host must be
+        #   the URL's host, not merely appear somewhere in the file.
+        ok(re.search(r"^uri=http://nmcheck\.gnome\.org/check_network_status\.txt$",
+                     F(r, "etc/NetworkManager/conf.d/50-vibeserver-connectivity.conf") or "", re.M) is not None,
            "NetworkManager connectivity check (the tunnel's gate)")
-        ok("apt.vibesdr.net" in (F(r, "etc/apt/sources.list.d/vibesdr.list") or ""), "a missing apt source is restored")
+        ok(re.search(r"^deb \S*.* https://apt\.vibesdr\.net stable main$",
+                     F(r, "etc/apt/sources.list.d/vibesdr.list") or "", re.M) is not None, "a missing apt source is restored")
         av = F(r, "etc/avahi/avahi-daemon.conf")
         ok("\n#allow-interfaces=wlan0  # off" in av and "\nallow-interfaces" not in av, "avahi: allow-interfaces switched off")
         ok("#deny-interfaces=eth1\n" in av, "avahi: an already-commented line is left as it was")

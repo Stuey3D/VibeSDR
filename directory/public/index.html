@@ -3516,7 +3516,12 @@ map.on('zoomend', drawServerMarkers);
 /** ★★ ONE RETRY BEFORE "NOT RESPONDING" (2026-10-13). A single refused or dropped status read — an owner's own rate limit
  *  or firewall, a blip on a home connection — painted a receiver with people listening as NOT RESPONDING
  *  (ListenamateurVLD). A server that is really gone fails both tries; one that hiccuped answers the second. */
-async function fetchStatus(url) {
+/** ★★ It takes the HOST, never a URL, and tests ADDRESS_OK HERE, at the fetch (CodeQL js/request-forgery #105,
+ *  2026-10-14 — the same rule as #100): the URL is built from a host that can only be one of ours, so no caller and no
+ *  listing can aim this anywhere else. */
+async function fetchStatus(host) {
+  if (!ADDRESS_OK.test(String(host))) throw new Error('not a VibeServer address');
+  const url = `https://${host}/vibeserver.json`;
   for (let attempt = 0; ; attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 4000);
@@ -3536,7 +3541,7 @@ async function withLiveCounts(servers) {
   await Promise.all(servers.map(async (s) => {
     if (!s.address) return;
     try {
-      const r = await fetchStatus(`https://${s.address}/vibeserver.json`);
+      const r = await fetchStatus(s.address);
       if (!r.ok) return;
       const j = await r.json();
       if (Number.isFinite(j.listeners)) s.listeners = Number(j.listeners);
