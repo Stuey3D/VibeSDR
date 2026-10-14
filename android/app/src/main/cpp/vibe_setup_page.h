@@ -326,8 +326,10 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       </div>
       <div class="hint" id="wifiScanMsg"></div>
       <div class="hint">An iPhone&rsquo;s Personal Hotspot is usually not visible while you are setting this
-         up &mdash; choose <b>Type a name</b>, enter it exactly as the iPhone shows it under
-         Settings &rsaquo; General &rsaquo; About &rsaquo; Name, and tick <b>not visible</b>.</div>
+         up &mdash; choose <b>Type a name</b>, enter it as the iPhone shows it under
+         Settings &rsaquo; General &rsaquo; About &rsaquo; Name, and tick <b>not visible</b>. A straight or curly
+         apostrophe (&lsquo;Sam's&rsquo; or &lsquo;Sam&rsquo;s&rsquo;) both work &mdash; the box saves the name
+         exactly as the iPhone sends it once it sees it.</div>
       <!-- ★★ Stuart's Pi 3 A+ (2026-10-10) would not join his iPhone's hotspot until Maximise Compatibility was on: newer
            iPhones run the hotspot on 5 GHz with newer security, which the Pi's Wi-Fi may not see or join. -->
       <div class="hint"><b>On the iPhone, turn on Maximise Compatibility</b> (Settings &rsaquo; Personal Hotspot) &mdash;
@@ -5831,13 +5833,36 @@ async function wifiRadioSet(off) {
   $("wifiRadioBtn").disabled = false;
 }
 
+/** ★★★ A TYPED NAME IS SAVED AS IT IS ON THE AIR (Stuart's road test, 2026-10-14: the box never joined his iPhone).
+ *  NetworkManager matches names byte for byte, and an iPhone's hotspot is "Stuart’s iPhone" with a CURLY apostrophe —
+ *  typed on a Mac it is a straight one, and capitals or a trailing space go astray as easily. When the name typed is
+ *  not in the box's scan but exactly ONE scanned network means the same (apostrophes, quotes, dashes, spaces and
+ *  capitals aside), that network's real name is saved. The box applies the same rule when it scans later
+ *  (vibeserver-pocket: ssid_on_air), so a phone that is off while this page is open is still found. */
+function wifiKey(s) {
+  return String(s || "").normalize("NFKC")
+    .replace(/[‘’‚‛′ʼ´`＇]/g, "'")
+    .replace(/[“-‟″＂]/g, '"')
+    .replace(/[‐-―−]/g, "-")
+    .replace(/\s+/g, " ").trim().toLowerCase();
+}
+function wifiOnAir(ssid) {
+  const names = ((WIFI && WIFI.scan) || []).map(x => x.ssid);
+  if (names.includes(ssid)) return ssid;
+  const k = wifiKey(ssid);
+  const hits = names.filter(n => n && wifiKey(n) === k);
+  return hits.length === 1 ? hits[0] : ssid;
+}
+
 /** The request, validated here for a quick answer — the box checks every rule again. */
 function wifiCollect() {
   const nets = [];
   const seen = new Set();
   for (let i = 0; i < WIFI_ROWS.length; i++) {
     const r = WIFI_ROWS[i];
-    const ssid = (r.ssid || "").trim() === "" ? "" : r.ssid;
+    const typed = (r.ssid || "").trim() === "" ? "" : r.ssid;
+    // ★ Not for a row kept as saved (no new password): the box knows that one by its saved name.
+    const ssid = typed && !(r.keep && !r.psk) ? wifiOnAir(typed) : typed;
     if (!ssid) {
       // ★ An untouched empty row is not an error — it is a row the owner did not fill.
       if (!r.psk) continue;

@@ -46,6 +46,22 @@
 #include <ifaddrs.h>
 #define VIBE_MDNS_FOLLOW_IP 1
 #endif
+// ★★★ EVERY INTERFACE, BY ITS OWN ADDRESS — LINUX VIBESERVER ONLY (Stuart's Portable road test, 2026-10-14: on the
+//     box's own hotspot its name did not resolve; he had to type http://10.42.0.1). The group was joined with
+//     imr_interface = INADDR_ANY and packets sent with no IP_MULTICAST_IF, and Linux resolves BOTH through the routing
+//     table — "which interface does 224.0.0.251 route out of?". On a hotspot (NetworkManager's shared mode) there is no
+//     default route at all: the join failed with ENODEV and every send with ENETUNREACH, so the responder heard no
+//     question and announced nothing. avahi kept answering for the HOSTNAME (it joins per interface), which is why
+//     VibeServerSetup.local worked on the setup hotspot — but the name chosen in setup, and the _vibesdr._tcp service
+//     the apps browse for, are ours, and were silent there. The same hole on a box with Ethernet AND its hotspot: the
+//     route picks one interface and the other network never hears the name.
+//     So, here: join on every multicast interface by its address, send out of each interface explicitly, and answer a
+//     question with the address of the interface the asker shares (their subnet). Android keeps its proven
+//     INADDR_ANY path (NsdManager does the service there; its Wi-Fi always has a route); iOS never serves.
+#if defined(__linux__) && !defined(__ANDROID__) && defined(VIBE_MDNS_FOLLOW_IP)
+#include <net/if.h>
+#define VIBE_MDNS_PER_IFACE 1
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -355,6 +371,69 @@ void sendTo(int fd, const std::string& pkt, const sockaddr_in& dst) {
     sendto(fd, pkt.data(), pkt.size(), 0, (const sockaddr*)&dst, sizeof dst);
 }
 
+#ifdef VIBE_MDNS_PER_IFACE
+/** One IPv4 interface we answer on: its address and netmask (network byte order). */
+struct Ifc { uint32_t addr; uint32_t mask; };
+
+/** Every UP, MULTICAST, non-loopback IPv4 interface address — a Wi-Fi client, the box's own hotspot, Ethernet. */
+std::vector<Ifc> listIfcs() {
+    std::vector<Ifc> out;
+    struct ifaddrs* ifa = nullptr;
+    if (getifaddrs(&ifa) != 0) return out;
+    for (auto* p = ifa; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
+        if (!(p->ifa_flags & IFF_UP) || !(p->ifa_flags & IFF_MULTICAST) || (p->ifa_flags & IFF_LOOPBACK)) continue;
+        const uint32_t a = reinterpret_cast<const sockaddr_in*>(p->ifa_addr)->sin_addr.s_addr;
+        if (!a || (ntohl(a) >> 24) == 127) continue;
+        const uint32_t m = p->ifa_netmask ? reinterpret_cast<const sockaddr_in*>(p->ifa_netmask)->sin_addr.s_addr
+                                          : 0xFFFFFFFFu;
+        bool dup = false;
+        for (const auto& i : out) dup = dup || i.addr == a;
+        if (!dup) out.push_back({a, m});
+    }
+    freeifaddrs(ifa);
+    return out;
+}
+
+bool sameIfcs(const std::vector<Ifc>& a, const std::vector<Ifc>& b) {
+    if (a.size() != b.size()) return false;
+    for (const auto& x : a) {
+        bool hit = false;
+        for (const auto& y : b) hit = hit || (x.addr == y.addr && x.mask == y.mask);
+        if (!hit) return false;
+    }
+    return true;
+}
+
+/** Join the group on each interface, BY ITS ADDRESS — no routing lookup, so a hotspot with no default route joins too.
+ *  True if any join SUCCEEDED, i.e. a membership was missing (EADDRINUSE = still held): the caller re-announces. */
+bool joinEach(int fd, const std::vector<Ifc>& ifs) {
+    bool any = false;
+    for (const auto& i : ifs) {
+        ip_mreq m{};
+        m.imr_multiaddr.s_addr = inet_addr(kGroup);
+        m.imr_interface.s_addr = i.addr;
+        if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &m, sizeof m) == 0) any = true;
+    }
+    return any;
+}
+
+/** Send out of the interface that owns `via` (IP_MULTICAST_IF) — a link-local group needs no route that way. */
+void sendVia(int fd, const std::string& pkt, const sockaddr_in& dst, uint32_t via) {
+    in_addr a{};
+    a.s_addr = via;
+    setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &a, sizeof a);
+    sendTo(fd, pkt, dst);
+}
+
+/** Our address on the asker's network (the interface whose subnet holds it), else `fallback`. */
+uint32_t addrFor(const std::vector<Ifc>& ifs, uint32_t peer, uint32_t fallback) {
+    for (const auto& i : ifs)
+        if ((i.addr & i.mask) == (peer & i.mask)) return i.addr;
+    return fallback;
+}
+#endif
+
 #ifdef VIBE_MDNS_FOLLOW_IP
 /** The machine's address NOW, by the same preference as the server's primaryIpv4() (a private LAN
  *  address over anything else). 0 when there is none — between networks. */
@@ -397,6 +476,33 @@ void loop(std::string base, uint32_t addr) {
     group.sin_addr.s_addr = inet_addr(kGroup);
     group.sin_port = htons(kPort);
 
+    // ★ Multicast to the group: out of EVERY interface, each packet carrying that interface's own address
+    //   (build(addr) makes it). Without per-interface support, the one address as before.
+#ifdef VIBE_MDNS_PER_IFACE
+    std::vector<Ifc> ifs = listIfcs();
+    joinEach(fd, ifs);
+#endif
+    auto toGroup = [&](auto build) {
+#ifdef VIBE_MDNS_PER_IFACE
+        if (!ifs.empty()) {
+            for (const auto& i : ifs) {
+                const std::string pkt = build(i.addr);
+                if (!pkt.empty()) sendVia(fd, pkt, group, i.addr);
+            }
+            return;
+        }
+#endif
+        const std::string pkt = build(addr);
+        if (!pkt.empty()) sendTo(fd, pkt, group);
+    };
+    // ★ Is this source address one of OURS (our own multicast looped back)? Every interface's, not just the first.
+    auto isOurs = [&](uint32_t a) {
+#ifdef VIBE_MDNS_PER_IFACE
+        for (const auto& i : ifs) if (i.addr == a) return true;
+#endif
+        return a == addr;
+    };
+
     // ── Probe, then rename on conflict (RFC 6762 §8) ─────────────────────────
     // This is what makes a SECOND phone on the network call itself vibesdr-2 without
     // anybody configuring it.
@@ -407,7 +513,7 @@ void loop(std::string base, uint32_t addr) {
         std::string want = encodeName(host);
 
         for (int i = 0; i < 3 && g_run.load(); ++i) {
-            sendTo(fd, probe, group);
+            toGroup([&](uint32_t) { return probe; });
             // Listen 250ms for somebody answering for this name.
             for (int t = 0; t < 25 && g_run.load(); ++t) {
                 timeval tv{0, 10000};
@@ -421,7 +527,7 @@ void loop(std::string base, uint32_t addr) {
                 ssize_t n = recvfrom(fd, buf, sizeof buf, 0, (sockaddr*)&from, &fl);
                 if (n < 12) continue;
                 // A RESPONSE (QR bit) whose answer name is ours = somebody else owns it.
-                if ((buf[2] & 0x80) && from.sin_addr.s_addr != addr) {
+                if ((buf[2] & 0x80) && !isOurs(from.sin_addr.s_addr)) {
                     size_t off = 12;
                     uint16_t qd = (buf[4] << 8) | buf[5];
                     for (uint16_t q = 0; q < qd && off < (size_t)n; ++q) {
@@ -451,15 +557,16 @@ void loop(std::string base, uint32_t addr) {
     const std::string wantInst = svcInstName(host);
     const std::string wantType = svcTypeName();
     const std::string wantMeta = svcMetaName();
+    // ★ Our name (and the service, when we publish it) to the group, on every interface.
+    auto announce = [&]() {
+        toGroup([&](uint32_t a) { return buildAnswer(host, a, 0); });
+        if (g_svcPort) toGroup([&](uint32_t a) { return buildService(host, a, 0, true); });
+    };
     for (int i = 0; i < 2 && g_run.load(); ++i) {
-        sendTo(fd, buildAnswer(host, addr, 0), group);
         // ★ Announce the SERVICE unasked too. A client that is already listening learns about
         //   this server the moment it starts, instead of only when it next happens to browse —
         //   which is what "the server took a while to appear" actually is.
-        if (g_svcPort) {
-            const std::string svc = buildService(host, addr, 0, true);
-            if (!svc.empty()) sendTo(fd, svc, group);
-        }
+        announce();
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     if (g_svcPort)
@@ -495,19 +602,27 @@ void loop(std::string base, uint32_t addr) {
             if (nowT - lastIp >= 5 || nowT < lastIp) {
                 lastIp = nowT;
                 const uint32_t now = currentIpv4();
-                if (now && now != addr) {
-                    addr = now;
-                    g_addr = now;
+#ifdef VIBE_MDNS_PER_IFACE
+                // ★ The INTERFACES are what changed, as often as the address: the box's hotspot coming up beside
+                //   Ethernet adds one without changing the "primary" address at all.
+                std::vector<Ifc> nowIfs = listIfcs();
+                const bool ifsChanged = !sameIfcs(nowIfs, ifs);
+                if (ifsChanged) ifs = std::move(nowIfs);
+#else
+                const bool ifsChanged = false;
+#endif
+                if ((now && now != addr) || ifsChanged) {
+                    if (now) { addr = now; g_addr = now; }
                     LOGI("mDNS: the address changed to %s — announcing it", inet_ntoa(*(in_addr*)&addr));
+#ifdef VIBE_MDNS_PER_IFACE
+                    joinEach(fd, ifs);
+#else
                     ip_mreq re{};
                     re.imr_multiaddr.s_addr = inet_addr(kGroup);
                     re.imr_interface.s_addr = htonl(INADDR_ANY);
                     setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &re, sizeof re);   // EADDRINUSE = still held
-                    sendTo(fd, buildAnswer(host, addr, 0), group);
-                    if (g_svcPort) {
-                        const std::string svc = buildService(host, addr, 0, true);
-                        if (!svc.empty()) sendTo(fd, svc, group);
-                    }
+#endif
+                    announce();
                 }
             }
         }
@@ -516,16 +631,17 @@ void loop(std::string base, uint32_t addr) {
             const time_t nowT = time(nullptr);
             if (nowT - lastJoin >= 20 || nowT < lastJoin) {
                 lastJoin = nowT;
+#ifdef VIBE_MDNS_PER_IFACE
+                const bool rejoined = joinEach(fd, ifs);
+#else
                 ip_mreq re{};
                 re.imr_multiaddr.s_addr = inet_addr(kGroup);
                 re.imr_interface.s_addr = htonl(INADDR_ANY);
-                if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &re, sizeof re) == 0) {
+                const bool rejoined = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &re, sizeof re) == 0;
+#endif
+                if (rejoined) {
                     LOGI("mDNS multicast membership had been lost — re-joined and re-announcing");
-                    sendTo(fd, buildAnswer(host, addr, 0), group);
-                    if (g_svcPort) {
-                        const std::string svc = buildService(host, addr, 0, true);
-                        if (!svc.empty()) sendTo(fd, svc, group);
-                    }
+                    announce();
                 }
             }
         }
@@ -541,6 +657,24 @@ void loop(std::string base, uint32_t addr) {
         ssize_t n = recvfrom(fd, buf, sizeof buf, 0, (sockaddr*)&from, &fl);
         if (n < 12) continue;
         if (buf[2] & 0x80) continue;                   // a response, not a question
+        // ★ Answer with our address on the ASKER's network, out of that interface (a phone on the hotspot must be
+        //   told 10.42.0.1, not the Ethernet address it cannot reach).
+        bool unicastReply = false;
+#ifdef VIBE_MDNS_PER_IFACE
+        const uint32_t here = addrFor(ifs, from.sin_addr.s_addr, addr);
+        auto reply = [&](const std::string& ans) {
+            if (ans.empty()) return;
+            if (unicastReply) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
+            else              sendVia(fd, ans, group, here);
+        };
+#else
+        const uint32_t here = addr;
+        auto reply = [&](const std::string& ans) {
+            if (ans.empty()) return;
+            if (unicastReply) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
+            else              sendTo(fd, ans, group);
+        };
+#endif
 
         uint16_t qd = (buf[4] << 8) | buf[5];
         size_t off = 12;
@@ -558,6 +692,7 @@ void loop(std::string base, uint32_t addr) {
             if (skip + 4 > (size_t)n) break;
             uint16_t qtype = (buf[skip] << 8) | buf[skip + 1];
             const bool unicast = (buf[skip + 2] & 0x80) != 0;   // QU bit
+            unicastReply = unicast;
             off = skip + 4;
 
             // ── The service questions ────────────────────────────────────────────────────
@@ -567,17 +702,14 @@ void loop(std::string base, uint32_t addr) {
                     if (qtype == 12 || qtype == 255) ans = buildMetaPtr(0);
                 } else if (isType) {
                     // A browse. PTR + everything needed to use it, in one packet.
-                    if (qtype == 12 || qtype == 255) ans = buildService(host, addr, 0, true);
+                    if (qtype == 12 || qtype == 255) ans = buildService(host, here, 0, true);
                 } else {
                     // The instance itself — SRV/TXT/ANY. No PTR: it was not asked for, and
                     // this name is not where a PTR lives.
                     if (qtype == 33 || qtype == 16 || qtype == 255)
-                        ans = buildService(host, addr, 0, false);
+                        ans = buildService(host, here, 0, false);
                 }
-                if (!ans.empty()) {
-                    if (unicast) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
-                    else         sendTo(fd, ans, group);
-                }
+                reply(ans);
                 continue;
             }
 
@@ -585,7 +717,7 @@ void loop(std::string base, uint32_t addr) {
 
             std::string ans;
             if (qtype == 1 || qtype == 255) {
-                ans = buildAnswer(host, addr, 0);          // A
+                ans = buildAnswer(host, here, 0);          // A — our address on the asker's network
             } else if (qtype == 28) {
                 // AAAA — we have none. ANSWER anyway, with NSEC: leaving it unanswered
                 // makes the resolver wait out a timeout before using the A record it
@@ -595,8 +727,7 @@ void loop(std::string base, uint32_t addr) {
                 continue;
             }
             // Honour the QU bit: a resolver that asked for a unicast reply gets one.
-            if (unicast) { from.sin_port = htons(kPort); sendTo(fd, ans, from); }
-            else         sendTo(fd, ans, group);
+            reply(ans);
         }
     }
     close(fd);

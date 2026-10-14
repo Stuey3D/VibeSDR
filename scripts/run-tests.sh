@@ -184,6 +184,8 @@ done
 #   because that page is what a new owner meets first.
 printf '\n\033[1m── setup page ──\033[0m\n'
 if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
+if node scripts/test-setup-wifi-name.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ Fork labelling (directory forkOf): a fork's name is shown, checked; official names refused as fork names.
 if node --no-warnings directory/scripts/test-fork.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE DIRECTORY PAGE (2026-10-13): this check existed but was never run here, so it failed for a month after the dial gained

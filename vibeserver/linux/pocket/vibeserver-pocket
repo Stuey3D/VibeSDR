@@ -59,6 +59,7 @@ import stat
 import subprocess
 import sys
 import time
+import unicodedata
 
 MARKER       = "/etc/vibeserver-pocket/enabled"
 CONF         = "/etc/vibeserver-pocket/pocket.conf"       # the image's defaults (read-only root)
@@ -120,7 +121,8 @@ DEFAULTS = {
     "IDLE_SEC": "120",              # …and only once nobody has been connected for this long
     "UPGRADE_SEC": "120",           # on network 2/3: how often to look for a higher one (never while the radio is in use)
     # ★★★ A NETWORK CHOSEN IN THE MENU (Stuart, 2026-10-11: "Stuey3D's iPhone | Meow! | Own WiFi"). Long enough to
-    #     leave the app, open Settings and switch Personal Hotspot on; the box keeps its current link while it looks.
+    #     leave the app, open Settings and switch Personal Hotspot on; the box keeps a NETWORK link while it looks, but
+    #     leaves its own hotspot at once (the phone pressing is on it, and cannot host while it is — see pursue).
     "TRY_SEC": "90",
     "JOIN_WAIT_SEC": "30",          # nmcli --wait for one join attempt
     # ★★★ OWN WI-FI, BY HAND (Stuart, 2026-10-10). A listener on the box's local network can send it to its own hotspot
@@ -255,18 +257,81 @@ def iw_unescape(s):
     return b.decode("utf-8", "replace")
 
 
+# ★★★ EVERY TOOL WE READ SPEAKS UTF-8, IN ENGLISH, WHATEVER THE BOX'S LOCALE (Stuart's road test, 2026-10-14: the phone's
+#     hotspot never joined). An iPhone's hotspot is named after the phone — "Stuart’s iPhone", with a CURLY apostrophe
+#     (U+2019). nmcli prints through glib's g_print, which CONVERTS to the locale's charset: under a C/POSIX locale (a
+#     unit started with no LANG, a locale that was never generated) that apostrophe comes out as "?". The scan would then
+#     list "Stuart?s iPhone", a saved network would read back the same way, and a re-save of the Wi-Fi card (keep: the
+#     page sends back the name it was shown) would WRITE "Stuart?s iPhone" into NetworkManager — a network that does not
+#     exist. C.UTF-8 is built into glibc (no locale-gen needed), so this holds on every image. LANGUAGE/LC_ALL also pin
+#     the messages we match on ("Connectivity is now", "Not connected", NM's activation errors) to English.
+TOOL_ENV = dict(os.environ, LC_ALL="C.UTF-8", LANG="C.UTF-8", LANGUAGE="")
+
+
+# ★★★ THE NAME AS TYPED vs THE NAME ON THE AIR (Stuart's road test, 2026-10-14). NetworkManager matches a saved network
+#     to a scan BYTE FOR BYTE, and a phone hotspot is the one network an owner must TYPE (it is rarely on when they set
+#     the box up). The iPhone's name has a curly apostrophe — "Stuart’s iPhone" — that a Mac keyboard types as ' and an
+#     iPhone keyboard (Smart Punctuation) types as ’; dashes and quotes go the same way, a trailing space slips in, and
+#     the capitals of "iPhone" are easy to get wrong. Any one of those and the box never joins, with nothing to say why.
+#     So a saved name that is NOT on the air is matched to one that IS by this key, and — only when exactly ONE network
+#     in range matches — the saved network is corrected to the name on the air (ssid_on_air, Box.correct_ssid). The key
+#     is only ever used to FIND that one network; what NetworkManager is given is always the exact name it scanned.
+_SSID_FOLD = {}
+for _c in "\u2018\u2019\u201a\u201b\u2032\u02bc\u00b4\u0060\uff07":
+    _SSID_FOLD[ord(_c)] = "'"
+for _c in "\u201c\u201d\u201e\u201f\u2033\uff02":
+    _SSID_FOLD[ord(_c)] = '"'
+for _c in "\u2010\u2011\u2012\u2013\u2014\u2015\u2212":
+    _SSID_FOLD[ord(_c)] = "-"
+
+
+def ssid_key(s):
+    """What a person means by a network name: apostrophes, quotes and dashes of every kind as one, Unicode composed the
+    same way, spaces of every kind as one space, no space at either end, capitals ignored."""
+    s = unicodedata.normalize("NFKC", s or "").translate(_SSID_FOLD)
+    return " ".join(s.split()).casefold()
+
+
+def ssid_on_air(ssid, visible):
+    """The name to use for saved network `ssid` given the names seen in a scan: `ssid` itself if it is there, else the
+    ONE scanned name that means the same (ssid_key), else None. Two candidates = ambiguous = None: a guess could put the
+    owner's password on a stranger's network."""
+    if not visible:
+        return None
+    if ssid in visible:
+        return ssid
+    k = ssid_key(ssid)
+    hits = [v for v in visible if v and "\ufffd" not in v and ssid_key(v) == k]
+    return hits[0] if len(hits) == 1 else None
+
+
+def nm_reason(stderr):
+    """NetworkManager's own words for a failed `connection up` ("Secrets were required, but not provided", "The Wi-Fi
+    network could not be found", …) — shown to the owner, because "check its password" was said for EVERY failure."""
+    m = re.search(r"failed:\s*(.+)$", stderr or "")
+    r = (m.group(1) if m else (stderr or "")).strip()
+    r = re.sub(r"^\(\d+\)\s*", "", r)
+    return r[:140]
+
+
 class Shell:
     """The only thing that runs programs. Swapped for a fake in the tests."""
+    last_stderr = ""                 # ★ the last failed command's last stderr line — the WHY of a failed join
+
     def run(self, args, timeout=40, secret=False):
+        self.last_stderr = ""
         try:
-            p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               timeout=timeout, text=True, stdin=subprocess.DEVNULL)
+            p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
+                               text=True, encoding="utf-8", errors="replace", env=TOOL_ENV,
+                               stdin=subprocess.DEVNULL)
         except (OSError, subprocess.TimeoutExpired) as e:
             # ★ The VERB only — the arguments can hold a password.
             log("%s %s failed (%s)" % (args[0], args[1] if len(args) > 1 else "", type(e).__name__))
             return 1, ""
         if p.returncode != 0 and not secret:
+            # ★ Never for a `secret` run: nmcli can quote a refused property (a password) back in its error.
             err = (p.stderr or "").strip().splitlines()
+            self.last_stderr = err[-1] if err else ""
             log("%s: %s" % (" ".join(args[:3]), err[-1] if err else "exit %d" % p.returncode))
         elif p.returncode != 0:
             log("%s %s failed (exit %d)" % (args[0], args[1], p.returncode))
@@ -275,7 +340,7 @@ class Shell:
     def run_input(self, args, data, timeout=20):
         try:
             p = subprocess.run(args, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               timeout=timeout, text=True)
+                               timeout=timeout, text=True, encoding="utf-8", env=TOOL_ENV)
             return p.returncode
         except (OSError, subprocess.TimeoutExpired):
             return 1
@@ -314,6 +379,7 @@ class Box:
         self.scan_cache = []          # [{"ssid","signal","secure"}] — the setup page's list
         self.scan_at = 0
         self.last_error = ""
+        self.join_reason = ""         # NetworkManager's reason for the last failed join (nm_reason)
         self.boot_at = sh.now()
         self.next_rescan = 0
         self.next_upgrade = 0
@@ -661,8 +727,29 @@ class Box:
         wait = wait or self.ci("JOIN_WAIT_SEC")
         rc, _ = self.sh.run(["nmcli", "--wait", str(wait), "connection", "up", name, "ifname", self.dev],
                             timeout=wait + 15)
+        self.join_reason = "" if rc == 0 else nm_reason(getattr(self.sh, "last_stderr", ""))
         self.read_active()
         return rc == 0
+
+    def join_error(self, ssid):
+        """★ What the owner is told when a join fails — NetworkManager's reason, not a guess. It used to say "check its
+        password" for every failure, which sent Stuart to retype a password that was right (2026-10-14)."""
+        r = self.join_reason
+        if re.search(r"secret|password|psk|4-way|handshake", r, re.I):
+            return "could not join \"%s\" — it refused the password" % ssid
+        if re.search(r"not be found|not found|no network", r, re.I):
+            return "could not join \"%s\" — it was not found (is it switched on?)" % ssid
+        return "could not join \"%s\"%s" % (ssid, (" — " + r) if r else " — check its password")
+
+    def correct_ssid(self, name, saved_ssid, on_air):
+        """★★★ The saved name differs from the one on the air only in apostrophes, dashes, spaces or capitals (ssid_key):
+        rewrite the saved network to the EXACT name on the air — the password, order and everything else stay — so this
+        join and every later one (NetworkManager's own autoconnect at boot included) use the real name."""
+        if on_air == saved_ssid or not valid_ssid(on_air):
+            return
+        log("network \"%s\" is on the air as \"%s\" — the saved name is corrected to match"
+            % (saved_ssid.encode("unicode_escape").decode("ascii"), on_air.encode("unicode_escape").decode("ascii")))
+        self.nm_change(["nmcli", "connection", "modify", name, "802-11-wireless.ssid", on_air])
 
     def down(self, name):
         self.sh.run(["nmcli", "connection", "down", name], timeout=20)
@@ -824,8 +911,20 @@ class Box:
         `below_rank`, only those ranked above the current one (an upgrade). True once joined.
         `blind=False` (an upgrade, off a WORKING link): a "not visible" network is tried only if the scan saw it."""
         saved = self.saved()
+        unseen = False
         if visible is None:
-            visible = self.scan() or set()
+            visible = self.scan()
+            if visible is None:
+                # ★★ A FAILED SCAN IS NOT AN EMPTY SKY. NetworkManager refuses a rescan straight after another, or while
+                #    the driver is still leaving AP mode; this read that as "nothing in range", skipped every network
+                #    not ticked "not visible", and raised the hotspot — where a phone joining it then kept it up for
+                #    good. Look again once; if the radio still will not say, try each saved network by name (we have no
+                #    link to lose here — `visible` is only passed in from a working link, which never probes blind).
+                self.sh.sleep(3)
+                visible = self.scan()
+                if visible is None:
+                    log("the scan failed twice — trying the saved networks by name")
+                    visible, unseen = set(), True
         now = self.sh.now()
         for rank, name, ssid, hidden in saved:
             if below_rank is not None and rank >= below_rank:
@@ -835,10 +934,14 @@ class Box:
             # ★ A phone hotspot may not be ADVERTISING (the phone is busy) — the owner ticks
             #   "not visible" and NM probes for it by name; everything else must be SEEN first, or
             #   each absent network costs JOIN_WAIT_SEC of nothing.
-            if ssid not in visible and not (hidden and blind):
+            on_air = ssid_on_air(ssid, visible)
+            if on_air is None and not ((hidden or unseen) and blind):
                 continue
             if below_rank is not None and self.failed_until.get(name, 0) > now:
                 continue
+            if on_air is not None:
+                self.correct_ssid(name, ssid, on_air)
+                ssid = on_air
             log("joining network %s (%s)" % (rank if rank < 9 else "other", ssid))
             if self.up(name):
                 self.captive_off()
@@ -855,12 +958,12 @@ class Box:
             n = self.fail_count.get(name, 0) + 1
             self.fail_count[name] = n
             self.failed_until[name] = self.sh.now() + min(900 * 2 ** (n - 1), 6 * 3600)
-            self.last_error = "could not join \"%s\" — check its password" % ssid
+            self.last_error = self.join_error(ssid)
         return False
 
     def choose_net(self, rank):
         """★★★ A NETWORK CHOSEN IN THE MENU (Stuart, 2026-10-11) — e.g. the owner's phone hotspot, switched on after
-        pressing. Look for it for TRY_SEC, KEEPING the current link while looking where the radio allows; join it the
+        pressing. Look for it for TRY_SEC, KEEPING a network link while looking (but never its own hotspot — pursue); join it the
         moment it appears; if it never does, stay (or go back) where we were. Once joined it is held like Own Wi-Fi."""
         hit = [(r, n, s, h) for r, n, s, h in self.saved() if r == rank and r <= 3]
         if not hit:
@@ -898,24 +1001,25 @@ class Box:
                 self.leave_hotspot_and_try("back after looking for \"%s\"" % w["ssid"])
             return
         if self.cur in (AP_NAME, SETUP_NAME):
-            # ★ On a hotspot: look without dropping it where the driver can (ap-force); otherwise leave it now —
-            #   whoever pressed is leaving it anyway, and a station-mode scan is the only way to look.
-            seen = self.scan_while_ap()
-            if seen is not None and w["ssid"] not in seen and not w["hidden"]:
-                return
+            # ★★★ ON A HOTSPOT: LEAVE IT, AT ONCE (Stuart's road test, 2026-10-14: on the box's own Wi-Fi, chose his
+            #     iPhone's hotspot in the app — it never switched). This used to keep the hotspot up while it looked
+            #     (ap-force) until the chosen network appeared. But the phone that pressed is ON this hotspot, and an
+            #     iPhone does not run its Personal Hotspot over Wi-Fi while its own Wi-Fi is joined to another network:
+            #     keeping ours up kept the network we were looking for switched off, for the whole TRY_SEC. Whoever
+            #     pressed is leaving it anyway (the menu says so), and if the network never appears the hotspot comes
+            #     back (below). A station-mode scan is also the only one every driver can do.
             self.down(self.cur)
             self.captive_off()
             self.sh.sleep(2)
             self.read_active()
             self.mode = "connecting"
-        if self.cur and self.st >= 100:
-            vis = self.scan() or set()                  # ★ a scan keeps the link: nobody is dropped until it is there
-            if w["ssid"] not in vis and not w["hidden"]:
-                return
-        elif not w["hidden"]:
-            vis = self.scan() or set()
-            if w["ssid"] not in vis:
-                return
+        vis = self.scan() or set()                      # ★ a scan keeps the link: nobody is dropped until it is there
+        on_air = ssid_on_air(w["ssid"], vis)
+        if on_air is None and not w["hidden"]:
+            return
+        if on_air is not None and on_air != w["ssid"]:
+            self.correct_ssid(w["name"], w["ssid"], on_air)
+            w["ssid"] = on_air
         log("joining the chosen network (%s)" % w["ssid"])
         if self.up(w["name"]):
             self.captive_off()
@@ -928,7 +1032,7 @@ class Box:
             self.next_upgrade = self.sh.now() + self.ci("UPGRADE_SEC")
             self.want = None
             return
-        self.last_error = "could not join \"%s\" — check its password" % w["ssid"]
+        self.last_error = self.join_error(w["ssid"])
 
     def leave_hotspot_and_try(self, why):
         log("looking for a saved network — " + why)
@@ -1078,8 +1182,7 @@ class Box:
             if self.hold_own and cur == AP_NAME:
                 if self.hold_quiet_for() >= self.ci("RELEASE_SEC"):
                     seen = self.scan_while_ap()
-                    names = {s for _, _, s, _ in saved}
-                    if seen is None or (seen & names) or any(h for _, _, _, h in saved):
+                    if seen is None or any(ssid_on_air(s, seen) for _, _, s, _ in saved) or any(h for _, _, _, h in saved):
                         self.network_again("Own Wi-Fi released: the radio has not been used for %d min"
                                            % (self.ci("RELEASE_SEC") // 60))
                     else:
@@ -1095,8 +1198,7 @@ class Box:
             if saved and now >= self.next_rescan:
                 self.next_rescan = now + self.ci("RESCAN_SEC")
                 seen = self.scan_while_ap()
-                names = {s for _, _, s, _ in saved}
-                maybe = seen is None or bool(seen & names) or any(h for _, _, _, h in saved)
+                maybe = seen is None or any(ssid_on_air(s, seen) for _, _, s, _ in saved) or any(h for _, _, _, h in saved)
                 if maybe and idle:
                     self.leave_hotspot_and_try("hotspot idle for %d s" % self.ci("IDLE_SEC"))
             return
@@ -1226,7 +1328,7 @@ class NetWatch:
 
     def start(self):
         try:
-            self.proc = subprocess.Popen(["nmcli", "monitor"], stdout=subprocess.PIPE,
+            self.proc = subprocess.Popen(["nmcli", "monitor"], stdout=subprocess.PIPE, env=TOOL_ENV,
                                          stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
             os.set_blocking(self.proc.stdout.fileno(), False)
         except OSError:
@@ -1455,6 +1557,14 @@ def setup_once(box):
     if not box.wifi_off:
         sh.run(["rfkill", "unblock", "wifi"], timeout=10)
         sh.run(["nmcli", "radio", "wifi", "on"], timeout=10)
+    # ★★ THE WI-FI COUNTRY, EVERY BOOT. Setup saves the owner's country to the settings partition (STATE_CONF), but
+    #    set_country's raspi-config writes it to cmdline.txt on /boot — READ-ONLY on a Portable — and its `iw reg set`
+    #    lasted only until the next power cycle. So the box came back on whatever the image was built with, or the
+    #    world domain if that never took: channels 12/13 passive, a phone hotspot there harder to find. Cheap, and
+    #    harmless when it is already set.
+    cc = str(box.conf.get("COUNTRY", "")).strip().upper()
+    if valid_country(cc):
+        sh.run(["iw", "reg", "set", cc], timeout=10)
     # ★★ THE DNS HIJACK — every name resolves to the box, but ONLY on NM's shared (hotspot)
     #    connections: this directory is read by the dnsmasq NM starts for a hotspot and by nothing
     #    else, so the box's own lookups as a client are untouched.

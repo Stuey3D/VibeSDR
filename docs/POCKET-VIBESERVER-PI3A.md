@@ -158,7 +158,8 @@ nothing on an ordinary install.
                           │                         that refuses us rests 15 min, 30, 1 h … 6 h.
                           │
                           ├ chosen in the menu ─▶  (each saved network by name | Own Wi-Fi, on the box's own network
-                          │                         only) look for it for TRY_SEC (90 s) KEEPING the current link;
+                          │                         only) look for it for TRY_SEC (90 s) KEEPING a network link (its
+                          │                         OWN hotspot is dropped at once — the phone pressing is on it);
                           │                         join it the moment it appears (a phone's hotspot being switched
                           │                         on); not found → stay / go back where it was. Held like Own Wi-Fi:
                           │                         until RELEASE_SEC (30 min) without a listener, or a power cycle.

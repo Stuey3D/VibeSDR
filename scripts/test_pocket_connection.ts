@@ -41,6 +41,11 @@ ok(pick.title === 'Switch to “Stuey3D\'s iPhone”?', 'the title names the net
 ok(/look for “Stuey3D's iPhone” for the next 90 seconds/.test(pick.body) && /Personal Hotspot/.test(pick.body),
    'it says how long the box looks, and to turn the hotspot on now');
 ok(/it stays on “Meow!”/.test(pick.body), '…and where it stays if it is not found');
+// ★★★ Stuart's road test (2026-10-14): from its own Wi-Fi the box leaves it at once, so the iPhone pressing can host.
+const fromOwn = pocketSwitchText({ ...onMeow, mode: 'fallback-ap', ssid: '' }, phone);
+ok(/switch its own Wi-Fi off now/.test(fromOwn.body) && /its own Wi-Fi comes back/.test(fromOwn.body)
+   && !/stays on its own Wi-Fi/.test(fromOwn.body.split('\n\n')[1]),
+   'chosen from its own Wi-Fi: says it leaves it now, and that it comes back if the network is not found');
 ok(pocketLinkLine({ ...onMeow, trying: "Stuey3D's iPhone", tryLeft: 64 }) === 'Looking for “Stuey3D\'s iPhone” — 64 s left · turn its hotspot on now',
    'while looking, the line says so');
 ok(/held while the radio is in use$/.test(pocketLinkLine({ ...onMeow, holdNet: 'Meow!' })), 'a chosen network is shown as held');

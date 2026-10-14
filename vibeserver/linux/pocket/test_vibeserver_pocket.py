@@ -64,6 +64,12 @@ class FakeNM:
         self.wifi_dev = "wlan0"                     # None = no Wi-Fi chip (a Pi 2)
         self.eth = None                             # None = no Ethernet port; else NM's state, e.g. "connected"
         self.radio = True                           # nmcli radio wifi on/off
+        self.last_stderr = ""                       # ★ as Shell: the last failed command's stderr line
+        self.scan_fails = 0                         # this many station scans fail first ("not allowed" — NM's rate limit)
+        # ★★★ AN IPHONE'S RULE (Stuart's road test, 2026-10-14): its Personal Hotspot is not on the air while the
+        #     phone's own Wi-Fi is joined to another network. phone_ssid = the phone's hotspot; phone_on_ap = that phone
+        #     is a station on the BOX's hotspot. While both hold, the phone's hotspot is missing from every scan.
+        self.phone_ssid, self.phone_on_ap = None, False
 
     # Shell interface
     def port_open(self, port):
@@ -79,8 +85,14 @@ class FakeNM:
         self.nft.append(data)
         return 0
 
+    def on_air(self):
+        if self.phone_ssid and self.phone_on_ap and self.is_ap():
+            return {k: v for k, v in self.air.items() if k != self.phone_ssid}
+        return self.air
+
     def run(self, args, timeout=40, secret=False):
         self.calls.append(list(args))
+        self.last_stderr = ""
         a = args
         if a[:2] == ["nmcli", "-t"] and a[4:] == ["device"]:
             out = ""
@@ -116,11 +128,15 @@ class FakeNM:
         if a[:3] == ["nmcli", "-t", "-f"] and "wifi" in a and "list" in a:
             if self.is_ap():
                 return 1, ""       # ★ NM: "Scanning not allowed while in AP mode"
-            return 0, "".join("%s:%d:WPA2\n" % (esc(s), sig) for s, (sig, _) in self.air.items())
+            if self.scan_fails > 0:
+                self.scan_fails -= 1
+                self.last_stderr = "Error: Scanning not allowed immediately following previous scan."
+                return 1, ""
+            return 0, "".join("%s:%d:WPA2\n" % (esc(s), sig) for s, (sig, _) in self.on_air().items())
         if a[:2] == ["iw", "dev"] and a[3:] == ["scan", "ap-force"]:
             if not self.ap_force:
                 return 1, ""
-            return 0, "".join("BSS x\n\tSSID: %s\n" % s for s in self.air)
+            return 0, "".join("BSS x\n\tSSID: %s\n" % s for s in self.on_air())
         if a[:2] == ["iw", "dev"] and a[3:] == ["station", "dump"]:
             if self.active and not self.is_ap():     # as a client: the one station is the router, with counters
                 return 0, "Station e4:5e:1b:00:00:01 (on wlan0)\n\ttx packets:\t%d\n\ttx retries:\t%d\n" % (self.txpk, self.txrt)
@@ -147,16 +163,23 @@ class FakeNM:
                 self.ap_up_seen.append((bool(self.nft), st.get("mode"), self.door))
                 self.active = name
                 return 0, ""
-            real = self.air.get(c["ssid"])
+            # ★★ NetworkManager matches the saved name to the air BYTE FOR BYTE — "Stuart's" is not "Stuart’s".
+            if self.is_ap():
+                self.phone_on_ap = False            # leaving our hotspot for a network drops its stations
+            real = self.on_air().get(c["ssid"])
             if real and real[1] == c["psk"]:
                 self.active = name
                 self.assoc = c["ssid"]
                 return 0, ""
             self.active = ""
             self.t += int(a[2])
+            self.last_stderr = ("Error: Connection activation failed: (7) Secrets were required, but not provided."
+                                if real else "Error: Connection activation failed: The Wi-Fi network could not be found.")
             return 4, ""
         if a[:3] == ["nmcli", "connection", "down"]:
             if self.active == a[3]:
+                if self.is_ap():
+                    self.phone_on_ap = False        # the hotspot went: every station on it is off it
                 self.active = ""
             return 0, ""
         if a[:3] == ["nmcli", "connection", "delete"]:
@@ -211,6 +234,90 @@ def req(nets, ap=("Pocket-SDR", "pocketpass"), switch=False, ap_keep=False):
         "ap": {"ssid": ap[0], "psk": ap[1], "keep": ap_keep}, "country": "GB", "switch": switch})
     assert r, err
     return r
+
+
+
+def road_test_2026_10_14(tmp):
+    """★★★ STUART'S FIRST ROAD TEST (2026-10-14): the box never joined his iPhone's hotspot at boot, and choosing the
+    phone in the app's menu from the box's own Wi-Fi never switched it. Each case below FAILS on the code before the fix
+    (bar the two marked as guards)."""
+    CURLY, ASCII = "Stuart’s iPhone", "Stuart's iPhone"
+
+    def box_with(ssid, hidden=False, air=None):
+        nm, box = make(tmp)
+        nm.conns = {"vibe-net-1": {"type": "802-11-wireless", "ssid": ssid, "psk": "phonepass", "prio": 30,
+                                   "hidden": hidden, "mode": "infrastructure"},
+                    vp.AP_NAME: {"type": "802-11-wireless", "ssid": "Pocket-SDR", "psk": "pocketpass", "prio": 0,
+                                 "hidden": False, "mode": "ap"}}
+        nm.air = dict(air or {})
+        return nm, box
+
+    # ── the name typed on a Mac (') vs the name on the air (’) ──
+    for hidden in (False, True):
+        nm, box = box_with(ASCII, hidden=hidden, air={CURLY: (70, "phonepass")})
+        run_for(nm, box, 120)
+        ok(nm.active == "vibe-net-1" and nm.conns["vibe-net-1"]["ssid"] == CURLY,
+           "typed \"Stuart's iPhone\", the iPhone says \"Stuart’s iPhone\"%s: JOINED, and the saved name corrected to "
+           "the one on the air" % (" (ticked not visible)" if hidden else ""))
+    nm, box = box_with("stuart’s iphone ", air={CURLY: (70, "phonepass")})
+    run_for(nm, box, 120)
+    ok(nm.active == "vibe-net-1", "…capitals and a trailing space typed wrong: still found and joined")
+    nm, box = box_with(ASCII, air={CURLY: (70, "phonepass"), "Stuart‘s iPhone": (60, "other")})
+    run_for(nm, box, 200)
+    ok(nm.active == vp.AP_NAME and nm.conns["vibe-net-1"]["ssid"] == ASCII,
+       "(guard) TWO networks on the air could be it: neither is guessed — a password is never offered to the wrong one")
+    nm, box = box_with("Home", air={"Home": (50, "phonepass"), "HOME": (50, "y" * 8)})
+    run_for(nm, box, 120)
+    ok(nm.active == "vibe-net-1" and nm.conns["vibe-net-1"]["ssid"] == "Home",
+       "(guard) an exact name always wins over a near one")
+
+    # ── a refused scan is not an empty sky ──
+    nm, box = box_with(CURLY, air={CURLY: (70, "phonepass")})
+    nm.scan_fails = 1
+    run_for(nm, box, 75)
+    ok(nm.active == "vibe-net-1", "the first scan refused (NM's rate limit): looks again and joins the phone")
+    nm, box = box_with(CURLY, air={CURLY: (70, "phonepass")})
+    nm.scan_fails = 10 ** 6
+    run_for(nm, box, 75)
+    ok(nm.active == "vibe-net-1", "scans refused every time: the saved networks are tried by name, not given up on")
+
+    # ── the WHY of a failed join is NetworkManager's, not a guess ──
+    nm, box = box_with(CURLY, air={CURLY: (70, "WRONGpass")})
+    run_for(nm, box, 120)
+    ok(nm.active == vp.AP_NAME and "password" in box.last_error, "wrong password: the owner is told it refused the password")
+    nm, box = box_with(CURLY, hidden=True, air={})
+    run_for(nm, box, 120)
+    ok("not found" in box.last_error and "password" not in box.last_error,
+       "a hidden phone that is not on: 'not found', not 'check its password' (got: %s)" % box.last_error)
+
+    # ── ★★★ the menu, from the box's own Wi-Fi, with the iPhone ON that Wi-Fi ──
+    for ap_force in (False, True):
+        nm, box = box_with(CURLY, air={})
+        nm.ap_force = ap_force
+        run_for(nm, box, 200)
+        ok(nm.active == vp.AP_NAME, "(out and about: on its own Wi-Fi%s)" % (", ap-force scans work" if ap_force else ""))
+        nm.stations, nm.phone_ssid, nm.phone_on_ap = 1, CURLY, True
+        nm.air[CURLY] = (70, "phonepass")          # Personal Hotspot switched on — but the phone is on the box's Wi-Fi
+        box.choose_net(1)
+        run_for(nm, box, 60)
+        ok(nm.active == "vibe-net-1",
+           "picked the iPhone FROM the box's own Wi-Fi%s: the hotspot is left so the phone can host — joined"
+           % (" (ap-force)" if ap_force else ""))
+    nm, box = box_with(ASCII, air={})
+    run_for(nm, box, 200)
+    nm.stations, nm.phone_ssid, nm.phone_on_ap = 1, CURLY, True
+    nm.air[CURLY] = (70, "phonepass")
+    box.choose_net(1)
+    run_for(nm, box, 60)
+    ok(nm.active == "vibe-net-1" and nm.conns["vibe-net-1"]["ssid"] == CURLY,
+       "…and with the name typed with a straight apostrophe: found, corrected, joined")
+    nm, box = box_with(CURLY, air={})
+    nm.ap_force = True
+    run_for(nm, box, 200)
+    box.choose_net(1)
+    run_for(nm, box, int(vp.DEFAULTS["TRY_SEC"]) + 60)
+    ok(nm.active == vp.AP_NAME and not box.want and "not found" in box.last_error,
+       "(guard) picked, never switched on: its own Wi-Fi comes back and says why")
 
 
 def main():
@@ -503,6 +610,8 @@ def main():
         box.tick()
         ok(nm.active == vp.SETUP_NAME, "after a Wi-Fi reset the OPEN setup hotspot is back")
 
+        road_test_2026_10_14(tempfile.mkdtemp())
+
     out = log.getvalue()
     for secret in ("homepass1", "phonepass", "pocketpass", "workpass1"):
         ok(secret not in out, "the log never contains the password %s…" % secret[:3])
@@ -746,6 +855,8 @@ def main():
         hostfiles("vibepocket")                    # (a box whose name is not the setup name yet)
         nm, box = fresh(wifi=None, eth="connected")
         vp.boot(box, configured=False)
+        ok(["iw", "reg", "set", "GB"] in nm.calls,
+           "the Wi-Fi country is applied at every boot (setup's choice is on /data; /boot is read-only)")
         ok(["hostnamectl", "set-hostname", "vibeserversetup"] in nm.calls and box.dev is None,
            "Pi 2 (no Wi-Fi chip): the setup name is set at once — nothing waits for, or gives up on, a Wi-Fi device")
         i_name = nm.calls.index(["hostnamectl", "set-hostname", "vibeserversetup"])
@@ -941,6 +1052,19 @@ def main():
             got = vp.converge_report(run=boom, path=fake)
         ok(got == [], "a check that cannot run is a log line, not a crash")
         ok(vp.converge_report(path=os.path.join(tmp, "absent")) == [], "no converge script (an older package): nothing")
+
+    # ★★★ THE REAL Shell, not the fake: nmcli must be run in a UTF-8 locale, or glib prints "Stuart?s iPhone".
+    sh = vp.Shell()
+    rc, out = sh.run(["sh", "-c", 'printf "%s|%s|" "$LC_ALL" "$LANG"; printf "\\342\\200\\231"'])
+    ok(rc == 0 and out == "C.UTF-8|C.UTF-8|’",
+       "tools run with LC_ALL=C.UTF-8 and their UTF-8 output is read as UTF-8 (got %r)" % out)
+    with redirect_stdout(io.StringIO()):
+        rc, _ = sh.run(["sh", "-c", "echo 'Error: Connection activation failed: (7) Secrets were required, but not provided.' >&2; exit 4"])
+    ok(rc == 4 and vp.nm_reason(sh.last_stderr) == "Secrets were required, but not provided.",
+       "a failed command's reason is kept (stderr's last line), and NM's '(7)' code stripped")
+    ok(vp.ssid_key("Stuart’s  iPhone ") == vp.ssid_key("stuart's iphone") and
+       vp.ssid_key("A–B") == vp.ssid_key("a-b") and vp.ssid_key("Café") == vp.ssid_key("Café"),
+       "the name key: apostrophes, dashes, spaces, capitals and Unicode composition all fold")
 
     ok(vp.terse_split(r"My\:Net\\x:70:WPA2") == ["My:Net\\x", "70", "WPA2"], "nmcli terse escapes are undone")
     ok(vp.iw_unescape(r"Caf\xc3\xa9") == "Café", "iw's \\x escapes are decoded")

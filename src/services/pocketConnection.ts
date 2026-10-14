@@ -68,12 +68,19 @@ export function pocketSwitchText(c: PocketConn, to: PocketChoice): { title: stri
     //     then it will fall back to the default connection order. This should give users enough time to switch to the
     //     settings and enable personal hotspot on their device."
     const n = `“${to.ssid}”`;
-    const here = pocketOnOwn(c) ? 'its own Wi-Fi' : c.ssid ? `“${c.ssid}”` : 'where it is';
+    // ★★★ FROM ITS OWN WI-FI THE BOX LEAVES IT AT ONCE (Stuart's road test, 2026-10-14). The phone pressing is on that
+    //     Wi-Fi, and an iPhone does not run its Personal Hotspot while its Wi-Fi is joined to another network — so the
+    //     box drops its own Wi-Fi to let the phone host, and brings it back if the network never appears.
+    const own = pocketOnOwn(c);
+    const here = own ? 'its own Wi-Fi' : c.ssid ? `“${c.ssid}”` : 'where it is';
     return {
       title: `Switch to ${n}?`,
-      body: `This VibeServer Portable will look for ${n} for the next ${POCKET_TRY_SEC} seconds and join it as soon as it `
+      body: (own ? `This VibeServer Portable will switch its own Wi-Fi off now, so this device leaves it, and look for ${n} `
+                 : `This VibeServer Portable will look for ${n} `)
+          + `for the next ${POCKET_TRY_SEC} seconds and join it as soon as it `
           + `appears. If ${n} is a phone's hotspot, turn it on now (on an iPhone: Settings › Personal Hotspot › Allow `
-          + `Others to Join).\n\nIf it does not find ${n} in time, it stays on ${here}. Once it has switched, leave this `
+          + `Others to Join).\n\nIf it does not find ${n} in time, ${own ? 'its own Wi-Fi comes back' : `it stays on ${here}`}. `
+          + `Once it has switched, leave this `
           + `session and start again from the server list on a device connected to ${n}.\n\n`
           + `It stays on ${n} while the radio is in use, and goes back to the usual order after 30 minutes unused or when `
           + 'it is switched off and on.',
