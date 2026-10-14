@@ -96,9 +96,9 @@ Judge it on the feel. That's the part a screenshot can't show, and the part we c
 
 **On the Apple Watch**
 
-| ![40 m waterfall on the watch](screenshots/watch-40m-waterfall.png) | ![An FM-DX server on the watch, with RDS](screenshots/watch-fm-station.png) | ![DAB services on the watch](screenshots/watch-dab-services.png) | ![An FM waterfall on the watch, from OpenWebRX or VibeServer](screenshots/watch-fm-heart.png) | ![HFDL aircraft on the watch, decoded by the server](screenshots/watch-hfdl-aircraft.png) |
+| ![40 m waterfall on the watch](screenshots/watch-40m-waterfall.png) | ![An FM-DX server on the watch, with RDS](screenshots/watch-fm-station.png) | ![DAB services on the watch](screenshots/watch-dab-services.png) | ![An FM waterfall on the watch, from OpenWebRX or VibeServer](screenshots/watch-fm-heart.png) | ![ADS-B aircraft on the watch, decoded by an OpenWebRX server](screenshots/watch-adsb-aircraft.png) |
 |:---:|:---:|:---:|:---:|:---:|
-| *40 m, tuned with the Crown* | *An FM-DX server, with RDS* | *DAB services* | *FM waterfall on OpenWebRX or VibeServer* | *HFDL aircraft, decoded by the server* |
+| *40 m, tuned with the Crown* | *An FM-DX server, with RDS* | *DAB services* | *FM waterfall on OpenWebRX or VibeServer* | *ADS-B aircraft, decoded by an OpenWebRX server* |
 
 ## Share your radio
 
