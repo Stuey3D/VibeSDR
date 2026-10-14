@@ -8228,8 +8228,27 @@ export default function SDRScreen({ route, navigation }: Props) {
       onStep: (hz: number) => { if (hz > 0) setStep(hz); },
       // Thin-remote passband from the wrist — both edges (Hz offsets from carrier), atomically.
       onBandwidth: (lo: number, hi: number) => onFilterBoth(lo, hi),
-      // SNR squelch relayed from the wrist (Buddy) — action it exactly like the phone's own control.
-      onSquelch: (v: number) => onSnrSquelch(v),
+      /* ★★★ BUDDY'S SQUELCH IS A POSITION ON THE BAR, put through the phone's own drag mapping.
+       *  It used to send an SNR figure in dB straight to onSnrSquelch, i.e. UberSDR's `set_audio_gate`
+       *  — whatever the receiver was. A VibeServer does not implement that message, so on one the wrist
+       *  drew a needle and the gate never moved (Stuart, 2026-10-14). The bar position is the one unit
+       *  every backend already maps (onSquelchDrag inverts exactly the line the phone draws), so the
+       *  wrist now gets the same gate as a finger on the phone's bar: VibeServer, Kiwi, UberSDR in any
+       *  meter mode. A wrist change is a hand-set value, so it takes the gate out of auto, as a drag does.
+       *  ★ OWRX's squelch is the server's own (`squelch_level`, its AudioSheet slider), not this bar's
+       *    gate — so it is set directly, through the inverse of the line drawn for it in the meter emit. */
+      onSquelchPos: (p: number) => {
+        if (!Number.isFinite(p)) return;
+        if (isOwrx) {
+          const db = p < 0 ? -150 : Math.round(Math.max(0, Math.min(1, p)) * 100 - 110 - visualGainRef.current);
+          owrxSquelchRef.current = db; client.current?.setSquelch?.(db);
+          return;
+        }
+        sqlDragRef.current?.(p < 0 ? -1 : Math.min(1, p));
+        onSquelchDragEnd();
+      },
+      // ★ The older dB message (a Buddy from before the position): it only ever meant UberSDR's gate.
+      onSquelch: (v: number) => { if (!isLocal && !isKiwi && !isOwrx) onSnrSquelch(v); },
 
       // Crown in ZOOM mode. Drives the SAME client.zoom() the phone's zoom drum
       // drives — so it moves the real waterfall, and the watch gets genuinely

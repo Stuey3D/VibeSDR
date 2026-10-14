@@ -418,7 +418,7 @@ struct ControlMenu: View {
           tile(name: "CROWN", value: crownLabel, h: h) { showCrown = true }
           // Passband: tap → LSB/USB crown editor. Value = total width in kHz.
           tile(name: "BW", value: bwLabel, h: h) { showBw = true }
-          tile(name: "SQL", value: link.squelchSet <= -999 ? "Off" : "≥\(Int(link.squelchSet))", h: h) { showSquelch = true }
+          tile(name: "SQL", value: link.sql < 0 ? "Off" : "On", h: h) { showSquelch = true }
           // DAB — only on a DAB profile. Programme picker (OWRX plays nothing until a service is
           // chosen; we auto-pick the first) + the speed-fix presets for the dablin chipmunk.
           if link.mode == "dab" {
@@ -979,39 +979,34 @@ struct BandwidthView: View {
   }
 }
 
-/// SNR squelch editor (thin-remote): the crown sets the threshold (dB) and RELAYS it to the phone,
-/// which actions the gate and echoes the line position back on the row. 0 = Off. Tap Done to close.
+/// Squelch editor (thin-remote): the crown moves a needle along the live signal bar and RELAYS its
+/// POSITION to the phone, which maps it to whatever its receiver's gate wants — exactly as a finger on
+/// the phone's own bar does. Hard left = Off. Tap Done to close.
 ///
 /// VISUAL editor, matching Jr: you aim a needle at a live signal bar rather than reading a number
-/// off a scale you have no feel for. "Point it just above the noise" is a thing anyone can do; "set
-/// it to 12 dB" is not.
+/// off a scale you have no feel for. "Point it just above the noise" is a thing anyone can do.
 ///
-/// ONE DIFFERENCE FROM JR, and it is forced: Buddy is a thin remote. The crown speaks dB, but the
-/// bar is drawn in the phone's meter scale, and the dB→bar mapping is the phone's (it varies with
-/// meter mode and backend). So the needle position can only come from the phone's echoed `sql` —
-/// there is no honest way to compute it here. That costs one relay round-trip of needle lag, which
-/// is the correct trade: a needle that's instantly in the WRONG place is worse than one that's
-/// briefly behind. The dB figure above the bar updates immediately, so the crown never feels dead.
+/// ★★★ WHY A POSITION AND NOT dB (Stuart, 2026-10-14: Buddy's squelch did nothing on a VibeServer).
+/// The crown used to speak SNR dB, and the only gate the phone could hand an SNR figure to is UberSDR's
+/// `set_audio_gate`; a VibeServer gates on channel dBFS, a Kiwi on dBm, OpenWebRX on its own level. The
+/// bar position is the one unit all of them already map, so the wrist can no longer pick a gate the
+/// receiver does not have. ★ A bonus: the needle is drawn where the crown put it, with no round trip.
 struct SquelchView: View {
   @EnvironmentObject var link: WatchLink
   @Environment(\.dismiss) private var dismiss
   @State private var val = 0.0
   @FocusState private var focused: Bool
 
-  private var closed: Bool { link.sql >= 0 && link.level < link.sql }
+  private var off: Bool { val < 0.02 }
+  private var closed: Bool { !off && link.level < val }
 
   var body: some View {
     VStack(spacing: 8) {
       Text("SQUELCH").font(.system(size: 12, weight: .bold)).foregroundColor(.orange)
-      Text(val < 0.5 ? "Off" : (closed ? "Muting" : "Passing"))
+      Text(off ? "Off" : (closed ? "Muting" : "Passing"))
         .font(.system(size: 13, weight: .bold))
-        .foregroundColor(val < 0.5 ? .secondary : (closed ? Color(red: 1, green: 0.3, blue: 0.3) : .green))
-      SquelchBar(level: link.level, pos: val < 0.5 ? -1 : link.sql)
-      // The number still earns its place: it's what you'd write down to set the same gate again,
-      // and it's the only part of this screen that responds to the crown with zero lag.
-      Text(val < 0.5 ? "Off" : "≥ \(Int(val)) dB")
-        .font(.system(size: 15, weight: .bold, design: .rounded)).monospacedDigit()
-        .foregroundColor(val < 0.5 ? .secondary : .white)
+        .foregroundColor(off ? .secondary : (closed ? Color(red: 1, green: 0.3, blue: 0.3) : .green))
+      SquelchBar(level: link.level, pos: off ? -1 : val)
       Text("Point the needle just above the noise.\nTurn the crown · tap Done.")
         .font(.system(size: 10)).foregroundColor(.secondary).multilineTextAlignment(.center)
       Button("Done") { dismiss() }.buttonStyle(.borderedProminent).tint(.orange)
@@ -1019,10 +1014,12 @@ struct SquelchView: View {
     .padding()
     .focusable(true)
     .focused($focused)
-    .digitalCrownRotation($val, from: 0, through: 50, by: 1,
+    .digitalCrownRotation($val, from: 0, through: 1, by: 0.01,
                           sensitivity: .low, isContinuous: false, isHapticFeedbackEnabled: true)
-    .onChange(of: val) { _, v in link.setSquelch(v < 0.5 ? -999 : v) }
-    .onAppear { val = link.squelchSet <= -999 ? 0 : link.squelchSet; focused = true }
+    .onChange(of: val) { _, v in link.setSquelchPos(v < 0.02 ? -1 : v) }
+    // ★ Seeded from the phone's own line, so opening the editor never moves a gate set on the phone
+    //   (or by its auto squelch) until the crown actually turns.
+    .onAppear { val = link.sql < 0 ? 0 : link.sql; focused = true }
   }
 }
 

@@ -227,6 +227,8 @@ export interface WatchCommandHandlers {
    *  only the FM-DX screen has cEQ/iMS/antenna. */
   onBandwidth?(lo: number, hi: number): void;
   onSquelch?(v: number): void;
+  /** Squelch as a 0..1 position on the phone's signal bar, < 0 = off — the unit every backend maps. */
+  onSquelchPos?(p: number): void;
   onFmdxEq?(on: boolean): void;
   onFmdxIms?(on: boolean): void;
   onFmdxAntenna?(id: number): void;
@@ -519,6 +521,7 @@ class WatchProvider {
           // Thin-remote server controls — the watch relayed a tap, run the phone's command.
           case 'bw':      handlers.onBandwidth?.(Number(e.lo ?? 0), Number(e.hi ?? 0)); break;
           case 'squelch': handlers.onSquelch?.(Number(e.val ?? -999)); break;
+          case 'squelchPos': handlers.onSquelchPos?.(Number(e.val ?? -1)); break;
           case 'fmdxEq':  handlers.onFmdxEq?.(e.val === true); break;
           case 'fmdxIms': handlers.onFmdxIms?.(e.val === true); break;
           case 'fmdxAnt': handlers.onFmdxAntenna?.(Number(e.val ?? 0)); break;
