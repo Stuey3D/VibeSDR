@@ -1,0 +1,43 @@
+{
+  "format": "cs8",
+  "sampleRate": 6000,
+  "centreHz": 4625876,
+  "loopSamples": 82475,
+  "recordedUtc": "2026-10-04T20:56:00Z",
+  "location": "IO92NH",
+  "labels": [
+    {
+      "name": "The Buzzer (UVB-76)",
+      "hz": 4625000
+    }
+  ],
+  "suggestedFft": {
+    "size": 1024,
+    "overlap": 0.85,
+    "rowsPerSec": 20
+  },
+  "buzzIntervalsSec": [
+    3.443,
+    3.404,
+    3.442,
+    3.455
+  ],
+  "seam": {
+    "crossfadeSamples": 300,
+    "seamGapSec": 3.457,
+    "medianGapSec": 3.415
+  },
+  "int8": {
+    "scale": 34616.31,
+    "noiseRmsLsb": 19.17,
+    "clipPct": 0.00546
+  },
+  "source": {
+    "rate": 192000,
+    "captureCentreHz": 4626000.0,
+    "dcShiftHz": 140.6,
+    "loopStartSec": 212.054,
+    "rawCapture": "https://github.com/Stuey3D/VibeSDR/releases/tag/buzzer-capture-2026-10-04 (buzzer-raw-20261004T2056Z.cf32, complex float32, 192 kS/s, centre 4626.000 kHz, Airspy HF+ att 0 LNA on, HF AGC off)",
+    "regenerate": "python3 tools/iq-loop/make_loop.py --in buzzer-raw-20261004T2056Z.cf32 --rate 192000 --centre 4626000 --offset -265 --band=-700,700 --recorded 2026-10-04T20:56:00Z --out demo"
+  }
+}

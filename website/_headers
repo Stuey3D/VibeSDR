@@ -12,3 +12,8 @@
   X-Frame-Options: DENY
   Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'self'
   Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self'; font-src 'self' data:; connect-src 'self' https://vibeserver.vibesdr.net https://api.github.com https://cloudflareinsights.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+
+# ★ The "before VibeSDR" photo is SDR++ Brown on a phone, not this app — and as the old hero image it was
+#   what search engines showed for "VibeSDR" (Stuart, 2026-10-14). It stays on the page, unindexed.
+/assets/shots/before-vibesdr-trackball.webp
+  X-Robots-Tag: noindex

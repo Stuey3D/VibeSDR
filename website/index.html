@@ -7,6 +7,21 @@
 <link rel="apple-touch-icon" href="assets/icon.png" />
 <title>VibeSDR</title>
 <meta name="description" content="An SDR receiver for iPhone, Android, Mac and Apple Watch, with its own DSP. Listen to any receiver, host your own from a spare phone, or wear one on your wrist." />
+<!-- ★★ THE PICTURE A SEARCH ENGINE OR A SHARED LINK SHOWS (Stuart, 2026-10-14): with no og:image, they chose
+     the first big image on the page — the SDR++ Brown photo, which is not this app. Name a VibeSDR one. -->
+<link rel="canonical" href="https://vibesdr.net/" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="VibeSDR" />
+<meta property="og:title" content="VibeSDR — an SDR receiver for iPhone, Android, Mac and Apple Watch" />
+<meta property="og:description" content="Its own DSP, a dial you turn with your thumb, and a server you can host on a spare phone." />
+<meta property="og:url" content="https://vibesdr.net/" />
+<meta property="og:image" content="https://vibesdr.net/assets/og-vibesdr.jpg" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="VibeSDR on an iPhone: a live waterfall and the tuning drum" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:image" content="https://vibesdr.net/assets/og-vibesdr.jpg" />
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"VibeSDR","applicationCategory":"UtilitiesApplication","operatingSystem":"iOS, iPadOS, macOS, watchOS, Android","url":"https://vibesdr.net/","image":"https://vibesdr.net/assets/og-vibesdr.jpg","offers":{"@type":"Offer","price":"2.99","priceCurrency":"GBP"}}</script>
 <style>
   /* ★★★ ONE DESIGN LANGUAGE. These are the web client's own tokens (web/client/index.html) and the
      directory's (directory/public/index.html), copied by value because this page ships alone on a
@@ -208,6 +223,20 @@
    *   are amber); sentence case for the same reason. Hours and window come from the data. */
   .hero-spg-cap { display: block; margin: 0 0 22px; font-size: 12px; letter-spacing: .04em; color: var(--phosphor); text-shadow: 0 0 6px #000, 0 0 3px #000; }
   .hero-spg-cap b { color: var(--phosphor); font-weight: 600; }
+  /* ── The live Buzzer (web/website-demo) ── */
+  .demo { max-width: 560px; }
+  .demo canvas { display: block; width: 100%; height: 300px; background: #000; border: 1px solid var(--line-strong); border-radius: 10px; }
+  .demo-ctl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; margin-top: 12px; font-size: 13px; color: var(--text); align-items: center; }
+  .demo-ctl label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .demo-ctl input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+  .demo-ctl output { width: 2.4em; text-align: right; font-variant-numeric: tabular-nums; color: var(--accent); }
+  .demo-ctl select { flex: 1; min-width: 0; background: var(--panel-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 6px; font: inherit; }
+  .demo-vfo { display: flex; align-items: center; gap: 8px; }
+  .demo-vfo .sws { display: flex; flex-wrap: wrap; gap: 6px; }
+  .demo-vfo .sw { width: 20px; height: 20px; border-radius: 50%; border: 2px solid rgba(0,0,0,.6); cursor: pointer; padding: 0; }
+  .demo-vfo .sw[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 2px; }
+  .demo-ctl .key { justify-content: center; padding: 8px 14px; }
+  @media (max-width: 560px) { .demo canvas { height: 240px; } .demo-ctl { grid-template-columns: 1fr; } }
   .hero-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; }
   @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; } }
   .hero .num { font-size: clamp(34px, 6vw, 64px); display: block; line-height: 1; margin-bottom: 12px; }
@@ -382,15 +411,23 @@
       </div>
       <p class="fine" style="margin-top:16px">£2.99 covers Apple's developer fees. The source is free and always will be. No subscription, no account, nothing phoned home.</p>
       <p class="fine">The APK above installs straight from GitHub and needs no Google account at all.</p>
-      <!-- ★★ THE ARGUMENT, IN ONE PICTURE, HIGH ON THE PAGE. A still rather than a video so it is
-           there the moment the page paints — the two demos beside it are already video, and a
-           third would push the first meaningful paint out for the sake of a shot that does not
-           move anyway. -->
-      <figure style="margin:26px 0 0">
-        <img src="assets/shots/before-vibesdr-trackball.webp" loading="eager" decoding="async"
-             style="width:100%;max-width:420px;height:auto;border-radius:10px;display:block"
-             alt="A phone in a rugged case propped against the steering wheel of a parked car, running SDR++ Brown on 3.766 MHz with the 80m ham band and 75m broadcast segments marked and decoded callsigns overlaid on the waterfall. A Bluetooth trackball is visible behind it." />
-        <figcaption>Before VibeSDR: a phone propped against a car steering wheel in a layby, controlled with a trackball.</figcaption>
+      <!-- ★★★ THE LIVE BUZZER IS THE HERO (Stuart, 2026-10-04 brief; built 2026-10-14). A real recording,
+           drawn by the web client's own renderer — web/website-demo/demo.ts, built by
+           scripts/build-website-demo.mjs. It replaced the "before VibeSDR" photo here, which now illustrates
+           the story it belongs to under How it's made: as the first big image on the page, it was the one
+           search engines picked to show for "VibeSDR" (Stuart, 2026-10-14), and it is SDR++, not this app.
+           ★ Sound only on a press. The canvas has a fixed height so the page does not jump when it starts. -->
+      <figure class="demo" id="demoBox" style="margin:26px 0 0">
+        <canvas id="demoCanvas" data-src="assets/demo/" aria-label="A live waterfall of The Buzzer, UVB-76, on 4625 kHz: a recording played through VibeSDR's own waterfall renderer"></canvas>
+        <div class="demo-ctl">
+          <label>Palette <select id="demoPalette" aria-label="Waterfall palette"></select></label>
+          <div class="demo-vfo"><span>VFO</span><span id="demoVfo" class="sws"></span></div>
+          <label>Brightness <input id="demoBright" type="range" min="-20" max="20" step="1" /><output id="demoBrightVal"></output></label>
+          <label>Contrast <input id="demoContrast" type="range" min="-10" max="10" step="1" /><output id="demoContrastVal"></output></label>
+          <label>Sharpness <input id="demoSharp" type="range" min="0" max="10" step="1" /><output id="demoSharpVal"></output></label>
+          <button type="button" id="demoListen" class="key" aria-pressed="false">Listen</button>
+        </div>
+        <figcaption><b>Try your own colours.</b> The Buzzer (UVB-76) on 4625 kHz, recorded as raw IQ on an Airspy HF+ in Northampton at 22:00 BST on 04/10/26, and played through the same waterfall code as VibeSDR's web client. The page behind it follows your palette too.</figcaption>
       </figure>
     </div>
     <div class="duo">
@@ -618,17 +655,15 @@
     </div>
     <p class="fine" style="margin-top:10px;color:var(--phosphor)">The same station, the same screen, on 4625 kHz, the Buzzer. Only the bottom inch changes.</p>
     <div class="rail" aria-label="More screenshots">
-      <img src="assets/shots/shot01.jpg" loading="lazy" alt="VibeSDR screenshot 1" />
-      <img src="assets/shots/shot02.jpg" loading="lazy" alt="VibeSDR screenshot 2" />
-      <img src="assets/shots/shot03.jpg" loading="lazy" alt="VibeSDR screenshot 3" />
-      <img src="assets/shots/shot04.jpg" loading="lazy" alt="VibeSDR screenshot 4" />
-      <img src="assets/shots/shot05.jpg" loading="lazy" alt="VibeSDR screenshot 5" />
-      <img src="assets/shots/shot06.jpg" loading="lazy" alt="VibeSDR screenshot 6" />
-      <img src="assets/shots/shot07.jpg" loading="lazy" alt="VibeSDR screenshot 7" />
-      <img src="assets/shots/shot08.jpg" loading="lazy" alt="VibeSDR screenshot 8" />
-      <img src="assets/shots/shot09.jpg" loading="lazy" alt="VibeSDR screenshot 9" />
-      <img src="assets/shots/shot10.jpg" loading="lazy" alt="VibeSDR screenshot 10" />
-      <img src="assets/shots/shot11.jpg" loading="lazy" alt="VibeSDR screenshot 11" />
+      <img src="assets/shots/shot01.jpg" loading="lazy" alt="The silver faceplate with a blue VFD: 96.6 MHz FM, Heart, a magenta waterfall, stereo and 59+49 dB on the LED meter" />
+      <img src="assets/shots/shot02.jpg" loading="lazy" alt="A red display: DAB multiplex 7D, NNDAB, with Flex FM playing and its station logos listed" />
+      <img src="assets/shots/shot03.jpg" loading="lazy" alt="The FM-DX tuner: Rire et Chansons in Nice, 87.7 MHz, with its PI code, transmitter and alternative frequencies" />
+      <img src="assets/shots/shot04.jpg" loading="lazy" alt="The servers list: UberSDR receivers, favourites, and the UberSDR, Receiverbook, KiwiSDR and FM-DX directories" />
+      <img src="assets/shots/shot05.jpg" loading="lazy" alt="Amber nixie tubes: DAB multiplex 10C Northamptonshire, Heart Northants playing, with logos and now-playing text" />
+      <img src="assets/shots/shot06.jpg" loading="lazy" alt="The ADS-B decoder on 1090 MHz: aircraft with altitude, heading and distance" />
+      <img src="assets/shots/shot07.jpg" loading="lazy" alt="A blue VFD on dark steel: FT8 digital spots on 7.074 MHz, callsigns, signal reports and countries" />
+      <img src="assets/shots/shot08.jpg" loading="lazy" alt="The RTTY decoder printing a DWD weather broadcast on 7645 kHz" />
+      <img src="assets/shots/shot09.jpg" loading="lazy" alt="The WEFAX decoder receiving a weather chart on 4608.1 kHz" />
     </div>
     <div class="grid2" style="margin-top:28px">
       <figure>
@@ -693,6 +728,14 @@
       <span class="lbl">How it's made</span>
       <h2 style="margin-top:8px">Vibe-coded. Named so you'd know.</h2>
       <p style="margin-top:14px">I wanted something I could use up a ladder working on antennas: tools in one hand, something to see the results on in the other, all worked with one thumb. A spectrum analyser would have done the job, but that is money spent when I already owned SDRs that could do the same. What I actually had was <a href="https://youtube.com/shorts/5HtoGd5Lco8" target="_blank" rel="noopener">SDR++ Brown on an Android phone with a Bluetooth trackball to point at it</a> &mdash; workable propped on a steering wheel, impossible up a ladder &mdash; because the interface was drawn for a desktop and something had to stand in for the mouse. <a href="https://www.youtube.com/watch?v=iY3Qxx1YU1g" target="_blank" rel="noopener">That was a session, start to finish</a>. VibeSDR exists to get rid of the trackball: it is built to feel as close to a real handheld radio as a phone can manage &mdash; a dial you turn with your thumb, not a cursor you push around a screen.</p>
+      <!-- ★ Lazy and low on the page, and served with X-Robots-Tag: noindex (website/_headers): this is SDR++
+           Brown, not VibeSDR, and as the hero image it was what search engines showed for "VibeSDR". -->
+      <figure style="margin:18px 0 0">
+        <img src="assets/shots/before-vibesdr-trackball.webp" loading="lazy" decoding="async"
+             style="width:100%;max-width:420px;height:auto;border-radius:10px;display:block"
+             alt="Before VibeSDR: SDR++ Brown on a phone in a rugged case, propped against a car steering wheel in a layby, with a Bluetooth trackball behind it." />
+        <figcaption>Before VibeSDR: SDR++ Brown on a phone propped against a steering wheel in a layby, worked with a trackball.</figcaption>
+      </figure>
       <p style="margin-top:14px">I'm not a licensed amateur and I don't transmit. I'm a listener. It started on the east coast of England as a kid, pulling Dutch television in on an indoor aerial when the weather was exactly right. I didn't know I was watching a Sporadic-E opening. I still chase it.</p>
       <p>I am not a developer and I won't pretend to be one. I'm the concept, the UI and the tester, and the readme says so. Claude writes the code. Every decision, every dead end and every release sign-off is mine, and the whole history, failed experiments included, is on GitHub for anyone to read. A user has already fixed a bug and sent a pull request.</p>
       <p>Nothing ships that I haven't driven myself on real hardware. The RDS analyser was checked against a professional broadcast analyser by someone who owns one. The DAB decoder took four days of chasing a breakup before it was right. Where I couldn't test, like HackRF, I worked with someone who could.</p>
@@ -1023,6 +1066,10 @@ async function loadSpectrogram() {
       }
     }
     g.putImageData(img, 0, 0);
+    // ★ Kept for the live demo, which repaints this through the visitor's palette, brightness and contrast
+    //   (web/website-demo/demo.ts). Whichever arrives second does the repaint.
+    window.vibeSpg = { u8, off: 41, bins, rows, lo, hi, cv };
+    if (window.vibeSpgPaint) window.vibeSpgPaint();
     box.classList.add('on');
 
     const hours = (last - first) / 3.6e6;
@@ -1126,5 +1173,6 @@ setInterval(loadDirectory, 60000);
   } catch {}
 })();
 </script>
+<script src="assets/demo/demo.js" defer></script>
 </body>
 </html>
