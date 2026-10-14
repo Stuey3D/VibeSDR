@@ -115,7 +115,7 @@ behaves the same for old clients, since squelch is part of the locked core.
    the receiver in your browser for now." with an **Open in browser** button to `webUrl`.
 4. **Legacy clients:** they don't know `update-app`. Verify what 10.3.1 shows for an unknown
    preflight reason and choose wording that still reads sensibly there. Also post the message
-   through the version-gated `/api/notice` endpoint (`PENDING-NEXT-RELEASE.md` §3), which already
+   through the version-gated `/api/notice` endpoint (`docs/PENDING-NEXT-RELEASE.md` §3), which already
    reaches 10.3.1.
 5. **Log it:** every refusal logs the peer, the `client` string, `proto` and the reason.
 

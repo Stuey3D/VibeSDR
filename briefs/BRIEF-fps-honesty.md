@@ -89,5 +89,5 @@ answer is the highest rate that holds.
 ## Related
 
 - The real fix is finishing the thread split so spectrum **delivery** leaves the DSP thread
-  (NETWORK > AUDIO > SPECTRUM > DECODERS — `PENDING-NEXT-RELEASE.md`). This brief is what we offer
+  (NETWORK > AUDIO > SPECTRUM > DECODERS — `docs/PENDING-NEXT-RELEASE.md`). This brief is what we offer
   users **until** that lands, and the honest gate afterwards.

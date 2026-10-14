@@ -148,3 +148,6 @@ dist/mapdata/
 #   The vibedsp host-test build trees carry .o files, binaries and the build machine's paths.
 android/app/src/main/assets/index.android.bundle
 android/app/src/main/cpp/vibedsp/test/build-*/
+
+# ★ Expo export output (was committed once, 2026-06; nothing reads it)
+dist-ios-tmp/

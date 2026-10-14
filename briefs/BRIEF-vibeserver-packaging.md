@@ -355,7 +355,7 @@ Advanced RDS, not leave an orphan that can never fire.
 
 ## 5. ★★★ THE BLOCKER — FIX BEFORE SHIPPING THE UI THAT SELLS IT
 
-**`BUG-vibeserver-broadcast-blocks.md`** — blocking sends under a **global mutex on the DSP
+**`briefs/BUG-vibeserver-broadcast-blocks.md`** — blocking sends under a **global mutex on the DSP
 thread**, so **one slow listener freezes every other one**. Meanwhile `--users 20` is advertised.
 
 Mode B's headline is multi-user. Putting a **"How many users"** field on a settings page is us

@@ -90,7 +90,7 @@ function computeRows(iq: Int8Array, meta: ClipMeta): Float32Array[] {
 
 /** USB at the VFO, as audio: mix the carrier to 0 Hz, keep +PASS_LO..+PASS_HI with a complex band-pass,
  *  take the real part, then up-sample ×8 to 48 kHz (6 kHz buffers are not accepted everywhere). */
-function demodUsb(iq: Int8Array, meta: ClipMeta): Float32Array {
+function demodUsb(iq: Int8Array, meta: ClipMeta): Float32Array<ArrayBuffer> {
   const fs = meta.sampleRate, L = meta.loopSamples;
   const shift = (2 * Math.PI * (meta.centreHz - VFO_HZ)) / fs;
   const I = new Float32Array(L), Q = new Float32Array(L);
@@ -214,7 +214,7 @@ async function main() {
 
   // ── Sound: off until asked, as every browser requires — and nobody wants a buzzer on page load ──
   const listen = $<HTMLButtonElement>('demoListen');
-  let ac: AudioContext | null = null, src: AudioBufferSourceNode | null = null, audio: Float32Array | null = null;
+  let ac: AudioContext | null = null, src: AudioBufferSourceNode | null = null, audio: Float32Array<ArrayBuffer> | null = null;
   let audioStart = 0;
   if (listen) listen.onclick = async () => {
     if (src) { src.stop(); src = null; listen.textContent = 'Listen'; listen.setAttribute('aria-pressed', 'false'); return; }
