@@ -186,17 +186,33 @@ jobs:
           upload: never
           output: sarif-results
 
-      - name: Drop results in third-party dependencies
+      # ★★★ AND ONE RULE WHERE IT DOES NOT APPLY: js/request-forgery in BROWSER-ONLY code.
+      #     That query models SERVER-side request forgery — untrusted input steering a request a
+      #     server makes with the server's own network position. web/client and directory/public
+      #     run in the visitor's browser: the request goes from the visitor's machine with the
+      #     visitor's privileges, so there is no server to pivot through. Every one of ~40 hits
+      #     there (#20-#105) was dismissed as a false positive, and each edit to the file moved the
+      #     line and raised it again as a "new" critical (Stuart, 2026-10-14: "CodeQL keeps flagging
+      #     up the same critical error").
+      # ★★ What still runs on that code: everything else, including js/client-side-request-forgery
+      #    (the browser version of this rule) and js/xss. The Cloudflare Worker (directory/src) and
+      #    VibeServer's own code are NOT in these paths, so a real SSRF there still lands.
+      #    The address guards in the code stay too (ADDRESS_OK / isValidReceiverAddress).
+      - name: Drop results in third-party dependencies, and server-side SSRF in browser-only code
         run: |
           shopt -s nullglob
           for f in sarif-results/*.sarif; do
             before=$(jq '[.runs[].results[]?] | length' "$f")
             jq '.runs[].results |= map(select(
-                  [.locations[]?.physicalLocation.artifactLocation.uri // ""]
-                  | any(test("(^|/)node_modules/")) | not))' "$f" > "$f.tmp"
+                  ([.locations[]?.physicalLocation.artifactLocation.uri // ""]
+                   | any(test("(^|/)node_modules/")) | not)
+                  and
+                  ((.ruleId == "js/request-forgery"
+                    and ([.locations[]?.physicalLocation.artifactLocation.uri // ""]
+                         | all(test("^(web/client|directory/public)/")))) | not)))' "$f" > "$f.tmp"
             mv "$f.tmp" "$f"
             after=$(jq '[.runs[].results[]?] | length' "$f")
-            echo "$f: $before results, $((before - after)) in node_modules dropped, $after kept"
+            echo "$f: $before results, $((before - after)) dropped (node_modules, browser-only SSRF), $after kept"
           done
 
       - name: Upload CodeQL results
