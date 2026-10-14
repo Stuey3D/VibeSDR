@@ -37,13 +37,24 @@ offered (AGENTS.md: a control that only works in one scenario must not be visibl
 - The phone's DIGITAL SPOTS panel already consumes the server's spots — reuse its message handling, do not
   invent a second reading of the same feed.
 
-## Questions to settle before building
+## Decisions (Stuart, 2026-10-14)
 
-- **The shared dial.** Picking a band retunes the receiver for everyone listening (THE SHARED-DIAL CONTRACT:
-  the client transmits only on a user action — a pick IS one, so it is allowed, but it takes the dial from
-  anyone else). Show the listener count and the shared-tuner line before the retune, as the phone does?
-- **Which bands to list.** Only those the connected radio can tune (from hwinfo), so an FM-only RTL-SDR server
-  never offers 160 m. Dial frequencies from the standard FT8/FT4 table.
-- **Where the decoder runs.** Confirm the server decodes on whatever frequency the dial is on (so the background
-  tune is all it takes), and what the spot message carries for the map (grid, distance, SNR, time).
-- **Leaving the screen.** Does the dial stay on the FT8 frequency (as DAB stays on its multiplex), or return?
+- **The shared dial: the same as DAB on a VibeServer today.** Whatever the watch's DAB mode does about other
+  listeners when it takes the dial, digital spots does too. No new rule.
+- **The DIGITAL SPOTS menu item appears only when BOTH:** the server reports it can tune a band that has digital
+  spots, **and** the owner has the feature enabled. Otherwise it is not in the menu at all.
+- **The picker lists every band the radio can tune, in band order, FT8 and FT4 each.** Those are the two modes
+  supported today; the list is built from data so more modes can join later without a new screen.
+- **Both apps get it:** Buddy (through the phone) and Jr (direct to the VibeServer), in the same build.
+- **Leaving goes back to the radio.** Leaving DAB or digital spots returns the dial to the **last signal the user
+  was listening to as an ordinary radio**, or, if they went straight in without listening to anything, to the
+  **landing frequency the server owner set**. ★ This is the rule for DAB as well — check what the watch's DAB
+  exit does now and bring it into line in the same build (memory note: DAB remembers and resumes, but the
+  landing half was unbuilt).
+
+## Still to confirm in the code
+
+- That the server's FT8/FT4 decoder follows the dial, so the background tune is all a band pick needs, and what a
+  spot carries for the map (grid, distance, SNR, time).
+- Where the owner's enable switch and the "can tune a digital-spots band" signal live in hwinfo, so the watch
+  reads them instead of guessing (APP HAS NO HARDCODED SETTINGS vs a server).
