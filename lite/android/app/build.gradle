@@ -51,7 +51,7 @@ android {
         buildConfigField 'boolean', 'IS_LEGACY_PACKAGE', 'false'
         minSdkVersion 21            // Android 5.0 — a 2017 Fire 7 is 5.1.1 (API 22)
         targetSdkVersion 28         // ★ sideload-only: old enough that an old tablet's rules apply
-        versionCode 65
+        versionCode 66
         versionName serverVersion + "-lite"
         ndk { abiFilters 'armeabi-v7a' }
         externalNativeBuild {
@@ -127,6 +127,17 @@ tasks.register('signLiteRelease') {
         def dir = file("${buildDir}/outputs/apk/release")
         def apk = new File(dir, 'app-release.apk')
         if (!apk.exists()) throw new GradleException("signLiteRelease: no ${apk}")
+        // ★★★ BEFORE SIGNING: no React module may NAME a class newer than minSdk (Kiko, 2026-10-14 — Lite 65 died at
+        //     launch on Android 6: FrameMetrics in a desugared lambda of the main app's VibeLocalSdrModule, which Lite
+        //     compiles as-is). A failing check DELETES the APK, so nothing in outputs/ can ship. See the script.
+        def api = new ProcessBuilder(['python3', '-I', file('../../../scripts/check-lite-api.py').path, apk.path,
+                                      android.defaultConfig.minSdkVersion.apiLevel.toString(),
+                                      "${android.sdkDirectory}/platforms/android-${rootProject.ext.compileSdkVersion}/data/api-versions.xml",
+                                      "${android.sdkDirectory}/build-tools/${android.buildToolsVersion}/dexdump"]
+                                     .collect { it.toString() }).redirectErrorStream(true).start()
+        def apiOut = api.inputStream.text
+        if (api.waitFor() != 0) { apk.delete(); throw new GradleException("check-lite-api failed — APK deleted:\n${apiOut}") }
+        logger.lifecycle(apiOut.trim())
         def tmp = new File(dir, 'app-release.rotated.apk')
         // ★ A failure must not leave an old-key-only APK in outputs/ looking finished.
         def fail = { String m -> apk.delete(); tmp.delete(); throw new GradleException(m) }

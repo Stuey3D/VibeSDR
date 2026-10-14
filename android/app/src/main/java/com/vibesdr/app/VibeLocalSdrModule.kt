@@ -335,16 +335,17 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     } catch (_: Throwable) { false }
 
     // ── FRAME WATCH — FRAME RATE → AUTO (constants/faceplate.ts autoWindowLate) ──
-    // ★★ What AUTO judges by: the system's own per-frame timings (Window.OnFrameMetricsAvailableListener, API 24) — the
-    //   numbers `dumpsys gfxinfo` counts as janky, not a guess from the model or a JS timer. A frame is LATE when its
-    //   total time from the intended vsync is over 1.5 refresh intervals (it missed its slot). JS takes the counts
-    //   every few seconds and decides; this only counts. Re-attached on resume (a recreated Activity has a new window);
-    //   the listener runs on its own small thread so counting never touches the UI thread.
-    @Volatile private var fwFrames = 0
-    @Volatile private var fwLate = 0
+    //   What it counts and how: FrameWatchN, at the end of this file.
+    // ★★★ THE API-24 TYPES LIVE IN FrameWatchN, NEVER IN THIS CLASS (Kiko, 2026-10-14: Lite 65 on an API 23 Amlogic box
+    //     crashed at launch — "Exception in HostObject::get for prop 'VibeLocalSDR': NoClassDefFoundError:
+    //     android.view.FrameMetrics"). The SDK_INT checks were right, but the listener lambda was desugared into a static
+    //     method of THIS class with FrameMetrics in its signature, and React Native finds @ReactMethods with
+    //     getDeclaredMethods — which resolves every declared method's types, so the whole module failed before any check
+    //     could run. Lite's minSdk is 21; the app's is 24, which is why only Lite broke. Anything newer than Lite's minSdk
+    //     goes in its own class here, like IcuLatin. scripts/check-lite-api.py fails the Lite build if a module
+    //     method signature names one.
     @Volatile private var fwOn = false
-    private var fwWindow: android.view.Window? = null
-    private var fwListener: android.view.Window.OnFrameMetricsAvailableListener? = null
+    private var fw: Any? = null                                   // FrameWatchN on API 24+, else always null
     private val fwThread by lazy { android.os.HandlerThread("vibe-frame-watch").also { it.start() } }
 
     private fun frameWatchAttach() {
@@ -353,16 +354,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         act.runOnUiThread {
             try {
                 val w = act.window ?: return@runOnUiThread
-                if (fwWindow === w && fwListener != null) return@runOnUiThread
-                frameWatchDetachNow()
                 val hz = (displayOf(act)?.refreshRate ?: 60f).coerceAtLeast(30f)
-                val lateNs = (1.5e9 / hz).toLong()
-                val l = android.view.Window.OnFrameMetricsAvailableListener { _, m, _ ->
-                    fwFrames++
-                    if (m.getMetric(android.view.FrameMetrics.TOTAL_DURATION) > lateNs) fwLate++
-                }
-                w.addOnFrameMetricsAvailableListener(l, android.os.Handler(fwThread.looper))
-                fwWindow = w; fwListener = l
+                val cur = (fw as? FrameWatchN) ?: FrameWatchN(fwThread).also { fw = it }
+                cur.attach(w, (1.5e9 / hz).toLong())
             } catch (t: Throwable) {
                 Log.w(TAG, "frame watch failed: ${t.message}")
             }
@@ -371,13 +365,15 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
 
     private fun frameWatchDetachNow() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
-        val w = fwWindow; val l = fwListener
-        fwWindow = null; fwListener = null
-        if (w != null && l != null) try { w.removeOnFrameMetricsAvailableListener(l) } catch (_: Throwable) {}
+        (fw as? FrameWatchN)?.detach()
     }
 
     @ReactMethod
-    fun startFrameWatch() { fwOn = true; fwFrames = 0; fwLate = 0; frameWatchAttach() }
+    fun startFrameWatch() {
+        fwOn = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) (fw as? FrameWatchN)?.take()
+        frameWatchAttach()
+    }
 
     @ReactMethod
     fun stopFrameWatch() {
@@ -389,9 +385,8 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod(isBlockingSynchronousMethod = true)
     fun takeFrameWatch(): com.facebook.react.bridge.WritableMap {
         val out = com.facebook.react.bridge.Arguments.createMap()
-        val f = fwFrames; val l = fwLate
-        fwFrames = 0; fwLate = 0
-        out.putInt("frames", f); out.putInt("late", l)
+        val fl = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) (fw as? FrameWatchN)?.take() else null
+        out.putInt("frames", fl?.get(0) ?: 0); out.putInt("late", fl?.get(1) ?: 0)
         return out
     }
 
@@ -1692,6 +1687,43 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
             (vid == HACKRF_VID && pid == HACKRF_PID) ||
             (vid == AIRSPY_VID && pid == AIRSPY_PID)
     }
+}
+
+/** FRAME WATCH for FRAME RATE → AUTO (constants/faceplate.ts autoWindowLate) — counts frames and LATE frames from the
+ *  system's own per-frame timings (Window.OnFrameMetricsAvailableListener, API 24): the numbers `dumpsys gfxinfo`
+ *  counts as janky, not a guess from the model or a JS timer. LATE = total time from the intended vsync over 1.5
+ *  refresh intervals (it missed its slot). JS takes the counts every few seconds and decides; this only counts, on its
+ *  own small thread so counting never touches the UI thread. Re-attached on resume (a recreated Activity has a new
+ *  window).
+ *  ★★★ Its own class so FrameMetrics is only ever loaded on Android 7+ — see the note at VibeLocalSdrModule.fw. */
+@androidx.annotation.RequiresApi(Build.VERSION_CODES.N)
+private class FrameWatchN(private val thread: android.os.HandlerThread) {
+    @Volatile private var frames = 0
+    @Volatile private var late = 0
+    private var window: android.view.Window? = null
+    private var listener: android.view.Window.OnFrameMetricsAvailableListener? = null
+
+    /** On the UI thread. Same window → nothing to do. */
+    fun attach(w: android.view.Window, lateNs: Long) {
+        if (window === w && listener != null) return
+        detach()
+        val l = android.view.Window.OnFrameMetricsAvailableListener { _, m, _ ->
+            frames++
+            if (m.getMetric(android.view.FrameMetrics.TOTAL_DURATION) > lateNs) late++
+        }
+        w.addOnFrameMetricsAvailableListener(l, android.os.Handler(thread.looper))
+        window = w; listener = l
+    }
+
+    /** On the UI thread. */
+    fun detach() {
+        val w = window; val l = listener
+        window = null; listener = null
+        if (w != null && l != null) try { w.removeOnFrameMetricsAvailableListener(l) } catch (_: Throwable) {}
+    }
+
+    /** [frames, late] since the last call, and resets them. */
+    fun take(): IntArray { val r = intArrayOf(frames, late); frames = 0; late = 0; return r }
 }
 
 /** ICU `Any-Latin; Latin-ASCII` for [VibeLocalSdrModule.transliterate]. Its own object so the
