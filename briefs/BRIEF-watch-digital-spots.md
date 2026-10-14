@@ -33,7 +33,7 @@ offered (AGENTS.md: a control that only works in one scenario must not be visibl
 - `ios/VibeSDRWatch/DabView.swift`, `DabBlockSheet.swift` — list + picker shape (Buddy).
 - `ios/VibeSDRWatch/AircraftView.swift` — list ↔ map switch (Buddy).
 - Jr (`spike/WristSDR/WristSDR/`) talks to the VibeServer directly; Buddy goes through the phone
-  (`watchProvider.ts`). Decide whether both get it in the first build.
+  (`watchProvider.ts`). Both get it (see Decisions).
 - The phone's DIGITAL SPOTS panel already consumes the server's spots — reuse its message handling, do not
   invent a second reading of the same feed.
 
