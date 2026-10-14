@@ -308,7 +308,7 @@ export interface RadioCaps {
   ranges?: [number, number][];
 }
 
-/** What the server reports about a DAB multiplex. Every field is MEASURED — see BRIEF-dab.md;
+/** What the server reports about a DAB multiplex. Every field is MEASURED — see briefs/BRIEF-dab.md;
  *  nothing here is inferred, which is the standard the Advanced RDS panel already sets. */
 export interface DabState {
   channel: string; centreHz: number; label: string; eid: number;

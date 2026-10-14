@@ -161,7 +161,7 @@ struct AnnouncementSwitch {
 };
 
 /** Everything the FIC has told us so far. Persistent across FIBs on purpose — see the note on
- *  parseFib, and the "station list that does not flap" goal in BRIEF-dab.md. */
+ *  parseFib, and the "station list that does not flap" goal in briefs/BRIEF-dab.md. */
 struct Ensemble {
     uint16_t eid = 0;
     std::string label;

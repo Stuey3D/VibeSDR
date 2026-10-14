@@ -4,7 +4,7 @@ Two small WebSocket clients that join a running VibeServer as real spectrum list
 because **multi-listener was "built but unproven" for weeks and was in fact plainly broken** — a
 second listener deadlocked the whole server. Nothing had ever joined as listener 2.
 
-See `BUG-vibeserver-broadcast-blocks.md` for what they caught.
+See `briefs/BUG-vibeserver-broadcast-blocks.md` for what they caught.
 
 ## `two-listeners.mjs` — the stalled-listener case
 

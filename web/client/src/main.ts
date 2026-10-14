@@ -1431,7 +1431,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *   available" sat there half a minute. A longer line still gets its full scroll: the notice's
      *   life is stretched to its length (vtsNoticeSized), never cut by this figure. */
     onVts: (text: string) => { vtsClearNotice('srv'); vtsNotice('srv', text, '', 9000); },
-    /* ★ DAB arrives twice a second with the whole station list — see BRIEF-dab.md for why it is
+    /* ★ DAB arrives twice a second with the whole station list — see briefs/BRIEF-dab.md for why it is
      *  sent entire rather than as deltas. A null means the server left DAB mode. */
     onDab: (d: DabState) => {
       if (!d) {
@@ -2908,7 +2908,7 @@ let lastRenderAt = 0;
 // ourselves when a summon lands), so a snapshot taken once was fragile. Also switchable by hand
 // from the console — `vibePerf(true)` — for when a URL cannot easily be edited.
 /**
- * ★ BISECT SWITCHES, for the Chromium cost hunt (BUG-vibeserver-chromium-render.md).
+ * ★ BISECT SWITCHES, for the Chromium cost hunt (briefs/BUG-vibeserver-chromium-render.md).
  *
  * The self-profiler proved our JS drawing is ~0% of wall on Chromium while the process sits at 38%,
  * so the cost is somewhere we cannot time from inside a frame. These turn whole subsystems OFF so

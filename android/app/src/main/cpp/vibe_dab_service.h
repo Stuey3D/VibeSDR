@@ -158,7 +158,7 @@ public:
 
     /** Choose a service by SId. Safe to call before the ensemble has arrived — it is remembered
      *  and applied as soon as the service appears, which is what makes a bookmark work on a cold
-     *  tune (recall is channel + SId; see BRIEF-dab.md). */
+     *  tune (recall is channel + SId; see briefs/BRIEF-dab.md). */
     /** ★★★ THE AUDIO-CHANNEL COUNTERS BELONG TO ONE SERVICE ON ONE MULTIPLEX. They were never
      *  zeroed on a block or service change, so the signal pane carried "Layer II frames 957 in,
      *  94 bad" from one multiplex to the next until DAB was left and re-entered (Stuart,

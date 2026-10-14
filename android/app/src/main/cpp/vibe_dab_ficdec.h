@@ -1,7 +1,7 @@
 // vibe_dab_ficdec.h — the complete FIC decode path: soft bits in, ensemble out.
 //
 // This is the piece that turns everything below it into A STATION LIST, with no audio decoded at
-// all — the milestone BRIEF-dab.md picks deliberately, because it proves the null detector, the
+// all — the milestone briefs/BRIEF-dab.md picks deliberately, because it proves the null detector, the
 // OFDM demapping, the interleaving, the depuncturing, the Viterbi, the scrambler and the CRC all
 // at once, and needs no codec to do it.
 //

@@ -47,7 +47,7 @@ private:
  *  @return bytes corrected (0..5), or -1 when the errors exceed the code's power.
  *
  *  ★ Syndromes → Berlekamp-Massey → Chien search → Forney. Written out rather than pulled from a
- *    library so the DAB+ path links nothing: the licence argument in BRIEF-dab.md is that
+ *    library so the DAB+ path links nothing: the licence argument in briefs/BRIEF-dab.md is that
  *    VibeServer contains no codec, and dragging in a general FEC library for ten bytes of parity
  *    would be a poor trade for that.
  */

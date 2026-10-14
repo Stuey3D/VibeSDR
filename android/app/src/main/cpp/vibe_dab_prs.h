@@ -6,7 +6,7 @@
 //       · the INTEGER frequency offset (the CP gives only the fraction of a carrier spacing);
 //       · confirmation that the null we found really was a null and not a fade;
 //       · a fine timing reference, and the channel impulse response — the SFN echo profile that
-//         BRIEF-dab.md wants for the DX panel, which falls out of the same correlation for free.
+//         briefs/BRIEF-dab.md wants for the DX panel, which falls out of the same correlation for free.
 //
 // ★★ THE TABLES ARE MACHINE-EXTRACTED FROM THE SPEC PDF, not typed. 48 groups of (k', i, n) plus
 //    a 4x32 h table is exactly the kind of transcription that goes wrong silently — one wrong
