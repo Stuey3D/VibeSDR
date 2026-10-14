@@ -902,7 +902,7 @@ final class SpikeLink: ObservableObject {
     // ★ A squelch remembered for this VibeServer (GitHub #28) — put the needle where the gate is.
     if let u = client as? UberClient, u.squelchRestoreSeq != squelchRestoreSeen {
       squelchRestoreSeen = u.squelchRestoreSeq
-      sql = u.savedSquelchDb <= -100 ? -1 : sqlNorm(u.savedSquelchDb)
+      sql = u.savedSquelchOn ? sqlNorm(u.savedSquelchDb) : -1
     }
 
     // A new row was drawn → the spectrum is alive.
@@ -1345,7 +1345,8 @@ final class SpikeLink: ObservableObject {
     if client is KiwiClient { return (90, -130) }
     if client is OwrxClient { return (100, -110) }
     // ★★★ A VIBESERVER GATE SPEAKS dBFS, NOT SNR. Its squelch keys off the tuned-channel power
-    //     (pre-AGC, from the FFT) and takes `db` with **-100 = off**; only real UberSDR takes an SNR
+    //     (pre-AGC, from the FFT) and takes `db` (plus `on` since 2026-10-14 — a threshold below -100
+    //     is real now; see UberClient.savedSquelchOn); only real UberSDR takes an SNR
     //     figure. Sharing UberSDR's 0…50 SNR scale here meant the needle's dB value was nonsense on
     //     the backend Jr is most used with. Same span/offset the PHONE uses for a VibeServer
     //     (SDRScreen: `(hwSquelch + 130) / 90`), so the wrist and the phone mean the same thing by

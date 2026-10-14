@@ -16,6 +16,7 @@
 
 import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
+import { VS_SQL_OFF, vsSqlOn, vsSqlEffective, vsSqlRestore } from '../services/vibeSquelch';
 import { APP_PROTO } from '../constants/version';
 import { scrollLane, scrollLaneOutset } from '../constants/popupTokens';
 import React, {
@@ -1229,7 +1230,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (v === '0') { nfmVoiceWantRef.current = false; setFmNfmVoice(false); }
     }).catch(() => {});
   }, []);
-  const [hwSquelch,     setHwSquelch]     = useState(-100);   // audio squelch dBFS (-100 = off)
+  const [hwSquelch,     setHwSquelch]     = useState(VS_SQL_OFF);   // audio squelch dBFS (VS_SQL_OFF = off — vibeSquelch.ts)
   const [hwNrLevel,     setHwNrLevel]     = useState(0);      // audio NR strength 0=off..20 (÷15 → native 0..1.33)
   const [hwNotch,       setHwNotch]       = useState(false);  // auto notch — LOCAL (shim)
   const [netNotch,      setNetNotch]      = useState(false);  // auto notch — NETWORK (UberSDR/OWRX/Kiwi)
@@ -1301,7 +1302,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       //    on an RTL-TCP server but the squelch reset to 0, so NFM opened at full noise on every
       //    launch until it was raised again. It is a property of THIS device's noise floor, like
       //    the gain — and it lives in the same per-device blob. Older blobs have no field → off.
-      const sql = typeof prefs.squelch === 'number' ? Math.max(-100, prefs.squelch) : -100;
+      // ★★ `squelchOn` rides with it from 2026-10-14: a threshold below -100 is real now, so "off" can
+      //    no longer be read out of the number. A blob without it is older, and there <= -100 was off.
+      const sql = vsSqlRestore(prefs.squelch, prefs.squelchOn);
       hwSquelchRef.current = sql;
       /* ★ Restored now, not forced to zero — see the note on the save. The defaults keep the old
        *  behaviour for a blob written before this, and for a radio nobody has set them on. */
@@ -1386,7 +1389,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
       LocalHw?.setDeemphasis?.(deemph);
       LocalHw?.setStereoEnabled?.(stereo);
-      LocalHw?.setSquelch?.(sql > -100, sql);
+      LocalHw?.setSquelch?.(vsSqlOn(sql), sql);
       // ★ Same curve as onLocalNR — this is the RESTORE path, and a restore that disagrees with
       //   the control puts the radio somewhere the slider never says it is.
       LocalHw?.setNrStrength?.(nrLvl <= 12 ? nrLvl / 12 : 1 + ((nrLvl - 12) / 3) * 0.4);
@@ -1473,6 +1476,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   localDeviceKey identifies. Nothing new to sync or migrate.
       converter: canConvert && !convIsIdentity(converter) ? converter : undefined,
       squelch: hwSquelch,            // ★ remembered per device — see the restore above (#28)
+      squelchOn: vsSqlOn(hwSquelch), // ★ on/off in words — vibeSquelch.ts (builds before it read <= -100 as off)
       /* ★★★ THE FM TREATMENTS, WHICH NOTHING HAS EVER REMEMBERED. Onfliner, 2026-09-24: "If you
        *  going to the main menu and then launch the dongle again, some settings will be reset —
        *  all audio settings except DE-EMPH and squelch". Those two were the only ones in this blob,
@@ -1809,7 +1813,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
   // re-subscribing the whole audio callback every time the threshold moves.
-  const hwSquelchRef = useRef(-100);
+  const hwSquelchRef = useRef(VS_SQL_OFF);
   /** ★★★ THESE THREE MUST GO TO THE SERVER ON A VIBESERVER — the de-emphasis bug again, found by
    *  Stuart 2026-07-31: "NR/Squelch/Auto-Notch do nothing on a VibeServer; they work on rtl_tcp and
    *  in the web client."
@@ -1819,10 +1823,19 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Exactly the shape of onHwDeemph/onHwStereo above: ask hwClient() first, fall back to LocalHw.
    *  ★★ TEST ON A VIBESERVER. rtl_tcp and on-device hardware pass whether or not the wire command
    *  exists, which is how this survived two releases. */
+  /* ★★★ THE ONE PLACE A dBFS THRESHOLD BECOMES ON OR OFF (vibeSquelch.ts). It used to be "-100 or
+   *  below = off", clamped here and by the drag (`Math.max(-100, …)`): on an Airspy HF+ airband channel
+   *  (quiet ≈ -110) that turned auto squelch's every threshold into OFF, and on an RSP1A on MW the left
+   *  third of the bar into OFF — the line drawn right, the gate never closing (Stuart, 2026-10-14).
+   *  ★ A server without hwinfo `sqlOn` still applies the old rule, so there the value is made OFF HERE
+   *    too — the control shows what the receiver does, never a gate it is not applying. This phone's
+   *    own shim is current code, so the on-device path always speaks `on`. */
   const onLocalSquelch = useCallback((db: number) => {
-    setHwSquelch(db); hwSquelchRef.current = db;
     const rc = hwClient();
-    if (rc) rc.setSquelchDb?.(db); else LocalHw?.setSquelch?.(db > -100, db);
+    const speaksOn = rc ? ((client.current as { squelchSpeaksOn?: () => boolean } | null)?.squelchSpeaksOn?.() ?? false) : true;
+    const eff = vsSqlEffective(db, speaksOn);
+    setHwSquelch(eff); hwSquelchRef.current = eff;
+    if (rc) rc.setSquelchDb?.(eff); else LocalHw?.setSquelch?.(vsSqlOn(eff), eff);
   }, [LocalHw, hwClient]);
   const onLocalNR = useCallback((level: number) => {
     setHwNrLevel(level);
@@ -3638,7 +3651,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  had put it. DL8LDN, 2026-09-14: the S-meter moved with the trim, the squelch did not. */
     const vg = visualGain;
     if (isKiwi)       { if (kiwiSquelch > -130) s = clamp01((kiwiSquelch + vg + 130) / 90); }
-    else if (isLocal) { if (hwSquelch   > -100) s = clamp01((hwSquelch   + vg + 130) / 90); }
+    else if (isLocal) { if (vsSqlOn(hwSquelch)) s = clamp01((hwSquelch   + vg + 130) / 90); }
     else if (!isOwrx) { if (snrSquelch  > -999 && signalMode === 'snr') s = sigNorm(snrSquelch); }
     sqlNormRef.current = s;   // SNR-gate in S-meter/dBFS mode is filled live in the meter emit (needs floor)
   }, [isKiwi, isLocal, isOwrx, kiwiSquelch, hwSquelch, snrSquelch, signalMode, visualGain]);
@@ -6024,8 +6037,18 @@ export default function SDRScreen({ route, navigation }: Props) {
           // Radiod (UberSDR/VibeServer) reports channel BASEBAND POWER — zoom-independent, the way the
           // ka9q web S-meter reads. Use it for the dBFS/S-meter level instead of the spectrum peak (which
           // scales with zoom). Kiwi/local/OWRX keep their own level source.
+          /* ★★★ AND A VIBESERVER REPORTS THE NUMBER ITS OWN SQUELCH GATE COMPARES (`sig.chan`) — use
+           *  that, not the frame's passband peak. The frame is peak-held from whichever FFT feeds the
+           *  current VIEW (zoomed in, the zoom FFT's narrower bins put the noise several dB lower) and
+           *  slow-averaged at a low frame rate, so the needle, the auto-squelch tracker and the
+           *  server's gate were reading three different quantities, and how far apart they sat
+           *  depended on the zoom. The web client has read `sig` since 2026-08-03 for this reason;
+           *  the app never did. ★ The frame peak stays the fallback (an older server, no `sig` yet). */
+          const vsChan = isLocal
+            ? ((client.current as { channelLevelDb?: () => number } | null)?.channelLevelDb?.() ?? NaN) : NaN;
           const chDbfs = (owrxDbm == null && !isKiwi && !isLocal && audioDbfsRef.current != null)
-            ? audioDbfsRef.current : peak;
+            ? audioDbfsRef.current
+            : Number.isFinite(vsChan) ? vsChan : peak;
           /* ★★★ THE VISUAL TRIM GOES ON HERE, ONCE, AND THEN ON EVERY THRESHOLD BELOW.
            *  `vg` shifts every dB quantity the user can SEE. Because it is added to both the level
            *  and each squelch threshold, every comparison between them is unchanged — so the gate
@@ -6096,7 +6119,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  the raw value is reconstructed for the comparison. */
           const rawLevelDbm = levelDbm - vg;
           const gate = isKiwi  ? (kiwiSqDbmRef.current > -130 ? rawLevelDbm < kiwiSqDbmRef.current : false)
-            : isLocal          ? (hwSquelchRef.current > -100 ? chDbfs   < hwSquelchRef.current : false)
+            : isLocal          ? (vsSqlOn(hwSquelchRef.current) ? chDbfs   < hwSquelchRef.current : false)
             : owrxDbm != null  ? undefined
             : (snrSquelchRef.current > -999 ? snrDb < snrSquelchRef.current : false);
           /* ── AUTO SQUELCH ────────────────────────────────────────────────────────────────────
@@ -7845,7 +7868,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       const m = sqlManualRef.current;
       // ★ The per-backend "off" sentinels, for a session where nothing manual was ever set.
       if (isKiwi)       onKiwiSquelch(Number.isFinite(m) ? m : -130);
-      else if (isLocal) onLocalSquelch(Number.isFinite(m) ? m : -100);
+      else if (isLocal) onLocalSquelch(Number.isFinite(m) ? m : VS_SQL_OFF);
       else              onSnrSquelch(Number.isFinite(m) ? m : -999);
     }
   }, [isKiwi, isLocal, onKiwiSquelch, onLocalSquelch, onSnrSquelch]);
@@ -7901,7 +7924,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     if (x < 0) {
       if (isKiwi) onKiwiSquelch(-130);
-      else if (isLocal) onLocalSquelch(-100);
+      else if (isLocal) onLocalSquelch(VS_SQL_OFF);
       else onSnrSquelch(-999);
       return;
     }
@@ -7919,7 +7942,9 @@ export default function SDRScreen({ route, navigation }: Props) {
      *    so its scale never moved and there is nothing to take back off. */
     const vg = visualGainRef.current;
     if (isKiwi)       onKiwiSquelch(c * 90 - 130 - vg);
-    else if (isLocal) onLocalSquelch(Math.max(-100, c * 90 - 130 - vg));
+    // ★ No floor here any more: -100 was the old OFF sentinel, and clamping to it made the bottom third
+    //   of the bar OFF (vibeSquelch.ts). onLocalSquelch decides what this server can honour.
+    else if (isLocal) onLocalSquelch(c * 90 - 130 - vg);
     else if (signalMode === 'snr') onSnrSquelch(sigDenorm(c));
     else {
       // dBFS/S-meter mode: invert `(floor + threshold + vg + 130) / 90`. Without a settled floor

@@ -232,6 +232,14 @@ export class VibeServerAdapter implements SDRBackend {
    *  Both halves, again — client method AND this passthrough. See UberSDRClient.setNrEnabled. */
   setNrEnabled(on: boolean, strength?: number) { this.client.setNrEnabled(on, strength); }
   setSquelchDb(db: number)              { this.client.setSquelchDb(db); }
+  /** ★ hwinfo said `sqlOn` — a threshold below -100 dBFS is a threshold here, not "off" (vibeSquelch.ts). */
+  squelchSpeaksOn(): boolean            { return this.client.squelchSpeaksOn; }
+  /** ★★★ The server's channel level (`sig.chan`, dBFS) — the number its squelch gate compares — or NaN
+   *  when none has arrived within `maxAgeMs` (an older server, a paused socket). See the client's note. */
+  channelLevelDb(maxAgeMs = 1000): number {
+    const c = this.client;
+    return Number.isFinite(c.sigChanDb) && Date.now() - c.sigAt <= maxAgeMs ? c.sigChanDb : NaN;
+  }
   setNotch(on: boolean)                 { this.client.setNotch(on); }
   // ★ Broadcast-FM treatments. Forwarded to the client rather than reimplemented — four faults,
   //   four switches, and they are not interchangeable (see UberSDRClient).

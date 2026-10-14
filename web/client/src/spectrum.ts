@@ -20,6 +20,7 @@
 import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services/faultLog';
 import { DabAssembler } from '../../../src/services/dabAssemble';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
+import { vsSquelchMsg } from '../../../src/services/vibeSquelch';
 
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm';
 
@@ -1719,8 +1720,9 @@ export class SpectrumClient {
   setHwAutoDirectSampling(on: boolean) { this._send({ type: 'autoDirectSampling', value: on ? 1 : 0 }); }
 
   // Audio DSP — runs server-side in the shim (the client stays a thin renderer).
-  /** db <= -100 turns squelch off, matching the app's convention. */
-  setSquelch(db: number) { this._send({ type: 'squelch', db }); }
+  /** ★★★ On/off goes out IN WORDS (vibeSquelch.ts): `db` alone with "<= -100 = off" made every threshold
+   *  below -100 dBFS an OFF — where an Airspy HF+'s quiet airband channel sits (Stuart, 2026-10-14). */
+  setSquelch(db: number) { this._send(vsSquelchMsg(db)); }
   setNr(on: boolean, strength: number) { this._send({ type: 'nr', on, strength }); }
   setNotch(on: boolean) { this._send({ type: 'notch', on }); }
   /** tau in seconds: 0 = off, 50e-6 or 75e-6. */

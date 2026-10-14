@@ -120,6 +120,7 @@
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
+#include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
 #include "vibe_listener_queue.h"     // ★ a per-VFO listener's block queue, sized in time (2026-10-07)
 #include "vibe_r82xx_if.h"           // ★ the R820T IF librtlsdr derives — the tuner-write diagnostic
@@ -13843,9 +13844,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     ★ Deliberately NOT admin-gated, unlike gain: these change only what THIS
             //       listener hears, so there is nothing shared to protect.
             if (type == "squelch") {
-                // db <= -100 means "off", the app's and Jr's convention (see the shared handler).
+                // ★★★ On/off from vibe::squelchMsgOn — an explicit `on` when the client sends one, else
+                //     the legacy "db <= -100 = off". The legacy rule alone made every threshold below
+                //     -100 an OFF: the Airspy HF+'s quiet channel sits there (see vibe_squelch_msg.h).
                 double q;
-                if (jsonNum(msg, "db", q)) { me->squelchOn.store(q > -100.0); me->squelchDb.store((float)q); }
+                if (jsonNum(msg, "db", q)) { me->squelchOn.store(vibe::squelchMsgOn(msg, q)); me->squelchDb.store((float)q); }
                 return;
             }
             if (type == "nr") {
@@ -15798,13 +15801,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // audio controls the local app has — and keeps the DSP server-side, so
         // the client stays a thin renderer (no duplicate DSP to drift).
         if (type == "squelch") {
-            // ★ This listener's own gate, never the radio's — see sessionSquelch. db <= -100 = off.
+            // ★ This listener's own gate, never the radio's — see sessionSquelch. On/off from
+            //   vibe::squelchMsgOn (explicit `on`, else the legacy db <= -100 = off) — the SAME rule
+            //   as the per-client handler above, so the two cannot drift.
             if (jsonNum(msg, "db", v)) {
+                const bool on = vibe::squelchMsgOn(msg, v);
                 std::lock_guard<std::mutex> lk(clientMtx);
                 auto it = sockSession.find(sock.get());
                 const std::string ses = it != sockSession.end() ? it->second : std::string();
-                if (!ses.empty()) { auto& q = sessionSquelch[ses]; q.on = v > -100.0; q.db = (float)v; }
-                else LocalSdrShim::instance().setSquelch(v > -100.0, (float)v);   // a socket with no session: the old whole-radio gate
+                if (!ses.empty()) { auto& q = sessionSquelch[ses]; q.on = on; q.db = (float)v; }
+                else LocalSdrShim::instance().setSquelch(on, (float)v);   // a socket with no session: the old whole-radio gate
             }
             return;
         }
@@ -16093,6 +16099,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       /* ★ The owner's switched-off modes. spectrum.ts has read this array since
                        *  it was written; this is the first thing that has ever sent it. */
                       + std::string(",\"blocked\":") + vsBlockedModesJson()
+                      /* ★★★ THIS SERVER HONOURS `squelch.on` — so a threshold below -100 dBFS is a
+                       *  THRESHOLD here, not "off" (vibe_squelch_msg.h). A client seeing no flag is
+                       *  on an older server and must treat <= -100 as off, or it would draw a gate
+                       *  the server is not applying. */
+                      + ",\"sqlOn\":true"
                       + std::string(",\"gainCap\":")
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))

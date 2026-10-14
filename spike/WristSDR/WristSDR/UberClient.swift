@@ -270,11 +270,17 @@ final class UberClient: ObservableObject {
   /// ★ The last squelch sent to THIS host, dBFS (−100 = off) — remembered with the tune (GitHub #28:
   ///   frequency and mode came back, the squelch did not, so NFM opened at full noise every launch).
   private(set) var savedSquelchDb = -100.0
+  /// ★★★ ON/OFF IN WORDS, NOT OUT OF THE NUMBER (2026-10-14). "-100 or below = off" sat inside the range
+  ///     of real thresholds: an Airspy HF+'s quiet airband channel reads about -110 dBFS, so a needle
+  ///     placed just above its noise went out as OFF and the gate never closed (the phone's auto squelch
+  ///     hit the same wall). The server reads `on` (vibe_squelch_msg.h); an older one ignores it and
+  ///     keeps its old rule, so nothing gets worse there.
+  private(set) var savedSquelchOn = false
   /// Bumped when a remembered squelch is restored, so SpikeLink can move its needle to match.
   @Published private(set) var squelchRestoreSeq = 0
   private func saveVibeState() {
     guard isVibe, frequency > 0 else { return }
-    UserDefaults.standard.set(["f": frequency, "m": mode, "q": savedSquelchDb], forKey: vibeStateKey)
+    UserDefaults.standard.set(["f": frequency, "m": mode, "q": savedSquelchDb, "qOn": savedSquelchOn], forKey: vibeStateKey)
   }
   private func restoreVibeState() {
     guard isVibe, let s = UserDefaults.standard.dictionary(forKey: vibeStateKey),
@@ -282,6 +288,8 @@ final class UberClient: ObservableObject {
     frequency = f
     if let m = s["m"] as? String { mode = m; if let bw = Self.modeBW[m] { bwLow = bw.low; bwHigh = bw.high } }
     if let q = s["q"] as? Double { savedSquelchDb = q } else { savedSquelchDb = -100 }
+    // ★ Saved before `qOn` existed: -100 or below was the only way to store OFF.
+    if let on = s["qOn"] as? Bool { savedSquelchOn = on && savedSquelchDb.isFinite } else { savedSquelchOn = savedSquelchDb > -100 }
     vibeRestored = true
   }
   /// Per-host RTL-SDR memory (VibeServer only) — gain/bias-T/AGC/ppm/rate/de-emphasis, so the dongle comes
@@ -3215,8 +3223,8 @@ final class UberClient: ObservableObject {
         guard !self.goingIdle else { return }
         self.sendTune()
         // ★ And the remembered squelch, on the same beat — the gate is per session server-side.
-        if self.savedSquelchDb > -100 {
-          self.specSock.send(json: ["type": "squelch", "db": self.savedSquelchDb])
+        if self.savedSquelchOn {
+          self.specSock.send(json: ["type": "squelch", "db": self.savedSquelchDb, "on": true])
           self.squelchRestoreSeq += 1
         }
       }
@@ -3443,7 +3451,8 @@ final class UberClient: ObservableObject {
   ///
   /// `set_audio_gate` with `min_snr` is an **UberSDR** message. The VibeServer shim does not
   /// implement it at all: its squelch is `{"type":"squelch","db":…}` on the SPECTRUM control
-  /// channel, keyed off the tuned-channel power with **db <= -100 meaning off** (see
+  /// channel, keyed off the tuned-channel power — with `on` saying on/off since 2026-10-14 (before,
+  /// **db <= -100 meant off**, which made a real threshold below -100 an OFF; see savedSquelchOn) (see
   /// local_sdr_shim.cpp, and `setSquelchDb` in the phone's UberSDRClient, which has always sent
   /// the right one). So on a VibeServer the wrist's squelch did precisely nothing — the needle
   /// moved, the bar said "Muting", and the audio carried on. Reported from the field by ff-mish
@@ -3456,9 +3465,10 @@ final class UberClient: ObservableObject {
   ///   UberSDR — because SpikeLink.sqlScale converts the needle per backend.
   func setSquelch(_ value: Double) {
     if isVibe {
-      savedSquelchDb = value <= -999 ? -100.0 : value
+      savedSquelchOn = value > -999 && value.isFinite
+      savedSquelchDb = savedSquelchOn ? value : -100.0   // -100 = OFF to an older server too
       saveVibeState()
-      specSock.send(json: ["type": "squelch", "db": savedSquelchDb])
+      specSock.send(json: ["type": "squelch", "db": savedSquelchDb, "on": savedSquelchOn])
     } else {
       audioSock.send(json: ["type": "set_audio_gate",
                             "min_snr": value <= -999 ? -999 : Int((value + 30).rounded())])

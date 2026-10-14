@@ -89,6 +89,7 @@ today (`rtlsdr`, `sdrplay`, `airspyhf`, `hackrf`) is 0.
 | Date | Addition | Older clients |
 |---|---|---|
 | 2026-09-17 | `{"type":"battery","level":N,"charging":b,"pauseAt":P,"resumeAt":R,"paused":b}` on the spectrum socket every minute and on change; `batteryLevel`/`batteryCharging`/`batteryPaused`/`batteryPauseAt`/`batteryResumeAt` in `/vibeserver.json`; `battery` in the admin status and the directory listing; preflight reason `battery-paused` (`level`, `resumeAt`) and a 503 with the same body on a bare upgrade while suspended; VTS notices at pauseAt+10, pauseAt+5 and pauseAt | Ignore the message and the fields; show the reason string |
+| 2026-10-14 | `squelch` takes an optional `"on": true\|false`; when present it decides on/off and `db` is the threshold however low. hwinfo carries `"sqlOn":true` on a server that honours it. (Without `on`, `db <= -100` still means off — and that sentinel sat inside real channel levels: an Airspy HF+'s quiet airband channel reads ≈ -110, so auto squelch's threshold went out as OFF.) Clients send `db:-100,on:false` for off | Unchanged: no `on` → the old rule. A new client against a server without `sqlOn` treats `db <= -100` as off itself |
 
 ## Changing the number
 

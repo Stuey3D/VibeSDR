@@ -89,6 +89,7 @@ import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE, clampVibePassband } from './sdrPro
 import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
+import { vsSquelchMsg } from './vibeSquelch';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -761,8 +762,23 @@ export abstract class VibeServerWsClient {
     if (typeof strength === 'number' && Number.isFinite(strength)) m.strength = strength;
     this._sendCtl(m);
   }
-  /** db <= -100 means OFF — the server's convention, and the app's own. */
-  setSquelchDb(db: number) { this._sendCtl({ type: 'squelch', db }); }
+  /** ★★★ ON/OFF GOES OUT IN WORDS (vibeSquelch.ts). `db` alone with "<= -100 = off" made every
+   *  threshold below -100 dBFS an OFF — and that is where an Airspy HF+'s quiet airband channel sits,
+   *  so auto squelch drew its line and never closed the gate (Stuart, 2026-10-14). VS_SQL_OFF = off. */
+  setSquelchDb(db: number) { this._sendCtl(vsSquelchMsg(db)); }
+  /** hwinfo said `sqlOn`: this server applies a threshold below -100 instead of reading it as off. */
+  squelchSpeaksOn = false;
+  /** ★★★ THE SERVER'S OWN CHANNEL LEVEL (`sig.chan`, dBFS) — the very number its squelch gate compares.
+   *  The app used to measure the level from the SPECTRUM FRAME instead, and on a VibeServer that is a
+   *  different quantity: frames are peak-held from whichever FFT feeds the current view (the zoom FFT
+   *  has narrower bins, so a lower per-bin noise floor) and slow-averaged for a low frame rate, while
+   *  the gate reads the full-rate FFT at a fixed resolution. So the needle, the auto-squelch tracker
+   *  and the gate could disagree by several dB depending on ZOOM — the web client hit exactly this on
+   *  2026-08-03 ("the bar is relative to the zoom") and has used `sig` ever since.
+   *  ★ NaN until the first `sig`; `sigAt` lets the reader refuse a stale one (an older server, or a
+   *    paused socket) and fall back to the frame. */
+  sigChanDb = NaN;
+  sigAt = 0;
   setNotch(on: boolean)    { this._sendCtl({ type: 'notch', on }); }
   // ── The broadcast-FM treatments (VibeServer 3.1) ────────────────────────────────────────────
   // ★★★ FOUR FAULTS, FOUR SWITCHES, and they are NOT interchangeable: NR answers continuous NOISE,
@@ -2173,6 +2189,13 @@ export abstract class VibeServerWsClient {
   }
 
   private _handleSpectrumMessage(msg: Record<string, unknown>) {
+    // ★ First, and cheap: twenty a second. Kept as fields, never a callback — the meter emit reads
+    //   them on its own frame, so nothing re-renders for a `sig`.
+    if (msg.type === 'sig') {
+      const c = Number(msg.chan);
+      if (Number.isFinite(c) && c > -500) { this.sigChanDb = c; this.sigAt = Date.now(); }
+      return;
+    }
     if (msg.type === 'pong') {
       if (this.pingSentAt > 0) {
         const rtt = Date.now() - this.pingSentAt;
@@ -2510,6 +2533,7 @@ export abstract class VibeServerWsClient {
       return;
     }
     if (msg.type === 'hwinfo') {
+      this.squelchSpeaksOn = msg.sqlOn === true;   // ★ see setSquelchDb / vibeSquelch.ts
       if (typeof msg.autoDs === 'boolean')
         this.callbacks.onHwDirectSampling?.(msg.autoDs, Number(msg.dsBelowHz) || 0, Number(msg.ds) || 0);
       // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.

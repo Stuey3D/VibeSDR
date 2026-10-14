@@ -42,6 +42,7 @@ import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle } from '../../../src/utils/navtex';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
+import { VS_SQL_OFF, vsSqlOn, vsSqlRestore } from '../../../src/services/vibeSquelch';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
  *  SAMPLES — audio glitches, gaps in the waterfall — and it does so silently, which is
@@ -4513,8 +4514,8 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   drawSquelchBar(sigDb);
 }
 
-/** The squelch threshold in dBFS, mirrored here so the meter can draw the needle. −100 = off. */
-let squelchDb = -100;
+/** The squelch threshold in dBFS, mirrored here so the meter can draw the needle. SQL_OFF = off. */
+let squelchDb = VS_SQL_OFF;
 
 /** Push the current threshold everywhere it is applied. Squelch is a SERVER-side gate, so without
  *  the spec call the client could not tell a closed gate from a muted tab. */
@@ -4525,7 +4526,10 @@ function applySquelch(db: number, persist = true) {
   // The plain slider used to persist under 'squelch'; the restore path still reads that key, so the
   // bar must keep writing it or a reload loses the setting AND resurrects the false muted-tab
   // warning. Restore itself passes persist=false — no point rewriting what we just read.
-  if (persist) savePref('squelch', db);
+  // ★★ And whether it is ON, in words: a threshold below -100 is real now, so "off" can no longer be
+  //    read out of the number (vibeSquelch.ts). A pref saved before this has no squelchOn, and there
+  //    -100 or below meant off — vsSqlRestore() reads both.
+  if (persist) { savePref('squelch', db); savePref('squelchOn', vsSqlOn(db)); }
 }
 
 /** Draw the live bar + threshold ball. Called every meter frame with the raw (unsmoothed) signal
@@ -4533,7 +4537,7 @@ function applySquelch(db: number, persist = true) {
 function drawSquelchBar(sigDbRaw: number) {
   const bar = document.getElementById('sqlBar');
   if (!bar) return;
-  const on = squelchDb > SQL_OFF;
+  const on = vsSqlOn(squelchDb);
   setClass(bar, 'on', on);
   const fill = document.getElementById('sqlFill') as HTMLElement | null;
   setStyle(fill, 'width', `${(Math.max(0, Math.min(1, sqlSigNorm)) * 100).toFixed(1)}%`);
@@ -4788,16 +4792,20 @@ function autoSquelchTick() {
    *  jumps about is worse than none. This is the number the margin slider actually sets, so moving
    *  the slider moves the line, which is what Stuart asked for. */
   sqlAutoShownDb = decide;
-  // Clamp INSIDE the bar's live scale, and never to SQL_OFF or below: -100 is the "off" sentinel, so
-  // a quiet band whose floor + margin lands there would silently read as squelch OFF.
+  /* ★★★ NO FLOOR ANY MORE. This was clamped to SQL_OFF + 1 = -99 because -100 was the wire's "off"
+   *  sentinel — and on an Airspy HF+ airband channel (quiet ≈ -110 dBFS) that made the threshold -99
+   *  whatever the noise did, so the gate sat SHUT on everything below -99; and the hang's "held open"
+   *  was the same -99, a real threshold ABOVE the noise, so it never held anything open (Stuart,
+   *  2026-10-14 — the app had the mirror image: its clamp sent OFF). On/off now go out in words
+   *  (vibeSquelch.ts), so the hang sends a genuine OFF and the threshold is exactly `decide`. */
   /* ★ Which way the gate is currently sitting decides which threshold applies. `srvChanDb` is the
    *  same channel figure the SERVER gates on, so this tracks its verdict rather than guessing. */
-  /* ★ Within the hang the receiver stays OPEN (threshold at the bottom of the scale); outside it,
+  /* ★ Within the hang the receiver stays OPEN (the gate genuinely OFF); outside it,
    *  the real threshold applies. That is what carries the audio through a pause between words —
    *  and it is why you hear the band quietly in those gaps, which is what a hang is FOR. */
   const want = gateOpen
-    ? SQL_OFF + 1
-    : Math.round(Math.max(SQL_OFF + 1, Math.min(sqlScaleMax, decide)));
+    ? SQL_OFF
+    : Math.round(Math.min(sqlScaleMax, decide));
   // persist=false: an automatic value must not overwrite the manual threshold the user remembers.
   // ★ Only on a real change — every `applySquelch` is a message to the server, ten times a second
   //   otherwise, and the wire is shared with the audio.
@@ -4816,7 +4824,7 @@ function setSquelchAuto(on: boolean, persist = true) {
     autoSquelchTick();
   } else {
     const p = prefs();
-    applySquelch(typeof p.squelch === 'number' ? p.squelch as number : SQL_OFF, false);
+    applySquelch(vsSqlRestore(p.squelch, p.squelchOn), false);
   }
   drawSquelchBar(lastSigDb);
 }
@@ -4882,7 +4890,9 @@ function setupSquelchBar() {
 let sqlScaleMin = -100, sqlScaleMax = -20;
 /** The last smoothed signal fraction (0..1), so the bar can colour the fill red when gated. */
 let sqlSigNorm = 0;
-const SQL_OFF = -100;
+/** ★ "Off" — far below any real channel level (vibeSquelch.ts). It was -100, INSIDE the range an Airspy
+ *  HF+'s quiet channel reads, so every threshold below it silently meant off (Stuart, 2026-10-14). */
+const SQL_OFF = VS_SQL_OFF;
 
 /** dBFS -> S-unit, 6 dB per unit (lifted from the skin's _toSUnit ladder). */
 /** ★ The signal meter's FIXED scale, in dBFS — deliberately the same span as the S-unit ladder
@@ -7538,8 +7548,8 @@ function buildControls() {
       //   a second derivation would put the line somewhere subtly wrong.
       // ★ CLOSED, not merely ARMED. A threshold set above the noise is normal; the state
       //   worth shouting about is the gate actively muting right now.
-      sqlClosed: squelchDb > -100 && lastSigDb < squelchDb,
-      sqlNorm: squelchDb > -100
+      sqlClosed: vsSqlOn(squelchDb) && lastSigDb < squelchDb,
+      sqlNorm: vsSqlOn(squelchDb)
         ? Math.max(0, Math.min(1, (squelchDb - sqlScaleMin) / Math.max(1, sqlScaleMax - sqlScaleMin)))
         : -1,
     }),
@@ -13654,7 +13664,7 @@ function pushSettingsToServer() {
   // restores the squelch but not the engine's knowledge of it — and the false
   // "IS THE TAB MUTED?" warning comes straight back.
   const sql = num('squelch');
-  if (sql !== undefined) applySquelch(sql, false);
+  if (sql !== undefined) applySquelch(vsSqlRestore(sql, p.squelchOn), false);
   // ★ Restored AFTER the manual value: setSquelchAuto(false) reads the remembered manual squelch
   //   back out of prefs(), so the manual restore above is what a later switch-off returns to.
   const sqlAutoPref = bool('squelchAuto');

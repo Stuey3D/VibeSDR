@@ -40,6 +40,7 @@ function loadOpusModule(): Promise<OpusModule> {
 // ★ The typeof guard is the build's rule for WebCodecs (build-web.mjs) — and the right test anyway.
 if (typeof AudioDecoder === 'undefined') void loadOpusModule().catch(() => { /* retried when a packet needs it */ });
 import { AudioSelfHeal, type HealDecision } from '../../../src/services/audioSelfHeal';
+import { VS_SQL_OFF, vsSqlOn } from '../../../src/services/vibeSquelch';
 import { initSegment, mediaSegment } from './fmp4';
 import { guard, guardCallbacks, guardJson, noteFault } from '../../../src/services/faultLog';
 
@@ -850,10 +851,10 @@ export class AudioPlayer {
   }
   private _volume = 1;
   private _muted = false;
-  /** Server-side squelch threshold, dB. <= -100 means OFF (matches the app's convention). */
-  private _squelchDb = -100;
+  /** Server-side squelch threshold, dB. VS_SQL_OFF = off (vibeSquelch.ts — a threshold below -100 is real). */
+  private _squelchDb = VS_SQL_OFF;
   set squelchDb(db: number) { this._squelchDb = db; }
-  get squelchActive() { return this._squelchDb > -100; }
+  get squelchActive() { return vsSqlOn(this._squelchDb); }
 
   constructor(url: string, cb: AudioCallbacks = {}) {
     this.url = url;
