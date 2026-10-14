@@ -26,7 +26,7 @@ import { NativeEventEmitter, NativeModules } from 'react-native';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -284,6 +284,16 @@ interface ModeSelectorProps {
    *  own heading (Stuart, 2026-09-17: "when only one button is left simply move it to the
    *  demodulators tab"). */
   blocked?: Set<string>;
+  /** ★★★ TRANSCRIBE (V12) — ON-DEVICE speech-to-text + translation of the audio we play. Client-side, so it is
+   *  offered on EVERY backend (OWRX too, where decoderControls is null); null = this device cannot run it, and then
+   *  no key is drawn. It sits with the decoders and opens the standard decoder box. Not UberSDR's STT. */
+  transcribeControls?: {
+    active: boolean; selected: boolean; onToggle: () => void;
+    /** 'auto' or a locale id; the offered rows are AUTO + the common languages the device actually has. */
+    language: string; languages: { code: string; id: string }[]; onLanguage: (id: string) => void;
+    /** Translation target ('' = off) and the phone's language, the one target offered beside OFF / EN. */
+    translateTo: string; deviceLanguage: string; onTranslateTo: (code: string) => void;
+  } | null;
   spotsControls?: {
     label: string; spotsKind: string | null;
     onSpotsToggle: (k: 'digi' | 'cw') => void; onSpotsMap?: () => void;
@@ -295,7 +305,7 @@ interface ModeSelectorProps {
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose,
   filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, bwEdgeMin = 0, onFilterBoth,
   showServerMaps = false, onServerMap, owrxPages,
-  decoderControls, spotsControls, blocked }: ModeSelectorProps) {
+  decoderControls, spotsControls, transcribeControls, blocked }: ModeSelectorProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const isBlocked = (id: string) => !!blocked && blocked.has(id);
   /* The client decoders this receiver both runs and allows — the same filter the row applies. */
@@ -339,6 +349,50 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   // ★ "ADV RDS" was an abbreviation forced by nothing — the button spans the whole row and has
   //   room to spare. Only the very narrowest phones need the short form (Stuart, 2026-07-28).
   const advRdsLabel = winW >= 340 ? 'ADVANCED RDS' : 'ADV RDS';
+  const txShown = !!transcribeControls && !isBlocked('transcribe');
+  const tc = transcribeControls;
+  const txLit = !!tc && (tc.active || tc.selected);
+  const transcribeKey = tc ? (
+    <NavItem key="transcribe" onPress={tc.onToggle}>{(navFocused, navRef) => pt.metal ? (
+      <MetalKey navRef={navRef} focused={navFocused} label="TRANSCRIBE" active={txLit} pip onPress={tc.onToggle} />
+    ) : (
+    <TouchableOpacity ref={navRef as any}
+      style={[st.btn, { borderColor: txLit ? dec : t.btnBorder, paddingVertical: 10 },
+              tc.active && { backgroundColor: decBg },
+              navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+      onPress={tc.onToggle} activeOpacity={0.8}>
+      <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: txLit ? dec : t.btnText }]}>
+        TRANSCRIBE
+      </Text>
+    </TouchableOpacity>
+    )}</NavItem>
+  ) : null;
+  /* ★ The settings drop in under the key while it is selected, as RTTY's and TIME's do. AUTO detects the spoken
+   *  language; a chosen language downloads its speech model once (the box says so). TRANSLATE offers OFF, the
+   *  phone's own language and English — the target is what YOU read, so a long list would be noise. */
+  const txTargets = tc ? Array.from(new Set([tc.deviceLanguage, 'en'].filter(Boolean))) : [];
+  const transcribeCallout = tc && txLit ? (
+    <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
+                             : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+      <SubLabel label="LANGUAGE" />
+      <OptRow>
+        <SegBtn label="AUTO" active={tc.language === 'auto'} onPress={() => tc.onLanguage('auto')} />
+        {tc.languages.map(l => (
+          <SegBtn key={l.id} label={l.code.toUpperCase()} active={tc.language === l.id} onPress={() => tc.onLanguage(l.id)} />
+        ))}
+      </OptRow>
+      <SubLabel label="TRANSLATE TO" />
+      <OptRow>
+        <SegBtn label="OFF" active={!tc.translateTo} onPress={() => tc.onTranslateTo('')} />
+        {txTargets.map(c => (
+          <SegBtn key={c} label={c.toUpperCase()} active={tc.translateTo === c} onPress={() => tc.onTranslateTo(c)} />
+        ))}
+      </OptRow>
+      <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 6, textAlign: 'left' }, { color: t.btnText }]}>
+        On this device, free and private — nothing is sent anywhere. Clear speech works best; noisy SSB and airband will be patchy.
+      </Text>
+    </View>
+  ) : null;
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
   // ★★★ SYNC DEFAULTS ON FOR A DUAL-SIDEBAND MODE. On AM, SAM, DSB or any FM the passband IS
@@ -688,6 +742,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </TouchableOpacity>
                 )}</NavItem>
               )}
+              {txShown && transcribeKey}
             </View></NavRow>
             {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
@@ -714,6 +769,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 ))}</OptRow>
               </View>
             )}
+            {txShown && transcribeCallout}
             {decoderControls.decMode === 'wefax' && (
               <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                                        : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
@@ -724,6 +780,18 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 ))}</OptRow>
               </View>
             )}
+          </View>
+        )}
+
+        {/* ★ TRANSCRIBE where the CLIENT DECODERS grid is not drawn (OpenWebRX, a receiver with nothing else to
+            decode): its own section under the same heading, so it is found in the same place everywhere. */}
+        {txShown && !(decSectionShown && decoderControls) && (
+          <View style={[dst.decWrap, rule]}>
+            <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
+              CLIENT DECODERS
+            </Text>
+            <NavRow><View style={st.grid}>{transcribeKey}</View></NavRow>
+            {transcribeCallout}
           </View>
         )}
 

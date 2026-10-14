@@ -620,7 +620,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   func feedExternalPcm(_ data: Data, sampleRate: Double, stereo: Bool) {
-    guard externalAudio, !isMuted, data.count >= 2 else { noteFeedRefused("pcm"); return }
+    guard externalAudio, !isMuted || VibeTranscribeTap.shared.armed, data.count >= 2 else { noteFeedRefused("pcm"); return }
     guard VibePowerModule.audioRateOK(sampleRate) else { noteFeedRefused("pcm rate \(sampleRate)"); return }
     let rate = max(8000, sampleRate)
     let ch2  = stereo                   // interleaved L,R (local WFM stereo)
@@ -667,7 +667,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     lastPacketAt = Date()
     if let out = convertTo48k(inBuf) {
       if recArmed { writeRecording(out) }   // OWRX/external audio recording
-      scheduleOut(out)
+      tapTranscriber(out)
+      // ★ Muted audio reaches here only for the on-device transcriber (feedExternal*'s gate) — never the speaker.
+      if !isMuted { scheduleOut(out) }
     }
   }
 
@@ -700,7 +702,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   func feedExternalOpus(_ pkt: Data, sampleRate: Int, channels: Int) {
-    guard externalAudio, !isMuted, pkt.count >= 3 else { noteFeedRefused("opus"); return }
+    guard externalAudio, !isMuted || VibeTranscribeTap.shared.armed, pkt.count >= 3 else { noteFeedRefused("opus"); return }
     guard VibePowerModule.audioRateOK(Double(sampleRate)) else { noteFeedRefused("opus rate \(sampleRate)"); return }
     let sr = Int32(max(8000, sampleRate))     // safe: ≤ 384000 after the guard above
     let ch = Int32(channels == 2 ? 2 : 1)
@@ -958,6 +960,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     guard let out = convertTo48k(inBuf) else { return }
     if recArmed { writeRecording(out) }
+    tapTranscriber(out)
     scheduleOut(out)
   }
 
@@ -1871,6 +1874,12 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   }
 
   /** audioQ-only — called from handlePacket with the converted 48 kHz buffer. */
+  /// ★ V12: the on-device transcriber hears what the listener hears — post-NR, squelch applied
+  ///   (VibeTranscriber.swift). audioQ; a copy and a hand-off, nothing more.
+  @inline(__always) private func tapTranscriber(_ buf: AVAudioPCMBuffer) {
+    if VibeTranscribeTap.shared.armed { VibeTranscribeTap.shared.feed(buf, silent: !squelchOpen) }
+  }
+
   private func writeRecording(_ buf: AVAudioPCMBuffer) {
     guard let f = recFile else { return }
     do { try f.write(from: buf) }
@@ -2028,7 +2037,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     // Recording must keep decoding through mutes (file taps the converter feed);
     // playback gating happens after conversion.
-    if !isMuted || recArmed {
+    if !isMuted || recArmed || VibeTranscribeTap.shared.armed {
       audioQ.async { self.handlePacket(data) }
     }
     return false
@@ -3053,6 +3062,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
     guard let outBuf = convertTo48k(inBuf) else { return }
     if recArmed { writeRecording(outBuf) }
+    tapTranscriber(outBuf)
     if !isMuted { scheduleOut(outBuf) }
   }
 

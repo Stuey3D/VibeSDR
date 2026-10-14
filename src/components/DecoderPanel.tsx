@@ -50,7 +50,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | null;
+                        | 'time' | 'transcribe' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -212,6 +212,8 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   // ★ Not "MSF" or "WWV" — the panel is the same control whichever station is being read, and the
   //   station itself appears in every line the decoder emits.
   time:    'TIME',
+  // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).
+  transcribe: 'TRANSCRIBE',
 };
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE — `dp` below is built

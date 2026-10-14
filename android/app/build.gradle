@@ -94,7 +94,7 @@ android {
         // ★ RC4 (530) is above every com.vibesdr.app APK ever released on GitHub (the last was RC3, 529), so the
         //   legacy build installs over a sideload; net.vibesdr.app starts its own sequence at the same number.
         versionCode 573
-        versionName "11.0.1"
+        versionName "12.0.0"
 
         // ★ The memory diagnostics build (VibeDiag.kt): `./gradlew -PvibeDiag=true :app:assembleCurrentRelease`.
         buildConfigField "boolean", "VIBE_DIAG", "${findProperty('vibeDiag') == 'true'}"
@@ -286,6 +286,8 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
     implementation("androidx.media:media:1.7.0")
+    // ★ V12 TRANSCRIBE: on-device translation (models download on Wi-Fi, on request — TranscribeEngine33).
+    implementation("com.google.mlkit:translate:17.0.3")
     // ★ 2026-10-05: media3-exoplayer / media3-session 1.4.1 removed. Nothing in this app imports
     //   androidx.media3 — VibeStreamService's lock-screen session is androidx.media (above) — and
     //   expo-audio brings its own media3 at the version IT was built against. A second, older pin

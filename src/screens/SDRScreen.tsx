@@ -210,6 +210,7 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
+import { transcribeCaps, startTranscribe, stopTranscribe, onTranscribe, COMMON_LANGS, pickLocale, type TranscribeCaps } from '../services/transcriber';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -4521,7 +4522,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -4601,7 +4602,56 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** What the running TIME decoder was actually attached AS, so a retune can notice a change. */
   const timeStationRef = useRef<string>('');
 
+  /* ★★★ TRANSCRIBE (V12, experimental) — ON-DEVICE speech-to-text of the audio we play, translated to the phone's
+   *  language when it is another one. Client-side, so every backend has it (OWRX included); UberSDR's STT key is the
+   *  server's whisper and is untouched. Offered only where the device can run it (transcribeCaps) — iOS 26+, Android
+   *  13+ with an on-device recogniser. Language: 'auto' (detect) or a locale id; target: a language code, '' = off. */
+  const [txCaps, setTxCaps] = useState<TranscribeCaps | null>(null);
+  const [txLang, setTxLang] = useState('auto');
+  const [txTo,   setTxTo]   = useState<string | null>(null);     // null = not loaded yet → the phone's language
+  useEffect(() => {
+    let dead = false;
+    transcribeCaps().then(c => { if (!dead) setTxCaps(c); });
+    AsyncStorage.multiGet(['lsv_tx_lang', 'lsv_tx_to']).then(kv => {
+      if (dead) return;
+      const l = kv[0]?.[1], t = kv[1]?.[1];
+      if (l) setTxLang(l);
+      if (t != null) setTxTo(t === 'off' ? '' : t);
+    }).catch(() => {});
+    return () => { dead = true; };
+  }, []);
+  const txTarget = txTo ?? (txCaps?.deviceLanguage ?? '');
+  const txTargetRef = useRef(txTarget); txTargetRef.current = txTarget;
+  const txLangRef = useRef(txLang); txLangRef.current = txLang;
+  /** The language the transcriber settled on (detected or chosen) — shown in the status line by the native side. */
+  /** The engine's own state line ("Listening — French (detected)") — a partial borrows the status row while speech is
+   *  being heard, and this comes back the moment the phrase is final. */
+  const txStateRef = useRef('');
+  useEffect(() => onTranscribe((e) => {
+    if (activeDecRef.current !== 'transcribe') return;
+    switch (e.type) {
+      case 'status':  txStateRef.current = e.text; queueDecoderStatus(e.text); break;
+      case 'error':   queueDecoderStatus(`⚠ ${e.text}`); setDecoding(false); break;
+      case 'partial': queueDecoderStatus(`… ${e.text}`); setDecoding(true); break;
+      case 'lang':    break;
+      case 'final': {
+        const tag = e.lang ? `[${e.lang}] ` : '';
+        const tr = e.translated && e.translated.trim() && e.translated.trim() !== e.text.trim()
+          ? `\n   → ${e.translated.trim()}` : '';
+        queueDecoderText(`${tag}${e.text}${tr}\n`);
+        if (txStateRef.current) queueDecoderStatus(txStateRef.current);
+        markDecodeOutput();
+        break;
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
+  useEffect(() => () => stopTranscribe(), []);
+
   const openDecoder = useCallback((type: DecoderType) => {
+    // ★ Leaving TRANSCRIBE for another decoder stops the native recogniser; entering it stops the socket decoder.
+    if (activeDecRef.current === 'transcribe' && type !== 'transcribe') stopTranscribe();
+    if (type === 'transcribe' && activeDecRef.current && activeDecRef.current !== 'transcribe') decoderClient.current?.stop();
     setActiveDecoder(type);
     activeDecRef.current = type;
     setDecoderText('');
@@ -4609,6 +4659,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDecoding(false);
     decoderImageRef.current?.reset();
     if (!type) return;
+    if (type === 'transcribe') {
+      setDecoderStatus('Starting on-device speech…');
+      startTranscribe(txLangRef.current, txTargetRef.current);
+      return;
+    }
     if (type === 'ft8') {
       // FT8 is not an audio extension — it's served instance-wide via the
       // Digital Spots feed (decoder_feed / digi spots APIs), not per-session.
@@ -4665,6 +4720,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [activeDecoder, status.frequency, timeStationPref, openDecoder]);
 
   const closeDecoder = useCallback(() => {
+    if (activeDecRef.current === 'transcribe') stopTranscribe();
     decoderClient.current?.stop();
     decoderImageRef.current?.reset();
     setActiveDecoder(null);
@@ -4697,7 +4753,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -11743,6 +11799,28 @@ export default function SDRScreen({ route, navigation }: Props) {
           dabAvail: dabCapable,
           dabOn,
           onDab: () => { markInteract(); setModeSelOpen(false); toggleDab(); },
+        } : null}
+        transcribeControls={txCaps?.available ? {
+          active: activeDecoder === 'transcribe',
+          selected: selDecoder === 'transcribe' && activeDecoder !== 'transcribe',
+          onToggle: () => onDecToggle('transcribe'),
+          language: txLang,
+          languages: COMMON_LANGS
+            .map(code => ({ code, id: pickLocale(txCaps, code) ?? '' }))
+            .filter(l => !!l.id),
+          onLanguage: (id: string) => {
+            setTxLang(id); txLangRef.current = id;
+            AsyncStorage.setItem('lsv_tx_lang', id).catch(() => {});
+            // ★ Applied at once while running, like TIME's station — a correction you SEE.
+            if (activeDecRef.current === 'transcribe') { setDecoderText(''); openDecoder('transcribe'); }
+          },
+          translateTo: txTarget,
+          deviceLanguage: txCaps.deviceLanguage ?? '',
+          onTranslateTo: (code: string) => {
+            setTxTo(code); txTargetRef.current = code;
+            AsyncStorage.setItem('lsv_tx_to', code || 'off').catch(() => {});
+            if (activeDecRef.current === 'transcribe') openDecoder('transcribe');
+          },
         } : null}
         spotsControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
           label: (isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS',

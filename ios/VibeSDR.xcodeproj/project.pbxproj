@@ -24,6 +24,8 @@
 		AA000001000000000000AAF3 /* FmdxMp3Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000001000000000000AAF1 /* FmdxMp3Decoder.swift */; };
 		AA000002000000000000CC0D /* VibeSDRWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = AA000002000000000000CC02 /* VibeSDRWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA000002000000000000EE13 /* VibeWatchModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE11 /* VibeWatchModule.swift */; };
+		AA000007000000000000FF13 /* VibeTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000FF11 /* VibeTranscriber.swift */; };
+		AA000007000000000000FF14 /* VibeTranscriber.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000007000000000000FF12 /* VibeTranscriber.m */; settings = {COMPILER_FLAGS = "-fno-modules"; }; };
 		AA000002000000000000EE14 /* VibeWatchModule.m in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE12 /* VibeWatchModule.m */; settings = {COMPILER_FLAGS = "-fno-modules"; }; };
 		AA000002000000000000EE33 /* WatchSpectrumForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */; };
 		AA000002000000000000F1977 /* WatchLinkCompat.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000002000000000000D1977 /* WatchLinkCompat.swift */; };
@@ -112,6 +114,8 @@
 		AA000002000000000000DD567 /* WatchLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLink.swift; sourceTree = "<group>"; };
 		AA000002000000000000DF874 /* SDRDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDRDirectory.swift; sourceTree = "<group>"; };
 		AA000002000000000000EE11 /* VibeWatchModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeWatchModule.swift; path = VibeSDR/VibeWatchModule.swift; sourceTree = "<group>"; };
+		AA000007000000000000FF11 /* VibeTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VibeTranscriber.swift; path = VibeSDR/VibeTranscriber.swift; sourceTree = "<group>"; };
+		AA000007000000000000FF12 /* VibeTranscriber.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VibeTranscriber.m; path = VibeSDR/VibeTranscriber.m; sourceTree = "<group>"; };
 		AA000002000000000000EE12 /* VibeWatchModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VibeWatchModule.m; path = VibeSDR/VibeWatchModule.m; sourceTree = "<group>"; };
 		AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WatchSpectrumForwarder.swift; path = VibeSDR/WatchSpectrumForwarder.swift; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = VibeSDR/SplashScreen.storyboard; sourceTree = "<group>"; };
@@ -155,6 +159,8 @@
 				AA000002000000000000EE11 /* VibeWatchModule.swift */,
 				AA000002000000000000EE31 /* WatchSpectrumForwarder.swift */,
 				AA000002000000000000EE12 /* VibeWatchModule.m */,
+				AA000007000000000000FF11 /* VibeTranscriber.swift */,
+				AA000007000000000000FF12 /* VibeTranscriber.m */,
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
 				F11748442D0722820044C1D9 /* VibeSDR-Bridging-Header.h */,
 				BB2F792B24A3F905000567C9 /* Supporting */,
@@ -530,6 +536,8 @@
 				AA000002000000000000EE13 /* VibeWatchModule.swift in Sources */,
 				AA000002000000000000EE33 /* WatchSpectrumForwarder.swift in Sources */,
 				AA000002000000000000EE14 /* VibeWatchModule.m in Sources */,
+				AA000007000000000000FF13 /* VibeTranscriber.swift in Sources */,
+				AA000007000000000000FF14 /* VibeTranscriber.m in Sources */,
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
 				59A08D71697B2308CF571DCA /* ExpoModulesProvider.swift in Sources */,
 			);
@@ -581,7 +589,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = VibeSDR/VibeSDR.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 253;
+				CURRENT_PROJECT_VERSION = 458;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -595,7 +603,7 @@
 					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.4;
-				MARKETING_VERSION = 11.0.1;
+				MARKETING_VERSION = 12.0.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -621,7 +629,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = VibeSDR/VibeSDR.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 253;
+				CURRENT_PROJECT_VERSION = 458;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				INFOPLIST_FILE = VibeSDR/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.4;
@@ -630,7 +638,7 @@
 					"@executable_path/Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.4;
-				MARKETING_VERSION = 11.0.1;
+				MARKETING_VERSION = 12.0.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -789,7 +797,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 253;
+				CURRENT_PROJECT_VERSION = 458;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VibeSDRWatch/Info.plist;
@@ -798,7 +806,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SDKROOT)/usr/lib/swift$(inherited)";
-				MARKETING_VERSION = 11.0.1;
+				MARKETING_VERSION = 12.0.0;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
@@ -821,7 +829,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 253;
+				CURRENT_PROJECT_VERSION = 458;
 				DEVELOPMENT_TEAM = 6PV2X6THHM;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VibeSDRWatch/Info.plist;
@@ -830,7 +838,7 @@
 					"@executable_path/Frameworks",
 				);
 				LIBRARY_SEARCH_PATHS = "$(SDKROOT)/usr/lib/swift$(inherited)";
-				MARKETING_VERSION = 11.0.1;
+				MARKETING_VERSION = 12.0.0;
 				OTHER_CFLAGS = "$(inherited)";
 				OTHER_CPLUSPLUSFLAGS = "$(inherited)";
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";

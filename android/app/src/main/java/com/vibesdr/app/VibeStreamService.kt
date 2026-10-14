@@ -1502,6 +1502,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         try { mine?.write(item.third, 0, item.third.size) }  // blocking = backpressure
                         catch (e: IllegalStateException) { Log.w(TAG, "ext AudioTrack gone mid-write: ${e.message}"); break }
                     }
+                    // ★ V12: the on-device transcriber — squelch applied (muted audio skips the gate above, so say so).
+                    VibeTranscribeTap.feed(item.third, item.third.size, item.first, item.second, !squelchOpen)
                     // Feed the recorder encoder (the UberSDR decode loop isn't
                     // running on this path, so recording is driven from here).
                     if (recArmed) {
@@ -2134,6 +2136,8 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         notchBytes(pcm, trackChannels)   // auto notch (network)
                         if (!squelchOpen) java.util.Arrays.fill(pcm, 0)  // squelch gate
                         if (recArmed) encodePcm(pcm)
+                        // ★ V12: the on-device transcriber hears what the listener hears (VibeTranscriberModule).
+                        VibeTranscribeTap.feedBytes(pcm, pcm.size, trackRate, trackChannels, false)
                         if (!muted) track?.write(pcm, 0, pcm.size)  // blocking = backpressure
                     }
                     c.releaseOutputBuffer(outIdx, false)

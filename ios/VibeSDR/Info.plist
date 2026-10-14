@@ -64,6 +64,8 @@
 	<string>VibeSDR uses local network access to scan for and connect to SDR servers on your network, such as RTL-TCP servers and local KiwiSDR, UberSDR or OpenWebRX receivers.</string>
 	<key>NSLocationDefaultAccuracyReduced</key>
 	<true/>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>TRANSCRIBE turns the radio audio you are listening to into text, entirely on this device. Nothing is sent anywhere.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>VibeSDR uses your approximate location to sort the SDR instance list by distance and to align the map for local SDR decodes. Location is optional — if you deny it, every other feature still works. Your location is coarsened and only used on-device for sorting.</string>
 	<key>RCTNewArchEnabled</key>

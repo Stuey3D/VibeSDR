@@ -37,7 +37,7 @@
 //       4. ios/VibeSDR.xcodeproj             MARKETING_VERSION x4 — the app AND the embedded
 //                                            Buddy watch app, which Apple requires to match
 //  ★ NOT spike/WristSDR: Jr is a SEPARATE APP on its own version train (1.5) and must not follow.
-export const APP_VERSION = '11.0.1';
+export const APP_VERSION = '12.0.0';
 
 /**
  * ★★ THE PRE-RELEASE LABEL, for the diagnostics header ONLY (2026-10-07). "app : 11.0" could not tell an
