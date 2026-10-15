@@ -39,6 +39,9 @@ class MainApplication : Application(), ReactApplication {
     }
 
     override fun onCreate() {
+        // ★ 2026-10-15: a Java crash leaves Android's exit record saying only "crash" — note it ourselves,
+        //   first, as the main app does. See VibeJavaCrash.
+        VibeJavaCrash.install(this)
         super.onCreate()
         // ★ 2026-10-07: names the build on this process's exit record, as the main app does, so Diagnostics
         //   says which Lite crashed — the morning after an update that matters. See VibeExitInfo.
