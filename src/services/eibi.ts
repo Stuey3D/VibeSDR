@@ -207,6 +207,11 @@ export async function loadActiveEibi(): Promise<ServerBookmark[]> {
 const EIBI_LANG_ISO: Record<string, string> = {
   A: 'ar', C: 'zh', CA: 'yue', D: 'de', E: 'en', F: 'fr', HI: 'hi', I: 'it', IN: 'id', J: 'ja', K: 'ko',
   M: 'zh', NL: 'nl', P: 'pt', PO: 'pl', R: 'ru', S: 'es', T: 'th', TU: 'tr', UK: 'uk', VN: 'vi',
+  // ★ Added 2026-10-15 — CRI's Czech hour on 7415 (CZ) gave AUTO no hint at all. A code the phone cannot transcribe
+  //   is dropped by the caller (`supported`), so listing it costs nothing.
+  CZ: 'cs', SK: 'sk', HU: 'hu', RO: 'ro', GR: 'el', SWE: 'sv', DA: 'da', NO: 'nb', FI: 'fi', HB: 'he', HR: 'hr',
+  SR: 'sr', BU: 'bg', CT: 'ca', FS: 'fa', ML: 'ms', UR: 'ur', BE: 'bn', TAM: 'ta', SWA: 'sw', LT: 'lt', LV: 'lv',
+  ES: 'et', AL: 'sq', BY: 'be', KZ: 'kk', AZ: 'az', GE: 'ka', IS: 'is', MA: 'mt',
 };
 
 /** ★ TRANSCRIBE's AUTO hint (Stuart, 2026-10-15: "if i tune to china radio chinese needs to be a language to test").

@@ -77,6 +77,11 @@ export const LANG_NAMES: Record<string, string> = {
   en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian', pt: 'Portuguese', nl: 'Dutch',
   ru: 'Russian', uk: 'Ukrainian', pl: 'Polish', tr: 'Turkish', ar: 'Arabic', zh: 'Mandarin', yue: 'Cantonese',
   ja: 'Japanese', ko: 'Korean', hi: 'Hindi', vi: 'Vietnamese', th: 'Thai', id: 'Indonesian', cmn: 'Mandarin',
+  cs: 'Czech', sk: 'Slovak', hu: 'Hungarian', ro: 'Romanian', el: 'Greek', sv: 'Swedish', da: 'Danish',
+  nb: 'Norwegian', no: 'Norwegian', fi: 'Finnish', he: 'Hebrew', hr: 'Croatian', sr: 'Serbian', bg: 'Bulgarian',
+  ca: 'Catalan', fa: 'Persian', ms: 'Malay', ur: 'Urdu', bn: 'Bengali', ta: 'Tamil', sw: 'Swahili',
+  lt: 'Lithuanian', lv: 'Latvian', et: 'Estonian', sq: 'Albanian', be: 'Belarusian', kk: 'Kazakh', az: 'Azerbaijani',
+  ka: 'Georgian', is: 'Icelandic', mt: 'Maltese',
 };
 /** A locale id or code ('zh-CN', 'yue', 'RU') → the name the box shows; anything unknown passes through. */
 export function langName(idOrCode: string | undefined): string {
