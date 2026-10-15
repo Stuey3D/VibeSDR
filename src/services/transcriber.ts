@@ -27,7 +27,7 @@ export type TranscribeEvent =
   | { type: 'status'; text: string }
   | { type: 'error'; text: string }
   | { type: 'partial'; text: string }
-  | { type: 'lang'; text: string; name: string }
+  | { type: 'lang'; text: string; name: string; detected?: boolean }
   | { type: 'final'; text: string; lang?: string; translated?: string };
 
 const Native: any = NativeModules.VibeTranscriber;
@@ -45,6 +45,15 @@ export function transcribeCaps(): Promise<TranscribeCaps> {
   return capsPromise as Promise<TranscribeCaps>;
 }
 
+/** Ask again (after a download) — the installed ticks change. */
+export function refreshTranscribeCaps(): Promise<TranscribeCaps> { capsPromise = null; return transcribeCaps(); }
+
+/** DOWNLOAD… — fetch a language's speech model (+ translation pack) without listening; { ok, text } for the row. */
+export function downloadTranscribeLanguage(language: string, translateTo: string): Promise<{ ok: boolean; text: string }> {
+  if (!Native?.download) return Promise.resolve({ ok: false, text: 'Not in this build' });
+  return Native.download(language, translateTo || '').catch((e: any) => ({ ok: false, text: String(e?.message ?? e) }));
+}
+
 export function startTranscribe(language: string, translateTo: string) { Native?.start?.(language || 'auto', translateTo || ''); }
 export function stopTranscribe() { Native?.stop?.(); }
 
@@ -54,8 +63,23 @@ export function onTranscribe(fn: (e: TranscribeEvent) => void): () => void {
   return () => sub.remove();
 }
 
-/** Short labels for the language row — the native list is long (dozens of locales); these are offered when present. */
-export const COMMON_LANGS = ['en', 'es', 'fr', 'de', 'it', 'pt', 'nl', 'ru', 'ar', 'zh', 'ja', 'ko', 'hi', 'tr', 'pl'];
+/** The language row — the native list is long (dozens of locales); these are offered when the device has them.
+ *  ★ Named, not ISO codes: Stuart looked for "CN" for China Radio and never saw "ZH" (2026-10-15). Mandarin and
+ *  Cantonese are separate rows because shortwave carries both (CRI, RTHK, the PBS regionals). */
+export const COMMON_LANGS = ['en', 'es', 'fr', 'de', 'it', 'pt', 'nl', 'ru', 'uk', 'pl', 'tr', 'ar',
+                             'zh', 'yue', 'ja', 'ko', 'hi', 'vi', 'th', 'id'];
+export const LANG_NAMES: Record<string, string> = {
+  en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian', pt: 'Portuguese', nl: 'Dutch',
+  ru: 'Russian', uk: 'Ukrainian', pl: 'Polish', tr: 'Turkish', ar: 'Arabic', zh: 'Mandarin', yue: 'Cantonese',
+  ja: 'Japanese', ko: 'Korean', hi: 'Hindi', vi: 'Vietnamese', th: 'Thai', id: 'Indonesian',
+};
+/** A locale id or code ('zh-CN', 'yue', 'RU') → the name the box shows; anything unknown passes through. */
+export function langName(idOrCode: string | undefined): string {
+  if (!idOrCode) return '';
+  return LANG_NAMES[idOrCode.toLowerCase().split(/[-_]/)[0]] ?? idOrCode;
+}
+/** Which region a bare code means when the device lists several (zh-HK / zh-TW are other variants). */
+const PREFERRED_REGION: Record<string, string> = { zh: 'cn', yue: 'cn' };
 
 /** The first native locale for a two-letter code ('en' → 'en-GB' on a British phone, if the list carries it). */
 export function pickLocale(caps: TranscribeCaps | null, code: string): string | null {
@@ -64,7 +88,9 @@ export function pickLocale(caps: TranscribeCaps | null, code: string): string | 
   if (!matches.length) return null;
   // Prefer an installed one, then the phone's own region.
   const region = (Intl as any)?.DateTimeFormat?.().resolvedOptions?.().locale?.split('-')[1];
-  return (matches.find(l => l.installed)
+  const pref = PREFERRED_REGION[code];
+  return (matches.find(l => pref && l.id.toLowerCase().endsWith(`-${pref}`))
+       ?? matches.find(l => l.installed)
        ?? matches.find(l => region && l.id.endsWith(region))
        ?? matches[0]).id;
 }

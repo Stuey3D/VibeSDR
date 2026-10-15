@@ -25,6 +25,7 @@ const SHEET_BG = 'rgba(8,6,1,0.97)';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
+import { LANG_NAMES } from '../services/transcriber';
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe';
 
@@ -290,7 +291,13 @@ interface ModeSelectorProps {
   transcribeControls?: {
     active: boolean; selected: boolean; onToggle: () => void;
     /** 'auto' or a locale id; the offered rows are AUTO + the common languages the device actually has. */
-    language: string; languages: { code: string; id: string }[]; onLanguage: (id: string) => void;
+    language: string; languages: { code: string; id: string; installed?: boolean }[]; onLanguage: (id: string) => void;
+    /** DOWNLOAD… — fetch a language for AUTO without listening (Stuart, 10-15). The id being fetched, and the last word. */
+    onDownload?: (id: string) => void; downloading?: string; downloadNote?: string;
+    /** The language being heard right now ('' when not running) — shown on the AUTO key as AUTO · MANDARIN. */
+    heard?: string;
+    /** iOS: AUTO only compares languages already on the phone — say so, or a new language looks unsupported. */
+    autoNote?: string;
     /** Translation target ('' = off) and the phone's language, the one target offered beside OFF / EN. */
     translateTo: string; deviceLanguage: string; onTranslateTo: (code: string) => void;
   } | null;
@@ -370,26 +377,49 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /* ★ The settings drop in under the key while it is selected, as RTTY's and TIME's do. AUTO detects the spoken
    *  language; a chosen language downloads its speech model once (the box says so). TRANSLATE offers OFF, the
    *  phone's own language and English — the target is what YOU read, so a long list would be noise. */
+  const [txDlOpen, setTxDlOpen] = useState(false);
   const txTargets = tc ? Array.from(new Set([tc.deviceLanguage, 'en'].filter(Boolean))) : [];
   const transcribeCallout = tc && txLit ? (
     <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                              : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
       <SubLabel label="LANGUAGE" />
       <OptRow>
-        <SegBtn label="AUTO" active={tc.language === 'auto'} onPress={() => tc.onLanguage('auto')} />
+        <SegBtn label={tc.language === 'auto' && tc.heard ? `AUTO · ${tc.heard.toUpperCase()}` : 'AUTO'}
+                active={tc.language === 'auto'} onPress={() => tc.onLanguage('auto')} />
         {tc.languages.map(l => (
-          <SegBtn key={l.id} label={l.code.toUpperCase()} active={tc.language === l.id} onPress={() => tc.onLanguage(l.id)} />
+          <SegBtn key={l.id} label={(LANG_NAMES[l.code] ?? l.code).toUpperCase()} active={tc.language === l.id} onPress={() => tc.onLanguage(l.id)} />
         ))}
+        {tc.onDownload && <SegBtn label="DOWNLOAD…" active={txDlOpen} onPress={() => setTxDlOpen(o => !o)} />}
       </OptRow>
+      {/* ★ The downloader: every language, ✓ = on the phone already. Tapping a missing one fetches its speech model
+       *  (and the translation pack, through the system's own sheet) so AUTO can pick it — no need to listen first. */}
+      {tc.onDownload && txDlOpen && (
+        <>
+          <SubLabel label="DOWNLOAD FOR AUTO" />
+          <OptRow>
+            {tc.languages.map(l => (
+              <SegBtn key={`dl-${l.id}`}
+                      label={`${l.installed ? '✓ ' : tc.downloading === l.id ? '… ' : ''}${(LANG_NAMES[l.code] ?? l.code).toUpperCase()}`}
+                      active={!!l.installed}
+                      onPress={() => { if (!l.installed) tc.onDownload!(l.id); }} />
+            ))}
+          </OptRow>
+          {!!tc.downloadNote && (
+            <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, marginTop: 4, textAlign: 'left' }, { color: t.btnText }]}>
+              {tc.downloadNote}
+            </Text>
+          )}
+        </>
+      )}
       <SubLabel label="TRANSLATE TO" />
       <OptRow>
         <SegBtn label="OFF" active={!tc.translateTo} onPress={() => tc.onTranslateTo('')} />
         {txTargets.map(c => (
-          <SegBtn key={c} label={c.toUpperCase()} active={tc.translateTo === c} onPress={() => tc.onTranslateTo(c)} />
+          <SegBtn key={c} label={(LANG_NAMES[c] ?? c).toUpperCase()} active={tc.translateTo === c} onPress={() => tc.onTranslateTo(c)} />
         ))}
       </OptRow>
       <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 6, textAlign: 'left' }, { color: t.btnText }]}>
-        On this device, free and private — nothing is sent anywhere. Clear speech works best; noisy SSB and airband will be patchy.
+        On this device, free and private — nothing is sent anywhere.{tc.autoNote ? ` ${tc.autoNote}` : ''} Clear speech works best; noisy SSB and airband will be patchy.
       </Text>
     </View>
   ) : null;

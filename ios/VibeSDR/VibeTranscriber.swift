@@ -96,8 +96,8 @@ class VibeTranscriber: RCTEventEmitter {
       guard SpeechTranscriber.isAvailable else {
         resolve(["available": false, "reason": "On-device speech recognition is not available on this device"]); return
       }
-      let supported = await SpeechTranscriber.supportedLocales
-      let installed = Set(await SpeechTranscriber.installedLocales.map { $0.identifier(.bcp47) })
+      let supported = await SpeechEngines.supportedLocales()
+      let installed = await SpeechEngines.installedIds()
       let here = Locale.current
       let langs: [[String: Any]] = supported
         .map { loc -> [String: Any] in
@@ -120,10 +120,84 @@ class VibeTranscriber: RCTEventEmitter {
     eng.start()
   }
 
+  /// ★ DOWNLOAD… in the language row (Stuart, 2026-10-15: "an option to pop up the language downloader ourselves").
+  /// Fetches a language's speech model without starting to listen — so AUTO can pick it from then on — and, when a
+  /// translation target is set, puts up Apple's own translation-pack sheet. Resolves { ok, text } for the box.
+  @objc func download(_ language: String, translateTo: String,
+                      resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard #available(iOS 26.0, *) else { resolve(["ok": false, "text": "Needs iOS 26 or later"]); return }
+    Task {
+      guard let loc = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: language)) else {
+        resolve(["ok": false, "text": "\(language) is not available for on-device speech"]); return
+      }
+      let code = loc.language.languageCode?.identifier ?? ""
+      let nm = Locale.current.localizedString(forLanguageCode: code) ?? code
+      let m = await SpeechEngines.module(for: loc)
+      do {
+        if await AssetInventory.status(forModules: [m]) != .installed {
+          _ = try? await AssetInventory.reserve(locale: loc)
+          if let req = try await AssetInventory.assetInstallationRequest(supporting: [m]) {
+            try await req.downloadAndInstall()
+          }
+        }
+      } catch {
+        resolve(["ok": false, "text": "Could not download \(nm): \(error.localizedDescription)"]); return
+      }
+      var text = "\(nm) is on this phone — AUTO can now pick it"
+      if !translateTo.isEmpty, code != translateTo {
+        let dst = Locale.Language(identifier: translateTo)
+        let dn = Locale.current.localizedString(forLanguageCode: translateTo) ?? translateTo
+        switch await LanguageAvailability().status(from: loc.language, to: dst) {
+        case .installed: text += ", translating to \(dn)"
+        case .supported:
+          let ok = await TranslationDownloadHost.request(source: loc.language, target: dst)
+          text += ok ? ", translating to \(dn)" : " (translation pack not downloaded)"
+        default: text += " (the phone cannot translate it to \(dn))"
+        }
+      }
+      resolve(["ok": true, "text": text])
+    }
+  }
+
   @objc func stop() {
     guard #available(iOS 26.0, *) else { return }
     (engineBox as? TranscribeEngine)?.stop()
     engineBox = nil
+  }
+}
+
+// MARK: - Speech engines
+
+/// ★ Apple has TWO on-device transcribers and they cover different languages. SpeechTranscriber (the newer, better
+/// model) has Mandarin, Cantonese, the Indian languages, English, French, German, Spanish, Italian, Japanese, Korean,
+/// Portuguese; DictationTranscriber adds Russian, Arabic, Turkish, Polish, Dutch, Ukrainian, Vietnamese, Thai and more.
+/// A language uses SpeechTranscriber when it can, DictationTranscriber otherwise — one list to the user.
+@available(iOS 26.0, *)
+enum SpeechEngines {
+  static func supportedLocales() async -> [Locale] {
+    var seen = Set<String>(), out: [Locale] = []
+    for l in await SpeechTranscriber.supportedLocales + DictationTranscriber.supportedLocales
+      where seen.insert(l.identifier(.bcp47)).inserted { out.append(l) }
+    return out
+  }
+  static func installedLocales() async -> [Locale] {
+    var seen = Set<String>(), out: [Locale] = []
+    for l in await SpeechTranscriber.installedLocales + DictationTranscriber.installedLocales
+      where seen.insert(l.identifier(.bcp47)).inserted { out.append(l) }
+    return out
+  }
+  static func installedIds() async -> Set<String> { Set(await installedLocales().map { $0.identifier(.bcp47) }) }
+  static func supportedLocale(equivalentTo l: Locale) async -> Locale? {
+    if let s = await SpeechTranscriber.supportedLocale(equivalentTo: l) { return s }
+    return await DictationTranscriber.supportedLocale(equivalentTo: l)
+  }
+  static func module(for loc: Locale) async -> any SpeechModule {
+    if await SpeechTranscriber.supportedLocale(equivalentTo: loc) != nil {
+      return SpeechTranscriber(locale: loc, transcriptionOptions: [], reportingOptions: [.volatileResults],
+                               attributeOptions: [.transcriptionConfidence])
+    }
+    return DictationTranscriber(locale: loc, contentHints: [], transcriptionOptions: [.punctuation],
+                                reportingOptions: [.volatileResults], attributeOptions: [.transcriptionConfidence])
   }
 }
 
@@ -133,6 +207,8 @@ class VibeTranscriber: RCTEventEmitter {
 final class TranscribeEngine {
   private weak var owner: VibeTranscriber?
   private let language: String
+  /// AUTO's EiBi hint ('auto:zh,tr' from JS): what the schedule says is on this frequency now — weighed first.
+  private let hints: [String]
   private let translateTo: String
   /// Everything below is touched only on `q`.
   private let q = DispatchQueue(label: "com.vibesdr.transcribe", qos: .utility)
@@ -147,7 +223,7 @@ final class TranscribeEngine {
 
   final class Lane {
     let locale: Locale
-    let transcriber: SpeechTranscriber
+    let transcriber: any SpeechModule
     let analyzer: SpeechAnalyzer
     let input: AsyncStream<AnalyzerInput>.Continuation
     let format: AVAudioFormat
@@ -155,7 +231,7 @@ final class TranscribeEngine {
     var tasks: [Task<Void, Never>] = []
     var confSum = 0.0, words = 0
     var finals: [String] = []
-    init(locale: Locale, transcriber: SpeechTranscriber, analyzer: SpeechAnalyzer,
+    init(locale: Locale, transcriber: any SpeechModule, analyzer: SpeechAnalyzer,
          input: AsyncStream<AnalyzerInput>.Continuation, format: AVAudioFormat) {
       self.locale = locale; self.transcriber = transcriber; self.analyzer = analyzer
       self.input = input; self.format = format
@@ -170,11 +246,22 @@ final class TranscribeEngine {
   }
 
   init(owner: VibeTranscriber, language: String, translateTo: String) {
-    self.owner = owner; self.language = language; self.translateTo = translateTo
+    self.owner = owner; self.translateTo = translateTo
+    if language.hasPrefix("auto:") {
+      self.language = "auto"
+      self.hints = language.dropFirst(5).split(separator: ",").map(String.init).filter { !$0.isEmpty }
+    } else {
+      self.language = language; self.hints = []
+    }
   }
 
   private func status(_ s: String) { owner?.emit(["type": "status", "text": s]) }
   private func name(_ l: Locale) -> String { Locale.current.localizedString(forIdentifier: l.identifier(.bcp47)) ?? l.identifier(.bcp47) }
+  /// The short name the box shows ("Chinese", "Cantonese", "Russian") — the region is noise there.
+  private func shortName(_ l: Locale) -> String {
+    let c = l.language.languageCode?.identifier ?? ""
+    return Locale.current.localizedString(forLanguageCode: c) ?? c.uppercased()
+  }
 
   func start() {
     Task { await self.begin() }
@@ -193,23 +280,33 @@ final class TranscribeEngine {
     status("Preparing on-device speech…")
     var cands: [Locale] = []
     if language != "auto" {
-      guard let l = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: language)) else {
+      guard let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: language)) else {
         owner?.emit(["type": "error", "text": "\(language) is not supported for on-device speech"]); return
       }
       cands = [l]
     } else {
-      // The phone's languages first (in the user's order), then any other model already installed.
+      // ★ EiBi's languages for this frequency first (fetched if missing — the box says so), then the phone's
+      //   languages (in the user's order), then any other model already installed.
       var seen = Set<String>()
+      var hinted = Set<String>()
+      for code in hints {
+        let want = code == "zh" ? "zh-CN" : code == "yue" ? "yue-CN" : code
+        if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: want)),
+           seen.insert(l.identifier(.bcp47)).inserted { cands.append(l); hinted.insert(l.identifier(.bcp47)) }
+      }
+      let phoneAt = cands.count
       for id in Locale.preferredLanguages {
-        if let l = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: id)),
+        if let l = await SpeechEngines.supportedLocale(equivalentTo: Locale(identifier: id)),
            seen.insert(l.identifier(.bcp47)).inserted { cands.append(l) }
       }
-      for l in await SpeechTranscriber.installedLocales where seen.insert(l.identifier(.bcp47)).inserted {
+      for l in await SpeechEngines.installedLocales() where seen.insert(l.identifier(.bcp47)).inserted {
         cands.append(l)
       }
       // ★ Only what is on the phone, plus the phone's own first language (downloaded if missing).
-      let installed = Set(await SpeechTranscriber.installedLocales.map { $0.identifier(.bcp47) })
-      cands = cands.enumerated().filter { $0.offset == 0 || installed.contains($0.element.identifier(.bcp47)) }.map { $0.element }
+      let installed = await SpeechEngines.installedIds()
+      cands = cands.enumerated().filter {
+        hinted.contains($0.element.identifier(.bcp47)) || $0.offset == phoneAt || installed.contains($0.element.identifier(.bcp47))
+      }.map { $0.element }
       cands = Array(cands.prefix(4))
     }
     guard !cands.isEmpty else { owner?.emit(["type": "error", "text": "No on-device speech language available"]); return }
@@ -220,9 +317,7 @@ final class TranscribeEngine {
   private func openLanes(_ cands: [Locale]) async {
     var made: [Lane] = []
     for loc in cands {
-      let t = SpeechTranscriber(locale: loc, transcriptionOptions: [],
-                                reportingOptions: [.volatileResults],
-                                attributeOptions: [.transcriptionConfidence])
+      let t = await SpeechEngines.module(for: loc)
       do {
         if await AssetInventory.status(forModules: [t]) != .installed {
           status("Downloading the \(name(loc)) speech model (once, then it works offline)…")
@@ -239,7 +334,11 @@ final class TranscribeEngine {
         let lane = Lane(locale: loc, transcriber: t, analyzer: a, input: cont, format: fmt)
         lane.tasks.append(Task { [weak self] in
           do {
-            for try await r in t.results { self?.q.async { self?.onResult(lane, r) } }
+            if let st = t as? SpeechTranscriber {
+              for try await r in st.results { self?.q.async { self?.onResult(lane, r.text, r.isFinal) } }
+            } else if let dt = t as? DictationTranscriber {
+              for try await r in dt.results { self?.q.async { self?.onResult(lane, r.text, r.isFinal) } }
+            }
           } catch {
             self?.q.async { self?.onLaneError(lane, error) }
           }
@@ -291,18 +390,18 @@ final class TranscribeEngine {
   }
 
   // q only
-  private func onResult(_ lane: Lane, _ r: SpeechTranscriber.Result) {
+  private func onResult(_ lane: Lane, _ rt: AttributedString, _ isFinal: Bool) {
     guard !stopped, lanes.contains(where: { $0 === lane }) else { return }
-    let text = String(r.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
-    if !r.isFinal {
+    let text = String(rt.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+    if !isFinal {
       if chosen === lane, !text.isEmpty { owner?.emit(["type": "partial", "text": text]) }
       return
     }
     guard !text.isEmpty else { return }
     var cs: [Double] = []
-    for run in r.text.runs {
+    for run in rt.runs {
       if let c = run[AttributeScopes.SpeechAttributes.ConfidenceAttribute.self] {
-        let w = r.text[run.range].characters.split(whereSeparator: { $0 == " " }).count
+        let w = rt[run.range].characters.split(whereSeparator: { $0 == " " }).count
         for _ in 0..<max(1, w) { cs.append(c) }
       }
     }
@@ -345,8 +444,9 @@ final class TranscribeEngine {
     chosen = lane
     recent.removeAll()
     let lang = lane.locale.language.languageCode?.identifier ?? ""
-    owner?.emit(["type": "lang", "text": lane.locale.identifier(.bcp47), "name": name(lane.locale)])
-    status("Listening — \(name(lane.locale))\(language == "auto" ? " (detected)" : "")")
+    owner?.emit(["type": "lang", "text": lane.locale.identifier(.bcp47), "name": shortName(lane.locale),
+                 "detected": language == "auto"])
+    status("Listening — \(shortName(lane.locale))\(language == "auto" ? " (detected)" : "")")
     translator = nil
     if !translateTo.isEmpty, lang != translateTo {
       let tr = Translator(source: lane.locale.language, target: Locale.Language(identifier: translateTo)) { [weak self] s in
@@ -368,7 +468,7 @@ final class TranscribeEngine {
 
   // q only
   private func deliver(_ text: String, lane: Lane) {
-    let lang = lane.locale.language.languageCode?.identifier.uppercased() ?? ""
+    let lang = shortName(lane.locale)
     guard let tr = translator else {
       owner?.emit(["type": "final", "text": text, "lang": lang]); return
     }

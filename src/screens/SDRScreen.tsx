@@ -190,7 +190,7 @@ import {
   type UserBookmark,
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
-import { loadActiveEibi } from '../services/eibi';
+import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
 import { tuneHintLabel } from '../utils/tuneHint';
@@ -210,7 +210,7 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
-import { transcribeCaps, startTranscribe, stopTranscribe, onTranscribe, COMMON_LANGS, pickLocale, type TranscribeCaps } from '../services/transcriber';
+import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, COMMON_LANGS, pickLocale, langName, type TranscribeCaps } from '../services/transcriber';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -4627,15 +4627,26 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** The engine's own state line ("Listening — French (detected)") — a partial borrows the status row while speech is
    *  being heard, and this comes back the moment the phrase is final. */
   const txStateRef = useRef('');
+  /** ★ The language it is hearing ("Mandarin", "Russian") — on the status row in front of every partial and on the
+   *  AUTO key, so a detection is always visible, not just for the moment its status line is up (Stuart, 10-15). */
+  const [txHeard, setTxHeard] = useState('');
+  /** DOWNLOAD… row: the locale being fetched, and what the last fetch said. */
+  const [txDl, setTxDl] = useState<{ id: string; note: string }>({ id: '', note: '' });
+  const txHeardRef = useRef(''); txHeardRef.current = txHeard;
   useEffect(() => onTranscribe((e) => {
     if (activeDecRef.current !== 'transcribe') return;
     switch (e.type) {
       case 'status':  txStateRef.current = e.text; queueDecoderStatus(e.text); break;
       case 'error':   queueDecoderStatus(`⚠ ${e.text}`); setDecoding(false); break;
-      case 'partial': queueDecoderStatus(`… ${e.text}`); setDecoding(true); break;
-      case 'lang':    break;
+      case 'partial': queueDecoderStatus(`${txHeardRef.current ? `${txHeardRef.current} · ` : ''}… ${e.text}`); setDecoding(true); break;
+      case 'lang': {
+        const n = langName(e.text) || e.name;
+        setTxHeard(n); txHeardRef.current = n;
+        queueDecoderText(`— ${n}${e.detected ? ' (detected)' : ''} —\n`);
+        break;
+      }
       case 'final': {
-        const tag = e.lang ? `[${e.lang}] ` : '';
+        const tag = e.lang ? `[${langName(e.lang)}] ` : '';
         const tr = e.translated && e.translated.trim() && e.translated.trim() !== e.text.trim()
           ? `\n   → ${e.translated.trim()}` : '';
         queueDecoderText(`${tag}${e.text}${tr}\n`);
@@ -4648,9 +4659,47 @@ export default function SDRScreen({ route, navigation }: Props) {
   }), []);
   useEffect(() => () => stopTranscribe(), []);
 
+  /* ★★ EiBi GUIDES AUTO (Stuart, 2026-10-15: "if i tune to china radio chinese needs to be a language to test …
+   *  Voice of Turkey turkish"). iOS can only weigh ~4 languages at once and has no detector of its own, so what EiBi
+   *  says is on air on THIS frequency NOW goes to the front of the list (fetched if not on the phone). Passed as
+   *  'auto:zh,yue' — the native side treats it as AUTO with those first. A retune to a station with other languages
+   *  restarts AUTO with the new hint; the text stays. Only with the EiBi schedule switched on (lsv_eibi_enabled). */
+  const txFreqRef = useRef(0); txFreqRef.current = status.frequency;
+  const txHintRef = useRef('');
+  const eibiOnRef = useRef(true);
+  const txLanguageArg = useCallback(async (): Promise<string> => {
+    const l = txLangRef.current;
+    if (l !== 'auto' || !eibiOnRef.current) { txHintRef.current = ''; return l; }
+    const h = await eibiLanguagesAt(txFreqRef.current).catch(() => ({ langs: [] as string[], station: '' }));
+    txHintRef.current = h.langs.join(',');
+    if (h.langs.length) queueDecoderText(`— EiBi: ${h.station} · ${h.langs.map(langName).join(', ')} —\n`);
+    return h.langs.length ? `auto:${txHintRef.current}` : 'auto';
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const startTxHinted = useCallback(() => {
+    txLanguageArg().then(arg => {
+      if (activeDecRef.current === 'transcribe') startTranscribe(arg, txTargetRef.current);
+    });
+  }, [txLanguageArg]);
+  useEffect(() => {
+    if (activeDecRef.current !== 'transcribe' || txLangRef.current !== 'auto' || !eibiOnRef.current) return;
+    const f = status.frequency;
+    const id = setTimeout(() => {
+      eibiLanguagesAt(f).then(h => {
+        if (activeDecRef.current !== 'transcribe' || txLangRef.current !== 'auto') return;
+        if (h.langs.join(',') === txHintRef.current) return;
+        setTxHeard('');
+        startTxHinted();
+      }).catch(() => {});
+    }, 1500);   // after the tune settles — a drum spin is not a station
+    return () => clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status.frequency]);
+
   const openDecoder = useCallback((type: DecoderType) => {
     // ★ Leaving TRANSCRIBE for another decoder stops the native recogniser; entering it stops the socket decoder.
     if (activeDecRef.current === 'transcribe' && type !== 'transcribe') stopTranscribe();
+    if (type === 'transcribe') setTxHeard('');
     if (type === 'transcribe' && activeDecRef.current && activeDecRef.current !== 'transcribe') decoderClient.current?.stop();
     setActiveDecoder(type);
     activeDecRef.current = type;
@@ -4661,7 +4710,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!type) return;
     if (type === 'transcribe') {
       setDecoderStatus('Starting on-device speech…');
-      startTranscribe(txLangRef.current, txTargetRef.current);
+      startTxHinted();
       return;
     }
     if (type === 'ft8') {
@@ -8896,6 +8945,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (some people find it too busy); used only when the backend has no server
   // bookmarks of its own. Persisted in lsv_eibi_enabled.
   const [eibiEnabled,   setEibiEnabled]   = useState(true);
+  eibiOnRef.current = eibiEnabled;
   const [eibiBookmarks, setEibiBookmarks] = useState<ServerBookmark[]>([]);
   useEffect(() => {
     AsyncStorage.getItem('lsv_eibi_enabled').then((v) => { if (v === '0') setEibiEnabled(false); }).catch(() => {});
@@ -11806,8 +11856,24 @@ export default function SDRScreen({ route, navigation }: Props) {
           onToggle: () => onDecToggle('transcribe'),
           language: txLang,
           languages: COMMON_LANGS
-            .map(code => ({ code, id: pickLocale(txCaps, code) ?? '' }))
+            .map(code => {
+              const id = pickLocale(txCaps, code) ?? '';
+              return { code, id, installed: !!txCaps.languages?.find(l => l.id === id)?.installed };
+            })
             .filter(l => !!l.id),
+          downloading: txDl.id,
+          downloadNote: txDl.note,
+          onDownload: (id: string) => {
+            if (txDl.id) return;
+            setTxDl({ id, note: `Downloading ${langName(id)}…` });
+            downloadTranscribeLanguage(id, txTargetRef.current).then(r => {
+              setTxDl({ id: '', note: r.text });
+              refreshTranscribeCaps().then(c => setTxCaps(c));
+            });
+          },
+          heard: activeDecoder === 'transcribe' ? txHeard : '',
+          autoNote: txCaps.nativeLanguageDetection ? undefined
+            : `AUTO tries ${eibiEnabled ? 'what the EiBi schedule lists for this frequency, then ' : ''}the languages already on this phone — DOWNLOAD… adds more.`,
           onLanguage: (id: string) => {
             setTxLang(id); txLangRef.current = id;
             AsyncStorage.setItem('lsv_tx_lang', id).catch(() => {});

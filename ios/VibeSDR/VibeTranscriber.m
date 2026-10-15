@@ -11,4 +11,10 @@ RCT_EXTERN_METHOD(start : (NSString *)language translateTo : (NSString *)transla
 
 RCT_EXTERN_METHOD(stop)
 
+RCT_EXTERN_METHOD(download
+                  : (NSString *)language translateTo
+                  : (NSString *)translateTo resolver
+                  : (RCTPromiseResolveBlock)resolve rejecter
+                  : (RCTPromiseRejectBlock)reject)
+
 @end

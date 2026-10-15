@@ -201,3 +201,29 @@ export async function loadActiveEibi(): Promise<ServerBookmark[]> {
   await ensureLoaded();
   return _entries ? activeNow(_entries) : [];
 }
+
+/* ★★ EiBi language codes → the ISO codes the on-device transcriber uses (EiBi README §language codes; checked
+ *  2026-10-15). Only languages the phones can transcribe are listed — the rest are no help to TRANSCRIBE. */
+const EIBI_LANG_ISO: Record<string, string> = {
+  A: 'ar', C: 'zh', CA: 'yue', D: 'de', E: 'en', F: 'fr', HI: 'hi', I: 'it', IN: 'id', J: 'ja', K: 'ko',
+  M: 'zh', NL: 'nl', P: 'pt', PO: 'pl', R: 'ru', S: 'es', T: 'th', TU: 'tr', UK: 'uk', VN: 'vi',
+};
+
+/** ★ TRANSCRIBE's AUTO hint (Stuart, 2026-10-15: "if i tune to china radio chinese needs to be a language to test").
+ *  iOS can only weigh ~4 languages at once, so what EiBi says is on THIS frequency NOW goes first. Within 2.5 kHz
+ *  (half a SW channel), on air now; nearest first. Returns ISO codes (no repeats) and the station EiBi names. */
+export async function eibiLanguagesAt(freqHz: number): Promise<{ langs: string[]; station: string }> {
+  await ensureLoaded();
+  if (!_entries || !(freqHz > 0)) return { langs: [], station: '' };
+  const near = activeNow(_entries)
+    .filter(b => Math.abs(b.frequency - freqHz) <= 2500)
+    .sort((a, b) => Math.abs(a.frequency - freqHz) - Math.abs(b.frequency - freqHz));
+  const langs: string[] = [];
+  for (const b of near) {
+    for (const c of (b.comment ?? '').toUpperCase().split(/[,/ ]+/)) {
+      const iso = EIBI_LANG_ISO[c.trim()];
+      if (iso && !langs.includes(iso)) langs.push(iso);
+    }
+  }
+  return { langs, station: near[0]?.name ?? '' };
+}

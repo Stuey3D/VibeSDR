@@ -43,9 +43,14 @@ import java.util.Locale
 class TranscribeEngine33(
     private val ctx: Context,
     private val mod: VibeTranscriberModule,
-    private val language: String,
+    languageArg: String,
     private val translateTo: String,
 ) {
+    /** 'auto:zh,tr' from JS = AUTO with EiBi's languages for this frequency weighed first. */
+    private val language = if (languageArg.startsWith("auto:")) "auto" else languageArg
+    private val hints = if (languageArg.startsWith("auto:"))
+        languageArg.substring(5).split(',').map { it.trim() }.filter { it.isNotEmpty() } else emptyList()
+    private var supported: List<String> = emptyList()
     companion object {
         private const val TAG = "VibeTranscribe"
 
@@ -96,6 +101,39 @@ class TranscribeEngine33(
                 Handler(Looper.getMainLooper()).postDelayed({ finish(emptyList(), emptySet()) }, 4000)
             }
         }
+
+        /** ★ DOWNLOAD… — the SYSTEM fetches the speech model (it shows its own progress); the translation pack follows
+         *  on Wi-Fi only, as when listening. Resolves at once with what was started, never waits on the system. */
+        fun download(ctx: Context, language: String, translateTo: String, p: Promise) {
+            Handler(Looper.getMainLooper()).post {
+                val dev = Locale.getDefault()
+                val nm = Locale.forLanguageTag(language).getDisplayLanguage(dev)
+                val res = Arguments.createMap()
+                val sr = try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) } catch (e: Throwable) { null }
+                if (sr == null) {
+                    res.putBoolean("ok", false); res.putString("text", "This phone has no on-device speech recogniser")
+                    p.resolve(res); return@post
+                }
+                try {
+                    sr.triggerModelDownload(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE, language))
+                } catch (e: Throwable) {
+                    Log.w(TAG, "triggerModelDownload $language", e)
+                }
+                Handler(Looper.getMainLooper()).postDelayed({ try { sr.destroy() } catch (_: Throwable) {} }, 2000)
+                var text = "Downloading $nm speech — Android shows its progress"
+                val src = TranslateLanguage.fromLanguageTag(language.substringBefore('-'))
+                val dst = if (translateTo.isEmpty()) null else TranslateLanguage.fromLanguageTag(translateTo)
+                if (src != null && dst != null && src != dst) {
+                    val tr = Translation.getClient(TranslatorOptions.Builder().setSourceLanguage(src).setTargetLanguage(dst).build())
+                    tr.downloadModelIfNeeded(DownloadConditions.Builder().requireWifi().build())
+                        .addOnCompleteListener { tr.close() }
+                    text += "; the translation pack follows on Wi-Fi"
+                }
+                res.putBoolean("ok", true); res.putString("text", text)
+                p.resolve(res)
+            }
+        }
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -122,6 +160,7 @@ class TranscribeEngine33(
                     object : RecognitionSupportCallback {
                         override fun onSupportResult(s: RecognitionSupport) {
                             installed = s.installedOnDeviceLanguages
+                            supported = s.supportedOnDeviceLanguages + s.installedOnDeviceLanguages
                             try { probe.destroy() } catch (_: Throwable) {}
                             open()
                         }
@@ -148,8 +187,20 @@ class TranscribeEngine33(
     }
 
     /** The recogniser's primary language: the chosen one, else the phone's (AUTO detects among the installed). */
+    /** The recogniser's tag for an EiBi hint ('zh' → zh-CN, 'yue' → a Cantonese tag), installed ones first. */
+    private fun hintTag(h: String): String? {
+        val pool = installed + supported
+        val base = pool.filter { it.substringBefore('-').equals(h, true) }
+        return when (h) {
+            "zh" -> base.firstOrNull { it.contains("CN", true) || it.contains("Hans", true) } ?: base.firstOrNull()
+            else -> base.firstOrNull()
+        }
+    }
+
     private fun primary(): String {
         if (language != "auto") return language
+        // ★ EiBi says what is on this frequency now — listen for that first (fetched by the system if missing).
+        hints.firstNotNullOfOrNull { hintTag(it) }?.let { return it }
         val dev = Locale.getDefault().toLanguageTag()
         return installed.firstOrNull { it.equals(dev, true) }
             ?: installed.firstOrNull { it.substringBefore('-').equals(Locale.getDefault().language, true) }
@@ -174,7 +225,7 @@ class TranscribeEngine33(
             // A segmented session runs until the audio source closes, reporting each segment — continuous captions.
             putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
             if (language == "auto" && Build.VERSION.SDK_INT >= 34 && installed.size > 1) {
-                val allowed = ArrayList(installed)
+                val allowed = ArrayList((hints.mapNotNull { hintTag(it) }.filter { installed.contains(it) } + installed).distinct())
                 putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, allowed)
                 putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)

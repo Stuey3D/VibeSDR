@@ -61,6 +61,16 @@ class VibeTranscriberModule(private val ctx: ReactApplicationContext) : ReactCon
         e.start()
     }
 
+    /** DOWNLOAD… in the language row — fetch a language's speech model (and translation pack) without listening. */
+    @ReactMethod
+    fun download(language: String, translateTo: String, p: Promise) {
+        if (Build.VERSION.SDK_INT < 33) {
+            val m = Arguments.createMap(); m.putBoolean("ok", false); m.putString("text", "Needs Android 13 or later")
+            p.resolve(m); return
+        }
+        TranscribeEngine33.download(ctx, language, translateTo, p)
+    }
+
     @ReactMethod
     fun stop() {
         if (Build.VERSION.SDK_INT >= 33) (engine as? TranscribeEngine33)?.stop()
