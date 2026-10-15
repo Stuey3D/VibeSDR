@@ -174,6 +174,10 @@ console.log('5. rotation stops');
 
 console.log('merge');
 ok(mergeSegments(['UMUARAMA', 'ALINE']) === 'UMUARAMA ALINE', 'no fusing on a single shared letter');
+  // ★ WLZX's scroller repeats the last few letters of the previous frame (Stuart, 2026-10-15, Advanced RDS).
+  ok(mergeSegments(['Smashing', 'ing pump', 'umpkins', 'ins cher']) === 'Smashing pumpkins cher',
+     `a 3-letter mid-word overlap merges ("${mergeSegments(['Smashing', 'ing pump', 'umpkins', 'ins cher'])}")`);
+  ok(mergeSegments(['UMUARAMA', 'MASSA']) === 'UMUARAMA MASSA', 'two shared letters do not fuse ("UMUARAMA MASSA")');
 ok(mergeSegments(['RADIO MA', 'ADIO MAS', 'DIO MASS']) === 'RADIO MASS', 'overlap merge');
 
 if (fails) { console.log(`\n${fails} FAILED`); process.exit(1); }

@@ -216,7 +216,18 @@ export function mergeSegments(segs: string[]): string {
     let o = Math.min(acc.length, s.length);
     const need = Math.max(3, Math.ceil(Math.min(acc.length, s.length) / 2));
     for (; o >= need; o--) if (acc.endsWith(s.slice(0, o))) break;
-    acc = o >= need ? acc + s.slice(o) : `${acc} ${s}`;
+    if (o < need) {
+      /* ★★ A SHORT OVERLAP THAT STARTS MID-WORD IS A SCROLLER TOO (Stuart, 2026-10-15, WLZX: "ing pump" / "umpkins" /
+       *    "ins cher" — each frame repeats the last few letters of the one before). 3+ characters (2 fused Kiko's
+       *    "UMUARAMA" + "MASSA" into "UMUARAMASSA"), and the earlier
+       *    piece's overlap begins INSIDE a word (a letter or digit before it) — "UMUARAMA" + "ALINE" share one 'A' at
+       *    a word start and stay apart. */
+      for (o = Math.min(acc.length - 1, s.length - 1, need - 1); o >= 3; o--) {
+        if (acc.endsWith(s.slice(0, o)) && /[\p{L}\p{N}]/u.test(acc[acc.length - o - 1])) break;
+      }
+      if (o < 3) o = 0;
+    }
+    acc = o > 0 ? acc + s.slice(o) : `${acc} ${s}`;
   }
   return acc;
 }
