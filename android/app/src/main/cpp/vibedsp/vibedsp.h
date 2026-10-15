@@ -3326,6 +3326,7 @@ private:
     bool  multipathValid_ = false; // ...and whether that residual means anything at this S/N
     bool  snrValid_ = false;       // is there a real pilot to measure the S/N against at all?
     const std::atomic<bool>* rdsExtWantedFlag_ = nullptr;   // see setRdsExtWantedFlag — nullptr = wanted
+    long long rdsExtSince_ = 0;   // channel samples since the last Advanced RDS snapshot — see demodTail_
     int    rdsFlagTp_ = -2, rdsFlagTa_ = -2, rdsFlagAf_ = -2;   // last rdsFlags sent (-2 = none yet)
     double rdsFlagAt_ = 0.0;                                     // when, steady seconds — see Callbacks::rdsFlags
     std::atomic<bool> resetReq_{false};      // see requestReset()

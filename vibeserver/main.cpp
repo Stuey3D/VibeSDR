@@ -1410,6 +1410,27 @@ int main(int argc, char** argv) {
      *  builds that the existing servers run never compile this. */
     setenv("VIBE_DSP_THREADS", "1", 0);
     setenv("VIBE_DAB_SPLIT",   "1", 0);
+#elif defined(__aarch64__) && defined(__linux__)
+    /* ★★★ AND ON A SMALL 64-BIT BOARD TOO (2026-10-16, the Portable). A Pi 3A+ (4x Cortex-A53 @ 1.4 GHz, and
+     *  1.2 GHz once warm) ran the whole receiver on ONE thread: IQ cleaning, a 32768-point spectrum FFT 80
+     *  times a second at 20 fps, then stereo, RDS, the resampler and Opus — the audio half waiting behind
+     *  the FFTs of every block. dspCpu sat at 100 with Advanced RDS open and the audio crackled (Stuart:
+     *  "advanced rds isnt usable on the pi3a+ … audio crackle even on standard WFM stereo"), while three
+     *  cores idled. The split the Pi 2 has had since 2026-09-19 puts the FFT on its own thread, which DROPS
+     *  a frame rather than delay the audio, and the demodulator on another.
+     *  ★ Only below 1.6 GHz — the same Pi 3-class line vsDecoderDefaultMax draws — so the Pi 500 and every
+     *    big 64-bit server keep the layout they have always run. The environment still wins. */
+    {
+        long maxKHz = 0;
+        if (FILE* f = std::fopen("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq", "r")) {
+            if (std::fscanf(f, "%ld", &maxKHz) != 1) maxKHz = 0;
+            std::fclose(f);
+        }
+        if (maxKHz > 0 && maxKHz < 1600000) {
+            setenv("VIBE_DSP_THREADS", "1", 0);
+            setenv("VIBE_DAB_SPLIT",   "1", 0);
+        }
+    }
 #endif
     // ★ Handled before everything else: it never starts a server, and it must work on a machine
     //   whose config is broken or absent — renaming a dongle is often what you do BEFORE setup.

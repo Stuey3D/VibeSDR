@@ -1407,7 +1407,15 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                     }
                 }
             }
-            if (wantRds && cb_.rdsExt && rdsExtWanted) {
+            /* ★★ AT THE PANEL'S PACE, NOT THE BLOCK'S (2026-10-16, the Portable: a Pi 3A+ read dspCpu 100 the
+             *  moment Advanced RDS opened, and the audio crackled). This snapshot — AF/EON/ODA merges, the eye
+             *  grids, the MPX spectrum, every vector copied again under rdsMtx by the shim — ran on EVERY demod
+             *  block, ~30 a second, on the audio thread, while the shim sends the panel at 6 Hz (rdsxLastAt).
+             *  Twelve a second keeps every sent panel at most one snapshot old; the rest was thrown away. */
+            rdsExtSince_ += nc;
+            const bool rdsExtDue = rdsExtSince_ >= (long long)(chFs_ / 12.0);
+            if (wantRds && cb_.rdsExt && rdsExtWanted && rdsExtDue) {
+                rdsExtSince_ = 0;
                 const RdsDecoder* d = rdsDemod_.best();
                 float xy[RdsDemod::kConstPts * 2];
                 const int np = rdsDemod_.constellation(xy, RdsDemod::kConstPts);
