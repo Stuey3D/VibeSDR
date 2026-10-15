@@ -77,6 +77,8 @@ export interface DecoderPanelProps {
   bottomOffset:  number;   // distance from bottom of screen (pillTop - 8)
   /** Clear the text output (skin CLR — text decoders only). */
   onClear?:      () => void;
+  /** ★ A line with one action key above the text (TRANSCRIBE: "this station is believed to be Mandarin … DOWNLOAD"). */
+  notice?:       { text: string; action?: string; onAction?: () => void } | null;
   /** ★ NAVTEX: the stream cut into messages (utils/navtex), fed by SDRScreen as text arrives. */
   navtex?:       NavtexAssembler | null;
   onClose:       () => void;
@@ -227,7 +229,7 @@ const FONT = DECODER_FONT;
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function DecoderPanel({
-  activeDecoder, decoderText, aircraft, decoderStatus, decoding,
+  activeDecoder, decoderText, aircraft, decoderStatus, decoding, notice,
   bottomOffset, onClear, onClose, navtex,
   imageRef, onImageStatus,
   morseQuality = 'all', onMorseQuality,
@@ -1418,6 +1420,16 @@ export default function DecoderPanel({
               </Text>
             )}
           </ScrollView>
+        )}
+        {!minimised && !isNavtex && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && !!notice && (
+          <View style={dp.adjRow}>
+            <Text style={[dp.output, { flex: 1, minWidth: 160, color: dc.output, fontFamily: FONT }]}>{notice.text}</Text>
+            {!!notice.action && !!notice.onAction && (
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel={notice.action} onPress={notice.onAction}>
+                <DecoderKeyLabel active style={dp.bigKeyTxt}>{notice.action}</DecoderKeyLabel>
+              </HBtn>
+            )}
+          </View>
         )}
         {!minimised && !isNavtex && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode && (
           <ScrollView
