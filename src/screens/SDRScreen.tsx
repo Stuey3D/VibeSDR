@@ -2353,6 +2353,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const withCall = (name: string | undefined): string | undefined => {
     const call = liveCallRef.current;
     if (!call || (name && !psStab.current.rotating)) return name;
+    // ★ A rotation that has not yet come round cleanly is only its latest piece (a PS carrying song titles takes the
+    //   length of the song to repeat): the derived call letters alone — clean, and what the bookmarks match on (WLZX).
+    if (!psStab.current.settled) return call;
     if (!name) return call;
     // ★ A rotation is KEPT (Stuart, 2026-10-08: "it should say Lazer 99.3 Playing Nirvana - In Bloom") — the call
     //   letters lead it unless it already carries them ("WLZX-FM").

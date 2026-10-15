@@ -131,6 +131,26 @@ console.log('3b. character scroller tuned in MID-WORD — the line must start at
   ok(bad === 0, `every tune-in point gives whole words (${bad} broken)`);
 }
 
+console.log('3c. PS carrying song titles, not yet repeating — UNSETTLED, never a jumble (WLZX, 2026-10-15)');
+{
+  // Was "-FM Lenny Kra tz Fly A ZX-FM Le y Kravan ah Rantz…": every piece heard, joined.
+  const pieces = ['WLZX-FM', 'Lenny Kr', 'avitz', 'Fly Away', 'Lenny Kr', 'Kra tz', 'Fly A', 'y Kravan', 'ah Rantz', 'ntz', 'After'];
+  const st = new PsStabiliser();
+  let t = 0, worst = 0, unsettled = true;
+  for (const p of pieces) {
+    const n = st.feed('pi:7455', p, t); t += 2000;
+    worst = Math.max(worst, n.split(' ').length);
+    if (t > 8000) unsettled = unsettled && st.rotating && !st.settled;
+  }
+  ok(unsettled, 'rotating, not settled — the caller shows the call letters (WLZX)');
+  ok(worst <= 2, `never more than one piece on show (widest ${worst} words)`);
+  // …and once the same song's pieces come round twice, it settles on the stitched name.
+  const loop = ['WLZX-FM', 'Linkin', 'Park', 'One Step', 'Closer', 'LAZER'];   // as Stuart's screenshot settled
+  const st2 = new PsStabiliser(); let t2 = 0, name = '';
+  for (let i = 0; i < 3 * loop.length; i++) { name = st2.feed('pi:7455', loop[i % loop.length], t2); t2 += 2000; }
+  ok(st2.settled && name.includes('One Step'), `settles once the cycle repeats ("${name}")`);
+}
+
 console.log('4. empty frames and station changes');
 {
   const st = new PsStabiliser();
