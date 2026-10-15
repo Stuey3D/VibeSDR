@@ -133,6 +133,8 @@ object VibeExitInfo {
                          val b = readCapped(s); log = TombstoneReader.logLines(b); TombstoneReader.describe(b) }
                      else null
                 6 -> e.traceInputStream?.let { anrExcerpt(String(readCapped(it), Charsets.UTF_8)) }
+                // ★ Android keeps no trace for a Java crash — VibeJavaCrash wrote one on the way down.
+                4 -> VibeJavaCrash.readFor(ctx, e.timestamp)
                 else -> null
             }
         } catch (t: Throwable) { "(trace unreadable: ${t.javaClass.simpleName}: ${t.message})" }
