@@ -291,9 +291,11 @@ interface ModeSelectorProps {
   transcribeControls?: {
     active: boolean; selected: boolean; onToggle: () => void;
     /** 'auto' or a locale id; the offered rows are AUTO + the common languages the device actually has. */
-    language: string; languages: { code: string; id: string; name: string; installed?: boolean }[]; onLanguage: (id: string) => void;
+    language: string; languages: { code: string; id: string; name: string; installed?: boolean; kept?: boolean }[]; onLanguage: (id: string) => void;
     /** DOWNLOAD… — fetch a language for AUTO without listening (Stuart, 10-15). The id being fetched, and the last word. */
     onDownload?: (id: string) => void; downloading?: string; downloadNote?: string;
+    /** iOS: give back the app's place for a language (rows with `kept`). */
+    onRemove?: (id: string) => void;
     /** The language being heard right now ('' when not running) — shown on the AUTO key as AUTO · MANDARIN. */
     heard?: string;
     /** iOS: AUTO only compares languages already on the phone — say so, or a new language looks unsupported. */
@@ -432,7 +434,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   ...(on ? { textShadowColor: pt.readoutGlow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null) }
               : { fontFamily: t.font, color: on ? dec : t.btnText };
             const side = l.id === 'auto' ? ''
-              : tc.downloading === l.id ? 'GETTING…' : l.installed ? 'ON PHONE' : tc.onDownload ? 'GET' : '';
+              : tc.downloading === l.id ? ((l as any).kept ? 'REMOVING…' : 'GETTING…') : l.installed ? 'ON PHONE' : tc.onDownload ? 'GET' : '';
+            /* ★ REMOVE (Stuart, 2026-10-15): iPhone keeps only a handful of speech languages per app, and a GET with every
+             *   place taken is refused — so a language holding a place can give it back here. iOS only (`kept`). */
+            const canRemove = !!(l as any).kept && !!tc.onRemove && tc.downloading !== l.id;
             return (
               <NavRow key={l.id}><MoreItem onPress={() => txPick(l.id)}
                 onReveal={() => {
@@ -454,6 +459,12 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   ) : (
                     <Text style={[st.txSide, { color: pt.metal ? pt.winText : t.btnText, opacity: 0.6 }]}>{side}</Text>
                   ))}
+                  {canRemove && (
+                    <TouchableOpacity hitSlop={8} onPress={() => tc.onRemove?.(l.id)} accessibilityLabel={`Remove ${l.name}`}
+                      style={[st.txGet, { marginLeft: 8, borderColor: pt.metal ? pt.winText : t.btnBorder }]}>
+                      <Text style={[st.txSide, { color: pt.metal ? pt.winText : t.btnText }]}>REMOVE</Text>
+                    </TouchableOpacity>
+                  )}
                 </TouchableOpacity>
               )}</MoreItem></NavRow>
             );

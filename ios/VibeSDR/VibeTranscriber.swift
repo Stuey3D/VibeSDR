@@ -98,11 +98,14 @@ class VibeTranscriber: RCTEventEmitter {
       }
       let supported = await SpeechEngines.supportedLocales()
       let installed = await SpeechEngines.installedIds()
+      let reserved = Set(await AssetInventory.reservedLocales.map { $0.identifier(.bcp47) })
       let here = Locale.current
       let langs: [[String: Any]] = supported
         .map { loc -> [String: Any] in
           let id = loc.identifier(.bcp47)
-          return ["id": id, "name": here.localizedString(forIdentifier: id) ?? id, "installed": installed.contains(id)]
+          // ★ `reserved` = one of the places Apple gives this app (REMOVE frees it); `installed` = the model is here.
+          return ["id": id, "name": here.localizedString(forIdentifier: id) ?? id, "installed": installed.contains(id),
+                  "reserved": reserved.contains(id)]
         }
         .sorted { ($0["name"] as! String) < ($1["name"] as! String) }
       resolve(["available": true, "deviceLanguage": Locale.current.language.languageCode?.identifier ?? "en",
@@ -137,7 +140,9 @@ class VibeTranscriber: RCTEventEmitter {
       let nm = Locale.current.localizedString(forLanguageCode: code) ?? code
       let m = await SpeechEngines.module(for: loc)
       do {
-        await SpeechEngines.reserve(loc, keeping: [loc.identifier(.bcp47)])
+        if let full = await SpeechEngines.reserve(loc) {
+          resolve(["ok": false, "text": full]); return
+        }
         if await AssetInventory.status(forModules: [m]) != .installed {
           if let req = try await AssetInventory.assetInstallationRequest(supporting: [m]) {
             try await req.downloadAndInstall()
@@ -159,6 +164,24 @@ class VibeTranscriber: RCTEventEmitter {
         }
       }
       resolve(["ok": true, "text": text])
+    }
+  }
+
+  /// ★ REMOVE in the language row (Stuart, 2026-10-15: "we need a remove button too as right now I try a download and
+  /// get the 5 limit warning"). Gives back this app's place for the language; iOS deletes the model itself when it
+  /// wants the space (Apple offers no "delete now"). Resolves { ok, text } for the box.
+  @objc func remove(_ language: String,
+                    resolver resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    guard #available(iOS 26.0, *) else { resolve(["ok": false, "text": "Needs iOS 26 or later"]); return }
+    Task {
+      let base = Locale(identifier: language).language.languageCode?.identifier ?? language
+      let nm = Locale.current.localizedString(forLanguageCode: base) ?? base
+      var n = 0
+      for l in await AssetInventory.reservedLocales where l.language.languageCode?.identifier == base {
+        if await AssetInventory.release(reservedLocale: l) { n += 1 }
+      }
+      resolve(n > 0 ? ["ok": true, "text": "\(nm) removed — iOS deletes the model when it needs the space"]
+                    : ["ok": false, "text": "\(nm) was not kept by this app"])
     }
   }
 
@@ -194,31 +217,23 @@ enum SpeechEngines {
     if let s = await SpeechTranscriber.supportedLocale(equivalentTo: l) { return s }
     return await DictationTranscriber.supportedLocale(equivalentTo: l)
   }
-  /* ★★★ APPLE KEEPS AT MOST `maximumReservedLocales` SPEECH LANGUAGES (5 on this Mac's SDK) — its limit, not ours
-   *  (Stuart, 2026-10-15: "is the limit of downloaded languages set by apple … I would like to download them all").
-   *  reserve() past the limit fails, and the download with it. So the least recently USED reservation is released
-   *  to make room — never one this request needs. A released language may be cleared by iOS later; choosing it
-   *  again simply fetches it again. Last use is kept in UserDefaults (id → time). */
-  private static let lruKey = "vibeTxLangLastUsed"
-  static func touch(_ loc: Locale) {
-    var m = UserDefaults.standard.dictionary(forKey: lruKey) as? [String: Double] ?? [:]
-    m[loc.identifier(.bcp47)] = Date().timeIntervalSince1970
-    UserDefaults.standard.set(m, forKey: lruKey)
-  }
-  static func reserve(_ loc: Locale, keeping keep: Set<String>) async {
+  /* ★★★ APPLE KEEPS AT MOST `maximumReservedLocales` SPEECH LANGUAGES PER APP (5 on this Mac's SDK) — its limit, not
+   *  ours (Stuart, 2026-10-15: "is the limit of downloaded languages set by apple"). reserve() past it fails. Nothing
+   *  is swapped out behind the user's back (each model is 300–450 MB): when the places are full, this says so and the
+   *  user REMOVEs one in the language list. Returns nil when the language has a place, else the reason it cannot. */
+  static func reserve(_ loc: Locale) async -> String? {
     let id = loc.identifier(.bcp47)
     let held = await AssetInventory.reservedLocales
-    if held.contains(where: { $0.identifier(.bcp47) == id }) { touch(loc); return }
+    if held.contains(where: { $0.identifier(.bcp47) == id }) { return nil }
     if held.count >= AssetInventory.maximumReservedLocales {
-      let used = UserDefaults.standard.dictionary(forKey: lruKey) as? [String: Double] ?? [:]
-      if let victim = held.filter({ !keep.contains($0.identifier(.bcp47)) })
-                          .min(by: { (used[$0.identifier(.bcp47)] ?? 0) < (used[$1.identifier(.bcp47)] ?? 0) }) {
-        NSLog("[VibeTranscriber] releasing %@ to make room for %@", victim.identifier, id)
-        _ = await AssetInventory.release(reservedLocale: victim)
-      }
+      // ★ A model the system already has (e.g. the phone's own language) still runs without one of our places.
+      if await installedIds().contains(id) { return nil }
+      let names = held.compactMap { $0.language.languageCode?.identifier }
+                      .map { Locale.current.localizedString(forLanguageCode: $0) ?? $0 }.joined(separator: ", ")
+      return "iPhone keeps \(AssetInventory.maximumReservedLocales) speech languages for this app (\(names)) — REMOVE one in the language list first"
     }
     _ = try? await AssetInventory.reserve(locale: loc)
-    touch(loc)
+    return nil
   }
   static func module(for loc: Locale) async -> any SpeechModule {
     if await SpeechTranscriber.supportedLocale(equivalentTo: loc) != nil {
@@ -350,13 +365,21 @@ final class TranscribeEngine {
       for l in await SpeechEngines.installedLocales() where seen.insert(l.identifier(.bcp47)).inserted {
         cands.append(l)
       }
-      // ★ Only what is on the phone, plus the phone's own first language (downloaded if missing).
+      _ = phoneAt
+      /* ★★ AUTO TESTS ONLY WHAT IS ALREADY ON THE PHONE (Stuart, 2026-10-15). A speech model is 300–450 MB, so probing
+       *    by download could pull a gigabyte over mobile data and churn Apple's handful of places. A likely language
+       *    that is not here is SAID instead — the user GETs it when and where it suits them. */
       let installed = await SpeechEngines.installedIds()
-      cands = cands.enumerated().filter {
-        hinted.contains($0.element.identifier(.bcp47)) || $0.offset == phoneAt || installed.contains($0.element.identifier(.bcp47))
-      }.map { $0.element }
+      let missing = cands.filter { hinted.contains($0.identifier(.bcp47)) && !installed.contains($0.identifier(.bcp47)) }
+      if !missing.isEmpty {
+        let names = missing.map { shortName($0) }.joined(separator: " or ")
+        owner?.emit(["type": "tried", "text": "This is probably \(names), which is not on this phone — GET it in the LANGUAGE list (about 300–450 MB, best on Wi-Fi)"])
+      }
+      cands = cands.filter { installed.contains($0.identifier(.bcp47)) }
     }
-    guard !cands.isEmpty else { owner?.emit(["type": "error", "text": "No on-device speech language available"]); return }
+    guard !cands.isEmpty else {
+      owner?.emit(["type": "error", "text": "No speech language is on this phone yet — GET one in the LANGUAGE list"]); return
+    }
     candidates = cands
     round = 0; bestSeen = nil
     await openRound()
@@ -374,8 +397,13 @@ final class TranscribeEngine {
     for loc in cands {
       let t = await SpeechEngines.module(for: loc)
       do {
-        await SpeechEngines.reserve(loc, keeping: Set(cands.map { $0.identifier(.bcp47) }))
+        if let full = await SpeechEngines.reserve(loc) {
+          if cands.count == 1 { owner?.emit(["type": "error", "text": full]); return }
+          continue
+        }
         if await AssetInventory.status(forModules: [t]) != .installed {
+          // ★ AUTO never downloads (Stuart, 10-15 — 300–450 MB each); only a language the user CHOSE gets here.
+          if probe { continue }
           status("Downloading the \(shortName(loc)) speech model (once, then it works offline)…")
           if let req = try await AssetInventory.assetInstallationRequest(supporting: [t]) {
             try await req.downloadAndInstall()

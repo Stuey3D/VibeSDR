@@ -12,7 +12,7 @@
  */
 import { NativeEventEmitter, NativeModules } from 'react-native';
 
-export interface TranscribeLanguage { id: string; name: string; installed?: boolean }
+export interface TranscribeLanguage { id: string; name: string; installed?: boolean; /** iOS: holds one of the app's places (REMOVE frees it). */ reserved?: boolean }
 export interface TranscribeCaps {
   available: boolean;
   reason?: string;
@@ -59,6 +59,12 @@ export function refreshTranscribeCaps(): Promise<TranscribeCaps> { capsPromise =
 export function downloadTranscribeLanguage(language: string, translateTo: string): Promise<{ ok: boolean; text: string }> {
   if (!Native?.download) return Promise.resolve({ ok: false, text: 'Not in this build' });
   return Native.download(language, translateTo || '').catch((e: any) => ({ ok: false, text: String(e?.message ?? e) }));
+}
+
+/** REMOVE — give back the app's place for a language (iOS only; Android has no such limit and draws no button). */
+export function removeTranscribeLanguage(language: string): Promise<{ ok: boolean; text: string }> {
+  if (!Native?.remove) return Promise.resolve({ ok: false, text: 'Not in this build' });
+  return Native.remove(language).catch((e: any) => ({ ok: false, text: String(e?.message ?? e) }));
 }
 
 export function startTranscribe(language: string, translateTo: string) { Native?.start?.(language || 'auto', translateTo || ''); }
@@ -118,20 +124,21 @@ export function pickLocale(caps: TranscribeCaps | null, code: string): string | 
  *  ★★ A ROW IS A LANGUAGE, NOT A VARIANT: `id` is the code ('fr') and that is what is chosen and stored. The variant
  *     (`locale`) is worked out when it is used — keying rows on the variant id lost the tick whenever the variant
  *     pickLocale preferred changed (after a download), which read as "the language will not select". */
-export function transcribeLanguageList(caps: TranscribeCaps | null): { code: string; id: string; locale: string; name: string; installed: boolean }[] {
+export function transcribeLanguageList(caps: TranscribeCaps | null): { code: string; id: string; locale: string; name: string; installed: boolean; kept: boolean }[] {
   const bases = new Map<string, string>();   // base code → native name (region stripped)
   for (const l of caps?.languages ?? []) {
     const base = baseOf(l.id);
     if (base === 'mul') continue;            // Apple's "multiple languages of India" model — not a language to choose
     if (!bases.has(base)) bases.set(base, (l.name || base).replace(/\s*\(.*\)\s*$/, ''));
   }
-  const out: { code: string; id: string; locale: string; name: string; installed: boolean }[] = [];
+  const out: { code: string; id: string; locale: string; name: string; installed: boolean; kept: boolean }[] = [];
   for (const [code, native] of bases) {
     const locale = pickLocale(caps, code);
     if (!locale) continue;
     // ON PHONE: any variant of the language — the speech model is the language's.
     const installed = !!caps?.languages?.some(l => baseOf(l.id) === code && l.installed);
-    out.push({ code, id: code, locale, name: LANG_NAMES[code] ?? native, installed });
+    const kept = !!caps?.languages?.some(l => baseOf(l.id) === code && l.reserved);
+    out.push({ code, id: code, locale, name: LANG_NAMES[code] ?? native, installed, kept });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }

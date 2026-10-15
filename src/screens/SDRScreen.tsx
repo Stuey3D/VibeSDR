@@ -211,7 +211,7 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
-import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, type TranscribeCaps } from '../services/transcriber';
+import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, removeTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, type TranscribeCaps } from '../services/transcriber';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -11906,12 +11906,21 @@ export default function SDRScreen({ route, navigation }: Props) {
               refreshTranscribeCaps().then(c => setTxCaps(c));
             });
           },
+          // ★ iOS only: a language holding one of Apple's places can give it back (Stuart, 10-15).
+          onRemove: (id: string) => {
+            if (txDl.id) return;
+            setTxDl({ id, note: `Removing ${langName(id)}…` });
+            removeTranscribeLanguage(pickLocale(txCaps, id) ?? id).then(r => {
+              setTxDl({ id: '', note: r.text });
+              refreshTranscribeCaps().then(c => setTxCaps(c));
+            });
+          },
           heard: activeDecoder === 'transcribe' ? txHeard : '',
           /* ★ Said where the user chooses (Stuart, 10-15: "Advise users that on iOS auto … can only try 4 languages at
            *   once and may take a while"). Android 14+ detects natively and needs no note. */
           autoNote: txCaps.nativeLanguageDetection ? undefined
             : Platform.OS === 'ios'
-              ? `On iPhone AUTO can only listen for 4 languages at once. It starts with the 4 most likely — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, then ' : ''}the main language around the receiver and the area’s other languages — then tries your phone’s languages and the others marked ON PHONE, four at a time, so it can take a while; the box shows each try. Once it settles, the runner-up keeps listening and takes over if it fits the audio better. Retuning or CLR detects again. Choosing the language yourself is instant; GET adds a language to AUTO’s list (iPhone keeps ${txCaps.maxLanguages ?? 'a few'} at a time and swaps out the least used).`
+              ? `On iPhone AUTO can only listen for 4 languages at once. It starts with the 4 most likely that are ON PHONE — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, then ' : ''}the main language around the receiver and the area’s other languages — then tries your phone’s languages and the rest marked ON PHONE, four at a time, so it can take a while; the box shows each try. Once it settles, the runner-up keeps listening and takes over if it fits the audio better. Retuning or CLR detects again. AUTO only tries languages ON PHONE and never downloads — each is 300–450 MB, so GET one on Wi-Fi and it joins AUTO’s list. iPhone keeps ${txCaps.maxLanguages ?? 'a few'} per app; REMOVE frees a place.`
               : `On this phone AUTO listens in the most likely language — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, else ' : ''}the main language around the receiver. Choose the language yourself for anything else.`,
           onLanguage: (id: string) => {
             setTxLang(id); txLangRef.current = id;
