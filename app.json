@@ -2,7 +2,7 @@
   "expo": {
     "name": "VibeSDR",
     "slug": "VibeSDR",
-    "version": "11.0.1",
+    "version": "11.0.2",
     "scheme": [
       "vibesdr",
       "sdr"
