@@ -1026,6 +1026,13 @@ const DotUnit = React.memo(function DotUnit({ unit, freqDotFont, columnW }: {
  * never changes the deck's height; the tubes and cells shrink into it, the window does not grow.
  * ★ The unit label has a FIXED width, so kHz / MHz / Hz cannot shift the digits beside it (§7 TRAP).
  */
+/* ★★★ THE DISPLAY IGNORES THE PHONE'S FONT-SIZE SETTING, AS THE DRAWN ONES DO (S10 report, 2026-10-15: the default
+ *  display's frequency shrank to a speck; Nixie / analogue fine). Its size is already worked out from the window.
+ *  With Android's font size turned up, the digits came out bigger than their box. Android's shrink-to-fit then
+ *  stepped the font down, but the fixed lineHeight does not shrink with it, so the box never fitted and the text
+ *  fell to RN's 4 dp floor. Nixie tubes are drawn, never typeset, so they never saw the setting. minimumFontScale bounds
+ *  any other squeeze: a clipped digit reads, a speck does not. */
+const DISPLAY_TEXT = { allowFontScaling: false, minimumFontScale: 0.6 } as const;
 function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFontSize, pillPadH, pillPadV, gap, shared,
   winH, land = false, fill = false }: {
   freqStr: string; unit: string; chanTag: string | null; freqFontSize: number; freqWidth: number;
@@ -1125,7 +1132,7 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
             textShadowColor: dk.freqGlow, textShadowRadius: 5,
             fontSize: dotFont,
             lineHeight: H, includeFontPadding: false,
-          }]} numberOfLines={1} adjustsFontSizeToFit>
+          }]} numberOfLines={1} adjustsFontSizeToFit {...DISPLAY_TEXT}>
             {freqStr}
           </Text>
         </View>
@@ -1563,22 +1570,22 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
           // whole meter frame, hiding the signal ring around it
           lineHeight: Math.round(freqFontSize * 1.12),
           includeFontPadding: false,
-        }]} numberOfLines={1} adjustsFontSizeToFit>
+        }]} numberOfLines={1} adjustsFontSizeToFit {...DISPLAY_TEXT}>
           {freqStr}
         </Text>
         {chanTag ? (
           <View style={pm.chanCol}>
             <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.freqFont,
                           fontSize: Math.max(8, Math.round(unitFontSize * 0.72)) }]}
-                  numberOfLines={1}>
+                  numberOfLines={1} {...DISPLAY_TEXT}>
               {chanTag}
             </Text>
-            <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]} numberOfLines={1}>
+            <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]} numberOfLines={1} {...DISPLAY_TEXT}>
               {unit}
             </Text>
           </View>
         ) : (
-          <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]} numberOfLines={1}>
+          <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFontSize }]} numberOfLines={1} {...DISPLAY_TEXT}>
             {unit}
           </Text>
         )}
@@ -1671,17 +1678,17 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
               color: dk.freq, fontSize: digit, fontFamily: dk.freqFont, textShadowColor: dk.freqGlow,
               letterSpacing: dk.freqSpacing, lineHeight: Math.round(digit * 1.12), includeFontPadding: false,
               flexShrink: 1,
-            }]} numberOfLines={1} adjustsFontSizeToFit>
+            }]} numberOfLines={1} adjustsFontSizeToFit {...DISPLAY_TEXT}>
               {freqStr}
             </Text>
             <View style={[pm.chanCol, { paddingBottom: L ? Math.max(2, Math.round(dl.freqH * 0.16)) : s.r(7), alignSelf: 'stretch' }]}>
               {chanTag ? (
                 <Text style={[pm.chanTag, { color: dk.unit, fontFamily: dk.freqFont,
-                              fontSize: Math.max(8, Math.round(unitFont * 0.72)) }]} numberOfLines={1}>
+                              fontSize: Math.max(8, Math.round(unitFont * 0.72)) }]} numberOfLines={1} {...DISPLAY_TEXT}>
                   {chanTag}
                 </Text>
               ) : null}
-              <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFont, paddingBottom: 0 }]} numberOfLines={1}>
+              <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.freqFont, fontSize: unitFont, paddingBottom: 0 }]} numberOfLines={1} {...DISPLAY_TEXT}>
                 {unit}
               </Text>
             </View>
