@@ -11867,8 +11867,12 @@ export default function SDRScreen({ route, navigation }: Props) {
             });
           },
           heard: activeDecoder === 'transcribe' ? txHeard : '',
+          /* ★ Said where the user chooses (Stuart, 10-15: "Advise users that on iOS auto … can only try 4 languages at
+           *   once and may take a while"). Android 14+ detects natively and needs no note. */
           autoNote: txCaps.nativeLanguageDetection ? undefined
-            : `AUTO tries ${eibiEnabled ? 'what the EiBi schedule lists for this frequency, then ' : ''}the languages already on this phone — GET in the list adds more.`,
+            : Platform.OS === 'ios'
+              ? `On iPhone AUTO can only listen for 4 languages at once, so it tries them in rounds of four — ${eibiEnabled ? 'what the EiBi schedule lists for this frequency first, then ' : ''}your phone’s languages, then the others marked ON PHONE — and can take a while to find the right one. Choosing the language yourself is instant; GET adds a language to AUTO’s list.`
+              : `On this phone AUTO listens in ${eibiEnabled ? 'the language the EiBi schedule lists for this frequency, else ' : ''}your phone’s language — choose the language yourself for anything else.`,
           onLanguage: (id: string) => {
             setTxLang(id); txLangRef.current = id;
             AsyncStorage.setItem('lsv_tx_lang', id).catch(() => {});

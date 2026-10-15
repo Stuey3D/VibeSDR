@@ -219,6 +219,16 @@ final class TranscribeEngine {
   private var stopped = false
   private var recent: [Double] = []        // per-word confidence of the chosen lane, for re-detect
   private var candidates: [Locale] = []
+  /* ★★ ROUNDS OF FOUR (Stuart, 2026-10-15). Apple has no language identifier and running more than ~4 models at once
+   *    is too much for a phone, so AUTO tries the pool four at a time — EiBi's languages for this frequency, then the
+   *    phone's, then every other language ON PHONE — and moves on when no lane in a round is convincing. After the
+   *    last round it settles on the most confident language heard in ANY round. The pool is the user's to shape:
+   *    GET in the language list adds a language to it. */
+  private static let laneCap = 4
+  private static let convincing = 0.55        // mean word confidence that ends the search early
+  private var round = 0
+  private var bestSeen: (locale: Locale, conf: Double)?
+  private var rounds: Int { max(1, (candidates.count + Self.laneCap - 1) / Self.laneCap) }
   private var translator: Translator?
 
   final class Lane {
@@ -307,14 +317,21 @@ final class TranscribeEngine {
       cands = cands.enumerated().filter {
         hinted.contains($0.element.identifier(.bcp47)) || $0.offset == phoneAt || installed.contains($0.element.identifier(.bcp47))
       }.map { $0.element }
-      cands = Array(cands.prefix(4))
     }
     guard !cands.isEmpty else { owner?.emit(["type": "error", "text": "No on-device speech language available"]); return }
     candidates = cands
-    await openLanes(cands)
+    round = 0; bestSeen = nil
+    await openRound()
   }
 
-  private func openLanes(_ cands: [Locale]) async {
+  /// The current round's slice of the pool, probed side by side (a single explicit language is just chosen).
+  private func openRound() async {
+    let lo = round * Self.laneCap, hi = min(candidates.count, lo + Self.laneCap)
+    guard lo < hi else { return }
+    await openLanes(Array(candidates[lo..<hi]), probe: candidates.count > 1)
+  }
+
+  private func openLanes(_ cands: [Locale], probe: Bool) async {
     var made: [Lane] = []
     for loc in cands {
       let t = await SpeechEngines.module(for: loc)
@@ -356,11 +373,15 @@ final class TranscribeEngine {
     q.async {
       guard !self.stopped else { made.forEach { $0.shutdown() }; return }
       self.lanes = made
-      self.probing = made.count > 1
+      self.probing = probe
       self.probeStart = Date()
       if self.probing {
         self.chosen = nil
-        self.status("Listening — detecting the language (\(made.map { self.name($0.locale) }.joined(separator: ", ")))…")
+        let names = made.map { self.shortName($0.locale) }.joined(separator: ", ")
+        // ★ Said while it searches, so a slow AUTO explains itself (Stuart, 10-15: "warn users of how it works").
+        self.status(self.rounds > 1
+          ? "Listening — trying \(names) (round \(self.round + 1) of \(self.rounds); iPhone can only try 4 languages at a time, so this can take a while)…"
+                                    : "Listening — detecting the language (\(names))…")
       } else {
         self.choose(made[0])
       }
@@ -431,6 +452,22 @@ final class TranscribeEngine {
     guard !ready.isEmpty, elapsed >= 5 || ready.count == lanes.count else { return }
     // Enough heard by at least one model: the most confident wins.
     guard let best = lanes.filter({ $0.words >= 3 }).max(by: { $0.meanConf < $1.meanConf }) else { return }
+    if bestSeen == nil || best.meanConf > bestSeen!.conf { bestSeen = (best.locale, best.meanConf) }
+    // ★ Not convincing and languages left to try: the next four.
+    if best.meanConf < Self.convincing, round + 1 < rounds {
+      let tried = lanes.map { shortName($0.locale) }.joined(separator: ", ")
+      shutdownLanes()
+      round += 1
+      status("Not \(tried) — trying the next languages…")
+      Task { await self.openRound() }
+      return
+    }
+    // ★ Every round tried and none convincing: the best heard anywhere, if it was not in this round.
+    if best.meanConf < Self.convincing, let b = bestSeen, b.locale.identifier(.bcp47) != best.locale.identifier(.bcp47) {
+      shutdownLanes()
+      Task { await self.openLanes([b.locale], probe: false) }
+      return
+    }
     for l in lanes where l !== best { l.shutdown() }
     lanes = [best]
     probing = false
@@ -459,11 +496,16 @@ final class TranscribeEngine {
 
   // q only
   private func reprobe() {
+    shutdownLanes()
+    round = 0; bestSeen = nil
+    Task { await self.openRound() }
+  }
+
+  // q only
+  private func shutdownLanes() {
     for l in lanes { l.shutdown() }
-    lanes.removeAll(); chosen = nil
+    lanes.removeAll(); chosen = nil; probing = false
     VibeTranscribeTap.shared.setSink(nil)
-    let c = candidates
-    Task { await self.openLanes(c) }
   }
 
   // q only
