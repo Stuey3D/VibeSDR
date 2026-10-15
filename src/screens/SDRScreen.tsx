@@ -191,6 +191,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
+import { languagesNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
 import { tuneHintLabel } from '../utils/tuneHint';
@@ -4638,6 +4639,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     switch (e.type) {
       case 'status':  txStateRef.current = e.text; queueDecoderStatus(e.text); break;
       case 'error':   queueDecoderStatus(`⚠ ${e.text}`); setDecoding(false); break;
+      // ★ The search, in the box itself (Stuart, 10-15: "Trying German... No Transcription / Trying French...").
+      case 'trying':  queueDecoderText(`Trying ${e.text}…\n`); break;
+      case 'tried':   queueDecoderText(`   ${e.text}\n`); break;
       case 'partial': queueDecoderStatus(`${txHeardRef.current ? `${txHeardRef.current} · ` : ''}… ${e.text}`); setDecoding(true); break;
       case 'lang': {
         const n = langName(e.text) || e.name;
@@ -4667,12 +4671,28 @@ export default function SDRScreen({ route, navigation }: Props) {
   const txFreqRef = useRef(0); txFreqRef.current = status.frequency;
   const txHintRef = useRef('');
   const eibiOnRef = useRef(true);
+  /* ★★ THE FOUR MOST LIKELY (Stuart, 10-15: "EiBi for broadcast stations and receiver location for all others, for
+   *    instance a receiver in the UK will maybe try French/Dutch/German/English" … "Always try the default language
+   *    for the receivers location first"). The receiver area's main language, then EiBi's languages for this
+   *    frequency, then the rest of the area's (regionLanguages.ts) — four, all ones this device can transcribe. */
+  const txCapsRef = useRef<TranscribeCaps | null>(null); txCapsRef.current = txCaps;
+  const txHintsFor = useCallback(async (freq: number): Promise<{ langs: string[]; label: string }> => {
+    const caps = txCapsRef.current;
+    const supported = (c: string) => !!pickLocale(caps, c) || (c === 'zh' && !!pickLocale(caps, 'cmn'));
+    const e = eibiOnRef.current
+      ? await eibiLanguagesAt(freq).catch(() => ({ langs: [] as string[], station: '' }))
+      : { langs: [] as string[], station: '' };
+    const fromEibi = e.langs.filter(supported);
+    const area = languagesNear(recvLocRef.current, supported, 4);
+    const langs = Array.from(new Set([...area.slice(0, 1), ...fromEibi, ...area.slice(1)])).slice(0, 4);
+    return { langs, label: fromEibi.length ? `EiBi: ${e.station} · ${fromEibi.map(langName).join(', ')}` : '' };
+  }, []);
   const txLanguageArg = useCallback(async (): Promise<string> => {
     const l = txLangRef.current;
-    if (l !== 'auto' || !eibiOnRef.current) { txHintRef.current = ''; return l; }
-    const h = await eibiLanguagesAt(txFreqRef.current).catch(() => ({ langs: [] as string[], station: '' }));
+    if (l !== 'auto') { txHintRef.current = ''; return l; }
+    const h = await txHintsFor(txFreqRef.current);
     txHintRef.current = h.langs.join(',');
-    if (h.langs.length) queueDecoderText(`— EiBi: ${h.station} · ${h.langs.map(langName).join(', ')} —\n`);
+    if (h.label) queueDecoderText(`— ${h.label} —\n`);
     return h.langs.length ? `auto:${txHintRef.current}` : 'auto';
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -4682,10 +4702,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     });
   }, [txLanguageArg]);
   useEffect(() => {
-    if (activeDecRef.current !== 'transcribe' || txLangRef.current !== 'auto' || !eibiOnRef.current) return;
+    if (activeDecRef.current !== 'transcribe' || txLangRef.current !== 'auto') return;
     const f = status.frequency;
     const id = setTimeout(() => {
-      eibiLanguagesAt(f).then(h => {
+      txHintsFor(f).then(h => {
         if (activeDecRef.current !== 'transcribe' || txLangRef.current !== 'auto') return;
         if (h.langs.join(',') === txHintRef.current) return;
         setTxHeard('');
@@ -11871,8 +11891,8 @@ export default function SDRScreen({ route, navigation }: Props) {
            *   once and may take a while"). Android 14+ detects natively and needs no note. */
           autoNote: txCaps.nativeLanguageDetection ? undefined
             : Platform.OS === 'ios'
-              ? `On iPhone AUTO can only listen for 4 languages at once, so it tries them in rounds of four — ${eibiEnabled ? 'what the EiBi schedule lists for this frequency first, then ' : ''}your phone’s languages, then the others marked ON PHONE — and can take a while to find the right one. Choosing the language yourself is instant; GET adds a language to AUTO’s list.`
-              : `On this phone AUTO listens in ${eibiEnabled ? 'the language the EiBi schedule lists for this frequency, else ' : ''}your phone’s language — choose the language yourself for anything else.`,
+              ? `On iPhone AUTO can only listen for 4 languages at once. It starts with the 4 most likely — the main language around the receiver${eibiEnabled ? ', what the EiBi schedule lists for a broadcast on this frequency,' : ''} and the receiver area’s other languages — then tries your phone’s languages and the others marked ON PHONE, four at a time, so it can take a while; the box shows each try. Choosing the language yourself is instant; GET adds a language to AUTO’s list.`
+              : `On this phone AUTO listens in the most likely language — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, else ' : ''}the main language around the receiver. Choose the language yourself for anything else.`,
           onLanguage: (id: string) => {
             setTxLang(id); txLangRef.current = id;
             AsyncStorage.setItem('lsv_tx_lang', id).catch(() => {});

@@ -51,6 +51,7 @@ class TranscribeEngine33(
     private val hints = if (languageArg.startsWith("auto:"))
         languageArg.substring(5).split(',').map { it.trim() }.filter { it.isNotEmpty() } else emptyList()
     private var supported: List<String> = emptyList()
+    private var announced = false   // the box's "Trying …" line, once per start (open() runs per segment)
     companion object {
         private const val TAG = "VibeTranscribe"
 
@@ -225,6 +226,12 @@ class TranscribeEngine33(
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
             // A segmented session runs until the audio source closes, reporting each segment — continuous captions.
             putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+            if (language == "auto" && !announced) {
+                announced = true
+                val names = (listOf(prim) + if (Build.VERSION.SDK_INT >= 34) installed else emptyList())
+                    .map { Locale.forLanguageTag(it).getDisplayLanguage(Locale.getDefault()) }.distinct().take(6)
+                mod.emit("trying", names.joinToString(", "))
+            }
             if (language == "auto" && Build.VERSION.SDK_INT >= 34 && installed.size > 1) {
                 val allowed = ArrayList((hints.mapNotNull { hintTag(it) }.filter { installed.contains(it) } + installed).distinct())
                 putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)

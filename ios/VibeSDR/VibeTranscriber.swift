@@ -378,6 +378,9 @@ final class TranscribeEngine {
       if self.probing {
         self.chosen = nil
         let names = made.map { self.shortName($0.locale) }.joined(separator: ", ")
+        // ★ The search shows in the BOX, line by line (Stuart, 10-15) — the status line alone flickers past.
+        self.owner?.emit(["type": "trying",
+                          "text": names + (self.rounds > 1 ? " (round \(self.round + 1) of \(self.rounds))" : "")])
         // ★ Said while it searches, so a slow AUTO explains itself (Stuart, 10-15: "warn users of how it works").
         self.status(self.rounds > 1
           ? "Listening — trying \(names) (round \(self.round + 1) of \(self.rounds); iPhone can only try 4 languages at a time, so this can take a while)…"
@@ -456,6 +459,7 @@ final class TranscribeEngine {
     // ★ Not convincing and languages left to try: the next four.
     if best.meanConf < Self.convincing, round + 1 < rounds {
       let tried = lanes.map { shortName($0.locale) }.joined(separator: ", ")
+      emitVerdicts()
       shutdownLanes()
       round += 1
       status("Not \(tried) — trying the next languages…")
@@ -464,6 +468,8 @@ final class TranscribeEngine {
     }
     // ★ Every round tried and none convincing: the best heard anywhere, if it was not in this round.
     if best.meanConf < Self.convincing, let b = bestSeen, b.locale.identifier(.bcp47) != best.locale.identifier(.bcp47) {
+      emitVerdicts()
+      owner?.emit(["type": "tried", "text": "None was a clear match — going back to \(shortName(b.locale)), the best heard"])
       shutdownLanes()
       Task { await self.openLanes([b.locale], probe: false) }
       return
@@ -499,6 +505,15 @@ final class TranscribeEngine {
     shutdownLanes()
     round = 0; bestSeen = nil
     Task { await self.openRound() }
+  }
+
+  // q only — one line for the box: what each language in this round made of the audio.
+  private func emitVerdicts() {
+    let v = lanes.map { l -> String in
+      l.words == 0 ? "\(shortName(l.locale)) — nothing recognised"
+                   : "\(shortName(l.locale)) — weak match (\(Int((l.meanConf * 100).rounded())) %)"
+    }.joined(separator: " · ")
+    owner?.emit(["type": "tried", "text": v])
   }
 
   // q only

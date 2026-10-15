@@ -27,6 +27,9 @@ export type TranscribeEvent =
   | { type: 'status'; text: string }
   | { type: 'error'; text: string }
   | { type: 'partial'; text: string }
+  /** AUTO's search, for the box: the languages being tried, then what each one made of it. */
+  | { type: 'trying'; text: string }
+  | { type: 'tried'; text: string }
   | { type: 'lang'; text: string; name: string; detected?: boolean }
   | { type: 'final'; text: string; lang?: string; translated?: string };
 
