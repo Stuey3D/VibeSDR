@@ -178,9 +178,21 @@ export class PsStabiliser {
  *  drop the repeated head from the tail. Needs the same substantial overlap as the merge. */
 function trimWrap(s: string): string {
   for (let o = Math.floor(s.length / 2); o >= 3; o--) {
-    if (s.endsWith(s.slice(0, o))) return s.slice(0, s.length - o).trim();
+    if (s.endsWith(s.slice(0, o))) return startAtWord(s.slice(0, s.length - o));
   }
   return s;
+}
+
+/** ★★ A SCROLLER'S CYCLE IS A RING, AND IT MUST BE OPENED AT A WORD (Stuart, 2026-10-15: WLZX read
+ *  "WLZX estival 10/17 Lazer 99.1 F" — the F under the strip's fade). The canonical start is the segment heard
+ *  first, and tuning in mid-scroll makes that "estival 1": the ring was opened inside a word. `ring` is the cycle
+ *  with its wrap intact — its last character runs straight into its first — so: if a space sits at the wrap, it is
+ *  already a word start; otherwise the word broken across the wrap is moved whole to the front. */
+function startAtWord(ring: string): string {
+  if (/^\s|\s$/.test(ring)) return ring.trim();
+  const k = ring.lastIndexOf(' ');
+  if (k < 0) return ring.trim();
+  return `${ring.slice(k + 1)}${ring.slice(0, k)}`.trim();
 }
 
 /** Join rotating segments into one string. A segment that overlaps the end of what we have (a

@@ -113,6 +113,24 @@ console.log('3. character scroller');
   ok(ch.length < seq.length / 4, 'far fewer updates than raw PS changes');
 }
 
+console.log('3b. character scroller tuned in MID-WORD — the line must start at a word (WLZX, 2026-10-15)');
+{
+  // Was "estival 10/17 Lazer 99.1 F": the ring opened at the first segment heard, inside "Festival".
+  const text = 'Festival 10/17 Lazer 99.1 ';
+  const words = text.trim().split(' ');
+  let bad = 0;
+  for (let start = 0; start < text.length; start++) {
+    const seq: string[] = [];
+    for (let i = 0; i < text.length; i++) { const j = (start + i) % text.length; seq.push((text + text).slice(j, j + 8).trim()); }
+    const { frames } = run(seq, 500, 90000);
+    const got = frames[frames.length - 1].name.split(' ');
+    if (!(got.length === words.length && got.every(w => words.includes(w)))) {
+      bad++; console.log(`       tuned in at ${start}: "${got.join(' ')}"`);
+    }
+  }
+  ok(bad === 0, `every tune-in point gives whole words (${bad} broken)`);
+}
+
 console.log('4. empty frames and station changes');
 {
   const st = new PsStabiliser();
