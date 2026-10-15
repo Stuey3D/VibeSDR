@@ -67,6 +67,7 @@ class TranscribeEngine33(
                 m.putBoolean("available", true)
                 m.putString("deviceLanguage", dev.language)
                 m.putString("deviceLanguageName", dev.getDisplayLanguage(dev))
+                m.putString("deviceRegion", dev.country)   // ★ picks en-GB over en-AU (pickLocale)
                 m.putBoolean("nativeLanguageDetection", Build.VERSION.SDK_INT >= 34)
                 val sr = try { SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx) } catch (e: Throwable) { null }
                 if (sr == null) { p.resolve(m); return@post }

@@ -211,7 +211,7 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
-import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, pickLocale, langName, transcribeLanguageList, type TranscribeCaps } from '../services/transcriber';
+import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, type TranscribeCaps } from '../services/transcriber';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -4353,7 +4353,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★★ CLR — and, for NAVTEX, a RETUNE (DecoderPanel; NickB 2026-10-12, Stuart: "navtex needs to clear on retune").
    *  NAVTEX drops only the message arriving (clearLive): the finished ones stay, the last under PREV, as WEFAX's CLR
    *  keeps its picture. The redraw is forced — the text may already be '' and setting it again would not draw. */
+  /** TRANSCRIBE's "detect again" (set further down, where AUTO's start lives) — CLR on that decoder calls it. */
+  const txRedetectRef = useRef<() => void>(() => {});
   const clearDecoderOutput = useCallback(() => {
+    // ★ CLR on TRANSCRIBE also starts the language detection again (Stuart, 2026-10-15: "the clear button should also
+    //   force a redetect") — a cleared box is a fresh start, not the old station's language.
+    if (activeDecRef.current === 'transcribe') { setDecoderText(''); txRedetectRef.current(); return; }
     if (activeDecRef.current !== 'navtex') { setDecoderText(''); return; }
     decTextPending.current = ''; decTextReplace.current = null;
     navtexAsmRef.current?.clearLive();
@@ -4616,7 +4621,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.multiGet(['lsv_tx_lang', 'lsv_tx_to']).then(kv => {
       if (dead) return;
       const l = kv[0]?.[1], t = kv[1]?.[1];
-      if (l) setTxLang(l);
+      if (l) setTxLang(transcribeChoiceCode(l));   // ★ a language code ('fr'); older builds stored 'fr-BE'
       if (t != null) setTxTo(t === 'off' ? '' : t);
     }).catch(() => {});
     return () => { dead = true; };
@@ -4684,33 +4689,48 @@ export default function SDRScreen({ route, navigation }: Props) {
       : { langs: [] as string[], station: '' };
     const fromEibi = e.langs.filter(supported);
     const area = languagesNear(recvLocRef.current, supported, 4);
-    const langs = Array.from(new Set([...area.slice(0, 1), ...fromEibi, ...area.slice(1)])).slice(0, 4);
+    /* ★ EiBi FIRST WHEN IT KNOWS THE STATION (Stuart, 2026-10-15: on China Radio "it said it was trying English first on
+     *   a Chinese radio station"). The receiver area's language still goes in the same four, so a UK receiver tries
+     *   English alongside — it just no longer heads the line when the schedule names the broadcast. No EiBi entry
+     *   (amateur bands, utilities): the area's language first, as before. */
+    const langs = Array.from(new Set(fromEibi.length ? [...fromEibi.slice(0, 3), ...area] : area)).slice(0, 4);
     return { langs, label: fromEibi.length ? `EiBi: ${e.station} · ${fromEibi.map(langName).join(', ')}` : '' };
   }, []);
   const txLanguageArg = useCallback(async (): Promise<string> => {
     const l = txLangRef.current;
-    if (l !== 'auto') { txHintRef.current = ''; return l; }
+    // ★ The choice is a language ('fr'); the variant is picked now, from the phone's region (pickLocale).
+    if (l !== 'auto') { txHintRef.current = ''; return pickLocale(txCapsRef.current, l) ?? l; }
     const h = await txHintsFor(txFreqRef.current);
     txHintRef.current = h.langs.join(',');
     if (h.label) queueDecoderText(`— ${h.label} —\n`);
     return h.langs.length ? `auto:${txHintRef.current}` : 'auto';
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  /** Where AUTO last started detecting — a retune further than TX_NEW_STATION_HZ from here is another station. */
+  const txStartFreqRef = useRef(0);
   const startTxHinted = useCallback(() => {
+    txStartFreqRef.current = txFreqRef.current;
     txLanguageArg().then(arg => {
       if (activeDecRef.current === 'transcribe') startTranscribe(arg, txTargetRef.current);
     });
   }, [txLanguageArg]);
+  txRedetectRef.current = () => {
+    if (txLangRef.current !== 'auto') return;     // a chosen language has nothing to detect
+    setTxHeard('');
+    startTxHinted();
+  };
+  /* ★★ A RETUNE IS A NEW STATION, SO DETECT AGAIN (Stuart, 2026-10-15: tuning to another SSB frequency with the box
+   *    open kept the previous language until the box was closed and opened). It used to restart only when EiBi's
+   *    hint changed, which on the amateur bands it never does. Now any retune of more than 2 kHz from where the
+   *    detection started restarts it — an SSB touch-up of a few hundred Hz is the same station and keeps its language. */
+  const TX_NEW_STATION_HZ = 2000;
   useEffect(() => {
     if (activeDecRef.current !== 'transcribe' || txLangRef.current !== 'auto') return;
     const f = status.frequency;
     const id = setTimeout(() => {
-      txHintsFor(f).then(h => {
-        if (activeDecRef.current !== 'transcribe' || txLangRef.current !== 'auto') return;
-        if (h.langs.join(',') === txHintRef.current) return;
-        setTxHeard('');
-        startTxHinted();
-      }).catch(() => {});
+      if (activeDecRef.current !== 'transcribe' || txLangRef.current !== 'auto') return;
+      if (Math.abs(f - txStartFreqRef.current) <= TX_NEW_STATION_HZ) return;
+      txRedetectRef.current();
     }, 1500);   // after the tune settles — a drum spin is not a station
     return () => clearTimeout(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -11874,14 +11894,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           active: activeDecoder === 'transcribe',
           selected: selDecoder === 'transcribe' && activeDecoder !== 'transcribe',
           onToggle: () => onDecToggle('transcribe'),
-          language: txLang,
+          language: transcribeChoiceCode(txLang),
           languages: transcribeLanguageList(txCaps),
           downloading: txDl.id,
           downloadNote: txDl.note,
           onDownload: (id: string) => {
             if (txDl.id) return;
             setTxDl({ id, note: `Downloading ${langName(id)}…` });
-            downloadTranscribeLanguage(id, txTargetRef.current).then(r => {
+            downloadTranscribeLanguage(pickLocale(txCaps, id) ?? id, txTargetRef.current).then(r => {
               setTxDl({ id: '', note: r.text });
               refreshTranscribeCaps().then(c => setTxCaps(c));
             });
@@ -11891,7 +11911,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *   once and may take a while"). Android 14+ detects natively and needs no note. */
           autoNote: txCaps.nativeLanguageDetection ? undefined
             : Platform.OS === 'ios'
-              ? `On iPhone AUTO can only listen for 4 languages at once. It starts with the 4 most likely — the main language around the receiver${eibiEnabled ? ', what the EiBi schedule lists for a broadcast on this frequency,' : ''} and the receiver area’s other languages — then tries your phone’s languages and the others marked ON PHONE, four at a time, so it can take a while; the box shows each try. Choosing the language yourself is instant; GET adds a language to AUTO’s list.`
+              ? `On iPhone AUTO can only listen for 4 languages at once. It starts with the 4 most likely — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, then ' : ''}the main language around the receiver and the area’s other languages — then tries your phone’s languages and the others marked ON PHONE, four at a time, so it can take a while; the box shows each try. Once it settles, the runner-up keeps listening and takes over if it fits the audio better. Retuning or CLR detects again. Choosing the language yourself is instant; GET adds a language to AUTO’s list (iPhone keeps ${txCaps.maxLanguages ?? 'a few'} at a time and swaps out the least used).`
               : `On this phone AUTO listens in the most likely language — ${eibiEnabled ? 'what the EiBi schedule lists for a broadcast on this frequency, else ' : ''}the main language around the receiver. Choose the language yourself for anything else.`,
           onLanguage: (id: string) => {
             setTxLang(id); txLangRef.current = id;

@@ -19,6 +19,10 @@ export interface TranscribeCaps {
   /** Two-letter code of the phone's language — the translation target. */
   deviceLanguage?: string;
   deviceLanguageName?: string;
+  /** The phone's region ('GB') — which variant 'English' means. */
+  deviceRegion?: string;
+  /** iOS: how many speech languages Apple lets an app keep at once (AssetInventory.maximumReservedLocales). */
+  maxLanguages?: number;
   languages?: TranscribeLanguage[];
   /** Android: the recogniser can identify the spoken language itself (14+). iOS AUTO is done by comparing models. */
   nativeLanguageDetection?: boolean;
@@ -79,38 +83,53 @@ export function langName(idOrCode: string | undefined): string {
   if (!idOrCode) return '';
   return LANG_NAMES[idOrCode.toLowerCase().split(/[-_]/)[0]] ?? idOrCode;
 }
-/** Which region a bare code means when the device lists several (zh-HK / zh-TW are other variants). */
-const PREFERRED_REGION: Record<string, string> = { zh: 'cn', yue: 'cn' };
+/** ★★ WHICH VARIANT A LANGUAGE MEANS (Stuart, 2026-10-15: French came out as French (Belgium), English as English
+ *  (Australia) — the native lists are alphabetical and the old fallback took the first). In order: the phone's own
+ *  region (en-GB on a British phone), then the language's home variant, then one already on the phone. */
+const HOME_REGION: Record<string, string> = {
+  en: 'us', fr: 'fr', de: 'de', es: 'es', it: 'it', pt: 'br', nl: 'nl', ru: 'ru', uk: 'ua', pl: 'pl', tr: 'tr',
+  ar: 'sa', zh: 'cn', cmn: 'cn', yue: 'cn', ja: 'jp', ko: 'kr', hi: 'in', vi: 'vn', th: 'th', id: 'id', sv: 'se',
+  da: 'dk', nb: 'no', fi: 'fi', el: 'gr', cs: 'cz', ro: 'ro', hu: 'hu', he: 'il', ms: 'my',
+};
+const baseOf = (id: string) => id.toLowerCase().split(/[-_]/)[0];
 
-/** The first native locale for a two-letter code ('en' → 'en-GB' on a British phone, if the list carries it). */
+/** The native locale for a language code ('en' → 'en-GB' on a British phone). An id with a region passes through. */
 export function pickLocale(caps: TranscribeCaps | null, code: string): string | null {
   const ls = caps?.languages ?? [];
-  const matches = ls.filter(l => l.id.toLowerCase().split(/[-_]/)[0] === code);
+  const base = baseOf(code);
+  const matches = ls.filter(l => baseOf(l.id) === base);
   if (!matches.length) return null;
-  // Prefer an installed one, then the phone's own region.
-  const region = (Intl as any)?.DateTimeFormat?.().resolvedOptions?.().locale?.split('-')[1];
-  const pref = PREFERRED_REGION[code];
-  return (matches.find(l => pref && l.id.toLowerCase().endsWith(`-${pref}`))
+  if (code.includes('-')) { const exact = matches.find(l => l.id.toLowerCase() === code.toLowerCase()); if (exact) return exact.id; }
+  const region = (caps?.deviceRegion ?? '').toLowerCase();
+  const home = HOME_REGION[base];
+  const tail = (r: string) => (l: TranscribeLanguage) => l.id.toLowerCase().split(/[-_]/).pop() === r;
+  return (matches.find(l => !!region && tail(region)(l))
+       ?? matches.find(l => !!home && tail(home)(l))
        ?? matches.find(l => l.installed)
-       ?? matches.find(l => region && l.id.endsWith(region))
        ?? matches[0]).id;
 }
 
-/** ★ The LANGUAGE dropdown: EVERY language the device can transcribe, one row per language (the native lists carry
- *  regional variants — en-AU, en-GB … — and the variant is picked by pickLocale), named and sorted by name. */
-export function transcribeLanguageList(caps: TranscribeCaps | null): { code: string; id: string; name: string; installed: boolean }[] {
+/** ★ The LANGUAGE dropdown: EVERY language the device can transcribe, one row per language, named and sorted.
+ *  ★★ A ROW IS A LANGUAGE, NOT A VARIANT: `id` is the code ('fr') and that is what is chosen and stored. The variant
+ *     (`locale`) is worked out when it is used — keying rows on the variant id lost the tick whenever the variant
+ *     pickLocale preferred changed (after a download), which read as "the language will not select". */
+export function transcribeLanguageList(caps: TranscribeCaps | null): { code: string; id: string; locale: string; name: string; installed: boolean }[] {
   const bases = new Map<string, string>();   // base code → native name (region stripped)
   for (const l of caps?.languages ?? []) {
-    const base = l.id.toLowerCase().split(/[-_]/)[0];
+    const base = baseOf(l.id);
     if (base === 'mul') continue;            // Apple's "multiple languages of India" model — not a language to choose
     if (!bases.has(base)) bases.set(base, (l.name || base).replace(/\s*\(.*\)\s*$/, ''));
   }
-  const out: { code: string; id: string; name: string; installed: boolean }[] = [];
+  const out: { code: string; id: string; locale: string; name: string; installed: boolean }[] = [];
   for (const [code, native] of bases) {
-    const id = pickLocale(caps, code);
-    if (!id) continue;
-    // ON PHONE describes the variant we would actually use (pickLocale's choice), not any variant.
-    out.push({ code, id, name: LANG_NAMES[code] ?? native, installed: !!caps?.languages?.find(l => l.id === id)?.installed });
+    const locale = pickLocale(caps, code);
+    if (!locale) continue;
+    // ON PHONE: any variant of the language — the speech model is the language's.
+    const installed = !!caps?.languages?.some(l => baseOf(l.id) === code && l.installed);
+    out.push({ code, id: code, locale, name: LANG_NAMES[code] ?? native, installed });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/** A stored choice → the row it belongs to: 'auto', or the language code (older builds stored 'fr-BE'). */
+export function transcribeChoiceCode(stored: string): string { return stored === 'auto' ? 'auto' : baseOf(stored); }

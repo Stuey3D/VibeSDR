@@ -107,6 +107,9 @@ class VibeTranscriber: RCTEventEmitter {
         .sorted { ($0["name"] as! String) < ($1["name"] as! String) }
       resolve(["available": true, "deviceLanguage": Locale.current.language.languageCode?.identifier ?? "en",
                "deviceLanguageName": here.localizedString(forLanguageCode: Locale.current.language.languageCode?.identifier ?? "en") ?? "",
+               // ★ The phone's region, so 'English' means en-GB on a British phone, not the list's first (en-AU).
+               "deviceRegion": Locale.current.region?.identifier ?? "",
+               "maxLanguages": AssetInventory.maximumReservedLocales,   // Apple's cap on speech languages kept
                "languages": langs])
     }
   }
@@ -134,8 +137,8 @@ class VibeTranscriber: RCTEventEmitter {
       let nm = Locale.current.localizedString(forLanguageCode: code) ?? code
       let m = await SpeechEngines.module(for: loc)
       do {
+        await SpeechEngines.reserve(loc, keeping: [loc.identifier(.bcp47)])
         if await AssetInventory.status(forModules: [m]) != .installed {
-          _ = try? await AssetInventory.reserve(locale: loc)
           if let req = try await AssetInventory.assetInstallationRequest(supporting: [m]) {
             try await req.downloadAndInstall()
           }
@@ -191,6 +194,32 @@ enum SpeechEngines {
     if let s = await SpeechTranscriber.supportedLocale(equivalentTo: l) { return s }
     return await DictationTranscriber.supportedLocale(equivalentTo: l)
   }
+  /* ★★★ APPLE KEEPS AT MOST `maximumReservedLocales` SPEECH LANGUAGES (5 on this Mac's SDK) — its limit, not ours
+   *  (Stuart, 2026-10-15: "is the limit of downloaded languages set by apple … I would like to download them all").
+   *  reserve() past the limit fails, and the download with it. So the least recently USED reservation is released
+   *  to make room — never one this request needs. A released language may be cleared by iOS later; choosing it
+   *  again simply fetches it again. Last use is kept in UserDefaults (id → time). */
+  private static let lruKey = "vibeTxLangLastUsed"
+  static func touch(_ loc: Locale) {
+    var m = UserDefaults.standard.dictionary(forKey: lruKey) as? [String: Double] ?? [:]
+    m[loc.identifier(.bcp47)] = Date().timeIntervalSince1970
+    UserDefaults.standard.set(m, forKey: lruKey)
+  }
+  static func reserve(_ loc: Locale, keeping keep: Set<String>) async {
+    let id = loc.identifier(.bcp47)
+    let held = await AssetInventory.reservedLocales
+    if held.contains(where: { $0.identifier(.bcp47) == id }) { touch(loc); return }
+    if held.count >= AssetInventory.maximumReservedLocales {
+      let used = UserDefaults.standard.dictionary(forKey: lruKey) as? [String: Double] ?? [:]
+      if let victim = held.filter({ !keep.contains($0.identifier(.bcp47)) })
+                          .min(by: { (used[$0.identifier(.bcp47)] ?? 0) < (used[$1.identifier(.bcp47)] ?? 0) }) {
+        NSLog("[VibeTranscriber] releasing %@ to make room for %@", victim.identifier, id)
+        _ = await AssetInventory.release(reservedLocale: victim)
+      }
+    }
+    _ = try? await AssetInventory.reserve(locale: loc)
+    touch(loc)
+  }
   static func module(for loc: Locale) async -> any SpeechModule {
     if await SpeechTranscriber.supportedLocale(equivalentTo: loc) != nil {
       return SpeechTranscriber(locale: loc, transcriptionOptions: [], reportingOptions: [.volatileResults],
@@ -217,7 +246,13 @@ final class TranscribeEngine {
   private var probing = false
   private var probeStart = Date()
   private var stopped = false
-  private var recent: [Double] = []        // per-word confidence of the chosen lane, for re-detect
+  /* ★★ THE RUNNER-UP KEEPS LISTENING (Stuart, 2026-10-15: an SSB contact in another language whose call signs were
+   *    said in English was settled as English, and a French station as German). Detection decides on a few phrases,
+   *    and a few phrases can mislead. So the second-best language of the deciding round stays on beside the chosen
+   *    one, and if it is clearly the more confident over the last 40 words it takes over — the language follows the
+   *    audio instead of being fixed by the first sentence. Costs one extra speech model while AUTO runs. */
+  private var challenger: Lane?
+  private static let overtake = 0.08          // the challenger's lead (mean confidence) that makes it the language
   private var candidates: [Locale] = []
   /* ★★ ROUNDS OF FOUR (Stuart, 2026-10-15). Apple has no language identifier and running more than ~4 models at once
    *    is too much for a phone, so AUTO tries the pool four at a time — EiBi's languages for this frequency, then the
@@ -241,6 +276,9 @@ final class TranscribeEngine {
     var tasks: [Task<Void, Never>] = []
     var confSum = 0.0, words = 0
     var finals: [String] = []
+    /// The last 40 words' confidence — what the chosen language and its challenger are compared on.
+    var recent: [Double] = []
+    var recentMean: Double { recent.isEmpty ? 0 : recent.reduce(0, +) / Double(recent.count) }
     init(locale: Locale, transcriber: any SpeechModule, analyzer: SpeechAnalyzer,
          input: AsyncStream<AnalyzerInput>.Continuation, format: AVAudioFormat) {
       self.locale = locale; self.transcriber = transcriber; self.analyzer = analyzer
@@ -282,7 +320,7 @@ final class TranscribeEngine {
     q.async {
       self.stopped = true
       self.lanes.forEach { $0.shutdown() }
-      self.lanes.removeAll(); self.chosen = nil
+      self.lanes.removeAll(); self.chosen = nil; self.challenger = nil
     }
   }
 
@@ -336,9 +374,9 @@ final class TranscribeEngine {
     for loc in cands {
       let t = await SpeechEngines.module(for: loc)
       do {
+        await SpeechEngines.reserve(loc, keeping: Set(cands.map { $0.identifier(.bcp47) }))
         if await AssetInventory.status(forModules: [t]) != .installed {
-          status("Downloading the \(name(loc)) speech model (once, then it works offline)…")
-          _ = try? await AssetInventory.reserve(locale: loc)
+          status("Downloading the \(shortName(loc)) speech model (once, then it works offline)…")
           if let req = try await AssetInventory.assetInstallationRequest(supporting: [t]) {
             try await req.downloadAndInstall()
           }
@@ -435,14 +473,24 @@ final class TranscribeEngine {
       decideIfReady()
       return
     }
-    guard chosen === lane else { return }
-    recent.append(contentsOf: cs)
-    if recent.count > 40 { recent.removeFirst(recent.count - 40) }
+    lane.recent.append(contentsOf: cs)
+    if lane.recent.count > 40 { lane.recent.removeFirst(lane.recent.count - 40) }
+    guard let cur = chosen else { return }
+    if lane === challenger {
+      // ★ Both have heard enough of the same audio, and the challenger believes it clearly more: switch.
+      if lane.recent.count >= 15, cur.recent.count >= 15, lane.recentMean > cur.recentMean + Self.overtake {
+        owner?.emit(["type": "tried", "text": "Sounds more like \(shortName(lane.locale)) than \(shortName(cur.locale)) — switching"])
+        challenger = cur
+        cur.recent.removeAll(); lane.recent.removeAll()
+        choose(lane)
+      }
+      return
+    }
+    guard cur === lane else { return }
     deliver(text, lane: lane)
     // ★ The station changed language (SW broadcasts do, hourly): confidence collapses. Re-detect, AUTO only.
-    if language == "auto", candidates.count > 1, recent.count >= 25,
-       recent.reduce(0, +) / Double(recent.count) < 0.35 {
-      recent.removeAll()
+    if language == "auto", candidates.count > 1, lane.recent.count >= 25, lane.recentMean < 0.35 {
+      lane.recent.removeAll()
       status("The language seems to have changed — re-detecting…")
       reprobe()
     }
@@ -451,10 +499,15 @@ final class TranscribeEngine {
   // q only
   private func decideIfReady() {
     let elapsed = Date().timeIntervalSince(probeStart)
-    let ready = lanes.filter { $0.words >= 6 }
-    guard !ready.isEmpty, elapsed >= 5 || ready.count == lanes.count else { return }
-    // Enough heard by at least one model: the most confident wins.
-    guard let best = lanes.filter({ $0.words >= 3 }).max(by: { $0.meanConf < $1.meanConf }) else { return }
+    // ★ More evidence than the first build asked for (6 words, 5 s): French settled as German on that (10-15).
+    let ready = lanes.filter { $0.words >= 10 }
+    guard !ready.isEmpty, elapsed >= 8 || ready.count == lanes.count else { return }
+    // Enough heard by at least one model: the most confident wins — unless the top two are too close to call, when
+    // it listens on, for up to 20 s.
+    let ranked = lanes.filter { $0.words >= 4 }.sorted { $0.meanConf > $1.meanConf }
+    guard let best = ranked.first else { return }
+    let second = ranked.count > 1 ? ranked[1] : nil
+    if let s2 = second, best.meanConf - s2.meanConf < 0.05, elapsed < 20 { return }
     if bestSeen == nil || best.meanConf > bestSeen!.conf { bestSeen = (best.locale, best.meanConf) }
     // ★ Not convincing and languages left to try: the next four.
     if best.meanConf < Self.convincing, round + 1 < rounds {
@@ -474,8 +527,12 @@ final class TranscribeEngine {
       Task { await self.openLanes([b.locale], probe: false) }
       return
     }
-    for l in lanes where l !== best { l.shutdown() }
-    lanes = [best]
+    // ★ The runner-up stays on as the challenger (see `challenger`) — only if it heard something at all.
+    let runnerUp = (second?.words ?? 0) > 0 ? second : nil
+    for l in lanes where l !== best && l !== runnerUp { l.shutdown() }
+    lanes = [best] + (runnerUp.map { [$0] } ?? [])
+    challenger = runnerUp
+    best.recent.removeAll(); runnerUp?.recent.removeAll()
     probing = false
     choose(best)
     for t in best.finals { deliver(t, lane: best) }   // nothing heard during detection is lost
@@ -485,7 +542,6 @@ final class TranscribeEngine {
   // q only
   private func choose(_ lane: Lane) {
     chosen = lane
-    recent.removeAll()
     let lang = lane.locale.language.languageCode?.identifier ?? ""
     owner?.emit(["type": "lang", "text": lane.locale.identifier(.bcp47), "name": shortName(lane.locale),
                  "detected": language == "auto"])
@@ -519,7 +575,7 @@ final class TranscribeEngine {
   // q only
   private func shutdownLanes() {
     for l in lanes { l.shutdown() }
-    lanes.removeAll(); chosen = nil; probing = false
+    lanes.removeAll(); chosen = nil; challenger = nil; probing = false
     VibeTranscribeTap.shared.setSink(nil)
   }
 
