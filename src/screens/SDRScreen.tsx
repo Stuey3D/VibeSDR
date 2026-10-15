@@ -210,7 +210,7 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
-import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, COMMON_LANGS, pickLocale, langName, type TranscribeCaps } from '../services/transcriber';
+import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, pickLocale, langName, transcribeLanguageList, type TranscribeCaps } from '../services/transcriber';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -11855,12 +11855,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           selected: selDecoder === 'transcribe' && activeDecoder !== 'transcribe',
           onToggle: () => onDecToggle('transcribe'),
           language: txLang,
-          languages: COMMON_LANGS
-            .map(code => {
-              const id = pickLocale(txCaps, code) ?? '';
-              return { code, id, installed: !!txCaps.languages?.find(l => l.id === id)?.installed };
-            })
-            .filter(l => !!l.id),
+          languages: transcribeLanguageList(txCaps),
           downloading: txDl.id,
           downloadNote: txDl.note,
           onDownload: (id: string) => {
@@ -11873,7 +11868,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           },
           heard: activeDecoder === 'transcribe' ? txHeard : '',
           autoNote: txCaps.nativeLanguageDetection ? undefined
-            : `AUTO tries ${eibiEnabled ? 'what the EiBi schedule lists for this frequency, then ' : ''}the languages already on this phone — DOWNLOAD… adds more.`,
+            : `AUTO tries ${eibiEnabled ? 'what the EiBi schedule lists for this frequency, then ' : ''}the languages already on this phone — GET in the list adds more.`,
           onLanguage: (id: string) => {
             setTxLang(id); txLangRef.current = id;
             AsyncStorage.setItem('lsv_tx_lang', id).catch(() => {});

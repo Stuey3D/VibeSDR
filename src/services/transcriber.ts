@@ -63,15 +63,13 @@ export function onTranscribe(fn: (e: TranscribeEvent) => void): () => void {
   return () => sub.remove();
 }
 
-/** The language row — the native list is long (dozens of locales); these are offered when the device has them.
- *  ★ Named, not ISO codes: Stuart looked for "CN" for China Radio and never saw "ZH" (2026-10-15). Mandarin and
- *  Cantonese are separate rows because shortwave carries both (CRI, RTHK, the PBS regionals). */
-export const COMMON_LANGS = ['en', 'es', 'fr', 'de', 'it', 'pt', 'nl', 'ru', 'uk', 'pl', 'tr', 'ar',
-                             'zh', 'yue', 'ja', 'ko', 'hi', 'vi', 'th', 'id'];
+/** Names for the language list and the [tags] — ★ named, not ISO codes: Stuart looked for "CN" for China Radio and
+ *  never saw "ZH" (2026-10-15). Mandarin and Cantonese are separate because shortwave carries both (CRI, RTHK, the
+ *  PBS regionals); Android may call Mandarin 'cmn'. Anything not here takes the platform's own name. */
 export const LANG_NAMES: Record<string, string> = {
   en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian', pt: 'Portuguese', nl: 'Dutch',
   ru: 'Russian', uk: 'Ukrainian', pl: 'Polish', tr: 'Turkish', ar: 'Arabic', zh: 'Mandarin', yue: 'Cantonese',
-  ja: 'Japanese', ko: 'Korean', hi: 'Hindi', vi: 'Vietnamese', th: 'Thai', id: 'Indonesian',
+  ja: 'Japanese', ko: 'Korean', hi: 'Hindi', vi: 'Vietnamese', th: 'Thai', id: 'Indonesian', cmn: 'Mandarin',
 };
 /** A locale id or code ('zh-CN', 'yue', 'RU') → the name the box shows; anything unknown passes through. */
 export function langName(idOrCode: string | undefined): string {
@@ -93,4 +91,23 @@ export function pickLocale(caps: TranscribeCaps | null, code: string): string | 
        ?? matches.find(l => l.installed)
        ?? matches.find(l => region && l.id.endsWith(region))
        ?? matches[0]).id;
+}
+
+/** ★ The LANGUAGE dropdown: EVERY language the device can transcribe, one row per language (the native lists carry
+ *  regional variants — en-AU, en-GB … — and the variant is picked by pickLocale), named and sorted by name. */
+export function transcribeLanguageList(caps: TranscribeCaps | null): { code: string; id: string; name: string; installed: boolean }[] {
+  const bases = new Map<string, string>();   // base code → native name (region stripped)
+  for (const l of caps?.languages ?? []) {
+    const base = l.id.toLowerCase().split(/[-_]/)[0];
+    if (base === 'mul') continue;            // Apple's "multiple languages of India" model — not a language to choose
+    if (!bases.has(base)) bases.set(base, (l.name || base).replace(/\s*\(.*\)\s*$/, ''));
+  }
+  const out: { code: string; id: string; name: string; installed: boolean }[] = [];
+  for (const [code, native] of bases) {
+    const id = pickLocale(caps, code);
+    if (!id) continue;
+    // ON PHONE describes the variant we would actually use (pickLocale's choice), not any variant.
+    out.push({ code, id, name: LANG_NAMES[code] ?? native, installed: !!caps?.languages?.find(l => l.id === id)?.installed });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }

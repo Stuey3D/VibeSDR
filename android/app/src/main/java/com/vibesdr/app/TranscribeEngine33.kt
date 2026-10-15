@@ -190,7 +190,8 @@ class TranscribeEngine33(
     /** The recogniser's tag for an EiBi hint ('zh' → zh-CN, 'yue' → a Cantonese tag), installed ones first. */
     private fun hintTag(h: String): String? {
         val pool = installed + supported
-        val base = pool.filter { it.substringBefore('-').equals(h, true) }
+        // ★ Mandarin may be listed as 'cmn-Hans-CN' rather than 'zh-CN'.
+        val base = pool.filter { val b = it.substringBefore('-'); b.equals(h, true) || (h == "zh" && b.equals("cmn", true)) }
         return when (h) {
             "zh" -> base.firstOrNull { it.contains("CN", true) || it.contains("Hans", true) } ?: base.firstOrNull()
             else -> base.firstOrNull()

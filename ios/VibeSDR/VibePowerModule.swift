@@ -667,6 +667,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     lastPacketAt = Date()
     if let out = convertTo48k(inBuf) {
       if recArmed { writeRecording(out) }   // OWRX/external audio recording
+      applyNotch(out)
       tapTranscriber(out)
       // ★ Muted audio reaches here only for the on-device transcriber (feedExternal*'s gate) — never the speaker.
       if !isMuted { scheduleOut(out) }
@@ -960,6 +961,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
     guard let out = convertTo48k(inBuf) else { return }
     if recArmed { writeRecording(out) }
+    applyNotch(out)
     tapTranscriber(out)
     scheduleOut(out)
   }
@@ -1871,6 +1873,18 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
       NSLog("[VibePowerModule] recording stopped: %@", path)
       resolve(path.isEmpty ? nil : path)
     }
+  }
+
+  /** Auto notch (network backends): adaptive line enhancer per channel, applied on the final 48 kHz feed. Runs on
+   *  audioQ (single-threaded), so the filter state is safe. Local/RTL-TCP never enable it here (shim already notched).
+   *  ★ V12: moved out of scheduleOut so the TRANSCRIBER hears the notched audio too (it was tapped before the notch,
+   *  and a muted listener never reached scheduleOut at all). Called after the recorder, so recordings are unchanged. */
+  @inline(__always) private func applyNotch(_ buf: AVAudioPCMBuffer) {
+    guard notchOn, let chans = buf.floatChannelData else { return }
+    let nch = Int(buf.format.channelCount)
+    while notch.count < nch { notch.append(AutoNotch()) }
+    let n = Int(buf.frameLength)
+    for c in 0..<nch { notch[c].process(chans[c], n) }
   }
 
   /** audioQ-only — called from handlePacket with the converted 48 kHz buffer. */
@@ -3062,6 +3076,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
     guard let outBuf = convertTo48k(inBuf) else { return }
     if recArmed { writeRecording(outBuf) }
+    applyNotch(outBuf)
     tapTranscriber(outBuf)
     if !isMuted { scheduleOut(outBuf) }
   }
@@ -3137,15 +3152,6 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   private func scheduleOut(_ buf: AVAudioPCMBuffer) {
     guard let player = playerNode, let fmt = audioFormat else { return }
     ensureRendering()
-    // Auto notch (network backends): adaptive line enhancer per channel, applied
-    // on the final 48 kHz feed. Runs on audioQ (single-threaded), so the filter
-    // state is safe. Local/RTL-TCP never enable it here (shim already notched).
-    if notchOn, let chans = buf.floatChannelData {
-      let nch = Int(buf.format.channelCount)
-      while notch.count < nch { notch.append(AutoNotch()) }
-      let n = Int(buf.frameLength)
-      for c in 0..<nch { notch[c].process(chans[c], n) }
-    }
     // Squelch closed → output silence (keeps the player fed, no underrun).
     if !squelchOpen, let chans = buf.floatChannelData {
       let nch = Int(buf.format.channelCount)

@@ -291,7 +291,7 @@ interface ModeSelectorProps {
   transcribeControls?: {
     active: boolean; selected: boolean; onToggle: () => void;
     /** 'auto' or a locale id; the offered rows are AUTO + the common languages the device actually has. */
-    language: string; languages: { code: string; id: string; installed?: boolean }[]; onLanguage: (id: string) => void;
+    language: string; languages: { code: string; id: string; name: string; installed?: boolean }[]; onLanguage: (id: string) => void;
     /** DOWNLOAD… — fetch a language for AUTO without listening (Stuart, 10-15). The id being fetched, and the last word. */
     onDownload?: (id: string) => void; downloading?: string; downloadNote?: string;
     /** The language being heard right now ('' when not running) — shown on the AUTO key as AUTO · MANDARIN. */
@@ -376,40 +376,94 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   ) : null;
   /* ★ The settings drop in under the key while it is selected, as RTTY's and TIME's do. AUTO detects the spoken
    *  language; a chosen language downloads its speech model once (the box says so). TRANSLATE offers OFF, the
-   *  phone's own language and English — the target is what YOU read, so a long list would be noise. */
-  const [txDlOpen, setTxDlOpen] = useState(false);
+   *  phone's own language and English — the target is what YOU read, so a long list would be noise.
+   *  ★★ LANGUAGE IS A DROPDOWN LIST, like OWRX's DIGITAL / DECODERS (Stuart, 2026-10-15: "a scrollable list … that way
+   *     we dont clutter the menu with lots of buttons") — so it can carry EVERY language the phone can transcribe,
+   *     not a hand-picked twenty. Each row says whether it is on the phone; GET fetches one (speech model, and the
+   *     translation pack through the system's own sheet) without listening, so AUTO can pick it from then on. */
+  const [txListOpen, setTxListOpen] = useState(false);
+  const txScroll = useRef<ScrollView | null>(null);
+  const txItemY = useRef<Record<string, number>>({});
+  const txChosen = tc?.languages.find(l => l.id === tc.language);
+  const txHead = !tc ? '' : tc.language === 'auto'
+    ? (tc.heard ? `AUTO · ${tc.heard.toUpperCase()}` : 'AUTO — DETECT THE LANGUAGE')
+    : (txChosen?.name ?? tc.language).toUpperCase();
+  useEffect(() => {
+    if (!txListOpen || !tc) return;
+    const id = setTimeout(() => {
+      const y = txItemY.current[tc.language];
+      if (y != null) txScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: false });
+    }, 60);
+    return () => clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txListOpen]);
+  const txPick = (id: string) => { setTxListOpen(false); tc?.onLanguage(id); };
+  const txRows = tc ? [{ id: 'auto', code: 'auto', name: 'AUTO — detect the language', installed: true }, ...tc.languages] : [];
   const txTargets = tc ? Array.from(new Set([tc.deviceLanguage, 'en'].filter(Boolean))) : [];
   const transcribeCallout = tc && txLit ? (
     <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                              : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
       <SubLabel label="LANGUAGE" />
-      <OptRow>
-        <SegBtn label={tc.language === 'auto' && tc.heard ? `AUTO · ${tc.heard.toUpperCase()}` : 'AUTO'}
-                active={tc.language === 'auto'} onPress={() => tc.onLanguage('auto')} />
-        {tc.languages.map(l => (
-          <SegBtn key={l.id} label={(LANG_NAMES[l.code] ?? l.code).toUpperCase()} active={tc.language === l.id} onPress={() => tc.onLanguage(l.id)} />
-        ))}
-        {tc.onDownload && <SegBtn label="DOWNLOAD…" active={txDlOpen} onPress={() => setTxDlOpen(o => !o)} />}
-      </OptRow>
-      {/* ★ The downloader: every language, ✓ = on the phone already. Tapping a missing one fetches its speech model
-       *  (and the translation pack, through the system's own sheet) so AUTO can pick it — no need to listen first. */}
-      {tc.onDownload && txDlOpen && (
-        <>
-          <SubLabel label="DOWNLOAD FOR AUTO" />
-          <OptRow>
-            {tc.languages.map(l => (
-              <SegBtn key={`dl-${l.id}`}
-                      label={`${l.installed ? '✓ ' : tc.downloading === l.id ? '… ' : ''}${(LANG_NAMES[l.code] ?? l.code).toUpperCase()}`}
-                      active={!!l.installed}
-                      onPress={() => { if (!l.installed) tc.onDownload!(l.id); }} />
-            ))}
-          </OptRow>
-          {!!tc.downloadNote && (
-            <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, marginTop: 4, textAlign: 'left' }, { color: t.btnText }]}>
-              {tc.downloadNote}
-            </Text>
+      <NavRow><NavItem onPress={() => setTxListOpen(o => !o)}>{(navFocused, navRef) => pt.metal ? (
+        <PopupKey ref={navRef as any} active pip onPress={() => setTxListOpen(o => !o)} focused={navFocused} height={38}
+          style={{ alignSelf: 'stretch' }} accessibilityLabel={`Language: ${txHead}`}>
+          {(legend) => (
+            <View style={st.moreHeadMetal}>
+              <Text style={[st.moreHeadText, { fontFamily: 'Atkinson Hyperlegible', fontWeight: '700', letterSpacing: 1, color: legend }]}
+                    numberOfLines={1}>{txHead}</Text>
+              <Text style={[st.moreChevron, { color: legend }]}>{txListOpen ? '▴' : '▾'}</Text>
+            </View>
           )}
-        </>
+        </PopupKey>
+      ) : (
+        <TouchableOpacity ref={navRef as any} activeOpacity={0.8} onPress={() => setTxListOpen(o => !o)}
+          style={[st.moreHead, { borderColor: dec, backgroundColor: decBg }, navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}>
+          <Text style={[st.moreHeadText, { fontFamily: t.font, color: dec }]} numberOfLines={1}>{txHead}</Text>
+          <Text style={[st.moreChevron, { color: t.btnText }]}>{txListOpen ? '▴' : '▾'}</Text>
+        </TouchableOpacity>
+      )}</NavItem></NavRow>
+      {txListOpen && (
+        <ScrollView ref={txScroll} nestedScrollEnabled keyboardShouldPersistTaps="handled"
+                    style={[st.moreList, { borderColor: t.btnBorder }, pt.metal && windowStyle(pt)]}>
+          {txRows.map(l => {
+            const on = l.id === tc.language;
+            const rowText = pt.metal
+              ? { fontFamily: 'Atkinson Hyperlegible', color: on ? pt.readout : pt.winText,
+                  ...(on ? { textShadowColor: pt.readoutGlow, textShadowRadius: 4, textShadowOffset: { width: 0, height: 0 } } : null) }
+              : { fontFamily: t.font, color: on ? dec : t.btnText };
+            const side = l.id === 'auto' ? ''
+              : tc.downloading === l.id ? 'GETTING…' : l.installed ? 'ON PHONE' : tc.onDownload ? 'GET' : '';
+            return (
+              <NavRow key={l.id}><MoreItem onPress={() => txPick(l.id)}
+                onReveal={() => {
+                  const y = txItemY.current[l.id];
+                  if (y != null) txScroll.current?.scrollTo({ y: Math.max(0, y - 60), animated: true });
+                }}>{(navFocused, navRef) => (
+                <TouchableOpacity ref={navRef as any} activeOpacity={0.7} onPress={() => txPick(l.id)}
+                  onLayout={e => { txItemY.current[l.id] = e.nativeEvent.layout.y; }}
+                  style={[st.moreItem, st.txItem, { borderBottomColor: pt.metal ? pt.winRule : t.barBorder },
+                          navFocused && { backgroundColor: focusC.tint(0.16) }]}>
+                  <Text style={[st.moreItemText, { flex: 1 }, rowText]} numberOfLines={1}>
+                    {on ? '✓ ' : ''}{l.name.toUpperCase()}
+                  </Text>
+                  {!!side && (side === 'GET' ? (
+                    <TouchableOpacity hitSlop={8} onPress={() => tc.onDownload?.(l.id)}
+                      style={[st.txGet, { borderColor: pt.metal ? pt.winText : t.btnBorder }]}>
+                      <Text style={[st.txSide, { color: pt.metal ? pt.winText : t.btnText }]}>GET</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={[st.txSide, { color: pt.metal ? pt.winText : t.btnText, opacity: 0.6 }]}>{side}</Text>
+                  ))}
+                </TouchableOpacity>
+              )}</MoreItem></NavRow>
+            );
+          })}
+        </ScrollView>
+      )}
+      {!!tc.downloadNote && (
+        <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, marginTop: 4, textAlign: 'left' }, { color: t.btnText }]}>
+          {tc.downloadNote}
+        </Text>
       )}
       <SubLabel label="TRANSLATE TO" />
       <OptRow>
@@ -1009,6 +1063,9 @@ const st = StyleSheet.create({
   moreList:     { marginTop: 4, maxHeight: 260, borderWidth: 1, borderRadius: 3 },
   moreItem:     { paddingVertical: 11, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   moreItemText: { fontSize: 14 },
+  txItem:       { flexDirection: 'row', alignItems: 'center' },
+  txSide:       { fontSize: 11, fontWeight: '600', letterSpacing: 0.5 },
+  txGet:        { borderWidth: 1, borderRadius: 3, paddingVertical: 3, paddingHorizontal: 8, marginLeft: 8 },
   decCaption:   { color: DEC_COL, fontSize: 11, marginTop: 7, opacity: 0.85, lineHeight: 15 },
   closeBtn: {
     marginTop: 14, alignSelf: 'center', borderWidth: 1,
