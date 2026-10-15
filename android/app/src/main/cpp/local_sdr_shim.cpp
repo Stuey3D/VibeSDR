@@ -14123,7 +14123,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  HF+'s do; packing and the curve are not gain and do not. */
         if (type == "airspy_control") {
             if (!sharedGate("Airspy controls")) return;
-            const bool manualLocked = LocalSdrShim::agcLocked();
+            const bool manualLocked = LocalSdrShim::agcLocked() && !adminNow(sock);   // ★ the owner overrides (see `gain`)
             /* ★★★ THE OWNER'S PER-BAND LIMIT: A CURVE, A POSITION, AND NOTHING ELSE (Stuart,
              *     2026-09-28): "if a per band limit is in place tie it to one of the gain curves
              *     and limit that and then block any manual gain with the individual gain controls."
@@ -14196,7 +14196,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     ARE this radio's gain — leaving them writable while the AGC is "locked" would be
             //     a lock in name only, since a listener could simply attenuate or boost around it.
             //     ★ The threshold below is the AGC's own setting, not a way past it, so it stays.
-            const bool ahfManualLocked = LocalSdrShim::agcLocked();
+            // ★★★ THE SIGNED-IN OWNER IS EXEMPT, as in the `gain` handler (Stuart, 2026-09-27: "admin should
+            //     override it"). That fix reached the generic slider only, so on an HF+ with the lock on the
+            //     owner's attenuator, preamp and AGC switch were refused and logged while the app showed them
+            //     live (Stuart, 2026-10-15: "moved the slider to its extremes and nothing changed at all").
+            const bool ahfManualLocked = LocalSdrShim::agcLocked() && !adminNow(sock);
             if (jsonNum(msg, "att", v)) {
                 if (ahfManualLocked) LOGI("attenuator refused — the owner has locked the AGC on");
                 else                 LocalSdrShim::instance().setAhfAttenuation((int)v);
@@ -14219,7 +14223,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     that is good enough", Stuart), so "protect the front end" here means: leave it
             //     to the radio, and do not let a listener take it off.
             if (jsonNum(msg, "agc", v)) {
-                if (LocalSdrShim::agcLocked() && v == 0) LOGI("AGC off refused — locked by the owner");
+                if (ahfManualLocked && v == 0) LOGI("AGC off refused — locked by the owner");
                 else                                     LocalSdrShim::instance().setAhfAgc(v != 0);
             }
             return;
@@ -14386,7 +14390,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     them the very control the lock exists to withhold. Turning it ON is always
             //     allowed — that is moving TOWARDS what the owner asked for.
             if (jsonNum(msg, "ifagc", v)) {
-                if (LocalSdrShim::agcLocked() && v == 0) {
+                if (LocalSdrShim::agcLocked() && v == 0 && !adminNow(sock)) {   // ★ the owner overrides (see `gain`)
                     LOGI("AGC off refused — the owner has locked it on");
                 } else {
                     LocalSdrShim::instance().setIfAgc(v != 0);
