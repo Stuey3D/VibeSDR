@@ -525,6 +525,12 @@ printf '\n\033[1m── a dead tunnel address is replaced (end to end) ──\03
 node scripts/test-tunnel-selfcheck.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★ "START THE TUNNEL AGAIN AFTER A REBOOT" (Stuart, 2026-10-16): settled + written at start (on everywhere, off on a
+#    Portable, the Portable's old dirResume carried over); OFF unlists after a REBOOT, never after a settings restart.
+printf '\n\033[1m── the tunnel after a reboot (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-resume.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 printf '\n\033[1m── a decoder alone keeps the audio chain (end to end) ──\033[0m\n'
 node scripts/test-server-decoder-alone.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

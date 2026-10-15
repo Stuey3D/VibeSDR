@@ -51,6 +51,7 @@
 #include <thread>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>  // _NSGetExecutablePath — macOS's /proc/self/exe
+#include <sys/sysctl.h>   // kern.bootsessionuuid — macOS's boot id, for bootId()
 #endif
 #ifdef __linux__
 #include <sys/prctl.h>
@@ -756,6 +757,28 @@ void reapRadios() {
  *     had just been fixed not to rely on. `_NSGetExecutablePath` is the exact equivalent and is
  *     what makes the front door's self-exec safe on a Mac, which Full mode there depends on.
  *  ★ Returns empty if it cannot be determined; the caller keeps the execlp fallback for that. */
+/** This machine's boot: changes only when the MACHINE restarts, never when the service does (every settings save
+ *  restarts it). "" where there is no such thing — the caller then treats every start as the same boot. */
+static std::string bootId() {
+    // ★ Tests only (scripts/test-tunnel-resume.mjs): a "reboot" without rebooting the test machine.
+    if (const char* t = std::getenv("VIBESERVER_TEST_BOOT_ID"); t && *t) return t;
+#if defined(__APPLE__)
+    char b[64] = {0};
+    size_t n = sizeof b - 1;
+    if (::sysctlbyname("kern.bootsessionuuid", b, &n, nullptr, 0) == 0) return std::string(b);
+    return "";
+#else
+    std::string id;
+    if (FILE* bf = std::fopen("/proc/sys/kernel/random/boot_id", "r")) {
+        char b[64] = {0};
+        if (std::fgets(b, sizeof b, bf)) id = b;
+        std::fclose(bf);
+    }
+    while (!id.empty() && (id.back() == '\n' || id.back() == '\r')) id.pop_back();
+    return id;
+#endif
+}
+
 static std::string selfExePath() {
 #if defined(__APPLE__)
     uint32_t sz = 0;
@@ -1636,51 +1659,52 @@ int main(int argc, char** argv) {
             //     came up and nothing said why (2026-08-08).
             // ★ Every other reader — the supervisor, the router, portForRadio — takes it from the
             //   file, so the file is where the truth has to live.
-            /* ★★★ A POCKET BOX WAKES UP PERSONAL UNLESS ITS OWNER SAID "RESUME" (Stuart, 2026-10-10).
-             *  Powered on, it is reachable on its own hotspot or the owner's Wi-Fi and nowhere else: the
-             *  tunnel is stopped (its ~30 MB per cloudflared comes back to a 512 MB board) and nothing is
-             *  listed. "Enable the tunnel" is the same "Advertise on VibeSDR.net" switch every server has
-             *  — it starts cloudflared live and stops it when switched off. Its sub-toggle, "Resume the
-             *  tunnel after a restart" (dirResume), keeps it across a power cycle; even then the tunnel
-             *  waits for real internet (vibedir::setInternet, fed by the pocket service).
-             *  ★★ ON A NEW BOOT, NOT A NEW PROCESS. Every settings save restarts this service; keying
-             *     on process start would un-share the box each time the owner saved anything. The
-             *     kernel's boot id changes only when the machine itself restarts.
-             *  ★ Front door only (the radios read the file after us), pocket image only, and written
-             *    to the FILE — one rule, two readers: the page must show the switch off, too. */
-            if (wantSerial.empty() && vibepocket::enabled() && srv.dirList && !srv.dirResume) {
-                std::string bootId;
-                if (FILE* bf = std::fopen("/proc/sys/kernel/random/boot_id", "r")) {
-                    char b[64] = {0};
-                    if (std::fgets(b, sizeof b, bf)) bootId = b;
-                    std::fclose(bf);
+            /* ★★★ "START THE TUNNEL AGAIN AFTER A REBOOT" — EVERY SERVER THIS PAGE CONFIGURES (Stuart, 2026-10-16).
+             *  It was the Portable's alone ("Resume the tunnel after a restart", dirResume, under a second
+             *  "Enable the tunnel" switch that did the same job as "List this server publicly"). Now it sits
+             *  under that one switch on every server: OFF by default on a Portable — it powers on Personal,
+             *  its tunnel stopped (~30 MB of cloudflared back on a 512 MB board) and nothing listed — and ON
+             *  by default everywhere else, which is what those servers always did.
+             *  ★★ ONE RULE, TWO READERS: a never-chosen value (-1) is settled HERE and written to the file,
+             *     so the page shows exactly what the server will do. On a Portable the old dirResume carries
+             *     over (an owner who ticked it keeps it).
+             *  ★★ ON A NEW BOOT, NOT A NEW PROCESS. Every settings save restarts this service; keying on
+             *     process start would un-share the box each time the owner saved anything. bootId() changes
+             *     only when the machine itself restarts.
+             *  ★ Even when on, a Portable's tunnel waits for real internet (vibedir::setInternet, fed by the
+             *    pocket service). Front door only (the radios read the file after us). */
+            if (wantSerial.empty()) {
+                const bool pocket = vibepocket::enabled();
+                if (srv.tunnelResume < 0) {
+                    srv.tunnelResume = pocket ? (srv.dirResume ? 1 : 0) : 1;
+                    std::string werr;
+                    if (!vsconfig::saveServer(g_configPath, srv, werr))
+                        std::fprintf(stderr, "VibeServer: could not record the tunnel's after-reboot default (%s)\n", werr.c_str());
                 }
-                const std::string mark = vibepocket::paths().portFile + ".boot";
+                // ★ The Portable keeps the mark where it always was, so an update does not read as a new boot.
+                const std::string mark = pocket ? vibepocket::paths().portFile + ".boot" : g_configPath + ".boot";
+                const std::string boot = bootId();
                 std::string seen;
                 if (FILE* mf = std::fopen(mark.c_str(), "r")) {
                     char b[64] = {0};
                     if (std::fgets(b, sizeof b, mf)) seen = b;
                     std::fclose(mf);
                 }
-                if (!bootId.empty() && bootId != seen) {
+                while (!seen.empty() && (seen.back() == '\n' || seen.back() == '\r')) seen.pop_back();
+                // ★ No mark yet = the first start of a build that keeps one: not a reboot we can vouch for.
+                if (srv.dirList && srv.tunnelResume == 0 && !boot.empty() && !seen.empty() && boot != seen) {
                     srv.dirList = false;
                     std::string werr;
                     if (vsconfig::saveServer(g_configPath, srv, werr))
-                        std::printf("VibeServer: pocket box — powered on PERSONAL: not listed, tunnel stopped "
-                                    "(share it from the setup page)\n");
+                        std::printf("VibeServer: restarted — not listed, tunnel stopped (\"Start the tunnel again after a "
+                                    "reboot\" is off; list it again from the setup page)\n");
                     else
-                        std::fprintf(stderr, "VibeServer: pocket — could not record Personal (%s)\n", werr.c_str());
+                        std::fprintf(stderr, "VibeServer: could not record the listing as off (%s)\n", werr.c_str());
                 }
-            }
-            if (wantSerial.empty() && vibepocket::enabled()) {
                 // ★ Remember this boot, so a restart within it keeps whatever the owner chose.
-                if (FILE* bf = std::fopen("/proc/sys/kernel/random/boot_id", "r")) {
-                    char b[64] = {0};
-                    if (std::fgets(b, sizeof b, bf)) {
-                        std::string perr;
-                        vibepocket::writePrivate(vibepocket::paths().portFile + ".boot", b, perr);
-                    }
-                    std::fclose(bf);
+                if (!boot.empty()) {
+                    std::string perr;
+                    vibepocket::writePrivate(mark, boot + "\n", perr);
                 }
             }
             g_serverConfig = srv;

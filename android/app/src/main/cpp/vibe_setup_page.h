@@ -363,33 +363,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       </div>
       </div>
 
-      <!-- ★★★ THE TUNNEL — ONE PRESS EACH WAY (Stuart, 2026-10-10). Not a second mechanism: "Enable
-           the tunnel" IS the "Advertise on VibeSDR.net" switch below, posted on its own so it acts at
-           once with no restart. On, the Cloudflare tunnel starts and the box is listed; off, the tunnel
-           PROCESS stops (its RAM comes back) and the entry is removed.
-           ★★ "Resume the tunnel after a restart" (off by default) is the only thing that survives a power
-              cycle; without it the box always comes back Personal. Either way the tunnel starts only
-              once the box has REAL internet — never on its own hotspot — and the line below says so.
-           ★ Same words as VibeServer Lite's ADVERTISE ON VIBESDR.NET card where they overlap, so the
-             two portable servers read the same. -->
-      <div class="card hide" id="shareCard">
-      <h2>Share with the world</h2>
-      <p class="why">Off, this box is personal: only you can reach it, on its own hotspot or your Wi-Fi.
-         On, it publishes this receiver on vibesdr.net so anyone can find it and listen. Your home
-         address is never published &mdash; listeners reach it through a Cloudflare tunnel.</p>
-      <label style="display:flex;align-items:center;gap:10px;margin:0">
-        <input type="checkbox" id="tunnelOn" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Enable the tunnel</span>
-      </label>
-      <!-- ★ A wrapper carries .hide: the label's own inline display:flex would beat the class. -->
-      <div id="tunnelResumeRow" class="hide">
-      <label style="display:flex;align-items:center;gap:10px;margin:10px 0 0 26px">
-        <input type="checkbox" id="tunnelResume" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Resume the tunnel after a restart</span>
-      </label>
-      </div>
-      <div class="hint" id="shareMsg"></div>
-      </div>
+      <!-- ★★ ONE SHARING SWITCH (Stuart, 2026-10-16). The Portable had its own "Share with the world" card here —
+           "Enable the tunnel" was the same switch as "List this server publicly", without the name. It went;
+           its "after a restart" option moved under that switch for every server (Advertise on VibeSDR.net). -->
 
       <!-- ★★★ WHAT THIS BOX CAN CARRY, AT THE TOP (Stuart, 2026-09-19). Every setting below is a promise about
            work this machine will have to do, and until it has been measured nobody — owner or us — knows which
@@ -519,6 +495,14 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <input type="checkbox" id="dirList" style="width:16px;height:16px;accent-color:var(--amber)">
           <span>List this server publicly</span>
         </label>
+        <!-- ★★★ "START THE TUNNEL AGAIN AFTER A REBOOT" (Stuart, 2026-10-16): every server that uses this page.
+             Off by default on a Portable (it powers on personal), on by default everywhere else (what those
+             servers always did). The server settles a never-chosen value and writes it (tunnelResume). -->
+        <label style="display:flex;align-items:center;gap:10px;margin:10px 0 0 26px">
+          <input type="checkbox" id="tunnelResume" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Start the tunnel again after a reboot</span>
+        </label>
+        <div class="hint" id="tunnelResumeHint" style="margin-left:26px"></div>
         <label><span class="lbl">Public name</span>
           <input type="text" id="dirName" maxlength="48" placeholder="e.g. Moulton RSP1B">
           <div class="hint" id="dirNameHint">The shareable address is made from this name, the same
@@ -1960,7 +1944,20 @@ async function benchRun(force) {
 function renderDirStatus(st) {
   const el = $("dirStatus"); if (!el) return;
   const on = $("dirList") && $("dirList").checked;
+  const h = $("tunnelResumeHint");
+  if (h) h.textContent = POCKET
+    ? "Off: when this box is switched off and on again it comes back personal \u2014 only you can reach it \u2014 "
+      + "until you list it again. Even when on, the tunnel waits until the box has a real internet connection."
+    : "Off: after this machine restarts, the listing stays off until you switch it on again here.";
   if (!st || typeof st !== "object" || !on) { el.innerHTML = ""; return; }
+  // ★ The Portable says what is TRUE, not what was asked for: listed while the box is its own hotspot (or has no
+  //   real internet) is WAITING, and the owner reads exactly that rather than an error or a spinner.
+  const hotspot = POCKET && WIFI && (WIFI.mode === "setup-ap" || WIFI.mode === "fallback-ap");
+  if (POCKET && (hotspot || st.internet === false)) {
+    el.textContent = "Tunnel waiting for an internet connection"
+      + (hotspot ? " \u2014 the box is its own hotspot. It starts by itself once the box joins one of your networks." : ".");
+    return;
+  }
   const addr = String(st.address || "");
   if (st.listed && addr) {
     el.innerHTML = `<b>Listed.</b> Accessible from <a href="https://${esc(addr)}/" target="_blank" rel="noopener"`
@@ -4549,6 +4546,8 @@ function fill() {
   //    the owner an empty box over a setting that is actually on, and the next save writes the
   //    blank back — which is how twelve settings reverted on every start once already.
   $("dirList").checked        = !!cfg.dirList;
+  // ★ The server writes the settled value; an older server sends none — then its old behaviour (Portable off, else on).
+  $("tunnelResume").checked   = typeof cfg.tunnelResume === "boolean" ? cfg.tunnelResume : (POCKET ? !!cfg.dirResume : true);
   renderDirStatus(cfg.dirStatus);
   $("dirName").value          = cfg.dirName || "";
   $("dirPublicUrl").value     = cfg.dirPublicUrl || "";
@@ -5125,6 +5124,7 @@ function stashServer() {
   cfg.oneRadioPerIp  = cfg.maxRadiosPerIp !== 0;
   cfg.decoderMax     = Math.max(0, parseInt($("decoderMax").value || "0", 10) || 0);
   cfg.dirList       = $("dirList").checked;
+  cfg.tunnelResume  = $("tunnelResume").checked;
   cfg.dirName       = $("dirName").value.trim();
   cfg.dirPublicUrl  = $("dirPublicUrl").value.trim();
   cfg.dirShareSec   = parseInt($("dirShareSec").value, 10) || 0;
@@ -5157,6 +5157,7 @@ function collect() {
     oneRadioPerIp: (parseInt($("maxRadiosPerIp").value, 10) || 0) !== 0,
     decoderMax:       Math.max(0, parseInt($("decoderMax").value || "0", 10) || 0),
     dirList:          $("dirList").checked,
+    tunnelResume:     $("tunnelResume").checked,
     dirName:          $("dirName").value.trim(),
     dirPublicUrl:     $("dirPublicUrl").value.trim(),
     batteryPauseAt:   parseInt($("batteryPauseAt").value || "0", 10),
@@ -5656,7 +5657,7 @@ function wifiPskOk(p) {
 async function wifiLoad() {
   if (!POCKET) return;
   $("wifiCard").classList.remove("hide");
-  shareRender();
+  renderDirStatus(cfg && cfg.dirStatus);
   try {
     const r = await fetch("/vibeserver/pocket/wifi?" + await authQuery(), {cache: "no-store"});
     WIFI = r.ok ? await r.json() : null;
@@ -5675,7 +5676,7 @@ async function wifiLoad() {
   $("wifiCountry").value = WIFI.country || "";
   $("wifiVolatile").classList.toggle("hide", WIFI.settingsSaved !== false);
   wifiRender();
-  shareRender();
+  renderDirStatus(cfg && cfg.dirStatus);
   try { WIFI_BASELINE = JSON.stringify(wifiCollect()); } catch (e) { WIFI_BASELINE = ""; }
   wifiDirtyRender();
 }
@@ -5892,66 +5893,6 @@ async function wifiPost(path, body) {
   if (!r.ok) throw (j.error || ("Refused (" + r.status + ")."));
   return j;
 }
-
-function shareRender() {
-  if (!POCKET || !cfg) return;
-  $("shareCard").classList.remove("hide");
-  const on = !!cfg.dirList;
-  $("tunnelOn").checked = on;
-  $("tunnelResume").checked = !!cfg.dirResume;
-  $("tunnelResumeRow").classList.toggle("hide", !on);
-  const st = cfg.dirStatus || {};
-  const hotspot = WIFI && (WIFI.mode === "setup-ap" || WIFI.mode === "fallback-ap");
-  // ★★ SAY WHAT IS TRUE, not what was asked for: a tunnel switched on while the box is its own hotspot
-  //    is WAITING, and the owner should read exactly that rather than an error or a spinner.
-  $("shareMsg").textContent = !on
-    ? "Personal — the tunnel is stopped."
-      + (cfg.dirResume ? "" : " After a restart the box always comes back personal.")
-    : (hotspot || st.internet === false)
-      ? "Tunnel waiting for an internet connection"
-        + (hotspot ? " — the box is its own hotspot. It starts by itself once the box joins one of your networks." : ".")
-      : st.address ? "Anyone can listen at " + st.address + " — share that address, it stays the same."
-      : st.error ? "Not listed yet: " + st.error
-      : "Starting the tunnel and listing this box…";
-}
-async function sharePost(patch) {
-  // ★ ONLY these switches (plus the radio list, so the server reads this as an update to the machine
-  //   it already has — see fromJson's patch rule). No restart: the listing follows the save, live.
-  const r = await fetch("/vibeserver/config?" + await authQuery(), {method: "POST", cache: "no-store",
-                        body: JSON.stringify(Object.assign({radios: cfg.radios || []}, patch))});
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw (j.error || ("Refused (" + r.status + ")."));
-}
-async function shareSet(on) {
-  if (!cfg) return;
-  if (on && !((cfg.dirName || "").trim() || (cfg.name || "").trim())) {
-    $("tunnelOn").checked = false;
-    $("shareMsg").textContent = "Give it a public name first (Advertise on VibeSDR.net, below), then enable the tunnel.";
-    return;
-  }
-  $("tunnelOn").disabled = $("tunnelResume").disabled = true;
-  try {
-    await sharePost({dirList: on});
-    cfg.dirList = on;
-    if ($("dirList")) $("dirList").checked = on;
-    shareRender();
-    // ★ The tunnel takes a few seconds to be given an address; read the status back twice.
-    for (const ms of [4000, 12000]) setTimeout(async () => {
-      try { const g = await fetch("/vibeserver/config?" + await authQuery(), {cache: "no-store"});
-            if (g.ok) { const c = await g.json(); cfg.dirStatus = c.dirStatus; shareRender(); } } catch (e) {}
-    }, ms);
-  } catch (e) { $("shareMsg").textContent = String(e); $("tunnelOn").checked = !!cfg.dirList; }
-  $("tunnelOn").disabled = $("tunnelResume").disabled = false;
-}
-$("tunnelOn").onchange = e => shareSet(e.target.checked);
-$("tunnelResume").onchange = async e => {
-  const v = e.target.checked;
-  $("tunnelResume").disabled = true;
-  try { await sharePost({dirResume: v}); cfg.dirResume = v; }
-  catch (err) { e.target.checked = !!cfg.dirResume; $("shareMsg").textContent = String(err); }
-  $("tunnelResume").disabled = false;
-  shareRender();
-};
 
 $("wifiAdd").onclick = () => {
   if (WIFI_ROWS.length < 3) WIFI_ROWS.push({ssid: "", psk: "", keep: false, hidden: false, other: false});
