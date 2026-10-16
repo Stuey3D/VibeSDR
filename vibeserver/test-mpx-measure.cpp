@@ -721,7 +721,7 @@ int main(int argc, char** argv) {
                 char w[220];
                 std::snprintf(w, sizeof w, "L/R under noise %.2f: left %.2f / right %.2f (true %.1f / %.1f) — within 2 kHz or shown as no reading, never above the total %.1f",
                               nz, r.lDev, r.rDev, wl, wr, r.mpxHold);
-                auto fine = [](double got, double want) { return got < 0.0 || std::fabs(got - want) <= 2.0; };   // ★ ±2 kHz: the measured spread between programme shapes (kLrNoiseA)
+                auto fine = [](double got, double want) { return got < 0.0 || std::fabs(got - want) <= 2.0; };   // ★ ±2 kHz: the measured spread between programme shapes (kLrNoiseA/B/C)
                 ok(fine(r.lDev, wl) && fine(r.rDev, wr) && r.lDev <= r.mpxHold + 0.5 && r.rDev <= r.mpxHold + 0.5, w);
             }
         }

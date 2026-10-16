@@ -21,17 +21,24 @@ namespace {
 constexpr double kPllWide = 0.01;            // ~190 Hz: acquisition, and the listener's own loop
 constexpr double kPllNarrow = 0.002;         // ~38 Hz: measurement (programme no longer pulls the phase)
 constexpr double kPllNarrowAfterSec = 1.5;   // of steady tracking before narrowing
-/* ★★ THE L/R NOISE REMOVAL — bias = kLrNoiseA·σ_L + kLrNoiseB·σ_L² (kHz), taken off the published L/R figure (see
- *  lrNoiseKM_ in the header for how σ_L is measured). How far noise lifts a 99.5th percentile depends on how long the
- *  programme DWELLS near its peak, so it is not one number — measured on test-mpx-measure's bench:
- *    · a clipped, band-limited programme (Gibbs ripple on its tops): 0.846σ + 0.157σ² (least squares over σ 0.7–5.8 kHz);
- *    · a sine programme (a long dwell at the crest): ≈ 2.0σ.
- *  A quadrature fit like the deviation's does not fit either (its constant drifted from 12 to 6 across the sweep). Real
- *  stations sit between the two, so the curve is the MIDPOINT: every bench case lands within ±2 kHz (the two shapes err
- *  in opposite directions — that spread is the honest accuracy under heavy noise), and Flex (96.1, recorded
- *  2026-10-10, σ_L 6.1 kHz) comes down from L 92 / R 91 to ~81 under its 86 kHz total — where the pilot's share says it
- *  must be. */
-constexpr double kLrNoiseA = 1.423, kLrNoiseB = 0.0785;
+/* ★★ THE L/R NOISE REMOVAL — see lrNoiseKM_ in the header for how σ_L is measured, and lrMeter_ for where it comes off.
+ *  How far noise lifts a 99.5th percentile depends on how long the programme DWELLS near its peak, AND ON HOW BIG THE
+ *  PEAK IS NEXT TO THE NOISE. In units of σ the lift is a function of x = σ/A (A the programme's true peak), not of σ:
+ *    · x → 0: only the crest is near the top, so it is the crest's dwell that counts — a sine (long dwell) ≈ 1.6–2.0σ, a
+ *      clipped band-limited programme (Gibbs ripple: a short dwell) ≈ 0.8–1.3σ;
+ *    · x → ∞: the noise alone makes the figure, ≈ 2.7σ (its own 99.5th percentile, the highest of 20 windows);
+ *    · in between the two shapes converge (they agree by x ≈ 0.25).
+ *  ★★ The first removal (2026-10-10) was 1.423σ + 0.0785σ², fitted at one programme level (~45 kHz). A QUIETER channel
+ *     under the same noise sits further along x and its lift is bigger, so it was under-corrected: the bench's sine at
+ *     L 40.5 / R 20.25 under σ_L 4.8 read R 23.1 (+2.8) while L was right — x 0.24 wants 2.2σ, the fit gave 1.8σ.
+ *  ★★★ SO THE LIFT IS g(σ/A)·σ, solved for A. g is a rational fit, (a + b·x)/(1 + c·x), to a simulation of this exact
+ *     statistic (|programme + noise| at 96 kHz, 50 ms windows, 99.5th percentile, the highest of 20) with FM's folded
+ *     f² noise through 15 kHz, for sines (1 / 1.7 kHz) and clipped 15 kHz square waves (0.7 / 1.1 kHz) at x 0.01–1.5,
+ *     weighted ONE PART SINE TO TWO PARTS CLIPPED — broadcast programme is processed, and the sine is the extreme long
+ *     dwell. Fit error ≤ 0.04σ. The spread between the shapes (≤ ~0.75σ at small x, nothing by x 0.25) is the honest
+ *     accuracy under heavy noise. P = A + σ·g(σ/A) is a quadratic in A — solved exactly, no iteration (lrMeter_).
+ *  ★ It withholds by itself: noise alone reads P ≈ (b/c)·σ, and there the root is A = 0 — "—", never a made-up figure. */
+constexpr double kLrNoiseA = 0.9551, kLrNoiseB = 25.637, kLrNoiseC = 9.400;
 }
 
 namespace vibedsp {
@@ -718,13 +725,18 @@ void MpxMeasure::lrMeter_(const float* x, const float* lmr, const float* lmrQ, i
             if (lrWinFill_ >= 4) for (int c = 0; c < 2; ++c) {      // ★ 200 ms before the first figure
                 float pk = 0.0f;
                 for (int w = 0; w < lrWinFill_; ++w) pk = std::max(pk, lrWinPk_[c][(size_t)w]);
-                /* ★★★ THE NOISE COMES OFF (see lrNoiseKM_ and kLrNoiseA/B). A figure the noise accounts for entirely is
+                /* ★★★ THE NOISE COMES OFF (see lrNoiseKM_ and kLrNoiseA/B/C). A figure the noise accounts for entirely is
                  *  not a figure: "—" (sticky in the panel), never a made-up zero. */
                 if (lrSigS2_ >= 0.0) {
                     const double sig = 75.0 * std::sqrt(lrSigS2_ * (1.0 + lrNoiseKM_));
-                    const double bias = kLrNoiseA * sig + kLrNoiseB * sig * sig;
                     lrSigKHz_ = (float)sig;
-                    pk = (pk - bias > 0.5) ? (float)(pk - bias) : -1.0f;
+                    /* P = A + σ·(a·A + b·σ)/(A + c·σ)  ⇒  A² + A·((a + c)·σ − P) + σ·(b·σ − c·P) = 0, the larger root.
+                     *  (A negative constant term — any P above the noise's own b/c·σ — gives one positive root; otherwise
+                     *  there is none, and no reading.) */
+                    const double P = pk, bq = (kLrNoiseA + kLrNoiseC) * sig - P, cq = sig * (kLrNoiseB * sig - kLrNoiseC * P);
+                    const double disc = bq * bq - 4.0 * cq;
+                    const double A = disc >= 0.0 ? 0.5 * (-bq + std::sqrt(disc)) : -1.0;
+                    pk = (A > 0.5) ? (float)A : -1.0f;
                 }
                 lrPub_[c] = pk;
             }
