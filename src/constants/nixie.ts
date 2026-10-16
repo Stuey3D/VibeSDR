@@ -152,9 +152,13 @@ export const DIGIT_CORE = '#ffaa2c';
 export const CORE_FAT = 0.6;
 /** Unlit cathodes: bare metal in a switched-off tube; lit warm from the side by a lit digit behind
  *  the ones in front; a dark wire where one crosses the glow. */
-const WIRE_OFF       = 'rgba(160,140,120,0.13)';
+/* ★ Stuart's photo of four UNLIT IN-14s (2026-10-16): the cathodes are bright silver-grey wire, the 6
+ *   right behind the mesh clearest, the stack fading as it goes back. Neutral metal — never greenish. */
+const WIRE_OFF       = 'rgba(205,205,200,0.28)';   // dimmer than the daylit photo: the recess is dark
+/** An off tube's wires fade with depth (the photo): alpha × (1 − OFF_FADE·i). */
+const OFF_FADE       = 0.09;
 const WIRE_WARM      = 'rgba(255,150,90,0.12)';
-const WIRE_FRONT     = 'rgba(70,26,6,0.36)';
+const WIRE_FRONT     = 'rgba(26,24,22,0.30)';   // neutral dark metal crossing the glow
 /** The anode mesh in front of the stack: it shadows the glow as fine hex lines, and is lit warm itself. */
 /** Nixie One's stroke weight, as a fraction of the font size (measured at 1000 px: 29-30 px — the 0's
  *  ring, the 2's base and tick). The 1's plain wire is drawn this wide. */
@@ -254,13 +258,24 @@ export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, font: SkFont, lit: stri
    * behind it, the glow included. ★ The unlit wires are drawn as ONE layer per side, opaque inside it,
    * the layer at the wire's tint: where two wires overlap (the 3, 8 and 0 share curves) they do not
    * stack up into a solid dark band over the digit — a wire is a wire, however many lie on that line. */
-  const [backCol, backA] = rgbA(lit === null ? WIRE_OFF : WIRE_WARM);
-  layer(backA, 0, () => {
-    for (let i = CATHODE_STACK.length - 1; i > li; i--) {
+  if (lit === null) {
+    // ★ A switched-off tube: the whole stack as bare silver wire, the 6 right behind the mesh clearest,
+    //   each one further back fainter (Stuart's photo of unlit IN-14s). Drawn wire by wire, back first,
+    //   so the front ones read over the tangle behind them.
+    const [offCol, offA] = rgbA(WIRE_OFF);
+    for (let i = CATHODE_STACK.length - 1; i >= 0; i--) {
       const d = CATHODE_STACK[i];
-      atDepth(d, (z) => layer(z.opacity, 0, () => shape(d, backCol, 0)));
+      atDepth(d, (z) => layer(offA * z.opacity * Math.max(0.15, 1 - OFF_FADE * i), 0, () => shape(d, offCol, 0)));
     }
-  });
+  } else {
+    const [backCol, backA] = rgbA(WIRE_WARM);
+    layer(backA, 0, () => {
+      for (let i = CATHODE_STACK.length - 1; i > li; i--) {
+        const d = CATHODE_STACK[i];
+        atDepth(d, (z) => layer(z.opacity, 0, () => shape(d, backCol, 0)));
+      }
+    });
+  }
   if (lit !== null) {
     atDepth(lit, (z) => {
       for (const g of DIGIT_NEON) layer(g.alpha * z.opacity, g.sigma * nf * z.soft, () => shape(lit, g.color, g.fat * stem));

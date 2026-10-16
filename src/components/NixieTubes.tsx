@@ -211,7 +211,7 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
           );
         })}
         <Group clip={meshClip}>
-          <Path path={mesh} color="rgba(150,140,125,0.20)" style="stroke" strokeWidth={meshW} />
+          <Path path={mesh} color="rgba(185,185,180,0.22)" style="stroke" strokeWidth={meshW} />
         </Group>
 
         {/* ── The INS-1 bulbs (the decimal point): glass, bare electrode, two leads ── */}
