@@ -21,7 +21,7 @@
  */
 
 // ★ Types only: this module stays loadable by node (scripts/test_faceplate_nixie.ts) with no React Native.
-import type { Skia, SkCanvas, SkFont, SkPath } from '@shopify/react-native-skia';
+import type { Skia, SkCanvas, SkPath } from '@shopify/react-native-skia';
 
 /**
  * ★★★ THE IN-14 CATHODE STACK, FRONT to back: 6 5 4 7 3 9 8 2 0 1 — MEASURED off Stuart's 4K close-up of real
@@ -61,14 +61,86 @@ export function cathodeNeighbours(d: string | null): { back: string[]; front: st
   return { back: CATHODE_STACK.slice(i + 1) as string[], front: CATHODE_STACK.slice(0, i) as string[] };
 }
 
-/** The glyph a digit's cathode is cut as. ★ On the IN-14 the 5 is the 2's cathode turned upside down
- *  and back to front (rotated 180°) — so the frequency tubes draw a '2' rotated 180°. Only here: any
- *  other Nixie-font text keeps the font's own 5. */
-export function cathodeGlyph(d: string): { glyph: string; flipY: boolean; bar: boolean } {
-  if (d === '5') return { glyph: '2', flipY: true, bar: false };
-  // ★ The IN-14's 1 is a plain straight wire — no flag, no foot (the font's 1 has both).
-  if (d === '1') return { glyph: '0', flipY: false, bar: true };
-  return { glyph: d, flipY: false, bar: false };
+/**
+ * ★★★ THE IN-14's OWN DIGITS, as wire paths (Stuart, 2026-10-16: "match the real numbers, such as the
+ * flat top 3 and the lack of tail on the 7"). Traced from his 4K close-up (IMG_1559, one tube through
+ * all ten digits) and his photo of unlit tubes. Frequency tubes only: the Nixie One font is untouched
+ * everywhere else.
+ *
+ * A digit is a list of strokes in a UNIT BOX: y 0 (top) … 1 (bottom), x 0 … GLYPH_W, each stroke one
+ * piece of wire with round ends. Shapes:
+ *   0 a plain tall oval · 1 a straight wire, no flag or foot · 2 an arc over the top, an S down to a
+ *   rounded corner, a flat base with NO upturn · 3 FLAT-TOPPED (Ʒ): top bar, a straight diagonal down
+ *   to a round bowl · 4 closed apex, the stem running below the line, the bar through it · 5 the 2's
+ *   part turned upside down (a vertical flip) · 6 a straight stroke from the top right into a round
+ *   bowl · 7 a flat top bar and a straight stem, NO tail at the foot · 8 a small loop on a larger one
+ *   · 9 the 6's part turned round (rotated 180°).
+ */
+export const GLYPH_W = 0.6;
+export type Stroke =
+  | { k: 'line'; pts: Array<[number, number]> }                           // polyline
+  | { k: 'arc'; cx: number; cy: number; rx: number; ry: number; a0: number; sweep: number }  // degrees, clockwise from +x
+  | { k: 'cubic'; p0: [number, number]; c1: [number, number]; c2: [number, number]; p1: [number, number] };
+
+const TWO: Stroke[] = [
+  { k: 'arc', cx: 0.30, cy: 0.27, rx: 0.28, ry: 0.27, a0: 192, sweep: 212 },          // over the top, down the right
+  { k: 'cubic', p0: [0.524, 0.426], c1: [0.42, 0.60], c2: [0.06, 0.70], p1: [0.02, 0.92] }, // the S into the corner
+  { k: 'cubic', p0: [0.02, 0.92], c1: [0.01, 0.98], c2: [0.05, 1.0], p1: [0.12, 1.0] },  // rounded corner
+  { k: 'line', pts: [[0.12, 1.0], [0.60, 1.0]] },                                       // flat base, no upturn
+];
+const SIX: Stroke[] = [
+  { k: 'cubic', p0: [0.50, 0.0], c1: [0.30, 0.22], c2: [0.06, 0.45], p1: [0.005, 0.68] }, // from the top right
+  { k: 'arc', cx: 0.30, cy: 0.69, rx: 0.295, ry: 0.31, a0: 0, sweep: 360 },            // the bowl
+];
+const flipY = (st: Stroke[]): Stroke[] => st.map((s) => s.k === 'line' ? { ...s, pts: s.pts.map(([x, y]) => [x, 1 - y] as [number, number]) }
+  : s.k === 'arc' ? { ...s, cy: 1 - s.cy, a0: -s.a0, sweep: -s.sweep }
+  : { ...s, p0: [s.p0[0], 1 - s.p0[1]], c1: [s.c1[0], 1 - s.c1[1]], c2: [s.c2[0], 1 - s.c2[1]], p1: [s.p1[0], 1 - s.p1[1]] });
+const rot180 = (st: Stroke[]): Stroke[] => st.map((s) => {
+  const R = ([x, y]: [number, number]): [number, number] => [GLYPH_W - x, 1 - y];
+  return s.k === 'line' ? { ...s, pts: s.pts.map(R) }
+    : s.k === 'arc' ? { ...s, cx: GLYPH_W - s.cx, cy: 1 - s.cy, a0: s.a0 + 180 }
+    : { ...s, p0: R(s.p0), c1: R(s.c1), c2: R(s.c2), p1: R(s.p1) };
+});
+
+export const CATHODE_STROKES: Record<string, Stroke[]> = {
+  '0': [{ k: 'arc', cx: 0.30, cy: 0.5, rx: 0.31, ry: 0.5, a0: 0, sweep: 360 }],
+  '1': [{ k: 'line', pts: [[0.30, 0.0], [0.30, 1.0]] }],
+  '2': TWO,
+  '3': [
+    { k: 'line', pts: [[0.0, 0.0], [0.60, 0.0], [0.19, 0.39]] },                        // flat top, diagonal
+    { k: 'arc', cx: 0.30, cy: 0.68, rx: 0.31, ry: 0.32, a0: 250, sweep: 262 },          // the bowl, ending low left
+  ],
+  '4': [
+    { k: 'line', pts: [[0.0, 0.72], [0.45, -0.02], [0.45, 1.06]] },                      // diagonal up to the apex, stem down
+    { k: 'line', pts: [[0.0, 0.72], [0.60, 0.72]] },                                     // the bar
+  ],
+  '5': flipY(TWO),
+  '6': SIX,
+  '7': [{ k: 'line', pts: [[0.0, 0.0], [0.60, 0.0], [0.20, 1.0]] }],
+  '8': [
+    { k: 'arc', cx: 0.30, cy: 0.21, rx: 0.235, ry: 0.21, a0: 0, sweep: 360 },
+    { k: 'arc', cx: 0.30, cy: 0.71, rx: 0.295, ry: 0.29, a0: 0, sweep: 360 },
+  ],
+  '9': rot180(SIX),
+};
+
+/** One digit's wire as a Skia path, the unit box scaled to `h` (pt) and centred on (cx, cy). */
+export function cathodePath(Sk: SkiaApi, d: string, cx: number, cy: number, h: number): SkPath {
+  const X = (u: number) => cx + (u - GLYPH_W / 2) * h, Y = (v: number) => cy + (v - 0.5) * h;
+  const p = Sk.Path.Make();
+  for (const s of CATHODE_STROKES[d] ?? []) {
+    if (s.k === 'line') {
+      s.pts.forEach(([u, v], i) => (i === 0 ? p.moveTo(X(u), Y(v)) : p.lineTo(X(u), Y(v))));
+    } else if (s.k === 'cubic') {
+      p.moveTo(X(s.p0[0]), Y(s.p0[1]));
+      p.cubicTo(X(s.c1[0]), Y(s.c1[1]), X(s.c2[0]), Y(s.c2[1]), X(s.p1[0]), Y(s.p1[1]));
+    } else {
+      const oval = Sk.XYWHRect(X(s.cx - s.rx), Y(s.cy - s.ry), 2 * s.rx * h, 2 * s.ry * h);
+      if (Math.abs(s.sweep) >= 360) p.addOval(oval);
+      else p.arcToOval(oval, s.a0, s.sweep, true);
+    }
+  }
+  return p;
 }
 
 // ── The tube's inside, drawn ONCE per size into a sprite (NixieTubes) ──────────
@@ -78,8 +150,14 @@ export function cathodeGlyph(d: string): { glyph: string; flipY: boolean; bar: b
 /** The anode box: the rectangle of hex mesh the cathodes stand in, in a tw × th glass (y from the
  *  glass top, which includes the dome). */
 export function meshBox(tw: number, th: number) {
-  return { x: tw * 0.12, y: th * 0.24, w: tw * 0.76, h: th * 0.64 };
+  // ★ The cage fills the tube (Stuart: "the mesh needs to fill the whole tube"; his unlit photo): edge to
+  //   edge across the glass, from where the dome meets the straight wall (the glass's top corners are
+  //   26 % of its height) down to just above the floor shade.
+  return { x: tw * 0.07, y: th * 0.25, w: tw * 0.86, h: th * 0.71 };
 }
+/** A digit's height as a fraction of the digit size nf (Nixie One's figure height, so the tubes keep
+ *  their size). */
+export const DIGIT_H = 0.72;
 /** Where a digit's centre sits in the glass (the anode box's middle). */
 export function digitCentre(tw: number, th: number) {
   const b = meshBox(tw, th);
@@ -113,7 +191,8 @@ export const tubeGlassPath = (Sk: SkiaApi, x: number, y: number, w: number, h: n
  *  One path of line segments — stroked thin, clipped to meshBox by the caller. */
 export function honeycombPath(Sk: SkiaApi, tw: number, th: number, ox = 0, oy = 0): SkPath {
   const b = meshBox(tw, th);
-  const r = Math.max(0.9, tw * 0.05);
+  // ★ Cell size from the photo and the 4K frames: about seven hexes across the tube's face.
+  const r = Math.max(1.0, tw * 0.075);
   const dx = 1.5 * r, dy = Math.sqrt(3) * r;
   const p = Sk.Path.Make();
   for (let col = 0, x = b.x; x <= b.x + b.w + r; col++, x += dx) {
@@ -129,49 +208,38 @@ export function honeycombPath(Sk: SkiaApi, tw: number, th: number, ox = 0, oy = 
   return p;   // ★ overruns the box by a cell: the caller CLIPS to meshBox (a path op on open lines is empty)
 }
 
+/** The mesh's wire: fine bright metal (the photo), shared by the static cage and the sprite's shadow. */
+export const meshWire = (tw: number) => Math.max(0.35, tw * 0.012);
+
 /**
- * ★★ THE NEON GLOW (Stuart, 2026-10-16: "a lovely neon gas glow around them", the reference video).
- * The gas glows in a sheath round the wire: brightest at the wire, falling off over a few stroke widths,
- * spilling warm light on the mesh and the wires next to it. Each layer is the cathode shape FATTENED
- * (a thin Nixie One stroke blurred on its own gives almost no halo — that was the old look) and then
- * blurred, outermost first. `sigma` is a fraction of the digit size, `fat` is in stroke widths.
+ * ★★★ EVERY CATHODE IS THE SAME FINE WIRE (Stuart, 2026-10-16: "the thickness comes from the glow,
+ * not the electrode wire itself"). Lit or not, a digit is one hairline of metal. A lit digit looks bold
+ * only because of the neon sheath round that wire: a hot core hugging it, then the sheath, the halo and
+ * a wide bloom — so the lit weight is built by the glow layers alone, never by a fat stroke.
+ * Widths and blurs are fractions of the digit size (nf); colours sampled from the 4K video off the
+ * clipped core: sheath #f59306, halo #d65409, lit window #be4608 — deep neon orange, not yellow-white.
  */
-export interface NeonLayer { sigma: number; fat: number; color: string; alpha: number }
+export interface NeonLayer { width: number; sigma: number; color: string; alpha: number }
 export const DIGIT_NEON: NeonLayer[] = [
-  // ★ Colours sampled from the 4K video (IMG_1559) off the stroke, never from its clipped yellow core:
-  //   sheath #f59306, halo #d65409, lit window #be4608. Deep neon orange, not yellow-white.
-  { sigma: 0.17,  fat: 4,   color: 'rgb(200,62,6)',   alpha: 0.65 },   // wide bloom, fills the window
-  { sigma: 0.07,  fat: 3,   color: 'rgb(214,84,9)',   alpha: 0.75 },   // the gas sheath
-  { sigma: 0.026, fat: 2,   color: 'rgb(240,110,8)',  alpha: 0.95 },    // hugging the wire
-  { sigma: 0.008, fat: 1.1, color: 'rgb(250,145,14)', alpha: 1 },      // hot rim
-];
-/** The wire itself: hot orange-amber (the camera clips it to yellow; the eye sees amber). */
-export const DIGIT_CORE = '#ffaa2c';
-/** The core is drawn this much fatter than Nixie One's stroke (in stroke widths): the lit wire reads
- *  about twice the font's weight in the 4K video. */
-export const CORE_FAT = 0.6;
-/** Unlit cathodes: bare metal in a switched-off tube; lit warm from the side by a lit digit behind
- *  the ones in front; a dark wire where one crosses the glow. */
-/* ★ Stuart's photo of four UNLIT IN-14s (2026-10-16): the cathodes are bright silver-grey wire, the 6
- *   right behind the mesh clearest, the stack fading as it goes back. Neutral metal — never greenish. */
-const WIRE_OFF       = 'rgba(205,205,200,0.28)';   // dimmer than the daylit photo: the recess is dark
+  { width: 0.16,  sigma: 0.15,  color: 'rgb(200,62,6)',   alpha: 0.60 },   // wide bloom, fills the window
+  { width: 0.09,  sigma: 0.05,  color: 'rgb(214,84,9)',   alpha: 0.85 },   // the gas sheath
+  { width: 0.062, sigma: 0.016, color: 'rgb(240,110,8)',  alpha: 1 },      // the glow hugging the wire
+  { width: 0.046, sigma: 0.006, color: 'rgb(252,150,22)', alpha: 1 },      // the hot core round the wire
+  { width: 0.03,  sigma: 0.003, color: 'rgb(255,182,60)', alpha: 1 },      // white-hot next to the wire
+]
+/** The wire itself, white-hot in its sheath. */
+export const DIGIT_CORE = '#ffb848';
+/** The bare wire: hairline-fine next to the lit glow (the 4K frames, the unlit photo). Fraction of nf,
+ *  never under one device pixel (so it neither vanishes nor aliases into dashes at 1x). */
+export const WIRE = 0.011;
+/* Unlit wire colours. ★ Stuart's photo of four UNLIT IN-14s: bright silver-grey wire, the 6 right behind
+ *   the mesh clearest, the stack fading as it goes back. Neutral metal — never greenish. */
+const WIRE_OFF       = 'rgba(215,215,210,0.34)';   // dimmer than the daylit photo: the recess is dark
 /** An off tube's wires fade with depth (the photo): alpha × (1 − OFF_FADE·i). */
-const OFF_FADE       = 0.09;
-const WIRE_WARM      = 'rgba(255,150,90,0.12)';
-const WIRE_FRONT     = 'rgba(26,24,22,0.30)';   // neutral dark metal crossing the glow
+const OFF_FADE       = 0.08;
+const WIRE_WARM      = 'rgba(255,160,100,0.30)';   // behind a lit digit: lit warm by its glow
+const WIRE_FRONT     = 'rgba(30,26,22,0.55)';      // in front of a lit digit: dark metal across the glow
 /** The anode mesh in front of the stack: it shadows the glow as fine hex lines, and is lit warm itself. */
-/** Nixie One's stroke weight, as a fraction of the font size (measured at 1000 px: 29-30 px — the 0's
- *  ring, the 2's base and tick). The 1's plain wire is drawn this wide. */
-export const STEM = 0.03;
-/**
- * ★ THE 2's BASE IS A STRAIGHT WIRE (Stuart, 2026-10-16, his photo): Nixie One ends the 2's flat base
- * with a 90° upturn — a second short stroke the IN-14 does not have. Measured in Nixie One at 1000 px
- * from the text origin: base y −30…−1 (centre −15.5), tick x 500…529 rising to y −170, base from x 61.
- * The tube cuts everything right of x 0.485 below y −0.25 and caps the base there with a round end of
- * the stroke's own width. The 5 is the flipped 2, so its flat top loses the matching down-tick.
- * Only the frequency tubes draw this; the font is untouched everywhere else.
- */
-export const TWO_TRIM = { cutX: 0.485, cutTop: -0.25, capY: -0.0155 };
 const MESH_SHADOW    = 'rgba(40,14,4,0.17)';
 const MESH_LIT       = 'rgba(230,100,30,0.20)';
 const MESH_WASH      = 'rgba(190,70,8,0.28)';
@@ -179,56 +247,32 @@ const MESH_WASH      = 'rgba(190,70,8,0.28)';
 /**
  * Draw ONE tube's inside — the whole cathode stack with `lit` glowing at its own depth (null = a
  * switched-off tube), the anode mesh over it — into `c`, a tw × th canvas whose origin is the glass's
- * top-left. Clipped to the glass.
- * ★★ PERF: this runs once per digit per tube SIZE (11 sprites), never per tune step: blurred text,
- *   up to ten glyph draws and the mesh are all rasterised here, and a tune step blits one image.
+ * top-left. Clipped to the glass. `px` is one device pixel in pt (the wire's floor).
+ * ★★ PERF: this runs once per digit per tube SIZE (11 sprites), never per tune step: the blurred glow,
+ *   up to ten wire paths and the mesh are all rasterised here, and a tune step blits one image.
  */
-export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, font: SkFont, lit: string | null,
-                               tw: number, th: number, nf: number): void {
+export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, lit: string | null,
+                               tw: number, th: number, nf: number, px = 1 / 3): void {
   const paint = (color: string, opts: { stroke?: number; blend?: number } = {}) => {
     const p = Sk.Paint();
     p.setAntiAlias(true);
     p.setColor(Sk.Color(color));
-    if (opts.stroke) { p.setStyle(1 /* PaintStyle.Stroke */); p.setStrokeWidth(opts.stroke); }
+    if (opts.stroke) {
+      p.setStyle(1 /* PaintStyle.Stroke */); p.setStrokeWidth(opts.stroke);
+      p.setStrokeCap(1 /* StrokeCap.Round */); p.setStrokeJoin(1 /* StrokeJoin.Round */);
+    }
     if (opts.blend !== undefined) p.setBlendMode(opts.blend);
     return p;
   };
   const { cx, cy } = digitCentre(tw, th);
-  const stem = nf * STEM;
-  /** The cathode's shape in an OPAQUE colour, fattened by `fat` pt — the 1 as a plain wire, the 5 as the
-   *  flipped 2, the 2's base without the font's upturn. */
-  const shape = (d: string, color: string, fat: number) => {
-    const g = cathodeGlyph(d);
-    const b = font.measureText(g.glyph);
-    const p = paint(color);
-    if (g.bar) {                                          // the 1: a wire the height of a 0
-      const w = stem + fat, len = b.height + w;
-      c.drawRRect(Sk.RRectXY(Sk.XYWHRect(cx - w / 2, cy - len / 2, w, len), w / 2, w / 2), p);
-      return;
-    }
-    const x = cx - (b.x + b.width / 2), y = cy - (b.y + b.height / 2);
-    const trim = g.glyph === '2';
-    if (g.flipY) { c.save(); c.translate(0, 2 * cy); c.scale(1, -1); }
-    if (trim) {
-      c.save();
-      c.clipRect(Sk.XYWHRect(x + TWO_TRIM.cutX * nf, y + TWO_TRIM.cutTop * nf, 0.3 * nf, -TWO_TRIM.cutTop * nf + 0.1 * nf),
-        0 /* ClipOp.Difference */, true);
-    }
-    c.drawText(g.glyph, x, y, p, font);
-    if (fat > 0) {
-      const ps = paint(color, { stroke: fat });
-      ps.setStrokeJoin(1 /* StrokeJoin.Round */);
-      c.drawText(g.glyph, x, y, ps, font);
-    }
-    if (trim) {
-      c.restore();
-      c.drawCircle(x + TWO_TRIM.cutX * nf, y + TWO_TRIM.capY * nf, (stem + fat) / 2, p);
-    }
-    if (g.flipY) c.restore();
-  };
-  /** Draw `draw` as one layer at `alpha`, blurred by `sigma` pt — so a shape's overlapping parts (the
-   *  trimmed 2's cap, a fattened outline) never double up, and the blur is the layer's, not cut by the
-   *  trim's clip. */
+  const gh = DIGIT_H * nf;
+  const paths: Record<string, SkPath> = {};
+  const pathOf = (d: string) => (paths[d] ??= cathodePath(Sk, d, cx, cy, gh));
+  const wireW = Math.max(px, WIRE * nf);
+  /** The cathode's wire in an OPAQUE colour, `w` pt wide. */
+  const shape = (d: string, color: string, w: number) => c.drawPath(pathOf(d), paint(color, { stroke: w }));
+  /** Draw `draw` as one layer at `alpha`, blurred by `sigma` pt — so a shape's overlapping parts never
+   *  double up, and the blur is the layer's. */
   const layer = (alpha: number, sigma: number, draw: () => void) => {
     const lp = Sk.Paint();
     lp.setAlphaf(alpha);
@@ -265,27 +309,27 @@ export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, font: SkFont, lit: stri
     const [offCol, offA] = rgbA(WIRE_OFF);
     for (let i = CATHODE_STACK.length - 1; i >= 0; i--) {
       const d = CATHODE_STACK[i];
-      atDepth(d, (z) => layer(offA * z.opacity * Math.max(0.15, 1 - OFF_FADE * i), 0, () => shape(d, offCol, 0)));
+      atDepth(d, (z) => layer(offA * z.opacity * Math.max(0.15, 1 - OFF_FADE * i), 0, () => shape(d, offCol, wireW / z.scale)));
     }
   } else {
     const [backCol, backA] = rgbA(WIRE_WARM);
     layer(backA, 0, () => {
       for (let i = CATHODE_STACK.length - 1; i > li; i--) {
         const d = CATHODE_STACK[i];
-        atDepth(d, (z) => layer(z.opacity, 0, () => shape(d, backCol, 0)));
+        atDepth(d, (z) => layer(z.opacity, 0, () => shape(d, backCol, wireW / z.scale)));
       }
     });
   }
   if (lit !== null) {
     atDepth(lit, (z) => {
-      for (const g of DIGIT_NEON) layer(g.alpha * z.opacity, g.sigma * nf * z.soft, () => shape(lit, g.color, g.fat * stem));
-      layer(z.opacity, 0, () => shape(lit, DIGIT_CORE, CORE_FAT * stem));
+      for (const g of DIGIT_NEON) layer(g.alpha * z.opacity, g.sigma * nf * z.soft, () => shape(lit, g.color, g.width * nf));
+      layer(z.opacity, 0, () => shape(lit, DIGIT_CORE, wireW / z.scale));
     });
     const [frontCol, frontA] = rgbA(WIRE_FRONT);
     layer(frontA, 0, () => {
       for (let i = li - 1; i >= 0; i--) {
         const d = CATHODE_STACK[i];
-        atDepth(d, () => shape(d, frontCol, 0));
+        atDepth(d, (z) => shape(d, frontCol, wireW / z.scale));
       }
     });
   }
@@ -295,7 +339,7 @@ export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, font: SkFont, lit: stri
     const mesh = honeycombPath(Sk, tw, th);
     c.save();
     c.clipRect(box, 1 /* ClipOp.Intersect */, true);
-    const meshW = Math.max(0.3, tw * 0.018);
+    const meshW = meshWire(tw);
     // The mesh's shadow lands only on what is drawn (glow + wires): SrcATop.
     c.drawPath(mesh, paint(MESH_SHADOW, { stroke: meshW, blend: 9 /* BlendMode.SrcATop */ }));
     // Then BEHIND everything drawn (DstOver): the mesh lit by the digit, and its warm wash.

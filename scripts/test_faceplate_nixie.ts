@@ -7,7 +7,7 @@
  * Run: node --no-warnings scripts/test_faceplate_nixie.ts   (run-tests.sh does)
  */
 import {
-  CATHODE_STACK, cathodeDepth, cathodeNeighbours, cathodeGlyph, meshBox, digitCentre, nixieSpec, nixieReadout, nixieGeometry,
+  CATHODE_STACK, cathodeDepth, cathodeNeighbours, CATHODE_STROKES, GLYPH_W, meshBox, digitCentre, nixieSpec, nixieReadout, nixieGeometry,
   stackHeight, mhzDigitsFor, TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, MIN_GLASS,
 } from '../src/constants/nixie.ts';
 
@@ -142,9 +142,23 @@ eq('a 3: every cathode behind and in front', cathodeNeighbours('3'), { back: ['9
 eq('a 6: nothing in front', cathodeNeighbours('6').front, []);
 eq('a 1: seen through all nine', cathodeNeighbours('1'), { back: [], front: ['6', '5', '4', '7', '3', '9', '8', '2', '0'] });
 eq('a switched-off tube shows the whole stack', cathodeNeighbours(null), { back: ['6', '5', '4', '7', '3', '9', '8', '2', '0', '1'], front: [] });
-eq('the 5 is the 2 turned upside down', cathodeGlyph('5'), { glyph: '2', flipY: true, bar: false });
-eq('the 1 is a plain wire', cathodeGlyph('1').bar, true);
-eq('a 7 is the font\'s own', cathodeGlyph('7'), { glyph: '7', flipY: false, bar: false });
+// ★★★ The IN-14's own digits, as wire paths (frequency tubes only).
+{
+  const pts = (d: string) => CATHODE_STROKES[d].flatMap((s) => s.k === 'line' ? s.pts : s.k === 'cubic' ? [s.p0, s.p1] : []);
+  ok('every digit has a wire path', '0123456789'.split('').every((d) => CATHODE_STROKES[d]?.length > 0));
+  ok('the 1 is one straight vertical wire', CATHODE_STROKES['1'].length === 1 && pts('1').every(([x]) => x === GLYPH_W / 2));
+  const top3 = pts('3').filter(([, y]) => y === 0);
+  ok('the 3 is flat-topped (a top bar end to end)', top3.some(([x]) => x === 0) && top3.some(([x]) => x === GLYPH_W));
+  const seven = pts('7');
+  ok('the 7 is a top bar and a straight stem with no tail', CATHODE_STROKES['7'].length === 1 && seven.length === 3 && seven[2][1] === 1);
+  const base2 = CATHODE_STROKES['2'].at(-1)!;
+  ok('the 2 ends in a flat base with no upturn', base2.k === 'line' && base2.pts.at(-1)![1] === 1 && base2.pts.every(([, y]) => y === 1));
+  const five = CATHODE_STROKES['5'].at(-1)!;
+  ok('the 5 is the 2 turned upside down (its base becomes the flat top)', five.k === 'line' && five.pts.every(([, y]) => y === 0));
+  ok('the 9 is the 6 turned round', CATHODE_STROKES['9'].length === CATHODE_STROKES['6'].length);
+  ok('every point inside the unit box (the 4 runs a little below the line)',
+    '0123456789'.split('').every((d) => pts(d).every(([x, y]) => x >= 0 && x <= GLYPH_W && y >= -0.05 && y <= 1.08)));
+}
 {
   const b = meshBox(21, 40), c = digitCentre(21, 40);
   ok('the anode box sits inside the glass, below the dome', b.x > 0 && b.x + b.w < 21 && b.y >= 0.26 * 40 * 0.9 && b.y + b.h < 40);
