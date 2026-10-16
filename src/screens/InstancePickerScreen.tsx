@@ -113,6 +113,10 @@ import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
 import { loadUserBookmarks, saveUserBookmarks, type UserBookmark } from '../services/userBookmarks';
 import { ViewMode, getViewMode, setViewMode } from '../services/viewMode';
 import PasswordModal from '../components/PasswordModal';
+import VibePinPrompt from '../components/VibePinPrompt';
+import type { SDRMode as LinkMode } from '../services/UberSDRClient';
+/** A vibesdr:// link's optional first tune, carried to the SDR screen (see linkVibe). */
+type LinkTune = { freq?: number; mode?: LinkMode; zoom?: number };
 import IdentModal from '../components/IdentModal';
 import { getKiwiIdent, setKiwiIdent } from '../services/kiwiIdent';
 import { VibePowerModule } from '../components/AudioPlayer';
@@ -122,7 +126,7 @@ import { useServing, loopbackIfSelf, servingNow } from '../services/serving';
 import { DIRECTORIES, fetchDirectory, type DirectoryId } from '../services/directories';
 import { startMdnsDiscovery, type DiscoveredServer } from '../services/mdns';
 import { favFromDiscovered, repairFromDiscovery, needsVibeProbe, tcpFavHttpBase } from '../services/discoveredFavs';
-import { resolveVibeAuth } from '../services/vibeAuth';
+import { resolveVibeAuth, checkVibePin } from '../services/vibeAuth';
 import { crumb } from '../services/crumbs';
 import { exportLogs, EXPORT_LOGS_LABEL } from '../components/ExportLogs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
@@ -331,6 +335,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }).catch(() => {});
   }, []);
   const [pwModal,     setPwModal]       = useState<{ url: string; name: string } | null>(null);
+  /** ★ The Android VibeServer PIN box (iOS uses Alert.prompt) — see askVibePin / VibePinPrompt. */
+  const [pinAsk, setPinAsk] = useState<{ name: string; initial: string; note?: string } | null>(null);
+  const pinAskResolve = useRef<((a: { pin: string; save: boolean } | null) => void) | null>(null);
   // KiwiSDR name/callsign identity. `identModal` open = the entry box is up; its optional
   // `connect` holds a pending connection to resume after saving (from a connect), or is absent
   // (editing via the prefill box). `kiwiIdentValue` is the saved value shown in the box.
@@ -805,7 +812,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // shim is started — the radio lives on the serving phone.
   const connectVibeServer = useCallback(async (host: string, port: number, name: string, pin: string,
                                               base?: string, adminPw?: string,
-                                              adminTakeover?: boolean) => {
+                                              adminTakeover?: boolean, tune?: LinkTune) => {
     setConnecting(true);
     /* ★★★ LISTENING TO OUR OWN SERVER GOES OVER LOOPBACK — Stuart: "loopback like the mac".
      *  mDNS advertises the LAN address, so without this a phone serving and listening to itself
@@ -881,6 +888,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             /* ★ Only when the owner answered "Continue" to the in-use warning: the takeover flag
              *  is one-shot and deliberate, never a property of connecting over loopback. */
             autoTakeover: adminTakeover || undefined,
+            // ★ A vibesdr:// link's tune (see linkVibe) — first connect only, as for any link.
+            ...(tune ? { deepLink: true, initialFreq: tune.freq, initialMode: tune.mode, initialZoom: tune.zoom } : null),
           } },
       ],
     } as never);
@@ -923,31 +932,85 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     );
   }, [connectLocal, connectVibeServer]);
 
+  /** Ask for a VibeServer PIN. Resolves with what was typed and whether to save it, or null on
+   *  Cancel.
+   *  ★★★ ANDROID HAS NO Alert.prompt (Stuart, 2026-10-16: "Android devices cannot connect to a PIN
+   *      protected server as no popup for it shows"). The else-branch here used to connect with
+   *      the saved PIN or none, so a PIN server could never be opened from an Android phone. iOS
+   *      keeps its native prompt; everything else gets VibePinPrompt, the same question in the
+   *      app's popup skin. */
+  const askVibePin = useCallback((name: string, initial: string, note?: string) =>
+    new Promise<{ pin: string; save: boolean } | null>((resolve) => {
+      const body = `Enter the PIN for ${name}`;
+      if (Platform.OS === 'ios' && (Alert as any).prompt) {
+        (Alert as any).prompt(
+          'VibeServer PIN', note ? `${note}\n\n${body}` : body,
+          [{ text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+           { text: 'Connect', onPress: (pin?: string) => resolve({ pin: pin ?? '', save: false }) },
+           { text: 'Save & Connect', onPress: (pin?: string) => resolve({ pin: pin ?? '', save: true }) }],
+          'plain-text', initial, 'number-pad');
+        return;
+      }
+      pinAskResolve.current?.(null);          // a stale box is a cancelled one
+      pinAskResolve.current = resolve;
+      setPinAsk({ name, initial, note });
+    }), []);
+  const finishPinAsk = useCallback((a: { pin: string; save: boolean } | null) => {
+    const r = pinAskResolve.current;
+    pinAskResolve.current = null;
+    setPinAsk(null);
+    r?.(a);
+  }, []);
+
   // Tap a discovered/typed VibeServer: prompt for the PIN if it needs one, with a
   // saved PIN pre-filled (per host:port) so the user need not retype it. "Save &
   // Connect" persists the entered PIN; "Connect" uses it just this once.
+  /* ★★★ A WRONG PIN ASKS AGAIN (2026-10-16). The PIN is checked with /vibeserver/auth/verify — a
+   *  free GET, the same gate as the socket — BEFORE we leave the picker. It used to go straight to
+   *  the receiver screen, where the server refuses the socket with a 401 and the listener sat on a
+   *  radio that never started, with nowhere to type the right PIN. A saved PIN the server refuses
+   *  is forgotten (the owner has changed it), and the box comes back saying so.
+   *  ★★ A locked-out address is told it is locked out, not "wrong PIN" — retyping a correct PIN
+   *     into the backoff only extends it. ★ Anything the check cannot answer (an older server
+   *     with no /verify, a network blip) connects as before and lets connectVibeServer report. */
   const openVibeServer = useCallback(async (host: string, port: number, name: string, needsPin: boolean,
-                                            base?: string) => {
-    if (!needsPin) { connectVibeServer(host, port, name, '', base); return; }
+                                            base?: string, tune?: LinkTune) => {
+    if (!needsPin) { connectVibeServer(host, port, name, '', base, undefined, undefined, tune); return; }
     const key = `vs_pin:${host}:${port}`;
     let saved = '';
     try { saved = (await AsyncStorage.getItem(key)) ?? ''; } catch {}
-    if (Platform.OS === 'ios' && (Alert as any).prompt) {
-      (Alert as any).prompt(
-        'VibeServer PIN', `Enter the PIN for ${name}`,
-        [{ text: 'Cancel', style: 'cancel' },
-         { text: 'Connect', onPress: (pin?: string) => connectVibeServer(host, port, name, pin || saved, base) },
-         { text: 'Save & Connect', onPress: (pin?: string) => {
-             const p = pin || saved;
-             AsyncStorage.setItem(key, p).catch(() => {});
-             connectVibeServer(host, port, name, p, base);
-           } }],
-        'plain-text', saved, 'number-pad');
-    } else {
-      // Android has no Alert.prompt — use the saved PIN if we have one.
-      connectVibeServer(host, port, name, saved, base);
+    // ★ The address connectVibeServer will use, so the check asks the same door the socket will.
+    const checkBase = loopbackIfSelf(host, port) === '127.0.0.1'
+      ? `http://127.0.0.1:${port}` : (base || `http://${host}:${port}`);
+    let initial = saved;
+    let note: string | undefined;
+    for (;;) {
+      const ans = await askVibePin(name, initial, note);
+      if (!ans) { crumb('openVibeServer: PIN cancelled'); return; }
+      // ★ An empty Connect means "the one you already have", as the iOS prompt always did.
+      const pin = (ans.pin || initial).trim();
+      if (!pin) { initial = ''; note = 'Enter a PIN to connect.'; continue; }
+      setConnecting(true);
+      const chk = await checkVibePin(checkBase, pin);
+      setConnecting(false);
+      crumb(`openVibeServer: PIN check ${chk.result}`);
+      if (chk.result === 'wrong') {
+        if (saved && pin === saved) { AsyncStorage.removeItem(key).catch(() => {}); saved = ''; }
+        initial = '';
+        note = 'That PIN was not accepted.';
+        continue;
+      }
+      if (chk.result === 'locked') {
+        const mins = chk.lockedFor ? Math.max(1, Math.ceil(chk.lockedFor / 60)) : 0;
+        Alert.alert('VibeServer',
+          `Too many wrong PINs from this device. ${mins ? `Try again in about ${mins} minute${mins === 1 ? '' : 's'}.` : 'Try again later.'}`);
+        return;
+      }
+      if (ans.save) AsyncStorage.setItem(key, pin).catch(() => {});
+      connectVibeServer(host, port, name, pin, base, undefined, undefined, tune);
+      return;
     }
-  }, [connectVibeServer]);
+  }, [connectVibeServer, askVibePin]);
 
   /**
    * ★★★ A VIBESERVER FROM THE DIRECTORY IS STILL A VIBESERVER. The generic `connect` path probes
@@ -1152,6 +1215,34 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     connectSpy(autoSpy.host, autoSpy.port, `${autoSpy.host}:${autoSpy.port}`);
   }, [autoSpy, connecting, connectSpy, navigation]);
 
+  /* ★★ vibesdr:// LINK TO A VIBESERVER (2026-10-16) — see RootStackParamList.linkVibe. Asks the
+   *  server whether it wants a PIN, then opens it the ONE way the picker opens a VibeServer, PIN
+   *  box and all. Same one-shot shape as autoSpy. */
+  const linkVibeFired = useRef(false);
+  const linkVibe = route.params?.linkVibe;
+  useEffect(() => {
+    if (!linkVibe) { linkVibeFired.current = false; return; }
+    if (linkVibeFired.current || connecting) return;
+    linkVibeFired.current = true;
+    navigation.setParams({ linkVibe: undefined });
+    (async () => {
+      // ★ A link may say ws(s)://; the PIN probe and the connect both speak http(s).
+      const base = linkVibe.url.replace(/\/+$/, '').replace(/^ws(s?):/i, 'http$1:');
+      let host = '', port = 443;
+      try {
+        const u = new URL(base);
+        host = u.hostname;
+        port = u.port ? parseInt(u.port, 10) : (u.protocol === 'http:' ? 80 : 443);
+      } catch { host = ''; }
+      if (!host) { Alert.alert('VibeServer', 'That link does not name a server.'); return; }
+      let needsPin = true;
+      try { needsPin = await vibeServerNeedsPin(base); }
+      catch { Alert.alert('VibeServer', `Could not reach ${base}. Is it still up?`); return; }
+      const tune: LinkTune = { freq: linkVibe.freq, mode: linkVibe.mode, zoom: linkVibe.zoom };
+      openVibeServer(host, port, linkVibe.name || `${host}:${port}`, needsPin, base, tune);
+    })();
+  }, [linkVibe, connecting, navigation, openVibeServer]);
+
   /* ★★★ THE WATCH CHOSE A VIBESERVER (or one of its radios) — connect it the ONE way this app
    *   connects a VibeServer. App.tsx resolves the address (favourite, browsed-directory cache, or
    *   the /r/<id> Buddy sends back after picking a radio) and hands it here, because the PIN probe,
@@ -1244,20 +1335,49 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         const key = `vs_pin:${host}:${port}`;
         let saved = '';
         try { saved = (await AsyncStorage.getItem(key)) ?? ''; } catch {}
-        if (saved) { crumb('autoVibe: saved PIN, connecting'); connectVibeServer(host, port, autoVibe.name, saved, autoVibe.url); return; }
+        /* ★★ A REFUSED PIN ASKS THE WRIST AGAIN (2026-10-16). Checked with the free verify GET
+         *  against the address we will connect to. A saved PIN the server refuses is forgotten
+         *  and the wrist is asked; a wrist PIN the server refuses is NOT saved, and the wrist is
+         *  asked again. 'unknown' (older server, network) connects as before. */
+        const endAttempt = () => {
+          watchProvider.setPhoneStatus('pick');
+          watchTargetPending.claimed = false;
+          watchProvider.holdAwake(false);
+        };
+        // ★ Our own server is reached over loopback, which never needs the PIN — nothing to check.
+        const isSelf = loopbackIfSelf(host, port) === '127.0.0.1';
+        const check = (p: string) => isSelf ? Promise.resolve({ result: 'ok' as const })
+                                            : checkVibePin(autoVibe.url, p);
+        const lockedOut = (lockedFor?: number) => {
+          endAttempt();
+          const mins = lockedFor ? Math.max(1, Math.ceil(lockedFor / 60)) : 0;
+          Alert.alert('VibeServer',
+            `Too many wrong PINs from this device. ${mins ? `Try again in about ${mins} minute${mins === 1 ? '' : 's'}.` : 'Try again later.'}`);
+        };
+        if (saved) {
+          const chk: { result: string; lockedFor?: number } = await check(saved);
+          crumb(`autoVibe: saved PIN check ${chk.result}`);
+          if (chk.result === 'locked') { lockedOut(chk.lockedFor); return; }
+          if (chk.result !== 'wrong') { connectVibeServer(host, port, autoVibe.name, saved, autoVibe.url); return; }
+          AsyncStorage.removeItem(key).catch(() => {});
+        }
         crumb('autoVibe: PIN needed, asking the wrist');
-        watchProvider.setPinHandler((pin) => {
-          const p = (pin || '').trim();
-          if (!p) {                       // cancelled on the wrist — end the attempt cleanly
-            watchProvider.setPhoneStatus('pick');
-            watchTargetPending.claimed = false;
-            watchProvider.holdAwake(false);
-            return;
-          }
-          AsyncStorage.setItem(key, p).catch(() => {});
-          connectVibeServer(host, port, autoVibe.name, p, autoVibe.url);
-        });
-        watchProvider.requestPin(autoVibe.name);
+        const askWrist = () => {
+          watchProvider.setPinHandler((pin) => {
+            const p = (pin || '').trim();
+            if (!p) { endAttempt(); return; }   // cancelled on the wrist — end the attempt cleanly
+            void (async () => {
+              const chk: { result: string; lockedFor?: number } = await check(p);
+              crumb(`autoVibe: wrist PIN check ${chk.result}`);
+              if (chk.result === 'wrong') { askWrist(); return; }
+              if (chk.result === 'locked') { lockedOut(chk.lockedFor); return; }
+              AsyncStorage.setItem(key, p).catch(() => {});
+              connectVibeServer(host, port, autoVibe.name, p, autoVibe.url);
+            })();
+          });
+          watchProvider.requestPin(autoVibe.name);
+        };
+        askWrist();
         return;
       }
       crumb('autoVibe: no PIN needed, opening');
@@ -2214,6 +2334,14 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         serverUrl={pwModal?.url ?? ''}
         onSubmit={pw => { const m = pwModal; setPwModal(null); if (m) connect(m.url, m.name, pw); }}
         onCancel={() => setPwModal(null)}
+      />
+      <VibePinPrompt
+        visible={!!pinAsk}
+        name={pinAsk?.name ?? ''}
+        initial={pinAsk?.initial ?? ''}
+        note={pinAsk?.note}
+        onSubmit={(pin, save) => finishPinAsk({ pin, save })}
+        onCancel={() => finishPinAsk(null)}
       />
 
       {/* Add RTL-TCP server: friendly name + host:port; Connect, or Save & Connect. */}

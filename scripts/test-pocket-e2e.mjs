@@ -139,7 +139,7 @@ try {
   // ★★★ WI-FI FIRST (Stuart, 2026-10-10): on the open setup hotspot the page is the Wi-Fi card and
   //     nothing else — no radios, no "Save and start" — and Save is the last step.
   ok(await js(`document.body.classList.contains("wifiFirst")`), "on the setup hotspot the page is Wi-Fi first");
-  ok(!(await js(visible("bar"))) && !(await js(visible("radioPane"))) && !(await js(visible("shareCard"))),
+  ok(!(await js(visible("bar"))) && !(await js(visible("radioPane"))) && !(await js(visible("dirList"))),
      "…no radios, no tunnel, no 'Save and start' until the box is on the owner's network");
   ok(!(await js(visible("wifiFinish"))), "…and no separate 'what happens next' step");
   ok(await js(`document.getElementById("wifiSave").textContent === "Save Wi-Fi and join it"`), "Save says what it does: 'Save Wi-Fi and join it'");
@@ -230,27 +230,27 @@ try {
   ok(/\.local\//.test(done) && /10\.42\.0\.1:48991/.test(done), "…and every address to reach the box afterwards (.local and the hotspot IP)");
   ok(!fs.existsSync(path.join(PD, "pocket-kick.request")), "nothing has been switched yet");
 
-  // ── The tunnel: Enable + Resume, while the box is still its own hotspot ──
-  ok(await until(visible("shareCard")), "the 'Share with the world' card is drawn on a pocket box");
-  ok(await js(`!document.getElementById("tunnelOn").checked && document.getElementById("tunnelResumeRow").offsetParent === null`),
-     "fresh box: the tunnel is OFF and 'Resume after a restart' is hidden");
-  await js(`cfg.name = "Pocket SDR"; document.getElementById("tunnelOn").click(); 1`);
-  ok(await until(`document.getElementById("shareMsg").textContent.includes("Tunnel waiting for an internet connection")`),
-     "enabled on the hotspot: 'Tunnel waiting for an internet connection' — not an error");
-  ok(/"dirList": true/.test(fs.readFileSync(path.join(T, "config.json"), "utf8")), "…and the switch is saved in the server config");
-  ok(await js(`document.getElementById("tunnelResumeRow").offsetParent !== null && !document.getElementById("tunnelResume").checked`),
-     "'Resume the tunnel after a restart' appears, OFF by default");
-  await js(`document.getElementById("tunnelResume").click(); 1`);
-  let resumed = false;
-  for (let i = 0; i < 30 && !resumed; i++) {
-    resumed = /"dirResume": true/.test(fs.readFileSync(path.join(T, "config.json"), "utf8"));
-    if (!resumed) await sleep(200);
-  }
-  ok(resumed, "Resume is persisted in the server config");
+  // ── The listing (Stuart, 2026-10-16): ONE switch — "List this server publicly" — and under it "Start the tunnel
+  //    again after a reboot", OFF by default on a Portable. The old "Enable the tunnel" card is gone. ──
+  ok(await js(`!document.getElementById("shareCard") && !document.getElementById("tunnelOn")`),
+     "no second 'Enable the tunnel' switch on a Portable");
+  ok(/"tunnelResume": false/.test(fs.readFileSync(path.join(T, "config.json"), "utf8")),
+     "the server settled 'Start the tunnel again after a reboot' OFF on a Portable, in its file");
+  ok(await js(`!document.getElementById("tunnelResume").checked`), "…and the page shows it OFF");
+  ok(await js(`document.getElementById("tunnelResumeHint").textContent.includes("comes back personal")`),
+     "the hint says what OFF means on a Portable");
+  // Listed while the box is still its own hotspot: the server holds the tunnel, the page says WAITING.
+  ok(await js(`(async () => { const r = await fetch("/vibeserver/config?" + await authQuery(), {method: "POST", cache: "no-store",
+               body: JSON.stringify({radios: cfg.radios || [], name: "Pocket SDR", dirList: true})}); return r.ok; })()`),
+     "listing it (the switch's save) is accepted");
+  await js(`document.getElementById("dirList").checked = true; cfg.dirList = true; renderDirStatus({internet: false}); 1`);
+  ok(await js(`document.getElementById("dirStatus").textContent.includes("Tunnel waiting for an internet connection")`),
+     "listed on the hotspot: 'Tunnel waiting for an internet connection' — not an error");
+  await sleep(1500);
   const slog = fs.readFileSync(path.join(T, "server.log"), "utf8") + fs.readFileSync(path.join(T, "server.err"), "utf8");
   ok(!/startTunnel|trycloudflare|NO TUNNEL/.test(slog), "no tunnel was attempted while there is no internet (no spawn, no retry spam)");
-  await js(`document.getElementById("tunnelOn").click(); 1`);
-  ok(await until(`document.getElementById("shareMsg").textContent.startsWith("Personal")`), "switched off: Personal again");
+  ok(await js(`(async () => { const r = await fetch("/vibeserver/config?" + await authQuery(), {method: "POST", cache: "no-store",
+               body: JSON.stringify({radios: cfg.radios || [], dirList: false})}); return r.ok; })()`), "…and unlisted again");
   await js(`document.getElementById("wifiGoNow").click(); 1`);
   ok(await until(`document.getElementById("wifiGoNow").textContent.includes("Switching")`), "Leave the hotspot now → the box is asked to switch");
   ok(fs.existsSync(path.join(PD, "pocket-kick.request")) && fs.readFileSync(path.join(PD, "pocket-kick.request"), "utf8") === "switch\n",

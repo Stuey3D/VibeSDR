@@ -144,26 +144,31 @@ RxPipeline::~RxPipeline() { meas_.stop(); stopDemodThread_(); stopSpecThread_();
 
 void RxPipeline::startSpecThread_() {
     if (specThreadOn_) return;
-    specWork_.assign((size_t)fftSize_, cf32{0.0f, 0.0f});
-    specDone_.assign((size_t)fftSize_, 0.0f);
-    specWorkN_ = fftSize_;
-    specBusy_ = specReady_ = specStop_ = false;
+    for (int i = 0; i < kSpecQ; ++i) {
+        specWorkQ_[i].assign((size_t)fftSize_, cf32{0.0f, 0.0f});
+        specDoneQ_[i].assign((size_t)fftSize_, 0.0f);
+    }
+    specFilled_ = specComputed_ = specDelivered_ = 0;
+    specStop_ = false;
     specThreadOn_ = true;
     specThread_ = std::thread([this] {
         if (workerInit()) workerInit()("vibe-spec");
 #if defined(__linux__)
         else pthread_setname_np(pthread_self(), "vibe-spec");
 #endif
+        const float scale = 1.0f / (float)((double)fftSize_ * (double)fftSize_);
         std::unique_lock<std::mutex> lk(specM_);
         for (;;) {
-            specCv_.wait(lk, [this] { return specBusy_ || specStop_; });
+            specCv_.wait(lk, [this] { return specComputed_ < specFilled_ || specStop_; });
             if (specStop_) return;
+            const int slot = (int)(specComputed_ % kSpecQ);
             lk.unlock();
-            // ★ Outside the lock: the window and cfft_ are this thread's alone while specBusy_.
-            const float scale = 1.0f / (float)((double)specWorkN_ * (double)specWorkN_);
-            cfft_->powerDbShifted(specWork_.data(), win_.data(), specDone_.data(), scale);
+            // ★ Outside the lock: this slot's window and result, and cfft_, are this thread's alone
+            //   between fill and compute — the DSP thread neither writes a filled slot nor reads an
+            //   uncomputed one.
+            cfft_->powerDbShifted(specWorkQ_[slot].data(), win_.data(), specDoneQ_[slot].data(), scale);
             lk.lock();
-            specBusy_ = false; specReady_ = true;
+            ++specComputed_;
         }
     });
 }
@@ -173,7 +178,28 @@ void RxPipeline::stopSpecThread_() {
     { std::lock_guard<std::mutex> lk(specM_); specStop_ = true; }
     specCv_.notify_all();
     if (specThread_.joinable()) specThread_.join();
-    specThreadOn_ = false; specBusy_ = specReady_ = false;
+    specThreadOn_ = false;
+    specFilled_ = specComputed_ = specDelivered_ = 0;
+}
+
+/** ★ On the DSP thread only: hand every finished frame to cb.spectrum, oldest first. The callback
+ *  runs with no lock held, so the worker carries on with the next window meanwhile. */
+void RxPipeline::deliverSpecFrames_() {
+    for (;;) {
+        int slot;
+        {
+            std::lock_guard<std::mutex> lk(specM_);
+            if (specDelivered_ >= specComputed_) return;
+            slot = (int)(specDelivered_ % kSpecQ);
+        }
+        // ★ Swapped, not copied: specDb_ takes the frame, the slot takes back an equal-sized buffer
+        //   the worker will overwrite whole. Done outside the lock — a computed, undelivered slot
+        //   belongs to this thread.
+        specDb_.swap(specDoneQ_[slot]);
+        cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
+        std::lock_guard<std::mutex> lk(specM_);
+        ++specDelivered_;
+    }
 }
 
 // ── The AM chain-width ladder ────────────────────────────────────────────────
@@ -848,11 +874,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
         cf32* sb   = reinterpret_cast<cf32*>(specBuf_.data());
         // ★ A frame the worker finished since the last block is delivered HERE, on the DSP thread —
         //   the callback never runs anywhere else. See setSpectrumThread.
-        if (specThreadOn_) {
-            bool have = false;
-            { std::lock_guard<std::mutex> lk(specM_); if (specReady_) { specDb_.swap(specDone_); specReady_ = false; have = true; } }
-            if (have) cb_.spectrum(cb_.ctx, specDb_.data(), fftSize_);
-        }
+        if (specThreadOn_) deliverSpecFrames_();
         const long long stride = std::max(1, specStride_.load(std::memory_order_relaxed));
         /* ★ BLOCK COPIES, NOT A PER-SAMPLE LOOP (2026-09-16). This walked every IQ sample of
          *  every mode with four counters and two branches each — 3 % of a Pi 3's WFM budget for
@@ -885,16 +907,20 @@ void RxPipeline::feed(const cf32* iq, int n) {
             std::memcpy(sb,        ring + specRingW_, (size_t)tail       * sizeof(cf32));
             std::memcpy(sb + tail, ring,              (size_t)specRingW_ * sizeof(cf32));
             if (specThreadOn_) {
-                bool taken = false;
+                // ★ Whatever the worker has finished goes out first, here and not only at the top
+                //   of the next feed — that is what frees its slot for this window (see kSpecQ).
+                deliverSpecFrames_();
+                int slot = -1;
                 {
                     std::lock_guard<std::mutex> lk(specM_);
-                    if (!specBusy_ && !specReady_ && specWorkN_ == fftSize_) {
-                        std::memcpy(specWork_.data(), sb, (size_t)fftSize_ * sizeof(cf32));
-                        specBusy_ = true; taken = true;
-                    }
+                    if (specFilled_ - specDelivered_ < (unsigned long long)kSpecQ)
+                        slot = (int)(specFilled_ % kSpecQ);
                 }
-                if (taken) specCv_.notify_one();
-                else specDropped_.fetch_add(1, std::memory_order_relaxed);   // busy: drop, never wait
+                if (slot < 0) { specDropped_.fetch_add(1, std::memory_order_relaxed); continue; }   // all in flight: drop, never wait
+                // ★ A free slot is neither the worker's nor awaiting delivery, so it is written unlocked.
+                std::memcpy(specWorkQ_[slot].data(), sb, (size_t)fftSize_ * sizeof(cf32));
+                { std::lock_guard<std::mutex> lk(specM_); ++specFilled_; }
+                specCv_.notify_one();
                 continue;
             }
             const float scale = 1.0f / (float)(fftSize_ * fftSize_);
@@ -1407,7 +1433,15 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap) {
                     }
                 }
             }
-            if (wantRds && cb_.rdsExt && rdsExtWanted) {
+            /* ★★ AT THE PANEL'S PACE, NOT THE BLOCK'S (2026-10-16, the Portable: a Pi 3A+ read dspCpu 100 the
+             *  moment Advanced RDS opened, and the audio crackled). This snapshot — AF/EON/ODA merges, the eye
+             *  grids, the MPX spectrum, every vector copied again under rdsMtx by the shim — ran on EVERY demod
+             *  block, ~30 a second, on the audio thread, while the shim sends the panel at 6 Hz (rdsxLastAt).
+             *  Twelve a second keeps every sent panel at most one snapshot old; the rest was thrown away. */
+            rdsExtSince_ += nc;
+            const bool rdsExtDue = rdsExtSince_ >= (long long)(chFs_ / 12.0);
+            if (wantRds && cb_.rdsExt && rdsExtWanted && rdsExtDue) {
+                rdsExtSince_ = 0;
                 const RdsDecoder* d = rdsDemod_.best();
                 float xy[RdsDemod::kConstPts * 2];
                 const int np = rdsDemod_.constellation(xy, RdsDemod::kConstPts);

@@ -135,6 +135,11 @@ export type RootStackParamList = {
      *  connected: the wrist waited for rows for ever and the phone sat there doing nothing
      *  (Stuart, 2026-08-28). Same hand-off shape as autoSpy: the picker owns the connect. */
     autoVibe?: { url: string; name: string };
+    /** ★★ A vibesdr:// LINK THAT NAMES A VIBESERVER (2026-10-16). Same reasoning as autoVibe: the
+     *  PIN probe, the PIN box and the saved-PIN store live in the picker, so a link to a VibeServer
+     *  is handed here rather than navigated straight to SDR — which asked for no PIN at all and
+     *  left a PIN-protected server refusing every socket. Carries the link's optional tune. */
+    linkVibe?: { url: string; name: string; freq?: number; mode?: SDRMode; zoom?: number };
     /** Sit in the stack WITHOUT auto-connecting to the default.
      *
      *  A watch-driven boot resets to [InstancePicker, target] so that BACK still has

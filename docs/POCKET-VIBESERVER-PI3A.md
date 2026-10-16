@@ -25,8 +25,8 @@ Nothing here has run on a Pi 3 A+ yet. The checklist at the end is how to prove 
 5. **Raspberry Pi OS Lite, minimal**, with **both** a 32-bit and a 64-bit image from one stage. The
    device decides which one we recommend.
 6. **The tunnel:**
-   - **Enable the tunnel** is off on a fresh box.
-   - **Resume the tunnel after a restart** is a sub-toggle, also off by default.
+   - **List this server publicly** (Advertise on VibeSDR.net) is off on a fresh box.
+   - **Start the tunnel again after a reboot** sits under it, off by default on a Portable.
    - The tunnel never tries to start without real internet, and never in hotspot mode.
 7. **The power WILL be pulled at any moment.**
    - The root filesystem must survive a cut.
@@ -210,22 +210,26 @@ The TUI's first run does three things: tick radios, set the admin password, set 
 
 ### The tunnel: Personal or shared
 
-**Enable the tunnel** is the existing "Advertise on VibeSDR.net" switch, posted on its own so it
-acts at once with no restart. On, it starts `cloudflared` and lists the box. Off, it stops the
-`cloudflared` **process** (the RAM really comes back) and delists the box.
+**List this server publicly** is the "Advertise on VibeSDR.net" switch every server has. On, it
+starts `cloudflared` and lists the box. Off, it stops the `cloudflared` **process** (the RAM really
+comes back) and delists the box.
 
-**Resume the tunnel after a restart** (config `dirResume`) sits under it. It is shown only while
-the tunnel is enabled, and is off by default. The wording matches VibeServer Lite's ADVERTISE ON
-VIBESDR.NET card where the two overlap.
+★ 2026-10-16 (Stuart): until then the Portable had a second card, "Share with the world", whose
+**Enable the tunnel** was the same switch without the name entry. It was removed. Its sub-toggle
+became **Start the tunnel again after a reboot** (config `tunnelResume`), under the one switch, on
+**every** server that uses this setup page (Linux, and the Mac in Full Mode): **off by default on a
+Portable, on by default everywhere else** (what those servers always did). A never-chosen value is
+settled by the front door at start and written to the file; a Portable's old `dirResume` carries
+over. Test: `scripts/test-tunnel-resume.mjs`.
 
-| Enable the tunnel | Resume after restart | Box state | What happens |
+| Listed | Again after a reboot | Box state | What happens |
 |---|---|---|---|
 | off | — | any | Personal. No cloudflared. Reachable on its own hotspot or your Wi-Fi only. |
 | on | — | own hotspot (setup or fallback) | **"Tunnel waiting for an internet connection"** — no cloudflared, no retries, no log lines; one line logged when it starts waiting. |
 | on | — | joined a network, NM connectivity not `full` (captive Wi-Fi, no upstream) | Same: waiting. |
 | on | — | joined, connectivity `full` | Tunnel starts, the box is listed; the page shows the address. |
 | on | — | internet lost (fell back to its hotspot, or the router went offline) | Tunnel stopped (paused), listing ages out; it restarts by itself when `full` returns. |
-| on | off | after a power cut / reboot | Comes back **Personal** (Enable is switched off on a new boot — the kernel boot id, so a settings save's restart does NOT switch it off). |
+| on | off | after a power cut / reboot | Comes back **Personal** (the listing is switched off on a new boot — the kernel boot id, so a settings save's restart does NOT switch it off). |
 | on | on | after a power cut / reboot | Tunnel enabled, and waits for `full` connectivity as above. |
 
 "Internet" means **NetworkManager's own connectivity verdict**:
@@ -443,7 +447,7 @@ Use an iPhone. If SSH was enabled with Imager, the logs are:
 11. **Wrong password** on network 1: it ends on 2 and does not retry 1 every two minutes. The page
     shows the problem.
 12. **The tunnel:**
-    - On the hotspot, **Enable the tunnel** → "Tunnel waiting for an internet connection".
+    - On the hotspot, **List this server publicly** → "Tunnel waiting for an internet connection".
       `pgrep cloudflared` → nothing.
     - Join home → the tunnel starts; listed.
     - Pull home's internet (not the Wi-Fi) → paused.
@@ -519,8 +523,8 @@ inside the ±7 % noise. Then the lighter build wins on 512 MB. Record the result
 8. **The first boot is unprotected for about a minute** (it writes its one-time identity, then
    seals). Acceptable, with "leave it powered for 3 minutes" on the card?
 9. **Lite's tunnel restores after a reboot by default** (`VibeTunnel.restoreIfWanted`). The pocket
-   box now asks first, through **Resume the tunnel after a restart**. Should Lite get the same
-   switch, so the two portable servers behave alike?
+   box now asks first, through **Start the tunnel again after a reboot** (every server on this setup
+   page has it since 2026-10-16). Should Lite get the same switch, so the two portable servers behave alike?
 
 ## Not done here (from the brief)
 

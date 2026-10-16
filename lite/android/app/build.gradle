@@ -51,7 +51,7 @@ android {
         buildConfigField 'boolean', 'IS_LEGACY_PACKAGE', 'false'
         minSdkVersion 21            // Android 5.0 — a 2017 Fire 7 is 5.1.1 (API 22)
         targetSdkVersion 28         // ★ sideload-only: old enough that an old tablet's rules apply
-        versionCode 68
+        versionCode 71
         versionName serverVersion + "-lite"
         ndk { abiFilters 'armeabi-v7a' }
         externalNativeBuild {
@@ -196,7 +196,8 @@ def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'R
               // ★★★ CRASH CAPTURE (2026-10-07): the system's exit record + the decoded native tombstone, read by
               //    LiteDiagModule for Diagnostics. Without these Lite reported "none recorded" for every native
               //    crash — on the build that exists to host the C++ engine. React-free bar Arguments/WritableMap.
-              'VibeExitInfo.kt', 'TombstoneReader.kt']
+              // ★ 2026-10-15: plus the Java crash note VibeExitInfo now reads for a CRASH exit (VibeJavaCrash).
+              'VibeExitInfo.kt', 'TombstoneReader.kt', 'VibeJavaCrash.kt']
 tasks.register('syncShared', Sync) {
     from("${MAIN}/java/com/vibesdr/app") { include SHARED }
     into "${buildDir}/shared-src/com/vibesdr/app"

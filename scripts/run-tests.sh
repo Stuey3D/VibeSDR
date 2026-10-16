@@ -268,6 +268,9 @@ if node --no-warnings scripts/test_faceplate_nixie.ts; then pass=$((pass+1)); el
 #     table the LEDs light from, Φ((μ − T)/σ) with its σ floor, the eye filter as the only easing, the
 #     steady-LED hysteresis, and the needle's 300 ms / 1 % ballistics — the maths, checked as data.
 if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE READOUT COMES FIRST, THE TUNING ROW IS NEVER SMALLER THAN THE MENU ROW (2026-10-16, iPhone 12): the
+#     portrait deck at 320–430 pt and tablets, every chassis × meter × shared × TUNE (drums / keys / DAB MUX).
+if node --no-warnings scripts/test_deck_readout_first.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ WORKLETS AS THE UI THREAD RUNS THEM (the 11 B7 LED VU crash): a default parameter that names a
 #     module constant THROWS on the UI thread (the plugin unpacks captures inside the body), so every
 #     worklet in src/ is compiled with the app's plugin and checked, and the meters' frame callbacks are
@@ -523,6 +526,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 
 printf '\n\033[1m── a dead tunnel address is replaced (end to end) ──\033[0m\n'
 node scripts/test-tunnel-selfcheck.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★ "START THE TUNNEL AGAIN AFTER A REBOOT" (Stuart, 2026-10-16): settled + written at start (on everywhere, off on a
+#    Portable, the Portable's old dirResume carried over); OFF unlists after a REBOOT, never after a settings restart.
+printf '\n\033[1m── the tunnel after a reboot (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-resume.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 printf '\n\033[1m── a decoder alone keeps the audio chain (end to end) ──\033[0m\n'

@@ -7,7 +7,7 @@
  * Run: node --no-warnings scripts/test_faceplate_nixie.ts   (run-tests.sh does)
  */
 import {
-  CATHODE_STACK, cathodeDepth, cathodeNeighbours, nixieSpec, nixieReadout, nixieGeometry,
+  CATHODE_STACK, cathodeDepth, cathodeNeighbours, CATHODE_STROKES, GLYPH_W, meshBox, digitCentre, nixieSpec, nixieReadout, nixieGeometry,
   stackHeight, mhzDigitsFor, TUBE_DESIGN, PIP_H, COLLAR_H, CLEAR, MIN_GLASS,
 } from '../src/constants/nixie.ts';
 
@@ -126,17 +126,44 @@ eq('mhzDigitsFor(145 MHz)', mhzDigitsFor(145_000_000), 3);
 eq('mhzDigitsFor(648 kHz)', mhzDigitsFor(648_000), 1);
 
 // ── Cathode stack ────────────────────────────────────────────────────────────
-eq('stack order', CATHODE_STACK.join(' '), '1 6 2 7 5 0 4 9 8 3');
-eq('a 1 sits at the front', cathodeDepth('1'), { scale: 1, dy: 0, opacity: 1 });
+// ★★★ front→back 6 5 4 7 3 9 8 2 0 1 — measured off Stuart's 4K close-up (IMG_1559, 2026-10-16).
+eq('stack order (front → back)', CATHODE_STACK.join(' '), '6 5 4 7 3 9 8 2 0 1');
+ok('the 6 is at the front (4K: largest, no wire across it)', CATHODE_STACK[0] === '6');
+ok('the 1 is at the back (4K: smallest, crossed by most wires)', CATHODE_STACK[9] === '1');
+ok('the stack holds each digit once', [...CATHODE_STACK].sort().join('') === '0123456789');
+eq('a 6 sits at the front', cathodeDepth('6'), { scale: 1, dy: 0, opacity: 1, soft: 1 });
 {
-  const d3 = cathodeDepth('3');
-  ok('a 3 sits smaller, lower and dimmer than a 1', d3.scale < 1 && d3.dy > 0 && d3.opacity < 1);
-  eq('a 3 (index 9)', [+(d3.scale).toFixed(3), d3.dy, +(d3.opacity).toFixed(2)], [0.748, 2.25, 0.73]);
+  const d1 = cathodeDepth('1');
+  ok('a 1 sits smaller, lower, dimmer and softer than a 6', d1.scale < 1 && d1.dy > 0 && d1.opacity < 1 && d1.soft > 1);
+  eq('a 1 (index 9)', [+(d1.scale).toFixed(3), +(d1.dy).toFixed(2), +(d1.opacity).toFixed(3), +(d1.soft).toFixed(2)], [0.91, 1.35, 0.865, 1.45]);
+  ok('the depth is gentle: the back digit is at least 85 % of the front one', d1.scale >= 0.85);
 }
-eq('neighbours of 5: 3 behind, 2 in front', cathodeNeighbours('5'), { back: ['0', '4', '9'], front: ['6', '2', '7'].slice(1) });
-eq('neighbours of 1: nothing in front', cathodeNeighbours('1').front, []);
-eq('neighbours of 3: nothing behind', cathodeNeighbours('3').back, []);
-eq('a switched-off tube shows four bare cathodes', cathodeNeighbours(null), { back: ['1', '6', '2', '7'], front: [] });
+eq('a 3: every cathode behind and in front', cathodeNeighbours('3'), { back: ['9', '8', '2', '0', '1'], front: ['6', '5', '4', '7'] });
+eq('a 6: nothing in front', cathodeNeighbours('6').front, []);
+eq('a 1: seen through all nine', cathodeNeighbours('1'), { back: [], front: ['6', '5', '4', '7', '3', '9', '8', '2', '0'] });
+eq('a switched-off tube shows the whole stack', cathodeNeighbours(null), { back: ['6', '5', '4', '7', '3', '9', '8', '2', '0', '1'], front: [] });
+// ★★★ The IN-14's own digits, as wire paths (frequency tubes only).
+{
+  const pts = (d: string) => CATHODE_STROKES[d].flatMap((s) => s.k === 'line' ? s.pts : s.k === 'cubic' ? [s.p0, s.p1] : []);
+  ok('every digit has a wire path', '0123456789'.split('').every((d) => CATHODE_STROKES[d]?.length > 0));
+  ok('the 1 is one straight vertical wire', CATHODE_STROKES['1'].length === 1 && pts('1').every(([x]) => x === GLYPH_W / 2));
+  const top3 = pts('3').filter(([, y]) => y === 0);
+  ok('the 3 is flat-topped (a top bar end to end)', top3.some(([x]) => x === 0) && top3.some(([x]) => x === GLYPH_W));
+  const seven = pts('7');
+  ok('the 7 is a top bar and a straight stem with no tail', CATHODE_STROKES['7'].length === 1 && seven.length === 3 && seven[2][1] === 1);
+  const base2 = CATHODE_STROKES['2'].at(-1)!;
+  ok('the 2 ends in a flat base with no upturn', base2.k === 'line' && base2.pts.at(-1)![1] === 1 && base2.pts.every(([, y]) => y === 1));
+  const five = CATHODE_STROKES['5'].at(-1)!;
+  ok('the 5 is the 2 turned upside down (its base becomes the flat top)', five.k === 'line' && five.pts.every(([, y]) => y === 0));
+  ok('the 9 is the 6 turned round', CATHODE_STROKES['9'].length === CATHODE_STROKES['6'].length);
+  ok('every point inside the unit box (the 4 runs a little below the line)',
+    '0123456789'.split('').every((d) => pts(d).every(([x, y]) => x >= 0 && x <= GLYPH_W && y >= -0.05 && y <= 1.08)));
+}
+{
+  const b = meshBox(21, 40), c = digitCentre(21, 40);
+  ok('the anode box sits inside the glass, below the dome', b.x > 0 && b.x + b.w < 21 && b.y >= 0.26 * 40 * 0.9 && b.y + b.h < 40);
+  ok('the digit centres in the anode box', Math.abs(c.cx - 10.5) < 1e-9 && c.cy > b.y && c.cy < b.y + b.h);
+}
 
 // ── ★★ ABOVE 9.999 GHz — a converter in front of the radio (LNB / transverter) puts the DIAL above 10 GHz:
 //    QO-100's narrowband downlink at 10 489.5 MHz (a 9 750 MHz Ku LNB), the 10 GHz and 24 GHz ham bands.

@@ -7,6 +7,7 @@
 //
 // usage: dab-switch <clip.vbu8> [switches]     (VIBE_DAB_SCAN=0/1, VIBE_DAB_SCAN_HOLD=0 for the A/B)
 #include "vibe_benchmark_dab.h"
+#include "vibe_thread_layout.h"
 #include <cstdio>
 #include <chrono>
 #include <thread>
@@ -17,10 +18,7 @@ int main(int argc, char** argv) {
     const int switches = argc > 2 ? std::atoi(argv[2]) : 6;
     vibe::DabClip clip;
     if (!vibe::loadDabClip(argv[1], clip)) { std::printf("cannot read %s\n", argv[1]); return 2; }
-#if defined(__arm__) && !defined(__aarch64__)
-    setenv("VIBE_DSP_THREADS", "1", 0);
-    setenv("VIBE_DAB_SPLIT", "1", 0);
-#endif
+    vibe::vibeApplyDefaultThreadLayout();   // ★ the served layout — see vibe_thread_layout.h
     vibedab::DabService svc;
     svc.setRfRate(clip.rate);
     svc.setRfCentre(clip.centre);

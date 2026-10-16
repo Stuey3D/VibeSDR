@@ -56,6 +56,9 @@ type Props = {
   /** Coachmark target — attached to the collapsed chip anchor so the first-run
    *  tour can spotlight it (tourRef from the parent). */
   anchorRef?: React.Ref<View>;
+  /** ★ The collapsed chip's width, so the receiver's name opposite can stop short of it (2026-10-16: on an
+   *  iPhone 12 "Northampton · 52.31, -0.88 · IO92nh" ran underneath the chip). */
+  onChipWidth?: (w: number) => void;
 };
 
 // Amber pill, shrunk ~12% from the first mockup (which read a touch chunky).
@@ -68,6 +71,7 @@ export default function ServersChip({
   openToken = 0,
   closeToken = 0,
   onExpandedChange,
+  onChipWidth,
 }: Props) {
   const { theme: t } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -165,6 +169,7 @@ export default function ServersChip({
           // ── Collapsed chip ──────────────────────────────────────────────────
           <Pressable
             onPress={() => setExpanded(true)}
+            onLayout={onChipWidth ? (e) => onChipWidth(Math.ceil(e.nativeEvent.layout.width)) : undefined}
             hitSlop={8}
             accessibilityRole="button"
             accessibilityLabel="Servers — tap to switch receiver or return to the list"

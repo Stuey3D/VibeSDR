@@ -85,7 +85,8 @@ inline std::atomic<float>& dabEraseFrac() {
  *  Viterbi, re-encode) ≈ 40 ms. 0.97 of a core on ONE thread is not real time; 0.56 + 0.42 on two of
  *  four cores is. The hand-over is the frame's MSC soft bits, which is already a clean boundary.
  *  ★★ It spreads the load, it does not reduce it — on a machine where DAB already fits one core
- *     this buys headroom and nothing audible, which is why it is a switch and not the default.
+ *     this buys headroom and nothing audible. Since 2026-10-16 every multi-core server sets it (g_vsSplitDefault
+ *     in local_sdr_shim.cpp); a bare DabReceiver (the offline tools, the tests) stays unsplit.
  *  ★ Seeded from VIBE_DAB_SPLIT=1; a host (the Lite APK) may store to it before the service starts. */
 inline std::atomic<bool>& dabSplitMsc() {
     static std::atomic<bool> v{ std::getenv("VIBE_DAB_SPLIT") != nullptr

@@ -423,8 +423,8 @@ private:
          *    not: the helper was defined inside that .cpp and unreachable from this header. */
         vibeAudioThread("vibe-dab");
         std::unique_lock<std::mutex> lk(m_);
-        /* ★ Opt-in (VIBE_DAB_SPLIT=1, or the Lite host): the MSC half on a second thread, for a
-         *  machine whose single core cannot carry the whole receiver — see dabSplitMsc(). */
+        /* ★ VIBE_DAB_SPLIT=1 — on every multi-core server since 2026-10-16 (g_vsSplitDefault): the MSC
+         *  half on a second thread — see dabSplitMsc(). */
         rx_.setMscThread(dabSplitMsc().load(), [] { vibeAudioThread("vibe-dab-msc"); });
         const size_t need = size_t(modeI().frameSamples) * 2;
         while (!stop_) {

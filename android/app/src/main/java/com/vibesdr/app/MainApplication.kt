@@ -28,6 +28,9 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     VibeDiag.start(this)   // ★ memory diagnostics — runs only in a -PvibeDiag=true build
+    // ★ 2026-10-15: a Java crash leaves Android's exit record saying only "crash" (NickB's 1 GB crash).
+    //   First, so a crash anywhere in start-up is caught too. See VibeJavaCrash.
+    VibeJavaCrash.install(this)
     super.onCreate()
     // ★ 2026-10-05: names the build on this process's exit record, so Diagnostics can say which version
     //   crashed (Nick's overnight VibeServer crash had no version, no log, nothing). See VibeExitInfo.

@@ -4,7 +4,7 @@
 //     Lite runs this at first setup and switches red features OFF by default (the owner may override); the full
 //     versions offer it at the top of setup as advice. Design: memory lite_first_setup_benchmark.md.
 // ★★★ THE REAL CHAIN ON SYNTHETIC SIGNALS — RxPipeline exactly as the server builds it (its own thread options,
-//     which 32-bit ARM switches on through VIBE_DSP_THREADS), fed a generated station. bench_wfm did the same and
+//     which every multi-core server switches on through VIBE_DSP_THREADS — g_vsSplitDefault), fed a generated station. bench_wfm did the same and
 //     matched the live Pi 2 within a few per cent.
 // ★★★ SCORED BY THE HOTTEST THREAD against ONE core, never the average: the admin page's 4-core average once read
 //     25 % with the audio already dead. Each thread's CPU is read from /proc/self/task; the worst one, over the

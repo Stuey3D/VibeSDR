@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { scrollLane } from '../constants/popupTokens';
 import {
   Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
@@ -425,7 +426,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         </TouchableOpacity>
       )}</NavItem></NavRow>
       {txListOpen && (
-        <ScrollView ref={txScroll} nestedScrollEnabled keyboardShouldPersistTaps="handled"
+        <ScrollView ref={txScroll} nestedScrollEnabled keyboardShouldPersistTaps="handled" contentContainerStyle={scrollLane}
                     style={[st.moreList, { borderColor: t.btnBorder }, pt.metal && windowStyle(pt)]}>
           {txRows.map(l => {
             const on = l.id === tc.language;

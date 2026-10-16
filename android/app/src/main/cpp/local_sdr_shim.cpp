@@ -36,6 +36,7 @@
 #endif
 #include <unistd.h>
 #include "vibe_thread.h"   // ★ the one definition — see the header for why it moved
+#include "vibe_thread_layout.h"   // ★ the receiver split on every multi-core server — g_vsSplitDefault below
 #include "vibe_usb_recovery.h"   // ★ park-not-release, fresh-fd back-off, the re-plug advice (2026-10-05)
 #include "vibe_clock.h"    // ★ corrected UTC for the slot decoders — see the header
 #include "vibe_hwinfo.h"
@@ -207,6 +208,14 @@ bool vibeLogVerbose() {
 void vibeSetLogVerbose(bool on) { g_logVerbose.store(on ? 1 : 0, std::memory_order_relaxed); }
 
 namespace {
+
+/* ★★★ ONE THREAD LAYOUT ON EVERY SERVER (2026-10-16, Stuart: "the multithreaded setup needs to be the default
+ *  for all servers"). The rule and its reasons live in vibe_thread_layout.h; it is applied HERE, in the code every
+ *  server shares, at library load — before any RxPipeline or DabService starts, and in the same process as the
+ *  setup page's benchmark, which therefore measures the layout that runs. The owner's own environment wins. */
+#if !defined(_WIN32)
+[[maybe_unused]] const bool g_vsSplitDefault = vibe::vibeApplyDefaultThreadLayout();
+#endif
 
 // V5: the on-device DSP is now the clean-room GPL-free engine. These local
 // aliases replace the old SDR++ dsp:: sample types so the decoder/audio feed
@@ -14123,7 +14132,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  HF+'s do; packing and the curve are not gain and do not. */
         if (type == "airspy_control") {
             if (!sharedGate("Airspy controls")) return;
-            const bool manualLocked = LocalSdrShim::agcLocked();
+            const bool manualLocked = LocalSdrShim::agcLocked() && !adminNow(sock);   // ★ the owner overrides (see `gain`)
             /* ★★★ THE OWNER'S PER-BAND LIMIT: A CURVE, A POSITION, AND NOTHING ELSE (Stuart,
              *     2026-09-28): "if a per band limit is in place tie it to one of the gain curves
              *     and limit that and then block any manual gain with the individual gain controls."
@@ -14196,7 +14205,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     ARE this radio's gain — leaving them writable while the AGC is "locked" would be
             //     a lock in name only, since a listener could simply attenuate or boost around it.
             //     ★ The threshold below is the AGC's own setting, not a way past it, so it stays.
-            const bool ahfManualLocked = LocalSdrShim::agcLocked();
+            // ★★★ THE SIGNED-IN OWNER IS EXEMPT, as in the `gain` handler (Stuart, 2026-09-27: "admin should
+            //     override it"). That fix reached the generic slider only, so on an HF+ with the lock on the
+            //     owner's attenuator, preamp and AGC switch were refused and logged while the app showed them
+            //     live (Stuart, 2026-10-15: "moved the slider to its extremes and nothing changed at all").
+            const bool ahfManualLocked = LocalSdrShim::agcLocked() && !adminNow(sock);
             if (jsonNum(msg, "att", v)) {
                 if (ahfManualLocked) LOGI("attenuator refused — the owner has locked the AGC on");
                 else                 LocalSdrShim::instance().setAhfAttenuation((int)v);
@@ -14219,7 +14232,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     that is good enough", Stuart), so "protect the front end" here means: leave it
             //     to the radio, and do not let a listener take it off.
             if (jsonNum(msg, "agc", v)) {
-                if (LocalSdrShim::agcLocked() && v == 0) LOGI("AGC off refused — locked by the owner");
+                if (ahfManualLocked && v == 0) LOGI("AGC off refused — locked by the owner");
                 else                                     LocalSdrShim::instance().setAhfAgc(v != 0);
             }
             return;
@@ -14386,7 +14399,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     them the very control the lock exists to withhold. Turning it ON is always
             //     allowed — that is moving TOWARDS what the owner asked for.
             if (jsonNum(msg, "ifagc", v)) {
-                if (LocalSdrShim::agcLocked() && v == 0) {
+                if (LocalSdrShim::agcLocked() && v == 0 && !adminNow(sock)) {   // ★ the owner overrides (see `gain`)
                     LOGI("AGC off refused — the owner has locked it on");
                 } else {
                     LocalSdrShim::instance().setIfAgc(v != 0);
@@ -18409,9 +18422,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                               *  there — steady, for as long as the listen lasts. A compute-bound
                               *  thread wanders; a thread BLOCKED ON A QUEUE pins just over 100 %,
                               *  because the blocked time is charged to the same interval. On armhf
-                              *  (the Pi 2 and nothing else) VIBE_DSP_THREADS=1, so the whole WFM
+                              *  (and, since 2026-10-16, every multi-core server — g_vsSplitDefault) VIBE_DSP_THREADS=1, so the whole WFM
                               *  chain runs on one `vibe-demod` thread behind a 4-slot queue.
-                              *  ★ So on a 32-bit box dspCpu is NOT a pure CPU figure, and the
+                              *  ★ So with the split on, dspCpu is NOT a pure CPU figure, and the
                               *  health pill going red is reporting "the pipeline is not keeping
                               *  up", not "this core is busy". This counter is what distinguishes
                               *  them, in one HTTP GET instead of a day of measurement. */

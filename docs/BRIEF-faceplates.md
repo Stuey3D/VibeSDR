@@ -429,14 +429,35 @@ Applies to the frequency window, mode box and VTS strip (`VTSBar.tsx`, the live 
     - ★ **TRAP (perf):** the recess, glass, mesh, collars and shadows never change. Draw them once and
       cache the result as a layer. Per tune step, redraw only the cathodes and the decimal point.
   - **Cathode depth**, which is the "a little higher or a little set back" feel of a real tube:
-    - The ten cathodes are stacked front to back in this order: `1 6 2 7 5 0 4 9 8 3`.
-    - A lit digit at stack index *i* is drawn at `scale(1 − 0.028·i)`, `translateY(0.25·i)` and
-      opacity `1 − 0.03·i`. So a 3 sits smaller, lower and dimmer than a 1.
-    - Draw up to 3 unlit cathodes behind it as faint wire `rgba(150,130,110,.10)`.
-    - Draw the 2 nearest cathodes in front of it as darker wire `rgba(70,48,34,.55)`, occluding the
-      glow. All of these use the same per-index transform.
-    - Digit `#ffc48a`, glow `0 0 1.5 #ff8a2e, 0 0 5 #ff6410, 0 0 11 rgba(255,80,10,.75),
-      0 0 20 rgba(255,70,0,.35)`.
+    - ★★★ REVISED 2026-10-16, MEASURED off Stuart's 4K close-up of his IN-14s (IMG_1559, one tube steps
+      through all ten digits at 9.7-12.7 s): front to back `6 5 4 7 3 9 8 2 0 1`. Same-tube evidence:
+      lit-stroke size (perspective) and dark wire crossing the stroke. No published depth order is
+      trustworthy — the earlier `1 6 2 7 5 0 4 9 8 3` here, and the `3 8 9 4 0 5 7 2 6 1` an AI summary
+      gave, both contradict the video. See constants/nixie.ts for the per-digit numbers.
+    - A lit digit at stack index *i* is drawn at `scale(1 − 0.010·i)`, `translateY(0.15·i)`, opacity
+      `1 − 0.015·i` and glow radius × `1 + 0.05·i` — a 1 sits a touch smaller, lower, dimmer and softer
+      than the 6 at the front (gentle: the real stack is a few mm deep).
+    - EVERY unlit cathode is drawn: those behind it lit warm by its glow, every one in front as dark wire
+      crossing the glow; a switched-off tube shows the whole stack as bare metal. The hex anode mesh is a
+      rectangle round the stack, IN FRONT of it: it shadows the glow and is lit warm itself.
+    - IN-14 shapes (frequency tubes only; the font is untouched elsewhere): every digit is a traced wire
+      path (constants/nixie `CATHODE_STROKES`), not Nixie One — 0 a tall oval, 1 a straight wire, 2 with a
+      flat base and no upturn, 3 FLAT-TOPPED (Ʒ), 4 with a closed apex and the stem below the line, 5 the
+      2 turned upside down, 6 a straight stroke into a round bowl, 7 a top bar and a straight stem with no
+      tail, 8 a small loop on a larger one, 9 the 6 turned round.
+    - ★★ Every cathode is the SAME FINE WIRE (Stuart: "the thickness comes from the glow, not the
+      electrode wire itself"): unlit wires are hairlines (≥ 1 device pixel); a lit digit is that wire
+      inside its neon sheath, the glow layers alone giving it its weight.
+    - The hex anode cage fills the tube's window edge to edge, about seven hexes across, bright fine
+      wire shaded towards the sides.
+    - The neon glow (sampled off the 4K video, not its clipped core): a fattened, blurred sheath round
+      each wire — bloom #c83e06, sheath #d65409, halo #f06e08, hot core #fc9616 / #ffb63c — filling the
+      anode window with warm orange. No flicker: the dark tubes in the video are the camera catching the
+      multiplex; the eye never sees it.
+    - ★ TRAP (perf): all of this is ONE sprite per digit per tube size (constants/nixie `drawTubeInside`);
+      a tune step blits one image per tube.
+    - (Superseded by the sampled glow above: digit `#ffc48a`, glow `0 0 1.5 #ff8a2e, 0 0 5 #ff6410,
+      0 0 11 rgba(255,80,10,.75), 0 0 20 rgba(255,70,0,.35)`.)
   - ★★★ **The decimal point is its own tube**, as on a real nixie clock (Stuart's reference photo). It is a
     small neon indicator bulb (INS-1 style), never a dot inside a digit tube:
     - width ≈ 0.45 × a digit tube, glass height ≈ 0.62 × a digit tube's glass;

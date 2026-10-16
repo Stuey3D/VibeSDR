@@ -36,8 +36,6 @@ const ROT_WINDOW_MS = 30000;
 const HISTORY_MS = 120000;
 const HISTORY_MAX = 200;
 const MAX_PERIOD = 64;
-/** The fallback when no clean period is found (e.g. dynamic PS carrying song titles). */
-const FALLBACK_SEGMENTS = 32;
 
 type Seg = { ps: string; t: number };
 
@@ -48,16 +46,23 @@ export class PsStabiliser {
   private shown = '';
   private shownAt = 0;
   private shownRotating = false;
+  private shownSettled = true;
   private lastRaw = '';
 
   /** Forget everything — live RDS has ended (retune, mode change). */
   reset(): void {
     this.key = null; this.hist = []; this.firstSeen.clear();
-    this.shown = ''; this.shownAt = 0; this.shownRotating = false; this.lastRaw = '';
+    this.shown = ''; this.shownAt = 0; this.shownRotating = false; this.shownSettled = true; this.lastRaw = '';
   }
 
   /** True while the station's PS is being treated as a rotating marquee. */
   get rotating(): boolean { return this.shownRotating; }
+
+  /** ★★ False while a rotating PS has NOT yet come round as a clean, repeating cycle — the name shown is then only the
+   *  latest piece. The caller shows the station's call letters instead when it has them (WLZX, 2026-10-15: a PS
+   *  carrying song titles never repeats until the song has played long enough, and joining every piece heard made
+   *  "-FM Lenny Kra tz Fly A ZX-FM Le y Kravan…"). Once the cycle repeats, the stitched name is settled. */
+  get settled(): boolean { return !this.shownRotating || this.shownSettled; }
 
   /**
    * Feed one PS observation for station `key`. Returns the name to DISPLAY — never '' once a name
@@ -96,7 +101,7 @@ export class PsStabiliser {
   }
 
   /** What we would show if no dwell applied. */
-  private target(now: number): { name: string; rotating: boolean } | null {
+  private target(now: number): { name: string; rotating: boolean; settled?: boolean } | null {
     if (!this.lastRaw) return null;
     const recent = this.hist.filter(s => now - s.t <= ROT_WINDOW_MS);
     // changes = segments after the first in the window; plus a RECURRENCE (A … B … A) is proof.
@@ -109,14 +114,14 @@ export class PsStabiliser {
     }
     const rotating = changes >= ROT_MIN_CHANGES || recurs;
     if (!rotating) return { name: this.lastRaw, rotating: false };
-    return { name: this.cycleName(), rotating: true };
+    return { ...this.cycleName(), rotating: true };
   }
 
   private evaluate(now: number): string {
     const want = this.target(now);
     if (!want) return this.shown;
     if (!this.shown) { this.adopt(want, now); return this.shown; }
-    if (want.name === this.shown) { this.shownRotating = want.rotating; return this.shown; }
+    if (want.name === this.shown) { this.shownRotating = want.rotating; this.shownSettled = want.settled !== false; return this.shown; }
     if (now >= this.dueAt(want)) this.adopt(want, now);
     return this.shown;
   }
@@ -127,19 +132,21 @@ export class PsStabiliser {
    *  ★★ One that arrives INSIDE the dwell is the start of a possible rotation, so it must itself
    *     hold still for MIN_DWELL_MS before it is shown. Otherwise the second segment of a marquee
    *     would flash up for a moment before the rotation had been recognised. */
-  private dueAt(want: { name: string; rotating: boolean }): number {
+  private dueAt(want: { name: string; rotating: boolean; settled?: boolean }): number {
+    // ★ The first clean cycle replaces an unsettled stand-in at once — it is the name the stand-in was waiting for.
+    if (want.rotating && want.settled !== false && this.shownRotating && !this.shownSettled) return this.shownAt;
     const base = this.shownAt + (this.shownRotating ? ROTATING_DWELL_MS : MIN_DWELL_MS);
     if (want.rotating) return base;
     const since = this.hist[this.hist.length - 1]?.t ?? this.shownAt;
     return since - this.shownAt >= MIN_DWELL_MS ? base : Math.max(base, since + MIN_DWELL_MS);
   }
 
-  private adopt(want: { name: string; rotating: boolean }, now: number) {
-    this.shown = want.name; this.shownAt = now; this.shownRotating = want.rotating;
+  private adopt(want: { name: string; rotating: boolean; settled?: boolean }, now: number) {
+    this.shown = want.name; this.shownAt = now; this.shownRotating = want.rotating; this.shownSettled = want.settled !== false;
   }
 
   /** The rotation as one canonical string. */
-  private cycleName(): string {
+  private cycleName(): { name: string; settled: boolean } {
     const seq = this.hist.map(s => s.ps);
     let cycle: string[] | null = null;
     // Smallest period p such that the last p segments repeat the p before them.
@@ -151,11 +158,12 @@ export class PsStabiliser {
       if (ok) { cycle = seq.slice(seq.length - p); break; }
     }
     if (!cycle) {
-      // No clean period yet: the distinct segments in the order they were first heard.
-      const distinct = [...new Set(seq)];
-      return trimWrap(mergeSegments(distinct.slice(-FALLBACK_SEGMENTS)));
+      // ★★ No clean period yet: UNSETTLED, and the name already on show is kept (the caller shows the call letters
+      //    instead when it has them). This used to join every distinct segment heard, which for a PS carrying song
+      //    titles — pieces that never repeat until the song has played a while — was a jumble (WLZX, 2026-10-15).
+      return { name: this.shown || (seq[seq.length - 1] ?? ''), settled: false };
     }
-    return trimWrap(mergeSegments(this.canonicalRotation(cycle)));
+    return { name: trimWrap(mergeSegments(this.canonicalRotation(cycle))), settled: true };
   }
 
   /** Rotate the cycle so it starts from the segment heard FIRST — the rotation's position must
@@ -178,9 +186,21 @@ export class PsStabiliser {
  *  drop the repeated head from the tail. Needs the same substantial overlap as the merge. */
 function trimWrap(s: string): string {
   for (let o = Math.floor(s.length / 2); o >= 3; o--) {
-    if (s.endsWith(s.slice(0, o))) return s.slice(0, s.length - o).trim();
+    if (s.endsWith(s.slice(0, o))) return startAtWord(s.slice(0, s.length - o));
   }
   return s;
+}
+
+/** ★★ A SCROLLER'S CYCLE IS A RING, AND IT MUST BE OPENED AT A WORD (Stuart, 2026-10-15: WLZX read
+ *  "WLZX estival 10/17 Lazer 99.1 F" — the F under the strip's fade). The canonical start is the segment heard
+ *  first, and tuning in mid-scroll makes that "estival 1": the ring was opened inside a word. `ring` is the cycle
+ *  with its wrap intact — its last character runs straight into its first — so: if a space sits at the wrap, it is
+ *  already a word start; otherwise the word broken across the wrap is moved whole to the front. */
+function startAtWord(ring: string): string {
+  if (/^\s|\s$/.test(ring)) return ring.trim();
+  const k = ring.lastIndexOf(' ');
+  if (k < 0) return ring.trim();
+  return `${ring.slice(k + 1)}${ring.slice(0, k)}`.trim();
 }
 
 /** Join rotating segments into one string. A segment that overlaps the end of what we have (a
@@ -196,7 +216,18 @@ export function mergeSegments(segs: string[]): string {
     let o = Math.min(acc.length, s.length);
     const need = Math.max(3, Math.ceil(Math.min(acc.length, s.length) / 2));
     for (; o >= need; o--) if (acc.endsWith(s.slice(0, o))) break;
-    acc = o >= need ? acc + s.slice(o) : `${acc} ${s}`;
+    if (o < need) {
+      /* ★★ A SHORT OVERLAP THAT STARTS MID-WORD IS A SCROLLER TOO (Stuart, 2026-10-15, WLZX: "ing pump" / "umpkins" /
+       *    "ins cher" — each frame repeats the last few letters of the one before). 3+ characters (2 fused Kiko's
+       *    "UMUARAMA" + "MASSA" into "UMUARAMASSA"), and the earlier
+       *    piece's overlap begins INSIDE a word (a letter or digit before it) — "UMUARAMA" + "ALINE" share one 'A' at
+       *    a word start and stay apart. */
+      for (o = Math.min(acc.length - 1, s.length - 1, need - 1); o >= 3; o--) {
+        if (acc.endsWith(s.slice(0, o)) && /[\p{L}\p{N}]/u.test(acc[acc.length - o - 1])) break;
+      }
+      if (o < 3) o = 0;
+    }
+    acc = o > 0 ? acc + s.slice(o) : `${acc} ${s}`;
   }
   return acc;
 }

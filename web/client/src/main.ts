@@ -3307,6 +3307,8 @@ let rdsPsRaw = '';
 let rdsCall = '';
 function withCall(name: string): string {
   if (!rdsCall || (name && !psStab.rotating)) return name;
+  // ★ A rotation that has not yet come round cleanly is only its latest piece — the call letters say more (WLZX).
+  if (!psStab.settled) return rdsCall;
   if (!name) return rdsCall;
   return name.includes(rdsCall) ? name : `${rdsCall} ${name}`;   // a rotation is kept, led by the call letters (RC31)
 }

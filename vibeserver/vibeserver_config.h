@@ -710,6 +710,11 @@ struct ServerConfig {
      *  when on, the tunnel starts only once the box has real internet (vibedir::setInternet). Read
      *  only on the pocket image; every other server always resumes, exactly as before. */
     bool        dirResume = false;
+    /** ★★ "Start the tunnel again after a reboot" (Stuart, 2026-10-16) — every server this setup page configures.
+     *  1 = the listing (and its tunnel) comes back after the MACHINE restarts; 0 = it powers on unlisted.
+     *  -1 = never chosen: the front door settles it at start (Portable: the old dirResume, so off; everywhere
+     *  else on — what those servers always did) and writes it back. dirResume stays only as that carry-over. */
+    int         tunnelResume = -1;
     /** ★★ "Update this server's location as I move about" (Stuart, 2026-10-11). Off by default. On: the
      *  front door looks up the NEAREST LARGE POPULATION CENTRE (or a general region) as the machine moves
      *  and every listener, map and listing sees that instead of the home location — see moveloc.h. */

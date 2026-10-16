@@ -13,10 +13,15 @@
  *      shadow and halo, pip, glass, anode mesh, collar, and the bulbs' glass, electrode and leads.
  *      None of it ever changes, so it is one memoised canvas that redraws only when the WINDOW
  *      SIZE or the radio's tube count changes — never on a tune step.
- *   2. NixieCathodes — only what a tune step changes: the cathode wires around each lit digit, the
- *      lit digit, the afterglow, and the lit bead. The glows are pre-rendered SPRITES
- *      (glowSprite.ts) — one image per digit, rasterised once — so a fast spin blits images and
- *      never runs a live BlurMask.
+ *   2. NixieCathodes — only what a tune step changes: each tube's inside and the lit bead. A tube's
+ *      inside is ONE pre-rendered SPRITE per digit (glowSprite.ts; drawn by constants/nixie
+ *      drawTubeInside): the whole IN-14 stack (front→back 6 5 4 7 3 9 8 2 0 1, measured) with that digit lit
+ *      at its own depth, seen through the dark wires of every cathode in front of it, the ones behind
+ *      lit warm, the hex anode mesh over the glow. Rasterised once per tube size (11 images), so a
+ *      fast spin blits one image per tube and never runs a live BlurMask or draws text.
+ * ★ The IN-14's own digits, as traced wire paths (constants/nixie CATHODE_STROKES) — flat-topped 3, a 7
+ *   with no tail, the 5 the 2 turned over — not the Nixie One font, which stays as it is everywhere else.
+ *   Every cathode is the same fine wire; a lit one looks bold only through its neon glow sheath.
  * ★ Neon afterglow: a cathode that goes out is drawn at ≈38 % for one frame, then gone, while the
  *   new one lights. A fade, never a flash; nothing animates at rest, so there is no flicker.
  * ★ Fast tune: every frequency this component is given is drawn, at the rate it is given — no
@@ -26,47 +31,30 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import {
-  Canvas, Group, Image as SkImageNode, LinearGradient, Path, RadialGradient, Rect, Skia, Text as SkText,
-  useTypeface, vec, BlurMask, TileMode, type SkFont, type SkImage, type SkPath,
+  Canvas, Group, Image as SkImageNode, LinearGradient, Path, RadialGradient, Rect, Skia,
+  vec, BlurMask, TileMode, type SkImage, type SkPath,
 } from '@shopify/react-native-skia';
 import {
-  cathodeDepth, cathodeNeighbours, nixieGeometry, nixieReadout, nixieSpec, mhzDigitsFor,
+  nixieGeometry, nixieReadout, nixieSpec, mhzDigitsFor, drawTubeInside, honeycombPath, meshBox, meshWire,
+  cornerPath as cornerPathSk, tubeGlassPath,
   COLLAR_H, PIP_H, type NixieGeometry, type NixieLayout, type NixieSpec, type NixieUnit, type TubeDesign,
 } from '../constants/nixie';
+import { assetPixelRatio } from '../constants/assetDensity';
 import { glowPaint, makeSprite, spriteBuild, useSharedSprite, type GlowStack } from './glowSprite';
 
-const NIXIE_TTF = require('../../assets/fonts/NixieOne-Regular.ttf');
 
-/** §7 digit: `#ffc48a`, glow `0 0 1.5 #ff8a2e, 0 0 5 #ff6410, 0 0 11 rgba(255,80,10,.75), 0 0 20 rgba(255,70,0,.35)`. */
-const DIGIT_CORE = '#ffc48a';
-const DIGIT_GLOW: GlowStack = [[20, 'rgba(255,70,0,0.35)'], [11, 'rgba(255,80,10,0.75)'], [5, '#ff6410'], [1.5, '#ff8a2e']];
 /** §7 bead: 4 × 5, `#fff1dc → #ffbd70 → #ff6a14`, glow `0 0 2 #ff8a2e, 0 0 6 #ff6410, 0 0 12 …, 0 0 20 …`. */
 const BEAD_GLOW: GlowStack = [[20, 'rgba(255,70,0,0.3)'], [12, 'rgba(255,80,10,0.7)'], [6, '#ff6410'], [2, '#ff8a2e']];
-const WIRE_BACK  = 'rgba(150,130,110,0.10)';
-const WIRE_FRONT = 'rgba(70,48,34,0.55)';
 const AFTERGLOW  = 0.38;
 
 // ── Shapes ────────────────────────────────────────────────────────────────────
 
 type Corner = [number, number];
-/** A box with elliptical per-corner radii — CSS `border-radius: a b c d / e f g h`. */
-function cornerPath(x: number, y: number, w: number, h: number, tl: Corner, tr: Corner, br: Corner, bl: Corner): SkPath {
-  const p = Skia.Path.Make();
-  const R = (cx: number, cy: number, rx: number, ry: number) => Skia.XYWHRect(cx, cy, 2 * rx, 2 * ry);
-  p.moveTo(x, y + tl[1]);
-  p.arcToOval(R(x, y, tl[0], tl[1]), 180, 90, false);
-  p.lineTo(x + w - tr[0], y);
-  p.arcToOval(R(x + w - 2 * tr[0], y, tr[0], tr[1]), 270, 90, false);
-  p.lineTo(x + w, y + h - br[1]);
-  p.arcToOval(R(x + w - 2 * br[0], y + h - 2 * br[1], br[0], br[1]), 0, 90, false);
-  p.lineTo(x + bl[0], y + h);
-  p.arcToOval(R(x, y + h - 2 * bl[1], bl[0], bl[1]), 90, 90, false);
-  p.close();
-  return p;
-}
+/** A box with elliptical per-corner radii (constants/nixie, shared with the tube-inside sprite). */
+const cornerPath = (x: number, y: number, w: number, h: number, tl: Corner, tr: Corner, br: Corner, bl: Corner): SkPath =>
+  cornerPathSk(Skia, x, y, w, h, tl, tr, br, bl);
 /** The digit tube's glass: `48% 48% 3 3 / 26% 26% 3 3`. */
-const tubeGlass = (x: number, y: number, w: number, h: number) =>
-  cornerPath(x, y, w, h, [0.48 * w, 0.26 * h], [0.48 * w, 0.26 * h], [3, 3], [3, 3]);
+const tubeGlass = (x: number, y: number, w: number, h: number) => tubeGlassPath(Skia, x, y, w, h);
 /** The bulb's glass: `48% 48% 2 2 / 22% 22% 2 2`. */
 const bulbGlass = (x: number, y: number, w: number, h: number) =>
   cornerPath(x, y, w, h, [0.48 * w, 0.22 * h], [0.48 * w, 0.22 * h], [2, 2], [2, 2]);
@@ -106,21 +94,20 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
     for (let x = 0; x < w; x += 3) p.addRect(Skia.XYWHRect(x, 0, 1, h));
     return p;
   }, [w, h]);
-  // One path for every tube's anode mesh: a 3 × 2.6 dot grid, the second set offset by half.
-  const { mesh, glassClip } = useMemo(() => {
-    const m = Skia.Path.Make();
-    const gc = Skia.Path.Make();
+  /* Every tube's anode: the IN-14's HEX mesh cage, filling the tube's window edge to edge (Stuart's photo
+   *  of unlit tubes). The same honeycomb is drawn again over the glow inside each lit tube's sprite
+   *  (constants/nixie drawTubeInside), so it lines up: same function, same origin. Here it is the bare
+   *  metal — bright fine wire, shaded darker towards the sides where the cage curves away. */
+  const cages = useMemo(() => {
     const { glassY } = stackY(geo, geo.glassH);
-    for (const t of geo.tubes) {
-      gc.addPath(tubeGlass(t.x, glassY, t.w, geo.glassH));
-      const x0 = t.x + 3, x1 = t.x + t.w - 3, y0 = glassY + 3, y1 = glassY + geo.glassH - 5;
-      for (let y = y0; y <= y1; y += 2.6) {
-        for (let x = x0; x <= x1; x += 3) m.addCircle(x, y, 0.7);
-        for (let x = x0 + 1.5; x <= x1; x += 3) if (y + 1.3 <= y1) m.addCircle(x, y + 1.3, 0.7);
-      }
-    }
-    return { mesh: m, glassClip: gc };
+    return geo.tubes.map((t) => {
+      const b = meshBox(t.w, geo.glassH);
+      const clip = Skia.Path.Make();
+      clip.addRect(Skia.XYWHRect(t.x + b.x, glassY + b.y, b.w, b.h));
+      return { path: honeycombPath(Skia, t.w, geo.glassH, t.x, glassY), clip, x0: t.x + b.x, x1: t.x + b.x + b.w };
+    });
   }, [geo]);
+  const meshW = meshWire(geo.tubes[0]?.w ?? 20);
 
   const T = stackY(geo, geo.glassH);
   const B = stackY(geo, geo.bulbH);
@@ -223,9 +210,15 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
             </Group>
           );
         })}
-        <Group clip={glassClip}>
-          <Path path={mesh} color="rgba(150,140,125,0.20)" />
-        </Group>
+        {cages.map((m, i) => (
+          <Group key={`m${i}`} clip={m.clip}>
+            <Path path={m.path} style="stroke" strokeWidth={meshW}>
+              <LinearGradient start={vec(m.x0, 0)} end={vec(m.x1, 0)}
+                colors={['rgba(170,170,165,0.08)', 'rgba(205,205,200,0.30)', 'rgba(205,205,200,0.30)', 'rgba(170,170,165,0.08)']}
+                positions={[0, 0.3, 0.7, 1]} />
+            </Path>
+          </Group>
+        ))}
 
         {/* ── The INS-1 bulbs (the decimal point): glass, bare electrode, two leads ── */}
         {geo.bulbs.map((b, i) => {
@@ -271,27 +264,25 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
 
 interface Sprite { img: SkImage; w: number; h: number }
 
-/** One glowing digit per 0-9, rasterised once per typeface × size. */
-function useDigitSprites(font: SkFont | null, nf: number): Record<string, Sprite> | null {
-  // ★ One set per digit size (the typeface is fixed), shared and freed when unused — see useSharedSprite.
-  return useSharedSprite(font ? `nixie|${nf}` : null, () => {
-    if (!font) return null;
+/**
+ * ★★ THE TUBE'S INSIDE, ONE IMAGE PER DIGIT (+ 'off'), rasterised once per tube size — the whole cathode
+ * stack with that digit lit at its own depth, every cathode in front of it crossing the glow as a dark
+ * wire, the ones behind lit warm, the anode's hex mesh over it, clipped to the glass (constants/nixie
+ * drawTubeInside, which holds the look). A tune step blits ONE image per tube: no text, no blur, no clip.
+ */
+function useTubeSprites(nf: number, tw: number, th: number): Record<string, Sprite> | null {
+  const key = tw > 0 && th > 0 ? `nixie-tube|${nf}|${tw.toFixed(2)}|${th.toFixed(2)}` : null;
+  return useSharedSprite(key, () => {
     const out: Record<string, Sprite> = {};
-    const gk = Math.max(0.6, Math.min(1, nf / 30));        // the glow shrinks with the tube
-    const m = Math.ceil(24 * gk);
-    for (const d of '0123456789') {
-      const b = font.measureText(d);
-      const w = b.width + 2 * m, h = b.height + 2 * m;
-      const img = makeSprite(w, h, (c) => {
-        const x = m - b.x, y = m - b.y;
-        for (const [r, col] of DIGIT_GLOW) c.drawText(d, x, y, glowPaint(col, r * gk), font);
-        c.drawText(d, x, y, glowPaint(DIGIT_CORE), font);
-      });
-      if (img) out[d] = { img, w, h };
+    const px = 1 / assetPixelRatio();          // the wire is never finer than one texture pixel
+    for (const d of [...'0123456789', OFF]) {
+      const img = makeSprite(tw, th, (c) => drawTubeInside(Skia, c, d === OFF ? null : d, tw, th, nf, px));
+      if (img) out[d] = { img, w: tw, h: th };
     }
     return spriteBuild(out, Object.values(out).map(s => s.img));
   });
 }
+const OFF = 'off';
 
 /** The lit bead with its glow, once. */
 function useBeadSprite(): Sprite | null {
@@ -315,56 +306,26 @@ const NixieCathodes = React.memo(function NixieCathodes({ w, h, geo, tubes, bulb
   /** The digits that went out on the last step (index → digit), drawn at the afterglow for one frame. */
   fading: (string | null)[] | null;
 }) {
-  const typeface = useTypeface(NIXIE_TTF);
   const nf = Math.round(geo.nf * 2) / 2;
-  const font = useMemo(() => (typeface ? Skia.Font(typeface, nf) : null), [typeface, nf]);
-  const sprites = useDigitSprites(font, nf);
+  const tw = geo.tubes[0]?.w ?? 0;
+  const sprites = useTubeSprites(nf, tw, geo.glassH);
   const bead = useBeadSprite();
-  const centre = useMemo(() => {
-    if (!font) return null;
-    const c: Record<string, { dx: number; dy: number }> = {};
-    for (const d of '0123456789') {
-      const b = font.measureText(d);
-      c[d] = { dx: -(b.x + b.width / 2), dy: -(b.y + b.height / 2) };
-    }
-    return c;
-  }, [font]);
-  if (!font || !centre) return null;
+  if (!sprites) return null;
   const T = stackY(geo, geo.glassH);
   const B = stackY(geo, geo.bulbH);
-
-  const wire = (d: string, cx: number, cy: number, color: string, key: string) => {
-    const z = cathodeDepth(d);
-    return (
-      <Group key={key} origin={vec(cx, cy)} transform={[{ translateY: z.dy }, { scale: z.scale }]} opacity={z.opacity}>
-        <SkText x={cx + centre[d].dx} y={cy + centre[d].dy} text={d} font={font} color={color} />
-      </Group>
-    );
-  };
-  const lit = (d: string, cx: number, cy: number, alpha: number, key: string) => {
-    const sp = sprites?.[d];
-    const z = cathodeDepth(d);
-    if (!sp) return <Group key={key}>{null}</Group>;
-    return (
-      <Group key={key} origin={vec(cx, cy)} transform={[{ translateY: z.dy }, { scale: z.scale }]} opacity={z.opacity * alpha}>
-        <SkImageNode image={sp.img} x={cx - sp.w / 2} y={cy - sp.h / 2} width={sp.w} height={sp.h} />
-      </Group>
-    );
-  };
+  const img = (sp: Sprite | undefined, x: number, alpha: number, key: string) => sp
+    ? <SkImageNode key={key} image={sp.img} x={x} y={T.glassY} width={sp.w} height={sp.h} opacity={alpha} />
+    : null;
 
   return (
     <Canvas style={{ position: 'absolute', left: 0, top: 0, width: w, height: h }} pointerEvents="none">
       {geo.tubes.map((t, i) => {
         const d = tubes[i] ?? null;
-        const cx = t.x + t.w / 2, cy = T.glassY + geo.glassH / 2;
-        const { back, front } = cathodeNeighbours(d);
         const gone = fading?.[i];
         return (
-          <Group key={i} clip={tubeGlass(t.x, T.glassY, t.w, geo.glassH)}>
-            {back.map((c, j) => wire(c, cx, cy, WIRE_BACK, `b${j}`))}
-            {gone && gone !== d ? lit(gone, cx, cy, AFTERGLOW, 'ag') : null}
-            {d !== null ? lit(d, cx, cy, 1, 'lit') : null}
-            {front.map((c, j) => wire(c, cx, cy, WIRE_FRONT, `f${j}`))}
+          <Group key={i}>
+            {gone && gone !== d ? img(sprites[gone], t.x, AFTERGLOW, 'ag') : null}
+            {img(sprites[d ?? OFF], t.x, 1, 'lit')}
           </Group>
         );
       })}
