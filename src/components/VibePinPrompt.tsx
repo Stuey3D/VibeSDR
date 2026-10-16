@@ -82,7 +82,10 @@ export default function VibePinPrompt({ visible, name, initial, note, onSubmit, 
         style={[styles.flex, dim && styles.overlayDim]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        {/* ★ No indicator: this scroller exists only so the box still fits a short landscape phone
+            with the keyboard up — it scrolls a single small card, and a bar would sit on its keys. */}
         <ScrollView
+          showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[
             styles.overlay,
