@@ -31,12 +31,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import {
-  Canvas, Group, Image as SkImageNode, LinearGradient, Path, RadialGradient, Rect, Skia,
+  Canvas, Circle, Group, Image as SkImageNode, LinearGradient, Path, RadialGradient, Rect, Skia,
   vec, BlurMask, TileMode, type SkImage, type SkPath,
 } from '@shopify/react-native-skia';
 import {
   nixieGeometry, nixieReadout, nixieSpec, mhzDigitsFor, drawTubeInside, honeycombPath, meshBox, meshWire,
-  cornerPath as cornerPathSk, tubeGlassPath,
+  cornerPath as cornerPathSk, tubeGlassPath, strapBox, pipPath,
   COLLAR_H, PIP_H, type NixieGeometry, type NixieLayout, type NixieSpec, type NixieUnit, type TubeDesign,
 } from '../constants/nixie';
 import { assetPixelRatio } from '../constants/assetDensity';
@@ -184,7 +184,6 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
           const cx = t.x + t.w / 2;
           return (
             <Group key={`t${i}`}>
-              <Path path={cornerPath(cx - 2, T.pipY, 4, PIP_H, [2, 2], [2, 2], [0, 0], [0, 0])} color="rgba(255,235,210,0.22)" />
               <Group clip={glass}>
                 <Rect x={t.x} y={T.glassY} width={t.w} height={geo.glassH} color="#0a0504" />
                 <Ellipse cx={cx} cy={T.glassY + geo.glassH * 0.45} rx={t.w * 0.70} ry={geo.glassH * 0.55}
@@ -200,7 +199,33 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
                     colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0)']} />
                 </Rect>
                 <Path path={glass} color="rgba(255,235,210,0.10)" style="stroke" strokeWidth={2} />
+                {/* The top strap across the cage: flat metal, a bright top edge (lit warm from below in
+                    the lit tube's sprite). */}
+                {(() => {
+                  const sb = strapBox(t.w, geo.glassH);
+                  return (
+                    <Group>
+                      <Rect x={t.x + sb.x} y={T.glassY + sb.y} width={sb.w} height={sb.h}>
+                        <LinearGradient start={vec(0, T.glassY + sb.y)} end={vec(0, T.glassY + sb.y + sb.h)}
+                          colors={['rgba(215,215,210,0.38)', 'rgba(150,150,145,0.18)']} />
+                      </Rect>
+                      <Rect x={t.x + sb.x} y={T.glassY + sb.y + sb.h} width={sb.w} height={Math.max(0.5, sb.h * 0.5)} color="rgba(0,0,0,0.35)" />
+                    </Group>
+                  );
+                })()}
               </Group>
+              {/* The tip-off pip: a glass nub on the dome, catching faint light. */}
+              {(() => {
+                const pp = pipPath(Skia, cx, T.glassY, T.pipY, t.w);
+                return (
+                  <Group>
+                    <Path path={pp.neck} color="rgba(235,225,210,0.16)" />
+                    <Path path={pp.neck} color="rgba(255,240,220,0.22)" style="stroke" strokeWidth={0.5} />
+                    <Circle cx={pp.knob.cx} cy={pp.knob.cy} r={pp.knob.r} color="rgba(235,225,210,0.22)" />
+                    <Circle cx={pp.knob.cx - pp.knob.r * 0.3} cy={pp.knob.cy - pp.knob.r * 0.3} r={pp.knob.r * 0.4} color="rgba(255,200,150,0.35)" />
+                  </Group>
+                );
+              })()}
               <Rect x={t.x} y={T.collarY - 1} width={t.w} height={1} color="rgba(0,0,0,0.8)" />
               <Path path={cornerPath(t.x, T.collarY, t.w, COLLAR_H, [1, 1], [1, 1], [2, 2], [2, 2])}>
                 <LinearGradient start={vec(0, T.collarY)} end={vec(0, T.collarY + COLLAR_H)}

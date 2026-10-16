@@ -160,6 +160,32 @@ export function meshBox(tw: number, th: number) {
   //   26 % of its height) down to just above the floor shade.
   return { x: tw * 0.07, y: th * 0.25, w: tw * 0.86, h: th * 0.71 };
 }
+/** ★ The top spacer (Stuart, 2026-10-16: "a small piece above the number that has a slight reflection of
+ *  the glow"): the IN-14's flat metal strap across the top of the cage, in the gap between the cage and
+ *  the dome — no extra height. Its underside catches the digit's light. */
+export function strapBox(tw: number, th: number) {
+  const b = meshBox(tw, th);
+  const h = Math.max(0.6, th * 0.022);
+  return { x: b.x - tw * 0.01, y: b.y - th * 0.05, w: b.w + tw * 0.02, h };
+}
+
+/** ★ The tip-off pip (where the glass was sealed): a small glass nub on the dome — a round knob on a
+ *  narrow neck flaring into the dome. It fits the PIP_H the stack already budgets (the knob sits in it,
+ *  the flare runs down onto the dome), so the tube is no taller. */
+export function pipPath(Sk: SkiaApi, cx: number, glassY: number, pipY: number, tw: number): { neck: SkPath; knob: { cx: number; cy: number; r: number } } {
+  const ph = Math.max(0.5, glassY - pipY);
+  const r = Math.min(tw * 0.07, ph * 0.5);
+  const nw = r * 0.6, fw = tw * 0.10;
+  const knobY = pipY + r;
+  const neck = Sk.Path.Make();
+  neck.moveTo(cx - fw, glassY + ph * 0.9);
+  neck.quadTo(cx - nw, glassY + ph * 0.2, cx - nw, knobY);
+  neck.lineTo(cx + nw, knobY);
+  neck.quadTo(cx + nw, glassY + ph * 0.2, cx + fw, glassY + ph * 0.9);
+  neck.close();
+  return { neck, knob: { cx, cy: knobY, r } };
+}
+
 /** A digit's height as a fraction of the digit size nf (Nixie One's figure height, so the tubes keep
  *  their size). */
 export const DIGIT_H = 0.72;
@@ -351,6 +377,28 @@ export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, lit: string | null,
     c.drawPath(mesh, paint(MESH_LIT, { stroke: meshW, blend: 4 /* BlendMode.DstOver */ }));
     c.drawRect(box, paint(MESH_WASH, { blend: 4 }));
     c.restore();
+    /* ★ NO HARD CUT-OFF AT THE CAGE TOP (Stuart, 2026-10-16): the wash carries on above the cage and fades
+     *  into the dome, as the real tube's light spills upward onto the glass and the parts above. */
+    const fadeTop = b.y * 0.15;
+    const up = Sk.Paint();
+    up.setAntiAlias(true);
+    up.setBlendMode(4 /* DstOver */);
+    up.setShader(Sk.Shader.MakeLinearGradient({ x: 0, y: b.y }, { x: 0, y: fadeTop },
+      [Sk.Color(MESH_WASH), Sk.Color('rgba(190,70,8,0)')], [0, 1], 0 /* TileMode.Clamp */));
+    c.drawRect(Sk.XYWHRect(0, fadeTop, tw, b.y - fadeTop), up);
+    // The top strap catching the glow on its underside.
+    const sb = strapBox(tw, th);
+    const sp = Sk.Paint();
+    sp.setAntiAlias(true);
+    sp.setShader(Sk.Shader.MakeLinearGradient({ x: 0, y: sb.y }, { x: 0, y: sb.y + sb.h },
+      [Sk.Color('rgba(255,150,70,0.12)'), Sk.Color('rgba(255,175,95,0.42)')], [0, 1], 0));
+    c.drawRect(Sk.XYWHRect(sb.x, sb.y, sb.w, sb.h), sp);
+    // and a faint warm sheen on the dome glass above it
+    const dome = Sk.Paint();
+    dome.setAntiAlias(true);
+    dome.setShader(Sk.Shader.MakeRadialGradient({ x: tw / 2, y: sb.y }, tw * 0.55,
+      [Sk.Color('rgba(255,120,40,0.10)'), Sk.Color('rgba(255,120,40,0)')], [0, 1], 0));
+    c.drawRect(Sk.XYWHRect(0, 0, tw, sb.y), dome);
   }
   c.restore();
 }
