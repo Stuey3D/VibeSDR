@@ -35,6 +35,10 @@ flags_for() {
     # ★ WFM DSP cost vs passband — a narrow width once cost ~5x the whole chain (the Sony's
     #   161-276 % of real time). Optimised like the server, or the ratio is not the server's.
     test-wfm-narrow-cost)  echo "-O2 -I $VDSP -I $KISS" ;;
+    # ★★ V12 TRANSCRIBE's SSB auto-tune (vibedsp/ssb_offset): the estimator, the shift, the decision and the
+    #    anti-aliased recogniser feed. -clips runs it on the research's real UberSDR recordings — NOT RUN
+    #    (exit 3) unless VIBE_SSB_CLIPS points at them; they are ~50 MB of off-air audio and not in the repo.
+    test-ssb-offset|test-ssb-offset-clips) echo "-O2 -I $VDSP -I $KISS" ;;
     # ★ Every mode's DSP cost vs passband, both directions and past the ceiling — the audit that
     #   followed the WFM cliff (2026-09-29). Optimised for the same reason.
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
@@ -91,6 +95,8 @@ deps_for() {
     test-resampler-rate)  echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-ssb-offset|test-ssb-offset-clips) echo "$VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
+                              $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     # ★★ proc.cpp goes with anything that SHELLS OUT (curl, mostly): geoip, asndb and radiodns all
     #    call vibeproc::run. It was missing, so those three "did not build" — and a suite that does
     #    not build is not a suite that passes, it is one nobody is running. Caught 2026-09-21.
@@ -176,7 +182,9 @@ for t in "$SRC"/test-*.cpp; do
     head -5 "$OUT/$name.buildlog" | sed 's/^/     /'
     broke=$((broke+1)); continue
   fi
-  if "$OUT/$name"; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ Exit 3 = NOT RUN (its data is not here) — counted apart, never as a pass. Same rule as the end-to-end suites.
+  "$OUT/$name"; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 done
 
 # ★ The setup page is a C++ raw string, so no compiler ever looks at its JavaScript. A syntax

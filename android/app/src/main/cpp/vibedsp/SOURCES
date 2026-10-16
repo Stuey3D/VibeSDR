@@ -35,3 +35,4 @@ pipeline.cpp
 mpxmeasure.cpp
 iqclean.cpp
 spectrum_processor.cpp
+ssb_offset.cpp
