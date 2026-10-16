@@ -73,6 +73,10 @@ class VibeTranscriberModule(private val ctx: ReactApplicationContext) : ReactCon
         TranscribeEngine.download(ctx, language, translateTo, p)
     }
 
+    /** The dial, for SSB auto-tune of the recogniser's feed: 'usb'/'lsb' arm it, any change resets it. */
+    @ReactMethod
+    fun tuning(mode: String, freqHz: Double) { VibeTranscribeTap.setTuning(mode, freqHz) }
+
     @ReactMethod
     fun stop() {
         if (Build.VERSION.SDK_INT >= 31) (engine as? TranscribeEngine)?.stop()
@@ -84,17 +88,56 @@ class VibeTranscriberModule(private val ctx: ReactApplicationContext) : ReactCon
 }
 
 /**
+ * ★ The recogniser's feed in native code — vibedsp/ssb_offset.h's RecogniserFeed, the SAME implementation iOS uses:
+ *   any rate → 16 kHz through a proper anti-aliased polyphase resampler, then SSB auto-tune (USB/LSB only: the voice's
+ *   own harmonics say how far the dial is off, and the RECOGNISER's copy is shifted back — never what the listener hears).
+ *   ★ The library is the app's own (vibelocalsdr, loaded by the local-radio and affinity code too). If it cannot load,
+ *     `ok` is false and the tap falls back to its old linear interpolator — captions still work, just without the two
+ *     improvements.
+ */
+object VibeRecogniserFeed {
+    val ok: Boolean = try { System.loadLibrary("vibelocalsdr"); true } catch (_: Throwable) { false }
+    @JvmStatic external fun nCreate(): Long
+    @JvmStatic external fun nSetTuning(h: Long, sideband: Int, dialHz: Double)
+    @JvmStatic external fun nProcess(h: Long, input: FloatArray, n: Int, rate: Int, out: ByteArray): Int
+    @JvmStatic external fun nDialCorrection(h: Long): Float
+    @JvmStatic external fun nRms(h: Long): Float
+    @JvmStatic external fun nStats(h: Long, out: FloatArray): Int
+}
+
+/**
  * The audio side. Called on the AudioTrack writer threads: a copy and a hand-off, nothing more — conversion and the
  * pipe write run on our own low-priority thread, and a backlog DROPS (Network > Audio > Spectrum > Decoders).
  */
 object VibeTranscribeTap {
     /** (16 kHz mono PCM16 little-endian bytes) — set by the engine; null = off, and feed() costs one volatile read. */
     @Volatile var sink: ((ByteArray) -> Unit)? = null
+    /** After every block, on the tap thread: its RMS (0..1), its 16 kHz sample count, and the SSB auto-tune's
+     *  correction as a DIAL change in Hz (0 = none). The engine's stall watchdog and the box's note read these. */
+    @Volatile var onBlock: ((rms: Float, samples: Int, dialCorrectionHz: Float) -> Unit)? = null
     private val backlog = AtomicInteger(0)
     private val thread by lazy { HandlerThread("vibesdr-transcribe", android.os.Process.THREAD_PRIORITY_BACKGROUND).also { it.start() } }
     private val handler by lazy { Handler(thread.looper) }
+    /** One native feed for the process (tap thread only, except setTuning — which only stores). */
+    private val feed: Long by lazy { if (VibeRecogniserFeed.ok) try { VibeRecogniserFeed.nCreate() } catch (_: Throwable) { 0L } else 0L }
 
-    // Continuous-phase linear resampler state (tap thread only) — per-packet resampling loses samples at the joins.
+    /** The dial: mode ('usb'/'lsb' arm the auto-tune; anything else is off) and frequency. Any change resets the
+     *  estimate — the old offset belonged to another signal. Any thread. */
+    fun setTuning(mode: String, freqHz: Double) {
+        val sb = when (mode.lowercase()) { "usb" -> 1; "lsb" -> -1; else -> 0 }
+        val h = feed
+        if (h != 0L) VibeRecogniserFeed.nSetTuning(h, sb, freqHz)
+    }
+
+    /** Last estimate, for the debug log: [offsetHz, confidence, voicedSeconds, passes, estimates, corrections, shiftHz]. */
+    fun stats(): FloatArray? {
+        val h = feed
+        if (h == 0L) return null
+        val o = FloatArray(7)
+        return if (VibeRecogniserFeed.nStats(h, o) == 7) o else null
+    }
+
+    // Fallback only (native library missing): the old continuous-phase linear resampler. Tap thread only.
     private var srcRate = 0
     private var phase = 0.0
     private var last = 0f
@@ -131,13 +174,26 @@ object VibeTranscribeTap {
         backlog.incrementAndGet()
         handler.post {
             try {
-                val out = resample16k(mono, rate)
-                sink?.invoke(out)
+                val h = feed
+                if (h != 0L) {
+                    // ★ 16 kHz out = n·16000/rate + a little; the native side refuses a short buffer rather than overrun.
+                    val out = ByteArray(((mono.size.toLong() * 16000 / rate).toInt() + 8) * 2)
+                    val nb = VibeRecogniserFeed.nProcess(h, mono, mono.size, rate, out)
+                    if (nb > 0) sink?.invoke(if (nb == out.size) out else out.copyOf(nb))
+                    onBlock?.invoke(VibeRecogniserFeed.nRms(h), nb / 2, VibeRecogniserFeed.nDialCorrection(h))
+                } else {
+                    val out = resample16k(mono, rate)
+                    sink?.invoke(out)
+                    var e = 0.0
+                    for (v in mono) e += (v * v).toDouble()
+                    onBlock?.invoke(if (mono.isEmpty()) 0f else Math.sqrt(e / mono.size).toFloat(), out.size / 2, 0f)
+                }
             } catch (_: Throwable) {
             } finally { backlog.decrementAndGet() }
         }
     }
 
+    /** Fallback only — no anti-alias filter (a wideband feed folds its top octave into the speech band). */
     private fun resample16k(x: FloatArray, rate: Int): ByteArray {
         if (rate != srcRate) { srcRate = rate; phase = 0.0; last = 0f }
         val step = rate / 16000.0

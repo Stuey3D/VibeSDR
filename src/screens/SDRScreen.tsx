@@ -211,7 +211,7 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
-import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, removeTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, sameLanguage, type TranscribeCaps } from '../services/transcriber';
+import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, removeTranscribeLanguage, startTranscribe, stopTranscribe, setTranscribeTuning, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, sameLanguage, type TranscribeCaps } from '../services/transcriber';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -4657,10 +4657,20 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** DOWNLOAD… row: the locale being fetched, and what the last fetch said. */
   const [txDl, setTxDl] = useState<{ id: string; note: string }>({ id: '', note: '' });
   const txHeardRef = useRef(''); txHeardRef.current = txHeard;
+  /** ★ SSB AUTO-TUNE's correction (dial Hz, 0 = none) — a quiet note after the engine's status line, only while it
+   *  is applied: "auto-tuned −60 Hz". It moves the RECOGNISER's copy only; what is heard is never touched. */
+  const txTuneRef = useRef(0);
+  const txStatusText = (s: string) => (txTuneRef.current && s && !s.startsWith('⚠')
+    ? `${s} · auto-tuned ${txTuneRef.current > 0 ? '+' : '\u2212'}${Math.abs(txTuneRef.current)} Hz` : s);
   useEffect(() => onTranscribe((e) => {
     if (activeDecRef.current !== 'transcribe') return;
     switch (e.type) {
-      case 'status':  txStateRef.current = e.text; queueDecoderStatus(e.text); break;
+      case 'status':  txStateRef.current = e.text; queueDecoderStatus(txStatusText(e.text)); break;
+      case 'tune': {
+        txTuneRef.current = Math.round(Number(e.hz) || 0);
+        if (txStateRef.current) queueDecoderStatus(txStatusText(txStateRef.current));
+        break;
+      }
       case 'error':   queueDecoderStatus(`⚠ ${e.text}`); setDecoding(false); break;
       // ★ The search, in the box itself (Stuart, 10-15: "Trying German... No Transcription / Trying French...").
       case 'trying':  queueDecoderText(`Trying ${e.text}…\n`); break;
@@ -4677,7 +4687,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         const tr = e.translated && e.translated.trim() && e.translated.trim() !== e.text.trim()
           ? `\n   → ${e.translated.trim()}` : '';
         queueDecoderText(`${tag}${e.text}${tr}\n`);
-        if (txStateRef.current) queueDecoderStatus(txStateRef.current);
+        if (txStateRef.current) queueDecoderStatus(txStatusText(txStateRef.current));
         markDecodeOutput();
         break;
       }
@@ -4685,6 +4695,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), []);
   useEffect(() => () => stopTranscribe(), []);
+  /* ★★ SSB AUTO-TUNE (V12): the native recogniser feed is told the mode and dial whenever TRANSCRIBE is open and
+   *    either changes — USB/LSB arm it, anything else switches it off, and a retune or mode change resets the
+   *    estimate (the old offset belonged to another signal). The note goes with it. */
+  useEffect(() => {
+    if (activeDecoder !== 'transcribe') return;
+    txTuneRef.current = 0;
+    setTranscribeTuning(String(status.mode || ''), status.frequency || 0);
+  }, [activeDecoder, status.mode, status.frequency]);
 
   /* ★★ EiBi GUIDES AUTO (Stuart, 2026-10-15: "if i tune to china radio chinese needs to be a language to test …
    *  Voice of Turkey turkish"). iOS can only weigh ~4 languages at once and has no detector of its own, so what EiBi

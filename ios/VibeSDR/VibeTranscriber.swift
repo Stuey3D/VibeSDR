@@ -32,19 +32,45 @@ import SwiftUI
   /// Read on audioQ without a lock — the same pattern as VibePowerModule.recArmed: a stale read costs one buffer.
   @objc private(set) var armed = false
   private var sink: ((AVAudioPCMBuffer) -> Void)?
+  /// When the SSB auto-tune's correction changes, on the tap's queue: the DIAL change in Hz (0 = none) and the
+  /// estimator's stats [offsetHz, confidence, voicedSeconds, passes, estimates, corrections, audioShiftHz].
+  private var onDial: ((Float, [Float]) -> Void)?
+  private var lastDial: Float = 0          // q only
   private let q = DispatchQueue(label: "com.vibesdr.transcribe.feed", qos: .utility)
   private var backlog = 0
   private let lock = NSLock()
+  /* ★★ THE RECOGNISER'S FEED IS SHARED C++ (vibedsp/ssb_offset — the same object Android's tap runs): any rate →
+   *    16 kHz through an anti-aliased resampler, then SSB AUTO-TUNE in USB/LSB — the voice's own harmonics say how
+   *    far the dial is off (measured: ±100 Hz cost the recogniser ~20 % of its words' agreement, ±200 Hz up to half)
+   *    and the RECOGNISER'S copy is shifted back. Never what the listener hears: this is a copy of the played audio.
+   *    Touched only on `q`, except set_tuning, which only stores atomics. */
+  private let feedH: UnsafeMutableRawPointer? = vibe_rxfeed_create()
+  private static let fmt16 = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
 
-  func setSink(_ s: ((AVAudioPCMBuffer) -> Void)?) {
-    lock.lock(); sink = s; armed = s != nil; lock.unlock()
+  func setSink(_ s: ((AVAudioPCMBuffer) -> Void)?, onDial d: ((Float, [Float]) -> Void)? = nil) {
+    lock.lock(); sink = s; onDial = d; armed = s != nil; lock.unlock()
+    q.async { self.lastDial = 0 }            // a new listener hears the current correction (if any) afresh
+  }
+
+  /// The dial: 'usb'/'lsb' arm the auto-tune, anything else switches it off; any change resets the estimate (the old
+  /// offset belonged to another signal). Any thread.
+  @objc func setTuning(_ mode: String, freqHz: Double) {
+    let m = mode.lowercased()
+    vibe_rxfeed_set_tuning(feedH, m == "usb" ? 1 : m == "lsb" ? -1 : 0, freqHz)
+  }
+
+  /// [offsetHz, confidence, voicedSeconds, passes, estimates, corrections, audioShiftHz] — for the debug log. q only.
+  private func stats() -> [Float] {
+    var o = [Float](repeating: 0, count: 7)
+    _ = vibe_rxfeed_stats(feedH, &o)
+    return o
   }
 
   /// `silent`: squelch is closed — the transcriber hears what the listener hears, i.e. nothing.
   @objc func feed(_ buf: AVAudioPCMBuffer, silent: Bool) {
     guard armed else { return }
     lock.lock(); let s = sink; let b = backlog; lock.unlock()
-    guard let s else { return }
+    guard s != nil else { return }
     if b > 40 { return }                         // ~1 s of packets queued: drop, never block audio
     // Downmix to mono now (the buffer is the player's), a plain copy — cheap enough for audioQ.
     let n = Int(buf.frameLength)
@@ -64,9 +90,20 @@ import SwiftUI
     }
     lock.lock(); backlog += 1; lock.unlock()
     q.async { [weak self] in
-      s(mono)
       guard let self else { return }
-      self.lock.lock(); self.backlog -= 1; self.lock.unlock()
+      defer { self.lock.lock(); self.backlog -= 1; self.lock.unlock() }
+      // ★ 16 kHz out: n·16000/rate + a little (the C side refuses a short buffer rather than overrun it).
+      let rate = Int32(mono.format.sampleRate.rounded())
+      let cap = Int32(Int64(n) * 16000 / Int64(max(1, rate)) + 8)
+      guard let out = AVAudioPCMBuffer(pcmFormat: Self.fmt16, frameCapacity: AVAudioFrameCount(cap)) else { return }
+      let m = vibe_rxfeed_process(self.feedH, mono.floatChannelData![0], Int32(n), rate, out.floatChannelData![0], cap)
+      self.lock.lock(); let sk = self.sink; let od = self.onDial; self.lock.unlock()
+      if m > 0 {
+        out.frameLength = AVAudioFrameCount(m)
+        sk?(out)
+      }
+      let d = vibe_rxfeed_dial_correction(self.feedH)
+      if d != self.lastDial, let od { self.lastDial = d; od(d, self.stats()) }
     }
   }
 }
@@ -190,6 +227,11 @@ class VibeTranscriber: RCTEventEmitter {
       resolve(n > 0 ? ["ok": true, "text": "\(nm) removed — iOS deletes the model when it needs the space"]
                     : ["ok": false, "text": "\(nm) was not kept by this app"])
     }
+  }
+
+  /// The dial, for SSB auto-tune of the recogniser's feed ('usb'/'lsb' arm it; any change resets it).
+  @objc func tuning(_ mode: String, freqHz: Double) {
+    VibeTranscribeTap.shared.setTuning(mode, freqHz: freqHz)
   }
 
   @objc func stop() {
@@ -370,6 +412,17 @@ final class TranscribeEngine {
   private var bestSeen: (locale: Locale, conf: Double)?
   private var rounds: Int { max(1, (candidates.count + Self.laneCap - 1) / Self.laneCap) }
   private var translator: Translator?
+  /* ★★ THE STALL WATCHDOG (V12 research, 2026-10-16). SpeechTranscriber was measured going quiet on medium SSB — words
+   *    for 7-15 s, then nothing for the rest of the clip; a 12 s no-result watchdog that starts a FRESH analyzer took
+   *    3702 kHz from 19 words to 85, and fired 0 times on clean VOLMET. So: audio FLOWING (over a low RMS floor — never
+   *    squelch or mute silence) and no volatile or final result for 12 s → that lane gets a fresh analyzer, same
+   *    language; the translator, the box's text and the lane's confidence history are kept. A restart that brings
+   *    nothing doubles the wait (to 96 s), so a long stretch of band noise costs a few restarts, not one every 12 s. */
+  private static let stallAfter: TimeInterval = 12
+  private static let stallMax: TimeInterval = 96
+  private static let stallAudible: TimeInterval = 10      // of the window, this much must have been audio
+  private static let stallRmsFloor: Float = 0.002          // ≈ -54 dBFS
+  private var stallRestarts = 0
 
   final class Lane {
     let locale: Locale
@@ -384,6 +437,11 @@ final class TranscribeEngine {
     /// The last 40 words' confidence — what the chosen language and its challenger are compared on.
     var recent: [Double] = []
     var recentMean: Double { recent.isEmpty ? 0 : recent.reduce(0, +) / Double(recent.count) }
+    // ── stall watchdog (q only) ──
+    var lastResult = Date()
+    var audible: TimeInterval = 0
+    var stallAfter = TranscribeEngine.stallAfter
+    var restarting = false
     init(locale: Locale, transcriber: any SpeechModule, analyzer: SpeechAnalyzer,
          input: AsyncStream<AnalyzerInput>.Continuation, format: AVAudioFormat) {
       self.locale = locale; self.transcriber = transcriber; self.analyzer = analyzer
@@ -424,6 +482,7 @@ final class TranscribeEngine {
     VibeTranscribeTap.shared.setSink(nil)
     SpeechEngines.inUse = []
     q.async {
+      if self.stallRestarts > 0 { NSLog("[VibeTranscriber] stall watchdog: %d restart(s) this session", self.stallRestarts) }
       self.stopped = true
       self.lanes.forEach { $0.shutdown() }
       self.lanes.removeAll(); self.chosen = nil; self.challenger = nil
@@ -503,23 +562,7 @@ final class TranscribeEngine {
             try await req.downloadAndInstall()
           }
         }
-        guard let fmt = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [t]) else { continue }
-        let (stream, cont) = AsyncStream<AnalyzerInput>.makeStream(bufferingPolicy: .bufferingNewest(64))
-        let a = SpeechAnalyzer(modules: [t], options: .init(priority: .utility, modelRetention: .whileInUse))
-        try await a.prepareToAnalyze(in: fmt)
-        try await a.start(inputSequence: stream)
-        let lane = Lane(locale: loc, transcriber: t, analyzer: a, input: cont, format: fmt)
-        lane.tasks.append(Task { [weak self] in
-          do {
-            if let st = t as? SpeechTranscriber {
-              for try await r in st.results { self?.q.async { self?.onResult(lane, r.text, r.isFinal) } }
-            } else if let dt = t as? DictationTranscriber {
-              for try await r in dt.results { self?.q.async { self?.onResult(lane, r.text, r.isFinal) } }
-            }
-          } catch {
-            self?.q.async { self?.onLaneError(lane, error) }
-          }
-        })
+        guard let lane = try await makeLane(loc, module: t) else { continue }
         made.append(lane)
       } catch {
         NSLog("[VibeTranscriber] lane %@ failed: %@", loc.identifier, error.localizedDescription)
@@ -530,6 +573,7 @@ final class TranscribeEngine {
       }
     }
     guard !made.isEmpty else { owner?.emit(["type": "error", "text": "Could not start on-device speech"]); return }
+    let tapDial: (Float, [Float]) -> Void = { [weak self] d, st in self?.q.async { self?.onDial(d, st) } }
     q.async {
       guard !self.stopped else { made.forEach { $0.shutdown() }; return }
       self.lanes = made
@@ -548,13 +592,82 @@ final class TranscribeEngine {
       } else {
         self.choose(made[0])
       }
-      VibeTranscribeTap.shared.setSink { [weak self] buf in self?.q.async { self?.feed(buf) } }
+      VibeTranscribeTap.shared.setSink({ [weak self] buf in self?.q.async { self?.feed(buf) } }, onDial: tapDial)
     }
+  }
+
+  /// One analyzer for `loc` on `module`, started, with its results task. Used to open a lane and to give a stalled
+  /// lane a fresh analyzer.
+  private func makeLane(_ loc: Locale, module t: any SpeechModule) async throws -> Lane? {
+    guard let fmt = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [t]) else { return nil }
+    let (stream, cont) = AsyncStream<AnalyzerInput>.makeStream(bufferingPolicy: .bufferingNewest(64))
+    let a = SpeechAnalyzer(modules: [t], options: .init(priority: .utility, modelRetention: .whileInUse))
+    try await a.prepareToAnalyze(in: fmt)
+    try await a.start(inputSequence: stream)
+    let lane = Lane(locale: loc, transcriber: t, analyzer: a, input: cont, format: fmt)
+    lane.tasks.append(Task { [weak self] in
+      do {
+        if let st = t as? SpeechTranscriber {
+          for try await r in st.results { self?.q.async { self?.onResult(lane, r.text, r.isFinal) } }
+        } else if let dt = t as? DictationTranscriber {
+          for try await r in dt.results { self?.q.async { self?.onResult(lane, r.text, r.isFinal) } }
+        }
+      } catch {
+        self?.q.async { self?.onLaneError(lane, error) }
+      }
+    })
+    return lane
+  }
+
+  // q only — the stalled lane gets a fresh analyzer for the same language; it takes the old lane's place (chosen,
+  // challenger, its confidence history and anything heard during detection), then the old one is shut down.
+  private func restartLane(_ old: Lane, quiet: TimeInterval) {
+    old.restarting = true
+    stallRestarts += 1
+    let next = min(old.stallAfter * 2, Self.stallMax)
+    NSLog("[VibeTranscriber] stall watchdog: %@ — no result for %.0f s with %.0f s of audio; fresh analyzer (#%d this session)",
+          old.locale.identifier(.bcp47), quiet, old.audible, stallRestarts)
+    let loc = old.locale
+    Task { [weak self] in
+      guard let self else { return }
+      let fresh = try? await self.makeLane(loc, module: await SpeechEngines.module(for: loc))
+      self.q.async {
+        guard let fresh else {
+          old.restarting = false; old.lastResult = Date(); old.audible = 0; old.stallAfter = next
+          return
+        }
+        guard !self.stopped, let i = self.lanes.firstIndex(where: { $0 === old }) else { fresh.shutdown(); return }
+        fresh.confSum = old.confSum; fresh.words = old.words; fresh.finals = old.finals; fresh.recent = old.recent
+        fresh.stallAfter = next
+        self.lanes[i] = fresh
+        if self.chosen === old { self.chosen = fresh }
+        if self.challenger === old { self.challenger = fresh }
+        old.shutdown()
+      }
+    }
+  }
+
+  // q only — SSB auto-tune moved the recogniser's copy: the box's header says so, quietly (only on a change).
+  private func onDial(_ d: Float, _ st: [Float]) {
+    guard !stopped else { return }
+    NSLog("[VibeTranscriber] ssb auto-tune: dial correction %.0f Hz (estimate %.1f Hz, confidence %.2f, %.0f s voiced, %d estimates, %d corrections)",
+          d, st.count == 7 ? st[0] : 0, st.count == 7 ? st[1] : 0, st.count == 7 ? st[2] : 0,
+          st.count == 7 ? Int(st[4]) : 0, st.count == 7 ? Int(st[5]) : 0)
+    owner?.emit(["type": "tune", "hz": Int(d.rounded())])
   }
 
   // q only
   private func feed(_ mono: AVAudioPCMBuffer) {
     guard !stopped else { return }
+    var rms: Float = 0
+    if let p = mono.floatChannelData?[0], mono.frameLength > 0 { vDSP_rmsqv(p, 1, &rms, vDSP_Length(mono.frameLength)) }
+    let dur = Double(mono.frameLength) / mono.format.sampleRate
+    let now = Date()
+    for lane in lanes where !lane.restarting {
+      if rms > Self.stallRmsFloor { lane.audible += dur }
+      let quiet = now.timeIntervalSince(lane.lastResult)
+      if quiet >= lane.stallAfter, lane.audible >= Self.stallAudible { restartLane(lane, quiet: quiet) }
+    }
     for lane in lanes {
       if lane.converter == nil || lane.converter!.inputFormat != mono.format {
         lane.converter = AVAudioConverter(from: mono.format, to: lane.format)
@@ -576,6 +689,8 @@ final class TranscribeEngine {
   // q only
   private func onResult(_ lane: Lane, _ rt: AttributedString, _ isFinal: Bool) {
     guard !stopped, lanes.contains(where: { $0 === lane }) else { return }
+    // ★ Any result, volatile or final, is life: the stall clock starts again and the next wait is the short one.
+    lane.lastResult = Date(); lane.audible = 0; lane.stallAfter = Self.stallAfter
     let text = String(rt.characters).trimmingCharacters(in: .whitespacesAndNewlines)
     if !isFinal {
       if chosen === lane, !text.isEmpty { owner?.emit(["type": "partial", "text": text]) }

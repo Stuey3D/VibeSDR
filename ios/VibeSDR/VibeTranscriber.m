@@ -9,6 +9,8 @@ RCT_EXTERN_METHOD(capabilities
 
 RCT_EXTERN_METHOD(start : (NSString *)language translateTo : (NSString *)translateTo)
 
+RCT_EXTERN_METHOD(tuning : (NSString *)mode freqHz : (double)freqHz)
+
 RCT_EXTERN_METHOD(stop)
 
 RCT_EXTERN_METHOD(download

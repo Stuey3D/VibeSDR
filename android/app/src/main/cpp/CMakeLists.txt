@@ -98,6 +98,8 @@ set(AIRSPY_SRC
 add_library(vibelocalsdr SHARED
     vibe_localsdr_jni.cpp local_sdr_shim.cpp net_shim.cpp rtl_tcp_server.cpp
     mdns_responder.cpp vibe_affinity.cpp
+    # ★ V12 TRANSCRIBE: the recogniser feed (vibedsp/ssb_offset — resample to 16 kHz, SSB auto-tune), shared with iOS.
+    vibe_ssb_jni.cpp
     # ★★★ COUNTRY AND NETWORK LOOKUP — THE SAME FILES THE DAEMON USES, not a copy. The admin page
     #     said "No country data yet" on Android for ever, and the Network column read "unknown",
     #     because these two were only ever compiled into the Linux/macOS daemon (Stuart,

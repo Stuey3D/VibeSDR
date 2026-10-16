@@ -5,3 +5,4 @@
 #import <Accelerate/Accelerate.h>
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventEmitter.h>
+#import "VibeSsbTune.h"   // V12 TRANSCRIBE: the shared recogniser feed (vibedsp/ssb_offset), C API

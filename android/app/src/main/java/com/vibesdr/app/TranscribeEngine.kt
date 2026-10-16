@@ -74,6 +74,16 @@ class TranscribeEngine(
         private const val TAG = "VibeTranscribe"
         /** 31-32: the recogniser has not taken our audio for this long while it flows → it is not reading the pipe. */
         private const val PIPE_DEAF_MS = 5000L
+        /* ★★ THE STALL WATCHDOG (V12 research, 2026-10-16). Apple's SpeechTranscriber was measured going quiet on medium
+         *    SSB — words for 7-15 s, then nothing for the rest of the clip (3702 kHz: 19 words → 85 with a 12 s watchdog
+         *    that starts a fresh analyzer; 0 restarts on clean VOLMET). The same guard runs here: audio FLOWING (over a
+         *    low RMS floor — never on squelch/mute silence) and no partial or final for STALL_MS → a fresh recogniser,
+         *    same language and translation, the box's text untouched. A restart that brings nothing waits twice as long
+         *    before the next (to STALL_MAX_MS), so a long stretch of band noise costs a few restarts, not one every 12 s. */
+        private const val STALL_MS = 12_000L
+        private const val STALL_MAX_MS = 96_000L
+        private const val STALL_AUDIBLE_MS = 10_000L     // of the window, this much must have been audio, not silence
+        private const val STALL_RMS_FLOOR = 0.002f      // ≈ -54 dBFS: squelch shut / muted is far below, band noise above
         /** 31-32: the languages offered when the phone cannot be asked (the phone's own goes first). One tag each. */
         private val COMMON = listOf("en-US", "es-ES", "fr-FR", "de-DE", "it-IT", "pt-BR", "nl-NL", "ru-RU", "uk-UA",
             "pl-PL", "tr-TR", "ar-EG", "zh-CN", "ja-JP", "ko-KR", "hi-IN", "vi-VN", "th-TH", "id-ID", "cs-CZ", "sv-SE")
@@ -223,12 +233,53 @@ class TranscribeEngine(
     private var translatorFor = ""
     private var translatorReady = false
     private var restarts = 0
+    // ── stall watchdog (see STALL_MS) — results on main, audio on the tap thread ──
+    @Volatile private var lastResultAt = 0L
+    private val audibleMs = java.util.concurrent.atomic.AtomicLong(0)
+    private var stallAfter = STALL_MS
+    private var stallRestarts = 0
+    private var lastDialCorr = 0f
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (stopped) return
+            val quiet = SystemClock.elapsedRealtime() - lastResultAt
+            if (sr != null && quiet >= stallAfter && audibleMs.get() >= STALL_AUDIBLE_MS) {
+                stallRestarts++
+                Log.i(TAG, "stall watchdog: no result for ${quiet / 1000} s with ${audibleMs.get() / 1000} s of audio — " +
+                    "fresh recogniser (#$stallRestarts this session)")
+                stallAfter = minOf(stallAfter * 2, STALL_MAX_MS)
+                markResult(false)
+                reopen(0)
+            }
+            main.postDelayed(this, 2000)
+        }
+    }
+    /** A partial or final arrived (or a fresh recogniser starts): the stall clock starts again. */
+    private fun markResult(heard: Boolean) {
+        lastResultAt = SystemClock.elapsedRealtime()
+        audibleMs.set(0)
+        if (heard) stallAfter = STALL_MS
+    }
 
     private fun status(s: String) = mod.emit("status", s)
     private fun display(tag: String) = Locale.forLanguageTag(tag).let { it.getDisplayName(Locale.getDefault()) }
 
     fun start() {
+        VibeTranscribeTap.onBlock = { rms, samples, dial ->
+            if (rms > STALL_RMS_FLOOR) audibleMs.addAndGet(samples * 1000L / 16000)
+            // ★ SSB auto-tune moved the recogniser's copy: say so, quietly, in the box's header (only on a change).
+            if (dial != lastDialCorr) {
+                lastDialCorr = dial
+                VibeTranscribeTap.stats()?.let { st ->
+                    Log.d(TAG, "ssb auto-tune: dial correction ${dial} Hz (estimate ${st[0]} Hz, confidence ${st[1]}, " +
+                        "${st[2]} s voiced, ${st[4].toInt()} estimates, ${st[5].toInt()} corrections)")
+                }
+                main.post { if (!stopped) mod.emit("tune", "", mapOf("hz" to Math.round(dial).toString())) }
+            }
+        }
         main.post {
+            markResult(false)
+            main.postDelayed(watchdog, 2000)
             status("Preparing on-device speech…")
             if (Build.VERSION.SDK_INT < 33) open() else start33()   // 12: nothing to ask — the chosen language
         }
@@ -260,9 +311,12 @@ class TranscribeEngine(
     fun stop() {
         stopped = true
         VibeTranscribeTap.sink = null
+        VibeTranscribeTap.onBlock = null
+        if (stallRestarts > 0) Log.i(TAG, "stall watchdog: $stallRestarts restart(s) this session")
         try { out?.close() } catch (_: IOException) {}
         out = null
         main.post {
+            main.removeCallbacks(watchdog)
             try { sr?.cancel() } catch (_: Throwable) {}
             try { sr?.destroy() } catch (_: Throwable) {}
             sr = null
@@ -335,6 +389,7 @@ class TranscribeEngine(
         val os = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
         out = os
         VibeTranscribeTap.reset()
+        markResult(false)
         if (Build.VERSION.SDK_INT < 33) {
             // ★ 12: our end never blocks; a pipe left full for PIPE_DEAF_MS = the recogniser is not reading it.
             val fd = pipe[1].fileDescriptor
@@ -401,10 +456,12 @@ class TranscribeEngine(
 
         override fun onPartialResults(b: Bundle?) {
             val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim().orEmpty()
+            markResult(true)
             if (t.isNotEmpty()) mod.emit("partial", t)
         }
-        override fun onSegmentResults(b: Bundle) { deliver(b) }
+        override fun onSegmentResults(b: Bundle) { markResult(true); deliver(b) }
         override fun onResults(b: Bundle?) {
+            markResult(true)
             if (b != null) deliver(b)
             // ★ 12's recogniser may not keep a segmented session: one utterance, then results — listen again.
             if (Build.VERSION.SDK_INT < 33) reopen(100)

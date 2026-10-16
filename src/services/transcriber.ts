@@ -41,7 +41,10 @@ export type TranscribeEvent =
   | { type: 'trying'; text: string }
   | { type: 'tried'; text: string }
   | { type: 'lang'; text: string; name: string; detected?: boolean }
-  | { type: 'final'; text: string; lang?: string; translated?: string };
+  | { type: 'final'; text: string; lang?: string; translated?: string }
+  /** SSB auto-tune moved the RECOGNISER's copy of the audio (never what is heard): the correction as a dial change,
+   *  Hz (a number on iOS, a string on Android); 0 = none. */
+  | { type: 'tune'; text?: string; hz: number | string };
 
 const Native: any = NativeModules.VibeTranscriber;
 
@@ -75,6 +78,10 @@ export function removeTranscribeLanguage(language: string): Promise<{ ok: boolea
 
 export function startTranscribe(language: string, translateTo: string) { Native?.start?.(language || 'auto', translateTo || ''); }
 export function stopTranscribe() { Native?.stop?.(); }
+/** ★ The dial, for SSB AUTO-TUNE of the recogniser's feed (V12): in USB/LSB the native side estimates how far the
+ *  voice is mistuned from its own harmonics and shifts ITS copy back (vibedsp/ssb_offset — shared C++, both
+ *  platforms). Any change of mode or frequency resets the estimate. Cheap — call it whenever either changes. */
+export function setTranscribeTuning(mode: string, freqHz: number) { Native?.tuning?.(String(mode || ''), Number(freqHz) || 0); }
 
 export function onTranscribe(fn: (e: TranscribeEvent) => void): () => void {
   if (!Native) return () => {};
