@@ -43,9 +43,10 @@ import {
   MIN_RECOMMENDED_VERSION,
 } from '../services/instancesApi';
 import { checkConnection, detectServerType, probeServer, parseServerAddress, DEFAULT_PORT,
-         fetchOccupancy, type ServerOccupancy, isKiwiProtocol,
+         fetchOccupancy, type ServerOccupancy, isKiwiProtocol, isHttpBackend, resolveServerScheme,
          type BackendType, type ServerType } from '../services/sdrTypes';
 import { vibeServerNeedsPin } from '../services/vibeAuth';
+import { buildServerUrl, parseServerUrl, withScheme } from '../utils/serverUrl';
 
 /**
  * Pull a host and port out of anything a person might reasonably type:
@@ -558,6 +559,17 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     if (u && !u.startsWith('http://') && !u.startsWith('https://')) u = 'http://' + u;
     return u;
   }, [customUrl]);
+  /* ★ The favourite this box's address already is. With no scheme typed, the ♡ saves whichever
+   *  scheme ANSWERED (GitHub #52), so the https form counts as a match too — otherwise the heart
+   *  shows empty for a saved TLS receiver and a second tap saves it twice. */
+  const customFav = useMemo(() => {
+    const exact = favourites.find(f => f.url === normalisedCustomUrl);
+    if (exact) return exact;
+    const p = parseServerUrl(customUrl);
+    if (!p || p.explicitScheme) return undefined;
+    const tls = withScheme(p, 'https').url;
+    return favourites.find(f => f.url === tls);
+  }, [favourites, normalisedCustomUrl, customUrl]);
   // A pasted sdr:// / spyserver:// link connects but isn't an http receiver — the
   // http favourite/default stars don't apply; it favourites into the SpyServer
   // list (tcpFavs) instead. Non-null = the custom box holds a valid spy link.
@@ -579,10 +591,15 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // toggleFavourite falls back to. Detection returns null only when the host can't be
   // reached; then keep the old default. connectFav re-detects on connect regardless.
   const favouriteCustomUrl = useCallback(async (url: string, name: string) => {
-    const detected = await detectServerType(url).catch(() => null);
-    const next = await toggleFavourite({ name, url, serverType: detected ?? 'ubersdr', custom: true }, favourites);
+    // ★★★ GitHub #52: with no scheme typed, `url` is a GUESSED http:// — save the address that
+    //   actually ANSWERED (https first), or a TLS-only receiver is saved unreachable for ever.
+    const typed = parseServerAddress(customUrl);
+    const probed = typed ? await probeServer(typed.host, typed.port, null, typed.url, typed.explicitScheme).catch(() => null) : null;
+    const saveUrl = probed && isHttpBackend(probed.type) ? probed.url : url;
+    const detected = probed && isHttpBackend(probed.type) ? probed.type : await detectServerType(url).catch(() => null);
+    const next = await toggleFavourite({ name, url: saveUrl, serverType: (detected ?? 'ubersdr') as Favourite['serverType'], custom: true }, favourites);
     setFavourites(next);
-  }, [favourites]);
+  }, [favourites, customUrl]);
 
   // Edit a custom server (pencil): open the sheet seeded from the favourite, and save the edits in
   // place. If the address changed, drop the stored serverType so connectFav re-detects it fresh.
@@ -1390,7 +1407,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // to the SpyServer proto — Airspy's map hands out copy-text, so paste must work
   // where tapping can't). Returns the detected proto so the connect routing below
   // doesn't depend on the async setTcpProto having landed yet.
-  const parseTcpEntry = useCallback((): { host: string; port: number; proto: BackendType | 'auto'; url: string } | null => {
+  const parseTcpEntry = useCallback((): { host: string; port: number; proto: BackendType | 'auto'; url: string; explicitScheme: boolean } | null => {
     let h = tcpHost.trim();
     let proto: BackendType | 'auto' = tcpProto;
     const schemeM = /^(sdr|spyserver):\/\//i.exec(h);
@@ -1415,9 +1432,12 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     const portField = Number.isFinite(typed) && typed > 0 && typed < 65536 ? typed : undefined;
     // ★ Same parser as the paste box: a named server may equally live behind TLS or in a
     // subfolder, and the two entry points must not disagree about what an address IS.
-    const u = parseServerAddress(h, portField ?? (proto === 'auto' ? undefined : DEFAULT_PORT[proto]));
+    // ★★★ GitHub #52: the port FIELD is an explicit port; the type's default port only fills a bare
+    //   host. An explicit https:// with no port is 443, not the type's default.
+    const u = parseServerAddress(h, { port: portField,
+                                      defaultPort: proto === 'auto' ? undefined : DEFAULT_PORT[proto] });
     if (!u) return null;
-    return { host: u.host, port: u.port, proto, url: u.url };
+    return { host: u.host, port: u.port, proto, url: u.url, explicitScheme: u.explicitScheme };
   }, [tcpHost, tcpPort, tcpProto]);
 
   const tcpModalConnect = useCallback(async (save: boolean) => {
@@ -1432,7 +1452,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     let url = parsed.url;
     if (!type) {
       setConnecting(true);
-      const probed = await probeServer(parsed.host, parsed.port, null, parsed.url);
+      const probed = await probeServer(parsed.host, parsed.port, null, parsed.url, parsed.explicitScheme);
       setConnecting(false);
       if (!probed) {
         Alert.alert('Custom server',
@@ -1440,10 +1460,21 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         return;
       }
       type = probed.type; url = probed.url;
+    } else if (isHttpBackend(type) && !parsed.explicitScheme) {
+      // ★★★ GitHub #52 — THE BUG. Picking "OpenWebRX" skipped the probe, and with no scheme typed
+      //   the address was GUESSED to be http:// — so an OWRX+ with its own certificate on 8073 was
+      //   dialled as ws://host:8073, closed in 50 ms, and showed "server stopped responding".
+      //   The type is the user's to choose; the scheme is still found out, never guessed.
+      setConnecting(true);
+      url = await resolveServerScheme(parsed.url, false);
+      setConnecting(false);
     }
     if (save) {
+      // ★ The URL is saved WITH the favourite (scheme, port and path) — host+port alone cannot say
+      //   https, and every reconnect rebuilt http://host:port (GitHub #52).
       const next = [...tcpFavs.filter(f => !(f.host === parsed.host && f.port === parsed.port)),
-                    { name, host: parsed.host, port: parsed.port, proto: type }];
+                    { name, host: parsed.host, port: parsed.port, proto: type,
+                      ...(isHttpBackend(type) ? { url } : {}) }];
       setTcpFavs(next); saveTcpFavs(next).catch(() => {});
     }
     setTcpModal(false); setTcpName(''); setTcpHost(''); setTcpPort('');
@@ -1508,6 +1539,19 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   //   is merely switched off must not be stamped rtl_tcp for ever — it just stays as it was.
   const connectTcpFav = useCallback(async (f: TcpFav) => {
     let proto: BackendType = (f.proto ?? 'rtltcp') as BackendType;
+    // ★★★ GitHub #52: a saved HTTP receiver connects to its SAVED URL. One saved before the URL
+    //   was kept has only host+port, so its scheme is probed once (https first) and written back —
+    //   never rebuilt as http://host:port, which is what made Reconnect repeat the failure.
+    let favUrl = f.url;
+    if (!favUrl && isHttpBackend(proto) && proto !== 'vibeserver') {
+      setConnecting(true);
+      favUrl = await resolveServerScheme(buildServerUrl('http', f.host, f.port), false);
+      setConnecting(false);
+      const healed = favUrl;
+      const next = tcpFavs.map(t => (t.host === f.host && t.port === f.port ? { ...t, url: healed } : t));
+      setTcpFavs(next);
+      saveTcpFavs(next).catch((e) => console.warn('[favourites] saving a favourite\'s address failed', e));
+    }
     if (needsVibeProbe(f)) {
       setConnecting(true);
       const occ = await fetchOccupancy(tcpFavHttpBase(f), 2000);
@@ -1519,7 +1563,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         saveTcpFavs(next).catch((e) => console.warn('[favourites] saving a repaired favourite failed', e));
       }
     }
-    connectDetected(proto, f.host, f.port, f.name);
+    connectDetected(proto, f.host, f.port, f.name, favUrl);
   }, [tcpFavs, connectDetected]);
 
   // Discovered servers not already saved as a favourite (dedupe by host:port).
@@ -1529,7 +1573,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   // Connect a saved favourite: use its stored backend type, or detect it once
   // (and remember it) so an OpenWebRX/Kiwi favourite doesn't reconnect as UberSDR.
-  const connectFav = useCallback(async (fav: Favourite) => {
+  const connectFav = useCallback(async (favIn: Favourite) => {
+    let fav = favIn;
     // FM-DX isn't sniffable by detectServerType (which only knows ubersdr/kiwi/
     // owrx) and letting it "detect" would mis-open an FM-DX fav as UberSDR
     // (waterfall) — trust the stored type and route straight to the tuner.
@@ -1547,6 +1592,22 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // host can't be reached — then keep the stored type rather than guessing.
     // ★ Hand it what we already believe this server is — a known Kiwi is not asked for our files.
     let detected = await detectServerType(fav.url, fav.serverType);
+
+    // ★★★ GitHub #52 SELF-HEAL. Earlier builds saved a typed `host:8073` as http://host:8073 — a
+    //   guess. If nothing answers there, ask the SAME host, port and path over https; if that
+    //   answers, the favourite is rewritten to it. Probed, never inferred from the port, and only
+    //   ever http → https (a favourite that says https is never downgraded).
+    if (!detected && /^http:\/\//i.test(fav.url) && fav.serverType !== 'vibeserver') {
+      const p = parseServerUrl(fav.url);
+      const tls = p ? withScheme(p, 'https').url : null;
+      const tlsType = tls ? await detectServerType(tls, fav.serverType) : null;
+      if (tls && tlsType) {
+        await updateFavourite(fav.url, { url: tls }).catch(() => {});
+        setFavourites(await getFavourites());
+        fav = { ...fav, url: tls };
+        detected = tlsType;
+      }
+    }
 
     // ★★ A SAVED VibeServer PORT GOES STALE ON ITS OWN. The server takes "the
     // first free port" from 48000 up, so if something else holds 48000 at launch
@@ -1578,7 +1639,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // opened as a plain UberSDR receiver with no PIN handshake.
     if (type === 'vibeserver') {
       const u = parseHostPort(fav.url, 'vibeserver');
-      if (u) { connectDetected('vibeserver', u.host, u.port, fav.name); return; }
+      // ★ With the favourite's own URL — rebuilt from host+port it became http://host:443 for a
+      //   tunnelled https VibeServer (the GitHub #52 family: scheme and port are a pair).
+      if (u) { connectDetected('vibeserver', u.host, u.port, fav.name, fav.url.replace(/\/+$/, '')); return; }
     }
     connect(fav.url, fav.name, undefined, null, type as ServerType | 'fmdx');
   }, [connect, connectDetected, setFavourites]);
@@ -1600,7 +1663,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // (NSAllowsArbitraryLoads) — most Kiwi/OpenWebRX receivers are hobbyist HTTP
     // boxes with no TLS, so we don't block them.
     setConnecting(true);
-    const probed = await probeServer(u.host, u.port, null, u.url);
+    const probed = await probeServer(u.host, u.port, null, u.url, u.explicitScheme);
     setConnecting(false);
     if (!probed) {
       // Typed a bare host with no port? DEFAULT_PORT guessed 80/8073, which is
@@ -2532,7 +2595,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   const url     = normalisedCustomUrl;
                   const fallback = url.replace(/^https?:\/\//, '');
                   // Already a favourite → just un-favourite. Otherwise ask for a name.
-                  if (isFav(url)) { handleToggleFav({ name: fallback, url }); return; }
+                  if (customFav) { handleToggleFav({ name: fallback, url: customFav.url }); return; }
                   if (Platform.OS === 'ios' && (Alert as any).prompt) {
                     (Alert as any).prompt(
                       'Name this favourite',
@@ -2550,8 +2613,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
                   }
                 }}
               >
-                <Text style={{ fontSize: fs(18), color: isFav(normalisedCustomUrl) ? C.red : C.keyDim }}>
-                  {isFav(normalisedCustomUrl) ? '♥' : '♡'}
+                <Text style={{ fontSize: fs(18), color: customFav ? C.red : C.keyDim }}>
+                  {customFav ? '♥' : '♡'}
                 </Text>
               </TouchableOpacity>
               {/* Star — set as default */}

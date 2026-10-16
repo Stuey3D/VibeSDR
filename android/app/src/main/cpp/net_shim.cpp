@@ -44,6 +44,10 @@ void Socket::closeAfterFlush() {
     ::close(fd_); fd_ = -1;
 }
 
+void Socket::shutdownBoth() {
+    if (open_ && fd_ >= 0) ::shutdown(fd_, SHUT_RDWR);
+}
+
 void Socket::close() {
     if (!open_) return;
     open_ = false;

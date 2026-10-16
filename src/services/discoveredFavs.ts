@@ -73,6 +73,8 @@ export function needsVibeProbe(f: TcpFav): boolean {
 
 /** The address the watch/phone should hand a VibeServer TcpFav to — an http URL, never the
  *  synthetic `vibeserver://host:port` key, which nothing can fetch. */
-export function tcpFavHttpBase(f: Pick<TcpFav, 'host' | 'port'>): string {
-  return `http://${f.host}:${f.port}`;
+export function tcpFavHttpBase(f: Pick<TcpFav, 'host' | 'port' | 'url'>): string {
+  // ★ The saved address wins (GitHub #52); host+port alone is plain http by necessity.
+  if (f.url) return f.url.replace(/\/+$/, '');
+  return `http://${f.host.includes(':') ? `[${f.host}]` : f.host}:${f.port}`;
 }

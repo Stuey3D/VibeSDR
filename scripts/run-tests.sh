@@ -128,6 +128,10 @@ deps_for() {
     test-asndb)         echo "$SRC/asndb.cpp $SRC/proc.cpp" ;;
     test-moveloc)       echo "$SRC/moveloc.cpp $SRC/proc.cpp" ;;
     test-admin-banlist) echo "" ;;
+    # ★★ The POWER card's verdict (vibe_power.h, 2026-10-16): brief supply dips amber; red only for a dip
+    #    held ≥ 10 s, near-continuous dips, USB over-current, or a USB device lost in a dip. Header-only,
+    #    with a fake /sys and /dev for the rpi_volt alarm and the USB scans.
+    test-power-dips)    echo "" ;;
     test-decoder-hardening) echo "android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
@@ -206,6 +210,8 @@ if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fa
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
 if node scripts/test-visit-grouping.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ The admin page's real module in jsdom (no browser, no audio): health cards, POWER's amber/red verdicts, bans, polling.
+if node scripts/test-admin-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A DATA MIGRATION, so it is tested: bookmarks move from being keyed on the URL you arrived by
 #    to the server's own identity. The failure modes are somebody's bookmarks going invisible on
 #    upgrade, or one server adopting another's — neither of which looks wrong in a screenshot.
@@ -247,6 +253,8 @@ if node scripts/test-web-no-desktop-bar.mjs; then pass=$((pass+1)); else fail=$(
 if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ proxy.kiwisdr.com IS 8073 ONLY (2026-10-07): 47 % of public Kiwis are listed portless (= port 80, refused).
 if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ SERVER ADDRESSES (serverUrl.ts): scheme and port are a PAIR — https://host:8073 stays TLS (GitHub #52, OWRX+ native TLS).
+if node --no-warnings scripts/test_server_url.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ OWRX S-METER CALIBRATION (owrxSmeterCal.ts): the wire level is not dBm — owner's plugin figures, else noise at S2.
 if node --no-warnings scripts/test_owrxSmeterCal.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ VIBESERVER SQUELCH ON/OFF (vibeSquelch.ts): a threshold below -100 dBFS is a threshold, not "off" — the
@@ -573,6 +581,14 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     and the log names who asked. Same VIBESERVER_BIN rule.
 printf '\n\033[1m── DAB exit (end to end) ──\033[0m\n'
 node scripts/test-server-dab-exit.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ A STOP THAT LANDS ON A DAB START STILL STOPS (Pi 500, 2026-10-16: a settings save, a listener asking for
+#     DAB in the same second, "Stopping…" and then 90 s until systemd's SIGKILL): a rate change held open across
+#     the SIGTERM, late DAB/NFM/de-emphasis requests, a plain stop's speed, and the shutdown watchdog naming the
+#     step a wedged stop was on. Same VIBESERVER_BIN rule.
+printf '\n\033[1m── stop during a DAB start (end to end) ──\033[0m\n'
+node scripts/test-server-stop-during-dab.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ SHARE A STATION THROUGH THE REAL SERVER: two listeners on a shared dial; the line the room receives is

@@ -283,7 +283,43 @@ function renderHealth(st: any, perRadio: Array<{ radio: string; data: any }> = [
   // ★★ SHOWN WHEN IT HAS EVER HAPPENED, not only while it is happening. By the time anyone opens
   //    this page the voltage has usually recovered, and "all fine" would be true of this instant
   //    and false about the machine.
-  if (sys.underVoltage !== undefined) {
+  // ★★★ COUNTED, NOT SAMPLED (2026-10-16). Reading the alarm at the instant of the poll turned this card RED
+  //     on every 1-2 s sag of Stuart's Pi 500 — many an hour under bursty load, with clean audio and not one
+  //     USB dropout. A red card that cries wolf is how the real fault gets ignored. The server now watches the
+  //     alarm's edges (vibe_power.h) and decides the colour: brief dips are AMBER with a count; RED only for a
+  //     dip held ≥ 10 s, dips so close together they are continuous, a USB over-current, or a USB device that
+  //     actually dropped during a dip. Nothing here claims USB trouble unless the server SAW it.
+  //  ★ Older servers send no `power`; the block below the next one is their card, unchanged.
+  const pw = sys.power;
+  if (pw && typeof pw.verdict === 'string') {
+    const n = (x: number, one: string, many: string) => `${x} ${x === 1 ? one : many}`;
+    const sec = (x: number) => `${Math.round(Number(x) || 0)} s`;
+    const v = pw.verdict;
+    const [val, sub] =
+      v === 'usblost' ? ['USB DROPPED',
+        `${n(pw.usbLostHour, 'USB device', 'USB devices')} dropped out during a supply dip this hour`
+        + ' — the supply cannot keep up; fit a stronger one']
+      : v === 'overcurrent' ? ['USB OVER-CURRENT',
+        `${n(pw.overCurrentHour, 'over-current event', 'over-current events')} on a USB port this hour`
+        + ' — the devices draw more than the port can give; use a powered hub']
+      : v === 'sustained' ? ['UNDER-VOLTAGE',
+        (pw.nowSec >= pw.sustainedSec ? `low for ${sec(pw.nowSec)} and counting`
+                                      : `held low for ${sec(pw.longestSec)} this hour`)
+        + ' — the supply cannot keep up; expect USB devices to drop out']
+      : v === 'frequent' ? ['UNDER-VOLTAGE',
+        `low for ${Math.round(100 * pw.recentSec / (pw.recentWindowSec || 300))}% of the last `
+        + `${Math.round((pw.recentWindowSec || 300) / 60)} minutes — dips so close together they are one;`
+        + ' expect USB devices to drop out']
+      : v === 'brief' ? ['BRIEF DIPS',
+        `${pw.dipsHour} in the last hour${pw.longestSec > 0 ? `, longest ${sec(pw.longestSec)}` : ''}`
+        + `${pw.now ? ' · dipping now' : ''} · the supply sags under load; no USB device has dropped`
+        + (sys.governor === 'performance' ? ' · the CPU is pinned to performance, which draws more' : '')]
+      : v === 'dipped' ? ['DIPPED',
+        'the supply has dipped since boot — suspect it before anything else'
+        + (sys.governor === 'performance' ? ' · the CPU is pinned to performance, which draws more' : '')]
+      : ['OK', 'supply voltage has stayed in range'];
+    out.push(card('POWER', val, sub, pw.status || 'ok'));
+  } else if (sys.underVoltage !== undefined) {
     const now = !!sys.underVoltage, ever = !!sys.underVoltageEver;
     out.push(card('POWER',
       now ? 'UNDER-VOLTAGE' : ever ? 'DIPPED' : 'OK',
@@ -504,7 +540,8 @@ function machineStats(conns: any[]): {
 
 /** ★ Inline SVG sparklines rather than a charting library. Three lines of history do not
  *  justify a dependency, and this page has to load on a phone over 4G from a field. */
-function spark(rows: number[][], col: number, label: string, fmt: (n: number) => string): string {
+function spark(rows: number[][], col: number, label: string, fmt: (n: number) => string,
+               marks: Array<[number, number]> = []): string {
   const vals = rows.map((r) => r[col]).filter((n) => isFinite(n));
   if (vals.length < 2) return `<figure><figcaption><span>${esc(label)}</span><span>—</span></figcaption>`
                             + `<svg viewBox="0 0 100 30" preserveAspectRatio="none"></svg></figure>`;
@@ -515,12 +552,30 @@ function spark(rows: number[][], col: number, label: string, fmt: (n: number) =>
   const last = vals[vals.length - 1];
   return `<figure><figcaption><span>${esc(label)}</span><span>${esc(fmt(last))}</span></figcaption>`
        + `<svg viewBox="0 0 100 30" preserveAspectRatio="none">`
+       + marks.map(([a, b]) => `<rect x="${a.toFixed(2)}" y="0" width="${Math.max(0.5, b - a).toFixed(2)}"`
+                              + ` height="30" fill="var(--red)" opacity="0.35"/>`).join('')
        + `<polyline points="${pts}" fill="none" stroke="var(--amber)" stroke-width="1"`
        + ` vector-effect="non-scaling-stroke"/></svg></figure>`;
 }
 
-function renderGraphs(h: any) {
+/** ★ The server's supply dips ([seconds ago it began, seconds ago it ended]) as x-ranges on the graphs'
+ *  0-100 axis. The axis is by ROW, not by time, so each dip is placed at the first row taken at or after it.
+ *  "Ago" is measured from the newest row — the status and the history come from the same poll. */
+function dipMarks(rows: number[][], dips: unknown): Array<[number, number]> {
+  if (!Array.isArray(dips) || !dips.length || rows.length < 2) return [];
+  const last = rows[rows.length - 1][0];
+  const at = (t: number) => {
+    let i = rows.findIndex((r) => r[0] >= t);
+    if (i < 0) i = rows.length - 1;
+    return (i / (rows.length - 1)) * 100;
+  };
+  return dips.filter((d) => Array.isArray(d) && last - d[1] >= rows[0][0])
+             .map((d) => [at(last - d[0]), at(last - d[1])] as [number, number]);
+}
+
+function renderGraphs(h: any, dips?: unknown) {
   const rows: number[][] = h.rows ?? [];
+  const marks = dipMarks(rows, dips);
   // fields: at, load1, tempC, listeners, kbps, mhz
   const parts = [
     spark(rows, 3, 'LISTENERS', (n) => String(Math.round(n))),
@@ -529,15 +584,20 @@ function renderGraphs(h: any) {
   // ★★ ONLY WHERE THE LOAD WAS MEASURED. Android refuses an app /proc/loadavg; the server records -1 there
   //    (older servers sent 0), and a flat "CPU LOAD 0.00" under a tile reading 75 % was a number never taken
   //    (Sony TV, 2026-09-19). Same rule as the temperature below: an empty box is worse than no box.
-  if (rows.some((r) => r[1] > 0)) parts.unshift(spark(rows, 1, 'CPU LOAD', (n) => n.toFixed(2)));
+  // ★ Supply dips are shaded on the CLOCK graph, where a sag shows as the firmware's clock drop — or on
+  //   the load graph where there is no clock column (an older server cannot send dips anyway).
+  const hasClock = rows.some((r) => r.length > 5 && r[5] > 0);
+  if (rows.some((r) => r[1] > 0))
+    parts.unshift(spark(rows, 1, 'CPU LOAD', (n) => n.toFixed(2), hasClock ? [] : marks));
   // Only draw temperature where there is one — an empty box is worse than no box.
   if (rows.some((r) => r[2] > 0)) parts.splice(1, 0, spark(rows, 2, 'CPU TEMP °C', (n) => n.toFixed(1)));
   // ★★ THE CLOCK IS WHERE A SAGGING SUPPLY BECOMES VISIBLE. Temperature stays fine and load looks
   //    ordinary while the governor quietly runs the machine slower, so the dip only shows here.
   //    Drawn next to the load so the two can be read together.
   //    ★ Older servers send five columns; index 5 is simply absent and no box is drawn.
-  if (rows.some((r) => r.length > 5 && r[5] > 0))
-    parts.splice(1, 0, spark(rows, 5, 'CPU CLOCK MHz', (n) => n.toFixed(0)));
+  if (hasClock)
+    parts.splice(1, 0, spark(rows, 5, marks.length ? 'CPU CLOCK MHz · DIPS' : 'CPU CLOCK MHz',
+                             (n) => n.toFixed(0), marks));
   $('adminGraphs').innerHTML = parts.join('');
 }
 
@@ -1475,7 +1535,7 @@ async function refresh() {
     };
     failures = 0;
     renderHealth(st, statAll, conns.connections);
-    renderGraphs(hist);
+    renderGraphs(hist, st.sys?.power?.dips);
     // ★★★ SIMPLE vs FULL. The gated panels are about MANAGING STRANGERS — who is connected,
     //     blocking them, where they came from. On a household receiver they are noise, and
     //     plug-and-play is the thing people already like about VibeServer (Stuart, 2026-08-07:

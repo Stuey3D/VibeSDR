@@ -63,6 +63,7 @@ const WF_BINS = 1024;              // Kiwi waterfall is a fixed 1024-bin row
 
 import { receiverPlaceLine } from './grid';
 import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
+import { toWsUrl } from '../utils/serverUrl';
 
 // SND flags (audio.js)
 const SND_COMPRESSED    = 0x0010;
@@ -224,11 +225,8 @@ export class KiwiAdapter implements SDRBackend {
   /** http(s)/ws(s)://host:port[/…] → ws(s)://host:port (no trailing path). */
   static toWsBase(baseUrl: string): string {
     // ★★ proxy.kiwisdr.com listens on 8073 only — see utils/kiwiProxy.ts (47 % of public Kiwis).
-    let u = withKiwiProxyPort(baseUrl.trim()).replace(/\/+$/, '');
-    if (u.startsWith('https://'))      u = 'wss://' + u.slice(8);
-    else if (u.startsWith('http://'))  u = 'ws://'  + u.slice(7);
-    else if (!/^wss?:\/\//.test(u))    u = 'ws://'  + u;
-    return u.replace(/\/ws(\/.*)?$/, '');
+    // ★ wss follows the scheme, never the port — utils/serverUrl.ts (GitHub #52).
+    return toWsUrl(withKiwiProxyPort(baseUrl.trim())).replace(/\/ws(\/.*)?$/, '');
   }
 
   /** 1 Hz readout. Rung 1 / never settling: the adaptive ladder for Kiwi lives in

@@ -385,8 +385,11 @@ export interface BackendCallbacks extends SDRCallbacks {
   onReconnecting?: (busy: boolean) => void;
   /** OWRX: the WS closed UNEXPECTEDLY (server crash/restart — common on OWRX),
    *  as opposed to a user pause/navigation. The UI keeps the session alive and
-   *  shows a "server stopped responding" prompt instead of silently dropping. */
-  onServerLost?: () => void;
+   *  shows a "server stopped responding" prompt instead of silently dropping.
+   *  ★ `reason` is what the socket actually said (GitHub #52 — it used to be thrown away), and
+   *    `neverConnected` = the server never answered the handshake, so the UI must not claim it
+   *    "stopped" responding. */
+  onServerLost?: (reason?: string, neverConnected?: boolean) => void;
   /** Kiwi: the receiver is full (all channels in use) — `MSG too_busy`. Distinct
    *  from onServerLost so the UI can say "server full, try another". */
   onServerBusy?: () => void;

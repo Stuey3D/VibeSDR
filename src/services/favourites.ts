@@ -148,7 +148,10 @@ const TCP_KEY = 'vsdr_rtltcp_favs';
 
 // `proto` is optional for backwards compatibility: favourites saved before
 // SpyServer support existed have no field and must keep resolving to rtl_tcp.
-export type TcpFav = { name: string; host: string; port: number; proto?: BackendType };
+/** ★ `url` (GitHub #52): an HTTP receiver's full address — scheme, port and path. host+port alone
+ *  cannot say https, and was rebuilt as http://host:port on every reconnect. Absent on raw-TCP
+ *  servers and on favourites saved before the GitHub #52 fix (those have their scheme probed once and saved). */
+export type TcpFav = { name: string; host: string; port: number; proto?: BackendType; url?: string };
 
 export async function getTcpFavs(): Promise<TcpFav[]> {
   try {

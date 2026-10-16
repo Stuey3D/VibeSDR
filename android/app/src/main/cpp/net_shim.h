@@ -37,6 +37,9 @@ public:
     Socket& operator=(const Socket&) = delete;
 
     void close();
+    /** Make this socket's blocked recv()/send() fail WITHOUT releasing the fd — the thread that owns it
+     *  closes it on its way out. For a stop that must wake a handler it is about to join. */
+    void shutdownBoth();
     /** ★★★ TELL THEM, THEN HANG UP — AND ACTUALLY TELL THEM. close() does shutdown(SHUT_RDWR) and
      *  closes at once, which ABORTS the connection: the frame just handed to the kernel is
      *  discarded, and any unread inbound data turns the close into an RST that destroys it for

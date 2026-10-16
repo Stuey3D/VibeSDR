@@ -38,6 +38,7 @@
 #include <thread>
 #include <vector>
 #include "vibe_vcio.h"   // ★ the Pi's firmware clock and throttle flags — see readSys()
+#include "vibe_power.h"  // ★ supply dips COUNTED (episodes, USB loss) — see SysStats::power
 
 #if defined(__APPLE__)
   #include <mach/mach.h>
@@ -1474,6 +1475,14 @@ struct SysStats {
     bool haveVolt = false;
     bool underVoltageNow = false;
     bool underVoltageEver = false;
+    /** ★★★ AND COUNTED, NOT ONLY SAMPLED (2026-10-16). The two flags above are one instant and a latch,
+     *  and the instant turned the card red on every 1-2 s sag of a supply that never dropped a device.
+     *  vibe_power.h watches the alarm's edges on its own thread and says how many dips, how long, and
+     *  whether a USB device went with one; the page's colour comes from its verdict. Absent (havePower
+     *  false) off a Pi, where the page shows nothing new. */
+    bool havePower = false;
+    vibepower::Summary power;
+    std::vector<std::pair<double, double>> powerDips;   ///< [ago start, ago end] s, last hour
 
     /** ★★★ THE PI'S FIRMWARE CLOCK — what the ARM is ACTUALLY running at. When present, cpuKHz above
      *  IS this figure, because sysfs reports the clock the kernel asked for and the firmware quietly
@@ -1629,6 +1638,14 @@ inline SysStats readSys() {
                 if (s.underVoltageNow) everSeen = true;
                 s.underVoltageEver = everSeen;
             }
+            if (const vibepower::Tracker* t = vibepower::instance()) {
+                const double now = vibepower::monoNow();
+                s.havePower = true;
+                s.power     = t->summary(now);
+                s.powerDips = t->recent(now);
+                // ★ The watcher sees every 2-s window; this read sees one instant per poll.
+                if (s.power.ever) s.underVoltageEver = everSeen = true;
+            }
         }
     }
 #endif
@@ -1733,6 +1750,29 @@ inline const char* tempStatus(const SysStats& s) {
     return "ok";
 }
 
+/** ★ ADDITIVE beside underVoltage / underVoltageEver, which keep their meanings for older pages.
+ *  `status` is the card's colour, decided here (vibepower::classify) — never re-derived on the page.
+ *  `dips` are [seconds ago it began, seconds ago it ended] (0 = still open), for marks on the graphs:
+ *  "ago" rather than epoch because the tracker runs on the monotonic clock (a Pi has no RTC). */
+inline std::string powerJson(const vibepower::Summary& p, const std::vector<std::pair<double, double>>& dips) {
+    char b[448];
+    snprintf(b, sizeof b,
+             "{\"verdict\":\"%s\",\"status\":\"%s\",\"now\":%s,\"dipsHour\":%d,\"longestSec\":%.0f,"
+             "\"nowSec\":%.0f,\"recentSec\":%.0f,\"recentWindowSec\":%.0f,\"sustainedSec\":%.0f,"
+             "\"usbLostHour\":%d,\"overCurrentHour\":%d,\"lastDipAgoSec\":%.0f",
+             vibepower::verdictName(p.verdict), vibepower::verdictStatus(p.verdict), p.now ? "true" : "false",
+             p.dipsHour, p.longestHourSec, p.nowSec, p.recentSec, vibepower::kRecentSec,
+             vibepower::kSustainedSec, p.usbLostHour, p.overCurrentHour, p.lastDipAgoSec);
+    std::string j = b;
+    j += ",\"dips\":[";
+    for (size_t i = 0; i < dips.size(); i++) {
+        char d[48];
+        snprintf(d, sizeof d, "%s[%.0f,%.0f]", i ? "," : "", dips[i].first, dips[i].second);
+        j += d;
+    }
+    return j + "]}";
+}
+
 inline std::string sysJson(const SysStats& s) {
     std::string j = "{\"cores\":" + std::to_string(s.cores);
     if (s.haveLoad) {
@@ -1751,6 +1791,7 @@ inline std::string sysJson(const SysStats& s) {
         j += ",\"underVoltage\":";     j += s.underVoltageNow  ? "true" : "false";
         j += ",\"underVoltageEver\":"; j += s.underVoltageEver ? "true" : "false";
     }
+    if (s.havePower) j += ",\"power\":" + powerJson(s.power, s.powerDips);
     j += std::string(",\"tempStatus\":\"") + tempStatus(s) + "\"";
     if (s.haveMem) {
         j += ",\"memTotalKB\":" + std::to_string(s.memTotalKB)

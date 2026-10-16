@@ -278,10 +278,10 @@ index ca5768d..263bdd4 100644
    jmethodID _updateTexImageMethod = nullptr;
 diff --git a/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h
 new file mode 100644
-index 0000000..b1d64a7
+index 0000000..d3b88d2
 --- /dev/null
 +++ b/node_modules/@shopify/react-native-skia/android/cpp/rnskia-android/RNSkRenderThread.h
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,297 @@
 +#pragma once
 +
 +// VIBESDR PATCH — ONE SKIA RENDER THREAD FOR EVERY CANVAS (Android, OpenGL).
@@ -481,16 +481,37 @@ index 0000000..b1d64a7
 +  }
 +
 +  static void onFrame64(int64_t frameTimeNanos, void *d) { static_cast<RNSkRenderThread *>(d)->frame(frameTimeNanos); }
-+  static void onFrame32(long frameTimeNanos, void *d) { static_cast<RNSkRenderThread *>(d)->frame((int64_t)frameTimeNanos); }
++  // ★★★ THE 32-BIT FRAME TIME (NickB, Moto G6, Android 9, 2026-10-16: "waterfall does not appear" — audio fine).
++  //   postFrameCallback64 is API 29+, so on Android 7-9 the only callback is this one, and its frame time is a `long`.
++  //   The Moto G6 runs a 32-BIT userspace on its 64-bit SoC: there `long` is 32 bits and Android hands over the vsync
++  //   time TRUNCATED to its low 32 bits — the very bug API 29 added the 64-bit call to fix. Compared with the full
++  //   64-bit request times in frame(), no request was ever "before this vsync", so nothing was ever drawn: the queue
++  //   re-posted itself every vsync for ever and every vsync-tied canvas (waterfall, spectrum) stayed blank.
++  //   Rebuild the full time from the low 32 bits and our own clock (the same CLOCK_MONOTONIC): the vsync is at most a
++  //   few ms in the past, far inside the 4.29 s the low bits cover. Done whatever `long`'s width — exact on 64-bit
++  //   too, so the API 24-28 path is ONE code path on every phone (and testable on a 64-bit API 28 emulator).
++  static void onFrame32(long frameTimeNanos, void *d) {
++    const int64_t now = nowNs();
++    const uint32_t back = (uint32_t)now - (uint32_t)(uint64_t)frameTimeNanos;   // now − vsync, mod 2^32
++    // A vsync "in the future" or over a second old cannot be real: take now, which draws everything already asked for.
++    const int64_t vsync = back < 1000000000u ? now - (int64_t)back : now;
++    static_cast<RNSkRenderThread *>(d)->frame(vsync);
++  }
 +
 +  void frame(int64_t vsyncNs) {
 +    _framePosted = false;
 +    std::vector<std::function<void()>> due;
++    const int64_t now = nowNs();
 +    {
 +      std::lock_guard<std::mutex> lock(_mx);
 +      auto it = _frameQ.begin();
 +      while (it != _frameQ.end()) {
-+        if (it->first < vsyncNs) { due.push_back(std::move(it->second)); it = _frameQ.erase(it); }
++        // ★ Belt and braces: a request older than 100 ms is drawn whatever the vsync says. A redraw must never hang on
++        //   a timestamp we cannot vouch for (a vendor Choreographer on another clock) — a late frame beats a blank one.
++        if (it->first < vsyncNs || now - it->first > 100000000LL) {
++          due.push_back(std::move(it->second));
++          it = _frameQ.erase(it);
++        }
 +        else ++it;
 +      }
 +    }
@@ -558,6 +579,33 @@ index 0000000..b1d64a7
 +};
 +
 +} // namespace RNSkia
+diff --git a/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java b/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
+index d776590..6c6b05a 100644
+--- a/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
++++ b/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
+@@ -47,6 +47,22 @@ public class SkiaTextureView extends TextureView implements TextureView.SurfaceT
+         return true;
+     }
+ 
++    /* VIBESDR PATCH — REPAINT WHEN THE WINDOW COMES BACK (2026-10-13, Moto G35). After saving a recording to Google
++     * Drive and returning, the tuning and zoom drums and part of the status row were BLANK until touched or rotated.
++     * Android may drop a hidden window's layers; canvases that draw every frame (waterfall, spectrum) refill on their
++     * own, but a still canvas only draws when its picture changes, so nothing asked it to paint again. A rotation fixed
++     * it because a size change always redraws — so returning to view takes that same path: the native size-change
++     * handler resizes the surface (a no-op at the same size) and redraws the current picture. One redraw per canvas on
++     * each return, nothing otherwise. */
++    @Override
++    protected void onWindowVisibilityChanged(int visibility) {
++        super.onWindowVisibilityChanged(visibility);
++        if (visibility == VISIBLE && isAvailable() && getWidth() > 0 && getHeight() > 0) {
++            SurfaceTexture st = getSurfaceTexture();
++            if (st != null) mApi.onSurfaceTextureChanged(st, getWidth(), getHeight());
++        }
++    }
++
+     private long _prevTimestamp = 0;
+     @Override
+     public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
 diff --git a/node_modules/@shopify/react-native-skia/cpp/api/JsiSkHostObjects.h b/node_modules/@shopify/react-native-skia/cpp/api/JsiSkHostObjects.h
 index 756476f..7cf2b2d 100644
 --- a/node_modules/@shopify/react-native-skia/cpp/api/JsiSkHostObjects.h
@@ -968,29 +1016,3 @@ index 08c16a9..9f07439 100644
      visit(recorder, this.root);
      const sharedValues = recorder.getSharedValues();
      const sharedRecorder = recorder.getRecorder();
-diff --git a/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java b/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
---- a/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
-+++ b/node_modules/@shopify/react-native-skia/android/src/main/java/com/shopify/reactnative/skia/SkiaTextureView.java
-@@ -47,6 +47,22 @@
-         return true;
-     }
- 
-+    /* VIBESDR PATCH — REPAINT WHEN THE WINDOW COMES BACK (2026-10-13, Moto G35). After saving a recording to Google
-+     * Drive and returning, the tuning and zoom drums and part of the status row were BLANK until touched or rotated.
-+     * Android may drop a hidden window's layers; canvases that draw every frame (waterfall, spectrum) refill on their
-+     * own, but a still canvas only draws when its picture changes, so nothing asked it to paint again. A rotation fixed
-+     * it because a size change always redraws — so returning to view takes that same path: the native size-change
-+     * handler resizes the surface (a no-op at the same size) and redraws the current picture. One redraw per canvas on
-+     * each return, nothing otherwise. */
-+    @Override
-+    protected void onWindowVisibilityChanged(int visibility) {
-+        super.onWindowVisibilityChanged(visibility);
-+        if (visibility == VISIBLE && isAvailable() && getWidth() > 0 && getHeight() > 0) {
-+            SurfaceTexture st = getSurfaceTexture();
-+            if (st != null) mApi.onSurfaceTextureChanged(st, getWidth(), getHeight());
-+        }
-+    }
-+
-     private long _prevTimestamp = 0;
-     @Override
-     public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
