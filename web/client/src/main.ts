@@ -10809,7 +10809,12 @@ function renderRds() {
     ceqEl.textContent = why === 1 ? 'off'
                       : why === 2 ? 'signal too weak to equalise'
                       : 'standing by · nothing to correct';
-    ceqEl.style.color = '';
+    /* ★★ GREEN WHEN THERE IS NOTHING TO CORRECT — that is the healthy answer, the same verdict
+     *    MULTIPATH gives in green on the row above ("clean"), and BLANKER gives for "nothing to
+     *    blank". Stuart, 2026-10-16: CEQ and IF NARROW "should be green ... as both of them are
+     *    reporting everything being within normal parameters". "off" is the listener's choice and
+     *    "too weak" is a limit, not a fault — both stay uncoloured. */
+    ceqEl.style.color = why === 1 || why === 2 ? '' : '#7dff9a';
   } else { ceqEl.textContent = dash; ceqEl.style.color = ''; }
 
   // ★★ THE IF-NARROWING BENEFIT, read against the CURRENT state — the shadow always evaluates THE
@@ -10850,7 +10855,12 @@ function renderRds() {
     const kHz = Math.round(ifC / 1000);
     const verdict = ifG > 1.5 ? 'would help' : ifG < -1.5 ? 'would cost' : 'no real gain';
     ifEl.textContent = `wide · ${kHz}k ${verdict} (${ifG >= 0 ? '+' : ''}${ifG.toFixed(1)} dB)`;
-    ifEl.style.color = ifG > 1.5 ? '#7dff9a' : '';
+    /* ★★ GREEN IN EVERY VERDICT HERE. This arm is the filter sitting WIDE with the shadow judging
+     *    the 110k cut: "would cost" and "no real gain" both mean wide is the right choice — normal
+     *    parameters, not a quiet warning (Stuart, 2026-10-16) — and "would help" is the adjacent-
+     *    channel arm's own evidence, which engages from here or deliberately declines to trade a
+     *    live RDS decode for under 3 dB. None of the three is a fault on this receiver. */
+    ifEl.style.color = '#7dff9a';
   } else { ifEl.textContent = dash; ifEl.style.color = ''; }
 
   const pdev = rdsExt?.pilotDev ?? 0;
