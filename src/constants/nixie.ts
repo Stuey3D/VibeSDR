@@ -88,9 +88,14 @@ const TWO: Stroke[] = [
   { k: 'cubic', p0: [0.02, 0.92], c1: [0.01, 0.98], c2: [0.05, 1.0], p1: [0.12, 1.0] },  // rounded corner
   { k: 'line', pts: [[0.12, 1.0], [0.60, 1.0]] },                                       // flat base, no upturn
 ];
+/* ★ The 6 LEANS (Stuart, 2026-10-16: "the 6 and 9 need to rotate slightly"). Measured on the 4K 6
+ *   (IMG_1559 11.6 s): the stem is a STRAIGHT wire at 29° from vertical, from the top right down to a
+ *   tangent with the left of a round bowl (centre 0.297, 0.721; r 0.276 of the digit height). The 9
+ *   (12.7 s) is the same part turned round: its tail measures 25°. Was: a curve starting at 42° and
+ *   curling to upright at the bowl. */
 const SIX: Stroke[] = [
-  { k: 'cubic', p0: [0.50, 0.0], c1: [0.30, 0.22], c2: [0.06, 0.45], p1: [0.005, 0.68] }, // from the top right
-  { k: 'arc', cx: 0.30, cy: 0.69, rx: 0.295, ry: 0.31, a0: 0, sweep: 360 },            // the bowl
+  { k: 'line', pts: [[0.384, 0.0], [0.055, 0.584]] },                                   // the stem, tangent to the bowl
+  { k: 'arc', cx: 0.297, cy: 0.721, rx: 0.276, ry: 0.276, a0: 0, sweep: 360 },          // the bowl
 ];
 const flipY = (st: Stroke[]): Stroke[] => st.map((s) => s.k === 'line' ? { ...s, pts: s.pts.map(([x, y]) => [x, 1 - y] as [number, number]) }
   : s.k === 'arc' ? { ...s, cy: 1 - s.cy, a0: -s.a0, sweep: -s.sweep }
@@ -221,8 +226,8 @@ export const meshWire = (tw: number) => Math.max(0.35, tw * 0.012);
  */
 export interface NeonLayer { width: number; sigma: number; color: string; alpha: number }
 export const DIGIT_NEON: NeonLayer[] = [
-  { width: 0.16,  sigma: 0.15,  color: 'rgb(200,62,6)',   alpha: 0.70 },   // wide bloom, fills the window
-  { width: 0.09,  sigma: 0.05,  color: 'rgb(214,84,9)',   alpha: 0.95 },   // the gas sheath
+  { width: 0.16,  sigma: 0.15,  color: 'rgb(200,62,6)',   alpha: 0.80 },   // wide bloom, fills the window
+  { width: 0.09,  sigma: 0.05,  color: 'rgb(214,84,9)',   alpha: 1 },   // the gas sheath
   { width: 0.062, sigma: 0.016, color: 'rgb(240,110,8)',  alpha: 1 },      // the glow hugging the wire
   { width: 0.046, sigma: 0.006, color: 'rgb(252,150,22)', alpha: 1 },      // the hot core round the wire
   { width: 0.03,  sigma: 0.003, color: 'rgb(255,182,60)', alpha: 1 },      // white-hot next to the wire
@@ -242,7 +247,7 @@ const WIRE_FRONT     = 'rgba(30,26,22,0.55)';      // in front of a lit digit: d
 /** The anode mesh in front of the stack: it shadows the glow as fine hex lines, and is lit warm itself. */
 const MESH_SHADOW    = 'rgba(40,14,4,0.17)';
 const MESH_LIT       = 'rgba(230,100,30,0.20)';
-const MESH_WASH      = 'rgba(190,70,8,0.32)';
+const MESH_WASH      = 'rgba(190,70,8,0.36)';
 
 /**
  * Draw ONE tube's inside — the whole cathode stack with `lit` glowing at its own depth (null = a
