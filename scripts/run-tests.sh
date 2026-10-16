@@ -268,6 +268,9 @@ if node --no-warnings scripts/test_faceplate_nixie.ts; then pass=$((pass+1)); el
 #     table the LEDs light from, Φ((μ − T)/σ) with its σ floor, the eye filter as the only easing, the
 #     steady-LED hysteresis, and the needle's 300 ms / 1 % ballistics — the maths, checked as data.
 if node --no-warnings scripts/test_faceplate_meters.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE READOUT COMES FIRST, THE TUNING ROW IS NEVER SMALLER THAN THE MENU ROW (2026-10-16, iPhone 12): the
+#     portrait deck at 320–430 pt and tablets, every chassis × meter × shared × TUNE (drums / keys / DAB MUX).
+if node --no-warnings scripts/test_deck_readout_first.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ WORKLETS AS THE UI THREAD RUNS THEM (the 11 B7 LED VU crash): a default parameter that names a
 #     module constant THROWS on the UI thread (the plugin unpacks captures inside the body), so every
 #     worklet in src/ is compiled with the app's plugin and checked, and the meters' frame callbacks are

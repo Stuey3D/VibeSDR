@@ -2902,6 +2902,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Zeroed when the overlay goes: onLayout only fires while it EXISTS, so a stale height would
    *    leave the clock hovering below nothing after a server switch. */
   const [stationIdH,    setStationIdH]    = useState(0);
+  const [serversChipW,  setServersChipW]  = useState(0);   // the collapsed Servers chip — the name stops short of it
   useEffect(() => { if (!stationId) setStationIdH(0); }, [stationId]);
   // Server software version (menu footer — identifies the backend type)
   const [serverVersion, setServerVersion] = useState<string | null>(null);
@@ -10525,6 +10526,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         onStationIdHeight={setStationIdH}
         // ★ Same edge as the session clock and the listener count below it — see rightInset.
         stationIdRight={rightInset}
+        // ★ …and it stops short of the Servers chip opposite (2026-10-16: on an iPhone 12 a long location line
+        //   ran underneath it). Only while the chip is drawn.
+        stationIdLeft={!controlsHidden && serversChipW > 0 ? Math.max(12, insets.left + 8) + serversChipW + 10 : undefined}
         specFrac={specFrac}
         panLoHz={walls?.loHz}
         panHiHz={walls?.hiHz}
@@ -11284,6 +11288,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           openToken={serversToken}
           closeToken={serversCloseToken}
           onExpandedChange={setServersOpen}
+          onChipWidth={setServersChipW}
         />
         </PanelBoundary>
       )}

@@ -92,6 +92,36 @@ export interface DeckLayout {
   /** The fixed block: displayH + rowGap + keySlot. The same for every meter × shared on a chassis,
    *  except the default chassis's BAR, which is today's (see portraitDeck). */
   blockH:      number;
+  /** ★ The keys were held below this layout's own key size (`maxKey`, phoneBarStack) — draw them as the
+   *  compact deck draws its keys (radius, hitSlop into the gaps). Absent = false. */
+  keysCompact?: boolean;
+}
+
+/** The four keys' legend scale for a slot: full at the layout's own key, 88 % down to the compact 44, 80 % below. */
+function legendFor(k: number, own: number, ownScale: number, r: (n: number) => number): number {
+  if (k >= own) return ownScale;
+  return Math.min(ownScale, k >= r(DECK.compactKey) ? DECK.legendScale : DECK.legendScaleShared);
+}
+
+/**
+ * ★★★ THE TUNING ROW IS NEVER SMALLER THAN THE MENU ROW (Stuart, 2026-10-16: "the most important controls should
+ *  not be smaller than the sub controls for the menus etc."). The four keys (step / audio / cog / chat) are the
+ *  MENU row; ‹ › and − + are the TUNING row. With TUNE = keys the tuning keys are the 60 pt well less its padding
+ *  (44 pt; 36 under DAB's MUX label), and the menu keys were 44 (58 on silver / black's bar deck) — the menu row
+ *  out-sized the controls you actually tune with. `maxKey` caps the menu slot at the tuning key's height. On the
+ *  LED / analogue deck the room goes to the frequency window (one deck height holds); on the bar deck it goes
+ *  back to the waterfall (the deck is shorter by it), since that window is already the deck's largest.
+ */
+function capKeys(d: DeckLayout, maxKey: number | undefined, r: (n: number) => number): DeckLayout {
+  if (maxKey == null || d.keySlot <= maxKey) return d;
+  const k = Math.max(1, Math.floor(maxKey));
+  const give = d.keySlot - k;
+  const legendScale = legendFor(k, d.keySlot, d.legendScale, r);
+  // ★ The bar deck gives the room back to the WATERFALL instead: its window is already the largest the deck draws
+  //   (silver / black's 62 pt), and a taller one only stretched the tubes. The LED / analogue window takes it.
+  return d.compact
+    ? { ...d, keySlot: k, legendScale, displayH: d.displayH + give, freqH: d.freqH + give, keysCompact: true }
+    : { ...d, keySlot: k, legendScale, blockH: d.blockH - give, keysCompact: true };
 }
 
 /**
@@ -115,7 +145,13 @@ export interface DeckLayout {
  * @param r       the UI scale's rounding (s.r)
  */
 export function portraitDeck(o: { cap: boolean; meter: MeterKind; shared: boolean; tablet: boolean;
-                                  rowGap: number; r: (n: number) => number }): DeckLayout {
+                                  rowGap: number; r: (n: number) => number;
+                                  /** The tuning row's key height when it draws keys (see capKeys). */
+                                  maxKey?: number }): DeckLayout {
+  return capKeys(portraitDeck0(o), o.maxKey, o.r);
+}
+function portraitDeck0(o: { cap: boolean; meter: MeterKind; shared: boolean; tablet: boolean;
+                            rowGap: number; r: (n: number) => number }): DeckLayout {
   const { r, rowGap } = o;
   const fixedBlock = r(DECK.barH) + rowGap + r(DECK.barKey);
   if (o.meter === 'bar') {
@@ -154,6 +190,81 @@ export function portraitDeck(o: { cap: boolean; meter: MeterKind; shared: boolea
 export function compactKeyHitSlop(slot: number, rowGap: number, colGap: number) {
   const top = rowGap, bottom = rowGap / 2;
   return { top, bottom, left: colGap / 2, right: colGap / 2, reach: slot + top + bottom };
+}
+
+/** The phone bar stack's smallest usable frequency window (the 26 pt the DAB-line rule already called usable). */
+export const BAR_STACK_PILL_MIN = 26;
+
+export interface BarStack {
+  /** The four main keys' slot, and their legend scale. */
+  keySlot:     number;
+  legendScale: number;
+  /** The keys stepped down from the chassis's bar key — draw them as the compact deck's keys (hitSlop). */
+  keysCompact: boolean;
+  /** The display column: [banner inside] / the frequency window / the line meter. */
+  displayH:    number;
+  pillH:       number;
+  lineH:       number;
+  /** The SHARED TUNER banner inside the column, or as a strip of its own above it (bannerOut adds its
+   *  height to the deck — the one case the block cannot hold it with the readout still first). */
+  bannerIn:    boolean;
+  bannerOut:   boolean;
+}
+
+/**
+ * ★★★ THE READOUT COMES FIRST (ChicopeeRadio2009's iPhone 12 + Stuart, 2026-10-16: "the main controls are
+ *  smaller than the sub controls, it should be the other way around"). The phone's portrait BAR deck — the
+ *  default meter — is [banner] / the full-width frequency window / a thin line meter, then the four keys. It
+ *  took today's 40 pt bar and 44 pt keys whole, so the frequency window was 30 pt under 44 pt keys at EVERY
+ *  phone width (the LED / analogue deck's shared keys step down to 34; the bar's never did). That is not a
+ *  width or font-scale breakpoint — it was the meter setting.
+ *
+ *  Now the deck's block (display + keys) stays EXACTLY today's height and is shared out with one rule: the
+ *  frequency window is never smaller than the keys. The keys step down the deck's own ladder — the chassis's
+ *  bar key, then the compact 44, then the compact shared 34 (the LED deck's "half height" keys, whose hitSlop
+ *  keeps the 44 pt reach) — until the window left over is at least as tall as they are.
+ *  ★ A shared server's banner goes INSIDE the column if the readout still comes first there (silver / black:
+ *    one deck height, keys 58 → 44); otherwise it is a strip of its own above the column, as it was before
+ *    (the default chassis: 40 + 44 cannot hold a 20 pt banner and two equal halves).
+ *  ★ `base` comes from portraitDeck with `maxKey` already applied, so the menu keys here never out-size the
+ *    tuning keys either (the ladder only steps DOWN from base.keySlot).
+ *  ★ Pure, scaled numbers in, so scripts/test_deck_readout_first.ts measures it at every phone width.
+ *
+ * @param base    portraitDeck's bar layout (its displayH + keySlot is the block)
+ * @param bannerH the banner strip's height with its margin (ControlsBar P_BANNER_H)
+ * @param thinH   the line meter; dabLineH: the DAB reception line's preferred height while DAB is on, else null
+ * @param gap     the gap between the window and the line meter (and the banner)
+ */
+export function phoneBarStack(o: { base: DeckLayout; shared: boolean; bannerH: number; thinH: number;
+                                   dabLineH: number | null; gap: number; r: (n: number) => number;
+                                   /** The tuning keys' height when the tuning row is keys (capKeys). */
+                                   maxKey?: number }): BarStack {
+  const { base, r, gap, thinH } = o;
+  const cap = o.maxKey == null ? base.keySlot : Math.min(base.keySlot, Math.floor(o.maxKey));
+  const ladder = [cap, r(DECK.compactKey), r(DECK.compactKeyShared)]
+    .filter((k, i, a) => k <= cap && a.indexOf(k) === i)
+    .sort((a, b) => b - a);
+  // ★ The window never grows past the bar frame's own (silver / black's 72 pt frame): when capped keys free more
+  //   than that, the block itself is shorter — the room goes back to the WATERFALL (a taller window only stretched
+  //   the tubes) — and it is the SAME block shared or not, so one deck height still holds on a chassis.
+  const block = Math.min(base.displayH + base.keySlot, r(DECK.barH) + ladder[0]);
+  const banner = (inside: boolean) => (inside ? o.bannerH : 0);
+  // ★ DAB's reception line takes a text line's height out of the window, never below max(26, the keys).
+  const lineOf = (displayH: number, inside: boolean, k: number) => o.dabLineH == null ? thinH
+    : Math.max(thinH, Math.min(o.dabLineH, displayH - gap - Math.max(BAR_STACK_PILL_MIN, k) - banner(inside)));
+  const lay = (k: number, inside: boolean) => {
+    const displayH = block - k;
+    const lineH = lineOf(displayH, inside, k);
+    return { k, displayH, lineH, pillH: displayH - lineH - gap - banner(inside) };
+  };
+  const pick = (inside: boolean) => ladder.map(k => lay(k, inside)).find(l => l.pillH >= l.k);
+  let bannerIn = false;
+  let l = o.shared ? pick(true) : undefined;
+  if (l) bannerIn = true;
+  else l = pick(false) ?? lay(ladder[ladder.length - 1], false);
+  const legendScale = legendFor(l.k, base.keySlot, base.legendScale, r);
+  return { keySlot: l.k, legendScale, keysCompact: l.k < base.keySlot, displayH: l.displayH, pillH: l.pillH,
+           lineH: l.lineH, bannerIn, bannerOut: o.shared && !bannerIn };
 }
 
 /**

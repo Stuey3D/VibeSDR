@@ -68,7 +68,8 @@ import { placePath } from './vfdMesh';
 import { StatusGhostContext, StatusRun } from './StatusField';
 import { statusParts, statusTags, type StatusPart } from '../constants/statusField';
 import { androidGlass, FONT_DOTO, FONT_HYPER, LAMP_OFF_LEGEND, rgba, NO_DROP_SHADOW, screenOneWeight, statusDisplayFor, type StatusDisplay } from '../constants/faceplate';
-import { DECK, portraitDeck, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
+import { tunerKeysLayout } from '../constants/drumWell';
+import { DECK, portraitDeck, phoneBarStack, landscapeDeck, compactKeyHitSlop, sqlClosedOf, type MeterKind, type DeckLayout,
   type LandscapeLayout, METER_SCALES, formatReading, meterReading, meterUnitOf, scaleMeterValues,
   makeScaledMeterState, type MeterUnit } from '../constants/meters';
 import { statusGainParts, statusGainText, statusFit, statusFits, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec,
@@ -1081,7 +1082,10 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
         // ★★ DOT: the unit in the window's own dots, case kept — "kHz" / "MHz" (2026-10-06). A fixed three cells.
         <DotUnit unit={unit} freqDotFont={dotFont} columnW={unitW - 3} />
       ) : (
-        <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.unitFont, fontSize: unitFontSize, paddingBottom: 0 }]} numberOfLines={1}>
+        // ★ "MHz" read "M…" on an iPhone 12 under Nixie (2026-10-16): the column is fixed (unitW, so the digits never
+        //   move) and the unit face's M is wide — the word shrinks to its column rather than lose two letters.
+        <Text style={[pm.unit, { color: dk.unit, fontFamily: dk.unitFont, fontSize: unitFontSize, paddingBottom: 0 }]}
+              numberOfLines={1} adjustsFontSizeToFit {...DISPLAY_TEXT}>
           {unit}
         </Text>
       )}
@@ -2141,21 +2145,14 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
    *  or shrink the deck. The bar keeps today's sizes (§4.2); on silver / black its frame is the
    *  mockup's 72 pt so the bar deck is the same height as the other two. */
   const meterKind  = fp.settings.meter;
-  const dl         = portraitDeck({ cap: isCap, meter: meterKind, shared: !!sharedDial, tablet: s.isTablet,
-                                    rowGap: ROW_GAP, r: s.r });
-  const KEY_SLOT   = dl.keySlot;
-  const pulseR     = !isCap ? 4 : dl.compact ? s.r(8) : 10;
-  const ICON_SZ    = Math.round(s.r(20) * dl.legendScale);
-  // ★ §4.1 TRAP: a 34 pt key is below 44 pt — its hitSlop reaches into the gaps round it.
-  const keySlop    = dl.compact ? compactKeyHitSlop(KEY_SLOT, ROW_GAP, COL_GAP) : undefined;
-  // ★★ THE PANEL-GAP LIGHT (constants/keyLight.ts): each key's light may take its share of the tightest
-  //   gap round it — the row gap to the display above and the drums below, the column gap to its
-  //   neighbours — so two keys' lights never run together into one glowing bar.
-  const lightReach = keyLightReach(Math.min(ROW_GAP, COL_GAP));
-  const keyProps   = dl.compact
-    ? { height: KEY_SLOT, radius: s.r(8), lightReach, hitSlop: keySlop && { top: keySlop.top, bottom: keySlop.bottom,
-                                                               left: keySlop.left, right: keySlop.right } }
-    : { height: KEY_SLOT, minHeight: true, lightReach };
+  /* ★★★ THE TUNING ROW IS NEVER SMALLER THAN THE MENU ROW (Stuart, 2026-10-16 — constants/meters.ts capKeys). With
+   *  TUNE = keys, ‹ › / − + are keys in the 60 pt well (44 pt; 36 under DAB's MUX label); the menu keys are capped
+   *  at that and the display takes back the room. Drums are the whole 60 pt well — nothing to cap against. */
+  const tuneKeyH   = IS_TV || !(vfoKeys || (zoomKeys && !singleDrum)) ? undefined
+    : Math.min(vfoKeys ? tunerKeysLayout(0, DRUM_H, false, s.r, vfoMuxLabel != null).keyH : Infinity,
+               zoomKeys && !singleDrum ? tunerKeysLayout(0, DRUM_H, false, s.r, false).keyH : Infinity);
+  const dl0        = portraitDeck({ cap: isCap, meter: meterKind, shared: !!sharedDial, tablet: s.isTablet,
+                                    rowGap: ROW_GAP, r: s.r, maxKey: tuneKeyH });
   // Freq/mode sizing — read from theme so white mode can increase them
   // Pill sized to leave the signal bar visible around it (the white theme's
   // 28pt/168w pill covered the whole frame — screenshots 2026-06-11; 23/138
@@ -2165,6 +2162,50 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   // (screenshots 2026-06-12).
   const tight      = Platform.OS === 'android' || s.isSmall;
   const FREQ_FONT  = s.r(tight ? 19 : 22);
+  /* ★★ THE SHARED TUNER BANNER LEAVES THE METER WHEN IT CANNOT SHARE IT (found on an emulator at the SE in
+   *  Display Zoom's 320 × 568, 2026-10-03): the bar frame is r(40) = 33 pt there, the banner ~20 of it, and the
+   *  frequency underneath was cut in half. Shrinking the digits to fit would have left them ~9 pt, so instead the
+   *  banner becomes its own strip above the frame — as the LED / analogue display already draws it — and the
+   *  pill keeps the whole frame. */
+  /* ★★★ THE PHONE BAR: FREQUENCY ACROSS, METER UNDER — portrait too (Stuart, 2026-10-03, after landscape had it:
+   *  "that signal meter … its massive and reduces the space available to tune frequency and shared tuner message
+   *  … go to the line meter we have in landscape just scaled up a tiny amount"). The bar frame drew a gradient
+   *  the full height of the display with the pill floating at 66–74 % of it. Now the display's own height holds
+   *  [SHARED TUNER banner] / the full-width pill / a 6 pt line meter. Phone windows only; tablets / Mac keep today's.
+   *  ★★★ AND THE READOUT COMES FIRST (2026-10-16, ChicopeeRadio2009's iPhone 12): that column was today's 40 pt
+   *    bar under 44 pt keys, so the frequency window was 30 pt — SMALLER than the keys under it, on every phone.
+   *    constants/meters.ts phoneBarStack shares the same block out so the window is never smaller than the keys:
+   *    the keys step down to the compact deck's sizes first (default 44 → 34, the window 30 → 40; metal + shared
+   *    58 → 44 with the banner inside). The deck's height is unchanged; a shared default deck still adds the
+   *    banner strip above it, as before. */
+  const pStack     = !dl0.compact && !s.isTablet;
+  const P_THIN     = Math.max(6, s.r(7));
+  const P_GAP      = Math.max(2, s.r(3));
+  const P_BANNER_H = Math.round(sharedBannerFont(FREQ_FONT) * 1.25) + 9;   // SharedBanner's box + its 3 pt margin
+  /* ★★ DAB (2026-10-06): the thin line becomes the reception meter — bars and a line of text — so it takes a
+   *  text line's height out of the pill, never below the 26 pt the banner rule already calls usable. */
+  const dab        = React.useContext(DabMeterContext);
+  // ★ The phone bar stack takes the UNCAPPED deck and the tuning keys' height itself (it shares the room out).
+  const stack      = pStack ? phoneBarStack({ base: portraitDeck({ cap: isCap, meter: meterKind, shared: !!sharedDial,
+                                                tablet: false, rowGap: ROW_GAP, r: s.r }),
+                                              shared: !!sharedDial, bannerH: P_BANNER_H, thinH: P_THIN,
+                                              dabLineH: dab ? s.r(13) : null, gap: P_GAP, r: s.r, maxKey: tuneKeyH }) : null;
+  const dl         = stack ? { ...dl0, keySlot: stack.keySlot, legendScale: stack.legendScale, displayH: stack.displayH } : dl0;
+  // ★ Keys below the chassis's own bar key are drawn as the compact deck draws its keys (radius, hitSlop).
+  const keysCompact = dl.compact || (stack ? stack.keysCompact : !!dl0.keysCompact);
+  const KEY_SLOT   = dl.keySlot;
+  const pulseR     = !isCap ? 4 : keysCompact ? s.r(8) : 10;
+  const ICON_SZ    = Math.round(s.r(20) * dl.legendScale);
+  // ★ §4.1 TRAP: a 34 pt key is below 44 pt — its hitSlop reaches into the gaps round it.
+  const keySlop    = keysCompact ? compactKeyHitSlop(KEY_SLOT, ROW_GAP, COL_GAP) : undefined;
+  // ★★ THE PANEL-GAP LIGHT (constants/keyLight.ts): each key's light may take its share of the tightest
+  //   gap round it — the row gap to the display above and the drums below, the column gap to its
+  //   neighbours — so two keys' lights never run together into one glowing bar.
+  const lightReach = keyLightReach(Math.min(ROW_GAP, COL_GAP));
+  const keyProps   = keysCompact
+    ? { height: KEY_SLOT, radius: s.r(8), lightReach, hitSlop: keySlop && { top: keySlop.top, bottom: keySlop.bottom,
+                                                               left: keySlop.left, right: keySlop.right } }
+    : { height: KEY_SLOT, minHeight: true, lightReach };
   const FREQ_W     = s.r(tight ? 112 : 130);
 
   const { ref: drumRowRef, onLayout: guardDrums } = useDrumSwipeGuard();
@@ -2182,34 +2223,13 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   const PILL_GAP   = s.r(5);
   const BTN_FONT   = s.f(t.btnSize);
   const CLOCK_FONT = s.f(8);
-  /* ★★ THE SHARED TUNER BANNER LEAVES THE METER WHEN IT CANNOT SHARE IT (found on an emulator at the SE in
-   *  Display Zoom's 320 × 568, 2026-10-03): the bar frame is r(40) = 33 pt there, the banner ~20 of it, and the
-   *  frequency underneath was cut in half. Shrinking the digits to fit would have left them ~9 pt, so instead the
-   *  banner becomes its own strip above the frame — as the LED / analogue display already draws it — and the
-   *  pill keeps the whole frame. Only where they cannot both fit: every larger phone is unchanged. */
-  /* ★★★ THE PHONE BAR: FREQUENCY ACROSS, METER UNDER — portrait too (Stuart, 2026-10-03, after landscape had it:
-   *  "that signal meter … its massive and reduces the space available to tune frequency and shared tuner message
-   *  … go to the line meter we have in landscape just scaled up a tiny amount"). The bar frame drew a gradient
-   *  the full height of the display with the pill floating at 66–74 % of it. Now the display's own height holds
-   *  [SHARED TUNER banner] / the full-width pill / a 6 pt line meter — the deck does not change height, the
-   *  frequency and the banner get the room the gradient had. Phone windows only; tablets / Mac keep today's.
-   *  ★ The banner stays INSIDE the display while the pill keeps a usable 26 pt; otherwise it is a strip above
-   *    (the SE's 33 pt default frame — as before, bannerOut). */
-  const pStack     = !dl.compact && !s.isTablet;
-  const P_THIN     = Math.max(6, s.r(7));
-  const P_GAP      = Math.max(2, s.r(3));
-  const P_BANNER_H = Math.round(sharedBannerFont(FREQ_FONT) * 1.25) + 9;   // SharedBanner's box + its 3 pt margin
-  const bannerIn   = pStack && !!sharedDial && dl.displayH - P_THIN - P_GAP - P_BANNER_H >= 26;
-  /* ★★ DAB (2026-10-06): the thin line becomes the reception meter — bars and a line of text — so it takes a
-   *  text line's height out of the pill, never below the 26 pt the banner rule already calls usable. The deck's
-   *  height is unchanged; only the digits step down a little, and only while DAB is on. */
-  const dab        = React.useContext(DabMeterContext);
-  const P_LINE     = dab ? Math.max(P_THIN, Math.min(s.r(13), dl.displayH - P_GAP - 26 - (bannerIn ? P_BANNER_H : 0)))
-                         : P_THIN;
-  const P_PILL     = dl.displayH - P_LINE - P_GAP - (bannerIn ? P_BANNER_H : 0);
+  const bannerIn   = !!stack?.bannerIn;
+  const P_LINE     = stack ? stack.lineH : P_THIN;
+  const P_PILL     = stack ? stack.pillH : 0;
   const FRAME_DAB_H = s.r(14);
-  const bannerOut  = !dl.compact && !!sharedDial && !bannerIn
-                     && (pStack || !barFitsBanner(dl.displayH, FREQ_FONT, PILL_PAD_V));
+  // ★ Tablets / Mac: the banner leaves the bar frame only when the two cannot share it (barFitsBanner).
+  const bannerOut  = !!stack?.bannerOut
+                     || (!pStack && !dl.compact && !!sharedDial && !barFitsBanner(dl.displayH, FREQ_FONT, PILL_PAD_V));
 
   return (
     <View style={{ gap: ROW_GAP }}>
