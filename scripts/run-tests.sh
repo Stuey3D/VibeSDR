@@ -122,6 +122,10 @@ deps_for() {
     test-asndb)         echo "$SRC/asndb.cpp $SRC/proc.cpp" ;;
     test-moveloc)       echo "$SRC/moveloc.cpp $SRC/proc.cpp" ;;
     test-admin-banlist) echo "" ;;
+    # ★★ The POWER card's verdict (vibe_power.h, 2026-10-16): brief supply dips amber; red only for a dip
+    #    held ≥ 10 s, near-continuous dips, USB over-current, or a USB device lost in a dip. Header-only,
+    #    with a fake /sys and /dev for the rpi_volt alarm and the USB scans.
+    test-power-dips)    echo "" ;;
     test-decoder-hardening) echo "android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp" ;;
@@ -198,6 +202,8 @@ if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fa
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
 if node scripts/test-visit-grouping.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ The admin page's real module in jsdom (no browser, no audio): health cards, POWER's amber/red verdicts, bans, polling.
+if node scripts/test-admin-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ A DATA MIGRATION, so it is tested: bookmarks move from being keyed on the URL you arrived by
 #    to the server's own identity. The failure modes are somebody's bookmarks going invisible on
 #    upgrade, or one server adopting another's — neither of which looks wrong in a screenshot.

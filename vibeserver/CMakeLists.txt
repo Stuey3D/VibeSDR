@@ -581,6 +581,11 @@ foreach(v native boost)
   endif()
   add_test(NAME health-snail-${v} COMMAND test-health-snail-${v})
 endforeach()
+# ★ The POWER card's verdict (vibe_power.h): brief supply dips amber, sustained / continuous / USB loss red.
+add_executable(test-power-dips "${CMAKE_CURRENT_SOURCE_DIR}/test-power-dips.cpp")
+target_include_directories(test-power-dips PRIVATE "${CPP_DIR}")
+target_link_libraries(test-power-dips PRIVATE Threads::Threads)
+add_test(NAME power-dips COMMAND test-power-dips)
 # ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
 #   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
 #   (prints SKIP elsewhere).
