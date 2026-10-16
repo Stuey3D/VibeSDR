@@ -20,26 +20,209 @@
  * ★ The decimal point is its OWN tube (an INS-1 bulb), never a dot inside a digit tube.
  */
 
-/** IN-14-style cathode stack, FRONT to back. A lit digit sits at its own depth. */
-export const CATHODE_STACK = ['1', '6', '2', '7', '5', '0', '4', '9', '8', '3'] as const;
+// ★ Types only: this module stays loadable by node (scripts/test_faceplate_nixie.ts) with no React Native.
+import type { Skia, SkCanvas, SkFont, SkPaint, SkPath } from '@shopify/react-native-skia';
 
-export interface CathodeDepth { scale: number; dy: number; opacity: number }
+/**
+ * ★★★ THE IN-14 CATHODE STACK, FRONT to back: 3 8 9 4 0 5 7 2 6 1 (Stuart, 2026-10-16 — his own IN-14
+ *   clock is the reference). The 3 sits right behind the anode mesh and reads crisp; the 1 is at the back
+ *   and is seen THROUGH the wires of all nine cathodes in front of it, as on the real tube (the video:
+ *   the 1, 6 and 2 are crossed by dark wire, the 3 and 8 are clean).
+ *   The order before 2026-10-16 was this one REVERSED (a 1 drawn clean at the front).
+ */
+export const CATHODE_STACK = ['3', '8', '9', '4', '0', '5', '7', '2', '6', '1'] as const;
 
-/** Stack index i → `scale(1 − 0.028·i) translateY(0.25·i) opacity(1 − 0.03·i)` (brief + mockup `depthT`). */
+export interface CathodeDepth { scale: number; dy: number; opacity: number; soft: number }
+
+/**
+ * Stack index i (0 = front) → a slightly smaller, lower, dimmer and softer digit:
+ * `scale 1 − 0.010·i`, `dy 0.15·i`, `opacity 1 − 0.015·i`, glow radius × `1 + 0.05·i`.
+ * ★ Gentle on purpose: the real stack is a few mm deep in a 18 mm tube — the back 1 is ~9 % smaller and
+ *   softer, not a different size. (The pre-2026-10-16 0.028 per step made the back digit 25 % smaller.)
+ */
 export function cathodeDepth(d: string): CathodeDepth {
   const i = Math.max(0, CATHODE_STACK.indexOf(d as any));
-  return { scale: 1 - 0.028 * i, dy: 0.25 * i, opacity: 1 - 0.03 * i };
+  return { scale: 1 - 0.010 * i, dy: 0.15 * i, opacity: 1 - 0.015 * i, soft: 1 + 0.05 * i };
 }
 
-/** The cathodes drawn around a lit digit: up to 3 unlit BEHIND it (faint wire) and the 2 nearest IN
- *  FRONT (darker wire, occluding the glow). A switched-off tube shows the first four, all faint. */
+/** The unlit cathodes around a lit digit: EVERY one behind it (faint wire, lit warm by its glow) and
+ *  EVERY one in front of it (dark wire crossing the glow), in stack order. A switched-off tube shows
+ *  the whole stack as bare metal. */
 export function cathodeNeighbours(d: string | null): { back: string[]; front: string[] } {
-  if (d === null) return { back: CATHODE_STACK.slice(0, 4) as string[], front: [] };
+  if (d === null) return { back: [...CATHODE_STACK], front: [] };
   const i = CATHODE_STACK.indexOf(d as any);
-  return {
-    back:  CATHODE_STACK.slice(i + 1, i + 4) as string[],
-    front: CATHODE_STACK.slice(Math.max(0, i - 2), i) as string[],
+  return { back: CATHODE_STACK.slice(i + 1) as string[], front: CATHODE_STACK.slice(0, i) as string[] };
+}
+
+/** The glyph a digit's cathode is cut as. ★ On the IN-14 the 5 is the 2's cathode turned upside down
+ *  and back to front (rotated 180°) — so the frequency tubes draw a '2' rotated 180°. Only here: any
+ *  other Nixie-font text keeps the font's own 5. */
+export function cathodeGlyph(d: string): { glyph: string; flipY: boolean; bar: boolean } {
+  if (d === '5') return { glyph: '2', flipY: true, bar: false };
+  // ★ The IN-14's 1 is a plain straight wire — no flag, no foot (the font's 1 has both).
+  if (d === '1') return { glyph: '0', flipY: false, bar: true };
+  return { glyph: d, flipY: false, bar: false };
+}
+
+// ── The tube's inside, drawn ONCE per size into a sprite (NixieTubes) ──────────
+// Pure apart from the Skia API passed in, so scripts can render it headless (canvaskit) to compare
+// against the reference video.
+
+/** The anode box: the rectangle of hex mesh the cathodes stand in, in a tw × th glass (y from the
+ *  glass top, which includes the dome). */
+export function meshBox(tw: number, th: number) {
+  return { x: tw * 0.12, y: th * 0.24, w: tw * 0.76, h: th * 0.64 };
+}
+/** Where a digit's centre sits in the glass (the anode box's middle). */
+export function digitCentre(tw: number, th: number) {
+  const b = meshBox(tw, th);
+  return { cx: tw / 2, cy: b.y + b.h / 2 };
+}
+
+type SkiaApi = typeof Skia;
+
+type Corner = [number, number];
+/** A box with elliptical per-corner radii — CSS `border-radius: a b c d / e f g h`. */
+export function cornerPath(Sk: SkiaApi, x: number, y: number, w: number, h: number,
+                           tl: Corner, tr: Corner, br: Corner, bl: Corner): SkPath {
+  const p = Sk.Path.Make();
+  const R = (cx: number, cy: number, rx: number, ry: number) => Sk.XYWHRect(cx, cy, 2 * rx, 2 * ry);
+  p.moveTo(x, y + tl[1]);
+  p.arcToOval(R(x, y, tl[0], tl[1]), 180, 90, false);
+  p.lineTo(x + w - tr[0], y);
+  p.arcToOval(R(x + w - 2 * tr[0], y, tr[0], tr[1]), 270, 90, false);
+  p.lineTo(x + w, y + h - br[1]);
+  p.arcToOval(R(x + w - 2 * br[0], y + h - 2 * br[1], br[0], br[1]), 0, 90, false);
+  p.lineTo(x + bl[0], y + h);
+  p.arcToOval(R(x, y + h - 2 * bl[1], bl[0], bl[1]), 90, 90, false);
+  p.close();
+  return p;
+}
+/** The digit tube's glass: `48% 48% 3 3 / 26% 26% 3 3`. */
+export const tubeGlassPath = (Sk: SkiaApi, x: number, y: number, w: number, h: number) =>
+  cornerPath(Sk, x, y, w, h, [0.48 * w, 0.26 * h], [0.48 * w, 0.26 * h], [3, 3], [3, 3]);
+
+/** The anode's honeycomb (flat-topped hexagons, edge `r`) filling the anode box, offset by (ox, oy).
+ *  One path of line segments — stroked thin, clipped to meshBox by the caller. */
+export function honeycombPath(Sk: SkiaApi, tw: number, th: number, ox = 0, oy = 0): SkPath {
+  const b = meshBox(tw, th);
+  const r = Math.max(0.9, tw * 0.05);
+  const dx = 1.5 * r, dy = Math.sqrt(3) * r;
+  const p = Sk.Path.Make();
+  for (let col = 0, x = b.x; x <= b.x + b.w + r; col++, x += dx) {
+    for (let y = b.y + (col % 2 ? dy / 2 : 0); y <= b.y + b.h + dy; y += dy) {
+      // three edges per cell (left, upper-left, lower-left) tile the plane without repeats
+      p.moveTo(ox + x - r, oy + y);
+      p.lineTo(ox + x - r / 2, oy + y - dy / 2);
+      p.lineTo(ox + x + r / 2, oy + y - dy / 2);
+      p.moveTo(ox + x - r, oy + y);
+      p.lineTo(ox + x - r / 2, oy + y + dy / 2);
+    }
+  }
+  return p;   // ★ overruns the box by a cell: the caller CLIPS to meshBox (a path op on open lines is empty)
+}
+
+/** A CSS glow stack, outermost first: `[[radius, colour], …]`. */
+export type NixieGlow = Array<[number, string]>;
+
+/** §7 digit: `#ffc48a`, glow `0 0 1.5 #ff8a2e, 0 0 5 #ff6410, 0 0 11 rgba(255,80,10,.75), 0 0 20 rgba(255,70,0,.35)`. */
+export const DIGIT_CORE = '#ffc48a';
+export const DIGIT_GLOW: NixieGlow = [[20, 'rgba(255,70,0,0.35)'], [11, 'rgba(255,80,10,0.75)'], [5, '#ff6410'], [1.5, '#ff8a2e']];
+/** Unlit cathodes: bare metal in a switched-off tube; lit warm from the side by a lit digit behind
+ *  the ones in front; a dark wire where one crosses the glow. */
+const WIRE_OFF       = 'rgba(160,140,120,0.13)';
+const WIRE_WARM      = 'rgba(255,150,90,0.12)';
+const WIRE_FRONT     = 'rgba(20,10,5,0.32)';
+/** The anode mesh in front of the stack: it shadows the glow as fine hex lines, and is lit warm itself. */
+/** Nixie One's stroke weight, as a fraction of the font size (measured: the 0's ring). */
+const STEM = 0.06;
+const MESH_SHADOW    = 'rgba(30,14,6,0.28)';
+const MESH_LIT       = 'rgba(255,140,70,0.16)';
+const MESH_WASH      = 'rgba(255,110,40,0.07)';
+
+/**
+ * Draw ONE tube's inside — the whole cathode stack with `lit` glowing at its own depth (null = a
+ * switched-off tube), the anode mesh over it — into `c`, a tw × th canvas whose origin is the glass's
+ * top-left. Clipped to the glass.
+ * ★★ PERF: this runs once per digit per tube SIZE (11 sprites), never per tune step: blurred text,
+ *   up to ten glyph draws and the mesh are all rasterised here, and a tune step blits one image.
+ */
+export function drawTubeInside(Sk: SkiaApi, c: SkCanvas, font: SkFont, lit: string | null,
+                               tw: number, th: number, nf: number): void {
+  const paint = (color: string, opts: { blur?: number; stroke?: number; blend?: number } = {}) => {
+    const p = Sk.Paint();
+    p.setAntiAlias(true);
+    p.setColor(Sk.Color(color));
+    if (opts.blur && opts.blur > 0) p.setMaskFilter(Sk.MaskFilter.MakeBlur(0 /* BlurStyle.Normal */, opts.blur / 2, true));
+    if (opts.stroke) { p.setStyle(1 /* PaintStyle.Stroke */); p.setStrokeWidth(opts.stroke); }
+    if (opts.blend !== undefined) p.setBlendMode(opts.blend);
+    return p;
   };
+  const { cx, cy } = digitCentre(tw, th);
+  const glyph = (d: string, p: SkPaint) => {
+    const g = cathodeGlyph(d);
+    const b = font.measureText(g.glyph);
+    if (g.bar) {                                          // the 1: a wire the height of a 0
+      const w = nf * STEM, len = b.height + w;
+      c.drawRRect(Sk.RRectXY(Sk.XYWHRect(cx - w / 2, cy - len / 2, w, len), w / 2, w / 2), p);
+      return;
+    }
+    const x = cx - (b.x + b.width / 2), y = cy - (b.y + b.height / 2);
+    if (g.flipY) { c.save(); c.translate(0, 2 * cy); c.scale(1, -1); }
+    c.drawText(g.glyph, x, y, p, font);
+    if (g.flipY) c.restore();
+  };
+  const atDepth = (d: string, draw: (z: CathodeDepth) => void) => {
+    const z = cathodeDepth(d);
+    c.save();
+    c.translate(cx, cy + z.dy);
+    c.scale(z.scale, z.scale);
+    c.translate(-cx, -cy);
+    draw(z);
+    c.restore();
+  };
+  const gk = Math.max(0.6, Math.min(1, nf / 30));        // the glow shrinks with the tube
+
+  c.save();
+  c.clipPath(tubeGlassPath(Sk, 0, 0, tw, th), 1 /* ClipOp.Intersect */, true);
+  const li = lit === null ? CATHODE_STACK.length : CATHODE_STACK.indexOf(lit as any);
+  // Back to front, so every cathode covers the ones behind it — the glow included.
+  for (let i = CATHODE_STACK.length - 1; i >= 0; i--) {
+    const d = CATHODE_STACK[i];
+    atDepth(d, (z) => {
+      if (i === li) {
+        for (const [r, col] of DIGIT_GLOW) {
+          const p = paint(col, { blur: r * gk * z.soft });
+          p.setAlphaf(p.getAlphaf() * z.opacity);
+          glyph(d, p);
+        }
+        const core = paint(DIGIT_CORE);
+        core.setAlphaf(z.opacity);
+        glyph(d, core);
+      } else if (i > li) {
+        const p = paint(lit === null ? WIRE_OFF : WIRE_WARM);
+        p.setAlphaf(p.getAlphaf() * z.opacity);
+        glyph(d, p);
+      } else {
+        glyph(d, paint(WIRE_FRONT));
+      }
+    });
+  }
+  if (lit !== null) {
+    const b = meshBox(tw, th);
+    const box = Sk.XYWHRect(b.x, b.y, b.w, b.h);
+    const mesh = honeycombPath(Sk, tw, th);
+    c.save();
+    c.clipRect(box, 1 /* ClipOp.Intersect */, true);
+    const meshW = Math.max(0.3, tw * 0.018);
+    // The mesh's shadow lands only on what is drawn (glow + wires): SrcATop.
+    c.drawPath(mesh, paint(MESH_SHADOW, { stroke: meshW, blend: 9 /* BlendMode.SrcATop */ }));
+    // Then BEHIND everything drawn (DstOver): the mesh lit by the digit, and its warm wash.
+    c.drawPath(mesh, paint(MESH_LIT, { stroke: meshW, blend: 4 /* BlendMode.DstOver */ }));
+    c.drawRect(box, paint(MESH_WASH, { blend: 4 }));
+    c.restore();
+  }
+  c.restore();
 }
 
 // ── Layouts ──────────────────────────────────────────────────────────────────
