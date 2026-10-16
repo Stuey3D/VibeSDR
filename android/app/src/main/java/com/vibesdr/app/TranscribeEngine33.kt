@@ -125,7 +125,7 @@ class TranscribeEngine33(
                 Handler(Looper.getMainLooper()).postDelayed({ try { sr.destroy() } catch (_: Throwable) {} }, 2000)
                 var text = "Downloading $nm speech — Android shows its progress"
                 val src = TranslateLanguage.fromLanguageTag(language.substringBefore('-'))
-                val dst = if (translateTo.isEmpty()) null else TranslateLanguage.fromLanguageTag(translateTo)
+                val dst = if (translateTo.isEmpty()) null else TranslateLanguage.fromLanguageTag(translateTo.substringBefore('-'))
                 if (src != null && dst != null && src != dst) {
                     val tr = Translation.getClient(TranslatorOptions.Builder().setSourceLanguage(src).setTargetLanguage(dst).build())
                     tr.downloadModelIfNeeded(DownloadConditions.Builder().requireWifi().build())
@@ -340,7 +340,7 @@ class TranscribeEngine33(
 
     private fun prepareTranslator(lang: String) {
         val src = TranslateLanguage.fromLanguageTag(lang.substringBefore('-'))
-        val dst = if (translateTo.isEmpty()) null else TranslateLanguage.fromLanguageTag(translateTo)
+        val dst = if (translateTo.isEmpty()) null else TranslateLanguage.fromLanguageTag(translateTo.substringBefore('-'))
         val key = "$src>$dst"
         if (key == translatorFor) return
         translator?.close(); translator = null; translatorReady = false; translatorFor = key

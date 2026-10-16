@@ -19,6 +19,9 @@ export interface TranscribeCaps {
   /** Two-letter code of the phone's language — the translation target. */
   deviceLanguage?: string;
   deviceLanguageName?: string;
+  /** iOS: the phone's language as a translation target, with its variant where Apple's Translation has several
+   *  ('pt-BR', 'zh-Hant', 'en-GB'); else the bare code. Android (ML Kit) translates to bare codes only. */
+  deviceTranslateTo?: string;
   /** The phone's region ('GB') — which variant 'English' means. */
   deviceRegion?: string;
   /** iOS: how many speech languages Apple lets an app keep at once (AssetInventory.maximumReservedLocales). */
@@ -94,6 +97,17 @@ export function langName(idOrCode: string | undefined): string {
   if (!idOrCode) return '';
   return LANG_NAMES[idOrCode.toLowerCase().split(/[-_]/)[0]] ?? idOrCode;
 }
+/** The TRANSLATE TO button for a target: 'en' → English, 'pt-BR' → Portuguese (BR), 'zh-Hant' → Chinese (Trad.).
+ *  Kept short — it is a segment button. Written Chinese is "Chinese", not the spoken "Mandarin" of LANG_NAMES. */
+export function translateTargetLabel(id: string): string {
+  const [code, sub] = id.split(/[-_]/);
+  const base = code.toLowerCase();
+  if (base === 'zh') return sub === 'Hant' || sub === 'TW' || sub === 'HK' ? 'Chinese (Trad.)' : sub ? 'Chinese (Simp.)' : 'Chinese';
+  const name = LANG_NAMES[base] ?? id;
+  return sub ? `${name} (${sub.toUpperCase()})` : name;
+}
+/** Same language, any variant ('pt' and 'pt-BR'). */
+export function sameLanguage(a: string, b: string): boolean { return !!a && !!b && baseOf(a) === baseOf(b); }
 /** ★★ WHICH VARIANT A LANGUAGE MEANS (Stuart, 2026-10-15: French came out as French (Belgium), English as English
  *  (Australia) — the native lists are alphabetical and the old fallback took the first). In order: the phone's own
  *  region (en-GB on a British phone), then the language's home variant, then one already on the phone. */

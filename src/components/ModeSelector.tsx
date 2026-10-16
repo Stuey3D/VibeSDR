@@ -26,7 +26,7 @@ const SHEET_BG = 'rgba(8,6,1,0.97)';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { RTTY_PRESETS, type RttySettings } from '../services/DecoderClient';
 import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/rttySpec';
-import { LANG_NAMES } from '../services/transcriber';
+import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe';
 
@@ -402,7 +402,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   }, [txListOpen]);
   const txPick = (id: string) => { setTxListOpen(false); tc?.onLanguage(id); };
   const txRows = tc ? [{ id: 'auto', code: 'auto', name: 'AUTO — detect the language', installed: true }, ...tc.languages] : [];
-  const txTargets = tc ? Array.from(new Set([tc.deviceLanguage, 'en'].filter(Boolean))) : [];
+  // ★ The phone's language (its variant: PORTUGUESE (BR)) and English — one button per language, never two Englishes.
+  const txTargets = tc ? [tc.deviceLanguage, ...(sameLanguage(tc.deviceLanguage, 'en') ? [] : ['en'])].filter(Boolean) : [];
   const transcribeCallout = tc && txLit ? (
     <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
                              : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
@@ -481,7 +482,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       <OptRow>
         <SegBtn label="OFF" active={!tc.translateTo} onPress={() => tc.onTranslateTo('')} />
         {txTargets.map(c => (
-          <SegBtn key={c} label={(LANG_NAMES[c] ?? c).toUpperCase()} active={tc.translateTo === c} onPress={() => tc.onTranslateTo(c)} />
+          <SegBtn key={c} label={translateTargetLabel(c).toUpperCase()} active={tc.translateTo === c} onPress={() => tc.onTranslateTo(c)} />
         ))}
       </OptRow>
       <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 6, textAlign: 'left' }, { color: t.btnText }]}>

@@ -211,7 +211,7 @@ import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
-import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, removeTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, type TranscribeCaps } from '../services/transcriber';
+import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, removeTranscribeLanguage, startTranscribe, stopTranscribe, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, sameLanguage, type TranscribeCaps } from '../services/transcriber';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -4630,7 +4630,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     }).catch(() => {});
     return () => { dead = true; };
   }, []);
-  const txTarget = txTo ?? (txCaps?.deviceLanguage ?? '');
+  /* ★ The phone's own variant where translation has several (Kiko in Brazil → pt-BR, not Apple's default Portuguese).
+   *   A stored bare code of the same language ('pt' from an older build) means the same choice → the variant. */
+  const txDevTo = txCaps?.deviceTranslateTo || txCaps?.deviceLanguage || '';
+  const txTarget = txTo == null ? txDevTo
+    : (txTo && !/[-_]/.test(txTo) && sameLanguage(txTo, txDevTo) ? txDevTo : txTo);
   const txTargetRef = useRef(txTarget); txTargetRef.current = txTarget;
   const txLangRef = useRef(txLang); txLangRef.current = txLang;
   /** The language the transcriber settled on (detected or chosen) — shown in the status line by the native side. */
@@ -11970,7 +11974,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (activeDecRef.current === 'transcribe') { setDecoderText(''); openDecoder('transcribe'); }
           },
           translateTo: txTarget,
-          deviceLanguage: txCaps.deviceLanguage ?? '',
+          deviceLanguage: txDevTo,
           onTranslateTo: (code: string) => {
             setTxTo(code); txTargetRef.current = code;
             AsyncStorage.setItem('lsv_tx_to', code || 'off').catch(() => {});

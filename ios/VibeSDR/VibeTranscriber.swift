@@ -113,6 +113,9 @@ class VibeTranscriber: RCTEventEmitter {
                // ★ The phone's region, so 'English' means en-GB on a British phone, not the list's first (en-AU).
                "deviceRegion": Locale.current.region?.identifier ?? "",
                "maxLanguages": AssetInventory.maximumReservedLocales,   // Apple's cap on speech languages kept
+               // ★ Translate INTO the phone's own variant where Apple's Translation has more than one (pt-BR, zh-Hant,
+               //   en-GB) — the bare code would be Apple's default variant, not Kiko's Brazilian Portuguese.
+               "deviceTranslateTo": await SpeechEngines.deviceTranslateTarget(),
                "languages": langs])
     }
   }
@@ -156,9 +159,9 @@ class VibeTranscriber: RCTEventEmitter {
         resolve(["ok": false, "text": "Could not download \(nm): \(error.localizedDescription)"]); return
       }
       var text = "\(nm) is on this phone — AUTO can now pick it\(roomNote)"
-      if !translateTo.isEmpty, code != translateTo {
+      if !translateTo.isEmpty, code != TranscribePlaces.base(translateTo) {
         let dst = Locale.Language(identifier: translateTo)
-        let dn = Locale.current.localizedString(forLanguageCode: translateTo) ?? translateTo
+        let dn = Locale.current.localizedString(forIdentifier: translateTo) ?? translateTo
         switch await LanguageAvailability().status(from: loc.language, to: dst) {
         case .installed: text += ", translating to \(dn)"
         case .supported:
@@ -308,6 +311,19 @@ enum SpeechEngines {
     let held = await AssetInventory.reservedLocales
     if held.contains(where: { TranscribePlaces.base($0.identifier(.bcp47)) == TranscribePlaces.base(loc.identifier(.bcp47)) }) { return }
     if held.count < AssetInventory.maximumReservedLocales { _ = try? await AssetInventory.reserve(locale: loc) }
+  }
+  /// The phone's language as a Translation target: a variant only when Apple's Translation offers several for the
+  /// language and one matches the phone (region first, then script — zh-Hant for Taiwan/Hong Kong); else the bare code.
+  static func deviceTranslateTarget() async -> String {
+    let me = Locale.current.language
+    guard let code = me.languageCode?.identifier else { return "en" }
+    let variants = await LanguageAvailability().supportedLanguages.filter { $0.languageCode?.identifier == code }
+    guard variants.count > 1 else { return code }
+    if let r = me.region?.identifier,
+       let v = variants.first(where: { $0.region?.identifier == r }) { return v.minimalIdentifier.replacingOccurrences(of: "_", with: "-") }
+    if let sc = (me.script ?? Locale.Language(identifier: me.maximalIdentifier).script)?.identifier,
+       variants.contains(where: { $0.script?.identifier == sc }) { return "\(code)-\(sc)" }
+    return code
   }
   static func module(for loc: Locale) async -> any SpeechModule {
     if await SpeechTranscriber.supportedLocale(equivalentTo: loc) != nil {
@@ -656,7 +672,7 @@ final class TranscribeEngine {
                  "detected": language == "auto"])
     status("Listening — \(shortName(lane.locale))\(language == "auto" ? " (detected)" : "")")
     translator = nil
-    if !translateTo.isEmpty, lang != translateTo {
+    if !translateTo.isEmpty, lang != TranscribePlaces.base(translateTo) {
       let tr = Translator(source: lane.locale.language, target: Locale.Language(identifier: translateTo)) { [weak self] s in
         self?.status(s)
       }
