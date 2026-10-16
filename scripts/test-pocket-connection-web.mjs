@@ -46,7 +46,7 @@ const srv = spawn(BIN, ["--tcp", `127.0.0.1:${rtlPort}`, "--port", String(port),
   env: { ...process.env, VIBESERVER_CONFIG: path.join(T, "config.json"), VIBESERVER_DATA_DIR: path.join(T, "data"),
          VIBESERVER_RUNTIME_DIR: path.join(T, "run"), VIBESERVER_POCKET_DIR: PD, HOME: T },
   stdio: ["ignore", fs.openSync(path.join(T, "server.log"), "w"), fs.openSync(path.join(T, "server.err"), "w")] });
-const br = spawn(BROWSER, ["--headless=new", "--mute-audio", "--no-first-run", "--disable-extensions", "--autoplay-policy=no-user-gesture-required",
+const br = spawn(BROWSER, ["--headless=new", "--mute-audio", "--disable-audio-output", "--no-first-run", "--disable-extensions", "--autoplay-policy=no-user-gesture-required",
   `--remote-debugging-port=${cdp}`, `--user-data-dir=${path.join(T, "browser")}`, "--window-size=1200,900", "about:blank"], { stdio: "ignore" });
 
 async function cleanup() {

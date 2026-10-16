@@ -29,7 +29,7 @@ const prof = mkdtempSync(path.join(tmpdir(), 'vibesdr-airband-'));
 
 const mock = spawn(process.execPath, ['scripts/mock-vibeserver.mjs', '--no-pin', '--port', String(PORT)], { stdio: 'ignore' });
 const edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-first-run', '--no-default-browser-check',
-  '--mute-audio', `--user-data-dir=${prof}`, '--window-size=1280,900', '--autoplay-policy=no-user-gesture-required', 'about:blank'],
+  '--mute-audio', '--disable-audio-output', `--user-data-dir=${prof}`, '--window-size=1280,900', '--autoplay-policy=no-user-gesture-required', 'about:blank'],
   { stdio: 'ignore' });
 let fails = 0;
 const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + m); if (!c) fails++; };

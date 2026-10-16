@@ -6,7 +6,7 @@ const URL0 = process.argv[2] || 'http://192.168.86.88:48001/';
 const SECS = Number(process.argv[3] || 40);
 const EDGE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 const port = 9333;
-const edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${port}`, '--no-first-run', '--no-default-browser-check',
+const edge = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', `--remote-debugging-port=${port}`, '--no-first-run', '--no-default-browser-check',
   '--user-data-dir=/tmp/vibesdr-edgeprof', '--window-size=1280,900', '--autoplay-policy=no-user-gesture-required', 'about:blank'],
   { stdio: 'ignore' });
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

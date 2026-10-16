@@ -1150,10 +1150,11 @@ export class Waterfall {
     return ((hz - lo) / this.spanHz) * W;
   }
 
-  /** CSS pixel x -> Hz. */
-  xToHz(cssX: number): number {
+  /** CSS pixel x -> Hz. `cssW` lets a per-frame caller (the pointer-frequency label) pass a cached
+   *  width instead of reading clientWidth — a layout read — every frame; same arithmetic either way. */
+  xToHz(cssX: number, cssW = this.canvas.clientWidth): number {
     const lo = this.displayCenterHz() - this.spanHz / 2;
-    const frac = cssX / Math.max(1, this.canvas.clientWidth);
+    const frac = cssX / Math.max(1, cssW);
     return lo + frac * this.spanHz;
   }
 
