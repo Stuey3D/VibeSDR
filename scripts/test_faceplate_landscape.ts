@@ -11,7 +11,7 @@
  * Run: node --no-warnings scripts/test_faceplate_landscape.ts   (run-tests.sh does)
  */
 import { landscapeDeck, landscapeBand, LAND, type MeterKind } from '../src/constants/meters.ts';
-import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H, COLLAR_H } from '../src/constants/nixie.ts';
+import { nixieGeometry, nixieSpec, stackHeight, TUBE_DESIGN, PIP_H, COLLAR_H, COLLAR_SHOWN, GLASS_GAIN } from '../src/constants/nixie.ts';
 import {
   modeBoxFit, modeTextWidth, stereoWidth, modeLabelCandidates, isFixedFace, MODE_BOX, MODE_BOX_MAX_SHARE, MODE_BOX_LAST_SHARE, MODE_MIN_FONT,
   type ModeFace,
@@ -140,8 +140,8 @@ for (const [W, H, tablet] of DEVICES) {
           const t = `${tag} ${layout} tubes (window ${d.freqH})`;
           ok(`${t}: the stack fits`, stackHeight(g.glassH, scale) <= d.freqH + 1e-9);
           ok(`${t}: the pip is inside`, g.collarY - g.glassH - PIP_H * scale >= -1e-9);
-          ok(`${t}: ★ the tubes stand on the line under the window`, Math.abs(g.collarY + COLLAR_H * scale - d.freqH) < 1e-9);
-          ok(`${t}: glass ≤ meterLand`, g.glassH <= TUBE_DESIGN.meterLand.th * scale + 1e-9);
+          ok(`${t}: ★ the tubes stand on the line under the window`, Math.abs(g.collarY + COLLAR_SHOWN * scale - d.freqH) < 1e-9);
+          ok(`${t}: glass ≤ meterLand`, g.glassH <= (TUBE_DESIGN.meterLand.th + GLASS_GAIN) * scale + 1e-9);
           const last = g.tubes[g.tubes.length - 1];
           ok(`${t}: the row fits the width`, last.x + last.w <= winW + 1e-6);
         }

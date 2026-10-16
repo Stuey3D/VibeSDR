@@ -143,7 +143,6 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
         <Rect x={0} y={h - 7 * lk} width={w} height={7 * lk}>
           <LinearGradient start={vec(0, h)} end={vec(0, h - 7 * lk)} colors={['rgba(0,0,0,0.8)', 'rgba(0,0,0,0)']} />
         </Rect>
-        <Rect x={0} y={h - 1} width={w} height={1} color="rgba(255,200,160,0.08)" />
 
         {/* ── Each tube's cast shadow and neon halo on the back wall (drawn once) ── */}
         {geo.tubes.map((t, i) => {
@@ -280,6 +279,12 @@ const NixieStatic = React.memo(function NixieStatic({ w, h, radius, geo }: Stati
             </Group>
           );
         })}
+        {/* ★ The panel's lower lip IN FRONT of the tube bases: the sockets run under it, so the tubes read
+            as mounted through the panel, not standing on a ledge inside it (Stuart, 2026-10-16). */}
+        <Rect x={0} y={h - 3.5} width={w} height={3.5}>
+          <LinearGradient start={vec(0, h - 3.5)} end={vec(0, h)} colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.55)']} />
+        </Rect>
+        <Rect x={0} y={h - 1} width={w} height={1} color="rgba(255,200,160,0.08)" />
       </Group>
     </Canvas>
   );
@@ -381,6 +386,9 @@ export interface NixieTubesProps {
    *  children). ★ The tubes are laid out in the window LEFT of it, so kHz / MHz / Hz can never move
    *  a tube (§7 TRAP: anchor the tube group, never centre tubes and label together). */
   reserveRight?: number;
+  /** The landscape centre window: tubes take back the 10-tube narrowing when the window has room, and
+   *  digits fill a little more of the glass (constants/nixie nixieGeometry `grow`). */
+  grow?: boolean;
   style?:  StyleProp<ViewStyle>;
   children?: React.ReactNode;
 }
@@ -405,7 +413,7 @@ function sizeKey(layout: string, design: object, bar: boolean, scale: number, re
 }
 
 export default function NixieTubes({ hz, unit, layout, design, bar, scale = 1, radius = 5, reserveRight = 0,
-  style, children }: NixieTubesProps) {
+  grow = false, style, children }: NixieTubesProps) {
   const sk = sizeKey(layout, design, bar, scale, reserveRight);
   const [sz, setSz] = useState(() => sizes.get(sk) ?? { w: 0, h: 0 });
   const onLayout = (e: LayoutChangeEvent) => {
@@ -423,8 +431,8 @@ export default function NixieTubes({ hz, unit, layout, design, bar, scale = 1, r
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [layout, extra.current]);
   const tubeW = sz.w - reserveRight;
-  const geo = useMemo(() => (tubeW > 0 && sz.h > 0 ? nixieGeometry(tubeW, sz.h, spec, design, { bar, scale }) : null),
-    [tubeW, sz.h, spec, design, bar, scale]);
+  const geo = useMemo(() => (tubeW > 0 && sz.h > 0 ? nixieGeometry(tubeW, sz.h, spec, design, { bar, scale, grow }) : null),
+    [tubeW, sz.h, spec, design, bar, scale, grow]);
   // ★ Memoised: the cathode layer is React.memo, and a fresh array every parent render would defeat it.
   const ro = useMemo(() => nixieReadout(hz, spec, unit), [hz, spec, unit]);
   const key = ro.tubes.map(d => d ?? ' ').join('');
